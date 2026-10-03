@@ -4,8 +4,10 @@
 //
 // - Window money is aggregated from raw `transactions` over
 //   transactions_account_active_occurred_idx and bucketed by the local date in
-//   the caller's zone, in SQL. The rollups (revenue_daily, fan_spend_daily)
-//   are dated in UTC and cannot be re-bucketed into another zone.
+//   the caller's zone. The rollups (revenue_daily, fan_spend_daily) are dated
+//   in UTC and cannot be re-bucketed into another zone. The SQL never reads
+//   the zone's name: it buckets by the instants each local date starts at,
+//   which Intl computes (resolveSpenderStatsWindows), and stops at `asOf`.
 // - Lifetime membership (tiers, payers, silence, the queue) reads the spender
 //   projection (fan_spend_lifetime), as the Spenders shelves do, so both count
 //   the same fans; its watermark is served as `projectionAsOf`.
@@ -72,28 +74,47 @@ function toDate(value: unknown): Date | null {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
-/** The d30 window of one request: local dates in one zone. */
+/** The d30 window of one request, as instants. */
 interface WindowScope {
   pageId: number;
-  timeZone: string;
-  from: string;
-  to: string;
+  /** The window's local dates and the instant each starts at, ascending. */
+  dates: readonly string[];
+  dateStarts: readonly Date[];
+  /** The instant the date after the window starts. */
+  end: Date;
+  /** Rows after it are not counted yet: today ends at `asOf`. */
+  asOf: Date;
 }
 
-/** The instant the window's first local date starts, computed by Postgres in the zone. */
+function windowScope(pageId: number, windows: SpenderStatsWindows): WindowScope {
+  return {
+    pageId,
+    dates: windows.dates,
+    dateStarts: windows.dateStarts,
+    end: windows.end,
+    asOf: windows.asOf,
+  };
+}
+
+function timestampSql(instant: Date): SQL {
+  return sql`${instant.toISOString()}::timestamptz`;
+}
+
+/** The instant the window's first local date starts. */
 function windowStartSql(scope: WindowScope): SQL {
-  return sql`(${scope.from}::date::timestamp at time zone ${scope.timeZone}::text)`;
+  return timestampSql(scope.dateStarts[0]!);
 }
 
-function windowEndSql(scope: WindowScope): SQL {
-  return sql`((${scope.to}::date + 1)::timestamp at time zone ${scope.timeZone}::text)`;
-}
-
-/** Every transaction of the universe in the window, with its local date. */
+/**
+ * Every transaction of the universe in the window, with its local date:
+ * `width_bucket` finds the last date that starts at or before the row.
+ */
 function windowRowsSql(scope: WindowScope): SQL {
+  const starts = `{${scope.dateStarts.map((start) => start.toISOString()).join(",")}}`;
+  const dates = `{${scope.dates.join(",")}}`;
   return sql`
     select t.fan_id,
-           (t.occurred_at at time zone ${scope.timeZone}::text)::date as local_date,
+           (${dates}::date[])[width_bucket(t.occurred_at, ${starts}::timestamptz[])] as local_date,
            t.transaction_state::text as state,
            t.gross_amount_mills as gross,
            t.creator_net_amount_mills as net,
@@ -103,7 +124,8 @@ function windowRowsSql(scope: WindowScope): SQL {
       and t.is_active = true
       and t.canonical_type in (${UNIVERSE_TYPES_SQL})
       and t.occurred_at >= ${windowStartSql(scope)}
-      and t.occurred_at < ${windowEndSql(scope)}
+      and t.occurred_at < ${timestampSql(scope.end)}
+      and t.occurred_at <= ${timestampSql(scope.asOf)}
   `;
 }
 
@@ -446,9 +468,10 @@ async function readSilence(db: Database, input: { pageId: number; asOf: Date }) 
 }
 
 /**
- * The stats of one page for a 30-day window in the caller's zone. The zone
- * must be a valid IANA name (`normalizeSpenderStatsTimeZone`); the caller
- * checks page access before calling.
+ * The stats of one page for a 30-day window in the caller's zone, as of
+ * `asOf` (the request time; nothing after it is counted). A zone that is not
+ * an IANA name Intl knows throws RangeError before any read
+ * (`normalizeSpenderStatsTimeZone`); the caller checks page access first.
  */
 export async function getPageSpenderStats(
   db: Database,
@@ -459,12 +482,7 @@ export async function getPageSpenderStats(
     timeZone: input.timeZone,
     ...(input.windowDays === undefined ? {} : { windowDays: input.windowDays }),
   });
-  const scope: WindowScope = {
-    pageId: input.pageId,
-    timeZone: windows.timeZone,
-    from: windows.d30.from,
-    to: windows.d30.to,
-  };
+  const scope = windowScope(input.pageId, windows);
 
   return db.transaction(async (tx) => {
     const database = tx as unknown as Database;
@@ -621,14 +639,24 @@ export async function listPageSpenderAwaitingReply(
   }, READ_SNAPSHOT);
 }
 
-async function explain(db: Database, query: SQL): Promise<string> {
-  const result = await db.execute<{ "QUERY PLAN": string }>(sql`explain (format text) ${query}`);
+async function explain(db: Database, query: SQL, options: { analyze?: boolean } = {}): Promise<string> {
+  const head = options.analyze ? sql`explain (analyze, buffers, format text)` : sql`explain (format text)`;
+  const result = await db.execute<{ "QUERY PLAN": string }>(sql`${head} ${query}`);
   return result.rows.map((row) => row["QUERY PLAN"]).join("\n");
 }
 
-/** EXPLAIN of the exact silence statement (the H-8 perf gate). */
-export function explainPageSpenderSilenceQuery(db: Database, input: { pageId: number; asOf: Date }) {
-  return explain(db, buildSilenceQuery(input));
+/**
+ * EXPLAIN of the exact silence statement (the H-8 perf gate). `analyze` runs
+ * it and adds the buffers: the measurement that decides whether the archive
+ * needs a partial index for fan messages; on production, run it inside a
+ * read-only transaction.
+ */
+export function explainPageSpenderSilenceQuery(
+  db: Database,
+  input: { pageId: number; asOf: Date },
+  options: { analyze?: boolean } = {},
+) {
+  return explain(db, buildSilenceQuery(input), options);
 }
 
 /** EXPLAIN of the exact window statement for the window ending at `asOf`. */
@@ -637,10 +665,5 @@ export function explainPageSpenderWindowQuery(
   input: { pageId: number; timeZone: string; asOf: Date },
 ) {
   const windows = resolveSpenderStatsWindows({ asOf: input.asOf, timeZone: input.timeZone });
-  return explain(db, buildWindowDaysQuery({
-    pageId: input.pageId,
-    timeZone: windows.timeZone,
-    from: windows.d30.from,
-    to: windows.d30.to,
-  }));
+  return explain(db, buildWindowDaysQuery(windowScope(input.pageId, windows)));
 }

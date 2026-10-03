@@ -12,7 +12,6 @@
 // which rounds once, here.
 
 import { SPENDER_AUTO_LIST_BUCKETS } from "./spender-buckets.ts";
-import { toBusinessDate } from "./time.ts";
 import {
   spenderAnalyticsTransactionTypes,
   transactionStates,
@@ -79,7 +78,10 @@ export type SpenderStatsCoverageState = (typeof SPENDER_STATS_COVERAGE_STATES)[n
  * - `projection_missing`: transactions exist but the spender projection was
  *   never built; tiers, silence and the queue read it.
  * - `projection_behind`: a transaction occurred after the projection was last
- *   rebuilt, so lifetime membership may lag the window totals.
+ *   rebuilt, so lifetime membership may lag the window totals. A row written
+ *   late with an old date cannot lag unseen on OnlyFans: every writer there
+ *   upserts and rebuilds in one transaction under the page lock
+ *   (`withOfapiSpendTransactionPageLock`), and stats read one snapshot.
  * - `history_starts_in_window`: the page's oldest transaction is inside the
  *   window; earlier days may be missing and a "new" payer is only the first
  *   one observed.
@@ -119,10 +121,16 @@ const IANA_TIME_ZONE_PATTERN = /^[A-Za-z][A-Za-z0-9_+-]*(?:\/[A-Za-z0-9_+-]+)*$/
 
 /**
  * The caller's zone, or null when it is not an IANA zone this runtime knows.
- * Only the letter case is canonicalised ("europe/moscow" → "Europe/Moscow"):
- * Intl would also rewrite a primary name to a CLDR alias
- * ("America/Argentina/Buenos_Aires" → "America/Buenos_Aires"), and the SQL
- * buckets by the name returned here, so it stays the one the caller sent.
+ * Only the letter case is canonicalised ("europe/moscow" → "Europe/Moscow"),
+ * so the answer echoes the name the caller sent; Intl would also swap names
+ * for their CLDR aliases ("Europe/Kyiv" → "Europe/Kiev").
+ *
+ * Intl is the only reader of the zone: `resolveSpenderStatsWindows` turns
+ * the local dates into instants here and the SQL receives only those. The
+ * hub's Postgres must not read it: its tzdata has no legacy links
+ * ("Europe/Kiev", "Asia/Calcutta", "US/Pacific", which browsers still send)
+ * and it takes "CET", "EET", "WET", "MET" as fixed-offset abbreviations,
+ * where Intl reads them as zones with DST.
  */
 export function normalizeSpenderStatsTimeZone(value: string): string | null {
   if (value.length === 0 || value.length > MAX_TIME_ZONE_LENGTH) return null;
@@ -148,6 +156,13 @@ export interface SpenderStatsWindows {
   windowDays: number;
   /** The window's local dates, ascending; the last one is today. */
   dates: string[];
+  /**
+   * The instant each of `dates` starts in the zone: its first second, which
+   * is not local midnight when a DST change skips midnight.
+   */
+  dateStarts: Date[];
+  /** The instant the date after today starts; the window never reads past `asOf`. */
+  end: Date;
   /** Today so far: a partial day, it ends at `asOf`. */
   today: SpenderStatsDateRange;
   /** The last 7 dates, today included. */
@@ -168,11 +183,60 @@ function shiftLocalDate(value: string, days: number): string {
   ].join("-");
 }
 
+function localDateFormatter(timeZone: string): Intl.DateTimeFormat {
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    calendar: "gregory",
+    numberingSystem: "latn",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+}
+
+/** The local date (`YYYY-MM-DD`) of an instant, by `formatter`'s zone. */
+function localDateAt(formatter: Intl.DateTimeFormat, epochMs: number): string {
+  let year = "";
+  let month = "";
+  let day = "";
+  for (const part of formatter.formatToParts(epochMs)) {
+    if (part.type === "year") year = part.value;
+    else if (part.type === "month") month = part.value;
+    else if (part.type === "day") day = part.value;
+  }
+  return `${year.padStart(4, "0")}-${month}-${day}`;
+}
+
+const MS_PER_HOUR = 3_600_000;
+
+/**
+ * The first whole second whose local date is `date` or later. Local dates
+ * never go backwards in time, so a bisection finds it, between 15 hours
+ * before the UTC midnight of `date` and 37 hours after (offsets run from
+ * −12 h to +14 h; a date the zone skipped, as Pacific/Apia did 2011-12-30,
+ * comes out empty). The hub's `businessDateToUtcStart` corrects the offset
+ * once and starts such dates an hour early when DST changes around local
+ * midnight (Asia/Beirut and Asia/Jerusalem in spring, America/Santiago in
+ * autumn), so it is not reused here.
+ */
+function startOfLocalDate(formatter: Intl.DateTimeFormat, date: string): Date {
+  const [year, month, day] = date.split("-").map(Number) as [number, number, number];
+  const utcMidnight = Date.UTC(year, month - 1, day);
+  let before = (utcMidnight - 15 * MS_PER_HOUR) / 1000;
+  let atOrAfter = (utcMidnight + 37 * MS_PER_HOUR) / 1000;
+  while (atOrAfter - before > 1) {
+    const middle = Math.floor((before + atOrAfter) / 2);
+    if (localDateAt(formatter, middle * 1000) >= date) atOrAfter = middle;
+    else before = middle;
+  }
+  return new Date(atOrAfter * 1000);
+}
+
 /**
  * The calendar windows for one request. Dates are local to `timeZone`;
  * windows are whole calendar dates, so a DST change only makes one of them an
- * hour longer or shorter. The SQL turns the same dates into instants in the
- * same zone; it never receives instants computed here.
+ * hour longer or shorter. Their instants are computed here, by the same Intl
+ * that dates today, and the SQL buckets rows by those instants alone.
  */
 export function resolveSpenderStatsWindows(input: {
   asOf: Date;
@@ -191,7 +255,8 @@ export function resolveSpenderStatsWindows(input: {
     throw new RangeError("asOf is not a valid instant");
   }
 
-  const today = toBusinessDate(input.asOf, timeZone);
+  const formatter = localDateFormatter(timeZone);
+  const today = localDateAt(formatter, input.asOf.getTime());
   const dates = Array.from({ length: windowDays }, (_, index) =>
     shiftLocalDate(today, index - (windowDays - 1)));
 
@@ -200,6 +265,8 @@ export function resolveSpenderStatsWindows(input: {
     asOf: input.asOf,
     windowDays,
     dates,
+    dateStarts: dates.map((date) => startOfLocalDate(formatter, date)),
+    end: startOfLocalDate(formatter, shiftLocalDate(today, 1)),
     today: { from: today, to: today },
     d7: { from: shiftLocalDate(today, -6), to: today },
     prev7: { from: shiftLocalDate(today, -13), to: shiftLocalDate(today, -7) },
