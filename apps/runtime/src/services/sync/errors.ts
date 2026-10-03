@@ -1,13 +1,12 @@
-import { FanslyApiError } from "@agency_hub_core/fansly";
 import { redactSensitiveText, sanitizeError } from "@agency_hub_core/shared";
 
 import { OfapiApiError } from "../ofapi.ts";
 
 const MAX_SYNC_ERROR_SUMMARY_CHARS = 1024;
 // Decision #248 / DP 7: the provider's own words about a rejection are a fact
-// worth journaling — an ari-1 purchase_history 422 left only "Fansly request
-// failed (422)" in the `:failed` observation and could not be diagnosed. The
-// snippet is bounded and redacted: a diagnostic aid, never a body dump.
+// worth journaling — a 422 that left only "request failed (422)" in the
+// `:failed` observation could not be diagnosed. The snippet is bounded and
+// redacted: a diagnostic aid, never a body dump.
 const MAX_SYNC_ERROR_RESPONSE_SNIPPET_CHARS = 400;
 
 export interface PersistedSyncError {
@@ -48,54 +47,6 @@ export class SyncPayloadPersistenceError extends Error {
   }
 }
 
-export class FollowersReconcileConsistencyError extends Error {
-  readonly code: string;
-  readonly retryable: boolean;
-
-  constructor(input: {
-    code: string;
-    message: string;
-    retryable?: boolean;
-  }) {
-    super(input.message);
-    this.name = "FollowersReconcileConsistencyError";
-    this.code = input.code;
-    this.retryable = input.retryable ?? false;
-  }
-}
-
-export class FanslyPurchaseHistoryContractError extends Error {
-  readonly code: string;
-
-  constructor(input: { code: string; message: string }) {
-    super(input.message);
-    this.name = "FanslyPurchaseHistoryContractError";
-    this.code = input.code;
-  }
-}
-
-export const FANSLY_TRANSACTION_ITEM_CONTRACT_REJECTED = "transaction_item_contract_rejected";
-
-/**
- * A Fansly transactions page carried an item that failed the adapter's item
- * contract (a fractional amount, a createdAt in seconds). The page is
- * journaled and the scan's progress is kept; the executor re-reads the page a
- * bounded number of times, then parks the lane as provider_bad_data.
- *
- * The message names only the field: Fansly transaction ids are long digit
- * strings, and the executor's fallback classifier reads digits such as 429.
- */
-export class FanslyTransactionsItemContractError extends Error {
-  readonly code = FANSLY_TRANSACTION_ITEM_CONTRACT_REJECTED;
-  readonly field: string;
-
-  constructor(input: { field: string }) {
-    super(`Fansly transaction page item failed the item contract (field ${input.field})`);
-    this.name = "FanslyTransactionsItemContractError";
-    this.field = input.field;
-  }
-}
-
 export function boundSyncErrorSummary(summary: string | null | undefined) {
   if (!summary) {
     return null;
@@ -117,16 +68,6 @@ function boundResponseSnippet(value: string | null | undefined) {
 }
 
 function resolveResponseSnippet(source: unknown): string | null {
-  // The Fansly adapter redacts and bounds its snippet at capture time
-  // (`onResponse` in packages/fansly/src/adapter.ts); take it as captured.
-  if (source instanceof FanslyApiError) {
-    // The adapter already redacts before it slices; redacting again here is a
-    // belt for a snippet that ever arrives by another path.
-    return source.responseSnippet
-      ? boundResponseSnippet(redactSensitiveText(source.responseSnippet))
-      : null;
-  }
-
   // OFAPI keeps the raw body (up to 2000 chars). Redact BEFORE slicing so the
   // bound can never leave half of a secret standing.
   if (source instanceof OfapiApiError) {

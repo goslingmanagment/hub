@@ -1,82 +1,77 @@
-import { vi } from "vitest";
 import {
   createFanslyPage,
   createModel,
   ensurePageSyncStates,
-  findPageById,
+  requestPageSync,
   startSyncRun,
-  upsertCheckpointProgress,
 } from "@agency_hub_core/db";
-import type { AppContext } from "../../apps/runtime/src/bootstrap.ts";
-import { executeFollowersChunk } from "../../apps/runtime/src/services/sync/executor-handlers.ts";
-import { SyncChunkBudget } from "../../apps/runtime/src/services/sync/chunk-budget.ts";
 import { SyncRunTelemetry } from "../../apps/runtime/src/services/sync/observability.ts";
+import { followersReconcileDecision } from "../../apps/runtime/src/sync/fansly/lib/followers-reconcile-decision.ts";
 import type { StartedTestDatabase } from "./db.ts";
 import { createTestAppContext } from "./runtime.ts";
 
+// The C1 readers (fansly_followers_diagnostic_report and
+// fansly_followers_diagnostic_timeline, migrations 0182-0185) read the
+// receipts the legacy Fansly followers walk wrote into sync_run_events. The
+// walk is deleted (step 4, S4-17); the readers stay for the receipts
+// production holds. This fixture writes one walk's run and its decision
+// receipt as the walk did: the decision over what the walk saw, and, when the
+// decision asks for a reconcile, the locked queue receipt of the anomaly
+// request it filed.
+
+export type FollowersWalkMode = "none" | "count" | "missing" | "unchanged" | "crossed";
+
+/** What one page of the walk saw in each mode (follow ids descend down the
+ *  list, as Fansly serves them); every walk wrote one follow. "missing" ran
+ *  off the end of the list without its known follow, "crossed" stopped at the
+ *  first row older than it, "unchanged" met its known follow under a head that
+ *  had not moved, "count" found fewer follows than the headline count. */
+const WALKS: Record<FollowersWalkMode, {
+  knownFollowId: string | null;
+  newestFollowId: string;
+  pageDone: boolean;
+  crossedKnownBoundary: boolean;
+  sawKnownCheckpoint: boolean;
+  sourceFollowerCount: number;
+}> = {
+  none: {
+    knownFollowId: null, newestFollowId: "1000", pageDone: true,
+    crossedKnownBoundary: false, sawKnownCheckpoint: false, sourceFollowerCount: 1,
+  },
+  count: {
+    knownFollowId: null, newestFollowId: "1000", pageDone: true,
+    crossedKnownBoundary: false, sawKnownCheckpoint: false, sourceFollowerCount: 2,
+  },
+  missing: {
+    knownFollowId: "999", newestFollowId: "1000", pageDone: true,
+    crossedKnownBoundary: false, sawKnownCheckpoint: false, sourceFollowerCount: 1,
+  },
+  unchanged: {
+    knownFollowId: "999", newestFollowId: "999", pageDone: false,
+    crossedKnownBoundary: false, sawKnownCheckpoint: true, sourceFollowerCount: 1,
+  },
+  crossed: {
+    knownFollowId: "1001", newestFollowId: "1002", pageDone: false,
+    crossedKnownBoundary: true, sawKnownCheckpoint: false, sourceFollowerCount: 1,
+  },
+};
+
 export async function followersDiagnosticFixture(
   db: StartedTestDatabase,
-  mode: "none" | "count" | "missing" | "unchanged" | "crossed" = "none",
+  mode: FollowersWalkMode = "none",
 ) {
-  // Follow ids descend down the list, as Fansly serves them. "missing" and
-  // "crossed" both lost the known follow: the first runs off the end of the
-  // list, the second stops at the first row older than it.
-  const knownFollowId = mode === "missing" || mode === "unchanged" ? "999"
-    : mode === "crossed" ? "1001" : null;
-  const items = [{ id: "1000", followerId: "fan-1", lastSeenAt: Date.now() }];
-  if (mode === "unchanged") {
-    items.push({ id: "999", followerId: "fan-2", lastSeenAt: Date.now() });
-  }
-  if (mode === "crossed") {
-    items.unshift({ id: "1002", followerId: "fan-2", lastSeenAt: Date.now() });
-  }
-  const accounts = items.map(row => ({
-    id: row.followerId,
-    username: row.followerId,
-    displayName: "Fan",
-    createdAt: 1_770_000_000_000,
-    lastSeenAt: row.lastSeenAt,
-  }));
-  // One page of rows; a walk that reads past it finds the end of the list.
-  const getFollowersPage = vi.fn<AppContext["adapter"]["getFollowersPage"]>(async (_context, _accountId, params) => (
-    (params.offset ?? 0) === 0
-      ? {
-        items,
-        accounts,
-        offset: 0,
-        done: mode !== "unchanged" && mode !== "crossed",
-        raw: { data: items, aggregationData: { accounts } },
-      }
-      : { items: [], accounts: [], offset: params.offset ?? 0, done: true, raw: { data: [], aggregationData: { accounts: [] } } }
-  ));
   const app = createTestAppContext(db);
-  app.adapter.getFollowersPage = getFollowersPage;
   const model = await createModel(db.db, { slug: "followers-diagnostic", name: "Followers" });
   if (!model) throw new Error("model seed failed");
   const page = await createFanslyPage(db.db, { modelId: model.id, label: "followers-diagnostic" });
   if (!page) throw new Error("page seed failed");
-  const states = await ensurePageSyncStates(db.db, { pageId: page.id });
-  const followerState = states.find(state => state.stream === "followers");
-  if (!followerState) throw new Error("followers state seed failed");
-  await upsertCheckpointProgress(db.db, {
-    platformAccountId: page.id,
-    stream: "followers",
-    state: {
-      revision: followerState.requestSeq,
-      knownFollowId,
-      newestFollowId: mode === "unchanged" ? knownFollowId : null,
-      offset: 0,
-      pageCount: 0,
-      sourceFollowerCount: mode === "count" ? 2 : 1,
-    },
-  });
-  const stored = await findPageById(db.db, page.id);
+  await ensurePageSyncStates(db.db, { pageId: page.id });
   const run = await startSyncRun(db.db, {
     platformAccountId: page.id,
     stream: "followers",
     trigger: "manual",
   });
-  if (!stored || !run) throw new Error("run seed failed");
+  if (!run) throw new Error("run seed failed");
   const telemetry = new SyncRunTelemetry(app, {
     runId: run.id,
     platformAccountId: page.id,
@@ -95,29 +90,36 @@ export async function followersDiagnosticFixture(
     if (!row) throw new Error("followers reconcile queue seed missing");
     return row.request_seq;
   };
-  const runHandlerAndFinishTelemetry = async () => {
-    const input: Parameters<typeof executeFollowersChunk>[1] = {
-      pageContext: {
-        platform: "fansly",
-        page: { ...stored.page, platformAccountId: "account-1" },
-        session: { authorization: "test-token" },
-        proxy: null,
-        egressKey: "direct",
-      },
-      streamState: {
-        ...followerState,
-        platform: "fansly",
-        proxyUrl: null,
-        egressKey: "direct",
-      },
-      syncRunId: run.id,
-      telemetry,
-      budget: new SyncChunkBudget(10),
+  /** The walk's completion: its decision receipt (fail-open, as telemetry
+   *  is) and its run finished as a success. */
+  const recordWalkAndFinishTelemetry = async () => {
+    const walk = WALKS[mode];
+    const counts = {
+      activeFollowerCount: 1,
+      sourceFollowerCount: walk.sourceFollowerCount,
+      pageCount: 1,
+      processedThisChunk: 1,
     };
-    const result = await executeFollowersChunk(app, input);
-    // This fixture exercises the handler and readers, not executor lease/CAS completion.
-    await telemetry.finish(result.satisfied ? "success" : "partial");
-    return result;
+    const decision = followersReconcileDecision({ ...walk, ...counts });
+    const receipt = decision.requested
+      ? (await requestPageSync(db.db, {
+        pageId: page.id,
+        streams: ["followers_reconcile"],
+        source: "anomaly",
+        includeQueueState: true,
+        coalesceOutstanding: true,
+      }))?.find((row) => row.stream === "followers_reconcile") ?? null
+      : null;
+    await telemetry.addNote("Fansly followers reconcile decision", {
+      followersReconcile: {
+        schemaVersion: 1, ...decision, counts,
+        knownCheckpoint: walk.knownFollowId !== null, pageDone: walk.pageDone,
+        requestedSeq: receipt?.requestedSeq ?? null, queueBefore: receipt?.queueBefore ?? null,
+        coalesced: receipt?.coalesced === true,
+      },
+    });
+    await telemetry.finish("success");
+    return decision;
   };
-  return { app, page, run, telemetry, runHandlerAndFinishTelemetry, queue, getFollowersPage };
+  return { app, page, run, telemetry, recordWalkAndFinishTelemetry, queue };
 }

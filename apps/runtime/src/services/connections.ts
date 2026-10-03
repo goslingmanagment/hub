@@ -17,12 +17,11 @@ import {
 } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
-import { BadRequestError, ConflictError, NotFoundError } from "./errors.ts";
+import { BadRequestError, NotFoundError } from "./errors.ts";
 import { handleSuccessfulPageVerificationRecovery } from "./notification-incidents.ts";
-import { resolveStoredProxyConfig, resolveStoredProxyEgressKey, saveProxy } from "./page-context.ts";
+import { resolveStoredProxyConfig, saveProxy } from "./page-context.ts";
 import { assertAllowedProxyTarget } from "./proxy-validation.ts";
-import { fanslyPageSendGuard } from "./fansly-send-guard/index.ts";
-import { checkFanslyIdentityThroughEngine, fanslyAccountRoute, saveVerifiedFanslyCredentials } from "./sync-engine-account.ts";
+import { assertFanslyPageOnEngine, checkFanslyIdentityThroughEngine, saveVerifiedFanslyCredentials } from "./sync-engine-account.ts";
 import { buildPageSyncUx } from "./sync-ux.ts";
 import { getSyncStatusSummarySnapshot } from "./sync-summary.ts";
 
@@ -41,21 +40,6 @@ function serializePageMetric(value: number | null | undefined) {
     value: value ?? null,
     available: value !== null && value !== undefined,
   };
-}
-
-function assertVerifiedAccountIdentity(
-  pageLabel: string,
-  expectedPlatformAccountId: string | null,
-  actualPlatformAccountId: string,
-) {
-  if (!expectedPlatformAccountId || expectedPlatformAccountId === actualPlatformAccountId) {
-    return;
-  }
-
-  throw new ConflictError(
-    `Submitted credentials belong to upstream account "${actualPlatformAccountId}", ` +
-      `but page "${pageLabel}" is bound to "${expectedPlatformAccountId}"`,
-  );
 }
 
 function decryptStoredCredentials(
@@ -226,13 +210,13 @@ export async function updatePageCredentials(
       `OnlyFans pages have no stored credentials to update: page "${stored.page.label}" syncs via its OFAPI account mapping`,
     );
   }
-  // Step-3 design §3.5 item 6: on a live page the session check is the
-  // engine's (`account.identity` with the candidate); a page being switched
-  // refuses (409) before anything is sent or stored.
-  const route = await fanslyAccountRoute(app, stored.page);
+  // Step-3 design §3.5 item 6: the session check is the engine's
+  // (`account.identity` with the candidate). A page being switched, or one the
+  // engine does not run, refuses (409) before anything is sent or stored — no
+  // legacy `/account/me` is left to check it with (step 4, S4-19).
+  await assertFanslyPageOnEngine(app, stored.page);
 
   const storedProxy = resolveStoredProxyConfig(app, stored.proxy);
-  const storedEgressKey = resolveStoredProxyEgressKey(stored.proxy);
   const explicitProxy = body.proxy === undefined ? null : normalizeProxyInput(body.proxy);
   if (explicitProxy) {
     await assertAllowedProxyTarget(explicitProxy);
@@ -254,82 +238,24 @@ export async function updatePageCredentials(
   const preservesStoredProxyRoute = Boolean(
     proxyRouteKey && storedProxyRouteKey && proxyRouteKey === storedProxyRouteKey,
   );
-  const proxyEgressKey = preservesStoredProxyRoute
-    ? storedEgressKey
-    : buildProxyEgressKey(proxy);
-  const storedCredentials = body.session === undefined
-    ? decryptStoredCredentials(app, stored)
-    : null;
-
-  // Verify credentials with platform adapter
-  const session = body.session ?? (
-    storedCredentials?.platform === "fansly" ? storedCredentials.session : null
-  );
-  if (!session) {
-    throw new BadRequestError(`Page "${stored.page.label}" has no stored Fansly session`);
+  // A change without a session rides the stored one: it must be there and
+  // readable as this page's (400 otherwise, before any work is queued).
+  if (body.session === undefined) {
+    decryptStoredCredentials(app, stored);
   }
 
-  if (route === "engine") {
-    return updateEnginePageCredentials(app, stored.page, {
-      // A parsed JSON body never carries an `undefined` member.
-      session: (body.session ?? null) as FanslySessionBundle | null,
-      proxy: explicitProxy && proxy ? proxy : null,
-      rateLimitScopeKey: preservesStoredProxyRoute ? stored.proxy?.rateLimitScopeKey ?? null : null,
-    });
-  }
-
-  const verification = await app.adapter.verifySession({
-    session,
-    proxy,
-    egressKey: proxyEgressKey,
-    // The page's own guard, whatever proxy the check rides (plan §2.4).
-    sendGuard: fanslyPageSendGuard(app, stored.page.id, "account_me_api"),
+  return updateEnginePageCredentials(app, stored.page, {
+    // A parsed JSON body never carries an `undefined` member.
+    session: (body.session ?? null) as FanslySessionBundle | null,
+    proxy: explicitProxy && proxy ? proxy : null,
+    rateLimitScopeKey: preservesStoredProxyRoute ? stored.proxy?.rateLimitScopeKey ?? null : null,
   });
-  assertVerifiedAccountIdentity(
-    stored.page.label,
-    stored.page.platformAccountId,
-    verification.parsed.account.id,
-  );
-
-  // Save encrypted credentials
-  const credentials: StoredPlatformCredentialBundle | null = body.session
-    ? { platform: "fansly", session: body.session }
-    : null;
-
-  if (credentials) {
-    const encrypted = encryptJson(
-      credentials,
-      app.config.encryptionKey,
-      app.config.encryptionKeyVersion,
-    );
-    await storePlatformCredentials(app.db, {
-      platformAccountId: stored.page.id,
-      encryptedSession: JSON.stringify(encrypted),
-      keyVersion: app.config.encryptionKeyVersion,
-    });
-  }
-
-  if (explicitProxy && proxy) {
-    await saveProxy(app, stored.page.id, proxy, {
-      rateLimitScopeKey: preservesStoredProxyRoute ? stored.proxy?.rateLimitScopeKey : undefined,
-    });
-  }
-
-  const recoveredAt = new Date();
-  const recovery = await handleSuccessfulPageVerificationRecovery(app, {
-    platformAccountId: stored.page.id,
-    pageLabel: stored.page.label,
-    platform: stored.page.platform,
-    recoveredAt,
-  });
-
-  return { updated: true, verified: true, syncUnblocked: recovery.syncUnblocked };
 }
 
 /**
  * The credentials change of a live engine page (design step 3 §3.5 item 6):
- * the candidate is checked through the page's actor, then stored as the
- * legacy path stores it and trusted by the engine in ONE transaction that is
+ * the candidate is checked through the page's actor, then stored and trusted
+ * by the engine in ONE transaction that is
  * a CAS on the pair the check proved (step 3b ruling 5). Nothing is stored
  * when the check does not match or the stored credentials changed since. An
  * auth hold of the old credentials ends when the engine's verify of the new
@@ -359,12 +285,13 @@ async function updateEnginePageCredentials(
         candidate.rateLimitScopeKey === null ? {} : { rateLimitScopeKey: candidate.rateLimitScopeKey });
     }
   });
-  const recovery = await handleSuccessfulPageVerificationRecovery(app, {
+  await handleSuccessfulPageVerificationRecovery(app, {
     platformAccountId: page.id,
     pageLabel: page.label,
     platform: "fansly",
     recoveredAt: new Date(),
-    unblockLegacyStreams: false,
   });
-  return { updated: true, verified: true, syncUnblocked: recovery.syncUnblocked };
+  // `syncUnblocked` stays in the contract for its clients (see
+  // `verifyPageOnEngine`): nothing of the legacy engine is left to unblock.
+  return { updated: true, verified: true, syncUnblocked: true };
 }

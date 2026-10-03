@@ -108,11 +108,11 @@ export interface FanslyJournalBody {
 const CATALOG_KINDS: ReadonlySet<string> = new Set(FANSLY_CATALOG_CANONICALIZED_KINDS);
 const PAYOUT_KINDS: ReadonlySet<string> = new Set(FANSLY_PAYOUTS_CANONICALIZED_KINDS);
 const STATS_KINDS: ReadonlySet<string> = new Set(FANSLY_STATS_CANONICALIZED_KINDS);
-/** Kinds journaled verbatim whose refused body the legacy lane wraps as
- *  `{contractAccepted: false, raw}` (subscribers: executor-handlers.ts
- *  `fanslySubscribersChunk`; group detail: the conversation sweep's
- *  `/group/:id` read). A resource that journals another such kind adds it here
- *  with its port. */
+/** Kinds journaled verbatim whose refused body the legacy lane wrapped as
+ *  `{contractAccepted: false, raw}` (subscribers: the legacy subscribers chunk,
+ *  deleted at step 4; group detail: the conversation sweep's `/group/:id`
+ *  read). A resource that journals another such kind adds it here with its
+ *  port. */
 const RAW_WRAPPED_REFUSAL_KINDS: ReadonlySet<string> = new Set(["subscribers", "group_detail"]);
 
 /** Step 1 (+ the mapper version that goes with it): the lane's own trim. */

@@ -78,8 +78,7 @@ export const FANSLY_CDN_TOKENS_STRIPPED_KINDS = [
  * downloads media from the URLs journaled in the observation that
  * `ai_media_descriptions.source_observation_id` or
  * `message_media_offers.source_observation_id` points at: DM pages today (every
- * one on production), and it also understands the purchase-history shape. The
- * AI fast lane journals `dm_messages` too (fansly-fast-lane.ts).
+ * one on production), and it also understands the purchase-history shape.
  */
 export const FANSLY_CDN_TOKENS_NEVER_STRIPPED_KINDS = [
   "dm_messages",

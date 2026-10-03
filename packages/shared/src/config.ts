@@ -100,6 +100,7 @@ const envSchema = z.object({
   FANSLY_DM_MESSAGES_DELAY_MS: z.coerce.number().int().positive().default(5000),
   FANSLY_DM_HEAD_CATCHUP_PAGE_ALLOWLIST: z.string().default("none"),
   FANSLY_DM_SHADOW_PAGE_ALLOWLIST: z.string().default("none"),
+  // Retired with the legacy WebSocket receiver (step 4, S4-12); parsed, ignored.
   FANSLY_WS_CAPTURE_ENABLED: booleanSchema.default(false),
   FANSLY_WS_CAPTURE_PAGE_ALLOWLIST: z.string().default(""),
   FANSLY_LIVE_OVERLAY_READ_PAGES: z.string().default("none"),
@@ -364,7 +365,7 @@ const envSchema = z.object({
   // frame says a fan sent media. OFF until the owner enables it after stage 1.
   AI_MEDIA_DESCRIBE_FANSLY_ACCELERATOR_ENABLED: booleanSchema.default(false),
   AI_MEDIA_DESCRIBE_FANSLY_ACCELERATOR_DAILY_LIMIT: z.coerce.number().int().min(0).default(60),
-  // Fansly fast lane: a head read right after the hub's own WS frame (off).
+  // Retired with the AI media fast lane (step 4, S4-12); parsed, ignored.
   AI_MEDIA_DESCRIBE_FANSLY_FAST_LANE_MODE: z.enum(["off", "shadow", "serve"]).default("off"),
   AI_MEDIA_DESCRIBE_FANSLY_FAST_LANE_PAGES: z.string().default(""),
   // Agent Read Plane (slice 0a). Every one of these ships OFF/false so the deploy
@@ -386,13 +387,10 @@ const envSchema = z.object({
   // off = hydration operations answer 503; request_only = requests can be filed and
   // decided but nothing executes; dispatch = the executor drains approvals.
   AGENT_HYDRATION_MODE: z.enum(["off", "request_only", "dispatch"]).default("off"),
-  // Decision #202: the in-kernel auto-approve policy for BOUNDED Fansly
-  // thread-deepening requests. off = policy dormant; shadow = log what WOULD be
-  // approved, decide nothing; enforce = decide, within the daily call budget.
+  // Retired at step 4 (S4-15) with the hydration auto-approve policy (decision
+  // #202): parsed so an env that sets them boots, read by nothing, removed
+  // with the other retired Fansly keys (S4-26).
   AGENT_HYDRATION_AUTO_APPROVE_MODE: z.enum(["off", "shadow", "enforce"]).default("off"),
-  // Vendor calls the policy may RESERVE per UTC day (sum of approved maxCalls;
-  // the adapter's own retries are not counted here). 0 = the policy approves
-  // nothing even in enforce — the inert default.
   AGENT_HYDRATION_AUTO_DAILY_CALL_BUDGET: z.coerce.number().int().min(0).default(0),
   // The value served in `exportPolicy`. Widening the wire literal to this enum is a
   // CODE deploy (clients validate successful responses against a vendored schema);
@@ -471,18 +469,33 @@ export interface AppConfig {
   fanslyDmMessagesDelayMs: number;
   fanslyDmHeadCatchupPageAllowlist?: string;
   fanslyDmShadowPageAllowlist?: string;
+  /** @deprecated Retired with the legacy WebSocket receiver (step 4, S4-12):
+   *  every Fansly page's socket runs in the Sync Engine and nothing reads it.
+   *  Parsed so an env that sets it boots; removed in S4-26. */
   fanslyWsCaptureEnabled?: boolean;
+  /** @deprecated Retired, like {@link AppConfig.fanslyWsCaptureEnabled}. */
   fanslyWsCapturePageAllowlist?: string;
   /** Pages whose chatter routes and AI kernel context read the live overlay
    * (CSV of labels, `all` or `none`); see fansly-live-overlay-read.ts. */
   fanslyLiveOverlayReadPages?: string;
+  /** @deprecated Retired, ignored: nothing reads it since the legacy Fansly
+   *  money lanes were deleted (step 4, S4-16). Parsed so an env that sets it
+   *  still boots; removed with its production override in S4-26. */
   fanslyFanEarningsRecoveryEnabled?: boolean;
+  /** @deprecated Retired, ignored, like {@link AppConfig.fanslyFanEarningsRecoveryEnabled}. */
   fanslyFanEarningsRecoveryPageAllowlist?: string;
+  /** @deprecated Retired, ignored, like {@link AppConfig.fanslyFanEarningsRecoveryEnabled}. */
   fanslyFanEarningsTargetsEnabled?: boolean;
+  /** @deprecated Retired, ignored, like {@link AppConfig.fanslyFanEarningsRecoveryEnabled}. */
   fanslyFanEarningsTargetsPageAllowlist?: string;
+  /** @deprecated Retired, ignored, like {@link AppConfig.fanslyFanEarningsRecoveryEnabled}. */
   fanslyFanEarningsTargetsDailyAttemptLimit?: number;
+  /** @deprecated Retired, ignored, like {@link AppConfig.fanslyFanEarningsRecoveryEnabled}. */
   fanslyFanEarningsRosterMaxAgeHours?: number;
+  /** @deprecated Ignored since step 4: the legacy followers reconcile that read
+   *  it is deleted. Parsed so an env that sets it boots; removed in step 4. */
   fanslyFollowersSettlementReuseEnabled?: boolean;
+  /** @deprecated Ignored, like {@link AppConfig.fanslyFollowersSettlementReuseEnabled}. */
   fanslyFollowersSettlementReusePageAllowlist?: string;
   fanslyDmBoundedEnabled?: boolean;
   fanslyDmBoundedPageAllowlist?: string;
@@ -491,6 +504,7 @@ export interface AppConfig {
   fanslyWsHintsPageAllowlist?: string;
   fanslyWsHintsTypeAllowlist?: string;
   fanslyWsHintsPolicies?: string;
+  /** @deprecated Retired, ignored, like {@link AppConfig.fanslyFanEarningsRecoveryEnabled}. */
   fanslyFanEarningsShadowPageAllowlist?: string;
   fanslyDmDeepBackfillEnabled?: boolean;
   fanslyDmDeepBackfillMaxRequestsPerRun?: number;
@@ -498,11 +512,14 @@ export interface AppConfig {
   fanslyDmDeepBackfillContinuationDelayMs?: number;
   fanslyDmDeepBackfillContinuationJitterMs?: number;
   onlyFansDefaultDelayMs: number;
+  /** @deprecated Retired at step 4 (S4-19) with its boot invariant; nothing reads it. */
   syncSharedRateLimitEnabled: boolean;
   egressPacerMode: "off" | "shadow" | "enforce";
   lakeDir: string;
   syncPageExecutorConcurrency: number;
+  /** @deprecated Retired, ignored, like {@link AppConfig.fanslyFanEarningsRecoveryEnabled}. */
   transactionLookbackDays: number;
+  /** @deprecated Retired, ignored, like {@link AppConfig.fanslyFanEarningsRecoveryEnabled}. */
   transactionRescanCapDays: number;
   syncObservabilityRetentionDays: number;
   healthSyncLightMaxAgeMinutes: number;
@@ -527,54 +544,61 @@ export interface AppConfig {
   ofapiDmProjectionEnabled?: boolean;
   ofapiDmSyncEnabled?: boolean;
   ofapiDmColdArchiveEnabled?: boolean;
+  /** @deprecated Retired at step 4 with the legacy ramp gate of fan_earnings and purchase_history; nothing reads it. */
   fanslyFanEarningsSyncEnabled?: boolean;
+  /** @deprecated Retired, ignored, like {@link AppConfig.fanslyFanEarningsRecoveryEnabled}. */
   fanslyPurchaseHistorySyncEnabled?: boolean;
+  /** @deprecated Retired at step 4 with the legacy ramp gate of fan_earnings and purchase_history; nothing reads it. */
   fanslyNewStreamPageAllowlist?: string;
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyStatsSnapshotSyncEnabled?: boolean;
-  /** CSV of page labels allowed to run the stats sweep; empty = NONE (fails closed). */
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyStatsSnapshotPageAllowlist?: string;
-  /** HTTP ATTEMPTS per page per UTC day for the stats lane; crossing it defers. */
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyStatsSnapshotDailyCallBudget?: number;
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyNotificationsSyncEnabled?: boolean;
-  /** CSV of page labels allowed to poll notifications; empty = NONE (fails closed). */
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyNotificationsPageAllowlist?: string;
-  /** HTTP ATTEMPTS per page per UTC day for the notification lane; crossing it defers. */
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyNotificationsDailyCallBudget?: number;
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyCatalogSyncEnabled?: boolean;
-  /** CSV of page labels allowed to sweep the catalog; empty = NONE (fails closed). */
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyCatalogPageAllowlist?: string;
-  /** HTTP ATTEMPTS per page per UTC day for the catalog lane; crossing it defers. */
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyCatalogDailyCallBudget?: number;
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyPostRepliesSyncEnabled?: boolean;
-  /** CSV of page labels allowed to walk post replies; empty = NONE (fails closed). */
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyPostRepliesPageAllowlist?: string;
-  /** HTTP ATTEMPTS per page per UTC day for the replies walk; crossing it defers. */
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyRepliesDailyCallBudget?: number;
   /** How stale a post's last walk must be before the round-robin re-reads it. */
   fanslyRepliesRewalkCycleDays?: number;
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyPayoutsSyncEnabled?: boolean;
-  /** CSV of page labels allowed to read payouts; empty = NONE (fails closed). */
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyPayoutsPageAllowlist?: string;
-  /** HTTP ATTEMPTS per page per UTC day for the payouts lane; crossing it defers. */
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyPayoutsDailyCallBudget?: number;
-  /** WP-F4: the per-media statistics lane over `/it/moie/statsnew`. */
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyMediaStatsSyncEnabled?: boolean;
-  /** CSV of page labels allowed to walk per-media stats; empty = NONE (fails closed). */
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyMediaStatsPageAllowlist?: string;
-  /** HTTP ATTEMPTS per page per UTC day for the per-media lane; crossing it defers.
-   *  The lane is DESIGNED to spend all of it when M is large (A16). */
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyMediaStatsDailyCallBudget?: number;
-  /** How stale a long-tail media item's last visit must be before the
-   *  round-robin re-reads it (A6's one explicitly tunable cadence). */
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyMediaStatsLongTailCycleDays?: number;
-  /** WP-F6: the decayed `GET /post?ids=` phase on the EXISTING posts stream. */
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyPostEngagementRefreshEnabled?: boolean;
-  /** HTTP ATTEMPTS per page per UTC day for the engagement phase; crossing it
-   *  defers. Counted apart from the timeline walk in the same posts cursor. */
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyPostEngagementDailyCallBudget?: number;
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyStatsHourlyEnabled?: boolean;
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyStatsHourlyBackfillMaxDays?: number;
-  /** Delay + 30% jitter between BACKFILL chunk continuations (burst shape). */
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyBackfillContinuationDelayMs?: number;
   fanslyDeepBackfillIgnoreRetentionLimit?: boolean;
   ofapiDmColdArchiveRetentionDays?: number;
@@ -685,9 +709,10 @@ export interface AppConfig {
   aiMediaDescribeFanslyAcceleratorEnabled?: boolean;
   /** Agency-wide accelerator reads per rolling 24 h. */
   aiMediaDescribeFanslyAcceleratorDailyLimit?: number;
-  /** Fansly fast lane: off, shadow (route and count only) or serve. */
+  /** @deprecated Retired with the AI media fast lane (step 4, S4-12): nothing
+   *  reads it. Parsed so an env that sets it boots; removed in S4-26. */
   aiMediaDescribeFanslyFastLaneMode?: "off" | "shadow" | "serve";
-  /** Fast lane allowlist: comma-separated page labels, or `*`. */
+  /** @deprecated Retired, like {@link AppConfig.aiMediaDescribeFanslyFastLaneMode}. */
   aiMediaDescribeFanslyFastLanePages?: string;
   openrouterApiKey?: string | null;
   // Agent Read Plane (slice 0a) — all live-wired, all inert by default.
@@ -699,9 +724,11 @@ export interface AppConfig {
   agentSearchBackend?: "off" | "fts" | "fts_trgm";
   /** off = hydration 503; request_only = state only; dispatch = executor runs. */
   agentHydrationMode?: "off" | "request_only" | "dispatch";
-  /** Decision #202 autopilot: off | shadow (log only) | enforce (decides). */
+  /** @deprecated Ignored: the hydration auto-approve policy (decision #202) is
+   *  gone since step 4 (S4-15). Parsed so an env that sets it boots; removed
+   *  with the other retired Fansly keys (S4-26). */
   agentHydrationAutoApproveMode?: "off" | "shadow" | "enforce";
-  /** Vendor calls the autopilot may reserve per UTC day; 0 = inert. */
+  /** @deprecated Ignored, like {@link AppConfig.agentHydrationAutoApproveMode}. */
   agentHydrationAutoDailyCallBudget?: number;
   /** The value served in `exportPolicy`; flipped only after the fleet re-vendors. */
   agentExportPolicyValue?: AgentExportPolicyValue;
@@ -791,21 +818,6 @@ export const IGNORED_FANSLY_ENDPOINT_PAUSE_ENV_KEYS = [
 /** The ignored endpoint pause env vars this environment sets (boot warning). */
 export function listIgnoredFanslyEndpointPauseEnv(env: NodeJS.ProcessEnv = process.env) {
   return IGNORED_FANSLY_ENDPOINT_PAUSE_ENV_KEYS.filter((key) => hasConfiguredValue(env[key]));
-}
-
-/** Concurrency > 1 is only safe when the shared rate limiter is on (the limiter is
- *  what keeps simultaneous workers from hammering an upstream past its budget). The
- *  boot check in bootstrap.ts throws on this; exposed here as a pure validator so the
- *  Stage B/C PATCH can reject the same combination before applying an override.
- *  Returns the boot error message when violated, else null. */
-export function checkSyncConcurrencyInvariant(input: {
-  pageExecutorConcurrency: number;
-  sharedRateLimitEnabled: boolean;
-}): string | null {
-  if (input.pageExecutorConcurrency > 1 && !input.sharedRateLimitEnabled) {
-    return "SYNC_PAGE_EXECUTOR_CONCURRENCY > 1 requires SYNC_SHARED_RATE_LIMIT_ENABLED=true";
-  }
-  return null;
 }
 
 export function loadConfig(

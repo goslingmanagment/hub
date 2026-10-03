@@ -14,15 +14,14 @@ import { encryptSyncWorkSecret } from "../sync/requests/secret-params.ts";
 import type { EnqueueAndWaitResult } from "../sync/requests/urgent.ts";
 import { readFanslyPageGeneration } from "./egress/fansly-probe-context.ts";
 import type { AppContext } from "../bootstrap.ts";
-import { AppError, BadRequestError } from "./errors.ts";
+import { AppError, BadRequestError, LegacySyncRetiredError, NotFoundError } from "./errors.ts";
 import { handleSuccessfulPageVerificationRecovery } from "./notification-incidents.ts";
 import { FanslyPageSwitchingError } from "./sync-engine-guard.ts";
 
-// The owner's `/account/me` senders on a page the Fansly Sync Engine owns
-// (design step 3 §3.5 item 6, replacing S3-01's 409 for `live`). The API and
-// the CLI never call Fansly for such a page: they put work on the page's queue
-// and wait (≤ 30 s) for the actor's answer, paced like every request of the
-// page.
+// The owner's `/account/me` senders of a Fansly page (design step 3 §3.5
+// item 6). The API and the CLI never call Fansly for a page: they put work on
+// the page's queue and wait (≤ 30 s) for the actor's answer, paced like every
+// request of the page.
 //   - page verify ⇒ `account.verify`;
 //   - a credentials or proxy change ⇒ `account.identity` with the candidate
 //     session/proxy sealed in the work's secret, over the stored credentials
@@ -33,10 +32,13 @@ import { FanslyPageSwitchingError } from "./sync-engine-guard.ts";
 //     exact pair the check proved (`saveVerifiedFanslyCredentials`, step 3b
 //     ruling 5). Trusting lifts no hold: under a credentials hold the actor
 //     then verifies the new stored credentials (A3), and that proof clears it.
-// `handover` answers 409 `fansly_page_switching`; `off`/`shadow` (or no engine
-// row) keep the legacy path. The engine's queue (`requests/urgent.ts`, which
-// loads the whole registry) is loaded only when a live page needs it, so the
-// legacy services that route here stay light.
+// `handover` answers 409 `fansly_page_switching`. A Fansly page the engine does
+// not run (`off`, `shadow` or no engine row) has no sender at all since step 4
+// (S4-19 deleted the legacy `/account/me` fallbacks; every Fansly page is
+// `live` and a new one is born `live`) and answers 409 `legacy_sync_retired`
+// before anything is resolved, sent or stored. The engine's queue
+// (`requests/urgent.ts`, which loads the whole registry) is loaded only when a
+// live page needs it, so the services that route here stay light.
 
 async function urgent() {
   return import("../sync/requests/urgent.ts");
@@ -60,16 +62,13 @@ export class FanslySyncWorkQueuedError extends AppError {
   }
 }
 
-/** Which engine answers the page's `/account/me` now. */
-export type FanslyAccountRoute = "legacy" | "engine";
-
-/** `legacy` for an `off`/`shadow` page (or one without an engine row),
- *  `engine` for a `live` one; a page being switched refuses (409). */
-export async function fanslyAccountRoute(app: { db: Database }, page: { id: number; label: string }): Promise<FanslyAccountRoute> {
+/** The engine answers a Fansly page's `/account/me` only for a page it runs
+ *  (`live`): a page being switched refuses (409 `fansly_page_switching`), any
+ *  other Fansly page refuses (409 `legacy_sync_retired`). */
+export async function assertFanslyPageOnEngine(app: { db: Database }, page: { id: number; label: string }): Promise<void> {
   const ownership = await isFanslyPageEngineOwned(app.db, page.id);
-  if (!ownership.owned) return "legacy";
   if (ownership.mode === "handover") throw new FanslyPageSwitchingError(page.label);
-  return "engine";
+  if (!ownership.owned) throw new LegacySyncRetiredError({ pageLabel: page.label, platform: "fansly" });
 }
 
 /** The engine's wait of one owner action. */
@@ -289,27 +288,30 @@ export async function saveVerifiedFanslyCredentials(
 }
 
 /**
- * The owner's page verify (route and CLI) of a page the engine runs: the
- * verify goes through the page's actor and, once it answered, the
- * verification incidents resolve — the legacy streams' auth block is the
- * legacy engine's state and stays as it is (J5). Null: the legacy engine
- * owns the page (its own verify path runs). 409 while the page is switching.
+ * The owner's page verify (route and CLI) of a Fansly page: the verify goes
+ * through the page's actor and, once it answered, the verification incidents
+ * resolve. Null: not a Fansly page (the caller answers that). 404 for an
+ * unknown label; 409 while the page is switching or when the engine does not
+ * run it.
  */
 export async function verifyPageOnEngine(
   app: Pick<AppContext, "db" | "config" | "logger">,
   pageLabel: string,
-): Promise<{ verified: true; username: string | null; platform: "fansly"; syncUnblocked: boolean } | null> {
+): Promise<{ verified: true; username: string | null; platform: "fansly"; syncUnblocked: true } | null> {
   const stored = await findPageByLabel(app.db, pageLabel);
-  if (!stored || stored.page.platform !== "fansly") return null;
+  if (!stored) throw new NotFoundError(`Page "${pageLabel}" not found`);
+  if (stored.page.platform !== "fansly") return null;
   const page = { id: stored.page.id, label: stored.page.label };
-  if ((await fanslyAccountRoute(app, page)) === "legacy") return null;
+  await assertFanslyPageOnEngine(app, page);
   const verified = await verifyFanslyPageThroughEngine(app, page);
-  const recovery = await handleSuccessfulPageVerificationRecovery(app, {
+  await handleSuccessfulPageVerificationRecovery(app, {
     platformAccountId: page.id,
     pageLabel: page.label,
     platform: "fansly",
     recoveredAt: new Date(),
-    unblockLegacyStreams: false,
   });
-  return { verified: true, username: verified.username ?? stored.page.username, platform: "fansly", syncUnblocked: recovery.syncUnblocked };
+  // `syncUnblocked` stays in the contract for its clients: nothing of the
+  // legacy engine is left to unblock, and an engine hold clears by the engine's
+  // own proof (A3), so a verified page is never "verified but still blocked".
+  return { verified: true, username: verified.username ?? stored.page.username, platform: "fansly", syncUnblocked: true };
 }

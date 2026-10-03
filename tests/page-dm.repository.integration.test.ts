@@ -10,20 +10,13 @@ import {
   createModel,
   deletePageDmMessageByPlatformMessageId,
   excludePageDmConversationMessageSync,
-  finalizePageDmConversationMessageSync,
-  getConversationSyncHealth,
-  getPageDmMessageIdsAtOrBefore,
   getPageDmSyncCoverage,
   getPageConversationPreview,
   getPageConversationMessages,
   listPageDmThreadIdsByGeneration,
   listPageDmThreadIdsStampedWithGeneration,
-  markPageDmConversationsInvisibleByGeneration,
   maxPageDmThreadGeneration,
-  recordConversationSyncFailure,
   refreshPageDmConversationWindow,
-  selectNextPageDmMessageDeepBackfillCandidate,
-  selectNextPageDmMessageSyncCandidate,
   upsertFans,
   upsertPageDmConversation,
   upsertPageDmMessages,
@@ -110,6 +103,43 @@ async function readThreadState(testDb: StartedTestDatabase, platformAccountId: n
   ]));
 }
 
+/** A legacy per-thread breaker row as the retired Fansly DM lanes left it
+ *  (their writer is gone since step 4, S4-15; the rows stay as records). */
+async function seedBreakerRow(
+  testDb: StartedTestDatabase,
+  input: { conversationId: number; platformAccountId: number; failureCount?: number },
+) {
+  await testDb.pool.query(
+    `insert into page_dm_message_sync_health (conversation_id, platform_account_id, failure_count, error_class,
+            last_error, last_attempt_at, next_retry_at, quarantine_until, updated_at)
+     values ($1, $2, $3, 'fansly_500', 'error getting group messages', now(), now() + interval '5 minutes',
+            case when $3 >= 4 then now() + interval '6 hours' end, now())
+     on conflict (conversation_id) do update set
+       failure_count = excluded.failure_count, error_class = excluded.error_class, last_error = excluded.last_error,
+       last_attempt_at = excluded.last_attempt_at, next_retry_at = excluded.next_retry_at,
+       quarantine_until = excluded.quarantine_until, updated_at = excluded.updated_at`,
+    [input.conversationId, input.platformAccountId, input.failureCount ?? 1],
+  );
+}
+
+async function readBreakerRow(testDb: StartedTestDatabase, conversationId: number) {
+  const { rows } = await testDb.pool.query<{
+    failureCount: number;
+    errorClass: string | null;
+    lastError: string | null;
+    nextRetryAt: Date | null;
+    quarantineUntil: Date | null;
+    preferredPageLimit: number | null;
+  }>(
+    `select failure_count as "failureCount", error_class as "errorClass", last_error as "lastError",
+            next_retry_at as "nextRetryAt", quarantine_until as "quarantineUntil",
+            preferred_page_limit as "preferredPageLimit"
+     from page_dm_message_sync_health where conversation_id = $1`,
+    [conversationId],
+  );
+  return rows[0] ?? null;
+}
+
 describe("page DM repository integration", () => {
   let testDb: StartedTestDatabase | null = null;
 
@@ -129,337 +159,6 @@ describe("page DM repository integration", () => {
     }
 
     await resetIntegrationDatabase(testDb.pool);
-  });
-
-  it("skips stale mismatched heads and falls through to pending backfill conversations", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    const now = new Date("2026-03-20T12:00:00.000Z");
-    const page = await createTestPage(testDb, "page-dm-sync-stale");
-    const [staleFan, backlogFan] = await upsertFans(testDb.db, [
-      {
-        platform: "fansly",
-        platformUserId: "fan-stale",
-        username: "fan_stale",
-        displayName: "Fan Stale",
-      },
-      {
-        platform: "fansly",
-        platformUserId: "fan-backlog",
-        username: "fan_backlog",
-        displayName: "Fan Backlog",
-      },
-    ]);
-
-    await upsertPageDmConversation(testDb.db, {
-      platformAccountId: page.id,
-      fanId: staleFan.id,
-      platformConversationId: "stale-mismatch",
-      partnerPlatformUserId: "fan-stale",
-      partnerUsername: "fan_stale",
-      partnerDisplayName: "Fan Stale",
-      conversationFlags: 0,
-      unreadCount: 99,
-      subscriptionTierId: null,
-      lastMessageId: "msg-101",
-      lastUnreadMessageId: "msg-101",
-      lastMessageAt: new Date("2026-03-19T12:00:00.000Z"),
-      lastMessageSenderId: "fan-stale",
-      lastMessageSenderRole: "fan",
-      lastMessagePreview: "stale mismatch",
-      lastFanMessageAt: new Date("2026-03-19T12:00:00.000Z"),
-      lastModelMessageAt: null,
-      storedMessageCount: 25,
-      newestStoredMessageId: "msg-100",
-      oldestStoredMessageId: "msg-076",
-      messageBackfillComplete: true,
-      lastMessageSyncAt: new Date("2026-03-19T12:05:00.000Z"),
-      isVisible: true,
-      lastSeenGeneration: 1,
-      metadata: {},
-    });
-    await upsertPageDmConversation(testDb.db, {
-      platformAccountId: page.id,
-      fanId: backlogFan.id,
-      platformConversationId: "pending-backfill",
-      partnerPlatformUserId: "fan-backlog",
-      partnerUsername: "fan_backlog",
-      partnerDisplayName: "Fan Backlog",
-      conversationFlags: 0,
-      unreadCount: 1,
-      subscriptionTierId: null,
-      lastMessageId: null,
-      lastUnreadMessageId: null,
-      lastMessageAt: null,
-      lastMessageSenderId: null,
-      lastMessageSenderRole: "unknown",
-      lastMessagePreview: null,
-      lastFanMessageAt: null,
-      lastModelMessageAt: null,
-      storedMessageCount: 0,
-      newestStoredMessageId: null,
-      oldestStoredMessageId: null,
-      messageBackfillComplete: false,
-      lastMessageSyncAt: null,
-      isVisible: true,
-      lastSeenGeneration: 1,
-      metadata: {},
-    });
-
-    const candidate = await selectNextPageDmMessageSyncCandidate(testDb.db, {
-      platformAccountId: page.id,
-      now,
-    });
-
-    expect(candidate).not.toBeNull();
-    expect(candidate?.platformConversationId).toBe("pending-backfill");
-  });
-
-  it("prioritizes fresh mismatched heads ahead of first-time backfills", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    const now = new Date("2026-03-20T12:00:00.000Z");
-    const page = await createTestPage(testDb, "page-dm-sync-fresh");
-    const [freshFan, backlogFan] = await upsertFans(testDb.db, [
-      {
-        platform: "fansly",
-        platformUserId: "fan-fresh",
-        username: "fan_fresh",
-        displayName: "Fan Fresh",
-      },
-      {
-        platform: "fansly",
-        platformUserId: "fan-backlog-priority",
-        username: "fan_backlog_priority",
-        displayName: "Fan Backlog Priority",
-      },
-    ]);
-
-    await upsertPageDmConversation(testDb.db, {
-      platformAccountId: page.id,
-      fanId: freshFan.id,
-      platformConversationId: "fresh-mismatch",
-      partnerPlatformUserId: "fan-fresh",
-      partnerUsername: "fan_fresh",
-      partnerDisplayName: "Fan Fresh",
-      conversationFlags: 0,
-      unreadCount: 0,
-      subscriptionTierId: null,
-      lastMessageId: "msg-201",
-      lastUnreadMessageId: "msg-201",
-      lastMessageAt: new Date("2026-03-19T12:00:00.000Z"),
-      lastMessageSenderId: "fan-fresh",
-      lastMessageSenderRole: "fan",
-      lastMessagePreview: "fresh mismatch",
-      lastFanMessageAt: new Date("2026-03-19T12:00:00.000Z"),
-      lastModelMessageAt: null,
-      storedMessageCount: 25,
-      newestStoredMessageId: "msg-200",
-      oldestStoredMessageId: "msg-176",
-      messageBackfillComplete: true,
-      lastMessageSyncAt: null,
-      isVisible: true,
-      lastSeenGeneration: 1,
-      metadata: {},
-    });
-    await upsertPageDmConversation(testDb.db, {
-      platformAccountId: page.id,
-      fanId: backlogFan.id,
-      platformConversationId: "backfill-secondary",
-      partnerPlatformUserId: "fan-backlog-priority",
-      partnerUsername: "fan_backlog_priority",
-      partnerDisplayName: "Fan Backlog Priority",
-      conversationFlags: 0,
-      unreadCount: 999,
-      subscriptionTierId: null,
-      lastMessageId: null,
-      lastUnreadMessageId: null,
-      lastMessageAt: null,
-      lastMessageSenderId: null,
-      lastMessageSenderRole: "unknown",
-      lastMessagePreview: null,
-      lastFanMessageAt: null,
-      lastModelMessageAt: null,
-      storedMessageCount: 0,
-      newestStoredMessageId: null,
-      oldestStoredMessageId: null,
-      messageBackfillComplete: false,
-      lastMessageSyncAt: null,
-      isVisible: true,
-      lastSeenGeneration: 1,
-      metadata: {},
-    });
-
-    const candidate = await selectNextPageDmMessageSyncCandidate(testDb.db, {
-      platformAccountId: page.id,
-      now,
-    });
-
-    expect(candidate).not.toBeNull();
-    expect(candidate?.platformConversationId).toBe("fresh-mismatch");
-  });
-
-  it("excludes conversations marked out of message sync from candidate selection", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    const now = new Date("2026-03-20T12:00:00.000Z");
-    const page = await createTestPage(testDb, "page-dm-sync-excluded");
-    const [fan] = await upsertFans(testDb.db, [{
-      platform: "fansly",
-      platformUserId: "fan-excluded",
-      username: "fan_excluded",
-      displayName: "Fan Excluded",
-    }]);
-
-    await upsertPageDmConversation(testDb.db, {
-      platformAccountId: page.id,
-      fanId: fan.id,
-      platformConversationId: "excluded-conversation",
-      partnerPlatformUserId: "fan-excluded",
-      partnerUsername: "fan_excluded",
-      partnerDisplayName: "Fan Excluded",
-      conversationFlags: 0,
-      unreadCount: 3,
-      subscriptionTierId: null,
-      lastMessageId: "msg-401",
-      lastUnreadMessageId: "msg-401",
-      lastMessageAt: new Date("2026-03-19T12:00:00.000Z"),
-      lastMessageSenderId: "fan-excluded",
-      lastMessageSenderRole: "fan",
-      lastMessagePreview: "excluded conversation",
-      lastFanMessageAt: new Date("2026-03-19T12:00:00.000Z"),
-      lastModelMessageAt: null,
-      storedMessageCount: 0,
-      newestStoredMessageId: null,
-      oldestStoredMessageId: null,
-      messageBackfillComplete: false,
-      lastMessageSyncAt: null,
-      isVisible: true,
-      lastSeenGeneration: 1,
-      metadata: {
-        [FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY]:
-          FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS,
-      },
-    });
-
-    const candidate = await selectNextPageDmMessageSyncCandidate(testDb.db, {
-      platformAccountId: page.id,
-      now,
-    });
-
-    expect(candidate).toBeNull();
-  });
-
-  it("does not reselect empty conversations once backfill is complete", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    const now = new Date("2026-03-20T12:00:00.000Z");
-    const page = await createTestPage(testDb, "page-dm-sync-empty-complete");
-    const [fan] = await upsertFans(testDb.db, [{
-      platform: "fansly",
-      platformUserId: "fan-empty-complete",
-      username: "fan_empty_complete",
-      displayName: "Fan Empty Complete",
-    }]);
-
-    await upsertPageDmConversation(testDb.db, {
-      platformAccountId: page.id,
-      fanId: fan.id,
-      platformConversationId: "empty-complete",
-      partnerPlatformUserId: "fan-empty-complete",
-      partnerUsername: "fan_empty_complete",
-      partnerDisplayName: "Fan Empty Complete",
-      conversationFlags: 0,
-      unreadCount: 5,
-      subscriptionTierId: null,
-      lastMessageId: null,
-      lastUnreadMessageId: null,
-      lastMessageAt: null,
-      lastMessageSenderId: null,
-      lastMessageSenderRole: "unknown",
-      lastMessagePreview: null,
-      lastFanMessageAt: null,
-      lastModelMessageAt: null,
-      storedMessageCount: 0,
-      newestStoredMessageId: null,
-      oldestStoredMessageId: null,
-      messageBackfillComplete: true,
-      lastMessageSyncAt: new Date("2026-03-19T12:05:00.000Z"),
-      isVisible: true,
-      lastSeenGeneration: 1,
-      metadata: {},
-    });
-
-    const candidate = await selectNextPageDmMessageSyncCandidate(testDb.db, {
-      platformAccountId: page.id,
-      now,
-    });
-
-    expect(candidate).toBeNull();
-  });
-
-  it("keeps null-last-message-at mismatches eligible before the first message sync", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    const now = new Date("2026-03-20T12:00:00.000Z");
-    const page = await createTestPage(testDb, "page-dm-sync-null-last-message-at");
-    const [fan] = await upsertFans(testDb.db, [{
-      platform: "fansly",
-      platformUserId: "fan-null-last-message-at",
-      username: "fan_null_last_message_at",
-      displayName: "Fan Null Last Message At",
-    }]);
-
-    await upsertPageDmConversation(testDb.db, {
-      platformAccountId: page.id,
-      fanId: fan.id,
-      platformConversationId: "null-last-message-at",
-      partnerPlatformUserId: "fan-null-last-message-at",
-      partnerUsername: "fan_null_last_message_at",
-      partnerDisplayName: "Fan Null Last Message At",
-      conversationFlags: 0,
-      unreadCount: 1,
-      subscriptionTierId: null,
-      lastMessageId: "msg-301",
-      lastUnreadMessageId: "msg-301",
-      lastMessageAt: null,
-      lastMessageSenderId: null,
-      lastMessageSenderRole: "unknown",
-      lastMessagePreview: null,
-      lastFanMessageAt: null,
-      lastModelMessageAt: null,
-      storedMessageCount: 0,
-      newestStoredMessageId: null,
-      oldestStoredMessageId: null,
-      messageBackfillComplete: true,
-      lastMessageSyncAt: null,
-      isVisible: true,
-      lastSeenGeneration: 1,
-      metadata: {},
-    });
-
-    const candidate = await selectNextPageDmMessageSyncCandidate(testDb.db, {
-      platformAccountId: page.id,
-      now,
-    });
-
-    expect(candidate).not.toBeNull();
-    expect(candidate?.platformConversationId).toBe("null-last-message-at");
   });
 
   it("does not count message-sync-excluded conversations in pending conversation backfill coverage", async (context) => {
@@ -547,173 +246,6 @@ describe("page DM repository integration", () => {
     expect(freshness.pendingMessageBackfillCount).toBe(1);
   });
 
-  it("selects deep backfill candidates from partial windows and prioritizes spenders", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    const page = await createTestPage(testDb, "page-dm-deep-backfill");
-    const [spenderFan, regularFan, pendingFan, freshFan] = await upsertFans(testDb.db, [
-      {
-        platform: "fansly",
-        platformUserId: "fan-deep-spender",
-        username: "fan_deep_spender",
-        displayName: "Fan Deep Spender",
-      },
-      {
-        platform: "fansly",
-        platformUserId: "fan-deep-regular",
-        username: "fan_deep_regular",
-        displayName: "Fan Deep Regular",
-      },
-      {
-        platform: "fansly",
-        platformUserId: "fan-deep-pending",
-        username: "fan_deep_pending",
-        displayName: "Fan Deep Pending",
-      },
-      {
-        platform: "fansly",
-        platformUserId: "fan-deep-fresh",
-        username: "fan_deep_fresh",
-        displayName: "Fan Deep Fresh",
-      },
-    ]);
-    await testDb.pool.query(
-      `
-        insert into fan_spend_lifetime (
-          platform_account_id,
-          fan_id,
-          gross_amount_mills,
-          creator_net_amount_mills,
-          last_transaction_at,
-          updated_at
-        )
-        values ($1, $2, 100000, 80000, $3, now())
-      `,
-      [page.id, spenderFan.id, new Date("2026-03-01T00:00:00.000Z")],
-    );
-
-    await upsertPageDmConversation(testDb.db, {
-      platformAccountId: page.id,
-      fanId: spenderFan.id,
-      platformConversationId: "deep-spender",
-      partnerPlatformUserId: "fan-deep-spender",
-      partnerUsername: "fan_deep_spender",
-      partnerDisplayName: "Fan Deep Spender",
-      conversationFlags: 0,
-      unreadCount: 0,
-      subscriptionTierId: null,
-      lastMessageId: "msg-500",
-      lastUnreadMessageId: null,
-      lastMessageAt: new Date("2026-03-18T08:00:00.000Z"),
-      lastMessageSenderId: "fan-deep-spender",
-      lastMessageSenderRole: "fan",
-      lastMessagePreview: "spender",
-      storedMessageCount: 25,
-      newestStoredMessageId: "msg-500",
-      oldestStoredMessageId: "msg-476",
-      messageCoverageStatus: "partial_window",
-      messageBackfillComplete: false,
-      lastMessageSyncAt: new Date("2026-03-18T08:05:00.000Z"),
-      isVisible: true,
-      lastSeenGeneration: 1,
-      metadata: {},
-    });
-    await upsertPageDmConversation(testDb.db, {
-      platformAccountId: page.id,
-      fanId: regularFan.id,
-      platformConversationId: "deep-regular",
-      partnerPlatformUserId: "fan-deep-regular",
-      partnerUsername: "fan_deep_regular",
-      partnerDisplayName: "Fan Deep Regular",
-      conversationFlags: 0,
-      unreadCount: 0,
-      subscriptionTierId: null,
-      lastMessageId: "msg-300",
-      lastUnreadMessageId: null,
-      lastMessageAt: new Date("2026-03-18T08:00:00.000Z"),
-      lastMessageSenderId: "fan-deep-regular",
-      lastMessageSenderRole: "fan",
-      lastMessagePreview: "regular",
-      storedMessageCount: 25,
-      newestStoredMessageId: "msg-300",
-      oldestStoredMessageId: "msg-276",
-      messageCoverageStatus: "partial_window",
-      messageBackfillComplete: false,
-      lastMessageSyncAt: new Date("2026-03-18T08:05:00.000Z"),
-      isVisible: true,
-      lastSeenGeneration: 1,
-      metadata: {},
-    });
-    await upsertPageDmConversation(testDb.db, {
-      platformAccountId: page.id,
-      fanId: pendingFan.id,
-      platformConversationId: "normal-pending",
-      partnerPlatformUserId: "fan-deep-pending",
-      partnerUsername: "fan_deep_pending",
-      partnerDisplayName: "Fan Deep Pending",
-      conversationFlags: 0,
-      unreadCount: 50,
-      subscriptionTierId: null,
-      lastMessageId: null,
-      lastUnreadMessageId: null,
-      lastMessageAt: null,
-      lastMessageSenderId: null,
-      lastMessageSenderRole: "unknown",
-      lastMessagePreview: null,
-      storedMessageCount: 0,
-      newestStoredMessageId: null,
-      oldestStoredMessageId: null,
-      messageCoverageStatus: "pending_backfill",
-      messageBackfillComplete: false,
-      lastMessageSyncAt: null,
-      isVisible: true,
-      lastSeenGeneration: 1,
-      metadata: {},
-    });
-    await upsertPageDmConversation(testDb.db, {
-      platformAccountId: page.id,
-      fanId: freshFan.id,
-      platformConversationId: "normal-fresh",
-      partnerPlatformUserId: "fan-deep-fresh",
-      partnerUsername: "fan_deep_fresh",
-      partnerDisplayName: "Fan Deep Fresh",
-      conversationFlags: 0,
-      unreadCount: 100,
-      subscriptionTierId: null,
-      lastMessageId: "msg-901",
-      lastUnreadMessageId: "msg-901",
-      lastMessageAt: new Date("2026-03-18T09:00:00.000Z"),
-      lastMessageSenderId: "fan-deep-fresh",
-      lastMessageSenderRole: "fan",
-      lastMessagePreview: "fresh",
-      storedMessageCount: 25,
-      newestStoredMessageId: "msg-900",
-      oldestStoredMessageId: "msg-876",
-      messageCoverageStatus: "partial_window",
-      messageBackfillComplete: false,
-      lastMessageSyncAt: null,
-      isVisible: true,
-      lastSeenGeneration: 1,
-      metadata: {},
-    });
-
-    const normalCandidate = await selectNextPageDmMessageSyncCandidate(testDb.db, {
-      platformAccountId: page.id,
-      now: new Date("2026-03-18T10:00:00.000Z"),
-    });
-    const deepCandidate = await selectNextPageDmMessageDeepBackfillCandidate(testDb.db, {
-      platformAccountId: page.id,
-    });
-
-    expect(normalCandidate?.platformConversationId).toBe("normal-fresh");
-    expect(deepCandidate?.platformConversationId).toBe("deep-spender");
-    expect(deepCandidate?.retentionLimit).toBe(PAGE_DM_SPENDER_MESSAGE_RETENTION_LIMIT);
-    expect(deepCandidate?.isSpender).toBe(true);
-  });
-
   it(`prunes regular message history to ${PAGE_DM_REGULAR_MESSAGE_RETENTION_LIMIT} and returns preview rows oldest-to-newest`, async (context) => {
     if (!testDb) {
       context.skip();
@@ -753,6 +285,7 @@ describe("page DM repository integration", () => {
       lastMessagePreview: `message ${messageCount}`,
       lastFanMessageAt: new Date("2026-03-17T14:10:00.000Z"),
       lastModelMessageAt: null,
+      messageCoverageStatus: "complete",
       isVisible: true,
       lastSeenGeneration: 1,
       metadata: {},
@@ -775,10 +308,9 @@ describe("page DM repository integration", () => {
       };
     }));
 
-    await finalizePageDmConversationMessageSync(testDb.db, {
+    await refreshPageDmConversationWindow(testDb.db, {
       conversationId: conversation.id,
-      messageCoverageStatus: "complete",
-      headReadAt: new Date("2026-03-17T13:30:00.000Z"),
+      enforceRetention: true,
     });
 
     const storedMessages = await testDb.pool.query<{ count: string }>(
@@ -813,7 +345,7 @@ describe("page DM repository integration", () => {
     expect(newestFirst?.messages[0]?.tipAmountCents).toBe(500);
   });
 
-  it("keeps every stored message when enforceRetention is false (Stage 1 stand-down)", async (context) => {
+  it("keeps every stored message when the window recompute does not enforce retention (Stage 1 stand-down)", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -869,16 +401,7 @@ describe("page DM repository integration", () => {
       };
     }));
 
-    const finalized = await finalizePageDmConversationMessageSync(testDb.db, {
-      conversationId: conversation.id,
-      messageCoverageStatus: "complete",
-      headReadAt: new Date("2026-03-17T13:30:00.000Z"),
-      enforceRetention: false,
-    });
-    expect(finalized.deletedCount).toBe(0);
-    expect(finalized.summary.storedMessageCount).toBe(messageCount);
-
-    // The live-ingest recompute without enforceRetention must not prune either.
+    // The live-ingest recompute without enforceRetention must not prune.
     const refreshed = await refreshPageDmConversationWindow(testDb.db, {
       conversationId: conversation.id,
     });
@@ -1067,10 +590,9 @@ describe("page DM repository integration", () => {
       };
     }));
 
-    await finalizePageDmConversationMessageSync(testDb.db, {
+    await refreshPageDmConversationWindow(testDb.db, {
       conversationId: conversation.id,
-      messageCoverageStatus: "partial_window",
-      headReadAt: new Date("2026-03-18T09:00:00.000Z"),
+      enforceRetention: true,
     });
 
     const storedMessages = await testDb.pool.query<{
@@ -1094,64 +616,7 @@ describe("page DM repository integration", () => {
     expect(storedMessages.rows[0]?.newest).toBe(latestMessageId);
   });
 
-  it("moves last_message_sync_at only for a head read, and never backwards", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    const page = await createGenerationPage(testDb, "page-dm-head-read");
-    const [fan] = await upsertFans(testDb.db, [{ platform: "fansly", platformUserId: "fan-head-read" }]);
-    if (!fan) throw new Error("test setup: fan creation failed");
-    const headReadAt = new Date("2026-09-22T00:11:00.000Z");
-    const thread = await upsertPageDmConversation(testDb.db, {
-      ...generationThreadInput(page.id, "head-read", 1), fanId: fan.id, lastMessageSyncAt: headReadAt,
-    });
-    const fresh = await upsertPageDmConversation(testDb.db, {
-      ...generationThreadInput(page.id, "head-read-fresh", 1), fanId: fan.id,
-    });
-    if (!thread || !fresh) throw new Error("test setup: thread creation failed");
-    const finalize = async (conversationId: number, at: Date | null) => (await finalizePageDmConversationMessageSync(
-      testDb!.db, { conversationId, messageCoverageStatus: "complete", headReadAt: at, enforceRetention: false },
-    )).conversation?.lastMessageSyncAt;
-
-    // A history walk or a summary repair leaves the watermark alone.
-    expect(await finalize(thread.id, null)).toEqual(headReadAt);
-    expect(await finalize(fresh.id, null)).toBeNull();
-    // An older head read cannot hide a head a newer read already certified.
-    expect(await finalize(thread.id, new Date("2026-09-20T00:00:00.000Z"))).toEqual(headReadAt);
-    const later = new Date("2026-09-28T02:07:00.000Z");
-    expect(await finalize(thread.id, later)).toEqual(later);
-    expect(await finalize(fresh.id, headReadAt)).toEqual(headReadAt);
-  });
-
-  it("counts only stored rows at or below the recorded boundary as known ground", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    const page = await createGenerationPage(testDb, "page-dm-known-ground");
-    const thread = await upsertPageDmConversation(testDb.db, generationThreadInput(page.id, "known-ground", 1));
-    if (!thread) throw new Error("test setup: thread creation failed");
-    const at = (second: number) => new Date(Date.UTC(2026, 8, 20, 0, 0, second));
-    await upsertPageDmMessages(testDb.db, [["m-1", 1], ["m-2", 2], ["m-3", 2], ["m-4", 3]].map(([id, second]) => ({
-      conversationId: thread.id, platformAccountId: page.id, platformMessageId: id as string,
-      senderPlatformUserId: "fan", senderRole: "fan" as const, createdAt: at(second as number),
-      content: "body", totalTipAmountCents: 0, inReplyToMessageId: null, inReplyToRootMessageId: null,
-    })));
-    const knownGround = async (boundaryMessageId: string) => [...await getPageDmMessageIdsAtOrBefore(testDb!.db, {
-      conversationId: thread.id, platformMessageIds: ["m-1", "m-2", "m-3", "m-4", "unstored"], boundaryMessageId,
-    })].sort();
-
-    // Same created_at breaks the tie on the id, as the window summary does.
-    expect(await knownGround("m-2")).toEqual(["m-1", "m-2"]);
-    expect(await knownGround("m-3")).toEqual(["m-1", "m-2", "m-3"]);
-    // An unstored boundary cannot place anything above it: every stored id counts.
-    expect(await knownGround("unstored")).toEqual(["m-1", "m-2", "m-3", "m-4"]);
-  });
-
-  it("backs a failing thread off 5/10/20 minutes up to 6h, quarantines it on the 4th failure, and clears it", async (context) => {
+  it("clears a legacy breaker row's failures on a successful read and keeps its learned page limit", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -1164,38 +629,26 @@ describe("page DM repository integration", () => {
       ...generationThreadInput(page.id, "breaker", 1), fanId: fan.id,
     });
     if (!thread) throw new Error("test setup: thread creation failed");
-    const now = new Date("2026-03-20T12:00:00.000Z");
-    const minutes = (value: number) => new Date(now.getTime() + value * 60_000);
-    const fail = () => recordConversationSyncFailure(testDb!.db, {
-      conversationId: thread.id, platformAccountId: page.id, errorClass: "fansly_500",
-      errorMessage: "error getting group messages", now,
-    });
 
-    expect(await fail()).toEqual({ failureCount: 1, nextRetryAt: minutes(5), quarantineUntil: null });
-    expect(await fail()).toEqual({ failureCount: 2, nextRetryAt: minutes(10), quarantineUntil: null });
-    expect(await fail()).toEqual({ failureCount: 3, nextRetryAt: minutes(20), quarantineUntil: null });
-    expect(await fail()).toEqual({ failureCount: 4, nextRetryAt: minutes(40), quarantineUntil: minutes(360) });
-    expect(await getConversationSyncHealth(testDb.db, thread.id)).toMatchObject({
+    await seedBreakerRow(testDb, { conversationId: thread.id, platformAccountId: page.id, failureCount: 4 });
+    expect(await readBreakerRow(testDb, thread.id)).toMatchObject({
       failureCount: 4, errorClass: "fansly_500", lastError: "error getting group messages",
     });
     expect(await countConversationSyncFailuresByAccount(testDb.db, { platformAccountIds: [page.id] }))
       .toEqual([{ platformAccountId: page.id, failingConversationCount: 1 }]);
-    // The backoff holds at the 6h cap; 5min * 2^35 once overflowed interval
-    // and rolled the 36th write back.
-    for (let failureCount = 5; failureCount < 40; failureCount += 1) await fail();
-    expect(await fail()).toEqual({ failureCount: 40, nextRetryAt: minutes(360), quarantineUntil: minutes(360) });
 
+    // The Fansly Sync Engine's DM read clears the row when nothing sticky is left.
     await clearConversationSyncHealth(testDb.db, thread.id);
-    expect(await getConversationSyncHealth(testDb.db, thread.id)).toBeNull();
+    expect(await readBreakerRow(testDb, thread.id)).toBeNull();
 
     // A learned page limit (0087) outlives the failure bookkeeping.
-    await fail();
+    await seedBreakerRow(testDb, { conversationId: thread.id, platformAccountId: page.id });
     await testDb.pool.query(
       "update page_dm_message_sync_health set preferred_page_limit = 5 where conversation_id = $1", [thread.id],
     );
     await clearConversationSyncHealth(testDb.db, thread.id);
-    expect(await getConversationSyncHealth(testDb.db, thread.id)).toMatchObject({
-      failureCount: 0, nextRetryAt: null, quarantineUntil: null, preferredPageLimit: 5,
+    expect(await readBreakerRow(testDb, thread.id)).toMatchObject({
+      failureCount: 0, errorClass: null, lastError: null, nextRetryAt: null, quarantineUntil: null, preferredPageLimit: 5,
     });
     expect(await countConversationSyncFailuresByAccount(testDb.db, { platformAccountIds: [page.id] })).toEqual([]);
   });
@@ -1218,10 +671,7 @@ describe("page DM repository integration", () => {
       });
       if (!thread) throw new Error("test setup: thread creation failed");
       threads.set(group, thread.id);
-      await recordConversationSyncFailure(testDb.db, {
-        conversationId: thread.id, platformAccountId: page.id, errorClass: "fansly_500",
-        errorMessage: "error getting group messages",
-      });
+      await seedBreakerRow(testDb, { conversationId: thread.id, platformAccountId: page.id });
     }
     const debt = () => countConversationSyncFailuresByAccount(testDb!.db, { platformAccountIds: [page.id] });
     expect(await debt()).toEqual([{ platformAccountId: page.id, failingConversationCount: 4 }]);
@@ -1238,63 +688,12 @@ describe("page DM repository integration", () => {
 
     // Before, every such row kept the page's /health/sync degraded for good.
     expect(await debt()).toEqual([{ platformAccountId: page.id, failingConversationCount: 1 }]);
-    expect(await getConversationSyncHealth(testDb.db, threads.get("hidden")!)).toMatchObject({ failureCount: 1 });
+    expect(await readBreakerRow(testDb, threads.get("hidden")!)).toMatchObject({ failureCount: 1 });
     await clearConversationSyncHealth(testDb.db, threads.get("live")!);
     expect(await debt()).toEqual([]);
     // A thread that returns to the lane carries its failures again.
     await testDb.pool.query("update page_dm_threads set is_visible = true where id = $1", [threads.get("hidden")]);
     expect(await debt()).toEqual([{ platformAccountId: page.id, failingConversationCount: 1 }]);
-  });
-
-  it("offers a breakered thread to neither picker until its window lapses", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    const page = await createGenerationPage(testDb, "page-dm-breaker-pickers");
-    const [pendingFan, partialFan] = await upsertFans(testDb.db, [
-      { platform: "fansly", platformUserId: "fan-breaker-pending" },
-      { platform: "fansly", platformUserId: "fan-breaker-partial" },
-    ]);
-    if (!pendingFan || !partialFan) throw new Error("test setup: fan creation failed");
-    const pending = await upsertPageDmConversation(testDb.db, {
-      ...generationThreadInput(page.id, "breaker-pending", 1), fanId: pendingFan.id,
-      messageCoverageStatus: "pending_backfill",
-    });
-    const partial = await upsertPageDmConversation(testDb.db, {
-      ...generationThreadInput(page.id, "breaker-partial", 1), fanId: partialFan.id,
-      lastMessageId: "partial-5", lastMessageAt: new Date("2026-03-19T12:00:00.000Z"),
-      storedMessageCount: 5, newestStoredMessageId: "partial-5", oldestStoredMessageId: "partial-1",
-      messageCoverageStatus: "partial_window", lastMessageSyncAt: new Date("2026-03-19T12:05:00.000Z"),
-    });
-    if (!pending || !partial) throw new Error("test setup: thread creation failed");
-    const now = new Date("2026-03-20T12:00:00.000Z");
-    const pick = (at: Date) => selectNextPageDmMessageSyncCandidate(testDb!.db, { platformAccountId: page.id, now: at });
-    const pickDeep = (at: Date) =>
-      selectNextPageDmMessageDeepBackfillCandidate(testDb!.db, { platformAccountId: page.id, now: at });
-    expect(await pick(now)).toMatchObject({ id: pending.id });
-    expect(await pickDeep(now)).toMatchObject({ id: partial.id });
-
-    for (const thread of [pending, partial]) {
-      await recordConversationSyncFailure(testDb.db, {
-        conversationId: thread.id, platformAccountId: page.id, errorClass: "fansly_404",
-        errorMessage: "Fansly request failed (404)", now,
-      });
-    }
-    expect(await pick(now)).toBeNull();
-    expect(await pickDeep(now)).toBeNull();
-
-    const lapsed = new Date(now.getTime() + 5 * 60_000);
-    expect(await pick(lapsed)).toMatchObject({ id: pending.id });
-    expect(await pickDeep(lapsed)).toMatchObject({ id: partial.id });
-
-    await testDb.pool.query(
-      "update page_dm_message_sync_health set next_retry_at = null, quarantine_until = $1", [lapsed],
-    );
-    expect(await pick(now)).toBeNull();
-    expect(await pickDeep(now)).toBeNull();
-    expect(await pick(lapsed)).toMatchObject({ id: pending.id });
   });
 
   // G2: last_seen_generation is the sweep-membership set the destructive
@@ -1415,40 +814,6 @@ describe("page DM repository integration", () => {
       expect(await readThreadState(testDb, page.id)).toEqual({
         "newer-first": { generation: 12, isVisible: true },
         "older-first": { generation: 12, isVisible: true },
-      });
-    });
-
-    it("keeps a guard-protected thread visible through a destructive finalization", async (context) => {
-      if (!testDb) {
-        context.skip();
-        return;
-      }
-
-      const page = await createGenerationPage(testDb, "generation-sweep");
-      const generation = 5;
-
-      // The sweep stamps two live threads at the current generation, and a
-      // third thread was last seen a generation ago (genuinely gone).
-      await upsertPageDmConversation(testDb.db, generationThreadInput(page.id, "live-raced", generation));
-      await upsertPageDmConversation(testDb.db, generationThreadInput(page.id, "live-plain", generation));
-      await upsertPageDmConversation(testDb.db, generationThreadInput(page.id, "gone", generation - 1));
-
-      // A concurrent writer holding a pre-sweep read writes the thread back
-      // with the stale stamp it saw (pre-G2 this regressed the row to 2 — and
-      // the finalization below then hid a live thread).
-      await upsertPageDmConversation(testDb.db, generationThreadInput(page.id, "live-raced", 2));
-      // …and another writes it back with the null it had read.
-      await upsertPageDmConversation(testDb.db, generationThreadInput(page.id, "live-raced", null));
-
-      await markPageDmConversationsInvisibleByGeneration(testDb.db, {
-        platformAccountId: page.id,
-        generation,
-      });
-
-      expect(await readThreadState(testDb, page.id)).toEqual({
-        "live-raced": { generation, isVisible: true },
-        "live-plain": { generation, isVisible: true },
-        gone: { generation: generation - 1, isVisible: false },
       });
     });
 

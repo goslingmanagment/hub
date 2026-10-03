@@ -12,11 +12,13 @@ import {
   type SyncRequestSource,
   type SyncStream,
 } from "@agency_hub_core/db";
+import type { Platform } from "@agency_hub_core/shared";
 import type { PgBoss } from "pg-boss";
 
 import type { AppContext } from "../bootstrap.ts";
 import { resolveStoredProxyEgressKey } from "./page-context.ts";
 import { appPlatformRegistry } from "../platforms/registry.ts";
+import { isLegacyExecutorPlatform } from "../sync/onlyfans/boundary.ts";
 import { sendSyncPageWakeup, type SyncTriggerScope } from "./sync-queue.ts";
 import { pageSyncDependencyInput } from "./sync/dependencies.ts";
 import {
@@ -32,7 +34,7 @@ import {
   ONLYFANS_DM_POLLING_DISABLED_MESSAGE,
   pauseDisabledOnlyFansDmPollingForPage,
 } from "./sync/onlyfans-dm-polling.ts";
-import { BadRequestError } from "./errors.ts";
+import { BadRequestError, LegacySyncRetiredError } from "./errors.ts";
 import {
   getOnlyFansPostsCaptureIneligibility,
   pauseIneligibleOnlyFansPostsForPage,
@@ -45,6 +47,13 @@ export interface RequestedSyncRequest {
 }
 
 export const filterStreamsForSyncConfig = filterOnlyFansDmPollingStreams;
+
+/** Refuse a page the legacy executor does not serve (`LegacySyncRetiredError`). */
+export function assertLegacyExecutorServes(page: { label: string; platform: Platform }): void {
+  if (!isLegacyExecutorPlatform(page.platform)) {
+    throw new LegacySyncRetiredError({ pageLabel: page.label, platform: page.platform });
+  }
+}
 
 export function resolveStreamsForScope(
   platform: "fansly" | "onlyfans",
@@ -73,6 +82,7 @@ export async function requestPageSync(
   if (!storedPage) {
     throw new Error(`Page not found for label "${input.pageLabel}"`);
   }
+  assertLegacyExecutorServes(storedPage.page);
 
   if (input.scope === "posts") {
     if (input.reason !== "manual") {
@@ -181,15 +191,15 @@ export async function requestPageSync(
   };
 }
 
+/** Every page of the platforms the legacy executor serves (OnlyFans since
+ *  step 4 S4-10); the Fansly Sync Engine refreshes its own pages
+ *  (`triggerEngineScope`). */
 export async function requestAllPagesSync(
   app: AppContext,
   boss: Pick<PgBoss, "send">,
   input: {
     scope: SyncTriggerScope;
     reason: SyncRequestSource;
-    /** Pages another engine serves (the Fansly Sync Engine's, step 3): their
-     *  legacy streams are fenced, so nothing is requested for them here. */
-    excludePageIds?: ReadonlySet<number>;
   },
 ) {
   if (input.scope === "posts") {
@@ -202,7 +212,7 @@ export async function requestAllPagesSync(
   }>;
 
   for (const page of pages) {
-    if (input.excludePageIds?.has(page.id) === true) continue;
+    if (!isLegacyExecutorPlatform(page.platform)) continue;
     const request = await requestPageSync(app, boss, {
       pageLabel: page.label,
       scope: input.scope,

@@ -118,7 +118,7 @@ async function legacyCapture(kind: string, response: unknown, contractAccepted?:
       responsePayload = trims.captureFanslyFollowerPayload(response, contractAccepted);
       mapperVersion = trims.FANSLY_FOLLOWERS_CAPTURE_MAPPER_VERSION;
       break;
-    case "dm_conversations": // fansly-dm-conversations.ts
+    case "dm_conversations": // the legacy sweep (deleted at step 4, S4-14)
       responsePayload = trims.captureFanslyMessagingGroupsPayload(response, contractAccepted);
       mapperVersion = trims.FANSLY_GROUPS_CAPTURE_MAPPER_VERSION;
       break;

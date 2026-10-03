@@ -5,9 +5,7 @@ import { classifyFanslyResponse } from "./lane.ts";
 // the media targets money facts and DM pages name, the legacy cursor the
 // switch imports, and the classification of one captured order-history page.
 // Pure; a classification reads only the durable status and body, so a parser
-// repair can reclassify history without a request. The legacy lane
-// (fansly-purchase-history.ts, executor-handlers.ts) imports them from here
-// until step 4 deletes it.
+// repair can reclassify history without a request.
 
 type JsonRecord = Record<string, unknown>;
 

@@ -4,7 +4,6 @@ import type { Database } from "../client.ts";
 import {
   egressEndpoints,
   pageFollows,
-  pageSyncProviderHolds,
   pageSyncStates,
   pages,
 } from "../schema.ts";
@@ -82,37 +81,21 @@ export type SyncRequestSource =
   | "reset";
 export type SyncWorkClass = "live" | "history" | "maintenance";
 
+/** The Fansly streams the legacy executor once held behind a rollout gate.
+ *  Since step 4 (S4-10) the legacy executor runs no Fansly stream, so nothing
+ *  pauses or resumes them by their gate any more. */
 export const FANSLY_BULK_SYNC_STREAMS = [
   "fan_earnings",
   "purchase_history",
-  // WP-F1: gate flips must materialize into durable pause/resume (#191/#194)
-  // for this lane too, or opening its flag moves nothing until the next slot.
   "stats_snapshot",
-  // WP-F2. Membership here is also what makes the never-ran seed-pause fix
-  // (the reconciler's gate-owned pause rule) cover this lane: without it a
-  // `notifications` row seeded paused would sit paused forever and its ramp
-  // flag would move nothing — the #192 failure, reproduced on production for
-  // stats_snapshot on 2026-08-22.
   "notifications",
-  // WP-F3: same rule. Without membership here the lane seeds paused and its
-  // ramp flag moves nothing.
   "catalog",
-  // WP-F5: same rule again.
   "post_replies",
-  // WP-F7: same rule again.
   "payouts",
-  // WP-F4: same rule again.
   "media_stats",
 ] as const;
 
 export type FanslyBulkSyncStream = typeof FANSLY_BULK_SYNC_STREAMS[number];
-export type FanslyBulkStreamGateState = "ramped" | "flag_off" | "not_allowlisted";
-export type FanslyBulkStreamGateAction = "paused" | "resumed" | "unchanged";
-
-export interface FanslyBulkStreamGateReconcileResult {
-  action: FanslyBulkStreamGateAction;
-  createdRecoveryGeneration: boolean;
-}
 
 export const FANSLY_BULK_STREAM_FEATURE_GATE_BLOCKER_KIND = "feature_gate";
 
@@ -124,8 +107,8 @@ export const FANSLY_BULK_STREAM_FEATURE_GATE_BLOCKER_KIND = "feature_gate";
  * OTHER stream seeds `pending`/recovery, so a gated-off stream added to
  * SYNC_STREAMS without an entry here would seed one pending row per page,
  * FLEET-WIDE, on the deploy that ships it — before its flag was ever opened.
- * Ungating stays an explicit act: the gate reconciler resumes it, or an
- * operator uses the stream's own sync scope.
+ * Ungating stays an explicit act: an operator uses the stream's own sync
+ * scope.
  */
 export const SEED_PAUSED_SYNC_STREAMS = [
   "posts",
@@ -843,6 +826,21 @@ function streamArraySql(streams: readonly SyncStream[]) {
   return sql`ARRAY[${sql.join(streams.map((stream) => sql`${stream}::sync_stream`), sql`, `)}]::sync_stream[]`;
 }
 
+/** The platforms a planner pass maintains: the platform registry's
+ *  legacy-executor set (`legacyExecutorPlatforms`, OnlyFans only since step 4
+ *  S4-10). Absent means every platform. */
+export type PageSyncPlatformScope = readonly ("fansly" | "onlyfans")[];
+
+/** `page_id` belongs to a page of one of `platforms` (true without a scope). */
+function pageSyncPlatformScopeSql(pageIdColumn: string, platforms: PageSyncPlatformScope | undefined) {
+  if (platforms === undefined) return sql`true`;
+  if (platforms.length === 0) return sql`false`;
+  return sql`${sql.raw(pageIdColumn)} in (
+    select scoped.id from ${pages} scoped
+    where scoped.platform in (${sql.join(platforms.map((platform) => sql`${platform}`), sql`, `)})
+  )`;
+}
+
 function streamOrderSql(columnName: string) {
   return sql.raw(`
     case ${columnName}
@@ -917,18 +915,6 @@ export function pageSyncRunnableSinceSql(tableAlias: string) {
   return sql.raw(
     `greatest(${tableAlias}.requested_at, ${tableAlias}.started_at, ${tableAlias}.retry_at)`,
   );
-}
-
-/** True unless the page is inside a provider hold at `now`
- * (armPageSyncProviderHold): then none of its streams may start. The planner,
- * the executor's lease and the targeted lease also carry
- * `legacyOwnsFanslyPageSql` (sync/pages.ts): no stream of a page the Fansly
- * Sync Engine owns (`handover`/`live`) is enqueued or leased. */
-function pageSyncProviderHoldClearSql(pageIdColumn: string, now: Date) {
-  return sql`not exists (
-    select 1 from ${pageSyncProviderHolds} ph
-    where ph.page_id = ${sql.raw(pageIdColumn)} and ph.hold_until > ${now}
-  )`;
 }
 
 /** SYNC_STREAM_STARVED_PRIORITY for a row that has starved past its stream's
@@ -1296,6 +1282,7 @@ async function listPageSyncStatesInternal(
   input?: {
     pageId?: number;
     streams?: SyncStream[];
+    platforms?: PageSyncPlatformScope;
   },
   options?: {
     lock?: boolean;
@@ -1306,6 +1293,10 @@ async function listPageSyncStatesInternal(
 
   if (input?.pageId !== undefined) {
     clauses.push(sql`page_id = ${input.pageId}`);
+  }
+
+  if (input?.platforms !== undefined) {
+    clauses.push(pageSyncPlatformScopeSql("page_id", input.platforms));
   }
 
   if (input?.streams?.length) {
@@ -1398,237 +1389,17 @@ export async function getPageSyncState(
   return rows[0] ?? null;
 }
 
-/**
- * Reconciles one durable Fansly bulk-stream state with its live rollout gate.
- *
- * The feature-gate blocker is ownership metadata: only rows carrying this
- * marker (plus the narrow legacy skipped-success shape) may be auto-resumed.
- * A row lock makes gate flips and the recovery-generation request atomic.
- */
-export async function reconcileFanslyBulkStreamGate(
-  db: Database,
-  input: {
-    pageId: number;
-    stream: FanslyBulkSyncStream;
-    gateState: FanslyBulkStreamGateState;
-    now?: Date;
-  },
-): Promise<FanslyBulkStreamGateReconcileResult> {
-  const now = input.now ?? new Date();
-
-  return db.transaction(async (tx) => {
-    const database = tx as unknown as Database;
-    const [current] = await listPageSyncStatesInternal(database, {
-      pageId: input.pageId,
-      streams: [input.stream],
-    }, { lock: true });
-
-    if (!current) {
-      return {
-        action: "unchanged",
-        createdRecoveryGeneration: false,
-      };
-    }
-
-    /**
-     * The seed shape of a SEED_PAUSED_SYNC_STREAMS lane (see
-     * buildSeedPageSyncState): planted `paused` with NO blocker, so the gate's
-     * own ownership marker is absent on exactly the rows a gate flip must
-     * open. Without this the promise in that comment — "the gate reconciler
-     * resumes it" — is false and the flag moves nothing (#191/#194).
-     *
-     * The test is NEVER RAN, not never requested. `request_seq` is no
-     * discriminator: the #192 config wake-up calls requestPageSync on the
-     * flag PATCH, which bumps request_seq (and stamps request_source
-     * 'recovery') while deliberately leaving a paused row paused — so by the
-     * time the planner's reconciler sees a seed row, it usually already
-     * carries request_seq >= 1. Verified on production 2026-08-22.
-     *
-     * What a run leaves behind instead: acquirePageSyncLease stamps
-     * `started_at` and `leased_seq`, and applying a generation advances
-     * `applied_seq`. None of the three is cleared by pausePageSync,
-     * pausePageSyncForAuth or resetPageSync, so a row an operator paused
-     * after it ran (or after a failed run, or while a lease was outstanding)
-     * can never be mistaken for a seed row.
-     */
-    const seedPaused =
-      current.status === "paused" &&
-      current.blockerKind === null &&
-      current.appliedSeq === 0 &&
-      current.leasedSeq === null &&
-      current.startedAt === null;
-
-    if (input.gateState !== "ramped") {
-      if (current.status === "running") {
-        return {
-          action: "unchanged",
-          createdRecoveryGeneration: false,
-        };
-      }
-
-      const featureGateOwned =
-        current.blockerKind === FANSLY_BULK_STREAM_FEATURE_GATE_BLOCKER_KIND;
-      const unblockedSchedulable =
-        current.blockerKind === null &&
-        (
-          current.status === "idle" ||
-          current.status === "pending" ||
-          current.status === "retrying"
-        );
-      const dependencyBlocked =
-        current.status === "blocked" && current.blockerKind === "dependency";
-
-      // Paused/auth/manual/other blocked rows are owned by their respective
-      // operators and must not be relabelled as feature-gated. A never-ran
-      // seed pause is the gate's own: it is labelled here so the ramped
-      // branch can recognize it later through the ordinary marker.
-      if (!featureGateOwned && !unblockedSchedulable && !dependencyBlocked && !seedPaused) {
-        return {
-          action: "unchanged",
-          createdRecoveryGeneration: false,
-        };
-      }
-
-      const blockerMessage = input.gateState === "flag_off"
-        ? `${input.stream} is disabled by the Fansly bulk-stream feature flag`
-        : `${input.stream} is outside the Fansly bulk-stream rollout allowlist`;
-      const alreadyReconciled =
-        current.status === "paused" &&
-        featureGateOwned &&
-        current.blockerCode === input.gateState &&
-        current.blockerMessage === blockerMessage &&
-        current.blockedAt !== null;
-
-      if (alreadyReconciled) {
-        return {
-          action: "unchanged",
-          createdRecoveryGeneration: false,
-        };
-      }
-
-      await database.execute(sql`
-        update ${pageSyncStates}
-        set status = 'paused'::page_sync_status,
-            blocker_kind = ${FANSLY_BULK_STREAM_FEATURE_GATE_BLOCKER_KIND},
-            blocker_code = ${input.gateState},
-            blocker_message = ${blockerMessage},
-            blocked_at = case
-                           when blocker_kind = ${FANSLY_BULK_STREAM_FEATURE_GATE_BLOCKER_KIND}
-                             then coalesce(blocked_at, ${now})
-                           else ${now}
-                         end,
-            leased_seq = null,
-            lease_owner = null,
-            lease_token = null,
-            lease_heartbeat_at = null,
-            lease_expires_at = null,
-            updated_at = ${now}
-        where page_id = ${input.pageId}
-          and stream = ${input.stream}
-      `);
-
-      return {
-        action: "paused",
-        createdRecoveryGeneration: false,
-      };
-    }
-
-    if (current.status === "running") {
-      return {
-        action: "unchanged",
-        createdRecoveryGeneration: false,
-      };
-    }
-
-    const featureGateOwned =
-      current.blockerKind === FANSLY_BULK_STREAM_FEATURE_GATE_BLOCKER_KIND;
-    const legacySkipReason = current.progress.skipped;
-    const legacySkippedSuccess =
-      current.status === "idle" &&
-      current.blockerKind === null &&
-      (legacySkipReason === "flag_off" || legacySkipReason === "not_allowlisted");
-
-    if (!featureGateOwned && !legacySkippedSuccess && !seedPaused) {
-      return {
-        action: "unchanged",
-        createdRecoveryGeneration: false,
-      };
-    }
-
-    if (current.requestSeq < current.appliedSeq) {
-      throw new Error(
-        `Invalid generation state for ${input.stream} on page ${input.pageId}: ` +
-          `request_seq ${current.requestSeq} is behind applied_seq ${current.appliedSeq}`,
-      );
-    }
-
-    const createdRecoveryGeneration = current.requestSeq === current.appliedSeq;
-    const nextRequestSeq = createdRecoveryGeneration
-      ? current.requestSeq + 1
-      : current.requestSeq;
-    const retryBackoffActive =
-      current.retryAt !== null && current.retryAt.getTime() > now.getTime();
-    const nextStatus: PageSyncStatus = retryBackoffActive ? "retrying" : "pending";
-
-    if (createdRecoveryGeneration) {
-      const currentSlot = computeCurrentPageSyncSlot(
-        now,
-        current.cadenceSeconds,
-        current.slotOffsetSeconds,
-      );
-      await database.execute(sql`
-        update ${pageSyncStates}
-        set status = ${nextStatus}::page_sync_status,
-            request_seq = ${nextRequestSeq},
-            request_source = 'recovery'::sync_request_source,
-            dispatch_source = 'recovery'::sync_request_source,
-            request_payload = '{}'::jsonb,
-            requested_at = ${now},
-            enqueued_at = null,
-            last_scheduled_slot = ${currentSlot},
-            blocker_kind = null,
-            blocker_code = null,
-            blocker_message = null,
-            blocked_at = null,
-            progress = coalesce(progress, '{}'::jsonb) - 'skipped',
-            updated_at = ${now}
-        where page_id = ${input.pageId}
-          and stream = ${input.stream}
-      `);
-    } else {
-      await database.execute(sql`
-        update ${pageSyncStates}
-        set status = ${nextStatus}::page_sync_status,
-            requested_at = ${now},
-            enqueued_at = null,
-            blocker_kind = null,
-            blocker_code = null,
-            blocker_message = null,
-            blocked_at = null,
-            progress = coalesce(progress, '{}'::jsonb) - 'skipped',
-            updated_at = ${now}
-        where page_id = ${input.pageId}
-          and stream = ${input.stream}
-      `);
-    }
-
-    return {
-      action: "resumed",
-      createdRecoveryGeneration,
-    };
-  });
-}
-
 async function repairLegacyLightTrustedPageSyncStates(
   db: Database,
   input: {
     pageId?: number;
+    platforms?: PageSyncPlatformScope;
     now: Date;
   },
 ) {
   const pageClause = input.pageId === undefined
-    ? sql`true`
-    : sql`st.page_id = ${input.pageId}`;
+    ? pageSyncPlatformScopeSql("st.page_id", input.platforms)
+    : sql`st.page_id = ${input.pageId} and ${pageSyncPlatformScopeSql("st.page_id", input.platforms)}`;
 
   await db.execute(sql`
     update ${pageSyncStates} st
@@ -1683,12 +1454,16 @@ export async function ensurePageSyncStates(
     onboarding?: boolean;
     now?: Date;
     dependencyOptions?: PageSyncDependencyOptions;
+    /** Seed and maintain only these platforms' pages (the planner and the
+     *  executor pass the legacy-executor set); every platform when absent. */
+    platforms?: PageSyncPlatformScope;
   },
 ) {
   const now = input?.now ?? new Date();
+  const platforms = input?.platforms;
   // Tombstoned pages (deletePageByLabel) must never get sync states seeded
   // or maintained — a deleted page otherwise re-enters the planner forever.
-  const clauses = [sql`p.status = 'active'`];
+  const clauses = [sql`p.status = 'active'`, pageSyncPlatformScopeSql("p.id", platforms)];
   if (input?.pageId !== undefined) {
     clauses.push(sql`p.id = ${input.pageId}`);
   }
@@ -1742,10 +1517,11 @@ export async function ensurePageSyncStates(
     activeFollowerCount: normalizeNumber(row.activeFollowerCount, "activeFollowerCount"),
   }));
 
-  const existingRows = await listPageSyncStates(
-    db,
-    input?.pageId !== undefined ? { pageId: input.pageId } : undefined,
-  );
+  const scope = {
+    ...(input?.pageId !== undefined ? { pageId: input.pageId } : {}),
+    ...(platforms !== undefined ? { platforms } : {}),
+  };
+  const existingRows = await listPageSyncStatesInternal(db, scope);
   const existingKeys = new Set(existingRows.map((row) => `${row.pageId}:${row.stream}`));
   const values = normalizedPages.flatMap((page) =>
     getSyncStreamsForPlatform(page.platform).flatMap((stream) => {
@@ -1764,13 +1540,11 @@ export async function ensurePageSyncStates(
 
   await repairLegacyLightTrustedPageSyncStates(db, {
     pageId: input?.pageId,
+    platforms,
     now,
   });
 
-  const refreshedRows = await listPageSyncStates(
-    db,
-    input?.pageId !== undefined ? { pageId: input.pageId } : undefined,
-  );
+  const refreshedRows = await listPageSyncStatesInternal(db, scope);
 
   await db.transaction(async (tx) => {
     const database = tx as unknown as Database;
@@ -1807,10 +1581,7 @@ export async function ensurePageSyncStates(
     }
   });
 
-  return listPageSyncStates(
-    db,
-    input?.pageId !== undefined ? { pageId: input.pageId } : undefined,
-  );
+  return listPageSyncStatesInternal(db, scope);
 }
 
 /**
@@ -1910,6 +1681,8 @@ export async function refreshPageSyncDependencies(
     pageId?: number;
     now?: Date;
     dependencyOptions?: PageSyncDependencyOptions;
+    /** Only these platforms' pages; every platform when absent. */
+    platforms?: PageSyncPlatformScope;
   },
 ) {
   const now = input?.now ?? new Date();
@@ -1917,7 +1690,10 @@ export async function refreshPageSyncDependencies(
     const database = tx as unknown as Database;
     const rows = await listPageSyncStatesInternal(
       database,
-      input?.pageId !== undefined ? { pageId: input.pageId } : undefined,
+      {
+        ...(input?.pageId !== undefined ? { pageId: input.pageId } : {}),
+        ...(input?.platforms !== undefined ? { platforms: input.platforms } : {}),
+      },
       { lock: true },
     );
     await refreshLockedPageSyncDependencies(database, rows, now, input?.dependencyOptions);
@@ -2022,12 +1798,16 @@ async function refreshLockedPageSyncDependencies(
 export async function reclaimExpiredPageSync(
   db: Database,
   _legacyProcessNow?: Date,
+  options?: {
+    /** Only these platforms' pages; every platform when absent. */
+    platforms?: PageSyncPlatformScope;
+  },
 ) {
   return db.transaction(async (tx) => {
     const database = tx as unknown as Database;
     const reclaimable = await listPageSyncStatesInternal(
       database,
-      undefined,
+      options?.platforms !== undefined ? { platforms: options.platforms } : undefined,
       { expiredLeaseOnly: true, lock: true },
     );
     const reclaimed: PageSyncState[] = [];
@@ -2069,23 +1849,29 @@ export async function scheduleDuePageSync(
     pageId?: number;
     now?: Date;
     dependencyOptions?: PageSyncDependencyOptions;
+    /** Schedule only these platforms' pages (the planner passes the
+     *  legacy-executor set); every platform when absent. Rows of other
+     *  platforms are neither seeded, reclaimed, requested nor unblocked. */
+    platforms?: PageSyncPlatformScope;
   },
 ) {
   const now = input?.now ?? new Date();
+  const platforms = input?.platforms;
+  const scope = {
+    ...(input?.pageId !== undefined ? { pageId: input.pageId } : {}),
+    ...(platforms !== undefined ? { platforms } : {}),
+  };
   await ensurePageSyncStates(db, {
     pageId: input?.pageId,
     now,
     dependencyOptions: input?.dependencyOptions,
+    ...(platforms !== undefined ? { platforms } : {}),
   });
-  await reclaimExpiredPageSync(db, now);
+  await reclaimExpiredPageSync(db, now, platforms !== undefined ? { platforms } : undefined);
 
   await db.transaction(async (tx) => {
     const database = tx as unknown as Database;
-    const rows = await listPageSyncStatesInternal(
-      database,
-      input?.pageId !== undefined ? { pageId: input.pageId } : undefined,
-      { lock: true },
-    );
+    const rows = await listPageSyncStatesInternal(database, scope, { lock: true });
 
     for (const row of rows) {
       if (row.status === "paused") {
@@ -2156,17 +1942,20 @@ export async function scheduleDuePageSync(
     pageId: input?.pageId,
     now,
     dependencyOptions: input?.dependencyOptions,
+    ...(platforms !== undefined ? { platforms } : {}),
   });
 
-  return listPageSyncStates(
-    db,
-    input?.pageId !== undefined ? { pageId: input.pageId } : undefined,
-  );
+  return listPageSyncStatesInternal(db, scope);
 }
 
 export async function listRunnablePageSync(
   db: Database,
   now = new Date(),
+  options?: {
+    /** Only these platforms' pages (the planner passes the legacy-executor
+     *  set); every platform when absent. */
+    platforms?: PageSyncPlatformScope;
+  },
 ) {
   const result = await db.execute<Record<string, unknown>>(sql`
     with runnable_streams as (
@@ -2186,8 +1975,8 @@ export async function listRunnablePageSync(
         and not (p.platform = 'onlyfans' and st.stream = 'dm_messages')
         and st.leased_seq is null
         and (st.retry_at is null or st.retry_at <= ${now})
-        and ${pageSyncProviderHoldClearSql("st.page_id", now)}
         and ${legacyOwnsFanslyPageSql(sql.raw("st.page_id"))}
+        and ${pageSyncPlatformScopeSql("st.page_id", options?.platforms)}
     )
     select rs."pageId" as "pageId",
            rs."platform" as "platform",
@@ -2239,6 +2028,9 @@ export async function acquirePageSyncLease(
     leaseToken: string;
     leaseTtlMs: number;
     now?: Date;
+    /** Lease only a stream of these platforms' pages (the executor passes
+     *  the legacy-executor set); every platform when absent. */
+    platforms?: PageSyncPlatformScope;
   },
 ) {
   const now = input.now ?? new Date();
@@ -2269,8 +2061,8 @@ export async function acquirePageSyncLease(
         )
         and st.leased_seq is null
         and (st.retry_at is null or st.retry_at <= ${now})
-        and ${pageSyncProviderHoldClearSql("st.page_id", now)}
         and ${legacyOwnsFanslyPageSql(sql.raw("st.page_id"))}
+        and ${pageSyncPlatformScopeSql("st.page_id", input.platforms)}
     ), candidate as (
       select r."pageId", r."stream", r."requestSeq"
       from runnable r
@@ -2367,10 +2159,12 @@ export interface TargetedPageSyncLease {
 
 /**
  * Slice C′: take the page's REAL sync lease for ONE named stream so an
- * out-of-band run (today: the targeted thread backfill) fences against the
- * regular executor instead of racing it. Same row, same lease columns, same
- * fence token that `assertOwnedPageSyncLease` verifies — acquire or return
- * null, never run lease-less.
+ * out-of-band run fences against the regular executor instead of racing it.
+ * Same row, same lease columns, same fence token that
+ * `assertOwnedPageSyncLease` verifies — acquire or return null, never run
+ * lease-less. Its one runtime caller, the legacy targeted thread backfill, is
+ * gone since step 4 (S4-15); the legacy lease tests still take a named
+ * stream's lease through it, and it goes with the legacy fence (S4-21).
  *
  * Differences from `acquirePageSyncLease`, both deliberate:
  *  - the stream is named by the caller instead of being picked by priority;
@@ -2416,7 +2210,6 @@ export async function acquireTargetedPageSyncLease(
       and st.blocker_kind is null
       and st.leased_seq is null
       and (st.retry_at is null or st.retry_at <= ${now})
-      and ${pageSyncProviderHoldClearSql("st.page_id", now)}
       and ${legacyOwnsFanslyPageSql(sql.raw("st.page_id"))}
       and exists (
         select 1 from ${pages} p
@@ -2510,40 +2303,6 @@ export async function heartbeatPageSyncLease(
   return (result.rowCount ?? 0) > 0;
 }
 
-export async function recordRunningPageSyncProgress(
-  db: Database,
-  input: {
-    pageId: number;
-    stream: SyncStream;
-    requestSeq: number;
-    leaseToken: string;
-    progressedAt?: Date | null;
-    phase?: string | null;
-    workClass?: SyncWorkClass | null;
-    progress?: Record<string, unknown>;
-    now?: Date;
-  },
-) {
-  const now = input.now ?? new Date();
-  const progressedAt = input.progressedAt ?? now;
-  const result = await db.execute(sql`
-    update ${pageSyncStates}
-    set progressed_at = ${progressedAt},
-        phase = coalesce(${input.phase ?? null}, phase),
-        work_class = coalesce(${input.workClass ?? null}, work_class),
-        progress = ${input.progress ?? {}},
-        updated_at = ${now}
-    where page_id = ${input.pageId}
-      and stream = ${input.stream}
-      and lease_token = ${input.leaseToken}
-      and leased_seq = ${input.requestSeq}
-      and status = 'running'
-      and lease_expires_at > clock_timestamp()
-  `);
-
-  return (result.rowCount ?? 0) > 0;
-}
-
 export async function clearPageSyncLease(
   db: Database,
   input: {
@@ -2587,15 +2346,10 @@ export async function completePageSync(
     workClass?: SyncWorkClass | null;
     progress?: Record<string, unknown>;
     now?: Date;
-    succeededAt?: Date;
     dependencyOptions?: PageSyncDependencyOptions;
   },
 ) {
   const now = input.now ?? new Date();
-  const succeededAt = input.succeededAt ?? now;
-  if (!Number.isFinite(succeededAt.getTime()) || succeededAt > now) {
-    throw new Error("A certified sync time must be finite and no later than settlement");
-  }
   const result = await db.execute(sql`
     update ${pageSyncStates}
     set status = case
@@ -2606,7 +2360,7 @@ export async function completePageSync(
         leased_seq = null,
         progressed_at = coalesce(${input.progressedAt ?? null}, progressed_at, ${now}),
         finished_at = ${now},
-        succeeded_at = ${succeededAt},
+        succeeded_at = ${now},
         retry_kind = null,
         retry_at = null,
         blocker_kind = null,
@@ -2729,16 +2483,12 @@ export async function yieldPageSync(
     progress?: Record<string, unknown>;
     retryAt?: Date | null;
     dispatchSource?: SyncRequestSource | null;
-    /** A deferral-only chunk (StreamChunkResult.deferral) read nothing: it
-     *  keeps the failure streak and last error, which only progress clears. */
-    keepFailureStreak?: boolean;
     now?: Date;
   },
 ): Promise<PageSyncYieldResult> {
   const now = input.now ?? new Date();
   const retryAt = input.retryAt ?? null;
   const dispatchSource = input.dispatchSource ?? null;
-  const keepFailureStreak = input.keepFailureStreak === true;
   const result = await db.execute(sql<{ requestSeq: number }>`
     update ${pageSyncStates}
     set status = 'pending',
@@ -2752,9 +2502,9 @@ export async function yieldPageSync(
                             when request_seq > ${input.requestSeq} then dispatch_source
                             else coalesce(${dispatchSource}::sync_request_source, dispatch_source)
                           end,
-        consecutive_failures = case when ${keepFailureStreak} then consecutive_failures else 0 end,
-        last_error_code = case when ${keepFailureStreak} then last_error_code else null end,
-        last_error_summary = case when ${keepFailureStreak} then last_error_summary else null end,
+        consecutive_failures = 0,
+        last_error_code = null,
+        last_error_summary = null,
         retry_kind = null,
         retry_at = case
                      when request_seq > ${input.requestSeq} then null::timestamptz
@@ -2804,51 +2554,6 @@ export function activePageSyncRetryAt(retryAt: Date | null, now: Date) {
 function hasProviderCooldown(retryKind: string | null, retryAt: Date | null, now: Date) {
   return (retryKind === "rate_limit" || retryKind === "provider_5xx") &&
     retryAt !== null && retryAt.getTime() > now.getTime();
-}
-
-/**
- * R04: hold EVERY sync stream of the page until `holdUntil` — the regular
- * lease, the targeted lease and the runnable listing all refuse a held page.
- * The hold lives beside page_sync_states on purpose: a Sync now, a B1 wake or
- * a planner tick rewrites a stream's retry state, and none of them may lift
- * it; sibling rows, streaks and health stay untouched. Never shortens a hold
- * already in force. Returns the hold's end when this call armed or extended
- * it, else null.
- */
-export async function armPageSyncProviderHold(
-  db: Database,
-  input: {
-    pageId: number;
-    stream: SyncStream;
-    syncRunId: number | null;
-    reason: string;
-    holdUntil: Date;
-    /** The provider's own deadline, unclamped (diagnostics only). */
-    retryAfterAt: Date | null;
-    now?: Date;
-  },
-): Promise<Date | null> {
-  const now = input.now ?? new Date();
-  const result = await db.execute<{ holdUntil: TimestampValue }>(sql`
-    insert into ${pageSyncProviderHolds} as ph
-      (page_id, hold_until, reason, stream, sync_run_id, retry_after_at, armed_at)
-    values (
-      ${input.pageId}, ${input.holdUntil}, ${input.reason}, ${input.stream},
-      ${input.syncRunId}, ${input.retryAfterAt}, ${now}
-    )
-    on conflict (page_id) do update
-    set hold_until = excluded.hold_until,
-        reason = excluded.reason,
-        stream = excluded.stream,
-        sync_run_id = excluded.sync_run_id,
-        retry_after_at = excluded.retry_after_at,
-        armed_at = excluded.armed_at
-    where ph.hold_until < excluded.hold_until
-    returning ph.hold_until as "holdUntil"
-  `);
-
-  const row = result.rows[0];
-  return row ? normalizeTimestamp(row.holdUntil, "holdUntil") : null;
 }
 
 export async function retryPageSync(
@@ -3036,38 +2741,6 @@ export async function markPageSyncAuthBlocked(
   `);
 }
 
-export async function clearPageSyncAuthBlock(
-  db: Database,
-  pageId: number,
-  input: Date | {
-    maxFailureAt?: Date;
-    now?: Date;
-  } = new Date(),
-) {
-  const now = input instanceof Date ? input : input.now ?? new Date();
-  const maxFailureAt = input instanceof Date ? undefined : input.maxFailureAt;
-  await db.execute(sql`
-    update ${pageSyncStates}
-    set status = case
-                   when request_seq > applied_seq then 'pending'::page_sync_status
-                   else 'idle'::page_sync_status
-                 end,
-        retry_kind = null,
-        retry_at = null,
-        blocker_kind = null,
-        blocker_code = null,
-        blocker_message = null,
-        blocked_at = null,
-        updated_at = ${now}
-    where page_id = ${pageId}
-      and blocker_kind = 'auth'
-      and (
-        ${maxFailureAt ?? null}::timestamptz is null or
-        coalesce(failed_at, blocked_at, updated_at) <= ${maxFailureAt ?? null}
-      )
-  `);
-}
-
 /**
  * Decision #249: an EXPLICIT operator request for a stream is the manual
  * action a `manual_action_required` block was waiting for. Clears that block
@@ -3169,8 +2842,9 @@ export async function pausePageSync(
 /**
  * Kernel Stage 26: typed auth death parks every runnable stream on the page
  * with blocker_kind='auth', so quota stops burning on a dead session. Streams
- * already parked by an operator or feature gate keep that ownership marker.
- * clearPageSyncAuthBlock can therefore restore only the rows auth paused.
+ * already parked by an operator or feature gate keep that ownership marker,
+ * so the recovery (the OFAPI account-health handler, by `blocker_kind = 'auth'`
+ * and its binding generation) restores only the rows auth paused.
  */
 export async function pausePageSyncForAuth(
   db: Database,

@@ -1,16 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
-  createModel, createFanslyPage, ensurePageSyncStates, findPageById,
-  startSyncRun, upsertFans, insertObservation,
+  createModel, createFanslyPage, ensurePageSyncStates, upsertFans, insertObservation,
   type UpsertTransactionInput,
 } from "@agency_hub_core/db";
 import { millsFromInteger } from "@agency_hub_core/shared";
-import { vi } from "vitest";
-import { SyncChunkBudget } from "../../apps/runtime/src/services/sync/chunk-budget.ts";
 import type { StartedTestDatabase } from "./db.ts";
 import { createTestAppContext } from "./runtime.ts";
 
-export async function earningsShadowFixture(testDb: StartedTestDatabase, shadow = true) {
+export async function earningsShadowFixture(testDb: StartedTestDatabase) {
   const model = await createModel(testDb.db, { slug: "earnings-shadow", name: "Earnings" });
   if (!model) throw new Error("Model seed failed");
   const page = await createFanslyPage(testDb.db, { modelId: model.id, label: "earnings-shadow" });
@@ -25,10 +22,7 @@ export async function earningsShadowFixture(testDb: StartedTestDatabase, shadow 
   // would name.
   await testDb.pool.query(`insert into page_fans (fan_id, platform_account_id, total_creator_net_mills)
     select unnest($1::bigint[]), $2, 100`, [fans.map((fan) => fan.id), page.id]);
-  const app = createTestAppContext(testDb, {
-    fanslyFanEarningsSyncEnabled: true,
-    fanslyFanEarningsShadowPageAllowlist: shadow ? page.label : "none",
-  });
+  const app = createTestAppContext(testDb);
   const transaction: UpsertTransactionInput & { source: "fansly:rest" } = {
     platformAccountId: page.id, source: "fansly:rest", transactionId: "transaction-a",
     correlationAccountId: "fan-a", fanId: fans[0]!.id, rawType: 2110, canonicalType: "tip",
@@ -50,21 +44,5 @@ export async function earningsShadowFixture(testDb: StartedTestDatabase, shadow 
     if (result.observationId === null) throw new Error("Observation seed failed");
     return result.observationId;
   }
-  async function chunkInput(maxRequests = 10) {
-    const run = await startSyncRun(testDb.db, {
-      platformAccountId: pageId, stream: "fan_earnings", trigger: "manual",
-    });
-    const stored = await findPageById(testDb.db, pageId);
-    if (!run || !stored) throw new Error("Run seed failed");
-    return {
-      pageContext: { page: stored.page, platform: "fansly", session: null, proxy: null, egressKey: "direct" } as never,
-      syncRunId: run.id,
-      telemetry: {
-        recordPhaseStarted: vi.fn(async () => {}), addAnomaly: vi.fn(async () => {}),
-        getRequestObserver: () => null,
-      } as never,
-      budget: new SyncChunkBudget(maxRequests, 60_000),
-    };
-  }
-  return { app, page, fans, transaction, rows, observation, chunkInput };
+  return { app, page, fans, transaction, rows, observation };
 }

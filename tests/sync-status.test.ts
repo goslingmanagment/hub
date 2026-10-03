@@ -90,14 +90,6 @@ function buildMonitorRow(overrides: Record<string, unknown> = {}) {
     dmEligibleConversationCount: 6,
     dmBackfillCompleteConversationCount: 6,
     dmLaggingConversationCount: 0,
-    dmDeepBackfillPendingConversationCount: 0,
-    dmDeepBackfillPendingPageEstimate: 0,
-    dmDeepBackfillSpenderPendingConversationCount: 0,
-    dmDeepBackfillSpenderPendingPageEstimate: 0,
-    dmDeepBackfillRegularPendingConversationCount: 0,
-    dmDeepBackfillRegularPendingPageEstimate: 0,
-    dmDeepBackfillRecentRequestCount: 0,
-    dmDeepBackfillLastCompletedAt: null,
     stream: "light",
     status: "idle",
     cadenceSeconds: 3600,
@@ -206,53 +198,27 @@ describe("sync status service", () => {
     vi.clearAllMocks();
   });
 
-  it.each([true, false])("keeps full freshness separate from a recent bounded pass, monitor=%s", async (includeMonitorRows) => {
-    const fullCompletedAt = "2026-03-24T10:12:00.000Z";
+  // Step 4 (S4-14): the legacy dm_conversations sweep and its bounded scan are
+  // gone, so their last cursor (a certified full hours old) no longer speaks
+  // for the page; the stream row alone does.
+  it.each([true, false])("ignores a legacy dm_conversations full-sweep cursor, monitor=%s", async (includeMonitorRows) => {
     dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage()]);
     dbMocks.listPageSyncStates.mockResolvedValue([buildTaskRow({ stream: "dm_conversations" })]);
-    dbMocks.listCheckpointStates.mockResolvedValue([{ pageId: 7, state: boundedCheckpoint(fullCompletedAt) }]);
+    dbMocks.listCheckpointStates.mockResolvedValue([{ pageId: 7, state: boundedCheckpoint("2026-03-24T10:12:00.000Z") }]);
     dbMocks.listSyncMonitorStreamRows.mockResolvedValue([buildMonitorRow({ stream: "dm_conversations" })]);
     const snapshot = await getSyncStatusSnapshot({ db: {}, config: {} } as never, {
       pageIds: [7], now: new Date("2026-03-24T12:00:00.000Z"), includeMonitorRows,
     });
-    expect(snapshot.pages[0]?.blocks.messages_live).toMatchObject({
-      state: "delayed", primaryFresh: false,
-      metrics: expect.objectContaining({ lastFullSweepCompletedAt: fullCompletedAt }),
-      progress: expect.objectContaining({ percent: null, percentValid: false, total: null }),
+    const block = snapshot.pages[0]?.blocks.messages_live;
+    expect(block).toMatchObject({
+      state: "up_to_date", primaryFresh: true,
       substreams: expect.arrayContaining([expect.objectContaining({
-        stream: "dm_conversations", succeededAt: fullCompletedAt, state: "delayed",
+        stream: "dm_conversations", succeededAt: "2026-03-24T12:00:00.000Z", state: "up_to_date",
       })]),
     });
+    expect(block?.metrics).not.toHaveProperty("lastFullSweepCompletedAt");
+    expect(dbMocks.listCheckpointStates).not.toHaveBeenCalled();
     if (!includeMonitorRows) expect(dbMocks.listSyncMonitorStreamRows).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    // Decision 366: an accepted 180-minute full interval promises a certified
-    // full within 210 minutes of the last one; a 30-minute policy keeps the
-    // 60-minute target. The certified full below completed at 10:12.
-    [180, "2026-03-24T13:41:00.000Z", "up_to_date", true],
-    [180, "2026-03-24T13:43:00.000Z", "delayed", false],
-    [30, "2026-03-24T11:13:00.000Z", "delayed", false],
-  ])("judges full freshness against the page's accepted full interval %s at %s", async (fullIntervalMinutes, nowIso, state, fresh) => {
-    const fullCompletedAt = "2026-03-24T10:12:00.000Z";
-    dbMocks.getConfigOverrides.mockResolvedValue(new Map([
-      ["fanslyDmBoundedEnabled", { value: true, version: 1 }],
-      ["fanslyDmBoundedPageAllowlist", { value: "lana", version: 1 }],
-      ["fanslyDmBoundedPolicies", { value: JSON.stringify({ lana: { fullIntervalMinutes } }), version: 1 }],
-    ]));
-    dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage()]);
-    dbMocks.listPageSyncStates.mockResolvedValue([buildTaskRow({ stream: "dm_conversations" })]);
-    dbMocks.listCheckpointStates.mockResolvedValue([{ pageId: 7, state: boundedCheckpoint(fullCompletedAt) }]);
-    dbMocks.listSyncMonitorStreamRows.mockResolvedValue([buildMonitorRow({ stream: "dm_conversations" })]);
-    const snapshot = await getSyncStatusSnapshot({ db: {}, config: {} } as never, {
-      pageIds: [7], now: new Date(nowIso),
-    });
-    expect(snapshot.pages[0]?.blocks.messages_live).toMatchObject({
-      state, primaryFresh: fresh,
-      substreams: expect.arrayContaining([expect.objectContaining({
-        stream: "dm_conversations", succeededAt: fullCompletedAt, state, isFresh: fresh,
-      })]),
-    });
   });
 
   it.each(["ready", "coverage", "physical debt", "active sibling"] as const)(
@@ -286,8 +252,6 @@ describe("sync status service", () => {
           ...(scenario === "coverage" ? {
             dmBackfillCompleteConversationCount: 4,
             dmLaggingConversationCount: 1,
-            dmDeepBackfillPendingConversationCount: 1,
-            dmDeepBackfillPendingPageEstimate: 3,
           } : {}),
           ...(scenario === "physical debt" ? {
             stalePhysicalAttemptCount: 1, physicalAttemptsSinceLastSuccess: 2,
@@ -329,7 +293,7 @@ describe("sync status service", () => {
       if (scenario === "coverage") {
         expect(scopedPage.blocks.messages_history).toMatchObject({
           state: "delayed", statusReason: { code: "history_incomplete" },
-          progress: { label: "4 / 6 conversations ready, 1 lagging, 3 deep pages" },
+          progress: { label: "4 / 6 conversations ready, 1 lagging" },
         });
       } else if (scenario === "physical debt") {
         expect(previewUx(scopedPage).state).toBe("attention");
@@ -572,57 +536,6 @@ describe("sync status service", () => {
       consecutiveFailures: 425,
       summary: "OFAPI request failed: GET .../chats/292065372/messages",
     });
-  });
-
-  it("keeps message history catching up while deep backfill pages remain", async () => {
-    dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage()]);
-    dbMocks.listPageSyncStates.mockResolvedValue([
-      buildTaskRow({ stream: "light" }),
-      buildTaskRow({ stream: "dm_conversations", cadenceSeconds: 1800 }),
-      buildTaskRow({ stream: "dm_messages", cadenceSeconds: 86400, workClass: "history" }),
-    ]);
-    dbMocks.listSyncMonitorStreamRows.mockResolvedValue([
-      buildMonitorRow({ stream: "light" }),
-      buildMonitorRow({ stream: "dm_conversations", cadenceSeconds: 1800 }),
-      buildMonitorRow({
-        stream: "dm_messages",
-        cadenceSeconds: 86400,
-        dmEligibleConversationCount: 10,
-        dmBackfillCompleteConversationCount: 10,
-        dmLaggingConversationCount: 0,
-        dmDeepBackfillPendingConversationCount: 4,
-        dmDeepBackfillPendingPageEstimate: 17,
-        dmDeepBackfillSpenderPendingConversationCount: 3,
-        dmDeepBackfillSpenderPendingPageEstimate: 15,
-        dmDeepBackfillRegularPendingConversationCount: 1,
-        dmDeepBackfillRegularPendingPageEstimate: 2,
-      }),
-    ]);
-
-    const snapshot = await getSyncStatusSnapshot({ db: {}, config: {} } as never, {
-      pageIds: [7],
-      now: new Date("2026-03-24T12:00:00.000Z"),
-    });
-
-    expect(snapshot.pages[0]?.blocks.messages_history).toMatchObject({
-      state: "delayed",
-      progress: expect.objectContaining({
-        label: "10 / 10 conversations ready, 17 deep pages",
-        details: expect.objectContaining({
-          deepBackfillPendingConversationCount: 4,
-          deepBackfillPendingPagesEstimate: 17,
-          deepBackfillSpenderPendingPagesEstimate: 15,
-          deepBackfillRegularPendingPagesEstimate: 2,
-        }),
-      }),
-      metrics: expect.objectContaining({
-        deepBackfillPendingConversationCount: 4,
-        deepBackfillPendingPagesEstimate: 17,
-        deepBackfillSpenderPendingPagesEstimate: 15,
-        deepBackfillRegularPendingPagesEstimate: 2,
-      }),
-    });
-    expect(snapshot.pages[0]?.syncUx.state).toBe("catching_up");
   });
 
   it("surfaces an auth blocker as failed connection sync and requires action", async () => {

@@ -86,11 +86,9 @@ export const QUEUE_RETENTION_SETTINGS: readonly QueueRetentionSetting[] = [
   { queue: "ofapi.events.sweep", retentionClass: "heartbeat-cron", retentionSeconds: HEARTBEAT_RETENTION_SECONDS, deleteAfterSeconds: HEARTBEAT_RETENTION_SECONDS },
   { queue: "projections.message-archive.sweep", retentionClass: "heartbeat-cron", retentionSeconds: HEARTBEAT_RETENTION_SECONDS, deleteAfterSeconds: HEARTBEAT_RETENTION_SECONDS },
   { queue: "agent.hydration.execute", retentionClass: "heartbeat-cron", retentionSeconds: HEARTBEAT_RETENTION_SECONDS, deleteAfterSeconds: HEARTBEAT_RETENTION_SECONDS },
-  { queue: "projections.debt.sweep", retentionClass: "heartbeat-cron", retentionSeconds: HEARTBEAT_RETENTION_SECONDS, deleteAfterSeconds: HEARTBEAT_RETENTION_SECONDS },
 
   // ---- Class B: real work queues (14d / 7d, pinned defaults) -------------
   { queue: "sync.page.execute", retentionClass: "work", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: DEFAULT_DELETE_AFTER_SECONDS },
-  { queue: "sync.thread.backfill", retentionClass: "work", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: DEFAULT_DELETE_AFTER_SECONDS },
   { queue: "ofapi.commands.execute", retentionClass: "work", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: DEFAULT_DELETE_AFTER_SECONDS },
   { queue: "ofapi.events.process.v2", retentionClass: "work", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: DEFAULT_DELETE_AFTER_SECONDS },
 

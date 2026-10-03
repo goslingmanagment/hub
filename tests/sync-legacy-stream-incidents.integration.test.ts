@@ -4,6 +4,7 @@ import {
   createModel,
   createOnlyFansPage,
   getSyncPage,
+  openNotificationIncident,
   type Database,
 } from "@agency_hub_core/db";
 import { createLogger } from "@agency_hub_core/shared";
@@ -13,7 +14,6 @@ import {
   incidentKey,
   notifySyncChunkFailureIncident,
   notifySyncEngineIncident,
-  notifyAuthFailedIncident,
   resolveLegacyStreamIncidentsOfEnginePage,
 } from "../apps/runtime/src/services/notification-incidents.ts";
 import { runNotificationPagingSweep } from "../apps/runtime/src/services/notification-paging-sweep.ts";
@@ -162,8 +162,16 @@ describe("legacy stream incidents at the transition to the Fansly Sync Engine", 
     const engine = await seedSyncPage(handles(), { label: "lilly-2", guard: "fansly_sync_engine" });
     await legacyStreamFailure({ pageId: engine.pageId, label: engine.label, stream: "dm_conversations", at: openedAt });
     await legacyStreamFailure({ pageId: engine.pageId, label: engine.label, stream: "posts", at: openedAt });
-    await notifyAuthFailedIncident(app(), {
-      platformAccountId: engine.pageId, pageLabel: engine.label, platform: "fansly", errorSummary: "401", occurredAt: openedAt,
+    // The page-wide auth latch a legacy chunk opened before the page was
+    // switched (nothing opens one since step 4, S4-19: the legacy executor
+    // serves no Fansly page).
+    await openNotificationIncident(db(), {
+      incidentKey: incidentKey({ kind: "auth_blocked", platformAccountId: engine.pageId }),
+      kind: "auth_blocked",
+      platformAccountId: engine.pageId,
+      errorSummary: "401",
+      metadata: { pageLabel: engine.label, platform: "fansly" },
+      now: openedAt,
     });
     // Another Fansly page the legacy engine still runs, and an OnlyFans page.
     const legacy = await seedSyncPage(handles(), { label: "lora-9" });

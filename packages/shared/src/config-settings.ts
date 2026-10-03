@@ -8,7 +8,6 @@
 // identically.
 
 import type { AppConfig } from "./config.ts";
-import { checkSyncConcurrencyInvariant } from "./config.ts";
 import type { ConfigOverrideValue, SkippedOverride } from "./config-registry.ts";
 import { CONFIG_DESCRIPTORS, getDescriptor, transitiveRequires } from "./config-registry.ts";
 
@@ -260,37 +259,21 @@ export interface ApplyBootOverridesResult {
   skipped: SkippedOverride[];
 }
 
-/** Read the boot-applied invariants off a (candidate) merged config and return the
- *  first violation message, or null. Generic/defensive: none of today's boot keys
- *  participate, but a future boot flag that feeds these fields would. (The
- *  public-profile OR-invariant died with its flags — W8.2 / A30, #133.) */
-function checkBootInvariants(config: AppConfig): string | null {
-  return checkSyncConcurrencyInvariant({
-    pageExecutorConcurrency: config.syncPageExecutorConcurrency,
-    sharedRateLimitEnabled: config.syncSharedRateLimitEnabled,
-  });
-}
-
 /** PURE boot-time apply of the staged (`runtimeApply === 'boot'`) overrides onto the
  *  env-loaded config, called once in createAppContext. For each boot descriptor with
  *  an override it validates the value (boolean) and tentatively writes it onto a clone;
  *  an invalid value (or a stray override for a key that is not a boot key) is skipped
- *  with a reason and never throws. It then ALWAYS (even with zero overrides) (1) normalizes
+ *  with a reason and never throws. It then ALWAYS (even with zero overrides) normalizes
  *  the staged REQUIRES GRAPH on the merged config — any boot flag left ON while a transitive
  *  prerequisite is OFF is forced to FALSE (NOT reverted to env, since the env value can
  *  itself be the invalid `true`) and recorded as skipped (fail-safe: boot never starts a
  *  dependent=on/prereq=off graph, however that state arose — a stale override, a hand-edited
- *  row, OR the env config itself) — then (2) re-checks the boot invariants on the FINAL
- *  merged config; if an APPLIED override broke one, the offending keys are reverted to env
- *  (recorded as skipped) and the invariants re-checked. This invariant-revert pass only fires
- *  when there are applied overrides (`applied.length > 0`): with zero overrides it is a no-op,
- *  which is sound because loadConfig already validated the env invariants before this runs AND
- *  no current boot key feeds checkBootInvariants (the boot set and the invariant-input fields
- *  are disjoint — pinned by the config-registry integrity test). So the env can't reach this
- *  point violating an invariant it didn't already reject at load. (If a future boot key is
- *  wired into checkBootInvariants, drop the `applied.length > 0` guard and re-normalize the
- *  requires graph after reverting.) Returns the original `config` object (unchanged identity)
+ *  row, OR the env config itself). Returns the original `config` object (unchanged identity)
  *  when nothing changed (zero overrides over an already-valid env graph).
+ *
+ *  There is no merged-config invariant beyond that graph: the last one, the page
+ *  executor's concurrency against the shared rate limiter, went with the limiter's last
+ *  reader (step 4, S4-19), and no boot key ever fed it.
  *
  *  No @agency_hub_core/db import: the override map is the local {@link BootOverrideInput}
  *  shape, so this stays in the cycle-free shared layer. */
@@ -300,9 +283,6 @@ export function applyBootOverrides(
 ): ApplyBootOverridesResult {
   const skipped: SkippedOverride[] = [];
 
-  // Candidate (key, validated boolean, configField) tuples that passed value validation.
-  // Tracked only so a later invariant revert names the overridden keys it backs out.
-  const applied: Array<{ key: string; value: boolean; field: string }> = [];
   // We ALWAYS materialize a working clone and run the requires-graph normalization over
   // it, even with zero overrides: the env config itself can be an invalid staged graph
   // (e.g. OFAPI_DM_SYNC_ENABLED=true while OFAPI_DM_PROJECTION_ENABLED=false), and boot
@@ -329,7 +309,6 @@ export function applyBootOverrides(
 
     const field = descriptor.configField as string;
     (merged as unknown as Record<string, unknown>)[field] = validated.value;
-    applied.push({ key: descriptor.key, value: validated.value, field });
   }
 
   // Flag only genuinely non-applicable override rows so the operator sees a row that was
@@ -372,9 +351,6 @@ export function applyBootOverrides(
       // which can itself be the invalid `true`).
       (merged as unknown as Record<string, unknown>)[field] = false;
       skipped.push({ key: descriptor.key, reason: `prerequisite ${offPrereq} is off` });
-      // Drop it from the applied set so the identity/invariant bookkeeping stays accurate.
-      const idx = applied.findIndex((candidate) => candidate.key === descriptor.key);
-      if (idx !== -1) applied.splice(idx, 1);
       forcedThisPass = true;
     }
     if (!forcedThisPass) break;
@@ -382,30 +358,10 @@ export function applyBootOverrides(
 
   const envSource = config as unknown as Record<string, unknown>;
 
-  // Validate the merged invariants; revert the involved overridden keys to env and
-  // re-check until clean. Because the current boot keys touch independent boolean
-  // fields, one pass per offending key converges; the loop is bounded by `applied`.
-  // The `applied.length > 0` guard is intentional: with no applied overrides there is
-  // nothing to revert, and the env was already invariant-validated by loadConfig (and no
-  // boot key feeds checkBootInvariants — see the docstring), so `merged` cannot violate an
-  // invariant here. A future boot key wired into an invariant would need this guard dropped
-  // plus a re-normalization of the requires graph after the revert.
-  let invariantError = checkBootInvariants(merged);
-  while (invariantError != null && applied.length > 0) {
-    // Revert every candidate that participated in this apply pass: defensive and
-    // simple — re-applying them would re-trigger the same violation.
-    for (const candidate of applied) {
-      (merged as unknown as Record<string, unknown>)[candidate.field] = envSource[candidate.field];
-      skipped.push({ key: candidate.key, reason: invariantError });
-    }
-    applied.length = 0;
-    invariantError = checkBootInvariants(merged);
-  }
-
   // Net change: did any boot field end up DIFFERENT from its original env value? A key that
-  // was flipped on then forced/reverted back to its env value is not a net change. When
-  // nothing changed (zero overrides over an already-valid env graph, or every applied
-  // candidate was undone), hand back the original `config` identity unchanged.
+  // was flipped on then forced back to its env value is not a net change. When nothing
+  // changed (zero overrides over an already-valid env graph, or every applied candidate
+  // was undone), hand back the original `config` identity unchanged.
   const mutated = bootDescriptors.some((descriptor) => {
     const field = descriptor.configField as string;
     return (merged as unknown as Record<string, unknown>)[field] !== envSource[field];

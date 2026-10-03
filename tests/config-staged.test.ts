@@ -9,8 +9,7 @@ import {
 } from "../apps/runtime/src/services/staged-config.ts";
 
 // A minimal AppConfig with the fields applyBootOverrides reads/writes: the 11 boot
-// boolean flags plus the fields the generic merged-invariant check consults. Partial
-// cast keeps the test free of the full env schema.
+// boolean flags. Partial cast keeps the test free of the full env schema.
 function baseConfig(): AppConfig {
   return {
     ofapiDmProjectionEnabled: false,
@@ -26,9 +25,6 @@ function baseConfig(): AppConfig {
     onlyFansTopSpendersEnabled: false,
     // A STAGED key with runtimeApply 'none' (must never boot-apply).
     onlyFansDmPollingEnabled: false,
-    // Invariant inputs (generic/defensive; no current boot key touches these).
-    syncPageExecutorConcurrency: 1,
-    syncSharedRateLimitEnabled: true,
     // A runtimeApply:'none' editable key that must never be boot-applied.
     logLevel: "info",
   } as unknown as AppConfig;
@@ -58,8 +54,8 @@ describe("validateStagedOverride", () => {
   it("rejects a 'never' key, an 'editable' live key, and a 'none' staged flag", () => {
     // databaseUrl: editability never / runtimeApply none
     expect(validateStagedOverride("databaseUrl", true).ok).toBe(false);
-    // transactionLookbackDays: editable but runtimeApply 'live' (not boot)
-    expect(validateStagedOverride("transactionLookbackDays", true).ok).toBe(false);
+    // healthSyncLightMaxAgeMinutes: editable but runtimeApply 'live' (not boot)
+    expect(validateStagedOverride("healthSyncLightMaxAgeMinutes", true).ok).toBe(false);
     // onlyFansDmPollingEnabled: staged editability but runtimeApply 'none'
     expect(validateStagedOverride("onlyFansDmPollingEnabled", true).ok).toBe(false);
     // logLevel: editable runtimeApply 'none'
@@ -106,13 +102,13 @@ describe("applyBootOverrides", () => {
   });
 
   it("does NOT report a live (runtime-overlay) override as boot-skipped", () => {
-    // transactionLookbackDays is runtimeApply:'live' — applied via the overlay, not at boot.
+    // healthSyncLightMaxAgeMinutes is runtimeApply:'live' — applied via the overlay, not at boot.
     // It must never appear in `skipped` (which the dashboard renders as "rejected at boot").
     const config = baseConfig();
-    const result = applyBootOverrides(config, overrides([["transactionLookbackDays", 14]]));
+    const result = applyBootOverrides(config, overrides([["healthSyncLightMaxAgeMinutes", 14]]));
     expect(result.config).toBe(config); // a live key is never boot-applied
     expect(result.skipped).toEqual([]);
-    expect(result.skipped.map((s) => s.key)).not.toContain("transactionLookbackDays");
+    expect(result.skipped.map((s) => s.key)).not.toContain("healthSyncLightMaxAgeMinutes");
   });
 
   it("skips an invalid (non-boolean) value for a boot key with a reason, never throwing", () => {
@@ -140,30 +136,22 @@ describe("applyBootOverrides", () => {
     expect(result.skipped.map((s) => s.key)).toContain("ofapiDmSyncEnabled");
   });
 
-  it("reverts overrides and records a reason when the merged config breaks an invariant (generic regression)", () => {
-    // No current boot key participates in an invariant, so synthesize one by starting
-    // from a config that is one boot flip away from a violation: concurrency > 1 with
-    // the shared limiter env-OFF, and a boot override that (hypothetically) flips a key.
-    // We exercise the revert path by making the BASE config already invariant-violating
-    // after a boot apply: set concurrency high + limiter off in env, then confirm a
-    // boot apply that leaves the violation intact reverts the applied key.
+  it("applies an override whatever the page executor's concurrency and the retired shared limiter key say", () => {
+    // The last merged-config invariant (concurrency > 1 needs the shared rate
+    // limiter) went with the limiter's last reader (step 4, S4-19): an applied
+    // override is no longer reverted over it.
     const config = {
       ...baseConfig(),
       syncPageExecutorConcurrency: 4,
       syncSharedRateLimitEnabled: false,
     } as unknown as AppConfig;
     const result = applyBootOverrides(config, overrides([["ofapiDmProjectionEnabled", true]]));
-    // The merged config violates the concurrency invariant (independent of the flip), so
-    // the applied key is reverted to env and recorded as skipped; config identity is the
-    // original since nothing survived.
-    expect(result.config).toBe(config);
-    expect(result.config.ofapiDmProjectionEnabled).toBe(false);
-    const skip = result.skipped.find((s) => s.key === "ofapiDmProjectionEnabled");
-    expect(skip).toBeDefined();
-    expect(skip!.reason).toMatch(/SYNC_SHARED_RATE_LIMIT_ENABLED/);
+    expect(result.config).not.toBe(config);
+    expect(result.config.ofapiDmProjectionEnabled).toBe(true);
+    expect(result.skipped).toEqual([]);
   });
 
-  it("does not falsely revert when the merged config satisfies the invariants", () => {
+  it("applies a whole chain whose prerequisites are all on", () => {
     // Both keys participate in a chain (accountHealth requires dmSync requires dmProjection),
     // so enabling accountHealth without its prereqs would trip the requires fail-safe. Use
     // two leaf-ish keys whose prereqs are also satisfied: enable the FULL #49 chain.
@@ -386,9 +374,9 @@ describe("validateStagedTransition", () => {
   });
 
   it("rejects a non-boot key", () => {
-    // logLevel is editable runtimeApply:'none'; transactionLookbackDays is live.
+    // logLevel is editable runtimeApply:'none'; healthSyncLightMaxAgeMinutes is live.
     expect(transition([{ key: "logLevel", desired: true }]).ok).toBe(false);
-    expect(transition([{ key: "transactionLookbackDays", desired: true }]).ok).toBe(false);
+    expect(transition([{ key: "healthSyncLightMaxAgeMinutes", desired: true }]).ok).toBe(false);
     expect(transition([{ key: "nopeNotAKey", desired: true }]).ok).toBe(false);
   });
 

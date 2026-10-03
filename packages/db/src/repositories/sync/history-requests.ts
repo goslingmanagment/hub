@@ -1125,7 +1125,7 @@ export async function isPageErased(db: Database, pageId: number): Promise<boolea
 }
 
 /** How fresh a live socket must have guarded its connection to count as open
- *  (the fast lane's precedent). */
+ *  (its guard runs every 5 s; six missed guards are a closed socket). */
 export const HISTORY_ANCHOR_SOCKET_FRESH_MS = 30_000;
 
 /** The page's current WebSocket connection, when it is open, verified and

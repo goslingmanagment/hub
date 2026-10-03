@@ -17,7 +17,6 @@ const dbMocks = vi.hoisted(() => ({
   listCheckpointStates: vi.fn(),
   listSyncMonitorStreamRows: vi.fn(),
   listSyncMonitorRecentEvents: vi.fn(),
-  countUnresolvedProjectionDebtByAccount: vi.fn(),
   countConversationSyncFailuresByAccount: vi.fn(),
   countDistinctFansForPages: vi.fn(),
 }));
@@ -189,7 +188,6 @@ describe("a followers_reconcile request held by the daily floor", () => {
     dbMocks.listCheckpointStates.mockImplementation(async (_db: unknown, _ids: unknown, stream: string) =>
       stream === "dm_conversations" ? [{ pageId: 7, state: boundedDmCheckpoint() }] : []);
     dbMocks.listSyncMonitorRecentEvents.mockResolvedValue([]);
-    dbMocks.countUnresolvedProjectionDebtByAccount.mockResolvedValue([]);
     dbMocks.countConversationSyncFailuresByAccount.mockResolvedValue([]);
     dbMocks.countDistinctFansForPages.mockResolvedValue(300);
   });

@@ -1,8 +1,6 @@
 import { sql } from "drizzle-orm";
 import type { Database } from "../client.ts";
-import {
-  fanEarningsPlane, type FanEarningsClaim, type FanEarningsRefreshWindow,
-} from "./fan-earnings-refresh.ts";
+import { fanEarningsPlane, type FanEarningsClaim } from "./fan-earnings-refresh.ts";
 
 export type FanEarningsReceipt = {
   outcome: "observed" | "empty" | "invalid" | "rejected" | "failed";
@@ -87,21 +85,4 @@ export async function settleFanEarningsReceipt(
     returning s.page_id
   `);
   return (result.rowCount ?? 0) === 1;
-}
-
-/** A walk may cross an endpoint's rejection only after its own receipt is
- * durable: stored at or after `since`, with the claim released. Returns that
- * endpoint's current run of rejected receipts, or null. */
-export async function findDurableFanEarningsRejection(
-  db: Database,
-  input: { pageId: number; fanRef: string; window: FanEarningsRefreshWindow; since: Date },
-): Promise<{ consecutiveRejections: number } | null> {
-  const result = await db.execute<{ consecutive_rejections: number }>(sql`
-    select consecutive_rejections from subject_refresh_state
-    where page_id = ${input.pageId} and plane = ${fanEarningsPlane(input.window)}
-      and subject_ref = ${input.fanRef} and claim_token is null
-      and last_refresh_outcome = 'rejected' and last_visited_at >= ${input.since}
-  `);
-  const row = result.rows[0];
-  return row ? { consecutiveRejections: Number(row.consecutive_rejections) } : null;
 }

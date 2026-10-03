@@ -275,7 +275,7 @@ describe("dm-live.deletions on a live page", () => {
     expect(archived!.deleted_at).not.toBeNull();
   }, 60_000);
 
-  it("a hot row the minutely legacy reconcile marked first: the window, the ledger and the archive still get the deletion", async (context) => {
+  it("a hot row marked before (the retired receipt reconcile's mark): the window, the ledger and the archive still get the deletion", async (context) => {
     if (!testDb) return context.skip();
     const { page, threadId, ids, at } = await seedLivePage();
     await deleteFrame(page, ids[0]);
@@ -286,7 +286,7 @@ describe("dm-live.deletions on a live page", () => {
     );
     const metrics = new RecordingMetrics();
     await runDeletions(page.pageId, metrics);
-    // The reconcile's mark stays; the window and the stores follow.
+    // The earlier mark stays; the window and the stores follow.
     expect((await hotRow(page.pageId, ids[0]))!.deleted_at).toEqual(reconciledAt);
     expect(await threadWindow(threadId)).toMatchObject({
       stored_message_count: 2,
