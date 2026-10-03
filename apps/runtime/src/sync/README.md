@@ -312,14 +312,15 @@ Phases: **A** mode `handover` (the legacy engine is fenced, the shadow actor rel
 lock) and the guard row handed to the engine once no legacy request is in flight; **B** the legacy stop confirmed
 (`switch/legacy-stop.ts`: no running lease, open run, open HTTP attempt, open guarded send, socket lock holder or
 active thread backfill; the guard handed); **R** the final incremental chain rebuild; **I** the legacy import
-(`switch/import.ts`: shadow work superseded, every module's `importLegacy` — cursors, carried DM breakers, head-debt
-catch-ups —, one urgent head read per chat with an unconfirmed overlay row, a legacy 429 hold or auth block carried,
-the 0231 marking, the takeover `account.verify`, `legacy_imported_at` last); **C** mode `live`, a new owner generation
-within 2 min, history requests open (+1 h on the first page ever switched); **H** once they are open, the page's
-hydration requests become history requests (`switch_migration`). A or B timing out reverts to `shadow` (exit 2); no
-live owner after C is exit 4. `sync switch --open-requests` runs H on the first page; `sync switch check --page P
---since T0` prints the acceptance checks (pace over both journals, the handover boundary, vendor refusals, nothing
-stuck, the SLOs, volume, restarts, open incidents).
+(`switch/import.ts`: shadow work superseded, every module's `importLegacy` — cursors, carried DM breakers (merged
+into the key's open work, else a closed carrier the next work inherits; a `handover` receipt waits for the import's
+fence), head-debt catch-ups —, one urgent head read per chat with an unconfirmed overlay row, a legacy 429 hold or
+auth block carried, the 0231 marking, the takeover `account.verify`, `legacy_imported_at` last); **C** mode `live`, a
+new owner generation within 2 min, history requests open (+1 h on the first page ever switched); **H** once they are
+open, the page's hydration requests become history requests (`switch_migration`). A or B timing out reverts to
+`shadow` (exit 2); no live owner after C is exit 4. `sync switch --open-requests` runs H on the first page; `sync
+switch check --page P --since T0` prints the acceptance checks (pace over both journals, the handover boundary, vendor
+refusals, nothing stuck, the SLOs, volume, restarts, open incidents).
 
 `pnpm cli sync rollback --page P [--with-auth-hold]` gives the page back: `handover` (the live actor and its socket
 stop and release), the release (or `sync ownership confirm-stopped`, exit 3 otherwise), the guard back to the legacy
