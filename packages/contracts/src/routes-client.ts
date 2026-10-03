@@ -181,3 +181,202 @@ export type ClientReceiptProfile = z.infer<typeof clientReceiptProfileSchema>;
 export type ClientBootstrapPage = z.infer<typeof clientBootstrapPageSchema>;
 export type ClientBootstrapLimits = z.infer<typeof clientBootstrapLimitsSchema>;
 export type ClientBootstrapResponse = z.infer<typeof clientBootstrapResponseSchema>;
+
+// ── client_health v1 (H-11a) ─────────────────────────────────────────────────
+//
+// The chat extension's health report: its version, the host build fingerprint,
+// the host-contract verdict, what is switched off, counters by code, perf
+// histograms and an estimate of its own storage. No text from a chat and no fan,
+// chat, message or operation id.
+//
+// THE CLIENT'S SHAPE. The chat extension froze this report in its contracts
+// v1.0.0 (`ClientHealthV1Schema` in its packages/contracts/src/telemetry.ts; its
+// `kind` rides the ingest envelope, the rest is this body). The metric names and
+// bounds, the field names and every limit below are the client's, and every
+// report the client's schema accepts parses here: a report the hub refused would
+// be lost with its P1 counters. The hub adds only checks such a report always
+// meets: counts = bounds + 1 and count = Σcounts (the client's own), strictly
+// increasing bounds (the client pins every histogram to this registry), an empty
+// histogram with sum 0 and max 0, one histogram per metric.
+//
+// Codes, not free text: host anchors, switched-off features, counter keys, the
+// host kind and metric names match CLIENT_HEALTH_CODE_PATTERN, ASCII without
+// spaces, so a sentence, a fan's name with a space or a URL does not fit in one.
+// Two fields are the client's bounded strings, not codes: the client version
+// (its manifest version) and the host build (the hashed name of the host's entry
+// module). And a code may name an inherited object property (`constructor`); a
+// record drops an own `__proto__` key without a word, as on the client. The
+// intake (H-11b) keys its user-free hourly rollups, kept forever, on these
+// strings (client version, host kind and build, metric, anchor, counter code),
+// so it files a version or build that is not a code under one placeholder, and
+// merges codes into a Map, never into a plain object.
+//
+// No route carries it and nothing on the hub reads it yet, so the contract hash
+// does not move: this is the shape the client and the hub agree on. The client
+// sends a report as one `ingestObservations` event of kind
+// CLIENT_HEALTH_INGEST_KIND, in a batch of its own, and ONLY once the bootstrap
+// lists `client-health-perf-v1`; until then it keeps its reports to itself. A
+// hub without that capability journals an unknown kind in `observations`
+// (`desktop.unknown:<kind>`) with the user, forever and on into the lake, which
+// is exactly what this report must never become. The intake behind the
+// capability (H-11b) checks a report against this schema and the bounds
+// registry, folds it into hourly rollups keyed without the user, and never
+// journals it.
+//
+// A client→hub shape, so strict (§4.0): an unknown key is a malformed report,
+// and a new field is a new report version. Growing names (metric, host kind)
+// stay open, as codes: one the hub does not know it drops, and the rest of the
+// report still counts. The checks below are cheap and local (no clock, no
+// registry). The intake checks a known metric's bounds against the registry,
+// drops a histogram whose max or sum its buckets cannot hold (the runtime's
+// `clientHealthHistogramFits`), and files a report under the hour it received
+// it, not the client's window.
+
+/** The `ingestObservations` event kind of a health report. */
+export const CLIENT_HEALTH_INGEST_KIND = "client_health";
+
+/**
+ * A code, never free text (the client's HEALTH_CODE_PATTERN): error and P1
+ * codes, contract anchors, switched-off features, metric names, the host kind.
+ */
+export const CLIENT_HEALTH_CODE_PATTERN = /^[A-Za-z0-9._:-]{1,80}$/;
+
+const healthCode = z.string().regex(CLIENT_HEALTH_CODE_PATTERN);
+/** A growing name (metric, host kind): a code within the open-token length. */
+const healthName = healthCode.max(64);
+
+/** One counter in one report (the client's cap). */
+const healthCounterValue = z.number().int().min(0).max(1_000_000);
+
+/**
+ * An instant on the client's clock: ISO 8601 with `Z` or a `±HH:MM` offset,
+ * checked by pattern only, as on the client (its IsoTimestampSchema).
+ */
+const CLIENT_HEALTH_INSTANT_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
+const healthInstant = z.string().max(40).regex(CLIENT_HEALTH_INSTANT_PATTERN);
+
+/**
+ * The perf metrics and the fixed upper bounds (ms) of their buckets, as the
+ * client froze them (`PERF_METRICS`, contracts v1.0.0): the client builds every
+ * histogram from these, and the hub checks a histogram against them before it
+ * merges one.
+ *
+ * Buckets: a histogram with n bounds has n + 1 counts. counts[0] holds values
+ * ≤ bounds[0]; counts[i] values in (bounds[i-1], bounds[i]]; counts[n] values
+ * above bounds[n-1] (that bucket tops out at the histogram's `max`).
+ *
+ * The bounds and meaning of one (metric, schemaVersion) never change: new
+ * bounds or a new meaning are a new schemaVersion, and the registry is
+ * append-only.
+ */
+export const CLIENT_HEALTH_PERF_METRICS = {
+  /** Route change → dock updated. */
+  routeToDockMs: { unit: "ms", schemaVersion: 1, bounds: [1, 2, 4, 8, 16, 32, 50, 75, 100, 150, 250, 500, 1000] },
+  /** Hotkey or click → visible response. */
+  panelOpenMs: { unit: "ms", schemaVersion: 1, bounds: [4, 8, 16, 32, 50, 75, 100, 150, 250, 500, 1000, 2500] },
+  /** Click → request sent: the client's own overhead. */
+  requestOverheadMs: { unit: "ms", schemaVersion: 1, bounds: [1, 2, 4, 8, 16, 32, 50, 100, 250, 500] },
+  /** Click → first chunk, end to end (provider latency included). */
+  ttfcMs: {
+    unit: "ms", schemaVersion: 1,
+    bounds: [250, 500, 1000, 1500, 2000, 3000, 4000, 6000, 8000, 12000, 20000, 30000, 60000],
+  },
+  /** First chunk → painted. */
+  firstChunkPaintMs: { unit: "ms", schemaVersion: 1, bounds: [4, 8, 16, 32, 50, 75, 100, 150, 250, 500] },
+  /** Guarded insert with verification. */
+  insertMs: { unit: "ms", schemaVersion: 1, bounds: [4, 8, 16, 32, 50, 75, 100, 150, 250, 500, 1000] },
+  /** Board open from cache. */
+  boardOpenMs: { unit: "ms", schemaVersion: 1, bounds: [8, 16, 32, 50, 75, 100, 150, 250, 500, 1000, 2500] },
+  /** Search over up to 1000 rows. */
+  searchMs: { unit: "ms", schemaVersion: 1, bounds: [1, 2, 4, 8, 16, 32, 50, 100, 250, 500] },
+  /** The client's synchronous handlers, sampled 1 in 20. */
+  handlerMs: { unit: "ms", schemaVersion: 1, bounds: [0.1, 0.5, 1, 2, 4, 8, 16, 50, 100] },
+  /** Event Timing of the client's hotkeys and clicks → next paint. */
+  eventLatencyMs: { unit: "ms", schemaVersion: 1, bounds: [8, 16, 24, 32, 50, 75, 100, 150, 250, 500, 1000] },
+  /** Input delay in the host's composer with the extension on. */
+  composerInputDelayMs: { unit: "ms", schemaVersion: 1, bounds: [1, 2, 4, 8, 16, 32, 50, 100, 250] },
+} as const satisfies Record<string, { unit: "ms"; schemaVersion: number; bounds: readonly number[] }>;
+
+export type ClientHealthPerfMetricName = keyof typeof CLIENT_HEALTH_PERF_METRICS;
+
+/**
+ * One perf metric over the report window. Percentiles are the hub's job: it
+ * computes them from buckets merged across reports, never from the client's.
+ */
+export const clientHealthPerfHistogramSchema = z.object({
+  /** Open name; known values: the keys of CLIENT_HEALTH_PERF_METRICS. */
+  metric: healthName,
+  unit: z.literal("ms"),
+  schemaVersion: positive,
+  bounds: z.array(z.number().nonnegative()).min(1).max(32),
+  counts: z.array(count).min(2).max(33),
+  count,
+  sum: z.number().nonnegative(),
+  max: z.number().nonnegative(),
+}).strict().superRefine((histogram, ctx) => {
+  const { bounds, counts, count: total, sum, max } = histogram;
+  if (counts.length !== bounds.length + 1) {
+    ctx.addIssue({ code: "custom", path: ["counts"], message: "counts must have one more entry than bounds" });
+    return;
+  }
+  if (counts.reduce((acc, bucket) => acc + bucket, 0) !== total) {
+    ctx.addIssue({ code: "custom", path: ["count"], message: "count must equal the sum of counts" });
+  }
+  for (let index = 1; index < bounds.length; index += 1) {
+    if (!(bounds[index]! > bounds[index - 1]!)) {
+      ctx.addIssue({ code: "custom", path: ["bounds", index], message: "bounds must strictly increase" });
+    }
+  }
+  if (total === 0 && (sum !== 0 || max !== 0)) {
+    ctx.addIssue({ code: "custom", path: ["sum"], message: "an empty histogram has sum 0 and max 0" });
+  }
+});
+
+export const clientHealthReportV1Schema = z.object({
+  v: z.literal(1),
+  /** The aggregation window on the client's clock (15 minutes today); neither ordered nor capped, as on the client. */
+  window: z.object({ from: healthInstant, to: healthInstant }).strict(),
+  client: z.object({
+    name: z.literal("chat-extension"),
+    /** The add-on's version: the client's bounded string, not a code. */
+    version: z.string().min(1).max(32),
+    browser: z.literal("firefox"),
+    browserMajor: positive,
+    os: z.enum(["windows", "macos", "linux", "other"]),
+  }).strict(),
+  host: z.object({
+    /** Open name: the host page the client works over (`chatspace` today). */
+    kind: healthName,
+    /**
+     * The host's build fingerprint (the hashed name of its entry module, such as
+     * `index-DEVowLko`); null when it could not be read. The client's bounded
+     * string, not a code.
+     */
+    build: z.string().max(80).nullable(),
+    /** Whether every anchor of the host contract was found. */
+    contractOk: z.boolean(),
+    /** Anchors of the host contract that were not found. */
+    missing: z.array(healthCode).max(64),
+  }).strict(),
+  /** Features switched off by the owner's flags or by a broken host contract. */
+  disabled: z.array(healthCode).max(64),
+  /** At most one histogram per metric: a metric twice in one report would count twice. */
+  perf: z.array(clientHealthPerfHistogramSchema).max(16)
+    .superRefine((perf, ctx) => {
+      const seen = new Set<string>();
+      perf.forEach((histogram, index) => {
+        if (seen.has(histogram.metric)) {
+          ctx.addIssue({ code: "custom", path: [index, "metric"], message: "one histogram per metric" });
+        }
+        seen.add(histogram.metric);
+      });
+    }),
+  /** Code → occurrences in the window: errors by code, prevented inserts, P1s. */
+  counters: z.record(healthCode, healthCounterValue)
+    .refine((counters) => Object.keys(counters).length <= 200, { message: "at most 200 counters" }),
+  /** The client's own caches and logs, not the heap (Firefox has no portable heap reading). */
+  footprint: z.object({ kind: z.literal("owned-estimate"), cachesKB: count, logsKB: count }).strict(),
+}).strict();
+
+export type ClientHealthPerfHistogram = z.infer<typeof clientHealthPerfHistogramSchema>;
+export type ClientHealthReportV1 = z.infer<typeof clientHealthReportV1Schema>;
