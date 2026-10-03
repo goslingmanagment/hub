@@ -33,6 +33,7 @@ import { ofapiCollectionRefusalDisposition, runWithHttpRequestSignal } from "@ag
 import type { Db as PgBossDb, JobWithMetadata, PgBoss } from "pg-boss";
 
 import type { AppContext } from "../../bootstrap.ts";
+import { legacyExecutorPlatforms } from "../../platforms/registry.ts";
 import { ProxyMissingError } from "../errors.ts";
 import { isFanslyPageOwnedBySyncEngineError } from "../fansly-send-guard/index.ts";
 import {
@@ -741,7 +742,11 @@ export async function executeNextSyncPageChunk(
   platformAccountId: number,
 ): Promise<SyncPageChunkResult> {
   const dependencyInput = pageSyncDependencyInput(app);
-  await ensurePageSyncStates(app.db, { pageId: platformAccountId, ...dependencyInput });
+  // Only the platforms whose adapter declares streams (OnlyFans since step 4
+  // S4-10): a stray wake-up for a Fansly page seeds, repairs and leases
+  // nothing of its legacy state and goes idle.
+  const platforms = legacyExecutorPlatforms();
+  await ensurePageSyncStates(app.db, { pageId: platformAccountId, platforms, ...dependencyInput });
   await pauseDisabledOnlyFansDmPollingForPage(app, platformAccountId);
 
   const taskLease = await acquirePageSyncLease(app.db, {
@@ -749,6 +754,7 @@ export async function executeNextSyncPageChunk(
     workerId: `sync-page-executor:${process.pid}`,
     leaseToken: randomUUID(),
     leaseTtlMs: SYNC_TASK_LEASE_TTL_MS,
+    platforms,
   });
 
   if (!taskLease) {
