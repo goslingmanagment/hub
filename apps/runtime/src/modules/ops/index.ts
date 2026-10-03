@@ -737,7 +737,7 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
     const { pageLabel, scope } = request.body;
-    await getPageSummary(appContext, pageLabel);
+    await getPageSummary(appContext, pageLabel); // 404 for an unknown page
     // A page the Fansly Sync Engine owns: the scope's streams become the
     // engine's polls due now (live); a page being switched refuses (409).
     // Any other Fansly page is refused by `requestPageSync` (409

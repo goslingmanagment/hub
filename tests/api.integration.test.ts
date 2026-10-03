@@ -9338,6 +9338,7 @@ describe("api integration", () => {
       modelId: fixture.lanaModel.id,
       label: "lana-of-blocks",
     });
+    if (!onlyFansPage) throw new Error("Expected the OnlyFans page");
     const now = new Date("2026-03-24T12:00:00.000Z");
     await ensurePageSyncStates(activeTestDb.db, {
       pageId: onlyFansPage.id,

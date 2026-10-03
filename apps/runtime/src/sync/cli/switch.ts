@@ -24,11 +24,11 @@ import { runSyncSwitch, runSyncSwitchOpenRequests } from "../switch/switch.ts";
 // reachable through these commands alone.
 //
 // Exit codes: 0 done; 2 the switch reverted to shadow (A or B timed out);
-// 3 B waits for a stop confirmation; 4 C timed out (the page is live with the
-// guard handed and no owner); 1 refused or failed — `sync rollback` always
-// (SYNC_ROLLBACK_RETIRED). `switch check`: 0 every page accepted, 1 a page
-// failed, 2 otherwise (inconclusive, or 429s on two routes of a page for the
-// owner's review).
+// 3 the switch's revert waits for a stop confirmation; 4 C timed out (the
+// page is live with the guard handed and no owner); 1 refused or failed —
+// `sync rollback` always (SYNC_ROLLBACK_RETIRED). `switch check`: 0 every
+// page accepted, 1 a page failed, 2 otherwise (inconclusive, or 429s on two
+// routes of a page for the owner's review).
 
 /** Why `sync rollback` refuses since step 4 (S4-10): the legacy executor
  *  serves no Fansly page, so there is no engine to hand a page back to. The
