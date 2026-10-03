@@ -106,6 +106,7 @@ import { REPLIES_FULL_PAGE_THRESHOLD } from "../canonicalize/fansly-comments.ts"
 import { loadEffectiveConfig } from "../effective-config.ts";
 import { composeRequestObservers } from "./chunk-budget.ts";
 import type { ExecutorRequestContext, StreamChunkResult } from "./executor-handlers.ts";
+import { classifyFanslyResponse, fanslyUtcDayKey } from "../../sync/fansly/lib/lane.ts";
 import {
   createFanslyLaneCoverageWriter,
   createFanslyLaneJournal,
@@ -118,11 +119,8 @@ import {
 } from "./fansly-lane.ts";
 import { evaluateFanslyStreamGate } from "./fansly-stream-gate.ts";
 import { summarizeCheckpoint } from "./observability.ts";
-import {
-  FANSLY_POST_REPLIES_CAPTURE_MAPPER_VERSION,
-  retentionDate,
-  trimFanslyPostRepliesPayload,
-} from "./shared.ts";
+import { retentionDate } from "./shared.ts";
+import { FANSLY_POST_REPLIES_CAPTURE_MAPPER_VERSION, trimFanslyPostRepliesPayload } from "../../sync/fansly/lib/capture-trims.ts";
 import { fanslyPageSendGuard } from "../fansly-send-guard/index.ts";
 
 const STREAM = "post_replies" as const;

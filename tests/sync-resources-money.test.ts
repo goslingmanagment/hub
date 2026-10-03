@@ -10,7 +10,8 @@ import {
   partitionTopSpenderItems,
   resolveFanslyCommissionRate,
   splitTopSpendersWindow,
-} from "../apps/runtime/src/services/sync/money-rules.ts";
+} from "../apps/runtime/src/sync/fansly/lib/money-rules.ts";
+import { fanslyPurchaseHistoryTargetOfTransaction } from "../apps/runtime/src/sync/fansly/lib/purchase-history.ts";
 import {
   fanEarningsRequest,
   fanEarningsSubjectOfRequest,
@@ -177,6 +178,20 @@ describe("purchase targets", () => {
       targets: [{ kind: "bundle", id: "770000000000000001" }, { kind: "media", id: "880000000000000002" }],
       conflicts: [],
     });
+  });
+
+  it("are named one per money fact, the content id trimmed", () => {
+    expect(fanslyPurchaseHistoryTargetOfTransaction({ rawType: "2110", correlationId: " 880000000000000002 " }))
+      .toEqual({ kind: "single", contentId: "880000000000000002" });
+    expect(fanslyPurchaseHistoryTargetOfTransaction({ rawType: 2016, correlationId: "770000000000000001" }))
+      .toEqual({ kind: "bundle", contentId: "770000000000000001" });
+    for (const row of [
+      { rawType: 7001, correlationId: "990000000000000001" },
+      { rawType: 2010, correlationId: null },
+      { rawType: 2116, correlationId: "  " },
+    ]) {
+      expect(fanslyPurchaseHistoryTargetOfTransaction(row), JSON.stringify(row)).toBeNull();
+    }
   });
 
   it("leave out a content id seen as both kinds instead of guessing", () => {

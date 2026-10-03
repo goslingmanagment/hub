@@ -1071,7 +1071,21 @@ rollback_remote_stack() {
     return 0
   fi
 
-  run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; docker tag $(printf '%q' "$ROLLBACK_IMAGE_TAG") $(printf '%q' "$IMAGE_TAG"); ${REMOTE_COMPOSE} up -d --remove-orphans --force-recreate --no-build" \
+  # An app-scope deploy kept the healthy PostgreSQL, so its rollback does too:
+  # it lists the forward recreate's services, and Compose recreates an unlisted
+  # dependency only when its configuration diverged, which the infrastructure
+  # guard ruled out. With no list, --force-recreate would stop and replace
+  # PostgreSQL as well. Sync rides in the same `up` (its depends_on starts it
+  # once the rolled-back api is healthy), or, when the restored files predate
+  # it, --remove-orphans removes it. A stack-scope deploy recreated everything,
+  # PostgreSQL included, so its rollback still lists nothing.
+  local release_has_sync=0
+  remote_release_defines_sync && release_has_sync=1
+  local services="${RECREATE_SERVICES:-}"
+  if [[ -n "$services" && "$release_has_sync" == "1" ]]; then
+    services+=" sync"
+  fi
+  run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; docker tag $(printf '%q' "$ROLLBACK_IMAGE_TAG") $(printf '%q' "$IMAGE_TAG"); ${REMOTE_COMPOSE} up -d --remove-orphans --force-recreate --no-build${services:+ ${services}}" \
     || {
       log "Rollback command failed"
       return 0
@@ -1082,6 +1096,37 @@ rollback_remote_stack() {
   else
     log "Rollback health check did not reach 200"
   fi
+
+  # The rollback replaced every app container, sync included, so it runs the
+  # forward path's confirmations: an owner of the replaced sync container that
+  # did not write its safe release leaves its page waiting
+  # `ownership_unconfirmed`, with no sender, and a Fansly request the stop cut
+  # off leaves its page closed. The sync one waits for the rolled-back sync
+  # container's healthcheck (its depends_on already waited for a healthy api),
+  # whatever the API check above saw from here. Like the rest of the rollback,
+  # neither ever stops fail().
+  if [[ "$release_has_sync" == "1" ]]; then
+    log "Waiting for the rolled-back sync container healthcheck"
+    if wait_for_sync_container_health; then
+      confirm_sync_owner_handover \
+        || log "WARNING: the sync engine owner confirmation failed after the rollback; a page whose owner was cut off by the rollback waits (ownership_unconfirmed) until sync ownership confirm-stopped is run by hand"
+    else
+      log "WARNING: the rolled-back sync container never reached a healthy state; a page whose owner was cut off by the rollback waits (ownership_unconfirmed) until sync ownership confirm-stopped is run by hand"
+    fi
+  fi
+  confirm_remote_fansly_send_guard_terminations \
+    || log "WARNING: the Fansly send guard confirmation failed after the rollback; a page cut off by the rollback stays closed (with its alert) until fansly-send-guard confirm-terminated is run by hand"
+}
+
+# The restored release files may predate the sync service (see
+# dump_remote_diagnostics), and Compose refuses to recreate a service its files
+# lack. A failed read counts as defined, as in every current release: the
+# recreate then reports the real problem.
+remote_release_defines_sync() {
+  local services
+  services="$(run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; ${REMOTE_COMPOSE} config --services")" \
+    || return 0
+  grep -qx sync <<<"$services"
 }
 
 capture_remote_schema_migrations() {

@@ -44,6 +44,7 @@ vi.mock("@agency_hub_core/db", async (importOriginal) => {
 
 const { FANSLY_MAPPER_VERSION } = await import("@agency_hub_core/fansly");
 const shared = await import("../apps/runtime/src/services/sync/shared.ts");
+const trims = await import("../apps/runtime/src/sync/fansly/lib/capture-trims.ts");
 const { FANSLY_STATS_MAPPER_VERSION } = await import("../apps/runtime/src/sync/fansly/lib/stats-rules.ts");
 const { prepareJournalBody } = await import("../apps/runtime/src/sync/fansly/capture.ts");
 
@@ -114,28 +115,28 @@ async function legacyCapture(kind: string, response: unknown, contractAccepted?:
   let observationPayload: { observationPayload: unknown } | Record<string, never> = {};
   switch (kind) {
     case "followers": // executor-handlers.ts
-      responsePayload = shared.captureFanslyFollowerPayload(response, contractAccepted);
-      mapperVersion = shared.FANSLY_FOLLOWERS_CAPTURE_MAPPER_VERSION;
+      responsePayload = trims.captureFanslyFollowerPayload(response, contractAccepted);
+      mapperVersion = trims.FANSLY_FOLLOWERS_CAPTURE_MAPPER_VERSION;
       break;
     case "dm_conversations": // fansly-dm-conversations.ts
-      responsePayload = shared.captureFanslyMessagingGroupsPayload(response, contractAccepted);
-      mapperVersion = shared.FANSLY_GROUPS_CAPTURE_MAPPER_VERSION;
+      responsePayload = trims.captureFanslyMessagingGroupsPayload(response, contractAccepted);
+      mapperVersion = trims.FANSLY_GROUPS_CAPTURE_MAPPER_VERSION;
       break;
     case "notifications": // fansly-notifications.ts
-      responsePayload = shared.trimFanslyNotificationsPayload(response);
-      mapperVersion = shared.FANSLY_NOTIFICATIONS_CAPTURE_MAPPER_VERSION;
+      responsePayload = trims.trimFanslyNotificationsPayload(response);
+      mapperVersion = trims.FANSLY_NOTIFICATIONS_CAPTURE_MAPPER_VERSION;
       break;
     case "vault_media": // fansly-catalog.ts
-      responsePayload = shared.trimFanslyCatalogPayload(response);
-      mapperVersion = shared.FANSLY_CATALOG_CAPTURE_MAPPER_VERSION;
+      responsePayload = trims.trimFanslyCatalogPayload(response);
+      mapperVersion = trims.FANSLY_CATALOG_CAPTURE_MAPPER_VERSION;
       break;
     case "post_replies": // fansly-post-replies.ts
-      responsePayload = shared.trimFanslyPostRepliesPayload(response);
-      mapperVersion = shared.FANSLY_POST_REPLIES_CAPTURE_MAPPER_VERSION;
+      responsePayload = trims.trimFanslyPostRepliesPayload(response);
+      mapperVersion = trims.FANSLY_POST_REPLIES_CAPTURE_MAPPER_VERSION;
       observationPayload = { observationPayload: { walk: WALK, response: responsePayload } };
       break;
     case "payout_requests": // fansly-payouts.ts
-      mapperVersion = shared.FANSLY_PAYOUTS_CAPTURE_MAPPER_VERSION;
+      mapperVersion = trims.FANSLY_PAYOUTS_CAPTURE_MAPPER_VERSION;
       break;
     case "account_stats": // fansly-stats.ts
       mapperVersion = FANSLY_STATS_MAPPER_VERSION;

@@ -7,7 +7,7 @@
 // for the same response, because the canonicalizer families, replay, the agent
 // scrub and the AI describer read observations by kind and expect exactly that
 // shape. So this file invents no transform: it applies, in the legacy order,
-// the existing pure ones (services/sync/shared.ts persistRawPayload and the
+// the existing pure ones (the legacy capture seam `persistRawPayload` and the
 // lanes that call it):
 //
 //   1. the lane's [A20] trim for the kinds that have one (follower and
@@ -38,17 +38,8 @@ import type { RequestPlan } from "../engine/resource.ts";
 import { FANSLY_CATALOG_CANONICALIZED_KINDS } from "../../services/canonicalize/fansly-catalog.ts";
 import { FANSLY_PAYOUTS_CANONICALIZED_KINDS } from "../../services/canonicalize/fansly-payouts.ts";
 import { FANSLY_STATS_CANONICALIZED_KINDS } from "../../services/canonicalize/fansly-stats.ts";
-import {
-  FANSLY_CDN_TOKENS_STRIPPED_MAPPER_SUFFIX,
-  fanslyCdnTokenStripApplies,
-  stripFanslySignedCdnTokens,
-} from "../../services/sync/fansly-cdn-tokens.ts";
 import { FANSLY_STATS_MAPPER_VERSION } from "./lib/stats-rules.ts";
 import { inspectFanslyPostTipsScope } from "./lib/posts-rules.ts";
-import {
-  JOURNAL_LONE_SURROGATES_REPLACED_MAPPER_SUFFIX,
-  replaceJournalLoneSurrogates,
-} from "../../services/sync/journal-lone-surrogates.ts";
 import {
   captureFanslyFollowerPayload,
   captureFanslyMessagingGroupsPayload,
@@ -61,7 +52,16 @@ import {
   trimFanslyCatalogPayload,
   trimFanslyNotificationsPayload,
   trimFanslyPostRepliesPayload,
-} from "../../services/sync/shared.ts";
+} from "./lib/capture-trims.ts";
+import {
+  FANSLY_CDN_TOKENS_STRIPPED_MAPPER_SUFFIX,
+  fanslyCdnTokenStripApplies,
+  stripFanslySignedCdnTokens,
+} from "./lib/cdn-tokens.ts";
+import {
+  JOURNAL_LONE_SURROGATES_REPLACED_MAPPER_SUFFIX,
+  replaceJournalLoneSurrogates,
+} from "./lib/journal-lone-surrogates.ts";
 
 /** The part of a wire spec this needs: the observation kind it journals
  *  under (`FanslyWireSpec.kind`). */

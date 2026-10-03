@@ -32,7 +32,7 @@ export function buildFanslyMetadata(
     // Served text straight into `pages.metadata` (jsonb), which refuses an
     // unpaired UTF-16 surrogate: without this belt one broken emoji in a wall
     // or tier description would fail every metadata refresh of the page
-    // (sync/journal-lone-surrogates.ts). A copy; the served account is kept.
+    // (sync/fansly/lib/journal-lone-surrogates.ts). A copy; the served account is kept.
     walls: sanitizeLoneSurrogatesDeep(account.walls ?? []),
     subscriptionTiers: sanitizeLoneSurrogatesDeep(account.subscriptionTiers ?? []),
   };

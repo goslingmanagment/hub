@@ -15,11 +15,11 @@ import { createCapturePayloadRowResolver, isCapturePayloadUnavailable } from "..
 import {
   classifyFanslyPurchaseHistoryCapture,
   extractFanslyPurchaseHistoryTargets,
-  extractFanslyPurchaseHistoryTargetsFromTransactions,
+  fanslyPurchaseHistoryTargetOfTransaction,
   parseFanslyPurchaseHistoryCursorState,
   type FanslyPurchaseHistoryPendingTarget,
   type FanslyPurchaseHistoryTarget,
-} from "../../../services/sync/fansly-purchase-history.ts";
+} from "../lib/purchase-history.ts";
 import { ApplyQuarantine } from "../../engine/commit.ts";
 import type {
   ApplyInput,
@@ -131,11 +131,11 @@ export function purchaseTargetsOfTransactions(
 ): { targets: PurchaseTarget[]; conflicts: string[] } {
   const byId = new Map<string, Set<PurchaseTarget["kind"]>>();
   for (const row of rows) {
-    for (const target of extractFanslyPurchaseHistoryTargetsFromTransactions([row])) {
-      const kinds = byId.get(target.contentId) ?? new Set();
-      kinds.add(fromLegacyTarget(target).kind);
-      byId.set(target.contentId, kinds);
-    }
+    const target = fanslyPurchaseHistoryTargetOfTransaction(row);
+    if (target === null) continue;
+    const kinds = byId.get(target.contentId) ?? new Set();
+    kinds.add(fromLegacyTarget(target).kind);
+    byId.set(target.contentId, kinds);
   }
   const targets: PurchaseTarget[] = [];
   const conflicts: string[] = [];

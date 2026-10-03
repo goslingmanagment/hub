@@ -15,23 +15,23 @@ import {
   type FanslyDmMessageSyncExcludedReason,
 } from "@agency_hub_core/shared";
 
-import { truncateDmPreview } from "../../../services/sync/dm-preview.ts";
 import {
   breaksLegacyUnchangedPage,
   diffConversationHead,
   type ConversationHeadDiffReason,
   type ConversationHeadSnapshot,
-} from "../../../services/sync/fansly-dm-head-diff.ts";
-import { resolveDmSenderRole } from "../../../services/sync/fansly-dm-messages.ts";
-import { normalizeFanslyTimestamp } from "../../../services/sync/shared.ts";
+} from "./dm-head-diff.ts";
+import { resolveDmSenderRole } from "./dm-normalize.ts";
+import { truncateDmPreview } from "./dm-preview.ts";
+import { normalizeFanslyTimestamp } from "./timestamp.ts";
 
 // The conversation list's rules, without I/O (plan §7 p.3, §6.2; design §5.3):
 // what one listed chat says about its thread, whether a page of them ends a
 // head walk, and whether a chat's list head asks for a message read.
 //
-// `resolveConversationListItem` is the pure part of the legacy sweep's
-// per-conversation step (services/sync/fansly-dm-conversations.ts, the loop
-// over `page.items`), with its requests taken out: the group detail becomes a
+// `resolveConversationListItem` is the pure part of the legacy
+// dm_conversations sweep's per-conversation step (its loop over
+// `page.items`), with its requests taken out: the group detail becomes a
 // `dm-conversations.detail` follow-up, the limit-1 head repair is retired (an
 // incomplete head keeps the stored id, and the next list read retries it),
 // and the unresolvable-partner probe reads its stored answer (a due probe is

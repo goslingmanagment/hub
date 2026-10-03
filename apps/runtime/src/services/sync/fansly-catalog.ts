@@ -104,11 +104,8 @@ import {
 } from "./fansly-lane.ts";
 import { evaluateFanslyStreamGate } from "./fansly-stream-gate.ts";
 import { summarizeCheckpoint } from "./observability.ts";
-import {
-  FANSLY_CATALOG_CAPTURE_MAPPER_VERSION,
-  retentionDate,
-  trimFanslyCatalogPayload,
-} from "./shared.ts";
+import { retentionDate } from "./shared.ts";
+import { FANSLY_CATALOG_CAPTURE_MAPPER_VERSION, trimFanslyCatalogPayload } from "../../sync/fansly/lib/capture-trims.ts";
 import { fanslyPageSendGuard } from "../fansly-send-guard/index.ts";
 
 const STREAM = "catalog" as const;

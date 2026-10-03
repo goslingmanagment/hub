@@ -236,6 +236,10 @@ describe("compose config", () => {
     expect(sync).toContain("Date.now() - stat.mtimeMs > 90000");
     expect(sync).not.toMatch(/^\s+(init|volumes|ports):/m);
     expect(main).toContain("export const SYNC_HEARTBEAT_INTERVAL_MS = 30_000;");
+    // Step 4, 4-3: the stall watchdog exits (70) and relies on this restart
+    // policy and on node being PID 1; SIGTERM ends the process at 40 s at the
+    // latest, inside the 45 s grace, so Docker's SIGKILL never comes.
+    expect(main).toContain("export const SYNC_SHUTDOWN_CAP_MS = 40_000;");
   });
 
   it("docker-compose.yml runs the sync role locally after the migrator", async () => {
@@ -303,8 +307,12 @@ describe("compose config", () => {
     expect(check).toContain(`APP_RECREATE=(up -d --remove-orphans --force-recreate --no-build ${services})`);
     expect(getShellFunction(deploy, "recreate_sync_service")).toContain("up -d --no-deps --force-recreate --no-build sync");
     expect(check).toContain("SYNC_RECREATE=(up -d --no-deps --force-recreate --no-build sync)");
-    expect(getShellFunction(deploy, "rollback_remote_stack")).toContain("${REMOTE_COMPOSE} up -d --remove-orphans --force-recreate --no-build\"");
-    expect(check).toContain("ROLLBACK_RECREATE=(up -d --remove-orphans --force-recreate --no-build)");
+    const rollback = getShellFunction(deploy, "rollback_remote_stack") ?? "";
+    expect(rollback).toContain('local services="${RECREATE_SERVICES:-}"');
+    expect(rollback).toContain('services+=" sync"');
+    expect(rollback).toContain("${REMOTE_COMPOSE} up -d --remove-orphans --force-recreate --no-build${services:+ ${services}}\"");
+    expect(check).toContain(`ROLLBACK_RECREATE=(up -d --remove-orphans --force-recreate --no-build ${services})`);
+    expect(check).toContain('compose "${ROLLBACK_RECREATE[@]}" sync');
   });
 
   // Plan §2.5: on SIGTERM the api admits no new Fansly request and lets the
@@ -372,7 +380,7 @@ describe("compose config", () => {
     expect(text).toContain('read_remote_env_value "HEALTH_SYNC_MONITORING_TOKEN"');
   });
 
-  it("checks pull and app-only prerequisites before stopping services and preserves stack rollback", async () => {
+  it("checks pull and app-only prerequisites before stopping services and rolls back the scope it recreated", async () => {
     const text = await readComposeFile("scripts/deploy-production.sh");
     const main = text.slice(text.indexOf('ROLLBACK_RELEASE_ARCHIVE="${TEMP_DIR}/rollback-release-files.tar"'));
     const candidate = main.indexOf("build_candidate_image\n");
@@ -385,7 +393,8 @@ describe("compose config", () => {
     expect(main).toContain('--no-build ${RECREATE_SERVICES}');
     const rollback = getShellFunction(text, "rollback_remote_stack");
     expect(rollback).toContain('${REMOTE_COMPOSE} up -d --remove-orphans --force-recreate --no-build');
-    expect(rollback).not.toContain("RECREATE_SERVICES");
+    // An app-scope rollback keeps PostgreSQL, as the app-scope deploy did.
+    expect(rollback).toContain('local services="${RECREATE_SERVICES:-}"');
     expect(main.lastIndexOf("verify_remote_infrastructure_unchanged")).toBeLessThan(main.indexOf("STACK_RECREATED=1"));
     expect(main.indexOf("Production verified;")).toBeLessThan(main.indexOf("rebuild_local_hub_cli || log"));
   });

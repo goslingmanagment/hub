@@ -70,12 +70,11 @@ describe("Fansly lane scaffold ratchet", () => {
       "catalog-rules.ts",
       "post-replies-rules.ts",
       "payouts-rules.ts",
+      "purchase-history.ts",
     ]) {
       expect(engineLibSource(file), `${file} must use the shared response classifier`)
         .toContain("classifyFanslyResponse");
     }
-    expect(syncSource("fansly-purchase-history.ts"), "fansly-purchase-history.ts must use the shared response classifier")
-      .toContain("classifyFanslyResponse");
   });
 
   it("keeps purchase-history journal and checkpoint work on the same scaffold", () => {
