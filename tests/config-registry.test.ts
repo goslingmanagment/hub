@@ -79,8 +79,6 @@ describe("config registry", () => {
     "accountLinksEnabled",
     "fanslyFollowersSettlementReuseEnabled",
     "fanslyFollowersSettlementReusePageAllowlist",
-    "fanslyWsCaptureEnabled",
-    "fanslyWsCapturePageAllowlist",
     // Fansly Sync Engine step 1: the live overlay readers, page by page.
     "fanslyLiveOverlayReadPages",
     "fanslyFanEarningsRecoveryEnabled",
@@ -183,8 +181,6 @@ describe("config registry", () => {
     "aiMediaDescribeModelMedia",
     "aiMediaDescribeLoopEnabled",
     "aiMediaDescribeFanslyAcceleratorDailyLimit",
-    "aiMediaDescribeFanslyFastLaneMode",
-    "aiMediaDescribeFanslyFastLanePages",
     // Agent Read Plane (slice 0a): read per request / per cycle so the owner's
     // ramp needs no restart. Every one of them rests at off/false.
     "agentReadPlaneMode",

@@ -210,9 +210,9 @@ created fresh or refused, never merged into another candidate's open row.
 
 ## WebSocket demand
 
-The socket is the live signal of a page (plan §7). The legacy receiver (worker) owns the socket until a page is
-switched; it captures each frame (observation + pending receipt) and the step-1 drivers apply the overlay and ack the
-receipt. The engine turns receipts into work in two ways, with one decoder (`fansly/ws/decode.ts`: the step-1 message
+The socket is the live signal of a page (plan §7). Since step 4 (S4-12) only a live page has one, in `sync` (below):
+the legacy receiver of the worker process is gone. Each frame is captured (observation + pending receipt) and the
+step-1 drivers apply the overlay and ack the receipt. The engine turns receipts into work in two ways, with one decoder (`fansly/ws/decode.ts`: the step-1 message
 decoder plus new chats, money, subscriptions and payouts) and one routing table (`fansly/ws/router.ts`):
 
 - **Live pages (`handover`/`live`, step 3)**: every driver passes the post-ack hook `routeFanslyWsReceiptDemand`
@@ -236,9 +236,9 @@ conversation list's, the chain is untouched. Since step 4 S4-11 this is the only
 stores: the legacy receipt reconcile is gone, and the receipts it applied stay as records that the archive shadow
 rebuild re-applies.
 
-**A live page's socket** lives in the `sync` process (`fansly/ws/source.ts`, one per live slot of the host; a shadow
-page has none — the legacy receiver owns it). The source holds the page's socket lock `(58213, page)` on its own
-session for as long as it runs, the lock the legacy receiver takes, so the two never both own a page's socket. It never
+**A live page's socket** lives in the `sync` process (`fansly/ws/source.ts`, one per live slot of the host; a page
+that is not live has none). The source holds the page's socket lock `(58213, page)` on its own session for as long as
+it runs, so no two sources ever both own a page's socket. It never
 connects by itself: it raises `ws.connect` demand (at start, after each end on the step-1 reconnect ladder, after a
 credentials change), and the actor admits that step like any request; the transport runs `handshake()` inside it, whose
 Upgrade rides an engine lease over the pacer's one-shot check (the last check before the headers; one admission, one
@@ -383,14 +383,13 @@ While the engine owns a page (`handover` or `live`) no legacy component even tri
 §3.1); the step-1 guard row (`owner_engine`, 0229) stays the catch-all at the wire. One predicate,
 `legacyOwnsFanslyPageSql` (`repositories/sync/pages.ts`), gates the legacy planner and leases
 (`listRunnablePageSync`, `markPageSyncEnqueued`, `acquirePageSyncLease`, `acquireTargetedPageSyncLease`), the
-`sync_silent` deadman, the AI fast lane (`page_held`), and hydration dispatch. The legacy processes
-ask `isFanslyPageEngineOwned` / `listEngineOwnedFanslyPages`: the WS supervisor drops the page within one poll (graceful
-`disabled`, lock 58213 released), and the AI describer downloads nothing itself (a `live` page's CDN hops are its
+`sync_silent` deadman and hydration dispatch. The legacy processes ask `isFanslyPageEngineOwned` /
+`listEngineOwnedFanslyPages`: the AI describer downloads nothing itself (a `live` page's CDN hops are its
 actor's `media-download.fetch`) and wakes no DM stream. The ws-hints projector and its minutely deletion reconcile are
 gone since step 4 S4-11 (after the A5 drain check over the captured frames): a socket deletion reaches the stores only
-through `dm-live.deletions`, and the receipts the projector filed stay as records. The owner's `/account/me` routes and CLIs, the probes, the alias backfill and the
-`scripts/fansly-ws` probes answer 409 `fansly_page_on_sync_engine` (`services/sync-engine-guard.ts`) with the engine
-command to use instead — except the `/account/me` levers (page verify, credentials, proxy, `fansly:ws-policy`), which
+through `dm-live.deletions`, and the receipts the projector filed stay as records. The owner's `/account/me` routes and
+CLIs, the probes and the alias backfill answer 409 `fansly_page_on_sync_engine` (`services/sync-engine-guard.ts`) with
+the engine command to use instead — except the `/account/me` levers (page verify, credentials, proxy), which
 on a `live` page go through the engine (`services/sync-engine-account.ts`: `account.verify` / `account.identity`,
 ≤ 30 s, else 409 `fansly_sync_work_queued` with the work's status link) and answer 409 `fansly_page_switching` in
 `handover`. Hydration rows the engine serves (`execution_lane = 'fansly_sync_engine'`) are never expired,
@@ -399,6 +398,8 @@ backfill with its owner CLI, the auto-approve policy and the projection-debt swe
 OnlyFans approvals only, a Fansly approval is refused at the decision, and old Fansly history is read only through
 history requests. `shadow` fences nothing, and every check is per query. Leaving to `off` no
 longer restores the legacy engine since step 4 S4-10: the legacy executor serves no Fansly page whatever its mode (I21).
+Since S4-12 the legacy WS receiver, the AI media fast lane, the WS policy repair (`fansly:ws-policy`) and the W0
+operator scripts are deleted, so no legacy component opens a Fansly socket on any page.
 
 A legacy stream's incident (`stream_failed_threshold:<page>:<stream>`) resolves only through the legacy executor's own
 chunk recovery, which never comes on an engine page. The switch's phase C and every live takeover of the host close the
@@ -538,6 +539,7 @@ Each is enforced in exactly one place and pinned by a test (design §1). The fir
 | I19 | Between two actual sends of one page on one route (or one family): ≥ the interval of its effective rate, counted from the actual send in the journal the page runs (the legacy send log too on a live page; an unknown outcome at its upper bound); no burst, no borrowing. | `engine/route-policy.ts` (`RouteClocks`) + `engine/actor.ts` (pick exclusion, final check) |
 | I20 | One page-hold rule: a credentials hold clears only by an identity proof sent after its latest refusal, written with the apply; under it only a candidate check and one verify per changed stored digest pass (step 3b ruling 5, A3). | `packages/shared/src/fansly-page-holds.ts` (gate, final admission, rollback, status, alerts) + `engine/commit.ts` (`recordIdentityProof`) |
 | I21 | The legacy page-sync executor serves only the platforms whose adapter declares streams (OnlyFans since step 4 S4-10): no Fansly page's legacy state is seeded, scheduled, woken, leased or requested, and `sync rollback` refuses. | `platforms/registry.ts` (`legacyExecutorPlatforms`) + `services/sync/planner.ts` + `services/sync/executor.ts` + `services/sync-control.ts` (`assertLegacyExecutorServes`) |
+| I22 | Only a live page's socket source in `sync` opens a Fansly WebSocket (step 4 S4-12): the receiver helper is the one place that constructs a socket, its Upgrade on a send lease (the engine's, over the pacer's one-shot check); no worker, lane or script opens one. | `fansly/ws/source.ts` + `services/egress/fansly-receiver-socket.ts`; tests/fansly-send-guard-boundary.test.ts |
 
 What the pacer guarantees, concretely: the slot opens at `max(last send + ceil(S × (1 + u)), last completion,
 takeover floor)`; `u` is drawn once per send and kept across re-waits; a waiting pacer re-reads `S` at least every

@@ -179,8 +179,6 @@ describe("LIVE_CONFIG_KEYS", () => {
     // system) and the long-tail cycle, live because it re-aims a running
     // round-robin without a deploy.
     expect(LIVE_CONFIG_KEYS.has("fanslyFanEarningsShadowPageAllowlist")).toBe(true);
-    expect(LIVE_CONFIG_KEYS.has("fanslyWsCaptureEnabled")).toBe(true);
-    expect(LIVE_CONFIG_KEYS.has("fanslyWsCapturePageAllowlist")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyWsHintsEnabled")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyWsHintsPageAllowlist")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyWsHintsTypeAllowlist")).toBe(true);
@@ -212,8 +210,6 @@ describe("LIVE_CONFIG_KEYS", () => {
       "aiMediaDescribeLoopEnabled",
       // H3: the Fansly freshness accelerator's budget (the fast lane shares it).
       "aiMediaDescribeFanslyAcceleratorDailyLimit",
-      "aiMediaDescribeFanslyFastLaneMode",
-      "aiMediaDescribeFanslyFastLanePages",
       // Fansly Sync Engine step 1: the live overlay read kill-switch.
       "fanslyLiveOverlayReadPages",
     ]) {
@@ -240,6 +236,16 @@ describe("LIVE_CONFIG_KEYS", () => {
       expect(LIVE_CONFIG_KEYS.has(key), key).toBe(false);
     }
     expect(LIVE_CONFIG_KEYS.has("agentHydrationMode")).toBe(true);
-    expect(LIVE_CONFIG_KEYS.size).toBe(88);
+    // Step 4 (S4-12): retired with the legacy WebSocket receiver and the AI
+    // media fast lane — nothing reads them, so no override applies.
+    for (const key of [
+      "fanslyWsCaptureEnabled",
+      "fanslyWsCapturePageAllowlist",
+      "aiMediaDescribeFanslyFastLaneMode",
+      "aiMediaDescribeFanslyFastLanePages",
+    ]) {
+      expect(LIVE_CONFIG_KEYS.has(key), key).toBe(false);
+    }
+    expect(LIVE_CONFIG_KEYS.size).toBe(84);
   });
 });

@@ -6,13 +6,13 @@ import { createFanslyWsFrameBudget } from "./fansly-ws-frame-budget.ts";
 import { bindFanslyUpgradeLease } from "./fansly-send-lease.ts";
 
 /** Own the upgraded transport as well as the dispatcher. Undici's close()
- * handshake alone cannot enforce the B0 kill-switch on a stalled peer.
+ * handshake alone cannot enforce a stop on a stalled peer.
  *
- * Plan §2.4/§2.5: the HTTP Upgrade is a request of the page and rides `lease`,
- * a capture of the page's send guard (source `ws_connect`) that the caller
- * took for this one attempt. The lease admits exactly one handshake and
- * completes when it settles (101, another status or an error); a reconnect is
- * a new capture. */
+ * Plan §2.4/§2.5: the HTTP Upgrade is a request of the page and rides `lease`
+ * (the engine's lease over its pacer check, `sync/fansly/ws/source.ts`), taken
+ * for this one attempt. The lease admits exactly one handshake and completes
+ * when it settles (101, another status or an error); a reconnect is a new
+ * admission. */
 export function openFanslyReceiverSocket(egress: AppEgressContext, lease: FanslySendLease) {
   if (!egress.dispatcher || !egress.egressKey || egress.egressKey === "direct"
     || /^(vendor|service|legacy-page):/.test(egress.egressKey)) {

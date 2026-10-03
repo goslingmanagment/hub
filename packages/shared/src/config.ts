@@ -100,6 +100,7 @@ const envSchema = z.object({
   FANSLY_DM_MESSAGES_DELAY_MS: z.coerce.number().int().positive().default(5000),
   FANSLY_DM_HEAD_CATCHUP_PAGE_ALLOWLIST: z.string().default("none"),
   FANSLY_DM_SHADOW_PAGE_ALLOWLIST: z.string().default("none"),
+  // Retired with the legacy WebSocket receiver (step 4, S4-12); parsed, ignored.
   FANSLY_WS_CAPTURE_ENABLED: booleanSchema.default(false),
   FANSLY_WS_CAPTURE_PAGE_ALLOWLIST: z.string().default(""),
   FANSLY_LIVE_OVERLAY_READ_PAGES: z.string().default("none"),
@@ -364,7 +365,7 @@ const envSchema = z.object({
   // frame says a fan sent media. OFF until the owner enables it after stage 1.
   AI_MEDIA_DESCRIBE_FANSLY_ACCELERATOR_ENABLED: booleanSchema.default(false),
   AI_MEDIA_DESCRIBE_FANSLY_ACCELERATOR_DAILY_LIMIT: z.coerce.number().int().min(0).default(60),
-  // Fansly fast lane: a head read right after the hub's own WS frame (off).
+  // Retired with the AI media fast lane (step 4, S4-12); parsed, ignored.
   AI_MEDIA_DESCRIBE_FANSLY_FAST_LANE_MODE: z.enum(["off", "shadow", "serve"]).default("off"),
   AI_MEDIA_DESCRIBE_FANSLY_FAST_LANE_PAGES: z.string().default(""),
   // Agent Read Plane (slice 0a). Every one of these ships OFF/false so the deploy
@@ -468,7 +469,11 @@ export interface AppConfig {
   fanslyDmMessagesDelayMs: number;
   fanslyDmHeadCatchupPageAllowlist?: string;
   fanslyDmShadowPageAllowlist?: string;
+  /** @deprecated Retired with the legacy WebSocket receiver (step 4, S4-12):
+   *  every Fansly page's socket runs in the Sync Engine and nothing reads it.
+   *  Parsed so an env that sets it boots; removed in S4-26. */
   fanslyWsCaptureEnabled?: boolean;
+  /** @deprecated Retired, like {@link AppConfig.fanslyWsCaptureEnabled}. */
   fanslyWsCapturePageAllowlist?: string;
   /** Pages whose chatter routes and AI kernel context read the live overlay
    * (CSV of labels, `all` or `none`); see fansly-live-overlay-read.ts. */
@@ -682,9 +687,10 @@ export interface AppConfig {
   aiMediaDescribeFanslyAcceleratorEnabled?: boolean;
   /** Agency-wide accelerator reads per rolling 24 h. */
   aiMediaDescribeFanslyAcceleratorDailyLimit?: number;
-  /** Fansly fast lane: off, shadow (route and count only) or serve. */
+  /** @deprecated Retired with the AI media fast lane (step 4, S4-12): nothing
+   *  reads it. Parsed so an env that sets it boots; removed in S4-26. */
   aiMediaDescribeFanslyFastLaneMode?: "off" | "shadow" | "serve";
-  /** Fast lane allowlist: comma-separated page labels, or `*`. */
+  /** @deprecated Retired, like {@link AppConfig.aiMediaDescribeFanslyFastLaneMode}. */
   aiMediaDescribeFanslyFastLanePages?: string;
   openrouterApiKey?: string | null;
   // Agent Read Plane (slice 0a) — all live-wired, all inert by default.

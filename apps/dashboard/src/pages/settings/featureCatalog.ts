@@ -215,15 +215,6 @@ export const HUB_FEATURES: readonly HubFeature[] = [
     evidenceHref: "/ofapi-marketing", evidenceLabel: "Открыть маркетинг OnlyFans",
   },
   {
-    id: "ws-capture", title: "Журнал событий Fansly", group: "Fansly", advice: "diagnostic",
-    summary: "Сохраняет входящие события для проверки доставки и будущего ускорения обновлений.",
-    reason: "Включать после проверки сессии и совместной работы с браузером на одной странице.",
-    consequence: "Приём остановится в течение минуты. Сохранённые события и сведения о пропусках останутся.",
-    check: "Проверить доставку, неизвестные типы и пропуски до использования событий для обновления данных.",
-    keys: ["fanslyWsCaptureEnabled", "fanslyWsCapturePageAllowlist"], gates: [gate("fanslyWsCaptureEnabled")],
-    scope: { key: "fanslyWsCapturePageAllowlist", empty: "none", none: "none" }, ...sync,
-  },
-  {
     id: "earnings-shadow", title: "Проверка обновления трат", group: "Fansly", advice: "diagnostic",
     summary: "Сопоставляет изменения платежей с ответами о суммарных тратах фанов.",
     reason: "Включать для ограниченного исследования. Экономия запросов и ускорение этим режимом ещё не доказаны.",

@@ -22,14 +22,13 @@ const labels = (value: string | undefined) => new Set((value ?? "").split(",")
 
 /** An absent/malformed baseline or an empty allowlist grants zero requests.
  * The baseline is frozen before activation; event traffic cannot inflate its
- * own allowance. Admission counts a rolling 24h across policy/generation changes. */
+ * own allowance. Admission counts a rolling 24h across policy/generation changes.
+ * The hints no longer also require the legacy B0 capture flags: that receiver
+ * is gone (step 4, S4-12) and every page's socket runs in the engine. */
 export function resolveFanslyWsHintPolicy(config: Pick<AppConfig,
-  "fanslyWsCaptureEnabled" | "fanslyWsCapturePageAllowlist" | "fanslyWsHintsEnabled"
-  | "fanslyWsHintsPageAllowlist" | "fanslyWsHintsTypeAllowlist" | "fanslyWsHintsPolicies"
+  "fanslyWsHintsEnabled" | "fanslyWsHintsPageAllowlist" | "fanslyWsHintsTypeAllowlist" | "fanslyWsHintsPolicies"
 >, pageLabel: string, now = new Date()): FanslyWsHintPolicy | null {
-  if (config.fanslyWsCaptureEnabled !== true || config.fanslyWsHintsEnabled !== true
-    || !labels(config.fanslyWsCapturePageAllowlist).has(pageLabel)
-    || !labels(config.fanslyWsHintsPageAllowlist).has(pageLabel)) return null;
+  if (config.fanslyWsHintsEnabled !== true || !labels(config.fanslyWsHintsPageAllowlist).has(pageLabel)) return null;
   const requestedTypes = labels(config.fanslyWsHintsTypeAllowlist);
   const enabledTypes = new Set(FANSLY_WS_HINT_TYPES.filter((type) => requestedTypes.has(type)));
   if (enabledTypes.size === 0) return null;

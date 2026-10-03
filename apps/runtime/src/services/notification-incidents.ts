@@ -28,7 +28,9 @@ const MAX_OPEN_DELIVERY_ATTEMPTS = 5;
 /** Global latches of the AI media describer under `ai_provider_failed`. */
 export const AI_MEDIA_DESCRIBE_BREAKER_SUBKEY = "media_describe_breaker";
 export const AI_MEDIA_DESCRIBE_ACCOUNT_STOP_SUBKEY = "media_describe_account_stop";
-/** The Fansly fast lane was unavailable on a describer page for > 10 min. */
+/** The Fansly fast lane's "unavailable > 10 min" latch. The lane is deleted
+ * (step 4, S4-12): nothing opens it any more, and one an older build left
+ * open resolves on the describer's next sweep. */
 export const AI_MEDIA_DESCRIBE_FAST_LANE_SUBKEY = "media_describe_fast_lane";
 /** Plan §2.5/§10: the page-scoped latches of the Fansly send guard, under the
  * Fansly-only `sync_silent` kind (a new kind is a contract change). A closed
@@ -374,7 +376,7 @@ function resolveDetailForIncident(
         return "AI image describer re-enabled by the owner";
       }
       if (input.subKey === AI_MEDIA_DESCRIBE_FAST_LANE_SUBKEY) {
-        return "Fansly image fast lane available again";
+        return "Fansly image fast lane retired: the Sync Engine reads a fan's new media";
       }
       return "AI provider generation recovered";
     case "capture_payload_parity":

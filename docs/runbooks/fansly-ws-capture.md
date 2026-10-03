@@ -1,47 +1,18 @@
-# Fansly B0 capture-only receiver
+# Fansly socket capture
 
-Decision 343 delivers the receiver in the existing worker. Deployment alone opens
-no socket: `FANSLY_WS_CAPTURE_ENABLED=false` and
-`FANSLY_WS_CAPTURE_PAGE_ALLOWLIST=""` are defaults. The live registry keys are
-`fanslyWsCaptureEnabled` and `fanslyWsCapturePageAllowlist`. Empty, whitespace and
-`none` select no pages; otherwise use exact comma-separated page labels.
-
-## Activation and rollback
-
-1. Deploy clean merged main including Decision 341's C2b isolation fix. Verify
-   source/image and API, worker and scheduler health. Check effective B0 settings
-   in the existing configuration UI; the diagnostic feature card exposes both.
-2. Before enabling, accept W0: the original REST identity receipt must match the
-   current credential/route generation; paired socket/browser delivery, independent
-   presence evidence, six-hour continuity and short/long-gap recovery receipts
-   remain required. A pong, HTTP 101 or REST 200 does not meet those gates.
-   See [W0 continuity](fansly-ws-continuity.md). There is no invented receipt TTL.
-   Decision 364 permitted a separately bounded early B1 experiment (its runbook
-   was removed with the ws-hints projector at step 4, S4-11): quiet gaps stay
-   unknown without forcing another live run; transport failures do not
-   qualify. Full polling remains the recovery authority.
-3. Set one reviewed page allowlist, verify it, then separately flip the enabled
-   flag. Follow the existing one-flag-at-a-time audit ritual. B0 changes no REST
-   cadence, and the receiver itself performs no hints, canonicalization or
-   business writes. After each capture commit the worker applies the frame to
-   the [live overlay](#live-overlay) (no HTTP, no work). A captured DM deletion
-   frame marks nothing by itself: since step 4 (S4-11) only the Fansly Sync
-   Engine's `dm-live.deletions` marks the stored copies, text kept
-   ([Platform deletions](fansly-ws-reliability.md#platform-deletions)).
-4. Kill-switch: set enabled to false (or remove the page from the allowlist).
-   Config polling is ten seconds; failed/stuck checks stop sockets. Verify a
-   closed connection receipt within 60 seconds and continued REST health.
-   The socket and its dedicated dispatcher are destroyed without waiting for a
-   peer close handshake. Frames already received are still captured and
-   applied (see the drain below). Do not delete raw, receipts, overlay rows or
-   gaps on rollback.
-
-Default-off development/deployment does not wait for W0. B1 additionally requires
-at least seven accepted durable B0 shadow days and event diversity for its
-explicitly permitted types for general rollout. Decision 364 replaces that
-calendar minimum only for the bounded Lilly-1/message-created canary; durable
-capture, identity, budgets and the unchanged polling fallback still apply.
-These are activation gates, not build gates.
+Decision 343 delivered a capture-only receiver (B0) in the worker process. Since
+step 4 (S4-12) that receiver is gone: a live page's socket runs in the `sync`
+process (`apps/runtime/src/sync/fansly/ws/source.ts`, see
+`apps/runtime/src/sync/README.md`, "WebSocket demand"), and a page that is not
+live has no socket. The connection itself (`services/fansly-ws/connection.ts`),
+the journal, the live overlay and their limits below are unchanged; where a
+section says "worker" for the receiver, read the page's socket source in
+`sync`. The flags `FANSLY_WS_CAPTURE_ENABLED` / `FANSLY_WS_CAPTURE_PAGE_ALLOWLIST`
+are retired and ignored (removed in S4-26): the engine owns a live page's
+socket whatever they say, and stopping it is the engine's business (the owner's
+pause of the page, a page hold), not a flag. The W0 operator scripts (`scripts/fansly-ws`)
+and their runbooks are deleted with it; captured rows, receipts, overlay rows
+and gaps stay as records.
 
 ## Ownership, generation and bounded failure
 

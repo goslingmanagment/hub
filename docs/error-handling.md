@@ -159,10 +159,10 @@ status, code, and intentional message.
 | Sync | `sync_page_not_found` | 404 | Owner routes of the Fansly Sync Engine (`/api/v1/sync/pages/:pageLabel/…`): no engine page with that label. The agent plane answers its one static `not_found` instead. |
 | Sync | `sync_work_not_found` | 404 | Owner route `GET /api/v1/sync/pages/:pageLabel/work/:workId`: no work row with that id on that page. |
 | Sync | `sync_page_off` | 409 | "Sync now" (`POST /api/v1/sync/pages/:pageLabel/refresh`) on a page whose engine mode is `off`: no actor runs it, so there is nothing to make due. Move the page to `shadow` first. |
-| Sync | `fansly_page_on_sync_engine` | 409 | A legacy sender on a page the Fansly Sync Engine owns (`handover` or `live`): the CLIs `fansly:endpoint-probe`, `fansly:replay-probe`, `fansly-page-alias-backfill` and the `scripts/fansly-ws` probes. Nothing was resolved or sent; the message names the page, its mode and the engine command to use instead. (The owner page verify and credentials routes, `page verify`, `page set-proxy` and `fansly:ws-policy` go through the engine on a `live` page instead, step 3.) |
-| Sync | `fansly_page_switching` | 409 | A request that would make a page read, asked of a page the Fansly Sync Engine is taking over or giving back (`sync_pages.mode = 'handover'`): the legacy owner levers (`/admin/sync/trigger`, the block trigger and reset, the follower-reconcile reset), the owner page verify and credentials routes, `page verify`, `page set-proxy`, `fansly:ws-policy`, an agent hydration request, and the engine's own enqueue-and-wait. Neither engine reads the page until the switch (or rollback) completes. Retry once the page is `live` (or `off`). |
+| Sync | `fansly_page_on_sync_engine` | 409 | A legacy sender on a page the Fansly Sync Engine owns (`handover` or `live`): the CLIs `fansly:endpoint-probe`, `fansly:replay-probe` and `fansly-page-alias-backfill`. Nothing was resolved or sent; the message names the page, its mode and the engine command to use instead. (The owner page verify and credentials routes, `page verify` and `page set-proxy` go through the engine on a `live` page instead, step 3.) |
+| Sync | `fansly_page_switching` | 409 | A request that would make a page read, asked of a page the Fansly Sync Engine is taking over or giving back (`sync_pages.mode = 'handover'`): the legacy owner levers (`/admin/sync/trigger`, the block trigger and reset, the follower-reconcile reset), the owner page verify and credentials routes, `page verify`, `page set-proxy`, an agent hydration request, and the engine's own enqueue-and-wait. Neither engine reads the page until the switch (or rollback) completes. Retry once the page is `live` (or `off`). |
 | Sync | `legacy_sync_retired` | 409 | A legacy sync lever on a page whose platform the legacy page-sync executor no longer serves: since step 4 (S4-10) every Fansly page is read by the Fansly Sync Engine. The owner routes `/admin/sync/trigger`, the block trigger, pause, resume and reset, the follower-reconcile reset and the CLI `sync --page`, on a Fansly page the engine does not own (a page it owns takes the engine's levers). Nothing was written or queued; the message names the page and the engine command to read it with. |
-| Sync | `fansly_sync_work_queued` | 409 | The owner page verify, a credentials or proxy change, or `fansly:ws-policy` on a `live` page: the Fansly Sync Engine took the check (`account.verify` / `account.identity`) but has not answered within 30 s (its page is held, or its queue is busy). Documented structured extension: `statusUrl`, the engine work's status link (`/api/v1/sync/pages/:pageLabel/work/:workId`). Nothing was stored. A second credentials check while one is queued answers the same code without a link. |
+| Sync | `fansly_sync_work_queued` | 409 | The owner page verify, or a credentials or proxy change on a `live` page: the Fansly Sync Engine took the check (`account.verify` / `account.identity`) but has not answered within 30 s (its page is held, or its queue is busy). Documented structured extension: `statusUrl`, the engine work's status link (`/api/v1/sync/pages/:pageLabel/work/:workId`). Nothing was stored. A second credentials check while one is queued answers the same code without a link. |
 | Sync | `engine_managed` | 409 | An owner decision on a hydration request the Fansly Sync Engine serves (a live page's wrapper: a history request needs no decision). |
 | Voice | `artifact_expired` | 410 | Stored voice audio passed its retrieval lifetime. |
 | Voice | `voice_retrieval_disabled` | 403 | Voice artifact retrieval is disabled. |
@@ -595,10 +595,12 @@ fixed reasons, identifiers and error classes/SQL states reach logs and the
 decision log — never a URL, signature, provider body, driver error message or
 file content. See [the media runbook](runbooks/ofapi-media.md).
 
-### Fansly B0 capture (Decision #343)
+### Fansly socket capture (Decision #343)
 
+A live page's socket runs in the `sync` process (`sync/fansly/ws/source.ts`); the
+legacy B0 receiver of the worker is gone since step 4 (S4-12).
 Ownership/generation loss, unavailable capture, overflow and transport failure
-close the receiver and retain an unknown coverage gap. Pending decode settlement
+close the connection and retain an unknown coverage gap. Pending decode settlement
 never retries a provider request: raw survives and bounded inline repair settles
 metadata later. Unknown children remain debt. An auth 401 blocks its generation
 across restarts; other failures use bounded backoff, reset by a durable capture
@@ -618,4 +620,4 @@ resolve ordinary incidents. Admission refusals retain their concrete bounded rea
 
 `source_deleted` in fansly_ws_hint_status settles an exact operational target after
 a contiguous REST check, not archive materialization; hot_applied_at remains null.
-See `docs/runbooks/fansly-ws-reliability.md` for verification and generation repair.
+See `docs/runbooks/fansly-ws-reliability.md` for verification.
