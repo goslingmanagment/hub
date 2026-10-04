@@ -1,14 +1,13 @@
-// Golden table for `diffConversationHead` — the dm_conversations sweep's
-// "did this conversation move?" question, extracted out of the handler.
+// Golden table for `diffConversationHead` — the conversation list's "did this
+// conversation move?" question, extracted out of the legacy sweep's handler.
 //
 // Two things are pinned here and they are NOT the same thing:
 //   * `reasons` — the FULL head scope, one entry per field that moved;
 //   * `LEGACY_UNCHANGED_PAGE_REASONS` / `breaksLegacyUnchangedPage` — the
 //     subset the `unchangedPageStreak` predicate has always counted. The gap
 //     between them IS the known wart (flags / lastUnreadMessageId /
-//     subscriptionTierId move without breaking the streak), pinned by
-//     tests/fansly-dm-conversations-sweep.integration.test.ts at the sweep
-//     level and by the last describe block here at the function level.
+//     subscriptionTierId move without breaking the streak), pinned by the
+//     last describe block here.
 
 import { describe, expect, it } from "vitest";
 

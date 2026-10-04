@@ -5,8 +5,7 @@ import { classifyFanslyResponse } from "./lane.ts";
 // The notifications rules of the Sync Engine's `notifications.*` resources
 // (resources/notifications.ts): the `notifications` cursor, the `type` filter
 // forms, and the reads of a served page (its rows, its walkable id bounds, the
-// overlap stop). Pure. The legacy `notifications` lane (fansly-notifications.ts)
-// imports them from here until step 4 deletes it.
+// overlap stop). Pure.
 
 /** The head of the list. The UI's own first call sends exactly this. */
 const HEAD_CURSOR = "0";
@@ -17,7 +16,7 @@ const HEAD_CURSOR = "0";
  *  refuses the unfiltered form refuses it on every chunk. */
 export type FanslyNotificationsFilterMode = "unfiltered" | "declared_csv" | "type_groups";
 
-export interface ForwardWalkState {
+interface ForwardWalkState {
   /** `before` for the next forward call; null = start at the head. */
   beforeRef: string | null;
   /** The newest id of THIS poll's first page. Committed to
@@ -167,7 +166,7 @@ export function parseFanslyNotificationsCursorState(
   };
 }
 
-export function emptyBackfillWalk(): BackfillWalkState {
+function emptyBackfillWalk(): BackfillWalkState {
   return {
     nextBeforeRef: HEAD_CURSOR,
     lastRequestedBefore: null,

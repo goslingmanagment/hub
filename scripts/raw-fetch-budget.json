@@ -1,4 +1,4 @@
 {
-  "comment": "Kernel Stage 26 ratchet: raw global-fetch( call sites outside services/egress. ElevenLabs and Telegram now use the mandatory-dispatcher fetchWithEgress seam. Ceiling 10 = ofapi.ts 8 + fansly adapter 1 + anthropic provider 1. Count may only decrease.",
-  "budget": 10
+  "comment": "Kernel Stage 26 ratchet: raw global-fetch( call sites outside services/egress. ElevenLabs and Telegram now use the mandatory-dispatcher fetchWithEgress seam. Ceiling 9 = ofapi.ts 8 + anthropic provider 1 (the Fansly adapter and its fetch are deleted, step 4 S4-20). Count may only decrease.",
+  "budget": 9
 }

@@ -20,7 +20,7 @@ import { readFanslyPageFacts } from "../lib/page-facts.ts";
 
 // `account.poll`, `account.verify`, `account.identity` (plan §5, design §5.1):
 // one `GET /account/me` per step, journaled as `account_me` exactly as the
-// legacy light stream journals it.
+// legacy light stream journaled it.
 //
 // - poll (planned, hourly): the page's identity, counters, balance and
 //   metadata (`updatePageMetadata` with `syncType: 'light'`: `last_verified_at`
@@ -51,8 +51,9 @@ export interface AccountMeFacts {
 }
 
 /**
- * Apply one accepted `/account/me` answer to the page — the write of the
- * legacy `refreshPageMetadata`, minus its request and journal: identity,
+ * Apply one accepted `/account/me` answer to the page — the write the legacy
+ * light stream's metadata refresh made (deleted at step 4), minus its request
+ * and journal: identity,
  * counters (a counter missing from the answer is cleared, never kept, so the
  * last 0 cannot look fresh), balance, metadata and `last_verified_at`. Throws
  * the identity errors of `updatePageMetadata` unchanged.

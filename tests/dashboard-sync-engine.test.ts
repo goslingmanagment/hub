@@ -5,7 +5,7 @@ import type { AgentSyncPageStatus, SyncBlockStatus, SyncBlocksPage } from "@agen
 import { MemoryRouter } from "../apps/dashboard/node_modules/react-router/dist/development/index.js";
 
 // Root tests cannot resolve @tanstack/react-query, so the api layer is mocked
-// at module level (same pattern as dashboard-sync-ws-hint-notice.test.ts).
+// at module level (same pattern as dashboard-sync-surfaces.test.ts).
 const mutation = () => ({ isPending: false, mutateAsync: vi.fn() });
 const queries = vi.hoisted(() => ({
   useSyncOverview: vi.fn(),

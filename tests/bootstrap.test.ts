@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type * as DbModule from "@agency_hub_core/db";
 import type * as SharedModule from "@agency_hub_core/shared";
-import type * as FanslyModule from "@agency_hub_core/fansly";
 
 const bootstrapMocks = vi.hoisted(() => {
   const pool = {
@@ -16,13 +15,9 @@ const bootstrapMocks = vi.hoisted(() => {
     error: vi.fn(),
     warn: vi.fn(),
   };
-  const adapter = {
-    close: vi.fn(async () => {}),
-  };
   const encryptionKey = Buffer.alloc(32, 7);
 
   return {
-    adapter,
     assertRuntimeSchemaReady: vi.fn(),
     // No boot overrides in the DB → applyBootOverrides is a no-op (config === env).
     getConfigOverrides: vi.fn(async () => new Map()),
@@ -30,7 +25,6 @@ const bootstrapMocks = vi.hoisted(() => {
     createLogger: vi.fn(() => logger),
     createPool: vi.fn(() => pool),
     db,
-    FanslyAdapter: vi.fn(function () { return adapter; }),
     logger,
     loadConfig: vi.fn(() => ({
       databaseUrl: "postgres://postgres:postgres@127.0.0.1:5432/agency_hub_core_test",
@@ -98,14 +92,6 @@ vi.mock("@agency_hub_core/shared", async (importOriginal) => {
   };
 });
 
-vi.mock("@agency_hub_core/fansly", async (importOriginal) => {
-  const actual = await importOriginal<typeof FanslyModule>();
-  return {
-    ...actual,
-    FanslyAdapter: bootstrapMocks.FanslyAdapter,
-  };
-});
-
 describe("bootstrap", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -128,20 +114,17 @@ describe("bootstrap", () => {
       "postgres://postgres:postgres@127.0.0.1:5432/agency_hub_core_test",
     );
     expect(bootstrapMocks.assertRuntimeSchemaReady).toHaveBeenCalledWith(bootstrapMocks.pool);
-    // The page-wide spacing is the send guard's (plan §2.5), not the adapter's.
-    expect(bootstrapMocks.FanslyAdapter).toHaveBeenCalledWith({
-      baseUrl: "https://example.invalid",
-    });
     expect(app.fanslySendGuards).toBeDefined();
     expect(app.db).toBe(bootstrapMocks.db);
-    expect(app.adapter).toBe(bootstrapMocks.adapter);
+    // No Fansly HTTP client is built at boot: the Sync Engine is the only
+    // sender of a Fansly page (step 4, S4-20).
+    expect(app).not.toHaveProperty("adapter");
     // No boot overrides in the DB → nothing skipped, config is the env config.
     expect(bootstrapMocks.getConfigOverrides).toHaveBeenCalledWith(bootstrapMocks.db);
     expect(app.bootSkipped).toEqual([]);
 
     await app.close();
 
-    expect(bootstrapMocks.adapter.close).toHaveBeenCalledTimes(1);
     expect(bootstrapMocks.pool.end).toHaveBeenCalledTimes(1);
   });
 
@@ -153,7 +136,8 @@ describe("bootstrap", () => {
     await expect(createAppContext()).rejects.toThrow("schema drift");
 
     expect(bootstrapMocks.pool.end).toHaveBeenCalledTimes(1);
-    expect(bootstrapMocks.FanslyAdapter).not.toHaveBeenCalled();
+    // Nothing is built on a database the guard refused.
+    expect(bootstrapMocks.createDb).not.toHaveBeenCalled();
   });
 
   it("warns when a deprecated Fansly delay alias is the active source", async () => {
@@ -250,7 +234,10 @@ describe("bootstrap", () => {
     expect(bootstrapMocks.logger.warn).toHaveBeenCalledTimes(1);
   });
 
-  it("rejects executor concurrency above 1 when shared limiting is disabled", async () => {
+  it("boots with executor concurrency above 1 whatever the retired shared limiter key says (step 4, S4-19)", async () => {
+    // The boot invariant that tied the page executor's concurrency to
+    // SYNC_SHARED_RATE_LIMIT_ENABLED went with the limiter's last reader.
+    bootstrapMocks.assertRuntimeSchemaReady.mockResolvedValue(undefined);
     bootstrapMocks.loadConfig.mockReturnValueOnce({
       ...bootstrapMocks.loadConfig(),
       syncSharedRateLimitEnabled: false,
@@ -260,11 +247,10 @@ describe("bootstrap", () => {
     });
     const { createAppContext } = await import("../apps/runtime/src/bootstrap.ts");
 
-    await expect(createAppContext()).rejects.toThrow(
-      "SYNC_PAGE_EXECUTOR_CONCURRENCY > 1 requires SYNC_SHARED_RATE_LIMIT_ENABLED=true",
-    );
+    const app = await createAppContext();
 
-    expect(bootstrapMocks.createPool).not.toHaveBeenCalled();
+    expect(app.config.syncPageExecutorConcurrency).toBe(4);
+    expect(bootstrapMocks.createPool).toHaveBeenCalledTimes(1);
   });
 
   it("retries a transient override read failure, then boots with the graph normalized (A31)", async () => {

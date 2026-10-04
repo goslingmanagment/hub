@@ -7,7 +7,6 @@ import {
   confirmSyncOwnersStopped,
   findAgentHydrationRequestById,
   getSyncPage,
-  hasDispatchingAgentHydrationRequestOnPage,
   insertAgentKey,
   listAgentHydrationEvents,
   markAgentHydrationEngineManaged,
@@ -534,9 +533,7 @@ describe("sync rollback", () => {
     const waiting = await wrapped(chat.groupId);
     // A chat the page does not know: refused at once, its request is over.
     const ended = await wrapped("777000000000000009");
-    // In flight on the engine: the legacy lane's page slot and the switch's
-    // hydration check ignore both.
-    expect(await hasDispatchingAgentHydrationRequestOnPage(db(), page.pageId)).toBe(false);
+    // In flight on the engine: the switch's hydration check ignores both.
     const inFlight = await checkSwitchPreconditions(ctx(r), { page: (await getSyncPage(db(), page.pageId))!, shadowReportPath: "/tmp/r.json" });
     expect(inFlight.checks.find((entry) => entry.name === "hydration_settled")).toMatchObject({ ok: true });
 
@@ -557,9 +554,8 @@ describe("sync rollback", () => {
     );
     expect(audit.rows[0]!.metadata).toMatchObject({ hydrationSettled: 1, hydrationExpired: 1 });
 
-    // The legacy lane owns the page's hydration again, and a later switch has
-    // nothing to wait for.
-    expect(await hasDispatchingAgentHydrationRequestOnPage(db(), page.pageId)).toBe(false);
+    // No wrapper row is in flight any more: a later switch has nothing to
+    // wait for.
     const verdict = await checkSwitchPreconditions(ctx(r), { page: (await getSyncPage(db(), page.pageId))!, shadowReportPath: "/tmp/r.json" });
     expect(verdict.checks.find((entry) => entry.name === "hydration_settled")).toMatchObject({ ok: true });
   }, 120_000);

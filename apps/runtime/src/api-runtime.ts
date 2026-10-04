@@ -67,14 +67,9 @@ export async function runApiRuntime() {
 
   const shutdown = async () => {
     clearInterval(keepAlive);
-    // No new Fansly capture from here on; a request already in flight
-    // finishes (bounded by its own timeout, at most 30 s) and
-    // appContext.close() waits for its completion to be written.
-    appContext.fanslySendGuards?.stop();
     // The watchdog lets a fallback Telegram send settle its outbox row before
-    // the pool ends. These stops are bounded at 5 s each and run side by side;
-    // with the in-flight request after them this fits the api's 45 s stop
-    // grace (docker-compose.production.yml).
+    // the pool ends. These stops are bounded at 5 s each and run side by side,
+    // well inside the api's 45 s stop grace (docker-compose.production.yml).
     await Promise.all([
       watchdog?.stop(),
       heartbeat?.stop().catch(() => undefined),

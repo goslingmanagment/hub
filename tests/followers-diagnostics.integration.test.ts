@@ -1,4 +1,4 @@
-import { getCheckpoint, requestPageSync } from "@agency_hub_core/db";
+import { requestPageSync } from "@agency_hub_core/db";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { resetIntegrationDatabase, startTestDatabase } from "./helpers/db.ts";
 import { followersDiagnosticFixture } from "./helpers/followers-diagnostic-fixture.ts";
@@ -7,6 +7,9 @@ const FROM = new Date(Date.now() - 3_600_000).toISOString();
 const TO = new Date(Date.now() + 3_600_000).toISOString();
 const TOO_LONG_END = new Date(Date.parse(FROM) + 8 * 86_400_000 + 1).toISOString();
 
+// The decision receipts the deleted legacy followers walk wrote stay readable
+// through fansly_followers_diagnostic_report (0182); the fixture writes them
+// as the walk did.
 describe("C1 followers decision receipts", () => {
   let db: Awaited<ReturnType<typeof startTestDatabase>>;
   beforeAll(async () => {
@@ -26,13 +29,12 @@ describe("C1 followers decision receipts", () => {
   );
 
   it.each(["none", "count", "missing", "unchanged", "crossed"] as const)(
-    "records %s while preserving requests, presence and the real queue decision", async mode => {
+    "records %s with the real queue decision", async mode => {
       const fixture = await followersDiagnosticFixture(db, mode);
       await settleQueue(fixture.page.id);
       const before = Number(await fixture.queue());
-      expect((await fixture.runHandlerAndFinishTelemetry()).satisfied).toBe(true);
+      expect((await fixture.recordWalkAndFinishTelemetry()).requested).toBe(mode !== "none");
       expect(Number(await fixture.queue()) - before).toBe(mode === "none" ? 0 : 1);
-      expect(fixture.getFollowersPage).toHaveBeenCalledTimes(1);
       const output = await report();
       expect(output.coverage).toEqual([expect.objectContaining({
         runs: 1, decisions: 1, missing_decisions: 0, invalid_decisions: 0, duplicate_decisions: 0,
@@ -47,36 +49,9 @@ describe("C1 followers decision receipts", () => {
         unknown_queue_receipts: 0,
         requests_with_pending_work: 0,
       })]);
-      const presence = await db.pool.query(
-        "select count(*)::int as n from page_fans where platform_account_id = $1 and external_presence_at is not null",
-        [fixture.page.id],
-      );
-      expect(presence.rows[0].n).toBe(mode === "unchanged" || mode === "crossed" ? 2 : 1);
-      expect(JSON.stringify(output)).not.toMatch(/test-token|fan-1|authorization/);
+      expect(JSON.stringify(output)).not.toMatch(/test-token|authorization/);
     },
   );
-
-  it("stops a walk at the first row older than its vanished known follow and still requests a reconcile", async () => {
-    const fixture = await followersDiagnosticFixture(db, "crossed");
-    await settleQueue(fixture.page.id);
-    const result = await fixture.runHandlerAndFinishTelemetry();
-    expect(result).toMatchObject({ satisfied: true, stats: { crossedKnownBoundary: true, sawKnownCheckpoint: false } });
-    expect(fixture.getFollowersPage).toHaveBeenCalledTimes(1);
-    // The row older than the cursor is the reconcile's to confirm, not this walk's.
-    const follows = await db.pool.query(
-      "select platform_follow_id from page_follows where platform_account_id = $1", [fixture.page.id],
-    );
-    expect(follows.rows).toEqual([{ platform_follow_id: "1002" }]);
-    expect((await getCheckpoint(db.db, fixture.page.id, "followers"))?.cursorText).toBe("1002");
-    const note = await db.pool.query(
-      "select details -> 'followersReconcile' as d from sync_run_events where sync_run_id = $1 and details ? 'followersReconcile'",
-      [fixture.run.id],
-    );
-    expect(note.rows).toEqual([{ d: expect.objectContaining({
-      countMismatch: false, exhaustedWithoutKnown: true, unchangedHeadWithRows: false,
-      requested: true, knownCheckpoint: true, pageDone: false,
-    }) }]);
-  });
 
   it("coalesces a decision into outstanding reconcile work without touching its queue row", async () => {
     const fixture = await followersDiagnosticFixture(db, "count");
@@ -96,7 +71,7 @@ describe("C1 followers decision receipts", () => {
     const before = await reconcileRow();
     expect(before.request_seq).toBeGreaterThan(before.applied_seq);
 
-    expect((await fixture.runHandlerAndFinishTelemetry()).satisfied).toBe(true);
+    await fixture.recordWalkAndFinishTelemetry();
     expect(await reconcileRow()).toEqual(before);
     const note = await db.pool.query(
       "select details -> 'followersReconcile' as d from sync_run_events where sync_run_id = $1 and details ? 'followersReconcile'",
@@ -115,7 +90,7 @@ describe("C1 followers decision receipts", () => {
   it("distinguishes a clean queue from pending work using the locked request receipt", async () => {
     const fixture = await followersDiagnosticFixture(db, "count");
     await settleQueue(fixture.page.id);
-    await fixture.runHandlerAndFinishTelemetry();
+    await fixture.recordWalkAndFinishTelemetry();
     expect((await report()).queue).toEqual([expect.objectContaining({
       requested: 1, known_queue_receipts: 1, unknown_queue_receipts: 0, requests_with_pending_work: 0,
     })]);
@@ -142,7 +117,7 @@ describe("C1 followers decision receipts", () => {
     expect(ordinary).toEqual([{ stream: "followers_reconcile", requestedSeq: before + 3 }]);
   });
 
-  it("keeps a lost diagnostic unknown and cannot fail an otherwise successful walk", async () => {
+  it("keeps a lost receipt unknown while its anomaly request stands", async () => {
     const fixture = await followersDiagnosticFixture(db, "count");
     await db.pool.query(`create function reject_followers_note() returns trigger language plpgsql as $$
       begin if new.details ? 'followersReconcile' then raise exception 'diagnostic unavailable'; end if;
@@ -152,7 +127,7 @@ describe("C1 followers decision receipts", () => {
     try {
       await settleQueue(fixture.page.id);
       const before = Number(await fixture.queue());
-      expect((await fixture.runHandlerAndFinishTelemetry()).satisfied).toBe(true);
+      await fixture.recordWalkAndFinishTelemetry();
       expect(Number(await fixture.queue()) - before).toBe(1);
       const result = await report();
       expect(result.decisions).toEqual([]);
@@ -164,7 +139,7 @@ describe("C1 followers decision receipts", () => {
 
   it("reports duplicate receipts outside the valid decision denominator", async () => {
     const fixture = await followersDiagnosticFixture(db);
-    await fixture.runHandlerAndFinishTelemetry();
+    await fixture.recordWalkAndFinishTelemetry();
     await fixture.telemetry.addNote("duplicate", { followersReconcile: { schemaVersion: 1 } });
     expect((await report()).coverage).toEqual([expect.objectContaining({ decisions: 0, duplicate_decisions: 1 })]);
   });
@@ -223,7 +198,7 @@ describe("C1 followers decision receipts", () => {
 
   it("does not pull a later decision into the report window", async () => {
     const fixture = await followersDiagnosticFixture(db);
-    await fixture.runHandlerAndFinishTelemetry();
+    await fixture.recordWalkAndFinishTelemetry();
     await db.pool.query(
       "update sync_run_events set emitted_at = $1 where details ? 'followersReconcile'", [TO],
     );

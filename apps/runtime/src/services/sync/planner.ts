@@ -12,6 +12,7 @@ import {
 import type { PgBoss } from "pg-boss";
 
 import type { AppContext } from "../../bootstrap.ts";
+import { assertLegacyExecutorPage, legacyExecutorPlatforms } from "../../sync/onlyfans/boundary.ts";
 import { sendSyncPageWakeup } from "../sync-queue.ts";
 import { isOfapiBackgroundCaptureRunnable } from "../ofapi-capture-jobs.ts";
 import { recoverExpiredOfapiInteractiveResponses } from "../ofapi-capture-transport.ts";
@@ -21,7 +22,6 @@ import { pauseDisabledOnlyFansAudienceForAllPages } from "./ofapi-audience-sync.
 import { pauseDisabledOnlyFansDmPollingForAllPages } from "./onlyfans-dm-polling.ts";
 import { pauseDisabledOnlyFansTopSpendersForAllPages } from "./onlyfans-top-spenders.ts";
 import { pauseIneligibleOnlyFansPostsForAllPages } from "./posts.ts";
-import { reconcileFanslyBulkStreamScheduling } from "./fansly-stream-scheduling.ts";
 
 const INACTIVE_SYNC_RUN_THRESHOLD_MS = 90 * 1000;
 const INACTIVE_SYNC_RUN_ERROR_SUMMARY = "Sync run auto-closed after inactivity";
@@ -46,15 +46,14 @@ export async function runSyncPlannerCycle(
     }, "Inactive sync run cleanup complete");
   }
 
+  // The legacy executor serves only the platforms whose adapter declares
+  // streams (OnlyFans since step 4: the Fansly Sync Engine reads every Fansly
+  // page; `sync/onlyfans/boundary.ts`). The planner seeds, schedules and
+  // dispatches page-sync state of their pages only; a Fansly page's legacy
+  // rows stay exactly as they are.
+  const platforms = legacyExecutorPlatforms();
   const dependencyInput = pageSyncDependencyInput(app);
-  await ensurePageSyncStates(app.db, { now, ...dependencyInput });
-  const fanslyBulkGate = await reconcileFanslyBulkStreamScheduling(app, now);
-  if (fanslyBulkGate.paused > 0 || fanslyBulkGate.resumed > 0) {
-    app.logger.info({
-      ...fanslyBulkGate,
-      reconciledAt: now,
-    }, "Reconciled Fansly bulk-stream rollout gates");
-  }
+  await ensurePageSyncStates(app.db, { now, platforms, ...dependencyInput });
   const retiredOnlyFansDmRows = await retireLegacyOnlyFansDmMessages(app.db, now);
   if (retiredOnlyFansDmRows > 0) {
     app.logger.warn({
@@ -84,9 +83,9 @@ export async function runSyncPlannerCycle(
       pausedOnlyFansPostsPages,
     }, "Paused OnlyFans posts because background capture is disabled or the page is unmapped");
   }
-  await scheduleDuePageSync(app.db, { now, ...dependencyInput });
+  await scheduleDuePageSync(app.db, { now, platforms, ...dependencyInput });
 
-  const runnablePages = await listRunnablePageSync(app.db, now);
+  const runnablePages = await listRunnablePageSync(app.db, now, { platforms });
   const pageWork = new Map<number, {
     pageId: number;
     platform: "fansly" | "onlyfans";
@@ -155,6 +154,12 @@ export async function runSyncPlannerCycle(
     right.priority - left.priority ||
     left.requestedAt.getTime() - right.requestedAt.getTime() ||
     left.pageId - right.pageId);
+  // The boundary (I21): the listings are scoped to `platforms`, so every page
+  // here is one the legacy executor serves. A broken scope stops the pass
+  // before the first wake-up — after the recovery above, which sends nothing.
+  for (const page of orderedWork) {
+    assertLegacyExecutorPage(page, "planner");
+  }
   for (const page of orderedWork) {
     const wakeupId = await sendSyncPageWakeup(boss, {
       platformAccountId: page.pageId,

@@ -215,10 +215,11 @@ export interface MaterializeFanslyDmTipContextsResult extends FanslyDmTipSidecar
 
 /**
  * One `/message` capture to materialize. Its lineage is the legacy raw row
- * (`sourceRawPayloadId`, what every legacy caller passes) or, for the Fansly
- * Sync Engine, which journals observations only, `lineage: { kind:
- * "observation", sourceObservationId, sourceObservationReceivedAt }` (0230).
- * `capturedAt` is the capture time of that lineage.
+ * (`sourceRawPayloadId`, what the raw backfill passes: the legacy DM lanes
+ * that wrote it live are gone since step 4, S4-15) or, for the Fansly Sync
+ * Engine, which journals observations only, `lineage: { kind: "observation",
+ * sourceObservationId, sourceObservationReceivedAt }` (0230). `capturedAt` is
+ * the capture time of that lineage.
  */
 export type MaterializeFanslyDmTipContextsInput = {
   accountId: number;

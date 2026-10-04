@@ -336,13 +336,13 @@ three, and once it owns pages it journals every Fansly response.
 **Why the api too, and what it costs (#223).** The api is a capture writer, on
 more paths than any other role: `services/auth.ts recordAudit` journals an
 observation on *every* audited admin mutation, `POST /api/v1/ingest/observations`
-is the desktop's and the extension's own capture lane, the OFAPI webhook
-receiver and the OFAPI read gateway each write their own — and
-`POST /api/v1/admin/pages/:pageLabel/verify` calls `refreshPageMetadata`, which
-fetches from Fansly and journals the response straight into
-**`sync_raw_payloads`**, the table these two phases rewrite. An earlier version
-of this runbook stopped only `worker` and `scheduler`, which meant the api kept
-heartbeating and both phases refused forever — correctly.
+is the desktop's and the extension's own capture lane, and the OFAPI webhook
+receiver and the OFAPI read gateway each write their own. (Until step 4 of the
+Fansly Sync Engine the page verify route also fetched `/account/me` in the api
+and journaled it straight into **`sync_raw_payloads`**, the table these two
+phases rewrite; a Fansly page's verify is the engine's work in `sync` now.) An
+earlier version of this runbook stopped only `worker` and `scheduler`, which
+meant the api kept heartbeating and both phases refused forever — correctly.
 
 The consequence is stated rather than discovered: **for the length of R2 and R3
 the dashboard is down, the desktop and the extension cannot reach the kernel,

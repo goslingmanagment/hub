@@ -21,7 +21,7 @@ import type {
 // The response contracts of the Fansly API: the envelope every route answers
 // in, and the container/identity contracts of the routes whose bodies a writer
 // applies directly. The legacy parsers moved here unchanged from the adapter
-// (which imports them back); the engine reads the same answer the same way.
+// (deleted in step 4); the engine reads the same answer the same way.
 
 /** Fansly's response envelope: `{success, response}` or `{success:false, error}`. */
 export type FanslyEnvelope<T = unknown> = {

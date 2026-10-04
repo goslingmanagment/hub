@@ -22,7 +22,7 @@ export function drainsOnStop(reason: FanslyWsStopReason) {
 }
 
 /** Receiver deadlines. Production always uses the defaults below; the override
- * exists only so integration tests can run the real worker on scaled time. */
+ * exists only so integration tests can run the real socket on scaled time. */
 export interface FanslyWsConnectionTiming {
   /** Auth deadline; only a session frame clears it. */
   authTimeoutMs: number;

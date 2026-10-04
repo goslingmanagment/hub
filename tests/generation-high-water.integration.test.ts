@@ -7,32 +7,22 @@ import {
   createFanslyPage,
   createModel,
   deactivatePageFollowsByGeneration,
-  ensurePageSyncStates,
-  findPageById,
   listPageFollowDeactivationCandidates,
   maxPageDmThreadGeneration,
   maxPageFollowGeneration,
   maxPageSubscriptionGeneration,
   readPageFollowDeactivationGenerationBuckets,
-  startSyncRun,
-  upsertCheckpointProgress,
   upsertFans,
   upsertPageFollow,
   upsertPageFollows,
   upsertPageSubscription,
 } from "@agency_hub_core/db";
 
-import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
-import { SyncChunkBudget } from "../apps/runtime/src/services/sync/chunk-budget.ts";
-import { fanslySubscribersChunk } from "../apps/runtime/src/services/sync/executor-handlers.ts";
-import type { StreamChunkResult } from "../apps/runtime/src/services/sync/executor-types.ts";
-import { SyncRunTelemetry } from "../apps/runtime/src/services/sync/observability.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
   type StartedTestDatabase,
 } from "./helpers/db.ts";
-import { createTestAppContext } from "./helpers/runtime.ts";
 import { INTEGRATION_TEST_TIMEOUT_MS } from "./helpers/timeouts.ts";
 
 async function createGenerationPage(testDb: StartedTestDatabase, label: string) {
@@ -366,123 +356,5 @@ describe("projection generation high-water", () => {
       platformAccountId: page.id,
       generation: 5,
     })).toBe(1);
-  }, INTEGRATION_TEST_TIMEOUT_MS);
-
-  it("keeps a current subscription that overlapping offset pages never served", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    const page = await createGenerationPage(testDb, "generation-subscriber-overlap");
-    const [tailFan] = await upsertFans(testDb.db, [{ platform: "fansly", platformUserId: "tail-fan" }]);
-    await upsertPageSubscription(testDb.db, {
-      platformSubscriptionId: "tail-subscription",
-      platformAccountId: page.id,
-      fanId: tailFan!.id,
-      rawStatus: 3,
-      canonicalStatus: "active",
-      priceMills: 0n,
-      renewPriceMills: 0n,
-      lastSeenGeneration: 0,
-    });
-    const items = Array.from({ length: 100 }, (_, index) => ({
-      id: `walk-subscription-${index}`,
-      subscriberId: `walk-fan-${index}`,
-      historyId: null,
-      subscriptionTierId: null,
-      subscriptionTierName: null,
-      subscriptionTierColor: null,
-      planId: null,
-      status: 3,
-      price: 5000,
-      renewPrice: 5000,
-      autoRenew: 1,
-      billingCycle: 30,
-      duration: 30,
-      renewDate: null,
-      createdAt: "2026-03-10T00:00:00.000Z",
-      updatedAt: null,
-      endsAt: "2026-04-09T00:00:00.000Z",
-    }));
-    // The provider total counts the tail subscription, but its second page
-    // repeats a first-page row instead of serving it: page lengths still sum
-    // to the total, so only distinct membership exposes the unseen row.
-    const adapter = {
-      getSubscribersPage: async (_context: unknown, params: { offset?: number }) => ({
-        total: 101,
-        items: params.offset === 0 ? items : [items[0]!],
-        offset: params.offset ?? 0,
-        done: params.offset !== 0,
-        contractAccepted: true,
-        raw: {},
-      }),
-      getAccountsByIdsPage: async () => ({ parsed: [], raw: {} }),
-    } as unknown as AppContext["adapter"];
-    const app = createTestAppContext(testDb, { adapter });
-    const states = await ensurePageSyncStates(testDb.db, { pageId: page.id });
-    const subscribersState = states.find((state) => state.stream === "subscribers");
-    const stored = await findPageById(testDb.db, page.id);
-    const run = await startSyncRun(testDb.db, {
-      platformAccountId: page.id,
-      stream: "subscribers",
-      trigger: "manual",
-    });
-    if (!subscribersState || !stored || !run) {
-      throw new Error("test setup: subscribers run seed failed");
-    }
-    // History is already backfilled, so the walk ends at the active finalization.
-    await upsertCheckpointProgress(testDb.db, {
-      platformAccountId: page.id,
-      stream: "subscribers",
-      state: { revision: 0, generation: 0, historyBackfilledAt: "2026-07-01T00:00:00.000Z" },
-    });
-    const telemetry = new SyncRunTelemetry(app, {
-      runId: run.id,
-      platformAccountId: page.id,
-      pageLabel: page.label,
-      provider: "fansly",
-      stream: "subscribers",
-      trigger: "manual",
-      egressKey: "direct",
-    });
-    const runChunk = () => fanslySubscribersChunk(app, {
-      pageContext: {
-        platform: "fansly",
-        page: { ...stored.page, platformAccountId: "account-1" },
-        session: { authorization: "test-token" },
-        proxy: null,
-        egressKey: "direct",
-      },
-      streamState: { ...subscribersState, platform: "fansly", proxyUrl: null, egressKey: "direct" },
-      syncRunId: run.id,
-      telemetry,
-      budget: new SyncChunkBudget(10),
-    });
-
-    const results: StreamChunkResult[] = [];
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      results.push(await runChunk());
-    }
-    await telemetry.finish("success");
-
-    expect(results.map((result) => [
-      result.satisfied,
-      result.stats?.restartReason ?? result.stats?.withheldReason,
-    ])).toEqual([
-      [false, "offset_duplicates"],
-      [false, "offset_duplicates"],
-      [true, "offset_duplicates"],
-    ]);
-    const current = await testDb.pool.query<{ platform_subscription_id: string; last_seen_generation: number }>(
-      `select platform_subscription_id, last_seen_generation::int as last_seen_generation
-       from page_subscriptions
-       where platform_account_id = $1 and is_current = true`,
-      [page.id],
-    );
-    expect(current.rows).toHaveLength(101);
-    expect(current.rows).toContainEqual({ platform_subscription_id: "tail-subscription", last_seen_generation: 0 });
-    // Each restart takes a fresh generation, so an abandoned walk's rows never count as seen.
-    expect(await maxPageSubscriptionGeneration(testDb.db, page.id)).toBe(3);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });

@@ -39,7 +39,6 @@ vi.mock("@agency_hub_core/db", async (importOriginal) => {
       captured.observations.push(input);
       return { inserted: true, payloadRefVanished: false };
     }),
-    updatePageMetadata: vi.fn(async () => undefined),
     recordSyncHttpAttemptResponseBodyBytes: vi.fn(async () => true),
   };
 });
@@ -48,7 +47,7 @@ const {
   recordSyncHttpAttemptResponseBodyBytes,
   runWithPageSyncExecutionContext,
 } = await import("@agency_hub_core/db");
-const { persistRawPayload, refreshPageMetadata, retentionDate } = await import(
+const { persistRawPayload, retentionDate } = await import(
   "../apps/runtime/src/services/sync/shared.ts"
 );
 
@@ -104,89 +103,47 @@ describe("persistRawPayload observation keys", () => {
   });
 
   // J4: continuation chunks of one request share requestSeq and each restarts
-  // the fetch counter, so followers_reconcile's sweep-start account_me and its
-  // terminal verification account_me (a later chunk) both keyed
-  // `7:followers_reconcile:norun:42.1` and the second was silently dropped.
-  it("keys account_me by run so continuation chunks of one request both journal", async () => {
+  // the fetch counter, so a capture a later chunk repeats would key
+  // `7:subscribers:norun:42.1` both times and the second would be silently
+  // dropped. A caller in a chunk passes its run id, which keys each chunk apart.
+  it("keys a capture by run so continuation chunks of one request both journal", async () => {
     captured.observations.length = 0;
     captured.raws.length = 0;
     vi.mocked(recordSyncHttpAttemptResponseBodyBytes).mockClear();
-    const app = (followCount: number) => ({
-      db: {},
-      config: { syncSharedRateLimitEnabled: false },
-      adapter: {
-        getAccountMe: vi.fn(async () => ({
-          raw: { account: { id: "a1", followCount } },
-          parsed: {
-            account: {
-              id: "a1",
-              username: "u",
-              displayName: "d",
-              followCount,
-              subscriberCount: 1,
-              createdAt: 0,
-            },
-          },
-        })),
-      },
-    }) as never;
-    const pageContext = {
-      page: { id: 7, metadata: {} },
-      session: {},
-      proxy: {},
-      egressKey: "e",
-    } as never;
-    const telemetry = (runId: number) => ({
-      metadata: { runId },
-      getRequestObserver: () => null,
-    }) as never;
-    const chunk = { pageId: 7, stream: "followers_reconcile" as const, requestSeq: 42, leaseToken: "t" };
+    const chunk = { pageId: 7, stream: "subscribers" as const, requestSeq: 42, leaseToken: "t" };
 
     await runWithPageSyncExecutionContext(
       { ...chunk },
-      () => refreshPageMetadata(app(100), pageContext, undefined, telemetry(11)),
+      () => persistRawPayload({} as never, { ...payload("ofapi_fans_active"), syncRunId: 11 }, { platform: "onlyfans" }),
     );
     await runWithPageSyncExecutionContext(
       { ...chunk },
-      () => refreshPageMetadata(app(99), pageContext, undefined, telemetry(12)),
+      () => persistRawPayload({} as never, { ...payload("ofapi_fans_active"), syncRunId: 12 }, { platform: "onlyfans" }),
     );
 
     expect(captured.observations.map((o) => o.idempotencyKey)).toEqual([
-      "7:followers_reconcile:11:42.1",
-      "7:followers_reconcile:12:42.1",
+      "7:subscribers:11:42.1",
+      "7:subscribers:12:42.1",
     ]);
     expect(captured.raws).toEqual([
-      { endpoint: "account_me", syncRunId: 11 },
-      { endpoint: "account_me", syncRunId: 12 },
+      { endpoint: "ofapi_fans_active", syncRunId: 11 },
+      { endpoint: "ofapi_fans_active", syncRunId: 12 },
     ]);
-    // The body size now lands on account_me's own attempt, not the next one.
+    // The body size lands on the capture's own attempt of its own run.
     expect(vi.mocked(recordSyncHttpAttemptResponseBodyBytes).mock.calls.map(([, input]) => input))
       .toEqual([
-        expect.objectContaining({ syncRunId: 11, stream: "followers_reconcile" }),
-        expect.objectContaining({ syncRunId: 12, stream: "followers_reconcile" }),
+        expect.objectContaining({ syncRunId: 11, stream: "subscribers" }),
+        expect.objectContaining({ syncRunId: 12, stream: "subscribers" }),
       ]);
   });
 
-  it("leaves account_me run-less outside the executor (CLI and catalog callers)", async () => {
+  it("leaves a capture run-less outside the executor", async () => {
     captured.observations.length = 0;
     captured.raws.length = 0;
-    const app = {
-      db: {},
-      config: { syncSharedRateLimitEnabled: false },
-      adapter: {
-        getAccountMe: vi.fn(async () => ({
-          raw: { account: { id: "a1" } },
-          parsed: {
-            account: { id: "a1", username: "u", displayName: "d", followCount: 1, subscriberCount: 1 },
-          },
-        })),
-      },
-    } as never;
-    const pageContext = { page: { id: 7, metadata: {} }, session: {}, proxy: {}, egressKey: "e" } as never;
 
-    await refreshPageMetadata(app, pageContext, "light");
+    await persistRawPayload({} as never, { ...payload("ofapi_link_stats"), syncRunId: null }, { platform: "onlyfans" });
 
-    expect(captured.raws).toEqual([{ endpoint: "account_me", syncRunId: null }]);
-    expect(captured.observations[0]?.idempotencyKey).toMatch(/^7:account_me:norun:[0-9a-f-]{36}$/);
+    expect(captured.raws).toEqual([{ endpoint: "ofapi_link_stats", syncRunId: null }]);
+    expect(captured.observations[0]?.idempotencyKey).toMatch(/^7:ofapi_link_stats:norun:[0-9a-f-]{36}$/);
   });
 });

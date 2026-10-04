@@ -211,8 +211,11 @@ use depends on the page:
 - **A page being switched** — `mode: "handover"`: neither engine reads it for a
   few minutes; both routes answer **409 `fansly_page_switching`**. Wait and
   retry, do not refile under another key.
-- **Every other page** (`off`, `shadow`, OnlyFans): the hydration route below,
-  as before.
+- **An OnlyFans page**: the hydration route below; the owner decides each
+  request.
+- **A Fansly page outside the engine** (`off`, `shadow`): none is left in
+  production. The hydration route still records the intent there, but nothing
+  executes it: the owner can only reject it.
 
 The response tells you when more data is even possible. Look at the `remedy` on
 the relevant plane: a kind of `local_replay` or a hydration kind means more data
@@ -227,7 +230,7 @@ the `request:hydration` capability is real:
   files one. Body: a `target` of kind `thread_backfill_before` with EXACTLY one
   of `beforeAt` / `beforeMessageRef` (a boundary, not a window: "everything in
   this thread older than X"), a `reason`, an optional `maxCalls`, and a UUID
-  `idempotencyKey`. It answers **200, not 202**: on a page outside the engine it
+  `idempotencyKey`. It answers **200, not 202**: on an OnlyFans page it
   records an intent and queues nothing — only an owner decision can spend a
   vendor call.
 - `GET /api/v1/agent/hydration-requests/:requestRef` polls the one you filed.
@@ -241,12 +244,10 @@ EMPTY page, the chat's whole history is stored; `partially_completed` — read t
 your boundary, not proven complete; `failed` with `lastError: quarantined` —
 Fansly keeps refusing that chat, do not refile; `failed` with `lastError:
 vendor_unavailable` — the chat could not be read (not found, excluded);
-`expired` — the history request was cancelled, or the page went back to the
-legacy engine before it was served (refile there if you still need it). Nobody
-decides it: an owner
+`expired` — the history request was cancelled. Nobody decides it: an owner
 decision on such a request answers 409 `engine_managed`. Before the page's
-requests open (the first switched page waits an hour) the request stays
-`requested` and is converted when they open.
+requests open the request stays `requested`; file it again with the same
+`idempotencyKey` once they open.
 
 What each refusal means, so you do not retry the wrong thing:
 
@@ -264,32 +265,21 @@ What each refusal means, so you do not retry the wrong thing:
   page you were not granted, or a request that is not yours, is always the
   indistinguishable 404 above.
 
-**Who decides your request off the engine (decision #201).** A Fansly
-`thread_backfill_before` request on a page outside the engine may be approved by
-a versioned in-kernel policy instead of a human, within a daily call budget:
-your request's `decision.decisionSource` says which (`auto_policy` | `owner`),
-and an auto-approved run usually executes within a couple of minutes. What this
-means for how you file:
+**Who decides your OnlyFans request.** The owner, every time: the approval
+names the call, page and credit ceilings and consents to the read marking the
+chat read (#158). Until then the request stays `requested`; do not refile it
+under a fresh UUID. `completed` means the capture reached the end of the
+vendor's history; `partially_completed` with `lastError: budget_exhausted`
+means the owner's ceiling stopped it; `failed` means nothing was hydrated and a
+re-run needs a new request and a new decision. The auto-approve policy
+(`decision.decisionSource: "auto_policy"` on older requests) decided Fansly
+requests only and is gone with the legacy Fansly lane: a Fansly request is a
+history request, which needs no decision.
 
-- always state an explicit `maxCalls`, and keep it ≤ 40 (one full targeted run,
-  ~1000 messages) — the policy clamps to 40 and NEVER widens what you asked;
-- anything the policy may not decide — OnlyFans, over the day's budget, over
-  the cap — simply STAYS `requested` for the owner. Do not refile it under a
-  fresh UUID: one live approval per page and one auto-run per conversation per
-  UTC day are enforced, so the duplicate just parks;
-- `completed` is a proof: from the oldest message the hub held, the run read
-  on to an EMPTY vendor page, so the thread's whole history is stored. A short
-  last page or meeting already-stored messages is not that proof and settles
-  `partially_completed`: re-read the capture floor and decide whether another
-  bounded request is worth filing;
-- `failed` with `lastError: quarantined` means Fansly kept refusing that thread
-  (a 500): its per-thread breaker now holds it, and the policy will not approve
-  it again until the backoff lapses. Do not refile it meanwhile.
-
-Since `hub` has no command for the hydration route, off the engine the useful
-half is still yours to do by hand: report the specific gap (page, thread,
-conversation ref, window, and the `remedy` the response carried) and hand it to
-the owner, who can run the backfill directly. That report IS the request.
+Since `hub` has no command for the hydration route, the useful half is still
+yours to do by hand: report the specific gap (page, thread, conversation ref,
+window, and the `remedy` the response carried) and hand it to the owner. That
+report IS the request.
 
 ## History requests (pages on the Fansly Sync Engine)
 

@@ -442,26 +442,6 @@ describe("cancellation and shutdown", () => {
   });
 });
 
-describe("a check of an unknown session", () => {
-  it("is journaled without a page, paced against none, and still sends once", async () => {
-    const { registry, store } = setup();
-    const guard = registry.withoutPage("onboarding");
-    const a = await guard.acquire({ operation: "account_me", requestTimeoutMs: TIMEOUT_MS }) as unknown as {
-      checkSend(): FanslySendRefusedError | null;
-    } & Awaited<ReturnType<typeof guard.acquire>>;
-    const b = await guard.acquire({ operation: "account_me", requestTimeoutMs: TIMEOUT_MS });
-    expect(a.pageId).toBeNull();
-    expect(a.checkSend()).toBeNull();
-    expect(a.checkSend()?.reason).toBe("lease_used");
-    await a.complete({ outcome: "response", httpStatus: 200 });
-    await b.complete({ outcome: "response", httpStatus: 200 });
-    expect(store.journal.map((row) => [row.pageId, row.source, row.outcome])).toEqual([
-      [null, "onboarding", "response"],
-      [null, "onboarding", "response"],
-    ]);
-  });
-});
-
 describe("termination evidence", () => {
   const probe = (alive: Record<number, string>): FanslySendOsProbe => ({
     hostname: () => "container-a",

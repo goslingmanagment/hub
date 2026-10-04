@@ -6,7 +6,6 @@ export const CONFIG_MODE_CHOICES: Record<string, readonly { value: string; label
   agentReadPlaneMode: [{ value: "off", label: "Выключен" }, { value: "read_only", label: "Проверочный доступ" }, { value: "full", label: "Обычный доступ по выданным правам" }],
   agentSearchBackend: [{ value: "off", label: "Поиск выключен" }, { value: "fts", label: "Поиск по тексту" }, { value: "fts_trgm", label: "Текстовый поиск с поиском похожих фрагментов" }],
   agentHydrationMode: [{ value: "off", label: "Выключена" }, { value: "request_only", label: "Только заявки, без исполнения" }, { value: "dispatch", label: "Исполнять одобренные заявки" }],
-  agentHydrationAutoApproveMode: [{ value: "off", label: "Только ручное одобрение" }, { value: "shadow", label: "Проверять правила, не одобрять" }, { value: "enforce", label: "Автоодобрение в пределах бюджета" }],
   fanslyReplayMode: [{ value: "off", label: "Выключена" }, { value: "shadow", label: "Проверить без записи результатов" }, { value: "on", label: "Обработать и записать результаты" }],
   captureCasReadMode: [{ value: "inline", label: "Прежняя копия" }, { value: "shadow", label: "Прежняя копия с проверкой общей" }, { value: "serve", label: "Общая копия с запасным чтением" }],
 };

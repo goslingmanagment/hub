@@ -53,9 +53,10 @@ vi.mock("../apps/runtime/src/services/proxy-validation.ts", async (importOrigina
   (await import("./helpers/loopback-proxy-validation.ts")).loopbackProxyValidation(await importOriginal(), loopbackProxies));
 
 // Step 4 S4-05: a new Fansly page goes straight to `live` on the Fansly Sync
-// Engine, and the dashboard's create-page check keeps working without the
-// legacy adapter. Against the S2-14 harness — a fake Fansly origin behind a
-// counting CONNECT proxy, the production host, pacer and page transport:
+// Engine, and the dashboard's create-page check works without the legacy
+// adapter (deleted in S4-20: the app context has none). Against the S2-14
+// harness — a fake Fansly origin behind a counting CONNECT proxy, the
+// production host, pacer and page transport:
 //
 //  - onboarding: one journaled no-page `/account/me` (page_id null, source
 //    `onboarding`) through the page's own proxy, then the page, its
@@ -66,8 +67,8 @@ vi.mock("../apps/runtime/src/services/proxy-validation.ts", async (importOrigina
 //  - both callers (onboarding, `/admin/credentials/verify`) refuse a missing or
 //    refused proxy before anything is journaled or sent;
 //  - `/admin/credentials/verify` answers as before (valid, an invalid session,
-//    a refused proxy), and the create-page flow (verify, then create) passes
-//    on an app whose legacy adapter throws on any use — the state after S4-20.
+//    a refused proxy), and the create-page flow (verify, then create) passes:
+//    every request of it is the no-page check's, journaled under its source.
 
 const S = 300;
 const PAGE_TOKEN = "page-session-token";
@@ -82,14 +83,6 @@ let api: Awaited<ReturnType<typeof buildApiServer>> | null = null;
 const hosts: SyncEngineHost[] = [];
 /** The `authorization` header of every `/account/me` the origin received. */
 let checks: string[] = [];
-
-/** On any use: the state after S4-20 deletes the adapter's HTTP. */
-const adapterInUse = new Proxy({}, {
-  get(_target, property) {
-    if (typeof property !== "string" || property === "then") return undefined;
-    throw new Error(`the legacy Fansly adapter was used (${property})`);
-  },
-}) as AppContext["adapter"];
 
 beforeAll(async () => {
   testDb = await startIntegrationTestDatabase();
@@ -153,7 +146,7 @@ function accountMe(authorization: string): FakeAnswer {
 }
 
 function app(): AppContext {
-  return createTestAppContext(testDb!, { fanslyBaseUrl: server!.apiBaseUrl, adapter: adapterInUse });
+  return createTestAppContext(testDb!, { fanslyBaseUrl: server!.apiBaseUrl });
 }
 
 async function seedModel(slug = "lora"): Promise<void> {
@@ -373,7 +366,7 @@ describe("createLiveSyncPage refuses a page with a past", () => {
   });
 });
 
-describe("the dashboard's create-page check (/admin/credentials/verify) without the adapter", () => {
+describe("the dashboard's create-page check (/admin/credentials/verify)", () => {
   it("answers as before: valid, an invalid session, a refused proxy", async (context) => {
     if (!testDb) return context.skip();
     const cookie = await startApi(app());

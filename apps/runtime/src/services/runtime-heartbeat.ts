@@ -22,7 +22,7 @@ export type RuntimeRole = "api" | "worker" | "scheduler" | "sync";
 /** What a heartbeat reads from its process: the DB, the boot config (boot
  *  overrides applied) with what boot skipped, and a logger. Every role's
  *  context has these — the full AppContext of api/worker/scheduler and the
- *  adapter-free SyncContext of the `sync` role. */
+ *  SyncContext of the `sync` role. */
 export type RuntimeHeartbeatContext = Pick<AppContext, "db" | "config" | "logger" | "bootSkipped">;
 
 /** How often each process refreshes its heartbeat row by default. The

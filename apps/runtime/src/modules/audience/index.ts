@@ -2,9 +2,7 @@ import { routeSchemas } from "@agency_hub_core/contracts";
 import {
   createFanNote,
   findPlatformFan,
-  getCheckpoint,
   getFanEarningsSnapshotMeta,
-  getPageSyncState,
   listFanPageContexts,
   listTopFanEarnings,
   setFanFlags,
@@ -31,7 +29,7 @@ import {
 } from "../../services/reporting.ts";
 import { searchVisibleFans } from "../../services/spenders.ts";
 import { loadEffectiveConfig } from "../../services/effective-config.ts";
-import { evaluateFanslyStreamGate, type FanslyStreamGateState } from "../../services/sync/fansly-stream-gate.ts";
+import { engineStreamState, readEngineStatusFacts } from "../../services/sync-status-engine.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 // Audience module (target §6.1): fans, subscriptions, follows, growth, fan
@@ -41,6 +39,35 @@ import type { ApiModuleContext, ApiServer } from "../context.ts";
 export function registerAudienceRoutes(server: ApiServer, ctx: ApiModuleContext) {
   const { appContext } = ctx;
   const { requirePrincipal } = ctx.auth;
+
+  /**
+   * W8.1 (A12/A20, decision #133): why the fan-earnings projection is (or is
+   * not) being fed, so `builtAt: null / entries: []` is not read as "no
+   * spenders". The Fansly Sync Engine feeds it (`fan-earnings.roster`, the
+   * `fan_earnings` stream's key), so the answer is that key's live work:
+   * `ramped` while the engine owns the page and the owner has not paused it,
+   * `flag_off` otherwise; the last applied read and the largest failure count of
+   * its active work. OnlyFans has no such stream.
+   */
+  async function topSpendersSource(page: { id: number; platform: string }) {
+    if (page.platform !== "fansly") {
+      return { streamState: "unsupported_platform" as const, lastSyncedAt: null, consecutiveFailures: null };
+    }
+    const effective = await loadEffectiveConfig(appContext.db, appContext.config);
+    const facts = (await readEngineStatusFacts(appContext.db, {
+      pageIds: [page.id],
+      settingMs: effective.fanslyDefaultDelayMs,
+    })).get(page.id);
+    if (facts === undefined) {
+      return { streamState: "flag_off" as const, lastSyncedAt: null, consecutiveFailures: null };
+    }
+    const state = engineStreamState("fan_earnings", facts);
+    return {
+      streamState: state.paused ? "flag_off" as const : "ramped" as const,
+      lastSyncedAt: state.succeededAt?.toISOString() ?? null,
+      consecutiveFailures: state.consecutiveFailures,
+    };
+  }
 
   server.get("/api/v1/overview/growth", {
     schema: routeSchemas.overviewGrowth,
@@ -132,31 +159,16 @@ export function registerAudienceRoutes(server: ApiServer, ctx: ApiModuleContext)
       throw new ForbiddenError("Page access denied");
     }
     const { window, limit } = request.query;
-    const [meta, entries, effective, syncState, syncCheckpoint] = await Promise.all([
+    const [meta, entries, source] = await Promise.all([
       getFanEarningsSnapshotMeta(appContext.db, { accountId: page.id, window }),
       listTopFanEarnings(appContext.db, { accountId: page.id, window, limit }),
-      loadEffectiveConfig(appContext.db, appContext.config),
-      getPageSyncState(appContext.db, page.id, "fan_earnings"),
-      getCheckpoint(appContext.db, page.id, "fan_earnings"),
+      topSpendersSource(page),
     ]);
-    // W8.1 (A12/A20, decision #133): `builtAt:null / entries:[]` used to be
-    // indistinguishable from "no spenders" — the source block says WHY the
-    // projection is empty. streamState comes from the SAME gate helper the
-    // executor uses (evaluateFanslyStreamGate), so it cannot drift.
-    const streamState: FanslyStreamGateState | "unsupported_platform" = page.platform === "fansly"
-      ? evaluateFanslyStreamGate(effective, "fan_earnings", page.label).state
-      : "unsupported_platform";
     return {
       window,
       builtAt: meta.builtAt === null ? null : meta.builtAt.toISOString(),
       fanCount: meta.fanCount,
-      source: {
-        streamState,
-        // Gate no-ops settle a durable request but do not refresh the data.
-        // Cursor success only advances after a real fan-earnings capture.
-        lastSyncedAt: syncCheckpoint?.cursorLastSucceededAt?.toISOString() ?? null,
-        consecutiveFailures: syncState?.consecutiveFailures ?? null,
-      },
+      source,
       entries: entries.map((entry) => ({
         platformUserId: entry.platformUserId,
         username: entry.username,

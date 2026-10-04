@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { readFile } from "node:fs/promises";
-import { applyFanslyWsPolicyRepair, diagnoseFanslyWsHints, previewFanslyWsPolicyRepair } from "./services/fansly-ws-policy-repair.ts";
 import { buildFanslyWsRecoveryManifest } from "./services/fansly-ws-recovery-manifest.ts";
 import { applyFanslyWsLive, fanslyWsLivePayloadResolver } from "./services/fansly-ws/live-apply.ts";
 import { routeFanslyWsReceiptDemand } from "./sync/fansly/ws/route-receipt.ts";
@@ -18,8 +17,6 @@ import {
   DomainEventTargetMonthsUnattachedError,
   findPageByLabel,
   findUserById,
-  getPageDmConversationById,
-  getPageDmMessageRetentionLimit,
   insertDeliveryAttempt,
   insertErasureLog,
   replayFanslyWsDecode,
@@ -47,7 +44,6 @@ import {
 import { createAppContext } from "./bootstrap.ts";
 import { registerSyncEngineCommands } from "./sync/cli.ts";
 import { AiGatewayTerminalStreamConsumer, buildAiGatewayTerminalRecord } from "./services/ai-gateway.ts";
-import { backfillFanslyPageAliases } from "./services/fansly-page-alias-backfill.ts";
 import {
   applyLiveConfigPatches,
   assertLiveEditableConfigKey,
@@ -69,7 +65,6 @@ import { registerSyncHistoryCommands } from "./sync/cli/history.ts";
 import { registerSyncReportCommands } from "./sync/cli/report.ts";
 import { registerSyncSwitchCommands } from "./sync/cli/switch.ts";
 import { verifyPageOnEngine } from "./services/sync-engine-account.ts";
-import { handleSuccessfulPageVerificationRecovery } from "./services/notification-incidents.ts";
 import { resolveHarvestManifest } from "./services/harvest-manifest.ts";
 import {
   runOfapiTransactionsBackfill,
@@ -78,17 +73,11 @@ import {
 import { backfillOnlyFansPageMetadata } from "./services/onlyfans-page-metadata-backfill.ts";
 import { onboardFanslyPage, onboardOnlyFansPage } from "./services/page-onboarding.ts";
 import { removePageProxy, setPageProxy } from "./services/page-proxies.ts";
-import { assertLegacyOwnsFanslyPageId, SYNC_ENGINE_HINTS } from "./services/sync-engine-guard.ts";
 import {
   removeVoiceProfile,
   setVoiceProfile,
   showVoiceProfile,
 } from "./services/voice-profiles.ts";
-import {
-  runFanslyEndpointProbe,
-  summarizeEndpointProbe,
-} from "./services/fansly-endpoint-probe.ts";
-import { runFanslyReplayProbe, summarizeReplayProbe } from "./services/fansly-replay-probe.ts";
 import { runCanonicalization } from "./services/canonicalize-driver.ts";
 import { runOfapiBindingReconcile } from "./services/ofapi-binding-reconcile.ts";
 import { runDmCorrectionsFingerprintBackfill } from "./services/dm-corrections-backfill.ts";
@@ -97,7 +86,6 @@ import { runDmCorrectionsLineageIntake } from "./services/dm-corrections-lineage
 import { runFansly1970Repair } from "./services/fansly-1970-repair.ts";
 import { runOfapiPpvRefRepair } from "./services/ofapi-ppv-ref-repair.ts";
 import { runPpvPurchaseBackfill } from "./services/ppv-purchase-backfill.ts";
-import { runFanslyWsDeletionBackfill } from "./services/fansly-ws-deletions.ts";
 import {
   DM_ONLY_PRUNE_DEFAULT_WAIT_MS,
   runFanslyMediaStatsDmOnlyPrune,
@@ -143,7 +131,6 @@ import {
   resolveStoredProxyEgressKey,
 } from "./services/page-context.ts";
 import { requestPageSync, waitForRequestedSyncRequests } from "./services/sync-control.ts";
-import { refreshPageMetadata } from "./services/sync/shared.ts";
 import { getSyncMonitorSnapshot } from "./services/sync-monitor.ts";
 import { renderSyncMonitor } from "./services/sync-monitor-view.ts";
 import {
@@ -159,15 +146,6 @@ import {
 } from "./services/sync.ts";
 import { resolvePageContext } from "./services/page-context.ts";
 import { ensureSyncQueues, sendSyncPlannerWakeup } from "./services/sync-queue.ts";
-import {
-  ensureTargetedThreadBackfillQueue,
-  readTargetedThreadBackfillJobStatus,
-  sendTargetedThreadBackfillJob,
-  TARGETED_BACKFILL_EXPIRE_SECONDS,
-  targetedThreadBackfillWaitBudget,
-  waitForTargetedThreadBackfillJob,
-  type TargetedThreadBackfillResult,
-} from "./services/sync/targeted-thread-backfill.ts";
 import {
   buildStatusRows,
   listStalledRuns,
@@ -604,82 +582,6 @@ async function queueLegacyRecoverySync(pageLabel: string) {
   }
 }
 
-async function queueTargetedThreadBackfill(
-  databaseUrl: string,
-  input: { threadId: number; platformAccountId: number; ignoreRetentionLimit: boolean },
-) {
-  const boss = new PgBoss({ connectionString: databaseUrl });
-  attachCliPgBossErrorLogger(boss);
-
-  try {
-    await boss.start();
-    await ensureTargetedThreadBackfillQueue(boss);
-    return await sendTargetedThreadBackfillJob(boss, input);
-  } finally {
-    await boss.stop().catch(() => undefined);
-  }
-}
-
-const TARGETED_BACKFILL_WAIT_POLL_MS = 2_000;
-
-/**
- * `dm backfill-thread --wait`: follow the job in pgboss.job (read-only) and
- * report the run's own result, which the worker returns as the job output.
- * Anything but a `completed` / `partial` run exits non-zero.
- */
-async function waitForTargetedThreadBackfill(
-  app: Awaited<ReturnType<typeof createAppContext>>,
-  input: { jobId: string; threadId: number; wait: number | true },
-) {
-  const { jobId, threadId } = input;
-  const startedAt = Date.now();
-  const elapsedSeconds = () => Math.floor((Date.now() - startedAt) / 1000);
-  const { status, timedOut } = await waitForTargetedThreadBackfillJob({
-    read: () => readTargetedThreadBackfillJobStatus(app.db, jobId),
-    ...targetedThreadBackfillWaitBudget(input.wait),
-    pollMs: TARGETED_BACKFILL_WAIT_POLL_MS,
-    onState: (row) => {
-      console.log(`job ${jobId}: ${row.state} (${elapsedSeconds()} s)`);
-    },
-  });
-  if (status === null) {
-    console.error(`Targeted backfill job ${jobId} is not in pgboss.job`);
-    process.exitCode = 1;
-    return;
-  }
-  if (timedOut) {
-    console.error(
-      `Targeted backfill job ${jobId} is still ${status.state} after ${elapsedSeconds()} s; `
-        + "it keeps running — its outcome will be in pgboss.job.output",
-    );
-    process.exitCode = 1;
-    return;
-  }
-  if (status.state !== "completed") {
-    const output = status.output as { message?: unknown } | null;
-    const reason = typeof output?.message === "string" ? output.message : JSON.stringify(output);
-    console.error(`Targeted backfill job ${jobId} ${status.state}: ${reason}`);
-    process.exitCode = 1;
-    return;
-  }
-  const result = status.output as TargetedThreadBackfillResult | null;
-  if (result === null || typeof result.outcome !== "string") {
-    console.error(`Targeted backfill job ${jobId} completed without a recorded outcome`);
-    process.exitCode = 1;
-    return;
-  }
-  console.log(JSON.stringify(result));
-  if (result.outcome !== "completed" && result.outcome !== "partial") {
-    console.error(
-      `Targeted backfill of thread ${threadId} ended ${result.outcome} after ${result.requests} request(s)`
-        + (result.outcome === "retention_limit_reached"
-          ? "; pass --ignore-retention-limit to walk past the depth cap for one run"
-          : ""),
-    );
-    process.exitCode = 1;
-  }
-}
-
 async function queuePlannerRecovery(
   databaseUrl: string,
 ) {
@@ -1023,7 +925,6 @@ export function buildProgram() {
       }
     });
 
-  const dm = program.command("dm");
   const page = program.command("page");
   const pageAdd = page.command("add");
   const sync = program.command("sync");
@@ -1035,82 +936,6 @@ export function buildProgram() {
   const queue = program.command("queue");
   const telegram = program.command("telegram");
   const serviceEgress = program.command("service-egress");
-
-  dm
-    .command("backfill-thread")
-    .description(
-      "Slice C′: queue a one-shot deep backfill of ONE Fansly DM thread. The worker "
-        + "executes it under the page's dm_messages sync lease; this process never "
-        + "touches the vendor.",
-    )
-    .requiredOption("--thread <id>", "page_dm_threads id", parsePositiveInt)
-    .option(
-      "--ignore-retention-limit",
-      "walk past the per-thread depth cap for THIS run only (global config unchanged)",
-    )
-    .option(
-      "--wait [seconds]",
-      "follow the job and print the run's outcome; non-zero exit unless completed/partial. "
-        + `Bare: until the job ends (up to ${TARGETED_BACKFILL_EXPIRE_SECONDS / 60} min queued, `
-        + `then its ${TARGETED_BACKFILL_EXPIRE_SECONDS / 60}-min expiry once running); `
-        + "with seconds: at most that long",
-      parsePositiveInt,
-    )
-    .action(async (options) => {
-      const app = await createAppContext();
-      try {
-        const threadId = options.thread as number;
-        const ignoreRetentionLimit = options.ignoreRetentionLimit === true;
-        // The queue key is the PAGE (Stage 25: one sync chunk per page at a
-        // time), so the enqueue resolves the thread's page first.
-        const thread = await getPageDmConversationById(app.db, threadId);
-        if (!thread) {
-          throw new Error(`DM thread ${threadId} not found`);
-        }
-        // Step-3 design §3.1 item 11: the worker's lease would refuse the job
-        // on a page the Fansly Sync Engine owns; say so before queueing it.
-        await assertLegacyOwnsFanslyPageId(app, thread.platformAccountId, SYNC_ENGINE_HINTS.history);
-        // The one worker refusal the owner controls from here, read-only: a job
-        // the worker would refuse on the depth cap is not queued at all. Every
-        // other check stays the worker's, under the lease.
-        if (!ignoreRetentionLimit) {
-          const retentionLimit = await getPageDmMessageRetentionLimit(app.db, threadId);
-          if (thread.storedMessageCount >= retentionLimit) {
-            console.error(
-              `Thread ${threadId} stores ${thread.storedMessageCount} messages, at or above its `
-                + `retention limit of ${retentionLimit}: the worker would refuse it as `
-                + "retention_limit_reached. Pass --ignore-retention-limit to walk past the cap "
-                + "for this run.",
-            );
-            process.exitCode = 1;
-            return;
-          }
-        }
-        const jobId = await queueTargetedThreadBackfill(app.config.databaseUrl, {
-          threadId,
-          platformAccountId: thread.platformAccountId,
-          ignoreRetentionLimit,
-        });
-        console.log(JSON.stringify({ jobId, threadId }));
-        if (jobId === null) {
-          console.error(
-            `Not queued: another targeted backfill for this page is queued or running `
-              + `(one per page; page ${thread.platformAccountId}). Re-run once it finishes.`,
-          );
-          process.exitCode = 1;
-          return;
-        }
-        if (options.wait !== undefined) {
-          await waitForTargetedThreadBackfill(app, {
-            jobId,
-            threadId,
-            wait: options.wait as number | true,
-          });
-        }
-      } finally {
-        await app.close();
-      }
-    });
 
   program
     .command("tiering:run")
@@ -1745,41 +1570,26 @@ export function buildProgram() {
     .action(async (options) => {
       const app = await createAppContext();
       try {
-        // Step-3 design §3.5 item 6: a live page is verified by its engine
-        // actor; a page being switched refuses (409).
+        // A Fansly page is verified by its engine actor (step-3 design §3.5
+        // item 6); a page being switched, or one the engine does not run,
+        // refuses (409) — no legacy `/account/me` is left (step 4, S4-19).
         const onEngine = await verifyPageOnEngine(app, options.page);
         if (onEngine !== null) {
           console.log(`Verified page ${options.page} through the Fansly Sync Engine (${onEngine.username ?? "?"})`);
           return;
         }
+        // Stage 18: OnlyMonster retired — OnlyFans pages have no pasted
+        // credentials to verify; their access is the OFAPI mapping.
         const context = await resolvePageContext(app, options.page);
-        const egressSummaryPromise = resolvePageEgressSummary({
+        printPageEgressSummary(await resolvePageEgressSummary({
           pageLabel: context.page.label,
           platform: context.platform,
           proxy: context.proxy,
           egressKey: context.egressKey,
-        });
-        if (context.platform === "fansly") {
-          const verified = await refreshPageMetadata(app, context, "light", undefined, null, "account_me_cli");
-          const recoveredAt = new Date();
-          printPageEgressSummary(await egressSummaryPromise);
-          await handleSuccessfulPageVerificationRecovery(app, {
-            platformAccountId: context.page.id,
-            pageLabel: context.page.label,
-            platform: context.platform,
-            recoveredAt,
-          });
-          console.log(
-            `Verified page ${options.page}: ${verified.parsed.account.username} (${verified.parsed.account.id})`,
-          );
-        } else {
-          // Stage 18: OnlyMonster retired — OnlyFans pages have no pasted
-          // credentials to verify; their access is the OFAPI mapping.
-          printPageEgressSummary(await egressSummaryPromise);
-          throw new Error(
-            "OnlyMonster is retired: OnlyFans pages verify via their OFAPI mapping (setPageOfapiAccountId), not pasted credentials",
-          );
-        }
+        }));
+        throw new Error(
+          "OnlyMonster is retired: OnlyFans pages verify via their OFAPI mapping (setPageOfapiAccountId), not pasted credentials",
+        );
       } finally {
         await app.close();
       }
@@ -1875,61 +1685,6 @@ export function buildProgram() {
     });
 
   program
-    .command("fansly:replay-probe")
-    .description(
-      "Stage 6 gate: probe whether core can replay Fansly earnings/order-history endpoints server-side",
-    )
-    .option("--page <label>", "Fansly page label; may be repeated", collectStringOption, [])
-    .option("--calls <n>", "calls per family per page (default 1)", (value) => {
-      const parsed = Number.parseInt(value, 10);
-      if (!Number.isInteger(parsed) || parsed < 1) {
-        // NaN would fire zero probes yet print the green verdict (review R1-5).
-        throw new InvalidArgumentError("--calls must be a positive integer");
-      }
-      return parsed;
-    }, 1)
-    .option("--fan <accountId>", "fan account id → correlationAccountId + order-history accountIds (well-formed call)")
-    .option("--media <accountMediaId>", "accountMediaId for order-history (well-formed call)")
-    .option("--bundle <accountMediaBundleId>", "accountMediaBundleId for order-history (well-formed call)")
-    .option(
-      "--transactions-parity",
-      "fire only the /earnings/transactions query-bound matrix",
-    )
-    .option(
-      "--transactions-after <iso>",
-      "non-empty lower bound for --transactions-parity",
-      parseDateOption,
-    )
-    .option("--dry-run", "resolve contexts and print the plan without calling Fansly")
-    .action(async (options) => {
-      const pageLabels: string[] = options.page;
-      if (pageLabels.length === 0) {
-        throw new Error("fansly:replay-probe requires at least one --page <label>");
-      }
-      const app = await createAppContext();
-      try {
-        const results = await runFanslyReplayProbe(app, {
-          pageLabels,
-          calls: options.calls,
-          dryRun: Boolean(options.dryRun),
-          correlationAccountId: options.fan ?? null,
-          mediaAccountIds: options.fan ?? null,
-          accountMediaId: options.media ?? null,
-          accountMediaBundleId: options.bundle ?? null,
-          transactionsParity: Boolean(options.transactionsParity),
-          transactionsAfter: options.transactionsAfter,
-        });
-        for (const result of results) {
-          console.log(JSON.stringify(result));
-        }
-        console.log("");
-        console.log(summarizeReplayProbe(results));
-      } finally {
-        await app.close();
-      }
-    });
-
-  program
     .command("fansly:ws-recovery-manifest")
     .description("Read-only provenance and reader-state check for up to 20 exact retained WS messages; never prints message text")
     .requiredOption("--input <file>", "JSON with pageLabel and exact observationId/groupRef/messageRef targets")
@@ -1938,84 +1693,6 @@ export function buildProgram() {
       const app = await createAppContext();
       try { console.log(JSON.stringify(await buildFanslyWsRecoveryManifest(app, request), null, 2)); }
       finally { await app.close(); }
-    });
-
-  program
-    .command("fansly:ws-policy")
-    .description("Inspect B1 generation, preview an account-verified repair, or apply an exact reviewed preview")
-    .requiredOption("--page <label>", "exact Fansly page label")
-    .option("--preview", "read-only preview; one account/me request through the page proxy")
-    .option("--apply <file>", "apply a saved preview after repeating account binding and config CAS checks")
-    .action(async (options: { page: string; preview?: boolean; apply?: string }) => {
-      if (options.preview && options.apply) throw new Error("Choose preview or apply");
-      const app = await createAppContext();
-      try {
-        if (options.apply) {
-          const document = JSON.parse(await readFile(options.apply, "utf8")) as { proposal?: { pageLabel?: unknown } };
-          if (!document.proposal) throw new Error("Preview has no applicable repair proposal; inspect its state and blockers");
-          if (document.proposal?.pageLabel !== options.page) throw new Error("Preview page does not match --page");
-          console.log(JSON.stringify(await applyFanslyWsPolicyRepair(app, document.proposal)));
-        } else console.log(JSON.stringify(options.preview
-          ? await previewFanslyWsPolicyRepair(app, options.page)
-          : await diagnoseFanslyWsHints(app, options.page), null, 2));
-      } finally { await app.close(); }
-    });
-
-  program
-    .command("fansly:endpoint-probe")
-    .description(
-      "Liveness probe for the endpoints-cover initiative: fires ONE read-only GET per WP-F9 "
-        + "(`dm_commerce`) route, the [E1] bare `/post/{id}/replies`, the WP-F3 catalog routes "
-        + "and [F1]'s `/it/amoie/stats` MONTH form (year/month, two months back — it prints the "
-        + "served window so one run says whether the month was honoured), through the page's own "
-        + "proxy. Answers 'does the server serve this to us at all' BEFORE any capture machinery "
-        + "is designed around it. Writes nothing to Fansly and nothing to Postgres beyond ordinary "
-        + "sync telemetry. Never issues `POST /postreply/verify` — doing so would destroy the only "
-        + "question [E1] asks.",
-    )
-    .option("--page <label>", "Fansly page label; may be repeated", collectStringOption, [])
-    .option(
-      "--post <id>",
-      "[E1] post id with a KNOWN visible reply. Without it [E1] is skipped, not answered — "
-        + "the id is a path segment, so there is no bare form of that call.",
-    )
-    .option("--group <id>", "conversation id for /groups/mediaoffers (else the call fires bare)")
-    .option("--fan <accountId>", "fan account id for /tips/account and /groups/mediaoffers")
-    .option("--story <id>", "story id for /mediastory/views (else the call fires bare)")
-    .option("--media <id>", "[F3] a known accountMedia id for /account/media?ids=")
-    .option("--bundle <id>", "[F3] a known bundle id for /account/media/bundle?ids=")
-    .option("--album <id>", "[F3] a known vault album id for /media/vaultnew")
-    .option("--only <substr>", "fire only routes whose key contains this substring (e.g. mediaoffers)")
-    .option("--ids", "print allowlisted identifier fields per list row (ids, type, price, flags — never text/URLs)")
-    .option("--dry-run", "resolve page contexts and print the plan without calling Fansly")
-    .action(async (options) => {
-      const pageLabels: string[] = options.page;
-      if (pageLabels.length === 0) {
-        throw new Error("fansly:endpoint-probe requires at least one --page <label>");
-      }
-      const app = await createAppContext();
-      try {
-        const results = await runFanslyEndpointProbe(app, {
-          pageLabels,
-          dryRun: Boolean(options.dryRun),
-          postId: options.post ?? null,
-          groupId: options.group ?? null,
-          fanAccountId: options.fan ?? null,
-          storyId: options.story ?? null,
-          mediaId: options.media ?? null,
-          bundleId: options.bundle ?? null,
-          albumId: options.album ?? null,
-          only: options.only ?? null,
-          ids: Boolean(options.ids),
-        });
-        for (const result of results) {
-          console.log(JSON.stringify(result));
-        }
-        console.log("");
-        console.log(summarizeEndpointProbe(results));
-      } finally {
-        await app.close();
-      }
     });
 
   program
@@ -2533,43 +2210,6 @@ export function buildProgram() {
             + `message_archive is_opened ${result.messageArchiveOpened}, `
             + `dm_message_archive is_opened ${result.dmArchiveOpened} `
             + `(${result.facts} purchase facts in scope)`,
-        );
-      } finally {
-        await app.close();
-      }
-    });
-
-  // D-6. Owner-run one-off like the two above: dry-run is the default (inside
-  // a READ ONLY transaction), `--execute` opts in, a re-run reports zeros. It
-  // reads Hub's own deletion receipts and makes no Fansly call.
-  program
-    .command("archive:backfill-fansly-ws-deletions")
-    .description(
-      "D-6: mark Fansly DM messages the account socket reported deleted (exact "
-        + "serviceId 5 / type 10 receipts) as deleted in page_dm_messages and "
-        + "message_archive. Text and attachments stay; never inserts. Dry-run default; idempotent",
-    )
-    .option("--execute", "actually mark (default is a read-only dry-run count)")
-    .option("--account <id>", "restrict to one internal account (page) id", parsePositiveInt)
-    .action(async (options) => {
-      const app = await createAppContext();
-      try {
-        const result = await runFanslyWsDeletionBackfill(app, {
-          dryRun: !options.execute,
-          ...(options.account !== undefined ? { accountId: options.account } : {}),
-        });
-        console.log(JSON.stringify(result));
-        for (const page of result.pages) {
-          console.log(
-            `page ${page.pageId} (${page.pageLabel}): ${page.deletions} deletions, `
-              + `live hot ${page.hot}, live archive ${page.archive}`,
-          );
-        }
-        console.log(
-          `${result.dryRun ? "[dry-run] would mark" : "marked"}: `
-            + `hot ${result.hotMarked}, message_archive ${result.archiveMarked} `
-            + `(${result.deletions} exact deletions in scope); `
-            + `${result.dryRun ? "would repair" : "repaired"} ${result.windowsRepaired} drifted thread windows`,
         );
       } finally {
         await app.close();
@@ -3144,70 +2784,6 @@ export function buildProgram() {
           pageLabel: options.page === undefined ? null : String(options.page),
         });
         console.log(JSON.stringify(report, null, 2));
-      } finally {
-        await app.close();
-      }
-    });
-
-  program
-    .command("fansly-page-alias-backfill")
-    .option("--page <label>", "restrict to one page label", collectStringOption, [])
-    .option("--chunk-size <n>", "max account ids per Fansly request", parsePositiveInt, 100)
-    .action(async (options) => {
-      const app = await createAppContext();
-      try {
-        const result = await backfillFanslyPageAliases(app, {
-          pageLabels: options.page,
-          chunkSize: options.chunkSize,
-        });
-
-        printRows(
-          [
-            "page_label",
-            "memberships_scanned",
-            "unique_fan_ids",
-            "accounts_returned",
-            "fallback_misses",
-            "reconciled_accounts",
-            "notes_seen",
-            "notes_upserted",
-            "notes_deactivated",
-            "aliases_set",
-            "aliases_cleared",
-          ],
-          result.pages.map((page) => [
-            page.pageLabel,
-            page.membershipsScanned,
-            page.uniqueFanIds,
-            page.accountsReturned,
-            page.fallbackMisses,
-            page.reconciledAccounts,
-            page.notesSeen,
-            page.notesUpserted,
-            page.notesDeactivated,
-            page.aliasesSet,
-            page.aliasesCleared,
-          ]),
-        );
-
-        console.log("");
-        console.log(`pages=${result.totalPages}`);
-        console.log(`memberships_scanned=${result.totalMembershipsScanned}`);
-        console.log(`unique_fan_ids=${result.totalUniqueFanIds}`);
-        console.log(`accounts_returned=${result.totalAccountsReturned}`);
-        console.log(`fallback_misses=${result.totalFallbackMisses}`);
-        console.log(`reconciled_accounts=${result.totalReconciledAccounts}`);
-        console.log(`notes_seen=${result.totalNotesSeen}`);
-        console.log(`notes_upserted=${result.totalNotesUpserted}`);
-        console.log(`notes_deactivated=${result.totalNotesDeactivated}`);
-        console.log(`aliases_set=${result.totalAliasesSet}`);
-        console.log(`aliases_cleared=${result.totalAliasesCleared}`);
-        if (result.skippedEngineOwnedPages.length > 0) {
-          console.log(
-            `skipped_engine_pages=${result.skippedEngineOwnedPages.join(",")} `
-              + "(on the Fansly Sync Engine: `pnpm cli sync work enqueue --page <label> --resource fan-profiles.alias-backfill`)",
-          );
-        }
       } finally {
         await app.close();
       }
