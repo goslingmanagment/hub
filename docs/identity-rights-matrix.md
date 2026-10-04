@@ -182,7 +182,13 @@ into hourly rollups that hold no user, page or fan (the `client_health_*_hourly`
 tables) and drops the report; with `chatExtensionHealthIngestEnabled` off (or
 the master switch off) it accepts the report and keeps nothing, and the
 bootstrap does not list `client-health-perf-v1`, so the extension does not send
-one. Held by `client-health-intake.integration`. Its AI generations wait for
+one. Held by `client-health-intake.integration`. The owner reads the rollups at
+`GET /api/v1/admin/client-health` (chat-extension H-11c), an `owner-session`
+route like the rest of the owner console: no device token reaches it, the
+extension's own included. It names no person, since the rollups hold none: the
+figures are by client version and host build, and a group of fewer than 20
+observations shows its size and no mean, maximum or percentile. Held by
+`client-health-view.integration`. Its AI generations wait for
 the owner's switches (`chatExtensionEnabled`, the Coach / Recap / Review flags) and its
 version for `chatExtensionMinVersion`, and each generation record is labelled
 `clientProfile: "chat-extension"`. A full device token of the same person is

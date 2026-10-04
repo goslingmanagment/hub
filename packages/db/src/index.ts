@@ -9,6 +9,8 @@ export * from "./repositories/client-claim.ts";
 export * from "./repositories/client-claim-transition.ts";
 // chat-extension client_health hourly rollups (0244, H-11b).
 export * from "./repositories/client-health.ts";
+// Their reads for the owner's view (H-11c).
+export * from "./repositories/client-health-view.ts";
 export * from "./schema.ts";
 export * from "./repositories/creator-raw-media.ts";
 export * from "./repositories/vault-album-scans.ts";
