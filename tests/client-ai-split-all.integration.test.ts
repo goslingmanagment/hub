@@ -12,9 +12,19 @@ import {
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
-import { createBundledPersonalities } from "../apps/runtime/src/modules/ai/index.ts";
-import type { AiGatewayProviderInput } from "../apps/runtime/src/services/ai-gateway.ts";
-import { assignPageToUser, createUserAccount, setUserPassword } from "../apps/runtime/src/services/auth.ts";
+import { createBundledPersonalities, describeSplitOutput } from "../apps/runtime/src/modules/ai/index.ts";
+import {
+  AiGatewayTerminalStreamConsumer,
+  buildAiGatewayTerminalRecord,
+  prepareAiGatewayStream,
+  type AiGatewayProviderInput,
+} from "../apps/runtime/src/services/ai-gateway.ts";
+import {
+  assignPageToUser,
+  createUserAccount,
+  setUserPassword,
+  type HumanAuthPrincipal,
+} from "../apps/runtime/src/services/auth.ts";
 import { isSplitAllOnForPage } from "../apps/runtime/src/services/client-split-all.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { armNoOutboundTrap } from "./helpers/no-outbound.ts";
@@ -391,6 +401,77 @@ describe("Split for Ping and Hi behind split-all-v1 (H-10a)", () => {
       await trap.assertNoOutbound();
     } finally {
       await trap.restore();
+    }
+  }, AI_TEST_TIMEOUT_MS);
+
+  it("a structure check that throws costs only its own record: the generation row and the ledger are written", async (context) => {
+    if (!server) return context.skip();
+    const principal: HumanAuthPrincipal = {
+      authMethod: "device_token",
+      user: {
+        id: await fixtureUserId(app, "grisha"), username: "grisha", role: "chatter", assignedPages: [], mustChangePassword: false,
+      },
+      assignedPageIds: [pageIds["lora-of"]!],
+    };
+    /** What the route does with a prepared stream: read it to its end, then settle the terminal record. */
+    const settle = async (describeOutput: (completion: string) => Record<string, unknown>) => {
+      const stream = await prepareAiGatewayStream(app, principal, {
+        clientRequestId: randomUUID(),
+        feature: "ping",
+        pageLabel: "lora-of",
+        platform: "onlyfans",
+        platformUserId: FAN,
+        conversationId: FAN,
+        model: "anthropic:claude-sonnet-4-6",
+        reasoningEffort: "off",
+        isRegeneration: false,
+        prompt: { systemBlocks: [{ text: "system", cache: "1h" }], userBlocks: [{ text: "user", cache: "none" }] },
+      }, { describeOutput });
+      const consumer = new AiGatewayTerminalStreamConsumer();
+      for await (const frame of stream.stream(new AbortController().signal)) {
+        consumer.note(frame);
+      }
+      consumer.finish();
+      const recorded = await stream.recordTerminal(buildAiGatewayTerminalRecord(consumer, {
+        outcome: consumer.outcome, failure: null, durationMs: 1, completedAt: new Date(),
+      }));
+      return { recorded, generationRef: stream.requestId };
+    };
+
+    completionChunks = ["hey you [NEXT] what's up"];
+    const warn = vi.spyOn(app.logger, "warn");
+    try {
+      const failing = await settle(() => {
+        throw new Error("structure check exploded");
+      });
+      // The usage row is finalized and the restricted record is stored, without the structure key.
+      expect(failing.recorded).toBe(true);
+      const params = await paramsOf(failing.generationRef);
+      expect(params).toMatchObject({ outcome: "completed", stopReason: "end_turn" });
+      expect(params).not.toHaveProperty("outputStructure");
+      const { rows } = await testDb!.pool.query(
+        `select g.completion, u.gateway_outcome
+         from ai_generation_content g join ai_usage_events u on u.id = g.usage_event_id
+         where g.generation_ref = $1`,
+        [failing.generationRef],
+      );
+      expect(rows).toEqual([{ completion: "hey you [NEXT] what's up", gateway_outcome: "completed" }]);
+      expect(warn).toHaveBeenCalledWith(
+        expect.objectContaining({ requestId: failing.generationRef }),
+        "AI gateway output structure check failed",
+      );
+
+      // The same stream with a check that returns: the key is there.
+      warn.mockClear();
+      const described = await settle((completion) => describeSplitOutput(completion, 1));
+      expect(described.recorded).toBe(true);
+      expect(await paramsOf(described.generationRef)).toMatchObject({
+        outcome: "completed",
+        outputStructure: { variantsRequested: 1, partsPerVariant: [2], ok: true },
+      });
+      expect(warn).not.toHaveBeenCalledWith(expect.anything(), "AI gateway output structure check failed");
+    } finally {
+      warn.mockRestore();
     }
   }, AI_TEST_TIMEOUT_MS);
 });

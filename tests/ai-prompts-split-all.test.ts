@@ -20,46 +20,6 @@ import {
 import { AiGatewayTerminalStreamConsumer } from "../apps/runtime/src/services/ai-gateway.ts";
 import { promptDigest, referencePrompts } from "./helpers/ai-prompt-references.ts";
 
-// The reference prompts (tests/helpers/ai-prompt-references.ts), pinned as the
-// builder assembled them on hub main b8fac831, BEFORE the Split slot existed: a
-// request that does not pass the split-all gate must keep these bytes. A
-// deliberate prompt change re-pins its digests here (the failing assertion
-// prints the new one), in the same change as prompt-manifest.json.
-const REFERENCE_PROMPT_DIGESTS: Readonly<Record<string, string>> = {
-  "onlyfans fast-reply flirty": "ec5cddb8defecb8b840d791e4125e0c6d096dd68b526403d3669cc9a8ee991cb",
-  "onlyfans fast-reply split": "525eb4d6b08544de2517b7cac6cfd930856e64cdf9b7659889a50911038ea381",
-  "onlyfans improve-draft": "fc15e8107b65a1a3694bbb3938b84f1849f0bcdab1156e353554123875ea88aa",
-  "onlyfans improve-draft split": "9b2a4e8ed74d76b1850b45663f13f00eadbb5f2eb89944c99ea757086a6d4a7e",
-  "onlyfans help-me": "446d81da33a798c8efb16a010e4d9e17de7a54fde4b273dbe87694cb974c1279",
-  "onlyfans fan-summary": "b95609405cb8f722bb9d27374e86a6265f963ece64d2de5044140d02f2f690fd",
-  "onlyfans fan-summary short": "b930dc1035c8f90ada5282132ce2a3db13ba37b6675716acc03cfb597bcd9d89",
-  "onlyfans chat-review": "a568cca85dbe096c056971e54247f3ea6c4a0c60b385b5a3ea451c6b17b51fb7",
-  "onlyfans ping segment-a": "17d4a6e0b94e6034502735bb06f8a3b63b2e3fefd7b766ec93700af86245b311",
-  "onlyfans ping segment-b": "cf68618362fb25afe490144370117b53c9b645d8d43ed12fef7cfa59214454bd",
-  "onlyfans ping active": "e794eb2f0566eca28c6e1c1c43ab9e61860f96c33ea8c7a3629fd37405fe6abb",
-  "onlyfans hi-greeting 3 variants": "daa4b5361ba33ce78b7287e3049ad005bfb15e3c167c3cf9524a929eab40a907",
-  "onlyfans hi-greeting 1 variant": "fa80b6e751c827acaa2e7968f2bc4eae6592eda115d8517d8db57275d3bfe94b",
-  "onlyfans coach-chat question": "210aa78a9273a9ca3050f2a20a82253df8e4b8b4da8078ec94378e5a21e02bfb",
-  "onlyfans coach-chat preset": "616a99096fb08a4ea556eaca9a9c5ece8afcf046ba4ad848945f396fa2ace7ee",
-  "onlyfans voice-script": "6661bbc14a1a3f38ea1de7a5dcdd1ac23171357d27292327ee86090187998e83",
-  "fansly fast-reply flirty": "56a25de19d807359f31430218f92b3b45bbaf826818295fa7e46ef6f7c03498a",
-  "fansly fast-reply split": "e51613f6590f8c7d3f4cbbc6732965f8dac1f09d944a96322b8de216f686caee",
-  "fansly improve-draft": "812a047aa8a4b45fbb63ae101b14c9f2a0a90b27373ae64ede43c5c9f6298f3e",
-  "fansly improve-draft split": "15122138e152a5635d86c5ea0eba134fdcfa59ddc5ea46255cba1c9efa363ccf",
-  "fansly help-me": "23f79158582e57b7c17e4e38cc024babf888f2a32e5b446d5d5d209f78d05d4f",
-  "fansly fan-summary": "07025090eeedca83c29fca667ed963d88f5b50a1f46b050b39120f895d264ac4",
-  "fansly fan-summary short": "20becc30ec4065fe08ae9d11da9afc8c8081eade975ba77b566fc2d795c7cb4f",
-  "fansly chat-review": "6240e3b616514fd6f66ac873a6fcce4dfe3d3719c4786f5d2ed90410fe8a30c3",
-  "fansly ping segment-a": "44e8fe1a396c519097dc1adc94808db8659445d49e45d8a26d93c27313eabeee",
-  "fansly ping segment-b": "31955b05ad63764c323224373160233e61dad1ac56d998449e35831aec59f47a",
-  "fansly ping active": "16ecfd3ef4905cd970f748622e80497585450a2cf0cf92a266fb9c6d2d2b754f",
-  "fansly hi-greeting 3 variants": "6c833e4e8bf6fbc62644fa5c64fb95a8739250223f466e25ba226d872622834f",
-  "fansly hi-greeting 1 variant": "b26324d13b458f8aa2eaf40f0a63d9af827f5e2ee637d05f38bd65e839354182",
-  "fansly coach-chat question": "fe39cdf6fcb00e332c5d89e690ab05a9873fd74e3eaeafb5393050e5471f36c9",
-  "fansly coach-chat preset": "488dfe520c35bb99eb0c30639f2cc1df033b13ede3da96a78568fe0c1edf0f0b",
-  "fansly voice-script": "414dbf45b2eb7ae59dac6b0d23abcff2651881f5d891e4d68531991b4c7b78c7",
-};
-
 const SPLIT_ALL_FEATURES: readonly OperationFeature[] = ["ping", "hi-greeting"];
 
 const digestOf = (input: PromptBuildInput) => promptDigest(buildPrompt(input));
@@ -68,20 +28,70 @@ const taskBlock = (input: PromptBuildInput) => buildPrompt(input).userBlocks.at(
 describe("reference prompts without the split-all gate", () => {
   const references = referencePrompts();
 
-  it("pins a digest for every reference prompt, both platforms and every feature", () => {
-    expect(references.map((reference) => reference.name).sort()).toEqual(Object.keys(REFERENCE_PROMPT_DIGESTS).sort());
-    expect(new Set(references.map((reference) => reference.input.feature))).toEqual(new Set(OPERATION_FEATURES));
+  it("covers every feature on both platforms", () => {
+    expect(new Set(references.map((reference) => reference.name)).size).toBe(references.length);
+    for (const platform of ["onlyfans", "fansly"] as const) {
+      const features = references.filter((reference) => reference.input.platform === platform)
+        .map((reference) => reference.input.feature);
+      expect(new Set(features), platform).toEqual(new Set(OPERATION_FEATURES));
+    }
+  });
+
+  // The reference prompts (tests/helpers/ai-prompt-references.ts) as the builder
+  // assembled them on hub main b8fac831, BEFORE the Split slot existed: a
+  // request that does not pass the split-all gate must keep these bytes.
+  //
+  // A deliberate prompt change re-pins them in one step, in the same change as
+  // prompt-manifest.json:
+  //   npx vitest run tests/ai-prompts-split-all.test.ts -u
+  // and the diff of this block then names every prompt that changed.
+  it("every reference prompt keeps its pinned digest", () => {
+    expect(Object.fromEntries(references.map(({ name, input }) => [name, digestOf(input)]))).toMatchInlineSnapshot(`
+      {
+        "fansly chat-review": "6240e3b616514fd6f66ac873a6fcce4dfe3d3719c4786f5d2ed90410fe8a30c3",
+        "fansly coach-chat preset": "488dfe520c35bb99eb0c30639f2cc1df033b13ede3da96a78568fe0c1edf0f0b",
+        "fansly coach-chat question": "fe39cdf6fcb00e332c5d89e690ab05a9873fd74e3eaeafb5393050e5471f36c9",
+        "fansly fan-summary": "07025090eeedca83c29fca667ed963d88f5b50a1f46b050b39120f895d264ac4",
+        "fansly fan-summary short": "20becc30ec4065fe08ae9d11da9afc8c8081eade975ba77b566fc2d795c7cb4f",
+        "fansly fast-reply flirty": "56a25de19d807359f31430218f92b3b45bbaf826818295fa7e46ef6f7c03498a",
+        "fansly fast-reply split": "e51613f6590f8c7d3f4cbbc6732965f8dac1f09d944a96322b8de216f686caee",
+        "fansly help-me": "23f79158582e57b7c17e4e38cc024babf888f2a32e5b446d5d5d209f78d05d4f",
+        "fansly hi-greeting 1 variant": "b26324d13b458f8aa2eaf40f0a63d9af827f5e2ee637d05f38bd65e839354182",
+        "fansly hi-greeting 3 variants": "6c833e4e8bf6fbc62644fa5c64fb95a8739250223f466e25ba226d872622834f",
+        "fansly improve-draft": "812a047aa8a4b45fbb63ae101b14c9f2a0a90b27373ae64ede43c5c9f6298f3e",
+        "fansly improve-draft split": "15122138e152a5635d86c5ea0eba134fdcfa59ddc5ea46255cba1c9efa363ccf",
+        "fansly ping active": "16ecfd3ef4905cd970f748622e80497585450a2cf0cf92a266fb9c6d2d2b754f",
+        "fansly ping segment-a": "44e8fe1a396c519097dc1adc94808db8659445d49e45d8a26d93c27313eabeee",
+        "fansly ping segment-b": "31955b05ad63764c323224373160233e61dad1ac56d998449e35831aec59f47a",
+        "fansly voice-script": "414dbf45b2eb7ae59dac6b0d23abcff2651881f5d891e4d68531991b4c7b78c7",
+        "onlyfans chat-review": "a568cca85dbe096c056971e54247f3ea6c4a0c60b385b5a3ea451c6b17b51fb7",
+        "onlyfans coach-chat preset": "616a99096fb08a4ea556eaca9a9c5ece8afcf046ba4ad848945f396fa2ace7ee",
+        "onlyfans coach-chat question": "210aa78a9273a9ca3050f2a20a82253df8e4b8b4da8078ec94378e5a21e02bfb",
+        "onlyfans fan-summary": "b95609405cb8f722bb9d27374e86a6265f963ece64d2de5044140d02f2f690fd",
+        "onlyfans fan-summary short": "b930dc1035c8f90ada5282132ce2a3db13ba37b6675716acc03cfb597bcd9d89",
+        "onlyfans fast-reply flirty": "ec5cddb8defecb8b840d791e4125e0c6d096dd68b526403d3669cc9a8ee991cb",
+        "onlyfans fast-reply split": "525eb4d6b08544de2517b7cac6cfd930856e64cdf9b7659889a50911038ea381",
+        "onlyfans help-me": "446d81da33a798c8efb16a010e4d9e17de7a54fde4b273dbe87694cb974c1279",
+        "onlyfans hi-greeting 1 variant": "fa80b6e751c827acaa2e7968f2bc4eae6592eda115d8517d8db57275d3bfe94b",
+        "onlyfans hi-greeting 3 variants": "daa4b5361ba33ce78b7287e3049ad005bfb15e3c167c3cf9524a929eab40a907",
+        "onlyfans improve-draft": "fc15e8107b65a1a3694bbb3938b84f1849f0bcdab1156e353554123875ea88aa",
+        "onlyfans improve-draft split": "9b2a4e8ed74d76b1850b45663f13f00eadbb5f2eb89944c99ea757086a6d4a7e",
+        "onlyfans ping active": "e794eb2f0566eca28c6e1c1c43ab9e61860f96c33ea8c7a3629fd37405fe6abb",
+        "onlyfans ping segment-a": "17d4a6e0b94e6034502735bb06f8a3b63b2e3fefd7b766ec93700af86245b311",
+        "onlyfans ping segment-b": "cf68618362fb25afe490144370117b53c9b645d8d43ed12fef7cfa59214454bd",
+        "onlyfans voice-script": "6661bbc14a1a3f38ea1de7a5dcdd1ac23171357d27292327ee86090187998e83",
+      }
+    `);
   });
 
   for (const { name, input } of references) {
-    it(`${name}: matches its pinned digest, whatever the gate input says without the Split ask`, () => {
-      const pinned = REFERENCE_PROMPT_DIGESTS[name];
-      expect(digestOf(input)).toBe(pinned);
+    it(`${name}: the gate input without the Split ask changes nothing`, () => {
+      const reference = digestOf(input);
       // The gate input absent, false, or true without the Split ask: no change.
-      expect(digestOf({ ...input, splitAll: false })).toBe(pinned);
-      expect(digestOf({ ...input, splitAll: true })).toBe(pinned);
+      expect(digestOf({ ...input, splitAll: false })).toBe(reference);
+      expect(digestOf({ ...input, splitAll: true })).toBe(reference);
       if (input.replyMode === undefined) {
-        expect(digestOf({ ...input, replyMode: "default", splitAll: true })).toBe(pinned);
+        expect(digestOf({ ...input, replyMode: "default", splitAll: true })).toBe(reference);
       }
     });
   }
@@ -93,9 +103,9 @@ describe("reference prompts without the split-all gate", () => {
       continue;
     }
     it(`${name}: replyMode preferSplit alone changes nothing`, () => {
-      const pinned = REFERENCE_PROMPT_DIGESTS[name];
-      expect(digestOf({ ...input, replyMode: "preferSplit" })).toBe(pinned);
-      expect(digestOf({ ...input, replyMode: "preferSplit", splitAll: false })).toBe(pinned);
+      const reference = digestOf(input);
+      expect(digestOf({ ...input, replyMode: "preferSplit" })).toBe(reference);
+      expect(digestOf({ ...input, replyMode: "preferSplit", splitAll: false })).toBe(reference);
     });
   }
 });
