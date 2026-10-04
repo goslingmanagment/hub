@@ -110,10 +110,10 @@ inside what the caller could already do:
   archive, no observation and no dossier, and no shared reader selects a scoped
   generation;
 - the check that a snapshot belongs to the chat the request names reads other
-  pages' message archive only for pages granted to the caller (every page for
-  the owner). A message id that exists on a page the caller is not granted is
-  not looked up, so the `context_conflict` refusal never says that an id
-  exists there.
+  pages' message stores (the archive and the webhook archive) only for pages
+  granted to the caller (every page for the owner). A message id that exists
+  on a page the caller is not granted is not looked up, so the
+  `context_conflict` refusal never says that an id exists there.
 
 Held by `client-ai-live-text.integration` (a chatter of two pages, the owner,
 a page that is not the chatter's) and `client-ai-live-text-lookup.integration`.

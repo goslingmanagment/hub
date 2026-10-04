@@ -2204,11 +2204,16 @@ export const AI_LIVE_TEXT_MAX_CHARS = 5_000;
 
 // An instant as the client writes it: ISO 8601 with seconds and an explicit
 // offset, at most nine fractional digits. The house `isoTimestamp` is a bare
-// string; these order the transcript, so they are checked, and bounded in
-// length because they count toward the body limit above.
+// string; these order the transcript, so their form is checked, which also
+// bounds their length (they count toward the body limit above).
+//
+// The pattern is the client's frozen one (chat-extension IsoTimestampSchema)
+// and the whole check: this schema accepts exactly what the client's does. A
+// string of the right form that names no instant (a leap second, a thirteenth
+// month) is therefore NOT refused here, where it would fail the whole request:
+// the merge rejects that one item as `unusable` (context/live-text.ts).
 const aiLiveTextInstantSchema = z.string()
-  .regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/)
-  .refine((value) => Number.isFinite(Date.parse(value)), "Invalid timestamp");
+  .regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/);
 
 export const aiLiveTextContextSchema = z.object({
   /** When the client read the messages off the page. */

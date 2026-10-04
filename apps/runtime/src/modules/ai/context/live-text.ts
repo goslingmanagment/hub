@@ -146,10 +146,14 @@ export type AiLiveTextRejectReason =
   | "duplicate"
   /** Nothing is left of the text once it is normalized like an archive row. */
   | "empty"
-  /** The transcript cannot key the id (not a safe integer) or the time. */
+  /** The transcript cannot key the id (not a safe integer) or the time, or
+   *  the text is one the normalizers fail on. */
   | "unusable"
   /** The store lookup failed: the id could be deleted or another chat's. */
-  | "unverified";
+  | "unverified"
+  /** The merge itself failed, so nothing of the snapshot was judged
+   *  (mergeLiveTextSafely). */
+  | "failed";
 
 export type AiLiveTextConflictReason =
   /** The hub holds the message as sent by the other side. */
@@ -179,6 +183,16 @@ export interface AiLiveTextMerge {
   hubSawHead: boolean;
 }
 
+export interface AiLiveTextMergeInput {
+  /** The loaded transcript, oldest first, and the refs of its messages, index
+   *  for index (TranscriptContext.messages / .served.window). */
+  messages: readonly TranscriptMessage[];
+  window: readonly AiContextMessageRef[];
+  items: readonly AiLiveTextItem[];
+  stores: ReadonlyMap<string, AiLiveTextStoreState> | null;
+  limit: number;
+}
+
 /** Numeric ids compare as numbers without becoming one (they can pass 2^53). */
 function compareNumericIds(left: string, right: string): number {
   return left.length - right.length || (left < right ? -1 : left > right ? 1 : 0);
@@ -188,13 +202,20 @@ function compareNumericIds(left: string, right: string): number {
  *  takes: `normalizeDmMessageText` is what turns a platform message into the
  *  archive's `text_plain` (tags and entities out), and the transcript
  *  normalizer is what every row then goes through. No price, tip or media: a
- *  client sends text only, and money is the hub's own. */
-function liveItemToTranscriptMessage(item: AiLiveTextItem, id: number): TranscriptMessage | null {
+ *  client sends text only, and money is the hub's own.
+ *
+ *  `heldAt` is the hub's own time of the message, where a store holds it for
+ *  this conversation: it stands, and the client's clock is not read. */
+function liveItemToTranscriptMessage(
+  item: AiLiveTextItem,
+  id: number,
+  heldAt: Date | null,
+): TranscriptMessage | "empty" | "unusable" {
   const shaped = {
     id,
     text: normalizeDmMessageText(item.text),
     isSentByMe: item.direction === "model",
-    createdAt: item.occurredAt,
+    createdAt: heldAt === null ? item.occurredAt : heldAt.toISOString(),
     price: null,
     isOpened: null,
     isTip: false,
@@ -203,10 +224,10 @@ function liveItemToTranscriptMessage(item: AiLiveTextItem, id: number): Transcri
     media: [],
   } as OfapiChatMessage;
   const [message] = normalizeTranscriptMessages([shaped]);
-  if (!message || !Number.isFinite(message.createdAtMs) || message.text.trim().length === 0) {
-    return null;
+  if (!message || !Number.isFinite(message.createdAtMs)) {
+    return "unusable";
   }
-  return message;
+  return message.text.trim().length === 0 ? "empty" : message;
 }
 
 /**
@@ -221,20 +242,19 @@ function liveItemToTranscriptMessage(item: AiLiveTextItem, id: number): Transcri
  * - A tombstoned id is rejected, never restored.
  * - The rest joins the transcript, sorted by time then id like every
  *   transcript, and the newest `limit` messages are kept.
+ * - The time is the client's only for a message the hub cannot place. An id a
+ *   store holds for this conversation outside the loaded transcript (older
+ *   than its window, or only in a store the serving reader did not read)
+ *   keeps the hub's time: a client's clock never moves a message the hub can
+ *   place, so an old message cannot be sent to the head of the window.
+ * - An item whose text a normalizer fails on is rejected like any other the
+ *   transcript cannot use; the rest of the snapshot is still judged.
  *
  * `stores` holds the store state of the ids the transcript does not hold;
  * `null` when that read failed, and then nothing the hub cannot vouch for
  * joins.
  */
-export function mergeLiveText(input: {
-  /** The loaded transcript, oldest first, and the refs of its messages, index
-   *  for index (TranscriptContext.messages / .served.window). */
-  messages: readonly TranscriptMessage[];
-  window: readonly AiContextMessageRef[];
-  items: readonly AiLiveTextItem[];
-  stores: ReadonlyMap<string, AiLiveTextStoreState> | null;
-  limit: number;
-}): AiLiveTextMerge {
+export function mergeLiveText(input: AiLiveTextMergeInput): AiLiveTextMerge {
   const hubByRef = new Map(input.window.map((message) => [message.messageRef, message]));
   const hubIds = new Set(input.messages.map((message) => message.id));
   const merged = input.messages.map((message, index) => ({
@@ -303,9 +323,16 @@ export function mergeLiveText(input: {
       rejected.push({ id, reason: "unusable" });
       continue;
     }
-    const message = liveItemToTranscriptMessage(item, numericId);
-    if (message === null) {
-      rejected.push({ id, reason: Number.isFinite(atMs) ? "empty" : "unusable" });
+    // The one step that reads the client's text. Whatever a normalizer throws
+    // on is a text the transcript cannot use, not a failed generation.
+    let message: ReturnType<typeof liveItemToTranscriptMessage>;
+    try {
+      message = liveItemToTranscriptMessage(item, numericId, state?.occurredAt ?? null);
+    } catch {
+      message = "unusable";
+    }
+    if (typeof message === "string") {
+      rejected.push({ id, reason: message });
       continue;
     }
     hubIds.add(numericId);
@@ -336,6 +363,29 @@ export function mergeLiveText(input: {
     headRef: head?.ref ?? null,
     hubSawHead: head !== null && hubByRef.has(head.ref),
   };
+}
+
+/**
+ * `mergeLiveText` for the generation path, where it has to be total. Fresh
+ * text is an addition: nothing about a snapshot may fail the generation it
+ * came with. (The one refusal, a conflict in `serve`, is the caller's decision
+ * over a finished merge.) Whatever the merge throws on, nothing of the
+ * client's joins: the result is the merge of the hub's rows alone, with every
+ * item rejected as `failed`.
+ */
+export function mergeLiveTextSafely(
+  input: AiLiveTextMergeInput,
+  onFailure: (error: unknown) => void = () => {},
+): AiLiveTextMerge {
+  try {
+    return mergeLiveText(input);
+  } catch (error) {
+    onFailure(error);
+    return {
+      ...mergeLiveText({ ...input, items: [] }),
+      rejected: input.items.map((item) => ({ id: String(item.platformMessageId), reason: "failed" as const })),
+    };
+  }
 }
 
 function countByReason<R extends string>(entries: ReadonlyArray<{ reason: R }>): Partial<Record<R, number>> {
@@ -416,6 +466,12 @@ export interface AppliedLiveText<T extends LiveTextTranscript> {
  * One database read (the store lookup for the ids the transcript does not
  * hold), and only for a page the caller was already admitted to. It fails
  * closed: without it nothing the hub cannot vouch for joins the transcript.
+ *
+ * The conflict in `serve` is the only way fresh text fails a request. A
+ * switch that cannot be read is a switch that is off; a lookup that fails
+ * rejects what the hub could not vouch for; a text a normalizer throws on
+ * rejects its item; a merge that fails altogether rejects every item and
+ * leaves the hub's own transcript.
  */
 export async function applyLiveTextContext<T extends LiveTextTranscript>(
   app: AppContext,
@@ -458,12 +514,19 @@ export async function applyLiveTextContext<T extends LiveTextTranscript>(
     }
   }
 
-  const merge = mergeLiveText({
+  const merge = mergeLiveTextSafely({
     messages: loaded.messages,
     window: loaded.served.window,
     items,
     stores,
     limit: input.limit,
+  }, (error) => {
+    // The error came out of code that was reading a client's text: its name
+    // is logged, never its message.
+    app.logger.warn(
+      { pageId: input.page.id, errorName: error instanceof Error ? error.name : typeof error },
+      "ai fresh-text merge failed; fresh text ignored",
+    );
   });
   if (mode === "serve" && merge.conflicts.length > 0) {
     throw new ContextConflictError(merge.conflicts.map((conflict) => conflict.id));

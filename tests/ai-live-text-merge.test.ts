@@ -21,6 +21,7 @@ import {
   formatTranscript,
   liveTextManifest,
   mergeLiveText,
+  mergeLiveTextSafely,
   type AiContextMessageRef,
   type AiLiveTextItem,
   type TranscriptMessage,
@@ -70,7 +71,7 @@ function merge(items: AiLiveTextItem[], overrides: {
     ? null
     : new Map(Object.entries(overrides.stores ?? {}).map(([id, state]) => [
       id,
-      { foreign: false, deleted: false, isSentByMe: null, ...state },
+      { foreign: false, deleted: false, isSentByMe: null, occurredAt: null, ...state },
     ]));
   return mergeLiveText({
     messages: rows.map((row) => row.message),
@@ -140,6 +141,48 @@ describe("mergeLiveText", () => {
     // A store that holds no content for the id says nothing about its sender.
     expect(merge([item("8000", "fan", "old one", -500)], { stores: { "8000": { isSentByMe: null } } }))
       .toMatchObject({ conflicts: [], accepted: ["8000"] });
+  });
+
+  it("a message the hub can place keeps the hub's time, whatever the client's clock says", () => {
+    // The archive holds 8000 for this conversation, ninety minutes before the
+    // window; the client sends it as the newest message of the chat.
+    const held = { "8000": { isSentByMe: false, occurredAt: new Date(T0 - 90 * 60_000) } };
+    const moved = merge([item("8000", "fan", "CLIENT COPY", 15)], { stores: held, limit: 3 });
+    // Ordered by the hub's time it lies before the window, and the cap drops it.
+    expect(refs(moved)).toEqual(["9001", "9002", "9003"]);
+    expect(moved.messages).toEqual(HUB.map((row) => row.message));
+    expect(moved).toMatchObject({ accepted: [], rejected: [], conflicts: [], matched: 0, outsideWindow: 1 });
+    expect(formatTranscript(moved.messages)).not.toContain("CLIENT COPY");
+    // The head is still the client's newest message by its own clock, which the hub's transcript did not hold.
+    expect(moved).toMatchObject({ headRef: "8000", hubSawHead: false });
+    // An honest time gives the same answer.
+    expect(merge([item("8000", "fan", "CLIENT COPY", -90)], { stores: held, limit: 3 }))
+      .toMatchObject({ accepted: [], outsideWindow: 1 });
+    // Beside a message the hub has not seen, only that one joins.
+    const beside = merge([item("8000", "fan", "CLIENT COPY", 15), item("9004", "fan", "new", 16)], { stores: held, limit: 3 });
+    expect(refs(beside)).toEqual(["9002", "9003", "9004"]);
+    expect(beside).toMatchObject({ accepted: ["9004"], outsideWindow: 1 });
+
+    // Held inside the window's time by a store the serving reader did not read
+    // (the webhook archive, with the union off): it joins at the hub's place.
+    const unread = merge(
+      [item("9500", "model", "from the webhook store", 500)],
+      { stores: { "9500": { isSentByMe: true, occurredAt: new Date(T0 + 7 * 60_000) } } },
+    );
+    expect(refs(unread)).toEqual(["9001", "9002", "9500", "9003"]);
+    expect(unread.messages[2]).toMatchObject({ id: 9500, createdAtMs: T0 + 7 * 60_000, sender: "Model" });
+    expect(unread.window[2]).toEqual({ messageRef: "9500", occurredAt: new Date(T0 + 7 * 60_000), isFromFan: false });
+    expect(unread).toMatchObject({ accepted: ["9500"], outsideWindow: 0 });
+    // The hub's time stands even where the client's names no instant.
+    expect(merge(
+      [{ platformMessageId: "9500", direction: "model", occurredAt: "2026-13-45T10:19:30Z", text: "x" }],
+      { stores: { "9500": { isSentByMe: true, occurredAt: new Date(T0 + 7 * 60_000) } } },
+    )).toMatchObject({ accepted: ["9500"], rejected: [] });
+
+    // A message no store can place has the client's time, and only then.
+    const unseen = merge([item("8000", "fan", "CLIENT COPY", 15)], { limit: 3 });
+    expect(refs(unseen)).toEqual(["9002", "9003", "8000"]);
+    expect(unseen).toMatchObject({ accepted: ["8000"], outsideWindow: 0 });
   });
 
   it("an id of another conversation is a conflict, whatever else is true of it", () => {
@@ -217,6 +260,45 @@ describe("mergeLiveText", () => {
     expect(result.messages.find((message) => message.id === 9004)!.text).toBe("first");
   });
 
+  it("rejects an item whose time names no instant, though the wire takes its form", () => {
+    // The client's frozen pattern checks the form only, and the hub's schema is
+    // that pattern: a leap second, a thirteenth month and an offset of a whole
+    // day all pass it. None can be placed in a transcript.
+    const timeless = ["2026-10-04T23:59:60Z", "2026-13-45T10:19:30Z", "2026-10-04T10:19:30+24:00"]
+      .map((occurredAt, index): AiLiveTextItem => (
+        { platformMessageId: String(9004 + index), direction: "fan", occurredAt, text: "x" }
+      ));
+    const result = merge([...timeless, item("9010", "fan", "fine", 15)]);
+    expect(result.rejected).toEqual([
+      { id: "9004", reason: "unusable" }, { id: "9005", reason: "unusable" }, { id: "9006", reason: "unusable" },
+    ]);
+    expect(result.accepted).toEqual(["9010"]);
+    // None of them is the head either.
+    expect(result.headRef).toBe("9010");
+  });
+
+  it("rejects an item whose text a normalizer fails on, and still judges the rest", () => {
+    // The text normalizers run on input the hub does not control. Whatever one
+    // of them throws on is one item the transcript cannot use.
+    const poisoned: AiLiveTextItem = {
+      platformMessageId: "9004",
+      direction: "fan",
+      occurredAt: at(15),
+      get text(): string {
+        throw new RangeError("Invalid code point 1114112");
+      },
+    };
+    const result = merge([poisoned, item("9005", "fan", "still here", 16)]);
+    expect(result.rejected).toEqual([{ id: "9004", reason: "unusable" }]);
+    expect(result.accepted).toEqual(["9005"]);
+    expect(refs(result)).toEqual(["9001", "9002", "9003", "9005"]);
+    // The text that used to throw: a numeric reference past Unicode's range
+    // stays the text it was (tests/dm-text.test.ts).
+    const literal = merge([item("9004", "fan", "lol &#1114112; ok &#x110000;", 15)]);
+    expect(literal).toMatchObject({ accepted: ["9004"], rejected: [] });
+    expect(literal.messages[3]!.text).toBe("lol &#1114112; ok &#x110000;");
+  });
+
   it("without the store lookup nothing the hub cannot vouch for joins", () => {
     const result = merge([item("9003", "fan", "held", 10), item("9004", "fan", "fresh", 15)], { stores: null });
     expect(result).toMatchObject({ matched: 1, accepted: [], rejected: [{ id: "9004", reason: "unverified" }] });
@@ -227,6 +309,60 @@ describe("mergeLiveText", () => {
     const result = merge([item("9002", "model", "hi", 5), item("9001", "fan", "hey", 0)], { hubRows: [] });
     expect(refs(result)).toEqual(["9001", "9002"]);
     expect(result).toMatchObject({ accepted: ["9001", "9002"], headRef: "9002", hubSawHead: false });
+  });
+});
+
+describe("mergeLiveTextSafely", () => {
+  const input = (items: AiLiveTextItem[], limit = 100) => ({
+    messages: HUB.map((row) => row.message),
+    window: HUB.map((row) => row.window),
+    items,
+    stores: new Map<string, AiLiveTextStoreState>(),
+    limit,
+  });
+
+  it("is the merge itself while the merge holds", () => {
+    const items = [item("9004", "fan", "four", 15), item("9003", "fan", "held", 10)];
+    const failures: unknown[] = [];
+    expect(mergeLiveTextSafely(input(items), (error) => failures.push(error))).toEqual(mergeLiveText(input(items)));
+    expect(failures).toEqual([]);
+  });
+
+  it("whatever the merge throws on, the hub's transcript stands and every item is rejected", () => {
+    // Not a text failure (those reject one item): the merge itself breaks.
+    const broken = {
+      platformMessageId: "9005",
+      occurredAt: at(16),
+      text: "TEXT-OF-A-BROKEN-SNAPSHOT",
+      get direction(): "fan" {
+        throw new TypeError("boom");
+      },
+    } satisfies AiLiveTextItem;
+    const items = [item("9004", "fan", "four", 15), broken];
+    expect(() => mergeLiveText(input(items))).toThrow("boom");
+
+    const failures: unknown[] = [];
+    const result = mergeLiveTextSafely(input(items), (error) => failures.push(error));
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toBeInstanceOf(TypeError);
+    expect(result).toEqual({
+      messages: HUB.map((row) => row.message),
+      window: HUB.map((row) => row.window),
+      accepted: [],
+      // Not even the item judged before the failure joins.
+      rejected: [{ id: "9004", reason: "failed" }, { id: "9005", reason: "failed" }],
+      conflicts: [],
+      matched: 0,
+      outsideWindow: 0,
+      headRef: null,
+      hubSawHead: false,
+    });
+    // The hub's rows are capped as any merge caps them.
+    expect(refs(mergeLiveTextSafely(input(items, 2)))).toEqual(["9002", "9003"]);
+    // What is recorded names ids and the reason, never the text.
+    const manifest = liveTextManifest({ mode: "serve", status: "rejected", sent: 2, merge: result });
+    expect(manifest).toMatchObject({ accepted: 0, rejected: 2, rejectedReasons: { failed: 2 }, acceptedRefs: [] });
+    expect(JSON.stringify(manifest)).not.toContain("BROKEN");
   });
 });
 
@@ -352,6 +488,14 @@ describe("liveTextContext body field", () => {
     expect(aiLiveTextContextSchema.safeParse(live()).success).toBe(true);
     // Both directions, an offset, up to nine fractional digits.
     expect(schema.safeParse(body(live({ capturedAt: "2026-10-04T13:20:00.123456789+03:00" }, { direction: "model" }))).success).toBe(true);
+    // An instant is checked for its form and nothing more, like the client's
+    // IsoTimestampSchema: what that accepts, this accepts. A string of the
+    // right form that names no instant (a leap second, a thirteenth month, an
+    // offset of a whole day) costs its item in the merge, never the request.
+    for (const instant of ["2026-10-04T23:59:60Z", "2026-13-45T10:19:30Z", "2026-10-04T10:19:30+24:00", "2026-02-30T24:00:00Z"]) {
+      expect(schema.safeParse(body(live({ capturedAt: instant }))).success, `capturedAt ${instant}`).toBe(true);
+      expect(schema.safeParse(body(live({}, { occurredAt: instant }))).success, `occurredAt ${instant}`).toBe(true);
+    }
     // The limits the bootstrap announces are the schema's.
     expect([AI_LIVE_TEXT_MAX_ITEMS, AI_LIVE_TEXT_MAX_CHARS]).toEqual([60, 5000]);
     expect(CLIENT_BOOTSTRAP_LIMITS).toMatchObject({ freshTextMaxItems: 60, freshTextMaxChars: 5000 });
@@ -375,7 +519,10 @@ describe("liveTextContext body field", () => {
       ["a time without an offset", live({}, { occurredAt: "2026-10-04T10:19:30" })],
       ["a time without seconds", live({}, { occurredAt: "2026-10-04T10:19Z" })],
       ["ten fractional digits", live({}, { occurredAt: "2026-10-04T10:19:30.1234567890Z" })],
-      ["a time that is not one", live({}, { occurredAt: "2026-13-45T10:19:30Z" })],
+      ["a date without a time", live({}, { occurredAt: "2026-10-04" })],
+      ["a time with a space for the T", live({}, { occurredAt: "2026-10-04 10:19:30Z" })],
+      ["an offset without a colon", live({}, { occurredAt: "2026-10-04T10:19:30+0300" })],
+      ["a time with something after it", live({}, { occurredAt: "2026-10-04T10:19:30Z\n" })],
       ["no capturedAt", { items: live().items }],
       ["a capturedAt that is not a time", live({ capturedAt: "now" })],
       ["an extra key", live({ source: "page" })],

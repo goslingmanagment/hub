@@ -27,7 +27,7 @@
 // case; the live union hides a message on that mark alone, so a message the
 // archive still holds live reads `deleted` here once the overlay tombstones it.
 
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 
@@ -163,14 +163,16 @@ export async function explainAiKnownMessagesQuery(
 // chat-extension H-4c: where the hub's stores stand on message ids a client
 // sent WITH their text (`liveTextContext`, the fresh text of the open chat).
 // The AI feature lane asks it for the ids the served transcript does not hold,
-// before it lets a client's text into a prompt. Three questions per id:
+// before it lets a client's text into a prompt. Four questions per id:
 //
 //   - does the id belong to ANOTHER chat (`foreign`)? Then the snapshot is not
 //     of the chat the request names, and the request is refused;
 //   - was the message deleted (`deleted`)? A client's copy never brings a
 //     deleted message back;
 //   - who sent it (`isSentByMe`), where a store holds its content for this
-//     conversation? A client that names the other side is refused.
+//     conversation? A client that names the other side is refused;
+//   - when was it sent (`occurredAt`), by the same stores? A message the hub
+//     can place keeps the hub's time, whatever the client's clock says.
 //
 // The same stores and the same unique keys as the lookup above, for this page:
 // message_archive, dm_message_archive (through the page's OFAPI account) and,
@@ -183,18 +185,23 @@ export async function explainAiKnownMessagesQuery(
 //     described, the item is only left out of the prompt. A delete webhook
 //     names no chat, so this is the only way such a stub counts at all;
 //   - `foreign` reads the chat a row names instead of filtering by it;
-//   - with `otherPageIds` it also reads message_archive of OTHER pages, by the
-//     same unique key (one probe per page and id). The caller passes only pages
-//     the principal may read, so the refusal says nothing a second request of
-//     the same principal could not ask outright.
+//   - with `otherPageIds` it also reads both archives of OTHER pages, by the
+//     same unique keys (one probe per page, store and id; a page's
+//     dm_message_archive through its own OFAPI account, exactly as this
+//     page's). The caller passes only pages the principal may read, so the
+//     refusal says nothing a second request of the same principal could not
+//     ask outright. `deleted`, the sender and the time still come from this
+//     page's stores alone.
 //
 // "The same chat" across pages: a chat is a pair of platform accounts, and
 // both can be pages of this hub (two models writing to each other). The same
-// message is then archived twice, once under each page with the other one as
-// its conversation. Such a row is the chat itself seen from its other side,
-// not a foreign one. Known account ids are unique among a platform's pages
-// (pages_platform_external_id_uniq), so a second record of one account exists
-// only with an id unknown (`pages.external_page_id` is NULL). Where an unknown
+// message is then held twice, once under each page with the other one as its
+// conversation, in either archive. Such a row is the chat itself seen from its
+// other side, not a foreign one. Known account ids are unique among a
+// platform's pages (pages_platform_external_id_uniq), so a second record of
+// one account exists only with an id unknown (`pages.external_page_id` is
+// NULL; an OFAPI account belongs to one page, pages_ofapi_account_uniq, so the
+// webhook archive is never read twice through two records). Where an unknown
 // id leaves the answer open, the row decides nothing (SQL's three-valued `not`
 // drops it): a wrong refusal costs a generation, a missed one costs nothing
 // the caller could not have typed into the draft.
@@ -208,6 +215,10 @@ export interface AiLiveTextStoreState {
    *  conversation: true = the page, false = the fan, null = no store holds its
    *  content, or they disagree. */
   isSentByMe: boolean | null;
+  /** When the message was sent, by the same stores: message_archive first (the
+   *  time every reader orders by), dm_message_archive where the archive does
+   *  not hold the message yet. null = no store holds its content with a time. */
+  occurredAt: Date | null;
 }
 
 export interface AiLiveTextLookupInput {
@@ -216,10 +227,10 @@ export interface AiLiveTextLookupInput {
   platform: string;
   conversationRef: string;
   messageRefs: readonly string[];
-  /** Other pages whose archive is read for the same ids: `null` = every other
-   *  page of the platform (a caller who may read them all), a list = exactly
-   *  those. EMPTY = none: reading "no ids" as "no filter" is how a scope clamp
-   *  turns into an unfiltered read. */
+  /** Other pages whose archives are read for the same ids: `null` = every
+   *  other page of the platform (a caller who may read them all), a list =
+   *  exactly those. EMPTY = none: reading "no ids" as "no filter" is how a
+   *  scope clamp turns into an unfiltered read. */
   otherPageIds: readonly number[] | null;
 }
 
@@ -229,6 +240,16 @@ function buildLiveTextMessageQuery(input: AiLiveTextLookupInput) {
     ? null
     : input.otherPageIds.filter((id) => id !== input.pageId);
   const others = otherPageIds === null || otherPageIds.length > 0;
+  // The other pages this caller may read; the request's own page is never one.
+  const otherPages = sql`o.platform = ${input.platform}
+        and o.id <> ${input.pageId}
+        ${otherPageIds === null ? sql`` : sql`and o.id = any(${sql.param(otherPageIds)}::bigint[])`}`;
+  // The same chat seen from its other side (the header above). Three-valued:
+  // with an account unknown the row decides nothing.
+  const mirrored = (conversation: SQL) => sql`(
+          (o.external_page_id = ${input.conversationRef} and ${conversation} = page.external_page_id)
+          or (o.external_page_id = page.external_page_id and ${conversation} = ${input.conversationRef})
+        )`;
   return sql`
     with page as (
       select p.ofapi_account_id, p.external_page_id
@@ -241,6 +262,7 @@ function buildLiveTextMessageQuery(input: AiLiveTextLookupInput) {
     ),
     archive_rows as (
       select ma.message_ref, ma.conversation_ref, ma.is_sent_by_me, ma.deleted_at,
+             ma.occurred_at as event_time,
              ma.content_pending as is_stub
       from message_archive ma
       where ma.account_id = ${input.pageId}
@@ -252,6 +274,7 @@ function buildLiveTextMessageQuery(input: AiLiveTextLookupInput) {
              d.platform_conversation_id as conversation_ref,
              d.is_sent_by_me,
              d.deleted_at,
+             d.message_created_at as event_time,
              (d.message_created_at is null) as is_stub,
              (d.platform_account_id = ${input.pageId}) as on_page
       from dm_message_archive d
@@ -275,21 +298,28 @@ function buildLiveTextMessageQuery(input: AiLiveTextLookupInput) {
         on ma.account_id = o.id
        and ma.platform = ${input.platform}
        and ma.message_ref = any(${refs})
-      where o.platform = ${input.platform}
-        and o.id <> ${input.pageId}
-        ${otherPageIds === null ? sql`` : sql`and o.id = any(${sql.param(otherPageIds)}::bigint[])`}
+      where ${otherPages}
         and ma.conversation_ref is not null
-        and not (
-          (o.external_page_id = ${input.conversationRef} and ma.conversation_ref = page.external_page_id)
-          or (o.external_page_id = page.external_page_id and ma.conversation_ref = ${input.conversationRef})
-        )
+        and not ${mirrored(sql`ma.conversation_ref`)}
+      union all
+      select d.platform_message_id as message_ref
+      from pages o
+      cross join page
+      join dm_message_archive d
+        on d.platform = 'onlyfans'
+       and d.ofapi_account_id = o.ofapi_account_id
+       and d.platform_message_id = any(${refs})
+      where ${otherPages}
+        and d.platform_account_id = o.id
+        and d.platform_conversation_id is not null
+        and not ${mirrored(sql`d.platform_conversation_id`)}
     ),` : sql``}
     content as (
-      select a.message_ref, a.is_sent_by_me
+      select a.message_ref, a.is_sent_by_me, a.event_time, 0 as store_rank
       from archive_rows a
       where a.conversation_ref = ${input.conversationRef} and not a.is_stub
       union all
-      select d.message_ref, d.is_sent_by_me
+      select d.message_ref, d.is_sent_by_me, d.event_time, 1 as store_rank
       from dm_rows d
       where d.on_page and d.conversation_ref = ${input.conversationRef} and not d.is_stub
     )
@@ -313,17 +343,23 @@ function buildLiveTextMessageQuery(input: AiLiveTextLookupInput) {
            exists (select 1 from content c
                    where c.message_ref = w.message_ref and c.is_sent_by_me) as sent_by_page,
            exists (select 1 from content c
-                   where c.message_ref = w.message_ref and not c.is_sent_by_me) as sent_by_fan
+                   where c.message_ref = w.message_ref and not c.is_sent_by_me) as sent_by_fan,
+           (select c.event_time from content c
+            where c.message_ref = w.message_ref and c.event_time is not null
+            order by c.store_rank
+            limit 1) as occurred_at
     from wanted w
   `;
 }
 
-const AI_LIVE_TEXT_UNSEEN: AiLiveTextStoreState = { foreign: false, deleted: false, isSentByMe: null };
+const AI_LIVE_TEXT_UNSEEN: AiLiveTextStoreState = {
+  foreign: false, deleted: false, isSentByMe: null, occurredAt: null,
+};
 
 /**
  * The state of each named message id in the hub's stores, for one conversation
  * of one page. Every ref of the input has an entry; an id no store has seen
- * reads `{ foreign: false, deleted: false, isSentByMe: null }`.
+ * reads `{ foreign: false, deleted: false, isSentByMe: null, occurredAt: null }`.
  */
 export async function lookupAiLiveTextMessages(
   db: Database,
@@ -344,6 +380,7 @@ export async function lookupAiLiveTextMessages(
       foreign: row.foreign_chat === true,
       deleted: row.tombstoned === true,
       isSentByMe: byPage === byFan ? null : byPage,
+      occurredAt: row.occurred_at == null ? null : new Date(row.occurred_at as string | Date),
     });
   }
   for (const ref of input.messageRefs) {

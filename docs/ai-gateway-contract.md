@@ -189,10 +189,14 @@ Body field (optional, strict):
   `freshTextMaxChars`. `platformMessageId` is the platform's own numeric id (no leading zero, at
   most 30 digits); `direction` is `fan` or `model`; both instants are ISO 8601 with seconds and an
   explicit offset.
+- An instant is checked for its form and nothing more: the pattern is the client's own frozen one,
+  so the hub accepts exactly what the client's contract does. A string of that form that names no
+  instant (a leap second, a thirteenth month) is not a schema error, which would fail the whole
+  request: its item is rejected by the merge (`unusable`).
 - The client sends only messages the platform confirmed: never a queued (welcome, mass) or an
   unsent one, and no message that is media alone. No money, no media, no links as markup: text only.
-- `capturedAt` is when the client read the page. It is validated and otherwise unused: nothing is
-  decided by a client's clock, and it is not recorded.
+- `capturedAt` is when the client read the page. Its form is checked and it is otherwise unused:
+  nothing is decided by it, and it is not recorded.
 
 Refused before any context loads, after the page was admitted (a client bug, never retried):
 
@@ -221,7 +225,7 @@ generations. Two conditions, both read per generation:
 | `disabled` | It did, and the switch is off: nothing was read from it, nothing recorded. The generation is the one without the field, byte for byte. |
 | `shadow` | Merged and recorded in the context manifest; the hub's own transcript served. `accepted` is what `serve` would have added. A conflict is recorded and counted in `rejected`, never thrown: shadow changes no generation. |
 | `served` | The merged transcript served. `accepted` can be 0: the hub already held every message. |
-| `rejected` | `serve`, and nothing of the client's joined although something was refused (tombstoned, unusable, or unverifiable). The hub's transcript served. |
+| `rejected` | `serve`, and nothing of the client's joined although something was refused (tombstoned, unusable, unverifiable, or the merge failed). The hub's transcript served. |
 
 The merge, in `serve` and `shadow` alike:
 
@@ -233,14 +237,24 @@ The merge, in `serve` and `shadow` alike:
   names message ids only. "Another chat" is another conversation of the same page, or a chat of
   another page the caller may read (the wrong page for this chat). Two pages of this hub writing to
   each other archive the same message under both; that is the same chat from its other side, not a
-  conflict. A page the caller cannot read is not consulted.
+  conflict. A page the caller cannot read is not consulted. Another page is read in both of its
+  message stores (`message_archive` and `dm_message_archive`), so a snapshot of the wrong page is
+  refused even when it is made only of messages seconds old.
 - A tombstone is never restored: an id deleted in any store of the page is rejected.
 - A client item's text goes through `normalizeDmMessageText` and the transcript normalizer, exactly
   as an archive row does (tags and entities out). An item whose text is empty after that, whose id
-  the transcript cannot key, or that repeats an id of the same snapshot is rejected.
+  or time the transcript cannot key, whose text a normalizer fails on, or that repeats an id of the
+  same snapshot is rejected.
 - The result is sorted by time then id and capped to the request's window, like every transcript.
   Merging never shrinks it, so a gate that counts messages (Hi) can only tighten; the Ping segment
   and fan silence are computed over the merged window.
+- The time is the client's only for a message the hub cannot place itself. An id a store of the
+  page holds for this conversation outside the served transcript (older than the window, or only in
+  a store the serving reader did not read) keeps the hub's time, `message_archive.occurred_at` first.
+  A client's clock therefore never moves a message the hub can place: an old archived message sent
+  as if it were new stays before the window and is cut (`outsideWindow`), and a message only the
+  webhook store holds joins at the place the hub's own reader would give it. Such an item still
+  carries the client's text, and a generation that served it is scoped like any other.
 - `accepted` counts the client's items the served window holds. Items cut by the window are neither
   accepted nor rejected.
 
@@ -264,6 +278,19 @@ one statement of point lookups on the stores' unique keys, for the ids the trans
 hold. It fails closed: if it cannot be read, nothing the hub cannot vouch for joins the transcript
 (`unverified`), and the generation runs on the hub's own. Like the frame, fresh text costs database
 reads only: no platform request, no queued platform work, no change to a chat's unread state.
+
+The conflict in `serve` is the only way fresh text fails a request. Nothing else about it fails a
+generation:
+
+- a switch that cannot be read is a switch that is off (`disabled`);
+- a lookup that fails rejects every item the hub could not vouch for (`unverified`);
+- a text a normalizer throws on rejects that one item (`unusable`), and the rest of the snapshot
+  is still judged;
+- a merge that fails altogether rejects every item (`failed`) and the hub's own transcript serves.
+  It is logged with the error's name, never its message: the failing code was reading a client's
+  text.
+
+In `shadow` nothing at all changes the generation.
 
 ## Authorization
 

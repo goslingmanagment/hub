@@ -121,6 +121,41 @@ async function archive(row: {
   );
 }
 
+/** The OFAPI accounts of the pages, once `bindOfapiAccounts` ran. */
+const OFAPI_ACCOUNTS = { "lora-of": "acct_live", "lora-vip-of": "acct_vip", "mia-of": "acct_mia" } as const;
+
+/** Binds the pages to their OFAPI accounts: dm_message_archive is keyed by them. */
+async function bindOfapiAccounts() {
+  for (const [label, account] of Object.entries(OFAPI_ACCOUNTS)) {
+    await testDb!.pool.query("update pages set ofapi_account_id = $1 where id = $2", [account, pageIds[label]]);
+  }
+}
+
+/**
+ * One row of the webhook store (dm_message_archive), which holds a message
+ * seconds after the platform sent it, before the archive does. `fan: null` is
+ * a delete webhook: it names no chat, so its stub has neither a chat nor a time.
+ */
+async function webhook(row: {
+  ref: string; mine: boolean; text: string; minutesAgo: number;
+  page?: keyof typeof OFAPI_ACCOUNTS; fan?: string | null; deleted?: boolean;
+}) {
+  const page = row.page ?? "lora-of";
+  const fan = row.fan === undefined ? FAN : row.fan;
+  await testDb!.pool.query(
+    `insert into dm_message_archive (platform, platform_account_id, ofapi_account_id, platform_conversation_id,
+       fan_platform_user_id, platform_message_id, sender_role, is_sent_by_me, message_created_at, text_plain,
+       is_tip, tip_amount_mills, deleted_at, source, source_event_type, source_idempotency_key,
+       source_journal_id, source_received_at, retain_until)
+     values ('onlyfans', $1, $2, $3, $3, $4, $5, $6, $7, $8, false, 0, $9, 'webhook', $10, $11, 1, now(),
+       now() + interval '100 years')`,
+    [pageIds[page], OFAPI_ACCOUNTS[page], fan, row.ref, row.mine ? "model" : "fan", row.mine,
+      fan === null ? null : minutesAgo(row.minutesAgo), row.text, row.deleted ? new Date() : null,
+      row.deleted ? "messages.deleted" : row.mine ? "messages.sent" : "messages.received",
+      `live-${page}-${row.ref}`],
+  );
+}
+
 /** The fan's chat on lora-of as the hub's archive holds it. */
 async function seedChat() {
   await archive({ ref: "9001", mine: false, text: "hey babe", minutesAgo: 60 });
@@ -559,6 +594,16 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
     expect(liveManifest(await lastGeneration())).toMatchObject({
       conflicts: 1, conflictRefs: ["9003"], conflictReasons: { direction: 1 }, acceptedRefs: ["9004"],
     });
+
+    // Nor does a text: a numeric reference past Unicode's range used to throw in
+    // the text normalizer and answer 500. Whatever a client's text holds, a
+    // shadow generation is the hub's own.
+    for (const text of ["lol &#1114112; ok", "&#x110000;", `&#${"9".repeat(400)};`, "&#0; \u0000 \ud800"]) {
+      const hostile = await ask({ live: [fresh("9004", "fan", `${MARK} ${text}`, 1)] });
+      expect(hostile.status, `${JSON.stringify(text)}: ${hostile.response.body}`).toBe(200);
+      expect(hostile.prompt, JSON.stringify(text)).toBe(plain.prompt);
+      expect(hostile.context!.live, JSON.stringify(text)).toEqual({ status: "shadow", accepted: 1, rejected: 0 });
+    }
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
@@ -641,6 +686,12 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
     const html = await ask({ live: [fresh("9004", "fan", `<p>${MARK} look &amp; tell</p><p>ok?<br><a href="https://x.example/a">this</a></p>`, 1)] });
     expect(html.transcript).toContain(`${MARK} look &amp; tell\nok?\nthis`);
     expect(html.transcript).not.toMatch(/href|x\.example/);
+    // A numeric reference that names no character stays the text it was; the
+    // request it came in is served (it used to answer 500).
+    const reference = await ask({ live: [fresh("9004", "fan", `${MARK} lol &#1114112; ok`, 1)] });
+    expect(reference.status, reference.response.body).toBe(200);
+    expect(reference.context!.live).toEqual({ status: "served", accepted: 1, rejected: 0 });
+    expect(reference.transcript).toMatch(new RegExp(`${MARK} lol &(amp;)?#1114112; ok`));
 
     // A message the hub knows as deleted does not come back through a client.
     const tombstoned = await ask({ live: [fresh("9000", "fan", `${MARK} deleted long ago`, 70)] });
@@ -718,6 +769,125 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
     });
     expect(mirror.status, mirror.response.body).toBe(200);
     expect(mirror.context!.live).toEqual({ status: "served", accepted: 1, rejected: 0 });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("serve: a message the hub can place keeps the hub's time, whatever the client's clock says", async (context) => {
+    if (!server) return context.skip();
+    await seedChat();
+    await archive({ ref: "8000", mine: false, text: "HUB COPY of an old message", minutesAgo: 90 });
+    await archive({ ref: "9010", mine: true, text: "four", minutesAgo: 45 });
+    await archive({ ref: "9011", mine: false, text: "five", minutesAgo: 40 });
+    await switchFreshText("serve");
+    // A window of five: the archive's 8000 lies before it.
+    const window = { messageCount: 5 };
+    const plain = await ask({ body: window });
+    expect(plain.context).toMatchObject({ servedHead: { messageRef: "9011" }, window: { served: 5 } });
+    expect(plain.transcript).not.toContain("HUB COPY");
+
+    // The client sends the old message as if it had just arrived, with its own text for it.
+    const moved = await ask({ live: [fresh("8000", "fan", `${MARK} CLIENT COPY`, 0.2)], body: window });
+    expect(moved.status, moved.response.body).toBe(200);
+    // It stays where the hub holds it, before the window: the generation is the plain one.
+    expect(moved.prompt).toBe(plain.prompt);
+    expect(moved.context).toMatchObject({
+      servedHead: { messageRef: "9011" },
+      window: { served: 5 },
+      live: { status: "served", accepted: 0, rejected: 0 },
+    });
+    const row = await lastGeneration();
+    expect(row.params).not.toHaveProperty("contextScope");
+    expect(liveManifest(row)).toMatchObject({ accepted: 0, outsideWindow: 1, matched: 0, acceptedRefs: [], headRef: "8000" });
+
+    // A message so far only in the webhook store, which this reader does not
+    // read (the union is off): the client's copy joins, at the hub's time.
+    await bindOfapiAccounts();
+    await webhook({ ref: "9020", mine: false, text: "the webhook store's copy", minutesAgo: 30 });
+    const placed = await ask({
+      live: [fresh("9020", "fan", `${MARK} sent half an hour ago`, 0.1), fresh("9021", "fan", `${MARK} sent just now`, 1)],
+      body: window,
+    });
+    expect(placed.status, placed.response.body).toBe(200);
+    expect(placed.context).toMatchObject({
+      source: "archive",
+      // By the client's clock 9020 would be the head.
+      servedHead: { messageRef: "9021" },
+      live: { status: "served", accepted: 2, rejected: 0 },
+    });
+    const transcript = placed.transcript!;
+    expect(transcript.indexOf(`${MARK} sent half an hour ago`)).toBeGreaterThan(transcript.indexOf("five"));
+    expect(transcript.indexOf(`${MARK} sent just now`)).toBeGreaterThan(transcript.indexOf(`${MARK} sent half an hour ago`));
+    expect((await lastGeneration()).params.contextScope).toBe("principal-draft");
+    await trap!.assertNoOutbound();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("serve on top of the union transcript, the mode production runs in", async (context) => {
+    if (!server) return context.skip();
+    await seedChat();
+    await bindOfapiAccounts();
+    // The union reader serves the archive and the webhook store as one transcript.
+    app.config.aiTranscriptFreshUnionMode = "serve";
+    // Held by the webhook store alone; and a delete webhook for an archived message.
+    await webhook({ ref: "9004", mine: false, text: "the webhook store's copy", minutesAgo: 5 });
+    await webhook({ ref: "9001", mine: false, text: "", minutesAgo: 0, fan: null, deleted: true });
+    // The same fan's chat on the chatter's other page and on a page that is not
+    // theirs, seconds old: only the webhook store holds these.
+    await webhook({ ref: "7200", mine: false, text: "the other page's chat", minutesAgo: 2, page: "lora-vip-of" });
+    await webhook({ ref: "7300", mine: false, text: "not this chatter's page", minutesAgo: 2, page: "mia-of" });
+    await switchFreshText("serve");
+
+    const served = await ask({
+      live: [
+        fresh("9003", "fan", `${MARK} the client's copy of an archived message`, 50),
+        fresh("9004", "fan", `${MARK} the client's copy of a webhook message`, 5),
+        fresh("9001", "fan", `${MARK} the client's copy of a deleted message`, 60),
+        fresh("9006", "fan", `${MARK} nobody but the client has this yet`, 1),
+      ],
+      body: { knownFanMessageIds: ["9004", "9001", "9006"] },
+    });
+    expect(served.status, served.response.body).toBe(200);
+    expect(served.context).toMatchObject({
+      source: "union",
+      servedHead: { messageRef: "9006", isFromFan: true },
+      // 9002, 9003 and 9004 of the union (9001 is tombstoned) and the client's 9006.
+      window: { served: 4 },
+      live: { status: "served", accepted: 1, rejected: 1 },
+      knownFanMessages: [
+        { id: "9004", state: "included" }, { id: "9001", state: "deleted" }, { id: "9006", state: "included" },
+      ],
+    });
+    // The hub's rows stand, from either store; the tombstoned one is not restored.
+    expect(served.transcript).toContain("sent you something");
+    expect(served.transcript).toContain("the webhook store's copy");
+    expect(served.transcript).toContain(`${MARK} nobody but the client has this yet`);
+    expect(served.transcript).not.toContain("hey babe");
+    expect(served.transcript).not.toMatch(/the client's copy/);
+    const row = await lastGeneration();
+    expect(row.params.contextScope).toBe(AI_CONTEXT_SCOPE_PRINCIPAL_DRAFT);
+    expect(liveManifest(row)).toMatchObject({
+      mode: "serve", status: "served", sent: 4, matched: 2, accepted: 1, rejected: 1, conflicts: 0,
+      acceptedRefs: ["9006"], rejectedRefs: ["9001"], rejectedReasons: { deleted: 1 },
+    });
+    expect(row.params.contextManifest).toMatchObject({ mode: "serve", source: "union" });
+
+    const refuse = async (input: Parameters<typeof ask>[0], ids: string) => {
+      const callsBefore = provider.calls;
+      const asked = await ask(input);
+      expect(expectRefused(asked.response, 400, "context_conflict").message).toBe(
+        `liveTextContext conflicts with the hub's transcript of this conversation (message ids: ${ids})`,
+      );
+      expect(provider.calls).toBe(callsBefore);
+    };
+    // A sender swapped on a message only the webhook store holds.
+    await refuse({ live: [fresh("9004", "model", `${MARK} wrong side`, 5), fresh("9006", "fan", "x", 1)] }, "9004");
+    // A snapshot of the same fan's chat on the chatter's other page, made only of
+    // messages the archive does not hold yet: the wrong page for this chat.
+    await refuse({ live: [fresh("7200", "fan", `${MARK} the other page's chat`, 2)] }, "7200");
+    // A page the caller cannot read is not consulted; the owner reads every page.
+    const unseen = await ask({ live: [fresh("7300", "fan", `${MARK} elsewhere`, 2)] });
+    expect(unseen.status, unseen.response.body).toBe(200);
+    expect(unseen.context!.live).toEqual({ status: "served", accepted: 1, rejected: 0 });
+    await refuse({ token: ownerToken, live: [fresh("7300", "fan", `${MARK} elsewhere`, 2)] }, "7300");
+    await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("serve: the Hi gate and the Ping analysis read the merged transcript, so fresh text can only tighten", async (context) => {
