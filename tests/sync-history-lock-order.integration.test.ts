@@ -153,7 +153,7 @@ async function dbNow(): Promise<Date> {
 
 async function headWork(pageId: number, groupId: string): Promise<number> {
   const [row] = await upsertDemands(db(), [{
-    pageId, shadow: false, resource: "dm-messages.head", subject: groupId, kind: "trigger", class: "urgent",
+    pageId, resource: "dm-messages.head", subject: groupId, kind: "trigger", class: "urgent",
   }]);
   return row!.id;
 }
@@ -174,7 +174,7 @@ describe("history requests vs the actor: lock order", () => {
     const threadB = await seedThread(pageId, GROUP_B);
     const ctx: HistoryServiceContext = { db: db(), rawConfig: testConfig(testDb.connectionString) };
     const registry = createEngineRegistry(FANSLY_RESOURCE_SPECS);
-    const { deps } = await makeTestActor({ db: db(), pageId, mode: "live", registry });
+    const { deps } = await makeTestActor({ db: db(), pageId, registry });
     const commit: CommitDeps = deps;
     const module = await registry.module("dm-messages.history");
     const grant = { settingMs: 2_000, jitterU: 0.1, pauseMs: 2_200, earliestMono: 0 };
@@ -193,7 +193,7 @@ describe("history requests vs the actor: lock order", () => {
     /** One admission (tx 1) of the next requests turn, then its apply-like
      *  tx 3: page FOR SHARE → the work row → the history hook. */
     const admitAndApply = async (): Promise<string> => {
-      const picked = await pickRequests(db(), { pageId, shadow: false });
+      const picked = await pickRequests(db(), { pageId });
       if (picked === null) return "idle";
       const groupId = picked.work.subject;
       const admitted = await admit(commit, {
@@ -287,7 +287,7 @@ describe("history requests vs the actor: lock order", () => {
     const pageId = await seedLivePage();
     const threadId = await seedThread(pageId, GROUP_A);
     const ctx: HistoryServiceContext = { db: db(), rawConfig: testConfig(testDb.connectionString) };
-    const { generation } = await makeTestActor({ db: db(), pageId, mode: "live", registry: createEngineRegistry(FANSLY_RESOURCE_SPECS) });
+    const { generation } = await makeTestActor({ db: db(), pageId, registry: createEngineRegistry(FANSLY_RESOURCE_SPECS) });
     const headWorkId = await headWork(pageId, GROUP_A);
     // No socket: the fan has no anchor at intake; the next accepted head
     // anchors it, and 11 messages below it satisfy `latest 5`.
@@ -325,7 +325,7 @@ describe("history requests vs the actor: lock order", () => {
     const pageId = await seedLivePage();
     const threadId = await seedThread(pageId, GROUP_A);
     const ctx: HistoryServiceContext = { db: db(), rawConfig: testConfig(testDb.connectionString) };
-    const { generation } = await makeTestActor({ db: db(), pageId, mode: "live", registry: createEngineRegistry(FANSLY_RESOURCE_SPECS) });
+    const { generation } = await makeTestActor({ db: db(), pageId, registry: createEngineRegistry(FANSLY_RESOURCE_SPECS) });
     const headWorkId = await headWork(pageId, GROUP_A);
     const first = await fileLatest(ctx, pageId, [GROUP_A], 5);
     const { rows: [item] } = await testDb.pool.query<{ work_id: string }>("select work_id::text from history_request_items");
@@ -373,7 +373,7 @@ describe("history requests vs the actor: lock order", () => {
     const pageId = await seedLivePage();
     const threads = new Map([[GROUP_A, await seedThread(pageId, GROUP_A)], [GROUP_B, await seedThread(pageId, GROUP_B)]]);
     const ctx: HistoryServiceContext = { db: db(), rawConfig: testConfig(testDb.connectionString) };
-    const { generation } = await makeTestActor({ db: db(), pageId, mode: "live", registry: createEngineRegistry(FANSLY_RESOURCE_SPECS) });
+    const { generation } = await makeTestActor({ db: db(), pageId, registry: createEngineRegistry(FANSLY_RESOURCE_SPECS) });
     const headWorks = new Map([[GROUP_A, await headWork(pageId, GROUP_A)], [GROUP_B, await headWork(pageId, GROUP_B)]]);
 
     // Each round: a head read on one chat (it anchors and satisfies the fans

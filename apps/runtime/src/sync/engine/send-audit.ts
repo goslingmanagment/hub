@@ -11,10 +11,10 @@ import {
 } from "../fansly/routes.ts";
 
 // The send audit of a page (invariants I1 and I19; arena 3b-review G1): the
-// one checker of the alert evaluator (alert 1's permanent pace latch), `sync
-// check live-hour` and the shadow report (A4 and the route budgets). It judges
-// the sends the journals recorded against what each admission recorded it
-// applied — never against a copy of the policy that chose it:
+// one checker of the alert evaluator (alert 1's permanent pace latch) and
+// `sync check live-hour`. It judges the sends the journals recorded against
+// what each admission recorded it applied — never against a copy of the
+// policy that chose it:
 //
 //   I1   every pair of adjacent actual sends of the page, of either journal:
 //        gap ≥ the later send's own pause, S × (1 + u) (`pause_ms`). Two
@@ -46,8 +46,7 @@ import {
 // legacy row without its pause), one whose later send was never recorded and
 // is not proven by its admission, one whose two clocks disagree, a route
 // audit that read a send this build places on no route. A pair whose later
-// send is the legacy engine's is its own policy's, not judged by I19. Window
-// counts (⌈W/T⌉ + 1) are the shadow report's diagnostics only.
+// send is the legacy engine's is its own policy's, not judged by I19.
 
 /** The slack of a comparison of two recorded wall-clock instants (`sent_at`,
  *  written by the sending process; an admission or an unknown send's bound by
@@ -219,13 +218,12 @@ export interface PaceAudit {
  * previous actual send — the recorded one, or a later one never recorded,
  * which only makes it shorter). A send never recorded that may have gone out
  * stands at its upper bound, as the takeover floor counts it (`paceFloorFromDb`),
- * and is judged at its admission. The shadow journal's sends are simulated:
- * an attempt without an instant simulated none and is no send.
+ * and is judged at its admission.
  */
 export function auditPagePace(rows: readonly FanslySendAuditRow[], window: SendAuditWindow): PaceAudit {
   const sends: Placed[] = rows
     .flatMap((row) => {
-      const at = row.sentAt ?? (row.shadow ? null : row.countedAt);
+      const at = row.sentAt ?? row.countedAt;
       return at === null ? [] : [placed(row, at)];
     })
     .sort((a, b) => a.ms - b.ms || byJournalAndRef(a, b));

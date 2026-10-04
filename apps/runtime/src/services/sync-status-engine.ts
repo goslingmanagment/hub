@@ -95,7 +95,6 @@ export async function readEngineStatusFacts(
   for (const page of pages) {
     const pageRows = await getWorkForStatus(db, {
       pageId: page.pageId,
-      shadow: false,
       subject: "",
       states: ["open", "running", "quarantined"],
       limit: 200,

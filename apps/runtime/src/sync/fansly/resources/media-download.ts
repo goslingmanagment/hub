@@ -13,7 +13,6 @@ import type {
   OutcomeStep,
   RequestPlan,
   ResourceModule,
-  ShadowResult,
   StepPlan,
   WorkOutcome,
 } from "../../engine/resource.ts";
@@ -117,9 +116,7 @@ export function mediaDownloadOutcome(decision: OutcomeDecision, step: OutcomeSte
 
 export function createMediaDownloadModule(policy: MediaDownloadPolicy = FANSLY_CDN_POLICY): ResourceModule {
   return {
-    async plan(work, ctx): Promise<StepPlan> {
-      // Live only: a shadow page never downloads (I14).
-      if (ctx.shadow) return { kind: "done", reason: "shadow" };
+    async plan(work): Promise<StepPlan> {
       if (descriptionIdOfSubject(work.subject) === null) {
         return { kind: "done", reason: "bad_subject", result: { failure: "bad_subject", httpStatus: null } satisfies MediaDownloadResultJson };
       }
@@ -188,11 +185,6 @@ export function createMediaDownloadModule(policy: MediaDownloadPolicy = FANSLY_C
     },
 
     outcome: mediaDownloadOutcome,
-
-    async shadow(): Promise<ShadowResult> {
-      // Live only (the registry's `liveOnly`): a shadow page never runs it.
-      return { work: { satisfiesRevision: true, close: "done", closeReason: "shadow" }, followups: [] };
-    },
   };
 }
 

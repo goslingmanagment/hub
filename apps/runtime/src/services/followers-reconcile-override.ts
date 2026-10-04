@@ -154,7 +154,7 @@ const ENGINE_RECONCILE_KEY = "followers.reconcile";
 type EngineBlockedReconcile = BlockedReconcileState & { workId: number; cursor: unknown };
 
 async function readEngineBlockedReconcile(db: Database, pageId: number): Promise<EngineBlockedReconcile> {
-  const work = await getOpenWorkForKey(db, { pageId, shadow: false, resource: ENGINE_RECONCILE_KEY, subject: "" });
+  const work = await getOpenWorkForKey(db, { pageId, resource: ENGINE_RECONCILE_KEY, subject: "" });
   const quarantine = work === null ? null : syncWorkQuarantineOf(work.result);
   if (work === null || work.state !== "quarantined" || quarantine?.detail.refusal !== FOLLOWERS_RECONCILE_BLAST_RADIUS_BLOCKER) {
     throw new ConflictError("Follower reconcile is not blocked by the blast-radius guard");

@@ -4,7 +4,6 @@ import { createDefaultFanslySendOsProbe } from "../../apps/runtime/src/services/
 import { createSyncContext } from "../../apps/runtime/src/sync/context.ts";
 import { SyncEngineHost } from "../../apps/runtime/src/sync/engine/host.ts";
 import { createPacer } from "../../apps/runtime/src/sync/engine/pacer.ts";
-import { fixedShadowLatency } from "../../apps/runtime/src/sync/engine/shadow.ts";
 import { SyncStallWatchdog } from "../../apps/runtime/src/sync/engine/watchdog.ts";
 import { FANSLY_WS_SOURCE_TIMING } from "../../apps/runtime/src/sync/fansly/ws/source.ts";
 import {
@@ -15,13 +14,14 @@ import {
 import { harnessConfig, harnessHostOptions, harnessRng } from "./sync-engine.ts";
 import { wsHostOptions } from "./sync-ws.ts";
 import {
-  childShadowRegistry,
+  childPollRegistry,
   containerRunProbe,
   CRASH_READ_KEY,
   crashRegistry,
   makeTestActor,
   quietLogger,
   recordingTransport,
+  ScriptedLiveTransport,
   testConfig,
 } from "./sync-engine-host.ts";
 
@@ -29,9 +29,11 @@ import {
 // kill -9, SIGSTOP/SIGCONT, two processes on one page). Run as
 //   node --import tsx/esm tests/helpers/sync-engine-child.ts <mode>
 // with DATABASE_URL set. Modes:
-//   host        a SyncEngineHost over a test-only shadow registry; SIGTERM
-//               stops it gracefully (exit 0). SYNC_TEST_HOSTNAME overrides the
-//               OS probe's hostname (two "containers" on one machine).
+//   host        a SyncEngineHost over a test-only registry (one poll) and a
+//               scripted transport that opens no socket (50 ms an answer);
+//               SIGTERM stops it gracefully (exit 0). SYNC_TEST_HOSTNAME
+//               overrides the OS probe's hostname (two "containers" on one
+//               machine).
 //   live-crash  one live actor on PAGE_ID that SIGKILLs itself at FAULT_POINT.
 //   harness-live a live SyncEngineHost over the physical-request harness
 //               (tests/helpers/sync-engine.ts): the harness registry and
@@ -66,12 +68,17 @@ async function runHost(): Promise<void> {
     config: testConfig(connectionString),
     rawConfig: testConfig(connectionString),
     logger: quietLogger,
-    registry: childShadowRegistry(),
+    registry: childPollRegistry(),
     probe,
     pause: { readSettingMs: async () => settingMs },
     pacerFactory: (deps) => createPacer({ ...deps, minSettingMs: 1 }),
     routeTimeScale: 0,
-    shadowLatency: () => fixedShadowLatency(50),
+    liveTransportFactory: async () => {
+      const transport = new ScriptedLiveTransport();
+      transport.latencyMs = 50;
+      return transport;
+    },
+    liveSocket: () => null,
     modeLoopIntervalMs: 250,
   });
   await host.start();
@@ -89,11 +96,10 @@ async function runLiveCrash(): Promise<void> {
   const db = createDb(pool) as unknown as Database;
   const pageId = Number(process.env.PAGE_ID);
   const faultPoint = process.env.FAULT_POINT;
-  await upsertDemand(db, { pageId, shadow: false, resource: CRASH_READ_KEY, kind: "trigger", class: "urgent" });
+  await upsertDemand(db, { pageId, resource: CRASH_READ_KEY, kind: "trigger", class: "urgent" });
   const { actor, stop, abort } = await makeTestActor({
     db,
     pageId,
-    mode: "live",
     registry: crashRegistry(),
     transport: recordingTransport(db),
     faults: (point) => {
@@ -162,7 +168,7 @@ async function runStallLive(): Promise<void> {
     report: createStallIncidentReport({ connectionString, logger: quietLogger }),
   });
   watchdog.start();
-  await upsertDemand(db, { pageId, shadow: false, resource: CRASH_READ_KEY, kind: "trigger", class: "urgent" });
+  await upsertDemand(db, { pageId, resource: CRASH_READ_KEY, kind: "trigger", class: "urgent" });
   const host = new SyncEngineHost({
     db,
     connectionString,

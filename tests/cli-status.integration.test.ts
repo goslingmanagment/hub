@@ -524,6 +524,11 @@ describe("CLI status flows", () => {
     expect(fullOutput).toMatch(/^mila\s+light\s/m);
     expect(fullOutput).toContain("Retrying=1");
     expect(fullOutput).toContain("stalled");
+    // The seeded legacy transactions checkpoint stays as a record: step 4
+    // (S4-16) deleted the legacy transactions lane with the reader of its
+    // backfill state, so the monitor renders no progress from it.
+    expect(fullOutput).toMatch(/^lora\s+transactions\s+retrying\s+-\s/m);
+    expect(fullOutput).not.toContain("items backfilled");
     // Neither Fansly page has a row, the one holding parked legacy rows included.
     expect(fullOutput).not.toMatch(/^(lana|nova)\s/m);
 

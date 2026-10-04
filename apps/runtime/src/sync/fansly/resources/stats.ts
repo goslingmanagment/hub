@@ -1,5 +1,3 @@
-import { sql } from "drizzle-orm";
-
 import type { CaptureCoverageProof, CaptureCoverageStatus, Database, SyncPageRow } from "@agency_hub_core/db";
 import type { FanslyWireId } from "@agency_hub_core/fansly";
 import { CAPTURE_COVERAGE_PLANES } from "@agency_hub_core/shared";
@@ -39,7 +37,6 @@ import {
   narrowedSpanDays,
   parseDailyBackfill,
   parseEarningsBackfill,
-  parseFanslyStatsCursorState,
   servedWindow,
   trustedAccountCreatedAt,
   windowWasHonoured,
@@ -54,11 +51,8 @@ import {
   type ApplyResult,
   type RequestPlan,
   type ResourceModule,
-  type ShadowResult,
   type StepPlan,
 } from "../../engine/resource.ts";
-import { replayByCanonicalDrafts } from "../lib/family-replay.ts";
-import { advanceShadowWalk, type ShadowWalkProgress } from "../lib/offset-walk.ts";
 import { readFanslyPageFacts } from "../lib/page-facts.ts";
 import { fanslyResourceSpec } from "../registry.ts";
 
@@ -144,13 +138,6 @@ async function writeClaims(tx: Database, pageId: number, claims: readonly Covera
   }
 }
 
-async function legacyStatsState(db: Database, pageId: number) {
-  const result = await db.execute<{ state: unknown }>(sql`
-    select state from page_sync_cursors where page_id = ${pageId} and stream = 'stats_snapshot'
-  `);
-  return parseFanslyStatsCursorState(result.rows[0]?.state ?? null);
-}
-
 // ── daily ────────────────────────────────────────────────────────────────────
 
 interface BroadcastState {
@@ -166,8 +153,6 @@ export interface StatsDailyCursor {
   earningsWalk: EarningsWindowWalk | null;
   discoveryPage: number;
   broadcasts: { live: BroadcastState; deleted: BroadcastState };
-  /** Shadow: the broadcast walks were seeded from the legacy cursor. */
-  seeded: boolean;
   last: Record<string, unknown> | null;
 }
 
@@ -204,7 +189,6 @@ export function parseStatsDailyCursor(value: unknown): StatsDailyCursor {
     earningsWalk: parseEarningsWindow(record.earningsWalk),
     discoveryPage: Math.max(0, int(record.discoveryPage) ?? 0),
     broadcasts: { live: parseBroadcast(broadcasts.live), deleted: parseBroadcast(broadcasts.deleted) },
-    seeded: record.seeded === true,
     last: typeof record.last === "object" && record.last !== null ? record.last as Record<string, unknown> : null,
   };
 }
@@ -212,22 +196,6 @@ export function parseStatsDailyCursor(value: unknown): StatsDailyCursor {
 function nextDailyStep(index: number): number | null {
   if (index === 0) return 2;
   return index >= LAST_SWEEP_STEP ? null : index + 1;
-}
-
-/** Shadow's broadcast walks start where the legacy lane's are (shadow never
- *  sees a floor of its own). */
-async function seededDailyCursor(db: Database, pageId: number, cursor: StatsDailyCursor): Promise<StatsDailyCursor> {
-  if (cursor.seeded) return cursor;
-  const legacy = await legacyStatsState(db, pageId);
-  if (legacy === null) return { ...cursor, seeded: true };
-  return {
-    ...cursor,
-    seeded: true,
-    broadcasts: {
-      live: { before: legacy.broadcastBefore, floorReached: legacy.broadcastFloorReached, pagesInSweep: 0, stop: legacy.broadcastWalkStop },
-      deleted: { before: legacy.deletedBroadcastBefore, floorReached: legacy.deletedBroadcastFloorReached, pagesInSweep: 0, stop: legacy.deletedBroadcastWalkStop },
-    },
-  };
 }
 
 function dailyRequest(cursor: StatsDailyCursor, now: Date): RequestPlan {
@@ -288,40 +256,9 @@ function foldBroadcast(walk: BroadcastState, response: unknown, counters: Record
   return { walk: { ...next.walk, stop: next.stop ?? walk.stop }, stepDone: next.stepDone };
 }
 
-/** A shadow sweep's steps at most (a guard on the estimate's loop). */
-const DAILY_SWEEP_STEPS_MAX = 100;
-
-/**
- * One shadow step of the daily sweep at `index` (no answers): the discovery
- * read counts its sweep's pages, the earnings window one read, a broadcast
- * list not at its floor a sweep's three pages. Pure: `shadow()` and the
- * report's assumed run size (rule A1.rate-assumed) step the same way.
- */
-function shadowDailyStep(input: StatsDailyCursor, index: number, now: Date): { cursor: StatsDailyCursor; sweepDone: boolean } {
-  let cursor = input;
-  if (index === 5 && cursor.discoveryPage + 1 < DISCOVERY_PAGES_PER_SWEEP) {
-    return { cursor: { ...cursor, discoveryPage: cursor.discoveryPage + 1 }, sweepDone: false };
-  }
-  if (index === 5) cursor = { ...cursor, discoveryPage: 0 };
-  if (index === 6 || index === 7) {
-    const live = index === 6;
-    const walk = live ? cursor.broadcasts.live : cursor.broadcasts.deleted;
-    if (!walk.floorReached) {
-      const pagesInSweep = walk.pagesInSweep + 1;
-      const done = pagesInSweep >= 3;
-      const nextWalk = { ...walk, pagesInSweep: done ? 0 : pagesInSweep };
-      cursor = { ...cursor, broadcasts: live ? { ...cursor.broadcasts, live: nextWalk } : { ...cursor.broadcasts, deleted: nextWalk } };
-      if (!done) return { cursor, sweepDone: false };
-    }
-  }
-  return advanceDaily({ ...cursor, stepIndex: index }, now);
-}
-
 const dailyModule: ResourceModule = {
   async plan(work, ctx): Promise<StepPlan> {
-    let cursor = parseStatsDailyCursor(work.cursor);
-    if (ctx.shadow) cursor = await seededDailyCursor(ctx.db, ctx.pageId, cursor);
-    return { kind: "request", request: dailyRequest(cursor, ctx.now) };
+    return { kind: "request", request: dailyRequest(parseStatsDailyCursor(work.cursor), ctx.now) };
   },
 
   async apply(tx, input: ApplyInput): Promise<ApplyResult> {
@@ -409,36 +346,6 @@ const dailyModule: ResourceModule = {
     const next = advanceDaily(cursor, now);
     return dailyOutcome(next.cursor, now, next.sweepDone, counters);
   },
-
-  async shadow(work, request, ctx): Promise<ShadowResult> {
-    const cursor = await seededDailyCursor(ctx.db, ctx.pageId, parseStatsDailyCursor(work.cursor));
-    const next = shadowDailyStep(cursor, dailyStepOf(request)?.index ?? cursor.stepIndex, ctx.now);
-    return next.sweepDone
-      ? { work: { satisfiesRevision: true, close: "done", closeReason: "shadow", cursor: next.cursor }, followups: [] }
-      : { work: { satisfiesRevision: false, nextDueAt: ctx.now, cursor: next.cursor }, followups: [] };
-  },
-
-  async estimateRunSteps(work, ctx): Promise<number> {
-    // A whole sweep from its head, the broadcast walks where the row (or the
-    // legacy lane it is seeded from) holds them, stepped as `shadow()` steps.
-    const seeded = await seededDailyCursor(ctx.db, ctx.pageId, parseStatsDailyCursor(work.cursor));
-    const reset = (walk: BroadcastState): BroadcastState => ({ ...walk, pagesInSweep: 0 });
-    let cursor: StatsDailyCursor = {
-      ...seeded,
-      stepIndex: 0,
-      earningsWalk: null,
-      discoveryPage: 0,
-      broadcasts: { live: reset(seeded.broadcasts.live), deleted: reset(seeded.broadcasts.deleted) },
-    };
-    for (let steps = 1; steps <= DAILY_SWEEP_STEPS_MAX; steps += 1) {
-      const next = shadowDailyStep(cursor, cursor.stepIndex, ctx.now);
-      if (next.sweepDone) return steps;
-      cursor = next.cursor;
-    }
-    return DAILY_SWEEP_STEPS_MAX;
-  },
-
-  replay: replayByCanonicalDrafts,
 };
 
 // ── hourly ───────────────────────────────────────────────────────────────────
@@ -548,13 +455,6 @@ const hourlyModule: ResourceModule = {
       counters,
     };
   },
-
-  async shadow(_work, _request, ctx): Promise<ShadowResult> {
-    return {
-      work: { satisfiesRevision: true, close: "done", closeReason: "shadow", nextDueAt: nextHourlyCaptureAt(ctx.now, Math.random(), ctx.page) },
-      followups: [],
-    };
-  },
 };
 
 // ── backfill ─────────────────────────────────────────────────────────────────
@@ -567,7 +467,6 @@ export interface StatsBackfillState {
 
 interface StatsBackfillCursor {
   state: StatsBackfillState | null;
-  shadow: ShadowWalkProgress | null;
 }
 
 type BackfillLane = { lane: "daily_trailing" } | { lane: "daily_month"; monthIndex: number } | { lane: "earnings" };
@@ -595,14 +494,7 @@ function parseBackfillState(value: unknown, now: Date): StatsBackfillState | nul
 }
 
 function parseBackfillCursor(value: unknown, now: Date): StatsBackfillCursor {
-  const record = recordOf(value);
-  const shadow = recordOf(record.shadow);
-  const steps = int(shadow.steps);
-  const done = int(shadow.done);
-  return {
-    state: parseBackfillState(record.state, now),
-    shadow: steps === null || done === null ? null : { steps, done },
-  };
+  return { state: parseBackfillState(recordOf(value).state, now) };
 }
 
 function cloneState(state: StatsBackfillState): StatsBackfillState {
@@ -1036,7 +928,7 @@ const backfillModule: ResourceModule = {
     const created = await accountCreatedAtOf(ctx.db, ctx.pageId, ctx.now);
     const advanced = advanceStatsBackfill({ state: cursor.state ?? freshBackfill(ctx.now), now: ctx.now, accountCreatedAt: created });
     if (advanced.next === null) {
-      return { kind: "done", reason: "backfill_complete", cursor: { state: advanced.state, shadow: null } };
+      return { kind: "done", reason: "backfill_complete", cursor: { state: advanced.state } satisfies StatsBackfillCursor };
     }
     const step: BackfillStep = { state: advanced.state, lane: advanced.next.lane, claims: advanced.claims };
     return { kind: "request", request: { ...advanced.next.request, step } };
@@ -1061,27 +953,12 @@ const backfillModule: ResourceModule = {
     const advanced = advanceStatsBackfill({ state: folded.state, now, accountCreatedAt: created });
     await writeClaims(tx, input.pageId, [...step.claims, ...folded.claims, ...advanced.claims]);
     const counters = { ...folded.counters, ...advanced.counters };
-    const cursor: StatsBackfillCursor = { state: advanced.state, shadow: null };
+    const cursor: StatsBackfillCursor = { state: advanced.state };
     if (advanced.next === null || backfillDone(advanced.state)) {
       return { work: { satisfiesRevision: true, close: "done", closeReason: "backfill_complete", cursor }, followups: [], counters };
     }
     return { work: { satisfiesRevision: false, nextDueAt: now, cursor }, followups: [], counters };
   },
-
-  async shadow(work, _request, ctx): Promise<ShadowResult> {
-    const cursor = parseBackfillCursor(work.cursor, ctx.now);
-    const created = await accountCreatedAtOf(ctx.db, ctx.pageId, ctx.now);
-    // The trailing window, the months to the creation (two years when it is
-    // unknown) and the earnings windows to the same floor.
-    const spanMs = (created === null ? 2 * 365 * DAY_MS : Math.max(0, ctx.now.getTime() - created.getTime()));
-    const estimate = () => 1 + Math.ceil(spanMs / (30 * DAY_MS)) + Math.ceil(spanMs / (31 * DAY_MS));
-    const step = advanceShadowWalk(cursor.shadow, estimate);
-    return step.finished
-      ? { work: { satisfiesRevision: true, close: "done", closeReason: "shadow", cursor: { ...cursor, shadow: null } }, followups: [] }
-      : { work: { satisfiesRevision: false, nextDueAt: ctx.now, cursor: { ...cursor, shadow: step.progress } }, followups: [] };
-  },
-
-  replay: replayByCanonicalDrafts,
 };
 
 export type StatsVariant = "daily" | "hourly" | "backfill";

@@ -164,7 +164,7 @@ export function registerSyncEngineCommands(sync: Command, deps: SyncCliDeps = de
 
   page
     .command("mode")
-    .description("move a page between off and shadow (no lever reaches handover or live: a page is born live at onboarding)")
+    .description("take a page left in shadow to off (no lever reaches shadow, handover or live: a page is born live at onboarding)")
     .requiredOption("--page <label>", "the Fansly page")
     .requiredOption("--to <mode>", `one of ${OWNER_PAGE_MODES.join(", ")}`)
     .option("--note <text>", "why (stored with the change)")
@@ -288,7 +288,7 @@ export function registerSyncEngineCommands(sync: Command, deps: SyncCliDeps = de
 
   sync
     .command("probe")
-    .description("one admitted read of a wire route for a page, journaled under its kind (shadow: simulated)")
+    .description("one admitted read of a wire route for a page, journaled under its kind")
     .requiredOption("--page <label>", "the Fansly page")
     .requiredOption("--operation <wire id>", "a wire route, e.g. account.me or media.offer_stats")
     .option("--params <json>", "the route's parameters as a JSON object", parseJsonObject, {})
@@ -301,7 +301,7 @@ export function registerSyncEngineCommands(sync: Command, deps: SyncCliDeps = de
           requestedBy: cliActor(),
         });
         deps.print(`${options.page}: probe ${options.operation} queued as work ${queued.workId}`
-          + `${queued.shadow ? " (shadow: simulated, nothing is sent)" : ""}; result: sync why --page ${options.page} --resource probe.manual --subject ''`);
+          + `; result: sync why --page ${options.page} --resource probe.manual --subject ''`);
       });
     });
 

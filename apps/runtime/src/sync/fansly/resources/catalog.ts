@@ -1,7 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
 
-import { sql } from "drizzle-orm";
-
 import {
   insertObservation,
   latestClosedWorkForKey,
@@ -24,7 +22,6 @@ import {
   emptyAlbumWalk,
   nextVaultCursor,
   parseAlbumWalk,
-  parseFanslyCatalogCursorState,
   VAULT_ALBUM_MAX_PAGES,
   vaultMediaRows,
   type VaultAlbumWalkState,
@@ -40,11 +37,8 @@ import {
   type DemandSignal,
   type RequestPlan,
   type ResourceModule,
-  type ShadowResult,
   type StepPlan,
 } from "../../engine/resource.ts";
-import { replayByCanonicalDrafts } from "../lib/family-replay.ts";
-import { advanceShadowWalk, type ShadowWalkProgress } from "../lib/offset-walk.ts";
 import { readFanslyPageFacts } from "../lib/page-facts.ts";
 import { projectionBehind } from "../lib/projection-lag.ts";
 import { standingRecheckAt } from "../lib/subject-queue.ts";
@@ -94,9 +88,6 @@ export function vaultCadence(page: Parameters<typeof effectiveCadence>[1]): Requ
   if (cadence === null || cadence.fullEveryMs === undefined) throw new Error(`${VAULT_KEY} needs a cadence with a full sweep`);
   return { everyMs: cadence.everyMs, fullEveryMs: cadence.fullEveryMs };
 }
-/** Rows `/media/vaultnew` serves a page (production 2026-10: 50). Shadow only:
- *  an album's walk length is estimated from its item count. */
-export const VAULT_PAGE_ESTIMATE = 50;
 /** A ref a batch did not return is not asked again for this long. */
 const UNSERVED_MEMORY_MS = DAY_MS;
 /** The album events whose projection the walk's list depends on. */
@@ -195,18 +186,7 @@ function stepFixed(index: number, now: Date): { cursor: FixedCursor; finished: b
     : { cursor: { index: next, last: null }, finished: false };
 }
 
-/** The reads of one fixed sweep: every listing, the user-vault one only with
- *  the page's own account id (the plan's rule; the shadow report's assumed
- *  run size, rule A1.rate-assumed). */
-function fixedSweepSteps(externalId: string | null): number {
-  return CATALOG_FIXED_STEPS.length - (externalId === null ? 1 : 0);
-}
-
 const fixedModule: ResourceModule = {
-  async estimateRunSteps(_work, ctx): Promise<number> {
-    return fixedSweepSteps((await readFanslyPageFacts(ctx.db, ctx.pageId))?.externalId ?? null);
-  },
-
   async plan(work, ctx): Promise<StepPlan> {
     const cursor = parseFixedCursor(work.cursor);
     const facts = await readFanslyPageFacts(ctx.db, ctx.pageId);
@@ -248,24 +228,7 @@ const fixedModule: ResourceModule = {
       ? { work: { satisfiesRevision: true, close: "done", closeReason: "fixed_steps_read", cursor: next.cursor, result: next.cursor.last }, followups: AFTER_FIXED, counters: { catalog_fixed_sweeps: 1 } }
       : { work: { satisfiesRevision: false, nextDueAt: input.now, cursor: next.cursor }, followups: [] };
   },
-
-  async shadow(work, request, ctx): Promise<ShadowResult> {
-    const step = fixedStepOf(request) ?? { index: parseFixedCursor(work.cursor).index, skippedUservault: false };
-    const next = stepFixed(step.index, ctx.now);
-    return next.finished
-      ? { work: { satisfiesRevision: true, close: "done", closeReason: "shadow", cursor: next.cursor }, followups: AFTER_FIXED }
-      : { work: { satisfiesRevision: false, nextDueAt: ctx.now, cursor: next.cursor }, followups: [] };
-  },
-
-  replay: replayByCanonicalDrafts,
 };
-
-async function legacyCatalogState(db: Database, pageId: number): Promise<unknown> {
-  const result = await db.execute<{ state: unknown }>(sql`
-    select state from page_sync_cursors where page_id = ${pageId} and stream = 'catalog'
-  `);
-  return result.rows[0]?.state;
-}
 
 // ── vault ────────────────────────────────────────────────────────────────────
 
@@ -280,8 +243,6 @@ interface VaultCursor {
   vaultWalk: Record<string, VaultAlbumWalkState>;
   /** The album the rotation last served. */
   afterAlbumRef: string | null;
-  /** Shadow: the walk state was seeded from the legacy cursor. */
-  seeded: boolean;
   last: Record<string, unknown> | null;
 }
 
@@ -295,7 +256,6 @@ function parseVaultCursor(value: unknown): VaultCursor {
   return {
     vaultWalk,
     afterAlbumRef: text(record.afterAlbumRef),
-    seeded: record.seeded === true,
     last: typeof record.last === "object" && record.last !== null ? record.last as Record<string, unknown> : null,
   };
 }
@@ -403,50 +363,11 @@ function closedWalk(walk: VaultAlbumWalkState, album: VaultAlbum, utcDay: string
   return { ...walk, done: true, completedAtLastItemRef: album.lastItemRef, completedOnUtcDay: utcDay };
 }
 
-/** Shadow's walk state: its own, seeded once from the legacy cursor (proofs
- *  without their member lists). */
-async function shadowVaultWalk(db: Database, pageId: number, cursor: VaultCursor): Promise<VaultCursor> {
-  if (cursor.seeded) return cursor;
-  const legacy = parseFanslyCatalogCursorState((await legacyCatalogState(db, pageId)) ?? null);
-  const vaultWalk: Record<string, VaultAlbumWalkState> = {};
-  for (const [albumRef, walk] of Object.entries(legacy?.vaultWalk ?? {})) {
-    vaultWalk[albumRef] = walk.proof === undefined
-      ? walk
-      : { ...walk, proof: { ...walk.proof, seenMediaRefs: [], observationRefs: [] } };
-  }
-  return { ...cursor, vaultWalk, afterAlbumRef: legacy?.vaultWalkAfterAlbumRef ?? cursor.afterAlbumRef, seeded: true };
-}
-
 const HYDRATE_AFTER_WALK: readonly DemandSignal[] = [{ resource: HYDRATE_KEY, demand: { reason: "album_walked" } }];
 
-/** The creator albums of the page whose projected row changed after `at`. */
-async function albumsChangedSince(db: Database, pageId: number, at: Date): Promise<Set<string>> {
-  const result = await db.execute<{ albumRef: string }>(sql`
-    select album_ref as "albumRef" from creator_vault_albums
-     where page_id = ${pageId} and vault_kind = 'creator' and updated_at > ${at}
-  `);
-  return new Set(result.rows.map((row) => row.albumRef));
-}
-
 const vaultModule: ResourceModule = {
-  /** The shadow report's look check (rule A1.floor-idle): every album the
-   *  walk's choice would have taken at the look, from the legacy-seeded walk
-   *  state, less the albums whose row changed since. */
-  async dueAtLook(work, ctx) {
-    const cursor = await shadowVaultWalk(ctx.db, ctx.pageId, parseVaultCursor(work.cursor));
-    const fullEveryMs = vaultCadence(ctx.page).fullEveryMs;
-    const day = fanslyUtcDayKey(ctx.now);
-    const changed = await albumsChangedSince(ctx.db, ctx.pageId, ctx.now);
-    const albums = await listCreatorVaultAlbumsForWalk(ctx.db, ctx.pageId);
-    const due = albums
-      .filter((album) => !changed.has(album.albumRef) && chooseVaultAlbum([album], cursor, day, fullEveryMs) !== null)
-      .map((album) => album.albumRef);
-    return { count: due.length, examples: due.slice(0, 5), queued: albums.length };
-  },
-
   async plan(work, ctx): Promise<StepPlan> {
-    let cursor = parseVaultCursor(work.cursor);
-    if (ctx.shadow) cursor = await shadowVaultWalk(ctx.db, ctx.pageId, cursor);
+    const cursor = parseVaultCursor(work.cursor);
     const cadence = vaultCadence(ctx.page);
     const albums = await listCreatorVaultAlbumsForWalk(ctx.db, ctx.pageId);
     const choice = albums.length === 0 ? null : chooseVaultAlbum(albums, cursor, fanslyUtcDayKey(ctx.now), cadence.fullEveryMs);
@@ -605,44 +526,13 @@ const vaultModule: ResourceModule = {
     const receipt = finished
       ? { albumRef: album.albumRef, outcome, pages: walk.pages, seen: proof.seenMediaRefs.length, at: now.toISOString() }
       : cursor.last;
-    const next: VaultCursor = { vaultWalk: walks, afterAlbumRef: album.albumRef, seeded: cursor.seeded, last: receipt };
+    const next: VaultCursor = { vaultWalk: walks, afterAlbumRef: album.albumRef, last: receipt };
     return {
       work: { satisfiesRevision: finished, nextDueAt: now, cursor: next, ...(finished ? { result: receipt } : {}) },
       followups: finished ? HYDRATE_AFTER_WALK : [],
       counters,
     };
   },
-
-  async shadow(work, request, ctx): Promise<ShadowResult> {
-    const cursor = await shadowVaultWalk(ctx.db, ctx.pageId, parseVaultCursor(work.cursor));
-    const step = vaultStepOf(request);
-    if (step === null) return { work: { satisfiesRevision: true, nextDueAt: ctx.now, cursor }, followups: [] };
-    const utcDay = fanslyUtcDayKey(ctx.now);
-    const walks: Record<string, VaultAlbumWalkState> = { ...cursor.vaultWalk };
-    for (const parked of step.parked) {
-      walks[parked.album.albumRef] = closedWalk(walks[parked.album.albumRef] ?? emptyAlbumWalk(), parked.album, utcDay);
-    }
-    const album = step.album;
-    let walk = step.start !== null || walks[album.albumRef] === undefined
-      ? { ...emptyAlbumWalk(), lastCompleteWalkAt: step.start?.lastCompleteWalkAt ?? undefined, proof: headProof(album, step.start ?? { walkRef: randomUUID(), startedAt: ctx.now.toISOString(), lastCompleteWalkAt: null }) }
-      : walks[album.albumRef]!;
-    // The walk ends on the empty page after its rows (50 a page, production).
-    const pages = album.itemCount === null || album.itemCount <= 0 ? 1 : Math.ceil(album.itemCount / VAULT_PAGE_ESTIMATE) + 1;
-    walk = { ...walk, pages: walk.pages + 1, lastRequestedBefore: walk.beforeRef };
-    const finished = walk.pages >= pages;
-    walk = finished
-      ? { ...closedWalk(walk, album, utcDay), lastCompleteWalkAt: ctx.now.toISOString() }
-      : { ...walk, sawRows: true, beforeRef: `shadow-${walk.pages}` };
-    walks[album.albumRef] = walk;
-    const next: VaultCursor = { ...cursor, vaultWalk: walks, afterAlbumRef: album.albumRef };
-    return {
-      work: { satisfiesRevision: finished, nextDueAt: ctx.now, cursor: next },
-      followups: finished ? HYDRATE_AFTER_WALK : [],
-      counters: finished ? { vault_albums_estimated: 1 } : {},
-    };
-  },
-
-  replay: replayByCanonicalDrafts,
 };
 
 // ── hydrate ──────────────────────────────────────────────────────────────────
@@ -655,7 +545,6 @@ interface HydrateCursor {
   lastObservationId: number | null;
   hydratedMedia: number;
   hydratedBundles: number;
-  shadow: ShadowWalkProgress | null;
 }
 
 function parseHydrateCursor(value: unknown): HydrateCursor {
@@ -665,15 +554,11 @@ function parseHydrateCursor(value: unknown): HydrateCursor {
     const ms = int(at);
     if (ms !== null) unserved[ref] = ms;
   }
-  const shadow = recordOf(record.shadow);
-  const steps = int(shadow.steps);
-  const done = int(shadow.done);
   return {
     unserved,
     lastObservationId: int(record.lastObservationId),
     hydratedMedia: int(record.hydratedMedia) ?? 0,
     hydratedBundles: int(record.hydratedBundles) ?? 0,
-    shadow: steps === null || done === null ? null : { steps, done },
   };
 }
 
@@ -697,7 +582,7 @@ async function hydrateMemory(db: Database, work: SyncWorkRow, now: Date): Promis
   if (Object.keys(own.unserved).length > 0 || own.lastObservationId !== null) {
     return { unserved: freshUnserved(own.unserved, now), lastObservationId: own.lastObservationId };
   }
-  const previous = await latestClosedWorkForKey(db, { pageId: work.pageId, shadow: work.shadow, resource: HYDRATE_KEY, subject: work.subject });
+  const previous = await latestClosedWorkForKey(db, { pageId: work.pageId, resource: HYDRATE_KEY, subject: work.subject });
   const before = parseHydrateCursor(previous?.cursor);
   return { unserved: freshUnserved(before.unserved, now), lastObservationId: before.lastObservationId };
 }
@@ -742,7 +627,7 @@ const hydrateModule: ResourceModule = {
   async plan(work, ctx): Promise<StepPlan> {
     const cursor = parseHydrateCursor(work.cursor);
     const memory = await hydrateMemory(ctx.db, work, ctx.now);
-    if (!ctx.shadow && memory.lastObservationId !== null && await projectionBehind(ctx.db, {
+    if (memory.lastObservationId !== null && await projectionBehind(ctx.db, {
       pageId: ctx.pageId,
       projection: MEDIA_PLANE_PROJECTION,
       eventTypes: ["media.observed"],
@@ -773,7 +658,6 @@ const hydrateModule: ResourceModule = {
       lastObservationId: input.observation.id,
       hydratedMedia: cursor.hydratedMedia + (media ? asked.length : 0),
       hydratedBundles: cursor.hydratedBundles + (media ? 0 : asked.length),
-      shadow: null,
     };
     await coverageWriter(tx, input.pageId, CAPTURE_COVERAGE_PLANES.catalogMediaHydration, now)("", "in_progress", "none", {
       reasonCode: "batch_hydration",
@@ -785,32 +669,6 @@ const hydrateModule: ResourceModule = {
       counters: { cards_asked: asked.length, cards_unserved: asked.filter((ref) => !served.has(ref)).length },
     };
   },
-
-  async shadow(work, request, ctx): Promise<ShadowResult> {
-    // Shadow hydrates nothing, so the queue does not shrink under it: the
-    // pass is the batches the queue holds when it starts, then it closes.
-    const cursor = parseHydrateCursor(work.cursor);
-    const progress = cursor.shadow ?? await (async () => {
-      const result = await ctx.db.execute<{ n: string }>(sql`
-        select (
-          (select count(distinct m.media_offer_ref) from creator_vault_album_members m
-            where m.page_id = ${ctx.pageId} and m.vault_kind = 'creator' and m.media_offer_ref is not null
-              and not exists (select 1 from creator_media c where c.page_id = m.page_id and c.media_offer_ref = m.media_offer_ref))
-          + (select count(distinct m.bundle_ref) from creator_vault_album_members m
-            where m.page_id = ${ctx.pageId} and m.vault_kind = 'creator' and m.bundle_ref is not null
-              and not exists (select 1 from creator_media_bundles b where b.page_id = m.page_id and b.bundle_ref = m.bundle_ref))
-        )::text as n
-      `);
-      return { steps: Math.max(1, Math.ceil(Number(result.rows[0]?.n ?? 0) / ACCOUNT_MEDIA_BATCH_SIZE)), done: 0 };
-    })();
-    const step = advanceShadowWalk(progress, () => progress.steps);
-    const asked = stringList(recordOf(request.params).ids).length;
-    return step.finished
-      ? { work: { satisfiesRevision: true, close: "done", closeReason: "shadow", cursor: { ...cursor, shadow: null } }, followups: [], counters: { cards_asked: asked } }
-      : { work: { satisfiesRevision: false, nextDueAt: ctx.now, cursor: { ...cursor, shadow: step.progress } }, followups: [], counters: { cards_asked: asked } };
-  },
-
-  replay: replayByCanonicalDrafts,
 };
 
 export function catalogModule(variant: CatalogVariant): ResourceModule {

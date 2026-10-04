@@ -228,7 +228,7 @@ function digest(value: unknown): string {
 }
 
 /** The hash of the whole budget policy: two builds with the same hash pace
- *  every route alike (the shadow report's fingerprint). */
+ *  every route alike. */
 export const ROUTE_POLICY_HASH: string = digest(policyDocument());
 
 /** A route's policy version: the hash of the budgets that pace it (its own and

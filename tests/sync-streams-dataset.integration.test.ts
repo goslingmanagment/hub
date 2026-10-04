@@ -123,10 +123,10 @@ describe("the sync_streams dataset", () => {
     await legacyRows(onlyfans, [["light", "idle", 0, null]]);
     // The live page's engine is at work: a poll open, a read in flight, a row
     // in quarantine. None of it is a stream row any more.
-    await upsertDemand(db(), { pageId: live, shadow: false, resource: "account.poll", kind: "poll", class: "planned" });
-    await upsertDemand(db(), { pageId: live, shadow: false, resource: "subscribers.poll", kind: "poll", class: "planned" });
+    await upsertDemand(db(), { pageId: live, resource: "account.poll", kind: "poll", class: "planned" });
+    await upsertDemand(db(), { pageId: live, resource: "subscribers.poll", kind: "poll", class: "planned" });
     await testDb!.pool.query("update sync_work set state = 'running' where page_id = $1 and resource = 'subscribers.poll'", [live]);
-    await upsertDemand(db(), { pageId: live, shadow: false, resource: "transactions.rescan", kind: "poll", class: "planned" });
+    await upsertDemand(db(), { pageId: live, resource: "transactions.rescan", kind: "poll", class: "planned" });
     await testDb!.pool.query(
       "update sync_work set state = 'quarantined', waiting_reason = 'quarantined' where page_id = $1 and resource = 'transactions.rescan'",
       [live],

@@ -204,8 +204,6 @@ describe("LIVE_CONFIG_KEYS", () => {
       "aiMediaDescribeLiveChatOnly",
       "aiMediaDescribeModelMedia",
       "aiMediaDescribeLoopEnabled",
-      // H3: the Fansly freshness accelerator's budget (the fast lane shares it).
-      "aiMediaDescribeFanslyAcceleratorDailyLimit",
       // Fansly Sync Engine step 1: the live overlay read kill-switch.
       "fanslyLiveOverlayReadPages",
       // Chat extension (hub-pr-plan H-2b): the owner's five switches, read per
@@ -220,9 +218,20 @@ describe("LIVE_CONFIG_KEYS", () => {
     }
     expect(LIVE_CONFIG_KEYS.has("fanslyDefaultDelayMs")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyLiveOverlayReadPages")).toBe(true);
+    // Step 4 (S4-12): retired with the legacy WebSocket receiver and the AI
+    // media fast lane — nothing reads them, so no override applies.
+    for (const key of [
+      "fanslyWsCaptureEnabled",
+      "fanslyWsCapturePageAllowlist",
+      "aiMediaDescribeFanslyFastLaneMode",
+      "aiMediaDescribeFanslyFastLanePages",
+    ]) {
+      expect(LIVE_CONFIG_KEYS.has(key), key).toBe(false);
+    }
     // Step 4 (S4-14): retired with the legacy DM handlers (the bounded scan, the
     // sweep shadow, the head catch-up, the deep backfill) and the in-chunk AI
-    // media accelerator — nothing reads them, so no override applies.
+    // media accelerator — nothing reads them, so no override applies. The
+    // accelerator's daily limit lost its last readers with S4-12 and S4-14.
     for (const key of [
       "fanslyDmBoundedEnabled",
       "fanslyDmBoundedPageAllowlist",
@@ -231,21 +240,7 @@ describe("LIVE_CONFIG_KEYS", () => {
       "fanslyDmHeadCatchupPageAllowlist",
       "fanslyDeepBackfillIgnoreRetentionLimit",
       "aiMediaDescribeFanslyAcceleratorEnabled",
-    ]) {
-      expect(LIVE_CONFIG_KEYS.has(key), key).toBe(false);
-    }
-    // Step 4 (S4-15): retired with the hydration auto-approve policy.
-    for (const key of ["agentHydrationAutoApproveMode", "agentHydrationAutoDailyCallBudget"]) {
-      expect(LIVE_CONFIG_KEYS.has(key), key).toBe(false);
-    }
-    expect(LIVE_CONFIG_KEYS.has("agentHydrationMode")).toBe(true);
-    // Step 4 (S4-12): retired with the legacy WebSocket receiver and the AI
-    // media fast lane — nothing reads them, so no override applies.
-    for (const key of [
-      "fanslyWsCaptureEnabled",
-      "fanslyWsCapturePageAllowlist",
-      "aiMediaDescribeFanslyFastLaneMode",
-      "aiMediaDescribeFanslyFastLanePages",
+      "aiMediaDescribeFanslyAcceleratorDailyLimit",
     ]) {
       expect(LIVE_CONFIG_KEYS.has(key), key).toBe(false);
     }
@@ -257,10 +252,15 @@ describe("LIVE_CONFIG_KEYS", () => {
     for (const key of ["fanslyFanEarningsSyncEnabled", "fanslyNewStreamPageAllowlist"]) {
       expect(LIVE_CONFIG_KEYS.has(key), key).toBe(false);
     }
+    // Step 4 (S4-15): retired with the hydration auto-approve policy.
+    for (const key of ["agentHydrationAutoApproveMode", "agentHydrationAutoDailyCallBudget"]) {
+      expect(LIVE_CONFIG_KEYS.has(key), key).toBe(false);
+    }
+    expect(LIVE_CONFIG_KEYS.has("agentHydrationMode")).toBe(true);
     // Step 4 S4-24 retired the follower-sync age threshold of /health/sync
     // with the legacy Fansly checks that read it.
     expect(LIVE_CONFIG_KEYS.has("healthSyncFollowerMaxAgeMinutes")).toBe(false);
     expect(LIVE_CONFIG_KEYS.has("healthSyncLightMaxAgeMinutes")).toBe(true);
-    expect(LIVE_CONFIG_KEYS.size).toBe(50);
+    expect(LIVE_CONFIG_KEYS.size).toBe(49);
   });
 });

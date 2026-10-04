@@ -15,7 +15,6 @@ import type {
   PlanContext,
   RequestPlan,
   ResourceModule,
-  ShadowResult,
   StepPlan,
 } from "../../engine/resource.ts";
 import { listHeadInstant } from "../lib/conversation-list.ts";
@@ -180,14 +179,12 @@ async function planList(ctx: PlanContext, step: RepairStep): Promise<StepPlan> {
   // The list apply tells the page's own account from the partner.
   const facts = await readFanslyPageFacts(ctx.db, ctx.pageId);
   if (facts === null) return { kind: "quarantine", reason: "page_missing" };
-  if (facts.externalId === null) return waitForPageIdentity(REPAIR_KEY, ctx.shadow, ctx.now);
+  if (facts.externalId === null) return waitForPageIdentity(REPAIR_KEY);
   return { kind: "request", request: listStep(step) };
 }
 
 export const repairWsGapModule: ResourceModule = {
   async plan(work, ctx): Promise<StepPlan> {
-    // Live only: a shadow page has no socket and no gap of its own (I14).
-    if (ctx.shadow) return { kind: "done", reason: "shadow_no_socket" };
     const cursor = parseRepairCursor(work.cursor);
     if (cursor === null) {
       // A new pass: its window and targets, read-only; they travel with the
@@ -321,10 +318,5 @@ export const repairWsGapModule: ResourceModule = {
       followups: [],
       counters: { repair_stamped: stamped },
     };
-  },
-
-  async shadow(): Promise<ShadowResult> {
-    // Live only (the registry's `liveOnly`): a shadow page never runs it.
-    return { work: { satisfiesRevision: true, close: "done", closeReason: "shadow" }, followups: [] };
   },
 };

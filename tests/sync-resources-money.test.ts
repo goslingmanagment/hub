@@ -158,9 +158,9 @@ describe("transactions walks", () => {
   });
 
   it("a cursor survives whatever its row holds", () => {
-    expect(parseTransactionsCursor(null)).toEqual({ cursorTimestamp: null, walk: null, restartCount: 0, last: null, shadow: null });
-    expect(parseTransactionsCursor({ cursorTimestamp: "nope", walk: { offset: -1 }, restartCount: "2", shadow: { steps: 3 } }))
-      .toEqual({ cursorTimestamp: null, walk: null, restartCount: 0, last: null, shadow: null });
+    expect(parseTransactionsCursor(null)).toEqual({ cursorTimestamp: null, walk: null, restartCount: 0, last: null });
+    expect(parseTransactionsCursor({ cursorTimestamp: "nope", walk: { offset: -1 }, restartCount: "2", shadow: { steps: 3, done: 1 } }))
+      .toEqual({ cursorTimestamp: null, walk: null, restartCount: 0, last: null });
     const walk = { startedAt: NOW.toISOString(), offset: 40, pages: 2, fetched: 40, total: 99, lastPageIds: ["a", 1], after: null, newestSeenAt: null, seenDemanded: [] };
     expect(parseTransactionsCursor({ walk, restartCount: 1 }).walk).toMatchObject({ offset: 40, total: 99, lastPageIds: ["a"] });
   });

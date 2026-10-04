@@ -8,7 +8,6 @@ import { PgWake } from "../apps/runtime/src/sync/engine/host-ports.ts";
 import { SyncEngineHost } from "../apps/runtime/src/sync/engine/host.ts";
 import { createPacer } from "../apps/runtime/src/sync/engine/pacer.ts";
 import type { ResourceModule } from "../apps/runtime/src/sync/engine/resource.ts";
-import { fixedShadowLatency } from "../apps/runtime/src/sync/engine/shadow.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -17,6 +16,7 @@ import {
 import {
   countRows,
   quietLogger,
+  ScriptedLiveTransport,
   seedSyncPage,
   testConfig,
   testRegistry,
@@ -52,7 +52,6 @@ function readRegistry() {
   const read: ResourceModule = {
     plan: async (work) => ({ kind: "request", request: { spec: "post.replies", params: { postId: work.subject, before: null } } }),
     apply: async () => ({ work: { satisfiesRevision: true, close: "done" }, followups: [] }),
-    shadow: async () => ({ work: { satisfiesRevision: true, close: "done" }, followups: [] }),
   };
   return testRegistry([testSpec("notify.read", read)]);
 }
@@ -60,7 +59,7 @@ function readRegistry() {
 /** Work written the way a writer that forgot its NOTIFY would. */
 async function insertSilently(pageId: number, subject: string): Promise<void> {
   await testDb!.pool.query(
-    "insert into sync_work (page_id, shadow, resource, subject, kind, class) values ($1, true, 'notify.read', $2, 'trigger', 'urgent')",
+    "insert into sync_work (page_id, shadow, resource, subject, kind, class) values ($1, false, 'notify.read', $2, 'trigger', 'urgent')",
     [pageId, subject],
   );
 }
@@ -81,7 +80,7 @@ async function pickLatencyMs(subject: string): Promise<number> {
 describe("lost NOTIFY", () => {
   it("work written without NOTIFY is picked within the re-read; a killed LISTEN reconnects", async (context) => {
     if (!testDb) return context.skip();
-    const { pageId } = await seedSyncPage({ db: db(), pool: testDb.pool }, { mode: "shadow" });
+    const { pageId } = await seedSyncPage({ db: db(), pool: testDb.pool }, { mode: "live", guard: "fansly_sync_engine" });
     const wake = new PgWake({ connectionString: testDb.connectionString, logger: quietLogger });
     const host = new SyncEngineHost({
       db: db(),
@@ -94,13 +93,14 @@ describe("lost NOTIFY", () => {
       pause: { readSettingMs: async () => 50 },
       pacerFactory: (deps) => createPacer({ ...deps, minSettingMs: 1 }),
       routeTimeScale: 0,
-      shadowLatency: () => fixedShadowLatency(0),
+      liveTransportFactory: async () => new ScriptedLiveTransport(),
+      liveSocket: () => null,
       modeLoopIntervalMs: 200,
     });
     await host.start();
     try {
       // Past the takeover floor, the page idles.
-      await upsertDemand(db(), { pageId, shadow: true, resource: "notify.read", subject: "warmup", kind: "trigger", class: "urgent" });
+      await upsertDemand(db(), { pageId, resource: "notify.read", subject: "warmup", kind: "trigger", class: "urgent" });
       await pickLatencyMs("warmup");
 
       for (const subject of ["silent-1", "silent-2", "silent-3"]) {
@@ -112,7 +112,7 @@ describe("lost NOTIFY", () => {
       // With NOTIFY the wake-up is the notification itself.
       const before = wake.notifications;
       await sleep(400);
-      await upsertDemand(db(), { pageId, shadow: true, resource: "notify.read", subject: "notified", kind: "trigger", class: "urgent" });
+      await upsertDemand(db(), { pageId, resource: "notify.read", subject: "notified", kind: "trigger", class: "urgent" });
       expect(await pickLatencyMs("notified")).toBeLessThanOrEqual(PICK_BOUND_MS);
       expect(wake.notifications).toBeGreaterThan(before);
 
@@ -130,7 +130,7 @@ describe("lost NOTIFY", () => {
           [killed.rows[0]!.pid]) === 1 && wake.listening ? true : null
       ), 10_000, "the LISTEN connection back");
       const afterReconnect = wake.notifications;
-      await upsertDemand(db(), { pageId, shadow: true, resource: "notify.read", subject: "after-reconnect", kind: "trigger", class: "urgent" });
+      await upsertDemand(db(), { pageId, resource: "notify.read", subject: "after-reconnect", kind: "trigger", class: "urgent" });
       expect(await pickLatencyMs("after-reconnect")).toBeLessThanOrEqual(PICK_BOUND_MS);
       await waitFor(() => (wake.notifications > afterReconnect ? true : null), 5_000, "a notification after the reconnect");
     } finally {
