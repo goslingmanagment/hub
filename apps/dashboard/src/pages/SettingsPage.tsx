@@ -2,6 +2,7 @@ import { Link, useNavigate, useSearchParams } from "react-router";
 import { buildSettingsSectionRoute, resolveSettingsTab, type SettingsTab } from "@/lib/navigation";
 import { CredentialsTab } from "./settings/CredentialsTab.js";
 import { SyncTab } from "./settings/SyncTab.js";
+import { EngineTab } from "./settings/engine/EngineTab.js";
 import { CollectionTab } from "./settings/CollectionTab.js";
 import { ModelsTab } from "./settings/ModelsTab.js";
 import { PagesTab } from "./settings/PagesTab.js";
@@ -20,9 +21,13 @@ const sections: Record<SettingsTab, { label: string; description: string }> = {
     label: "Работа Hub",
     description: "Настройте обновление данных, работу AI и другие возможности Hub.",
   },
+  engine: {
+    label: "Синк",
+    description: "Посмотрите, как Fansly Sync Engine читает каждую страницу Fansly: темп, очередь, удержания и заявки на историю.",
+  },
   sync: {
     label: "Синхронизация",
-    description: "Посмотрите, какие данные обновляются и нужна ли помощь какой-то странице.",
+    description: "Посмотрите, какие данные OnlyFans обновляются и нужна ли помощь какой-то странице.",
   },
   collection: {
     label: "Сбор OnlyFans",
@@ -55,7 +60,7 @@ const sections: Record<SettingsTab, { label: string; description: string }> = {
 };
 
 const navigationGroups: { id: string; label: string; tabs: SettingsTab[] }[] = [
-  { id: "system", label: "Система", tabs: ["features", "configuration", "sync", "collection"] },
+  { id: "system", label: "Система", tabs: ["features", "configuration", "engine", "sync", "collection"] },
   { id: "accounts", label: "Аккаунты и AI", tabs: ["models", "pages", "personas"] },
   { id: "access", label: "Доступ", tabs: ["credentials", "users", "agentKeys"] },
 ];
@@ -131,6 +136,7 @@ export function SettingsPage() {
               </p>
             </div>
             {activeTab === "credentials" && <CredentialsTab />}
+            {activeTab === "engine" && <EngineTab />}
             {activeTab === "sync" && <SyncTab />}
             {activeTab === "collection" && <CollectionTab />}
             {activeTab === "models" && <ModelsTab />}

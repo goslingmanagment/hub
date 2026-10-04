@@ -5,7 +5,7 @@ import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
 import { getSyncUxDisplayMode } from "@/components/shared/syncUxDisplay";
-import { buildSettingsRoute } from "@/lib/navigation";
+import { buildPageSyncRoute } from "@/lib/navigation";
 import { CredentialsModal, type CredentialsModalConnection } from "./CredentialsModal.js";
 
 function formatPageMetric(metric: {
@@ -106,7 +106,7 @@ export function CredentialsTab() {
               </div>
               {usesOfapi ? (
                 <Link
-                  to={buildSettingsRoute("sync", conn.label)}
+                  to={buildPageSyncRoute(conn.platform, conn.label)}
                   className="shrink-0 rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:bg-hover"
                 >
                   Connection diagnostics

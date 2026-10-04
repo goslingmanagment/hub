@@ -13,7 +13,7 @@ import { ConfirmModal } from "@/components/shared/ConfirmModal";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
 import { formatRelativeTime } from "@/lib/format";
-import { buildSettingsRoute } from "@/lib/navigation";
+import { buildPageSyncRoute } from "@/lib/navigation";
 import { toast } from "sonner";
 import { CreatePageModal } from "./CreatePageModal.js";
 import { EditPageModal } from "./EditPageModal.js";
@@ -252,7 +252,7 @@ function PageRow({
           </button>
           {page.platform === "onlyfans" ? (
             <Link
-              to={buildSettingsRoute("sync", page.label)}
+              to={buildPageSyncRoute(page.platform, page.label)}
               title="OnlyFans access is managed in OFAPI. Open Sync to inspect connection blocks."
               className="rounded-lg border border-border bg-card px-2.5 py-1 text-xs font-medium text-text-secondary transition-colors hover:bg-hover"
             >

@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   AdminSyncBlockBody,
+  SyncHistoryRequestsQuery,
   UpdateCredentialsBody,
 } from "@agency_hub_core/contracts";
 
@@ -108,6 +109,22 @@ export function useSyncEnginePages(options: { enabled?: boolean } = {}) {
     queryKey: ["syncEngine", "pages"],
     queryFn: () => kernel.syncPages(),
     refetchInterval: 10_000,
+    enabled: options.enabled ?? true,
+  });
+}
+
+/** The engine's history requests, newest first (`/api/v1/sync/history-requests`,
+ *  owner session): fans ready, reads made and left, the ETA and why each
+ *  waits. A request moves one read at a time, so it is polled slower than the
+ *  page status. */
+export function useSyncHistoryRequests(
+  query: Partial<Pick<SyncHistoryRequestsQuery, "pageLabel" | "state" | "limit">>,
+  options: { enabled?: boolean } = {},
+) {
+  return useQuery({
+    queryKey: ["syncEngine", "historyRequests", query.pageLabel ?? null, query.state ?? null, query.limit ?? null],
+    queryFn: () => kernel.syncHistoryRequests({ query }),
+    refetchInterval: 30_000,
     enabled: options.enabled ?? true,
   });
 }

@@ -230,6 +230,14 @@ with the reason `fansly_sync_engine_off`; its summary reads "Not syncing"; a blo
 follower reconcile levers answer 409 `legacy_sync_retired`; the insights `engine` block is `null` and the top-spenders
 source `flag_off`.
 
+In the dashboard each engine has its Settings tab (S4-28). «Синк» (`?tab=engine`, `pages/settings/engine/`) lists the
+Fansly pages as the engine reads them — owner, holds, socket, the pause and how it was kept, the queue by class with
+the hour's requests, from `/api/v1/sync/pages`; the open history requests with their fans, reads and the ETA's two
+numbers, from `/api/v1/sync/history-requests` — and a page's detail there carries the five Settings blocks with their
+buttons. «Синхронизация» (`?tab=sync`) lists the legacy executor's pages only. `syncSettingsTab` (`lib/navigation.ts`)
+names a page's tab from its platform, and every link to a page's sync goes through it; a page opened on the other tab
+is pointed to its own.
+
 Not for a Fansly page at all: the legacy monitor (`/api/v1/sync/status`, `pnpm cli sync status` — the rows are the
 legacy executor's pages and streams, the events and `/api/v1/sync/requests` its journal as it stands; `sync page
 status` and `/api/v1/sync/pages` are the engine's) and the agent dataset `sync_streams` (the legacy executor's stream

@@ -23,6 +23,7 @@ export interface HubFeature {
 
 const gate = (key: string, ...off: (string | boolean)[]): FeatureGate => ({ key, off: off.length ? off : [false] });
 const sync = { evidenceHref: "/settings?tab=sync", evidenceLabel: "Проверить сбор данных" };
+const fanslySync = { evidenceHref: "/settings?tab=engine", evidenceLabel: "Проверить сбор данных" };
 const ai = { evidenceHref: "/usage", evidenceLabel: "Посмотреть использование AI" };
 
 export const HUB_FEATURES: readonly HubFeature[] = [
@@ -150,7 +151,7 @@ export const HUB_FEATURES: readonly HubFeature[] = [
     reason: "Держать выключенной после завершения конкретного восстановления. Это инструмент ремонта, а не повседневная функция.",
     consequence: "Этот повторный разбор остановится. Уже захваченные данные останутся; новые запросы к площадке этот режим не экономит.",
     check: "Проверить наличие незавершённого восстановления и его отдельный план.",
-    keys: ["fanslyReplayMode"], gates: [gate("fanslyReplayMode", "off")], ...sync,
+    keys: ["fanslyReplayMode"], gates: [gate("fanslyReplayMode", "off")], ...fanslySync,
   },
   {
     id: "storage", title: "Общее хранилище ответов", group: "Система", advice: "keep",

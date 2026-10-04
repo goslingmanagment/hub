@@ -7,6 +7,7 @@ import { MemoryRouter } from "../apps/dashboard/node_modules/react-router/dist/d
 
 vi.mock("../apps/dashboard/src/pages/settings/CredentialsTab.tsx", () => ({ CredentialsTab: () => "content:credentials" }));
 vi.mock("../apps/dashboard/src/pages/settings/SyncTab.tsx", () => ({ SyncTab: () => "content:sync" }));
+vi.mock("../apps/dashboard/src/pages/settings/engine/EngineTab.tsx", () => ({ EngineTab: () => "content:engine" }));
 vi.mock("../apps/dashboard/src/pages/settings/CollectionTab.tsx", () => ({ CollectionTab: () => "content:collection" }));
 vi.mock("../apps/dashboard/src/pages/settings/ModelsTab.tsx", () => ({ ModelsTab: () => "content:models" }));
 vi.mock("../apps/dashboard/src/pages/settings/PagesTab.tsx", () => ({ PagesTab: () => "content:pages" }));
@@ -18,7 +19,7 @@ vi.mock("../apps/dashboard/src/pages/settings/FeaturesTab.tsx", () => ({ Feature
 
 import { SettingsPage } from "../apps/dashboard/src/pages/SettingsPage.tsx";
 
-const tabs = ["credentials", "sync", "collection", "models", "personas", "pages", "users", "agentKeys", "configuration", "features"];
+const tabs = ["credentials", "engine", "sync", "collection", "models", "personas", "pages", "users", "agentKeys", "configuration", "features"];
 
 function renderSettings(path: string) {
   return renderToStaticMarkup(createElement(
