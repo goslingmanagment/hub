@@ -6,11 +6,14 @@ import { buildClientBootstrap } from "../../services/client-bootstrap.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 import { registerClientProfileFromGenerationRoutes } from "./profile-from-generation.ts";
 import { registerClientRecapRoutes } from "./recaps.ts";
+import { registerClientAiUsageRoutes } from "./ai-usage.ts";
+import { registerClientHealthViewRoutes } from "./health.ts";
 
 /**
  * The chat extension's routes under `/api/v1/client/` (chat-extension
- * architecture §8). Every handler of a client route lives in this module; the
- * schemas live in `packages/contracts/src/routes-client.ts`.
+ * architecture §8), and the dashboard routes about the extension. Every handler
+ * of them lives in this module; the schemas live in
+ * `packages/contracts/src/routes-client.ts`.
  */
 export function registerClientRoutes(server: ApiServer, ctx: ApiModuleContext) {
   const { appContext } = ctx;
@@ -33,4 +36,6 @@ export function registerClientRoutes(server: ApiServer, ctx: ApiModuleContext) {
 
   registerClientRecapRoutes(server, ctx);
   registerClientProfileFromGenerationRoutes(server, ctx);
+  registerClientAiUsageRoutes(server, ctx);
+  registerClientHealthViewRoutes(server, ctx);
 }

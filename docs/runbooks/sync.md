@@ -205,12 +205,19 @@ with the work's status link: the check is queued, not lost. Under a credentials 
 one verify per changed digest go out; a network hold beside it stops those too until it ends.
 
 Every hold is a row of `sync_holds` (the page's hold set: its own holds, each route's hold and slowdown, each
-file's breaker), and one evaluator reads it for the actor, status, "why" and the alerts. While a previous image
-that knows only the old hold columns of `sync_pages` can come back, every hold write rewrites those columns too,
-and they win whenever they differ from the rows: at the page's next acquisition (the host logs it and counts
-`sync_holds_imported`: expected after this release's first deploy and after a rollback, for each page whose holds
-the previous image wrote) and before a `sync route raise`. So a hold is never edited by hand in `sync_holds` alone;
-the rule is in `apps/runtime/src/sync/README.md` ("The hold set and the hold evaluator").
+file's breaker), and one evaluator reads it for the actor, status, "why" and the alerts.
+
+**Rollback targets and the old hold columns.** A page's holds are its rows of `sync_holds` (`sync page status`
+shows them). The old hold columns of `sync_pages` are stale since the release that stopped writing them (step 4,
+S4-32): never read a hold from the page row, and never edit one there. The release before that one is a safe
+rollback target: it reads the rows alone. The hold-set release (the one that brought `sync_holds`) and every image
+older than it are NOT a rollback target any more: the hold-set release lets the stale columns win over the rows
+whenever it acquires a page, so by them it would drop every hold taken, and bring back every hold lifted, since.
+Every page that release (S4-32) has taken carries a marker in its old columns at which the hold-set release refuses
+the page instead (`Fansly sync host: acquire failed` with `SyncLegacyHoldsUnreadableError`; alert 1
+`ownership_unconfirmed` after 2 min): sync is down on that image, not open. Go forward — that release or the one
+before it again — and never edit the marker away. Details: `apps/runtime/src/sync/README.md`, "Rollback targets
+from this release on".
 
 **Breakers** stop one subject or one file, never the page:
 

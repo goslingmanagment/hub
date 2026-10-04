@@ -900,7 +900,7 @@ export const fanslySendPaceCursor = pgTable(
 );
 
 // 0228 (Fansly Sync Engine, plan §11): the new engine's per-page state. Mode,
-// pauses, holds, ownership (generation + the owner process's identity), the
+// pauses, ownership (generation + the owner process's identity), the
 // scheduler's cycle position and the pacer's facts. Written through
 // repositories/sync/pages.ts only; `live` only at a page's birth
 // (`createLiveSyncPage`), `handover` by nothing since step 4 (S4-21).
@@ -920,16 +920,14 @@ export const syncPages = pgTable(
     pausedRequests: boolean("paused_requests").notNull().default(false),
     pausedResources: text("paused_resources").array().notNull().default(sql`'{}'::text[]`),
     pauseNote: text("pause_note"),
-    // The old hold slot and `resource_holds` below: kept in step with the
-    // hold set (`sync_holds`, 0240) for the previous image, read by nothing
-    // (repositories/sync/holds-legacy.ts). `hold_step` is no longer mapped:
-    // the database column keeps its default.
-    holdKind: text("hold_kind").$type<"rate_limit" | "auth" | "identity_mismatch" | "network">(),
-    holdUntil: timestamp("hold_until", { withTimezone: true }),
-    holdSince: timestamp("hold_since", { withTimezone: true }),
-    holdDetail: jsonbSafe("hold_detail").$type<Record<string, unknown>>().notNull().default({}),
+    // No hold is mapped here: a page's holds are its rows of `sync_holds`
+    // (0240). The old hold slot and the resource-hold map of 0228 are still
+    // columns of the table in the database — stale, with the slot's two
+    // CHECKs — until a migration drops them. Nothing names them but the
+    // marker an acquisition leaves in the map to say so
+    // (`STALE_HOLD_COLUMNS_MARKER`, repositories/sync/pages.ts; step 4,
+    // S4-32; tests/sync-old-hold-columns.test.ts).
     networkFailureStreak: smallint("network_failure_streak").notNull().default(0),
-    resourceHolds: jsonbSafe("resource_holds").$type<Record<string, unknown>>().notNull().default({}),
     identityAccountId: text("identity_account_id"),
     identityCheckedAt: timestamp("identity_checked_at", { withTimezone: true }),
     credentialsGeneration: text("credentials_generation"),
@@ -961,7 +959,6 @@ export const syncPages = pgTable(
   },
   (table) => ({
     modeCheck: check("sync_pages_mode_check", sql`${table.mode} in ('off', 'shadow', 'handover', 'live')`),
-    holdPairCheck: check("sync_pages_hold_pair_check", sql`(${table.holdKind} is null) = (${table.holdUntil} is null)`),
     cyclePosCheck: check("sync_pages_cycle_pos_check", sql`${table.cyclePos} between 0 and 9`),
     liftedDmExclusionsCheck: check(
       "sync_pages_lifted_dm_exclusions_check",

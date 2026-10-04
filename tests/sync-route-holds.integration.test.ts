@@ -34,8 +34,7 @@ import { pageHoldKindOf, routeEntryOf } from "./helpers/sync-holds.ts";
 // its Retry-After holds its route without a slowdown; the capture opens the
 // route's own incident; "why" and the status name the hold; the owner's
 // `sync route raise` is one audited step of ≤ +1/min against the revision
-// its evidence read; an older build's endpoint-group 429 hold left on a row
-// is no file breaker of this build.
+// its evidence read.
 
 let testDb: StartedTestDatabase | null = null;
 
@@ -436,51 +435,5 @@ describe("sync route raise (A2)", () => {
     expect(JSON.parse(last.join("\n"))).toMatchObject({ toPerMin: 15, slowdownEnded: true, revision: 5 });
     expect(await entryOf(pageId, "messages.page")).toMatchObject({ effectivePerMin: null, policyVersion: null, revision: 5 });
     await expect(raise([], label, "messages.page", "15", "5")).rejects.toThrow(/not_slowed/);
-  }, 60_000);
-
-  it("after a rollback, before this build's sync has taken the page: a raise never goes over what the previous image left in the old hold columns", async (context) => {
-    if (!testDb) return context.skip();
-    const label = "raise-2";
-    const pageId = await seedLive(label);
-    // This build slowed two routes (revision 1 each); then it was rolled back.
-    await writeSyncRouteState(db(), { pageId, route: "messages.page", expectRevision: 0, entry: entryWrite() });
-    await writeSyncRouteState(db(), {
-      pageId, route: "messaging.groups", expectRevision: 0, entry: entryWrite({ effectivePerMin: 6, policyVersion: routePolicyVersion("messaging.groups") }),
-    });
-    // The previous image ran the page and wrote the old columns alone: a
-    // credentials hold, and a second 429 on the list route (revision 2).
-    const refusal = { status: 401, credentialsGeneration: "gen-a", failedAttemptId: 9, failedAt: "2026-10-04T10:05:00.000Z" };
-    await testDb.pool.query(
-      `update sync_pages
-          set hold_kind = 'auth', hold_until = 'infinity', hold_since = $2::timestamptz, hold_detail = $3::jsonb,
-              resource_holds = jsonb_set(resource_holds, '{route:state,routes,messaging.groups}',
-                (resource_holds #> '{route:state,routes,messaging.groups}') || '{"effectivePerMin":3,"ladderStep":2,"revision":2}'::jsonb)
-        where page_id = $1`,
-      [pageId, refusal.failedAt, JSON.stringify(refusal)],
-    );
-    const columns = async () => (await testDb!.pool.query<{ hold_kind: string | null; hold_detail: unknown; routes: Record<string, { effectivePerMin: number; revision: number }> }>(
-      "select hold_kind, hold_detail, resource_holds #> '{route:state,routes}' as routes from sync_pages where page_id = $1", [pageId],
-    )).rows[0]!;
-    const left = await columns();
-
-    // The evidence read this build's rows, which that image has outdated: the
-    // list route is no longer at their revision. Nothing is written.
-    await expect(raise([], label, "messaging.groups", "7", "1")).rejects.toThrow(/messaging\.groups is no longer at revision 1/);
-    expect(await columns()).toEqual(left);
-    expect(await entryOf(pageId, "messaging.groups")).toMatchObject({ effectivePerMin: 6, revision: 1 });
-    expect(await raises(pageId)).toEqual([]);
-
-    // The route that image left alone is raised — over the rows its columns
-    // say: its credentials hold and its slowdown of the list stand on both sides.
-    await raise([], label, "messages.page", "8.5", "1");
-    expect(await columns()).toEqual({
-      ...left,
-      routes: { ...left.routes, "messages.page": { ...left.routes["messages.page"], effectivePerMin: 8.5, revision: 2 } },
-    });
-    const page = (await getSyncPage(db(), pageId))!;
-    expect(pageHoldKindOf(page)).toBe("auth");
-    expect(routeEntryOf(page, "messages.page")).toMatchObject({ effectivePerMin: 8.5, revision: 2 });
-    expect(routeEntryOf(page, "messaging.groups")).toMatchObject({ effectivePerMin: 3, ladderStep: 2, revision: 2 });
-    expect(await raises(pageId)).toEqual([expect.objectContaining({ route: "messages.page", fromPerMin: 7.5, toPerMin: 8.5, fromRevision: 1, revision: 2 })]);
   }, 60_000);
 });

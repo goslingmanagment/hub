@@ -22,6 +22,7 @@ import {
 } from "../../../services/ai-gateway.ts";
 import { resolveAiTranscriptMaxRows } from "../../../services/ai-transcript-depth.ts";
 import { canAccessPage, type HumanAuthPrincipal } from "../../../services/auth.ts";
+import { isSplitAllOnForPage } from "../../../services/client-split-all.ts";
 import {
   BadRequestError,
   NotFoundError,
@@ -72,7 +73,10 @@ import {
   FEATURE_POLICIES,
   HI_GREETING_MAX_TRANSCRIPT,
   BUNDLED_LORA_PERSONALITY_ID,
+  COACH_PRESET_DRAFT_BLOCKS,
   buildPrompt,
+  describeCoachSplitOutput,
+  describeSplitOutput,
   formatTranscript,
   isOperationFeature,
   type GreetingVariantCount,
@@ -828,6 +832,17 @@ export async function prepareAiFeatureStream(
     }
   }
 
+  // chat-extension H-10 (architecture.md D-15): Split for Ping, Hi and the
+  // drafts of a Coach answer. On only for a request that advertises
+  // split-all-v1, on a page whose owner switched the splitAll flag on.
+  // replyMode alone never turns it on: released clients send it on every
+  // feature and keep their prompts.
+  const splitAll = policy.supportsSplitAll
+    && body.replyMode === "preferSplit"
+    && options?.capabilities?.has("split-all-v1") === true
+    && await isSplitAllOnForPage(app, pageId);
+  const greetingVariantCount = feature === "hi-greeting" ? resolveGreetingVariantCount(body) : undefined;
+
   const prompt = buildPrompt({
     feature,
     personality: persona.personality,
@@ -839,7 +854,7 @@ export async function prepareAiFeatureStream(
     fanBio: contextValues.fanBio,
     fanCustomName: contextValues.fanCustomName,
     fanUsername: body.clientContext?.fanUsername,
-    greetingVariantCount: feature === "hi-greeting" ? resolveGreetingVariantCount(body) : undefined,
+    greetingVariantCount,
     fanProfile: fanProfile
       ? { body: fanProfile.body, generatedAt: fanProfile.generatedAt }
       : undefined,
@@ -847,7 +862,8 @@ export async function prepareAiFeatureStream(
     pingSegment: contextValues.pingSegment,
     fanSilenceDays: contextValues.fanSilenceDays,
     replyTone: policy.supportsReplyTone ? body.replyTone : undefined,
-    replyMode: policy.supportsReplyMode ? body.replyMode : undefined,
+    replyMode: policy.supportsReplyMode || splitAll ? body.replyMode : undefined,
+    splitAll,
     chatterQuestion: effectiveChatterQuestion,
     coachHistory: feature === "coach-chat" ? body.coachHistory : undefined,
     preset: feature === "coach-chat" ? body.preset : undefined,
@@ -1084,6 +1100,7 @@ export async function prepareAiFeatureStream(
       || body.expectedPersonaDefinitionId !== undefined
       || attachedRecaps !== undefined
       || presetQuestion !== undefined
+      || splitAll
       ? {
         ...(contextManifest !== undefined ? { contextManifest } : {}),
         ...(debugFrame !== undefined ? { debugFrame } : {}),
@@ -1093,6 +1110,16 @@ export async function prepareAiFeatureStream(
           : {}),
         ...(attachedRecaps !== undefined ? { attachedRecaps } : {}),
         ...(presetQuestion !== undefined ? { presetQuestion } : {}),
+        // Written on the finished text only: nothing already streamed changes.
+        // A Coach answer is advice with draft blocks in it, so it has its own reader.
+        ...(splitAll
+          ? {
+            describeOutput: feature === "coach-chat"
+              ? (completion: string) =>
+                describeCoachSplitOutput(completion, body.preset !== undefined ? COACH_PRESET_DRAFT_BLOCKS : null)
+              : (completion: string) => describeSplitOutput(completion, greetingVariantCount ?? 1),
+          }
+          : {}),
       }
       : undefined,
   );

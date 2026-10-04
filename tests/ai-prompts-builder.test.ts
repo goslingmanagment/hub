@@ -289,6 +289,9 @@ function buildExpectedFlatUser(input: PromptBuildInput): string {
     fanCustomNameLine: buildFanCustomNameLine(input.fanCustomName),
     fanUsernameLine: buildFanUsernameLine(input.fanUsername, input.fanDisplayName),
     greetingTask: buildGreetingTask(input),
+    // Split by capability (H-10) is off in every request of this suite: the
+    // slot renders empty. tests/ai-prompts-split-all.test.ts covers it on.
+    pingSplitInstructions: '',
     fanProfileSection: buildFanProfileSectionOracle(input.fanProfile),
     draftSection: buildDraftSection(input.draftText),
     splitReplyInstructions: buildSplitReplyInstructions(input.feature, input.replyMode),

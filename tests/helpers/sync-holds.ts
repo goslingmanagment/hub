@@ -1,4 +1,4 @@
-import { mirrorSyncHoldsToLegacyColumns, type Database, type SyncHoldRow, type SyncPageRow } from "@agency_hub_core/db";
+import type { SyncHoldRow, SyncPageRow } from "@agency_hub_core/db";
 import { INDEFINITE_UNTIL, type FanslyPageHoldKind, type FanslyPageHolds } from "@agency_hub_core/shared";
 
 import { holdSetOf } from "../../apps/runtime/src/sync/engine/admission.ts";
@@ -78,18 +78,11 @@ export function routeStateRows(routes: Readonly<Record<string, Partial<RouteStat
 }
 
 // ── a database's hold set, written directly (a test's stand-in for an
-// outcome): by the database clock, and the old hold columns rewritten from
-// the rows as every hold write of this release does — an acquisition of the
-// page's ownership then reads nothing back ────────────────────────────────
+// outcome), by the database clock ──────────────────────────────────────────
 
-/** A test database: its pool and its drizzle handle (`StartedTestDatabase`). */
+/** A test database: its pool (`StartedTestDatabase`). */
 interface TestDatabase {
   pool: { query(text: string, values?: unknown[]): Promise<unknown> };
-  db: unknown;
-}
-
-async function mirror(target: TestDatabase, pageId: number): Promise<void> {
-  await mirrorSyncHoldsToLegacyColumns(target.db as Database, pageId);
 }
 
 /** The page's own hold of `kind`, until `untilSeconds` from now (`"infinity"`:
@@ -106,7 +99,6 @@ export async function seedPageHold(
      on conflict (page_id, scope, key, kind) do update set until = excluded.until, detail = excluded.detail, revision = sync_holds.revision + 1`,
     [input.pageId, input.kind, input.untilSeconds === "infinity" ? null : input.untilSeconds, JSON.stringify(input.detail ?? {})],
   );
-  await mirror(target, input.pageId);
 }
 
 /** Lift the page's own holds (every kind, or `kinds`). */
@@ -115,7 +107,6 @@ export async function clearPageHolds(target: TestDatabase, pageId: number, kinds
     "delete from sync_holds where page_id = $1 and scope = 'page' and ($2::text[] is null or kind = any($2::text[]))",
     [pageId, kinds ?? null],
   );
-  await mirror(target, pageId);
 }
 
 /** One route's rows: its state (`route_budget`) and, with `holdSeconds`, its
@@ -157,7 +148,6 @@ export async function seedRouteState(
       [input.pageId, input.route, input.holdSeconds],
     );
   }
-  await mirror(target, input.pageId);
 }
 
 /** Replace the page's rows of `scope` by `rows` (built by `routeStateRows`,
@@ -175,7 +165,6 @@ export async function replaceHoldRows(target: TestDatabase, pageId: number, scop
       ],
     );
   }
-  await mirror(target, pageId);
 }
 
 // ── a page row's hold set, as a test asks about it ─────────────────────────

@@ -7,6 +7,10 @@ export * from "./repositories/follower-outreach.ts";
 // chat-extension greeting lease and send custody (0241, H-7a).
 export * from "./repositories/client-claim.ts";
 export * from "./repositories/client-claim-transition.ts";
+// chat-extension client_health hourly rollups (0244, H-11b).
+export * from "./repositories/client-health.ts";
+// Their reads for the owner's view (H-11c).
+export * from "./repositories/client-health-view.ts";
 export * from "./schema.ts";
 export * from "./repositories/creator-raw-media.ts";
 export * from "./repositories/vault-album-scans.ts";
@@ -164,7 +168,6 @@ export * from "./repositories/fansly-send-guard-checks.ts";
 // conversation list's own writer; the DM message reads; the subject-queue
 // walks; the history requests (0232).
 export * from "./repositories/sync/holds.ts";
-export * from "./repositories/sync/holds-legacy.ts";
 export * from "./repositories/sync/pages.ts";
 export * from "./repositories/sync/work.ts";
 export * from "./repositories/sync/attempts.ts";

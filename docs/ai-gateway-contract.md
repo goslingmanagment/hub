@@ -107,7 +107,9 @@ authorization.
   `chatMuseAiPromptDebugEchoEnabled` kill-switch. `context-v1` adds the `context_v1` frame (below)
   and is required to send `liveTextContext`, whose answer rides that frame. It is also what lets a
   full Recap read past 1500 messages (transcript depth, below).
-  `split-all-v1` is reserved for the fields that will read it; until then it changes nothing.
+- `split-all-v1` lets `replyMode: "preferSplit"` reach `ping`, `hi-greeting` and `coach-chat` on a
+  page whose owner switched the `splitAll` flag on (see "Split for Ping, Hi and Coach drafts"
+  below). It adds no frame.
 - SDK: the header is the union of the `capabilities` option and the legacy `debugPromptEcho` flag,
   deduplicated, in the constant's order, joined by `, `. With nothing to advertise no header is sent,
   so existing callers put exactly the same bytes on the wire as before.
@@ -479,6 +481,33 @@ The existing `/api/v1/ai-usage/batch` endpoint remains during migration for dire
 When gateway mode is active for a request, desktop must not also submit a duplicate usage event for
 that same generation.
 
+### The caller's own spend for the chat extension (chat-extension H-15)
+
+`GET /api/v1/client/pages/:pageLabel/ai-usage?date=YYYY-MM-DD[&days=1..7][&timeZone=…]`
+(`clientAiUsageDaily`, capability `ai-usage-v1`) reads the same ledger for the extension's debug
+panel: the caller's own rows on that page, by day and by feature, in micro-USD. It reads only the
+ledger and the config; it never stores or returns prompt text, generated text or provider bodies.
+
+Two day boundaries meet in one answer, and it states both:
+
+- **Report days** are calendar days in `timeZone` (default `Europe/Moscow`, the cabinet's business
+  day). Each day carries the instants it was cut at (`from`, `toExclusive`), and the ledger is
+  bucketed by exactly those instants on `completed_at`. A day is cut where the zone's date turns,
+  so a day the zone's clocks change in is 23 or 25 hours long.
+- **The quota's day is the UTC day** (the preflight above). `quota.dayBoundary` is `"UTC"` and
+  `remainingRequestsToday` / `remainingMicroUsdToday` are the gateway's own answer for
+  `(caller, page)`. At 01:30 Moscow time the report's "today" is 90 minutes old while the quota's
+  day has 1.5 hours left, so "spent today" and "left today" do not add up to the limit. `quota` is
+  `null` while the gateway is off.
+
+A day is `partial` while its numbers may still move or are not exact: `day_open` (not over yet),
+`open_reservations` (a reservation without an outcome: it carries no cost yet, and on a normal
+finish its `completed_at` becomes the finish time, so the row moves to the day it finished in), and
+`approximate_cost` (a cost in it is an estimate). Otherwise it is `complete`. `date` may be today in
+`timeZone` or up to 8 days before it; a later or older date and an unknown zone answer `400
+bad_request` with a `reason` (`docs/error-handling.md` §3). The route is behind the chat-extension
+master switch and the minimum extension version (`409 client_feature_disabled`).
+
 ## Privacy and Retention
 
 Core may stream prompt text to the selected provider, but must not persist raw prompt text,
@@ -713,3 +742,53 @@ server-loaded transcript/profile context and rejects clientContext. Page access,
 platform matching, persona revision, quotas and restricted capture are
 unchanged. A greeting is a reviewed draft; the kernel neither sends a message
 nor certifies live first-contact eligibility.
+
+### Split for Ping, Hi and Coach drafts (`split-all-v1`, chat-extension H-10)
+
+`replyMode: "preferSplit"` splits Reply and Fix (`fast-reply`, `improve-draft`) for every client, as
+before. `ping`, `hi-greeting` and `coach-chat` take it only when all of these hold:
+
+- the request advertises `split-all-v1` in `x-kernel-ai-capabilities`;
+- the owner's `splitAll` flag is on for the page, by the same evaluation as every chat-extension
+  flag (`evaluateClientFeature`: an OnlyFans page, `chatExtensionEnabled`, the flag in
+  `chatExtensionFeatures`, a binding, `split-all-v1` among the served capabilities);
+- the feature is `supportsSplitAll` in both policy tables (`FEATURE_POLICIES` and the builder's
+  `PROMPT_POLICIES`).
+
+`replyMode` alone never turns it on: the Fansly extension sends `preferSplit` on every feature, and
+a client that does not advertise the capability keeps its prompts byte for byte
+(`tests/ai-prompts-split-all.test.ts`, `tests/client-sdk-compat.integration.test.ts`). A request
+that does not pass the gate is not refused: it generates the prompt without Split it always did.
+
+With the gate open only the uncached task block changes. Ping gets the instructions for 2-3
+`[NEXT]` parts; Hi asks for `[NEXT]` parts inside each `[VARIANT]`, or inside its one draft. The
+cached prefix, the body schema and the frames are unchanged: the markers travel inside
+`content_delta` text and the client parses them after `done`.
+
+Coach splits its drafts, never its advice. The draft grammar is unchanged: a block opens with a
+` ```draft ` line and closes with a ` ``` ` line, at most two blocks per answer (exactly two on a
+preset turn), each under 1500 characters. With the gate open the `[NEXT]` parts sit inside each
+block, 2-3 per block, and the 1500 characters cover the block with all its parts. A client splits
+a block's body on `[NEXT]` after it has lifted the block out of the answer; `[NEXT]` is asked for
+nowhere else in a Coach answer. An earlier split answer replayed in `coachHistory` reaches a later
+prompt as the client sent it, markers included, whatever that later turn's gate says.
+
+A generation the gate opened also stores `params.outputStructure` in its restricted record: the
+structure of the finished text, counts only. It is written for completed streams only and is a
+record, never a filter: the stream has already been sent.
+
+- Ping and Hi: `{ variantsRequested, partsPerVariant, ok }`, where `ok` means the requested number
+  of variants with two or three parts each.
+- Coach: `{ draftsRequested, partsPerDraft, brokenDrafts, strayMarkers, ok }`. The check reads the
+  answer the way a client does: it lifts the draft blocks out and the rest stays in the advice.
+  `draftsRequested` is `2` on a preset turn and `null` on a question turn, where the coach decides
+  how many messages to propose. `partsPerDraft` counts the parts of every well-formed block:
+  closed, not empty, at most 1500 characters. `brokenDrafts` counts the draft fences the model
+  opened that are not such a block: an opener that is not the ` ```draft ` line (indented,
+  ` ```Draft `, four backticks), a block that never closes (the answer ran out of tokens, the
+  closer is glued to the text), a block over 1500 characters. `strayMarkers` counts the `[NEXT]`
+  markers outside the counted blocks, in the advice or in a broken draft: a client shows those to
+  the chatter as text. `ok` means the requested number of blocks (at most two when the coach
+  decides, none included), each with two or three parts, no broken draft and no stray marker. So
+  an empty `partsPerDraft` with `ok: true` on a question turn is an answer with no draft fence
+  and no marker anywhere in it: as far as the markup can tell, one that proposes no message.

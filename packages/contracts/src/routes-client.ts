@@ -23,10 +23,12 @@
  *   itself and reads an unknown member as "off" / "unknown".
  */
 
-import { platforms, userRoles } from "@agency_hub_core/shared";
+import {
+  MOSCOW_TIME_ZONE, diffBusinessDays, isValidBusinessDateString, nextBusinessDate, platforms, userRoles,
+} from "@agency_hub_core/shared";
 import { z } from "zod";
 
-import { errorResponseSchema, intId, isoTimestamp } from "./primitives.ts";
+import { businessDate, errorResponseSchema, intId, isoTimestamp } from "./primitives.ts";
 
 /** Open token: the wire form of every growing vocabulary (reason, flag, capability, platform, role…). */
 export const clientOpenToken = z.string().min(1).max(64);
@@ -272,6 +274,217 @@ export const clientFanProfileFromGenerationResponseSchema = z.object({
   }),
 });
 
+// ── own AI spend (H-15) ──────────────────────────────────────────────────────
+//
+// What the caller spent on AI on one page, day by day, for the extension's
+// debug panel. Always the caller's own ledger rows: an owner too reads only the
+// owner's own spend, never a chatter's.
+//
+// TWO DAY BOUNDARIES, and the answer states both:
+// - a report day is a calendar day in `timeZone` (Europe/Moscow unless the
+//   caller names another zone, as in the cabinet's reports). Every day carries
+//   the two instants it was cut at (`from`, `toExclusive`);
+// - the AI quota counts the UTC day (`quota.dayBoundary`). "Left today" is
+//   therefore counted over a different window than today's report row, and the
+//   two do not add up to the limit.
+
+/** At most this many days in one answer. */
+export const CLIENT_AI_USAGE_MAX_DAYS = 7;
+/** `date` may lie this many days before today (today in `timeZone`), no further. */
+export const CLIENT_AI_USAGE_MAX_AGE_DAYS = 8;
+/** Known values of `days[].coverage`. On the wire an open token. */
+export const CLIENT_AI_USAGE_COVERAGE = ["complete", "partial"] as const;
+/** Known values of `days[].coverageReasons`: why a day's numbers may still change or are not exact. */
+export const CLIENT_AI_USAGE_COVERAGE_REASONS = ["day_open", "open_reservations", "approximate_cost"] as const;
+/** The `reason` beside this route's 400 `bad_request`. */
+export const CLIENT_AI_USAGE_REFUSAL_REASONS = ["unknown_time_zone", "date_in_future", "date_too_old"] as const;
+
+export type ClientAiUsageCoverage = (typeof CLIENT_AI_USAGE_COVERAGE)[number];
+export type ClientAiUsageCoverageReason = (typeof CLIENT_AI_USAGE_COVERAGE_REASONS)[number];
+export type ClientAiUsageRefusalReason = (typeof CLIENT_AI_USAGE_REFUSAL_REASONS)[number];
+
+export const clientAiUsageQuerySchema = z.object({
+  /** The LAST day of the range: a calendar day in `timeZone`. */
+  date: businessDate,
+  /** How many days, ending at `date`. */
+  days: z.coerce.number().int().min(1).max(CLIENT_AI_USAGE_MAX_DAYS).default(1),
+  /** The IANA zone the days are cut in. A zone the hub does not know is refused. */
+  timeZone: z.string().min(1).max(64).default(MOSCOW_TIME_ZONE),
+}).strict();
+
+export const clientAiUsageTotalsSchema = z.object({
+  /** Every ledger row of the window: finished, refused by the quota, or still open. */
+  requestCount: count,
+  costMicroUsd: count,
+  /** At least one row's cost is the hub's estimate, not the provider's count. */
+  costApproximate: z.boolean(),
+  tokens: z.object({ input: count, output: count, cacheWrite: count, cacheRead: count }),
+  completed: count,
+  failed: count,
+  cancelled: count,
+  quotaDenied: count,
+  /** Rows with no outcome yet: a generation still running, or one cut off and
+   *  not swept yet. Their cost is not in the totals. */
+  openReservations: count,
+  regenerations: count,
+});
+
+export const clientAiUsageDaySchema = z.object({
+  /** The calendar day in `timeZone`, YYYY-MM-DD. */
+  date: z.string(),
+  from: isoTimestamp,
+  toExclusive: isoTimestamp,
+  /** Open token; known values: CLIENT_AI_USAGE_COVERAGE. */
+  coverage: clientOpenToken,
+  /** Open tokens, empty when complete; known values: CLIENT_AI_USAGE_COVERAGE_REASONS. */
+  coverageReasons: z.array(clientOpenToken),
+  totals: clientAiUsageTotalsSchema,
+  /** One row per AI feature used that day, by feature name. The feature is an open token. */
+  features: z.array(clientAiUsageTotalsSchema.extend({ feature: clientOpenToken })),
+});
+
+export const clientAiUsageResponseSchema = z.object({
+  /** Whose spend and where: always the caller, on the page of the path. */
+  scope: z.object({ pageLabel: z.string(), userId: intId }),
+  /** The zone the days were cut in. */
+  timeZone: z.string(),
+  asOf: isoTimestamp,
+  moneyUnit: z.literal("micro-USD"),
+  /** Oldest first; the last one is the requested `date`. A day without spend is listed with zeros. */
+  days: z.array(clientAiUsageDaySchema),
+  /**
+   * What the caller may still spend on this page before the quota's day ends,
+   * and that day is the UTC day, whatever `timeZone` is. Null when this hub's AI
+   * gateway is off: nothing is generated, so there is no quota to report.
+   */
+  quota: z.object({
+    dayBoundary: z.literal("UTC"),
+    remainingRequestsToday: count.nullable(),
+    remainingMicroUsdToday: count.nullable(),
+  }).nullable(),
+});
+
+// ── the owner's client-health view (H-11c) ───────────────────────────────────
+//
+// What the owner reads of the `client_health` rollups (H-11b): figures by client
+// version and host build, never by person. The rollups hold no user, page, fan
+// or device, so neither does this view, and it has no list of who runs what.
+//
+// A dashboard route, not a client's: `owner-session`, so no device token reaches
+// it and it is on no narrow-token list. It lives in this module because every
+// shape of the chat extension does (and `routes.ts` stays untouched).
+
+/** The longest range one read may span, in days. */
+export const ADMIN_CLIENT_HEALTH_MAX_RANGE_DAYS = 366;
+
+export const adminClientHealthQuerySchema = z.object({
+  /** First and last day of the range, inclusive, in the response's `range.timeZone`. */
+  from: businessDate,
+  to: businessDate,
+  /** Only this client's rollups (`chat-extension`). */
+  clientName: clientOpenToken.optional(),
+  /** Only this metric among `perf`; the other sections are not narrowed by it. */
+  metric: clientOpenToken.optional(),
+}).strict().superRefine((query, ctx) => {
+  // The field checks above report a malformed date; a range needs two real ones.
+  if (!isValidBusinessDateString(query.from) || !isValidBusinessDateString(query.to)) {
+    return;
+  }
+  // The read stops before the first hour of the day after `to`, and the hub has
+  // to be able to name that day: 9999-12-31 has none, and the day after one in a
+  // year below 1000 comes back from `nextBusinessDate` without its leading zero.
+  // Refused here, or resolving the range throws and the route answers 500.
+  if (!isValidBusinessDateString(nextBusinessDate(query.to))) {
+    ctx.addIssue({ code: "custom", path: ["to"], message: "`to` is outside the days the hub can read" });
+    return;
+  }
+  if (query.from > query.to) {
+    ctx.addIssue({ code: "custom", path: ["to"], message: "`from` must be on or before `to`" });
+    return;
+  }
+  if (diffBusinessDays(query.from, query.to) > ADMIN_CLIENT_HEALTH_MAX_RANGE_DAYS) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["to"],
+      message: `the range must not be longer than ${ADMIN_CLIENT_HEALTH_MAX_RANGE_DAYS} days`,
+    });
+  }
+});
+
+/**
+ * One perf metric of one client group over the range, read off the buckets
+ * merged across every report and hour of it (a percentile is never averaged
+ * from parts). Milliseconds.
+ *
+ * A group with fewer than `minGroupSize` observations in the range asked for is
+ * `suppressed`: it shows how many observations it has and no figure of them
+ * (mean, max and both percentiles are null). The floor is on the range of one
+ * read and no narrower: see the route's description.
+ */
+export const adminClientHealthPerfRowSchema = z.object({
+  clientName: z.string(),
+  /** A code, or `(other)` for a version that is not one. */
+  clientVersion: z.string(),
+  hostKind: z.string(),
+  /** The host build fingerprint; `(other)` for one that is not a code, null when the client could not read it. */
+  hostBuild: z.string().nullable(),
+  metric: z.string(),
+  /** The version of the metric's bounds and meaning; two versions are two rows. */
+  schemaVersion: z.number().int(),
+  /** Observations in the group. */
+  count,
+  mean: z.number().nullable(),
+  max: z.number().nullable(),
+  p50: z.number().nullable(),
+  p95: z.number().nullable(),
+  suppressed: z.boolean(),
+});
+
+/**
+ * The host-contract verdicts of one client version on one host build: counts of
+ * reports, shown at any size (a build that breaks the contract shows from its
+ * first report).
+ */
+export const adminClientHealthContractRowSchema = z.object({
+  clientVersion: z.string(),
+  hostBuild: z.string().nullable(),
+  /** Reports received from the group. */
+  reports: count,
+  /** Reports that said the host contract was broken. */
+  failedReports: count,
+  /** The anchors of the host contract that reports did not find, each with how many reports missed it. */
+  missing: z.array(z.object({ anchor: z.string(), reports: count })),
+});
+
+/**
+ * The client's own footprint by client version: the 95th percentile, over
+ * reports, of the size of its caches and logs (KB) and of the largest number of
+ * its own DOM nodes in a report's window. Null under `minGroupSize` reports.
+ */
+export const adminClientHealthFootprintRowSchema = z.object({
+  clientVersion: z.string(),
+  cachesKBp95: z.number().nullable(),
+  logsKBp95: z.number().nullable(),
+  domNodesP95: z.number().nullable(),
+});
+
+export const adminClientHealthResponseSchema = z.object({
+  /** The days read, as asked, and the zone they are days of. */
+  range: z.object({ from: z.string(), to: z.string(), timeZone: z.string() }),
+  /** The fewest observations a group needs, over the range asked for, to show a mean, a maximum or a percentile. */
+  minGroupSize: positive,
+  perf: z.array(adminClientHealthPerfRowSchema),
+  contract: z.array(adminClientHealthContractRowSchema),
+  /**
+   * Counters by code, summed over the range: errors, prevented inserts, P1s, and
+   * the client's own bookkeeping of what it left out of a report (`perf.capped`
+   * and the like), which is not an error count.
+   */
+  counters: z.array(z.object({ code: z.string(), total: count })),
+  footprint: z.array(adminClientHealthFootprintRowSchema),
+  asOf: isoTimestamp,
+});
+
 export const clientRouteSchemas = {
   clientBootstrap: {
     auth: { kind: "apiKey" },
@@ -335,6 +548,50 @@ export const clientRouteSchemas = {
       409: errorResponseSchema,
     },
   },
+  clientAiUsageDaily: {
+    auth: { kind: "apiKey", scope: "page" },
+    tags: ["client"],
+    summary: "The caller's own AI spend on one page, by day",
+    description: "Read-only and database-only: no platform request, no queued work. Only the caller's own "
+      + "ledger rows on the page of the path; an owner too reads only their own. `date` is the last of "
+      + "`days` (1 to 7) calendar days in `timeZone` (Europe/Moscow by default); every day carries the "
+      + "instants it was cut at. A day is `partial` while it is not over (`day_open`), while a generation "
+      + "of it is still running (`open_reservations`), or when a cost in it is an estimate "
+      + "(`approximate_cost`). `quota` is counted over the UTC day, not over `timeZone`. Refused with 400 "
+      + "and a `reason`: `unknown_time_zone`, `date_in_future`, `date_too_old` (more than 8 days before "
+      + "today in `timeZone`). Behind the chat-extension master switch and minimum version: 409 "
+      + "`client_feature_disabled` with the reason (`disabled`, `client_outdated`, `not_granted`).",
+    params: clientPageParamsSchema,
+    querystring: clientAiUsageQuerySchema,
+    response: {
+      200: clientAiUsageResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
+  adminClientHealth: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary: "Owner view of the chat extension's health: speed, host contract, counters and footprint by client version",
+    description: "Read-only and database-only, over the hourly `client_health` rollups, which hold no user, page, "
+      + "fan or device: the view names no person. Reports are filed under the hour the hub received them; the range "
+      + "is whole days of `range.timeZone`. Percentiles are read off buckets merged over the range. A group with "
+      + "fewer than `minGroupSize` observations in the range asked for shows its size and no mean, maximum or "
+      + "percentile. That floor is on the range of one read and no narrower: the mean and the maximum of a few "
+      + "observations can be worked out from two reads of larger ranges, so it keeps a thin figure from being read "
+      + "as the version's and does not seal a small group off. Contract verdicts and counters are counts of reports "
+      + "and events, shown at any size.",
+    querystring: adminClientHealthQuerySchema,
+    response: {
+      200: adminClientHealthResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
 } as const;
 
 export type ClientFeatureAvailability = z.infer<typeof clientFeatureAvailabilitySchema>;
@@ -347,6 +604,12 @@ export type ClientRecapBody = z.infer<typeof clientRecapBodySchema>;
 export type ClientConversationRecapsResponse = z.infer<typeof clientConversationRecapsResponseSchema>;
 export type ClientFanProfileFromGenerationBody = z.infer<typeof clientFanProfileFromGenerationBodySchema>;
 export type ClientFanProfileFromGenerationResponse = z.infer<typeof clientFanProfileFromGenerationResponseSchema>;
+export type ClientAiUsageQuery = z.infer<typeof clientAiUsageQuerySchema>;
+export type ClientAiUsageTotals = z.infer<typeof clientAiUsageTotalsSchema>;
+export type ClientAiUsageDay = z.infer<typeof clientAiUsageDaySchema>;
+export type ClientAiUsageResponse = z.infer<typeof clientAiUsageResponseSchema>;
+export type AdminClientHealthQuery = z.infer<typeof adminClientHealthQuerySchema>;
+export type AdminClientHealthResponse = z.infer<typeof adminClientHealthResponseSchema>;
 
 // ── client_health v1 (H-11a) ─────────────────────────────────────────────────
 //
@@ -382,12 +645,13 @@ export type ClientFanProfileFromGenerationResponse = z.infer<typeof clientFanPro
 // sends a report as one `ingestObservations` event of kind
 // CLIENT_HEALTH_INGEST_KIND, in a batch of its own, and ONLY once the bootstrap
 // lists `client-health-perf-v1`; until then it keeps its reports to itself. A
-// hub without that capability journals an unknown kind in `observations`
+// hub older than the intake (H-11b) journals an unknown kind in `observations`
 // (`desktop.unknown:<kind>`) with the user, forever and on into the lake, which
-// is exactly what this report must never become. The intake behind the
-// capability (H-11b) checks a report against this schema and the bounds
-// registry, folds it into hourly rollups keyed without the user, and never
-// journals it.
+// is exactly what this report must never become. The intake (H-11b) never
+// journals the kind, from any token: behind the capability (the owner's
+// `chatExtensionHealthIngestEnabled`) it checks a report against this schema
+// and the bounds registry and folds it into hourly rollups keyed without the
+// user; without it, it accepts the report and keeps nothing.
 //
 // A client→hub shape, so strict (§4.0): an unknown key is a malformed report,
 // and a new field is a new report version. Growing names (metric, host kind)
@@ -537,7 +801,12 @@ export const clientHealthReportV1Schema = z.object({
         seen.add(histogram.metric);
       });
     }),
-  /** Code → occurrences in the window: errors by code, prevented inserts, P1s. */
+  /**
+   * Code → occurrences in the window: errors by code, prevented inserts, P1s.
+   * One code the client sends here is a level, not a count: `footprint.dom-nodes-max`,
+   * the largest number of its own DOM nodes in the window. The intake buckets
+   * it, one observation per report, and keeps it out of the counter totals.
+   */
   counters: z.record(healthCode, healthCounterValue)
     .refine((counters) => Object.keys(counters).length <= 200, { message: "at most 200 counters" }),
   /** The client's own caches and logs, not the heap (Firefox has no portable heap reading). */

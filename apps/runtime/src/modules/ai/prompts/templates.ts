@@ -504,7 +504,7 @@ Use this fan segment strategy:
 
 {fanSilenceSection}
 
-Write a {pingMessageKind} from the model to the fan following that segment strategy. Output only the message text, in the fan's language (English by default).
+Write a {pingMessageKind} from the model to the fan following that segment strategy. Output only the message text, in the fan's language (English by default).{pingSplitInstructions}
 Before you send: reread it as the fan would. If it could have gone to any other fan, add the detail that makes it his.
 `;
 
@@ -628,7 +628,7 @@ The chatter asks:
 
 {coachDraftSection}
 {presetInstructions}
-Answer the chatter now in the language they asked in. Use a draft fence for any proposed fan message, in the fan's language (English by default). Keep the explanation outside the fence.
+Answer the chatter now in the language they asked in. Use a draft fence for any proposed fan message, in the fan's language (English by default). Keep the explanation outside the fence.{coachSplitInstructions}
 `;
 
 export const VOICE_SCRIPT_TEMPLATE = `You are adapting a chosen chat-message draft into a short spoken script for a voice note the model will record on OnlyFans. Rewrite the draft as something the model would naturally SAY out loud, staying fully in character with the personality in the system prompt.

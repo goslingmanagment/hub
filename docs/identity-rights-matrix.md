@@ -52,6 +52,7 @@ pages that account is granted; the owner is granted every page implicitly.
 | Chat-extension bootstrap — `/client/bootstrap` (`apiKey`) | no (403) | yes, every page | no (403) | yes, assigned | no (403) | **yes, assigned** | — | yes, by the role's reach |
 | Chat-extension shared recaps — `/client/pages/{label}/conversations/{fan}/recaps` (`apiKey` + page scope) | no (403) | yes, every page | no (403) | yes, assigned | no (403) | **yes, assigned** | — | yes, by the role's reach |
 | Chat-extension dossier save — `/client/pages/{label}/fans/{fan}/profile/from-generation` (`apiKey` + page scope) | no (403) | own generations, every page | no (403) | own generations, assigned | no (403) | **own generations, assigned** | — | own generations, by the role's reach |
+| Chat-extension own AI spend — `/client/pages/{label}/ai-usage` (`apiKey` + page scope) | no (403) | yes, every page, **own rows only** | no (403) | yes, assigned, own rows only | no (403) | **yes, assigned, own rows only** | — | yes, by the role's reach |
 
 The client bootstrap lists the caller's **active** pages only (a tombstoned
 page is never listed, assigned or not) and announces every feature off until
@@ -147,6 +148,18 @@ inside what the caller could already do:
 Held by `client-ai-live-text.integration` (a chatter of two pages, the owner,
 a page that is not the chatter's) and `client-ai-live-text-lookup.integration`.
 
+The own-AI-spend read (chat-extension H-15) answers the **caller's own**
+ledger rows on the page of the path, by day, and nothing else: an owner's
+device token reads the owner's spend, never a chatter's (everyone's spend is
+the owner console's usage report, cookie only). The page is in the path, so
+page scope applies as on every page route; a page or a user named in the query
+is refused, not ignored. It waits for the owner's master switch
+(`chatExtensionEnabled`) and the extension's version
+(`chatExtensionMinVersion`); it has no flag of its own and asks for no
+platform or host binding. Its row is held by `client-ai-usage.integration`:
+every cell, the agent key, and a page that is not granted, tombstoned or
+missing, in both auth-policy modes.
+
 The **chat-extension token** (chat-extension H-3) is a device token the
 extension asks for at password sign-in with `client: "chat-extension"`. The
 sign-in echoes `client`, the token row keeps the profile for good (a trigger
@@ -156,14 +169,32 @@ reaches only the routes of `CLIENT_TOKEN_PROFILES["chat-extension"]`
 column of the [generated policy table](generated/authorization-policy.md)):
 who am I, the bootstrap, the persona catalogue without prompt texts, the AI
 feature stream, the recap status, the shared recaps, the dossier save from a
-stored generation, the fan and conversation profiles, the spenders reads, the
-capture lane and revoking itself. Every other route
+stored generation, the fan and conversation profiles, the spenders reads, its
+own AI spend, the capture lane and revoking itself. Every other route
 answers a plain 403 with no `reason`, in **both** auth-policy modes, before any
 handler runs; page scope still applies on the listed routes, and a revoked or
 expired token still answers 401 with its reason. On the capture lane it sends
-only `ai_acceptance`, journaled as `chat-extension@<version>`, and it can never
-carry the desktop harvest capability. Its AI generations wait for the owner's
-switches (`chatExtensionEnabled`, the Coach / Recap / Review flags) and its
+only `ai_acceptance`, journaled as `chat-extension@<version>`, and
+`client_health` (chat-extension H-11b), and it can never carry the desktop
+harvest capability. A `client_health` report is never journaled, from any
+token: the journal keeps the payload and the user forever. The lane folds it
+into hourly rollups that hold no user, page or fan (the `client_health_*_hourly`
+tables) and drops the report; with `chatExtensionHealthIngestEnabled` off (or
+the master switch off) it accepts the report and keeps nothing, and the
+bootstrap does not list `client-health-perf-v1`, so the extension does not send
+one. Held by `client-health-intake.integration`. The owner reads the rollups at
+`GET /api/v1/admin/client-health` (chat-extension H-11c), an `owner-session`
+route like the rest of the owner console: no device token reaches it, the
+extension's own included. It names no person, since the rollups hold none: the
+figures are by client version and host build, and a group of fewer than 20
+observations in the range asked for shows its size and no mean, maximum or
+percentile. That floor is on the range of one read and no narrower: the mean
+and the maximum of a few observations can be worked out from two reads of
+larger ranges, so it keeps a thin figure from being read as the version's and
+does not seal a small group off. Contract verdicts and counters are counts of
+reports and events and are shown at any size. Held by
+`client-health-view.integration`. Its AI generations wait for
+the owner's switches (`chatExtensionEnabled`, the Coach / Recap / Review flags) and its
 version for `chatExtensionMinVersion`, and each generation record is labelled
 `clientProfile: "chat-extension"`. A full device token of the same person is
 untouched. Held by `device-token-client-profile.integration` (every route of

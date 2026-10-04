@@ -45,7 +45,7 @@ import {
   testSpec,
   waitFor,
 } from "./helpers/sync-engine-host.ts";
-import { routeEntryOf, seedRouteState } from "./helpers/sync-holds.ts";
+import { pageHoldKindOf, resourceBreakersOf, routeEntryOf, seedRouteState } from "./helpers/sync-holds.ts";
 
 // The conversation list of the Fansly Sync Engine (design §5.3) through the
 // real actor and commits against a real database: a scripted live transport
@@ -618,8 +618,8 @@ describe("dm-conversations.find and .detail", () => {
     const detail = await workRow(pageId, "dm-conversations.detail");
     expect(detail).toMatchObject({ state: "open", failure_count: 1 });
     expect(detail!.breaker_until!.getTime()).toBeGreaterThan(Date.now());
-    const page = await testDb.pool.query("select hold_kind, resource_holds from sync_pages where page_id = $1", [pageId]);
-    expect(page.rows[0]).toEqual({ hold_kind: null, resource_holds: {} });
+    // Nothing else is held: the page's hold set is empty.
+    expect((await getSyncPage(db(), pageId))!.holds).toEqual([]);
     expect(await thread(pageId, 5)).toMatchObject({ partner: null, metadata: { unresolvedIdentity: true } });
   });
 });
@@ -970,18 +970,15 @@ describe("a 429 on the conversation list (owner decisions №14, №22)", () => 
     return { account: { id: OWN_ID, username: "model", displayName: "Model", followCount: 0, subscriberCount: 0 } };
   }
 
-  /** The list route's state as the page row's old hold columns say it — which
-   *  every hold write of this release keeps in step with the hold set (the
-   *  previous image reads them): no page hold, no file breaker, the route's
-   *  entry. */
+  /** The list route as the page's hold set has it: the page's own hold (none),
+   *  the breaker of the list's file (none), the route's entry. */
   async function listRoute(pageId: number) {
-    const result = await testDb!.pool.query<{ hold_kind: string | null; list_file: unknown; entry: { holdUntil: string; ladderStep: number; effectivePerMin: number } | null }>(
-      `select hold_kind, resource_holds -> 'dm-conversations' as list_file,
-              resource_holds #> '{route:state,routes,messaging.groups}' as entry
-         from sync_pages where page_id = $1`,
-      [pageId],
-    );
-    return result.rows[0]!;
+    const page = (await getSyncPage(db(), pageId))!;
+    return {
+      pageHold: pageHoldKindOf(page),
+      listBreaker: resourceBreakersOf(page)["dm-conversations"] ?? null,
+      entry: routeEntryOf(page, "messaging.groups"),
+    };
   }
 
   /** The list route held for 5 more minutes (the test's stand-in for a long Retry-After). */
@@ -1023,8 +1020,8 @@ describe("a 429 on the conversation list (owner decisions №14, №22)", () => 
     expect(first.hits.filter((spec) => spec === "messaging.groups")).toHaveLength(1);
     expect(first.hits).toContain("account.me");
     const held = await listRoute(pageId);
-    expect(held).toMatchObject({ hold_kind: null, list_file: null, entry: { ladderStep: 1, effectivePerMin: 6 } });
-    const untilMs = new Date(held.entry!.holdUntil).getTime() - Date.now();
+    expect(held).toMatchObject({ pageHold: null, listBreaker: null, entry: { ladderStep: 1, effectivePerMin: 6 } });
+    const untilMs = new Date(held.entry!.holdUntil!).getTime() - Date.now();
     // The ladder's first step: 5 s + ≤ 20 % jitter.
     expect(untilMs).toBeLessThanOrEqual(6_000);
     // Open and due: the route admission keeps it out of the pick while its only route is held.
@@ -1088,7 +1085,7 @@ describe("a 429 on the conversation list (owner decisions №14, №22)", () => 
     expect([...second.hits].sort()).toEqual(["messages.page", "transactions.page"]);
     expect((await workRow(pageId, "dm-messages.head"))!.close_reason).toBe("confirmed");
     expect(await thread(pageId, 3)).toMatchObject({ head_confirmed_id: messageOf(3), history_state: "partial", stored_message_count: 1 });
-    expect(await listRoute(pageId)).toMatchObject({ hold_kind: null, list_file: null, entry: { ladderStep: 1 } });
+    expect(await listRoute(pageId)).toMatchObject({ pageHold: null, listBreaker: null, entry: { ladderStep: 1 } });
     expect(await workRow(pageId, "dm-conversations.head")).toMatchObject({ state: "open", waiting_reason: null });
     expect(await countRows(testDb.pool,
       "select count(*)::int as n from sync_attempts where page_id = $1 and resource = 'dm-conversations.head'", [pageId])).toBe(1);

@@ -8,6 +8,7 @@ export * from "./templates.ts";
 export * from "./types.ts";
 export * from "./output/reply-output.ts";
 export * from "./output/split.ts";
+export * from "./output/split-structure.ts";
 export * from "./output/xml.ts";
 export * from "./transcript/index.ts";
 export * from "./transcript/ping-segment.ts";

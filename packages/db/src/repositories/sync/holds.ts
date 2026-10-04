@@ -1,6 +1,5 @@
 import { sql } from "drizzle-orm";
 
-import type { Database } from "../../client.ts";
 import { toDate, toRequiredDate } from "./values.ts";
 
 // Fansly Sync Engine, the hold set (0240; plan §9, §11, owner decision №26):
@@ -86,7 +85,7 @@ export const syncHoldsOfPageSql = sql`
      from sync_holds h
     where h.page_id = sp.page_id)`;
 
-/** Rows as the driver hands them out (a JSON aggregate, or columns) → rows. */
+/** Rows as the driver hands them out (the page select's JSON aggregate) → rows. */
 export function normalizeSyncHoldRows(rows: readonly HoldSqlRow[] | null | undefined): SyncHoldRow[] {
   return (rows ?? []).map((row) => ({
     scope: row.scope,
@@ -98,15 +97,4 @@ export function normalizeSyncHoldRows(rows: readonly HoldSqlRow[] | null | undef
     detail: row.detail ?? {},
     revision: Number(row.revision),
   }));
-}
-
-/** A page's hold set, ordered by scope, key and kind. */
-export async function listSyncHolds(db: Database, pageId: number): Promise<SyncHoldRow[]> {
-  const result = await db.execute<HoldSqlRow>(sql`
-    select h.scope, h.key, h.kind, h.until, h.since, h.ladder_step as "ladderStep", h.detail, h.revision::text as revision
-      from sync_holds h
-     where h.page_id = ${pageId}
-     order by h.scope, h.key, h.kind
-  `);
-  return normalizeSyncHoldRows(result.rows);
 }

@@ -1,5 +1,5 @@
 import { NavLink, useLocation, Link } from "react-router";
-import { BarChart3, Bell, Coins, LineChart, Settings, Users, Heart, Trophy, Terminal, ListTodo, Database, AlertTriangle, Droplets, Code2, ChevronDown, UserX } from "lucide-react";
+import { Activity, BarChart3, Bell, Coins, LineChart, Settings, Users, Heart, Trophy, Terminal, ListTodo, Database, AlertTriangle, Droplets, Code2, ChevronDown, UserX } from "lucide-react";
 import { useState } from "react";
 import { useAdminConnections } from "@/api/queries";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
@@ -16,6 +16,8 @@ const devLinks = [
   { to: "/dev/queue", label: "Queue", icon: ListTodo },
   { to: "/dev/db-stats", label: "DB Stats", icon: Database },
   { to: "/dev/incidents", label: "Incidents", icon: AlertTriangle },
+  // The chat extension's health reports by version; no person in them (H-11c).
+  { to: "/dev/client-health", label: "Client health", icon: Activity },
   // Slice C: the owner approval queue. It lives under Dev because it is an
   // operator surface, not a daily one — an empty queue is the normal state.
   { to: "/agent-hydration", label: "Hydration", icon: Droplets },

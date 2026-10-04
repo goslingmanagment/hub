@@ -276,15 +276,18 @@ describe("a 429 on the media statistics (owner decisions №20, №22)", () => {
       return mediaAnswer(req);
     };
     const alerts = new RecordingAlerts();
-    type Held = { hold_kind: string | null; media_stats_file: unknown; until: Date | null; effective: number | null };
+    type Held = { page_holds: number; media_stats_breakers: number; until: Date | null; effective: number | null };
     let heldSeen: Held | null = null;
     await runLive(pageId, reg, transport, async () => {
       if (heldSeen === null) {
+        // The page's hold set while the route is held.
         const page = await testDb!.pool.query<Held>(
-          `select hold_kind, resource_holds -> 'media-stats' as media_stats_file,
-                  (resource_holds #>> '{route:state,routes,media.offer_stats,holdUntil}')::timestamptz as until,
-                  (resource_holds #>> '{route:state,routes,media.offer_stats,effectivePerMin}')::float8 as effective
-             from sync_pages where page_id = $1`, [pageId]);
+          `select count(*) filter (where scope = 'page')::int as page_holds,
+                  count(*) filter (where scope = 'resource' and key = 'media-stats')::int as media_stats_breakers,
+                  max(until) filter (where scope = 'route' and key = 'media.offer_stats' and kind = 'route_hold') as until,
+                  max((detail ->> 'effectivePerMin')::float8)
+                    filter (where scope = 'route' and key = 'media.offer_stats' and kind = 'route_budget') as effective
+             from sync_holds where page_id = $1`, [pageId]);
         if (page.rows[0]?.until !== null && page.rows[0]?.until !== undefined) heldSeen = page.rows[0];
       }
       return (await visited(pageId)) >= 2;
@@ -303,14 +306,13 @@ describe("a 429 on the media statistics (owner decisions №20, №22)", () => {
       ]);
       // The hold was the route's own (and it runs at half its 5/min after);
       // the page and the media-stats file were never held.
-      expect(heldSeen).toMatchObject({ hold_kind: null, media_stats_file: null, effective: 2.5 });
+      expect(heldSeen).toMatchObject({ page_holds: 0, media_stats_breakers: 0, effective: 2.5 });
       const holdMsSet = heldSeen!.until!.getTime() - media[0]!.completed_at!.getTime();
       // The ladder's first step stretched by ≤ 20 % jitter; a Retry-After as stated.
       expect(holdMsSet).toBeGreaterThan(holdMs - 1_000);
       expect(holdMsSet).toBeLessThanOrEqual(retryAfter === null ? holdMs * 1.2 + 1_000 : holdMs + 1_000);
-      const page = await testDb.pool.query<{ hold_kind: string | null; hold_step: number }>(
-        "select hold_kind, hold_step from sync_pages where page_id = $1", [pageId]);
-      expect(page.rows).toEqual([{ hold_kind: null, hold_step: 0 }]);
+      const pageHolds = await testDb.pool.query("select kind from sync_holds where page_id = $1 and scope = 'page'", [pageId]);
+      expect(pageHolds.rows).toEqual([]);
       // The chat and the money head went out inside the walk's hold.
       const order = transport.hits.map((hit) => hit.spec);
       const first = order.indexOf("media.offer_stats");

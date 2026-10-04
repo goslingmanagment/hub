@@ -36,6 +36,12 @@ export interface FeaturePolicy {
   minMessages: number;
   rerunAction: FeatureRerunAction;
   supportsReplyMode: boolean;
+  /** Split by capability (chat-extension H-10, architecture.md D-15): the
+   * feature takes replyMode only when the request advertises `split-all-v1` on
+   * a page whose owner switched the `splitAll` flag on. Released clients send
+   * replyMode on every feature, so replyMode alone never turns it on. The
+   * builder's PROMPT_POLICIES carries the same flag. */
+  supportsSplitAll: boolean;
   supportsReplyTone: boolean;
   requiresDraft: boolean;
   usesPingSegment: boolean;
@@ -136,6 +142,7 @@ export const FEATURE_POLICIES = {
     minMessages: 0,
     rerunAction: 'regenerate',
     supportsReplyMode: true,
+    supportsSplitAll: false,
     supportsReplyTone: true,
     requiresDraft: false,
     usesPingSegment: false,
@@ -154,6 +161,7 @@ export const FEATURE_POLICIES = {
     minMessages: 0,
     rerunAction: 'regenerate',
     supportsReplyMode: true,
+    supportsSplitAll: false,
     supportsReplyTone: false,
     requiresDraft: true,
     usesPingSegment: false,
@@ -172,6 +180,7 @@ export const FEATURE_POLICIES = {
     minMessages: 0,
     rerunAction: 'regenerate',
     supportsReplyMode: false,
+    supportsSplitAll: false,
     supportsReplyTone: false,
     requiresDraft: false,
     usesPingSegment: false,
@@ -190,6 +199,7 @@ export const FEATURE_POLICIES = {
     minMessages: MIN_MESSAGES_FOR_DEEP,
     rerunAction: 'refresh',
     supportsReplyMode: false,
+    supportsSplitAll: false,
     supportsReplyTone: false,
     requiresDraft: false,
     usesPingSegment: false,
@@ -208,6 +218,7 @@ export const FEATURE_POLICIES = {
     minMessages: MIN_MESSAGES_FOR_DEEP,
     rerunAction: 'refresh',
     supportsReplyMode: false,
+    supportsSplitAll: false,
     supportsReplyTone: false,
     requiresDraft: false,
     usesPingSegment: false,
@@ -226,6 +237,7 @@ export const FEATURE_POLICIES = {
     minMessages: 0,
     rerunAction: 'regenerate',
     supportsReplyMode: false,
+    supportsSplitAll: true,
     supportsReplyTone: false,
     requiresDraft: false,
     usesPingSegment: true,
@@ -244,6 +256,7 @@ export const FEATURE_POLICIES = {
     minMessages: 0,
     rerunAction: 'regenerate',
     supportsReplyMode: false,
+    supportsSplitAll: true,
     supportsReplyTone: false,
     requiresDraft: false,
     usesPingSegment: false,
@@ -262,6 +275,7 @@ export const FEATURE_POLICIES = {
     minMessages: 0,
     rerunAction: 'regenerate',
     supportsReplyMode: false,
+    supportsSplitAll: true,
     supportsReplyTone: false,
     requiresDraft: false,
     usesPingSegment: false,
@@ -285,6 +299,7 @@ export const FEATURE_POLICIES = {
     minMessages: 0,
     rerunAction: 'regenerate',
     supportsReplyMode: false,
+    supportsSplitAll: false,
     supportsReplyTone: true,
     requiresDraft: true,
     usesPingSegment: false,
