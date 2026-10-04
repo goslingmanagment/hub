@@ -613,20 +613,19 @@ export interface UpsertPageDmMessageInput {
 
 /**
  * Insert or refresh message rows; a row deleted earlier stays as it is
- * (sticky). Returns the platform ids of the rows this statement INSERTED (new
- * to the thread, hence not deleted) — the Fansly Sync Engine's incremental
- * legacy summary counts them; every other caller ignores the result.
+ * (sticky). The Fansly Sync Engine never calls it (step 4 S4-13): a live
+ * page's messages go to `message_archive`.
  */
 export async function upsertPageDmMessages(
   db: Database,
   inputs: UpsertPageDmMessageInput[],
-): Promise<string[]> {
+): Promise<void> {
   if (inputs.length === 0) {
-    return [];
+    return;
   }
 
   const syncedAt = new Date();
-  const written = await db
+  await db
     .insert(pageDmMessages)
     .values(inputs.map((input) => ({
       conversationId: input.conversationId,
@@ -654,11 +653,7 @@ export async function upsertPageDmMessages(
         inReplyToRootMessageId: sql`excluded.in_reply_to_root_message_id`,
         syncedAt: sql`excluded.synced_at`,
       },
-    })
-    // xmax = 0 only on a row this statement inserted (an updated row carries
-    // this transaction's id); a sticky-deleted conflict returns nothing.
-    .returning({ platformMessageId: pageDmMessages.platformMessageId, inserted: sql<boolean>`(xmax = 0)` });
-  return written.filter((row) => row.inserted === true).map((row) => row.platformMessageId);
+    });
 }
 
 export interface PageDmMessageLookupRow {
