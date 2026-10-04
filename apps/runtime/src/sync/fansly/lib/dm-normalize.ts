@@ -6,7 +6,7 @@ import { normalizeFanslyTimestamp } from "./timestamp.ts";
 
 // A served `/message` page as hot-table rows, without I/O: shared by the
 // legacy DM lanes, which store them in `page_dm_messages`, and the Fansly Sync
-// Engine, which writes no hot row (step 4 S4-13, I22) — its DM apply names the
+// Engine, which writes no hot row (step 4 S4-13, I23) — its DM apply names the
 // page's messages with them and its replay compares legacy's rows to them.
 
 export type FanslyDmMessageUpsertInput = UpsertPageDmMessageInput[];

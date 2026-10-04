@@ -1,4 +1,3 @@
-import { FANSLY_WS_HINT_PROJECTION, runFanslyWsHintProjection } from "./fansly-ws-hints.ts";
 import { OFAPI_MEDIA_EVENT, OFAPI_MEDIA_PROJECTION, runOfapiMediaProjection, rebuildOfapiMediaProjection } from "./ofapi-media.ts";
 import { OFAPI_CONTENT_PROJECTION, runOfapiContentProjection, rebuildOfapiContentProjection } from "./ofapi-content-events.ts";
 import { OFAPI_READ_SNAPSHOT_PROJECTION, runOfapiReadSnapshotProjection, rebuildOfapiReadSnapshotProjection } from "./ofapi-read-snapshots.ts";
@@ -154,12 +153,6 @@ export const PROJECTION_REGISTRY: readonly ProjectionDefinition[] = [
     stateClass: "operational_state", rebuildKind: "none", rebuild: null,
     label: "AI media describer candidates projected", run: runAiMediaCandidatesProjection,
     didWork: result => count(result, "candidates") > 0 || count(result, "accelerations") > 0,
-  },
-  {
-    name: FANSLY_WS_HINT_PROJECTION, eventTypes: ["fansly.ws_signal_observed"],
-    tables: ["fansly_ws_hint_receipts", "subject_refresh_state"], stateClass: "operational_state",
-    rebuildKind: "none", rebuild: null, label: "Fansly WS hints routed", run: runFanslyWsHintProjection,
-    didWork: result => count(result, "applied") > 0,
   },
   { name:OFAPI_CONTENT_PROJECTION, eventTypes:["ofapi.chat_queue_observed"], tables:["ofapi_chat_queue_state"], stateClass:"fact_projection", rebuildKind:"truncate_replay", label:"OFAPI queue evidence projected", run:runOfapiContentProjection, rebuild:rebuildOfapiContentProjection, didWork:result=>count(result,"applied")>0 },
   { name:OFAPI_READ_SNAPSHOT_PROJECTION, eventTypes:["ofapi.read_snapshot_observed"], tables:["ofapi_read_snapshots"], stateClass:"fact_projection", rebuildKind:"truncate_replay", label:"OFAPI read snapshots projected", run:runOfapiReadSnapshotProjection, rebuild:rebuildOfapiReadSnapshotProjection, didWork:result=>count(result,"applied")>0 },
@@ -418,8 +411,8 @@ export const OPERATIONAL_STATE_TABLES: readonly {
   },
   {
     table: "fansly_ws_hint_receipts", stateClass: "operational_state",
-    writer: "services/projections/fansly-ws-hints.ts",
-    justification: "B1 routing custody and revision receipts must survive replay. Truncation would increment dirty revisions twice and spend additional platform attempts.",
+    writer: "none since step 4 S4-11 (the retired ws-hints projector filed them); records only",
+    justification: "Exact socket-deletion evidence from before the Fansly Sync Engine applied deletions itself: the archive shadow rebuild re-applies these marks (no message.* event carries them), and erasure and fansly:ws-recovery-manifest read them. Truncation would lose those marks on the next rebuild.",
   },
   {
     table: "fan_earnings_target_attempts", stateClass: "operational_state",
@@ -666,9 +659,7 @@ function rotateProjections(
  *   there would park every later account again.
  * - Accounts the whole run already finished run a second time. That is safe:
  *   a projection resumes from its own watermark (usually an empty read), and
- *   its writes are idempotent. `fansly_ws_hints`, which takes one ledger page
- *   per tick, routes its next page early; the refreshes it asks for stay
- *   coalesced and under their own caps.
+ *   its writes are idempotent.
  * - Nothing is skipped or quarantined: a failing account's watermark stays
  *   where it is, and the next tick retries it.
  *

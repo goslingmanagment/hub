@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { sql, type SQL } from "drizzle-orm";
-import { FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY, type FanslyWsHintNode, type FanslyWsHintPolicy } from "@agency_hub_core/shared";
+import { FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY, type FanslyWsHintPolicy } from "@agency_hub_core/shared";
 import type { Database } from "../client.ts";
 import { tryAcquireDmArchiveWriterFenceLock } from "./erasure-fence.ts";
 import { capturePayloadRefFromColumns } from "./capture-payloads.ts";
@@ -20,58 +20,6 @@ export async function listFanslyWsHintRawPages(db: Database, pageId: number, gro
   if (result.rows.length !== ids.length) throw new Error("fansly_ws_hint_page_chain_unavailable");
   return result.rows.map(row => ({ id: Number(row.id), payload: row.payload,
     payloadRef: capturePayloadRefFromColumns(row.bucket, row.object_id) }));
-}
-
-export type FanslyWsHintEvent = {
-  id: number; pageId: number; observationId: number; receivedAt: Date;
-  generation: string | null; node: FanslyWsHintNode;
-};
-
-/** Caller holds the page erasure/generation fence and commits the routing
- * receipt with the dirty mark. Receipts survive projection replay. */
-export async function routeFanslyWsHintEvent(db: Database, event: FanslyWsHintEvent, policy: FanslyWsHintPolicy | null) {
-  const { node } = event;
-  let outcome: string = node.outcome;
-  if (node.outcome === "hint") {
-    outcome = !event.generation ? "generation_unknown"
-      : !policy || policy.generation !== event.generation || !node.hint || !policy.enabledTypes.has(node.hint.type) ? "disabled"
-      : event.receivedAt < new Date(policy.activationAt) ? "before_activation" : "routed";
-  } else if (node.outcome === "not_enabled") outcome = "disabled";
-  const groupRef = node.hint?.groupRef ?? node.mutation?.groupRef ?? null;
-  const receipt = await db.execute(sql`
-    insert into fansly_ws_hint_receipts (event_id, page_id, observation_id, received_at,
-      generation, group_ref, message_ref, hint_type, mutation, outcome)
-    values (${event.id}, ${event.pageId}, ${event.observationId}, ${event.receivedAt},
-      ${event.generation}, ${groupRef}, ${node.hint?.messageRef ?? node.mutation?.messageRef ?? null}, ${node.hint?.type ?? null},
-      ${node.mutation ? JSON.stringify(node.mutation) : null}::jsonb, ${outcome})
-    on conflict (event_id) do nothing returning event_id
-  `);
-  if (!receipt.rows.length || outcome !== "routed" || !node.hint) return false;
-  const result = await db.execute<{ requested_revision: string }>(sql`
-    insert into subject_refresh_state (page_id, plane, subject_ref, refresh_class,
-      dirty_reason, next_due_at, requested_revision, backfill_cursor)
-    values (${event.pageId}, ${FANSLY_WS_DM_PLANE}, ${node.hint.groupRef}, 'dirty',
-      'ws_hint', ${event.receivedAt}, 1, jsonb_build_object('generation', ${event.generation}::text))
-    on conflict (page_id, plane, subject_ref) do update set
-      requested_revision = subject_refresh_state.requested_revision + 1,
-      refresh_class = 'dirty', dirty_reason = 'ws_hint',
-      next_due_at = least(subject_refresh_state.next_due_at, excluded.next_due_at),
-      -- A new credential/route generation cannot inherit an old in-flight
-      -- walk. Same-generation R+1 leaves R's cursor and claim untouched.
-      backfill_cursor = case when subject_refresh_state.backfill_cursor->>'generation' = ${event.generation}
-        then subject_refresh_state.backfill_cursor else excluded.backfill_cursor end,
-      claim_token = case when subject_refresh_state.backfill_cursor->>'generation' = ${event.generation}
-        then subject_refresh_state.claim_token else null end,
-      claimed_revision = case when subject_refresh_state.backfill_cursor->>'generation' = ${event.generation}
-        then subject_refresh_state.claimed_revision else null end,
-      claim_expires_at = case when subject_refresh_state.backfill_cursor->>'generation' = ${event.generation}
-        then subject_refresh_state.claim_expires_at else null end,
-      updated_at = now()
-    returning requested_revision
-  `);
-  await db.execute(sql`update fansly_ws_hint_receipts set routed_revision = ${result.rows[0]!.requested_revision}::bigint
-    where event_id = ${event.id}`);
-  return true;
 }
 
 export type FanslyWsHintWalk = {
@@ -267,17 +215,6 @@ export async function listMaterializedFanslyWsHints(db: Database, input: {
       and ${materializedAtHead(policy)}
     order by next_due_at, last_visited_at, subject_ref limit ${input.limit}`);
   return result.rows.map(row => row.subject_ref);
-}
-
-/** While the 24h budget is spent the projector wakes a step only to settle
- * stored targets: when no subject of the page was claimed since `quietSince`
- * and a due one passes the zero-request gate. */
-export async function isFanslyWsHintDrainDue(db: Database, input: {
-  pageId: number; policy: FanslyWsHintPolicy; now: Date; quietSince: Date;
-}) {
-  const served = await db.execute(sql`select 1 from subject_refresh_state
-    where page_id = ${input.pageId} and plane = ${FANSLY_WS_DM_PLANE} and last_visited_at > ${input.quietSince} limit 1`);
-  return !served.rows.length && (await listMaterializedFanslyWsHints(db, { ...input, limit: 1 })).length > 0;
 }
 
 /** Called in the SAME owned transaction as the REST-derived message writes.

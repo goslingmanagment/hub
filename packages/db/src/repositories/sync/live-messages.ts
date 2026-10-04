@@ -858,13 +858,13 @@ export async function readFanslyWsLiveGauges(
 // what "unconfirmed" means per reader: a parity verdict found in the OTHER
 // store does not hide the row, or a message would blink out between the two
 // stores' arrivals (the archive trails page_dm_messages by its projection
-// minute, and the AI fast lane fills the archive before page_dm_messages). A
+// minute). A
 // `not_found` verdict hides it: REST had no copy for the whole parity window,
 // and REST wins (plan §7.4). Chats excluded from REST message sync never get a
 // copy; their socket rows stay visible, marked `apiUnavailable` (plan §7.9a).
 // A chat Hub has no thread row for stays invisible (plan §7.6). A socket
 // deletion hides the store's copy of that message as well (tombstone
-// dominance), ahead of the legacy deletion reconcile. Money is REST-only
+// dominance), ahead of the engine's `dm-live.deletions` mark. Money is REST-only
 // (owner decision №7): an overlay row carries no tip, price or purchase.
 
 /** The REST store a reader already reads; the overlay dedups against it. */

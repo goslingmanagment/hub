@@ -100,6 +100,7 @@ const envSchema = z.object({
   FANSLY_DM_MESSAGES_DELAY_MS: z.coerce.number().int().positive().default(5000),
   FANSLY_DM_HEAD_CATCHUP_PAGE_ALLOWLIST: z.string().default("none"),
   FANSLY_DM_SHADOW_PAGE_ALLOWLIST: z.string().default("none"),
+  // Retired with the legacy WebSocket receiver (step 4, S4-12); parsed, ignored.
   FANSLY_WS_CAPTURE_ENABLED: booleanSchema.default(false),
   FANSLY_WS_CAPTURE_PAGE_ALLOWLIST: z.string().default(""),
   FANSLY_LIVE_OVERLAY_READ_PAGES: z.string().default("none"),
@@ -364,7 +365,7 @@ const envSchema = z.object({
   // frame says a fan sent media. OFF until the owner enables it after stage 1.
   AI_MEDIA_DESCRIBE_FANSLY_ACCELERATOR_ENABLED: booleanSchema.default(false),
   AI_MEDIA_DESCRIBE_FANSLY_ACCELERATOR_DAILY_LIMIT: z.coerce.number().int().min(0).default(60),
-  // Fansly fast lane: a head read right after the hub's own WS frame (off).
+  // Retired with the AI media fast lane (step 4, S4-12); parsed, ignored.
   AI_MEDIA_DESCRIBE_FANSLY_FAST_LANE_MODE: z.enum(["off", "shadow", "serve"]).default("off"),
   AI_MEDIA_DESCRIBE_FANSLY_FAST_LANE_PAGES: z.string().default(""),
   // Agent Read Plane (slice 0a). Every one of these ships OFF/false so the deploy
@@ -434,6 +435,16 @@ const envSchema = z.object({
   // with no catalog reference there is no pointer, so the inline body is written
   // exactly as before. EMPTY = FULLY OFF.
   CAPTURE_CAS_POINTER_ONLY_PAGES: z.string().default(""),
+  // Chat extension (chat-extension docs/hub-pr-plan.md H-2b): the owner's
+  // switches for the hub's third client, live and audited. Every one rests OFF.
+  // The JSON and version values are parsed where they are read
+  // (chat-extension-settings.ts), never here: a bad value must turn the
+  // extension off, not stop the hub from booting.
+  CHAT_EXTENSION_ENABLED: booleanSchema.default(false),
+  CHAT_EXTENSION_FEATURES: z.string().default("{}"),
+  CHAT_EXTENSION_MIN_VERSION: z.string().default("0.0.0"),
+  CHAT_EXTENSION_HOST_BINDINGS: z.string().default("{}"),
+  CHAT_EXTENSION_PREVIEW_SEND_RECEIPT_PROFILES: z.string().default("[]"),
 });
 
 // Machine-readable list of every env var the schema understands. Exported so the
@@ -471,7 +482,11 @@ export interface AppConfig {
   fanslyDmMessagesDelayMs: number;
   fanslyDmHeadCatchupPageAllowlist?: string;
   fanslyDmShadowPageAllowlist?: string;
+  /** @deprecated Retired with the legacy WebSocket receiver (step 4, S4-12):
+   *  every Fansly page's socket runs in the Sync Engine and nothing reads it.
+   *  Parsed so an env that sets it boots; removed in S4-26. */
   fanslyWsCaptureEnabled?: boolean;
+  /** @deprecated Retired, like {@link AppConfig.fanslyWsCaptureEnabled}. */
   fanslyWsCapturePageAllowlist?: string;
   /** Pages whose chatter routes and AI kernel context read the live overlay
    * (CSV of labels, `all` or `none`); see fansly-live-overlay-read.ts. */
@@ -685,9 +700,10 @@ export interface AppConfig {
   aiMediaDescribeFanslyAcceleratorEnabled?: boolean;
   /** Agency-wide accelerator reads per rolling 24 h. */
   aiMediaDescribeFanslyAcceleratorDailyLimit?: number;
-  /** Fansly fast lane: off, shadow (route and count only) or serve. */
+  /** @deprecated Retired with the AI media fast lane (step 4, S4-12): nothing
+   *  reads it. Parsed so an env that sets it boots; removed in S4-26. */
   aiMediaDescribeFanslyFastLaneMode?: "off" | "shadow" | "serve";
-  /** Fast lane allowlist: comma-separated page labels, or `*`. */
+  /** @deprecated Retired, like {@link AppConfig.aiMediaDescribeFanslyFastLaneMode}. */
   aiMediaDescribeFanslyFastLanePages?: string;
   openrouterApiKey?: string | null;
   // Agent Read Plane (slice 0a) — all live-wired, all inert by default.
@@ -716,6 +732,16 @@ export interface AppConfig {
   /** G5 slice 3c-1: pages whose new captures skip the inline body once the
    *  catalog copy is on disk. CSV of page ids, "*" for all, "" = fully off. */
   captureCasPointerOnlyPages?: string;
+  /** Chat extension master switch; off = every feature off (H-2b). */
+  chatExtensionEnabled?: boolean;
+  /** JSON: scope ("*" or a page label) → flag → on. */
+  chatExtensionFeatures?: string;
+  /** MAJOR.MINOR.PATCH: the lowest extension version the client routes serve. */
+  chatExtensionMinVersion?: string;
+  /** JSON: host account ("onlymonster:36408") → page label. */
+  chatExtensionHostBindings?: string;
+  /** JSON array: the admitted preview-send receipt profiles (X8); [] = none. */
+  chatExtensionPreviewSendReceiptProfiles?: string;
 }
 
 function hasConfiguredValue(value: string | undefined) {
@@ -1044,6 +1070,11 @@ export function loadConfig(
     captureCasDualWritePages: parsed.CAPTURE_CAS_DUAL_WRITE_PAGES,
     captureCasReadMode: parsed.CAPTURE_CAS_READ_MODE,
     captureCasPointerOnlyPages: parsed.CAPTURE_CAS_POINTER_ONLY_PAGES,
+    chatExtensionEnabled: parsed.CHAT_EXTENSION_ENABLED,
+    chatExtensionFeatures: parsed.CHAT_EXTENSION_FEATURES,
+    chatExtensionMinVersion: parsed.CHAT_EXTENSION_MIN_VERSION,
+    chatExtensionHostBindings: parsed.CHAT_EXTENSION_HOST_BINDINGS,
+    chatExtensionPreviewSendReceiptProfiles: parsed.CHAT_EXTENSION_PREVIEW_SEND_RECEIPT_PROFILES,
   };
 }
 

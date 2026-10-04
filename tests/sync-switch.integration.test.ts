@@ -10,17 +10,20 @@ import {
   getSyncPage,
   insertAgentKey,
   insertAuditEvent,
-  listCombinedFanslySendsForPaceAudit,
+  readFanslySendAudit,
   type Database,
 } from "@agency_hub_core/db";
+import { createLogger } from "@agency_hub_core/shared";
 
 import { updatePageCredentials } from "../apps/runtime/src/services/connections.ts";
+import { incidentKey, notifySyncChunkFailureIncident } from "../apps/runtime/src/services/notification-incidents.ts";
 import { SyncEngineHost } from "../apps/runtime/src/sync/engine/host.ts";
+import { auditPagePace } from "../apps/runtime/src/sync/engine/send-audit.ts";
 import { HistoryRequestsUnavailableError, submitHistoryRequest } from "../apps/runtime/src/sync/requests/history.ts";
-import { SYNC_ROLLBACK_AUDIT_EVENT } from "../apps/runtime/src/sync/switch/audit.ts";
+import { SYNC_ROLLBACK_AUDIT_EVENT, SYNC_SWITCH_RED_LINES_AUDIT_EVENT } from "../apps/runtime/src/sync/switch/audit.ts";
 import { SwitchRefusedError } from "../apps/runtime/src/sync/switch/context.ts";
 import { checkSwitchPreconditions } from "../apps/runtime/src/sync/switch/preconditions.ts";
-import { runSyncSwitch, runSyncSwitchOpenRequests } from "../apps/runtime/src/sync/switch/switch.ts";
+import { runSyncSwitch, runSyncSwitchOpenRequests, type SyncSwitchInput } from "../apps/runtime/src/sync/switch/switch.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import {
@@ -43,6 +46,7 @@ import {
   LEGACY_PATH,
   legacyRoute,
   LegacySender,
+  redShadowReport,
   seedSwitchPage,
   SWITCH_TEST_BUILD,
   switchContext,
@@ -56,13 +60,15 @@ import {
 // stand-in legacy sender that takes the real step-1 guard for every request.
 // Pinned at the origin: no legacy request after the guard flipped, the
 // engine's first request ≥ 1.2 × S after the legacy one, 0 pairs closer than
-// S over both journals; the flip waits for a legacy request in flight and
+// S over both journals, a legacy stream's latch open before the switch closed
+// (`engine_owned`); the flip waits for a legacy request in flight and
 // never takes a closed guard; a phase that times out puts the page back in
 // shadow with the guard back; a switch killed after any phase ends in the
 // same place when run again; the first page opens its requests an hour
 // later, a later page converts its hydration rows at once; a pre-switch
 // unconfirmed overlay row gets its head read; a rollback stopped half way is
-// never resumed as a switch.
+// never resumed as a switch; a report with red lines switches only on the
+// owner's judgement, on record before the switch starts (step 3b ruling 12).
 
 const S = 300;
 
@@ -166,13 +172,14 @@ function ctx(r: Rig, overrides: Parameters<typeof switchContext>[1] = {}) {
   return switchContext({ db: db(), config: r.config, report: r.report, lines: r.lines }, overrides);
 }
 
-function switchOf(r: Rig, label: string, overrides: Parameters<typeof switchContext>[1] = {}) {
+function switchOf(r: Rig, label: string, overrides: Parameters<typeof switchContext>[1] = {}, input: Partial<SyncSwitchInput> = {}) {
   return runSyncSwitch(ctx(r, overrides), {
     pageLabel: label,
     shadowReportPath: "/tmp/shadow-report.json",
     dryRun: false,
     registry: switchRegistry(),
     capabilityFor: testCapability("test switch"),
+    ...input,
   });
 }
 
@@ -205,9 +212,21 @@ describe("sync switch", () => {
     const startedAt = new Date();
     const legacy = legacySender(r, page.pageId);
     await until(async () => legacy.sent >= 3, 15_000, "legacy sends");
+    // A legacy stream's latch open before the switch (production incident 41).
+    await notifySyncChunkFailureIncident({ db: db(), config: r.config, logger: createLogger("silent") }, {
+      platformAccountId: page.pageId, pageLabel: page.pageLabel, platform: "fansly", stream: "dm_conversations", runId: 0,
+      hasProxy: false, previousConsecutiveFailures: 2, errorSummary: "Fansly request failed (500)", occurredAt: new Date(),
+    });
+    const streamLatch = incidentKey({ kind: "stream_failed_threshold", platformAccountId: page.pageId, stream: "dm_conversations" });
+    const latchOf = async () => (await testDb!.pool.query<{ status: string; resolution: string | null }>(
+      "select status, metadata ->> 'resolution' as resolution from notification_incidents where incident_key = $1", [streamLatch],
+    )).rows[0];
+    expect(await latchOf()).toEqual({ status: "open", resolution: null });
 
     const outcome = await switchOf(r, page.pageLabel);
     expect(outcome).toEqual({ exitCode: 0, phase: "done", page: page.pageLabel });
+    // Closed at the transition: only the legacy executor's recovery resolved it.
+    expect(await latchOf()).toEqual({ status: "resolved", resolution: "engine_owned" });
     expect(await phases(page.pageId)).toEqual([
       "start", "A_handover", "A_guard_handed", "B_stopped", "R_rebuilt", "I_imported", "C_live", "C_owner", "C_requests", "done",
     ]);
@@ -228,10 +247,13 @@ describe("sync switch", () => {
     expect(legacyArrivals.at(-1)!.mono).toBeLessThan(engineArrivals[0]!.mono);
     expect(engineArrivals[0]!.mono - legacyArrivals.at(-1)!.mono).toBeGreaterThanOrEqual(1.2 * S);
     expect(gaps(r.server.arrivals).filter((gap) => gap < S)).toEqual([]);
-    const combined = await listCombinedFanslySendsForPaceAudit(db(), { pageId: page.pageId, since: startedAt });
-    expect(combined.some((send) => send.journal === "legacy:sync_stream")).toBe(true);
-    expect(combined.some((send) => send.journal === "engine")).toBe(true);
-    expect(combined.filter((send) => send.violation)).toEqual([]);
+    // The send audit over both journals: every pair ≥ the later send's own pause (I1).
+    const combined = await readFanslySendAudit(db(), { pageId: page.pageId, since: startedAt });
+    const sentSince = combined.filter((send) => send.sentAt !== null && send.sentAt.getTime() >= startedAt.getTime());
+    expect(sentSince.some((send) => send.journal === "legacy" && send.source === "sync_stream")).toBe(true);
+    expect(sentSince.some((send) => send.journal === "engine")).toBe(true);
+    const pace = auditPagePace(combined, { start: startedAt, until: null });
+    expect(pace).toMatchObject({ verdict: "pass", violations: [], inconclusive: [] });
 
     const row = (await getSyncPage(db(), page.pageId))!;
     expect(row.mode).toBe("live");
@@ -533,6 +555,64 @@ describe("sync switch", () => {
     await expect(switchOf(r, page.pageLabel)).rejects.toThrow(/a rollback stopped at step 2_released; a switch never resumes it/);
     expect((await getSyncPage(db(), page.pageId))!.mode).toBe("handover");
   }, 60_000);
+
+  it("(l) a report with red lines switches only on the owner's judgement, audited before the switch starts (step 3b ruling 12)", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig(["switch-l"]);
+    const page = r.pages[0]!;
+    r.report = redShadowReport(["switch-l"], ["a1", "a2", "b6"]);
+    const host = await startHost(r, 19);
+    await shadowRunning(host, page.pageId);
+    const reason = "A1/B6: the live page's own floor and rebuild; A2: legacy reads the shared queue first";
+    const window = (JSON.parse(r.report) as { window: { window: { start: string; end: string } } }).window.window;
+    const auditRows = async () => (await testDb!.pool.query<{ event_type: string; phase: string | null }>(
+      `select event_type, metadata ->> 'phase' as phase from audit_events
+        where platform_account_id = $1 and event_type in ('admin.sync_switch', $2) order by id`,
+      [page.pageId, SYNC_SWITCH_RED_LINES_AUDIT_EVENT],
+    )).rows;
+
+    // Without the owner's word, or with a failing red line left out: refused, nothing written.
+    await expect(switchOf(r, page.pageLabel)).rejects.toBeInstanceOf(SwitchRefusedError);
+    expect(r.lines.at(-1)).toBe("FAIL shadow_report: the shadow report's verdict is not accepted (a1 FAIL, a2 FAIL, b6 FAIL); the owner may "
+      + "accept its red lines with evidence: --accept-red-lines a1,a2,b6 --red-lines-reason \"<evidence>\" (step 3b ruling 12)");
+    await expect(switchOf(r, page.pageLabel, {}, { acceptRedLines: { checks: ["a1", "b6"], reason } })).rejects.toBeInstanceOf(SwitchRefusedError);
+    expect(r.lines.at(-1)).toBe("FAIL shadow_report: the shadow report fails a2, which the owner did not accept (--accept-red-lines a1,b6)");
+    expect(await auditRows()).toEqual([]);
+
+    // The dry run prints the owner's acceptance and writes nothing.
+    const accept = { checks: ["a1", "a2", "b6"], reason };
+    const accepted = `red lines a1, a2, b6 accepted by the owner (step 3b ruling 12): "${reason}"; report window ${window.start} … ${window.end}`;
+    r.lines.length = 0;
+    expect(await switchOf(r, page.pageLabel, {}, { acceptRedLines: accept, dryRun: true })).toMatchObject({ exitCode: 0, phase: "dry_run" });
+    expect(r.lines.filter((line) => line.startsWith("FAIL"))).toEqual([]);
+    expect(r.lines).toContain(`RED LINES switch-l: ${accepted} — the switch would record admin.sync_switch_red_lines_accepted`);
+    expect(await auditRows()).toEqual([]);
+
+    // The switch on the owner's word: the acceptance is on record first.
+    expect(await switchOf(r, page.pageLabel, {}, { acceptRedLines: accept })).toMatchObject({ exitCode: 0, phase: "done" });
+    expect(r.lines).toContain(`RED LINES switch-l: ${accepted} — recorded as admin.sync_switch_red_lines_accepted`);
+    expect((await auditRows()).slice(0, 2)).toEqual([
+      { event_type: SYNC_SWITCH_RED_LINES_AUDIT_EVENT, phase: null },
+      { event_type: "admin.sync_switch", phase: "start" },
+    ]);
+    const recorded = await testDb.pool.query<{ source: string; metadata: Record<string, unknown> }>(
+      "select source, metadata from audit_events where event_type = $1", [SYNC_SWITCH_RED_LINES_AUDIT_EVENT],
+    );
+    expect(recorded.rows).toEqual([{
+      source: "cli",
+      metadata: {
+        pageId: page.pageId,
+        page: "switch-l",
+        actor: "test",
+        checks: ["a1", "a2", "b6"],
+        listedNotFailing: [],
+        reason,
+        reportWindow: window,
+        reportGeneratedAt: window.end,
+      },
+    }]);
+    expect((await getSyncPage(db(), page.pageId))!.mode).toBe("live");
+  }, 120_000);
 
   it("(k) a legacy 429 hold and a legacy auth block are both carried: nothing goes out before the 429 ends, the owner's renewal lifts only the auth hold", async (context) => {
     if (!testDb) return context.skip();

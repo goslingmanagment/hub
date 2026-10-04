@@ -119,7 +119,7 @@ import { purchaseTargetFollowups, purchaseTargetSubject, type PurchaseTarget } f
 // (`writeThreadSummary`, engine-owned pages only) and the overlay confirmed
 // against the archive (step 4, S4-08: the page's readers read the archive) →
 // the work rows (demand ids resolved, a covered `.catchup` closed). The apply
-// writes no `page_dm_messages` row (step 4 S4-13, I22). Excluded and unbound
+// writes no `page_dm_messages` row (step 4 S4-13, I23). Excluded and unbound
 // threads are never read (decision №8 has its own probe); a page whose thread
 // was deleted, unbound or excluded since the plan only canonicalizes its
 // observation under the same fence (stamped, so the unfenced minutely sweep
@@ -707,7 +707,7 @@ async function applyMessagesPage(variant: DmMessagesVariant, tx: Database, input
   const kept = fence.fencedIds.size === 0 ? messages : messages.filter((message) => !fence.fencedIds.has(message.id));
 
   // 3. The tip contexts. The page's messages go to `message_archive` (step 7);
-  //    `page_dm_messages` is not written (step 4 S4-13, I22): a live page's
+  //    `page_dm_messages` is not written (step 4 S4-13, I23): a live page's
   //    readers read the archive, and the hot rows legacy stored stay as they
   //    were (deletion marks only, `dm-live.deletions`). The normalized rows
   //    are the page's storable messages, whose overlay rows are judged below.

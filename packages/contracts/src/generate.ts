@@ -80,7 +80,7 @@ async function main() {
     const sdkFiles = buildSdkFiles({
       routePolicyTable: server.routePolicyTable,
       openApiDocumentJson,
-      sdkVersion: "0.3.0",
+      sdkVersion: "0.4.0",
     });
     for (const [relativePath, content] of sdkFiles) {
       const target = path.resolve("packages/sdk", relativePath);

@@ -46,7 +46,7 @@ import {
 // a page, `before` strictly below). Pinned: one head read confirms a socket
 // message into every store in one commit (chain, the summary from the
 // archive, the overlay confirmed against the archive, events, archive) and
-// writes no `page_dm_messages` row (step 4 S4-13, I22: the rows legacy stored
+// writes no `page_dm_messages` row (step 4 S4-13, I23: the rows legacy stored
 // stay as they were); a demand that arrives during the read is read again
 // (I11); an id the vendor does not show yet is retried at 15 s and
 // 60 s, then settled not found; more than 25 new messages are read down until

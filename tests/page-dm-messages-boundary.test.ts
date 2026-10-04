@@ -73,12 +73,11 @@ const SANCTIONED_FILES: Record<string, string> = {
   "packages/db/src/repositories/catalog.ts": "the page's business-fact presence",
   "apps/runtime/src/services/fansly-page.ts": "comment: the platform-agnostic DM store",
   "apps/runtime/src/cli.ts": "maintenance CLI descriptions",
-  // The Sync Engine: no hot row is written (I22); deletion marks only.
+  // The Sync Engine: no hot row is written (I23); deletion marks only.
   "apps/runtime/src/sync/fansly/resources/dm-live.ts": "the deletion mark of the rows legacy stored (markFanslyWsHotDeletion)",
   "apps/runtime/src/sync/fansly/resources/dm-messages.ts": "comment: the DM apply writes no hot row",
   "apps/runtime/src/sync/fansly/lib/dm-normalize.ts": "comment: the legacy lanes store its rows, the engine does not",
-  "packages/db/src/repositories/fansly-ws-deletions.ts":
-    "markFanslyWsHotDeletion (the engine's mark); the receipt reconcile's targets until S4-11",
+  "packages/db/src/repositories/fansly-ws-deletions.ts": "markFanslyWsHotDeletion (the engine's mark)",
   // The reader parity (S4-06) and the shadow report compare against legacy's rows.
   "apps/runtime/src/sync/cli/dm-reader-parity.ts": "the reader parity CLI",
   "apps/runtime/src/sync/parity/classify.ts": "the reader parity",
@@ -87,7 +86,6 @@ const SANCTIONED_FILES: Record<string, string> = {
   "packages/db/src/repositories/sync/dm-messages.ts": "the replay's comparison with the rows legacy stored",
   "packages/db/src/repositories/sync/observability.ts": "the shadow report: when legacy first held a message",
   // Legacy Fansly DM code, idle since S4-10, deleted by the PR named.
-  "apps/runtime/src/services/fansly-ws-deletions.ts": "the receipt reconcile (S4-11)",
   "apps/runtime/src/services/sync/fansly-dm-messages.ts": "the legacy DM lane (S4-14)",
   "apps/runtime/src/services/sync/ai-media-accelerator.ts": "the legacy AI accelerator (S4-14)",
   "packages/db/src/repositories/fansly-dm-head-debt.ts": "the legacy head debt (S4-14)",
@@ -126,13 +124,9 @@ const WRITERS: Record<string, Record<string, string>> = {
   resetPageDmSyncState: { "apps/runtime/src/services/sync-blocks.ts": "the legacy block reset (refused for messages)" },
   markFanslyWsHotDeletion: {
     "apps/runtime/src/sync/fansly/resources/dm-live.ts": "the engine's deletion mark of a legacy row",
-    "apps/runtime/src/services/fansly-ws-deletions.ts": "the receipt reconcile (S4-11)",
   },
   prunePageDmMessagesToLimit: {},
-  refreshPageDmConversationWindow: {
-    "apps/runtime/src/services/ofapi-dm-projection.ts": "OnlyFans",
-    "apps/runtime/src/services/fansly-ws-deletions.ts": "the receipt reconcile (S4-11)",
-  },
+  refreshPageDmConversationWindow: { "apps/runtime/src/services/ofapi-dm-projection.ts": "OnlyFans" },
   finalizePageDmConversationMessageSync: {
     "apps/runtime/src/services/projection-debt-sweep.ts": "the legacy DM projection debt (S4-15)",
     "apps/runtime/src/services/sync/executor-handlers.ts": "the legacy Fansly DM handler (S4-14)",
@@ -195,7 +189,7 @@ describe("page_dm_messages boundary (step 4 S4-13, owner decision №11)", () =>
     expect(matching(aliased)).toEqual([]);
   });
 
-  it("gets no row from the Sync Engine, which only marks the deletion of a row legacy stored (I22)", () => {
+  it("gets no row from the Sync Engine, which only marks the deletion of a row legacy stored (I23)", () => {
     const engineCalls: Record<string, string[]> = {};
     for (const writer of Object.keys(WRITERS)) {
       for (const file of callersOf(writer).filter((caller) => caller.startsWith(ENGINE))) {
