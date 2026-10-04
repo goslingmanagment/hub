@@ -4,6 +4,9 @@ One long-running process (`sync`) hosts one **actor per Fansly page**. The actor
 physical request of the page passes one pacer, one queue (`sync_work`), one journal row per attempt
 (`sync_attempts`). Plan: `docs/plans/2026-10-01-sync-engine/plan.md`. OnlyFans is not here.
 
+Operating it — a page's status and "why", the owner's levers, the alerts, onboarding, restarts, calibration — is the
+runbook `docs/runbooks/sync.md`; this file is how the engine works.
+
 The engine landed in steps: step 2 ran it in **shadow** next to the legacy engine (it planned, paced and journaled,
 but never sent); step 3 switched the six pages one by one (`sync switch`, gone since step 4 S4-21); step 4 deletes the
 legacy code — and shadow mode with it (S4-23): an actor runs a `live` page and nothing else, nothing puts a page in
