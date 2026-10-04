@@ -245,7 +245,10 @@ describe("deploy gate: a candidate keeps every registered client SDK", () => {
     // The real script parses its flags and runs its local preflight; the first
     // SSH call (the remote deploy lock) records what the parse kept for the
     // gate, then fails, so nothing else runs. TMPDIR keeps the local lock and
-    // the run's temp directory inside the fixture.
+    // the run's temp directory inside the fixture. The preflight requires
+    // docker, gh, unzip and curl on PATH but calls none of them before the
+    // remote lock; a CI runner need not have them, so each is a stub that
+    // records a call the expected log does not allow.
     const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("DEPLOY_")));
     // A plain string: a template literal would take the array expansion for its own.
     const recordDrops = 'printf \'drop %s\\n\' "${DROP_CLIENT_SDKS[@]}" >> "$TEST_COMMAND_LOG"';
@@ -260,7 +263,11 @@ describe("deploy gate: a candidate keeps every registered client SDK", () => {
         ${recordDrops}
         return 99
       }
-      export -f ssh
+      docker() { printf 'unexpected docker\n' >> "$TEST_COMMAND_LOG"; return 99; }
+      gh() { printf 'unexpected gh\n' >> "$TEST_COMMAND_LOG"; return 99; }
+      unzip() { printf 'unexpected unzip\n' >> "$TEST_COMMAND_LOG"; return 99; }
+      curl() { printf 'unexpected curl\n' >> "$TEST_COMMAND_LOG"; return 99; }
+      export -f ssh docker gh unzip curl
       script="$1"; shift
       bash "$script" "$@"
     `, "fixture", deployPath, "--drop-client-sdk", retiredHash, "root@localhost", "--drop-client-sdk", retiredBuild], {
