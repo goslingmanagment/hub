@@ -89,6 +89,27 @@ Core emits SSE frames with event name `ai` and JSON data matching the exported f
 The stream is the only successful response body. Core must not buffer a full provider response and
 return it as JSON on success.
 
+### Feature-lane capability header
+
+`POST /api/v1/ai/features/:feature` (SDK helper `streamAiFeature`) reads an optional
+`x-kernel-ai-capabilities` header: comma-separated tokens from `AI_STREAM_CAPABILITIES` in
+`packages/contracts/src/sdk-runtime.ts` (`debug-input-v1`, `context-v1`, `split-all-v1`). A token is
+compatibility negotiation ("this client understands the matching frame or field"), never
+authorization.
+
+- Server: parsed once per request by `parseAiStreamCapabilities` — one string of at most 256
+  characters, split on commas, trimmed, case-sensitive, unknown tokens dropped. A longer value, or an
+  array value, counts as empty. A header repeated on the wire is not an array: Node joins its lines
+  into one `, `-separated string, which is parsed as usual (the union of the lines) within the same
+  256-character cap. The header is not declared in the route schema, so a malformed value is ignored
+  instead of failing with 400.
+- Today only `debug-input-v1` changes the stream: the `debug_input_v1` frame, still behind the
+  `chatMuseAiPromptDebugEchoEnabled` kill-switch. The other tokens are reserved for the frames and
+  fields that will read them; until then they change nothing.
+- SDK: the header is the union of the `capabilities` option and the legacy `debugPromptEcho` flag,
+  deduplicated, in the constant's order, joined by `, `. With nothing to advertise no header is sent,
+  so existing callers put exactly the same bytes on the wire as before.
+
 ## Authorization
 
 Core must resolve `pageLabel` through the authenticated chatter's current page assignments before
@@ -103,6 +124,16 @@ falling back to the production host IP, because Anthropic has already rejected t
 `platformUserId` and `conversationId` are audit and context-correlation fields. Version 1 may accept
 a fan that is not yet in the core fan table only after page authorization succeeds; it must not use
 an unresolved fan to widen page scope.
+
+The chat extension's narrow device token (chat-extension H-3, `client: "chat-extension"` at sign-in)
+reaches `/api/v1/ai/features/:feature` only through the owner's switches, checked before any context
+load, quota reservation or provider call (`services/client-ai-switch.ts`). `coach-chat`,
+`fan-summary` and `chat-review` run the full check of the page's `coach` / `recap` / `review` flag
+(`requireClientFeature`); every other feature needs `chatExtensionEnabled` and an
+`x-client-version` of `chat-extension/<MAJOR.MINOR.PATCH>` at or above `chatExtensionMinVersion`. A
+refusal is `409 client_feature_disabled` with its `reason`. The raw gateway stream is not on the
+narrow token's route list at all. The restricted generation record of a narrow token carries
+`params.clientProfile = "chat-extension"`; a full token's params are unchanged.
 
 ## Quota and Ledger
 

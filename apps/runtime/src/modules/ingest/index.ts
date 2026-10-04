@@ -77,6 +77,8 @@ export async function registerIngestRoutes(server: ApiServer, ctx: ApiModuleCont
       });
     }
     const normalizedClientVersion = clientVersion.trim();
+    // A narrow client token never carries a harvest machine (the capability
+    // refuses it), so a harvest-* header from one is a 403 here.
     const harvestCapability = isHarvestClientVersion(normalizedClientVersion)
       ? requireHarvestDeviceToken(principal)
       : null;
@@ -88,6 +90,7 @@ export async function registerIngestRoutes(server: ApiServer, ctx: ApiModuleCont
         allowedPageIds: principal.user.role === "owner" ? null : principal.assignedPageIds,
         clientVersion: normalizedClientVersion,
         authorizedHarvestMachineId: harvestCapability?.machineId ?? null,
+        clientProfile: principal.clientProfile ?? null,
         events: request.body.events,
       });
     } catch (error) {

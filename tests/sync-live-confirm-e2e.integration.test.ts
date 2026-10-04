@@ -122,7 +122,7 @@ describe("socket frame to confirmed overlay, in one flow", () => {
     expect(head.rows).toEqual([expect.objectContaining({ class: "urgent", message_ids: [message!.id] })]);
 
     await until(async () => (await overlay())?.confirmed_at != null, 30_000, "the overlay confirmed");
-    expect(await overlay()).toMatchObject({ confirm_outcome: "match", confirm_source: "page_dm_messages", deleted_at: null });
+    expect(await overlay()).toMatchObject({ confirm_outcome: "match", confirm_source: "message_archive", deleted_at: null });
     // One head read at the origin; the message is stored and the chain's head moved to it.
     expect(server.arrivalsAt("/api/v1/message?")).toHaveLength(1);
     const stored = await testDb.pool.query<{ n: number }>(

@@ -6,7 +6,7 @@ import {
   isDmArchiveScopeFenced,
   listDomainEventsByDedupKeys,
   markFanslyWsHotDeletion,
-  syncLegacyThreadSummaryAfterDeletion,
+  writeThreadSummaryAfterDeletion,
   type Database,
   type DomainEventInput,
 } from "@agency_hub_core/db";
@@ -29,17 +29,21 @@ import type { ApplyResult, LocalApplyInput, ResourceModule } from "../../engine/
 // transaction under the erasure fence the entry declares). Per deleted
 // overlay row of the work's ids: an executed erasure covering the chat (or its
 // fan, or the message's sender) at the deletion's instant skips it; the page's hot rows of the message are marked
-// (`markFanslyWsHotDeletion`, sticky — also when the minutely legacy reconcile
-// marked them first); one deliverable `message.deleted` per message (dedup
-// `msg-deleted:fansly:<id>`), and the archive tombstone from the stored
-// events (tombstone-first, sticky: a later REST copy hydrates the stub and
-// keeps the tombstone). The stored window of every thread that holds one of
-// the messages is recomputed (`syncLegacyThreadSummaryAfterDeletion`, the
-// only engine writer of those columns besides the read's, I9/E7); its head
-// stays the conversation list's, its chain is not touched.
+// (`markFanslyWsHotDeletion`, sticky — also when a row was marked before, as
+// the retired receipt reconcile did until step 4 S4-11; the hot table stays
+// written in step 4 until S4-13); one
+// deliverable `message.deleted` per message (dedup `msg-deleted:fansly:<id>`),
+// and the archive tombstone from the stored events (tombstone-first, sticky: a
+// later REST copy hydrates the stub and keeps the tombstone). Then the stored
+// window of every thread whose archive holds one of the messages is recounted
+// from the archive (`writeThreadSummaryAfterDeletion`, the only engine writer
+// of those columns besides the read's, I9/E7; step 4 S4-08: the page's
+// readers read the archive); its head stays the conversation list's, its
+// chain is not touched.
 //
 // Lock order: sync_pages → erasure fence → page_dm_threads (FOR UPDATE, id
-// order) → page_dm_messages → domain_event_seq → message_archive → sync_work.
+// order) → page_dm_messages → domain_event_seq → message_archive → sync_work
+// (the recount updates thread rows locked at the start).
 
 /** Overlay rows one overflowed step carries at most; a full batch that
  *  carried something keeps the work open for the rest. */
@@ -93,7 +97,8 @@ async function deletedOverlayRows(tx: Database, pageId: number, ids: readonly st
 /**
  * An overflowed work (more ids than the demand keeps): the subject chat's
  * deleted overlay rows (a frame without a chat: the rows without one) whose
- * deletion has not reached the hot table or the event ledger yet.
+ * deletion has not reached the archive (the store the page's readers read)
+ * or the event ledger yet.
  */
 async function overflowMessageIds(tx: Database, pageId: number, subject: string): Promise<string[]> {
   const chat = subject === ""
@@ -105,10 +110,11 @@ async function overflowMessageIds(tx: Database, pageId: number, subject: string)
      where m.page_id = ${pageId}
        and m.deleted_at is not null
        and ${chat}
-       and (exists (select 1 from page_dm_messages h
-                     where h.platform_account_id = m.page_id
-                       and h.platform_message_id = m.platform_message_id
-                       and h.deleted_at is null)
+       and (exists (select 1 from message_archive a
+                     where a.account_id = m.page_id
+                       and a.platform = 'fansly'
+                       and a.message_ref = m.platform_message_id
+                       and a.deleted_at is null)
             or not exists (select 1 from domain_event_keys k
                             where k.account_id = m.page_id
                               and k.dedup_key = 'msg-deleted:fansly:' || m.platform_message_id))
@@ -138,6 +144,8 @@ async function chatFanRefs(tx: Database, pageId: number, groupIds: readonly stri
   return refs;
 }
 
+/** The page's hot rows of the messages, to mark (the hot table stays written
+ *  until S4-13, so a revert finds the deletions marked). */
 async function hotRowsOf(tx: Database, pageId: number, messageIds: readonly string[]): Promise<Map<string, HotRow[]>> {
   const rows = new Map<string, HotRow[]>();
   if (messageIds.length === 0) return rows;
@@ -154,6 +162,23 @@ async function hotRowsOf(tx: Database, pageId: number, messageIds: readonly stri
     rows.set(row.platform_message_id, list);
   }
   return rows;
+}
+
+/** The threads whose archive holds one of the messages (in any state: the
+ *  recount after the tombstones decides what is still stored), in id order. */
+async function archiveThreadIdsOf(tx: Database, pageId: number, messageIds: readonly string[]): Promise<number[]> {
+  if (messageIds.length === 0) return [];
+  const result = await tx.execute<{ id: string }>(sql`
+    select distinct t.id
+      from message_archive a
+      join page_dm_threads t
+        on t.platform_account_id = a.account_id and t.platform_conversation_id = a.conversation_ref
+     where a.account_id = ${pageId}
+       and a.platform = 'fansly'
+       and a.message_ref = any(${sql.param([...new Set(messageIds)])}::text[])
+     order by t.id
+  `);
+  return result.rows.map((row) => Number(row.id));
 }
 
 /** Carry the work's deletions to the hot table, the event ledger and the
@@ -183,8 +208,11 @@ export async function applyDmLiveDeletions(tx: Database, input: LocalApplyInput)
     carried.push(row);
   }
 
-  const hot = await hotRowsOf(tx, pageId, carried.map((row) => row.messageId));
-  const threadIds = [...new Set([...hot.values()].flat().map((row) => row.conversationId))].sort((a, b) => a - b);
+  const carriedIds = carried.map((row) => row.messageId);
+  const hot = await hotRowsOf(tx, pageId, carriedIds);
+  const summaryThreadIds = await archiveThreadIdsOf(tx, pageId, carriedIds);
+  const threadIds = [...new Set([...[...hot.values()].flat().map((row) => row.conversationId), ...summaryThreadIds])]
+    .sort((a, b) => a - b);
   if (threadIds.length > 0) {
     // The DM apply holds a chat before its messages: so does this.
     await tx.execute(sql`
@@ -200,8 +228,6 @@ export async function applyDmLiveDeletions(tx: Database, input: LocalApplyInput)
       if (await markFanslyWsHotDeletion(tx, { id: target.id, deletedAt: row.deletedAt })) bump("hot_marked");
     }
   }
-  for (const threadId of threadIds) await syncLegacyThreadSummaryAfterDeletion(tx, threadId);
-  bump("windows_recomputed", threadIds.length);
 
   if (carried.length > 0) {
     const events: DomainEventInput[] = carried.map((row) => ({
@@ -222,6 +248,9 @@ export async function applyDmLiveDeletions(tx: Database, input: LocalApplyInput)
     const archived = await applyMessageEventsToArchive(tx, { accountId: pageId, platform: "fansly", events: stored });
     bump("archive_tombstoned", archived.tombstoned);
   }
+  // After the tombstones: the windows count what the archive still stores.
+  for (const threadId of summaryThreadIds) await writeThreadSummaryAfterDeletion(tx, threadId);
+  bump("windows_recomputed", summaryThreadIds.length);
 
   const more = overflow && ids.length >= DM_LIVE_DELETIONS_OVERFLOW_BATCH && carried.length > 0;
   return {

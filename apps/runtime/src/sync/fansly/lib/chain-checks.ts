@@ -1,10 +1,12 @@
 import {
   countStoredMessagesOlderThan,
+  dmReaderStoreOf,
   getPageDmMessageWindowSummary,
   getSyncPage,
   listPageThreadChains,
   listThreadStoredWindows,
   readThreadStoredFacts,
+  type DmLiveReaderStore,
   type SyncPageMode,
 } from "@agency_hub_core/db";
 
@@ -43,7 +45,10 @@ import {
 //      not.
 // `check-window` compares the stored-window columns with the window
 // recomputed from the rows (the drift check of the engine's incremental
-// `syncLegacyThreadSummary`).
+// `writeThreadSummary`).
+//
+// "Stored" is the store the page's readers read (`dmReaderStoreOf`): the
+// archive on a live page (step 4, S4-08), page_dm_messages elsewhere.
 
 const STORED_PROBE_CHUNK = 1000;
 
@@ -119,10 +124,14 @@ export interface EndRuleOptions extends ScanPacing {
   maxListed: number;
 }
 
-async function storedOlderCounts(app: SyncChainContext, probes: { threadId: number; beforeId: string }[]): Promise<number[]> {
+async function storedOlderCounts(
+  app: SyncChainContext,
+  store: DmLiveReaderStore,
+  probes: { threadId: number; beforeId: string }[],
+): Promise<number[]> {
   const counts: number[] = [];
   for (let start = 0; start < probes.length; start += STORED_PROBE_CHUNK) {
-    counts.push(...await countStoredMessagesOlderThan(app.db, probes.slice(start, start + STORED_PROBE_CHUNK)));
+    counts.push(...await countStoredMessagesOlderThan(app.db, probes.slice(start, start + STORED_PROBE_CHUNK), { store }));
   }
   return counts;
 }
@@ -133,6 +142,7 @@ export async function checkEndRule(
   governor: ScanGovernor = new ScanGovernor(options),
 ): Promise<EndRulePageReport> {
   const syncPage = await getSyncPage(app.db, options.pageId);
+  const store = dmReaderStoreOf(syncPage?.mode);
   const threads = await listPageThreadChains(app.db, { pageId: options.pageId });
   const book = new Map(threads.map((row) => [row.groupId, initialFoldState(row, "scratch")]));
   const counters = newFoldCounters();
@@ -140,7 +150,7 @@ export async function checkEndRule(
   const pendingByCursor = new Map<string, ShortPageRecord[]>();
   const emptyEnds: EmptyEndRecord[] = [];
   const seenGroups = new Set<string>();
-  const readStored = (threadId: number) => readThreadStoredFacts(app.db, threadId);
+  const readStored = (threadId: number) => readThreadStoredFacts(app.db, threadId, { store });
   const scan: EndRulePageReport["scan"] = { rowsScanned: 0, throughRawId: 0, completed: false, stoppedBy: null };
 
   scan.stoppedBy = governor.stopReason();
@@ -205,6 +215,7 @@ export async function checkEndRule(
   const shortProbes = shortPages.filter((record) => record.threadId !== null);
   const shortCounts = await storedOlderCounts(
     app,
+    store,
     shortProbes.map((record) => ({ threadId: record.threadId!, beforeId: record.oldestId })),
   );
   shortProbes.forEach((record, index) => {
@@ -212,6 +223,7 @@ export async function checkEndRule(
   });
   const endCounts = await storedOlderCounts(
     app,
+    store,
     emptyEnds.map((record) => ({ threadId: record.threadId, beforeId: record.before })),
   );
   emptyEnds.forEach((record, index) => {
@@ -321,8 +333,9 @@ function comparable(value: Date | string | number | null): string | number | nul
 
 /**
  * Compare every thread's stored-window columns (`stored_message_count`,
- * newest/oldest stored ids, last fan/model times) with the window the legacy
- * finalize would recompute from the rows (`getPageDmMessageWindowSummary`).
+ * newest/oldest stored ids, last fan/model times) with the window recomputed
+ * from the rows of the page's reader store (`getPageDmMessageWindowSummary`:
+ * the archive on a live page, else the legacy finalize's page_dm_messages).
  * Read-only; one summary query per thread.
  */
 export async function checkWindow(
@@ -330,6 +343,7 @@ export async function checkWindow(
   options: { pageId: number; threadId?: number; maxThreads: number; maxListed: number },
 ): Promise<WindowCheckReport> {
   const syncPage = await getSyncPage(app.db, options.pageId);
+  const store = dmReaderStoreOf(syncPage?.mode);
   const byField = Object.fromEntries(WINDOW_FIELDS.map((field) => [field, 0])) as Record<WindowField, number>;
   const examples: WindowDrift[] = [];
   let threadsChecked = 0;
@@ -352,7 +366,7 @@ export async function checkWindow(
     for (const row of rows.slice(0, remaining)) {
       afterThreadId = row.threadId;
       threadsChecked += 1;
-      const summary = await getPageDmMessageWindowSummary(app.db, row.threadId);
+      const summary = await getPageDmMessageWindowSummary(app.db, row.threadId, { store });
       const fields: WindowDrift["fields"] = {};
       for (const field of WINDOW_FIELDS) {
         const stored = comparable(row[field]);

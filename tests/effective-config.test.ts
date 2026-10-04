@@ -218,6 +218,13 @@ describe("LIVE_CONFIG_KEYS", () => {
       "aiMediaDescribeFanslyAcceleratorDailyLimit",
       // Fansly Sync Engine step 1: the live overlay read kill-switch.
       "fanslyLiveOverlayReadPages",
+      // Chat extension (hub-pr-plan H-2b): the owner's five switches, read per
+      // request by the bootstrap and the client routes' check.
+      "chatExtensionEnabled",
+      "chatExtensionFeatures",
+      "chatExtensionMinVersion",
+      "chatExtensionHostBindings",
+      "chatExtensionPreviewSendReceiptProfiles",
     ]) {
       expect(LIVE_CONFIG_KEYS.has(key), key).toBe(true);
     }
@@ -233,6 +240,6 @@ describe("LIVE_CONFIG_KEYS", () => {
     ]) {
       expect(LIVE_CONFIG_KEYS.has(key), key).toBe(false);
     }
-    expect(LIVE_CONFIG_KEYS.size).toBe(93);
+    expect(LIVE_CONFIG_KEYS.size).toBe(98);
   });
 });

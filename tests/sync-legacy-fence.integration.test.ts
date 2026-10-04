@@ -5,8 +5,6 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import {
   acquirePageSyncLease,
   acquireTargetedPageSyncLease,
-  beginFanslyWsConnection,
-  captureFanslyWsFrame,
   createFanslyPage,
   createModel,
   createOnlyFansPage,
@@ -14,7 +12,6 @@ import {
   ensureSyncPage,
   FANSLY_SYNC_ENGINE_HYDRATION_LANE,
   getFanslySyncLiveness,
-  getProjectionWatermark,
   insertAgentKey,
   isFanslyPageEngineOwned,
   listAutoApprovableAgentHydrationRequests,
@@ -27,7 +24,6 @@ import {
   markPageSyncEnqueued,
   releaseTargetedPageSyncLease,
   requestPageSync,
-  routeFanslyWsHintEvent,
   startSyncRun,
   upsertFanPages,
   upsertFans,
@@ -36,7 +32,6 @@ import {
   appendDomainEvents,
   type SyncPageMode,
 } from "@agency_hub_core/db";
-import { FANSLY_WS_CAPTURE_KIND } from "@agency_hub_core/shared";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
@@ -46,18 +41,11 @@ import {
   sweepStuckAgentHydration,
 } from "../apps/runtime/src/services/agent-hydration.ts";
 import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
-import { runCanonicalization } from "../apps/runtime/src/services/canonicalize-driver.ts";
-import { readFanslyPageGeneration } from "../apps/runtime/src/services/egress/fansly-probe-context.ts";
 import { runFanslyEndpointProbe } from "../apps/runtime/src/services/fansly-endpoint-probe.ts";
 import { backfillFanslyPageAliases } from "../apps/runtime/src/services/fansly-page-alias-backfill.ts";
 import { runFanslyReplayProbe } from "../apps/runtime/src/services/fansly-replay-probe.ts";
-import { reconcileRecentFanslyWsDeletions } from "../apps/runtime/src/services/fansly-ws-deletions.ts";
 import { saveProxy } from "../apps/runtime/src/services/page-context.ts";
 import { setPageProxy } from "../apps/runtime/src/services/page-proxies.ts";
-import {
-  FANSLY_WS_HINT_PROJECTION,
-  runFanslyWsHintProjection,
-} from "../apps/runtime/src/services/projections/fansly-ws-hints.ts";
 import { runMessageArchiveProjection } from "../apps/runtime/src/services/projections/message-archive.ts";
 import { FANSLY_PAGE_ON_SYNC_ENGINE_CODE } from "../apps/runtime/src/services/sync-engine-guard.ts";
 import {
@@ -377,12 +365,10 @@ describe("(d) agent hydration", () => {
   });
 });
 
-// ── (f) the ws-hints projector, (i) the minutely deletion reconcile ──────────
+// ── a stored DM thread, for the CLI fences below ─────────────────────────────
 
-const GENERATION = "a".repeat(64);
 const GROUP = "100";
 const FAN = "111";
-let receiptId = 9_000;
 
 async function seedThread(app: ReturnType<typeof createTestAppContext>, pageId: number, base: Date) {
   const [fan] = await upsertFans(app.db, [{ platform: "fansly", platformUserId: FAN }]);
@@ -414,200 +400,6 @@ async function seedThread(app: ReturnType<typeof createTestAppContext>, pageId: 
   await runMessageArchiveProjection(app, { accountId: pageId });
   return thread;
 }
-
-async function threadWindow(id: number) {
-  return (await db().pool.query(
-    `select stored_message_count, newest_stored_message_id, oldest_stored_message_id
-       from page_dm_threads where id = $1`,
-    [id],
-  )).rows[0];
-}
-
-async function deletedAt(table: "page_dm_messages" | "message_archive", ref: string, pageId: number) {
-  const column = table === "page_dm_messages" ? "platform_account_id" : "account_id";
-  const ref_column = table === "page_dm_messages" ? "platform_message_id" : "message_ref";
-  return (await db().pool.query(
-    `select deleted_at from ${table} where ${column} = $1 and ${ref_column} = $2`, [pageId, ref],
-  )).rows[0]?.deleted_at ?? null;
-}
-
-describe("(f) the ws-hints projector", () => {
-  type App = ReturnType<typeof createTestAppContext>;
-  /** One socket frame the legacy worker captured a minute ago, canonicalized
-   *  into its `fansly.ws_signal_observed` event. */
-  async function signal(app: App, pageId: number, event: Record<string, unknown>, generation = GENERATION) {
-    const connectionId = randomUUID();
-    await beginFanslyWsConnection(db().db, { id: connectionId, pageId, generation });
-    await captureFanslyWsFrame(db().db, {
-      connectionId, pageId, generation, accountRef: "999", ordinal: 1, receivedAt: new Date(Date.now() - 60_000),
-      frame: JSON.stringify({ t: 10000, d: { serviceId: 5, event } }),
-      validate: async () => {},
-    });
-    expect(await runCanonicalization(app, { accountId: pageId, kinds: [FANSLY_WS_CAPTURE_KIND] }))
-      .toMatchObject({ errored: 0, stamped: 1 });
-  }
-  const deletion = { type: 10, message: { id: "150", groupId: GROUP, correlationId: "77", type: 1 } };
-  const created = (id: string) => ({ type: 1, message: { id, groupId: GROUP, content: "hello" } });
-  /** A hint policy in force for the page (the step-1 B1 rollout shape). */
-  async function enableHints(app: App, page: { id: number; label: string }) {
-    await saveProxy(app, page.id, { url: "http://proxy.example.test:8080", username: "test", password: "test" });
-    const generation = await readFanslyPageGeneration(app.db, page.label);
-    Object.assign(app.config, {
-      fanslyWsCaptureEnabled: true, fanslyWsCapturePageAllowlist: page.label,
-      fanslyWsHintsEnabled: true, fanslyWsHintsPageAllowlist: page.label,
-      fanslyWsHintsTypeAllowlist: "message_created",
-      fanslyWsHintsPolicies: JSON.stringify({ [page.label]: {
-        generation, activationAt: "2026-01-01T00:00:00Z", baselineAttempts24h: 1000, baselineReference: "fixture",
-      } }),
-    });
-    return generation;
-  }
-  const outcomes = async (pageId: number) => (await db().pool.query<{ message_ref: string; outcome: string }>(
-    "select message_ref, outcome from fansly_ws_hint_receipts where page_id = $1 order by event_id", [pageId],
-  )).rows;
-  const dirtyQueue = async (pageId: number) => (await db().pool.query(
-    "select subject_ref, requested_revision from subject_refresh_state where page_id = $1 order by subject_ref", [pageId],
-  )).rows;
-  const dmWake = async (pageId: number) => (await db().pool.query<{ request_seq: string }>(
-    "select request_seq::text from page_sync_states where page_id = $1 and stream = 'dm_messages'", [pageId],
-  )).rows[0]?.request_seq ?? null;
-  const headSeq = async (pageId: number) => Number((await db().pool.query<{ seq: string }>(
-    "select max(account_seq)::text as seq from domain_events where account_id = $1", [pageId],
-  )).rows[0]!.seq);
-
-  it.each(ENGINE_MODES)(
-    "on a %s page files every receipt under no policy: deletions as debt, hints disabled, no dirty queue, no wake",
-    async (mode) => {
-      const app = createTestAppContext(db());
-      const page = await seedPage(app);
-      const generation = await enableHints(app, page);
-      await setMode(page.id, "shadow");
-      // Before the switch: the hint routes and wakes the DM stream (J8).
-      await signal(app, page.id, created("149"), generation);
-      expect(await runFanslyWsHintProjection(app, { accountId: page.id })).toMatchObject({ applied: 1 });
-      expect(await dirtyQueue(page.id)).toEqual([{ subject_ref: GROUP, requested_revision: 1n }]);
-      const woken = await dmWake(page.id);
-      expect(woken).not.toBeNull();
-      // That run finished: an event wake reaches only an idle stream.
-      await db().pool.query(
-        `update page_sync_states set status = 'idle', applied_seq = request_seq,
-            leased_seq = null, lease_token = null, lease_expires_at = null
-          where page_id = $1`,
-        [page.id],
-      );
-
-      // Frames the legacy socket captured before the switch, projected after it.
-      await signal(app, page.id, created("151"), generation);
-      await signal(app, page.id, deletion, generation);
-      await setMode(page.id, mode);
-      const result = await runFanslyWsHintProjection(app, { accountId: page.id });
-      expect(result).toMatchObject({ accounts: 1, applied: 0 });
-      expect(await getProjectionWatermark(app.db, FANSLY_WS_HINT_PROJECTION, page.id)).toBe(await headSeq(page.id));
-      // The deletion keeps its receipt (the reconcile's only evidence); the
-      // hint is filed but routes nothing.
-      expect(await outcomes(page.id)).toEqual([
-        { message_ref: "149", outcome: "routed" },
-        { message_ref: "151", outcome: "disabled" },
-        { message_ref: "150", outcome: "mutation_debt" },
-      ]);
-      expect(await dirtyQueue(page.id)).toEqual([{ subject_ref: GROUP, requested_revision: 1n }]);
-      // The routed subject is still due, yet the fenced stream is not woken.
-      expect(await dmWake(page.id)).toBe(woken);
-
-      // Back to `off`: the same due subject wakes the stream again.
-      await setMode(page.id, "off");
-      await runFanslyWsHintProjection(app, { accountId: page.id });
-      expect(Number(await dmWake(page.id))).toBeGreaterThan(Number(woken));
-    },
-  );
-
-  it("a deletion captured before the switch and projected after it is still marked, also after a phase-B revert", async () => {
-    const app = createTestAppContext(db());
-    const page = await seedPage(app);
-    await setMode(page.id, "shadow");
-    const thread = await seedThread(app, page.id, new Date(Date.now() - 3_600_000));
-    // Acked in shadow: the engine's `dm-live.deletions` closes it without a write.
-    await signal(app, page.id, deletion);
-    await setMode(page.id, "handover");
-    await runFanslyWsHintProjection(app, { accountId: page.id });
-    const before = await threadWindow(thread.id);
-    expect(await reconcileRecentFanslyWsDeletions(app, { accountId: page.id }))
-      .toEqual({ hotMarked: 1, archiveMarked: 1, windowsRepaired: 0 });
-    expect(await deletedAt("page_dm_messages", "150", page.id)).toBeInstanceOf(Date);
-    expect(await deletedAt("message_archive", "150", page.id)).toBeInstanceOf(Date);
-    // The window is the engine's while it owns the page.
-    expect(await threadWindow(thread.id)).toEqual(before);
-
-    // Phase B times out: back to shadow, the reconcile re-derives the window.
-    await setMode(page.id, "shadow");
-    expect(await reconcileRecentFanslyWsDeletions(app, { accountId: page.id }))
-      .toEqual({ hotMarked: 0, archiveMarked: 0, windowsRepaired: 1 });
-    expect(await threadWindow(thread.id)).toEqual({
-      stored_message_count: 1, newest_stored_message_id: "149", oldest_stored_message_id: "149",
-    });
-  });
-
-  it("on a shadow page routes as before", async () => {
-    const app = createTestAppContext(db());
-    const page = await seedPage(app);
-    await setMode(page.id, "shadow");
-    await signal(app, page.id, deletion);
-    await runFanslyWsHintProjection(app, { accountId: page.id });
-    // The deletion's mutation_debt receipt, as before the step-3 fences.
-    expect(await outcomes(page.id)).toEqual([{ message_ref: "150", outcome: "mutation_debt" }]);
-    expect(await getProjectionWatermark(app.db, FANSLY_WS_HINT_PROJECTION, page.id)).toBe(await headSeq(page.id));
-  });
-});
-
-describe("(i) the minutely deletion reconcile", () => {
-  async function fixture(mode: SyncPageMode) {
-    const app = createTestAppContext(db());
-    const page = await seedPage(app);
-    const thread = await seedThread(app, page.id, new Date(Date.now() - 3_600_000));
-    // The receipt the hint projector filed before the switch.
-    const id = ++receiptId;
-    await routeFanslyWsHintEvent(db().db, {
-      id, pageId: page.id, observationId: id, receivedAt: new Date(Date.now() - 120_000), generation: GENERATION,
-      node: { path: [], outcome: "mutation_debt", mutation: {
-        messageRef: "150", groupRef: GROUP, correlationRef: "77", bulk: false,
-      } },
-    }, null);
-    await setMode(page.id, mode);
-    return { app, page, thread };
-  }
-
-  it("marks a receipt's rows on an engine page but writes none of its window columns", async () => {
-    const f = await fixture("live");
-    const before = await threadWindow(f.thread.id);
-    expect(await reconcileRecentFanslyWsDeletions(f.app, { accountId: f.page.id }))
-      .toEqual({ hotMarked: 1, archiveMarked: 1, windowsRepaired: 0 });
-    expect(await deletedAt("page_dm_messages", "150", f.page.id)).toBeInstanceOf(Date);
-    expect(await deletedAt("message_archive", "150", f.page.id)).toBeInstanceOf(Date);
-    // The window still counts the marked row: on an engine page it is the
-    // engine's to recompute, and the drift pass leaves it alone too.
-    expect(await threadWindow(f.thread.id)).toEqual(before);
-    expect(await reconcileRecentFanslyWsDeletions(f.app, { accountId: f.page.id }))
-      .toEqual({ hotMarked: 0, archiveMarked: 0, windowsRepaired: 0 });
-    expect(await threadWindow(f.thread.id)).toEqual(before);
-
-    // Back to `off`: the drift pass re-derives the window on the next pass.
-    await setMode(f.page.id, "off");
-    expect(await reconcileRecentFanslyWsDeletions(f.app, { accountId: f.page.id }))
-      .toEqual({ hotMarked: 0, archiveMarked: 0, windowsRepaired: 1 });
-    expect(await threadWindow(f.thread.id)).toEqual({
-      stored_message_count: 1, newest_stored_message_id: "149", oldest_stored_message_id: "149",
-    });
-  });
-
-  it("refreshes the window with the mark on an off page", async () => {
-    const f = await fixture("off");
-    expect(await reconcileRecentFanslyWsDeletions(f.app, { accountId: f.page.id }))
-      .toEqual({ hotMarked: 1, archiveMarked: 1, windowsRepaired: 0 });
-    expect(await threadWindow(f.thread.id)).toEqual({
-      stored_message_count: 1, newest_stored_message_id: "149", oldest_stored_message_id: "149",
-    });
-  });
-});
 
 // ── (g) the /account/me levers, the probes, the scripts ─────────────────────
 

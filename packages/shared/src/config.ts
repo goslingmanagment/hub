@@ -435,6 +435,16 @@ const envSchema = z.object({
   // with no catalog reference there is no pointer, so the inline body is written
   // exactly as before. EMPTY = FULLY OFF.
   CAPTURE_CAS_POINTER_ONLY_PAGES: z.string().default(""),
+  // Chat extension (chat-extension docs/hub-pr-plan.md H-2b): the owner's
+  // switches for the hub's third client, live and audited. Every one rests OFF.
+  // The JSON and version values are parsed where they are read
+  // (chat-extension-settings.ts), never here: a bad value must turn the
+  // extension off, not stop the hub from booting.
+  CHAT_EXTENSION_ENABLED: booleanSchema.default(false),
+  CHAT_EXTENSION_FEATURES: z.string().default("{}"),
+  CHAT_EXTENSION_MIN_VERSION: z.string().default("0.0.0"),
+  CHAT_EXTENSION_HOST_BINDINGS: z.string().default("{}"),
+  CHAT_EXTENSION_PREVIEW_SEND_RECEIPT_PROFILES: z.string().default("[]"),
 });
 
 // Machine-readable list of every env var the schema understands. Exported so the
@@ -722,6 +732,16 @@ export interface AppConfig {
   /** G5 slice 3c-1: pages whose new captures skip the inline body once the
    *  catalog copy is on disk. CSV of page ids, "*" for all, "" = fully off. */
   captureCasPointerOnlyPages?: string;
+  /** Chat extension master switch; off = every feature off (H-2b). */
+  chatExtensionEnabled?: boolean;
+  /** JSON: scope ("*" or a page label) → flag → on. */
+  chatExtensionFeatures?: string;
+  /** MAJOR.MINOR.PATCH: the lowest extension version the client routes serve. */
+  chatExtensionMinVersion?: string;
+  /** JSON: host account ("onlymonster:36408") → page label. */
+  chatExtensionHostBindings?: string;
+  /** JSON array: the admitted preview-send receipt profiles (X8); [] = none. */
+  chatExtensionPreviewSendReceiptProfiles?: string;
 }
 
 function hasConfiguredValue(value: string | undefined) {
@@ -1050,6 +1070,11 @@ export function loadConfig(
     captureCasDualWritePages: parsed.CAPTURE_CAS_DUAL_WRITE_PAGES,
     captureCasReadMode: parsed.CAPTURE_CAS_READ_MODE,
     captureCasPointerOnlyPages: parsed.CAPTURE_CAS_POINTER_ONLY_PAGES,
+    chatExtensionEnabled: parsed.CHAT_EXTENSION_ENABLED,
+    chatExtensionFeatures: parsed.CHAT_EXTENSION_FEATURES,
+    chatExtensionMinVersion: parsed.CHAT_EXTENSION_MIN_VERSION,
+    chatExtensionHostBindings: parsed.CHAT_EXTENSION_HOST_BINDINGS,
+    chatExtensionPreviewSendReceiptProfiles: parsed.CHAT_EXTENSION_PREVIEW_SEND_RECEIPT_PROFILES,
   };
 }
 

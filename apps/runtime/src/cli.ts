@@ -62,6 +62,7 @@ import {
 } from "./services/fansly-send-guard/index.ts";
 import { buildFanslySendGuardReport } from "./services/fansly-send-guard/report.ts";
 import { registerSyncChainCommands } from "./sync/cli/chain.ts";
+import { registerSyncDmReaderParityCommands } from "./sync/cli/dm-reader-parity.ts";
 import { registerSyncExcludedCommands } from "./sync/cli/excluded.ts";
 import { registerSyncHistoryCommands } from "./sync/cli/history.ts";
 import { registerSyncReportCommands } from "./sync/cli/report.ts";
@@ -95,7 +96,6 @@ import { runDmCorrectionsLineageIntake } from "./services/dm-corrections-lineage
 import { runFansly1970Repair } from "./services/fansly-1970-repair.ts";
 import { runOfapiPpvRefRepair } from "./services/ofapi-ppv-ref-repair.ts";
 import { runPpvPurchaseBackfill } from "./services/ppv-purchase-backfill.ts";
-import { runFanslyWsDeletionBackfill } from "./services/fansly-ws-deletions.ts";
 import {
   DM_ONLY_PRUNE_DEFAULT_WAIT_MS,
   runFanslyMediaStatsDmOnlyPrune,
@@ -2516,43 +2516,6 @@ export function buildProgram() {
       }
     });
 
-  // D-6. Owner-run one-off like the two above: dry-run is the default (inside
-  // a READ ONLY transaction), `--execute` opts in, a re-run reports zeros. It
-  // reads Hub's own deletion receipts and makes no Fansly call.
-  program
-    .command("archive:backfill-fansly-ws-deletions")
-    .description(
-      "D-6: mark Fansly DM messages the account socket reported deleted (exact "
-        + "serviceId 5 / type 10 receipts) as deleted in page_dm_messages and "
-        + "message_archive. Text and attachments stay; never inserts. Dry-run default; idempotent",
-    )
-    .option("--execute", "actually mark (default is a read-only dry-run count)")
-    .option("--account <id>", "restrict to one internal account (page) id", parsePositiveInt)
-    .action(async (options) => {
-      const app = await createAppContext();
-      try {
-        const result = await runFanslyWsDeletionBackfill(app, {
-          dryRun: !options.execute,
-          ...(options.account !== undefined ? { accountId: options.account } : {}),
-        });
-        console.log(JSON.stringify(result));
-        for (const page of result.pages) {
-          console.log(
-            `page ${page.pageId} (${page.pageLabel}): ${page.deletions} deletions, `
-              + `live hot ${page.hot}, live archive ${page.archive}`,
-          );
-        }
-        console.log(
-          `${result.dryRun ? "[dry-run] would mark" : "marked"}: `
-            + `hot ${result.hotMarked}, message_archive ${result.archiveMarked} `
-            + `(${result.deletions} exact deletions in scope); `
-            + `${result.dryRun ? "would repair" : "repaired"} ${result.windowsRepaired} drifted thread windows`,
-        );
-      } finally {
-        await app.close();
-      }
-    });
-
   program
     .command("money:repair-negations")
     .description(
@@ -3367,6 +3330,8 @@ export function buildProgram() {
   // Owner decision №8 (step-3 design S3-06): `sync excluded probe | report |
   // lift | unlift`.
   registerSyncExcludedCommands(sync);
+  // Step 4 S4-06, owner decision №11: `sync dm-reader-parity` (read-only).
+  registerSyncDmReaderParityCommands(sync);
 
   queue
     .command("planner-recover")
