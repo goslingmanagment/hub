@@ -55,6 +55,9 @@ const SANCTIONED_FILES: Record<string, string> = {
   "apps/runtime/src/services/ppv-purchase-backfill.ts": "the OnlyFans PPV backfill CLI",
   "packages/db/src/repositories/ai-transcript-union.ts": "the OnlyFans AI transcript union (tombstones, PPV upgrade)",
   "packages/db/src/repositories/agent-hydration.ts": "the hydration boundary of the OnlyFans lane",
+  // chat-extension H-4b: a read-only point lookup, no row is served from it.
+  "packages/db/src/repositories/ai-live-context.ts":
+    "the context_v1 known-message lookup: whether this conversation holds a named id and its deletion mark (the archive arm answers a live page)",
   // Readers that serve each page from the store its sync mode names
   // (`dmReaderStoreOf`, S4-08): the archive on a live page, this table elsewhere.
   "apps/runtime/src/services/conversations.ts": "the chat routes pass the page's store",
