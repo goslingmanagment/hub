@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { aiFeatureStreamFrameSchema } from "@agency_hub_core/contracts";
+import { aiFeatureStreamFrameSchema, errorResponseSchema } from "@agency_hub_core/contracts";
 import {
   createFanslyPage,
   createModel,
@@ -19,6 +19,7 @@ import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { createBundledPersonalities, loadTranscriptContext } from "../apps/runtime/src/modules/ai/index.ts";
 import type { AiGatewayProvider, AiGatewayProviderInput } from "../apps/runtime/src/services/ai-gateway.ts";
 import { assignPageToUser, createUserAccount, setUserPassword } from "../apps/runtime/src/services/auth.ts";
+import type * as ClientCapabilitiesModule from "../apps/runtime/src/services/client-capabilities.ts";
 import { issueDeviceTokenForUserId } from "./helpers/device-credentials.ts";
 import {
   resetIntegrationDatabase,
@@ -43,6 +44,29 @@ import { fixtureUserId } from "./helpers/user-identity.ts";
 // verify (tests/helpers/cheap-argon2.ts).
 vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
 
+// The chat extension asks with its narrow token, and a narrow token's
+// `fan-summary` is behind the page's `recap` feature. That feature needs
+// `recap-profile-v1` (the dossier save, H-5), which this hub does not serve
+// yet: as merged, the extension's Recap is refused `hub_not_ready` before
+// anything is read. The narrow-token test below holds exactly that first, then
+// stands in for the hub that serves the dossier save, the only state in which
+// the extension's Recap reads a transcript at all. Every other test runs the
+// hub as it is. When H-5 adds `recap-profile-v1` to SERVED_CLIENT_CAPABILITIES,
+// this mock and the `hub_not_ready` step go, here and in
+// tests/client-recaps.integration.test.ts, which carries the same stand-in.
+const hub = vi.hoisted(() => ({ servesDossierSave: false }));
+vi.mock("../apps/runtime/src/services/client-capabilities.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof ClientCapabilitiesModule>();
+  return {
+    ...actual,
+    get SERVED_CLIENT_CAPABILITIES() {
+      return hub.servesDossierSave
+        ? [...new Set([...actual.SERVED_CLIENT_CAPABILITIES, "recap-profile-v1"])]
+        : actual.SERVED_CLIENT_CAPABILITIES;
+    },
+  };
+});
+
 const PASSWORDS = { owner: "owner-secret", grisha: "grisha-secret" } as const;
 const AUDIT = { source: "cli" } as const;
 const FAN = "777000777";
@@ -58,6 +82,7 @@ const ref = (n: number) => String(500_000 + n);
 const MINUTES_BACK = CHAT_MESSAGES + 200;
 
 type ApiServer = Awaited<ReturnType<typeof buildApiServer>>;
+type InjectResponse = Awaited<ReturnType<ApiServer["inject"]>>;
 type Frame = Record<string, unknown>;
 
 let testDb: StartedTestDatabase | null = null;
@@ -65,7 +90,7 @@ let app: AppContext;
 let server: ApiServer | null = null;
 let trap: NoOutboundTrap | null = null;
 let ownerCookie = "";
-/** A full device token of a chatter of lora-of and lora-fansly (an old client's). */
+/** A full device token of a chatter of lora-of and lora-fansly (a desktop's). */
 let grishaToken = "";
 /** The narrow chat-extension token of the same chatter. */
 let grishaExtensionToken = "";
@@ -146,20 +171,32 @@ function frames(body: string): Frame[] {
     .map((line) => JSON.parse(line.slice("data: ".length)) as Frame);
 }
 
-/** One AI request. `capabilities: null` sends no capability header, as a released client does. */
-async function ask(input: {
+interface AskInput {
+  /**
+   * Who asks. `desktop` (the default) is the chatter's full device token: a
+   * released desktop without the capability header, or one whose SDK advertises
+   * `context-v1`. `extension` is the chat extension as it signs in and asks:
+   * its narrow token and its version header.
+   */
+  as?: "desktop" | "extension";
   feature?: string;
+  /** `null` sends no capability header, as a released client does. */
   capabilities?: string | null;
   body?: Record<string, unknown>;
-} = {}) {
+}
+
+/** One AI request, as the hub answered it. */
+async function send(input: AskInput = {}): Promise<InjectResponse> {
   delete provider.input;
   const feature = input.feature ?? "fan-summary";
   const capabilities = input.capabilities === undefined ? "context-v1" : input.capabilities;
-  const response = await server!.inject({
+  return server!.inject({
     method: "POST",
     url: `/api/v1/ai/features/${feature}`,
     headers: {
-      authorization: `Bearer ${grishaToken}`,
+      ...(input.as === "extension"
+        ? { authorization: `Bearer ${grishaExtensionToken}`, "x-client-version": EXTENSION_VERSION }
+        : { authorization: `Bearer ${grishaToken}` }),
       ...(capabilities !== null ? { "x-kernel-ai-capabilities": capabilities } : {}),
     },
     payload: {
@@ -171,6 +208,11 @@ async function ask(input: {
       ...input.body,
     },
   });
+}
+
+/** One AI request that generates: what was streamed and what the provider was given. */
+async function ask(input: AskInput = {}) {
+  const response = await send(input);
   expect(response.statusCode, response.body).toBe(200);
   const streamed = frames(response.body);
   for (const frame of streamed) {
@@ -191,6 +233,13 @@ async function ask(input: {
   };
 }
 
+/** The owner's switch refused the request, with this reason, before anything was read. */
+function expectFeatureRefused(response: InjectResponse, reason: string) {
+  expect(response.statusCode, response.body).toBe(409);
+  expect(errorResponseSchema.parse(response.json())).toMatchObject({ error: "client_feature_disabled", reason });
+  expect(provider.input).toBeUndefined();
+}
+
 /** The numbers `from..to`, both included. */
 const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, index) => from + index);
 
@@ -209,6 +258,12 @@ async function raiseDepth() {
   expect(response.statusCode, response.body).toBe(200);
 }
 
+/** The owner's Recap flag of the extension on lora-of. */
+async function setRecapFlag(on: boolean) {
+  const response = await patchConfig("chatExtensionFeatures", JSON.stringify({ "lora-of": { recap: on } }));
+  expect(response.statusCode, response.body).toBe(200);
+}
+
 async function bootstrap() {
   const response = await server!.inject({
     method: "GET",
@@ -216,7 +271,21 @@ async function bootstrap() {
     headers: { authorization: `Bearer ${grishaExtensionToken}`, "x-client-version": EXTENSION_VERSION },
   });
   expect(response.statusCode, response.body).toBe(200);
-  return response.json<{ configRevision: number; limits: Record<string, unknown> }>();
+  return response.json<{
+    configRevision: number;
+    limits: Record<string, unknown>;
+    pages: Array<{ pageLabel: string; features: Record<string, { available: boolean; reason?: string }> }>;
+  }>();
+}
+
+/** The extension's Recap feature on lora-of, as the bootstrap tells it. */
+async function recapFeature() {
+  return (await bootstrap()).pages.find((page) => page.pageLabel === "lora-of")?.features.recap;
+}
+
+async function generationCount(): Promise<number> {
+  const { rows } = await testDb!.pool.query<{ count: number }>("select count(*)::int as count from ai_generation_content");
+  return rows[0]!.count;
 }
 
 interface GenerationRow { feature: string; params: Record<string, unknown> }
@@ -245,6 +314,7 @@ describe("full Recap transcript depth (aiTranscriptDeepMaxRows)", () => {
       return;
     }
     await resetIntegrationDatabase(testDb.pool);
+    hub.servesDossierSave = false;
     app = createTestAppContext(testDb, { authPolicyEnforcement: "log" });
     app.config.chatMuseAiGatewayEnabled = true;
     app.aiGatewayProvider = capturingProvider();
@@ -399,6 +469,70 @@ describe("full Recap transcript depth (aiTranscriptDeepMaxRows)", () => {
     // Lowered again, the same request is back at 1500 from the next generation on.
     expect((await patchConfig("aiTranscriptDeepMaxRows", "1500")).statusCode).toBe(200);
     expect((await ask({ body: { messageCount: 3000 } })).read).toEqual(range(CHAT_MESSAGES - 1499, CHAT_MESSAGES));
+
+    await trap!.assertNoOutbound();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("serves the chat extension itself: its narrow token's full Recap reads 3000, behind the page's Recap switch", async (context) => {
+    if (!server) return context.skip();
+    await seedChat();
+    await raiseDepth();
+    // The extension's full Recap as its request builder sends it: the fan in
+    // both refs, and a window cut to the `limits.deepMax` of its bootstrap.
+    const extensionRecap = async (): Promise<AskInput> => ({
+      as: "extension",
+      body: { fanRef: FAN, isRegeneration: false, messageCount: (await bootstrap()).limits.deepMax },
+    });
+    expect((await extensionRecap()).body).toMatchObject({ messageCount: 3000 });
+
+    // The depth is raised, but the owner has not switched the extension on:
+    // its Recap is refused before anything is read.
+    expectFeatureRefused(await send(await extensionRecap()), "disabled");
+    expect((await patchConfig("chatExtensionEnabled", true)).statusCode).toBe(200);
+    await setRecapFlag(true);
+
+    // The hub exactly as this change leaves it: Recap on, no dossier save yet.
+    expect(await recapFeature()).toEqual({ available: false, reason: "hub_not_ready" });
+    expectFeatureRefused(await send(await extensionRecap()), "hub_not_ready");
+    expect(await generationCount()).toBe(0);
+
+    // The hub that serves the whole of Recap: the narrow token passes the
+    // owner's switch and reads the deep window.
+    hub.servesDossierSave = true;
+    expect(await recapFeature()).toEqual({ available: true });
+    const recap = await ask(await extensionRecap());
+    expect(recap.types).toEqual(["meta", "context_v1", "content_delta", "usage", "done"]);
+    expect(recap.read).toEqual(range(CHAT_MESSAGES - 2999, CHAT_MESSAGES));
+    expect(recap.context).toMatchObject({
+      source: "archive",
+      servedHead: { messageRef: ref(CHAT_MESSAGES) },
+      window: { requested: 3000, served: 3000 },
+    });
+    const recorded = await lastGeneration();
+    expect(recorded.params).toMatchObject({
+      clientProfile: "chat-extension",
+      summaryMode: "full",
+      requestedCount: 3000,
+      keptCount: 3000,
+    });
+    expect(manifestOf(recorded)).toMatchObject({ source: "archive", archiveCount: 3000 });
+
+    // The short Recap of the same token stays at 300.
+    const short = await ask({ as: "extension", body: { fanRef: FAN, summaryMode: "short", messageCount: 3000 } });
+    expect(short.read).toEqual(range(CHAT_MESSAGES - 299, CHAT_MESSAGES));
+
+    // Lowered: the bootstrap tells the extension 1500, and one that still
+    // holds the old limits and asks for 3000 reads 1500.
+    expect((await patchConfig("aiTranscriptDeepMaxRows", "1500")).statusCode).toBe(200);
+    expect((await extensionRecap()).body).toMatchObject({ messageCount: 1500 });
+    const stale = await ask({ as: "extension", body: { fanRef: FAN, messageCount: 3000 } });
+    expect(stale.read).toEqual(range(CHAT_MESSAGES - 1499, CHAT_MESSAGES));
+    expect(stale.context!.window).toEqual({ requested: 3000, served: 1500 });
+
+    // The owner's Recap switch still decides, whatever the depth says.
+    await raiseDepth();
+    await setRecapFlag(false);
+    expectFeatureRefused(await send(await extensionRecap()), "flag_off");
 
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
