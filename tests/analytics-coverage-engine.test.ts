@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { StatsCoverageResponse } from "@agency_hub_core/contracts";
 
@@ -90,6 +90,10 @@ function card(html: string, name: string): string {
 
 const badge = (html: string, name: string): string => card(html, name).split("\n")[2]!;
 
+/** A time as the panel writes it: with its year once that is not the current
+ *  one. An expectation built without the rule holds only until New Year. */
+const panelTime = (iso: string): string => formatDateTime(iso, { yearUnlessCurrent: true });
+
 describe("the coverage panel's engine section", () => {
   it("shows each stream's last read, next due, keys and why it waits", () => {
     const html = render({
@@ -101,7 +105,7 @@ describe("the coverage panel's engine section", () => {
     const media = card(html, "media_stats");
     expect(media).toContain("Last read");
     expect(media).toContain("Next due");
-    expect(media).toContain(`media-stats.walk: not due until ${formatDateTime("2026-10-03T09:05:00.000Z")}`);
+    expect(media).toContain(`media-stats.walk: not due until ${panelTime("2026-10-03T09:05:00.000Z")}`);
     expect(media).toContain("media-stats.walk");
     expect(badge(html, "media_stats")).toBe("reading");
     // The retired lanes' vocabulary is gone.
@@ -217,21 +221,34 @@ describe("why a stream waits, in the sync tabs' dictionary and the panel's time"
     expect(engineWaitLabel("subject_breaker", "ru")).toBe("пауза после ошибок");
   });
 
-  it("writes 'until' as the card writes its other times, not as UTC ISO", () => {
+  // The clock is pinned, so the year the suite runs in decides nothing: the
+  // same card is read in the instant's own year and in a later one, where
+  // both of its times carry the year.
+  it.each([
+    ["in the instant's own year", "2026-10-04T09:00:00.000Z", false],
+    ["in a later year, with the year", "2027-01-15T12:00:00.000Z", true],
+  ])("writes 'until' as the card writes its other times, not as UTC ISO (%s)", (_when, clock, withYear) => {
     const until = "2026-10-04T09:01:51.948Z";
-    const html = text(render({
-      engine: engine([stream({
-        stream: "light",
-        resources: ["account.poll"],
-        nextDueAt: until,
-        waiting: { resource: "account.poll", reason: "not_due", until },
-      })]),
-    }));
-    const local = formatDateTime(until);
-    expect(html).toContain(`\naccount.poll: not due until ${local}\n`);
-    // "Next due" beside it reads the same instant the same way.
-    expect(html.split(local)).toHaveLength(3);
-    expect(html).not.toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:/);
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(clock));
+      const html = text(render({
+        engine: engine([stream({
+          stream: "light",
+          resources: ["account.poll"],
+          nextDueAt: until,
+          waiting: { resource: "account.poll", reason: "not_due", until },
+        })]),
+      }));
+      const local = panelTime(until);
+      expect(local.includes("2026")).toBe(withYear);
+      expect(html).toContain(`\naccount.poll: not due until ${local}\n`);
+      // "Next due" beside it reads the same instant the same way.
+      expect(html.split(local)).toHaveLength(3);
+      expect(html).not.toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:/);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("titles a card by the stream's name in the sync tabs, never by a raw key", () => {
