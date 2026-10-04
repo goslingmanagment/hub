@@ -409,6 +409,35 @@ describe("GET /api/v1/admin/client-health (H-11c)", () => {
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
+  it("holds a group back by its size in the range asked for, and no narrower", async (context) => {
+    if (!server) return context.skip();
+
+    // One version and build: 22 observations on one Moscow day, 3 on the next.
+    const many = range(22, 10, 1); // 10 … 31 ms
+    const few = [300, 310, 900];
+    await fold("2026-10-02T08:00:00.000Z", healthReport({ perf: [histogramFor("insertMs", many)] }));
+    await fold("2026-10-03T08:00:00.000Z", healthReport({ perf: [histogramFor("insertMs", few)] }));
+
+    // The thin day alone: its size and no figure.
+    expect((await view({ from: DAY, to: DAY })).perf).toEqual([expect.objectContaining({
+      metric: "insertMs", count: 3, mean: null, max: null, p50: null, p95: null, suppressed: true,
+    })]);
+    // The day before alone and the two days together are groups of 22 and 25: both shown.
+    const [before] = (await view({ from: "2026-10-02", to: "2026-10-02" })).perf;
+    expect(before).toMatchObject({ count: 22, mean: 20.5, max: 31, suppressed: false });
+    const [both] = (await view({ from: "2026-10-02", to: DAY })).perf;
+    expect(both).toMatchObject({ count: 25, max: 900, suppressed: false });
+
+    // The floor is on the range of one read, as the route's description says:
+    // the two answers it shows give away the mean and the maximum of the thin
+    // day. Whoever makes it hold for a part of a range changes this test.
+    expect((both!.mean! * both!.count - before!.mean! * before!.count) / few.length)
+      .toBeCloseTo(few.reduce((total, sample) => total + sample, 0) / few.length, 6);
+    expect(both!.max).toBe(Math.max(...few));
+
+    await trap!.assertNoOutbound();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
   it("narrows by client and by metric", async (context) => {
     if (!server) return context.skip();
 
@@ -531,6 +560,10 @@ describe("GET /api/v1/admin/client-health (H-11c)", () => {
       { from: "2025-10-02", to: "2026-10-03" },
       { from: DAY, to: DAY, userId: "7" },
       { from: DAY, to: DAY, clientName: "" },
+      // Real days whose next day the hub cannot name: the read stops before that day's first hour.
+      { from: "9999-12-31", to: "9999-12-31" },
+      { from: "0999-01-01", to: "0999-01-01" },
+      { from: "0100-01-01", to: "0100-01-02" },
     ] as Array<Record<string, string>>) {
       const response = await viewRequest(query, { cookie: ownerCookie });
       expect(response.statusCode, `${JSON.stringify(query)}: ${response.body}`).toBe(400);
@@ -538,6 +571,14 @@ describe("GET /api/v1/admin/client-health (H-11c)", () => {
     }
     // The longest range it does read: a year of days.
     expect((await viewRequest({ from: "2025-10-03", to: "2026-10-03" }, { cookie: ownerCookie })).statusCode).toBe(200);
+    // The farthest days it takes are read, and empty: no day that passes the check answers 500.
+    for (const query of [
+      { from: "9999-12-30", to: "9999-12-30" },
+      { from: "0999-12-31", to: "0999-12-31" },
+      { from: "0999-06-01", to: "1000-01-01" },
+    ]) {
+      expect(await view(query), JSON.stringify(query)).toMatchObject({ perf: [], contract: [], counters: [], footprint: [] });
+    }
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("shows a report sent on the capture lane, and nothing of who sent it", async (context) => {

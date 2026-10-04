@@ -26,14 +26,32 @@ const PERF_METRICS: ReadonlyArray<readonly [metric: string, label: string]> = [
   ["composerInputDelayMs", "Задержка набора в поле сообщения"],
 ];
 
-/** The counters the extension always sends, in the order the page lists them. Any other prints its code alone. */
+/**
+ * The counters the page lists first, in this order. The extension sends six of
+ * them in every report, zeroes included; `p1.other` it sends once an error of
+ * the gravest class that has no counter of its own happens.
+ */
 const COUNTERS: ReadonlyArray<readonly [code: string, label: string]> = [
   ["p1.insert-misplaced", "Вставка в чужой чат"],
   ["p1.send-without-human", "Отправка без человека"],
   ["p1.read-without-human", "Чтение чата без человека"],
+  ["p1.other", "Другой критичный сбой"],
   ["insert.prevented", "Вставка остановлена проверкой"],
   ["send.held", "Отправка удержана"],
   ["send.uncertain", "Неизвестно, ушло ли сообщение"],
+];
+
+/**
+ * The extension's own bookkeeping, listed last: what it left out of its
+ * reports. Not errors, and the page says so: `perf.capped` grows on any busy
+ * sitting (a metric takes 20 000 measurements per report), so among the error
+ * codes, which are listed by size, it would read as the largest error.
+ */
+const BOOKKEEPING_COUNTERS: ReadonlyArray<readonly [code: string, label: string]> = [
+  ["perf.capped", "Замеры сверх лимита, в отчёт не вошли"],
+  ["perf.invalid", "Замеры с негодным значением, отброшены"],
+  ["perf.rejected", "Наборы замеров не того формата, отброшены"],
+  ["health.bad-counter", "Счётчики с недопустимым именем, отброшены"],
 ];
 
 /** The ranges the page offers: each ends today. */
@@ -225,8 +243,12 @@ export function clientHealthPageModel(data: AdminClientHealthResponse): ClientHe
         .map(perfRowView),
     }));
 
-  const counterOrder = new Map(COUNTERS.map(([code], index) => [code, index]));
-  const counterLabels = new Map(COUNTERS);
+  // Three runs: the counters the page lists first, then every other code by size, then the bookkeeping.
+  const counterOrder = new Map([
+    ...COUNTERS.map(([code], index) => [code, index] as const),
+    ...BOOKKEEPING_COUNTERS.map(([code], index) => [code, COUNTERS.length + 1 + index] as const),
+  ]);
+  const counterLabels = new Map([...COUNTERS, ...BOOKKEEPING_COUNTERS]);
   const counters = [...data.counters]
     .sort((left, right) => {
       const known = (counterOrder.get(left.code) ?? COUNTERS.length) - (counterOrder.get(right.code) ?? COUNTERS.length);

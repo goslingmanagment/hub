@@ -28,9 +28,20 @@ import { CLIENT_HEALTH_MIN_GROUP_SIZE, clientHealthP50P95, clientHealthPercentil
  * person and does not try to: there is no list of who runs which version.
  *
  * A measurement is shown only for a group of at least
- * CLIENT_HEALTH_MIN_GROUP_SIZE observations. A smaller group shows how many
- * observations it has and nothing of them: a mean, a maximum or a percentile of
- * three observations describes one sitting of one person, not the version.
+ * CLIENT_HEALTH_MIN_GROUP_SIZE observations in the range asked for. A smaller
+ * group shows how many observations it has and nothing of them: a mean, a
+ * maximum or a percentile of three observations describes one sitting of one
+ * person, not the version.
+ *
+ * The floor is on the range of one read and no narrower. The days of a range
+ * are free, so the sum of a few observations, and their maximum when it is the
+ * larger one, come out of two reads of larger ranges: 22 observations on one
+ * day and 3 on the next are held back as the second day alone and shown as the
+ * two days together. It keeps a thin figure off the page; it does not seal a
+ * small group off, and the view must not be described as if it did. Holding a
+ * group back whenever one of its days is thin would need the observations
+ * counted per day, which no read here does.
+ *
  * Contract verdicts and counters are counts of reports and events by client
  * version and host build, not measurements of a sitting, and are shown at any
  * size: a host build that breaks the contract has to be visible from its first
@@ -100,7 +111,10 @@ export interface ClientHealthViewRange {
   toExclusiveBound: Date;
 }
 
-/** The hub hours a range of days covers. The query schema has checked the days and their order. */
+/**
+ * The hub hours a range of days covers. The query schema has checked the days,
+ * their order, and that the day after `to` is one the hub can name.
+ */
 export function resolveClientHealthViewRange(query: Pick<AdminClientHealthQuery, "from" | "to">): ClientHealthViewRange {
   return {
     from: query.from,

@@ -187,7 +187,12 @@ one. Held by `client-health-intake.integration`. The owner reads the rollups at
 route like the rest of the owner console: no device token reaches it, the
 extension's own included. It names no person, since the rollups hold none: the
 figures are by client version and host build, and a group of fewer than 20
-observations shows its size and no mean, maximum or percentile. Held by
+observations in the range asked for shows its size and no mean, maximum or
+percentile. That floor is on the range of one read and no narrower: the mean
+and the maximum of a few observations can be worked out from two reads of
+larger ranges, so it keeps a thin figure from being read as the version's and
+does not seal a small group off. Contract verdicts and counters are counts of
+reports and events and are shown at any size. Held by
 `client-health-view.integration`. Its AI generations wait for
 the owner's switches (`chatExtensionEnabled`, the Coach / Recap / Review flags) and its
 version for `chatExtensionMinVersion`, and each generation record is labelled

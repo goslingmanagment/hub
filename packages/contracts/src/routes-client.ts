@@ -23,7 +23,9 @@
  *   itself and reads an unknown member as "off" / "unknown".
  */
 
-import { MOSCOW_TIME_ZONE, diffBusinessDays, isValidBusinessDateString, platforms, userRoles } from "@agency_hub_core/shared";
+import {
+  MOSCOW_TIME_ZONE, diffBusinessDays, isValidBusinessDateString, nextBusinessDate, platforms, userRoles,
+} from "@agency_hub_core/shared";
 import { z } from "zod";
 
 import { businessDate, errorResponseSchema, intId, isoTimestamp } from "./primitives.ts";
@@ -388,6 +390,14 @@ export const adminClientHealthQuerySchema = z.object({
   if (!isValidBusinessDateString(query.from) || !isValidBusinessDateString(query.to)) {
     return;
   }
+  // The read stops before the first hour of the day after `to`, and the hub has
+  // to be able to name that day: 9999-12-31 has none, and the day after one in a
+  // year below 1000 comes back from `nextBusinessDate` without its leading zero.
+  // Refused here, or resolving the range throws and the route answers 500.
+  if (!isValidBusinessDateString(nextBusinessDate(query.to))) {
+    ctx.addIssue({ code: "custom", path: ["to"], message: "`to` is outside the days the hub can read" });
+    return;
+  }
   if (query.from > query.to) {
     ctx.addIssue({ code: "custom", path: ["to"], message: "`from` must be on or before `to`" });
     return;
@@ -406,9 +416,10 @@ export const adminClientHealthQuerySchema = z.object({
  * merged across every report and hour of it (a percentile is never averaged
  * from parts). Milliseconds.
  *
- * A group with fewer than `minGroupSize` observations is `suppressed`: it shows
- * how many observations it has and no figure of them (mean, max and both
- * percentiles are null).
+ * A group with fewer than `minGroupSize` observations in the range asked for is
+ * `suppressed`: it shows how many observations it has and no figure of them
+ * (mean, max and both percentiles are null). The floor is on the range of one
+ * read and no narrower: see the route's description.
  */
 export const adminClientHealthPerfRowSchema = z.object({
   clientName: z.string(),
@@ -460,11 +471,15 @@ export const adminClientHealthFootprintRowSchema = z.object({
 export const adminClientHealthResponseSchema = z.object({
   /** The days read, as asked, and the zone they are days of. */
   range: z.object({ from: z.string(), to: z.string(), timeZone: z.string() }),
-  /** The fewest observations a group needs to show a mean, a maximum or a percentile. */
+  /** The fewest observations a group needs, over the range asked for, to show a mean, a maximum or a percentile. */
   minGroupSize: positive,
   perf: z.array(adminClientHealthPerfRowSchema),
   contract: z.array(adminClientHealthContractRowSchema),
-  /** Counters by code, summed over the range: errors, prevented inserts, P1s. */
+  /**
+   * Counters by code, summed over the range: errors, prevented inserts, P1s, and
+   * the client's own bookkeeping of what it left out of a report (`perf.capped`
+   * and the like), which is not an error count.
+   */
   counters: z.array(z.object({ code: z.string(), total: count })),
   footprint: z.array(adminClientHealthFootprintRowSchema),
   asOf: isoTimestamp,
@@ -564,8 +579,11 @@ export const clientRouteSchemas = {
     description: "Read-only and database-only, over the hourly `client_health` rollups, which hold no user, page, "
       + "fan or device: the view names no person. Reports are filed under the hour the hub received them; the range "
       + "is whole days of `range.timeZone`. Percentiles are read off buckets merged over the range. A group with "
-      + "fewer than `minGroupSize` observations shows its size and no mean, maximum or percentile. Contract "
-      + "verdicts and counters are counts of reports and events, shown at any size.",
+      + "fewer than `minGroupSize` observations in the range asked for shows its size and no mean, maximum or "
+      + "percentile. That floor is on the range of one read and no narrower: the mean and the maximum of a few "
+      + "observations can be worked out from two reads of larger ranges, so it keeps a thin figure from being read "
+      + "as the version's and does not seal a small group off. Contract verdicts and counters are counts of reports "
+      + "and events, shown at any size.",
     querystring: adminClientHealthQuerySchema,
     response: {
       200: adminClientHealthResponseSchema,

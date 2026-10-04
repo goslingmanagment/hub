@@ -131,6 +131,28 @@ describe("the owner's client-health view: contract", () => {
     expect(adminClientHealthQuerySchema.safeParse({ from: "2025-10-02", to: "2026-10-03" }).success).toBe(false);
   });
 
+  it("refuses a last day the hub cannot name the day after, so every range it takes resolves", () => {
+    // The read stops before the first hour of the day after `to`.
+    for (const bad of [
+      { from: "9999-12-31", to: "9999-12-31" },
+      { from: "0999-01-01", to: "0999-01-01" },
+      { from: "0100-01-01", to: "0100-01-02" },
+    ]) {
+      const parsed = adminClientHealthQuerySchema.safeParse(bad);
+      expect(parsed.success, JSON.stringify(bad)).toBe(false);
+      expect(parsed.error?.issues.map((issue) => issue.path), JSON.stringify(bad)).toEqual([["to"]]);
+    }
+    // The nearest days on either side that it does take.
+    for (const edge of [
+      { from: "9999-12-30", to: "9999-12-30" },
+      { from: "0999-12-31", to: "0999-12-31" },
+      { from: "0999-06-01", to: "1000-01-01" },
+    ]) {
+      const range = resolveClientHealthViewRange(adminClientHealthQuerySchema.parse(edge));
+      expect(range.toExclusiveBound.getTime(), JSON.stringify(edge)).toBeGreaterThan(range.fromBound.getTime());
+    }
+  });
+
   it("has no place for a person: no list of who runs what, no user in any row", () => {
     const shape = adminClientHealthResponseSchema.shape;
     expect(Object.keys(shape).sort()).toEqual(["asOf", "contract", "counters", "footprint", "minGroupSize", "perf", "range"]);

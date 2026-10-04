@@ -934,7 +934,7 @@
         "tags": [
           "admin"
         ],
-        "description": "Read-only and database-only, over the hourly `client_health` rollups, which hold no user, page, fan or device: the view names no person. Reports are filed under the hour the hub received them; the range is whole days of `range.timeZone`. Percentiles are read off buckets merged over the range. A group with fewer than `minGroupSize` observations shows its size and no mean, maximum or percentile. Contract verdicts and counters are counts of reports and events, shown at any size.",
+        "description": "Read-only and database-only, over the hourly `client_health` rollups, which hold no user, page, fan or device: the view names no person. Reports are filed under the hour the hub received them; the range is whole days of `range.timeZone`. Percentiles are read off buckets merged over the range. A group with fewer than `minGroupSize` observations in the range asked for shows its size and no mean, maximum or percentile. That floor is on the range of one read and no narrower: the mean and the maximum of a few observations can be worked out from two reads of larger ranges, so it keeps a thin figure from being read as the version's and does not seal a small group off. Contract verdicts and counters are counts of reports and events, shown at any size.",
         "parameters": [
           {
             "schema": {

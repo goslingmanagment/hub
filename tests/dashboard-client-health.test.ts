@@ -140,6 +140,30 @@ describe("client-health page model", () => {
     ]);
   });
 
+  it("names the extension's bookkeeping counters and lists them last, however large", () => {
+    // What the extension counts beside its error codes (chat-extension core, telemetry/health.ts).
+    const counters = [
+      { code: "perf.capped", total: 54_000 },
+      { code: "health.bad-counter", total: 2 },
+      { code: "CG-NET-TIMEOUT", total: 14 },
+      { code: "perf.rejected", total: 1 },
+      { code: "p1.other", total: 1 },
+      { code: "perf.invalid", total: 7 },
+      { code: "send.held", total: 0 },
+      { code: "futureCounter", total: 60_000 },
+    ];
+    expect(clientHealthPageModel(answer({ counters })).counters).toEqual([
+      { code: "p1.other", label: "Другой критичный сбой", total: "1" },
+      { code: "send.held", label: "Отправка удержана", total: "0" },
+      { code: "futureCounter", label: null, total: `60${NBSP}000` },
+      { code: "CG-NET-TIMEOUT", label: null, total: "14" },
+      { code: "perf.capped", label: "Замеры сверх лимита, в отчёт не вошли", total: `54${NBSP}000` },
+      { code: "perf.invalid", label: "Замеры с негодным значением, отброшены", total: "7" },
+      { code: "perf.rejected", label: "Наборы замеров не того формата, отброшены", total: "1" },
+      { code: "health.bad-counter", label: "Счётчики с недопустимым именем, отброшены", total: "2" },
+    ]);
+  });
+
   it("says a version has too few reports instead of printing a footprint figure", () => {
     expect(clientHealthPageModel(answer()).footprint).toEqual([
       { version: "1.10.0", caches: CLIENT_HEALTH_FEW_REPORTS, logs: CLIENT_HEALTH_FEW_REPORTS, domNodes: CLIENT_HEALTH_FEW_REPORTS },
@@ -186,6 +210,10 @@ describe("ClientHealthPage", () => {
     expect(html).toContain("7,3 мс");
     expect(html).toContain("Вставка в чужой чат");
     expect(html).toContain("2,5 МБ");
+    // A row without a name is not called an error: only a CG- code is one, and the bookkeeping is not.
+    expect(html).toContain("те, что начинаются с CG-, — ошибки");
+    expect(html).toContain("служебные счётчики");
+    expect(html).not.toContain("остальные строки — ошибки по коду");
   });
 
   it("prints only the size of a group the hub held back", () => {
