@@ -622,7 +622,8 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # it runs unchanged; no image clears a 'retired' blocker.
   "0239_retire_fansly_legacy_sync_states.sql"
   # 0240_sync_holds.sql is NOT listed any more (step 4, S4-32). The reason is
-  # at the end of this list, beside 0243_sync_pages_drop_hold_step.sql.
+  # below, where 0243_sync_pages_drop_hold_step.sql was.
+
   # chat-extension greeting lease and send custody (hub-pr-plan H-7a): three
   # new tables (client_fan_leases, client_greetings, client_send_custody),
   # their checks, indexes and comments. The previous image never names them,
@@ -657,6 +658,18 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # column. A deploy that still had one of them to apply keeps the automatic
   # rollback off rather than return to an image that runs no page this
   # release has taken (apps/runtime/src/sync/README.md, "Rollback targets").
+
+  # chat-extension client_health rollups (chat-extension H-11b): five new
+  # tables (client_health_receipts and four *_hourly rollups), their checks,
+  # comments and a read_only grant on the rollups. Nothing writes them until
+  # the owner turns chatExtensionHealthIngestEnabled on. The previous image
+  # never names them and runs unchanged after a rollback: its bootstrap does
+  # not list client-health-perf-v1, so the extension stops sending reports
+  # within its bootstrap cache (5 minutes), and a report that still arrives
+  # from the extension's narrow token is refused there (400: the kind is not
+  # in the token's profile), never journaled. Rollups already written stay
+  # unread until a forward deploy returns.
+  "0244_client_health_rollups.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"
