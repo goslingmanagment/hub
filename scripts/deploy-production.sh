@@ -629,13 +629,18 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # Both were compatible only while the hold writers rewrote the columns
   # from the table in the transaction of every hold write, which they did
   # through the release that carried 0241. This tree writes the table alone
-  # and leaves the columns stale, so either image would drop every hold
-  # taken since this release started and bring back every hold lifted. This
-  # release is therefore deployed onto the one that carried 0241, with both
-  # applied already: no delta of its deploy holds them, and its automatic
-  # rollback returns to an image that reads no hold column. A deploy that
-  # still had one of them to apply keeps the automatic rollback off rather
-  # than fail open (apps/runtime/src/sync/README.md, "Rollback targets").
+  # and leaves the columns stale, so by them either image would drop every
+  # hold taken since this release started and bring back every hold lifted.
+  # The one thing this tree writes there is a marker, whenever it takes a
+  # page: a route-state version in the old resource-hold map that the image
+  # before 0241 cannot read. That image then refuses the page instead of
+  # opening it by stale columns: it fails closed, and runs no page this
+  # release has taken. This release is therefore deployed onto the one that
+  # carried 0241, with both applied already: no delta of its deploy holds
+  # them, and its automatic rollback returns to an image that reads no hold
+  # column. A deploy that still had one of them to apply keeps the automatic
+  # rollback off rather than return to an image that runs no page this
+  # release has taken (apps/runtime/src/sync/README.md, "Rollback targets").
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

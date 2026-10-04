@@ -717,7 +717,8 @@ describe("sync_pages_drop_hold_step.sql (step 4, S4-31: the first old hold colum
 
   it("leaves the other old hold columns in the database: no later migration has dropped them yet", () => {
     // The image before this one (S4-31) still writes them at every hold
-    // write; this one names none of them (tests/sync-old-hold-columns.test.ts).
+    // write; this one names one of them once, for the marker of an
+    // acquisition (tests/sync-old-hold-columns.test.ts).
     const base = stripComments(readFileSync("packages/db/migrations/0228_sync_engine_core.sql", "utf8"));
     for (const column of ["hold_kind", "hold_until", "hold_since", "hold_detail", "resource_holds"]) {
       expect(base, column).toMatch(new RegExp(`^\\s{2}${column} `, "m"));

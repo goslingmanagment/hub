@@ -76,7 +76,8 @@ export interface SyncPageRow {
    *  resource files'. The engine's hold evaluator reads it
    *  (`apps/runtime/src/sync/engine/admission.ts`). The page row itself says
    *  nothing of a hold: the old hold columns it still has in the database
-   *  are stale, and no statement names them (step 4, S4-32). */
+   *  are stale, and no statement reads them (step 4, S4-32; the one write to
+   *  them is `STALE_HOLD_COLUMNS_MARKER`). */
   holds: SyncHoldRow[];
   networkFailureStreak: number;
   identityAccountId: string | null;
@@ -689,6 +690,51 @@ export type AcquireSyncPageOwnershipResult =
   | { kind: "no_page" };
 
 /**
+ * What the row of a page says once this build has taken it (step 4, S4-32):
+ * its old hold columns are stale. The marker is the route-state entry of the
+ * old resource-hold map, at a version no build ever read, with no route. This
+ * constant is the ONE place of `apps`, `packages` and `scripts` that names an
+ * old hold column, and the statement it is part of, in
+ * `acquireSyncPageOwnership`, the only write this build makes to one
+ * (tests/sync-old-hold-columns.test.ts).
+ *
+ * Why. This build writes a page's holds to `sync_holds` alone, so the old
+ * columns no longer follow them. The hold-set release (S4-30) compares those
+ * columns with the rows whenever it acquires a page, and before a hold write
+ * under no generation, and lets the columns win. Brought back over a database
+ * this build has run on — a rollback of two releases, or an automatic one had
+ * this release been deployed straight onto it — it would drop every hold
+ * taken since and bring back every hold lifted: fail open. With the marker it
+ * cannot. Columns that carry it are never what rows make them (that image
+ * writes the entry at version 1, and only with a route in it), so it goes on
+ * to read them, cannot read this version, and refuses: the page is not
+ * acquired and that hold write is not made, nothing written either time. The
+ * page stays closed until a build that reads the rows is back.
+ *
+ * The release before this one (S4-31) reads no old column, so the marker
+ * changes nothing there; its first hold write of the page rewrites the map
+ * whole from the rows — the marker goes exactly where the two sides are equal
+ * again — and the next acquisition by this build puts it back.
+ *
+ * The rest of the map is kept as it was (it is stale either way); a value
+ * that is no JSON object, which no build wrote, is replaced by the marker
+ * alone. It goes with the columns (S4-33).
+ */
+const STALE_HOLD_COLUMNS_MARKER = sql`
+  resource_holds = case when jsonb_typeof(resource_holds) = 'object' then resource_holds else '{}'::jsonb end
+                   || '{"route:state": {"version": 2, "routes": {}}}'::jsonb`;
+
+/** SQLSTATE 42703 (`undefined_column`), on the error or what caused it. */
+function isUndefinedColumn(error: unknown): boolean {
+  let current = error;
+  for (let depth = 0; depth < 6 && typeof current === "object" && current !== null; depth += 1) {
+    if ((current as { code?: unknown }).code === "42703") return true;
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
+/**
  * Take the next owner generation of a page — the database half of the host's
  * acquire (design §3.6), run after the caller holds the session advisory lock
  * `(SYNC_PAGE_OWNERSHIP_LOCK_NAMESPACE, pageId)`. Under the row lock the
@@ -701,7 +747,10 @@ export type AcquireSyncPageOwnershipResult =
  *       judges this very process); null = no proof.
  * A lost database session alone is never a confirmation. On success the new
  * generation and this process's identity are written; the caller then computes
- * the takeover floor (`paceFloorFromDb`, I5).
+ * the takeover floor (`paceFloorFromDb`, I5). In the same transaction the row
+ * is marked as one whose old hold columns are stale
+ * (`STALE_HOLD_COLUMNS_MARKER`): every page this build owns, a page it
+ * onboarded included, carries the marker from its first acquisition on.
  */
 export async function acquireSyncPageOwnership(
   db: Database,
@@ -756,6 +805,20 @@ export async function acquireSyncPageOwnership(
        where page_id = ${input.pageId}
       returning owner_generation::text as generation
     `);
+
+    // The page is this build's from here on, and so are its holds: its row
+    // says that its old hold columns are stale. A statement of its own, in a
+    // savepoint, because the columns are to be dropped under this build: once
+    // they are gone there is nothing to mark, and no image that reads them
+    // runs on the database at all. Any other failure fails the acquisition.
+    try {
+      await tx.transaction(async (savepoint) => {
+        await savepoint.execute(sql`update sync_pages set ${STALE_HOLD_COLUMNS_MARKER} where page_id = ${input.pageId}`);
+      });
+    } catch (error) {
+      if (!isUndefinedColumn(error)) throw error;
+    }
+
     return {
       kind: "acquired",
       generation: BigInt(updated.rows[0]!.generation),
@@ -936,9 +999,11 @@ async function lockPageForHoldWrite(tx: Database, pageId: number, generation: bi
  * transaction (a savepoint inside the caller's). The rows are the page's
  * whole hold state. The page row is locked and not written: its old hold
  * columns stay in the database as the last release that wrote them left
- * them, until a migration drops them (step 4, S4-32) — the image before this
- * one reads none of them back and rewrites them from the rows at its first
- * hold write of a page, so a rollback to it runs on what is left here.
+ * them — and as this build's acquisition marked them stale
+ * (`STALE_HOLD_COLUMNS_MARKER`) — until a migration drops them (step 4,
+ * S4-32). The image before this one reads none of them back and rewrites
+ * them from the rows at its first hold write of a page, so a rollback to it
+ * runs on what is left here.
  */
 async function writeHoldSet<T>(
   db: Database,

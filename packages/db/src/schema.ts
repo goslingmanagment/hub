@@ -923,7 +923,9 @@ export const syncPages = pgTable(
     // No hold is mapped here: a page's holds are its rows of `sync_holds`
     // (0240). The old hold slot and the resource-hold map of 0228 are still
     // columns of the table in the database — stale, with the slot's two
-    // CHECKs — until a migration drops them; nothing names them (step 4,
+    // CHECKs — until a migration drops them. Nothing names them but the
+    // marker an acquisition leaves in the map to say so
+    // (`STALE_HOLD_COLUMNS_MARKER`, repositories/sync/pages.ts; step 4,
     // S4-32; tests/sync-old-hold-columns.test.ts).
     networkFailureStreak: smallint("network_failure_streak").notNull().default(0),
     identityAccountId: text("identity_account_id"),
