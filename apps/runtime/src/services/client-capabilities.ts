@@ -11,4 +11,7 @@ import type { ClientHubCapabilityName } from "@agency_hub_core/contracts";
 export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   // The AI feature stream's `context_v1` frame (H-4b).
   "context-v1",
+  // The shared recaps read (H-13). The `recap` feature also needs
+  // `recap-profile-v1` (H-5), so it stays `hub_not_ready` until that lands.
+  "shared-recaps-v1",
 ];

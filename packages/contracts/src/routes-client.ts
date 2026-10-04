@@ -168,6 +168,50 @@ export const clientBootstrapResponseSchema = z.object({
   capabilities: z.array(clientOpenToken).max(64),
 });
 
+// ── shared recaps (H-13) ─────────────────────────────────────────────────────
+//
+// The freshest usable full and short recap of one fan on one page, WITH their
+// text. A recap is shared: every chatter granted the page reads the same one,
+// whoever generated it (chat-extension architecture §19, decision 1; there are
+// no private recaps). `aiRecapStatus` (routes.ts) answers the same two slots
+// as metadata only.
+
+/** Known values of `coverage.transcriptCoverage`. On the wire an open token. */
+export const CLIENT_RECAP_TRANSCRIPT_COVERAGES = ["full-history", "window"] as const;
+export type ClientRecapTranscriptCoverage = (typeof CLIENT_RECAP_TRANSCRIPT_COVERAGES)[number];
+
+export const clientConversationRecapsQuerySchema = z.object({
+  /** The persona's opaque catalog identity (`aiPersonaCatalog.definitionId`).
+   *  With it, only that persona's recaps are selected; without it, the freshest
+   *  of any persona, as `aiRecapStatus` does. */
+  personaDefinitionId: z.string().min(16).max(100).optional(),
+}).strict();
+
+export const clientRecapBodySchema = z.object({
+  /** The generation's `meta.requestId`: the identity of this shared recap. */
+  generationRef: z.string().min(1).max(100),
+  generatedAt: isoTimestamp,
+  /** The persona the recap was written for; null on a row that predates the field. */
+  personaDefinitionId: z.string().nullable(),
+  /** What the generation read. Null where the generation did not record it. */
+  coverage: z.object({
+    /** Open token; known values: CLIENT_RECAP_TRANSCRIPT_COVERAGES. */
+    transcriptCoverage: clientOpenToken.nullable(),
+    /** The window the request resolved to. */
+    requestedCount: z.number().int().nullable(),
+    /** The messages the generation actually read. */
+    keptCount: z.number().int().nullable(),
+  }),
+  text: z.string(),
+});
+
+export const clientConversationRecapsResponseSchema = z.object({
+  full: clientRecapBodySchema.nullable(),
+  short: clientRecapBodySchema.nullable(),
+  /** The fan's latest dossier on this page has exactly the full recap's text. */
+  fullSavedToProfile: z.boolean(),
+});
+
 export const clientRouteSchemas = {
   clientBootstrap: {
     auth: { kind: "apiKey" },
@@ -183,6 +227,28 @@ export const clientRouteSchemas = {
       403: errorResponseSchema,
     },
   },
+  clientConversationRecaps: {
+    auth: { kind: "apiKey", scope: "page" },
+    tags: ["client"],
+    summary: "The shared full and short recap of one fan on one page, with their text",
+    description: "Read-only and database-only: no platform request, no generation, no AI spend. Answers the "
+      + "freshest usable full and short `fan-summary` recap of the fan (`fanRef` is the OnlyFans fan id, "
+      + "which is the chat id), the same two rows `aiRecapStatus` describes, to every chatter granted the "
+      + "page, whoever generated them. A recap generated from context only its caller saw is never "
+      + "selected. `personaDefinitionId` narrows both slots to one persona. `fullSavedToProfile` tells "
+      + "whether the fan's latest dossier on this page has exactly the full recap's text. Behind the "
+      + "chat-extension `recap` switch: 409 `client_feature_disabled` with the reason.",
+    params: clientPageFanParamsSchema,
+    querystring: clientConversationRecapsQuerySchema,
+    response: {
+      200: clientConversationRecapsResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
 } as const;
 
 export type ClientFeatureAvailability = z.infer<typeof clientFeatureAvailabilitySchema>;
@@ -190,6 +256,9 @@ export type ClientReceiptProfile = z.infer<typeof clientReceiptProfileSchema>;
 export type ClientBootstrapPage = z.infer<typeof clientBootstrapPageSchema>;
 export type ClientBootstrapLimits = z.infer<typeof clientBootstrapLimitsSchema>;
 export type ClientBootstrapResponse = z.infer<typeof clientBootstrapResponseSchema>;
+export type ClientConversationRecapsQuery = z.infer<typeof clientConversationRecapsQuerySchema>;
+export type ClientRecapBody = z.infer<typeof clientRecapBodySchema>;
+export type ClientConversationRecapsResponse = z.infer<typeof clientConversationRecapsResponseSchema>;
 
 // ── client_health v1 (H-11a) ─────────────────────────────────────────────────
 //

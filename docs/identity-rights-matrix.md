@@ -50,6 +50,7 @@ pages that account is granted; the owner is granted every page implicitly.
 | Clients — `/pages`, `/pages/{label}/…` (`any` + page scope) | every page | every page | assigned | assigned | assigned | **assigned** | — | **listed reads only**, by the role's reach; `/pages` no (403) |
 | Desktop read gateway — `/ofapi/read/*` (`apiKey`) | no (403) | yes, assigned | no (403) | yes, assigned | no (403) | **yes, assigned** | — | no (403) |
 | Chat-extension bootstrap — `/client/bootstrap` (`apiKey`) | no (403) | yes, every page | no (403) | yes, assigned | no (403) | **yes, assigned** | — | yes, by the role's reach |
+| Chat-extension shared recaps — `/client/pages/{label}/conversations/{fan}/recaps` (`apiKey` + page scope) | no (403) | yes, every page | no (403) | yes, assigned | no (403) | **yes, assigned** | — | yes, by the role's reach |
 
 The client bootstrap lists the caller's **active** pages only (a tombstoned
 page is never listed, assigned or not) and announces every feature off until
@@ -63,6 +64,32 @@ held by `client-bootstrap.integration`: every cell of it, plus the agent key,
 in both auth-policy modes; the switches and bindings by
 `client-owner-switches.integration`.
 
+The shared recaps read (chat-extension H-13) is the one route on which a
+chatter reads a **restricted generation record**. A stored AI generation
+(`ai_generation_content`: its prompt and its output) is otherwise read back
+only by the owner; here every chatter granted a page reads the **text** of
+that page's recaps, whoever generated them. The owner ruled recaps shared, with
+no private recap per chatter (chat-extension `docs/architecture.md` §19,
+decision 1, and question 8 of its `docs/hub-pr-plan.md` §6), and the widening
+stops exactly there:
+
+- only `fan-summary` generations, and only the two usable ones the recap
+  status already describes: the freshest completed full and short recap of the
+  fan (and of the persona, when the caller names one);
+- never a generation that carries a `contextScope`: one whose context held
+  something only its caller saw is that person's draft, not a shared recap, so
+  it is excluded from this read, from the recap status, from the Coach attach
+  and from the proof of a dossier alike;
+- only on a page granted to the caller (page scope, as on every page route),
+  and only while the owner's `recap` switch is on for it;
+- only the text and its provenance (`generationRef`, time, persona, coverage):
+  no prompt block, no author, no context manifest. The reader names its
+  columns, so the rest never leaves the database for this route.
+
+Its row is held by `client-recaps.integration`: every cell, the agent key, a
+page that is not granted and one that does not exist, in both auth-policy
+modes, and two chatters of one page reading the same recap.
+
 The **chat-extension token** (chat-extension H-3) is a device token the
 extension asks for at password sign-in with `client: "chat-extension"`. The
 sign-in echoes `client`, the token row keeps the profile for good (a trigger
@@ -71,8 +98,8 @@ reaches only the routes of `CLIENT_TOKEN_PROFILES["chat-extension"]`
 (`packages/contracts/src/client-token-scopes.ts`; the "chat-extension token"
 column of the [generated policy table](generated/authorization-policy.md)):
 who am I, the bootstrap, the persona catalogue without prompt texts, the AI
-feature stream, the recap status, the fan and conversation profiles, the
-spenders reads, the capture lane and revoking itself. Every other route
+feature stream, the recap status, the shared recaps, the fan and conversation
+profiles, the spenders reads, the capture lane and revoking itself. Every other route
 answers a plain 403 with no `reason`, in **both** auth-policy modes, before any
 handler runs; page scope still applies on the listed routes, and a revoked or
 expired token still answers 401 with its reason. On the capture lane it sends

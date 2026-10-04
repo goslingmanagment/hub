@@ -320,6 +320,37 @@ model, provider, provider response id, bounded error code/class, token counts, a
 Provider response ids are audit metadata; they are not a substitute for storing prompt or response
 content.
 
+### Shared recaps (chat-extension)
+
+The restricted generation records (`ai_generation_content`: prompt blocks and completions) are
+read by the owner only, with one exception: a recap is shared. `GET
+/api/v1/client/pages/:pageLabel/conversations/:fanRef/recaps` (`clientConversationRecaps`,
+bootstrap capability `shared-recaps-v1`) answers the text of the freshest usable full and short
+`fan-summary` recap of one fan to every chatter granted the page, whoever generated them (owner
+ruling: no private recap per chatter; `docs/identity-rights-matrix.md`).
+
+- Selection: one rule for every reader of a recap, `usableFanSummaryPredicate`
+  (`packages/db/src/repositories/ai-restricted.ts`): a `fan-summary` row of the slot's
+  `summaryMode` with a completed outcome, a present and non-exhausted `stopReason`, a non-empty
+  completion and no `params.contextScope`. `GET /api/v1/ai/recap-status`, the Coach recap attach,
+  this route and the dossier's generation proof all select through it, so they always agree on
+  which recap exists.
+- `params.contextScope` marks a generation whose context held something only its caller saw (the
+  fresh text of an open chat). Such a row is that person's draft: it is never a status slot, never
+  attached to Coach, never returned here and never proves a dossier. Nothing writes the key on a
+  `fan-summary` row, so the condition is a guard.
+- `fanRef` is the OnlyFans fan id, which is the chat id. `personaDefinitionId` (optional, as on
+  the recap status) narrows both slots to one persona.
+- Answer: `{ full, short, fullSavedToProfile }`. A slot is `null` or `{ generationRef,
+  generatedAt, personaDefinitionId, coverage: { transcriptCoverage, requestedCount, keptCount },
+  text }`; `generationRef` is the generation's `meta.requestId`. `fullSavedToProfile` is true when
+  the fan's latest dossier on the page has exactly the full recap's text. Never a prompt block,
+  the author or the context manifest.
+- It reads the database only: no generation, no AI spend, no platform request.
+- Behind the owner's `recap` switch on the page (`requireClientFeature`): a refusal is `409
+  client_feature_disabled` with its `reason`. The `recap` feature also needs `recap-profile-v1`,
+  so the route answers `hub_not_ready` until the hub serves the dossier save as well.
+
 ### AI media describer (system lane)
 
 The hub's background image describer (`docs/runbooks/ai-media-describe.md`) is

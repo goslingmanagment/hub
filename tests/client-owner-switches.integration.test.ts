@@ -260,7 +260,8 @@ describe("owner switches of the chat extension", () => {
     expect(features["lora-of"]).toMatchObject({
       coach: { available: false, reason: "flag_off" },
       review: { available: true },
-      // The owner switched it on, but this hub does not serve recaps yet.
+      // The owner switched it on, but this hub does not serve all of Recap yet
+      // (the dossier save, `recap-profile-v1`).
       recap: { available: false, reason: "hub_not_ready" },
       preview: { available: false, reason: "flag_off" },
     });
