@@ -105,7 +105,8 @@ authorization.
   instead of failing with 400.
 - `debug-input-v1` adds the `debug_input_v1` frame, still behind the
   `chatMuseAiPromptDebugEchoEnabled` kill-switch. `context-v1` adds the `context_v1` frame (below)
-  and is required to send `liveTextContext`, whose answer rides that frame.
+  and is required to send `liveTextContext`, whose answer rides that frame. It is also what lets a
+  full Recap read past 1500 messages (transcript depth, below).
   `split-all-v1` is reserved for the fields that will read it; until then it changes nothing.
 - SDK: the header is the union of the `capabilities` option and the legacy `debugPromptEcho` flag,
   deduplicated, in the constant's order, joined by `, `. With nothing to advertise no header is sent,
@@ -168,6 +169,41 @@ The frame is built from database reads only (the transcript loader, the coverage
 lookup): no platform request, no queued platform work and no change to a chat's unread state.
 Coverage and the known-id lookup fail open: a failed read reports `unknown` and never fails the
 generation. The frame is not persisted, and the recorded `params.contextManifest` is unchanged.
+
+### Feature-lane transcript depth (`messageCount`, full Recap)
+
+`messageCount` is the window a request asks for (5 to 3000). The hub's two transcript readers (the
+archive reader and the union reader) cap every window at 1500 messages, whatever was asked: a
+request for 3000 is served the newest 1500, and the `context_v1` frame says so in `window`.
+
+One request reads past that cap, up to 3000 messages: the full Recap. All of these must hold:
+
+- the feature is `fan-summary` and the request is not `summaryMode: "short"` (the short Recap keeps
+  its window of 300);
+- the page is an OnlyFans page and the hub loads the transcript itself (a request with
+  `clientContext` brings its own transcript and is not read by the hub's readers at all);
+- the caller advertised `context-v1`;
+- the owner's live setting `aiTranscriptDeepMaxRows` is `3000`. It takes exactly `1500` or `3000`
+  and rests at `1500`.
+
+Everything else stays at 1500: `chat-review` and `coach-chat`, the reply features, a Fansly page's
+hub-loaded transcript (the socket overlay union included), and every client that does not send
+`context-v1`. The released desktop lets a chatter set its deep window as high as 3000; such a Recap
+is served 1500, before and after the owner raises the setting.
+
+A request that names no `messageCount` keeps the full Recap's default window of 1500. A client that
+wants the deeper read asks for it, up to the bootstrap's `limits.deepMax`, which is the value of
+`aiTranscriptDeepMaxRows` (`GET /api/v1/client/bootstrap`).
+
+The recorded generation tells what was read: `params.requestedCount` is the window the request
+resolved to (not clipped by the cap), `params.keptCount` is the number of messages the prompt held,
+and `params.contextManifest.archiveCount` / `unionCount` are the rows each reader returned.
+
+Cost: at 3000 the transcript of a full Recap is up to twice as long. The per-request ceiling
+(`chatMuseAiGatewayRequestMicroUsdLimit`) and the daily ceilings below apply unchanged, to the
+longer prompt. The read itself is the same statement and plan at either cap: both readers fetch the
+whole conversation by its index and cut the tail afterwards (tombstones, stubs and duplicates are
+resolved before the cap).
 
 ### Feature-lane fresh text (`liveTextContext`)
 

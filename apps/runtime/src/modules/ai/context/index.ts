@@ -144,6 +144,10 @@ export async function loadTranscriptContext(
     unionMode?: AiTranscriptUnionMode;
     /** Fansly pages only; the OnlyFans union mode never runs beside it. */
     liveOverlay?: AiTranscriptLiveOverlay;
+    /** chat-extension H-6: raises the row cap of the archive and union reads
+     * for this load (the full Recap's deeper read, ai-transcript-depth.ts).
+     * The Fansly live overlay union never reads it and stays at its own cap. */
+    maxRows?: number;
   },
 ): Promise<TranscriptContext> {
   const limit = input.limit ?? 100;
@@ -186,6 +190,7 @@ export async function loadTranscriptContext(
       accountId: input.pageId,
       conversationRef: input.conversationRef,
       limit,
+      maxRows: input.maxRows,
     });
   }
 
@@ -201,6 +206,7 @@ export async function loadTranscriptContext(
         pageId: input.pageId,
         conversationRef: input.conversationRef,
         limit,
+        maxRows: input.maxRows,
       });
     } catch {
       // Union failure is NEVER a hard failure: archive serves, and the

@@ -34,6 +34,7 @@
 import { sql, type SQL } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
+import { aiTranscriptRowCap } from "./ai-transcript-depth.ts";
 
 export interface AiTranscriptUnionRow {
   messageRef: string;
@@ -55,6 +56,9 @@ export interface AiTranscriptUnionInput {
   pageId: number;
   conversationRef: string;
   limit?: number;
+  /** Raises the row cap of this read past AI_TRANSCRIPT_UNION_MAX_LIMIT, up to
+   * AI_TRANSCRIPT_DEEP_MAX_ROWS. Only the full Recap passes it. */
+  maxRows?: number | undefined;
 }
 
 export interface AiTranscriptUnionCteOptions {
@@ -200,7 +204,7 @@ export function aiTranscriptUnionCtes(
 }
 
 function buildUnionQuery(input: AiTranscriptUnionInput) {
-  const limit = Math.min(input.limit ?? 100, AI_TRANSCRIPT_UNION_MAX_LIMIT);
+  const limit = Math.min(input.limit ?? 100, aiTranscriptRowCap(input.maxRows, AI_TRANSCRIPT_UNION_MAX_LIMIT));
   return sql`
     with ${aiTranscriptUnionCtes(input)}
     select u.message_ref,

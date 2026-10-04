@@ -206,6 +206,9 @@ describe("LIVE_CONFIG_KEYS", () => {
       // chat-extension H-4c: what the AI lane does with a client's fresh text,
       // read per generation.
       "aiLiveTextContextMode",
+      // chat-extension H-6: the full Recap's transcript depth, read per
+      // generation and per bootstrap.
+      "aiTranscriptDeepMaxRows",
     ]) {
       expect(LIVE_CONFIG_KEYS.has(key), key).toBe(true);
     }
@@ -213,6 +216,6 @@ describe("LIVE_CONFIG_KEYS", () => {
     expect(LIVE_CONFIG_KEYS.has("fanslyLiveOverlayReadPages")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("agentHydrationMode")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("healthSyncLightMaxAgeMinutes")).toBe(true);
-    expect(LIVE_CONFIG_KEYS.size).toBe(46);
+    expect(LIVE_CONFIG_KEYS.size).toBe(47);
   });
 });
