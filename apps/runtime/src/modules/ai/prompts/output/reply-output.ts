@@ -33,7 +33,10 @@ const META_LEAK_PATTERNS: readonly RegExp[] = [
   /\bgenerated\s+(?:reply|message|response)\b/i,
 ];
 
-function stripThinkBlocks(text: string): string {
+// Exported for output/split-structure.ts (chat-extension H-10a): a reader of the
+// final text must drop reasoning blocks before it looks for delimiter markers,
+// exactly as normalize() below does.
+export function stripThinkBlocks(text: string): string {
   return text
     .replace(/<think\b[^>]*>[\s\S]*?<\/think>/gi, '')
     .replace(/```(?:think|thinking|reasoning|chain-of-thought)[^\n]*\n[\s\S]*?```/gi, '');

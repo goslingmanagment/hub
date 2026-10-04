@@ -23,6 +23,7 @@ import {
   setUserPassword,
 } from "../apps/runtime/src/services/auth.ts";
 import { CLIENT_SDK_REGISTRY } from "../apps/runtime/src/services/client-sdk-registry.ts";
+import { isSplitAllOnForPage } from "../apps/runtime/src/services/client-split-all.ts";
 import {
   COMPAT_ARCHIVE,
   COMPAT_CHATTER,
@@ -313,12 +314,27 @@ for (const row of CLIENT_SDK_REGISTRY) {
       // sends it on every request so a hub that starts honoring it elsewhere fails.
       it("lets the Split toggle change only the Reply and Fix prompts", async (context) => {
         if (!ready(context)) return;
-        for (const request of lane.calls) {
-          await streamFeature(ctx.sdk, options, request.feature, { ...request.body(persona), replyMode: "preferSplit" });
-          const split = promptOf();
-          await streamFeature(ctx.sdk, options, request.feature, { ...request.body(persona), replyMode: "default" });
-          if (SPLIT_FEATURES.has(request.feature)) expect(split, request.name).not.toEqual(promptOf());
-          else expect(split, request.name).toEqual(promptOf());
+        // H-10a, the worst case for a released client: the owner's splitAll flag
+        // is ON for every page. Only the capability it never sends is missing.
+        appContext.config.chatExtensionEnabled = true;
+        appContext.config.chatExtensionFeatures = JSON.stringify({ "*": { splitAll: true } });
+        appContext.config.chatExtensionHostBindings = JSON.stringify({ "onlymonster:1": COMPAT_PAGES.onlyfans });
+        try {
+          expect(await isSplitAllOnForPage(appContext, pageIds.onlyfans)).toBe(true);
+          for (const request of lane.calls) {
+            await streamFeature(ctx.sdk, options, request.feature, { ...request.body(persona), replyMode: "preferSplit" });
+            const split = promptOf();
+            await streamFeature(ctx.sdk, options, request.feature, { ...request.body(persona), replyMode: "default" });
+            if (SPLIT_FEATURES.has(request.feature)) expect(split, request.name).not.toEqual(promptOf());
+            else expect(split, request.name).toEqual(promptOf());
+          }
+          // Nor does any stored generation of a released client gain the Split record.
+          const { rows } = await testDb!.pool.query("select 1 from ai_generation_content where params ? 'outputStructure'");
+          expect(rows).toEqual([]);
+        } finally {
+          appContext.config.chatExtensionEnabled = false;
+          appContext.config.chatExtensionFeatures = "{}";
+          appContext.config.chatExtensionHostBindings = "{}";
         }
       }, AI_TEST_TIMEOUT_MS);
 

@@ -504,7 +504,7 @@ Use this fan segment strategy:
 
 {fanSilenceSection}
 
-Write a {pingMessageKind} from the model to the fan following that segment strategy. Output only the message text, in the fan's language (English by default).
+Write a {pingMessageKind} from the model to the fan following that segment strategy. Output only the message text, in the fan's language (English by default).{pingSplitInstructions}
 Before you send: reread it as the fan would. If it could have gone to any other fan, add the detail that makes it his.
 `;
 
