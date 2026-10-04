@@ -145,10 +145,9 @@ export const MEDIA_STATS_QUEUE_ORIGINS: ReadonlySet<string> = new Set(["post", "
  * other readers want it — but the queue row is skipped when the media's owner
  * and the page's own account ref are both known and differ; either one unknown
  * fails open. `creator_media` keeps no owner, so the chunk query cannot tell
- * such rows apart, and `seedMediaStatsQueue` (first enable only) skips them only
- * because a fan's media is first seen in a DM; the ones queued before this check
- * are removed by the owner-run one-off `fansly:media-stats-prune-foreign`, which
- * reads the owner from the events.
+ * such rows apart; the ones queued before this check are removed by the
+ * owner-run one-off `fansly:media-stats-prune-foreign`, which reads the owner
+ * from the events.
  *
  * AND ONLY FROM AN ORIGIN THAT SHOWS IT OUTSIDE A DM (`MEDIA_STATS_QUEUE_ORIGINS`).
  * The origin is the observation's, not the head's `first_origin`: a media first

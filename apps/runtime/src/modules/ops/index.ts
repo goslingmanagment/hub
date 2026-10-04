@@ -774,9 +774,9 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
     if (!boss) throw new Error("Job queue not available");
-    // Pages the Fansly Sync Engine owns are refreshed by the engine (live)
-    // or left alone (handover: neither engine reads during the switch); the
-    // legacy executor queues the pages of the platforms it serves.
+    // Pages the Fansly Sync Engine runs (live) are refreshed by the engine; a
+    // row in `handover` is left alone (neither engine reads it); the legacy
+    // executor queues the pages of the platforms it serves.
     const enginePages = await listSyncPages(appContext.db, { modes: ["live"] });
     const engine: Array<{ pageLabel: string } & EngineLeverOutcome> = [];
     for (const page of enginePages) {

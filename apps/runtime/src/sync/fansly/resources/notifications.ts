@@ -23,7 +23,6 @@ import {
   oldestCreatedAtIso,
   pageReachesOverlap,
   pageRefBounds,
-  parseFanslyNotificationsCursorState,
   typesForFilterMode,
   type FanslyNotificationsFilterMode,
 } from "../lib/notifications-rules.ts";
@@ -31,7 +30,6 @@ import { ApplyQuarantine } from "../../engine/commit.ts";
 import type {
   ApplyInput,
   ApplyResult,
-  LegacyImport,
   RequestPlan,
   ResourceModule,
   ShadowResult,
@@ -506,30 +504,6 @@ const forwardModule: ResourceModule = {
   },
 
   replay: replayByCanonicalDrafts,
-
-  async importLegacy(tx, page): Promise<LegacyImport> {
-    const legacy = await readLegacyCursor(tx, page.pageId);
-    if (legacy === null) {
-      return { cursors: [{ resource: FORWARD_KEY, subject: "", cursor: parseForwardCursor({}) }], notes: { forward: "none" } };
-    }
-    // A forward walk the legacy lane paused at its page cap is not carried:
-    // its head was never committed, so a fresh walk from the head down to the
-    // overlap reads the same rows again.
-    const cursor: NotificationsForwardCursor = {
-      newestSeenNotificationId: legacy.newestSeenNotificationId,
-      lastForwardPollAt: legacy.lastForwardPollAt,
-      form: { mode: legacy.filterMode, groupIndex: legacy.typeGroupIndex % FANSLY_NOTIFICATION_TYPE_GROUPS.length },
-      unfilteredProbeSpent: legacy.unfilteredProbeSpent,
-      postLikesCoverageWritten: legacy.postLikesCoverageWritten,
-      walk: null,
-      last: null,
-      shadow: null,
-    };
-    return {
-      cursors: [{ resource: FORWARD_KEY, subject: "", cursor }],
-      notes: { forward: "page_sync_cursors.notifications", droppedForwardWalk: legacy.forward.beforeRef !== null },
-    };
-  },
 };
 
 // ── backfill ────────────────────────────────────────────────────────────────
@@ -632,32 +606,7 @@ const backfillModule: ResourceModule = {
   },
 
   replay: replayByCanonicalDrafts,
-
-  async importLegacy(tx, page): Promise<LegacyImport> {
-    const legacy = await readLegacyCursor(tx, page.pageId);
-    if (legacy === null || legacy.backfill === null || legacy.backfill.done) {
-      return { cursors: [], notes: { backfill: legacy === null ? "none" : "complete" } };
-    }
-    // A page still in its one-off deep backfill (lilly-2, lora-1, lora-2 at
-    // design time) gets the goal, from where the legacy walk stood.
-    const cursor: NotificationsBackfillCursor = {
-      nextBeforeRef: legacy.backfill.nextBeforeRef,
-      lastRequestedBefore: null,
-      floorAt: legacy.backfill.floorAt,
-      lastObservationId: legacy.backfill.lastObservationId,
-      form: { mode: legacy.filterMode, groupIndex: legacy.typeGroupIndex % FANSLY_NOTIFICATION_TYPE_GROUPS.length },
-      shadow: null,
-    };
-    return { cursors: [{ resource: BACKFILL_KEY, subject: "", cursor }], notes: { backfill: "page_sync_cursors.notifications" } };
-  },
 };
-
-async function readLegacyCursor(db: Database, pageId: number) {
-  const result = await db.execute<{ state: unknown }>(sql`
-    select state from page_sync_cursors where page_id = ${pageId} and stream = 'notifications'
-  `);
-  return parseFanslyNotificationsCursorState(result.rows[0]?.state ?? null);
-}
 
 export function notificationsModule(variant: NotificationsVariant): ResourceModule {
   return variant === "forward" ? forwardModule : backfillModule;

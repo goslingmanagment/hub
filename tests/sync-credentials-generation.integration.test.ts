@@ -29,6 +29,7 @@ import {
   HARNESS_KEY,
   harnessConfig,
   harnessHostOptions,
+  harnessIdentityRegistry,
   harnessRng,
   harnessRoutes,
   seedHarnessPage,
@@ -36,7 +37,6 @@ import {
   type FakeRoute,
   type HarnessPage,
 } from "./helpers/sync-engine.ts";
-import { switchRegistry } from "./helpers/sync-switch.ts";
 
 // The engine's credentials generation on a live page (design step 3 §3.5
 // item 3, G1/G2/G18, E16; step 3b ruling 5, A3): an applied `account.verify`
@@ -111,7 +111,7 @@ async function startHost(r: Rig, seed: number): Promise<SyncEngineHost> {
     connectionString: testDb!.connectionString,
     config: r.config,
     rng: harnessRng(seed),
-    registry: switchRegistry(),
+    registry: harnessIdentityRegistry(),
   }));
   hosts.push(host);
   await host.start();

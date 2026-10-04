@@ -1,4 +1,3 @@
-import { sql } from "drizzle-orm";
 
 import {
   countPostComments,
@@ -6,7 +5,6 @@ import {
   listPostRepliesWalkChunk,
   listUnnamedPostCommentAuthorRefs,
   recordPostRepliesWalkVisit,
-  seedPostRepliesWalkQueue,
   subjectQueueBackoffOpen,
   type CaptureCoverageStatus,
   type Database,
@@ -21,7 +19,6 @@ import {
   classifyPostRepliesResponse,
   nextRepliesCursor,
   p99PostsLength,
-  parseFanslyPostRepliesCursorState,
   replyRows,
   type RepliesPaginationMode,
 } from "../lib/post-replies-rules.ts";
@@ -30,7 +27,6 @@ import type {
   ApplyInput,
   ApplyResult,
   DemandSignal,
-  LegacyImport,
   RequestPlan,
   ResourceModule,
   ShadowResult,
@@ -78,7 +74,6 @@ import {
 
 export type PostRepliesVariant = "walk" | "authors";
 
-const WALK_KEY = "post-replies.walk";
 const AUTHORS_KEY = "post-replies.authors";
 const DAY_MS = 86_400_000;
 /** Pages ONE post's walk may take (a safety net, not a coverage limit). */
@@ -88,7 +83,6 @@ export const MAX_PAGES_PER_POST = 20;
 export const POST_REPLIES_RECHECK_MS = 6 * 60 * 60 * 1000;
 const HYDRATED_AUTHOR_MEMORY = 1_000;
 const POSTS_LENGTH_SAMPLE_LIMIT = 200;
-const SEED_BATCH_SIZE = 500;
 const DEFAULT_REWALK_CYCLE_DAYS = Number(getDescriptor("fanslyRepliesRewalkCycleDays")?.default ?? "14");
 
 function recordOf(value: unknown): Record<string, unknown> {
@@ -433,38 +427,6 @@ const walkModule: ResourceModule = {
   },
 
   replay: replayByCanonicalDrafts,
-
-  async importLegacy(tx, page): Promise<LegacyImport> {
-    const result = await tx.execute<{ state: unknown }>(sql`
-      select state from page_sync_cursors where page_id = ${page.pageId} and stream = 'post_replies'
-    `);
-    const legacy = parseFanslyPostRepliesCursorState(result.rows[0]?.state ?? null);
-    // The first-enable seeding (zero platform calls) is finished here when
-    // legacy left it unfinished; later posts are queued by the projector.
-    let seedCursor = legacy?.seedCursor ?? null;
-    let seeded = 0;
-    if (legacy?.seedComplete !== true) {
-      for (;;) {
-        const batch = await seedPostRepliesWalkQueue(tx, { pageId: page.pageId, afterSubjectRef: seedCursor, limit: SEED_BATCH_SIZE, dueAt: new Date() });
-        seedCursor = batch.cursor;
-        seeded += batch.inserted;
-        if (batch.scanned < SEED_BATCH_SIZE) break;
-      }
-    }
-    const cursor: PostRepliesCursor = {
-      paginationMode: legacy?.paginationMode ?? "unproven",
-      paginationAnnounced: legacy?.paginationAnnounced ?? false,
-      hydratedAuthorRefs: legacy?.hydratedAuthorRefs ?? [],
-      postsLengthSamples: legacy?.postsLengthSamples ?? [],
-      walk: null,
-      last: null,
-      shadow: EMPTY_SHADOW_PASS,
-    };
-    return {
-      cursors: [{ resource: WALK_KEY, subject: "", cursor }],
-      notes: { walk: legacy === null ? "none" : "page_sync_cursors.post_replies", seeded },
-    };
-  },
 };
 
 // ── authors ─────────────────────────────────────────────────────────────────

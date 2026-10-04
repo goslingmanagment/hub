@@ -64,8 +64,8 @@ import {
 const HOUR_MS = 3_600_000;
 const DAY_MS = 24 * HOUR_MS;
 
-/** The modes `sync page mode` moves a page between. `handover` and `live` are
- *  reachable only through the step-3 switch (`sync switch`, I17). */
+/** The modes `sync page mode` moves a page between. No lever reaches
+ *  `handover` or `live` (I17): a page is born live at onboarding. */
 export const OWNER_PAGE_MODES = ["off", "shadow"] as const satisfies readonly SyncPageMode[];
 
 export class SyncPageNotFoundError extends Error {
@@ -402,7 +402,7 @@ export async function changeSyncPageModeByOwner(
   if (!(OWNER_PAGE_MODES as readonly string[]).includes(input.to)) {
     throw new SyncOwnerLeverError(
       `sync page mode moves a page only between off and shadow (asked: ${input.to}); `
-      + "handover and live are reachable only through the step-3 switch",
+      + "no lever reaches handover or live — a page is born live at onboarding",
     );
   }
   const page = await findSyncPageByLabel(db, input.pageLabel);
@@ -569,7 +569,7 @@ export function ownerEnqueueKeys(specs: readonly ResourceSpec[] = FANSLY_RESOURC
  * alias backfill) — the owner levers of the legacy streams that had one.
  * Demand reason `owner` (the follower walk's daily floor yields to it);
  * audited with the demand in one transaction. Only a `live` page: a shadow
- * page's work is simulated, a page in `handover` is being switched.
+ * page's work is simulated, a page in `handover` runs no actor.
  */
 export async function enqueueOwnerSyncWork(
   db: Database,

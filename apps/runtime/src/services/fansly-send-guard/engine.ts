@@ -33,8 +33,10 @@ import {
 // every Fansly page's row is the Sync Engine's, which no capture can take.
 // What is left of the registry at run time is this process's holder identity
 // (the journal of the identity check without a page, the sweeper, the CLI).
-// The capture itself stays as the legacy side of the switch and rollback
-// hand-over, which their suites drive through it; it goes with that code.
+// The capture below has no caller left: the step-3 switch and its rollback,
+// whose legacy side it was, went at step 4 (S4-21). It stays, inert, with the
+// sweeper, the closed-page latch and `fansly-send-guard confirm-terminated`
+// that stand on its statements (the deploy script still calls the last).
 //
 //   acquire  — capture the row; it is the only pacing of a Fansly request
 //              (plan §2.3). Refused because of the pause: sleep exactly the time the
@@ -43,7 +45,7 @@ import {
 //              wait for that request's completion locally. Refused because the
 //              holder overran its lease: the page is closed, and acquire fails.
 //              Refused because the page belongs to the Fansly Sync Engine
-//              (0229, the step-3 switch): acquire fails at once — a page-level
+//              (0229 `owner_engine`): acquire fails at once — a page-level
 //              stop of the legacy sender, never a failure of its thread or
 //              subject.
 //   send     — the bound dispatcher checks synchronously, right before the
@@ -151,8 +153,8 @@ export class FanslyPageSendClosedError extends Error {
 }
 
 /** The page's guard row belongs to the Fansly Sync Engine (0229
- *  `owner_engine`, flipped only by the step-3 switch): no legacy sender of any
- *  process may send for the page. A page-level stop — callers never charge it
+ *  `owner_engine`; nothing flips a row since step 4, S4-21): no legacy sender
+ *  of any process may send for the page. A page-level stop — callers never charge it
  *  to a thread or subject (no `page_dm_message_sync_health` row). */
 export class FanslyPageOwnedBySyncEngineError extends Error {
   constructor(readonly pageId: number, readonly engineSwitchedAt: Date | null = null) {
@@ -513,8 +515,7 @@ export class FanslySendGuardRegistry {
       refusals += 1;
       this.counters.captureRefusals += 1;
       if (result.kind === "engine_owned") {
-        // No retry loop: the page stays the engine's until a rollback, and
-        // the caller's stream is fenced anyway (design §2.7).
+        // No retry loop: the page stays the engine's for good (design §2.7).
         this.counters.engineOwnedRefusals += 1;
         this.deps.logger.warn({
           component: "fansly_send_guard",

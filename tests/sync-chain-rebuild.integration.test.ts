@@ -8,11 +8,9 @@ import {
   ensureSyncPage,
   getLatestCompletedChainRebuild,
   insertRawPayload,
-  issueSyncSwitchCapability,
   putPayloadObject,
   readThreadChain,
   readThreadStoredFacts,
-  setSyncPageMode,
   SYNC_CHAIN_REBUILD_AUDIT_EVENT,
   upsertPageDmMessages,
   writeThreadChain,
@@ -252,10 +250,13 @@ function options(pageId: number, extra: Partial<ChainRebuildOptions> = {}): Chai
   };
 }
 
+/** The page's mode, written directly: no lever reaches `handover` or `live` (I17). */
 async function moveTo(pageId: number, path: readonly SyncPageMode[]): Promise<void> {
-  const capability = issueSyncSwitchCapability({ pageId, purpose: "test" });
   for (const to of path) {
-    expect((await setSyncPageMode(db(), { pageId, to, changedBy: "test", capability })).kind).toBe("changed");
+    await testDb!.pool.query(
+      "update sync_pages set mode = $2, mode_changed_at = clock_timestamp(), mode_changed_by = 'test' where page_id = $1",
+      [pageId, to],
+    );
   }
 }
 
@@ -452,9 +453,7 @@ describe("sync chain rebuild", () => {
     expect((await rebuildPageChains(app(), options(page.id))).mode).toBe("shadow");
     await moveTo(page.id, ["handover"]);
     await expect(rebuildPageChains(app(), options(page.id))).rejects.toBeInstanceOf(ChainRebuildRefusedError);
-    const capability = issueSyncSwitchCapability({ pageId: page.id, purpose: "final pass" });
-    const finalPass = await rebuildPageChains(app(), options(page.id, { write: true, handoverCapability: capability }));
-    expect(finalPass.threads.written).toBe(6);
+    await expect(rebuildPageChains(app(), options(page.id, { write: true }))).rejects.toThrow(/'handover'/);
     await moveTo(page.id, ["live"]);
     await expect(rebuildPageChains(app(), options(page.id))).rejects.toThrow(/'live'/);
   });

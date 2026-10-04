@@ -2,13 +2,13 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import type { Database } from "@agency_hub_core/db";
 
-import { acceptanceExitCode, checkSwitchAcceptance, type SwitchAcceptanceReport } from "../apps/runtime/src/sync/switch/acceptance.ts";
-import { ACCEPTANCE_CHECKS } from "../apps/runtime/src/sync/switch/acceptance-rules.ts";
+import { acceptanceExitCode, checkLiveHour, type LiveHourReport } from "../apps/runtime/src/sync/checks/live-hour.ts";
+import { ACCEPTANCE_CHECKS } from "../apps/runtime/src/sync/checks/live-hour-rules.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { seedAcceptanceScenarios, type SeededAcceptance } from "./helpers/sync-acceptance-fixtures.ts";
 
 // The live-hour acceptance (step 3b ruling 13, A6; plan PR 1-11) on its
-// shared fixtures: `pnpm cli sync switch check` (switch/acceptance.ts) judges
+// shared fixtures: `pnpm cli sync check live-hour` (checks/live-hour.ts) judges
 // fifteen pages of one shared window — each after a stretch of legacy reads
 // denser than the budgets, which are not the window's — page by page, check
 // by check and route by route: a clean hour after a handover stop that ended
@@ -27,14 +27,14 @@ import { seedAcceptanceScenarios, type SeededAcceptance } from "./helpers/sync-a
 
 let testDb: StartedTestDatabase | null = null;
 let seeded: SeededAcceptance | null = null;
-let runtime: SwitchAcceptanceReport | null = null;
+let runtime: LiveHourReport | null = null;
 
 beforeAll(async () => {
   testDb = await startIntegrationTestDatabase();
   if (!testDb) return;
   const db = testDb.db as unknown as Database;
   seeded = await seedAcceptanceScenarios(db, testDb.pool);
-  runtime = await checkSwitchAcceptance(db, { pageIds: seeded.pages.map((page) => page.pageId), since: seeded.since });
+  runtime = await checkLiveHour(db, { pageIds: seeded.pages.map((page) => page.pageId), since: seeded.since });
 }, 240_000);
 
 afterAll(async () => {
@@ -168,13 +168,13 @@ describe("the live-hour acceptance on its shared fixtures", () => {
     const pages = seeded.pages.filter((page) => page.label === "acc-clean" || page.label === "acc-auth-403");
     // A window ending in the future: nothing after now has happened yet.
     const until = new Date(Date.now() + 3_600_000);
-    const report = await checkSwitchAcceptance(db, { pageIds: pages.map((page) => page.pageId), since: seeded.since, until });
+    const report = await checkLiveHour(db, { pageIds: pages.map((page) => page.pageId), since: seeded.since, until });
     expect(report.windowComplete).toBe(false);
     for (const [label, verdict, reasons] of [["acc-clean", "inconclusive", ["window_complete"]], ["acc-auth-403", "fail", ["auth_refusals"]]] as const) {
       expect(report.pages.find((page) => page.page === label)).toMatchObject({ verdict, reasons });
     }
     expect(acceptanceExitCode(report)).toBe(1);
-    const open = await checkSwitchAcceptance(db, { pageIds: [pages[0]!.pageId], since: seeded.since, until });
+    const open = await checkLiveHour(db, { pageIds: [pages[0]!.pageId], since: seeded.since, until });
     expect(acceptanceExitCode(open)).toBe(2);
   });
 
@@ -184,7 +184,7 @@ describe("the live-hour acceptance on its shared fixtures", () => {
     const page = seeded.pages.find((entry) => entry.label === "acc-clean")!;
     await testDb.pool.query("update sync_pages set mode = 'off' where page_id = $1", [page.pageId]);
     try {
-      const report = await checkSwitchAcceptance(db, { pageIds: [page.pageId], since: seeded.since });
+      const report = await checkLiveHour(db, { pageIds: [page.pageId], since: seeded.since });
       expect(report.pages[0]).toMatchObject({ verdict: "fail", windowStart: seeded.since.toISOString() });
       expect(report.pages[0]!.reasons[0]).toBe("live");
     } finally {

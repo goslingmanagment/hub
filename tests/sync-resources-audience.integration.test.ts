@@ -745,23 +745,6 @@ describe("followers", () => {
     expect(attempt.rows[0]).toEqual({ apply_state: "quarantined", apply_error: "quarantine:followers_reconcile_deactivation_blast_radius" });
     expect(alerts.opened.some((alert) => alert.subKey === "live_degraded" && alert.detail === "quarantined")).toBe(true);
   });
-
-  it("import: the known follow from the legacy cursor, else the newest stored follow", async (context) => {
-    if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
-    const module = await createEngineRegistry(FANSLY_RESOURCE_SPECS).module("followers.head");
-    const [fan] = await upsertFans(db(), [{ platform: "fansly", platformUserId: "640000000000000001" }]);
-    await testDb.pool.query(
-      `insert into page_follows (platform_account_id, fan_id, platform_follow_id, followed_at) values ($1, $2, '900', clock_timestamp())`,
-      [pageId, fan!.id],
-    );
-    const fallback = await module.importLegacy!(db(), { pageId });
-    expect(fallback.cursors).toEqual([{ resource: "followers.head", subject: "", cursor: { knownFollowId: "900", walk: null, last: null, shadow: null } }]);
-    expect(fallback.notes).toEqual({ knownFollowId: "page_follows.newest" });
-    await testDb.pool.query("insert into page_sync_cursors (page_id, stream, cursor_text) values ($1, 'followers', '777')", [pageId]);
-    const legacy = await module.importLegacy!(db(), { pageId });
-    expect(legacy.cursors[0]!.cursor).toMatchObject({ knownFollowId: "777" });
-  });
 });
 
 describe("fan-profiles", () => {

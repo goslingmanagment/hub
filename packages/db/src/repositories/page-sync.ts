@@ -8,7 +8,6 @@ import {
   pages,
 } from "../schema.ts";
 import { egressKeySql } from "./egress.ts";
-import { legacyOwnsFanslyPageSql } from "./sync/pages.ts";
 
 type TimestampValue = Date | string | null | undefined;
 type NumericValue = number | bigint | null | undefined;
@@ -826,9 +825,14 @@ function streamArraySql(streams: readonly SyncStream[]) {
   return sql`ARRAY[${sql.join(streams.map((stream) => sql`${stream}::sync_stream`), sql`, `)}]::sync_stream[]`;
 }
 
-/** The platforms a planner pass maintains: the platform registry's
+/** The platforms a page-sync query serves: the platform registry's
  *  legacy-executor set (`legacyExecutorPlatforms`, OnlyFans only since step 4
- *  S4-10). Absent means every platform. */
+ *  S4-10). The queries that pick work — the runnable listing, the enqueue mark
+ *  and the lease — take it as a required argument: since step 4 (S4-21) it is
+ *  the one fence between the legacy executor and a Fansly page (the
+ *  `sync_pages` mode predicate they carried through step 3 is gone). The
+ *  queries that only maintain state take it optionally; absent means every
+ *  platform. */
 export type PageSyncPlatformScope = readonly ("fansly" | "onlyfans")[];
 
 /** `page_id` belongs to a page of one of `platforms` (true without a scope). */
@@ -909,8 +913,7 @@ function streamPriorityBySourceSql(streamColumnName: string, sourceColumnName: s
 /** The time a runnable row last became eligible or was last served: its
  * request, its last lease, or the retry/pacing deadline it waited out. The
  * planner keeps a passed retry_at until the next lease outcome or request
- * rewrites it, so the deadline still counts after the row turns pending.
- * Also the ops watchdog's clock for an outstanding request (sync_silent). */
+ * rewrites it, so the deadline still counts after the row turns pending. */
 export function pageSyncRunnableSinceSql(tableAlias: string) {
   return sql.raw(
     `greatest(${tableAlias}.requested_at, ${tableAlias}.started_at, ${tableAlias}.retry_at)`,
@@ -1950,11 +1953,11 @@ export async function scheduleDuePageSync(
 
 export async function listRunnablePageSync(
   db: Database,
-  now = new Date(),
-  options?: {
-    /** Only these platforms' pages (the planner passes the legacy-executor
-     *  set); every platform when absent. */
-    platforms?: PageSyncPlatformScope;
+  now: Date,
+  options: {
+    /** Only these platforms' pages: the planner and the executor pass the
+     *  legacy-executor set. */
+    platforms: PageSyncPlatformScope;
   },
 ) {
   const result = await db.execute<Record<string, unknown>>(sql`
@@ -1975,8 +1978,7 @@ export async function listRunnablePageSync(
         and not (p.platform = 'onlyfans' and st.stream = 'dm_messages')
         and st.leased_seq is null
         and (st.retry_at is null or st.retry_at <= ${now})
-        and ${legacyOwnsFanslyPageSql(sql.raw("st.page_id"))}
-        and ${pageSyncPlatformScopeSql("st.page_id", options?.platforms)}
+        and ${pageSyncPlatformScopeSql("st.page_id", options.platforms)}
     )
     select rs."pageId" as "pageId",
            rs."platform" as "platform",
@@ -2004,7 +2006,12 @@ export async function listRunnablePageSync(
 export async function markPageSyncEnqueued(
   db: Database,
   pageId: number,
-  now = new Date(),
+  now: Date,
+  options: {
+    /** Only a page of these platforms (the planner passes the
+     *  legacy-executor set). */
+    platforms: PageSyncPlatformScope;
+  },
 ) {
   await db.execute(sql`
     update ${pageSyncStates}
@@ -2016,7 +2023,7 @@ export async function markPageSyncEnqueued(
       and blocker_kind is null
       and leased_seq is null
       and (retry_at is null or retry_at <= ${now})
-      and ${legacyOwnsFanslyPageSql(sql`${pageId}`)}
+      and ${pageSyncPlatformScopeSql("page_id", options.platforms)}
   `);
 }
 
@@ -2029,8 +2036,8 @@ export async function acquirePageSyncLease(
     leaseTtlMs: number;
     now?: Date;
     /** Lease only a stream of these platforms' pages (the executor passes
-     *  the legacy-executor set); every platform when absent. */
-    platforms?: PageSyncPlatformScope;
+     *  the legacy-executor set). */
+    platforms: PageSyncPlatformScope;
   },
 ) {
   const now = input.now ?? new Date();
@@ -2061,7 +2068,6 @@ export async function acquirePageSyncLease(
         )
         and st.leased_seq is null
         and (st.retry_at is null or st.retry_at <= ${now})
-        and ${legacyOwnsFanslyPageSql(sql.raw("st.page_id"))}
         and ${pageSyncPlatformScopeSql("st.page_id", input.platforms)}
     ), candidate as (
       select r."pageId", r."stream", r."requestSeq"
@@ -2147,133 +2153,6 @@ export async function acquirePageSyncLease(
   `);
 
   return result.rows[0] ? normalizePageSyncLease(result.rows[0]) : null;
-}
-
-export interface TargetedPageSyncLease {
-  pageId: number;
-  stream: SyncStream;
-  requestSeq: number;
-  leasedSeq: number;
-  leaseToken: string;
-}
-
-/**
- * Slice C′: take the page's REAL sync lease for ONE named stream so an
- * out-of-band run fences against the regular executor instead of racing it.
- * Same row, same lease columns, same fence token that
- * `assertOwnedPageSyncLease` verifies — acquire or return null, never run
- * lease-less. Its one runtime caller, the legacy targeted thread backfill, is
- * gone since step 4 (S4-15); the legacy lease tests still take a named
- * stream's lease through it, and it goes with the legacy fence (S4-21).
- *
- * Differences from `acquirePageSyncLease`, both deliberate:
- *  - the stream is named by the caller instead of being picked by priority;
- *  - no `request_seq > applied_seq` precondition — an owner-initiated run must
- *    work on an idle stream, and it deliberately does NOT consume a pending
- *    request (`applied_seq` is never advanced here, so a queued scheduled
- *    request survives the run untouched).
- * Everything that guards the regular acquire still guards this one: paused,
- * blocked, retry-backoff, already-leased, provider-held, non-active and
- * engine-owned pages all refuse.
- * `started_at` is left alone — this run is not the stream's scheduled chunk.
- */
-export async function acquireTargetedPageSyncLease(
-  db: Database,
-  input: {
-    pageId: number;
-    stream: SyncStream;
-    workerId: string;
-    leaseToken: string;
-    leaseTtlMs: number;
-    now?: Date;
-  },
-): Promise<TargetedPageSyncLease | null> {
-  const now = input.now ?? new Date();
-  const result = await db.execute<{
-    pageId: NumericValue;
-    stream: SyncStream;
-    requestSeq: NumericValue;
-    leasedSeq: NumericValue;
-    leaseToken: string;
-  }>(sql`
-    update ${pageSyncStates} st
-    set status = 'running',
-        leased_seq = st.request_seq,
-        lease_owner = ${input.workerId},
-        lease_token = ${input.leaseToken},
-        lease_heartbeat_at = clock_timestamp(),
-        lease_expires_at = clock_timestamp() + (${input.leaseTtlMs} * interval '1 millisecond'),
-        updated_at = ${now}
-    where st.page_id = ${input.pageId}
-      and st.stream = ${input.stream}
-      and st.status <> 'paused'
-      and st.blocker_kind is null
-      and st.leased_seq is null
-      and (st.retry_at is null or st.retry_at <= ${now})
-      and ${legacyOwnsFanslyPageSql(sql.raw("st.page_id"))}
-      and exists (
-        select 1 from ${pages} p
-        where p.id = st.page_id and p.status = 'active'
-      )
-    returning st.page_id as "pageId",
-              st.stream as "stream",
-              st.request_seq as "requestSeq",
-              st.leased_seq as "leasedSeq",
-              st.lease_token as "leaseToken"
-  `);
-
-  const row = result.rows[0];
-  if (!row) {
-    return null;
-  }
-
-  return {
-    pageId: normalizeNumber(row.pageId, "pageId"),
-    stream: row.stream,
-    requestSeq: normalizeNumber(row.requestSeq, "requestSeq"),
-    leasedSeq: normalizeNumber(row.leasedSeq, "leasedSeq"),
-    leaseToken: row.leaseToken,
-  };
-}
-
-/**
- * Release a lease taken by `acquireTargetedPageSyncLease`. The next status is
- * computed from the row itself with the same CASE the expiry reclaimer uses,
- * so a request that arrived DURING the run (requestPageSync keeps a live lease
- * running) leaves the stream `pending` rather than silently idle.
- */
-export async function releaseTargetedPageSyncLease(
-  db: Database,
-  input: {
-    pageId: number;
-    stream: SyncStream;
-    leaseToken: string;
-    now?: Date;
-  },
-) {
-  const now = input.now ?? new Date();
-  const result = await db.execute(sql`
-    update ${pageSyncStates}
-    set status = case
-                   when blocker_kind is not null then 'blocked'::page_sync_status
-                   when retry_at is not null and retry_at > clock_timestamp() then 'retrying'::page_sync_status
-                   when request_seq > applied_seq then 'pending'::page_sync_status
-                   else 'idle'::page_sync_status
-                 end,
-        leased_seq = null,
-        lease_owner = null,
-        lease_token = null,
-        lease_heartbeat_at = null,
-        lease_expires_at = null,
-        updated_at = ${now}
-    where page_id = ${input.pageId}
-      and stream = ${input.stream}
-      and lease_token = ${input.leaseToken}
-      and leased_seq is not null
-      and status = 'running'
-  `);
-
-  return (result.rowCount ?? 0) > 0;
 }
 
 export async function heartbeatPageSyncLease(

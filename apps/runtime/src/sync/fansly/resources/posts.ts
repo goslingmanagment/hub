@@ -6,7 +6,6 @@ import {
   postEngagementTier,
   recordPostEngagementRefreshFailures,
   recordPostEngagementRefreshVisits,
-  seedPostEngagementQueue,
   type Database,
   type PostEngagementRefreshCandidate,
 } from "@agency_hub_core/db";
@@ -17,13 +16,11 @@ import {
   FANSLY_RECENT_POST_REFRESH_LOOKBACK_DAYS,
   fanslyPublishedAt,
   inspectFanslyPostTipsScope,
-  parsePostsCursorState,
 } from "../lib/posts-rules.ts";
 import { ApplyQuarantine } from "../../engine/commit.ts";
 import type {
   ApplyInput,
   ApplyResult,
-  LegacyImport,
   RequestPlan,
   ResourceModule,
   ShadowResult,
@@ -71,9 +68,6 @@ import {
 
 export type PostsVariant = "refresh" | "backfill" | "engagement";
 
-const REFRESH_KEY = "posts.refresh";
-const BACKFILL_KEY = "posts.backfill";
-const ENGAGEMENT_KEY = "posts.engagement";
 const DAY_MS = 86_400_000;
 /** A shadow walk of a page without its native id re-checks this often. */
 const IDENTITY_RECHECK_MS = 60 * 60 * 1000;
@@ -88,8 +82,6 @@ export const POST_ENGAGEMENT_RECHECK_MS = 6 * 60 * 60 * 1000;
 /** Ids the provider left out of a batch are asked again after this long
  *  (legacy: a post it drops is not one whose counters were seen). */
 const UNSERVED_RETRY_MS = DAY_MS;
-/** Rows seeded per batch when the switch carries the queue over. */
-const ENGAGEMENT_SEED_BATCH_SIZE = 500;
 
 function recordOf(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -386,33 +378,6 @@ function walkModule(variant: "refresh" | "backfill"): ResourceModule {
     },
 
     replay: replayByCanonicalDrafts,
-
-    async importLegacy(tx, page): Promise<LegacyImport> {
-      const result = await tx.execute<{ state: unknown; cursorText: string | null }>(sql`
-        select state, cursor_text as "cursorText" from page_sync_cursors where page_id = ${page.pageId} and stream = 'posts'
-      `);
-      const legacy = parsePostsCursorState(result.rows[0]?.state ?? null);
-      const headPostId = legacy?.headPostId ?? text(result.rows[0]?.cursorText) ?? null;
-      const tipsBackfilledAt = legacy?.fanslyPostTipsBackfilledAt ?? null;
-      if (bounded) {
-        const cursor: PostsWalkCursor = { headPostId, tipsBackfilledAt, walk: null, last: null, shadow: null };
-        return { cursors: [{ resource: REFRESH_KEY, subject: "", cursor }], notes: { refresh: legacy === null ? "none" : "page_sync_cursors.posts" } };
-      }
-      // The one-time full walk is owed while legacy never completed it; a
-      // full walk legacy left mid-way resumes at its page.
-      if (tipsBackfilledAt !== null) return { cursors: [], notes: { backfill: "complete" } };
-      const midWay = legacy !== null && legacy.completedAt === null && legacy.fanslyRecentRefreshCutoffAt === null && legacy.before !== FANSLY_HEAD_CURSOR;
-      const cursor: PostsWalkCursor = {
-        headPostId,
-        tipsBackfilledAt: null,
-        walk: midWay
-          ? { ...freshWalk(null, null), before: legacy.before, pageIndex: legacy.pageIndex, capturedHeadPostId: legacy.capturedHeadPostId }
-          : null,
-        last: null,
-        shadow: null,
-      };
-      return { cursors: [{ resource: BACKFILL_KEY, subject: "", cursor }], notes: { backfill: midWay ? "resumed" : "owed" } };
-    },
   };
 }
 
@@ -544,33 +509,6 @@ const engagementModule: ResourceModule = {
   },
 
   replay: replayByCanonicalDrafts,
-
-  async importLegacy(tx, page): Promise<LegacyImport> {
-    // The first-enable seeding of the queue (zero platform calls) is
-    // finished here when legacy left it unfinished; every post projected
-    // later is queued by the creator-posts projector itself.
-    const result = await tx.execute<{ state: unknown }>(sql`
-      select state from page_sync_cursors where page_id = ${page.pageId} and stream = 'posts'
-    `);
-    const legacy = parsePostsCursorState(result.rows[0]?.state ?? null);
-    let seedCursor = legacy?.fanslyPostEngagement.seedCursor ?? null;
-    let seeded = 0;
-    if (legacy?.fanslyPostEngagement.seedComplete !== true) {
-      for (;;) {
-        const batch = await seedPostEngagementQueue(tx, {
-          pageId: page.pageId,
-          afterSubjectRef: seedCursor,
-          limit: ENGAGEMENT_SEED_BATCH_SIZE,
-          dueAt: new Date(),
-        });
-        seedCursor = batch.cursor;
-        seeded += batch.inserted;
-        if (batch.scanned < ENGAGEMENT_SEED_BATCH_SIZE) break;
-      }
-    }
-    const cursor: EngagementCursor = { last: null, shadow: EMPTY_SHADOW_PASS };
-    return { cursors: [{ resource: ENGAGEMENT_KEY, subject: "", cursor }], notes: { engagementSeeded: seeded } };
-  },
 };
 
 export function postsModule(variant: PostsVariant): ResourceModule {

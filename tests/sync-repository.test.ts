@@ -5,7 +5,6 @@ import {
   ensureSyncProviderRateLimitProfile,
   getSyncRun,
   hasRecentTerminalProxyFailure,
-  listFanslyMessagePurchaseTargetsAfterId,
   listPageSyncStates,
   listRunnablePageSync,
   listSyncMonitorStreamRows,
@@ -18,6 +17,8 @@ import {
 } from "../packages/db/src/repositories/sync.ts";
 import type { SQL } from "../packages/db/node_modules/drizzle-orm/index.js";
 import { PgDialect } from "../packages/db/node_modules/drizzle-orm/pg-core/index.js";
+
+import { EVERY_PLATFORM } from "./helpers/page-sync-scope.ts";
 
 const DIALECT = new PgDialect();
 
@@ -71,31 +72,6 @@ function extractSqlText(query: {
 }
 
 describe("sync repository timestamp normalization", () => {
-  it("keysets Fansly media purchase targets without admitting other correlation namespaces", async () => {
-    const execute = vi.fn().mockResolvedValue({
-      rows: [
-        { id: "41", rawType: "2110", correlationId: "media-1" },
-        { id: "42", rawType: "2116", correlationId: "bundle-1" },
-      ],
-    });
-    const db = { execute } as never;
-
-    await expect(listFanslyMessagePurchaseTargetsAfterId(db, {
-      pageId: 7,
-      afterId: 40,
-      limit: 25,
-    })).resolves.toEqual([
-      { id: 41, rawType: "2110", correlationId: "media-1" },
-      { id: 42, rawType: "2116", correlationId: "bundle-1" },
-    ]);
-
-    const query = execute.mock.calls[0]?.[0];
-    const sqlText = extractSqlText(query);
-    expect(sqlText).toContain("t.raw_type in ('2010', '2016', '2110', '2116')");
-    expect(sqlText).toContain("nullif(btrim(t.correlation_id), '') is not null");
-    expect(sqlText).toContain("order by t.id asc");
-    expect(extractQueryParams(query)).toEqual(expect.arrayContaining([7, 40, 25]));
-  });
 
   it("normalizes run timestamps returned from raw sync run queries", async () => {
     const execute = vi.fn();
@@ -391,7 +367,7 @@ describe("sync repository timestamp normalization", () => {
     const db = { execute } as never;
     const now = new Date("2026-03-24T12:00:00.000Z");
 
-    await listRunnablePageSync(db, now);
+    await listRunnablePageSync(db, now, { platforms: EVERY_PLATFORM });
 
     const query = execute.mock.calls[0]?.[0];
 

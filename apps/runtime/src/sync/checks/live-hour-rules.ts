@@ -6,13 +6,15 @@ import { NETWORK_FAILURES_TO_PAUSE } from "../engine/errors.ts";
 import { auditPagePace, auditRouteIntervals, sendAuditJournalOf, sendAuditRouteOf, type SendAuditWindow } from "../engine/send-audit.ts";
 import { intervalMsOf, routeBudget, routeOfEngineOperation, routeOfLegacyOperation, type FanslyRoute } from "../fansly/routes.ts";
 
-// The rules of the live-hour acceptance of switched pages (step 3b ruling 13,
-// A1 §2b, A6; owner decisions №18, №21–№26), pure. `switch/acceptance.ts`
-// (`pnpm cli sync switch check`, JSON on stdout for the runbook) reads the
-// journals and judges with these; the pace and the route budgets are the send
-// audit's (`engine/send-audit.ts`), the same checker the alert evaluator runs,
-// and the slowdown a route owes after a 429 (A2) is judged here on the same
-// recorded numbers.
+// The rules of the live-hour check of a page's first hour on the engine (step
+// 3b ruling 13, A1 §2b, A6; owner decisions №18, №21–№26), pure. They were the
+// acceptance of the step-3 switch; since step 4 (S4-21) a page reaches `live`
+// only by being onboarded, and the same rules judge its first hour.
+// `checks/live-hour.ts` (`pnpm cli sync check live-hour`, JSON on stdout for
+// the runbook) reads the journals and judges with these; the pace and the
+// route budgets are the send audit's (`engine/send-audit.ts`), the same
+// checker the alert evaluator runs, and the slowdown a route owes after a 429
+// (A2) is judged here on the same recorded numbers.
 //
 // Window: each page is judged over [T_i, T* + 1 h), T_i = the later of the
 // owner's `since` and the instant the page became live, T* = max(T_i) over

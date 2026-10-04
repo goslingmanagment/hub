@@ -18,13 +18,13 @@ import {
   FakeFanslyServer,
   harnessConfig,
   harnessHostOptions,
+  harnessIdentityRegistry,
   harnessRng,
   harnessRoutes,
   seedHarnessPage,
   type HarnessPage,
 } from "./helpers/sync-engine.ts";
 import { setModeDirect } from "./helpers/sync-engine-host.ts";
-import { switchRegistry } from "./helpers/sync-switch.ts";
 
 // The owner's `/account/me` levers by the page's engine mode (design step 3
 // §3.5 item 6, E10): a page the engine does not run (`off`, `shadow`) answers
@@ -113,7 +113,7 @@ async function rig(mode: "off" | "shadow" | "handover" | "live"): Promise<Rig> {
       connectionString: testDb!.connectionString,
       config: harnessConfig(testDb!.connectionString, server.apiBaseUrl),
       rng: harnessRng(41),
-      registry: switchRegistry(),
+      registry: harnessIdentityRegistry(),
     }));
     hosts.push(host);
     await host.start();

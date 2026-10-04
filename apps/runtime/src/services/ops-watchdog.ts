@@ -5,12 +5,17 @@
 // `restart: unless-stopped` only acts on process exit, never on a
 // wedged-but-alive process. The watchdog runs from the API process — the one
 // long-lived process independent of scheduler/worker — and pages when either
-// signal goes silent. E-2 adds a third leg: Fansly sync chunks that stop
-// starting while work is due. The Fansly Sync Engine adds a fourth (alert 5,
-// design §9.6): a page is in the engine and no `sync` process beats.
+// signal goes silent. The Fansly Sync Engine adds a third leg (alert 5, design
+// §9.6): a page is in the engine and no `sync` process beats.
+//
+// E-2's leg — legacy Fansly sync chunks that stop starting while a stream is
+// due — went with its subject at step 4 (S4-21): no Fansly page has a legacy
+// stream that can be due. Its 15-minute bound was measured on Fansly's chunk
+// starts (never more than 5 min 10 s apart); OnlyFans, the legacy executor's
+// remaining platform, starts runs more than 15 min apart several times a day,
+// so the same leg re-pointed at it would page falsely.
 
 import {
-  getFanslySyncLiveness,
   getLatestOpsMetricSampleAt,
   hasFreshInstanceHeartbeat,
   hasSyncPageInEngine,
@@ -41,16 +46,9 @@ export const OPS_WATCHDOG_SILENCE_MS = 3 * 60_000;
  * but a fresh one still resolves, so the latch the outgoing api opened during
  * the restart closes within a minute instead of after the whole grace. */
 export const OPS_WATCHDOG_BOOT_GRACE_MS = 5 * 60_000;
-/** E-2: no Fansly chunk started for this long while a stream has been due
- * for as long (getFanslySyncLiveness). The widest production gap between
- * Fansly chunk starts over 21 days (the host power-off of 2026-09-23 aside)
- * was 5 min 10 s; deploy gaps stay under 6 min. */
-export const OPS_WATCHDOG_SYNC_SILENCE_MS = 15 * 60_000;
 /** Alert 5 (design §9.6): the `sync` process beats every 30 s; none for this
  *  long while a page is in the engine pages the owner. */
 export const OPS_WATCHDOG_SYNC_ENGINE_SILENCE_MS = 2 * 60_000;
-/** Bounds the chunk-start lookup; anything older reads as "over an hour". */
-export const OPS_WATCHDOG_SYNC_LOOKBACK_MS = 60 * 60_000;
 /** The api-side delivery fallback drains a few rows on a short clock: it runs
  * beside the watchdog every minute, and the worker takes over once it is back. */
 export const OPS_WATCHDOG_FALLBACK_MAX_ROWS = 5;
@@ -64,15 +62,12 @@ export interface OpsWatchdogCheckResult {
   bootGrace: boolean;
   schedulerFresh: boolean;
   samplerFresh: boolean;
-  /** No Fansly chunk started for OPS_WATCHDOG_SYNC_SILENCE_MS while a stream
-   * has been due for as long. */
-  syncStalled: boolean;
   /** A Fansly page is in the engine and no `sync` process beat within
    *  OPS_WATCHDOG_SYNC_ENGINE_SILENCE_MS (alert 5). */
   syncEngineSilent: boolean;
 }
 
-type DeadmanKind = "scheduler_silent" | "ops_sampler_silent" | "sync_silent";
+type DeadmanKind = "scheduler_silent" | "ops_sampler_silent";
 
 async function latchDeadman(
   app: Pick<AppContext, "db" | "config" | "logger">,
@@ -129,31 +124,6 @@ export async function runOpsWatchdogCheck(
       : `Newest golden-signal sample is ${Math.round((now.getTime() - latestSampleAt.getTime()) / 60_000)} min old — ops telemetry is blind`,
   });
 
-  // E-2: the planner is one all-or-nothing cycle (its DLQ has no consumer)
-  // and a wedged executor starts nothing; both read as chunks not starting.
-  // A stream counts once it has been due for the same threshold, so an hourly
-  // stream idling to its next slot, or work that just came due, is no stall.
-  const sync = await getFanslySyncLiveness(app.db, {
-    since: new Date(now.getTime() - OPS_WATCHDOG_SYNC_LOOKBACK_MS),
-    dueBefore: new Date(now.getTime() - OPS_WATCHDOG_SYNC_SILENCE_MS),
-  });
-  const syncStalled = sync.hasDueStream && (
-    sync.latestStartedAt === null
-    || now.getTime() - sync.latestStartedAt.getTime() > OPS_WATCHDOG_SYNC_SILENCE_MS
-  );
-  await latchDeadman(app, {
-    kind: "sync_silent",
-    healthy: !syncStalled,
-    bootGrace,
-    now,
-    errorSummary: () => {
-      const silentFor = sync.latestStartedAt === null
-        ? `over ${Math.round(OPS_WATCHDOG_SYNC_LOOKBACK_MS / 60_000)} min`
-        : `${Math.floor((now.getTime() - sync.latestStartedAt.getTime()) / 60_000)} min`;
-      return `No Fansly sync chunk started for ${silentFor} — planner or executor stalled`;
-    },
-  });
-
   // Alert 5: with every page `off` the process is allowed to be absent.
   const syncEngineSilent = await hasSyncPageInEngine(app.db)
     && !await hasFreshInstanceHeartbeat(app.db, { role: "sync", ttlMs: OPS_WATCHDOG_SYNC_ENGINE_SILENCE_MS });
@@ -171,7 +141,7 @@ export async function runOpsWatchdogCheck(
     });
   }
 
-  return { bootGrace, schedulerFresh, samplerFresh, syncStalled, syncEngineSilent };
+  return { bootGrace, schedulerFresh, samplerFresh, syncEngineSilent };
 }
 
 /**
@@ -185,7 +155,7 @@ export async function runOpsWatchdogCheck(
  */
 export function opsWatchdogNeedsDeliveryFallback(result: OpsWatchdogCheckResult): boolean {
   return !result.bootGrace
-    && (!result.schedulerFresh || !result.samplerFresh || result.syncStalled);
+    && (!result.schedulerFresh || !result.samplerFresh);
 }
 
 export interface OpsWatchdogDeliveryFallbackResult {

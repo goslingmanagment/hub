@@ -265,8 +265,8 @@ function historyServiceError(error: unknown): unknown {
  * is a one-fan history request (requester `legacy_hydration_wrapper`, the
  * boundary of the body, idempotent by the legacy ref) and the legacy row
  * points at it (`dispatching`, lane `fansly_sync_engine`). Before the
- * requests open the row stays `requested` (the switch's `--open-requests`
- * converts it). Null: nothing to wrap.
+ * requests open the row stays `requested`: the same request asked again once
+ * they are open wraps it, else it expires unserved. Null: nothing to wrap.
  */
 async function wrapHydrationOnEngine(
   appContext: AppContext,

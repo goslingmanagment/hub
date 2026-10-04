@@ -27,7 +27,6 @@ import {
   POST_ENGAGEMENT_FRESH_DAYS,
   recordPostEngagementRefreshFailures,
   recordPostEngagementRefreshVisits,
-  seedPostEngagementQueue,
   upsertCreatorPost,
 } from "@agency_hub_core/db";
 
@@ -134,38 +133,6 @@ async function visited(pageId: number, subjectRef: string, at: Date) {
 }
 
 describe("[sync-critical] WP-F6 the post_engagement refresh queue", () => {
-  it("seeds Fansly posts only, in bounded keyset batches", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-    const page = await seedPage("f6q-seed");
-    // Written through the projector's own path, so each already carries its
-    // same-transaction row. Clear them to exercise the FIRST-ENABLE sweep, which
-    // is what a page whose posts predate this package actually hits.
-    for (const ref of ["p-1", "p-2", "p-3"]) await seedPost(page.id, ref, daysAgo(5));
-    await seedPost(page.id, "of-1", daysAgo(5), "onlyfans");
-    await testDb.pool.query("delete from subject_refresh_state where page_id = $1", [page.id]);
-
-    const first = await seedPostEngagementQueue(testDb.db, {
-      pageId: page.id,
-      afterSubjectRef: null,
-      limit: 2,
-      dueAt: NOW,
-    });
-    expect(first).toMatchObject({ scanned: 2, inserted: 2, cursor: "p-2" });
-    const second = await seedPostEngagementQueue(testDb.db, {
-      pageId: page.id,
-      afterSubjectRef: first.cursor,
-      limit: 2,
-      dueAt: NOW,
-    });
-    // `of-1` sorts before `p-*` and is NOT scanned: `GET /post?ids=` is a Fansly
-    // route and an OnlyFans post has no batch read to queue.
-    expect(second).toMatchObject({ scanned: 1, inserted: 1, cursor: "p-3" });
-
-    expect(await planeCounts(page.id)).toMatchObject({ known: 3, refreshed: 0 });
-  });
 
   it("re-reads by DECAY: daily, weekly, monthly by the post's age", async (context) => {
     if (!testDb) {

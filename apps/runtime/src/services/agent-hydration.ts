@@ -47,7 +47,7 @@ import {
   resolveAgentHydrationBoundaryRef,
   listDispatchableAgentHydrationRequests,
   listDispatchingAgentHydrationRequests,
-  listEngineManagedAgentHydrationDispatches,
+  listEndedEngineManagedAgentHydrationDispatches,
   listExpirableAgentHydrationRequests,
   listStuckAgentHydrationDispatches,
   recordAgentHydrationExecution,
@@ -266,7 +266,7 @@ export async function runAgentHydrationCycle(app: AppContext): Promise<AgentHydr
  * is loaded only when such a row exists, so the worker stays light.
  */
 async function settleEndedEngineHydration(app: AppContext): Promise<number> {
-  const ended = await listEngineManagedAgentHydrationDispatches(app.db, { limit: 1, endedOnly: true });
+  const ended = await listEndedEngineManagedAgentHydrationDispatches(app.db, { limit: 1 });
   if (ended.length === 0) return 0;
   const { settleEngineManagedHydration } = await import("../sync/requests/legacy-hydration.ts");
   return (await settleEngineManagedHydration({ db: app.db, rawConfig: app.config })).settled;
@@ -275,9 +275,7 @@ async function settleEndedEngineHydration(app: AppContext): Promise<number> {
 /** Undecided or never-dispatched approvals whose expiry has passed. Like the
  * reconcile and the stuck sweep below, it never sees a row the Fansly Sync
  * Engine serves (`FANSLY_SYNC_ENGINE_HYDRATION_LANE`, filtered by the list):
- * that row mirrors a history request, and a page the engine owns gets its
- * legacy-state rows converted by the switch, not dispatched (step-3 design
- * §3.1 item 8). */
+ * that row mirrors a history request. */
 async function expireAgentHydration(app: AppContext): Promise<number> {
   const rows = await listExpirableAgentHydrationRequests(app.db, { limit: SWEEP_BATCH_LIMIT });
   let expired = 0;

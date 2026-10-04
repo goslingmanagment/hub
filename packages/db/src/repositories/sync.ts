@@ -25,9 +25,7 @@ import {
 } from "../schema.ts";
 import {
   SYNC_STREAM_POLICY,
-  computeCurrentPageSyncSlot,
   getSyncStreamsForPlatform,
-  pageSyncRunnableSinceSql,
   resolvePageSyncPriority,
   type PageSyncStatus,
   type SyncRequestSource,
@@ -35,12 +33,10 @@ import {
 } from "./page-sync.ts";
 import {
   type CapturePayloadRef,
-  capturePayloadRefFromColumns,
   lockCapturePayloadRefAlive,
 } from "./capture-payloads.ts";
 import { egressKeySql } from "./egress.ts";
 import { PageSyncLeaseLostError, getPageSyncExecutionContext } from "./sync-context.ts";
-import { legacyOwnsFanslyPageSql } from "./sync/pages.ts";
 
 type TimestampValue = Date | string | null | undefined;
 type NumericValue = number | bigint | null | undefined;
@@ -497,122 +493,6 @@ export async function listCheckpointStates(db: Database, pageIds: number[], stre
   return db.select({ pageId: pageSyncCursors.pageId, state: pageSyncCursors.state })
     .from(pageSyncCursors)
     .where(and(inArray(pageSyncCursors.pageId, pageIds), eq(pageSyncCursors.stream, stream)));
-}
-
-export interface FanslyDmRawPayloadCursorRow {
-  id: number;
-  responsePayload: unknown;
-  /** G5 slice 2: the catalog reference this raw envelope carries, or null. */
-  payloadRef: CapturePayloadRef | null;
-}
-
-/**
- * Durable source cursor for the media-scoped Fansly purchase-history walk.
- * The raw page is already captured before this reader sees it; keyset paging
- * keeps steady-state work bounded to newly captured /message pages.
- */
-export async function listFanslyDmRawPayloadsAfterId(
-  db: Database,
-  input: {
-    pageId: number;
-    afterId: number;
-    limit?: number;
-  },
-): Promise<FanslyDmRawPayloadCursorRow[]> {
-  const result = await db.execute<Record<string, unknown>>(sql`
-    select rp.id::text as id,
-           rp.response_payload as "responsePayload",
-           to_char(rp.payload_bucket_month, 'YYYY-MM-DD') as "payloadBucketMonth",
-           rp.payload_object_id::text as "payloadObjectId"
-    from ${syncRawPayloads} rp
-    where rp.page_id = ${input.pageId}
-      and rp.endpoint = 'dm_messages'
-      and rp.id > ${input.afterId}
-    order by rp.id asc
-    limit ${input.limit ?? 500}
-  `);
-  return result.rows.map((row) => ({
-    id: Number(row.id),
-    responsePayload: row.responsePayload,
-    payloadRef: capturePayloadRefFromColumns(
-      row.payloadBucketMonth as string | null,
-      row.payloadObjectId as string | null,
-    ),
-  }));
-}
-
-export interface FanslyMessagePurchaseTargetCursorRow {
-  id: number;
-  rawType: string;
-  correlationId: string;
-}
-
-/**
- * Durable local discovery source for Fansly media purchase-history targets.
- * Fansly transaction correlation ids identify the purchased media for the
- * four media transaction types; the runtime maps each raw type to the
- * accountMediaId/accountMediaBundleId request parameter.
- *
- * Deliberately do not filter by transaction state or is_active: an unlock is
- * a historical fact even while its payout is pending or after a later
- * financial adjustment. The raw-type allowlist prevents unrelated Fansly
- * correlation-id namespaces (for example subscriptions) from entering the
- * media walk.
- */
-export async function listFanslyMessagePurchaseTargetsAfterId(
-  db: Database,
-  input: {
-    pageId: number;
-    afterId: number;
-    limit?: number;
-  },
-): Promise<FanslyMessagePurchaseTargetCursorRow[]> {
-  const result = await db.execute<{
-    id: string;
-    rawType: string;
-    correlationId: string;
-  }>(sql`
-    select t.id::text as id,
-           t.raw_type as "rawType",
-           btrim(t.correlation_id) as "correlationId"
-    from ${transactions} t
-    where t.platform_account_id = ${input.pageId}
-      and t.id > ${input.afterId}
-      and t.raw_type in ('2010', '2016', '2110', '2116')
-      and nullif(btrim(t.correlation_id), '') is not null
-    order by t.id asc
-    limit ${input.limit ?? 500}
-  `);
-  return result.rows.map((row) => ({
-    id: Number(row.id),
-    rawType: row.rawType,
-    correlationId: row.correlationId,
-  }));
-}
-
-/**
- * The content ids the legacy purchase-history lane has captured on a page (any
- * answer, either namespace) — the ones its discovery skips. Request parameters
- * only: no body is read.
- */
-export async function listFanslyPurchaseHistoryCapturedContentIds(
-  db: Database,
-  pageId: number,
-): Promise<string[]> {
-  const result = await db.execute<{ contentId: string }>(sql`
-    select distinct coalesce(
-             nullif(rp.request_params ->> 'accountMediaId', ''),
-             nullif(rp.request_params ->> 'accountMediaBundleId', '')
-           ) as "contentId"
-    from ${syncRawPayloads} rp
-    where rp.page_id = ${pageId}
-      and rp.endpoint = 'purchase_history'
-      and (
-        nullif(rp.request_params ->> 'accountMediaId', '') is not null
-        or nullif(rp.request_params ->> 'accountMediaBundleId', '') is not null
-      )
-  `);
-  return result.rows.map((row) => row.contentId);
 }
 
 /** Refreshes the page-level reporting cache from the authoritative current
@@ -1591,78 +1471,6 @@ export async function hasRecentTerminalProxyFailure(
   `);
 
   return Boolean(result.rows[0]?.hasFailure);
-}
-
-/** E-2: the ops watchdog's Fansly sync deadman. The planner is one
- * all-or-nothing cycle and a wedged executor starts nothing, so either failure
- * shows up the same way: no Fansly chunk starts while a stream is due.
- *
- * A stream counts only once it has been due since `dueBefore`: work that just
- * came due (a slot reached, a request made, a back-off run out) first gets the
- * watchdog's own threshold to start, and a stream idling toward its next slot
- * never counts. It must be runnable (not paused, not blocked, no retry or
- * pacing deadline after `dueBefore`) and either hold an outstanding request
- * (`request_seq > applied_seq`) whose runnable-since clock, the one starvation
- * aging uses, is at or before `dueBefore`, or have a slot the planner would
- * have claimed by then (its own `computeCurrentPageSyncSlot` against
- * `last_scheduled_slot`), which is how a planner that stopped claiming shows.
- *
- * The run lookup is bounded to `since` so it stays on `sync_runs_started_idx`;
- * `latestStartedAt` is null when nothing started inside it.
- *
- * Pages the Fansly Sync Engine owns (`handover`/`live`) are out of both
- * halves: their legacy streams are fenced, so a due stream of theirs is no
- * sign of a wedged executor, and a run of theirs (one that started just before
- * the switch) is no sign of a live one. */
-export async function getFanslySyncLiveness(
-  db: Database,
-  input: { since: Date; dueBefore: Date },
-): Promise<{ latestStartedAt: Date | null; hasDueStream: boolean }> {
-  const latest = await db.execute<{ latestStartedAt: TimestampValue }>(sql`
-    select max(r.started_at) as "latestStartedAt"
-      from ${syncRuns} r
-      join ${pages} p on p.id = r.page_id and p.platform = 'fansly'
-     where r.started_at > ${input.since}
-       and ${legacyOwnsFanslyPageSql(sql.raw("r.page_id"))}
-  `);
-  const streams = await db.execute<{
-    outstanding: boolean;
-    runnableSince: TimestampValue;
-    cadenceSeconds: NumericValue;
-    slotOffsetSeconds: NumericValue;
-    lastScheduledSlot: NumericValue;
-  }>(sql`
-    select st.request_seq > st.applied_seq as "outstanding",
-           ${pageSyncRunnableSinceSql("st")} as "runnableSince",
-           st.cadence_seconds as "cadenceSeconds",
-           st.slot_offset_seconds as "slotOffsetSeconds",
-           st.last_scheduled_slot as "lastScheduledSlot"
-      from ${pageSyncStates} st
-      join ${pages} p on p.id = st.page_id and p.status = 'active' and p.platform = 'fansly'
-     where st.status <> 'paused'
-       and st.blocker_kind is null
-       and (st.retry_at is null or st.retry_at <= ${input.dueBefore})
-       and ${legacyOwnsFanslyPageSql(sql.raw("st.page_id"))}
-  `);
-  const hasDueStream = streams.rows.some((row) => {
-    if (row.outstanding) {
-      // Every request stamps requested_at; a row without any clock is due.
-      const runnableSince = row.runnableSince ? new Date(row.runnableSince) : null;
-      if (runnableSince === null || runnableSince.getTime() <= input.dueBefore.getTime()) {
-        return true;
-      }
-    }
-    return computeCurrentPageSyncSlot(
-      input.dueBefore,
-      normalizeNumber(row.cadenceSeconds, "cadenceSeconds"),
-      normalizeNumber(row.slotOffsetSeconds, "slotOffsetSeconds"),
-    ) > normalizeNumber(row.lastScheduledSlot, "lastScheduledSlot");
-  });
-  const latestStartedAt = latest.rows[0]?.latestStartedAt;
-  return {
-    latestStartedAt: latestStartedAt ? new Date(latestStartedAt) : null,
-    hasDueStream,
-  };
 }
 
 export async function listRunningSyncRuns(

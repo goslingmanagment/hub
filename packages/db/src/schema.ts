@@ -788,8 +788,9 @@ export const pageSyncStates = pgTable("page_sync_states",
 
 // 0219 (R04): a Fansly 429 held every legacy sync stream of the page until
 // holdUntil. Nothing writes or obeys it since step 4 (S4-19: the legacy
-// executor serves OnlyFans only, and only a Fansly answer armed it); the rows
-// stay as records, and the switch import still reads a hold in force.
+// executor serves OnlyFans only, and only a Fansly answer armed it), and
+// nothing reads it since S4-21 (the switch import carried a hold in force);
+// the rows stay as records.
 export const pageSyncProviderHolds = pgTable("page_sync_provider_holds", {
   pageId: bigint("page_id", { mode: "number" }).primaryKey().references(() => pages.id, {
     onDelete: "cascade",
@@ -808,7 +809,7 @@ export const pageSyncProviderHolds = pgTable("page_sync_provider_holds", {
 // the legacy engine. The capture and its completion are conditional UPDATEs by
 // DB clock (repositories/fansly-send-guard.ts); an expired lease never opens
 // the page by itself. 0229 (sync engine design §2.7): `owner_engine` — a row
-// the step-3 switch gave to the Fansly Sync Engine refuses every legacy
+// of the Fansly Sync Engine (every Fansly page's) refuses every legacy
 // capture.
 export const fanslyPageSendGuards = pgTable(
   "fansly_page_send_guards",
@@ -901,7 +902,8 @@ export const fanslySendPaceCursor = pgTable(
 // 0228 (Fansly Sync Engine, plan §11): the new engine's per-page state. Mode,
 // pauses, holds, ownership (generation + the owner process's identity), the
 // scheduler's cycle position and the pacer's facts. Written through
-// repositories/sync/pages.ts only; `handover`/`live` only by the switch CLI.
+// repositories/sync/pages.ts only; `live` only at a page's birth
+// (`createLiveSyncPage`), `handover` by nothing since step 4 (S4-21).
 export const syncPages = pgTable(
   "sync_pages",
   {

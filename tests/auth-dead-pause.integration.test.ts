@@ -24,6 +24,7 @@ import {
   startIntegrationTestDatabase,
   type StartedTestDatabase,
 } from "./helpers/db.ts";
+import { EVERY_PLATFORM } from "./helpers/page-sync-scope.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { INTEGRATION_TEST_TIMEOUT_MS } from "./helpers/timeouts.ts";
 
@@ -83,7 +84,7 @@ describe("auth-dead pause wiring (Stage 26)", () => {
       streams: ["light"],
       source: "manual",
     });
-    const runnableBefore = await listRunnablePageSync(appContext.db);
+    const runnableBefore = await listRunnablePageSync(appContext.db, new Date(), { platforms: EVERY_PLATFORM });
     expect(runnableBefore.map((row) => row.pageId)).toContain(page.id);
 
     await applyOfapiAccountHealthEvent(appContext, {
@@ -108,7 +109,7 @@ describe("auth-dead pause wiring (Stage 26)", () => {
     }
 
     // The planner's runnable set drops the page immediately.
-    const runnableAfter = await listRunnablePageSync(appContext.db);
+    const runnableAfter = await listRunnablePageSync(appContext.db, new Date(), { platforms: EVERY_PLATFORM });
     expect(runnableAfter.map((row) => row.pageId)).not.toContain(page.id);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
@@ -149,7 +150,7 @@ describe("auth-dead pause wiring (Stage 26)", () => {
     }
     expect(states.find((state) => state.stream === "light")?.status).toBe("pending");
 
-    const runnable = await listRunnablePageSync(appContext.db);
+    const runnable = await listRunnablePageSync(appContext.db, new Date(), { platforms: EVERY_PLATFORM });
     expect(runnable.map((row) => row.pageId)).toContain(page.id);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 

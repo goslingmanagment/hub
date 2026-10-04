@@ -1,3 +1,5 @@
+import { readdirSync, readFileSync } from "node:fs";
+
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -5,10 +7,12 @@ import {
   createModel,
   createOnlyFansPage,
   ensurePageSyncStates,
-  issueSyncSwitchCapability,
   listRunnablePageSync,
+  markPageSyncEnqueued,
   requestPageSync as requestPageSyncRows,
-  setSyncPageMode,
+  resetPageSync,
+  resumePageSync,
+  scheduleDuePageSync,
   type SyncStream,
 } from "@agency_hub_core/db";
 
@@ -24,13 +28,15 @@ import {
 } from "../apps/runtime/src/services/sync-control.ts";
 import { FANSLY_ENGINE_SCOPE_STREAMS } from "../apps/runtime/src/services/sync-engine-levers.ts";
 import type { SyncTriggerScope } from "../apps/runtime/src/services/sync-queue.ts";
+import { legacyExecutorPlatforms } from "../apps/runtime/src/sync/onlyfans/boundary.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
   type StartedTestDatabase,
 } from "./helpers/db.ts";
+import { EVERY_PLATFORM } from "./helpers/page-sync-scope.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
-import { seedSyncPage } from "./helpers/sync-engine-host.ts";
+import { seedSyncPage, setModeDirect } from "./helpers/sync-engine-host.ts";
 
 vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
 
@@ -43,10 +49,14 @@ vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
  * engine for a page it owns and refuse any other Fansly page.
  *
  * S4-10 writes no legacy state (E17): the Fansly `page_sync_states` rows stay
- * exactly as they are — today idle, pending or retrying with a null blocker —
- * so a revert of S4-10 (whose image runs `sync rollback` again) finds them
- * recoverable. The recovery data path below takes the data steps of that
- * reverted image's rollback and proves the page's streams become runnable.
+ * exactly as they are — idle, pending or retrying with a null blocker.
+ *
+ * Step 4, S4-21 (the point of no return, stage 2) parks them for good:
+ * migration 0239 makes every Fansly row `paused` with the `retired` blocker,
+ * and the executor's platform set is the one fence left in its queries. The
+ * second half below takes the data steps a reverted image's roll-back would
+ * take on the parked rows and proves nothing of the page becomes runnable —
+ * with the platform set, and without it.
  */
 
 let testDb: StartedTestDatabase | null = null;
@@ -56,8 +66,8 @@ let ownerCookie = "";
 
 const SCOPES = ["light", "followers", "all", "data", "messages", "posts"] as const satisfies readonly SyncTriggerScope[];
 const BLOCKS = ["connection", "financials", "audience", "messages_live", "messages_history"] as const;
-/** The scope `all` of a Fansly page before S4-10 (the reverted image's
- *  `requestPageSync(scope 'all', reason 'recovery')`). */
+/** The scope `all` of a Fansly page before S4-10: what a reverted image's
+ *  roll-back requested as `recovery`. */
 const REVERTED_ALL_SCOPE: SyncStream[] = [
   "light",
   "transactions",
@@ -288,64 +298,201 @@ describe("Fansly off the legacy executor (step 4, S4-10)", () => {
       [fansly],
     )).rows[0].n).toBe(0);
   });
+});
 
-  it("recovery data path: on the rows S4-10 leaves, the reverted image's rollback makes the page's streams runnable",
-    async () => {
-      const now = new Date();
-      const pages = await seedPages(now);
-      const { boss } = recordingBoss();
-      await runSyncPlannerCycle(app, boss as never, now);
-      await expect(requestPageSync(app, boss as never, { pageLabel: pages.live.label, scope: "all", reason: "recovery" }))
-        .rejects.toThrow(retired(pages.live.label));
-      // The rows as S4-10 leaves them: idle, pending, retrying — no blocker,
-      // nothing parked — and fenced while the page is live.
-      const shaped = (await rowsOf(pages.live.pageId)).filter((row) => ["light", "dm_messages", "transactions"].includes(row.stream));
-      expect(shaped).toEqual([
-        { stream: "dm_messages", status: "pending", blocker_kind: null },
-        { stream: "light", status: "idle", blocker_kind: null },
-        { stream: "transactions", status: "retrying", blocker_kind: null },
-      ]);
-      expect((await listRunnablePageSync(app.db, now)).map((row) => row.pageId)).not.toContain(pages.live.pageId);
+// ── step 4, S4-21: the rows parked, the platform set the fence ──────────────
 
-      // The reverted image's `sync rollback --page` data steps: live →
-      // handover → off (its steps 1 and 5), then its last step's
-      // `requestPageSync(scope 'all', reason 'recovery')` — the app layer
-      // seeds the page's rows first, then requests the scope's streams.
-      const capability = issueSyncSwitchCapability({ pageId: pages.live.pageId, purpose: "revert drill" });
-      for (const [from, to] of [["live", "handover"], ["handover", "off"]] as const) {
-        expect(await setSyncPageMode(app.db, {
-          pageId: pages.live.pageId,
-          to,
-          expectFrom: from,
-          changedBy: "test:reverted rollback",
-          capability,
-        })).toMatchObject({ kind: "changed", from, to });
+/** The migration that parks the rows (0239 at the time of writing), found by
+ *  its name: its number is the next free one at merge. */
+function retireMigrationSql(): string {
+  const dir = "packages/db/migrations";
+  const found = readdirSync(dir).filter((file) => file.endsWith("_retire_fansly_legacy_sync_states.sql"));
+  if (found.length !== 1) throw new Error(`expected one retire migration, found ${found.length}`);
+  return readFileSync(`${dir}/${found[0]!}`, "utf8");
+}
+
+/** The migration's statement, as the deploy applies it. */
+async function parkFanslyLegacyRows(): Promise<void> {
+  await pool().query(retireMigrationSql());
+}
+
+interface LegacyRow {
+  stream: string;
+  status: string;
+  blocker_kind: string | null;
+  blocker_code: string | null;
+  request_seq: string;
+  applied_seq: string;
+  leased_seq: string | null;
+  lease_token: string | null;
+  lease_owner: string | null;
+  retry_kind: string | null;
+  retry_at: Date | null;
+}
+
+async function legacyRows(pageId: number): Promise<LegacyRow[]> {
+  return (await pool().query<LegacyRow>(
+    `select stream::text, status::text, blocker_kind, blocker_code, request_seq::text, applied_seq::text,
+            leased_seq::text, lease_token, lease_owner, retry_kind, retry_at
+       from page_sync_states where page_id = $1 order by stream`,
+    [pageId],
+  )).rows;
+}
+
+/** An OnlyFans page with a runnable `transactions` request (the planner's seed, then a request). */
+async function requestOnlyFansStream(pageId: number, now: Date): Promise<void> {
+  await ensurePageSyncStates(app.db, { pageId, now });
+  await pool().query(
+    `update page_sync_states
+        set applied_seq = request_seq, status = case when status = 'paused' then status else 'idle' end
+      where page_id = $1`,
+    [pageId],
+  );
+  await requestPageSyncRows(app.db, { pageId, streams: ["transactions"], source: "manual", now });
+}
+
+describe("the Fansly legacy rows parked for good (step 4, S4-21, migration 0239)", () => {
+  it("parks every Fansly row — leased, retrying, blocked or idle — keeps its sequences, and leaves OnlyFans and a "
+    + "row parked already untouched", async () => {
+    const now = new Date();
+    const pages = await seedPages(now);
+    // A lease an older executor left running, and a stream an auth failure blocked.
+    await pool().query(
+      `update page_sync_states
+          set status = 'running', request_seq = applied_seq + 1, leased_seq = applied_seq + 1, lease_owner = 'old-executor',
+              lease_token = 'old-lease', lease_heartbeat_at = $2, lease_expires_at = $2::timestamptz + interval '5 minutes'
+        where page_id = $1 and stream = 'subscribers'`,
+      [pages.live.pageId, now],
+    );
+    await pool().query(
+      `update page_sync_states
+          set status = 'blocked', blocker_kind = 'auth', blocker_code = 'fansly_auth', blocker_message = 'dead session',
+              blocked_at = $2
+        where page_id = $1 and stream = 'followers'`,
+      [pages.live.pageId, now],
+    );
+    await requestOnlyFansStream(pages.onlyfans.pageId, now);
+    const onlyFansBefore = await legacySnapshot([pages.onlyfans.pageId]);
+    const before = await legacyRows(pages.live.pageId);
+    expect([...new Set(before.map((row) => row.status))])
+      .toEqual(expect.arrayContaining(["idle", "pending", "retrying", "running", "blocked"]));
+
+    await parkFanslyLegacyRows();
+
+    for (const page of [pages.live, pages.off]) {
+      const rows = await legacyRows(page.pageId);
+      expect(rows.length).toBeGreaterThan(3);
+      for (const row of rows) {
+        expect(row, `${page.label} ${row.stream}`).toMatchObject({
+          status: "paused",
+          blocker_kind: "retired",
+          blocker_code: "fansly_sync_engine_owned",
+          leased_seq: null,
+          lease_token: null,
+          lease_owner: null,
+          retry_kind: null,
+          retry_at: null,
+        });
       }
-      await ensurePageSyncStates(app.db, { pageId: pages.live.pageId, now });
-      const requests = await requestPageSyncRows(app.db, {
-        pageId: pages.live.pageId,
-        streams: REVERTED_ALL_SCOPE,
-        source: "recovery",
-        now,
-      });
-      expect(requests.map((request) => request.stream).sort()).toEqual([...REVERTED_ALL_SCOPE].sort());
+    }
+    // What each stream had asked for and applied stays on the row, as a record.
+    expect((await legacyRows(pages.live.pageId)).map((row) => [row.stream, row.request_seq, row.applied_seq]))
+      .toEqual(before.map((row) => [row.stream, row.request_seq, row.applied_seq]));
+    const blocked = await pool().query<{ blocked_at: Date; blocker_message: string }>(
+      "select blocked_at, blocker_message from page_sync_states where page_id = $1 and stream = 'followers'",
+      [pages.live.pageId],
+    );
+    // The first block's instant is kept; the message says who reads the page now.
+    expect(blocked.rows[0]!.blocked_at).toEqual(now);
+    expect(blocked.rows[0]!.blocker_message).toBe(
+      "Legacy Fansly sync streams are permanently retired; the page is read by the Fansly Sync Engine",
+    );
+    expect(await legacySnapshot([pages.onlyfans.pageId])).toEqual(onlyFansBefore);
 
-      const outstanding = await pool().query<{ stream: string }>(
-        `select stream::text from page_sync_states
-          where page_id = $1 and request_seq > applied_seq and status <> 'paused' order by stream`,
-        [pages.live.pageId],
-      );
-      expect(outstanding.rows.map((row) => row.stream)).toEqual(expect.arrayContaining(REVERTED_ALL_SCOPE));
-      const runnable = await listRunnablePageSync(app.db, now);
-      expect(runnable.map((row) => row.pageId)).toContain(pages.live.pageId);
-      // The reverted executor, which serves Fansly again, leases a stream.
-      const lease = await acquirePageSyncLease(app.db, {
-        pageId: pages.live.pageId,
-        workerId: "reverted-executor",
-        leaseToken: "drill",
-        leaseTtlMs: 60_000,
-        now,
-      });
-      expect(lease).toMatchObject({ pageId: pages.live.pageId, platform: "fansly", status: "running" });
+    // Applied again (a later database, a re-run): nothing is rewritten.
+    const parked = await legacySnapshot([pages.live.pageId, pages.off.pageId]);
+    await parkFanslyLegacyRows();
+    expect(await legacySnapshot([pages.live.pageId, pages.off.pageId])).toEqual(parked);
+    // The acceptance query of the release: no Fansly row is left unparked.
+    expect((await pool().query(
+      `select count(*)::int as n from page_sync_states s join pages p on p.id = s.page_id
+        where p.platform = 'fansly' and not (s.status = 'paused' and s.blocker_kind = 'retired')`,
+    )).rows[0].n).toBe(0);
+  });
+
+  it("no way back: on the parked rows a reverted image's roll-back steps — mode off, every stream requested as recovery, "
+    + "a resume, a reset — make nothing runnable, with the platform set or without it", async () => {
+    const now = new Date();
+    const pages = await seedPages(now);
+    await requestOnlyFansStream(pages.onlyfans.pageId, now);
+    await parkFanslyLegacyRows();
+    const parked = await legacySnapshot([pages.live.pageId]);
+
+    // The data steps of a roll-back as the pre-S4-21 images ran it: the page
+    // leaves the engine (`off`), its rows are seeded and every stream of the
+    // old scope `all` is requested as recovery, then resumed and reset by hand.
+    await setModeDirect(pool(), pages.live.pageId, "off");
+    await ensurePageSyncStates(app.db, { pageId: pages.live.pageId, now });
+    const requests = await requestPageSyncRows(app.db, {
+      pageId: pages.live.pageId,
+      streams: REVERTED_ALL_SCOPE,
+      source: "recovery",
+      now,
     });
+    expect(requests.map((request) => request.stream).sort()).toEqual([...REVERTED_ALL_SCOPE].sort());
+    await resumePageSync(app.db, { pageId: pages.live.pageId, streams: REVERTED_ALL_SCOPE, now });
+    await resetPageSync(app.db, { pageId: pages.live.pageId, streams: REVERTED_ALL_SCOPE, now });
+    // A planner pass of such an image with every slot due.
+    await scheduleDuePageSync(app.db, { now: new Date(now.getTime() + 25 * 3_600_000) });
+
+    // Every row is still parked: paused, `retired`.
+    expect(new Set((await legacyRows(pages.live.pageId)).map((row) => `${row.status}/${row.blocker_kind}`)))
+      .toEqual(new Set(["paused/retired"]));
+    expect(parked.states.length).toBe((await legacyRows(pages.live.pageId)).length);
+
+    for (const platforms of [legacyExecutorPlatforms(), EVERY_PLATFORM]) {
+      const runnable = (await listRunnablePageSync(app.db, now, { platforms })).map((row) => row.pageId);
+      expect(runnable, platforms.join("+")).toEqual([pages.onlyfans.pageId]);
+      expect(await acquirePageSyncLease(app.db, {
+        pageId: pages.live.pageId, workerId: "reverted-executor", leaseToken: "drill", leaseTtlMs: 60_000, now, platforms,
+      })).toBeNull();
+    }
+  });
+
+  it("the platform set alone holds: an unparked pending Fansly row is not listed, marked or leased; an OnlyFans "
+    + "stream stays runnable", async () => {
+    const now = new Date();
+    const pages = await seedPages(now);
+    await requestOnlyFansStream(pages.onlyfans.pageId, now);
+    const platforms = legacyExecutorPlatforms();
+    expect(platforms).toEqual(["onlyfans"]);
+    const fansly = [pages.live.pageId, pages.off.pageId];
+    const before = await legacySnapshot(fansly);
+
+    // Unparked: each Fansly page holds a pending `dm_messages` request with no
+    // blocker, whatever its engine mode — a row a stray writer could leave.
+    expect((await listRunnablePageSync(app.db, now, { platforms: EVERY_PLATFORM })).map((row) => row.pageId).sort())
+      .toEqual([...fansly, pages.onlyfans.pageId].sort());
+
+    expect((await listRunnablePageSync(app.db, now, { platforms })).map((row) => [row.pageId, row.platform]))
+      .toEqual([[pages.onlyfans.pageId, "onlyfans"]]);
+    expect(await listRunnablePageSync(app.db, now, { platforms: [] })).toEqual([]);
+    for (const pageId of [...fansly, pages.onlyfans.pageId]) await markPageSyncEnqueued(app.db, pageId, now, { platforms });
+    for (const pageId of fansly) {
+      expect(await acquirePageSyncLease(app.db, {
+        pageId, workerId: "executor", leaseToken: `lease-${pageId}`, leaseTtlMs: 60_000, now, platforms,
+      })).toBeNull();
+    }
+    // Not a column of a Fansly row moved: no enqueue mark, no lease.
+    expect(await legacySnapshot(fansly)).toEqual(before);
+
+    const enqueued = await pool().query<{ enqueued: boolean }>(
+      "select enqueued_at is not null as enqueued from page_sync_states where page_id = $1 and stream = 'transactions'",
+      [pages.onlyfans.pageId],
+    );
+    expect(enqueued.rows).toEqual([{ enqueued: true }]);
+    expect(await acquirePageSyncLease(app.db, {
+      pageId: pages.onlyfans.pageId, workerId: "executor", leaseToken: "of-lease", leaseTtlMs: 60_000, now, platforms,
+    })).toMatchObject({ pageId: pages.onlyfans.pageId, platform: "onlyfans", stream: "transactions", status: "running" });
+  });
 });

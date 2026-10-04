@@ -32,8 +32,9 @@ import { onHistoryThreadChainChanged, onHistoryWorkClosed } from "./requests/his
 // host; on SIGTERM the host finishes the step in flight, drains the live
 // sockets and releases every page before the process exits — within
 // `SYNC_SHUTDOWN_CAP_MS` whatever is still running. A page sends to Fansly
-// only after the step-3 switch made it `live`, handed it the step-1 guard row
-// and imported the legacy state (I17, J1, J3).
+// only on a `live` row with the engine's step-1 guard row and its import mark
+// (I17, J1, J3): a page is born so at onboarding; the six earlier pages were
+// taken over by the step-3 switch.
 
 /** The `sync` heartbeat cadence. Alert 5 (design §9.6) fires when no `sync`
  *  heartbeat is younger than 2 minutes, and the compose healthcheck wants the
@@ -253,7 +254,7 @@ export async function runSyncRuntime(): Promise<void> {
   }
   context.logger.info(
     { instanceId: runtime.instanceId, heartbeatIntervalMs: SYNC_HEARTBEAT_INTERVAL_MS },
-    "Sync runtime started (engine host: shadow pages and live pages run; a page is live only after the switch)",
+    "Sync runtime started (engine host: shadow pages and live pages run; a page is live from its onboarding)",
   );
   handleSyncShutdownSignals(context, runtime);
 }

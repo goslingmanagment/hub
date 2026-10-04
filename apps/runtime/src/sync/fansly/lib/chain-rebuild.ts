@@ -10,7 +10,6 @@ import {
   writeRebuiltThreadChain,
   type LegacyDmJournalRow,
   type SyncPageMode,
-  type SyncSwitchCapability,
   type ThreadChainRow,
 } from "@agency_hub_core/db";
 
@@ -391,8 +390,6 @@ export interface ChainRebuildOptions extends ScanPacing {
   write: boolean;
   /** Ignore earlier rebuilds: fold the whole journal from empty chains. */
   full: boolean;
-  /** The step-3 switch's own final pass on a `handover` page. */
-  handoverCapability?: SyncSwitchCapability;
   audit?: AuditContext;
   /** Progress after every batch (the CLI prints it). */
   onBatch?: (progress: { pageId: number; throughRawId: number; rowsScanned: number; batches: number }) => void;
@@ -447,7 +444,7 @@ export class ChainRebuildRefusedError extends Error {
  * own watermark. With `write`, folded threads are written after every batch
  * (each in its own short transaction) and the run leaves an audit event; a
  * page-wide run that reached the end of the journal is the page's completed
- * rebuild (the step-3 switch requires one, D21).
+ * rebuild.
  */
 export async function rebuildPageChains(
   app: SyncChainContext,
@@ -456,8 +453,7 @@ export async function rebuildPageChains(
 ): Promise<ChainRebuildPageReport> {
   const syncPage = await getSyncPage(app.db, options.pageId);
   const mode: SyncPageMode | "no_sync_page" = syncPage?.mode ?? "no_sync_page";
-  const handoverAllowed = mode === "handover" && options.handoverCapability !== undefined;
-  if ((mode === "handover" && !handoverAllowed) || mode === "live") {
+  if (mode === "handover" || mode === "live") {
     throw new ChainRebuildRefusedError(options.pageId, mode);
   }
 
@@ -504,7 +500,6 @@ export async function rebuildPageChains(
         chain: state.chain,
         expectedWatermark: state.storedWatermark,
         journalWatermark: throughRawId,
-        ...(options.handoverCapability === undefined ? {} : { handoverCapability: options.handoverCapability }),
       });
       state.dirty = false;
       if (written.kind === "written") {

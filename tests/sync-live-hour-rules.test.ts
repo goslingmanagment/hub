@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { FanslySendAuditRow } from "@agency_hub_core/db";
 
-import { acceptanceExitCode } from "../apps/runtime/src/sync/switch/acceptance.ts";
+import { acceptanceExitCode } from "../apps/runtime/src/sync/checks/live-hour.ts";
 import {
   acceptanceIncidentKeys,
   acceptanceRouteOf,
@@ -26,7 +26,7 @@ import {
   type AcceptanceJournalRow,
   type AcceptanceWindow,
   type PageStopEpisode,
-} from "../apps/runtime/src/sync/switch/acceptance-rules.ts";
+} from "../apps/runtime/src/sync/checks/live-hour-rules.ts";
 
 // The live-hour acceptance's rules (step 3b ruling 13, A1 §2b, A6), pure:
 // the window shared by pages switched together, the pace and the route

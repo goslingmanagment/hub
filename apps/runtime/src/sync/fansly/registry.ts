@@ -29,7 +29,7 @@ export type ResourceFile =
 /** What creates or bumps the work (design §4.1). */
 export type Trigger =
   | "poll" | "request" | "owner" | "api" | "ws_lifecycle" | "ws_gap" | "dependency" | "projection_queue"
-  | "legacy_import" | "new_page" | `ws:${string}` | `apply:${string}`;
+  | "new_page" | `ws:${string}` | `apply:${string}`;
 
 /** What a finished step proves (design §4.1, §8). */
 export type ProofKind =
@@ -274,7 +274,7 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
   },
   {
     key: "dm-messages.catchup", file: "dm-messages", subject: "thread", kind: "trigger", class: "planned",
-    triggers: ["apply:dm-conversations.head", "apply:dm-conversations.full", "apply:dm-conversations.detail", "legacy_import"],
+    triggers: ["apply:dm-conversations.head", "apply:dm-conversations.full", "apply:dm-conversations.detail"],
     coalesce: { quietMs: MINUTE, maxMs: 10 * MINUTE, extendOnSignal: true }, slo: { staleAfterMs: 6 * HOUR },
     proof: "chain_empty_page", walk: "incremental-head", http: true, evidence: true, fence: "dm_archive",
     operations: ["messages.page"],
@@ -476,7 +476,7 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
   },
   {
     key: "notifications.backfill", file: "notifications", subject: "page", kind: "goal", class: "planned",
-    triggers: ["owner", "legacy_import"], slo: {},
+    triggers: ["owner"], slo: {},
     proof: "empty_page", walk: "cursor-walk", http: true, evidence: true, fence: "none",
     operations: ["notifications.page"],
     legacy: [stream("notifications")],
@@ -494,7 +494,7 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
   },
   {
     key: "posts.backfill", file: "posts", subject: "page", kind: "goal", class: "planned",
-    triggers: ["owner", "legacy_import"], slo: {},
+    triggers: ["owner"], slo: {},
     proof: "empty_page", walk: "cursor-walk", http: true, evidence: false, fence: "none",
     operations: ["posts.timeline", "posts.tips"],
     legacy: [stream("posts")],
@@ -613,7 +613,7 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
   },
   {
     key: "stats.backfill", file: "stats", subject: "page", kind: "goal", class: "planned",
-    triggers: ["owner", "legacy_import"], slo: {},
+    triggers: ["owner"], slo: {},
     proof: "window_honoured", walk: "windows", http: true, evidence: false, fence: "none",
     operations: ["account.stats", "earnings.stats_window"],
     legacy: [stream("stats_snapshot")],

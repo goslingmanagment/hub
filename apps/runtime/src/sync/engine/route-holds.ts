@@ -51,16 +51,6 @@ export function routeHoldUntil(state: RouteState, route: FanslyRoute, now: Date)
   return at.getTime() > now.getTime() ? at : null;
 }
 
-/** Every route held at `now`, the latest end first. */
-export function activeRouteHolds(state: RouteState, now: Date): Array<{ route: FanslyRoute; until: Date }> {
-  const held: Array<{ route: FanslyRoute; until: Date }> = [];
-  for (const route of Object.keys(state.routes) as FanslyRoute[]) {
-    const until = routeHoldUntil(state, route, now);
-    if (until !== null) held.push({ route, until });
-  }
-  return held.sort((a, b) => b.until.getTime() - a.until.getTime() || (a.route < b.route ? -1 : 1));
-}
-
 export interface RouteHoldInput {
   route: FanslyRoute;
   /** The route's stored entry (null: none yet). */

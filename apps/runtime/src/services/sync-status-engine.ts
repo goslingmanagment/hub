@@ -22,8 +22,8 @@ import type {
 } from "./sync-status.ts";
 
 // The legacy status blocks of a page the Fansly Sync Engine owns (design step
-// 3 §3.2 items 2 and 7): its legacy cursors are frozen at the switch, so a
-// block derived from them would read "delayed" for good. Every block reads
+// 3 §3.2 items 2 and 7): its legacy cursors are frozen (parked for good at
+// step 4, S4-21), so a block derived from them would read "delayed" for good. Every block reads
 // `state: "engine"` with the page's engine mode instead, and each legacy
 // stream of the block is described by the live work of the registry keys
 // that took it over: when one was last applied, when the next is due, why the

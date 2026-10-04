@@ -33,17 +33,18 @@ import {
   type AcceptanceWindow,
   type PageStopEpisode,
   type PageVerdict,
-} from "./acceptance-rules.ts";
+} from "./live-hour-rules.ts";
 
-// `pnpm cli sync switch check --page P [--page Q …] --since <iso> [--until
-// <iso>]` (step 3b ruling 13, A6; design step 3 §3.5 item 7): the live-hour
-// acceptance of switched pages as JSON on stdout (the runbook reads it),
-// read-only. The rules are `acceptance-rules.ts`; the pace and the route
-// budgets are the send audit's (`engine/send-audit.ts`), which the alert
-// evaluator runs on every pass. Pages checked together share the window end
-// T* + 1 h (T* = the last page's live instant). Exit code of the CLI: 0 every
-// page accepted, 1 a page failed, 2 otherwise (inconclusive or for the
-// owner's review).
+// `pnpm cli sync check live-hour --page P [--page Q …] --since <iso> [--until
+// <iso>]` (step 3b ruling 13, A6): the check of a page's first hour on the
+// engine as JSON on stdout (the runbook reads it), read-only — the acceptance
+// of the step-3 switch until step 4 (S4-21), of an onboarded page since. The
+// rules are `live-hour-rules.ts`; the pace and the route budgets are the send
+// audit's (`engine/send-audit.ts`) over both journals — the combined pace
+// audit — which the alert evaluator runs on every pass. Pages checked
+// together share the window end T* + 1 h (T* = the last page's live instant).
+// Exit code of the CLI: 0 every page accepted, 1 a page failed, 2 otherwise
+// (inconclusive or for the owner's review).
 
 export interface PageAcceptanceReport {
   page: string;
@@ -71,7 +72,7 @@ export interface PageAcceptanceReport {
   };
 }
 
-export interface SwitchAcceptanceReport {
+export interface LiveHourReport {
   since: string;
   until: string | null;
   /** The last page's live instant. */
@@ -87,7 +88,7 @@ export interface SwitchAcceptanceReport {
 }
 
 /** The CLI's exit code for a report: 0 accepted, 1 a page failed, 2 open. */
-export function acceptanceExitCode(report: Pick<SwitchAcceptanceReport, "pages" | "accepted">): number {
+export function acceptanceExitCode(report: Pick<LiveHourReport, "pages" | "accepted">): number {
   if (report.accepted) return 0;
   return report.pages.some((page) => page.verdict === "fail") ? 1 : 2;
 }
@@ -179,6 +180,10 @@ async function readPageStops(db: Database, pageId: number): Promise<PageStopEpis
   }));
 }
 
+/** The takeover boundary (I5): the engine's first send comes ≥ 1.2 × S after
+ *  the guard row's last completion — the legacy engine's last request on a
+ *  page the step-3 switch took over, the row's seed on a page born live — and
+ *  no legacy capture follows the instant the row became the engine's. */
 async function boundaryCheck(db: Database, pageId: number): Promise<AcceptanceCheck> {
   const guard = await getFanslySendGuard(db, pageId);
   const boundary = await db.execute<{ legacyAfterFlip: number; engineFirstSent: Date | string | null; settingMs: number | null }>(sql`
@@ -459,10 +464,10 @@ async function checkPage(db: Database, page: SyncPageRow, window: AcceptanceWind
  * 1 h), T_i = the later of `since` and its live instant (`until` replaces the
  * end). Read-only.
  */
-export async function checkSwitchAcceptance(
+export async function checkLiveHour(
   db: Database,
   input: { pageIds: readonly number[]; since: Date; until?: Date | null },
-): Promise<SwitchAcceptanceReport> {
+): Promise<LiveHourReport> {
   if (input.pageIds.length === 0) throw new Error("The acceptance needs at least one page");
   const pages: SyncPageRow[] = [];
   for (const pageId of new Set(input.pageIds)) {

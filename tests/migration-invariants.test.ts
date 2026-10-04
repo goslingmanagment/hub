@@ -354,9 +354,9 @@ describe("database migration invariants", () => {
 
     // The raw-payload index is partial on the purchase-history endpoints. The
     // legacy lane that journaled the probe and storm pages is gone (step 4,
-    // S4-16); the engine's import still reads `purchase_history` through it,
-    // and a reader that leaves this list goes back to a whole-table scan with
-    // no error.
+    // S4-16), and so is the switch import that read `purchase_history` through
+    // it (S4-21); a reader that leaves this list goes back to a whole-table
+    // scan with no error.
     const predicate = /where endpoint in \(([^)]*)\)/.exec(index)?.[1];
     expect(predicate).toBeDefined();
     expect(predicate!.split(",").map((value) => value.trim().replace(/^'|'$/g, ""))).toEqual([
@@ -364,7 +364,6 @@ describe("database migration invariants", () => {
       "purchase_history_contract_probe",
       "purchase_history_contract_storm",
     ]);
-    expect(sync).toContain("and rp.endpoint = 'purchase_history'");
     // The shadow report's window read (rule A2.demand-replaced) spells the
     // predicate itself: without it, the stream and time filters alone are a
     // whole-table scan of the 788 MB heap.

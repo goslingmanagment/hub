@@ -64,9 +64,10 @@ import { noStallTracker, type StallTracker, type StallTracking } from "./watchdo
 //
 // Pages: `handover` and `live` page the owner. A `shadow` page's alerts are
 // metrics only (D14): the golden-signal sampler counts them
-// (`sync_shadow_alerts`), the sink logs the actor's. On `handover` the
-// ownership alert is suppressed (the switch waits up to 5 min for the legacy
-// stop by design); a handover older than 10 min is `handover_stuck`.
+// (`sync_shadow_alerts`), the sink logs the actor's. On `handover` — a mode
+// nothing reaches since step 4 (S4-21), still honoured where a row says it —
+// the ownership alert is suppressed (no owner runs there by design); a
+// handover older than 10 min is `handover_stuck`.
 
 /** The evaluator's cadence. */
 export const SYNC_ALERT_EVAL_INTERVAL_MS = 30_000;
@@ -628,8 +629,8 @@ export class SyncAlertEvaluator {
 
   /** The send audit (I1, I19): the page's sends since the last pass over BOTH
    *  journals — the engine's live attempts and the legacy send log — so a
-   *  pair straddling the handover or a rollback is seen too (step-3 §3.5
-   *  item 2, G4, E12). Every violation opens (refreshes) the permanent pace
+   *  pair straddling a page's hand-over to the engine is seen too (step-3
+   *  §3.5 item 2, G4, E12). Every violation opens (refreshes) the permanent pace
    *  latch as of its send; an acknowledged one never reopens it. A pair it
    *  cannot judge (an attempt admitted before 0237, two clocks that disagree,
    *  a send never recorded that its admission does not prove) pages nobody:

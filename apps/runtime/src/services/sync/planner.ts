@@ -50,7 +50,8 @@ export async function runSyncPlannerCycle(
   // streams (OnlyFans since step 4: the Fansly Sync Engine reads every Fansly
   // page; `sync/onlyfans/boundary.ts`). The planner seeds, schedules and
   // dispatches page-sync state of their pages only; a Fansly page's legacy
-  // rows stay exactly as they are.
+  // rows stay exactly as they are (parked `retired` by migration 0239). This
+  // scope is the fence: no query below looks at `sync_pages`.
   const platforms = legacyExecutorPlatforms();
   const dependencyInput = pageSyncDependencyInput(app);
   await ensurePageSyncStates(app.db, { now, platforms, ...dependencyInput });
@@ -169,7 +170,7 @@ export async function runSyncPlannerCycle(
     });
 
     if (wakeupId && page.hasLegacyWork) {
-      await markPageSyncEnqueued(app.db, page.pageId, now);
+      await markPageSyncEnqueued(app.db, page.pageId, now, { platforms });
     }
   }
 

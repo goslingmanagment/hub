@@ -656,13 +656,11 @@ export async function notifySyncChunkFailureIncident(
 ) {
   try {
     if (input.platform === "fansly" && (await isFanslyPageEngineOwned(app.db, input.platformAccountId)).owned) {
-      // A legacy chunk of a page the Fansly Sync Engine owns (one still in
-      // flight when the switch fenced the legacy engine): the legacy stream no
-      // longer runs, so its failure is not the page's state — the engine
-      // reports the page through its own alerts — and a stream latch opened
-      // now would wait for a legacy recovery that never comes (the transition
-      // closed it, `engine_owned`). The streak itself stays on the legacy
-      // row: after a rollback the stream's next failure opens it again.
+      // A legacy chunk failure reported for a page the Fansly Sync Engine
+      // owns: the legacy stream no longer runs, so its failure is not the
+      // page's state — the engine reports the page through its own alerts —
+      // and a stream latch opened now would wait for a legacy recovery that
+      // never comes (the transition closed it, `engine_owned`).
       app.logger.warn({
         platformAccountId: input.platformAccountId,
         stream: input.stream,
@@ -751,13 +749,12 @@ export async function resolveSyncChunkRecoveryIncidents(
  * through the legacy executor's chunk recovery above, and the legacy executor
  * never runs a stream of a page the engine runs live — such a latch would stay
  * open for ever (production incident 41, lilly-2 `dm_conversations`, opened
- * by the legacy engine the day before its switch). The switch's phase C and
- * every live takeover of the engine host close the page's open ones here,
- * through the ordinary resolve (the recovery tombstone; the paging sweep's
- * resolve message, which names the reason `engine_owned`).
+ * by the legacy engine the day before its switch). Every live takeover of the
+ * engine host closes the page's open ones here, through the ordinary resolve
+ * (the recovery tombstone; the paging sweep's resolve message, which names
+ * the reason `engine_owned`).
  *
- * Only a page in `live`: a switch that reverts from `handover` gives the
- * streams back to the legacy engine, whose latches are still true. Idempotent:
+ * Only a page in `live`: the engine runs no other. Idempotent:
  * with none open nothing is written. The engine's own latches
  * (`fansly_sync_engine`) and every other kind stay as they are; an OnlyFans
  * page has no `sync_pages` row, so it is never live. The legacy executor
