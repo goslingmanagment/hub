@@ -116,6 +116,8 @@ for (const file of [
   "routes-sync.ts",
   // The chat extension's routes; routes.ts spreads them in too.
   "routes-client.ts",
+  // Narrow device-token profiles: the barrel re-exports them.
+  "client-token-scopes.ts",
   "routes-ofapi-vendor.ts",
   "ofapi-vendor-usage.ts",
   "routes-ofapi-collection.ts",

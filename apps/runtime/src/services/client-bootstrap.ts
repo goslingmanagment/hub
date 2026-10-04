@@ -29,6 +29,8 @@ export interface ClientBootstrapCaller {
   user: { id: number; username: string; role: string };
   /** The caller's page scope: null = every page (the owner). */
   pageIds: readonly number[] | null;
+  /** The caller token's client profile (H-3): null = a full token. */
+  tokenClient: string | null;
 }
 
 function toBootstrapPage(
@@ -98,7 +100,7 @@ export async function buildClientBootstrap(
       userId: caller.user.id,
       username: caller.user.username,
       role: caller.user.role,
-      tokenClient: null,
+      tokenClient: caller.tokenClient,
     },
     pages: rows.map((row) => toBootstrapPage(row, switches.settings, served)),
     bindingsByHost: bindingsForCaller(switches.settings.hostBindings, rows),

@@ -24,6 +24,8 @@ export function registerClientRoutes(server: ApiServer, ctx: ApiModuleContext) {
     return buildClientBootstrap(appContext, {
       user: principal.user,
       pageIds: pageScopeFor(principal) ?? null,
+      // H-3: the client checks this before it trusts a narrow token.
+      tokenClient: principal.clientProfile ?? null,
     });
   });
 }

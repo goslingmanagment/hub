@@ -22,279 +22,284 @@ body remain handler-checked and are noted per route in the service layer.
 | `agentKey` | Agent Read Plane key only; no human principal is admitted |
 | `any` | any authenticated principal except an agent key |
 
+The `chat-extension token` column is the narrow device token a client asks
+for at password sign-in (`client: "chat-extension"`): it reaches only the
+13 routes marked "yes", and every route marked "no" refuses it with 403 in
+both enforcement modes. A full device token is not affected.
+
 ## Routes (272)
 
-| Method | Path | Route key | Kind | Roles | Page scope |
-| --- | --- | --- | --- | --- | --- |
-| GET | `/api/v1/admin/ai/personas` | `adminAiPersonasList` | `owner-session` | — | — |
-| POST | `/api/v1/admin/ai/personas` | `adminAiPersonaCreate` | `owner-session` | — | — |
-| DELETE | `/api/v1/admin/ai/personas/:key` | `adminAiPersonaArchive` | `owner-session` | — | — |
-| PUT | `/api/v1/admin/ai/personas/:key` | `adminAiPersonaUpdate` | `owner-session` | — | — |
-| GET | `/api/v1/admin/config` | `adminConfig` | `owner-session` | — | — |
-| PATCH | `/api/v1/admin/config` | `adminConfigUpdate` | `owner-session` | — | — |
-| DELETE | `/api/v1/admin/config/:key` | `adminConfigClear` | `owner-session` | — | — |
-| PATCH | `/api/v1/admin/config/staged` | `adminConfigStaged` | `owner-session` | — | — |
-| GET | `/api/v1/admin/connections` | `adminConnections` | `owner-session` | — | — |
-| POST | `/api/v1/admin/credentials/verify` | `adminVerifyCredentials` | `owner-session` | — | — |
-| GET | `/api/v1/admin/db/stats` | `adminDbStats` | `owner-session` | — | — |
-| GET | `/api/v1/admin/device-token-adoption` | `adminDeviceTokenAdoption` | `owner-session` | — | — |
-| GET | `/api/v1/admin/incidents` | `adminIncidents` | `owner-session` | — | — |
-| POST | `/api/v1/admin/invites` | `adminCreateInvite` | `owner-session` | — | — |
-| GET | `/api/v1/admin/logs` | `adminLogs` | `owner-session` | — | — |
-| GET | `/api/v1/admin/models` | `adminModels` | `owner-session` | — | — |
-| POST | `/api/v1/admin/models` | `adminCreateModel` | `owner-session` | — | — |
-| DELETE | `/api/v1/admin/models/:modelSlug` | `adminDeleteModel` | `owner-session` | — | — |
-| PATCH | `/api/v1/admin/models/:modelSlug` | `adminUpdateModel` | `owner-session` | — | — |
-| POST | `/api/v1/admin/notifications/discover-chats` | `notificationsDiscoverChats` | `owner-session` | — | — |
-| GET | `/api/v1/admin/notifications/incidents` | `notificationsIncidents` | `owner-session` | — | — |
-| POST | `/api/v1/admin/notifications/incidents/:incidentId/resolve` | `notificationsResolveIncident` | `owner-session` | — | — |
-| GET | `/api/v1/admin/notifications/reports/history` | `notificationsReportHistory` | `owner-session` | — | — |
-| GET | `/api/v1/admin/notifications/reports/preview` | `notificationsReportPreview` | `owner-session` | — | — |
-| POST | `/api/v1/admin/notifications/reports/send` | `notificationsReportSend` | `owner-session` | — | — |
-| GET | `/api/v1/admin/notifications/settings` | `notificationsSettings` | `owner-session` | — | — |
-| PATCH | `/api/v1/admin/notifications/settings` | `notificationsSettingsUpdate` | `owner-session` | — | — |
-| POST | `/api/v1/admin/notifications/test` | `notificationsTestMessage` | `owner-session` | — | — |
-| GET | `/api/v1/admin/ofapi/actions` | `ofapiActionList` | `owner-session` | — | — |
-| POST | `/api/v1/admin/ofapi/actions` | `ofapiActionPrepare` | `owner-session` | — | — |
-| GET | `/api/v1/admin/ofapi/actions/:id` | `ofapiActionGet` | `owner-session` | — | — |
-| POST | `/api/v1/admin/ofapi/actions/:id/cancel` | `ofapiActionCancel` | `owner-session` | — | — |
-| POST | `/api/v1/admin/ofapi/actions/:id/dispatch` | `ofapiActionDispatch` | `owner-session` | — | — |
-| POST | `/api/v1/admin/ofapi/actions/:id/repair` | `ofapiActionRepair` | `owner-session` | — | — |
-| GET | `/api/v1/admin/ofapi/banned-words` | `ofapiBannedWordsAdminGet` | `owner-session` | — | — |
-| POST | `/api/v1/admin/ofapi/banned-words/refresh` | `ofapiBannedWordsRefresh` | `owner-session` | — | — |
-| POST | `/api/v1/admin/ofapi/capture-jobs/seed` | `adminOfapiCaptureJobsSeed` | `owner-session` | — | — |
-| POST | `/api/v1/admin/ofapi/capture/attempts/:attemptId/resolve` | `adminOfapiCaptureAttemptResolve` | `owner-session` | — | — |
-| POST | `/api/v1/admin/ofapi/capture/controls` | `adminOfapiCaptureControl` | `owner-session` | — | — |
-| POST | `/api/v1/admin/ofapi/capture/coverage/:pageId/:chatId/revoke` | `adminOfapiCoverageRevoke` | `owner-session` | — | — |
-| POST | `/api/v1/admin/ofapi/capture/jobs/:jobId/cancel` | `adminOfapiCaptureJobCancel` | `owner-session` | — | — |
-| POST | `/api/v1/admin/ofapi/capture/jobs/:jobId/replay` | `adminOfapiCaptureJobReplay` | `owner-session` | — | — |
-| GET | `/api/v1/admin/ofapi/capture/operator` | `adminOfapiCaptureOperatorStatus` | `owner-session` | — | — |
-| GET | `/api/v1/admin/ofapi/collection` | `ofapiCollectionGet` | `session` | — | — |
-| POST | `/api/v1/admin/ofapi/collection/apply` | `ofapiCollectionApply` | `owner-session` | — | — |
-| POST | `/api/v1/admin/ofapi/collection/jobs` | `ofapiCollectionJobCreate` | `owner-session` | — | — |
-| POST | `/api/v1/admin/ofapi/collection/jobs/:id/finish-incomplete` | `ofapiCollectionJobFinishIncomplete` | `owner-session` | — | — |
-| POST | `/api/v1/admin/ofapi/collection/jobs/:id/resume` | `ofapiCollectionJobResume` | `owner-session` | — | — |
-| POST | `/api/v1/admin/ofapi/collection/preview` | `ofapiCollectionPreview` | `owner-session` | — | — |
-| GET | `/api/v1/admin/ofapi/collection/results` | `ofapiReadCollectionsGet` | `owner-session` | — | — |
-| GET | `/api/v1/admin/ofapi/content/events` | `ofapiContentEventsGet` | `owner-session` | — | — |
-| GET | `/api/v1/admin/ofapi/credits/daily` | `adminOfapiCreditsDaily` | `owner-session` | — | — |
-| GET | `/api/v1/admin/ofapi/credits/ledger` | `adminOfapiCreditsLedger` | `owner-session` | — | — |
-| GET | `/api/v1/admin/ofapi/credits/ledger.csv` | `adminOfapiCreditsLedgerCsv` | `owner-session` | — | — |
-| GET | `/api/v1/admin/ofapi/credits/summary` | `adminOfapiCreditsSummary` | `owner-session` | — | — |
-| GET | `/api/v1/admin/ofapi/dm-archive/status` | `adminOfapiDmColdArchiveStatus` | `owner-session` | — | — |
-| GET | `/api/v1/admin/ofapi/export-inventory` | `ofapiExportInventoryGet` | `owner-session` | — | — |
-| POST | `/api/v1/admin/ofapi/export-inventory/refresh` | `ofapiExportInventoryRefresh` | `owner-session` | — | — |
-| POST | `/api/v1/admin/ofapi/export-quotes` | `adminOfapiExportQuotesCreate` | `owner-session` | — | — |
-| GET | `/api/v1/admin/ofapi/export-quotes/:jobId` | `adminOfapiExportQuoteStatus` | `owner-session` | — | — |
-| POST | `/api/v1/admin/ofapi/export-quotes/:jobId/approve-pilot` | `adminOfapiExportPilotApprove` | `owner-session` | — | — |
-| POST | `/api/v1/admin/ofapi/export-quotes/:jobId/cancel` | `adminOfapiExportQuoteCancel` | `owner-session` | — | — |
-| POST | `/api/v1/admin/ofapi/export-quotes/:jobId/capture-artifact` | `adminOfapiExportArtifactCapture` | `owner-session` | — | — |
-| POST | `/api/v1/admin/ofapi/export-quotes/:jobId/reconcile-create` | `adminOfapiExportCreateReconcile` | `owner-session` | — | — |
-| GET | `/api/v1/admin/ofapi/exports` | `ofapiTypedExportList` | `session` | — | — |
-| POST | `/api/v1/admin/ofapi/exports` | `ofapiTypedExportCreate` | `owner-session` | — | — |
-| POST | `/api/v1/admin/ofapi/exports/:jobId/approve` | `ofapiTypedExportApprove` | `owner-session` | — | — |
-| POST | `/api/v1/admin/ofapi/exports/:jobId/artifact` | `ofapiTypedExportArtifact` | `owner-session` | — | — |
-| POST | `/api/v1/admin/ofapi/exports/:jobId/control` | `ofapiTypedExportControl` | `owner-session` | — | — |
-| POST | `/api/v1/admin/ofapi/exports/:jobId/resume` | `ofapiTypedExportResume` | `owner-session` | — | — |
-| GET | `/api/v1/admin/ofapi/exports/:jobId/rows` | `ofapiTypedExportRows` | `session` | — | — |
-| GET | `/api/v1/admin/ofapi/key-scope` | `ofapiKeyScopeGet` | `owner-session` | — | — |
-| POST | `/api/v1/admin/ofapi/key-scope` | `ofapiKeyScopeApply` | `owner-session` | — | — |
-| GET | `/api/v1/admin/ofapi/marketing` | `ofapiMarketingGet` | `owner-session` | — | — |
-| POST | `/api/v1/admin/ofapi/marketing/intents` | `ofapiMarketingPrepare` | `owner-session` | — | — |
-| POST | `/api/v1/admin/ofapi/marketing/intents/:id/dispatch` | `ofapiMarketingDispatch` | `owner-session` | — | — |
-| POST | `/api/v1/admin/ofapi/marketing/postbacks/refresh` | `ofapiMarketingPostbacksRefresh` | `owner-session` | — | — |
-| POST | `/api/v1/admin/ofapi/marketing/rebuild` | `ofapiMarketingRebuild` | `owner-session` | — | — |
-| GET | `/api/v1/admin/ofapi/media` | `ofapiMediaGet` | `session` | — | — |
-| POST | `/api/v1/admin/ofapi/media/handoff` | `ofapiMediaHandoff` | `owner-session` | — | — |
-| POST | `/api/v1/admin/ofapi/media/sources` | `ofapiMediaSourceCreate` | `owner-session` | — | — |
-| POST | `/api/v1/admin/ofapi/media/uploads` | `ofapiMediaUploadCreate` | `owner-session` | — | — |
-| POST | `/api/v1/admin/ofapi/media/uploads/:jobId/resume` | `ofapiMediaUploadResume` | `owner-session` | — | — |
-| GET | `/api/v1/admin/ofapi/profile-visitors` | `ofapiProfileVisitorsGet` | `session` | — | — |
-| GET | `/api/v1/admin/ofapi/spend/comparison` | `adminOfapiSpendComparison` | `owner-session` | — | — |
-| POST | `/api/v1/admin/ofapi/vendor-usage` | `ofapiVendorUsageRefresh` | `owner-session` | — | — |
-| GET | `/api/v1/admin/ofapi/webhook` | `adminOfapiWebhookStatus` | `owner-session` | — | — |
-| POST | `/api/v1/admin/ofapi/webhook` | `adminOfapiWebhookRegister` | `owner-session` | — | — |
-| POST | `/api/v1/admin/ofapi/webhook/bindings` | `adminOfapiBindingRefresh` | `owner-session` | — | — |
-| GET | `/api/v1/admin/ofapi/webhook/collection-policy` | `adminOfapiWebhookCollectionPolicy` | `owner-session` | — | — |
-| PUT | `/api/v1/admin/ofapi/webhook/collection-policy` | `adminOfapiWebhookCollectionPolicySave` | `owner-session` | — | — |
-| POST | `/api/v1/admin/ofapi/webhook/collection-policy/apply` | `adminOfapiWebhookCollectionPolicyApply` | `owner-session` | — | — |
-| GET | `/api/v1/admin/ofapi/webhook/deliveries` | `adminOfapiWebhookDeliveries` | `owner-session` | — | — |
-| POST | `/api/v1/admin/ofapi/webhook/deliveries/redeliver` | `adminOfapiWebhookRedeliver` | `owner-session` | — | — |
-| POST | `/api/v1/admin/ofapi/webhook/deliveries/sync` | `adminOfapiWebhookDeliverySync` | `owner-session` | — | — |
-| GET | `/api/v1/admin/ofapi/webhook/event-catalog` | `adminOfapiWebhookEventCatalog` | `owner-session` | — | — |
-| POST | `/api/v1/admin/ofapi/webhook/event-catalog/refresh` | `adminOfapiWebhookEventCatalogRefresh` | `owner-session` | — | — |
-| GET | `/api/v1/admin/ofapi/webhook/preflight` | `adminOfapiCredentialPreflight` | `owner-session` | — | — |
-| POST | `/api/v1/admin/ofapi/webhook/reconcile` | `adminOfapiWebhookReconcile` | `owner-session` | — | — |
-| POST | `/api/v1/admin/ofapi/webhook/replay` | `adminOfapiWebhookReplay` | `owner-session` | — | — |
-| GET | `/api/v1/admin/pages` | `adminPages` | `owner-session` | — | — |
-| POST | `/api/v1/admin/pages` | `adminCreatePage` | `owner-session` | — | — |
-| DELETE | `/api/v1/admin/pages/:pageLabel` | `adminDeletePage` | `owner-session` | — | — |
-| PATCH | `/api/v1/admin/pages/:pageLabel` | `adminUpdatePage` | `owner-session` | — | — |
-| PATCH | `/api/v1/admin/pages/:pageLabel/credentials` | `adminUpdateCredentials` | `owner-session` | — | — |
-| POST | `/api/v1/admin/pages/:pageLabel/verify` | `adminVerifyPage` | `owner-session` | — | — |
-| POST | `/api/v1/admin/proxy/test` | `adminTestProxy` | `owner-session` | — | — |
-| GET | `/api/v1/admin/queue/jobs` | `adminQueueJobs` | `owner-session` | — | — |
-| POST | `/api/v1/admin/sync/blocks/pause` | `adminSyncBlockPause` | `owner-session` | — | — |
-| POST | `/api/v1/admin/sync/blocks/reset` | `adminSyncBlockReset` | `owner-session` | — | — |
-| POST | `/api/v1/admin/sync/blocks/resume` | `adminSyncBlockResume` | `owner-session` | — | — |
-| POST | `/api/v1/admin/sync/blocks/trigger` | `adminSyncBlockTrigger` | `owner-session` | — | — |
-| POST | `/api/v1/admin/sync/followers-reconcile/blast-radius/apply` | `adminFollowersReconcileOverrideApply` | `owner-session` | — | — |
-| POST | `/api/v1/admin/sync/followers-reconcile/blast-radius/preview` | `adminFollowersReconcileOverridePreview` | `owner-session` | — | — |
-| POST | `/api/v1/admin/sync/followers-reconcile/reset` | `adminFollowersReconcileReset` | `owner-session` | — | — |
-| GET | `/api/v1/admin/sync/runs` | `adminSyncRuns` | `owner-session` | — | — |
-| GET | `/api/v1/admin/sync/runs/:runId` | `adminSyncRunDetail` | `owner-session` | — | — |
-| POST | `/api/v1/admin/sync/trigger` | `adminSyncTrigger` | `owner-session` | — | — |
-| POST | `/api/v1/admin/sync/trigger-all` | `adminSyncTriggerAll` | `owner-session` | — | — |
-| GET | `/api/v1/admin/usage/chatters` | `adminChatterUsage` | `owner-session` | — | — |
-| GET | `/api/v1/admin/users` | `adminListUsers` | `owner-session` | — | — |
-| DELETE | `/api/v1/admin/users/by-id/:userId` | `adminDeleteUser` | `owner-session` | — | — |
-| POST | `/api/v1/admin/users/by-id/:userId/deactivate` | `adminDeactivateUser` | `owner-session` | — | — |
-| DELETE | `/api/v1/admin/users/by-id/:userId/device-tokens` | `adminRevokeDeviceTokens` | `owner-session` | — | — |
-| GET | `/api/v1/admin/users/by-id/:userId/device-tokens` | `adminListDeviceTokens` | `owner-session` | — | — |
-| DELETE | `/api/v1/admin/users/by-id/:userId/device-tokens/:tokenId` | `adminRevokeDeviceToken` | `owner-session` | — | — |
-| PATCH | `/api/v1/admin/users/by-id/:userId/device-tokens/:tokenId/harvest-capability` | `adminSetDeviceTokenHarvestCapability` | `owner-session` | — | — |
-| GET | `/api/v1/admin/users/by-id/:userId/grants` | `adminListUserGrants` | `owner-session` | — | — |
-| GET | `/api/v1/admin/users/by-id/:userId/links` | `adminListAccountLinks` | `owner-session` | — | — |
-| POST | `/api/v1/admin/users/by-id/:userId/links` | `adminCreateAccountLink` | `owner-session` | — | — |
-| POST | `/api/v1/admin/users/by-id/:userId/links/:linkId/revoke` | `adminRevokeAccountLink` | `owner-session` | — | — |
-| POST | `/api/v1/admin/users/by-id/:userId/models` | `adminGrantModel` | `owner-session` | — | — |
-| DELETE | `/api/v1/admin/users/by-id/:userId/models/:modelSlug` | `adminRevokeModel` | `owner-session` | — | — |
-| POST | `/api/v1/admin/users/by-id/:userId/pages` | `adminAssignPage` | `owner-session` | — | — |
-| DELETE | `/api/v1/admin/users/by-id/:userId/pages/:pageLabel` | `adminUnassignPage` | `owner-session` | — | — |
-| POST | `/api/v1/admin/users/by-id/:userId/reactivate` | `adminReactivateUser` | `owner-session` | — | — |
-| POST | `/api/v1/admin/users/by-id/:userId/terminate-access` | `adminTerminateAllAccess` | `owner-session` | — | — |
-| GET | `/api/v1/agent/capabilities` | `agentCapabilities` | `agentKey` | — | — |
-| GET | `/api/v1/agent/coverage` | `agentCoverage` | `agentKey` | — | — |
-| GET | `/api/v1/agent/history-requests` | `agentHistoryRequestList` | `agentKey` | — | — |
-| GET | `/api/v1/agent/history-requests/:requestRef` | `agentHistoryRequestGet` | `agentKey` | — | — |
-| POST | `/api/v1/agent/history-requests/:requestRef/cancel` | `agentHistoryRequestCancel` | `agentKey` | — | — |
-| GET | `/api/v1/agent/hydration-requests` | `agentHydrationRequestList` | `owner-session` | — | — |
-| GET | `/api/v1/agent/hydration-requests/:requestRef` | `agentHydrationRequestGet` | `agentKey` | — | — |
-| POST | `/api/v1/agent/hydration-requests/:requestRef/decision` | `agentHydrationRequestDecide` | `owner-session` | — | — |
-| GET | `/api/v1/agent/keys` | `agentKeyList` | `owner-session` | — | — |
-| POST | `/api/v1/agent/keys` | `agentKeyCreate` | `owner-session` | — | — |
-| POST | `/api/v1/agent/keys/:id/revoke` | `agentKeyRevoke` | `owner-session` | — | — |
-| GET | `/api/v1/agent/observations` | `agentObservations` | `agentKey` | — | — |
-| GET | `/api/v1/agent/observations/:observationRef/payload` | `agentObservationPayload` | `owner-session` | — | — |
-| POST | `/api/v1/agent/pages/:pageLabel/datasets/:dataset/query` | `agentDatasetQuery` | `agentKey` | — | page |
-| POST | `/api/v1/agent/pages/:pageLabel/history-requests` | `agentHistoryRequestCreate` | `agentKey` | — | page |
-| GET | `/api/v1/agent/pages/:pageLabel/sync/work` | `agentSyncWhy` | `agentKey` | — | page |
-| POST | `/api/v1/agent/pages/:pageLabel/threads/:conversationRef/hydration-requests` | `agentHydrationRequestCreate` | `agentKey` | — | page |
-| GET | `/api/v1/agent/pages/:pageLabel/threads/:conversationRef/messages` | `agentThreadMessages` | `agentKey` | — | page |
-| GET | `/api/v1/agent/people/:platform/:platformUserId` | `agentPerson` | `agentKey` | — | — |
-| GET | `/api/v1/agent/people/:platform/:platformUserId/timeline` | `agentPersonTimeline` | `agentKey` | — | — |
-| POST | `/api/v1/agent/resolve` | `agentResolve` | `agentKey` | — | — |
-| POST | `/api/v1/agent/search/messages` | `agentSearchMessages` | `agentKey` | — | — |
-| GET | `/api/v1/agent/sync/pages` | `agentSyncStatus` | `agentKey` | — | — |
-| GET | `/api/v1/agent/threads` | `agentThreads` | `agentKey` | — | — |
-| POST | `/api/v1/ai-usage/batch` | `aiUsageBatch` | `apiKey` | — | — |
-| POST | `/api/v1/ai/features/:feature` | `aiFeatureStream` | `apiKey` | — | — |
-| POST | `/api/v1/ai/gateway/stream` | `aiGatewayStream` | `apiKey` | — | — |
-| GET | `/api/v1/ai/persona-catalog` | `aiPersonaCatalog` | `apiKey` | — | — |
-| GET | `/api/v1/ai/personas` | `aiPersonasList` | `apiKey` | — | — |
-| DELETE | `/api/v1/ai/personas/:key` | `aiPersonaArchive` | `apiKey` | — | — |
-| PUT | `/api/v1/ai/personas/:key` | `aiPersonaUpsert` | `apiKey` | — | — |
-| GET | `/api/v1/ai/recap-status` | `aiRecapStatus` | `apiKey` | — | — |
-| GET | `/api/v1/ai/restricted/generations` | `aiRestrictedGenerations` | `owner-session` | — | — |
-| GET | `/api/v1/ai/restricted/generations/:generationRef` | `aiRestrictedGenerationDetail` | `owner-session` | — | — |
-| GET | `/api/v1/archive/conversations/:ref/messages` | `archiveConversationMessages` | `session` | — | — |
-| GET | `/api/v1/archive/search` | `archiveSearch` | `session` | — | — |
-| POST | `/api/v1/auth/change-password` | `authChangePassword` | `any-session` | — | — |
-| POST | `/api/v1/auth/device-tokens/activate` | `authActivateDeviceToken` | `pending-device-token` | — | — |
-| DELETE | `/api/v1/auth/device-tokens/current` | `authRevokeCurrentDeviceToken` | `device-token` | — | — |
-| POST | `/api/v1/auth/device-tokens/password` | `authIssueDeviceTokenWithPassword` | `public` | — | — |
-| GET | `/api/v1/auth/devices` | `authListDevices` | `any-session` | — | — |
-| DELETE | `/api/v1/auth/devices/:deviceId` | `authRevokeDevice` | `any-session` | — | — |
-| POST | `/api/v1/auth/devices/revoke-all` | `authRevokeAllDevices` | `any-session` | — | — |
-| POST | `/api/v1/auth/links/inspect` | `authInspectAccountLink` | `public` | — | — |
-| POST | `/api/v1/auth/links/redeem` | `authRedeemAccountLink` | `public` | — | — |
-| POST | `/api/v1/auth/login` | `login` | `public` | — | — |
-| POST | `/api/v1/auth/logout` | `logout` | `public` | — | — |
-| GET | `/api/v1/auth/me` | `me` | `any` | — | — |
-| GET | `/api/v1/auth/usage` | `authMyUsage` | `any-session` | — | — |
-| GET | `/api/v1/client/bootstrap` | `clientBootstrap` | `apiKey` | — | — |
-| GET | `/api/v1/events/snapshot` | `eventsSnapshot` | `apiKey` | — | — |
-| GET | `/api/v1/events/stream` | `eventsStream` | `apiKey` | — | — |
-| GET | `/api/v1/events/v2/facts` | `eventsV2Facts` | `any` | — | — |
-| GET | `/api/v1/events/v2/snapshot` | `eventsV2Snapshot` | `any` | — | — |
-| GET | `/api/v1/events/v2/stream` | `eventsV2Stream` | `any` | — | — |
-| GET | `/api/v1/fans/:platform/:platformUserId` | `crossPageFanDetail` | `session` | — | — |
-| PATCH | `/api/v1/fans/:platform/:platformUserId/flags` | `setFanFlags` | `owner-session` | — | — |
-| GET | `/api/v1/fans/:platform/:platformUserId/transactions` | `crossPageFanTransactions` | `session` | — | — |
-| GET | `/api/v1/health` | `health` | `public` | — | — |
-| GET | `/api/v1/health/sync` | `healthSync` | `monitoring` | — | — |
-| POST | `/api/v1/ingest/observations` | `ingestObservations` | `apiKey` | — | — |
-| GET | `/api/v1/models` | `models` | `session` | — | — |
-| GET | `/api/v1/models/:modelSlug/revenue` | `modelRevenue` | `session` | — | — |
-| GET | `/api/v1/models/:modelSlug/revenue/daily` | `modelRevenueDaily` | `session` | — | — |
-| GET | `/api/v1/ofapi/banned-words` | `ofapiBannedWordsGet` | `apiKey` | — | — |
-| POST | `/api/v1/ofapi/banned-words/preview` | `ofapiBannedWordsPreview` | `apiKey` | — | — |
-| POST | `/api/v1/ofapi/commands` | `createOfapiCommand` | `apiKey` | — | — |
-| GET | `/api/v1/ofapi/commands/:commandId` | `getOfapiCommand` | `apiKey` | — | — |
-| POST | `/api/v1/ofapi/commands/:commandId/cancel` | `cancelOfapiCommand` | `apiKey` | — | — |
-| GET | `/api/v1/ofapi/credits/summary` | `ofapiCreditsChatterSummary` | `apiKey` | — | — |
-| POST | `/api/v1/ofapi/media/reports` | `ofapiMediaReports` | `apiKey` | — | — |
-| POST | `/api/v1/ofapi/media/resolve` | `ofapiMediaResolve` | `apiKey` | — | — |
-| GET | `/api/v1/ofapi/read/*` | `ofapiReadGateway` | `apiKey` | — | — |
-| POST | `/api/v1/ofapi/webhook` | `ofapiWebhookReceive` | `hmac` | — | — |
-| GET | `/api/v1/openapi.json` | `openApiJson` | `owner-session` | — | — |
-| GET | `/api/v1/ops/metrics` | `opsMetrics` | `monitoring` | — | — |
-| GET | `/api/v1/overview` | `overview` | `session` | — | — |
-| GET | `/api/v1/overview/growth` | `overviewGrowth` | `session` | — | — |
-| GET | `/api/v1/overview/revenue` | `overviewRevenue` | `session` | — | — |
-| GET | `/api/v1/overview/revenue/by-model` | `overviewRevenueByModel` | `session` | — | — |
-| GET | `/api/v1/overview/revenue/daily` | `overviewRevenueDaily` | `session` | — | — |
-| GET | `/api/v1/pages` | `pages` | `any` | — | — |
-| GET | `/api/v1/pages/:pageLabel/content/comments` | `contentComments` | `owner-session` | — | page |
-| GET | `/api/v1/pages/:pageLabel/content/media` | `contentMedia` | `owner-session` | — | page |
-| GET | `/api/v1/pages/:pageLabel/conversations/:conversationId/messages` | `pageConversationMessages` | `session` | — | page |
-| GET | `/api/v1/pages/:pageLabel/conversations/:conversationId/profile` | `pageConversationProfile` | `any` | — | page |
-| GET | `/api/v1/pages/:pageLabel/conversations/:platformConversationId/preview` | `pageConversationPreview` | `session` | — | page |
-| GET | `/api/v1/pages/:pageLabel/deleted-fans` | `pageDeletedFans` | `any` | — | page |
-| GET | `/api/v1/pages/:pageLabel/fans` | `pageFans` | `any` | — | page |
-| GET | `/api/v1/pages/:pageLabel/fans/:platformUserId` | `pageFanDetail` | `any` | — | page |
-| POST | `/api/v1/pages/:pageLabel/fans/:platformUserId/notes` | `createFanNote` | `any` | — | page |
-| GET | `/api/v1/pages/:pageLabel/fans/:platformUserId/profile` | `pageFanProfile` | `any` | — | page |
-| PUT | `/api/v1/pages/:pageLabel/fans/:platformUserId/profile` | `upsertFanProfile` | `any` | — | page |
-| GET | `/api/v1/pages/:pageLabel/fans/:platformUserId/profile/versions` | `pageFanProfileVersions` | `any` | — | page |
-| GET | `/api/v1/pages/:pageLabel/fans/:platformUserId/profile/versions/:version` | `pageFanProfileVersion` | `any` | — | page |
-| GET | `/api/v1/pages/:pageLabel/fans/:platformUserId/transactions` | `pageFanTransactions` | `session` | — | page |
-| POST | `/api/v1/pages/:pageLabel/follower-outreach/attempt` | `followerOutreachAttempt` | `any` | — | page |
-| GET | `/api/v1/pages/:pageLabel/followers` | `pageFollowers` | `any` | — | page |
-| GET | `/api/v1/pages/:pageLabel/followers/daily` | `pageFollowersDaily` | `any` | — | page |
-| GET | `/api/v1/pages/:pageLabel/money/payouts` | `moneyPayouts` | `owner-session` | — | page |
-| GET | `/api/v1/pages/:pageLabel/money/revenue-mix` | `moneyRevenueMix` | `owner-session` | — | page |
-| GET | `/api/v1/pages/:pageLabel/revenue` | `pageRevenue` | `session` | — | page |
-| GET | `/api/v1/pages/:pageLabel/revenue/daily` | `pageRevenueDaily` | `session` | — | page |
-| GET | `/api/v1/pages/:pageLabel/spender-autolists` | `pageSpenderAutoLists` | `any` | — | page |
-| GET | `/api/v1/pages/:pageLabel/spender-autolists/:bucketKey` | `pageSpenderAutoListDetail` | `any` | — | page |
-| GET | `/api/v1/pages/:pageLabel/stats/coverage` | `statsCoverage` | `owner-session` | — | page |
-| GET | `/api/v1/pages/:pageLabel/stats/media` | `statsMedia` | `owner-session` | — | page |
-| GET | `/api/v1/pages/:pageLabel/stats/tags` | `statsTags` | `owner-session` | — | page |
-| GET | `/api/v1/pages/:pageLabel/stats/traffic` | `statsTraffic` | `owner-session` | — | page |
-| GET | `/api/v1/pages/:pageLabel/subscribers` | `pageSubscribers` | `any` | — | page |
-| GET | `/api/v1/pages/:pageLabel/subscribers/daily` | `pageSubscribersDaily` | `any` | — | page |
-| GET | `/api/v1/pages/:pageLabel/sync/blocks` | `pageSyncBlocks` | `any` | — | page |
-| GET | `/api/v1/pages/:pageLabel/sync/blocks/messages` | `pageMessagesBlock` | `any` | — | page |
-| GET | `/api/v1/pages/:pageLabel/top-spenders` | `pageTopSpenders` | `any` | — | page |
-| GET | `/api/v1/pages/:pageLabel/transactions` | `pageTransactions` | `session` | — | page |
-| POST | `/api/v1/pages/:pageLabel/voice-notes` | `voiceNoteCreate` | `apiKey` | — | page |
-| GET | `/api/v1/pages/:pageLabel/voice-notes/:id` | `voiceNoteStatus` | `apiKey` | — | page |
-| GET | `/api/v1/pages/:pageLabel/voice-notes/:id/audio` | `voiceNoteAudio` | `apiKey` | — | page |
-| GET | `/api/v1/sync/history-requests` | `syncHistoryRequests` | `owner-session` | — | — |
-| GET | `/api/v1/sync/history-requests/:requestRef` | `syncHistoryRequestGet` | `owner-session` | — | — |
-| POST | `/api/v1/sync/history-requests/:requestRef/cancel` | `syncHistoryRequestCancel` | `owner-session` | — | — |
-| GET | `/api/v1/sync/overview` | `syncOverview` | `session` | — | — |
-| GET | `/api/v1/sync/pages` | `syncPages` | `owner-session` | — | — |
-| POST | `/api/v1/sync/pages/:pageLabel/history-requests` | `syncHistoryRequestCreate` | `owner-session` | — | — |
-| POST | `/api/v1/sync/pages/:pageLabel/refresh` | `syncPageRefresh` | `owner-session` | — | — |
-| GET | `/api/v1/sync/pages/:pageLabel/work` | `syncPageWork` | `owner-session` | — | — |
-| GET | `/api/v1/sync/pages/:pageLabel/work/:workId` | `syncPageWorkGet` | `owner-session` | — | — |
-| GET | `/api/v1/sync/requests` | `syncRequests` | `session` | — | — |
-| GET | `/api/v1/sync/status` | `syncStatus` | `session` | — | — |
-| GET | `/api/v1/transactions` | `crossPageTransactions` | `session` | — | — |
-| GET | `/api/v2/fans/search` | `fansSearch` | `any` | — | — |
-| GET | `/api/v2/spenders` | `spenders` | `any` | — | — |
-| POST | `/api/v2/spenders:batch` | `spenderBatch` | `any` | — | — |
-| GET | `/api/v2/spenders/:platform/:platformUserId` | `spenderDetail` | `any` | — | — |
-| GET | `/api/v2/spenders/:platform/:platformUserId/series` | `spenderSeries` | `session` | — | — |
+| Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
+| --- | --- | --- | --- | --- | --- | --- |
+| GET | `/api/v1/admin/ai/personas` | `adminAiPersonasList` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/ai/personas` | `adminAiPersonaCreate` | `owner-session` | — | — | no |
+| DELETE | `/api/v1/admin/ai/personas/:key` | `adminAiPersonaArchive` | `owner-session` | — | — | no |
+| PUT | `/api/v1/admin/ai/personas/:key` | `adminAiPersonaUpdate` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/config` | `adminConfig` | `owner-session` | — | — | no |
+| PATCH | `/api/v1/admin/config` | `adminConfigUpdate` | `owner-session` | — | — | no |
+| DELETE | `/api/v1/admin/config/:key` | `adminConfigClear` | `owner-session` | — | — | no |
+| PATCH | `/api/v1/admin/config/staged` | `adminConfigStaged` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/connections` | `adminConnections` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/credentials/verify` | `adminVerifyCredentials` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/db/stats` | `adminDbStats` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/device-token-adoption` | `adminDeviceTokenAdoption` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/incidents` | `adminIncidents` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/invites` | `adminCreateInvite` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/logs` | `adminLogs` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/models` | `adminModels` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/models` | `adminCreateModel` | `owner-session` | — | — | no |
+| DELETE | `/api/v1/admin/models/:modelSlug` | `adminDeleteModel` | `owner-session` | — | — | no |
+| PATCH | `/api/v1/admin/models/:modelSlug` | `adminUpdateModel` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/notifications/discover-chats` | `notificationsDiscoverChats` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/notifications/incidents` | `notificationsIncidents` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/notifications/incidents/:incidentId/resolve` | `notificationsResolveIncident` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/notifications/reports/history` | `notificationsReportHistory` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/notifications/reports/preview` | `notificationsReportPreview` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/notifications/reports/send` | `notificationsReportSend` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/notifications/settings` | `notificationsSettings` | `owner-session` | — | — | no |
+| PATCH | `/api/v1/admin/notifications/settings` | `notificationsSettingsUpdate` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/notifications/test` | `notificationsTestMessage` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/ofapi/actions` | `ofapiActionList` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/ofapi/actions` | `ofapiActionPrepare` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/ofapi/actions/:id` | `ofapiActionGet` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/ofapi/actions/:id/cancel` | `ofapiActionCancel` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/ofapi/actions/:id/dispatch` | `ofapiActionDispatch` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/ofapi/actions/:id/repair` | `ofapiActionRepair` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/ofapi/banned-words` | `ofapiBannedWordsAdminGet` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/ofapi/banned-words/refresh` | `ofapiBannedWordsRefresh` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/ofapi/capture-jobs/seed` | `adminOfapiCaptureJobsSeed` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/ofapi/capture/attempts/:attemptId/resolve` | `adminOfapiCaptureAttemptResolve` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/ofapi/capture/controls` | `adminOfapiCaptureControl` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/ofapi/capture/coverage/:pageId/:chatId/revoke` | `adminOfapiCoverageRevoke` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/ofapi/capture/jobs/:jobId/cancel` | `adminOfapiCaptureJobCancel` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/ofapi/capture/jobs/:jobId/replay` | `adminOfapiCaptureJobReplay` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/ofapi/capture/operator` | `adminOfapiCaptureOperatorStatus` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/ofapi/collection` | `ofapiCollectionGet` | `session` | — | — | no |
+| POST | `/api/v1/admin/ofapi/collection/apply` | `ofapiCollectionApply` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/ofapi/collection/jobs` | `ofapiCollectionJobCreate` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/ofapi/collection/jobs/:id/finish-incomplete` | `ofapiCollectionJobFinishIncomplete` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/ofapi/collection/jobs/:id/resume` | `ofapiCollectionJobResume` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/ofapi/collection/preview` | `ofapiCollectionPreview` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/ofapi/collection/results` | `ofapiReadCollectionsGet` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/ofapi/content/events` | `ofapiContentEventsGet` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/ofapi/credits/daily` | `adminOfapiCreditsDaily` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/ofapi/credits/ledger` | `adminOfapiCreditsLedger` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/ofapi/credits/ledger.csv` | `adminOfapiCreditsLedgerCsv` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/ofapi/credits/summary` | `adminOfapiCreditsSummary` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/ofapi/dm-archive/status` | `adminOfapiDmColdArchiveStatus` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/ofapi/export-inventory` | `ofapiExportInventoryGet` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/ofapi/export-inventory/refresh` | `ofapiExportInventoryRefresh` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/ofapi/export-quotes` | `adminOfapiExportQuotesCreate` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/ofapi/export-quotes/:jobId` | `adminOfapiExportQuoteStatus` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/ofapi/export-quotes/:jobId/approve-pilot` | `adminOfapiExportPilotApprove` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/ofapi/export-quotes/:jobId/cancel` | `adminOfapiExportQuoteCancel` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/ofapi/export-quotes/:jobId/capture-artifact` | `adminOfapiExportArtifactCapture` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/ofapi/export-quotes/:jobId/reconcile-create` | `adminOfapiExportCreateReconcile` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/ofapi/exports` | `ofapiTypedExportList` | `session` | — | — | no |
+| POST | `/api/v1/admin/ofapi/exports` | `ofapiTypedExportCreate` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/ofapi/exports/:jobId/approve` | `ofapiTypedExportApprove` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/ofapi/exports/:jobId/artifact` | `ofapiTypedExportArtifact` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/ofapi/exports/:jobId/control` | `ofapiTypedExportControl` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/ofapi/exports/:jobId/resume` | `ofapiTypedExportResume` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/ofapi/exports/:jobId/rows` | `ofapiTypedExportRows` | `session` | — | — | no |
+| GET | `/api/v1/admin/ofapi/key-scope` | `ofapiKeyScopeGet` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/ofapi/key-scope` | `ofapiKeyScopeApply` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/ofapi/marketing` | `ofapiMarketingGet` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/ofapi/marketing/intents` | `ofapiMarketingPrepare` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/ofapi/marketing/intents/:id/dispatch` | `ofapiMarketingDispatch` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/ofapi/marketing/postbacks/refresh` | `ofapiMarketingPostbacksRefresh` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/ofapi/marketing/rebuild` | `ofapiMarketingRebuild` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/ofapi/media` | `ofapiMediaGet` | `session` | — | — | no |
+| POST | `/api/v1/admin/ofapi/media/handoff` | `ofapiMediaHandoff` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/ofapi/media/sources` | `ofapiMediaSourceCreate` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/ofapi/media/uploads` | `ofapiMediaUploadCreate` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/ofapi/media/uploads/:jobId/resume` | `ofapiMediaUploadResume` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/ofapi/profile-visitors` | `ofapiProfileVisitorsGet` | `session` | — | — | no |
+| GET | `/api/v1/admin/ofapi/spend/comparison` | `adminOfapiSpendComparison` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/ofapi/vendor-usage` | `ofapiVendorUsageRefresh` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/ofapi/webhook` | `adminOfapiWebhookStatus` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/ofapi/webhook` | `adminOfapiWebhookRegister` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/ofapi/webhook/bindings` | `adminOfapiBindingRefresh` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/ofapi/webhook/collection-policy` | `adminOfapiWebhookCollectionPolicy` | `owner-session` | — | — | no |
+| PUT | `/api/v1/admin/ofapi/webhook/collection-policy` | `adminOfapiWebhookCollectionPolicySave` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/ofapi/webhook/collection-policy/apply` | `adminOfapiWebhookCollectionPolicyApply` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/ofapi/webhook/deliveries` | `adminOfapiWebhookDeliveries` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/ofapi/webhook/deliveries/redeliver` | `adminOfapiWebhookRedeliver` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/ofapi/webhook/deliveries/sync` | `adminOfapiWebhookDeliverySync` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/ofapi/webhook/event-catalog` | `adminOfapiWebhookEventCatalog` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/ofapi/webhook/event-catalog/refresh` | `adminOfapiWebhookEventCatalogRefresh` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/ofapi/webhook/preflight` | `adminOfapiCredentialPreflight` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/ofapi/webhook/reconcile` | `adminOfapiWebhookReconcile` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/ofapi/webhook/replay` | `adminOfapiWebhookReplay` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/pages` | `adminPages` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/pages` | `adminCreatePage` | `owner-session` | — | — | no |
+| DELETE | `/api/v1/admin/pages/:pageLabel` | `adminDeletePage` | `owner-session` | — | — | no |
+| PATCH | `/api/v1/admin/pages/:pageLabel` | `adminUpdatePage` | `owner-session` | — | — | no |
+| PATCH | `/api/v1/admin/pages/:pageLabel/credentials` | `adminUpdateCredentials` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/pages/:pageLabel/verify` | `adminVerifyPage` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/proxy/test` | `adminTestProxy` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/queue/jobs` | `adminQueueJobs` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/sync/blocks/pause` | `adminSyncBlockPause` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/sync/blocks/reset` | `adminSyncBlockReset` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/sync/blocks/resume` | `adminSyncBlockResume` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/sync/blocks/trigger` | `adminSyncBlockTrigger` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/sync/followers-reconcile/blast-radius/apply` | `adminFollowersReconcileOverrideApply` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/sync/followers-reconcile/blast-radius/preview` | `adminFollowersReconcileOverridePreview` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/sync/followers-reconcile/reset` | `adminFollowersReconcileReset` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/sync/runs` | `adminSyncRuns` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/sync/runs/:runId` | `adminSyncRunDetail` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/sync/trigger` | `adminSyncTrigger` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/sync/trigger-all` | `adminSyncTriggerAll` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/usage/chatters` | `adminChatterUsage` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/users` | `adminListUsers` | `owner-session` | — | — | no |
+| DELETE | `/api/v1/admin/users/by-id/:userId` | `adminDeleteUser` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/users/by-id/:userId/deactivate` | `adminDeactivateUser` | `owner-session` | — | — | no |
+| DELETE | `/api/v1/admin/users/by-id/:userId/device-tokens` | `adminRevokeDeviceTokens` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/users/by-id/:userId/device-tokens` | `adminListDeviceTokens` | `owner-session` | — | — | no |
+| DELETE | `/api/v1/admin/users/by-id/:userId/device-tokens/:tokenId` | `adminRevokeDeviceToken` | `owner-session` | — | — | no |
+| PATCH | `/api/v1/admin/users/by-id/:userId/device-tokens/:tokenId/harvest-capability` | `adminSetDeviceTokenHarvestCapability` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/users/by-id/:userId/grants` | `adminListUserGrants` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/users/by-id/:userId/links` | `adminListAccountLinks` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/users/by-id/:userId/links` | `adminCreateAccountLink` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/users/by-id/:userId/links/:linkId/revoke` | `adminRevokeAccountLink` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/users/by-id/:userId/models` | `adminGrantModel` | `owner-session` | — | — | no |
+| DELETE | `/api/v1/admin/users/by-id/:userId/models/:modelSlug` | `adminRevokeModel` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/users/by-id/:userId/pages` | `adminAssignPage` | `owner-session` | — | — | no |
+| DELETE | `/api/v1/admin/users/by-id/:userId/pages/:pageLabel` | `adminUnassignPage` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/users/by-id/:userId/reactivate` | `adminReactivateUser` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/users/by-id/:userId/terminate-access` | `adminTerminateAllAccess` | `owner-session` | — | — | no |
+| GET | `/api/v1/agent/capabilities` | `agentCapabilities` | `agentKey` | — | — | no |
+| GET | `/api/v1/agent/coverage` | `agentCoverage` | `agentKey` | — | — | no |
+| GET | `/api/v1/agent/history-requests` | `agentHistoryRequestList` | `agentKey` | — | — | no |
+| GET | `/api/v1/agent/history-requests/:requestRef` | `agentHistoryRequestGet` | `agentKey` | — | — | no |
+| POST | `/api/v1/agent/history-requests/:requestRef/cancel` | `agentHistoryRequestCancel` | `agentKey` | — | — | no |
+| GET | `/api/v1/agent/hydration-requests` | `agentHydrationRequestList` | `owner-session` | — | — | no |
+| GET | `/api/v1/agent/hydration-requests/:requestRef` | `agentHydrationRequestGet` | `agentKey` | — | — | no |
+| POST | `/api/v1/agent/hydration-requests/:requestRef/decision` | `agentHydrationRequestDecide` | `owner-session` | — | — | no |
+| GET | `/api/v1/agent/keys` | `agentKeyList` | `owner-session` | — | — | no |
+| POST | `/api/v1/agent/keys` | `agentKeyCreate` | `owner-session` | — | — | no |
+| POST | `/api/v1/agent/keys/:id/revoke` | `agentKeyRevoke` | `owner-session` | — | — | no |
+| GET | `/api/v1/agent/observations` | `agentObservations` | `agentKey` | — | — | no |
+| GET | `/api/v1/agent/observations/:observationRef/payload` | `agentObservationPayload` | `owner-session` | — | — | no |
+| POST | `/api/v1/agent/pages/:pageLabel/datasets/:dataset/query` | `agentDatasetQuery` | `agentKey` | — | page | no |
+| POST | `/api/v1/agent/pages/:pageLabel/history-requests` | `agentHistoryRequestCreate` | `agentKey` | — | page | no |
+| GET | `/api/v1/agent/pages/:pageLabel/sync/work` | `agentSyncWhy` | `agentKey` | — | page | no |
+| POST | `/api/v1/agent/pages/:pageLabel/threads/:conversationRef/hydration-requests` | `agentHydrationRequestCreate` | `agentKey` | — | page | no |
+| GET | `/api/v1/agent/pages/:pageLabel/threads/:conversationRef/messages` | `agentThreadMessages` | `agentKey` | — | page | no |
+| GET | `/api/v1/agent/people/:platform/:platformUserId` | `agentPerson` | `agentKey` | — | — | no |
+| GET | `/api/v1/agent/people/:platform/:platformUserId/timeline` | `agentPersonTimeline` | `agentKey` | — | — | no |
+| POST | `/api/v1/agent/resolve` | `agentResolve` | `agentKey` | — | — | no |
+| POST | `/api/v1/agent/search/messages` | `agentSearchMessages` | `agentKey` | — | — | no |
+| GET | `/api/v1/agent/sync/pages` | `agentSyncStatus` | `agentKey` | — | — | no |
+| GET | `/api/v1/agent/threads` | `agentThreads` | `agentKey` | — | — | no |
+| POST | `/api/v1/ai-usage/batch` | `aiUsageBatch` | `apiKey` | — | — | no |
+| POST | `/api/v1/ai/features/:feature` | `aiFeatureStream` | `apiKey` | — | — | yes |
+| POST | `/api/v1/ai/gateway/stream` | `aiGatewayStream` | `apiKey` | — | — | no |
+| GET | `/api/v1/ai/persona-catalog` | `aiPersonaCatalog` | `apiKey` | — | — | yes |
+| GET | `/api/v1/ai/personas` | `aiPersonasList` | `apiKey` | — | — | no |
+| DELETE | `/api/v1/ai/personas/:key` | `aiPersonaArchive` | `apiKey` | — | — | no |
+| PUT | `/api/v1/ai/personas/:key` | `aiPersonaUpsert` | `apiKey` | — | — | no |
+| GET | `/api/v1/ai/recap-status` | `aiRecapStatus` | `apiKey` | — | — | yes |
+| GET | `/api/v1/ai/restricted/generations` | `aiRestrictedGenerations` | `owner-session` | — | — | no |
+| GET | `/api/v1/ai/restricted/generations/:generationRef` | `aiRestrictedGenerationDetail` | `owner-session` | — | — | no |
+| GET | `/api/v1/archive/conversations/:ref/messages` | `archiveConversationMessages` | `session` | — | — | no |
+| GET | `/api/v1/archive/search` | `archiveSearch` | `session` | — | — | no |
+| POST | `/api/v1/auth/change-password` | `authChangePassword` | `any-session` | — | — | no |
+| POST | `/api/v1/auth/device-tokens/activate` | `authActivateDeviceToken` | `pending-device-token` | — | — | — |
+| DELETE | `/api/v1/auth/device-tokens/current` | `authRevokeCurrentDeviceToken` | `device-token` | — | — | yes |
+| POST | `/api/v1/auth/device-tokens/password` | `authIssueDeviceTokenWithPassword` | `public` | — | — | — |
+| GET | `/api/v1/auth/devices` | `authListDevices` | `any-session` | — | — | no |
+| DELETE | `/api/v1/auth/devices/:deviceId` | `authRevokeDevice` | `any-session` | — | — | no |
+| POST | `/api/v1/auth/devices/revoke-all` | `authRevokeAllDevices` | `any-session` | — | — | no |
+| POST | `/api/v1/auth/links/inspect` | `authInspectAccountLink` | `public` | — | — | — |
+| POST | `/api/v1/auth/links/redeem` | `authRedeemAccountLink` | `public` | — | — | — |
+| POST | `/api/v1/auth/login` | `login` | `public` | — | — | — |
+| POST | `/api/v1/auth/logout` | `logout` | `public` | — | — | — |
+| GET | `/api/v1/auth/me` | `me` | `any` | — | — | yes |
+| GET | `/api/v1/auth/usage` | `authMyUsage` | `any-session` | — | — | no |
+| GET | `/api/v1/client/bootstrap` | `clientBootstrap` | `apiKey` | — | — | yes |
+| GET | `/api/v1/events/snapshot` | `eventsSnapshot` | `apiKey` | — | — | no |
+| GET | `/api/v1/events/stream` | `eventsStream` | `apiKey` | — | — | no |
+| GET | `/api/v1/events/v2/facts` | `eventsV2Facts` | `any` | — | — | no |
+| GET | `/api/v1/events/v2/snapshot` | `eventsV2Snapshot` | `any` | — | — | no |
+| GET | `/api/v1/events/v2/stream` | `eventsV2Stream` | `any` | — | — | no |
+| GET | `/api/v1/fans/:platform/:platformUserId` | `crossPageFanDetail` | `session` | — | — | no |
+| PATCH | `/api/v1/fans/:platform/:platformUserId/flags` | `setFanFlags` | `owner-session` | — | — | no |
+| GET | `/api/v1/fans/:platform/:platformUserId/transactions` | `crossPageFanTransactions` | `session` | — | — | no |
+| GET | `/api/v1/health` | `health` | `public` | — | — | — |
+| GET | `/api/v1/health/sync` | `healthSync` | `monitoring` | — | — | no |
+| POST | `/api/v1/ingest/observations` | `ingestObservations` | `apiKey` | — | — | yes |
+| GET | `/api/v1/models` | `models` | `session` | — | — | no |
+| GET | `/api/v1/models/:modelSlug/revenue` | `modelRevenue` | `session` | — | — | no |
+| GET | `/api/v1/models/:modelSlug/revenue/daily` | `modelRevenueDaily` | `session` | — | — | no |
+| GET | `/api/v1/ofapi/banned-words` | `ofapiBannedWordsGet` | `apiKey` | — | — | no |
+| POST | `/api/v1/ofapi/banned-words/preview` | `ofapiBannedWordsPreview` | `apiKey` | — | — | no |
+| POST | `/api/v1/ofapi/commands` | `createOfapiCommand` | `apiKey` | — | — | no |
+| GET | `/api/v1/ofapi/commands/:commandId` | `getOfapiCommand` | `apiKey` | — | — | no |
+| POST | `/api/v1/ofapi/commands/:commandId/cancel` | `cancelOfapiCommand` | `apiKey` | — | — | no |
+| GET | `/api/v1/ofapi/credits/summary` | `ofapiCreditsChatterSummary` | `apiKey` | — | — | no |
+| POST | `/api/v1/ofapi/media/reports` | `ofapiMediaReports` | `apiKey` | — | — | no |
+| POST | `/api/v1/ofapi/media/resolve` | `ofapiMediaResolve` | `apiKey` | — | — | no |
+| GET | `/api/v1/ofapi/read/*` | `ofapiReadGateway` | `apiKey` | — | — | no |
+| POST | `/api/v1/ofapi/webhook` | `ofapiWebhookReceive` | `hmac` | — | — | — |
+| GET | `/api/v1/openapi.json` | `openApiJson` | `owner-session` | — | — | no |
+| GET | `/api/v1/ops/metrics` | `opsMetrics` | `monitoring` | — | — | no |
+| GET | `/api/v1/overview` | `overview` | `session` | — | — | no |
+| GET | `/api/v1/overview/growth` | `overviewGrowth` | `session` | — | — | no |
+| GET | `/api/v1/overview/revenue` | `overviewRevenue` | `session` | — | — | no |
+| GET | `/api/v1/overview/revenue/by-model` | `overviewRevenueByModel` | `session` | — | — | no |
+| GET | `/api/v1/overview/revenue/daily` | `overviewRevenueDaily` | `session` | — | — | no |
+| GET | `/api/v1/pages` | `pages` | `any` | — | — | no |
+| GET | `/api/v1/pages/:pageLabel/content/comments` | `contentComments` | `owner-session` | — | page | no |
+| GET | `/api/v1/pages/:pageLabel/content/media` | `contentMedia` | `owner-session` | — | page | no |
+| GET | `/api/v1/pages/:pageLabel/conversations/:conversationId/messages` | `pageConversationMessages` | `session` | — | page | no |
+| GET | `/api/v1/pages/:pageLabel/conversations/:conversationId/profile` | `pageConversationProfile` | `any` | — | page | yes |
+| GET | `/api/v1/pages/:pageLabel/conversations/:platformConversationId/preview` | `pageConversationPreview` | `session` | — | page | no |
+| GET | `/api/v1/pages/:pageLabel/deleted-fans` | `pageDeletedFans` | `any` | — | page | no |
+| GET | `/api/v1/pages/:pageLabel/fans` | `pageFans` | `any` | — | page | no |
+| GET | `/api/v1/pages/:pageLabel/fans/:platformUserId` | `pageFanDetail` | `any` | — | page | no |
+| POST | `/api/v1/pages/:pageLabel/fans/:platformUserId/notes` | `createFanNote` | `any` | — | page | no |
+| GET | `/api/v1/pages/:pageLabel/fans/:platformUserId/profile` | `pageFanProfile` | `any` | — | page | yes |
+| PUT | `/api/v1/pages/:pageLabel/fans/:platformUserId/profile` | `upsertFanProfile` | `any` | — | page | no |
+| GET | `/api/v1/pages/:pageLabel/fans/:platformUserId/profile/versions` | `pageFanProfileVersions` | `any` | — | page | no |
+| GET | `/api/v1/pages/:pageLabel/fans/:platformUserId/profile/versions/:version` | `pageFanProfileVersion` | `any` | — | page | no |
+| GET | `/api/v1/pages/:pageLabel/fans/:platformUserId/transactions` | `pageFanTransactions` | `session` | — | page | no |
+| POST | `/api/v1/pages/:pageLabel/follower-outreach/attempt` | `followerOutreachAttempt` | `any` | — | page | no |
+| GET | `/api/v1/pages/:pageLabel/followers` | `pageFollowers` | `any` | — | page | no |
+| GET | `/api/v1/pages/:pageLabel/followers/daily` | `pageFollowersDaily` | `any` | — | page | no |
+| GET | `/api/v1/pages/:pageLabel/money/payouts` | `moneyPayouts` | `owner-session` | — | page | no |
+| GET | `/api/v1/pages/:pageLabel/money/revenue-mix` | `moneyRevenueMix` | `owner-session` | — | page | no |
+| GET | `/api/v1/pages/:pageLabel/revenue` | `pageRevenue` | `session` | — | page | no |
+| GET | `/api/v1/pages/:pageLabel/revenue/daily` | `pageRevenueDaily` | `session` | — | page | no |
+| GET | `/api/v1/pages/:pageLabel/spender-autolists` | `pageSpenderAutoLists` | `any` | — | page | yes |
+| GET | `/api/v1/pages/:pageLabel/spender-autolists/:bucketKey` | `pageSpenderAutoListDetail` | `any` | — | page | no |
+| GET | `/api/v1/pages/:pageLabel/stats/coverage` | `statsCoverage` | `owner-session` | — | page | no |
+| GET | `/api/v1/pages/:pageLabel/stats/media` | `statsMedia` | `owner-session` | — | page | no |
+| GET | `/api/v1/pages/:pageLabel/stats/tags` | `statsTags` | `owner-session` | — | page | no |
+| GET | `/api/v1/pages/:pageLabel/stats/traffic` | `statsTraffic` | `owner-session` | — | page | no |
+| GET | `/api/v1/pages/:pageLabel/subscribers` | `pageSubscribers` | `any` | — | page | no |
+| GET | `/api/v1/pages/:pageLabel/subscribers/daily` | `pageSubscribersDaily` | `any` | — | page | no |
+| GET | `/api/v1/pages/:pageLabel/sync/blocks` | `pageSyncBlocks` | `any` | — | page | no |
+| GET | `/api/v1/pages/:pageLabel/sync/blocks/messages` | `pageMessagesBlock` | `any` | — | page | no |
+| GET | `/api/v1/pages/:pageLabel/top-spenders` | `pageTopSpenders` | `any` | — | page | no |
+| GET | `/api/v1/pages/:pageLabel/transactions` | `pageTransactions` | `session` | — | page | no |
+| POST | `/api/v1/pages/:pageLabel/voice-notes` | `voiceNoteCreate` | `apiKey` | — | page | no |
+| GET | `/api/v1/pages/:pageLabel/voice-notes/:id` | `voiceNoteStatus` | `apiKey` | — | page | no |
+| GET | `/api/v1/pages/:pageLabel/voice-notes/:id/audio` | `voiceNoteAudio` | `apiKey` | — | page | no |
+| GET | `/api/v1/sync/history-requests` | `syncHistoryRequests` | `owner-session` | — | — | no |
+| GET | `/api/v1/sync/history-requests/:requestRef` | `syncHistoryRequestGet` | `owner-session` | — | — | no |
+| POST | `/api/v1/sync/history-requests/:requestRef/cancel` | `syncHistoryRequestCancel` | `owner-session` | — | — | no |
+| GET | `/api/v1/sync/overview` | `syncOverview` | `session` | — | — | no |
+| GET | `/api/v1/sync/pages` | `syncPages` | `owner-session` | — | — | no |
+| POST | `/api/v1/sync/pages/:pageLabel/history-requests` | `syncHistoryRequestCreate` | `owner-session` | — | — | no |
+| POST | `/api/v1/sync/pages/:pageLabel/refresh` | `syncPageRefresh` | `owner-session` | — | — | no |
+| GET | `/api/v1/sync/pages/:pageLabel/work` | `syncPageWork` | `owner-session` | — | — | no |
+| GET | `/api/v1/sync/pages/:pageLabel/work/:workId` | `syncPageWorkGet` | `owner-session` | — | — | no |
+| GET | `/api/v1/sync/requests` | `syncRequests` | `session` | — | — | no |
+| GET | `/api/v1/sync/status` | `syncStatus` | `session` | — | — | no |
+| GET | `/api/v1/transactions` | `crossPageTransactions` | `session` | — | — | no |
+| GET | `/api/v2/fans/search` | `fansSearch` | `any` | — | — | no |
+| GET | `/api/v2/spenders` | `spenders` | `any` | — | — | yes |
+| POST | `/api/v2/spenders:batch` | `spenderBatch` | `any` | — | — | yes |
+| GET | `/api/v2/spenders/:platform/:platformUserId` | `spenderDetail` | `any` | — | — | yes |
+| GET | `/api/v2/spenders/:platform/:platformUserId/series` | `spenderSeries` | `session` | — | — | no |
