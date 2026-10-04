@@ -8,6 +8,7 @@ import {
   FANSLY_PAUSE_MIN_MS,
   getDescriptor,
   loadConfig,
+  RETIRED_FANSLY_ENV_KEYS,
 } from "@agency_hub_core/shared";
 
 // Minimal hermetic env: only the required fields, .env merging disabled so defaults
@@ -30,14 +31,30 @@ describe("config registry", () => {
     expect(descriptorEnvNames.length).toBe(descriptorEnvSet.size);
   });
 
+  it("names no env var retired with the legacy Fansly engine, in the schema or in a descriptor", () => {
+    // Step 4 (S4-26): the keys left both together, so an env var of the list is
+    // only ever reported at boot — it is never parsed and never shown as a key.
+    const retired = new Set<string>(RETIRED_FANSLY_ENV_KEYS);
+    expect(retired.size).toBe(68);
+    expect(ENV_CONFIG_KEYS.filter((key) => retired.has(key))).toEqual([]);
+    expect(CONFIG_DESCRIPTORS.filter((d) => retired.has(d.envName)).map((d) => d.key)).toEqual([]);
+    // The owner's pace setting and the engine's own keys are not among them.
+    for (const kept of ["FANSLY_DEFAULT_DELAY_MS", "FANSLY_BASE_URL", "FANSLY_REPLAY_MODE",
+      "FANSLY_REPLIES_REWALK_CYCLE_DAYS", "FANSLY_LIVE_OVERLAY_READ_PAGES", "AGENT_HYDRATION_MODE",
+      "SYNC_PAGE_EXECUTOR_CONCURRENCY", "HEALTH_SYNC_LIGHT_MAX_AGE_MINUTES", "PAGE_DM_PRUNE_ENABLED"]) {
+      expect(retired.has(kept), kept).toBe(false);
+      expect(ENV_CONFIG_KEYS as string[], kept).toContain(kept);
+    }
+  });
+
   it("has unique descriptor keys", () => {
     const keys = CONFIG_DESCRIPTORS.map((d) => d.key);
     expect(new Set(keys).size).toBe(keys.length);
   });
 
-  it("never marks a secret/derived/complex/alias value as editable", () => {
+  it("never marks a secret/derived/complex value as editable", () => {
     const unsafe = CONFIG_DESCRIPTORS.filter(
-      (d) => d.editability === "editable" && ["secret", "derived", "complex", "alias"].includes(d.kind),
+      (d) => d.editability === "editable" && ["secret", "derived", "complex"].includes(d.kind),
     );
     expect(unsafe.map((d) => d.key)).toEqual([]);
   });
@@ -79,10 +96,6 @@ describe("config registry", () => {
     "accountLinksEnabled",
     // Fansly Sync Engine step 1: the live overlay readers, page by page.
     "fanslyLiveOverlayReadPages",
-    "fanslyWsHintsEnabled",
-    "fanslyWsHintsPageAllowlist",
-    "fanslyWsHintsTypeAllowlist",
-    "fanslyWsHintsPolicies",
     // Fansly Sync Engine plan §2.1: the owner's one pace setting, editable live and
     // rejected (never clamped) outside 2000..60000 ms.
     "fanslyDefaultDelayMs",
@@ -93,13 +106,9 @@ describe("config registry", () => {
     // per sweep so the coordinator enables it after deploy without a restart.
     "ofapiWebhookAutoRedeliveryEnabled",
     "ofapiWebhookAutoRedeliveryDailyCap",
-    // (healthSyncFollowerMaxAgeMinutes was retired at step 4, S4-24, with the
-    // legacy follower-sync check of /health/sync, and is applied nowhere.)
     "healthSyncLightMaxAgeMinutes",
     "ofapiDmReconcileIntervalMinutes",
     // The engine's post-replies walk: the cycle decides WHICH posts it reads.
-    // (The legacy content lanes' flags, allowlists and budgets were retired
-    // at step 4 and are applied nowhere.)
     "fanslyRepliesRewalkCycleDays",
     // Fast-reply freshness PR3: union-read mode, read per generation.
     "aiTranscriptFreshUnionMode",

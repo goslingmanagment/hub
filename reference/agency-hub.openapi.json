@@ -1078,7 +1078,6 @@
                                     "url",
                                     "secret",
                                     "derived",
-                                    "alias",
                                     "complex"
                                   ]
                                 },

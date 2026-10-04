@@ -53,8 +53,8 @@ import type {
 export const FAN_EARNINGS_ROSTER_KEY = "fan-earnings.roster";
 
 const HOUR_MS = 3_600_000;
-/** The roster age (registry parameter; the production owner setting
- *  `fanslyFanEarningsRosterMaxAgeHours` = 156): a spender is read again this
+/** The roster age (registry parameter: 156 h, the owner's production setting
+ *  of the legacy roster when it was retired): a spender is read again this
  *  long after its last read. */
 export const FAN_EARNINGS_ROSTER_MAX_AGE_MS = 156 * HOUR_MS;
 

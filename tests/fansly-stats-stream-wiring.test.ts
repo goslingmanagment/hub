@@ -8,7 +8,7 @@ import {
   SYNC_STREAM_POLICY,
   SYNC_STREAMS,
 } from "@agency_hub_core/db";
-import { CONFIG_DESCRIPTORS } from "@agency_hub_core/shared";
+import { CONFIG_DESCRIPTORS, ENV_CONFIG_KEYS } from "@agency_hub_core/shared";
 
 import { MONITORED_SYNC_STREAMS } from "../apps/runtime/src/services/sync-monitor.ts";
 
@@ -18,7 +18,7 @@ import { MONITORED_SYNC_STREAMS } from "../apps/runtime/src/services/sync-monito
 // rule, a rollout gate and a monitor entry each. Step 4 deleted the lanes
 // (S4-16, S4-18) and then their rows (S4-24): the Fansly Sync Engine's registry
 // reads these resources. What is pinned here is that nothing of the legacy
-// wiring is left for them, and the config keys that outlive them.
+// wiring is left for them, their config keys included (S4-26).
 
 const FORMER_FANSLY_LANES = [
   "followers", "followers_reconcile", "dm_messages", "fan_earnings", "purchase_history",
@@ -66,31 +66,18 @@ describe("the former Fansly lanes have no legacy wiring", () => {
 
 // Step 4 retired the legacy content lanes: the Fansly Sync Engine's registry
 // paces these resources, so their stream flags, page allowlists, daily call
-// budgets and continuation delay are read by nothing. Each stays registered,
-// ignored, until the retired keys are removed together.
-describe("the legacy content lanes' keys are retired", () => {
-  const RETIRED = [
-    "fanslyStatsSnapshotSyncEnabled", "fanslyStatsSnapshotPageAllowlist", "fanslyStatsSnapshotDailyCallBudget",
-    "fanslyNotificationsSyncEnabled", "fanslyNotificationsPageAllowlist", "fanslyNotificationsDailyCallBudget",
-    "fanslyCatalogSyncEnabled", "fanslyCatalogPageAllowlist", "fanslyCatalogDailyCallBudget",
-    "fanslyPostRepliesSyncEnabled", "fanslyPostRepliesPageAllowlist", "fanslyRepliesDailyCallBudget",
-    "fanslyPayoutsSyncEnabled", "fanslyPayoutsPageAllowlist", "fanslyPayoutsDailyCallBudget",
-    "fanslyMediaStatsSyncEnabled", "fanslyMediaStatsPageAllowlist", "fanslyMediaStatsDailyCallBudget",
-    "fanslyMediaStatsLongTailCycleDays",
-    "fanslyPostEngagementRefreshEnabled", "fanslyPostEngagementDailyCallBudget",
-    "fanslyStatsHourlyEnabled", "fanslyStatsHourlyBackfillMaxDays",
-    "fanslyBackfillContinuationDelayMs",
-  ];
-
-  it("keeps each one registered, labelled retired and applied nowhere", () => {
-    const byKey = new Map(CONFIG_DESCRIPTORS.map((descriptor) => [descriptor.key, descriptor]));
-    for (const key of RETIRED) {
-      const descriptor = byKey.get(key);
-      expect(descriptor, key).toBeDefined();
-      expect(descriptor?.runtimeApply, key).toBe("none");
-      expect(descriptor?.label, key).toMatch(/— retired, ignored$/);
-      expect(descriptor?.costWarning, key).toBeUndefined();
-    }
+// budgets, hourly switches, long-tail cycle and continuation delay had no
+// reader, and S4-26 removed the keys (and their stored overrides) together.
+describe("the legacy content lanes left no config key", () => {
+  it("registers no switch, page allowlist, call budget or cadence of a content lane", () => {
+    const laneKey = /^fansly(StatsSnapshot|StatsHourly|Notifications|Catalog|PostReplies|Replies|Payouts|MediaStats|PostEngagement|BackfillContinuation)/;
+    expect(CONFIG_DESCRIPTORS.map((descriptor) => descriptor.key).filter((key) => laneKey.test(key)))
+      .toEqual(["fanslyRepliesRewalkCycleDays"]);
+    const laneEnv = /^FANSLY_(STATS_SNAPSHOT|STATS_HOURLY|NOTIFICATIONS|CATALOG|POST_REPLIES|REPLIES|PAYOUTS|MEDIA_STATS|POST_ENGAGEMENT|BACKFILL_CONTINUATION)_/;
+    expect(ENV_CONFIG_KEYS.filter((key) => laneEnv.test(key))).toEqual(["FANSLY_REPLIES_REWALK_CYCLE_DAYS"]);
+    // No key of any kind is a daily call budget of a Fansly lane: the route
+    // budgets are code constants (the engine's route table).
+    expect(CONFIG_DESCRIPTORS.filter((descriptor) => /^fansly.*DailyCallBudget$/.test(descriptor.key))).toEqual([]);
   });
 
   it("keeps the replies re-walk cycle live: it changes which posts, never the request rate", () => {

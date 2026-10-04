@@ -55,6 +55,12 @@ describe("configuration discovery", () => {
     }
   });
 
+  it("explains no key the registry does not name", () => {
+    // A key leaves the registry with its copy (the legacy Fansly keys, step 4 S4-26).
+    const registered = new Set(CONFIG_DESCRIPTORS.map((descriptor) => descriptor.key));
+    expect(Object.keys(CONFIG_COPY_RU).filter((key) => !registered.has(key))).toEqual([]);
+  });
+
   it("searches case-insensitive words in labels, machine keys and Russian explanations", () => {
     expect(matchesConfigSearch(item(), "FANSLY OVERLAY")).toBe(true);
     expect(matchesConfigSearch(item(), "ещё не подтверждены")).toBe(true);

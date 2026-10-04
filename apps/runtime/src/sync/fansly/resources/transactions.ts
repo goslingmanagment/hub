@@ -80,8 +80,8 @@ export const TRANSACTIONS_SCAN_LIMIT = 100;
 /** [D6] A head walk that reaches this offset hands over to the rescan. */
 export const TRANSACTIONS_HEAD_ESCALATE_OFFSET = 200;
 const DAY_MS = 86_400_000;
-/** The rescan window (registry parameters; today's production values of the
- *  legacy keys `transactionLookbackDays` / `transactionRescanCapDays`). */
+/** The rescan window (registry parameters: the lookback and the rescan cap the
+ *  legacy engine ran with in production when it was retired). */
 export const TRANSACTIONS_LOOKBACK_MS = 7 * DAY_MS;
 export const TRANSACTIONS_RESCAN_CAP_MS = 30 * DAY_MS;
 /** Restarts of an unstable scan (total moved, rows served twice, fetched ≠

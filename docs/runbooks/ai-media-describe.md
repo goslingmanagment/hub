@@ -103,8 +103,8 @@ the legacy WebSocket receiver (step 4, S4-12): every Fansly page's socket runs
 in the Sync Engine, whose head read of a chat with a fan's new attachment (a
 fast window, `sync/fansly/ws/router.ts`) journals the fresh DM page, and the
 projector makes its media due from there.
-`AI_MEDIA_DESCRIBE_FANSLY_FAST_LANE_MODE` / `_PAGES` are retired and ignored
-(removed in S4-26). Its rows stay as records: `ai_media_accelerator_reads`
+Its mode and page switches went with the other config keys of the legacy
+Fansly engine (S4-26). Its rows stay as records: `ai_media_accelerator_reads`
 with `lane = 'fast'` and `ai_media_fast_lane_health`. Its incident
 (`ai_provider_failed` / `media_describe_fast_lane`), if an older build left it
 open, resolves on the describer's next sweep.
@@ -121,10 +121,10 @@ open, resolves on the describer's next sweep.
   `dormant`); teasers and free creator media when a generation shows them.
   A media file the hub has not captured yet waits (`awaiting_source`): on a
   page the Fansly Sync Engine reads, its socket confirmation reads the
-  conversation's head. The in-chunk accelerator and its keys
-  `AI_MEDIA_DESCRIBE_FANSLY_ACCELERATOR_ENABLED` / `_DAILY_LIMIT` are retired
-  since step 4 (S4-14); the keys are ignored (removed in S4-26). Its rows stay
-  as records: `ai_media_accelerator_reads` with `lane = 'chunk'`.
+  conversation's head. The in-chunk accelerator is deleted (step 4, S4-14);
+  its switch and its daily limit went with the other config keys of the legacy
+  Fansly engine (S4-26). Its rows stay as records:
+  `ai_media_accelerator_reads` with `lane = 'chunk'`.
 - **OnlyFans** (0216): locators of the desktop images layer, **free sources
   only** — webhook `Expires` URLs (≥120 s left) and `cdn.fansapi.com` URLs the
   desktop resolve handed out (now persisted as `source = 'resolve'`). `policy`

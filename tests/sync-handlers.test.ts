@@ -51,9 +51,7 @@ describe("sync executor handlers", () => {
     const telemetry = createTelemetry();
     const app = {
       db: {},
-      config: {
-        syncSharedRateLimitEnabled: false,
-      },
+      config: {},
     } as never;
 
     const result = await onlyfansTransactionsChunk(app, {

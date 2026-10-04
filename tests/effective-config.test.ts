@@ -18,7 +18,6 @@ function baseConfig(): AppConfig {
     ofapiWebhookSilenceThresholdMinutes: 720,
     ofapiBurnAlertCreditsPerHour: 300,
     healthSyncLightMaxAgeMinutes: 180,
-    healthSyncFollowerMaxAgeMinutes: 1080,
     ofapiDmReconcileIntervalMinutes: 360,
     fanslyDefaultDelayMs: 2500,
     // A runtimeApply:'none' editable key (must never be overlaid) and a boot/staged key.
@@ -51,18 +50,16 @@ describe("applyEffectiveOverrides", () => {
     expect(config.healthSyncLightMaxAgeMinutes).toBe(180);
   });
 
-  it("ignores an override of a key retired with the legacy Fansly money lanes (step 4, S4-16)", () => {
-    const config = {
-      ...baseConfig(),
-      transactionLookbackDays: 7,
-      fanslyFanEarningsTargetsEnabled: false,
-    } as AppConfig;
+  it("ignores an override whose key the registry does not name, writing no field for it", () => {
+    // A stored row can outlive its key (the legacy Fansly keys went at step 4,
+    // S4-26, with their rows): it is never applied.
+    const config = baseConfig();
     const merged = applyEffectiveOverrides(config, overrides([
-      ["transactionLookbackDays", 14],
-      ["fanslyFanEarningsTargetsEnabled", true],
+      ["aKeyTheRegistryDropped", 14],
+      ["anotherDroppedSwitch", true],
     ]));
-    expect(merged.transactionLookbackDays).toBe(7);
-    expect(merged.fanslyFanEarningsTargetsEnabled).toBe(false);
+    expect(merged).toBe(config);
+    expect(merged).not.toHaveProperty("aKeyTheRegistryDropped");
   });
 
   it("applies multiple live keys at once", () => {
@@ -168,23 +165,16 @@ describe("LIVE_CONFIG_KEYS", () => {
     // the voice-notes lane added the seven ElevenLabs kill switches + budgets;
     // the Agent Read Plane added its five plane switches, the Fansly replay mode
     // and the retention-tiering gate (read per request / per cycle);
-    // decision #202 added the hydration autopilot mode and its daily budget;
     // G5 slice 1 added the CAS dual-write canary bound (published to each
     // process by the heartbeat, which reads the live overlay anyway);
     // G5 slice 2 added the payload read mode, published the same way;
     // G5 slice 3c-1 added the pointer-only bound, published on the same beat;
     // WP-F5 added the replies re-walk cycle, live because it re-aims a running
     // first pass without a deploy (the engine's post-replies walk reads it);
-    // step 4 (S4-18) retired the legacy content lanes' 24 flags, allowlists,
-    // daily call budgets, hourly switches, continuation delay and long-tail
-    // cycle: nothing reads them, so none is live any more.
-    expect(LIVE_CONFIG_KEYS.has("fanslyWsHintsEnabled")).toBe(true);
-    expect(LIVE_CONFIG_KEYS.has("fanslyWsHintsPageAllowlist")).toBe(true);
-    expect(LIVE_CONFIG_KEYS.has("fanslyWsHintsTypeAllowlist")).toBe(true);
-    expect(LIVE_CONFIG_KEYS.has("fanslyWsHintsPolicies")).toBe(true);
-    // Retired at step 4 (S4-17): nothing reads them, so no override applies.
-    expect(LIVE_CONFIG_KEYS.has("fanslyFollowersSettlementReuseEnabled")).toBe(false);
-    expect(LIVE_CONFIG_KEYS.has("fanslyFollowersSettlementReusePageAllowlist")).toBe(false);
+    // step 4 retired the legacy Fansly engine's keys with their last readers
+    // (the AI media accelerator's daily limit stopped being live then) and
+    // S4-26 removed them from the registry — the four ws-hint keys were the
+    // ones still live among them, which is what took the set from 49 to 45.
     // Decision 349 added the public invite/reset link kill switch, read per
     // request so a flip never waits for a deploy.
     expect(LIVE_CONFIG_KEYS.has("accountLinksEnabled")).toBe(true);
@@ -218,49 +208,8 @@ describe("LIVE_CONFIG_KEYS", () => {
     }
     expect(LIVE_CONFIG_KEYS.has("fanslyDefaultDelayMs")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyLiveOverlayReadPages")).toBe(true);
-    // Step 4 (S4-12): retired with the legacy WebSocket receiver and the AI
-    // media fast lane — nothing reads them, so no override applies.
-    for (const key of [
-      "fanslyWsCaptureEnabled",
-      "fanslyWsCapturePageAllowlist",
-      "aiMediaDescribeFanslyFastLaneMode",
-      "aiMediaDescribeFanslyFastLanePages",
-    ]) {
-      expect(LIVE_CONFIG_KEYS.has(key), key).toBe(false);
-    }
-    // Step 4 (S4-14): retired with the legacy DM handlers (the bounded scan, the
-    // sweep shadow, the head catch-up, the deep backfill) and the in-chunk AI
-    // media accelerator — nothing reads them, so no override applies. The
-    // accelerator's daily limit lost its last readers with S4-12 and S4-14.
-    for (const key of [
-      "fanslyDmBoundedEnabled",
-      "fanslyDmBoundedPageAllowlist",
-      "fanslyDmBoundedPolicies",
-      "fanslyDmShadowPageAllowlist",
-      "fanslyDmHeadCatchupPageAllowlist",
-      "fanslyDeepBackfillIgnoreRetentionLimit",
-      "aiMediaDescribeFanslyAcceleratorEnabled",
-      "aiMediaDescribeFanslyAcceleratorDailyLimit",
-    ]) {
-      expect(LIVE_CONFIG_KEYS.has(key), key).toBe(false);
-    }
-    // Step 4 S4-16 retired ten keys with the legacy Fansly money lanes.
-    // Step 4 S4-17 retired two keys with the legacy followers reconcile's settlement reuse.
-    // Step 4 S4-18 retired 24 keys with the legacy Fansly content lanes.
-    // The legacy ramp gate of fan_earnings and purchase_history went with its
-    // last callers (S4-16 and S4-18 together), and its two live keys with it.
-    for (const key of ["fanslyFanEarningsSyncEnabled", "fanslyNewStreamPageAllowlist"]) {
-      expect(LIVE_CONFIG_KEYS.has(key), key).toBe(false);
-    }
-    // Step 4 (S4-15): retired with the hydration auto-approve policy.
-    for (const key of ["agentHydrationAutoApproveMode", "agentHydrationAutoDailyCallBudget"]) {
-      expect(LIVE_CONFIG_KEYS.has(key), key).toBe(false);
-    }
     expect(LIVE_CONFIG_KEYS.has("agentHydrationMode")).toBe(true);
-    // Step 4 S4-24 retired the follower-sync age threshold of /health/sync
-    // with the legacy Fansly checks that read it.
-    expect(LIVE_CONFIG_KEYS.has("healthSyncFollowerMaxAgeMinutes")).toBe(false);
     expect(LIVE_CONFIG_KEYS.has("healthSyncLightMaxAgeMinutes")).toBe(true);
-    expect(LIVE_CONFIG_KEYS.size).toBe(49);
+    expect(LIVE_CONFIG_KEYS.size).toBe(45);
   });
 });
