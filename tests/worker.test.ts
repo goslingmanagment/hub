@@ -4,6 +4,7 @@ import type * as DbModule from "@agency_hub_core/db";
 import type * as CaptureTransportModule from
   "../apps/runtime/src/services/ofapi-capture-transport.ts";
 import type * as SyncQueueModule from "../apps/runtime/src/services/sync-queue.ts";
+import type * as PostsModule from "../apps/runtime/src/services/sync/posts.ts";
 
 const dbMocks = vi.hoisted(() => ({
   closeInactiveSyncRuns: vi.fn(),
@@ -22,9 +23,6 @@ const queueMocks = vi.hoisted(() => ({
 }));
 const captureTransportMocks = vi.hoisted(() => ({
   recoverExpiredOfapiInteractiveResponses: vi.fn(),
-}));
-const fanslySchedulingMocks = vi.hoisted(() => ({
-  reconcileFanslyBulkStreamScheduling: vi.fn(),
 }));
 const postsSchedulingMocks = vi.hoisted(() => ({
   pauseIneligibleOnlyFansPostsForAllPages: vi.fn(),
@@ -57,11 +55,8 @@ vi.mock("../apps/runtime/src/services/ofapi-capture-transport.ts", async () => {
       captureTransportMocks.recoverExpiredOfapiInteractiveResponses,
   };
 });
-vi.mock("../apps/runtime/src/services/sync/fansly-stream-scheduling.ts", () => ({
-  reconcileFanslyBulkStreamScheduling:
-    fanslySchedulingMocks.reconcileFanslyBulkStreamScheduling,
-}));
-vi.mock("../apps/runtime/src/services/sync/posts.ts", () => ({
+vi.mock("../apps/runtime/src/services/sync/posts.ts", async () => ({
+  ...await vi.importActual<typeof PostsModule>("../apps/runtime/src/services/sync/posts.ts"),
   pauseIneligibleOnlyFansPostsForAllPages:
     postsSchedulingMocks.pauseIneligibleOnlyFansPostsForAllPages,
 }));
@@ -80,7 +75,6 @@ describe("sync planner", () => {
     dbMocks.listRunnableOfapiCapturePages.mockReset();
     dbMocks.findPageById.mockReset();
     captureTransportMocks.recoverExpiredOfapiInteractiveResponses.mockReset();
-    fanslySchedulingMocks.reconcileFanslyBulkStreamScheduling.mockReset();
     postsSchedulingMocks.pauseIneligibleOnlyFansPostsForAllPages.mockReset();
     queueMocks.sendSyncPageWakeup.mockReset();
     dbMocks.closeInactiveSyncRuns.mockResolvedValue({
@@ -103,11 +97,6 @@ describe("sync planner", () => {
       unavailable: 0,
       errors: 0,
     });
-    fanslySchedulingMocks.reconcileFanslyBulkStreamScheduling.mockResolvedValue({
-      paused: 0,
-      resumed: 0,
-      recoveryGenerations: 0,
-    });
     postsSchedulingMocks.pauseIneligibleOnlyFansPostsForAllPages.mockResolvedValue(0);
   });
 
@@ -120,7 +109,7 @@ describe("sync planner", () => {
     dbMocks.listRunnablePageSync.mockResolvedValue([
       {
         pageId: 11,
-        platform: "fansly",
+        platform: "onlyfans",
         priority: 60,
         requestedAt: now,
         proxyUrl: "socks5://proxy-a.example",
@@ -149,14 +138,6 @@ describe("sync planner", () => {
     dbMocks.ensurePageSyncStates.mockImplementation(async () => {
       order.push("ensurePageSyncStates");
     });
-    fanslySchedulingMocks.reconcileFanslyBulkStreamScheduling.mockImplementation(async () => {
-      order.push("reconcileFanslyBulkStreamScheduling");
-      return {
-        paused: 0,
-        resumed: 0,
-        recoveryGenerations: 0,
-      };
-    });
     dbMocks.scheduleDuePageSync.mockImplementation(async () => {
       order.push("scheduleDuePageSync");
     });
@@ -171,12 +152,14 @@ describe("sync planner", () => {
       finishedAt: now,
       errorSummary: "Sync run auto-closed after inactivity",
     });
-    expect(dbMocks.ensurePageSyncStates).toHaveBeenCalledWith({}, { now });
+    // Step 4 (S4-10): only the platforms the legacy executor serves.
+    expect(dbMocks.ensurePageSyncStates).toHaveBeenCalledWith({}, { now, platforms: ["onlyfans"] });
     expect(postsSchedulingMocks.pauseIneligibleOnlyFansPostsForAllPages).toHaveBeenCalledWith(
       expect.objectContaining({ db: {} }),
       now,
     );
-    expect(dbMocks.scheduleDuePageSync).toHaveBeenCalledWith({}, { now });
+    expect(dbMocks.scheduleDuePageSync).toHaveBeenCalledWith({}, { now, platforms: ["onlyfans"] });
+    expect(dbMocks.listRunnablePageSync).toHaveBeenCalledWith({}, now, { platforms: ["onlyfans"] });
     expect(captureTransportMocks.recoverExpiredOfapiInteractiveResponses).toHaveBeenCalledWith(
       expect.objectContaining({ db: {} }),
       { now },
@@ -184,14 +167,13 @@ describe("sync planner", () => {
     expect(order).toEqual([
       "cleanup",
       "ensurePageSyncStates",
-      "reconcileFanslyBulkStreamScheduling",
       "scheduleDuePageSync",
     ]);
     expect(queueMocks.sendSyncPageWakeup).toHaveBeenNthCalledWith(1, boss, {
       egressKey: "socks5://proxy-a.example:1080",
       platformAccountId: 11,
       priority: 60,
-      provider: "fansly",
+      provider: "onlyfans",
     });
     expect(queueMocks.sendSyncPageWakeup).toHaveBeenNthCalledWith(2, boss, {
       egressKey: "direct",
@@ -211,7 +193,7 @@ describe("sync planner", () => {
     dbMocks.listRunnablePageSync.mockResolvedValue([
       {
         pageId: 33,
-        platform: "fansly",
+        platform: "onlyfans",
         priority: 60,
         requestedAt: now,
         proxyUrl: null,
@@ -229,7 +211,7 @@ describe("sync planner", () => {
       egressKey: "direct",
       platformAccountId: 33,
       priority: 60,
-      provider: "fansly",
+      provider: "onlyfans",
     });
     expect(dbMocks.markPageSyncEnqueued).not.toHaveBeenCalled();
   });
