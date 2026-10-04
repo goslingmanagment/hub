@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { insertObservation, routeFanslyWsHintEvent } from "@agency_hub_core/db";
+import { insertObservation } from "@agency_hub_core/db";
 import { FANSLY_WS_CAPTURE_KIND } from "@agency_hub_core/shared";
 import { buildFanslyWsRecoveryManifest } from "../apps/runtime/src/services/fansly-ws-recovery-manifest.ts";
 import { resetIntegrationDatabase, seedFanslyPage, startTestDatabase } from "./helpers/db.ts";
+import { fileFanslyWsHintReceipt } from "./helpers/fansly-ws-hint-receipts.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 
 let db: Awaited<ReturnType<typeof startTestDatabase>>;
@@ -29,7 +30,7 @@ async function fixture(createdAtMs = Date.now() - 60_000, createdAt = createdAtM
     accountId: page.id, nativeAccountRef: "999", kind: FANSLY_WS_CAPTURE_KIND,
     payload: { codec: FANSLY_WS_CAPTURE_KIND, frame, generation },
     payloadHash: createHash("sha256").update(frame).digest(), idempotencyKey: "manifest-fixture", receivedAt });
-  await routeFanslyWsHintEvent(db.db, { id: 1, pageId: page.id, observationId: captured.observationId,
+  await fileFanslyWsHintReceipt(db.pool, { id: 1, pageId: page.id, observationId: captured.observationId,
     receivedAt: captured.receivedAt, generation,
     node: { path: [0], outcome: "hint", hint: { type: "message_created", groupRef: "100", messageRef: "150" } },
   }, null);
@@ -63,7 +64,7 @@ describe("bounded read-only WS recovery manifest", () => {
   });
   it("keeps later source deletion separate from actual reader materialization", async () => {
     const f = await fixture();
-    await routeFanslyWsHintEvent(db.db, { id: 2, pageId: f.page.id, observationId: 999,
+    await fileFanslyWsHintReceipt(db.pool, { id: 2, pageId: f.page.id, observationId: 999,
       receivedAt: new Date(), generation: f.generation,
       node: { path: [], outcome: "mutation_debt", mutation: { messageRef: "150", groupRef: "100", bulk: false, correlationRef: null } },
     }, null);

@@ -356,15 +356,13 @@ describe("the journaling call sites", () => {
     // set grew. So what a call site must do is (a) hand the served body to the
     // trim and (b) stamp the per-endpoint capture-shape version, so replay
     // tooling can tell a pre-[A20] 4-field body from a widened 18-field one.
-    // The follower lanes are the Sync Engine's (the legacy `followers` and
-    // `followers_reconcile` handlers are deleted since step 4, S4-17): both of
-    // its follower resources journal the `followers` kind through one trim.
+    // The follower lanes and the conversation list are the Sync Engine's (the
+    // legacy dm_conversations sweep is deleted since step 4, S4-14; the legacy
+    // `followers` and `followers_reconcile` handlers since S4-17): both of its
+    // follower resources journal the `followers` kind through one trim, and
+    // its conversation list the `dm_conversations` kind through another.
     const engineSource = readFileSync(
       path.resolve("apps/runtime/src/sync/fansly/capture.ts"),
-      "utf8",
-    );
-    const conversationSource = readFileSync(
-      path.resolve("apps/runtime/src/services/sync/fansly-dm-conversations.ts"),
       "utf8",
     );
     const follower = [...engineSource.matchAll(
@@ -372,19 +370,16 @@ describe("the journaling call sites", () => {
     )];
     expect(follower).toHaveLength(1);
     expect(follower[0]![1]).toBe("FANSLY_FOLLOWERS_CAPTURE_MAPPER_VERSION");
-    const groups = [...conversationSource.matchAll(
-      /responsePayload: capturedPayload,\s*\n\s*mapperVersion: (\w+),/g,
+    const groups = [...engineSource.matchAll(
+      /body: captureFanslyMessagingGroupsPayload\(response, served\.contractAccepted\),\s*\n\s*mapperVersion: (\w+),/g,
     )];
-    expect(conversationSource).toContain(
-      "const capturedPayload = captureFanslyMessagingGroupsPayload(page.raw, page.contractAccepted)",
-    );
     expect(groups).toHaveLength(1);
     expect(groups[0]![1]).toBe("FANSLY_GROUPS_CAPTURE_MAPPER_VERSION");
 
     // …and the shared constant is NOT bumped for these lanes: it is read by
     // every Fansly writer, so bumping it would re-label unrelated captures.
-    expect(conversationSource).not.toMatch(
-      /trimFanslyMessagingGroupsPayload\(page\.raw\),\s*\n\s*mapperVersion: FANSLY_MAPPER_VERSION,/,
+    expect(engineSource).not.toMatch(
+      /captureFansly(Follower|MessagingGroups)Payload\(response, served\.contractAccepted\),\s*\n\s*mapperVersion: FANSLY_MAPPER_VERSION,/,
     );
   });
 });
@@ -409,7 +404,7 @@ describe("[A20] negative pins: no byte ceiling exists, anywhere", () => {
       "apps/runtime/src/services/sync/shared.ts",
       "apps/runtime/src/sync/fansly/lib/capture-trims.ts",
       "apps/runtime/src/services/sync/executor-handlers.ts",
-      "apps/runtime/src/services/sync/fansly-dm-conversations.ts",
+      "apps/runtime/src/sync/fansly/capture.ts",
       "packages/db/src/repositories/sync.ts",
     ];
     for (const relative of captureSources) {

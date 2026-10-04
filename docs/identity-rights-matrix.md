@@ -40,15 +40,50 @@ remain bound to the original ID. See
 What each combination reaches. "Assigned" means the page-scoped routes of the
 pages that account is granted; the owner is granted every page implicitly.
 
-| Surface (policy kind) | owner, cookie | owner, device token | team_lead, cookie | team_lead, device token | chatter, cookie | chatter, device token | `content_manager` (historical) |
-|---|---|---|---|---|---|---|---|
-| Sign in at all (`login`, password sign-in) | yes | yes | yes | yes | yes | yes | **no — 401 on both lanes** |
-| Owner console — `/admin/*` (`owner-session`) | **yes** | no (403) | no (403) | no (403) | no (403) | no (403) | — |
-| Dashboard — `/models`, revenue (`session`) | yes | no (403) | **yes** | no (403) | no (403) | no (403) | — |
-| Cabinet `/account` — `/auth/devices`, `/auth/usage` (`any-session`) | yes | no (403) | yes | no (403) | **yes** | no (403) | — |
-| `/auth/me` (`any`) | yes | yes | yes | yes | yes | yes | — |
-| Clients — `/pages`, `/pages/{label}/…` (`any` + page scope) | every page | every page | assigned | assigned | assigned | **assigned** | — |
-| Desktop read gateway — `/ofapi/read/*` (`apiKey`) | no (403) | yes, assigned | no (403) | yes, assigned | no (403) | **yes, assigned** | — |
+| Surface (policy kind) | owner, cookie | owner, device token | team_lead, cookie | team_lead, device token | chatter, cookie | chatter, device token | `content_manager` (historical) | chat-extension token (any role) |
+|---|---|---|---|---|---|---|---|---|
+| Sign in at all (`login`, password sign-in) | yes | yes | yes | yes | yes | yes | **no — 401 on both lanes** | yes (password sign-in, `client`) |
+| Owner console — `/admin/*` (`owner-session`) | **yes** | no (403) | no (403) | no (403) | no (403) | no (403) | — | no (403) |
+| Dashboard — `/models`, revenue (`session`) | yes | no (403) | **yes** | no (403) | no (403) | no (403) | — | no (403) |
+| Cabinet `/account` — `/auth/devices`, `/auth/usage` (`any-session`) | yes | no (403) | yes | no (403) | **yes** | no (403) | — | no (403) |
+| `/auth/me` (`any`) | yes | yes | yes | yes | yes | yes | — | yes |
+| Clients — `/pages`, `/pages/{label}/…` (`any` + page scope) | every page | every page | assigned | assigned | assigned | **assigned** | — | **listed reads only**, by the role's reach; `/pages` no (403) |
+| Desktop read gateway — `/ofapi/read/*` (`apiKey`) | no (403) | yes, assigned | no (403) | yes, assigned | no (403) | **yes, assigned** | — | no (403) |
+| Chat-extension bootstrap — `/client/bootstrap` (`apiKey`) | no (403) | yes, every page | no (403) | yes, assigned | no (403) | **yes, assigned** | — | yes, by the role's reach |
+
+The client bootstrap lists the caller's **active** pages only (a tombstoned
+page is never listed, assigned or not) and announces every feature off until
+the owner switches it on (the audited `chatExtension*` settings). Its
+`bindingsByHost` keeps an owner host binding only when it points at one of
+those pages, so a binding never reveals a page the caller is not granted, and
+only when the host holds accounts of that page's platform (an OnlyMonster
+account binds an OnlyFans page, never a Fansly one). A
+live agent key is refused with 403 even on a page it is granted. Its row is
+held by `client-bootstrap.integration`: every cell of it, plus the agent key,
+in both auth-policy modes; the switches and bindings by
+`client-owner-switches.integration`.
+
+The **chat-extension token** (chat-extension H-3) is a device token the
+extension asks for at password sign-in with `client: "chat-extension"`. The
+sign-in echoes `client`, the token row keeps the profile for good (a trigger
+refuses any change), and the bootstrap names it in `identity.tokenClient`. It
+reaches only the routes of `CLIENT_TOKEN_PROFILES["chat-extension"]`
+(`packages/contracts/src/client-token-scopes.ts`; the "chat-extension token"
+column of the [generated policy table](generated/authorization-policy.md)):
+who am I, the bootstrap, the persona catalogue without prompt texts, the AI
+feature stream, the recap status, the fan and conversation profiles, the
+spenders reads, the capture lane and revoking itself. Every other route
+answers a plain 403 with no `reason`, in **both** auth-policy modes, before any
+handler runs; page scope still applies on the listed routes, and a revoked or
+expired token still answers 401 with its reason. On the capture lane it sends
+only `ai_acceptance`, journaled as `chat-extension@<version>`, and it can never
+carry the desktop harvest capability. Its AI generations wait for the owner's
+switches (`chatExtensionEnabled`, the Coach / Recap / Review flags) and its
+version for `chatExtensionMinVersion`, and each generation record is labelled
+`clientProfile: "chat-extension"`. A full device token of the same person is
+untouched. Held by `device-token-client-profile.integration` (every route of
+the policy table walked by a narrow and a full token in both modes) and by
+`rights-matrix.integration` › *chatter, chat-extension token*.
 
 Three consequences worth stating out loud, because each has already surprised
 someone:
@@ -101,6 +136,16 @@ control.
   **«Завершить все входы»** (terminate all access) for a real cut-off, and
   deactivation to close the account. (Before Decision 370 a legacy API key
   survived it too; that half of the trap is gone with the lane.)
+- **The chat-extension token narrows a client, not a person.** It keeps a
+  leaked or misbehaving extension inside the extension's routes; the person
+  who signed it in can still sign in again with the same password and take a
+  full device token. An application rollback to a hub older than H-3 also
+  reads a narrow token as a full one until the next forward deploy. Before
+  rolling back past H-3, list the live narrow tokens read-only
+  (`select id, user_id, label from device_tokens where client_profile is not
+  null and revoked_at is null and expires_at > now()`) and revoke each one in
+  the cabinet (the person's card, «Завершить вход на устройстве»); the
+  extension signs in again after the forward deploy.
 - **Streams lag by up to 60 seconds.** A revoked assignment closes an already
   open SSE stream at the next revalidation tick, not instantly.
 - **The desktop's local cache outlives the account.** Removing an assignment or

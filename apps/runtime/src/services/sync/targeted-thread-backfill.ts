@@ -654,7 +654,7 @@ function fingerprintThreadSummaryWriters(states: readonly PageSyncState[]) {
 /**
  * Did a dm_conversations chunk of this page run while the targeted walk was in
  * flight? That chunk snapshots `storedMessageCount` / `oldestStoredMessageId` /
- * `messageCoverageStatus` at read time (`fansly-dm-conversations.ts`) and
+ * `messageCoverageStatus` at read time (the legacy sweep, deleted at step 4 S4-14) and
  * writes them back through the non head-guarded half of the thread upsert
  * (`page-dm.ts` upsertPageDmConversation), so a chunk that overlaps this run
  * would REGRESS the cursor right after this run recomputed it — and the next

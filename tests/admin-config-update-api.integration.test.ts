@@ -96,7 +96,7 @@ describe("admin config update api (Stage B1)", () => {
       headers: { cookie },
       payload: {
         patches: [
-          { key: "transactionLookbackDays", value: 14 },
+          { key: "healthSyncLightMaxAgeMinutes", value: 14 },
           { key: "ofapiCreditAlertThreshold", value: 250 },
         ],
         note: "tuning",
@@ -105,16 +105,16 @@ describe("admin config update api (Stage B1)", () => {
     expect(response.statusCode).toBe(200);
     const body = response.json() as { results: Array<{ key: string; value: unknown; version: number }> };
     expect(body.results).toEqual([
-      { key: "transactionLookbackDays", value: 14, version: 1 },
+      { key: "healthSyncLightMaxAgeMinutes", value: 14, version: 1 },
       { key: "ofapiCreditAlertThreshold", value: 250, version: 1 },
     ]);
 
     const overrides = await getConfigOverrides(testDb.db);
-    expect(overrides.get("transactionLookbackDays")).toEqual({ value: 14, version: 1 });
+    expect(overrides.get("healthSyncLightMaxAgeMinutes")).toEqual({ value: 14, version: 1 });
     expect(overrides.get("ofapiCreditAlertThreshold")).toEqual({ value: 250, version: 1 });
 
     // Both audit rows share one group id.
-    const auditA = await listConfigAudit(testDb.db, { key: "transactionLookbackDays" });
+    const auditA = await listConfigAudit(testDb.db, { key: "healthSyncLightMaxAgeMinutes" });
     const auditB = await listConfigAudit(testDb.db, { key: "ofapiCreditAlertThreshold" });
     expect(auditA[0]!.groupId).toBe(auditB[0]!.groupId);
     expect(auditB[0]!.note).toContain("tuning [cost-warnings]");
@@ -127,12 +127,12 @@ describe("admin config update api (Stage B1)", () => {
       return;
     }
     const cookie = await loginCookie("dima", "owner-secret");
-    // Seed transactionLookbackDays at version 1.
+    // Seed healthSyncLightMaxAgeMinutes at version 1.
     await server.inject({
       method: "PATCH",
       url: "/api/v1/admin/config",
       headers: { cookie },
-      payload: { patches: [{ key: "transactionLookbackDays", value: 14 }] },
+      payload: { patches: [{ key: "healthSyncLightMaxAgeMinutes", value: 14 }] },
     });
 
     // A two-key patch where the second key carries a STALE expectedVersion. The first
@@ -144,7 +144,7 @@ describe("admin config update api (Stage B1)", () => {
       payload: {
         patches: [
           { key: "ofapiCreditAlertThreshold", value: 250 },
-          { key: "transactionLookbackDays", value: 21, expectedVersion: 0 },
+          { key: "healthSyncLightMaxAgeMinutes", value: 21, expectedVersion: 0 },
         ],
       },
     });
@@ -153,7 +153,7 @@ describe("admin config update api (Stage B1)", () => {
     const overrides = await getConfigOverrides(testDb.db);
     // The brand-new key was NOT created, and the existing key is untouched.
     expect(overrides.has("ofapiCreditAlertThreshold")).toBe(false);
-    expect(overrides.get("transactionLookbackDays")?.value).toBe(14);
+    expect(overrides.get("healthSyncLightMaxAgeMinutes")?.value).toBe(14);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("rejects a patch that sets the same key twice (400, nothing written)", async (context) => {
@@ -168,13 +168,13 @@ describe("admin config update api (Stage B1)", () => {
       headers: { cookie },
       payload: {
         patches: [
-          { key: "transactionLookbackDays", value: 14 },
-          { key: "transactionLookbackDays", value: 21 },
+          { key: "healthSyncLightMaxAgeMinutes", value: 14 },
+          { key: "healthSyncLightMaxAgeMinutes", value: 21 },
         ],
       },
     });
     expect(response.statusCode).toBe(400);
-    expect((await getConfigOverrides(testDb.db)).has("transactionLookbackDays")).toBe(false);
+    expect((await getConfigOverrides(testDb.db)).has("healthSyncLightMaxAgeMinutes")).toBe(false);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("rejects a non-live editable+reload key (400)", async (context) => {
@@ -354,18 +354,18 @@ describe("admin config update api (Stage B1)", () => {
       method: "PATCH",
       url: "/api/v1/admin/config",
       headers: { cookie },
-      payload: { patches: [{ key: "transactionLookbackDays", value: 14 }] },
+      payload: { patches: [{ key: "healthSyncLightMaxAgeMinutes", value: 14 }] },
     });
     // Row is at version 1 now; expectedVersion 0 (brand-new assumption) conflicts.
     const conflict = await server.inject({
       method: "PATCH",
       url: "/api/v1/admin/config",
       headers: { cookie },
-      payload: { patches: [{ key: "transactionLookbackDays", value: 21, expectedVersion: 0 }] },
+      payload: { patches: [{ key: "healthSyncLightMaxAgeMinutes", value: 21, expectedVersion: 0 }] },
     });
     expect(conflict.statusCode).toBe(409);
     // Unchanged.
-    expect((await getConfigOverrides(testDb.db)).get("transactionLookbackDays")?.value).toBe(14);
+    expect((await getConfigOverrides(testDb.db)).get("healthSyncLightMaxAgeMinutes")?.value).toBe(14);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("is owner-only (lead -> 403, anon -> 401)", async (context) => {
@@ -376,7 +376,7 @@ describe("admin config update api (Stage B1)", () => {
     const anon = await server.inject({
       method: "PATCH",
       url: "/api/v1/admin/config",
-      payload: { patches: [{ key: "transactionLookbackDays", value: 14 }] },
+      payload: { patches: [{ key: "healthSyncLightMaxAgeMinutes", value: 14 }] },
     });
     expect(anon.statusCode).toBe(401);
 
@@ -385,10 +385,10 @@ describe("admin config update api (Stage B1)", () => {
       method: "PATCH",
       url: "/api/v1/admin/config",
       headers: { cookie: leadCookie },
-      payload: { patches: [{ key: "transactionLookbackDays", value: 14 }] },
+      payload: { patches: [{ key: "healthSyncLightMaxAgeMinutes", value: 14 }] },
     });
     expect(lead.statusCode).toBe(403);
-    expect((await getConfigOverrides(testDb.db)).has("transactionLookbackDays")).toBe(false);
+    expect((await getConfigOverrides(testDb.db)).has("healthSyncLightMaxAgeMinutes")).toBe(false);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("reflects the override in buildConfigView (desired/source/pendingApply, live:true)", async (context) => {
@@ -401,7 +401,7 @@ describe("admin config update api (Stage B1)", () => {
       method: "PATCH",
       url: "/api/v1/admin/config",
       headers: { cookie },
-      payload: { patches: [{ key: "transactionLookbackDays", value: 14 }] },
+      payload: { patches: [{ key: "healthSyncLightMaxAgeMinutes", value: 14 }] },
     });
 
     // A heartbeat reporting the BOOT value (no overlay) -> override is pending.
@@ -415,7 +415,7 @@ describe("admin config update api (Stage B1)", () => {
     const view = (await server
       .inject({ method: "GET", url: "/api/v1/admin/config", headers: { cookie } })
       .then((r) => r.json())) as ConfigViewResponse;
-    const item = findItem(view, "transactionLookbackDays");
+    const item = findItem(view, "healthSyncLightMaxAgeMinutes");
     expect(item.live).toBe(true);
     expect(item.source).toBe("override");
     expect(item.desired).toBe(14);
@@ -432,7 +432,7 @@ describe("admin config update api (Stage B1)", () => {
       method: "PATCH",
       url: "/api/v1/admin/config",
       headers: { cookie },
-      payload: { patches: [{ key: "transactionLookbackDays", value: 14 }] },
+      payload: { patches: [{ key: "healthSyncLightMaxAgeMinutes", value: 14 }] },
     });
 
     // The heartbeat snapshot is built from loadEffectiveConfig — exactly what the process now
@@ -451,7 +451,7 @@ describe("admin config update api (Stage B1)", () => {
     const view = (await server
       .inject({ method: "GET", url: "/api/v1/admin/config", headers: { cookie } })
       .then((r) => r.json())) as ConfigViewResponse;
-    const item = findItem(view, "transactionLookbackDays");
+    const item = findItem(view, "healthSyncLightMaxAgeMinutes");
     expect(item.running.find((entry) => entry.role === "worker")?.value).toBe(14);
     expect(item.pendingApply).toBe(false);
   }, INTEGRATION_TEST_TIMEOUT_MS);
@@ -466,19 +466,19 @@ describe("admin config update api (Stage B1)", () => {
       method: "PATCH",
       url: "/api/v1/admin/config",
       headers: { cookie },
-      payload: { patches: [{ key: "transactionLookbackDays", value: 14 }] },
+      payload: { patches: [{ key: "healthSyncLightMaxAgeMinutes", value: 14 }] },
     });
 
     const cleared = await server.inject({
       method: "DELETE",
-      url: "/api/v1/admin/config/transactionLookbackDays?note=revert",
+      url: "/api/v1/admin/config/healthSyncLightMaxAgeMinutes?note=revert",
       headers: { cookie },
     });
     expect(cleared.statusCode).toBe(200);
-    expect(cleared.json()).toEqual({ ok: true, key: "transactionLookbackDays" });
+    expect(cleared.json()).toEqual({ ok: true, key: "healthSyncLightMaxAgeMinutes" });
 
-    expect((await getConfigOverrides(testDb.db)).has("transactionLookbackDays")).toBe(false);
-    const audit = await listConfigAudit(testDb.db, { key: "transactionLookbackDays" });
+    expect((await getConfigOverrides(testDb.db)).has("healthSyncLightMaxAgeMinutes")).toBe(false);
+    const audit = await listConfigAudit(testDb.db, { key: "healthSyncLightMaxAgeMinutes" });
     // Newest first: the clear row has a null new_value.
     expect(audit[0]!.newValue).toBeNull();
     expect(audit[0]!.oldValue).toBe(14);

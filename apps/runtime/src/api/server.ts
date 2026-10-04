@@ -39,6 +39,7 @@ import {
 import {
   AppError,
   BadRequestError,
+  ClientFeatureDisabledError,
   ConflictError,
   ForbiddenError,
   NotFoundError,
@@ -62,6 +63,7 @@ import type { ApiModuleContext } from "../modules/context.ts";
 import { registerAgentReadRoutes } from "../modules/agent-read/index.ts";
 import { registerAudienceRoutes } from "../modules/audience/index.ts";
 import { registerCatalogRoutes } from "../modules/catalog/index.ts";
+import { registerClientRoutes } from "../modules/client/index.ts";
 import { registerAiAdminRoutes, registerAiRoutes } from "../modules/ai/index.ts";
 import { registerConversationsRoutes } from "../modules/conversations/index.ts";
 import { registerEventsRoutes } from "../modules/events/index.ts";
@@ -77,6 +79,8 @@ import {
   ensureSyncQueues,
   reconcileQueueRetention,
 } from "../services/sync-queue.ts";
+import { clientTokenAllowlistApplies } from "@agency_hub_core/contracts";
+import { clientTokenRouteRefusal } from "../services/client-token-profile.ts";
 import { recordClientVersionObservation } from "../services/client-versions.ts";
 import { ensureOfapiCommandQueues } from "../services/ofapi-command-executor.ts";
 import { ensureOfapiQueues } from "../services/ofapi-events.ts";
@@ -393,6 +397,20 @@ export async function buildApiServer(appContext: AppContext) {
     });
     request.authPolicy = { routeKey: entry.key, verdict };
 
+    // chat-extension H-3: a narrow client token reaches only its profile's
+    // routes, in BOTH enforcement modes (client-token-profile.ts). Recorded as
+    // the verdict too, so log mode reports no divergence for it.
+    if (clientTokenAllowlistApplies(entry.auth)) {
+      const refusal = clientTokenRouteRefusal(entry.key, await resolvePrincipal(request));
+      if (refusal) {
+        request.authPolicy = {
+          routeKey: entry.key,
+          verdict: { allow: false, statusCode: 403, reason: "client_profile_route_not_allowed" },
+        };
+        throw refusal;
+      }
+    }
+
     // Decision 370: the Stage 22 must_change_password route allowlist is gone
     // with the flag. Nothing reads the column any more; `mustChangePassword` on
     // the wire is a deprecated constant `false`.
@@ -549,13 +567,15 @@ export async function buildApiServer(appContext: AppContext) {
     if (
       (error instanceof UnauthorizedError
         || error instanceof ConflictError
-        || error instanceof BadRequestError)
+        || error instanceof BadRequestError
+        || error instanceof ClientFeatureDisabledError)
       && error.reason !== null
     ) {
       // Documented structured extension (docs/error-handling.md §3): the
       // machine `reason` beside the code — token_revoked | token_expired on a
       // 401 for a presented device token, used | expired | revoked on the
-      // account-link 409, too_short | too_long | common on the redeem 400.
+      // account-link 409, too_short | too_long | common on the redeem 400, why
+      // a chat-extension feature is unavailable on client_feature_disabled.
       // A reason-less error keeps the plain envelope.
       reply.code(error.statusCode).send({
         error: error.code,
@@ -625,6 +645,9 @@ export async function buildApiServer(appContext: AppContext) {
 
   // --- Fansly Sync Engine owner routes (history requests) --- (module: apps/runtime/src/modules/sync-engine)
   registerSyncEngineRoutes(server, moduleContext);
+
+  // --- Chat extension (client bootstrap) --- (module: apps/runtime/src/modules/client)
+  registerClientRoutes(server, moduleContext);
 
   // --- Events (stream + snapshot) --- (module: apps/runtime/src/modules/events)
   registerEventsRoutes(server, moduleContext);

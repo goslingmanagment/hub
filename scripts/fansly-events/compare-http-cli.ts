@@ -1,6 +1,6 @@
 import { open } from "node:fs/promises";
 import { compareHttpSnapshots, parseHttpSnapshot } from "./compare-http.ts";
-import { readPrivateFile } from "../fansly-ws/private-file.ts";
+import { readPrivateFile } from "./private-file.ts";
 
 const MAX_REPORT_BYTES = 32 * 1024 * 1024;
 const [baselinePath, currentPath, outputPath, ...pages] = process.argv.slice(2);

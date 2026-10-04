@@ -2,6 +2,8 @@ import { createHash, randomUUID } from "node:crypto";
 
 import argon2 from "argon2";
 
+import { isClientTokenProfile, type ClientTokenProfile } from "@agency_hub_core/contracts";
+
 import {
   assignUserToPage,
   advanceDeviceTokenEpoch,
@@ -130,6 +132,13 @@ export interface HumanAuthPrincipal {
   authSessionId?: number;
   /** Owner-bound capability carried by this exact device token. */
   harvestMachineId?: string;
+  /**
+   * chat-extension H-3: the narrow token's client profile, copied from the
+   * token row (never from the request). Present only for such a token: the API
+   * server then refuses every route outside the profile's allowlist
+   * (client-token-profile.ts). Absent = a full principal, as before.
+   */
+  clientProfile?: ClientTokenProfile;
 }
 
 /**
@@ -1429,6 +1438,13 @@ export async function authenticateDeviceToken(
     return { principal: null, failure: { reason: "token_expired" } };
   }
 
+  // chat-extension H-3: a profile this build does not know (a later hub's,
+  // seen after a rollback) must never authenticate as a FULL token. Refused
+  // without a reason, so the client keeps its sign-in.
+  if (record.clientProfile !== null && !isClientTokenProfile(record.clientProfile)) {
+    return { principal: null, failure: null };
+  }
+
   const user = await getAuthenticatedUserById(app, record.userId);
   if (!user || !roleCanUseSession(user.role)) {
     // Unreachable by design (deactivation revokes every token); if a row ever
@@ -1458,6 +1474,7 @@ export async function authenticateDeviceToken(
       assignedPageIds: user.assignedPages.map((page) => page.id),
       deviceTokenId: record.id,
       ...(record.harvestMachineId ? { harvestMachineId: record.harvestMachineId } : {}),
+      ...(isClientTokenProfile(record.clientProfile) ? { clientProfile: record.clientProfile } : {}),
     },
     failure: null,
   };
@@ -1577,6 +1594,11 @@ export async function setDeviceTokenHarvestCapabilityForUserId(
     if (token.revokedAt || token.expiresAt <= new Date()) {
       throw new BadRequestError("Harvest capability requires an active device token");
     }
+    if (token.clientProfile !== null) {
+      // chat-extension H-3: the harvest lane journals canonical platform facts;
+      // a narrow client token never carries it.
+      throw new BadRequestError("Harvest capability is not available to a client-profile device token");
+    }
 
     const changed = await setDeviceTokenHarvestMachine(dbTx, {
       deviceTokenId: token.id,
@@ -1678,6 +1700,8 @@ export type IssuedDeviceCredential =
     label: string;
     keyPrefix: string;
     expiresAt: Date;
+    /** chat-extension H-3: the profile the token is bound to; null = a full token. */
+    clientProfile: ClientTokenProfile | null;
   }
   | {
     mode: "pending";
@@ -1702,8 +1726,15 @@ export async function issueDeviceTokenWithPassword(
     label: string;
     mode: "active" | "pending";
     clientVersion: string | null;
+    /** chat-extension H-3: a narrow token's profile (active only); null = a full token. */
+    clientProfile?: ClientTokenProfile | null;
   },
 ): Promise<IssuedDeviceCredential> {
+  const clientProfile = input.clientProfile ?? null;
+  if (clientProfile !== null && input.mode !== "active") {
+    // The body schema refuses it first; a reservation has no profile to carry.
+    throw new BadRequestError("A client profile requires mode active");
+  }
   const material = mintDeviceTokenMaterial(input.mode);
   return verifyPasswordAndLockUser(app, input, async (dbTx, user) => {
     // Time is sampled after the lock wait, as activation does.
@@ -1717,6 +1748,7 @@ export async function issueDeviceTokenWithPassword(
         keyPrefix: material.keyPrefix,
         expiresAt,
         lastClientVersion: input.clientVersion,
+        clientProfile,
       });
       await recordAudit({ db: dbTx }, {
         source: "api",
@@ -1729,6 +1761,8 @@ export async function issueDeviceTokenWithPassword(
           keyPrefix: material.keyPrefix,
           via: "password",
           clientVersion: input.clientVersion,
+          // Only a narrow token adds the key: a full token's audit row is unchanged.
+          ...(clientProfile !== null ? { clientProfile } : {}),
         },
       });
       return {
@@ -1738,6 +1772,7 @@ export async function issueDeviceTokenWithPassword(
         label: created.label,
         keyPrefix: material.keyPrefix,
         expiresAt,
+        clientProfile,
       };
     }
 

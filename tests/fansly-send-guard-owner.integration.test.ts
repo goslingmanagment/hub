@@ -39,7 +39,6 @@ import {
   startIntegrationTestDatabase,
   type StartedTestDatabase,
 } from "./helpers/db.ts";
-import { seedThreadInput } from "./helpers/fansly-dm-sweep.ts";
 import type { FanslySendGuardChildConfig } from "./helpers/fansly-send-guard-child.ts";
 import { startFakeFanslyNetwork, type FakeFanslyNetwork } from "./helpers/fansly-send-guard-network.ts";
 import { silentFanslySendGuardLogger } from "./helpers/fansly-send-guard.ts";
@@ -371,6 +370,29 @@ describe("every source of every process, on a page the engine owns", () => {
 const POISON = "group-poison";
 const HEALTHY = "group-healthy";
 
+function seedThreadInput(platformAccountId: number, platformConversationId: string) {
+  return {
+    platformAccountId,
+    fanId: null,
+    platformConversationId,
+    partnerPlatformUserId: `fan-${platformConversationId}`,
+    partnerUsername: `fan_${platformConversationId}`,
+    partnerDisplayName: null,
+    conversationFlags: 0,
+    unreadCount: 0,
+    subscriptionTierId: null,
+    lastMessageId: `msg-${platformConversationId}`,
+    lastUnreadMessageId: null,
+    lastMessageAt: new Date("2026-03-09T12:00:00.000Z"),
+    lastMessageSenderId: `fan-${platformConversationId}`,
+    lastMessageSenderRole: "fan" as const,
+    lastMessagePreview: "seeded",
+    isVisible: true,
+    lastSeenGeneration: 1,
+    metadata: {},
+  };
+}
+
 async function legacyDmFixture(network: FakeFanslyNetwork) {
   const app = createTestAppContext(testDb!, {
     syncSharedRateLimitEnabled: true,
@@ -382,20 +404,11 @@ async function legacyDmFixture(network: FakeFanslyNetwork) {
   if (!page) throw new Error("Expected a fixture page");
   await testDb!.pool.query("update pages set external_page_id = '999' where id = $1", [page.id]);
   await saveProxy(app, page.id, { url: network.proxyUrl });
-  Object.assign(app.config, {
-    aiMediaDescribeEnabled: true,
-    aiMediaDescribePagePolicies: JSON.stringify({
-      "owner-dm": { since: new Date(Date.now() - 24 * 3600_000).toISOString() },
-    }),
-    aiMediaDescribeFanslyAcceleratorEnabled: true,
-    aiMediaDescribeFanslyAcceleratorDailyLimit: 50,
-  });
-
   const threads: Record<string, number> = {};
   for (const group of [POISON, HEALTHY]) {
     const [fan] = await upsertFans(app.db, [{ platform: "fansly", platformUserId: `fan-${group}` }]);
     const thread = await upsertPageDmConversation(app.db, {
-      ...seedThreadInput(page.id, group, 1), fanId: fan!.id, unreadCount: 1,
+      ...seedThreadInput(page.id, group), fanId: fan!.id, unreadCount: 1,
     });
     threads[group] = thread!.id;
   }

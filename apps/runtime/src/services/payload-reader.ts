@@ -670,23 +670,6 @@ export function createCapturePayloadRowResolver<
   };
 }
 
-/**
- * The `sync_raw_payloads` row form. Those readers name the body
- * `responsePayload` (the column is `response_payload`), so they get their own
- * one-line wrapper instead of a rename at every call site.
- */
-export async function resolveRawCapturePayloadRow<
-  T extends { id: number; responsePayload: unknown; payloadRef: CapturePayloadRef | null },
->(app: SeamContext, row: T): Promise<T> {
-  const responsePayload = await resolveCapturePayload(app, {
-    envelope: "raw_payload",
-    envelopeId: row.id,
-    inline: row.responsePayload,
-    ref: row.payloadRef,
-  });
-  return responsePayload === row.responsePayload ? row : { ...row, responsePayload };
-}
-
 export interface ObservationPayloadRead {
   observationId: number;
   /** The journal row's own received_at — a caller that needs a second,

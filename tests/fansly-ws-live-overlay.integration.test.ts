@@ -12,10 +12,8 @@ import {
   listPendingFanslyWsLiveReceipts, readFanslyWsLiveGauges, upsertFanPages, upsertFans, type Database,
 } from "@agency_hub_core/db";
 import { readFanslyPageGeneration, readProbeGeneration } from "../apps/runtime/src/services/egress/fansly-probe-context.ts";
-import * as socketTransport from "../apps/runtime/src/services/egress/fansly-receiver-socket.ts";
 import { executeErasure, planErasure } from "../apps/runtime/src/services/erasure/index.ts";
 import { applyFanslyWsLive, startFanslyWsLiveTimer } from "../apps/runtime/src/services/fansly-ws/live-apply.ts";
-import { startFanslyWsWorker, type FanslyWsWorkerTiming } from "../apps/runtime/src/services/fansly-ws/worker.ts";
 import { computeGoldenSignals } from "../apps/runtime/src/services/golden-signals.ts";
 import { saveProxy } from "../apps/runtime/src/services/page-context.ts";
 import { MESSAGE_EVENT_TYPES, runMessageArchiveProjection } from "../apps/runtime/src/services/projections/message-archive.ts";
@@ -35,11 +33,6 @@ const FAN = "700000000000000001";
 const OTHER_FAN = "700000000000000002";
 const GROUP = "800000000000000001";
 const OTHER_GROUP = "800000000000000002";
-const scaled: FanslyWsWorkerTiming = {
-  configPollMs: 1_000, configStaleMs: 2_000, pagePauseMs: 1_000, backoffBaseMs: 150,
-  authTimeoutMs: 1_000, checkMs: 500, guardStaleMs: 1_500, pingMs: 2_000, pongTimeoutMs: 3_000,
-  drainMs: 10_000, applyDrainMs: 10_000,
-};
 
 let testDb: StartedTestDatabase;
 let lakeDir: string;
@@ -464,50 +457,7 @@ describe("passive parity and golden signals", () => {
   });
 });
 
-describe("the worker paths", () => {
-  async function workerFixture() {
-    const f = await fixture();
-    await f.owner.close();
-    f.app.config.fanslyWsCaptureEnabled = true;
-    f.app.config.fanslyWsCapturePageAllowlist = f.page.label;
-    return f;
-  }
-
-  it("drains a full queue on stop: every received frame is captured and applied, the close keeps the gap", async () => {
-    const f = await workerFixture();
-    const items = Array.from({ length: 128 }, () => message());
-    let stopping: Promise<void> | undefined;
-    let stoppedAt = 0;
-    const open = vi.spyOn(socketTransport, "openFanslyReceiverSocket").mockImplementation(() => {
-      const socket = Object.assign(new EventTarget(), { send: vi.fn() });
-      queueMicrotask(() => {
-        socket.dispatchEvent(new Event("open"));
-        socket.dispatchEvent(new MessageEvent("message", { data: '{"t":1,"d":"{}"}' }));
-        for (const item of items) socket.dispatchEvent(new MessageEvent("message", { data: created(item) }));
-        // SIGTERM with the queue full: 128 frames received, at most one captured.
-        stoppedAt = Date.now();
-        stopping = worker.stop();
-      });
-      return { socket, stop: vi.fn() } as unknown as ReturnType<typeof socketTransport.openFanslyReceiverSocket>;
-    });
-    const worker = startFanslyWsWorker(f.app, { timing: scaled });
-    await vi.waitFor(() => expect(stopping).toBeDefined(), { timeout: 10_000 });
-    await stopping;
-    expect(open).toHaveBeenCalledOnce();
-    expect(await count("observations", "source='fansly_ws'")).toBe(128);
-    expect(await query("select live_state, count(*)::int as n from fansly_ws_decode_receipts group by live_state"))
-      .toEqual([{ live_state: "applied", n: 128 }]);
-    expect(await count("dm_live_messages")).toBe(128);
-    expect(await count("domain_events", `type='${FANSLY_WS_LIVE_OBSERVED_EVENT}'`)).toBe(128);
-    const [connection] = await query<{ stop_reason: string; closed_at: Date; last_capture_at: Date; last_ordinal: number }>(
-      `select stop_reason, closed_at, last_capture_at, last_ordinal::int from fansly_ws_connections
-       where stop_reason = 'disabled'`);
-    expect(connection).toMatchObject({ stop_reason: "disabled", last_ordinal: 129 });
-    // The close is the intake stop, not the end of the drain.
-    expect(connection!.closed_at.getTime()).toBeGreaterThanOrEqual(connection!.last_capture_at.getTime());
-    expect(connection!.closed_at.getTime()).toBeLessThanOrEqual(stoppedAt + 1_000);
-  }, 60_000);
-
+describe("a process killed mid-apply", () => {
   it("a real process killed after its overlay insert, before commit, leaves the receipt pending; replay applies once", async () => {
     const f = await fixture();
     const item = message();

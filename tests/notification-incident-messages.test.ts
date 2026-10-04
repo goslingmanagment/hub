@@ -128,6 +128,21 @@ describe("resolveMessageForIncident", () => {
     expect(deadman).toContain("Fansly sync chunks starting again");
   });
 
+  // A legacy stream's latch closed at the transition to the Fansly Sync
+  // Engine is not a recovery: the resolve says it closed and why. A
+  // resolution the vocabulary does not know changes nothing.
+  it("a legacy stream latch closed because the engine owns the page says so, not 'recovered'", () => {
+    expect(resolveMessageForIncident({
+      kind: "stream_failed_threshold", pageLabel: "lilly-2", platform: "fansly", stream: "dm_conversations", resolution: "engine_owned",
+    })).toBe("✅ Resolved\nStream dm_conversations closed: lilly-2 (fansly)\n"
+      + "Reason: the page is owned by the Fansly Sync Engine; the legacy stream no longer runs");
+    for (const resolution of [{}, { resolution: null }, { resolution: "unknown" }]) {
+      expect(resolveMessageForIncident({
+        kind: "stream_failed_threshold", pageLabel: "lilly-2", platform: "fansly", stream: "dm_conversations", ...resolution,
+      })).toBe("✅ Resolved\nStream dm_conversations recovered: lilly-2 (fansly)");
+    }
+  });
+
   it("the send guard's closed-page message keeps the token to confirm", () => {
     const summary = describeClosedFanslyPage({
       pageId: 7, pageLabel: "lilly-1", holderToken: "33333333-3333-4333-8333-333333333333",

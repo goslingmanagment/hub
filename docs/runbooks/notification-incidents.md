@@ -43,6 +43,24 @@ itself come from a walk that made none. It still resolves `proxy_missing` and it
 flapping open/resolved; it closes at the first real success on any stream of the
 page, or on page verification.
 
+## stream_failed_threshold on a page the Fansly Sync Engine runs
+
+A legacy stream's latch (`stream_failed_threshold:<page>:<stream>`) resolves
+only through the legacy executor's own chunk recovery, and the legacy executor
+never runs a stream of a page the Fansly Sync Engine owns. So the latch is
+closed at the transition: the switch's phase C and every live takeover of the
+`sync` host resolve the page's open ones through the ordinary resolve (recovery
+tombstone, the paging sweep's resolve message after its hold), stored as
+`metadata.resolution = 'engine_owned'`. The resolve message reads
+`Stream <stream> closed: <page> (fansly)` with the line
+`Reason: the page is owned by the Fansly Sync Engine; the legacy stream no longer runs`.
+While the engine owns the page (`handover` or `live`) a legacy chunk failure
+opens no legacy incident (`proxy_failed` or `stream_failed_threshold`); the
+engine reports the page through its own `fansly_sync_engine` alerts. A page
+rolled back to `off` gets its legacy latches back from the next legacy failure
+(the streak stays on the legacy row). OnlyFans pages and the engine's own
+latches are untouched.
+
 ## syncUnblocked: false (W3.3, D4-N1)
 
 A credential update/verify that returns `syncUnblocked: false` verified the

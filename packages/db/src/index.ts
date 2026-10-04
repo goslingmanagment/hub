@@ -151,10 +151,7 @@ export * from "./repositories/telegram-settings.ts";
 export * from "./repositories/reporting.ts";
 export * from "./repositories/runtime-instances.ts";
 export * from "./repositories/page-dm.ts";
-export * from "./repositories/fansly-dm-head-debt.ts";
-export * from "./repositories/fansly-dm-shadow.ts";
 export * from "./repositories/fansly-dm-reader-heads.ts";
-export * from "./repositories/fansly-dm-shadow-snapshot.ts";
 export * from "./repositories/fansly-send-guard.ts";
 export * from "./repositories/fansly-send-guard-checks.ts";
 // Fansly Sync Engine core state (0228): pages, the work queue, the attempt
@@ -170,6 +167,8 @@ export * from "./repositories/sync/conversation-list.ts";
 export * from "./repositories/sync/dm-messages.ts";
 export * from "./repositories/sync/subject-queue.ts";
 export * from "./repositories/sync/history-requests.ts";
+// Step 4 (S4-06, owner decision №11): the DM reader parity's read-only reads.
+export * from "./repositories/sync/dm-reader-parity.ts";
 // The WebSocket demand router's reads (design §6).
 export * from "./repositories/sync/ws-router.ts";
 export * from "./repositories/sync/ws-gap.ts";
@@ -204,3 +203,7 @@ export * from "./repositories/ofapi-read-collections.ts";
 
 export * from "./repositories/ofapi-typed-exports.ts";
 export { saveOfapiChatQueueState, readOfapiContentEvents } from './repositories/ofapi-content-events.ts';
+
+// The chat extension's bootstrap page list (active, untombstoned, scoped) and
+// its config revision.
+export * from "./repositories/client-bootstrap.ts";

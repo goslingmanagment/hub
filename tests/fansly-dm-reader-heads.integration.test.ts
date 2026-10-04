@@ -1,10 +1,8 @@
-import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, expect, it } from "vitest";
 import {
-  createFanslyPage, createModel, fanslyDmReaderHeadKey, listAgentTranscript,
-  queryFanslyDmReaderHeads, readFanslyDmShadowSnapshot,
+  createFanslyPage, createModel, fanslyDmReaderHeadKey, listAgentTranscript, queryFanslyDmReaderHeads,
 } from "@agency_hub_core/db";
 import { resetIntegrationDatabase, startTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
-import * as readerRepo from "../packages/db/src/repositories/fansly-dm-reader-heads.ts";
 
 let db: StartedTestDatabase;
 let pageId: number;
@@ -12,7 +10,6 @@ const at = "2026-09-14T12:00:00Z";
 const head = { conversationRef: "group", messageId: "head" };
 beforeAll(async () => { db = await startTestDatabase(); }, 120_000);
 afterAll(async () => { await db?.stop(); });
-afterEach(() => { vi.restoreAllMocks(); });
 beforeEach(async () => {
   await resetIntegrationDatabase(db.pool);
   const model = await createModel(db.db, { slug: "reader", name: "Reader" });
@@ -78,17 +75,16 @@ it.each([
 it("uses current page/group binding and cannot turn a foreign same-ID row into evidence", async () => {
   const model = await createModel(db.db, { slug: "foreign", name: "Foreign" });
   const foreign = await createFanslyPage(db.db, { modelId: model!.id, label: "foreign" });
-  const wrongHint = await hot(false, foreign!.id);
+  await hot(false, foreign!.id);
   await hot(false, pageId, "other-group");
   await archive(false, false, foreign!.id);
   await archive(false, false, pageId, "other-group");
-  const snapshot = () => readFanslyDmShadowSnapshot(db.db, {
-    pageId, heads: [{ ...head, conversationId: wrongHint }], maxDurationMs: 5000,
-  });
-  expect((await snapshot()).reader.get(fanslyDmReaderHeadKey(head))?.state).toBe("missing");
+  const state = async () => (await queryFanslyDmReaderHeads(db.db, pageId, [head]))
+    .get(fanslyDmReaderHeadKey(head))?.state;
+  expect(await state()).toBe("missing");
   expect(await readerState()).toBe("missing");
   await hot();
-  expect((await snapshot()).reader.get(fanslyDmReaderHeadKey(head))?.state).toBe("materialized");
+  expect(await state()).toBe("materialized");
 });
 
 it("applies cross-source tombstones only through an existing candidate and current binding", async () => {
@@ -107,20 +103,10 @@ it("applies cross-source tombstones only through an existing candidate and curre
   }
 });
 
-it("does not mistake old capture debt for current reader material and resolves archive-only heads", async () => {
-  const id = await hot(true);
-  await db.pool.query(`insert into fansly_dm_head_debt
-    (conversation_id, message_id, first_observed_at, captured_at) values ($1, 'head', now(), now())`, [id]);
-  const snapshot = await readFanslyDmShadowSnapshot(db.db, {
-    pageId, heads: [{ ...head, conversationId: id }], maxDurationMs: 5000,
-  });
-  expect(snapshot.hot.get(id)?.present).toBe(false);
-  expect(snapshot.reader.get(fanslyDmReaderHeadKey(head))?.state).toBe("deleted");
+it("resolves an archive-only head from the archive, with no live hot copy", async () => {
   await archive(false, false, pageId, "archive-only");
-  const target = { conversationRef: "archive-only", messageId: "head", conversationId: null };
-  const next = await readFanslyDmShadowSnapshot(db.db, { pageId, heads: [target], maxDurationMs: 5000 });
-  expect(next.hot.size).toBe(0);
-  expect(next.reader.get(fanslyDmReaderHeadKey(target))).toEqual({
+  const target = { conversationRef: "archive-only", messageId: "head" };
+  expect((await queryFanslyDmReaderHeads(db.db, pageId, [target])).get(fanslyDmReaderHeadKey(target))).toEqual({
     state: "materialized", source: "message_archive", liveHotCopy: false,
   });
 });
@@ -131,39 +117,4 @@ it("rejects oversized batches, keeps invalid-page evidence unknown and handles d
   expect((await queryFanslyDmReaderHeads(db.db, 0, [head])).get(fanslyDmReaderHeadKey(head))?.state).toBeNull();
   await expect(queryFanslyDmReaderHeads(db.db, pageId, Array.from({ length: 101 }, () => head)))
     .rejects.toThrow("exceeds one list page");
-});
-
-it("shares a monotonic budget across both reads and refuses an expired second read", async () => {
-  const id = await hot();
-  // Actual SQL uses the real database. Only elapsed time is injected; no sleeps,
-  // fake query completion or alternate lease/database clock is involved.
-  const clock = vi.fn().mockReturnValueOnce(0).mockReturnValueOnce(10)
-    .mockReturnValueOnce(20).mockReturnValue(5001);
-  await expect(readFanslyDmShadowSnapshot(db.db, {
-    pageId, heads: [{ ...head, conversationId: id }], maxDurationMs: 5000, monotonicNowMs: clock,
-  })).rejects.toThrow("DM shadow read budget exhausted");
-  expect(clock).toHaveBeenCalledTimes(4);
-  expect(await readerState()).toBe("materialized");
-});
-
-it("keeps one read-only snapshot despite a concurrent archive writer and passes only the remaining deadline", async () => {
-  const id = await hot();
-  await archive();
-  const read = readerRepo.queryFanslyDmReaderHeads;
-  vi.spyOn(readerRepo, "queryFanslyDmReaderHeads").mockImplementation(async (tx, page, heads) => {
-    const settings = await tx.execute<{ read_only: string; isolation: string; timeout: string }>(`
-      select current_setting('transaction_read_only') as read_only,
-        current_setting('transaction_isolation') as isolation,
-        current_setting('statement_timeout') as timeout`);
-    expect(settings.rows).toEqual([{ read_only: "on", isolation: "repeatable read", timeout: "500ms" }]);
-    await db.pool.query("update message_archive set content_pending = true where account_id = $1", [pageId]);
-    return read(tx, page, heads);
-  });
-  const clock = vi.fn().mockReturnValueOnce(0).mockReturnValueOnce(10)
-    .mockReturnValueOnce(20).mockReturnValue(4500);
-  const snapshot = await readFanslyDmShadowSnapshot(db.db, {
-    pageId, heads: [{ ...head, conversationId: id }], maxDurationMs: 5000, monotonicNowMs: clock,
-  });
-  expect(snapshot.reader.get(fanslyDmReaderHeadKey(head))?.state).toBe("materialized");
-  expect(await readerState()).toBe("content_pending");
 });
