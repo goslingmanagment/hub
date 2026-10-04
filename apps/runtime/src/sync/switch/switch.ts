@@ -13,6 +13,7 @@ import {
   type SyncSwitchCapability,
 } from "@agency_hub_core/db";
 
+import { resolveLegacyStreamIncidentsOfEnginePage } from "../../services/notification-incidents.ts";
 import { rebuildPageChains } from "../fansly/lib/chain-rebuild.ts";
 import type { EngineRegistry } from "../engine/resource.ts";
 import { findSyncPageByLabel } from "../inspect.ts";
@@ -48,9 +49,11 @@ import { checkSwitchPreconditions, redLinesLine, type RedLinesAcceptance } from 
 //      cancelled, `shadow`, exit 2.
 //   R  the final incremental chain rebuild from the journal (§8.2).
 //   I  the legacy import (`importLegacyState`), `legacy_imported_at` last.
-//   C  mode `live`: the host takes a new owner generation (its first send
-//      ≥ 1.2 × S after the legacy completion, `paceFloorFromDb`); then the
-//      page's history requests open (+1 h on the first page ever switched).
+//   C  mode `live`: the page's legacy stream incidents are closed
+//      (`engine_owned`: only the legacy executor's recovery resolved them);
+//      the host takes a new owner generation (its first send ≥ 1.2 × S after
+//      the legacy completion, `paceFloorFromDb`); then the page's history
+//      requests open (+1 h on the first page ever switched).
 //   H  once requests are open: the page's open hydration requests become
 //      history requests (`switch_migration`), their legacy rows `expired`.
 
@@ -363,6 +366,14 @@ async function finishLive(
   generationAtC: bigint | null,
 ): Promise<SyncSwitchOutcome> {
   const { db } = ctx;
+  // The page is the engine's now: the legacy stream latches only the legacy
+  // executor's recovery resolved are closed (`engine_owned`), before the wait
+  // for the owner — a page left live without one runs no legacy stream either.
+  // The host closes them again on every live takeover (idempotent).
+  const closed = await resolveLegacyStreamIncidentsOfEnginePage(ctx, { pageId, pageLabel: label });
+  if (closed.length > 0) {
+    ctx.print(`C ${label}: ${closed.length} legacy stream incident(s) closed (${closed.join(", ")}) — the page is owned by the Fansly Sync Engine`);
+  }
   const deadline = Date.now() + ctx.timing.ownerTimeoutMs;
   let page = await getSyncPage(db, pageId);
   for (;;) {
@@ -467,8 +478,8 @@ async function convertOpenHydration(ctx: SwitchContext, pageId: number, label: s
 
 function printChecklist(ctx: SwitchContext, label: string, page: SyncPageRow): void {
   ctx.print(`Post-switch checklist for ${label} (runbook §6.2):`);
-  ctx.print(`  S3 now: sync page status --page ${label}; step3-accept.sql from T0 = ${page.modeChangedAt.toISOString()} (sections 1, 2, 4, 8); sync alerts status --page ${label}`);
+  ctx.print(`  S3 now: sync page status --page ${label}; sync switch check --page ${label} --since ${page.modeChangedAt.toISOString()} (interim: a fail shows at once); sync alerts status --page ${label}`);
   ctx.print("  S4 within the hour: 1 deploy + 2 sync recreates + 1 kill -9, ≥ 10 min apart (owner decision №16)");
   ctx.print(`  S5 at ${page.requestsEnabledAt?.toISOString() ?? "the requests opening"}: the 20-fan control request`);
-  ctx.print(`  S7 after T* + 1 h: the verdict — sync switch check --page ${label} [--page <each page switched with it> …] --since <the first of their T0s; this page's: ${page.modeChangedAt.toISOString()}> (= step3-accept.sql section 9)`);
+  ctx.print(`  S7 after T* + 1 h: the verdict — sync switch check --page ${label} [--page <each page switched with it> …] --since <the first of their T0s; this page's: ${page.modeChangedAt.toISOString()}>`);
 }

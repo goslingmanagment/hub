@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
-  claimFanEarningsRotation, markFanEarningsDirty, renewFanEarningsClaim, settleFanEarningsReceipt,
+  claimFanEarningsRotation, countFanEarningsRecoveryDebt, markFanEarningsDirty, renewFanEarningsClaim,
+  settleFanEarningsReceipt,
   withOwnedPageSyncTransaction,
   type FanEarningsClaim,
 } from "@agency_hub_core/db";
@@ -211,6 +212,23 @@ describe("Fansly earnings revision and endpoint receipts", () => {
     expect(await lifetime()).toMatchObject({ consecutive_failures: 4, consecutive_rejections: 1 });
     await settle(await claim(8), "a", 9);
     expect(await lifetime()).toMatchObject({ consecutive_failures: 0, consecutive_rejections: 0 });
+  });
+
+  it("counts recovery debt until each endpoint holds a fresh observed receipt", async () => {
+    const hour = 3_600_000;
+    const debt = (seconds: number) => countFanEarningsRecoveryDebt(db.db, f.page.id, at(seconds), hour);
+    await settle(await claim(), "a");
+    expect(await debt(2)).toBe(0);
+    const monthly = await claim(2, "monthly");
+    // A claimed endpoint is not covered until its receipt settles.
+    expect(await debt(2)).toBe(1);
+    await settle(monthly, "a", 3);
+    expect(await debt(4)).toBe(0);
+    // Checked before the window: both endpoints are debt again.
+    expect(await debt(4 + 3600)).toBe(2);
+    // A dirty mark is debt inside the window.
+    await dirty(false, 5);
+    expect(await debt(6)).toBe(2);
   });
 
   it("reports per-endpoint ages, uncovered roster and receipt loss without fan identities", async () => {

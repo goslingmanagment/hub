@@ -198,8 +198,8 @@ export function registerSyncSwitchCommands(
   switchCommand
     .command("check")
     .description(
-      "the live-hour acceptance of switched pages (step 3b ruling 13, A6; the same rules as step3-accept.sql) as JSON, "
-      + "read-only; each page over [T_i, T* + 1 h) (exit 0 accepted, 1 a page failed, 2 inconclusive or the owner's review)",
+      "the live-hour acceptance of switched pages (step 3b ruling 13, A6) as JSON on stdout, read-only; each page over "
+      + "[T_i, T* + 1 h) (exit 0 accepted, 1 a page failed, 2 inconclusive or the owner's review)",
     )
     .option("--page <labels>", "a Fansly page; repeat it (or separate by commas) for pages switched together", collectLabels, [])
     .requiredOption("--since <iso>", "no window starts earlier: T_i = the later of this and the page's live instant", isoDate)

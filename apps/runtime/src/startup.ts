@@ -4,6 +4,7 @@ import { loadConfig } from "@agency_hub_core/shared";
 import { runMigrations } from "../../../packages/db/src/migrate-runner.ts";
 import { runApiRuntime } from "./api-runtime.ts";
 import { runSchedulerRuntime } from "./scheduler-runtime.ts";
+import { describeCompatibleClientSdks } from "./services/compatible-client-sdks.ts";
 import {
   DESKTOP_LIFECYCLE_V2_EVIDENCE,
   validateDesktopLifecycleV2Evidence,
@@ -57,6 +58,10 @@ function resolveRole() {
 export async function main() {
   if (process.argv[2] === "print-public-capabilities") {
     process.stdout.write(`${JSON.stringify(PUBLIC_RUNTIME_CAPABILITIES)}\n`);
+    return;
+  }
+  if (process.argv[2] === "print-compatible-client-sdks") {
+    process.stdout.write(`${JSON.stringify(describeCompatibleClientSdks())}\n`);
     return;
   }
   if (process.argv[2] === "print-desktop-lifecycle-v2-evidence") {

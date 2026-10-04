@@ -444,8 +444,6 @@ export class SyncRunTelemetry {
   private readonly requestObserver: HttpRequestObserver;
   private readonly runStartedAt: Date;
 
-  private boundary: Record<string, unknown> | null = null;
-  private scan: Record<string, unknown> | null = null;
   private hydration: Record<string, unknown> | null = null;
 
   constructor(
@@ -546,20 +544,6 @@ export class SyncRunTelemetry {
       code: input.code,
       ...input.details,
     }, input.severity === "error" ? "error" : "warn");
-  }
-
-  setBoundarySummary(boundary: Record<string, unknown>) {
-    this.boundary = {
-      ...(this.boundary ?? {}),
-      ...boundary,
-    };
-  }
-
-  setScanSummary(scan: Record<string, unknown>) {
-    this.scan = {
-      ...(this.scan ?? {}),
-      ...scan,
-    };
   }
 
   mergeHydrationSummary(hydration: Record<string, unknown>) {
@@ -676,9 +660,9 @@ export class SyncRunTelemetry {
             ...Object.keys(this.checkpointAfter),
           ])).map((label) => [
             label,
-            // Write-time record OR summary diff: some handlers (transactions
-            // progress writes, several OFAPI paths) persist checkpoints without
-            // calling recordCheckpointAdvanced, and one calls it with a null
+            // Write-time record OR summary diff: some handlers (several OFAPI
+            // paths) persist checkpoints without calling
+            // recordCheckpointAdvanced, and one calls it with a null
             // write — the diff over the now-bounded summaries keeps those sites
             // truthful, the Set keeps progress-only advances (which may leave
             // the summary byte-identical) reading as advanced.
@@ -687,8 +671,6 @@ export class SyncRunTelemetry {
           ]),
         ),
       },
-      boundary: this.boundary,
-      scan: this.scan,
       hydration: this.hydration,
       phases: this.phaseNames,
       ...extraStats,

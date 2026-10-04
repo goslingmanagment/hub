@@ -100,6 +100,7 @@ const envSchema = z.object({
   FANSLY_DM_MESSAGES_DELAY_MS: z.coerce.number().int().positive().default(5000),
   FANSLY_DM_HEAD_CATCHUP_PAGE_ALLOWLIST: z.string().default("none"),
   FANSLY_DM_SHADOW_PAGE_ALLOWLIST: z.string().default("none"),
+  // Retired with the legacy WebSocket receiver (step 4, S4-12); parsed, ignored.
   FANSLY_WS_CAPTURE_ENABLED: booleanSchema.default(false),
   FANSLY_WS_CAPTURE_PAGE_ALLOWLIST: z.string().default(""),
   FANSLY_LIVE_OVERLAY_READ_PAGES: z.string().default("none"),
@@ -364,7 +365,7 @@ const envSchema = z.object({
   // frame says a fan sent media. OFF until the owner enables it after stage 1.
   AI_MEDIA_DESCRIBE_FANSLY_ACCELERATOR_ENABLED: booleanSchema.default(false),
   AI_MEDIA_DESCRIBE_FANSLY_ACCELERATOR_DAILY_LIMIT: z.coerce.number().int().min(0).default(60),
-  // Fansly fast lane: a head read right after the hub's own WS frame (off).
+  // Retired with the AI media fast lane (step 4, S4-12); parsed, ignored.
   AI_MEDIA_DESCRIBE_FANSLY_FAST_LANE_MODE: z.enum(["off", "shadow", "serve"]).default("off"),
   AI_MEDIA_DESCRIBE_FANSLY_FAST_LANE_PAGES: z.string().default(""),
   // Agent Read Plane (slice 0a). Every one of these ships OFF/false so the deploy
@@ -431,6 +432,16 @@ const envSchema = z.object({
   // with no catalog reference there is no pointer, so the inline body is written
   // exactly as before. EMPTY = FULLY OFF.
   CAPTURE_CAS_POINTER_ONLY_PAGES: z.string().default(""),
+  // Chat extension (chat-extension docs/hub-pr-plan.md H-2b): the owner's
+  // switches for the hub's third client, live and audited. Every one rests OFF.
+  // The JSON and version values are parsed where they are read
+  // (chat-extension-settings.ts), never here: a bad value must turn the
+  // extension off, not stop the hub from booting.
+  CHAT_EXTENSION_ENABLED: booleanSchema.default(false),
+  CHAT_EXTENSION_FEATURES: z.string().default("{}"),
+  CHAT_EXTENSION_MIN_VERSION: z.string().default("0.0.0"),
+  CHAT_EXTENSION_HOST_BINDINGS: z.string().default("{}"),
+  CHAT_EXTENSION_PREVIEW_SEND_RECEIPT_PROFILES: z.string().default("[]"),
 });
 
 // Machine-readable list of every env var the schema understands. Exported so the
@@ -468,18 +479,33 @@ export interface AppConfig {
   fanslyDmMessagesDelayMs: number;
   fanslyDmHeadCatchupPageAllowlist?: string;
   fanslyDmShadowPageAllowlist?: string;
+  /** @deprecated Retired with the legacy WebSocket receiver (step 4, S4-12):
+   *  every Fansly page's socket runs in the Sync Engine and nothing reads it.
+   *  Parsed so an env that sets it boots; removed in S4-26. */
   fanslyWsCaptureEnabled?: boolean;
+  /** @deprecated Retired, like {@link AppConfig.fanslyWsCaptureEnabled}. */
   fanslyWsCapturePageAllowlist?: string;
   /** Pages whose chatter routes and AI kernel context read the live overlay
    * (CSV of labels, `all` or `none`); see fansly-live-overlay-read.ts. */
   fanslyLiveOverlayReadPages?: string;
+  /** @deprecated Retired, ignored: nothing reads it since the legacy Fansly
+   *  money lanes were deleted (step 4, S4-16). Parsed so an env that sets it
+   *  still boots; removed with its production override in S4-26. */
   fanslyFanEarningsRecoveryEnabled?: boolean;
+  /** @deprecated Retired, ignored, like {@link AppConfig.fanslyFanEarningsRecoveryEnabled}. */
   fanslyFanEarningsRecoveryPageAllowlist?: string;
+  /** @deprecated Retired, ignored, like {@link AppConfig.fanslyFanEarningsRecoveryEnabled}. */
   fanslyFanEarningsTargetsEnabled?: boolean;
+  /** @deprecated Retired, ignored, like {@link AppConfig.fanslyFanEarningsRecoveryEnabled}. */
   fanslyFanEarningsTargetsPageAllowlist?: string;
+  /** @deprecated Retired, ignored, like {@link AppConfig.fanslyFanEarningsRecoveryEnabled}. */
   fanslyFanEarningsTargetsDailyAttemptLimit?: number;
+  /** @deprecated Retired, ignored, like {@link AppConfig.fanslyFanEarningsRecoveryEnabled}. */
   fanslyFanEarningsRosterMaxAgeHours?: number;
+  /** @deprecated Ignored since step 4: the legacy followers reconcile that read
+   *  it is deleted. Parsed so an env that sets it boots; removed in step 4. */
   fanslyFollowersSettlementReuseEnabled?: boolean;
+  /** @deprecated Ignored, like {@link AppConfig.fanslyFollowersSettlementReuseEnabled}. */
   fanslyFollowersSettlementReusePageAllowlist?: string;
   fanslyDmBoundedEnabled?: boolean;
   fanslyDmBoundedPageAllowlist?: string;
@@ -488,6 +514,7 @@ export interface AppConfig {
   fanslyWsHintsPageAllowlist?: string;
   fanslyWsHintsTypeAllowlist?: string;
   fanslyWsHintsPolicies?: string;
+  /** @deprecated Retired, ignored, like {@link AppConfig.fanslyFanEarningsRecoveryEnabled}. */
   fanslyFanEarningsShadowPageAllowlist?: string;
   fanslyDmDeepBackfillEnabled?: boolean;
   fanslyDmDeepBackfillMaxRequestsPerRun?: number;
@@ -499,7 +526,9 @@ export interface AppConfig {
   egressPacerMode: "off" | "shadow" | "enforce";
   lakeDir: string;
   syncPageExecutorConcurrency: number;
+  /** @deprecated Retired, ignored, like {@link AppConfig.fanslyFanEarningsRecoveryEnabled}. */
   transactionLookbackDays: number;
+  /** @deprecated Retired, ignored, like {@link AppConfig.fanslyFanEarningsRecoveryEnabled}. */
   transactionRescanCapDays: number;
   syncObservabilityRetentionDays: number;
   healthSyncLightMaxAgeMinutes: number;
@@ -524,54 +553,61 @@ export interface AppConfig {
   ofapiDmProjectionEnabled?: boolean;
   ofapiDmSyncEnabled?: boolean;
   ofapiDmColdArchiveEnabled?: boolean;
+  /** @deprecated Retired at step 4 with the legacy ramp gate of fan_earnings and purchase_history; nothing reads it. */
   fanslyFanEarningsSyncEnabled?: boolean;
+  /** @deprecated Retired, ignored, like {@link AppConfig.fanslyFanEarningsRecoveryEnabled}. */
   fanslyPurchaseHistorySyncEnabled?: boolean;
+  /** @deprecated Retired at step 4 with the legacy ramp gate of fan_earnings and purchase_history; nothing reads it. */
   fanslyNewStreamPageAllowlist?: string;
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyStatsSnapshotSyncEnabled?: boolean;
-  /** CSV of page labels allowed to run the stats sweep; empty = NONE (fails closed). */
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyStatsSnapshotPageAllowlist?: string;
-  /** HTTP ATTEMPTS per page per UTC day for the stats lane; crossing it defers. */
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyStatsSnapshotDailyCallBudget?: number;
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyNotificationsSyncEnabled?: boolean;
-  /** CSV of page labels allowed to poll notifications; empty = NONE (fails closed). */
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyNotificationsPageAllowlist?: string;
-  /** HTTP ATTEMPTS per page per UTC day for the notification lane; crossing it defers. */
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyNotificationsDailyCallBudget?: number;
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyCatalogSyncEnabled?: boolean;
-  /** CSV of page labels allowed to sweep the catalog; empty = NONE (fails closed). */
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyCatalogPageAllowlist?: string;
-  /** HTTP ATTEMPTS per page per UTC day for the catalog lane; crossing it defers. */
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyCatalogDailyCallBudget?: number;
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyPostRepliesSyncEnabled?: boolean;
-  /** CSV of page labels allowed to walk post replies; empty = NONE (fails closed). */
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyPostRepliesPageAllowlist?: string;
-  /** HTTP ATTEMPTS per page per UTC day for the replies walk; crossing it defers. */
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyRepliesDailyCallBudget?: number;
   /** How stale a post's last walk must be before the round-robin re-reads it. */
   fanslyRepliesRewalkCycleDays?: number;
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyPayoutsSyncEnabled?: boolean;
-  /** CSV of page labels allowed to read payouts; empty = NONE (fails closed). */
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyPayoutsPageAllowlist?: string;
-  /** HTTP ATTEMPTS per page per UTC day for the payouts lane; crossing it defers. */
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyPayoutsDailyCallBudget?: number;
-  /** WP-F4: the per-media statistics lane over `/it/moie/statsnew`. */
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyMediaStatsSyncEnabled?: boolean;
-  /** CSV of page labels allowed to walk per-media stats; empty = NONE (fails closed). */
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyMediaStatsPageAllowlist?: string;
-  /** HTTP ATTEMPTS per page per UTC day for the per-media lane; crossing it defers.
-   *  The lane is DESIGNED to spend all of it when M is large (A16). */
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyMediaStatsDailyCallBudget?: number;
-  /** How stale a long-tail media item's last visit must be before the
-   *  round-robin re-reads it (A6's one explicitly tunable cadence). */
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyMediaStatsLongTailCycleDays?: number;
-  /** WP-F6: the decayed `GET /post?ids=` phase on the EXISTING posts stream. */
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyPostEngagementRefreshEnabled?: boolean;
-  /** HTTP ATTEMPTS per page per UTC day for the engagement phase; crossing it
-   *  defers. Counted apart from the timeline walk in the same posts cursor. */
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyPostEngagementDailyCallBudget?: number;
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyStatsHourlyEnabled?: boolean;
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyStatsHourlyBackfillMaxDays?: number;
-  /** Delay + 30% jitter between BACKFILL chunk continuations (burst shape). */
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyBackfillContinuationDelayMs?: number;
   fanslyDeepBackfillIgnoreRetentionLimit?: boolean;
   ofapiDmColdArchiveRetentionDays?: number;
@@ -682,9 +718,10 @@ export interface AppConfig {
   aiMediaDescribeFanslyAcceleratorEnabled?: boolean;
   /** Agency-wide accelerator reads per rolling 24 h. */
   aiMediaDescribeFanslyAcceleratorDailyLimit?: number;
-  /** Fansly fast lane: off, shadow (route and count only) or serve. */
+  /** @deprecated Retired with the AI media fast lane (step 4, S4-12): nothing
+   *  reads it. Parsed so an env that sets it boots; removed in S4-26. */
   aiMediaDescribeFanslyFastLaneMode?: "off" | "shadow" | "serve";
-  /** Fast lane allowlist: comma-separated page labels, or `*`. */
+  /** @deprecated Retired, like {@link AppConfig.aiMediaDescribeFanslyFastLaneMode}. */
   aiMediaDescribeFanslyFastLanePages?: string;
   openrouterApiKey?: string | null;
   // Agent Read Plane (slice 0a) — all live-wired, all inert by default.
@@ -715,6 +752,16 @@ export interface AppConfig {
   /** G5 slice 3c-1: pages whose new captures skip the inline body once the
    *  catalog copy is on disk. CSV of page ids, "*" for all, "" = fully off. */
   captureCasPointerOnlyPages?: string;
+  /** Chat extension master switch; off = every feature off (H-2b). */
+  chatExtensionEnabled?: boolean;
+  /** JSON: scope ("*" or a page label) → flag → on. */
+  chatExtensionFeatures?: string;
+  /** MAJOR.MINOR.PATCH: the lowest extension version the client routes serve. */
+  chatExtensionMinVersion?: string;
+  /** JSON: host account ("onlymonster:36408") → page label. */
+  chatExtensionHostBindings?: string;
+  /** JSON array: the admitted preview-send receipt profiles (X8); [] = none. */
+  chatExtensionPreviewSendReceiptProfiles?: string;
 }
 
 function hasConfiguredValue(value: string | undefined) {
@@ -1043,6 +1090,11 @@ export function loadConfig(
     captureCasDualWritePages: parsed.CAPTURE_CAS_DUAL_WRITE_PAGES,
     captureCasReadMode: parsed.CAPTURE_CAS_READ_MODE,
     captureCasPointerOnlyPages: parsed.CAPTURE_CAS_POINTER_ONLY_PAGES,
+    chatExtensionEnabled: parsed.CHAT_EXTENSION_ENABLED,
+    chatExtensionFeatures: parsed.CHAT_EXTENSION_FEATURES,
+    chatExtensionMinVersion: parsed.CHAT_EXTENSION_MIN_VERSION,
+    chatExtensionHostBindings: parsed.CHAT_EXTENSION_HOST_BINDINGS,
+    chatExtensionPreviewSendReceiptProfiles: parsed.CHAT_EXTENSION_PREVIEW_SEND_RECEIPT_PROFILES,
   };
 }
 

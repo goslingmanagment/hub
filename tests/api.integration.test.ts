@@ -9046,13 +9046,9 @@ describe("api integration", () => {
         state: "retrying",
         headline: "Retrying automatically",
       }),
-      progress: {
-        label: "17 items backfilled",
-        current: 17,
-        total: null,
-        unit: "items",
-        percent: null,
-      },
+      // A legacy Fansly transactions backfill checkpoint renders no progress
+      // since step 4 (S4-16): its writer is gone, the row stays as a record.
+      progress: null,
       recentRuns: expect.objectContaining({
         partial: 1,
       }),

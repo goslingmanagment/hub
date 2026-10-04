@@ -1,5 +1,4 @@
 import type { SyncUxSummary } from "@agency_hub_core/contracts";
-import { getFanslyWsHintDiagnostic } from "./fansly-ws-policy-repair.ts";
 import {
   activePageSyncRetryAt,
   getOfapiFinancialTruthSummaries,
@@ -39,7 +38,6 @@ import {
 } from "./sync/followers-reconcile-floor.ts";
 import { filterOnlyFansAudienceStreams } from "./sync/ofapi-audience-sync.ts";
 import { buildEngineDomainBlock, readEngineStatusFacts, type EngineStatusFacts } from "./sync-status-engine.ts";
-import { parseTransactionBackfillState } from "./sync/transaction-backfill.ts";
 
 export const SYNC_DOMAIN_BLOCKS = [
   "connection",
@@ -832,33 +830,6 @@ function buildProgressFromPayload(
         };
       }
     }
-
-    if (task.stream === "transactions") {
-      const backfill = parseTransactionBackfillState(monitorRow.checkpointState);
-      if (backfill) {
-        const total = typeof backfill.providerReportedTotal === "number"
-          ? Math.max(backfill.providerReportedTotal, 0)
-          : null;
-        const current = clampProgress(
-          backfill.processedTransactions + backfill.processedChargebacks,
-          total,
-        );
-        return {
-          label: total !== null
-            ? `${current.toLocaleString()} / ${total.toLocaleString()} items backfilled`
-            : `${current.toLocaleString()} items backfilled`,
-          current,
-          total,
-          unit: "items",
-          percent: percent(current, total),
-          percentValid: total !== null && total > 0,
-          details: {
-            ...payload,
-            ...backfill,
-          },
-        };
-      }
-    }
   }
 
   if (typeof payload.pageCount === "number" && typeof payload.offset === "number") {
@@ -1615,8 +1586,6 @@ export async function getSyncStatusSnapshot(
   const engineFacts: Map<number, EngineStatusFacts> = fanslyPageIds.length > 0 && effectiveConfig !== null
     ? await readEngineStatusFacts(app.db, { pageIds: fanslyPageIds, settingMs: effectiveConfig.fanslyDefaultDelayMs })
     : new Map();
-  const hintDiagnostics = new Map(await Promise.all(scopedPages.filter(page => fanslyPageIds.includes(page.id) && !engineFacts.has(page.id))
-    .map(async page => [page.id, await getFanslyWsHintDiagnostic(app, page.label, effectiveConfig ?? app.config)] as const)));
 
   const ofapiDmIngestPageIds = isOfapiDmProjectionEnabled(app.config)
     ? new Set(
@@ -1792,11 +1761,6 @@ export async function getSyncStatusSnapshot(
       }
 
       const blockList = SYNC_DOMAIN_BLOCKS.map((block) => blocks[block]);
-      // Additive latency diagnostics, deliberately excluded from block health
-      // and deploy gating. The existing metrics bag is exposed by sync-blocks;
-      // the dashboard's Sync tab turns a generation_mismatch into a status line.
-      const hintDiagnostic = hintDiagnostics.get(page.id);
-      if (hintDiagnostic) blocks.messages_live.metrics.fanslyWsHints = hintDiagnostic;
       return {
         pageId: page.id,
         pageLabel: page.label,

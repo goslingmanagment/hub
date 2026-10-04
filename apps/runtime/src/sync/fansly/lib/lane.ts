@@ -5,11 +5,9 @@ import {
   type Database,
 } from "@agency_hub_core/db";
 
-// The lane rules the Sync Engine's resources share with the legacy Fansly
-// lanes: the three-way response class, the UTC day key, one offset page's
-// advance and the capture-coverage writer. The legacy lanes (fansly-lane.ts
-// and the stream modules on it) import them from here until step 4 deletes
-// them.
+// The lane rules the Sync Engine's resources share: the three-way response
+// class, the UTC day key, one offset page's advance and the capture-coverage
+// writer.
 
 export type FanslyResponseClass = "nonempty" | "empty" | "invalid";
 

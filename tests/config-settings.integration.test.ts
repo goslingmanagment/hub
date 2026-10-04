@@ -154,14 +154,14 @@ describe("config_settings repository (Stage B0)", () => {
     // ofapiDmDailyCreditBudget is 'none' (not overridable), so its override is intentionally
     // NOT surfaced (source stays 'env') — the unit suite covers that 'none' case separately.
     await setConfigOverride(testDb.db, {
-      key: "transactionLookbackDays",
+      key: "healthSyncLightMaxAgeMinutes",
       value: 14,
       userId,
       groupId: randomUUID(),
     });
 
     const view = await buildConfigView(testDb.db);
-    const lookback = viewItem(view, "transactionLookbackDays");
+    const lookback = viewItem(view, "healthSyncLightMaxAgeMinutes");
     expect(lookback.source).toBe("override");
     expect(lookback.desired).toBe(14);
     // No active instance is reporting a value, so the override is pending.
@@ -341,7 +341,7 @@ describe("config_settings repository (Stage B0)", () => {
       captureCasDualWritePages: "",
       fanslyReplayMode: "off",
       retentionTieringEnabled: false,
-      transactionLookbackDays: 7,
+      healthSyncLightMaxAgeMinutes: 7,
     } as unknown as AppConfig;
   }
 
@@ -384,7 +384,7 @@ describe("config_settings repository (Stage B0)", () => {
     await setConfigOverridesAtomic(testDb.db, {
       patches: [
         { key: "fanslyReplayMode", value: "shadow" },
-        { key: "transactionLookbackDays", value: 14 },
+        { key: "healthSyncLightMaxAgeMinutes", value: 14 },
         { key: "retentionTieringEnabled", value: true },
       ],
       userId,
@@ -393,12 +393,12 @@ describe("config_settings repository (Stage B0)", () => {
 
     const overrides = await getConfigOverrides(testDb.db);
     expect(overrides.get("fanslyReplayMode")!.value).toBe("shadow");
-    expect(overrides.get("transactionLookbackDays")!.value).toBe(14);
+    expect(overrides.get("healthSyncLightMaxAgeMinutes")!.value).toBe(14);
     expect(overrides.get("retentionTieringEnabled")!.value).toBe(true);
 
     const merged = applyEffectiveOverrides(overlayBase(), overrides);
     expect(merged.fanslyReplayMode).toBe("shadow");
-    expect(merged.transactionLookbackDays).toBe(14);
+    expect(merged.healthSyncLightMaxAgeMinutes).toBe(14);
     expect(merged.retentionTieringEnabled).toBe(true);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
@@ -445,7 +445,7 @@ describe("config_settings repository (Stage B0)", () => {
         // A NESTED string that looks like a number: safe even before the fix
         // (drizzle only re-parsed the top level), and it must stay safe now.
         captureCasDualWritePages: { value: "4" },
-        transactionLookbackDays: { value: 14 },
+        healthSyncLightMaxAgeMinutes: { value: 14 },
         retentionTieringEnabled: { value: false },
         encryptionKey: { value: null, masked: true, state: "set" },
       },

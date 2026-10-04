@@ -356,25 +356,20 @@ describe("the journaling call sites", () => {
     // set grew. So what a call site must do is (a) hand the served body to the
     // trim and (b) stamp the per-endpoint capture-shape version, so replay
     // tooling can tell a pre-[A20] 4-field body from a widened 18-field one.
-    const source = readFileSync(
-      path.resolve("apps/runtime/src/services/sync/executor-handlers.ts"),
-      "utf8",
-    );
-    // The conversation list is the Sync Engine's (the legacy dm_conversations
-    // sweep is deleted since step 4, S4-14): it journals the
-    // `dm_conversations` kind through one trim.
+    // The follower lanes and the conversation list are the Sync Engine's (the
+    // legacy dm_conversations sweep is deleted since step 4, S4-14; the legacy
+    // `followers` and `followers_reconcile` handlers since S4-17): both of its
+    // follower resources journal the `followers` kind through one trim, and
+    // its conversation list the `dm_conversations` kind through another.
     const engineSource = readFileSync(
       path.resolve("apps/runtime/src/sync/fansly/capture.ts"),
       "utf8",
     );
-    const follower = [...source.matchAll(
-      /responsePayload: captureFanslyFollowerPayload\(page\.raw, page\.contractAccepted\),\s*\n\s*mapperVersion: (\w+),/g,
+    const follower = [...engineSource.matchAll(
+      /body: captureFanslyFollowerPayload\(response, served\.contractAccepted\),\s*\n\s*mapperVersion: (\w+),/g,
     )];
-    // Two follower lanes: `followers` (incremental) and `followers_reconcile`.
-    expect(follower).toHaveLength(2);
-    for (const match of follower) {
-      expect(match[1]).toBe("FANSLY_FOLLOWERS_CAPTURE_MAPPER_VERSION");
-    }
+    expect(follower).toHaveLength(1);
+    expect(follower[0]![1]).toBe("FANSLY_FOLLOWERS_CAPTURE_MAPPER_VERSION");
     const groups = [...engineSource.matchAll(
       /body: captureFanslyMessagingGroupsPayload\(response, served\.contractAccepted\),\s*\n\s*mapperVersion: (\w+),/g,
     )];
@@ -383,8 +378,8 @@ describe("the journaling call sites", () => {
 
     // …and the shared constant is NOT bumped for these lanes: it is read by
     // every Fansly writer, so bumping it would re-label unrelated captures.
-    expect(source).not.toMatch(
-      /trimFanslyFollowerPayload\(page\.raw\),\s*\n\s*mapperVersion: FANSLY_MAPPER_VERSION,/,
+    expect(engineSource).not.toMatch(
+      /captureFansly(Follower|MessagingGroups)Payload\(response, served\.contractAccepted\),\s*\n\s*mapperVersion: FANSLY_MAPPER_VERSION,/,
     );
   });
 });
@@ -500,23 +495,6 @@ describe("[A20] the WP-F2 notification lane trims accounts[] and NOTHING else", 
       .not.toBe(FANSLY_GROUPS_CAPTURE_MAPPER_VERSION);
     expect(FANSLY_NOTIFICATIONS_CAPTURE_MAPPER_VERSION)
       .not.toBe(FANSLY_FOLLOWERS_CAPTURE_MAPPER_VERSION);
-  });
-
-  it("the handler journals through the trim, and stamps that version", () => {
-    // Pin both halves of the shared-journal seam: the lane-specific mapper
-    // version configures the writer, and the call site passes only the trimmed
-    // payload into it.
-    const source = readFileSync(
-      path.resolve("apps/runtime/src/services/sync/fansly-notifications.ts"),
-      "utf8",
-    );
-    expect(source).toMatch(
-      /createFanslyLaneJournal\(\{[\s\S]*?mapperVersion: FANSLY_NOTIFICATIONS_CAPTURE_MAPPER_VERSION,[\s\S]*?\}\);/,
-    );
-    expect(source).toMatch(
-      /journal\(OBSERVATION_KIND, requestParams, trimFanslyNotificationsPayload\(payload\)\)/,
-    );
-    expect(source).not.toMatch(/journal\(OBSERVATION_KIND, requestParams, payload\)/);
   });
 });
 

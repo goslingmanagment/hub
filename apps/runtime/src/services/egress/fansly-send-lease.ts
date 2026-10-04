@@ -2,10 +2,10 @@ import { safeFanslyAnswerHeaders, type FanslySendCompletionOutcome, type FanslyS
 import type { Dispatcher } from "undici";
 
 // Plan §2.4/§2.5: the senders outside the adapter (CDN media download, the
-// WebSocket handshakes, the binding preflight) ride a page's egress through
-// the same per-page send guard. Each physical HTTP request is one capture:
-// the lease's dispatcher refuses a second dispatch (a redirect hop is a new
-// capture), and the request is completed once it has settled.
+// WebSocket handshake) ride a page's egress through the same per-page send
+// guard. Each physical HTTP request is one capture: the lease's dispatcher
+// refuses a second dispatch (a redirect hop is a new capture), and the
+// request is completed once it has settled.
 
 /** Hosts of Fansly's origins: the REST API, the WebSocket and the media CDNs. */
 export function isFanslyHost(hostname: string): boolean {

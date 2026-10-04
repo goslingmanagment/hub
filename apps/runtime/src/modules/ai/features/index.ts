@@ -2,6 +2,7 @@ import type {
   AiFeatureAttachedRecaps,
   AiFeatureDebugInputFrame,
   AiGatewayReasoningEffort,
+  AiStreamCapability,
 } from "@agency_hub_core/contracts";
 import {
   COACH_ANSWER_MAX_CHARS,
@@ -30,7 +31,7 @@ import {
 } from "../../../services/errors.ts";
 import { loadEffectiveConfig } from "../../../services/effective-config.ts";
 import { pageReadsLiveOverlay } from "../../../services/live-overlay-read.ts";
-import { isPageAllowlisted } from "../../../services/voice-notes.ts";
+import { isPageAllowlisted } from "@agency_hub_core/shared";
 import { isPromptDebugEchoEnabled } from "../prompt-debug-echo.ts";
 import { aiPersonaDefinitionId } from "../persona-definition.ts";
 import {
@@ -285,7 +286,11 @@ export async function prepareAiFeatureStream(
   principal: HumanAuthPrincipal,
   featureKey: string,
   body: AiFeatureRequestBody,
-  options?: { debugPromptEcho?: boolean },
+  options?: {
+    debugPromptEcho?: boolean;
+    /** Parsed `x-kernel-ai-capabilities` of the request (empty when absent). */
+    capabilities?: ReadonlySet<AiStreamCapability>;
+  },
 ): Promise<PreparedAiGatewayStream> {
   if (!(featureKey in FEATURE_POLICIES) || !isOperationFeature(featureKey as never)) {
     throw new UnknownAiFeatureError(`Unknown AI feature: ${featureKey}`);

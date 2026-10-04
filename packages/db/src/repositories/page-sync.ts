@@ -82,7 +82,7 @@ export type SyncRequestSource =
   | "reset";
 export type SyncWorkClass = "live" | "history" | "maintenance";
 
-/** The Fansly streams behind a rollout gate (`services/sync/fansly-stream-gate.ts`).
+/** The Fansly streams the legacy executor once held behind a rollout gate.
  *  Since step 4 (S4-10) the legacy executor runs no Fansly stream, so nothing
  *  pauses or resumes them by their gate any more. */
 export const FANSLY_BULK_SYNC_STREAMS = [
@@ -2312,40 +2312,6 @@ export async function heartbeatPageSyncLease(
       and stream = ${input.stream}
       and lease_token = ${input.leaseToken}
       and leased_seq is not null
-      and status = 'running'
-      and lease_expires_at > clock_timestamp()
-  `);
-
-  return (result.rowCount ?? 0) > 0;
-}
-
-export async function recordRunningPageSyncProgress(
-  db: Database,
-  input: {
-    pageId: number;
-    stream: SyncStream;
-    requestSeq: number;
-    leaseToken: string;
-    progressedAt?: Date | null;
-    phase?: string | null;
-    workClass?: SyncWorkClass | null;
-    progress?: Record<string, unknown>;
-    now?: Date;
-  },
-) {
-  const now = input.now ?? new Date();
-  const progressedAt = input.progressedAt ?? now;
-  const result = await db.execute(sql`
-    update ${pageSyncStates}
-    set progressed_at = ${progressedAt},
-        phase = coalesce(${input.phase ?? null}, phase),
-        work_class = coalesce(${input.workClass ?? null}, work_class),
-        progress = ${input.progress ?? {}},
-        updated_at = ${now}
-    where page_id = ${input.pageId}
-      and stream = ${input.stream}
-      and lease_token = ${input.leaseToken}
-      and leased_seq = ${input.requestSeq}
       and status = 'running'
       and lease_expires_at > clock_timestamp()
   `);

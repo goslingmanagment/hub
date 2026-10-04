@@ -30,6 +30,7 @@ import {
   SYNC_WORK_STATES,
   SYNC_MEDIA_HANDOFF_MAX_BYTES,
   SYNC_LIFTABLE_DM_EXCLUSIONS,
+  syncAttempts,
   syncMediaHandoff,
   syncPages,
 } from "@agency_hub_core/db";
@@ -512,6 +513,33 @@ describe("0236_fansly_thread_summary_from_archive.sql", () => {
   });
 
   it("allows application rollback after the data-only migration", () => {
+    expect(rollbackCompatible()).toContain(`"${migration}"`);
+  });
+});
+
+describe("0237_sync_attempt_route_intervals.sql", () => {
+  const migration = "0237_sync_attempt_route_intervals.sql";
+  const text = readFileSync(`packages/db/migrations/${migration}`, "utf8");
+  const sql = stripComments(text);
+  const statements = topLevelStatements(sql);
+
+  it("is purely additive: two nullable columns without a default (catalog-only) and their comments", () => {
+    expect(statements).toEqual([
+      "alter table sync_attempts add column if not exists route_interval_ms integer",
+      "alter table sync_attempts add column if not exists family_interval_ms integer",
+      expect.stringMatching(/^comment on column sync_attempts\.route_interval_ms is 'I19: /),
+      expect.stringMatching(/^comment on column sync_attempts\.family_interval_ms is 'I19: /),
+    ]);
+    expect(sql).not.toMatch(/\b(drop|rename|truncate|delete|update|default|not null|grant)\b/i);
+  });
+
+  it("is mirrored in drizzle", () => {
+    const columns = syncAttempts as unknown as Record<string, { name?: unknown }>;
+    expect(columns.routeIntervalMs?.name).toBe("route_interval_ms");
+    expect(columns.familyIntervalMs?.name).toBe("family_interval_ms");
+  });
+
+  it("allows application rollback after the additive migration", () => {
     expect(rollbackCompatible()).toContain(`"${migration}"`);
   });
 });

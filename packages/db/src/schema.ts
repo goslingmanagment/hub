@@ -1065,6 +1065,9 @@ export const syncAttempts = pgTable(
     applyRetryAt: timestamp("apply_retry_at", { withTimezone: true }),
     appliedAt: timestamp("applied_at", { withTimezone: true }),
     evidence: boolean("evidence").notNull().default(false),
+    // 0237 (I19): the route's and its family's intervals the admission applied.
+    routeIntervalMs: integer("route_interval_ms"),
+    familyIntervalMs: integer("family_interval_ms"),
   },
   (table) => ({
     pageAdmittedIdx: index("sync_attempts_page_admitted").on(table.pageId, table.admittedAt.desc()),
@@ -1316,9 +1319,9 @@ export const syncRawPayloads = pgTable(
     dmTipContextBackfillIdx: index("sync_raw_payloads_dm_tip_context_backfill_idx")
       .on(table.id)
       .where(sql`${table.endpoint} = 'dm_messages' and ${table.payloadKind} = 'dm_messages'`),
-    // 0223: a purchase_history chunk's capture, probe and storm reads. The
-    // list is the lane's endpoints (fansly-purchase-history.ts); a query only
-    // uses the index when its endpoint is one of them.
+    // 0223: the purchase-history capture, probe and storm reads. The list is
+    // the endpoints the legacy lane journaled (deleted at step 4, S4-16); a
+    // query only uses the index when its endpoint is one of them.
     purchaseHistoryIdx: index("sync_raw_payloads_purchase_history_idx")
       .on(table.pageId, table.endpoint, table.id)
       .where(sql`${table.endpoint} in ('purchase_history', 'purchase_history_contract_probe', 'purchase_history_contract_storm')`),
@@ -2620,6 +2623,11 @@ export const deviceTokens = pgTable(
     // presented, stamped by the same UPDATE as last_used_at. Routing metadata,
     // never authority (#145).
     lastClientVersion: text("last_client_version"),
+    // chat-extension H-3 (*_device_token_client_profile.sql): the narrow
+    // token's client profile (CLIENT_TOKEN_PROFILES), set once at issuance and
+    // immutable (trigger).
+    // NULL = a full token. Authority, unlike last_client_version.
+    clientProfile: text("client_profile"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
     revokedReason: text("revoked_reason"),

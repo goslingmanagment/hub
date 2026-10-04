@@ -57,12 +57,7 @@ import {
   type SyncPageExecutePayload,
 } from "../sync-queue.ts";
 import { pageSyncDependencyInput } from "./dependencies.ts";
-import {
-  buildNormalizedSyncError,
-  FanslyPurchaseHistoryContractError,
-  FanslyTransactionsItemContractError,
-  FollowersReconcileConsistencyError,
-} from "./errors.ts";
+import { buildNormalizedSyncError } from "./errors.ts";
 import { executeStreamChunk, resolveExecutorPageContext } from "./executor-handlers.ts";
 import { SyncChunkBudget } from "./chunk-budget.ts";
 import { pauseDisabledOnlyFansDmPollingForPage } from "./onlyfans-dm-polling.ts";
@@ -83,9 +78,6 @@ const LONG_PROVIDER_COOLDOWN_MS = 30 * 60_000;
 /** R04: the first Fansly 429 of a stream's failure streak holds the whole page
  * at least this long (the whole hold when the provider named no deadline). */
 const PAGE_PROVIDER_HOLD_DEFAULT_MS = 120_000;
-/** Consecutive rejections of a Fansly transactions page item that retry on the
- * ordinary ladder; the next one parks the lane as provider_bad_data. */
-const TRANSACTION_ITEM_CONTRACT_RETRIES = 2;
 
 export interface SyncPageChunkResult {
   kind: "idle" | "success" | "skipped" | "yielded" | "failed" | "blocked";
@@ -457,7 +449,6 @@ function classifyTaskFailure(
   input: {
     previousConsecutiveFailures: number;
     previousRetryKind: string | null;
-    previousErrorCode: string | null;
     now?: Date;
   },
 ): {
@@ -518,55 +509,6 @@ function classifyTaskFailure(
     return {
       mode: "retry",
       retryClass: FANSLY_SYNC_ENGINE_OWNED_RETRY_CLASS,
-    };
-  }
-
-  if (error instanceof FollowersReconcileConsistencyError) {
-    if (error.retryable) {
-      return {
-        mode: "retry",
-        retryClass: "followers_reconcile_snapshot_drift",
-      };
-    }
-    return {
-      mode: "blocked",
-      blockerType: "provider_bad_data",
-      blockerCode: error.code,
-      blockerReason: failure.summary,
-    };
-  }
-
-  if (error instanceof FanslyPurchaseHistoryContractError) {
-    return {
-      mode: "blocked",
-      blockerType: "provider_bad_data",
-      blockerCode: error.code,
-      blockerReason: failure.summary,
-    };
-  }
-
-  // A malformed transactions page may be a passing provider glitch, so the
-  // saved offset is re-read on the ordinary ladder. A third rejection in a row
-  // is the provider's data: park the lane with its journal and checkpoint
-  // intact rather than re-read the same page every 30 minutes forever. The
-  // streak is read from last_error_code, not retry_kind: the planner clears
-  // retry_kind when it makes a due retry runnable.
-  if (error instanceof FanslyTransactionsItemContractError) {
-    const previousRejections = input.previousErrorCode === error.code
-      ? input.previousConsecutiveFailures
-      : 0;
-    if (previousRejections < TRANSACTION_ITEM_CONTRACT_RETRIES) {
-      return {
-        mode: "retry",
-        retryClass: error.code,
-      };
-    }
-
-    return {
-      mode: "blocked",
-      blockerType: "provider_bad_data",
-      blockerCode: error.code,
-      blockerReason: failure.summary,
     };
   }
 
@@ -1102,7 +1044,6 @@ export async function executeNextSyncPageChunk(
     const classified = classifyTaskFailure(error, failure, {
       previousConsecutiveFailures: taskLease.consecutiveFailures,
       previousRetryKind: taskLease.retryKind,
-      previousErrorCode: taskLease.lastErrorCode,
       // Same clock sample as the persistence below: a retry deadline anchored
       // to a second `Date.now()` would drift past the row it is written into.
       now: failedAt,

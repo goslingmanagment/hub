@@ -187,7 +187,7 @@ export interface ShadowReport {
   /** What the hour ran on (build, route policy, registry and tiers, S). */
   fingerprint: ShadowReportFingerprint;
   window: ShadowWindowReport | null;
-  /** Part A's two SQL checks over the shadow journal. */
+  /** Part A's two checks over the shadow journal (the route budgets: the send audit). */
   routes: ShadowRouteChecks | null;
   media: ShadowMediaModelRow[] | null;
   journal: {
@@ -237,7 +237,7 @@ async function windowPart(
       media.push({
         page: model.page,
         media: model.media,
-        queue: await countMediaStatsRefreshProgress(tx, { pageId: page.pageId, now: window.end, longTailCycleDays: 30, tiers: model.media.tiers }),
+        queue: await countMediaStatsRefreshProgress(tx, { pageId: page.pageId, now: window.end, tiers: model.media.tiers }),
       });
     }
     return { window: report, routes, media, fingerprint };
@@ -334,7 +334,7 @@ function verdictOf(
     a2: window?.verdict.a2 ?? null,
     a3: window?.verdict.a3 ?? null,
     a4: window?.verdict.a4 ?? null,
-    budgets: routes === null ? null : routes.budgets.violations === 0,
+    budgets: routes === null ? null : routes.budgets.violations === 0 && routes.budgets.inconclusive === 0,
     walks: routes === null ? null : routes.walks.repeats === 0,
     build: fingerprint.build.sync !== null,
     b5,
@@ -460,7 +460,8 @@ function summaryOf(
       lines.push(`A3 offline decisions over ${offline.receipts} receipts of the previous 24 h: `
         + offline.byResource.map((row) => `${row.resource} ${row.reads} reads / ${row.signals} signals`).join("; "));
     }
-    lines.push(`A4 pacer: ${window.pacer.violations} shadow pairs closer than the setting`);
+    lines.push(`A4 pacer: ${window.pacer.violations} shadow pairs closer than the later send's pause`
+      + `${window.pacer.inconclusive === 0 ? "" : `; ${window.pacer.inconclusive} not judged (inconclusive)`}`);
   }
   if (routes !== null) lines.push(...routeCheckLines(routes));
   for (const row of media ?? []) {

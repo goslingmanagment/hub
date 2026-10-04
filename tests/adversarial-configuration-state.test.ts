@@ -67,7 +67,7 @@ describe("configuration form lifetime across scope navigation", () => {
     const forms = [
       "/settings?tab=configuration",
       "/settings?tab=configuration&feature=voice",
-      "/settings?tab=configuration&feature=earnings",
+      "/settings?tab=configuration&feature=storage",
       "/settings?tab=configuration",
     ].map(configurationForm);
 
@@ -76,7 +76,7 @@ describe("configuration form lifetime across scope navigation", () => {
       expect(form.key).toBe(forms[0]!.key);
     }
     expect(forms[1]!.props.feature).toMatchObject({ id: "voice" });
-    expect(forms[2]!.props.feature).toMatchObject({ id: "earnings" });
+    expect(forms[2]!.props.feature).toMatchObject({ id: "storage" });
     expect(forms[3]!.props.feature).toBeNull();
   });
 

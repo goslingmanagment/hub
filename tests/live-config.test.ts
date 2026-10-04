@@ -34,7 +34,7 @@ describe("validateLiveConfigPatches", () => {
 
   it("rejects the whole patch with the owner-rule message for a Fansly pause below 2000 ms", () => {
     expect(rejection(() => validateLiveConfigPatches([
-      { key: "transactionLookbackDays", value: 14 },
+      { key: "healthSyncLightMaxAgeMinutes", value: 14 },
       { key: "fanslyDefaultDelayMs", value: 1500 },
     ]))).toBe(
       "Пауза между запросами Fansly не может быть меньше 2000 мс: правило владельца — "

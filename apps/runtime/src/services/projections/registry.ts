@@ -406,8 +406,8 @@ export const OPERATIONAL_STATE_TABLES: readonly {
   },
   {
     table: "ai_media_accelerator_reads", stateClass: "operational_state",
-    writer: "services/ai-media-describe/fansly-fast-lane.ts (the in-chunk accelerator and its request filers are gone since step 4 S4-14)",
-    justification: "Fansly accelerator physical-attempt admissions enforce the agency-wide rolling cap; resetting them would grant additional Fansly requests again within the same window.",
+    writer: "none since step 4 S4-12 and S4-14 (the retired AI media fast lane and in-chunk accelerator admitted them); records only",
+    justification: "Physical attempt admissions of the retired Fansly accelerator lanes: the record of the additional Fansly requests they sent. No event carries them, so a rebuild could not restore them.",
   },
   {
     table: "fansly_ws_hint_receipts", stateClass: "operational_state",
@@ -416,7 +416,7 @@ export const OPERATIONAL_STATE_TABLES: readonly {
   },
   {
     table: "fan_earnings_target_attempts", stateClass: "operational_state",
-    writer: "services/sync/fan-earnings-targets.ts",
+    writer: "none since step 4 S4-16 (the legacy services/sync/fan-earnings-targets.ts); rows kept as records",
     justification: "C2c physical-attempt custody; replay or config changes must not reset the rolling budget.",
   },
   {
@@ -427,7 +427,7 @@ export const OPERATIONAL_STATE_TABLES: readonly {
   {
     table: "capture_coverage",
     stateClass: "operational_state",
-    writer: "services/sync/fansly-stats.ts",
+    writer: "sync/fansly/lib/lane.ts",
     justification:
       "A17-6: cursors, floors and blockers that no event carries. `proof_observation_id` "
       + "points into the 100-year journal at the response that proves the claim, so the "

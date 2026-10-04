@@ -245,7 +245,6 @@ describe("(2) census — the registry is compared against what the tree writes",
     // still journals its list here).
     expect(census.has("dm_conversations")).toBe(true);
     expect(census.has("link_stats_tracking")).toBe(true);
-    expect(census.has("fan_earnings_monthly")).toBe(true);
   });
 
   it("knows every OF capture-plane observationKind literal", () => {

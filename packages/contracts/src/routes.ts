@@ -35,6 +35,8 @@ import { agentKeyAdminRouteSchemas } from "./routes-agent-keys.ts";
 // The Fansly Sync Engine's owner routes (history requests). Owner-session, no
 // agent envelope, so a sibling module for the same reason as the keys above.
 import { syncRouteSchemas } from "./routes-sync.ts";
+// The chat extension's routes (client bootstrap and what follows); same spread.
+import { clientRouteSchemas } from "./routes-client.ts";
 // House primitives shared with the sibling route modules (see primitives.ts).
 import {
   businessDate,
@@ -303,10 +305,24 @@ export const authIssueDeviceTokenWithPasswordBodySchema = z.object({
   // pending → a 10-minute reservation, activated through authActivateDeviceToken
   //           after the client has durably staged custody (the desktop).
   mode: deviceTokenIssueModeEnum,
+  // chat-extension H-3: a narrow token bound to this client's route allowlist
+  // (client-token-scopes.ts), stored immutably on the token. Active only. A hub
+  // without H-3 drops the key and issues a full token, so the client requires
+  // the echo below (and the bootstrap's identity.tokenClient) before using it.
+  client: z.enum(["chat-extension"]).optional(),
+}).superRefine((value, ctx) => {
+  if (value.client !== undefined && value.mode !== "active") {
+    ctx.addIssue({ code: "custom", path: ["client"], message: "client requires mode active" });
+  }
 });
 
 export const authIssueDeviceTokenWithPasswordResponseSchema = z.discriminatedUnion("mode", [
-  issuedDeviceTokenResponseSchema.extend({ mode: z.literal("active") }),
+  issuedDeviceTokenResponseSchema.extend({
+    mode: z.literal("active"),
+    // The profile the token was issued with: null for a full token. Open on
+    // the wire, absent from a hub without H-3.
+    client: z.string().min(1).max(64).nullable().optional(),
+  }),
   reservedDeviceTokenResponseSchema.extend({ mode: z.literal("pending") }),
 ]);
 
@@ -378,6 +394,9 @@ export const healthResponseSchema = z.object({
   timestamp: isoTimestamp,
   contractHash: z.string().regex(/^[a-f0-9]{64}$/),
   capabilities: z.array(z.literal("desktop-lifecycle-v2")),
+  /** Client SDK contract hashes this hub serves: its own first, then every frozen SDK
+   *  in its registry, no repeats. A client release gate checks its vendored hash here. */
+  compatibleClientSdks: z.array(z.string().regex(/^[a-f0-9]{64}$/)).max(64).optional(),
   checks: z.object({
     api: z.object({
       status: z.literal("ok"),
@@ -5267,47 +5286,25 @@ export const statsTagsResponseSchema = z.object({
   nextCursor: z.string().nullable(),
 });
 
-/** One lane's live operating state, read straight off `page_sync_states`. Every
- *  field is nullable because every field is written by ONE lane's progress
- *  block and no lane writes them all. */
-const insightsLaneProgressSchema = z.object({
-  journaled: z.number().int().nullable(),
-  callsToday: z.number().int().nullable(),
-  calledToday: z.number().int().nullable(),
-  dailyCap: z.number().int().nullable(),
-  deferred: z.string().nullable(),
-  // WP-F4's queue + honesty block.
-  mediaKnown: z.number().int().nullable(),
-  queueSize: z.number().int().nullable(),
-  dueToday: z.number().int().nullable(),
-  deferredToday: z.number().int().nullable(),
-  neverVisited: z.number().int().nullable(),
-  backfillComplete: z.number().int().nullable(),
-  backfillStopped: z.number().int().nullable(),
-  /** A16 item 3: the LIVE long-tail cycle, computed by the lane from the live
-   *  class census and the live cap. Never a documentation constant. */
-  estimatedCycleDays: z.number().nullable(),
-  requestsPerDayWanted: z.number().nullable(),
-  saturating: z.boolean().nullable(),
-  longTailCycleDays: z.number().nullable(),
-  // WP-F3's M block.
-  uniqueMediaCount: z.number().int().nullable(),
-  vaultMemberUniqueCount: z.number().int().nullable(),
-  /** Σ `item_count`. NON-UNIQUE by construction — the system albums are views
-   *  over the same media, so this double-counts. Labelled, never used as M. */
-  albumMembershipSum: z.number().int().nullable(),
-  vaultWalkStatus: z.string().nullable(),
-  // WP-F5's walk + truncation block.
-  rootsKnown: z.number().int().nullable(),
-  rootsWalked: z.number().int().nullable(),
-  rootsDirty: z.number().int().nullable(),
-  postsKnown: z.number().int().nullable(),
-  commentsSeen: z.number().int().nullable(),
-  commentsMissing: z.number().int().nullable(),
-  possiblyTruncated: z.number().int().nullable(),
-  paginationMode: z.string().nullable(),
-  phase: z.string().nullable(),
-  seedComplete: z.boolean().nullable(),
+/** One legacy stream of a page the Fansly Sync Engine owns, as the live work
+ *  of the registry keys that took it over says (the Settings sync blocks read
+ *  the same model). */
+const insightsEngineStreamSchema = z.object({
+  stream: z.string(),
+  /** The engine's registry keys that read this stream's data. */
+  resources: z.array(z.string()),
+  /** When one of them was last applied live; null = not yet. */
+  succeededAt: isoTimestamp.nullable(),
+  /** When the next one is due; null = none is open. */
+  nextDueAt: isoTimestamp.nullable(),
+  /** The owner paused the whole page or every one of these keys. */
+  paused: z.boolean(),
+  /** Some of their work is quarantined or blocked by Fansly. */
+  needsAttention: z.boolean(),
+  /** What needs attention, or why the earliest of them waits. */
+  reason: z.string().nullable(),
+  /** The largest failure count among their active work. */
+  consecutiveFailures: z.number().int(),
 });
 
 export const statsCoverageResponseSchema = z.object({
@@ -5316,26 +5313,14 @@ export const statsCoverageResponseSchema = z.object({
   /** Every `capture_coverage` row this page holds: the floors, in the
    *  `(status, acquisition_mode, proof)` vocabulary. */
   planes: z.array(insightsCoverageRowSchema),
-  /** Per lane: is its gate open, is this page on its allowlist, and what did it
-   *  last report. A lane whose flag is off holds no data for a reason, and a
-   *  panel that cannot tell that apart from "no activity" is the panel this one
-   *  replaces. */
-  streams: z.array(z.object({
-    stream: z.string(),
-    status: z.string(),
-    phase: z.string().nullable(),
-    succeededAt: isoTimestamp.nullable(),
-    failedAt: isoTimestamp.nullable(),
-    consecutiveFailures: z.number().int(),
-    blockerKind: z.string().nullable(),
-    blockerCode: z.string().nullable(),
-    /** null when this lane has no ramp flag of its own. */
-    flagEnabled: z.boolean().nullable(),
-    /** null when this lane has no page allowlist of its own. FAIL-CLOSED on
-     *  every lane this initiative shipped: empty allowlist = NO pages. */
-    allowlisted: z.boolean().nullable(),
-    progress: insightsLaneProgressSchema,
-  })),
+  /** Who reads this page's data and how far it got: the Fansly Sync Engine's
+   *  live work per legacy stream. A stream nobody reads holds no data for a
+   *  reason, and a panel that cannot tell that apart from "no activity" is the
+   *  panel this one replaces. null when the engine does not own the page. */
+  engine: z.object({
+    mode: z.enum(["handover", "live"]),
+    streams: z.array(insightsEngineStreamSchema),
+  }).nullable(),
   /** What we actually hold, per projection: row count and the range it spans.
    *  A zero count next to an open floor is a real answer; a zero count with no
    *  coverage row is "never started" and reads that way. */
@@ -6550,12 +6535,17 @@ const baseRouteSchemas = {
         fanCount: z.number().int().nonnegative(),
         /** W8.1 (A12/A20): why the projection is (or is not) being fed — a
          * `builtAt: null` response is no longer ambiguous between "no
-         * spenders" and "stream not ramped for this page". Additive. */
+         * spenders" and "nobody reads this page's fan earnings". Additive. */
         source: z.object({
+          /** `ramped`: the Fansly Sync Engine reads the page's fan earnings;
+           *  `flag_off`: it does not (the owner paused it, or the engine does
+           *  not own the page). `not_allowlisted` was the legacy executor's
+           *  page allowlist and is no longer served. */
           streamState: z.enum(["ramped", "flag_off", "not_allowlisted", "unsupported_platform"]),
-          /** fan_earnings stream's last successful sync for this page. */
+          /** When the engine last applied a fan-earnings read for this page. */
           lastSyncedAt: z.string().nullable(),
-          /** null = the page has no fan_earnings sync state row yet. */
+          /** The largest failure count among its active fan-earnings work;
+           *  null = the engine does not own the page. */
           consecutiveFailures: z.number().int().nullable(),
         }),
         entries: z.array(z.object({
@@ -7734,7 +7724,6 @@ const baseRouteSchemas = {
       // fansly_page_switching: the page is being switched to the Fansly Sync Engine;
       // legacy_sync_retired: a Fansly page the engine does not own (step 4 S4-10)
       409: errorResponseSchema,
-      503: errorResponseSchema,
     },
   },
   adminFollowersReconcileOverridePreview: {
@@ -7748,6 +7737,7 @@ const baseRouteSchemas = {
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
+      // legacy_sync_retired: a Fansly page the engine does not own (step 4 S4-17)
       409: errorResponseSchema,
     },
   },
@@ -7762,6 +7752,7 @@ const baseRouteSchemas = {
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
+      // legacy_sync_retired: a Fansly page the engine does not own (step 4 S4-17)
       409: errorResponseSchema,
     },
   },
@@ -8268,13 +8259,15 @@ export type RouteSchemas = typeof baseRouteSchemas
   & typeof ofapiActionRouteSchemas
   & typeof agentRouteSchemas
   & typeof agentKeyAdminRouteSchemas
-  & typeof syncRouteSchemas;
+  & typeof syncRouteSchemas
+  & typeof clientRouteSchemas;
 export const routeSchemas: RouteSchemas = {
   ...baseRouteSchemas,
   ...ofapiActionRouteSchemas,
   ...agentRouteSchemas,
   ...agentKeyAdminRouteSchemas,
   ...syncRouteSchemas,
+  ...clientRouteSchemas,
 };
 export type AuthState = z.infer<typeof authStateSchema>;
 export type AuthUser = z.infer<typeof authUserSchema>;

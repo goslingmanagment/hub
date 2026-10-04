@@ -3,7 +3,7 @@ import { sql } from "drizzle-orm";
 import {
   getFanslySendGuard,
   getSyncPage,
-  listCombinedFanslySendsForPaceAudit,
+  readFanslySendAudit,
   type Database,
   type SyncPageMode,
   type SyncPageRow,
@@ -21,11 +21,12 @@ import {
   latencyCheck,
   mediaStartCheck,
   mismatchCheck,
+  paceCombinedCheck,
   pageHoldCheck,
   pageVerdict,
   route429Check,
   route429Outcomes,
-  routeBudgetViolations,
+  routeBudgetsCheck,
   type AcceptanceCheck,
   type AcceptanceCheckName,
   type AcceptanceJournalRow,
@@ -36,12 +37,13 @@ import {
 
 // `pnpm cli sync switch check --page P [--page Q …] --since <iso> [--until
 // <iso>]` (step 3b ruling 13, A6; design step 3 §3.5 item 7): the live-hour
-// acceptance of switched pages as JSON, read-only. The rules are
-// `acceptance-rules.ts`; `step3-accept.sql` beside this file is the same
-// acceptance in psql for the runbook (`impl/workflows/prodsqlf.sh`). Pages
-// checked together share the window end T* + 1 h (T* = the last page's live
-// instant). Exit code of the CLI: 0 every page accepted, 1 a page failed,
-// 2 otherwise (inconclusive or for the owner's review).
+// acceptance of switched pages as JSON on stdout (the runbook reads it),
+// read-only. The rules are `acceptance-rules.ts`; the pace and the route
+// budgets are the send audit's (`engine/send-audit.ts`), which the alert
+// evaluator runs on every pass. Pages checked together share the window end
+// T* + 1 h (T* = the last page's live instant). Exit code of the CLI: 0 every
+// page accepted, 1 a page failed, 2 otherwise (inconclusive or for the
+// owner's review).
 
 export interface PageAcceptanceReport {
   page: string;
@@ -175,24 +177,6 @@ async function readPageStops(db: Database, pageId: number): Promise<PageStopEpis
     resolvedAt: row.resolvedAt === null ? null : dateOf(row.resolvedAt),
     detail: row.detail,
   }));
-}
-
-async function paceCheck(db: Database, pageId: number, window: AcceptanceWindow): Promise<AcceptanceCheck> {
-  const sends = await listCombinedFanslySendsForPaceAudit(db, { pageId, since: window.start, until: window.observedUntil });
-  const violations = sends.filter((send) => send.violation);
-  const gaps = sends.flatMap((send) => (send.gapMs === null ? [] : [send.gapMs]));
-  const crossGaps = sends.flatMap((send) => (send.gapMs !== null && send.prevJournal !== null && send.prevJournal !== send.journal ? [send.gapMs] : []));
-  return {
-    name: "pace_combined",
-    verdict: violations.length === 0 ? "pass" : "fail",
-    detail: {
-      pairs: gaps.length,
-      violations: violations.length,
-      minGapMs: gaps.length === 0 ? null : Math.round(Math.min(...gaps)),
-      minCrossJournalGapMs: crossGaps.length === 0 ? null : Math.round(Math.min(...crossGaps)),
-      firstViolations: violations.slice(0, 5).map((send) => ({ journal: send.journal, ref: send.ref, prevJournal: send.prevJournal, gapMs: Math.round(send.gapMs ?? 0), settingMs: send.settingMs })),
-    },
-  };
 }
 
 async function boundaryCheck(db: Database, pageId: number): Promise<AcceptanceCheck> {
@@ -428,7 +412,8 @@ function failureTotals(rows: readonly AcceptanceJournalRow[], window: Acceptance
 async function checkPage(db: Database, page: SyncPageRow, window: AcceptanceWindow): Promise<PageAcceptanceReport> {
   const pageId = page.pageId;
   const rows = await readJournal(db, pageId, new Date(window.start.getTime() - ACCEPTANCE_RULES.lookbackMs));
-  const budget = routeBudgetViolations(rows, window);
+  // The send audit's rows: both journals of [T_i − its look-back, end).
+  const sends = await readFanslySendAudit(db, { pageId, since: window.start, until: window.observedUntil });
   const paused = page.pausedAll || page.pausedResources.includes("media-stats.walk");
   const checks: AcceptanceCheck[] = [
     {
@@ -441,16 +426,9 @@ async function checkPage(db: Database, page: SyncPageRow, window: AcceptanceWind
       verdict: window.now.getTime() >= window.end.getTime() ? "pass" : "inconclusive",
       detail: { windowStart: window.start.toISOString(), windowEnd: window.end.toISOString(), observedUntil: window.observedUntil.toISOString() },
     },
-    await paceCheck(db, pageId, window),
+    paceCombinedCheck(sends, window),
     await boundaryCheck(db, pageId),
-    {
-      name: "route_budgets",
-      verdict: budget.length === 0 ? "pass" : "fail",
-      detail: {
-        violations: budget.length,
-        first: budget.slice(0, 5).map((entry) => ({ ...entry, at: entry.at.toISOString() })),
-      },
-    },
+    routeBudgetsCheck(sends, window),
     route429Check(route429Outcomes(rows, window)),
     authRefusalsCheck(rows, window),
     pageHoldCheck(rows, window, page, await readPageStops(db, pageId)),

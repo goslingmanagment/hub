@@ -19,8 +19,6 @@ function baseConfig(): AppConfig {
     ofapiBurnAlertCreditsPerHour: 300,
     healthSyncLightMaxAgeMinutes: 180,
     healthSyncFollowerMaxAgeMinutes: 1080,
-    transactionLookbackDays: 7,
-    transactionRescanCapDays: 30,
     ofapiDmReconcileIntervalMinutes: 360,
     fanslyDefaultDelayMs: 2500,
     // A runtimeApply:'none' editable key (must never be overlaid) and a boot/staged key.
@@ -47,10 +45,24 @@ describe("applyEffectiveOverrides", () => {
 
   it("applies a live reload override into its configField", () => {
     const config = baseConfig();
-    const merged = applyEffectiveOverrides(config, overrides([["transactionLookbackDays", 14]]));
-    expect(merged.transactionLookbackDays).toBe(14);
+    const merged = applyEffectiveOverrides(config, overrides([["healthSyncLightMaxAgeMinutes", 240]]));
+    expect(merged.healthSyncLightMaxAgeMinutes).toBe(240);
     // Original is not mutated.
-    expect(config.transactionLookbackDays).toBe(7);
+    expect(config.healthSyncLightMaxAgeMinutes).toBe(180);
+  });
+
+  it("ignores an override of a key retired with the legacy Fansly money lanes (step 4, S4-16)", () => {
+    const config = {
+      ...baseConfig(),
+      transactionLookbackDays: 7,
+      fanslyFanEarningsTargetsEnabled: false,
+    } as AppConfig;
+    const merged = applyEffectiveOverrides(config, overrides([
+      ["transactionLookbackDays", 14],
+      ["fanslyFanEarningsTargetsEnabled", true],
+    ]));
+    expect(merged.transactionLookbackDays).toBe(7);
+    expect(merged.fanslyFanEarningsTargetsEnabled).toBe(false);
   });
 
   it("applies multiple live keys at once", () => {
@@ -118,9 +130,9 @@ describe("applyEffectiveOverrides", () => {
   it("ignores an invalid (non-integer) override value, leaving env in place", () => {
     const merged = applyEffectiveOverrides(
       baseConfig(),
-      overrides([["transactionLookbackDays", 3.5]]),
+      overrides([["healthSyncLightMaxAgeMinutes", 3.5]]),
     );
-    expect(merged.transactionLookbackDays).toBe(7);
+    expect(merged.healthSyncLightMaxAgeMinutes).toBe(180);
   });
 
   it("never overlays the boot-only service proxy tuple", () => {
@@ -161,39 +173,21 @@ describe("LIVE_CONFIG_KEYS", () => {
     // process by the heartbeat, which reads the live overlay anyway);
     // G5 slice 2 added the payload read mode, published the same way;
     // G5 slice 3c-1 added the pointer-only bound, published on the same beat;
-    // WP-F1 added the six `stats_snapshot` keys — the ramp flag, its FAIL-CLOSED
-    // page allowlist, the per-lane daily call budget (read per chunk, so a
-    // budget flip must not need a deploy), the hourly-bucket switch, the hourly
-    // backfill bound and the backfill continuation delay;
-    // WP-F2 added the three `notifications` keys — the ramp flag, its
-    // FAIL-CLOSED page allowlist and the per-lane daily call budget, all read
-    // per chunk so a ramp on the lossy lane never waits for a deploy;
-    // WP-F3 added the three `catalog` keys on the same template;
-    // WP-F5 added FOUR — the ramp flag, its FAIL-CLOSED page allowlist, the
-    // per-lane daily call budget and the re-walk cycle, which is live because
-    // it re-aims a running first pass without a deploy;
-    // WP-F7 added the three `payouts` keys on the WP-F3 template;
-    // WP-F4 added FOUR — the ramp flag, its FAIL-CLOSED page allowlist, the
-    // per-lane daily call budget (the ONE number a cap-raise step moves, and
-    // the whole request-count enforcement on the highest-volume lane in the
-    // system) and the long-tail cycle, live because it re-aims a running
-    // round-robin without a deploy.
-    expect(LIVE_CONFIG_KEYS.has("fanslyFanEarningsShadowPageAllowlist")).toBe(true);
-    expect(LIVE_CONFIG_KEYS.has("fanslyWsCaptureEnabled")).toBe(true);
-    expect(LIVE_CONFIG_KEYS.has("fanslyWsCapturePageAllowlist")).toBe(true);
+    // WP-F5 added the replies re-walk cycle, live because it re-aims a running
+    // first pass without a deploy (the engine's post-replies walk reads it);
+    // step 4 (S4-18) retired the legacy content lanes' 24 flags, allowlists,
+    // daily call budgets, hourly switches, continuation delay and long-tail
+    // cycle: nothing reads them, so none is live any more.
     expect(LIVE_CONFIG_KEYS.has("fanslyWsHintsEnabled")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyWsHintsPageAllowlist")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyWsHintsTypeAllowlist")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyWsHintsPolicies")).toBe(true);
-    expect(LIVE_CONFIG_KEYS.has("fanslyFollowersSettlementReuseEnabled")).toBe(true);
-    expect(LIVE_CONFIG_KEYS.has("fanslyFollowersSettlementReusePageAllowlist")).toBe(true);
-    expect(LIVE_CONFIG_KEYS.has("fanslyFanEarningsRecoveryEnabled")).toBe(true);
-    expect(LIVE_CONFIG_KEYS.has("fanslyFanEarningsRecoveryPageAllowlist")).toBe(true);
+    // Retired at step 4 (S4-17): nothing reads them, so no override applies.
+    expect(LIVE_CONFIG_KEYS.has("fanslyFollowersSettlementReuseEnabled")).toBe(false);
+    expect(LIVE_CONFIG_KEYS.has("fanslyFollowersSettlementReusePageAllowlist")).toBe(false);
     // Decision 349 added the public invite/reset link kill switch, read per
     // request so a flip never waits for a deploy.
     expect(LIVE_CONFIG_KEYS.has("accountLinksEnabled")).toBe(true);
-    // Decision 368 wired the earnings roster max age as a live key.
-    expect(LIVE_CONFIG_KEYS.has("fanslyFanEarningsRosterMaxAgeHours")).toBe(true);
     // H2 (amends #265): the webhook auto-redelivery switch and its UTC-day
     // cap, read per sweep so enabling after deploy needs no restart.
     expect(LIVE_CONFIG_KEYS.has("ofapiWebhookAutoRedeliveryEnabled")).toBe(true);
@@ -210,20 +204,34 @@ describe("LIVE_CONFIG_KEYS", () => {
       "aiMediaDescribeLiveChatOnly",
       "aiMediaDescribeModelMedia",
       "aiMediaDescribeLoopEnabled",
-      // H3: the Fansly freshness accelerator's budget (the fast lane shares it).
-      "aiMediaDescribeFanslyAcceleratorDailyLimit",
-      "aiMediaDescribeFanslyFastLaneMode",
-      "aiMediaDescribeFanslyFastLanePages",
       // Fansly Sync Engine step 1: the live overlay read kill-switch.
       "fanslyLiveOverlayReadPages",
+      // Chat extension (hub-pr-plan H-2b): the owner's five switches, read per
+      // request by the bootstrap and the client routes' check.
+      "chatExtensionEnabled",
+      "chatExtensionFeatures",
+      "chatExtensionMinVersion",
+      "chatExtensionHostBindings",
+      "chatExtensionPreviewSendReceiptProfiles",
     ]) {
       expect(LIVE_CONFIG_KEYS.has(key), key).toBe(true);
     }
     expect(LIVE_CONFIG_KEYS.has("fanslyDefaultDelayMs")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyLiveOverlayReadPages")).toBe(true);
+    // Step 4 (S4-12): retired with the legacy WebSocket receiver and the AI
+    // media fast lane — nothing reads them, so no override applies.
+    for (const key of [
+      "fanslyWsCaptureEnabled",
+      "fanslyWsCapturePageAllowlist",
+      "aiMediaDescribeFanslyFastLaneMode",
+      "aiMediaDescribeFanslyFastLanePages",
+    ]) {
+      expect(LIVE_CONFIG_KEYS.has(key), key).toBe(false);
+    }
     // Step 4 (S4-14): retired with the legacy DM handlers (the bounded scan, the
     // sweep shadow, the head catch-up, the deep backfill) and the in-chunk AI
-    // media accelerator — nothing reads them, so no override applies.
+    // media accelerator — nothing reads them, so no override applies. The
+    // accelerator's daily limit lost its last readers with S4-12 and S4-14.
     for (const key of [
       "fanslyDmBoundedEnabled",
       "fanslyDmBoundedPageAllowlist",
@@ -232,7 +240,16 @@ describe("LIVE_CONFIG_KEYS", () => {
       "fanslyDmHeadCatchupPageAllowlist",
       "fanslyDeepBackfillIgnoreRetentionLimit",
       "aiMediaDescribeFanslyAcceleratorEnabled",
+      "aiMediaDescribeFanslyAcceleratorDailyLimit",
     ]) {
+      expect(LIVE_CONFIG_KEYS.has(key), key).toBe(false);
+    }
+    // Step 4 S4-16 retired ten keys with the legacy Fansly money lanes.
+    // Step 4 S4-17 retired two keys with the legacy followers reconcile's settlement reuse.
+    // Step 4 S4-18 retired 24 keys with the legacy Fansly content lanes.
+    // The legacy ramp gate of fan_earnings and purchase_history went with its
+    // last callers (S4-16 and S4-18 together), and its two live keys with it.
+    for (const key of ["fanslyFanEarningsSyncEnabled", "fanslyNewStreamPageAllowlist"]) {
       expect(LIVE_CONFIG_KEYS.has(key), key).toBe(false);
     }
     // Step 4 (S4-15): retired with the hydration auto-approve policy.
@@ -240,6 +257,6 @@ describe("LIVE_CONFIG_KEYS", () => {
       expect(LIVE_CONFIG_KEYS.has(key), key).toBe(false);
     }
     expect(LIVE_CONFIG_KEYS.has("agentHydrationMode")).toBe(true);
-    expect(LIVE_CONFIG_KEYS.size).toBe(88);
+    expect(LIVE_CONFIG_KEYS.size).toBe(50);
   });
 });
