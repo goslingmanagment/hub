@@ -8,4 +8,7 @@ import type { ClientHubCapabilityName } from "@agency_hub_core/contracts";
  * (`CLIENT_FEATURE_REQUIREMENTS` in client-features.ts), whatever the owner's
  * switches say.
  */
-export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [];
+export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
+  // The AI feature stream's `context_v1` frame (H-4b).
+  "context-v1",
+];

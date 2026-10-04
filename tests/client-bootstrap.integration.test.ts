@@ -223,7 +223,8 @@ describe("GET /api/v1/client/bootstrap", () => {
       dispatchTicketSec: 10,
       previewSendReceiptProfiles: [],
     });
-    expect(body.capabilities).toEqual([]);
+    // What this hub serves today: the AI stream's context frame (H-4b).
+    expect(body.capabilities).toEqual(["context-v1"]);
 
     await trap!.assertNoOutbound();
   });

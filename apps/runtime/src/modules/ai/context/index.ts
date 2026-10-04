@@ -25,8 +25,14 @@ import {
   type SpendingSums,
   type TranscriptMessage,
 } from "../prompts/index.ts";
+import {
+  servedWindowOf,
+  type AiContextSource,
+  type TranscriptServedSnapshot,
+} from "./context-frame.ts";
 import type { OnlyFansMessageMedia } from "./media-notes.ts";
 
+export * from "./context-frame.ts";
 export * from "./media-notes.ts";
 export * from "./media-notes-context.ts";
 export * from "./ping-summary.ts";
@@ -122,6 +128,10 @@ export interface TranscriptContext {
    * message text. Lands as the ADDITIVE params.contextManifest key on the
    * restricted generation record. */
   contextManifest: Record<string, unknown>;
+  /** chat-extension H-4b: the served snapshot the `context_v1` frame reports.
+   * Beside the manifest, never inside it: the manifest is recorded with the
+   * generation and echoed to debug clients, and neither may change. */
+  served: TranscriptServedSnapshot;
 }
 
 export async function loadTranscriptContext(
@@ -213,10 +223,11 @@ export async function loadTranscriptContext(
   const unionHead = unionRows?.[0] ?? null;
   const archiveRefs = new Set(archiveRows.map((row) => row.messageRef));
   const unionRefs = unionRows === null ? null : new Set(unionRows.map((row) => row.messageRef));
+  const source: AiContextSource = liveUnion !== null ? "live_union" : serveUnion ? "union" : "archive";
   const contextManifest: Record<string, unknown> = {
     loaderVersion: TRANSCRIPT_LOADER_VERSION,
     mode,
-    source: liveUnion !== null ? "live_union" : serveUnion ? "union" : "archive",
+    source,
     archiveCount: archiveRows.length,
     unionCount: unionRows === null ? null : unionRows.length,
     archiveHeadRef: archiveHead?.messageRef ?? null,
@@ -261,7 +272,19 @@ export async function loadTranscriptContext(
     }
   }
 
-  return { transcript: formatTranscript(messages), messages, mediaByMessage, contextManifest };
+  const served: TranscriptServedSnapshot = {
+    source,
+    window: servedWindowOf(servedRows, messages),
+    archiveHead: archiveHead === null
+      ? null
+      : {
+        messageRef: archiveHead.messageRef,
+        occurredAt: archiveHead.occurredAt,
+        isFromFan: !archiveHead.isSentByMe,
+      },
+  };
+
+  return { transcript: formatTranscript(messages), messages, mediaByMessage, contextManifest, served };
 }
 
 const SPENDING_TYPE_BY_CANONICAL: Record<string, string> = {

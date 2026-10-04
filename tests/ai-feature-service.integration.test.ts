@@ -6,6 +6,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { aiFeatureStreamFrameSchema } from "@agency_hub_core/contracts";
 import {
   AI_PERSONA_BUNDLED_VERSION_KEY,
+  OFAPI_CAPTURE_PROOF_POLICY_VERSION,
   archiveAiPersona,
   createFanslyPage,
   createModel,
@@ -13,6 +14,7 @@ import {
   findAiPersonaByKey,
   insertAiGenerationContent,
   seedBundledAiPersona,
+  setPageOfapiAccountId,
   storeProxyConfig,
   upsertVoiceProfile,
   upsertAiPersona,
@@ -25,6 +27,7 @@ import {
   createBundledPersonalities,
   loadFanBio,
   loadFanDisplayName,
+  loadTranscriptContext,
 } from "../apps/runtime/src/modules/ai/index.ts";
 import type {
   AiGatewayProvider,
@@ -37,6 +40,7 @@ import {
   startIntegrationTestDatabase,
   type StartedTestDatabase,
 } from "./helpers/db.ts";
+import { armNoOutboundTrap } from "./helpers/no-outbound.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { INTEGRATION_TEST_TIMEOUT_MS } from "./helpers/timeouts.ts";
 
@@ -3335,5 +3339,489 @@ describe("Fansly live overlay in the kernel context (plan §7.11)", () => {
     const killed = await runKernelFastReply();
     expect(killed.promptText).not.toContain("LIVE_SOCKET_LINE");
     expect(killed.manifest).toMatchObject({ source: "archive", liveOverlay: "off" });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+});
+
+describe("context_v1 frame (chat-extension H-4b)", () => {
+  // The frame tells a client that advertised `context-v1` which transcript
+  // snapshot actually served the generation. Nobody else sees it, and nothing
+  // about the generation itself changes.
+  const OTHER_FAN = "777000888";
+  const OFAPI_ACCOUNT = "acct_svc00000000000000000000000000001";
+
+  async function stream(input: {
+    capabilities?: string;
+    feature?: string;
+    body?: Record<string, unknown>;
+  } = {}) {
+    appContext.aiGatewayProvider = capturingProvider({});
+    const response = await apiServer!.inject({
+      method: "POST",
+      url: `/api/v1/ai/features/${input.feature ?? "fast-reply"}`,
+      headers: {
+        authorization: `Bearer ${chatterKey}`,
+        ...(input.capabilities !== undefined ? { "x-kernel-ai-capabilities": input.capabilities } : {}),
+      },
+      payload: {
+        clientRequestId: randomUUID(),
+        pageLabel: "svc-of",
+        platform: "onlyfans",
+        conversationRef: FAN,
+        messageCount: 50,
+        ...input.body,
+      },
+    });
+    expect(response.statusCode, response.body).toBe(200);
+    const frames = aiFrames(response.body);
+    return {
+      raw: response.body,
+      frames,
+      types: frames.map((frame) => frame.type),
+      context: frames.find((frame) => frame.type === "context_v1"),
+    };
+  }
+
+  /** The stream with what differs per request by design (ids, the quota left) masked. */
+  function comparable(raw: string) {
+    return raw
+      .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, "<uuid>")
+      .replace(/"(remainingRequestsToday|remainingMicroUsdToday)":\d+/g, '"$1":<n>');
+  }
+
+  async function occurredAt(ref: string) {
+    const { rows } = await testDb!.pool.query<{ at: Date }>(
+      `select coalesce(
+         (select occurred_at from message_archive where account_id = $1 and message_ref = $2),
+         (select message_created_at from dm_message_archive where platform_account_id = $1 and platform_message_id = $2)
+       ) as at`,
+      [pageId, ref],
+    );
+    return rows[0]!.at.toISOString();
+  }
+
+  async function seedDmMessage(input: {
+    ref: string; mine: boolean; text: string; minutesAgo: number; conversation?: string | null; deleted?: boolean;
+  }) {
+    const conversation = input.conversation === undefined ? FAN : input.conversation;
+    await testDb!.pool.query(
+      `insert into dm_message_archive (platform, platform_account_id, ofapi_account_id, platform_conversation_id,
+         fan_platform_user_id, platform_message_id, sender_role, is_sent_by_me, message_created_at, text_plain,
+         is_tip, tip_amount_mills, deleted_at, source, source_event_type, source_idempotency_key,
+         source_journal_id, source_received_at, retain_until)
+       values ('onlyfans', $1, $2, $3, $3, $4, $5, $6, $7, $8, false, 0, $9, 'webhook', $10, $11, 1, now(),
+         now() + interval '100 years')`,
+      [pageId, OFAPI_ACCOUNT, conversation, input.ref, input.mine ? "model" : "fan", input.mine,
+        conversation === null ? null : new Date(Date.now() - input.minutesAgo * 60_000), input.text,
+        input.deleted ? new Date() : null,
+        input.deleted ? "messages.deleted" : input.mine ? "messages.sent" : "messages.received",
+        `ctx-frame-${input.ref}`],
+    );
+  }
+
+  async function seedArchiveMessage(input: {
+    ref: string; conversation: string; text: string; minutesAgo: number; deleted?: boolean;
+  }) {
+    await testDb!.pool.query(
+      `insert into message_archive (account_id, platform, conversation_ref, message_ref, fan_native_id,
+         is_sent_by_me, occurred_at, text_plain, deleted_at)
+       values ($1, 'onlyfans', $2, $3, $2, false, $4, $5, $6)`,
+      [pageId, input.conversation, input.ref, new Date(Date.now() - input.minutesAgo * 60_000), input.text,
+        input.deleted ? new Date() : null],
+    );
+  }
+
+  it("without the capability the stream is byte for byte what it was", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    await seedConversation();
+
+    const plain = await stream();
+    expect(plain.types).toEqual(["meta", "content_delta", "usage", "done"]);
+    // Naming known ids without the capability changes nothing: there is no frame to answer in.
+    const withIds = await stream({ body: { knownFanMessageIds: ["9003", "9999"] } });
+    expect(comparable(withIds.raw)).toBe(comparable(plain.raw));
+    // Other capabilities never imply it.
+    const otherCapabilities = await stream({ capabilities: "debug-input-v1, future-v9" });
+    expect(comparable(otherCapabilities.raw)).toBe(comparable(plain.raw));
+
+    // With the capability the stream gains exactly one frame and loses nothing.
+    const advertised = await stream({ capabilities: "context-v1", body: { knownFanMessageIds: ["9003"] } });
+    expect(advertised.types).toEqual(["meta", "context_v1", "content_delta", "usage", "done"]);
+    const withoutTheFrame = advertised.raw
+      .split("\n\n")
+      .filter((chunk) => !chunk.includes('"type":"context_v1"'))
+      .join("\n\n");
+    expect(comparable(withoutTheFrame)).toBe(comparable(plain.raw));
+
+    // The recorded generation is the same either way: the frame is not stored,
+    // the known ids are not stored, and the context manifest has no new key.
+    const { rows } = await testDb.pool.query<{ params: Record<string, unknown> }>(
+      `select params from ai_generation_content order by id`,
+    );
+    expect(rows).toHaveLength(4);
+    for (const row of rows) {
+      expect(row.params).toEqual(rows[0]!.params);
+    }
+    expect(Object.keys(rows[0]!.params.contextManifest as Record<string, unknown>).sort()).toEqual([
+      "loaderVersion", "mode", "source", "archiveCount", "unionCount", "archiveHeadRef", "archiveHeadAt",
+      "unionHeadRef", "unionHeadAt", "headsEqual", "additions", "tombstones", "gapMs", "queryDurationMs",
+      "unionError", "staleContext", "liveOverlay", "liveCount", "liveError",
+    ].sort());
+    expect(JSON.stringify(rows)).not.toContain("knownFanMessage");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("with the capability the frame follows meta and the debug frame, before the first content", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    await seedConversation();
+    appContext.config.chatMuseAiPromptDebugEchoEnabled = true;
+
+    const both = await stream({ capabilities: "debug-input-v1, context-v1" });
+    expect(both.types).toEqual(["meta", "debug_input_v1", "context_v1", "content_delta", "usage", "done"]);
+    // The echoed manifest is the one old debug clients read: no key of the frame leaked into it.
+    expect(both.frames[1]!.contextManifest).not.toHaveProperty("served");
+
+    const only = await stream({ capabilities: "context-v1" });
+    expect(only.types).toEqual(["meta", "context_v1", "content_delta", "usage", "done"]);
+    // Parse through the SAME schema the vendored SDK uses.
+    expect(aiFeatureStreamFrameSchema.parse(only.context)).toEqual(only.context);
+    const head = { messageRef: "9003", occurredAt: await occurredAt("9003"), isFromFan: true };
+    expect(only.context).toEqual({
+      type: "context_v1",
+      generationRef: only.frames[0]!.requestId,
+      source: "archive",
+      servedHead: head,
+      archiveHead: head,
+      window: { requested: 50, served: 3 },
+      coverage: "unknown",
+      live: { status: "not_sent", accepted: 0, rejected: 0 },
+      fanLanguageEvidence: "latin",
+    });
+    // The generation the frame names is the one the hub recorded.
+    const { rows } = await testDb.pool.query<{ generation_ref: string }>(
+      `select generation_ref from ai_generation_content order by id desc limit 1`,
+    );
+    expect(rows[0]!.generation_ref).toBe((only.context as { generationRef: string }).generationRef);
+
+    // Every feature on the kernel-context lane carries it, with its own window.
+    const improve = await stream({
+      capabilities: "context-v1",
+      feature: "improve-draft",
+      body: { draftText: "hey you, miss me?", messageCount: 5 },
+    });
+    expect(improve.types).toEqual(["meta", "context_v1", "content_delta", "usage", "done"]);
+    expect(improve.context).toMatchObject({ source: "archive", window: { requested: 5, served: 3 } });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("an empty conversation has a frame with no head", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const empty = await stream({ capabilities: "context-v1", body: { knownFanMessageIds: ["9003"] } });
+    expect(empty.context).toMatchObject({
+      source: "archive",
+      servedHead: null,
+      archiveHead: null,
+      window: { requested: 50, served: 0 },
+      knownFanMessages: [{ id: "9003", state: "absent" }],
+      fanLanguageEvidence: "unknown",
+    });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("the client-context lane carries no frame in v1", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const fansly = await stream({
+      capabilities: "context-v1",
+      body: {
+        pageLabel: "svc-fs",
+        platform: "fansly",
+        knownFanMessageIds: ["9003"],
+        clientContext: {
+          transcript: "[10:00] Fan: hey",
+          messageCount: 12,
+          fanDisplayName: "Client Context Fan",
+          fanSpendingData: "",
+          fanSubscriptionData: "",
+        },
+      },
+    });
+    expect(fansly.types).toEqual(["meta", "content_delta", "usage", "done"]);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("reports the reader that served: the union head is fresher than the archive head", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    await seedConversation();
+    await setPageOfapiAccountId(appContext.db, { pageId, ofapiAccountId: OFAPI_ACCOUNT });
+    // Settled by webhook, not projected into the archive yet: the model's later
+    // reply 9005 and the fan's 9006 after it. The fan's 9004 is in neither
+    // store — a hole BEFORE the later model message.
+    await seedDmMessage({ ref: "9005", mine: true, text: "there you are", minutesAgo: 20 });
+    await seedDmMessage({ ref: "9006", mine: false, text: "did you see my message?", minutesAgo: 10 });
+    const known = { knownFanMessageIds: ["9006", "9004", "9003"] };
+
+    // Archive served: the fresher rows exist in the hub but the model did not read them.
+    const archive = await stream({ capabilities: "context-v1", body: known });
+    const archiveHead = { messageRef: "9003", occurredAt: await occurredAt("9003"), isFromFan: true };
+    expect(archive.context).toMatchObject({
+      source: "archive",
+      servedHead: archiveHead,
+      archiveHead,
+      window: { requested: 50, served: 3 },
+      knownFanMessages: [
+        { id: "9006", state: "absent" },
+        { id: "9004", state: "absent" },
+        { id: "9003", state: "included" },
+      ],
+    });
+
+    // Shadow computes the union but still serves the archive, and the frame says so.
+    appContext.config.aiTranscriptFreshUnionMode = "shadow";
+    const shadow = await stream({ capabilities: "context-v1", body: known });
+    expect(shadow.context).toMatchObject({ source: "archive", servedHead: archiveHead, window: { served: 3 } });
+    expect((shadow.context as { knownFanMessages: unknown }).knownFanMessages)
+      .toEqual((archive.context as { knownFanMessages: unknown }).knownFanMessages);
+
+    // Union served: its head is past the archive's, which stays as diagnostics.
+    appContext.config.aiTranscriptFreshUnionMode = "serve";
+    const union = await stream({ capabilities: "context-v1", body: known });
+    expect(union.context).toMatchObject({
+      source: "union",
+      servedHead: { messageRef: "9006", occurredAt: await occurredAt("9006"), isFromFan: true },
+      archiveHead,
+      window: { requested: 50, served: 5 },
+      knownFanMessages: [
+        { id: "9006", state: "included" },
+        // A later message in the context — even the model's own 9005 — never
+        // proves the earlier fan message was read.
+        { id: "9004", state: "absent" },
+        { id: "9003", state: "included" },
+      ],
+    });
+
+    // The served head can be the model's: the hole before it is still a hole.
+    await testDb.pool.query(
+      `update dm_message_archive set deleted_at = now() where platform_account_id = $1 and platform_message_id = '9006'`,
+      [pageId],
+    );
+    const modelHead = await stream({ capabilities: "context-v1", body: known });
+    expect(modelHead.context).toMatchObject({
+      source: "union",
+      servedHead: { messageRef: "9005", occurredAt: await occurredAt("9005"), isFromFan: false },
+      archiveHead,
+      window: { served: 4 },
+      knownFanMessages: [
+        { id: "9006", state: "deleted" },
+        { id: "9004", state: "absent" },
+        { id: "9003", state: "included" },
+      ],
+    });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("names the Fansly socket overlay when it served", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    // A Fansly request without clientContext reads the kernel archive; a page in
+    // `fanslyLiveOverlayReadPages` reads it together with its socket messages.
+    const group = "880002";
+    await testDb.pool.query(
+      `insert into page_dm_threads (platform_account_id, platform_conversation_id, partner_platform_user_id)
+       values ($1, $2, $3)`,
+      [fanslyPageId, group, FAN],
+    );
+    await testDb.pool.query(
+      `insert into message_archive (account_id, platform, conversation_ref, message_ref,
+         fan_native_id, is_sent_by_me, occurred_at, text_plain)
+       values ($1, 'fansly', $2, '7701', $3, false, now() - interval '10 minutes', 'archived hello')`,
+      [fanslyPageId, group, FAN],
+    );
+    await testDb.pool.query(
+      `insert into dm_live_messages (page_id, platform_message_id, platform_conversation_id,
+         sender_platform_user_id, is_sent_by_page, created_at, content, decoder_version, first_visible_at)
+       values ($1, '7702', $2, $3, false, now() - interval '5 seconds', 'live socket line', 1, now())`,
+      [fanslyPageId, group, FAN],
+    );
+    const body = {
+      pageLabel: "svc-fs",
+      platform: "fansly",
+      conversationRef: group,
+      fanRef: FAN,
+      knownFanMessageIds: ["7702", "7701"],
+    };
+
+    const archive = await stream({ capabilities: "context-v1", body });
+    expect(archive.context).toMatchObject({
+      source: "archive",
+      servedHead: { messageRef: "7701", isFromFan: true },
+      window: { served: 1 },
+      knownFanMessages: [{ id: "7702", state: "absent" }, { id: "7701", state: "included" }],
+    });
+
+    appContext.config.fanslyLiveOverlayReadPages = "svc-fs";
+    const live = await stream({ capabilities: "context-v1", body });
+    expect(live.context).toMatchObject({
+      source: "live_union",
+      servedHead: { messageRef: "7702", isFromFan: true },
+      archiveHead: { messageRef: "7701", isFromFan: true },
+      window: { served: 2 },
+      // The history proof is the OnlyFans capture lane's: a Fansly chat has none.
+      coverage: "unknown",
+      knownFanMessages: [{ id: "7702", state: "included" }, { id: "7701", state: "included" }],
+    });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("answers a known fan message in each of its four states, in the client's order", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    await seedConversation();
+    await setPageOfapiAccountId(appContext.db, { pageId, ofapiAccountId: OFAPI_ACCOUNT });
+    // This fan's message, tombstoned: held for the conversation, no longer in any transcript.
+    await seedArchiveMessage({ ref: "9050", conversation: FAN, text: "changed my mind", minutesAgo: 55, deleted: true });
+
+    const answered = await stream({
+      capabilities: "context-v1",
+      body: { knownFanMessageIds: ["9100", "9003", "9050", "9002", "9001"] },
+    });
+    expect((answered.context as { knownFanMessages: unknown }).knownFanMessages).toEqual([
+      // Never seen for this conversation.
+      { id: "9100", state: "absent" },
+      // In the served window as a fan message.
+      { id: "9003", state: "included" },
+      { id: "9050", state: "deleted" },
+      // In the served window as the MODEL's message: not the fan message the client meant.
+      { id: "9002", state: "unknown" },
+      { id: "9001", state: "included" },
+    ]);
+    // The deleted message is in nobody's prompt.
+    expect(answered.context).toMatchObject({ window: { served: 3 } });
+
+    // No ids named → no answers key at all.
+    expect((await stream({ capabilities: "context-v1" })).context).not.toHaveProperty("knownFanMessages");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("answers an id of another fan's chat as absent, never as included or deleted (critic item 5)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    await seedConversation();
+    await setPageOfapiAccountId(appContext.db, { pageId, ofapiAccountId: OFAPI_ACCOUNT });
+    appContext.config.aiTranscriptFreshUnionMode = "serve";
+    // The same page, another fan: live and deleted messages in both stores.
+    await seedArchiveMessage({ ref: "8001", conversation: OTHER_FAN, text: "other fan", minutesAgo: 30 });
+    await seedArchiveMessage({ ref: "8002", conversation: OTHER_FAN, text: "other fan, deleted", minutesAgo: 29, deleted: true });
+    await seedDmMessage({ ref: "8003", conversation: OTHER_FAN, mine: false, text: "other fan, fresh", minutesAgo: 1 });
+    await seedDmMessage({ ref: "8004", conversation: OTHER_FAN, mine: false, text: "", minutesAgo: 1, deleted: true });
+    // A delete webhook names no chat: alone it proves nothing about this one.
+    await seedDmMessage({ ref: "8005", conversation: null, mine: false, text: "", minutesAgo: 0, deleted: true });
+
+    const foreign = ["8001", "8002", "8003", "8004", "8005"];
+    const mine = await stream({ capabilities: "context-v1", body: { knownFanMessageIds: [...foreign, "9003"] } });
+    expect((mine.context as { knownFanMessages: unknown }).knownFanMessages).toEqual([
+      ...foreign.map((id) => ({ id, state: "absent" })),
+      { id: "9003", state: "included" },
+    ]);
+    // None of the other fan's text reached this generation either.
+    expect(mine.context).toMatchObject({ source: "union", window: { served: 3 } });
+
+    // Asked for the chat they belong to, the same ids are real.
+    const theirs = await stream({
+      capabilities: "context-v1",
+      body: { conversationRef: OTHER_FAN, knownFanMessageIds: [...foreign, "9003"] },
+    });
+    expect((theirs.context as { knownFanMessages: unknown }).knownFanMessages).toEqual([
+      { id: "8001", state: "included" },
+      { id: "8002", state: "deleted" },
+      { id: "8003", state: "included" },
+      { id: "8004", state: "deleted" },
+      { id: "8005", state: "absent" },
+      { id: "9003", state: "absent" },
+    ]);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("reports coverage from the conversation's history proof", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    await seedConversation();
+    const coverage = async () => (await stream({ capabilities: "context-v1" })).context!.coverage;
+    expect(await coverage()).toBe("unknown");
+
+    await testDb.pool.query(
+      `insert into ofapi_message_coverage (
+         page_id, chat_id, classification, source, frozen_head_id, oldest_message_id, target, target_hash,
+         page_chain_hash, raw_count, accepted_count, boundary_duplicate_count, explicitly_irrelevant_count,
+         rejected_count, parse_debt, required_serving_high_water, proof_observation_id,
+         proof_observation_received_at, proof_policy_version, source_contract_version, parser_version,
+         source_account_seq
+       ) values ($1, $2, 'continuous_history', 'pagination_exhausted', '9003', '9001', '{}'::jsonb, $3, $4,
+         3, 3, 0, 0, 0, 0, 3, 1, now(), $5, 'ofapi-capture-v1', 'ofapi-capture-parser-v1', 1)`,
+      [pageId, FAN, "a".repeat(64), "b".repeat(64), OFAPI_CAPTURE_PROOF_POLICY_VERSION],
+    );
+    // The archive has not projected what the proof covers yet.
+    expect(await coverage()).toBe("partial");
+    await testDb.pool.query(
+      `insert into projection_seq_watermarks (projection, account_id, high_seq) values ('message_archive', $1, 3)`,
+      [pageId],
+    );
+    expect(await coverage()).toBe("complete");
+    // Another fan's proof is not this fan's.
+    expect((await stream({ capabilities: "context-v1", body: { conversationRef: OTHER_FAN } })).context!.coverage)
+      .toBe("unknown");
+    await testDb.pool.query(`update ofapi_message_coverage set revoked_at = now() where page_id = $1`, [pageId]);
+    expect(await coverage()).toBe("unknown");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("reads only the database: no platform request, no queued work, no chat marked read (critic item 8)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    await seedConversation();
+    await setPageOfapiAccountId(appContext.db, { pageId, ofapiAccountId: OFAPI_ACCOUNT });
+    await seedDmMessage({ ref: "9005", mine: false, text: "still there?", minutesAgo: 5 });
+    // An unread chat: reading it through OnlyFans would mark it read there.
+    await testDb.pool.query(
+      `insert into page_dm_threads (platform_account_id, platform_conversation_id, partner_platform_user_id, unread_count)
+       values ($1, $2, $2, 3)`,
+      [pageId, FAN],
+    );
+
+    const trap = await armNoOutboundTrap(testDb);
+    try {
+      for (const mode of ["off", "shadow", "serve"] as const) {
+        appContext.config.aiTranscriptFreshUnionMode = mode;
+        const served = await stream({
+          capabilities: "context-v1",
+          body: { knownFanMessageIds: ["9005", "9004", "9003"] },
+        });
+        expect(served.context, mode).toMatchObject({ source: mode === "serve" ? "union" : "archive" });
+        // The loader on its own, in the same mode.
+        const transcript = await loadTranscriptContext(appContext, {
+          pageId, conversationRef: FAN, limit: 1500, unionMode: mode,
+        });
+        expect(transcript.served.window.map((message) => message.messageRef), mode).toEqual(
+          mode === "serve" ? ["9001", "9002", "9003", "9005"] : ["9001", "9002", "9003"],
+        );
+      }
+      await trap.assertNoOutbound();
+    } finally {
+      await trap.restore();
+    }
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });

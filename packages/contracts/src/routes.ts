@@ -36,7 +36,7 @@ import { agentKeyAdminRouteSchemas } from "./routes-agent-keys.ts";
 // agent envelope, so a sibling module for the same reason as the keys above.
 import { syncRouteSchemas } from "./routes-sync.ts";
 // The chat extension's routes (client bootstrap and what follows); same spread.
-import { clientRouteSchemas } from "./routes-client.ts";
+import { clientNumericIdSchema, clientOpenToken, clientRouteSchemas } from "./routes-client.ts";
 // House primitives shared with the sibling route modules (see primitives.ts).
 import {
   businessDate,
@@ -1946,12 +1946,74 @@ export const aiGatewayStreamFrameSchema = z.discriminatedUnion("type", [
   }).strict(),
 ]);
 
+// chat-extension H-4b. The newest message of a transcript reader, as the
+// context frame names it.
+const aiContextHeadSchema = z.object({
+  messageRef: z.string(),
+  occurredAt: isoTimestamp.nullable(),
+  isFromFan: z.boolean(),
+});
+
+/** How many ids `knownFanMessageIds` may name, and so how many answers the
+ *  context frame carries. */
+export const AI_KNOWN_FAN_MESSAGE_IDS_MAX = 10;
+
+// Known values of the frame's open tokens. On the wire they are open strings
+// (the shape law in routes-client.ts): a client narrows to these and reads an
+// unknown value as "unknown", so a later value never breaks an installed
+// client. `coverage` narrows to CLIENT_COVERAGE_LEVELS (routes-client.ts),
+// which the client reads share.
+export const AI_CONTEXT_SOURCES = ["archive", "union", "live_union"] as const;
+export const AI_KNOWN_FAN_MESSAGE_STATES = ["included", "absent", "deleted", "unknown"] as const;
+export const AI_CONTEXT_LIVE_STATUSES = ["not_sent", "disabled", "shadow", "served", "rejected"] as const;
+export const AI_FAN_LANGUAGE_EVIDENCE = ["latin", "cyrillic", "mixed", "unknown"] as const;
+
+// Feature-lane-only: the transcript snapshot that ACTUALLY served this
+// generation. Emitted right after `meta` (and `debug_input_v1`), before the
+// first `content_delta`, and only to a caller that advertised `context-v1`.
+// Deliberately NOT strict, unlike every other frame: a later key must not fail
+// the stream of a client already in the field.
+export const aiFeatureContextFrameSchema = z.object({
+  type: z.literal("context_v1"),
+  /** Equals `meta.requestId`. */
+  generationRef: z.string().uuid(),
+  /** The hub reader that served the transcript: AI_CONTEXT_SOURCES. */
+  source: clientOpenToken,
+  /** Newest message of the served window, after normalization and the window
+   *  cap; null when the window is empty. */
+  servedHead: aiContextHeadSchema.nullable(),
+  /** Diagnostics only: the plain archive reader's head. With `source: "union"`
+   *  the model may have read past it. */
+  archiveHead: aiContextHeadSchema.nullable().optional(),
+  window: z.object({
+    requested: z.number().int().nonnegative(),
+    served: z.number().int().nonnegative(),
+  }),
+  /** How much of the conversation's history the hub can vouch for:
+   *  CLIENT_COVERAGE_LEVELS. */
+  coverage: clientOpenToken,
+  /** One answer per id of the body's `knownFanMessageIds`, in the same order;
+   *  absent when the body named none. `state`: AI_KNOWN_FAN_MESSAGE_STATES. */
+  knownFanMessages: z.array(z.object({ id: z.string(), state: clientOpenToken }))
+    .max(AI_KNOWN_FAN_MESSAGE_IDS_MAX)
+    .optional(),
+  /** What the hub did with the client's fresh text: AI_CONTEXT_LIVE_STATUSES. */
+  live: z.object({
+    status: clientOpenToken,
+    accepted: z.number().int().nonnegative(),
+    rejected: z.number().int().nonnegative(),
+  }),
+  /** AI_FAN_LANGUAGE_EVIDENCE. */
+  fanLanguageEvidence: clientOpenToken.optional(),
+});
+
 // Unknown frames remain fatal for the raw gateway. Only streamAiFeature uses
-// this additive union, and the server emits debug_input_v1 only when the
-// caller advertised the matching capability header.
+// this additive union, and the server emits debug_input_v1 and context_v1 only
+// when the caller advertised the matching capability header.
 export const aiFeatureStreamFrameSchema = z.union([
   aiGatewayStreamFrameSchema,
   aiFeatureDebugInputFrameSchema,
+  aiFeatureContextFrameSchema,
 ]);
 
 // Stage 29 restricted capture class (DP 6-A): owner-only reads.
@@ -2160,6 +2222,17 @@ export const aiFeatureStreamBodySchema = z.object({
   // freshness gate skipped. New clients send variantCount instead. Do not
   // remove while a supported client still sends it.
   greetingMode: z.literal("new-follower").optional(),
+  // chat-extension H-4b: ids only, never text. Fan messages the client saw in
+  // the open chat before it asked for this generation, newest first. The hub
+  // answers each one in the `context_v1` frame (`knownFanMessages`) from the
+  // transcript that actually served the generation, scoped to this page and
+  // this conversation. Accepted on every feature; without the `context-v1`
+  // capability there is no frame to answer in, so the ids are ignored.
+  knownFanMessageIds: z.array(clientNumericIdSchema)
+    .min(1)
+    .max(AI_KNOWN_FAN_MESSAGE_IDS_MAX)
+    .refine((ids) => new Set(ids).size === ids.length, { message: "knownFanMessageIds repeat" })
+    .optional(),
   // Stage 32: client-loaded context for platforms whose kernel archive is
   // pull-cadenced (Fansly: dm_conversations 30 min / dm_messages 24 h — no
   // webhook lane), where the client reads the conversation live at
@@ -8306,6 +8379,7 @@ export type AiGatewayReasoningEffort = z.infer<typeof aiGatewayReasoningEffortSc
 export type AiGatewayPromptBlock = z.infer<typeof aiGatewayPromptBlockSchema>;
 export type AiFeatureDebugPromptBlock = z.infer<typeof aiFeatureDebugPromptBlockSchema>;
 export type AiFeatureDebugInputFrame = z.infer<typeof aiFeatureDebugInputFrameSchema>;
+export type AiFeatureContextFrame = z.infer<typeof aiFeatureContextFrameSchema>;
 export type AiGatewayStreamBody = z.infer<typeof aiGatewayStreamBodySchema>;
 export type AiGatewayUsage = z.infer<typeof aiGatewayUsageSchema>;
 export type AiGatewayQuota = z.infer<typeof aiGatewayQuotaSchema>;

@@ -74,10 +74,19 @@ export const CLIENT_FEATURE_UNAVAILABLE_REASONS = [
 /** The platforms and roles this hub knows today (`pages[].platform`, `identity.role`). */
 export const CLIENT_KNOWN_PLATFORMS = platforms;
 export const CLIENT_KNOWN_ROLES = userRoles;
+/**
+ * How much of one conversation's history the hub can vouch for: the `coverage`
+ * of the AI `context_v1` frame (routes.ts) and of the client reads built on the
+ * same stores. `complete`: a standing proof that the hub holds the chat's whole
+ * history up to the proof's head, served by the archive. `partial`: the hub
+ * knows its copy has a hole. `unknown`: nothing proves either.
+ */
+export const CLIENT_COVERAGE_LEVELS = ["complete", "partial", "unknown"] as const;
 
 export type ClientFeatureFlagName = (typeof CLIENT_FEATURE_FLAG_NAMES)[number];
 export type ClientHubCapabilityName = (typeof CLIENT_HUB_CAPABILITY_NAMES)[number];
 export type ClientFeatureUnavailableReason = (typeof CLIENT_FEATURE_UNAVAILABLE_REASONS)[number];
+export type ClientCoverageLevel = (typeof CLIENT_COVERAGE_LEVELS)[number];
 
 // ── bootstrap ────────────────────────────────────────────────────────────────
 

@@ -110755,6 +110755,15 @@
                       "new-follower"
                     ]
                   },
+                  "knownFanMessageIds": {
+                    "minItems": 1,
+                    "maxItems": 10,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[1-9]\\d{0,29}$"
+                    }
+                  },
                   "clientContext": {
                     "type": "object",
                     "properties": {
