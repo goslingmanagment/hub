@@ -1,14 +1,17 @@
+import { execFileSync } from "node:child_process";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import { getSyncStreamsForPlatform } from "@agency_hub_core/db";
-import { FANSLY_SEND_SOURCES, fanslyWireSpec, FANSLY_WIRE_SPECS, type FanslyWireId } from "@agency_hub_core/fansly";
+import { FANSLY_SEND_SOURCES, FANSLY_WIRE_SPECS } from "@agency_hub_core/fansly";
 
 import { beforeGateKeys, NOT_IMPLEMENTED_RECHECK_MS, plansBeforeGate } from "../apps/runtime/src/sync/engine/resource.ts";
 import {
   createFanslyRegistry,
   FANSLY_LEGACY_UNMAPPED,
   FANSLY_RESOURCE_SPECS,
-  fanslyReplayOwner,
   fanslyResourceSpec,
   type LegacyRef,
   type ResourceSpec,
@@ -17,7 +20,6 @@ import { routeHoldAfter } from "../apps/runtime/src/sync/engine/route-holds.ts";
 import { RouteClocks, routeExclusions, ROUTE_STATE_VERSION } from "../apps/runtime/src/sync/engine/route-policy.ts";
 import { DM_LIST_READ_KEYS } from "../apps/runtime/src/sync/fansly/resources/dm-conversations.ts";
 import type { FanslyRoute } from "../apps/runtime/src/sync/fansly/routes.ts";
-import { isQueueWalk, QUEUE_WALK_DRIVERS, ratePeriodMs, runGroupingOf } from "../apps/runtime/src/sync/report/shadow-window.ts";
 import { RecordingMetrics } from "./helpers/sync-engine-host.ts";
 
 // The Fansly registry (design §4.4, §4.5): every legacy stream of a Fansly
@@ -95,30 +97,14 @@ describe("the Fansly registry table", () => {
     }
   });
 
-  it("names only known wire routes, and every replayed kind is one its routes journal", () => {
+  it("names only known wire routes", () => {
     const ids = new Set(Object.keys(FANSLY_WIRE_SPECS));
     for (const spec of FANSLY_RESOURCE_SPECS) {
       for (const operation of spec.operations) expect(ids.has(operation), `${spec.key}: ${operation}`).toBe(true);
-      const kinds = new Set(spec.operations.map((operation: FanslyWireId) => fanslyWireSpec(operation).kind));
-      for (const kind of spec.replayKinds ?? []) expect(kinds.has(kind), `${spec.key} replays ${kind}`).toBe(true);
       if (spec.http) {
         expect(spec.operations.length > 0 || spec.key === "probe.manual", spec.key).toBe(true);
       }
     }
-  });
-
-  it("one replay owner per observation kind", () => {
-    const owners = new Map<string, string[]>();
-    for (const spec of FANSLY_RESOURCE_SPECS) {
-      for (const kind of spec.replayKinds ?? []) owners.set(kind, [...(owners.get(kind) ?? []), spec.key]);
-    }
-    for (const [kind, keys] of owners) expect(keys, kind).toHaveLength(1);
-    expect(fanslyReplayOwner("account_me")?.key).toBe("account.poll");
-    expect(fanslyReplayOwner("subscribers")?.key).toBe("subscribers.poll");
-    expect(fanslyReplayOwner("followers")?.key).toBe("followers.head");
-    expect(fanslyReplayOwner("account_lookup")?.key).toBe("fan-profiles.lookup");
-    expect(fanslyReplayOwner("dm_conversations")?.key).toBe("dm-conversations.head");
-    expect(fanslyReplayOwner("group_detail")?.key).toBe("dm-conversations.find");
   });
 
   it("the conversation list's follow-ups are triggers of the entries they create (design §5.3)", () => {
@@ -273,23 +259,6 @@ describe("the Fansly registry table", () => {
     expect(metrics.get("sync_not_implemented")).toBe(FANSLY_RESOURCE_SPECS.filter((spec) => spec.module === undefined).length);
   });
 
-  it("the implemented entries replay what design §5.1, §5.3, §5.4, §5.6–§5.13 say", async () => {
-    const registry = createFanslyRegistry();
-    for (const key of [
-      "account.poll", "subscribers.poll", "followers.head", "fan-profiles.lookup", "dm-conversations.head",
-      "dm-conversations.find", "dm-messages.head", "transactions.head", "top-spenders.window", "fan-earnings.roster",
-      "purchases.targets", "payouts.daily",
-    ]) {
-      expect(typeof (await registry.module(key)).replay, key).toBe("function");
-    }
-    // Every money kind has its replay owner (design §3.12 B5).
-    expect(fanslyReplayOwner("earnings_transactions")?.key).toBe("transactions.head");
-    expect(fanslyReplayOwner("earnings_accounts")?.key).toBe("top-spenders.window");
-    expect(fanslyReplayOwner("fan_earnings_monthly")?.key).toBe("fan-earnings.roster");
-    expect(fanslyReplayOwner("purchase_history")?.key).toBe("purchases.targets");
-    expect(fanslyReplayOwner("payout_requests")?.key).toBe("payouts.daily");
-  });
-
   it("the money entries: one walk row per purchase target, the earnings roster a queue walk, the 5-min insurance poll", () => {
     const targets = byKey("purchases.targets");
     expect(targets).toMatchObject({ subject: "target", kind: "goal", terminalStatuses: [404, 410, 422] });
@@ -300,17 +269,6 @@ describe("the Fansly registry table", () => {
     expect(byKey("transactions.rescan").triggers).toContain("apply:transactions.head");
     expect(byKey("top-spenders.window").period?.everyMs).toBe(6 * 3_600_000);
     expect(byKey("payouts.daily").operations).toEqual(["payouts.methods", "payouts.requests"]);
-  });
-
-  it("the content entries replay their kinds (design §5.14–§5.16)", async () => {
-    const registry = createFanslyRegistry();
-    for (const key of ["notifications.forward", "posts.refresh", "post-replies.walk"]) {
-      expect(typeof (await registry.module(key)).replay, key).toBe("function");
-    }
-    expect(fanslyReplayOwner("notifications")?.key).toBe("notifications.forward");
-    expect(fanslyReplayOwner("posts")?.key).toBe("posts.refresh");
-    expect(fanslyReplayOwner("post_tips")?.key).toBe("posts.refresh");
-    expect(fanslyReplayOwner("post_replies")?.key).toBe("post-replies.walk");
   });
 
   it("the subject-queue walks over projector-fed queues are standing goals with a queue breaker (design §4.3)", async () => {
@@ -338,51 +296,80 @@ describe("the Fansly registry table", () => {
     }
   });
 
-  it("the shadow report can judge every key it counts at a rate or by a schedule (rules A1.rate-assumed, A1.floor-queue, A1.floor-idle)", async () => {
-    const registry = createFanslyRegistry();
-    const page = { registryOverrides: {} };
-    // Every key on a period longer than the report's hour: a single request,
-    // or a module that estimates its run.
-    const rated = FANSLY_RESOURCE_SPECS.filter((spec) => spec.liveOnly !== true && ratePeriodMs(spec, page, 3_600_000) !== null);
-    expect(rated.map((spec) => spec.key).sort()).toEqual([
-      "catalog.fixed", "dm-conversations.full", "followers.reconcile", "payouts.daily", "posts.refresh", "stats.daily", "stats.hourly",
-      "top-spenders.window",
-    ]);
-    for (const spec of rated) {
-      const module = await registry.module(spec.key);
-      expect(runGroupingOf(spec) === "single" || typeof module.estimateRunSteps === "function", spec.key).toBe(true);
-    }
-    // Every standing walk re-runs its look; every queue walk reads its queue
-    // and is asked for by a poll.
-    for (const spec of FANSLY_RESOURCE_SPECS.filter((entry) => entry.standing !== undefined)) {
-      expect(typeof (await registry.module(spec.key)).dueAtLook, spec.key).toBe("function");
-    }
-    for (const spec of FANSLY_RESOURCE_SPECS.filter(isQueueWalk)) {
-      expect(typeof (await registry.module(spec.key)).queueNextDueAt, spec.key).toBe("function");
-      expect(QUEUE_WALK_DRIVERS[spec.key]?.length, spec.key).toBeGreaterThan(0);
-      for (const driver of QUEUE_WALK_DRIVERS[spec.key]!) expect(byKey(driver).kind, driver).toBe("poll");
-    }
-  });
-
   it("the vault walk stands over the projected album list, re-checked daily (design §5.17, owner decision №6)", () => {
     const standing = FANSLY_RESOURCE_SPECS.filter((spec) => spec.standing !== undefined && spec.subjectQueue !== true);
     expect(standing.map((spec) => [spec.key, spec.kind, spec.standing!.recheckMs])).toEqual([["catalog.vault", "goal", 86_400_000]]);
     expect(fanslyResourceSpec("catalog.vault")!.ownerProtected).toBe(true);
   });
+});
 
-  it("the content-b entries replay their kinds (design §5.17–§5.19, §5.22)", async () => {
+describe("the shadow report and the questions it asked the resources are gone (step 4, S4-22)", () => {
+  const root = join(__dirname, "..");
+  // The deletion's proof, kept true: none of these names anywhere in the
+  // sources or the tests. Spelled in halves so this file is no hit itself.
+  const QUESTIONS = [
+    ["estimate", "RunSteps"],
+    ["dueAt", "Look"],
+    ["queueNext", "DueAt"],
+  ].map(([head, tail]) => `${head}${tail}`);
+  const GONE = [
+    ...QUESTIONS,
+    ...[
+      ["Replay", "Verdict"],
+      ["shadowReport", "Check"],
+      ["buildShadow", "Report"],
+      ["listLegacyWsHint", "MembershipPending"],
+      ["listFanslyWsExact", "DeletedMessageRefs"],
+    ].map(([head, tail]) => `${head}${tail}`),
+  ];
+
+  it.each(GONE)("%s names nothing in apps, packages or tests", (name) => {
+    let hits = "";
+    try {
+      hits = execFileSync(
+        "grep",
+        ["-rlF", name, "--exclude-dir=node_modules", "--exclude-dir=dist", "--exclude-dir=.vite", "apps", "packages", "tests"],
+        { cwd: root, encoding: "utf8" },
+      );
+    } catch {
+      // grep exits 1 when nothing matches.
+    }
+    expect(hits.split("\n").filter(Boolean)).toEqual([]);
+  });
+
+  it("its files and the database's side of it are gone; the alerts keep their commands", () => {
+    for (const path of [
+      "apps/runtime/src/sync/report",
+      "apps/runtime/src/sync/cli/report.ts",
+      "apps/runtime/src/sync/fansly/lib/family-replay.ts",
+      "apps/runtime/src/sync/fansly/lib/replay-rules.ts",
+      "packages/db/src/repositories/fansly-ws-hints.ts",
+    ]) {
+      expect(existsSync(join(root, path)), path).toBe(false);
+    }
+    const repositories = readdirSync(join(root, "packages/db/src/repositories"), { recursive: true, encoding: "utf8" })
+      .filter((path) => path.endsWith(".ts"))
+      .map((path) => readFileSync(join(root, "packages/db/src/repositories", path), "utf8"))
+      .join("\n");
+    for (const name of [
+      "readLegacyDmStoredWindow", "listStoredDmMessagesForReplay", "readLegacyMessageArrivals",
+      "listLegacyPurchaseHistoryCapturesInWindow", "listPpvLedgerSales", "listSyncReplayObservations",
+      "countSyncAttemptsByKey", "listSyncRunAttempts", "readSyncPollPlacements", "readSyncClosedRuns", "listSyncWorkOpenAt",
+      "listSyncAdmissions", "listSharedReadAdmissions", "readFirstShadowAdmissions", "countLegacyFanslyAttempts",
+    ]) {
+      expect(repositories, name).not.toContain(name);
+    }
+    const cli = readFileSync(join(root, "apps/runtime/src/cli.ts"), "utf8");
+    expect(cli).toContain("registerSyncAlertsCommands(sync);");
+    expect(cli).not.toMatch(/registerSyncReportCommands|shadow report/);
+  });
+
+  it("a resource is plan, apply and shadow: no module answers a report question or replays a legacy observation", async () => {
     const registry = createFanslyRegistry();
-    for (const key of ["catalog.fixed", "catalog.vault", "catalog.hydrate", "media-stats.walk", "stats.daily"]) {
-      expect(typeof (await registry.module(key)).replay, key).toBe("function");
-    }
-    for (const kind of ["vault_albums", "uservault_albums", "subscription_tiers", "gift_codes", "automated_messages", "account_walls"]) {
-      expect(fanslyReplayOwner(kind)?.key, kind).toBe("catalog.fixed");
-    }
-    expect(fanslyReplayOwner("vault_media")?.key).toBe("catalog.vault");
-    expect(fanslyReplayOwner("account_media_batch")?.key).toBe("catalog.hydrate");
-    expect(fanslyReplayOwner("media_offer_stats")?.key).toBe("media-stats.walk");
-    for (const kind of ["account_stats", "earnings_stats_snapshot", "discovery_feed", "broadcast_stats_deleted", "recapstats"]) {
-      expect(fanslyReplayOwner(kind)?.key, kind).toBe("stats.daily");
+    for (const spec of FANSLY_RESOURCE_SPECS) {
+      const module = await registry.module(spec.key) as unknown as Record<string, unknown>;
+      for (const hook of [...QUESTIONS, "replay"]) expect(module[hook], `${spec.key}: ${hook}`).toBeUndefined();
+      expect("replayKinds" in spec, spec.key).toBe(false);
     }
   });
 });

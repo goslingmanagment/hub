@@ -21,7 +21,6 @@ import {
 } from "@agency_hub_core/db";
 import {
   FANSLY_FOLLOWERS_PAGE_LIMIT,
-  parseFanslyFollowersPage,
   type FanslyAccount,
   type FanslyAccountMe,
   type FanslyFollower,
@@ -46,9 +45,6 @@ import type {
   ApplyInput,
   ApplyResult,
   DemandSignal,
-  ReplayContext,
-  ReplayObservation,
-  ReplayVerdict,
   RequestPlan,
   ResourceModule,
   ShadowResult,
@@ -203,38 +199,6 @@ function followRow(pageId: number, fanId: number, follower: FanslyFollower, gene
 
 function requestedOffset(request: RequestPlan): number | null {
   return count(recordOf(request.params).offset);
-}
-
-/**
- * Replay of a legacy `followers` observation (design §5.12): the new contract
- * accepts the journaled page, and every follow it served is stored for the
- * page and was active when the page was captured (still active, or retired
- * after it). A body legacy refused is journaled trimmed inside a wrapper and
- * cannot be re-read.
- */
-async function replayFollowersPage(observation: ReplayObservation, ctx: ReplayContext): Promise<ReplayVerdict> {
-  if (recordOf(observation.payload).contractAccepted === false) {
-    return { kind: "not_replayable", reason: "legacy_refused_body_trimmed" };
-  }
-  const page = parseFanslyFollowersPage(observation.payload);
-  if (page === null) return { kind: "mismatch", reason: "contract_refused" };
-  const ids = [...new Set(page.followers.map((follower) => follower.id))];
-  if (ids.length === 0) return { kind: "match", detail: { served: 0 } };
-  const stored = await ctx.db.execute<{ id: string; active: boolean; lastSeenAt: Date | string }>(sql`
-    select platform_follow_id as id, is_active as active, last_seen_at as "lastSeenAt"
-      from page_follows
-     where platform_account_id = ${ctx.pageId}
-       and platform_follow_id = any(${sql.param(ids)}::text[])
-  `);
-  const byId = new Map(stored.rows.map((row) => [row.id, row] as const));
-  const mismatched = ids.filter((id) => {
-    const row = byId.get(id);
-    if (row === undefined) return true;
-    return !row.active && new Date(row.lastSeenAt).getTime() < observation.receivedAt.getTime();
-  });
-  return mismatched.length === 0
-    ? { kind: "match", detail: { served: ids.length } }
-    : { kind: "mismatch", reason: "follows_differ", detail: { served: ids.length, mismatched: mismatched.length, examples: mismatched.slice(0, 5) } };
 }
 
 // ── head ────────────────────────────────────────────────────────────────────
@@ -420,8 +384,6 @@ export const followersHeadModule: ResourceModule = {
       : [];
     return { work: { satisfiesRevision: true, close: "done", closeReason: "shadow", cursor: { ...cursor, shadow: null } }, followups };
   },
-
-  replay: replayFollowersPage,
 };
 
 // ── reconcile ───────────────────────────────────────────────────────────────
@@ -738,18 +700,13 @@ async function applyReconcileVerify(
 
 /** The steps of a reconcile walk: the start and terminal `/account/me` and
  *  every followers page to the short one, over the page's follower count
- *  (the shadow's estimate at a walk's start, and the shadow report's assumed
- *  run size, rule A1.rate-assumed). */
+ *  (the shadow's estimate at a walk's start). */
 async function reconcileWalkSteps(db: Database, pageId: number): Promise<number> {
   const facts = await readFanslyPageFacts(db, pageId);
   return offsetWalkPages({ total: facts?.followerCount ?? null, limit: FANSLY_FOLLOWERS_PAGE_LIMIT, statedTotal: false }) + 2;
 }
 
 export const followersReconcileModule: ResourceModule = {
-  async estimateRunSteps(_work, ctx): Promise<number> {
-    return reconcileWalkSteps(ctx.db, ctx.pageId);
-  },
-
   async plan(work, ctx): Promise<StepPlan> {
     const cursor = parseFollowersReconcileCursor(work.cursor);
     const phase = reconcilePhase(cursor, ctx.shadow);
@@ -805,8 +762,6 @@ export const followersReconcileModule: ResourceModule = {
       followups: [],
     };
   },
-
-  replay: replayFollowersPage,
 };
 
 export function followersModule(variant: FollowersVariant): ResourceModule {

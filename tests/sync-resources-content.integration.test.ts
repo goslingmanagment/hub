@@ -837,7 +837,7 @@ describe("shadow", () => {
     );
     expect(replyRequests.rows.map((row) => row.path)).toEqual([1, 2, 3, 4, 5].map((index) => `/post/${P(index)}/replies`));
     // Each step names its pass besides its subjects (the next pass asks them
-    // again: the shadow report's endless-walk check tells the two apart).
+    // again).
     const positions = await testDb.pool.query<{ resource: string; position: unknown; ids: string[] | null }>(
       `select resource, request -> 'position' as position, request -> 'params' -> 'ids' as ids from sync_attempts
         where page_id = $1 and resource in ('posts.engagement', 'post-replies.walk') order by resource, id`,
@@ -858,25 +858,5 @@ describe("shadow", () => {
     // The walks rest until their next pass: no live write, no new attempt.
     const replies = await workRow(pageId, "post-replies.walk", true);
     expect(replies!.due_at.getTime() - Date.now()).toBeGreaterThan(5 * HOUR_MS);
-  });
-});
-
-// ── replay (shadow report B5) ───────────────────────────────────────────────
-
-describe("replay of legacy observations", () => {
-  it("a journaled page matches when every draft's dedup key is stored, and names the missing ones otherwise", async (context) => {
-    if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
-    const registry = createEngineRegistry(FANSLY_RESOURCE_SPECS);
-    const ctx = { db: db(), pageId };
-    const observation = (kind: string, payload: unknown) => ({ id: 1, receivedAt: new Date(), kind, pageId, payload });
-
-    const notifications = await registry.module("notifications.forward");
-    expect(await notifications.replay!(observation("notifications", { notifications: [] }), ctx)).toEqual({ kind: "match", detail: { drafts: 0 } });
-    const posts = await registry.module("posts.refresh");
-    const verdict = await posts.replay!(observation("posts", { posts: [timelinePost(P(1), daysAgo(1))] }), ctx);
-    expect(verdict).toMatchObject({ kind: "mismatch", reason: "events_missing" });
-    expect(verdict.kind === "mismatch" ? verdict.detail?.missing : null).toBeGreaterThan(0);
-    expect(await posts.replay!(observation("posts", { posts: "not a list" }), ctx)).toMatchObject({ kind: "mismatch", reason: "family_rejected" });
   });
 });

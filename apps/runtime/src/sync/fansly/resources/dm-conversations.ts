@@ -4,7 +4,6 @@ import {
   countPageDmThreadsByGeneration,
   countPageDmVisibleThreads,
   getSyncPage,
-  listLegacyWsHintMembershipPending,
   listOpenWorkSubjects,
   listPageDmThreadIdsStampedWithGeneration,
   listPageDmThreadListStates,
@@ -20,8 +19,6 @@ import {
 } from "@agency_hub_core/db";
 import {
   FANSLY_MESSAGING_GROUPS_PAGE_LIMIT,
-  parseFanslyGroupDetail,
-  parseFanslyMessagingGroupsPage,
   type FanslyAccount,
   type FanslyGroupDetail,
   type FanslyMessagingGroup,
@@ -40,9 +37,6 @@ import type {
   ApplyResult,
   DemandSignal,
   LocalApplyInput,
-  ReplayContext,
-  ReplayObservation,
-  ReplayVerdict,
   RequestPlan,
   ResourceModule,
   ShadowResult,
@@ -56,7 +50,6 @@ import {
   listHeadInstant,
   listHeadNeedsRead,
   listPageUnchanged,
-  nonPageMembers,
   resolveConversationListItem,
   resolveGroupDetail,
   type ListHeadFollowupState,
@@ -64,7 +57,6 @@ import {
 } from "../lib/conversation-list.ts";
 import { advanceShadowWalk, offsetWalkPages, type ShadowWalkProgress } from "../lib/offset-walk.ts";
 import { readFanslyPageFacts, waitForPageIdentity } from "../lib/page-facts.ts";
-import { DETAIL_NOT_A_CHAT, LEGACY_WS_HINT_MEMBERSHIP_PENDING } from "../lib/replay-rules.ts";
 
 // `dm-conversations.head`, `.full`, `.find`, `.detail`, `.ws-down` (plan §6.2,
 // §7 p.3 and p.6; design §5.3): the conversation list
@@ -591,104 +583,6 @@ async function shadowFollowups(
   return { followups: result.followups, counters: mergeCounters({ simulated_chats: threads.length }, result.counters) };
 }
 
-// ── replay (design §3.12 B5) ────────────────────────────────────────────────
-
-function changedSince(state: PageDmThreadListState, receivedAt: Date): boolean {
-  return state.updatedAt.getTime() > receivedAt.getTime();
-}
-
-/**
- * Replay of a legacy `dm_conversations` observation: the new contract accepts
- * the journaled page, every chat on it has a thread on the page, and the
- * partner the list names is the stored one (or the row changed later). A body
- * legacy refused is journaled trimmed, so it cannot be re-judged.
- */
-async function replayConversationList(observation: ReplayObservation, ctx: ReplayContext): Promise<ReplayVerdict> {
-  if (recordOf(observation.payload).contractAccepted === false) {
-    return { kind: "not_replayable", reason: "legacy_refused_body_trimmed" };
-  }
-  const page = parseFanslyMessagingGroupsPage(observation.payload);
-  if (page === null) return { kind: "mismatch", reason: "contract_refused" };
-  const facts = await readFanslyPageFacts(ctx.db, ctx.pageId);
-  if (facts?.externalId == null) return { kind: "not_replayable", reason: "page_account_unknown" };
-  const rows = uniqueRows(page.data);
-  if (rows.length === 0) return { kind: "match", detail: { served: 0 } };
-  const groupsById = new Map((page.aggregationData?.groups ?? []).map((group) => [group.id, group] as const));
-  const states = await listPageDmThreadListStates(ctx.db, {
-    platformAccountId: ctx.pageId,
-    platformConversationIds: rows.map((row) => row.groupId),
-  });
-  const byGroup = new Map(states.map((state) => [state.platformConversationId, state] as const));
-  const missing: string[] = [];
-  const partnerDiffers: string[] = [];
-  for (const row of rows) {
-    const state = byGroup.get(row.groupId);
-    if (state === undefined) {
-      missing.push(row.groupId);
-      continue;
-    }
-    const members = nonPageMembers(groupsById.get(row.groupId)?.users, facts.externalId);
-    const partner = (typeof row.partnerAccountId === "string" && row.partnerAccountId.length > 0 ? row.partnerAccountId : null)
-      ?? (members.length === 1 ? members[0]! : null);
-    if (partner !== null && state.partnerPlatformUserId !== partner && !changedSince(state, observation.receivedAt)) {
-      partnerDiffers.push(row.groupId);
-    }
-  }
-  if (missing.length === 0 && partnerDiffers.length === 0) return { kind: "match", detail: { served: rows.length } };
-  return {
-    kind: "mismatch",
-    reason: missing.length > 0 ? "threads_missing" : "partner_differs",
-    detail: {
-      served: rows.length,
-      missing: missing.length,
-      partnerDiffers: partnerDiffers.length,
-      examples: [...missing, ...partnerDiffers].slice(0, 5),
-    },
-  };
-}
-
-/**
- * Replay of a legacy `group_detail` observation: a body legacy refused (kept
- * as `{contractAccepted: false, raw}`) is refused by the new contract too; an
- * accepted one names a thread of the page whose stored partner is the
- * detail's single non-page member (or the row changed later). Without a
- * thread: a detail that is no direct chat matches (neither side stores one);
- * a direct chat legacy's socket-hint path journaled and deferred on purpose
- * (its own `membership_pending` record of the group) is legacy's gap — it
- * stored nothing, the engine's `.find` creates the thread (D5); any other is
- * `thread_missing`.
- */
-async function replayGroupDetail(observation: ReplayObservation, ctx: ReplayContext): Promise<ReplayVerdict> {
-  const payload = recordOf(observation.payload);
-  if (payload.contractAccepted === false) {
-    const raw = recordOf(payload.raw);
-    const id = typeof raw.id === "string" ? raw.id : "";
-    return parseFanslyGroupDetail(payload.raw, id).ok
-      ? { kind: "mismatch", reason: "legacy_refused_new_accepts" }
-      : { kind: "match", detail: { legacyRefused: true } };
-  }
-  if (typeof payload.id !== "string" || payload.id.length === 0) return { kind: "mismatch", reason: "contract_refused" };
-  const parsed = parseFanslyGroupDetail(observation.payload, payload.id);
-  if (!parsed.ok) return { kind: "mismatch", reason: "contract_refused", detail: { ...parsed.violation } };
-  const facts = await readFanslyPageFacts(ctx.db, ctx.pageId);
-  if (facts?.externalId == null) return { kind: "not_replayable", reason: "page_account_unknown" };
-  const [state] = await listPageDmThreadListStates(ctx.db, { platformAccountId: ctx.pageId, platformConversationIds: [parsed.value.id] });
-  const members = nonPageMembers(parsed.value.users, facts.externalId);
-  if (state === undefined) {
-    if (members.length !== 1) {
-      return { kind: "match", detail: { notAChat: true, members: members.length, type: parsed.value.type }, via: [DETAIL_NOT_A_CHAT] };
-    }
-    const deferred = await listLegacyWsHintMembershipPending(ctx.db, { pageId: ctx.pageId, groupRefs: [parsed.value.id] });
-    if (deferred.includes(parsed.value.id)) return { kind: "not_replayable", reason: LEGACY_WS_HINT_MEMBERSHIP_PENDING };
-    return { kind: "mismatch", reason: "thread_missing", detail: { groupId: parsed.value.id } };
-  }
-  const partner = members.length === 1 ? members[0]! : null;
-  if (partner !== null && state.partnerPlatformUserId !== partner && !changedSince(state, observation.receivedAt)) {
-    return { kind: "mismatch", reason: "partner_differs", detail: { groupId: parsed.value.id } };
-  }
-  return { kind: "match", detail: { members: members.length } };
-}
-
 // ── head ────────────────────────────────────────────────────────────────────
 
 interface HeadWalk {
@@ -769,8 +663,6 @@ const headModule: ResourceModule = {
       counters: estimate.counters,
     };
   },
-
-  replay: replayConversationList,
 };
 
 // ── full ────────────────────────────────────────────────────────────────────
@@ -874,18 +766,13 @@ function restartOrWithhold(
 
 /** The pages a full sweep of the list reads: the page's visible chats at
  *  `LIMIT` a page, the list stating no total, so it ends on a short page (the
- *  shadow's estimate at a sweep's start, and the shadow report's assumed run
- *  size, rule A1.rate-assumed). */
+ *  shadow's estimate at a sweep's start). */
 async function fullSweepPages(db: Database, pageId: number): Promise<number> {
   const total = await countPageDmVisibleThreads(db, pageId);
   return offsetWalkPages({ total, limit: LIMIT, statedTotal: false });
 }
 
 const fullModule: ResourceModule = {
-  async estimateRunSteps(_work, ctx): Promise<number> {
-    return fullSweepPages(ctx.db, ctx.pageId);
-  },
-
   async plan(work, ctx): Promise<StepPlan> {
     const cursor = parseDmListFullCursor(work.cursor);
     const offset = ctx.shadow ? (cursor.shadow?.done ?? 0) * LIMIT : cursor.walk?.offset ?? 0;
@@ -997,8 +884,6 @@ const fullModule: ResourceModule = {
         counters: estimate.counters,
       };
   },
-
-  replay: replayConversationList,
 };
 
 // ── find ────────────────────────────────────────────────────────────────────
@@ -1020,8 +905,7 @@ function listHeld(page: SyncPageRow, now: Date): boolean {
 }
 
 /** The receipt of a find another key's read answered: that read (null: the
- *  chat was written by a read that was no list head read since the demand),
- *  so the shadow report counts the chat read with it. */
+ *  chat was written by a read that was no list head read since the demand). */
 function sharedReadResult(groupId: string, read: DmFindSharedRead["headRead"]): Record<string, unknown> {
   return {
     groupId,
@@ -1177,8 +1061,6 @@ const findModule: ResourceModule = {
       counters: estimate.counters,
     };
   },
-
-  replay: replayGroupDetail,
 };
 
 // ── detail ──────────────────────────────────────────────────────────────────
@@ -1209,8 +1091,6 @@ const detailModule: ResourceModule = {
   async shadow(): Promise<ShadowResult> {
     return { work: { satisfiesRevision: true, close: "done", closeReason: "shadow" }, followups: [] };
   },
-
-  replay: replayGroupDetail,
 };
 
 // ── ws-down (live only, step 3) ─────────────────────────────────────────────
@@ -1260,8 +1140,6 @@ const wsDownModule: ResourceModule = {
     // Live only: a shadow page never runs it (the registry's `liveOnly`).
     return { work: { satisfiesRevision: true, close: "done", closeReason: "shadow" }, followups: [] };
   },
-
-  replay: replayConversationList,
 };
 
 export function dmConversationsModule(variant: DmConversationsVariant): ResourceModule {

@@ -77,23 +77,6 @@ function errorClass(error: unknown): string {
   return error instanceof Error ? error.name : typeof error;
 }
 
-/** The page's facts a frame's routing reads, loaded once for its items. */
-async function loadRouteFacts(
-  db: Database,
-  input: { pageId: number; items: readonly WsItem[] },
-): Promise<{ threads: Map<string, WsRouteThread>; pending: Set<string> }> {
-  const groupIds = new Set<string>();
-  const settled = new Set<string>();
-  for (const item of input.items) {
-    if (item.kind === "message_created") groupIds.add(item.message.groupId);
-    else if (item.kind === "invalid" && item.groupRef !== null) groupIds.add(item.groupRef);
-    else if (item.kind === "transaction" && item.status !== 1) settled.add(item.id);
-  }
-  const threads = await loadWsRouteThreads(db, { pageId: input.pageId, groupIds: [...groupIds] });
-  const pending = await listKnownPendingTransactionIds(db, { pageId: input.pageId, transactionIds: [...settled] });
-  return { threads, pending };
-}
-
 /** The facts a frame's routing needs, loaded once for its items. */
 async function loadRouteContext(
   db: Database,
@@ -104,32 +87,28 @@ async function loadRouteContext(
     ownBroadcast: (item: Extract<WsItem, { kind: "message_created" }>) => boolean;
   },
 ): Promise<RouteContext> {
-  const { threads, pending } = await loadRouteFacts(db, input);
+  const groupIds = new Set<string>();
+  const settled = new Set<string>();
+  for (const item of input.items) {
+    if (item.kind === "message_created") groupIds.add(item.message.groupId);
+    else if (item.kind === "invalid" && item.groupRef !== null) groupIds.add(item.groupRef);
+    else if (item.kind === "transaction" && item.status !== 1) settled.add(item.id);
+  }
+  const threads = await loadWsRouteThreads(db, { pageId: input.pageId, groupIds: [...groupIds] });
+  const pending = await listKnownPendingTransactionIds(db, { pageId: input.pageId, transactionIds: [...settled] });
   return {
     pageId: input.pageId,
     nowMs: input.nowMs,
-    thread: (groupId) => routeThreadAt(threads.get(groupId), null),
+    thread: (groupId) => routeThreadOf(threads.get(groupId)),
     knownPendingTransaction: (id) => pending.has(id),
     ownBroadcastActive: input.ownBroadcast,
   };
 }
 
-/**
- * A thread as the router judges it: as it stands (`atMs` null), or as the
- * router knew it at `atMs` (offline routing of a past frame) — a row written
- * after `atMs` was an unknown chat, and a head confirmed by a later capture
- * was not yet confirmed. Binding and exclusion carry no time; they are taken
- * as they stand.
- */
-export function routeThreadAt(thread: WsRouteThread | undefined, atMs: number | null): RouteThread {
-  if (thread === undefined || (atMs !== null && thread.firstSeenAt.getTime() > atMs)) return unknownRouteThread();
-  const headConfirmed = atMs === null || (thread.headConfirmedAt !== null && thread.headConfirmedAt.getTime() <= atMs);
-  return {
-    known: true,
-    bound: thread.bound,
-    excluded: thread.excluded,
-    headConfirmedId: headConfirmed ? thread.headConfirmedId : null,
-  };
+/** A thread as the router judges it, as its row stands. */
+function routeThreadOf(thread: WsRouteThread | undefined): RouteThread {
+  if (thread === undefined) return unknownRouteThread();
+  return { known: true, bound: thread.bound, excluded: thread.excluded, headConfirmedId: thread.headConfirmedId };
 }
 
 /** Own messages of a frame without the broadcast marker (the ones the rate
@@ -381,51 +360,6 @@ export async function routeShadowReceipts(
   if (result.unreadable > 0) d.metrics.increment("sync_shadow_ws_receipts", { pageId: d.pageId, outcome: "unreadable" }, result.unreadable);
   if (result.routed > 0) d.metrics.increment("sync_shadow_ws_receipts", { pageId: d.pageId, outcome: "routed" }, result.routed);
   return result;
-}
-
-/** One receipt's offline routing decision and the thread facts it used. */
-export interface OfflineRouteDecision {
-  atMs: number;
-  signals: DemandSignal[];
-  /** A chat as the router knew it at `atMs` (`routeThreadAt`). */
-  thread(groupId: string): RouteThread;
-}
-
-/**
- * Offline routing (the shadow report's decision check, design §3.12 A3): the
- * demand each of a page's decoded receipts would raise when routed at its own
- * receipt time, against the page's thread facts as they stood then (as far as
- * the rows date them, `routeThreadAt`) and its ledger facts as they stand now,
- * with the broadcast rate fallback replayed in receipt order. Returned in
- * receipt order. Reads only.
- */
-export async function routeReceiptsOffline(
-  db: Database,
-  input: { pageId: number; receipts: ReadonlyArray<{ atMs: number; items: readonly WsItem[] }> },
-): Promise<OfflineRouteDecision[]> {
-  if (input.receipts.length === 0) return [];
-  const window = new OwnBroadcastWindow();
-  const ordered = [...input.receipts].sort((a, b) => a.atMs - b.atMs).map((receipt) => {
-    for (const item of receipt.items) {
-      if (item.kind === "message_created" && item.isOwn) window.record(item.message.groupId, receipt.atMs);
-    }
-    return { ...receipt, fallback: unmarkedOwnMessages(receipt.items).length > 0 && window.activeAt(receipt.atMs) };
-  });
-  const { threads, pending } = await loadRouteFacts(db, { pageId: input.pageId, items: ordered.flatMap((receipt) => receipt.items) });
-  return ordered.map((receipt) => {
-    const thread = (groupId: string) => routeThreadAt(threads.get(groupId), receipt.atMs);
-    return {
-      atMs: receipt.atMs,
-      thread,
-      signals: routeWsItems(receipt.items, {
-        pageId: input.pageId,
-        nowMs: receipt.atMs,
-        thread,
-        knownPendingTransaction: (id) => pending.has(id),
-        ownBroadcastActive: (item) => isOwnBroadcastMarked(item) || receipt.fallback,
-      }),
-    };
-  });
 }
 
 /**

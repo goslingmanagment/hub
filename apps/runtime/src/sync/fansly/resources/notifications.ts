@@ -35,7 +35,6 @@ import type {
   ShadowResult,
   StepPlan,
 } from "../../engine/resource.ts";
-import { replayByCanonicalDrafts } from "../lib/family-replay.ts";
 import { advanceShadowWalk, type ShadowWalkProgress } from "../lib/offset-walk.ts";
 
 // `notifications.forward` and `notifications.backfill` (plan §5, design §5.14):
@@ -502,8 +501,6 @@ const forwardModule: ResourceModule = {
       ? { work: { satisfiesRevision: true, close: "done", closeReason: "shadow", cursor: { ...cursor, shadow: null } }, followups: [] }
       : { work: { satisfiesRevision: false, nextDueAt: ctx.now, cursor: { ...cursor, shadow: step.progress } }, followups: [] };
   },
-
-  replay: replayByCanonicalDrafts,
 };
 
 // ── backfill ────────────────────────────────────────────────────────────────
@@ -597,15 +594,13 @@ const backfillModule: ResourceModule = {
 
   async shadow(work, _request, ctx): Promise<ShadowResult> {
     // The depth is unknown until the floor is read: one page per step, the
-    // walk simulated as one page (the shadow report lists the backfill apart).
+    // walk simulated as one page.
     const cursor = parseBackfillCursor(work.cursor);
     const step = advanceShadowWalk(cursor.shadow, () => 1);
     return step.finished
       ? { work: { satisfiesRevision: true, close: "done", closeReason: "shadow", cursor: { ...cursor, shadow: null } }, followups: [] }
       : { work: { satisfiesRevision: false, nextDueAt: ctx.now, cursor: { ...cursor, shadow: step.progress } }, followups: [] };
   },
-
-  replay: replayByCanonicalDrafts,
 };
 
 export function notificationsModule(variant: NotificationsVariant): ResourceModule {

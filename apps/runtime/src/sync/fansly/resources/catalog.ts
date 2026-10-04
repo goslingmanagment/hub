@@ -43,7 +43,6 @@ import {
   type ShadowResult,
   type StepPlan,
 } from "../../engine/resource.ts";
-import { replayByCanonicalDrafts } from "../lib/family-replay.ts";
 import { advanceShadowWalk, type ShadowWalkProgress } from "../lib/offset-walk.ts";
 import { readFanslyPageFacts } from "../lib/page-facts.ts";
 import { projectionBehind } from "../lib/projection-lag.ts";
@@ -195,18 +194,7 @@ function stepFixed(index: number, now: Date): { cursor: FixedCursor; finished: b
     : { cursor: { index: next, last: null }, finished: false };
 }
 
-/** The reads of one fixed sweep: every listing, the user-vault one only with
- *  the page's own account id (the plan's rule; the shadow report's assumed
- *  run size, rule A1.rate-assumed). */
-function fixedSweepSteps(externalId: string | null): number {
-  return CATALOG_FIXED_STEPS.length - (externalId === null ? 1 : 0);
-}
-
 const fixedModule: ResourceModule = {
-  async estimateRunSteps(_work, ctx): Promise<number> {
-    return fixedSweepSteps((await readFanslyPageFacts(ctx.db, ctx.pageId))?.externalId ?? null);
-  },
-
   async plan(work, ctx): Promise<StepPlan> {
     const cursor = parseFixedCursor(work.cursor);
     const facts = await readFanslyPageFacts(ctx.db, ctx.pageId);
@@ -256,8 +244,6 @@ const fixedModule: ResourceModule = {
       ? { work: { satisfiesRevision: true, close: "done", closeReason: "shadow", cursor: next.cursor }, followups: AFTER_FIXED }
       : { work: { satisfiesRevision: false, nextDueAt: ctx.now, cursor: next.cursor }, followups: [] };
   },
-
-  replay: replayByCanonicalDrafts,
 };
 
 async function legacyCatalogState(db: Database, pageId: number): Promise<unknown> {
@@ -419,31 +405,7 @@ async function shadowVaultWalk(db: Database, pageId: number, cursor: VaultCursor
 
 const HYDRATE_AFTER_WALK: readonly DemandSignal[] = [{ resource: HYDRATE_KEY, demand: { reason: "album_walked" } }];
 
-/** The creator albums of the page whose projected row changed after `at`. */
-async function albumsChangedSince(db: Database, pageId: number, at: Date): Promise<Set<string>> {
-  const result = await db.execute<{ albumRef: string }>(sql`
-    select album_ref as "albumRef" from creator_vault_albums
-     where page_id = ${pageId} and vault_kind = 'creator' and updated_at > ${at}
-  `);
-  return new Set(result.rows.map((row) => row.albumRef));
-}
-
 const vaultModule: ResourceModule = {
-  /** The shadow report's look check (rule A1.floor-idle): every album the
-   *  walk's choice would have taken at the look, from the legacy-seeded walk
-   *  state, less the albums whose row changed since. */
-  async dueAtLook(work, ctx) {
-    const cursor = await shadowVaultWalk(ctx.db, ctx.pageId, parseVaultCursor(work.cursor));
-    const fullEveryMs = vaultCadence(ctx.page).fullEveryMs;
-    const day = fanslyUtcDayKey(ctx.now);
-    const changed = await albumsChangedSince(ctx.db, ctx.pageId, ctx.now);
-    const albums = await listCreatorVaultAlbumsForWalk(ctx.db, ctx.pageId);
-    const due = albums
-      .filter((album) => !changed.has(album.albumRef) && chooseVaultAlbum([album], cursor, day, fullEveryMs) !== null)
-      .map((album) => album.albumRef);
-    return { count: due.length, examples: due.slice(0, 5), queued: albums.length };
-  },
-
   async plan(work, ctx): Promise<StepPlan> {
     let cursor = parseVaultCursor(work.cursor);
     if (ctx.shadow) cursor = await shadowVaultWalk(ctx.db, ctx.pageId, cursor);
@@ -641,8 +603,6 @@ const vaultModule: ResourceModule = {
       counters: finished ? { vault_albums_estimated: 1 } : {},
     };
   },
-
-  replay: replayByCanonicalDrafts,
 };
 
 // ── hydrate ──────────────────────────────────────────────────────────────────
@@ -809,8 +769,6 @@ const hydrateModule: ResourceModule = {
       ? { work: { satisfiesRevision: true, close: "done", closeReason: "shadow", cursor: { ...cursor, shadow: null } }, followups: [], counters: { cards_asked: asked } }
       : { work: { satisfiesRevision: false, nextDueAt: ctx.now, cursor: { ...cursor, shadow: step.progress } }, followups: [], counters: { cards_asked: asked } };
   },
-
-  replay: replayByCanonicalDrafts,
 };
 
 export function catalogModule(variant: CatalogVariant): ResourceModule {

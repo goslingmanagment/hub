@@ -23,7 +23,7 @@ import type { EngineRegistry } from "./resource.ts";
 // journals; a shadow page's families are `sync_shadow_*`, and its alerts 1–4
 // are counted here only (D14).
 //
-// `computeSyncMetrics` serves one page (status, the shadow report);
+// `computeSyncMetrics` serves one page (status);
 // `sampleSyncEngineMetrics` is the ops sampler's compact set (aggregates over
 // pages, design §9.4 [A11]): per-page series would double the sample table
 // for figures the page status already shows.

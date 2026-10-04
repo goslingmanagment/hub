@@ -21,9 +21,9 @@ import type { ApplyResult, LocalApplyInput, ResourceModule } from "../../engine/
 // page hold or pacer slot delays it (ruling 9) — outside the ack transaction
 // so the lock order holds (hot tables before `domain_event_seq`).
 //
-// Shadow (step 2): the router creates the work from real deletion frames so
-// the shadow report sees the demand, and the step closes at once — a shadow
-// page never writes a hot table, the archive or an event (I14).
+// Shadow (step 2): the router creates the work from real deletion frames and
+// the step closes at once — a shadow page never writes a hot table, the
+// archive or an event (I14).
 //
 // Live: a `local` step (`applyLocal`, in the commit's generation-fenced
 // transaction under the erasure fence the entry declares). Per deleted

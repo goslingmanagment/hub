@@ -5,7 +5,6 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   ensurePollRows,
   getSyncPage,
-  listSharedReadAdmissions,
   readDmFindSharedRead,
   setPageHold,
   upsertDemand,
@@ -894,7 +893,7 @@ describe("the shared list-head read of .find (step 3b, plan PR 1-3)", () => {
     expect(await subjectsOf(pageId, "dm-messages.catchup")).toEqual([]);
   });
 
-  it("in shadow, as live: one list read for the burst, every other find closed on it naming that read (the report counts its chat read with it), the urgent reads of the chats the database knows", async (context) => {
+  it("in shadow, as live: one list read for the burst, every other find closed on it naming that read, the urgent reads of the chats the database knows", async (context) => {
     if (!testDb) return context.skip();
     const pageId = await seedPage("shadow");
     const old = NOW_MS - 3 * HOUR;
@@ -908,7 +907,6 @@ describe("the shared list-head read of .find (step 3b, plan PR 1-3)", () => {
     ]);
     const registry = await quietRegistry(pageId, true);
     for (const n of [2, 3, 4, 5]) await makeDue(pageId, true, FIND, groupOf(n));
-    const from = new Date(Date.now() - 1_000);
     await drive(pageId, "shadow", registry, null, async () => (await openFinds(pageId, true)) === 0);
 
     const attempts = (await attemptsOf(pageId, true)).filter((attempt) => attempt.resource === FIND);
@@ -928,13 +926,6 @@ describe("the shared list-head read of .find (step 3b, plan PR 1-3)", () => {
     // open for — the reader's and the one it answered.
     expect(await subjectsOf(pageId, "dm-messages.head", true)).toEqual([groupOf(2), groupOf(3)]);
     expect((await workRow(pageId, "dm-messages.head", { shadow: true, subject: groupOf(3) }))!.class).toBe("urgent");
-    // The shadow report's live path counts every chat read at the shared read.
-    const admissions = await listSharedReadAdmissions(db(), {
-      pageIds: [pageId], shadow: true, resources: [FIND], from, to: new Date(Date.now() + 60_000),
-    });
-    expect(admissions.map((row) => [row.subject, row.admittedAt.getTime()])).toEqual(
-      [3, 4, 5].map((n) => [groupOf(n), reader.admitted_at.getTime()]),
-    );
   });
 });
 
@@ -1270,40 +1261,5 @@ describe("shadow", () => {
     expect(changedTables(before, after)).toEqual(["sync_attempts", "sync_work"]);
     const threadsAfter = await testDb.pool.query("select max(updated_at) as at from page_dm_threads where platform_account_id = $1", [pageId]);
     expect(threadsAfter.rows[0].at).toEqual(threadsBefore.rows[0].at);
-  });
-});
-
-describe("replay of legacy observations (shadow report B5)", () => {
-  it("dm_conversations and group_detail against what legacy stored", async (context) => {
-    if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
-    const at = NOW_MS - 2 * HOUR;
-    await seedThreads(pageId, [{ n: 1, headId: messageOf(1), headAtMs: at }, { n: 2, headId: messageOf(2), headAtMs: at }]);
-    const registry = createEngineRegistry(FANSLY_RESOURCE_SPECS);
-    const ctx = { db: db(), pageId };
-    const later = new Date(Date.now() + HOUR);
-    const observation = (kind: string, payload: unknown, receivedAt = later) => ({ id: 1, receivedAt, kind, pageId, payload });
-
-    const list = await registry.module("dm-conversations.head");
-    const served = listPage([{ n: 1, headId: messageOf(1), headAtMs: at }, { n: 2, headId: messageOf(2), headAtMs: at }]);
-    expect(await list.replay!(observation("dm_conversations", served), ctx)).toEqual({ kind: "match", detail: { served: 2 } });
-    expect(await list.replay!(observation("dm_conversations", listPage([{ n: 3, headId: null, headAtMs: null }])), ctx))
-      .toMatchObject({ kind: "mismatch", reason: "threads_missing" });
-    expect(await list.replay!(observation("dm_conversations", listPage([{ n: 1, partner: fanOf(9), headId: null, headAtMs: null }])), ctx))
-      .toMatchObject({ kind: "mismatch", reason: "partner_differs" });
-    // The row changed after an older observation: not a mismatch.
-    expect(await list.replay!(observation("dm_conversations", listPage([{ n: 1, partner: fanOf(9), headId: null, headAtMs: null }]), new Date(at)), ctx))
-      .toMatchObject({ kind: "match" });
-    expect(await list.replay!(observation("dm_conversations", { contractAccepted: false, captured: {} }), ctx)).toMatchObject({ kind: "not_replayable" });
-    expect(await list.replay!(observation("dm_conversations", { data: [{ nope: 1 }] }), ctx)).toMatchObject({ kind: "mismatch", reason: "contract_refused" });
-
-    const find = await registry.module("dm-conversations.find");
-    expect(await find.replay!(observation("group_detail", groupDetail(1, [fanOf(1)], null)), ctx)).toMatchObject({ kind: "match" });
-    expect(await find.replay!(observation("group_detail", groupDetail(1, [fanOf(9)], null)), ctx))
-      .toMatchObject({ kind: "mismatch", reason: "partner_differs" });
-    expect(await find.replay!(observation("group_detail", groupDetail(7, [fanOf(7)], null)), ctx))
-      .toMatchObject({ kind: "mismatch", reason: "thread_missing" });
-    expect(await find.replay!(observation("group_detail", { contractAccepted: false, raw: { id: groupOf(1), users: [{}] } }), ctx))
-      .toMatchObject({ kind: "match", detail: { legacyRefused: true } });
   });
 });

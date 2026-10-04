@@ -6,7 +6,6 @@ import {
   ensurePollRows,
   getSyncPage,
   listMediaStatsRefreshChunk,
-  listSyncPages,
   upsertDemand,
   type Database,
 } from "@agency_hub_core/db";
@@ -20,7 +19,6 @@ import { fanslyCaptureCodec } from "../apps/runtime/src/sync/fansly/capture.ts";
 import { projectionBehind } from "../apps/runtime/src/sync/fansly/lib/projection-lag.ts";
 import { createFanslyRegistry, FANSLY_RESOURCE_SPECS, fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";
 import { mediaStatsOwnerTiers, runMediaVisit, startMediaVisit } from "../apps/runtime/src/sync/fansly/resources/media-stats.ts";
-import { readShadowRouteChecks } from "../apps/runtime/src/sync/report/shadow-routes.ts";
 import { changeSyncRegistryOverride, requestSyncProbe, SyncOwnerLeverError } from "../apps/runtime/src/sync/inspect.ts";
 import { allZeroBody, statsBody } from "./helpers/fansly-media-stats-fixtures.ts";
 import {
@@ -983,8 +981,7 @@ describe("media-stats.walk", () => {
       { pass: 1, item: expect.stringContaining(ITEM_MID), window: 0 },
     ]);
     // A re-check period later the next pass reads both items again (shadow
-    // records no visit): the same items and windows, another pass — no walk
-    // went round in circles.
+    // records no visit): the same items and windows, another pass.
     await testDb.pool.query(
       `update sync_work set cursor = jsonb_set(cursor, '{shadow,startedAt}', to_jsonb($2::text))
         where page_id = $1 and shadow and resource = 'media-stats.walk'`,
@@ -995,12 +992,6 @@ describe("media-stats.walk", () => {
       (await countRows(testDb!.pool, "select count(*)::int as n from sync_attempts where page_id = $1 and shadow and resource = 'media-stats.walk' and outcome = 'shadow'", [pageId])) === 6
       && (await workRow(pageId, "media-stats.walk", true))?.waiting_reason === "not_due");
     expect((await positions()).slice(3)).toEqual(firstPass.map((position) => ({ ...position, pass: 2 })));
-    const checks = await readShadowRouteChecks(db(), {
-      pages: await listSyncPages(db()),
-      window: { start: new Date(Date.now() - HOUR_MS), end: new Date(Date.now() + 1_000) },
-      maxListed: 10,
-    });
-    expect(checks.walks).toEqual({ runs: 1, repeats: 0, endless: [] });
   });
 
   it("shadow models the long tail as live (step 3b ruling 12): on an unproven route the first visit asks the 90-day window and the split, every later one the split", async (context) => {

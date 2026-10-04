@@ -10,14 +10,11 @@ import {
   isDmArchiveScopeFenced,
   latestClosedWorkForKey,
   listDomainEventsByDedupKeys,
-  listFanslyWsExactDeletedMessageRefs,
   listOpenHistoryItems,
   listPageDmThreadListStates,
-  listStoredDmMessagesForReplay,
   listUnrecordedMediaOrders,
   lockWorkRows,
   openThreadSummary,
-  readLegacyDmStoredWindow,
   readThreadChain,
   readThreadStoredFacts,
   resolveWorkDemandMessageIds,
@@ -32,7 +29,6 @@ import {
 } from "@agency_hub_core/db";
 import {
   FANSLY_MESSAGES_PAGE_LIMIT,
-  parseFanslyMessagesPage,
   type FanslyMessage,
   type FanslyMessagesPage,
 } from "@agency_hub_core/fansly";
@@ -46,9 +42,6 @@ import type {
   ApplyInput,
   ApplyResult,
   DemandSignal,
-  ReplayContext,
-  ReplayObservation,
-  ReplayVerdict,
   RequestPlan,
   ResourceModule,
   ShadowResult,
@@ -72,11 +65,6 @@ import { normalizeFanslyDmMessages } from "../lib/dm-normalize.ts";
 import { replaceJournalLoneSurrogates } from "../lib/journal-lone-surrogates.ts";
 import { advanceShadowWalk, type ShadowWalkProgress } from "../lib/offset-walk.ts";
 import { readFanslyPageFacts, waitForPageIdentity } from "../lib/page-facts.ts";
-import {
-  LEGACY_UNSTORED_BELOW_COMPLETE_CLAIM,
-  LEGACY_UNSTORED_BELOW_WINDOW,
-  LEGACY_UNSTORED_DELETED_ON_PLATFORM,
-} from "../lib/replay-rules.ts";
 import { normalizeFanslyTimestamp } from "../lib/timestamp.ts";
 import { materializeFanslyDmTipContexts } from "../lib/tip-contexts.ts";
 import { needsHistoryHeadRead } from "../../requests/history-rules.ts";
@@ -1015,149 +1003,6 @@ async function shadowStep(variant: DmMessagesVariant, work: SyncWorkRow, ctx: { 
   };
 }
 
-// ── replay (design §3.12 B5) ────────────────────────────────────────────────
-
-/** The rows of a journaled page legacy never stored, one by one
- *  (`lib/replay-rules.ts`): deleted on Fansly (an exact socket receipt),
- *  older than every row legacy stored for the chat (in a chat legacy calls
- *  complete, apart), or unexplained — a hole inside legacy's stored window,
- *  or a chat it stored nothing of, is never excused. */
-async function classifyUnstoredRows(
-  db: Database,
-  input: { pageId: number; groupId: string; threadId: number; ids: readonly string[] },
-): Promise<{ gap: Record<string, number>; unexplained: string[] }> {
-  const window = await readLegacyDmStoredWindow(db, { conversationId: input.threadId });
-  const deleted = new Set(await listFanslyWsExactDeletedMessageRefs(db, {
-    pageId: input.pageId,
-    groupRef: input.groupId,
-    messageRefs: input.ids,
-  }));
-  const gap: Record<string, number> = {
-    [LEGACY_UNSTORED_DELETED_ON_PLATFORM]: 0,
-    [LEGACY_UNSTORED_BELOW_WINDOW]: 0,
-    [LEGACY_UNSTORED_BELOW_COMPLETE_CLAIM]: 0,
-  };
-  const unexplained: string[] = [];
-  for (const id of input.ids) {
-    if (deleted.has(id)) {
-      gap[LEGACY_UNSTORED_DELETED_ON_PLATFORM]! += 1;
-    } else if (window.lowestStoredId !== null && compareFanslySnowflakeIds(id, window.lowestStoredId) === -1) {
-      gap[window.legacyClaimsComplete ? LEGACY_UNSTORED_BELOW_COMPLETE_CLAIM : LEGACY_UNSTORED_BELOW_WINDOW]! += 1;
-    } else {
-      unexplained.push(id);
-    }
-  }
-  return { gap, unexplained };
-}
-
-/**
- * Replay of a legacy `dm_messages` observation: the new contract and the
- * chain page rules accept the journaled page (a body legacy refused is
- * journaled as `{contractAccepted: false, raw}` and must be refused again),
- * and every normalized row is in `page_dm_messages` with the same sender role,
- * `created_at`, tip cents and content — a row re-read later (newer
- * `synced_at`) or deleted since counts as a match. A row legacy never stored
- * is judged by `classifyUnstoredRows`: when each one is legacy's named gap
- * (its journal-only readers: the B1 walk's dropped staged pages, the AI fast
- * lane and accelerator), the stored rows decide — a match naming the gap, or,
- * when legacy stored none of the page, not replayable under the gap's name.
- */
-async function replayMessagesPage(observation: ReplayObservation, ctx: ReplayContext): Promise<ReplayVerdict> {
-  const payload = recordOf(observation.payload);
-  if (payload.contractAccepted === false) {
-    return parseFanslyMessagesPage(payload.raw) === null
-      ? { kind: "match", detail: { legacyRefused: true } }
-      : { kind: "mismatch", reason: "legacy_refused_new_accepts" };
-  }
-  const page = parseFanslyMessagesPage(observation.payload);
-  if (page === null) return { kind: "mismatch", reason: "contract_refused" };
-  if (page.messages.length === 0) return { kind: "match", detail: { served: 0 } };
-  if (page.messages.some((message) => typeof message !== "object" || message === null || Array.isArray(message))) {
-    return { kind: "mismatch", reason: "item_not_object" };
-  }
-  const groups = new Set(page.messages.map((message) => message.groupId));
-  if (groups.size !== 1) return { kind: "mismatch", reason: "mixed_groups", detail: { groups: groups.size } };
-  const groupId = page.messages[0]!.groupId;
-  // The journal row carries no request: the page is checked for order and
-  // ids only (its own limit is unknown — legacy also read with 1, 5, 20, 100).
-  const violation = validateChainPage({
-    before: null,
-    limit: page.messages.length,
-    ids: page.messages.map((message) => (typeof message.id === "string" ? message.id : "")),
-    createdAtMs: page.messages.map(() => null),
-    capturedAt: observation.receivedAt,
-    witness: { kind: "attempt", attemptId: 0, observationId: observation.id, receivedAt: observation.receivedAt },
-  });
-  if (violation !== null && violation.kind === "contract_violation") {
-    return { kind: "mismatch", reason: `chain_${violation.reason}` };
-  }
-  const facts = await readFanslyPageFacts(ctx.db, ctx.pageId);
-  if (facts?.externalId == null) return { kind: "not_replayable", reason: "page_account_unknown" };
-  const [thread] = await listPageDmThreadListStates(ctx.db, { platformAccountId: ctx.pageId, platformConversationIds: [groupId] });
-  if (thread === undefined) return { kind: "mismatch", reason: "thread_missing", detail: { groupId } };
-  const normalized = normalizeFanslyDmMessages(page.messages, {
-    conversationId: thread.id,
-    platformAccountId: ctx.pageId,
-    platform: "fansly",
-    pageAccountId: facts.externalId,
-    partnerPlatformUserId: thread.partnerPlatformUserId,
-  });
-  const stored = new Map((await listStoredDmMessagesForReplay(ctx.db, {
-    conversationId: thread.id,
-    platformMessageIds: normalized.rows.map((row) => row.platformMessageId),
-  })).map((row) => [row.platformMessageId, row] as const));
-  const missing: string[] = [];
-  const differs: string[] = [];
-  for (const row of normalized.rows) {
-    const copy = stored.get(row.platformMessageId);
-    if (copy === undefined) {
-      missing.push(row.platformMessageId);
-      continue;
-    }
-    if (copy.deletedAt !== null || copy.syncedAt.getTime() > observation.receivedAt.getTime()) continue;
-    if (copy.senderRole !== row.senderRole || copy.createdAt.getTime() !== row.createdAt.getTime()
-      || copy.totalTipAmountCents !== row.totalTipAmountCents || copy.content !== row.content) {
-      differs.push(row.platformMessageId);
-    }
-  }
-  if (missing.length === 0 && differs.length === 0) {
-    return { kind: "match", detail: { served: page.messages.length, unparseable: normalized.unparseable.length } };
-  }
-  const unstored = missing.length === 0
-    ? { gap: {}, unexplained: [] }
-    : await classifyUnstoredRows(ctx.db, { pageId: ctx.pageId, groupId, threadId: thread.id, ids: missing });
-  const named = Object.entries(unstored.gap).filter(([, n]) => n > 0);
-  const legacyGap = Object.fromEntries(named);
-  if (differs.length > 0 || unstored.unexplained.length > 0) {
-    return {
-      kind: "mismatch",
-      reason: unstored.unexplained.length > 0 ? "rows_missing" : "rows_differ",
-      detail: {
-        served: page.messages.length,
-        missing: unstored.unexplained.length,
-        differs: differs.length,
-        examples: [...unstored.unexplained, ...differs].slice(0, 5),
-        ...(named.length === 0 ? {} : { legacyGap }),
-      },
-    };
-  }
-  const compared = normalized.rows.length - missing.length;
-  if (compared > 0) {
-    return {
-      kind: "match",
-      detail: { served: page.messages.length, compared, unparseable: normalized.unparseable.length, legacyGap },
-      via: named.map(([rule]) => rule).sort(),
-    };
-  }
-  // Legacy stored none of the page: nothing to compare with.
-  const reason = (unstored.gap[LEGACY_UNSTORED_BELOW_COMPLETE_CLAIM] ?? 0) > 0
-    ? LEGACY_UNSTORED_BELOW_COMPLETE_CLAIM
-    : unstored.gap[LEGACY_UNSTORED_DELETED_ON_PLATFORM] === missing.length
-      ? LEGACY_UNSTORED_DELETED_ON_PLATFORM
-      : LEGACY_UNSTORED_BELOW_WINDOW;
-  return { kind: "not_replayable", reason };
-}
-
 // ── modules ─────────────────────────────────────────────────────────────────
 
 function variantModule(variant: DmMessagesVariant): ResourceModule {
@@ -1165,7 +1010,6 @@ function variantModule(variant: DmMessagesVariant): ResourceModule {
     plan: (work, ctx) => planStep(variant, work, ctx),
     apply: (tx, input) => applyMessagesPage(variant, tx, input),
     shadow: (work, _request, ctx) => shadowStep(variant, work, ctx),
-    replay: replayMessagesPage,
   };
 }
 

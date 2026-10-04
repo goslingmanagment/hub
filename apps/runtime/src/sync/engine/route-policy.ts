@@ -29,7 +29,7 @@ import type { RouteAdmissionView, RouteBudgetStatusView, RouteStatusView } from 
 // shorten an interval. On a live page the step-1 send log counts too
 // (what the legacy engine sent before the switch); a send whose instant is
 // unknown counts at its upper bound. A shadow page runs the same rule on its
-// own journal, so the shadow report sees the budgets live pages keep.
+// own journal.
 //
 // The rule is applied twice per slot, one pure function each:
 //   - at the pick: a key all of whose routes are closed is left out of the

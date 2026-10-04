@@ -33,12 +33,10 @@ import type {
   StepPlan,
 } from "../../engine/resource.ts";
 import type { SettingsSource } from "../../engine/ports.ts";
-import { replayByCanonicalDrafts } from "../lib/family-replay.ts";
 import {
   advanceShadowPass,
   clearQueueSubjectBlocks,
   currentShadowPass,
-  dueAtLookOf,
   EMPTY_SHADOW_PASS,
   parseShadowPass,
   recordQueueSubjectFailures,
@@ -246,27 +244,6 @@ async function writeArchiveCoverage(tx: Database, input: { pageId: number; now: 
 }
 
 const walkModule: ResourceModule = {
-  /** The shadow report's look check (rule A1.floor-idle): the shadow plan's
-   *  pick at the look under the live re-walk cycle, less what changed since.
-   *  The engine host always plans with the live settings, so a check without
-   *  them would re-run another pick (the registry's 14 d, not prod's 30 d) and
-   *  name posts the plan never had due: it fails instead. */
-  async dueAtLook(work, ctx) {
-    if (ctx.settings === undefined) {
-      throw new Error("no live settings: the walk's pick reads fanslyRepliesRewalkCycleDays live, the registry default is not the look's pick");
-    }
-    const cursor = parsePostRepliesCursor(work.cursor);
-    const pass = currentShadowPass(cursor.shadow, ctx.now, POST_REPLIES_RECHECK_MS);
-    if (pass.ended) return { count: 0, examples: [], queued: null };
-    const cycleDays = await rewalkCycleDays(ctx.settings);
-    return dueAtLookOf(ctx.db, {
-      pageId: ctx.pageId,
-      plane: POST_REPLIES_QUEUE.plane,
-      at: ctx.now,
-      pick: (limit) => pickDuePostReplies(ctx.db, { pageId: ctx.pageId, now: ctx.now, limit, after: pass.after, rewalkCycleDays: cycleDays }),
-    });
-  },
-
   async plan(work, ctx): Promise<StepPlan> {
     const cursor = parsePostRepliesCursor(work.cursor);
     const cycleDays = await rewalkCycleDays(ctx.settings);
@@ -425,8 +402,6 @@ const walkModule: ResourceModule = {
       counters,
     };
   },
-
-  replay: replayByCanonicalDrafts,
 };
 
 // ── authors ─────────────────────────────────────────────────────────────────
