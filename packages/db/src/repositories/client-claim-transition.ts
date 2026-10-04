@@ -104,6 +104,12 @@ export interface ClientFanClaimSnapshot {
   groupParts: ClientCustodyRow[];
   /** The user's preview sends inside the rate window (dispatch only). */
   recentPreviewSends: number;
+  /**
+   * The viewer's own last send to this fan dispatched from the preview, in
+   * whatever state it ended. Only the status read loads it (H-7b), and only
+   * while no send to the fan is open; an action leaves it undefined.
+   */
+  lastOwnDispatch?: ClientCustodyRow | null;
 }
 
 interface ActorFields {
@@ -247,6 +253,10 @@ export function decideClaimTransition(snapshot: ClientFanClaimSnapshot, request:
 
   switch (request.action) {
     case "claim": {
+      // A greeted fan has no first greeting left to work out. Only the greeting's owner may still
+      // hold the fan (the rest of its group); for everyone else the lease would only lead to a
+      // second greeting, by hand if not from the preview.
+      if (confirmedGreeting(snapshot) && snapshot.greeting?.ownerUserId !== request.userId) return reject("greeting_done");
       if (isLive(activeLease, now)) {
         return activeLease.leaseId === request.leaseToken && ownsLease(activeLease, request.instanceId) ? apply() : reject("claim_busy");
       }
@@ -330,6 +340,10 @@ export function decideClaimTransition(snapshot: ClientFanClaimSnapshot, request:
           ? apply() : reject("attempt_conflict");
       }
       if (attempt.state !== "dispatching") return reject("attempt_conflict");
+      // Past its ticket the send is uncertain-held, and that never becomes failed: the report
+      // says what the client knew inside the ticket, and nothing since. Only the late proof
+      // (sent) or the manual resolve ends it.
+      if (custodyViewState(attempt, now) !== "dispatching") return reject("custody_held");
       return apply({ op: "markFailed", attemptId: attempt.attemptId, reason: request.reason, httpStatus: request.httpStatus });
     }
     case "registerNativeSend": {
@@ -444,7 +458,12 @@ export function deriveClientClaimView(snapshot: ClientFanClaimSnapshot, viewer: 
   })();
   const attempt = snapshot.attempt && viewer.attemptId === snapshot.attempt.attemptId && isPartOf(snapshot.attempt, snapshot)
     ? snapshot.attempt : null;
-  const shown = attempt ?? snapshot.openCustody;
+  // The send the answer is about, else the fan's open send (anyone's: it holds the fan), else, for the
+  // status read, the viewer's own last dispatched send: its final state is how a client that lost
+  // track of it (a restart, a manual resolve) learns the outcome.
+  const lastOwn = snapshot.lastOwnDispatch && snapshot.lastOwnDispatch.userId === viewer.userId
+    && isPartOf(snapshot.lastOwnDispatch, snapshot) ? snapshot.lastOwnDispatch : null;
+  const shown = attempt ?? snapshot.openCustody ?? lastOwn;
   const group = snapshot.group && {
     ...snapshot.group,
     sentParts: partIndexes(snapshot, (row) => row.state === "sent" || row.state === "resolved_sent"),
@@ -472,12 +491,16 @@ function partIndexes(snapshot: ClientFanClaimSnapshot, keep: (row: ClientCustody
     .sort((a, b) => a - b);
 }
 
-/** The group the view reports: the request's, else its attempt's, the greeting's, the open send's. */
+/**
+ * The group the view reports: the request's, else its attempt's, the greeting's, the open send's,
+ * the viewer's own last dispatched send's (the status read).
+ */
 export function viewGroup(input: {
   requestGroup: ClientClaimGroup | null;
   attempt: ClientCustodyRow | null;
   greeting: ClientGreetingRow | null;
   openCustody: ClientCustodyRow | null;
+  lastOwnDispatch?: ClientCustodyRow | null;
 }): ClientClaimGroup | null {
   if (input.requestGroup) return input.requestGroup;
   const fromRow = (row: ClientCustodyRow | null) =>
@@ -487,5 +510,6 @@ export function viewGroup(input: {
     ?? (greeting?.generationRef != null && greeting.variant != null && greeting.partCount != null
       ? { generationRef: greeting.generationRef, variant: greeting.variant, partCount: greeting.partCount }
       : null)
-    ?? fromRow(input.openCustody);
+    ?? fromRow(input.openCustody)
+    ?? fromRow(input.lastOwnDispatch ?? null);
 }

@@ -87,6 +87,31 @@ describe("lease: claim, renew, release", () => {
       ]);
   });
 
+  it("gives no lease on a greeted fan to anyone but the greeting's owner", () => {
+    const claim: ClientClaimRequest = { ...actor, action: "claim", leaseToken: L1, instanceId: I1 };
+    const greeted = (ownerUserId: number | null) => ({
+      ownerUserId, generationRef: GROUP.generationRef, variant: GROUP.variant, partCount: GROUP.partCount,
+      confirmedAt: NOW, firstMessageRef: "901", source: "preview-send" as const,
+    });
+    // Someone else's greeting, one whose owner is gone, and the desktop's: no first greeting is left to work out.
+    for (const state of [
+      snapshot({ greeting: greeted(OTHER) }),
+      snapshot({ greeting: greeted(null) }),
+      snapshot({ desktop: { commandId: "c1", state: "confirmed", at: NOW, messageRef: "9001" } }),
+      // Also for the holder of a lease taken before a colleague's native send confirmed the greeting.
+      snapshot({ ...ownedLease, greeting: greeted(OTHER) }),
+    ]) {
+      expect(decideClaimTransition(state, claim)).toEqual({ outcome: "rejected", code: "greeting_done", writes: [] });
+    }
+    // The owner still holds the fan for the rest of the group; a desktop command that only may have greeted refuses no lease.
+    expect(decideClaimTransition(snapshot({ greeting: greeted(ME) }), claim)).toMatchObject({ outcome: "applied" });
+    expect(decideClaimTransition(snapshot({ desktop: { commandId: "c1", state: "held", at: NOW, messageRef: null } }), claim))
+      .toMatchObject({ outcome: "applied" });
+    // A lease that is already running is renewed and released as before.
+    expect(decideClaimTransition(snapshot({ ...ownedLease, greeting: greeted(OTHER) }), { ...claim, action: "renew" }))
+      .toMatchObject({ outcome: "applied" });
+  });
+
   it("never revives a released or expired token", () => {
     const state = snapshot({ requestedLease: lease({ state: "released" }) });
     expect(decideClaimTransition(state, { ...actor, action: "claim", leaseToken: L1, instanceId: I1 }))
@@ -262,6 +287,25 @@ describe("sent and failed: only the dispatching user and instance (critic 12)", 
     const failedRow = custody({ state: "failed", failureReason: "not_enqueued" });
     expect(decideClaimTransition(snapshot({ attempt: failedRow }), failed("not_enqueued", null))).toEqual({ outcome: "applied", writes: [] });
   });
+
+  it("takes a failure only inside the ticket: uncertain-held never becomes failed", () => {
+    // The client's frozen CUSTODY_TRANSITIONS: past the ticket only `sent` or a resolve ends the send.
+    for (const ticketExpiresAt of [NOW, later(-1), later(-60_000)]) {
+      const uncertain = custody({ ticketExpiresAt });
+      for (const report of [failed("not_enqueued", null), failed("native_rejected", 403)]) {
+        expect(decideClaimTransition(snapshot({ attempt: uncertain, openCustody: uncertain }), report))
+          .toEqual({ outcome: "rejected", code: "custody_held", writes: [] });
+      }
+      // Who may report is decided first: a stranger learns nothing about the send's state.
+      expect(decideClaimTransition(snapshot({ attempt: uncertain }), failed("not_enqueued", null, I2)))
+        .toMatchObject({ code: "custody_not_owned" });
+    }
+    expect(decideClaimTransition(snapshot({ attempt: custody({ ticketExpiresAt: later(1) }) }), failed("not_enqueued", null)).writes)
+      .toEqual([{ op: "markFailed", attemptId: A1, reason: "not_enqueued", httpStatus: null }]);
+    // A failure the hub took in time is repeated freely afterwards.
+    const failedRow = custody({ state: "failed", failureReason: "not_enqueued", ticketExpiresAt: later(-60_000) });
+    expect(decideClaimTransition(snapshot({ attempt: failedRow }), failed("not_enqueued", null))).toEqual({ outcome: "applied", writes: [] });
+  });
 });
 
 describe("registerNativeSend and resolve", () => {
@@ -356,6 +400,32 @@ describe("the view", () => {
     });
     expect(view.group).toEqual({ ...GROUP, sentParts: [2], heldParts: [1] });
     expect(view.custody).toEqual({ attemptId: A1, state: "uncertain-held", ticket: null, ticketExpiresAt: NOW });
+  });
+});
+
+describe("the status read's own last dispatch", () => {
+  const reader = { userId: ME, instanceId: null, leaseToken: null, attemptId: null };
+
+  it("reports the reader's own last dispatched send while nothing is open, in the state it ended", () => {
+    for (const [state, viewState] of [
+      ["resolved_not_sent", "resolved-not-sent"], ["resolved_sent", "resolved-sent"], ["sent", "sent"], ["failed", "failed"],
+    ] as const) {
+      const last = custody({ state, ticketExpiresAt: later(-60_000) });
+      const view = deriveClientClaimView(snapshot({ lastOwnDispatch: last }), reader);
+      expect(view.custody, state).toEqual({ attemptId: A1, state: viewState, ticket: null, ticketExpiresAt: last.ticketExpiresAt });
+    }
+  });
+
+  it("puts the fan's open send first, and never shows another person's finished send", () => {
+    const open = custody({ attemptId: A2, userId: OTHER, instanceId: I2 });
+    const last = custody({ state: "resolved_not_sent" });
+    expect(deriveClientClaimView(snapshot({ openCustody: open, lastOwnDispatch: last }), reader).custody)
+      .toMatchObject({ attemptId: A2, state: "dispatching" });
+    // The repository loads the reader's own row; the view does not trust it to.
+    expect(deriveClientClaimView(snapshot({ lastOwnDispatch: last }), { ...reader, userId: OTHER }).custody).toBeNull();
+    expect(deriveClientClaimView(snapshot({ lastOwnDispatch: custody({ state: "sent", fanRef: "77" }) }), reader).custody).toBeNull();
+    // An action's answer never loads it.
+    expect(deriveClientClaimView(snapshot(), reader).custody).toBeNull();
   });
 });
 

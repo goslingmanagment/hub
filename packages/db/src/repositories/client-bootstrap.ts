@@ -3,7 +3,8 @@ import { and, eq, inArray, isNull, sql, type SQL } from "drizzle-orm";
 import type { Platform } from "@agency_hub_core/shared";
 
 import type { Database } from "../client.ts";
-import { configAuditLog, models, pages } from "../schema.ts";
+import { configAuditLog, configSettings, models, pages } from "../schema.ts";
+import type { ConfigOverrideRecord } from "./config-settings.ts";
 
 export interface ClientBootstrapPageRow {
   id: number;
@@ -75,4 +76,41 @@ export async function getClientConfigRevision(db: Database, keys: readonly strin
   }).from(configAuditLog)
     .where(inArray(configAuditLog.key, [...keys]));
   return row?.revision ?? 0;
+}
+
+/**
+ * The stored global overrides of these config keys, each row locked FOR SHARE
+ * until the caller's transaction ends (hub-pr-plan H-7b: the dispatch of a send
+ * from the preview). Call it inside that transaction.
+ *
+ * The owner's config write takes each row FOR UPDATE before it changes or
+ * deletes it (`applyConfigPatchesInTx`), so a change of a key that has a row
+ * waits here until the transaction that read it ends, and a reader waits for a
+ * change already under way and then sees it. Rows are locked in key order, the
+ * order the config write uses, so the two cannot deadlock.
+ *
+ * A key with no row is absent from the result and nothing is locked for it: its
+ * first write is an insert that does not wait. A caller that must not act on an
+ * unlockable value treats an absent key as off.
+ */
+export async function lockConfigOverridesForShare(
+  tx: Database,
+  keys: readonly string[],
+): Promise<Map<string, ConfigOverrideRecord>> {
+  if (keys.length === 0) {
+    return new Map();
+  }
+  const rows = await tx.select({
+    key: configSettings.key,
+    value: configSettings.value,
+    version: configSettings.version,
+  }).from(configSettings)
+    .where(and(
+      eq(configSettings.scopeType, "global"),
+      eq(configSettings.scopeId, 0),
+      inArray(configSettings.key, [...keys]),
+    ))
+    .orderBy(configSettings.key)
+    .for("share");
+  return new Map(rows.map((row) => [row.key, { value: row.value, version: row.version }]));
 }
