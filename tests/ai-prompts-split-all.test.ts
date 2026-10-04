@@ -12,6 +12,8 @@ import {
   PING_TEMPLATE,
   buildPrompt,
   describeSplitOutput,
+  normalizeReplyParts,
+  normalizeVariantReplyParts,
   type OperationFeature,
   type PromptBuildInput,
 } from "../apps/runtime/src/modules/ai/index.ts";
@@ -238,6 +240,23 @@ describe("output structure of a finished Split generation", () => {
     expect(describeSplitOutput("a [NEXT] as an AI I cannot do that", 1).partsPerVariant).toEqual([1]);
     expect(describeSplitOutput("a [NEXT] b [VARIANT]  [VARIANT] c [NEXT] d", 3).partsPerVariant).toEqual([2, 2]);
     expect(describeSplitOutput("   ", 1)).toEqual({ variantsRequested: 1, partsPerVariant: [], ok: false });
+  });
+
+  it("drops reasoning blocks before it looks for markers, like the sanitizer", () => {
+    // A provider that leaks its reasoning into the visible text may write the
+    // markers there too; they are not variants or parts of the answer.
+    const hi = "<think>plan: a [VARIANT] b [VARIANT] c</think>one [NEXT] two [VARIANT] three [NEXT] four [VARIANT] five [NEXT] six";
+    expect(describeSplitOutput(hi, 3)).toEqual({ variantsRequested: 3, partsPerVariant: [2, 2, 2], ok: true });
+    expect(normalizeVariantReplyParts(hi).map((variant) => normalizeReplyParts(variant).length)).toEqual([2, 2, 2]);
+
+    const ping = "<think>x [VARIANT] y [NEXT] z</think>one [NEXT] two";
+    expect(describeSplitOutput(ping, 1)).toEqual({ variantsRequested: 1, partsPerVariant: [2], ok: true });
+    expect(normalizeReplyParts(ping)).toEqual(["one", "two"]);
+
+    const fenced = "```thinking\nfirst [NEXT] then [VARIANT] maybe\n```\nhey [NEXT] you";
+    expect(describeSplitOutput(fenced, 1)).toEqual({ variantsRequested: 1, partsPerVariant: [2], ok: true });
+    // Only reasoning is dropped: a real stray variant still counts against the ask.
+    expect(describeSplitOutput("<think>x</think>a [NEXT] b [VARIANT] c [NEXT] d", 1).ok).toBe(false);
   });
 
   it("records counts and never the text", () => {

@@ -38,8 +38,9 @@
     },
     "output/reply-output.ts": {
       "sourceSha256": "f88c93bef9be368f8cc4b6542102ee88739700249c166cdc1799ce6fd2bec985",
-      "coreSha256": "9208d24fb5a51020fe334b51241c2e10ce0e3ac0c0eae5862a36f187f7952d57",
-      "byteIdenticalToSource": false
+      "coreSha256": "3a5f296df03ef51d578af7ba156269076bcb231909268f7eee245b6618c04a43",
+      "byteIdenticalToSource": false,
+      "note": "Split by capability (2026-10-04; chat-extension hub PR plan H-10a): stripThinkBlocks is exported so output/split-structure.ts strips reasoning blocks before it splits the final text on [VARIANT], the order normalize() already uses. The sanitizer's behaviour and every other export are unchanged."
     },
     "output/split.ts": {
       "sourceSha256": "0585ab39e43d9fdfcb7b2fb06bda7c4f4e21b7c3ee0cfd0667d38587b23b4cdd",

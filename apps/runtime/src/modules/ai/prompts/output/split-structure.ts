@@ -5,7 +5,7 @@
 // been sent when this runs, so the result is a record in the generation's
 // params (`outputStructure`), never a filter.
 
-import { normalizeReplyParts } from './reply-output.ts';
+import { normalizeReplyParts, stripThinkBlocks } from './reply-output.ts';
 import { splitByVariant } from './split.ts';
 
 /** A Split prompt asks for at least two parts and never more than three. */
@@ -27,7 +27,9 @@ export function describeSplitOutput(
   completionText: string,
   variantsRequested: number,
 ): SplitOutputStructure {
-  const partsPerVariant = splitByVariant(completionText)
+  // Reasoning blocks go first, as in reply-output's normalize(): a marker the
+  // model wrote while thinking is not a variant or a part.
+  const partsPerVariant = splitByVariant(stripThinkBlocks(completionText))
     .map((variant) => normalizeReplyParts(variant).length)
     .filter((parts) => parts > 0);
   return {
