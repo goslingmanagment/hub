@@ -137953,6 +137953,9 @@
                                 "live"
                               ]
                             },
+                            "ownerRunning": {
+                              "type": "boolean"
+                            },
                             "streams": {
                               "type": "array",
                               "items": {
@@ -137987,6 +137990,11 @@
                                       }
                                     ]
                                   },
+                                  "activeWork": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
                                   "paused": {
                                     "type": "boolean"
                                   },
@@ -137997,6 +138005,56 @@
                                     "anyOf": [
                                       {
                                         "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "waiting": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "resource": {
+                                            "type": "string"
+                                          },
+                                          "reason": {
+                                            "type": "string",
+                                            "enum": [
+                                              "not_due",
+                                              "pacer",
+                                              "class_share",
+                                              "page_hold",
+                                              "route_budget",
+                                              "route_hold",
+                                              "resource_hold",
+                                              "subject_breaker",
+                                              "blocked_by_vendor",
+                                              "quarantined",
+                                              "paused",
+                                              "dependency",
+                                              "ownership_unconfirmed",
+                                              "running"
+                                            ]
+                                          },
+                                          "until": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          }
+                                        },
+                                        "required": [
+                                          "resource",
+                                          "reason",
+                                          "until"
+                                        ],
+                                        "additionalProperties": false
                                       },
                                       {
                                         "type": "null"
@@ -138014,9 +138072,11 @@
                                   "resources",
                                   "succeededAt",
                                   "nextDueAt",
+                                  "activeWork",
                                   "paused",
                                   "needsAttention",
                                   "reason",
+                                  "waiting",
                                   "consecutiveFailures"
                                 ],
                                 "additionalProperties": false
@@ -138025,6 +138085,7 @@
                           },
                           "required": [
                             "mode",
+                            "ownerRunning",
                             "streams"
                           ],
                           "additionalProperties": false

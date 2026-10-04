@@ -47,10 +47,9 @@ const STATUS_DETAIL: Readonly<Record<string, string>> = {
   sampled: "sampled rather than walked — this is not every row",
   partial_provider_surface: "the provider served only part of its own surface",
   unsupported_by_observed_surface: "no live route answers for this; nothing was captured",
-  budget_deferred: "the lane hit its daily cap and deferred the rest to tomorrow",
   auth_blocked: "capture is blocked on credentials",
   contract_drift: "the response shape changed; capture parked itself rather than guess",
-  not_started: "this lane has never run for this page",
+  not_started: "capture of this has not started for this page",
 };
 
 function instant(value: string | null): number | null {
@@ -221,7 +220,7 @@ export function coverageVerdict(
  *
  * `whenAnswered` is a CALLBACK, not a value, because a panel whose verdict is
  * a constant is wrapped by exactly the same rule: the Likers card's
- * `not_started` is a fact about Fansly's like lane, and stating it definitively
+ * `not_started` is a fact about Fansly's likes, and stating it definitively
  * over a coverage request that failed is the same lie as any other badge that
  * silently reads "complete".
  */
@@ -274,21 +273,21 @@ export function coverageBadgeVerdict(
 /**
  * The sentence an EMPTY panel is allowed to say, given what its badge knows.
  *
- * An empty chart means one thing when coverage says the lane is ramped and
- * exhausted, and the opposite when coverage has not answered at all. Panels
- * pass the sentence that is true of their own lane; this decides how much of
- * it may be asserted.
+ * An empty chart means one thing when coverage says the walk reached its end,
+ * and the opposite when coverage has not answered at all. Panels pass the
+ * sentence that is true of their own data; this decides how much of it may be
+ * asserted.
  */
-export function emptyPanelReason(verdict: CoverageVerdict, laneSentence: string): string {
+export function emptyPanelReason(verdict: CoverageVerdict, sentence: string): string {
   if (verdict.state === "not_started" || verdict.state === "unknown") {
     return "Nothing captured for this window — and the badge above says why. "
       + "This is not a reading of zero.";
   }
   if (verdict.state === "pending" || verdict.state === "unavailable") {
-    return `${laneSentence} Whether anything is missing from it is unknown until the `
+    return `${sentence} Whether anything is missing from it is unknown until the `
       + "coverage request answers.";
   }
-  return laneSentence;
+  return sentence;
 }
 
 export const SUGGESTIONS_DENOMINATOR_NOTE =

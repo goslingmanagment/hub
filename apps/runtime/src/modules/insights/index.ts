@@ -57,7 +57,7 @@ import { canAccessPage, requireOwner } from "../../services/auth.ts";
 import { loadEffectiveConfig } from "../../services/effective-config.ts";
 import { BadRequestError, ForbiddenError } from "../../services/errors.ts";
 import { getPageSummary } from "../../services/reporting.ts";
-import { engineStreamState, readEngineStatusFacts } from "../../services/sync-status-engine.ts";
+import { engineOwnerRunning, engineStreamState, readEngineStatusFacts } from "../../services/sync-status-engine.ts";
 import { fanslyLeverStreams } from "../../sync/fansly/registry.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
@@ -563,6 +563,7 @@ export function registerInsightsRoutes(server: ApiServer, ctx: ApiModuleContext)
         ? null
         : {
           mode: facts.page.mode,
+          ownerRunning: engineOwnerRunning(facts),
           streams: fanslyLeverStreams().map((stream) => {
             const state = engineStreamState(stream, facts);
             return {
@@ -570,9 +571,17 @@ export function registerInsightsRoutes(server: ApiServer, ctx: ApiModuleContext)
               resources: state.keys,
               succeededAt: isoOrNull(state.succeededAt),
               nextDueAt: isoOrNull(state.nextDueAt),
+              activeWork: state.activeWork,
               paused: state.paused,
               needsAttention: state.needsAttention,
               reason: state.statusReason?.summary ?? null,
+              waiting: state.waiting === null
+                ? null
+                : {
+                  resource: state.waiting.resource,
+                  reason: state.waiting.reason,
+                  until: isoOrNull(state.waiting.until),
+                },
               consecutiveFailures: state.consecutiveFailures,
             };
           }),

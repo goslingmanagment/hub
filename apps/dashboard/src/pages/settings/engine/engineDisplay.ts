@@ -36,25 +36,32 @@ export const ENGINE_CLASS_LABELS: Record<EngineWorkClass, string> = {
   planned: "плановое",
 };
 
-/** "Почему ждёт" (plan §10), the engine's closed dictionary. A route (an
+/** Who reads the engine's words: the «Синк» tab's own rows are Russian; the
+ *  block cards it shares with «Синхронизация» and the analytics Coverage panel
+ *  are English. */
+export type EngineWordsLanguage = "ru" | "en";
+
+/** "Почему ждёт" (plan §10), the engine's closed dictionary — the one place a
+ *  reason gets its words, for every surface that shows one. A route (an
  *  endpoint of Fansly) puts work off in two ways: `route_budget` is its own
  *  pace, `route_hold` a 429's hold of it — the one place the page's status
- *  shows such a hold. */
-const WAIT_LABELS: Record<string, string> = {
-  not_due: "ждёт срока",
-  pacer: "пауза между запросами",
-  class_share: "очередь класса",
-  page_hold: "удержание страницы",
-  route_budget: "пауза эндпоинта",
-  route_hold: "удержание эндпоинта (429)",
-  resource_hold: "удержание ресурса",
-  subject_breaker: "пауза после ошибок",
-  blocked_by_vendor: "Fansly отказывает",
-  quarantined: "карантин",
-  paused: "пауза владельца",
-  dependency: "ждёт другую работу",
-  ownership_unconfirmed: "нет владельца",
-  running: "читает",
+ *  shows such a hold. In English the three reasons of work that only waits for
+ *  its turn (`RUNNABLE_REASONS`) read the same: queued. */
+const WAIT_LABELS: Record<string, Record<EngineWordsLanguage, string>> = {
+  not_due: { ru: "ждёт срока", en: "not due" },
+  pacer: { ru: "пауза между запросами", en: "queued" },
+  class_share: { ru: "очередь класса", en: "queued" },
+  page_hold: { ru: "удержание страницы", en: "page held" },
+  route_budget: { ru: "пауза эндпоинта", en: "queued" },
+  route_hold: { ru: "удержание эндпоинта (429)", en: "endpoint held (429)" },
+  resource_hold: { ru: "удержание ресурса", en: "resource held" },
+  subject_breaker: { ru: "пауза после ошибок", en: "backing off" },
+  blocked_by_vendor: { ru: "Fansly отказывает", en: "refused by Fansly" },
+  quarantined: { ru: "карантин", en: "quarantined" },
+  paused: { ru: "пауза владельца", en: "paused" },
+  dependency: { ru: "ждёт другую работу", en: "waiting for other work" },
+  ownership_unconfirmed: { ru: "нет владельца", en: "no owner" },
+  running: { ru: "читает", en: "reading" },
 };
 
 /** The reasons of work that is ready to run — the server counts those rows
@@ -84,8 +91,13 @@ const LIMITED_BY_LABELS: Record<EngineHistoryRequest["eta"]["limitedBy"], string
   family: "общий лимит запросов к сообщениям",
 };
 
-export function engineWaitLabel(reason: string): string {
-  return WAIT_LABELS[reason] ?? reason;
+/** The words of a waiting reason; null for a code the dictionary does not hold. */
+export function engineWaitWords(reason: string, language: EngineWordsLanguage): string | null {
+  return WAIT_LABELS[reason]?.[language] ?? null;
+}
+
+export function engineWaitLabel(reason: string, language: EngineWordsLanguage = "ru"): string {
+  return engineWaitWords(reason, language) ?? reason;
 }
 
 /** 1 234 567: the page's numbers are counts, grouped the Russian way. */

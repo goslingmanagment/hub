@@ -27,7 +27,7 @@ import { z } from "zod";
 // contract with its own envelope law and principal) and spread into routeSchemas
 // below, so registration, the auth-declaration gate and the OpenAPI generator
 // keep seeing ONE flat registry.
-import { agentExportPolicyEnum, agentRouteSchemas } from "./routes-agent.ts";
+import { agentExportPolicyEnum, agentRouteSchemas, agentSyncWaitingReasonEnum } from "./routes-agent.ts";
 // Owner administration of the plane's KEYS. A sibling module rather than part of
 // the read plane: issuing a credential carries no evidence envelope, and folding
 // it into agentRouteSchemas would have meant loosening that module's pins.
@@ -5296,16 +5296,29 @@ const insightsEngineStreamSchema = z.object({
   stream: z.string(),
   /** The engine's registry keys that read this stream's data. */
   resources: z.array(z.string()),
-  /** When one of them was last applied live; null = not yet. */
+  /** When one of them was last applied live — a key that works per subject (a
+   *  chat, a fan) over all its subjects; null = not yet. */
   succeededAt: isoTimestamp.nullable(),
   /** When the next one is due; null = none is open. */
   nextDueAt: isoTimestamp.nullable(),
+  /** Their work that is open, running or quarantined. 0 with no last read:
+   *  nothing has been asked of the stream. */
+  activeWork: z.number().int(),
   /** The owner paused the whole page or every one of these keys. */
   paused: z.boolean(),
   /** Some of their work is quarantined or blocked by Fansly. */
   needsAttention: z.boolean(),
-  /** What needs attention, or why the earliest of them waits. */
+  /** What needs attention and the command that lists it, or why the earliest
+   *  of them waits: one line for a reader of the API (the engine's codes, UTC). */
   reason: z.string().nullable(),
+  /** Why the earliest-due page-level work of the stream waits, as data, for a
+   *  surface that words it itself. null: the stream needs attention, or none
+   *  of its page-level work is open. */
+  waiting: z.object({
+    resource: z.string(),
+    reason: agentSyncWaitingReasonEnum,
+    until: isoTimestamp.nullable(),
+  }).nullable(),
   /** The largest failure count among their active work. */
   consecutiveFailures: z.number().int(),
 });
@@ -5322,6 +5335,9 @@ export const statsCoverageResponseSchema = z.object({
    *  panel this one replaces. null when the engine does not own the page. */
   engine: z.object({
     mode: z.enum(["handover", "live"]),
+    /** A sync host runs the page (a fresh owner heartbeat). false: nothing of
+     *  it is read, whatever the streams' work says. */
+    ownerRunning: z.boolean(),
     streams: z.array(insightsEngineStreamSchema),
   }).nullable(),
   /** What we actually hold, per projection: row count and the range it spans.
