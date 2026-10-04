@@ -130,9 +130,9 @@ what it was, so a client built before the frame never meets it.
 |---|---|
 | `generationRef` | Equals `meta.requestId`. |
 | `source` | The reader whose rows became the transcript: `archive`, `union` (`aiTranscriptFreshUnionMode = serve`) or `live_union` (the Fansly socket overlay). In `shadow` mode the union is computed but the archive serves, and the frame says `archive`. |
-| `servedHead` | Newest message of the served window, after normalization and the window cap: `{ messageRef, occurredAt, isFromFan }`. `null` for an empty window. |
+| `servedHead` | Newest message of the served window: `{ messageRef, occurredAt, isFromFan }`. `null` for an empty window. |
 | `archiveHead` | Diagnostics only: the plain archive reader's newest row. With `source: "union"` the model may have read past it. |
-| `window` | `requested`: the window the request resolved to. `served`: the messages in the prompt. |
+| `window` | `requested`: the window the request resolved to. `served`: the messages the prompt holds whole. That is the transcript the hub loaded (after normalization and the window cap), minus what the prompt itself cut: only `coach-chat` cuts, when its whole-prompt budget drops the oldest transcript lines. A line the cut runs through is not counted. |
 | `coverage` | How much of the chat's history the hub can vouch for, from `ofapi_message_coverage` (`services/client-coverage.ts`). `complete`: a standing continuous-history proof under the current proof policy, and the archive has projected everything it covers. `partial`: a standing proof that does not vouch for the whole history. `unknown`: no proof, a revoked one, one under a proof policy the hub no longer accepts, or a failed lookup. A page without the capture lane (Fansly) always reads `unknown`. |
 | `knownFanMessages` | One `{ id, state }` per id of the body's `knownFanMessageIds`, in the same order. Absent when the body named none. |
 | `live` | What the hub did with the client's fresh text. No request can send it yet: always `{ status: "not_sent", accepted: 0, rejected: 0 }`. |
@@ -146,16 +146,21 @@ in and the ids are ignored. Each id is judged against the transcript that served
 | State | Meaning |
 |---|---|
 | `included` | The served window holds the id as a fan message. |
-| `deleted` | Not in the window, and tombstoned for this conversation in one of the hub's stores. |
-| `absent` | Not in the window: the hub does not hold it for this conversation, or holds it outside what the model read (older than the window, or only in a store the serving reader did not read). |
+| `deleted` | Not in the window, and tombstoned for this conversation in one of the hub's stores. The Fansly socket overlay counts only when it served (`source: live_union`). |
+| `absent` | Not in the window: the hub does not hold it for this conversation, or holds it outside what the model read (older than the window, cut by the Coach prompt budget, or only in a store the serving reader did not read). |
 | `unknown` | The hub cannot tell: the stores could not be read, or the window holds the id as the model's own message. |
+
+`included` is the only answer that says the model read the message. The same window serves every
+retry of a request, so an id the hub holds but that lies before the window stays `absent` however
+often the client asks again: `messageCount` can be as low as 5, and ten fan messages with the
+model's replies between them can span more than the 25 of Improve and Hi.
 
 The store lookup (`packages/db/src/repositories/ai-live-context.ts`) runs only after the page was
 admitted and is scoped to the page and the conversation of the request. An id that belongs to
 another fan's chat on the same page reads `absent`, exactly like an id the hub has never seen: the
 answer never says that a message exists, or was deleted, in a chat the caller did not name. A delete
 webhook carries no chat, so its tombstone counts only for an id the hub already holds for this
-conversation.
+conversation; a socket deletion that named no group is the same case.
 
 The frame is built from database reads only (the transcript loader, the coverage row, the known-id
 lookup): no platform request, no queued platform work and no change to a chat's unread state.

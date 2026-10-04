@@ -9,11 +9,12 @@ import { lookupAiKnownMessages, type AiKnownMessageStoreState } from "@agency_hu
 import type { AppContext } from "../../../bootstrap.ts";
 import type { AiFeatureContextFrameBody } from "../../../services/ai-gateway.ts";
 import { loadClientConversationCoverage } from "../../../services/client-coverage.ts";
-import type { TranscriptMessage } from "../prompts/index.ts";
+import { formatTranscript, type TranscriptMessage } from "../prompts/index.ts";
 
 // chat-extension H-4b — the `context_v1` frame: which transcript snapshot
 // ACTUALLY served a generation. Everything here describes the transcript the
-// loader already built; nothing changes what the model reads.
+// loader already built and the cut the prompt made of it; nothing changes what
+// the model reads.
 
 export type AiContextSource = (typeof AI_CONTEXT_SOURCES)[number];
 export type AiKnownFanMessageState = (typeof AI_KNOWN_FAN_MESSAGE_STATES)[number];
@@ -32,7 +33,9 @@ export interface TranscriptServedSnapshot {
   /** The reader whose rows became the transcript. */
   source: AiContextSource;
   /** The transcript's messages, oldest first: after shaping, the dedupe and
-   *  the window cap, so exactly what the prompt holds. */
+   *  the window cap. The prompt holds all of them, except that the Coach
+   *  whole-prompt budget may cut the oldest: `loadAiContextFrameBody` takes
+   *  that cut (`omittedByPromptBudget`) before the frame reports the window. */
   window: AiContextMessageRef[];
   /** The plain archive reader's newest row. Diagnostics: with `source: "union"`
    *  the transcript may reach past it. */
@@ -61,6 +64,40 @@ export function servedWindowOf(
     occurredAt: new Date(message.createdAtMs),
     isFromFan: message.sender === "Fan",
   }));
+}
+
+/**
+ * How many of the transcript's oldest messages the prompt does not hold whole.
+ * Only the Coach whole-prompt budget shortens a transcript: it leaves out the
+ * first `omittedChars` UTF-16 units of the rendered text, wherever that lands.
+ * A message counts as read only when its whole line survived, so the line the
+ * cut runs through is out together with every line before it.
+ *
+ * `messages` are the ones `transcript` was rendered from, in order (with their
+ * image notes, when the prompt carries them). Each counted line is checked
+ * against the text: a text these messages do not render to vouches for none.
+ */
+export function transcriptMessagesOmittedByBudget(input: {
+  transcript: string;
+  messages: readonly TranscriptMessage[];
+  omittedChars: number;
+}): number {
+  if (input.omittedChars <= 0) {
+    return 0;
+  }
+  let offset = 0;
+  for (let index = 0; index < input.messages.length; index += 1) {
+    const line = formatTranscript([input.messages[index]!]);
+    if (!input.transcript.startsWith(line, offset)) {
+      return input.messages.length;
+    }
+    if (offset >= input.omittedChars) {
+      return index;
+    }
+    // Lines are joined by one "\n".
+    offset += line.length + 1;
+  }
+  return input.messages.length;
 }
 
 /** How many of the fan's latest text messages the script evidence reads. */
@@ -103,7 +140,7 @@ export function fanLanguageEvidenceOf(messages: readonly TranscriptMessage[]): A
  * - `included`: the served window holds it as a fan message;
  * - `deleted`: not in the window, and tombstoned in this conversation;
  * - `absent`: not in the window (never seen for this conversation, an id of
- *   another chat, or older than the window);
+ *   another chat, older than the window, or cut by the prompt budget);
  * - `unknown`: the hub cannot tell — the stores could not be read, or the
  *   window holds the id as the model's own message.
  *
@@ -172,10 +209,20 @@ export async function loadAiContextFrameBody(
     conversationRef: string;
     served: TranscriptServedSnapshot;
     messages: readonly TranscriptMessage[];
+    /** How many of the oldest transcript messages the prompt left out
+     *  (`transcriptMessagesOmittedByBudget`). They are not in the window the
+     *  frame reports: their ids answer like any message the model did not read. */
+    omittedByPromptBudget?: number;
     requestedCount: number;
     knownFanMessageIds?: readonly string[];
   },
 ): Promise<AiFeatureContextFrameBody> {
+  const omitted = Math.min(Math.max(input.omittedByPromptBudget ?? 0, 0), input.served.window.length);
+  const served: TranscriptServedSnapshot = omitted === 0
+    ? input.served
+    : { ...input.served, window: input.served.window.slice(omitted) };
+  const messages = omitted === 0 ? input.messages : input.messages.slice(omitted);
+
   let coverage: ClientCoverageLevel = "unknown";
   try {
     coverage = await loadClientConversationCoverage(app, {
@@ -188,7 +235,7 @@ export async function loadAiContextFrameBody(
 
   let knownFanMessages: Array<{ id: string; state: AiKnownFanMessageState }> | undefined;
   if (input.knownFanMessageIds !== undefined) {
-    const servedRefs = new Set(input.served.window.map((message) => message.messageRef));
+    const servedRefs = new Set(served.window.map((message) => message.messageRef));
     const outsideWindow = input.knownFanMessageIds.filter((id) => !servedRefs.has(id));
     let stores: Map<string, AiKnownMessageStoreState> | null = new Map();
     if (outsideWindow.length > 0) {
@@ -198,6 +245,9 @@ export async function loadAiContextFrameBody(
           platform: input.platform,
           conversationRef: input.conversationRef,
           messageRefs: outsideWindow,
+          // The stores the serving reader read: the socket overlay hides a
+          // message it tombstoned, so only then does its mark count.
+          liveOverlay: served.source === "live_union",
         });
       } catch (error) {
         stores = null;
@@ -206,16 +256,16 @@ export async function loadAiContextFrameBody(
     }
     knownFanMessages = resolveKnownFanMessages({
       ids: input.knownFanMessageIds,
-      window: input.served.window,
+      window: served.window,
       stores,
     });
   }
 
   return buildAiContextFrameBody({
-    served: input.served,
+    served,
     requestedCount: input.requestedCount,
     coverage,
     ...(knownFanMessages !== undefined ? { knownFanMessages } : {}),
-    fanLanguageEvidence: fanLanguageEvidenceOf(input.messages),
+    fanLanguageEvidence: fanLanguageEvidenceOf(messages),
   });
 }

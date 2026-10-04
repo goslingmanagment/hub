@@ -54,6 +54,7 @@ import {
   loadSpendingContext,
   loadSubscriptionContext,
   loadTranscriptContext,
+  transcriptMessagesOmittedByBudget,
   type AiTranscriptLiveOverlay,
   type AiTranscriptUnionMode,
   type FanProfilePromptContext,
@@ -76,6 +77,7 @@ import {
   type RecapAttach,
   type ReplyMode,
   type ReplyTone,
+  type TranscriptMessage,
 } from "../prompts/index.ts";
 
 // Kernel Stage 30 — feature services. Prompt assembly moves kernel-side:
@@ -455,7 +457,9 @@ export async function prepareAiFeatureStream(
   let contextManifest: Record<string, unknown> | undefined;
   // chat-extension H-4b: the transcript the hub loaded itself, kept for the
   // `context_v1` frame. Unset on the client-context lane, which has no frame.
-  let kernelTranscript: TranscriptContext | undefined;
+  // `rendered` are the messages the prompt's transcript text was built from:
+  // the loader's, or the same ones with their image notes filled in.
+  let kernelTranscript: { context: TranscriptContext; rendered: readonly TranscriptMessage[] } | undefined;
   // AI media describer: image notes rendered into the transcript (one config
   // read + one indexed select, no network), and the files to ask for after.
   let mediaNotes: {
@@ -586,7 +590,7 @@ export async function prepareAiFeatureStream(
       liveOverlay,
     });
     contextManifest = transcript.contextManifest;
-    kernelTranscript = transcript;
+    kernelTranscript = { context: transcript, rendered: transcript.messages };
     const spending = policy.includesEarnings
       ? await loadSpendingContext(app, { pageId, fanRef })
       : null;
@@ -630,6 +634,7 @@ export async function prepareAiFeatureStream(
         });
         if (!applied.manifest.mismatch) {
           contextValues.transcript = `${formatTranscript(applied.messages)}${MEDIA_NOTES_GUIDE}`;
+          kernelTranscript.rendered = applied.messages;
         }
         mediaNotes = {
           gate,
@@ -979,14 +984,22 @@ export async function prepareAiFeatureStream(
   // chat-extension H-4b: only a caller that advertised `context-v1` gets the
   // frame (and pays its two indexed reads), so every other stream stays byte
   // for byte what it was. The page was admitted above, before any context load.
+  // The same what-the-provider-actually-received rule as the recaps above: the
+  // Coach budget may have cut the oldest transcript lines, and the frame's
+  // window is what is left.
   let contextFrame: AiFeatureContextFrameBody | undefined;
   if (kernelTranscript && options?.capabilities?.has("context-v1")) {
     contextFrame = await loadAiContextFrameBody(app, {
       pageId,
       platform: stored.page.platform,
       conversationRef: body.conversationRef,
-      served: kernelTranscript.served,
-      messages: kernelTranscript.messages,
+      served: kernelTranscript.context.served,
+      messages: kernelTranscript.context.messages,
+      omittedByPromptBudget: transcriptMessagesOmittedByBudget({
+        transcript: contextValues.transcript,
+        messages: kernelTranscript.rendered,
+        omittedChars: prompt.coachTranscriptOmittedChars ?? 0,
+      }),
       requestedCount: resolvedMessageLimit,
       ...(body.knownFanMessageIds !== undefined ? { knownFanMessageIds: body.knownFanMessageIds } : {}),
     });

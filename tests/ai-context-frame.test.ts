@@ -20,10 +20,16 @@ import {
 import { OFAPI_CAPTURE_PROOF_POLICY_VERSION, type OfapiMessageCoverageServingState } from "@agency_hub_core/db";
 
 import {
+  COACH_PROMPT_MAX_CHARS,
+  MEDIA_NOTES_GUIDE,
   buildAiContextFrameBody,
+  buildPrompt,
   fanLanguageEvidenceOf,
+  formatTranscript,
+  loadAiContextFrameBody,
   resolveKnownFanMessages,
   servedWindowOf,
+  transcriptMessagesOmittedByBudget,
   type TranscriptMessage,
   type TranscriptServedSnapshot,
 } from "../apps/runtime/src/modules/ai/index.ts";
@@ -312,6 +318,197 @@ describe("context frame body", () => {
     expect(body.archiveHead).toEqual({ messageRef: "9000", occurredAt: null, isFromFan: true });
     expect(body.window).toEqual({ requested: 30, served: 0 });
     expect(body.knownFanMessages).toEqual([{ id: "9003", state: "absent" }]);
+  });
+});
+
+describe("transcript cut by the prompt budget", () => {
+  // Only the Coach whole-prompt budget shortens a transcript, and it cuts by
+  // characters. The frame counts a message only when its whole line survived.
+  const messages = [
+    message(1, "Fan", "first"),
+    message(2, "Model", "second\nwith a second line"),
+    message(3, "Fan", "third 🎉"),
+    message(4, "Fan", "fourth"),
+  ];
+  const lines = messages.map((one) => formatTranscript([one]));
+  const transcript = formatTranscript(messages);
+  const startOf = (index: number) => lines.slice(0, index).join("\n").length + (index > 0 ? 1 : 0);
+  const omittedBy = (omittedChars: number, text = transcript) =>
+    transcriptMessagesOmittedByBudget({ transcript: text, messages, omittedChars });
+
+  it("leaves a whole transcript alone", () => {
+    expect(omittedBy(0)).toBe(0);
+    expect(transcriptMessagesOmittedByBudget({ transcript: formatTranscript([]), messages: [], omittedChars: 5 })).toBe(0);
+  });
+
+  it("drops the line the cut runs through together with every line before it", () => {
+    // A cut exactly at a line start (or on the newline before it) keeps that line whole.
+    expect(omittedBy(startOf(1))).toBe(1);
+    expect(omittedBy(startOf(1) - 1)).toBe(1);
+    expect(omittedBy(startOf(2))).toBe(2);
+    // One unit into a line and it is no longer whole. A newline inside a
+    // message is not a boundary.
+    expect(omittedBy(1)).toBe(1);
+    expect(omittedBy(startOf(1) + 1)).toBe(2);
+    expect(omittedBy(startOf(2) - 3)).toBe(2);
+    expect(omittedBy(startOf(3) + 1)).toBe(4);
+    expect(omittedBy(transcript.length)).toBe(4);
+  });
+
+  it("measures the text the prompt got: the lines with their image-notes guide after them", () => {
+    const withGuide = `${transcript}${MEDIA_NOTES_GUIDE}`;
+    expect(omittedBy(startOf(2), withGuide)).toBe(2);
+    // A cut inside the guide left no message line at all.
+    expect(omittedBy(transcript.length + 5, withGuide)).toBe(4);
+  });
+
+  it("vouches for no message when the text is not these messages' rendering", () => {
+    expect(omittedBy(1, `[older]\n${transcript}`)).toBe(4);
+    expect(transcriptMessagesOmittedByBudget({
+      transcript,
+      messages: [messages[0]!, message(2, "Model", "another text"), messages[2]!, messages[3]!],
+      omittedChars: startOf(3),
+    })).toBe(4);
+  });
+
+  it("agrees with the Coach reducer: the first counted message is the first whole line of the prompt", () => {
+    const long = Array.from({ length: 1_500 }, (_, index) =>
+      message(index + 1, index % 2 === 0 ? "Fan" : "Model", `msg-${index + 1}-🎉 ${"y".repeat(300)}`));
+    const text = formatTranscript(long);
+    const built = buildPrompt({
+      feature: "coach-chat",
+      personality: { content: "PERSONA", id: "p1", name: "Persona", updatedAt: 1 },
+      transcript: text,
+      fanSpendingData: "",
+      fanSubscriptionData: "",
+      fanDisplayName: "Bob",
+      chatterQuestion: "what now?",
+    });
+    expect(text.length).toBeGreaterThan(COACH_PROMPT_MAX_CHARS);
+    const omitted = transcriptMessagesOmittedByBudget({
+      transcript: text,
+      messages: long,
+      omittedChars: built.coachTranscriptOmittedChars!,
+    });
+    expect(omitted).toBeGreaterThan(0);
+    expect(omitted).toBeLessThan(long.length);
+    // The oldest counted message is in the prompt whole; the one before it is not.
+    expect(built.user).toContain(formatTranscript([long[omitted]!]));
+    expect(built.user).not.toContain(formatTranscript([long[omitted - 1]!]));
+    expect(built.user).toContain(formatTranscript(long.slice(omitted)));
+  });
+});
+
+describe("context frame loader", () => {
+  const served: TranscriptServedSnapshot = {
+    source: "archive",
+    window: [
+      { messageRef: "9001", occurredAt: new Date(1000), isFromFan: true },
+      { messageRef: "9002", occurredAt: new Date(2000), isFromFan: false },
+      { messageRef: "9003", occurredAt: new Date(3000), isFromFan: true },
+    ],
+    archiveHead: { messageRef: "9003", occurredAt: new Date(3000), isFromFan: true },
+  };
+  const messages = [
+    message(9001, "Fan", "привет, как дела", 1000),
+    message(9002, "Model", "hey you", 2000),
+    message(9003, "Fan", "now in English only", 3000),
+  ];
+  const request = { pageId: 7, platform: "onlyfans", conversationRef: "518588958", served, messages, requestedCount: 50 };
+
+  /** The two reads of the loader, in its order: the coverage row, then the known-id lookup. */
+  function stubApp(reads: Array<() => Promise<{ rows: Array<Record<string, unknown>> }>>) {
+    const warnings: string[] = [];
+    let calls = 0;
+    const app = {
+      db: { execute: async () => reads[calls++]!() },
+      logger: { warn: (_fields: unknown, text: string) => { warnings.push(text); } },
+    } as unknown as Parameters<typeof loadAiContextFrameBody>[0];
+    return { app, warnings, calls: () => calls };
+  }
+  const failing = async () => { throw new Error("connection terminated"); };
+  const noRows = async () => ({ rows: [] });
+
+  it("fails open: a failed read reports unknown and never costs the generation", async () => {
+    const stub = stubApp([failing, failing]);
+    const body = await loadAiContextFrameBody(stub.app, { ...request, knownFanMessageIds: ["9003", "8001"] });
+    expect(body).toMatchObject({
+      source: "archive",
+      servedHead: { messageRef: "9003" },
+      window: { requested: 50, served: 3 },
+      coverage: "unknown",
+      // The window is in hand, so its answer stands; only the store answer is lost.
+      knownFanMessages: [{ id: "9003", state: "included" }, { id: "8001", state: "unknown" }],
+    });
+    expect(stub.calls()).toBe(2);
+    expect(stub.warnings).toEqual([
+      "ai context frame coverage lookup failed",
+      "ai context frame known-message lookup failed",
+    ]);
+
+    // Either read alone.
+    const coverageOnly = stubApp([failing, noRows]);
+    expect(await loadAiContextFrameBody(coverageOnly.app, { ...request, knownFanMessageIds: ["8001"] })).toMatchObject({
+      coverage: "unknown",
+      knownFanMessages: [{ id: "8001", state: "absent" }],
+    });
+    expect(coverageOnly.warnings).toEqual(["ai context frame coverage lookup failed"]);
+    const lookupOnly = stubApp([noRows, failing]);
+    expect(await loadAiContextFrameBody(lookupOnly.app, { ...request, knownFanMessageIds: ["8001"] })).toMatchObject({
+      coverage: "unknown",
+      knownFanMessages: [{ id: "8001", state: "unknown" }],
+    });
+    expect(lookupOnly.warnings).toEqual(["ai context frame known-message lookup failed"]);
+  });
+
+  it("asks the stores only about ids the window does not hold", async () => {
+    const inWindow = stubApp([noRows, failing]);
+    expect(await loadAiContextFrameBody(inWindow.app, { ...request, knownFanMessageIds: ["9003", "9001"] })).toMatchObject({
+      knownFanMessages: [{ id: "9003", state: "included" }, { id: "9001", state: "included" }],
+    });
+    expect(inWindow.calls()).toBe(1);
+    const noIds = stubApp([noRows, failing]);
+    expect(await loadAiContextFrameBody(noIds.app, request)).not.toHaveProperty("knownFanMessages");
+    expect(noIds.calls()).toBe(1);
+  });
+
+  it("reports the window the prompt kept: a message the budget cut is not in it", async () => {
+    const whole = stubApp([noRows, failing]);
+    expect(await loadAiContextFrameBody(whole.app, { ...request, knownFanMessageIds: ["9001"] })).toMatchObject({
+      window: { requested: 50, served: 3 },
+      knownFanMessages: [{ id: "9001", state: "included" }],
+      fanLanguageEvidence: "mixed",
+    });
+
+    // The hub still holds 9001 for this chat, but the model did not read it.
+    const held = async () => ({ rows: [{ message_ref: "9001", held: true, tombstoned: false }] });
+    const cut = stubApp([noRows, held]);
+    expect(await loadAiContextFrameBody(cut.app, {
+      ...request,
+      omittedByPromptBudget: 1,
+      knownFanMessageIds: ["9001", "9003"],
+    })).toMatchObject({
+      servedHead: { messageRef: "9003" },
+      archiveHead: { messageRef: "9003" },
+      window: { requested: 50, served: 2 },
+      knownFanMessages: [{ id: "9001", state: "absent" }, { id: "9003", state: "included" }],
+      // The fan's cut message is not evidence of the script either.
+      fanLanguageEvidence: "latin",
+    });
+    expect(cut.calls()).toBe(2);
+
+    // Nothing whole survived: an empty window, as for an empty chat.
+    const nothing = stubApp([noRows, noRows]);
+    expect(await loadAiContextFrameBody(nothing.app, {
+      ...request,
+      omittedByPromptBudget: 99,
+      knownFanMessageIds: ["9003"],
+    })).toMatchObject({
+      servedHead: null,
+      window: { requested: 50, served: 0 },
+      knownFanMessages: [{ id: "9003", state: "absent" }],
+      fanLanguageEvidence: "unknown",
+    });
   });
 });
 

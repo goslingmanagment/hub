@@ -3353,8 +3353,9 @@ describe("context_v1 frame (chat-extension H-4b)", () => {
     capabilities?: string;
     feature?: string;
     body?: Record<string, unknown>;
+    capture?: { input?: AiGatewayProviderInput };
   } = {}) {
-    appContext.aiGatewayProvider = capturingProvider({});
+    appContext.aiGatewayProvider = capturingProvider(input.capture ?? {});
     const response = await apiServer!.inject({
       method: "POST",
       url: `/api/v1/ai/features/${input.feature ?? "fast-reply"}`,
@@ -3679,6 +3680,108 @@ describe("context_v1 frame (chat-extension H-4b)", () => {
       // The history proof is the OnlyFans capture lane's: a Fansly chat has none.
       coverage: "unknown",
       knownFanMessages: [{ id: "7702", state: "included" }, { id: "7701", state: "included" }],
+    });
+
+    // A socket deletion that named no group: the live union hides 7701 although
+    // the archive still holds it live, and the frame says why it is gone.
+    await testDb.pool.query(
+      `insert into dm_live_messages (page_id, platform_message_id, decoder_version, deleted_at)
+       values ($1, '7701', 1, now())`,
+      [fanslyPageId],
+    );
+    const tombstoned = await stream({ capabilities: "context-v1", body });
+    expect(tombstoned.context).toMatchObject({
+      source: "live_union",
+      servedHead: { messageRef: "7702", isFromFan: true },
+      window: { served: 1 },
+      knownFanMessages: [{ id: "7702", state: "included" }, { id: "7701", state: "deleted" }],
+    });
+    // With the overlay read switched off the archive serves 7701 again, and the
+    // frame is judged by what that reader read, not by the overlay.
+    appContext.config.fanslyLiveOverlayReadPages = "none";
+    const killed = await stream({ capabilities: "context-v1", body });
+    expect(killed.context).toMatchObject({
+      source: "archive",
+      servedHead: { messageRef: "7701", isFromFan: true },
+      window: { served: 1 },
+      knownFanMessages: [{ id: "7702", state: "absent" }, { id: "7701", state: "included" }],
+    });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("reports the window a Coach prompt kept after its budget cut the oldest lines", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    // 1500 messages of ~330 characters: more than the Coach whole-prompt budget
+    // holds, so the builder drops the oldest part of the transcript. Odd
+    // numbers are the fan's.
+    await testDb.pool.query(
+      `insert into message_archive (account_id, platform, conversation_ref, message_ref, fan_native_id,
+         is_sent_by_me, occurred_at, text_plain)
+       select $1, 'onlyfans', $2, (20000 + g)::text, case when g % 2 = 1 then $2 end, g % 2 = 0,
+              now() - ((1501 - g) || ' minutes')::interval, 'msg-' || g || '-' || repeat('y', 300)
+       from generate_series(1, 1500) g`,
+      [pageId, FAN],
+    );
+    const coach = async (knownFanMessageIds: string[]) => {
+      const capture: { input?: AiGatewayProviderInput } = {};
+      const served = await stream({
+        capabilities: "context-v1",
+        feature: "coach-chat",
+        body: { chatterQuestion: "what should I write next?", messageCount: 1500, knownFanMessageIds },
+        capture,
+      });
+      const prompt = capture.input!.body.prompt.userBlocks.map((block) => block.text).join("");
+      // The message numbers whose WHOLE line the provider received.
+      const whole = [...prompt.matchAll(/^\[\d\d:\d\d\] (?:Fan|Model): msg-(\d+)-y{300}$/gm)].map((match) => Number(match[1]));
+      return { served, prompt, whole };
+    };
+
+    const first = await coach(["20001", "21499"]);
+    expect(first.served.types).toEqual(["meta", "context_v1", "content_delta", "usage", "done"]);
+    expect(first.prompt).toContain("[older transcript omitted]");
+    const oldestWhole = first.whole[0]!;
+    expect(oldestWhole).toBeGreaterThan(1);
+    expect(first.whole.at(-1)).toBe(1500);
+    expect(first.whole).toHaveLength(1500 - oldestWhole + 1);
+    expect(first.served.context).toMatchObject({
+      source: "archive",
+      // The loader read all 1500; the frame counts what the model was given.
+      servedHead: { messageRef: "21500", isFromFan: false },
+      archiveHead: { messageRef: "21500", isFromFan: false },
+      window: { requested: 1500, served: first.whole.length },
+      knownFanMessages: [
+        // Held by the hub for this chat, cut out of the prompt by the budget.
+        { id: "20001", state: "absent" },
+        { id: "21499", state: "included" },
+      ],
+    });
+
+    // Around the cut, judged by the prompt of the same generation: a message is
+    // in the window exactly when its whole line reached the provider.
+    const around = [oldestWhole - 2, oldestWhole - 1, oldestWhole, oldestWhole + 1].filter((n) => n >= 1);
+    const second = await coach(around.map((n) => String(20000 + n)));
+    const inPrompt = new Set(second.whole);
+    expect(second.served.context).toMatchObject({
+      window: { requested: 1500, served: second.whole.length },
+      knownFanMessages: around.map((n) => ({
+        id: String(20000 + n),
+        state: !inPrompt.has(n) ? "absent" : n % 2 === 1 ? "included" : "unknown",
+      })),
+    });
+    expect(around.some((n) => inPrompt.has(n))).toBe(true);
+    expect(around.some((n) => !inPrompt.has(n))).toBe(true);
+
+    // A feature without that budget hands the model everything it loaded.
+    const summary = await stream({
+      capabilities: "context-v1",
+      feature: "fan-summary",
+      body: { messageCount: 1500, knownFanMessageIds: ["20001"] },
+    });
+    expect(summary.context).toMatchObject({
+      window: { requested: 1500, served: 1500 },
+      knownFanMessages: [{ id: "20001", state: "included" }],
     });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 

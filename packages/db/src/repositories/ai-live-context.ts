@@ -9,7 +9,11 @@
 //     platform_message_id), the page's ofapi_account_id resolved in-query as
 //     the transcript union does;
 //   - page_dm_messages by its unique (conversation_id, platform_message_id),
-//     through the thread of this conversation.
+//     through the thread of this conversation;
+//   - dm_live_messages (the Fansly socket overlay) by its primary key
+//     (page_id, platform_message_id), only when the caller says the overlay
+//     served the transcript. A page whose readers do not read the overlay
+//     (`fanslyLiveOverlayReadPages`) is not judged by it here either.
 //
 // The conversation is part of every arm. A message id of another fan's chat on
 // the same page is found by none of them and reads `absent`, exactly like an id
@@ -19,7 +23,9 @@
 // A tombstone counts from any store once the id is known to belong to this
 // conversation, as in the transcript union: a delete webhook carries no chat,
 // so its dm_message_archive stub has a NULL conversation and proves nothing
-// about the chat by itself.
+// about the chat by itself. A socket deletion stub of the overlay is the same
+// case; the live union hides a message on that mark alone, so a message the
+// archive still holds live reads `deleted` here once the overlay tombstones it.
 
 import { sql } from "drizzle-orm";
 
@@ -40,10 +46,14 @@ export interface AiKnownMessageLookupInput {
   platform: string;
   conversationRef: string;
   messageRefs: readonly string[];
+  /** The transcript was served by the live union (`source: "live_union"`):
+   *  read the socket overlay too. Off by default: no other reader does. */
+  liveOverlay?: boolean;
 }
 
 function buildKnownMessageQuery(input: AiKnownMessageLookupInput) {
   const refs = sql`${sql.param([...input.messageRefs])}::text[]`;
+  const live = input.liveOverlay === true;
   return sql`
     with page as (
       select p.ofapi_account_id
@@ -80,19 +90,31 @@ function buildKnownMessageQuery(input: AiKnownMessageLookupInput) {
         and t.platform_conversation_id = ${input.conversationRef}
         and m.platform_message_id = any(${refs})
     ),
+    ${live ? sql`live_rows as (
+      select l.platform_message_id as message_ref,
+             l.deleted_at,
+             (l.platform_conversation_id = ${input.conversationRef}) as in_conversation
+      from dm_live_messages l
+      where l.page_id = ${input.pageId}
+        and l.platform_message_id = any(${refs})
+    ),` : sql``}
     held as (
       select a.message_ref, a.deleted_at from archive_rows a
       union all
       select d.message_ref, d.deleted_at from dm_rows d where d.in_conversation
       union all
       select h.message_ref, h.deleted_at from hot_rows h
+      ${live ? sql`union all
+      select l.message_ref, l.deleted_at from live_rows l where l.in_conversation` : sql``}
     )
     select w.message_ref,
            exists (select 1 from held x where x.message_ref = w.message_ref) as held,
            (exists (select 1 from held x
                     where x.message_ref = w.message_ref and x.deleted_at is not null)
              or exists (select 1 from dm_rows d
-                        where d.message_ref = w.message_ref and d.deleted_at is not null)) as tombstoned
+                        where d.message_ref = w.message_ref and d.deleted_at is not null)
+             ${live ? sql`or exists (select 1 from live_rows l
+                        where l.message_ref = w.message_ref and l.deleted_at is not null)` : sql``}) as tombstoned
     from wanted w
   `;
 }
