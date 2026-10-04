@@ -31,8 +31,9 @@ import { resolveOrCreateFanOnPage } from "./fan-profiles.ts";
  *
  * The client names a generation; the hub copies its text. So the dossier is
  * exactly what the model wrote, and the hub decides what may become one:
- * - only the caller's own generation, of this page and this fan. Anything else
- *   reads as absent (404), another person's generation included;
+ * - only the caller's own generation, of this page and this fan's chat
+ *   (`generationIsOfFan`). Anything else reads as absent (404), another
+ *   person's generation included;
  * - only a usable full recap: `usableFanSummaryPredicate("full")`, the rule the
  *   recap status, the Coach attach, the shared recaps and the dossier's
  *   generation proof share. A dossier saved here is therefore always one the
@@ -92,6 +93,32 @@ export function generationRefusalReason(
   return generation.completion.length > DOSSIER_BODY_MAX_CHARS ? "too_long" : null;
 }
 
+/**
+ * Whether a stored generation is a recap of this fan on this page.
+ *
+ * The feature exists only where the chat id IS the fan id (OnlyFans), so the
+ * fan in the path names the conversation, as on the shared recaps read. A
+ * generation is this fan's when it is of that conversation and names no other
+ * fan. Both refs are checked: the AI route reads the transcript by
+ * `conversation_ref` and the fan's own data (spending, subscription, name) by
+ * `fan_ref`, and nothing there makes a Recap's two refs agree. A record whose
+ * refs differ mixes two fans and is neither's dossier.
+ *
+ * Narrower than the dossier's generation proof (`fan_ref`, or
+ * `conversation_ref` when no fan is named), so a generation found here always
+ * proves the dossier it is saved as. A platform whose conversations have ids
+ * of their own needs the conversation in the request before it gets the
+ * feature.
+ */
+export function generationIsOfFan(
+  generation: Pick<OwnGenerationForProfile, "pageId" | "conversationRef" | "fanRef">,
+  target: { pageId: number; fanRef: string },
+): boolean {
+  return generation.pageId === target.pageId
+    && generation.conversationRef === target.fanRef
+    && (generation.fanRef === null || generation.fanRef === target.fanRef);
+}
+
 function toResponse(
   outcome: ClientFanProfileFromGenerationResponse["outcome"],
   profile: FanProfileVersionRef,
@@ -137,10 +164,9 @@ export async function saveClientFanProfileFromGeneration(
     }
     throw new NotFoundError(NOT_FOUND_MESSAGE);
   }
-  // The feature exists only where the chat id IS the fan id (OnlyFans): a
-  // generation that names no separate fan is about its conversation's fan.
-  if (generation.pageId !== page.id || (generation.fanRef ?? generation.conversationRef) !== input.fanRef) {
-    // The caller's own generation of another page or fan: not this fan's.
+  if (!generationIsOfFan(generation, { pageId: page.id, fanRef: input.fanRef })) {
+    // The caller's own generation of another page, of another fan, or of two
+    // fans at once: not this fan's.
     throw new NotFoundError(NOT_FOUND_MESSAGE);
   }
   const refusal = generationRefusalReason(generation);

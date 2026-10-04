@@ -531,9 +531,14 @@ request) and the hub copies the text from the restricted record it stored. No te
 through the client, in either direction: the dossier is exactly the model's output, and the
 answer carries none of it.
 
-- Found: only a generation of the same user, the same page and the same fan (`fan_ref`, or
-  `conversation_ref` when the record names no separate fan). Anything else answers `404`,
-  another person's generation included, for every role.
+- Found: only a generation of the same user, the same page and the same fan. On OnlyFans the
+  chat id is the fan id, so the fan in the path names the conversation: the record's
+  `conversation_ref` must equal it, and its `fan_ref` must be absent or equal to it. Anything
+  else answers `404`, another person's generation included, for every role. A record whose two
+  refs differ is found for neither fan: the AI route reads the transcript by `conversationRef`
+  and the fan's own data by `fanRef` and does not make a Recap's two refs agree, so such a
+  record mixes two fans. This is narrower than the dossier's generation proof (`fan_ref`, or
+  `conversation_ref` when no fan is named), which the older write keeps.
 - Eligible: only a usable full recap, by the rule above (`usableFanSummaryPredicate("full")`),
   and no longer than a dossier body may be (50,000 characters, the cap of the older write). Any
   other generation answers `409 generation_not_eligible` with a `reason`
@@ -546,7 +551,11 @@ answer carries none of it.
 - Idempotent: when a version of the fan's dossier on the page already has exactly this text, the
   answer is `existing` with that version and nothing is written, however many versions came
   since. Otherwise the dossier write's own rules apply: a generation that is not newer than the
-  dossier's latest text is never written (`409 generation_not_eligible`, `superseded`).
+  dossier's latest text is never written (`409 generation_not_eligible`, `superseded`). That
+  one reason says nothing against the generation: the dossier already holds a newer text (a
+  colleague's later recap saved first, or an older client's write). The answer stays a refusal
+  because this text was not saved, and `existing` promises a version that holds it; a client
+  may show `superseded` as information rather than as a failed save.
 - Answer: `{ outcome: "created" | "existing", profile: { version, createdAt, sourceGeneratedAt } }`.
 - Not ready: the generation record is written after the stream's `done` frame. Until it exists, a
   request that names the `clientRequestId` of an AI request the gateway admitted for the caller on

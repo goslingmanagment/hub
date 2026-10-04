@@ -679,10 +679,14 @@ describe("POST /api/v1/client/pages/:pageLabel/fans/:fanRef/profile/from-generat
     const authorless = await seedGeneration({ text: "AUTHORLESS RECAP", userId: null });
     const otherFan = await seedGeneration({ text: "OTHER FAN RECAP", conversationRef: OTHER_FAN, at: minutesAgo(50) });
     const otherPage = await seedGeneration({ text: "VIP PAGE RECAP", pageLabel: "lora-vip-of" });
-    // A separate fan ref wins over the conversation's: this one is about OTHER_FAN.
+    // Records whose chat and fan differ. The transcript is read by the
+    // conversation and the fan's data by the fan, so each mixes two fans.
     const aboutOtherFan = await seedGeneration({ text: "ABOUT OTHER FAN", conversationRef: FAN, fanRef: OTHER_FAN, at: minutesAgo(40) });
-    // A conversation with an id of its own, about FAN.
+    const otherChat = await seedGeneration({ text: "OTHER CHAT RECAP", conversationRef: OTHER_FAN, fanRef: FAN, at: minutesAgo(35) });
+    // A conversation with an id of its own, about FAN: no OnlyFans chat has one.
     const groupChat = await seedGeneration({ text: "GROUP CHAT RECAP", conversationRef: "group-900", fanRef: FAN, at: minutesAgo(20) });
+    // The record as the extension's own requests make it: the fan in both refs.
+    const bothRefs = await seedGeneration({ text: "BOTH REFS RECAP", conversationRef: FAN, fanRef: FAN, at: minutesAgo(10) });
 
     const unknown = await save(grishaToken, { generationRef: randomUUID() });
     expectRefused(unknown, 404, "not_found");
@@ -698,24 +702,44 @@ describe("POST /api/v1/client/pages/:pageLabel/fans/:fanRef/profile/from-generat
     }
     // The caller's own, of another fan or another page.
     expectRefused(await save(grishaToken, { generationRef: otherFan }), 404, "not_found");
-    expectRefused(await save(grishaToken, { generationRef: aboutOtherFan }), 404, "not_found");
     expectRefused(await save(grishaToken, { generationRef: otherPage }), 404, "not_found");
-    expectRefused(await save(grishaToken, { generationRef: groupChat, fan: OTHER_FAN }), 404, "not_found");
     expectRefused(await save(grishaToken, { generationRef: nikitas, pageLabel: "lora-vip-of" }), 404, "not_found");
+    // A record that mixes two fans is neither fan's dossier: not the one whose
+    // chat was read, not the one it was stored about.
+    for (const mixed of [aboutOtherFan, otherChat, groupChat]) {
+      for (const fan of [FAN, OTHER_FAN]) {
+        expectRefused(await save(grishaToken, { generationRef: mixed, fan }), 404, "not_found");
+      }
+    }
+    // The AI route records what a request asks, and nothing makes a Recap's
+    // two refs agree there. So the extension's own token can make such a
+    // record; it still saves it for nobody.
+    script.text = "RECAP OF ONE CHAT NAMING ANOTHER FAN";
+    const askedId = randomUUID();
+    const asked = streamed(await generate("fan-summary", askedId, { fanRef: OTHER_FAN }));
+    const { rows: [recorded] } = await testDb!.pool.query<{ conversation_ref: string; fan_ref: string | null }>(
+      "select conversation_ref, fan_ref from ai_generation_content where generation_ref = $1",
+      [asked.generationRef],
+    );
+    expect(recorded).toEqual({ conversation_ref: FAN, fan_ref: OTHER_FAN });
+    for (const fan of [FAN, OTHER_FAN]) {
+      expectRefused(await save(grishaToken, { generationRef: asked.generationRef, clientRequestId: askedId, fan }), 404, "not_found");
+      expectRefused(await save(grishaFullToken, { generationRef: asked.generationRef, fan }), 404, "not_found");
+    }
     expect(await count("fan_profiles")).toBe(0);
     expect(await count("fans")).toBe(0);
+    expect(await count("page_fans")).toBe(0);
 
     // Each is saved where it belongs, by its author.
     expect((await saveOk(nikitaToken, { generationRef: nikitas })).outcome).toBe("created");
-    expect((await saveOk(grishaToken, { generationRef: groupChat })).outcome).toBe("created");
+    expect((await saveOk(grishaToken, { generationRef: bothRefs })).outcome).toBe("created");
     expect((await saveOk(grishaToken, { generationRef: otherFan, fan: OTHER_FAN })).outcome).toBe("created");
-    expect((await saveOk(grishaToken, { generationRef: aboutOtherFan, fan: OTHER_FAN })).outcome).toBe("created");
     expect((await saveOk(grishaToken, { generationRef: otherPage, pageLabel: "lora-vip-of" })).outcome).toBe("created");
     expect((await dossier()).map((version) => [version.body, version.created_by_user_id])).toEqual([
       ["NIKITA RECAP", userIds.nikita],
-      ["GROUP CHAT RECAP", userIds.grisha],
+      ["BOTH REFS RECAP", userIds.grisha],
     ]);
-    expect((await dossier("lora-of", OTHER_FAN)).map((version) => version.body)).toEqual(["OTHER FAN RECAP", "ABOUT OTHER FAN"]);
+    expect((await dossier("lora-of", OTHER_FAN)).map((version) => version.body)).toEqual(["OTHER FAN RECAP"]);
     expect((await dossier("lora-vip-of")).map((version) => version.body)).toEqual(["VIP PAGE RECAP"]);
 
     await trap!.assertNoOutbound();

@@ -112,7 +112,9 @@ is narrower than the page grant on purpose:
   that a generation exists, and no way to publish someone else's;
 - only of the page in the path and of the fan in the path, and only a usable
   full recap (the same rule as the shared recaps, so never one with a
-  `contextScope`);
+  `contextScope`). The fan in the path is the chat: a generation of one fan's
+  chat that names another fan is found for neither, so the route never writes
+  one fan's recap into another fan's dossier;
 - nothing of the record comes back: the answer is the dossier version's
   number and times;
 - only on a page granted to the caller, and only while the owner's `recap`

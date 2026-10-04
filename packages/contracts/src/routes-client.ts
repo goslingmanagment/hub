@@ -241,6 +241,8 @@ export const CLIENT_REQUEST_ID_PATTERN = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-f
  * - `context_scope`: its context held something only its caller saw;
  * - `too_long`: its text is longer than a dossier may be;
  * - `superseded`: the fan's dossier already holds a text that is not older.
+ *   The one reason that says nothing against the generation: a client may show
+ *   it as information rather than as a failed save.
  */
 export const CLIENT_GENERATION_NOT_ELIGIBLE_REASONS = [
   "not_full_summary", "not_completed", "stop_reason_missing", "output_exhausted", "empty",

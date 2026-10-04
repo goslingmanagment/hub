@@ -17,6 +17,7 @@ import type { OwnGenerationForProfile } from "@agency_hub_core/db";
 import { SERVED_CLIENT_CAPABILITIES } from "../apps/runtime/src/services/client-capabilities.ts";
 import {
   DOSSIER_BODY_MAX_CHARS,
+  generationIsOfFan,
   generationRefusalReason,
 } from "../apps/runtime/src/services/client-profile-from-generation.ts";
 import { GenerationNotEligibleError, GenerationNotReadyError } from "../apps/runtime/src/services/errors.ts";
@@ -187,6 +188,41 @@ describe("dossier-from-generation contract", () => {
       statusCode: notEligible.statusCode,
       reason: notEligible.reason,
     }).success).toBe(true);
+  });
+});
+
+describe("generationIsOfFan", () => {
+  const FAN = "777000777";
+  const OTHER_FAN = "777000888";
+  const target = { pageId: 1, fanRef: FAN };
+
+  it("finds a recap of the fan's own chat that names no other fan", () => {
+    // An older client's request names the chat only; the extension's names the fan in both refs.
+    expect(generationIsOfFan(generation({ conversationRef: FAN, fanRef: null }), target)).toBe(true);
+    expect(generationIsOfFan(generation({ conversationRef: FAN, fanRef: FAN }), target)).toBe(true);
+  });
+
+  it("finds nothing of another page, another fan, or two fans at once", () => {
+    const absent: Array<Partial<OwnGenerationForProfile>> = [
+      { pageId: 2 },
+      { pageId: null },
+      { conversationRef: OTHER_FAN },
+      { conversationRef: OTHER_FAN, fanRef: OTHER_FAN },
+      // The chat of one fan, stored about another: read for either of them.
+      { conversationRef: FAN, fanRef: OTHER_FAN },
+      { conversationRef: OTHER_FAN, fanRef: FAN },
+      // A conversation with an id of its own: no OnlyFans chat has one.
+      { conversationRef: "group-900", fanRef: FAN },
+      // A record that names no conversation.
+      { conversationRef: null, fanRef: FAN },
+      { conversationRef: null, fanRef: null },
+    ];
+    for (const over of absent) {
+      expect(generationIsOfFan(generation(over), target), JSON.stringify(over)).toBe(false);
+    }
+    // The mixed record is nobody's, whichever of its two fans the path names.
+    const mixed = generation({ conversationRef: FAN, fanRef: OTHER_FAN });
+    expect(generationIsOfFan(mixed, { pageId: 1, fanRef: OTHER_FAN })).toBe(false);
   });
 });
 
