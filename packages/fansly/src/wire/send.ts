@@ -358,9 +358,10 @@ function decoderFor(coding: string): Decoder | null {
 
 /**
  * Undo the response's content codings, last applied first, exactly where the
- * browser (and the adapter's fetch) would: the request advertises the HAR's
- * `accept-encoding`, so the answer may be compressed. A coding the browser
- * cannot decode leaves the whole body as received (fetch does the same).
+ * browser (and undici's `fetch`, which the legacy adapter used) would: the
+ * request advertises the HAR's `accept-encoding`, so the answer may be
+ * compressed. A coding the browser cannot decode leaves the whole body as
+ * received (fetch does the same).
  */
 async function decodeContent(raw: Buffer, contentEncoding: string | undefined): Promise<Buffer> {
   if (contentEncoding === undefined || raw.length === 0) {

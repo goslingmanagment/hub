@@ -86,15 +86,10 @@ function db(): Database {
   return testDb!.db as unknown as Database;
 }
 
-const sentinel = () => {
-  throw new Error("adapter reached");
-};
-
 interface Rig {
   page: HarnessPage;
   server: FakeFanslyServer;
   app: AppContext;
-  adapter: { getAccountMe: ReturnType<typeof vi.fn>; verifySession: ReturnType<typeof vi.fn> };
   identityTokens: string[];
 }
 
@@ -110,8 +105,7 @@ async function rig(mode: "off" | "shadow" | "handover" | "live"): Promise<Rig> {
   for (const route of harnessRoutes(new FakeChats())) server.route(route);
   const page = await seedHarnessPage({ db: db(), pool: testDb!.pool }, { mode: mode === "live" ? "live" : "shadow", proxyUrl: proxy.url, label: "routing-page" });
   if (mode !== "live" && mode !== "shadow") await setModeDirect(testDb!.pool, page.pageId, mode);
-  const adapter = { getAccountMe: vi.fn(sentinel), verifySession: vi.fn(sentinel) };
-  const app = createTestAppContext(testDb!, { adapter: adapter as unknown as AppContext["adapter"], fanslySendGuardSettingMs: S });
+  const app = createTestAppContext(testDb!, { fanslySendGuardSettingMs: S });
   if (mode === "live") {
     const host = new SyncEngineHost(harnessHostOptions({
       db: db(),
@@ -124,7 +118,7 @@ async function rig(mode: "off" | "shadow" | "handover" | "live"): Promise<Rig> {
     hosts.push(host);
     await host.start();
   }
-  return { page, server, app, adapter, identityTokens };
+  return { page, server, app, identityTokens };
 }
 
 async function ownerCookie(app: AppContext, apiServer: Awaited<ReturnType<typeof buildApiServer>>): Promise<string> {
@@ -164,8 +158,6 @@ describe("the /account/me levers by engine mode", () => {
     }
     await expect(setPageProxy(r.app, r.page.pageLabel, { url: "http://127.0.0.1:9" })).rejects.toMatchObject({ code: "legacy_sync_retired" });
     // No legacy sender is left behind the levers, and the engine was not asked.
-    expect(r.adapter.getAccountMe).not.toHaveBeenCalled();
-    expect(r.adapter.verifySession).not.toHaveBeenCalled();
     expect(r.server.arrivals).toEqual([]);
     expect(await storedGeneration(r.page)).toBe(before);
     expect((await testDb.pool.query("select count(*)::int as n from sync_work where not shadow")).rows[0].n).toBe(0);
@@ -192,8 +184,6 @@ describe("the /account/me levers by engine mode", () => {
       await apiServer.close();
     }
     await expect(setPageProxy(r.app, r.page.pageLabel, { url: "http://127.0.0.1:9" })).rejects.toMatchObject({ code: "fansly_page_switching" });
-    expect(r.adapter.getAccountMe).not.toHaveBeenCalled();
-    expect(r.adapter.verifySession).not.toHaveBeenCalled();
     expect(r.server.arrivals).toEqual([]);
     expect(await storedGeneration(r.page)).toBe(before);
     expect((await testDb.pool.query("select count(*)::int as n from sync_work where not shadow")).rows[0].n).toBe(0);
@@ -230,8 +220,6 @@ describe("the /account/me levers by engine mode", () => {
     const stored = await testDb.pool.query<{ url: string }>("select url from egress_endpoints where platform_account_id = $1 order by id desc limit 1", [r.page.pageId]);
     expect(stored.rows[0]!.url).toBe(next.url);
 
-    expect(r.adapter.getAccountMe).not.toHaveBeenCalled();
-    expect(r.adapter.verifySession).not.toHaveBeenCalled();
     const works = await testDb.pool.query<{ resource: string; close_reason: string }>(
       "select resource, close_reason from sync_work where page_id = $1 and resource like 'account.%' and not shadow order by id", [r.page.pageId],
     );

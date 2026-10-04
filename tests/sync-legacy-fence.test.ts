@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
@@ -11,10 +11,6 @@ import {
   SYNC_PAGE_MODES,
 } from "@agency_hub_core/db";
 
-import {
-  FANSLY_PAGE_ON_SYNC_ENGINE_CODE,
-  FanslyPageOnSyncEngineError,
-} from "../apps/runtime/src/services/sync-engine-guard.ts";
 import { PgDialect } from "../packages/db/node_modules/drizzle-orm/pg-core/index.js";
 import { sql } from "../packages/db/node_modules/drizzle-orm/index.js";
 
@@ -117,12 +113,38 @@ describe("the legacy processes ask before they act", () => {
     // resolved or sent — no legacy `/account/me` is left behind them.
     ["apps/runtime/src/services/connections.ts", "updatePageCredentials", "await assertFanslyPageOnEngine(app, stored.page);"],
     ["apps/runtime/src/services/page-proxies.ts", "setPageProxy", "await assertFanslyPageOnEngine(app, known.page);"],
-    ["apps/runtime/src/services/fansly-replay-probe.ts", "runFanslyReplayProbe", "assertLegacyOwnsFanslyPageLabels(app, options.pageLabels"],
-    ["apps/runtime/src/services/fansly-endpoint-probe.ts", "runFanslyEndpointProbe", "assertLegacyOwnsFanslyPageLabels(app, options.pageLabels"],
-    ["apps/runtime/src/services/fansly-page-alias-backfill.ts", "backfillFanslyPageAliases", "assertLegacyOwnsFanslyPageLabels(app, requestedPageLabels"],
-    ["apps/runtime/src/services/fansly-page-alias-backfill.ts", "backfillFanslyPageAliases", "listEngineOwnedFanslyPages(app.db)"],
   ])("%s %s", (path, name, check) => {
     expect(functionBody(path, name)).toContain(check);
+  });
+
+  // Step 4 (S4-20): the legacy senders that were fenced here are deleted with
+  // the adapter's HTTP — the probes (`sync probe` is the engine's) and the
+  // alias backfill (`sync work enqueue --resource fan-profiles.alias-backfill`)
+  // — and the describer's page-egress download asks for no send guard: it
+  // sends no Fansly request at all.
+  it("the probes, the alias backfill and the adapter are gone, and no runtime code asks for a page's send guard", () => {
+    for (const path of [
+      "packages/fansly/src/adapter.ts",
+      "apps/runtime/src/services/fansly-endpoint-probe.ts",
+      "apps/runtime/src/services/fansly-replay-probe.ts",
+      "apps/runtime/src/services/fansly-page-alias-backfill.ts",
+    ]) {
+      expect(existsSync(join(root, path)), path).toBe(false);
+    }
+    const cli = source("apps/runtime/src/cli.ts");
+    for (const command of ["fansly:endpoint-probe", "fansly:replay-probe", "fansly-page-alias-backfill"]) {
+      expect(cli, command).not.toContain(command);
+    }
+    expect(source("apps/runtime/src/bootstrap.ts")).not.toMatch(/FanslyAdapter|\badapter\b/);
+    const describer = source("apps/runtime/src/services/ai-media-describe/worker.ts");
+    expect(describer).not.toMatch(/SendGuard/);
+    expect(functionBody("apps/runtime/src/services/ai-media-describe/worker.ts", "downloadAiMediaThroughPageEgress"))
+      .toContain("return await downloadMediaForDescribe({ url: input.url, dispatcher: egress.dispatcher });");
+    const download = source("apps/runtime/src/services/egress/media-download.ts");
+    expect(download).not.toMatch(/SendGuard|SendLease|\.acquire\(/);
+    expect(functionBody("apps/runtime/src/services/egress/media-download.ts", "downloadMediaForDescribe")).toMatch(
+      /if \(isFanslyHost\(current\.hostname\)\) \{[\s\S]{0,200}?return \{ ok: false, reason: "send_guard", httpStatus: null \};/,
+    );
   });
 
   // Step 4 (S4-10): the legacy executor runs no Fansly stream, so the AI
@@ -166,16 +188,5 @@ describe("the legacy processes ask before they act", () => {
     // `dm backfill-thread` queued a legacy read of one thread; nothing queues one now.
     expect(cli).not.toContain("backfill-thread");
     expect(cli).not.toContain("sync.thread.backfill");
-  });
-});
-
-describe("the refusal", () => {
-  it("is a 409 with the page, the mode and the hint", () => {
-    const error = new FanslyPageOnSyncEngineError({ pageId: 4, pageLabel: "lilly-1", mode: "live", hint: "ask the engine" });
-    expect(error).toMatchObject({ statusCode: 409, code: FANSLY_PAGE_ON_SYNC_ENGINE_CODE, pageId: 4, mode: "live" });
-    expect(FANSLY_PAGE_ON_SYNC_ENGINE_CODE).toBe("fansly_page_on_sync_engine");
-    expect(error.message).toBe(
-      "Page lilly-1 is on the Fansly Sync Engine (mode live): the legacy engine sends nothing for it; ask the engine",
-    );
   });
 });

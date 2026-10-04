@@ -1,26 +1,25 @@
-import { FANSLY_CDN_ACCEPT, type FanslySendGuard, type FanslySendLease } from "@agency_hub_core/fansly";
+import { FANSLY_CDN_ACCEPT } from "@agency_hub_core/fansly";
 import type { Dispatcher } from "undici";
 
 import { fetchWithEgress } from "./fetch.ts";
-import { fanslySendFailureOutcome, isFanslyHost } from "./fansly-send-lease.ts";
+import { isFanslyHost } from "./fansly-send-lease.ts";
 
 // AI media describer downloads (docs/runbooks/ai-media-describe.md). The hub
-// code that fetches chat media bytes — except on a Fansly page the Sync Engine
-// owns, whose actor downloads them as its own requests (`media-download.fetch`,
-// the same host policy below: `isFanslyCdnUrl`). The bytes stay in this
-// process's memory and go straight to the describer; nothing here writes a
-// file, a row or a log line containing the URL.
+// code that fetches chat media bytes of a page the Fansly Sync Engine does not
+// run (OnlyFans). A Fansly page's actor downloads them as its own requests
+// (`media-download.fetch`, under the same host policy: `isFanslyCdnUrl`). The
+// bytes stay in this process's memory and go straight to the describer;
+// nothing here writes a file, a row or a log line containing the URL.
 //
 // Rules: https only; a fixed host allowlist (the platforms' media CDNs and the
 // OFAPI cache CDN); redirects followed by hand and only onto the same
 // allowlist; no platform auth, no cookies; a hard byte cap enforced while
 // streaming; one bounded timeout per hop.
 //
-// Plan §2.4/§2.5: a Fansly CDN hop is a request of the page and goes through
-// the page's send guard (source `media_download`): each physical hop is its
-// own capture (a redirect is a new one), the hop's timeout runs from its
-// capture, and the hop completes after its body was read or cancelled. A
-// Fansly hop without a guard is refused before anything is sent.
+// Plan §2.4: a Fansly CDN hop is a request of its page, and a page has one
+// sender, its actor. This download never sends one: a Fansly host — the URL
+// itself or a redirect onto one — is refused (`send_guard`) before anything is
+// sent, and the row looks again later.
 
 export const MEDIA_DOWNLOAD_MAX_BYTES = 5 * 1024 * 1024;
 export const MEDIA_DOWNLOAD_TIMEOUT_MS = 10_000;
@@ -55,8 +54,8 @@ export type MediaDownloadFailure =
   | "too_large"
   | "timeout"
   | "transport"
-  /** A Fansly hop with no send guard, or the page's guard refused it (the page
-   *  is closed, or this process is shutting down). Nothing was sent. */
+  /** Not sent: a hop only the page's own sender may make (a Fansly CDN host
+   *  here; in the Sync Engine's download, a page that is held or switching). */
   | "send_guard";
 
 export type MediaDownloadResult =
@@ -66,9 +65,6 @@ export type MediaDownloadResult =
 export interface DownloadMediaInput {
   url: string;
   dispatcher: Dispatcher | null;
-  /** The send guard of the page whose egress `dispatcher` is. Required for a
-   *  Fansly CDN hop; other hosts never use it. */
-  fanslySendGuard: FanslySendGuard | null;
   fetchImpl?: typeof fetch;
   maxBytes?: number;
   timeoutMs?: number;
@@ -116,20 +112,12 @@ export async function downloadMediaForDescribe(input: DownloadMediaInput): Promi
   }
 
   for (let hop = 0; ; hop += 1) {
-    const guarded = isFanslyHost(current.hostname);
-    if (guarded && (!input.fanslySendGuard || !input.dispatcher)) {
-      // Never through a page's egress, or direct, without a capture.
+    if (isFanslyHost(current.hostname)) {
+      // Never through a page's egress, or direct: only the page's actor sends
+      // a Fansly request.
       return { ok: false, reason: "send_guard", httpStatus: null };
     }
-    let lease: FanslySendLease | null = null;
-    if (guarded) {
-      try {
-        lease = await input.fanslySendGuard!.acquire({ operation: "media_download", requestTimeoutMs: timeoutMs });
-      } catch {
-        return { ok: false, reason: "send_guard", httpStatus: null };
-      }
-    }
-    const step = await downloadHop(input, fetchImpl, current, lease, { maxBytes, timeoutMs });
+    const step = await downloadHop(input, fetchImpl, current, { maxBytes, timeoutMs });
     if (step.kind === "done") {
       return step.result;
     }
@@ -148,32 +136,26 @@ type HopResult =
   | { kind: "done"; result: MediaDownloadResult }
   | { kind: "redirect"; location: string; httpStatus: number };
 
-/** One physical request. With a lease, it is the lease's one request, and the
- *  lease completes when this returns (body read or cancelled, or failed). */
+/** One physical request. */
 async function downloadHop(
   input: DownloadMediaInput,
   fetchImpl: typeof fetch,
   url: URL,
-  lease: FanslySendLease | null,
   limits: { maxBytes: number; timeoutMs: number },
 ): Promise<HopResult> {
-  let httpStatus: number | null = null;
-  let failure: unknown = null;
   try {
     const init: RequestInit = {
       method: "GET",
       redirect: "manual",
-      // From the capture (or the hop's start without a guard).
+      // From the hop's start.
       signal: AbortSignal.timeout(limits.timeoutMs),
       // No credentials of any kind: CDN URLs are self-signed.
       credentials: "omit",
       headers: { accept: FANSLY_CDN_ACCEPT },
     };
-    const dispatcher = input.dispatcher && lease ? lease.bind(input.dispatcher) : input.dispatcher;
-    const response = dispatcher
-      ? await fetchWithEgress(fetchImpl, dispatcher, url, init)
+    const response = input.dispatcher
+      ? await fetchWithEgress(fetchImpl, input.dispatcher, url, init)
       : await fetchImpl(url, init);
-    httpStatus = response.status;
     if (response.status >= 300 && response.status < 400) {
       await response.body?.cancel().catch(() => undefined);
       const location = response.headers.get("location");
@@ -197,19 +179,6 @@ async function downloadHop(
     }
     return { kind: "done", result: { ok: true, bytes, contentType: response.headers.get("content-type") } };
   } catch (error) {
-    failure = error;
-    const refused = lease?.sendRefused === true && !lease.sent;
-    return {
-      kind: "done",
-      result: {
-        ok: false,
-        reason: refused ? "send_guard" : isTimeout(error) ? "timeout" : "transport",
-        httpStatus: null,
-      },
-    };
-  } finally {
-    await lease?.complete(httpStatus !== null
-      ? { outcome: "response", httpStatus }
-      : { outcome: fanslySendFailureOutcome(failure) });
+    return { kind: "done", result: { ok: false, reason: isTimeout(error) ? "timeout" : "transport", httpStatus: null } };
   }
 }

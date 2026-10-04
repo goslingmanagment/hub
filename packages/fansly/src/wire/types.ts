@@ -269,8 +269,9 @@ export interface FanslyWireSpec<P, R> {
   readonly capture?: "none" | "bytes";
   /** The route with its path parameters named, as the legacy journal wrote it. */
   readonly endpointTemplate: string;
-  /** The adapter operation that sends this route today (`sync_http_attempts.operation`),
-   *  so legacy volume maps onto wire ids. */
+  /** The operation the legacy adapter journaled this route under
+   *  (`sync_http_attempts.operation`, `fansly_send_log.operation`), so legacy
+   *  volume maps onto wire ids. */
   readonly legacyOperation: string;
   path(params: P): string;
   /** The query, in the order the app sends it; `ngsw-bypass=true` is added by

@@ -24,17 +24,18 @@ import type {
 } from "./types.ts";
 
 // One spec per Fansly route the engine reads. Every request shape is the
-// adapter method's, key for key and in the same order, including the
-// present-and-empty values the app sends (`tests/fansly-wire-specs.test.ts`
-// compares each URL with the adapter's own). Only what varies per request is a
-// parameter; page sizes and fixed filters are the app's and live here.
+// deleted legacy adapter method's, key for key and in the same order,
+// including the present-and-empty values the app sends
+// (`tests/fansly-wire-specs.test.ts` pins each URL to the one the adapter
+// sent). Only what varies per request is a parameter; page sizes and fixed
+// filters are the app's and live here.
 
 /**
  * WP-F3: `/media/vaultnew`'s head cursor is the LITERAL STRING "0", for both
  * `before` and `after`. An empty `before=` is a cursor the server does not
  * honour — it answers `{albumMedia: [], media: []}` for an album with 4 760
  * items, which is indistinguishable from an exhausted album. The app's own
- * caller sends "0"; so does this adapter.
+ * caller sends "0"; so does this spec.
  */
 export const VAULT_MEDIA_HEAD_CURSOR = "0";
 /**
@@ -749,8 +750,8 @@ export function isFanslyApiWireId(id: FanslyWireId): boolean {
   return fanslyWireSpec(id).host === "api";
 }
 
-/** The pathname and query of one request, exactly as the adapter writes them:
- *  `ngsw-bypass=true` first, then the spec's keys in order. Throws on a
+/** The pathname and query of one request, exactly as the legacy adapter wrote
+ *  them: `ngsw-bypass=true` first, then the spec's keys in order. Throws on a
  *  parameter no request may carry, before anything is admitted or sent. */
 export function buildFanslyWireTarget<I extends FanslyWireId>(
   id: I,
@@ -776,7 +777,7 @@ export function buildFanslyWireUrl<I extends FanslyWireId>(
 
 /** One request, built at send time: the browser headers of the captured HAR
  *  with this request's client timestamp, through `buildFanslyRequestHeaders`
- *  — the same headers the adapter sends for the same route. */
+ *  — the headers the legacy adapter sent for the same route. */
 export function buildFanslyWireRequest<I extends FanslyWireId>(
   id: I,
   params: FanslyWireParams<I>,

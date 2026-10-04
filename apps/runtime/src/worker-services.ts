@@ -618,9 +618,6 @@ export async function startWorkerServices(
         });
       }
       abortController.abort();
-      // No new Fansly capture from here on; requests already in flight finish
-      // and app.close() waits for their completions.
-      app.fanslySendGuards?.stop();
       await aiMediaDescribeLoop.stop().catch((error) => {
         app.logger.warn({ err: error }, "AI media describe loop failed during shutdown");
       });

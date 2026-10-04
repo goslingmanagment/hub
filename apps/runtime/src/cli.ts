@@ -44,7 +44,6 @@ import {
 import { createAppContext } from "./bootstrap.ts";
 import { registerSyncEngineCommands } from "./sync/cli.ts";
 import { AiGatewayTerminalStreamConsumer, buildAiGatewayTerminalRecord } from "./services/ai-gateway.ts";
-import { backfillFanslyPageAliases } from "./services/fansly-page-alias-backfill.ts";
 import {
   applyLiveConfigPatches,
   assertLiveEditableConfigKey,
@@ -79,11 +78,6 @@ import {
   setVoiceProfile,
   showVoiceProfile,
 } from "./services/voice-profiles.ts";
-import {
-  runFanslyEndpointProbe,
-  summarizeEndpointProbe,
-} from "./services/fansly-endpoint-probe.ts";
-import { runFanslyReplayProbe, summarizeReplayProbe } from "./services/fansly-replay-probe.ts";
 import { runCanonicalization } from "./services/canonicalize-driver.ts";
 import { runOfapiBindingReconcile } from "./services/ofapi-binding-reconcile.ts";
 import { runDmCorrectionsFingerprintBackfill } from "./services/dm-corrections-backfill.ts";
@@ -1691,61 +1685,6 @@ export function buildProgram() {
     });
 
   program
-    .command("fansly:replay-probe")
-    .description(
-      "Stage 6 gate: probe whether core can replay Fansly earnings/order-history endpoints server-side",
-    )
-    .option("--page <label>", "Fansly page label; may be repeated", collectStringOption, [])
-    .option("--calls <n>", "calls per family per page (default 1)", (value) => {
-      const parsed = Number.parseInt(value, 10);
-      if (!Number.isInteger(parsed) || parsed < 1) {
-        // NaN would fire zero probes yet print the green verdict (review R1-5).
-        throw new InvalidArgumentError("--calls must be a positive integer");
-      }
-      return parsed;
-    }, 1)
-    .option("--fan <accountId>", "fan account id → correlationAccountId + order-history accountIds (well-formed call)")
-    .option("--media <accountMediaId>", "accountMediaId for order-history (well-formed call)")
-    .option("--bundle <accountMediaBundleId>", "accountMediaBundleId for order-history (well-formed call)")
-    .option(
-      "--transactions-parity",
-      "fire only the /earnings/transactions query-bound matrix",
-    )
-    .option(
-      "--transactions-after <iso>",
-      "non-empty lower bound for --transactions-parity",
-      parseDateOption,
-    )
-    .option("--dry-run", "resolve contexts and print the plan without calling Fansly")
-    .action(async (options) => {
-      const pageLabels: string[] = options.page;
-      if (pageLabels.length === 0) {
-        throw new Error("fansly:replay-probe requires at least one --page <label>");
-      }
-      const app = await createAppContext();
-      try {
-        const results = await runFanslyReplayProbe(app, {
-          pageLabels,
-          calls: options.calls,
-          dryRun: Boolean(options.dryRun),
-          correlationAccountId: options.fan ?? null,
-          mediaAccountIds: options.fan ?? null,
-          accountMediaId: options.media ?? null,
-          accountMediaBundleId: options.bundle ?? null,
-          transactionsParity: Boolean(options.transactionsParity),
-          transactionsAfter: options.transactionsAfter,
-        });
-        for (const result of results) {
-          console.log(JSON.stringify(result));
-        }
-        console.log("");
-        console.log(summarizeReplayProbe(results));
-      } finally {
-        await app.close();
-      }
-    });
-
-  program
     .command("fansly:ws-recovery-manifest")
     .description("Read-only provenance and reader-state check for up to 20 exact retained WS messages; never prints message text")
     .requiredOption("--input <file>", "JSON with pageLabel and exact observationId/groupRef/messageRef targets")
@@ -1754,63 +1693,6 @@ export function buildProgram() {
       const app = await createAppContext();
       try { console.log(JSON.stringify(await buildFanslyWsRecoveryManifest(app, request), null, 2)); }
       finally { await app.close(); }
-    });
-
-  program
-    .command("fansly:endpoint-probe")
-    .description(
-      "Liveness probe for the endpoints-cover initiative: fires ONE read-only GET per WP-F9 "
-        + "(`dm_commerce`) route, the [E1] bare `/post/{id}/replies`, the WP-F3 catalog routes "
-        + "and [F1]'s `/it/amoie/stats` MONTH form (year/month, two months back — it prints the "
-        + "served window so one run says whether the month was honoured), through the page's own "
-        + "proxy. Answers 'does the server serve this to us at all' BEFORE any capture machinery "
-        + "is designed around it. Writes nothing to Fansly and nothing to Postgres beyond ordinary "
-        + "sync telemetry. Never issues `POST /postreply/verify` — doing so would destroy the only "
-        + "question [E1] asks.",
-    )
-    .option("--page <label>", "Fansly page label; may be repeated", collectStringOption, [])
-    .option(
-      "--post <id>",
-      "[E1] post id with a KNOWN visible reply. Without it [E1] is skipped, not answered — "
-        + "the id is a path segment, so there is no bare form of that call.",
-    )
-    .option("--group <id>", "conversation id for /groups/mediaoffers (else the call fires bare)")
-    .option("--fan <accountId>", "fan account id for /tips/account and /groups/mediaoffers")
-    .option("--story <id>", "story id for /mediastory/views (else the call fires bare)")
-    .option("--media <id>", "[F3] a known accountMedia id for /account/media?ids=")
-    .option("--bundle <id>", "[F3] a known bundle id for /account/media/bundle?ids=")
-    .option("--album <id>", "[F3] a known vault album id for /media/vaultnew")
-    .option("--only <substr>", "fire only routes whose key contains this substring (e.g. mediaoffers)")
-    .option("--ids", "print allowlisted identifier fields per list row (ids, type, price, flags — never text/URLs)")
-    .option("--dry-run", "resolve page contexts and print the plan without calling Fansly")
-    .action(async (options) => {
-      const pageLabels: string[] = options.page;
-      if (pageLabels.length === 0) {
-        throw new Error("fansly:endpoint-probe requires at least one --page <label>");
-      }
-      const app = await createAppContext();
-      try {
-        const results = await runFanslyEndpointProbe(app, {
-          pageLabels,
-          dryRun: Boolean(options.dryRun),
-          postId: options.post ?? null,
-          groupId: options.group ?? null,
-          fanAccountId: options.fan ?? null,
-          storyId: options.story ?? null,
-          mediaId: options.media ?? null,
-          bundleId: options.bundle ?? null,
-          albumId: options.album ?? null,
-          only: options.only ?? null,
-          ids: Boolean(options.ids),
-        });
-        for (const result of results) {
-          console.log(JSON.stringify(result));
-        }
-        console.log("");
-        console.log(summarizeEndpointProbe(results));
-      } finally {
-        await app.close();
-      }
     });
 
   program
@@ -2902,70 +2784,6 @@ export function buildProgram() {
           pageLabel: options.page === undefined ? null : String(options.page),
         });
         console.log(JSON.stringify(report, null, 2));
-      } finally {
-        await app.close();
-      }
-    });
-
-  program
-    .command("fansly-page-alias-backfill")
-    .option("--page <label>", "restrict to one page label", collectStringOption, [])
-    .option("--chunk-size <n>", "max account ids per Fansly request", parsePositiveInt, 100)
-    .action(async (options) => {
-      const app = await createAppContext();
-      try {
-        const result = await backfillFanslyPageAliases(app, {
-          pageLabels: options.page,
-          chunkSize: options.chunkSize,
-        });
-
-        printRows(
-          [
-            "page_label",
-            "memberships_scanned",
-            "unique_fan_ids",
-            "accounts_returned",
-            "fallback_misses",
-            "reconciled_accounts",
-            "notes_seen",
-            "notes_upserted",
-            "notes_deactivated",
-            "aliases_set",
-            "aliases_cleared",
-          ],
-          result.pages.map((page) => [
-            page.pageLabel,
-            page.membershipsScanned,
-            page.uniqueFanIds,
-            page.accountsReturned,
-            page.fallbackMisses,
-            page.reconciledAccounts,
-            page.notesSeen,
-            page.notesUpserted,
-            page.notesDeactivated,
-            page.aliasesSet,
-            page.aliasesCleared,
-          ]),
-        );
-
-        console.log("");
-        console.log(`pages=${result.totalPages}`);
-        console.log(`memberships_scanned=${result.totalMembershipsScanned}`);
-        console.log(`unique_fan_ids=${result.totalUniqueFanIds}`);
-        console.log(`accounts_returned=${result.totalAccountsReturned}`);
-        console.log(`fallback_misses=${result.totalFallbackMisses}`);
-        console.log(`reconciled_accounts=${result.totalReconciledAccounts}`);
-        console.log(`notes_seen=${result.totalNotesSeen}`);
-        console.log(`notes_upserted=${result.totalNotesUpserted}`);
-        console.log(`notes_deactivated=${result.totalNotesDeactivated}`);
-        console.log(`aliases_set=${result.totalAliasesSet}`);
-        console.log(`aliases_cleared=${result.totalAliasesCleared}`);
-        if (result.skippedEngineOwnedPages.length > 0) {
-          console.log(
-            `skipped_engine_pages=${result.skippedEngineOwnedPages.join(",")} `
-              + "(on the Fansly Sync Engine: `pnpm cli sync work enqueue --page <label> --resource fan-profiles.alias-backfill`)",
-          );
-        }
       } finally {
         await app.close();
       }

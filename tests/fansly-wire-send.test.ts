@@ -10,7 +10,6 @@ import {
   createOneShotSendCheck,
   FANSLY_CDN_ACCEPT,
   FANSLY_WIRE_MAX_BODY_BYTES,
-  FanslyAdapter,
   FanslySendRefusedError,
   sendFanslyCdnRequest,
   sendFanslyWireRequest,
@@ -18,7 +17,6 @@ import {
 } from "@agency_hub_core/fansly";
 import { createProxyRequestDispatcher } from "@agency_hub_core/shared";
 
-import { createTestFanslySendGuard } from "./helpers/fansly-send-guard.ts";
 import { startFakeFanslyNetwork, type FakeFanslyNetwork } from "./helpers/fansly-send-guard-network.ts";
 
 // The engine's wire send on the real transport: the production proxy
@@ -456,8 +454,33 @@ describe("a CDN hop (step 3, media-download.fetch)", () => {
   });
 });
 
-describe("the request is the adapter's", () => {
-  it("carries the same headers, in the same order, as the adapter's request for the route", async () => {
+describe("the request on the wire", () => {
+  // What the origin received from the legacy adapter for this route (undici's
+  // `fetch` through the same proxy dispatcher), captured when the adapter's
+  // HTTP was deleted (step 4, S4-20; base 16567c31). Until then this test sent
+  // the request both ways and compared them at the origin.
+  const ADAPTER_REQUEST_AT_ORIGIN: ReadonlyArray<readonly [string, string]> = [
+    ["host", "<origin>"],
+    ["connection", "keep-alive"],
+    ["user-agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:153.0) Gecko/20100101 Firefox/153.0"],
+    ["accept", "application/json, text/plain, */*"],
+    ["accept-language", "en-US,en;q=0.9"],
+    ["accept-encoding", "gzip, deflate, br, zstd"],
+    ["referer", "https://fansly.com/"],
+    ["fansly-client-id", "client-1"],
+    ["fansly-client-ts", "<ts>"],
+    ["fansly-session-id", "session-1"],
+    ["fansly-client-check", "check-account"],
+    ["origin", "https://fansly.com"],
+    ["dnt", "1"],
+    ["sec-gpc", "1"],
+    ["sec-fetch-dest", "empty"],
+    ["sec-fetch-mode", "cors"],
+    ["sec-fetch-site", "same-site"],
+    ["authorization", "synthetic-token"],
+  ];
+
+  it("reaches the origin with the headers the adapter's request had, in the same order, and nothing else", async () => {
     const seen: IncomingMessage["rawHeaders"][] = [];
     const answer = JSON.stringify({
       success: true,
@@ -476,18 +499,6 @@ describe("the request is the adapter's", () => {
       fanslySessionId: "session-1",
       routeChecks: { account: "check-account" },
     };
-    const adapter = new FanslyAdapter({ baseUrl: network.baseUrl });
-    try {
-      await adapter.getAccountsByIdsPage({
-        session,
-        proxy: { url: network.proxyUrl },
-        egressKey: network.proxyUrl,
-        sendGuard: createTestFanslySendGuard(),
-        remainingAttempts: () => 1,
-      }, ["fan-1", "fan-2"]);
-    } finally {
-      await adapter.close();
-    }
     const outcome = await sendFanslyWireRequest(
       dispatcher,
       buildFanslyWireRequest("accounts.by_ids", { ids: ["fan-1", "fan-2"] }, {
@@ -500,18 +511,17 @@ describe("the request is the adapter's", () => {
     );
     expect(outcome).toMatchObject({ kind: "response", status: 200 });
 
-    const pairs = (raw: string[]) => raw.reduce<Array<[string, string]>>((list, value, index) => {
+    expect(seen).toHaveLength(1);
+    const raw = seen[0]!;
+    const atOrigin = raw.reduce<Array<[string, string]>>((list, value, index) => {
       if (index % 2 === 0) list.push([value.toLowerCase(), raw[index + 1]!]);
       return list;
     }, []);
-    const [adapterHeaders, wireHeaders] = seen.map((raw) => pairs(raw));
-    const comparable = (headers: Array<[string, string]>) => headers.map(([name, value]) =>
-      name === "fansly-client-ts" ? [name, "<ts>"] : [name, value]);
-    expect(wireHeaders).toBeDefined();
-    expect(comparable(wireHeaders!)).toEqual(comparable(adapterHeaders!));
-    expect(network.arrivals.map((arrival) => arrival.path)).toEqual([
-      "/account?ngsw-bypass=true&ids=fan-1%2Cfan-2",
-      "/account?ngsw-bypass=true&ids=fan-1%2Cfan-2",
-    ]);
+    expect(atOrigin.find(([name]) => name === "host")?.[1]).toBe(new URL(network.baseUrl).host);
+    expect(atOrigin.find(([name]) => name === "fansly-client-ts")?.[1]).toMatch(/^\d{13}$/);
+    expect(atOrigin.map(([name, value]) =>
+      name === "host" ? [name, "<origin>"] : name === "fansly-client-ts" ? [name, "<ts>"] : [name, value]))
+      .toEqual(ADAPTER_REQUEST_AT_ORIGIN);
+    expect(network.arrivals.map((arrival) => arrival.path)).toEqual(["/account?ngsw-bypass=true&ids=fan-1%2Cfan-2"]);
   });
 });

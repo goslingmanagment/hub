@@ -16,7 +16,6 @@ import {
   isFanslyPageEngineOwned,
   listDispatchableAgentHydrationRequests,
   listDispatchingAgentHydrationRequests,
-  listEngineOwnedFanslyPages,
   listExpirableAgentHydrationRequests,
   listRunnablePageSync,
   listStuckAgentHydrationDispatches,
@@ -24,8 +23,6 @@ import {
   releaseTargetedPageSyncLease,
   requestPageSync,
   startSyncRun,
-  upsertFanPages,
-  upsertFans,
   type SyncPageMode,
 } from "@agency_hub_core/db";
 
@@ -37,12 +34,8 @@ import {
   sweepStuckAgentHydration,
 } from "../apps/runtime/src/services/agent-hydration.ts";
 import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
-import { runFanslyEndpointProbe } from "../apps/runtime/src/services/fansly-endpoint-probe.ts";
-import { backfillFanslyPageAliases } from "../apps/runtime/src/services/fansly-page-alias-backfill.ts";
-import { runFanslyReplayProbe } from "../apps/runtime/src/services/fansly-replay-probe.ts";
 import { saveProxy } from "../apps/runtime/src/services/page-context.ts";
 import { setPageProxy } from "../apps/runtime/src/services/page-proxies.ts";
-import { FANSLY_PAGE_ON_SYNC_ENGINE_CODE } from "../apps/runtime/src/services/sync-engine-guard.ts";
 import {
   resetIntegrationDatabase,
   seedFanslyPage,
@@ -196,12 +189,9 @@ describe("(a) the legacy page-sync schedulers", () => {
     expect(await lease(pages.handover.id)).toMatchObject({ pageId: pages.handover.id, stream: "light" });
   });
 
-  it("the repository readers name the engine's pages and only them", async () => {
+  it("the repository reader names the engine's pages and only them", async () => {
     const pages = await seedFencePages();
-    expect(await listEngineOwnedFanslyPages(db().db)).toEqual([
-      { pageId: pages.handover.id, label: "fence-handover", mode: "handover" },
-      { pageId: pages.live.id, label: "fence-live", mode: "live" },
-    ]);
+    expect(await isFanslyPageEngineOwned(db().db, pages.handover.id)).toEqual({ owned: true, mode: "handover" });
     expect(await isFanslyPageEngineOwned(db().db, pages.live.id)).toEqual({ owned: true, mode: "live" });
     expect(await isFanslyPageEngineOwned(db().db, pages.shadow.id)).toEqual({ owned: false, mode: "shadow" });
     expect(await isFanslyPageEngineOwned(db().db, pages.onlyfans.id)).toEqual({ owned: false, mode: null });
@@ -348,29 +338,25 @@ describe("(d) agent hydration", () => {
   });
 });
 
-// ── (g) the /account/me levers, the probes, the scripts ─────────────────────
+// ── (g) the /account/me levers and the describer's download ─────────────────
+//
+// The probes and the alias backfill that were fenced here are deleted (step 4,
+// S4-20): `sync probe` and `sync work enqueue --resource
+// fan-profiles.alias-backfill` are the engine's. Nothing outside the engine
+// can send for a Fansly page any more, so "sent nothing" is read off the
+// journal of the senders outside it (`fansly_send_log`).
 
-describe("(g) the legacy levers refuse an engine page with a 409 and send nothing", () => {
-  function adapterSpies() {
-    return {
-      getAccountMe: vi.fn(async () => { throw new Error("must not send"); }),
-      verifySession: vi.fn(async () => { throw new Error("must not send"); }),
-      getAccountsByIdsPage: vi.fn(async () => { throw new Error("must not send"); }),
-    };
-  }
-
+describe("(g) the levers refuse a page the engine does not run with a 409 and send nothing", () => {
   async function engineFixture(mode: SyncPageMode, label = "fence-lever") {
-    const adapter = adapterSpies();
-    const app = createTestAppContext(db(), { adapter: adapter as unknown as AppContext["adapter"] });
+    const app = createTestAppContext(db());
     const page = await seedPage(app, label);
     await setMode(page.id, mode);
-    return { app, page, adapter };
+    return { app, page };
   }
 
-  const refusal = (label: string, mode: string) => expect.objectContaining({
-    name: "FanslyPageOnSyncEngineError", statusCode: 409, code: FANSLY_PAGE_ON_SYNC_ENGINE_CODE,
-    pageLabel: label, mode,
-  });
+  async function journaledSends(): Promise<number> {
+    return (await db().pool.query("select count(*)::int as n from fansly_send_log")).rows[0].n;
+  }
 
   // S3-05: on a `live` page these routes go through the engine
   // (tests/sync-account-routing.integration.test.ts); a page being switched
@@ -405,8 +391,7 @@ describe("(g) the legacy levers refuse an engine page with a 409 and send nothin
     } finally {
       await server.close();
     }
-    expect(f.adapter.getAccountMe).not.toHaveBeenCalled();
-    expect(f.adapter.verifySession).not.toHaveBeenCalled();
+    expect(await journaledSends()).toBe(0);
   });
 
   it("the verify route refuses a shadow page: no legacy sender is left behind it (S4-19)", async () => {
@@ -429,35 +414,15 @@ describe("(g) the legacy levers refuse an engine page with a 409 and send nothin
     } finally {
       await server.close();
     }
-    expect(f.adapter.getAccountMe).not.toHaveBeenCalled();
-    expect(f.adapter.verifySession).not.toHaveBeenCalled();
-    expect((await db().pool.query("select count(*)::int as n from fansly_send_log")).rows[0].n).toBe(0);
+    expect(await journaledSends()).toBe(0);
   });
 
-  it("the services behind the CLIs refuse before anything is resolved or sent", async () => {
+  it("the proxy change behind the CLI refuses a page being switched before anything is resolved or sent", async () => {
     const f = await engineFixture("handover");
     const switching = expect.objectContaining({ name: "FanslyPageSwitchingError", statusCode: 409, code: "fansly_page_switching" });
     await expect(setPageProxy(f.app, f.page.label, { url: "http://proxy.example.test:8080" }))
       .rejects.toThrow(switching);
-    await expect(backfillFanslyPageAliases(f.app, { pageLabels: [f.page.label] }))
-      .rejects.toThrow(refusal(f.page.label, "handover"));
-    await expect(runFanslyEndpointProbe(f.app, { pageLabels: [f.page.label], dryRun: true }))
-      .rejects.toThrow(refusal(f.page.label, "handover"));
-    await expect(runFanslyReplayProbe(f.app, { pageLabels: [f.page.label], dryRun: true }))
-      .rejects.toThrow(refusal(f.page.label, "handover"));
-    expect(f.adapter.verifySession).not.toHaveBeenCalled();
-    expect(f.adapter.getAccountsByIdsPage).not.toHaveBeenCalled();
-    expect((await db().pool.query("select count(*)::int as n from fansly_send_log")).rows[0].n).toBe(0);
-  });
-
-  it("an unrestricted alias backfill skips the engine's page and names it", async () => {
-    const f = await engineFixture("live");
-    const [fan] = await upsertFans(f.app.db, [{ platform: "fansly", platformUserId: "4242" }]);
-    await upsertFanPages(f.app.db, [{ fanId: fan!.id, platformAccountId: f.page.id, isFollower: true }]);
-    expect(await backfillFanslyPageAliases(f.app, {})).toMatchObject({
-      totalPages: 0, pages: [], skippedEngineOwnedPages: [f.page.label],
-    });
-    expect(f.adapter.getAccountsByIdsPage).not.toHaveBeenCalled();
+    expect(await journaledSends()).toBe(0);
   });
 
   it("the AI describer's CDN download is refused before an egress is resolved", async () => {
@@ -470,11 +435,8 @@ describe("(g) the legacy levers refuse an engine page with a 409 and send nothin
       .rejects.toThrow();
   });
 
-  it("a shadow page passes the probes and the alias backfill as before (J8); its /account/me levers refuse (S4-19)", async () => {
-    // The adapter answers with a sentinel: reaching it is the "as before".
-    const sent = () => { throw new Error("adapter reached"); };
-    const adapter = { getAccountMe: vi.fn(sent), verifySession: vi.fn(sent), getAccountsByIdsPage: vi.fn(sent) };
-    const app = createTestAppContext(db(), { adapter: adapter as unknown as AppContext["adapter"] });
+  it("a shadow page is not fenced (J8), and nothing sends for it: the describer downloads no Fansly file, its /account/me levers refuse (S4-19)", async () => {
+    const app = createTestAppContext(db());
     const page = await seedPage(app, "fence-shadow-lever");
     await setMode(page.id, "shadow");
 
@@ -484,6 +446,10 @@ describe("(g) the legacy levers refuse an engine page with a 409 and send nothin
       .rejects.toThrow(/has no assigned proxy/);
 
     await saveProxy(app, page.id, { url: "http://proxy.example.test:8080" });
+    // With an egress, the Fansly file is still not this path's to fetch: no
+    // legacy sender is left for the page (S4-20), so the row looks again later.
+    expect(await downloadAiMediaThroughPageEgress(app, { url: "https://cdn3.fansly.com/a.jpg", pageId: page.id }))
+      .toEqual({ ok: false, reason: "send_guard", httpStatus: null });
     await createUserAccount(app, { username: "owner", role: "owner", password: "owner-secret" }, { source: "cli" });
     const server = await buildApiServer(app);
     await server.ready();
@@ -507,20 +473,7 @@ describe("(g) the legacy levers refuse an engine page with a 409 and send nothin
 
     await expect(setPageProxy(app, page.label, { url: "http://proxy.example.test:8080" }))
       .rejects.toMatchObject({ code: "legacy_sync_retired", statusCode: 409 });
-    expect(adapter.verifySession).not.toHaveBeenCalled();
-    expect(adapter.getAccountMe).not.toHaveBeenCalled();
-    const endpoint = await runFanslyEndpointProbe(app, { pageLabels: [page.label], dryRun: true });
-    expect(endpoint.length).toBeGreaterThan(0);
-    expect(new Set(endpoint.map((row) => row.verdict))).toEqual(new Set(["skipped"]));
-    const replay = await runFanslyReplayProbe(app, { pageLabels: [page.label], dryRun: true });
-    expect(replay.length).toBeGreaterThan(0);
-    expect(new Set(replay.map((row) => row.verdict))).toEqual(new Set(["skipped"]));
-
-    const [fan] = await upsertFans(app.db, [{ platform: "fansly", platformUserId: "4243" }]);
-    await upsertFanPages(app.db, [{ fanId: fan!.id, platformAccountId: page.id, isFollower: true }]);
-    await expect(backfillFanslyPageAliases(app, {})).rejects.toThrow("adapter reached");
-    await expect(backfillFanslyPageAliases(app, { pageLabels: [page.label] })).rejects.toThrow("adapter reached");
-    expect(adapter.getAccountsByIdsPage).toHaveBeenCalledTimes(2);
+    expect(await journaledSends()).toBe(0);
   });
 });
 
@@ -536,8 +489,7 @@ describe("(g) the runtime CLI", () => {
   }
 
   it("`page verify` refuses a page being switched", async () => {
-    const getAccountMe = vi.fn(async () => { throw new Error("must not send"); });
-    const app = createTestAppContext(db(), { adapter: { getAccountMe } as unknown as AppContext["adapter"] });
+    const app = createTestAppContext(db());
     const page = await seedPage(app, "fence-cli");
     await setMode(page.id, "handover");
     try {
@@ -549,14 +501,11 @@ describe("(g) the runtime CLI", () => {
       vi.doUnmock("../apps/runtime/src/bootstrap.ts");
       vi.resetModules();
     }
-    expect(getAccountMe).not.toHaveBeenCalled();
+    expect((await db().pool.query("select count(*)::int as n from fansly_send_log")).rows[0].n).toBe(0);
   });
 
   it("`page verify` refuses a shadow page: no legacy sender is left behind it (S4-19)", async () => {
-    const getAccountMe = vi.fn(async () => { throw new Error("adapter reached"); });
-    const app = createTestAppContext(db(), {
-      adapter: { getAccountMe } as unknown as AppContext["adapter"], databaseUrl: db().connectionString,
-    });
+    const app = createTestAppContext(db(), { databaseUrl: db().connectionString });
     const page = await seedPage(app, "fence-cli-shadow");
     await saveProxy(app, page.id, { url: "http://proxy.example.test:8080" });
     await setMode(page.id, "shadow");
@@ -564,7 +513,7 @@ describe("(g) the runtime CLI", () => {
       const verify = await loadCliProgram(app);
       await expect(verify.parseAsync(["page", "verify", "--page", page.label], { from: "user" }))
         .rejects.toThrow(expect.objectContaining({ code: "legacy_sync_retired", statusCode: 409 }));
-      expect(getAccountMe).not.toHaveBeenCalled();
+      expect((await db().pool.query("select count(*)::int as n from fansly_send_log")).rows[0].n).toBe(0);
     } finally {
       vi.doUnmock("../apps/runtime/src/bootstrap.ts");
       vi.resetModules();

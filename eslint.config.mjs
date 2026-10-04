@@ -196,9 +196,9 @@ export default tseslint.config(
     },
   },
   {
-    // Existing HTTP-only undici exceptions keep named HTTP imports. A
+    // The one HTTP-only undici exception keeps named HTTP imports. A
     // dynamic namespace would also expose WebSocket, so it is not exempt.
-    files: ["packages/shared/src/http-client.ts", "packages/fansly/src/adapter.ts"],
+    files: ["packages/shared/src/http-client.ts"],
     rules: {
       "no-restricted-syntax": ["error", moneyRestriction, dynamicUndiciRestriction, dynamicWsRestriction],
     },

@@ -1,11 +1,11 @@
 import { safeFanslyAnswerHeaders, type FanslySendCompletionOutcome, type FanslySendLease } from "@agency_hub_core/fansly";
 import type { Dispatcher } from "undici";
 
-// Plan §2.4/§2.5: the senders outside the adapter (CDN media download, the
-// WebSocket handshake) ride a page's egress through the same per-page send
-// guard. Each physical HTTP request is one capture: the lease's dispatcher
-// refuses a second dispatch (a redirect hop is a new capture), and the
-// request is completed once it has settled.
+// Plan §2.4: the page socket's handshake rides the page's egress on a send
+// lease — one physical HTTP request, whose dispatcher refuses a second
+// dispatch and which is completed once it has settled. The lease is the Sync
+// Engine's (`createEngineUpgradeLease`: the pacer's admission); the legacy
+// guard's senders are deleted (step 4).
 
 /** Hosts of Fansly's origins: the REST API, the WebSocket and the media CDNs. */
 export function isFanslyHost(hostname: string): boolean {

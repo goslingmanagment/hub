@@ -5,7 +5,6 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type * as DbModule from "@agency_hub_core/db";
-import type * as SyncEngineGuardModule from "../apps/runtime/src/services/sync-engine-guard.ts";
 import type * as SyncServiceModule from "../apps/runtime/src/services/sync.ts";
 import type { ConstructorOptions, Queue, SendOptions, StopOptions } from "pg-boss";
 
@@ -51,7 +50,6 @@ const cliMocks = vi.hoisted(() => {
 
   return {
     PgBossMock,
-    backfillFanslyPageAliases: vi.fn(),
     bossBehavior,
     bossInstances,
     countHarvestObservations: vi.fn(),
@@ -111,19 +109,6 @@ vi.mock("../apps/runtime/src/services/page-onboarding.ts", () => ({
 vi.mock("../apps/runtime/src/services/page-proxies.ts", () => ({
   setPageProxy: cliMocks.setPageProxy,
   removePageProxy: cliMocks.removePageProxy,
-}));
-
-vi.mock("../apps/runtime/src/services/fansly-page-alias-backfill.ts", () => ({
-  backfillFanslyPageAliases: cliMocks.backfillFanslyPageAliases,
-}));
-
-// The step-3 legacy fences (S3-01) read `sync_pages`; these parsing tests run
-// without a database, on pages the legacy engine owns. The fences themselves
-// are tested in tests/sync-legacy-fence.integration.test.ts.
-vi.mock("../apps/runtime/src/services/sync-engine-guard.ts", async (importOriginal) => ({
-  ...await importOriginal<typeof SyncEngineGuardModule>(),
-  assertLegacyOwnsFanslyPage: async () => undefined,
-  assertLegacyOwnsFanslyPageLabels: async () => undefined,
 }));
 
 vi.mock("../apps/runtime/src/services/notification-incidents.ts", () => ({
@@ -217,7 +202,6 @@ describe("CLI parsing", () => {
     cliMocks.bossBehavior.sendError = null;
     cliMocks.bossBehavior.sendResult = "job-1";
     cliMocks.bossInstances.length = 0;
-    cliMocks.backfillFanslyPageAliases.mockReset();
     cliMocks.createAppContext.mockReset();
     cliMocks.countHarvestObservations.mockReset();
     cliMocks.findPageByLabel.mockReset();
@@ -249,7 +233,6 @@ describe("CLI parsing", () => {
       db: {},
       pool: {},
       logger: {},
-      adapter: {},
       onlyFansAdapter: {},
       close: vi.fn(async () => {}),
     });
@@ -275,34 +258,6 @@ describe("CLI parsing", () => {
       page: { id: 1, label: "page" },
       requests: [],
       wakeupId: "job-1",
-    });
-    cliMocks.backfillFanslyPageAliases.mockResolvedValue({
-      totalPages: 1,
-      totalMembershipsScanned: 10,
-      totalUniqueFanIds: 10,
-      totalAccountsReturned: 8,
-      totalFallbackMisses: 2,
-      totalReconciledAccounts: 8,
-      totalNotesSeen: 5,
-      totalNotesUpserted: 5,
-      totalNotesDeactivated: 1,
-      totalAliasesSet: 3,
-      totalAliasesCleared: 1,
-      pages: [{
-        pageId: 44,
-        pageLabel: "lora-main",
-        membershipsScanned: 10,
-        uniqueFanIds: 10,
-        accountsReturned: 8,
-        fallbackMisses: 2,
-        reconciledAccounts: 8,
-        notesSeen: 5,
-        notesUpserted: 5,
-        notesDeactivated: 1,
-        aliasesSet: 3,
-        aliasesCleared: 1,
-      }],
-      skippedEngineOwnedPages: [],
     });
     cliMocks.waitForRequestedSyncRequests.mockResolvedValue(undefined);
     cliMocks.removePageProxy.mockResolvedValue(undefined);
@@ -873,48 +828,6 @@ describe("CLI parsing", () => {
     );
 
     expect(cliMocks.requestPageSync).not.toHaveBeenCalled();
-  });
-
-  it("runs the Fansly page alias backfill with repeated page filters", async () => {
-    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-    const program = buildProgram();
-
-    await program.parseAsync([
-      "fansly-page-alias-backfill",
-      "--page",
-      "lora-main",
-      "--page",
-      "lora-vip",
-      "--chunk-size",
-      "50",
-    ], { from: "user" });
-
-    expect(cliMocks.backfillFanslyPageAliases).toHaveBeenCalledWith(expect.anything(), {
-      pageLabels: ["lora-main", "lora-vip"],
-      chunkSize: 50,
-    });
-    expect(logSpy).toHaveBeenCalledWith(
-      "page_label\tmemberships_scanned\tunique_fan_ids\taccounts_returned\tfallback_misses\treconciled_accounts\tnotes_seen\tnotes_upserted\tnotes_deactivated\taliases_set\taliases_cleared",
-    );
-    expect(logSpy).toHaveBeenCalledWith("pages=1");
-    expect(logSpy).toHaveBeenCalledWith("aliases_cleared=1");
-  });
-
-  it("names the pages an unrestricted alias backfill left to the Fansly Sync Engine", async () => {
-    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-    cliMocks.backfillFanslyPageAliases.mockResolvedValueOnce({
-      totalPages: 0, totalMembershipsScanned: 0, totalUniqueFanIds: 0, totalAccountsReturned: 0,
-      totalFallbackMisses: 0, totalReconciledAccounts: 0, totalNotesSeen: 0, totalNotesUpserted: 0,
-      totalNotesDeactivated: 0, totalAliasesSet: 0, totalAliasesCleared: 0, pages: [],
-      skippedEngineOwnedPages: ["lilly-1"],
-    });
-
-    await buildProgram().parseAsync(["fansly-page-alias-backfill"], { from: "user" });
-
-    expect(logSpy).toHaveBeenCalledWith(
-      "skipped_engine_pages=lilly-1 (on the Fansly Sync Engine: "
-        + "`pnpm cli sync work enqueue --page <label> --resource fan-profiles.alias-backfill`)",
-    );
   });
 
   it("queues a fresh sync.planner recovery job", async () => {

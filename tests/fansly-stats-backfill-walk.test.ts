@@ -2,10 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import { canParseFanslyStatsObservation } from "../apps/runtime/src/services/canonicalize/fansly-stats.ts";
 import {
-  describeStatsMonthAnswer,
-  probeStatsMonth,
-} from "../apps/runtime/src/services/fansly-endpoint-probe.ts";
-import {
   advanceBroadcastWalk,
   broadcastMessageRows,
   classifyStatsMonth,
@@ -638,46 +634,5 @@ describe("the month form — the only history /it/amoie/stats serves", () => {
     expect(classifyStatsWindow({ dataset: { datapoints: [{ timestamp: 1 }] } })).toBe("nonempty");
     expect(classifyStatsWindow({ dataset: { datapoints: [], profileDatapoints: [{}] } }))
       .toBe("nonempty");
-  });
-});
-
-describe("the [F1] probe route", () => {
-  it("asks for the month TWO back, which the trailing window cannot reach", () => {
-    // One month back overlaps the trailing window, so a served window that
-    // happened to cover it would prove nothing.
-    expect(probeStatsMonth(new Date("2026-08-22T09:00:00.000Z")))
-      .toEqual({ year: 2026, month: 6 });
-    expect(probeStatsMonth(new Date("2026-01-05T00:00:00.000Z")))
-      .toEqual({ year: 2025, month: 11 });
-  });
-
-  it("prints the served window and the verdict, not the numbers", () => {
-    const honoured = describeStatsMonthAnswer({ year: 2026, month: 6 }, {
-      dataset: {
-        dateAfter: Date.UTC(2026, 5, 1),
-        dateBefore: Date.UTC(2026, 6, 1),
-        datapoints: [],
-        profileDatapoints: new Array(30).fill({ timestamp: 1, stats: [] }),
-      },
-    });
-    expect(honoured).toContain("asked year=2026 month=6");
-    // ISO DAYS, not values to redact: the served window IS the answer.
-    expect(honoured).toContain("served dateAfter=2026-06-01 dateBefore=2026-07-01");
-    expect(honoured).toContain("profileDatapoints=30");
-    expect(honoured).toContain("MONTH FORM HONOURED");
-
-    const refused = describeStatsMonthAnswer({ year: 2026, month: 6 }, {
-      dataset: {
-        dateAfter: Date.UTC(2026, 6, 21),
-        dateBefore: Date.UTC(2026, 7, 21),
-        datapoints: [],
-        profileDatapoints: [],
-      },
-    });
-    expect(refused).toContain("MONTH FORM NOT HONOURED");
-    // A response describing no window judges nothing, the way a 401 judges no
-    // route: absence of evidence is not evidence.
-    expect(describeStatsMonthAnswer({ year: 2026, month: 6 }, { dataset: {} }))
-      .toContain("UNJUDGED");
   });
 });

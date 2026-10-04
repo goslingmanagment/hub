@@ -1,10 +1,9 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   ensurePageSyncStates, openNotificationIncidentWithRecoveryGuard,
   retireLapsedPageSubscriptionsForEmptySnapshot, upsertCheckpointProgress, upsertFanPages, upsertFans,
   upsertPageSubscription,
 } from "@agency_hub_core/db";
-import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { incidentKey } from "../apps/runtime/src/services/notification-incidents.ts";
 import { saveProxy } from "../apps/runtime/src/services/page-context.ts";
 import { resetIntegrationDatabase, seedFanslyPage, startTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
@@ -13,7 +12,8 @@ import { INTEGRATION_TEST_TIMEOUT_MS } from "./helpers/timeouts.ts";
 
 // Production lilly-1 on 2026-09-28: one current subscription that lapsed at
 // 15:47:35 with auto-renew off, then every /subscribers?status=3,4 answer was
-// an accepted contract with zero rows and totalActive=0.
+// an accepted contract with zero rows and totalActive=0. The state such a walk
+// leaves is seeded here; the retirement rule is asked directly.
 const REQUEST_SEQ = 4123;
 const LILLY_ENDS_AT = "2026-09-28T15:47:35.000Z";
 const LILLY_LAST_SEEN_AT = "2026-09-28T14:54:27.297Z";
@@ -30,17 +30,9 @@ type SeededSubscription = {
   autoRenew: boolean | null;
   lastSeenAt?: string;
 };
-type SubscribersPage = {
-  total?: number | null | undefined; items: unknown[]; offset: number; done: boolean;
-  contractAccepted?: boolean | undefined; raw: unknown;
-};
 
 const lapsed = (id: string): SeededSubscription => ({ id, endsAt: LILLY_ENDS_AT, autoRenew: false });
 const renewing = (id: string): SeededSubscription => ({ id, endsAt: "2099-01-01T00:00:00.000Z", autoRenew: true });
-const statedEmpty = (): SubscribersPage => ({
-  total: 0, items: [], offset: 0, done: true, contractAccepted: true,
-  raw: { stats: { totalActive: 0, totalExpired: 50, total: 50 }, subscriptions: [] },
-});
 
 describe("Fansly subscribers stated-empty snapshot", () => {
   let db: StartedTestDatabase;
@@ -51,25 +43,8 @@ describe("Fansly subscribers stated-empty snapshot", () => {
   async function fixture(input: {
     subscriptions: SeededSubscription[];
     cursor?: Record<string, unknown>;
-    serve: (params: { offset?: number; status?: string }) => SubscribersPage | Promise<SubscribersPage>;
-    /** The /account/me account the light and followers streams read. */
-    accountMe?: Record<string, unknown>;
   }) {
-    const getSubscribersPage = vi.fn(async (_context: unknown, params: { offset?: number; status?: string }) =>
-      input.serve(params));
-    const getAccountsByIdsPage = vi.fn(async (_context: unknown, ids: string[]) => ({
-      parsed: ids.map((id) => ({ id, username: id, displayName: null, createdAt: 1_770_000_000_000 })),
-      raw: {},
-    }));
-    const account = input.accountMe ?? {
-      id: "acct-lilly-1", username: "lilly1", displayName: null, createdAt: 1_700_000_000_000,
-      followCount: 10, subscriberCount: 0,
-    };
-    const getAccountMe = vi.fn(async () => ({ parsed: { account }, raw: { account } }));
-    const app = createTestAppContext(db, {
-      adapter: { getSubscribersPage, getAccountsByIdsPage, getAccountMe } as unknown as AppContext["adapter"],
-      fanslyDefaultDelayMs: 0,
-    });
+    const app = createTestAppContext(db, { fanslyDefaultDelayMs: 0 });
     const { page } = await seedFanslyPage(app.db, app.config.encryptionKey, 1, "lilly-1");
     if (!page) throw new Error("test setup: page missing");
     await saveProxy(app, page.id, { url: "http://proxy.example.test:8080", username: "test", password: "test" });
@@ -108,7 +83,7 @@ describe("Fansly subscribers stated-empty snapshot", () => {
       incidentKey: key, kind: "stream_failed_threshold", platformAccountId: page.id, stream: "subscribers",
       occurredAt: new Date("2026-09-28T15:58:55.204Z"),
     });
-    return { app, page, key, getSubscribersPage, getAccountsByIdsPage };
+    return { app, page, key };
   }
 
   async function subscriptions(pageId: number) {
@@ -141,7 +116,6 @@ describe("Fansly subscribers stated-empty snapshot", () => {
         { ...lapsed("touched"), lastSeenAt: "2026-09-29T12:00:00.000Z" },
         { ...lapsed("old-inactive") },
       ],
-      serve: statedEmpty,
     });
     await db.pool.query(
       "update page_subscriptions set is_current=false where platform_account_id=$1 and platform_subscription_id='old-inactive'",
@@ -180,7 +154,6 @@ describe("Fansly subscribers stated-empty snapshot", () => {
         lapsed("lapsed"),
         { ...renewing("touched"), lastSeenAt: "2026-09-29T12:00:00.000Z" },
       ],
-      serve: statedEmpty,
     });
     const lapsedRuleOnly = {
       platformAccountId: f.page.id, generation: 4122,

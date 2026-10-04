@@ -1,21 +1,5 @@
 import { ofapiCollectionPolicyHooks } from "./services/ofapi-collection-policy.ts";
 import { assertRuntimeSchemaReady, createDb, createPool, type Database } from "@agency_hub_core/db";
-import { FanslyAdapter } from "@agency_hub_core/fansly";
-import type {
-  FanslyAccount,
-  FanslyAccountMeResponse,
-  FanslyEarningsAccountsPageResponse,
-  FanslyEarningsTransaction,
-  FanslyFollower,
-  FanslyGroupDetail,
-  FanslyMessagesPageResponse,
-  FanslyMessagingGroupsPageResponse,
-  FanslyPostsPageResponse,
-  FanslyPostTipsResponse,
-  FanslyTrackingLinksResponse,
-  FanslyRequestContext,
-  FanslySubscriber,
-} from "@agency_hub_core/fansly";
 import {
   createLogger,
   loadConfig,
@@ -41,240 +25,11 @@ import {
   createElevenLabsVoiceProvider,
   type VoiceTtsProvider,
 } from "./services/voice-elevenlabs-provider.ts";
-import type { ProviderAdapter } from "./services/provider.ts";
 import {
   createFanslySendGuards,
   type FanslySendGuardRegistry,
   type FanslySendHolderRole,
 } from "./services/fansly-send-guard/index.ts";
-
-export type AdapterLike = ProviderAdapter<
-  FanslyRequestContext,
-  FanslyAccountMeResponse,
-  FanslyAccount,
-  FanslyEarningsTransaction,
-  FanslySubscriber,
-  FanslyFollower
-> & {
-  getMessagingGroupsPage(
-    context: FanslyRequestContext,
-    params: {
-      offset?: number;
-      limit?: number;
-      sortOrder?: number;
-      flags?: number;
-      search?: string;
-      subscriptionTierId?: string | null;
-      listIds?: string | null;
-    },
-  ): Promise<FanslyMessagingGroupsPageResponse>;
-  getGroupDetail(context: FanslyRequestContext, groupId: string): Promise<{
-    parsed: FanslyGroupDetail;
-    raw: FanslyGroupDetail;
-  }>;
-  getMessagesPage(
-    context: FanslyRequestContext,
-    params: {
-      groupId: string;
-      limit?: number;
-      before?: string | null;
-    },
-  ): Promise<FanslyMessagesPageResponse>;
-  getPostsPage(
-    context: FanslyRequestContext,
-    accountId: string,
-    params?: {
-      before?: string | null;
-      wallId?: string | null;
-      pageIndex?: number;
-    },
-  ): Promise<FanslyPostsPageResponse>;
-  /** WP-F6 — `GET /post?ids=<csv>`, the engagement refresh phase's only egress.
-   *  Same envelope as the timeline, so it journals under the existing `posts`
-   *  kind and the v6 family parses it with no new branch. */
-  getPostsByIds(
-    context: FanslyRequestContext,
-    ids: string[],
-  ): Promise<FanslyPostsPageResponse>;
-  getTipsByTargetIds(
-    context: FanslyRequestContext,
-    targetIds: string[],
-  ): Promise<FanslyPostTipsResponse>;
-  getEarningsAccountsPage(
-    context: FanslyRequestContext,
-    params: {
-      after?: Date | null;
-      before?: Date | null;
-    },
-  ): Promise<FanslyEarningsAccountsPageResponse>;
-  /** `/trackinglinks` — cumulative promo-link counters (WP-F1 step 5). */
-  getTrackingLinks(context: FanslyRequestContext): Promise<FanslyTrackingLinksResponse>;
-
-  // WP-F1: the `stats_snapshot` lane. Loosely typed in and out on purpose —
-  // the handler journals before it asserts, so a typed parse here would refuse
-  // bytes DP 7 requires us to keep.
-  // `year`/`month` are the named-month form (1–12); 0/0 — the default — means
-  // "read the bounds". The bounds are honoured only inside the route's own
-  // trailing window, so every window OLDER than that is asked for by month.
-  getAccountStats(
-    context: FanslyRequestContext,
-    params: {
-      beforeDate: Date;
-      afterDate: Date;
-      periodMs: number;
-      year?: number;
-      month?: number;
-    },
-  ): Promise<{ items: unknown; raw: unknown }>;
-  getMediaOfferStats(
-    context: FanslyRequestContext,
-    params: { mediaOfferId: string; beforeDate: Date; afterDate: Date; periodMs: number },
-  ): Promise<{ items: unknown; raw: unknown }>;
-  getEarningsStatsWindow(
-    context: FanslyRequestContext,
-    params: { before: Date; after: Date; limit?: number | null; offset?: number | null },
-  ): Promise<{ items: unknown; raw: unknown }>;
-  getEarningsMonthlyStats(
-    context: FanslyRequestContext,
-    params?: { before?: Date | null; after?: Date | null },
-  ): Promise<{ items: unknown; raw: unknown }>;
-  getDiscoveryMediaSuggestions(
-    context: FanslyRequestContext,
-    params: { limit?: number | null; before?: number | null; offset?: number | null },
-  ): Promise<{ items: unknown; raw: unknown }>;
-
-  // WP-F2: the `notifications` lane. `before` is a NOTIFICATION ID, not a
-  // timestamp; `types` omitted is the unfiltered form A1 asks for.
-  getNotificationsPage(
-    context: FanslyRequestContext,
-    params: { before?: string | null; after?: string | null; types?: readonly number[] | null },
-  ): Promise<{ items: unknown; raw: unknown }>;
-
-  // WP-F3: the `catalog` lane. Loosely typed in and out — every one of these
-  // responses is journaled BEFORE anything asserts a shape about it.
-  getVaultAlbums(context: FanslyRequestContext): Promise<{ items: unknown; raw: unknown }>;
-  getUserVaultAlbums(
-    context: FanslyRequestContext,
-    params: { accountId: string },
-  ): Promise<{ items: unknown; raw: unknown }>;
-  getSubscriptionTiers(context: FanslyRequestContext): Promise<{ items: unknown; raw: unknown }>;
-  getGiftCodes(context: FanslyRequestContext): Promise<{ items: unknown; raw: unknown }>;
-  getAutomatedMessages(context: FanslyRequestContext): Promise<{ items: unknown; raw: unknown }>;
-  // `before`/`after` are the LITERAL string "0" on the first page (§ the app
-  // bundle); `mediaType` is present and empty when unfiltered.
-  getVaultMediaPage(
-    context: FanslyRequestContext,
-    params: {
-      albumId?: string | null;
-      type?: number | null;
-      mediaType?: string | null;
-      before?: string | null;
-      after?: string | null;
-      search?: string | null;
-    },
-  ): Promise<{ items: unknown; raw: unknown }>;
-  getAccountMediaByIds(
-    context: FanslyRequestContext,
-    params: { ids: string },
-  ): Promise<{ items: unknown; raw: unknown }>;
-  getAccountMediaBundlesByIds(
-    context: FanslyRequestContext,
-    params: { ids: string },
-  ): Promise<{ items: unknown; raw: unknown }>;
-  getAccountWalls(
-    context: FanslyRequestContext,
-    params: { correlationPostIds?: string | null },
-  ): Promise<{ items: unknown; raw: unknown }>;
-
-  // WP-F7 — the payouts lane. Two routes, both GET, both loosely typed: the
-  // body is journaled before anything asserts on its shape, and `metadata`
-  // (a JSON-ENCODED STRING that can carry a plaintext email) is decoded in the
-  // canonicalizer, never here and never in SQL.
-  getPayoutMethods(
-    context: FanslyRequestContext,
-  ): Promise<{ items: unknown; raw: unknown }>;
-  getPayoutRequestsPage(
-    context: FanslyRequestContext,
-    params: {
-      /** Present and EMPTY when unbounded — exactly as the app sends it. */
-      before?: string | null;
-      after?: string | null;
-      limit: number;
-      /** Zero-based ROW offset, not a page index. */
-      offset: number;
-    },
-  ): Promise<{ items: unknown; raw: unknown }>;
-
-  // Stage 6 replay-probe methods (read-only, loosely typed — Stage 16 hardens).
-  getEarningsStatsAccountsPage(
-    context: FanslyRequestContext,
-    params: { correlationAccountId?: string | null; after?: Date | null; before?: Date | null },
-  ): Promise<{ items: unknown; raw: unknown }>;
-  getEarningsMonthlyStatsAccountsPage(
-    context: FanslyRequestContext,
-    params: { correlationAccountId?: string | null; after?: Date | null; before?: Date | null },
-  ): Promise<{ items: unknown; raw: unknown }>;
-  getMediaOrderHistoryPage(
-    context: FanslyRequestContext,
-    params: {
-      accountIds?: string | null;
-      accountMediaId?: string | null;
-      accountMediaBundleId?: string | null;
-      before?: string | null;
-      limit?: number;
-    },
-  ): Promise<{ items: unknown; raw: unknown }>;
-
-  // Liveness probes — WP-F9 (`dm_commerce`) + [E1]. Bundle-derived routes, never
-  // yet served to us; deliberately `unknown` in and out until a real response has
-  // been inspected. See services/fansly-endpoint-probe.ts. All read-only GETs.
-  // WP-F5's own lane calls this one now (the probe declared it first). BARE
-  // GET, always — `POST /postreply/verify` is never issued. `before` is offered
-  // because every other paginated Fansly route uses it, and is sent only after
-  // a page looks suspiciously full.
-  getPostRepliesPage(
-    context: FanslyRequestContext,
-    params: { postId: string; before?: string | null },
-  ): Promise<{ items: unknown; raw: unknown }>;
-  getGroupMediaOffersPage(
-    context: FanslyRequestContext,
-    params: {
-      groupId: string;
-      accountId?: string | null;
-      before?: string | null;
-      after?: string | null;
-      limit?: number | null;
-      offset?: number | null;
-    },
-  ): Promise<{ items: unknown; raw: unknown }>;
-  getBroadcastStatsPage(
-    context: FanslyRequestContext,
-    params: { before?: string | null; limit?: number | null; deleted?: boolean },
-  ): Promise<{ items: unknown; raw: unknown }>;
-  getBroadcastScheduled(
-    context: FanslyRequestContext,
-  ): Promise<{ items: unknown; raw: unknown }>;
-  getAccountMediaOrdersPage(
-    context: FanslyRequestContext,
-    params: { limit?: number | null; offset?: number | null },
-  ): Promise<{ items: unknown; raw: unknown }>;
-  getTipsByAccountIds(
-    context: FanslyRequestContext,
-    params: { accountIds?: string | null },
-  ): Promise<{ items: unknown; raw: unknown }>;
-  getMediaStoryViewsPage(
-    context: FanslyRequestContext,
-    params: { storyId: string; limit?: number | null; offset?: number | null },
-  ): Promise<{ items: unknown; raw: unknown }>;
-  getPolls(context: FanslyRequestContext): Promise<{ items: unknown; raw: unknown }>;
-  getRecapStats(context: FanslyRequestContext): Promise<{ items: unknown; raw: unknown }>;
-  // (The WP-F9 probe's declarations of the four catalog routes moved up to the
-  // WP-F3 block above when the lane that CALLS them landed — one declaration
-  // per method, and `getVaultMediaPage`'s `mediaType` is a STRING there because
-  // the app sends it present-and-empty when unfiltered.)
-
-  close?(): Promise<void>;
-};
 
 export interface AppContext {
   /** The env config with the staged ('boot') DB overrides applied (see
@@ -295,7 +50,6 @@ export interface AppContext {
   logger: ReturnType<typeof createLogger>;
   pool: ReturnType<typeof createPool>;
   db: Database;
-  adapter: AdapterLike;
   // onlyfansapi.com management client; absent when OFAPI_API_KEY is not set
   // (admin webhook registration then 503s). Optional so existing AppContext
   // literals (tests, codegen) need not provide it.
@@ -313,15 +67,18 @@ export interface AppContext {
   // Undefined when either boot dependency is absent (admission then 503s
   // voice_provider_unavailable).
   voiceTtsProvider?: VoiceTtsProvider | undefined;
-  /** The process's Fansly send guards (plan §2.5). createAppContext always
-   *  sets it and drains it on close; optional so AppContext literals (tests)
-   *  need not provide it — `getFanslySendGuards` then builds one on first use. */
+  /** The process's Fansly send-guard registry (plan §2.5). No runtime sender
+   *  captures a page through it any more (step 4): it is this process's holder
+   *  identity — for the journal of the identity check without a page, the
+   *  termination sweeper and the CLI. createAppContext always sets it and
+   *  closes it; optional so AppContext literals (tests) need not provide it —
+   *  `getFanslySendGuards` then builds one on first use. */
   fanslySendGuards?: FanslySendGuardRegistry | undefined;
   close(): Promise<void>;
 }
 
 export interface CreateAppContextOptions {
-  /** The role this process holds Fansly send guards as (journal and status).
+  /** The role in this process's Fansly holder identity (journal and status).
    *  The long-lived runtimes pass theirs; everything else is the CLI. */
   processRole?: FanslySendHolderRole;
 }
@@ -370,10 +127,9 @@ export async function createAppContext(options: CreateAppContextOptions = {}): P
     const db = createDb(pool);
 
     // Apply the staged ('boot') DB overrides onto the env config exactly once, before
-    // anything reads config (adapters/OFAPI client/sink). Fails closed (A31).
+    // anything reads config (the OFAPI client, the credit sink). Fails closed (A31).
     const { config, bootSkipped } = await loadBootConfig(db, rawConfig, logger);
 
-    const adapter = new FanslyAdapter({ baseUrl: config.fanslyBaseUrl });
     const fanslySendGuards = createFanslySendGuards({
       db,
       config,
@@ -425,17 +181,15 @@ export async function createAppContext(options: CreateAppContextOptions = {}): P
       logger,
       pool,
       db,
-      adapter,
       ofapi,
       aiGatewayProvider,
       aiGatewayOpenrouterProvider,
       voiceTtsProvider,
       fanslySendGuards,
       async close() {
-        // In-flight Fansly requests finish (each is bounded by its timeout)
-        // and their completions are written before the pool ends.
+        // Before the pool ends: a lease still held (none at run time since
+        // step 4) writes its completion first.
         await fanslySendGuards.close();
-        await adapter.close?.();
         await pool.end();
       },
     };

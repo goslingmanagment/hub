@@ -3,8 +3,8 @@
 // source outside the egress resolver's own modules, and fails when the count
 // EXCEEDS the recorded budget. Every outbound platform call must resolve its
 // transport through services/egress/resolveEgress — the count's target
-// trajectory is 0 (the remaining budget is the recorded OFAPI, Fansly-adapter,
-// and Anthropic transport debt; Telegram and ElevenLabs use the egress seam).
+// trajectory is 0 (the remaining budget is the recorded OFAPI and Anthropic
+// transport debt; Telegram and ElevenLabs use the egress seam).
 // Decreases are recorded by updating scripts/raw-fetch-budget.json.
 
 import { execFileSync } from "node:child_process";

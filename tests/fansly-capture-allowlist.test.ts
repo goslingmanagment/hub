@@ -67,9 +67,9 @@ const VERBATIM = JSON.parse(readFileSync(
   "utf8",
 )) as { data: { response: Record<string, unknown> } };
 
-/** The envelope's inner `response` object — exactly what `page.raw` is
- *  (packages/fansly/src/adapter.ts) and therefore exactly what the three call
- *  sites hand the trim. */
+/** The envelope's inner `response` object — exactly what the wire layer reads
+ *  as the answer's `response` (`readFanslyWireResponse`) and therefore exactly
+ *  what the capture hands the trim. */
 function verbatimRaw(): Record<string, unknown> {
   return JSON.parse(JSON.stringify(VERBATIM.data.response)) as Record<string, unknown>;
 }

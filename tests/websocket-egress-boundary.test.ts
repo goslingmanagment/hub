@@ -8,7 +8,7 @@ const root = resolve(__dirname, "..");
 const eslint = new ESLint({ cwd: root });
 const runtimeFile = "apps/runtime/src/services/socket-boundary-fixture.ts";
 const egressFile = "apps/runtime/src/services/egress/fansly-receiver-socket.ts";
-const httpImporters = ["packages/shared/src/http-client.ts", "packages/fansly/src/adapter.ts"];
+const httpImporters = ["packages/shared/src/http-client.ts"];
 
 async function lint(code: string, filePath = runtimeFile) {
   const [result] = await eslint.lintText(code, { filePath });
@@ -92,6 +92,16 @@ describe("WebSocket boundary preserves the existing architecture walls", () => {
       import { request, fetch, Agent } from "undici";
       export const http = { request, fetch, Agent };
     `, filePath)).toEqual([]);
+  });
+
+  // The Fansly adapter was the second HTTP importer; it is deleted (step 4,
+  // S4-20), and the package's wire layer takes undici's types only.
+  it("rejects undici's HTTP in the Fansly package", async () => {
+    for (const filePath of ["packages/fansly/src/wire/send.ts", "packages/fansly/src/adapter.ts"]) {
+      expect(await lint('import { fetch } from "undici"; export { fetch };', filePath), filePath)
+        .toEqual(expect.arrayContaining([expect.objectContaining({ ruleId: "no-restricted-syntax" })]));
+      expect(await lint('import type { Dispatcher } from "undici"; export type D = Dispatcher;', filePath), filePath).toEqual([]);
+    }
   });
 
   it.each([runtimeFile, egressFile, ...httpImporters])("still rejects toMills in %s", async (filePath) => {

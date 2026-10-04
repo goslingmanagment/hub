@@ -1,5 +1,3 @@
-import { createHash } from "node:crypto";
-
 import type { ProxyConfig } from "./types.ts";
 
 const SUPPORTED_PROXY_PROTOCOLS = new Set(["http:", "https:", "socks5:"]);
@@ -325,20 +323,6 @@ export function normalizeProxyConfig(proxy: ProxyConfig): ProxyConfig {
 
 export function normalizeProxyConfigWithMetadata(proxy: ProxyConfig): NormalizedProxyConfig {
   return parseNormalizedProxyConfig(proxy);
-}
-
-export function buildProxyDispatcherCacheKey(proxy: ProxyConfig) {
-  const normalized = parseNormalizedProxyConfig(proxy);
-  const hash = createHash("sha256")
-    .update(normalized.url)
-    .update("\0")
-    .update(normalized.username ?? "")
-    .update("\0")
-    .update(normalized.password ?? "")
-    .digest("hex")
-    .slice(0, 16);
-
-  return `${normalized.protocol}//${normalized.host}#${hash}`;
 }
 
 export function buildProxyEgressKey(proxy: ProxyConfig | null | undefined): string {
