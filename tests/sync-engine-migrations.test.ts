@@ -103,9 +103,9 @@ describe("0228_sync_engine_core.sql", () => {
 
   it("keeps the vocabularies of the checks equal to the repositories' constants", () => {
     expect(checkList(sql, "sync_pages_mode_check")).toEqual([...SYNC_PAGE_MODES]);
-    // The old hold slot: every kind a page's hold set has (the hold writers
-    // keep the slot in step with it), and the page-wide 429 kind no build
-    // takes any more.
+    // The old hold slot, stale since step 4 S4-32 (nothing writes it): its
+    // CHECK admits every kind a page's hold set has, and the page-wide 429
+    // kind no build takes any more.
     expect(checkList(sql, "sync_pages_hold_kind_check")).toEqual(["rate_limit", ...SYNC_PAGE_HOLD_KINDS]);
     expect(checkList(sql, "sync_work_kind_check")).toEqual([...SYNC_WORK_KINDS]);
     expect(checkList(sql, "sync_work_class_check")).toEqual([...SYNC_WORK_CLASSES]);
@@ -675,15 +675,17 @@ describe("sync_holds.sql (step 4, S4-30: the hold set)", () => {
     expect(names).toEqual(expect.arrayContaining(columns));
   });
 
-  it("allows application rollback: the hold writers keep the old hold columns in step, for an image that reads them", () => {
-    expect(rollbackCompatible()).toContain(`"${migration}"`);
+  it("no longer allows application rollback: the image before it reads the old hold columns, and no hold write rewrites them", () => {
+    // It was listed while every hold write rewrote the page row's old hold
+    // columns from the rows (the release that brought the table, and the one
+    // after it). The hold writers write the rows alone now (step 4, S4-32;
+    // tests/sync-old-hold-columns.test.ts), so an image that knows only the
+    // columns would hold nothing taken since: a deploy that still applies
+    // this migration must not roll back by itself.
+    expect(rollbackCompatible()).not.toContain(`"${migration}"`);
     const pages = readFileSync("packages/db/src/repositories/sync/pages.ts", "utf8");
-    // Every hold write goes through one transaction that rewrites the old
-    // columns from the rows: the image that brought the table lets the
-    // columns win when they differ from the rows at an acquisition, so a
-    // rollback to it must find them equal.
     expect(pages.match(/writeHoldSet\(db, input,/g)).toHaveLength(4);
-    expect(pages).toContain("await mirrorSyncHoldsToLegacyColumns(tx, input.pageId);");
+    expect(pages).not.toMatch(/LegacyColumns/);
     // No other statement writes a hold row.
     for (const file of readdirSync("packages/db/src/repositories/sync")) {
       if (file === "pages.ts") continue;
@@ -780,12 +782,13 @@ describe("sync_pages_drop_hold_step.sql (step 4, S4-31: the first old hold colum
     ]);
   });
 
-  it("leaves every old hold column an image still writes: no later migration has dropped them yet", () => {
+  it("leaves the other old hold columns in the database: no later migration has dropped them yet", () => {
+    // The image before this one (S4-31) still writes them at every hold
+    // write; this one names one of them once, for the marker of an
+    // acquisition (tests/sync-old-hold-columns.test.ts).
     const base = stripComments(readFileSync("packages/db/migrations/0228_sync_engine_core.sql", "utf8"));
-    const mirror = readFileSync("packages/db/src/repositories/sync/holds-legacy.ts", "utf8");
     for (const column of ["hold_kind", "hold_until", "hold_since", "hold_detail", "resource_holds"]) {
       expect(base, column).toMatch(new RegExp(`^\\s{2}${column} `, "m"));
-      expect(mirror, column).toMatch(new RegExp(`\\b${column} = \\$\\{`));
       for (const later of migrations.filter((file) => file > "0228_sync_engine_core.sql")) {
         const sql = stripComments(readFileSync(`packages/db/migrations/${later}`, "utf8"));
         expect(sql, `${later}: ${column}`).not.toMatch(new RegExp(`drop column (if exists )?${column}\\b`, "i"));
@@ -795,8 +798,11 @@ describe("sync_pages_drop_hold_step.sql (step 4, S4-31: the first old hold colum
     expect(base).toMatch(/^\s{2}network_failure_streak smallint not null default 0,$/m);
   });
 
-  it("allows application rollback: the page row is read by named columns, and no source names this one", () => {
-    expect(rollbackCompatible()).toContain(`"${migration}"`);
+  it("no longer allows application rollback (the image before it lets the stale columns win); no source names the column", () => {
+    // Listed while the hold writers kept the other old hold columns equal to
+    // the rows, which the image before this migration compares at every
+    // acquisition. They are stale since step 4 S4-32.
+    expect(rollbackCompatible()).not.toContain(`"${migration}"`);
     // The page row is read through one list of named columns, never `*`.
     const pages = readFileSync("packages/db/src/repositories/sync/pages.ts", "utf8");
     expect(pages).not.toMatch(/\bsp\.\*|select \* from sync_pages|to_jsonb\(sp\)/);
@@ -809,8 +815,9 @@ describe("sync_pages_drop_hold_step.sql (step 4, S4-31: the first old hold colum
       .filter((path) => readFileSync(path, "utf8").replaceAll(migration, "").split("\n")
         .some((line) => /hold_step|holdStep/.test(line) && !/^\s*(\/\/|\/?\*|#|--)/.test(line)));
     expect(naming).toEqual([]);
-    // Nor does a test select it: only the tests of this migration name it.
+    // Nor does a test select it: only the tests of this migration name it
+    // (and the pin of the old hold columns, which names the migration's file).
     const tests = readdirSync("tests").filter((file) => file.endsWith(".ts") && /hold_step|holdStep/.test(readFileSync(`tests/${file}`, "utf8")));
-    expect(tests.sort()).toEqual(["sync-engine-migrations.test.ts", "sync-hold-set.integration.test.ts", "sync-holds-legacy.test.ts"]);
+    expect(tests.sort()).toEqual(["sync-engine-migrations.test.ts", "sync-hold-set.integration.test.ts", "sync-old-hold-columns.test.ts"]);
   });
 });

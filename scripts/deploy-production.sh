@@ -621,16 +621,9 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # resets a Fansly page's legacy state, and its rollback command refuses, so
   # it runs unchanged; no image clears a 'retired' blocker.
   "0239_retire_fansly_legacy_sync_states.sql"
-  # The hold set (step 4, owner decision №26): one new table, sync_holds, its
-  # partial unique index, comments and the read-role grant; it starts empty.
-  # The previous image never names it: it reads and writes a page's holds in
-  # the old columns of sync_pages (hold_kind … hold_detail, resource_holds),
-  # which the hold writers rewrite from the table in the same transaction as
-  # every hold write, so it holds what the table holds after a rollback. What
-  # it writes there meanwhile was read back into the table when the hold-set
-  # release acquired the page's ownership; the release after it (0243) reads
-  # no hold column, so that one ships only after this one has been deployed.
-  "0240_sync_holds.sql"
+  # 0240_sync_holds.sql is NOT listed any more (step 4, S4-32). The reason is
+  # below, where 0243_sync_pages_drop_hold_step.sql was.
+
   # chat-extension greeting lease and send custody (hub-pr-plan H-7a): three
   # new tables (client_fan_leases, client_greetings, client_send_custody),
   # their checks, indexes and comments. The previous image never names them,
@@ -645,18 +638,27 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # gone it shows their env defaults and runs unchanged; the removed values
   # stay readable in the audit log.
   "0242_retire_fansly_legacy_config_overrides.sql"
-  # The first old hold column goes (step 4, design S4-31): sync_pages.hold_step
-  # is dropped (catalog-only, lock_timeout 5 s). The previous image — the
-  # hold-set release (0240) or a later one — never names it: it reads and
-  # writes sync_pages by named columns, and its hold writers and its
-  # acquisition name hold_kind, hold_until, hold_since, hold_detail and
-  # resource_holds only. Those stay, and this release's hold writers keep
-  # rewriting them from the table, so after a rollback that image runs
-  # unchanged and its acquisition finds them equal to the page's rows (it
-  # reads nothing back). NOT compatible with an image older than the hold-set
-  # release, which selects hold_step by name: 0240 and 0243 never ship in one
-  # deploy.
-  "0243_sync_pages_drop_hold_step.sql"
+  # NOT listed any more (step 4, S4-32): 0240_sync_holds.sql (the hold set's
+  # table) and 0243_sync_pages_drop_hold_step.sql (the first old hold column
+  # of sync_pages). The image before 0240 knows a page's holds in the old
+  # hold columns of sync_pages alone; the one before 0243 compares those
+  # columns with the table whenever it acquires a page and lets them win.
+  # Both were compatible only while the hold writers rewrote the columns
+  # from the table in the transaction of every hold write, which they did
+  # through the release that carried 0243. This tree writes the table alone
+  # and leaves the columns stale, so by them either image would drop every
+  # hold taken since this release started and bring back every hold lifted.
+  # The one thing this tree writes there is a marker, whenever it takes a
+  # page: a route-state version in the old resource-hold map that the image
+  # before 0243 cannot read. That image then refuses the page instead of
+  # opening it by stale columns: it fails closed, and runs no page this
+  # release has taken. This release is therefore deployed onto the one that
+  # carried 0243, with both applied already: no delta of its deploy holds
+  # them, and its automatic rollback returns to an image that reads no hold
+  # column. A deploy that still had one of them to apply keeps the automatic
+  # rollback off rather than return to an image that runs no page this
+  # release has taken (apps/runtime/src/sync/README.md, "Rollback targets").
+
   # chat-extension client_health rollups (chat-extension H-11b): five new
   # tables (client_health_receipts and four *_hourly rollups), their checks,
   # comments and a read_only grant on the rollups. Nothing writes them until

@@ -247,8 +247,9 @@ describe("account.poll", () => {
     await runLive(pageId, () => okResponse(accountMe("399999999999999999")),
       async () => (await workRow(pageId, "account.poll"))?.state === "quarantined", { alerts });
 
-    const sync = await testDb.pool.query("select hold_kind, hold_until = 'infinity'::timestamptz as indefinite from sync_pages where page_id = $1", [pageId]);
-    expect(sync.rows[0]).toEqual({ hold_kind: "identity_mismatch", indefinite: true });
+    const holds = await testDb.pool.query(
+      "select kind, until = 'infinity'::timestamptz as indefinite from sync_holds where page_id = $1 and scope = 'page'", [pageId]);
+    expect(holds.rows).toEqual([{ kind: "identity_mismatch", indefinite: true }]);
     const page = await testDb.pool.query("select external_page_id from pages where id = $1", [pageId]);
     expect(page.rows[0].external_page_id).toBe(OWN_ID);
     expect(alerts.opened.map((alert) => alert.detail)).toEqual(expect.arrayContaining(["identity_mismatch", "quarantined"]));
@@ -282,8 +283,10 @@ describe("account.identity", () => {
         [pageId],
       );
       expect(page.rows[0]).toEqual({ external_page_id: externalId, follower_count: 5, subscriber_count: 4, stale: true });
-      const sync = await testDb.pool.query("select identity_account_id, hold_kind from sync_pages where page_id = $1", [pageId]);
-      expect(sync.rows[0]).toEqual({ identity_account_id: null, hold_kind: null });
+      const sync = await testDb.pool.query(
+        `select sp.identity_account_id, (select count(*)::int from sync_holds h where h.page_id = sp.page_id) as holds
+           from sync_pages sp where sp.page_id = $1`, [pageId]);
+      expect(sync.rows[0]).toEqual({ identity_account_id: null, holds: 0 });
       // The answer is journaled like every served response.
       expect(await countRows(testDb.pool, "select count(*)::int as n from observations where account_id = $1 and kind = 'account_me'", [pageId])).toBe(1);
     }

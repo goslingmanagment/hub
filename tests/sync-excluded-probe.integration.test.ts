@@ -218,12 +218,13 @@ async function reasonOf(threadId: number): Promise<string | null> {
   return result.rows[0]?.reason ?? null;
 }
 
-async function hold(pageId: number) {
-  const result = await testDb!.pool.query<{ hold_kind: string | null; resource_holds: Record<string, unknown> }>(
-    "select hold_kind, resource_holds from sync_pages where page_id = $1",
+/** The page's hold set (`sync_holds`), each row as `scope/key/kind`. */
+async function holds(pageId: number): Promise<string[]> {
+  const result = await testDb!.pool.query<{ hold: string }>(
+    "select scope || '/' || key || '/' || kind as hold from sync_holds where page_id = $1 order by 1",
     [pageId],
   );
-  return result.rows[0]!;
+  return result.rows.map((row) => row.hold);
 }
 
 async function probe(pageLabel: string, sample = 20) {
@@ -270,7 +271,7 @@ describe("probe.excluded-chat", () => {
     expect(await scalar("select count(*)::int as n from message_archive where account_id = $1", [pageId])).toBe(0);
     // The chat stays excluded until the owner lifts it; the page holds nothing.
     expect(await reasonOf(threadId)).toBe(MISSING);
-    expect((await hold(pageId)).hold_kind).toBeNull();
+    expect((await holds(pageId)).filter((hold) => hold.startsWith("page/"))).toEqual([]);
   });
 
   it("a version bump of the DM family re-parses DM history, never a probe", async (context) => {
@@ -326,7 +327,7 @@ describe("probe.excluded-chat", () => {
       breaker_until: null,
     });
     expect(await probeWork(pageId, other!)).toMatchObject({ state: "done", result: { served: true } });
-    expect(await hold(pageId)).toEqual({ hold_kind: null, resource_holds: {} });
+    expect(await holds(pageId)).toEqual([]);
 
     const report = await readExcludedProbeReport(db(), { pageLabel: "probe-forbidden" });
     expect(report.summary).toMatchObject({ reason: MISSING, probed: 2, served: 1, notServed: 1, pending: 0, pageErrors: 0 });
@@ -339,7 +340,7 @@ describe("probe.excluded-chat", () => {
     await seedThread(pageId, 1, { reason: MISSING });
     await probe("probe-401");
     const alerts = new RecordingAlerts();
-    await runLive(pageId, () => statusResponse(401, ""), async () => (await hold(pageId)).hold_kind === "auth", alerts);
+    await runLive(pageId, () => statusResponse(401, ""), async () => (await holds(pageId)).includes("page//auth"), alerts);
     expect(await probeWork(pageId, 1)).toMatchObject({ state: "open", waiting_reason: "page_hold" });
     const report = await readExcludedProbeReport(db(), { pageLabel: "probe-401", reason: MISSING });
     expect(report.summary).toMatchObject({ probed: 1, served: 0, pending: 1, pageErrors: 1 });
