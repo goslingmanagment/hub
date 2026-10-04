@@ -16,6 +16,7 @@ import {
 } from "@agency_hub_core/db";
 
 import { startIntegrationTestDatabase } from "./helpers/db.ts";
+import { seedFormerFanslyRows } from "./helpers/fansly-legacy-rows.ts";
 import { EVERY_PLATFORM } from "./helpers/page-sync-scope.ts";
 
 describe("permanent OnlyFans legacy DM retirement", () => {
@@ -40,7 +41,9 @@ describe("permanent OnlyFans legacy DM retirement", () => {
       });
       if (!fanslyPage) throw new Error("Expected to create the Fansly control page");
       await ensurePageSyncStates(testDb.db, { pageId: onlyFansPage.id });
-      await ensurePageSyncStates(testDb.db, { pageId: fanslyPage.id });
+      // The Fansly control holds the rows an old planner seeded (nothing seeds
+      // a Fansly page's rows since step 4).
+      await seedFormerFanslyRows(testDb.pool, fanslyPage.id, new Date());
       expect(await listPageSyncStates(testDb.db, {
         pageId: onlyFansPage.id,
         streams: ["dm_messages"],

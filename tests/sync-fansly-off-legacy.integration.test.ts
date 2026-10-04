@@ -35,6 +35,7 @@ import {
   type StartedTestDatabase,
 } from "./helpers/db.ts";
 import { EVERY_PLATFORM } from "./helpers/page-sync-scope.ts";
+import { seedFormerFanslyRows } from "./helpers/fansly-legacy-rows.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { seedSyncPage, setModeDirect } from "./helpers/sync-engine-host.ts";
 
@@ -119,8 +120,9 @@ async function seedPages(now: Date) {
   const model = await createModel(app.db, { slug: "of-model", name: "OF model" });
   const onlyfans = await createOnlyFansPage(app.db, { modelId: model!.id, label: "lana-of" });
   for (const pageId of [live.pageId, off.pageId]) {
-    // As the pre-S4-10 planner seeded them.
-    await ensurePageSyncStates(app.db, { pageId, now });
+    // As the pre-S4-10 planner seeded them (the seeder writes no Fansly row
+    // since S4-24).
+    await seedFormerFanslyRows(pool(), pageId, now);
     await pool().query(
       `update page_sync_states
           set status = 'idle', applied_seq = request_seq, succeeded_at = $2, blocker_kind = null,
@@ -209,11 +211,11 @@ const retired = (label: string) => expect.objectContaining({
 
 describe("Fansly off the legacy executor (step 4, S4-10)", () => {
   it("every Fansly lever scope resolves to engine registry keys", async () => {
-    const { fanslyFilesForStreams, fanslyKeysForStreams } = await import("../apps/runtime/src/sync/fansly/legacy-streams.ts");
+    const { fanslyFilesForStreams, fanslyKeysForStreams } = await import("../apps/runtime/src/sync/fansly/registry.ts");
     for (const scope of SCOPES) {
       const streams = FANSLY_ENGINE_SCOPE_STREAMS[scope];
       expect(streams.length, scope).toBeGreaterThan(0);
-      // Every stream of the scope is taken over by at least one registry key.
+      // Every stream of the scope names at least one registry key (the lever map).
       for (const stream of streams) expect(fanslyKeysForStreams([stream]), `${scope}/${stream}`).not.toEqual([]);
       expect(fanslyFilesForStreams(streams), scope).not.toEqual([]);
     }

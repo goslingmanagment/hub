@@ -146,7 +146,7 @@ describe("runtime page services", () => {
       { db: {} },
       {
         pageIds: [7],
-        monitorStreams: ["dm_conversations", "dm_messages"],
+        monitorStreams: ["dm_conversations"],
       },
     );
     expect(repoMocks.getPageConversationPreview).toHaveBeenCalledWith(
@@ -294,7 +294,7 @@ describe("runtime page services", () => {
     expect(result.page.platform).toBe("onlyfans");
     expect(syncStatusMocks.getSyncStatusSnapshot).toHaveBeenCalledWith(
       { db: {} },
-      { pageIds: [9], monitorStreams: ["dm_conversations", "dm_messages"] },
+      { pageIds: [9], monitorStreams: ["dm_conversations"] },
     );
     expect(result.fan).toMatchObject({
       platform: "onlyfans",

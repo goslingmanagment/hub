@@ -30,7 +30,10 @@ function slotStartSeconds(slot: number, grid: { cadenceSeconds: number; slotOffs
   return slot * grid.cadenceSeconds + grid.slotOffsetSeconds;
 }
 
-describe("top_spenders cadence (owner decision 2026-09-30: read Fansly top spenders every 6 h)", () => {
+// The legacy executor's top_spenders lane (OnlyFans since step 4) keeps the
+// 6-hour cadence the owner set for Fansly on 2026-09-30; the Fansly Sync
+// Engine's own period is the registry's (`top-spenders.window`).
+describe("top_spenders cadence (owner decision 2026-09-30: read top spenders every 6 h)", () => {
   it("schedules the lane every 6 hours and still never judges it by a freshness target", () => {
     expect(SYNC_STREAM_POLICY.top_spenders).toMatchObject({
       cadenceSeconds: SIX_HOURS,
@@ -48,11 +51,12 @@ describe("top_spenders cadence (owner decision 2026-09-30: read Fansly top spend
       freshnessSlaSeconds: 3 * HOUR,
     });
     expect(SYNC_STREAM_DEPENDENCIES.top_spenders).toEqual(["transactions"]);
-    // The DM lanes wait for the first top_spenders success only (dependencyMet
-    // reads succeeded_at/applied_seq, not age), so a 6-hour gap never blocks them.
-    for (const stream of ["dm_conversations", "dm_messages"] as const) {
-      expect(getSyncStreamDependenciesForPage({ platform: "fansly", stream })).toContain("top_spenders");
-    }
+    // The legacy DM lane (an OnlyFans page without the OFAPI DM sync) waits for
+    // the first top_spenders success only (dependencyMet reads
+    // succeeded_at/applied_seq, not age), so a 6-hour gap never blocks it.
+    expect(getSyncStreamDependenciesForPage({ platform: "onlyfans", stream: "dm_conversations" }))
+      .toContain("top_spenders");
+    // On a Fansly page the engine's "sync now" scopes still reach the reads.
     expect(FANSLY_ENGINE_SCOPE_STREAMS.data).toContain("top_spenders");
     expect(FANSLY_ENGINE_SCOPE_STREAMS.all).toContain("top_spenders");
   });

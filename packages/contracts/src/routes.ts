@@ -405,10 +405,11 @@ export const healthResponseSchema = z.object({
   }),
 });
 
-/** `/health/sync`'s block of a page the Fansly Sync Engine owns: its legacy
- *  streams are not judged; the page is unhealthy on a stale owner (> 90 s),
- *  a refused credential (an `auth`/`identity_mismatch` hold) or a handover
- *  older than 10 minutes. */
+/** `/health/sync`'s block of a page the Fansly Sync Engine owns: the page is
+ *  unhealthy on a stale owner (> 90 s), a refused credential (an
+ *  `auth`/`identity_mismatch` hold) or a handover older than 10 minutes. A
+ *  Fansly page without the block is one the engine does not own: nothing
+ *  reads it, and it is unhealthy with the issue `engine:not_live`. */
 export const syncHealthEngineSchema = z.object({
   mode: z.enum(["handover", "live"]),
   ownerHeartbeatAgeSeconds: z.number().int().nonnegative().nullable(),
@@ -446,9 +447,10 @@ export const syncHealthPageSchema = z.object({
 export const syncHealthResponseSchema = z.object({
   status: serviceHealthStatusEnum,
   timestamp: isoTimestamp,
+  /** The legacy stream checks' threshold; they judge the pages of the legacy
+   *  page-sync executor (OnlyFans). */
   thresholds: z.object({
     lightMaxAgeMinutes: z.number().int().positive(),
-    followerMaxAgeMinutes: z.number().int().positive(),
   }),
   overall: z.object({
     pageCount: z.number().int(),
@@ -2650,8 +2652,8 @@ const syncBlockStateEnum = z.enum([
   "failed",
   "paused",
   "not_available",
-  // The page is the Fansly Sync Engine's (`handover`/`live`): its legacy
-  // streams are frozen and the block describes the engine's live work.
+  // The page is the Fansly Sync Engine's (`handover`/`live`): the block
+  // describes the engine's live work.
   "engine",
 ]);
 

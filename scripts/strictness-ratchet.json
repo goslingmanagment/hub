@@ -60,7 +60,7 @@
   "tests/ai-restricted-class.integration.test.ts": 3,
   "tests/ai-usage.repository.integration.test.ts": 11,
   "tests/analytics-models.integration.test.ts": 9,
-  "tests/api.integration.test.ts": 294,
+  "tests/api.integration.test.ts": 285,
   "tests/auth-dead-pause.integration.test.ts": 12,
   "tests/auth-policy.integration.test.ts": 4,
   "tests/cli-admin.integration.test.ts": 1,

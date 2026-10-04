@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   acquirePageSyncLease,
-  createFanslyPage,
   createModel,
+  createOnlyFansPage,
   ensurePageSyncStates,
   finishSyncRun,
   getPageSyncState,
@@ -17,14 +17,17 @@ import { startIntegrationTestDatabase } from "./helpers/db.ts";
 import { EVERY_PLATFORM } from "./helpers/page-sync-scope.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 
-/** A ramp-gated chunk (platform / flag / allowlist) short-circuits before any
+/** A gated chunk (platform / flag / allowlist) short-circuits before any
  *  egress. It used to terminate through completePageSync, which stamped
  *  succeeded_at = now() and zeroed consecutive_failures for a stream that
  *  issued zero requests. That is how lora-1's fan_earnings feed sat dead from
  *  2026-07-17 to 2026-07-31 while every instrument read healthy. skipPageSync
- *  must release the lease and advance applied_seq while claiming NOTHING. */
+ *  must release the lease and advance applied_seq while claiming NOTHING.
+ *
+ *  The legacy executor serves OnlyFans only (step 4); its gated lane here is
+ *  `transactions` on a page whose transactions come from webhooks. */
 describe("page sync gated skip", () => {
-  async function seedLeasedFanEarnings(
+  async function seedLeasedTransactions(
     testDb: NonNullable<Awaited<ReturnType<typeof startIntegrationTestDatabase>>>,
     label: string,
   ) {
@@ -35,7 +38,7 @@ describe("page sync gated skip", () => {
     if (!model) {
       throw new Error("Expected to create a model");
     }
-    const page = await createFanslyPage(testDb.db, {
+    const page = await createOnlyFansPage(testDb.db, {
       modelId: model.id,
       label,
     });
@@ -50,13 +53,13 @@ describe("page sync gated skip", () => {
       `
         update page_sync_states
         set applied_seq = request_seq, status = 'idle'
-        where page_id = $1 and stream <> 'fan_earnings'
+        where page_id = $1 and stream <> 'transactions'
       `,
       [page.id],
     );
     await requestPageSync(testDb.db, {
       pageId: page.id,
-      streams: ["fan_earnings"],
+      streams: ["transactions"],
       source: "scheduled",
     });
 
@@ -71,7 +74,7 @@ describe("page sync gated skip", () => {
             consecutive_failures = 2,
             last_error_code = 'http_500',
             last_error_summary = 'upstream blew up'
-        where page_id = $1 and stream = 'fan_earnings'
+        where page_id = $1 and stream = 'transactions'
       `,
       [page.id],
     );
@@ -83,8 +86,8 @@ describe("page sync gated skip", () => {
       leaseToken: `${label}-token`,
       leaseTtlMs: 60_000,
     });
-    if (!lease || lease.stream !== "fan_earnings") {
-      throw new Error(`Expected a fan_earnings lease, got ${lease?.stream ?? "none"}`);
+    if (!lease || lease.stream !== "transactions") {
+      throw new Error(`Expected a transactions lease, got ${lease?.stream ?? "none"}`);
     }
 
     return { page, lease, leasedSeq: lease.leasedSeq ?? lease.requestSeq };
@@ -97,17 +100,17 @@ describe("page sync gated skip", () => {
     }
 
     try {
-      const { page, leasedSeq } = await seedLeasedFanEarnings(testDb, "gated-skip-page");
+      const { page, leasedSeq } = await seedLeasedTransactions(testDb, "gated-skip-page");
 
       await expect(skipPageSync(testDb.db, {
         pageId: page.id,
-        stream: "fan_earnings",
+        stream: "transactions",
         requestSeq: leasedSeq,
         leaseToken: "gated-skip-page-token",
-        progress: { skipped: "not_allowlisted" },
+        progress: { skipped: "onlyfans_transactions_webhook_sourced" },
       })).resolves.toBe(true);
 
-      const state = await getPageSyncState(testDb.db, page.id, "fan_earnings");
+      const state = await getPageSyncState(testDb.db, page.id, "transactions");
       expect(state).toMatchObject({
         status: "idle",
         appliedSeq: leasedSeq,
@@ -140,25 +143,25 @@ describe("page sync gated skip", () => {
     }
 
     try {
-      const { page, leasedSeq } = await seedLeasedFanEarnings(testDb, "gated-skip-fence");
-      const before = await getPageSyncState(testDb.db, page.id, "fan_earnings");
+      const { page, leasedSeq } = await seedLeasedTransactions(testDb, "gated-skip-fence");
+      const before = await getPageSyncState(testDb.db, page.id, "transactions");
 
       await expect(skipPageSync(testDb.db, {
         pageId: page.id,
-        stream: "fan_earnings",
+        stream: "transactions",
         requestSeq: leasedSeq,
         leaseToken: "someone-elses-token",
-        progress: { skipped: "not_allowlisted" },
+        progress: { skipped: "onlyfans_transactions_webhook_sourced" },
       })).resolves.toBe(false);
 
-      const after = await getPageSyncState(testDb.db, page.id, "fan_earnings");
+      const after = await getPageSyncState(testDb.db, page.id, "transactions");
       expect(after).toEqual(before);
     } finally {
       await testDb.stop();
     }
   }, 30_000);
 
-  it("tells a gate skip apart from a lost lease, and keeps bulk out of the rollup", async () => {
+  it("tells a gate skip apart from a lost lease", async () => {
     const testDb = await startIntegrationTestDatabase();
     if (!testDb) {
       return;
@@ -166,7 +169,7 @@ describe("page sync gated skip", () => {
 
     async function recordRun(input: {
       pageId: number;
-      stream: "light" | "fan_earnings";
+      stream: "light" | "transactions";
       status: "success" | "skipped";
       stats: Record<string, unknown>;
       errorSummary?: string;
@@ -201,7 +204,7 @@ describe("page sync gated skip", () => {
       if (!model) {
         throw new Error("Expected to create a model");
       }
-      const page = await createFanslyPage(testDb.db, {
+      const page = await createOnlyFansPage(testDb.db, {
         modelId: model.id,
         label: "gated-skip-monitor",
       });
@@ -247,13 +250,13 @@ describe("page sync gated skip", () => {
         [new Date("2026-07-30T10:01:00.000Z"), page.id],
       );
 
-      // A genuinely ramp-gated bulk stream, carrying the structured marker.
+      // A genuinely gated stream, carrying the structured marker.
       await recordRun({
         pageId: page.id,
-        stream: "fan_earnings",
+        stream: "transactions",
         status: "skipped",
-        stats: { skipped: "not_allowlisted", gatedSkip: "not_allowlisted" },
-        errorSummary: "not_allowlisted",
+        stats: { skipped: "onlyfans_transactions_webhook_sourced", gatedSkip: "onlyfans_transactions_webhook_sourced" },
+        errorSummary: "onlyfans_transactions_webhook_sourced",
         startedAt: "2026-07-30T10:00:00.000Z",
         finishedAt: "2026-07-30T10:00:05.000Z",
       });
@@ -272,14 +275,8 @@ describe("page sync gated skip", () => {
       // alone reported this healthy stream as "gated off" until its next run.
       expect(streamState("light")).not.toBe("off");
 
-      // The gated bulk stream still tells the truth about itself.
-      expect(streamState("fan_earnings")).toBe("off");
-
-      // Defect 2: and it does not get to decide the page, nor the fleet line
-      // above it (decision #166 — both ramp flags are false by default, so
-      // otherwise EVERY Fansly page would read "Off" forever).
-      expect(monitored.syncUx.state).not.toBe("off");
-      expect(snapshot.overall.syncUx.state).not.toBe("off");
+      // The gated stream tells the truth about itself.
+      expect(streamState("transactions")).toBe("off");
     } finally {
       await testDb.stop();
     }

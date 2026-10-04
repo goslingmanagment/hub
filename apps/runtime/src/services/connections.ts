@@ -21,6 +21,7 @@ import { BadRequestError, NotFoundError } from "./errors.ts";
 import { handleSuccessfulPageVerificationRecovery } from "./notification-incidents.ts";
 import { resolveStoredProxyConfig, saveProxy } from "./page-context.ts";
 import { assertAllowedProxyTarget } from "./proxy-validation.ts";
+import { legacyExecutorPlatforms } from "../sync/onlyfans/boundary.ts";
 import { assertFanslyPageOnEngine, checkFanslyIdentityThroughEngine, saveVerifiedFanslyCredentials } from "./sync-engine-account.ts";
 import { buildPageSyncUx } from "./sync-ux.ts";
 import { getSyncStatusSummarySnapshot } from "./sync-summary.ts";
@@ -119,6 +120,24 @@ function classifyConnectionStatus(
   return "active";
 }
 
+/** The connection of a page the Fansly Sync Engine reads: `expired` while the
+ *  engine holds the page for its credentials (the page's sync summary asks for
+ *  new ones), else by the age of the account read the engine stamps on the
+ *  page (`account.poll`, hourly). No legacy run is consulted. */
+function classifyEngineConnectionStatus(
+  hasCredentials: boolean,
+  lastLightSyncAt: Date | null,
+  credentialsRefused: boolean,
+): ConnectionStatus {
+  if (!hasCredentials) {
+    return "unverified";
+  }
+  if (credentialsRefused) {
+    return "expired";
+  }
+  return classifyConnectionStatus(hasCredentials, lastLightSyncAt, null);
+}
+
 function normalizeProxyInput(proxy: ProxyConfig) {
   try {
     return normalizeProxyConfig(proxy);
@@ -143,8 +162,11 @@ export async function listConnectionStatuses(
   }
 
   const allPageIds = pages.map((p) => p.id);
+  // Only a page the legacy executor serves has legacy runs to judge its
+  // connection by; a Fansly page's is the engine's (its sync summary).
+  const legacyPlatforms = legacyExecutorPlatforms();
   const [latestRuns, snapshot] = await Promise.all([
-    getLatestSyncRunPerPage(app.db, allPageIds, {
+    getLatestSyncRunPerPage(app.db, pages.filter((p) => legacyPlatforms.includes(p.platform)).map((p) => p.id), {
       stream: "light",
     }),
     input?.syncUxByPageId
@@ -159,12 +181,15 @@ export async function listConnectionStatuses(
   return pages.map((page) => {
     const latestRun = runsByPageId.get(page.id) ?? null;
     const hasCredentials = page.hasCredentials;
+    const syncUx = syncByPageId.get(page.id) ?? buildPageSyncUx([]);
+    const legacy = legacyPlatforms.includes(page.platform);
+    // The engine's summary requires action for one thing on a page that has
+    // credentials: the engine holds the page until new ones are saved.
+    const engineCredentialsRefused = !legacy && hasCredentials && syncUx.requiresAction;
 
-    const connectionStatus = classifyConnectionStatus(
-      hasCredentials,
-      page.lastLightSyncAt,
-      latestRun,
-    );
+    const connectionStatus = legacy
+      ? classifyConnectionStatus(hasCredentials, page.lastLightSyncAt, latestRun)
+      : classifyEngineConnectionStatus(hasCredentials, page.lastLightSyncAt, engineCredentialsRefused);
 
     return {
       id: page.id,
@@ -177,12 +202,12 @@ export async function listConnectionStatuses(
       connectionStatus,
       lastLightSyncAt: page.lastLightSyncAt?.toISOString() ?? null,
       lastFollowerSyncAt: page.lastFollowerSyncAt?.toISOString() ?? null,
-      lastSyncError: latestRun?.errorSummary ?? null,
+      lastSyncError: legacy ? latestRun?.errorSummary ?? null : engineCredentialsRefused ? syncUx.detail : null,
       subscriberCount: serializePageMetric(page.subscriberCount),
       followerCount: serializePageMetric(page.followerCount),
       proxyUrl: page.proxyUrl ?? null,
       proxyHasAuth: page.proxyHasAuth ?? false,
-      syncUx: syncByPageId.get(page.id) ?? buildPageSyncUx([]),
+      syncUx,
     };
   });
 }

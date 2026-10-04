@@ -6,7 +6,6 @@ import {
   createModel,
   createOnlyFansPage,
   ensureFanslyPageSendGuard,
-  ensurePageSyncStates,
   ensureSyncPage,
   getSyncPage,
   LiveSyncPageRefusedError,
@@ -25,6 +24,7 @@ import { checkLiveHour } from "../apps/runtime/src/sync/checks/live-hour.ts";
 import { SyncEngineHost } from "../apps/runtime/src/sync/engine/host.ts";
 import { checkFanslyIdentityWithoutPage } from "../apps/runtime/src/sync/fansly/identity-without-page.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
+import { seedFormerFanslyRows } from "./helpers/fansly-legacy-rows.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import {
   CountingConnectProxy,
@@ -362,7 +362,7 @@ describe("createLiveSyncPage refuses a page with a past", () => {
   it("writes nothing for a legacy footprint, an engine or guard row, or a page that is not Fansly", async (context) => {
     if (!testDb) return context.skip();
     const states = await fanslyPage("with-states");
-    await ensurePageSyncStates(db(), { pageId: states });
+    await seedFormerFanslyRows(testDb.pool, states, new Date());
     const cursors = await fanslyPage("with-cursors");
     await upsertCheckpoint(db(), { platformAccountId: cursors, stream: "light", cursorText: "0" });
     const sendLog = await fanslyPage("with-send-log");
