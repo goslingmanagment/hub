@@ -123,13 +123,16 @@ describe("socket frame to confirmed overlay, in one flow", () => {
 
     await until(async () => (await overlay())?.confirmed_at != null, 30_000, "the overlay confirmed");
     expect(await overlay()).toMatchObject({ confirm_outcome: "match", confirm_source: "message_archive", deleted_at: null });
-    // One head read at the origin; the message is stored and the chain's head moved to it.
+    // One head read at the origin; the message is stored in the archive (no
+    // hot row: step 4 S4-13) and the chain's head moved to it.
     expect(server.arrivalsAt("/api/v1/message?")).toHaveLength(1);
-    const stored = await testDb.pool.query<{ n: number }>(
-      "select count(*)::int as n from page_dm_messages where conversation_id = $1 and platform_message_id = $2",
-      [threadId, message!.id],
+    const stored = await testDb.pool.query<{ archive: number; hot: number }>(
+      `select (select count(*)::int from message_archive
+                where account_id = $1 and platform = 'fansly' and conversation_ref = $2 and message_ref = $3) as archive,
+              (select count(*)::int from page_dm_messages where conversation_id = $4 and platform_message_id = $3) as hot`,
+      [page.pageId, chat.groupId, message!.id, threadId],
     );
-    expect(stored.rows[0]!.n).toBe(1);
+    expect(stored.rows[0]).toEqual({ archive: 1, hot: 0 });
     const thread = await testDb.pool.query<{ head_confirmed_id: string | null }>(
       "select head_confirmed_id from page_dm_threads where id = $1", [threadId],
     );

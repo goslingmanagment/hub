@@ -400,6 +400,7 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
       label: request.body.label,
       mode: request.body.mode,
       clientVersion: normalizeClientVersionHeader(request.headers["x-client-version"]),
+      clientProfile: request.body.client ?? null,
     });
     return issued.mode === "active"
       ? {
@@ -409,6 +410,9 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
         label: issued.label,
         keyPrefix: issued.keyPrefix,
         expiresAt: issued.expiresAt.toISOString(),
+        // chat-extension H-3: the echo the client requires before trusting a
+        // narrow token (a hub without H-3 issues a full one silently).
+        client: issued.clientProfile,
       }
       : {
         mode: "pending" as const,

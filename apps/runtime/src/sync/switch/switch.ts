@@ -478,8 +478,8 @@ async function convertOpenHydration(ctx: SwitchContext, pageId: number, label: s
 
 function printChecklist(ctx: SwitchContext, label: string, page: SyncPageRow): void {
   ctx.print(`Post-switch checklist for ${label} (runbook §6.2):`);
-  ctx.print(`  S3 now: sync page status --page ${label}; step3-accept.sql from T0 = ${page.modeChangedAt.toISOString()} (sections 1, 2, 4, 8); sync alerts status --page ${label}`);
+  ctx.print(`  S3 now: sync page status --page ${label}; sync switch check --page ${label} --since ${page.modeChangedAt.toISOString()} (interim: a fail shows at once); sync alerts status --page ${label}`);
   ctx.print("  S4 within the hour: 1 deploy + 2 sync recreates + 1 kill -9, ≥ 10 min apart (owner decision №16)");
   ctx.print(`  S5 at ${page.requestsEnabledAt?.toISOString() ?? "the requests opening"}: the 20-fan control request`);
-  ctx.print(`  S7 after T* + 1 h: the verdict — sync switch check --page ${label} [--page <each page switched with it> …] --since <the first of their T0s; this page's: ${page.modeChangedAt.toISOString()}> (= step3-accept.sql section 9)`);
+  ctx.print(`  S7 after T* + 1 h: the verdict — sync switch check --page ${label} [--page <each page switched with it> …] --since <the first of their T0s; this page's: ${page.modeChangedAt.toISOString()}>`);
 }

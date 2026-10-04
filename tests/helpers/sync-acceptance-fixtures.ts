@@ -1,24 +1,32 @@
-import { spawn } from "node:child_process";
-import { readFile } from "node:fs/promises";
-
 import type { Pool } from "pg";
-import { inject } from "vitest";
 
 import { createFanslyPage, createModel, ensureSyncPage, type Database } from "@agency_hub_core/db";
 
+import type { RouteAdmissionIntervals } from "../../apps/runtime/src/sync/engine/route-policy.ts";
+import { FAMILY_BUDGETS, familyOfRoute, intervalMsOf, routeBudget, type FanslyRoute } from "../../apps/runtime/src/sync/fansly/routes.ts";
 import type { AcceptanceCheckName, CheckVerdict, PageVerdict } from "../../apps/runtime/src/sync/switch/acceptance-rules.ts";
 
 // The shared fixtures of the live-hour acceptance (step 3b A6, plan PR 1-11):
 // one database with a page per scenario, all switched within seconds of each
-// other an hour and a quarter ago, so `pnpm cli sync switch check` and
-// `step3-accept.sql` judge one complete shared window. Each page starts from
-// a healthy hour — the legacy engine reading /message every 2.5 s until 45 s
-// before live (denser than the route's budget: not the budget's sends), then
-// an engine send every 5 s rotating over four routes well inside their
-// budgets, the first media request 17 s after live, ten-plus samples of every
-// latency SLO — and its scenario changes only what it is about.
+// other an hour and a quarter ago, so `pnpm cli sync switch check` judges one
+// complete shared window. Each page starts from a healthy hour — the legacy
+// engine reading /message every 2.5 s until 45 s before live (denser than the
+// route's budget: not the budget's sends), then an engine send every 5 s
+// rotating over four routes well inside their budgets, each attempt recording
+// the pause and the route and family intervals its admission applied (as the
+// runtime does), the first media request 17 s after live, ten-plus samples of
+// every latency SLO — and its scenario changes only what it is about. A 429
+// (`rateLimit`) leaves what the engine leaves: the admissions of its route
+// after it record the halved rate.
 
-export const ACCEPTANCE_SQL_PATH = "apps/runtime/src/sync/switch/step3-accept.sql";
+/** What an admission on `route` records at the table's `current` rates. */
+export function currentIntervals(route: FanslyRoute): RouteAdmissionIntervals {
+  const family = familyOfRoute(route);
+  return {
+    routeIntervalMs: intervalMsOf(routeBudget(route).currentPerMin),
+    familyIntervalMs: family === null ? null : intervalMsOf(FAMILY_BUDGETS[family].currentPerMin),
+  };
+}
 
 /** A send every this many seconds, rotating over `ROTATION`. */
 const SEND_EVERY_S = 5;
@@ -63,6 +71,11 @@ export interface SeededPage {
   liveAt: Date;
   /** Change the engine attempt of `slot`. */
   setSlot(slot: number, columns: Record<string, string | number | null>): Promise<void>;
+  /** The attempt of `slot` answered 429, and the slowdown the engine applies
+   *  for it (A2): every later admission of its route records twice the
+   *  interval that attempt was admitted under, never more than ⅛ of the
+   *  ceiling's rate gives. */
+  rateLimit(slot: number, columns?: Record<string, string | number | null>): Promise<void>;
   slotOf(operation: (typeof ROTATION)[number]["operation"], fromSlot: number): number;
 }
 
@@ -112,6 +125,25 @@ async function setSlot(pool: Pool, pageId: number, liveAt: Date, slot: number, c
   if (result.rowCount !== 1) throw new Error(`No attempt in slot ${slot} of page ${pageId}`);
 }
 
+async function rateLimit(
+  pool: Pool,
+  pageId: number,
+  liveAt: Date,
+  slot: number,
+  columns: Record<string, string | number | null> = {},
+): Promise<void> {
+  await setSlot(pool, pageId, liveAt, slot, { http_status: 429, error_class: "rate_limit", ...columns });
+  const route = ROTATION[slot % ROTATION.length]!.operation;
+  await pool.query(
+    `update sync_attempts a
+        set route_interval_ms = least(2 * limited.route_interval_ms, $4::int)
+       from sync_attempts limited
+      where limited.page_id = $1 and limited.admitted_at = $2::timestamptz + make_interval(secs => $3::double precision)
+        and a.page_id = limited.page_id and a.operation = limited.operation and a.admitted_at > limited.admitted_at`,
+    [pageId, liveAt, slotAt(slot), intervalMsOf(routeBudget(route).ceilingPerMin / 8)],
+  );
+}
+
 export const ACCEPTANCE_SCENARIOS: readonly AcceptanceScenario[] = [
   {
     // A clean hour. The handover's page stop (a legacy 429 hold imported at
@@ -137,7 +169,7 @@ export const ACCEPTANCE_SCENARIOS: readonly AcceptanceScenario[] = [
     expectedRoutes: { "messages.page": "recovered" },
     async apply(page) {
       const slot = page.slotOf("messages.page", 200);
-      await page.setSlot(slot, { http_status: 429, error_class: "rate_limit", retry_after_ms: null });
+      await page.rateLimit(slot, { retry_after_ms: null });
       await engineLatch(page, "route_limited:messages.page", "route_held", [{ openedS: slotAt(slot) + 0.4, resolvedS: null, lastSeenS: slotAt(slot) + 6 }]);
     },
   },
@@ -151,7 +183,7 @@ export const ACCEPTANCE_SCENARIOS: readonly AcceptanceScenario[] = [
     expectedRoutes: { "messages.page": "recovered" },
     async apply(page) {
       const slot = page.slotOf("messages.page", 200);
-      await page.setSlot(slot, { http_status: 429, error_class: "rate_limit", retry_after_ms: null });
+      await page.rateLimit(slot, { retry_after_ms: null });
       await engineLatch(page, "page_stopped", "rate_limit", [{ openedS: slotAt(slot) + 0.4, resolvedS: slotAt(slot) + 665 }]);
     },
   },
@@ -176,8 +208,8 @@ export const ACCEPTANCE_SCENARIOS: readonly AcceptanceScenario[] = [
     expectedChecks: { route_429: "fail" },
     expectedRoutes: { "messages.page": "repeated" },
     async apply(page) {
-      await page.setSlot(page.slotOf("messages.page", 200), { http_status: 429, error_class: "rate_limit" });
-      await page.setSlot(page.slotOf("messages.page", 400), { http_status: 429, error_class: "rate_limit", resource: "dm-messages.head" });
+      await page.rateLimit(page.slotOf("messages.page", 200));
+      await page.rateLimit(page.slotOf("messages.page", 400), { resource: "dm-messages.head" });
     },
   },
   {
@@ -187,8 +219,8 @@ export const ACCEPTANCE_SCENARIOS: readonly AcceptanceScenario[] = [
     expectedChecks: { route_429: "pass", route_budgets: "pass" },
     expectedRoutes: { "messages.page": "recovered", "group.detail": "recovered" },
     async apply(page) {
-      await page.setSlot(page.slotOf("messages.page", 200), { http_status: 429, error_class: "rate_limit", retry_after_ms: 10_000 });
-      await page.setSlot(page.slotOf("group.detail", 300), { http_status: 429, error_class: "rate_limit" });
+      await page.rateLimit(page.slotOf("messages.page", 200), { retry_after_ms: 10_000 });
+      await page.rateLimit(page.slotOf("group.detail", 300));
     },
   },
   {
@@ -219,7 +251,7 @@ export const ACCEPTANCE_SCENARIOS: readonly AcceptanceScenario[] = [
     expectedChecks: { route_429: "inconclusive" },
     expectedRoutes: { "messages.page": "unproven" },
     async apply(page) {
-      await page.setSlot(page.slotOf("messages.page", SENDS - 4), { http_status: 429, error_class: "rate_limit" });
+      await page.rateLimit(page.slotOf("messages.page", SENDS - 4));
     },
   },
   {
@@ -247,25 +279,73 @@ export const ACCEPTANCE_SCENARIOS: readonly AcceptanceScenario[] = [
     },
   },
   {
-    // The media statistics read every 5 s for two minutes: over its 5/min.
+    // The media statistics read every 5 s for two minutes: each pair closer
+    // than the 12 s its admissions recorded.
     label: "acc-budget",
     expected: "fail",
-    expectedChecks: { route_budgets: "fail", route_429: "pass" },
+    expectedChecks: { route_budgets: "fail", pace_combined: "pass", route_429: "pass" },
     async apply(page) {
+      const media = currentIntervals("media.offer_stats");
       for (let slot = 100; slot < 124; slot += 1) {
-        await page.setSlot(slot, { operation: "media.offer_stats", resource: "media-stats.walk" });
+        await page.setSlot(slot, {
+          operation: "media.offer_stats", resource: "media-stats.walk",
+          route_interval_ms: media.routeIntervalMs, family_interval_ms: media.familyIntervalMs,
+        });
       }
     },
   },
   {
-    // One media 429, recovered, but the route kept its full 3/min after it:
-    // more than the halved 2.5/min allows within 300 s.
+    // One media 429, recovered, but the route kept its full rate after it:
+    // the admissions after the 429 still recorded the unslowed 12 s (5/min)
+    // where the halved 2.5/min is 24 s. Every pair keeps the interval its
+    // admission recorded — only the slowdown rule (A2) sees it.
     label: "acc-slowdown",
+    expected: "fail",
+    expectedChecks: { route_budgets: "fail", pace_combined: "pass", route_429: "pass" },
+    expectedRoutes: { "media.offer_stats": "recovered" },
+    async apply(page) {
+      await page.setSlot(page.slotOf("media.offer_stats", 200), { http_status: 429, error_class: "rate_limit" });
+    },
+  },
+  {
+    // The same 429 with the slowdown applied — the admissions after it
+    // recorded the halved rate (2.5/min: 24 s) — but the route went on every
+    // 20 s: each pair closer than the interval it was admitted under.
+    label: "acc-slowdown-gap",
     expected: "fail",
     expectedChecks: { route_budgets: "fail", route_429: "pass" },
     expectedRoutes: { "media.offer_stats": "recovered" },
     async apply(page) {
-      await page.setSlot(page.slotOf("media.offer_stats", 200), { http_status: 429, error_class: "rate_limit" });
+      await page.rateLimit(page.slotOf("media.offer_stats", 200));
+    },
+  },
+  {
+    // The arena's counterexample (G1): fifteen sends of one 4 s route 2.8 s
+    // apart — fourteen pairs closer than its interval, though no 60 s or
+    // 300 s span holds more than ⌈W/T⌉ + 1 of them (15 ≤ 16) — and each ≥ the
+    // page's pause. The rotation's sends of those 45 s are not there.
+    label: "acc-route-gap",
+    expected: "fail",
+    expectedChecks: { route_budgets: "fail", pace_combined: "pass", route_429: "pass" },
+    async apply(page) {
+      await page.pool.query(
+        `delete from sync_attempts
+          where page_id = $1 and admitted_at between $2::timestamptz + interval '999 seconds' and $2::timestamptz + interval '1044 seconds'`,
+        [page.pageId, page.liveAt],
+      );
+      const notifications = currentIntervals("notifications.page");
+      await page.pool.query(
+        `insert into sync_attempts (page_id, shadow, resource, subject, class, owner_generation, setting_ms, jitter_u, pause_ms,
+                                    admitted_at, sent_at, send_mark, completed_at, operation, request, outcome, http_status,
+                                    route_interval_ms, family_interval_ms)
+         select $1, false, 'notifications.forward', '', 'planned', 1, 2500, 0, 2500,
+                $2::timestamptz + make_interval(secs => 1001 + 2.8 * i),
+                $2::timestamptz + make_interval(secs => 1001 + 2.8 * i + 0.1), 'request_start',
+                $2::timestamptz + make_interval(secs => 1001 + 2.8 * i + 0.4),
+                'notifications.page', '{}'::jsonb, 'response', 200, $3, $4
+           from generate_series(0, 14) as i`,
+        [page.pageId, page.liveAt, notifications.routeIntervalMs, notifications.familyIntervalMs],
+      );
     },
   },
 ];
@@ -296,26 +376,31 @@ async function seedHealthyPage(db: Database, pool: Pool, label: string, liveAt: 
   // The legacy engine's last 255 s before the switch: /message every 2.5 s.
   await pool.query(
     `insert into fansly_send_log (page_id, guard_token, source, operation, holder_host, holder_pid, holder_role, holder_instance,
-                                  setting_ms, captured_at, sent_at, completed_at, outcome, http_status)
-     select $1, gen_random_uuid(), 'sync_stream', 'messages', 'worker-1', 1, 'worker', gen_random_uuid(), 2500,
+                                  setting_ms, jitter_u, pause_ms, captured_at, sent_at, completed_at, outcome, http_status)
+     select $1, gen_random_uuid(), 'sync_stream', 'messages', 'worker-1', 1, 'worker', gen_random_uuid(), 2500, 0, 2500,
             $2::timestamptz - make_interval(secs => 300 - 2.5 * i),
             $2::timestamptz - make_interval(secs => 300 - 2.5 * i - 0.05),
             $2::timestamptz - make_interval(secs => 300 - 2.5 * i - 0.3), 'response', 200
        from generate_series(0, 102) as i`,
     [pageId, liveAt],
   );
+  const intervals = ROTATION.map((entry) => currentIntervals(entry.operation));
   await pool.query(
     `insert into sync_attempts (page_id, shadow, resource, subject, class, owner_generation, setting_ms, jitter_u, pause_ms,
-                                admitted_at, sent_at, send_mark, completed_at, operation, request, outcome, http_status)
+                                admitted_at, sent_at, send_mark, completed_at, operation, request, outcome, http_status,
+                                route_interval_ms, family_interval_ms)
      select $1, false, r.resource, '', 'planned', 1, 2500, 0, 2500,
             $2::timestamptz + make_interval(secs => $3 + $4 * i),
             $2::timestamptz + make_interval(secs => $3 + $4 * i + 0.1), 'request_start',
             $2::timestamptz + make_interval(secs => $3 + $4 * i + 0.4),
-            r.operation, '{}'::jsonb, 'response', 200
+            r.operation, '{}'::jsonb, 'response', 200, r.route_interval_ms, r.family_interval_ms
        from generate_series(0, $5 - 1) as i
        cross join lateral (select ($6::text[])[i % cardinality($6::text[]) + 1] as operation,
-                                  ($7::text[])[i % cardinality($7::text[]) + 1] as resource) as r`,
-    [pageId, liveAt, FIRST_SEND_S, SEND_EVERY_S, SENDS, ROTATION.map((entry) => entry.operation), ROTATION.map((entry) => entry.resource)],
+                                  ($7::text[])[i % cardinality($7::text[]) + 1] as resource,
+                                  ($8::int[])[i % cardinality($8::int[]) + 1] as route_interval_ms,
+                                  ($9::int[])[i % cardinality($9::int[]) + 1] as family_interval_ms) as r`,
+    [pageId, liveAt, FIRST_SEND_S, SEND_EVERY_S, SENDS, ROTATION.map((entry) => entry.operation), ROTATION.map((entry) => entry.resource),
+      intervals.map((entry) => entry.routeIntervalMs), intervals.map((entry) => entry.familyIntervalMs)],
   );
   // Twelve fan messages, visible 1 s after they were sent, confirmed 5 s later.
   await pool.query(
@@ -363,55 +448,10 @@ export async function seedAcceptanceScenarios(db: Database, pool: Pool): Promise
       label: scenario.label,
       liveAt,
       setSlot: (slot, columns) => setSlot(pool, pageId, liveAt, slot, columns),
+      rateLimit: (slot, columns) => rateLimit(pool, pageId, liveAt, slot, columns),
       slotOf,
     });
     pages.push({ ...scenario, pageId });
   }
   return { since: new Date(first.getTime() - 60_000), pages };
-}
-
-/** What the psql script concluded of one page (its last line). */
-export interface SqlPageVerdict {
-  page: string;
-  verdict: PageVerdict;
-  reasons: AcceptanceCheckName[];
-  routesWith429: number;
-  checks: Record<AcceptanceCheckName, CheckVerdict>;
-}
-
-/**
- * Run `step3-accept.sql` as the runbook does — psql 16 inside the suite's
- * Postgres container, in a READ ONLY transaction (`prodsqlf.sh`) — and return
- * its output and the verdict JSON of its last line.
- */
-export async function runAcceptanceSql(
-  connectionString: string,
-  input: { pages: readonly string[]; since: Date; until?: Date | null },
-): Promise<{ output: string; verdicts: SqlPageVerdict[] }> {
-  const container = inject("testDbContainerId");
-  const database = new URL(connectionString).pathname.slice(1);
-  if (!container || !/^[a-z0-9_]+$/i.test(container + database)) {
-    throw new Error("Docker Postgres is required to run step3-accept.sql through psql");
-  }
-  const script = await readFile(ACCEPTANCE_SQL_PATH, "utf8");
-  const args = [
-    "exec", "-i", container, "psql", "-X", "-q", "-A", "-t", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", database,
-    "-v", `pages=${input.pages.join(",")}`, "-v", `since='${input.since.toISOString()}'`,
-    ...(input.until === undefined || input.until === null ? [] : ["-v", `until='${input.until.toISOString()}'`]),
-  ];
-  const output = await new Promise<string>((resolve, reject) => {
-    const child = spawn("docker", args, { stdio: ["pipe", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString("utf8"); });
-    child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString("utf8"); });
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code === 0) resolve(stdout);
-      else reject(new Error(`psql exited ${code}: ${stderr || stdout}`));
-    });
-    child.stdin.end(`begin read only;\n${script}\nrollback;\n`);
-  });
-  const last = output.trimEnd().split("\n").at(-1) ?? "";
-  return { output, verdicts: JSON.parse(last) as SqlPageVerdict[] };
 }

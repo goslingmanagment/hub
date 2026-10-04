@@ -356,11 +356,11 @@ describe("the journaling call sites", () => {
     // set grew. So what a call site must do is (a) hand the served body to the
     // trim and (b) stamp the per-endpoint capture-shape version, so replay
     // tooling can tell a pre-[A20] 4-field body from a widened 18-field one.
-    // Both lanes are the Sync Engine's (the legacy `followers` and
-    // `followers_reconcile` handlers are deleted since step 4, S4-17, the
-    // legacy dm_conversations sweep since S4-14): its follower resources
-    // journal the `followers` kind and its conversation list the
-    // `dm_conversations` kind, each through one trim.
+    // The follower lanes and the conversation list are the Sync Engine's (the
+    // legacy dm_conversations sweep is deleted since step 4, S4-14; the legacy
+    // `followers` and `followers_reconcile` handlers since S4-17): both of its
+    // follower resources journal the `followers` kind through one trim, and
+    // its conversation list the `dm_conversations` kind through another.
     const engineSource = readFileSync(
       path.resolve("apps/runtime/src/sync/fansly/capture.ts"),
       "utf8",
@@ -379,7 +379,7 @@ describe("the journaling call sites", () => {
     // …and the shared constant is NOT bumped for these lanes: it is read by
     // every Fansly writer, so bumping it would re-label unrelated captures.
     expect(engineSource).not.toMatch(
-      /captureFansly(Follower|MessagingGroups)Payload\([^)]*\),\s*\n\s*mapperVersion: FANSLY_MAPPER_VERSION,/,
+      /captureFansly(Follower|MessagingGroups)Payload\(response, served\.contractAccepted\),\s*\n\s*mapperVersion: FANSLY_MAPPER_VERSION,/,
     );
   });
 });

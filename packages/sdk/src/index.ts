@@ -20,6 +20,8 @@ export {
 // Runtime surface for out-of-workspace consumers (Stage 24: client repos
 // cannot reach @agency_hub_core/contracts the way the dashboard does).
 export {
+  // The tokens streamAiFeature may advertise (`capabilities` option).
+  AI_STREAM_CAPABILITIES,
   decodeDomainEventCursor,
   fetchVoiceNoteAudio,
   // Shared client-side predicate (coach-chat spec §8): apply to a terminal
@@ -37,6 +39,7 @@ export {
   type AiFeatureDebugInputFrame,
   type AiFeatureStreamFrame,
   type AiGatewayStreamFrame,
+  type AiStreamCapability,
   type DomainEventFrame,
   type DomainEventsSnapshotRequired,
   type KernelStreamHandle,
@@ -45,6 +48,40 @@ export {
 } from "@agency_hub_core/contracts";
 export { kernelOperations } from "./operations.ts";
 export { KERNEL_CONTRACT_HASH, KERNEL_SDK_VERSION } from "./meta.ts";
+// The chat extension's known values (routes-client.ts). On the wire these
+// vocabularies are open strings; the client narrows to these constants and
+// reads an unknown member as off / unknown.
+export {
+  CLIENT_FEATURE_FLAG_NAMES,
+  CLIENT_FEATURE_UNAVAILABLE_REASONS,
+  CLIENT_HUB_CAPABILITY_NAMES,
+  CLIENT_KNOWN_PLATFORMS,
+  CLIENT_KNOWN_ROLES,
+  CLIENT_NUMERIC_ID_PATTERN,
+  type ClientFeatureFlagName,
+  type ClientFeatureUnavailableReason,
+  type ClientHubCapabilityName,
+} from "@agency_hub_core/contracts";
+// The chat extension's health report (routes-client.ts). No route carries it:
+// it rides one ingest batch of its own once the bootstrap lists
+// client-health-perf-v1, and its histograms use these fixed bucket bounds.
+export {
+  CLIENT_HEALTH_CODE_PATTERN,
+  CLIENT_HEALTH_INGEST_KIND,
+  CLIENT_HEALTH_PERF_METRICS,
+  clientHealthPerfHistogramSchema,
+  clientHealthReportV1Schema,
+  type ClientHealthPerfHistogram,
+  type ClientHealthPerfMetricName,
+  type ClientHealthReportV1,
+} from "@agency_hub_core/contracts";
+// The narrow token's profiles (client-token-scopes.ts): which operations a
+// token issued with `client` reaches; the hub refuses the rest with 403.
+export {
+  CLIENT_TOKEN_PROFILE_NAMES,
+  CLIENT_TOKEN_PROFILES,
+  type ClientTokenProfile,
+} from "@agency_hub_core/contracts";
 
 export function createClient(options: KernelClientOptions): KernelClient {
   return createKernelClient(kernelOperations, options);

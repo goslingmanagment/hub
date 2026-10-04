@@ -41,6 +41,11 @@ Options:
                         Private Desktop legacy-persona export for first enable
   --desktop-diagnostics-receipt <path>
                         Private Desktop diagnostics receipt for first enable
+  --drop-client-sdk <sha256>
+                        Owner-approved: let this candidate drop one client SDK
+                        contract hash or registry build that the running hub
+                        registers. Repeat once per value the gate names. No
+                        environment equivalent: a drop is a per-run decision.
   --image-gc             Enable the post-health-gate cleanup of superseded
                         candidate/rollback/full-base image tags and the
                         builder cache prune. ON by default since Decision
@@ -183,6 +188,7 @@ SSH_PORT="${DEPLOY_SSH_PORT:-}"
 EXTENSION_PERSONA_RECEIPT="${DEPLOY_EXTENSION_PERSONA_RECEIPT:-}"
 DESKTOP_PERSONA_RECEIPT="${DEPLOY_DESKTOP_PERSONA_RECEIPT:-}"
 DESKTOP_DIAGNOSTICS_RECEIPT="${DEPLOY_DESKTOP_DIAGNOSTICS_RECEIPT:-}"
+DROP_CLIENT_SDKS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -271,6 +277,12 @@ while [[ $# -gt 0 ]]; do
     --desktop-diagnostics-receipt)
       [[ $# -ge 2 ]] || fail "Missing value for $1"
       DESKTOP_DIAGNOSTICS_RECEIPT="$2"
+      shift 2
+      ;;
+    --drop-client-sdk)
+      [[ $# -ge 2 ]] || fail "Missing value for $1"
+      [[ "$2" =~ ^[a-f0-9]{64}$ ]] || fail "--drop-client-sdk takes a lowercase sha256 (64 hex characters)"
+      DROP_CLIENT_SDKS+=("$2")
       shift 2
       ;;
     -h|--help)
@@ -580,6 +592,27 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # recounts them from page_dm_messages after a socket deletion, so it runs
   # unchanged after a rollback (it still writes page_dm_messages).
   "0236_fansly_thread_summary_from_archive.sql"
+  # Route intervals on the attempt (I19 audit): two nullable columns on
+  # sync_attempts without a default (catalog-only). The previous image never
+  # names them (it inserts attempts by named columns), so it runs unchanged
+  # after a rollback; its attempts carry no interval and the audit reads their
+  # pairs as inconclusive.
+  "0237_sync_attempt_route_intervals.sql"
+  # Narrow chat-extension device tokens (chat-extension H-3): one nullable
+  # column on device_tokens (no default; its CHECK scans a few dozen rows) and
+  # an immutability trigger that fires only when an UPDATE names the column.
+  # The previous image never names it: it inserts and updates device tokens by
+  # named columns and runs unchanged. Known cost of a rollback: that image does
+  # not know the profile, so a narrow token issued meanwhile acts as a full
+  # token of the same person (who can mint one with the password anyway) until
+  # a forward deploy returns. Before a manual rollback past H-3, list the live
+  # narrow tokens read-only:
+  #   select id, user_id, label from device_tokens where client_profile is not
+  #   null and revoked_at is null and expires_at > now();
+  # and revoke each (cabinet: Settings > Team > the person > "Завершить вход на
+  # устройстве", i.e. DELETE /api/v1/admin/users/by-id/:userId/device-tokens/
+  # :tokenId); the extension signs in again after the forward deploy.
+  "0238_device_token_client_profile.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"
@@ -595,7 +628,8 @@ for file in \
   scripts/deploy-production.sh \
   scripts/deploy-metadata.sh \
   scripts/deploy-infrastructure.mjs \
-  scripts/verify-desktop-lifecycle-v2-evidence.mjs
+  scripts/verify-desktop-lifecycle-v2-evidence.mjs \
+  scripts/verify-client-sdk-retention.mjs
 do
   if [[ -e "${ROOT_DIR}/${file}" ]]; then
     REMOTE_RELEASE_FILES+=("$file")
@@ -1942,6 +1976,39 @@ if (present !== (expectedRaw === "true")) {
 NODE
 }
 
+# A candidate keeps serving every client SDK the running hub registers
+# (services/client-sdk-registry.ts: health lists those hashes and released
+# clients gate on them). Both images print their registry; the verifier
+# refuses a dropped hash or build the owner did not name with
+# --drop-client-sdk. A running image that predates the print mode leaves
+# nothing to compare, and the gate says so.
+verify_candidate_client_sdks() {
+  local candidate_sdks
+  local running_sdks
+  local running_error_file="${TEMP_DIR}/running-client-sdks.stderr"
+  local drop
+  local verifier_args=()
+
+  candidate_sdks="$(run_remote "set -euo pipefail; docker run --rm $(printf '%q' "$IMAGE_CANDIDATE_TAG") node apps/runtime/dist/startup.js print-compatible-client-sdks")" \
+    || fail "Unable to read the candidate's registered client SDKs"
+  verifier_args+=(--candidate "$candidate_sdks")
+  if [[ "${ROLLBACK_IMAGE_AVAILABLE:-0}" != "1" ]]; then
+    log "No running image to compare registered client SDKs with"
+  elif running_sdks="$(run_remote "set -euo pipefail; docker run --rm $(printf '%q' "$ROLLBACK_IMAGE_TAG") node apps/runtime/dist/startup.js print-compatible-client-sdks" 2>"$running_error_file")"; then
+    verifier_args+=(--running "$running_sdks")
+  elif grep -qF 'Unsupported Agency Hub runtime role "print-compatible-client-sdks"' "$running_error_file"; then
+    log "Running image predates print-compatible-client-sdks; skipping the registered client SDK comparison"
+  else
+    cat "$running_error_file" >&2
+    fail "Unable to read the running image's registered client SDKs"
+  fi
+  for drop in "${DROP_CLIENT_SDKS[@]}"; do
+    verifier_args+=(--drop "$drop")
+  done
+  node "$SCRIPT_DIR/verify-client-sdk-retention.mjs" "${verifier_args[@]}" \
+    || fail "Candidate would drop a registered client SDK, or its registry line is unreadable"
+}
+
 run_pre_recreate_safe_migrations() {
   local candidate_compose
   candidate_compose="RUNTIME_IMAGE=$(printf '%q' "$IMAGE_CANDIDATE_TAG") docker compose --env-file .env.production -f docker-compose.production.yml"
@@ -2002,6 +2069,7 @@ finish_phase candidate
 start_phase candidate-verification
 validate_pull_checkout || fail "Pull checkout changed during candidate preparation"
 verify_candidate_lifecycle_capability
+verify_candidate_client_sdks
 prepare_remote_infrastructure_check
 verify_remote_infrastructure_unchanged || fail "App release would change PostgreSQL/infrastructure; review an explicit --recreate-scope stack deployment"
 finish_phase candidate-verification
