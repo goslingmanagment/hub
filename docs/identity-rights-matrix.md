@@ -174,9 +174,16 @@ own AI spend, the capture lane and revoking itself. Every other route
 answers a plain 403 with no `reason`, in **both** auth-policy modes, before any
 handler runs; page scope still applies on the listed routes, and a revoked or
 expired token still answers 401 with its reason. On the capture lane it sends
-only `ai_acceptance`, journaled as `chat-extension@<version>`, and it can never
-carry the desktop harvest capability. Its AI generations wait for the owner's
-switches (`chatExtensionEnabled`, the Coach / Recap / Review flags) and its
+only `ai_acceptance`, journaled as `chat-extension@<version>`, and
+`client_health` (chat-extension H-11b), and it can never carry the desktop
+harvest capability. A `client_health` report is never journaled, from any
+token: the journal keeps the payload and the user forever. The lane folds it
+into hourly rollups that hold no user, page or fan (the `client_health_*_hourly`
+tables) and drops the report; with `chatExtensionHealthIngestEnabled` off (or
+the master switch off) it accepts the report and keeps nothing, and the
+bootstrap does not list `client-health-perf-v1`, so the extension does not send
+one. Held by `client-health-intake.integration`. Its AI generations wait for
+the owner's switches (`chatExtensionEnabled`, the Coach / Recap / Review flags) and its
 version for `chatExtensionMinVersion`, and each generation record is labelled
 `clientProfile: "chat-extension"`. A full device token of the same person is
 untouched. Held by `device-token-client-profile.integration` (every route of

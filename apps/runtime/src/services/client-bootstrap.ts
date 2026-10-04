@@ -4,7 +4,7 @@ import type { Platform } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { loadAiTranscriptDeepMaxRows } from "./ai-transcript-depth.ts";
-import { SERVED_CLIENT_CAPABILITIES } from "./client-capabilities.ts";
+import { clientBootstrapCapabilities, SERVED_CLIENT_CAPABILITIES } from "./client-capabilities.ts";
 import {
   clientBootstrapFlags,
   evaluateClientPageFeatures,
@@ -110,6 +110,6 @@ export async function buildClientBootstrap(
     bindingsByHost: bindingsForCaller(switches.settings.hostBindings, rows),
     flags: clientBootstrapFlags(switches.settings),
     limits: { ...CLIENT_BOOTSTRAP_LIMITS, deepMax, previewSendReceiptProfiles: [...switches.receiptProfiles] },
-    capabilities: [...served],
+    capabilities: clientBootstrapCapabilities(switches),
   };
 }

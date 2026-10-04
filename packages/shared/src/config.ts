@@ -357,6 +357,9 @@ const envSchema = z.object({
   // a range: 3000 is the readers' hard ceiling and the window the client
   // offers. Keep the env at 1500; the owner raises it in the console.
   AI_TRANSCRIPT_DEEP_MAX_ROWS: z.enum(["1500", "3000"]).default("1500"),
+  // H-11b: keep the extension's client_health reports as hourly rollups with
+  // no user. Off = reports are accepted and dropped.
+  CHAT_EXTENSION_HEALTH_INGEST_ENABLED: booleanSchema.default(false),
 });
 
 // Machine-readable list of every env var the schema understands. Exported so the
@@ -556,6 +559,8 @@ export interface AppConfig {
   aiLiveTextContextMode?: "off" | "shadow" | "serve";
   /** chat-extension H-6: the row cap of the full Recap's transcript read (live-wired). */
   aiTranscriptDeepMaxRows?: "1500" | "3000";
+  /** Keep client_health reports as hourly rollups with no user (H-11b); default false. */
+  chatExtensionHealthIngestEnabled?: boolean;
 }
 
 function hasConfiguredValue(value: string | undefined) {
@@ -886,6 +891,7 @@ export function loadConfig(
     chatExtensionPreviewSendReceiptProfiles: parsed.CHAT_EXTENSION_PREVIEW_SEND_RECEIPT_PROFILES,
     aiLiveTextContextMode: parsed.AI_LIVE_TEXT_CONTEXT_MODE,
     aiTranscriptDeepMaxRows: parsed.AI_TRANSCRIPT_DEEP_MAX_ROWS,
+    chatExtensionHealthIngestEnabled: parsed.CHAT_EXTENSION_HEALTH_INGEST_ENABLED,
   };
 }
 

@@ -500,12 +500,13 @@ export type ClientAiUsageResponse = z.infer<typeof clientAiUsageResponseSchema>;
 // sends a report as one `ingestObservations` event of kind
 // CLIENT_HEALTH_INGEST_KIND, in a batch of its own, and ONLY once the bootstrap
 // lists `client-health-perf-v1`; until then it keeps its reports to itself. A
-// hub without that capability journals an unknown kind in `observations`
+// hub older than the intake (H-11b) journals an unknown kind in `observations`
 // (`desktop.unknown:<kind>`) with the user, forever and on into the lake, which
-// is exactly what this report must never become. The intake behind the
-// capability (H-11b) checks a report against this schema and the bounds
-// registry, folds it into hourly rollups keyed without the user, and never
-// journals it.
+// is exactly what this report must never become. The intake (H-11b) never
+// journals the kind, from any token: behind the capability (the owner's
+// `chatExtensionHealthIngestEnabled`) it checks a report against this schema
+// and the bounds registry and folds it into hourly rollups keyed without the
+// user; without it, it accepts the report and keeps nothing.
 //
 // A client→hub shape, so strict (§4.0): an unknown key is a malformed report,
 // and a new field is a new report version. Growing names (metric, host kind)

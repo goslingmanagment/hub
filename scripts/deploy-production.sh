@@ -657,6 +657,17 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # release, which selects hold_step by name: 0240 and 0243 never ship in one
   # deploy.
   "0243_sync_pages_drop_hold_step.sql"
+  # chat-extension client_health rollups (chat-extension H-11b): five new
+  # tables (client_health_receipts and four *_hourly rollups), their checks,
+  # comments and a read_only grant on the rollups. Nothing writes them until
+  # the owner turns chatExtensionHealthIngestEnabled on. The previous image
+  # never names them and runs unchanged after a rollback: its bootstrap does
+  # not list client-health-perf-v1, so the extension stops sending reports
+  # within its bootstrap cache (5 minutes), and a report that still arrives
+  # from the extension's narrow token is refused there (400: the kind is not
+  # in the token's profile), never journaled. Rollups already written stay
+  # unread until a forward deploy returns.
+  "0239_client_health_rollups.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

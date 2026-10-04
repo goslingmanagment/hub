@@ -361,13 +361,15 @@ describe("client_health v1 report contract", () => {
     expect(Object.keys(CLIENT_HEALTH_PERF_METRICS).length).toBeLessThanOrEqual(16);
   });
 
-  it("is a shape only: no route, no served capability, never a journaled ingest kind", () => {
+  it("has no route of its own, is never a journaled ingest kind, and its capability is no standing one", () => {
     // §5 item 15 / B′: a journaled report would keep the user and the payload
     // forever and carry them into the lake. The intake (H-11b) takes the kind
     // on a branch of its own; the allowlist that journals kinds never holds it.
     expect(CLIENT_HEALTH_INGEST_KIND).toBe("client_health");
     expect(INGEST_KIND_ALLOWLIST.has(CLIENT_HEALTH_INGEST_KIND)).toBe(false);
     expect(CLIENT_HUB_CAPABILITY_NAMES).toContain("client-health-perf-v1");
+    // The capability follows the owner's live switch (clientBootstrapCapabilities),
+    // so the standing list never holds it.
     expect(SERVED_CLIENT_CAPABILITIES).not.toContain("client-health-perf-v1");
     expect(Object.keys(routeSchemas).filter((key) => /health/i.test(key) && key.startsWith("client"))).toEqual([]);
   });

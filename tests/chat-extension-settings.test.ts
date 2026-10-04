@@ -19,13 +19,15 @@ const CHAT_EXTENSION_KEYS = [
   "chatExtensionMinVersion",
   "chatExtensionHostBindings",
   "chatExtensionPreviewSendReceiptProfiles",
+  // H-11b: the health intake's own switch.
+  "chatExtensionHealthIngestEnabled",
 ];
 
 describe("chat-extension switch descriptors", () => {
-  it("are five live, editable Core keys that rest off", () => {
+  it("are six live, editable Core keys that rest off", () => {
     const keys = CONFIG_DESCRIPTORS.filter((descriptor) => descriptor.key.startsWith("chatExtension")).map((d) => d.key);
     expect(keys).toEqual(CHAT_EXTENSION_KEYS);
-    expect(CHAT_EXTENSION_KEYS.map((key) => getDescriptor(key)!.default)).toEqual(["false", "{}", "0.0.0", "{}", "[]"]);
+    expect(CHAT_EXTENSION_KEYS.map((key) => getDescriptor(key)!.default)).toEqual(["false", "{}", "0.0.0", "{}", "[]", "false"]);
     for (const key of CHAT_EXTENSION_KEYS) {
       const descriptor = getDescriptor(key)!;
       expect(descriptor.editability, key).toBe("editable");
