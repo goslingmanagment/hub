@@ -23,4 +23,6 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   // H-10: Split for Ping, Hi and Coach drafts (the splitAll flag;
   // docs/ai-gateway-contract.md).
   "split-all-v1",
+  // H-15: GET /api/v1/client/pages/:pageLabel/ai-usage.
+  "ai-usage-v1",
 ];

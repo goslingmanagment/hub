@@ -23,10 +23,10 @@
  *   itself and reads an unknown member as "off" / "unknown".
  */
 
-import { platforms, userRoles } from "@agency_hub_core/shared";
+import { MOSCOW_TIME_ZONE, platforms, userRoles } from "@agency_hub_core/shared";
 import { z } from "zod";
 
-import { errorResponseSchema, intId, isoTimestamp } from "./primitives.ts";
+import { businessDate, errorResponseSchema, intId, isoTimestamp } from "./primitives.ts";
 
 /** Open token: the wire form of every growing vocabulary (reason, flag, capability, platform, role…). */
 export const clientOpenToken = z.string().min(1).max(64);
@@ -272,6 +272,96 @@ export const clientFanProfileFromGenerationResponseSchema = z.object({
   }),
 });
 
+// ── own AI spend (H-15) ──────────────────────────────────────────────────────
+//
+// What the caller spent on AI on one page, day by day, for the extension's
+// debug panel. Always the caller's own ledger rows: an owner too reads only the
+// owner's own spend, never a chatter's.
+//
+// TWO DAY BOUNDARIES, and the answer states both:
+// - a report day is a calendar day in `timeZone` (Europe/Moscow unless the
+//   caller names another zone, as in the cabinet's reports). Every day carries
+//   the two instants it was cut at (`from`, `toExclusive`);
+// - the AI quota counts the UTC day (`quota.dayBoundary`). "Left today" is
+//   therefore counted over a different window than today's report row, and the
+//   two do not add up to the limit.
+
+/** At most this many days in one answer. */
+export const CLIENT_AI_USAGE_MAX_DAYS = 7;
+/** `date` may lie this many days before today (today in `timeZone`), no further. */
+export const CLIENT_AI_USAGE_MAX_AGE_DAYS = 8;
+/** Known values of `days[].coverage`. On the wire an open token. */
+export const CLIENT_AI_USAGE_COVERAGE = ["complete", "partial"] as const;
+/** Known values of `days[].coverageReasons`: why a day's numbers may still change or are not exact. */
+export const CLIENT_AI_USAGE_COVERAGE_REASONS = ["day_open", "open_reservations", "approximate_cost"] as const;
+/** The `reason` beside this route's 400 `bad_request`. */
+export const CLIENT_AI_USAGE_REFUSAL_REASONS = ["unknown_time_zone", "date_in_future", "date_too_old"] as const;
+
+export type ClientAiUsageCoverage = (typeof CLIENT_AI_USAGE_COVERAGE)[number];
+export type ClientAiUsageCoverageReason = (typeof CLIENT_AI_USAGE_COVERAGE_REASONS)[number];
+export type ClientAiUsageRefusalReason = (typeof CLIENT_AI_USAGE_REFUSAL_REASONS)[number];
+
+export const clientAiUsageQuerySchema = z.object({
+  /** The LAST day of the range: a calendar day in `timeZone`. */
+  date: businessDate,
+  /** How many days, ending at `date`. */
+  days: z.coerce.number().int().min(1).max(CLIENT_AI_USAGE_MAX_DAYS).default(1),
+  /** The IANA zone the days are cut in. A zone the hub does not know is refused. */
+  timeZone: z.string().min(1).max(64).default(MOSCOW_TIME_ZONE),
+}).strict();
+
+export const clientAiUsageTotalsSchema = z.object({
+  /** Every ledger row of the window: finished, refused by the quota, or still open. */
+  requestCount: count,
+  costMicroUsd: count,
+  /** At least one row's cost is the hub's estimate, not the provider's count. */
+  costApproximate: z.boolean(),
+  tokens: z.object({ input: count, output: count, cacheWrite: count, cacheRead: count }),
+  completed: count,
+  failed: count,
+  cancelled: count,
+  quotaDenied: count,
+  /** Rows with no outcome yet: a generation still running, or one cut off and
+   *  not swept yet. Their cost is not in the totals. */
+  openReservations: count,
+  regenerations: count,
+});
+
+export const clientAiUsageDaySchema = z.object({
+  /** The calendar day in `timeZone`, YYYY-MM-DD. */
+  date: z.string(),
+  from: isoTimestamp,
+  toExclusive: isoTimestamp,
+  /** Open token; known values: CLIENT_AI_USAGE_COVERAGE. */
+  coverage: clientOpenToken,
+  /** Open tokens, empty when complete; known values: CLIENT_AI_USAGE_COVERAGE_REASONS. */
+  coverageReasons: z.array(clientOpenToken),
+  totals: clientAiUsageTotalsSchema,
+  /** One row per AI feature used that day, by feature name. The feature is an open token. */
+  features: z.array(clientAiUsageTotalsSchema.extend({ feature: clientOpenToken })),
+});
+
+export const clientAiUsageResponseSchema = z.object({
+  /** Whose spend and where: always the caller, on the page of the path. */
+  scope: z.object({ pageLabel: z.string(), userId: intId }),
+  /** The zone the days were cut in. */
+  timeZone: z.string(),
+  asOf: isoTimestamp,
+  moneyUnit: z.literal("micro-USD"),
+  /** Oldest first; the last one is the requested `date`. A day without spend is listed with zeros. */
+  days: z.array(clientAiUsageDaySchema),
+  /**
+   * What the caller may still spend on this page before the quota's day ends,
+   * and that day is the UTC day, whatever `timeZone` is. Null when this hub's AI
+   * gateway is off: nothing is generated, so there is no quota to report.
+   */
+  quota: z.object({
+    dayBoundary: z.literal("UTC"),
+    remainingRequestsToday: count.nullable(),
+    remainingMicroUsdToday: count.nullable(),
+  }).nullable(),
+});
+
 export const clientRouteSchemas = {
   clientBootstrap: {
     auth: { kind: "apiKey" },
@@ -335,6 +425,30 @@ export const clientRouteSchemas = {
       409: errorResponseSchema,
     },
   },
+  clientAiUsageDaily: {
+    auth: { kind: "apiKey", scope: "page" },
+    tags: ["client"],
+    summary: "The caller's own AI spend on one page, by day",
+    description: "Read-only and database-only: no platform request, no queued work. Only the caller's own "
+      + "ledger rows on the page of the path; an owner too reads only their own. `date` is the last of "
+      + "`days` (1 to 7) calendar days in `timeZone` (Europe/Moscow by default); every day carries the "
+      + "instants it was cut at. A day is `partial` while it is not over (`day_open`), while a generation "
+      + "of it is still running (`open_reservations`), or when a cost in it is an estimate "
+      + "(`approximate_cost`). `quota` is counted over the UTC day, not over `timeZone`. Refused with 400 "
+      + "and a `reason`: `unknown_time_zone`, `date_in_future`, `date_too_old` (more than 8 days before "
+      + "today in `timeZone`). Behind the chat-extension master switch and minimum version: 409 "
+      + "`client_feature_disabled` with the reason (`disabled`, `client_outdated`, `not_granted`).",
+    params: clientPageParamsSchema,
+    querystring: clientAiUsageQuerySchema,
+    response: {
+      200: clientAiUsageResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
 } as const;
 
 export type ClientFeatureAvailability = z.infer<typeof clientFeatureAvailabilitySchema>;
@@ -347,6 +461,10 @@ export type ClientRecapBody = z.infer<typeof clientRecapBodySchema>;
 export type ClientConversationRecapsResponse = z.infer<typeof clientConversationRecapsResponseSchema>;
 export type ClientFanProfileFromGenerationBody = z.infer<typeof clientFanProfileFromGenerationBodySchema>;
 export type ClientFanProfileFromGenerationResponse = z.infer<typeof clientFanProfileFromGenerationResponseSchema>;
+export type ClientAiUsageQuery = z.infer<typeof clientAiUsageQuerySchema>;
+export type ClientAiUsageTotals = z.infer<typeof clientAiUsageTotalsSchema>;
+export type ClientAiUsageDay = z.infer<typeof clientAiUsageDaySchema>;
+export type ClientAiUsageResponse = z.infer<typeof clientAiUsageResponseSchema>;
 
 // ── client_health v1 (H-11a) ─────────────────────────────────────────────────
 //

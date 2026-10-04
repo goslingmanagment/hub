@@ -1,22 +1,46 @@
-import type {
-  AdminChatterUsageQuery,
-  AdminChatterUsageResponse,
-  AiUsageBatchBody,
-  AiUsageBatchResponse,
-  AuthMyUsageResponse,
+import {
+  CLIENT_AI_USAGE_MAX_AGE_DAYS,
+  type AdminChatterUsageQuery,
+  type AdminChatterUsageResponse,
+  type AiUsageBatchBody,
+  type AiUsageBatchResponse,
+  type AuthMyUsageResponse,
+  type ClientAiUsageCoverageReason,
+  type ClientAiUsageQuery,
+  type ClientAiUsageRefusalReason,
+  type ClientAiUsageResponse,
+  type ClientAiUsageTotals,
 } from "@agency_hub_core/contracts";
-import { insertAiUsageEvents, listChatterUsageSummary, listUserUsageReport } from "@agency_hub_core/db";
+import {
+  findPageSummaryByLabel,
+  insertAiUsageEvents,
+  listChatterUsageSummary,
+  listClientBootstrapPages,
+  listUserPageDailyUsage,
+  listUserUsageReport,
+  type UserPageDailyUsageRow,
+} from "@agency_hub_core/db";
 import {
   MOSCOW_TIME_ZONE,
   businessDateToUtcStart,
   nextBusinessDate,
   previousBusinessDate,
   resolveBusinessDateRange,
+  toBusinessDate,
 } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
-import { requireApiKeyUser, requireSessionUser, type AuthPrincipal } from "./auth.ts";
-import { BadRequestError } from "./errors.ts";
+import { evaluateAiGatewayQuota, isChatMuseAiGatewayEnabled } from "./ai-gateway.ts";
+import {
+  canAccessPage,
+  requireApiKeyUser,
+  requireSessionUser,
+  type AuthPrincipal,
+  type HumanAuthPrincipal,
+} from "./auth.ts";
+import { clientVersionRefusal } from "./client-features.ts";
+import { loadClientSwitches, type ClientFeatureRequest } from "./client-switches.ts";
+import { BadRequestError, ClientFeatureDisabledError } from "./errors.ts";
 
 const COMPLETED_AT_FUTURE_SKEW_MS = 5 * 60 * 1000;
 
@@ -178,5 +202,188 @@ export async function getOwnUsageReport(
     },
     row: report.row,
     daily: report.daily,
+  };
+}
+
+// ── chat-extension H-15: the caller's own AI spend on one page, by day ───────
+
+/** How the refusals of this route name it (`client_feature_disabled`). */
+const CLIENT_AI_USAGE_FEATURE = "ai-usage";
+
+function refuseClientAiUsage(message: string, reason: ClientAiUsageRefusalReason): never {
+  throw new BadRequestError(message, { reason });
+}
+
+/** A zone this runtime can cut calendar days in. */
+function isKnownTimeZone(timeZone: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** `count` consecutive calendar dates ending at `lastDate`, oldest first. */
+function businessDatesEndingAt(lastDate: string, count: number): string[] {
+  const dates = [lastDate];
+  while (dates.length < count) {
+    dates.unshift(previousBusinessDate(dates[0]!));
+  }
+  return dates;
+}
+
+function toClientAiUsageTotals(rows: readonly UserPageDailyUsageRow[]): ClientAiUsageTotals {
+  const sum = (pick: (row: UserPageDailyUsageRow) => number) => rows.reduce((total, row) => total + pick(row), 0);
+  return {
+    requestCount: sum((row) => row.requestCount),
+    costMicroUsd: sum((row) => row.costMicroUsd),
+    costApproximate: rows.some((row) => row.costApproximate),
+    tokens: {
+      input: sum((row) => row.inputTokens),
+      output: sum((row) => row.outputTokens),
+      cacheWrite: sum((row) => row.cacheWriteTokens),
+      cacheRead: sum((row) => row.cacheReadTokens),
+    },
+    completed: sum((row) => row.completedCount),
+    failed: sum((row) => row.failedCount),
+    cancelled: sum((row) => row.cancelledCount),
+    quotaDenied: sum((row) => row.quotaDeniedCount),
+    openReservations: sum((row) => row.openReservationCount),
+    regenerations: sum((row) => row.regenerationCount),
+  };
+}
+
+/**
+ * The hub's own check of this route. It has no flag of its own, so it is the
+ * part of requireClientFeature (client-switches.ts) that every client route
+ * shares, refused the same way (409 `client_feature_disabled` + reason):
+ * - `not_granted`: not an active page granted to the caller (a missing page
+ *   answers the same, so the refusal reveals nothing);
+ * - `disabled`: the owner's master switch is off;
+ * - `client_outdated`: `x-client-version` is below the owner's minimum, or
+ *   unreadable.
+ * No platform check: AI is spent on every platform.
+ */
+async function requireClientAiUsagePage(
+  app: AppContext,
+  request: ClientFeatureRequest,
+  principal: HumanAuthPrincipal,
+  pageLabel: string,
+): Promise<{ id: number; label: string }> {
+  const found = await findPageSummaryByLabel(app.db, pageLabel);
+  const [page] = found && canAccessPage(principal, found.id) ? await listClientBootstrapPages(app.db, [found.id]) : [];
+  if (page === undefined) {
+    throw new ClientFeatureDisabledError(CLIENT_AI_USAGE_FEATURE, "not_granted");
+  }
+  const switches = await loadClientSwitches(app);
+  if (!switches.settings.enabled) {
+    throw new ClientFeatureDisabledError(CLIENT_AI_USAGE_FEATURE, "disabled");
+  }
+  const outdated = clientVersionRefusal(switches.minVersion, request.headers["x-client-version"]);
+  if (outdated !== null) {
+    throw new ClientFeatureDisabledError(CLIENT_AI_USAGE_FEATURE, outdated);
+  }
+  return page;
+}
+
+/**
+ * chat-extension H-15: what the caller spent on AI on one page, by day.
+ * Database only: the ledger and the config; no platform request, no queued work.
+ *
+ * Whose: always `principal.user.id`. An owner reads the owner's own rows, never
+ * a chatter's (the owner's view of everyone is the cabinet's admin report).
+ *
+ * TWO DAY BOUNDARIES, both printed in the answer:
+ * - report days are calendar days in `query.timeZone` (Europe/Moscow by
+ *   default, the cabinet's business day), cut by the same helper as every other
+ *   report of the hub. The ledger is bucketed by the instants printed as
+ *   `from` / `toExclusive`, so what a day shows is exactly what was counted;
+ * - `quota` is the gateway's own answer (evaluateAiGatewayQuota), and its day
+ *   is the UTC day. Around midnight the two "today"s are different windows.
+ *
+ * A day is `partial` while its numbers may still move or are not exact: the day
+ * is not over, a generation of it has no outcome yet (its row carries no cost
+ * and moves to the day it finishes in), or a cost in it is an estimate.
+ *
+ * Refuses (400 + reason) a zone the runtime does not know, a `date` after today
+ * in that zone, and a `date` more than CLIENT_AI_USAGE_MAX_AGE_DAYS before it.
+ */
+export async function getClientAiUsageReport(
+  app: AppContext,
+  request: ClientFeatureRequest,
+  principal: HumanAuthPrincipal,
+  input: { pageLabel: string; query: ClientAiUsageQuery },
+  now: Date = new Date(),
+): Promise<ClientAiUsageResponse> {
+  requireApiKeyUser(principal);
+  const page = await requireClientAiUsagePage(app, request, principal, input.pageLabel);
+
+  const { date, days, timeZone } = input.query;
+  if (!isKnownTimeZone(timeZone)) {
+    refuseClientAiUsage("timeZone is not a time zone this hub knows", "unknown_time_zone");
+  }
+  const today = toBusinessDate(now, timeZone);
+  if (date > today) {
+    refuseClientAiUsage(`date is after today (${today} in ${timeZone})`, "date_in_future");
+  }
+  const oldest = businessDatesEndingAt(today, CLIENT_AI_USAGE_MAX_AGE_DAYS + 1)[0]!;
+  if (date < oldest) {
+    refuseClientAiUsage(
+      `date is more than ${CLIENT_AI_USAGE_MAX_AGE_DAYS} days before today (${today} in ${timeZone})`,
+      "date_too_old",
+    );
+  }
+
+  const dates = businessDatesEndingAt(date, days);
+  // One more boundary than days: day i is [boundaries[i], boundaries[i + 1]).
+  const boundaries = [...dates, nextBusinessDate(date)].map((day) => businessDateToUtcStart(day, timeZone));
+  const userId = principal.user.id;
+  const rows = await listUserPageDailyUsage(app.db, {
+    userId,
+    pageId: page.id,
+    dayStarts: boundaries.slice(0, -1),
+    toExclusive: boundaries[boundaries.length - 1]!,
+  });
+  const quota = isChatMuseAiGatewayEnabled(app.config)
+    ? await evaluateAiGatewayQuota(app, { userId, pageId: page.id, now })
+    : null;
+
+  return {
+    scope: { pageLabel: page.label, userId },
+    timeZone,
+    asOf: now.toISOString(),
+    moneyUnit: "micro-USD",
+    days: dates.map((day, index) => {
+      const dayRows = rows.filter((row) => row.dayIndex === index);
+      const totals = toClientAiUsageTotals(dayRows);
+      const toExclusive = boundaries[index + 1]!;
+      const coverageReasons: ClientAiUsageCoverageReason[] = [];
+      if (now.getTime() < toExclusive.getTime()) {
+        coverageReasons.push("day_open");
+      }
+      if (totals.openReservations > 0) {
+        coverageReasons.push("open_reservations");
+      }
+      if (totals.costApproximate) {
+        coverageReasons.push("approximate_cost");
+      }
+      return {
+        date: day,
+        from: boundaries[index]!.toISOString(),
+        toExclusive: toExclusive.toISOString(),
+        coverage: coverageReasons.length === 0 ? "complete" : "partial",
+        coverageReasons,
+        totals,
+        features: dayRows.map((row) => ({ feature: row.feature, ...toClientAiUsageTotals([row]) })),
+      };
+    }),
+    quota: quota === null
+      ? null
+      : {
+        dayBoundary: "UTC",
+        remainingRequestsToday: quota.remainingRequestsToday,
+        remainingMicroUsdToday: quota.remainingMicroUsdToday,
+      },
   };
 }
