@@ -86,6 +86,15 @@ stops exactly there:
   no prompt block, no author, no context manifest. The reader names its
   columns, so the rest never leaves the database for this route.
 
+A page that is not the caller's serves no recap in either auth-policy mode;
+only the refusal differs. With the policy enforced, the declared page scope
+answers before the handler, as on every page route: 403 for a page that is not
+granted, 404 for one that does not exist. In `log` mode the handler decides,
+and the chat-extension feature check (`requireClientFeature`, the same on
+every chat-extension page route) answers both `409 client_feature_disabled`
+with the reason `not_granted`, which does not tell a missing page from another
+person's.
+
 Its row is held by `client-recaps.integration`: every cell, the agent key, a
 page that is not granted and one that does not exist, in both auth-policy
 modes, and two chatters of one page reading the same recap.
