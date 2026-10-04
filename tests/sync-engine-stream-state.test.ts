@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import type { SyncWorkResourceCounts, SyncWorkRow } from "@agency_hub_core/db";
+import { INDEFINITE_UNTIL } from "@agency_hub_core/shared";
 
 import {
   engineOwnerRunning,
   engineStreamState,
   type EngineStatusFacts,
 } from "../apps/runtime/src/services/sync-status-engine.ts";
+import { pageHoldRow } from "./helpers/sync-holds.ts";
 
 // One lever stream of an engine page as its surfaces read it (the Settings
 // blocks, the analytics Coverage panel): what of it is open, why its earliest
@@ -24,11 +26,8 @@ function page(overrides: Record<string, unknown> = {}): EngineStatusFacts["page"
     pausedAll: false,
     pausedRequests: false,
     pausedResources: [],
-    holdKind: null,
-    holdUntil: null,
-    holdSince: null,
-    holdDetail: {},
-    resourceHolds: {},
+    // The page's hold set (`sync_holds`): it holds nothing.
+    holds: [],
     lastSendAt: minutes(-1),
     lastCompletedAt: minutes(-1),
     dbNow: NOW,
@@ -155,7 +154,7 @@ describe("a lever stream of an engine page", () => {
 
   it("a hold with no end has no 'until'", () => {
     const state = engineStreamState("light", facts({
-      page: { holdKind: "auth", holdUntil: new Date(8.64e15), holdSince: minutes(-10) },
+      page: { holds: [pageHoldRow("auth", INDEFINITE_UNTIL, { since: minutes(-10) })] },
       counts: [counts("account.poll", { nextDueAt: minutes(-1) })],
       rows: [row("account.poll", { dueAt: minutes(-1), waitingReason: null, waitingUntil: null })],
     }));
