@@ -2,6 +2,7 @@ import type {
   AiFeatureAttachedRecaps,
   AiFeatureDebugInputFrame,
   AiGatewayReasoningEffort,
+  AiLiveTextContext,
   AiStreamCapability,
 } from "@agency_hub_core/contracts";
 import { COACH_ANSWER_MAX_CHARS } from "@agency_hub_core/contracts";
@@ -45,6 +46,8 @@ import {
   type MediaNoteItem,
   type MediaNotesGate,
   type MediaNotesManifest,
+  applyLiveTextContext,
+  assertLiveTextRequestShape,
   computePingSummary,
   isFanProfileFeatureEnabled,
   loadAiContextFrameBody,
@@ -57,6 +60,7 @@ import {
   transcriptMessagesOmittedByBudget,
   type AiTranscriptLiveOverlay,
   type AiTranscriptUnionMode,
+  type AppliedLiveText,
   type FanProfilePromptContext,
   type TranscriptContext,
 } from "../context/index.ts";
@@ -124,6 +128,9 @@ export interface AiFeatureRequestBody {
   /** chat-extension H-4b: fan message ids the client saw before it asked;
    * answered in the `context_v1` frame, never read into the prompt. */
   knownFanMessageIds?: string[];
+  /** chat-extension H-4c: the fresh text of the open OnlyFans chat, merged
+   * into the hub's transcript for this generation only (context/live-text.ts). */
+  liveTextContext?: AiLiveTextContext;
   /** Stage 32: client-loaded context (Fansly — the kernel archive is
    * pull-cadenced: dm_conversations 30 min / dm_messages 24 h, no webhooks;
    * the extension reads the conversation live at generation time). */
@@ -383,6 +390,19 @@ export async function prepareAiFeatureStream(
   }
   const pageId = stored.page.id;
 
+  // chat-extension H-4c: fresh text is refused where it can never be used
+  // (the feature, the platform, beside clientContext, without the frame that
+  // answers it), before any context loads. The owner's switch is not a
+  // refusal: switched off, the text is ignored further down.
+  if (body.liveTextContext !== undefined) {
+    assertLiveTextRequestShape({
+      feature,
+      isFanslyRequest,
+      hasClientContext: body.clientContext !== undefined,
+      capabilities: options?.capabilities,
+    });
+  }
+
   // Decision #174: voice-script is part of the voice-notes lane, which ships
   // INERT (VOICE_NOTES_ENABLED default-off). Gate this PAID generation on the
   // SAME live flag + fail-closed page allowlist the voice-notes service admits
@@ -460,6 +480,9 @@ export async function prepareAiFeatureStream(
   // `rendered` are the messages the prompt's transcript text was built from:
   // the loader's, or the same ones with their image notes filled in.
   let kernelTranscript: { context: TranscriptContext; rendered: readonly TranscriptMessage[] } | undefined;
+  // chat-extension H-4c: what the hub did with the request's fresh text. Set
+  // on the kernel-context lane only (fresh text never rides with clientContext).
+  let liveText: AppliedLiveText<TranscriptContext> | undefined;
   // AI media describer: image notes rendered into the transcript (one config
   // read + one indexed select, no network), and the files to ask for after.
   let mediaNotes: {
@@ -582,13 +605,27 @@ export async function prepareAiFeatureStream(
     // Uses the resolved window computed above (short fan-summary already clamped
     // DOWN to 300; every other request keeps its per-bucket default or the
     // caller-supplied messageCount).
-    const transcript = await loadTranscriptContext(app, {
+    const loaded = await loadTranscriptContext(app, {
       pageId,
       conversationRef: body.conversationRef,
       limit: resolvedMessageLimit,
       unionMode,
       liveOverlay,
     });
+    // chat-extension H-4c: the request's fresh text joins AFTER the loader
+    // returns, never inside it. Without fresh text (or with the owner's switch
+    // off, or in shadow) `transcript` is the loaded one; in serve it is the
+    // merged one, so everything below (the gates, the Ping analysis, the image
+    // notes, the frame) reads what the model reads.
+    liveText = await applyLiveTextContext(app, {
+      principal,
+      page: stored.page,
+      conversationRef: body.conversationRef,
+      limit: resolvedMessageLimit,
+      transcript: loaded,
+      liveTextContext: body.liveTextContext,
+    });
+    const transcript = liveText.transcript;
     contextManifest = transcript.contextManifest;
     kernelTranscript = { context: transcript, rendered: transcript.messages };
     const spending = policy.includesEarnings
@@ -957,6 +994,13 @@ export async function prepareAiFeatureStream(
       ...(body.clientContext?.fanAvatarUrl ? { images: [{ url: body.clientContext.fanAvatarUrl }] } : {}),
     },
   };
+  // chat-extension H-4c: featureParams for every feature, not fan-summary
+  // alone. A generation whose transcript held text only the caller's client
+  // supplied is scoped, so no shared reader ever selects it. Without served
+  // fresh text nothing is added and the recorded params are what they were.
+  if (liveText?.contextScope !== undefined) {
+    gatewayBody.featureParams = { ...gatewayBody.featureParams, contextScope: liveText.contextScope };
+  }
   let debugFrame: AiFeatureDebugInputFrame | undefined;
   if (options?.debugPromptEcho) {
     try {
@@ -1002,6 +1046,7 @@ export async function prepareAiFeatureStream(
       }),
       requestedCount: resolvedMessageLimit,
       ...(body.knownFanMessageIds !== undefined ? { knownFanMessageIds: body.knownFanMessageIds } : {}),
+      ...(liveText !== undefined ? { live: liveText.live } : {}),
     });
   }
   if (mediaNotes?.gate.active && mediaNotes.gate.policy && mediaNotes.items.length > 0) {

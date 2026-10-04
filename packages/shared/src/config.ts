@@ -347,6 +347,11 @@ const envSchema = z.object({
   CHAT_EXTENSION_MIN_VERSION: z.string().default("0.0.0"),
   CHAT_EXTENSION_HOST_BINDINGS: z.string().default("{}"),
   CHAT_EXTENSION_PREVIEW_SEND_RECEIPT_PROFILES: z.string().default("[]"),
+  // chat-extension H-4c: whether a client's fresh text of the open OnlyFans
+  // chat joins the AI transcript. Keep the env at the default, like
+  // AI_TRANSCRIPT_FRESH_UNION_MODE: the PATCH lane owns transitions (stepwise
+  // up through shadow, any rollback), and clearing the override resolves to off.
+  AI_LIVE_TEXT_CONTEXT_MODE: z.enum(["off", "shadow", "serve"]).default("off"),
 });
 
 // Machine-readable list of every env var the schema understands. Exported so the
@@ -542,6 +547,8 @@ export interface AppConfig {
   chatExtensionHostBindings?: string;
   /** JSON array: the admitted preview-send receipt profiles (X8); [] = none. */
   chatExtensionPreviewSendReceiptProfiles?: string;
+  /** chat-extension H-4c: what the AI lane does with a client's fresh text (live-wired). */
+  aiLiveTextContextMode?: "off" | "shadow" | "serve";
 }
 
 function hasConfiguredValue(value: string | undefined) {
@@ -870,6 +877,7 @@ export function loadConfig(
     chatExtensionMinVersion: parsed.CHAT_EXTENSION_MIN_VERSION,
     chatExtensionHostBindings: parsed.CHAT_EXTENSION_HOST_BINDINGS,
     chatExtensionPreviewSendReceiptProfiles: parsed.CHAT_EXTENSION_PREVIEW_SEND_RECEIPT_PROFILES,
+    aiLiveTextContextMode: parsed.AI_LIVE_TEXT_CONTEXT_MODE,
   };
 }
 

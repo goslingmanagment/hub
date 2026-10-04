@@ -164,6 +164,9 @@ describe("config registry", () => {
     "chatExtensionMinVersion",
     "chatExtensionHostBindings",
     "chatExtensionPreviewSendReceiptProfiles",
+    // chat-extension H-4c: what the AI lane does with a client's fresh text of
+    // the open chat, read per generation. Rests off.
+    "aiLiveTextContextMode",
   ];
   const BOOT_KEYS = [
     "ofapiDmProjectionEnabled",

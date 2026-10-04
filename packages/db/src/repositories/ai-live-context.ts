@@ -159,3 +159,208 @@ export async function explainAiKnownMessagesQuery(
   );
   return result.rows.map((row) => row["QUERY PLAN"]).join("\n");
 }
+
+// chat-extension H-4c: where the hub's stores stand on message ids a client
+// sent WITH their text (`liveTextContext`, the fresh text of the open chat).
+// The AI feature lane asks it for the ids the served transcript does not hold,
+// before it lets a client's text into a prompt. Three questions per id:
+//
+//   - does the id belong to ANOTHER chat (`foreign`)? Then the snapshot is not
+//     of the chat the request names, and the request is refused;
+//   - was the message deleted (`deleted`)? A client's copy never brings a
+//     deleted message back;
+//   - who sent it (`isSentByMe`), where a store holds its content for this
+//     conversation? A client that names the other side is refused.
+//
+// The same stores and the same unique keys as the lookup above, for this page:
+// message_archive, dm_message_archive (through the page's OFAPI account) and,
+// for a tombstone only, the hot table through this conversation's thread.
+//
+// What differs from the lookup above, and why:
+//   - a tombstone counts from any store of this page whether or not the hub
+//     holds the message for this conversation. Above, the answer goes back to
+//     the client and must not describe a chat it did not name; here nothing is
+//     described, the item is only left out of the prompt. A delete webhook
+//     names no chat, so this is the only way such a stub counts at all;
+//   - `foreign` reads the chat a row names instead of filtering by it;
+//   - with `otherPageIds` it also reads message_archive of OTHER pages, by the
+//     same unique key (one probe per page and id). The caller passes only pages
+//     the principal may read, so the refusal says nothing a second request of
+//     the same principal could not ask outright.
+//
+// "The same chat" across pages: a chat is a pair of platform accounts, and
+// both can be pages of this hub (two models writing to each other). The same
+// message is then archived twice, once under each page with the other one as
+// its conversation. Such a row is the chat itself seen from its other side,
+// not a foreign one. Known account ids are unique among a platform's pages
+// (pages_platform_external_id_uniq), so a second record of one account exists
+// only with an id unknown (`pages.external_page_id` is NULL). Where an unknown
+// id leaves the answer open, the row decides nothing (SQL's three-valued `not`
+// drops it): a wrong refusal costs a generation, a missed one costs nothing
+// the caller could not have typed into the draft.
+
+export interface AiLiveTextStoreState {
+  /** The hub holds the id under another chat. */
+  foreign: boolean;
+  /** Tombstoned in a store of this page. */
+  deleted: boolean;
+  /** The sender by the stores that hold the message's content for this
+   *  conversation: true = the page, false = the fan, null = no store holds its
+   *  content, or they disagree. */
+  isSentByMe: boolean | null;
+}
+
+export interface AiLiveTextLookupInput {
+  pageId: number;
+  /** The page's platform: part of message_archive's unique key. */
+  platform: string;
+  conversationRef: string;
+  messageRefs: readonly string[];
+  /** Other pages whose archive is read for the same ids: `null` = every other
+   *  page of the platform (a caller who may read them all), a list = exactly
+   *  those. EMPTY = none: reading "no ids" as "no filter" is how a scope clamp
+   *  turns into an unfiltered read. */
+  otherPageIds: readonly number[] | null;
+}
+
+function buildLiveTextMessageQuery(input: AiLiveTextLookupInput) {
+  const refs = sql`${sql.param([...input.messageRefs])}::text[]`;
+  const otherPageIds = input.otherPageIds === null
+    ? null
+    : input.otherPageIds.filter((id) => id !== input.pageId);
+  const others = otherPageIds === null || otherPageIds.length > 0;
+  return sql`
+    with page as (
+      select p.ofapi_account_id, p.external_page_id
+      from pages p
+      where p.id = ${input.pageId}
+    ),
+    wanted as (
+      select distinct w.message_ref
+      from unnest(${refs}) as w(message_ref)
+    ),
+    archive_rows as (
+      select ma.message_ref, ma.conversation_ref, ma.is_sent_by_me, ma.deleted_at,
+             ma.content_pending as is_stub
+      from message_archive ma
+      where ma.account_id = ${input.pageId}
+        and ma.platform = ${input.platform}
+        and ma.message_ref = any(${refs})
+    ),
+    dm_rows as (
+      select d.platform_message_id as message_ref,
+             d.platform_conversation_id as conversation_ref,
+             d.is_sent_by_me,
+             d.deleted_at,
+             (d.message_created_at is null) as is_stub,
+             (d.platform_account_id = ${input.pageId}) as on_page
+      from dm_message_archive d
+      join page on page.ofapi_account_id = d.ofapi_account_id
+      where d.platform = 'onlyfans'
+        and d.platform_message_id = any(${refs})
+    ),
+    hot_rows as (
+      select m.platform_message_id as message_ref, m.deleted_at
+      from page_dm_threads t
+      join page_dm_messages m on m.conversation_id = t.id
+      where t.platform_account_id = ${input.pageId}
+        and t.platform_conversation_id = ${input.conversationRef}
+        and m.platform_message_id = any(${refs})
+    ),
+    ${others ? sql`other_rows as (
+      select ma.message_ref
+      from pages o
+      cross join page
+      join message_archive ma
+        on ma.account_id = o.id
+       and ma.platform = ${input.platform}
+       and ma.message_ref = any(${refs})
+      where o.platform = ${input.platform}
+        and o.id <> ${input.pageId}
+        ${otherPageIds === null ? sql`` : sql`and o.id = any(${sql.param(otherPageIds)}::bigint[])`}
+        and ma.conversation_ref is not null
+        and not (
+          (o.external_page_id = ${input.conversationRef} and ma.conversation_ref = page.external_page_id)
+          or (o.external_page_id = page.external_page_id and ma.conversation_ref = ${input.conversationRef})
+        )
+    ),` : sql``}
+    content as (
+      select a.message_ref, a.is_sent_by_me
+      from archive_rows a
+      where a.conversation_ref = ${input.conversationRef} and not a.is_stub
+      union all
+      select d.message_ref, d.is_sent_by_me
+      from dm_rows d
+      where d.on_page and d.conversation_ref = ${input.conversationRef} and not d.is_stub
+    )
+    select w.message_ref,
+           (exists (select 1 from archive_rows a
+                    where a.message_ref = w.message_ref
+                      and a.conversation_ref is not null
+                      and a.conversation_ref <> ${input.conversationRef})
+             or exists (select 1 from dm_rows d
+                        where d.message_ref = w.message_ref
+                          and d.on_page
+                          and d.conversation_ref is not null
+                          and d.conversation_ref <> ${input.conversationRef})
+             ${others ? sql`or exists (select 1 from other_rows o where o.message_ref = w.message_ref)` : sql``}) as foreign_chat,
+           (exists (select 1 from archive_rows a
+                    where a.message_ref = w.message_ref and a.deleted_at is not null)
+             or exists (select 1 from dm_rows d
+                        where d.message_ref = w.message_ref and d.deleted_at is not null)
+             or exists (select 1 from hot_rows h
+                        where h.message_ref = w.message_ref and h.deleted_at is not null)) as tombstoned,
+           exists (select 1 from content c
+                   where c.message_ref = w.message_ref and c.is_sent_by_me) as sent_by_page,
+           exists (select 1 from content c
+                   where c.message_ref = w.message_ref and not c.is_sent_by_me) as sent_by_fan
+    from wanted w
+  `;
+}
+
+const AI_LIVE_TEXT_UNSEEN: AiLiveTextStoreState = { foreign: false, deleted: false, isSentByMe: null };
+
+/**
+ * The state of each named message id in the hub's stores, for one conversation
+ * of one page. Every ref of the input has an entry; an id no store has seen
+ * reads `{ foreign: false, deleted: false, isSentByMe: null }`.
+ */
+export async function lookupAiLiveTextMessages(
+  db: Database,
+  input: AiLiveTextLookupInput,
+): Promise<Map<string, AiLiveTextStoreState>> {
+  const states = new Map<string, AiLiveTextStoreState>();
+  if (input.messageRefs.length === 0) {
+    return states;
+  }
+  if (input.messageRefs.length > AI_KNOWN_MESSAGE_LOOKUP_MAX_REFS) {
+    throw new Error(`lookupAiLiveTextMessages takes at most ${AI_KNOWN_MESSAGE_LOOKUP_MAX_REFS} refs`);
+  }
+  const result = await db.execute<Record<string, unknown>>(buildLiveTextMessageQuery(input));
+  for (const row of result.rows) {
+    const byPage = row.sent_by_page === true;
+    const byFan = row.sent_by_fan === true;
+    states.set(String(row.message_ref), {
+      foreign: row.foreign_chat === true,
+      deleted: row.tombstoned === true,
+      isSentByMe: byPage === byFan ? null : byPage,
+    });
+  }
+  for (const ref of input.messageRefs) {
+    if (!states.has(ref)) {
+      states.set(ref, AI_LIVE_TEXT_UNSEEN);
+    }
+  }
+  return states;
+}
+
+/** Perf-gate seam: EXPLAIN over the exact statement the lookup runs. */
+export async function explainAiLiveTextMessagesQuery(
+  db: Database,
+  input: AiLiveTextLookupInput,
+): Promise<string> {
+  const result = await db.execute<{ "QUERY PLAN": string }>(
+    sql`explain (format text) ${buildLiveTextMessageQuery(input)}`,
+  );
+  return result.rows.map((row) => row["QUERY PLAN"]).join("\n");
+}

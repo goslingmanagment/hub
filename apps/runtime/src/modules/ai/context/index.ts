@@ -33,6 +33,7 @@ import {
 import type { OnlyFansMessageMedia } from "./media-notes.ts";
 
 export * from "./context-frame.ts";
+export * from "./live-text.ts";
 export * from "./media-notes.ts";
 export * from "./media-notes-context.ts";
 export * from "./ping-summary.ts";

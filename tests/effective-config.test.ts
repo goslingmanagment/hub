@@ -203,6 +203,9 @@ describe("LIVE_CONFIG_KEYS", () => {
       "chatExtensionMinVersion",
       "chatExtensionHostBindings",
       "chatExtensionPreviewSendReceiptProfiles",
+      // chat-extension H-4c: what the AI lane does with a client's fresh text,
+      // read per generation.
+      "aiLiveTextContextMode",
     ]) {
       expect(LIVE_CONFIG_KEYS.has(key), key).toBe(true);
     }
@@ -210,6 +213,6 @@ describe("LIVE_CONFIG_KEYS", () => {
     expect(LIVE_CONFIG_KEYS.has("fanslyLiveOverlayReadPages")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("agentHydrationMode")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("healthSyncLightMaxAgeMinutes")).toBe(true);
-    expect(LIVE_CONFIG_KEYS.size).toBe(45);
+    expect(LIVE_CONFIG_KEYS.size).toBe(46);
   });
 });

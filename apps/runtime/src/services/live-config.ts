@@ -21,6 +21,7 @@ import {
 import {
   collectCostWarnings,
   getDescriptor,
+  validateAiLiveTextContextModeTransition,
   validateAiTranscriptFreshUnionModeTransition,
   validateCaptureCasReadModeTransition,
   validateConfigOverride,
@@ -103,12 +104,17 @@ export function validateLiveConfigPatches(patches: readonly LiveConfigPatchInput
     // writes the override: fast-reply freshness PR3's union mode, and G5
     // slice 2's capture read mode, which follows it deliberately — a flag
     // that moves the byte source of a read must pass through a shadow window.
+    // chat-extension H-4c's fresh-text mode follows the same rule: `serve`
+    // puts a client's text into the model's context.
     const validateTransition = patch.key === "aiTranscriptFreshUnionMode"
       ? (current: ConfigOverrideValue | null) =>
         validateAiTranscriptFreshUnionModeTransition(current, String(validated.value))
       : patch.key === "captureCasReadMode"
       ? (current: ConfigOverrideValue | null) =>
         validateCaptureCasReadModeTransition(current, String(validated.value))
+      : patch.key === "aiLiveTextContextMode"
+      ? (current: ConfigOverrideValue | null) =>
+        validateAiLiveTextContextModeTransition(current, String(validated.value))
       : undefined;
     return {
       key: patch.key,
