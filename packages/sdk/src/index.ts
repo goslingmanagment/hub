@@ -60,10 +60,12 @@ export {
   CLIENT_KNOWN_PLATFORMS,
   CLIENT_KNOWN_ROLES,
   CLIENT_NUMERIC_ID_PATTERN,
+  CLIENT_RECAP_TRANSCRIPT_COVERAGES,
   type ClientCoverageLevel,
   type ClientFeatureFlagName,
   type ClientFeatureUnavailableReason,
   type ClientHubCapabilityName,
+  type ClientRecapTranscriptCoverage,
 } from "@agency_hub_core/contracts";
 // The AI context frame's known values (routes.ts, `context_v1`): its open
 // tokens narrow to these, and `knownFanMessageIds` takes at most the MAX.

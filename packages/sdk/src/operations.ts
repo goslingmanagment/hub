@@ -140,6 +140,7 @@ export const kernelOperations = {
   authRevokeDevice: { method: "DELETE", path: "/api/v1/auth/devices/:deviceId" },
   cancelOfapiCommand: { method: "POST", path: "/api/v1/ofapi/commands/:commandId/cancel" },
   clientBootstrap: { method: "GET", path: "/api/v1/client/bootstrap" },
+  clientConversationRecaps: { method: "GET", path: "/api/v1/client/pages/:pageLabel/conversations/:fanRef/recaps" },
   contentComments: { method: "GET", path: "/api/v1/pages/:pageLabel/content/comments" },
   contentMedia: { method: "GET", path: "/api/v1/pages/:pageLabel/content/media" },
   createFanNote: { method: "POST", path: "/api/v1/pages/:pageLabel/fans/:platformUserId/notes" },
