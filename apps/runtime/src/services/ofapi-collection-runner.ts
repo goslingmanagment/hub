@@ -63,6 +63,7 @@ const READ_CATEGORIES: OfapiCollectionCategory[] = [
   "content_history",
   "balances",
   "smart_links", "tracking_links",
+  "account_settings",
 ];
 class OfapiCollectionCapturedHttpError extends Error {
   constructor(readonly status: number) {

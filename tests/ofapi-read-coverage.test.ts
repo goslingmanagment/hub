@@ -55,6 +55,7 @@ describe("closed OFAPI read coverage catalog", () => {
           user_list_users: "ofapi_gateway_user_list_users",
           vault_lists: "ofapi_gateway_vault_lists",
           vault_item: "ofapi_gateway_vault_media_item",
+          welcome_message: "ofapi_gateway_welcome_message",
         };
         expect(request).toMatchObject({
           kind: "proxy",
