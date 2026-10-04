@@ -62,6 +62,19 @@ export {
   type ClientFeatureUnavailableReason,
   type ClientHubCapabilityName,
 } from "@agency_hub_core/contracts";
+// The chat extension's health report (routes-client.ts). No route carries it:
+// it rides one ingest batch of its own once the bootstrap lists
+// client-health-perf-v1, and its histograms use these fixed bucket bounds.
+export {
+  CLIENT_HEALTH_CODE_PATTERN,
+  CLIENT_HEALTH_INGEST_KIND,
+  CLIENT_HEALTH_PERF_METRICS,
+  clientHealthPerfHistogramSchema,
+  clientHealthReportV1Schema,
+  type ClientHealthPerfHistogram,
+  type ClientHealthPerfMetricName,
+  type ClientHealthReportV1,
+} from "@agency_hub_core/contracts";
 
 export function createClient(options: KernelClientOptions): KernelClient {
   return createKernelClient(kernelOperations, options);
