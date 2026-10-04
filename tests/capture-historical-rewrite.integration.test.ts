@@ -1462,8 +1462,9 @@ describe("C — capture:reclaim, sync_raw_payloads (the maintenance-rewrite rout
   // check (which refuses on ANY heartbeating instance) refused indefinitely and
   // the documented ritual could not be performed. The audit found the api is a
   // capture writer too — it journals an observation on every audited admin
-  // mutation and writes sync_raw_payloads itself on the page-verify route — so
-  // the CHECK is right and the ritual was wrong. These cases pin both halves.
+  // mutation (and, until step 4 of the Fansly Sync Engine, wrote
+  // sync_raw_payloads itself on the page-verify route) — so the CHECK is right
+  // and the ritual was wrong. These cases pin both halves.
   describe("the writers-stopped matrix (#223)", () => {
     async function armRawScope(label: string) {
       const page = await seedPage(label);

@@ -17,8 +17,8 @@ import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
 import { executeNextSyncPageChunk } from "../apps/runtime/src/services/sync/executor.ts";
 import { runSyncPlannerCycle } from "../apps/runtime/src/services/sync/planner.ts";
+import { LEGACY_SYNC_RETIRED_CODE } from "../apps/runtime/src/services/errors.ts";
 import {
-  LEGACY_SYNC_RETIRED_CODE,
   requestAllPagesSync,
   requestPageSync,
 } from "../apps/runtime/src/services/sync-control.ts";

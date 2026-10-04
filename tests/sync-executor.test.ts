@@ -5,11 +5,8 @@ import type * as NotificationIncidentsModule from "../apps/runtime/src/services/
 import type * as SyncSharedModule from "../apps/runtime/src/services/sync/shared.ts";
 
 import { OfapiCollectionPolicyError, PageSyncLeaseLostError } from "@agency_hub_core/db";
-import { FanslyApiError } from "@agency_hub_core/fansly";
 import { executeObservedRequest, waitForHttpRequestDelay } from "@agency_hub_core/shared";
 
-import { ProxyMissingError } from "../apps/runtime/src/services/errors.ts";
-import { FanslyPageOwnedBySyncEngineError } from "../apps/runtime/src/services/fansly-send-guard/index.ts";
 import { OfapiApiError } from "../apps/runtime/src/services/ofapi.ts";
 import {
   PostsCaptureConfigurationError,
@@ -18,9 +15,7 @@ import {
 
 const dbMocks = vi.hoisted(() => ({
   acquirePageSyncLease: vi.fn(),
-  armPageSyncProviderHold: vi.fn(),
   blockPageSync: vi.fn(),
-  pausePageSyncForAuth: vi.fn(),
   clearPageSyncLease: vi.fn(),
   completePageSync: vi.fn(),
   ensurePageSyncStates: vi.fn(),
@@ -46,7 +41,6 @@ const sharedMocks = vi.hoisted(() => ({
 }));
 
 const notificationMocks = vi.hoisted(() => ({
-  notifyAuthFailedIncident: vi.fn(),
   notifyOfapiGlobalIncident: vi.fn(),
   notifySyncChunkFailureIncident: vi.fn(),
   resolveOfapiGlobalIncident: vi.fn(),
@@ -73,11 +67,17 @@ vi.mock("@agency_hub_core/db", async () => {
   };
 });
 vi.mock("../apps/runtime/src/services/sync/executor-handlers.ts", () => handlerMocks);
-// The real registry assembles its pull maps from the handlers mocked above;
-// the executor reads only the legacy-executor platform set from it (pinned in
-// tests/platform-registry.test.ts).
+// The real registry assembles its pull maps from the handlers mocked above.
+// The executor reads only the legacy executor's platform set, through the
+// boundary (`sync/onlyfans/boundary.ts`, real here): the adapters that declare
+// a stream — OnlyFans only, as tests/platform-registry.test.ts pins.
 vi.mock("../apps/runtime/src/platforms/registry.ts", () => ({
-  legacyExecutorPlatforms: () => ["onlyfans"],
+  appPlatformRegistry: {
+    all: () => [
+      { key: "fansly", capabilities: { streams: [] } },
+      { key: "onlyfans", capabilities: { streams: ["light", "subscribers"] } },
+    ],
+  },
 }));
 vi.mock("../apps/runtime/src/services/sync/shared.ts", async () => {
   const actual = await vi.importActual<typeof SyncSharedModule>(
@@ -124,7 +124,7 @@ import {
 describe("sync executor", () => {
   const taskLease = {
     pageId: 55,
-    stream: "followers",
+    stream: "subscribers",
     status: "pending",
     requestSeq: 3,
     leasedSeq: 3,
@@ -159,7 +159,7 @@ describe("sync executor", () => {
     operationId: 99,
     requestSource: "manual",
     dispatchSource: "manual",
-    platform: "fansly",
+    platform: "onlyfans",
     proxyUrl: "socks5://proxy.example",
     egressKey: "shared-proxy-pool",
     createdAt: new Date("2026-03-14T12:00:00.000Z"),
@@ -195,7 +195,7 @@ describe("sync executor", () => {
     return {
       id: "job-1",
       data: { platformAccountId: 55 },
-      groupId: "fansly:direct",
+      groupId: "onlyfans:direct",
       startedOn: input?.startedOn ?? new Date(),
       expireInSeconds: input?.expireInSeconds ?? 900,
       retryLimit: input?.retryLimit ?? 0,
@@ -232,8 +232,6 @@ describe("sync executor", () => {
     });
     dbMocks.ensurePageSyncStates.mockResolvedValue([]);
     dbMocks.acquirePageSyncLease.mockResolvedValue(null);
-    dbMocks.armPageSyncProviderHold.mockImplementation(async (_db: unknown, input: { holdUntil: Date }) =>
-      input.holdUntil);
     dbMocks.blockPageSync.mockResolvedValue({ updated: true, blocked: true });
     dbMocks.completePageSync.mockResolvedValue(true);
     dbMocks.skipPageSync.mockResolvedValue(true);
@@ -242,7 +240,7 @@ describe("sync executor", () => {
       page: {
         id: 55,
         label: "page-55",
-        platform: "fansly",
+        platform: "onlyfans",
       },
       proxy: {
         url: "socks5://proxy.example",
@@ -255,52 +253,36 @@ describe("sync executor", () => {
     dbMocks.listRunnableOfapiCapturePages.mockResolvedValue([]);
     dbMocks.yieldPageSync.mockResolvedValue({ updated: true, superseded: false });
     handlerMocks.resolveExecutorPageContext.mockResolvedValue({
-      platform: "fansly",
+      platform: "onlyfans",
       page: {
         id: 55,
         label: "page-55",
       },
-      session: { authorization: "token" },
+      auth: { token: "" },
       proxy: null,
     });
   });
 
-  it.each(["followers_reconcile", "fan_earnings"] as const)(
-    "settles a reused %s result with its original freshness and no provider recovery", async (stream) => {
-      const app = { db: {}, logger: { warn: vi.fn(), error: vi.fn() } } as never;
-      const succeededAt = new Date("2026-03-14T12:00:00.000Z");
-      dbMocks.acquirePageSyncLease.mockResolvedValueOnce({ ...taskLease, stream });
-      // The reuse makes no request, and the original completion time may come
-      // from a walk that made none either (a fan_earnings walk over fresh fans).
-      handlerMocks.executeStreamChunk.mockResolvedValue({
-        satisfied: true, yieldReason: null, succeededAt, stats: { reusedCompletedWalk: true },
-      });
-      expect(await executeNextSyncPageChunk(app, 55)).toMatchObject({ kind: "success" });
-      expect(dbMocks.completePageSync).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ succeededAt }));
-      expect(notificationMocks.resolveSyncChunkRecoveryIncidents).toHaveBeenCalledWith(app,
-        expect.objectContaining({ providerRecoveredAt: null, recoveredAt: expect.any(Date), stream }));
-    });
-
   it.each([
     ["a partial with no successful response", false, null],
     ["a partial with a successful response", false, "last_success"],
-    ["a completion stamped this chunk with no successful response", true, null],
+    ["a completion with no successful response", true, null],
     ["a completion with a successful response", true, "last_success"],
   ] as const)("recovers page-wide incidents only from provider evidence: %s", async (_name, satisfied, expected) => {
     const app = { db: {}, logger: { warn: vi.fn(), error: vi.fn() } } as never;
     const lastSuccessAt = new Date(Date.now() - 1_000);
     telemetryMocks.lastSuccessfulAttemptAt = expected === "last_success" ? lastSuccessAt : null;
-    dbMocks.acquirePageSyncLease.mockResolvedValueOnce({ ...taskLease, stream: "fan_earnings" });
-    // A fan_earnings walk finishing on an exhausted cursor stamps succeededAt
-    // now; that is a completion time, not a provider answer.
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce({ ...taskLease, stream: "top_spenders" });
+    // A top_spenders chunk computes from stored transactions: it completes
+    // without a request, and a completion is not a provider answer.
     handlerMocks.executeStreamChunk.mockImplementation(async () => (satisfied
-      ? { satisfied: true, yieldReason: null, succeededAt: new Date(), stats: { walkCompleted: true } }
-      : { satisfied: false, yieldReason: "request_budget", stats: { fansFetched: 0 } }));
+      ? { satisfied: true, yieldReason: null, stats: { windowsProcessed: 1 } }
+      : { satisfied: false, yieldReason: "request_budget", stats: { windowsProcessed: 0 } }));
     await executeNextSyncPageChunk(app, 55);
     expect(notificationMocks.resolveSyncChunkRecoveryIncidents).toHaveBeenCalledWith(app, expect.objectContaining({
       providerRecoveredAt: expected === "last_success" ? lastSuccessAt : null,
       recoveredAt: expect.any(Date),
-      stream: "fan_earnings",
+      stream: "top_spenders",
     }));
   });
 
@@ -330,7 +312,7 @@ describe("sync executor", () => {
 
     dbMocks.acquirePageSyncLease.mockResolvedValueOnce({
       ...taskLease,
-      stream: "fan_earnings" as const,
+      stream: "top_spenders" as const,
       progress: {
         pendingTargets: 17,
         previousCounter: 4,
@@ -341,24 +323,24 @@ describe("sync executor", () => {
     handlerMocks.executeStreamChunk.mockResolvedValue({
       satisfied: true,
       yieldReason: null,
-      gatedSkip: "not_allowlisted",
-      stats: { skipped: "not_allowlisted" },
+      gatedSkip: "onlyfans_top_spenders_disabled",
+      stats: { skipped: "onlyfans_top_spenders_disabled" },
     });
 
     const result = await executeNextSyncPageChunk(app, 55);
 
-    expect(result).toMatchObject({ kind: "skipped", stream: "fan_earnings" });
+    expect(result).toMatchObject({ kind: "skipped", stream: "top_spenders" });
     expect(dbMocks.skipPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
       pageId: 55,
-      stream: "fan_earnings",
-      progress: { skipped: "not_allowlisted" },
+      stream: "top_spenders",
+      progress: { skipped: "onlyfans_top_spenders_disabled" },
     }));
     expect(telemetryMocks.instances[0]?.finish).toHaveBeenCalledWith(
       "skipped",
-      "not_allowlisted",
+      "onlyfans_top_spenders_disabled",
       expect.objectContaining({
-        skipped: "not_allowlisted",
-        gatedSkip: "not_allowlisted",
+        skipped: "onlyfans_top_spenders_disabled",
+        gatedSkip: "onlyfans_top_spenders_disabled",
       }),
     );
     expect(notificationMocks.resolveSyncChunkRecoveryIncidents).not.toHaveBeenCalled();
@@ -372,9 +354,9 @@ describe("sync executor", () => {
 
     dbMocks.acquirePageSyncLease.mockResolvedValueOnce({
       ...taskLease,
-      stream: "purchase_history" as const,
+      stream: "fan_identities" as const,
       progress: {
-        skipped: "not_allowlisted",
+        skipped: "onlyfans_top_spenders_disabled",
         pendingTargets: 17,
       },
     });
@@ -389,7 +371,7 @@ describe("sync executor", () => {
 
     const result = await executeNextSyncPageChunk(app, 55);
 
-    expect(result).toMatchObject({ kind: "success", stream: "purchase_history" });
+    expect(result).toMatchObject({ kind: "success", stream: "fan_identities" });
     expect(dbMocks.completePageSync).toHaveBeenCalledWith({}, expect.objectContaining({
       progress: {
         targetsFetched: 2,
@@ -413,7 +395,7 @@ describe("sync executor", () => {
     dbMocks.listRunnablePageSync.mockResolvedValueOnce([
       {
         pageId: 55,
-        platform: "fansly",
+        platform: "onlyfans",
         priority: 45,
         requestedAt: new Date("2026-03-14T12:00:00.000Z"),
         proxyUrl: "socks5://proxy.example",
@@ -443,7 +425,7 @@ describe("sync executor", () => {
     }));
     expect(dbMocks.yieldPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
       pageId: 55,
-      stream: "followers",
+      stream: "subscribers",
       requestSeq: 3,
       leaseToken: "lease-1",
     }));
@@ -462,7 +444,7 @@ describe("sync executor", () => {
         expireInSeconds: 900,
         retryLimit: 0,
         group: {
-          id: "fansly:shared-proxy-pool",
+          id: "onlyfans:shared-proxy-pool",
         },
       }),
     );
@@ -484,7 +466,7 @@ describe("sync executor", () => {
     };
     dbMocks.listRunnablePageSync.mockResolvedValueOnce([{
       pageId: 55,
-      platform: "fansly",
+      platform: "onlyfans",
       priority: 25,
       requestedAt: new Date("2026-03-14T12:00:00.000Z"),
       proxyUrl: "socks5://proxy.example",
@@ -518,7 +500,7 @@ describe("sync executor", () => {
         priority: 25,
         expireInSeconds: 900,
         retryLimit: 0,
-        group: { id: "fansly:shared-proxy-pool" },
+        group: { id: "onlyfans:shared-proxy-pool" },
       }),
     );
     const statements = client.query.mock.calls.map(([statement]) => statement);
@@ -593,12 +575,12 @@ describe("sync executor", () => {
 
     dbMocks.acquirePageSyncLease.mockResolvedValueOnce({
       ...taskLease,
-      stream: "dm_messages" as const,
+      stream: "dm_conversations" as const,
       requestSource: "manual" as const,
     });
     dbMocks.listRunnablePageSync.mockResolvedValueOnce([{
       pageId: 55,
-      platform: "fansly",
+      platform: "onlyfans",
       priority: 25,
       requestedAt: new Date("2026-03-14T12:00:00.000Z"),
       proxyUrl: "socks5://proxy.example",
@@ -614,7 +596,7 @@ describe("sync executor", () => {
 
     expect(dbMocks.yieldPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
       pageId: 55,
-      stream: "dm_messages",
+      stream: "dm_conversations",
       dispatchSource: "scheduled",
     }));
     expect(result).toMatchObject({
@@ -631,13 +613,13 @@ describe("sync executor", () => {
 
     dbMocks.acquirePageSyncLease.mockResolvedValueOnce({
       ...taskLease,
-      stream: "dm_messages" as const,
+      stream: "dm_conversations" as const,
       requestSource: "manual" as const,
       dispatchSource: "manual" as const,
     });
     dbMocks.listRunnablePageSync.mockResolvedValueOnce([{
       pageId: 55,
-      platform: "fansly",
+      platform: "onlyfans",
       priority: 35,
       requestedAt: new Date("2026-03-14T12:00:00.000Z"),
       proxyUrl: "socks5://proxy.example",
@@ -664,66 +646,31 @@ describe("sync executor", () => {
       logger: { warn: vi.fn(), error: vi.fn() },
     } as never;
     const retryAt = new Date("2026-03-14T12:00:22.000Z");
-    const dmMessagesTaskLease = {
+    const dmTaskLease = {
       ...taskLease,
-      stream: "dm_messages" as const,
+      stream: "dm_conversations" as const,
     };
 
-    dbMocks.acquirePageSyncLease.mockResolvedValueOnce(dmMessagesTaskLease);
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce(dmTaskLease);
     dbMocks.listRunnablePageSync.mockResolvedValueOnce([]);
     handlerMocks.executeStreamChunk.mockResolvedValue({
       satisfied: false,
       yieldReason: null,
       continuationRetryAt: retryAt,
       continuationRequestSource: "scheduled",
-      stats: { deepBackfillRequests: 1 },
+      stats: { chatsRead: 1 },
     });
 
     await executeNextSyncPageChunk(app, 55);
 
     expect(dbMocks.yieldPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
       pageId: 55,
-      stream: "dm_messages",
+      stream: "dm_conversations",
       requestSeq: 3,
       leaseToken: "lease-1",
       retryAt,
       dispatchSource: "scheduled",
     }));
-  });
-
-  it.each([
-    ["a deferral-only chunk keeps", "fansly_dm_threads_deferred"],
-    ["an ordinary partial chunk resets", null],
-  ] as const)("%s the failure streak, freshness and incidents", async (_name, deferral) => {
-    const app = { db: {}, logger: { warn: vi.fn(), error: vi.fn() } } as never;
-    const retryAt = new Date(Date.now() + 10 * 60_000);
-    const progressedAt = new Date("2026-03-13T12:00:00.000Z");
-    dbMocks.acquirePageSyncLease.mockResolvedValueOnce({
-      ...taskLease, stream: "dm_messages" as const, consecutiveFailures: 22, progressedAt,
-    });
-    handlerMocks.executeStreamChunk.mockResolvedValue({
-      satisfied: false, yieldReason: null, continuationRetryAt: retryAt,
-      ...(deferral ? { deferral } : {}), stats: { deferredThreads: 1 },
-    });
-
-    expect(await executeNextSyncPageChunk(app, 55)).toMatchObject({
-      kind: "yielded", stream: "dm_messages", continuationRetryAt: retryAt,
-    });
-
-    const settled = dbMocks.yieldPageSync.mock.calls[0]?.[1];
-    expect(settled).toMatchObject({ retryAt });
-    if (deferral) {
-      // Only the wake-up moves: no progress stamp, streak or incident change.
-      expect(settled).toMatchObject({ keepFailureStreak: true, progressedAt });
-      expect(telemetryMocks.instances[0]?.finish).toHaveBeenCalledWith("partial", null,
-        expect.objectContaining({ deferral, deferredThreads: 1 }));
-      expect(notificationMocks.resolveSyncChunkRecoveryIncidents).not.toHaveBeenCalled();
-    } else {
-      expect(settled).not.toHaveProperty("keepFailureStreak");
-      expect(settled?.progressedAt).not.toEqual(progressedAt);
-      expect(notificationMocks.resolveSyncChunkRecoveryIncidents).toHaveBeenCalledOnce();
-    }
-    expect(dbMocks.completePageSync).not.toHaveBeenCalled();
   });
 
   it("keeps a newer manual generation immediately runnable when an old chunk yields", async () => {
@@ -735,12 +682,12 @@ describe("sync executor", () => {
 
     dbMocks.acquirePageSyncLease.mockResolvedValueOnce({
       ...taskLease,
-      stream: "dm_messages" as const,
+      stream: "dm_conversations" as const,
     });
     dbMocks.yieldPageSync.mockResolvedValueOnce({ updated: true, superseded: true });
     dbMocks.listRunnablePageSync.mockResolvedValueOnce([{
       pageId: 55,
-      platform: "fansly",
+      platform: "onlyfans",
       priority: 65,
       requestedAt: new Date("2026-03-14T12:00:01.000Z"),
       proxyUrl: "socks5://proxy.example",
@@ -772,11 +719,11 @@ describe("sync executor", () => {
 
     dbMocks.acquirePageSyncLease.mockResolvedValueOnce({
       ...taskLease,
-      stream: "dm_messages" as const,
+      stream: "dm_conversations" as const,
     });
     dbMocks.listRunnablePageSync.mockResolvedValueOnce([{
       pageId: 55,
-      platform: "fansly",
+      platform: "onlyfans",
       priority: 60,
       requestedAt: new Date("2026-03-14T12:00:01.000Z"),
       proxyUrl: "socks5://proxy.example",
@@ -809,18 +756,18 @@ describe("sync executor", () => {
       send: ReturnType<typeof vi.fn>;
     };
     const retryAt = new Date("2026-03-14T12:00:22.000Z");
-    const dmMessagesTaskLease = {
+    const dmTaskLease = {
       ...taskLease,
-      stream: "dm_messages" as const,
+      stream: "dm_conversations" as const,
     };
 
-    dbMocks.acquirePageSyncLease.mockResolvedValueOnce(dmMessagesTaskLease);
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce(dmTaskLease);
     handlerMocks.executeStreamChunk.mockResolvedValue({
       satisfied: false,
       yieldReason: null,
       continuationRetryAt: retryAt,
       continuationRequestSource: "scheduled",
-      stats: { deepBackfillRequests: 1 },
+      stats: { chatsRead: 1 },
     });
 
     const result = await processSyncPageExecuteJob(app, boss as never, {
@@ -830,7 +777,8 @@ describe("sync executor", () => {
     expect(result).toMatchObject({
       kind: "yielded",
       needsContinuation: true,
-      continuationPriority: 25,
+      // resolvePageSyncPriority("dm_conversations", "scheduled")
+      continuationPriority: 30,
       continuationRetryAt: retryAt,
     });
     expect(dbMocks.yieldPageSync).toHaveBeenCalledWith({}, expect.objectContaining({ retryAt }));
@@ -853,18 +801,18 @@ describe("sync executor", () => {
       send: ReturnType<typeof vi.fn>;
     };
     const retryAt = new Date("2026-03-14T12:00:22.000Z");
-    const dmMessagesTaskLease = {
+    const dmTaskLease = {
       ...taskLease,
-      stream: "dm_messages" as const,
+      stream: "dm_conversations" as const,
     };
 
-    dbMocks.acquirePageSyncLease.mockResolvedValueOnce(dmMessagesTaskLease);
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce(dmTaskLease);
     handlerMocks.executeStreamChunk.mockResolvedValue({
       satisfied: false,
       yieldReason: null,
       continuationRetryAt: retryAt,
       continuationRequestSource: "scheduled",
-      stats: { deepBackfillRequests: 1 },
+      stats: { chatsRead: 1 },
     });
 
     await processSyncPageExecuteJob(app, boss as never, {
@@ -893,7 +841,7 @@ describe("sync executor", () => {
     dbMocks.listRunnablePageSync.mockResolvedValueOnce([
       {
         pageId: 55,
-        platform: "fansly",
+        platform: "onlyfans",
         priority: 45,
         requestedAt: new Date("2026-03-14T12:00:00.000Z"),
         proxyUrl: "socks5://proxy.example",
@@ -934,7 +882,7 @@ describe("sync executor", () => {
     dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
     dbMocks.listRunnablePageSync.mockResolvedValueOnce([{
       pageId: 55,
-      platform: "fansly",
+      platform: "onlyfans",
       priority: 45,
       requestedAt: new Date("2026-03-14T12:00:00.000Z"),
       proxyUrl: "socks5://proxy.example",
@@ -980,7 +928,7 @@ describe("sync executor", () => {
     dbMocks.acquirePageSyncLease.mockImplementation(async () => taskLease);
     dbMocks.listRunnablePageSync.mockResolvedValue([{
       pageId: 55,
-      platform: "fansly",
+      platform: "onlyfans",
       priority: 45,
       requestedAt: new Date("2026-03-14T12:00:00.000Z"),
       proxyUrl: "socks5://proxy.example",
@@ -1019,7 +967,7 @@ describe("sync executor", () => {
     dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
     dbMocks.listRunnablePageSync.mockResolvedValueOnce([{
       pageId: 55,
-      platform: "fansly",
+      platform: "onlyfans",
       priority: 45,
       requestedAt: new Date("2026-03-14T12:00:00.000Z"),
       proxyUrl: "socks5://proxy.example",
@@ -1068,7 +1016,7 @@ describe("sync executor", () => {
     });
     expect(dbMocks.clearPageSyncLease).toHaveBeenCalledWith({}, {
       pageId: 55,
-      stream: "followers",
+      stream: "subscribers",
       leaseToken: "lease-1",
       nextStatus: "paused",
     });
@@ -1078,51 +1026,33 @@ describe("sync executor", () => {
     expect(handlerMocks.executeStreamChunk).not.toHaveBeenCalled();
   });
 
-  it("marks auth failures durably and does not request continuation", async () => {
+  it("stops at the boundary when the leased page is of a platform the legacy executor does not serve", async () => {
     const app = {
       db: {},
       logger: { warn: vi.fn(), error: vi.fn() },
     } as never;
 
+    // The lease is scoped to the served platforms, so this is a broken scope:
+    // the chunk must not open a run or reach a handler for a Fansly page.
     dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
-    handlerMocks.executeStreamChunk.mockRejectedValue(
-      new FanslyApiError("expired session", 401, undefined, '{"success":false,"error":{"code":401}}'),
-    );
-
-    const result = await executeNextSyncPageChunk(app, 55);
-
-    expect(sharedMocks.persistFailedSyncPayload).toHaveBeenCalledTimes(1);
-    // Decision #248: the provider's response body rides into the `:failed`
-    // observation payload, which persistFailedSyncPayload writes verbatim from
-    // `failure.error`.
-    expect(sharedMocks.persistFailedSyncPayload).toHaveBeenCalledWith(app, expect.objectContaining({
-      failure: expect.objectContaining({
-        summary: "expired session",
-        error: expect.objectContaining({
-          responseSnippet: '{"success":false,"error":{"code":401}}',
-        }),
-      }),
-    }));
-    expect(dbMocks.blockPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
-      pageId: 55,
-      stream: "followers",
-      requestSeq: 3,
-      leaseToken: "lease-1",
-      blockerKind: "auth",
-      blockerCode: "credentials_invalid",
-      blockerMessage: "expired session",
-    }));
-    // Stage 26: a dead session parks the WHOLE page, not just the failing stream.
-    expect(dbMocks.pausePageSyncForAuth).toHaveBeenCalledWith({}, expect.objectContaining({
-      pageId: 55,
-      blockerCode: "credentials_invalid",
-      streams: expect.arrayContaining(["light", "dm_messages", "followers"]),
-    }));
-    expect(result).toMatchObject({
-      kind: "blocked",
-      platformAccountId: 55,
-      needsContinuation: false,
+    dbMocks.findPageById.mockResolvedValueOnce({
+      page: { id: 55, label: "page-55", platform: "fansly" },
+      proxy: null,
     });
+
+    await expect(executeNextSyncPageChunk(app, 55)).rejects.toMatchObject({
+      name: "LegacyExecutorBoundaryError",
+      pageId: 55,
+      platform: "fansly",
+      site: "executor",
+    });
+
+    expect(dbMocks.ensurePageSyncStates).toHaveBeenCalledWith({}, expect.objectContaining({ platforms: ["onlyfans"] }));
+    expect(dbMocks.acquirePageSyncLease).toHaveBeenCalledWith({}, expect.objectContaining({ platforms: ["onlyfans"] }));
+    expect(dbMocks.startSyncRun).not.toHaveBeenCalled();
+    expect(telemetryMocks.instances).toHaveLength(0);
+    expect(handlerMocks.resolveExecutorPageContext).not.toHaveBeenCalled();
+    expect(handlerMocks.executeStreamChunk).not.toHaveBeenCalled();
   });
 
   it("treats lease loss as a skipped idle result without retrying or blocking", async () => {
@@ -1165,7 +1095,7 @@ describe("sync executor", () => {
 
     expect(dbMocks.retryPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
       pageId: 55,
-      stream: "followers",
+      stream: "subscribers",
       requestSeq: 3,
       leaseToken: "lease-1",
     }));
@@ -1191,7 +1121,7 @@ describe("sync executor", () => {
     dbMocks.retryPageSync.mockResolvedValueOnce({ updated: true, retried: false });
     dbMocks.listRunnablePageSync.mockResolvedValueOnce([{
       pageId: 55,
-      platform: "fansly",
+      platform: "onlyfans",
       priority: 40,
       requestedAt: new Date("2026-03-14T12:00:01.000Z"),
       proxyUrl: "socks5://proxy.example",
@@ -1203,7 +1133,7 @@ describe("sync executor", () => {
 
     expect(dbMocks.retryPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
       pageId: 55,
-      stream: "followers",
+      stream: "subscribers",
       requestSeq: 3,
       leaseToken: "lease-1",
       retryKind: "transient_network",
@@ -1221,7 +1151,7 @@ describe("sync executor", () => {
     expect(result).toMatchObject({
       kind: "failed",
       platformAccountId: 55,
-      stream: "followers",
+      stream: "subscribers",
       runId: 777,
       needsContinuation: true,
       continuationPriority: 40,
@@ -1260,89 +1190,6 @@ describe("sync executor", () => {
     );
   });
 
-  it("treats lost leases during auth blocking as skipped", async () => {
-    const app = {
-      db: {},
-      logger: { warn: vi.fn(), error: vi.fn() },
-    } as never;
-
-    dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
-    dbMocks.blockPageSync.mockResolvedValueOnce({ updated: false, blocked: false });
-    handlerMocks.executeStreamChunk.mockRejectedValue(
-      new FanslyApiError("expired session", 401),
-    );
-
-    const result = await executeNextSyncPageChunk(app, 55);
-
-    expect(dbMocks.blockPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
-      pageId: 55,
-      stream: "followers",
-      requestSeq: 3,
-      leaseToken: "lease-1",
-      blockerKind: "auth",
-      blockerCode: "credentials_invalid",
-    }));
-    expect(telemetryMocks.instances[0]?.recordSkipped).toHaveBeenCalledWith("Page sync lease lost");
-    expect(sharedMocks.persistFailedSyncPayload).not.toHaveBeenCalled();
-    expect(telemetryMocks.instances[0]?.finish).not.toHaveBeenCalled();
-    expect(result).toMatchObject({
-      kind: "idle",
-      platformAccountId: 55,
-      stream: null,
-      runId: 777,
-      needsContinuation: false,
-    });
-  });
-
-  it("continues newer pending work when stale auth blocking does not apply", async () => {
-    const app = {
-      db: {},
-      logger: { warn: vi.fn(), error: vi.fn() },
-    } as never;
-
-    dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
-    dbMocks.blockPageSync.mockResolvedValueOnce({ updated: true, blocked: false });
-    dbMocks.listRunnablePageSync.mockResolvedValueOnce([{
-      pageId: 55,
-      platform: "fansly",
-      priority: 42,
-      requestedAt: new Date("2026-03-14T12:00:01.000Z"),
-      proxyUrl: "socks5://proxy.example",
-      egressKey: "shared-proxy-pool",
-    }]);
-    handlerMocks.executeStreamChunk.mockRejectedValue(
-      new FanslyApiError("expired session", 401),
-    );
-
-    const result = await executeNextSyncPageChunk(app, 55);
-
-    expect(dbMocks.blockPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
-      pageId: 55,
-      stream: "followers",
-      requestSeq: 3,
-      leaseToken: "lease-1",
-      blockerKind: "auth",
-    }));
-    expect(sharedMocks.persistFailedSyncPayload).not.toHaveBeenCalled();
-    expect(telemetryMocks.instances[0]?.finish).toHaveBeenCalledWith(
-      "failed",
-      expect.objectContaining({
-        summary: "expired session",
-      }),
-      {
-        chunkStatus: "stale_block",
-      },
-    );
-    expect(result).toMatchObject({
-      kind: "failed",
-      platformAccountId: 55,
-      stream: "followers",
-      runId: 777,
-      needsContinuation: true,
-      continuationPriority: 42,
-    });
-  });
-
   it("continues newer pending work when stale manual blocking does not apply", async () => {
     const app = {
       db: {},
@@ -1353,7 +1200,7 @@ describe("sync executor", () => {
     dbMocks.blockPageSync.mockResolvedValueOnce({ updated: true, blocked: false });
     dbMocks.listRunnablePageSync.mockResolvedValueOnce([{
       pageId: 55,
-      platform: "fansly",
+      platform: "onlyfans",
       priority: 41,
       requestedAt: new Date("2026-03-14T12:00:01.000Z"),
       proxyUrl: "socks5://proxy.example",
@@ -1365,7 +1212,7 @@ describe("sync executor", () => {
 
     expect(dbMocks.blockPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
       pageId: 55,
-      stream: "followers",
+      stream: "subscribers",
       requestSeq: 3,
       leaseToken: "lease-1",
       blockerKind: "manual_action_required",
@@ -1383,7 +1230,7 @@ describe("sync executor", () => {
     expect(result).toMatchObject({
       kind: "failed",
       platformAccountId: 55,
-      stream: "followers",
+      stream: "subscribers",
       runId: 777,
       needsContinuation: true,
       continuationPriority: 41,
@@ -1406,14 +1253,14 @@ describe("sync executor", () => {
 
     expect(dbMocks.startSyncRun).toHaveBeenCalledWith({}, {
       platformAccountId: 55,
-      stream: "followers",
+      stream: "subscribers",
       generation: 3,
       leaseToken: "lease-1",
       trigger: "manual",
     });
     expect(dbMocks.retryPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
       pageId: 55,
-      stream: "followers",
+      stream: "subscribers",
       requestSeq: 3,
       leaseToken: "lease-1",
       retryKind: "transient_network",
@@ -1421,8 +1268,8 @@ describe("sync executor", () => {
     expect(sharedMocks.persistFailedSyncPayload).toHaveBeenCalledWith(app, expect.objectContaining({
       platformAccountId: 55,
       syncRunId: 777,
-      platform: "fansly",
-      endpoint: "followers",
+      platform: "onlyfans",
+      endpoint: "subscribers",
     }));
     expect(telemetryMocks.instances[0]?.recordRunStarted).toHaveBeenCalledTimes(1);
     expect(telemetryMocks.instances[0]?.finish).toHaveBeenCalledWith(
@@ -1460,7 +1307,7 @@ describe("sync executor", () => {
     // every 30 min until midnight) and not a "stream failed 3x" page.
     expect(dbMocks.retryPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
       pageId: 55,
-      stream: "followers",
+      stream: "subscribers",
       retryKind: "ofapi_collection_policy",
       retryAt: resetAt,
       errorCode: "ofapi_collection_daily_limit",
@@ -1514,77 +1361,13 @@ describe("sync executor", () => {
     // who already sees the decision in the collection console.
     expect(dbMocks.blockPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
       pageId: 55,
-      stream: "followers",
+      stream: "subscribers",
       blockerKind: "manual_action_required",
       blockerCode: "ofapi_collection_collection_off",
       errorCode: "ofapi_collection_collection_off",
     }));
     expect(dbMocks.retryPageSync).not.toHaveBeenCalled();
     expect(notificationMocks.notifySyncChunkFailureIncident).not.toHaveBeenCalled();
-  });
-
-  it("retries a page the Fansly Sync Engine owns under its own class: a page-level stop, no block, no hold", async () => {
-    const app = {
-      db: {},
-      logger: { warn: vi.fn(), error: vi.fn() },
-    } as never;
-
-    dbMocks.acquirePageSyncLease.mockResolvedValueOnce({ ...taskLease, stream: "dm_messages" });
-    handlerMocks.executeStreamChunk.mockRejectedValue(new FanslyPageOwnedBySyncEngineError(55));
-
-    const result = await executeNextSyncPageChunk(app, 55);
-
-    // The guard refused the capture before anything was sent (design §2.7):
-    // not the provider's answer, not a dead session, not a config state.
-    expect(dbMocks.retryPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
-      pageId: 55,
-      stream: "dm_messages",
-      retryKind: "fansly_sync_engine_owned",
-    }));
-    const call = dbMocks.retryPageSync.mock.calls[0]?.[1] as { retryAt?: Date | null };
-    expect(call.retryAt ?? null).toBeNull();
-    expect(dbMocks.blockPageSync).not.toHaveBeenCalled();
-    expect(dbMocks.pausePageSyncForAuth).not.toHaveBeenCalled();
-    expect(dbMocks.armPageSyncProviderHold).not.toHaveBeenCalled();
-    expect(notificationMocks.notifyAuthFailedIncident).not.toHaveBeenCalled();
-    // The ordinary streak rule: a stream that keeps meeting it (a fence the
-    // switch missed) still reaches the owner.
-    expect(notificationMocks.notifySyncChunkFailureIncident).toHaveBeenCalledWith(app, expect.objectContaining({
-      stream: "dm_messages",
-      forceOpen: false,
-      errorSummary: expect.stringContaining("is owned by the Fansly Sync Engine"),
-    }));
-    expect(result).toMatchObject({ kind: "failed", runId: 777 });
-  });
-
-  it("parks the stream with blocker proxy_missing when the context refuses proxyless Fansly egress (W3.1)", async () => {
-    const app = {
-      db: {},
-      logger: { warn: vi.fn(), error: vi.fn() },
-    } as never;
-
-    dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
-    dbMocks.listRunnablePageSync.mockResolvedValueOnce([]);
-    handlerMocks.resolveExecutorPageContext.mockRejectedValue(
-      new ProxyMissingError('Page "55" has no assigned proxy; Fansly egress is refused (fail-closed)'),
-    );
-
-    const result = await executeNextSyncPageChunk(app, 55);
-
-    // W3.1 (decision #124): a refused proxyless resolution is a config state
-    // — the stream parks (manual action) instead of hot-retrying the refusal.
-    expect(dbMocks.blockPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
-      pageId: 55,
-      stream: "followers",
-      blockerKind: "manual_action_required",
-      blockerCode: "proxy_missing",
-    }));
-    expect(dbMocks.retryPageSync).not.toHaveBeenCalled();
-    expect(result).toMatchObject({
-      kind: "failed",
-      runId: 777,
-      needsContinuation: false,
-    });
   });
 
   it("parks a stream immediately when its governed OFAPI capture job is blocked", async () => {
@@ -1615,297 +1398,6 @@ describe("sync executor", () => {
       app,
       expect.objectContaining({ forceOpen: true }),
     );
-  });
-
-  it.each([
-    { previousConsecutiveFailures: 0, previousRetryKind: null },
-    { previousConsecutiveFailures: 1, previousRetryKind: "provider_404" },
-  ])("retries Fansly 404 failures before the terminal attempt ($previousConsecutiveFailures prior)", async ({
-    previousConsecutiveFailures,
-    previousRetryKind,
-  }) => {
-    const app = {
-      db: {},
-      logger: { warn: vi.fn(), error: vi.fn() },
-    } as never;
-
-    dbMocks.acquirePageSyncLease.mockResolvedValueOnce({
-      ...taskLease,
-      consecutiveFailures: previousConsecutiveFailures,
-      retryKind: previousRetryKind,
-    });
-    handlerMocks.executeStreamChunk.mockRejectedValue(new FanslyApiError("not found", 404));
-
-    await executeNextSyncPageChunk(app, 55);
-
-    expect(dbMocks.retryPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
-      pageId: 55,
-      stream: "followers",
-      retryKind: "provider_404",
-    }));
-    expect(dbMocks.blockPageSync).not.toHaveBeenCalled();
-    expect(notificationMocks.notifySyncChunkFailureIncident).toHaveBeenCalledWith(app, expect.objectContaining({
-      previousConsecutiveFailures,
-      forceOpen: false,
-    }));
-  });
-
-  it("blocks a Fansly 404 after two retries and opens the incident immediately", async () => {
-    const app = {
-      db: {},
-      logger: { warn: vi.fn(), error: vi.fn() },
-    } as never;
-
-    dbMocks.acquirePageSyncLease.mockResolvedValueOnce({
-      ...taskLease,
-      consecutiveFailures: 2,
-      retryKind: "provider_404",
-    });
-    handlerMocks.executeStreamChunk.mockRejectedValue(new FanslyApiError("not found", 404));
-
-    await executeNextSyncPageChunk(app, 55);
-
-    expect(dbMocks.retryPageSync).not.toHaveBeenCalled();
-    expect(dbMocks.blockPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
-      pageId: 55,
-      stream: "followers",
-      blockerKind: "provider_bad_data",
-      blockerCode: "provider_404_exhausted",
-    }));
-    expect(notificationMocks.notifySyncChunkFailureIncident).toHaveBeenCalledWith(app, expect.objectContaining({
-      previousConsecutiveFailures: 2,
-      forceOpen: true,
-    }));
-  });
-
-  it("sleeps a rate-limited page until the provider's own Retry-After deadline", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(new Date("2026-03-14T12:00:00.000Z"));
-    const app = {
-      db: {},
-      logger: { warn: vi.fn(), error: vi.fn() },
-    } as never;
-    // Fansly answered `Retry-After: 600`; the adapter stopped retrying in
-    // process and handed the deadline over.
-    const retryAfterAt = new Date("2026-03-14T12:10:00.000Z");
-
-    dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
-    handlerMocks.executeStreamChunk.mockRejectedValue(
-      new FanslyApiError("rate limited", 429, undefined, undefined, retryAfterAt),
-    );
-
-    await executeNextSyncPageChunk(app, 55);
-
-    // Without this the row woke on the 60s rung of the ladder and walked
-    // straight back into the same limit, three times over.
-    expect(dbMocks.retryPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
-      pageId: 55,
-      stream: "followers",
-      retryKind: "rate_limit",
-      retryAt: retryAfterAt,
-    }));
-    expect(dbMocks.blockPageSync).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { status: 429, retryKind: "rate_limit", delayMs: 30 * 60_000, forceOpen: false },
-    { status: 429, retryKind: "rate_limit", delayMs: 30 * 60_000 + 1, forceOpen: true },
-    { status: 429, retryKind: "rate_limit", delayMs: 86_400_000, forceOpen: true },
-    { status: 503, retryKind: "provider_5xx", delayMs: 30 * 60_000, forceOpen: false },
-    { status: 503, retryKind: "provider_5xx", delayMs: 30 * 60_000 + 1, forceOpen: true },
-    { status: 503, retryKind: "provider_5xx", delayMs: 86_400_000, forceOpen: true },
-  ])("reports a long provider cooldown without shortening it ($status, $delayMs ms)", async ({
-    status, retryKind, delayMs, forceOpen,
-  }) => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    const now = new Date("2026-03-14T12:00:00.000Z");
-    vi.setSystemTime(now);
-    const app = {
-      db: {},
-      logger: { warn: vi.fn(), error: vi.fn() },
-    } as never;
-    const retryAt = new Date(now.getTime() + delayMs);
-    dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
-    handlerMocks.executeStreamChunk.mockRejectedValue(
-      new FanslyApiError("provider unavailable", status, undefined, undefined, retryAt),
-    );
-
-    await executeNextSyncPageChunk(app, 55);
-
-    expect(dbMocks.retryPageSync).toHaveBeenCalledWith({}, expect.objectContaining({ retryKind, retryAt }));
-    expect(dbMocks.blockPageSync).not.toHaveBeenCalled();
-    expect(notificationMocks.notifySyncChunkFailureIncident).toHaveBeenCalledWith(app, expect.objectContaining({
-      previousConsecutiveFailures: 0,
-      forceOpen,
-      ...(forceOpen ? { errorSummary: expect.stringContaining(retryAt.toISOString()) } : {}),
-    }));
-  });
-
-  it("keeps the durable ladder when it outlasts the provider's deadline", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(new Date("2026-03-14T12:00:00.000Z"));
-    const app = {
-      db: {},
-      logger: { warn: vi.fn(), error: vi.fn() },
-    } as never;
-
-    dbMocks.acquirePageSyncLease.mockResolvedValueOnce({
-      ...taskLease,
-      // Sixth consecutive failure: the ladder is already at its 30 min cap.
-      consecutiveFailures: 5,
-      retryKind: "provider_5xx",
-    });
-    handlerMocks.executeStreamChunk.mockRejectedValue(
-      new FanslyApiError("unavailable", 503, undefined, undefined, new Date("2026-03-14T12:00:30.000Z")),
-    );
-
-    await executeNextSyncPageChunk(app, 55);
-
-    // A short Retry-After may not pull a repeatedly failing stream forward
-    // into a hot loop: the wake-up is the LATER of the two.
-    expect(dbMocks.retryPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
-      retryKind: "provider_5xx",
-      retryAt: new Date("2026-03-14T12:30:00.000Z"),
-    }));
-  });
-
-  it("leaves the ladder to itself when the provider named no deadline", async () => {
-    const app = {
-      db: {},
-      logger: { warn: vi.fn(), error: vi.fn() },
-    } as never;
-
-    dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
-    handlerMocks.executeStreamChunk.mockRejectedValue(new FanslyApiError("rate limited", 429));
-
-    await executeNextSyncPageChunk(app, 55);
-
-    const call = dbMocks.retryPageSync.mock.calls[0]?.[1] as { retryKind: string };
-    expect(call.retryKind).toBe("rate_limit");
-    // No `retryAt` key at all — retryPageSync computes the rung itself.
-    expect(call).not.toHaveProperty("retryAt");
-  });
-
-  describe("page provider hold (R04)", () => {
-    const now = new Date("2026-03-14T12:00:00.000Z");
-    const at = (offsetMs: number) => new Date(now.getTime() + offsetMs);
-
-    beforeEach(() => {
-      vi.useFakeTimers({ toFake: ["Date"] });
-      vi.setSystemTime(now);
-    });
-
-    it.each([
-      ["the provider's Retry-After", at(600_000), at(600_000), at(600_000)],
-      // Never capped: the failing stream waits the whole deadline, and so do
-      // its siblings.
-      ["a Retry-After a day away, uncapped", at(86_400_000), at(86_400_000), at(86_400_000)],
-      ["a fixed 120 s without a Retry-After", null, at(120_000), undefined],
-      ["a fixed 120 s when the Retry-After has already passed", at(-1_000), at(120_000), at(60_000)],
-      // A thrown 429 with a short Retry-After means the adapter's in-process
-      // retries already met repeated 429s: the page never holds for less.
-      ["a 120 s floor when the Retry-After is seconds away", at(10_000), at(120_000), at(60_000)],
-      ["a Retry-After just past the 120 s floor", at(121_000), at(121_000), at(121_000)],
-    ] as const)("holds the page on a first Fansly 429 until %s", async (_name, retryAfterAt, holdUntil, retryAt) => {
-      const app = { db: {}, logger: { warn: vi.fn(), error: vi.fn() } } as never;
-      dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
-      handlerMocks.executeStreamChunk.mockRejectedValue(
-        new FanslyApiError("rate limited", 429, undefined, undefined, retryAfterAt),
-      );
-
-      const result = await executeNextSyncPageChunk(app, 55);
-
-      expect(result).toMatchObject({ kind: "failed", stream: "followers" });
-      expect(dbMocks.armPageSyncProviderHold).toHaveBeenCalledWith({}, {
-        pageId: 55, stream: "followers", syncRunId: 777, reason: "rate_limit",
-        holdUntil, retryAfterAt, now,
-      });
-      // The failing stream keeps its own retry exactly as before.
-      const retry = dbMocks.retryPageSync.mock.calls[0]?.[1] as Record<string, unknown>;
-      expect(retry).toMatchObject({ retryKind: "rate_limit" });
-      expect(retry.retryAt).toEqual(retryAt);
-      expect(telemetryMocks.instances[0]?.addAnomaly).toHaveBeenCalledWith(expect.objectContaining({
-        code: "page_provider_hold",
-        severity: "warn",
-        details: expect.objectContaining({ holdUntil: holdUntil.toISOString() }),
-      }));
-    });
-
-    // A provider deadline speaks for the page on every 429, whatever the
-    // streak: exactly that instant, without the first 429's 120 s floor.
-    it.each([
-      ["after a 5xx", { consecutiveFailures: 1, retryKind: "provider_5xx" }, at(600_000), at(600_000)],
-      ["after an earlier 429 whose hold has passed", { consecutiveFailures: 2, retryKind: "rate_limit" },
-        at(900_000), at(900_000)],
-      ["a Retry-After seconds away", { consecutiveFailures: 1, retryKind: "rate_limit" }, at(10_000), at(120_000)],
-    ] as const)("holds the page on a later 429 of a streak until its Retry-After: %s", async (
-      _name, lease, retryAfterAt, retryAt,
-    ) => {
-      const app = { db: {}, logger: { warn: vi.fn(), error: vi.fn() } } as never;
-      dbMocks.acquirePageSyncLease.mockResolvedValueOnce({ ...taskLease, ...lease });
-      handlerMocks.executeStreamChunk.mockRejectedValue(
-        new FanslyApiError("rate limited", 429, undefined, undefined, retryAfterAt),
-      );
-
-      await executeNextSyncPageChunk(app, 55);
-
-      expect(dbMocks.armPageSyncProviderHold).toHaveBeenCalledWith({}, {
-        pageId: 55, stream: "followers", syncRunId: 777, reason: "rate_limit",
-        holdUntil: retryAfterAt, retryAfterAt, now,
-      });
-      const retry = dbMocks.retryPageSync.mock.calls[0]?.[1] as Record<string, unknown>;
-      expect(retry).toMatchObject({ retryKind: "rate_limit" });
-      expect(retry.retryAt).toEqual(retryAt);
-    });
-
-    it.each([
-      ["a later 429 of the same failure streak without a Retry-After",
-        { consecutiveFailures: 1, retryKind: "rate_limit" }, new FanslyApiError("rate limited", 429)],
-      ["a later 429 of the same failure streak whose Retry-After has passed",
-        { consecutiveFailures: 1, retryKind: "rate_limit" },
-        new FanslyApiError("rate limited", 429, undefined, undefined, at(-1_000))],
-      ["a 5xx with a Retry-After", {},
-        new FanslyApiError("unavailable", 503, undefined, undefined, at(600_000))],
-      ["an OFAPI 429", {}, new OfapiApiError("rate limited", 429, null)],
-    ] as const)("does not hold the page for %s", async (_name, lease, error) => {
-      const app = { db: {}, logger: { warn: vi.fn(), error: vi.fn() } } as never;
-      dbMocks.acquirePageSyncLease.mockResolvedValueOnce({ ...taskLease, ...lease });
-      handlerMocks.executeStreamChunk.mockRejectedValue(error);
-
-      await executeNextSyncPageChunk(app, 55);
-
-      expect(dbMocks.retryPageSync).toHaveBeenCalledTimes(1);
-      expect(dbMocks.armPageSyncProviderHold).not.toHaveBeenCalled();
-      expect(telemetryMocks.instances[0]?.addAnomaly).not.toHaveBeenCalled();
-    });
-
-    it("records no anomaly when a longer hold is already in force", async () => {
-      const app = { db: {}, logger: { warn: vi.fn(), error: vi.fn() } } as never;
-      dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
-      dbMocks.armPageSyncProviderHold.mockResolvedValueOnce(null);
-      handlerMocks.executeStreamChunk.mockRejectedValue(new FanslyApiError("rate limited", 429));
-
-      await executeNextSyncPageChunk(app, 55);
-
-      expect(dbMocks.armPageSyncProviderHold).toHaveBeenCalledTimes(1);
-      expect(telemetryMocks.instances[0]?.addAnomaly).not.toHaveBeenCalled();
-    });
-
-    it("still retries the failing stream when the hold cannot be written", async () => {
-      const logger = { warn: vi.fn(), error: vi.fn() };
-      const app = { db: {}, logger } as never;
-      dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
-      dbMocks.armPageSyncProviderHold.mockRejectedValueOnce(new Error("db down"));
-      handlerMocks.executeStreamChunk.mockRejectedValue(new FanslyApiError("rate limited", 429));
-
-      expect(await executeNextSyncPageChunk(app, 55)).toMatchObject({ kind: "failed" });
-
-      expect(dbMocks.retryPageSync).toHaveBeenCalledWith({}, expect.objectContaining({ retryKind: "rate_limit" }));
-      expect(logger.warn).toHaveBeenCalledWith(
-        expect.objectContaining({ platformAccountId: 55, stream: "followers" }),
-        expect.stringContaining("provider hold"),
-      );
-    });
   });
 
   it("keeps long-running chunks alive with a worker heartbeat", async () => {
@@ -1966,7 +1458,7 @@ describe("sync executor", () => {
       expect.objectContaining({
         err: expect.any(Error),
         platformAccountId: 55,
-        stream: "followers",
+        stream: "subscribers",
       }),
       "Failed to heartbeat page sync lease",
     );
@@ -1989,7 +1481,7 @@ describe("sync executor", () => {
     handlerMocks.executeStreamChunk.mockImplementation(async () => {
       await executeObservedRequest({
         requestId: "lease-cancel",
-        operation: "followers",
+        operation: "subscribers",
         endpointTemplate: "/synthetic",
         method: "GET",
         async waitForRateLimit() {
@@ -2033,7 +1525,7 @@ describe("sync executor", () => {
     handlerMocks.executeStreamChunk.mockImplementation(async () => {
       const response = await executeObservedRequest({
         requestId: "lease-cancel-inflight",
-        operation: "followers",
+        operation: "subscribers",
         endpointTemplate: "/synthetic",
         method: "GET",
         execute: () => { entered(); return inFlight; },
@@ -2106,7 +1598,9 @@ describe("sync executor", () => {
     const app = {
       db: {},
       logger: { warn: vi.fn(), error: vi.fn() },
-      config: { syncPageExecutorConcurrency: 2 },
+      // DM polling on: the executor's own pause of a disabled OnlyFans DM
+      // stream (real db calls) stays out of this queue-mechanics case.
+      config: { syncPageExecutorConcurrency: 2, onlyFansDmPollingEnabled: true },
       pool: { connect: vi.fn(async () => queueClient) },
     } as never;
     const boss = {
@@ -2126,7 +1620,7 @@ describe("sync executor", () => {
           return [{
             id: "job-1",
             data: { platformAccountId: 55 },
-            groupId: "fansly:direct",
+            groupId: "onlyfans:direct",
             startedOn: new Date(),
             expireInSeconds: 900,
             retryLimit: 0,
@@ -2140,7 +1634,7 @@ describe("sync executor", () => {
           priority: false,
           orderByCreatedOn: true,
           groupConcurrency: 1,
-          ignoreGroups: ["fansly:direct"],
+          ignoreGroups: ["onlyfans:direct"],
         });
         abortController.abort();
         releaseChunk();
@@ -2178,10 +1672,10 @@ describe("sync executor", () => {
     expect(boss.fail).not.toHaveBeenCalled();
   });
 
-  it("terminates a ramp-gated chunk without claiming a successful sync", async () => {
-    // The gated skip used to call completePageSync, so page_sync_states got a
+  it("terminates a gated chunk without claiming a successful sync", async () => {
+    // A gated skip once called completePageSync, so page_sync_states got a
     // fresh succeeded_at and consecutive_failures = 0 for a stream that issued
-    // zero requests. That is how lora-1 stood still for 13 days looking healthy.
+    // zero requests: a stream standing still looked healthy.
     const app = {
       db: {},
       logger: { warn: vi.fn(), error: vi.fn() },
@@ -2191,15 +1685,15 @@ describe("sync executor", () => {
     handlerMocks.executeStreamChunk.mockResolvedValue({
       satisfied: true,
       yieldReason: null,
-      gatedSkip: "not_allowlisted",
-      stats: { skipped: "not_allowlisted" },
+      gatedSkip: "onlyfans_top_spenders_disabled",
+      stats: { skipped: "onlyfans_top_spenders_disabled" },
     });
 
     await executeNextSyncPageChunk(app, 55);
 
     expect(dbMocks.skipPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
       pageId: 55,
-      stream: "followers",
+      stream: "subscribers",
       leaseToken: "lease-1",
     }));
     expect(dbMocks.completePageSync).not.toHaveBeenCalled();
@@ -2208,13 +1702,13 @@ describe("sync executor", () => {
     expect(dbMocks.skipPageSync.mock.calls[0]?.[1]).not.toHaveProperty("progressedAt");
     expect(telemetryMocks.instances[0]?.finish).toHaveBeenCalledWith(
       "skipped",
-      "not_allowlisted",
+      "onlyfans_top_spenders_disabled",
       // `gatedSkip` in the run stats is the structured marker the UX keys
       // "gated off" on. The `skipped` OUTCOME cannot serve as that marker:
       // recordSkipped writes it for every lost lease, on healthy streams too.
       expect.objectContaining({
-        skipped: "not_allowlisted",
-        gatedSkip: "not_allowlisted",
+        skipped: "onlyfans_top_spenders_disabled",
+        gatedSkip: "onlyfans_top_spenders_disabled",
       }),
     );
     expect(notificationMocks.resolveSyncChunkRecoveryIncidents).not.toHaveBeenCalled();
@@ -2289,7 +1783,6 @@ describe("sync executor", () => {
         retryKind: "ofapi_insufficient_credits",
       }));
       expect(dbMocks.blockPageSync).not.toHaveBeenCalled();
-      expect(dbMocks.pausePageSyncForAuth).not.toHaveBeenCalled();
       expect(notificationMocks.notifyOfapiGlobalIncident).toHaveBeenCalledTimes(1);
       expect(notificationMocks.notifyOfapiGlobalIncident).toHaveBeenCalledWith(ctx, expect.objectContaining({
         kind: "ofapi_low_credit",
@@ -2397,7 +1890,6 @@ describe("sync executor", () => {
         blockerKind: "manual_action_required",
         blockerCode: `ofapi_http_${status}`,
       }));
-      expect(dbMocks.pausePageSyncForAuth).not.toHaveBeenCalled();
       expect(dbMocks.retryPageSync).not.toHaveBeenCalled();
       expect(notificationMocks.notifyOfapiGlobalIncident).not.toHaveBeenCalled();
       expect(result).toMatchObject({ kind: "failed", needsContinuation: false });

@@ -17,7 +17,6 @@ import type {
   FanslySubscriber,
 } from "@agency_hub_core/fansly";
 import {
-  checkSyncConcurrencyInvariant,
   createLogger,
   loadConfig,
   listIgnoredFanslyEndpointPauseEnv,
@@ -288,7 +287,7 @@ export interface AppContext {
    *  it; createAppContext always populates it. */
   rawConfig?: ReturnType<typeof loadConfig> | undefined;
   /** Boot-apply overrides that were rejected at start (invalid value / not a boot key /
-   *  merged-invariant violation). The heartbeat publishes these in its snapshot so the
+   *  a prerequisite left off). The heartbeat publishes these in its snapshot so the
    *  dashboard can surface an ignored override per instance. Empty for a clean boot.
    *  Optional so existing AppContext literals (tests, codegen) need not provide it;
    *  createAppContext always populates it, so production behavior is exact. */
@@ -328,7 +327,7 @@ export interface CreateAppContextOptions {
 }
 
 export async function createAppContext(options: CreateAppContextOptions = {}): Promise<AppContext> {
-  // Env config. loadConfig runs its own boot invariants on the env values here. The
+  // Env config. loadConfig validates the env values here. The
   // logger is built from the env logLevel (runtimeApply: 'none', never boot-applied).
   const rawConfig = loadConfig();
   const logger = createLogger(rawConfig.logLevel);
@@ -362,14 +361,6 @@ export async function createAppContext(options: CreateAppContextOptions = {}): P
       vendor: "telegram",
       egressKey: "legacy-page",
     }, "Telegram is using the deprecated transition legacy-page egress route");
-  }
-
-  const syncConcurrencyInvariantError = checkSyncConcurrencyInvariant({
-    pageExecutorConcurrency: rawConfig.syncPageExecutorConcurrency,
-    sharedRateLimitEnabled: rawConfig.syncSharedRateLimitEnabled,
-  });
-  if (syncConcurrencyInvariantError) {
-    throw new Error(syncConcurrencyInvariantError);
   }
 
   const pool = createPool(rawConfig.databaseUrl);

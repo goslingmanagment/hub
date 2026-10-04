@@ -9,10 +9,8 @@ import {
   createOrGetOfapiCommand,
   ensurePageSyncStates,
   getOfapiCommandById,
-  getSyncStreamsForPlatform,
   listPageSyncStates,
   listRunnablePageSync,
-  pausePageSyncForAuth,
   requestPageSync,
   setPageOfapiAccountId,
 } from "@agency_hub_core/db";
@@ -21,7 +19,6 @@ import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
 import { applyOfapiAccountHealthEvent } from "../apps/runtime/src/services/ofapi-account-health.ts";
 import { executeOfapiCommand } from "../apps/runtime/src/services/ofapi-command-executor.ts";
-import { handleSuccessfulPageVerificationRecovery } from "../apps/runtime/src/services/notification-incidents.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -154,47 +151,6 @@ describe("auth-dead pause wiring (Stage 26)", () => {
 
     const runnable = await listRunnablePageSync(appContext.db);
     expect(runnable.map((row) => row.pageId)).toContain(page.id);
-  }, INTEGRATION_TEST_TIMEOUT_MS);
-
-  it("credential re-verify (handleSuccessfulPageVerificationRecovery) releases a direct-sync auth pause", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    const page = await seedMappedPage("lora-of-verify");
-    await pausePageSyncForAuth(appContext.db, {
-      pageId: page.id,
-      streams: getSyncStreamsForPlatform("onlyfans"),
-      blockerCode: "credentials_invalid",
-      blockerMessage: "401 during sync",
-    });
-
-    const paused = await pageStreamStates(page.id);
-    expect(paused.find((state) => state.stream === "posts")).toMatchObject({
-      status: "paused",
-      blockerKind: null,
-    });
-    expect(paused
-      .filter((state) => state.stream !== "posts")
-      .every((state) => state.status === "paused" && state.blockerKind === "auth"))
-      .toBe(true);
-
-    await handleSuccessfulPageVerificationRecovery(appContext, {
-      platformAccountId: page.id,
-      pageLabel: page.label,
-      platform: "onlyfans",
-    });
-
-    const restored = await pageStreamStates(page.id);
-    expect(restored.find((state) => state.stream === "posts")).toMatchObject({
-      status: "paused",
-      blockerKind: null,
-    });
-    for (const state of restored.filter((candidate) => candidate.stream !== "posts")) {
-      expect(state.status, state.stream).toMatch(/^(idle|pending)$/);
-      expect(state.blockerKind, state.stream).toBeNull();
-    }
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("commands fail fast on an auth-dead page without spending the one attempt", async (context) => {

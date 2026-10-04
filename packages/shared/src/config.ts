@@ -387,13 +387,10 @@ const envSchema = z.object({
   // off = hydration operations answer 503; request_only = requests can be filed and
   // decided but nothing executes; dispatch = the executor drains approvals.
   AGENT_HYDRATION_MODE: z.enum(["off", "request_only", "dispatch"]).default("off"),
-  // Decision #202: the in-kernel auto-approve policy for BOUNDED Fansly
-  // thread-deepening requests. off = policy dormant; shadow = log what WOULD be
-  // approved, decide nothing; enforce = decide, within the daily call budget.
+  // Retired at step 4 (S4-15) with the hydration auto-approve policy (decision
+  // #202): parsed so an env that sets them boots, read by nothing, removed
+  // with the other retired Fansly keys (S4-26).
   AGENT_HYDRATION_AUTO_APPROVE_MODE: z.enum(["off", "shadow", "enforce"]).default("off"),
-  // Vendor calls the policy may RESERVE per UTC day (sum of approved maxCalls;
-  // the adapter's own retries are not counted here). 0 = the policy approves
-  // nothing even in enforce — the inert default.
   AGENT_HYDRATION_AUTO_DAILY_CALL_BUDGET: z.coerce.number().int().min(0).default(0),
   // The value served in `exportPolicy`. Widening the wire literal to this enum is a
   // CODE deploy (clients validate successful responses against a vendored schema);
@@ -525,6 +522,7 @@ export interface AppConfig {
   fanslyDmDeepBackfillContinuationDelayMs?: number;
   fanslyDmDeepBackfillContinuationJitterMs?: number;
   onlyFansDefaultDelayMs: number;
+  /** @deprecated Retired at step 4 (S4-19) with its boot invariant; nothing reads it. */
   syncSharedRateLimitEnabled: boolean;
   egressPacerMode: "off" | "shadow" | "enforce";
   lakeDir: string;
@@ -736,9 +734,11 @@ export interface AppConfig {
   agentSearchBackend?: "off" | "fts" | "fts_trgm";
   /** off = hydration 503; request_only = state only; dispatch = executor runs. */
   agentHydrationMode?: "off" | "request_only" | "dispatch";
-  /** Decision #202 autopilot: off | shadow (log only) | enforce (decides). */
+  /** @deprecated Ignored: the hydration auto-approve policy (decision #202) is
+   *  gone since step 4 (S4-15). Parsed so an env that sets it boots; removed
+   *  with the other retired Fansly keys (S4-26). */
   agentHydrationAutoApproveMode?: "off" | "shadow" | "enforce";
-  /** Vendor calls the autopilot may reserve per UTC day; 0 = inert. */
+  /** @deprecated Ignored, like {@link AppConfig.agentHydrationAutoApproveMode}. */
   agentHydrationAutoDailyCallBudget?: number;
   /** The value served in `exportPolicy`; flipped only after the fleet re-vendors. */
   agentExportPolicyValue?: AgentExportPolicyValue;
@@ -838,21 +838,6 @@ export const IGNORED_FANSLY_ENDPOINT_PAUSE_ENV_KEYS = [
 /** The ignored endpoint pause env vars this environment sets (boot warning). */
 export function listIgnoredFanslyEndpointPauseEnv(env: NodeJS.ProcessEnv = process.env) {
   return IGNORED_FANSLY_ENDPOINT_PAUSE_ENV_KEYS.filter((key) => hasConfiguredValue(env[key]));
-}
-
-/** Concurrency > 1 is only safe when the shared rate limiter is on (the limiter is
- *  what keeps simultaneous workers from hammering an upstream past its budget). The
- *  boot check in bootstrap.ts throws on this; exposed here as a pure validator so the
- *  Stage B/C PATCH can reject the same combination before applying an override.
- *  Returns the boot error message when violated, else null. */
-export function checkSyncConcurrencyInvariant(input: {
-  pageExecutorConcurrency: number;
-  sharedRateLimitEnabled: boolean;
-}): string | null {
-  if (input.pageExecutorConcurrency > 1 && !input.sharedRateLimitEnabled) {
-    return "SYNC_PAGE_EXECUTOR_CONCURRENCY > 1 requires SYNC_SHARED_RATE_LIMIT_ENABLED=true";
-  }
-  return null;
 }
 
 export function loadConfig(

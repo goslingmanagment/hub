@@ -1,6 +1,5 @@
 import {
   countConversationSyncFailuresByAccount,
-  countUnresolvedProjectionDebtByAccount,
   listNotificationIncidents,
   listSyncPages,
   oldestDueLiveUrgentWork,
@@ -247,7 +246,7 @@ export async function getPublicSyncHealth(
   const now = input?.now ?? new Date();
   // One effective-config snapshot for both live health thresholds read below, so the
   // reported `running` values match exactly what this check consumes (no field skew).
-  const [connections, snapshot, effective, projectionDebtCounts, coverageDebtCounts, syncPages] = await Promise.all([
+  const [connections, snapshot, effective, coverageDebtCounts, syncPages] = await Promise.all([
     listConnectionStatuses(app, {
       pageIds: input?.pageIds,
     }),
@@ -256,12 +255,6 @@ export async function getPublicSyncHealth(
       pageIds: input?.pageIds,
     }),
     loadEffectiveConfig(app.db, app.config),
-    // #135 A2b: unresolved projection debt is deferred repair work the sweep
-    // has not cleared yet — surfaced per page so it cannot rot silently.
-    countUnresolvedProjectionDebtByAccount(
-      app.db,
-      input?.pageIds ? { platformAccountIds: input.pageIds } : undefined,
-    ),
     // #138 addendum: conversation-level coverage debt. The page-level failure
     // streak is reset to 0 by every partial yield that read something, and a
     // deferred thread no longer fails the stream, so once the breaker keeps a
@@ -284,9 +277,6 @@ export async function getPublicSyncHealth(
 
   const connectionsById = new Map(connections.map((connection) => [connection.id, connection]));
   const snapshotPagesById = new Map(snapshot.pages.map((page) => [page.pageId, page]));
-  const projectionDebtByPageId = new Map(
-    projectionDebtCounts.map((row) => [row.platformAccountId, row.unresolvedCount]),
-  );
   const coverageDebtByPageId = new Map(
     coverageDebtCounts.map((row) => [row.platformAccountId, row.failingConversationCount]),
   );
@@ -395,20 +385,15 @@ export async function getPublicSyncHealth(
       issues.push(`${stream}:retry_wedged`);
     }
 
-    if ((projectionDebtByPageId.get(pageId) ?? 0) > 0) {
-      issues.push("projection_debt");
-    }
-
     // page_dm_message_sync_health rows of OnlyFans pages are historical, left
     // by the permanently retired legacy dm_messages crawler. They are not
     // mirror coverage debt and must not keep /health/sync at 503 after the
-    // retirement fence. On a Fansly page the per-thread breaker wrote the table
-    // (the legacy dm_messages lane until step 4 S4-14; the legacy targeted
-    // thread backfill still does), so the page stays coverage_degraded while a
-    // visible, bound, not excluded thread carries failures: until a successful
-    // read of that thread clears them (a targeted backfill, or the Fansly Sync
-    // Engine's DM read), or the thread leaves that set (excluded, hidden,
-    // unbound).
+    // retirement fence. On a Fansly page the legacy DM lanes' per-thread
+    // breaker wrote the table (the dm_messages lane until step 4 S4-14, the
+    // targeted thread backfill until S4-15), so a page the engine does not own
+    // stays coverage_degraded while a visible, bound, not excluded thread
+    // carries failures: until the Fansly Sync Engine's DM read of that thread
+    // clears them, or the thread leaves that set (excluded, hidden, unbound).
     if (platform !== "onlyfans" && (coverageDebtByPageId.get(pageId) ?? 0) > 0) {
       issues.push("dm_messages:coverage_degraded");
     }

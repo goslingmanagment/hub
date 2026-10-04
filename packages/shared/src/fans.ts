@@ -146,9 +146,3 @@ export function getFanslyDmMessageSyncExcludedReason(
     ? reason
     : null;
 }
-
-export function isFanslyDmMessageSyncExcluded(
-  metadata: Record<string, unknown> | null | undefined,
-) {
-  return getFanslyDmMessageSyncExcludedReason(metadata) !== null;
-}

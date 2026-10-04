@@ -33,6 +33,7 @@ import type { AgentAuthPrincipal, HumanAuthPrincipal } from "../../services/auth
 import {
   AGENT_HYDRATION_LANES,
   evaluateHydrationLanes,
+  hasHydrationExecutorLane,
 } from "../../services/agent-hydration.ts";
 import { loadEffectiveConfig } from "../../services/effective-config.ts";
 import { AppError, BadRequestError } from "../../services/errors.ts";
@@ -590,6 +591,15 @@ export async function applyHydrationDecision(
 
   const platform = request.platform as Platform;
   const lane = AGENT_HYDRATION_LANES[platform];
+  // An approval no executor lane runs is a lie in the queue: a Fansly request
+  // is the Fansly Sync Engine's history request (the wrapper above), and the
+  // legacy Fansly lane is gone since step 4 (S4-15). A rejection stays open.
+  if (body.decision === "approve" && !hasHydrationExecutorLane(platform)) {
+    throw new AgentHydrationNotAdmissibleError(
+      "no hydration executor runs this platform's requests; a Fansly page's history is read by"
+        + " the Fansly Sync Engine as a history request",
+    );
+  }
   // #158: an approval that refuses the side effect cannot be executed on a
   // platform whose history read performs it. Refusing HERE is the honest place:
   // an "approved" request the executor would never run is a lie in the queue.

@@ -3,9 +3,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const healthMocks = vi.hoisted(() => ({
   getSyncStatusSnapshot: vi.fn(),
   listConnectionStatuses: vi.fn(),
-  countUnresolvedProjectionDebtByAccount: vi.fn(
-    async (): Promise<Array<{ platformAccountId: number; unresolvedCount: number }>> => [],
-  ),
   countConversationSyncFailuresByAccount: vi.fn(
     async (): Promise<Array<{ platformAccountId: number; failingConversationCount: number }>> => [],
   ),
@@ -22,11 +19,10 @@ vi.mock("../apps/runtime/src/services/sync-status.ts", () => ({
   getSyncStatusSnapshot: healthMocks.getSyncStatusSnapshot,
 }));
 
-// The unit-level app context carries no db; stub the projection-debt count
-// (#135 A2b) the way the other health data sources are stubbed.
+// The unit-level app context carries no db; stub the coverage-debt count the
+// way the other health data sources are stubbed.
 vi.mock("@agency_hub_core/db", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  countUnresolvedProjectionDebtByAccount: healthMocks.countUnresolvedProjectionDebtByAccount,
   countConversationSyncFailuresByAccount: healthMocks.countConversationSyncFailuresByAccount,
   listSyncPages: healthMocks.listSyncPages,
 }));
@@ -811,64 +807,6 @@ describe("health service", () => {
           pageId: 8,
           status: "degraded",
           issues: ["dm_messages:coverage_degraded"],
-        },
-      ],
-    });
-  });
-
-  it("degrades a page with unresolved projection debt (#135)", async () => {
-    healthMocks.listConnectionStatuses.mockResolvedValue([
-      {
-        id: 7,
-        label: "lora-1",
-        platform: "fansly",
-        modelSlug: "lora",
-        modelName: "Lora",
-        connectionStatus: "active",
-        lastLightSyncAt: "2026-03-23T12:00:00.000Z",
-        lastFollowerSyncAt: "2026-03-23T12:00:00.000Z",
-        lastSyncError: null,
-      },
-    ]);
-    healthMocks.getSyncStatusSnapshot.mockResolvedValue({
-      generatedAt: "2026-03-23T12:00:00.000Z",
-      pages: [{
-        pageId: 7,
-        pageLabel: "lora-1",
-        platform: "fansly",
-        modelSlug: "lora",
-        modelName: "Lora",
-        blocks: {
-          connection: { block: "connection", state: "up_to_date", statusReason: null, error: null, metrics: {} },
-          financials: { block: "financials", state: "up_to_date", statusReason: null, error: null, metrics: {} },
-          audience: { block: "audience", state: "up_to_date", statusReason: null, error: null, metrics: {} },
-          messages_live: { block: "messages_live", state: "up_to_date", statusReason: null, error: null, metrics: {} },
-          messages_history: { block: "messages_history", state: "up_to_date", statusReason: null, error: null, metrics: {} },
-        },
-      }],
-    });
-    healthMocks.countUnresolvedProjectionDebtByAccount.mockResolvedValueOnce([
-      { platformAccountId: 7, unresolvedCount: 2 },
-    ]);
-
-    const result = await getPublicSyncHealth({
-      config: {
-        healthSyncLightMaxAgeMinutes: 180,
-        healthSyncFollowerMaxAgeMinutes: 1080,
-        healthSyncMonitoringToken: null,
-      },
-    } as never, {
-      now: new Date("2026-03-23T12:00:00.000Z"),
-    });
-
-    expect(result.statusCode).toBe(503);
-    expect(result.body).toMatchObject({
-      status: "degraded",
-      pages: [
-        {
-          pageId: 7,
-          status: "degraded",
-          issues: ["projection_debt"],
         },
       ],
     });

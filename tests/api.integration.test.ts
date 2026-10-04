@@ -11,9 +11,9 @@ import {
   createFanslyPage,
   createModel,
   ensurePageSyncStates,
+  ensureSyncPage,
   setPageOfapiAccountId,
   findUserByUsername,
-  finalizePageDmConversationMessageSync,
   finishSyncRequestAttempt,
   finishSyncRun,
   getNotificationIncidentByKey,
@@ -21,7 +21,6 @@ import {
   insertSyncRunEvent,
   insertAiGenerationContent,
   insertAiUsageEvents,
-  markPageSyncAuthBlocked,
   purgeExpiredVoiceNoteAudio,
   upsertVoiceProfile,
   openNotificationIncident,
@@ -29,6 +28,7 @@ import {
   rebuildFollowerRollups,
   rebuildRevenueRollups,
   rebuildSubscriberRollups,
+  refreshPageDmConversationWindow,
   storeFanslySession,
   pageSyncCursors as pageSyncCursorRows,
   syncRateLimits,
@@ -56,7 +56,7 @@ import { buildApiServer, normalizeOpenApiDocument } from "../apps/runtime/src/ap
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import * as effectiveConfigModule from "../apps/runtime/src/services/effective-config.ts";
 import type { VoiceTtsProvider } from "../apps/runtime/src/services/voice-elevenlabs-provider.ts";
-import { saveProxy } from "../apps/runtime/src/services/page-context.ts";
+import { resolvePageContext, saveProxy } from "../apps/runtime/src/services/page-context.ts";
 import {
   SESSION_COOKIE_NAME,
   assignPageToUser,
@@ -77,10 +77,90 @@ import {
   type StartedTestDatabase,
 } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
+import { setModeDirect } from "./helpers/sync-engine-host.ts";
+import type * as UrgentModule from "../apps/runtime/src/sync/requests/urgent.ts";
 
 // Fixture passwords hash at minimum cost; sign-in still runs the real argon2
 // verify (tests/helpers/cheap-argon2.ts).
 vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
+
+// The owner's `/account/me` levers of a Fansly page (page verify, a credentials
+// or proxy change) go through the page's engine actor; no actor runs in this
+// file, so a case that needs its answer sets it here. Unset, the real queue
+// answers (a page the engine does not run gets no work).
+// tests/sync-account-routing.integration.test.ts runs the levers against a
+// real actor.
+const engineAnswer = vi.hoisted(() => ({
+  answer: null as null | ((input: { resource: string; params?: { candidate?: { base?: string } } }) => unknown),
+  asked: [] as string[],
+}));
+vi.mock("../apps/runtime/src/sync/requests/urgent.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof UrgentModule>();
+  return {
+    ...actual,
+    enqueueAndWait: async (...args: Parameters<typeof actual.enqueueAndWait>) => {
+      if (engineAnswer.answer === null) return actual.enqueueAndWait(...args);
+      engineAnswer.asked.push(args[1].resource);
+      return engineAnswer.answer(args[1] as never) as Awaited<ReturnType<typeof actual.enqueueAndWait>>;
+    },
+  };
+});
+
+/** The engine's actor answered for the fixture page's own account. */
+function engineAnswersFor(account: { accountId: string; username: string }) {
+  engineAnswer.answer = (input) => ({
+    state: "done",
+    workId: engineAnswer.asked.length,
+    satisfied: true,
+    closeReason: input.resource === "account.verify" ? "verified" : "identity_matches",
+    result: {
+      accountId: account.accountId,
+      username: account.username,
+      matches: true,
+      proof: { attemptId: engineAnswer.asked.length, sentAt: new Date().toISOString(), base: input.params?.candidate?.base },
+    },
+  });
+}
+
+/** Makes a fixture Fansly page one the engine runs (`live`), with a stored
+ *  session and proxy: the only state in which its `/account/me` levers act
+ *  since step 4 (S4-19 deleted their legacy fallbacks). */
+async function makeEngineLive(testDb: StartedTestDatabase, pageId: number) {
+  await saveProxy(createTestAppContext(testDb), pageId, { url: "socks5://127.0.0.1:1080" });
+  await storeFanslySession(
+    testDb.db,
+    pageId,
+    JSON.stringify(encryptJson({
+      platform: "fansly",
+      session: {
+        authorization: "verify-token",
+      },
+    }, Buffer.alloc(32, 7), 1)),
+    1,
+  );
+  await ensureSyncPage(testDb.db, { pageId });
+  await setModeDirect(testDb.pool, pageId, "live");
+}
+
+/** The page-level latches an older build left open on the page. */
+async function openLegacyPageLatches(testDb: StartedTestDatabase, page: { id: number; label: string; platform: string }) {
+  for (const [kind, errorCode, errorSummary] of [
+    ["auth_blocked", "auth_blocked", "Session expired"],
+    ["proxy_failed", "transport", "Proxy unavailable"],
+  ] as const) {
+    await openNotificationIncident(testDb.db, {
+      incidentKey: `${kind}:${page.id}`,
+      kind,
+      platformAccountId: page.id,
+      errorCode,
+      errorSummary,
+      metadata: {
+        pageLabel: page.label,
+        platform: page.platform,
+      },
+    });
+  }
+}
 
 async function seedPhase2Fixture(testDb: StartedTestDatabase) {
   const lanaModel = await createModel(testDb.db, {
@@ -283,276 +363,21 @@ function createOnboardingOfapi(input: { accountId: string; username: string; dis
   } as unknown as AppContext["ofapi"];
 }
 
-function createAutoSyncFanslyAdapter(input: {
-  accountId: string;
-  username: string;
-  displayName: string | null;
-}): AppContext["adapter"] {
-  const accountMe = {
-    account: {
-      id: input.accountId,
-      username: input.username,
-      displayName: input.displayName,
-      createdAt: 1_772_157_317_000,
-      followCount: 0,
-      subscriberCount: 0,
-      earningsWallet: null,
-      walls: [],
-      subscriptionTiers: [],
-    },
-  };
-
-  return {
-    async verifySession() {
-      return {
-        parsed: accountMe,
-        raw: accountMe,
-      };
-    },
-    async getAccountMe() {
-      return {
-        parsed: accountMe,
-        raw: accountMe,
-      };
-    },
-    async getAccountsByIdsPage() {
-      return {
-        parsed: [],
-        raw: [],
-      };
-    },
-    async getTransactionsPage() {
-      return {
-        total: 0,
-        items: [],
-        offset: 0,
-        done: true,
-        raw: {
-          total: 0,
-          data: [],
-        },
-      };
-    },
-    async getSubscribersPage() {
-      return {
-        total: 0,
-        items: [],
-        offset: 0,
-        done: true,
-        raw: {
-          stats: {
-            totalActive: 0,
-            totalExpired: 0,
-            total: 0,
-          },
-          subscriptions: [],
-        },
-      };
-    },
-    async getFollowersPage() {
-      return {
-        total: 0,
-        items: [],
-        offset: 0,
-        done: true,
-        accounts: [],
-        raw: {
-          followers: [],
-          aggregationData: {
-            accounts: [],
-          },
-        },
-      };
-    },
-    async getMessagingGroupsPage() {
-      return {
-        total: 0,
-        items: [],
-        accounts: [],
-        groups: [],
-        offset: 0,
-        done: true,
-        raw: {
-          data: [],
-          aggregationData: {
-            total: 0,
-            accounts: [],
-            groups: [],
-          },
-        },
-      };
-    },
-    async getGroupDetail(_context: unknown, groupId: string) {
-      const parsed = {
-        id: groupId,
-        type: 1,
-        groupFlags: 0,
-        users: [],
-        lastMessage: null,
-      };
-
-      return {
-        parsed,
-        raw: parsed,
-      };
-    },
-    async getMessagesPage(_context: unknown, params: { groupId: string; before?: string | null }) {
-      return {
-        items: [],
-        groupId: params.groupId,
-        before: params.before ?? null,
-        done: true,
-        raw: {
-          messages: [],
-        },
-      };
-    },
-    async getPostsPage() {
-      return {
-        items: [],
-        accountId: input.accountId,
-        wallId: null,
-        before: "0",
-        nextBefore: null,
-        done: true,
-        contractAccepted: true,
-        raw: { posts: [] },
-      };
-    },
-    // WP-F6 — the batch post read. Same envelope as the timeline.
-    async getPostsByIds() {
-      return {
-        items: [],
-        accountId: "",
-        wallId: null,
-        before: "0",
-        nextBefore: null,
-        done: true,
-        contractAccepted: true,
-        raw: { posts: [] },
-      };
-    },
-    async getTipsByTargetIds(_context: unknown, targetIds: string[]) {
-      return {
-        items: [],
-        targetIds,
-        contractAccepted: true,
-        raw: [],
-      };
-    },
-    async getEarningsAccountsPage(_context: unknown, params: { after?: Date | null; before?: Date | null }) {
-      return {
-        items: [],
-        after: params.after ?? null,
-        before: params.before ?? null,
-        done: true,
-        raw: [],
-      };
-    },
-    async getEarningsStatsAccountsPage() {
-      return { items: [], raw: [] };
-    },
-    async getEarningsMonthlyStatsAccountsPage() {
-      return { items: [], raw: [] };
-    },
-    async getMediaOrderHistoryPage() {
-      return { items: [], raw: [] };
-    },
-    // WP-F9 / [E1] liveness probes — CLI-only, never exercised by this suite.
-    async getPostRepliesPage() {
-      return { items: [], raw: [] };
-    },
-    async getGroupMediaOffersPage() {
-      return { items: [], raw: [] };
-    },
-    async getBroadcastStatsPage() {
-      return { items: [], raw: [] };
-    },
-    async getBroadcastScheduled() {
-      return { items: [], raw: [] };
-    },
-    async getAccountMediaOrdersPage() {
-      return { items: [], raw: [] };
-    },
-    async getTipsByAccountIds() {
-      return { items: [], raw: [] };
-    },
-    async getMediaStoryViewsPage() {
-      return { items: [], raw: [] };
-    },
-    async getPolls() {
-      return { items: [], raw: [] };
-    },
-    async getRecapStats() {
-      return { items: [], raw: [] };
-    },
-    async getAccountMediaByIds() {
-      return { items: [], raw: [] };
-    },
-    async getAccountMediaBundlesByIds() {
-      return { items: [], raw: [] };
-    },
-    async getAccountWalls() {
-      return { items: [], raw: [] };
-    },
-    async getVaultMediaPage() {
-      return { items: [], raw: [] };
-    },
-    // WP-F7: the payouts lane's two reads. Stubbed empty — this fixture
-    // exercises auto-sync wiring, not the lane. The stub grows with the
-    // adapter deliberately: the cast is what keeps this fake honest about the
-    // surface the runtime actually depends on.
-    async getPayoutMethods() {
-      return { items: [], raw: [] };
-    },
-    async getPayoutRequestsPage() {
-      return { items: [], raw: { total: 0, data: [] } };
-    },
-    // WP-F1: the stats lane's five reads plus the tracking-links call. The stub
-    // grows with the adapter deliberately — the cast is what keeps this fake
-    // honest about the surface the runtime actually depends on.
-    async getTrackingLinks() {
-      return { items: [], contractAccepted: true, raw: [] };
-    },
-    async getAccountStats() {
-      return { items: null, raw: null };
-    },
-    async getMediaOfferStats() {
-      return { items: null, raw: null };
-    },
-    async getEarningsStatsWindow() {
-      return { items: [], raw: [] };
-    },
-    async getEarningsMonthlyStats() {
-      return { items: [], raw: [] };
-    },
-    async getDiscoveryMediaSuggestions() {
-      return { items: null, raw: null };
-    },
-    // WP-F2: the notification poll. Stubbed empty — this fixture exercises
-    // auto-sync wiring, not the lane.
-    async getNotificationsPage() {
-      return { items: null, raw: null };
-    },
-    // WP-F3: the catalog sweep's five listing reads. The four batch/vault
-    // routes are already stubbed above (the WP-F9 probe declared them first).
-    async getVaultAlbums() {
-      return { items: null, raw: null };
-    },
-    async getUserVaultAlbums() {
-      return { items: null, raw: null };
-    },
-    async getSubscriptionTiers() {
-      return { items: [], raw: [] };
-    },
-    async getGiftCodes() {
-      return { items: [], raw: [] };
-    },
-    async getAutomatedMessages() {
-      return { items: [], raw: [] };
-    },
-    async close() {},
-  } as AppContext["adapter"];
+/** The stored summary of a thread whose messages are all read: the window
+ *  recounted from the stored rows, coverage `complete`, and the head-read
+ *  watermark. (The legacy sync's closing write, gone since step 4 S4-15; the
+ *  Fansly Sync Engine writes the same columns from the archive.) */
+async function settleCompleteThreadSummary(
+  testDb: StartedTestDatabase,
+  input: { conversationId: number; headReadAt: Date },
+) {
+  await refreshPageDmConversationWindow(testDb.db, { conversationId: input.conversationId });
+  await testDb.pool.query(
+    `update page_dm_threads
+        set message_coverage_status = 'complete', message_backfill_complete = true, last_message_sync_at = $2
+      where id = $1`,
+    [input.conversationId, input.headReadAt],
+  );
 }
 
 async function seedConversationApiFixture(input: {
@@ -648,9 +473,8 @@ async function seedConversationApiFixture(input: {
     },
   ]);
 
-  await finalizePageDmConversationMessageSync(input.testDb.db, {
+  await settleCompleteThreadSummary(input.testDb, {
     conversationId: conversation.id,
-    messageCoverageStatus: "complete",
     headReadAt: new Date("2026-03-17T11:45:00.000Z"),
   });
 
@@ -946,9 +770,8 @@ async function seedSyncMonitorScenario(
       inReplyToRootMessageId: null,
     },
   ]);
-  await finalizePageDmConversationMessageSync(testDb.db, {
+  await settleCompleteThreadSummary(testDb, {
     conversationId: completedConversation.id,
-    messageCoverageStatus: "complete",
     headReadAt: completedSyncAt,
   });
 
@@ -1605,6 +1428,8 @@ describe("api integration", () => {
 
   afterEach(async () => {
     vi.useRealTimers();
+    engineAnswer.answer = null;
+    engineAnswer.asked.length = 0;
 
     if (workerBoss) {
       await workerBoss.stop();
@@ -7682,58 +7507,9 @@ describe("api integration", () => {
     }
 
     const activeTestDb = testDb;
-    await server.close();
-    const appContext = createTestAppContext(activeTestDb, {
-      adapter: createAutoSyncFanslyAdapter({
-        accountId: "acct-lana",
-        username: "lana_page",
-        displayName: "Lana",
-      }),
-    });
-    server = await buildApiServer(appContext);
-    await server.ready();
-
-    await storeFanslySession(
-      activeTestDb.db,
-      fixture!.lanaPage.id,
-      JSON.stringify(encryptJson({
-        platform: "fansly",
-        session: {
-          authorization: "verify-token",
-        },
-      }, Buffer.alloc(32, 7), 1)),
-      1,
-    );
-    await ensurePageSyncStates(activeTestDb.db, {
-      pageId: fixture!.lanaPage.id,
-    });
-    await markPageSyncAuthBlocked(activeTestDb.db, {
-      pageId: fixture!.lanaPage.id,
-      errorCode: "auth_blocked",
-      errorSummary: "Session expired",
-    });
-    await openNotificationIncident(activeTestDb.db, {
-      incidentKey: `auth_blocked:${fixture!.lanaPage.id}`,
-      kind: "auth_blocked",
-      platformAccountId: fixture!.lanaPage.id,
-      errorCode: "auth_blocked",
-      errorSummary: "Session expired",
-      metadata: {
-        pageLabel: fixture!.lanaPage.label,
-        platform: fixture!.lanaPage.platform,
-      },
-    });
-    await openNotificationIncident(activeTestDb.db, {
-      incidentKey: `proxy_failed:${fixture!.lanaPage.id}`,
-      kind: "proxy_failed",
-      platformAccountId: fixture!.lanaPage.id,
-      errorCode: "transport",
-      errorSummary: "Proxy unavailable",
-      metadata: {
-        pageLabel: fixture!.lanaPage.label,
-        platform: fixture!.lanaPage.platform,
-      },
-    });
+    await makeEngineLive(activeTestDb, fixture!.lanaPage.id);
+    await openLegacyPageLatches(activeTestDb, fixture!.lanaPage);
+    engineAnswersFor({ accountId: "acct-lana", username: "lana_page" });
 
     const login = await server.inject({
       method: "POST",
@@ -7763,16 +7539,11 @@ describe("api integration", () => {
       verified: true,
       syncUnblocked: true,
     });
+    // One identity check of the candidate through the page's actor.
+    expect(engineAnswer.asked).toEqual(["account.identity"]);
+    const stored = await resolvePageContext(createTestAppContext(activeTestDb), "lana");
+    expect("session" in stored ? stored.session.authorization : null).toBe("updated-token");
 
-    const authBlockedRows = await activeTestDb.pool.query<{ count: number }>(`
-      select count(*)::int as count
-      from page_sync_states
-      where page_id = $1
-        and status = 'blocked'
-        and blocker_kind = 'auth'
-    `, [fixture!.lanaPage.id]);
-
-    expect(authBlockedRows.rows[0]?.count).toBe(0);
     expect(await getNotificationIncidentByKey(
       activeTestDb.db,
       `auth_blocked:${fixture!.lanaPage.id}`,
@@ -7787,69 +7558,16 @@ describe("api integration", () => {
     }));
   });
 
-  it("clears auth_blocked state and resolves incidents when owners admin verify a page [sync-critical]", async (context) => {
+  it("verifies a page through its engine actor and resolves its incidents when owners admin verify it [sync-critical]", async (context) => {
     if (!testDb || !server) {
       context.skip();
       return;
     }
 
     const activeTestDb = testDb;
-    await server.close();
-    const appContext = createTestAppContext(activeTestDb, {
-      adapter: createAutoSyncFanslyAdapter({
-        accountId: "acct-lana",
-        username: "lana_page",
-        displayName: "Lana",
-      }),
-    });
-    server = await buildApiServer(appContext);
-    await server.ready();
-
-    // W3.1: verify resolves the page context, which fails closed proxyless.
-    await saveProxy(createTestAppContext(activeTestDb), fixture!.lanaPage!.id, {
-      url: "socks5://127.0.0.1:1080",
-    });
-    await storeFanslySession(
-      activeTestDb.db,
-      fixture!.lanaPage.id,
-      JSON.stringify(encryptJson({
-        platform: "fansly",
-        session: {
-          authorization: "verify-token",
-        },
-      }, Buffer.alloc(32, 7), 1)),
-      1,
-    );
-    await ensurePageSyncStates(activeTestDb.db, {
-      pageId: fixture!.lanaPage.id,
-    });
-    await markPageSyncAuthBlocked(activeTestDb.db, {
-      pageId: fixture!.lanaPage.id,
-      errorCode: "auth_blocked",
-      errorSummary: "Session expired",
-    });
-    await openNotificationIncident(activeTestDb.db, {
-      incidentKey: `auth_blocked:${fixture!.lanaPage.id}`,
-      kind: "auth_blocked",
-      platformAccountId: fixture!.lanaPage.id,
-      errorCode: "auth_blocked",
-      errorSummary: "Session expired",
-      metadata: {
-        pageLabel: fixture!.lanaPage.label,
-        platform: fixture!.lanaPage.platform,
-      },
-    });
-    await openNotificationIncident(activeTestDb.db, {
-      incidentKey: `proxy_failed:${fixture!.lanaPage.id}`,
-      kind: "proxy_failed",
-      platformAccountId: fixture!.lanaPage.id,
-      errorCode: "transport",
-      errorSummary: "Proxy unavailable",
-      metadata: {
-        pageLabel: fixture!.lanaPage.label,
-        platform: fixture!.lanaPage.platform,
-      },
-    });
+    await makeEngineLive(activeTestDb, fixture!.lanaPage.id);
+    await openLegacyPageLatches(activeTestDb, fixture!.lanaPage);
+    engineAnswersFor({ accountId: "acct-lana", username: "lana_page" });
 
     const login = await server.inject({
       method: "POST",
@@ -7874,16 +7592,8 @@ describe("api integration", () => {
       platform: "fansly",
       syncUnblocked: true,
     });
+    expect(engineAnswer.asked).toEqual(["account.verify"]);
 
-    const authBlockedRows = await activeTestDb.pool.query<{ count: number }>(`
-      select count(*)::int as count
-      from page_sync_states
-      where page_id = $1
-        and status = 'blocked'
-        and blocker_kind = 'auth'
-    `, [fixture!.lanaPage.id]);
-
-    expect(authBlockedRows.rows[0]?.count).toBe(0);
     expect(await getNotificationIncidentByKey(
       activeTestDb.db,
       `auth_blocked:${fixture!.lanaPage.id}`,
@@ -7896,6 +7606,68 @@ describe("api integration", () => {
     )).toEqual(expect.objectContaining({
       status: "resolved",
     }));
+  });
+
+  it("refuses the owner's verify and credentials change of a Fansly page the engine does not run [sync-critical]", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+
+    // No legacy `/account/me` is left to fall back to (step 4, S4-19): a
+    // Fansly page without a live engine row has no sender, so nothing is
+    // checked, sent or stored, and its incidents stay as they are.
+    const activeTestDb = testDb;
+    await makeEngineLive(activeTestDb, fixture!.lanaPage.id);
+    await openLegacyPageLatches(activeTestDb, fixture!.lanaPage);
+    engineAnswersFor({ accountId: "acct-lana", username: "lana_page" });
+
+    const login = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: {
+        username: "dima",
+        password: "owner-secret",
+      },
+    });
+    const cookie = sessionCookieFrom(login);
+
+    for (const mode of ["off", "shadow", null] as const) {
+      if (mode === null) {
+        await activeTestDb.pool.query("delete from sync_pages where page_id = $1", [fixture!.lanaPage.id]);
+      } else {
+        await setModeDirect(activeTestDb.pool, fixture!.lanaPage.id, mode);
+      }
+      const verify = await server.inject({
+        method: "POST",
+        url: "/api/v1/admin/pages/lana/verify",
+        headers: { cookie },
+      });
+      expect(verify.statusCode, String(mode)).toBe(409);
+      expect(verify.json()).toMatchObject({ error: "legacy_sync_retired", statusCode: 409 });
+
+      const credentials = await server.inject({
+        method: "PATCH",
+        url: "/api/v1/admin/pages/lana/credentials",
+        headers: { cookie },
+        payload: {
+          platform: "fansly",
+          session: {
+            authorization: "updated-token",
+          },
+        },
+      });
+      expect(credentials.statusCode, String(mode)).toBe(409);
+      expect(credentials.json()).toMatchObject({ error: "legacy_sync_retired", statusCode: 409 });
+    }
+
+    expect(engineAnswer.asked).toEqual([]);
+    const stored = await resolvePageContext(createTestAppContext(activeTestDb), "lana");
+    expect("session" in stored ? stored.session.authorization : null).toBe("verify-token");
+    for (const kind of ["auth_blocked", "proxy_failed"]) {
+      expect(await getNotificationIncidentByKey(activeTestDb.db, `${kind}:${fixture!.lanaPage.id}`))
+        .toEqual(expect.objectContaining({ status: "open" }));
+    }
   });
 
   it("returns 404 when owners admin verify a missing page [sync-critical]", async (context) => {
@@ -7935,37 +7707,10 @@ describe("api integration", () => {
     }
 
     const activeTestDb = testDb;
-    await server.close();
-    const appContext = createTestAppContext(activeTestDb, {
-      adapter: {
-        ...createAutoSyncFanslyAdapter({
-          accountId: "acct-lana",
-          username: "lana_page",
-          displayName: "Lana",
-        }),
-        async getAccountMe() {
-          throw new Error("metadata refresh exploded");
-        },
-      } as AppContext["adapter"],
-    });
-    server = await buildApiServer(appContext);
-    await server.ready();
-
-    // W3.1: verify resolves the page context, which fails closed proxyless.
-    await saveProxy(createTestAppContext(activeTestDb), fixture.lanaPage!.id, {
-      url: "socks5://127.0.0.1:1080",
-    });
-    await storeFanslySession(
-      activeTestDb.db,
-      fixture.lanaPage.id,
-      JSON.stringify(encryptJson({
-        platform: "fansly",
-        session: {
-          authorization: "verify-token",
-        },
-      }, Buffer.alloc(32, 7), 1)),
-      1,
-    );
+    await makeEngineLive(activeTestDb, fixture.lanaPage.id);
+    engineAnswer.answer = () => {
+      throw new Error("the engine's queue exploded");
+    };
 
     const login = await server.inject({
       method: "POST",
@@ -7998,16 +7743,8 @@ describe("api integration", () => {
     }
 
     const activeTestDb = testDb;
-    await server.close();
-    const appContext = createTestAppContext(activeTestDb, {
-      adapter: createAutoSyncFanslyAdapter({
-        accountId: "acct-lana",
-        username: "lana_page",
-        displayName: "Lana",
-      }),
-    });
-    server = await buildApiServer(appContext);
-    await server.ready();
+    await makeEngineLive(activeTestDb, fixture!.lanaPage.id);
+    engineAnswersFor({ accountId: "acct-lana", username: "lana_page" });
 
     const login = await server.inject({
       method: "POST",
@@ -8057,33 +7794,8 @@ describe("api integration", () => {
     }
 
     const activeTestDb = testDb;
-    await saveProxy(createTestAppContext(activeTestDb), fixture.lanaPage.id, {
-      url: "socks5://proxy-user:proxy-pass@127.0.0.1:1080",
-    });
-
-    await server.close();
-    let verifiedProxy: Record<string, unknown> | null | undefined;
-    const appContext = createTestAppContext(activeTestDb, {
-      adapter: {
-        async verifySession(contextInput: { proxy?: Record<string, unknown> | null }) {
-          verifiedProxy = contextInput.proxy;
-          return {
-            parsed: {
-              account: {
-                id: "acct-lana",
-                username: "lana_page",
-                displayName: "Lana",
-                followCount: 0,
-                subscriberCount: 0,
-              },
-            },
-            raw: null,
-          };
-        },
-      } as never,
-    });
-    server = await buildApiServer(appContext);
-    await server.ready();
+    await makeEngineLive(activeTestDb, fixture.lanaPage.id);
+    engineAnswersFor({ accountId: "acct-lana", username: "lana_page" });
 
     const login = await server.inject({
       method: "POST",
@@ -8109,7 +7821,8 @@ describe("api integration", () => {
     });
 
     expect(response.statusCode).toBe(400);
-    expect(verifiedProxy).toBeUndefined();
+    // Refused at the contract: nothing reached the page's actor.
+    expect(engineAnswer.asked).toEqual([]);
 
     const proxyRows = await activeTestDb.pool.query<{ count: number }>(`
       select count(*)::int as count
