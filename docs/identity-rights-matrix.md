@@ -51,6 +51,7 @@ pages that account is granted; the owner is granted every page implicitly.
 | Desktop read gateway — `/ofapi/read/*` (`apiKey`) | no (403) | yes, assigned | no (403) | yes, assigned | no (403) | **yes, assigned** | — | no (403) |
 | Chat-extension bootstrap — `/client/bootstrap` (`apiKey`) | no (403) | yes, every page | no (403) | yes, assigned | no (403) | **yes, assigned** | — | yes, by the role's reach |
 | Chat-extension shared recaps — `/client/pages/{label}/conversations/{fan}/recaps` (`apiKey` + page scope) | no (403) | yes, every page | no (403) | yes, assigned | no (403) | **yes, assigned** | — | yes, by the role's reach |
+| Chat-extension archive feed — `/client/pages/{label}/conversations/{fan}/feed` (`apiKey` + page scope) | no (403) | yes, every page | no (403) | yes, assigned | no (403) | **yes, assigned** | — | yes, by the role's reach |
 | Chat-extension dossier save — `/client/pages/{label}/fans/{fan}/profile/from-generation` (`apiKey` + page scope) | no (403) | own generations, every page | no (403) | own generations, assigned | no (403) | **own generations, assigned** | — | own generations, by the role's reach |
 | Chat-extension own AI spend — `/client/pages/{label}/ai-usage` (`apiKey` + page scope) | no (403) | yes, every page, **own rows only** | no (403) | yes, assigned, own rows only | no (403) | **yes, assigned, own rows only** | — | yes, by the role's reach |
 | Chat-extension Spenders statistics — `/client/pages/{label}/spenders/stats` (`apiKey` + page scope) | no (403) | yes, every page | no (403) | yes, assigned | no (403) | **yes, assigned** | — | yes, by the role's reach |
@@ -102,6 +103,38 @@ person's.
 Its row is held by `client-recaps.integration`: every cell, the agent key, a
 page that is not granted and one that does not exist, in both auth-policy
 modes, and two chatters of one page reading the same recap.
+
+The archive feed (chat-extension H-9c) is the route on which a device token
+reads a conversation's **messages from the hub's own stores**. The dashboard's
+reads of a stored conversation (`pageConversationPreview`,
+`pageConversationMessages`, `archiveConversationMessages`) stay cookie-session
+routes; a client saw messages through the desktop read gateway and the event
+streams, and the chat-extension token reaches neither, so this is the one way
+that token reads message text. Every chatter granted a page reads, for any fan
+of that page, what the message archive and the webhook store hold of the chat,
+a page at a time:
+
+- only on a page granted to the caller (page scope, as on every page route),
+  and only while the owner's `preview` switch is on for it. A page that is not
+  the caller's answers as on the shared recaps (403 / 404 with the policy
+  enforced, `409 client_feature_disabled` / `not_granted` in `log` mode);
+- only one conversation per request, the fan in the path. Another fan's chat
+  and the same fan on another page are other conversations and never mixed in;
+- the text, the time, the sender, a tip or a price in mills and a caption of
+  what is attached. No media id or URL, no prompt, no generation, and nothing
+  about who of the team read or wrote what;
+- a message deleted on the platform is served as a row flagged `deleted`, with
+  the text the store still has: the archive keeps what it captured, and the
+  row says the message is gone from the chat;
+- it only reads. Nothing is asked of the platform and nothing is queued, so a
+  chat read here stays unread on OnlyFans.
+
+Its cursor adds no right: it is signed and bound to the page, the fan and the
+person, so one chatter's cursor opens nothing for another, and it is checked
+after the page and the switch, never in their place. Its row is held by
+`client-feed.integration`: every cell, the agent key, a page that is not
+granted and one that does not exist, in both auth-policy modes, and a cursor
+presented by another person, for another fan and for another page.
 
 The dossier save from a stored generation (chat-extension H-5) writes the
 fan's dossier, as the older `PUT …/fans/{fan}/profile` does, with one
