@@ -254,9 +254,9 @@ the HTTP gate on the actor's next lap — no page hold or pacer slot delays it �
 rows of the message are marked (sticky), one deliverable `message.deleted` is appended and the archive tombstoned
 from it (tombstone-first, sticky against a later REST copy), and then the stored window of every thread whose archive
 holds one of the messages is recounted from the archive by `writeThreadSummaryAfterDeletion` — the head stays the
-conversation list's, the chain is untouched. Since step 4 S4-11 this is the only path from a socket deletion to the
-stores: the legacy receipt reconcile is gone, and the receipts it applied stay as records that the archive shadow
-rebuild re-applies.
+conversation list's, the chain is untouched.
+Since step 4 S4-11 this is the only path from a socket deletion to the stores: the legacy receipt reconcile is gone, and
+the receipts it applied stay as records that the archive shadow rebuild re-applies.
 
 **A live page's socket** lives in the `sync` process (`fansly/ws/source.ts`, one per live slot of the host; a page
 that is not live has none). The source holds the page's socket lock `(58213, page)` on its own session for as long as
@@ -503,8 +503,13 @@ branch. On a live page:
   Migration 0236 recomputed the count and the newest/oldest ids from the archive once, on the live pages. Their
   readers (coverage, Top Supporters, agent datasets, ETA, chain checks) did not change.
 
-`page_dm_messages` is still written for Fansly (inserts and deletion marks) until S4-13, so reverting this step
-serves the hot table again with nothing lost.
+**The hot table is frozen for Fansly (step 4 S4-13, I23).** The engine's DM apply writes no `page_dm_messages` row:
+the messages a read shows reach the readers through `message_archive` only. The rows legacy stored before a page went
+live stay as they were, and `dm-live.deletions` keeps marking them (`markFanslyWsHotDeletion`, sticky), so the frozen
+snapshot never shows a deleted message as live. OnlyFans keeps writing the table (`services/ofapi-dm-projection.ts`,
+the OnlyFans PPV backfill). `tests/page-dm-messages-boundary.test.ts` pins every file that names the table, every
+write statement on it and every caller of its writers; inside `sync/` the deletion mark is the only one. A revert of
+S4-13 brings the inserts back; the gap since is not refilled, and a live page's readers read the archive anyway.
 
 **Parity.** `pnpm cli sync dm-reader-parity --window 1h --rounds 12 --interval 5m [--page P] [--full] --out <json>`
 compares the two stores reader by reader, read-only (every statement in a READ ONLY transaction, each thread in one
@@ -519,8 +524,8 @@ differ between the stores; the threads with a deletion, tip, PPV, reply ref or e
 ≥ 2 min later still finds it missing, `field_mismatch` fails, `extra_in_archive` (the archive knows more: the
 September sidecar rows, a deletion first) and `tie_order` are reported. `--full` also judges every Fansly hot row
 against its archive row. The JSON report goes to `--out`; stdout carries the verdict and the archive-only list for
-the owner; exit 1 on a fail. It ran for an hour before the readers moved (S4-08) and runs again before the Fansly
-hot writes stop (S4-13).
+the owner; exit 1 on a fail. It ran for an hour before the readers moved (S4-08) and again before the Fansly hot
+writes stopped (S4-13); since then every message newer than the freeze is `extra_in_archive`.
 
 ## Invariants
 
@@ -550,6 +555,7 @@ Each is enforced in exactly one place and pinned by a test (design §1). The fir
 | I20 | One page-hold rule: a credentials hold clears only by an identity proof sent after its latest refusal, written with the apply; under it only a candidate check and one verify per changed stored digest pass (step 3b ruling 5, A3). | `packages/shared/src/fansly-page-holds.ts` (gate, final admission, status, alerts) + `engine/commit.ts` (`recordIdentityProof`) |
 | I21 | The legacy page-sync executor serves only the platforms whose adapter declares streams (OnlyFans since step 4 S4-10): no Fansly page's legacy state is seeded, scheduled, woken, leased or requested, and nothing gives a page back to it. The platform set is a required argument of every query that picks work — the one fence in them since S4-21, with the Fansly rows parked `retired` (0239) beside it — and the planner and the executor assert it before a wake-up or a run; `services/sync/` holds no Fansly handler, error class or Fansly HTTP import (S4-19). | `onlyfans/boundary.ts` (`legacyExecutorPlatforms`, `assertLegacyExecutorPage`) over `platforms/registry.ts` + `repositories/page-sync.ts` (`PageSyncPlatformScope`) + `services/sync/planner.ts` + `services/sync/executor.ts` + `services/sync-control.ts` (`assertLegacyExecutorServes`); tests/sync-onlyfans-boundary.test.ts, tests/sync-legacy-fence.test.ts |
 | I22 | Only a live page's socket source in `sync` opens a Fansly WebSocket (step 4 S4-12): the receiver helper is the one place that constructs a socket, its Upgrade on a send lease (the engine's, over the pacer's one-shot check); no worker, lane or script opens one. | `fansly/ws/source.ts` + `services/egress/fansly-receiver-socket.ts`; tests/fansly-send-guard-boundary.test.ts |
+| I23 | The Sync Engine writes no `page_dm_messages` row: a live page's messages go to `message_archive`; the engine only marks the deletion of rows legacy stored (`markFanslyWsHotDeletion`, sticky). | `fansly/resources/dm-messages.ts` + `fansly/resources/dm-live.ts`, pinned by `tests/page-dm-messages-boundary.test.ts` |
 
 What the pacer guarantees, concretely: the slot opens at `max(last send + ceil(S × (1 + u)), last completion,
 takeover floor)`; `u` is drawn once per send and kept across re-waits; a waiting pacer re-reads `S` at least every
