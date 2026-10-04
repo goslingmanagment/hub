@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type {
   AdminSyncBlockBody,
   SyncHistoryRequestsQuery,
@@ -32,17 +32,27 @@ export function usePageSyncBlocks(pageLabel: string) {
   });
 }
 
+/**
+ * What a block lever (sync now, pause, resume, reset) makes stale: the blocks,
+ * the page summaries built from them — and, on a Fansly page, the engine's own
+ * status and history requests (`/api/v1/sync/pages`, `…/history-requests`): a
+ * pause moves rows of the queue between "ready" and "paused" at once, and the
+ * «Синк» tab shows both beside the buttons.
+ */
+function invalidateAfterSyncBlockLever(qc: QueryClient): void {
+  void qc.invalidateQueries({ queryKey: ["syncBlocks"] });
+  void qc.invalidateQueries({ queryKey: ["syncEngine"] });
+  void qc.invalidateQueries({ queryKey: ["admin", "connections"] });
+  void qc.invalidateQueries({ queryKey: ["overview"] });
+}
+
 export function useAdminSyncBlockTrigger() {
   const qc = useQueryClient();
   return useMutation({
     meta: { suppressGlobalError: true },
     mutationFn: (body: AdminSyncBlockBody) =>
       kernel.adminSyncBlockTrigger({ body }),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["syncBlocks"] });
-      void qc.invalidateQueries({ queryKey: ["admin", "connections"] });
-      void qc.invalidateQueries({ queryKey: ["overview"] });
-    },
+    onSuccess: () => invalidateAfterSyncBlockLever(qc),
   });
 }
 
@@ -52,11 +62,7 @@ export function useAdminSyncBlockPause() {
     meta: { suppressGlobalError: true },
     mutationFn: (body: AdminSyncBlockBody) =>
       kernel.adminSyncBlockPause({ body }),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["syncBlocks"] });
-      void qc.invalidateQueries({ queryKey: ["admin", "connections"] });
-      void qc.invalidateQueries({ queryKey: ["overview"] });
-    },
+    onSuccess: () => invalidateAfterSyncBlockLever(qc),
   });
 }
 
@@ -66,11 +72,7 @@ export function useAdminSyncBlockResume() {
     meta: { suppressGlobalError: true },
     mutationFn: (body: AdminSyncBlockBody) =>
       kernel.adminSyncBlockResume({ body }),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["syncBlocks"] });
-      void qc.invalidateQueries({ queryKey: ["admin", "connections"] });
-      void qc.invalidateQueries({ queryKey: ["overview"] });
-    },
+    onSuccess: () => invalidateAfterSyncBlockLever(qc),
   });
 }
 
@@ -80,11 +82,7 @@ export function useAdminSyncBlockReset() {
     meta: { suppressGlobalError: true },
     mutationFn: (body: AdminSyncBlockBody) =>
       kernel.adminSyncBlockReset({ body }),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["syncBlocks"] });
-      void qc.invalidateQueries({ queryKey: ["admin", "connections"] });
-      void qc.invalidateQueries({ queryKey: ["overview"] });
-    },
+    onSuccess: () => invalidateAfterSyncBlockLever(qc),
   });
 }
 

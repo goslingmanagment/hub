@@ -17,13 +17,11 @@ import {
   getStreamLabel,
   getSubstreamTone,
   isDependencyWait,
-  isEngineBlock,
   formatSubstreamStateLabel,
 } from "./syncBlockDisplay.js";
 
-/** One block of a page in detail — its state, timing, streams and buttons.
- *  «Синхронизация» shows the legacy executor's blocks with it, «Синк» the
- *  Fansly Sync Engine's. */
+/** One block of a page of the legacy executor in detail — its state, timing,
+ *  streams and buttons («Синхронизация»). */
 export function SyncBlockDetailCard({
   block,
   pageLabel,
@@ -61,8 +59,7 @@ export function SyncBlockDetailCard({
     ? "Waiting for prerequisite syncs"
     : statusSummary ?? (block.state === "failed" ? `${label} needs attention` : "Sync is delayed");
   const queueWaiting = block.statusReason?.code === "queue_waiting";
-  const engineAttention = isEngineBlock(block) && block.needsAttention;
-  const hasStatusNotice = dependencyWait || block.state === "failed" || block.state === "delayed" || engineAttention;
+  const hasStatusNotice = dependencyWait || block.state === "failed" || block.state === "delayed";
   const hasSubstreams = block.substreams.length > 1;
   const dependencyDetail = getDependencyWaitDetail(block);
   const progressCaption = formatBlockProgressCaption(block);
@@ -274,7 +271,6 @@ export function SyncBlockDetailCard({
                         {formatNextTime(sub.nextDueAt) ?? "\u2014"}
                       </td>
                       <td className="px-3 py-1.5 text-text-secondary">
-                        {/* An engine stream with no poll (triggered work) has no interval. */}
                         {sub.cadenceSeconds > 0 ? formatCadence(sub.cadenceSeconds) : "\u2014"}
                       </td>
                     </tr>

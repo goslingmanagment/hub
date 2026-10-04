@@ -2,13 +2,12 @@ import { usePageSyncBlocks, useSyncHistoryRequests } from "@/api/queries";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
 import { syncSettingsTab } from "@/lib/navigation";
-import { SyncBlockDetailCard } from "../sync/SyncBlockDetailCard.js";
-import { SyncDiagnosisNotice } from "../sync/SyncDiagnosisNotice.js";
 import { SyncBackButton, SyncPageOnOtherTab, SyncPageTitle } from "../sync/SyncPageParts.js";
-import { getBlockOrder } from "../sync/syncBlockDisplay.js";
+import { EngineBlockCard, EnginePageAttention } from "./EngineBlocks.js";
 import { EnginePageMode, EnginePageStatusBody } from "./EnginePageCard.js";
 import { EngineSendsByResource } from "./EngineStatus.js";
 import { HistoryRequestsBlock } from "./HistoryRequests.js";
+import { engineBlockOrder } from "./engineBlockDisplay.js";
 import { useEngineStatusOf } from "./useEngineStatusOf.js";
 
 const BACK = "К списку страниц";
@@ -71,7 +70,7 @@ export function EnginePageDetail({ pageLabel, onBack }: { pageLabel: string; onB
       </div>
       <div className="space-y-3">
         {isError && <StaleDataNotice title="Показаны сохранённые данные" error={error} />}
-        {page.diagnosis && <SyncDiagnosisNotice diagnosis={page.diagnosis} />}
+        <EnginePageAttention page={page} />
         <section className="rounded-xl border border-border bg-card px-5 py-4" aria-label="Состояние движка">
           <EnginePageStatusBody state={state} pageLabel={pageLabel}>
             {state.kind === "ready" && (
@@ -87,8 +86,8 @@ export function EnginePageDetail({ pageLabel, onBack }: { pageLabel: string; onB
             closed={closed}
           />
         </div>
-        {getBlockOrder().map((key) => (
-          <SyncBlockDetailCard key={key} block={page.blocks[key]} pageLabel={pageLabel} />
+        {engineBlockOrder().map((key) => (
+          <EngineBlockCard key={key} block={page.blocks[key]} pageLabel={pageLabel} />
         ))}
       </div>
     </div>

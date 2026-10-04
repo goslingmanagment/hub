@@ -31,7 +31,13 @@ import {
 import { loadEffectiveConfig } from "./effective-config.ts";
 import { filterOnlyFansAudienceStreams } from "./sync/ofapi-audience-sync.ts";
 import { legacyExecutorPlatforms } from "../sync/onlyfans/boundary.ts";
-import { buildEngineDomainBlock, readEngineStatusFacts, type EngineStatusFacts } from "./sync-status-engine.ts";
+import {
+  buildEngineDomainBlock,
+  readEngineStatusFacts,
+  type EngineBlockInfo,
+  type EngineStatusFacts,
+  type EngineSubstreamInfo,
+} from "./sync-status-engine.ts";
 
 export const SYNC_DOMAIN_BLOCKS = [
   "connection",
@@ -124,6 +130,9 @@ export interface SyncDomainBlockStatus {
   state: SyncDomainBlockState;
   /** Set exactly when `state` is `engine`: the page's engine mode. */
   engineMode?: "handover" | "live";
+  /** Set exactly when `state` is `engine`: who runs the page, the keys the
+   *  block's buttons move, what stops them and what needs the owner. */
+  engine?: EngineBlockInfo;
   succeededAt: string | null;
   progress: SyncDomainProgress | null;
   progressStream: SyncStream | null;
@@ -164,6 +173,8 @@ export interface SyncDomainBlockStatus {
       failedAt: string | null;
       consecutiveFailures: number;
     } | null;
+    /** Set exactly when `state` is `engine`: what stops the stream's keys. */
+    engine?: EngineSubstreamInfo;
   }>;
   tasks: SyncTaskReadStatus[];
 }

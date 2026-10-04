@@ -14,13 +14,16 @@ import { getStreamLabel } from "../apps/dashboard/src/pages/settings/sync/syncBl
 import { WAITING_REASONS } from "../apps/runtime/src/sync/engine/status.ts";
 import { FANSLY_LEVER_STREAMS } from "../apps/runtime/src/sync/fansly/registry.ts";
 
-// The coverage panel's engine section and its floors (step 4, S4-18 and
-// S4-34): what the Fansly Sync Engine reads for the page, stream by stream, in
-// words that are true — "reading" only of a stream a host reads, a reason in
-// the sync tabs' own dictionary and the panel's time, a floor with its year.
+// The coverage panel's engine section and its floors (step 4, S4-18, S4-34
+// and S4-35): what the Fansly Sync Engine reads for the page, stream by
+// stream, in words that are true — "reading" only of a stream a host reads
+// and nothing stops, what stops it (the page's hold, a breaker, a 429's hold
+// of its routes, the owner's pause) said in the panel's own words, a reason in
+// the sync tabs' dictionary and the panel's time, a floor with its year.
 
 type Engine = NonNullable<StatsCoverageResponse["engine"]>;
 type EngineStream = Engine["streams"][number];
+type EngineStop = EngineStream["stops"][number];
 type Floor = StatsCoverageResponse["planes"][number];
 
 function stream(overrides: Partial<EngineStream> = {}): EngineStream {
@@ -31,6 +34,8 @@ function stream(overrides: Partial<EngineStream> = {}): EngineStream {
     nextDueAt: "2026-10-03T09:05:00.000Z",
     activeWork: 1,
     paused: false,
+    stopped: "none",
+    stops: [],
     needsAttention: false,
     reason: null,
     waiting: null,
@@ -38,6 +43,14 @@ function stream(overrides: Partial<EngineStream> = {}): EngineStream {
     ...overrides,
   };
 }
+
+/** What the server says of a stream every key of which the owner paused. */
+function pausedBy(resources: string[]): Pick<EngineStream, "paused" | "stopped" | "stops"> {
+  return { paused: true, stopped: "all", stops: [{ reason: "paused", by: ["keys"], resources, until: null }] };
+}
+
+const stop = (reason: EngineStop["reason"], by: string[], resources: string[], until: string | null = null): EngineStop =>
+  ({ reason, by, resources, until });
 
 function engine(streams: EngineStream[], overrides: Partial<Engine> = {}): Engine {
   return { mode: "live", ownerRunning: true, streams, ...overrides };
@@ -117,7 +130,11 @@ describe("the coverage panel's engine section", () => {
   it("says a paused stream is paused and a quarantined one needs attention, with its failures", () => {
     const html = render({
       engine: engine([
-        stream({ stream: "notifications", resources: ["notifications.forward", "notifications.backfill"], paused: true }),
+        stream({
+          stream: "notifications",
+          resources: ["notifications.forward", "notifications.backfill"],
+          ...pausedBy(["notifications.forward", "notifications.backfill"]),
+        }),
         stream({
           stream: "catalog",
           resources: ["catalog.fixed"],
@@ -168,7 +185,7 @@ describe("the badge of a stream says what is true of it", () => {
     const streams = [
       stream({ stream: "light", waiting: { resource: "account.poll", reason: "ownership_unconfirmed", until: null } }),
       stream({ stream: "transactions", activeWork: 4 }),
-      stream({ stream: "stats_snapshot", paused: true }),
+      stream({ stream: "stats_snapshot", ...pausedBy(["media-stats.walk"]) }),
       stream({ stream: "followers_reconcile", activeWork: 0, succeededAt: null, nextDueAt: null }),
       stream({
         stream: "subscribers",
@@ -190,14 +207,197 @@ describe("the badge of a stream says what is true of it", () => {
     expect(handover).toContain("The page is switching to the engine (handover)");
   });
 
-  it("puts the owner first, then the pause, then attention, then the work", () => {
+  it("puts the owner first, then what stops every key, then attention, then a partial stop, then the work", () => {
     const owned = { mode: "live", ownerRunning: true } as const;
-    const all = stream({ paused: true, needsAttention: true, activeWork: 2 });
+    const all = stream({ ...pausedBy(["media-stats.walk"]), needsAttention: true, activeWork: 2 });
+    type Stopped = Pick<EngineStream, "paused" | "stopped" | "stops">;
+    const free: Stopped = { paused: false, stopped: "none", stops: [] };
+    const partly: Stopped = { paused: false, stopped: "some", stops: [stop("resource_hold", ["followers"], ["followers.head"])] };
     expect(engineStreamBadge({ mode: "live", ownerRunning: false }, all)).toMatchObject({ text: "not running: no owner", tone: "off" });
     expect(engineStreamBadge(owned, all)).toMatchObject({ text: "paused", tone: "off" });
-    expect(engineStreamBadge(owned, { ...all, paused: false })).toMatchObject({ text: "needs attention", tone: "off" });
-    expect(engineStreamBadge(owned, { ...all, paused: false, needsAttention: false })).toMatchObject({ text: "reading", tone: "on" });
-    expect(engineStreamBadge(owned, { ...all, paused: false, needsAttention: false, activeWork: 0 })).toMatchObject({ text: "idle", tone: "on" });
+    expect(engineStreamBadge(owned, { ...all, ...free })).toMatchObject({ text: "needs attention", tone: "off" });
+    // Work that needs the owner is said before a stop of some of the keys.
+    expect(engineStreamBadge(owned, { ...all, ...partly })).toMatchObject({ text: "needs attention", tone: "off" });
+    expect(engineStreamBadge(owned, { ...all, ...partly, needsAttention: false })).toMatchObject({ text: "partly held", tone: "off" });
+    expect(engineStreamBadge(owned, { ...all, ...free, needsAttention: false })).toMatchObject({ text: "reading", tone: "on" });
+    expect(engineStreamBadge(owned, { ...all, ...free, needsAttention: false, activeWork: 0 })).toMatchObject({ text: "idle", tone: "on" });
+  });
+});
+
+// S4-35: seen on the stand — every stream of a page held for its credentials
+// read "reading" beside "account.poll: page held"; "Followers [reading] …
+// resource held until …"; "Message history [reading]" while its only route was
+// held by a 429. The badge follows the server's verdict over the stream's
+// keys (`stopped`, `stops`: the engine's own hold evaluator and the owner's
+// pauses), for a stream whose work is per chat as for any other.
+describe("held is not reading", () => {
+  const owned = { mode: "live", ownerRunning: true } as const;
+  const pageHold = (resources: string[]) => stop("page_hold", ["auth"], resources);
+
+  it("no stream of a page held for its credentials reads 'reading', and each says what holds the page", () => {
+    const streams = [
+      stream({
+        stream: "light", resources: ["account.poll"], stopped: "all", stops: [pageHold(["account.poll"])],
+        waiting: { resource: "account.poll", reason: "page_hold", until: null },
+      }),
+      // Work per chat: no page-level row, so no waiting line — the badge still knows.
+      stream({
+        stream: "dm_messages", resources: ["dm-messages.head", "dm-messages.catchup", "dm-messages.history"], activeWork: 12,
+        stopped: "all", stops: [pageHold(["dm-messages.head", "dm-messages.catchup", "dm-messages.history"])],
+      }),
+      stream({ stream: "posts", resources: ["posts.refresh"], activeWork: 0, succeededAt: null, stopped: "all", stops: [pageHold(["posts.refresh"])] }),
+    ];
+    const html = render({ engine: engine(streams) });
+    for (const row of streams) {
+      expect(badge(html, row.stream), row.stream).toBe("page held");
+      expect(card(html, row.stream), row.stream).toContain("Page held: Fansly refuses its credentials — until new ones are saved");
+    }
+    expect(text(html)).not.toContain("\nreading\n");
+    // The stop says it for every key: the one row's "page held" is not repeated.
+    expect(card(html, "light")).not.toContain("account.poll: page held");
+    expect(engineStreamBadge(owned, streams[1]!)).toMatchObject({ text: "page held", tone: "off" });
+  });
+
+  it("a stream whose only route a 429 holds is held until the hold's end, not reading", () => {
+    const until = "2026-10-04T19:59:42.000Z";
+    const history = stream({
+      stream: "dm_messages",
+      resources: ["dm-messages.head", "dm-messages.catchup", "dm-messages.history"],
+      activeWork: 4,
+      nextDueAt: null,
+      stopped: "all",
+      stops: [stop("route_hold", ["messages.page"], ["dm-messages.head", "dm-messages.catchup", "dm-messages.history"], until)],
+    });
+    const html = render({ engine: engine([history]) });
+    expect(badge(html, "dm_messages")).toBe("held");
+    const read = card(html, "dm_messages");
+    expect(read).toContain(`\nEndpoint messages.page held (429) until ${panelTime(until)}\n`);
+    // Open work that is held has no next read.
+    expect(read.split("\n").slice(read.split("\n").indexOf("Next due"))[1]).toBe("—");
+    expect(read).not.toMatch(/\d{4}-\d{2}-\d{2}T/);
+  });
+
+  // Seen in review: "Posts [reading]" and "Follower reconcile [reading]"
+  // above "…: endpoint held (429) until …". A key that reads several routes
+  // is stopped by a hold of one of them once the hold has put its work off
+  // (the server's verdict reads that row): the badge says held, and the hold
+  // is said once — by the stop, with every key it stops.
+  it("work a 429's hold of one of its routes put off is held, not reading", () => {
+    const until = "2026-10-04T19:59:42.000Z";
+    const posts = stream({
+      stream: "posts",
+      resources: ["posts.refresh", "posts.backfill", "posts.engagement"],
+      activeWork: 2,
+      nextDueAt: null,
+      stopped: "some",
+      stops: [stop("route_hold", ["posts.timeline"], ["posts.refresh", "posts.backfill"], until)],
+      reason: `posts.refresh: route_hold until ${until}`,
+      waiting: { resource: "posts.refresh", reason: "route_hold", until },
+    });
+    const reconcile = stream({
+      stream: "followers_reconcile",
+      resources: ["followers.reconcile", "fan-profiles.lookup"],
+      nextDueAt: null,
+      stopped: "some",
+      stops: [stop("route_hold", ["followers.page"], ["followers.reconcile"], until)],
+      waiting: { resource: "followers.reconcile", reason: "route_hold", until },
+    });
+    // A stream of one key: all of it is held.
+    const earnings = stream({
+      stream: "fan_earnings",
+      resources: ["fan-earnings.roster"],
+      nextDueAt: null,
+      stopped: "all",
+      stops: [stop("route_hold", ["earnings.monthly_accounts"], ["fan-earnings.roster"], until)],
+      waiting: { resource: "fan-earnings.roster", reason: "route_hold", until },
+    });
+    const html = render({ engine: engine([posts, reconcile, earnings]) });
+    expect(text(html)).not.toContain("\nreading\n");
+    expect(badge(html, "posts")).toBe("partly held");
+    expect(badge(html, "followers_reconcile")).toBe("partly held");
+    expect(badge(html, "fan_earnings")).toBe("held");
+    for (const row of [posts, reconcile, earnings]) expect(engineStreamBadge(owned, row).tone, row.stream).toBe("off");
+    const read = card(html, "posts");
+    expect(read).toContain(`\nEndpoint posts.timeline held (429) until ${panelTime(until)}: posts.refresh, posts.backfill\n`);
+    expect(card(html, "followers_reconcile")).toContain(`\nEndpoint followers.page held (429) until ${panelTime(until)}: followers.reconcile\n`);
+    expect(card(html, "fan_earnings")).toContain(`\nEndpoint earnings.monthly_accounts held (429) until ${panelTime(until)}\n`);
+    // The row's own wait would only repeat the stop for one of its keys, and
+    // held work has no next read.
+    expect(text(html)).not.toContain(": endpoint held (429)");
+    for (const name of ["posts", "followers_reconcile", "fan_earnings"]) {
+      const lines = card(html, name).split("\n");
+      expect(lines[lines.indexOf("Next due") + 1], name).toBe("—");
+    }
+    expect(html.match(/data-engine-stop/g)).toHaveLength(3);
+  });
+
+  it("a breaker of one of its files holds a part of a stream: the keys it stops are named", () => {
+    const until = "2026-10-04T18:08:42.000Z";
+    const followers = stream({
+      stream: "followers",
+      resources: ["followers.head", "fan-profiles.lookup"],
+      stopped: "some",
+      stops: [stop("resource_hold", ["followers"], ["followers.head"], until)],
+      waiting: { resource: "followers.head", reason: "resource_hold", until },
+    });
+    const html = render({ engine: engine([followers]) });
+    expect(badge(html, "followers")).toBe("partly held");
+    const read = card(html, "followers");
+    expect(read).toContain(`\nResource followers held after errors until ${panelTime(until)}: followers.head\n`);
+    expect(read).not.toContain("followers.head: resource held");
+  });
+
+  it("a pause of some keys is a partial pause; of the page, a pause that names the page", () => {
+    const some = stream({
+      stream: "dm_conversations",
+      resources: ["dm-conversations.head", "dm-conversations.full", "fan-profiles.probe"],
+      stopped: "some",
+      stops: [stop("paused", ["keys"], ["dm-conversations.full", "fan-profiles.probe"])],
+      waiting: { resource: "dm-conversations.head", reason: "not_due", until: null },
+    });
+    const whole = stream({ stream: "posts", resources: ["posts.refresh"], paused: true, stopped: "all", stops: [stop("paused", ["page"], ["posts.refresh"])] });
+    const requests = stream({
+      stream: "dm_messages", resources: ["dm-messages.head", "dm-messages.history"], stopped: "some",
+      stops: [stop("paused", ["requests"], ["dm-messages.history"])],
+    });
+    const html = render({ engine: engine([some, whole, requests]) });
+    expect(badge(html, "dm_conversations")).toBe("partly paused");
+    expect(card(html, "dm_conversations")).toContain("\nPaused by the owner: dm-conversations.full, fan-profiles.probe\n");
+    // Why the keys that are read wait is still said.
+    expect(card(html, "dm_conversations")).toContain("\ndm-conversations.head: not due\n");
+    expect(badge(html, "posts")).toBe("paused");
+    expect(card(html, "posts")).toContain("\nPaused by the owner: the whole page\n");
+    expect(badge(html, "dm_messages")).toBe("partly paused");
+    expect(card(html, "dm_messages")).toContain("\nPaused by the owner: history requests (dm-messages.history)\n");
+  });
+
+  it("says every stop of a stream, the pause before the hold it would leave", () => {
+    const until = "2026-10-04T18:08:42.000Z";
+    const both = stream({
+      stream: "followers",
+      resources: ["followers.head", "fan-profiles.lookup"],
+      paused: false,
+      stopped: "all",
+      stops: [
+        stop("paused", ["keys"], ["followers.head"]),
+        stop("page_hold", ["network"], ["followers.head", "fan-profiles.lookup"], until),
+      ],
+    });
+    const html = render({ engine: engine([both]) });
+    expect(badge(html, "followers")).toBe("page held");
+    const lines = card(html, "followers").split("\n");
+    const paused = lines.indexOf("Paused by the owner: followers.head");
+    expect(paused).toBeGreaterThan(-1);
+    expect(lines[paused + 1]).toBe(`Page held: network errors until ${panelTime(until)}`);
+    expect(html.match(/data-engine-stop/g)).toHaveLength(2);
+  });
+
+  it("a page nobody runs still says what would stop it once somebody does", () => {
+    const html = render({
+      engine: engine([stream({ stream: "light", resources: ["account.poll"], stopped: "all", stops: [pageHold(["account.poll"])] })], { ownerRunning: false }),
+    });
+    expect(badge(html, "light")).toBe("not running: no owner");
+    expect(card(html, "light")).toContain("Page held: Fansly refuses its credentials");
   });
 });
 

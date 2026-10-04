@@ -1,3 +1,6 @@
+import { readFileSync, readdirSync } from "node:fs";
+import path from "node:path";
+
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -34,21 +37,29 @@ import { HistoryRequestCard, HistoryRequestsBlock } from "../apps/dashboard/src/
 import {
   engineAgeText,
   engineDurationText,
+  engineOwnerText,
   engineSocketText,
   engineStatusState,
   engineWaitLabel,
   engineWaitWords,
   engineWaitingText,
   historyEtaText,
+  historyFansText,
   historyReadsText,
 } from "../apps/dashboard/src/pages/settings/engine/engineDisplay.ts";
-import { getSyncBlockActionPresentation } from "../apps/dashboard/src/pages/settings/sync/SyncBlockActions.tsx";
+import { EngineBlockCard, EngineBlockRow, EnginePageAttention } from "../apps/dashboard/src/pages/settings/engine/EngineBlocks.tsx";
+import { EngineModeChip } from "../apps/dashboard/src/pages/settings/engine/EngineStatus.tsx";
 import {
-  formatBlockSummary,
-  formatSubstreamStateLabel,
-  getBlockStateLabel,
-  needsVisualAttention,
-} from "../apps/dashboard/src/pages/settings/sync/syncBlockDisplay.ts";
+  engineBlockButtons,
+  engineBlockState,
+  engineBlockSummary,
+  engineLeverNotice,
+  engineRequeueConfirmText,
+  engineSubstreamStateText,
+  isEngineBlock,
+  type EngineBlock,
+} from "../apps/dashboard/src/pages/settings/engine/engineBlockDisplay.ts";
+import { formatBlockSummary, needsVisualAttention } from "../apps/dashboard/src/pages/settings/sync/syncBlockDisplay.ts";
 import { SyncPageDetail } from "../apps/dashboard/src/pages/settings/sync/SyncPageDetail.tsx";
 import { SyncPageList } from "../apps/dashboard/src/pages/settings/sync/SyncPageList.tsx";
 import { WAITING_REASONS, isRunnableReason } from "../apps/runtime/src/sync/engine/status.ts";
@@ -57,18 +68,33 @@ import { WAITING_REASONS, isRunnableReason } from "../apps/runtime/src/sync/engi
 // Fansly Sync Engine reads it — owner, holds, socket, the pause, the queue with
 // the hour's requests by class, and its history requests with their progress
 // and ETA — and the five blocks whose buttons act on the engine. «Синхронизация»
-// keeps the pages of the legacy executor only.
+// keeps the pages of the legacy executor only. Since S4-35 the blocks say what
+// is true of them — read, paused, held, without an owner — in the tab's own
+// language, and a button says what it moved.
 
 const NOW = "2026-10-02T12:00:00.000Z";
 const NOW_MS = new Date(NOW).getTime();
 /** Thousands are grouped with a narrow no-break space (ru-RU). */
 const plain = (html: string) => html.replace(/[\u00a0\u202f]/g, " ");
 
+type EngineInfo = NonNullable<SyncBlockStatus["engine"]>;
+type EngineStop = EngineInfo["stops"][number];
+
+const FINANCIALS_KEYS = [
+  "transactions.head", "transactions.insurance", "transactions.rescan", "transactions.backfill",
+  "top-spenders.window", "top-spenders.bootstrap",
+];
+
+const stop = (reason: EngineStop["reason"], by: string[], resources: string[], until: string | null = null): EngineStop =>
+  ({ reason, by, resources, until });
+
+/** A block of a page the engine reads, with nothing stopping it; `engine`
+ *  overrides what the server says of its keys. */
 function engineBlock(
   key: SyncBlockStatus["block"],
   overrides: Partial<SyncBlockStatus> = {},
-  metrics: Record<string, unknown> = {},
-): SyncBlockStatus {
+  engine: Partial<EngineInfo> = {},
+): EngineBlock {
   return {
     block: key,
     state: "engine",
@@ -81,10 +107,10 @@ function engineBlock(
     statusReason: { code: "fansly_sync_engine", summary: "Managed by the Fansly Sync Engine", waitingFor: null },
     primaryFresh: true,
     needsAttention: false,
-    nextDueAt: null,
+    nextDueAt: "2026-10-02T12:03:00.000Z",
     nextRetryAt: null,
-    intervals: [],
-    metrics: { engineMode: "live", engineKeys: ["transactions.head", "transactions.insurance"], pausedResources: [], pausedAll: false, ...metrics },
+    intervals: [{ stream: "transactions", cadenceSeconds: 300 }],
+    metrics: {},
     connectionStatus: key === "connection" ? "connected" : null,
     substreams: [{
       stream: "transactions",
@@ -98,6 +124,7 @@ function engineBlock(
       needsAttention: false,
       statusReason: { code: "not_due", summary: "transactions.insurance: not_due", waitingFor: null },
       error: null,
+      engine: { stopped: "none", stops: [], paused: false, activeWork: 3 },
     }, {
       stream: "top_spenders",
       role: "supporting",
@@ -110,10 +137,38 @@ function engineBlock(
       needsAttention: false,
       statusReason: { code: "paused", summary: "top-spenders.window: paused", waitingFor: null },
       error: null,
+      engine: {
+        stopped: "all", paused: true, activeWork: 1,
+        stops: [stop("paused", ["keys"], ["top-spenders.window", "top-spenders.bootstrap"])],
+      },
     }],
     ...overrides,
+    engine: {
+      mode: "live",
+      ownerRunning: true,
+      keys: FINANCIALS_KEYS,
+      pollKeys: ["transactions.insurance", "transactions.rescan", "top-spenders.window"],
+      pausedKeys: [],
+      pausedAll: false,
+      stopped: "none",
+      stops: [],
+      paused: false,
+      activeWork: 4,
+      quarantined: { count: 0, resources: [] },
+      blockedByVendor: { count: 0, resources: [] },
+      ...overrides.engine,
+      ...engine,
+    },
   };
 }
+
+/** What the server says of a block all of whose keys the owner paused. */
+const allPaused = (keys: string[] = FINANCIALS_KEYS): Partial<EngineInfo> =>
+  ({ pausedKeys: keys, stopped: "all", paused: true, stops: [stop("paused", ["keys"], keys)] });
+
+/** What the server says of a block on a page held for its credentials. */
+const credentialsHeld = (keys: string[] = FINANCIALS_KEYS): Partial<EngineInfo> =>
+  ({ stopped: "all", stops: [stop("page_hold", ["auth"], keys)] });
 
 function page(overrides: Partial<SyncBlocksPage> = {}, blockOverrides: Partial<SyncBlockStatus> = {}): SyncBlocksPage {
   return {
@@ -139,7 +194,7 @@ function page(overrides: Partial<SyncBlocksPage> = {}, blockOverrides: Partial<S
 /** A page of the legacy executor, with the blocks «Синхронизация» shows. */
 function legacyPage(overrides: Partial<SyncBlocksPage> = {}): SyncBlocksPage {
   const block = (key: SyncBlockStatus["block"]): SyncBlockStatus => {
-    const { engineMode: _mode, ...rest } = engineBlock(key, { state: "up_to_date", statusReason: null, metrics: {}, substreams: [] });
+    const { engineMode: _mode, engine: _engine, ...rest } = engineBlock(key, { state: "up_to_date", statusReason: null, substreams: [] });
     return rest;
   };
   return {
@@ -273,8 +328,10 @@ describe("the «Синк» tab: the list of Fansly pages", () => {
     expect(html).toContain("наименьший промежуток за час 2 600 мс");
     expect(html).toContain("ждёт срока: 20");
     expect(html).toContain("пауза владельца: 3");
-    // Its five blocks at a glance, in the engine's words.
-    expect(html.match(/Fansly Sync Engine · updated/g)).toHaveLength(5);
+    // Its five blocks at a glance, in the tab's words.
+    expect(html.match(/data-engine-block=/g)).toHaveLength(5);
+    expect(html.match(/читается · последнее чтение \d+ [а-я]+ назад/g)).toHaveLength(5);
+    for (const label of ["Подключение", "Финансы", "Аудитория", "Список чатов", "Сообщения чатов"]) expect(html).toContain(label);
     expect(html).toContain("Остальные страницы (1)");
     expect(html).toContain('href="/settings?tab=sync"');
     expect(queries.useSyncHistoryRequests).toHaveBeenCalledWith({ state: "open", limit: 200 });
@@ -316,7 +373,7 @@ describe("the «Синк» tab: the list of Fansly pages", () => {
       ws: { connected: false, since: null, gapSince: null, decodeDebt: 0 },
     });
     const html = renderRouted(createElement(EngineStatusGrid, { status: held, pageLabel: "lilly-1", now: NOW_MS }));
-    expect(html).toContain("владельца нет");
+    expect(html).toContain("владельца нет: страницу никто не читает");
     expect(html).toContain("Fansly не принимает данные входа, до новых данных входа");
     expect(html).toMatch(/probe до \d/);
     expect(html).toContain("отключён");
@@ -331,7 +388,7 @@ describe("the «Синк» tab: the list of Fansly pages", () => {
     const absent = renderRouted(createElement(EnginePageList, { onSelectPage: vi.fn() }));
     expect(absent).toContain("Fansly Sync Engine не читает эту страницу");
     expect(absent).not.toContain("Запросов за час");
-    expect(absent).toContain("Connection");
+    expect(absent).toContain("Подключение");
     queries.useSyncEnginePages.mockReturnValue({ data: undefined, isLoading: false, isError: true, error: new Error("403") });
     const failed = renderRouted(createElement(EnginePageList, { onSelectPage: vi.fn() }));
     expect(failed).toContain("Состояние движка не загрузилось.");
@@ -398,20 +455,24 @@ describe("the «Синк» tab: why work waits", () => {
     }
   });
 
-  // One dictionary for every surface (S4-34): the tab's own rows read it in
-  // Russian; the block cards and the analytics Coverage panel in English. A
-  // reason the engine gains needs both, in this one table.
-  it("holds every reason's words in both languages, and the block cards read their state from it", () => {
+  // One dictionary for every surface (S4-34): the «Синк» tab reads it in
+  // Russian — its own rows and, since S4-35, its block cards — the analytics
+  // Coverage panel in English. A reason the engine gains needs both, in this
+  // one table.
+  it("holds every reason's words in both languages, and the block cards read a stream's wait from it", () => {
     for (const reason of WAITING_REASONS) {
       const english = engineWaitWords(reason, "en");
+      const russian = engineWaitWords(reason, "ru");
       expect(english, reason).not.toBeNull();
       expect(english, reason).not.toMatch(/_/);
-      expect(engineWaitWords(reason, "ru"), reason).toMatch(/[а-яё]/i);
+      expect(russian, reason).toMatch(/[а-яё]/i);
       expect(engineWaitLabel(reason, "en"), reason).toBe(english);
       // Ready to run is one word in English, whatever it waits its turn behind.
       if (isRunnableReason(reason)) expect(english, reason).toBe("queued");
-      const substream = { ...engineBlock("connection").substreams[0]!, statusReason: { code: reason, summary: "", waitingFor: null } };
-      expect(formatSubstreamStateLabel(substream), reason).toBe(english!.charAt(0).toUpperCase() + english!.slice(1));
+      // A stream that is read says why its earliest work waits.
+      const block = engineBlock("connection");
+      const substream = { ...block.substreams[0]!, statusReason: { code: reason, summary: "", waitingFor: null } };
+      expect(engineSubstreamStateText(block, substream), reason).toBe(russian!.charAt(0).toUpperCase() + russian!.slice(1));
     }
     expect(engineWaitWords("engine_quarantined", "en")).toBeNull();
     expect(engineWaitLabel("a_reason_of_tomorrow", "en")).toBe("a_reason_of_tomorrow");
@@ -487,7 +548,7 @@ describe("the «Синк» tab: history requests", () => {
     expect(html).toContain("до прежней границы");
     expect(html).toContain("старый маршрут заявок");
     expect(html).toContain("выполнена 5 мин назад");
-    expect(html).toContain("готово 1 из 1 фанов");
+    expect(html).toContain("готово 1 из 1 фана");
     expect(html).toContain(">сделано 12<");
     expect(html).not.toContain("не меньше");
     expect(html).not.toContain("чтений в час");
@@ -555,14 +616,18 @@ describe("the «Синк» tab: a page in detail", () => {
     expect(queries.useSyncHistoryRequests).toHaveBeenCalledWith({ pageLabel: "lilly-1", limit: 20 }, { enabled: true });
   });
 
-  it("keeps the five blocks, their streams in the engine's words and the buttons that act on the engine", () => {
+  it("keeps the five blocks, their streams in the tab's words and the buttons that act on the engine", () => {
     const html = renderRouted(createElement(EnginePageDetail, { pageLabel: "lilly-1", onBack: vi.fn() }));
-    for (const label of ["Connection", "Financials", "Audience", "Messages Live", "Messages History"]) {
+    for (const label of ["Подключение", "Финансы", "Аудитория", "Список чатов", "Сообщения чатов"]) {
       expect(html).toContain(label);
     }
-    expect(html).toContain("Not due");
-    expect(html).toContain("Paused");
-    expect(html).toContain("Sync Now");
+    expect(html).toContain("Ждёт срока");
+    expect(html).toContain("Пауза владельца");
+    expect(html).toContain("Опросить сейчас");
+    // One language inside the tab: nothing of a block is said in English.
+    for (const english of ["Sync Now", "Pause", "Resume", "Requeue", "Last success", "Next due", "Substreams", "Sync Engine"]) {
+      expect(html, english).not.toContain(english);
+    }
   });
 
   it("a stream the engine reads on a trigger, not on a poll, shows no interval", () => {
@@ -571,8 +636,9 @@ describe("the «Синк» tab: a page in detail", () => {
     blocks.blocks.audience = engineBlock("audience", { substreams: [blocks.blocks.audience.substreams[0]!, reconcile] });
     queries.usePageSyncBlocks.mockReturnValue(loaded({ generatedAt: NOW, page: blocks }));
     const html = renderRouted(createElement(EnginePageDetail, { pageLabel: "lilly-1", onBack: vi.fn() }));
-    expect(html).toContain("follower reconcile");
-    expect(html).not.toMatch(/>0s</);
+    expect(html).toContain("сверка фолловеров");
+    expect(html).toContain("раз в 5 мин");
+    expect(html).not.toContain("раз в 0");
   });
 
   // Step 4, S4-24: a Fansly page the engine does not own has no legacy block
@@ -588,26 +654,32 @@ describe("the «Синк» tab: a page in detail", () => {
         waitingFor: null,
       },
       primaryFresh: false,
-      metrics: {},
       connectionStatus: null,
       substreams: [],
     });
-    const { engineMode: _mode, ...connection } = unserved("connection");
+    const withoutEngine = (block: SyncBlockStatus): SyncBlockStatus => {
+      const { engineMode: _mode, engine: _engine, ...rest } = block;
+      return rest;
+    };
     const blocks = {
-      connection: connection as SyncBlockStatus,
-      financials: unserved("financials"),
-      audience: unserved("audience"),
-      messages_live: unserved("messages_live"),
-      messages_history: unserved("messages_history"),
+      connection: withoutEngine(unserved("connection")),
+      financials: withoutEngine(unserved("financials")),
+      audience: withoutEngine(unserved("audience")),
+      messages_live: withoutEngine(unserved("messages_live")),
+      messages_history: withoutEngine(unserved("messages_history")),
     };
     queries.usePageSyncBlocks.mockReturnValue(loaded({ generatedAt: NOW, page: { ...page(), blocks } }));
     queries.useSyncEnginePages.mockReturnValue(loaded({ pages: [] }));
     const html = renderRouted(createElement(EnginePageDetail, { pageLabel: "lilly-1", onBack: vi.fn() }));
-    expect(html.match(/The Fansly Sync Engine does not run this page: nothing reads it\./g)).toHaveLength(5);
+    expect(html.match(/Fansly Sync Engine не ведёт эту страницу: блок никто не читает\./g)).toHaveLength(5);
     expect(html).toContain("Fansly Sync Engine не читает эту страницу");
-    expect(html).not.toContain("Not available on this platform");
-    expect(html).not.toContain("Sync Now");
-    expect(html).not.toContain("Pause");
+    expect(html).not.toContain("The Fansly Sync Engine does not run this page");
+    expect(html).not.toContain("Опросить сейчас");
+    expect(html).not.toContain("Пауза");
+    expect(isEngineBlock(blocks.financials)).toBe(false);
+    // On the page's card of the list each block reads as not read.
+    expect(plain(renderToStaticMarkup(createElement(EngineBlockRow, { block: blocks.financials })))).toContain("не читается");
+    // «Синхронизация» would say the same of such a block.
     expect(formatBlockSummary(blocks.financials)).toBe("Not available");
     expect(needsVisualAttention(blocks.financials)).toBe(false);
   });
@@ -658,8 +730,14 @@ describe("«Синхронизация» keeps the pages of the legacy executor 
       generatedAt: NOW, diagnosis, pages: [page({ diagnosis }), legacyPage()],
     }));
     expect(renderRouted(createElement(SyncPageList, { onSelectPage: vi.fn() }))).not.toContain("Reconnect credentials");
-    // The page's own tab shows it.
-    expect(renderRouted(createElement(EnginePageList, { onSelectPage: vi.fn() }))).toContain("Reconnect credentials");
+    // The page's own tab says it in its own words, from what holds the page.
+    const held = page();
+    held.blocks.connection = engineBlock("connection", { needsAttention: true }, credentialsHeld(["account.poll"]));
+    queries.useSyncOverview.mockReturnValue(loaded({ generatedAt: NOW, diagnosis, pages: [{ ...held, diagnosis }, legacyPage()] }));
+    const engine = renderRouted(createElement(EnginePageList, { onSelectPage: vi.fn() }));
+    expect(engine).toContain("Удержание страницы: Fansly не принимает данные входа — до новых данных входа");
+    expect(engine).toContain('href="/settings?tab=credentials"');
+    expect(engine).not.toContain("Reconnect credentials");
   });
 
   it("a Fansly page opened here points to «Синк»", () => {
@@ -671,45 +749,370 @@ describe("«Синхронизация» keeps the pages of the legacy executor 
   });
 });
 
-describe("the engine's blocks and buttons", () => {
-  it("speak for the engine instead of the frozen legacy streams", () => {
-    const block = page().blocks.financials;
-    expect(getBlockStateLabel(block)).toBe("Sync Engine");
-    expect(formatBlockSummary(block)).toMatch(/^Fansly Sync Engine · updated /);
-    expect(needsVisualAttention(block)).toBe(false);
-    const quarantined = engineBlock("financials", {
-      needsAttention: true,
-      primaryFresh: false,
-      statusReason: { code: "engine_quarantined", summary: "1 quarantined (transactions.rescan)", waitingFor: null },
-    });
-    expect(getBlockStateLabel(quarantined)).toBe("Attention");
-    expect(formatBlockSummary(quarantined)).toBe("Fansly Sync Engine · quarantined");
-    expect(needsVisualAttention(quarantined)).toBe(true);
-    expect(formatBlockSummary(engineBlock("financials", { engineMode: "handover" }))).toBe("Switching to the Fansly Sync Engine");
-    // What needs the owner is on the page's card of the list.
-    queries.useSyncOverview.mockReturnValue(loaded({
-      generatedAt: NOW, diagnosis: null, pages: [page({}, quarantined)],
-    }));
-    expect(renderRouted(createElement(EnginePageList, { onSelectPage: vi.fn() }))).toContain("1 quarantined (transactions.rescan)");
+// S4-35: what is on screen must be true about whether a page is sending or
+// held. The blocks of a Fansly page say it from the server's verdict over the
+// block's own keys, and their buttons act on those keys and say what they did.
+describe("the engine's blocks say what is true of them", () => {
+  const row = (block: SyncBlockStatus) => plain(renderToStaticMarkup(createElement(EngineBlockRow, { block, now: NOW_MS })));
+  const cardOf = (block: SyncBlockStatus) =>
+    renderRouted(createElement(EngineBlockCard, { block, pageLabel: "lilly-1", now: NOW_MS }));
+  const stateOf = (html: string) => html.match(/data-engine-state="([a-z_]+)"/)?.[1];
+  /** The "Следующее" line of a card's timing (its streams' table has a column of that name). */
+  const NEXT_LINE = '<span class="text-text-muted">Следующее</span>';
+
+  it("a block that is read says so, with its last read, its next and its polls", () => {
+    const block = engineBlock("financials");
+    expect(engineBlockState(block)).toBe("reading");
+    expect(engineBlockSummary(block, NOW_MS)).toBe("читается · последнее чтение 2 мин назад");
+    const html = cardOf(block);
+    expect(stateOf(html)).toBe("reading");
+    expect(html).toContain("</span>Читается</span>");
+    expect(html).toContain(`${NEXT_LINE}<span class="text-text-secondary">через 3 мин</span>`);
+    expect(html).toContain("транзакции — раз в 5 мин");
+    expect(html).not.toContain("data-engine-stops");
+    expect(row(block)).toContain("bg-green");
   });
 
-  it("the buttons act on the engine: sync now only while live, pause/resume by the block's keys, requeue on a quarantine", () => {
-    expect(getSyncBlockActionPresentation(page().blocks.financials)).toEqual({
-      showTrigger: true,
-      showPause: true,
-      showResume: false,
-      showReset: false,
-      resumeLabel: "Resume",
-      resetLabel: "Requeue",
+  it("a paused block says it is paused, not when it is next due", () => {
+    const pausedStream = (substream: SyncBlockStatus["substreams"][number], keys: string[]) => ({
+      ...substream,
+      engine: { stopped: "all" as const, paused: true, activeWork: 1, stops: [stop("paused", ["keys"], keys)] },
     });
-    const paused = engineBlock("financials", {}, { pausedResources: ["transactions.head", "transactions.insurance"] });
-    expect(getSyncBlockActionPresentation(paused)).toMatchObject({ showPause: false, showResume: true });
-    const partly = engineBlock("financials", {}, { pausedResources: ["transactions.head"] });
-    expect(getSyncBlockActionPresentation(partly)).toMatchObject({ showPause: true, showResume: true });
-    const handover = engineBlock("financials", { engineMode: "handover", needsAttention: true });
-    expect(getSyncBlockActionPresentation(handover)).toMatchObject({ showTrigger: false, showReset: false });
-    const quarantined = engineBlock("financials", { needsAttention: true });
-    expect(getSyncBlockActionPresentation(quarantined)).toMatchObject({ showReset: true, resetLabel: "Requeue" });
+    const [transactions, topSpenders] = engineBlock("financials").substreams;
+    const block = engineBlock("financials", {
+      substreams: [
+        pausedStream(transactions!, FINANCIALS_KEYS.slice(0, 4)),
+        pausedStream(topSpenders!, FINANCIALS_KEYS.slice(4)),
+      ],
+    }, allPaused());
+    expect(engineBlockState(block)).toBe("paused");
+    expect(engineBlockSummary(block, NOW_MS)).toBe("пауза владельца · последнее чтение 2 мин назад");
+    const html = cardOf(block);
+    expect(stateOf(html)).toBe("paused");
+    expect(html).toContain("</span>Пауза владельца</span>");
+    expect(html).toMatch(/data-engine-stops[^>]*><p[^>]*>Пауза владельца<\/p>/);
+    expect(html).not.toContain(NEXT_LINE);
+    // The owner's own pause is said, not sounded as a failure.
+    expect(html).not.toContain("text-warning-dark");
+    // Its streams have nothing due either, whatever their rows' due times are:
+    // each says the pause (in the table and in the phone's list).
+    expect(html).not.toContain("через 3 мин");
+    expect(html.match(/<span class="text-text-secondary">Пауза владельца<\/span>/g)).toHaveLength(4);
+    // The whole page paused: the block says which pause it is.
+    const whole = engineBlock("financials", {}, {
+      pausedAll: true, stopped: "all", paused: true, stops: [stop("paused", ["page"], FINANCIALS_KEYS)],
+    });
+    expect(engineBlockSummary(whole, NOW_MS)).toBe("пауза владельца: вся страница · последнее чтение 2 мин назад");
+  });
+
+  it("a block whose route a 429 holds says so with the hold's end, on the list and in detail", () => {
+    const keys = ["dm-messages.head", "dm-messages.catchup", "dm-messages.history"];
+    const block = engineBlock("messages_history", { nextDueAt: null, intervals: [], substreams: [] }, {
+      keys, pollKeys: [], stopped: "all", stops: [stop("route_hold", ["messages.page"], keys, "2026-10-02T12:05:00.000Z")],
+    });
+    expect(engineBlockState(block)).toBe("held");
+    expect(engineBlockSummary(block, NOW_MS))
+      .toMatch(/^удержание эндпоинта messages\.page \(429\) до \d[\d:]* · последнее чтение 2 мин назад$/);
+    expect(row(block)).toMatch(/text-warning-dark">удержание эндпоинта messages\.page \(429\) до \d/);
+    const html = cardOf(block);
+    expect(stateOf(html)).toBe("held");
+    expect(html).toContain("</span>Удержано</span>");
+    expect(html).toMatch(/Удержание эндпоинта messages\.page \(429\) до \d[\d:]*<\/p>/);
+    // Nothing of it is due while the hold stands, and it has no poll a "sync now" could move.
+    expect(html).not.toContain(NEXT_LINE);
+    expect(html).not.toContain("Опросить сейчас");
+    expect(engineBlockButtons(block)).toEqual({ trigger: false, pause: { label: "Пауза" }, resume: null, requeue: null });
+  });
+
+  it("a breaker of one file holds a part of a block: the keys it stops are named, and the stream says so", () => {
+    const held = stop("resource_hold", ["followers"], ["followers.head", "followers.reconcile"], "2026-10-02T15:00:00.000Z");
+    const followers = {
+      ...engineBlock("audience").substreams[0]!,
+      stream: "followers" as const,
+      statusReason: { code: "resource_hold", summary: "followers.head: resource_hold", waitingFor: null },
+      engine: { stopped: "some" as const, stops: [{ ...held, resources: ["followers.head"] }], paused: false, activeWork: 2 },
+    };
+    const subscribers = { ...engineBlock("audience").substreams[0]!, stream: "subscribers" as const };
+    const block = engineBlock("audience", { substreams: [subscribers, followers] }, {
+      keys: ["subscribers.poll", "subscribers.history", "followers.head", "followers.reconcile", "fan-profiles.lookup"],
+      stopped: "some",
+      stops: [held],
+    });
+    expect(engineBlockState(block)).toBe("partly_held");
+    expect(engineBlockSummary(block, NOW_MS))
+      .toMatch(/^частично удержано: удержание ресурса followers после ошибок до \d[\d:]* · последнее чтение 2 мин назад$/);
+    const html = cardOf(block);
+    expect(html).toMatch(/Удержание ресурса followers после ошибок до \d[\d:]*: followers\.head, followers\.reconcile<\/p>/);
+    expect(engineSubstreamStateText(block, followers)).toBe("Частично удержано");
+    expect(engineSubstreamStateText(block, subscribers)).toBe("Ждёт срока");
+    // What of the block is read still has a next read.
+    expect(html).toContain(NEXT_LINE);
+  });
+
+  // Seen in review: the reconcile walk's row under a green dot reading
+  // «Удержание эндпоинта (429)». A stream whose work a route's hold put off
+  // comes from the server stopped: its row says held, in the warning tone.
+  it("a stream whose work a route's hold put off says it is held, not its wait under a green dot", () => {
+    const until = "2026-10-02T12:05:00.000Z";
+    const hold = stop("route_hold", ["followers.page"], ["followers.head", "followers.reconcile"], until);
+    const base = engineBlock("audience").substreams[0]!;
+    const reconcile = {
+      ...base,
+      stream: "followers_reconcile" as const,
+      nextDueAt: null,
+      statusReason: { code: "route_hold", summary: `followers.reconcile: route_hold until ${until}`, waitingFor: null },
+      engine: { stopped: "some" as const, stops: [{ ...hold, resources: ["followers.reconcile"] }], paused: false, activeWork: 1 },
+    };
+    const subscribers = { ...base, stream: "subscribers" as const };
+    const block = engineBlock("audience", { substreams: [subscribers, reconcile] }, {
+      keys: ["subscribers.poll", "subscribers.history", "followers.head", "followers.reconcile", "fan-profiles.lookup"],
+      stopped: "some",
+      stops: [hold],
+    });
+    expect(engineSubstreamStateText(block, reconcile)).toBe("Частично удержано");
+    const html = cardOf(block);
+    const table = html.slice(html.indexOf('data-engine-streams="table"'), html.indexOf('data-engine-streams="list"'));
+    const walk = table.slice(table.indexOf('data-engine-stream="followers_reconcile"'));
+    expect(walk).toMatch(/^[^>]*>.*?<span class="[^"]*bg-warning-dark"><\/span><span class="text-warning-dark">Частично удержано<\/span>/);
+    // The stream that is read keeps its green dot and its wait.
+    const read = table.slice(table.indexOf('data-engine-stream="subscribers"'), table.indexOf('data-engine-stream="followers_reconcile"'));
+    expect(read).toMatch(/bg-green"><\/span><span class="text-text-secondary">Ждёт срока<\/span>/);
+    expect(html).not.toContain(">Удержание эндпоинта (429)<");
+    // The block's line names both keys the hold stops.
+    expect(html).toMatch(/Удержание эндпоинта followers\.page \(429\) до \d[\d:]*: followers\.head, followers\.reconcile<\/p>/);
+  });
+
+  it("a block's streams are a table where its columns fit and one labelled block per stream where they would not", () => {
+    const html = cardOf(engineBlock("financials"));
+    expect(html).toContain('class="@container ');
+    const table = html.slice(html.indexOf('data-engine-streams="table"'), html.indexOf('data-engine-streams="list"'));
+    const list = html.slice(html.indexOf('data-engine-streams="list"'));
+    // One of the two shows at any width of the card.
+    expect(html).toMatch(/<table class="hidden [^"]*@md:table[^"]*" data-engine-streams="table"/);
+    expect(html).toMatch(/<ul class="[^"]*@md:hidden[^"]*" data-engine-streams="list"/);
+    for (const part of [table, list]) {
+      for (const cell of ["транзакции", "Ждёт срока", "2 мин назад", "через 3 мин", "раз в 5 мин", "топ-спендеры", "Пауза владельца", "раз в 6 ч"]) {
+        expect(part, cell).toContain(`>${cell}<`);
+      }
+    }
+    // The list labels each value; the table has them as its columns.
+    for (const label of ["Последнее чтение", "Следующее", "Опрос"]) {
+      expect(list).toContain(`<dt class="text-text-muted">${label}</dt>`);
+      expect(table).toContain(`>${label}</th>`);
+    }
+    // A block of one stream has neither.
+    const single = cardOf(engineBlock("connection", { substreams: [engineBlock("connection").substreams[0]!] }));
+    expect(single).not.toContain("data-engine-streams");
+  });
+
+  it("a page held for its credentials: every block says the page is held, and the connection block points to the credentials form", () => {
+    const refused = engineBlock("connection", { needsAttention: true }, {
+      keys: ["account.poll"], pollKeys: ["account.poll"], ...credentialsHeld(["account.poll"]),
+    });
+    expect(engineBlockState(refused)).toBe("page_held");
+    // The hold is named once, on the page: its blocks' lines stay short.
+    expect(engineBlockSummary(refused, NOW_MS)).toBe("страница удержана · последнее чтение 2 мин назад");
+    // No requeue: nothing is quarantined, and new credentials are what ends the hold.
+    expect(engineBlockButtons(refused).requeue).toBeNull();
+    const html = cardOf(refused);
+    expect(html).toContain("Удержание страницы: Fansly не принимает данные входа — до новых данных входа");
+    expect(html).toContain('href="/settings?tab=credentials"');
+    expect(html).toContain("Обновить данные входа");
+    expect(html).not.toContain("карантин");
+    const financials = cardOf(engineBlock("financials", {}, credentialsHeld()));
+    expect(stateOf(financials)).toBe("page_held");
+    expect(financials).not.toContain("tab=credentials");
+    expect(financials).not.toContain(NEXT_LINE);
+  });
+
+  it("the requeue is offered only for quarantined work and names what it takes", () => {
+    // Work Fansly refuses needs the owner, and a requeue would not touch it.
+    const blocked = engineBlock("financials", { needsAttention: true }, {
+      blockedByVendor: { count: 1, resources: ["transactions.rescan"] },
+    });
+    expect(engineBlockButtons(blocked).requeue).toBeNull();
+    expect(cardOf(blocked)).toContain(
+      "Fansly отказывает: transactions.rescan · pnpm cli sync work list --page lilly-1 --state open --resource transactions.rescan",
+    );
+    expect(cardOf(blocked)).not.toContain("Вернуть из карантина");
+
+    const quarantined = engineBlock("financials", { needsAttention: true }, {
+      quarantined: { count: 2, resources: ["transactions.head", "transactions.rescan"] },
+    });
+    expect(engineBlockState(quarantined)).toBe("attention");
+    expect(engineBlockSummary(quarantined, NOW_MS)).toBe("нужно внимание · в карантине 2 · последнее чтение 2 мин назад");
+    expect(engineBlockButtons(quarantined).requeue).toEqual({ label: "Вернуть из карантина (2)" });
+    expect(engineRequeueConfirmText(quarantined, "lilly-1")).toBe(
+      "2 строки в карантине (transactions.head, transactions.rescan) на lilly-1 запустятся снова: "
+      + "сохранённый ответ применяется из журнала без нового запроса. Ничего не удаляется.",
+    );
+    const html = cardOf(quarantined);
+    expect(html).toContain(
+      "В карантине: 2 (transactions.head, transactions.rescan) · pnpm cli sync work list --page lilly-1 --state quarantined",
+    );
+    expect(html).toContain("Вернуть из карантина (2)");
+    // A page in handover reads nothing: no lever that would.
+    const handover = engineBlock("financials", { engineMode: "handover", needsAttention: true }, {
+      mode: "handover", ownerRunning: false, quarantined: { count: 1, resources: ["transactions.rescan"] },
+    });
+    expect(engineBlockButtons(handover)).toMatchObject({ trigger: false, requeue: null });
+    expect(engineBlockSummary(handover, NOW_MS)).toBe("не читается: переключение");
+  });
+
+  it("pause and resume act on the block's own keys, and a partial pause is shown as partial", () => {
+    expect(engineBlockButtons(engineBlock("financials"))).toEqual({
+      trigger: true, pause: { label: "Пауза" }, resume: null, requeue: null,
+    });
+    // Every key paused: nothing left to pause, and no poll a "sync now" would be read for.
+    expect(engineBlockButtons(engineBlock("financials", {}, allPaused()))).toEqual({
+      trigger: false, pause: null, resume: { label: "Снять паузу" }, requeue: null,
+    });
+    const some = ["transactions.head", "top-spenders.window"];
+    const partly = engineBlock("financials", {}, { pausedKeys: some, stopped: "some", stops: [stop("paused", ["keys"], some)] });
+    expect(engineBlockState(partly)).toBe("partly_paused");
+    expect(engineBlockButtons(partly)).toEqual({
+      trigger: true,
+      pause: { label: "Пауза для остальных (4)" },
+      resume: { label: "Снять паузу (2 из 6)" },
+      requeue: null,
+    });
+    const html = cardOf(partly);
+    expect(html).toContain("</span>Частично на паузе</span>");
+    expect(html).toContain("Пауза владельца: transactions.head, top-spenders.window");
+    expect(html).toContain("Пауза для остальных (4)");
+    expect(html).toContain("Снять паузу (2 из 6)");
+    // The whole page paused by the owner: the block's polls would be read by nobody.
+    const whole = engineBlock("financials", {}, {
+      pausedAll: true, stopped: "all", paused: true, stops: [stop("paused", ["page"], FINANCIALS_KEYS)],
+    });
+    expect(engineBlockButtons(whole).trigger).toBe(false);
+  });
+
+  it("a lever's notice says what it moved — never 'done' for nothing — and when nothing will be sent anyway", () => {
+    const answer = (affected: number) => ({ engine: { mode: "live" as const, resources: [], affected } });
+    const block = engineBlock("financials");
+    // Sync now.
+    expect(engineLeverNotice("trigger", block, answer(3), NOW_MS)).toEqual({
+      kind: "success", text: "Финансы: 3 опроса поставлены в очередь",
+    });
+    expect(engineLeverNotice("trigger", block, answer(1), NOW_MS).text).toBe("Финансы: 1 опрос поставлен в очередь");
+    expect(engineLeverNotice("trigger", block, answer(0), NOW_MS)).toEqual({
+      kind: "message", text: "Финансы: ни один опрос не сдвинут — опросы блока уже в очереди или выполняются",
+    });
+    const held = engineBlock("financials", {}, credentialsHeld());
+    expect(engineLeverNotice("trigger", held, answer(3), NOW_MS)).toEqual({
+      kind: "warning",
+      text: "Финансы: 3 опроса поставлены в очередь; запросы не уйдут — "
+        + "удержание страницы: Fansly не принимает данные входа — до новых данных входа",
+    });
+    expect(engineLeverNotice("trigger", held, answer(0), NOW_MS)).toMatchObject({ kind: "warning" });
+    const orphan = engineBlock("financials", {}, { ownerRunning: false });
+    expect(engineLeverNotice("trigger", orphan, answer(2), NOW_MS)).toEqual({
+      kind: "warning", text: "Финансы: 2 опроса поставлены в очередь; запросы не уйдут — страницу не ведёт ни один sync-хост",
+    });
+    // A hold of a part of the block leaves something to send: no warning.
+    const partlyHeld = engineBlock("financials", {}, {
+      stopped: "some", stops: [stop("resource_hold", ["transactions"], ["transactions.head"], "2026-10-02T15:00:00.000Z")],
+    });
+    expect(engineLeverNotice("trigger", partlyHeld, answer(2), NOW_MS).kind).toBe("success");
+    // Pause and resume.
+    expect(engineLeverNotice("pause", block, answer(6), NOW_MS)).toEqual({ kind: "success", text: "Финансы: на паузе 6 ключей" });
+    expect(engineLeverNotice("pause", block, answer(0), NOW_MS)).toEqual({ kind: "message", text: "Финансы: ключи блока уже на паузе" });
+    const paused = engineBlock("financials", {}, allPaused());
+    expect(engineLeverNotice("resume", paused, answer(6), NOW_MS)).toEqual({ kind: "success", text: "Финансы: пауза снята с 6 ключей" });
+    expect(engineLeverNotice("resume", paused, answer(1), NOW_MS).text).toBe("Финансы: пауза снята с 1 ключа");
+    expect(engineLeverNotice("resume", block, answer(0), NOW_MS)).toEqual({ kind: "message", text: "Финансы: на паузе ничего не было" });
+    // The pause lifted, the page still held for its credentials: said.
+    const pausedAndHeld = engineBlock("financials", {}, {
+      ...allPaused(), stops: [stop("paused", ["keys"], FINANCIALS_KEYS), stop("page_hold", ["auth"], FINANCIALS_KEYS)],
+    });
+    expect(engineLeverNotice("resume", pausedAndHeld, answer(6), NOW_MS)).toEqual({
+      kind: "warning",
+      text: "Финансы: пауза снята с 6 ключей; запросы не уйдут — "
+        + "удержание страницы: Fansly не принимает данные входа — до новых данных входа",
+    });
+    // The requeue.
+    expect(engineLeverNotice("reset", block, answer(0), NOW_MS)).toEqual({
+      kind: "message", text: "Финансы: в карантине ничего не было — возвращать нечего",
+    });
+    expect(engineLeverNotice("reset", block, answer(1), NOW_MS)).toEqual({ kind: "success", text: "Финансы: из карантина возвращена 1 строка" });
+    expect(engineLeverNotice("reset", block, answer(5), NOW_MS).text).toBe("Финансы: из карантина возвращено 5 строк");
+    // An answer without the engine's part (a server of another build) moved nothing it can vouch for.
+    expect(engineLeverNotice("pause", block, {}, NOW_MS).kind).toBe("message");
+  });
+
+  it("a page nobody runs does not look live: the chip, the owner and every block say so", () => {
+    const chip = (mode: AgentSyncPageStatus["mode"], ownerRunning: boolean) =>
+      renderToStaticMarkup(createElement(EngineModeChip, { mode, ownerRunning }));
+    expect(chip("live", true)).toContain("text-green");
+    expect(chip("live", true)).toContain(">live<");
+    const orphanChip = chip("live", false);
+    expect(orphanChip).toContain(">live · нет владельца<");
+    expect(orphanChip).not.toContain("green");
+    expect(orphanChip).toContain("text-warning-dark");
+    expect(chip("handover", false)).toContain(">переключение<");
+
+    const silent = status({
+      owner: { generation: "4", host: "sync-1", acquiredAt: NOW, heartbeatAt: "2026-10-02T11:00:00.000Z", running: false },
+    });
+    expect(engineOwnerText(silent, NOW_MS)).toBe("владельца нет: страницу никто не читает (последний ответ 60 мин назад)");
+    expect(renderRouted(createElement(EngineStatusGrid, { status: silent, pageLabel: "lilly-1", now: NOW_MS })))
+      .toContain('<span class="text-warning-dark font-medium">владельца нет: страницу никто не читает');
+    expect(renderRouted(createElement(EngineStatusGrid, { status: status(), pageLabel: "lilly-1", now: NOW_MS })))
+      .toContain('<span class="text-text-secondary">владелец отвечал');
+
+    const orphan = engineBlock("financials", {}, { ownerRunning: false });
+    expect(engineBlockState(orphan)).toBe("no_owner");
+    expect(engineBlockSummary(orphan, NOW_MS)).toBe("не читается: нет владельца");
+    const html = cardOf(orphan);
+    expect(stateOf(html)).toBe("no_owner");
+    expect(html).toContain("Страницу не ведёт ни один sync-хост: из неё ничего не читается.");
+    expect(html).not.toContain(NEXT_LINE);
+
+    queries.useSyncEnginePages.mockReturnValue(loaded({ pages: [silent] }));
+    const list = renderRouted(createElement(EnginePageList, { onSelectPage: vi.fn() }));
+    expect(list).toContain('data-engine-running="false"');
+    expect(list).toContain("live · нет владельца");
+    queries.useSyncEnginePages.mockReturnValue(loaded({ pages: [status()] }));
+    expect(renderRouted(createElement(EnginePageList, { onSelectPage: vi.fn() }))).toContain('data-engine-running="true"');
+  });
+
+  it("the page's notice asks for credentials first, else lists the work that needs the owner with its commands", () => {
+    const notice = (blocks: Partial<SyncBlocksPage["blocks"]>) => renderRouted(createElement(EnginePageAttention, {
+      page: { ...page(), blocks: { ...page().blocks, ...blocks } }, now: NOW_MS,
+    }));
+    expect(notice({})).toBe("");
+    const quarantined = engineBlock("financials", { needsAttention: true }, {
+      quarantined: { count: 1, resources: ["transactions.rescan"] },
+      blockedByVendor: { count: 2, resources: ["top-spenders.window"] },
+    });
+    const work = notice({ financials: quarantined });
+    expect(work).toContain('data-engine-attention="work"');
+    expect(work).toContain("Финансы — В карантине: 1 (transactions.rescan) · pnpm cli sync work list --page lilly-1 --state quarantined");
+    expect(work).toContain(
+      "Финансы — Fansly отказывает: top-spenders.window · pnpm cli sync work list --page lilly-1 --state open --resource top-spenders.window",
+    );
+    const refused = notice({
+      financials: quarantined,
+      connection: engineBlock("connection", { needsAttention: true }, credentialsHeld(["account.poll"])),
+    });
+    expect(refused).toContain('data-engine-attention="credentials"');
+    expect(refused).toContain("Удержание страницы: Fansly не принимает данные входа — до новых данных входа");
+    expect(refused).toContain("Из страницы ничего не читается.");
+    expect(refused).toContain('href="/settings?tab=credentials"');
+    // The page's card of the list carries it.
+    queries.useSyncOverview.mockReturnValue(loaded({ generatedAt: NOW, diagnosis: null, pages: [page({}, quarantined)] }));
+    expect(renderRouted(createElement(EnginePageList, { onSelectPage: vi.fn() }))).toContain("В карантине: 1 (transactions.rescan)");
+  });
+
+  it("«готово N из M фанов» follows the count", () => {
+    const fans = (total: number) => historyFansText(historyRequest({
+      counts: { total, ready: 0, queued: 0, loading: 0, blocked: 0, refused: 0, cancelled: 0 },
+    }));
+    expect(fans(1)).toBe("готово 0 из 1 фана");
+    expect(fans(5)).toBe("готово 0 из 5 фанов");
+    expect(fans(21)).toBe("готово 0 из 21 фана");
+    expect(fans(11)).toBe("готово 0 из 11 фанов");
   });
 });
 
@@ -736,5 +1139,55 @@ describe("the tab's words", () => {
     expect(engineSocketText(status({ ws: { connected: false, since: NOW, gapSince: NOW, decodeDebt: 0 } })))
       .toMatch(/^отключён · последнее подключение в \d/);
     expect(engineSocketText(status({ ws: null }))).toBe("нет данных");
+  });
+});
+
+// The proof of S4-35, pinned. The engine's blocks have their own cards on
+// «Синк»; what the cards «Синхронизация» keeps knew of the engine is gone, and
+// a block's keys travel in its typed `engine` part, not in its metrics:
+//   rg -n "<each name of GONE below>" apps packages tests                                                                        (no hits)
+//   rg -n "sync/(SyncBlock|syncBlockDisplay|SyncPageAttention|SyncDiagnosisNotice)" apps/dashboard/src/pages/settings/engine                                                          (no hits)
+//   rg -n 'state === "engine"|engineMode|engine/engineDisplay' apps/dashboard/src/pages/settings/sync                                                                                   (no hits)
+describe("the engine's blocks are the «Синк» tab's own (the deletion's proof, step 4 S4-35)", () => {
+  const ROOT = path.resolve(".");
+  const SKIP = new Set(["node_modules", "dist", ".vite", "client-sdks"]);
+  const sources = (target: string): string[] => {
+    const full = path.resolve(ROOT, target);
+    return readdirSync(full, { withFileTypes: true }).flatMap((entry) => {
+      if (entry.isDirectory()) return SKIP.has(entry.name) ? [] : sources(path.join(target, entry.name));
+      return /\.(ts|tsx|json)$/.test(entry.name) ? [path.join(full, entry.name)] : [];
+    });
+  };
+  const hits = (files: readonly string[], pattern: RegExp): string[] => files.flatMap((file) =>
+    readFileSync(file, "utf8").split("\n")
+      .map((line, index) => ({ line, at: `${path.relative(ROOT, file)}:${index + 1}` }))
+      .filter(({ line }) => pattern.test(line))
+      .map(({ line, at }) => `${at}: ${line.trim()}`));
+
+  // Spelled in halves so this file is no hit itself.
+  const GONE = [
+    ["getEngine", "BlockKeys"],
+    ["getEngineBlock", "ActionPresentation"],
+    ["formatEngine", "BlockSummary"],
+    ["engineReason", "Label"],
+    ["ENGINE_ATTENTION", "_TONE"],
+    ["ENGINE_STATUS", "_LABELS"],
+    ["isEngine", "Attention"],
+    ["engine", "Keys"],
+  ].map(([head, tail]) => `${head}${tail}`);
+
+  it("nothing in apps, packages or tests names what the shared cards knew of the engine", () => {
+    const files = ["apps", "packages", "tests"].flatMap(sources);
+    expect(files.length).toBeGreaterThan(500);
+    expect(hits(files, new RegExp(GONE.join("|")))).toEqual([]);
+  });
+
+  it("the «Синк» tab uses none of the legacy block cards, and those cards know nothing of the engine", () => {
+    const engine = sources("apps/dashboard/src/pages/settings/engine");
+    expect(engine.length).toBeGreaterThan(8);
+    expect(hits(engine, /sync\/(SyncBlock|syncBlockDisplay|SyncPageAttention|SyncDiagnosisNotice)/)).toEqual([]);
+    const legacy = sources("apps/dashboard/src/pages/settings/sync");
+    expect(legacy.length).toBeGreaterThan(8);
+    expect(hits(legacy, /state === "engine"|engineMode|engine\/engineDisplay/)).toEqual([]);
   });
 });

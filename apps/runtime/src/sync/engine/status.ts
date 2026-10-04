@@ -95,14 +95,38 @@ export interface WorkExplanation {
   detail: Record<string, unknown>;
 }
 
-/** The page has an owner that is running a loop: a fresh heartbeat of the
- *  current generation that was not released, in the mode an actor runs in. */
-export function ownerRunning(page: Pick<StatusPage, "mode" | "owner">, now: Date): boolean {
-  if (page.mode !== "live") return false;
+/** Whether an owner runs the page's loop, and when not, why: the page is in
+ *  a mode no actor runs in (`mode`), nobody ever took it (`never_owned`), its
+ *  owner let it go (`released`), or its owner stopped beating
+ *  (`heartbeat_stale`). */
+export type OwnerRunState =
+  | { running: true }
+  | { running: false; why: "mode" | "never_owned" | "released" }
+  | { running: false; why: "heartbeat_stale"; heartbeatAgeMs: number };
+
+/** The page's owner as its row says: running a loop — a fresh heartbeat of
+ *  the current generation that was not released, in the mode an actor runs
+ *  in — or not, and why. */
+export function ownerRunState(page: Pick<StatusPage, "mode" | "owner">, now: Date): OwnerRunState {
+  if (page.mode !== "live") return { running: false, why: "mode" };
   const { owner } = page;
-  if (owner.generation === 0n || owner.heartbeatAt === null) return false;
-  if (owner.releasedAt !== null && owner.releaseGeneration === owner.generation) return false;
-  return now.getTime() - owner.heartbeatAt.getTime() <= OWNER_HEARTBEAT_FRESH_MS;
+  if (owner.generation === 0n || owner.heartbeatAt === null) return { running: false, why: "never_owned" };
+  if (owner.releasedAt !== null && owner.releaseGeneration === owner.generation) return { running: false, why: "released" };
+  const heartbeatAgeMs = now.getTime() - owner.heartbeatAt.getTime();
+  return heartbeatAgeMs <= OWNER_HEARTBEAT_FRESH_MS ? { running: true } : { running: false, why: "heartbeat_stale", heartbeatAgeMs };
+}
+
+/** The page has an owner that is running a loop (`ownerRunState`). */
+export function ownerRunning(page: Pick<StatusPage, "mode" | "owner">, now: Date): boolean {
+  return ownerRunState(page, now).running;
+}
+
+/** Until when the route its request planned put the work off — the row's own
+ *  record of the final check before an admission (`deferForRoute`:
+ *  `waiting_reason = 'pacer'`, due when the route opens). Null: no route put it
+ *  off, its time has come, or its key sends nothing. */
+export function routePutOffUntil(work: Pick<StatusWork, "dueAt" | "waitingReason" | "http">, now: Date): Date | null {
+  return work.http !== false && work.waitingReason === "pacer" && work.dueAt.getTime() > now.getTime() ? work.dueAt : null;
 }
 
 /**
@@ -144,7 +168,7 @@ export function explainWork(
   const sends = work.http !== false;
   // Its planned route's budget or hold put the request off (the row stores
   // `pacer`): due again when the route opens.
-  const putOffUntil = sends && work.waitingReason === "pacer" && after(work.dueAt) ? work.dueAt : null;
+  const putOffUntil = routePutOffUntil(work, now);
   const held = heldByScope(page.holds, sends ? runtime.routes ?? null : null, { work: { ...work, putOffUntil } }, now);
   if (held.page !== null && sends) {
     // Rows of the hold set this build cannot read close the page's admission.

@@ -18,15 +18,19 @@ import {
 // who owns it, what holds it, its socket, the pause and how it was kept, and
 // the queue with the hour's requests by class.
 
-export function EngineModeChip({ mode }: { mode: EnginePageStatus["mode"] }) {
-  const live = mode === "live";
+/** The page's mode. A page reads as live — green — only while a host runs it:
+ *  `live` in the row of a page nobody runs says so beside the mode. */
+export function EngineModeChip({ mode, ownerRunning }: { mode: EnginePageStatus["mode"]; ownerRunning: boolean }) {
+  const running = mode === "live" && ownerRunning;
   return (
     <span
       className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
-        live ? "border-green/30 bg-green/10 text-green" : "border-warning/30 bg-warning/10 text-warning-dark"
+        running ? "border-green/30 bg-green/10 text-green" : "border-warning/30 bg-warning/10 text-warning-dark"
       }`}
+      data-engine-mode={mode}
+      data-engine-running={running}
     >
-      {engineModeLabel(mode)}
+      {mode === "live" && !ownerRunning ? "live · нет владельца" : engineModeLabel(mode)}
     </span>
   );
 }
@@ -58,7 +62,9 @@ export function EngineStatusGrid({
   return (
     <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-0.5 text-xs">
       <span className="text-text-muted">Владелец</span>
-      <span className="text-text-secondary">{engineOwnerText(status, now)}</span>
+      <span className={status.owner.running ? "text-text-secondary" : "text-warning-dark font-medium"}>
+        {engineOwnerText(status, now)}
+      </span>
       <span className="text-text-muted">Удержание</span>
       <span className={status.holds.page === null ? "text-text-secondary" : "text-warning-dark font-medium"}>
         {engineHoldText(status, now) ?? "нет"}

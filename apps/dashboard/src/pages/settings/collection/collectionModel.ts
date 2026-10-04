@@ -11,6 +11,7 @@ import type {
   OfapiCollectionSettings,
   OfapiCollectionSnapshot,
 } from "@/api/adminOfapiCollection";
+import { ruPlural } from "@/lib/plural";
 import { categoryLabel, modeLabel } from "./collectionCopyRu.js";
 
 // Type-only dependency on the api module: the root tests mock that module's
@@ -346,13 +347,7 @@ export function fmtCredits(value: number) {
   return value.toLocaleString("ru-RU");
 }
 
-export function ruPlural(value: number, one: string, few: string, many: string) {
-  const mod10 = Math.abs(value) % 10;
-  const mod100 = Math.abs(value) % 100;
-  if (mod10 === 1 && mod100 !== 11) return one;
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return few;
-  return many;
-}
+export { ruPlural };
 
 /** All timestamps on the screen are UTC (budgets reset at UTC midnight). */
 export function utcDateTime(iso: string) {

@@ -57,7 +57,12 @@ import { canAccessPage, requireOwner } from "../../services/auth.ts";
 import { loadEffectiveConfig } from "../../services/effective-config.ts";
 import { BadRequestError, ForbiddenError } from "../../services/errors.ts";
 import { getPageSummary } from "../../services/reporting.ts";
-import { engineOwnerRunning, engineStreamState, readEngineStatusFacts } from "../../services/sync-status-engine.ts";
+import {
+  engineOwnerRunning,
+  engineStopToWire,
+  engineStreamState,
+  readEngineStatusFacts,
+} from "../../services/sync-status-engine.ts";
 import { fanslyLeverStreams } from "../../sync/fansly/registry.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
@@ -573,6 +578,8 @@ export function registerInsightsRoutes(server: ApiServer, ctx: ApiModuleContext)
               nextDueAt: isoOrNull(state.nextDueAt),
               activeWork: state.activeWork,
               paused: state.paused,
+              stopped: state.stopped,
+              stops: state.stops.map(engineStopToWire),
               needsAttention: state.needsAttention,
               reason: state.statusReason?.summary ?? null,
               waiting: state.waiting === null

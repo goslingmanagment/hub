@@ -1,4 +1,6 @@
-import type { AgentHistoryRequest, AgentSyncPageStatus } from "@agency_hub_core/contracts";
+import type { AgentHistoryRequest, AgentSyncPageStatus, SyncEngineStop } from "@agency_hub_core/contracts";
+
+import { ruPlural } from "@/lib/plural";
 
 // The words of the «Синк» tab: the Fansly Sync Engine's page status
 // (`/api/v1/sync/pages`) and its history requests
@@ -9,6 +11,10 @@ import type { AgentHistoryRequest, AgentSyncPageStatus } from "@agency_hub_core/
 export type EnginePageStatus = AgentSyncPageStatus;
 export type EngineWorkClass = keyof EnginePageStatus["queue"];
 export type EngineHistoryRequest = AgentHistoryRequest;
+/** One thing that stops keys of a page from sending now (the server's
+ *  `engineStops`: the owner's pauses and the engine's hold evaluator). */
+export type EngineStop = SyncEngineStop;
+export type EngineStopped = "none" | "some" | "all";
 
 /** The engine status of a page as the tab holds it: the status of a page the
  *  engine reads, still loading, failed, or `idle` — the engine has no row for
@@ -36,9 +42,8 @@ export const ENGINE_CLASS_LABELS: Record<EngineWorkClass, string> = {
   planned: "плановое",
 };
 
-/** Who reads the engine's words: the «Синк» tab's own rows are Russian; the
- *  block cards it shares with «Синхронизация» and the analytics Coverage panel
- *  are English. */
+/** Who reads the engine's words: the «Синк» tab is Russian, the analytics
+ *  Coverage panel English. */
 export type EngineWordsLanguage = "ru" | "en";
 
 /** "Почему ждёт" (plan §10), the engine's closed dictionary — the one place a
@@ -69,12 +74,18 @@ const WAIT_LABELS: Record<string, Record<EngineWordsLanguage, string>> = {
  *  its turn — the page's pause, its endpoint's own pace, or other work. */
 const RUNNABLE_REASONS: ReadonlySet<string> = new Set(["pacer", "route_budget", "class_share"]);
 
-/** What holds a page. A 429 never does: it holds its route (`route_hold`). */
-const HOLD_LABELS: Record<string, string> = {
-  auth: "Fansly не принимает данные входа",
-  identity_mismatch: "данные входа другого аккаунта",
-  network: "сеть",
+/** What holds a page. A 429 never does: it holds its route (`route_hold`).
+ *  `unreadable`: rows of the page's hold set the running build cannot read —
+ *  the engine admits nothing while they stand. */
+const PAGE_HOLD_WORDS: Record<string, Record<EngineWordsLanguage, string>> = {
+  auth: { ru: "Fansly не принимает данные входа", en: "Fansly refuses its credentials" },
+  identity_mismatch: { ru: "данные входа другого аккаунта", en: "its credentials are another account's" },
+  network: { ru: "сеть", en: "network errors" },
+  unreadable: { ru: "записи удержаний не читаются этой сборкой", en: "its hold rows cannot be read by this build" },
 };
+
+/** The page holds only new credentials end. */
+const CREDENTIALS_HOLDS: ReadonlySet<string> = new Set(["auth", "identity_mismatch"]);
 
 const REQUESTER_LABELS: Record<EngineHistoryRequest["requesterKind"], string> = {
   agent_key: "агент",
@@ -146,12 +157,18 @@ export function engineHoldText(status: EnginePageStatus, now: number = Date.now(
   const hold = status.holds.page;
   if (hold === null) return null;
   const until = hold.until === "infinity" ? "до новых данных входа" : `до ${engineClockText(hold.until, now)}`;
-  return `${HOLD_LABELS[hold.kind] ?? hold.kind}, ${until}`;
+  return `${PAGE_HOLD_WORDS[hold.kind]?.ru ?? hold.kind}, ${until}`;
 }
 
+/** Who runs the page. Without a running owner nothing of it is read, whatever
+ *  its mode says: the last heartbeat is given so its age is plain. */
 export function engineOwnerText(status: EnginePageStatus, now: number): string {
-  if (!status.owner.running) return "владельца нет";
   const age = engineAgeText(status.owner.heartbeatAt, now);
+  if (!status.owner.running) {
+    return age === null
+      ? "владельца нет: страницу никто не читает"
+      : `владельца нет: страницу никто не читает (последний ответ ${age} назад)`;
+  }
   return age === null ? "владелец работает" : `владелец отвечал ${age} назад`;
 }
 
@@ -198,6 +215,164 @@ export function engineSendsByResource(status: EnginePageStatus): Array<{ resourc
     .sort((a, b) => b.sends - a.sends || a.resource.localeCompare(b.resource));
 }
 
+// ── what stops work, and what is true of a stream ────────────────────────────
+
+/** The stop is the page's refused credentials: only new ones end it. */
+export function isCredentialsStop(stop: EngineStop): boolean {
+  return stop.reason === "page_hold" && stop.by.some((kind) => CREDENTIALS_HOLDS.has(kind));
+}
+
+/**
+ * A stop in words: what stops the keys, until when and — with `listKeys` —
+ * which keys. `until` writes an instant the way the surface writes its times.
+ */
+export function engineStopText(
+  stop: EngineStop,
+  options: { language: EngineWordsLanguage; until: (iso: string) => string; listKeys?: boolean },
+): string {
+  const ru = options.language === "ru";
+  const end = stop.until === null ? "" : `${ru ? " до " : " until "}${options.until(stop.until)}`;
+  const named = stop.resources.join(", ");
+  const keys = options.listKeys === false || named === "" ? "" : `: ${named}`;
+  switch (stop.reason) {
+    case "paused": {
+      const head = ru ? "Пауза владельца" : "Paused by the owner";
+      if (stop.by.includes("page")) return `${head}: ${ru ? "вся страница" : "the whole page"}`;
+      if (stop.by.includes("requests")) {
+        return `${head}: ${ru ? "заявки на историю" : "history requests"}${keys === "" ? "" : ` (${named})`}`;
+      }
+      return `${head}${keys}`;
+    }
+    case "page_hold": {
+      const kind = stop.by[0] ?? "";
+      const words = PAGE_HOLD_WORDS[kind]?.[options.language] ?? kind;
+      const until = isCredentialsStop(stop) ? (ru ? " — до новых данных входа" : " — until new ones are saved") : end;
+      return `${ru ? "Удержание страницы" : "Page held"}: ${words}${until}`;
+    }
+    case "resource_hold":
+      return ru
+        ? `Удержание ресурса ${stop.by.join(", ")} после ошибок${end}${keys}`
+        : `Resource ${stop.by.join(", ")} held after errors${end}${keys}`;
+    case "route_hold":
+      return ru
+        ? `Удержание эндпоинта ${stop.by.join(", ")} (429)${end}${keys}`
+        : `Endpoint ${stop.by.join(", ")} held (429)${end}${keys}`;
+  }
+}
+
+/** The one thing that is true of a set of keys the engine reads — a stream, a
+ *  block — now. "reading" is a claim, not a default. */
+export type EngineReadingState =
+  | "no_owner"
+  | "switching"
+  | "paused"
+  | "page_held"
+  | "held"
+  | "attention"
+  | "partly_paused"
+  | "partly_held"
+  | "reading"
+  | "idle"
+  | "never_read";
+
+export interface EngineReadingFacts {
+  mode: "handover" | "live";
+  /** A sync host runs the page. */
+  ownerRunning: boolean;
+  /** How many of the keys can send nothing now, and what stops them. */
+  stopped: EngineStopped;
+  stops: readonly EngineStop[];
+  /** The owner's pause stops every one of the keys, whatever else does. */
+  paused: boolean;
+  /** Some of their work is quarantined or refused by Fansly. */
+  needsAttention: boolean;
+  /** Their work that is open. */
+  activeWork: number;
+  /** Something of them was applied before. */
+  everRead: boolean;
+}
+
+/**
+ * What a badge says, first match: no host runs the page; every key is stopped
+ * — by the owner's pause (the engine judges it first too), by the page's
+ * hold, by a breaker or a 429's hold; work needs the owner; some keys are
+ * stopped; work is open; nothing is.
+ */
+export function engineReadingState(facts: EngineReadingFacts): EngineReadingState {
+  if (!facts.ownerRunning) return facts.mode === "handover" ? "switching" : "no_owner";
+  if (facts.stopped === "all") {
+    if (facts.paused) return "paused";
+    return facts.stops.some((stop) => stop.reason === "page_hold") ? "page_held" : "held";
+  }
+  if (facts.needsAttention) return "attention";
+  if (facts.stopped === "some") {
+    return facts.stops.every((stop) => stop.reason === "paused") ? "partly_paused" : "partly_held";
+  }
+  if (facts.activeWork > 0) return "reading";
+  return facts.everRead ? "idle" : "never_read";
+}
+
+const READING_STATE_WORDS: Record<EngineReadingState, Record<EngineWordsLanguage, { text: string; detail: string }>> = {
+  no_owner: {
+    ru: { text: "не читается: нет владельца", detail: "Страницу не ведёт ни один sync-хост: из неё ничего не читается." },
+    en: { text: "not running: no owner", detail: "No sync host owns the page: nothing of it is read." },
+  },
+  switching: {
+    ru: { text: "не читается: переключение", detail: "Страница переключается на движок: до конца переключения из неё ничего не читается." },
+    en: { text: "not running: switching", detail: "The page is switching to the engine: nothing of it is read until the switch completes." },
+  },
+  paused: {
+    ru: { text: "пауза владельца", detail: "Владелец поставил на паузу страницу или каждый ключ." },
+    en: { text: "paused", detail: "The owner paused the page or every key of this stream." },
+  },
+  page_held: {
+    ru: { text: "страница удержана", detail: "Движок удерживает страницу целиком: до конца удержания запросы не уходят." },
+    en: { text: "page held", detail: "The engine holds the whole page: nothing of it is sent until the hold ends." },
+  },
+  held: {
+    ru: { text: "удержано", detail: "Ни один ключ сейчас не может отправить запрос: что их держит, сказано ниже." },
+    en: { text: "held", detail: "No key of this stream can send now: what holds them is said below." },
+  },
+  attention: {
+    ru: { text: "нужно внимание", detail: "Часть работы в карантине или Fansly её отказывает." },
+    en: { text: "needs attention", detail: "Some of its work is quarantined or refused by Fansly." },
+  },
+  partly_paused: {
+    ru: { text: "частично на паузе", detail: "Часть ключей на паузе владельца, остальные читаются." },
+    en: { text: "partly paused", detail: "The owner paused some of its keys; the others are read." },
+  },
+  partly_held: {
+    ru: { text: "частично удержано", detail: "Часть ключей сейчас не может отправить запрос, остальные читаются." },
+    en: { text: "partly held", detail: "Some of its keys cannot send now; the others are read." },
+  },
+  reading: {
+    ru: { text: "читается", detail: "Sync-хост ведёт страницу, работа открыта и её ничто не держит." },
+    en: { text: "reading", detail: "A sync host runs the page, work of this stream is open and nothing holds it." },
+  },
+  idle: {
+    ru: { text: "нет открытой работы", detail: "Открытой работы сейчас нет; раньше читалось." },
+    en: { text: "idle", detail: "No work of this stream is open now; it was read before." },
+  },
+  never_read: {
+    ru: { text: "ничего не запрошено", detail: "Работа ещё не заводилась." },
+    en: { text: "nothing asked yet", detail: "No work has been filed for this stream on this page." },
+  },
+};
+
+export function engineReadingWords(state: EngineReadingState, language: EngineWordsLanguage): { text: string; detail: string } {
+  return READING_STATE_WORDS[state][language];
+}
+
+/** How a state reads at a glance: `ok` — it is read; `quiet` — there is
+ *  nothing to read, or the owner paused it; `warn` — it sends nothing, or less
+ *  than it should, and nobody chose that. */
+export type EngineReadingTone = "ok" | "quiet" | "warn";
+
+export function engineReadingTone(state: EngineReadingState): EngineReadingTone {
+  if (state === "reading") return "ok";
+  return state === "paused" || state === "idle" || state === "never_read" ? "quiet" : "warn";
+}
+
 // ── history requests ────────────────────────────────────────────────────────
 
 export function historyDepthText(depth: EngineHistoryRequest["depth"]): string {
@@ -210,10 +385,12 @@ export function historyRequesterText(kind: EngineHistoryRequest["requesterKind"]
   return REQUESTER_LABELS[kind];
 }
 
-/** Fans whose reading is over, of all the request names. */
+/** Fans whose reading is over, of all the request names ("из 1 фана", "из 5
+ *  фанов"). */
 export function historyFansText(request: EngineHistoryRequest): string {
   const { counts } = request;
-  const parts = [`готово ${engineCount(counts.ready)} из ${engineCount(counts.total)} фанов`];
+  const fans = ruPlural(counts.total, "фана", "фанов", "фанов");
+  const parts = [`готово ${engineCount(counts.ready)} из ${engineCount(counts.total)} ${fans}`];
   if (counts.loading > 0) parts.push(`читается ${engineCount(counts.loading)}`);
   if (counts.queued > 0) parts.push(`в очереди ${engineCount(counts.queued)}`);
   if (counts.blocked > 0) parts.push(`Fansly отказывает ${engineCount(counts.blocked)}`);
