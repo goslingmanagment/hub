@@ -2177,11 +2177,57 @@ export const FAN_SILENCE_DAYS_MAX = 20_000;
 // ~= 10.1MB (a printable 3-byte-UTF-8 char like the CJK "no" is only the 3-byte
 // ceiling -> ~5.06MB, well under this). The former 4 MiB and 8 MiB limits both
 // 413'd this six-byte worst case before validation; 12 MiB (12,582,912) clears
-// ~10.1MB with headroom while genuine transport abuse still 413s. Kept in the
-// contract next to the schema so the limit and the field caps that drive it
-// cannot drift apart; asserted against the measured worst case in
+// it with headroom while genuine transport abuse still 413s.
+//
+// chat-extension H-4c adds `liveTextContext`: 60 items x 5k = 300k more code
+// units, 1.8MB at six bytes each. The service refuses it on Coach and beside
+// `clientContext`, but that is decided AFTER this limit and the schema, and the
+// schema cannot refuse it (the feature is a path parameter). So the worst
+// schema-valid body carries both: ~1.99M code units, measured 12.13MB with the
+// media list and JSON framing, which 12 MiB (12.58MB) still clears by about
+// 0.45MB. No request the service accepts comes near it. A field added after
+// this one has to be counted in the test before it ships.
+//
+// Kept in the contract next to the schema so the limit and the field caps that
+// drive it cannot drift apart; asserted against the measured worst case in
 // tests/contracts-coach-body.test.ts.
 export const AI_FEATURE_STREAM_BODY_LIMIT_BYTES = 12 * 1024 * 1024;
+
+// chat-extension H-4c — the fresh text of the open OnlyFans chat: the last
+// confirmed messages the client reads off the page it is showing, for the
+// features that draft a message to the fan (Reply, Fix, Hi, Ping). The hub's
+// archive lags the page by seconds to minutes; these fill that gap for ONE
+// generation and are stored nowhere else (docs/ai-gateway-contract.md).
+export const AI_LIVE_TEXT_MAX_ITEMS = 60;
+/** Per item, in UTF-16 code units. */
+export const AI_LIVE_TEXT_MAX_CHARS = 5_000;
+
+// An instant as the client writes it: ISO 8601 with seconds and an explicit
+// offset, at most nine fractional digits. The house `isoTimestamp` is a bare
+// string; these order the transcript, so their form is checked, which also
+// bounds their length (they count toward the body limit above).
+//
+// The pattern is the client's frozen one (chat-extension IsoTimestampSchema)
+// and the whole check: this schema accepts exactly what the client's does. A
+// string of the right form that names no instant (a leap second, a thirteenth
+// month) is therefore NOT refused here, where it would fail the whole request:
+// the merge rejects that one item as `unusable` (context/live-text.ts).
+const aiLiveTextInstantSchema = z.string()
+  .regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/);
+
+export const aiLiveTextContextSchema = z.object({
+  /** When the client read the messages off the page. */
+  capturedAt: aiLiveTextInstantSchema,
+  items: z.array(z.object({
+    /** The platform's own message id. Only messages the platform confirmed:
+     *  never a queued (mass, welcome) or an unsent one. */
+    platformMessageId: clientNumericIdSchema,
+    direction: z.enum(["fan", "model"]),
+    occurredAt: aiLiveTextInstantSchema,
+    /** Text only: a message that is media alone is not sent. */
+    text: z.string().min(1).max(AI_LIVE_TEXT_MAX_CHARS),
+  }).strict()).min(1).max(AI_LIVE_TEXT_MAX_ITEMS),
+}).strict();
 
 export const aiFeatureStreamBodySchema = z.object({
   clientRequestId: z.string().uuid(),
@@ -2233,6 +2279,14 @@ export const aiFeatureStreamBodySchema = z.object({
     .max(AI_KNOWN_FAN_MESSAGE_IDS_MAX)
     .refine((ids) => new Set(ids).size === ids.length, { message: "knownFanMessageIds repeat" })
     .optional(),
+  // chat-extension H-4c: the fresh text of the open OnlyFans chat (above).
+  // Accepted only on fast-reply, improve-draft, hi-greeting and ping, only for
+  // an OnlyFans page, never beside clientContext, and only from a caller that
+  // advertised `context-v1`: anything else is a 400 with a machine reason.
+  // Whether it is USED is the owner's switch (`aiLiveTextContextMode` and the
+  // page's `freshText` flag); switched off, it is ignored and the `context_v1`
+  // frame says `live.status: "disabled"`.
+  liveTextContext: aiLiveTextContextSchema.optional(),
   // Stage 32: client-loaded context for platforms whose kernel archive is
   // pull-cadenced (Fansly: dm_conversations 30 min / dm_messages 24 h — no
   // webhook lane), where the client reads the conversation live at
@@ -8380,6 +8434,7 @@ export type AiGatewayPromptBlock = z.infer<typeof aiGatewayPromptBlockSchema>;
 export type AiFeatureDebugPromptBlock = z.infer<typeof aiFeatureDebugPromptBlockSchema>;
 export type AiFeatureDebugInputFrame = z.infer<typeof aiFeatureDebugInputFrameSchema>;
 export type AiFeatureContextFrame = z.infer<typeof aiFeatureContextFrameSchema>;
+export type AiLiveTextContext = z.infer<typeof aiLiveTextContextSchema>;
 export type AiGatewayStreamBody = z.infer<typeof aiGatewayStreamBodySchema>;
 export type AiGatewayUsage = z.infer<typeof aiGatewayUsageSchema>;
 export type AiGatewayQuota = z.infer<typeof aiGatewayQuotaSchema>;

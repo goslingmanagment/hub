@@ -40,7 +40,14 @@ const SOURCES = ["apps/runtime/src", "packages"] as const;
 
 describe("Fansly Sync Engine repository boundaries", () => {
   it("has no switch capability and no mode change but shadow → off (I17, step 4 S4-21 and S4-23)", () => {
-    expect(filesMatching("SyncSwitchCapability|issueSyncSwitchCapability|capability_required", SOURCES)).toEqual([]);
+    expect(filesMatching("SyncSwitchCapability|issueSyncSwitchCapability", SOURCES)).toEqual([]);
+    // The switch's `capability_required` refusal is gone with it. The one file
+    // that still holds the string is not sync code: the AI lane's refusal of
+    // fresh text from a client without `context-v1` (chat-extension H-4c, a
+    // reason the client froze — docs/error-handling.md §3).
+    expect(filesMatching("capability_required", SOURCES)).toEqual([
+      "apps/runtime/src/modules/ai/context/live-text.ts",
+    ]);
     const pages = readFileSync(join(root, "packages/db/src/repositories/sync/pages.ts"), "utf8");
     expect(pages).toContain('const OWNER_TRANSITIONS: ReadonlySet<string> = new Set(["shadow>off"]);');
     expect(pages).not.toMatch(/[a-z]+>(handover|live|shadow)|(handover|live)>[a-z]+/);

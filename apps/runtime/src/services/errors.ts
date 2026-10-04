@@ -204,3 +204,26 @@ export class ClientFeatureDisabledError extends AppError {
     super(`Chat-extension feature "${flag}" is unavailable (${reason})`, 409, "client_feature_disabled");
   }
 }
+
+// chat-extension H-4c: the fresh text a client sent with an AI request
+// (`liveTextContext`) contradicts what the hub holds: a message the hub knows
+// as sent by the other side, or a message id of another chat. The snapshot is
+// not of the conversation the request names, so nothing is generated. 400: the
+// request itself is wrong and the same request never succeeds; the client
+// re-reads the open chat and asks again. The message names message IDS ONLY.
+// It is logged and shown, and must never carry a fan's text.
+const CONTEXT_CONFLICT_IDS_SHOWN = 10;
+
+export class ContextConflictError extends AppError {
+  constructor(readonly messageIds: readonly string[]) {
+    const shown = messageIds.slice(0, CONTEXT_CONFLICT_IDS_SHOWN).join(", ");
+    const more = messageIds.length > CONTEXT_CONFLICT_IDS_SHOWN
+      ? ` and ${messageIds.length - CONTEXT_CONFLICT_IDS_SHOWN} more`
+      : "";
+    super(
+      `liveTextContext conflicts with the hub's transcript of this conversation (message ids: ${shown}${more})`,
+      400,
+      "context_conflict",
+    );
+  }
+}

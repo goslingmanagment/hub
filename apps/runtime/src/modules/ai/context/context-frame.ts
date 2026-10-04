@@ -180,6 +180,9 @@ export function buildAiContextFrameBody(input: {
   requestedCount: number;
   coverage: ClientCoverageLevel;
   knownFanMessages?: Array<{ id: string; state: AiKnownFanMessageState }>;
+  /** What the hub did with the request's fresh text (live-text.ts); absent
+   *  when the request sent none. */
+  live?: AiFeatureContextFrameBody["live"];
   fanLanguageEvidence: AiFanLanguageEvidence;
 }): AiFeatureContextFrameBody {
   return {
@@ -189,8 +192,7 @@ export function buildAiContextFrameBody(input: {
     window: { requested: input.requestedCount, served: input.served.window.length },
     coverage: input.coverage,
     ...(input.knownFanMessages !== undefined ? { knownFanMessages: input.knownFanMessages } : {}),
-    // The client's fresh text is a later step: none is accepted yet.
-    live: { status: "not_sent", accepted: 0, rejected: 0 },
+    live: input.live ?? { status: "not_sent", accepted: 0, rejected: 0 },
     fanLanguageEvidence: input.fanLanguageEvidence,
   };
 }
@@ -215,6 +217,8 @@ export async function loadAiContextFrameBody(
     omittedByPromptBudget?: number;
     requestedCount: number;
     knownFanMessageIds?: readonly string[];
+    /** The frame's `live` block (applyLiveTextContext). */
+    live?: AiFeatureContextFrameBody["live"];
   },
 ): Promise<AiFeatureContextFrameBody> {
   const omitted = Math.min(Math.max(input.omittedByPromptBudget ?? 0, 0), input.served.window.length);
@@ -266,6 +270,7 @@ export async function loadAiContextFrameBody(
     requestedCount: input.requestedCount,
     coverage,
     ...(knownFanMessages !== undefined ? { knownFanMessages } : {}),
+    ...(input.live !== undefined ? { live: input.live } : {}),
     fanLanguageEvidence: fanLanguageEvidenceOf(messages),
   });
 }

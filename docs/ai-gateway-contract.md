@@ -104,7 +104,8 @@ authorization.
   256-character cap. The header is not declared in the route schema, so a malformed value is ignored
   instead of failing with 400.
 - `debug-input-v1` adds the `debug_input_v1` frame, still behind the
-  `chatMuseAiPromptDebugEchoEnabled` kill-switch. `context-v1` adds the `context_v1` frame (below).
+  `chatMuseAiPromptDebugEchoEnabled` kill-switch. `context-v1` adds the `context_v1` frame (below)
+  and is required to send `liveTextContext`, whose answer rides that frame.
   `split-all-v1` is reserved for the fields that will read it; until then it changes nothing.
 - SDK: the header is the union of the `capabilities` option and the legacy `debugPromptEcho` flag,
   deduplicated, in the constant's order, joined by `, `. With nothing to advertise no header is sent,
@@ -135,7 +136,8 @@ what it was, so a client built before the frame never meets it.
 | `window` | `requested`: the window the request resolved to. `served`: the messages the prompt holds whole. That is the transcript the hub loaded (after normalization and the window cap), minus what the prompt itself cut: only `coach-chat` cuts, when its whole-prompt budget drops the oldest transcript lines. A line the cut runs through is not counted. |
 | `coverage` | How much of the chat's history the hub can vouch for, from `ofapi_message_coverage` (`services/client-coverage.ts`). `complete`: a standing continuous-history proof under the current proof policy, and the archive has projected everything it covers. `partial`: a standing proof that does not vouch for the whole history. `unknown`: no proof, a revoked one, one under a proof policy the hub no longer accepts, or a failed lookup. A page without the capture lane (Fansly) always reads `unknown`. |
 | `knownFanMessages` | One `{ id, state }` per id of the body's `knownFanMessageIds`, in the same order. Absent when the body named none. |
-| `live` | What the hub did with the client's fresh text. No request can send it yet: always `{ status: "not_sent", accepted: 0, rejected: 0 }`. |
+| `source` with fresh text | Unchanged: `source` names the hub's own reader. Text a client supplied is described by `live` alone. |
+| `live` | What the hub did with the request's fresh text (`liveTextContext`, below): `{ status, accepted, rejected }`. |
 | `fanLanguageEvidence` | `latin`, `cyrillic`, `mixed` or `unknown`: a rough count of the letters in the fan's latest 20 text messages of the served window. It is not language detection. |
 
 `knownFanMessageIds` (body, optional, 1 to 10 distinct numeric ids) names fan messages the client
@@ -166,6 +168,129 @@ The frame is built from database reads only (the transcript loader, the coverage
 lookup): no platform request, no queued platform work and no change to a chat's unread state.
 Coverage and the known-id lookup fail open: a failed read reports `unknown` and never fails the
 generation. The frame is not persisted, and the recorded `params.contextManifest` is unchanged.
+
+### Feature-lane fresh text (`liveTextContext`)
+
+The hub's archive trails the chat a chatter is looking at by seconds to minutes. A client that
+reads the open OnlyFans chat sends its last confirmed messages with the request, and the hub merges
+them into the transcript it loaded itself, for that one generation
+(`apps/runtime/src/modules/ai/context/live-text.ts`).
+
+Body field (optional, strict):
+
+```json
+{ "capturedAt": "2026-10-04T10:20:00.000Z",
+  "items": [{ "platformMessageId": "4301234567890", "direction": "fan",
+              "occurredAt": "2026-10-04T10:19:30.000Z", "text": "are you there?" }] }
+```
+
+- `items`: 1 to 60 (`AI_LIVE_TEXT_MAX_ITEMS`), each text 1 to 5000 UTF-16 units
+  (`AI_LIVE_TEXT_MAX_CHARS`); the bootstrap announces the same numbers as `freshTextMaxItems` and
+  `freshTextMaxChars`. `platformMessageId` is the platform's own numeric id (no leading zero, at
+  most 30 digits); `direction` is `fan` or `model`; both instants are ISO 8601 with seconds and an
+  explicit offset.
+- An instant is checked for its form and nothing more: the pattern is the client's own frozen one,
+  so the hub accepts exactly what the client's contract does. A string of that form that names no
+  instant (a leap second, a thirteenth month) is not a schema error, which would fail the whole
+  request: its item is rejected by the merge (`unusable`).
+- The client sends only messages the platform confirmed: never a queued (welcome, mass) or an
+  unsent one, and no message that is media alone. No money, no media, no links as markup: text only.
+- `capturedAt` is when the client read the page. Its form is checked and it is otherwise unused:
+  nothing is decided by it, and it is not recorded.
+
+Refused before any context loads, after the page was admitted (a client bug, never retried):
+
+| Case | Answer |
+|---|---|
+| a feature other than `fast-reply`, `improve-draft`, `hi-greeting`, `ping` | 400 `bad_request`, reason `live_text_not_allowed` |
+| a page that is not OnlyFans | 400 `bad_request`, reason `live_text_not_allowed` |
+| together with `clientContext` | 400 `bad_request`, reason `live_text_not_allowed` |
+| no `context-v1` in the capability header | 400 `bad_request`, reason `capability_required` |
+
+Recap (full and short), Review, Coach and Help never take it: a recap built on one person's page
+would be shared with everyone.
+
+Whether it is USED is the owner's switch, and a switch that is off IGNORES the field, it never
+refuses: a client's bootstrap can be up to its TTL old, and a kill switch must not fail
+generations. Two conditions, both read per generation:
+
+- `aiLiveTextContextMode` (`off` | `shadow` | `serve`, rests `off`; stepped up one mode at a time,
+  rolled back freely, like `aiTranscriptFreshUnionMode`);
+- the page's `freshText` flag in `chatExtensionFeatures`, by the evaluation the bootstrap announces
+  (master switch, flag, platform, binding, the `live-text-v1` capability).
+
+| `live.status` | Meaning |
+|---|---|
+| `not_sent` | The request carried no fresh text. |
+| `disabled` | It did, and the switch is off: nothing was read from it, nothing recorded. The generation is the one without the field, byte for byte. |
+| `shadow` | Merged and recorded in the context manifest; the hub's own transcript served. `accepted` is what `serve` would have added. A conflict is recorded and counted in `rejected`, never thrown: shadow changes no generation. |
+| `served` | The merged transcript served. `accepted` can be 0: the hub already held every message. |
+| `rejected` | `serve`, and nothing of the client's joined although something was refused (tombstoned, unusable, unverifiable, or the merge failed). The hub's transcript served. |
+
+The merge, in `serve` and `shadow` alike:
+
+- Only by platform message id, never by text. The hub's rows come first and win: for an id the
+  transcript already holds, the hub's text stands (the page's HTML against the archive's plain text
+  is not a disagreement).
+- An id the hub holds as sent by the OTHER side, or under ANOTHER chat, is a conflict: the snapshot
+  is not of the conversation the request names. `serve` answers 400 `context_conflict`; the message
+  names message ids only. "Another chat" is another conversation of the same page, or a chat of
+  another page the caller may read (the wrong page for this chat). Two pages of this hub writing to
+  each other archive the same message under both; that is the same chat from its other side, not a
+  conflict. A page the caller cannot read is not consulted. Another page is read in both of its
+  message stores (`message_archive` and `dm_message_archive`), so a snapshot of the wrong page is
+  refused even when it is made only of messages seconds old.
+- A tombstone is never restored: an id deleted in any store of the page is rejected.
+- A client item's text goes through `normalizeDmMessageText` and the transcript normalizer, exactly
+  as an archive row does (tags and entities out). An item whose text is empty after that, whose id
+  or time the transcript cannot key, whose text a normalizer fails on, or that repeats an id of the
+  same snapshot is rejected.
+- The result is sorted by time then id and capped to the request's window, like every transcript.
+  Merging never shrinks it, so a gate that counts messages (Hi) can only tighten; the Ping segment
+  and fan silence are computed over the merged window.
+- The time is the client's only for a message the hub cannot place itself. An id a store of the
+  page holds for this conversation outside the served transcript (older than the window, or only in
+  a store the serving reader did not read) keeps the hub's time, `message_archive.occurred_at` first.
+  A client's clock therefore never moves a message the hub can place: an old archived message sent
+  as if it were new stays before the window and is cut (`outsideWindow`), and a message only the
+  webhook store holds joins at the place the hub's own reader would give it. Such an item still
+  carries the client's text, and a generation that served it is scoped like any other.
+- `accepted` counts the client's items the served window holds. Items cut by the window are neither
+  accepted nor rejected.
+
+Where the client's text lives: in the restricted record of that one generation
+(`ai_generation_content.prompt_blocks`), and nowhere else. It is written to no message archive, no
+observation, no dossier. A generation that served at least one accepted item is recorded with
+`params.contextScope = "principal-draft"`, which every shared reader skips (Shared recaps, below).
+Without served fresh text the recorded `params` are exactly what they were for every feature.
+
+`params.contextManifest.liveText` (`shadow` and `serve`) holds message ids, counts and the mode,
+never a message's text or time: `source: "client-supplied"`, `mode`, `status`, `sent`, `accepted`,
+`rejected`, `conflicts`, `matched` (ids the hub already held), `outsideWindow`, `headRef` and
+`archiveSawHead` (the client's newest message, and whether the hub's transcript held it),
+`acceptedRefs`, `rejectedRefs`, `rejectedReasons`, `conflictRefs`, `conflictReasons`. In `shadow`
+this is the evidence to read before `serve`: `matched` close to `sent` proves that the ids the
+client reads are the ids the hub archives; `matched: 0` beside a non-empty archive means they are
+not, and `serve` must wait.
+
+The store lookup (`lookupAiLiveTextMessages`, `packages/db/src/repositories/ai-live-context.ts`) is
+one statement of point lookups on the stores' unique keys, for the ids the transcript does not
+hold. It fails closed: if it cannot be read, nothing the hub cannot vouch for joins the transcript
+(`unverified`), and the generation runs on the hub's own. Like the frame, fresh text costs database
+reads only: no platform request, no queued platform work, no change to a chat's unread state.
+
+The conflict in `serve` is the only way fresh text fails a request. Nothing else about it fails a
+generation:
+
+- a switch that cannot be read is a switch that is off (`disabled`);
+- a lookup that fails rejects every item the hub could not vouch for (`unverified`);
+- a text a normalizer throws on rejects that one item (`unusable`), and the rest of the snapshot
+  is still judged;
+- a merge that fails altogether rejects every item (`failed`) and the hub's own transcript serves.
+  It is logged with the error's name, never its message: the failing code was reading a client's
+  text.
+
+In `shadow` nothing at all changes the generation.
 
 ## Authorization
 
@@ -336,9 +461,10 @@ ruling: no private recap per chatter; `docs/identity-rights-matrix.md`).
   this route and the dossier's generation proof all select through it, so they always agree on
   which recap exists.
 - `params.contextScope` marks a generation whose context held something only its caller saw (the
-  fresh text of an open chat). Such a row is that person's draft: it is never a status slot, never
-  attached to Coach, never returned here and never proves a dossier. Nothing writes the key on a
-  `fan-summary` row, so the condition is a guard.
+  fresh text of an open chat, `principal-draft`). Such a row is that person's draft: it is never a
+  status slot, never attached to Coach, never returned here and never proves a dossier. Fresh text
+  is refused on `fan-summary`, so nothing writes the key on a `fan-summary` row and the condition
+  is a guard.
 - `fanRef` is the OnlyFans fan id, which is the chat id. `personaDefinitionId` (optional, as on
   the recap status) narrows both slots to one persona.
 - Answer: `{ full, short, fullSavedToProfile }`. A slot is `null` or `{ generationRef,

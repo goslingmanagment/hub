@@ -69,12 +69,15 @@ export {
 } from "@agency_hub_core/contracts";
 // The AI context frame's known values (routes.ts, `context_v1`): its open
 // tokens narrow to these, and `knownFanMessageIds` takes at most the MAX.
+// AI_LIVE_TEXT_*: the caps of the body's `liveTextContext` (fresh text).
 export {
   AI_CONTEXT_LIVE_STATUSES,
   AI_CONTEXT_SOURCES,
   AI_FAN_LANGUAGE_EVIDENCE,
   AI_KNOWN_FAN_MESSAGE_IDS_MAX,
   AI_KNOWN_FAN_MESSAGE_STATES,
+  AI_LIVE_TEXT_MAX_CHARS,
+  AI_LIVE_TEXT_MAX_ITEMS,
 } from "@agency_hub_core/contracts";
 // The chat extension's health report (routes-client.ts). No route carries it:
 // it rides one ingest batch of its own once the bootstrap lists
