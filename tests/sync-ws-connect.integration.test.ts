@@ -109,7 +109,7 @@ async function startHost(r: Rig, options: {
 }
 
 async function demand(pageId: number, resource: string, subject: string) {
-  await upsertDemand(db(), { pageId, shadow: false, resource, subject, kind: "trigger", class: "urgent", demand: { reasons: ["test"] } });
+  await upsertDemand(db(), { pageId, resource, subject, kind: "trigger", class: "urgent", demand: { reasons: ["test"] } });
 }
 
 async function rows<T>(text: string, values: unknown[]): Promise<T[]> {

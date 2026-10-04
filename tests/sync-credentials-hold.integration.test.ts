@@ -179,7 +179,7 @@ async function holdAuth(page: HarnessPage, failed: string): Promise<void> {
 }
 
 async function urgent(pageId: number, subject: string): Promise<void> {
-  await upsertDemand(db(), { pageId, shadow: false, resource: HARNESS_KEY.urgent, subject, kind: "trigger", class: "urgent", demand: { reasons: ["test"] } });
+  await upsertDemand(db(), { pageId, resource: HARNESS_KEY.urgent, subject, kind: "trigger", class: "urgent", demand: { reasons: ["test"] } });
 }
 
 function appContext(): AppContext {
@@ -409,7 +409,7 @@ describe("credentials holds of a live page (ruling 5, A3)", () => {
     // The trusted digest is stale and the page's only verify is closed (what
     // a lost in-memory mode and a failed identity write left behind).
     await testDb.pool.query("update sync_pages set credentials_generation = $2 where page_id = $1", [r.page.pageId, "e".repeat(64)]);
-    await upsertDemand(db(), { pageId: r.page.pageId, shadow: false, resource: "account.verify", kind: "trigger", class: "urgent" });
+    await upsertDemand(db(), { pageId: r.page.pageId, resource: "account.verify", kind: "trigger", class: "urgent" });
     await testDb.pool.query(
       `update sync_work set state = 'done', closed_at = clock_timestamp(), close_reason = 'verified'
         where page_id = $1 and resource = 'account.verify'`,
@@ -584,7 +584,7 @@ describe("the final admission under the page row lock (ruling 5)", () => {
     it(`a ${kind} hold written after the gate looked refuses the request before anything is counted`, async (context) => {
       if (!testDb) return context.skip();
       const { pageId } = await seedSyncPage({ db: db(), pool: testDb.pool }, { mode: "live", guard: "fansly_sync_engine" });
-      await upsertDemand(db(), { pageId, shadow: false, resource: CRASH_READ_KEY, kind: "trigger", class: "urgent" });
+      await upsertDemand(db(), { pageId, resource: CRASH_READ_KEY, kind: "trigger", class: "urgent" });
       const transport = new ScriptedLiveTransport();
       const prepare = transport.prepare.bind(transport);
       let held = false;
@@ -596,7 +596,7 @@ describe("the final admission under the page row lock (ruling 5)", () => {
         return prepare(request);
       };
       const metrics = new RecordingMetrics();
-      const { actor, stop, abort } = await makeTestActor({ db: db(), pageId, mode: "live", registry: crashRegistry(), transport, metrics });
+      const { actor, stop, abort } = await makeTestActor({ db: db(), pageId, registry: crashRegistry(), transport, metrics });
       const run = actor.run({ stop: stop.signal, abort: abort.signal });
       try {
         await waitFor(() => (held ? true : null), 10_000, "the hold written at the prepare");

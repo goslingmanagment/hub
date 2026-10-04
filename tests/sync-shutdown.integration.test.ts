@@ -140,7 +140,7 @@ describe("SIGTERM of the sync process with a live page", () => {
       "select count(*)::int as n from fansly_ws_connections where page_id = $1 and verified_at is not null and closed_at is null",
       [page.pageId],
     )) === 1, 30_000, "the socket up and verified");
-    await upsertDemand(db(), { pageId: page.pageId, shadow: false, resource: HARNESS_KEY.urgent, subject: "drip", kind: "trigger", class: "urgent" });
+    await upsertDemand(db(), { pageId: page.pageId, resource: HARNESS_KEY.urgent, subject: "drip", kind: "trigger", class: "urgent" });
     await until(async () => server!.arrivalsAt("/api/v1/trackinglinks").length === 1, 30_000, "the dripping request on the wire");
 
     // 128 fan messages in four chats, in one burst: the receiver queues them

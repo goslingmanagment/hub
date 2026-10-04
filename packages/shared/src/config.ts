@@ -93,40 +93,8 @@ const envSchema = z.object({
   SYNC_HTTP_TRACE_FILE: optionalTrimmedStringSchema,
   SYNC_HTTP_ATTEMPT_TRACE_STDOUT: booleanSchema.default(false),
   FANSLY_DEFAULT_DELAY_MS: optionalPositiveIntSchema,
-  FANSLY_GLOBAL_DELAY_MS: optionalPositiveIntSchema,
-  FANSLY_ACCOUNT_LOOKUP_DELAY_MS: optionalPositiveIntSchema,
-  FOLLOWER_PAGE_DELAY_MS: z.coerce.number().int().positive().default(5000),
-  FANSLY_DM_CONVERSATIONS_DELAY_MS: z.coerce.number().int().positive().default(5000),
-  FANSLY_DM_MESSAGES_DELAY_MS: z.coerce.number().int().positive().default(5000),
-  FANSLY_DM_HEAD_CATCHUP_PAGE_ALLOWLIST: z.string().default("none"),
-  FANSLY_DM_SHADOW_PAGE_ALLOWLIST: z.string().default("none"),
-  // Retired with the legacy WebSocket receiver (step 4, S4-12); parsed, ignored.
-  FANSLY_WS_CAPTURE_ENABLED: booleanSchema.default(false),
-  FANSLY_WS_CAPTURE_PAGE_ALLOWLIST: z.string().default(""),
   FANSLY_LIVE_OVERLAY_READ_PAGES: z.string().default("none"),
-  FANSLY_FAN_EARNINGS_RECOVERY_ENABLED: booleanSchema.default(false),
-  FANSLY_FAN_EARNINGS_RECOVERY_PAGE_ALLOWLIST: z.string().default(""),
-  FANSLY_FAN_EARNINGS_TARGETS_ENABLED: booleanSchema.default(false),
-  FANSLY_FAN_EARNINGS_TARGETS_PAGE_ALLOWLIST: z.string().default(""),
-  FANSLY_FAN_EARNINGS_TARGETS_DAILY_ATTEMPT_LIMIT: z.coerce.number().int().min(0).max(1000).default(0),
-  FANSLY_FAN_EARNINGS_ROSTER_MAX_AGE_HOURS: z.coerce.number().int().min(0).max(168).default(0),
-  FANSLY_FOLLOWERS_SETTLEMENT_REUSE_ENABLED: booleanSchema.default(false),
-  FANSLY_FOLLOWERS_SETTLEMENT_REUSE_PAGE_ALLOWLIST: z.string().default(""),
-  FANSLY_DM_BOUNDED_ENABLED: booleanSchema.default(false),
-  FANSLY_DM_BOUNDED_PAGE_ALLOWLIST: z.string().default(""),
-  FANSLY_DM_BOUNDED_POLICIES: z.string().default("{}"),
-  FANSLY_WS_HINTS_ENABLED: booleanSchema.default(false),
-  FANSLY_WS_HINTS_PAGE_ALLOWLIST: z.string().default(""),
-  FANSLY_WS_HINTS_TYPE_ALLOWLIST: z.string().default(""),
-  FANSLY_WS_HINTS_POLICIES: z.string().default("{}"),
-  FANSLY_FAN_EARNINGS_SHADOW_PAGE_ALLOWLIST: z.string().default("none"),
-  FANSLY_DM_DEEP_BACKFILL_ENABLED: booleanSchema.default(false),
-  FANSLY_DM_DEEP_BACKFILL_MAX_REQUESTS_PER_RUN: z.coerce.number().int().min(0).default(1),
-  FANSLY_DM_DEEP_BACKFILL_LIVE_REQUESTS_PER_DEEP: z.coerce.number().int().min(1).default(4),
-  FANSLY_DM_DEEP_BACKFILL_CONTINUATION_DELAY_MS: z.coerce.number().int().min(0).default(0),
-  FANSLY_DM_DEEP_BACKFILL_CONTINUATION_JITTER_MS: z.coerce.number().int().min(0).default(0),
   ONLYFANS_DEFAULT_DELAY_MS: z.coerce.number().int().positive().default(1000),
-  SYNC_SHARED_RATE_LIMIT_ENABLED: booleanSchema.default(true),
   // Stage 28: on-box lake root for tiered Parquet exports (Q3 declined).
   LAKE_DIR: z.string().min(1).default("lake"),
   // Stage 26: class-aware egress pacer rollout mode. off = old policy only;
@@ -135,11 +103,8 @@ const envSchema = z.object({
   // shadow window).
   EGRESS_PACER_MODE: z.enum(["off", "shadow", "enforce"]).default("off"),
   SYNC_PAGE_EXECUTOR_CONCURRENCY: z.coerce.number().int().positive().default(4),
-  TRANSACTION_LOOKBACK_DAYS: z.coerce.number().int().positive().default(7),
-  TRANSACTION_RESCAN_CAP_DAYS: z.coerce.number().int().positive().default(30),
   SYNC_OBSERVABILITY_RETENTION_DAYS: z.coerce.number().int().positive().default(30),
   HEALTH_SYNC_LIGHT_MAX_AGE_MINUTES: z.coerce.number().int().positive().default(180),
-  HEALTH_SYNC_FOLLOWER_MAX_AGE_MINUTES: z.coerce.number().int().positive().default(1080),
   HEALTH_SYNC_MONITORING_TOKEN: optionalTrimmedStringSchema,
   TELEGRAM_BOT_TOKEN: optionalTrimmedStringSchema,
   TELEGRAM_CHAT_ID: optionalTrimmedStringSchema,
@@ -159,54 +124,7 @@ const envSchema = z.object({
   OFAPI_DM_PROJECTION_ENABLED: booleanSchema.default(false),
   OFAPI_DM_SYNC_ENABLED: booleanSchema.default(false),
   OFAPI_DM_COLD_ARCHIVE_ENABLED: booleanSchema.default(false),
-  FANSLY_FAN_EARNINGS_SYNC_ENABLED: booleanSchema.default(false),
-  FANSLY_PURCHASE_HISTORY_SYNC_ENABLED: booleanSchema.default(false),
-  FANSLY_NEW_STREAM_PAGE_ALLOWLIST: z.string().default(""),
-  // WP-F1. FANSLY_STATS_SNAPSHOT_PAGE_ALLOWLIST FAILS CLOSED — empty = NO
-  // pages — the OPPOSITE of FANSLY_NEW_STREAM_PAGE_ALLOWLIST above.
-  FANSLY_STATS_SNAPSHOT_SYNC_ENABLED: booleanSchema.default(false),
-  FANSLY_STATS_SNAPSHOT_PAGE_ALLOWLIST: z.string().default(""),
-  FANSLY_STATS_SNAPSHOT_DAILY_CALL_BUDGET: z.coerce.number().int().min(1).max(500).default(25),
-  // WP-F2. Same fail-closed allowlist semantic; its own key (S4) so the
-  // notification ramp cannot be widened by an edit meant for another lane.
-  FANSLY_NOTIFICATIONS_SYNC_ENABLED: booleanSchema.default(false),
-  FANSLY_NOTIFICATIONS_PAGE_ALLOWLIST: z.string().default(""),
-  FANSLY_NOTIFICATIONS_DAILY_CALL_BUDGET: z.coerce.number().int().min(1).max(500).default(96),
-  // WP-F3. Same fail-closed allowlist semantic; its own key (S4) so a catalog
-  // ramp cannot be widened by an edit meant for another lane.
-  FANSLY_CATALOG_SYNC_ENABLED: booleanSchema.default(false),
-  FANSLY_CATALOG_PAGE_ALLOWLIST: z.string().default(""),
-  FANSLY_CATALOG_DAILY_CALL_BUDGET: z.coerce.number().int().min(1).max(500).default(60),
-  // WP-F5. Same fail-closed allowlist semantic; its own keys (S4). The budget
-  // ships at 100 and its ceiling is 400 — the raise to 300 is a separate,
-  // criteria-gated flip with its own window (A29), not a default.
-  FANSLY_POST_REPLIES_SYNC_ENABLED: booleanSchema.default(false),
-  FANSLY_POST_REPLIES_PAGE_ALLOWLIST: z.string().default(""),
-  FANSLY_REPLIES_DAILY_CALL_BUDGET: z.coerce.number().int().min(1).max(400).default(100),
   FANSLY_REPLIES_REWALK_CYCLE_DAYS: z.coerce.number().int().min(1).max(365).default(14),
-  // WP-F7. Same fail-closed allowlist semantic; its own keys (S4). 20 is §6.1's
-  // corrected number — the steady state spends 2.
-  FANSLY_PAYOUTS_SYNC_ENABLED: booleanSchema.default(false),
-  FANSLY_PAYOUTS_PAGE_ALLOWLIST: z.string().default(""),
-  FANSLY_PAYOUTS_DAILY_CALL_BUDGET: z.coerce.number().int().min(1).max(100).default(20),
-  // WP-F4. Same fail-closed allowlist semantic; its own keys (S4). 300 is the
-  // cap A16 sized the age decay against, and this lane is DESIGNED to spend it:
-  // at M = 2 000 the decay wants 294 calls a day. 1 000 is the registry ceiling
-  // — a raise toward what the decay wants is a named per-lane owner step. The
-  // long-tail cycle is the one cadence A6 asks to be tunable; the fresh/mid
-  // boundaries are constants in the code.
-  FANSLY_MEDIA_STATS_SYNC_ENABLED: booleanSchema.default(false),
-  FANSLY_MEDIA_STATS_PAGE_ALLOWLIST: z.string().default(""),
-  FANSLY_MEDIA_STATS_DAILY_CALL_BUDGET: z.coerce.number().int().min(1).max(1000).default(300),
-  FANSLY_MEDIA_STATS_LONG_TAIL_CYCLE_DAYS: z.coerce.number().int().min(1).max(365).default(30),
-  // WP-F6. Rides the EXISTING `posts` stream, so it has no allowlist of its
-  // own; the cap is counted apart from the timeline walk in the same cursor.
-  FANSLY_POST_ENGAGEMENT_REFRESH_ENABLED: booleanSchema.default(false),
-  FANSLY_POST_ENGAGEMENT_DAILY_CALL_BUDGET: z.coerce.number().int().min(1).max(200).default(40),
-  FANSLY_STATS_HOURLY_ENABLED: booleanSchema.default(true),
-  FANSLY_STATS_HOURLY_BACKFILL_MAX_DAYS: z.coerce.number().int().min(0).max(400).default(30),
-  FANSLY_BACKFILL_CONTINUATION_DELAY_MS: z.coerce.number().int().min(0).max(600_000).default(20_000),
-  FANSLY_DEEP_BACKFILL_IGNORE_RETENTION_LIMIT: booleanSchema.default(false),
   OFAPI_DM_COLD_ARCHIVE_RETENTION_DAYS: z.coerce.number().int().positive().default(36500),
   OFAPI_REST_DELAY_MS: z.coerce.number().int().min(0).default(500),
   OFAPI_DM_BOOTSTRAP_MAX_REQUESTS_PER_RUN: z.coerce.number().int().min(1).default(25),
@@ -333,8 +251,7 @@ const envSchema = z.object({
     .default(false),
   // Voice notes (ElevenLabs TTS): ships inert behind kill switches. ELEVENLABS_API_KEY
   // is the vendor secret; the rest are live-wired kill switches + budgets read per
-  // request. VOICE_NOTES_PAGE_ALLOWLIST FAILS CLOSED — empty = NO pages enabled
-  // (the OPPOSITE of FANSLY_NEW_STREAM_PAGE_ALLOWLIST, where empty = all pages).
+  // request. VOICE_NOTES_PAGE_ALLOWLIST FAILS CLOSED — empty = NO pages enabled.
   ELEVENLABS_API_KEY: optionalTrimmedStringSchema,
   VOICE_NOTES_ENABLED: booleanSchema.default(false),
   VOICE_NOTES_RETRIEVAL_ENABLED: booleanSchema.default(true),
@@ -361,13 +278,6 @@ const envSchema = z.object({
   AI_MEDIA_DESCRIBE_MODEL_MEDIA: z.enum(["teasers", "teasers+free"]).default("teasers"),
   // Describe within seconds: the worker's 1 s loop over due rows (default off).
   AI_MEDIA_DESCRIBE_LOOP_ENABLED: booleanSchema.default(false),
-  // Fansly freshness accelerator: one head read of a conversation when a WS
-  // frame says a fan sent media. OFF until the owner enables it after stage 1.
-  AI_MEDIA_DESCRIBE_FANSLY_ACCELERATOR_ENABLED: booleanSchema.default(false),
-  AI_MEDIA_DESCRIBE_FANSLY_ACCELERATOR_DAILY_LIMIT: z.coerce.number().int().min(0).default(60),
-  // Retired with the AI media fast lane (step 4, S4-12); parsed, ignored.
-  AI_MEDIA_DESCRIBE_FANSLY_FAST_LANE_MODE: z.enum(["off", "shadow", "serve"]).default("off"),
-  AI_MEDIA_DESCRIBE_FANSLY_FAST_LANE_PAGES: z.string().default(""),
   // Agent Read Plane (slice 0a). Every one of these ships OFF/false so the deploy
   // is inert, and every one is LIVE-wired: the owner ramps them from the dashboard,
   // one flip per verification window, never a bundle and never a restart.
@@ -387,11 +297,6 @@ const envSchema = z.object({
   // off = hydration operations answer 503; request_only = requests can be filed and
   // decided but nothing executes; dispatch = the executor drains approvals.
   AGENT_HYDRATION_MODE: z.enum(["off", "request_only", "dispatch"]).default("off"),
-  // Retired at step 4 (S4-15) with the hydration auto-approve policy (decision
-  // #202): parsed so an env that sets them boots, read by nothing, removed
-  // with the other retired Fansly keys (S4-26).
-  AGENT_HYDRATION_AUTO_APPROVE_MODE: z.enum(["off", "shadow", "enforce"]).default("off"),
-  AGENT_HYDRATION_AUTO_DAILY_CALL_BUDGET: z.coerce.number().int().min(0).default(0),
   // The value served in `exportPolicy`. Widening the wire literal to this enum is a
   // CODE deploy (clients validate successful responses against a vendored schema);
   // only the VALUE flip is config, and only after the fleet has re-vendored.
@@ -442,6 +347,16 @@ const envSchema = z.object({
   CHAT_EXTENSION_MIN_VERSION: z.string().default("0.0.0"),
   CHAT_EXTENSION_HOST_BINDINGS: z.string().default("{}"),
   CHAT_EXTENSION_PREVIEW_SEND_RECEIPT_PROFILES: z.string().default("[]"),
+  // chat-extension H-4c: whether a client's fresh text of the open OnlyFans
+  // chat joins the AI transcript. Keep the env at the default, like
+  // AI_TRANSCRIPT_FRESH_UNION_MODE: the PATCH lane owns transitions (stepwise
+  // up through shadow, any rollback), and clearing the override resolves to off.
+  AI_LIVE_TEXT_CONTEXT_MODE: z.enum(["off", "shadow", "serve"]).default("off"),
+  // chat-extension H-6: how many messages the full Recap of an OnlyFans chat
+  // may read: 1500 (the AI readers' cap for everyone) or 3000. Two values, not
+  // a range: 3000 is the readers' hard ceiling and the window the client
+  // offers. Keep the env at 1500; the owner raises it in the console.
+  AI_TRANSCRIPT_DEEP_MAX_ROWS: z.enum(["1500", "3000"]).default("1500"),
 });
 
 // Machine-readable list of every env var the schema understands. Exported so the
@@ -469,71 +384,15 @@ export interface AppConfig {
    *  failures, and attempts whose DB telemetry row was lost are printed. */
   syncHttpAttemptTraceStdout?: boolean;
   fanslyDefaultDelayMs: number;
-  /** @deprecated Ignored: the per-page send guard is the only pacing of a
-   *  Fansly request (plan §2.3). Parsed so the production env still boots;
-   *  removed with the legacy engine (plan §14, step 4). */
-  followerPageDelayMs: number;
-  /** @deprecated Ignored, like {@link AppConfig.followerPageDelayMs}. */
-  fanslyDmConversationsDelayMs: number;
-  /** @deprecated Ignored, like {@link AppConfig.followerPageDelayMs}. */
-  fanslyDmMessagesDelayMs: number;
-  fanslyDmHeadCatchupPageAllowlist?: string;
-  fanslyDmShadowPageAllowlist?: string;
-  /** @deprecated Retired with the legacy WebSocket receiver (step 4, S4-12):
-   *  every Fansly page's socket runs in the Sync Engine and nothing reads it.
-   *  Parsed so an env that sets it boots; removed in S4-26. */
-  fanslyWsCaptureEnabled?: boolean;
-  /** @deprecated Retired, like {@link AppConfig.fanslyWsCaptureEnabled}. */
-  fanslyWsCapturePageAllowlist?: string;
   /** Pages whose chatter routes and AI kernel context read the live overlay
    * (CSV of labels, `all` or `none`); see fansly-live-overlay-read.ts. */
   fanslyLiveOverlayReadPages?: string;
-  /** @deprecated Retired, ignored: nothing reads it since the legacy Fansly
-   *  money lanes were deleted (step 4, S4-16). Parsed so an env that sets it
-   *  still boots; removed with its production override in S4-26. */
-  fanslyFanEarningsRecoveryEnabled?: boolean;
-  /** @deprecated Retired, ignored, like {@link AppConfig.fanslyFanEarningsRecoveryEnabled}. */
-  fanslyFanEarningsRecoveryPageAllowlist?: string;
-  /** @deprecated Retired, ignored, like {@link AppConfig.fanslyFanEarningsRecoveryEnabled}. */
-  fanslyFanEarningsTargetsEnabled?: boolean;
-  /** @deprecated Retired, ignored, like {@link AppConfig.fanslyFanEarningsRecoveryEnabled}. */
-  fanslyFanEarningsTargetsPageAllowlist?: string;
-  /** @deprecated Retired, ignored, like {@link AppConfig.fanslyFanEarningsRecoveryEnabled}. */
-  fanslyFanEarningsTargetsDailyAttemptLimit?: number;
-  /** @deprecated Retired, ignored, like {@link AppConfig.fanslyFanEarningsRecoveryEnabled}. */
-  fanslyFanEarningsRosterMaxAgeHours?: number;
-  /** @deprecated Ignored since step 4: the legacy followers reconcile that read
-   *  it is deleted. Parsed so an env that sets it boots; removed in step 4. */
-  fanslyFollowersSettlementReuseEnabled?: boolean;
-  /** @deprecated Ignored, like {@link AppConfig.fanslyFollowersSettlementReuseEnabled}. */
-  fanslyFollowersSettlementReusePageAllowlist?: string;
-  fanslyDmBoundedEnabled?: boolean;
-  fanslyDmBoundedPageAllowlist?: string;
-  fanslyDmBoundedPolicies?: string;
-  fanslyWsHintsEnabled?: boolean;
-  fanslyWsHintsPageAllowlist?: string;
-  fanslyWsHintsTypeAllowlist?: string;
-  fanslyWsHintsPolicies?: string;
-  /** @deprecated Retired, ignored, like {@link AppConfig.fanslyFanEarningsRecoveryEnabled}. */
-  fanslyFanEarningsShadowPageAllowlist?: string;
-  fanslyDmDeepBackfillEnabled?: boolean;
-  fanslyDmDeepBackfillMaxRequestsPerRun?: number;
-  fanslyDmDeepBackfillLiveRequestsPerDeep?: number;
-  fanslyDmDeepBackfillContinuationDelayMs?: number;
-  fanslyDmDeepBackfillContinuationJitterMs?: number;
   onlyFansDefaultDelayMs: number;
-  /** @deprecated Retired at step 4 (S4-19) with its boot invariant; nothing reads it. */
-  syncSharedRateLimitEnabled: boolean;
   egressPacerMode: "off" | "shadow" | "enforce";
   lakeDir: string;
   syncPageExecutorConcurrency: number;
-  /** @deprecated Retired, ignored, like {@link AppConfig.fanslyFanEarningsRecoveryEnabled}. */
-  transactionLookbackDays: number;
-  /** @deprecated Retired, ignored, like {@link AppConfig.fanslyFanEarningsRecoveryEnabled}. */
-  transactionRescanCapDays: number;
   syncObservabilityRetentionDays: number;
   healthSyncLightMaxAgeMinutes: number;
-  healthSyncFollowerMaxAgeMinutes: number;
   healthSyncMonitoringToken: string | null;
   telegramBotToken: string | null;
   telegramChatId: string | null;
@@ -554,63 +413,8 @@ export interface AppConfig {
   ofapiDmProjectionEnabled?: boolean;
   ofapiDmSyncEnabled?: boolean;
   ofapiDmColdArchiveEnabled?: boolean;
-  /** @deprecated Retired at step 4 with the legacy ramp gate of fan_earnings and purchase_history; nothing reads it. */
-  fanslyFanEarningsSyncEnabled?: boolean;
-  /** @deprecated Retired, ignored, like {@link AppConfig.fanslyFanEarningsRecoveryEnabled}. */
-  fanslyPurchaseHistorySyncEnabled?: boolean;
-  /** @deprecated Retired at step 4 with the legacy ramp gate of fan_earnings and purchase_history; nothing reads it. */
-  fanslyNewStreamPageAllowlist?: string;
-  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
-  fanslyStatsSnapshotSyncEnabled?: boolean;
-  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
-  fanslyStatsSnapshotPageAllowlist?: string;
-  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
-  fanslyStatsSnapshotDailyCallBudget?: number;
-  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
-  fanslyNotificationsSyncEnabled?: boolean;
-  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
-  fanslyNotificationsPageAllowlist?: string;
-  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
-  fanslyNotificationsDailyCallBudget?: number;
-  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
-  fanslyCatalogSyncEnabled?: boolean;
-  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
-  fanslyCatalogPageAllowlist?: string;
-  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
-  fanslyCatalogDailyCallBudget?: number;
-  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
-  fanslyPostRepliesSyncEnabled?: boolean;
-  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
-  fanslyPostRepliesPageAllowlist?: string;
-  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
-  fanslyRepliesDailyCallBudget?: number;
   /** How stale a post's last walk must be before the round-robin re-reads it. */
   fanslyRepliesRewalkCycleDays?: number;
-  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
-  fanslyPayoutsSyncEnabled?: boolean;
-  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
-  fanslyPayoutsPageAllowlist?: string;
-  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
-  fanslyPayoutsDailyCallBudget?: number;
-  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
-  fanslyMediaStatsSyncEnabled?: boolean;
-  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
-  fanslyMediaStatsPageAllowlist?: string;
-  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
-  fanslyMediaStatsDailyCallBudget?: number;
-  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
-  fanslyMediaStatsLongTailCycleDays?: number;
-  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
-  fanslyPostEngagementRefreshEnabled?: boolean;
-  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
-  fanslyPostEngagementDailyCallBudget?: number;
-  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
-  fanslyStatsHourlyEnabled?: boolean;
-  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
-  fanslyStatsHourlyBackfillMaxDays?: number;
-  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
-  fanslyBackfillContinuationDelayMs?: number;
-  fanslyDeepBackfillIgnoreRetentionLimit?: boolean;
   ofapiDmColdArchiveRetentionDays?: number;
   ofapiRestDelayMs?: number;
   ofapiQueuedCommandTtlMs?: number;
@@ -715,15 +519,6 @@ export interface AppConfig {
   aiMediaDescribeModelMedia?: "teasers" | "teasers+free";
   /** The worker describes due rows within seconds (1 s loop), not per minute. */
   aiMediaDescribeLoopEnabled?: boolean;
-  /** Fansly: one head read per fan media WS signal (own budget, default off). */
-  aiMediaDescribeFanslyAcceleratorEnabled?: boolean;
-  /** Agency-wide accelerator reads per rolling 24 h. */
-  aiMediaDescribeFanslyAcceleratorDailyLimit?: number;
-  /** @deprecated Retired with the AI media fast lane (step 4, S4-12): nothing
-   *  reads it. Parsed so an env that sets it boots; removed in S4-26. */
-  aiMediaDescribeFanslyFastLaneMode?: "off" | "shadow" | "serve";
-  /** @deprecated Retired, like {@link AppConfig.aiMediaDescribeFanslyFastLaneMode}. */
-  aiMediaDescribeFanslyFastLanePages?: string;
   openrouterApiKey?: string | null;
   // Agent Read Plane (slice 0a) — all live-wired, all inert by default.
   /** off = 503 on every agent route; read_only = serve with absenceProvable pinned false; full. */
@@ -734,12 +529,6 @@ export interface AppConfig {
   agentSearchBackend?: "off" | "fts" | "fts_trgm";
   /** off = hydration 503; request_only = state only; dispatch = executor runs. */
   agentHydrationMode?: "off" | "request_only" | "dispatch";
-  /** @deprecated Ignored: the hydration auto-approve policy (decision #202) is
-   *  gone since step 4 (S4-15). Parsed so an env that sets it boots; removed
-   *  with the other retired Fansly keys (S4-26). */
-  agentHydrationAutoApproveMode?: "off" | "shadow" | "enforce";
-  /** @deprecated Ignored, like {@link AppConfig.agentHydrationAutoApproveMode}. */
-  agentHydrationAutoDailyCallBudget?: number;
   /** The value served in `exportPolicy`; flipped only after the fleet re-vendors. */
   agentExportPolicyValue?: AgentExportPolicyValue;
   /** Fansly local replay of parse_version-0 observations: off | shadow | on. */
@@ -763,6 +552,10 @@ export interface AppConfig {
   chatExtensionHostBindings?: string;
   /** JSON array: the admitted preview-send receipt profiles (X8); [] = none. */
   chatExtensionPreviewSendReceiptProfiles?: string;
+  /** chat-extension H-4c: what the AI lane does with a client's fresh text (live-wired). */
+  aiLiveTextContextMode?: "off" | "shadow" | "serve";
+  /** chat-extension H-6: the row cap of the full Recap's transcript read (live-wired). */
+  aiTranscriptDeepMaxRows?: "1500" | "3000";
 }
 
 function hasConfiguredValue(value: string | undefined) {
@@ -808,36 +601,104 @@ function resolveServiceEgressProxyTuple(input: {
   return { url: url!, username: username!, password: password! };
 }
 
-export function resolveFanslyDefaultDelayEnvSource(env: NodeJS.ProcessEnv = process.env) {
-  if (hasConfiguredValue(env.FANSLY_DEFAULT_DELAY_MS)) {
-    return "FANSLY_DEFAULT_DELAY_MS" as const;
-  }
+/** The pause aliases retired with the legacy Fansly engine (step 4). They fed
+ *  `fanslyDefaultDelayMs` while `FANSLY_DEFAULT_DELAY_MS` was unset, so an
+ *  environment that still sets the pause only through one of them fails the
+ *  boot (see `loadConfig`) rather than have the owner's pause become the
+ *  default behind their back. */
+const RETIRED_FANSLY_PAUSE_ALIAS_ENV_KEYS = [
+  "FANSLY_GLOBAL_DELAY_MS",
+  "FANSLY_ACCOUNT_LOOKUP_DELAY_MS",
+] as const;
 
-  if (hasConfiguredValue(env.FANSLY_GLOBAL_DELAY_MS)) {
-    return "FANSLY_GLOBAL_DELAY_MS" as const;
-  }
-
-  if (hasConfiguredValue(env.FANSLY_ACCOUNT_LOOKUP_DELAY_MS)) {
-    return "FANSLY_ACCOUNT_LOOKUP_DELAY_MS" as const;
-  }
-
-  return null;
-}
-
-/** The legacy endpoint pauses (plan §2.3). Their env vars are still parsed —
- *  the production env sets them — but nothing reads the values: every Fansly
- *  request is paced only by its page's send guard (`fanslyDefaultDelayMs` ×
- *  (1 + 0–20 %) from the previous completion). Removing a key and changing
- *  traffic are separate steps (plan §14), so the keys stay until step 4. */
-export const IGNORED_FANSLY_ENDPOINT_PAUSE_ENV_KEYS = [
+/** Env vars of the config keys removed with the legacy Fansly engine (step 4,
+ *  plan §14). The schema no longer names them, so a value an environment still
+ *  sets is dropped unparsed and the process boots (the two pause aliases above
+ *  apart); the api, the worker and the scheduler name the ones they find once
+ *  at start (`createAppContext`), until the line leaves the env. Nothing else
+ *  reads this list: every Fansly request is the Sync Engine's, paced by
+ *  `FANSLY_DEFAULT_DELAY_MS` and budgeted by the route table in code. */
+export const RETIRED_FANSLY_ENV_KEYS = [
+  // The pause aliases and the endpoint pauses (plan §2.3).
+  ...RETIRED_FANSLY_PAUSE_ALIAS_ENV_KEYS,
   "FOLLOWER_PAGE_DELAY_MS",
   "FANSLY_DM_CONVERSATIONS_DELAY_MS",
   "FANSLY_DM_MESSAGES_DELAY_MS",
+  // The legacy executor's pacing and windows.
+  "SYNC_SHARED_RATE_LIMIT_ENABLED",
+  "FANSLY_BACKFILL_CONTINUATION_DELAY_MS",
+  "TRANSACTION_LOOKBACK_DAYS",
+  "TRANSACTION_RESCAN_CAP_DAYS",
+  "HEALTH_SYNC_FOLLOWER_MAX_AGE_MINUTES",
+  // The legacy WebSocket receiver and its hints.
+  "FANSLY_WS_CAPTURE_ENABLED",
+  "FANSLY_WS_CAPTURE_PAGE_ALLOWLIST",
+  "FANSLY_WS_HINTS_ENABLED",
+  "FANSLY_WS_HINTS_PAGE_ALLOWLIST",
+  "FANSLY_WS_HINTS_TYPE_ALLOWLIST",
+  "FANSLY_WS_HINTS_POLICIES",
+  // The legacy DM lanes.
+  "FANSLY_DM_HEAD_CATCHUP_PAGE_ALLOWLIST",
+  "FANSLY_DM_SHADOW_PAGE_ALLOWLIST",
+  "FANSLY_DM_BOUNDED_ENABLED",
+  "FANSLY_DM_BOUNDED_PAGE_ALLOWLIST",
+  "FANSLY_DM_BOUNDED_POLICIES",
+  "FANSLY_DM_DEEP_BACKFILL_ENABLED",
+  "FANSLY_DM_DEEP_BACKFILL_MAX_REQUESTS_PER_RUN",
+  "FANSLY_DM_DEEP_BACKFILL_LIVE_REQUESTS_PER_DEEP",
+  "FANSLY_DM_DEEP_BACKFILL_CONTINUATION_DELAY_MS",
+  "FANSLY_DM_DEEP_BACKFILL_CONTINUATION_JITTER_MS",
+  "FANSLY_DEEP_BACKFILL_IGNORE_RETENTION_LIMIT",
+  // The legacy money and audience lanes.
+  "FANSLY_FAN_EARNINGS_SYNC_ENABLED",
+  "FANSLY_FAN_EARNINGS_SHADOW_PAGE_ALLOWLIST",
+  "FANSLY_FAN_EARNINGS_RECOVERY_ENABLED",
+  "FANSLY_FAN_EARNINGS_RECOVERY_PAGE_ALLOWLIST",
+  "FANSLY_FAN_EARNINGS_TARGETS_ENABLED",
+  "FANSLY_FAN_EARNINGS_TARGETS_PAGE_ALLOWLIST",
+  "FANSLY_FAN_EARNINGS_TARGETS_DAILY_ATTEMPT_LIMIT",
+  "FANSLY_FAN_EARNINGS_ROSTER_MAX_AGE_HOURS",
+  "FANSLY_PURCHASE_HISTORY_SYNC_ENABLED",
+  "FANSLY_NEW_STREAM_PAGE_ALLOWLIST",
+  "FANSLY_FOLLOWERS_SETTLEMENT_REUSE_ENABLED",
+  "FANSLY_FOLLOWERS_SETTLEMENT_REUSE_PAGE_ALLOWLIST",
+  // The legacy content lanes: their flags, page allowlists and daily budgets.
+  "FANSLY_STATS_SNAPSHOT_SYNC_ENABLED",
+  "FANSLY_STATS_SNAPSHOT_PAGE_ALLOWLIST",
+  "FANSLY_STATS_SNAPSHOT_DAILY_CALL_BUDGET",
+  "FANSLY_STATS_HOURLY_ENABLED",
+  "FANSLY_STATS_HOURLY_BACKFILL_MAX_DAYS",
+  "FANSLY_NOTIFICATIONS_SYNC_ENABLED",
+  "FANSLY_NOTIFICATIONS_PAGE_ALLOWLIST",
+  "FANSLY_NOTIFICATIONS_DAILY_CALL_BUDGET",
+  "FANSLY_CATALOG_SYNC_ENABLED",
+  "FANSLY_CATALOG_PAGE_ALLOWLIST",
+  "FANSLY_CATALOG_DAILY_CALL_BUDGET",
+  "FANSLY_POST_REPLIES_SYNC_ENABLED",
+  "FANSLY_POST_REPLIES_PAGE_ALLOWLIST",
+  "FANSLY_REPLIES_DAILY_CALL_BUDGET",
+  "FANSLY_PAYOUTS_SYNC_ENABLED",
+  "FANSLY_PAYOUTS_PAGE_ALLOWLIST",
+  "FANSLY_PAYOUTS_DAILY_CALL_BUDGET",
+  "FANSLY_MEDIA_STATS_SYNC_ENABLED",
+  "FANSLY_MEDIA_STATS_PAGE_ALLOWLIST",
+  "FANSLY_MEDIA_STATS_DAILY_CALL_BUDGET",
+  "FANSLY_MEDIA_STATS_LONG_TAIL_CYCLE_DAYS",
+  "FANSLY_POST_ENGAGEMENT_REFRESH_ENABLED",
+  "FANSLY_POST_ENGAGEMENT_DAILY_CALL_BUDGET",
+  // The AI media describer's Fansly accelerator and fast lane.
+  "AI_MEDIA_DESCRIBE_FANSLY_ACCELERATOR_ENABLED",
+  "AI_MEDIA_DESCRIBE_FANSLY_ACCELERATOR_DAILY_LIMIT",
+  "AI_MEDIA_DESCRIBE_FANSLY_FAST_LANE_MODE",
+  "AI_MEDIA_DESCRIBE_FANSLY_FAST_LANE_PAGES",
+  // The Fansly hydration autopilot.
+  "AGENT_HYDRATION_AUTO_APPROVE_MODE",
+  "AGENT_HYDRATION_AUTO_DAILY_CALL_BUDGET",
 ] as const;
 
-/** The ignored endpoint pause env vars this environment sets (boot warning). */
-export function listIgnoredFanslyEndpointPauseEnv(env: NodeJS.ProcessEnv = process.env) {
-  return IGNORED_FANSLY_ENDPOINT_PAUSE_ENV_KEYS.filter((key) => hasConfiguredValue(env[key]));
+/** The retired Fansly env vars this environment still sets (boot warning). */
+export function listRetiredFanslyEnv(env: NodeJS.ProcessEnv = process.env) {
+  return RETIRED_FANSLY_ENV_KEYS.filter((key) => hasConfiguredValue(env[key]));
 }
 
 export function loadConfig(
@@ -861,17 +722,25 @@ export function loadConfig(
     encryptionKey,
   );
 
-  const fanslyDefaultDelayMs =
-    parsed.FANSLY_DEFAULT_DELAY_MS ??
-    parsed.FANSLY_GLOBAL_DELAY_MS ??
-    parsed.FANSLY_ACCOUNT_LOOKUP_DELAY_MS ??
-    2500;
+  if (parsed.FANSLY_DEFAULT_DELAY_MS === undefined) {
+    // The retired aliases set the pause while this name was unset. Dropping one
+    // like any other retired name would move the page pause to the default
+    // without the owner's act, so the boot stops and names the fix.
+    const retiredAlias = RETIRED_FANSLY_PAUSE_ALIAS_ENV_KEYS.find((key) => hasConfiguredValue(env[key]));
+    if (retiredAlias !== undefined) {
+      throw new Error(
+        `${retiredAlias} is retired and no longer sets the Fansly pause; `
+          + `set FANSLY_DEFAULT_DELAY_MS=${env[retiredAlias]!.trim()} instead and remove ${retiredAlias}`,
+      );
+    }
+  }
+  const fanslyDefaultDelayMs = parsed.FANSLY_DEFAULT_DELAY_MS ?? 2500;
   if (fanslyDefaultDelayMs < FANSLY_PAUSE_MIN_MS || fanslyDefaultDelayMs > FANSLY_PAUSE_MAX_MS) {
     // Fail the boot loudly: a silently raised value would hide a wrong env, and a
     // lowered one would break the owner's pace rule for every Fansly page.
     throw new Error(
       `FANSLY_DEFAULT_DELAY_MS must be between ${FANSLY_PAUSE_MIN_MS} and ${FANSLY_PAUSE_MAX_MS} ms `
-        + `(got ${fanslyDefaultDelayMs} from ${resolveFanslyDefaultDelayEnvSource(env) ?? "the default"}); `
+        + `(got ${fanslyDefaultDelayMs}); `
         + "the owner rule is at most one request of a Fansly page every 2 s, and going lower is a code change",
     );
   }
@@ -896,45 +765,13 @@ export function loadConfig(
     syncHttpTraceFile: parsed.SYNC_HTTP_TRACE_FILE ?? null,
     syncHttpAttemptTraceStdout: parsed.SYNC_HTTP_ATTEMPT_TRACE_STDOUT,
     fanslyDefaultDelayMs,
-    followerPageDelayMs: parsed.FOLLOWER_PAGE_DELAY_MS,
-    fanslyDmConversationsDelayMs: parsed.FANSLY_DM_CONVERSATIONS_DELAY_MS,
-    fanslyDmMessagesDelayMs: parsed.FANSLY_DM_MESSAGES_DELAY_MS,
-    fanslyDmHeadCatchupPageAllowlist: parsed.FANSLY_DM_HEAD_CATCHUP_PAGE_ALLOWLIST,
-    fanslyDmShadowPageAllowlist: parsed.FANSLY_DM_SHADOW_PAGE_ALLOWLIST,
-    fanslyWsCaptureEnabled: parsed.FANSLY_WS_CAPTURE_ENABLED,
-    fanslyWsCapturePageAllowlist: parsed.FANSLY_WS_CAPTURE_PAGE_ALLOWLIST,
     fanslyLiveOverlayReadPages: parsed.FANSLY_LIVE_OVERLAY_READ_PAGES,
-    fanslyFanEarningsRecoveryEnabled: parsed.FANSLY_FAN_EARNINGS_RECOVERY_ENABLED,
-    fanslyFanEarningsRecoveryPageAllowlist: parsed.FANSLY_FAN_EARNINGS_RECOVERY_PAGE_ALLOWLIST,
-    fanslyFanEarningsTargetsEnabled: parsed.FANSLY_FAN_EARNINGS_TARGETS_ENABLED,
-    fanslyFanEarningsTargetsPageAllowlist: parsed.FANSLY_FAN_EARNINGS_TARGETS_PAGE_ALLOWLIST,
-    fanslyFanEarningsTargetsDailyAttemptLimit: parsed.FANSLY_FAN_EARNINGS_TARGETS_DAILY_ATTEMPT_LIMIT,
-    fanslyFanEarningsRosterMaxAgeHours: parsed.FANSLY_FAN_EARNINGS_ROSTER_MAX_AGE_HOURS,
-    fanslyFollowersSettlementReuseEnabled: parsed.FANSLY_FOLLOWERS_SETTLEMENT_REUSE_ENABLED,
-    fanslyFollowersSettlementReusePageAllowlist: parsed.FANSLY_FOLLOWERS_SETTLEMENT_REUSE_PAGE_ALLOWLIST,
-    fanslyDmBoundedEnabled: parsed.FANSLY_DM_BOUNDED_ENABLED,
-    fanslyDmBoundedPageAllowlist: parsed.FANSLY_DM_BOUNDED_PAGE_ALLOWLIST,
-    fanslyDmBoundedPolicies: parsed.FANSLY_DM_BOUNDED_POLICIES,
-    fanslyWsHintsEnabled: parsed.FANSLY_WS_HINTS_ENABLED,
-    fanslyWsHintsPageAllowlist: parsed.FANSLY_WS_HINTS_PAGE_ALLOWLIST,
-    fanslyWsHintsTypeAllowlist: parsed.FANSLY_WS_HINTS_TYPE_ALLOWLIST,
-    fanslyWsHintsPolicies: parsed.FANSLY_WS_HINTS_POLICIES,
-    fanslyFanEarningsShadowPageAllowlist: parsed.FANSLY_FAN_EARNINGS_SHADOW_PAGE_ALLOWLIST,
-    fanslyDmDeepBackfillEnabled: parsed.FANSLY_DM_DEEP_BACKFILL_ENABLED,
-    fanslyDmDeepBackfillMaxRequestsPerRun: parsed.FANSLY_DM_DEEP_BACKFILL_MAX_REQUESTS_PER_RUN,
-    fanslyDmDeepBackfillLiveRequestsPerDeep: parsed.FANSLY_DM_DEEP_BACKFILL_LIVE_REQUESTS_PER_DEEP,
-    fanslyDmDeepBackfillContinuationDelayMs: parsed.FANSLY_DM_DEEP_BACKFILL_CONTINUATION_DELAY_MS,
-    fanslyDmDeepBackfillContinuationJitterMs: parsed.FANSLY_DM_DEEP_BACKFILL_CONTINUATION_JITTER_MS,
     onlyFansDefaultDelayMs: parsed.ONLYFANS_DEFAULT_DELAY_MS,
-    syncSharedRateLimitEnabled: parsed.SYNC_SHARED_RATE_LIMIT_ENABLED,
     egressPacerMode: parsed.EGRESS_PACER_MODE,
     lakeDir: parsed.LAKE_DIR,
     syncPageExecutorConcurrency: parsed.SYNC_PAGE_EXECUTOR_CONCURRENCY,
-    transactionLookbackDays: parsed.TRANSACTION_LOOKBACK_DAYS,
-    transactionRescanCapDays: parsed.TRANSACTION_RESCAN_CAP_DAYS,
     syncObservabilityRetentionDays: parsed.SYNC_OBSERVABILITY_RETENTION_DAYS,
     healthSyncLightMaxAgeMinutes: parsed.HEALTH_SYNC_LIGHT_MAX_AGE_MINUTES,
-    healthSyncFollowerMaxAgeMinutes: parsed.HEALTH_SYNC_FOLLOWER_MAX_AGE_MINUTES,
     healthSyncMonitoringToken: parsed.HEALTH_SYNC_MONITORING_TOKEN ?? null,
     telegramBotToken,
     telegramChatId,
@@ -953,35 +790,7 @@ export function loadConfig(
     ofapiDmProjectionEnabled: parsed.OFAPI_DM_PROJECTION_ENABLED,
     ofapiDmSyncEnabled: parsed.OFAPI_DM_SYNC_ENABLED,
     ofapiDmColdArchiveEnabled: parsed.OFAPI_DM_COLD_ARCHIVE_ENABLED,
-    fanslyFanEarningsSyncEnabled: parsed.FANSLY_FAN_EARNINGS_SYNC_ENABLED,
-    fanslyPurchaseHistorySyncEnabled: parsed.FANSLY_PURCHASE_HISTORY_SYNC_ENABLED,
-    fanslyNewStreamPageAllowlist: parsed.FANSLY_NEW_STREAM_PAGE_ALLOWLIST,
-    fanslyStatsSnapshotSyncEnabled: parsed.FANSLY_STATS_SNAPSHOT_SYNC_ENABLED,
-    fanslyStatsSnapshotPageAllowlist: parsed.FANSLY_STATS_SNAPSHOT_PAGE_ALLOWLIST,
-    fanslyStatsSnapshotDailyCallBudget: parsed.FANSLY_STATS_SNAPSHOT_DAILY_CALL_BUDGET,
-    fanslyNotificationsSyncEnabled: parsed.FANSLY_NOTIFICATIONS_SYNC_ENABLED,
-    fanslyNotificationsPageAllowlist: parsed.FANSLY_NOTIFICATIONS_PAGE_ALLOWLIST,
-    fanslyNotificationsDailyCallBudget: parsed.FANSLY_NOTIFICATIONS_DAILY_CALL_BUDGET,
-    fanslyCatalogSyncEnabled: parsed.FANSLY_CATALOG_SYNC_ENABLED,
-    fanslyCatalogPageAllowlist: parsed.FANSLY_CATALOG_PAGE_ALLOWLIST,
-    fanslyCatalogDailyCallBudget: parsed.FANSLY_CATALOG_DAILY_CALL_BUDGET,
-    fanslyPostRepliesSyncEnabled: parsed.FANSLY_POST_REPLIES_SYNC_ENABLED,
-    fanslyPostRepliesPageAllowlist: parsed.FANSLY_POST_REPLIES_PAGE_ALLOWLIST,
-    fanslyRepliesDailyCallBudget: parsed.FANSLY_REPLIES_DAILY_CALL_BUDGET,
     fanslyRepliesRewalkCycleDays: parsed.FANSLY_REPLIES_REWALK_CYCLE_DAYS,
-    fanslyPayoutsSyncEnabled: parsed.FANSLY_PAYOUTS_SYNC_ENABLED,
-    fanslyPayoutsPageAllowlist: parsed.FANSLY_PAYOUTS_PAGE_ALLOWLIST,
-    fanslyPayoutsDailyCallBudget: parsed.FANSLY_PAYOUTS_DAILY_CALL_BUDGET,
-    fanslyMediaStatsSyncEnabled: parsed.FANSLY_MEDIA_STATS_SYNC_ENABLED,
-    fanslyMediaStatsPageAllowlist: parsed.FANSLY_MEDIA_STATS_PAGE_ALLOWLIST,
-    fanslyMediaStatsDailyCallBudget: parsed.FANSLY_MEDIA_STATS_DAILY_CALL_BUDGET,
-    fanslyMediaStatsLongTailCycleDays: parsed.FANSLY_MEDIA_STATS_LONG_TAIL_CYCLE_DAYS,
-    fanslyPostEngagementRefreshEnabled: parsed.FANSLY_POST_ENGAGEMENT_REFRESH_ENABLED,
-    fanslyPostEngagementDailyCallBudget: parsed.FANSLY_POST_ENGAGEMENT_DAILY_CALL_BUDGET,
-    fanslyStatsHourlyEnabled: parsed.FANSLY_STATS_HOURLY_ENABLED,
-    fanslyStatsHourlyBackfillMaxDays: parsed.FANSLY_STATS_HOURLY_BACKFILL_MAX_DAYS,
-    fanslyBackfillContinuationDelayMs: parsed.FANSLY_BACKFILL_CONTINUATION_DELAY_MS,
-    fanslyDeepBackfillIgnoreRetentionLimit: parsed.FANSLY_DEEP_BACKFILL_IGNORE_RETENTION_LIMIT,
     ofapiDmColdArchiveRetentionDays: parsed.OFAPI_DM_COLD_ARCHIVE_RETENTION_DAYS,
     ofapiRestDelayMs: parsed.OFAPI_REST_DELAY_MS,
     ofapiQueuedCommandTtlMs: parsed.OFAPI_QUEUED_COMMAND_TTL_MS,
@@ -1060,16 +869,10 @@ export function loadConfig(
     aiMediaDescribeLiveChatOnly: parsed.AI_MEDIA_DESCRIBE_LIVE_CHAT_ONLY,
     aiMediaDescribeModelMedia: parsed.AI_MEDIA_DESCRIBE_MODEL_MEDIA,
     aiMediaDescribeLoopEnabled: parsed.AI_MEDIA_DESCRIBE_LOOP_ENABLED,
-    aiMediaDescribeFanslyAcceleratorEnabled: parsed.AI_MEDIA_DESCRIBE_FANSLY_ACCELERATOR_ENABLED,
-    aiMediaDescribeFanslyAcceleratorDailyLimit: parsed.AI_MEDIA_DESCRIBE_FANSLY_ACCELERATOR_DAILY_LIMIT,
-    aiMediaDescribeFanslyFastLaneMode: parsed.AI_MEDIA_DESCRIBE_FANSLY_FAST_LANE_MODE,
-    aiMediaDescribeFanslyFastLanePages: parsed.AI_MEDIA_DESCRIBE_FANSLY_FAST_LANE_PAGES,
     agentReadPlaneMode: parsed.AGENT_READ_PLANE_MODE,
     agentObservationsEnabled: parsed.AGENT_OBSERVATIONS_ENABLED,
     agentSearchBackend: parsed.AGENT_SEARCH_BACKEND,
     agentHydrationMode: parsed.AGENT_HYDRATION_MODE,
-    agentHydrationAutoApproveMode: parsed.AGENT_HYDRATION_AUTO_APPROVE_MODE,
-    agentHydrationAutoDailyCallBudget: parsed.AGENT_HYDRATION_AUTO_DAILY_CALL_BUDGET,
     agentExportPolicyValue: parsed.AGENT_EXPORT_POLICY_VALUE,
     fanslyReplayMode: parsed.FANSLY_REPLAY_MODE,
     retentionTieringEnabled: parsed.RETENTION_TIERING_ENABLED,
@@ -1081,6 +884,8 @@ export function loadConfig(
     chatExtensionMinVersion: parsed.CHAT_EXTENSION_MIN_VERSION,
     chatExtensionHostBindings: parsed.CHAT_EXTENSION_HOST_BINDINGS,
     chatExtensionPreviewSendReceiptProfiles: parsed.CHAT_EXTENSION_PREVIEW_SEND_RECEIPT_PROFILES,
+    aiLiveTextContextMode: parsed.AI_LIVE_TEXT_CONTEXT_MODE,
+    aiTranscriptDeepMaxRows: parsed.AI_TRANSCRIPT_DEEP_MAX_ROWS,
   };
 }
 

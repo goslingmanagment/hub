@@ -14,8 +14,8 @@ export function buildFypMediaViewSummary(rows: readonly FypMediaViewRow[]) {
   let served = false;
 
   for (const row of rows) {
-    const lane = row.sourceLabel === "fyp" ? "fyp" : row.sourceLabel === "direct" ? "direct" : null;
-    if (lane === null || row.views === null || row.previewViews === null) {
+    const source = row.sourceLabel === "fyp" ? "fyp" : row.sourceLabel === "direct" ? "direct" : null;
+    if (source === null || row.views === null || row.previewViews === null) {
       // Fansly's widget uses BOTH counters. If either is absent, the combined
       // count is unknown; treating the missing member as zero would invent it.
       continue;
@@ -24,9 +24,9 @@ export function buildFypMediaViewSummary(rows: readonly FypMediaViewRow[]) {
     served = true;
     const bucket = buckets.get(row.bucketStart)
       ?? { bucketStart: row.bucketStart, fyp: 0, direct: 0 };
-    bucket[lane] += combinedViews;
+    bucket[source] += combinedViews;
     buckets.set(row.bucketStart, bucket);
-    if (lane === "fyp") {
+    if (source === "fyp") {
       fypTotal += combinedViews;
     } else {
       directTotal += combinedViews;

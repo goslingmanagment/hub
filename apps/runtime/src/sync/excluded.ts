@@ -115,7 +115,7 @@ export async function requestExcludedChatProbes(
       const upsert = demandToUpsert(
         { resource: EXCLUDED_CHAT_PROBE_KEY, subject: thread.platformConversationId, params, demand: { reason: "owner_probe" } },
         spec,
-        { pageId: page.pageId, shadow: false, now: new Date(), page },
+        { pageId: page.pageId, now: new Date(), page },
       );
       if (upsert === null) {
         throw new SyncOwnerLeverError(`${EXCLUDED_CHAT_PROBE_KEY} is switched off on ${input.pageLabel} (sync page override)`);

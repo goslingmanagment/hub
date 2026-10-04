@@ -132,7 +132,7 @@ async function holdAuth(page: HarnessPage, failedGeneration: string): Promise<vo
 }
 
 async function urgent(pageId: number, subject: string): Promise<void> {
-  await upsertDemand(db(), { pageId, shadow: false, resource: HARNESS_KEY.urgent, subject, kind: "trigger", class: "urgent", demand: { reasons: ["test"] } });
+  await upsertDemand(db(), { pageId, resource: HARNESS_KEY.urgent, subject, kind: "trigger", class: "urgent", demand: { reasons: ["test"] } });
 }
 
 function appContext(): AppContext {

@@ -36,7 +36,7 @@ import { jsonParam, SYNC_INDEFINITE_UNTIL_MS, timestampParam, untilParam } from 
 //   1. this build: nothing reads the columns back, the mirror stays. Before
 //      it ships every page's rows are what its columns say — the hold-set
 //      release has acquired the page. `hold_step`, which that release neither
-//      reads nor writes, is dropped (0241);
+//      reads nor writes, is dropped (0243);
 //   2. the mirror and this file go: a rollback to (1) reads no column;
 //   3. the columns are dropped: a rollback to (2) neither reads nor writes
 //      them.

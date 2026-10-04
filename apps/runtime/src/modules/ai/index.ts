@@ -389,6 +389,9 @@ export async function pipeAiGatewaySse(
       if (stream.debugFrame) {
         writeFrame(stream.debugFrame);
       }
+      if (stream.contextFrame) {
+        writeFrame(stream.contextFrame);
+      }
       // Coach transport ceiling (spec §3/§7, option "c"): a coach answer whose
       // accumulated visible output crosses COACH_ANSWER_MAX_CHARS is aborted
       // mid-stream and errors WITHOUT a `done` frame, so the attempt is

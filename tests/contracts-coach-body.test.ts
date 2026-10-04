@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   AI_FEATURE_CLIENT_MEDIA_MAX_ITEMS,
   AI_FEATURE_STREAM_BODY_LIMIT_BYTES,
+  AI_KNOWN_FAN_MESSAGE_IDS_MAX,
+  AI_LIVE_TEXT_MAX_CHARS,
+  AI_LIVE_TEXT_MAX_ITEMS,
   COACH_ANSWER_MAX_CHARS,
   FAN_SILENCE_DAYS_MAX,
   routeSchemas,
@@ -125,11 +128,31 @@ describe("aiFeatureStream body limit vs the worst-case schema-valid body", () =>
     model: unit.repeat(100),
     draftText: unit.repeat(20_000),
     chatterQuestion: unit.repeat(2_000),
+    // Ids are digits only, so their worst case does not depend on `unit`:
+    // ten distinct 30-digit ids.
+    knownFanMessageIds: Array.from(
+      { length: AI_KNOWN_FAN_MESSAGE_IDS_MAX },
+      (_, index) => `${index + 1}`.padEnd(30, "9"),
+    ),
     // 20 x (2k question + 64k answer) = the 1.32M-code-unit bulk.
     coachHistory: Array.from({ length: 20 }, () => ({
       question: unit.repeat(2_000),
       answer: unit.repeat(COACH_ANSWER_MAX_CHARS),
     })),
+    // chat-extension H-4c (critic item 4): fresh text is 60 x 5k = 300k more
+    // code units. The service refuses it on Coach and beside clientContext, but
+    // only after this byte limit and the schema, and the schema cannot refuse
+    // it (the feature is a path parameter): the worst schema-valid body has
+    // both. Ids and instants are bounded and do not depend on `unit`.
+    liveTextContext: {
+      capturedAt: "2026-10-04T10:20:00.123456789+03:00",
+      items: Array.from({ length: AI_LIVE_TEXT_MAX_ITEMS }, (_, index) => ({
+        platformMessageId: `${index + 1}`.padEnd(30, "9"),
+        direction: "model",
+        occurredAt: "2026-10-04T10:20:00.123456789+03:00",
+        text: unit.repeat(AI_LIVE_TEXT_MAX_CHARS),
+      })),
+    },
     clientContext: {
       transcript: unit.repeat(300_000),
       messageCount: 5000,
@@ -160,7 +183,8 @@ describe("aiFeatureStream body limit vs the worst-case schema-valid body", () =>
   it("a 3-byte-UTF-8 (の) worst case is schema-valid and fits 12 MiB (>4 MiB)", () => {
     // "の" is 3 UTF-8 bytes and 1 UTF-16 code unit -- the byte-per-char worst
     // case among PRINTABLE chars for z.string().max() (astral chars are 2 code
-    // units -> 4 bytes = fewer bytes/unit, so they never dominate). ~5.06MB.
+    // units -> 4 bytes = fewer bytes/unit, so they never dominate). ~5.06MB
+    // before fresh text, ~5.97MB with it.
     const worstCase = maxBodyFilledWith("の");
     expect(schema.safeParse(worstCase).success, "の worst case must be schema-valid").toBe(true);
     const bytes = Buffer.byteLength(JSON.stringify(worstCase), "utf8");
@@ -173,13 +197,29 @@ describe("aiFeatureStream body limit vs the worst-case schema-valid body", () =>
     // Round-4 P2-4: with the control-char ban reverted, the TRUE worst case is a
     // lone surrogate. "\ud800" is a legal JSON string value (1 UTF-16 code unit,
     // so z.string().max() accepts it) that JSON.stringify escapes to a SIX-byte
-    // "\ud800" sequence -- ~1.69M units x 6 ~= 10.1MB. The former 8 MiB limit
-    // would have 413'd this contract-valid body; 12 MiB clears it with headroom.
+    // "\ud800" sequence -- ~1.69M units x 6 ~= 10.1MB of text (10.33MB with the
+    // media list and framing) before fresh text, 12.13MB with it. The former
+    // 8 MiB limit would have 413'd this contract-valid body; 12 MiB (12.58MB)
+    // still clears it, by about 0.45MB.
     const worstCase = maxBodyFilledWith("\ud800");
     expect(schema.safeParse(worstCase).success, "surrogate worst case must be schema-valid").toBe(true);
     const bytes = Buffer.byteLength(JSON.stringify(worstCase), "utf8");
     // Proves why 12 MiB was needed: the six-byte escape blows past the old 8 MiB.
     expect(bytes).toBeGreaterThan(8 * 1024 * 1024);
+    // A field added to the body after fresh text has to be added to
+    // maxBodyFilledWith above: this is the assertion that then says whether the
+    // limit must rise with it.
     expect(bytes).toBeLessThan(AI_FEATURE_STREAM_BODY_LIMIT_BYTES);
+  });
+
+  it("fresh text alone is 1.8MB of that worst case (critic item 4)", () => {
+    const withFreshText = maxBodyFilledWith("\ud800");
+    const { liveTextContext, ...withoutFreshText } = withFreshText;
+    expect(liveTextContext.items).toHaveLength(60);
+    const added = Buffer.byteLength(JSON.stringify(withFreshText), "utf8")
+      - Buffer.byteLength(JSON.stringify(withoutFreshText), "utf8");
+    // 60 x 5000 code units x 6 bytes, plus the ids, instants and JSON framing.
+    expect(added).toBeGreaterThan(60 * 5_000 * 6);
+    expect(added).toBeLessThan(60 * 5_000 * 6 + 16 * 1024);
   });
 });

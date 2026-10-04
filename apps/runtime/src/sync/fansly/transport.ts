@@ -20,11 +20,11 @@ import {
   CredentialsGenerationChangedError,
   UnsendableRequestError,
   type LivePageSocketRef,
+  type PageTransport,
   type SendHooks,
   type TransportOutcome,
 } from "../engine/ports.ts";
 import type { RequestPlan } from "../engine/resource.ts";
-import type { PageTransport } from "../engine/shadow.ts";
 import { decryptSyncWorkSecret } from "../requests/secret-params.ts";
 
 // The live page transport (design §3.10, S3-04 item 2, step-3 §3.5 items 3–4):

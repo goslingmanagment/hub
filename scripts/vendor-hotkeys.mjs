@@ -9,8 +9,10 @@
 // Usage: node scripts/vendor-hotkeys.mjs <target-dir> [--allow-dirty]
 //   e.g. node scripts/vendor-hotkeys.mjs ../fansly-chat/vendor/chatgoose-hotkeys
 //        node scripts/vendor-hotkeys.mjs ../onlyfans-chat/packages/chatgoose-hotkeys
+//        node scripts/vendor-hotkeys.mjs ../chat-extension/vendor/chatgoose-hotkeys
 //
-// Both clients must ship the same manifest sha256 from the same source commit.
+// ALL clients (fansly-chat, onlyfans-chat, chat-extension) must ship the same
+// manifest sha256 from the same source commit.
 
 import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";

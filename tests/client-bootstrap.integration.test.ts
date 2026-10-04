@@ -223,7 +223,10 @@ describe("GET /api/v1/client/bootstrap", () => {
       dispatchTicketSec: 10,
       previewSendReceiptProfiles: [],
     });
-    expect(body.capabilities).toEqual([]);
+    // What this hub serves today: the AI stream's context frame (H-4b), the
+    // fresh text of the open chat (H-4c), the shared recaps read (H-13) and the
+    // dossier save from a stored generation (H-5).
+    expect(body.capabilities).toEqual(["context-v1", "live-text-v1", "shared-recaps-v1", "recap-profile-v1"]);
 
     await trap!.assertNoOutbound();
   });

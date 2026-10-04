@@ -4,6 +4,8 @@ import { pageScopeFor } from "../../api/request-auth.ts";
 import { requireApiKeyUser } from "../../services/auth.ts";
 import { buildClientBootstrap } from "../../services/client-bootstrap.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
+import { registerClientProfileFromGenerationRoutes } from "./profile-from-generation.ts";
+import { registerClientRecapRoutes } from "./recaps.ts";
 
 /**
  * The chat extension's routes under `/api/v1/client/` (chat-extension
@@ -28,4 +30,7 @@ export function registerClientRoutes(server: ApiServer, ctx: ApiModuleContext) {
       tokenClient: principal.clientProfile ?? null,
     });
   });
+
+  registerClientRecapRoutes(server, ctx);
+  registerClientProfileFromGenerationRoutes(server, ctx);
 }

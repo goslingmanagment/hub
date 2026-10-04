@@ -1,7 +1,5 @@
-import { sql } from "drizzle-orm";
-
 import { upsertFans, upsertPageTopSpenders, type Database } from "@agency_hub_core/db";
-import { fanslyWireSpec, type FanslyEarningsAccount } from "@agency_hub_core/fansly";
+import type { FanslyEarningsAccount } from "@agency_hub_core/fansly";
 import { millsFromInteger } from "@agency_hub_core/shared";
 
 import { parseFanslyMetadataAccountCreatedAt } from "../../../services/fansly.ts";
@@ -9,12 +7,8 @@ import type {
   ApplyInput,
   ApplyResult,
   DemandSignal,
-  ReplayContext,
-  ReplayObservation,
-  ReplayVerdict,
   RequestPlan,
   ResourceModule,
-  ShadowResult,
   StepPlan,
 } from "../../engine/resource.ts";
 import {
@@ -30,7 +24,6 @@ import {
   type TopSpendersCursorState,
   type TopSpendersCursorWindow,
 } from "../lib/money-rules.ts";
-import { advanceShadowWalk, type ShadowWalkProgress } from "../lib/offset-walk.ts";
 import { readFanslyPageFacts } from "../lib/page-facts.ts";
 
 // `top-spenders.window` and `.bootstrap` (design §5.7): the page's spenders
@@ -57,7 +50,6 @@ interface TopSpendersCursor {
   pending: TopSpendersCursorWindow[];
   /** Bootstrap: the legacy-shaped walk state. */
   state: TopSpendersCursorState | null;
-  shadow: ShadowWalkProgress | null;
 }
 
 function recordOf(value: unknown): Record<string, unknown> {
@@ -80,14 +72,7 @@ function parseWindows(value: unknown): TopSpendersCursorWindow[] {
 
 function parseCursor(value: unknown): TopSpendersCursor {
   const record = recordOf(value);
-  const shadow = recordOf(record.shadow);
-  return {
-    pending: parseWindows(record.pending),
-    state: parseTopSpendersCursorState(record.state),
-    shadow: typeof shadow.steps === "number" && typeof shadow.done === "number"
-      ? { steps: shadow.steps, done: shadow.done }
-      : null,
-  };
+  return { pending: parseWindows(record.pending), state: parseTopSpendersCursorState(record.state) };
 }
 
 function windowRequest(window: TopSpendersCursorWindow): RequestPlan<"earnings.accounts"> {
@@ -182,10 +167,9 @@ export function topSpendersModule(variant: TopSpendersVariant): ResourceModule {
     async plan(work, ctx): Promise<StepPlan> {
       const cursor = parseCursor(work.cursor);
       if (variant === "window") {
-        if (ctx.shadow) return { kind: "request", request: windowRequest(steadyWindow(ctx.now)) };
         return { kind: "request", request: windowRequest(cursor.pending[0] ?? steadyWindow(ctx.now)) };
       }
-      if (cursor.state !== null && !ctx.shadow) {
+      if (cursor.state !== null) {
         const head = cursor.state.pendingWindows[0];
         return head === undefined
           ? { kind: "done", reason: "bootstrap_complete", cursor }
@@ -209,7 +193,7 @@ export function topSpendersModule(variant: TopSpendersVariant): ResourceModule {
         const window = windowOfRequest(input.request, cursor.pending[0], "week");
         const rest = cursor.pending.length > 0 && cursor.pending[0] === window ? cursor.pending.slice(1) : cursor.pending;
         const read = await readWindow(tx, { pageId: input.pageId, window, rest, items });
-        const next: TopSpendersCursor = { pending: read.pending, state: null, shadow: null };
+        const next: TopSpendersCursor = { pending: read.pending, state: null };
         return read.pending.length === 0
           ? {
             work: {
@@ -243,7 +227,7 @@ export function topSpendersModule(variant: TopSpendersVariant): ResourceModule {
       };
       if (read.pending.length > 0) {
         return {
-          work: { satisfiesRevision: false, nextDueAt: input.now, cursor: { pending: [], state, shadow: null } },
+          work: { satisfiesRevision: false, nextDueAt: input.now, cursor: { pending: [], state } },
           followups: [],
           counters: read.counters,
         };
@@ -254,55 +238,12 @@ export function topSpendersModule(variant: TopSpendersVariant): ResourceModule {
           satisfiesRevision: true,
           close: "done",
           closeReason: "bootstrap_complete",
-          cursor: { pending: [], state, shadow: null },
+          cursor: { pending: [], state },
           proof: { totalMonths: state.totalMonths, accountCreatedAt: state.accountCreatedAt },
         },
         followups: [],
         counters: read.counters,
       };
     },
-
-    async shadow(work, _request, ctx): Promise<ShadowResult> {
-      const cursor = parseCursor(work.cursor);
-      if (variant === "window") {
-        return { work: { satisfiesRevision: true, close: "done", closeReason: "shadow", cursor: { ...cursor, shadow: null } }, followups: [] };
-      }
-      const created = await accountCreatedAt(ctx.db, ctx.pageId);
-      const step = advanceShadowWalk(cursor.shadow, () =>
-        created === null ? 1 : buildTopSpendersBootstrapWindows(created, ctx.now).length);
-      return step.finished
-        ? { work: { satisfiesRevision: true, close: "done", closeReason: "shadow", cursor: { ...cursor, shadow: null } }, followups: [] }
-        : { work: { satisfiesRevision: false, nextDueAt: ctx.now, cursor: { ...cursor, shadow: step.progress } }, followups: [] };
-    },
-
-    ...(variant === "window"
-      ? {
-        async replay(observation: ReplayObservation, ctx: ReplayContext): Promise<ReplayVerdict> {
-          return replayEarningsAccounts(observation, ctx);
-        },
-      }
-      : {}),
   };
-}
-
-/**
- * Replay of a legacy `earnings_accounts` observation (design §5.7): the new
- * contract accepts it, and every row that names a spender has its ranking
- * row on the page.
- */
-async function replayEarningsAccounts(observation: ReplayObservation, ctx: ReplayContext): Promise<ReplayVerdict> {
-  const parsed = fanslyWireSpec("earnings.accounts").parse(observation.payload, { afterMs: 0, beforeMs: 0 });
-  if (!parsed.ok) return { kind: "mismatch", reason: "contract_refused", detail: { field: parsed.violation.field } };
-  const { valid } = partitionTopSpenderItems(parsed.value);
-  if (valid.length === 0) return { kind: "match", detail: { served: 0 } };
-  const keys = [...new Set(valid.map((item) => item.sourceIdentityKey))];
-  const stored = await ctx.db.execute<{ key: string }>(sql`
-    select source_identity_key as key from page_fan_identities
-     where platform_account_id = ${ctx.pageId} and source_identity_key = any(${sql.param(keys)}::text[])
-  `);
-  const known = new Set(stored.rows.map((row) => row.key));
-  const missing = keys.filter((identity) => !known.has(identity));
-  return missing.length === 0
-    ? { kind: "match", detail: { served: keys.length } }
-    : { kind: "mismatch", reason: "rankings_missing", detail: { served: keys.length, missing: missing.length, examples: missing.slice(0, 5) } };
 }

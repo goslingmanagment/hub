@@ -64,6 +64,10 @@ describe("route auth declarations", () => {
       // The Sync Engine's "why waiting" of one page's work.
       "agentSyncWhy",
       "agentThreadMessages",
+      // The chat extension's page routes (`/api/v1/client/pages/:pageLabel/…`):
+      // `apiKey` + page scope, the page always in the path.
+      "clientConversationRecaps",
+      "clientFanProfileFromGeneration",
       // WP-S1 (endpoints-cover serving). All eight are `owner-session` +
       // `scope: "page"`, which is also what gates the two `/money/*` routes:
       // on the REST surface `owner-session` IS the money scope (the agent

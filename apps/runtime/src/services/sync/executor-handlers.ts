@@ -59,7 +59,6 @@ import { isOnlyFansTopSpendersEnabled } from "./onlyfans-top-spenders.ts";
 import type { ExecutorRequestContext, StreamChunkResult } from "./executor-types.ts";
 export type { ExecutorRequestContext, StreamChunkResult };
 
-
 function shouldSkipOnlyFansDmPolling(
   app: AppContext,
   input: {

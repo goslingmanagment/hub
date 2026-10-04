@@ -80,7 +80,7 @@ describe("the old columns have one writer and no reader", () => {
     // The drizzle mirror of the table keeps the columns it still has. (The
     // calibration report reads the hold set: tests/sync-route-holds.test.ts.)
     expect(named.sort()).toEqual(["packages/db/src/repositories/sync/holds-legacy.ts", "packages/db/src/schema.ts"]);
-    // `hold_step` is gone (0241; tests/sync-engine-migrations.test.ts pins
+    // `hold_step` is gone (0243; tests/sync-engine-migrations.test.ts pins
     // that no source names it): the drizzle table does not map it.
     expect(readFileSync("packages/db/src/schema.ts", "utf8")).not.toMatch(/smallint\("hold_step"\)/);
   });

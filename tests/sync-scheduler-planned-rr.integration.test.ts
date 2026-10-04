@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import type { Database } from "@agency_hub_core/db";
 
-import type { ResourceModule, ShadowResult } from "../apps/runtime/src/sync/engine/resource.ts";
+import type { ApplyResult, ResourceModule } from "../apps/runtime/src/sync/engine/resource.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -47,20 +47,18 @@ const VAULT_WALK = "catalog.vault";
 const POLL = "subscribers.poll";
 
 function plannedRegistry() {
-  const closes: ShadowResult = { work: { satisfiesRevision: true, close: "done" }, followups: [] };
+  const closes: ApplyResult = { work: { satisfiesRevision: true, close: "done" }, followups: [] };
   const walks = (): ResourceModule => {
     let step = 0;
     return {
       plan: async () => ({ kind: "request", request: pollsRequest }),
-      apply: async () => closes,
       // A long walk: one more page each step, never done in this test.
-      shadow: async () => ({ work: { satisfiesRevision: false, cursor: { step: ++step } }, followups: [] }),
+      apply: async () => ({ work: { satisfiesRevision: false, cursor: { step: ++step } }, followups: [] }),
     };
   };
   const once: ResourceModule = {
     plan: async () => ({ kind: "request", request: pollsRequest }),
     apply: async () => closes,
-    shadow: async () => closes,
   };
   return testRegistry([
     testSpec(CATCHUP, once, { kind: "trigger", class: "planned" }),
@@ -73,19 +71,19 @@ function plannedRegistry() {
 describe("the planned class", () => {
   it("6 000 triggers next to two walks: each walk is served in every 3 planned slots; a due poll goes first", async (context) => {
     if (!testDb) return context.skip();
-    const { pageId } = await seedSyncPage({ db: db(), pool: testDb.pool }, { mode: "shadow" });
+    const { pageId } = await seedSyncPage({ db: db(), pool: testDb.pool }, { mode: "live", guard: "fansly_sync_engine" });
     await testDb.pool.query(`
       insert into sync_work (page_id, shadow, resource, subject, kind, class, due_at)
-      select $1, true, $2, 'group-' || g, 'trigger', 'planned', clock_timestamp() - interval '1 minute'
+      select $1, false, $2, 'group-' || g, 'trigger', 'planned', clock_timestamp() - interval '1 minute'
         from generate_series(1, 6000) g`, [pageId, CATCHUP]);
     await testDb.pool.query(`
       insert into sync_work (page_id, shadow, resource, subject, kind, class, due_at) values
-        ($1, true, $2, '', 'goal', 'planned', clock_timestamp()),
-        ($1, true, $3, '', 'goal', 'planned', clock_timestamp()),
-        ($1, true, $4, '', 'poll', 'planned', clock_timestamp() + interval '1 hour')`,
+        ($1, false, $2, '', 'goal', 'planned', clock_timestamp()),
+        ($1, false, $3, '', 'goal', 'planned', clock_timestamp()),
+        ($1, false, $4, '', 'poll', 'planned', clock_timestamp() + interval '1 hour')`,
       [pageId, MEDIA_WALK, VAULT_WALK, POLL]);
 
-    const { actor, stop, abort } = await makeTestActor({ db: db(), pageId, mode: "shadow", registry: plannedRegistry(), settingMs: 5 });
+    const { actor, stop, abort } = await makeTestActor({ db: db(), pageId, registry: plannedRegistry(), settingMs: 5 });
     const run = actor.run({ stop: stop.signal, abort: abort.signal });
     let pollDueAfterId = 0;
     try {

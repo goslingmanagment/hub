@@ -134,7 +134,7 @@ export function fanslyMessageTime(value: unknown, now: Date): { at: Date | null;
 }
 
 /** The non-page members of a group (unique, in served order). */
-export function nonPageMembers(users: ReadonlyArray<{ userId?: unknown }> | undefined, pageAccountId: string): string[] {
+function nonPageMembers(users: ReadonlyArray<{ userId?: unknown }> | undefined, pageAccountId: string): string[] {
   const ids: string[] = [];
   for (const user of users ?? []) {
     const id = nonEmpty(user.userId);

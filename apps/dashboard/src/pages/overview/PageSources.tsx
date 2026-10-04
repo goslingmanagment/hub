@@ -5,7 +5,7 @@ import { usePageRevenue } from "@/api/pages";
 import {
   buildPageRoute,
   buildPageSectionRoute,
-  buildSettingsRoute,
+  buildPageSyncRoute,
 } from "@/lib/navigation";
 import {
   buildRevenueTransactionsRoute,
@@ -261,10 +261,10 @@ export function PageSources({
             {sync && isAlertState(sync) && (
               <p className="v1-capture-note">
                 Сбор: {sync.label}. {sync.detail}{" "}
-                {isOwner && (
+                {isOwner && platform && (
                   <Link
                     className="v1-external-link"
-                    to={buildSettingsRoute("sync", page.pageLabel)}
+                    to={buildPageSyncRoute(platform, page.pageLabel)}
                   >
                     Проверить сбор →
                   </Link>

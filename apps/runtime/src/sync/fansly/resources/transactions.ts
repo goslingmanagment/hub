@@ -10,7 +10,6 @@ import {
   type Database,
 } from "@agency_hub_core/db";
 import {
-  fanslyWireSpec,
   isKnownFanslyTransactionType,
   type FanslyEarningsTransaction,
   type FanslyTransactionsPageContract,
@@ -28,15 +27,11 @@ import type {
   ApplyInput,
   ApplyResult,
   DemandSignal,
-  ReplayContext,
-  ReplayObservation,
-  ReplayVerdict,
   ResourceModule,
-  ShadowResult,
   StepPlan,
   WorkOutcome,
 } from "../../engine/resource.ts";
-import { advanceShadowWalk, offsetPageDone, offsetWalkPages, type ShadowWalkProgress } from "../lib/offset-walk.ts";
+import { offsetPageDone } from "../lib/offset-walk.ts";
 import { fanEarningsRosterFollowups } from "./fan-earnings.ts";
 import { lookupFollowups, partitionLookupIds } from "./fan-profiles.ts";
 import { purchaseTargetFollowups, purchaseTargetsOfTransactions } from "./purchases.ts";
@@ -85,8 +80,8 @@ export const TRANSACTIONS_SCAN_LIMIT = 100;
 /** [D6] A head walk that reaches this offset hands over to the rescan. */
 export const TRANSACTIONS_HEAD_ESCALATE_OFFSET = 200;
 const DAY_MS = 86_400_000;
-/** The rescan window (registry parameters; today's production values of the
- *  legacy keys `transactionLookbackDays` / `transactionRescanCapDays`). */
+/** The rescan window (registry parameters: the lookback and the rescan cap the
+ *  legacy engine ran with in production when it was retired). */
 export const TRANSACTIONS_LOOKBACK_MS = 7 * DAY_MS;
 export const TRANSACTIONS_RESCAN_CAP_MS = 30 * DAY_MS;
 /** Restarts of an unstable scan (total moved, rows served twice, fetched ≠
@@ -123,7 +118,6 @@ export interface TransactionsCursor {
   restartCount: number;
   /** The receipt of the last finished walk. */
   last: Record<string, unknown> | null;
-  shadow: ShadowWalkProgress | null;
 }
 
 function recordOf(value: unknown): Record<string, unknown> {
@@ -162,15 +156,11 @@ function parseWalk(value: unknown): TransactionsWalk | null {
 
 export function parseTransactionsCursor(value: unknown): TransactionsCursor {
   const record = recordOf(value);
-  const shadow = recordOf(record.shadow);
   return {
     cursorTimestamp: iso(record.cursorTimestamp),
     walk: parseWalk(record.walk),
     restartCount: count(record.restartCount) ?? 0,
     last: typeof record.last === "object" && record.last !== null ? record.last as Record<string, unknown> : null,
-    shadow: count(shadow.steps) !== null && count(shadow.done) !== null
-      ? { steps: count(shadow.steps)!, done: count(shadow.done)! }
-      : null,
   };
 }
 
@@ -333,7 +323,7 @@ async function writeTransactionsPage(
     ...lookupFollowups(lookup.due, key),
     ...purchaseTargetFollowups(purchases.targets, key),
     // After the writer's dirty marks (stamped with the wall clock as it ran).
-    ...(await fanEarningsRosterFollowups(tx, { pageId, now: new Date(), shadow: false, reason: key })),
+    ...(await fanEarningsRosterFollowups(tx, { pageId, now: new Date(), reason: key })),
   ];
   return { knownUnchanged, followups, counters };
 }
@@ -349,7 +339,7 @@ function restartOutcome(
     satisfiesRevision: false,
     nextDueAt: new Date(now.getTime() + TRANSACTIONS_WALK_RESTART_DELAY_MS),
     waitingReason: "not_due",
-    cursor: { ...cursor, walk: null, restartCount: cursor.restartCount + 1, shadow: null } satisfies TransactionsCursor,
+    cursor: { ...cursor, walk: null, restartCount: cursor.restartCount + 1 } satisfies TransactionsCursor,
     result: { restartReason: reason, restartCount: cursor.restartCount + 1, pages: walk.pages, ...detail },
   };
 }
@@ -365,7 +355,7 @@ function withheldOutcome(
     satisfiesRevision: true,
     close: "done",
     closeReason: "walk_withheld",
-    cursor: { ...cursor, walk: null, restartCount: 0, last: receipt, shadow: null } satisfies TransactionsCursor,
+    cursor: { ...cursor, walk: null, restartCount: 0, last: receipt } satisfies TransactionsCursor,
     proof: receipt,
   };
 }
@@ -423,7 +413,7 @@ export function transactionsModule(variant: TransactionsVariant): ResourceModule
     };
     if (decision.stop === null) {
       return {
-        work: { satisfiesRevision: false, nextDueAt: input.now, cursor: { ...cursor, walk: next, shadow: null } },
+        work: { satisfiesRevision: false, nextDueAt: input.now, cursor: { ...cursor, walk: next } },
         followups: write.followups,
         counters: write.counters,
       };
@@ -443,7 +433,7 @@ export function transactionsModule(variant: TransactionsVariant): ResourceModule
         satisfiesRevision: true,
         close: "done",
         closeReason: decision.stop,
-        cursor: { ...cursor, walk: null, last: receipt, shadow: null },
+        cursor: { ...cursor, walk: null, last: receipt },
         proof: receipt,
       },
       followups,
@@ -511,7 +501,7 @@ export function transactionsModule(variant: TransactionsVariant): ResourceModule
     const allCounters = { ...write.counters, ...counters };
     if (!done && !earlyStopped) {
       return {
-        work: { satisfiesRevision: false, nextDueAt: input.now, cursor: { ...cursor, walk: next, shadow: null } },
+        work: { satisfiesRevision: false, nextDueAt: input.now, cursor: { ...cursor, walk: next } },
         followups: write.followups,
         counters: allCounters,
       };
@@ -540,7 +530,7 @@ export function transactionsModule(variant: TransactionsVariant): ResourceModule
         satisfiesRevision: true,
         close: "done",
         closeReason: earlyStopped ? "early_stop" : "end",
-        cursor: { cursorTimestamp: next.newestSeenAt, walk: null, restartCount: 0, last: receipt, shadow: null },
+        cursor: { cursorTimestamp: next.newestSeenAt, walk: null, restartCount: 0, last: receipt },
         proof: receipt,
       },
       followups: write.followups,
@@ -591,7 +581,7 @@ export function transactionsModule(variant: TransactionsVariant): ResourceModule
     };
     if (!done) {
       return {
-        work: { satisfiesRevision: false, nextDueAt: input.now, cursor: { ...cursor, walk: next, shadow: null } },
+        work: { satisfiesRevision: false, nextDueAt: input.now, cursor: { ...cursor, walk: next } },
         followups: write.followups,
         counters: write.counters,
       };
@@ -611,7 +601,7 @@ export function transactionsModule(variant: TransactionsVariant): ResourceModule
         satisfiesRevision: true,
         close: "done",
         closeReason: "backfill_complete",
-        cursor: { ...cursor, walk: null, restartCount: 0, last: receipt, shadow: null },
+        cursor: { ...cursor, walk: null, restartCount: 0, last: receipt },
         proof: receipt,
       },
       followups: write.followups,
@@ -632,10 +622,7 @@ export function transactionsModule(variant: TransactionsVariant): ResourceModule
         const enqueue: DemandSignal[] = [{ resource: "transactions.backfill", demand: { reason: `dependency:${key}` } }];
         return { kind: "wait", reason: "dependency", until: new Date(ctx.now.getTime() + TRANSACTIONS_WRONG_WRITER_RECHECK_MS), enqueue };
       }
-      const offset = ctx.shadow
-        ? (cursor.shadow?.done ?? 0) * limit
-        : cursor.walk?.offset ?? 0;
-      return { kind: "request", request: { spec: "transactions.page", params: { limit, offset } } };
+      return { kind: "request", request: { spec: "transactions.page", params: { limit, offset: cursor.walk?.offset ?? 0 } } };
     },
 
     async apply(tx, input: ApplyInput): Promise<ApplyResult> {
@@ -656,72 +643,5 @@ export function transactionsModule(variant: TransactionsVariant): ResourceModule
           return applyBackfill(tx, input, page, cursor);
       }
     },
-
-    async shadow(work, _request, ctx): Promise<ShadowResult> {
-      const cursor = parseTransactionsCursor(work.cursor);
-      // What the live step would ask of the roster walk; purchase targets and
-      // profiles need the answer, so shadow names none.
-      const followups = await fanEarningsRosterFollowups(ctx.db, { pageId: ctx.pageId, now: ctx.now, shadow: true, reason: key });
-      if (variant !== "backfill") {
-        return {
-          work: { satisfiesRevision: true, close: "done", closeReason: "shadow", cursor: { ...cursor, shadow: null } },
-          followups,
-        };
-      }
-      const stored = await countTransactionsBySource(ctx.db, { platformAccountId: ctx.pageId, source: "fansly:rest" });
-      const step = advanceShadowWalk(cursor.shadow, () => offsetWalkPages({ total: stored, limit, statedTotal: true }));
-      return step.finished
-        ? { work: { satisfiesRevision: true, close: "done", closeReason: "shadow", cursor: { ...cursor, shadow: null } }, followups }
-        : { work: { satisfiesRevision: false, nextDueAt: ctx.now, cursor: { ...cursor, shadow: step.progress } }, followups: [] };
-    },
-
-    async replay(observation: ReplayObservation, ctx: ReplayContext): Promise<ReplayVerdict> {
-      return replayTransactionsPage(observation, ctx);
-    },
   };
-}
-
-/**
- * Replay of a legacy `earnings_transactions` observation (design §5.6): the
- * new contract accepts what legacy accepted (both parse with the same
- * function, so a refused page is refused by both), and every served row maps
- * to the stored ledger row: amounts (mills), raw type, canonical type and
- * occurred_at equal; the state may have advanced since.
- */
-async function replayTransactionsPage(observation: ReplayObservation, ctx: ReplayContext): Promise<ReplayVerdict> {
-  const parsed = fanslyWireSpec("transactions.page").parse(observation.payload, { limit: TRANSACTIONS_SCAN_LIMIT, offset: 0 });
-  if (!parsed.ok) return { kind: "match", detail: { refusedByBoth: true, field: parsed.violation.field } };
-  const items = parsed.value.data;
-  if (items.length === 0) return { kind: "match", detail: { served: 0 } };
-  const commissionRate = await pageCommissionRate(ctx.db, ctx.pageId);
-  const stored = await ctx.db.execute<{
-    id: string; gross: string; net: string; destination: string; rawType: string; canonicalType: string; occurredAt: Date | string;
-  }>(sql`
-    select transaction_id as id, gross_amount_mills::text as gross, creator_net_amount_mills::text as net,
-           source_destination_amount_mills::text as destination, raw_type as "rawType",
-           canonical_type::text as "canonicalType", occurred_at as "occurredAt"
-      from transactions
-     where platform_account_id = ${ctx.pageId}
-       and transaction_id = any(${sql.param(items.map((item) => item.transactionId))}::text[])
-  `);
-  const byId = new Map(stored.rows.map((row) => [row.id, row] as const));
-  const mismatched: string[] = [];
-  for (const item of items) {
-    const row = byId.get(item.transactionId);
-    const { row: mapped } = mapFanslyTransactionItem(item, commissionRate);
-    if (
-      row === undefined ||
-      row.gross !== mapped.grossAmountMills.toString() ||
-      row.net !== mapped.creatorNetAmountMills.toString() ||
-      row.destination !== mapped.sourceDestinationAmountMills.toString() ||
-      row.rawType !== String(mapped.rawType) ||
-      row.canonicalType !== mapped.canonicalType ||
-      new Date(row.occurredAt).getTime() !== mapped.occurredAt.getTime()
-    ) {
-      mismatched.push(item.transactionId);
-    }
-  }
-  return mismatched.length === 0
-    ? { kind: "match", detail: { served: items.length } }
-    : { kind: "mismatch", reason: "ledger_differs", detail: { served: items.length, mismatched: mismatched.length, examples: mismatched.slice(0, 5) } };
 }

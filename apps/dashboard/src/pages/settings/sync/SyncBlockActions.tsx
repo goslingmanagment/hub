@@ -11,15 +11,12 @@ import { toast } from "sonner";
 import { getBlockLabel, getEngineBlockKeys, getStreamLabel } from "./syncBlockDisplay.js";
 import type { SyncBlockKey, SyncBlockState } from "./syncBlockDisplay.js";
 
-type SyncPlatform = "fansly" | "onlyfans";
-
 // Detailed status keeps compatibility rows visible for auditability, but they
-// must not create a fake recovery action. OnlyFans `light` and `transactions`
-// are webhook/OFAPI-era no-ops, while legacy `dm_messages` is retired.
+// must not create a fake recovery action: OnlyFans `light` and `transactions`
+// are webhook/OFAPI-era no-ops.
 const ONLYFANS_NON_RESUMABLE_STREAMS = new Set([
   "light",
   "transactions",
-  "dm_messages",
 ]);
 
 function canTrigger(state: SyncBlockState): boolean {
@@ -66,20 +63,16 @@ function getEngineBlockActionPresentation(block: SyncBlockStatus) {
   };
 }
 
-export function getSyncBlockActionPresentation(
-  block: SyncBlockStatus,
-  platform: SyncPlatform,
-) {
+/** The buttons of a block: the engine's on a page the Fansly Sync Engine
+ *  owns, else those of a legacy block — a page of the legacy page-sync
+ *  executor, which is OnlyFans. */
+export function getSyncBlockActionPresentation(block: SyncBlockStatus) {
   if (block.state === "engine") return getEngineBlockActionPresentation(block);
   const pausedSubstreams = block.substreams.filter((substream) => (
-    substream.state === "paused" && !(
-      platform === "onlyfans" && ONLYFANS_NON_RESUMABLE_STREAMS.has(substream.stream)
-    )
+    substream.state === "paused" && !ONLYFANS_NON_RESUMABLE_STREAMS.has(substream.stream)
   ));
   const hasPartialPause = block.state !== "paused" && pausedSubstreams.length > 0;
-  const showResume = platform === "onlyfans" && block.substreams.length > 0
-    ? pausedSubstreams.length > 0
-    : canResume(block.state) || hasPartialPause;
+  const showResume = block.substreams.length > 0 ? pausedSubstreams.length > 0 : canResume(block.state);
 
   return {
     showTrigger: !hasPartialPause && (canTrigger(block.state) || canTriggerDisabled(block.state)),
@@ -95,11 +88,9 @@ export function getSyncBlockActionPresentation(
 
 export function SyncBlockActions({
   pageLabel,
-  platform,
   block,
 }: {
   pageLabel: string;
-  platform: SyncPlatform;
   block: SyncBlockStatus;
 }) {
   const [showResetConfirm, setShowResetConfirm] = useState(false);
@@ -161,7 +152,7 @@ export function SyncBlockActions({
     showReset,
     resumeLabel,
     resetLabel,
-  } = getSyncBlockActionPresentation(block, platform);
+  } = getSyncBlockActionPresentation(block);
 
   return (
     <>

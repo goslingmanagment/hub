@@ -138,36 +138,6 @@ export async function listPageDmThreadListStates(
   return result.rows.map(normalizeListState);
 }
 
-/**
- * One page of the page's visible threads in the list's own order (newest head
- * first): what a list read at this offset would serve, as far as the database
- * knows it. The shadow estimate of a list step reads it instead of the answer
- * it never gets.
- */
-export async function listPageDmThreadListStatesByRecency(
-  db: Database,
-  input: { platformAccountId: number; offset: number; limit: number },
-): Promise<PageDmThreadListState[]> {
-  const result = await db.execute<ListStateSqlRow>(sql`
-    select ${listStateColumns}
-      from page_dm_threads t
-     where t.platform_account_id = ${input.platformAccountId}
-       and t.is_visible
-     order by t.last_message_at desc nulls last, t.id desc
-     limit ${Math.max(0, input.limit)}
-    offset ${Math.max(0, input.offset)}
-  `);
-  return result.rows.map(normalizeListState);
-}
-
-/** The page's visible threads (the length of a full list walk). */
-export async function countPageDmVisibleThreads(db: Database, platformAccountId: number): Promise<number> {
-  const result = await db.execute<{ n: number | string }>(sql`
-    select count(*)::int as n from page_dm_threads where platform_account_id = ${platformAccountId} and is_visible
-  `);
-  return Number(result.rows[0]?.n ?? 0);
-}
-
 export interface PageDmConversationListFieldsInput {
   platformAccountId: number;
   platformConversationId: string;
@@ -294,13 +264,12 @@ export async function upsertPageDmConversationListFields(
 export interface DmFindSharedRead {
   /** The chat's thread was written by the list's writer (a list page or a
    *  group detail applied: `last_seen_at`) since the find's first demand — a
-   *  read served the chat. Always false on a shadow page, which writes no
-   *  thread. */
+   *  read served the chat. */
   found: boolean;
   /** The first read of the list head (offset 0) by one of the list's keys
-   *  admitted since the find's first demand whose answer was applied (on a
-   *  shadow page: whose estimate settled); null while there is none. An
-   *  admission without its applied answer proves nothing. */
+   *  admitted since the find's first demand whose answer was applied; null
+   *  while there is none. An admission without its applied answer proves
+   *  nothing. */
   headRead: { attemptId: number; resource: string; subject: string; admittedAt: Date } | null;
 }
 
@@ -315,7 +284,6 @@ export async function readDmFindSharedRead(
   input: {
     workId: number;
     pageId: number;
-    shadow: boolean;
     platformConversationId: string;
     /** The list's operation (`messaging.groups`). */
     listOperation: string;
@@ -336,8 +304,7 @@ export async function readDmFindSharedRead(
     select exists (
              select 1
                from page_dm_threads t
-              where not ${input.shadow}::boolean
-                and t.platform_account_id = ${input.pageId}
+              where t.platform_account_id = ${input.pageId}
                 and t.platform_conversation_id = ${input.platformConversationId}
                 and t.last_seen_at >= d.first_demand_at
            ) as found,
@@ -347,12 +314,12 @@ export async function readDmFindSharedRead(
         select a.id, a.resource, a.subject, a.admitted_at
           from sync_attempts a
          where a.page_id = ${input.pageId}
-           and a.shadow = ${input.shadow}::boolean
+           and not a.shadow
            and a.admitted_at >= d.first_demand_at
            and a.operation = ${input.listOperation}
            and a.resource = any(${textArrayParam(input.listKeys)})
            and a.request -> 'params' ->> 'offset' = '0'
-           and case when a.shadow then a.outcome = 'shadow' else a.apply_state = 'applied' end
+           and a.apply_state = 'applied'
          order by a.admitted_at, a.id
          limit 1
       ) r on true

@@ -331,7 +331,7 @@ describe("database migration invariants", () => {
     expect(recovery).toContain("not a.succeeded and a.idempotency_key is not null");
   });
 
-  it("builds the purchase-history and DM 5xx-streak lookup indexes concurrently, the first on its reader's own clauses", async () => {
+  it("builds the purchase-history and DM 5xx-streak lookup indexes concurrently; their readers are gone and the indexes stay", async () => {
     const index = await readFile(
       "packages/db/migrations/0223_raw_payload_and_attempt_lookup_indexes.sql",
       "utf8",
@@ -352,11 +352,13 @@ describe("database migration invariants", () => {
     expect(index).toContain("on sync_http_attempts (page_id, (request_shape ->> 'groupId'))");
     expect(index.split("-- agency-hub:statement").length - 1).toBe(3);
 
-    // The raw-payload index is partial on the purchase-history endpoints. The
-    // legacy lane that journaled the probe and storm pages is gone (step 4,
-    // S4-16), and so is the switch import that read `purchase_history` through
-    // it (S4-21); a reader that leaves this list goes back to a whole-table
-    // scan with no error.
+    // The raw-payload index is partial on the purchase-history endpoints. Its
+    // readers went at step 4: the legacy lane that journaled the probe and
+    // storm pages (S4-16), the switch import that read `purchase_history`
+    // through it (S4-21) and the shadow report's window read (S4-22). The
+    // index stays (migrations are forward-only) and no reader is pinned to
+    // it; one that comes back must spell this list, or it scans the whole
+    // 788 MB heap with no error.
     const predicate = /where endpoint in \(([^)]*)\)/.exec(index)?.[1];
     expect(predicate).toBeDefined();
     expect(predicate!.split(",").map((value) => value.trim().replace(/^'|'$/g, ""))).toEqual([
@@ -364,11 +366,8 @@ describe("database migration invariants", () => {
       "purchase_history_contract_probe",
       "purchase_history_contract_storm",
     ]);
-    // The shadow report's window read (rule A2.demand-replaced) spells the
-    // predicate itself: without it, the stream and time filters alone are a
-    // whole-table scan of the 788 MB heap.
     const observability = await readFile("packages/db/src/repositories/sync/observability.ts", "utf8");
-    expect(observability).toContain(`and rp.endpoint in (${predicate})`);
+    expect(observability).not.toContain("sync_raw_payloads");
 
     // The attempt index served the legacy dm_messages 5xx breaker's streak
     // query, which went with the legacy DM handler at step 4 (S4-14); the

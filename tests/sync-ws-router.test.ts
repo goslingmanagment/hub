@@ -11,7 +11,6 @@ import {
   INVALID_NO_CHAT_REPAIR_DELAY_MS,
   mergeDemandSignals,
   OWN_MASS_MESSAGE_CONTAINER_TYPE,
-  OwnBroadcastWindow,
   routeWsItems,
   unknownRouteThread,
   type RouteContext,
@@ -314,22 +313,5 @@ describe("routeWsItems (design §6.2)", () => {
       "dm-conversations.find", "dm-live.deletions", "dm-messages.head", "payouts.daily", "purchases.targets", "repair.ws-gap",
       "subscribers.poll", "transactions.head", "transactions.rescan",
     ]);
-  });
-});
-
-describe("OwnBroadcastWindow (the shadow rate fallback, design §6.2)", () => {
-  it("more than 20 own messages in distinct chats within 60 s is a broadcast", () => {
-    const window = new OwnBroadcastWindow();
-    for (let chat = 0; chat < 20; chat++) window.record(`g${chat}`, NOW + chat * 1_000);
-    expect(window.chatsAt(NOW + 19_000)).toBe(20);
-    expect(window.activeAt(NOW + 19_000)).toBe(false);
-    // Repeats in one chat do not count twice.
-    window.record("g0", NOW + 20_000);
-    expect(window.activeAt(NOW + 20_000)).toBe(false);
-    window.record("g20", NOW + 21_000);
-    expect(window.activeAt(NOW + 21_000)).toBe(true);
-    // A minute later the early chats have left the window.
-    expect(window.chatsAt(NOW + 62_500)).toBe(19);
-    expect(window.activeAt(NOW + 62_500)).toBe(false);
   });
 });

@@ -37,16 +37,16 @@ import {
 /**
  * WP-S1 — the Analytics page: everything F0–F7 and F4 captured, served.
  *
- * FANSLY ONLY (A28-2). The page selector lists Fansly pages because no
- * OnlyFans lane writes any of the projections behind these panels, and a page
- * selector that offered them would be offering eight permanently empty charts.
+ * FANSLY ONLY (A28-2). The page selector lists Fansly pages because nothing
+ * writes any of the projections behind these panels for an OnlyFans page, and
+ * a selector that offered them would be offering eight permanently empty charts.
  *
  * THE RULE THE WHOLE PAGE IS BUILT AROUND: partial data is never visually
  * indistinguishable from complete data. Every panel carries its own coverage
  * verdict in its header, and the honesty panel at the bottom is what makes an
- * empty chart readable — an empty chart over an exhausted lane and an empty
- * chart over a lane whose flag is off look identical without it, and mean
- * opposite things.
+ * empty chart readable — an empty chart over a walk that reached its end and
+ * an empty chart over a stream nobody reads look identical without it, and
+ * mean opposite things.
  *
  * The page catalog comes from `usePages()` and NOT from the shell's
  * `useOverview()`: this page fires nothing until it knows which page is
@@ -275,6 +275,7 @@ export function AnalyticsPage() {
         />
         <CoveragePanel
           state={coverageState}
+          pageId={fanslyPages.find((page) => page.label === activeLabel)?.id ?? null}
           onRetry={() => void coverage.refetch()}
         />
       </div>

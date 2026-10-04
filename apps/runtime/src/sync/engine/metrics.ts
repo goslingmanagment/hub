@@ -14,7 +14,7 @@ import type { FanslyPageHoldKind } from "@agency_hub_core/shared";
 
 import { moneyFramesMissing, readMoneyFrames, type MoneyFrame } from "../fansly/ws/money-frames.ts";
 import { holdSetOf, pageHoldsInForce, resourceFilesHeld } from "./admission.ts";
-import { collectPageAlerts, SYNC_MONEY_FRAME_MS, SYNC_MONEY_LOOKBACK_MS } from "./alerts.ts";
+import { collectPageAlerts, pagesOwnerAlerts, SYNC_MONEY_FRAME_MS, SYNC_MONEY_LOOKBACK_MS } from "./alerts.ts";
 import type { EngineRegistry } from "./resource.ts";
 
 // The Fansly Sync Engine's golden signals (plan §10, design §9.5), computed
@@ -22,26 +22,18 @@ import type { EngineRegistry } from "./resource.ts";
 // setting, violations), sends by class and resource, holds, breakers,
 // quarantine, the overlay's confirmation lag and REST mismatches, the money
 // lag from a socket frame to the ledger, history requests and the ETA's fact
-// over forecast. Live pages (`handover`/`live`) and shadow pages are separate
-// journals; a shadow page's families are `sync_shadow_*`, and its alerts 1–4
-// are counted here only (D14).
+// over forecast. The per-page families cover the pages the engine owns
+// (`handover`/`live`).
 //
-// `computeSyncMetrics` serves one page (status, the shadow report);
+// `computeSyncMetrics` serves one page (status);
 // `sampleSyncEngineMetrics` is the ops sampler's compact set (aggregates over
 // pages, design §9.4 [A11]): per-page series would double the sample table
 // for figures the page status already shows.
-
-export type SyncJournal = "live" | "shadow";
-
-export function journalOf(page: Pick<SyncPageRow, "mode">): SyncJournal {
-  return page.mode === "handover" || page.mode === "live" ? "live" : "shadow";
-}
 
 export interface SyncPageMetrics {
   pageId: number;
   pageLabel: string | null;
   mode: SyncPageRow["mode"];
-  journal: SyncJournal;
   window: { since: Date; until: Date };
   sends: { urgent: number; requests: number; planned: number; total: number; byResource: Record<string, number> };
   /** `sync_min_send_gap_ms{page}`; null with fewer than two sends. */
@@ -67,22 +59,19 @@ function holdsOf(page: SyncPageRow, now: Date): SyncPageMetrics["holds"] {
   };
 }
 
-/** One page's families over [now − windowMs, now) of its journal. */
+/** One page's families over [now − windowMs, now). */
 export async function computeSyncMetrics(
   db: Database,
   input: { page: SyncPageRow; windowMs: number; now?: Date },
 ): Promise<SyncPageMetrics> {
   const until = input.now ?? input.page.dbNow;
   const since = new Date(until.getTime() - input.windowMs);
-  const journal = journalOf(input.page);
-  const shadow = journal === "shadow";
-  const [row] = await readSyncJournalMetrics(db, { pageIds: [input.page.pageId], shadow, since, until });
-  const counts = await countSendsSince(db, { pageId: input.page.pageId, since, shadow });
+  const [row] = await readSyncJournalMetrics(db, { pageIds: [input.page.pageId], since, until });
+  const counts = await countSendsSince(db, { pageId: input.page.pageId, since });
   return {
     pageId: input.page.pageId,
     pageLabel: input.page.pageLabel,
     mode: input.page.mode,
-    journal,
     window: { since, until },
     sends: {
       urgent: row?.sends.urgent ?? 0,
@@ -120,7 +109,7 @@ export interface SyncGlobalMetrics {
   history: { requestsOpen: number; readsDone: number; readsRemaining: number; factOverForecast: { p50: number | null; p95: number | null } };
 }
 
-/** The families that are not per journal, over [now − windowMs, now). */
+/** The families that are not per page, over [now − windowMs, now). */
 export async function computeSyncGlobalMetrics(
   db: Database,
   input: {
@@ -184,12 +173,12 @@ function basisPoints(value: number | null): number | null {
 }
 
 /**
- * The ops sampler's set (every `SYNC_METRICS_SAMPLE_EVERY_MINUTES`): per
- * journal with at least one page in it (`sync_` for handover/live,
- * `sync_shadow_` for shadow) the smallest send gap of the hour over its pages,
- * pace violations, sends, holds, open breakers, vendor-blocked subjects,
- * quarantined work and the alert conditions that hold; and the global
- * families. Threshold-free: the engine's alerts page, not the sample latch.
+ * The ops sampler's set (every `SYNC_METRICS_SAMPLE_EVERY_MINUTES`): over the
+ * pages the engine owns (`sync_*`, none without one) the smallest send gap of
+ * the hour, pace violations, sends, holds, open breakers, vendor-blocked
+ * subjects, quarantined work and the alert conditions that hold; and the
+ * global families. Threshold-free: the engine's alerts page, not the sample
+ * latch.
  */
 export async function sampleSyncEngineMetrics(
   db: Database,
@@ -197,7 +186,7 @@ export async function sampleSyncEngineMetrics(
 ): Promise<OpsMetricSampleInput[]> {
   const pages = await listSyncPages(db);
   const now = pages[0]?.dbNow ?? new Date();
-  const engaged = pages.filter((page) => page.mode !== "off");
+  const engaged = pages.filter(pagesOwnerAlerts);
   const resolve = input.resolvePayload === undefined ? {} : { resolvePayload: input.resolvePayload };
   const samples: OpsMetricSampleInput[] = [...gauge("sync_setting_ms", input.settingMs)];
   // One read of the socket's money news serves the money lag and alert 3.
@@ -209,34 +198,30 @@ export async function sampleSyncEngineMetrics(
   });
   const engagedIds = new Set(engaged.map((page) => page.pageId));
   const money = moneyFramesMissing(moneyFrames.filter((frame) => engagedIds.has(frame.pageId)), now, SYNC_MONEY_FRAME_MS);
-  for (const journal of ["live", "shadow"] as const) {
-    const members = engaged.filter((page) => journalOf(page) === journal);
-    if (members.length === 0) continue;
-    const prefix = journal === "live" ? "sync_" : "sync_shadow_";
+  if (engaged.length > 0) {
     const rows = await readSyncJournalMetrics(db, {
-      pageIds: members.map((page) => page.pageId),
-      shadow: journal === "shadow",
+      pageIds: engaged.map((page) => page.pageId),
       since: new Date(now.getTime() - SYNC_METRICS_WINDOW_MS),
       until: now,
     });
     const gaps = rows.map((row) => row.minGapMs).filter((gap): gap is number => gap !== null);
     let holds = 0;
     let conditions = 0;
-    for (const page of members) {
+    for (const page of engaged) {
       const held = holdsOf(page, now);
       holds += held.page.length + held.resources.length;
       conditions += (await collectPageAlerts(db, { page, registry: input.registry, money })).length;
     }
     const sum = (pick: (row: (typeof rows)[number]) => number) => rows.reduce((total, row) => total + pick(row), 0);
     samples.push(
-      ...gauge(`${prefix}min_send_gap_ms`, gaps.length === 0 ? null : Math.min(...gaps)),
-      ...gauge(`${prefix}pace_violations`, sum((row) => row.paceViolations)),
-      ...gauge(`${prefix}sends`, sum((row) => row.sends.urgent + row.sends.requests + row.sends.planned)),
-      ...gauge(`${prefix}holds`, holds),
-      ...gauge(`${prefix}breakers_open`, sum((row) => row.breakersOpen)),
-      ...gauge(`${prefix}blocked_by_vendor`, sum((row) => row.blockedByVendor)),
-      ...gauge(`${prefix}quarantined`, sum((row) => row.quarantined)),
-      ...gauge(`${prefix}alerts`, conditions),
+      ...gauge("sync_min_send_gap_ms", gaps.length === 0 ? null : Math.min(...gaps)),
+      ...gauge("sync_pace_violations", sum((row) => row.paceViolations)),
+      ...gauge("sync_sends", sum((row) => row.sends.urgent + row.sends.requests + row.sends.planned)),
+      ...gauge("sync_holds", holds),
+      ...gauge("sync_breakers_open", sum((row) => row.breakersOpen)),
+      ...gauge("sync_blocked_by_vendor", sum((row) => row.blockedByVendor)),
+      ...gauge("sync_quarantined", sum((row) => row.quarantined)),
+      ...gauge("sync_alerts", conditions),
     );
   }
   const windowFrom = now.getTime() - SYNC_METRICS_WINDOW_MS;

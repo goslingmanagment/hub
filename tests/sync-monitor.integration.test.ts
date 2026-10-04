@@ -1,6 +1,13 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { createFanslyPage, createModel, listSyncMonitorStreamRows, type SyncStream } from "@agency_hub_core/db";
+import {
+  createFanslyPage,
+  createModel,
+  createOnlyFansPage,
+  LEGACY_EXECUTOR_STREAMS,
+  listSyncMonitorStreamRows,
+  type SyncStream,
+} from "@agency_hub_core/db";
 import { resetIntegrationDatabase, startTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 
 let testDb: StartedTestDatabase;
@@ -11,15 +18,17 @@ beforeAll(async () => { testDb = await startTestDatabase(); }, 120_000);
 afterAll(async () => { await testDb?.stop(); });
 beforeEach(async () => { await resetIntegrationDatabase(testDb.pool); });
 
-async function seedPage(label: string) {
+// The monitor is the legacy page-sync executor's: its pages are OnlyFans's.
+async function seedPage(label: string, platform: "fansly" | "onlyfans" = "onlyfans") {
   const model = await createModel(testDb.db, { slug: label, name: label });
   if (!model) throw new Error("test model missing");
-  const page = await createFanslyPage(testDb.db, { modelId: model.id, label });
+  const create = { fansly: createFanslyPage, onlyfans: createOnlyFansPage }[platform];
+  const page = await create(testDb.db, { modelId: model.id, label });
   if (!page) throw new Error("test page missing");
   return page.id;
 }
 
-async function run(pageId: number, startedAt: string, stream: SyncStream = "dm_messages", finishedAt: string | null = null) {
+async function run(pageId: number, startedAt: string, stream: SyncStream = "dm_conversations", finishedAt: string | null = null) {
   const result = await testDb.pool.query<{ id: bigint }>(`
     insert into sync_runs(page_id, stream, outcome, started_at, finished_at)
     values ($1, $2, $3, $4, $5) returning id
@@ -31,7 +40,7 @@ async function attempt(runId: number, startedAt: string, finishedAt: string | nu
   await testDb.pool.query(`
     insert into sync_http_attempts(sync_run_id, page_id, provider, stream, operation,
       logical_request_id, attempt_number, state, started_at, finished_at)
-    select sr.id, sr.page_id, 'fansly', sr.stream, 'fixture', $2::text, 1, $4, $2::text::timestamptz, $3
+    select sr.id, sr.page_id, 'onlyfans', sr.stream, 'fixture', $2::text, 1, $4, $2::text::timestamptz, $3
     from sync_runs sr where sr.id = $1
   `, [runId, startedAt, finishedAt, state]);
 }
@@ -39,12 +48,12 @@ async function attempt(runId: number, startedAt: string, finishedAt: string | nu
 async function event(runId: number, emittedAt: string) {
   await testDb.pool.query(`
     insert into sync_run_events(sync_run_id, page_id, provider, stream, event_type, severity, message, emitted_at)
-    select sr.id, sr.page_id, 'fansly', sr.stream, 'fixture', 'info', 'fixture', $2
+    select sr.id, sr.page_id, 'onlyfans', sr.stream, 'fixture', 'info', 'fixture', $2
     from sync_runs sr where sr.id = $1
   `, [runId, emittedAt]);
 }
 
-function rows(pageId: number, streams: SyncStream[] = ["dm_messages"]) {
+function rows(pageId: number, streams: SyncStream[] = ["dm_conversations"]) {
   return listSyncMonitorStreamRows(testDb.db, { pageIds: [pageId], streams, now, windowStart });
 }
 
@@ -54,7 +63,7 @@ describe("sync monitor running activity", () => {
     const old = await run(pageId, "2026-09-08T09:00:00Z");
     const tied = await run(pageId, "2026-09-08T10:00:00Z");
     const current = await run(pageId, "2026-09-08T10:00:00Z");
-    const completed = await run(pageId, "2026-09-08T11:00:00Z", "dm_messages", "2026-09-08T11:59:00Z");
+    const completed = await run(pageId, "2026-09-08T11:00:00Z", "dm_conversations", "2026-09-08T11:59:00Z");
     for (const id of [old, tied, completed]) {
       await attempt(id, "2026-09-08T11:59:00Z");
       await event(id, "2026-09-08T11:59:00Z");
@@ -88,13 +97,13 @@ describe("sync monitor running activity", () => {
     await event(current, "2026-09-08T10:10:00Z");
     const scoped = await rows(pageId);
     expect(scoped).toHaveLength(1);
-    expect(scoped[0]).toMatchObject({ pageId, stream: "dm_messages", runningLastActivityAt: new Date("2026-09-08T10:10:00Z") });
+    expect(scoped[0]).toMatchObject({ pageId, stream: "dm_conversations", runningLastActivityAt: new Date("2026-09-08T10:10:00Z") });
     expect(await listSyncMonitorStreamRows(testDb.db, { pageIds: [], now })).toEqual([]);
   });
 
   it("keeps historical physical failure debt even when no run is currently running", async () => {
     const pageId = await seedPage("physical");
-    const completed = await run(pageId, "2026-09-01T00:00:00Z", "dm_messages", "2026-09-01T01:00:00Z");
+    const completed = await run(pageId, "2026-09-01T00:00:00Z", "dm_conversations", "2026-09-01T01:00:00Z");
     await attempt(completed, "2026-09-01T00:00:00Z");
     await attempt(completed, "2026-09-01T00:01:00Z", null, "failed");
     await attempt(completed, "2026-09-01T00:02:00Z", null, "started");
@@ -107,9 +116,9 @@ describe("sync monitor running activity", () => {
     });
   });
 
-  it("returns identical DM rows when unrelated streams are excluded, retaining old unresolved debt", async () => {
+  it("returns identical rows when unrelated streams are excluded, retaining old unresolved debt", async () => {
     const pageId = await seedPage("preview-scope");
-    const dmStreams: SyncStream[] = ["dm_conversations", "dm_messages"];
+    const dmStreams: SyncStream[] = ["dm_conversations", "subscribers"];
     for (const stream of dmStreams) {
       const completed = await run(pageId, "2026-09-01T00:00:00Z", stream, "2026-09-01T01:00:00Z");
       await attempt(completed, "2026-09-01T00:00:00Z");
@@ -133,15 +142,42 @@ describe("sync monitor running activity", () => {
 });
 
 
+// Step 4, S4-24: the monitor lists the legacy executor's pages and streams.
+describe("sync monitor scope", () => {
+  it("lists an OnlyFans page on the executor's streams and no Fansly page at all, whatever runs and rows it has", async () => {
+    const onlyfans = await seedPage("scope-of");
+    const fansly = await seedPage("scope-fansly", "fansly");
+    // A Fansly page's records: a parked row and an old run of a stream name
+    // the executor still runs elsewhere.
+    await testDb.pool.query(`
+      insert into page_sync_states (page_id, stream, status, cadence_seconds, slot_offset_seconds, blocker_kind)
+      values ($1, 'light', 'paused', 3600, 0, 'retired'), ($1, 'followers', 'paused', 3600, 0, 'retired')
+    `, [fansly]);
+    await run(fansly, "2026-09-08T10:00:00Z", "light", "2026-09-08T10:01:00Z");
+    await run(onlyfans, "2026-09-08T10:00:00Z", "light", "2026-09-08T10:01:00Z");
+
+    const all = await listSyncMonitorStreamRows(testDb.db, { now, windowStart });
+    expect(new Set(all.map((row) => row.pageId))).toEqual(new Set([onlyfans]));
+    expect(all.map((row) => row.stream).sort()).toEqual([...LEGACY_EXECUTOR_STREAMS].sort());
+    expect(new Set(all.map((row) => row.platform))).toEqual(new Set(["onlyfans"]));
+    // Asked for the Fansly page, or for a stream no executor runs: nothing.
+    expect(await listSyncMonitorStreamRows(testDb.db, { pageIds: [fansly], now, windowStart })).toEqual([]);
+    expect(await listSyncMonitorStreamRows(testDb.db, { pageLabel: "scope-fansly", now, windowStart })).toEqual([]);
+    expect(await listSyncMonitorStreamRows(testDb.db, {
+      pageIds: [onlyfans, fansly], streams: ["followers", "dm_messages"], now, windowStart,
+    })).toEqual([]);
+  });
+});
+
 describe("sync monitor completed runs", () => {
   it("selects by finish time and ID across old history before reading the payload", async () => {
     const pageId = await seedPage("completed-order");
     const otherPage = await seedPage("completed-other");
-    await run(pageId, "2026-09-01T00:00:00Z", "dm_messages", "2026-09-02T10:00:00Z");
-    const selected = await run(pageId, "2026-09-01T00:00:00Z", "dm_messages", "2026-09-02T10:00:00Z");
-    await run(pageId, "2026-09-02T09:00:00Z", "dm_messages", "2026-09-02T09:05:00Z");
+    await run(pageId, "2026-09-01T00:00:00Z", "dm_conversations", "2026-09-02T10:00:00Z");
+    const selected = await run(pageId, "2026-09-01T00:00:00Z", "dm_conversations", "2026-09-02T10:00:00Z");
+    await run(pageId, "2026-09-02T09:00:00Z", "dm_conversations", "2026-09-02T09:05:00Z");
     await run(pageId, "2026-09-08T10:00:00Z", "light", "2026-09-08T11:00:00Z");
-    await run(otherPage, "2026-09-08T10:00:00Z", "dm_messages", "2026-09-08T11:00:00Z");
+    await run(otherPage, "2026-09-08T10:00:00Z", "dm_conversations", "2026-09-08T11:00:00Z");
     const running = await run(pageId, "2026-09-08T11:00:00Z");
     const unfinished = await run(pageId, "2026-09-08T11:01:00Z");
     await testDb.pool.query(`
@@ -162,7 +198,7 @@ describe("sync monitor completed runs", () => {
       lastCompletedErrorSummary: "selected payload",
     });
     expect(await listSyncMonitorStreamRows(testDb.db, {
-      pageLabel: "completed-order", streams: ["dm_messages"], now, windowStart,
+      pageLabel: "completed-order", streams: ["dm_conversations"], now, windowStart,
     })).toEqual([row]);
   });
 
@@ -170,7 +206,7 @@ describe("sync monitor completed runs", () => {
     "includes a finished %s run without changing its result fields",
     async (outcome) => {
       const pageId = await seedPage(`completed-${outcome}`);
-      const completed = await run(pageId, "2026-09-08T10:00:00Z", "dm_messages", "2026-09-08T10:00:01Z");
+      const completed = await run(pageId, "2026-09-08T10:00:00Z", "dm_conversations", "2026-09-08T10:00:01Z");
       await testDb.pool.query("update sync_runs set outcome = $2, source = null where id = $1", [completed, outcome]);
       const [row] = await rows(pageId);
       expect(row).toMatchObject({

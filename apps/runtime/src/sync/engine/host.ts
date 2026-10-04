@@ -28,7 +28,7 @@ import { resolveLegacyStreamIncidentsOfEnginePage } from "../../services/notific
 import { createPageTransport } from "../fansly/transport.ts";
 import { FanslyWsSource, type FanslyWsSourceDeps } from "../fansly/ws/source.ts";
 import { createSyncWorkSecretBox } from "../requests/secret-params.ts";
-import { SyncActor, type ActorExit, type ShadowFeed } from "./actor.ts";
+import { SyncActor, type ActorExit } from "./actor.ts";
 import { SYNC_OWNERSHIP_UNCONFIRMED_MS } from "./alerts.ts";
 import {
   errorName,
@@ -52,21 +52,22 @@ import {
   type LivePageSocket,
   type LivePageSocketRef,
   type Metrics,
+  type PageTransport,
   type PauseSource,
   type SettingsSource,
   type Rng,
   type Wake,
 } from "./ports.ts";
 import { demandToUpsert, type DemandSignal, type EngineRegistry } from "./resource.ts";
-import { createLegacyShadowLatency, ShadowTransport, type PageTransport, type ShadowLatencySource } from "./shadow.ts";
 import { noStallTracker, type StallTracker, type StallTracking } from "./watchdog.ts";
 
 // The host (plan §2.4, §8; design §3.6): pages ↔ actors. It owns the process's
 // lock session and LISTEN client, watches `sync_pages.mode` every 2 s, takes a
-// page only when its previous owner is CONFIRMED stopped, starts one actor per
-// owned page with the takeover floor, heartbeats each owner, and on shutdown,
-// mode change or ownership loss lets the request in flight finish and writes
-// the page's safe release.
+// `live` page only when its previous owner is CONFIRMED stopped, starts one
+// actor per owned page with the takeover floor, heartbeats each owner, and on
+// shutdown, mode change or ownership loss lets the request in flight finish
+// and writes the page's safe release. A page in any other mode runs no actor
+// (`off`; `shadow`, a mode nothing runs since step 4 S4-23; `handover`).
 //
 // I17 — no live sender by accident. Independent gates, each pinned by
 // tests/sync-live-gate.integration.test.ts:
@@ -74,7 +75,7 @@ import { noStallTracker, type StallTracker, type StallTracking } from "./watchdo
 //   2. a page is `live` only by its birth: onboarding creates it so
 //      (`createLiveSyncPage`, step 4 S4-05: a new page with nothing of the
 //      legacy engine). No lever moves an existing page there — `sync page
-//      mode` and `setSyncPageMode` know off ↔ shadow alone; the step-3 switch
+//      mode` and `setSyncPageMode` know shadow → off alone; the step-3 switch
 //      that took the six earlier pages live is gone (S4-21);
 //   3. every live admission needs the step-1 guard row to be the engine's
 //      (`owner_engine = 'fansly_sync_engine'`, checked in `lockOwnedPage`);
@@ -82,8 +83,8 @@ import { noStallTracker, type StallTracker, type StallTracking } from "./watchdo
 //      (`sync_pages.legacy_imported_at`, J3: stamped at a page's birth, and by
 //      the switch's import for the pages it took over): a `live` row without
 //      it waits (`legacy_not_imported`, alert after 2 min) and nothing is sent.
-// The live transport (`fansly/transport.ts`) is built in one place only: the
-// live branch below. A live page also gets its WebSocket source
+// The page transport (`fansly/transport.ts`) is built in one place only:
+// `#acquire` below. A live page also gets its WebSocket source
 // (`fansly/ws/source.ts`, design §3.3, J6): created with the slot, started once
 // the actor exists, its Upgrade admitted by that actor like any request, and
 // stopped — the socket closed and its lock session ended — before the page's
@@ -115,7 +116,7 @@ export const SHUTDOWN_ACTOR_BUDGET_MS = 30_000;
 export const SHUTDOWN_ABORT_BUDGET_MS = 5_000;
 
 export type HostPageState =
-  | { kind: "running"; mode: "shadow" | "live"; generation: bigint }
+  | { kind: "running"; generation: bigint }
   | { kind: "waiting"; reason: string; since: Date }
   | { kind: "handover" }
   | { kind: "idle" };
@@ -142,8 +143,6 @@ export interface SyncHostOptions {
   metrics?: Metrics;
   /** Default: one PgWake on `fansly_sync_work`. */
   wake?: Wake & { start?(): Promise<void>; close?(): Promise<void> };
-  shadowLatency?: (pageId: number) => ShadowLatencySource;
-  shadowFeed?: ShadowFeed;
   capture?: CaptureCodec;
   canonicalize?: ObservationCanonicalizer;
   onThreadChainChanged?: ThreadChainChangedHook;
@@ -190,14 +189,13 @@ export interface LivePageLinks {
 
 interface PageSlot {
   pageId: number;
-  mode: "shadow" | "live";
   generation: bigint;
   actor: SyncActor;
   transport: PageTransport;
   /** The watchdog's tracker of the actor, done once its exit is through. */
   stall: StallTracker;
-  /** A live page's WebSocket (design §3.3, J6); none in shadow — the legacy
-   *  receiver owns a shadow page's socket. */
+  /** The page's WebSocket (design §3.3, J6); null without a label, or where
+   *  a test's `liveSocket` stands in for it. */
   ws: FanslyWsSource | null;
   stop: AbortController;
   abort: AbortController;
@@ -281,10 +279,10 @@ export class SyncEngineHost {
     this.#timer = setInterval(() => void this.#runTick(), this.#o.modeLoopIntervalMs ?? MODE_LOOP_INTERVAL_MS);
   }
 
-  /** Per page: running (mode, generation), waiting (why), handover, idle. */
+  /** Per page: running (generation), waiting (why), handover, idle. */
   state(pageId: number): HostPageState {
     const slot = this.#slots.get(pageId);
-    if (slot !== undefined) return { kind: "running", mode: slot.mode, generation: slot.generation };
+    if (slot !== undefined) return { kind: "running", generation: slot.generation };
     const waiting = this.#waiting.get(pageId);
     if (waiting !== undefined) return { kind: "waiting", reason: waiting.reason, since: waiting.sinceWall };
     if (this.#handover.has(pageId)) return { kind: "handover" };
@@ -363,11 +361,11 @@ export class SyncEngineHost {
       if (this.#stopping !== null) return;
       pass.progress("page");
       const slot = this.#slots.get(page.pageId);
-      const desired = this.#desiredRun(page);
+      const run = this.#runs(page);
       if (slot !== undefined) {
-        if (desired !== slot.mode) {
-          // Left its mode: finish the step in flight, release, re-acquire in
-          // the new mode on a later pass. `handover` keeps the lock.
+        if (!run) {
+          // Left `live`: finish the step in flight and release. `handover`
+          // keeps the lock.
           slot.keepLock = page.mode === "handover";
           slot.stop.abort();
         }
@@ -379,14 +377,14 @@ export class SyncEngineHost {
         continue;
       }
       this.#handover.delete(page.pageId);
-      if (desired === "live" && page.legacyImportedAt === null) {
+      if (run && page.legacyImportedAt === null) {
         // J3: a live row without its import mark (a page's birth always
         // writes one; a row set live by hand has none): no live loop, the
         // lock this host may hold since `handover` is kept.
         this.#markWaiting(page, "legacy_not_imported", UNCONFIRMED_RETRY_MS);
         continue;
       }
-      if (desired === null) {
+      if (!run) {
         this.#waiting.delete(page.pageId);
         if (page.mode === "live") this.#reportLiveDisabled(page);
         if (session?.holds(page.pageId) === true) await session.unlock(page.pageId).catch(() => undefined);
@@ -396,14 +394,14 @@ export class SyncEngineHost {
         this.#markWaiting(page, "ownership_session_unavailable", 0);
         continue;
       }
-      await this.#acquire(session, page, desired);
+      await this.#acquire(session, page);
     }
   }
 
-  #desiredRun(page: SyncPageRow): "shadow" | "live" | null {
-    if (page.mode === "shadow") return "shadow";
-    if (page.mode === "live" && this.#liveLoopEnabled) return "live";
-    return null;
+  /** Whether this host runs an actor for the page: only a `live` page, and
+   *  only in a build with a live loop. */
+  #runs(page: SyncPageRow): boolean {
+    return page.mode === "live" && this.#liveLoopEnabled;
   }
 
   #reportLiveDisabled(page: SyncPageRow): void {
@@ -462,13 +460,12 @@ export class SyncEngineHost {
         subKey: "page_stopped",
         pageId: page.pageId,
         detail: "ownership_unconfirmed",
-        shadow: page.mode === "shadow",
         context: { reason },
       }).catch(() => undefined);
     }
   }
 
-  async #acquire(session: PgOwnershipSession, page: SyncPageRow, mode: "shadow" | "live"): Promise<void> {
+  async #acquire(session: PgOwnershipSession, page: SyncPageRow): Promise<void> {
     const { db, logger } = this.#o;
     const pageId = page.pageId;
     const waiting = this.#waiting.get(pageId);
@@ -503,12 +500,12 @@ export class SyncEngineHost {
     let transport: PageTransport | null = null;
     let pacer: Pacer;
     let ownRef: string | null;
-    // A live page's socket (J6): created with the slot, started once its
-    // actor exists, stopped before the page's safe release. It is the page's
-    // socket owner: `ws.connect` plans by its state, the transport sends the
-    // Upgrade through its handshake (a test's `liveSocket` stands in for it).
-    const ws = mode === "live" ? this.#createWsSource(page, generation) : null;
-    const standIn = mode === "live" ? this.#o.liveSocket : undefined;
+    // The page's socket (J6): created with the slot, started once its actor
+    // exists, stopped before the page's safe release. It is the page's socket
+    // owner: `ws.connect` plans by its state, the transport sends the Upgrade
+    // through its handshake (a test's `liveSocket` stands in for it).
+    const ws = this.#createWsSource(page, generation);
+    const standIn = this.#o.liveSocket;
     const socket: LivePageSocket | null = standIn === undefined ? ws : standIn(page);
     const socketRef: LivePageSocketRef = () => socket;
     try {
@@ -523,12 +520,7 @@ export class SyncEngineHost {
       });
       pacer.initTakeover(floorDelayMs);
       ownRef = await readOwnRef(db, pageId);
-      transport = mode === "shadow"
-        ? new ShadowTransport({
-          clock: this.#clock,
-          latency: this.#o.shadowLatency?.(pageId) ?? createLegacyShadowLatency({ db, pageId, clock: this.#clock, rng: this.#rng }),
-        })
-        : await this.#liveTransport(page, { ws, socket: socketRef });
+      transport = await this.#liveTransport(page, { ws, socket: socketRef });
     } catch (error) {
       // Nothing was sent under the new generation: release it at once.
       await transport?.close().catch(() => undefined);
@@ -545,7 +537,6 @@ export class SyncEngineHost {
       pageId,
       ownRef,
       generation,
-      mode,
       stall,
       registry: this.#o.registry,
       clock: this.#clock,
@@ -562,16 +553,15 @@ export class SyncEngineHost {
       ...(this.#o.canonicalize === undefined ? {} : { canonicalize: this.#o.canonicalize }),
       ...(this.#o.onThreadChainChanged === undefined ? {} : { onThreadChainChanged: this.#o.onThreadChainChanged }),
       ...(this.#o.onWorkClosed === undefined ? {} : { onWorkClosed: this.#o.onWorkClosed }),
-      ...(this.#o.shadowFeed === undefined ? {} : { shadowFeed: this.#o.shadowFeed }),
       ...(this.#o.faults === undefined ? {} : { faults: this.#o.faults }),
       ...(this.#o.routeTimeScale === undefined ? {} : { routeTimeScale: this.#o.routeTimeScale }),
-      ...(mode === "live" ? { socket: socketRef, secrets: createSyncWorkSecretBox(this.#o.config) } : {}),
+      socket: socketRef,
+      secrets: createSyncWorkSecretBox(this.#o.config),
     });
     const stop = new AbortController();
     const abort = new AbortController();
     const slot: PageSlot = {
       pageId,
-      mode,
       generation,
       actor,
       transport,
@@ -585,17 +575,17 @@ export class SyncEngineHost {
     };
     slot.heartbeat.unref?.();
     this.#slots.set(pageId, slot);
-    logger.info({ pageId, pageLabel: page.pageLabel, mode, generation: generation.toString(), evidence: acquired.evidence },
+    logger.info({ pageId, pageLabel: page.pageLabel, generation: generation.toString(), evidence: acquired.evidence },
       "Fansly sync host: page acquired");
     slot.done = actor.run({ stop: stop.signal, abort: abort.signal })
       .catch((error: unknown): ActorExit => ({ kind: "failed", error: errorName(error) }))
       .then((exit) => this.#onActorExit(slot, exit, session));
     ws?.start();
-    if (mode === "live") await this.#closeLegacyStreamIncidents(page);
+    await this.#closeLegacyStreamIncidents(page);
   }
 
   /**
-   * Every live takeover closes the page's legacy stream latches, which only
+   * Every takeover closes the page's legacy stream latches, which only
    * the legacy executor's chunk recovery resolved and which nothing resolves
    * once the engine runs the page (`resolveLegacyStreamIncidentsOfEnginePage`,
    * reason `engine_owned`): a page switched before the build that added this
@@ -660,7 +650,7 @@ export class SyncEngineHost {
           this.#metrics.increment("sync_ws_demand_unknown_resource", { resource: signal.resource });
           continue;
         }
-        const upsert = demandToUpsert(signal, spec, { pageId, shadow: false, now, ...(page === null ? {} : { page }) });
+        const upsert = demandToUpsert(signal, spec, { pageId, now, ...(page === null ? {} : { page }) });
         if (upsert !== null) upserts.push(upsert);
       }
       if (upserts.length > 0) await upsertDemands(tx, upserts);
@@ -767,15 +757,12 @@ async function settleWithin(promise: Promise<unknown>, ms: number): Promise<bool
 
 /**
  * The host's default alert sink (tests, tools): alerts are logged only. The
- * `sync` process passes the incident sink (`engine/alerts.ts`); a shadow
- * page's alerts are metrics only either way (D14).
+ * `sync` process passes the incident sink (`engine/alerts.ts`).
  */
 export function createLoggingAlertSink(logger: SyncLogger): AlertSink {
   return {
     async open(input) {
-      const fields = { pageId: input.pageId, subKey: input.subKey, detail: input.detail, shadow: input.shadow };
-      if (input.shadow) logger.info(fields, "Fansly sync shadow alert (metric only)");
-      else logger.error(fields, "Fansly sync alert");
+      logger.error({ pageId: input.pageId, subKey: input.subKey, detail: input.detail }, "Fansly sync alert");
     },
     async resolve(input) {
       logger.info({ pageId: input.pageId, subKey: input.subKey }, "Fansly sync alert resolved");

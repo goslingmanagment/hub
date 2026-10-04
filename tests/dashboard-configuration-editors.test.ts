@@ -98,7 +98,7 @@ describe("configuration scalar edits", () => {
   });
 
   it("rejects fractional numbers like the real server validator", () => {
-    const setting = item({ key: "transactionRescanCapDays", kind: "number", desired: 14, default: "14" });
+    const setting = item({ key: "sessionTtlDays", kind: "number", desired: 14, default: "14" });
     for (const input of ["1.5", "-0.5", "1e-1"]) {
       expect(validateConfigOverride(setting.key, Number(input)).ok).toBe(false);
       expect(parseScalarInput("number", input).valid).toBe(false);
@@ -178,7 +178,7 @@ describe("configuration editor feedback", () => {
 
 describe("configuration write reconciliation", () => {
   it("retains the actual clamped PATCH result until the read model confirms it", () => {
-    const previous = item({ key: "transactionRescanCapDays", kind: "number", desired: 14, overrideVersion: 5 });
+    const previous = item({ key: "sessionTtlDays", kind: "number", desired: 14, overrideVersion: 5 });
     const stored = validateConfigOverride(previous.key, 1_000_000);
     expect(stored).toEqual({ ok: true, value: 365 });
     if (!stored.ok) throw new Error(stored.error);

@@ -94,7 +94,7 @@ export function validateConfigOverride(
       return { ok: true, value: trimmed };
     }
     default:
-      // url/secret/derived/alias/complex are never marked editable in the registry
+      // url/secret/derived/complex are never marked editable in the registry
       // (a parity test enforces this); guard anyway so a future mistake fails closed.
       return { ok: false, error: `Config key is not editable: ${key}` };
   }
@@ -151,6 +151,30 @@ export function validateCaptureCasReadModeTransition(
   }
   if (order[next]! - order[currentMode]! > 1) {
     return `captureCasReadMode may only step upward one mode at a time (${currentMode} → ${next}); go through shadow first`;
+  }
+  return null;
+}
+
+/** chat-extension H-4c: the aiLiveTextContextMode transition rule, the same
+ *  shape as the union-mode rule above and for the same reason. `serve` puts
+ *  text a client supplied into the model's context, so it is reachable only
+ *  through `shadow`, where the same merge runs and is recorded but cannot
+ *  change a single generation. Upward moves are one step at a time
+ *  (off→shadow→serve); any downward move is an allowed rollback; re-writing the
+ *  same value is allowed. `current` is the stored override's value (null = no
+ *  override = off); an invalid stored value reads as off. Clearing the override
+ *  resolves to off and needs no check. */
+export function validateAiLiveTextContextModeTransition(
+  current: ConfigOverrideValue | null,
+  next: string,
+): string | null {
+  const order: Record<string, number> = { off: 0, shadow: 1, serve: 2 };
+  const currentMode = current === "shadow" || current === "serve" ? (current as string) : "off";
+  if (!(next in order)) {
+    return "aiLiveTextContextMode must be one of: off, shadow, serve";
+  }
+  if (order[next]! - order[currentMode]! > 1) {
+    return `aiLiveTextContextMode may only step upward one mode at a time (${currentMode} → ${next}); go through shadow first`;
   }
   return null;
 }

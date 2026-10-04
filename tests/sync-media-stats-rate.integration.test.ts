@@ -29,9 +29,7 @@ import {
 // demand that pulls the walk forward and a restarted actor included — while
 // other work keeps going in between; a 429 there holds only its route
 // (`Retry-After`, else the ladder of owner decision №14, then the route at half
-// rate), never the page, and the chat and money reads still go out; a shadow
-// page paces its simulated walk the
-// same way, so the shadow report counts what the live walk will send.
+// rate), never the page, and the chat and money reads still go out.
 
 let testDb: StartedTestDatabase | null = null;
 
@@ -65,8 +63,8 @@ const BACKFILL_DONE = {
 
 const itemOf = (n: number) => `7770000000000000${String(n).padStart(2, "0")}`;
 
-async function seedPage(mode: "live" | "shadow"): Promise<number> {
-  const { pageId } = await seedSyncPage({ db: db(), pool: testDb!.pool }, { mode, guard: mode === "live" ? "fansly_sync_engine" : null });
+async function seedPage(): Promise<number> {
+  const { pageId } = await seedSyncPage({ db: db(), pool: testDb!.pool }, { mode: "live", guard: "fansly_sync_engine" });
   await testDb!.pool.query(
     "update pages set external_page_id = $2, last_verified_at = clock_timestamp() - interval '1 minute' where id = $1",
     [pageId, OWN_ID],
@@ -90,9 +88,9 @@ async function seedItem(pageId: number, ref: string): Promise<void> {
   );
 }
 
-async function demand(pageId: number, resource: string, shadow = false, subject = ""): Promise<void> {
+async function demand(pageId: number, resource: string, subject = ""): Promise<void> {
   const spec = fanslyResourceSpec(resource)!;
-  await upsertDemand(db(), { pageId, shadow, resource, subject, kind: spec.kind, class: spec.class, demand: { reasons: ["test"] } });
+  await upsertDemand(db(), { pageId, resource, subject, kind: spec.kind, class: spec.class, demand: { reasons: ["test"] } });
 }
 
 /** A stand-in that reads `/polls` once, then is done. */
@@ -103,9 +101,6 @@ function oneRead(): ResourceModule {
     },
     async apply() {
       return { work: { satisfiesRevision: true, close: "done", closeReason: "stand_in" }, followups: [] };
-    },
-    async shadow() {
-      return { work: { satisfiesRevision: true, close: "done" }, followups: [] };
     },
   };
 }
@@ -118,9 +113,6 @@ function busy(): ResourceModule {
     },
     async apply(_tx, input) {
       return { work: { satisfiesRevision: false, nextDueAt: input.now }, followups: [] };
-    },
-    async shadow(_work, _request, ctx) {
-      return { work: { satisfiesRevision: false, nextDueAt: ctx.now }, followups: [] };
     },
   };
 }
@@ -169,13 +161,12 @@ interface Attempt {
   completed_at: Date | null;
   http_status: number | null;
   error_class: string | null;
-  shadow: boolean;
 }
 
 async function attemptsOf(pageId: number): Promise<Attempt[]> {
   const result = await testDb!.pool.query<Attempt>(
-    `select id::int as id, resource, operation, admitted_at, sent_at, completed_at, http_status, error_class, shadow
-       from sync_attempts where page_id = $1 order by id`,
+    `select id::int as id, resource, operation, admitted_at, sent_at, completed_at, http_status, error_class
+       from sync_attempts where page_id = $1 and not shadow order by id`,
     [pageId],
   );
   return result.rows;
@@ -187,14 +178,6 @@ async function visited(pageId: number): Promise<number> {
     [pageId],
   );
   return result.rows[0]!.n;
-}
-
-async function walkRow(pageId: number, shadow = false) {
-  const result = await testDb!.pool.query<{ waiting_reason: string | null; due_at: Date; state: string }>(
-    "select waiting_reason, due_at, state from sync_work where page_id = $1 and resource = $2 and shadow = $3 order by id desc limit 1",
-    [pageId, WALK, shadow],
-  );
-  return result.rows[0] ?? null;
 }
 
 /** Run a live actor until `done`, then stop it. */
@@ -209,7 +192,7 @@ async function runLive(
   routeTimeScale = 0,
 ): Promise<void> {
   const { actor, stop, abort } = await makeTestActor({
-    db: db(), pageId, mode: "live", registry: reg, transport, ownRef: OWN_ID, capture: fanslyCaptureCodec, alerts, metrics, routeTimeScale,
+    db: db(), pageId, registry: reg, transport, ownRef: OWN_ID, capture: fanslyCaptureCodec, alerts, metrics, routeTimeScale,
   });
   const running = actor.run({ stop: stop.signal, abort: abort.signal });
   try {
@@ -231,7 +214,7 @@ function expectSpaced(attempts: readonly Attempt[], intervalMs: number): void {
 describe("media stats at their route's budget (owner decisions №20, D2)", () => {
   it("sends two media-stats steps a route interval apart through demand bumps and a restarted actor, other work between", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
+    const pageId = await seedPage();
     for (const n of [1, 2, 3, 4]) await seedItem(pageId, itemOf(n));
     const reg = registry({ busy: true });
     await demand(pageId, WALK);
@@ -275,7 +258,7 @@ describe("media stats at their route's budget (owner decisions №20, D2)", () =
 
 describe("a 429 on the media statistics (owner decisions №20, №22)", () => {
   async function run429(retryAfter: string | null) {
-    const pageId = await seedPage("live");
+    const pageId = await seedPage();
     for (const n of [1, 2]) await seedItem(pageId, itemOf(n));
     const reg = registry();
     await demand(pageId, WALK);
@@ -286,7 +269,7 @@ describe("a 429 on the media statistics (owner decisions №20, №22)", () => {
       media += 1;
       if (media === 1) {
         // While the walk is held, a chat and the money head are asked for.
-        void demand(pageId, "dm-messages.head", false, "g1");
+        void demand(pageId, "dm-messages.head", "g1");
         void demand(pageId, "transactions.head");
         return tooMany(retryAfter);
       }
@@ -340,37 +323,7 @@ describe("a 429 on the media statistics (owner decisions №20, №22)", () => {
       // The route's own incident (D5), never alert 1.
       expect(alerts.opened.filter((alert) => alert.subKey === "page_stopped")).toEqual([]);
       expect(alerts.opened.filter((alert) => alert.subKey === "route_limited"))
-        .toEqual([expect.objectContaining({ route: "media.offer_stats", detail: "rate_limit", shadow: false })]);
+        .toEqual([expect.objectContaining({ route: "media.offer_stats", detail: "rate_limit" })]);
     }, 60_000);
   }
-});
-
-describe("shadow paces the media-stats walk the same way (owner decisions №20, D2)", () => {
-  it("simulated media-stats steps are sent a route interval apart on the shadow journal; the walk visits every item and rests", async (context) => {
-    if (!testDb) return context.skip();
-    const pageId = await seedPage("shadow");
-    for (const n of [1, 2, 3]) await seedItem(pageId, itemOf(n));
-    const reg = registry({ busy: true });
-    await demand(pageId, WALK, true);
-    await demand(pageId, "transactions.head", true);
-    const { actor, stop, abort } = await makeTestActor({ db: db(), pageId, mode: "shadow", registry: reg, ownRef: OWN_ID, routeTimeScale: ROUTE_SCALE });
-    const running = actor.run({ stop: stop.signal, abort: abort.signal });
-    try {
-      await waitFor(async () => ((await walkRow(pageId, true))?.waiting_reason === "not_due" ? true : null), 40_000, "the shadow walk to rest");
-    } finally {
-      stop.abort();
-      await running;
-    }
-    const all = await attemptsOf(pageId);
-    expect(all.every((attempt) => attempt.shadow)).toBe(true);
-    const media = all.filter((attempt) => attempt.operation === "media.offer_stats");
-    // One shadow step per item (each a one-window refresh): the demand the
-    // shadow report counts is the live walk's.
-    expect(media).toHaveLength(3);
-    expectSpaced(media, MEDIA_INTERVAL_MS);
-    expectSpaced(all.filter((attempt) => attempt.operation === "polls"), POLLS_INTERVAL_MS);
-    for (let i = 1; i < media.length; i += 1) {
-      expect(all.filter((attempt) => attempt.id > media[i - 1]!.id && attempt.id < media[i]!.id).length).toBeGreaterThanOrEqual(1);
-    }
-  }, 60_000);
 });

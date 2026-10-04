@@ -1,10 +1,10 @@
 import { classifyFanslyResponse } from "./lane.ts";
 
 // The purchase-history rules of the Sync Engine's `purchases.targets`
-// resource (resources/purchases.ts) and the purchase announcements report:
-// the media target a money fact names and the classification of one captured
-// order-history page. Pure; a classification reads only the durable status
-// and body, so a parser repair can reclassify history without a request.
+// resource (resources/purchases.ts): the media target a money fact names and
+// the classification of one captured order-history page. Pure; a
+// classification reads only the durable status and body, so a parser repair
+// can reclassify history without a request.
 
 type JsonRecord = Record<string, unknown>;
 
@@ -57,15 +57,6 @@ function asRecord(value: unknown): JsonRecord | null {
 
 function asString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
-}
-
-function records(value: unknown): JsonRecord[] {
-  return Array.isArray(value)
-    ? value.flatMap((item) => {
-      const record = asRecord(item);
-      return record ? [record] : [];
-    })
-    : [];
 }
 
 function purchaseHistoryTargetKindFromRawType(
@@ -130,13 +121,6 @@ export function classifyFanslyPurchaseHistoryResponse(payloadValue: unknown) {
     },
     isEmpty: (value) => fanslyPurchaseHistoryRows(value)?.length === 0,
   });
-}
-
-/** The order rows of a purchase-history body (objects only); null when the
- *  body holds no order array (a refusal, a malformed page). */
-export function fanslyPurchaseHistoryOrderRows(payloadValue: unknown): JsonRecord[] | null {
-  const rows = fanslyPurchaseHistoryRows(payloadValue);
-  return rows === null ? null : records(rows);
 }
 
 /**

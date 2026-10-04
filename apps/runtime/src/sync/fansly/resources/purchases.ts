@@ -1,11 +1,4 @@
-import { sql } from "drizzle-orm";
-
-import {
-  latestClosedWorkForKey,
-  type Database,
-  type SyncWorkRow,
-} from "@agency_hub_core/db";
-import { FANSLY_ORDER_HISTORY_PAGE_LIMIT } from "@agency_hub_core/fansly";
+import { latestClosedWorkForKey, type SyncWorkRow } from "@agency_hub_core/db";
 
 import {
   classifyFanslyPurchaseHistoryCapture,
@@ -17,15 +10,10 @@ import type {
   ApplyInput,
   ApplyResult,
   DemandSignal,
-  ReplayContext,
-  ReplayObservation,
-  ReplayVerdict,
   RequestPlan,
   ResourceModule,
-  ShadowResult,
   StepPlan,
 } from "../../engine/resource.ts";
-import { advanceShadowWalk, type ShadowWalkProgress } from "../lib/offset-walk.ts";
 
 // `purchases.targets` (plan §5, design §5.9): the order history of one PPV
 // media or bundle the page sold — `GET /media/orderhistory?accountMediaId=|
@@ -156,13 +144,12 @@ interface TargetCursor {
   /** The demand revision this walk's head covers: the revision its head page
    *  was admitted at (a walk imported mid-history: its first page's). */
   headRevision: number | null;
-  shadow: ShadowWalkProgress | null;
 }
 
 /** A walk from the head that stops on a page holding one of `knownOrderIds`
  *  (null: the last closed walk's head, looked up on the first page). */
 function headWalk(knownOrderIds: string[] | null): TargetCursor {
-  return { before: null, pages: 0, orders: 0, headOrderIds: [], knownOrderIds, headRevision: null, shadow: null };
+  return { before: null, pages: 0, orders: 0, headOrderIds: [], knownOrderIds, headRevision: null };
 }
 
 function parseTargetCursor(value: unknown): TargetCursor {
@@ -171,9 +158,6 @@ function parseTargetCursor(value: unknown): TargetCursor {
     const raw = record[key];
     return typeof raw === "number" && Number.isSafeInteger(raw) && raw >= 0 ? raw : 0;
   };
-  const shadow = recordOf(record.shadow);
-  const steps = shadow.steps;
-  const done = shadow.done;
   const headRevision = record.headRevision;
   return {
     before: typeof record.before === "string" && record.before.length > 0 ? record.before : null,
@@ -182,7 +166,6 @@ function parseTargetCursor(value: unknown): TargetCursor {
     headOrderIds: stringsOf(record.headOrderIds),
     knownOrderIds: Array.isArray(record.knownOrderIds) ? stringsOf(record.knownOrderIds) : null,
     headRevision: typeof headRevision === "number" && Number.isSafeInteger(headRevision) && headRevision >= 0 ? headRevision : null,
-    shadow: typeof steps === "number" && typeof done === "number" ? { steps, done } : null,
   };
 }
 
@@ -204,25 +187,16 @@ function orderIdsOf(response: unknown): string[] {
   });
 }
 
-/** The orders the page already knows for a target (shadow estimate). */
-async function knownOrderCount(db: Database, pageId: number, target: PurchaseTarget): Promise<number> {
-  const result = await db.execute<{ n: number }>(sql`
-    select count(*)::int as n from media_orders
-     where page_id = ${pageId} and media_offer_ref = ${target.id}
-  `);
-  return Number(result.rows[0]?.n ?? 0);
-}
-
 function targetOf(work: Pick<SyncWorkRow, "subject">): PurchaseTarget | null {
   return parsePurchaseTargetSubject(work.subject);
 }
 
 export const purchasesTargetsModule: ResourceModule = {
-  async plan(work, ctx): Promise<StepPlan> {
+  async plan(work): Promise<StepPlan> {
     const target = targetOf(work);
     if (target === null) return { kind: "quarantine", reason: "purchase_target_unknown" };
     const cursor = parseTargetCursor(work.cursor);
-    return { kind: "request", request: targetRequest(target, ctx.shadow ? null : cursor.before) };
+    return { kind: "request", request: targetRequest(target, cursor.before) };
   },
 
   async apply(tx, input: ApplyInput): Promise<ApplyResult> {
@@ -253,7 +227,7 @@ export const purchasesTargetsModule: ResourceModule = {
     let knownOrderIds = cursor.knownOrderIds;
     if (knownOrderIds === null) {
       const previous = await latestClosedWorkForKey(tx, {
-        pageId: input.pageId, shadow: false, resource: PURCHASES_TARGETS_KEY, subject: input.work.subject,
+        pageId: input.pageId, resource: PURCHASES_TARGETS_KEY, subject: input.work.subject,
       });
       knownOrderIds = stringsOf(recordOf(previous?.proof).headOrderIds);
     }
@@ -264,7 +238,6 @@ export const purchasesTargetsModule: ResourceModule = {
       headOrderIds: cursor.pages === 0 ? orderIds.slice(0, KNOWN_ORDER_IDS_KEPT) : cursor.headOrderIds,
       knownOrderIds,
       headRevision,
-      shadow: null,
     };
     const known = new Set(knownOrderIds);
     const caughtUp = orderIds.some((id) => known.has(id));
@@ -302,68 +275,4 @@ export const purchasesTargetsModule: ResourceModule = {
       counters: { orders: orderIds.length },
     };
   },
-
-  async shadow(work, _request, ctx): Promise<ShadowResult> {
-    const target = targetOf(work);
-    const cursor = parseTargetCursor(work.cursor);
-    const known = target === null ? 0 : await knownOrderCount(ctx.db, ctx.pageId, target);
-    // A walk to the empty page: every full page of the known orders, the
-    // short one, then the empty one.
-    const step = advanceShadowWalk(cursor.shadow, () =>
-      known === 0 ? 1 : Math.floor(known / FANSLY_ORDER_HISTORY_PAGE_LIMIT) + 2);
-    return step.finished
-      ? { work: { satisfiesRevision: true, close: "done", closeReason: "shadow", cursor: { ...cursor, shadow: null } }, followups: [] }
-      : { work: { satisfiesRevision: false, nextDueAt: ctx.now, cursor: { ...cursor, shadow: step.progress } }, followups: [] };
-  },
-
-  async replay(observation: ReplayObservation, ctx: ReplayContext): Promise<ReplayVerdict> {
-    return replayPurchaseHistory(observation, ctx);
-  },
 };
-
-/**
- * Replay of a legacy `purchase_history` observation (design §5.9): the
- * classifier accepts the page, and every (offer, buyer) it served has a
- * `media_orders` row on the page.
- */
-async function replayPurchaseHistory(observation: ReplayObservation, ctx: ReplayContext): Promise<ReplayVerdict> {
-  const payload = recordOf(observation.payload);
-  if (recordOf(payload.error).status !== undefined) {
-    return { kind: "not_replayable", reason: "legacy_rejection_receipt" };
-  }
-  const classified = classifyFanslyPurchaseHistoryCapture({
-    id: observation.id,
-    targetKey: "single:replay",
-    requestBefore: null,
-    statusCode: null,
-    responsePayload: observation.payload,
-  });
-  if (classified.blocked) return { kind: "mismatch", reason: `contract:${classified.outcome}` };
-  const aggregation = recordOf(payload.aggregationData);
-  const rows = (Array.isArray(payload.accountMediaOrderHistory)
-    ? payload.accountMediaOrderHistory
-    : Array.isArray(payload.accountMediaOrders)
-      ? payload.accountMediaOrders
-      : Array.isArray(aggregation.accountMediaOrders) ? aggregation.accountMediaOrders : []) as unknown[];
-  const pairs = new Map<string, { offer: string; buyer: string }>();
-  for (const row of rows) {
-    const record = recordOf(row);
-    const offer = typeof record.accountMediaBundleId === "string" && record.accountMediaBundleId.length > 0
-      ? record.accountMediaBundleId
-      : typeof record.accountMediaId === "string" ? record.accountMediaId : "";
-    const buyer = typeof record.accountId === "string" ? record.accountId : "";
-    if (offer.length > 0 && buyer.length > 0) pairs.set(`${offer}:${buyer}`, { offer, buyer });
-  }
-  if (pairs.size === 0) return { kind: "match", detail: { orders: 0 } };
-  const offers = [...new Set([...pairs.values()].map((pair) => pair.offer))];
-  const stored = await ctx.db.execute<{ offer: string; buyer: string }>(sql`
-    select distinct media_offer_ref as offer, buyer_platform_user_id as buyer
-      from media_orders
-     where page_id = ${ctx.pageId} and media_offer_ref = any(${sql.param(offers)}::text[])
-  `);
-  const known = new Set(stored.rows.map((row) => `${row.offer}:${row.buyer}`));
-  const missing = [...pairs.keys()].filter((key) => !known.has(key));
-  return missing.length === 0
-    ? { kind: "match", detail: { orders: pairs.size } }
-    : { kind: "mismatch", reason: "orders_missing", detail: { orders: pairs.size, missing: missing.length, examples: missing.slice(0, 5) } };
-}

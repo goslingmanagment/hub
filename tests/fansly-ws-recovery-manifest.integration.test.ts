@@ -33,7 +33,7 @@ async function fixture(createdAtMs = Date.now() - 60_000, createdAt = createdAtM
   await fileFanslyWsHintReceipt(db.pool, { id: 1, pageId: page.id, observationId: captured.observationId,
     receivedAt: captured.receivedAt, generation,
     node: { path: [0], outcome: "hint", hint: { type: "message_created", groupRef: "100", messageRef: "150" } },
-  }, null);
+  });
   const request = { pageLabel: page.label, targets: [{ observationId: captured.observationId, groupRef: "100", messageRef: "150" }] };
   const manifest = () => buildFanslyWsRecoveryManifest(app, request);
   const counts = async () => (await db.pool.query(`select
@@ -67,7 +67,7 @@ describe("bounded read-only WS recovery manifest", () => {
     await fileFanslyWsHintReceipt(db.pool, { id: 2, pageId: f.page.id, observationId: 999,
       receivedAt: new Date(), generation: f.generation,
       node: { path: [], outcome: "mutation_debt", mutation: { messageRef: "150", groupRef: "100", bulk: false, correlationRef: null } },
-    }, null);
+    });
     expect((await f.manifest()).items[0]).toMatchObject({ reader: { state: "missing" },
       laterMutations: [{ same_group: true, same_generation: true }] });
   });

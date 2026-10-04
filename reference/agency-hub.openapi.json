@@ -1078,7 +1078,6 @@
                                     "url",
                                     "secret",
                                     "derived",
-                                    "alias",
                                     "complex"
                                   ]
                                 },
@@ -33942,7 +33941,8 @@
                               "balances",
                               "profile_notifications",
                               "content_history",
-                              "media_previews"
+                              "media_previews",
+                              "account_settings"
                             ]
                           },
                           "label": {
@@ -34074,7 +34074,8 @@
                               "balances",
                               "profile_notifications",
                               "content_history",
-                              "media_previews"
+                              "media_previews",
+                              "account_settings"
                             ]
                           },
                           "mode": {
@@ -34217,7 +34218,8 @@
                               "balances",
                               "profile_notifications",
                               "content_history",
-                              "media_previews"
+                              "media_previews",
+                              "account_settings"
                             ]
                           },
                           "state": {
@@ -34514,7 +34516,8 @@
                             "balances",
                             "profile_notifications",
                             "content_history",
-                            "media_previews"
+                            "media_previews",
+                            "account_settings"
                           ]
                         },
                         "mode": {
@@ -34777,7 +34780,8 @@
                       "balances",
                       "profile_notifications",
                       "content_history",
-                      "media_previews"
+                      "media_previews",
+                      "account_settings"
                     ]
                   },
                   "expectedRevision": {
@@ -35531,7 +35535,8 @@
                             "balances",
                             "profile_notifications",
                             "content_history",
-                            "media_previews"
+                            "media_previews",
+                            "account_settings"
                           ]
                         },
                         "mode": {
@@ -35634,7 +35639,8 @@
                               "balances",
                               "profile_notifications",
                               "content_history",
-                              "media_previews"
+                              "media_previews",
+                              "account_settings"
                             ]
                           },
                           "mode": {
@@ -110749,6 +110755,66 @@
                       "new-follower"
                     ]
                   },
+                  "knownFanMessageIds": {
+                    "minItems": 1,
+                    "maxItems": 10,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[1-9]\\d{0,29}$"
+                    }
+                  },
+                  "liveTextContext": {
+                    "type": "object",
+                    "properties": {
+                      "capturedAt": {
+                        "type": "string",
+                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?(?:Z|[+-]\\d{2}:\\d{2})$"
+                      },
+                      "items": {
+                        "minItems": 1,
+                        "maxItems": 60,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "platformMessageId": {
+                              "type": "string",
+                              "pattern": "^[1-9]\\d{0,29}$"
+                            },
+                            "direction": {
+                              "type": "string",
+                              "enum": [
+                                "fan",
+                                "model"
+                              ]
+                            },
+                            "occurredAt": {
+                              "type": "string",
+                              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?(?:Z|[+-]\\d{2}:\\d{2})$"
+                            },
+                            "text": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 5000
+                            }
+                          },
+                          "required": [
+                            "platformMessageId",
+                            "direction",
+                            "occurredAt",
+                            "text"
+                          ],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": [
+                      "capturedAt",
+                      "items"
+                    ],
+                    "additionalProperties": false
+                  },
                   "clientContext": {
                     "type": "object",
                     "properties": {
@@ -116333,6 +116399,715 @@
         }
       }
     },
+    "/api/v1/client/pages/{pageLabel}/conversations/{fanRef}/recaps": {
+      "get": {
+        "summary": "The shared full and short recap of one fan on one page, with their text",
+        "tags": [
+          "client"
+        ],
+        "description": "Read-only and database-only: no platform request, no generation, no AI spend. Answers the freshest usable full and short `fan-summary` recap of the fan (`fanRef` is the OnlyFans fan id, which is the chat id), the same two rows `aiRecapStatus` describes, to every chatter granted the page, whoever generated them. A recap generated from context only its caller saw is never selected. `personaDefinitionId` narrows both slots to one persona. `fullSavedToProfile` tells whether the fan's latest dossier on this page has exactly the full recap's text. Behind the chat-extension `recap` switch: 409 `client_feature_disabled` with the reason.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 100
+            },
+            "in": "query",
+            "name": "personaDefinitionId",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            },
+            "in": "path",
+            "name": "pageLabel",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9]\\d{0,29}$"
+            },
+            "in": "path",
+            "name": "fanRef",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "full": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "generationRef": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 100
+                            },
+                            "generatedAt": {
+                              "type": "string"
+                            },
+                            "personaDefinitionId": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "coverage": {
+                              "type": "object",
+                              "properties": {
+                                "transcriptCoverage": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 64
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "requestedCount": {
+                                  "anyOf": [
+                                    {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "keptCount": {
+                                  "anyOf": [
+                                    {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "transcriptCoverage",
+                                "requestedCount",
+                                "keptCount"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "text": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "generationRef",
+                            "generatedAt",
+                            "personaDefinitionId",
+                            "coverage",
+                            "text"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "short": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "generationRef": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 100
+                            },
+                            "generatedAt": {
+                              "type": "string"
+                            },
+                            "personaDefinitionId": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "coverage": {
+                              "type": "object",
+                              "properties": {
+                                "transcriptCoverage": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 64
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "requestedCount": {
+                                  "anyOf": [
+                                    {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "keptCount": {
+                                  "anyOf": [
+                                    {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "transcriptCoverage",
+                                "requestedCount",
+                                "keptCount"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "text": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "generationRef",
+                            "generatedAt",
+                            "personaDefinitionId",
+                            "coverage",
+                            "text"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "fullSavedToProfile": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "full",
+                    "short",
+                    "fullSavedToProfile"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/client/pages/{pageLabel}/fans/{fanRef}/profile/from-generation": {
+      "post": {
+        "summary": "Save a finished full recap as the fan's dossier, from the generation the hub stored",
+        "tags": [
+          "client"
+        ],
+        "description": "Database-only: no platform request, no generation, no AI spend. The caller names one of its own generations by `generationRef` (the `meta.requestId` of the AI request) and the hub writes that generation's text as a new dossier version of the fan on the page (`fanRef` is the OnlyFans fan id, which is the chat id). Only a generation of the same user, page and fan is found (404 otherwise), and only a usable full `fan-summary` is saved: 409 `generation_not_eligible` with a `reason` for any other. Idempotent: when a version of the fan's dossier already has exactly this text, the answer is `existing` and nothing is written. The generation's record appears shortly after the stream's `done` frame; until then, a request that names its `clientRequestId` is answered 409 `generation_not_ready` and may be repeated. That answer can stay for good when the record was never written, so a client bounds its repeats. Behind the chat-extension `recap` switch: 409 `client_feature_disabled` with the reason.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "generationRef": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  },
+                  "clientRequestId": {
+                    "type": "string",
+                    "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                  }
+                },
+                "required": [
+                  "generationRef"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            },
+            "in": "path",
+            "name": "pageLabel",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9]\\d{0,29}$"
+            },
+            "in": "path",
+            "name": "fanRef",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "outcome": {
+                      "type": "string",
+                      "enum": [
+                        "created",
+                        "existing"
+                      ]
+                    },
+                    "profile": {
+                      "type": "object",
+                      "properties": {
+                        "version": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "createdAt": {
+                          "type": "string"
+                        },
+                        "sourceGeneratedAt": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "version",
+                        "createdAt",
+                        "sourceGeneratedAt"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "outcome",
+                    "profile"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/events/snapshot": {
       "get": {
         "summary": "Current durable sync state for replay-gap recovery",
@@ -119390,16 +120165,10 @@
                           "type": "integer",
                           "exclusiveMinimum": 0,
                           "maximum": 9007199254740991
-                        },
-                        "followerMaxAgeMinutes": {
-                          "type": "integer",
-                          "exclusiveMinimum": 0,
-                          "maximum": 9007199254740991
                         }
                       },
                       "required": [
-                        "lightMaxAgeMinutes",
-                        "followerMaxAgeMinutes"
+                        "lightMaxAgeMinutes"
                       ],
                       "additionalProperties": false
                     },
@@ -119809,16 +120578,10 @@
                           "type": "integer",
                           "exclusiveMinimum": 0,
                           "maximum": 9007199254740991
-                        },
-                        "followerMaxAgeMinutes": {
-                          "type": "integer",
-                          "exclusiveMinimum": 0,
-                          "maximum": 9007199254740991
                         }
                       },
                       "required": [
-                        "lightMaxAgeMinutes",
-                        "followerMaxAgeMinutes"
+                        "lightMaxAgeMinutes"
                       ],
                       "additionalProperties": false
                     },
@@ -137959,6 +138722,9 @@
                                 "live"
                               ]
                             },
+                            "ownerRunning": {
+                              "type": "boolean"
+                            },
                             "streams": {
                               "type": "array",
                               "items": {
@@ -137993,6 +138759,11 @@
                                       }
                                     ]
                                   },
+                                  "activeWork": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
                                   "paused": {
                                     "type": "boolean"
                                   },
@@ -138003,6 +138774,56 @@
                                     "anyOf": [
                                       {
                                         "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "waiting": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "resource": {
+                                            "type": "string"
+                                          },
+                                          "reason": {
+                                            "type": "string",
+                                            "enum": [
+                                              "not_due",
+                                              "pacer",
+                                              "class_share",
+                                              "page_hold",
+                                              "route_budget",
+                                              "route_hold",
+                                              "resource_hold",
+                                              "subject_breaker",
+                                              "blocked_by_vendor",
+                                              "quarantined",
+                                              "paused",
+                                              "dependency",
+                                              "ownership_unconfirmed",
+                                              "running"
+                                            ]
+                                          },
+                                          "until": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          }
+                                        },
+                                        "required": [
+                                          "resource",
+                                          "reason",
+                                          "until"
+                                        ],
+                                        "additionalProperties": false
                                       },
                                       {
                                         "type": "null"
@@ -138020,9 +138841,11 @@
                                   "resources",
                                   "succeededAt",
                                   "nextDueAt",
+                                  "activeWork",
                                   "paused",
                                   "needsAttention",
                                   "reason",
+                                  "waiting",
                                   "consecutiveFailures"
                                 ],
                                 "additionalProperties": false
@@ -138031,6 +138854,7 @@
                           },
                           "required": [
                             "mode",
+                            "ownerRunning",
                             "streams"
                           ],
                           "additionalProperties": false

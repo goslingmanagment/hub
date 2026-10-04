@@ -37,7 +37,7 @@ import {
 // compares them with the rows when it acquires a page and lets the columns
 // win, so a rollback to it must find the two equal — and nothing reads them:
 // an acquisition, and a hold write under no generation, take the rows as
-// they stand. `hold_step`, which that image never names, is gone (0241).
+// they stand. `hold_step`, which that image never names, is gone (0243).
 
 let testDb: StartedTestDatabase | null = null;
 
@@ -208,7 +208,7 @@ describe("the hold set table (0240)", () => {
   });
 });
 
-describe("the first old hold column goes (0241)", () => {
+describe("the first old hold column goes (0243)", () => {
   it("the migration drops `hold_step` alone; the hold writes and an acquisition run on what is left", async (context) => {
     if (!testDb) return context.skip();
     const migrations = readdirSync("packages/db/migrations").filter((file) => file.endsWith(".sql")).sort();

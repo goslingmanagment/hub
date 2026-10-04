@@ -187,9 +187,9 @@ describe("CLI config (audited live overrides)", () => {
     }
     const { run, auditEvents } = harness(testDb);
 
-    // Editable, but not wired live (the endpoint pause), a restart-only key, a secret.
-    await expect(run(["config", "set", "fanslyDmMessagesDelayMs", "7500", "--note", "x"]))
-      .rejects.toThrow("Config key is not runtime-editable: fanslyDmMessagesDelayMs");
+    // Editable, but not wired live (a daily credit budget), a restart-only key, a secret.
+    await expect(run(["config", "set", "ofapiDmDailyCreditBudget", "750", "--note", "x"]))
+      .rejects.toThrow("Config key is not runtime-editable: ofapiDmDailyCreditBudget");
     await expect(run(["config", "clear", "logLevel", "--note", "x"]))
       .rejects.toThrow("Config key is not runtime-editable: logLevel");
     await expect(run(["config", "get", "databaseUrl"]))
