@@ -600,7 +600,7 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # and revoke each (cabinet: Settings > Team > the person > "Завершить вход на
   # устройстве", i.e. DELETE /api/v1/admin/users/by-id/:userId/device-tokens/
   # :tokenId); the extension signs in again after the forward deploy.
-  "0236_device_token_client_profile.sql"
+  "0238_device_token_client_profile.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"
