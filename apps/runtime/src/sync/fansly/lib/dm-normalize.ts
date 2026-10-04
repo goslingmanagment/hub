@@ -1,13 +1,15 @@
-import type { upsertPageDmMessages } from "@agency_hub_core/db";
+import type { UpsertPageDmMessageInput } from "@agency_hub_core/db";
 import type { FanslyMessage } from "@agency_hub_core/fansly";
 
 import type { ResolvedPageContext } from "../../../services/page-context.ts";
 import { normalizeFanslyTimestamp } from "./timestamp.ts";
 
 // A served `/message` page as hot-table rows, without I/O: shared by the
-// Fansly Sync Engine's DM apply and the legacy DM lanes.
+// legacy DM lanes, which store them in `page_dm_messages`, and the Fansly Sync
+// Engine, which writes no hot row (step 4 S4-13, I23) — its DM apply names the
+// page's messages with them and its replay compares legacy's rows to them.
 
-export type FanslyDmMessageUpsertInput = Parameters<typeof upsertPageDmMessages>[1];
+export type FanslyDmMessageUpsertInput = UpsertPageDmMessageInput[];
 
 export function normalizeDmTipAmountCents(
   platform: ResolvedPageContext["platform"],

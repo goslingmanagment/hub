@@ -151,6 +151,7 @@ export function renderPagingResolvedMessage(input: {
     platform: candidate.platform,
     stream: candidate.stream as SyncStream | null,
     subKey: subKeyOf(candidate),
+    resolution: candidate.resolution,
   });
   const quiet = formatDurationShort(input.now.getTime() - input.resolvedAt.getTime());
   if (!input.pagedOpenedAt) {

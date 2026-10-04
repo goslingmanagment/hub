@@ -11,7 +11,7 @@ export function canParseFanslyWsObservation(observation: CanonicalizableObservat
 }
 
 /** Parsing retains addresses and explicit debt only. A candidate type is not
- * permission to dispatch: the operational projector has separate live gates.
+ * permission to dispatch: a consumer keeps its own live gates.
  * Old B0 envelopes without a captured generation remain unattributable debt. */
 export function canonicalizeFanslyWsObservation(observation: CanonicalizableObservation): CanonicalEventDraft[] {
   if (!canParseFanslyWsObservation(observation) || !isRecord(observation.payload)) return [];

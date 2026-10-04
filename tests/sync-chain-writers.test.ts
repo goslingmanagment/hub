@@ -5,7 +5,8 @@ import { describe, expect, it } from "vitest";
 
 // Fansly Sync Engine invariant I9 (design §1, §2.3, §8.1): the chain columns
 // of a DM thread have ONE writer module, and the engine writes the legacy
-// coverage columns only through `syncLegacyThreadSummary`.
+// coverage columns only through `writeThreadSummary` (and its deletion
+// recount), from message_archive since step 4 (S4-08).
 //
 // The census reads every statement that writes `page_dm_threads` (raw SQL
 // `update`/`insert`, drizzle `.update(...)`/`.insert(...)` of the table or its
@@ -89,7 +90,7 @@ describe("DM thread chain writers (I9)", () => {
     expect(engine.filter((path) => threadWrites(readFileSync(join(root, path), "utf8")).length > 0)).toEqual([]);
   });
 
-  it("writes legacy coverage columns from the engine's repositories only through syncLegacyThreadSummary and syncLegacyThreadSummaryAfterDeletion", () => {
+  it("writes legacy coverage columns from the engine's repositories only through writeThreadSummary and writeThreadSummaryAfterDeletion", () => {
     const syncRepositories = SOURCES.filter((path) => path.startsWith("packages/db/src/repositories/sync/"));
     const legacyAssignment = /\b(stored_message_count|message_coverage_status|message_backfill_complete|last_message_sync_at)\s*=\s*[^=]/;
     expect(syncRepositories.filter((path) => threadWrites(readFileSync(join(root, path), "utf8"))
@@ -98,7 +99,7 @@ describe("DM thread chain writers (I9)", () => {
     const legacyChunks = threadWrites(writer).filter((chunk) => legacyAssignment.test(chunk));
     // A read's stored rows, a socket deletion's marked row (design §3.3 item 4, E7).
     expect(legacyChunks).toHaveLength(2);
-    for (const name of ["syncLegacyThreadSummary", "syncLegacyThreadSummaryAfterDeletion"]) {
+    for (const name of ["writeThreadSummary", "writeThreadSummaryAfterDeletion"]) {
       expect(writer).toMatch(new RegExp(`export async function ${name}\\(`));
     }
     // Each statement asserts the page mode in its own WHERE (no read-then-write).

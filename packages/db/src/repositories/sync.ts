@@ -8,7 +8,6 @@ import type { Database } from "../client.ts";
 import {
   egressEndpoints,
   fanPages,
-  fanSpendLifetime,
   models,
   pageDmConversations,
   pageDmMessages,
@@ -42,11 +41,6 @@ import {
 import { egressKeySql } from "./egress.ts";
 import { PageSyncLeaseLostError, getPageSyncExecutionContext } from "./sync-context.ts";
 import { legacyOwnsFanslyPageSql } from "./sync/pages.ts";
-import {
-  PAGE_DM_MESSAGE_HISTORY_LIMIT,
-  PAGE_DM_REGULAR_MESSAGE_RETENTION_LIMIT,
-  PAGE_DM_SPENDER_MESSAGE_RETENTION_LIMIT,
-} from "./page-dm.ts";
 
 type TimestampValue = Date | string | null | undefined;
 type NumericValue = number | bigint | null | undefined;
@@ -1572,52 +1566,6 @@ export async function listSyncRequestAttempts(
   return result.rows.map((row) => normalizeSyncRequestAttemptRow(row));
 }
 
-export async function countRecentTerminalDmMessageConversationFailureStreak(
-  db: Database,
-  input: {
-    platformAccountId: number;
-    platformConversationId: string;
-    limit?: number;
-  },
-) {
-  const result = await db.execute<{
-    terminalState: "success" | "failed";
-    httpStatus: number | null;
-  }>(sql`
-    with logical_requests as (
-      select a.logical_request_id as "logicalRequestId",
-             max(a.id) filter (where a.state in ('success', 'failed')) as "terminalAttemptId"
-      from ${syncHttpAttempts} a
-      where a.page_id = ${input.platformAccountId}
-        and a.stream = 'dm_messages'
-        and a.operation = 'messages'
-        and a.request_shape ->> 'groupId' = ${input.platformConversationId}
-      group by a.logical_request_id
-    )
-    select a.state as "terminalState",
-           a.http_status as "httpStatus"
-    from logical_requests lr
-    inner join ${syncHttpAttempts} a on a.id = lr."terminalAttemptId"
-    order by coalesce(a.finished_at, a.started_at) desc, a.id desc
-    limit ${input.limit ?? 20}
-  `);
-
-  let streak = 0;
-  for (const row of result.rows) {
-    if (row.terminalState !== "failed") {
-      break;
-    }
-
-    if (row.httpStatus === null || row.httpStatus < 500 || row.httpStatus >= 600) {
-      break;
-    }
-
-    streak += 1;
-  }
-
-  return streak;
-}
-
 /**
  * Outage guard for the per-thread dm_messages breaker (the #138 vendor-outage
  * rule): how many OTHER groups of the page have a failed /message read newer
@@ -1838,14 +1786,6 @@ export interface SyncMonitorStreamRow {
   dmEligibleConversationCount: number;
   dmBackfillCompleteConversationCount: number;
   dmLaggingConversationCount: number;
-  dmDeepBackfillPendingConversationCount: number;
-  dmDeepBackfillPendingPageEstimate: number;
-  dmDeepBackfillSpenderPendingConversationCount: number;
-  dmDeepBackfillSpenderPendingPageEstimate: number;
-  dmDeepBackfillRegularPendingConversationCount: number;
-  dmDeepBackfillRegularPendingPageEstimate: number;
-  dmDeepBackfillRecentRequestCount: number;
-  dmDeepBackfillLastCompletedAt: Date | null;
   stream: SyncStream;
   status: PageSyncStatus | null;
   blockerKind: string | null;
@@ -1934,38 +1874,6 @@ function normalizeSyncMonitorStreamRow(row: Record<string, unknown>): SyncMonito
     dmEligibleConversationCount: normalizeNumber(row.dmEligibleConversationCount as NumericValue, "dmEligibleConversationCount"),
     dmBackfillCompleteConversationCount: normalizeNumber(row.dmBackfillCompleteConversationCount as NumericValue, "dmBackfillCompleteConversationCount"),
     dmLaggingConversationCount: normalizeNumber(row.dmLaggingConversationCount as NumericValue, "dmLaggingConversationCount"),
-    dmDeepBackfillPendingConversationCount: normalizeNumber(
-      row.dmDeepBackfillPendingConversationCount as NumericValue,
-      "dmDeepBackfillPendingConversationCount",
-    ),
-    dmDeepBackfillPendingPageEstimate: normalizeNumber(
-      row.dmDeepBackfillPendingPageEstimate as NumericValue,
-      "dmDeepBackfillPendingPageEstimate",
-    ),
-    dmDeepBackfillSpenderPendingConversationCount: normalizeNumber(
-      row.dmDeepBackfillSpenderPendingConversationCount as NumericValue,
-      "dmDeepBackfillSpenderPendingConversationCount",
-    ),
-    dmDeepBackfillSpenderPendingPageEstimate: normalizeNumber(
-      row.dmDeepBackfillSpenderPendingPageEstimate as NumericValue,
-      "dmDeepBackfillSpenderPendingPageEstimate",
-    ),
-    dmDeepBackfillRegularPendingConversationCount: normalizeNumber(
-      row.dmDeepBackfillRegularPendingConversationCount as NumericValue,
-      "dmDeepBackfillRegularPendingConversationCount",
-    ),
-    dmDeepBackfillRegularPendingPageEstimate: normalizeNumber(
-      row.dmDeepBackfillRegularPendingPageEstimate as NumericValue,
-      "dmDeepBackfillRegularPendingPageEstimate",
-    ),
-    dmDeepBackfillRecentRequestCount: normalizeNumber(
-      row.dmDeepBackfillRecentRequestCount as NumericValue,
-      "dmDeepBackfillRecentRequestCount",
-    ),
-    dmDeepBackfillLastCompletedAt: parseTimestamp(
-      row.dmDeepBackfillLastCompletedAt as TimestampValue,
-      "dmDeepBackfillLastCompletedAt",
-    ),
     stream: asSyncStream(String(row.stream ?? "")),
     status: row.status ? row.status as PageSyncStatus : null,
     blockerKind: typeof row.blockerKind === "string" ? row.blockerKind : null,
@@ -2276,63 +2184,6 @@ export async function listSyncMonitorStreamRows(
       inner join visible_pages vp on vp."pageId" = m.platform_account_id
       group by m.platform_account_id
     ),
-    dm_deep_backfill_candidates as (
-      select c.platform_account_id as "pageId",
-             (coalesce(slp.creator_net_amount_mills, 0)::bigint > 0) as "isSpender",
-             c.stored_message_count as "storedMessageCount",
-             case
-               when coalesce(slp.creator_net_amount_mills, 0)::bigint > 0
-                 then ${PAGE_DM_SPENDER_MESSAGE_RETENTION_LIMIT}
-               else ${PAGE_DM_REGULAR_MESSAGE_RETENTION_LIMIT}
-             end::int as "retentionLimit"
-      from ${pageDmConversations} c
-      inner join visible_pages vp on vp."pageId" = c.platform_account_id
-      left join ${fanSpendLifetime} slp
-        on slp.platform_account_id = c.platform_account_id
-       and slp.fan_id = c.fan_id
-      where vp."platform" = 'fansly'
-        and c.is_visible = true
-        and c.fan_id is not null
-        and ${dmMessageSyncEligibleSql("c")}
-        and c.message_coverage_status = 'partial_window'::dm_message_coverage_status
-        and c.stored_message_count > 0
-        and not (
-          c.last_message_id is distinct from c.newest_stored_message_id
-          and (
-            c.last_message_sync_at is null
-            or (c.last_message_at is not null and c.last_message_sync_at < c.last_message_at)
-          )
-        )
-    ),
-    dm_deep_backfill_counts as (
-      select "pageId",
-             count(*) filter (where "storedMessageCount" < "retentionLimit")::int as "pendingConversationCount",
-             coalesce(sum(
-               ceil(greatest("retentionLimit" - "storedMessageCount", 0)::numeric / ${PAGE_DM_MESSAGE_HISTORY_LIMIT})
-             ) filter (where "storedMessageCount" < "retentionLimit"), 0)::int as "pendingPageEstimate",
-             count(*) filter (
-               where "isSpender" = true
-                 and "storedMessageCount" < "retentionLimit"
-             )::int as "spenderPendingConversationCount",
-             coalesce(sum(
-               ceil(greatest("retentionLimit" - "storedMessageCount", 0)::numeric / ${PAGE_DM_MESSAGE_HISTORY_LIMIT})
-             ) filter (
-               where "isSpender" = true
-                 and "storedMessageCount" < "retentionLimit"
-             ), 0)::int as "spenderPendingPageEstimate",
-             count(*) filter (
-               where "isSpender" = false
-                 and "storedMessageCount" < "retentionLimit"
-             )::int as "regularPendingConversationCount",
-             coalesce(sum(
-               ceil(greatest("retentionLimit" - "storedMessageCount", 0)::numeric / ${PAGE_DM_MESSAGE_HISTORY_LIMIT})
-             ) filter (
-               where "isSpender" = false
-                 and "storedMessageCount" < "retentionLimit"
-             ), 0)::int as "regularPendingPageEstimate"
-      from dm_deep_backfill_candidates
-      group by "pageId"
-    ),
     running_runs as (
       select ranked.*,
              greatest(
@@ -2403,30 +2254,6 @@ export async function listSyncMonitorStreamRows(
       -- Load payload only after selecting one completion per page/stream.
       inner join ${syncRuns} sr on sr.id = ranked."runId"
       where ranked."rank" = 1
-    ),
-    deep_backfill_runs as (
-      select page_id as "pageId",
-             coalesce(sum("deepBackfillRequests"), 0)::int as "recentDeepBackfillRequestCount",
-             max(finished_at) filter (
-               where "deepBackfillRequests" > 0
-                 and finished_at is not null
-             ) as "lastDeepBackfillCompletedAt"
-      from (
-        select sr.page_id,
-               sr.finished_at,
-               case
-                 when jsonb_typeof(sr.stats) = 'object'
-                  and (sr.stats ->> 'deepBackfillRequests') ~ '^[0-9]+$'
-                 then (sr.stats ->> 'deepBackfillRequests')::int
-                 else 0
-               end as "deepBackfillRequests"
-        from ${syncRuns} sr
-        inner join visible_pages vp on vp."pageId" = sr.page_id
-        where vp."platform" = 'fansly'
-          and sr.stream = 'dm_messages'::sync_stream
-          and sr.started_at >= ${windowStart}
-      ) runs
-      group by page_id
     ),
     recent_run_counts as (
       select sr.page_id as "pageId",
@@ -2539,14 +2366,6 @@ export async function listSyncMonitorStreamRows(
            coalesce(dcc."dmEligibleConversationCount", 0)::int as "dmEligibleConversationCount",
            coalesce(dcc."dmBackfillCompleteConversationCount", 0)::int as "dmBackfillCompleteConversationCount",
            coalesce(dcc."dmLaggingConversationCount", 0)::int as "dmLaggingConversationCount",
-           coalesce(ddbc."pendingConversationCount", 0)::int as "dmDeepBackfillPendingConversationCount",
-           coalesce(ddbc."pendingPageEstimate", 0)::int as "dmDeepBackfillPendingPageEstimate",
-           coalesce(ddbc."spenderPendingConversationCount", 0)::int as "dmDeepBackfillSpenderPendingConversationCount",
-           coalesce(ddbc."spenderPendingPageEstimate", 0)::int as "dmDeepBackfillSpenderPendingPageEstimate",
-           coalesce(ddbc."regularPendingConversationCount", 0)::int as "dmDeepBackfillRegularPendingConversationCount",
-           coalesce(ddbc."regularPendingPageEstimate", 0)::int as "dmDeepBackfillRegularPendingPageEstimate",
-           coalesce(dbr."recentDeepBackfillRequestCount", 0)::int as "dmDeepBackfillRecentRequestCount",
-           dbr."lastDeepBackfillCompletedAt" as "dmDeepBackfillLastCompletedAt",
            ps."stream" as "stream",
            st.status as "status",
            st.blocker_kind as "blockerKind",
@@ -2632,8 +2451,6 @@ export async function listSyncMonitorStreamRows(
     left join transaction_counts tc on tc."pageId" = ps."pageId"
     left join dm_conversation_counts dcc on dcc."pageId" = ps."pageId"
     left join dm_message_counts dmc on dmc."pageId" = ps."pageId"
-    left join dm_deep_backfill_counts ddbc on ddbc."pageId" = ps."pageId"
-    left join deep_backfill_runs dbr on dbr."pageId" = ps."pageId"
     order by ps."pageLabel" asc, ${streamOrderSql('ps."stream"')} asc
   `);
 

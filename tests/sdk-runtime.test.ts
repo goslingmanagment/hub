@@ -158,7 +158,14 @@ describe("kernel SDK runtime", () => {
   });
 });
 
-import { streamAiFeature, streamAiGateway, subscribeSyncEvents } from "@agency_hub_core/contracts";
+import {
+  AI_STREAM_CAPABILITIES,
+  streamAiFeature,
+  streamAiGateway,
+  subscribeSyncEvents,
+} from "@agency_hub_core/contracts";
+
+import * as generatedSdk from "../packages/sdk/src/index.ts";
 
 function sseFetch(chunks: string[], init?: { status?: number }) {
   const stream = new ReadableStream<Uint8Array>({
@@ -199,6 +206,52 @@ describe("AI gateway stream helper (protocol conformance on a fake stream)", () 
     await handle.done;
     expect(new Headers(requestInit?.headers).get("x-kernel-ai-capabilities")).toBe("debug-input-v1");
     expect(frames).toEqual([expect.objectContaining({ type: "debug_input_v1" })]);
+  });
+
+  // H-4a: the capability list. The header is the union of `capabilities` and
+  // the legacy `debugPromptEcho`, deduplicated, in AI_STREAM_CAPABILITIES
+  // order, ", "-joined; nothing to advertise → no header at all.
+  async function capabilitiesHeaderFor(
+    input: Pick<Parameters<typeof streamAiFeature>[1], "debugPromptEcho" | "capabilities">,
+  ): Promise<string | null> {
+    let requestInit: RequestInit | undefined;
+    const impl = (async (_url: string | URL | Request, init?: RequestInit) => {
+      requestInit = init;
+      return sseFetch(['event: ai\ndata: {"type":"done","stopReason":"end_turn"}\n\n'])("http://unused");
+    }) as unknown as typeof fetch;
+    const handle = streamAiFeature(
+      { baseUrl: "http://hub", fetch: impl },
+      { feature: "fast-reply", body: {} as never, onFrame: () => undefined, ...input },
+    );
+    await handle.done;
+    return new Headers(requestInit?.headers).get("x-kernel-ai-capabilities");
+  }
+
+  it("feature stream writes the capability list in constant order, without repeats", async () => {
+    expect(AI_STREAM_CAPABILITIES).toEqual(["debug-input-v1", "context-v1", "split-all-v1"]);
+    // Old callers: unchanged wire.
+    expect(await capabilitiesHeaderFor({})).toBeNull();
+    expect(await capabilitiesHeaderFor({ debugPromptEcho: false })).toBeNull();
+    expect(await capabilitiesHeaderFor({ debugPromptEcho: true })).toBe("debug-input-v1");
+    // New option.
+    expect(await capabilitiesHeaderFor({ capabilities: [] })).toBeNull();
+    expect(await capabilitiesHeaderFor({ capabilities: ["split-all-v1", "context-v1"] }))
+      .toBe("context-v1, split-all-v1");
+    expect(await capabilitiesHeaderFor({ capabilities: ["debug-input-v1"] })).toBe("debug-input-v1");
+    // Union with the legacy flag, deduplicated.
+    expect(await capabilitiesHeaderFor({
+      debugPromptEcho: true,
+      capabilities: ["context-v1", "debug-input-v1", "context-v1"],
+    })).toBe("debug-input-v1, context-v1");
+    expect(await capabilitiesHeaderFor({ debugPromptEcho: true, capabilities: ["split-all-v1"] }))
+      .toBe("debug-input-v1, split-all-v1");
+    // A value outside the constant (an untyped JS caller) is never sent.
+    expect(await capabilitiesHeaderFor({ capabilities: ["future-v9" as never, "context-v1"] })).toBe("context-v1");
+    expect(await capabilitiesHeaderFor({ capabilities: ["future-v9" as never] })).toBeNull();
+  });
+
+  it("the generated SDK re-exports the capability list", () => {
+    expect(generatedSdk.AI_STREAM_CAPABILITIES).toBe(AI_STREAM_CAPABILITIES);
   });
 
   it("raw gateway remains strict against debug_input_v1", async () => {

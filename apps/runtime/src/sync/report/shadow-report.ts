@@ -5,6 +5,7 @@ import {
   type Database,
   type FanslyWsLivePayloadResolver,
   type MediaStatsRefreshProgress,
+  type SyncPageMode,
   type SyncPageRow,
 } from "@agency_hub_core/db";
 
@@ -39,18 +40,26 @@ import type { EtaBacktestPageReport } from "../requests/eta-backtest.ts";
 // consistent picture of the hour); part B reads the past journal in batches
 // (read-only transactions for the replay; the chain checks and the ETA
 // backtest are the dry-run scans of `sync chain …` and `sync history
-// eta-backtest`). Acceptance = every page in shadow, settled, through the
-// window (a window that starts before the deploy or a page's switch to shadow
-// is no acceptance window), A1–A4 hold, the route budgets held in shadow and
-// no walk went round in circles (step 3b ruling 12, `shadow-routes.ts`), the
-// fingerprint proves the window's sync build (`shadow-fingerprint.ts`: the
-// switch accepts the report only of its own build and route policy), B5 ≥
-// 99.9 % per resource (matched over every observation but legacy's own
-// refusals; a kind with observations and nothing judged fails) with every
-// mismatch listed for explanation, B6 lists the 16.09 counterexamples and no
-// empty-page soundness hit, B7 printed.
+// eta-backtest`). The report judges the pages in shadow alone — the switch
+// candidates: a page `live`, in `handover` or `off` is listed as not judged
+// with its mode and why, and counts in no part and no verdict (a live page is
+// judged by `sync switch check`). Acceptance = every judged page settled in
+// shadow through the window (a window that starts before the deploy or a
+// page's switch to shadow is no acceptance window), A1–A4 hold, the route
+// budgets held in shadow and no walk went round in circles (step 3b ruling 12,
+// `shadow-routes.ts`), the fingerprint proves the window's sync build
+// (`shadow-fingerprint.ts`: the switch accepts the report only of its own
+// build and route policy), B5 ≥ 99.9 % per resource (matched over every
+// observation but legacy's own refusals; a kind with observations and nothing
+// judged fails) with every mismatch listed for explanation, B6 lists the 16.09
+// counterexamples and no empty-page soundness hit, B7 printed. A report that
+// is not accepted can still carry a switch: the owner judges its red lines
+// with evidence (ruling 12, `SHADOW_VERDICT_CHECKS`; `sync switch
+// --accept-red-lines`), never a failed hard check.
 
 export interface ShadowReportInput {
+  /** The pages to report on; only those in shadow are judged
+   *  (`shadowReportScope`). */
   pages: readonly SyncPageRow[];
   registry: Pick<EngineRegistry, "module">;
   /** Part A's window; null skips part A. */
@@ -97,6 +106,72 @@ export interface ShadowReportVerdict {
   accepted: boolean;
 }
 
+/**
+ * Every check of the verdict and who may overrule its FAIL (step 3b ruling
+ * 12: "the other A1/A2 rules stay frozen and red lines are judged by the owner
+ * with evidence"). A `hard` check — the window's coverage, the pacer, the
+ * route budgets, the walks, the build — is never overruled; a `red_line` of a
+ * frozen rule only by the owner, at the switch, with a reason it audits
+ * (`sync switch --accept-red-lines`). The rules and thresholds stay as they are.
+ */
+export const SHADOW_VERDICT_CHECKS: Readonly<Record<Exclude<keyof ShadowReportVerdict, "accepted">, "hard" | "red_line">> = {
+  covered: "hard",
+  a1: "red_line",
+  a2: "red_line",
+  a3: "red_line",
+  a4: "hard",
+  budgets: "hard",
+  walks: "hard",
+  build: "hard",
+  b5: "red_line",
+  b6: "red_line",
+  b7: "red_line",
+};
+
+export type ShadowVerdictCheck = keyof typeof SHADOW_VERDICT_CHECKS;
+
+const VERDICT_CHECKS = Object.keys(SHADOW_VERDICT_CHECKS) as ShadowVerdictCheck[];
+/** The checks no one overrules, in the verdict's order. */
+export const SHADOW_HARD_CHECKS: readonly ShadowVerdictCheck[] = VERDICT_CHECKS.filter((key) => SHADOW_VERDICT_CHECKS[key] === "hard");
+/** The checks whose FAIL the owner may accept, in the verdict's order. */
+export const SHADOW_RED_LINES: readonly ShadowVerdictCheck[] = VERDICT_CHECKS.filter((key) => SHADOW_VERDICT_CHECKS[key] === "red_line");
+
+/** Whether `name` is a check of the verdict (never an inherited property). */
+export function isShadowVerdictCheck(name: string): name is ShadowVerdictCheck {
+  return Object.hasOwn(SHADOW_VERDICT_CHECKS, name);
+}
+
+/** Why the report does not judge a page in this mode. */
+export const SHADOW_NOT_JUDGED_REASONS: Readonly<Record<Exclude<SyncPageMode, "shadow">, string>> = {
+  live: "live — judged by `sync switch check`",
+  handover: "handover — a switch is under way; judged by `sync switch check` once live",
+  off: "off — the engine does not run the page",
+};
+
+/** A page the report lists without judging it. */
+export interface ShadowReportNotJudged {
+  page: string;
+  mode: Exclude<SyncPageMode, "shadow">;
+  reason: string;
+}
+
+/** The pages the report judges — those in shadow, the switch candidates —
+ *  and the others, listed with their mode and why. Pure. */
+export function shadowReportScope<P extends Pick<SyncPageRow, "pageId" | "pageLabel" | "mode">>(
+  pages: readonly P[],
+): { judged: P[]; notJudged: ShadowReportNotJudged[] } {
+  const judged: P[] = [];
+  const notJudged: ShadowReportNotJudged[] = [];
+  for (const page of pages) {
+    if (page.mode === "shadow") {
+      judged.push(page);
+    } else {
+      notJudged.push({ page: page.pageLabel ?? String(page.pageId), mode: page.mode, reason: SHADOW_NOT_JUDGED_REASONS[page.mode] });
+    }
+  }
+  return { judged, notJudged };
+}
+
 /** The media-stats walk as the shadow models it on a page (ruling 12), with
  *  its queue under those tiers at the window end. */
 export interface ShadowMediaModelRow extends Pick<ShadowFingerprintPage, "page" | "media"> {
@@ -105,11 +180,14 @@ export interface ShadowMediaModelRow extends Pick<ShadowFingerprintPage, "page" 
 
 export interface ShadowReport {
   generatedAt: Date;
+  /** The pages judged: every one in shadow (the switch checks its page here). */
   pages: Array<{ page: string; mode: SyncPageRow["mode"] }>;
+  /** The pages listed but not judged: in no part and no verdict. */
+  notJudged: ShadowReportNotJudged[];
   /** What the hour ran on (build, route policy, registry and tiers, S). */
   fingerprint: ShadowReportFingerprint;
   window: ShadowWindowReport | null;
-  /** Part A's two SQL checks over the shadow journal. */
+  /** Part A's two checks over the shadow journal (the route budgets: the send audit). */
   routes: ShadowRouteChecks | null;
   media: ShadowMediaModelRow[] | null;
   journal: {
@@ -178,7 +256,10 @@ function mark(value: boolean | null): string {
   return value === null ? "n/a" : value ? "ok" : "FAIL";
 }
 
-export async function buildShadowReport(ctx: Pick<SyncContext, "db" | "logger">, input: ShadowReportInput): Promise<ShadowReport> {
+export async function buildShadowReport(ctx: Pick<SyncContext, "db" | "logger">, requested: ShadowReportInput): Promise<ShadowReport> {
+  // Every part below reads the judged pages alone.
+  const scope = shadowReportScope(requested.pages);
+  const input: ShadowReportInput = { ...requested, pages: scope.judged };
   const part = input.window === null ? null : await windowPart(ctx, input, input.window);
   const window = part?.window ?? null;
   const fingerprint = part?.fingerprint
@@ -216,13 +297,14 @@ export async function buildShadowReport(ctx: Pick<SyncContext, "db" | "logger">,
   return {
     generatedAt: new Date(),
     pages: input.pages.map((page) => ({ page: page.pageLabel ?? String(page.pageId), mode: page.mode })),
+    notJudged: scope.notJudged,
     fingerprint,
     window,
     routes,
     media,
     journal,
     verdict,
-    summary: summaryOf({ window, routes, media, fingerprint }, journal, verdict),
+    summary: summaryOf({ window, routes, media, fingerprint }, journal, verdict, { judged: input.pages, notJudged: scope.notJudged }),
   };
 }
 
@@ -252,7 +334,7 @@ function verdictOf(
     a2: window?.verdict.a2 ?? null,
     a3: window?.verdict.a3 ?? null,
     a4: window?.verdict.a4 ?? null,
-    budgets: routes === null ? null : routes.budgets.violations === 0,
+    budgets: routes === null ? null : routes.budgets.violations === 0 && routes.budgets.inconclusive === 0,
     walks: routes === null ? null : routes.walks.repeats === 0,
     build: fingerprint.build.sync !== null,
     b5,
@@ -260,8 +342,9 @@ function verdictOf(
     b7,
   };
   // A3 without a single sampled frame is decided by the offline replay, which
-  // the owner reads; every other check must hold and both parts must have run.
-  const accepted = window !== null && journal !== null
+  // the owner reads; every other check must hold, both parts must have run
+  // and a page must have been judged.
+  const accepted = pages > 0 && window !== null && journal !== null
     && verdict.covered === true
     && verdict.a1 === true && verdict.a2 === true && verdict.a3 !== false && verdict.a4 === true
     && verdict.budgets === true && verdict.walks === true && verdict.build
@@ -330,13 +413,21 @@ function fingerprintLine(fingerprint: ShadowReportFingerprint): string {
     + `S ${setting.effectiveMs ?? "unreadable"} ms now${setting.windowMs.length === 0 ? "" : `, ${setting.windowMs.join(" / ")} ms in the window`}`;
 }
 
+/** Which pages the report judged and which it only lists. */
+function scopeLine(scope: { judged: readonly SyncPageRow[]; notJudged: readonly ShadowReportNotJudged[] }): string {
+  const judged = scope.judged.map((page) => page.pageLabel ?? String(page.pageId));
+  return `Judged: ${judged.length === 0 ? "none — no page is in shadow" : `${judged.join(", ")} (in shadow, the switch candidates)`}`
+    + `${scope.notJudged.length === 0 ? "" : `; not judged, in no verdict: ${scope.notJudged.map((entry) => `${entry.page} ${entry.reason}`).join("; ")}`}`;
+}
+
 function summaryOf(
   partA: Pick<ShadowReport, "window" | "routes" | "media" | "fingerprint">,
   journal: ShadowReport["journal"],
   verdict: ShadowReportVerdict,
+  scope: { judged: readonly SyncPageRow[]; notJudged: readonly ShadowReportNotJudged[] },
 ): string[] {
   const { window, routes, media, fingerprint } = partA;
-  const lines: string[] = [fingerprintLine(fingerprint)];
+  const lines: string[] = [fingerprintLine(fingerprint), scopeLine(scope)];
   if (window !== null) {
     lines.push(`Window ${window.window.start.toISOString()} … ${window.window.end.toISOString()}`);
     const uncovered = window.coverage.filter((page) => !page.covered);
@@ -369,7 +460,8 @@ function summaryOf(
       lines.push(`A3 offline decisions over ${offline.receipts} receipts of the previous 24 h: `
         + offline.byResource.map((row) => `${row.resource} ${row.reads} reads / ${row.signals} signals`).join("; "));
     }
-    lines.push(`A4 pacer: ${window.pacer.violations} shadow pairs closer than the setting`);
+    lines.push(`A4 pacer: ${window.pacer.violations} shadow pairs closer than the later send's pause`
+      + `${window.pacer.inconclusive === 0 ? "" : `; ${window.pacer.inconclusive} not judged (inconclusive)`}`);
   }
   if (routes !== null) lines.push(...routeCheckLines(routes));
   for (const row of media ?? []) {

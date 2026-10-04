@@ -46,12 +46,6 @@ describe("the reconnect ladder", () => {
     expect(wsReconnectDelayMs(1, 7)).toBeCloseTo(3_600, 6);
     expect(wsReconnectDelayMs(2, 0.5, 100)).toBe(400);
   });
-
-  it("is the one ladder: the legacy receiver uses it too", () => {
-    const worker = read("apps/runtime/src/services/fansly-ws/worker.ts");
-    expect(worker).toContain("await pause(signal, wsReconnectDelayMs(failures, Math.random(), timing.backoffBaseMs));");
-    expect(worker).not.toMatch(/30 \* 60_000/);
-  });
 });
 
 /** A dispatcher stand-in: `compose` wraps a dispatch that starts the request

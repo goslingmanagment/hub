@@ -1,6 +1,8 @@
 import { sql } from "drizzle-orm";
 
-import { insertAuditEvent, type Database } from "@agency_hub_core/db";
+import { insertAuditEvent, type Database, type InsertAuditEventInput } from "@agency_hub_core/db";
+
+import type { AcceptedRedLines } from "./preconditions.ts";
 
 // The audit trail of the step-3 switch and its rollback (design step 3 §3.5
 // item 7, J4). Every transition of either CLI writes one `audit_events` row;
@@ -11,6 +13,10 @@ import { insertAuditEvent, type Database } from "@agency_hub_core/db";
 
 export const SYNC_SWITCH_AUDIT_EVENT = "admin.sync_switch";
 export const SYNC_ROLLBACK_AUDIT_EVENT = "admin.sync_rollback";
+/** The owner accepted a shadow report's red lines for a switch (step 3b
+ *  ruling 12): one row when the switch starts on them. Never read back by
+ *  the switch's resume (`readLatestSwitchAudit`). */
+export const SYNC_SWITCH_RED_LINES_AUDIT_EVENT = "admin.sync_switch_red_lines_accepted";
 
 /** The switch's phases as audited (`metadata.phase`). */
 export const SYNC_SWITCH_PHASES = [
@@ -148,6 +154,36 @@ export async function recordRollbackAudit(
     eventType: SYNC_ROLLBACK_AUDIT_EVENT,
     metadata: { step: input.step, pageId: input.pageId, actor: input.actor, ...(input.detail ?? {}) },
   });
+}
+
+/** The audit row of the owner's acceptance of a report's red lines: the page,
+ *  the report's window, the checks accepted, the reason and the actor. Pure. */
+export function redLinesAuditEvent(
+  input: { pageId: number; page: string; actor: string; redLines: AcceptedRedLines },
+): InsertAuditEventInput {
+  const { redLines } = input;
+  return {
+    platformAccountId: input.pageId,
+    source: "cli",
+    eventType: SYNC_SWITCH_RED_LINES_AUDIT_EVENT,
+    metadata: {
+      pageId: input.pageId,
+      page: input.page,
+      actor: input.actor,
+      checks: redLines.checks,
+      listedNotFailing: redLines.listedNotFailing,
+      reason: redLines.reason,
+      reportWindow: redLines.window,
+      reportGeneratedAt: redLines.generatedAt,
+    },
+  };
+}
+
+export async function recordRedLinesAcceptance(
+  db: Database,
+  input: { pageId: number; page: string; actor: string; redLines: AcceptedRedLines },
+): Promise<void> {
+  await insertAuditEvent(db, redLinesAuditEvent(input));
 }
 
 /** A rollback that has not reached `done`: a switch must never resume it. */

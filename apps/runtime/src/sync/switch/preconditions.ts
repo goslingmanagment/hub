@@ -15,6 +15,13 @@ import { syncEngineIncidentKey } from "../../services/notification-incidents.ts"
 import { inLegacyNightWindow } from "../fansly/lib/chain-rebuild.ts";
 import { ROUTE_POLICY_HASH } from "../fansly/routes.ts";
 import { judgeShadowFingerprint, type ShadowFingerprintExpectation } from "../report/shadow-fingerprint.ts";
+import {
+  isShadowVerdictCheck,
+  SHADOW_HARD_CHECKS,
+  SHADOW_RED_LINES,
+  SHADOW_VERDICT_CHECKS,
+  type ShadowVerdictCheck,
+} from "../report/shadow-report.ts";
 import { isUnfinishedRollback, readLatestSwitchAudit } from "./audit.ts";
 import { wholeSeconds, type SwitchContext } from "./context.ts";
 
@@ -38,14 +45,104 @@ export interface SwitchCheck {
 /** The shadow report as `sync shadow report --out` writes it (the fields the
  *  switch reads). */
 interface ShadowReportFile {
+  generatedAt?: unknown;
   pages?: Array<{ page?: unknown; mode?: unknown }>;
   window?: { window?: { start?: unknown; end?: unknown } } | null;
-  verdict?: { accepted?: unknown };
+  verdict?: Record<string, unknown> & { accepted?: unknown };
   fingerprint?: unknown;
+}
+
+/** The owner's judgement of a report's red lines (step 3b ruling 12: "red
+ *  lines are judged by the owner with evidence"), as `sync switch
+ *  --accept-red-lines <checks> --red-lines-reason <text>` gives it. */
+export interface RedLinesAcceptance {
+  /** The verdict checks the owner accepts failing: red lines only. */
+  checks: readonly string[];
+  /** The owner's evidence, audited with the switch. */
+  reason: string;
+}
+
+/** The red lines a switch runs on by the owner's word: what it audits. */
+export interface AcceptedRedLines {
+  /** The report's failing checks: every one a red line the owner accepted. */
+  checks: ShadowVerdictCheck[];
+  /** What the owner listed that the report does not fail. */
+  listedNotFailing: string[];
+  reason: string;
+  /** The report's window and when the report was written. */
+  window: { start: string | null; end: string | null };
+  generatedAt: string | null;
 }
 
 function check(name: string, ok: boolean, detail: string): SwitchCheck {
   return { name, ok, detail };
+}
+
+/** A check's state in a report's verdict: true passes, false fails; anything
+ *  else was not judged (its part did not run) — but A3 without a sampled
+ *  frame (null), which the verdict leaves to the offline replay. */
+function verdictState(verdict: Record<string, unknown>, key: ShadowVerdictCheck): "ok" | "fail" | "not_judged" {
+  const value = verdict[key];
+  if (value === true || (key === "a3" && value === null)) return "ok";
+  return value === false ? "fail" : "not_judged";
+}
+
+function statesText(verdict: Record<string, unknown>, keys: readonly ShadowVerdictCheck[]): string {
+  return keys.map((key) => `${key} ${verdictState(verdict, key) === "fail" ? "FAIL" : "not judged"}`).join(", ");
+}
+
+/** The owner's word is well-formed: a reason, and red lines alone. Pure. */
+export function redLinesAcceptanceProblem(acceptance: RedLinesAcceptance): string | null {
+  if (acceptance.reason.trim().length === 0) return "accepting red lines needs the owner's reason (--red-lines-reason)";
+  if (acceptance.checks.length === 0) return "--accept-red-lines names no red line";
+  const hard = acceptance.checks.filter((key) => isShadowVerdictCheck(key) && SHADOW_VERDICT_CHECKS[key] === "hard");
+  if (hard.length > 0) return `${hard.join(", ")}: a hard check of the shadow report, never accepted (red lines: ${SHADOW_RED_LINES.join(", ")})`;
+  const unknown = acceptance.checks.filter((key) => !isShadowVerdictCheck(key));
+  if (unknown.length > 0) return `${unknown.join(", ")}: no check of the shadow report (red lines: ${SHADOW_RED_LINES.join(", ")})`;
+  return null;
+}
+
+/**
+ * A report whose verdict is not accepted carries a switch only by the owner's
+ * judgement of its red lines (step 3b ruling 12): every failing check a red
+ * line the owner listed, every hard check passed, every part run. Pure.
+ */
+export function judgeRedLines(
+  verdict: Record<string, unknown>,
+  acceptance: RedLinesAcceptance | null,
+): { ok: true; checks: ShadowVerdictCheck[]; listedNotFailing: string[] } | { ok: false; detail: string } {
+  const hard = SHADOW_HARD_CHECKS.filter((key) => verdictState(verdict, key) !== "ok");
+  const failing = SHADOW_RED_LINES.filter((key) => verdictState(verdict, key) === "fail");
+  const unjudged = SHADOW_RED_LINES.filter((key) => verdictState(verdict, key) === "not_judged");
+  if (acceptance === null) {
+    const named = [...hard, ...failing, ...unjudged];
+    const offer = hard.length === 0 && unjudged.length === 0 && failing.length > 0
+      ? `; the owner may accept its red lines with evidence: --accept-red-lines ${failing.join(",")} --red-lines-reason "<evidence>" (step 3b ruling 12)`
+      : "";
+    return { ok: false, detail: `the shadow report's verdict is not accepted${named.length === 0 ? "" : ` (${statesText(verdict, named)})`}${offer}` };
+  }
+  if (hard.length > 0) {
+    return { ok: false, detail: `the shadow report fails a hard check (${statesText(verdict, hard)}): never accepted, whatever the red lines` };
+  }
+  if (unjudged.length > 0) {
+    return { ok: false, detail: `the shadow report did not judge ${unjudged.join(", ")} (a part did not run): no red line of an incomplete report is accepted` };
+  }
+  const unaccepted = failing.filter((key) => !acceptance.checks.includes(key));
+  if (unaccepted.length > 0) {
+    return {
+      ok: false,
+      detail: `the shadow report fails ${unaccepted.join(", ")}, which the owner did not accept (--accept-red-lines ${acceptance.checks.join(",")})`,
+    };
+  }
+  if (failing.length === 0) return { ok: false, detail: "the shadow report's verdict is not accepted, yet it fails no check" };
+  return { ok: true, checks: failing, listedNotFailing: acceptance.checks.filter((key) => !failing.some((entry) => entry === key)) };
+}
+
+/** The owner's acceptance as the switch prints it. */
+export function redLinesLine(redLines: AcceptedRedLines): string {
+  return `red lines ${redLines.checks.join(", ")} accepted by the owner (step 3b ruling 12): "${redLines.reason}"`
+    + `${redLines.listedNotFailing.length === 0 ? "" : `; listed but not failing: ${redLines.listedNotFailing.join(", ")}`}`
+    + `; report window ${redLines.window.start ?? "?"} … ${redLines.window.end ?? "?"}`;
 }
 
 /** "sync runs the same build as this CLI" (G13): the newest `sync` heartbeat
@@ -88,37 +185,61 @@ async function buildIdentityCheck(ctx: SwitchContext): Promise<{ check: SwitchCh
  * The shadow report's verdict for the page (S2-13: one report-wide verdict),
  * of the build and route policy being switched to (step 3b ruling 12: its
  * fingerprint; an accepted report of another build proves nothing about this
- * one, however fresh).
+ * one, however fresh). A verdict that is not accepted passes only by the
+ * owner's judgement of its red lines (`judgeRedLines`), returned for the
+ * switch to audit; everything else is checked as for an accepted one.
  */
 export function shadowReportCheck(
   text: string | null,
   pageLabel: string,
   now: Date,
   expected: ShadowFingerprintExpectation,
-): SwitchCheck {
-  if (text === null) return check("shadow_report", false, "no shadow report (--shadow-report <path>)");
+  acceptance: RedLinesAcceptance | null = null,
+): { check: SwitchCheck; redLines: AcceptedRedLines | null } {
+  const refuse = (detail: string) => ({ check: check("shadow_report", false, detail), redLines: null });
+  if (acceptance !== null) {
+    const problem = redLinesAcceptanceProblem(acceptance);
+    if (problem !== null) return refuse(problem);
+  }
+  if (text === null) return refuse("no shadow report (--shadow-report <path>)");
   let report: ShadowReportFile;
   try {
     report = JSON.parse(text) as ShadowReportFile;
   } catch {
-    return check("shadow_report", false, "the shadow report is not JSON");
+    return refuse("the shadow report is not JSON");
   }
-  if (report.verdict?.accepted !== true) return check("shadow_report", false, "the shadow report's verdict is not accepted");
+  let red: { checks: ShadowVerdictCheck[]; listedNotFailing: string[] } | null = null;
+  if (report.verdict?.accepted !== true) {
+    const judged = judgeRedLines(report.verdict ?? {}, acceptance);
+    if (!judged.ok) return refuse(judged.detail);
+    red = judged;
+  }
   const listed = (report.pages ?? []).find((entry) => entry.page === pageLabel);
-  if (listed === undefined) return check("shadow_report", false, `the shadow report does not list ${pageLabel}`);
-  if (listed.mode !== "shadow") {
-    return check("shadow_report", false, `the shadow report lists ${pageLabel} as ${String(listed.mode)}, not shadow`);
-  }
+  if (listed === undefined) return refuse(`the shadow report does not list ${pageLabel}`);
+  if (listed.mode !== "shadow") return refuse(`the shadow report lists ${pageLabel} as ${String(listed.mode)}, not shadow`);
   const end = report.window?.window?.end;
   const endAt = typeof end === "string" ? new Date(end) : null;
-  if (endAt === null || Number.isNaN(endAt.getTime())) return check("shadow_report", false, "the shadow report has no window");
+  if (endAt === null || Number.isNaN(endAt.getTime())) return refuse("the shadow report has no window");
   const ageMs = now.getTime() - endAt.getTime();
-  if (ageMs > SWITCH_REPORT_MAX_AGE_MS) {
-    return check("shadow_report", false, `the shadow report's window ended ${Math.round(ageMs / 3_600_000)} h ago (> 24 h)`);
-  }
+  if (ageMs > SWITCH_REPORT_MAX_AGE_MS) return refuse(`the shadow report's window ended ${Math.round(ageMs / 3_600_000)} h ago (> 24 h)`);
   const fingerprint = judgeShadowFingerprint(report.fingerprint, expected);
-  if (!fingerprint.ok) return check("shadow_report", false, fingerprint.detail);
-  return check("shadow_report", true, `accepted; window ended ${endAt.toISOString()}; ${fingerprint.detail}`);
+  if (!fingerprint.ok) return refuse(fingerprint.detail);
+  const tail = `window ended ${endAt.toISOString()}; ${fingerprint.detail}`;
+  if (red === null) {
+    return {
+      check: check("shadow_report", true, `accepted${acceptance === null ? "" : " (no red line to accept)"}; ${tail}`),
+      redLines: null,
+    };
+  }
+  const start = report.window?.window?.start;
+  const redLines: AcceptedRedLines = {
+    checks: red.checks,
+    listedNotFailing: red.listedNotFailing,
+    reason: acceptance!.reason.trim(),
+    window: { start: typeof start === "string" ? start : null, end: endAt.toISOString() },
+    generatedAt: typeof report.generatedAt === "string" ? report.generatedAt : null,
+  };
+  return { check: check("shadow_report", true, `not accepted; ${redLinesLine(redLines)}; ${tail}`), redLines };
 }
 
 /**
@@ -127,8 +248,8 @@ export function shadowReportCheck(
  */
 export async function checkSwitchPreconditions(
   ctx: SwitchContext,
-  input: { page: SyncPageRow; shadowReportPath: string | null },
-): Promise<{ ok: boolean; checks: SwitchCheck[] }> {
+  input: { page: SyncPageRow; shadowReportPath: string | null; acceptRedLines?: RedLinesAcceptance | null },
+): Promise<{ ok: boolean; checks: SwitchCheck[]; redLines: AcceptedRedLines | null }> {
   const { db } = ctx;
   const page = (await getSyncPage(db, input.page.pageId)) ?? input.page;
   const label = page.pageLabel ?? String(page.pageId);
@@ -153,7 +274,14 @@ export async function checkSwitchPreconditions(
   if (input.shadowReportPath !== null) {
     reportText = await ctx.readFile(input.shadowReportPath).catch(() => null);
   }
-  checks.push(shadowReportCheck(reportText, label, now, { syncBuild: build.syncBuild, policyHash: ROUTE_POLICY_HASH }));
+  const report = shadowReportCheck(
+    reportText,
+    label,
+    now,
+    { syncBuild: build.syncBuild, policyHash: ROUTE_POLICY_HASH },
+    input.acceptRedLines ?? null,
+  );
+  checks.push(report.check);
 
   const rebuild = await getLatestCompletedChainRebuild(db, page.pageId);
   checks.push(check("chain_rebuild", rebuild !== null, rebuild === null
@@ -208,5 +336,5 @@ export async function checkSwitchPreconditions(
     .catch(() => null);
   checks.push(check("pause_setting", settingMs !== null, settingMs === null ? "fanslyDefaultDelayMs is unreadable" : `S = ${settingMs} ms`));
 
-  return { ok: checks.every((entry) => entry.ok), checks };
+  return { ok: checks.every((entry) => entry.ok), checks, redLines: report.redLines };
 }

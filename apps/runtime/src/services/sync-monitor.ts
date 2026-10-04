@@ -10,7 +10,6 @@ import {
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
-import { parseDmBoundedSweepState } from "./sync/dm-bounded-state.ts";
 import { followersReconcileFloorWaitUntil } from "./sync/followers-reconcile-floor.ts";
 import { BadRequestError } from "./errors.ts";
 import {
@@ -35,7 +34,6 @@ const DEFAULT_REQUEST_LOOKBACK_MS = 60_000;
 const DEFAULT_REQUEST_LIMIT = 100;
 const MAX_REQUEST_LIMIT = 500;
 const STALLED_THRESHOLD_MS = 45_000;
-const DEEP_BACKFILL_STALLED_THRESHOLD_MS = 60 * 60 * 1000;
 const RATE_LIMITED_LOOKBACK_MS = 15 * 60 * 1000;
 /** Exported so a pin test can assert MONITORED ⊇ getSyncStreamsForPlatform("fansly").
  *  A Fansly lane the monitor cannot see is a lane that can wedge unobserved —
@@ -156,21 +154,6 @@ export interface SyncMonitorActiveRun {
   lastActivityAt: string;
 }
 
-export interface SyncMonitorDeepBackfill {
-  pendingConversations: number;
-  pendingPagesEstimate: number;
-  spenderPendingConversations: number;
-  spenderPendingPagesEstimate: number;
-  regularPendingConversations: number;
-  regularPendingPagesEstimate: number;
-  recentRequests: number;
-  lastCompletedAt: string | null;
-  liveRequestsSinceDeepBackfill: number;
-  active: boolean;
-  stalled: boolean;
-  stallReason: string | null;
-}
-
 export interface SyncMonitorStreamItem {
   stream: SyncStream;
   status: SyncMonitorStatus;
@@ -178,7 +161,6 @@ export interface SyncMonitorStreamItem {
   pending: boolean;
   retryAt: string | null;
   progress: SyncMonitorProgress | null;
-  deepBackfill: SyncMonitorDeepBackfill | null;
   recentRuns: SyncMonitorRecentRuns;
   recentErrors: SyncMonitorRecentErrors;
   physicalHealth: SyncMonitorPhysicalHealth;
@@ -586,11 +568,6 @@ function buildDmConversationProgress(
   row: SyncMonitorStreamRow,
   status: SyncMonitorStatus,
 ): SyncMonitorProgress | null {
-  const bounded = parseDmBoundedSweepState(row.checkpointState);
-  if (bounded) return {
-    label: `${bounded.observedCount.toLocaleString()} conversations checked in bounded scan`,
-    current: bounded.observedCount, total: null, unit: "conversations", percent: null,
-  };
   const state = parseDmConversationCursorState(row.checkpointState);
   if (!state) {
     return null;
@@ -628,9 +605,6 @@ function buildDmMessagesProgress(row: SyncMonitorStreamRow): SyncMonitorProgress
   if (lagging > 0) {
     labelParts.push(`${lagging.toLocaleString()} lagging`);
   }
-  if (row.dmDeepBackfillPendingPageEstimate > 0) {
-    labelParts.push(`${row.dmDeepBackfillPendingPageEstimate.toLocaleString()} deep pages`);
-  }
 
   return {
     label: labelParts.join(", "),
@@ -638,59 +612,6 @@ function buildDmMessagesProgress(row: SyncMonitorStreamRow): SyncMonitorProgress
     total: total || 0,
     unit: "conversations",
     percent: total > 0 ? percent(current, total) : null,
-  };
-}
-
-function buildDmMessagesDeepBackfill(
-  row: SyncMonitorStreamRow,
-  status: SyncMonitorStatus,
-  now: Date,
-  enabled: boolean,
-): SyncMonitorDeepBackfill | null {
-  if (row.platform !== "fansly" || row.stream !== "dm_messages") {
-    return null;
-  }
-
-  const state = parseDmMessagesCursorState(row.checkpointState);
-  const active = status === "running" && state?.currentMode === "deep_backfill";
-  const blockedOrWaiting = status === "blocked" ||
-    status === "paused" ||
-    status === "pending" ||
-    status === "retrying" ||
-    active;
-  const lastCompletedAt = row.dmDeepBackfillLastCompletedAt;
-  const fallbackProgressAt = latestSuccessTimestamp(row) ?? row.lastFinishedAt ?? row.requestedAt;
-  const lastProgressAt = lastCompletedAt ?? fallbackProgressAt;
-  const progressAgeMs = lastProgressAt ? now.getTime() - lastProgressAt.getTime() : null;
-  const hasBacklog = row.dmDeepBackfillPendingPageEstimate > 0;
-  const stalled = enabled &&
-    hasBacklog &&
-    !blockedOrWaiting &&
-    (
-      progressAgeMs === null ||
-      progressAgeMs > DEEP_BACKFILL_STALLED_THRESHOLD_MS
-    );
-
-  return {
-    pendingConversations: row.dmDeepBackfillPendingConversationCount,
-    pendingPagesEstimate: row.dmDeepBackfillPendingPageEstimate,
-    spenderPendingConversations: row.dmDeepBackfillSpenderPendingConversationCount,
-    spenderPendingPagesEstimate: row.dmDeepBackfillSpenderPendingPageEstimate,
-    regularPendingConversations: row.dmDeepBackfillRegularPendingConversationCount,
-    regularPendingPagesEstimate: row.dmDeepBackfillRegularPendingPageEstimate,
-    recentRequests: row.dmDeepBackfillRecentRequestCount,
-    lastCompletedAt: iso(lastCompletedAt),
-    liveRequestsSinceDeepBackfill: Math.max(
-      0,
-      Math.floor(state?.liveMessageRequestsSinceDeepBackfill ?? 0),
-    ),
-    active,
-    stalled,
-    stallReason: stalled
-      ? lastCompletedAt
-        ? "deep_progress_stale"
-        : "no_deep_progress"
-      : null,
   };
 }
 
@@ -718,9 +639,6 @@ function progressFor(
 function streamItemFor(
   row: SyncMonitorStreamRow,
   now: Date,
-  options?: {
-    deepBackfillEnabled?: boolean;
-  },
 ): SyncMonitorStreamItem {
   const status = statusFor(row, now);
   const physicalFailed = row.stalePhysicalAttemptCount > 0 ||
@@ -730,12 +648,6 @@ function streamItemFor(
   const floorUntil = followersReconcileFloorWaitUntil(row, row.lastCompletedStats, now);
   const pending = isPending(row) && floorUntil === null;
   const retryAt = isRetrying(row, now) ? row.retryAt : null;
-  const deepBackfill = buildDmMessagesDeepBackfill(
-    row,
-    status,
-    now,
-    options?.deepBackfillEnabled === true,
-  );
   const item = {
     stream: row.stream,
     status,
@@ -743,7 +655,6 @@ function streamItemFor(
     pending,
     retryAt: iso(retryAt),
     progress: progressFor(row, status),
-    deepBackfill,
     recentRuns: recentRunsFor(row),
     recentErrors: recentErrorsFor(row),
     physicalHealth: {
@@ -815,9 +726,7 @@ export async function getPageStreamSyncUxByStream(
 
   return new Map(
     rows.map((row) => {
-      const stream = streamItemFor(row, now, {
-        deepBackfillEnabled: app.config.fanslyDmDeepBackfillEnabled === true,
-      });
+      const stream = streamItemFor(row, now);
       return [row.stream, stream.syncUx] satisfies [SyncStream, SyncUxSummary];
     }),
   );
@@ -943,9 +852,7 @@ export async function getSyncMonitorSnapshot(
       syncUx: buildPageSyncUx([]),
     };
 
-    const stream = streamItemFor(row, now, {
-      deepBackfillEnabled: app.config.fanslyDmDeepBackfillEnabled === true,
-    });
+    const stream = streamItemFor(row, now);
     page.streams.push(stream);
     if (stream.status === "running") {
       page.summary.runningStreams += 1;

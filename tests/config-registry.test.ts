@@ -79,19 +79,12 @@ describe("config registry", () => {
     "accountLinksEnabled",
     "fanslyFollowersSettlementReuseEnabled",
     "fanslyFollowersSettlementReusePageAllowlist",
-    "fanslyDmBoundedEnabled",
-    "fanslyDmBoundedPageAllowlist",
-    "fanslyDmBoundedPolicies",
-    "fanslyWsCaptureEnabled",
-    "fanslyWsCapturePageAllowlist",
     // Fansly Sync Engine step 1: the live overlay readers, page by page.
     "fanslyLiveOverlayReadPages",
     "fanslyWsHintsEnabled",
     "fanslyWsHintsPageAllowlist",
     "fanslyWsHintsTypeAllowlist",
     "fanslyWsHintsPolicies",
-    "fanslyDmShadowPageAllowlist",
-    "fanslyDmHeadCatchupPageAllowlist",
     // Fansly Sync Engine plan §2.1: the owner's one pace setting, editable live and
     // rejected (never clamped) outside 2000..60000 ms.
     "fanslyDefaultDelayMs",
@@ -152,7 +145,6 @@ describe("config registry", () => {
     // it rides on.
     "fanslyPostEngagementRefreshEnabled",
     "fanslyPostEngagementDailyCallBudget",
-    "fanslyDeepBackfillIgnoreRetentionLimit",
     // Fast-reply freshness PR3: union-read mode, read per generation.
     "aiTranscriptFreshUnionMode",
     // Decision #136: fan-dossier context, read per generation.
@@ -178,10 +170,6 @@ describe("config registry", () => {
     "aiMediaDescribeLiveChatOnly",
     "aiMediaDescribeModelMedia",
     "aiMediaDescribeLoopEnabled",
-    "aiMediaDescribeFanslyAcceleratorEnabled",
-    "aiMediaDescribeFanslyAcceleratorDailyLimit",
-    "aiMediaDescribeFanslyFastLaneMode",
-    "aiMediaDescribeFanslyFastLanePages",
     // Agent Read Plane (slice 0a): read per request / per cycle so the owner's
     // ramp needs no restart. Every one of them rests at off/false.
     "agentReadPlaneMode",
@@ -205,6 +193,14 @@ describe("config registry", () => {
     // that unlike every other live key here, turning this one back off does not
     // undo the rows written while it was on.
     "captureCasPointerOnlyPages",
+    // Chat extension (hub-pr-plan H-2b): the owner's switches for the third
+    // client, read per request by the bootstrap and the client routes' check.
+    // Every one rests off.
+    "chatExtensionEnabled",
+    "chatExtensionFeatures",
+    "chatExtensionMinVersion",
+    "chatExtensionHostBindings",
+    "chatExtensionPreviewSendReceiptProfiles",
   ];
   const BOOT_KEYS = [
     "ofapiDmProjectionEnabled",

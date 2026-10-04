@@ -7,7 +7,6 @@ import {
   getBlockProgressBarMode,
   formatBlockSummary,
   formatBlockProgressCaption,
-  getWsHintGenerationNotice,
 } from "./syncBlockDisplay.js";
 
 export function SyncBlockRow({ block }: { block: SyncBlockStatus }) {
@@ -17,7 +16,6 @@ export function SyncBlockRow({ block }: { block: SyncBlockStatus }) {
   const isNA = block.state === "not_available";
   const progressCaption = formatBlockProgressCaption(block);
   const progressBarMode = getBlockProgressBarMode(block);
-  const hintNotice = getWsHintGenerationNotice(block);
 
   return (
     <div className="grid grid-cols-[9rem_1fr] gap-x-3 py-1 items-baseline">
@@ -55,11 +53,6 @@ export function SyncBlockRow({ block }: { block: SyncBlockStatus }) {
               {progressCaption ?? block.progress.label}
             </span>
           </div>
-        )}
-        {hintNotice && (
-          <span className="basis-full text-[11px] text-warning-dark">
-            {hintNotice.headline} &middot; {hintNotice.summary}
-          </span>
         )}
       </div>
     </div>

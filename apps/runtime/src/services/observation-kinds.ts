@@ -39,7 +39,7 @@ export interface WrittenObservationKind {
 }
 
 export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
-  { kind: "fansly.ws.frame.v1", source: "fansly_ws", writer: "services/fansly-ws/worker.ts" },
+  { kind: "fansly.ws.frame.v1", source: "fansly_ws", writer: "sync/fansly/ws/source.ts" },
   { kind: "ofapi.collection_read_materialized.v1", source: "ofapi_capture", writer: "services/ofapi-collection-read-transport.ts" },
   { kind: "ofapi.collection_read_response.v1", source: "ofapi_capture", writer: "services/ofapi-collection-read-transport.ts" },
   { kind: "ofapi_gateway_chat_search", source: "readthrough", writer: "services/ofapi-read-gateway.ts" },
@@ -58,9 +58,9 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
   // (services/sync/shared.ts persistRawPayload). This is the seam BL-C3 went
   // through, and the seam ~27–30 of this initiative's new Fansly kinds will
   // arrive on.
-  { kind: "account_lookup", source: "pull", writer: "services/sync/fansly-account-probe.ts" },
+  { kind: "account_lookup", source: "pull", writer: "sync/fansly/capture.ts" },
   { kind: "account_me", source: "pull", writer: "services/sync/executor-handlers.ts" },
-  { kind: "dm_conversations", source: "pull", writer: "services/sync/fansly-dm-conversations.ts" },
+  { kind: "dm_conversations", source: "pull", writer: "sync/fansly/capture.ts" },
   { kind: "dm_messages", source: "pull", writer: "services/sync/fansly-dm-messages.ts" },
   { kind: "earnings_accounts", source: "pull", writer: "sync/engine/commit.ts (wire spec earnings.accounts)" },
   { kind: "earnings_transactions", source: "pull", writer: "sync/engine/commit.ts (wire spec transactions.page)" },
@@ -68,7 +68,7 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
   { kind: "fan_earnings_monthly", source: "pull", writer: "sync/engine/commit.ts (wire spec earnings.monthly_accounts)" },
   { kind: "fans_active", source: "pull", writer: "services/sync/executor-handlers.ts" },
   { kind: "followers", source: "pull", writer: "services/sync/executor-handlers.ts" },
-  { kind: "group_detail", source: "pull", writer: "services/sync/fansly-dm-conversations.ts" },
+  { kind: "group_detail", source: "pull", writer: "sync/fansly/capture.ts" },
   { kind: "post_tips", source: "pull", writer: "services/sync/executor-handlers.ts" },
   { kind: "posts", source: "pull", writer: "services/sync/executor-handlers.ts" },
   { kind: "purchase_history", source: "pull", writer: "sync/engine/commit.ts (wire spec media.order_history)" },

@@ -13,6 +13,7 @@ import {
   type SyncSwitchCapability,
 } from "@agency_hub_core/db";
 
+import { resolveLegacyStreamIncidentsOfEnginePage } from "../../services/notification-incidents.ts";
 import { rebuildPageChains } from "../fansly/lib/chain-rebuild.ts";
 import type { EngineRegistry } from "../engine/resource.ts";
 import { findSyncPageByLabel } from "../inspect.ts";
@@ -22,14 +23,16 @@ import {
   anyPageWasLive,
   isUnfinishedRollback,
   readLatestSwitchAudit,
+  recordRedLinesAcceptance,
   recordSwitchAudit,
   SYNC_SWITCH_AUDIT_EVENT,
+  SYNC_SWITCH_RED_LINES_AUDIT_EVENT,
   type SwitchAuditRow,
 } from "./audit.ts";
 import { SWITCH_EXIT, SwitchRefusedError, wholeSeconds, type SwitchContext } from "./context.ts";
 import { importLegacyState } from "./import.ts";
 import { failingStopCheck, legacyStopped, readLegacyStopEvidence } from "./legacy-stop.ts";
-import { checkSwitchPreconditions } from "./preconditions.ts";
+import { checkSwitchPreconditions, redLinesLine, type RedLinesAcceptance } from "./preconditions.ts";
 
 // `pnpm cli sync switch --page P --shadow-report <path>` (design step 3 §3.5
 // item 7, runbook §6.2): moves one page from the shadow engine to the live
@@ -46,15 +49,20 @@ import { checkSwitchPreconditions } from "./preconditions.ts";
 //      cancelled, `shadow`, exit 2.
 //   R  the final incremental chain rebuild from the journal (§8.2).
 //   I  the legacy import (`importLegacyState`), `legacy_imported_at` last.
-//   C  mode `live`: the host takes a new owner generation (its first send
-//      ≥ 1.2 × S after the legacy completion, `paceFloorFromDb`); then the
-//      page's history requests open (+1 h on the first page ever switched).
+//   C  mode `live`: the page's legacy stream incidents are closed
+//      (`engine_owned`: only the legacy executor's recovery resolved them);
+//      the host takes a new owner generation (its first send ≥ 1.2 × S after
+//      the legacy completion, `paceFloorFromDb`); then the page's history
+//      requests open (+1 h on the first page ever switched).
 //   H  once requests are open: the page's open hydration requests become
 //      history requests (`switch_migration`), their legacy rows `expired`.
 
 export interface SyncSwitchInput {
   pageLabel: string;
   shadowReportPath: string | null;
+  /** The owner's judgement of the report's red lines (step 3b ruling 12):
+   *  a report that is not accepted passes on it alone, audited. */
+  acceptRedLines?: RedLinesAcceptance | null;
   dryRun: boolean;
   registry: EngineRegistry;
   /** The switch capability for the page (issued by the CLI only, I17). */
@@ -121,14 +129,21 @@ export async function runSyncSwitch(ctx: SwitchContext, input: SyncSwitchInput):
     );
   }
   const resume = deriveResume(page, await guardHandedToEngine(ctx, page.pageId), latest);
+  const preconditions = { page, shadowReportPath: input.shadowReportPath, acceptRedLines: input.acceptRedLines ?? null };
+  if (resume.at !== "A" && preconditions.acceptRedLines !== null) {
+    ctx.print(`${label}: --accept-red-lines unused — the switch resumes at ${resume.at}, past its preconditions`);
+  }
 
   if (input.dryRun) {
     if (resume.at !== "A") {
       ctx.print(`${label}: ${page.mode}; a switch would resume at ${resume.at}`);
       return { exitCode: SWITCH_EXIT.done, phase: `dry_run:${resume.at}`, page: label };
     }
-    const verdict = await checkSwitchPreconditions(ctx, { page, shadowReportPath: input.shadowReportPath });
+    const verdict = await checkSwitchPreconditions(ctx, preconditions);
     for (const check of verdict.checks) ctx.print(`${check.ok ? "ok  " : "FAIL"} ${check.name}: ${check.detail}`);
+    if (verdict.redLines !== null) {
+      ctx.print(`RED LINES ${label}: ${redLinesLine(verdict.redLines)} — the switch would record ${SYNC_SWITCH_RED_LINES_AUDIT_EVENT}`);
+    }
     ctx.print(verdict.ok ? `${label}: every precondition holds` : `${label}: the switch would be refused`);
     return { exitCode: verdict.ok ? SWITCH_EXIT.done : 1, phase: "dry_run", page: label };
   }
@@ -138,10 +153,16 @@ export async function runSyncSwitch(ctx: SwitchContext, input: SyncSwitchInput):
     case "revert":
       return revertToShadow(ctx, page, capability, resume.cause);
     case "A": {
-      const verdict = await checkSwitchPreconditions(ctx, { page, shadowReportPath: input.shadowReportPath });
+      const verdict = await checkSwitchPreconditions(ctx, preconditions);
       if (!verdict.ok) {
         for (const check of verdict.checks.filter((entry) => !entry.ok)) ctx.print(`FAIL ${check.name}: ${check.detail}`);
         throw new SwitchRefusedError(`${label}: the switch is refused (preconditions)`, verdict.checks);
+      }
+      if (verdict.redLines !== null) {
+        // The owner's judgement of the report (step 3b ruling 12), on record
+        // before anything changes.
+        await recordRedLinesAcceptance(db, { pageId: page.pageId, page: label, actor: ctx.actor, redLines: verdict.redLines });
+        ctx.print(`RED LINES ${label}: ${redLinesLine(verdict.redLines)} — recorded as ${SYNC_SWITCH_RED_LINES_AUDIT_EVENT}`);
       }
       await recordSwitchAudit(db, { pageId: page.pageId, phase: "start", actor: ctx.actor, detail: { checks: verdict.checks } });
       const moved = await setSyncPageMode(db, {
@@ -345,6 +366,14 @@ async function finishLive(
   generationAtC: bigint | null,
 ): Promise<SyncSwitchOutcome> {
   const { db } = ctx;
+  // The page is the engine's now: the legacy stream latches only the legacy
+  // executor's recovery resolved are closed (`engine_owned`), before the wait
+  // for the owner — a page left live without one runs no legacy stream either.
+  // The host closes them again on every live takeover (idempotent).
+  const closed = await resolveLegacyStreamIncidentsOfEnginePage(ctx, { pageId, pageLabel: label });
+  if (closed.length > 0) {
+    ctx.print(`C ${label}: ${closed.length} legacy stream incident(s) closed (${closed.join(", ")}) — the page is owned by the Fansly Sync Engine`);
+  }
   const deadline = Date.now() + ctx.timing.ownerTimeoutMs;
   let page = await getSyncPage(db, pageId);
   for (;;) {
@@ -449,8 +478,8 @@ async function convertOpenHydration(ctx: SwitchContext, pageId: number, label: s
 
 function printChecklist(ctx: SwitchContext, label: string, page: SyncPageRow): void {
   ctx.print(`Post-switch checklist for ${label} (runbook §6.2):`);
-  ctx.print(`  S3 now: sync page status --page ${label}; step3-accept.sql from T0 = ${page.modeChangedAt.toISOString()} (sections 1, 2, 4, 8); sync alerts status --page ${label}`);
+  ctx.print(`  S3 now: sync page status --page ${label}; sync switch check --page ${label} --since ${page.modeChangedAt.toISOString()} (interim: a fail shows at once); sync alerts status --page ${label}`);
   ctx.print("  S4 within the hour: 1 deploy + 2 sync recreates + 1 kill -9, ≥ 10 min apart (owner decision №16)");
   ctx.print(`  S5 at ${page.requestsEnabledAt?.toISOString() ?? "the requests opening"}: the 20-fan control request`);
-  ctx.print(`  S7 after T* + 1 h: the verdict — sync switch check --page ${label} [--page <each page switched with it> …] --since <the first of their T0s; this page's: ${page.modeChangedAt.toISOString()}> (= step3-accept.sql section 9)`);
+  ctx.print(`  S7 after T* + 1 h: the verdict — sync switch check --page ${label} [--page <each page switched with it> …] --since <the first of their T0s; this page's: ${page.modeChangedAt.toISOString()}>`);
 }

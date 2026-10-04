@@ -2,6 +2,8 @@ import { sql, type SQL } from "drizzle-orm";
 
 import type { Database } from "../../client.ts";
 import { type CapturePayloadRef, capturePayloadRefFromColumns } from "../capture-payloads.ts";
+import { archiveSenderRole, archiveStoredMessageSql, archiveThreadRowsFromSql } from "../dm-archive-store.ts";
+import type { DmLiveReaderStore } from "./live-messages.ts";
 import { holdsSyncSwitchCapability, type SyncPageMode, type SyncSwitchCapability } from "./pages.ts";
 import { textArrayParam, toDate, toRequiredDate } from "./values.ts";
 
@@ -16,11 +18,13 @@ import { textArrayParam, toDate, toRequiredDate } from "./values.ts";
 //       short transaction (`writeRebuiltThreadChain`);
 //   legacy coverage columns (stored_*, message_coverage_status,
 //       message_backfill_complete, last_message_sync_at, last_fan/model_*)
-//       written by the engine ONLY through `syncLegacyThreadSummary` (a read
-//       stored rows) and `syncLegacyThreadSummaryAfterDeletion` (a socket
-//       deletion marked one), which refuse a thread whose page is not
-//       `handover`/`live` — on every other page they belong to the legacy
-//       engine.
+//       written by the engine ONLY through `writeThreadSummary` (a read
+//       stored messages in `message_archive`) and
+//       `writeThreadSummaryAfterDeletion` (a socket deletion tombstoned one),
+//       which refuse a thread whose page is not `handover`/`live` — on every
+//       other page they belong to the legacy engine. On the engine's pages
+//       they count the thread's archive messages (step 4, design S4-08 [E4]):
+//       the readers of those pages read the archive.
 // Neither writer touches the other group (nor `updated_at`, for the chain
 // writer), so a rebuild on a legacy page changes nothing a legacy reader sees.
 
@@ -80,8 +84,8 @@ export class ThreadChainInvalidError extends Error {
   }
 }
 
-/** `syncLegacyThreadSummary` on a thread whose page the legacy engine owns. */
-export class LegacyThreadSummaryRefusedError extends Error {
+/** A thread summary write on a thread whose page the legacy engine owns. */
+export class ThreadSummaryRefusedError extends Error {
   readonly threadId: number;
   readonly mode: SyncPageMode | null;
 
@@ -92,7 +96,7 @@ export class LegacyThreadSummaryRefusedError extends Error {
           + `(the page is ${mode === null ? "without a sync_pages row" : `'${mode}'`})`
         : `Thread ${threadId}: no such thread`,
     );
-    this.name = "LegacyThreadSummaryRefusedError";
+    this.name = "ThreadSummaryRefusedError";
     this.threadId = threadId;
     this.mode = mode;
   }
@@ -360,46 +364,68 @@ export async function resetThreadChain(tx: Database, threadId: number): Promise<
 const NUMERIC_MESSAGE_ID = sql.raw(`'^[0-9]{1,30}$'`);
 
 /** The fold's `StoredFacts` (§8.1): non-deleted stored messages of the thread
- *  and the oldest of them by snowflake. Read only for empty pages. */
+ *  and the oldest of them by snowflake. Read only for empty pages.
+ *  `store: "message_archive"` reads the thread's stored archive messages
+ *  instead (dm-archive-store.ts). */
 export async function readThreadStoredFacts(
   db: Database,
   threadId: number,
+  options: { store?: DmLiveReaderStore } = {},
 ): Promise<{ nonDeletedCount: number; oldestNonDeletedId: string | null }> {
-  const result = await db.execute<{ nonDeletedCount: number; oldestNonDeletedId: string | null }>(sql`
+  const result = await db.execute<{ nonDeletedCount: number; oldestNonDeletedId: string | null }>(
+    options.store === "message_archive"
+      ? sql`
+    select count(*)::int as "nonDeletedCount",
+           min(case when ma.message_ref ~ ${NUMERIC_MESSAGE_ID} then ma.message_ref::numeric end)::text
+             as "oldestNonDeletedId"
+      from ${archiveThreadRowsFromSql(threadId)}
+       and ${archiveStoredMessageSql("ma")}
+  `
+      : sql`
     select count(*)::int as "nonDeletedCount",
            min(case when m.platform_message_id ~ ${NUMERIC_MESSAGE_ID} then m.platform_message_id::numeric end)::text
              as "oldestNonDeletedId"
       from page_dm_messages m
      where m.conversation_id = ${threadId}
        and m.deleted_at is null
-  `);
+  `,
+  );
   const row = result.rows[0];
   return { nonDeletedCount: Number(row?.nonDeletedCount ?? 0), oldestNonDeletedId: row?.oldestNonDeletedId ?? null };
 }
 
 /** For each probe, how many non-deleted stored messages of the thread are
- *  older (by snowflake) than `beforeId` — the end-rule checks of §8.3. */
+ *  older (by snowflake) than `beforeId` — the end-rule checks of §8.3.
+ *  `store: "message_archive"` counts the thread's stored archive messages. */
 export async function countStoredMessagesOlderThan(
   db: Database,
   probes: readonly { threadId: number; beforeId: string }[],
+  options: { store?: DmLiveReaderStore } = {},
 ): Promise<number[]> {
   if (probes.length === 0) return [];
   for (const probe of probes) {
     if (!DECIMAL_ID.test(probe.beforeId)) throw new Error(`Not a message id: ${probe.beforeId}`);
   }
-  const result = await db.execute<{ ord: string; olderCount: number }>(sql`
-    select p.ord::text as ord,
-           (select count(*)::int
+  const older = options.store === "message_archive"
+    ? sql`(select count(*)::int
+              from ${archiveThreadRowsFromSql(sql`probe.thread_id`)}
+               and ${archiveStoredMessageSql("ma")}
+               and ma.message_ref ~ ${NUMERIC_MESSAGE_ID}
+               and ma.message_ref::numeric < probe.before_id::numeric)`
+    : sql`(select count(*)::int
               from page_dm_messages m
-             where m.conversation_id = p.thread_id
+             where m.conversation_id = probe.thread_id
                and m.deleted_at is null
                and m.platform_message_id ~ ${NUMERIC_MESSAGE_ID}
-               and m.platform_message_id::numeric < p.before_id::numeric) as "olderCount"
+               and m.platform_message_id::numeric < probe.before_id::numeric)`;
+  const result = await db.execute<{ ord: string; olderCount: number }>(sql`
+    select probe.ord::text as ord,
+           ${older} as "olderCount"
       from unnest(
              ${textArrayParam(probes.map((probe) => String(probe.threadId)))}::bigint[],
              ${textArrayParam(probes.map((probe) => probe.beforeId))}
-           ) with ordinality as p(thread_id, before_id, ord)
-     order by p.ord
+           ) with ordinality as probe(thread_id, before_id, ord)
+     order by probe.ord
   `);
   const counts = new Array<number>(probes.length).fill(0);
   for (const row of result.rows) counts[Number(row.ord) - 1] = Number(row.olderCount);
@@ -600,12 +626,24 @@ export async function getLatestCompletedChainRebuild(
     : null;
 }
 
-// ── legacy coverage columns on engine-owned pages ─────────────────────────────
+// ── the summary columns on engine-owned pages (from the archive) ──────────────
 
-export interface LegacySummaryInsertedRow {
-  platformMessageId: string;
-  createdAt: Date;
+/** A stored archive message of a thread, as the summary counts it
+ *  (`archiveStoredMessageSql`). */
+export interface ThreadSummaryStoredRow {
+  messageRef: string;
+  occurredAt: Date;
   senderRole: "fan" | "model" | "system" | "unknown";
+}
+
+/** What the DM apply saw of the archive before feeding it
+ *  (`openThreadSummary`), for `writeThreadSummary`. */
+export interface ThreadSummaryOpening {
+  threadId: number;
+  /** The message refs of the page the apply read (numeric ids, deduped). */
+  refs: readonly string[];
+  /** Those the archive already stored for the thread before the feed. */
+  storedBefore: ReadonlySet<string>;
 }
 
 function extremeId(ids: readonly string[], pick: "max" | "min"): string | null {
@@ -618,12 +656,48 @@ function extremeId(ids: readonly string[], pick: "max" | "min"): string | null {
   return best?.id ?? null;
 }
 
-function latestAt(rows: readonly LegacySummaryInsertedRow[], role: LegacySummaryInsertedRow["senderRole"]): Date | null {
+function latestAt(rows: readonly ThreadSummaryStoredRow[], role: ThreadSummaryStoredRow["senderRole"]): Date | null {
   let latest: Date | null = null;
   for (const row of rows) {
-    if (row.senderRole === role && (latest === null || row.createdAt > latest)) latest = row.createdAt;
+    if (row.senderRole === role && (latest === null || row.occurredAt > latest)) latest = row.occurredAt;
   }
   return latest;
+}
+
+/** The thread's stored archive messages among `refs`. Looked up by the
+ *  archive's unique (account, platform, message ref) first: given the
+ *  conversation as well, the planner walks the whole conversation's index
+ *  range instead (7 s cold for a 17 000-message chat in production). */
+async function readThreadArchiveStoredRows(
+  tx: Database,
+  threadId: number,
+  refs: readonly string[],
+): Promise<ThreadSummaryStoredRow[]> {
+  if (refs.length === 0) return [];
+  const result = await tx.execute<{ messageRef: string; occurredAt: Date | string; senderRole: string }>(sql`
+    with thread as (
+      select t.platform_account_id as account_id, p.platform::text as platform,
+             t.platform_conversation_id as conversation_ref
+        from page_dm_threads t
+        join pages p on p.id = t.platform_account_id
+       where t.id = ${threadId}
+    ), candidates as materialized (
+      select ma.message_ref, ma.conversation_ref, ma.occurred_at, ma.sender_role, ma.deleted_at, ma.content_pending
+        from message_archive ma
+       where ma.account_id = (select account_id from thread)
+         and ma.platform = (select platform from thread)
+         and ma.message_ref = any(${textArrayParam(refs)})
+    )
+    select c.message_ref as "messageRef", c.occurred_at as "occurredAt", c.sender_role as "senderRole"
+      from candidates c
+      join thread on thread.conversation_ref = c.conversation_ref
+     where ${archiveStoredMessageSql("c")}
+  `);
+  return result.rows.map((row) => ({
+    messageRef: row.messageRef,
+    occurredAt: toRequiredDate(row.occurredAt),
+    senderRole: archiveSenderRole(row.senderRole),
+  }));
 }
 
 /**
@@ -650,29 +724,52 @@ export async function markPageThreadsUnverified(tx: Database, pageId: number): P
 }
 
 /**
- * Keep the legacy coverage columns honest for legacy readers on a page the
- * engine owns (design §5.4 step 6), in the DM apply's transaction after
- * `writeThreadChain`. Asserts in the same statement that the thread's page is
- * `handover` or `live` and throws `LegacyThreadSummaryRefusedError` otherwise
- * (never on a legacy page, I9).
- *
- * Incremental, from the rows this apply INSERTED (new, hence not deleted):
- * `stored_message_count` grows by their number, newest/oldest stored ids move
- * by snowflake comparison, last fan/model times by `greatest`; no per-thread
- * scan (`sync chain check-window` compares the result offline). The coverage
- * verdict follows the effective history state (complete → complete, partial |
- * unverified → partial_window, none → pending_backfill), and a head read
- * raises `last_message_sync_at` to its send time, never backwards.
+ * The first half of `writeThreadSummary`, in the DM apply's transaction
+ * BEFORE it feeds `message_archive`: lock the thread row (lock order:
+ * `page_dm_threads` before `domain_event_seq` and `message_archive`) and note
+ * which of the page's message refs the archive already stores for the thread.
  */
-export async function syncLegacyThreadSummary(
+export async function openThreadSummary(
   tx: Database,
   threadId: number,
-  input: { inserted: readonly LegacySummaryInsertedRow[]; headReadAt: Date | null },
-): Promise<{ storedMessageCount: number; messageCoverageStatus: ThreadChainRow["messageCoverageStatus"] }> {
-  const ids = input.inserted.map((row) => row.platformMessageId);
+  refs: readonly string[],
+): Promise<ThreadSummaryOpening> {
+  const unique = [...new Set(refs.filter((ref) => DECIMAL_ID.test(ref)))].sort();
+  await tx.execute(sql`select id from page_dm_threads where id = ${threadId} for update`);
+  const before = await readThreadArchiveStoredRows(tx, threadId, unique);
+  return { threadId, refs: unique, storedBefore: new Set(before.map((row) => row.messageRef)) };
+}
+
+/**
+ * Keep the summary columns honest for their readers on a page the engine owns
+ * (design §5.4 step 6; step 4 S4-08 [E4]: they count the thread's archive
+ * messages, which the engine's readers serve), in the DM apply's transaction
+ * after `writeThreadChain` and the archive feed. Asserts in the same statement
+ * that the thread's page is `handover` or `live` and throws
+ * `ThreadSummaryRefusedError` otherwise (never on a legacy page, I9).
+ *
+ * Incremental, from the archive messages of the page this apply STORED (the
+ * opening's refs stored for the thread now and not before the feed: new,
+ * hence not deleted): `stored_message_count` grows by their number,
+ * newest/oldest stored ids move by snowflake comparison, last fan/model times
+ * by `greatest`; no per-thread scan (`sync chain check-window` compares the
+ * result with the archive offline, and a deletion recounts the thread). The
+ * coverage verdict follows the effective history state (complete → complete,
+ * partial | unverified → partial_window, none → pending_backfill), and a head
+ * read raises `last_message_sync_at` to its send time, never backwards.
+ */
+export async function writeThreadSummary(
+  tx: Database,
+  opening: ThreadSummaryOpening,
+  input: { headReadAt: Date | null },
+): Promise<{ storedMessageCount: number; messageCoverageStatus: ThreadChainRow["messageCoverageStatus"]; added: number }> {
+  const threadId = opening.threadId;
+  const stored = (await readThreadArchiveStoredRows(tx, threadId, opening.refs))
+    .filter((row) => !opening.storedBefore.has(row.messageRef));
+  const ids = stored.map((row) => row.messageRef);
   const newest = extremeId(ids, "max");
   const oldest = extremeId(ids, "min");
-  const added = input.inserted.length;
+  const added = stored.length;
   const newCount = sql`(t.stored_message_count + ${added}::int)`;
   const effective = sql`(case when t.history_state = 'none' and ${newCount} > 0 then 'unverified' else t.history_state end)`;
   const result = await tx.execute<{ storedMessageCount: number; messageCoverageStatus: ThreadChainRow["messageCoverageStatus"] }>(sql`
@@ -690,8 +787,8 @@ export async function syncLegacyThreadSummary(
                then ${oldest}::text
              when ${oldest}::numeric < t.oldest_stored_message_id::numeric then ${oldest}::text
              else t.oldest_stored_message_id end,
-           last_fan_message_at = greatest(t.last_fan_message_at, ${latestAt(input.inserted, "fan")}::timestamptz),
-           last_model_message_at = greatest(t.last_model_message_at, ${latestAt(input.inserted, "model")}::timestamptz),
+           last_fan_message_at = greatest(t.last_fan_message_at, ${latestAt(stored, "fan")}::timestamptz),
+           last_model_message_at = greatest(t.last_model_message_at, ${latestAt(stored, "model")}::timestamptz),
            message_coverage_status = (case ${effective}
              when 'complete' then 'complete'
              when 'none' then 'pending_backfill'
@@ -711,32 +808,25 @@ export async function syncLegacyThreadSummary(
   `);
   const row = result.rows[0];
   if (row) {
-    return { storedMessageCount: Number(row.storedMessageCount), messageCoverageStatus: row.messageCoverageStatus };
+    return { storedMessageCount: Number(row.storedMessageCount), messageCoverageStatus: row.messageCoverageStatus, added };
   }
-  const why = await tx.execute<{ mode: SyncPageMode | null }>(sql`
-    select sp.mode
-      from page_dm_threads t
-      left join sync_pages sp on sp.page_id = t.platform_account_id
-     where t.id = ${threadId}
-  `);
-  const found = why.rows[0];
-  throw new LegacyThreadSummaryRefusedError(threadId, found?.mode ?? null, found !== undefined);
+  throw await summaryRefusal(tx, threadId);
 }
 
 /**
- * Keep the legacy stored window of one thread honest after a WebSocket
- * deletion marked a row of it on a page the engine owns (design §3.3 item 4,
- * E7): `stored_message_count`, `newest/oldest_stored_message_id` and
- * `last_fan/model_message_at`, recomputed from the thread's live rows
- * (`page_dm_messages where deleted_at is null`, the window summary of
- * `getPageDmMessageWindowSummary`). The head fields are the conversation
- * list's, the coverage verdict follows the chain (a deletion changes neither),
- * and the chain columns are untouched. Asserts in the same statement that the
- * thread's page is `handover` or `live` and throws
- * `LegacyThreadSummaryRefusedError` otherwise (I9), like
- * `syncLegacyThreadSummary`.
+ * Keep the stored window of one thread honest after a WebSocket deletion
+ * tombstoned a message of it in `message_archive` on a page the engine owns
+ * (design §3.3 item 4, E7; step 4 S4-08): `stored_message_count`,
+ * `newest/oldest_stored_message_id` and `last_fan/model_message_at`,
+ * recounted from the thread's stored archive messages (the window of
+ * `getPageDmMessageWindowSummary(…, { store: "message_archive" })`). Runs
+ * after the tombstones. The head fields are the conversation list's, the
+ * coverage verdict follows the chain (a deletion changes neither), and the
+ * chain columns are untouched. Asserts in the same statement that the
+ * thread's page is `handover` or `live` and throws `ThreadSummaryRefusedError`
+ * otherwise (I9), like `writeThreadSummary`.
  */
-export async function syncLegacyThreadSummaryAfterDeletion(
+export async function writeThreadSummaryAfterDeletion(
   tx: Database,
   threadId: number,
 ): Promise<{ storedMessageCount: number }> {
@@ -750,13 +840,12 @@ export async function syncLegacyThreadSummaryAfterDeletion(
            updated_at = clock_timestamp()
       from sync_pages sp,
            (select count(*)::int as stored_count,
-                   (array_agg(m.platform_message_id order by m.created_at desc, m.platform_message_id desc, m.id desc))[1] as newest_id,
-                   (array_agg(m.platform_message_id order by m.created_at asc, m.platform_message_id asc, m.id asc))[1] as oldest_id,
-                   max(m.created_at) filter (where m.sender_role = 'fan') as last_fan_at,
-                   max(m.created_at) filter (where m.sender_role = 'model') as last_model_at
-              from page_dm_messages m
-             where m.conversation_id = ${threadId}
-               and m.deleted_at is null) s
+                   (array_agg(ma.message_ref order by ma.occurred_at desc, ma.message_ref desc, ma.id desc))[1] as newest_id,
+                   (array_agg(ma.message_ref order by ma.occurred_at asc, ma.message_ref asc, ma.id asc))[1] as oldest_id,
+                   max(ma.occurred_at) filter (where ma.sender_role = 'fan') as last_fan_at,
+                   max(ma.occurred_at) filter (where ma.sender_role = 'model') as last_model_at
+              from ${archiveThreadRowsFromSql(threadId)}
+               and ${archiveStoredMessageSql("ma")}) s
      where t.id = ${threadId}
        and sp.page_id = t.platform_account_id
        and sp.mode in ('handover', 'live')
@@ -764,6 +853,10 @@ export async function syncLegacyThreadSummaryAfterDeletion(
   `);
   const row = result.rows[0];
   if (row) return { storedMessageCount: Number(row.storedMessageCount) };
+  throw await summaryRefusal(tx, threadId);
+}
+
+async function summaryRefusal(tx: Database, threadId: number): Promise<ThreadSummaryRefusedError> {
   const why = await tx.execute<{ mode: SyncPageMode | null }>(sql`
     select sp.mode
       from page_dm_threads t
@@ -771,5 +864,5 @@ export async function syncLegacyThreadSummaryAfterDeletion(
      where t.id = ${threadId}
   `);
   const found = why.rows[0];
-  throw new LegacyThreadSummaryRefusedError(threadId, found?.mode ?? null, found !== undefined);
+  return new ThreadSummaryRefusedError(threadId, found?.mode ?? null, found !== undefined);
 }

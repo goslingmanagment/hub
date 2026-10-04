@@ -50,6 +50,13 @@ describe("BL-A11: transcript witnesses carry their OWN floors", () => {
     }
   });
 
+  it("without the hot arm (step 4, S4-06) the union witnesses only the archives it reads", async () => {
+    const { witnesses } = await listAgentTranscript(stubDb, { ...input, hotArm: false });
+    const byPlane = new Map(witnesses.map((witness) => [witness.plane, witness.captureFloor]));
+    expect([...byPlane.keys()].sort()).toEqual(["dm_message_archive", "message_archive"]);
+    expect(byPlane.get("message_archive")).toEqual({ at: FLOOR.toISOString(), kind: "oldest_stored_row" });
+  });
+
   it("an unknown archive floor stays unknown on every arm", async () => {
     const { witnesses } = await listAgentTranscript(stubDb, { ...input, archiveFloor: null });
     for (const witness of witnesses) {

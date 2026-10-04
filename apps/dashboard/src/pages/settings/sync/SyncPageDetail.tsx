@@ -23,7 +23,6 @@ import {
   getReasonSummary,
   getStreamLabel,
   getSubstreamTone,
-  getWsHintGenerationNotice,
   isDependencyWait,
   isEngineBlock,
   formatSubstreamStateLabel,
@@ -74,7 +73,6 @@ function BlockDetailCard({
   const dependencyDetail = getDependencyWaitDetail(block);
   const progressCaption = formatBlockProgressCaption(block);
   const progressBarMode = getBlockProgressBarMode(block);
-  const hintNotice = getWsHintGenerationNotice(block);
   const statusTone = dependencyWait || queueWaiting
     ? "border-border bg-hover-alt text-text-secondary"
     : block.state === "failed"
@@ -166,17 +164,6 @@ function BlockDetailCard({
               Consecutive failures: {block.error.consecutiveFailures}
             </p>
           )}
-        </div>
-      )}
-
-      {/* Informational: never changes the block's state or attention */}
-      {hintNotice && (
-        <div className="mt-3 rounded-lg border border-warning/25 bg-warning/10 px-3 py-2.5 space-y-1 text-warning-dark">
-          <p className="text-xs font-medium">{hintNotice.headline}</p>
-          <p className="text-[11px] text-text-secondary">{hintNotice.detail}</p>
-          <p className="text-[11px] text-text-muted">
-            Preview: <code className="select-all break-all font-mono">pnpm --silent cli fansly:ws-policy --page {pageLabel} --preview</code>
-          </p>
         </div>
       )}
 
