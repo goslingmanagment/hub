@@ -23,6 +23,12 @@ provider hold (R04) or import of the Fansly HTTP package, and the owner's `/acco
 credentials or proxy change) have no legacy sender behind them. `onlyfans/boundary.ts` is where that executor's
 platform set is read from; the planner and the executor scope every page-sync query with it and assert it before they
 wake or run a page (tests/sync-onlyfans-boundary.test.ts is the ratchet).
+Since S4-20 no legacy sender of a Fansly page is left at all (I13): the Fansly adapter's HTTP, the endpoint and replay
+probe CLIs (`sync probe` is the engine's), the alias backfill CLI (`sync work enqueue --resource
+fan-profiles.alias-backfill`) and the describer's guarded CDN hop are deleted, and the app context builds no Fansly
+client. The describer's page-egress download serves the pages without a `live` row (OnlyFans) and refuses a Fansly
+CDN host before anything is sent. The guard row and its journal stay (`lockOwnedPage`, the takeover floor, the
+no-page identity check's `fansly_send_log` row).
 
 ## Map
 
@@ -393,18 +399,19 @@ While the engine owns a page (`handover` or `live`) no legacy component even tri
 §3.1); the step-1 guard row (`owner_engine`, 0229) stays the catch-all at the wire. One predicate,
 `legacyOwnsFanslyPageSql` (`repositories/sync/pages.ts`), gates the legacy planner and leases
 (`listRunnablePageSync`, `markPageSyncEnqueued`, `acquirePageSyncLease`, `acquireTargetedPageSyncLease`), the
-`sync_silent` deadman, and hydration dispatch. The legacy processes ask `isFanslyPageEngineOwned` /
-`listEngineOwnedFanslyPages`: the AI describer downloads nothing itself (a `live` page's CDN hops are its actor's
-`media-download.fetch`) and wakes no DM stream. The ws-hints projector and its minutely deletion reconcile are
-gone since step 4 S4-11 (after the A5 drain check over the captured frames): a socket deletion reaches the stores only
-through `dm-live.deletions`, and the receipts the projector filed stay as records. The owner's `/account/me` routes and
-CLIs, the probes and the alias backfill answer 409 `fansly_page_on_sync_engine` (`services/sync-engine-guard.ts`) with
-the engine command to use instead — except the `/account/me` levers (page verify, credentials, proxy), which
-on a `live` page go through the engine (`services/sync-engine-account.ts`: `account.verify` / `account.identity`,
-≤ 30 s, else 409 `fansly_sync_work_queued` with the work's status link) and answer 409 `fansly_page_switching` in
-`handover`. Since step 4 S4-19 they have no legacy path: on a Fansly page the engine does not run (`off`, `shadow` or
-no engine row) they answer 409 `legacy_sync_retired` before anything is resolved, sent or stored, and a verified
-change resolves the page's verification incidents without touching its legacy rows. Hydration rows the engine serves (`execution_lane = 'fansly_sync_engine'`) are never expired,
+`sync_silent` deadman, and hydration dispatch. The legacy processes ask `isFanslyPageEngineOwned`: the AI describer
+downloads nothing itself (a `live` page's CDN hops are its actor's `media-download.fetch`) and wakes no DM stream; since
+step 4 S4-20 its page-egress download sends no Fansly request for any page (a Fansly CDN host there answers
+`send_guard`, nothing sent, and the row looks again later). The ws-hints projector and its minutely deletion reconcile
+are gone since step 4 S4-11 (after the A5 drain check over the captured frames): a socket deletion reaches the stores
+only through `dm-live.deletions`, and the receipts the projector filed stay as records. The probes and the alias
+backfill that answered 409 `fansly_page_on_sync_engine` here are deleted (S4-20), and that code with them. The owner's
+`/account/me` levers (page verify, credentials, proxy) on a `live` page go through the engine
+(`services/sync-engine-account.ts`: `account.verify` / `account.identity`, ≤ 30 s, else 409 `fansly_sync_work_queued`
+with the work's status link) and answer 409 `fansly_page_switching` in `handover`. Since step 4 S4-19 they have no
+legacy path: on a Fansly page the engine does not run (`off`, `shadow` or no engine row) they answer 409
+`legacy_sync_retired` before anything is resolved, sent or stored, and a verified change resolves the page's
+verification incidents without touching its legacy rows. Hydration rows the engine serves (`execution_lane = 'fansly_sync_engine'`) are never expired,
 reconciled or swept by the legacy cycle. Since step 4 S4-15 that cycle has no Fansly lane at all (the targeted thread
 backfill with its owner CLI, the auto-approve policy and the projection-debt sweep are deleted): it dispatches
 OnlyFans approvals only, a Fansly approval is refused at the decision, and old Fansly history is read only through
@@ -550,7 +557,7 @@ Each is enforced in exactly one place and pinned by a test (design §1). The fir
 | I10 | `history_complete` only by an accepted empty page at `before = contiguous_oldest_id`; a short page is not the end; overlap is not proof. | `fansly/lib/chain.ts` |
 | I11 | A new event during a read raises `demand_revision`; an older answer never closes newer demand. | `engine/commit.ts` |
 | I12 | No history walk without a request. | `fansly/registry.ts` (`dm-messages.history` triggers only on a request) |
-| I13 | The Fansly HTTP client exists only inside `sync/` (plus the sanctioned legacy list until step 4). | lint rule + boundary test |
+| I13 | A Fansly HTTP request leaves the process only through the wire layer's single-request send, under the caller's send check; its callers are the page transport in `sync/` (the pacer's admission) and the identity check of a session without a page (journaled, owner decision №4). The legacy adapter and every legacy sender are deleted (step 4 S4-20); nothing in the runtime captures a page's legacy guard. | `packages/fansly/src/wire/send.ts` + `fansly/transport.ts` + `fansly/identity-without-page.ts`; lint rule (no undici HTTP import in `packages/fansly`) + tests/fansly-send-guard-boundary.test.ts |
 | I14 | Shadow never sends and never writes observations, domain tables, receipts or the overlay; it never owns a socket. | `engine/actor.ts` + `engine/commit.ts` |
 | I15 | The erasure fence is taken in every apply that writes fan material. | `engine/commit.ts` |
 | I16 | The command outbox semantics are untouched (Fansly has no sends). | — |

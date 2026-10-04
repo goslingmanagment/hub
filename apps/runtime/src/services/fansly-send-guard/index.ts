@@ -2,7 +2,6 @@ import {
   captureFanslyPageSendGuard,
   completeFanslySendAttempt,
   confirmFanslySendGuardTerminated,
-  journalUnpacedFanslySend,
   listFanslySendGuards,
   listHeldFanslySendGuards,
   markFanslySendAttemptSent,
@@ -11,7 +10,6 @@ import {
   type FanslySendGuardRow,
   type FanslySendHolderIdentity,
 } from "@agency_hub_core/db";
-import type { FanslySendGuard, FanslySendSource } from "@agency_hub_core/fansly";
 import type { AppConfig } from "@agency_hub_core/shared";
 
 import { loadEffectiveConfig } from "../effective-config.ts";
@@ -66,7 +64,6 @@ export {
 export function createPgFanslySendGuardStore(db: Database): FanslySendGuardStore {
   return {
     capture: (input) => captureFanslyPageSendGuard(db, input),
-    journalUnpaced: (input) => journalUnpacedFanslySend(db, input),
     markSent: (input) => markFanslySendAttemptSent(db, input),
     complete: (input) => completeFanslySendAttempt(db, input),
     markClosed: (input) => markFanslySendGuardClosed(db, input),
@@ -127,11 +124,6 @@ export function getFanslySendGuards(app: GuardHost): FanslySendGuardRegistry {
     implicitRegistries.set(app, registry);
   }
   return registry;
-}
-
-/** The send guard of one Fansly page for one kind of sender. */
-export function fanslyPageSendGuard(app: GuardHost, pageId: number, source: FanslySendSource): FanslySendGuard {
-  return getFanslySendGuards(app).forPage(pageId, source);
 }
 
 export const FANSLY_SEND_GUARD_SWEEP_INTERVAL_MS = 10_000;

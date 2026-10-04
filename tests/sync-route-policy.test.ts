@@ -97,34 +97,48 @@ describe("the route catalogue", () => {
 });
 
 describe("the legacy send log's operations", () => {
-  /** Every operation a legacy sender can journal: the adapter's lanes and
-   *  probes, and the direct captures of the step-1 guard. */
-  function operationsInCode(): string[] {
-    const adapter = readFileSync("packages/fansly/src/adapter.ts", "utf8");
-    const found = new Set<string>();
-    for (const match of adapter.matchAll(/operation: (?:[^"\n]*\? )?"([a-z_]+)"(?: : "([a-z_]+)")?/g)) {
-      found.add(match[1]!);
-      if (match[2] !== undefined) found.add(match[2]);
+  /** Every operation a legacy sender journaled, frozen when the last of them
+   *  was deleted: the adapter's lanes and probes and the describer's guarded
+   *  CDN hop (step 4, S4-20; until then this list was scanned from the
+   *  adapter's code), the legacy socket connect and the W0 socket probes
+   *  (S4-12). The send log keeps their rows, and a page's route budgets count
+   *  them. */
+  const LEGACY_OPERATIONS = [
+    "account_lookup", "account_me", "account_media_bundles_by_ids_probe", "account_media_by_ids_probe",
+    "account_media_orders_probe", "account_stats", "account_walls_probe", "automated_messages",
+    "broadcast_scheduled_probe", "broadcast_stats_deleted_probe", "broadcast_stats_probe", "discovery_media_suggestions",
+    "earnings_accounts", "earnings_monthly_stats", "earnings_monthlystats_accounts", "earnings_overview",
+    "earnings_stats_accounts", "earnings_stats_window", "earnings_transactions", "followers", "gift_codes", "group_detail",
+    "group_mediaoffers_probe", "list_items", "lists_account", "media_download", "media_offer_stats", "media_orderhistory",
+    "mediastory_views_probe", "messages", "messaging_groups", "notifications_page", "payout_methods", "payout_requests",
+    "polls_probe", "post_lookup", "post_replies", "post_tips", "recapstats_probe", "subscribers", "subscription_tiers",
+    "timeline_posts", "tips_account_probe", "tracking_links", "uservault_albums", "vault_albums", "vault_media",
+    "ws_connect", "ws_probe",
+  ];
+
+  /** The captures of the step-1 guard left in the runtime's senders. */
+  function guardCapturesInCode(): string[] {
+    let captures = "";
+    try {
+      captures = execFileSync("grep", ["-rhoE", String.raw`operation: "[a-z_]+", requestTimeoutMs|acquire\(\{ operation: "[a-z_]+"`,
+        "apps/runtime/src/services", "apps/runtime/src/sync", "apps/runtime/src/modules", "apps/runtime/src/cli.ts"], { encoding: "utf8" });
+    } catch (error) {
+      // grep exits 1 when nothing matches.
+      if ((error as { status?: number }).status !== 1) throw error;
     }
-    const captures = execFileSync("grep", ["-rhoE", String.raw`operation: "[a-z_]+", requestTimeoutMs|acquire\(\{ operation: "[a-z_]+"|^\s+operation: "[a-z_]+",$`,
-      "apps/runtime/src/services/egress", "apps/runtime/src/services/fansly-ws"], { encoding: "utf8" });
-    for (const match of captures.matchAll(/operation: "([a-z_]+)"/g)) found.add(match[1]!);
-    return [...found].sort();
+    return [...captures.matchAll(/operation: "([a-z_]+)"/g)].map((match) => match[1]!).sort();
   }
 
-  /** Operations whose writers are deleted but whose rows the send log keeps:
-   *  the legacy socket connect and the W0 socket probes (step 4, S4-12). */
-  const RETIRED_OPERATIONS = ["ws_connect", "ws_probe"];
-
-  it("maps every operation the legacy code writes or the send log keeps from a deleted writer, and no other", () => {
-    const inCode = operationsInCode();
-    // The scan sees the adapter's lanes and every direct capture.
-    for (const operation of ["messages", "messaging_groups", "media_offer_stats", "broadcast_stats_deleted_probe", "media_download", "account_me"]) {
-      expect(inCode, operation).toContain(operation);
-    }
-    for (const operation of RETIRED_OPERATIONS) expect(inCode, operation).not.toContain(operation);
-    expect(Object.keys(FANSLY_LEGACY_OPERATION_ROUTES).sort()).toEqual([...inCode, ...RETIRED_OPERATIONS].sort());
+  it("maps every operation the send log holds from a deleted legacy sender, and no other", () => {
+    expect(Object.keys(FANSLY_LEGACY_OPERATION_ROUTES).sort()).toEqual([...LEGACY_OPERATIONS].sort());
     for (const route of Object.values(FANSLY_LEGACY_OPERATION_ROUTES)) expect(FANSLY_ROUTES.has(route), route).toBe(true);
+    // No sender captures a page's guard any more: a new one would journal an
+    // operation this map does not know.
+    expect(guardCapturesInCode()).toEqual([]);
+    // The one writer the send log still has is the identity check of a session
+    // without a page, under the wire spec's own legacy operation.
+    expect(readFileSync("apps/runtime/src/sync/fansly/identity-without-page.ts", "utf8")).toContain("operation: spec.legacyOperation,");
+    expect(LEGACY_OPERATIONS).toContain(FANSLY_WIRE_SPECS["account.me"].legacyOperation);
   });
 
   it("each wire spec's legacy operation is its own route", () => {

@@ -532,13 +532,13 @@ export async function setSyncPageMode(
 // `handover` (the switch fences the legacy engine before the engine's first
 // send) or `live` — no legacy component even tries to send for it. The legacy
 // schedulers carry `legacyOwnsFanslyPageSql` next to their other gates and the
-// legacy processes ask `isFanslyPageEngineOwned` /
-// `listEngineOwnedFanslyPages`; the step-1 guard row (`owner_engine`, 0229)
-// stays the catch-all at the wire. `off` and `shadow` fence nothing (J8). A
-// page without a `sync_pages` row (OnlyFans) is legacy-owned by construction;
-// a Fansly page onboarded since step 4 is born live (`createLiveSyncPage`),
-// so it never has a moment without its row. Every check is evaluated per
-// query, so leaving to `off` restores the legacy engine with no other action.
+// legacy processes ask `isFanslyPageEngineOwned`; the step-1 guard row
+// (`owner_engine`, 0229) stays the catch-all at the wire. `off` and `shadow`
+// fence nothing (J8). A page without a `sync_pages` row (OnlyFans) is
+// legacy-owned by construction; a Fansly page onboarded since step 4 is born
+// live (`createLiveSyncPage`), so it never has a moment without its row. Every
+// check is evaluated per query, so leaving to `off` restores the legacy engine
+// with no other action.
 
 /** The modes in which the Fansly Sync Engine owns a page. */
 export const ENGINE_OWNED_SYNC_PAGE_MODES = ["handover", "live"] as const satisfies readonly SyncPageMode[];
@@ -563,20 +563,6 @@ export function engineOwnsFanslyPageSql(pageIdColumn: SQL): SQL {
  *  scheduler query (OnlyFans pages and pages without a row pass). */
 export function legacyOwnsFanslyPageSql(pageIdColumn: SQL): SQL {
   return sql`not ${engineOwnsFanslyPageSql(pageIdColumn)}`;
-}
-
-/** The pages the engine owns now, for the legacy processes' page lists. */
-export async function listEngineOwnedFanslyPages(
-  db: Database,
-): Promise<Array<{ pageId: number; label: string; mode: EngineOwnedSyncPageMode }>> {
-  const result = await db.execute<{ pageId: string | number; label: string; mode: EngineOwnedSyncPageMode }>(sql`
-    select sp.page_id as "pageId", p.label, sp.mode
-      from sync_pages sp
-      join pages p on p.id = sp.page_id
-     where sp.mode in ('handover', 'live')
-     order by sp.page_id
-  `);
-  return result.rows.map((row) => ({ pageId: Number(row.pageId), label: row.label, mode: row.mode }));
 }
 
 /** Whether the engine owns this page now, and the page's mode (null without a

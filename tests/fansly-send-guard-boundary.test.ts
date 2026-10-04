@@ -3,13 +3,15 @@ import { join, relative } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-// Plan §2.4/§2.5 «все отправители страницы под охраной»: after the send guard's
-// second step no code path reaches apiv3.fansly.com, wsv3.fansly.com or
-// cdn*.fansly.com through a page's egress without a capture of the page's send
-// guard. The compiler forces each sender's callers to hand it a guard (the
-// parameters are mandatory); this pins the senders themselves and the ways to
-// a page's egress, so a new one cannot appear unnoticed. Sanctioned call sites
-// are listed with their reason; a change here is a review of the boundary.
+// Plan §2.4 «все отправители страницы»: no code path reaches apiv3.fansly.com,
+// wsv3.fansly.com or cdn*.fansly.com through a page's egress except the Sync
+// Engine's, each request under an admission of the page's pacer. The legacy
+// senders that rode the page's send guard (§2.5) — the adapter, the probes,
+// the alias backfill, the describer's guarded CDN hop — are deleted (step 4,
+// S4-20), and no runtime code asks for a page's guard any more. This pins the
+// senders that are left and the ways to a page's egress, so a new one cannot
+// appear unnoticed. Sanctioned call sites are listed with their reason; a
+// change here is a review of the boundary.
 
 const ROOT = join(__dirname, "..");
 const SCANNED = ["apps/runtime/src", "packages", "scripts"];
@@ -34,16 +36,16 @@ const matching = (pattern: RegExp) => files.filter((file) => pattern.test(read(f
 
 /** Every file that names a Fansly origin, and why that is no unguarded send. */
 const SANCTIONED_FANSLY_ORIGIN_FILES: Record<string, string> = {
-  "apps/runtime/src/services/egress/fansly-receiver-socket.ts": "the page socket's handshake: under a lease of the page's guard",
-  "apps/runtime/src/services/egress/media-download.ts": "the CDN host allowlist; a Fansly hop is captured per hop",
+  "apps/runtime/src/services/egress/fansly-receiver-socket.ts": "the page socket's handshake: under the engine's Upgrade lease",
+  "apps/runtime/src/services/egress/media-download.ts": "the CDN host allowlist; the describer's download refuses a Fansly host",
   "apps/runtime/src/sync/fansly/lib/cdn-tokens.ts": "comments only: reads signed CDN URLs, sends nothing",
   "packages/contracts/src/generate.ts": "the base URL default of the generated docs, sends nothing",
   "packages/contracts/src/routes.ts": "validates avatar URLs the API returns, sends nothing",
-  "packages/shared/src/config-registry.ts": "the base URL setting of the adapter (which sends under the guard)",
-  "packages/shared/src/config.ts": "the base URL setting of the adapter (which sends under the guard)",
+  "packages/shared/src/config-registry.ts": "the base URL setting of the wire layer (sent by the engine's transport)",
+  "packages/shared/src/config.ts": "the base URL setting of the wire layer (sent by the engine's transport)",
 };
 
-describe("the Fansly send-guard boundary (plan §2.5)", () => {
+describe("the Fansly send boundary (plan §2.4)", () => {
   it("names a Fansly origin only in the sanctioned files", () => {
     const origins = /(apiv3|wsv3)\.fansly\.com|cdn[0-9a-z<>N-]*\.fansly\.com|fansly\\\.com/;
     expect(matching(origins)).toEqual(Object.keys(SANCTIONED_FANSLY_ORIGIN_FILES).sort());
@@ -61,18 +63,25 @@ describe("the Fansly send-guard boundary (plan §2.5)", () => {
     }
   });
 
-  it("dispatches every Fansly HTTP request through the lease of its capture", () => {
-    // The adapter: every attempt, every sender of senders.md #1–#5, #8–#15.
-    const adapter = read("packages/fansly/src/adapter.ts");
-    expect(adapter.match(/\bfetch\(/g)).toHaveLength(1);
-    expect(adapter).toContain("dispatcher: lease.bind(this.getDispatcher(context.proxy)),");
-    expect(adapter.match(/this\.getDispatcher\(/g)).toHaveLength(1);
-    // The CDN download (#6): a capture per Fansly hop, never direct.
+  it("sends a Fansly HTTP request only through the wire layer's single-request send, under its check", () => {
+    // The Fansly package holds one physical send, and it composes the caller's
+    // send check onto the dispatcher for that request only.
+    expect(files.filter((file) => file.startsWith("packages/fansly/"))).not.toContain("packages/fansly/src/adapter.ts");
+    expect(matching(/\bfetch\(/).filter((file) => file.startsWith("packages/fansly/"))).toEqual([]);
+    const send = read("packages/fansly/src/wire/send.ts");
+    expect(send.match(/\.request\(/g)).toHaveLength(1);
+    expect(send).toContain("const response = await composeFanslySendCheck(dispatcher, gate.check).request({");
+    // Its callers: the engine's page transport (the pacer's admission) and the
+    // identity check of a session without a page (journaled, owner decision №4).
+    expect(matching(/\b(sendFanslyWireRequest|sendFanslyCdnRequest)\(/)).toEqual([
+      "apps/runtime/src/sync/fansly/identity-without-page.ts",
+      "apps/runtime/src/sync/fansly/transport.ts",
+      "packages/fansly/src/wire/send.ts",
+    ]);
+    // The describer's CDN download: a Fansly host is refused before any hop.
     const media = read("apps/runtime/src/services/egress/media-download.ts");
-    expect(media).toContain("const guarded = isFanslyHost(current.hostname);");
-    expect(media).toContain("if (guarded && (!input.fanslySendGuard || !input.dispatcher))");
-    expect(media).toContain("lease.bind(input.dispatcher)");
-    expect(media).toContain("fanslySendGuard: FanslySendGuard | null;");
+    expect(media).toContain("if (isFanslyHost(current.hostname)) {");
+    expect(media).not.toMatch(/SendGuard|SendLease|\.acquire\(/);
   });
 
   it("hands a page's egress only to the sanctioned senders", () => {
@@ -108,12 +117,13 @@ describe("the Fansly send-guard boundary (plan §2.5)", () => {
     expect(read("apps/runtime/src/sync/main.ts")).not.toContain("wsSourceOverrides");
   });
 
-  it("gives each sender outside the adapter the guard of its page with its own source", () => {
-    const expectations: Array<[string, string]> = [
-      ["apps/runtime/src/services/ai-media-describe/worker.ts", 'fanslyPageSendGuard(app, input.pageId, "media_download")'],
-    ];
-    for (const [file, guard] of expectations) {
-      expect(read(file), file).toContain(guard);
-    }
+  it("asks for a page's legacy send guard nowhere: no runtime code captures a guard row", () => {
+    // `FanslySendGuardRegistry.forPage` and its capture stay only as the
+    // legacy sender of the switch and rollback suites (they go with that code).
+    expect(matching(/\.forPage\(|fanslyPageSendGuard\b|\.withoutPage\(/)).toEqual([]);
+    expect(matching(/\bcaptureFanslyPageSendGuard\(/)).toEqual([
+      "apps/runtime/src/services/fansly-send-guard/index.ts",
+      "packages/db/src/repositories/fansly-send-guard.ts",
+    ]);
   });
 });

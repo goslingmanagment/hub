@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 
@@ -19,7 +18,8 @@ import {
   upsertPageDmConversation,
   type FanslySendHolderIdentity,
 } from "@agency_hub_core/db";
-import { FANSLY_SEND_SOURCES, FanslyAdapter } from "@agency_hub_core/fansly";
+import { FANSLY_SEND_SOURCES } from "@agency_hub_core/fansly";
+import { createProxyRequestDispatcher } from "@agency_hub_core/shared";
 
 import {
   createFanslySendGuards,
@@ -33,7 +33,6 @@ import {
   startIntegrationTestDatabase,
   type StartedTestDatabase,
 } from "./helpers/db.ts";
-import type { FanslySendGuardChildConfig } from "./helpers/fansly-send-guard-child.ts";
 import { startFakeFanslyNetwork, type FakeFanslyNetwork } from "./helpers/fansly-send-guard-network.ts";
 import { silentFanslySendGuardLogger } from "./helpers/fansly-send-guard.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
@@ -44,6 +43,11 @@ import { createTestAppContext } from "./helpers/runtime.ts";
 // captures it, from any source: zero requests reach the origin, no journal row
 // is written, and no per-thread breaker row moves. Handing the row back (the
 // rollback flip, design §2.8) restores captures after 1.2 × S.
+//
+// The legacy senders themselves are deleted (step 4, S4-20). The capture and
+// its refusal stay while the switch and rollback code does: a legacy sender
+// here is the guard registry's lease with one request through the page's
+// proxy, as the switch suites make it.
 
 let testDb: StartedTestDatabase | null = null;
 
@@ -238,79 +242,52 @@ describe("the 0229 migration", () => {
   }, 120_000);
 });
 
-// ── Every source of every process ───────────────────────────────────────────
+// ── Every source, then the hand-back ────────────────────────────────────────
 
 const S_MS = 300;
-const CHILD = "tests/helpers/fansly-send-guard-child.ts";
 
-function runChild(config: FanslySendGuardChildConfig) {
-  const child = spawn(process.execPath, ["--import", "tsx/esm", CHILD], {
-    env: { ...process.env, FANSLY_SEND_GUARD_CHILD_CONFIG: JSON.stringify(config) },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  let stdout = "";
-  let stderr = "";
-  child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
-  child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
-  return new Promise<{
-    code: number | null;
-    summary: {
-      responses: number;
-      counters: { captures: number; captureRefusals: number; engineOwnedRefusals: number };
-      errors: Record<string, number>;
-    };
-  }>((resolve, reject) => {
-    child.on("error", reject);
-    child.on("exit", (code) => {
-      const line = stdout.trim().split("\n").at(-1) ?? "";
-      try {
-        resolve({ code, summary: JSON.parse(line) });
-      } catch {
-        reject(new Error(`child ${config.name} printed no summary; stderr:\n${stderr}`));
-      }
-    });
-  });
-}
-
-describe("every source of every process, on a page the engine owns", () => {
+describe("every source, on a page the engine owns", () => {
   it("sends nothing until the page is handed back, then captures again after 1.2 × S", async (context) => {
     if (!testDb) return context.skip();
     const db = testDb;
     const page = await seedGuardedPage("owner-acceptance");
     expect(await flipToEngine(page.id)).toBe(true);
     const network = await startFakeFanslyNetwork();
+    const dispatcher = createProxyRequestDispatcher({ url: network.proxyUrl });
+    const registry = createFanslySendGuards({
+      db: db.db,
+      config: {} as never,
+      logger: silentFanslySendGuardLogger,
+      role: "test",
+      readSettingMs: async () => S_MS,
+    });
+    /** One request of a legacy sender: the capture, the request through the
+     *  page's proxy on the lease's dispatcher, the completion. */
+    const send = async (source: (typeof FANSLY_SEND_SOURCES)[number]) => {
+      const lease = await registry.forPage(page.id, source).acquire({ operation: "account_me", requestTimeoutMs: 2_000 });
+      let status: number | null = null;
+      try {
+        const response = await fetch(`${network.baseUrl}/account/me`, { dispatcher: lease.bind(dispatcher) } as RequestInit);
+        status = response.status;
+        await response.arrayBuffer();
+      } finally {
+        await lease.complete({ outcome: status === null ? "transport_error" : "response", httpStatus: status });
+      }
+    };
     try {
-      const base = {
-        pageId: page.id,
-        baseUrl: network.baseUrl,
-        proxyUrl: network.proxyUrl,
-        settingMs: S_MS,
-        leaseMarginMs: 500,
-        durationMs: 1_500,
-        captureDelay: { longProbability: 0, longMaxMs: 0, shortMaxMs: 0 },
-        blockAfterSendCheck: null,
-        hangBeforeCompletion: null,
-        sweepIntervalMs: 400,
-      } satisfies Partial<FanslySendGuardChildConfig>;
-      const half = Math.ceil(FANSLY_SEND_SOURCES.length / 2);
-      const sourcesOf = (list: readonly (typeof FANSLY_SEND_SOURCES)[number][]) =>
-        list.map((source) => ({ source, requestTimeoutMs: 2_000 }));
-      const [a, b] = await Promise.all([
-        runChild({ ...base, name: "A", databaseUrl: db.connectionString, sources: sourcesOf(FANSLY_SEND_SOURCES.slice(0, half)) }),
-        runChild({ ...base, name: "B", databaseUrl: db.connectionString, sources: sourcesOf(FANSLY_SEND_SOURCES.slice(half)) }),
-      ]);
-
-      expect([a.code, b.code]).toEqual([0, 0]);
+      // The engine's page: every source of the journal's vocabulary is refused
+      // at the capture, at once, with nothing sent and nothing journaled.
+      for (const source of FANSLY_SEND_SOURCES) {
+        await expect(send(source)).rejects.toBeInstanceOf(FanslyPageOwnedBySyncEngineError);
+      }
       expect(network.arrivals).toEqual([]);
       expect(network.tunnels).toBe(0);
       expect(await journalCount(page.id)).toBe(0);
-      for (const { summary } of [a, b]) {
-        expect(summary.responses).toBe(0);
-        expect(summary.counters.captures).toBe(0);
-        expect(summary.counters.engineOwnedRefusals).toBeGreaterThanOrEqual(half);
-        expect(summary.counters.captureRefusals).toBe(summary.counters.engineOwnedRefusals);
-        expect(Object.keys(summary.errors)).toEqual(["FanslyPageOwnedBySyncEngineError"]);
-      }
+      expect(registry.counters).toMatchObject({
+        captures: 0,
+        captureRefusals: FANSLY_SEND_SOURCES.length,
+        engineOwnedRefusals: FANSLY_SEND_SOURCES.length,
+      });
 
       // Handed back: closed for 1.2 × S from the flip, by the database clock.
       await flipBackToLegacy(page.id);
@@ -320,27 +297,7 @@ describe("every source of every process, on a page the engine owns", () => {
       expect(paused.kind).toBe("pause");
       expect(paused.kind === "pause" ? paused.waitMs : 0).toBeGreaterThan(1.2 * S_MS - 150);
 
-      const registry = createFanslySendGuards({
-        db: db.db,
-        config: {} as never,
-        logger: silentFanslySendGuardLogger,
-        role: "test",
-        readSettingMs: async () => S_MS,
-      });
-      const adapter = new FanslyAdapter({ baseUrl: network.baseUrl });
-      try {
-        await adapter.getAccountMe({
-          session: { authorization: "synthetic" },
-          proxy: { url: network.proxyUrl },
-          egressKey: network.proxyUrl,
-          requestTimeoutMs: 2_000,
-          remainingAttempts: () => 1,
-          sendGuard: registry.forPage(page.id, "account_me_cli"),
-        });
-      } finally {
-        await registry.close();
-        await adapter.close();
-      }
+      await send("account_me_cli");
       expect(network.arrivals).toHaveLength(1);
       const journal = await db.pool.query(`
         select jitter_u, pause_ms, previous_completed_at, captured_at, outcome
@@ -353,6 +310,8 @@ describe("every source of every process, on a page the engine owns", () => {
       expect(row.previous_completed_at).toEqual(flipped.last_completed_at);
       expect(row.captured_at.getTime() - flipped.engine_switched_at!.getTime()).toBeGreaterThanOrEqual(1.2 * S_MS - 1);
     } finally {
+      await registry.close();
+      await dispatcher.close();
       await network.close();
     }
   }, 60_000);
@@ -391,7 +350,6 @@ async function legacyDmFixture(network: FakeFanslyNetwork) {
     syncSharedRateLimitEnabled: true,
     fanslyDmMessagesDelayMs: 0,
     fanslyDmConversationsDelayMs: 0,
-    adapter: new FanslyAdapter({ baseUrl: network.baseUrl }) as never,
   });
   const { page } = await seedFanslyPage(app.db, app.config.encryptionKey, 1, "owner-dm");
   if (!page) throw new Error("Expected a fixture page");

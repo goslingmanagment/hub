@@ -51,7 +51,6 @@
   "packages/db/src/repositories/spenders.ts": 1,
   "packages/db/src/repositories/telegram-settings.ts": 2,
   "packages/db/src/schema-guard.ts": 1,
-  "packages/fansly/src/adapter.ts": 2,
   "packages/shared/src/http-client.ts": 2,
   "packages/shared/src/http-request.ts": 4,
   "packages/shared/src/logger.ts": 1,

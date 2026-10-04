@@ -7,7 +7,6 @@ import type { StartedTestDatabase } from "./db.ts";
 export function createTestAppContext(
   testDb: StartedTestDatabase,
   overrides?: {
-    adapter?: AppContext["adapter"];
     databaseUrl?: string;
     encryptionKey?: Buffer;
     encryptionKeyVersion?: number;
@@ -230,7 +229,6 @@ export function createTestAppContext(
     config,
     // Tests apply no boot overrides, so the raw env baseline equals the effective config.
     rawConfig: config,
-    adapter: overrides?.adapter ?? ({} as AppContext["adapter"]),
     ofapi: overrides?.ofapi,
     aiGatewayProvider: overrides?.aiGatewayProvider,
     fanslySendGuards: createFanslySendGuards({

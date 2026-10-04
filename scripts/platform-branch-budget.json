@@ -1,6 +1,6 @@
 {
   "comment": "Kernel Stage 18 ratchet: strict platform comparison sites (`platform` + optional whitespace + `===` or `!==`) outside the adapter packages. Count may only decrease (target ~0 as handlers move behind the registry); decreases update this file.",
-  "budget": 135,
+  "budget": 131,
   "note": " 2026-07-06: +1 for the Stage 32 named platform substitution (applyPlatformWording in ai/prompts/builder.ts) \u2014 a deliberate wording branch, not platform logic drift. 2026-07-10: +1 for the fast-reply freshness union-read gate in ai/features/index.ts \u2014 the union reads dm_message_archive (the OFAPI post-settle store); Fansly has no webhook lane, so the mode read is OnlyFans-only by design. 2026-07-18: +1 for the P1-2 fan-erasure reachability fix (isFanslyRequest in ai/features/index.ts) \u2014 Fansly's conversationRef is the canonical groupId not the fan, so the coach-chat / short-fan-summary fanRef gate is Fansly-specific by design. 2026-07-18 (round-3 P1-3): +1 for the ai:feature-smoke --fan CLI guard (cli.ts) \u2014 the smoke requires --fan only on Fansly (conversationRef is the groupId there); on OnlyFans the conversation IS the fan id, so the guard mirrors the server's Fansly-only fanRef contract by design. 2026-07-18 (round-4 P1-3): the persisted fan_ref fallback that once shared the isFanslyRequest branch was REMOVED (it poisoned canonical rows by stamping a groupId into fan_ref; legacy rows are already erasure-reachable via the conversation_ref arm). The gate keeps the branch, so the count is unchanged at 52. 2026-07-22: +1 for the link-stats reconcile page filter (ofapi-link-stats-sync.ts) \u2014 mirrors the chargebacks reconcile's onlyfans-only fleet selection by design. 2026-09-07 (review #144, fix 3): re-based 53 \u2192 155 because the ratchet regex was tightened from the literal `platform ===` to `platform[[:space:]]*(===|!==)`: a branch written `platform!==\"onlyfans\"` (no spaces, negated) in projections/fansly-engagement.ts had slipped past the count unseen. That site was REMOVED (the ofapi.post_like_observed event is OnlyFans by construction \u2014 minted only by the webhook family from OFAPI-journaled observations), the 53 `===` sites are unchanged, and the remaining 102 are PRE-EXISTING `!==` comparisons the old regex never saw, listed as of this commit in `not_equal_sites_2026-09-07` (file:line). None is new platform-logic drift; each is to be retired the same way as the `===` sites. The printed label stays \"platform === branch sites\" because tests/platform-registry.test.ts pins it. 2026-09-12: +1 for the seed-count integration fixture's Fansly/OnlyFans page factory. Tests are included in this ratchet; the branch selects existing fixture constructors and adds no runtime provider logic. 2026-09-12: +1 for the canonicalization batching guard's `platform !== null` validation. This provider-agnostic missing-scope check conservatively excludes ambiguous envelopes from prefetch; it adds no provider routing. Decision 332: +1 for the browser-send custody route, scoped to Fansly; OF sends already use the kernel outbox.",
   "not_equal_sites_2026-09-07": [
     "apps/runtime/src/modules/catalog/index.ts:510",
@@ -26,11 +26,8 @@
     "apps/runtime/src/services/canonicalize/posts.ts:926",
     "apps/runtime/src/services/canonicalize/posts.ts:946",
     "apps/runtime/src/services/canonicalize/posts.ts:963",
-    "apps/runtime/src/services/fansly-page-alias-backfill.ts:35",
-    "apps/runtime/src/services/fansly-page-alias-backfill.ts:65",
     "apps/runtime/src/services/agent-hydration.ts:337",
     "apps/runtime/src/services/agent-hydration.ts:368",
-    "apps/runtime/src/services/fansly-endpoint-probe.ts:436",
     "apps/runtime/src/services/projections/media-plane.ts:172",
     "apps/runtime/src/services/projections/message-archive-rebuild.ts:163",
     "apps/runtime/src/services/projections/fansly-comments.ts:172",
@@ -83,7 +80,6 @@
     "apps/runtime/src/services/sync/planner.ts:140",
     "apps/runtime/src/services/sync-summary.ts:160",
     "apps/runtime/src/services/sync-summary.ts:211",
-    "apps/runtime/src/services/fansly-replay-probe.ts:123",
     "apps/runtime/src/services/ofapi-typed-exports.ts:30",
     "apps/runtime/src/services/ofapi-dm-projection.ts:459",
     "apps/runtime/src/services/ai-gateway.ts:272",
@@ -121,5 +117,9 @@
   "j1_2026_09_28": {
     "added_sites": 1,
     "reason": "The sync-pull family's shape gate (diagnoseSyncPullObservationRejection) refuses drifted bodies for Fansly only; other platforms' observations pass ungated, exactly as the canonicalizer already routes them. A provider-boundary guard, no routing or scheduling change."
+  },
+  "client_sdk_compat_2026_10_04": {
+    "added_sites": 1,
+    "reason": "tests/client-sdk-compat.integration.test.ts picks the Fansly lane's Recap cases (`lane.platform === \"fansly\"`, #419). It reached main inside main's slack while the step-4 deletions were lowering this budget to its ceiling, so it is recorded here (step 4 S4-19 merged at 135 with it counted; S4-20: 135 - 4 deleted legacy sender sites = 131). A test fixture selection, no runtime provider logic."
   }
 }

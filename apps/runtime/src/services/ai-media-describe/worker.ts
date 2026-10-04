@@ -31,7 +31,6 @@ import type { AppContext } from "../../bootstrap.ts";
 import { loadEffectiveConfig } from "../effective-config.ts";
 import { resolveEgress } from "../egress/resolver.ts";
 import { downloadMediaForDescribe, type MediaDownloadResult } from "../egress/media-download.ts";
-import { fanslyPageSendGuard } from "../fansly-send-guard/index.ts";
 import {
   AI_MEDIA_DESCRIBE_ACCOUNT_STOP_SUBKEY,
   AI_MEDIA_DESCRIBE_BREAKER_SUBKEY,
@@ -130,7 +129,7 @@ function nextUtcMidnight(now: Date) {
 }
 
 /** The describer's download of one file: through the page's actor on a page
- *  the Fansly Sync Engine owns, else through the page's egress and send guard. */
+ *  the Fansly Sync Engine runs, else through the page's egress (OnlyFans). */
 export async function downloadAiMediaForDescribe(
   app: AppContext,
   input: { url: string; pageId: number; descriptionId: number },
@@ -144,28 +143,25 @@ export async function downloadAiMediaForDescribe(
   return downloadAiMediaThroughPageEgress(app, { url: input.url, pageId: input.pageId });
 }
 
-/** The describer's legacy download: through the page's own egress, the CDN
- *  hop under the page's send guard (`off`/`shadow` pages). */
+/** The describer's download through the page's own egress: every page
+ *  without a `live` engine row, which is the OnlyFans pages. It sends no
+ *  Fansly request: a Fansly CDN host is refused (`send_guard`) before anything
+ *  is sent (`downloadMediaForDescribe`), so a Fansly page the engine does not
+ *  run (`off`, `shadow`) downloads nothing and its row looks again later. */
 export async function downloadAiMediaThroughPageEgress(
   app: AppContext,
   input: { url: string; pageId: number },
 ): Promise<MediaDownloadResult> {
-  // A page the Fansly Sync Engine owns sends nothing through the legacy path
-  // (step-3 design §3.1 item 9): like a closed send guard, nothing was sent
-  // and the row looks again later. (The router above sends a `live` page
-  // through its actor; this catches a page that switched since it looked.)
+  // A page the Fansly Sync Engine owns sends nothing through this path
+  // (step-3 design §3.1 item 9): nothing was sent and the row looks again
+  // later. (The router above sends a `live` page through its actor; this
+  // catches a page that switched since it looked.)
   if ((await isFanslyPageEngineOwned(app.db, input.pageId)).owned) {
     return { ok: false, reason: "send_guard", httpStatus: null };
   }
   const egress = await resolveEgress(app, { kind: "page", pageId: input.pageId });
   try {
-    // Plan §2.5: a Fansly CDN hop rides the page's send guard; the download
-    // uses it for Fansly hosts only.
-    return await downloadMediaForDescribe({
-      url: input.url,
-      dispatcher: egress.dispatcher,
-      fanslySendGuard: fanslyPageSendGuard(app, input.pageId, "media_download"),
-    });
+    return await downloadMediaForDescribe({ url: input.url, dispatcher: egress.dispatcher });
   } finally {
     await egress.close().catch(() => undefined);
   }
@@ -471,9 +467,10 @@ async function processRow(
   const download = deps.download ?? ((args) => downloadAiMediaForDescribe(app, args));
   const downloaded = await download({ url: resolution.url, pageId: row.pageId, descriptionId: row.id });
   if (!downloaded.ok && downloaded.reason === "send_guard") {
-    // The page's send guard did not admit the CDN request (the page is closed,
-    // or this worker is stopping): nothing was sent and nothing is wrong with
-    // the file. Like a missing proxy, look again later; never a failure.
+    // The CDN request is the page's own sender's and it did not go now (a
+    // Fansly page that is held, switching or not on the engine): nothing was
+    // sent and nothing is wrong with the file. Like a missing proxy, look
+    // again later; never a failure.
     await finish("pending", {
       errorCode: "download_send_guard",
       nextAttemptAt: new Date(clock().getTime() + TRANSIENT_RETRY_MS),

@@ -1,28 +1,3 @@
-import type {
-  FanslySessionBundle,
-  HttpRequestObserver,
-  Mills,
-  ProxyConfig,
-} from "@agency_hub_core/shared";
-
-import type { FanslySendGuard } from "./send-guard.ts";
-
-export interface FanslyRequestContext {
-  session: FanslySessionBundle;
-  proxy?: ProxyConfig | null;
-  egressKey?: string | null;
-  requestObserver?: HttpRequestObserver | null;
-  /** Durable lane allowance remaining before this logical request starts.
-   * The adapter clamps its retry loop to this value. */
-  remainingAttempts?: (() => number) | null;
-  /** The page's send guard (plan §2.5). Mandatory: every physical attempt,
-   * SDK retries included, is captured through it and journaled. It is the
-   * only pacing of a Fansly request: the endpoint pauses are gone (§2.3). */
-  sendGuard: FanslySendGuard;
-  /** Per-request timeout override (default 30 s); the fetch is aborted. */
-  requestTimeoutMs?: number | null;
-}
-
 export interface FanslyAccount {
   id: string;
   username: string | null;
@@ -63,87 +38,6 @@ export interface FanslyAccountMeResponse {
     walls?: Array<Record<string, unknown>>;
     subscriptionTiers?: Array<Record<string, unknown>>;
   };
-}
-
-/**
- * The earnings overview currently exposes only the pending balance in the
- * observed Fansly corpus. Keep the raw provider object alongside the parsed
- * value so a later additive contract can be captured before it is modeled.
- */
-export interface FanslyEarningsOverview {
-  pendingBalance: number;
-  [key: string]: unknown;
-}
-
-export interface FanslyEarningsOverviewResponse {
-  pendingBalanceMills: Mills | null;
-  contractAccepted: boolean;
-  raw: unknown;
-}
-
-/** Stable fields observed on GET /trackinglinks. Additive provider fields are
- * retained in each record and in the raw response. */
-export interface FanslyTrackingLink {
-  id: string;
-  accountId?: string | null;
-  internalId?: string | null;
-  type?: number | null;
-  status?: number | null;
-  label?: string | null;
-  description?: string | null;
-  metadata?: string | null;
-  createdAt?: number | null;
-  clicks?: number | null;
-  claims?: number | null;
-  follows?: number | null;
-  subscriptions?: number | null;
-  totalNet?: number | null;
-  totalGross?: number | null;
-  [key: string]: unknown;
-}
-
-/** Stable fields observed on GET /lists/itemsnew. */
-export interface FanslyListItem {
-  id: string;
-  sortId?: string | null;
-  listId?: string | null;
-  type?: number | null;
-  metadata?: string | null;
-  [key: string]: unknown;
-}
-
-/** Stable fields observed on GET /lists/account. An item-filtered response may
- * include matching list items; the all-lists response need not. */
-export interface FanslyAccountList {
-  id: string;
-  accountId?: string | null;
-  pos?: number | null;
-  type?: number | null;
-  label?: string | null;
-  itemCount?: number | null;
-  items?: FanslyListItem[];
-  [key: string]: unknown;
-}
-
-export interface FanslyTrackingLinksResponse {
-  items: FanslyTrackingLink[];
-  contractAccepted: boolean;
-  raw: unknown;
-}
-
-export interface FanslyAccountListsResponse {
-  items: FanslyAccountList[];
-  itemId: string | null;
-  contractAccepted: boolean;
-  raw: unknown;
-}
-
-export interface FanslyListItemsPageResponse {
-  items: FanslyListItem[];
-  listId: string;
-  after: string | null;
-  contractAccepted: boolean;
-  raw: unknown;
 }
 
 export interface FanslyEarningsTransaction {
@@ -314,34 +208,6 @@ export interface FanslyMessagesPage {
   storyOrders?: Array<Record<string, unknown>>;
 }
 
-export interface FanslyPaginatedResponse<T> {
-  total?: number;
-  items: T[];
-  done: boolean;
-  offset: number;
-}
-
-export interface FanslyMessagingGroupsPageResponse extends FanslyPaginatedResponse<FanslyMessagingGroup> {
-  accounts: FanslyAccount[];
-  groups: FanslyMessagingAggregatedGroup[];
-  /** False means the successful envelope drifted from `{data: [...]}` or a
-   * row/group/account lost its id. Callers must capture raw before refusing
-   * the page. */
-  contractAccepted?: boolean;
-  raw: FanslyMessagingGroupsPage | unknown;
-}
-
-export interface FanslyMessagesPageResponse {
-  items: FanslyMessage[];
-  groupId: string;
-  before: string | null;
-  done: boolean;
-  /** False means the successful envelope drifted from `{messages: [...]}`.
-   * Callers must capture raw before refusing the page. */
-  contractAccepted?: boolean;
-  raw: FanslyMessagesPage | unknown;
-}
-
 /** Minimal stable fields observed on GET /timelinenew/{accountId}. Unknown
  * additive provider fields stay present in the raw page captured by the sync
  * layer; this interface intentionally does not try to model the large media
@@ -359,71 +225,4 @@ export interface FanslyPost {
 export interface FanslyPostsPage {
   posts: FanslyPost[];
   [key: string]: unknown;
-}
-
-export interface FanslyPostsPageResponse {
-  items: FanslyPost[];
-  accountId: string;
-  wallId: string | null;
-  before: string;
-  nextBefore: string | null;
-  done: boolean;
-  /** False means the successful provider envelope drifted away from
-   * `{posts: [...]}`. Callers must capture raw before rejecting the page. */
-  contractAccepted: boolean;
-  raw: FanslyPostsPage | unknown;
-}
-
-/** Stable fields observed on GET /tips?targetIds=... . The endpoint may add
- * fields (including tipGoalId), so accepted items and targets retain additive
- * provider properties for capture-first consumers. */
-export interface FanslyTipTarget {
-  id: string;
-  type: number;
-  [key: string]: unknown;
-}
-
-interface FanslyPostTipCommon {
-  id: string;
-  senderId: string;
-  receiverId: string;
-  amount: number;
-  message?: string | null;
-  senderTransactionId?: string | null;
-  receiverTransactionId?: string | null;
-  createdAt: number;
-  tipGoalId?: string | null;
-  [key: string]: unknown;
-}
-
-/** Shape observed live in August 2026. targetId is exact post attribution,
- * but carries no evidence about whether the tip funded a linked goal. */
-export interface FanslyFlatPostTip extends FanslyPostTipCommon {
-  targetId: string;
-  targets?: never;
-}
-
-/** Older/richer shape where typed targets distinguish the post from a goal. */
-export interface FanslyNestedPostTip extends FanslyPostTipCommon {
-  targets: FanslyTipTarget[];
-  targetId?: string;
-}
-
-export type FanslyPostTip = FanslyFlatPostTip | FanslyNestedPostTip;
-
-export interface FanslyPostTipsResponse {
-  items: FanslyPostTip[];
-  targetIds: string[];
-  /** False means the successful provider envelope drifted away from an array.
-   * Callers must capture raw before rejecting the response. */
-  contractAccepted: boolean;
-  raw: FanslyPostTip[] | unknown;
-}
-
-export interface FanslyEarningsAccountsPageResponse {
-  items: FanslyEarningsAccount[];
-  after: Date | null;
-  before: Date | null;
-  done: boolean;
-  raw: FanslyEarningsAccount[];
 }
