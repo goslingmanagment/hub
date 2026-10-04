@@ -1,17 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { beginFanslyWsConnection, storeFanslySession, upsertDemand, type Database } from "@agency_hub_core/db";
 import { encryptJson } from "@agency_hub_core/shared";
 
-import * as receiverSocket from "../apps/runtime/src/services/egress/fansly-receiver-socket.ts";
-import { startFanslyWsWorker, type FanslyWsWorkerTiming } from "../apps/runtime/src/services/fansly-ws/worker.ts";
 import { SyncEngineHost } from "../apps/runtime/src/sync/engine/host.ts";
 import type { Metrics, SyncMetricLabels } from "../apps/runtime/src/sync/engine/ports.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
-import { createTestAppContext } from "./helpers/runtime.ts";
 import {
   CountingConnectProxy,
   ensureHarnessSettingTable,
@@ -66,7 +63,6 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  vi.restoreAllMocks();
   await Promise.all(hosts.splice(0).map((host) => host.stop()));
   await server?.close();
   await proxy?.close();
@@ -331,39 +327,6 @@ describe("the page's socket in the sync process", () => {
     expect(checks.calls).toBe(1);
     expect(upgrades(r)).toHaveLength(1);
     expect((await connections(pageId)).map((row) => row.generation)).toEqual([verified]);
-  }, 60_000);
-
-  it("the legacy receiver on the same database cannot take the page's socket while sync owns it (58213)", async (context) => {
-    if (!testDb) return context.skip();
-    const r = await rig();
-    const { pageId, pageLabel } = r.page;
-    r.server.onWebSocket = (peer) => speakFansly(peer);
-    await startHost(r, { seed: 13 });
-    await until(async () => (await connections(pageId))[0]?.verified_at != null, 30_000, "the engine's connection verified");
-    const holder = await lockHolder(pageId);
-
-    const app = createTestAppContext(testDb, { databaseUrl: testDb.connectionString, encryptionKey: HARNESS_ENCRYPTION_KEY });
-    app.config.fanslyWsCaptureEnabled = true;
-    app.config.fanslyWsCapturePageAllowlist = pageLabel;
-    const open = vi.spyOn(receiverSocket, "openFanslyReceiverSocket");
-    const timing: FanslyWsWorkerTiming = {
-      configPollMs: 300, configStaleMs: 2_000, pagePauseMs: 300, backoffBaseMs: 150,
-      authTimeoutMs: 1_000, checkMs: 500, guardStaleMs: 1_500, pingMs: 2_000, pongTimeoutMs: 3_000,
-      drainMs: 2_000, applyDrainMs: 1_500,
-    };
-    const worker = startFanslyWsWorker(app, { timing });
-    try {
-      // Several of the legacy page loop's lock attempts.
-      await sleep(2_500);
-    } finally {
-      await worker.stop();
-    }
-    expect(open).not.toHaveBeenCalled();
-    expect(await scalar("select count(*)::int as n from fansly_send_log where page_id = $1 and source = 'ws_connect'", [pageId])).toBe(0);
-    const rows = await connections(pageId);
-    expect(rows).toHaveLength(1);
-    expect(rows[0]!.closed_at).toBeNull();
-    expect(await lockHolder(pageId)).toBe(holder);
   }, 60_000);
 
   it("an auth refusal blocks the credentials generation: account.verify, alert 2, the list head while down, no reconnect until the credentials change", async (context) => {

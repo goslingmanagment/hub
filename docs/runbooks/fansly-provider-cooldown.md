@@ -34,12 +34,11 @@ whole page: a row in `page_sync_provider_holds` (0219).
 
 A hold is only ever extended, never shortened. While `hold_until` is in the
 future, no stream of the page is leased (regular chunk, Sync now, B1 wake,
-targeted thread backfill) and the AI fast lane stays off it. The failing stream
+targeted thread backfill). The failing stream
 keeps its own `retry_at`; sibling rows, streaks and health are not touched, so
 a queued sibling may read as queued or delayed. The failed run carries the
 anomaly `page_provider_hold`. Interactive requests (page verification, CLI
-probes, the platform command outbox) and the WS binding check do not consult
-the hold.
+probes, the platform command outbox) do not consult the hold.
 
 ```sql
 select p.label, h.* from page_sync_provider_holds h join pages p on p.id = h.page_id

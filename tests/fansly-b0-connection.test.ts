@@ -3,9 +3,6 @@ import { businessFanslyWsFrame, decodeFanslyWsCapture, fanslyWsCaptureContainsSu
 import {
   drainsOnStop, FANSLY_WS_CONNECTION_TIMING, receiveFanslyConnection, type FanslyWsStopReason,
 } from "../apps/runtime/src/services/fansly-ws/connection.ts";
-import { FANSLY_WS_WORKER_TIMING, fanslyWsPages, startFanslyWsWorker } from "../apps/runtime/src/services/fansly-ws/worker.ts";
-import * as liveConfig from "../apps/runtime/src/services/effective-config.ts";
-import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 
 const known = JSON.stringify({ t: 10000, d: JSON.stringify({ serviceId: 5,
   event: JSON.stringify({ type: 1, data: { id: "101", accountId: "123" } }) }) });
@@ -42,45 +39,13 @@ function gatedCapture() {
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe("Fansly B0 durable receiver", () => {
-  it("does no work with default-off or empty/none allowlist", async () => {
-    expect([...fanslyWsPages({})]).toEqual([]);
-    expect([...fanslyWsPages({ fanslyWsCaptureEnabled: true })]).toEqual([]);
-    expect([...fanslyWsPages({ fanslyWsCaptureEnabled: true, fanslyWsCapturePageAllowlist: "none" })]).toEqual([]);
-    expect([...fanslyWsPages({ fanslyWsCaptureEnabled: true, fanslyWsCapturePageAllowlist: "lilly-1,lilly-1" })]).toEqual(["lilly-1"]);
-    const load = vi.spyOn(liveConfig, "loadEffectiveConfig").mockResolvedValue({} as AppContext["config"]);
-    const worker = startFanslyWsWorker({} as AppContext);
-    await Promise.resolve(); await worker.stop();
-    expect(load).toHaveBeenCalledOnce();
-  });
-
-  it("pins production timing: config every 10 s, stale after 20 s, live off within 60 s", () => {
-    // Integration tests run the real worker on scaled timing; these defaults are
-    // what production runs (docs/runbooks/fansly-ws-capture.md).
-    expect(FANSLY_WS_WORKER_TIMING).toEqual({
-      configPollMs: 10_000, configStaleMs: 20_000, pagePauseMs: 10_000, backoffBaseMs: 1_500,
+  it("pins production timing: guard every 5 s, stale after 15 s, pong within 30 s", () => {
+    // Integration tests run the real socket on scaled timing; these defaults
+    // are what production runs.
+    expect(FANSLY_WS_CONNECTION_TIMING).toEqual({
       authTimeoutMs: 10_000, checkMs: 5_000, guardStaleMs: 15_000, pingMs: 20_000, pongTimeoutMs: 30_000,
-      drainMs: 20_000, applyDrainMs: 15_000,
+      drainMs: 20_000,
     });
-    expect(FANSLY_WS_WORKER_TIMING).toMatchObject(FANSLY_WS_CONNECTION_TIMING);
-    // A flag flip is seen by the next poll; a stalled read is caught at the first
-    // poll tick past staleness; one connection check covers the close.
-    const { configPollMs, configStaleMs, checkMs } = FANSLY_WS_WORKER_TIMING;
-    expect(configPollMs + configStaleMs + checkMs).toBeLessThanOrEqual(60_000);
-    // A stop drains received frames, applies them to the overlay, then closes
-    // through the 5 s session: well inside the worker's 60 s stop grace.
-    const { drainMs, applyDrainMs } = FANSLY_WS_WORKER_TIMING;
-    expect(drainMs + applyDrainMs + 5_000).toBeLessThanOrEqual(45_000);
-  });
-
-  it("polls live configuration every 10 seconds by default", async () => {
-    vi.useFakeTimers();
-    const load = vi.spyOn(liveConfig, "loadEffectiveConfig").mockResolvedValue({} as AppContext["config"]);
-    const worker = startFanslyWsWorker({} as AppContext);
-    await vi.advanceTimersByTimeAsync(9_999);
-    expect(load).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(1);
-    expect(load).toHaveBeenCalledTimes(2);
-    await worker.stop();
   });
 
   it("captures the exact business frames in arrival order, one durable write at a time", async () => {

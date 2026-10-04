@@ -109,9 +109,10 @@ export const FAMILY_BUDGETS: Readonly<Record<FanslyRouteFamily, RouteBudget>> = 
 /**
  * `fansly_send_log.operation` → the route it read: every operation a legacy
  * sender journals — the adapter's lanes and probes (`packages/fansly/src/
- * adapter.ts`), the media download, the binding preflight, the socket
- * connect and the socket probes. Pinned complete against the code and each
- * wire spec's `legacyOperation` by tests/sync-route-policy.test.ts.
+ * adapter.ts`) and the media download — and the operations of deleted
+ * writers the log still holds (the legacy socket connect and the socket
+ * probes, step 4 S4-12). Pinned complete against the code and each wire
+ * spec's `legacyOperation` by tests/sync-route-policy.test.ts.
  */
 export const FANSLY_LEGACY_OPERATION_ROUTES: Readonly<Record<string, FanslyRoute>> = {
   account_me: "account.me",

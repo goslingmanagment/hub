@@ -32,6 +32,7 @@ import {
 } from "../apps/runtime/src/services/ai-media-describe/loop.ts";
 import {
   AI_MEDIA_DESCRIBE_BREAKER_SUBKEY,
+  AI_MEDIA_DESCRIBE_FAST_LANE_SUBKEY,
   openCriticalNotificationIncident,
 } from "../apps/runtime/src/services/notification-incidents.ts";
 import { executeErasure } from "../apps/runtime/src/services/erasure/index.ts";
@@ -385,6 +386,26 @@ describe("AI media describer sweep", () => {
     await candidate({ mediaRef: "k2" });
     const next = await runAiMediaDescribeSweep(app, deps);
     expect(next.skipped).toBe("account_stopped");
+  });
+
+  it("clears the fast lane incident an older build left open: the lane is deleted (step 4, S4-12)", async () => {
+    await openCriticalNotificationIncident(app, {
+      kind: "ai_provider_failed",
+      platformAccountId: null,
+      pageLabel: null,
+      platform: "fansly",
+      subKey: AI_MEDIA_DESCRIBE_FAST_LANE_SUBKEY,
+      errorCode: "media_fast_lane_unavailable",
+      errorSummary: "Fresh fan photos wait for the minutely path on: lilly-1: socket_down.",
+      occurredAt: NOW,
+    });
+    const status = async () => (await testDb!.pool.query(
+      `select status from notification_incidents where incident_key = 'ai_provider_failed:global:media_describe_fast_lane'`,
+    )).rows[0]?.status;
+    expect(await status()).toBe("open");
+    const { deps } = harness();
+    await runAiMediaDescribeSweep(app, deps);
+    expect(await status()).toBe("resolved");
   });
 
   it("keeps the owner Usage report working with system describer rows", async () => {

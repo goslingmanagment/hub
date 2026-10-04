@@ -11,6 +11,7 @@ import {
 import { KERNEL_CONTRACT_HASH } from "@agency_hub_core/contracts";
 
 import type { AppContext } from "../bootstrap.ts";
+import { listCompatibleClientSdks } from "./compatible-client-sdks.ts";
 import { listConnectionStatuses } from "./connections.ts";
 import { loadEffectiveConfig } from "./effective-config.ts";
 import { PUBLIC_RUNTIME_CAPABILITIES } from "./public-capabilities.ts";
@@ -183,6 +184,7 @@ export async function getSystemHealth(app: AppContext) {
   // flag. Keep it absent until the preservation-first read-only Desktop and
   // Extension artifacts are shipped and fleet coverage is verifiable.
   const capabilities = [...PUBLIC_RUNTIME_CAPABILITIES];
+  const compatibleClientSdks = listCompatibleClientSdks();
 
   try {
     await app.pool.query("select 1");
@@ -194,6 +196,7 @@ export async function getSystemHealth(app: AppContext) {
         timestamp,
         contractHash: KERNEL_CONTRACT_HASH,
         capabilities,
+        compatibleClientSdks,
         checks: {
           api: {
             status: "ok" as const,
@@ -218,6 +221,7 @@ export async function getSystemHealth(app: AppContext) {
         timestamp,
         contractHash: KERNEL_CONTRACT_HASH,
         capabilities,
+        compatibleClientSdks,
         checks: {
           api: {
             status: "ok" as const,

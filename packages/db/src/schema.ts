@@ -1065,6 +1065,9 @@ export const syncAttempts = pgTable(
     applyRetryAt: timestamp("apply_retry_at", { withTimezone: true }),
     appliedAt: timestamp("applied_at", { withTimezone: true }),
     evidence: boolean("evidence").notNull().default(false),
+    // 0237 (I19): the route's and its family's intervals the admission applied.
+    routeIntervalMs: integer("route_interval_ms"),
+    familyIntervalMs: integer("family_interval_ms"),
   },
   (table) => ({
     pageAdmittedIdx: index("sync_attempts_page_admitted").on(table.pageId, table.admittedAt.desc()),
@@ -2620,6 +2623,11 @@ export const deviceTokens = pgTable(
     // presented, stamped by the same UPDATE as last_used_at. Routing metadata,
     // never authority (#145).
     lastClientVersion: text("last_client_version"),
+    // chat-extension H-3 (*_device_token_client_profile.sql): the narrow
+    // token's client profile (CLIENT_TOKEN_PROFILES), set once at issuance and
+    // immutable (trigger).
+    // NULL = a full token. Authority, unlike last_client_version.
+    clientProfile: text("client_profile"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
     revokedReason: text("revoked_reason"),

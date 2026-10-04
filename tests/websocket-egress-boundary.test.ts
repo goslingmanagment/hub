@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 const root = resolve(__dirname, "..");
 const eslint = new ESLint({ cwd: root });
 const runtimeFile = "apps/runtime/src/services/socket-boundary-fixture.ts";
-const egressFile = "apps/runtime/src/services/egress/fansly-probe-socket.ts";
+const egressFile = "apps/runtime/src/services/egress/fansly-receiver-socket.ts";
 const httpImporters = ["packages/shared/src/http-client.ts", "packages/fansly/src/adapter.ts"];
 
 async function lint(code: string, filePath = runtimeFile) {
@@ -82,8 +82,8 @@ describe("WebSocket boundary preserves the existing architecture walls", () => {
 
   it("permits callers to use the egress constructor", async () => {
     expect(await lint(`
-      import { openFanslyProbeSocket } from "./egress/fansly-probe-socket.ts";
-      export const open = openFanslyProbeSocket;
+      import { openFanslyReceiverSocket } from "./egress/fansly-receiver-socket.ts";
+      export const open = openFanslyReceiverSocket;
     `)).toEqual([]);
   });
 

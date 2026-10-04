@@ -179,8 +179,6 @@ describe("LIVE_CONFIG_KEYS", () => {
     // system) and the long-tail cycle, live because it re-aims a running
     // round-robin without a deploy.
     expect(LIVE_CONFIG_KEYS.has("fanslyFanEarningsShadowPageAllowlist")).toBe(true);
-    expect(LIVE_CONFIG_KEYS.has("fanslyWsCaptureEnabled")).toBe(true);
-    expect(LIVE_CONFIG_KEYS.has("fanslyWsCapturePageAllowlist")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyWsHintsEnabled")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyWsHintsPageAllowlist")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyWsHintsTypeAllowlist")).toBe(true);
@@ -212,15 +210,30 @@ describe("LIVE_CONFIG_KEYS", () => {
       "aiMediaDescribeLoopEnabled",
       // H3: the Fansly freshness accelerator's budget (the fast lane shares it).
       "aiMediaDescribeFanslyAcceleratorDailyLimit",
-      "aiMediaDescribeFanslyFastLaneMode",
-      "aiMediaDescribeFanslyFastLanePages",
       // Fansly Sync Engine step 1: the live overlay read kill-switch.
       "fanslyLiveOverlayReadPages",
+      // Chat extension (hub-pr-plan H-2b): the owner's five switches, read per
+      // request by the bootstrap and the client routes' check.
+      "chatExtensionEnabled",
+      "chatExtensionFeatures",
+      "chatExtensionMinVersion",
+      "chatExtensionHostBindings",
+      "chatExtensionPreviewSendReceiptProfiles",
     ]) {
       expect(LIVE_CONFIG_KEYS.has(key), key).toBe(true);
     }
     expect(LIVE_CONFIG_KEYS.has("fanslyDefaultDelayMs")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyLiveOverlayReadPages")).toBe(true);
+    // Step 4 (S4-12): retired with the legacy WebSocket receiver and the AI
+    // media fast lane — nothing reads them, so no override applies.
+    for (const key of [
+      "fanslyWsCaptureEnabled",
+      "fanslyWsCapturePageAllowlist",
+      "aiMediaDescribeFanslyFastLaneMode",
+      "aiMediaDescribeFanslyFastLanePages",
+    ]) {
+      expect(LIVE_CONFIG_KEYS.has(key), key).toBe(false);
+    }
     // Step 4 (S4-14): retired with the legacy DM handlers (the bounded scan, the
     // sweep shadow, the head catch-up, the deep backfill) and the in-chunk AI
     // media accelerator — nothing reads them, so no override applies.

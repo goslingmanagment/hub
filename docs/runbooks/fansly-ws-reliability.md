@@ -16,42 +16,12 @@ rollback leaves new receipt evidence readable; old code can again repeat reads
 for deleted targets. Disable B1 through the existing switch if containment is
 needed. Keep raw observations and attempt accounting intact.
 
-## Checked generation repair
+## Generation repair (retired)
 
-Run against the intended environment. Status is read-only and makes no Fansly
-HTTP request. Preview for a mismatched generation and apply each inspect account/me once through the exact
-page proxy, without retries or redirects. They never send a fan message.
-
-```sh
-pnpm --silent cli fansly:ws-policy --page lora-2
-pnpm --silent cli fansly:ws-policy --page lora-2 --preview > /tmp/lora-2-preview.json
-```
-
-Review page identity, old/new generation, binding result, blockers and proposal.
-B0 verified_at is only socket authentication shape; the account/me result is the
-independent account check. A ready proposal expires after 15 minutes. To apply
-that concrete reviewed operation after authorization:
-
-```sh
-pnpm --silent cli fansly:ws-policy --page lora-2 --apply /tmp/lora-2-preview.json
-```
-
-Apply rechecks binding, generation, config version/fingerprint and permanent
-policy under existing row locks and a serializable transaction. A conflict
-requires a fresh preview; never work around it by resetting a budget or changing
-activationAt. Reapplying an already-recorded proposal returns already_applied.
-Canary, disabled and expired policies refuse. Verify all-role live config
-convergence and new receipts in the new generation afterward; no process restart
-is required for live overrides. Old disabled receipts remain retained and are
-not automatically re-routed. A reverse repin to a stale generation is not a
-repair; rollback to B1-off is the operational containment option.
-
-Detailed sync-block responses expose messages_live.metrics.fanslyWsHints, and
-the dashboard's Settings → Sync renders a `generation_mismatch` as an
-"Event-driven refresh paused" line on Messages Live (with the preview command on
-the page detail). It clears on the next refresh after apply. A mismatch is
-informational, not a paged incident, a deploy-health failure or an archive
-completeness certificate. The command also exposes it when ordinary REST is healthy.
+The checked repin `fansly:ws-policy` (status, preview, apply), its `fanslyWsHints`
+diagnostic in the sync blocks and the dashboard's "Event-driven refresh paused"
+line are deleted (step 4, S4-12): every Fansly page runs on the Sync Engine,
+which routes the socket's demand itself and never consults a B1 policy.
 
 ## Settlement and failure checks
 
