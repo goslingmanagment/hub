@@ -942,7 +942,7 @@ describe("WP-S1 serving routes: media, tags and coverage", () => {
   // evaluator the engine admits by — for a stream whose work is per chat too.
   it("says what stops a stream: a 429's hold of its route, then the page's refused credentials", async (context) => {
     if (!requireServer(context)) return;
-    const target = { pool: testDb!.pool, db: testDb!.db };
+    const target = { pool: testDb!.pool };
     const read = async () => {
       const response = await get(`/api/v1/pages/${PAGE}/stats/coverage`);
       expect(response.statusCode).toBe(200);
@@ -992,7 +992,7 @@ describe("WP-S1 serving routes: media, tags and coverage", () => {
   // when the route opens (`deferForRoute`). The verdict reads that row.
   it("a 429's hold of one of a key's routes stops the key once it has put the key's work off", async (context) => {
     if (!requireServer(context)) return;
-    const target = { pool: testDb!.pool, db: testDb!.db };
+    const target = { pool: testDb!.pool };
     const posts = async () => {
       const response = await get(`/api/v1/pages/${PAGE}/stats/coverage`);
       expect(response.statusCode).toBe(200);
