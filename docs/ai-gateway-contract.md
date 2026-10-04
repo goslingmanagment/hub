@@ -732,6 +732,12 @@ a client that does not advertise the capability keeps its prompts byte for byte
 (`tests/ai-prompts-split-all.test.ts`, `tests/client-sdk-compat.integration.test.ts`). A request
 that does not pass the gate is not refused: it generates the single-message prompt it always did.
 
+`coach-chat` is not in the gate yet; H-10b adds it. The chat extension reads this one token and
+this one flag for Hi, Ping and Coach drafts alike, so with `splitAll` on before H-10b it asks for
+Split on Coach too. Such a request is not refused: `replyMode` is dropped as for any other client,
+the Coach prompt is the one without Split, the drafts come back unsplit and no
+`params.outputStructure` is stored (`tests/client-ai-split-all.integration.test.ts`, row Coach).
+
 With the gate open only the uncached task block changes. Ping gets the instructions for 2-3
 `[NEXT]` parts; Hi asks for `[NEXT]` parts inside each `[VARIANT]`, or inside its one draft. The
 cached prefix, the body schema and the frames are unchanged: the markers travel inside
