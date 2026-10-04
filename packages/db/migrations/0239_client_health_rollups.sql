@@ -17,8 +17,12 @@
 --   client_health_missing_hourly   reports that missed one host anchor
 --   client_health_counters_hourly  counters by code, summed
 --   client_health_perf_hourly      histograms merged bucket by bucket: the
---                                  client's perf metrics (ms) and the two
---                                  footprint sizes the hub buckets itself (KB)
+--                                  client's perf metrics (ms) and the levels
+--                                  the hub buckets itself, one observation per
+--                                  report: the two footprint sizes (KB) and
+--                                  the client's DOM node count (nodes), which
+--                                  arrives among the counters and is kept out
+--                                  of the counter totals
 --
 -- No user, page, fan, chat, message or device column anywhere, and no report
 -- body. The hour is the hour the HUB received the report (UTC), never the
@@ -40,7 +44,7 @@ create table if not exists client_health_receipts (
 comment on table client_health_receipts is
   'client_health reports already folded into the hourly rollups, by client event id. A resent report finds its row and is not counted twice. No user and no report body.';
 comment on column client_health_receipts.client_event_id is
-  'The capture event id the client derives from the report''s kind, version and window.';
+  'The capture event id the client derives from the report''s kind, version and window. The same id from another sender is the same receipt: nothing here tells senders apart.';
 comment on column client_health_receipts.received_hour is 'The UTC hour the report was folded into.';
 
 create table if not exists client_health_contract_hourly (
@@ -116,7 +120,7 @@ create table if not exists client_health_counters_hourly (
 );
 
 comment on table client_health_counters_hourly is
-  'client_health counters (errors by code, prevented inserts, P1s) summed per hub hour and client group. No user.';
+  'client_health counters (errors by code, prevented inserts, P1s) summed per hub hour and client group. A counter code that is a level, not a count (footprint.dom-nodes-max), is not here: it is bucketed in client_health_perf_hourly. No user.';
 
 create table if not exists client_health_perf_hourly (
   hour timestamptz not null,
@@ -142,7 +146,7 @@ create table if not exists client_health_perf_hourly (
     check (host_build in ('', '(other)') or host_build ~ '^[A-Za-z0-9._:-]{1,80}$'),
   constraint client_health_perf_hourly_metric_check check (metric ~ '^[A-Za-z0-9._:-]{1,80}$'),
   constraint client_health_perf_hourly_schema_version_check check (schema_version > 0),
-  constraint client_health_perf_hourly_unit_check check (unit in ('ms', 'KB')),
+  constraint client_health_perf_hourly_unit_check check (unit in ('ms', 'KB', 'nodes')),
   constraint client_health_perf_hourly_buckets_check
     check (cardinality(bounds) >= 1 and cardinality(counts) = cardinality(bounds) + 1),
   constraint client_health_perf_hourly_totals_check check (count >= 0 and sum >= 0 and max >= 0)
@@ -151,7 +155,7 @@ create table if not exists client_health_perf_hourly (
 comment on table client_health_perf_hourly is
   'client_health histograms merged per hub hour, client group, metric and schema version. Percentiles are read off the merged buckets, never averaged from reports. No user.';
 comment on column client_health_perf_hourly.metric is
-  'A perf metric of the client (CLIENT_HEALTH_PERF_METRICS, unit ms) or a footprint size the hub buckets itself (footprint.cachesKB, footprint.logsKB, unit KB, one observation per report).';
+  'A perf metric of the client (CLIENT_HEALTH_PERF_METRICS, unit ms) or a level the hub buckets itself, one observation per report: a footprint size (footprint.cachesKB, footprint.logsKB, unit KB) or the largest count of the client''s own DOM nodes in the window (footprint.dom-nodes-max, unit nodes).';
 comment on column client_health_perf_hourly.schema_version is
   'The version of the metric''s bounds and meaning. Rows of two versions never merge.';
 comment on column client_health_perf_hourly.bounds is

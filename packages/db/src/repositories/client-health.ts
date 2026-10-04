@@ -38,6 +38,7 @@ export interface ClientHealthMissingRollup extends ClientHealthGroup {
   reports: number;
 }
 
+/** A count summed over reports. A code that is a level, not a count, is bucketed as a perf row instead. */
 export interface ClientHealthCounterRollup extends ClientHealthGroup {
   code: string;
   total: number;
@@ -72,6 +73,17 @@ export function clientHealthHour(receivedAt: Date): Date {
  * Claims the receipts of reports about to be folded. Returns the ids that were
  * new; every other id is a report already folded (by an earlier batch, or by a
  * concurrent one that committed first: the insert waits for it).
+ *
+ * The key is the client event id alone, whoever sent it. The journaled kinds of
+ * the capture lane are deduplicated per sender (`<user>:<clientEventId>`), and
+ * the client's contract says so of every kind; this one cannot be, since a
+ * receipt that told senders apart would put the user back into these tables.
+ * The cost: the client derives a health report's id from its kind, its version
+ * and both ends of its window, with nothing of the install in it, so two
+ * installs of one version whose windows match to the millisecond on both ends
+ * send one id, and the second report is answered as a duplicate and not
+ * counted. Telling them apart is the client's to do (an install-specific part
+ * in the id), never a sender column here.
  */
 export async function claimClientHealthReceipts(
   db: Database,

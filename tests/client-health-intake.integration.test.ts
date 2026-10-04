@@ -14,6 +14,7 @@ import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { assignPageToUser, createUserAccount, setUserPassword } from "../apps/runtime/src/services/auth.ts";
 import {
+  CLIENT_HEALTH_DOM_NODES_BOUNDS,
   CLIENT_HEALTH_FOOTPRINT_BOUNDS,
   intakeClientHealthReports,
 } from "../apps/runtime/src/services/client-health-intake.ts";
@@ -64,7 +65,10 @@ let fullToken = "";
 let secondChatterToken = "";
 let chatterId = 0;
 
-/** A histogram on the registry's bounds, built the way the client builds one. */
+/**
+ * A histogram on the registry's bounds, built the way the client builds one
+ * (its Histogram.toWire): the sum rounded to three decimals, the max as measured.
+ */
 function histogramFor(metric: keyof typeof CLIENT_HEALTH_PERF_METRICS, samples: number[]): Histogram {
   const entry = CLIENT_HEALTH_PERF_METRICS[metric];
   const bounds = [...entry.bounds];
@@ -80,7 +84,7 @@ function histogramFor(metric: keyof typeof CLIENT_HEALTH_PERF_METRICS, samples: 
     bounds,
     counts,
     count: samples.length,
-    sum: samples.reduce((total, sample) => total + sample, 0),
+    sum: Math.round(samples.reduce((total, sample) => total + sample, 0) * 1000) / 1000,
     max: samples.length === 0 ? 0 : Math.max(...samples),
   };
 }
@@ -335,11 +339,14 @@ describe("client_health intake (H-11b)", () => {
     expect(after.configRevision).toBeGreaterThan(before.configRevision);
 
     const insert = histogramFor("insertMs", [10, 40, 90]);
+    // One sample of sub-microsecond precision: the client rounds the sum (37.457), not the max.
+    const panel = histogramFor("panelOpenMs", [37.4567891]);
     const report = healthReport({
       contractOk: false,
       missing: ["fansMap"],
-      perf: [insert, histogramFor("routeToDockMs", [3])],
-      counters: { "CG-SEND-UNCERTAIN": 2, "p1.insert-misplaced": 0, constructor: 3 },
+      perf: [insert, histogramFor("routeToDockMs", [3]), panel],
+      // The DOM node count rides among the counters and is a level, not a count.
+      counters: { "CG-SEND-UNCERTAIN": 2, "p1.insert-misplaced": 0, constructor: 3, "footprint.dom-nodes-max": 1500 },
     });
     // The client's own schema of the report holds.
     expect(clientHealthReportV1Schema.safeParse(report).success).toBe(true);
@@ -360,9 +367,10 @@ describe("client_health intake (H-11b)", () => {
       client_health_receipts: 1,
       client_health_contract_hourly: 1,
       client_health_missing_hourly: 1,
+      // The node count is not among them.
       client_health_counters_hourly: 3,
-      // insertMs, routeToDockMs and the two footprint sizes.
-      client_health_perf_hourly: 4,
+      // insertMs, routeToDockMs, panelOpenMs, the two footprint sizes and the node count.
+      client_health_perf_hourly: 6,
     });
     expect(await contractTotals()).toEqual([{ ...GROUP, reports: 1, failed_reports: 1 }]);
     expect(await missingTotals()).toEqual([{ anchor: "fansMap", reports: 1 }]);
@@ -383,6 +391,10 @@ describe("client_health intake (H-11b)", () => {
     expect(stored!.hour.getTime() % 3_600_000).toBe(0);
     const [caches] = await perfRows("footprint.cachesKB");
     expect(caches).toMatchObject({ unit: "KB", bounds: [...CLIENT_HEALTH_FOOTPRINT_BOUNDS], count: 1, sum: 420, max: 420 });
+    expect((await perfRows("panelOpenMs"))[0]).toMatchObject({ unit: "ms", count: 1, sum: 37.457, max: 37.4567891 });
+    const [nodes] = await perfRows("footprint.dom-nodes-max");
+    expect(nodes).toMatchObject({ unit: "nodes", schema_version: 1, bounds: [...CLIENT_HEALTH_DOM_NODES_BOUNDS], count: 1, sum: 1500, max: 1500 });
+    expect(nodes!.counts[CLIENT_HEALTH_DOM_NODES_BOUNDS.indexOf(2048)]).toBe(1);
 
     // The receipt is the client event id and the hour, nothing of the sender.
     const receipt = await testDb!.pool.query<{ received_hour: Date }>("select received_hour from client_health_receipts");
@@ -448,11 +460,11 @@ describe("client_health intake (H-11b)", () => {
     const first = histogramFor("insertMs", [10, 40, 90]);
     const second = histogramFor("insertMs", [10, 12, 700, 1500]);
     expect(await intakeAt(tenPast, [
-      { clientEventId: randomUUID(), payload: healthReport({ perf: [first], counters: { "CG-HUB-UNAVAILABLE": 2 }, cachesKB: 100 }) },
+      { clientEventId: randomUUID(), payload: healthReport({ perf: [first], counters: { "CG-HUB-UNAVAILABLE": 2, "footprint.dom-nodes-max": 1500 }, cachesKB: 100 }) },
     ])).toEqual({ accepted: 1, duplicates: 0 });
     // Another batch, the same hour: two reports, one of another version.
     expect(await intakeAt(new Date("2026-10-03T10:59:59.999Z"), [
-      { clientEventId: randomUUID(), payload: healthReport({ perf: [second], counters: { "CG-HUB-UNAVAILABLE": 5 }, contractOk: false, missing: ["composer"], cachesKB: 5_000 }) },
+      { clientEventId: randomUUID(), payload: healthReport({ perf: [second], counters: { "CG-HUB-UNAVAILABLE": 5, "footprint.dom-nodes-max": 900 }, contractOk: false, missing: ["composer"], cachesKB: 5_000 }) },
       { clientEventId: randomUUID(), payload: healthReport({ version: "1.5.0", perf: [first] }) },
     ])).toEqual({ accepted: 2, duplicates: 0 });
     // The next hour.
@@ -479,6 +491,13 @@ describe("client_health intake (H-11b)", () => {
     expect(caches.counts[CLIENT_HEALTH_FOOTPRINT_BOUNDS.indexOf(128)]).toBe(1);
     expect(caches.counts[CLIENT_HEALTH_FOOTPRINT_BOUNDS.indexOf(8192)]).toBe(1);
 
+    // The node count of two reports is two observations with their own max, never 2400 in a counter row.
+    const nodes = await perfRows("footprint.dom-nodes-max");
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0]).toMatchObject({ client_version: "1.4.2", unit: "nodes", count: 2, sum: 2400, max: 1500 });
+    expect(nodes[0]!.counts[CLIENT_HEALTH_DOM_NODES_BOUNDS.indexOf(1024)]).toBe(1);
+    expect(nodes[0]!.counts[CLIENT_HEALTH_DOM_NODES_BOUNDS.indexOf(2048)]).toBe(1);
+
     const contract = await testDb!.pool.query(
       `select hour, client_version, reports::int as reports, failed_reports::int as failed_reports
          from client_health_contract_hourly order by hour, client_version collate "C"`,
@@ -492,7 +511,7 @@ describe("client_health intake (H-11b)", () => {
     expect(await missingTotals()).toEqual([{ anchor: "composer", reports: 1 }]);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("a resent report is not counted twice: a resent batch, the same id twice in a batch, concurrent resends", async (context) => {
+  it("a resent report is not counted twice: a resent batch, the same id from another sender or twice in a batch, concurrent resends", async (context) => {
     if (!server) return context.skip();
     await patchConfig([{ key: "chatExtensionEnabled", value: true }, { key: "chatExtensionHealthIngestEnabled", value: true }]);
 
@@ -504,6 +523,9 @@ describe("client_health intake (H-11b)", () => {
     expect(await ingestOk(narrowToken, [acceptance, event])).toEqual({ accepted: 0, duplicates: 2 });
     // The id in another letter case is the same id.
     expect(await ingestOk(narrowToken, [healthEvent(report, event.clientEventId.toUpperCase())])).toEqual({ accepted: 0, duplicates: 1 });
+    // The receipt names no sender, so the same id from another person is the same report: unlike the
+    // journaled kinds, which are deduplicated per sender (her acceptance event of the same id is new).
+    expect(await ingestOk(secondChatterToken, [acceptance, event])).toEqual({ accepted: 1, duplicates: 1 });
 
     // Twice in one batch: the first is folded, the second is a duplicate.
     const twice = healthEvent(healthReport({ counters: { "CG-SEND-UNCERTAIN": 1 } }));
@@ -519,7 +541,11 @@ describe("client_health intake (H-11b)", () => {
     expect(await contractTotals()).toEqual([{ ...GROUP, reports: 3, failed_reports: 0 }]);
     expect(await counterTotals()).toEqual([{ client_version: "1.4.2", code: "CG-SEND-UNCERTAIN", total: 3 }]);
     expect((await perfRows("insertMs")).reduce((total, row) => total + row.count, 0)).toBe(3);
-    expect(await journal()).toEqual([{ producer: "chat-extension@1.4.2", kind: "desktop.ai_acceptance" }]);
+    // The acceptance event of each of the two senders.
+    expect(await journal()).toEqual([
+      { producer: "chat-extension@1.4.2", kind: "desktop.ai_acceptance" },
+      { producer: "chat-extension@1.4.2", kind: "desktop.ai_acceptance" },
+    ]);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("concurrent batches of different senders lose nothing and do not deadlock", async (context) => {

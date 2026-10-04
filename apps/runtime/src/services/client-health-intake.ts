@@ -72,6 +72,28 @@ export const CLIENT_HEALTH_FOOTPRINT_BOUNDS: readonly number[] = [
   16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16_384, 32_768, 65_536, 131_072, 262_144,
 ];
 
+/** 64 … 65 536 DOM nodes, doubling. */
+export const CLIENT_HEALTH_DOM_NODES_BOUNDS: readonly number[] = [
+  64, 128, 256, 512, 1024, 2048, 4096, 8192, 16_384, 32_768, 65_536,
+];
+
+/**
+ * Counter codes that are a level, not a count. The report has no field for the
+ * client's DOM nodes, so the client sends them among its counters: the largest
+ * number of its own nodes a tab reported in the window (its
+ * `footprint.dom-nodes-max`). Added up over reports and installs that is no
+ * number at all, and the reports are not kept to take it apart again. So such a
+ * code never reaches the counter rollup: the hub buckets it like the two
+ * storage sizes, one observation per report that carries it, under the client's
+ * own code as the metric name.
+ *
+ * A counter the client means as a level must be listed here before the client
+ * sends it; one that is not is summed like any count.
+ */
+export const CLIENT_HEALTH_GAUGE_COUNTERS = {
+  "footprint.dom-nodes-max": { unit: "nodes", schemaVersion: 1, bounds: CLIENT_HEALTH_DOM_NODES_BOUNDS },
+} as const satisfies Record<string, { unit: "nodes"; schemaVersion: number; bounds: readonly number[] }>;
+
 export type ClientHealthHistogramDropReason =
   /** The hub's registry has no such metric (a newer client's). */
   | "unknown_metric"
@@ -187,6 +209,33 @@ export function foldClientHealthReports(reports: readonly ClientHealthReportV1[]
     merged.max = Math.max(merged.max, histogram.max);
   }
 
+  /** One report's level (a storage size, a node count) as one observation of a histogram the hub builds itself. */
+  function addObservation(
+    group: ClientHealthGroup,
+    groupKey: readonly string[],
+    metric: string,
+    spec: { unit: string; schemaVersion: number; bounds: readonly number[] },
+    value: number,
+  ) {
+    if (value > CLIENT_HEALTH_PLAUSIBLE_MAX) {
+      dropped.push({ metric, reason: "implausible" });
+      return;
+    }
+    const bucket = spec.bounds.findIndex((bound) => value <= bound);
+    const counts = Array.from({ length: spec.bounds.length + 1 }, () => 0);
+    counts[bucket === -1 ? spec.bounds.length : bucket] = 1;
+    addHistogram(group, groupKey, {
+      metric,
+      schemaVersion: spec.schemaVersion,
+      unit: spec.unit,
+      bounds: [...spec.bounds],
+      counts,
+      count: 1,
+      sum: value,
+      max: value,
+    });
+  }
+
   for (const report of reports) {
     const group = clientHealthGroup(report);
     const groupKey = [group.clientName, group.clientVersion, group.hostKind, group.hostBuild];
@@ -204,6 +253,11 @@ export function foldClientHealthReports(reports: readonly ClientHealthReportV1[]
 
     // Zeroes are kept: the client always sends its P1 counters, and "reported, none" is the answer the owner wants.
     for (const [code, value] of Object.entries(report.counters)) {
+      // An own key: a code may name an inherited property (`constructor`), which is no gauge.
+      if (Object.hasOwn(CLIENT_HEALTH_GAUGE_COUNTERS, code)) {
+        addObservation(group, groupKey, code, CLIENT_HEALTH_GAUGE_COUNTERS[code as keyof typeof CLIENT_HEALTH_GAUGE_COUNTERS], value);
+        continue;
+      }
       row(counters, [...groupKey, code], () => ({ ...group, code, total: 0 })).total += value;
     }
 
@@ -220,24 +274,7 @@ export function foldClientHealthReports(reports: readonly ClientHealthReportV1[]
     }
 
     for (const [metric, spec] of Object.entries(CLIENT_HEALTH_FOOTPRINT_METRICS)) {
-      const value = report.footprint[spec.field];
-      if (value > CLIENT_HEALTH_PLAUSIBLE_MAX) {
-        dropped.push({ metric, reason: "implausible" });
-        continue;
-      }
-      const bucket = CLIENT_HEALTH_FOOTPRINT_BOUNDS.findIndex((bound) => value <= bound);
-      const counts = Array.from({ length: CLIENT_HEALTH_FOOTPRINT_BOUNDS.length + 1 }, () => 0);
-      counts[bucket === -1 ? CLIENT_HEALTH_FOOTPRINT_BOUNDS.length : bucket] = 1;
-      addHistogram(group, groupKey, {
-        metric,
-        schemaVersion: spec.schemaVersion,
-        unit: spec.unit,
-        bounds: [...CLIENT_HEALTH_FOOTPRINT_BOUNDS],
-        counts,
-        count: 1,
-        sum: value,
-        max: value,
-      });
+      addObservation(group, groupKey, metric, { ...spec, bounds: CLIENT_HEALTH_FOOTPRINT_BOUNDS }, report.footprint[spec.field]);
     }
   }
 

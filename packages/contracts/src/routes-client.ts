@@ -656,7 +656,12 @@ export const clientHealthReportV1Schema = z.object({
         seen.add(histogram.metric);
       });
     }),
-  /** Code → occurrences in the window: errors by code, prevented inserts, P1s. */
+  /**
+   * Code → occurrences in the window: errors by code, prevented inserts, P1s.
+   * One code the client sends here is a level, not a count: `footprint.dom-nodes-max`,
+   * the largest number of its own DOM nodes in the window. The intake buckets
+   * it, one observation per report, and keeps it out of the counter totals.
+   */
   counters: z.record(healthCode, healthCounterValue)
     .refine((counters) => Object.keys(counters).length <= 200, { message: "at most 200 counters" }),
   /** The client's own caches and logs, not the heap (Firefox has no portable heap reading). */

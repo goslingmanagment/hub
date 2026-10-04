@@ -12,8 +12,10 @@ import { clientHealthHour, type ClientHealthPerfRollup } from "@agency_hub_core/
 
 import {
   CLIENT_HEALTH_BUILD_UNREAD,
+  CLIENT_HEALTH_DOM_NODES_BOUNDS,
   CLIENT_HEALTH_FOOTPRINT_BOUNDS,
   CLIENT_HEALTH_FOOTPRINT_METRICS,
+  CLIENT_HEALTH_GAUGE_COUNTERS,
   CLIENT_HEALTH_PLAUSIBLE_MAX,
   CLIENT_HEALTH_UNCODED,
   clientHealthGroup,
@@ -30,7 +32,10 @@ import { clientHealthHistogramFits, clientHealthPercentile } from "../apps/runti
 
 type Histogram = ClientHealthReportV1["perf"][number];
 
-/** A histogram on the registry's bounds, built the way the client builds one. */
+/**
+ * A histogram on the registry's bounds, built the way the client builds one
+ * (its Histogram.toWire): the sum rounded to three decimals, the max as measured.
+ */
 function histogramFor(metric: keyof typeof CLIENT_HEALTH_PERF_METRICS, samples: number[]): Histogram {
   const entry = CLIENT_HEALTH_PERF_METRICS[metric];
   const bounds = [...entry.bounds];
@@ -46,7 +51,7 @@ function histogramFor(metric: keyof typeof CLIENT_HEALTH_PERF_METRICS, samples: 
     bounds,
     counts,
     count: samples.length,
-    sum: samples.reduce((total, sample) => total + sample, 0),
+    sum: Math.round(samples.reduce((total, sample) => total + sample, 0) * 1000) / 1000,
     max: samples.length === 0 ? 0 : Math.max(...samples),
   };
 }
@@ -168,6 +173,42 @@ describe("client_health fold", () => {
     ]);
   });
 
+  it("never sums the counter that is a level: the client's DOM node count is bucketed, one observation per report", () => {
+    const { rollups, dropped } = foldClientHealthReports([
+      report({ counters: { "footprint.dom-nodes-max": 1500, "insert.prevented": 2 } }),
+      report({ counters: { "footprint.dom-nodes-max": 900, "insert.prevented": 1 } }),
+      // A report whose tabs reported no node carries no such counter: no observation.
+      report({ counters: { "insert.prevented": 4 } }),
+      report({ version: "0.2.0", counters: { "footprint.dom-nodes-max": 70_000 } }),
+    ]);
+
+    expect(dropped).toEqual([]);
+    // 1500 + 900 would be no number at all; the counts beside it are summed as before.
+    expect(rollups.counters).toEqual([{ ...GROUP, code: "insert.prevented", total: 7 }]);
+    const nodes = rollups.perf.filter((row) => row.metric === "footprint.dom-nodes-max");
+    expect(nodes).toHaveLength(2);
+    expect(nodes[0]).toMatchObject({ ...GROUP, unit: "nodes", schemaVersion: 1, count: 2, sum: 2400, max: 1500 });
+    expect(nodes[0]!.bounds).toEqual([...CLIENT_HEALTH_DOM_NODES_BOUNDS]);
+    // 900 → (512, 1024]; 1500 → (1024, 2048].
+    expect(nodes[0]!.counts[CLIENT_HEALTH_DOM_NODES_BOUNDS.indexOf(1024)]).toBe(1);
+    expect(nodes[0]!.counts[CLIENT_HEALTH_DOM_NODES_BOUNDS.indexOf(2048)]).toBe(1);
+    // Above the last bound: the overflow bucket, topped by the max.
+    expect(nodes[1]).toMatchObject({ clientVersion: "0.2.0", count: 1, max: 70_000 });
+    expect(nodes[1]!.counts.at(-1)).toBe(1);
+    for (const row of nodes) {
+      expect(row.counts).toHaveLength(row.bounds.length + 1);
+      expect(clientHealthHistogramFits(row)).toBe(true);
+      // The largest value any report held is still read off the row.
+      expect(clientHealthPercentile(row, 1)).toBe(row.max);
+    }
+  });
+
+  it("takes only an own key for a gauge: a counter named like an inherited property is a count", () => {
+    const { rollups } = foldClientHealthReports([report({ counters: { constructor: 2, toString: 1 } })]);
+    expect(rollups.counters.map((row) => [row.code, row.total])).toEqual([["constructor", 2], ["toString", 1]]);
+    expect(rollups.perf.map((row) => row.metric).sort()).toEqual(["footprint.cachesKB", "footprint.logsKB"]);
+  });
+
   it("merges histograms bucket by bucket, so a percentile is read off the whole", () => {
     const first = histogramFor("insertMs", [10, 40, 90]);
     const second = histogramFor("insertMs", [10, 12, 700, 1500]);
@@ -239,15 +280,27 @@ describe("client_health fold", () => {
     expect(perfRow(rollups.perf, "footprint.logsKB")).toMatchObject({ count: 1, max: CLIENT_HEALTH_PLAUSIBLE_MAX });
   });
 
-  it("holds footprint bounds a histogram can be built on, under names no client metric has", () => {
-    expect(CLIENT_HEALTH_FOOTPRINT_BOUNDS.length).toBeLessThanOrEqual(32);
-    CLIENT_HEALTH_FOOTPRINT_BOUNDS.forEach((bound, index) => {
-      expect(bound).toBeGreaterThan(index === 0 ? 0 : CLIENT_HEALTH_FOOTPRINT_BOUNDS[index - 1]!);
-    });
+  it("holds bounds a histogram can be built on for every level it buckets, under names no client metric has", () => {
+    for (const bounds of [CLIENT_HEALTH_FOOTPRINT_BOUNDS, CLIENT_HEALTH_DOM_NODES_BOUNDS]) {
+      expect(bounds.length).toBeLessThanOrEqual(32);
+      bounds.forEach((bound, index) => {
+        expect(bound).toBeGreaterThan(index === 0 ? 0 : bounds[index - 1]!);
+      });
+    }
     for (const [metric, spec] of Object.entries(CLIENT_HEALTH_FOOTPRINT_METRICS)) {
       expect(CLIENT_HEALTH_CODE_PATTERN.test(metric), metric).toBe(true);
       expect(Object.hasOwn(CLIENT_HEALTH_PERF_METRICS, metric), metric).toBe(false);
       expect(spec.unit).toBe("KB");
+    }
+    // A gauge keeps the client's own counter code as its metric name.
+    expect(Object.keys(CLIENT_HEALTH_GAUGE_COUNTERS)).toEqual(["footprint.dom-nodes-max"]);
+    for (const [code, spec] of Object.entries(CLIENT_HEALTH_GAUGE_COUNTERS)) {
+      expect(CLIENT_HEALTH_CODE_PATTERN.test(code), code).toBe(true);
+      expect(Object.hasOwn(CLIENT_HEALTH_PERF_METRICS, code), code).toBe(false);
+      expect(Object.hasOwn(CLIENT_HEALTH_FOOTPRINT_METRICS, code), code).toBe(false);
+      expect(spec.unit).toBe("nodes");
+      // The client caps a counter at a million: its largest value still has a bucket.
+      expect(foldClientHealthReports([report({ counters: { [code]: 1_000_000 } })]).dropped).toEqual([]);
     }
   });
 });
@@ -261,7 +314,33 @@ describe("client_health histogram checks against the registry", () => {
     }
   });
 
+  it("merges a histogram whose sum the client rounded past its samples", () => {
+    // Timer precision below a microsecond (Firefox with its timer clamp off): the
+    // sum is rounded to three decimals, the max is not.
+    const above = histogramFor("panelOpenMs", [37.4567891]);
+    expect(above).toMatchObject({ sum: 37.457, max: 37.4567891 });
+    const below = histogramFor("handlerMs", [0.0004]);
+    expect(below).toMatchObject({ sum: 0, max: 0.0004 });
+    // Just above a bucket edge: the sum rounds down onto the edge, the max stays inside the bucket.
+    const edge = histogramFor("insertMs", [4.0004]);
+    expect(edge).toMatchObject({ sum: 4, max: 4.0004, counts: [0, 1, ...edge.counts.slice(2)] });
+    for (const histogram of [above, below, edge]) {
+      expect(clientHealthHistogramDropReason(histogram), histogram.metric).toBeNull();
+    }
+
+    const { rollups, dropped } = foldClientHealthReports([report({ perf: [above, below] }), report({ perf: [above] })]);
+    expect(dropped).toEqual([]);
+    expect(perfRow(rollups.perf, "panelOpenMs")).toMatchObject({ count: 2, sum: 74.914, max: 37.4567891 });
+    expect(perfRow(rollups.perf, "handlerMs")).toMatchObject({ count: 1, sum: 0, max: 0.0004 });
+    // The merged row still fits its own buckets.
+    expect(clientHealthHistogramFits(perfRow(rollups.perf, "panelOpenMs")!)).toBe(true);
+  });
+
   it("drops a metric the registry does not hold, an inherited property name included", () => {
+    // A level the hub buckets itself is no client metric either.
+    for (const metric of [...Object.keys(CLIENT_HEALTH_FOOTPRINT_METRICS), ...Object.keys(CLIENT_HEALTH_GAUGE_COUNTERS)]) {
+      expect(clientHealthHistogramDropReason({ ...histogramFor("insertMs", [10]), metric }), metric).toBe("unknown_metric");
+    }
     const base = histogramFor("insertMs", [10]);
     for (const metric of ["someFutureMs", "constructor", "toString", "__proto__", "hasOwnProperty"]) {
       expect(clientHealthHistogramDropReason({ ...base, metric }), metric).toBe("unknown_metric");
@@ -367,5 +446,15 @@ describe("client_health rollups migration", () => {
     expect(statements).toContain(`constraint client_health_missing_hourly_anchor_check check (anchor ~ ${code})`);
     expect(statements).toContain(`constraint client_health_counters_hourly_code_check check (code ~ ${code})`);
     expect(statements).toContain(`constraint client_health_perf_hourly_metric_check check (metric ~ ${code})`);
+  });
+
+  it("allows exactly the units the intake writes", () => {
+    const units = [
+      ...Object.values(CLIENT_HEALTH_PERF_METRICS),
+      ...Object.values(CLIENT_HEALTH_FOOTPRINT_METRICS),
+      ...Object.values(CLIENT_HEALTH_GAUGE_COUNTERS),
+    ].map((spec) => spec.unit);
+    expect([...new Set(units)]).toEqual(["ms", "KB", "nodes"]);
+    expect(statements).toContain("constraint client_health_perf_hourly_unit_check check (unit in ('ms', 'KB', 'nodes'))");
   });
 });
