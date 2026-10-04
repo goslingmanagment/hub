@@ -725,34 +725,6 @@ export function formatSubstreamStateLabel(substream: SyncBlockSubstream): string
   return getBlockStateLabel(substream.state);
 }
 
-export interface SyncBlockNotice {
-  headline: string;
-  summary: string;
-  detail: string;
-}
-
-/**
- * Decision 366 pins Fansly WS hints to the page's session + proxy generation;
- * after either rotates, hints stop until the policy is re-pinned by hand with
- * `fansly:ws-policy`. The runtime reports `generation_mismatch` only while
- * hints are enabled for the page and recomputes it on every read, so this
- * notice clears once the policy matches again. It is informational: the
- * block's state, attention and deploy health stay with ordinary polling.
- */
-export function getWsHintGenerationNotice(block: SyncBlockStatus): SyncBlockNotice | null {
-  if (block.block !== "messages_live") return null;
-  const hints = block.metrics.fanslyWsHints;
-  if (typeof hints !== "object" || hints === null || !("state" in hints)
-    || hints.state !== "generation_mismatch") return null;
-  return {
-    headline: "Event-driven refresh paused",
-    summary: "session or proxy changed; re-pin with fansly:ws-policy",
-    detail: "This page's session or proxy changed after its WS hint policy was pinned. "
-      + "New messages still arrive through scheduled polling, only later. "
-      + "Re-pin the policy with fansly:ws-policy; this notice clears once it matches.",
-  };
-}
-
 export function needsVisualAttention(block: SyncBlockStatus): boolean {
   if (isDependencyWait(block)) {
     return false;

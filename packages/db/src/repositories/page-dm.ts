@@ -1,4 +1,3 @@
-import { resolveCapturedFanslyDmHeads } from "./fansly-dm-head-debt.ts";
 
 import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY, millsToWholeCents } from "@agency_hub_core/shared";
@@ -16,7 +15,6 @@ import {
   fans,
   pageDmConversations,
   pageDmMessages,
-  pageDmMessageSyncHealth,
   pageSyncCursors,
   pageSyncStates,
 } from "../schema.ts";
@@ -25,16 +23,6 @@ type TimestampValue = Date | string | null | undefined;
 type NumericValue = number | string | bigint | null | undefined;
 
 export const PAGE_DM_PREVIEW_LIMIT = 25;
-export const PAGE_DM_LIVE_BACKFILL_CAP = 25;
-/**
- * How many message pages past PAGE_DM_LIVE_BACKFILL_CAP the FIRST read of a
- * conversation that began after the page's DM onboarding may walk toward the
- * provider's end (getPageDmOnboardedAt; the Fansly dm_messages backfill). At
- * 25 messages a page that is 200 messages with the window. A safety net: such
- * a thread normally reaches its start in one or two extra requests, and the
- * walk still stops at the first message older than onboarding.
- */
-export const PAGE_DM_NEW_THREAD_EXTRA_HISTORY_PAGES = 7;
 export const PAGE_DM_REGULAR_MESSAGE_RETENTION_LIMIT = 200;
 export const PAGE_DM_SPENDER_MESSAGE_RETENTION_LIMIT = 1000;
 export const PAGE_DM_MAX_MESSAGE_RETENTION_LIMIT = PAGE_DM_SPENDER_MESSAGE_RETENTION_LIMIT;
@@ -284,74 +272,6 @@ export async function upsertPageDmConversation(
   return row;
 }
 
-export async function markPageDmConversationsInvisibleByGeneration(
-  db: Database,
-  input: {
-    platformAccountId: number;
-    generation: number;
-    now?: Date;
-  },
-) {
-  const now = input.now ?? new Date();
-  await db.execute(sql`
-    update page_dm_threads
-    set is_visible = false,
-        updated_at = ${now}
-    where platform_account_id = ${input.platformAccountId}
-      and is_visible = true
-      and (last_seen_generation is null or last_seen_generation < ${input.generation})
-  `);
-}
-
-/**
- * How many threads `markPageDmConversationsInvisibleByGeneration` WOULD hide
- * for this generation — the same predicate, counted instead of applied.
- *
- * The Fansly dm_conversations empty-sweep guard is its only caller, and only
- * on a sweep that observed nothing at all: a provider response that lists zero
- * conversations while the page still shows threads is the one shape where the
- * destructive pass would empty a whole inbox off a single bad answer. Keeping
- * the two statements' where-clauses identical is the point — this must count
- * exactly the rows that pass would blank, or the guard measures the wrong set.
- */
-export async function countPageDmVisibleThreadsBelowGeneration(
-  db: Database,
-  input: {
-    platformAccountId: number;
-    generation: number;
-  },
-) {
-  const result = await db.execute<{ count: string | number }>(sql`
-    select count(*)::bigint as count
-    from page_dm_threads
-    where platform_account_id = ${input.platformAccountId}
-      and is_visible = true
-      and (last_seen_generation is null or last_seen_generation < ${input.generation})
-  `);
-
-  const count = Number(result.rows[0]?.count ?? 0);
-  if (!Number.isSafeInteger(count) || count < 0) {
-    throw new Error("Expected page_dm_threads visible-below-generation count to be a non-negative safe integer");
-  }
-  return count;
-}
-
-/**
- * The page's DM onboarding: when Hub first listed any of its conversations
- * (the earliest first_seen_at). History older than this was already there
- * when Hub started watching the page — the depth the deep backfill owns —
- * while a conversation whose every message is newer began under Hub's watch.
- * An erasure that removes the earliest rows only moves it later, which reads
- * less history, never more. Null when the page has no conversation yet.
- */
-export async function getPageDmOnboardedAt(db: Database, platformAccountId: number) {
-  const [row] = await db
-    .select({ onboardedAt: sql<TimestampValue>`min(${pageDmConversations.firstSeenAt})` })
-    .from(pageDmConversations)
-    .where(eq(pageDmConversations.platformAccountId, platformAccountId));
-  return parseTimestamp(row?.onboardedAt);
-}
-
 export async function maxPageDmThreadGeneration(db: Database, platformAccountId: number) {
   const result = await db.execute(sql`
     select coalesce(max(last_seen_generation), 0)::bigint as generation
@@ -538,16 +458,6 @@ function normalizeConversationRow(row: typeof pageDmConversations.$inferSelect):
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
-}
-
-export async function getPageDmConversationById(
-  db: Database,
-  conversationId: number,
-) {
-  const row = await db.query.pageDmConversations.findFirst({
-    where: eq(pageDmConversations.id, conversationId),
-  });
-  return row ? normalizeConversationRow(row) : null;
 }
 
 export async function listPageDmConversationsByPlatformConversationIds(
@@ -821,7 +731,7 @@ export async function prunePageDmMessagesToLimit(
   return result.rows[0]?.deletedCount ?? 0;
 }
 
-export async function getPageDmMessageRetentionLimit(
+async function getPageDmMessageRetentionLimit(
   db: Database,
   conversationId: number,
 ) {
@@ -956,10 +866,9 @@ async function getNewestStoredPageDmMessage(db: Database, conversationId: number
 /**
  * Recomputes a conversation's stored-window bookkeeping (count, newest/oldest
  * ids, last fan/model timestamps) from the rows on disk, optionally pruning to
- * the retention tier first. Unlike finalizePageDmConversationMessageSync this
- * deliberately leaves message_coverage_status and last_message_sync_at alone —
- * it serves live ingest (OFAPI webhook projection) and deletions, which are not
- * sync runs.
+ * the retention tier first. It leaves message_coverage_status and
+ * last_message_sync_at alone — it serves live ingest (OFAPI webhook
+ * projection) and deletions, which are not sync runs.
  */
 export async function refreshPageDmConversationWindow(
   db: Database,
@@ -1044,81 +953,6 @@ export async function refreshPageDmConversationWindow(
   });
 }
 
-/**
- * Closes a message-sync pass over one conversation: recomputes the stored
- * window, writes the coverage verdict and, when the pass read the head,
- * advances last_message_sync_at.
- */
-export async function finalizePageDmConversationMessageSync(
-  db: Database,
-  input: {
-    conversationId: number;
-    messageCoverageStatus: MessageCoverageStatus;
-    /**
-     * When this pass read the conversation head: the dispatch time of its
-     * head page (before = null). last_message_sync_at is the time-based
-     * "head already read" watermark the candidate picker compares with
-     * last_message_at, so only a head read may move it, and never backwards.
-     * null leaves it untouched — a history walk from a stored cursor, a
-     * continuation that cannot vouch for its head, or a summary-only repair
-     * never read the head, and stamping "now" would hide a head that arrived
-     * meanwhile. Required so every caller decides.
-     */
-    headReadAt: Date | null;
-    /**
-     * When false, the per-conversation retention prune is skipped and only the
-     * window bookkeeping is recomputed. Stage 1 retention stand-down: sync
-     * callers pass the PAGE_DM_PRUNE_ENABLED kill-switch here (default off),
-     * so stored DM history is nondecreasing until Stage 28 re-scopes the prune
-     * as a cache policy. Defaults to true to keep the repo function's
-     * standalone semantics unchanged.
-     */
-    enforceRetention?: boolean;
-  },
-) {
-  const headReadAt = input.headReadAt;
-  return db.transaction(async (tx) => {
-    const database = tx as unknown as Database;
-    await resolveCapturedFanslyDmHeads(database, input.conversationId);
-    let deletedCount = 0;
-    if (input.enforceRetention !== false) {
-      const retentionLimit = await getPageDmMessageRetentionLimit(database, input.conversationId);
-      deletedCount = await prunePageDmMessagesToLimit(database, {
-        conversationId: input.conversationId,
-        limit: retentionLimit,
-      });
-    }
-    const summary = await getPageDmMessageWindowSummary(database, input.conversationId);
-
-    const [row] = await database
-      .update(pageDmConversations)
-      .set({
-        storedMessageCount: summary.storedMessageCount,
-        newestStoredMessageId: summary.newestStoredMessageId,
-        oldestStoredMessageId: summary.oldestStoredMessageId,
-        messageCoverageStatus: input.messageCoverageStatus,
-        messageBackfillComplete: isMessageBackfillComplete(input.messageCoverageStatus),
-        ...(headReadAt ? {
-          lastMessageSyncAt: sql`greatest(
-            coalesce(${pageDmConversations.lastMessageSyncAt}, ${headReadAt}::timestamptz),
-            ${headReadAt}::timestamptz
-          )`,
-        } : {}),
-        lastFanMessageAt: summary.lastFanMessageAt,
-        lastModelMessageAt: summary.lastModelMessageAt,
-        updatedAt: new Date(),
-      })
-      .where(eq(pageDmConversations.id, input.conversationId))
-      .returning();
-
-    return {
-      conversation: row ? normalizeConversationRow(row) : null,
-      deletedCount,
-      summary,
-    };
-  });
-}
-
 export async function resetPageDmSyncState(
   db: Database,
   platformAccountId: number,
@@ -1163,318 +997,6 @@ export async function getExistingPageDmMessageIds(
     ));
 
   return new Set(rows.map((row) => row.platformMessageId));
-}
-
-/**
- * The subset of `platformMessageIds` stored in this conversation at or before
- * `boundaryMessageId`, in the stored-window order that picks
- * newest_stored_message_id (created_at, then platform_message_id). A head
- * walk meets known ground only there: a stored row above the recorded newest
- * message was written since the summary was last recomputed (a walk dropped
- * before its finalize, or a finalize deferred into projection debt), and the
- * gap below it may be unread. When the boundary row is not stored, every
- * stored id qualifies, as in getExistingPageDmMessageIds. Soft-deleted rows
- * count, as there.
- */
-export async function getPageDmMessageIdsAtOrBefore(
-  db: Database,
-  input: {
-    conversationId: number;
-    platformMessageIds: string[];
-    boundaryMessageId: string;
-  },
-) {
-  if (input.platformMessageIds.length === 0) {
-    return new Set<string>();
-  }
-
-  const result = await db.execute<{ platform_message_id: string }>(sql`
-    select m.platform_message_id
-    from page_dm_messages m
-    left join page_dm_messages b
-      on b.conversation_id = m.conversation_id
-     and b.platform_message_id = ${input.boundaryMessageId}
-    where m.conversation_id = ${input.conversationId}
-      and m.platform_message_id in ${input.platformMessageIds}
-      and (b.id is null
-        or (m.created_at, m.platform_message_id) <= (b.created_at, b.platform_message_id))
-  `);
-
-  return new Set(result.rows.map((row) => row.platform_message_id));
-}
-
-export interface PageDmMessageSyncCandidate {
-  id: number;
-  platformConversationId: string;
-  fanId: number;
-  partnerPlatformUserId: string | null;
-  unreadCount: number;
-  lastMessageAt: Date | null;
-  lastMessageId: string | null;
-  newestStoredMessageId: string | null;
-  storedMessageCount: number;
-  messageCoverageStatus: MessageCoverageStatus;
-  messageBackfillComplete: boolean;
-  lastMessageSyncAt: Date | null;
-}
-
-export interface PageDmMessageDeepBackfillCandidate extends PageDmMessageSyncCandidate {
-  retentionLimit: number;
-  isSpender: boolean;
-}
-
-export async function selectNextPageDmMessageSyncCandidate(
-  db: Database,
-  input: {
-    platformAccountId: number;
-    includeHeadDebt?: boolean;
-    /** Skip threads still carrying breaker failures, even once their window
-     * has lapsed: the chunk has spent its one retry of such a thread. */
-    excludeFailingThreads?: boolean;
-    now?: Date;
-  },
-) {
-  const now = input.now ?? new Date();
-  const nowSql = sql`${now}::timestamptz`;
-  const nowPlus21Days = sql`${now}::timestamptz + interval '21 days'`;
-  const staleHeadMismatchSql = input.includeHeadDebt ? sql`exists (
-    select 1 from fansly_dm_head_debt d
-    where d.conversation_id = c.id and d.captured_at is null
-      and d.attempts < 5 and d.next_retry_at <= ${nowSql}
-  )` : sql`
-    c.last_message_id is distinct from c.newest_stored_message_id
-    and (
-      c.last_message_sync_at is null
-      or (c.last_message_at is not null and c.last_message_sync_at < c.last_message_at)
-    )
-  `;
-  const result = await db.execute<{
-    id: NumericValue;
-    platformConversationId: string;
-    fanId: NumericValue;
-    partnerPlatformUserId: string | null;
-    unreadCount: NumericValue;
-    lastMessageAt: TimestampValue;
-    lastMessageId: string | null;
-    newestStoredMessageId: string | null;
-    storedMessageCount: NumericValue;
-    messageCoverageStatus: MessageCoverageStatus;
-    messageBackfillComplete: boolean;
-    lastMessageSyncAt: TimestampValue;
-  }>(sql`
-    select c.id as "id",
-           c.platform_conversation_id as "platformConversationId",
-           c.fan_id as "fanId",
-           c.partner_platform_user_id as "partnerPlatformUserId",
-           c.unread_count as "unreadCount",
-           c.last_message_at as "lastMessageAt",
-           c.last_message_id as "lastMessageId",
-           c.newest_stored_message_id as "newestStoredMessageId",
-           c.stored_message_count as "storedMessageCount",
-           c.message_coverage_status as "messageCoverageStatus",
-           c.message_backfill_complete as "messageBackfillComplete",
-           c.last_message_sync_at as "lastMessageSyncAt"
-    from page_dm_threads c
-    left join page_fans fp
-      on fp.platform_account_id = c.platform_account_id
-     and fp.fan_id = c.fan_id
-    left join fan_spend_lifetime slp
-      on slp.platform_account_id = c.platform_account_id
-     and slp.fan_id = c.fan_id
-    left join page_dm_message_sync_health h
-      on h.conversation_id = c.id
-    where c.platform_account_id = ${input.platformAccountId}
-      and c.is_visible = true
-      and c.fan_id is not null
-      and ${dmMessageSyncEligibleSql("c")}
-      -- Circuit breaker (0086): conversations inside a failure-backoff or
-      -- quarantine window are not offered; re-admission is implicit once the
-      -- window lapses.
-      and (
-        h.conversation_id is null
-        or (
-          (h.next_retry_at is null or h.next_retry_at <= ${nowSql})
-          and (h.quarantine_until is null or h.quarantine_until <= ${nowSql})
-        )
-      )
-      ${input.excludeFailingThreads ? sql`and (h.conversation_id is null or h.failure_count = 0)` : sql``}
-      and (
-        ${staleHeadMismatchSql}
-        or (c.message_coverage_status = 'pending_backfill'::dm_message_coverage_status
-          and ${input.includeHeadDebt ? sql`not exists (
-            select 1 from fansly_dm_head_debt d
-            where d.conversation_id = c.id and d.captured_at is null
-              and d.attempts < 5
-          )` : sql`true`})
-      )
-    order by
-      case
-        when ${staleHeadMismatchSql} then 0
-        when c.message_coverage_status = 'pending_backfill'::dm_message_coverage_status then 1
-        else 2
-      end asc,
-      c.unread_count desc,
-      case
-        when fp.is_subscriber = true
-         and fp.subscription_expires_at > ${nowSql}
-         and fp.subscription_expires_at <= ${nowPlus21Days} then 0
-        else 1
-      end asc,
-      coalesce(slp.creator_net_amount_mills, 0)::bigint desc,
-      c.last_message_at desc nulls last,
-      c.last_message_sync_at asc nulls first,
-      c.id asc
-    limit 1
-  `);
-
-  const row = result.rows[0];
-  if (!row) {
-    return null;
-  }
-
-  return {
-    id: normalizeNumber(row.id, "id"),
-    platformConversationId: row.platformConversationId,
-    fanId: normalizeNumber(row.fanId, "fanId"),
-    partnerPlatformUserId: row.partnerPlatformUserId,
-    unreadCount: normalizeNumber(row.unreadCount, "unreadCount"),
-    lastMessageAt: parseTimestamp(row.lastMessageAt),
-    lastMessageId: row.lastMessageId,
-    newestStoredMessageId: row.newestStoredMessageId,
-    storedMessageCount: normalizeNumber(row.storedMessageCount, "storedMessageCount"),
-    messageCoverageStatus: normalizeMessageCoverageStatus(row.messageCoverageStatus),
-    messageBackfillComplete: isMessageBackfillComplete(
-      normalizeMessageCoverageStatus(row.messageCoverageStatus),
-    ),
-    lastMessageSyncAt: parseTimestamp(row.lastMessageSyncAt),
-  } satisfies PageDmMessageSyncCandidate;
-}
-
-export async function selectNextPageDmMessageDeepBackfillCandidate(
-  db: Database,
-  input: {
-    platformAccountId: number;
-    now?: Date;
-    /** Stage 17: lift the depth cap so the crawl walks to platform exhaustion. */
-    ignoreRetentionLimit?: boolean;
-    /** As in the ordinary picker: the chunk's one failing-thread retry is spent. */
-    excludeFailingThreads?: boolean;
-  },
-) {
-  const nowSql = sql`${input.now ?? new Date()}::timestamptz`;
-  const result = await db.execute<{
-    id: NumericValue;
-    platformConversationId: string;
-    fanId: NumericValue;
-    partnerPlatformUserId: string | null;
-    unreadCount: NumericValue;
-    lastMessageAt: TimestampValue;
-    lastMessageId: string | null;
-    newestStoredMessageId: string | null;
-    storedMessageCount: NumericValue;
-    messageCoverageStatus: MessageCoverageStatus;
-    messageBackfillComplete: boolean;
-    lastMessageSyncAt: TimestampValue;
-    retentionLimit: NumericValue;
-    isSpender: boolean;
-  }>(sql`
-    with candidates as (
-      select c.id,
-             c.platform_conversation_id,
-             c.fan_id,
-             c.partner_platform_user_id,
-             c.unread_count,
-             c.last_message_at,
-             c.last_message_id,
-             c.newest_stored_message_id,
-             c.stored_message_count,
-             c.message_coverage_status,
-             c.message_backfill_complete,
-             c.last_message_sync_at,
-             coalesce(slp.creator_net_amount_mills, 0)::bigint as creator_net_amount_mills,
-             case
-               when coalesce(slp.creator_net_amount_mills, 0)::bigint > 0
-                 then ${PAGE_DM_SPENDER_MESSAGE_RETENTION_LIMIT}
-               else ${PAGE_DM_REGULAR_MESSAGE_RETENTION_LIMIT}
-             end::int as retention_limit
-      from page_dm_threads c
-      left join fan_spend_lifetime slp
-        on slp.platform_account_id = c.platform_account_id
-       and slp.fan_id = c.fan_id
-      left join page_dm_message_sync_health h
-        on h.conversation_id = c.id
-      where c.platform_account_id = ${input.platformAccountId}
-        and c.is_visible = true
-        and c.fan_id is not null
-        and ${dmMessageSyncEligibleSql("c")}
-        -- Same circuit breaker as the ordinary picker.
-        and (
-          h.conversation_id is null
-          or (
-            (h.next_retry_at is null or h.next_retry_at <= ${nowSql})
-            and (h.quarantine_until is null or h.quarantine_until <= ${nowSql})
-          )
-        )
-        ${input.excludeFailingThreads ? sql`and (h.conversation_id is null or h.failure_count = 0)` : sql``}
-        and c.message_coverage_status = 'partial_window'::dm_message_coverage_status
-        and c.stored_message_count > 0
-        and not (
-          c.last_message_id is distinct from c.newest_stored_message_id
-          and (
-            c.last_message_sync_at is null
-            or (c.last_message_at is not null and c.last_message_sync_at < c.last_message_at)
-          )
-        )
-    )
-    select id as "id",
-           platform_conversation_id as "platformConversationId",
-           fan_id as "fanId",
-           partner_platform_user_id as "partnerPlatformUserId",
-           unread_count as "unreadCount",
-           last_message_at as "lastMessageAt",
-           last_message_id as "lastMessageId",
-           newest_stored_message_id as "newestStoredMessageId",
-           stored_message_count as "storedMessageCount",
-           message_coverage_status as "messageCoverageStatus",
-           message_backfill_complete as "messageBackfillComplete",
-           last_message_sync_at as "lastMessageSyncAt",
-           retention_limit as "retentionLimit",
-           (creator_net_amount_mills > 0)::boolean as "isSpender"
-    from candidates
-    where (${input.ignoreRetentionLimit === true} or stored_message_count < retention_limit)
-    order by
-      case when creator_net_amount_mills > 0 then 0 else 1 end asc,
-      creator_net_amount_mills desc,
-      stored_message_count asc,
-      last_message_sync_at asc nulls first,
-      last_message_at desc nulls last,
-      id asc
-    limit 1
-  `);
-
-  const row = result.rows[0];
-  if (!row) {
-    return null;
-  }
-
-  return {
-    id: normalizeNumber(row.id, "id"),
-    platformConversationId: row.platformConversationId,
-    fanId: normalizeNumber(row.fanId, "fanId"),
-    partnerPlatformUserId: row.partnerPlatformUserId,
-    unreadCount: normalizeNumber(row.unreadCount, "unreadCount"),
-    lastMessageAt: parseTimestamp(row.lastMessageAt),
-    lastMessageId: row.lastMessageId,
-    newestStoredMessageId: row.newestStoredMessageId,
-    storedMessageCount: normalizeNumber(row.storedMessageCount, "storedMessageCount"),
-    messageCoverageStatus: normalizeMessageCoverageStatus(row.messageCoverageStatus),
-    messageBackfillComplete: isMessageBackfillComplete(
-      normalizeMessageCoverageStatus(row.messageCoverageStatus),
-    ),
-    lastMessageSyncAt: parseTimestamp(row.lastMessageSyncAt),
-    retentionLimit: normalizeNumber(row.retentionLimit, "retentionLimit"),
-    isSpender: row.isSpender,
-  } satisfies PageDmMessageDeepBackfillCandidate;
 }
 
 export interface PageDmSyncCoverage {
@@ -1982,150 +1504,14 @@ async function readPreviewLiveUnion(
 }
 
 // ─── Per-conversation DM message-sync circuit breaker (0086) ───────────────
-// One poison thread (a deterministic per-group refusal) must not wedge a
-// page's whole dm_messages stream. The Fansly dm_messages lane records a
-// failure when a walk's first page fails and moves on to other threads;
-// failures accrue exponential backoff (next_retry_at) and, from the 4th
-// failure, a quarantine window. Candidate selection skips excluded
-// conversations, re-admission is implicit once the windows lapse. The stream
-// wakes when the earliest short backoff window ends
-// (nextConversationSyncBackoffRetryAt); a quarantined thread waits for the
-// next ordinary request.
-// Rows are operational sync state — cleared by a successful read of the
-// conversation (an ordinary walk, a B1 hint walk or a targeted backfill),
-// cascaded away with their thread. The retired OnlyFans crawler's historical
-// rows remain readable here too.
-
-export const PAGE_DM_SYNC_FAILURE_QUARANTINE_THRESHOLD = 4;
-const PAGE_DM_SYNC_FAILURE_BACKOFF_BASE_MINUTES = 5;
-const PAGE_DM_SYNC_FAILURE_BACKOFF_CAP_HOURS = 6;
-const PAGE_DM_SYNC_QUARANTINE_HOURS = 6;
-const PAGE_DM_SYNC_LAST_ERROR_MAX_LENGTH = 500;
-
-export interface PageDmConversationSyncHealth {
-  conversationId: number;
-  platformAccountId: number;
-  failureCount: number;
-  errorClass: string | null;
-  lastError: string | null;
-  lastAttemptAt: Date | null;
-  nextRetryAt: Date | null;
-  quarantineUntil: Date | null;
-  preferredPageLimit: number | null;
-}
-
-export function isConversationSyncHealthExcluded(
-  health: Pick<PageDmConversationSyncHealth, "nextRetryAt" | "quarantineUntil"> | null,
-  now: Date = new Date(),
-) {
-  if (!health) {
-    return false;
-  }
-  const nowMs = now.getTime();
-  return (health.nextRetryAt !== null && health.nextRetryAt.getTime() > nowMs) ||
-    (health.quarantineUntil !== null && health.quarantineUntil.getTime() > nowMs);
-}
-
-export async function getConversationSyncHealth(
-  db: Database,
-  conversationId: number,
-): Promise<PageDmConversationSyncHealth | null> {
-  const [row] = await db.select()
-    .from(pageDmMessageSyncHealth)
-    .where(eq(pageDmMessageSyncHealth.conversationId, conversationId))
-    .limit(1);
-  if (!row) {
-    return null;
-  }
-  return {
-    conversationId: row.conversationId,
-    platformAccountId: row.platformAccountId,
-    failureCount: row.failureCount,
-    errorClass: row.errorClass,
-    lastError: row.lastError,
-    lastAttemptAt: row.lastAttemptAt,
-    nextRetryAt: row.nextRetryAt,
-    quarantineUntil: row.quarantineUntil,
-    preferredPageLimit: row.preferredPageLimit,
-  };
-}
-
-/**
- * Upserts one failure observation: failure_count++, backoff
- * next_retry_at = now + min(5min * 2^(failure_count - 1), 6h), and from the
- * 4th failure a 6h quarantine window. One atomic statement — concurrent
- * writers cannot lose an increment.
- */
-export async function recordConversationSyncFailure(
-  db: Database,
-  input: {
-    conversationId: number;
-    platformAccountId: number;
-    errorClass: string;
-    errorMessage: string;
-    now?: Date;
-  },
-): Promise<{ failureCount: number; nextRetryAt: Date | null; quarantineUntil: Date | null }> {
-  const now = input.now ?? new Date();
-  const nowSql = sql`${now}::timestamptz`;
-  const lastError = input.errorMessage.slice(0, PAGE_DM_SYNC_LAST_ERROR_MAX_LENGTH);
-  // Module-level integer literals, inlined so make_interval needs no
-  // parameter-type inference.
-  const backoffBaseSql = sql.raw(String(PAGE_DM_SYNC_FAILURE_BACKOFF_BASE_MINUTES));
-  const backoffCapSql = sql.raw(String(PAGE_DM_SYNC_FAILURE_BACKOFF_CAP_HOURS));
-  const quarantineHoursSql = sql.raw(String(PAGE_DM_SYNC_QUARANTINE_HOURS));
-  const quarantineThresholdSql = sql.raw(String(PAGE_DM_SYNC_FAILURE_QUARANTINE_THRESHOLD));
-
-  // The doubling's exponent is clamped before the multiply: 5min * 2^35
-  // overflows interval, and the raised error would roll every later breaker
-  // write back. 2^7 already passes the 6h cap.
-  const result = await db.execute<{
-    failureCount: NumericValue;
-    nextRetryAt: TimestampValue;
-    quarantineUntil: TimestampValue;
-  }>(sql`
-    insert into page_dm_message_sync_health (
-      conversation_id, platform_account_id, failure_count, error_class,
-      last_error, last_attempt_at, next_retry_at, quarantine_until, updated_at
-    )
-    values (
-      ${input.conversationId}, ${input.platformAccountId}, 1, ${input.errorClass},
-      ${lastError}, ${nowSql},
-      ${nowSql} + make_interval(mins => ${backoffBaseSql}),
-      null, ${nowSql}
-    )
-    on conflict (conversation_id) do update set
-      failure_count = page_dm_message_sync_health.failure_count + 1,
-      error_class = excluded.error_class,
-      last_error = excluded.last_error,
-      last_attempt_at = excluded.last_attempt_at,
-      next_retry_at = excluded.last_attempt_at + least(
-        make_interval(mins => ${backoffBaseSql})
-          * power(2, least(page_dm_message_sync_health.failure_count, 16)),
-        make_interval(hours => ${backoffCapSql})
-      ),
-      quarantine_until = case
-        when page_dm_message_sync_health.failure_count + 1 >= ${quarantineThresholdSql}
-          then excluded.last_attempt_at + make_interval(hours => ${quarantineHoursSql})
-        else page_dm_message_sync_health.quarantine_until
-      end,
-      updated_at = excluded.updated_at
-    returning
-      failure_count as "failureCount",
-      next_retry_at as "nextRetryAt",
-      quarantine_until as "quarantineUntil"
-  `);
-
-  const row = result.rows[0];
-  if (!row) {
-    throw new Error("recordConversationSyncFailure returned no row");
-  }
-  return {
-    failureCount: normalizeNumber(row.failureCount, "failureCount"),
-    nextRetryAt: parseTimestamp(row.nextRetryAt),
-    quarantineUntil: parseTimestamp(row.quarantineUntil),
-  };
-}
+// The legacy Fansly DM lanes (the dm_messages lane until step 4 S4-14, the
+// targeted thread backfill until S4-15) recorded a failing thread here so one
+// poison thread could not wedge a page's DM reads. Nothing writes a failure
+// any more: the Fansly Sync Engine keeps its own breakers. The rows stay as
+// records — cleared by the engine's successful DM read of their conversation,
+// carried into the engine's breakers at a page's switch, counted by the
+// health surface, and cascaded away with their thread. The retired OnlyFans
+// crawler's historical rows remain readable here too.
 
 /** Successful sync of the conversation resets its failure bookkeeping. The
  * learned preferred_page_limit survives (0087); the row is dropped only when
@@ -2148,36 +1534,6 @@ export async function clearConversationSyncHealth(db: Database, conversationId: 
     where conversation_id = ${conversationId}
       and not exists (select 1 from kept)
   `);
-}
-
-/** When the page's first thread inside a short backoff window (below the
- * quarantine threshold) becomes selectable again: the earliest future
- * next_retry_at among such rows whose thread the lane selects (visible, bound
- * to a fan, not excluded), or null. The dm_messages stream sleeps until then
- * instead of completing. A quarantined row (6 hours, re-armed by each later
- * failure) never holds the stream: its thread waits for the next ordinary
- * request, and B1 can wake the idle stream meanwhile. A lapsed window is never
- * returned, so a failing row whose thread has nothing left to read cannot keep
- * the stream awake. */
-export async function nextConversationSyncBackoffRetryAt(
-  db: Database,
-  input: { platformAccountId: number; now?: Date },
-): Promise<Date | null> {
-  const nowSql = sql`${input.now ?? new Date()}::timestamptz`;
-  const quarantineThresholdSql = sql.raw(String(PAGE_DM_SYNC_FAILURE_QUARANTINE_THRESHOLD));
-  const result = await db.execute<{ retryAt: TimestampValue }>(sql`
-    select min(h.next_retry_at) as "retryAt"
-    from page_dm_message_sync_health h
-    join page_dm_threads c on c.id = h.conversation_id
-    where h.platform_account_id = ${input.platformAccountId}
-      and h.failure_count > 0
-      and h.failure_count < ${quarantineThresholdSql}
-      and h.next_retry_at > ${nowSql}
-      and c.is_visible = true
-      and c.fan_id is not null
-      and ${dmMessageSyncEligibleSql("c")}
-  `);
-  return parseTimestamp(result.rows[0]?.retryAt ?? null);
 }
 
 /** Conversation-level coverage debt per account: breaker rows still carrying

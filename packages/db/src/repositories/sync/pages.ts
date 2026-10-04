@@ -1,4 +1,4 @@
-import { sql, type SQL } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 
 import type { Database } from "../../client.ts";
 import {
@@ -26,11 +26,13 @@ import {
 // (`acquireSyncPageOwnership`, I6) — a lost database session alone is never
 // such a confirmation.
 //
-// Mode: `off ↔ shadow` is the owner's ordinary lever. `handover` and `live`
-// are reachable only with the switch capability of the step-3 switch CLI; no
-// step-2 build can issue it. The one other way to `live` is a page's birth:
-// onboarding creates a new Fansly page's row live in the transaction that
-// creates the page (`createLiveSyncPage`, step 4 S4-05). Both are pinned by
+// Mode: `off ↔ shadow` is the owner's ordinary lever (`setSyncPageMode`). The
+// one way to `live` is a page's birth: onboarding creates a new Fansly page's
+// row live in the transaction that creates the page (`createLiveSyncPage`,
+// step 4 S4-05). Nothing moves a page to `handover` or out of `live`: the
+// step-3 switch and its rollback, with the capability that opened those
+// transitions, are gone (step 4 S4-21). `handover` stays a value the CHECK
+// admits and every reader still treats as "neither engine sends". Pinned by
 // tests/sync-engine-repositories.test.ts (I17).
 
 export const SYNC_PAGE_MODES = ["off", "shadow", "handover", "live"] as const;
@@ -42,7 +44,7 @@ export type SyncPageHoldKind = (typeof SYNC_PAGE_HOLD_KINDS)[number];
 /** Session advisory lock namespace of page ownership: (58215, pageId). */
 export const SYNC_PAGE_OWNERSHIP_LOCK_NAMESPACE = 58_215;
 
-/** The step-1 guard row's owner once the switch flipped it (0229). */
+/** The step-1 guard row's owner on the engine's side (0229). */
 export const SYNC_ENGINE_GUARD_OWNER = "fansly_sync_engine" satisfies FanslySendGuardOwnerEngine;
 
 /** A registry key `<file>.<variant>` (= sync_work.resource). */
@@ -405,53 +407,9 @@ export async function listSyncPages(
 
 // ── mode ──────────────────────────────────────────────────────────────────────
 
-/**
- * The switch CLI's capability (design §11.1): the only key to `handover` and
- * `live`. A capability is valid only as the very object this module issued
- * (a structurally equal literal is refused) and only for its page.
- * `issueSyncSwitchCapability` has exactly one sanctioned caller outside tests
- * — the step-3 switch/rollback CLI — pinned by
- * tests/sync-engine-repositories.test.ts; in step 2 nothing issues one.
- */
-export interface SyncSwitchCapability {
-  readonly kind: "sync_switch";
-  readonly pageId: number;
-  readonly purpose: string;
-}
-
-const issuedSwitchCapabilities = new WeakSet<object>();
-
-export function issueSyncSwitchCapability(input: { pageId: number; purpose: string }): SyncSwitchCapability {
-  const capability: SyncSwitchCapability = Object.freeze({
-    kind: "sync_switch" as const,
-    pageId: input.pageId,
-    purpose: input.purpose,
-  });
-  issuedSwitchCapabilities.add(capability);
-  return capability;
-}
-
-function holdsSwitchCapability(capability: SyncSwitchCapability | undefined, pageId: number): boolean {
-  return capability !== undefined && issuedSwitchCapabilities.has(capability) && capability.pageId === pageId;
-}
-
-/** Whether `capability` is a switch capability this module issued for
- *  `pageId` (the switch's own final chain rebuild runs in `handover`, §8.2). */
-export function holdsSyncSwitchCapability(capability: SyncSwitchCapability | undefined, pageId: number): boolean {
-  return holdsSwitchCapability(capability, pageId);
-}
-
-/** Transitions the owner makes without a capability (`sync page mode`). */
+/** The transitions the owner makes (`sync page mode`): the only ones there
+ *  are (I17). */
 const OWNER_TRANSITIONS: ReadonlySet<string> = new Set(["off>shadow", "shadow>off"]);
-
-/** Transitions of the switch (§11.1) and the rollback (§11.2). */
-const SWITCH_TRANSITIONS: ReadonlySet<string> = new Set([
-  "shadow>handover", // A: fence the legacy engine
-  "handover>live", // C: take over
-  "handover>shadow", // B timed out: back to shadow
-  "live>handover", // rollback 1: stop the live actor, legacy stays fenced
-  "handover>off", // rollback 4: legacy owns the page again
-]);
 
 export type SetSyncPageModeResult =
   | { kind: "changed"; from: SyncPageMode; to: SyncPageMode; modeChangedAt: Date }
@@ -460,17 +418,15 @@ export type SetSyncPageModeResult =
     kind: "refused";
     from: SyncPageMode | null;
     to: SyncPageMode;
-    reason: "no_page" | "expected_mode_mismatch" | "capability_required" | "transition_not_allowed";
+    reason: "no_page" | "expected_mode_mismatch" | "transition_not_allowed";
   };
 
 /**
- * Move a page between modes. Without the switch capability only `off ↔ shadow`
- * is possible, and only from those modes (I17); every other change needs the
- * capability issued for this page and must be a transition of the switch or the
- * rollback. `expectFrom` makes the change conditional on the current mode.
- * Leaving to `off` or `shadow` clears `legacy_imported_at` (the legacy cursors
- * are the truth again, §11.2; an import made before an aborted switch is
- * never reused by a later one, step-3 §3.5 item 9).
+ * Move a page between `off` and `shadow`, the only transitions there are
+ * (I17): a page reaches `live` by `createLiveSyncPage` alone and never leaves
+ * it, and nothing reaches `handover`. `expectFrom` makes the change
+ * conditional on the current mode. Neither mode runs a live loop, so
+ * `legacy_imported_at` (J3) is null after the change.
  */
 export async function setSyncPageMode(
   db: Database,
@@ -479,7 +435,6 @@ export async function setSyncPageMode(
     to: SyncPageMode;
     changedBy: string;
     expectFrom?: SyncPageMode;
-    capability?: SyncSwitchCapability;
   },
 ): Promise<SetSyncPageModeResult> {
   if (!(SYNC_PAGE_MODES as readonly string[]).includes(input.to)) {
@@ -498,21 +453,15 @@ export async function setSyncPageMode(
       return { kind: "refused", from, to: input.to, reason: "expected_mode_mismatch" };
     }
     if (from === input.to) return { kind: "unchanged", mode: from };
-    const transition = `${from}>${input.to}`;
-    if (!OWNER_TRANSITIONS.has(transition)) {
-      if (!SWITCH_TRANSITIONS.has(transition)) {
-        return { kind: "refused", from, to: input.to, reason: "transition_not_allowed" };
-      }
-      if (!holdsSwitchCapability(input.capability, input.pageId)) {
-        return { kind: "refused", from, to: input.to, reason: "capability_required" };
-      }
+    if (!OWNER_TRANSITIONS.has(`${from}>${input.to}`)) {
+      return { kind: "refused", from, to: input.to, reason: "transition_not_allowed" };
     }
     const updated = await tx.execute<{ modeChangedAt: Date | string }>(sql`
       update sync_pages
          set mode = ${input.to},
              mode_changed_at = clock_timestamp(),
              mode_changed_by = ${input.changedBy},
-             legacy_imported_at = case when ${input.to} in ('off', 'shadow') then null else legacy_imported_at end,
+             legacy_imported_at = null,
              updated_at = clock_timestamp()
        where page_id = ${input.pageId}
       returning mode_changed_at as "modeChangedAt"
@@ -526,19 +475,15 @@ export async function setSyncPageMode(
   });
 }
 
-// ── legacy fences (step 3) ────────────────────────────────────────────────────
+// ── engine ownership (step 3) ────────────────────────────────────────────────
 //
-// Step-3 design §3.1 (S3-01): while the Fansly Sync Engine owns a page —
-// `handover` (the switch fences the legacy engine before the engine's first
-// send) or `live` — no legacy component even tries to send for it. The legacy
-// schedulers carry `legacyOwnsFanslyPageSql` next to their other gates and the
-// legacy processes ask `isFanslyPageEngineOwned` /
-// `listEngineOwnedFanslyPages`; the step-1 guard row (`owner_engine`, 0229)
-// stays the catch-all at the wire. `off` and `shadow` fence nothing (J8). A
-// page without a `sync_pages` row (OnlyFans) is legacy-owned by construction;
-// a Fansly page onboarded since step 4 is born live (`createLiveSyncPage`),
-// so it never has a moment without its row. Every check is evaluated per
-// query, so leaving to `off` restores the legacy engine with no other action.
+// The Fansly Sync Engine owns a page in `live` — and in `handover`, a mode
+// nothing reaches since step 4 (S4-21) and no engine sends in. The legacy
+// page-sync executor never reads these rows: it serves the platforms its
+// registry declares (OnlyFans, `apps/runtime/src/sync/onlyfans/boundary.ts`)
+// and its queries are scoped to them (`PageSyncPlatformScope`), so no fence
+// on this table stands between it and a Fansly page any more. The step-1
+// guard row (`owner_engine`, 0229) stays the catch-all at the wire.
 
 /** The modes in which the Fansly Sync Engine owns a page. */
 export const ENGINE_OWNED_SYNC_PAGE_MODES = ["handover", "live"] as const satisfies readonly SyncPageMode[];
@@ -546,37 +491,6 @@ export type EngineOwnedSyncPageMode = (typeof ENGINE_OWNED_SYNC_PAGE_MODES)[numb
 
 function isEngineOwnedMode(mode: SyncPageMode | null): mode is EngineOwnedSyncPageMode {
   return mode !== null && (ENGINE_OWNED_SYNC_PAGE_MODES as readonly string[]).includes(mode);
-}
-
-/** True while the Fansly Sync Engine owns the page (handover or live).
- *  `pageIdColumn` is a qualified column or a bound value; the subquery's own
- *  alias cannot shadow a caller's. */
-export function engineOwnsFanslyPageSql(pageIdColumn: SQL): SQL {
-  return sql`exists (
-    select 1 from sync_pages engine_owned_page
-     where engine_owned_page.page_id = ${pageIdColumn}
-       and engine_owned_page.mode in ('handover', 'live')
-  )`;
-}
-
-/** True unless the Fansly Sync Engine owns the page: the gate of every legacy
- *  scheduler query (OnlyFans pages and pages without a row pass). */
-export function legacyOwnsFanslyPageSql(pageIdColumn: SQL): SQL {
-  return sql`not ${engineOwnsFanslyPageSql(pageIdColumn)}`;
-}
-
-/** The pages the engine owns now, for the legacy processes' page lists. */
-export async function listEngineOwnedFanslyPages(
-  db: Database,
-): Promise<Array<{ pageId: number; label: string; mode: EngineOwnedSyncPageMode }>> {
-  const result = await db.execute<{ pageId: string | number; label: string; mode: EngineOwnedSyncPageMode }>(sql`
-    select sp.page_id as "pageId", p.label, sp.mode
-      from sync_pages sp
-      join pages p on p.id = sp.page_id
-     where sp.mode in ('handover', 'live')
-     order by sp.page_id
-  `);
-  return result.rows.map((row) => ({ pageId: Number(row.pageId), label: row.label, mode: row.mode }));
 }
 
 /** Whether the engine owns this page now, and the page's mode (null without a
@@ -590,63 +504,6 @@ export async function isFanslyPageEngineOwned(
   `);
   const mode = result.rows[0]?.mode ?? null;
   return { owned: isEngineOwnedMode(mode), mode };
-}
-
-// ── the step-3 switch (design step 3 §3.5) ────────────────────────────────────
-
-/**
- * The legacy import is complete (switch phase I, step 7): the host's live loop
- * starts only with it (J3). Written only in `handover`, with the switch
- * capability. False: the page is not in `handover`.
- */
-export async function markSyncPageLegacyImported(
-  db: Database,
-  input: { pageId: number; capability: SyncSwitchCapability },
-): Promise<boolean> {
-  if (!holdsSwitchCapability(input.capability, input.pageId)) {
-    throw new Error(`markSyncPageLegacyImported needs the switch capability of page ${input.pageId}`);
-  }
-  const result = await db.execute(sql`
-    update sync_pages
-       set legacy_imported_at = clock_timestamp(),
-           updated_at = clock_timestamp()
-     where page_id = ${input.pageId}
-       and mode = 'handover'
-  `);
-  return (result.rowCount ?? 0) > 0;
-}
-
-/**
- * When the page's history requests open (`requests_enabled_at`, switch phase
- * C): one hour after the first switch, at once on later pages; null closes
- * them again (rollback step 4). Opening needs the switch capability and a
- * page in `live`; closing works in any mode. False: the page is not live (or
- * has no row).
- */
-export async function setSyncRequestsEnabledAt(
-  db: Database,
-  input: { pageId: number; at: Date | null; capability: SyncSwitchCapability },
-): Promise<boolean> {
-  if (!holdsSwitchCapability(input.capability, input.pageId)) {
-    throw new Error(`setSyncRequestsEnabledAt needs the switch capability of page ${input.pageId}`);
-  }
-  const result = input.at === null
-    ? await db.execute(sql`
-      update sync_pages
-         set requests_enabled_at = null,
-             updated_at = clock_timestamp()
-       where page_id = ${input.pageId}
-    `)
-    : await db.execute(sql`
-      update sync_pages
-         set requests_enabled_at = ${input.at}::timestamptz,
-             updated_at = clock_timestamp()
-       where page_id = ${input.pageId}
-         and mode = 'live'
-    `);
-  if ((result.rowCount ?? 0) === 0) return false;
-  await db.execute(sql`select pg_notify('fansly_sync_work', ${String(input.pageId)})`);
-  return true;
 }
 
 // ── a new page, straight to live (step 4, S4-05) ─────────────────────────────
@@ -695,7 +552,8 @@ export class LiveSyncPageRefusedError extends Error {
  * Refused, writing nothing, for a page that is not a Fansly page or that has
  * an engine row, a guard row or any legacy footprint (`page_sync_states`,
  * `page_sync_cursors`, a `fansly_send_log` row of the page): such a page has
- * a past this capability does not import — the switch is its way to `live`.
+ * a past this capability does not import, and since step 4 (S4-21) nothing
+ * else takes a page live.
  */
 export async function createLiveSyncPage(
   tx: Database,

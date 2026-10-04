@@ -121,17 +121,17 @@ describe("assembleConfigView", () => {
 });
 
 describe("assembleConfigView overlay (Stage B1 live overrides)", () => {
-  // transactionLookbackDays is a runtimeApply:'live' editable key (env default 7), so the
-  // overlay surfaces an override and pendingApply reflects override-vs-running.
-  const RUNNING = { transactionLookbackDays: 7 };
+  // healthSyncLightMaxAgeMinutes is a runtimeApply:'live' editable key (env default 180), so
+  // the overlay surfaces an override and pendingApply reflects override-vs-running.
+  const RUNNING = { healthSyncLightMaxAgeMinutes: 7 };
 
   it("populates desired/source/pendingApply for a live override that differs from running", () => {
     const overrides = new Map<string, ConfigOverrideRecord>([
-      ["transactionLookbackDays", { value: 14, version: 1 }],
+      ["healthSyncLightMaxAgeMinutes", { value: 14, version: 1 }],
     ]);
     const view = assembleConfigView([row("api", "a1", RUNNING, FRESH)], NOW, overrides);
 
-    const lookback = item(view, "transactionLookbackDays");
+    const lookback = item(view, "healthSyncLightMaxAgeMinutes");
     expect(lookback.source).toBe("override");
     expect(lookback.desired).toBe(14);
     expect(lookback.pendingApply).toBe(true);
@@ -139,7 +139,7 @@ describe("assembleConfigView overlay (Stage B1 live overrides)", () => {
 
   it("leaves env defaults when no override is present", () => {
     const view = assembleConfigView([row("api", "a1", RUNNING, FRESH)], NOW, new Map());
-    const lookback = item(view, "transactionLookbackDays");
+    const lookback = item(view, "healthSyncLightMaxAgeMinutes");
     expect(lookback.source).toBe("env");
     expect(lookback.desired).toBeNull();
     expect(lookback.pendingApply).toBe(false);
@@ -176,7 +176,7 @@ describe("assembleConfigView overlay (Stage B1 live overrides)", () => {
 
   it("does not flag pendingApply when the override matches the running value across all roles", () => {
     const overrides = new Map<string, ConfigOverrideRecord>([
-      ["transactionLookbackDays", { value: 7, version: 1 }],
+      ["healthSyncLightMaxAgeMinutes", { value: 7, version: 1 }],
     ]);
     // Every expected role active and matching → not pending (role-complete; see M1 below).
     const view = assembleConfigView(
@@ -184,7 +184,7 @@ describe("assembleConfigView overlay (Stage B1 live overrides)", () => {
       NOW,
       overrides,
     );
-    const lookback = item(view, "transactionLookbackDays");
+    const lookback = item(view, "healthSyncLightMaxAgeMinutes");
     expect(lookback.source).toBe("override");
     expect(lookback.desired).toBe(7);
     expect(lookback.pendingApply).toBe(false);
@@ -196,45 +196,45 @@ describe("assembleConfigView overlay (Stage B1 live overrides)", () => {
     // 'pending restart' banner / 'applying…' badge does not wrongly clear during a worker
     // outage or rolling deploy. (runningState stays fail-closed 'unknown' alongside this.)
     const overrides = new Map<string, ConfigOverrideRecord>([
-      ["transactionLookbackDays", { value: 14, version: 1 }],
+      ["healthSyncLightMaxAgeMinutes", { value: 14, version: 1 }],
     ]);
     const view = assembleConfigView(
-      [row("api", "a1", { transactionLookbackDays: 14 }, FRESH)],
+      [row("api", "a1", { healthSyncLightMaxAgeMinutes: 14 }, FRESH)],
       NOW,
       overrides,
     );
-    expect(item(view, "transactionLookbackDays").pendingApply).toBe(true);
+    expect(item(view, "healthSyncLightMaxAgeMinutes").pendingApply).toBe(true);
   });
 
   it("stays pending under partial apply (api applied, worker not)", () => {
     const overrides = new Map<string, ConfigOverrideRecord>([
-      ["transactionLookbackDays", { value: 14, version: 1 }],
+      ["healthSyncLightMaxAgeMinutes", { value: 14, version: 1 }],
     ]);
     const view = assembleConfigView(
       [
-        row("api", "a1", { transactionLookbackDays: 14 }, FRESH),
-        row("worker", "w1", { transactionLookbackDays: 7 }, FRESH),
+        row("api", "a1", { healthSyncLightMaxAgeMinutes: 14 }, FRESH),
+        row("worker", "w1", { healthSyncLightMaxAgeMinutes: 7 }, FRESH),
       ],
       NOW,
       overrides,
     );
-    expect(item(view, "transactionLookbackDays").pendingApply).toBe(true);
+    expect(item(view, "healthSyncLightMaxAgeMinutes").pendingApply).toBe(true);
   });
 
   it("clears pendingApply only once every active instance runs the override", () => {
     const overrides = new Map<string, ConfigOverrideRecord>([
-      ["transactionLookbackDays", { value: 14, version: 1 }],
+      ["healthSyncLightMaxAgeMinutes", { value: 14, version: 1 }],
     ]);
     const view = assembleConfigView(
       [
-        row("api", "a1", { transactionLookbackDays: 14 }, FRESH),
-        row("worker", "w1", { transactionLookbackDays: 14 }, FRESH),
-        row("sync", "s1", { transactionLookbackDays: 14 }, FRESH),
+        row("api", "a1", { healthSyncLightMaxAgeMinutes: 14 }, FRESH),
+        row("worker", "w1", { healthSyncLightMaxAgeMinutes: 14 }, FRESH),
+        row("sync", "s1", { healthSyncLightMaxAgeMinutes: 14 }, FRESH),
       ],
       NOW,
       overrides,
     );
-    expect(item(view, "transactionLookbackDays").pendingApply).toBe(false);
+    expect(item(view, "healthSyncLightMaxAgeMinutes").pendingApply).toBe(false);
   });
 });
 
@@ -293,9 +293,9 @@ describe("assembleConfigView server-computed runningState + desiredEffective (St
   });
 
   it("desiredEffective is null for a non-boolean key (no env baseline meaning)", () => {
-    // transactionLookbackDays is a number → no boolean desired meaning.
-    const view = assembleConfigView([row("api", "a1", { transactionLookbackDays: 7 }, FRESH)], NOW);
-    expect(item(view, "transactionLookbackDays").desiredEffective).toBeNull();
+    // healthSyncLightMaxAgeMinutes is a number → no boolean desired meaning.
+    const view = assembleConfigView([row("api", "a1", { healthSyncLightMaxAgeMinutes: 7 }, FRESH)], NOW);
+    expect(item(view, "healthSyncLightMaxAgeMinutes").desiredEffective).toBeNull();
   });
 
   it("desiredEffective is null when the env baseline is unset (default {} baseline)", () => {
@@ -315,13 +315,13 @@ describe("assembleConfigView schema-mismatch (unknown) handling", () => {
       lastSeenAt,
       imageTag: null,
       // Force a version mismatch (RUNNING_SCHEMA_VERSION is current; 1 is older).
-      running: { schemaVersion: 1, values: { transactionLookbackDays: { value: 14 } } } as never,
+      running: { schemaVersion: 1, values: { healthSyncLightMaxAgeMinutes: { value: 14 } } } as never,
     };
   }
 
   it("surfaces a mismatched-snapshot instance as state 'unknown' instead of dropping it", () => {
     const view = assembleConfigView([staleSnapshotRow("worker", "w1", FRESH)], NOW);
-    const lookback = item(view, "transactionLookbackDays");
+    const lookback = item(view, "healthSyncLightMaxAgeMinutes");
     expect(lookback.running).toHaveLength(1);
     expect(lookback.running[0]!.state).toBe("unknown");
     expect(lookback.running[0]!.value).toBeNull();
@@ -345,17 +345,17 @@ describe("assembleConfigView schema-mismatch (unknown) handling", () => {
       };
     }
     const overrides = new Map<string, ConfigOverrideRecord>([
-      ["transactionLookbackDays", { value: 14, version: 1 }],
+      ["healthSyncLightMaxAgeMinutes", { value: 14, version: 1 }],
     ]);
     const view = assembleConfigView(
       [
-        row("api", "a1", { transactionLookbackDays: 14 }, FRESH),
+        row("api", "a1", { healthSyncLightMaxAgeMinutes: 14 }, FRESH),
         currentSchemaMissingKeyRow("worker", "w1"),
       ],
       NOW,
       overrides,
     );
-    const lookback = item(view, "transactionLookbackDays");
+    const lookback = item(view, "healthSyncLightMaxAgeMinutes");
     // api matches the override, but the worker omitted it → unknown → still pending.
     expect(lookback.running.find((entry) => entry.role === "worker")?.state).toBe("unknown");
     expect(lookback.pendingApply).toBe(true);
@@ -363,18 +363,18 @@ describe("assembleConfigView schema-mismatch (unknown) handling", () => {
 
   it("keeps pendingApply true while any instance reports an unknown (stale) value", () => {
     const overrides = new Map<string, ConfigOverrideRecord>([
-      ["transactionLookbackDays", { value: 14, version: 1 }],
+      ["healthSyncLightMaxAgeMinutes", { value: 14, version: 1 }],
     ]);
     const view = assembleConfigView(
       [
-        row("api", "a1", { transactionLookbackDays: 14 }, FRESH),
+        row("api", "a1", { healthSyncLightMaxAgeMinutes: 14 }, FRESH),
         staleSnapshotRow("worker", "w1", FRESH),
       ],
       NOW,
       overrides,
     );
     // api applied the override, but worker's snapshot is unknown → still pending.
-    expect(item(view, "transactionLookbackDays").pendingApply).toBe(true);
+    expect(item(view, "healthSyncLightMaxAgeMinutes").pendingApply).toBe(true);
   });
 });
 
@@ -390,7 +390,7 @@ describe("assembleConfigView skippedOverrides", () => {
       startedAt: new Date(NOW - 60_000),
       lastSeenAt: FRESH,
       imageTag: null,
-      running: buildRunningSnapshot({ transactionLookbackDays: 7 } as never, skipped),
+      running: buildRunningSnapshot({ healthSyncLightMaxAgeMinutes: 7 } as never, skipped),
     };
   }
 

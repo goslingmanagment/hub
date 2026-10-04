@@ -17,6 +17,7 @@ import {
 } from "@agency_hub_core/db";
 
 import { startIntegrationTestDatabase } from "./helpers/db.ts";
+import { EVERY_PLATFORM } from "./helpers/page-sync-scope.ts";
 
 // Ages are relative to the database clock and far from every threshold, so
 // the tests hold whichever clock stamps started_at on acquisition.
@@ -97,6 +98,7 @@ describe("Fansly page stream starvation aging", () => {
   async function runTurn(targetPageId = pageId, finish: "yield" | "complete" = "yield") {
     turn++;
     const lease = await acquirePageSyncLease(db, {
+      platforms: EVERY_PLATFORM,
       pageId: targetPageId, workerId: `worker-${turn}`, leaseToken: `turn-${turn}`, leaseTtlMs: 60_000,
     });
     if (!lease) throw new Error("Expected runnable work");

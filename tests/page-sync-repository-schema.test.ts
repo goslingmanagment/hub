@@ -19,6 +19,8 @@ import { sql, type SQL } from "../packages/db/node_modules/drizzle-orm/index.js"
 import { PgDialect } from "../packages/db/node_modules/drizzle-orm/pg-core/index.js";
 import { pageSyncStates } from "../packages/db/src/schema.ts";
 
+import { EVERY_PLATFORM } from "./helpers/page-sync-scope.ts";
+
 const DIALECT = new PgDialect();
 const SYNC_STREAM_SET = new Set<string>(SYNC_STREAMS);
 
@@ -94,7 +96,7 @@ describe("page-sync repository schema alignment", () => {
       pageId: 55,
       streams: ["light"],
     });
-    await listRunnablePageSync(db, now);
+    await listRunnablePageSync(db, now, { platforms: EVERY_PLATFORM });
     await heartbeatPageSyncLease(db, {
       pageId: 55,
       stream: "light",
@@ -103,6 +105,7 @@ describe("page-sync repository schema alignment", () => {
       now,
     });
     await acquirePageSyncLease(db, {
+      platforms: EVERY_PLATFORM,
       pageId: 55,
       workerId: "worker-1",
       leaseToken: "lease-1",

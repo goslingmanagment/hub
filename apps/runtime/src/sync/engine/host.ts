@@ -68,20 +68,20 @@ import { noStallTracker, type StallTracker, type StallTracking } from "./watchdo
 // mode change or ownership loss lets the request in flight finish and writes
 // the page's safe release.
 //
-// I17 — no live sender without the step-3 switch. Independent gates, each
-// pinned by tests/sync-live-gate.integration.test.ts:
-//   1. `LIVE_LOOP_ENABLED` below (true since the switch PR, S3-05: the build
-//      can run a live loop at all);
-//   2. a page reaches `live` only through the switch CLI's capability
-//      (`setSyncPageMode`; `sync page mode` moves only off ↔ shadow) — or is
-//      born live by onboarding (`createLiveSyncPage`, step 4 S4-05: a new
-//      page with nothing of the legacy engine);
-//   3. every live admission needs the step-1 guard row handed to the engine
+// I17 — no live sender by accident. Independent gates, each pinned by
+// tests/sync-live-gate.integration.test.ts:
+//   1. `LIVE_LOOP_ENABLED` below (the build can run a live loop at all);
+//   2. a page is `live` only by its birth: onboarding creates it so
+//      (`createLiveSyncPage`, step 4 S4-05: a new page with nothing of the
+//      legacy engine). No lever moves an existing page there — `sync page
+//      mode` and `setSyncPageMode` know off ↔ shadow alone; the step-3 switch
+//      that took the six earlier pages live is gone (S4-21);
+//   3. every live admission needs the step-1 guard row to be the engine's
 //      (`owner_engine = 'fansly_sync_engine'`, checked in `lockOwnedPage`);
-//   4. a live loop starts only after the switch imported the legacy state
-//      (`sync_pages.legacy_imported_at`, J3; a page born live has none and is
-//      stamped at birth): a `live` page without it waits
-//      (`legacy_not_imported`, alert after 2 min) and nothing is sent.
+//   4. a live loop starts only on a row that carries its import mark
+//      (`sync_pages.legacy_imported_at`, J3: stamped at a page's birth, and by
+//      the switch's import for the pages it took over): a `live` row without
+//      it waits (`legacy_not_imported`, alert after 2 min) and nothing is sent.
 // The live transport (`fansly/transport.ts`) is built in one place only: the
 // live branch below. A live page also gets its WebSocket source
 // (`fansly/ws/source.ts`, design §3.3, J6): created with the slot, started once
@@ -89,10 +89,9 @@ import { noStallTracker, type StallTracker, type StallTracking } from "./watchdo
 // stopped — the socket closed and its lock session ended — before the page's
 // safe release.
 
-/** The live loop runs only when this is true — THE flip of the switch PR
- *  (S3-05, step-3 §3.5 item 9). Still no page is live without the switch
- *  CLI's `live` mode, the guard row handed to the engine and the legacy
- *  import (gates 2–4 above). */
+/** The live loop runs only when this is true (flipped at step 3, S3-05).
+ *  Still no page sends without its `live` row, the engine's guard row and the
+ *  import mark (gates 2–4 above). */
 export const LIVE_LOOP_ENABLED = true;
 
 /** The mode loop re-reads `sync_pages` this often. */
@@ -381,8 +380,9 @@ export class SyncEngineHost {
       }
       this.#handover.delete(page.pageId);
       if (desired === "live" && page.legacyImportedAt === null) {
-        // J3: the switch's import has not finished (or was cleared): no live
-        // loop, the lock this host may hold since `handover` is kept.
+        // J3: a live row without its import mark (a page's birth always
+        // writes one; a row set live by hand has none): no live loop, the
+        // lock this host may hold since `handover` is kept.
         this.#markWaiting(page, "legacy_not_imported", UNCONFIRMED_RETRY_MS);
         continue;
       }
@@ -598,9 +598,9 @@ export class SyncEngineHost {
    * Every live takeover closes the page's legacy stream latches, which only
    * the legacy executor's chunk recovery resolved and which nothing resolves
    * once the engine runs the page (`resolveLegacyStreamIncidentsOfEnginePage`,
-   * reason `engine_owned`): the switch's phase C does it too, and a page
-   * switched before this build has its own closed on its first takeover after
-   * it. Idempotent (nothing open, nothing written); never throws.
+   * reason `engine_owned`): a page switched before the build that added this
+   * has its own closed on its first takeover after it. Idempotent (nothing
+   * open, nothing written); never throws.
    */
   async #closeLegacyStreamIncidents(page: SyncPageRow): Promise<void> {
     const closed = await resolveLegacyStreamIncidentsOfEnginePage(this.#o, { pageId: page.pageId, pageLabel: page.pageLabel });

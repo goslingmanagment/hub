@@ -273,7 +273,7 @@ describe("the Fansly registry table", () => {
     expect(metrics.get("sync_not_implemented")).toBe(FANSLY_RESOURCE_SPECS.filter((spec) => spec.module === undefined).length);
   });
 
-  it("the implemented entries replay and import what design §5.1, §5.3, §5.4, §5.6–§5.13 say", async () => {
+  it("the implemented entries replay what design §5.1, §5.3, §5.4, §5.6–§5.13 say", async () => {
     const registry = createFanslyRegistry();
     for (const key of [
       "account.poll", "subscribers.poll", "followers.head", "fan-profiles.lookup", "dm-conversations.head",
@@ -281,12 +281,6 @@ describe("the Fansly registry table", () => {
       "purchases.targets", "payouts.daily",
     ]) {
       expect(typeof (await registry.module(key)).replay, key).toBe("function");
-    }
-    for (const key of [
-      "followers.head", "followers.reconcile", "transactions.rescan", "top-spenders.bootstrap", "purchases.targets",
-      "payouts.daily",
-    ]) {
-      expect(typeof (await registry.module(key)).importLegacy, key).toBe("function");
     }
     // Every money kind has its replay owner (design §3.12 B5).
     expect(fanslyReplayOwner("earnings_transactions")?.key).toBe("transactions.head");
@@ -308,15 +302,10 @@ describe("the Fansly registry table", () => {
     expect(byKey("payouts.daily").operations).toEqual(["payouts.methods", "payouts.requests"]);
   });
 
-  it("the content entries replay their kinds and import their legacy cursors (design §5.14–§5.16)", async () => {
+  it("the content entries replay their kinds (design §5.14–§5.16)", async () => {
     const registry = createFanslyRegistry();
     for (const key of ["notifications.forward", "posts.refresh", "post-replies.walk"]) {
       expect(typeof (await registry.module(key)).replay, key).toBe("function");
-    }
-    for (const key of [
-      "notifications.forward", "notifications.backfill", "posts.refresh", "posts.backfill", "posts.engagement", "post-replies.walk",
-    ]) {
-      expect(typeof (await registry.module(key)).importLegacy, key).toBe("function");
     }
     expect(fanslyReplayOwner("notifications")?.key).toBe("notifications.forward");
     expect(fanslyReplayOwner("posts")?.key).toBe("posts.refresh");
@@ -381,13 +370,10 @@ describe("the Fansly registry table", () => {
     expect(fanslyResourceSpec("catalog.vault")!.ownerProtected).toBe(true);
   });
 
-  it("the content-b entries replay their kinds and import their legacy cursors (design §5.17–§5.19, §5.22)", async () => {
+  it("the content-b entries replay their kinds (design §5.17–§5.19, §5.22)", async () => {
     const registry = createFanslyRegistry();
     for (const key of ["catalog.fixed", "catalog.vault", "catalog.hydrate", "media-stats.walk", "stats.daily"]) {
       expect(typeof (await registry.module(key)).replay, key).toBe("function");
-    }
-    for (const key of ["catalog.fixed", "catalog.vault", "media-stats.walk", "stats.daily", "stats.hourly", "stats.backfill"]) {
-      expect(typeof (await registry.module(key)).importLegacy, key).toBe("function");
     }
     for (const kind of ["vault_albums", "uservault_albums", "subscription_tiers", "gift_codes", "automated_messages", "account_walls"]) {
       expect(fanslyReplayOwner(kind)?.key, kind).toBe("catalog.fixed");

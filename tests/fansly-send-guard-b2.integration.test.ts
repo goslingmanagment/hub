@@ -1,12 +1,11 @@
 import { randomUUID } from "node:crypto";
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
   advanceFanslySendPaceCursor,
   captureFanslyPageSendGuard,
   completeFanslySendAttempt,
-  confirmFanslySendGuardTerminated,
   createFanslyPage,
   createModel,
   ensureFanslyPageSendGuard,
@@ -17,29 +16,21 @@ import {
   type FanslySendHolderIdentity,
 } from "@agency_hub_core/db";
 
-import * as socketTransport from "../apps/runtime/src/services/egress/fansly-receiver-socket.ts";
 import { confirmFanslySendGuardHostsTerminated } from "../apps/runtime/src/services/fansly-send-guard/index.ts";
 import { runFanslySendGuardMonitorPass } from "../apps/runtime/src/services/fansly-send-guard/monitor.ts";
 import { buildFanslySendGuardReport } from "../apps/runtime/src/services/fansly-send-guard/report.ts";
-import { startFanslyWsWorker, type FanslyWsWorkerTiming } from "../apps/runtime/src/services/fansly-ws/worker.ts";
 import { incidentKey } from "../apps/runtime/src/services/notification-incidents.ts";
 import { runNotificationPagingSweep } from "../apps/runtime/src/services/notification-paging-sweep.ts";
-import { saveProxy } from "../apps/runtime/src/services/page-context.ts";
-import { withFanslyScriptSendGuard } from "../scripts/fansly-ws/send-guard.ts";
 import {
   resetIntegrationDatabase,
-  seedFanslyPage,
   startIntegrationTestDatabase,
   type StartedTestDatabase,
 } from "./helpers/db.ts";
-import { READ_ONLY_ROLE_PASSWORD } from "./helpers/db-context.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 
 // The send guard's second step (plan §2.4 «проверка, а не вера», §2.5, §10) on
 // a real Postgres: the journal's lease end, the minutely pace check behind its
-// durable cursor, the closed-page alert, the acceptance report, the W0
-// scripts' writable guard connection, and the WS receiver waiting on a closed
-// page instead of looping.
+// durable cursor, the closed-page alert and the acceptance report.
 
 let testDb: StartedTestDatabase | null = null;
 
@@ -435,97 +426,4 @@ describe("the Docker-level confirmation of a deploy", () => {
     );
     expect(held.rows).toEqual([{ page_id: after.id, holder_token: late }]);
   });
-});
-
-describe("the W0 scripts' guard connection", () => {
-  it("journals the script's capture through a writable connection of its own", async (context) => {
-    if (!testDb) return context.skip();
-    const page = await seedPage("w0-guard");
-    await openGuard(page.id);
-    const config = { ...app().config, databaseUrl: testDb.connectionString };
-    const outcome = await withFanslyScriptSendGuard(config, {
-      pageId: page.id, source: "ws_probe", applicationName: "hub-test-w0-guard",
-    }, async (guard) => {
-      const lease = await guard.acquire({ operation: "ws_probe", requestTimeoutMs: 1_000 });
-      await lease.complete({ outcome: "response", httpStatus: 101 });
-      return lease.token;
-    });
-    const rows = await testDb.pool.query(
-      "select source, holder_role, outcome, http_status from fansly_send_log where guard_token = $1", [outcome],
-    );
-    expect(rows.rows).toEqual([{ source: "ws_probe", holder_role: "script", outcome: "response", http_status: 101 }]);
-    const sessions = await testDb.pool.query(
-      `select count(*)::int as n from pg_stat_activity
-        where datname = current_database() and application_name = 'hub-test-w0-guard'`,
-    );
-    expect(sessions.rows[0].n).toBe(0);
-  });
-
-  it("fails closed for a role that cannot write: nothing journaled, nothing to send", async (context) => {
-    if (!testDb) return context.skip();
-    const page = await seedPage("w0-read-only");
-    await openGuard(page.id);
-    await testDb.pool.query("grant usage on schema public to read_only");
-    await testDb.pool.query("grant select on fansly_page_send_guards, fansly_send_log, config_settings to read_only");
-    const connection = new URL(testDb.connectionString);
-    connection.username = "read_only";
-    connection.password = READ_ONLY_ROLE_PASSWORD;
-    const config = { ...app().config, databaseUrl: connection.toString() };
-    const work = vi.fn();
-    await expect(withFanslyScriptSendGuard(config, {
-      pageId: page.id, source: "binding_preflight", applicationName: "hub-test-w0-read-only",
-    }, work)).rejects.toThrow("fansly_send_guard_not_writable");
-    expect(work).not.toHaveBeenCalled();
-    expect((await testDb.pool.query("select count(*)::int as n from fansly_send_log")).rows[0].n).toBe(0);
-  });
-});
-
-describe("the WS receiver on a closed page", () => {
-  const scaled: FanslyWsWorkerTiming = {
-    configPollMs: 1_000, configStaleMs: 2_000, pagePauseMs: 300, backoffBaseMs: 150,
-    authTimeoutMs: 1_000, checkMs: 500, guardStaleMs: 1_500, pingMs: 2_000, pongTimeoutMs: 3_000,
-    drainMs: 2_000, applyDrainMs: 1_500,
-  };
-
-  it("waits on the page pause without connecting, then connects once the page opens", async (context) => {
-    if (!testDb) return context.skip();
-    const runtime = app();
-    const { page } = await seedFanslyPage(runtime.db, runtime.config.encryptionKey);
-    if (!page) throw new Error("seed failed");
-    await saveProxy(runtime, page.id, { url: "http://proxy.example.test:8080", username: "test", password: "test" });
-    await testDb.pool.query("update pages set external_page_id='999' where id=$1", [page.id]);
-    // Another process holds the page past its lease, unconfirmed.
-    await openGuard(page.id);
-    const stuck = randomUUID();
-    await captureFanslyPageSendGuard(testDb.db, {
-      pageId: page.id, token: stuck, source: "sync_stream", operation: "messages", holder: holder({ host: "elsewhere" }),
-      settingMs: 0, leaseMs: 1, captureWaitMs: 0, captureRefusals: 0,
-    });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-
-    const open = vi.spyOn(socketTransport, "openFanslyReceiverSocket").mockImplementation(() => {
-      const socket = Object.assign(new EventTarget(), { send: vi.fn() });
-      return { socket, stop: vi.fn() } as unknown as ReturnType<typeof socketTransport.openFanslyReceiverSocket>;
-    });
-    runtime.config.fanslyWsCaptureEnabled = true;
-    runtime.config.fanslyWsCapturePageAllowlist = page.label;
-    const worker = startFanslyWsWorker(runtime, { timing: scaled });
-    try {
-      await new Promise((resolve) => setTimeout(resolve, 1_500));
-      expect(open).not.toHaveBeenCalled();
-      // No connection attempt was recorded for a refused capture.
-      expect((await testDb.pool.query("select count(*)::int as n from fansly_ws_connections")).rows[0].n).toBe(0);
-      expect(await confirmFanslySendGuardTerminated(testDb.db, {
-        pageId: page.id, token: stuck, evidence: "test", requireExpiredLease: true,
-      })).toBe(true);
-      await vi.waitFor(() => expect(open).toHaveBeenCalledOnce(), { timeout: 5_000 });
-      const journalRows = await testDb.pool.query(
-        "select source from fansly_send_log where page_id = $1 and source = 'ws_connect'", [page.id],
-      );
-      expect(journalRows.rows).toHaveLength(1);
-    } finally {
-      await worker.stop();
-      open.mockRestore();
-    }
-  }, 20_000);
 });

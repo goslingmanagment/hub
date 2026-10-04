@@ -373,7 +373,7 @@ describe("admin config staged api (Stage C)", () => {
     expect((await getConfigOverrides(testDb.db)).has("ofapiDmProjectionEnabled")).toBe(false);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("rejects a non-boot key (transactionLookbackDays) with 400", async (context) => {
+  it("rejects a non-boot key (healthSyncLightMaxAgeMinutes) with 400", async (context) => {
     if (!testDb || !server) {
       context.skip();
       return;
@@ -384,14 +384,14 @@ describe("admin config staged api (Stage C)", () => {
       url: "/api/v1/admin/config/staged",
       headers: { cookie },
       payload: {
-        // transactionLookbackDays is editable+live, not a boot flag — and would fail the
+        // healthSyncLightMaxAgeMinutes is editable+live, not a boot flag — and would fail the
         // boolean check too. logLevel (runtimeApply:'none') is also rejected.
-        patches: [{ key: "transactionLookbackDays", desired: true, expectedVersion: 0 }],
+        patches: [{ key: "healthSyncLightMaxAgeMinutes", desired: true, expectedVersion: 0 }],
         ack: true,
       },
     });
     expect(response.statusCode).toBe(400);
-    expect((await getConfigOverrides(testDb.db)).has("transactionLookbackDays")).toBe(false);
+    expect((await getConfigOverrides(testDb.db)).has("healthSyncLightMaxAgeMinutes")).toBe(false);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("rejects setting the same key twice with 400", async (context) => {

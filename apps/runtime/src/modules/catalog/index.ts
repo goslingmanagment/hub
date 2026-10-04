@@ -20,7 +20,6 @@ import {
   updateModelBySlug,
   updatePageByLabel,
 } from "@agency_hub_core/db";
-import { FanslyApiError } from "@agency_hub_core/fansly";
 import {
   createProxyRequestDispatcher,
   normalizeProxyConfig,
@@ -43,8 +42,6 @@ import {
   ConflictError,
   NotFoundError,
 } from "../../services/errors.ts";
-import { handleSuccessfulPageVerificationRecovery } from "../../services/notification-incidents.ts";
-import { resolvePageContext } from "../../services/page-context.ts";
 import { onboardFanslyPage, onboardOnlyFansPage } from "../../services/page-onboarding.ts";
 import { assertAllowedProxyTarget } from "../../services/proxy-validation.ts";
 import {
@@ -52,8 +49,8 @@ import {
   listModelSummaries,
   listPageSummaries,
 } from "../../services/reporting.ts";
-import { refreshPageMetadata } from "../../services/sync/shared.ts";
 import { requestPageSync } from "../../services/sync-control.ts";
+import { isLegacyExecutorPlatform } from "../../sync/onlyfans/boundary.ts";
 import { verifyPageOnEngine } from "../../services/sync-engine-account.ts";
 import { checkFanslyIdentityWithoutPage } from "../../sync/fansly/identity-without-page.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
@@ -106,7 +103,7 @@ function serializeAssignedPage(page: {
 }
 
 // The voice-notes page allowlist FAILS CLOSED: empty (or unset) = NO pages.
-// Mirrors isPageAllowlisted in services/sync/fansly-stream-gate.ts (its
+// Mirrors isPageAllowlisted in @agency_hub_core/shared (its
 // canonical home) — kept a local copy so the two never drift on the
 // empty-means-none rule.
 function parseVoiceAllowlist(csv: string | undefined): Set<string> {
@@ -186,18 +183,6 @@ function rethrowAdminCatalogError(error: unknown): never {
   }
 
   throw error;
-}
-
-function isAdminPageVerifyBadRequest(error: unknown) {
-  if (error instanceof BadRequestError) {
-    return true;
-  }
-
-  if (error instanceof FanslyApiError) {
-    return error.status === 401 || error.status === 403;
-  }
-
-  return false;
 }
 
 export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) {
@@ -397,11 +382,15 @@ export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) 
     try {
       const deleted = await deletePageByLabel(appContext.db, request.params.pageLabel);
       // The planner/lease queries exclude tombstoned pages; pausing here also
-      // stops in-flight leases and keeps the sync states legibly parked.
-      await pausePageSync(appContext.db, {
-        pageId: deleted.id,
-        streams: getSyncStreamsForPlatform(deleted.platform),
-      });
+      // stops in-flight leases and keeps the sync states legibly parked. A
+      // Fansly page's legacy rows are left as they are: the legacy executor
+      // serves no Fansly page (step 4 S4-10), so none of them is leased.
+      if (isLegacyExecutorPlatform(deleted.platform)) {
+        await pausePageSync(appContext.db, {
+          pageId: deleted.id,
+          streams: getSyncStreamsForPlatform(deleted.platform),
+        });
+      }
       await recordAudit(appContext, {
         ...auditCtx(principal),
         eventType: "admin.page_soft_delete",
@@ -508,49 +497,17 @@ export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) 
   }, async (request) => {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
-    try {
-      // Step-3 design §3.5 item 6: a live page is verified by its engine
-      // actor (`account.verify`, ≤ 30 s, else 409 queued); a page being
-      // switched answers 409 before anything is resolved or sent.
-      const onEngine = await verifyPageOnEngine(appContext, request.params.pageLabel);
-      if (onEngine !== null) return onEngine;
-      const pageContext = await resolvePageContext(appContext, request.params.pageLabel);
-      if (pageContext.platform !== "fansly") {
-        // Stage 18: OnlyMonster retired — OnlyFans pages have no pasted
-        // credentials; access rides the OFAPI mapping.
-        throw new BadRequestError(
-          "OnlyFans pages verify via their OFAPI mapping, not pasted credentials",
-        );
-      }
-      await refreshPageMetadata(appContext, pageContext, "light", undefined, null, "account_me_api");
-      const recoveredAt = new Date();
-      const recovery = await handleSuccessfulPageVerificationRecovery(appContext, {
-        platformAccountId: pageContext.page.id,
-        pageLabel: pageContext.page.label,
-        platform: pageContext.platform,
-        recoveredAt,
-      });
-      return {
-        verified: true,
-        username: pageContext.page.username,
-        platform: pageContext.platform,
-        syncUnblocked: recovery.syncUnblocked,
-      };
-    } catch (error) {
-      if (error instanceof NotFoundError) {
-        throw error;
-      }
-
-      if (isAdminPageVerifyBadRequest(error)) {
-        throw new BadRequestError(
-          `Page verification failed: ${
-            redactSensitiveText(error instanceof Error ? error.message : "Unknown error")
-          }`,
-        );
-      }
-
-      throw error;
-    }
+    // A Fansly page is verified by its engine actor (`account.verify`, ≤ 30 s,
+    // else 409 queued; step-3 design §3.5 item 6). A page being switched, or
+    // one the engine does not run, answers 409 before anything is resolved or
+    // sent: no legacy `/account/me` is left to fall back to (step 4, S4-19).
+    const onEngine = await verifyPageOnEngine(appContext, request.params.pageLabel);
+    if (onEngine !== null) return onEngine;
+    // Stage 18: OnlyMonster retired — OnlyFans pages have no pasted
+    // credentials; access rides the OFAPI mapping.
+    throw new BadRequestError(
+      "Page verification failed: OnlyFans pages verify via their OFAPI mapping, not pasted credentials",
+    );
   });
 
   server.patch("/api/v1/admin/pages/:pageLabel/credentials", {

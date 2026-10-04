@@ -4,7 +4,6 @@ import { canonicalizeFanslyWsObservation } from "../apps/runtime/src/services/ca
 
 const generation = "a".repeat(64);
 const config = {
-  fanslyWsCaptureEnabled: true, fanslyWsCapturePageAllowlist: "lilly-1",
   fanslyWsHintsEnabled: true, fanslyWsHintsPageAllowlist: "lilly-1",
   fanslyWsHintsTypeAllowlist: "message_created",
   fanslyWsHintsPolicies: JSON.stringify({ "lilly-1": {
@@ -18,9 +17,12 @@ describe("B1 activation policy", () => {
     expect(resolveFanslyWsHintPolicy(config, "lilly-10")).toBeNull();
     expect(resolveFanslyWsHintPolicy({ ...config, fanslyWsHintsPageAllowlist: "*" }, "lilly-1")).toBeNull();
   });
+  it("no longer asks the retired B0 capture flags: the legacy receiver is gone (step 4, S4-12)", () => {
+    const retired = { fanslyWsCaptureEnabled: false, fanslyWsCapturePageAllowlist: "" };
+    expect(resolveFanslyWsHintPolicy({ ...config, ...retired }, "lilly-1")).not.toBeNull();
+  });
   it.each([
-    { fanslyWsCaptureEnabled: false }, { fanslyWsHintsEnabled: false },
-    { fanslyWsCapturePageAllowlist: "" }, { fanslyWsHintsPageAllowlist: "none" },
+    { fanslyWsHintsEnabled: false }, { fanslyWsHintsPageAllowlist: "none" },
     { fanslyWsHintsTypeAllowlist: "delete,typing" }, { fanslyWsHintsPolicies: "{}" },
     { fanslyWsHintsPolicies: "not-json" },
     { fanslyWsHintsPolicies: JSON.stringify({ "lilly-1": { baselineAttempts24h: 1000 } }) },

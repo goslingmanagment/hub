@@ -7,9 +7,9 @@ import {
 import { calculateGrossMillsFromNet, millsFromInteger } from "@agency_hub_core/shared";
 
 // The money rules of the Sync Engine's resources (resources/transactions.ts,
-// top-spenders.ts). Pure. The legacy chunk handlers (transactions.ts,
-// executor-handlers.ts) import them from here until step 4 deletes them; the
-// OnlyFans top-spenders handler keeps the window rules and the cursor below.
+// top-spenders.ts). Pure. The OnlyFans top-spenders handler
+// (services/sync/executor-handlers.ts) shares the window rules and the cursor
+// below.
 
 // ── transactions ────────────────────────────────────────────────────────────
 

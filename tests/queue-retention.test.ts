@@ -11,7 +11,12 @@ import {
   HEARTBEAT_RETENTION_SECONDS,
   QUEUE_RETENTION_SETTINGS,
 } from "../apps/runtime/src/services/queue-retention.ts";
-import { reconcileQueueRetention } from "../apps/runtime/src/services/sync-queue.ts";
+import {
+  RETIRED_QUEUES,
+  RETIRED_SCHEDULES,
+  reconcileQueueRetention,
+  retireRemovedQueues,
+} from "../apps/runtime/src/services/sync-queue.ts";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const runtimeSourceRoot = path.join(repoRoot, "apps/runtime/src");
@@ -243,5 +248,66 @@ describe("pg-boss queue retention settings", () => {
       // clock could never fire — declaring one would read like a policy.
       expect(setting.deleteAfterSeconds).toBeUndefined();
     }
+  });
+});
+
+describe("retired pg-boss objects", () => {
+  function createRetirementBoss(existing: readonly string[]) {
+    const present = new Set(existing);
+    const unscheduled: string[] = [];
+    const deleted: string[] = [];
+    return {
+      unscheduled,
+      deleted,
+      boss: {
+        unschedule: async (name: string) => { unscheduled.push(name); },
+        getQueue: async (name: string) => (present.has(name) ? { name } : null),
+        deleteQueue: async (name: string) => { present.delete(name); deleted.push(name); },
+      },
+    };
+  }
+
+  it("names only queues nothing declares any more", async () => {
+    // The mirror of the retention pin above: a live queue must never be listed
+    // here, or a scheduler boot would delete the queue it is about to use.
+    const declared = await readDeclaredQueueNames();
+    const pinned = new Set(QUEUE_RETENTION_SETTINGS.map((setting) => setting.queue));
+    for (const name of [...RETIRED_QUEUES, ...RETIRED_SCHEDULES]) {
+      expect(declared.has(name), `${name} is still a declared queue`).toBe(false);
+      expect(pinned.has(name), `${name} is still pinned in the retention table`).toBe(false);
+    }
+    expect(RETIRED_QUEUES).toContain("projections.debt.sweep");
+    // A cron fires into its queue: retiring the queue without its cron would
+    // leave the timekeeper sending into nothing.
+    for (const name of RETIRED_SCHEDULES) {
+      expect(RETIRED_QUEUES, name).toContain(name);
+    }
+  });
+
+  it("unschedules the cron keys and deletes only the queues that still exist", async () => {
+    const store = createRetirementBoss(["projections.debt.sweep", "sync.planner"]);
+    await retireRemovedQueues(store.boss);
+
+    expect(store.unscheduled).toEqual([...RETIRED_SCHEDULES]);
+    expect(store.deleted).toEqual(["projections.debt.sweep"]);
+  });
+
+  it("is a no-op on the second run, so every leader takeover can repeat it", async () => {
+    const store = createRetirementBoss([...RETIRED_QUEUES]);
+    await retireRemovedQueues(store.boss);
+    expect(store.deleted).toEqual([...RETIRED_QUEUES]);
+
+    store.deleted.length = 0;
+    await retireRemovedQueues(store.boss);
+    expect(store.deleted).toEqual([]);
+  });
+
+  it("the scheduler retires before it reconciles retention and registers the live crons", async () => {
+    const text = await readFile(path.join(repoRoot, "apps/runtime/src/services/schedules.ts"), "utf8");
+    const retireAt = text.indexOf("await retireRemovedQueues(boss)");
+    expect(retireAt).toBeGreaterThan(-1);
+    expect(retireAt).toBeLessThan(text.indexOf("await reconcileQueueRetention(boss)"));
+    // Best effort: a failure to retire never keeps the live schedules from registering.
+    expect(text.slice(text.lastIndexOf("try {", retireAt), retireAt)).toMatch(/try \{\s*$/);
   });
 });

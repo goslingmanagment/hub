@@ -40,6 +40,7 @@ import {
   HARNESS_KEY,
   harnessConfig,
   harnessHostOptions,
+  harnessIdentityRegistry,
   harnessRng,
   harnessRoutes,
   seedHarnessPage,
@@ -47,7 +48,6 @@ import {
   type FakeRoute,
   type HarnessPage,
 } from "./helpers/sync-engine.ts";
-import { switchRegistry } from "./helpers/sync-switch.ts";
 
 // The credentials holds of a live page (step 3b ruling 5, A3), end to end:
 // a credentials hold records its LATEST refusal and is in force whatever
@@ -144,7 +144,7 @@ async function startHost(r: Rig, seed: number, faults?: (point: SyncFaultPoint) 
     connectionString: testDb!.connectionString,
     config: r.config,
     rng: harnessRng(seed),
-    registry: switchRegistry(),
+    registry: harnessIdentityRegistry(),
     ...(faults === undefined ? {} : { faults }),
   }));
   hosts.push(host);

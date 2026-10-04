@@ -22,7 +22,6 @@ import {
   resetCaptureCasReadForTests,
   resolveCapturePayload,
   resolveCapturePayloadRow,
-  resolveRawCapturePayloadRow,
 } from "../apps/runtime/src/services/payload-reader.ts";
 
 const REF = { bucketMonth: "2026-08-01", objectId: 7 };
@@ -326,10 +325,9 @@ describe("capture CAS read seam — serve mode", () => {
     expect(stub.warnings).toHaveLength(0);
   });
 
-  it("swaps the payload on the row forms and leaves every other field alone", async () => {
+  it("swaps the payload on the row form and leaves every other field alone", async () => {
     const catalog = { total: 1, messages: [{ text: "hey", id: "m1" }] };
     const observationStub = stubApp([catalogRow(catalog)]);
-    const rawStub = stubApp([catalogRow(catalog)]);
 
     const observationRow = { payload: INLINE, payloadRef: REF, kind: "dm_messages" };
     const resolved = await resolveCapturePayloadRow(
@@ -341,12 +339,6 @@ describe("capture CAS read seam — serve mode", () => {
     expect(resolved).not.toBe(observationRow);
     expect(resolved.payload).toBe(catalog);
     expect(resolved.kind).toBe("dm_messages");
-
-    const rawRow = { id: 42, responsePayload: INLINE, payloadRef: REF, endpoint: "dm_messages" };
-    const resolvedRaw = await resolveRawCapturePayloadRow(rawStub.app, rawRow);
-    expect(resolvedRaw.responsePayload).toBe(catalog);
-    expect(resolvedRaw.endpoint).toBe("dm_messages");
-    expect(resolvedRaw.id).toBe(42);
   });
 });
 

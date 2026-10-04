@@ -90,23 +90,6 @@ interface RequestSummaryRecord {
   }>;
 }
 
-export interface DmMessagesChunkSummary {
-  conversationsProcessed: number;
-  messageFetchRequests: number;
-  rateLimit429s: number;
-  chunkDurationMs: number;
-  averageGapMs: number;
-}
-
-interface DmMessagesChunkSummaryRecord extends DmMessagesChunkSummary {
-  timestamp: string;
-  component: "sync_dm_messages_chunk";
-  provider: SyncProvider;
-  runId: number;
-  pageLabel: string;
-  stream: "dm_messages";
-}
-
 function iso(value: Date | null | undefined) {
   return value ? value.toISOString() : null;
 }
@@ -461,9 +444,6 @@ export class SyncRunTelemetry {
   private readonly requestObserver: HttpRequestObserver;
   private readonly runStartedAt: Date;
 
-  private boundary: Record<string, unknown> | null = null;
-  private scan: Record<string, unknown> | null = null;
-  private hydration: Record<string, unknown> | null = null;
 
   constructor(
     private readonly app: Pick<AppContext, "config" | "db" | "logger">,
@@ -554,23 +534,6 @@ export class SyncRunTelemetry {
     await this.recordEvent("note", message, details);
   }
 
-  async recordDmMessagesChunkSummary(summary: DmMessagesChunkSummary) {
-    if (this.metadata.stream !== "dm_messages") {
-      return;
-    }
-
-    const record: DmMessagesChunkSummaryRecord = {
-      timestamp: new Date().toISOString(),
-      component: "sync_dm_messages_chunk",
-      provider: this.metadata.provider,
-      runId: this.metadata.runId,
-      pageLabel: this.metadata.pageLabel,
-      stream: "dm_messages",
-      ...summary,
-    };
-    await this.emitTraceRecord(record as unknown as Record<string, unknown>, "sync_dm_messages_chunk");
-  }
-
   async addAnomaly(input: SyncAnomalyRecord) {
     if (!this.anomalies.has(input.code)) {
       this.anomalies.set(input.code, input);
@@ -580,36 +543,6 @@ export class SyncRunTelemetry {
       code: input.code,
       ...input.details,
     }, input.severity === "error" ? "error" : "warn");
-  }
-
-  setBoundarySummary(boundary: Record<string, unknown>) {
-    this.boundary = {
-      ...(this.boundary ?? {}),
-      ...boundary,
-    };
-  }
-
-  setScanSummary(scan: Record<string, unknown>) {
-    this.scan = {
-      ...(this.scan ?? {}),
-      ...scan,
-    };
-  }
-
-  mergeHydrationSummary(hydration: Record<string, unknown>) {
-    const next = {
-      ...(this.hydration ?? {}),
-    };
-
-    for (const [key, value] of Object.entries(hydration)) {
-      if (typeof value === "number" && typeof next[key] === "number") {
-        next[key] = (next[key] as number) + value;
-      } else {
-        next[key] = value;
-      }
-    }
-
-    this.hydration = next;
   }
 
   async recordSkipped(reason: string) {
@@ -710,9 +643,9 @@ export class SyncRunTelemetry {
             ...Object.keys(this.checkpointAfter),
           ])).map((label) => [
             label,
-            // Write-time record OR summary diff: some handlers (transactions
-            // progress writes, several OFAPI paths) persist checkpoints without
-            // calling recordCheckpointAdvanced, and one calls it with a null
+            // Write-time record OR summary diff: some handlers (several OFAPI
+            // paths) persist checkpoints without calling
+            // recordCheckpointAdvanced, and one calls it with a null
             // write — the diff over the now-bounded summaries keeps those sites
             // truthful, the Set keeps progress-only advances (which may leave
             // the summary byte-identical) reading as advanced.
@@ -721,9 +654,6 @@ export class SyncRunTelemetry {
           ]),
         ),
       },
-      boundary: this.boundary,
-      scan: this.scan,
-      hydration: this.hydration,
       phases: this.phaseNames,
       ...extraStats,
       ...(error ? { error } : {}),
@@ -732,10 +662,6 @@ export class SyncRunTelemetry {
 
   getRequestTotalsSnapshot() {
     return this.requestSummaryCollector.getRequestTotalsSnapshot();
-  }
-
-  getHydrationSummary() {
-    return this.hydration;
   }
 
   private createCompositeRequestObserver(): HttpRequestObserver {

@@ -5,11 +5,6 @@ import { describe, expect, it } from "vitest";
 import { OFAPI_SPEND_PROJECTION_EVENT_TYPES } from "@agency_hub_core/db";
 import { ofapiCaptureJobStates } from "@agency_hub_core/shared";
 
-import {
-  FANSLY_PURCHASE_HISTORY_CONTRACT_PROBE_ENDPOINT,
-  FANSLY_PURCHASE_HISTORY_CONTRACT_STORM_ENDPOINT,
-} from "../apps/runtime/src/services/sync/fansly-purchase-history.ts";
-
 describe("database migration invariants", () => {
   it("ties sync observability rows to their run page and stream", async () => {
     const migration = await readFile(
@@ -336,7 +331,7 @@ describe("database migration invariants", () => {
     expect(recovery).toContain("not a.succeeded and a.idempotency_key is not null");
   });
 
-  it("builds the purchase-history and DM 5xx-streak lookup indexes concurrently, on the readers' own clauses", async () => {
+  it("builds the purchase-history and DM 5xx-streak lookup indexes concurrently, the first on its reader's own clauses", async () => {
     const index = await readFile(
       "packages/db/migrations/0223_raw_payload_and_attempt_lookup_indexes.sql",
       "utf8",
@@ -357,29 +352,29 @@ describe("database migration invariants", () => {
     expect(index).toContain("on sync_http_attempts (page_id, (request_shape ->> 'groupId'))");
     expect(index.split("-- agency-hub:statement").length - 1).toBe(3);
 
-    // The raw-payload index is partial on the endpoints the purchase-history
-    // chunk reads back. An endpoint renamed or added without this list goes
-    // back to a whole-table scan with no error, so the list is pinned to the
-    // lane's own constants.
+    // The raw-payload index is partial on the purchase-history endpoints. The
+    // legacy lane that journaled the probe and storm pages is gone (step 4,
+    // S4-16), and so is the switch import that read `purchase_history` through
+    // it (S4-21); a reader that leaves this list goes back to a whole-table
+    // scan with no error.
     const predicate = /where endpoint in \(([^)]*)\)/.exec(index)?.[1];
     expect(predicate).toBeDefined();
     expect(predicate!.split(",").map((value) => value.trim().replace(/^'|'$/g, ""))).toEqual([
       "purchase_history",
-      FANSLY_PURCHASE_HISTORY_CONTRACT_PROBE_ENDPOINT,
-      FANSLY_PURCHASE_HISTORY_CONTRACT_STORM_ENDPOINT,
+      "purchase_history_contract_probe",
+      "purchase_history_contract_storm",
     ]);
-    expect(sync).toContain(`rp.endpoint = '${FANSLY_PURCHASE_HISTORY_CONTRACT_STORM_ENDPOINT}'`);
     // The shadow report's window read (rule A2.demand-replaced) spells the
     // predicate itself: without it, the stream and time filters alone are a
     // whole-table scan of the 788 MB heap.
     const observability = await readFile("packages/db/src/repositories/sync/observability.ts", "utf8");
     expect(observability).toContain(`and rp.endpoint in (${predicate})`);
 
-    // The attempt index predicate is a contract with the streak query: the
-    // query spells the same clauses as constants, so it implies it.
+    // The attempt index served the legacy dm_messages 5xx breaker's streak
+    // query, which went with the legacy DM handler at step 4 (S4-14); the
+    // index stays (migrations are forward-only) and no reader is pinned to it.
     expect(index).toContain("where stream = 'dm_messages' and operation = 'messages';");
-    expect(sync).toContain("and a.stream = 'dm_messages'\n        and a.operation = 'messages'\n"
-      + "        and a.request_shape ->> 'groupId' = ");
+    expect(sync).not.toContain("a.request_shape ->> 'groupId' = ");
 
     // Index-only, so a failed deploy may still restore the previous image.
     const deploy = await readFile("scripts/deploy-production.sh", "utf8");

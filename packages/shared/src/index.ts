@@ -1,6 +1,5 @@
 export * from "./fansly-ws-capture.ts";
 export * from "./fansly-ws-hints.ts";
-export * from "./fansly-ws-media.ts";
 export * from "./fansly-ws-messages.ts";
 export * from "./fansly-live-overlay-read.ts";
 export * from "./fansly-ws-hint-policy.ts";
@@ -24,6 +23,7 @@ export * from "./http-request.ts";
 export * from "./http-request-scope.ts";
 export * from "./logger.ts";
 export * from "./money.ts";
+export * from "./page-allowlist.ts";
 export * from "./password-policy.ts";
 export * from "./auth/password-blacklist.ts";
 export * from "./proxy.ts";

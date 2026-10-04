@@ -11,7 +11,6 @@ import type {
 } from "../schema.ts";
 import { insertAgentReadAudit, type InsertAgentReadAuditInput } from "./agent-read-audit.ts";
 import { witnessFor, type PlaneReadWitness } from "./agent-read-witness.ts";
-import { legacyOwnsFanslyPageSql } from "./sync/pages.ts";
 
 /**
  * The hydration request store (Agent Read Plane, slice C).
@@ -27,12 +26,12 @@ import { legacyOwnsFanslyPageSql } from "./sync/pages.ts";
  *    row is the current state; `agent_hydration_events` is how it got there. A
  *    state that moved without a journal row would be a decision nobody can audit.
  * 3. **One vendor attempt per approval.** `approved -> dispatching` is a CAS
- *    like any other. The only way back is `rearmAgentHydrationRequest`, and only
- *    for a run that DETERMINATELY made no vendor request (it was refused at the
- *    page's door) — capped, journaled `rearmed`. Anything that may have spent
- *    stays one-way: a crashed run ends `failed` and a re-run needs a fresh
- *    request and a fresh owner decision (outbox discipline — a duplicated paid
- *    backfill behind the owner's back is worse than a missed one).
+ *    like any other, and it is one-way: a crashed run ends `failed` and a
+ *    re-run needs a fresh request and a fresh owner decision (outbox
+ *    discipline — a duplicated paid backfill behind the owner's back is worse
+ *    than a missed one). The `rearmed` events in the journal are the legacy
+ *    Fansly lane's (gone since step 4, S4-15): it handed an approval back when
+ *    its run was refused before any vendor request.
  *
  * NO FREE-FORM CALLER TEXT crosses this boundary. The agent's `reason` and the
  * owner's decision reason arrive already digested as {sha256, length}, exactly
@@ -220,9 +219,7 @@ const REQUEST_FROM = sql`
  * §3.5 item 10: the hydration wrapper of a live page files a history request
  * and points the legacy row at it). Such a row is `dispatching` for as long as
  * its history request runs, and only the wrapper reads its state; the legacy
- * expiry, reconcile and stuck sweeps never touch it, and the legacy lane's
- * page slot, the auto-approval's one-run-per-page rule and the switch's
- * `hydration_settled` precondition never count it (the column has no CHECK,
+ * expiry, reconcile and stuck sweeps never touch it (the column has no CHECK,
  * 0117).
  */
 export const FANSLY_SYNC_ENGINE_HYDRATION_LANE = "fansly_sync_engine";
@@ -540,12 +537,10 @@ export interface DecideAgentHydrationRequestInput {
   id: number;
   expectedVersion: number;
   approved: boolean;
-  /** Decision #202: the decision names its author. The owner path carries the
-   *  session user; the policy path carries the policy version — never a
-   *  fabricated owner id. */
-  decidedBy:
-    | { source: "owner"; sessionUserId: number }
-    | { source: "auto_policy"; policyVersion: number };
+  /** Decision #202: the decision names its author — the owner's session
+   *  user. The auto-approve policy that also decided (`auto_policy` rows and
+   *  events in the store) is gone since step 4 (S4-15). */
+  decidedBy: { source: "owner"; sessionUserId: number };
   allowMarkReadSideEffect: boolean | null;
   maxCalls: number | null;
   maxCredits: number | null;
@@ -622,9 +617,9 @@ export async function decideAgentHydrationRequest(
         row_version = row_version + 1,
         coverage_fingerprint = ${currentCoverage},
         decided_at = ${now},
-        decided_by_user_id = ${decider.source === "owner" ? decider.sessionUserId : null},
+        decided_by_user_id = ${decider.sessionUserId},
         decision_source = ${decider.source},
-        decision_policy_version = ${decider.source === "auto_policy" ? decider.policyVersion : null},
+        decision_policy_version = null,
         decision_approved = ${input.approved},
         decision_allow_mark_read = ${input.allowMarkReadSideEffect},
         decision_max_calls = ${input.maxCalls},
@@ -658,11 +653,11 @@ export async function decideAgentHydrationRequest(
       fromState: "requested",
       toState,
       rowVersion: num(row.row_version),
-      actor: decider.source === "owner" ? "owner_session" : "auto_policy",
-      sessionUserId: decider.source === "owner" ? decider.sessionUserId : null,
+      actor: "owner_session",
+      sessionUserId: decider.sessionUserId,
       detail: {
         decisionSource: decider.source,
-        policyVersion: decider.source === "auto_policy" ? decider.policyVersion : null,
+        policyVersion: null,
         allowMarkReadSideEffect: input.allowMarkReadSideEffect,
         maxCalls: input.maxCalls,
         maxCredits: input.maxCredits,
@@ -679,153 +674,15 @@ export async function decideAgentHydrationRequest(
 }
 
 /**
- * Requests the decision-#202 auto-approve policy may even LOOK at.
- *
- * Everything the policy refuses to touch is expressed HERE, in one statement,
- * so "the policy considered it" and "the policy could never see it" stay
- * distinguishable in review:
- *   - Fansly only — the OF lane's read marks a fan's thread read, and the
- *     policy is forbidden from consenting to that side effect for the owner;
- *   - `thread_backfill_before` only — the one target whose cost is bounded;
- *   - the filing key must still be alive and still hold the capability and the
- *     page it filed against — a revoked key's parked wishes die with it;
- *   - a page with an auth-paused dm stream is skipped (its runs would burn
- *     budget against a dead session);
- *   - one live approval per page at a time (approved|dispatching from ANY
- *     decider blocks the page — this is also the per-page fairness bound);
- *   - one auto-approval per conversation per UTC day;
- *   - a thread whose per-thread breaker window is open (backoff or
- *     quarantine, `page_dm_message_sync_health`) waits it out: approved, its
- *     run would only be refused `breaker_open`, and a thread Fansly keeps
- *     answering 500 must not be walked into the same answer every day.
- *
- * The live-approval guard is a snapshot taken ONCE for the whole list, so it
- * cannot see approvals the caller makes while walking it: the caller enforces
- * "one per page" within its pass. The order serves that: every page's oldest
- * request first, then every page's second, so a page with a hundred requests
- * cannot crowd the others out of the batch, and a page whose first candidate
- * is refused still has a fallback in it.
- *
- * Sequencing: the caller is the single exclusive hydration cycle, so a plain
- * sum-then-decide over this list is race-free without reservations.
- */
-export async function listAutoApprovableAgentHydrationRequests(
-  db: Database,
-  input: { limit: number; utcDayStart: Date; now?: Date },
-): Promise<AgentHydrationRequestRecord[]> {
-  const now = input.now ?? new Date();
-  const result = await db.execute<Record<string, unknown>>(sql`
-    select * from (
-      select ${REQUEST_COLUMNS},
-        row_number() over (partition by r.page_id order by r.created_at asc, r.id asc) as page_rank
-      ${REQUEST_FROM}
-      where r.state = 'requested'
-        and r.admissible = true
-        and (r.expires_at is null or r.expires_at > ${now})
-        and r.target_kind = 'thread_backfill_before'
-        and p.platform = 'fansly'
-        -- A page the Fansly Sync Engine owns: its open rows are converted by
-        -- the switch (step-3 design §3.5 phase H), never approved here.
-        and ${legacyOwnsFanslyPageSql(sql.raw("r.page_id"))}
-        and k.revoked_at is null
-        and k.expires_at > ${now}
-        and 'request:hydration' = any(k.capabilities)
-        and r.page_id = any(k.page_ids)
-        and not exists (
-          select 1 from page_sync_states pss
-          where pss.page_id = r.page_id
-            and pss.stream = 'dm_messages'
-            and pss.blocker_kind = 'auth'
-        )
-        and not exists (
-          select 1 from agent_hydration_requests live
-          where live.page_id = r.page_id
-            and live.state in ('approved', 'dispatching')
-            -- A row the engine served (a history request) is no legacy run.
-            and live.execution_lane is distinct from ${FANSLY_SYNC_ENGINE_HYDRATION_LANE}
-        )
-        and not exists (
-          select 1 from agent_hydration_requests today
-          where today.page_id = r.page_id
-            and today.conversation_ref = r.conversation_ref
-            and today.decision_source = 'auto_policy'
-            and today.decided_at >= ${input.utcDayStart}
-        )
-        and not exists (
-          select 1 from page_dm_message_sync_health health
-          where health.conversation_id = r.thread_id
-            and (health.next_retry_at > ${now} or health.quarantine_until > ${now})
-        )
-    ) candidates
-    order by page_rank asc, created_at asc, id asc
-    limit ${input.limit}
-  `);
-  return result.rows.map(mapRequest);
-}
-
-/**
- * What today's auto-approvals count against the policy's daily budget, since
- * the UTC day start. Owner decision 2026-09-30: the budget is ACTUAL calls — a
- * settled approval returns whatever it did not use. Per approval:
- *
- *   - in flight (`approved`, `dispatching`): its full `decision_max_calls`,
- *     because the run may still spend all of it;
- *   - `expired`: nothing — an approval only returns to `approved` after a run
- *     that made no vendor request, so an expired one never spent;
- *   - settled with a known count: the `vendorCalls` its settle event journaled
- *     (HTTP attempts, retries included — it may exceed the reservation, and
- *     then that is what counts);
- *   - settled WITHOUT one — the stuck sweeper's `timeout` (a dead run's spend
- *     is unknown), any settle written before the count existed, any other
- *     state: FAIL CLOSED to the full reservation. The one exception is the
- *     earlier rule for such rows: `failed` with nothing accepted and a cause
- *     other than `timeout` was refused before any vendor request, so it is 0.
- */
-export async function sumAutoApprovedCallsSince(
-  db: Database,
-  since: Date,
-): Promise<number> {
-  const result = await db.execute<{ counted: string | null }>(sql`
-    select sum(
-      case
-        when r.state in ('approved', 'dispatching') then r.decision_max_calls
-        when r.state = 'expired' then 0
-        when r.state in ('completed', 'partially_completed', 'failed')
-          and settle.vendor_calls is not null then settle.vendor_calls
-        when r.state = 'failed' and r.last_error <> 'timeout' and r.accepted_pages = 0 then 0
-        else r.decision_max_calls
-      end
-    )::text as counted
-    from agent_hydration_requests r
-    left join lateral (
-      -- A request settles once (the CAS demands 'dispatching'), so this is its
-      -- one settle event. Anything but a non-negative number is no count.
-      select case
-          when jsonb_typeof(e.detail -> 'vendorCalls') = 'number'
-            and (e.detail ->> 'vendorCalls')::numeric >= 0
-          then (e.detail ->> 'vendorCalls')::numeric
-        end as vendor_calls
-      from agent_hydration_events e
-      where e.request_id = r.id
-        and e.kind in ('settled', 'failed')
-      order by e.seq desc
-      limit 1
-    ) settle on true
-    where r.decision_source = 'auto_policy'
-      and r.decision_approved = true
-      and r.decided_at >= ${since}
-  `);
-  const raw = result.rows[0]?.counted;
-  return raw == null ? 0 : Number(raw);
-}
-
-/**
  * Approved requests the executor may dispatch: in date, admissible, not
- * expired, on a page the legacy engine owns, oldest decision first.
+ * expired, oldest decision first. Which platforms have an executor lane is
+ * the executor's own table (`LANE_DISPATCHERS`, OnlyFans): an approval of
+ * another platform is refused there before its claim, and none can be made
+ * since step 4 (S4-15).
  *
  * `excludeIds` is the executor's scan cursor: the rows it already walked this
- * cycle. It pages PAST the approvals that wait (busy page, parked, refused
- * before the claim) instead of being handed the same head of the queue again.
+ * cycle. It pages PAST the approvals refused before their claim instead of
+ * being handed the same head of the queue again.
  * Ids, not a `decided_at` keyset: a JS Date cursor is milliseconds, the column
  * is microseconds, and a truncated cursor would return its own row again.
  */
@@ -839,9 +696,6 @@ export async function listDispatchableAgentHydrationRequests(
     where r.state = 'approved'
       and r.admissible = true
       and (r.expires_at is null or r.expires_at > ${now})
-      -- A page the Fansly Sync Engine owns: its legacy streams are fenced, and
-      -- the switch converts its open rows (step-3 design §3.5 phase H).
-      and ${legacyOwnsFanslyPageSql(sql.raw("r.page_id"))}
       and r.id <> all(${sql.param([...(input.excludeIds ?? [])])}::bigint[])
     order by r.decided_at asc, r.id asc
     limit ${input.limit}
@@ -850,10 +704,9 @@ export async function listDispatchableAgentHydrationRequests(
 }
 
 /**
- * `approved -> dispatching`, CAS'd. This is the ONE vendor attempt: the only
- * way back to `approved` is `rearmAgentHydrationRequest`, for a run that made
- * no vendor request at all, so a crashed run is settled `failed` by the
- * sweeper and only a fresh owner decision can produce another attempt.
+ * `approved -> dispatching`, CAS'd. This is the ONE vendor attempt, and it is
+ * one-way: a crashed run is settled `failed` by the sweeper and only a fresh
+ * owner decision can produce another attempt.
  *
  * The EXECUTION REFERENCE IS WRITTEN BY THIS STATEMENT, not by a follow-up
  * update. The caller mints the id first and hands it to the job it is about to
@@ -917,106 +770,6 @@ export async function claimAgentHydrationRequestForDispatch(
 }
 
 /**
- * `dispatching -> approved`, CAS'd on the version the caller observed.
- *
- * ONLY for a run that DETERMINATELY made no vendor request: it was refused at
- * the page's door (another stream mid-chunk, the page lease held, the page's
- * targeted slot taken). Nothing was spent, so the approval's one vendor attempt
- * is still unspent and failing it would throw away an authorization for work
- * that never started. Never call this for a run that may have reached the
- * vendor — that stays one-way (file header, property 3).
- *
- * Capped by `dispatch_count`, which every claim increments and this does not
- * reset: at most `maxDispatches` claims per approval, after which the caller
- * settles the row instead. The execution columns are cleared so the row reads
- * as an ordinary not-yet-started approval; the refused job's reference is kept
- * in the journal. The expiry is left alone — an approval whose window closed
- * while it was being refused is expired by the next cycle, which is the honest
- * end for it.
- */
-export async function rearmAgentHydrationRequest(
-  db: Database,
-  input: {
-    id: number;
-    expectedVersion: number;
-    maxDispatches: number;
-    /** The refusal, as a bounded code (e.g. a targeted-backfill outcome). */
-    cause: string;
-    now?: Date;
-  },
-): Promise<{ outcome: AgentHydrationCasOutcome; request: AgentHydrationRequestRecord | null }> {
-  const now = input.now ?? new Date();
-  return inTransaction(db, async (tx) => {
-    // The reference the refused run carried, read under the row lock so the
-    // journal records exactly what the update below clears.
-    const current = await tx.execute<Record<string, unknown>>(sql`
-      select execution_ref from agent_hydration_requests where id = ${input.id} for update
-    `);
-    const refusedExecutionRef = nullableText(current.rows[0]?.execution_ref);
-    const updated = await tx.execute<Record<string, unknown>>(sql`
-      update agent_hydration_requests set
-        state = 'approved',
-        row_version = row_version + 1,
-        dispatched_at = null,
-        dispatch_deadline_at = null,
-        execution_lane = null,
-        execution_ref = null,
-        updated_at = ${now}
-      where id = ${input.id}
-        and row_version = ${input.expectedVersion}
-        and state = 'dispatching'
-        and dispatch_count < ${input.maxDispatches}
-      returning id, row_version, dispatch_count
-    `);
-    const row = updated.rows[0];
-    if (!row) {
-      return {
-        outcome: "conflict" as const,
-        request: await findAgentHydrationRequestById(tx, input.id),
-      };
-    }
-    await appendEvent(tx, {
-      requestId: input.id,
-      kind: "rearmed",
-      fromState: "dispatching",
-      toState: "approved",
-      rowVersion: num(row.row_version),
-      actor: "executor",
-      detail: {
-        cause: input.cause,
-        dispatchCount: num(row.dispatch_count),
-        executionRef: refusedExecutionRef,
-      },
-    });
-    return {
-      outcome: "applied" as const,
-      request: await findAgentHydrationRequestById(tx, input.id),
-    };
-  });
-}
-
-/**
- * Whether the page already has a hydration run in flight. The Fansly lane runs
- * one targeted job per page at a time; its dispatcher reads this before it
- * claims, so a second approval for the page waits instead of being claimed
- * into a send the queue must refuse. A row the Fansly Sync Engine served is
- * no legacy run (its work is a history request): it never takes the slot.
- */
-export async function hasDispatchingAgentHydrationRequestOnPage(
-  db: Database,
-  pageId: number,
-): Promise<boolean> {
-  const result = await db.execute<{ dispatching: boolean }>(sql`
-    select exists (
-      select 1 from agent_hydration_requests r
-      where r.page_id = ${pageId} and r.state = 'dispatching'
-        and ${LEGACY_SWEEPABLE}
-    ) as dispatching
-  `);
-  return result.rows[0]?.dispatching === true;
-}
-
-/**
  * Corrects the execution reference when the created job COALESCED onto an
  * existing one.
  *
@@ -1054,13 +807,6 @@ export interface SettleAgentHydrationRequestInput {
   acceptedItems?: number;
   acceptedPages?: number;
   spentCredits?: number;
-  /**
-   * Journal-only: the vendor requests the run actually made (HTTP attempts,
-   * retries included), when the settling party KNOWS them. The autopilot's
-   * daily budget counts a settled approval by this number; omitted, it keeps
-   * counting the approval's full reservation.
-   */
-  vendorCalls?: number;
   actor?: AgentHydrationActor;
   /** Journal-only: the executor's own code for why it settled (bounded). */
   cause?: string;
@@ -1109,7 +855,6 @@ export async function settleAgentHydrationRequest(
         lastError: input.lastError ?? "none",
         acceptedItems: input.acceptedItems ?? 0,
         acceptedPages: input.acceptedPages ?? 0,
-        ...(input.vendorCalls === undefined ? {} : { vendorCalls: input.vendorCalls }),
         ...(input.cause === undefined ? {} : { cause: input.cause }),
       },
     });
@@ -1231,36 +976,14 @@ export async function expireAgentHydrationRequest(
 }
 
 /**
- * The open hydration requests of a Fansly page (`requested`, `approved`,
- * `dispatching`), oldest first, rows the engine already serves excluded: what
- * the step-3 switch converts into history requests (design step 3 §3.5 item 7,
- * phase H).
- */
-export async function listOpenLegacyHydrationRequestsForPage(
-  db: Database,
-  pageId: number,
-): Promise<AgentHydrationRequestRecord[]> {
-  const result = await db.execute<Record<string, unknown>>(sql`
-    select ${REQUEST_COLUMNS} ${REQUEST_FROM}
-    where r.page_id = ${pageId}
-      and p.platform = 'fansly'
-      and r.state in ('requested', 'approved', 'dispatching')
-      and ${LEGACY_SWEEPABLE}
-    order by r.created_at asc, r.id asc
-  `);
-  return result.rows.map(mapRequest);
-}
-
-/**
  * `requested -> dispatching` for a request the Fansly Sync Engine serves (the
  * hydration wrapper of a live page, design step 3 §3.5 item 10): the row
  * points at the history request it was filed as (`execution_lane =
  * 'fansly_sync_engine'`, `execution_ref` = its ref) and stays `dispatching`
  * while that request runs — its read mirrors the request's item, the legacy
  * sweeps and page slots never count it — and is settled to the mirrored
- * terminal state once the request is over (or `expired` by a rollback). No
- * owner decision: history requests need none (plan §4). CAS'd on the observed
- * version.
+ * terminal state once the request is over. No owner decision: history
+ * requests need none (plan §4). CAS'd on the observed version.
  */
 export async function markAgentHydrationEngineManaged(
   db: Database,
@@ -1301,27 +1024,23 @@ export async function markAgentHydrationEngineManaged(
 
 /**
  * The rows the Fansly Sync Engine serves that are still `dispatching` (the
- * wrapper's rows, step-3 design §3.5 item 10), oldest dispatch first.
- * `pageId` narrows to one page (the rollback); `endedOnly` to the rows whose
- * history request is over (`done`/`cancelled`): the worker's settle pass,
- * which must never be crowded out by requests still running.
+ * wrapper's rows, step-3 design §3.5 item 10) although their history request
+ * is over (`done`/`cancelled`), oldest dispatch first: what the worker's
+ * settle pass closes.
  */
-export async function listEngineManagedAgentHydrationDispatches(
+export async function listEndedEngineManagedAgentHydrationDispatches(
   db: Database,
-  input: { limit: number; pageId?: number; endedOnly?: boolean },
+  input: { limit: number },
 ): Promise<AgentHydrationRequestRecord[]> {
   const result = await db.execute<Record<string, unknown>>(sql`
     select ${REQUEST_COLUMNS} ${REQUEST_FROM}
     where r.state = 'dispatching'
       and r.execution_lane = ${FANSLY_SYNC_ENGINE_HYDRATION_LANE}
       and r.execution_ref is not null
-      ${input.pageId === undefined ? sql`` : sql`and r.page_id = ${input.pageId}`}
-      ${input.endedOnly === true
-        ? sql`and exists (
-            select 1 from history_requests h
-             where h.request_ref::text = r.execution_ref
-               and h.state in ('done', 'cancelled'))`
-        : sql``}
+      and exists (
+        select 1 from history_requests h
+         where h.request_ref::text = r.execution_ref
+           and h.state in ('done', 'cancelled'))
     order by r.dispatched_at asc nulls first, r.id asc
     limit ${input.limit}
   `);

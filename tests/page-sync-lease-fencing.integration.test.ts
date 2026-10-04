@@ -27,6 +27,7 @@ import {
 
 import { sql } from "../packages/db/node_modules/drizzle-orm/index.js";
 import { startIntegrationTestDatabase } from "./helpers/db.ts";
+import { EVERY_PLATFORM } from "./helpers/page-sync-scope.ts";
 
 describe("page sync lease fencing", () => {
   it("makes lease expiry terminal instead of allowing heartbeat resurrection", async () => {
@@ -57,6 +58,7 @@ describe("page sync lease fencing", () => {
         source: "manual",
       });
       const lease = await acquirePageSyncLease(testDb.db, {
+        platforms: EVERY_PLATFORM,
         pageId: page.id,
         workerId: "old-worker",
         leaseToken: "old-token",
@@ -101,6 +103,7 @@ describe("page sync lease fencing", () => {
       // follow lease_expires_at against PostgreSQL time.
       await reclaimExpiredPageSync(testDb.db, new Date("2000-01-01T00:00:00.000Z"));
       const replacement = await acquirePageSyncLease(testDb.db, {
+        platforms: EVERY_PLATFORM,
         pageId: page.id,
         workerId: "new-worker",
         leaseToken: "new-token",
@@ -146,6 +149,7 @@ describe("page sync lease fencing", () => {
         source: "manual",
       });
       const lease = await acquirePageSyncLease(testDb.db, {
+        platforms: EVERY_PLATFORM,
         pageId: page.id,
         workerId: "live-worker",
         leaseToken: "live-token",
@@ -205,6 +209,7 @@ describe("page sync lease fencing", () => {
         now,
       });
       const lease = await acquirePageSyncLease(testDb.db, {
+        platforms: EVERY_PLATFORM,
         pageId: page.id,
         workerId: "worker-1",
         leaseToken: "lease-1",
@@ -276,6 +281,7 @@ describe("page sync lease fencing", () => {
       });
 
       const lightLease = await acquirePageSyncLease(testDb.db, {
+        platforms: EVERY_PLATFORM,
         pageId: page.id,
         workerId: "worker-light",
         leaseToken: "lease-light",
@@ -302,6 +308,7 @@ describe("page sync lease fencing", () => {
       });
 
       const followersLease = await acquirePageSyncLease(testDb.db, {
+        platforms: EVERY_PLATFORM,
         pageId: page.id,
         workerId: "worker-followers",
         leaseToken: "lease-followers",
@@ -315,7 +322,7 @@ describe("page sync lease fencing", () => {
       if (!followersLease) {
         throw new Error("Expected followers lease");
       }
-      const runnableWhileFollowersIsLeased = await listRunnablePageSync(testDb.db);
+      const runnableWhileFollowersIsLeased = await listRunnablePageSync(testDb.db, new Date(), { platforms: EVERY_PLATFORM });
       expect(runnableWhileFollowersIsLeased.find((row) => row.pageId === page.id)).toMatchObject({
         priority: resolvePageSyncPriority("light", "scheduled"),
       });
@@ -370,6 +377,7 @@ describe("page sync lease fencing", () => {
       });
 
       const lease = await acquirePageSyncLease(testDb.db, {
+        platforms: EVERY_PLATFORM,
         pageId: page.id,
         workerId: "worker-1",
         leaseToken: "lease-1",
@@ -460,6 +468,7 @@ describe("page sync lease fencing", () => {
       });
 
       const lease = await acquirePageSyncLease(testDb.db, {
+        platforms: EVERY_PLATFORM,
         pageId: page.id,
         workerId: "worker-1",
         leaseToken: "lease-1",
@@ -631,6 +640,7 @@ describe("page sync lease fencing", () => {
       });
 
       const lease = await acquirePageSyncLease(testDb.db, {
+        platforms: EVERY_PLATFORM,
         pageId: page.id,
         workerId: "worker-1",
         leaseToken: "lease-1",
@@ -727,6 +737,7 @@ describe("page sync lease fencing", () => {
         now,
       });
       const lease = await acquirePageSyncLease(testDb.db, {
+        platforms: EVERY_PLATFORM,
         pageId: page.id,
         workerId: "worker-1",
         leaseToken: "lease-auth-block",
@@ -813,6 +824,7 @@ describe("page sync lease fencing", () => {
         transactionCount += 1;
         if (transactionCount === 2) {
           await acquirePageSyncLease(testDb.db, {
+            platforms: EVERY_PLATFORM,
             pageId: page.id,
             workerId: "worker-1",
             leaseToken: "lease-1",
@@ -883,6 +895,7 @@ describe("page sync lease fencing", () => {
       );
 
       const lease = await acquirePageSyncLease(testDb.db, {
+        platforms: EVERY_PLATFORM,
         pageId: page.id,
         workerId: "worker-1",
         leaseToken: "lease-1",
@@ -979,6 +992,7 @@ describe("page sync lease fencing", () => {
       );
 
       const lease = await acquirePageSyncLease(testDb.db, {
+        platforms: EVERY_PLATFORM,
         pageId: page.id,
         workerId: "worker-1",
         leaseToken: "lease-1",
@@ -1064,6 +1078,7 @@ describe("page sync lease fencing", () => {
       });
 
       const lease = await acquirePageSyncLease(testDb.db, {
+        platforms: EVERY_PLATFORM,
         pageId: page.id,
         workerId: "worker-1",
         leaseToken: "lease-1",
@@ -1102,6 +1117,7 @@ describe("page sync lease fencing", () => {
       });
 
       const nextLease = await acquirePageSyncLease(testDb.db, {
+        platforms: EVERY_PLATFORM,
         pageId: page.id,
         workerId: "worker-2",
         leaseToken: "lease-2",
@@ -1360,6 +1376,7 @@ describe("page sync lease fencing", () => {
       };
       const lease = async (leaseToken: string, leaseAt: Date) => {
         const acquired = await acquirePageSyncLease(testDb.db, {
+          platforms: EVERY_PLATFORM,
           pageId: page.id,
           workerId: "worker-1",
           leaseToken,

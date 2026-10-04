@@ -4,7 +4,6 @@ import type {
   CompleteFanslySendAttemptInput,
   FanslySendHolderIdentity,
 } from "@agency_hub_core/db";
-import type { FanslySendGuard, FanslySendSource } from "@agency_hub_core/fansly";
 
 import {
   FanslySendGuardRegistry,
@@ -17,8 +16,7 @@ import {
 // An in-memory twin of the 0225/0229 guard statements
 // (packages/db/src/repositories/fansly-send-guard.ts), driven by an injectable
 // "database clock". The state machine tests run the real registry against it
-// with a fake clock; adapter tests that are not about pacing use
-// `createTestFanslySendGuard()`, a guard with S = 0 whose pages start open.
+// with a fake clock.
 
 export interface InMemoryGuardRow {
   pageId: number;
@@ -37,7 +35,7 @@ export interface InMemoryGuardRow {
 
 export interface InMemoryJournalRow {
   id: string;
-  pageId: number | null;
+  pageId: number;
   token: string;
   source: string;
   operation: string;
@@ -155,36 +153,6 @@ export class InMemoryFanslySendGuardStore implements FanslySendGuardStore {
       };
     }
     return { kind: "pause", waitMs: Math.max(0, opensAt - now) };
-  }
-
-  async journalUnpaced(input: {
-    token: string;
-    source: FanslySendSource;
-    operation: string;
-    holder: FanslySendHolderIdentity;
-  }) {
-    const id = String(this.journal.length + 1);
-    this.journal.push({
-      id,
-      pageId: null,
-      token: input.token,
-      source: input.source,
-      operation: input.operation,
-      settingMs: null,
-      jitterU: null,
-      pauseMs: null,
-      previousCompletedAt: null,
-      captureWaitMs: 0,
-      captureRefusals: 0,
-      capturedAt: this.now(),
-      sentAt: null,
-      sendOffsetMs: null,
-      completedAt: null,
-      outcome: null,
-      outcomeDetail: null,
-      httpStatus: null,
-    });
-    return { journalId: id };
   }
 
   async markSent(input: { token: string; sentAt: Date; sendOffsetMs: number }) {
@@ -316,10 +284,4 @@ export function createTestFanslySendGuards(options: {
     ...(options.hooks ? { hooks: options.hooks } : {}),
   });
   return { registry, store };
-}
-
-/** A guard for adapter tests that are not about pacing: S = 0, pages start
- *  open, one request in flight per page, every attempt journaled in memory. */
-export function createTestFanslySendGuard(pageId = 1, source: FanslySendSource = "sync_stream"): FanslySendGuard {
-  return createTestFanslySendGuards().registry.forPage(pageId, source);
 }

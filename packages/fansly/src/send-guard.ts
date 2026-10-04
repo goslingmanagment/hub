@@ -1,24 +1,28 @@
 import type { Dispatcher } from "undici";
 
-// Plan §2.5 step 1: every request the hub sends to a Fansly page passes ONE
-// per-page guard that all processes share. The guard itself (a conditional
-// UPDATE of the page's row, by DB clock) lives in the runtime; this package only
-// knows the contract, so the adapter never imports the database.
+// The send contract of a Fansly page: a lease is one admission for ONE
+// physical request, and its check runs synchronously right before the request
+// headers are written. The Sync Engine admits by its pacer and reuses the
+// check (`composeFanslySendCheck`) and the lease shape (the socket's Upgrade).
 //
-// A lease is one admission for ONE physical request:
+// Plan §2.5 step 1 is where the contract comes from: the legacy engine's
+// per-page guard, one row per page shared by every process (a conditional
+// UPDATE of the row, by DB clock, in the runtime). Under it:
 //   1. `acquire` returns once the page had no request in flight and at least
 //      S × (1 + u) passed since the previous request COMPLETED;
-//   2. the adapter dispatches through `lease.bind(dispatcher)`, whose
+//   2. the sender dispatches through `lease.bind(dispatcher)`, whose
 //      interceptor checks the lease synchronously right before the request
 //      headers are written (undici `onRequestStart`) and aborts the request
 //      otherwise — a second dispatch of the same lease (a redirect hop, undici's
 //      hidden 421 re-send) is refused there, so zero bytes reach the origin;
 //   3. `complete` is written after the response body was read, or after the
 //      error or timeout. It is the only thing that opens the page again.
+// The legacy senders are deleted (step 4); their journal rows stay.
 
-/** Who sends. A closed vocabulary, mirrored by the CHECK on
- *  `fansly_send_log.source` (migration 0225). The last four are the senders
- *  outside the adapter that join the guard in the next step. */
+/** Who sent. A closed vocabulary, mirrored by the CHECK on
+ *  `fansly_send_log.source` (migration 0225): the journal keeps the rows of
+ *  the deleted legacy senders. `onboarding` and `credentials_verify` are the
+ *  ones still written (the identity check of a session without a page). */
 export const FANSLY_SEND_SOURCES = [
   "sync_stream",
   "ws_hint",
@@ -52,7 +56,7 @@ export type FanslySendOutcome = (typeof FANSLY_SEND_OUTCOMES)[number];
 export type FanslySendCompletionOutcome = Exclude<FanslySendOutcome, "confirmed_terminated">;
 
 export interface FanslySendGuardAcquireInput {
-  /** The adapter operation (`account_me`, `messages`, …), for the journal. */
+  /** The request's operation (`account_me`, `messages`, …), for the journal. */
   operation: string;
   /** The timeout the request runs under. The send window and the lease term
    *  are derived from it. */
@@ -64,9 +68,8 @@ export interface FanslySendGuardAcquireInput {
 
 export interface FanslySendLease {
   readonly token: string;
-  /** The page whose guard this lease holds; null for a check of an unknown
-   *  session, which is journaled but paced against no page (owner decision №4). */
-  readonly pageId: number | null;
+  /** The page this lease admits a request of. */
+  readonly pageId: number;
   /** True once the bound dispatcher wrote request headers for this lease. */
   readonly sent: boolean;
   /** True once the bound dispatcher refused a dispatch of this lease. */

@@ -26,7 +26,7 @@ describe("platform registry (Stage 18)", () => {
         try {
           streams = resolveStreamsForScope(platform, scope);
         } catch {
-          continue; // followers scope is fansly-only by design
+          continue; // a scope the platform does not offer (OnlyFans has no followers; Fansly none since S4-10)
         }
         for (const stream of streams) {
           expect(capabilities.has(stream), `${platform}/${scope}/${stream}`).toBe(true);
@@ -49,6 +49,13 @@ describe("platform registry (Stage 18)", () => {
   it("adapters conform: every declared stream has a handler, none undeclared", () => {
     expect(checkAdapterConformance(fanslyPlatformAdapter)).toEqual([]);
     expect(checkAdapterConformance(onlyfansPlatformAdapter)).toEqual([]);
+  });
+
+  it("Fansly declares no legacy stream, handler or scope (step 4 S4-10); the platform set it leaves is tests/sync-onlyfans-boundary.test.ts", () => {
+    expect(fanslyPlatformAdapter.capabilities.streams).toEqual([]);
+    expect(fanslyPlatformAdapter.pull).toEqual({});
+    expect(fanslyPlatformAdapter.syncScopes).toEqual({});
+    expect(onlyfansPlatformAdapter.capabilities.streams.length).toBeGreaterThan(0);
   });
 
   it("the registry resolves both platforms and fails loudly on unknowns", () => {

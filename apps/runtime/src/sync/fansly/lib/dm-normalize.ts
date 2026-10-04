@@ -4,8 +4,9 @@ import type { FanslyMessage } from "@agency_hub_core/fansly";
 import type { ResolvedPageContext } from "../../../services/page-context.ts";
 import { normalizeFanslyTimestamp } from "./timestamp.ts";
 
-// A served `/message` page as hot-table rows, without I/O: shared by the
-// Fansly Sync Engine's DM apply and the legacy DM lanes.
+// A served `/message` page as hot-table rows, without I/O: the Fansly Sync
+// Engine's DM apply (the legacy DM lanes that shared it are gone since step 4,
+// S4-15).
 
 export type FanslyDmMessageUpsertInput = Parameters<typeof upsertPageDmMessages>[1];
 
@@ -26,7 +27,7 @@ export function normalizeDmTipAmountCents(
 }
 
 /** Before 2010, or more than a day after `now`: a DM timestamp no message can
- *  carry (the legacy lanes record it as a `dm_timestamp_implausible` anomaly). */
+ *  carry (the engine's apply counts it as `timestamps_implausible`). */
 export function isClearlyImplausibleDmTimestamp(timestamp: Date, now = new Date()) {
   return timestamp.getTime() < Date.UTC(2010, 0, 1) ||
     timestamp.getTime() > now.getTime() + (24 * 60 * 60 * 1000);
@@ -66,7 +67,7 @@ export interface NormalizedFanslyDmMessages {
   /** Messages left unstored: no parseable `createdAt` (still journaled). */
   unparseable: Array<{ id: string; valueType: string }>;
   /** Stored messages whose timestamp normalized to an implausible instant
-   *  (the legacy lane records each as a `dm_timestamp_implausible` anomaly). */
+   *  (the engine's apply counts them as `timestamps_implausible`). */
   implausible: Array<{ id: string; rawValue: number; normalizedAt: Date }>;
   /** Every message id as served (newest first by contract). */
   idsInResponseOrder: string[];

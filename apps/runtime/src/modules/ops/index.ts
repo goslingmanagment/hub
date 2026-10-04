@@ -106,10 +106,10 @@ import {
   resumeSyncBlock,
   triggerSyncBlock,
 } from "../../services/sync-blocks.ts";
-import { requestAllPagesSync, requestPageSync, resolveStreamsForScope } from "../../services/sync-control.ts";
+import { requestAllPagesSync, requestPageSync } from "../../services/sync-control.ts";
 import {
   engineOwnedSyncPageByLabel,
-  triggerEngineStreams,
+  triggerEngineScope,
   type EngineLeverOutcome,
 } from "../../services/sync-engine-levers.ts";
 import {
@@ -737,12 +737,14 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
     const { pageLabel, scope } = request.body;
-    const summary = await getPageSummary(appContext, pageLabel);
+    await getPageSummary(appContext, pageLabel); // 404 for an unknown page
     // A page the Fansly Sync Engine owns: the scope's streams become the
     // engine's polls due now (live); a page being switched refuses (409).
+    // Any other Fansly page is refused by `requestPageSync` (409
+    // `legacy_sync_retired`): the legacy executor serves no Fansly page.
     const engine = await engineOwnedSyncPageByLabel(appContext.db, pageLabel);
     if (engine !== null) {
-      const outcome = await triggerEngineStreams(appContext.db, engine, resolveStreamsForScope(summary.platform, scope));
+      const outcome = await triggerEngineScope(appContext.db, engine, scope);
       await recordAudit(appContext, {
         ...auditCtx(principal),
         eventType: "admin.sync_trigger",
@@ -772,24 +774,16 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
     if (!boss) throw new Error("Job queue not available");
-    // Pages the Fansly Sync Engine owns are refreshed by the engine (live)
-    // or left alone (handover: neither engine reads during the switch).
-    const enginePages = await listSyncPages(appContext.db, { modes: ["handover", "live"] });
+    // Pages the Fansly Sync Engine runs (live) are refreshed by the engine; a
+    // row in `handover` is left alone (neither engine reads it); the legacy
+    // executor queues the pages of the platforms it serves.
+    const enginePages = await listSyncPages(appContext.db, { modes: ["live"] });
     const engine: Array<{ pageLabel: string } & EngineLeverOutcome> = [];
     for (const page of enginePages) {
-      if (page.mode !== "live") continue;
-      const outcome = await triggerEngineStreams(
-        appContext.db,
-        page as typeof page & { mode: "live" },
-        resolveStreamsForScope("fansly", "all"),
-      );
+      const outcome = await triggerEngineScope(appContext.db, page as typeof page & { mode: "live" }, "all");
       engine.push({ pageLabel: page.pageLabel ?? String(page.pageId), ...outcome });
     }
-    const results = await requestAllPagesSync(appContext, boss, {
-      scope: "all",
-      reason: "manual",
-      excludePageIds: new Set(enginePages.map((page) => page.pageId)),
-    });
+    const results = await requestAllPagesSync(appContext, boss, { scope: "all", reason: "manual" });
     const pagesQueued = results.length + engine.length;
     await recordAudit(appContext, {
       ...auditCtx(principal),
@@ -870,10 +864,7 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
   }, async (request) => {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
-    if (!boss) {
-      throw new ServiceUnavailableError("Job queue not available");
-    }
-    const result = await resetFollowersReconcileStream(appContext, boss, request.body);
+    const result = await resetFollowersReconcileStream(appContext, request.body);
     await recordAudit(appContext, {
       ...auditCtx(principal),
       eventType: "admin.followers_reconcile_reset",

@@ -10,9 +10,8 @@ import type {
 } from "@agency_hub_core/db";
 import type { Dispatcher } from "undici";
 
-// The contract module directly, not the package index: the index also loads
-// the adapter (and with it undici's fetch), which neither this module nor its
-// test doubles need.
+// The contract module directly, not the package index: neither this module
+// nor its test doubles need the wire layer the index also loads.
 import {
   composeFanslySendCheck,
   FanslySendRefusedError,
@@ -27,7 +26,17 @@ import {
 // Plan §2.5 step 1: the legacy engine's per-page Fansly send guard, process
 // side. The page's row in the database is the only authority (see
 // packages/db/src/repositories/fansly-send-guard.ts); this module turns it into
-// leases for the adapter:
+// leases for a legacy sender.
+//
+// No runtime code is one any more (step 4, S4-20): the adapter, the probes,
+// the alias backfill and the describer's guarded CDN hop are deleted, and
+// every Fansly page's row is the Sync Engine's, which no capture can take.
+// What is left of the registry at run time is this process's holder identity
+// (the journal of the identity check without a page, the sweeper, the CLI).
+// The capture below has no caller left: the step-3 switch and its rollback,
+// whose legacy side it was, went at step 4 (S4-21). It stays, inert, with the
+// sweeper, the closed-page latch and `fansly-send-guard confirm-terminated`
+// that stand on its statements (the deploy script still calls the last).
 //
 //   acquire  — capture the row; it is the only pacing of a Fansly request
 //              (plan §2.3). Refused because of the pause: sleep exactly the time the
@@ -36,7 +45,7 @@ import {
 //              wait for that request's completion locally. Refused because the
 //              holder overran its lease: the page is closed, and acquire fails.
 //              Refused because the page belongs to the Fansly Sync Engine
-//              (0229, the step-3 switch): acquire fails at once — a page-level
+//              (0229 `owner_engine`): acquire fails at once — a page-level
 //              stop of the legacy sender, never a failure of its thread or
 //              subject.
 //   send     — the bound dispatcher checks synchronously, right before the
@@ -60,12 +69,6 @@ const COMPLETION_RETRY_MAX_MS = 5_000;
 
 export interface FanslySendGuardStore {
   capture(input: CaptureFanslyPageSendGuardInput): Promise<CaptureFanslyPageSendGuardResult>;
-  journalUnpaced(input: {
-    token: string;
-    source: FanslySendSource;
-    operation: string;
-    holder: FanslySendHolderIdentity;
-  }): Promise<{ journalId: string }>;
   markSent(input: { token: string; sentAt: Date; sendOffsetMs: number }): Promise<void>;
   complete(input: CompleteFanslySendAttemptInput): Promise<{ released: boolean; journaled: boolean }>;
   markClosed(input: { pageId: number; token: string; reason: string }): Promise<boolean>;
@@ -82,7 +85,7 @@ export interface FanslySendGuardClock {
 
 export interface FanslySendLeaseInfo {
   readonly token: string;
-  readonly pageId: number | null;
+  readonly pageId: number;
   readonly source: FanslySendSource;
   readonly operation: string;
   readonly journalId: string | null;
@@ -150,8 +153,8 @@ export class FanslyPageSendClosedError extends Error {
 }
 
 /** The page's guard row belongs to the Fansly Sync Engine (0229
- *  `owner_engine`, flipped only by the step-3 switch): no legacy sender of any
- *  process may send for the page. A page-level stop — callers never charge it
+ *  `owner_engine`; nothing flips a row since step 4, S4-21): no legacy sender
+ *  of any process may send for the page. A page-level stop — callers never charge it
  *  to a thread or subject (no `page_dm_message_sync_health` row). */
 export class FanslyPageOwnedBySyncEngineError extends Error {
   constructor(readonly pageId: number, readonly engineSwitchedAt: Date | null = null) {
@@ -260,7 +263,7 @@ class GuardLease implements FanslySendLease, FanslySendLeaseInfo {
   constructor(
     private readonly registry: FanslySendGuardRegistry,
     readonly token: string,
-    readonly pageId: number | null,
+    readonly pageId: number,
     readonly source: FanslySendSource,
     readonly operation: string,
     readonly journalId: string | null,
@@ -334,9 +337,9 @@ class GuardLease implements FanslySendLease, FanslySendLeaseInfo {
 }
 
 /**
- * One per process. Hands out guards bound to a page (or to no page) and a
- * source; tracks this process's leases so a shutdown can stop new captures and
- * wait for the in-flight requests' completions.
+ * One per process. Hands out guards bound to a page and a source; tracks this
+ * process's leases so a shutdown can stop new captures and wait for the
+ * in-flight requests' completions.
  */
 export class FanslySendGuardRegistry {
   readonly clock: FanslySendGuardClock;
@@ -379,13 +382,6 @@ export class FanslySendGuardRegistry {
       throw new Error(`Fansly send guard needs a page id (got ${pageId})`);
     }
     return { acquire: (input) => this.acquirePage(pageId, source, input) };
-  }
-
-  /** The check of a session whose account is unknown yet (onboarding, the
-   *  credentials check): journaled, one physical request per lease, but paced
-   *  against no page (plan §2.4, owner decision №4). */
-  withoutPage(source: FanslySendSource): FanslySendGuard {
-    return { acquire: (input) => this.acquireUnpaced(source, input) };
   }
 
   /** Stop admitting new captures (SIGTERM). In-flight requests go on. */
@@ -519,8 +515,7 @@ export class FanslySendGuardRegistry {
       refusals += 1;
       this.counters.captureRefusals += 1;
       if (result.kind === "engine_owned") {
-        // No retry loop: the page stays the engine's until a rollback, and
-        // the caller's stream is fenced anyway (design §2.7).
+        // No retry loop: the page stays the engine's for good (design §2.7).
         this.counters.engineOwnedRefusals += 1;
         this.deps.logger.warn({
           component: "fansly_send_guard",
@@ -545,34 +540,6 @@ export class FanslySendGuardRegistry {
       }
       await this.clock.sleep(this.busyPollMs(), signal);
     }
-  }
-
-  private async acquireUnpaced(
-    source: FanslySendSource,
-    input: FanslySendGuardAcquireInput,
-  ): Promise<FanslySendLease> {
-    const requestTimeoutMs = assertRequestTimeout(input.requestTimeoutMs);
-    const signal = input.signal ?? null;
-    this.assertOpen(signal);
-    const token = randomUUID();
-    const issuedAt = this.clock.monotonicMs();
-    const { journalId } = await this.deps.store.journalUnpaced({
-      token,
-      source,
-      operation: input.operation,
-      holder: this.deps.identity(),
-    });
-    const lease = new GuardLease(
-      this, token, null, source, input.operation, journalId,
-      issuedAt, issuedAt + requestTimeoutMs, false,
-    );
-    this.#inflight.add(lease);
-    this.counters.captures += 1;
-    if (signal?.aborted || this.#stopped) {
-      await lease.complete({ outcome: "aborted_before_send" });
-      this.assertOpen(signal);
-    }
-    return lease;
   }
 
   private releaseUnknownCapture(
@@ -624,7 +591,7 @@ export class FanslySendGuardRegistry {
             nextU,
             ...input,
           });
-          if (lease.pageId !== null && lease.expectHeld && !released) {
+          if (lease.expectHeld && !released) {
             this.deps.logger.error({
               component: "fansly_send_guard",
               pageId: lease.pageId,
@@ -645,7 +612,7 @@ export class FanslySendGuardRegistry {
         }
       }
     } finally {
-      if (lease.pageId !== null && this.#localHolds.get(lease.pageId) === lease) {
+      if (this.#localHolds.get(lease.pageId) === lease) {
         this.#localHolds.delete(lease.pageId);
       }
       this.#inflight.delete(lease);

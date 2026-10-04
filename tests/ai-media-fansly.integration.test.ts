@@ -4,12 +4,9 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
-  claimAiMediaAcceleratorRead,
-  admitAiMediaAcceleratorRead,
   createFanslyPage,
   createModel,
   listAiMediaDescriptionsByRefs,
-  requestAiMediaAcceleratorRead,
   storeProxyConfig,
 } from "@agency_hub_core/db";
 
@@ -194,42 +191,23 @@ describe("Fansly candidates projector", () => {
     expect(live.rows[0]).toEqual({ variant: "poster", status: "pending" });
   });
 
-  it("queues one accelerator read per fan media WS signal only while the accelerator is on", async () => {
+  // Step 4 (S4-14): the in-chunk accelerator and its request filers are gone,
+  // so a socket signal of fan media queues no accelerator read, whatever the
+  // retired accelerator key says.
+  it("files no accelerator read for a fan media WS signal, even with the retired accelerator key on", async () => {
     const observationId = await seedObservation({ frame: "x" });
-    const signal = (messageRef: string) => ({
+    app.config.aiMediaDescribeFanslyAcceleratorEnabled = true;
+    await seedEvent("fansly.ws_signal_observed", observationId, {
       path: [],
       outcome: "hint",
-      hint: { type: "message_created", groupRef: GROUP, messageRef, hasAttachments: true, senderRef: FAN },
+      hint: { type: "message_created", groupRef: GROUP, messageRef: "5102", hasAttachments: true, senderRef: FAN },
       generation: null,
       receivedAt: new Date().toISOString(),
     });
-    await seedEvent("fansly.ws_signal_observed", observationId, signal("5101"));
-    await runAiMediaCandidatesProjection(app, { accountId: pageId });
+    const result = await runAiMediaCandidatesProjection(app, { accountId: pageId });
+    expect(result).toMatchObject({ eventsSeen: 1, candidates: 0 });
+    expect(result).not.toHaveProperty("accelerations");
     expect((await testDb!.pool.query(`select count(*)::int as n from ai_media_accelerator_reads`)).rows[0].n).toBe(0);
-
-    app.config.aiMediaDescribeFanslyAcceleratorEnabled = true;
-    await seedEvent("fansly.ws_signal_observed", observationId, signal("5102"));
-    await runAiMediaCandidatesProjection(app, { accountId: pageId });
-    const reads = await testDb!.pool.query(`select group_ref, message_ref, status from ai_media_accelerator_reads`);
-    expect(reads.rows).toEqual([{ group_ref: GROUP, message_ref: "5102", status: "pending" }]);
-  });
-});
-
-describe("accelerator budget", () => {
-  it("admits within the agency cap and spaces reads of one conversation by 2 minutes", async () => {
-    const now = new Date();
-    await requestAiMediaAcceleratorRead(app.db, { pageId, groupRef: GROUP, messageRef: "1", now });
-    await requestAiMediaAcceleratorRead(app.db, { pageId, groupRef: GROUP, messageRef: "2", now });
-    const first = await claimAiMediaAcceleratorRead(app.db, { pageId, now, perConversationGapMs: 120_000, staleAfterMs: 1_800_000 });
-    expect(first).not.toBeNull();
-    await expect(admitAiMediaAcceleratorRead(app.db, { id: first!.id, requestId: "r1", limit24h: 1, now })).resolves.toBe(true);
-    // Same conversation within the gap: nothing to claim.
-    await expect(claimAiMediaAcceleratorRead(app.db, { pageId, now, perConversationGapMs: 120_000, staleAfterMs: 1_800_000 })).resolves.toBeNull();
-    // After the gap, the agency cap of 1 refuses the next admission.
-    const later = new Date(now.getTime() + 130_000);
-    const second = await claimAiMediaAcceleratorRead(app.db, { pageId, now: later, perConversationGapMs: 120_000, staleAfterMs: 1_800_000 });
-    expect(second).not.toBeNull();
-    await expect(admitAiMediaAcceleratorRead(app.db, { id: second!.id, requestId: "r2", limit24h: 1, now: later })).resolves.toBe(false);
   });
 });
 
