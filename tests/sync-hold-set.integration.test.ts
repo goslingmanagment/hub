@@ -11,10 +11,10 @@ import {
   createModel,
   ensureSyncPage,
   getSyncPage,
+  legacyHoldColumnsOf,
   listSyncHolds,
   setPageHold,
   setResourceHold,
-  SyncLegacyHoldsUnreadableError,
   writeSafeRelease,
   writeSyncRouteState,
   type Database,
@@ -24,7 +24,6 @@ import {
 import { INDEFINITE_UNTIL } from "@agency_hub_core/shared";
 
 import { holdSetOf, whyHeld } from "../apps/runtime/src/sync/engine/admission.ts";
-import { routeAdmissionView, RouteClocks } from "../apps/runtime/src/sync/engine/route-policy.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -32,11 +31,13 @@ import {
 } from "./helpers/db.ts";
 
 // The hold set (0240, step 4 owner decision №26) on a real Postgres: the
-// table's own rules, the old hold columns kept in step with it for the
-// previous image (every hold write rewrites them in its transaction), and the
-// way back — a page's rows re-read from those columns when they say something
-// else: when its ownership is acquired, and before a hold write under no
-// generation.
+// table's own rules, and the old hold columns of the page row beside it in
+// the first of the three releases that take them away (S4-31). Every hold
+// write still rewrites them in its transaction — the image before this one
+// compares them with the rows when it acquires a page and lets the columns
+// win, so a rollback to it must find the two equal — and nothing reads them:
+// an acquisition, and a hold write under no generation, take the rows as
+// they stand. `hold_step`, which that image never names, is gone (0241).
 
 let testDb: StartedTestDatabase | null = null;
 
@@ -72,7 +73,7 @@ function owner(): FanslySendHolderIdentity {
 }
 
 /** Acquire the page's ownership (a new generation), as the host does. */
-async function own(pageId: number): Promise<{ generation: bigint; holdsImported: boolean }> {
+async function own(pageId: number): Promise<{ generation: bigint }> {
   const acquired = await acquireSyncPageOwnership(db(), { pageId, owner: owner() });
   if (acquired.kind !== "acquired") throw new Error(`expected to acquire page ${pageId}: ${acquired.kind}`);
   return acquired;
@@ -85,17 +86,43 @@ async function oldColumns(pageId: number) {
     indefinite: boolean | null;
     hold_until: Date | null;
     hold_since: Date | null;
-    hold_step: number;
     hold_detail: Record<string, unknown>;
     resource_holds: Record<string, unknown>;
   }>(
     `select hold_kind, hold_until = 'infinity'::timestamptz as indefinite,
             case when hold_until = 'infinity'::timestamptz then null else hold_until end as hold_until,
-            hold_since, hold_step::int as hold_step, hold_detail, resource_holds
+            hold_since, hold_detail, resource_holds
        from sync_pages where page_id = $1`,
     [pageId],
   );
   return row!;
+}
+
+/**
+ * The previous image's check when it acquires the page — after a rollback to
+ * it: are the old columns what the page's rows make them? Where they are not
+ * its columns win and the rows are replaced, so this build leaves them equal
+ * after every hold write.
+ */
+async function expectColumnsInStep(pageId: number): Promise<void> {
+  const stored = await oldColumns(pageId);
+  expect({
+    holdKind: stored.hold_kind,
+    holdUntil: stored.indefinite === true ? INDEFINITE_UNTIL : stored.hold_until,
+    holdSince: stored.hold_since,
+    holdDetail: stored.hold_detail,
+    resourceHolds: stored.resource_holds,
+  }).toEqual(legacyHoldColumnsOf(await listSyncHolds(db(), pageId)));
+}
+
+/** A writer that knows only the old columns (a hand; the image before the
+ *  hold set): the slot and `resource_holds`. */
+async function writeOldColumns(pageId: number, columns: { kind: string | null; until?: string | null; since?: string | null; detail?: unknown; resourceHolds?: unknown }) {
+  await testDb!.pool.query(
+    `update sync_pages set hold_kind = $2, hold_until = $3::timestamptz, hold_since = $4::timestamptz,
+            hold_detail = $5::jsonb, resource_holds = $6::jsonb where page_id = $1`,
+    [pageId, columns.kind, columns.until ?? null, columns.since ?? null, JSON.stringify(columns.detail ?? {}), JSON.stringify(columns.resourceHolds ?? {})],
+  );
 }
 
 /** Rows without the instants a test does not name. */
@@ -106,7 +133,7 @@ function shape(rows: readonly SyncHoldRow[]) {
 const iso = (date: Date) => date.toISOString();
 
 describe("the hold set table (0240)", () => {
-  it("the migration: an empty table beside the old columns it leaves alone, granted to the read role", async (context) => {
+  it("the migration: an empty table beside the page rows it leaves alone, granted to the read role", async (context) => {
     if (!testDb) return context.skip();
     const migrations = readdirSync("packages/db/migrations").filter((file) => file.endsWith(".sql")).sort();
     const migration = migrations.find((file) => file.endsWith("_sync_holds.sql"))!;
@@ -130,20 +157,11 @@ describe("the hold set table (0240)", () => {
       } finally {
         client.release();
       }
-      // Its state reaches the table when its ownership is acquired, never by
-      // a copy the previous image — still running here — could outdate.
+      // The migration copies nothing: the hold-set release read a page's
+      // state from the old columns when it acquired the page.
       expect((await partial.pool.query("select count(*)::int as n from sync_holds")).rows).toEqual([{ n: 0 }]);
       expect((await partial.pool.query("select to_jsonb(sp) as row from sync_pages sp")).rows).toEqual(before.rows);
       expect((await partial.pool.query("select has_table_privilege('read_only', 'sync_holds', 'select') as granted")).rows).toEqual([{ granted: true }]);
-      const acquired = await acquireSyncPageOwnership(partial.db as unknown as Database, {
-        pageId: Number(before.rows[0].row.page_id),
-        owner: owner(),
-      });
-      expect(acquired).toMatchObject({ kind: "acquired", holdsImported: true });
-      expect((await partial.pool.query("select scope, key, kind, ladder_step::int as step from sync_holds order by scope, key, kind")).rows).toEqual([
-        { scope: "page", key: "", kind: "auth", step: 0 },
-        { scope: "resource", key: "probe", kind: "resource_breaker", step: 7 },
-      ]);
     } finally {
       await partial.stop();
     }
@@ -190,7 +208,82 @@ describe("the hold set table (0240)", () => {
   });
 });
 
-describe("the old hold columns, kept in step for the previous image", () => {
+describe("the first old hold column goes (0241)", () => {
+  it("the migration drops `hold_step` alone; the hold writes and an acquisition run on what is left", async (context) => {
+    if (!testDb) return context.skip();
+    const migrations = readdirSync("packages/db/migrations").filter((file) => file.endsWith(".sql")).sort();
+    const migration = migrations.find((file) => file.endsWith("_sync_pages_drop_hold_step.sql"))!;
+    const partial = await startIntegrationTestDatabase({ through: migrations[migrations.indexOf(migration) - 1]! });
+    if (!partial) return context.skip();
+    try {
+      // A page as the hold-set release left it: its rows, the old columns in
+      // step with them, and a ladder step an older build once took.
+      await partial.pool.query("insert into models (slug, name) values ('seed-model', 'Seed')");
+      await partial.pool.query(`insert into pages (model_id, platform, label) select id, 'fansly', 'seed-fansly' from models where slug = 'seed-model'`);
+      await partial.pool.query(
+        `insert into sync_pages (page_id, mode, mode_changed_by, hold_kind, hold_until, hold_since, hold_step, hold_detail, resource_holds)
+         select id, 'live', 'test', 'auth', 'infinity', '2026-10-04T08:00:00Z', 3, '{"credentialsGeneration":"gen-a"}'::jsonb,
+                '{"probe":{"until":"2099-01-01T00:00:00.000Z","step":7,"since":"2026-10-02T21:54:26.507Z"}}'::jsonb
+           from pages where label = 'seed-fansly'`,
+      );
+      await partial.pool.query(
+        `insert into sync_holds (page_id, scope, key, kind, until, since, ladder_step, detail)
+         select page_id, 'page', '', 'auth', 'infinity'::timestamptz, '2026-10-04T08:00:00Z'::timestamptz, 0, '{"credentialsGeneration":"gen-a"}'::jsonb from sync_pages
+         union all
+         select page_id, 'resource', 'probe', 'resource_breaker', '2099-01-01T00:00:00Z', '2026-10-02T21:54:26.507Z', 7, '{}'::jsonb from sync_pages`,
+      );
+      const pageId = Number((await partial.pool.query("select page_id from sync_pages")).rows[0].page_id);
+      const before = await partial.pool.query("select to_jsonb(sp) - 'hold_step' as row from sync_pages sp");
+      const holds = await partial.pool.query("select to_jsonb(h) as row from sync_holds h order by h.scope");
+      const { runMigrations } = await import("../packages/db/src/migrate-runner.ts");
+      const client = await partial.pool.connect();
+      try {
+        await runMigrations({ db: client, migrationsDir: path.resolve("packages/db/migrations"), through: migration });
+        // The bound on its lock wait is the migration's own: gone with its transaction.
+        expect((await client.query("show lock_timeout")).rows).toEqual([{ lock_timeout: "0" }]);
+      } finally {
+        client.release();
+      }
+      const columns = await partial.pool.query<{ column_name: string }>(
+        `select column_name from information_schema.columns
+          where table_name = 'sync_pages' and (column_name like 'hold%' or column_name in ('resource_holds', 'network_failure_streak'))
+          order by 1`,
+      );
+      expect(columns.rows.map((row) => row.column_name)).toEqual(["hold_detail", "hold_kind", "hold_since", "hold_until", "network_failure_streak", "resource_holds"]);
+      // Nothing else of the row changed, and no hold row.
+      expect((await partial.pool.query("select to_jsonb(sp) as row from sync_pages sp")).rows).toEqual(before.rows);
+      expect((await partial.pool.query("select to_jsonb(h) as row from sync_holds h order by h.scope")).rows).toEqual(holds.rows);
+
+      // What the previous image runs over the table after a rollback — its
+      // read of the old columns at an acquisition, its hold writes and their
+      // mirror — names none but these columns: it runs unchanged. (This
+      // build's hold writers are that image's.)
+      const read = await partial.pool.query(
+        "select hold_kind, hold_until = 'infinity'::timestamptz as indefinite, hold_since, hold_detail, resource_holds from sync_pages where page_id = $1", [pageId],
+      );
+      expect(read.rows).toEqual([{
+        hold_kind: "auth",
+        indefinite: true,
+        hold_since: new Date("2026-10-04T08:00:00.000Z"),
+        hold_detail: { credentialsGeneration: "gen-a" },
+        resource_holds: { probe: { until: "2099-01-01T00:00:00.000Z", step: 7, since: "2026-10-02T21:54:26.507Z" } },
+      }]);
+      const partialDb = partial.db as unknown as Database;
+      const acquired = await acquireSyncPageOwnership(partialDb, { pageId, owner: owner() });
+      if (acquired.kind !== "acquired") throw new Error(`expected to acquire the page: ${acquired.kind}`);
+      await setResourceHold(partialDb, { pageId, generation: acquired.generation, file: "probe", hold: null });
+      await clearPageHold(partialDb, { pageId, generation: acquired.generation, kinds: ["auth"] });
+      await setPageHold(partialDb, { pageId, generation: acquired.generation, kind: "network", until: new Date("2099-01-01T00:00:00.000Z"), detail: { streak: 3 } });
+      expect((await partial.pool.query("select hold_kind, hold_until, hold_detail, resource_holds from sync_pages where page_id = $1", [pageId])).rows).toEqual([
+        { hold_kind: "network", hold_until: new Date("2099-01-01T00:00:00.000Z"), hold_detail: { streak: 3 }, resource_holds: {} },
+      ]);
+    } finally {
+      await partial.stop();
+    }
+  }, 120_000);
+});
+
+describe("the old hold columns, still written for a rollback to the previous image", () => {
   it("every hold write rewrites them in its transaction: what that image reads holds what the rows hold", async (context) => {
     if (!testDb) return context.skip();
     const pageId = await seedPage();
@@ -210,10 +303,10 @@ describe("the old hold columns, kept in step for the previous image", () => {
       indefinite: false,
       hold_until: networkUntil,
       hold_since: network.since,
-      hold_step: 0,
       hold_detail: { streak: 3, networkSince: "2026-10-04T08:59:00.000Z" },
       resource_holds: {},
     });
+    await expectColumnsInStep(pageId);
 
     // A credentials hold beside it: the slot is the credentials hold's and
     // carries the network hold in its detail, as that image reads two holds.
@@ -229,9 +322,11 @@ describe("the old hold columns, kept in step for the previous image", () => {
         timedHold: { kind: "network", until: iso(networkUntil), detail: { streak: 3, networkSince: "2026-10-04T08:59:00.000Z" } },
       },
     });
+    await expectColumnsInStep(pageId);
 
     // A resource breaker and a route's state, beside each other in `resource_holds`.
     await setResourceHold(db(), { ...fenced, file: "transactions", hold: { until: breakerUntil, step: 1 } });
+    await expectColumnsInStep(pageId);
     expect(await writeSyncRouteState(db(), {
       ...fenced,
       route: "messages.page",
@@ -251,6 +346,7 @@ describe("the old hold columns, kept in step for the previous image", () => {
         },
       },
     });
+    await expectColumnsInStep(pageId);
 
     // An identity proof lifts the credentials hold alone: the slot is the
     // network hold's again.
@@ -261,6 +357,7 @@ describe("the old hold columns, kept in step for the previous image", () => {
       hold_until: networkUntil,
       hold_detail: { streak: 3, networkSince: "2026-10-04T08:59:00.000Z" },
     });
+    await expectColumnsInStep(pageId);
     await clearPageHold(db(), { ...fenced, kinds: ["network"] });
     await setResourceHold(db(), { ...fenced, file: "transactions", hold: null });
     expect(await oldColumns(pageId)).toMatchObject({
@@ -271,9 +368,46 @@ describe("the old hold columns, kept in step for the previous image", () => {
       hold_detail: {},
       resource_holds: { "route:state": { version: 1, routes: { "messages.page": { revision: 1 } } } },
     });
-    // The two sides agree: a new owner has nothing to read back.
+    // The two sides agree: the previous image, taking the page after a
+    // rollback, reads nothing back — and neither side moves when this build
+    // takes it again.
+    await expectColumnsInStep(pageId);
     await writeSafeRelease(db(), fenced);
-    expect((await own(pageId)).holdsImported).toBe(false);
+    const before = { rows: await listSyncHolds(db(), pageId), columns: await oldColumns(pageId) };
+    await own(pageId);
+    expect({ rows: await listSyncHolds(db(), pageId), columns: await oldColumns(pageId) }).toEqual(before);
+  });
+
+  it("a hold write under no generation (the owner's route raise) rewrites them like a fenced one", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage();
+    const slowed = { holdUntil: null, ladderStep: 1, effectivePerMin: 5, policyVersion: "v1", last429AttemptId: 42, last429At: new Date("2026-10-04T10:00:00.000Z") };
+    // The page's actor took a credentials hold and slowed a route, and released.
+    const fenced = { pageId, generation: (await own(pageId)).generation };
+    await setPageHold(db(), { ...fenced, kind: "auth", until: "infinity", detail: { credentialsGeneration: "gen-a" } });
+    expect(await writeSyncRouteState(db(), { ...fenced, route: "messages.page", expectRevision: 0, entry: slowed })).toEqual({ kind: "written", revision: 1 });
+    await writeSafeRelease(db(), fenced);
+
+    // `sync` is stopped; the owner raises the route: a compare-and-set on the
+    // route's revision, the credentials hold untouched, both sides written.
+    expect(await writeSyncRouteState(db(), { pageId, route: "messages.page", expectRevision: 0, entry: { ...slowed, effectivePerMin: 6 } }))
+      .toEqual({ kind: "stale" });
+    expect(await writeSyncRouteState(db(), { pageId, route: "messages.page", expectRevision: 1, entry: { ...slowed, effectivePerMin: 6 } }))
+      .toEqual({ kind: "written", revision: 2 });
+    expect(shape(await listSyncHolds(db(), pageId))).toEqual([
+      { scope: "page", key: "", kind: "auth", ladderStep: 0, detail: { credentialsGeneration: "gen-a" }, revision: 1 },
+      {
+        scope: "route", key: "messages.page", kind: "route_budget", ladderStep: 1,
+        detail: { effectivePerMin: 6, policyVersion: "v1", last429AttemptId: 42, last429At: "2026-10-04T10:00:00.000Z" }, revision: 2,
+      },
+    ]);
+    expect(await oldColumns(pageId)).toMatchObject({
+      hold_kind: "auth",
+      indefinite: true,
+      hold_detail: { credentialsGeneration: "gen-a" },
+      resource_holds: { "route:state": { version: 1, routes: { "messages.page": { effectivePerMin: 6, revision: 2 } } } },
+    });
+    await expectColumnsInStep(pageId);
   });
 
   it("a write that fails writes neither side", async (context) => {
@@ -296,295 +430,87 @@ describe("the old hold columns, kept in step for the previous image", () => {
   });
 });
 
-describe("the hold set read back from the old columns", () => {
-  /** What the previous image wrote: the slot and `resource_holds`. */
-  async function writeOldColumns(pageId: number, columns: { kind: string | null; until?: string | null; since?: string | null; detail?: unknown; resourceHolds?: unknown }) {
-    await testDb!.pool.query(
-      `update sync_pages set hold_kind = $2, hold_until = $3::timestamptz, hold_since = $4::timestamptz,
-              hold_detail = $5::jsonb, resource_holds = $6::jsonb where page_id = $1`,
-      [pageId, columns.kind, columns.until ?? null, columns.since ?? null, JSON.stringify(columns.detail ?? {}), JSON.stringify(columns.resourceHolds ?? {})],
-    );
-  }
-
-  it("a page's state first reaches the table this way: both page holds, the breakers and the route state", async (context) => {
-    if (!testDb) return context.skip();
-    const pageId = await seedPage();
-    const since = "2026-10-04T08:00:00.000Z";
-    const networkUntil = new Date(Date.now() + 90_000).toISOString();
-    const routeUntil = new Date(Date.now() + 300_000).toISOString();
-    const breakerUntil = new Date(Date.now() + 1_800_000).toISOString();
-    await writeOldColumns(pageId, {
-      kind: "auth",
-      until: "infinity",
-      since,
-      detail: {
-        status: 401, credentialsGeneration: "gen-b", failedAttemptId: 7, failedAt: since,
-        timedHold: { kind: "network", until: networkUntil, detail: { streak: 4, networkSince: "2026-10-04T07:59:00.000Z" } },
-      },
-      resourceHolds: {
-        probe: { until: breakerUntil, step: 7, since: "2026-10-02T21:54:26.507558+00:00" },
-        // An older build's endpoint-group hold: no build reads it any more.
-        "dm-conversations": { until: breakerUntil, kind: "rate_limit_list", step: 2 },
-        "route:state": {
-          version: 1,
-          routes: {
-            "messaging.groups": {
-              holdUntil: routeUntil, ladderStep: 2, effectivePerMin: 3, policyVersion: "abc", last429AttemptId: 99,
-              last429At: "2026-10-04T08:30:00.000Z", revision: 4,
-            },
-            polls: { holdUntil: null, ladderStep: 0, effectivePerMin: null, policyVersion: null, last429AttemptId: null, last429At: null, revision: 2 },
+describe("nothing reads the old hold columns", () => {
+  const routeUntil = new Date(Date.now() + 300_000).toISOString();
+  /** Columns that say something else than any rows of these tests: another
+   *  credentials hold, a breaker, a held and slowed route. */
+  const elsewhere = {
+    kind: "identity_mismatch",
+    until: "infinity",
+    since: "2026-10-04T08:00:00.000Z",
+    detail: { credentialsGeneration: "gen-z" },
+    resourceHolds: {
+      probe: { until: "2099-01-01T00:00:00.000Z", step: 7, since: "2026-10-02T21:54:26.507Z" },
+      "route:state": {
+        version: 1,
+        routes: {
+          "messaging.groups": {
+            holdUntil: routeUntil, ladderStep: 2, effectivePerMin: 3, policyVersion: "abc", last429AttemptId: 99,
+            last429At: "2026-10-04T08:30:00.000Z", revision: 4,
           },
         },
       },
-    });
-    const first = await own(pageId);
-    expect(first.holdsImported).toBe(true);
-    const rows = await listSyncHolds(db(), pageId);
-    expect(shape(rows)).toEqual([
-      { scope: "page", key: "", kind: "auth", ladderStep: 0, detail: { status: 401, credentialsGeneration: "gen-b", failedAttemptId: 7, failedAt: since }, revision: 1 },
-      { scope: "page", key: "", kind: "network", ladderStep: 0, detail: { streak: 4, networkSince: "2026-10-04T07:59:00.000Z" }, revision: 1 },
-      { scope: "resource", key: "probe", kind: "resource_breaker", ladderStep: 7, detail: {}, revision: 1 },
-      {
-        scope: "route", key: "messaging.groups", kind: "route_budget", ladderStep: 2,
-        detail: { effectivePerMin: 3, policyVersion: "abc", last429AttemptId: 99, last429At: "2026-10-04T08:30:00.000Z" }, revision: 4,
-      },
-      { scope: "route", key: "messaging.groups", kind: "route_hold", ladderStep: 0, detail: {}, revision: 1 },
-      { scope: "route", key: "polls", kind: "route_budget", ladderStep: 0, detail: { effectivePerMin: null, policyVersion: null, last429AttemptId: null, last429At: null }, revision: 2 },
-    ]);
-    expect(rows.map((row) => row.until?.toISOString() ?? null)).toEqual([
-      INDEFINITE_UNTIL.toISOString(), networkUntil, breakerUntil, null, routeUntil, null,
-    ]);
-    expect(rows[0]!.since.toISOString()).toBe(since);
-    expect(rows[1]!.since.toISOString()).toBe("2026-10-04T07:59:00.000Z");
-    expect(rows[2]!.since.toISOString()).toBe("2026-10-02T21:54:26.507Z");
+    },
+  };
 
-    // What the engine admits by, from the page row: nothing while the network
-    // hold stands, then only the identity checks the credentials hold admits.
-    const page = (await getSyncPage(db(), pageId))!;
-    const holds = holdSetOf(page.holds);
-    expect(whyHeld(holds, null, {}, page.dbNow)).toMatchObject({ scope: "page", kind: "network" });
-    const afterNetwork = new Date(Date.parse(networkUntil) + 1);
-    expect(whyHeld(holds, null, {}, afterNetwork)).toMatchObject({ scope: "credentials", kind: "auth" });
-    expect(whyHeld(holds, null, { operation: { kind: "verify", digest: "gen-c" } }, afterNetwork)).toBeNull();
-    expect(holds.routes).toMatchObject({ ok: true, state: { routes: { "messaging.groups": { holdUntil: routeUntil, revision: 4, effectivePerMin: 3 } } } });
-    if (!holds.routes.ok) throw new Error("the route state reads");
-    const routes = routeAdmissionView(new RouteClocks({ sends: [], state: holds.routes.state }), [{ key: "dm-conversations.head", operations: ["messaging.groups"] }], afterNetwork);
-    expect(whyHeld(holds, routes, { operation: { kind: "candidate_check" }, work: { resource: "dm-conversations.head" } }, afterNetwork))
-      .toEqual({ scope: "route_hold", kind: "route", until: new Date(routeUntil), routes: ["messaging.groups"], held: ["messaging.groups"] });
-
-    // The columns are now exactly what the rows say (the group hold is gone
-    // from them): the next owner reads nothing back.
-    expect((await oldColumns(pageId)).resource_holds).not.toHaveProperty("dm-conversations");
-    await writeSafeRelease(db(), { pageId, generation: first.generation });
-    const before = await listSyncHolds(db(), pageId);
-    const second = await own(pageId);
-    expect(second.holdsImported).toBe(false);
-    expect(await listSyncHolds(db(), pageId)).toEqual(before);
-  });
-
-  it("after a rollback: what the previous image wrote and lifted meanwhile is the page's state", async (context) => {
+  it("an acquisition takes the page's rows as they stand, whatever the columns say, and writes neither side", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage();
-    const first = await own(pageId);
-    const fenced = { pageId, generation: first.generation };
-    // This image: an auth hold and a breaker.
-    await setPageHold(db(), { ...fenced, kind: "auth", until: "infinity", detail: { credentialsGeneration: "gen-a" } });
-    await setResourceHold(db(), { ...fenced, file: "posts", hold: { until: new Date(Date.now() + 1_800_000), step: 1 } });
-    await writeSafeRelease(db(), fenced);
-    // The previous image ran the page: its identity proof cleared the hold,
-    // an ok answer lifted the breaker, and a 429 held and slowed a route.
-    const routeUntil = new Date(Date.now() + 40_000).toISOString();
-    await writeOldColumns(pageId, {
-      kind: null,
-      resourceHolds: {
-        "route:state": {
-          version: 1,
-          routes: {
-            "media.offer_stats": {
-              holdUntil: routeUntil, ladderStep: 1, effectivePerMin: 2.5, policyVersion: "p", last429AttemptId: 5,
-              last429At: "2026-10-04T10:00:00.000Z", revision: 1,
-            },
-          },
-        },
-      },
-    });
-    const second = await own(pageId);
-    expect(second.holdsImported).toBe(true);
-    const rows = await listSyncHolds(db(), pageId);
-    expect(shape(rows)).toEqual([
-      {
-        scope: "route", key: "media.offer_stats", kind: "route_budget", ladderStep: 1,
-        detail: { effectivePerMin: 2.5, policyVersion: "p", last429AttemptId: 5, last429At: "2026-10-04T10:00:00.000Z" }, revision: 1,
-      },
-      { scope: "route", key: "media.offer_stats", kind: "route_hold", ladderStep: 0, detail: {}, revision: 1 },
-    ]);
-    // The slowdown is durable across it: the next write is a compare-and-set
-    // on the revision that image left.
-    const state = { ladderStep: 2, effectivePerMin: 1.5, policyVersion: "p", last429AttemptId: 6, last429At: new Date() };
-    expect(await writeSyncRouteState(db(), { pageId, generation: second.generation, route: "media.offer_stats", expectRevision: 0, entry: { ...state, holdUntil: null } }))
-      .toEqual({ kind: "stale" });
-    expect(await writeSyncRouteState(db(), { pageId, generation: second.generation, route: "media.offer_stats", expectRevision: 1, entry: { ...state, holdUntil: new Date(routeUntil) } }))
-      .toEqual({ kind: "written", revision: 2 });
-  });
-
-  it("a hold write under no generation (the owner's route raise) reads the columns back first: it never writes outdated rows over what the previous image left", async (context) => {
-    if (!testDb) return context.skip();
-    const slowed = { holdUntil: null, ladderStep: 1, effectivePerMin: 5, policyVersion: "v1", last429AttemptId: 42, last429At: new Date("2026-10-04T10:00:00.000Z") };
-    const refusal = { status: 401, credentialsGeneration: "gen-a", failedAttemptId: 50, failedAt: "2026-10-04T10:05:00.000Z" };
-    const breakerUntil = new Date(Date.now() + 1_800_000).toISOString();
-    /** A page this image slowed a route of (revision 1) and released — a
-     *  rollback follows — and that the previous image then ran: it took a
-     *  credentials hold and a breaker, and wrote `route` as `entry`. */
-    async function afterRollback(entry: Record<string, unknown>): Promise<number> {
-      const pageId = await seedPage();
-      const fenced = { pageId, generation: (await own(pageId)).generation };
-      expect(await writeSyncRouteState(db(), { ...fenced, route: "messages.page", expectRevision: 0, entry: slowed })).toEqual({ kind: "written", revision: 1 });
-      await writeSafeRelease(db(), fenced);
-      const routes = (await oldColumns(pageId)).resource_holds["route:state"] as { routes: Record<string, Record<string, unknown>> };
-      await writeOldColumns(pageId, {
-        kind: "auth",
-        until: "infinity",
-        since: refusal.failedAt,
-        detail: refusal,
-        resourceHolds: {
-          posts: { until: breakerUntil, step: 2, since: refusal.failedAt },
-          "route:state": { version: 1, routes: { "messages.page": { ...routes.routes["messages.page"], ...entry } } },
-        },
-      });
-      return pageId;
+    // A page held by its rows, the columns saying something else.
+    const held = await seedPage();
+    const first = await own(held);
+    await setPageHold(db(), { pageId: held, generation: first.generation, kind: "auth", until: "infinity", detail: { credentialsGeneration: "gen-a" } });
+    await setResourceHold(db(), { pageId: held, generation: first.generation, file: "posts", hold: { until: new Date(Date.now() + 1_800_000), step: 1 } });
+    await writeSafeRelease(db(), { pageId: held, generation: first.generation });
+    for (const columns of [
+      elsewhere,
+      // Nothing at all — rows changed alone, as a build that no longer writes the columns leaves them.
+      { kind: null },
+      // A route state no build ever wrote.
+      { kind: null, resourceHolds: { "route:state": { version: 9, routes: {} } } },
+    ]) {
+      await writeOldColumns(held, columns);
+      const before = { rows: await listSyncHolds(db(), held), columns: await oldColumns(held) };
+      const acquired = await own(held);
+      expect({ rows: await listSyncHolds(db(), held), columns: await oldColumns(held) }).toEqual(before);
+      expect(shape(before.rows)).toEqual([
+        { scope: "page", key: "", kind: "auth", ladderStep: 0, detail: { credentialsGeneration: "gen-a" }, revision: 1 },
+        { scope: "resource", key: "posts", kind: "resource_breaker", ladderStep: 1, detail: {}, revision: 1 },
+      ]);
+      const page = (await getSyncPage(db(), held))!;
+      expect(whyHeld(holdSetOf(page.holds), null, {}, page.dbNow)).toMatchObject({ scope: "credentials", kind: "auth" });
+      await writeSafeRelease(db(), { pageId: held, generation: acquired.generation });
     }
-    const held = [
-      { scope: "page", key: "", kind: "auth", ladderStep: 0, detail: refusal, revision: 1 },
-      { scope: "resource", key: "posts", kind: "resource_breaker", ladderStep: 2, detail: {}, revision: 1 },
-    ];
-    const state = { effectivePerMin: 5, policyVersion: "v1", last429AttemptId: 42, last429At: "2026-10-04T10:00:00.000Z" };
 
-    // This image is back and its host has not taken the page yet. A raise of
-    // the route that image left alone is written — over the rows its columns
-    // say, so the holds it took stand on both sides.
-    const untouched = await afterRollback({});
-    expect(await writeSyncRouteState(db(), { pageId: untouched, route: "messages.page", expectRevision: 1, entry: { ...slowed, effectivePerMin: 6 } }))
-      .toEqual({ kind: "written", revision: 2 });
-    expect(shape(await listSyncHolds(db(), untouched))).toEqual([
-      ...held,
-      { scope: "route", key: "messages.page", kind: "route_budget", ladderStep: 1, detail: { ...state, effectivePerMin: 6 }, revision: 2 },
-    ]);
-    expect(await oldColumns(untouched)).toMatchObject({
-      hold_kind: "auth",
-      indefinite: true,
-      hold_detail: refusal,
-      resource_holds: {
-        posts: { until: breakerUntil, step: 2 },
-        "route:state": { version: 1, routes: { "messages.page": { effectivePerMin: 6, revision: 2 } } },
-      },
-    });
-    // The two sides agree, and the page is held as that image held it.
-    expect((await own(untouched)).holdsImported).toBe(false);
-    const page = (await getSyncPage(db(), untouched))!;
-    expect(whyHeld(holdSetOf(page.holds), null, {}, page.dbNow)).toMatchObject({ scope: "credentials", kind: "auth" });
-
-    // A raise computed from this image's rows of a route that image slowed
-    // again (its second 429: revision 2) meets that revision: nothing raised,
-    // and the columns stand as that image left them.
-    const routeUntil = new Date(Date.now() + 300_000).toISOString();
-    const again = { holdUntil: routeUntil, ladderStep: 2, effectivePerMin: 2.5, last429AttemptId: 51, last429At: "2026-10-04T10:06:00.000Z", revision: 2 };
-    const slowedAgain = await afterRollback(again);
-    const before = await oldColumns(slowedAgain);
-    expect(await writeSyncRouteState(db(), { pageId: slowedAgain, route: "messages.page", expectRevision: 1, entry: { ...slowed, effectivePerMin: 6 } }))
-      .toEqual({ kind: "stale" });
-    expect(await oldColumns(slowedAgain)).toEqual(before);
-    expect(shape(await listSyncHolds(db(), slowedAgain))).toEqual([
-      ...held,
-      {
-        scope: "route", key: "messages.page", kind: "route_budget", ladderStep: 2,
-        detail: { ...state, effectivePerMin: 2.5, last429AttemptId: 51, last429At: "2026-10-04T10:06:00.000Z" }, revision: 2,
-      },
-      { scope: "route", key: "messages.page", kind: "route_hold", ladderStep: 0, detail: {}, revision: 1 },
-    ]);
+    // A page whose columns hold something and that has no row: the hold-set
+    // release never acquired it. Nothing is read here — which is why this
+    // release ships only once every page's rows are what its columns say.
+    const never = await seedPage();
+    await writeOldColumns(never, elsewhere);
+    await own(never);
+    expect(await listSyncHolds(db(), never)).toEqual([]);
+    const page = (await getSyncPage(db(), never))!;
+    expect(whyHeld(holdSetOf(page.holds), null, {}, page.dbNow)).toBeNull();
+    expect(await oldColumns(never)).toMatchObject({ hold_kind: "identity_mismatch", indefinite: true, resource_holds: elsewhere.resourceHolds });
   });
 
-  it("rows changed alone are replaced by what the columns say — this build is a rollback target only of a build that still writes the columns", async (context) => {
+  it("a hold write under no generation reads none back either — columns it cannot make sense of do not refuse it — and rewrites them from the rows", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage();
-    await writeSafeRelease(db(), { pageId, generation: (await own(pageId)).generation });
-    // A writer that left the columns alone — a hand, or a later build that no
-    // longer mirrors: a credentials hold and a held, slowed route, rows only.
-    await testDb.pool.query(
-      `insert into sync_holds (page_id, scope, key, kind, until, ladder_step, detail)
-       values ($1, 'page', '', 'auth', 'infinity', 0, '{"credentialsGeneration":"gen-a"}'),
-              ($1, 'route', 'messages.page', 'route_hold', clock_timestamp() + interval '5 minutes', 0, '{}'),
-              ($1, 'route', 'messages.page', 'route_budget', null, 1, '{"effectivePerMin":5,"policyVersion":"v1","last429AttemptId":9,"last429At":"2026-10-04T10:00:00.000Z"}')`,
-      [pageId],
-    );
-    const before = (await getSyncPage(db(), pageId))!;
-    expect(whyHeld(holdSetOf(before.holds), null, {}, before.dbNow)).toMatchObject({ scope: "credentials", kind: "auth" });
-    // The columns hold nothing, and they win: the page is open again. Hence
-    // the order of the releases after this one (README, "The hold set"): the
-    // first only stops reading the columns back and still writes them.
-    expect((await own(pageId)).holdsImported).toBe(true);
-    expect(await listSyncHolds(db(), pageId)).toEqual([]);
-    const after = (await getSyncPage(db(), pageId))!;
-    expect(whyHeld(holdSetOf(after.holds), null, {}, after.dbNow)).toBeNull();
-  });
-
-  it("a page-wide 429 hold an older build left holds the page until its end all the same (fail closed)", async (context) => {
-    if (!testDb) return context.skip();
-    const own429 = await seedPage();
-    const until = new Date(Date.now() + 120_000);
-    await writeOldColumns(own429, { kind: "rate_limit", until: until.toISOString(), since: "2026-10-04T08:00:00.000Z", detail: { status: 429 } });
-    expect((await own(own429)).holdsImported).toBe(true);
-    const page = (await getSyncPage(db(), own429))!;
-    expect(shape(page.holds)).toEqual([
-      { scope: "page", key: "", kind: "network", ladderStep: 0, detail: { status: 429, legacyKind: "rate_limit" }, revision: 1 },
-    ]);
-    expect(whyHeld(holdSetOf(page.holds), null, { operation: { kind: "candidate_check" } }, page.dbNow)).toMatchObject({ scope: "page", until });
-    expect(await oldColumns(own429)).toMatchObject({ hold_kind: "network", hold_until: until, hold_detail: { status: 429, legacyKind: "rate_limit" } });
-
-    const carried = await seedPage();
-    await writeOldColumns(carried, {
-      kind: "identity_mismatch",
-      until: "infinity",
-      since: "2026-10-04T08:00:00.000Z",
-      detail: { credentialsGeneration: "gen-a", timedHold: { kind: "rate_limit", until: until.toISOString(), detail: { lastRateLimitAt: "2026-10-04T08:10:00.000Z" } } },
-    });
-    await own(carried);
-    const rows = await listSyncHolds(db(), carried);
-    expect(shape(rows)).toEqual([
-      { scope: "page", key: "", kind: "identity_mismatch", ladderStep: 0, detail: { credentialsGeneration: "gen-a" }, revision: 1 },
-      { scope: "page", key: "", kind: "network", ladderStep: 0, detail: { lastRateLimitAt: "2026-10-04T08:10:00.000Z", legacyKind: "rate_limit" }, revision: 1 },
-    ]);
-    expect(rows[1]!.until).toEqual(until);
-  });
-
-  it("a page that holds nothing on either side is not written; old columns no build wrote refuse the acquisition", async (context) => {
-    if (!testDb) return context.skip();
-    const clean = await seedPage();
-    const acquired = await own(clean);
-    expect(acquired.holdsImported).toBe(false);
-    expect(await listSyncHolds(db(), clean)).toEqual([]);
-    expect(await oldColumns(clean)).toMatchObject({ hold_kind: null, hold_detail: {}, resource_holds: {} });
-
-    for (const [routeState, diagnostic] of [
-      [{ version: 9, routes: {} }, /route_state_version:9/],
-      ["v1", /route_state_not_an_object/],
-      [{ version: 1, routes: [] }, /route_state_routes/],
-      [{ version: 1, routes: { polls: { holdUntil: "soon", ladderStep: 0, effectivePerMin: null, policyVersion: null, last429AttemptId: null, last429At: null, revision: 1 } } }, /route_state_entry:polls/],
-      [{ version: 1, routes: { polls: { holdUntil: null, ladderStep: 0, effectivePerMin: null, policyVersion: null, last429AttemptId: null, last429At: null, revision: 0 } } }, /route_state_entry:polls/],
-    ] as const) {
+    for (const columns of [elsewhere, { kind: null, resourceHolds: { "route:state": "v1" } }]) {
       const pageId = await seedPage();
-      // Rows a newer state left stay as they are: an unreadable hold never opens a page.
-      await testDb.pool.query("insert into sync_holds (page_id, scope, key, kind, until) values ($1, 'page', '', 'auth', 'infinity')", [pageId]);
-      await writeOldColumns(pageId, { kind: null, resourceHolds: { "route:state": routeState } });
-      const refused = acquireSyncPageOwnership(db(), { pageId, owner: owner() });
-      await expect(refused).rejects.toBeInstanceOf(SyncLegacyHoldsUnreadableError);
-      await expect(refused).rejects.toThrow(diagnostic);
-      // Nor does a hold write under no generation go over them.
-      await expect(setResourceHold(db(), { pageId, file: "posts", hold: { until: new Date(Date.now() + 60_000), step: 1 } }))
-        .rejects.toBeInstanceOf(SyncLegacyHoldsUnreadableError);
-      // Nothing was written: the page is not owned, its rows and columns stand.
-      expect(await query("select owner_generation::int as generation from sync_pages where page_id = $1", [pageId])).toEqual([{ generation: 0 }]);
-      expect(shape(await listSyncHolds(db(), pageId))).toEqual([{ scope: "page", key: "", kind: "auth", ladderStep: 0, detail: {}, revision: 1 }]);
-      expect((await oldColumns(pageId)).resource_holds).toEqual({ "route:state": routeState });
+      await writeSafeRelease(db(), { pageId, generation: (await own(pageId)).generation });
+      await writeOldColumns(pageId, columns);
+      const until = new Date(Date.now() + 60_000);
+      await setResourceHold(db(), { pageId, file: "posts", hold: { until, step: 1 } });
+      const rows = await listSyncHolds(db(), pageId);
+      expect(shape(rows)).toEqual([{ scope: "resource", key: "posts", kind: "resource_breaker", ladderStep: 1, detail: {}, revision: 1 }]);
+      expect(await oldColumns(pageId)).toEqual({
+        hold_kind: null,
+        indefinite: null,
+        hold_until: null,
+        hold_since: null,
+        hold_detail: {},
+        resource_holds: { posts: { until: iso(until), step: 1, since: iso(rows[0]!.since) } },
+      });
     }
   });
 });

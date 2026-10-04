@@ -920,10 +920,10 @@ export const syncPages = pgTable(
     pausedRequests: boolean("paused_requests").notNull().default(false),
     pausedResources: text("paused_resources").array().notNull().default(sql`'{}'::text[]`),
     pauseNote: text("pause_note"),
-    // The old hold slot and `resource_holds` below: kept in step with the
-    // hold set (`sync_holds`, 0240) for the previous image, read by nothing
-    // (repositories/sync/holds-legacy.ts). `hold_step` is no longer mapped:
-    // the database column keeps its default.
+    // The old hold slot and `resource_holds` below: rewritten from the hold
+    // set (`sync_holds`, 0240) by every hold write, for a rollback's image,
+    // and read by nothing (repositories/sync/holds-legacy.ts). `hold_step`
+    // is gone (0241).
     holdKind: text("hold_kind").$type<"rate_limit" | "auth" | "identity_mismatch" | "network">(),
     holdUntil: timestamp("hold_until", { withTimezone: true }),
     holdSince: timestamp("hold_since", { withTimezone: true }),

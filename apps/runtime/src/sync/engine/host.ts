@@ -494,13 +494,6 @@ export class SyncEngineHost {
       return;
     }
     const generation = acquired.generation;
-    if (acquired.holdsImported) {
-      // The old hold columns said something else than the page's hold set:
-      // the previous image wrote them (or a hand did), and they won.
-      this.#metrics.increment("sync_holds_imported", { pageId });
-      logger.warn({ pageId, pageLabel: page.pageLabel },
-        "Fansly sync host: the page's hold set was re-read from the old hold columns of its row");
-    }
     const wasWaiting = this.#waiting.get(pageId);
     this.#waiting.delete(pageId);
     if (wasWaiting?.alerted === true) {

@@ -622,9 +622,9 @@ describe("sync_holds.sql (step 4, S4-30: the hold set)", () => {
       expect(statement.replaceAll("on delete restrict", "")).not.toMatch(/\b(drop|rename|truncate|delete|update|insert|alter)\b/i);
     }
     expect(statements.filter((statement) => statement.startsWith("create table"))).toHaveLength(1);
-    // The table starts empty: a page's state reaches it when its ownership is
-    // acquired (`reconcileSyncHoldsWithLegacyColumns`), never by a copy the
-    // previous image could outdate.
+    // The table starts empty: a page's state reached it when the hold-set
+    // release acquired the page's ownership, never by a copy the image before
+    // it could outdate.
     expect(sql).not.toMatch(/\bsync_pages\b/);
     expect(text).toContain("grant select on sync_holds to read_only");
     expect(statements.filter((statement) => statement.startsWith("do $$"))).toHaveLength(1);
@@ -674,22 +674,76 @@ describe("sync_holds.sql (step 4, S4-30: the hold set)", () => {
     expect(names).toEqual(expect.arrayContaining(columns));
   });
 
-  it("allows application rollback: the previous image reads the old hold columns, which the hold writers keep in step", () => {
+  it("allows application rollback: the hold writers keep the old hold columns in step, for an image that reads them", () => {
     expect(rollbackCompatible()).toContain(`"${migration}"`);
     const pages = readFileSync("packages/db/src/repositories/sync/pages.ts", "utf8");
     // Every hold write goes through one transaction that rewrites the old
-    // columns from the rows; an acquisition reads them back when they differ,
-    // and so does a write under no generation before it writes (it can come
-    // before this build has taken the page).
+    // columns from the rows: the image that brought the table lets the
+    // columns win when they differ from the rows at an acquisition, so a
+    // rollback to it must find them equal.
     expect(pages.match(/writeHoldSet\(db, input,/g)).toHaveLength(4);
     expect(pages).toContain("await mirrorSyncHoldsToLegacyColumns(tx, input.pageId);");
-    expect(pages).toContain("await reconcileSyncHoldsWithLegacyColumns(tx as unknown as Database, input.pageId);");
-    expect(pages).toContain("if (input.generation === undefined) await reconcileSyncHoldsWithLegacyColumns(tx, input.pageId);");
-    expect(pages.match(/reconcileSyncHoldsWithLegacyColumns\(tx/g)).toHaveLength(2);
     // No other statement writes a hold row.
     for (const file of readdirSync("packages/db/src/repositories/sync")) {
-      if (file === "pages.ts" || file === "holds-legacy.ts") continue;
+      if (file === "pages.ts") continue;
       expect(readFileSync(`packages/db/src/repositories/sync/${file}`, "utf8"), file).not.toMatch(/(insert into|update|delete from) sync_holds\b/);
     }
+  });
+});
+
+describe("sync_pages_drop_hold_step.sql (step 4, S4-31: the first old hold column goes)", () => {
+  // Found by its name, not its number: the number is the next free one at merge.
+  const migrations = readdirSync("packages/db/migrations").filter((file) => file.endsWith(".sql")).sort();
+  const found = migrations.filter((file) => file.endsWith("_sync_pages_drop_hold_step.sql"));
+  const migration = found[0] ?? "";
+  const text = found.length === 1 ? readFileSync(`packages/db/migrations/${migration}`, "utf8") : "";
+  const statements = topLevelStatements(stripComments(text));
+
+  it("exists once, after the hold set's table", () => {
+    expect(found).toHaveLength(1);
+    const holdSet = migrations.find((file) => file.endsWith("_sync_holds.sql")) ?? "";
+    expect(holdSet).not.toBe("");
+    expect(migration > holdSet).toBe(true);
+  });
+
+  it("drops `sync_pages.hold_step` and nothing else, its lock wait bounded", () => {
+    expect(statements).toEqual([
+      "set local lock_timeout = '5s'",
+      "alter table sync_pages drop column if exists hold_step",
+    ]);
+  });
+
+  it("leaves every old hold column an image still writes: no later migration has dropped them yet", () => {
+    const base = stripComments(readFileSync("packages/db/migrations/0228_sync_engine_core.sql", "utf8"));
+    const mirror = readFileSync("packages/db/src/repositories/sync/holds-legacy.ts", "utf8");
+    for (const column of ["hold_kind", "hold_until", "hold_since", "hold_detail", "resource_holds"]) {
+      expect(base, column).toMatch(new RegExp(`^\\s{2}${column} `, "m"));
+      expect(mirror, column).toMatch(new RegExp(`\\b${column} = \\$\\{`));
+      for (const later of migrations.filter((file) => file > "0228_sync_engine_core.sql")) {
+        const sql = stripComments(readFileSync(`packages/db/migrations/${later}`, "utf8"));
+        expect(sql, `${later}: ${column}`).not.toMatch(new RegExp(`drop column (if exists )?${column}\\b`, "i"));
+      }
+    }
+    // The counter of consecutive network failures is no hold: it stays.
+    expect(base).toMatch(/^\s{2}network_failure_streak smallint not null default 0,$/m);
+  });
+
+  it("allows application rollback: the page row is read by named columns, and no source names this one", () => {
+    expect(rollbackCompatible()).toContain(`"${migration}"`);
+    // The page row is read through one list of named columns, never `*`.
+    const pages = readFileSync("packages/db/src/repositories/sync/pages.ts", "utf8");
+    expect(pages).not.toMatch(/\bsp\.\*|select \* from sync_pages|to_jsonb\(sp\)/);
+    const sources = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+      const path = `${dir}/${entry.name}`;
+      if (entry.isDirectory()) return entry.name === "node_modules" || entry.name === "dist" ? [] : sources(path);
+      return /\.(ts|tsx|sql|mjs|sh)$/.test(entry.name) ? [path] : [];
+    });
+    const naming = [...sources("apps"), ...sources("packages/db/src"), ...sources("packages/shared/src"), ...sources("packages/contracts/src"), ...sources("scripts")]
+      .filter((path) => readFileSync(path, "utf8").replaceAll(migration, "").split("\n")
+        .some((line) => /hold_step|holdStep/.test(line) && !/^\s*(\/\/|\/?\*|#|--)/.test(line)));
+    expect(naming).toEqual([]);
+    // Nor does a test select it: only the tests of this migration name it.
+    const tests = readdirSync("tests").filter((file) => file.endsWith(".ts") && /hold_step|holdStep/.test(readFileSync(`tests/${file}`, "utf8")));
+    expect(tests.sort()).toEqual(["sync-engine-migrations.test.ts", "sync-hold-set.integration.test.ts", "sync-holds-legacy.test.ts"]);
   });
 });

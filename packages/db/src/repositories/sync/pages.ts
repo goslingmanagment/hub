@@ -6,7 +6,7 @@ import {
   type FanslySendGuardOwnerEngine,
   type FanslySendHolderIdentity,
 } from "../fansly-send-guard.ts";
-import { mirrorSyncHoldsToLegacyColumns, reconcileSyncHoldsWithLegacyColumns } from "./holds-legacy.ts";
+import { mirrorSyncHoldsToLegacyColumns } from "./holds-legacy.ts";
 import {
   normalizeSyncHoldRows,
   SYNC_PAGE_HOLD_KEY,
@@ -683,15 +683,7 @@ export type SyncOwnerStopEvidence =
   | `os:${string}`;
 
 export type AcquireSyncPageOwnershipResult =
-  | {
-    kind: "acquired";
-    generation: bigint;
-    evidence: SyncOwnerStopEvidence;
-    previous: SyncPageOwnerRecord;
-    /** The page's hold set was re-read from the old hold columns: they said
-     *  something else than its rows (`reconcileSyncHoldsWithLegacyColumns`). */
-    holdsImported: boolean;
-  }
+  | { kind: "acquired"; generation: bigint; evidence: SyncOwnerStopEvidence; previous: SyncPageOwnerRecord }
   /** The previous owner is not confirmed stopped: nothing was written. */
   | { kind: "unconfirmed"; previous: SyncPageOwnerRecord }
   | { kind: "no_page" };
@@ -709,10 +701,7 @@ export type AcquireSyncPageOwnershipResult =
  *       judges this very process); null = no proof.
  * A lost database session alone is never a confirmation. On success the new
  * generation and this process's identity are written; the caller then computes
- * the takeover floor (`paceFloorFromDb`, I5). In the same transaction the
- * page's hold set is brought in line with the old hold columns
- * (`reconcileSyncHoldsWithLegacyColumns`); columns that cannot be read fail
- * the acquisition (`SyncLegacyHoldsUnreadableError`), nothing written.
+ * the takeover floor (`paceFloorFromDb`, I5).
  */
 export async function acquireSyncPageOwnership(
   db: Database,
@@ -749,11 +738,6 @@ export async function acquireSyncPageOwnership(
     }
     if (evidence === null) return { kind: "unconfirmed", previous };
 
-    // The hold set against the old hold columns (this one release): what the
-    // previous image left in them is the page's state, and the new owner
-    // admits by the rows.
-    const holds = await reconcileSyncHoldsWithLegacyColumns(tx as unknown as Database, input.pageId);
-
     const owner = input.owner;
     const updated = await tx.execute<{ generation: string }>(sql`
       update sync_pages
@@ -777,7 +761,6 @@ export async function acquireSyncPageOwnership(
       generation: BigInt(updated.rows[0]!.generation),
       evidence,
       previous,
-      holdsImported: holds.imported,
     };
   });
 }
@@ -949,22 +932,14 @@ async function lockPageForHoldWrite(tx: Database, pageId: number, generation: bi
 }
 
 /**
- * One write of a page's hold set: the fence, the rows, then — until S4-31
- * takes the mirror away — the old hold columns rewritten from the rows
- * (`mirrorSyncHoldsToLegacyColumns`), all in one transaction (a savepoint
- * inside the caller's), so the two never part.
- *
- * The columns are rewritten from the rows, so the rows must already say what
- * the columns say. A writer under its generation has that from its
- * acquisition (`acquireSyncPageOwnership`); the generation fences the
- * previous image's actor out. A writer under none (the owner's `sync route
- * raise`) can run before this build has taken the page — after a rollback
- * and the way back, while `sync` is stopped or its acquisition waits — over
- * rows the previous image has outdated. It brings them in line itself, under
- * the same lock, before it writes (`reconcileSyncHoldsWithLegacyColumns`):
- * what that image left is then part of what is written back, never written
- * over. Columns that cannot be read refuse the write
- * (`SyncLegacyHoldsUnreadableError`).
+ * One write of a page's hold set: the fence, the rows, then — for the
+ * rollback's sake, until the next release takes the mirror away — the old
+ * hold columns rewritten from the rows (`mirrorSyncHoldsToLegacyColumns`),
+ * all in one transaction (a savepoint inside the caller's), so the two never
+ * part. The rows are the page's state: nothing reads the columns back,
+ * neither here nor when the page's ownership is acquired — the image before
+ * this one keeps the two sides equal itself, so the way back from a rollback
+ * to it finds the rows current.
  */
 async function writeHoldSet<T>(
   db: Database,
@@ -974,7 +949,6 @@ async function writeHoldSet<T>(
   return db.transaction(async (raw) => {
     const tx = raw as unknown as Database;
     await lockPageForHoldWrite(tx, input.pageId, input.generation);
-    if (input.generation === undefined) await reconcileSyncHoldsWithLegacyColumns(tx, input.pageId);
     const written = await write(tx);
     await mirrorSyncHoldsToLegacyColumns(tx, input.pageId);
     return written;
@@ -1159,8 +1133,7 @@ export type WriteSyncRouteStateResult =
  * without one): it is written with `expectRevision + 1`. With `generation`,
  * fenced like every actor write (a lost generation throws
  * `OwnershipLostError`); without it (the owner's `sync route raise`) the
- * revision alone orders the writers — the previous image among them: a raise
- * computed from rows that image has outdated meets the revision it left.
+ * revision alone orders the writers.
  */
 export async function writeSyncRouteState(
   db: Database,

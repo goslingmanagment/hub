@@ -325,9 +325,9 @@ describe("a 429 on the media statistics (owner decisions №20, №22)", () => {
       // The ladder's first step stretched by ≤ 20 % jitter; a Retry-After as stated.
       expect(holdMsSet).toBeGreaterThan(holdMs - 1_000);
       expect(holdMsSet).toBeLessThanOrEqual(retryAfter === null ? holdMs * 1.2 + 1_000 : holdMs + 1_000);
-      const page = await testDb.pool.query<{ hold_kind: string | null; hold_step: number }>(
-        "select hold_kind, hold_step from sync_pages where page_id = $1", [pageId]);
-      expect(page.rows).toEqual([{ hold_kind: null, hold_step: 0 }]);
+      const page = await testDb.pool.query<{ hold_kind: string | null }>(
+        "select hold_kind from sync_pages where page_id = $1", [pageId]);
+      expect(page.rows).toEqual([{ hold_kind: null }]);
       // The chat and the money head went out inside the walk's hold.
       const order = transport.hits.map((hit) => hit.spec);
       const first = order.indexOf("media.offer_stats");

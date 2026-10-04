@@ -79,8 +79,7 @@ export function routeStateRows(routes: Readonly<Record<string, Partial<RouteStat
 
 // ── a database's hold set, written directly (a test's stand-in for an
 // outcome): by the database clock, and the old hold columns rewritten from
-// the rows as every hold write of this release does — an acquisition of the
-// page's ownership then reads nothing back ────────────────────────────────
+// the rows as every hold write does while they exist ──────────────────────
 
 /** A test database: its pool and its drizzle handle (`StartedTestDatabase`). */
 interface TestDatabase {
