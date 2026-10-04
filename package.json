@@ -42,7 +42,9 @@
     "test:watch": "vitest",
     "dev": "bash scripts/dev-local.sh",
     "dev:db": "docker compose up -d postgres",
-    "dev:dashboard": "cd apps/dashboard && npx vite"
+    "dev:dashboard": "cd apps/dashboard && npx vite",
+    "dev:seed-client": "node --import tsx/esm scripts/dev-seed-client.ts",
+    "dev:fake-ai": "node scripts/dev-fake-ai-provider.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
