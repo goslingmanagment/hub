@@ -62344,41 +62344,6 @@
                 }
               }
             }
-          },
-          "503": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
           }
         }
       }
