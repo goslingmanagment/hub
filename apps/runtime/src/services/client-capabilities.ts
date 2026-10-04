@@ -20,4 +20,6 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   // The dossier save from a stored generation (H-5). With it the hub serves
   // all of the `recap` feature; the owner's switches decide from here on.
   "recap-profile-v1",
+  // H-10a: Split for Ping and Hi (the splitAll flag). Coach drafts follow in H-10b.
+  "split-all-v1",
 ];

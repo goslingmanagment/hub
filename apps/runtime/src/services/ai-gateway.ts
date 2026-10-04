@@ -271,6 +271,12 @@ export interface AiGatewayStreamInternalOptions {
   attachedRecaps?: AiFeatureAttachedRecaps;
   /** Coach-only echo of the canonical question substituted for a preset turn. */
   presetQuestion?: string;
+  /** Feature-lane-only structural check of the FINAL completion text
+   * (chat-extension H-10: Split parts and variants; counts, never text). Runs
+   * once on a completed stream and is recorded as the ADDITIVE
+   * params.outputStructure key of the restricted generation record. Write-only:
+   * the stream has already been sent, so it can never filter or change it. */
+  describeOutput?: (completionText: string) => Record<string, unknown>;
 }
 
 /** The feature service builds a stream input from the wire body plus optional
@@ -540,6 +546,15 @@ export async function prepareAiGatewayStream(
           completedAt: record.completedAt,
         },
       });
+      // A record of the finished text, never a reason to lose the terminal row.
+      let outputStructure: Record<string, unknown> | undefined;
+      if (internal?.describeOutput !== undefined && record.outcome === "completed") {
+        try {
+          outputStructure = internal.describeOutput(record.completionText);
+        } catch (error) {
+          app.logger.warn({ requestId, err: error }, "AI gateway output structure check failed");
+        }
+      }
       // Stage 29 (DP 6-A): the restricted class stores the generation
       // VERBATIM — prompt blocks, completion, params — keyed by the
       // gateway-issued requestId (= generation_ref on the meta frame, the
@@ -577,6 +592,7 @@ export async function prepareAiGatewayStream(
           ...(internal?.contextManifest !== undefined
             ? { contextManifest: internal.contextManifest }
             : {}),
+          ...(outputStructure !== undefined ? { outputStructure } : {}),
         },
       });
       if (usageEventId !== null) {

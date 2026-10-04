@@ -107,7 +107,8 @@ authorization.
   `chatMuseAiPromptDebugEchoEnabled` kill-switch. `context-v1` adds the `context_v1` frame (below)
   and is required to send `liveTextContext`, whose answer rides that frame. It is also what lets a
   full Recap read past 1500 messages (transcript depth, below).
-  `split-all-v1` is reserved for the fields that will read it; until then it changes nothing.
+- `split-all-v1` lets `replyMode: "preferSplit"` reach `ping` and `hi-greeting` on a page whose
+  owner switched the `splitAll` flag on (see "Split for Ping and Hi" below). It adds no frame.
 - SDK: the header is the union of the `capabilities` option and the legacy `debugPromptEcho` flag,
   deduplicated, in the constant's order, joined by `, `. With nothing to advertise no header is sent,
   so existing callers put exactly the same bytes on the wire as before.
@@ -713,3 +714,30 @@ server-loaded transcript/profile context and rejects clientContext. Page access,
 platform matching, persona revision, quotas and restricted capture are
 unchanged. A greeting is a reviewed draft; the kernel neither sends a message
 nor certifies live first-contact eligibility.
+
+### Split for Ping and Hi (`split-all-v1`, chat-extension H-10a)
+
+`replyMode: "preferSplit"` splits Reply and Fix (`fast-reply`, `improve-draft`) for every client, as
+before. `ping` and `hi-greeting` take it only when all of these hold:
+
+- the request advertises `split-all-v1` in `x-kernel-ai-capabilities`;
+- the owner's `splitAll` flag is on for the page, by the same evaluation as every chat-extension
+  flag (`evaluateClientFeature`: an OnlyFans page, `chatExtensionEnabled`, the flag in
+  `chatExtensionFeatures`, a binding, `split-all-v1` among the served capabilities);
+- the feature is `supportsSplitAll` in both policy tables (`FEATURE_POLICIES` and the builder's
+  `PROMPT_POLICIES`).
+
+`replyMode` alone never turns it on: the Fansly extension sends `preferSplit` on every feature, and
+a client that does not advertise the capability keeps its prompts byte for byte
+(`tests/ai-prompts-split-all.test.ts`, `tests/client-sdk-compat.integration.test.ts`). A request
+that does not pass the gate is not refused: it generates the single-message prompt it always did.
+
+With the gate open only the uncached task block changes. Ping gets the instructions for 2-3
+`[NEXT]` parts; Hi asks for `[NEXT]` parts inside each `[VARIANT]`, or inside its one draft. The
+cached prefix, the body schema and the frames are unchanged: the markers travel inside
+`content_delta` text and the client parses them after `done`.
+
+A generation the gate opened also stores `params.outputStructure` in its restricted record: the
+structure of the finished text as `{ variantsRequested, partsPerVariant, ok }`, counts only, where
+`ok` means the requested number of variants with two or three parts each. It is written for
+completed streams only and is a record, never a filter: the stream has already been sent.

@@ -19,6 +19,7 @@ import {
   createUserAccount,
   setUserPassword,
 } from "../apps/runtime/src/services/auth.ts";
+import { SERVED_CLIENT_CAPABILITIES } from "../apps/runtime/src/services/client-capabilities.ts";
 import { issueDeviceTokenForUserId } from "./helpers/device-credentials.ts";
 import {
   resetIntegrationDatabase,
@@ -224,9 +225,17 @@ describe("GET /api/v1/client/bootstrap", () => {
       previewSendReceiptProfiles: [],
     });
     // What this hub serves today: the AI stream's context frame (H-4b), the
-    // fresh text of the open chat (H-4c), the shared recaps read (H-13) and the
-    // dossier save from a stored generation (H-5).
-    expect(body.capabilities).toEqual(["context-v1", "live-text-v1", "shared-recaps-v1", "recap-profile-v1"]);
+    // fresh text of the open chat (H-4c), the shared recaps read (H-13), the
+    // dossier save from a stored generation (H-5) and Split for Ping and Hi
+    // (H-10a; the flag itself is off at rest).
+    expect(body.capabilities).toEqual([
+      "context-v1",
+      "live-text-v1",
+      "shared-recaps-v1",
+      "recap-profile-v1",
+      "split-all-v1",
+    ]);
+    expect(body.capabilities).toEqual([...SERVED_CLIENT_CAPABILITIES]);
 
     await trap!.assertNoOutbound();
   });
