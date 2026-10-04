@@ -47,10 +47,11 @@ describe("sync block display", () => {
       nextDueAt: null,
       nextRetryAt: null,
       intervals: [],
-      metrics: { followerCount: 5 },
+      // A legacy audience block is OnlyFans's: its count is subscribers.
+      metrics: { subscriberCount: 5 },
       connectionStatus: null,
       substreams: [],
-    } as never)).toBe("Updated 30m ago · 5 followers");
+    } as never)).toBe("Updated 30m ago · 5 subscribers");
 
     expect(formatBlockSummary({
       block: "messages_live",
@@ -172,33 +173,6 @@ describe("sync block display", () => {
       connectionStatus: null,
       substreams: [],
     } as never)).toBe(false);
-  });
-
-  it("uses non-numeric copy for audience follower refresh progress", () => {
-    const block = {
-      block: "audience",
-      state: "syncing",
-      succeededAt: "2026-03-24T11:53:00.000Z",
-      progress: {
-        label: "75 / 75 followers",
-        current: 75,
-        total: 75,
-        unit: "followers",
-        percent: 100,
-        details: {},
-      },
-      error: null,
-      needsAttention: false,
-      nextDueAt: null,
-      nextRetryAt: null,
-      intervals: [],
-      metrics: { followerCount: 4821 },
-      connectionStatus: null,
-      substreams: [],
-    } as never;
-
-    expect(formatBlockSummary(block)).toBe("Refreshing followers…");
-    expect(shouldShowBlockProgressBar(block)).toBe(false);
   });
 
   it("replaces 100% messages live progress with finalizing copy", () => {
@@ -459,46 +433,37 @@ describe("sync block display", () => {
     expect(shouldShowBlockProgressBar(block)).toBe(true);
   });
 
-  it("shows catch-up progress for delayed message history", () => {
+  // A delayed legacy block never shows a bar: the one that did was the
+  // legacy Fansly message-history backlog, which no page has any more.
+  it("hides the progress bar of a delayed block", () => {
     const block = {
-      block: "messages_history",
+      block: "messages_live",
       state: "delayed",
       succeededAt: "2026-03-24T11:55:00.000Z",
       progress: {
-        label: "203 / 3,669 conversations ready, 4 lagging",
+        label: "203 / 3,669 conversations",
         current: 203,
         total: 3669,
         unit: "conversations",
         percent: 5.53,
-        details: {
-          laggingConversationCount: 4,
-        },
+        details: {},
       },
-      progressStream: "dm_messages",
+      progressStream: "dm_conversations",
       progressRole: "primary",
       error: null,
-      statusReason: {
-        code: "history_incomplete",
-        summary: "Conversation history is still catching up.",
-        waitingFor: null,
-      },
+      statusReason: { code: "stale", summary: "Last successful sync is older than the freshness target.", waitingFor: null },
       primaryFresh: false,
       needsAttention: true,
       nextDueAt: null,
       nextRetryAt: null,
       intervals: [],
-      metrics: {
-        readyConversationCount: 203,
-        eligibleConversationCount: 3669,
-      },
+      metrics: {},
       connectionStatus: null,
       substreams: [],
     } as never;
 
-    expect(shouldShowBlockProgressBar(block)).toBe(true);
-    expect(getBlockProgressFillClass(block)).toBe("bg-warning-dark");
-    expect(formatBlockProgressCaption(block)).toBe(
-      "message history · 203 / 3,669 ready · 3,466 left · 4 lagging",
-    );
+    expect(shouldShowBlockProgressBar(block)).toBe(false);
+    expect(getBlockProgressFillClass(block)).toBe("bg-accent");
+    expect(formatBlockProgressCaption(block)).toBe("conversation sync · 203 / 3,669 conversations");
   });
 });

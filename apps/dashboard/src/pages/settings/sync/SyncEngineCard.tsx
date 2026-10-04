@@ -1,11 +1,11 @@
 import type { AgentSyncPageStatus } from "@agency_hub_core/contracts";
 import { useSyncEnginePages } from "@/api/queries";
 
-// A page the Fansly Sync Engine owns (design step 3 §3.2 item 3): its legacy
-// streams are frozen, so the Settings tab says who serves the page and shows
-// the engine's own view of it — mode, owner, holds, socket and the queue by
-// why it waits — from `/api/v1/sync/pages` (owner session; a session without
-// it simply sees no engine detail).
+// A page the Fansly Sync Engine owns (design step 3 §3.2 item 3): the Settings
+// tab says who serves the page and shows the engine's own view of it — mode,
+// owner, holds, socket and the queue by why it waits — from
+// `/api/v1/sync/pages` (owner session; a session without it simply sees no
+// engine detail).
 
 type EnginePageStatus = AgentSyncPageStatus;
 type WorkClass = keyof EnginePageStatus["queue"];
@@ -152,7 +152,7 @@ export function SyncEngineCard({ pageLabel }: { pageLabel: string }) {
         )}
       </div>
       <p className="mt-0.5 text-xs text-text-muted">
-        Старые потоки этой страницы остановлены; блоки ниже показывают работу движка, кнопки управляют его ресурсами.
+        Страницу читает движок синхронизации Fansly; блоки ниже показывают его работу, кнопки управляют его ресурсами.
       </p>
       {status === null
         ? <p className="mt-2 text-xs text-text-muted">Подробности движка недоступны.</p>

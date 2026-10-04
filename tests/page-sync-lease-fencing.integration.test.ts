@@ -4,8 +4,8 @@ import {
   acquirePageSyncLease,
   blockPageSync,
   completePageSync,
-  createFanslyPage,
   createModel,
+  createOnlyFansPage,
   ensurePageSyncStates,
   getPageSyncState,
   heartbeatPageSyncLease,
@@ -29,6 +29,8 @@ import { sql } from "../packages/db/node_modules/drizzle-orm/index.js";
 import { startIntegrationTestDatabase } from "./helpers/db.ts";
 import { EVERY_PLATFORM } from "./helpers/page-sync-scope.ts";
 
+// The legacy page-sync executor's leases, on a page of a platform it serves
+// (OnlyFans, step 4) and on the streams it runs.
 describe("page sync lease fencing", () => {
   it("makes lease expiry terminal instead of allowing heartbeat resurrection", async () => {
     const testDb = await startIntegrationTestDatabase();
@@ -44,7 +46,7 @@ describe("page sync lease fencing", () => {
       if (!model) {
         throw new Error("Expected to create a model");
       }
-      const page = await createFanslyPage(testDb.db, {
+      const page = await createOnlyFansPage(testDb.db, {
         modelId: model.id,
         label: "expired-lease-page",
       });
@@ -135,7 +137,7 @@ describe("page sync lease fencing", () => {
       if (!model) {
         throw new Error("Expected to create a model");
       }
-      const page = await createFanslyPage(testDb.db, {
+      const page = await createOnlyFansPage(testDb.db, {
         modelId: model.id,
         label: "live-db-clock-page",
       });
@@ -194,7 +196,7 @@ describe("page sync lease fencing", () => {
       if (!model) {
         throw new Error("Expected to create a model");
       }
-      const page = await createFanslyPage(testDb.db, {
+      const page = await createOnlyFansPage(testDb.db, {
         modelId: model.id,
         label: "yield-generation-page",
       });
@@ -266,7 +268,7 @@ describe("page sync lease fencing", () => {
       if (!model) {
         throw new Error("Expected to create a model");
       }
-      const page = await createFanslyPage(testDb.db, {
+      const page = await createOnlyFansPage(testDb.db, {
         modelId: model.id,
         label: "dispatch-source-page",
       });
@@ -276,7 +278,7 @@ describe("page sync lease fencing", () => {
       await ensurePageSyncStates(testDb.db, { pageId: page.id });
       await requestPageSync(testDb.db, {
         pageId: page.id,
-        streams: ["light", "followers"],
+        streams: ["light", "subscribers"],
         source: "manual",
       });
 
@@ -307,35 +309,35 @@ describe("page sync lease fencing", () => {
         dispatchSource: "scheduled",
       });
 
-      const followersLease = await acquirePageSyncLease(testDb.db, {
+      const subscribersLease = await acquirePageSyncLease(testDb.db, {
         platforms: EVERY_PLATFORM,
         pageId: page.id,
-        workerId: "worker-followers",
-        leaseToken: "lease-followers",
+        workerId: "worker-subscribers",
+        leaseToken: "lease-subscribers",
         leaseTtlMs: 60_000,
       });
-      expect(followersLease).toMatchObject({
-        stream: "followers",
+      expect(subscribersLease).toMatchObject({
+        stream: "subscribers",
         requestSource: "manual",
         dispatchSource: "manual",
       });
-      if (!followersLease) {
-        throw new Error("Expected followers lease");
+      if (!subscribersLease) {
+        throw new Error("Expected subscribers lease");
       }
-      const runnableWhileFollowersIsLeased = await listRunnablePageSync(testDb.db, new Date(), { platforms: EVERY_PLATFORM });
-      expect(runnableWhileFollowersIsLeased.find((row) => row.pageId === page.id)).toMatchObject({
+      const runnableWhileSubscribersIsLeased = await listRunnablePageSync(testDb.db, new Date(), { platforms: EVERY_PLATFORM });
+      expect(runnableWhileSubscribersIsLeased.find((row) => row.pageId === page.id)).toMatchObject({
         priority: resolvePageSyncPriority("light", "scheduled"),
       });
       await retryPageSync(testDb.db, {
         pageId: page.id,
-        stream: "followers",
-        requestSeq: followersLease.leasedSeq ?? followersLease.requestSeq,
-        leaseToken: followersLease.leaseToken ?? "",
+        stream: "subscribers",
+        requestSeq: subscribersLease.leasedSeq ?? subscribersLease.requestSeq,
+        leaseToken: subscribersLease.leaseToken ?? "",
         retryKind: "transient_network",
         errorCode: "timeout",
         errorSummary: "temporary timeout",
       });
-      expect(await getPageSyncState(testDb.db, page.id, "followers")).toMatchObject({
+      expect(await getPageSyncState(testDb.db, page.id, "subscribers")).toMatchObject({
         requestSource: "manual",
         dispatchSource: "scheduled",
         status: "retrying",
@@ -359,7 +361,7 @@ describe("page sync lease fencing", () => {
       if (!model) {
         throw new Error("Expected to create a model");
       }
-      const page = await createFanslyPage(testDb.db, {
+      const page = await createOnlyFansPage(testDb.db, {
         modelId: model.id,
         label: "lease-page",
       });
@@ -372,7 +374,7 @@ describe("page sync lease fencing", () => {
       });
       await requestPageSync(testDb.db, {
         pageId: page.id,
-        streams: ["followers"],
+        streams: ["subscribers"],
         source: "manual",
       });
 
@@ -388,7 +390,7 @@ describe("page sync lease fencing", () => {
       }
       expect(lease).toMatchObject({
         pageId: page.id,
-        stream: "followers",
+        stream: "subscribers",
         leaseToken: "lease-1",
       });
 
@@ -453,7 +455,7 @@ describe("page sync lease fencing", () => {
         slug: "checkpoint-lease-model",
         name: "Checkpoint Lease Model",
       });
-      const page = await createFanslyPage(testDb.db, {
+      const page = await createOnlyFansPage(testDb.db, {
         modelId: model.id,
         label: "checkpoint-lease-page",
       });
@@ -556,7 +558,7 @@ describe("page sync lease fencing", () => {
         slug: "reclaim-model",
         name: "Reclaim Model",
       });
-      const page = await createFanslyPage(testDb.db, {
+      const page = await createOnlyFansPage(testDb.db, {
         modelId: model.id,
         label: "reclaim-page",
       });
@@ -579,7 +581,7 @@ describe("page sync lease fencing", () => {
               lease_expires_at = $2,
               updated_at = $1
           where page_id = $3
-            and stream = 'followers'
+            and stream = 'subscribers'
         `,
         [now, new Date(now.getTime() - 1_000), page.id],
       );
@@ -588,7 +590,7 @@ describe("page sync lease fencing", () => {
       dbWithInjectedRequest.transaction = async (callback) => {
         await requestPageSync(testDb.db, {
           pageId: page.id,
-          streams: ["followers"],
+          streams: ["subscribers"],
           source: "manual",
           now,
         });
@@ -597,7 +599,7 @@ describe("page sync lease fencing", () => {
 
       await reclaimExpiredPageSync(dbWithInjectedRequest, now);
 
-      const state = await getPageSyncState(testDb.db, page.id, "followers");
+      const state = await getPageSyncState(testDb.db, page.id, "subscribers");
       expect(state).toMatchObject({
         status: "pending",
         requestSeq: 1,
@@ -623,7 +625,7 @@ describe("page sync lease fencing", () => {
         slug: "running-request-model",
         name: "Running Request Model",
       });
-      const page = await createFanslyPage(testDb.db, {
+      const page = await createOnlyFansPage(testDb.db, {
         modelId: model.id,
         label: "running-request-page",
       });
@@ -721,7 +723,7 @@ describe("page sync lease fencing", () => {
         slug: "auth-block-lease-model",
         name: "Auth Block Lease Model",
       });
-      const page = await createFanslyPage(testDb.db, {
+      const page = await createOnlyFansPage(testDb.db, {
         modelId: model.id,
         label: "auth-block-lease-page",
       });
@@ -802,7 +804,7 @@ describe("page sync lease fencing", () => {
         slug: "schedule-lease-model",
         name: "Schedule Lease Model",
       });
-      const page = await createFanslyPage(testDb.db, {
+      const page = await createOnlyFansPage(testDb.db, {
         modelId: model.id,
         label: "schedule-lease-page",
       });
@@ -868,7 +870,7 @@ describe("page sync lease fencing", () => {
       if (!model) {
         throw new Error("Expected to create a model");
       }
-      const page = await createFanslyPage(testDb.db, {
+      const page = await createOnlyFansPage(testDb.db, {
         modelId: model.id,
         label: "retry-request-page",
       });
@@ -882,7 +884,7 @@ describe("page sync lease fencing", () => {
       });
       await requestPageSync(testDb.db, {
         pageId: page.id,
-        streams: ["followers"],
+        streams: ["subscribers"],
         source: "manual",
         now,
       });
@@ -890,7 +892,7 @@ describe("page sync lease fencing", () => {
       await testDb.pool.query(
         `update page_sync_states
          set consecutive_failures = 9, last_error_code = 'http_502', last_error_summary = 'Earlier failure'
-         where page_id = $1 and stream = 'followers'`,
+         where page_id = $1 and stream = 'subscribers'`,
         [page.id],
       );
 
@@ -911,14 +913,14 @@ describe("page sync lease fencing", () => {
       // "Sync now" while the chunk is failing.
       await requestPageSync(testDb.db, {
         pageId: page.id,
-        streams: ["followers"],
+        streams: ["subscribers"],
         source: "manual",
         now: new Date(now.getTime() + 1_000),
       });
 
       const retryResult = await retryPageSync(testDb.db, {
         pageId: page.id,
-        stream: "followers",
+        stream: "subscribers",
         requestSeq: leasedSeq,
         leaseToken: lease.leaseToken ?? "",
         retryKind: "transport",
@@ -931,7 +933,7 @@ describe("page sync lease fencing", () => {
         retried: false,
       });
 
-      expect(await getPageSyncState(testDb.db, page.id, "followers")).toMatchObject({
+      expect(await getPageSyncState(testDb.db, page.id, "subscribers")).toMatchObject({
         status: "pending",
         requestSeq: nextRequestSeq,
         appliedSeq: lease.appliedSeq,
@@ -965,7 +967,7 @@ describe("page sync lease fencing", () => {
       if (!model) {
         throw new Error("Expected to create a model");
       }
-      const page = await createFanslyPage(testDb.db, {
+      const page = await createOnlyFansPage(testDb.db, {
         modelId: model.id,
         label: "block-request-page",
       });
@@ -979,7 +981,7 @@ describe("page sync lease fencing", () => {
       });
       await requestPageSync(testDb.db, {
         pageId: page.id,
-        streams: ["followers"],
+        streams: ["subscribers"],
         source: "manual",
         now,
       });
@@ -987,7 +989,7 @@ describe("page sync lease fencing", () => {
       await testDb.pool.query(
         `update page_sync_states
          set consecutive_failures = 2, last_error_code = 'http_502', last_error_summary = 'Earlier failure'
-         where page_id = $1 and stream = 'followers'`,
+         where page_id = $1 and stream = 'subscribers'`,
         [page.id],
       );
 
@@ -1008,14 +1010,14 @@ describe("page sync lease fencing", () => {
       // "Sync now" while the chunk is failing.
       await requestPageSync(testDb.db, {
         pageId: page.id,
-        streams: ["followers"],
+        streams: ["subscribers"],
         source: "manual",
         now: new Date(now.getTime() + 1_000),
       });
 
       const blockResult = await blockPageSync(testDb.db, {
         pageId: page.id,
-        stream: "followers",
+        stream: "subscribers",
         requestSeq: leasedSeq,
         leaseToken: lease.leaseToken ?? "",
         blockerKind: "manual_action_required",
@@ -1030,7 +1032,7 @@ describe("page sync lease fencing", () => {
         blocked: false,
       });
 
-      expect(await getPageSyncState(testDb.db, page.id, "followers")).toMatchObject({
+      expect(await getPageSyncState(testDb.db, page.id, "subscribers")).toMatchObject({
         status: "pending",
         requestSeq: nextRequestSeq,
         appliedSeq: lease.appliedSeq,
@@ -1061,7 +1063,7 @@ describe("page sync lease fencing", () => {
         slug: "expired-request-model",
         name: "Expired Request Model",
       });
-      const page = await createFanslyPage(testDb.db, {
+      const page = await createOnlyFansPage(testDb.db, {
         modelId: model.id,
         label: "expired-request-page",
       });
@@ -1072,7 +1074,7 @@ describe("page sync lease fencing", () => {
       });
       await requestPageSync(testDb.db, {
         pageId: page.id,
-        streams: ["followers"],
+        streams: ["subscribers"],
         source: "manual",
         now,
       });
@@ -1093,7 +1095,7 @@ describe("page sync lease fencing", () => {
         `
           update page_sync_states
           set lease_expires_at = clock_timestamp() - interval '1 second'
-          where page_id = $1 and stream = 'followers'
+          where page_id = $1 and stream = 'subscribers'
         `,
         [page.id],
       );
@@ -1103,12 +1105,12 @@ describe("page sync lease fencing", () => {
       const requestedAt = new Date("2000-01-01T00:00:00.000Z");
       await requestPageSync(testDb.db, {
         pageId: page.id,
-        streams: ["followers"],
+        streams: ["subscribers"],
         source: "manual",
         now: requestedAt,
       });
 
-      expect(await getPageSyncState(testDb.db, page.id, "followers")).toMatchObject({
+      expect(await getPageSyncState(testDb.db, page.id, "subscribers")).toMatchObject({
         status: "pending",
         requestSeq: lease.requestSeq + 1,
         appliedSeq: lease.appliedSeq,
@@ -1126,7 +1128,7 @@ describe("page sync lease fencing", () => {
       });
       expect(nextLease).toMatchObject({
         pageId: page.id,
-        stream: "followers",
+        stream: "subscribers",
         leaseToken: "lease-2",
       });
     } finally {
@@ -1147,7 +1149,7 @@ describe("page sync lease fencing", () => {
         slug: "reclaim-pending-model",
         name: "Reclaim Pending Model",
       });
-      const page = await createFanslyPage(testDb.db, {
+      const page = await createOnlyFansPage(testDb.db, {
         modelId: model.id,
         label: "reclaim-pending-page",
       });
@@ -1170,14 +1172,14 @@ describe("page sync lease fencing", () => {
               lease_expires_at = $2,
               updated_at = $1
           where page_id = $3
-            and stream = 'followers_reconcile'
+            and stream = 'fan_identities'
         `,
         [now, new Date(now.getTime() - 1_000), page.id],
       );
 
       await reclaimExpiredPageSync(testDb.db, new Date("2000-01-01T00:00:00.000Z"));
 
-      const state = await getPageSyncState(testDb.db, page.id, "followers_reconcile");
+      const state = await getPageSyncState(testDb.db, page.id, "fan_identities");
       expect(state).toMatchObject({
         status: "pending",
         requestSeq: 2,
@@ -1201,7 +1203,7 @@ describe("page sync lease fencing", () => {
         slug: "dependency-model",
         name: "Dependency Model",
       });
-      const page = await createFanslyPage(testDb.db, {
+      const page = await createOnlyFansPage(testDb.db, {
         modelId: model.id,
         label: "dependency-page",
       });
@@ -1211,11 +1213,11 @@ describe("page sync lease fencing", () => {
       });
       await requestPageSync(testDb.db, {
         pageId: page.id,
-        streams: ["dm_messages"],
+        streams: ["dm_conversations"],
         source: "manual",
       });
 
-      const state = await getPageSyncState(testDb.db, page.id, "dm_messages");
+      const state = await getPageSyncState(testDb.db, page.id, "dm_conversations");
       expect(state).toMatchObject({
         status: "blocked",
         blockerKind: "dependency",
@@ -1239,7 +1241,7 @@ describe("page sync lease fencing", () => {
         slug: "paused-dependency-model",
         name: "Paused Dependency Model",
       });
-      const page = await createFanslyPage(testDb.db, {
+      const page = await createOnlyFansPage(testDb.db, {
         modelId: model.id,
         label: "paused-dependency-page",
       });
@@ -1250,13 +1252,13 @@ describe("page sync lease fencing", () => {
       });
       await requestPageSync(testDb.db, {
         pageId: page.id,
-        streams: ["dm_messages"],
+        streams: ["dm_conversations"],
         source: "manual",
         now,
       });
       await pausePageSync(testDb.db, {
         pageId: page.id,
-        streams: ["dm_messages"],
+        streams: ["dm_conversations"],
         now: new Date(now.getTime() + 1_000),
       });
       await testDb.pool.query(
@@ -1271,7 +1273,7 @@ describe("page sync lease fencing", () => {
         [
           new Date(now.getTime() + 2_000),
           page.id,
-          ["light", "top_spenders", "transactions", "subscribers", "followers", "dm_conversations"],
+          ["light", "top_spenders", "transactions", "subscribers"],
         ],
       );
 
@@ -1280,7 +1282,7 @@ describe("page sync lease fencing", () => {
         now: new Date(now.getTime() + 3_000),
       });
 
-      expect(await getPageSyncState(testDb.db, page.id, "dm_messages")).toMatchObject({
+      expect(await getPageSyncState(testDb.db, page.id, "dm_conversations")).toMatchObject({
         status: "paused",
         blockerKind: "dependency",
         blockerCode: "unmet_dependency",
@@ -1307,7 +1309,7 @@ describe("page sync lease fencing", () => {
       if (!model) {
         throw new Error("Expected to create a model");
       }
-      const page = await createFanslyPage(testDb.db, {
+      const page = await createOnlyFansPage(testDb.db, {
         modelId: model.id,
         label: "coalesce-page",
       });
@@ -1328,7 +1330,7 @@ describe("page sync lease fencing", () => {
               succeeded_at = $1,
               updated_at = $1
           where page_id = $2
-            and stream <> 'followers_reconcile'
+            and stream <> 'fan_identities'
         `,
         [now, page.id],
       );
@@ -1338,7 +1340,7 @@ describe("page sync lease fencing", () => {
       });
       const [requested] = await requestPageSync(testDb.db, {
         pageId: page.id,
-        streams: ["followers_reconcile"],
+        streams: ["fan_identities"],
         source: "manual",
         now,
       });
@@ -1350,7 +1352,7 @@ describe("page sync lease fencing", () => {
             select to_jsonb(s) as row
             from page_sync_states s
             where page_id = $1
-              and stream = 'followers_reconcile'
+              and stream = 'fan_identities'
           `,
           [page.id],
         );
@@ -1360,14 +1362,14 @@ describe("page sync lease fencing", () => {
         const before = await reconcileRow();
         const receipts = await requestPageSync(testDb.db, {
           pageId: page.id,
-          streams: ["followers_reconcile"],
+          streams: ["fan_identities"],
           source: "anomaly",
           includeQueueState: true,
           coalesceOutstanding: true,
           now: requestAt,
         });
         expect(receipts).toEqual([{
-          stream: "followers_reconcile",
+          stream: "fan_identities",
           requestedSeq: outstandingSeq,
           coalesced: true,
           queueBefore: { requestedSeq: outstandingSeq, appliedSeq: before?.applied_seq },
@@ -1384,7 +1386,7 @@ describe("page sync lease fencing", () => {
           now: leaseAt,
         });
         expect(acquired).toMatchObject({
-          stream: "followers_reconcile",
+          stream: "fan_identities",
           leasedSeq: outstandingSeq,
         });
         return acquired!;
@@ -1398,14 +1400,14 @@ describe("page sync lease fencing", () => {
       const restartAt = at(900);
       await yieldPageSync(testDb.db, {
         pageId: page.id,
-        stream: "followers_reconcile",
+        stream: "fan_identities",
         requestSeq: outstandingSeq,
         leaseToken: "lease-1",
         retryAt: restartAt,
         now: at(3),
       });
       await expectCoalesced(at(4));
-      expect(await getPageSyncState(testDb.db, page.id, "followers_reconcile")).toMatchObject({
+      expect(await getPageSyncState(testDb.db, page.id, "fan_identities")).toMatchObject({
         status: "pending",
         requestSeq: outstandingSeq,
         retryAt: restartAt,
@@ -1415,7 +1417,7 @@ describe("page sync lease fencing", () => {
       await lease("lease-2", at(901));
       await retryPageSync(testDb.db, {
         pageId: page.id,
-        stream: "followers_reconcile",
+        stream: "fan_identities",
         requestSeq: outstandingSeq,
         leaseToken: "lease-2",
         retryKind: "transient_network",
@@ -1424,7 +1426,7 @@ describe("page sync lease fencing", () => {
         now: at(902),
       });
       await expectCoalesced(at(903));
-      expect(await getPageSyncState(testDb.db, page.id, "followers_reconcile")).toMatchObject({
+      expect(await getPageSyncState(testDb.db, page.id, "fan_identities")).toMatchObject({
         status: "retrying",
         retryKind: "transient_network",
         retryAt: at(962),
@@ -1434,18 +1436,18 @@ describe("page sync lease fencing", () => {
       await lease("lease-3", at(1_000));
       await blockPageSync(testDb.db, {
         pageId: page.id,
-        stream: "followers_reconcile",
+        stream: "fan_identities",
         requestSeq: outstandingSeq,
         leaseToken: "lease-3",
         blockerKind: "provider_bad_data",
-        blockerCode: "followers_reconcile_deactivation_blast_radius",
+        blockerCode: "fan_identities_deactivation_blast_radius",
         blockerMessage: "Blast radius exceeded",
         errorCode: null,
         errorSummary: "Blast radius exceeded",
         now: at(1_001),
       });
       await expectCoalesced(at(1_002));
-      expect(await getPageSyncState(testDb.db, page.id, "followers_reconcile")).toMatchObject({
+      expect(await getPageSyncState(testDb.db, page.id, "fan_identities")).toMatchObject({
         status: "blocked",
         requestSeq: outstandingSeq,
       });
@@ -1453,10 +1455,10 @@ describe("page sync lease fencing", () => {
       // Ordinary callers still bump outstanding work.
       expect(await requestPageSync(testDb.db, {
         pageId: page.id,
-        streams: ["followers_reconcile"],
+        streams: ["fan_identities"],
         source: "anomaly",
         now: at(1_003),
-      })).toEqual([{ stream: "followers_reconcile", requestedSeq: outstandingSeq + 1 }]);
+      })).toEqual([{ stream: "fan_identities", requestedSeq: outstandingSeq + 1 }]);
 
       // Settled work still gets exactly one new request.
       await testDb.pool.query(
@@ -1469,23 +1471,23 @@ describe("page sync lease fencing", () => {
               blocker_message = null,
               blocked_at = null
           where page_id = $1
-            and stream = 'followers_reconcile'
+            and stream = 'fan_identities'
         `,
         [page.id],
       );
       expect(await requestPageSync(testDb.db, {
         pageId: page.id,
-        streams: ["followers_reconcile"],
+        streams: ["fan_identities"],
         source: "anomaly",
         includeQueueState: true,
         coalesceOutstanding: true,
         now: at(1_004),
       })).toEqual([{
-        stream: "followers_reconcile",
+        stream: "fan_identities",
         requestedSeq: outstandingSeq + 2,
         queueBefore: { requestedSeq: outstandingSeq + 1, appliedSeq: outstandingSeq + 1 },
       }]);
-      expect(await getPageSyncState(testDb.db, page.id, "followers_reconcile")).toMatchObject({
+      expect(await getPageSyncState(testDb.db, page.id, "fan_identities")).toMatchObject({
         status: "pending",
         requestSeq: outstandingSeq + 2,
         dispatchSource: "anomaly",

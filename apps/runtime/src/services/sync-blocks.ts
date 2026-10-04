@@ -3,7 +3,6 @@ import {
   deletePageTopSpenders,
   ensurePageSyncStates,
   findPageByLabel,
-  getSyncStreamsForPlatform,
   listPageSyncStates,
   pausePageSync,
   requestPageSync as requestPageSyncRows,
@@ -11,6 +10,8 @@ import {
   resetPageSync,
   resolvePageSyncPriority,
   resumePageSync,
+  SYNC_DOMAIN_POLICY,
+  type LegacyExecutorStream,
   type SyncStream,
 } from "@agency_hub_core/db";
 import type { Platform } from "@agency_hub_core/shared";
@@ -40,6 +41,7 @@ import {
   triggerEngineStreams,
   type EngineLeverOutcome,
 } from "./sync-engine-levers.ts";
+import { engineBlockStreams } from "./sync-status-engine.ts";
 
 export type SyncBlockKey = SyncDomainBlockKey;
 export type SyncBlockState = SyncDomainBlockState;
@@ -153,14 +155,6 @@ type SyncMessagesBlockResponse = {
   block: SyncBlockStatus;
 };
 
-const BLOCK_TASKS: Record<SyncBlockKey, readonly SyncStream[]> = {
-  connection: ["light"],
-  financials: ["transactions", "fan_identities", "top_spenders"],
-  audience: ["subscribers", "followers", "followers_reconcile"],
-  messages_live: ["dm_conversations"],
-  messages_history: ["dm_messages"],
-};
-
 const ONLYFANS_HISTORY_RETIRED_MESSAGE =
   "OnlyFans legacy message-history crawler is permanently retired; durable OF mirror jobs own history acquisition";
 const PERMANENTLY_RETIRED_SYNC_BLOCKS = new Set<`${Platform}:${SyncBlockKey}`>([
@@ -179,12 +173,16 @@ function assertLegacyOnlyFansHistoryNotRequested(
   }
 }
 
-/** The block's streams that exist on the platform (its stream catalogue, the
- *  vocabulary of the status blocks): on an engine page they name the registry
- *  keys the lever acts on, elsewhere the legacy streams it requests. */
-function blockTasksForPlatform(platform: Platform, block: SyncBlockKey) {
-  const supportedStreams = new Set(getSyncStreamsForPlatform(platform));
-  return BLOCK_TASKS[block].filter((stream) => supportedStreams.has(stream));
+/** The legacy streams a block lever requests on a page the legacy executor
+ *  serves: the block's streams of the status blocks. A block with none is not
+ *  available there. (On a page the Fansly Sync Engine owns the lever moves the
+ *  registry keys of the block's lever streams, `engineBlockStreams`.) */
+function legacyBlockTasks(platform: Platform, block: SyncBlockKey): LegacyExecutorStream[] {
+  const tasks = [...SYNC_DOMAIN_POLICY[block].primaryStreams, ...SYNC_DOMAIN_POLICY[block].supportingStreams];
+  if (tasks.length === 0) {
+    throw new BadRequestError(`Sync domain "${block}" is not available on ${platform}`);
+  }
+  return tasks;
 }
 
 function toBlockStatus(block: SyncDomainBlockStatus): SyncBlockStatus {
@@ -368,11 +366,8 @@ export async function getSyncBlocksOverview(
   const snapshot = await getSyncStatusSnapshot(app, {
     pageIds: input?.pageIds,
     now: input?.now,
-    // The list view needs dm_messages monitor aggregates to avoid hiding
-    // message-history backlog, but not the full 24h monitor rollup for every
-    // stream.
+    // The list view does not need the 24h monitor rollup of the streams.
     includeMonitorRows: false,
-    monitorStreams: ["dm_messages"],
   });
   const pages = snapshot.pages.map((page) => toBlocksPage(page));
 
@@ -445,15 +440,15 @@ export async function triggerSyncBlock(
   const stored = await getPageOrThrow(app, input.pageLabel);
   assertLegacyOnlyFansHistoryNotRequested(stored.page.platform, input.block);
   const dependencyInput = pageSyncDependencyInput(app);
-  const tasks = blockTasksForPlatform(stored.page.platform, input.block);
-  if (tasks.length === 0) {
-    throw new BadRequestError(`Sync domain "${input.block}" is not available on ${stored.page.platform}`);
-  }
   const engine = await engineOwnedSyncPage(app.db, stored.page.id);
   if (engine !== null) {
-    return engineBlockResponse("trigger", stored.page.label, input.block, await triggerEngineStreams(app.db, engine, tasks));
+    return engineBlockResponse(
+      "trigger", stored.page.label, input.block,
+      await triggerEngineStreams(app.db, engine, engineBlockStreams(input.block)),
+    );
   }
   assertLegacyExecutorServes(stored.page);
+  const tasks = legacyBlockTasks(stored.page.platform, input.block);
 
   await ensurePageSyncStates(app.db, {
     pageId: stored.page.id,
@@ -499,15 +494,15 @@ export async function pauseSyncBlock(
   const stored = await getPageOrThrow(app, input.pageLabel);
   assertLegacyOnlyFansHistoryNotRequested(stored.page.platform, input.block);
   const dependencyInput = pageSyncDependencyInput(app);
-  const tasks = blockTasksForPlatform(stored.page.platform, input.block);
-  if (tasks.length === 0) {
-    throw new BadRequestError(`Sync domain "${input.block}" is not available on ${stored.page.platform}`);
-  }
   const engine = await engineOwnedSyncPage(app.db, stored.page.id);
   if (engine !== null) {
-    return engineBlockResponse("pause", stored.page.label, input.block, await pauseEngineStreams(app.db, engine, tasks, "pause"));
+    return engineBlockResponse(
+      "pause", stored.page.label, input.block,
+      await pauseEngineStreams(app.db, engine, engineBlockStreams(input.block), "pause"),
+    );
   }
   assertLegacyExecutorServes(stored.page);
+  const tasks = legacyBlockTasks(stored.page.platform, input.block);
 
   await ensurePageSyncStates(app.db, {
     pageId: stored.page.id,
@@ -541,15 +536,15 @@ export async function resumeSyncBlock(
   const stored = await getPageOrThrow(app, input.pageLabel);
   assertLegacyOnlyFansHistoryNotRequested(stored.page.platform, input.block);
   const dependencyInput = pageSyncDependencyInput(app);
-  const tasks = blockTasksForPlatform(stored.page.platform, input.block);
-  if (tasks.length === 0) {
-    throw new BadRequestError(`Sync domain "${input.block}" is not available on ${stored.page.platform}`);
-  }
   const engine = await engineOwnedSyncPage(app.db, stored.page.id);
   if (engine !== null) {
-    return engineBlockResponse("resume", stored.page.label, input.block, await pauseEngineStreams(app.db, engine, tasks, "resume"));
+    return engineBlockResponse(
+      "resume", stored.page.label, input.block,
+      await pauseEngineStreams(app.db, engine, engineBlockStreams(input.block), "resume"),
+    );
   }
   assertLegacyExecutorServes(stored.page);
+  const tasks = legacyBlockTasks(stored.page.platform, input.block);
 
   await ensurePageSyncStates(app.db, {
     pageId: stored.page.id,
@@ -617,11 +612,10 @@ export async function resetSyncBlock(
   // so the destruction door below does not apply.
   const engine = await engineOwnedSyncPage(app.db, stored.page.id);
   if (engine !== null) {
-    const tasks = blockTasksForPlatform(stored.page.platform, input.block);
-    if (tasks.length === 0) {
-      throw new BadRequestError(`Sync domain "${input.block}" is not available on ${stored.page.platform}`);
-    }
-    return engineBlockResponse("reset", stored.page.label, input.block, await requeueEngineStreams(app.db, engine, tasks));
+    return engineBlockResponse(
+      "reset", stored.page.label, input.block,
+      await requeueEngineStreams(app.db, engine, engineBlockStreams(input.block)),
+    );
   }
   assertLegacyExecutorServes(stored.page);
 
@@ -637,10 +631,7 @@ export async function resetSyncBlock(
 
   const now = input.now ?? new Date();
   const dependencyInput = pageSyncDependencyInput(app);
-  const tasks = blockTasksForPlatform(stored.page.platform, input.block);
-  if (tasks.length === 0) {
-    throw new BadRequestError(`Sync domain "${input.block}" is not available on ${stored.page.platform}`);
-  }
+  const tasks = legacyBlockTasks(stored.page.platform, input.block);
 
   await ensurePageSyncStates(app.db, {
     pageId: stored.page.id,

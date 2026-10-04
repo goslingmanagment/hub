@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 
 import { PlatformAccountIdentityConflictError, PlatformAccountIdentityImmutableError, type Database, type SyncPageRow } from "@agency_hub_core/db";
-import { FanslySendRefusedError } from "@agency_hub_core/fansly";
 
 import { FANSLY_SEND_HOLDER_ROLES } from "../apps/runtime/src/services/fansly-send-guard/os-probe.ts";
 import { CapturePayloadUnavailableError } from "../apps/runtime/src/services/payload-reader.ts";
@@ -17,7 +16,6 @@ import {
   requestJsonOf,
 } from "../apps/runtime/src/sync/engine/commit.ts";
 import { escalateResourceHold, RESOURCE_HOLD_LADDER_MS } from "../apps/runtime/src/sync/engine/errors.ts";
-import { systemClock } from "../apps/runtime/src/sync/engine/ports.ts";
 import {
   createEngineRegistry,
   demandToUpsert,
@@ -27,20 +25,18 @@ import {
   type EngineResourceSpec,
   type ResourceModule,
 } from "../apps/runtime/src/sync/engine/resource.ts";
-import { createLegacyShadowLatency, fixedShadowLatency, SHADOW_DEFAULT_LATENCY_MS, ShadowTransport } from "../apps/runtime/src/sync/engine/shadow.ts";
 import { FANSLY_RESOURCE_SPECS } from "../apps/runtime/src/sync/fansly/registry.ts";
 import { changeSyncRegistryOverride, SyncOwnerLeverError } from "../apps/runtime/src/sync/inspect.ts";
 import { RecordingMetrics } from "./helpers/sync-engine-host.ts";
 import { resourceBreakerRow } from "./helpers/sync-holds.ts";
 
 // The pure parts of the engine host (design §3.5–§3.7, §4.1–§4.2): the
-// registry rules every entry shares, what a pick leaves out, how apply errors
-// are classified, and the shadow transport.
+// registry rules every entry shares, what a pick leaves out and how apply
+// errors are classified.
 
 const noop: ResourceModule = {
   plan: async () => ({ kind: "done", reason: "test" }),
   apply: async () => ({ work: { satisfiesRevision: true }, followups: [] }),
-  shadow: async () => ({ work: { satisfiesRevision: true }, followups: [] }),
 };
 
 function spec(key: string, overrides: Partial<EngineResourceSpec> = {}): EngineResourceSpec {
@@ -79,16 +75,19 @@ describe("the registry rules", () => {
     expect(FANSLY_RESOURCE_SPECS.find((entry) => entry.key === "subscribers.poll")?.module).toBeTypeOf("function");
   });
 
-  it("polls: live-only entries never in shadow, the page's period override, a switched-off key", () => {
+  it("polls: every poll entry, the page's period override, a switched-off key", () => {
     const registry = createEngineRegistry([
       spec("subscribers.poll", { kind: "poll", class: "planned", period: { everyMs: 3_600_000 } }),
       spec("stats.daily", { kind: "poll", class: "planned", period: { everyMs: 86_400_000 } }),
-      spec("ws.connect", { kind: "poll", class: "urgent", period: { everyMs: 60_000 }, liveOnly: true }),
+      spec("ws.connect", { kind: "poll", class: "urgent", period: { everyMs: 60_000 } }),
       spec("dm-messages.head"),
     ]);
     const overridden = page({ registryOverrides: { "subscribers.poll": { everyMs: 1_800_000 }, "stats.daily": { enabled: false } } });
-    expect(pollsFor(registry, overridden, true)).toEqual([{ resource: "subscribers.poll", class: "planned", everyMs: 1_800_000 }]);
-    expect(pollsFor(registry, page(), false).map((poll) => poll.resource)).toEqual(["subscribers.poll", "stats.daily", "ws.connect"]);
+    expect(pollsFor(registry, overridden)).toEqual([
+      { resource: "subscribers.poll", class: "planned", everyMs: 1_800_000 },
+      { resource: "ws.connect", class: "urgent", everyMs: 60_000 },
+    ]);
+    expect(pollsFor(registry, page()).map((poll) => poll.resource)).toEqual(["subscribers.poll", "stats.daily", "ws.connect"]);
   });
 
   it("a poll is due again after its period ± 10 %", () => {
@@ -105,9 +104,8 @@ describe("the registry rules", () => {
       slo: { resultMs: 30_000 },
     });
     expect(demandToUpsert({ resource: head.key, subject: "g1", demand: { messageIds: ["m1"], reason: "ws" } }, head,
-      { pageId: 7, shadow: true, now: NOW })).toEqual({
+      { pageId: 7, now: NOW })).toEqual({
       pageId: 7,
-      shadow: true,
       resource: "dm-messages.head",
       subject: "g1",
       kind: "trigger",
@@ -118,12 +116,10 @@ describe("the registry rules", () => {
       extendOnSignal: true,
       demand: { messageIds: ["m1"], txIds: [], reasons: ["ws"] },
     });
-    const fast = demandToUpsert({ resource: head.key, coalesce: "fast" }, head, { pageId: 7, shadow: false, now: NOW })!;
+    const fast = demandToUpsert({ resource: head.key, coalesce: "fast" }, head, { pageId: 7, now: NOW })!;
     expect([fast.dueAt, fast.coalesceUntil]).toEqual([new Date(NOW.getTime() + 2_000), new Date(NOW.getTime() + 6_000)]);
-    const download = spec("media-download.fetch", { liveOnly: true });
-    expect(demandToUpsert({ resource: download.key }, download, { pageId: 7, shadow: true, now: NOW })).toBeNull();
     expect(demandToUpsert({ resource: head.key }, head, {
-      pageId: 7, shadow: false, now: NOW, page: page({ registryOverrides: { "dm-messages.head": { enabled: false } } }),
+      pageId: 7, now: NOW, page: page({ registryOverrides: { "dm-messages.head": { enabled: false } } }),
     })).toBeNull();
   });
 });
@@ -133,24 +129,24 @@ describe("what a pick leaves out", () => {
     spec("dm-messages.head"),
     spec("dm-messages.catchup", { class: "planned" }),
     spec("media-stats.walk", { class: "planned", kind: "goal" }),
-    spec("media-download.fetch", { liveOnly: true }),
+    spec("media-download.fetch"),
   ]);
   const later = new Date(NOW.getTime() + 60_000);
 
-  it("paused and switched-off keys, live-only keys in shadow", () => {
+  it("paused and switched-off keys", () => {
     const exclusions = pickExclusions(page({
       pausedResources: ["media-stats.walk"],
       registryOverrides: { "dm-messages.catchup": { enabled: false } },
-    }), registry, true, NOW);
+    }), registry, NOW);
     expect(exclusions).toEqual({
-      excludeResources: ["dm-messages.catchup", "media-download.fetch", "media-stats.walk"],
+      excludeResources: ["dm-messages.catchup", "media-stats.walk"],
       excludeFiles: [],
       excludeClasses: [],
     });
   });
 
   it("the owner's requests pause: the whole requests class (the idle wait must not count it as due)", () => {
-    expect(pickExclusions(page({ pausedRequests: true }), registry, false, NOW).excludeClasses).toEqual(["requests"]);
+    expect(pickExclusions(page({ pausedRequests: true }), registry, NOW).excludeClasses).toEqual(["requests"]);
   });
 
   it("a held file, but never the key a hold does not stop (dm-messages.head)", () => {
@@ -160,12 +156,12 @@ describe("what a pick leaves out", () => {
         resourceBreakerRow("dm-messages", later),
         resourceBreakerRow("posts", new Date(NOW.getTime() - 1)),
       ],
-    }), registry, false, NOW);
+    }), registry, NOW);
     expect(exclusions).toEqual({ excludeResources: ["dm-messages.catchup"], excludeFiles: ["media-stats"], excludeClasses: [] });
   });
 
   it("unverified credentials (checks-only, derived from the database by the actor): only the identity checks", () => {
-    const exclusions = pickExclusions(page(), registry, false, NOW, { checksOnly: true });
+    const exclusions = pickExclusions(page(), registry, NOW, { checksOnly: true });
     expect(exclusions.excludeClasses).toEqual(["requests"]);
     expect(exclusions.excludeResources).not.toContain("account.verify");
     expect(exclusions.excludeResources).not.toContain("account.identity");
@@ -257,52 +253,16 @@ describe("the journaled request", () => {
     });
   });
 
-  it("keeps the step and a shadow step's walk position beside the parameters (never on the wire)", () => {
-    const position = { pass: 2, item: "[0,0,1,\"-Infinity\",\"-1\",\"777\"]", window: 1 };
+  it("keeps the resource's account of the step beside the parameters (never on the wire)", () => {
+    const step = { visit: { snapshot: { subjectRef: "777" }, outcomes: [] } };
     const json = requestJsonOf({
       spec: "media.offer_stats",
       params: { mediaOfferId: "777", beforeMs: 2_000, afterMs: 1_000, periodMs: 86_400_000 },
-      step: { shadowVisit: { done: 1 } },
-      position,
+      step,
     });
-    expect(json).toMatchObject({ spec: "media.offer_stats", step: { shadowVisit: { done: 1 } }, position });
-    for (const key of Object.keys(position)) expect(json.query).not.toHaveProperty(key);
-  });
-});
-
-describe("the shadow transport", () => {
-  const request = { spec: "polls" as const, params: {} };
-
-  it("asks the send check, then simulates the answer's latency; nothing is dialled", async () => {
-    const transport = new ShadowTransport({ clock: systemClock, latency: fixedShadowLatency(5) });
-    const prepared = await transport.prepare(request);
-    expect(prepared.headers).toEqual({});
-    let checks = 0;
-    const outcome = await transport.send(prepared, { check: () => { checks += 1; return null; } }, new AbortController().signal);
-    expect(checks).toBe(1);
-    expect(outcome.kind).toBe("shadow");
-    expect(transport.sends).toBe(1);
-  });
-
-  it("a refused check is a refusal, as live", async () => {
-    const transport = new ShadowTransport({ clock: systemClock, latency: fixedShadowLatency(5) });
-    const outcome = await transport.send(await transport.prepare(request), {
-      check: () => new FanslySendRefusedError("lease_inactive"),
-    }, new AbortController().signal);
-    expect(outcome).toEqual({ kind: "aborted_before_send", refusal: "lease_inactive" });
-    expect(transport.sends).toBe(0);
-  });
-
-  it("legacy latencies: uniform between p50 and p95 of the operation; the default without data", async () => {
-    const db = {
-      execute: async () => ({ rows: [{ operation: "polls_probe", p50: 200, p95: 1_000 }] }),
-    } as unknown as Database;
-    const sampled = createLegacyShadowLatency({ db, pageId: 1, clock: systemClock, rng: { next: () => 0.5 } });
-    expect(await sampled.sampleMs("polls")).toBe(600);
-    expect(await sampled.sampleMs("recapstats")).toBe(SHADOW_DEFAULT_LATENCY_MS);
-    const broken = { execute: async () => { throw new Error("db down"); } } as unknown as Database;
-    expect(await createLegacyShadowLatency({ db: broken, pageId: 1, clock: systemClock, rng: { next: () => 0.5 } }).sampleMs("polls"))
-      .toBe(SHADOW_DEFAULT_LATENCY_MS);
+    expect(json).toMatchObject({ spec: "media.offer_stats", step });
+    expect(json).not.toHaveProperty("position");
+    expect(json.query).not.toHaveProperty("visit");
   });
 });
 

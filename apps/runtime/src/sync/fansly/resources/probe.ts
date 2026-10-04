@@ -15,7 +15,6 @@ import type {
   OutcomeStep,
   RequestPlan,
   ResourceModule,
-  ShadowResult,
   StepPlan,
 } from "../../engine/resource.ts";
 import { normalizeFanslyTimestamp } from "../lib/timestamp.ts";
@@ -25,8 +24,7 @@ import { normalizeFanslyTimestamp } from "../lib/timestamp.ts";
 // One admitted request through the page's pacer like every other — never a
 // side door — journaled under the route's kind (a body the contract refuses
 // under `<kind>:failed`, by the capture), the outcome in the work's result.
-// It replaces the legacy endpoint and replay probes (senders #14, #15). In
-// shadow it is simulated like any step: nothing is sent.
+// It replaces the legacy endpoint and replay probes (senders #14, #15).
 
 export interface ProbeParams {
   operation: FanslyWireId;
@@ -70,18 +68,6 @@ export const probeManualModule: ResourceModule = {
       at: input.now.toISOString(),
     };
     return { work: { satisfiesRevision: true, close: "done", closeReason: "probed", result }, followups: [], counters: { probes: 1 } };
-  },
-
-  async shadow(_work, request, ctx): Promise<ShadowResult> {
-    return {
-      work: {
-        satisfiesRevision: true,
-        close: "done",
-        closeReason: "shadow",
-        result: { operation: request.spec, shadow: true, at: ctx.now.toISOString() },
-      },
-      followups: [],
-    };
   },
 };
 
@@ -167,9 +153,7 @@ export function excludedChatProbeOutcome(decision: OutcomeDecision, step: Outcom
 }
 
 export const probeExcludedChatModule: ResourceModule = {
-  async plan(work, ctx): Promise<StepPlan> {
-    // Live only (the registry's `liveOnly`): a shadow page never probes.
-    if (ctx.shadow) return { kind: "done", reason: "shadow" };
+  async plan(work): Promise<StepPlan> {
     if (work.subject.length === 0) return { kind: "quarantine", reason: "probe_without_chat" };
     return { kind: "request", request: headRead(work.subject) };
   },
@@ -205,8 +189,4 @@ export const probeExcludedChatModule: ResourceModule = {
   },
 
   outcome: excludedChatProbeOutcome,
-
-  async shadow(_work, _request, ctx): Promise<ShadowResult> {
-    return { work: { satisfiesRevision: true, close: "done", closeReason: "shadow", result: { shadow: true, at: ctx.now.toISOString() } }, followups: [] };
-  },
 };

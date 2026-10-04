@@ -269,7 +269,6 @@ describe("health and docs route auth", () => {
         timestamp: "2026-04-30T00:00:00.000Z",
         thresholds: {
           lightMaxAgeMinutes: 180,
-          followerMaxAgeMinutes: 1080,
         },
         overall: {
           pageCount: 1,

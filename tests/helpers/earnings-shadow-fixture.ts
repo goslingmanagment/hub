@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
-  createModel, createFanslyPage, ensurePageSyncStates, upsertFans, insertObservation,
+  createModel, createFanslyPage, upsertFans, insertObservation,
   type UpsertTransactionInput,
 } from "@agency_hub_core/db";
 import { millsFromInteger } from "@agency_hub_core/shared";
@@ -13,7 +13,6 @@ export async function earningsShadowFixture(testDb: StartedTestDatabase) {
   const page = await createFanslyPage(testDb.db, { modelId: model.id, label: "earnings-shadow" });
   if (!page) throw new Error("Page seed failed");
   const pageId = page.id;
-  await ensurePageSyncStates(testDb.db, { pageId: page.id });
   const fans = await upsertFans(testDb.db, ["fan-a", "fan-b"].map((platformUserId) => ({
     platform: "fansly" as const, platformUserId, username: platformUserId,
   })));

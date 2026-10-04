@@ -150,7 +150,7 @@ describe("the pick: what a slot leaves out", () => {
       resourceBreakerRow("posts", at(-1)),
     ];
     expect(resourceFilesHeld(holdSetOf(rows), NOW)).toEqual(["dm-messages", "transactions"]);
-    expect(pickExclusions(page(rows), registry, false, NOW)).toEqual({
+    expect(pickExclusions(page(rows), registry, NOW)).toEqual({
       excludeResources: ["dm-messages.catchup"],
       excludeFiles: ["transactions"],
       excludeClasses: [],

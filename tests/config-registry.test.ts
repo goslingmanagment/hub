@@ -93,8 +93,9 @@ describe("config registry", () => {
     // per sweep so the coordinator enables it after deploy without a restart.
     "ofapiWebhookAutoRedeliveryEnabled",
     "ofapiWebhookAutoRedeliveryDailyCap",
+    // (healthSyncFollowerMaxAgeMinutes was retired at step 4, S4-24, with the
+    // legacy follower-sync check of /health/sync, and is applied nowhere.)
     "healthSyncLightMaxAgeMinutes",
-    "healthSyncFollowerMaxAgeMinutes",
     "ofapiDmReconcileIntervalMinutes",
     // The engine's post-replies walk: the cycle decides WHICH posts it reads.
     // (The legacy content lanes' flags, allowlists and budgets were retired
@@ -125,7 +126,6 @@ describe("config registry", () => {
     "aiMediaDescribeLiveChatOnly",
     "aiMediaDescribeModelMedia",
     "aiMediaDescribeLoopEnabled",
-    "aiMediaDescribeFanslyAcceleratorDailyLimit",
     // Agent Read Plane (slice 0a): read per request / per cycle so the owner's
     // ramp needs no restart. Every one of them rests at off/false.
     "agentReadPlaneMode",

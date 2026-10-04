@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
-  computeSyncStreamSlotOffsetSeconds,
+  computePageSyncSlotOffsetSeconds,
   ensureSyncProviderRateLimitProfile,
   getSyncRun,
   hasRecentTerminalProxyFailure,
@@ -226,12 +226,12 @@ describe("sync repository timestamp normalization", () => {
     expect(runningRuns[0]?.lastActivityAt).toBeInstanceOf(Date);
   });
 
-  it("derives deterministic slot jitter and request priorities for control-plane streams", () => {
-    expect(computeSyncStreamSlotOffsetSeconds(42, "light")).toBe(
-      computeSyncStreamSlotOffsetSeconds(42, "light"),
+  it("derives deterministic slot jitter and request priorities for the executor's streams", () => {
+    expect(computePageSyncSlotOffsetSeconds(42, "light")).toBe(
+      computePageSyncSlotOffsetSeconds(42, "light"),
     );
-    expect(computeSyncStreamSlotOffsetSeconds(42, "light")).not.toBe(
-      computeSyncStreamSlotOffsetSeconds(42, "followers"),
+    expect(computePageSyncSlotOffsetSeconds(42, "light")).not.toBe(
+      computePageSyncSlotOffsetSeconds(42, "subscribers"),
     );
     expect(resolvePageSyncPriority("transactions", "scheduled")).toBeGreaterThan(
       resolvePageSyncPriority("top_spenders", "scheduled"),
@@ -239,16 +239,17 @@ describe("sync repository timestamp normalization", () => {
     expect(resolvePageSyncPriority("top_spenders", "manual")).toBeGreaterThan(
       resolvePageSyncPriority("subscribers", "manual"),
     );
-    expect(resolvePageSyncPriority("followers", "scheduled")).toBeGreaterThan(
+    expect(resolvePageSyncPriority("subscribers", "scheduled")).toBeGreaterThan(
       resolvePageSyncPriority("dm_conversations", "scheduled"),
     );
-    expect(resolvePageSyncPriority("followers", "manual")).toBeGreaterThan(
-      resolvePageSyncPriority("dm_messages", "manual"),
-    );
-    expect(resolvePageSyncPriority("followers_reconcile", "anomaly")).toBe(44);
+    expect(resolvePageSyncPriority("dm_conversations", "anomaly")).toBe(40);
     expect(resolvePageSyncPriority("light", "manual")).toBeGreaterThan(
       resolvePageSyncPriority("light", "scheduled"),
     );
+    // A stream the executor does not run (a former Fansly lane) has no
+    // priority: nothing requests it.
+    expect(resolvePageSyncPriority("followers", "manual")).toBe(0);
+    expect(resolvePageSyncPriority("dm_messages", "reset")).toBe(0);
   });
 
   it("reserves shared provider rate-limit rows at the latest available slot", async () => {

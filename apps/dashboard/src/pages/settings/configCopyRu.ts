@@ -28,19 +28,19 @@ function endpointPauseRetired(title: string, what: string): ConfigCopy {
     { unit: "мс" });
 }
 
-/** Keys retired with a legacy Fansly component (step 4): still readable until
- *  the key is removed (S4-26), but nothing reads them any more. */
-function retiredWithLegacyFansly(title: string, reason: string): ConfigCopy {
-  return copy(title, `Больше не действует: ${reason}.`,
-    "Hub больше ничего по этой настройке не делает. Сохранённое значение ни на что не влияет; настройка будет удалена вместе с остальными настройками старого движка синхронизации Fansly.");
-}
-
 /** The legacy Fansly content lanes' switches, page lists and limits (step 4):
  *  kept readable until the key is removed, but they no longer apply to anything. */
 function contentLaneRetired(title: string, what: string, unit?: string): ConfigCopy {
   return copy(`${title} (больше не действует)`, `Больше не применяется: ${what} Fansly читает новый движок синхронизации.`,
     "Статистику, уведомления, каталог, комментарии, выводы, статистику материалов и реакции на посты новый движок синхронизации Fansly читает по своему реестру; отдельных переключателей, списков страниц и дневных лимитов у него нет. Значение ещё читается, но ни на что не влияет. Настройка будет удалена вместе со старым движком синхронизации.",
     unit === undefined ? {} : { unit });
+}
+
+/** Keys retired with a legacy Fansly component (step 4): still readable until
+ *  the key is removed (S4-26), but nothing reads them any more. */
+function retiredWithLegacyFansly(title: string, reason: string): ConfigCopy {
+  return copy(title, `Больше не действует: ${reason}.`,
+    "Hub больше ничего по этой настройке не делает. Сохранённое значение ни на что не влияет; настройка будет удалена вместе с остальными настройками старого движка синхронизации Fansly.");
 }
 
 export const CONFIG_COPY_RU: Record<string, ConfigCopy> = {
@@ -176,8 +176,8 @@ export const CONFIG_COPY_RU: Record<string, ConfigCopy> = {
     { unit: "дней", warning: "Уменьшение срока может безвозвратно удалить старые диагностические записи." }),
   healthSyncLightMaxAgeMinutes: copy("Когда предупреждать о задержке", "Через сколько минут без проверки аккаунта показывать предупреждение.",
     "Это порог для оценки состояния синхронизации. Он меняет момент появления предупреждения, а не частоту самой проверки.", { unit: "мин" }),
-  healthSyncFollowerMaxAgeMinutes: copy("Когда список подписчиков устарел", "Через сколько минут без обновления списка показывать предупреждение.",
-    "Если список не обновлялся дольше этого срока, проверка состояния отмечает отставание. Уменьшение порога показывает предупреждение раньше, но не ускоряет загрузку.", { unit: "мин" }),
+  healthSyncFollowerMaxAgeMinutes: retiredWithLegacyFansly("Когда список подписчиков устарел (больше не действует)",
+    "проверка состояния больше не оценивает страницу Fansly по старой загрузке подписчиков: за страницей следит новый движок синхронизации"),
   healthSyncMonitoringToken: copy("Ключ внешнего мониторинга", "Разрешает внешнему сервису проверять состояние синхронизации.",
     "Мониторинг предъявляет этот секрет вместо входа в кабинет. Если ключ не задан, такой доступ к проверке состояния закрыт."),
   onlyFansTopSpendersEnabled: copy("Крупнейшие покупатели OnlyFans", "Включает рейтинг фанов по сохранённым тратам.",
@@ -438,9 +438,9 @@ export const CONFIG_COPY_RU: Record<string, ConfigCopy> = {
     "быстрая полоса описания картинок удалена"),
   aiMediaDescribeFanslyFastLanePages: retiredWithLegacyFansly("Страницы быстрой полосы (больше не действует)",
     "быстрая полоса описания картинок удалена"),
-  aiMediaDescribeFanslyAcceleratorDailyLimit: copy("Чтений ускорителя в сутки", "Ограничивает дополнительные чтения Fansly для описания картинок.",
-    "Лимит общий для агентства за скользящие 24 часа; попытка считается в момент допуска, даже если потом сорвалась. Ноль запрещает чтения.",
-    { unit: "чтений/сутки", warning: "Повышение увеличивает число дополнительных запросов к Fansly." }),
+  aiMediaDescribeFanslyAcceleratorDailyLimit: copy("Чтений ускорителя в сутки (больше не действует)",
+    "Больше не применяется: старого ускорителя описания картинок Fansly нет.",
+    "Значение ещё читается, но ни на что не влияет. Настройка будет удалена вместе с остальными настройками старого движка.", { unit: "чтений/сутки" }),
   elevenLabsApiKey: copy("Ключ доступа ElevenLabs", "Подключает сервис создания голосовых сообщений.",
     "Ключ позволяет Hub синтезировать речь через ElevenLabs. Для создания сообщений также нужны разрешение функции и подходящие лимиты; ключ скрыт."),
   voiceNotesEnabled: copy("Создание голосовых сообщений", "Разрешает синтезировать новые голосовые сообщения.",

@@ -3,11 +3,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const healthMocks = vi.hoisted(() => ({
   getSyncStatusSnapshot: vi.fn(),
   listConnectionStatuses: vi.fn(),
-  countConversationSyncFailuresByAccount: vi.fn(
-    async (): Promise<Array<{ platformAccountId: number; failingConversationCount: number }>> => [],
-  ),
-  // No page is the Fansly Sync Engine's here: every page is judged by its
-  // legacy streams (the engine pages' block: tests/sync-engine-health).
+  // No page is the Fansly Sync Engine's here: the legacy stream checks judge
+  // the legacy executor's pages (OnlyFans), and a Fansly page is one the engine
+  // does not own (the engine pages' block: tests/sync-engine-health).
   listSyncPages: vi.fn(async (): Promise<unknown[]> => []),
 }));
 
@@ -19,11 +17,10 @@ vi.mock("../apps/runtime/src/services/sync-status.ts", () => ({
   getSyncStatusSnapshot: healthMocks.getSyncStatusSnapshot,
 }));
 
-// The unit-level app context carries no db; stub the coverage-debt count the
-// way the other health data sources are stubbed.
+// The unit-level app context carries no db; stub the engine page list the way
+// the other health data sources are stubbed.
 vi.mock("@agency_hub_core/db", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  countConversationSyncFailuresByAccount: healthMocks.countConversationSyncFailuresByAccount,
   listSyncPages: healthMocks.listSyncPages,
 }));
 
@@ -37,17 +34,17 @@ import { getPublicSyncHealth, getSystemHealth } from "../apps/runtime/src/servic
 
 const TASK_HEALTH_NOW = new Date("2026-03-23T12:00:00.000Z");
 
-function mockAudienceTaskHealthScenario(audienceBlock: Record<string, unknown>) {
+function mockTaskHealthScenario(financialsBlock: Record<string, unknown>) {
   healthMocks.listConnectionStatuses.mockResolvedValue([
     {
       id: 7,
-      label: "lora-1",
-      platform: "fansly",
+      label: "lora-of",
+      platform: "onlyfans",
       modelSlug: "lora",
       modelName: "Lora",
       connectionStatus: "active",
       lastLightSyncAt: TASK_HEALTH_NOW.toISOString(),
-      lastFollowerSyncAt: TASK_HEALTH_NOW.toISOString(),
+      lastFollowerSyncAt: null,
       lastSyncError: null,
     },
   ]);
@@ -55,8 +52,8 @@ function mockAudienceTaskHealthScenario(audienceBlock: Record<string, unknown>) 
     generatedAt: TASK_HEALTH_NOW.toISOString(),
     pages: [{
       pageId: 7,
-      pageLabel: "lora-1",
-      platform: "fansly",
+      pageLabel: "lora-of",
+      platform: "onlyfans",
       modelSlug: "lora",
       modelName: "Lora",
       blocks: {
@@ -68,15 +65,15 @@ function mockAudienceTaskHealthScenario(audienceBlock: Record<string, unknown>) 
           metrics: {},
           tasks: [],
         },
-        financials: {
-          block: "financials",
+        financials: financialsBlock,
+        audience: {
+          block: "audience",
           state: "up_to_date",
           statusReason: null,
           error: null,
           metrics: {},
           tasks: [],
         },
-        audience: audienceBlock,
         messages_live: {
           block: "messages_live",
           state: "up_to_date",
@@ -98,11 +95,10 @@ function mockAudienceTaskHealthScenario(audienceBlock: Record<string, unknown>) 
   });
 }
 
-function readMockedAudienceTaskHealth() {
+function readMockedTaskHealth() {
   return getPublicSyncHealth({
     config: {
       healthSyncLightMaxAgeMinutes: 180,
-      healthSyncFollowerMaxAgeMinutes: 1080,
       healthSyncMonitoringToken: null,
     },
   } as never, {
@@ -119,8 +115,8 @@ describe("health service", () => {
     healthMocks.listConnectionStatuses.mockResolvedValue([
       {
         id: 7,
-        label: "lana",
-        platform: "fansly",
+        label: "lana-of",
+        platform: "onlyfans",
         modelSlug: "lana",
         modelName: "Lana",
         connectionStatus: "never_synced",
@@ -137,7 +133,6 @@ describe("health service", () => {
     const result = await getPublicSyncHealth({
       config: {
         healthSyncLightMaxAgeMinutes: 180,
-        healthSyncFollowerMaxAgeMinutes: 1080,
         healthSyncMonitoringToken: null,
       },
     } as never, {
@@ -145,6 +140,9 @@ describe("health service", () => {
     });
 
     expect(result.statusCode).toBe(503);
+    // The legacy checks have one threshold left: the follower one went with
+    // the legacy Fansly follower check (step 4, S4-24).
+    expect(result.body.thresholds).toEqual({ lightMaxAgeMinutes: 180 });
     expect(result.body).toMatchObject({
       status: "degraded",
       overall: {
@@ -156,16 +154,16 @@ describe("health service", () => {
       pages: [
         {
           pageId: 7,
-          pageLabel: "lana",
-          platform: "fansly",
+          pageLabel: "lana-of",
+          platform: "onlyfans",
           connectionStatus: "never_synced",
+          followerAgeMinutes: null,
           failedStreams: 0,
           stalledStreams: 0,
           pendingStreams: 0,
           issues: [
             "connection:never_synced",
             "light_sync_missing",
-            "follower_sync_missing",
           ],
           lastErrorSummary: "No successful sync yet",
         },
@@ -173,7 +171,7 @@ describe("health service", () => {
     });
   });
 
-  it("reports recent sync failure counters from the sync status snapshot", async () => {
+  it("judges no Fansly page by legacy streams: one the engine does not own is unhealthy because nothing reads it", async () => {
     healthMocks.listConnectionStatuses.mockResolvedValue([
       {
         id: 7,
@@ -181,9 +179,75 @@ describe("health service", () => {
         platform: "fansly",
         modelSlug: "lana",
         modelName: "Lana",
+        // Everything a legacy check would have passed.
+        connectionStatus: "active",
+        lastLightSyncAt: "2026-03-23T11:50:00.000Z",
+        lastFollowerSyncAt: "2026-03-23T11:00:00.000Z",
+        lastSyncError: null,
+      },
+    ]);
+    healthMocks.getSyncStatusSnapshot.mockResolvedValue({
+      generatedAt: "2026-03-23T12:00:00.000Z",
+      pages: [{
+        pageId: 7,
+        pageLabel: "lana",
+        platform: "fansly",
+        modelSlug: "lana",
+        modelName: "Lana",
+        blocks: {
+          connection: { block: "connection", state: "not_available", statusReason: null, error: null, metrics: {} },
+          financials: { block: "financials", state: "not_available", statusReason: null, error: null, metrics: {} },
+          audience: { block: "audience", state: "not_available", statusReason: null, error: null, metrics: {} },
+          messages_live: { block: "messages_live", state: "not_available", statusReason: null, error: null, metrics: {} },
+          messages_history: { block: "messages_history", state: "not_available", statusReason: null, error: null, metrics: {} },
+        },
+      }],
+    });
+
+    const result = await getPublicSyncHealth({
+      config: {
+        healthSyncLightMaxAgeMinutes: 180,
+        healthSyncMonitoringToken: null,
+      },
+    } as never, {
+      now: new Date("2026-03-23T12:00:00.000Z"),
+    });
+
+    expect(result.statusCode).toBe(503);
+    expect(result.body.pages).toEqual([
+      {
+        pageId: 7,
+        pageLabel: "lana",
+        platform: "fansly",
+        modelSlug: "lana",
+        modelName: "Lana",
+        status: "degraded",
+        connectionStatus: "active",
+        lastLightSyncAt: "2026-03-23T11:50:00.000Z",
+        lightAgeMinutes: 10,
+        lastFollowerSyncAt: "2026-03-23T11:00:00.000Z",
+        followerAgeMinutes: 60,
+        failedStreams: 0,
+        stalledStreams: 0,
+        pendingStreams: 0,
+        lastErrorSummary: "engine:not_live",
+        issues: ["engine:not_live"],
+      },
+    ]);
+    expect(result.body.overall).toMatchObject({ pageCount: 1, unhealthyPageCount: 1 });
+  });
+
+  it("reports recent sync failure counters from the sync status snapshot", async () => {
+    healthMocks.listConnectionStatuses.mockResolvedValue([
+      {
+        id: 7,
+        label: "lana-of",
+        platform: "onlyfans",
+        modelSlug: "lana",
+        modelName: "Lana",
         connectionStatus: "active",
         lastLightSyncAt: "2026-03-23T12:00:00.000Z",
-        lastFollowerSyncAt: "2026-03-23T12:00:00.000Z",
+        lastFollowerSyncAt: null,
         lastSyncError: null,
       },
     ]);
@@ -196,8 +260,8 @@ describe("health service", () => {
       },
       pages: [{
         pageId: 7,
-        pageLabel: "lana",
-        platform: "fansly",
+        pageLabel: "lana-of",
+        platform: "onlyfans",
         modelSlug: "lana",
         modelName: "Lana",
         blocks: {
@@ -213,7 +277,6 @@ describe("health service", () => {
     const result = await getPublicSyncHealth({
       config: {
         healthSyncLightMaxAgeMinutes: 180,
-        healthSyncFollowerMaxAgeMinutes: 1080,
         healthSyncMonitoringToken: null,
       },
     } as never, {
@@ -263,7 +326,6 @@ describe("health service", () => {
     const result = await getPublicSyncHealth({
       config: {
         healthSyncLightMaxAgeMinutes: 180,
-        healthSyncFollowerMaxAgeMinutes: 1080,
         healthSyncMonitoringToken: null,
       },
     } as never, {
@@ -289,31 +351,31 @@ describe("health service", () => {
   });
 
   it("degrades for a failed supporting task hidden by an up-to-date block", async () => {
-    mockAudienceTaskHealthScenario({
-      block: "audience",
+    mockTaskHealthScenario({
+      block: "financials",
       state: "up_to_date",
       statusReason: null,
       error: null,
       metrics: {},
       tasks: [{
-        stream: "followers_reconcile",
+        stream: "top_spenders",
         state: "failed",
         needsAttention: true,
         statusReason: {
-          code: "followers_reconcile_inconsistent_snapshot",
-          summary: "Follower snapshot stayed inconsistent after the bounded restart.",
+          code: "top_spenders_window_rejected",
+          summary: "The top spenders window could not be rebuilt.",
           waitingFor: null,
         },
         error: {
-          code: "followers_reconcile_inconsistent_snapshot",
-          summary: "Follower snapshot stayed inconsistent after the bounded restart.",
+          code: "top_spenders_window_rejected",
+          summary: "The top spenders window could not be rebuilt.",
           failedAt: "2026-03-23T11:59:00.000Z",
           consecutiveFailures: 1,
         },
       }],
     });
 
-    const result = await readMockedAudienceTaskHealth();
+    const result = await readMockedTaskHealth();
 
     expect(result.statusCode).toBe(503);
     expect(result.body).toMatchObject({
@@ -327,32 +389,32 @@ describe("health service", () => {
         status: "degraded",
         failedStreams: 0,
         issues: ["failed_tasks"],
-        lastErrorSummary: "Follower snapshot stayed inconsistent after the bounded restart.",
+        lastErrorSummary: "The top spenders window could not be rebuilt.",
       }],
     });
   });
 
   it("does not treat a dependency-delayed supporting task as failed", async () => {
-    mockAudienceTaskHealthScenario({
-      block: "audience",
+    mockTaskHealthScenario({
+      block: "financials",
       state: "up_to_date",
       statusReason: null,
       error: null,
       metrics: {},
       tasks: [{
-        stream: "followers_reconcile",
+        stream: "top_spenders",
         state: "delayed",
         needsAttention: true,
         statusReason: {
           code: "unmet_dependency",
-          summary: "Waiting for followers.",
-          waitingFor: ["followers"],
+          summary: "Waiting for transactions.",
+          waitingFor: ["transactions"],
         },
         error: null,
       }],
     });
 
-    const result = await readMockedAudienceTaskHealth();
+    const result = await readMockedTaskHealth();
 
     expect(result.statusCode).toBe(200);
     expect(result.body).toMatchObject({
@@ -371,14 +433,14 @@ describe("health service", () => {
   });
 
   it("does not degrade a paused block when no task failed", async () => {
-    mockAudienceTaskHealthScenario({
-      block: "audience",
+    mockTaskHealthScenario({
+      block: "financials",
       state: "paused",
       statusReason: null,
       error: null,
       metrics: {},
       tasks: [{
-        stream: "followers",
+        stream: "transactions",
         state: "paused",
         needsAttention: false,
         statusReason: null,
@@ -386,7 +448,7 @@ describe("health service", () => {
       }],
     });
 
-    const result = await readMockedAudienceTaskHealth();
+    const result = await readMockedTaskHealth();
 
     expect(result.statusCode).toBe(200);
     expect(result.body).toMatchObject({
@@ -405,33 +467,33 @@ describe("health service", () => {
   });
 
   it("degrades a paused aggregate when a supporting sibling task failed", async () => {
-    mockAudienceTaskHealthScenario({
-      block: "audience",
+    mockTaskHealthScenario({
+      block: "financials",
       state: "paused",
       statusReason: null,
       error: null,
       metrics: {},
       tasks: [{
-        stream: "followers",
+        stream: "transactions",
         state: "paused",
         needsAttention: false,
         statusReason: null,
         error: null,
       }, {
-        stream: "followers_reconcile",
+        stream: "top_spenders",
         state: "failed",
         needsAttention: true,
         statusReason: null,
         error: {
-          code: "followers_reconcile_inconsistent_snapshot",
-          summary: "Follower reconcile is blocked on an inconsistent snapshot.",
+          code: "top_spenders_window_rejected",
+          summary: "Top spenders are blocked on a rejected window.",
           failedAt: "2026-03-23T11:59:00.000Z",
           consecutiveFailures: 1,
         },
       }],
     });
 
-    const result = await readMockedAudienceTaskHealth();
+    const result = await readMockedTaskHealth();
 
     expect(result.statusCode).toBe(503);
     expect(result.body).toMatchObject({
@@ -445,12 +507,12 @@ describe("health service", () => {
         status: "degraded",
         failedStreams: 0,
         issues: ["failed_tasks"],
-        lastErrorSummary: "Follower reconcile is blocked on an inconsistent snapshot.",
+        lastErrorSummary: "Top spenders are blocked on a rejected window.",
       }],
     });
   });
 
-  it("does not degrade an OFAPI page for retired legacy OnlyFans coverage debt", async () => {
+  it("does not degrade an OFAPI-mapped page for its unverified legacy connection or its parked streams", async () => {
     healthMocks.listConnectionStatuses.mockResolvedValue([
       {
         id: 9,
@@ -502,14 +564,9 @@ describe("health service", () => {
         },
       }],
     });
-    healthMocks.countConversationSyncFailuresByAccount.mockResolvedValueOnce([
-      { platformAccountId: 9, failingConversationCount: 4 },
-    ]);
-
     const result = await getPublicSyncHealth({
       config: {
         healthSyncLightMaxAgeMinutes: 180,
-        healthSyncFollowerMaxAgeMinutes: 1080,
         healthSyncMonitoringToken: null,
       },
     } as never, {
@@ -538,13 +595,13 @@ describe("health service", () => {
     healthMocks.listConnectionStatuses.mockResolvedValue([
       {
         id: 7,
-        label: "lora-1",
-        platform: "fansly",
+        label: "lora-of",
+        platform: "onlyfans",
         modelSlug: "lora",
         modelName: "Lora",
         connectionStatus: "active",
         lastLightSyncAt: "2026-03-23T12:00:00.000Z",
-        lastFollowerSyncAt: "2026-03-23T12:00:00.000Z",
+        lastFollowerSyncAt: null,
         lastSyncError: null,
       },
     ]);
@@ -552,23 +609,22 @@ describe("health service", () => {
       generatedAt: "2026-03-23T12:00:00.000Z",
       pages: [{
         pageId: 7,
-        pageLabel: "lora-1",
-        platform: "fansly",
+        pageLabel: "lora-of",
+        platform: "onlyfans",
         modelSlug: "lora",
         modelName: "Lora",
         blocks: {
           connection: { block: "connection", state: "up_to_date", statusReason: null, error: null, metrics: {} },
           financials: { block: "financials", state: "up_to_date", statusReason: null, error: null, metrics: {} },
           audience: { block: "audience", state: "up_to_date", statusReason: null, error: null, metrics: {} },
-          messages_live: { block: "messages_live", state: "up_to_date", statusReason: null, error: null, metrics: {} },
           // The incident shape: 251 consecutive 23514s, state "retrying" —
           // previously counted into pendingStreams and reported 200/ok.
-          messages_history: {
-            block: "messages_history",
+          messages_live: {
+            block: "messages_live",
             state: "retrying",
             statusReason: null,
             error: {
-              stream: "dm_messages",
+              stream: "dm_conversations",
               code: "23514",
               summary: "stored_message_count check violated",
               failedAt: "2026-03-23T11:59:00.000Z",
@@ -576,6 +632,7 @@ describe("health service", () => {
             },
             metrics: {},
           },
+          messages_history: { block: "messages_history", state: "not_available", statusReason: null, error: null, metrics: {} },
         },
       }],
     });
@@ -583,7 +640,6 @@ describe("health service", () => {
     const result = await getPublicSyncHealth({
       config: {
         healthSyncLightMaxAgeMinutes: 180,
-        healthSyncFollowerMaxAgeMinutes: 1080,
         healthSyncMonitoringToken: null,
       },
     } as never, {
@@ -601,16 +657,16 @@ describe("health service", () => {
           pageId: 7,
           status: "degraded",
           pendingStreams: 1,
-          issues: ["dm_messages:retry_wedged"],
+          issues: ["dm_conversations:retry_wedged"],
         },
       ],
     });
   });
 
   it("keeps degrading when the wedged stream's state leaves retrying (#137 addendum: false-green)", async () => {
-    // Prod 2026-07-11: a 425-streak dm_messages flipped retrying → pending
-    // between failures and /health/sync went back to 200/ok. The streak only
-    // resets on a real success, so the state transition must not clear it.
+    // Prod 2026-07-11: a 425-streak stream flipped retrying → pending between
+    // failures and /health/sync went back to 200/ok. The streak only resets on
+    // a real success, so the state transition must not clear it.
     healthMocks.listConnectionStatuses.mockResolvedValue([
       {
         id: 9,
@@ -636,24 +692,24 @@ describe("health service", () => {
           connection: { block: "connection", state: "up_to_date", statusReason: null, error: null, metrics: {} },
           financials: { block: "financials", state: "up_to_date", statusReason: null, error: null, metrics: {} },
           audience: { block: "audience", state: "up_to_date", statusReason: null, error: null, metrics: {} },
-          messages_live: { block: "messages_live", state: "up_to_date", statusReason: null, error: null, metrics: {} },
-          messages_history: {
-            block: "messages_history",
-            state: "backfilling",
+          messages_live: {
+            block: "messages_live",
+            state: "syncing",
             statusReason: null,
             error: null,
             tasks: [{
-              stream: "dm_messages",
+              stream: "dm_conversations",
               error: {
-                stream: "dm_messages",
+                stream: "dm_conversations",
                 code: null,
-                summary: "OFAPI request failed: GET .../chats/292065372/messages",
+                summary: "OFAPI request failed: GET .../chats",
                 failedAt: "2026-03-23T11:59:00.000Z",
                 consecutiveFailures: 425,
               },
             }],
             metrics: {},
           },
+          messages_history: { block: "messages_history", state: "not_available", statusReason: null, error: null, metrics: {} },
         },
       }],
     });
@@ -661,7 +717,6 @@ describe("health service", () => {
     const result = await getPublicSyncHealth({
       config: {
         healthSyncLightMaxAgeMinutes: 180,
-        healthSyncFollowerMaxAgeMinutes: 1080,
         healthSyncMonitoringToken: null,
       },
     } as never, {
@@ -675,7 +730,7 @@ describe("health service", () => {
         {
           pageId: 9,
           status: "degraded",
-          issues: ["dm_messages:retry_wedged"],
+          issues: ["dm_conversations:retry_wedged"],
         },
       ],
     });
@@ -685,13 +740,13 @@ describe("health service", () => {
     healthMocks.listConnectionStatuses.mockResolvedValue([
       {
         id: 7,
-        label: "lora-1",
-        platform: "fansly",
+        label: "lora-of",
+        platform: "onlyfans",
         modelSlug: "lora",
         modelName: "Lora",
         connectionStatus: "active",
         lastLightSyncAt: "2026-03-23T12:00:00.000Z",
-        lastFollowerSyncAt: "2026-03-23T12:00:00.000Z",
+        lastFollowerSyncAt: null,
         lastSyncError: null,
       },
     ]);
@@ -699,21 +754,20 @@ describe("health service", () => {
       generatedAt: "2026-03-23T12:00:00.000Z",
       pages: [{
         pageId: 7,
-        pageLabel: "lora-1",
-        platform: "fansly",
+        pageLabel: "lora-of",
+        platform: "onlyfans",
         modelSlug: "lora",
         modelName: "Lora",
         blocks: {
           connection: { block: "connection", state: "up_to_date", statusReason: null, error: null, metrics: {} },
           financials: { block: "financials", state: "up_to_date", statusReason: null, error: null, metrics: {} },
           audience: { block: "audience", state: "up_to_date", statusReason: null, error: null, metrics: {} },
-          messages_live: { block: "messages_live", state: "up_to_date", statusReason: null, error: null, metrics: {} },
-          messages_history: {
-            block: "messages_history",
+          messages_live: {
+            block: "messages_live",
             state: "retrying",
             statusReason: null,
             error: {
-              stream: "dm_messages",
+              stream: "dm_conversations",
               code: "http_5xx",
               summary: "upstream flake",
               failedAt: "2026-03-23T11:59:00.000Z",
@@ -721,6 +775,7 @@ describe("health service", () => {
             },
             metrics: {},
           },
+          messages_history: { block: "messages_history", state: "not_available", statusReason: null, error: null, metrics: {} },
         },
       }],
     });
@@ -728,7 +783,6 @@ describe("health service", () => {
     const result = await getPublicSyncHealth({
       config: {
         healthSyncLightMaxAgeMinutes: 180,
-        healthSyncFollowerMaxAgeMinutes: 1080,
         healthSyncMonitoringToken: null,
       },
     } as never, {
@@ -744,69 +798,6 @@ describe("health service", () => {
           status: "ok",
           pendingStreams: 1,
           issues: [],
-        },
-      ],
-    });
-  });
-
-  it("degrades a page with conversation-level coverage debt even after a partial yield reset the streak (#138 addendum)", async () => {
-    // Prod 2026-07-11 third layer: yieldPageSync resets consecutive_failures
-    // to 0 on EVERY partial run, so once the breaker keeps the stream moving
-    // the page-level streak goes quiet while poison chats still sit in
-    // backoff. The breaker rows are the durable signal.
-    healthMocks.listConnectionStatuses.mockResolvedValue([
-      {
-        id: 8,
-        label: "lora-fansly",
-        platform: "fansly",
-        modelSlug: "lora",
-        modelName: "Lora",
-        connectionStatus: "active",
-        lastLightSyncAt: "2026-03-23T12:00:00.000Z",
-        lastFollowerSyncAt: "2026-03-23T12:00:00.000Z",
-        lastSyncError: null,
-      },
-    ]);
-    healthMocks.getSyncStatusSnapshot.mockResolvedValue({
-      generatedAt: "2026-03-23T12:00:00.000Z",
-      pages: [{
-        pageId: 8,
-        pageLabel: "lora-fansly",
-        platform: "fansly",
-        modelSlug: "lora",
-        modelName: "Lora",
-        blocks: {
-          connection: { block: "connection", state: "up_to_date", statusReason: null, error: null, metrics: {} },
-          financials: { block: "financials", state: "up_to_date", statusReason: null, error: null, metrics: {} },
-          audience: { block: "audience", state: "up_to_date", statusReason: null, error: null, metrics: {} },
-          messages_live: { block: "messages_live", state: "up_to_date", statusReason: null, error: null, metrics: {} },
-          // Streak wiped by the yield — nothing wedged-looking left here.
-          messages_history: { block: "messages_history", state: "backfilling", statusReason: null, error: null, metrics: {} },
-        },
-      }],
-    });
-    healthMocks.countConversationSyncFailuresByAccount.mockResolvedValueOnce([
-      { platformAccountId: 8, failingConversationCount: 4 },
-    ]);
-
-    const result = await getPublicSyncHealth({
-      config: {
-        healthSyncLightMaxAgeMinutes: 180,
-        healthSyncFollowerMaxAgeMinutes: 1080,
-        healthSyncMonitoringToken: null,
-      },
-    } as never, {
-      now: new Date("2026-03-23T12:00:00.000Z"),
-    });
-
-    expect(result.statusCode).toBe(503);
-    expect(result.body).toMatchObject({
-      status: "degraded",
-      pages: [
-        {
-          pageId: 8,
-          status: "degraded",
-          issues: ["dm_messages:coverage_degraded"],
         },
       ],
     });

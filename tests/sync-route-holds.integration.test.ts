@@ -77,9 +77,6 @@ function busy(spec: FanslyWireId): ResourceModule {
     async apply(_tx, input) {
       return { work: { satisfiesRevision: false, nextDueAt: input.now }, followups: [] };
     },
-    async shadow(_work, _request, ctx) {
-      return { work: { satisfiesRevision: false, nextDueAt: ctx.now }, followups: [] };
-    },
   };
 }
 
@@ -114,7 +111,7 @@ function refused(status: number, retryAfter: string | null): FanslyWireOutcome {
 
 async function demand(pageId: number, reg: EngineRegistry, resource: string): Promise<void> {
   const spec = reg.spec(resource)!;
-  await upsertDemand(db(), { pageId, shadow: false, resource, subject: "", kind: spec.kind, class: spec.class, demand: { reasons: ["test"] } });
+  await upsertDemand(db(), { pageId, resource, subject: "", kind: spec.kind, class: spec.class, demand: { reasons: ["test"] } });
 }
 
 interface Attempt {
@@ -160,7 +157,7 @@ async function runUntil(
   timeoutMs = 40_000,
 ): Promise<void> {
   const { actor, stop, abort } = await makeTestActor({
-    db: db(), pageId, mode: "live", registry: reg, routeTimeScale: options.scale, transport,
+    db: db(), pageId, registry: reg, routeTimeScale: options.scale, transport,
     ...(options.alerts === undefined ? {} : { alerts: options.alerts }),
     ...(options.metrics === undefined ? {} : { metrics: options.metrics }),
   });

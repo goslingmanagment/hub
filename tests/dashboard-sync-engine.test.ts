@@ -184,6 +184,19 @@ describe("an engine page on the Sync tab", () => {
     expect(html).toContain("Paused");
   });
 
+  it("a stream the engine reads on a trigger, not on a poll, shows no interval", () => {
+    const reconcile = { ...page().blocks.audience.substreams[1]!, stream: "followers_reconcile" as const, cadenceSeconds: 0 };
+    const blocks = page();
+    blocks.blocks.audience = engineBlock("audience", { substreams: [blocks.blocks.audience.substreams[0]!, reconcile] });
+    queries.usePageSyncBlocks.mockReturnValue({
+      data: { generatedAt: NOW, page: blocks },
+      isLoading: false, isError: false, error: null,
+    });
+    const html = renderRouted(createElement(SyncPageDetail, { pageLabel: "lilly-1", onBack: vi.fn() }));
+    expect(html).toContain("follower reconcile");
+    expect(html).not.toMatch(/>0s</);
+  });
+
   it("a session without the engine status still sees who serves the page", () => {
     queries.useSyncEnginePages.mockReturnValue({ data: undefined });
     queries.usePageSyncBlocks.mockReturnValue({
@@ -196,7 +209,7 @@ describe("an engine page on the Sync tab", () => {
   });
 
   it("the buttons act on the engine: sync now only while live, pause/resume by the block's keys, requeue on a quarantine", () => {
-    expect(getSyncBlockActionPresentation(page().blocks.financials, "fansly")).toEqual({
+    expect(getSyncBlockActionPresentation(page().blocks.financials)).toEqual({
       showTrigger: true,
       showPause: true,
       showResume: false,
@@ -205,13 +218,52 @@ describe("an engine page on the Sync tab", () => {
       resetLabel: "Requeue",
     });
     const paused = engineBlock("financials", {}, { pausedResources: ["transactions.head", "transactions.insurance"] });
-    expect(getSyncBlockActionPresentation(paused, "fansly")).toMatchObject({ showPause: false, showResume: true });
+    expect(getSyncBlockActionPresentation(paused)).toMatchObject({ showPause: false, showResume: true });
     const partly = engineBlock("financials", {}, { pausedResources: ["transactions.head"] });
-    expect(getSyncBlockActionPresentation(partly, "fansly")).toMatchObject({ showPause: true, showResume: true });
+    expect(getSyncBlockActionPresentation(partly)).toMatchObject({ showPause: true, showResume: true });
     const handover = engineBlock("financials", { engineMode: "handover", needsAttention: true });
-    expect(getSyncBlockActionPresentation(handover, "fansly")).toMatchObject({ showTrigger: false, showReset: false });
+    expect(getSyncBlockActionPresentation(handover)).toMatchObject({ showTrigger: false, showReset: false });
     const quarantined = engineBlock("financials", { needsAttention: true });
-    expect(getSyncBlockActionPresentation(quarantined, "fansly")).toMatchObject({ showReset: true, resetLabel: "Requeue" });
+    expect(getSyncBlockActionPresentation(quarantined)).toMatchObject({ showReset: true, resetLabel: "Requeue" });
+  });
+
+  // Step 4, S4-24: a Fansly page the engine does not own has no legacy block
+  // to show: every block is not available and says that nothing reads the page.
+  it("a Fansly page the engine does not own says why its blocks are not available, with no button and no engine card", () => {
+    const unserved = (key: SyncBlockStatus["block"]): SyncBlockStatus => ({
+      ...engineBlock(key),
+      state: "not_available",
+      succeededAt: null,
+      statusReason: {
+        code: "fansly_sync_engine_off",
+        summary: "The Fansly Sync Engine does not run this page: nothing reads it.",
+        waitingFor: null,
+      },
+      primaryFresh: false,
+      metrics: {},
+      connectionStatus: null,
+      substreams: [],
+    });
+    const { engineMode: _mode, ...connection } = unserved("connection");
+    const blocks = {
+      connection: connection as SyncBlockStatus,
+      financials: unserved("financials"),
+      audience: unserved("audience"),
+      messages_live: unserved("messages_live"),
+      messages_history: unserved("messages_history"),
+    };
+    queries.usePageSyncBlocks.mockReturnValue({
+      data: { generatedAt: NOW, page: { ...page(), blocks } },
+      isLoading: false, isError: false, error: null,
+    });
+    const html = renderRouted(createElement(SyncPageDetail, { pageLabel: "lilly-1", onBack: vi.fn() }));
+    expect(html.match(/The Fansly Sync Engine does not run this page: nothing reads it\./g)).toHaveLength(5);
+    expect(html).not.toContain("Not available on this platform");
+    expect(html).not.toContain(MANAGED);
+    expect(html).not.toContain("Sync Now");
+    expect(html).not.toContain("Pause");
+    expect(formatBlockSummary(blocks.financials)).toBe("Not available");
+    expect(needsVisualAttention(blocks.financials)).toBe(false);
   });
 
   it("formats the engine line and ages in the owner's words", () => {

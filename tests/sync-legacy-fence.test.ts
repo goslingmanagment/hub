@@ -77,6 +77,7 @@ describe("the legacy pickers carry the executor's platform set", () => {
       .sort();
     expect(optional).toEqual([
       "ensurePageSyncStates",
+      "listPageSyncStates",
       "listPageSyncStatesInternal",
       "reclaimExpiredPageSync",
       "refreshPageSyncDependencies",

@@ -31,11 +31,9 @@ import {
 function BlockDetailCard({
   block,
   pageLabel,
-  platform,
 }: {
   block: SyncBlockStatus;
   pageLabel: string;
-  platform: SyncBlocksPage["platform"];
 }) {
   const label = getBlockLabel(block.block);
   const description = getBlockDescription(block.block);
@@ -49,7 +47,7 @@ function BlockDetailCard({
           <SyncBlockBadge block={block} />
         </div>
         <p className="mt-1 text-xs text-text-muted">
-          Not available on this platform
+          {block.statusReason?.summary ?? "Not available on this platform"}
         </p>
       </div>
     );
@@ -280,7 +278,8 @@ function BlockDetailCard({
                         {formatNextTime(sub.nextDueAt) ?? "\u2014"}
                       </td>
                       <td className="px-3 py-1.5 text-text-secondary">
-                        {formatCadence(sub.cadenceSeconds)}
+                        {/* An engine stream with no poll (triggered work) has no interval. */}
+                        {sub.cadenceSeconds > 0 ? formatCadence(sub.cadenceSeconds) : "\u2014"}
                       </td>
                     </tr>
                   );
@@ -293,7 +292,7 @@ function BlockDetailCard({
 
       {/* Actions */}
       <div className="mt-4 flex justify-end">
-        <SyncBlockActions pageLabel={pageLabel} platform={platform} block={block} />
+        <SyncBlockActions pageLabel={pageLabel} block={block} />
       </div>
     </div>
   );
@@ -409,7 +408,6 @@ export function SyncPageDetail({
             key={key}
             block={page.blocks[key]}
             pageLabel={pageLabel}
-            platform={page.platform}
           />
         ))}
       </div>

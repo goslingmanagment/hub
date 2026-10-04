@@ -37,13 +37,15 @@ import {
 // (`acquireSyncPageOwnership`, I6) — a lost database session alone is never
 // such a confirmation.
 //
-// Mode: `off ↔ shadow` is the owner's ordinary lever (`setSyncPageMode`). The
-// one way to `live` is a page's birth: onboarding creates a new Fansly page's
-// row live in the transaction that creates the page (`createLiveSyncPage`,
-// step 4 S4-05). Nothing moves a page to `handover` or out of `live`: the
-// step-3 switch and its rollback, with the capability that opened those
-// transitions, are gone (step 4 S4-21). `handover` stays a value the CHECK
-// admits and every reader still treats as "neither engine sends". Pinned by
+// Mode: the one way to `live` is a page's birth: onboarding creates a new
+// Fansly page's row live in the transaction that creates the page
+// (`createLiveSyncPage`, step 4 S4-05). Nothing moves a page to `handover` or
+// out of `live`: the step-3 switch and its rollback, with the capability that
+// opened those transitions, are gone (step 4 S4-21). Nothing moves a page to
+// `shadow` either: shadow mode is gone (step 4 S4-23) — no actor runs such a
+// page, and the one transition `setSyncPageMode` still makes takes a row left
+// in `shadow` to `off`. `shadow` and `handover` stay values the CHECK admits;
+// every reader treats both as "the engine sends nothing". Pinned by
 // tests/sync-engine-repositories.test.ts (I17).
 
 export const SYNC_PAGE_MODES = ["off", "shadow", "handover", "live"] as const;
@@ -89,7 +91,6 @@ export interface SyncPageRow {
   lastSendAt: Date | null;
   lastSendAttemptId: number | null;
   lastCompletedAt: Date | null;
-  wsRouterCursor: number;
   /** Owner decision №8 (0235): DM exclusion reasons the engine no longer
    *  applies on this page (`sync excluded lift`). */
   liftedDmExclusions: string[];
@@ -152,7 +153,6 @@ type PageSqlRow = {
   lastSendAt: Date | string | null;
   lastSendAttemptId: string | null;
   lastCompletedAt: Date | string | null;
-  wsRouterCursor: string;
   liftedDmExclusions: string[] | null;
   createdAt: Date | string;
   updatedAt: Date | string;
@@ -196,7 +196,6 @@ const pageColumns = sql`
   sp.last_send_at as "lastSendAt",
   sp.last_send_attempt_id::text as "lastSendAttemptId",
   sp.last_completed_at as "lastCompletedAt",
-  sp.ws_router_cursor::text as "wsRouterCursor",
   sp.lifted_dm_exclusions as "liftedDmExclusions",
   sp.created_at as "createdAt",
   sp.updated_at as "updatedAt",
@@ -247,7 +246,6 @@ function normalizePageRow(row: PageSqlRow): SyncPageRow {
     lastSendAt: toDate(row.lastSendAt),
     lastSendAttemptId: toNumber(row.lastSendAttemptId),
     lastCompletedAt: toDate(row.lastCompletedAt),
-    wsRouterCursor: Number(row.wsRouterCursor),
     liftedDmExclusions: row.liftedDmExclusions ?? [],
     createdAt: toRequiredDate(row.createdAt),
     updatedAt: toRequiredDate(row.updatedAt),
@@ -367,9 +365,9 @@ export async function listSyncPages(
 
 // ── mode ──────────────────────────────────────────────────────────────────────
 
-/** The transitions the owner makes (`sync page mode`): the only ones there
- *  are (I17). */
-const OWNER_TRANSITIONS: ReadonlySet<string> = new Set(["off>shadow", "shadow>off"]);
+/** The transition the owner makes (`sync page mode`): the only one there is
+ *  (I17) — a page left in `shadow`, a mode nothing runs any more, goes `off`. */
+const OWNER_TRANSITIONS: ReadonlySet<string> = new Set(["shadow>off"]);
 
 export type SetSyncPageModeResult =
   | { kind: "changed"; from: SyncPageMode; to: SyncPageMode; modeChangedAt: Date }
@@ -382,11 +380,12 @@ export type SetSyncPageModeResult =
   };
 
 /**
- * Move a page between `off` and `shadow`, the only transitions there are
- * (I17): a page reaches `live` by `createLiveSyncPage` alone and never leaves
- * it, and nothing reaches `handover`. `expectFrom` makes the change
- * conditional on the current mode. Neither mode runs a live loop, so
- * `legacy_imported_at` (J3) is null after the change.
+ * Move a page from `shadow` to `off`, the only transition there is (I17): a
+ * page reaches `live` by `createLiveSyncPage` alone and never leaves it, and
+ * nothing reaches `handover` or `shadow` — a change to `shadow` is refused
+ * like any other (`transition_not_allowed`). `expectFrom` makes the change
+ * conditional on the current mode. `off` runs no loop, so `legacy_imported_at`
+ * (J3) is null after the change.
  */
 export async function setSyncPageMode(
   db: Database,
@@ -1399,18 +1398,3 @@ export async function setRegistryOverride(
   return true;
 }
 
-/** The shadow WS feed's cursor (§3.12): only ever forward, under the
- *  generation of the page's shadow actor. */
-export async function advanceWsRouterCursor(
-  db: Database,
-  input: { pageId: number; generation: bigint; cursor: number },
-): Promise<void> {
-  const result = await db.execute(sql`
-    update sync_pages
-       set ws_router_cursor = greatest(ws_router_cursor, ${input.cursor}::bigint),
-           updated_at = clock_timestamp()
-     where page_id = ${input.pageId}
-       ${ownedPageFilter(input.generation)}
-  `);
-  await assertOwnedWrite(db, input.pageId, input.generation, result.rowCount);
-}

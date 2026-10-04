@@ -2,10 +2,12 @@ import type { SyncUxSummary } from "@agency_hub_core/contracts";
 import {
   activePageSyncRetryAt,
   getSyncStreamsForPlatform,
+  isLegacyExecutorStream,
   listCheckpointStates,
   listPageSyncStates,
   listVisiblePages,
   SYNC_STREAM_POLICY,
+  type LegacyExecutorStream,
   type PageSyncState,
   type SyncStream,
 } from "@agency_hub_core/db";
@@ -15,20 +17,23 @@ import {
   isOfapiAccountHealthEnabled,
   ofapiAuthStatusNeedsAction,
 } from "./ofapi-account-health.ts";
+import { legacyExecutorPlatforms } from "../sync/onlyfans/boundary.ts";
 import { filterOnlyFansAudienceStreams } from "./sync/ofapi-audience-sync.ts";
 import { ofapiAudienceQualityHoldFor } from "./sync/cursor-state.ts";
-import { followersReconcileFloorWaitUntil } from "./sync/followers-reconcile-floor.ts";
 import { isOfapiFanIdentitiesEligiblePage } from "./sync/ofapi-fan-identities.ts";
 import { filterOnlyFansDmPollingStreams } from "./sync/onlyfans-dm-polling.ts";
 import { filterOnlyFansTopSpendersStreams } from "./sync/onlyfans-top-spenders.ts";
+import { buildEnginePageSyncUx, readEngineSummaryFacts, type EngineSummaryFacts } from "./sync-status-engine.ts";
 import {
   buildPageSyncUx,
   buildStreamSyncUx,
-  isBulkEnrichmentSyncStream,
   type SyncUxStreamLike,
 } from "./sync-ux.ts";
 
 type VisiblePage = Awaited<ReturnType<typeof listVisiblePages>>[number];
+
+/** A `page_sync_states` row of a stream the legacy executor runs. */
+type LegacyTaskRow = PageSyncState & { stream: LegacyExecutorStream };
 
 export interface SyncStatusSummaryPage {
   pageId: number;
@@ -71,14 +76,14 @@ function buildSummary(state: SyncUxSummary["state"], input: {
   };
 }
 
-function progressFor(task: PageSyncState): SyncUxStreamLike["progress"] {
+function progressFor(task: LegacyTaskRow): SyncUxStreamLike["progress"] {
   const label = task.progress.label;
   return typeof label === "string" && label.length > 0
     ? { label }
     : null;
 }
 
-function isStalled(task: PageSyncState, now: Date) {
+function isStalled(task: LegacyTaskRow, now: Date) {
   if (task.status !== "running") {
     return false;
   }
@@ -90,7 +95,7 @@ function isStalled(task: PageSyncState, now: Date) {
 }
 
 function toStreamSyncUx(
-  task: PageSyncState,
+  task: LegacyTaskRow,
   now: Date,
   qualityHold: string | null,
 ): SyncUxSummary {
@@ -128,7 +133,6 @@ function toStreamSyncUx(
       : null,
     succeededAt: iso(task.succeededAt),
     lastCompletionQualityHold: qualityHold,
-    intervalFloorUntil: iso(followersReconcileFloorWaitUntil(task, task.progress, now)),
     failedAt: iso(task.failedAt),
     lastErrorCode: task.lastErrorCode,
     blockerKind: task.blockerKind,
@@ -180,10 +184,12 @@ function buildOfapiAuthSyncUx(app: AppContext, page: VisiblePage): SyncUxSummary
   });
 }
 
-function buildPageSummarySyncUx(
+/** The summary of a page the legacy executor serves (OnlyFans), from its
+ *  legacy stream rows. */
+function buildLegacyPageSummarySyncUx(
   app: AppContext,
   page: VisiblePage,
-  taskRows: PageSyncState[],
+  taskRows: LegacyTaskRow[],
   now: Date,
   audienceQualityHold: string | null,
 ) {
@@ -192,12 +198,7 @@ function buildPageSummarySyncUx(
     return actionRequired;
   }
 
-  let applicableStreams: SyncStream[] = getSyncStreamsForPlatform(page.platform)
-    // Stage 16 bulk enrichment streams remain visible on the detailed sync
-    // monitor, but never make an otherwise-current page look broken/off. The
-    // membership list moved to sync-ux.ts so this filter and the monitor's page
-    // rollup, which needs the identical rule, cannot drift apart.
-    .filter((stream) => !isBulkEnrichmentSyncStream(stream));
+  let applicableStreams: SyncStream[] = getSyncStreamsForPlatform(page.platform);
   applicableStreams = filterOnlyFansAudienceStreams(
     page.platform,
     applicableStreams,
@@ -215,19 +216,17 @@ function buildPageSummarySyncUx(
     applicableStreams,
     app.config,
   );
-  if (page.platform !== "fansly") {
-    applicableStreams = applicableStreams.filter((stream) => {
-      // These rows are compatibility placeholders: OnlyFans identity metadata
-      // is static and transaction truth arrives through captured webhooks.
-      if (stream === "light" || stream === "transactions") {
-        return false;
-      }
-      if (stream === "fan_identities") {
-        return isOfapiFanIdentitiesEligiblePage(app.config, page);
-      }
-      return true;
-    });
-  }
+  applicableStreams = applicableStreams.filter((stream) => {
+    // These rows are compatibility placeholders: OnlyFans identity metadata
+    // is static and transaction truth arrives through captured webhooks.
+    if (stream === "light" || stream === "transactions") {
+      return false;
+    }
+    if (stream === "fan_identities") {
+      return isOfapiFanIdentitiesEligiblePage(app.config, page);
+    }
+    return true;
+  });
 
   const supportedStreams = new Set(applicableStreams);
   const streamSummaries = taskRows
@@ -235,6 +234,28 @@ function buildPageSummarySyncUx(
     .map((task) => toStreamSyncUx(task, now, task.stream === "subscribers" ? audienceQualityHold : null));
 
   return buildPageSyncUx(streamSummaries);
+}
+
+/** The summary of a page the legacy executor does not serve (Fansly): the
+ *  Fansly Sync Engine's, or "not syncing" when the engine does not own the
+ *  page — nothing reads it then. */
+function buildEnginePageSummarySyncUx(
+  app: AppContext,
+  page: VisiblePage,
+  engine: EngineSummaryFacts | undefined,
+): SyncUxSummary {
+  const credentials = buildCredentialSyncUx(app, page);
+  if (credentials) {
+    return credentials;
+  }
+  if (engine === undefined) {
+    return buildSummary("off", {
+      label: "Off",
+      headline: "Not syncing",
+      detail: "The Fansly Sync Engine does not run this page: nothing reads it.",
+    });
+  }
+  return buildEnginePageSyncUx(engine);
 }
 
 export async function getSyncStatusSummarySnapshot(
@@ -274,18 +295,25 @@ export async function getSyncStatusSummarySnapshot(
   // sync planner tick, the executor, and the explicit admin paths
   // (sync-control.ts, sync-blocks.ts). A page with no state rows is reported as
   // such — buildPageSummarySyncUx already handles an empty row list.
-  const [taskRows, checkpoints] = await Promise.all([
-    listPageSyncStates(app.db),
+  // A page of a platform the legacy executor serves (OnlyFans) is summed up
+  // from its legacy stream rows; any other page (Fansly) by the Fansly Sync
+  // Engine.
+  const legacyPlatforms = legacyExecutorPlatforms();
+  const enginePageIds = scopedPages.filter((page) => !legacyPlatforms.includes(page.platform)).map((page) => page.id);
+  const [taskRows, checkpoints, engineFacts] = await Promise.all([
+    listPageSyncStates(app.db, { platforms: legacyPlatforms }),
     listCheckpointStates(app.db, scopedPageIds, "subscribers"),
+    readEngineSummaryFacts(app.db, { pageIds: enginePageIds }),
   ]);
   const audienceHolds = new Map(checkpoints.map((row) => [row.pageId, ofapiAudienceQualityHoldFor(row.state)]));
-  const taskRowsByPageId = new Map<number, PageSyncState[]>();
+  const taskRowsByPageId = new Map<number, LegacyTaskRow[]>();
   for (const task of taskRows) {
-    if (!scopedPageIds.includes(task.pageId)) {
+    // A record row (OnlyFans's retired dm_messages) is no stream of the page.
+    if (!scopedPageIds.includes(task.pageId) || !isLegacyExecutorStream(task.stream)) {
       continue;
     }
     const current = taskRowsByPageId.get(task.pageId) ?? [];
-    current.push(task);
+    current.push(task as LegacyTaskRow);
     taskRowsByPageId.set(task.pageId, current);
   }
 
@@ -299,9 +327,11 @@ export async function getSyncStatusSummarySnapshot(
       modelName: page.modelName,
       username: page.username,
       displayName: page.displayName,
-      syncUx: buildPageSummarySyncUx(
-        app, page, taskRowsByPageId.get(page.id) ?? [], now, audienceHolds.get(page.id) ?? null,
-      ),
+      syncUx: legacyPlatforms.includes(page.platform)
+        ? buildLegacyPageSummarySyncUx(
+          app, page, taskRowsByPageId.get(page.id) ?? [], now, audienceHolds.get(page.id) ?? null,
+        )
+        : buildEnginePageSummarySyncUx(app, page, engineFacts.get(page.id)),
     })),
   };
 }

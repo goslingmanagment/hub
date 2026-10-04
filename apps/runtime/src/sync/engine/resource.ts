@@ -17,11 +17,10 @@ import type { WorkClass } from "./scheduler.ts";
 // The resource contract of the Fansly Sync Engine (design §4.1): what a
 // registry entry declares and what its module does, as far as the engine runs
 // it. The actor asks a module to PLAN one step (read-only), admits the one
-// request a plan asks for, and hands the answer to the module's APPLY (live)
-// or SHADOW (shadow: no answer, an estimate). The registry
-// (`sync/fansly/registry.ts`) lists every entry; this file only defines the
-// shape and the generic rules every entry shares (poll rows, demand → work
-// row, a module that is not implemented yet).
+// request a plan asks for, and hands the answer to the module's APPLY. The
+// registry (`sync/fansly/registry.ts`) lists every entry; this file only
+// defines the shape and the generic rules every entry shares (poll rows,
+// demand → work row, a module that is not implemented yet).
 
 /** A registry key `<file>.<variant>` (= `sync_work.resource`). */
 export type ResourceKey = string;
@@ -83,10 +82,8 @@ export interface EngineResourceSpec {
    *  the page's HTTP gate (ruling 9, `stepBeforeGate`) and commits such a
    *  step there; a plan that asks for a request is left for its slot. */
   planBeforeGate?: true;
-  /** Never runs in shadow (socket connect, media download, repair). */
-  liveOnly?: boolean;
   /** `sync_attempts.evidence`: the request parameters are coverage evidence
-   *  and are never pruned (design §2.9). A shadow attempt never is. */
+   *  and are never pruned (design §2.9). */
   evidence: boolean;
   /** The erasure fence the apply takes (I15). */
   fence: "dm_archive" | "none";
@@ -135,22 +132,10 @@ export interface RequestPlan<I extends FanslyWireId = FanslyWireId> {
    * belongs, as the plan decided it (a media visit's windows, an album walk's
    * proof header). Never sent; stored with the attempt
    * (`sync_attempts.request.step`) and handed back with the request to the
-   * apply, the shadow estimate and a journal re-apply, so a decision the
-   * read-only plan took is the one the step folds its answer into.
+   * apply and a journal re-apply, so a decision the read-only plan took is
+   * the one the step folds its answer into.
    */
   step?: unknown;
-  /**
-   * A shadow step's place in its walk when its parameters cannot name it: a
-   * window cut at the step's clock (a media visit's window, the fan earnings
-   * roster's whole history up to now) names the subject and the step instead,
-   * and a subject-queue walk names its shadow pass (each pass re-reads the
-   * subjects an earlier one read: shadow records no visit). Never sent and
-   * never read back by the resource; journaled with the attempt
-   * (`sync_attempts.request.position`), where the shadow report's
-   * endless-walk check (`report/shadow-routes.ts`) takes it for the request's
-   * identity in place of its parameters.
-   */
-  position?: unknown;
 }
 
 /** A demand for work (a follow-up of an apply, a router signal, an owner
@@ -174,7 +159,7 @@ export interface DemandSignal {
   deadlineMs?: number;
 }
 
-/** What a step does to its work row (apply, shadow, no-HTTP). */
+/** What a step does to its work row (apply, no-HTTP). */
 export interface WorkOutcome<C = unknown> {
   cursor?: C;
   proof?: unknown;
@@ -196,7 +181,7 @@ export type StepPlan<C = unknown> =
   | { kind: "done"; cursor?: C; proof?: unknown; result?: unknown; reason: string }
   /** A write the page needs that makes no request (design §3.3 item 3, E6):
    *  the module's `applyLocal` runs in one generation-fenced transaction, under
-   *  the erasure fence when the entry declares one. Live only. */
+   *  the erasure fence when the entry declares one. */
   | { kind: "local"; reason: string }
   /** Not now: a dependency, or not due. `until` null = re-check after
    *  `WAIT_RECHECK_MS`. */
@@ -206,23 +191,14 @@ export type StepPlan<C = unknown> =
 export interface PlanContext {
   db: Database;
   pageId: number;
-  shadow: boolean;
   now: Date;
   page: SyncPageRow;
   registry: EngineRegistry;
   /** The live settings (absent: the registry defaults). */
   settings?: SettingsSource;
-  /** The page's socket owner (live pages of a process that runs one; absent
-   *  or null otherwise): what `ws.connect` plans by. */
+  /** The page's socket owner (a process that runs one; absent or null
+   *  otherwise): what `ws.connect` plans by. */
   socket?: LivePageSocket | null;
-}
-
-export interface ShadowContext {
-  db: Database;
-  pageId: number;
-  now: Date;
-  page: SyncPageRow;
-  settings?: SettingsSource;
 }
 
 export interface ApplyInput {
@@ -315,66 +291,18 @@ export interface LocalApplyInput {
   ownRef: string | null;
 }
 
-/** A standing walk's look re-run (`ResourceModule.dueAtLook`): how many
- *  subjects were due at the look and untouched since, a few of them, and how
- *  many subjects its queue holds at all (null: the check did not pick, e.g.
- *  a pass that has ended or a visit in flight). */
-export interface LookCheck {
-  count: number;
-  examples: string[];
-  queued: number | null;
-}
-
-/** A queue walk's queue at an instant (`ResourceModule.queueNextDueAt`). */
-export type QueueNextDue = { nextDueAt: Date | null } | { unjudgeable: string };
-
-export interface ShadowResult<C = unknown> {
-  work: WorkOutcome<C>;
-  /** Demand the live apply would have created: upserted as shadow work. */
-  followups: readonly DemandSignal[];
-  /** Effects that are not work (subject-queue writes, …), counted only. */
-  counters?: Readonly<Record<string, number>>;
-}
-
-/** One journaled observation offered to a resource's replay (the shadow
- *  report, design §3.12 B5): the body as the journal holds it. */
-export interface ReplayObservation {
-  id: number;
-  receivedAt: Date;
-  kind: string;
-  pageId: number;
-  payload: unknown;
-}
-
-export interface ReplayContext {
-  /** Read-only: a replay never writes. */
-  db: Database;
-  pageId: number;
-}
-
-/** What a replay concluded about one observation: the new wire contract and
- *  the resource's intended effects against what legacy stored. A match that
- *  needed a named, checked legacy rule to hold (an older key scheme legacy
- *  stored the same fact under, rows legacy never stored) names each rule in
- *  `via`; the shadow report counts the observations of every rule, so no
- *  such allowance is silent. */
-export type ReplayVerdict =
-  | { kind: "match"; detail?: Readonly<Record<string, unknown>>; via?: readonly string[] }
-  | { kind: "mismatch"; reason: string; detail?: Readonly<Record<string, unknown>> }
-  | { kind: "not_replayable"; reason: string };
-
 export interface ResourceModule<C = unknown> {
   /** Read-only: what the next step of this work is. */
   plan(work: SyncWorkRow, ctx: PlanContext): Promise<StepPlan<C>>;
-  /** Claims in the admission transaction (live only, never in shadow). */
+  /** Claims in the admission transaction. */
   onAdmit?(tx: Database, work: SyncWorkRow, request: RequestPlan): Promise<void>;
-  /** Live: apply the captured answer (tx 3). */
+  /** Apply the captured answer (tx 3). */
   apply(tx: Database, input: ApplyInput): Promise<ApplyResult<C>>;
-  /** Live, a route that journals nothing (`capture`): apply its in-memory
-   *  answer (tx 3). Required for such routes; `apply` is never called for them. */
+  /** A route that journals nothing (`capture`): apply its in-memory answer
+   *  (tx 3). Required for such routes; `apply` is never called for them. */
   applyAnswer?(tx: Database, input: AnswerApplyInput): Promise<ApplyResult<C>>;
-  /** Live: the write of a `local` plan, in the commit's fenced transaction
-   *  (after the page lock and the erasure fence, before the work row). */
+  /** The write of a `local` plan, in the commit's fenced transaction (after
+   *  the page lock and the erasure fence, before the work row). */
   applyLocal?(tx: Database, input: LocalApplyInput): Promise<ApplyResult<C>>;
   /** The module's word on an outcome's consequences (`errors.onOutcome`), in
    *  the capture transaction: a failed WebSocket handshake goes to the
@@ -382,31 +310,8 @@ export interface ResourceModule<C = unknown> {
    *  hop's final answer closes its download with the describer's failure.
    *  Pure. */
   outcome?(decision: OutcomeDecision, step: OutcomeStep): OutcomeDecision;
-  /** Shadow: estimate the outcome of the step without an answer. */
-  shadow(work: SyncWorkRow, request: RequestPlan, ctx: ShadowContext): Promise<ShadowResult<C>>;
-  /** Read-only (the shadow report, rule A1.rate-assumed): the steps a shadow
-   *  run of this key would take if it started at `ctx.now` from the work
-   *  row's cursor — the estimate its `shadow()` fixes at a run's start, by
-   *  the same helper. A multi-step key on a period longer than the report
-   *  window implements it (pinned by tests/sync-registry-coverage.test.ts). */
-  estimateRunSteps?(work: Pick<SyncWorkRow, "cursor">, ctx: ShadowContext): Promise<number>;
-  /** Read-only, a standing walk (the shadow report, rule A1.floor-idle): the
-   *  subjects its own shadow pick finds due at `ctx.now` from the work row's
-   *  cursor, among those no writer has changed since — what a look at that
-   *  instant that found nothing due should have read. */
-  dueAtLook?(work: Pick<SyncWorkRow, "cursor">, ctx: ShadowContext): Promise<LookCheck>;
-  /** Read-only, a subject-queue walk without a standing row (the shadow
-   *  report, rule A1.floor-queue): the earliest instant from which the
-   *  shadow's driver asks for a walk of the page's queue as it stood at
-   *  `ctx.now` (in the past: a subject is due already; null: no subject comes
-   *  due without a new write) — or why the queue at that instant cannot be
-   *  told from the rows as they stand now (a writer changed them since). */
-  queueNextDueAt?(ctx: ShadowContext): Promise<QueueNextDue>;
   /** The resource's own journal trim of the served answer (default: as served). */
   journal?(response: unknown): unknown;
-  /** Read-only: one legacy observation of a kind this resource owns through
-   *  the new contract and the resource's intended effects (design §3.12 B5). */
-  replay?(observation: ReplayObservation, ctx: ReplayContext): Promise<ReplayVerdict>;
   /** A subject-queue walk's subject outcome (the breaker lives on the queue
    *  row). `step.request` names the subject(s) the failed step asked for (the
    *  walk row's own subject is the page's); the breaker fields are the work
@@ -433,7 +338,7 @@ export const WAIT_RECHECK_MS = 60_000;
 /** A module that is not implemented re-checks after this long. */
 export const NOT_IMPLEMENTED_RECHECK_MS = 3_600_000;
 /** Poll jitter: every period is ±10 % (design §4.4). */
-export const POLL_JITTER = 0.1;
+const POLL_JITTER = 0.1;
 
 const KEY_PATTERN = /^[a-z][a-z0-9-]*\.[a-z][a-z0-9-]*$/;
 
@@ -454,9 +359,6 @@ export function notImplementedModule(key: ResourceKey, metrics: Metrics = noopMe
     },
     async apply() {
       throw new NotImplementedResourceError(key, "apply");
-    },
-    async shadow() {
-      throw new NotImplementedResourceError(key, "shadow");
     },
   };
 }
@@ -607,11 +509,6 @@ export function effectivePeriodMs(spec: EngineResourceSpec, page: Pick<SyncPageR
   return spec.period.everyMs;
 }
 
-/** Whether an entry runs on a page in this mode. */
-export function runsIn(spec: EngineResourceSpec, shadow: boolean): boolean {
-  return !(shadow && spec.liveOnly === true);
-}
-
 /** Whether the actor plans an entry's due work before the HTTP gate (ruling
  *  9): an entry without HTTP always, any other only when it says so. */
 export function plansBeforeGate(spec: EngineResourceSpec): boolean {
@@ -622,16 +519,15 @@ export function plansBeforeGate(spec: EngineResourceSpec): boolean {
  * The keys whose due work the actor plans before the page's HTTP gate, in
  * the order it plans them: the entries without HTTP first (every step of
  * theirs is one the gate never needed to stop), then those that plan before
- * the gate by choice. Keys that do not run in this mode, that the owner
- * switched off for the page or paused are left out, as a pick leaves them out.
+ * the gate by choice. Keys that the owner switched off for the page or paused
+ * are left out, as a pick leaves them out.
  */
 export function beforeGateKeys(
   registry: EngineRegistry,
   page: Pick<SyncPageRow, "pausedResources" | "registryOverrides">,
-  shadow: boolean,
 ): string[] {
   const specs = registry.specs.filter((spec) =>
-    plansBeforeGate(spec) && runsIn(spec, shadow) && !resourceDisabled(page, spec.key) && !page.pausedResources.includes(spec.key));
+    plansBeforeGate(spec) && !resourceDisabled(page, spec.key) && !page.pausedResources.includes(spec.key));
   return [...specs.filter((spec) => !spec.http), ...specs.filter((spec) => spec.http)].map((spec) => spec.key);
 }
 
@@ -644,16 +540,15 @@ export interface StandingRow {
 }
 
 /** The standing rows a page should have (`ensurePollRows`): every enabled poll
- *  entry that runs in this mode, with its effective period, and every enabled
- *  standing walk with its re-check period. */
+ *  entry, with its effective period, and every enabled standing walk with its
+ *  re-check period. */
 export function pollsFor(
   registry: EngineRegistry,
   page: Pick<SyncPageRow, "registryOverrides">,
-  shadow: boolean,
 ): StandingRow[] {
   const polls: StandingRow[] = [];
   for (const spec of registry.specs) {
-    if (!runsIn(spec, shadow) || resourceDisabled(page, spec.key)) continue;
+    if (resourceDisabled(page, spec.key)) continue;
     if (spec.kind === "poll") {
       const everyMs = effectivePeriodMs(spec, page);
       if (everyMs !== null) polls.push({ resource: spec.key, class: spec.class, everyMs });
@@ -681,15 +576,14 @@ export function nextPollDueAt(
 /**
  * A demand signal as the work row it creates or bumps (`upsertDemand`): kind
  * and class from the entry, the coalescing window and the deadline from its
- * coalescing and SLO rules. Null when the entry does not run in this mode or
- * the owner switched it off for the page.
+ * coalescing and SLO rules. Null when the owner switched the entry off for the
+ * page.
  */
 export function demandToUpsert(
   signal: DemandSignal,
   spec: EngineResourceSpec,
-  input: { pageId: number; shadow: boolean; now: Date; page?: Pick<SyncPageRow, "registryOverrides"> },
+  input: { pageId: number; now: Date; page?: Pick<SyncPageRow, "registryOverrides"> },
 ): UpsertDemandInput | null {
-  if (!runsIn(spec, input.shadow)) return null;
   if (input.page !== undefined && resourceDisabled(input.page, spec.key)) return null;
   const at = input.now.getTime();
   const window = spec.coalesce === undefined
@@ -701,7 +595,6 @@ export function demandToUpsert(
   const deadlineMs = signal.deadlineMs ?? spec.slo?.resultMs;
   const upsert: UpsertDemandInput = {
     pageId: signal.pageId ?? input.pageId,
-    shadow: input.shadow,
     resource: spec.key,
     subject: signal.subject ?? "",
     kind: spec.kind,

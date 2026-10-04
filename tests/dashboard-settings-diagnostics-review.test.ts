@@ -19,7 +19,7 @@ vi.mock("../apps/dashboard/src/api/sdk.ts", () => ({ KernelApiError: class Kerne
 import {
   AgentHydrationPage, createHydrationDraft, hydrationApprovalError, hydrationDraftMatches,
   prepareHydrationDecision, reviewHydrationDraft, hydrationDecisionAttempt,
-  hydrationDecisionStatusIsDefiniteRefusal, frozenHydrationDecisionSummary,
+  hydrationDecisionStatusIsDefiniteRefusal, frozenHydrationDecisionSummary, hydrationRequestTakesApproval,
 } from "../apps/dashboard/src/pages/AgentHydrationPage.tsx";
 import { editWebhookSelection, OfapiWebhookRecovery, webhookApplyIsRunning, webhookCanPrepareNewAction, webhookReadbackResolvesAction } from "../apps/dashboard/src/pages/settings/OfapiWebhookRecovery.tsx";
 import { PageAssignmentsEditor } from "../apps/dashboard/src/pages/settings/PageAssignmentsEditor.tsx";
@@ -135,6 +135,61 @@ describe("hydration approval review", () => {
     const html = render(AgentHydrationPage);
     expect(html).toContain("Queue refresh failed; decisions are paused");
     expect(html).toContain("Refresh requests");
+  });
+
+  // Step 4, S4-24: the queue has no Fansly lane. A Fansly page's history is the
+  // Fansly Sync Engine's history request (the route wraps the request), so a
+  // Fansly row still waiting offers a rejection and nothing to approve.
+  it("offers an approval for an OnlyFans request and only a rejection for a Fansly one", () => {
+    const lanes = {
+      fansly: { pageLabel: "lora-1", selected: "vendor_paid_low", costNote: "egress_quota_and_ban_risk" },
+      onlyfans: { pageLabel: "lora-of", selected: "vendor_paid_high", costNote: "ofapi_credits" },
+    } as const;
+    const waiting = (platform: "fansly" | "onlyfans") => ({
+      requestRef: `request-${platform}`,
+      state: "requested",
+      pageLabel: lanes[platform].pageLabel,
+      platform,
+      conversationRef: "chat-1",
+      target: { kind: "thread_backfill_before", beforeAt: null, beforeMessageRef: "m-1" },
+      admissibility: {
+        orderEvaluated: ["free_local_replay"],
+        selected: lanes[platform].selected,
+        admissible: true,
+        reason: null,
+        costNote: lanes[platform].costNote,
+      },
+      coverageFingerprint: "c".repeat(64),
+      rowVersion: 1,
+      requestedBy: { principal: "agent_key", keyPrefix: "ahk_test" },
+      reasonSha256: "d".repeat(64),
+      reasonLength: 12,
+      createdAt: "2026-10-04T08:00:00.000Z",
+      updatedAt: "2026-10-04T08:00:00.000Z",
+      expiresAt: null,
+      decision: null,
+      progress: { dispatchCount: 0, acceptedItems: 0, acceptedPages: 0, spentCredits: 0, lastError: "none", executionRef: null },
+    });
+    expect(hydrationRequestTakesApproval({ platform: "onlyfans" })).toBe(true);
+    expect(hydrationRequestTakesApproval({ platform: "fansly" })).toBe(false);
+
+    queries.useAgentHydrationRequests.mockReturnValue(query({ items: [waiting("onlyfans")] }));
+    const onlyfans = render(AgentHydrationPage);
+    expect(onlyfans).toContain(">Approve<");
+    expect(onlyfans).toContain(">Reject<");
+    expect(onlyfans).toContain("Max credits");
+    expect(onlyfans).toContain("vendor_paid_high · ofapi_credits");
+    expect(onlyfans).not.toContain("nothing to approve here");
+
+    queries.useAgentHydrationRequests.mockReturnValue(query({ items: [waiting("fansly")] }));
+    const fansly = render(AgentHydrationPage);
+    expect(fansly).not.toContain(">Approve<");
+    expect(fansly).toContain(">Reject<");
+    expect(fansly).not.toContain("Max credits");
+    expect(fansly).not.toContain("mark this chat READ");
+    expect(fansly).toContain("Fansly Sync Engine · history request");
+    expect(fansly).not.toContain("egress_quota_and_ban_risk");
+    expect(fansly).toContain("there is nothing to approve here");
   });
 });
 

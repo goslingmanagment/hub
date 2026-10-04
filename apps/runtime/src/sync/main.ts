@@ -22,16 +22,15 @@ import {
 } from "./engine/watchdog.ts";
 import { fanslyCaptureCodec } from "./fansly/capture.ts";
 import { createFanslyRegistry } from "./fansly/registry.ts";
-import { createFanslyShadowWsFeed } from "./fansly/ws/route-receipt.ts";
 import { onHistoryThreadChainChanged, onHistoryWorkClosed } from "./requests/history.ts";
 
 // The `sync` role: the long-running process of the Fansly Sync Engine (plan
-// §8, §12; design §3.6, §9.1). It hosts one actor per Fansly page in `shadow`
-// or `live`: context (its pool bounded by `SYNC_POOL_TIMEOUTS`), CAS
-// settings, the stall watchdog, heartbeat and health file, then the engine
-// host; on SIGTERM the host finishes the step in flight, drains the live
-// sockets and releases every page before the process exits — within
-// `SYNC_SHUTDOWN_CAP_MS` whatever is still running. A page sends to Fansly
+// §8, §12; design §3.6, §9.1). It hosts one actor per `live` Fansly page:
+// context (its pool bounded by `SYNC_POOL_TIMEOUTS`), CAS settings, the stall
+// watchdog, heartbeat and health file, then the engine host; on SIGTERM the
+// host finishes the step in flight, drains the live sockets and releases
+// every page before the process exits — within `SYNC_SHUTDOWN_CAP_MS`
+// whatever is still running. A page sends to Fansly
 // only on a `live` row with the engine's step-1 guard row and its import mark
 // (I17, J1, J3): a page is born so at onboarding; the six earlier pages were
 // taken over by the step-3 switch.
@@ -73,13 +72,10 @@ export function createSyncRuntimeHost(context: SyncContext, watchdog: StallTrack
     rawConfig: context.rawConfig,
     logger: context.logger,
     registry: createFanslyRegistry(),
-    // Alerts 1–4 (design §9.6): a live page's alert opens its latch at once;
-    // a shadow page's is logged only (D14). The evaluator resolves.
+    // Alerts 1–4 (design §9.6): an alert opens its latch at once; the
+    // evaluator resolves.
     alerts: createIncidentAlertSink({ db: context.db, logger: context.logger }),
     capture: fanslyCaptureCodec,
-    // Shadow pages: the receipts the legacy receiver captured become shadow
-    // demand, read through the payload seam (design §6.4).
-    shadowFeed: createFanslyShadowWsFeed({ resolvePayload: fanslyWsLivePayloadResolver(context) }),
     // History requests (design §7.1.6): every history read and every DM read
     // that moved a chain settles the fans riding on it; a history work that
     // closes for a reason of its own ends its fans.
@@ -254,7 +250,7 @@ export async function runSyncRuntime(): Promise<void> {
   }
   context.logger.info(
     { instanceId: runtime.instanceId, heartbeatIntervalMs: SYNC_HEARTBEAT_INTERVAL_MS },
-    "Sync runtime started (engine host: shadow pages and live pages run; a page is live from its onboarding)",
+    "Sync runtime started (engine host: live pages run; a page is live from its onboarding)",
   );
   handleSyncShutdownSignals(context, runtime);
 }

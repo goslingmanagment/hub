@@ -1,15 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import type { SyncWorkRow } from "@agency_hub_core/db";
 import type { FanslyMessage } from "@agency_hub_core/fansly";
 
 import { demandToUpsert } from "../apps/runtime/src/sync/engine/resource.ts";
 import { emptyChain, type ThreadChain } from "../apps/runtime/src/sync/fansly/lib/chain.ts";
 import { normalizeFanslyDmMessages } from "../apps/runtime/src/sync/fansly/lib/dm-normalize.ts";
-import { createFanslyRegistry, fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";
+import { fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";
 import {
   DM_HEAD_NOT_FOUND_RETRY_MS,
-  dmMessagesModule,
   parseDmMessagesCursor,
   resolveDemand,
   type DemandResolutionInput,
@@ -17,7 +15,7 @@ import {
 
 // The DM message reads' rules without I/O (design §5.4): the pure page
 // normalization, what one read does for the demanded ids (the not-found ladder
-// of plan §7 p.4), the cursor, and the shadow estimate.
+// of plan §7 p.4), and the cursor.
 
 const EPOCH_MS = 1561494359900;
 const PAGE = "300000000000000001";
@@ -179,7 +177,6 @@ describe("cursor", () => {
       },
       walkPages: 2,
       misses: { "910000000000000091": 1 },
-      shadow: { steps: 3, done: 1 },
       last: { verdict: "joined" },
       historyHeadAt: NOW,
     });
@@ -189,56 +186,29 @@ describe("cursor", () => {
       .toMatchObject({ baseHeadId: null, headId: "9", oldestId: "8", count: 2, oldestCreatedAtMs: null });
     expect(parseDmMessagesCursor({ segment: { baseHeadId: "x", headId: "9", headAt: NOW.toISOString(), oldestId: "8", count: 2 } }).segment)
       .toBeNull();
-    expect(parseDmMessagesCursor(null)).toEqual({ segment: null, walkPages: 0, misses: {}, shadow: null, last: null, historyHeadAt: null });
+    expect(parseDmMessagesCursor(null)).toEqual({ segment: null, walkPages: 0, misses: {}, last: null, historyHeadAt: null });
   });
 });
 
-describe("registry and shadow", () => {
-  function work(messageIds: string[], cursor: unknown = {}): SyncWorkRow {
-    return {
-      demand: { messageIds, txIds: [], reasons: ["test"], overflow: false },
-      cursor,
-      subject: "700000000000000001",
-    } as unknown as SyncWorkRow;
-  }
-
-  it("the three variants are implemented and replay the journal's dm_messages pages", async () => {
-    const registry = createFanslyRegistry();
+describe("registry", () => {
+  it("the three variants are implemented", () => {
     for (const key of ["dm-messages.head", "dm-messages.catchup", "dm-messages.history"]) {
       expect(fanslyResourceSpec(key)?.module, key).toBeDefined();
-      expect(typeof (await registry.module(key)).replay, key).toBe("function");
     }
-    expect(fanslyResourceSpec("dm-messages.head")?.replayKinds).toEqual(["dm_messages"]);
   });
 
   it("coalesces a head read 5 s / 20 s, and 2 s / 6 s for a fast signal", () => {
     const spec = fanslyResourceSpec("dm-messages.head")!;
     const normal = demandToUpsert({ resource: spec.key, subject: "7", demand: { messageIds: ["1"], reason: "ws" } }, spec, {
-      pageId: 1, shadow: true, now: NOW,
+      pageId: 1, now: NOW,
     })!;
     expect(normal).toMatchObject({
       class: "urgent", dueAt: new Date(NOW.getTime() + 5_000), coalesceUntil: new Date(NOW.getTime() + 20_000),
       deadlineAt: new Date(NOW.getTime() + 30_000), extendOnSignal: true,
     });
     const fast = demandToUpsert({ resource: spec.key, subject: "7", coalesce: "fast", demand: { messageIds: ["1"], reason: "ws" } }, spec, {
-      pageId: 1, shadow: true, now: NOW,
+      pageId: 1, now: NOW,
     })!;
     expect(fast).toMatchObject({ dueAt: new Date(NOW.getTime() + 2_000), coalesceUntil: new Date(NOW.getTime() + 6_000) });
-  });
-
-  it("estimates ⌈demanded ids / 25⌉ reads (at least one); a history read never runs in shadow", async () => {
-    const head = dmMessagesModule("head");
-    const ids = Array.from({ length: 60 }, (_, index) => snowflake(NOW.getTime() - 60_000, index));
-    let cursor: unknown = {};
-    const outcomes = [];
-    for (let step = 0; step < 3; step += 1) {
-      const result = await head.shadow(work(ids, cursor), { spec: "messages.page", params: {} as never }, {} as never);
-      outcomes.push(result.work.close ?? "open");
-      cursor = result.work.cursor;
-    }
-    expect(outcomes).toEqual(["open", "open", "done"]);
-    expect((await head.shadow(work([]), { spec: "messages.page", params: {} as never }, {} as never)).work.close).toBe("done");
-    const history = await dmMessagesModule("history").shadow(work([]), { spec: "messages.page", params: {} as never }, {} as never);
-    expect(history.work).toMatchObject({ close: "done", closeReason: "shadow" });
   });
 });

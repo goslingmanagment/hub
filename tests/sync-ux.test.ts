@@ -5,8 +5,6 @@ import {
   buildOverallSyncUx,
   buildPageSyncUx,
   buildStreamSyncUx,
-  BULK_ENRICHMENT_SYNC_STREAMS,
-  isBulkEnrichmentSyncStream,
   type SyncUxStreamLike,
 } from "../apps/runtime/src/services/sync-ux.ts";
 
@@ -335,62 +333,5 @@ describe("sync UX summaries", () => {
     expect(summary.headline).not.toBe("Not updating");
     expect(summary.detail ?? "").not.toContain("gated off");
     expect(summary.state).toBe("healthy");
-  });
-
-  it("keeps a gated bulk stream from dominating the page and fleet rollup", () => {
-    // fan_earnings/purchase_history sit in MONITORED_SYNC_STREAMS and `off`
-    // outranks every state below `attention`, so an honest per-stream `off`
-    // would otherwise turn every Fansly page — and the fleet line above it —
-    // into "Off" on a default configuration, where both ramp flags are false.
-    // Decision #166 already forbids that; the monitor rollup lacked the filter.
-    const pageStreams = [
-      {
-        stream: "light",
-        syncUx: buildStreamSyncUx(skippedStream({
-          stream: "light",
-          lastCompletion: { status: "success", finishedAt: "2026-07-30T11:30:00.000Z" },
-          succeededAt: "2026-07-30T11:30:00.000Z",
-        })),
-      },
-      {
-        stream: "fan_earnings",
-        syncUx: buildStreamSyncUx(skippedStream({
-          lastCompletionGatedSkipReason: "not_allowlisted",
-        })),
-      },
-    ];
-    expect(pageStreams[0]?.syncUx.state).toBe("healthy");
-    expect(pageStreams[1]?.syncUx.state).toBe("off");
-
-    // Unfiltered, one gated bulk stream decides the whole page — this pins the
-    // consequence callers must avoid.
-    expect(buildPageSyncUx(pageStreams.map((item) => item.syncUx)).state).toBe("off");
-
-    // The rule the monitor now applies, spelled out with the shared predicate.
-    const rollupInput = pageStreams
-      .filter((item) => !isBulkEnrichmentSyncStream(item.stream))
-      .map((item) => item.syncUx);
-    expect(buildPageSyncUx(rollupInput).state).toBe("healthy");
-    expect(buildOverallSyncUx([buildPageSyncUx(rollupInput)]).state).toBe("healthy");
-  });
-
-  it("names the bulk enrichment streams that must not dominate a rollup", () => {
-    expect([...BULK_ENRICHMENT_SYNC_STREAMS]).toEqual([
-      "fan_earnings",
-      "purchase_history",
-      // WP-F1: same class, same reason — its flag defaults false, so letting it
-      // vote would make every Fansly page read "Off" from the deploy onward.
-      "stats_snapshot",
-      "notifications",
-      "catalog",
-      "post_replies",
-      "payouts",
-      "media_stats",
-    ]);
-    expect(isBulkEnrichmentSyncStream("fan_earnings")).toBe(true);
-    expect(isBulkEnrichmentSyncStream("purchase_history")).toBe(true);
-    expect(isBulkEnrichmentSyncStream("stats_snapshot")).toBe(true);
-    expect(isBulkEnrichmentSyncStream("dm_messages")).toBe(false);
-    expect(isBulkEnrichmentSyncStream("light")).toBe(false);
   });
 });

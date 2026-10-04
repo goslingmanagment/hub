@@ -41,6 +41,7 @@ import {
   startIntegrationTestDatabase,
   type StartedTestDatabase,
 } from "./helpers/db.ts";
+import { FORMER_FANSLY_STREAMS, seedFormerFanslyRows } from "./helpers/fansly-legacy-rows.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 
 // The fences between the legacy engine and a Fansly page. Step 3 (S3-01)
@@ -57,6 +58,8 @@ import { createTestAppContext } from "./helpers/runtime.ts";
 vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
 
 let testDb: StartedTestDatabase | null = null;
+/** The Fansly pages of the case in hand (`seedFencePages`). */
+const fanslyPageIds = new Set<number>();
 
 beforeAll(async () => {
   testDb = await startIntegrationTestDatabase();
@@ -69,6 +72,7 @@ afterAll(async () => {
 beforeEach(async (context) => {
   if (!testDb) return context.skip();
   await resetIntegrationDatabase(testDb.pool);
+  fanslyPageIds.clear();
 });
 
 function db() {
@@ -101,6 +105,7 @@ async function seedFencePages() {
   const fansly = async (label: string, mode: SyncPageMode) => {
     const page = await createFanslyPage(db().db, { modelId: model.id, label });
     if (!page) throw new Error("page missing");
+    fanslyPageIds.add(page.id);
     await setMode(page.id, mode);
     return page;
   };
@@ -114,8 +119,10 @@ async function seedFencePages() {
 }
 
 /** Every stream of the page settled except `stream`, which holds a runnable
- *  request. */
+ *  request. An OnlyFans page's rows are the seeder's; a Fansly page's are the
+ *  records an old image left (the seeder writes none since step 4, S4-24). */
 async function pendingStream(pageId: number, stream: "light" | "dm_messages", now: Date) {
+  await seedFormerFanslyRows(db().pool, pageId, now, fanslyPageIds.has(pageId) ? FORMER_FANSLY_STREAMS : []);
   await ensurePageSyncStates(db().db, { pageId, now });
   await db().pool.query(
     `update page_sync_states
