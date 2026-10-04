@@ -10,6 +10,7 @@ import type { AiGatewayStreamFrame } from "@agency_hub_core/contracts";
 import {
   COACH_CHAT_TEMPLATE,
   COACH_DRAFT_BLOCKS_MAX,
+  COACH_DRAFT_CHARS_MAX,
   COACH_PRESET_DRAFT_BLOCKS,
   COACH_PROMPT_MAX_CHARS,
   FEATURE_POLICIES,
@@ -333,6 +334,7 @@ Answer the chatter now in the language they asked in. Use a draft fence for any 
     expect(SPLIT_INSTRUCTIONS).toContain("The [NEXT] marker is the only thing other than message text allowed inside a draft fence.");
     expect(SPLIT_INSTRUCTIONS).toContain("at most two draft fences, each under 1500 characters");
     expect(COACH_DRAFT_BLOCKS_MAX).toBe(2);
+    expect(COACH_DRAFT_CHARS_MAX).toBe(1500);
     expect(taskBlock(preset)).toContain("EXACTLY two draft fences");
     expect(COACH_PRESET_DRAFT_BLOCKS).toBe(2);
   });
@@ -445,63 +447,109 @@ describe("output structure of a finished Coach generation with Split", () => {
     ...drafts.map((draft) => `\`\`\`draft\n${draft}\n\`\`\``),
     "Если промолчит, не дави.",
   ].join("\n\n");
+  /** The record of an answer with nothing of a draft left in the advice. */
+  const clean = (draftsRequested: number | null, partsPerDraft: number[], ok: boolean) =>
+    ({ draftsRequested, partsPerDraft, brokenDrafts: 0, strayMarkers: 0, ok });
 
   it("counts the [NEXT] parts inside each draft block: two or three is the ask", () => {
-    expect(describeCoachSplitOutput(answer("hey you [NEXT] what's up"), null))
-      .toEqual({ draftsRequested: null, partsPerDraft: [2], ok: true });
+    expect(describeCoachSplitOutput(answer("hey you [NEXT] what's up"), null)).toEqual(clean(null, [2], true));
     // The marker on its own line, as a model tends to write it inside a fence.
     expect(describeCoachSplitOutput(answer("hey you\n[NEXT]\nwhat's up", "a\n[NEXT]\nb\n[NEXT]\nc"), null))
-      .toEqual({ draftsRequested: null, partsPerDraft: [2, 3], ok: true });
-    expect(describeCoachSplitOutput(answer("one message only"), null))
-      .toEqual({ draftsRequested: null, partsPerDraft: [1], ok: false });
+      .toEqual(clean(null, [2, 3], true));
+    expect(describeCoachSplitOutput(answer("one message only"), null)).toEqual(clean(null, [1], false));
     expect(describeCoachSplitOutput(answer("a [NEXT] b", "c [NEXT] d [NEXT] e [NEXT] f"), null))
-      .toEqual({ draftsRequested: null, partsPerDraft: [2, 4], ok: false });
+      .toEqual(clean(null, [2, 4], false));
   });
 
   it("a question turn may propose nothing; a preset turn must propose exactly two", () => {
     expect(describeCoachSplitOutput("Тут писать ничего не нужно, подожди его ответа.", null))
-      .toEqual({ draftsRequested: null, partsPerDraft: [], ok: true });
+      .toEqual(clean(null, [], true));
     expect(describeCoachSplitOutput("Тут писать ничего не нужно.", COACH_PRESET_DRAFT_BLOCKS))
-      .toEqual({ draftsRequested: 2, partsPerDraft: [], ok: false });
-    expect(describeCoachSplitOutput(answer("a [NEXT] b"), COACH_PRESET_DRAFT_BLOCKS))
-      .toEqual({ draftsRequested: 2, partsPerDraft: [2], ok: false });
+      .toEqual(clean(2, [], false));
+    expect(describeCoachSplitOutput(answer("a [NEXT] b"), COACH_PRESET_DRAFT_BLOCKS)).toEqual(clean(2, [2], false));
     expect(describeCoachSplitOutput(answer("a [NEXT] b", "c [NEXT] d [NEXT] e"), COACH_PRESET_DRAFT_BLOCKS))
-      .toEqual({ draftsRequested: 2, partsPerDraft: [2, 3], ok: true });
+      .toEqual(clean(2, [2, 3], true));
     // More blocks than the template allows, on either kind of turn.
     const three = answer("a [NEXT] b", "c [NEXT] d", "e [NEXT] f");
-    expect(describeCoachSplitOutput(three, null)).toEqual({ draftsRequested: null, partsPerDraft: [2, 2, 2], ok: false });
+    expect(describeCoachSplitOutput(three, null)).toEqual(clean(null, [2, 2, 2], false));
     expect(describeCoachSplitOutput(three, COACH_PRESET_DRAFT_BLOCKS).ok).toBe(false);
   });
 
   it("catches a model that opens one fence per part", () => {
-    expect(describeCoachSplitOutput(answer("hey you", "what's up"), null))
-      .toEqual({ draftsRequested: null, partsPerDraft: [1, 1], ok: false });
+    expect(describeCoachSplitOutput(answer("hey you", "what's up"), null)).toEqual(clean(null, [1, 1], false));
   });
 
   it("reads closed draft blocks only, by the grammar of the template", () => {
-    // A marker in the advice, and a fence that is not a draft, are not parts of a draft.
-    const noisy = `Вариант такой [NEXT] или такой.\n\`\`\`text\nx [NEXT] y [NEXT] z\n\`\`\`\n${answer("a [NEXT] b")}`;
-    expect(describeCoachSplitOutput(noisy, null).partsPerDraft).toEqual([2]);
-    // A block that never closes is advice: the released reader leaves it in the prose.
-    expect(describeCoachSplitOutput("Совет.\n```draft\na [NEXT] b", null).partsPerDraft).toEqual([]);
     // An opener before the closer abandons the block it interrupts.
-    expect(describeCoachSplitOutput("```draft\na [NEXT] b\n```draft\nc [NEXT] d [NEXT] e\n```", null).partsPerDraft).toEqual([3]);
-    // Fences are line-anchored: an indented or inline one opens nothing.
-    expect(describeCoachSplitOutput("  ```draft\na [NEXT] b\n```\nSee ```draft\nc [NEXT] d\n```", null).partsPerDraft).toEqual([]);
+    expect(describeCoachSplitOutput("```draft\na [NEXT] b\n```draft\nc [NEXT] d [NEXT] e\n```", null))
+      .toEqual({ draftsRequested: null, partsPerDraft: [3], brokenDrafts: 1, strayMarkers: 1, ok: false });
     // Trailing blanks after a fence and CRLF line ends are still the grammar.
-    expect(describeCoachSplitOutput("Совет.\r\n```draft \t\r\na [NEXT] b\r\n``` \r\nЕщё.", null).partsPerDraft).toEqual([2]);
-    // An empty block is not a draft; a part that is not insertable is not a part.
-    expect(describeCoachSplitOutput(answer("  ", "a [NEXT] b [NEXT] ["), null).partsPerDraft).toEqual([2]);
+    expect(describeCoachSplitOutput("Совет.\r\n```draft \t\r\na [NEXT] b\r\n``` \r\nЕщё.", null))
+      .toEqual(clean(null, [2], true));
+    // An empty block is not a draft, and a client drops it; a part that is not insertable is not a part.
+    expect(describeCoachSplitOutput(answer("  ", "a [NEXT] b [NEXT] ["), null)).toEqual(clean(null, [2], true));
+    // A block with text and no insertable part is still a block a client lifts.
+    expect(describeCoachSplitOutput(answer("[NEXT]"), null)).toEqual(clean(null, [0], false));
+  });
+
+  it("an answer whose drafts were not read is not the answer that proposes none", () => {
+    const unread = (text: string, brokenDrafts: number, strayMarkers: number, draftsRequested: number | null = null) =>
+      expect(describeCoachSplitOutput(text, draftsRequested), JSON.stringify(text))
+        .toEqual({ draftsRequested, partsPerDraft: [], brokenDrafts, strayMarkers, ok: false });
+    // The block never closes: the answer ran out of tokens, with or without a marker so far.
+    unread("Совет.\n```draft\nhey [NEXT] you", 1, 1);
+    unread("Совет.\n```draft\nhey you", 1, 0);
+    // The closer is glued to the text, so the block never closes either.
+    unread("```draft\na [NEXT] b```", 1, 1);
+    // Fences are line-anchored and spelled one way: none of these opens a block.
+    unread("1. Напиши так:\n   ```draft\n   a [NEXT] b\n   ```", 1, 1);
+    unread("```Draft\na [NEXT] b\n```", 1, 1);
+    unread("````draft\na [NEXT] b\n````", 1, 1);
+    unread("```draft message\na [NEXT] b\n```", 1, 1);
+    unread("See ```draft\na [NEXT] b\n```", 1, 1);
+    // The same fences around a message the model did not split.
+    unread("   ```draft\n   hey you\n   ```", 1, 0);
+    // A message with its parts and no fence at all.
+    unread("Напиши так:\nhey you [NEXT] what's up", 0, 1);
+    // A fence that is not a draft: its markers are not parts of one.
+    unread("```text\nx [NEXT] y [NEXT] z\n```", 0, 2);
+    // A preset turn is held to the same.
+    unread("СИТУАЦИЯ: тёплый.\n```draft\na [NEXT] b", 1, 1, COACH_PRESET_DRAFT_BLOCKS);
+  });
+
+  it("a marker in the advice is not ok, however good the drafts are", () => {
+    expect(describeCoachSplitOutput(`Вариант такой [NEXT] или такой.\n${answer("a [NEXT] b")}`, null))
+      .toEqual({ draftsRequested: null, partsPerDraft: [2], brokenDrafts: 0, strayMarkers: 1, ok: false });
+    expect(describeCoachSplitOutput(`${answer("a [NEXT] b", "c [NEXT] d")}\n[NEXT]`, COACH_PRESET_DRAFT_BLOCKS))
+      .toEqual({ draftsRequested: 2, partsPerDraft: [2, 2], brokenDrafts: 0, strayMarkers: 1, ok: false });
+    // An unread draft next to a read one.
+    expect(describeCoachSplitOutput(`${answer("a [NEXT] b")}\n  \`\`\`draft\nc [NEXT] d [NEXT] e\n\`\`\``, null))
+      .toEqual({ draftsRequested: null, partsPerDraft: [2], brokenDrafts: 1, strayMarkers: 2, ok: false });
+  });
+
+  it("a block over the size limit stays in the advice with its markers, as a client leaves it", () => {
+    const sized = (chars: number) => `${"a".repeat(chars - 9)} [NEXT] b`;
+    expect(Array.from(sized(COACH_DRAFT_CHARS_MAX))).toHaveLength(1500);
+    expect(describeCoachSplitOutput(answer(sized(COACH_DRAFT_CHARS_MAX)), null)).toEqual(clean(null, [2], true));
+    expect(describeCoachSplitOutput(answer(sized(COACH_DRAFT_CHARS_MAX + 1)), null))
+      .toEqual({ draftsRequested: null, partsPerDraft: [], brokenDrafts: 1, strayMarkers: 1, ok: false });
+    expect(describeCoachSplitOutput(answer("a [NEXT] b", sized(COACH_DRAFT_CHARS_MAX + 1)), COACH_PRESET_DRAFT_BLOCKS))
+      .toEqual({ draftsRequested: 2, partsPerDraft: [2], brokenDrafts: 1, strayMarkers: 1, ok: false });
+    // Code points, as both readers measure: 800 emoji are 1600 UTF-16 units and fit.
+    const emoji = `${"😘".repeat(800)} [NEXT] b`;
+    expect(emoji.length).toBeGreaterThan(COACH_DRAFT_CHARS_MAX);
+    expect(describeCoachSplitOutput(answer(emoji), null)).toEqual(clean(null, [2], true));
   });
 
   it("drops reasoning blocks before it looks for fences and markers", () => {
-    const leaked = `<think>\n\`\`\`draft\nx [NEXT] y [NEXT] z\n\`\`\`\n</think>\n${answer("a [NEXT] b")}`;
-    expect(describeCoachSplitOutput(leaked, null)).toEqual({ draftsRequested: null, partsPerDraft: [2], ok: true });
+    const leaked = `<think>\n\`\`\`draft\nx [NEXT] y [NEXT] z\n\`\`\`\nor [NEXT] and an open \`\`\`draft\n</think>\n${answer("a [NEXT] b")}`;
+    expect(describeCoachSplitOutput(leaked, null)).toEqual(clean(null, [2], true));
   });
 
   it("records counts and never the text", () => {
-    const structure = describeCoachSplitOutput(answer("secret opener [NEXT] secret follow-up"), null);
-    expect(Object.keys(structure).sort()).toEqual(["draftsRequested", "ok", "partsPerDraft"]);
+    const structure = describeCoachSplitOutput(`secret advice [NEXT]\n${answer("secret opener [NEXT] secret follow-up")}\n\`\`\`draft\nsecret cut`, null);
+    expect(Object.keys(structure).sort()).toEqual(["brokenDrafts", "draftsRequested", "ok", "partsPerDraft", "strayMarkers"]);
+    expect(structure).toMatchObject({ partsPerDraft: [2], brokenDrafts: 1, strayMarkers: 1 });
     expect(JSON.stringify(structure)).not.toContain("secret");
     expect(JSON.stringify(structure)).not.toContain("вопрос");
   });
@@ -514,7 +562,6 @@ describe("output structure of a finished Coach generation with Split", () => {
     for (const text of chunks) {
       consumer.note({ type: "content_delta", text });
     }
-    expect(describeCoachSplitOutput(consumer.completionText, null))
-      .toEqual({ draftsRequested: null, partsPerDraft: [2, 3], ok: true });
+    expect(describeCoachSplitOutput(consumer.completionText, null)).toEqual(clean(null, [2, 3], true));
   });
 });

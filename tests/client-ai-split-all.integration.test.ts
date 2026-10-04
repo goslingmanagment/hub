@@ -453,27 +453,44 @@ describe("Split for Ping, Hi and Coach drafts behind split-all-v1 (H-10)", () =>
       expect(await paramsOf(answered.generationRef)).toMatchObject({
         clientProfile: "chat-extension",
         outcome: "completed",
-        outputStructure: { draftsRequested: null, partsPerDraft: [2, 3], ok: true },
+        outputStructure: { draftsRequested: null, partsPerDraft: [2, 3], brokenDrafts: 0, strayMarkers: 0, ok: true },
       });
 
       // A preset turn asks for exactly two drafts. The model gave one: the record says so.
       completionChunks = ["СИТУАЦИЯ: тёплый.\n```draft\nhey [NEXT] you\n```"];
       const presetTurn = await generate(EXTENSION, preset, "preferSplit");
       expect((await paramsOf(presetTurn.generationRef))["outputStructure"])
-        .toEqual({ draftsRequested: 2, partsPerDraft: [2], ok: false });
+        .toEqual({ draftsRequested: 2, partsPerDraft: [2], brokenDrafts: 0, strayMarkers: 0, ok: false });
 
       // One fence per part is the miss Split on Coach can cause; the stream is not touched.
       completionChunks = ["```draft\nhey you\n```\n```draft\nwhat's up\n```"];
       const fencePerPart = await generate(FULL_ADVERTISING, coach, "preferSplit");
       expect(fencePerPart.frames.map((frame) => frame.type)).toEqual(["meta", "content_delta", "usage", "done"]);
       const fencePerPartParams = await paramsOf(fencePerPart.generationRef);
-      expect(fencePerPartParams["outputStructure"]).toEqual({ draftsRequested: null, partsPerDraft: [1, 1], ok: false });
+      expect(fencePerPartParams["outputStructure"])
+        .toEqual({ draftsRequested: null, partsPerDraft: [1, 1], brokenDrafts: 0, strayMarkers: 0, ok: false });
       expect(fencePerPartParams).not.toHaveProperty("clientProfile");
 
-      // Advice with no message to propose has nothing to split; a marker in the advice is not a part.
+      // Advice with no message to propose has nothing to split.
+      completionChunks = ["Подожди его ответа, не пиши первым."];
+      expect((await paramsOf((await generate(EXTENSION, coach, "preferSplit")).generationRef))["outputStructure"])
+        .toEqual({ draftsRequested: null, partsPerDraft: [], brokenDrafts: 0, strayMarkers: 0, ok: true });
+
+      // The same empty list is not ok when a draft was written and no client reads it. A marker in
+      // the advice is shown to the chatter as text.
       completionChunks = ["Подожди его ответа [NEXT] не пиши первым."];
       expect((await paramsOf((await generate(EXTENSION, coach, "preferSplit")).generationRef))["outputStructure"])
-        .toEqual({ draftsRequested: null, partsPerDraft: [], ok: true });
+        .toEqual({ draftsRequested: null, partsPerDraft: [], brokenDrafts: 0, strayMarkers: 1, ok: false });
+      // A block the answer never closed: out of tokens is a completed stream too.
+      completionChunks = ["Напиши так.\n```draft\nhey you [NEXT] what's"];
+      stopReason = "max_tokens";
+      const outOfTokens = await generate(EXTENSION, coach, "preferSplit");
+      stopReason = "end_turn";
+      expect(await paramsOf(outOfTokens.generationRef)).toMatchObject({
+        outcome: "completed",
+        stopReason: "max_tokens",
+        outputStructure: { draftsRequested: null, partsPerDraft: [], brokenDrafts: 1, strayMarkers: 1, ok: false },
+      });
 
       // Split not asked for: no record, whatever the answer looks like.
       completionChunks = ["```draft\na [NEXT] b\n```"];

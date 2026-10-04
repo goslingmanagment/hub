@@ -752,7 +752,16 @@ record, never a filter: the stream has already been sent.
 
 - Ping and Hi: `{ variantsRequested, partsPerVariant, ok }`, where `ok` means the requested number
   of variants with two or three parts each.
-- Coach: `{ draftsRequested, partsPerDraft, ok }`. `draftsRequested` is `2` on a preset turn and
-  `null` on a question turn, where the coach decides how many messages to propose. `partsPerDraft`
-  counts the parts of every closed draft block. `ok` means the requested number of blocks (at most
-  two when the coach decides, none included), each with two or three parts.
+- Coach: `{ draftsRequested, partsPerDraft, brokenDrafts, strayMarkers, ok }`. The check reads the
+  answer the way a client does: it lifts the draft blocks out and the rest stays in the advice.
+  `draftsRequested` is `2` on a preset turn and `null` on a question turn, where the coach decides
+  how many messages to propose. `partsPerDraft` counts the parts of every well-formed block:
+  closed, not empty, at most 1500 characters. `brokenDrafts` counts the draft fences the model
+  opened that are not such a block: an opener that is not the ` ```draft ` line (indented,
+  ` ```Draft `, four backticks), a block that never closes (the answer ran out of tokens, the
+  closer is glued to the text), a block over 1500 characters. `strayMarkers` counts the `[NEXT]`
+  markers outside the counted blocks, in the advice or in a broken draft: a client shows those to
+  the chatter as text. `ok` means the requested number of blocks (at most two when the coach
+  decides, none included), each with two or three parts, no broken draft and no stray marker. So
+  an empty `partsPerDraft` with `ok: true` on a question turn is an answer with no draft fence
+  and no marker anywhere in it: as far as the markup can tell, one that proposes no message.
