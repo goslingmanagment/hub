@@ -14,6 +14,7 @@ import {
   upsertFanPages,
   upsertFans,
 } from "@agency_hub_core/db";
+import type { Platform } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import {
@@ -109,13 +110,16 @@ async function resolvePageFan(
 // fan: OnlyMonster coverage is transactions-only, so non-spenders would 404 on the
 // first ChatMuse PUT. Create the fan + page membership on demand instead (idempotent
 // upserts). Fansly pages keep the strict 404 — their sync covers all DM fans.
-async function resolveOrCreatePageFan(
+//
+// The fan a dossier write lands on, for every writer: the PUT below and the
+// chat extension's save from a stored generation. The caller has already
+// checked that the page is the principal's.
+export async function resolveOrCreateFanOnPage(
   app: AppContext,
-  principal: AuthPrincipal,
-  pageLabel: string,
+  page: { id: number; label: string; platform: Platform },
   platformUserId: string,
 ) {
-  const page = await resolveAccessiblePage(app, principal, pageLabel);
+  const pageLabel = page.label;
   let fan = await findFanOnPage(app.db, page.id, platformUserId);
   if (!fan && page.platform === "onlyfans") {
     // Fans flagged deleted by sync keep their 404 without side effects — the
@@ -144,7 +148,17 @@ async function resolveOrCreatePageFan(
     throw new NotFoundError(`Fan "${platformUserId}" not found on page "${pageLabel}"`);
   }
 
-  return { page, fan };
+  return fan;
+}
+
+async function resolveOrCreatePageFan(
+  app: AppContext,
+  principal: AuthPrincipal,
+  pageLabel: string,
+  platformUserId: string,
+) {
+  const page = await resolveAccessiblePage(app, principal, pageLabel);
+  return { page, fan: await resolveOrCreateFanOnPage(app, page, platformUserId) };
 }
 
 export async function getPageFanProfile(

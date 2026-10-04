@@ -518,8 +518,54 @@ ruling: no private recap per chatter; `docs/identity-rights-matrix.md`).
   the author or the context manifest.
 - It reads the database only: no generation, no AI spend, no platform request.
 - Behind the owner's `recap` switch on the page (`requireClientFeature`): a refusal is `409
-  client_feature_disabled` with its `reason`. The `recap` feature also needs `recap-profile-v1`,
-  so the route answers `hub_not_ready` until the hub serves the dossier save as well.
+  client_feature_disabled` with its `reason`. The `recap` feature needs both `shared-recaps-v1`
+  and `recap-profile-v1` (the dossier save below); this hub serves both.
+
+### Dossier from a stored generation (chat-extension)
+
+`POST /api/v1/client/pages/:pageLabel/fans/:fanRef/profile/from-generation`
+(`clientFanProfileFromGeneration`, bootstrap capability `recap-profile-v1`) saves a finished full
+recap as the fan's dossier on the page. The body is `{ generationRef, clientRequestId? }`: the
+client names the generation (`generationRef` is the `meta.requestId` of its `fan-summary`
+request) and the hub copies the text from the restricted record it stored. No text travels
+through the client, in either direction: the dossier is exactly the model's output, and the
+answer carries none of it.
+
+- Found: only a generation of the same user, the same page and the same fan. On OnlyFans the
+  chat id is the fan id, so the fan in the path names the conversation: the record's
+  `conversation_ref` must equal it, and its `fan_ref` must be absent or equal to it. Anything
+  else answers `404`, another person's generation included, for every role. A record whose two
+  refs differ is found for neither fan: the AI route reads the transcript by `conversationRef`
+  and the fan's own data by `fanRef` and does not make a Recap's two refs agree, so such a
+  record mixes two fans. This is narrower than the dossier's generation proof (`fan_ref`, or
+  `conversation_ref` when no fan is named), which the older write keeps.
+- Eligible: only a usable full recap, by the rule above (`usableFanSummaryPredicate("full")`),
+  and no longer than a dossier body may be (50,000 characters, the cap of the older write). Any
+  other generation answers `409 generation_not_eligible` with a `reason`
+  (`docs/error-handling.md` §3). A dossier saved here is therefore always one the prompts use:
+  the dossier's generation proof selects by the same rule.
+- Written: a new dossier version with `source_generated_at` = the record's `created_at` (the
+  hub's time of the generation, never a client's clock), `created_by_user_id` = the caller and
+  `source` = `chatmuse`. The fan is resolved as every dossier write resolves it (created on first
+  sight on OnlyFans; a fan flagged deleted stays `404`).
+- Idempotent: when a version of the fan's dossier on the page already has exactly this text, the
+  answer is `existing` with that version and nothing is written, however many versions came
+  since. Otherwise the dossier write's own rules apply: a generation that is not newer than the
+  dossier's latest text is never written (`409 generation_not_eligible`, `superseded`). That
+  one reason says nothing against the generation: the dossier already holds a newer text (a
+  colleague's later recap saved first, or an older client's write). The answer stays a refusal
+  because this text was not saved, and `existing` promises a version that holds it; a client
+  may show `superseded` as information rather than as a failed save.
+- Answer: `{ outcome: "created" | "existing", profile: { version, createdAt, sourceGeneratedAt } }`.
+- Not ready: the generation record is written after the stream's `done` frame. Until it exists, a
+  request that names the `clientRequestId` of an AI request the gateway admitted for the caller on
+  that page answers `409 generation_not_ready` and may be repeated; without it the answer is
+  `404`. Not-ready can stay for good when the record's write failed, so a client bounds its
+  repeats.
+- It reads and writes the database only: no generation, no AI spend, no platform request.
+- Behind the same `recap` switch as the shared recaps. The older write (`PUT
+  /api/v1/pages/:pageLabel/fans/:platformUserId/profile`, the text sent by the client) stays for
+  the clients that use it; the chat-extension token does not reach it.
 
 ### AI media describer (system lane)
 

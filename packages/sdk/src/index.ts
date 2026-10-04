@@ -56,6 +56,7 @@ export {
   CLIENT_COVERAGE_LEVELS,
   CLIENT_FEATURE_FLAG_NAMES,
   CLIENT_FEATURE_UNAVAILABLE_REASONS,
+  CLIENT_GENERATION_NOT_ELIGIBLE_REASONS,
   CLIENT_HUB_CAPABILITY_NAMES,
   CLIENT_KNOWN_PLATFORMS,
   CLIENT_KNOWN_ROLES,
@@ -64,6 +65,7 @@ export {
   type ClientCoverageLevel,
   type ClientFeatureFlagName,
   type ClientFeatureUnavailableReason,
+  type ClientGenerationNotEligibleReason,
   type ClientHubCapabilityName,
   type ClientRecapTranscriptCoverage,
 } from "@agency_hub_core/contracts";

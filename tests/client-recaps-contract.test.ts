@@ -163,17 +163,21 @@ describe("shared recaps contract", () => {
     expect(CLIENT_TOKEN_PROFILES["chat-extension"].operations).toContain("clientConversationRecaps");
   });
 
-  it("is served, and still inert: Recap needs the dossier save too (H-5), so the feature reads hub_not_ready", () => {
-    expect(SERVED_CLIENT_CAPABILITIES).toContain("shared-recaps-v1");
+  it("is served, with the dossier save (H-5): Recap is available where the owner switched it on, and only there", () => {
     expect(CLIENT_FEATURE_REQUIREMENTS.recap.capabilities).toEqual(["shared-recaps-v1", "recap-profile-v1"]);
-    // With every owner switch on. This flips to `available` in the change that
-    // serves `recap-profile-v1`, and only there.
-    expect(evaluateClientFeature({
-      settings: { enabled: true, features: { "*": { recap: true } }, hostBindings: {} },
-      page: { label: "lora-of", platform: "onlyfans", platformAccountId: "100000001" },
+    expect(SERVED_CLIENT_CAPABILITIES).toEqual(expect.arrayContaining(["shared-recaps-v1", "recap-profile-v1"]));
+    const page = { label: "lora-of", platform: "onlyfans", platformAccountId: "100000001" } as const;
+    const recap = (settings: Parameters<typeof evaluateClientFeature>[0]["settings"]) => evaluateClientFeature({
+      settings,
+      page,
       flag: "recap",
       served: SERVED_CLIENT_CAPABILITIES,
-    })).toEqual({ available: false, reason: "hub_not_ready" });
+    });
+    expect(recap({ enabled: true, features: { "*": { recap: true } }, hostBindings: {} })).toEqual({ available: true });
+    // Still inert at rest: the master switch and the flag are the owner's.
+    expect(recap({ enabled: false, features: { "*": { recap: true } }, hostBindings: {} }))
+      .toEqual({ available: false, reason: "disabled" });
+    expect(recap({ enabled: true, features: {}, hostBindings: {} })).toEqual({ available: false, reason: "flag_off" });
   });
 });
 

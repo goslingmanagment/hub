@@ -40,8 +40,8 @@ export const CLIENT_TOKEN_PROFILES = {
       "pageSpenderAutoLists",
       "ingestObservations",
       "clientConversationRecaps",
+      "clientFanProfileFromGeneration",
       // Every later client route joins here in its own PR:
-      // clientFanProfileFromGeneration,
       // clientConversationFeed, clientSpenderStats, clientSpenderAwaitingReply,
       // clientFanClaim, clientFanClaimStatus, clientAudienceNew, clientAiUsageDaily.
     ] as const satisfies readonly KernelOperationKey[],

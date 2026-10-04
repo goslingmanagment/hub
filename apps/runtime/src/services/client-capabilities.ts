@@ -15,7 +15,9 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   // chat (H-4c). Taking the field is not using it: `aiLiveTextContextMode`
   // rests off, and a page needs its `freshText` flag.
   "live-text-v1",
-  // The shared recaps read (H-13). The `recap` feature also needs
-  // `recap-profile-v1` (H-5), so it stays `hub_not_ready` until that lands.
+  // The shared recaps read (H-13).
   "shared-recaps-v1",
+  // The dossier save from a stored generation (H-5). With it the hub serves
+  // all of the `recap` feature; the owner's switches decide from here on.
+  "recap-profile-v1",
 ];

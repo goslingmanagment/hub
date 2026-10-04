@@ -31,7 +31,6 @@ import {
   createUserAccount,
   setUserPassword,
 } from "../apps/runtime/src/services/auth.ts";
-import type * as ClientCapabilitiesModule from "../apps/runtime/src/services/client-capabilities.ts";
 import { issueDeviceTokenForUserId } from "./helpers/device-credentials.ts";
 import {
   resetIntegrationDatabase,
@@ -50,26 +49,6 @@ import { fixtureUserId } from "./helpers/user-identity.ts";
 // Fixture passwords hash at minimum cost; sign-in still runs the real argon2
 // verify (tests/helpers/cheap-argon2.ts).
 vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
-
-// The `recap` feature needs two hub capabilities: `shared-recaps-v1` (this
-// route) and `recap-profile-v1` (the dossier save, H-5, not served yet). As
-// merged, the route therefore answers `hub_not_ready` whatever the owner
-// switches on; the first test below holds exactly that. Every other test stands
-// in for the hub that serves both, which is the only state the route reads in.
-// When H-5 adds `recap-profile-v1` to SERVED_CLIENT_CAPABILITIES, this mock and
-// the `hub_not_ready` half of the first test go.
-const hub = vi.hoisted(() => ({ servesDossierSave: true }));
-vi.mock("../apps/runtime/src/services/client-capabilities.ts", async (importOriginal) => {
-  const actual = await importOriginal<typeof ClientCapabilitiesModule>();
-  return {
-    ...actual,
-    get SERVED_CLIENT_CAPABILITIES() {
-      return hub.servesDossierSave
-        ? [...new Set([...actual.SERVED_CLIENT_CAPABILITIES, "recap-profile-v1"])]
-        : actual.SERVED_CLIENT_CAPABILITIES;
-    },
-  };
-});
 
 const PASSWORDS = { owner: "owner-secret", lead: "lead-secret", grisha: "grisha-secret", nikita: "nikita-secret" } as const;
 const AUDIT = { source: "cli" } as const;
@@ -278,7 +257,6 @@ describe("GET /api/v1/client/pages/:pageLabel/conversations/:fanRef/recaps", () 
       context.skip();
       return;
     }
-    hub.servesDossierSave = true;
     await resetIntegrationDatabase(testDb.pool);
     app = createTestAppContext(testDb, { authPolicyEnforcement: "log" });
     app.config.chatMuseAiGatewayEnabled = true;
@@ -422,31 +400,27 @@ describe("GET /api/v1/client/pages/:pageLabel/conversations/:fanRef/recaps", () 
     await testDb?.stop();
   });
 
-  it("is inert at merge: off until the owner switches Recap on, and hub_not_ready until the hub serves the dossier save", async (context) => {
+  it("is inert at merge: off until the owner switches Recap on, then the owner's switches decide", async (context) => {
     if (!server) return context.skip();
     await seedRecap({ mode: "full", text: "FULL RECAP", at: minutesAgo(5) });
+    const recapFeature = async () => {
+      const bootstrap = await server!.inject({ method: "GET", url: "/api/v1/client/bootstrap", headers: bearer(grishaToken) });
+      const announced = clientBootstrapResponseSchema.parse(bootstrap.json());
+      // The hub serves both halves of Recap: the shared read and the dossier save (H-5).
+      expect(announced.capabilities).toEqual(expect.arrayContaining(["shared-recaps-v1", "recap-profile-v1"]));
+      return announced.pages.find((page) => page.pageLabel === "lora-of")?.features.recap;
+    };
 
-    // The hub exactly as this change leaves it.
-    hub.servesDossierSave = false;
-    for (const token of [grishaToken, grishaFullToken, ownerToken]) {
-      expectRefused(await recaps(token), 409, "client_feature_disabled", "disabled");
-    }
-    await switchRecapOn();
+    // The hub as it rests: nothing is served until the owner says so.
     for (const token of [grishaToken, grishaFullToken, ownerToken]) {
       const refused = await recaps(token);
-      expectRefused(refused, 409, "client_feature_disabled", "hub_not_ready");
+      expectRefused(refused, 409, "client_feature_disabled", "disabled");
       expect(refused.body).not.toContain("FULL RECAP");
     }
-    // The bootstrap says the same: the capability is announced, the feature is not ready.
-    const bootstrap = await server.inject({ method: "GET", url: "/api/v1/client/bootstrap", headers: bearer(grishaToken) });
-    const announced = clientBootstrapResponseSchema.parse(bootstrap.json());
-    expect(announced.capabilities).toContain("shared-recaps-v1");
-    expect(announced.capabilities).not.toContain("recap-profile-v1");
-    expect(announced.pages.find((page) => page.pageLabel === "lora-of")?.features.recap)
-      .toEqual({ available: false, reason: "hub_not_ready" });
+    expect(await recapFeature()).toEqual({ available: false, reason: "disabled" });
 
-    // A hub that serves the whole of Recap: the owner's switches decide.
-    hub.servesDossierSave = true;
+    await switchRecapOn();
+    expect(await recapFeature()).toEqual({ available: true });
     expect((await recapsOk(grishaToken)).body.full?.text).toBe("FULL RECAP");
     expectRefused(await recaps(grishaToken, { pageLabel: "lora-fansly" }), 409, "client_feature_disabled", "platform_unsupported");
     // An old client's version, or none, is not the extension: refused, never passed.

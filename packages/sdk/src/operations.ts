@@ -141,6 +141,7 @@ export const kernelOperations = {
   cancelOfapiCommand: { method: "POST", path: "/api/v1/ofapi/commands/:commandId/cancel" },
   clientBootstrap: { method: "GET", path: "/api/v1/client/bootstrap" },
   clientConversationRecaps: { method: "GET", path: "/api/v1/client/pages/:pageLabel/conversations/:fanRef/recaps" },
+  clientFanProfileFromGeneration: { method: "POST", path: "/api/v1/client/pages/:pageLabel/fans/:fanRef/profile/from-generation" },
   contentComments: { method: "GET", path: "/api/v1/pages/:pageLabel/content/comments" },
   contentMedia: { method: "GET", path: "/api/v1/pages/:pageLabel/content/media" },
   createFanNote: { method: "POST", path: "/api/v1/pages/:pageLabel/fans/:platformUserId/notes" },
