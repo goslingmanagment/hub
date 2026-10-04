@@ -446,8 +446,9 @@ describe("Split for Ping, Hi and Coach drafts behind split-all-v1 (H-10)", () =>
       ];
       expect(completionChunks.some((chunk) => chunk.includes("[NEXT]") || chunk.includes("```draft"))).toBe(false);
       const answered = await generate(EXTENSION, coach, "preferSplit");
+      // The extension advertises context-v1 too, so its context_v1 frame (H-4b) comes first.
       expect(answered.frames.map((frame) => frame.type))
-        .toEqual(["meta", ...completionChunks.map(() => "content_delta"), "usage", "done"]);
+        .toEqual(["meta", "context_v1", ...completionChunks.map(() => "content_delta"), "usage", "done"]);
       expect(answered.frames.filter((frame) => frame.type === "content_delta").map((frame) => frame.text))
         .toEqual(completionChunks);
       expect(await paramsOf(answered.generationRef)).toMatchObject({
