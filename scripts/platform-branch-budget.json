@@ -120,6 +120,6 @@
   },
   "client_sdk_compat_2026_10_04": {
     "added_sites": 1,
-    "reason": "tests/client-sdk-compat.integration.test.ts picks the Fansly lane's Recap cases (`lane.platform === \"fansly\"`, #419). It reached main inside main's slack while the step-4 deletions were lowering this budget to its ceiling, so it is recorded here (step 4 S4-20: 134 + 1 - 4 deleted legacy sender sites = 131). A test fixture selection, no runtime provider logic."
+    "reason": "tests/client-sdk-compat.integration.test.ts picks the Fansly lane's Recap cases (`lane.platform === \"fansly\"`, #419). It reached main inside main's slack while the step-4 deletions were lowering this budget to its ceiling, so it is recorded here (step 4 S4-19 merged at 135 with it counted; S4-20: 135 - 4 deleted legacy sender sites = 131). A test fixture selection, no runtime provider logic."
   }
 }

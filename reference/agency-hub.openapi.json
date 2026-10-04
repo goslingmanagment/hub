@@ -113964,6 +113964,12 @@
                       "active",
                       "pending"
                     ]
+                  },
+                  "client": {
+                    "type": "string",
+                    "enum": [
+                      "chat-extension"
+                    ]
                   }
                 },
                 "required": [
@@ -114007,6 +114013,18 @@
                           "type": "string",
                           "enum": [
                             "active"
+                          ]
+                        },
+                        "client": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 64
+                            },
+                            {
+                              "type": "null"
+                            }
                           ]
                         }
                       },

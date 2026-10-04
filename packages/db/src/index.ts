@@ -203,5 +203,6 @@ export * from "./repositories/ofapi-read-collections.ts";
 export * from "./repositories/ofapi-typed-exports.ts";
 export { saveOfapiChatQueueState, readOfapiContentEvents } from './repositories/ofapi-content-events.ts';
 
-// The chat extension's bootstrap page list (active, untombstoned, scoped).
+// The chat extension's bootstrap page list (active, untombstoned, scoped) and
+// its config revision.
 export * from "./repositories/client-bootstrap.ts";

@@ -13,9 +13,9 @@ import {
 // is the subcommand's own option, repeated or comma-separated for pages
 // switched together — step 3b ruling 13; the owner's acceptance of a report's red
 // lines names red lines alone, with a reason — ruling 12), every command opens its
-// context only after its options parsed, and the main CLI registers the group. Since
-// step 4 (S4-10) `sync rollback` refuses before it opens anything: the legacy
-// executor serves no Fansly page to hand one back to.
+// context only after its options parsed, and the main CLI registers the group.
+// Since step 4 (S4-10) `sync rollback` refuses before it opens anything: the
+// legacy executor serves no Fansly page to hand one back to.
 
 class Opened extends Error {}
 

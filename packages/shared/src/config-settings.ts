@@ -7,6 +7,7 @@
 // the worker, the API handlers, and tests resolve the effective config
 // identically.
 
+import { configStringFormatError } from "./chat-extension-settings.ts";
 import type { AppConfig } from "./config.ts";
 import type { ConfigOverrideValue, SkippedOverride } from "./config-registry.ts";
 import { CONFIG_DESCRIPTORS, getDescriptor, transitiveRequires } from "./config-registry.ts";
@@ -83,6 +84,12 @@ export function validateConfigOverride(
           ok: false,
           error: `${key} must be one of: ${descriptor.enumValues.join(", ")}`,
         };
+      }
+      // A value with inner structure (JSON, a version) is rejected when it does
+      // not parse — never trimmed into shape (chat-extension-settings.ts).
+      const formatError = descriptor.format ? configStringFormatError(descriptor.format, trimmed) : null;
+      if (formatError !== null) {
+        return { ok: false, error: `${key}: ${formatError}` };
       }
       return { ok: true, value: trimmed };
     }

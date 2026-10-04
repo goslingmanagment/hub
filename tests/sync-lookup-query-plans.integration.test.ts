@@ -1,9 +1,9 @@
 // A sync reader that wants a handful of rows out of the biggest sync journal,
 // and had no index leading with the columns it filters on: the
 // purchase-history readers want rows by (page_id, endpoint) from
-// sync_raw_payloads (788 MB, 2.5M rows on prod 2026-09-30): the legacy lane's
-// three per chunk were seq scans of ~0.8-1.1 s each before any egress (that
-// lane is gone since step 4, S4-16; the engine's switch import reads the
+// sync_raw_payloads (788 MB, 2.5M rows on prod 2026-09-30). The legacy lane's
+// three reads per chunk were seq scans of ~0.8-1.1 s each before any egress
+// (that lane is gone since step 4, S4-16; the engine's switch import reads the
 // captured ids through the same index). (Migration 0223's other index served
 // the legacy dm_messages 5xx breaker's streak read, which went with the legacy
 // DM handler at step 4, S4-14.)

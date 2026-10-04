@@ -305,10 +305,24 @@ export const authIssueDeviceTokenWithPasswordBodySchema = z.object({
   // pending → a 10-minute reservation, activated through authActivateDeviceToken
   //           after the client has durably staged custody (the desktop).
   mode: deviceTokenIssueModeEnum,
+  // chat-extension H-3: a narrow token bound to this client's route allowlist
+  // (client-token-scopes.ts), stored immutably on the token. Active only. A hub
+  // without H-3 drops the key and issues a full token, so the client requires
+  // the echo below (and the bootstrap's identity.tokenClient) before using it.
+  client: z.enum(["chat-extension"]).optional(),
+}).superRefine((value, ctx) => {
+  if (value.client !== undefined && value.mode !== "active") {
+    ctx.addIssue({ code: "custom", path: ["client"], message: "client requires mode active" });
+  }
 });
 
 export const authIssueDeviceTokenWithPasswordResponseSchema = z.discriminatedUnion("mode", [
-  issuedDeviceTokenResponseSchema.extend({ mode: z.literal("active") }),
+  issuedDeviceTokenResponseSchema.extend({
+    mode: z.literal("active"),
+    // The profile the token was issued with: null for a full token. Open on
+    // the wire, absent from a hub without H-3.
+    client: z.string().min(1).max(64).nullable().optional(),
+  }),
   reservedDeviceTokenResponseSchema.extend({ mode: z.literal("pending") }),
 ]);
 
