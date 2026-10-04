@@ -142,6 +142,7 @@ export const kernelOperations = {
   cancelOfapiCommand: { method: "POST", path: "/api/v1/ofapi/commands/:commandId/cancel" },
   clientAiUsageDaily: { method: "GET", path: "/api/v1/client/pages/:pageLabel/ai-usage" },
   clientBootstrap: { method: "GET", path: "/api/v1/client/bootstrap" },
+  clientConversationFeed: { method: "GET", path: "/api/v1/client/pages/:pageLabel/conversations/:fanRef/feed" },
   clientConversationRecaps: { method: "GET", path: "/api/v1/client/pages/:pageLabel/conversations/:fanRef/recaps" },
   clientFanProfileFromGeneration: { method: "POST", path: "/api/v1/client/pages/:pageLabel/fans/:fanRef/profile/from-generation" },
   clientSpenderAwaitingReply: { method: "GET", path: "/api/v1/client/pages/:pageLabel/spenders/awaiting-reply" },

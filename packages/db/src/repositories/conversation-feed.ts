@@ -69,9 +69,10 @@ export const CONVERSATION_FEED_MAX_ROWS = ARCHIVE_AI_TRANSCRIPT_MAX_ROWS;
 /** The first-page Ping summary's default window (§4.4: the Ping window). */
 export const CONVERSATION_FEED_SUMMARY_DEFAULT_WINDOW = 100;
 /**
- * The summary reads through the AI readers, whose window is 1500. The contract
- * accepts `summaryWindow` up to 3000, but the 3000 depth (H-6) is the full
- * Recap's alone; a feed page never makes a deep read.
+ * The summary reads through the AI readers, whose window is 1500, and the
+ * contract takes `summaryWindow` up to the same number
+ * (CLIENT_FEED_SUMMARY_WINDOW_MAX). The 3000 depth (H-6) is the full Recap's
+ * alone; a feed page never makes a deep read.
  */
 export const CONVERSATION_FEED_SUMMARY_MAX_WINDOW = ARCHIVE_AI_TRANSCRIPT_MAX_ROWS;
 
@@ -176,6 +177,28 @@ export async function readConversationFeedSnapshot(
     archiveMaxId: Number(row?.archive_max_id ?? 0),
     dmMaxId: Number(row?.dm_max_id ?? 0),
   };
+}
+
+/**
+ * When the chat's last message was sent, as its thread row knows it
+ * (`page_dm_threads.last_message_at`). The chat list and the DM projection
+ * move it, so it can be ahead of both content stores: a time later than the
+ * feed's head says the stores have not caught up with the chat. Null when the
+ * hub has no thread row for the conversation, or the row names no message.
+ * One read by the unique (page, conversation) key.
+ */
+export async function readConversationFeedThreadLastMessageAt(
+  db: Database,
+  input: { pageId: number; conversationRef: string },
+): Promise<Date | null> {
+  const result = await db.execute<{ last_message_at: string | Date | null }>(sql`
+    select t.last_message_at
+    from page_dm_threads t
+    where t.platform_account_id = ${input.pageId}
+      and t.platform_conversation_id = ${input.conversationRef}
+  `);
+  const value = result.rows[0]?.last_message_at;
+  return value == null ? null : new Date(value);
 }
 
 const NUMERIC_REF = /^[0-9]{1,18}$/;

@@ -57,6 +57,9 @@ export const clientCursorSchema = z.string().min(1).max(2048);
  * long:
  * - the awaiting-reply queue (`clientSpenderAwaitingReply`): the page and the
  *   person; a cursor is good for an hour after the page that carried it.
+ * - the archive feed (`clientConversationFeed`): the page, the fan, the person,
+ *   the reader and the archive generation; a walk ends a day after its first
+ *   page.
  */
 export const CLIENT_CURSOR_REFUSAL_REASONS = ["cursor_invalid"] as const;
 export type ClientCursorRefusalReason = (typeof CLIENT_CURSOR_REFUSAL_REASONS)[number];
@@ -284,6 +287,142 @@ export const clientFanProfileFromGenerationResponseSchema = z.object({
     /** When the text was generated; null on a version an older client wrote without it. */
     sourceGeneratedAt: isoTimestamp.nullable(),
   }),
+});
+
+// ── archive feed (H-9c) ──────────────────────────────────────────────────────
+//
+// One conversation as the hub's own message stores hold it: newest first, a
+// page at a time, with a Ping summary on the first page. Database only: no
+// platform request, no refresh and no queued work, so reading the feed never
+// marks the chat read on OnlyFans.
+//
+// THE READER is the one a generation uses: the owner's
+// `aiTranscriptFreshUnionMode` decides between the archive and the archive ∪
+// webhook-store union, and `source` says which one served. A message deleted on
+// the platform stays in the feed as a row with `deleted: true` (a generation
+// drops it).
+//
+// ONE WALK, ONE SNAPSHOT. A request without a cursor starts a walk and freezes
+// it: `snapshotRevision`, `asOf`, `coverage`, `head` and `newestKnownAt` are
+// read once and every later page of the walk repeats them. A message that
+// arrives during the walk is not in it; the next walk from the first page has
+// it. `nextOlderCursor` is opaque and signed, and it is valid only for the same
+// page, fan and person, on the same reader, for a day, and until the archive is
+// rebuilt: any other use is 400 `bad_request` with the reason `cursor_invalid`,
+// and the client reads the first page again.
+
+/** The most rows one page carries; the bootstrap announces it as `limits.feedMax`. */
+export const CLIENT_FEED_MAX_LIMIT = 100;
+export const CLIENT_FEED_DEFAULT_LIMIT = 50;
+/** The first page's summary reads this many of the newest messages unless the query says otherwise: the Ping window. */
+export const CLIENT_FEED_SUMMARY_WINDOW_DEFAULT = 100;
+export const CLIENT_FEED_SUMMARY_WINDOW_MIN = 5;
+/** The transcript readers' own cap. The deeper read (3000) is the full Recap's alone: a feed page never makes it. */
+export const CLIENT_FEED_SUMMARY_WINDOW_MAX = 1500;
+
+/** Known values of the feed's `source`. On the wire an open token. The AI
+ *  context frame names the same readers (`AI_CONTEXT_SOURCES` in routes.ts). */
+export const CLIENT_FEED_SOURCES = ["archive", "union"] as const;
+/** Known values of `sender` (a row's and the head's). On the wire an open token. */
+export const CLIENT_FEED_SENDERS = ["fan", "model", "system", "unknown"] as const;
+/**
+ * Known values of `summary.pingSegment`. On the wire an open token. This hub
+ * answers the segment a Ping generation would be given for the same messages
+ * (`active`, `segment-a`, `segment-b`); `unknown` is what a client reads any
+ * other value as, and what it shows when `summary` is null.
+ */
+export const CLIENT_FEED_PING_SEGMENTS = ["active", "segment-a", "segment-b", "unknown"] as const;
+
+export type ClientFeedSource = (typeof CLIENT_FEED_SOURCES)[number];
+export type ClientFeedSender = (typeof CLIENT_FEED_SENDERS)[number];
+export type ClientFeedPingSegment = (typeof CLIENT_FEED_PING_SEGMENTS)[number];
+
+export const clientConversationFeedQuerySchema = z.object({
+  /** `nextOlderCursor` of the page before; absent starts a new walk at the newest message. */
+  cursor: clientCursorSchema.optional(),
+  limit: z.coerce.number().int().min(1).max(CLIENT_FEED_MAX_LIMIT).default(CLIENT_FEED_DEFAULT_LIMIT),
+  /** How many of the newest messages the first page's summary reads. Not read on a later page, which has no summary. */
+  summaryWindow: z.coerce.number().int()
+    .min(CLIENT_FEED_SUMMARY_WINDOW_MIN).max(CLIENT_FEED_SUMMARY_WINDOW_MAX).optional(),
+}).strict();
+
+export const clientFeedItemSchema = z.object({
+  /** The platform's message id. */
+  messageId: z.string(),
+  /** Null for a message the stores hold without a time; such rows come last. */
+  at: isoTimestamp.nullable(),
+  /** Open token; known values: CLIENT_FEED_SENDERS. */
+  sender: clientOpenToken,
+  /** Plain text as stored; kept on a deleted message when the store still has it. */
+  text: z.string(),
+  /** Whether the message was sent by an automation. The stores hold no such signal: always null today. */
+  automatic: z.boolean().nullable(),
+  /** The message was deleted on the platform. */
+  deleted: z.boolean(),
+  /** The tip the message carries; null when it carries none. */
+  tipMills: mills.nullable(),
+  /** The price of a paid message; null for a free one. Whether it was bought is not part of the feed. */
+  priceMills: mills.nullable(),
+  /** Captions of what is attached, as a generation reads them (`[Photo]`); never a media reference. */
+  attachmentLabels: z.array(z.string().max(80)).max(50),
+});
+
+/** The newest message a generation would read from this reader: live, never a deleted one. */
+export const clientFeedHeadSchema = z.object({
+  messageRef: z.string(),
+  at: isoTimestamp.nullable(),
+  /**
+   * Open token; known values: CLIENT_FEED_SENDERS. The head reads the sender
+   * as a generation does (`servedHead.isFromFan`): `model` for the page's own
+   * message and `fan` for every other one, a system line included. The row of
+   * the same message in `items` carries its stored role.
+   */
+  sender: clientOpenToken,
+});
+
+export const clientFeedSummarySchema = z.object({
+  /** Open token; known values: CLIENT_FEED_PING_SEGMENTS. */
+  pingSegment: clientOpenToken,
+  /** Whole days since the fan's last text message in the window; null when the window holds none. */
+  fanSilenceDays: count.nullable(),
+  /** The messages asked for and the messages the summary read. */
+  window: z.object({ requested: count, served: count }),
+  /** Open token; known values: CLIENT_COVERAGE_LEVELS. */
+  coverage: clientOpenToken,
+  /** The instant the segment and the silence were counted at. */
+  asOf: isoTimestamp,
+});
+
+export const clientConversationFeedResponseSchema = z.object({
+  target: z.object({ pageLabel: z.string(), fanRef: clientFanRefSchema }),
+  /** The reader that served the walk. Open token; known values: CLIENT_FEED_SOURCES. */
+  source: clientOpenToken,
+  /** Names the walk's snapshot: the same on every page of one walk. Opaque. */
+  snapshotRevision: z.string(),
+  /** When the walk's snapshot was taken. */
+  asOf: isoTimestamp,
+  /** How much of the chat's history the hub can vouch for. Open token; known values: CLIENT_COVERAGE_LEVELS. */
+  coverage: clientOpenToken,
+  /**
+   * The reader's newest live message at the snapshot, null when it holds none.
+   * It is the `servedHead` the AI `context_v1` frame reports for a generation
+   * served by the same reader from the same stored state (a generation that
+   * was sent fresh text may read past it; the feed never holds fresh text).
+   */
+  head: clientFeedHeadSchema.nullable(),
+  /**
+   * The time of the newest message the hub has heard of in this chat: the
+   * head's, or the chat list's last message when that is later. Later than
+   * `head.at` means the reader has not caught up with the chat yet. Null when
+   * the hub knows of no message.
+   */
+  newestKnownAt: isoTimestamp.nullable(),
+  /** Continues the walk toward older messages; null at its end. */
+  nextOlderCursor: clientCursorSchema.nullable(),
+  /** Newest first. */
+  items: z.array(clientFeedItemSchema).max(CLIENT_FEED_MAX_LIMIT),
+  /** On the first page of a walk only; null on every later page. */
+  summary: clientFeedSummarySchema.nullable(),
 });
 
 // ── own AI spend (H-15) ──────────────────────────────────────────────────────
@@ -777,6 +916,34 @@ export const clientRouteSchemas = {
       409: errorResponseSchema,
     },
   },
+  clientConversationFeed: {
+    auth: { kind: "apiKey", scope: "page" },
+    tags: ["client"],
+    summary: "One conversation's messages from the hub's own stores, newest first, with a Ping summary on the first page",
+    description: "Read-only and database-only: no platform request, no refresh, no queued work, so the chat is "
+      + "never marked read on the platform. `fanRef` is the OnlyFans fan id, which is the chat id. The reader is "
+      + "the one a generation uses (`aiTranscriptFreshUnionMode`): `source` is `archive` or `union`. Rows come "
+      + "newest first, `limit` (1 to 100) a page; a message deleted on the platform stays as a row with "
+      + "`deleted: true`. A request without `cursor` starts a walk and freezes it: `snapshotRevision`, `asOf`, "
+      + "`coverage`, `head` and `newestKnownAt` are the same on every page of the walk, and a message that "
+      + "arrives meanwhile is not in it. `head` is the reader's newest live message, the `servedHead` a "
+      + "generation's `context_v1` frame reports from the same stored state. `summary` comes on the first page "
+      + "only: the Ping segment and the fan's silence, counted by the generation's own rule over the newest "
+      + "`summaryWindow` messages (5 to 1500, 100 by default). `nextOlderCursor` is opaque, signed, and valid "
+      + "only for the same page, fan and person on the same reader, for a day, until the archive is rebuilt: "
+      + "anything else is 400 `bad_request` with the reason `cursor_invalid`, and the client reads the first "
+      + "page again. Behind the chat-extension `preview` switch: 409 `client_feature_disabled` with the reason.",
+    params: clientPageFanParamsSchema,
+    querystring: clientConversationFeedQuerySchema,
+    response: {
+      200: clientConversationFeedResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
   clientFanProfileFromGeneration: {
     auth: { kind: "apiKey", scope: "page" },
     tags: ["client"],
@@ -914,6 +1081,11 @@ export type ClientRecapBody = z.infer<typeof clientRecapBodySchema>;
 export type ClientConversationRecapsResponse = z.infer<typeof clientConversationRecapsResponseSchema>;
 export type ClientFanProfileFromGenerationBody = z.infer<typeof clientFanProfileFromGenerationBodySchema>;
 export type ClientFanProfileFromGenerationResponse = z.infer<typeof clientFanProfileFromGenerationResponseSchema>;
+export type ClientConversationFeedQuery = z.infer<typeof clientConversationFeedQuerySchema>;
+export type ClientFeedItem = z.infer<typeof clientFeedItemSchema>;
+export type ClientFeedHead = z.infer<typeof clientFeedHeadSchema>;
+export type ClientFeedSummary = z.infer<typeof clientFeedSummarySchema>;
+export type ClientConversationFeedResponse = z.infer<typeof clientConversationFeedResponseSchema>;
 export type ClientAiUsageQuery = z.infer<typeof clientAiUsageQuerySchema>;
 export type ClientAiUsageTotals = z.infer<typeof clientAiUsageTotalsSchema>;
 export type ClientAiUsageDay = z.infer<typeof clientAiUsageDaySchema>;

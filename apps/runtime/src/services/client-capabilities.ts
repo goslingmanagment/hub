@@ -31,6 +31,10 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   // the hub serves all of the `stats` feature; the owner's switches decide from
   // here on.
   "awaiting-reply-v1",
+  // H-9c: the archive feed of one conversation,
+  // GET /api/v1/client/pages/:pageLabel/conversations/:fanRef/feed. With it the
+  // hub serves all of the `preview` feature.
+  "archive-feed-v1",
 ];
 
 /**
