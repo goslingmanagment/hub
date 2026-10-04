@@ -29,8 +29,9 @@ import type { ApplyResult, LocalApplyInput, ResourceModule } from "../../engine/
 // transaction under the erasure fence the entry declares). Per deleted
 // overlay row of the work's ids: an executed erasure covering the chat (or its
 // fan, or the message's sender) at the deletion's instant skips it; the page's hot rows of the message are marked
-// (`markFanslyWsHotDeletion`, sticky — also when the minutely legacy reconcile
-// marked them first; the hot table stays written in step 4 until S4-13); one
+// (`markFanslyWsHotDeletion`, sticky — also when a row was marked before, as
+// the retired receipt reconcile did until step 4 S4-11; the hot table stays
+// written in step 4 until S4-13); one
 // deliverable `message.deleted` per message (dedup `msg-deleted:fansly:<id>`),
 // and the archive tombstone from the stored events (tombstone-first, sticky: a
 // later REST copy hydrates the stub and keeps the tombstone). Then the stored
