@@ -11,7 +11,8 @@ import {
   type EngineStatusFacts,
 } from "../apps/runtime/src/services/sync-status-engine.ts";
 import { SYNC_DOMAIN_BLOCKS } from "../apps/runtime/src/services/sync-status.ts";
-import { fanslyLeverStreams } from "../apps/runtime/src/sync/fansly/registry.ts";
+import { fanslyKeysForStreams, fanslyLeverStreams, fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";
+import { routeOfWireId, type FanslyRoute } from "../apps/runtime/src/sync/fansly/routes.ts";
 import { pageHoldRow, resourceBreakerRow, routeHoldRows } from "./helpers/sync-holds.ts";
 
 // One lever stream of an engine page as its surfaces read it (the Settings
@@ -59,6 +60,18 @@ function row(resource: string, overrides: Record<string, unknown> = {}): SyncWor
     blockedByVendorAt: null, waitingReason: "not_due", waitingUntil: minutes(30),
     ...overrides,
   } as unknown as SyncWorkRow;
+}
+
+/** A page-level row as the final check before an admission leaves it when the
+ *  route of its planned request is closed (`deferForRoute`): `pacer`, due
+ *  when the route opens. */
+function putOffRow(resource: string, until: Date, id = 1): SyncWorkRow {
+  return row(resource, { id, dueAt: until, waitingReason: "pacer", waitingUntil: until });
+}
+
+/** The routes a registry key declares. */
+function routesOf(key: string): FanslyRoute[] {
+  return [...new Set((fanslyResourceSpec(key)?.operations ?? []).map(routeOfWireId))];
 }
 
 function facts(input: {
@@ -218,27 +231,181 @@ describe("what stops the keys of a stream", () => {
     expect(engineStreamState("dm_conversations", held)).toMatchObject({ stopped: "none", stops: [] });
   });
 
-  it("a hold of one of a key's routes stops nothing; a route's own slowdown is no stop", () => {
-    // `posts.refresh` reads the timeline and the tips: one of the two is open.
-    const oneRoute = facts({ page: { holds: routeHoldRows("posts.timeline", { holdUntil: minutes(40).toISOString() }) } });
-    expect(engineStreamState("posts", oneRoute).stops.flatMap((stop) => stop.resources)).not.toContain("posts.refresh");
+  // A key that reads several routes is picked while one of them is open, so
+  // a 429's hold of the route its request takes shows only on its row: the
+  // final check before the admission puts it off until the route opens. Seen
+  // in review: "Posts [reading]" and "Follower reconcile [reading]" above
+  // "…: endpoint held (429) until …".
+  it("a hold of one of a key's routes stops the key once it has put the key's work off, and nothing before", () => {
+    const timelineHeld = { holds: routeHoldRows("posts.timeline", { holdUntil: minutes(40).toISOString() }) };
+    // `posts.refresh` reads the timeline and the tips. Its work is due and
+    // nothing has put it off: its next request may take the open route.
+    const due = engineStreamState("posts", facts({
+      page: timelineHeld,
+      counts: [counts("posts.refresh", { nextDueAt: minutes(-1) })],
+      rows: [row("posts.refresh", { dueAt: minutes(-1), waitingReason: null, waitingUntil: null })],
+    }));
+    expect(due).toMatchObject({ stopped: "none", stops: [], nextDueAt: minutes(-1) });
+    // Neither does work that only waits for its schedule.
+    expect(engineStreamState("posts", facts({
+      page: timelineHeld, counts: [counts("posts.refresh", { nextDueAt: minutes(30) })], rows: [row("posts.refresh")],
+    }))).toMatchObject({ stopped: "none", stops: [], waiting: { reason: "not_due" } });
+
+    // The timeline's hold put the work of both timeline keys off; the stream's
+    // third key reads another route.
+    const held = engineStreamState("posts", facts({
+      page: timelineHeld,
+      counts: [
+        counts("posts.refresh", { nextDueAt: minutes(40) }),
+        counts("posts.backfill", { nextDueAt: minutes(40) }),
+        counts("posts.engagement", { nextDueAt: minutes(5) }),
+      ],
+      rows: [
+        putOffRow("posts.refresh", minutes(40)),
+        putOffRow("posts.backfill", minutes(40), 2),
+        row("posts.engagement", { id: 3, dueAt: minutes(5), waitingUntil: minutes(5) }),
+      ],
+    }));
+    expect(held.stopped).toBe("some");
+    expect(held.stops).toEqual([
+      { reason: "route_hold", by: ["posts.timeline"], resources: ["posts.refresh", "posts.backfill"], until: minutes(40) },
+    ]);
+    // The next read is of the key nothing stops, and so is the wait explained.
+    expect(held).toMatchObject({
+      activeWork: 3, nextDueAt: minutes(5), waiting: { resource: "posts.engagement", reason: "not_due", until: minutes(5) },
+    });
+
+    // The follower reconcile walk after a 429 on the followers list (its
+    // other route, the account read, is open): the stream's one open row.
+    const walk = engineStreamState("followers_reconcile", facts({
+      page: { holds: routeHoldRows("followers.page", { holdUntil: minutes(40).toISOString() }) },
+      counts: [counts("followers.reconcile", { nextDueAt: minutes(40) })],
+      rows: [putOffRow("followers.reconcile", minutes(40))],
+    }));
+    expect(walk.stops).toEqual([
+      { reason: "route_hold", by: ["followers.page"], resources: ["followers.reconcile"], until: minutes(40) },
+    ]);
+    // The stop and the wait say the same thing of the row; it has no next read.
+    expect(walk).toMatchObject({
+      stopped: "some", nextDueAt: null, waiting: { resource: "followers.reconcile", reason: "route_hold", until: minutes(40) },
+    });
+
+    // A stream of one such key is held whole.
+    const roster = engineStreamState("fan_earnings", facts({
+      page: { holds: routeHoldRows("earnings.monthly_accounts", { holdUntil: minutes(40).toISOString() }) },
+      counts: [counts("fan-earnings.roster", { nextDueAt: minutes(40) })],
+      rows: [putOffRow("fan-earnings.roster", minutes(40))],
+    }));
+    expect(roster).toMatchObject({ stopped: "all", paused: false, nextDueAt: null });
+    expect(roster.stops).toEqual([
+      { reason: "route_hold", by: ["earnings.monthly_accounts"], resources: ["fan-earnings.roster"], until: minutes(40) },
+    ]);
+  });
+
+  it("work a route put off is stopped only while a hold keeps a route of its key closed; a route's own pace is no stop", () => {
+    // Put off for the route's pace: queued.
+    const paced = engineStreamState("posts", facts({
+      counts: [counts("posts.refresh", { nextDueAt: minutes(1) })], rows: [putOffRow("posts.refresh", minutes(1))],
+    }));
+    expect(paced).toMatchObject({ stopped: "none", stops: [], nextDueAt: minutes(1), waiting: { reason: "route_budget" } });
+    // The hold that put it off is over: it waits for its turn like any work.
+    const over = engineStreamState("posts", facts({
+      page: { holds: routeHoldRows("posts.timeline", { holdUntil: minutes(-1).toISOString(), ladderStep: 1 }) },
+      counts: [counts("posts.refresh", { nextDueAt: minutes(1) })],
+      rows: [putOffRow("posts.refresh", minutes(1))],
+    }));
+    expect(over).toMatchObject({ stopped: "none", stops: [], waiting: { reason: "route_budget" } });
+    // Its time has come under the hold: its next plan decides, nothing is put off now.
+    const again = engineStreamState("posts", facts({
+      page: { holds: routeHoldRows("posts.timeline", { holdUntil: minutes(40).toISOString() }) },
+      counts: [counts("posts.refresh", { nextDueAt: minutes(-1) })],
+      rows: [putOffRow("posts.refresh", minutes(-1))],
+    }));
+    expect(again).toMatchObject({ stopped: "none", stops: [], nextDueAt: minutes(-1) });
     // A halved route with its hold over: slower, not stopped.
     const halved = facts({ page: { holds: routeHoldRows("media.offer_stats", { effectivePerMin: 2.5, ladderStep: 1 }) } });
     expect(engineStreamState("media_stats", halved)).toMatchObject({ stopped: "none", stops: [] });
   });
 
-  it("a page-level row put off by its route's hold reads route_hold, by its route's pace it stays queued", () => {
-    const putOff = row("subscribers.poll", { dueAt: minutes(40), waitingReason: "pacer", waitingUntil: minutes(40) });
+  it("a key whose every route is held is stopped until the hold's end, whatever its row says", () => {
+    const putOff = putOffRow("subscribers.poll", minutes(40));
+    const hold = { holds: routeHoldRows("subscribers.page", { holdUntil: minutes(40).toISOString() }) };
     const held = engineStreamState("subscribers", facts({
-      page: { holds: routeHoldRows("subscribers.page", { holdUntil: minutes(40).toISOString() }) },
-      counts: [counts("subscribers.poll", { nextDueAt: minutes(40) })],
-      rows: [putOff],
+      page: hold, counts: [counts("subscribers.poll", { nextDueAt: minutes(40) })], rows: [putOff],
     }));
     expect(held.waiting).toEqual({ resource: "subscribers.poll", reason: "route_hold", until: minutes(40) });
+    expect(held.stops).toEqual([
+      { reason: "route_hold", by: ["subscribers.page"], resources: ["subscribers.poll", "subscribers.history"], until: minutes(40) },
+    ]);
     expect(held.stopped).toBe("some");
-    const paced = engineStreamState("subscribers", facts({ counts: [counts("subscribers.poll", { nextDueAt: minutes(1) })], rows: [{ ...putOff, dueAt: minutes(1) } as SyncWorkRow] }));
+    // The route's pace put the row off a minute, then a 429 of another key's
+    // request held the route: the key is out of the pick until the hold ends.
+    const heldLater = engineStreamState("subscribers", facts({
+      page: hold, counts: [counts("subscribers.poll", { nextDueAt: minutes(1) })], rows: [putOffRow("subscribers.poll", minutes(1))],
+    }));
+    expect(heldLater.stops.map((stop) => stop.until)).toEqual([minutes(40)]);
+    const paced = engineStreamState("subscribers", facts({
+      counts: [counts("subscribers.poll", { nextDueAt: minutes(1) })], rows: [putOffRow("subscribers.poll", minutes(1))],
+    }));
     expect(paced.waiting).toMatchObject({ resource: "subscribers.poll", reason: "route_budget" });
     expect(paced.stopped).toBe("none");
+  });
+
+  // The pin behind "held never reads as reading": whichever route of a key a
+  // 429 holds, once the hold has put the key's page-level work off the stream
+  // says so — the stop names the key, and the wait the engine gives for the
+  // row is never said beside a stream nothing stops.
+  it("every key that works per page: a hold of any one of its routes that put its work off stops it", () => {
+    let judged = 0;
+    for (const stream of fanslyLeverStreams()) {
+      for (const key of fanslyKeysForStreams([stream])) {
+        if (fanslyResourceSpec(key)!.subject !== "page") continue;
+        for (const route of routesOf(key)) {
+          const state = engineStreamState(stream, facts({
+            page: { holds: routeHoldRows(route, { holdUntil: minutes(40).toISOString() }) },
+            counts: [counts(key, { nextDueAt: minutes(40) })],
+            rows: [putOffRow(key, minutes(40))],
+          }));
+          const at = `${stream}: ${key} on ${route}`;
+          expect(state.waiting, at).toEqual({ resource: key, reason: "route_hold", until: minutes(40) });
+          expect(state.stopped, at).not.toBe("none");
+          const stop = state.stops.find((entry) => entry.reason === "route_hold" && entry.resources.includes(key));
+          expect(stop, at).toMatchObject({ by: [route], until: minutes(40) });
+          expect(state.nextDueAt, at).toBeNull();
+          judged += 1;
+        }
+      }
+    }
+    // The keys the review named are among them: each reads more than one route.
+    for (const key of ["followers.reconcile", "posts.refresh", "posts.backfill", "catalog.fixed", "catalog.hydrate",
+      "fan-earnings.roster", "stats.daily", "stats.backfill", "payouts.daily"]) {
+      expect(fanslyResourceSpec(key)!.subject, key).toBe("page");
+      expect(routesOf(key).length, key).toBeGreaterThan(1);
+    }
+    expect(judged).toBeGreaterThan(50);
+  });
+
+  // The row is read for the keys that work per page. A key that works per
+  // subject and reads several routes has no such row: its stream still never
+  // reads as read under a hold of one of them only because each of its routes
+  // is the one route of another key of the stream, which that hold stops.
+  it("a key that reads several routes works per page, or shares each of them with a one-route key of its stream", () => {
+    const perSubject: string[] = [];
+    for (const stream of fanslyLeverStreams()) {
+      const keys = fanslyKeysForStreams([stream]);
+      for (const key of keys) {
+        const routes = routesOf(key);
+        if (routes.length < 2 || fanslyResourceSpec(key)!.subject === "page") continue;
+        perSubject.push(key);
+        for (const route of routes) {
+          const sibling = keys.find((other) => other !== key && routesOf(other).join() === route);
+          expect(sibling, `${stream}: ${key} on ${route}`).toBeDefined();
+          const state = engineStreamState(stream, facts({ page: { holds: routeHoldRows(route, { holdUntil: minutes(40).toISOString() }) } }));
+          expect(state.stopped, `${stream}: ${route}`).toBe("some");
+        }
+      }
+    }
+    expect(perSubject).toEqual(["dm-conversations.find"]);
   });
 
   it("a resource breaker stops the keys of its file and leaves the stream's other keys", () => {
@@ -279,16 +446,15 @@ describe("what stops the keys of a stream", () => {
   // Ending one stop leaves the others: a resume of a paused key on a held
   // page sends nothing, and the surface must be able to say so.
   it("names a key under everything that stops it, in the order the engine judges a row", () => {
-    const state = engineStreamState("followers", facts({
-      page: {
-        pausedResources: ["followers.head"],
-        holds: [
-          pageHoldRow("auth", INDEFINITE_UNTIL),
-          resourceBreakerRow("followers", minutes(240)),
-          ...routeHoldRows("followers.page", { holdUntil: minutes(40).toISOString() }),
-        ],
-      },
-    }));
+    const stopped = {
+      pausedResources: ["followers.head", "followers.reconcile"],
+      holds: [
+        pageHoldRow("auth", INDEFINITE_UNTIL),
+        resourceBreakerRow("followers", minutes(240)),
+        ...routeHoldRows("followers.page", { holdUntil: minutes(40).toISOString() }),
+      ],
+    };
+    const state = engineStreamState("followers", facts({ page: stopped }));
     expect(state.stops).toEqual([
       { reason: "paused", by: ["keys"], resources: ["followers.head"], until: null },
       { reason: "page_hold", by: ["auth"], resources: ["followers.head", "fan-profiles.lookup"], until: null },
@@ -296,6 +462,15 @@ describe("what stops the keys of a stream", () => {
       { reason: "route_hold", by: ["followers.page"], resources: ["followers.head"], until: minutes(40) },
     ]);
     expect(state).toMatchObject({ stopped: "all", paused: false });
+    // Work the route's hold put off is named under the hold too, whatever
+    // else stops its key: a resume alone would send nothing of it.
+    const walk = engineStreamState("followers_reconcile", facts({ page: stopped, rows: [putOffRow("followers.reconcile", minutes(40))] }));
+    expect(walk.stops.map((stop) => [stop.reason, stop.resources])).toEqual([
+      ["paused", ["followers.reconcile"]],
+      ["page_hold", ["followers.reconcile", "fan-profiles.lookup"]],
+      ["resource_hold", ["followers.reconcile"]],
+      ["route_hold", ["followers.reconcile"]],
+    ]);
   });
 
   it("hold rows this build cannot read stop every key", () => {
@@ -306,7 +481,7 @@ describe("what stops the keys of a stream", () => {
   });
 
   it("engineStops answers for any set of keys, a key without a lever among them", () => {
-    const held = page({ holds: [pageHoldRow("auth", INDEFINITE_UNTIL)] });
+    const held = facts({ page: { holds: [pageHoldRow("auth", INDEFINITE_UNTIL)] } });
     // A deletion mark sends nothing: no page hold stops it.
     expect(engineStops(["dm-live.deletions"], held)).toEqual({ stops: [], stopped: "none", paused: false });
     expect(engineStops(["dm-live.deletions", "ws.connect"], held)).toMatchObject({
@@ -314,6 +489,23 @@ describe("what stops the keys of a stream", () => {
       stops: [{ reason: "page_hold", by: ["auth"], resources: ["ws.connect"], until: null }],
     });
     expect(engineStops([], held)).toEqual({ stops: [], stopped: "none", paused: false });
+    // The page's rows count: a key whose work a route's hold put off is
+    // stopped, a key whose row waits for anything else is not.
+    const hold = { holds: routeHoldRows("payouts.requests", { holdUntil: minutes(40).toISOString() }) };
+    const keys = ["payouts.daily", "payouts.walk", "posts.refresh"];
+    // `payouts.walk` reads that route alone; the poll reads the methods too,
+    // and the route's own interval put it off a minute past the hold: one
+    // stop, until the hold's end — from then on the poll is queued.
+    expect(engineStops(keys, facts({ page: hold, rows: [putOffRow("payouts.daily", minutes(41)), row("posts.refresh", { id: 2 })] }))).toEqual({
+      stopped: "some",
+      paused: false,
+      stops: [{ reason: "route_hold", by: ["payouts.requests"], resources: ["payouts.daily", "payouts.walk"], until: minutes(40) }],
+    });
+    // Put off for less than the hold lasts: stopped until it is due again.
+    expect(engineStops(keys, facts({ page: hold, rows: [putOffRow("payouts.daily", minutes(2))] })).stops).toEqual([
+      { reason: "route_hold", by: ["payouts.requests"], resources: ["payouts.daily"], until: minutes(2) },
+      { reason: "route_hold", by: ["payouts.requests"], resources: ["payouts.walk"], until: minutes(40) },
+    ]);
   });
 });
 
@@ -348,6 +540,34 @@ describe("a Settings block of an engine page", () => {
       }],
       ["followers_reconcile", { stopped: "none", stops: [], paused: false, activeWork: 0 }],
     ]);
+  });
+
+  // The block's line names every key the hold stops: the list poll by its
+  // one route, the reconcile walk by its work the hold put off.
+  it("names the keys whose work a route's hold put off beside those all of whose routes it holds", () => {
+    const block = buildEngineDomainBlock("audience", facts({
+      page: { holds: routeHoldRows("followers.page", { holdUntil: minutes(40).toISOString() }) },
+      counts: [
+        counts("subscribers.poll", { nextDueAt: minutes(30) }),
+        counts("followers.head", { nextDueAt: minutes(-2) }),
+        counts("followers.reconcile", { nextDueAt: minutes(40) }),
+      ],
+      rows: [putOffRow("followers.reconcile", minutes(40))],
+    }));
+    const hold = { reason: "route_hold", by: ["followers.page"], until: minutes(40).toISOString() };
+    expect(block.engine).toMatchObject({
+      stopped: "some",
+      paused: false,
+      stops: [{ ...hold, resources: ["followers.head", "followers.reconcile"] }],
+    });
+    expect(block.substreams.map((substream) => [substream.stream, substream.engine?.stopped, substream.engine?.stops])).toEqual([
+      ["subscribers", "none", []],
+      ["followers", "some", [{ ...hold, resources: ["followers.head"] }]],
+      ["followers_reconcile", "some", [{ ...hold, resources: ["followers.reconcile"] }]],
+    ]);
+    // The block's next read is of the key nothing stops.
+    expect(block.nextDueAt).toBe(minutes(30).toISOString());
+    expect(block.substreams[2]).toMatchObject({ nextDueAt: null, statusReason: { code: "route_hold" } });
   });
 
   it("says a 429's hold of its route and has no next read while it stands", () => {

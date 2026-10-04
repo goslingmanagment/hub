@@ -25,6 +25,7 @@ import {
   estimateSlotOpensAt,
   explainWork,
   ownerRunning,
+  routePutOffUntil,
   type StatusPage,
   type StatusWork,
   type WaitingReason,
@@ -206,12 +207,22 @@ function statusWorkOf(work: SyncWorkRow): StatusWork {
 // owner's pause (the page, the requests class, the key), and what the hold
 // evaluator says of a request of the key (`engine/admission.ts` `heldByScope`,
 // the rule the actor admits by) — the page's own hold, the breaker of the
-// key's resource file, a 429's hold of every route the key reads. Every cause
-// is listed, not the first: a key the owner paused on a page Fansly refuses
-// is stopped by both, and ending one leaves the other. A route's own pace is
-// not a stop: work it puts off is queued. The route holds are read from the
-// page's hold set alone (no send is counted): this is about holds, and it
-// costs no read of the attempt journal.
+// key's resource file, a 429's hold of its routes. Every cause is listed, not
+// the first: a key the owner paused on a page Fansly refuses is stopped by
+// both, and ending one leaves the other.
+//
+// A 429's hold stops a key in the two ways the actor meets it. Every route the
+// key reads is held: the pick leaves the key out until one opens. Or one of
+// them is, and the request the key's work planned took it: the final check
+// before the admission put the work off until the route opens (`deferForRoute`)
+// — a key that reads several routes (`posts.refresh`: the timeline and the
+// tips; `followers.reconcile`; the catalogue and statistics reads) is picked
+// while one of them is open, so such a hold shows only on its row. That row is
+// read for the keys that work per page (`putOff`: one row a key); a key that
+// works per subject is judged by its routes alone. A route's own pace is not a
+// stop: work it puts off is queued. The route holds are read from the page's
+// hold set alone (no send is counted): this is about holds, and it costs no
+// read of the attempt journal.
 
 export const ENGINE_STOP_REASONS = ["paused", "page_hold", "resource_hold", "route_hold"] as const;
 export type EngineStopReason = (typeof ENGINE_STOP_REASONS)[number];
@@ -228,8 +239,9 @@ export interface EngineStop {
   by: string[];
   /** The registry keys it stops, in registry order. */
   resources: string[];
-  /** When it ends. Null: no instant ends it — a pause, refused credentials,
-   *  rows nobody can read. */
+  /** When it ends (for work a hold of one of its routes put off: when the
+   *  work is due again, or the hold ends if that is sooner). Null: no instant
+   *  ends it — a pause, refused credentials, rows nobody can read. */
   until: Date | null;
 }
 
@@ -246,22 +258,35 @@ export interface EngineStops {
 }
 
 /** What the stops of a set of keys are judged from: the page's pauses, its
- *  hold set and the holds of its routes, read once. */
+ *  hold set and the holds of its routes, read once, and the page-level work a
+ *  route put off. */
 interface StopFacts {
   page: Pick<SyncPageRow, "pausedAll" | "pausedRequests" | "pausedResources">;
   holds: HoldSet;
   /** The route admission over the route holds alone; null: the route state
    *  does not read (the page is then held as a whole, `unreadable`). */
   routes: RouteAdmissionView | null;
+  /** The keys whose page-level row the route of its planned request put off,
+   *  with when the row is due again (`routePutOffUntil`). */
+  putOff: ReadonlyMap<string, Date>;
 }
 
-function stopFactsOf(page: SyncPageRow, holds: HoldSet, now: Date): StopFacts {
+/** The page and its page-level rows: what the stops of its keys are read from. */
+type StopSource = Pick<EngineStatusFacts, "page" | "pageRows">;
+
+function stopFactsOf(source: StopSource, holds: HoldSet, now: Date): StopFacts {
+  const putOff = new Map<string, Date>();
+  for (const row of source.pageRows) {
+    const until = routePutOffUntil(statusWorkOf(row), now);
+    if (until !== null) putOff.set(row.resource, until);
+  }
   return {
-    page,
+    page: source.page,
     holds,
     routes: holds.routes.ok
       ? routeAdmissionView(new RouteClocks({ sends: [], state: holds.routes.state }), FANSLY_RESOURCE_SPECS, now)
       : null,
+    putOff,
   };
 }
 
@@ -290,10 +315,28 @@ function keyStops(key: string, facts: StopFacts, now: Date): StopCause[] {
   if (pause !== null) causes.push(pause);
   // A key without requests never waits on the page's hold or on a route.
   const sends = fanslyResourceSpec(key)?.http !== false;
-  const held = heldByScope(facts.holds, sends ? facts.routes : null, { work: { resource: key } }, now);
+  const routes = sends ? facts.routes : null;
+  const held = heldByScope(facts.holds, routes, { work: { resource: key } }, now);
   if (held.page !== null && sends) causes.push({ reason: "page_hold", by: [held.page.kind], until: stopEnd(held.page.until) });
   if (held.resource !== null) causes.push({ reason: "resource_hold", by: [held.resource.file], until: held.resource.until });
-  if (held.route?.scope === "route_hold") causes.push({ reason: "route_hold", by: [...held.route.held], until: held.route.until });
+  if (held.route?.scope === "route_hold") {
+    // Every route of the key is held: until the first of them opens.
+    causes.push({ reason: "route_hold", by: [...held.route.held], until: held.route.until });
+    return causes;
+  }
+  // One of its routes is open. The evaluator is then asked as it is of the
+  // row itself (`explainWork`): work its route put off waits on a hold while
+  // one keeps a route of the key closed.
+  const putOffUntil = facts.putOff.get(key) ?? null;
+  if (putOffUntil === null) return causes;
+  const putOff = heldByScope(facts.holds, routes, { work: { resource: key, putOffUntil } }, now).route;
+  if (putOff?.scope === "route_hold") {
+    // The stop stands while the work is put off and a hold keeps a route
+    // closed: it ends with the first of the two (a route's own interval may
+    // put the work off past its hold — from the hold's end it is queued).
+    const holdsEnd = latest(putOff.held.map((route) => routes?.routeOpensAt(route)?.at));
+    causes.push({ reason: "route_hold", by: [...putOff.held], until: earliest([putOff.until, holdsEnd]) });
+  }
   return causes;
 }
 
@@ -322,9 +365,9 @@ function stopsOfKeys(keys: readonly string[], facts: StopFacts, now: Date): Engi
 }
 
 /** What stops the registry keys `keys` of a page from sending now, and how
- *  much of them that is. */
-export function engineStops(keys: readonly string[], page: SyncPageRow, now: Date = page.dbNow): EngineStops {
-  return stopsOfKeys(keys, stopFactsOf(page, holdSetOf(page.holds), now), now);
+ *  much of them that is: by the page's row and its page-level work. */
+export function engineStops(keys: readonly string[], source: StopSource, now: Date = source.page.dbNow): EngineStops {
+  return stopsOfKeys(keys, stopFactsOf(source, holdSetOf(source.page.holds), now), now);
 }
 
 type EngineSubstream = SyncDomainBlockStatus["substreams"][number];
@@ -403,7 +446,7 @@ export function engineStreamState(
   const succeededAt = latest(keys.map((key) => facts.appliedAt.get(key)));
   const activeWork = counts.reduce((sum, row) => sum + row.active, 0);
   const holds = holdSetOf(facts.page.holds);
-  const stopFacts = stopFactsOf(facts.page, holds, now);
+  const stopFacts = stopFactsOf(facts, holds, now);
   const { stops, stopped, paused } = stopsOfKeys(keys, stopFacts, now);
   const stoppedKeys = new Set(stops.flatMap((stop) => stop.resources));
   const nextDueAt = earliest(counts.filter((row) => !stoppedKeys.has(row.resource)).map((row) => row.nextDueAt));
@@ -568,7 +611,7 @@ export function buildEngineDomainBlock(
 ): SyncDomainBlockStatus {
   const substreams = ENGINE_BLOCK_STREAMS[block].map(({ stream, role }) => engineSubstream(stream, role, facts, now));
   const blockKeys = engineBlockKeys(block);
-  const { stops, stopped, paused } = engineStops(blockKeys, facts.page, now);
+  const { stops, stopped, paused } = engineStops(blockKeys, facts, now);
   const attention = substreams.find((substream) => substream.needsAttention) ?? null;
   const refusal = engineCredentialsRefusal(facts.page, now);
   const credentialsRefused = refusal !== null;

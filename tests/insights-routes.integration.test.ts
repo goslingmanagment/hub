@@ -984,6 +984,56 @@ describe("WP-S1 serving routes: media, tags and coverage", () => {
     }
     expect((await read()).get("dm_messages")).toMatchObject({ stopped: "none", stops: [], nextDueAt: "2026-08-20T12:45:00.000Z" });
   });
+
+  // S4-35 (review): "Posts [reading]" stood above "posts.refresh: endpoint
+  // held (429) until …". A key that reads several routes is picked while one
+  // of them is open, so a hold of the route its request takes shows only on
+  // its row — the final check before the admission leaves it `pacer`, due
+  // when the route opens (`deferForRoute`). The verdict reads that row.
+  it("a 429's hold of one of a key's routes stops the key once it has put the key's work off", async (context) => {
+    if (!requireServer(context)) return;
+    const target = { pool: testDb!.pool, db: testDb!.db };
+    const posts = async () => {
+      const response = await get(`/api/v1/pages/${PAGE}/stats/coverage`);
+      expect(response.statusCode).toBe(200);
+      return statsCoverageResponseSchema.parse(response.json()).engine!.streams.find((row) => row.stream === "posts")!;
+    };
+    const dueAgain = new Date(Date.now() + 1_800_000);
+    try {
+      // `posts.refresh` reads the timeline and the tips; the timeline is held
+      // for an hour and the poll is due: its next request may take the tips.
+      await seedRouteState(target, { pageId, route: "posts.timeline", holdSeconds: 3_600, last429SecondsAgo: 30 });
+      await testDb!.pool.query(
+        `insert into sync_work (page_id, shadow, resource, subject, kind, class, state, due_at)
+         values ($1, false, 'posts.refresh', '', 'poll', 'planned', 'open', '2026-08-20T12:00:00.000Z')`,
+        [pageId],
+      );
+      expect(await posts()).toMatchObject({
+        resources: ["posts.refresh", "posts.backfill", "posts.engagement"],
+        activeWork: 1, stopped: "none", stops: [], nextDueAt: "2026-08-20T12:00:00.000Z",
+      });
+      // Its request took the timeline: the final check put the poll off.
+      await testDb!.pool.query(
+        `update sync_work set due_at = $2::timestamptz, waiting_reason = 'pacer', waiting_until = $2::timestamptz
+          where page_id = $1 and resource = 'posts.refresh' and state = 'open'`,
+        [pageId, dueAgain.toISOString()],
+      );
+      expect(await posts()).toMatchObject({
+        activeWork: 1,
+        paused: false,
+        stopped: "some",
+        stops: [{ reason: "route_hold", by: ["posts.timeline"], resources: ["posts.refresh"], until: dueAgain.toISOString() }],
+        // Held work has no next read.
+        nextDueAt: null,
+      });
+      // The hold over (the row still waits for its route's pace): queued again.
+      await seedRouteState(target, { pageId, route: "posts.timeline", holdSeconds: null });
+      expect(await posts()).toMatchObject({ stopped: "none", stops: [], nextDueAt: dueAgain.toISOString() });
+    } finally {
+      await testDb!.pool.query("delete from sync_work where page_id = $1 and resource = 'posts.refresh'", [pageId]);
+      await testDb!.pool.query("delete from sync_holds where page_id = $1", [pageId]);
+    }
+  });
 });
 
 describe("WP-S1 serving routes: content", () => {

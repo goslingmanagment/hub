@@ -2817,7 +2817,8 @@ const syncStreamRoleEnum = z.enum(["primary", "supporting"]);
 /** One thing that stops registry keys of a page the Fansly Sync Engine owns
  *  from sending now. `paused` is the owner's; the rest is what the engine's
  *  hold evaluator says of a request of the key: the page's own hold, the
- *  breaker of its resource file, a 429's hold of every route it reads. (A
+ *  breaker of its resource file, a 429's hold of its routes — of every route
+ *  it reads, or of one of them once that hold has put the key's work off. (A
  *  route's own pace stops nothing: work it puts off is queued.) A key stopped
  *  by several is named under each: ending one leaves the others. */
 export const syncEngineStopSchema = z.object({
@@ -2830,8 +2831,9 @@ export const syncEngineStopSchema = z.object({
   by: z.array(z.string()),
   /** The registry keys it stops. */
   resources: z.array(z.string()),
-  /** When it ends; null: no instant ends it (a pause, refused credentials,
-   *  unreadable rows). */
+  /** When it ends (work a route's hold put off: when it is due again, or the
+   *  hold ends if that is sooner); null: no instant ends it (a pause, refused
+   *  credentials, unreadable rows). */
   until: isoTimestamp.nullable(),
 });
 
@@ -5504,7 +5506,7 @@ const insightsEngineStreamSchema = z.object({
   paused: z.boolean(),
   /** How many of these keys can send nothing now — by the owner's pauses and
    *  the engine's hold evaluator (the page's hold, a resource breaker, a 429's
-   *  hold of every route of a key) — and what stops them. A stream is being
+   *  hold of a key's routes) — and what stops them. A stream is being
    *  read only when a host runs the page and this is `none`. */
   stopped: syncEngineStoppedEnum,
   stops: z.array(syncEngineStopSchema),

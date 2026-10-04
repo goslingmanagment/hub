@@ -121,6 +121,14 @@ export function ownerRunning(page: Pick<StatusPage, "mode" | "owner">, now: Date
   return ownerRunState(page, now).running;
 }
 
+/** Until when the route its request planned put the work off — the row's own
+ *  record of the final check before an admission (`deferForRoute`:
+ *  `waiting_reason = 'pacer'`, due when the route opens). Null: no route put it
+ *  off, its time has come, or its key sends nothing. */
+export function routePutOffUntil(work: Pick<StatusWork, "dueAt" | "waitingReason" | "http">, now: Date): Date | null {
+  return work.http !== false && work.waitingReason === "pacer" && work.dueAt.getTime() > now.getTime() ? work.dueAt : null;
+}
+
 /**
  * Why `work` is not being served now (design §3.9). Precedence, first match
  * wins: running → ownership_unconfirmed → paused → page_hold → quarantined →
@@ -160,7 +168,7 @@ export function explainWork(
   const sends = work.http !== false;
   // Its planned route's budget or hold put the request off (the row stores
   // `pacer`): due again when the route opens.
-  const putOffUntil = sends && work.waitingReason === "pacer" && after(work.dueAt) ? work.dueAt : null;
+  const putOffUntil = routePutOffUntil(work, now);
   const held = heldByScope(page.holds, sends ? runtime.routes ?? null : null, { work: { ...work, putOffUntil } }, now);
   if (held.page !== null && sends) {
     // Rows of the hold set this build cannot read close the page's admission.

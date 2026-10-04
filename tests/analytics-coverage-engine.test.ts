@@ -277,6 +277,60 @@ describe("held is not reading", () => {
     expect(read).not.toMatch(/\d{4}-\d{2}-\d{2}T/);
   });
 
+  // Seen in review: "Posts [reading]" and "Follower reconcile [reading]"
+  // above "…: endpoint held (429) until …". A key that reads several routes
+  // is stopped by a hold of one of them once the hold has put its work off
+  // (the server's verdict reads that row): the badge says held, and the hold
+  // is said once — by the stop, with every key it stops.
+  it("work a 429's hold of one of its routes put off is held, not reading", () => {
+    const until = "2026-10-04T19:59:42.000Z";
+    const posts = stream({
+      stream: "posts",
+      resources: ["posts.refresh", "posts.backfill", "posts.engagement"],
+      activeWork: 2,
+      nextDueAt: null,
+      stopped: "some",
+      stops: [stop("route_hold", ["posts.timeline"], ["posts.refresh", "posts.backfill"], until)],
+      reason: `posts.refresh: route_hold until ${until}`,
+      waiting: { resource: "posts.refresh", reason: "route_hold", until },
+    });
+    const reconcile = stream({
+      stream: "followers_reconcile",
+      resources: ["followers.reconcile", "fan-profiles.lookup"],
+      nextDueAt: null,
+      stopped: "some",
+      stops: [stop("route_hold", ["followers.page"], ["followers.reconcile"], until)],
+      waiting: { resource: "followers.reconcile", reason: "route_hold", until },
+    });
+    // A stream of one key: all of it is held.
+    const earnings = stream({
+      stream: "fan_earnings",
+      resources: ["fan-earnings.roster"],
+      nextDueAt: null,
+      stopped: "all",
+      stops: [stop("route_hold", ["earnings.monthly_accounts"], ["fan-earnings.roster"], until)],
+      waiting: { resource: "fan-earnings.roster", reason: "route_hold", until },
+    });
+    const html = render({ engine: engine([posts, reconcile, earnings]) });
+    expect(text(html)).not.toContain("\nreading\n");
+    expect(badge(html, "posts")).toBe("partly held");
+    expect(badge(html, "followers_reconcile")).toBe("partly held");
+    expect(badge(html, "fan_earnings")).toBe("held");
+    for (const row of [posts, reconcile, earnings]) expect(engineStreamBadge(owned, row).tone, row.stream).toBe("off");
+    const read = card(html, "posts");
+    expect(read).toContain(`\nEndpoint posts.timeline held (429) until ${panelTime(until)}: posts.refresh, posts.backfill\n`);
+    expect(card(html, "followers_reconcile")).toContain(`\nEndpoint followers.page held (429) until ${panelTime(until)}: followers.reconcile\n`);
+    expect(card(html, "fan_earnings")).toContain(`\nEndpoint earnings.monthly_accounts held (429) until ${panelTime(until)}\n`);
+    // The row's own wait would only repeat the stop for one of its keys, and
+    // held work has no next read.
+    expect(text(html)).not.toContain(": endpoint held (429)");
+    for (const name of ["posts", "followers_reconcile", "fan_earnings"]) {
+      const lines = card(html, name).split("\n");
+      expect(lines[lines.indexOf("Next due") + 1], name).toBe("—");
+    }
+    expect(html.match(/data-engine-stop/g)).toHaveLength(3);
+  });
+
   it("a breaker of one of its files holds a part of a stream: the keys it stops are named", () => {
     const until = "2026-10-04T18:08:42.000Z";
     const followers = stream({

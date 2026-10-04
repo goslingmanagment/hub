@@ -11,6 +11,7 @@ import {
   OWNER_HEARTBEAT_FRESH_MS,
   ownerRunState,
   ownerRunning,
+  routePutOffUntil,
   summarizeQueue,
   WAITING_REASONS,
   type RuntimeSnapshot,
@@ -257,6 +258,20 @@ describe("sync status: why a work row waits", () => {
     // The page's own hold, a breaker and the due time come first.
     expect(reason(work({ resource: "dm-conversations.head" }), page({}, [pageHoldRow("auth")]), held)).toBe("page_hold");
     expect(reason(work({ resource: "dm-conversations.head", dueAt: at(1_000) }), page(), held)).toBe("not_due");
+  });
+
+  // The rule `explainWork` and the stream verdict of the status surfaces
+  // (`services/sync-status-engine.ts`) read a put-off row by.
+  it("work its route put off: the row stores `pacer` and a due time ahead; a key without requests is never put off", () => {
+    const putOff = work({ waitingReason: "pacer", dueAt: at(9_000) });
+    expect(routePutOffUntil(putOff, NOW)).toEqual(at(9_000));
+    // Its time has come: its next plan meets the route again.
+    expect(routePutOffUntil({ ...putOff, dueAt: NOW }, NOW)).toBeNull();
+    // Waiting for its schedule or for other work is not a route's doing.
+    expect(routePutOffUntil({ ...putOff, waitingReason: "not_due" }, NOW)).toBeNull();
+    expect(routePutOffUntil({ ...putOff, waitingReason: "dependency" }, NOW)).toBeNull();
+    expect(routePutOffUntil({ ...putOff, waitingReason: null }, NOW)).toBeNull();
+    expect(routePutOffUntil({ ...putOff, http: false }, NOW)).toBeNull();
   });
 
   it("closed work waits for nothing", () => {

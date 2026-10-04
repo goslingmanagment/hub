@@ -849,6 +849,39 @@ describe("the engine's blocks say what is true of them", () => {
     expect(html).toContain(NEXT_LINE);
   });
 
+  // Seen in review: the reconcile walk's row under a green dot reading
+  // «Удержание эндпоинта (429)». A stream whose work a route's hold put off
+  // comes from the server stopped: its row says held, in the warning tone.
+  it("a stream whose work a route's hold put off says it is held, not its wait under a green dot", () => {
+    const until = "2026-10-02T12:05:00.000Z";
+    const hold = stop("route_hold", ["followers.page"], ["followers.head", "followers.reconcile"], until);
+    const base = engineBlock("audience").substreams[0]!;
+    const reconcile = {
+      ...base,
+      stream: "followers_reconcile" as const,
+      nextDueAt: null,
+      statusReason: { code: "route_hold", summary: `followers.reconcile: route_hold until ${until}`, waitingFor: null },
+      engine: { stopped: "some" as const, stops: [{ ...hold, resources: ["followers.reconcile"] }], paused: false, activeWork: 1 },
+    };
+    const subscribers = { ...base, stream: "subscribers" as const };
+    const block = engineBlock("audience", { substreams: [subscribers, reconcile] }, {
+      keys: ["subscribers.poll", "subscribers.history", "followers.head", "followers.reconcile", "fan-profiles.lookup"],
+      stopped: "some",
+      stops: [hold],
+    });
+    expect(engineSubstreamStateText(block, reconcile)).toBe("Частично удержано");
+    const html = cardOf(block);
+    const table = html.slice(html.indexOf('data-engine-streams="table"'), html.indexOf('data-engine-streams="list"'));
+    const walk = table.slice(table.indexOf('data-engine-stream="followers_reconcile"'));
+    expect(walk).toMatch(/^[^>]*>.*?<span class="[^"]*bg-warning-dark"><\/span><span class="text-warning-dark">Частично удержано<\/span>/);
+    // The stream that is read keeps its green dot and its wait.
+    const read = table.slice(table.indexOf('data-engine-stream="subscribers"'), table.indexOf('data-engine-stream="followers_reconcile"'));
+    expect(read).toMatch(/bg-green"><\/span><span class="text-text-secondary">Ждёт срока<\/span>/);
+    expect(html).not.toContain(">Удержание эндпоинта (429)<");
+    // The block's line names both keys the hold stops.
+    expect(html).toMatch(/Удержание эндпоинта followers\.page \(429\) до \d[\d:]*: followers\.head, followers\.reconcile<\/p>/);
+  });
+
   it("a block's streams are a table where its columns fit and one labelled block per stream where they would not", () => {
     const html = cardOf(engineBlock("financials"));
     expect(html).toContain('class="@container ');

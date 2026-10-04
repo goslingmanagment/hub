@@ -217,16 +217,25 @@ placed. The streams of two blocks share no key (`engineBlockKeys`; S4-35): a blo
 pause of one block is never half undone by a resume of another. The chat list (`dm-conversations.*`, with
 `fan-profiles.probe`) and the chat messages (`dm-messages.*`, `.catchup` among them) are such two sets.
 
-**What stops a key** (S4-35). The surfaces that describe a page stream by stream say whether a stream is being read
-from one verdict, `engineStops` (`services/sync-status-engine.ts`): for each registry key, the owner's pause (the page,
-the requests class, the key) and what the hold evaluator says of a request of the key (`engine/admission.ts`
-`heldByScope`, the rule the actor admits by) — the page's own hold (`auth`, `identity_mismatch`, `network`, or rows this
-build cannot read), the breaker of the key's resource file, a 429's hold of every route the key reads. Every cause is
-listed, not the first: ending one leaves the others. A route's own pace is no stop (work it puts off is queued). The
-route holds are read from the page's hold set alone — no read of the attempt journal — so the verdict costs the status
-reads nothing. A stream or a block is `stopped` `none` / `some` / `all` of its keys, and `nextDueAt` is the earliest due
-time of open work of a key nothing stops: a paused or held key has no next read while its stop stands. "Reading" is
-said only of keys a host runs and nothing stops.
+**What stops a key** (S4-35). The surfaces that describe a page stream by stream say whether a stream is being read from
+one verdict, `engineStops` (`services/sync-status-engine.ts`): for each registry key, the owner's pause (the page, the
+requests class, the key) and what the hold evaluator says of a request of the key (`engine/admission.ts` `heldByScope`,
+the rule the actor admits by) — the page's own hold (`auth`, `identity_mismatch`, `network`, or rows this build cannot
+read), the breaker of the key's resource file, a 429's hold of its routes. Every cause is listed, not the first: ending
+one leaves the others. A 429's hold stops a key in the two ways the actor meets it: every route the key reads is held
+(the pick leaves the key out), or one of them is and the request its work planned took it — the final check put the work
+off until the route opens (`deferForRoute`: the row stores `pacer`, due then). A key that reads several routes
+(`followers.reconcile`, `posts.refresh`, `posts.backfill`, the catalogue and statistics reads, `fan-earnings.roster`,
+`payouts.daily`) is picked while one of them is open, so such a hold shows only on its row: the verdict asks the
+evaluator about that row as "why" does (`routePutOffUntil`, `engine/status.ts`), and the stop ends when the row is due
+again, or with the hold if that is sooner. The row is read for the keys that work per page (one row a key, already among
+the status facts); a key that works per subject is judged by its routes alone — `dm-conversations.find` is the only one
+that reads several, and each of its routes is the one route of another key of its stream (pinned in
+tests/sync-engine-stream-state.test.ts). A route's own pace is no stop (work it puts off is queued). The route holds are
+read from the page's hold set alone — no read of the attempt journal — so the verdict costs the status reads nothing. A
+stream or a block is `stopped` `none` / `some` / `all` of its keys, and `nextDueAt` is the earliest due time of open
+work of a key nothing stops: a paused or held key has no next read while its stop stands. "Reading" is said only of keys
+a host runs and nothing stops.
 
 | Surface | A Fansly page the engine owns (`handover`/`live`) |
 |---|---|
