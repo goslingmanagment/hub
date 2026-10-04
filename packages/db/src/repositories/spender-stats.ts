@@ -11,6 +11,10 @@
 // - Lifetime membership (tiers, payers, silence, the queue) reads the spender
 //   projection (fan_spend_lifetime), as the Spenders shelves do, so both count
 //   the same fans; its watermark is served as `projectionAsOf`.
+// - Silence reads the messages a generation of the page reads (H-8b): the
+//   archive, or the archive ∪ dm_message_archive where the caller says the AI
+//   transcript union serves (`messageSource`), so a fan who wrote a minute ago
+//   is not counted silent while the Ping chip of the same chat says otherwise.
 // - One stats answer is one REPEATABLE READ snapshot: the tier table, the
 //   window totals and the queue summary cannot disagree with each other.
 //
@@ -41,6 +45,7 @@ import {
   type SpenderStatsCoverage,
   type SpenderStatsDayStateRow,
   type SpenderStatsDayTotals,
+  type SpenderStatsMessageSource,
   type SpenderStatsMoneyWindow,
   type SpenderStatsTier,
   type SpenderStatsTierCounts,
@@ -49,6 +54,7 @@ import {
   type TransactionType,
 } from "@agency_hub_core/shared";
 import type { Database } from "../client.ts";
+import { aiTranscriptUnionLastFanTextAtSql } from "./ai-transcript-union.ts";
 
 const READ_SNAPSHOT = { isolationLevel: "repeatable read", accessMode: "read only" } as const;
 
@@ -156,12 +162,41 @@ function buildWindowDaysQuery(scope: WindowScope): SQL {
 }
 
 /**
- * The last TEXT message of each payer's fan, over every chat of that fan on
- * the page, in whole days before `asOf`; null when the archive holds none.
- * One LATERAL probe per chat walks message_archive_account_conv_idx backwards
- * and stops at the first match.
+ * When the fan last wrote TEXT in the chat `th`, one row or none, from the
+ * store(s) the page's AI transcript reads.
+ * - `archive`: one probe that walks message_archive_account_conv_idx
+ *   backwards and stops at the first match.
+ * - `union`: the same question of the AI transcript union, which owns the
+ *   rules of what a generation reads from the two stores
+ *   (`aiTranscriptUnionLastFanTextAtSql`): one such probe per store.
  */
-function buildSilenceQuery(input: { pageId: number; asOf: Date }): SQL {
+function lastFanTextSql(pageId: number, messageSource: SpenderStatsMessageSource): SQL {
+  if (messageSource === "union") {
+    return sql`
+        select ${aiTranscriptUnionLastFanTextAtSql({ pageId, conversationRef: sql`th.platform_conversation_id` })} as last_at
+    `;
+  }
+  return sql`
+        select ma.occurred_at as last_at
+        from message_archive ma
+        where ma.account_id = ${pageId}
+          and ma.conversation_ref = th.platform_conversation_id
+          and ma.occurred_at is not null
+          and ma.is_sent_by_me = false
+          and ma.deleted_at is null
+          and ma.content_pending = false
+          and ma.text_plain ~ '[^[:space:]]'
+        order by ma.occurred_at desc
+        limit 1
+  `;
+}
+
+/**
+ * The last TEXT message of each payer's fan, over every chat of that fan on
+ * the page, in whole days before `asOf`; null when the store(s) hold none.
+ * One LATERAL probe per chat (`lastFanTextSql`).
+ */
+function buildSilenceQuery(input: { pageId: number; asOf: Date; messageSource: SpenderStatsMessageSource }): SQL {
   return sql`
     with payers as (${payersSql(input.pageId)})
     select case
@@ -172,21 +207,9 @@ function buildSilenceQuery(input: { pageId: number; asOf: Date }): SQL {
            coalesce(sum(p.lifetime_gross), 0)::bigint as lifetime_gross
     from payers p
     left join lateral (
-      select max(m.occurred_at) as last_at
+      select max(m.last_at) as last_at
       from page_dm_threads th
-      cross join lateral (
-        select ma.occurred_at
-        from message_archive ma
-        where ma.account_id = ${input.pageId}
-          and ma.conversation_ref = th.platform_conversation_id
-          and ma.occurred_at is not null
-          and ma.is_sent_by_me = false
-          and ma.deleted_at is null
-          and ma.content_pending = false
-          and ma.text_plain ~ '[^[:space:]]'
-        order by ma.occurred_at desc
-        limit 1
-      ) m
+      cross join lateral (${lastFanTextSql(input.pageId, input.messageSource)}) m
       where th.platform_account_id = ${input.pageId}
         and th.fan_id = p.fan_id
     ) lt on true
@@ -260,6 +283,8 @@ async function readAwaitingReplySummary(db: Database, pageId: number): Promise<S
 export interface PageSpenderStats {
   pageId: number;
   metricVersion: number;
+  /** The store(s) silence was read from. */
+  messageSource: SpenderStatsMessageSource;
   timeZone: string;
   asOf: Date;
   /** First and last local date of the window. */
@@ -374,7 +399,25 @@ async function readTierCounts(db: Database, scope: WindowScope) {
 }
 
 /** Window payers, new payers and what coverage needs, in one statement. */
-async function readPageFacts(db: Database, scope: WindowScope, windows: SpenderStatsWindows) {
+async function readPageFacts(
+  db: Database,
+  scope: WindowScope,
+  windows: SpenderStatsWindows,
+  messageSource: SpenderStatsMessageSource,
+) {
+  // Whether the store(s) silence reads hold any message of the page at all.
+  const hasMessages = messageSource === "union"
+    ? sql`(
+        exists (select 1 from message_archive ma where ma.account_id = ${scope.pageId})
+        or exists (
+          select 1
+          from dm_message_archive d
+          where d.platform = 'onlyfans'
+            and d.platform_account_id = ${scope.pageId}
+            and d.message_created_at is not null
+        )
+      )`
+    : sql`exists (select 1 from message_archive ma where ma.account_id = ${scope.pageId})`;
   const result = await db.execute<{
     payers_today: number;
     payers_d7: number;
@@ -429,7 +472,7 @@ async function readPageFacts(db: Database, scope: WindowScope, windows: SpenderS
       (select w.last_rebuilt_at
        from projection_watermarks w
        where w.platform_account_id = ${scope.pageId}) as projection_as_of,
-      exists (select 1 from message_archive ma where ma.account_id = ${scope.pageId}) as has_archived_messages
+      ${hasMessages} as has_archived_messages
   `);
   const row = result.rows[0];
   const projectionAsOf = toDate(row?.projection_as_of);
@@ -449,7 +492,10 @@ async function readPageFacts(db: Database, scope: WindowScope, windows: SpenderS
   };
 }
 
-async function readSilence(db: Database, input: { pageId: number; asOf: Date }) {
+async function readSilence(
+  db: Database,
+  input: { pageId: number; asOf: Date; messageSource: SpenderStatsMessageSource },
+) {
   const result = await db.execute<{ whole_days: number | null; fans: number; lifetime_gross: string }>(
     buildSilenceQuery(input),
   );
@@ -472,11 +518,23 @@ async function readSilence(db: Database, input: { pageId: number; asOf: Date }) 
  * `asOf` (the request time; nothing after it is counted). A zone that is not
  * an IANA name Intl knows throws RangeError before any read
  * (`normalizeSpenderStatsTimeZone`); the caller checks page access first.
+ *
+ * `messageSource` is where silence reads the fan's messages: `archive` unless
+ * the caller passes `union`, which it does exactly where the page's AI
+ * transcript is served from the union (OnlyFans, `aiTranscriptFreshUnionMode
+ * = serve`).
  */
 export async function getPageSpenderStats(
   db: Database,
-  input: { pageId: number; timeZone: string; asOf: Date; windowDays?: number },
+  input: {
+    pageId: number;
+    timeZone: string;
+    asOf: Date;
+    windowDays?: number;
+    messageSource?: SpenderStatsMessageSource;
+  },
 ): Promise<PageSpenderStats> {
+  const messageSource = input.messageSource ?? "archive";
   const windows = resolveSpenderStatsWindows({
     asOf: input.asOf,
     timeZone: input.timeZone,
@@ -488,9 +546,9 @@ export async function getPageSpenderStats(
     const database = tx as unknown as Database;
     const dayRows = await readDayStateRows(database, scope);
     const { tiers, payerCount } = await readTierCounts(database, scope);
-    const facts = await readPageFacts(database, scope, windows);
+    const facts = await readPageFacts(database, scope, windows, messageSource);
     const { payerCounts } = facts;
-    const silence = await readSilence(database, { pageId: input.pageId, asOf: input.asOf });
+    const silence = await readSilence(database, { pageId: input.pageId, asOf: input.asOf, messageSource });
     const queueSummary = await readAwaitingReplySummary(database, input.pageId);
 
     const days = assembleSpenderStatsDays(windows.dates, dayRows);
@@ -501,6 +559,7 @@ export async function getPageSpenderStats(
     return {
       pageId: input.pageId,
       metricVersion: SPENDER_STATS_METRIC_VERSION,
+      messageSource,
       timeZone: windows.timeZone,
       asOf: input.asOf,
       from: windows.d30.from,
@@ -646,17 +705,17 @@ async function explain(db: Database, query: SQL, options: { analyze?: boolean } 
 }
 
 /**
- * EXPLAIN of the exact silence statement (the H-8 perf gate). `analyze` runs
- * it and adds the buffers: the measurement that decides whether the archive
- * needs a partial index for fan messages; on production, run it inside a
- * read-only transaction.
+ * EXPLAIN of the exact silence statement (the H-8 perf gate), for the source
+ * named (`archive` by default). `analyze` runs it and adds the buffers: the
+ * measurement that decides whether the stores need a partial index for fan
+ * messages; on production, run it inside a read-only transaction.
  */
 export function explainPageSpenderSilenceQuery(
   db: Database,
-  input: { pageId: number; asOf: Date },
+  input: { pageId: number; asOf: Date; messageSource?: SpenderStatsMessageSource },
   options: { analyze?: boolean } = {},
 ) {
-  return explain(db, buildSilenceQuery(input), options);
+  return explain(db, buildSilenceQuery({ ...input, messageSource: input.messageSource ?? "archive" }), options);
 }
 
 /** EXPLAIN of the exact window statement for the window ending at `asOf`. */
