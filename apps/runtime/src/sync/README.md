@@ -39,6 +39,11 @@ step-3 switch, its rollback, the legacy import (every resource's import hook, th
 capability are deleted; migration 0239 parks every Fansly `page_sync_states` row for good (`paused`, blocker
 `retired`, code `fansly_sync_engine_owned` — a blocker no image clears); and the `sync_pages` mode predicate the legacy
 pickers carried through step 3 is replaced by the executor's platform set (Legacy fences, below).
+Since S4-24 no status surface describes a Fansly page by a legacy stream: `/health/sync`, the Settings blocks, the page
+summary and its connection status speak for the engine or say that nothing reads the page; the legacy monitor and the
+`sync_streams` dataset list the legacy executor's pages (OnlyFans) only; the executor's stream policy
+(`SYNC_STREAM_POLICY`) has a row for each OnlyFans stream and none for a Fansly lane; and the stream names the owner's
+levers address a Fansly page by are the registry's own lever map (A Fansly page on the status surfaces, below).
 
 ## Map
 
@@ -192,22 +197,41 @@ agent plane (`agentSyncStatus`, `agentSyncWhy`, `hub sync-status`, `hub sync-why
 "Sync now" (`syncPageRefresh`, `refreshSyncPage`) makes the page's poll rows due now and wakes its actor; it sends
 nothing itself, and a page no actor runs (`off`, or one left in `shadow`) answers 409 `sync_page_off`.
 
-### Engine-owned pages on the legacy surfaces (step 3, S3-02)
+### A Fansly page on the status surfaces and the owner's levers (step 3 S3-02, step 4 S4-24)
 
-A page in `handover`/`live` has frozen legacy streams, so the surfaces that speak in legacy streams speak for the
-engine instead; `fansly/legacy-streams.ts` maps a legacy stream to the registry keys that took it over (generated
-from the registry's `legacy` refs; `@agency_hub_core/db`'s `FANSLY_ENGINE_LEGACY_STREAMS` is its SQL copy, pinned
-equal by `tests/sync-legacy-streams.test.ts`). `off`/`shadow` pages are untouched.
+The surfaces that describe a page block by block, and the owner's levers behind them, serve two engines. A page of a
+platform the legacy executor serves (OnlyFans) is described by its legacy stream rows. A Fansly page is described by
+the Fansly Sync Engine, and by nothing else: no surface reads its `page_sync_states` rows (parked records).
 
-| Surface | On an engine page |
+The lever map is the registry's (`fansly/registry.ts`, `FANSLY_LEVER_STREAMS`): each line names a stream — a
+`sync_stream` value, because the API contracts carry these names — and the registry keys that answer to it. A key in no
+line (`FANSLY_KEYS_WITHOUT_LEVER`: the identity checks, the socket and its repair, live deletions, the alias backfill,
+the probes, media download) is addressed by its own name. `services/sync-status-engine.ts` says which lever streams
+each Settings block shows and moves (`ENGINE_BLOCK_STREAMS`), `services/sync-engine-levers.ts` which ones a "sync now"
+scope names (`FANSLY_ENGINE_SCOPE_STREAMS`). tests/sync-lever-map.test.ts pins the three and that every registry key is
+placed.
+
+| Surface | A Fansly page the engine owns (`handover`/`live`) |
 |---|---|
-| `/api/v1/health/sync` | legacy checks skipped; an `engine` block (mode, owner heartbeat age, hold, oldest due urgent work, socket, quarantine, open alerts); unhealthy on an owner silent > 90 s, an `auth`/`identity_mismatch` hold, or `handover` > 10 min |
-| Settings blocks (`syncOverview`, `pageSyncBlocks`) | every block `state: "engine"` + `engineMode`; each legacy stream from its keys' live work (last applied, next due, why the earliest waits, quarantine / vendor block); a refused credential reads `credentials_invalid` on the connection block |
+| `/api/v1/health/sync` | an `engine` block (mode, owner heartbeat age, hold, oldest due urgent work, socket, quarantine, open alerts); unhealthy on an owner silent > 90 s, an `auth`/`identity_mismatch` hold, or `handover` > 10 min. No legacy stream is judged |
+| Settings blocks (`syncOverview`, `pageSyncBlocks`) | every block `state: "engine"` + `engineMode`; each lever stream of the block from its keys' live work (last applied, next due, why the earliest waits, quarantine / vendor block); a refused credential reads `credentials_invalid` on the connection block |
 | Block buttons, `/admin/sync/trigger(-all)` | trigger ⇒ the keys' polls due now (`refreshSyncPage`); pause / resume ⇒ the keys in / out of `paused_resources` (the rest kept); reset ⇒ the keys' quarantined work requeued — `page_sync_states` never touched; `handover` ⇒ 409 `fansly_page_switching` for a lever that would read |
-| Follower reconcile reset / blast-radius override | the quarantined `followers.reconcile` row: reset cancels it and files owner demand (a fresh walk); the override reads the walk from the row's cursor and `result.quarantine`, deactivates exactly the previewed set and closes the row done. Engine pages only since step 4 (S4-17, the legacy followers walk deleted): any other Fansly page ⇒ 409 `legacy_sync_retired` |
-| Insights coverage (`/api/v1/pages/:pageLabel/stats/coverage`) | an `engine` block (mode, and per legacy stream its keys, last applied, next due, paused, why the earliest waits, quarantine / vendor block, largest failure count) in place of the legacy lanes' gates, budgets and progress (step 4 S4-18); `null` when the engine does not own the page |
-| Top spenders `source` (`/api/v1/pages/:pageLabel/top-spenders`) | `fan_earnings` from `fan-earnings.roster`'s live work: `ramped` unless the owner paused it (`flag_off`, as for a page the engine does not own), its last applied read, its largest failure count |
-| Dataset `sync_streams` | rows from the live work per legacy stream: `failed` (quarantined / vendor-blocked) > `paused` > `running` > `ok`; success = the newest applied read (a page-level key's at any age, a thread / target / fan key's within 24 h); failure = a standing one (an active row whose last outcome failed); every lookup bounded per key, never by the journal's length |
+| Page summary (`syncUx` of the overview, the sidebar's connections, the credentials tab) | `buildEnginePageSyncUx`, from the page's row and the counts of its active work: new credentials needed (an `auth`/`identity_mismatch` hold), work of a Settings block quarantined or refused by Fansly, a switch in progress, or managed by the engine |
+| Connection status (`/admin/connections`, the health page item) | `expired` while the engine holds the page for its credentials, else by the age of the account read the engine stamps on the page (`account.poll`); no legacy run is consulted |
+| Follower reconcile reset / blast-radius override | the quarantined `followers.reconcile` row: reset cancels it and files owner demand (a fresh walk); the override reads the walk from the row's cursor and `result.quarantine`, deactivates exactly the previewed set and closes the row done |
+| Insights coverage (`/api/v1/pages/:pageLabel/stats/coverage`) | an `engine` block: mode, and per lever stream its keys, last applied, next due, paused, why the earliest waits, quarantine / vendor block, largest failure count |
+| Top spenders `source` (`/api/v1/pages/:pageLabel/top-spenders`) | `fan_earnings` from `fan-earnings.roster`'s live work: `ramped` unless the owner paused it (`flag_off`), its last applied read, its largest failure count |
+
+A Fansly page the engine does not own (no engine row, or one in `off` / `shadow`) is read by nothing. `/health/sync`
+reports it unhealthy with the one issue `engine:not_live` and no `engine` block; its Settings blocks are `not_available`
+with the reason `fansly_sync_engine_off`; its summary reads "Not syncing"; a block lever, a trigger scope and the
+follower reconcile levers answer 409 `legacy_sync_retired`; the insights `engine` block is `null` and the top-spenders
+source `flag_off`.
+
+Not for a Fansly page at all: the legacy monitor (`/api/v1/sync/status`, `pnpm cli sync status` — the rows are the
+legacy executor's pages and streams, the events and `/api/v1/sync/requests` its journal as it stands; `sync page
+status` and `/api/v1/sync/pages` are the engine's) and the agent dataset `sync_streams` (the legacy executor's stream
+rows; the engine's state is `agentSyncStatus` / `agentSyncWhy`).
 
 A quarantine records why in `sync_work.result.quarantine` (`{reason, detail, attemptId, at}`: an `ApplyQuarantine`
 detail or a contract violation's field). `pnpm cli sync work list --page P [--state quarantined] [--resource R]`

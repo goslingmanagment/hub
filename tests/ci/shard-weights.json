@@ -198,7 +198,6 @@
     "tests/page-sync-lease-fencing.integration.test.ts": 2.7,
     "tests/page-sync-provider-cooldown.integration.test.ts": 2.9,
     "tests/page-sync-seed-count.integration.test.ts": 2.2,
-    "tests/page-sync-starvation-aging.integration.test.ts": 2,
     "tests/page-sync-tombstone.integration.test.ts": 0.9,
     "tests/posts-sync-state.integration.test.ts": 1.2,
     "tests/ppv-purchase-projections.integration.test.ts": 2.7,

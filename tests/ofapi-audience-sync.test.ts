@@ -178,18 +178,22 @@ describe("audience eligibility and stream filtering", () => {
 });
 
 describe("platform-aware sync dependencies", () => {
-  it("keeps the Fansly ordering dependencies intact", () => {
-    expect(getSyncStreamDependenciesForPlatform("fansly", "dm_conversations"))
-      .toEqual(["light", "top_spenders", "transactions", "subscribers", "followers"]);
+  // Step 4, S4-24: the ordering is the legacy executor's, and it runs no
+  // stream of a Fansly page. A Fansly page's rows are records with no
+  // dependency to wait for.
+  it("gives a Fansly page's streams no dependency: the executor runs none of them", () => {
+    for (const stream of ["dm_conversations", "dm_messages", "top_spenders", "followers", "light"] as const) {
+      expect(getSyncStreamDependenciesForPlatform("fansly", stream), stream).toEqual([]);
+    }
   });
 
   it("keeps legacy/unmapped OnlyFans DM streams gated on their prerequisites", () => {
     expect(getSyncStreamDependenciesForPlatform("onlyfans", "dm_conversations"))
-      .toEqual(["light", "top_spenders", "transactions", "subscribers", "followers"]);
-    expect(getSyncStreamDependenciesForPlatform("onlyfans", "dm_messages"))
-      .toEqual(["light", "top_spenders", "transactions", "subscribers", "followers", "dm_conversations"]);
+      .toEqual(["light", "top_spenders", "transactions", "subscribers"]);
     expect(getSyncStreamDependenciesForPlatform("onlyfans", "top_spenders"))
       .toEqual(["transactions"]);
+    // The retired OnlyFans history crawler is no stream of the executor.
+    expect(getSyncStreamDependenciesForPlatform("onlyfans", "dm_messages")).toEqual([]);
   });
 
   it("strips legacy prerequisites only for OFAPI-DM-eligible OnlyFans DM streams", () => {
@@ -198,11 +202,6 @@ describe("platform-aware sync dependencies", () => {
       stream: "dm_conversations",
       onlyFansOfapiDmEligible: true,
     })).toEqual([]);
-    expect(getSyncStreamDependenciesForPage({
-      platform: "onlyfans",
-      stream: "dm_messages",
-      onlyFansOfapiDmEligible: true,
-    })).toEqual(["dm_conversations"]);
     expect(getSyncStreamDependenciesForPage({
       platform: "onlyfans",
       stream: "top_spenders",

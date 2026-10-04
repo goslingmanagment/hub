@@ -15,7 +15,6 @@ import {
   createFanslyPage,
   createModel,
   createOnlyFansPage,
-  ensurePageSyncStates,
   finishSyncRequestAttempt,
   getNotificationIncidentByKey,
   insertSyncRequestAttempt,
@@ -37,6 +36,7 @@ import {
   startIntegrationTestDatabase,
   type StartedTestDatabase,
 } from "./helpers/db.ts";
+import { seedFormerFanslyRows } from "./helpers/fansly-legacy-rows.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 
 describe("notification incidents integration", () => {
@@ -207,12 +207,8 @@ describe("notification incidents integration", () => {
       modelId: model.id,
       label: "threshold-page",
     });
-    await ensurePageSyncStates(testDb.db, {
-      pageId: proxiedPage.id,
-    });
-    await ensurePageSyncStates(testDb.db, {
-      pageId: thresholdPage.id,
-    });
+    await seedFormerFanslyRows(testDb.pool, proxiedPage.id, new Date());
+    await seedFormerFanslyRows(testDb.pool, thresholdPage.id, new Date());
 
     const app = createTestAppContext(testDb);
 
@@ -397,9 +393,7 @@ describe("notification incidents integration", () => {
       modelId: model.id,
       label: "latest-proxy-page",
     });
-    await ensurePageSyncStates(testDb.db, {
-      pageId: page.id,
-    });
+    await seedFormerFanslyRows(testDb.pool, page.id, new Date());
 
     const app = createTestAppContext(testDb);
     const run = await startSyncRun(testDb.db, {
@@ -698,9 +692,7 @@ describe("notification incidents integration", () => {
       modelId: model.id,
       label: "recovery-page",
     });
-    await ensurePageSyncStates(testDb.db, {
-      pageId: page.id,
-    });
+    await seedFormerFanslyRows(testDb.pool, page.id, new Date());
     await openNotificationIncident(testDb.db, {
       incidentKey: `auth_blocked:${page.id}`,
       kind: "auth_blocked",
@@ -771,9 +763,7 @@ describe("notification incidents integration", () => {
       modelId: model.id,
       label: "stale-recovery-page",
     });
-    await ensurePageSyncStates(testDb.db, {
-      pageId: page.id,
-    });
+    await seedFormerFanslyRows(testDb.pool, page.id, new Date());
 
     const recoveredAt = new Date("2026-03-15T12:00:00.000Z");
     const newerFailureAt = new Date("2026-03-15T12:00:01.000Z");

@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   acquirePageSyncLease,
-  createFanslyPage,
   createModel,
+  createOnlyFansPage,
   deletePageByLabel,
   ensurePageSyncStates,
   listRunnablePageSync,
@@ -18,7 +18,9 @@ import { EVERY_PLATFORM } from "./helpers/page-sync-scope.ts";
 // planner/lease queries used to ignore page status entirely — a deleted page
 // kept getting scheduled, leased, and thrown on ("Page not found") every
 // reclaim cycle, forever. These pins hold the planner surface to the
-// tombstone: no seeding, no runnable rows, no lease for a deleted page.
+// tombstone: no seeding, no runnable rows, no lease for a deleted page. The
+// page is an OnlyFans page: the planner seeds and runs the legacy executor's
+// platforms only (step 4).
 describe("page sync tombstone", () => {
   it("stops seeding, scheduling and leasing a page once it is tombstoned", async () => {
     const testDb = await startIntegrationTestDatabase();
@@ -34,7 +36,7 @@ describe("page sync tombstone", () => {
       if (!model) {
         throw new Error("Expected the model to be created");
       }
-      const page = await createFanslyPage(testDb.db, {
+      const page = await createOnlyFansPage(testDb.db, {
         modelId: model.id,
         label: "tombstone-page",
       });
@@ -42,10 +44,11 @@ describe("page sync tombstone", () => {
         throw new Error("Expected the page to be created");
       }
 
-      await ensurePageSyncStates(testDb.db, { pageId: page.id });
+      const seeded = await ensurePageSyncStates(testDb.db, { pageId: page.id });
+      expect(seeded.length).toBeGreaterThan(0);
       await requestPageSync(testDb.db, {
         pageId: page.id,
-        streams: ["followers"],
+        streams: ["subscribers"],
         source: "manual",
       });
 

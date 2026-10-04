@@ -12,12 +12,11 @@ import {
   type Database,
   type PageFollowDeactivationCandidate,
   type SyncPageRow,
-  type SyncStream,
 } from "@agency_hub_core/db";
 import { sql } from "drizzle-orm";
 
 import type { AppContext } from "../bootstrap.ts";
-import { fanslyKeysForStreams } from "../sync/fansly/legacy-streams.ts";
+import { fanslyKeysForStreams } from "../sync/fansly/registry.ts";
 import {
   followersReconcileCursorAfterOverride,
   parseFollowersReconcileCursor,
@@ -25,6 +24,7 @@ import {
 import { recordAudit } from "./auth.ts";
 import { BadRequestError, ConflictError, LegacySyncRetiredError, NotFoundError } from "./errors.ts";
 import { engineOwnedSyncPageByLabel } from "./sync-engine-levers.ts";
+import { engineBlockStreams } from "./sync-status-engine.ts";
 import {
   followersReconcileCandidateGenerationBuckets,
   followersReconcileCandidateSha256,
@@ -33,11 +33,6 @@ import {
 
 const FOLLOWERS_RECONCILE_BLAST_RADIUS_BLOCKER =
   "followers_reconcile_deactivation_blast_radius";
-const AUDIENCE_STREAMS = [
-  "subscribers",
-  "followers",
-  "followers_reconcile",
-] as const satisfies readonly SyncStream[];
 
 type OverrideAuditContext = {
   source: string;
@@ -196,7 +191,7 @@ async function readEngineBlockedReconcile(db: Database, pageId: number): Promise
 /** The engine's audience precondition: every audience key paused (or the
  *  whole page), and no audience read in flight. */
 async function readEngineAudience(db: Database, page: SyncPageRow) {
-  const keys = fanslyKeysForStreams(AUDIENCE_STREAMS);
+  const keys = fanslyKeysForStreams(engineBlockStreams("audience"));
   const paused = page.pausedAll || keys.every((key) => page.pausedResources.includes(key));
   const counts = await countActiveLiveWorkByResource(db, { pageIds: [page.pageId] });
   const leaseFree = counts.every((row) => !keys.includes(row.resource) || row.running === 0);

@@ -1530,33 +1530,3 @@ export async function clearConversationSyncHealth(db: Database, conversationId: 
       and not exists (select 1 from kept)
   `);
 }
-
-/** Conversation-level coverage debt per account: breaker rows still carrying
- * failures. They clear only when THEIR conversation is read successfully —
- * the health signal while poison threads sit out. A thread the lane no longer
- * selects (excluded, hidden, unbound) sits out for good and stops counting;
- * its row stays and applies again if the thread returns. Rows kept only for
- * preferred_page_limit (failure_count = 0) do not count. */
-export async function countConversationSyncFailuresByAccount(
-  db: Database,
-  input?: { platformAccountIds?: readonly number[] },
-): Promise<Array<{ platformAccountId: number; failingConversationCount: number }>> {
-  const accountFilter = input?.platformAccountIds && input.platformAccountIds.length > 0
-    ? sql`and h.platform_account_id in (${sql.join(input.platformAccountIds.map((id) => sql`${id}`), sql`, `)})`
-    : sql``;
-  const result = await db.execute<{ platformAccountId: NumericValue; count: NumericValue }>(sql`
-    select h.platform_account_id as "platformAccountId", count(*)::bigint as "count"
-    from page_dm_message_sync_health h
-    join page_dm_threads c on c.id = h.conversation_id
-    where h.failure_count > 0
-      ${accountFilter}
-      and c.is_visible = true
-      and c.fan_id is not null
-      and ${dmMessageSyncEligibleSql("c")}
-    group by h.platform_account_id
-  `);
-  return result.rows.map((row) => ({
-    platformAccountId: normalizeNumber(row.platformAccountId, "platformAccountId"),
-    failingConversationCount: normalizeNumber(row.count, "count"),
-  }));
-}

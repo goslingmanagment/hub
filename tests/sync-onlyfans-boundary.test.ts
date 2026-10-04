@@ -4,6 +4,19 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+  getSyncStreamsForPlatform,
+  isLegacyExecutorStream,
+  LEGACY_EXECUTOR_PLATFORMS,
+  LEGACY_EXECUTOR_STREAMS,
+  resolvePageSyncPriority,
+  SYNC_DOMAIN_POLICY,
+  SYNC_STREAM_DEPENDENCIES,
+  SYNC_STREAM_POLICY,
+  SYNC_STREAMS,
+  syncStreamPolicy,
+} from "@agency_hub_core/db";
+
+import {
   appPlatformRegistry,
   fanslyPlatformAdapter,
   onlyfansPlatformAdapter,
@@ -108,6 +121,63 @@ describe("the planner and the executor stand on the boundary", () => {
   });
 });
 
+// Step 4, S4-24: the executor's stream policy has a row for each stream it
+// runs and for nothing else. The rows of the Fansly lanes went with the last
+// legacy status surface that read them; their names stay in the vocabulary
+// (`SYNC_STREAMS`, the database enum) as records.
+describe("the legacy executor's stream policy", () => {
+  it("has a row exactly for the streams OnlyFans declares, and Fansly has none", () => {
+    expect([...LEGACY_EXECUTOR_STREAMS]).toEqual([
+      "light", "transactions", "fan_identities", "top_spenders", "subscribers", "dm_conversations", "posts",
+    ]);
+    expect(Object.keys(SYNC_STREAM_POLICY).sort()).toEqual([...LEGACY_EXECUTOR_STREAMS].sort());
+    expect(getSyncStreamsForPlatform("onlyfans")).toEqual([...LEGACY_EXECUTOR_STREAMS]);
+    expect(onlyfansPlatformAdapter.capabilities.streams).toEqual([...LEGACY_EXECUTOR_STREAMS]);
+    expect(getSyncStreamsForPlatform("fansly")).toEqual([]);
+    for (const [stream, policy] of Object.entries(SYNC_STREAM_POLICY)) expect(policy.stream).toBe(stream);
+  });
+
+  it("the database package derives the same platform set the registry declares", () => {
+    expect([...LEGACY_EXECUTOR_PLATFORMS]).toEqual(legacyExecutorPlatforms());
+    expect([...LEGACY_EXECUTOR_PLATFORMS]).toEqual(["onlyfans"]);
+  });
+
+  it("knows a stream of the vocabulary it does not run as a record: no policy, no priority", () => {
+    const records = SYNC_STREAMS.filter((stream) => !isLegacyExecutorStream(stream));
+    expect(records).toEqual([
+      "followers", "followers_reconcile", "dm_messages", "fan_earnings", "purchase_history",
+      "stats_snapshot", "notifications", "catalog", "post_replies", "payouts", "media_stats",
+    ]);
+    for (const stream of records) {
+      expect(syncStreamPolicy(stream), stream).toBeNull();
+      expect(resolvePageSyncPriority(stream, "manual"), stream).toBe(0);
+    }
+    for (const stream of LEGACY_EXECUTOR_STREAMS) {
+      expect(syncStreamPolicy(stream), stream).toBe(SYNC_STREAM_POLICY[stream]);
+      expect(resolvePageSyncPriority(stream, "scheduled"), stream).toBeGreaterThan(0);
+    }
+  });
+
+  it("builds its blocks and its dependencies from its own streams only", () => {
+    const blockStreams = Object.values(SYNC_DOMAIN_POLICY).flatMap((domain) => [...domain.primaryStreams, ...domain.supportingStreams]);
+    for (const stream of blockStreams) expect(isLegacyExecutorStream(stream), stream).toBe(true);
+    // OnlyFans history is acquired by its mirror jobs: the block has no stream.
+    expect(SYNC_DOMAIN_POLICY.messages_history).toMatchObject({ primaryStreams: [], supportingStreams: [] });
+    expect(SYNC_DOMAIN_POLICY.audience).toMatchObject({ primaryStreams: ["subscribers"], supportingStreams: [] });
+    expect(SYNC_STREAM_DEPENDENCIES).toEqual({
+      top_spenders: ["transactions"],
+      dm_conversations: ["light", "top_spenders", "transactions", "subscribers"],
+    });
+  });
+
+  it("the page-sync repository carries no Fansly policy: no starvation aging, no followers seed", () => {
+    const pageSync = readFileSync(join(ROOT, "packages/db/src/repositories/page-sync.ts"), "utf8");
+    // (tests/sync-lever-map.test.ts pins that the starvation aging's names are gone from the tree.)
+    expect(pageSync).not.toMatch(/starved|aging/i);
+    expect(pageSync).not.toMatch(/followersReconcileNeedsRecovery|activeFollowerCount/);
+  });
+});
+
 describe("the legacy executor holds nothing of Fansly (ratchet)", () => {
   it("has no Fansly module", () => {
     expect(legacyFiles).toEqual([
@@ -118,9 +188,6 @@ describe("the legacy executor holds nothing of Fansly (ratchet)", () => {
       "executor-handlers.ts",
       "executor-types.ts",
       "executor.ts",
-      // The status readers' view of a legacy followers_reconcile row (no
-      // handler, no request); goes with the legacy Fansly status surfaces.
-      "followers-reconcile-floor.ts",
       "observability.ts",
       "ofapi-audience-sync.ts",
       "ofapi-dm-sync.ts",

@@ -708,3 +708,88 @@ export function fanslyResourceSpec(key: string): ResourceSpec | null {
 export function createFanslyRegistry(options: { metrics?: Metrics } = {}): EngineRegistry {
   return createEngineRegistry(FANSLY_RESOURCE_SPECS, options);
 }
+
+// ── the lever map (step 4, S4-24) ────────────────────────────────────────────
+//
+// The owner's levers (the Settings block buttons, the "sync now" scopes) and
+// the surfaces that describe a Fansly page part by part (the Settings blocks,
+// the insights coverage, the top-spenders source) address the keys above in
+// groups: one stream name for the keys that read one kind of data. The names
+// are `sync_stream` values because the API contracts carry them; nothing of
+// the legacy engine stands behind them (it ran a lane per name until step 4).
+// A key answers to every stream listed with it; a key in no line answers to
+// no such lever (`FANSLY_KEYS_WITHOUT_LEVER`) and is addressed by its own name
+// (`sync page pause --resource`, `sync work`).
+
+/** One line of the lever map. */
+export interface FanslyLeverStream {
+  stream: SyncStream;
+  /** The registry keys that answer to the name, in registry order. */
+  keys: readonly string[];
+}
+
+export const FANSLY_LEVER_STREAMS: readonly FanslyLeverStream[] = [
+  { stream: "light", keys: ["account.poll"] },
+  {
+    stream: "dm_conversations",
+    keys: [
+      "dm-conversations.head", "dm-conversations.full", "dm-conversations.find", "dm-conversations.detail",
+      "dm-conversations.ws-down", "dm-messages.catchup", "fan-profiles.probe",
+    ],
+  },
+  { stream: "dm_messages", keys: ["dm-messages.head", "dm-messages.catchup", "dm-messages.history", "fan-profiles.probe"] },
+  {
+    stream: "transactions",
+    keys: ["transactions.head", "transactions.insurance", "transactions.rescan", "transactions.backfill"],
+  },
+  { stream: "top_spenders", keys: ["top-spenders.window", "top-spenders.bootstrap"] },
+  { stream: "fan_earnings", keys: ["fan-earnings.roster"] },
+  { stream: "purchase_history", keys: ["purchases.targets"] },
+  { stream: "payouts", keys: ["payouts.daily", "payouts.walk"] },
+  { stream: "subscribers", keys: ["subscribers.poll", "subscribers.history", "fan-profiles.lookup"] },
+  { stream: "followers", keys: ["followers.head", "fan-profiles.lookup"] },
+  { stream: "followers_reconcile", keys: ["followers.reconcile", "fan-profiles.lookup"] },
+  { stream: "notifications", keys: ["notifications.forward", "notifications.backfill"] },
+  { stream: "posts", keys: ["posts.refresh", "posts.backfill", "posts.engagement"] },
+  { stream: "post_replies", keys: ["post-replies.walk", "post-replies.authors"] },
+  { stream: "catalog", keys: ["catalog.fixed", "catalog.vault", "catalog.hydrate"] },
+  { stream: "media_stats", keys: ["media-stats.walk"] },
+  { stream: "stats_snapshot", keys: ["stats.daily", "stats.hourly", "stats.backfill"] },
+];
+
+/** The keys no lever stream names: the identity checks, the socket and its
+ *  repair, live deletions, the owner's alias backfill and probes, and media
+ *  download. Listed so a new key is placed deliberately
+ *  (tests/sync-lever-map.test.ts). */
+export const FANSLY_KEYS_WITHOUT_LEVER: readonly string[] = [
+  "account.verify", "account.identity", "ws.connect", "dm-live.deletions", "fan-profiles.alias-backfill",
+  "media-download.fetch", "repair.ws-gap", "probe.manual", "probe.excluded-chat",
+];
+
+/** Every stream name of the lever map, in its order. */
+export function fanslyLeverStreams(): SyncStream[] {
+  return FANSLY_LEVER_STREAMS.map((line) => line.stream);
+}
+
+/** The registry keys that answer to any of `streams`, in registry order. */
+export function fanslyKeysForStreams(streams: readonly SyncStream[]): string[] {
+  const wanted = new Set(streams);
+  const keys = new Set(FANSLY_LEVER_STREAMS.filter((line) => wanted.has(line.stream)).flatMap((line) => line.keys));
+  return FANSLY_RESOURCE_SPECS.filter((spec) => keys.has(spec.key)).map((spec) => spec.key);
+}
+
+/** The resource files of those keys (the unit of "sync now"), sorted. */
+export function fanslyFilesForStreams(streams: readonly SyncStream[]): ResourceFile[] {
+  const keys = new Set(fanslyKeysForStreams(streams));
+  return [...new Set(FANSLY_RESOURCE_SPECS.filter((spec) => keys.has(spec.key)).map((spec) => spec.file))].sort();
+}
+
+/** The poll period of a stream's first poll key, in seconds (0: no poll). */
+export function fanslyStreamPollSeconds(stream: SyncStream): number {
+  for (const key of fanslyKeysForStreams([stream])) {
+    const spec = fanslyResourceSpec(key);
+    // Registry periods are whole seconds.
+    if (spec?.kind === "poll" && spec.period !== undefined) return Math.floor(spec.period.everyMs / SECOND);
+  }
+  return 0;
+}

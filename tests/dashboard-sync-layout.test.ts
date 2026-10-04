@@ -178,13 +178,16 @@ function buildSyncBlock(
   };
 }
 
+// The legacy blocks of the Settings sync tab are those of a page the legacy
+// page-sync executor serves: OnlyFans (a Fansly page's blocks are the engine's,
+// tests/dashboard-sync-engine.test.ts).
 function buildSyncOverview(): {
   generatedAt: string;
   diagnosis: ReturnType<typeof buildSyncDiagnosis> | null;
   pages: Array<{
     pageId: number;
     pageLabel: string;
-    platform: "fansly";
+    platform: "onlyfans";
     modelSlug: string;
     modelName: string;
     username: string;
@@ -205,7 +208,7 @@ function buildSyncOverview(): {
     pages: [{
       pageId: 1,
       pageLabel: "lana",
-      platform: "fansly" as const,
+      platform: "onlyfans" as const,
       modelSlug: "lana",
       modelName: "Lana",
       username: "lana",
@@ -219,13 +222,13 @@ function buildSyncOverview(): {
           metrics: { transactionCount: 12 },
         }),
         audience: buildSyncBlock("audience", {
-          metrics: { followerCount: 34 },
+          metrics: { subscriberCount: 34 },
         }),
         messages_live: buildSyncBlock("messages_live", {
           metrics: { visibleConversationCount: 3 },
         }),
         messages_history: buildSyncBlock("messages_history", {
-          metrics: { readyConversationCount: 3, eligibleConversationCount: 4 },
+          state: "not_available",
         }),
       },
     }],
@@ -626,7 +629,7 @@ describe("dashboard sync layout", () => {
       ],
     };
 
-    expect(getSyncBlockActionPresentation(block, "onlyfans")).toEqual({
+    expect(getSyncBlockActionPresentation(block)).toEqual({
       showTrigger: false,
       showPause: false,
       showResume: true,
@@ -638,7 +641,7 @@ describe("dashboard sync layout", () => {
     expect(getSyncBlockActionPresentation({
       ...block,
       substreams: block.substreams.filter((substream) => substream.stream === "transactions"),
-    }, "onlyfans")).toMatchObject({
+    })).toMatchObject({
       showResume: false,
     });
   });
@@ -788,52 +791,7 @@ describe("dashboard sync layout", () => {
     expect((html.match(/Sync is delayed/g) ?? [])).toHaveLength(2);
   });
 
-  it("renders catch-up progress for delayed message history detail", () => {
-    const overview = buildSyncOverview();
-    overview.pages[0]!.blocks.messages_history = {
-      ...overview.pages[0]!.blocks.messages_history,
-      state: "delayed",
-      statusReason: {
-        code: "history_incomplete",
-        summary: "Conversation history is still catching up.",
-        waitingFor: null,
-      },
-      primaryFresh: false,
-      needsAttention: true,
-      progress: {
-        label: "203 / 3,669 conversations ready, 4 lagging",
-        current: 203,
-        total: 3669,
-        unit: "conversations",
-        percent: 5.53,
-        details: {
-          laggingConversationCount: 4,
-        },
-      },
-      progressStream: "dm_messages",
-      progressRole: "primary",
-      metrics: {
-        readyConversationCount: 203,
-        eligibleConversationCount: 3669,
-        laggingConversationCount: 4,
-      },
-    };
-    queryMocks.usePageSyncBlocks.mockReturnValue({
-      data: {
-        generatedAt: "2026-03-24T12:00:00.000Z",
-        page: overview.pages[0],
-      },
-      isLoading: false,
-    });
-
-    const html = renderWithRouter(createElement(SettingsPage), ["/settings?tab=sync&page=lana"]);
-
-    expect(html).toContain("203 / 3,669 ready");
-    expect(html).toContain("3,466 left");
-    expect(html).toContain("4 lagging");
-  });
-
-  it("renders fresh queue waits as healthy while message history backfill is running", () => {
+  it("renders fresh queue waits as healthy while another stream of the page is running", () => {
     const overview = buildSyncOverview();
     overview.pages[0]!.blocks.financials = {
       ...overview.pages[0]!.blocks.financials,
@@ -842,7 +800,7 @@ describe("dashboard sync layout", () => {
       statusReason: {
         code: "queue_waiting",
         summary: "Queued - will start after current sync completes.",
-        waitingFor: ["dm_messages"],
+        waitingFor: ["dm_conversations"],
       },
       progress: {
         label: "15 / 15 months",
@@ -862,21 +820,11 @@ describe("dashboard sync layout", () => {
       statusReason: {
         code: "queue_waiting",
         summary: "Queued - will start after current sync completes.",
-        waitingFor: ["dm_messages"],
+        waitingFor: ["dm_conversations"],
       },
     };
     overview.pages[0]!.blocks.messages_live = {
       ...overview.pages[0]!.blocks.messages_live,
-      state: "scheduled",
-      primaryFresh: true,
-      statusReason: {
-        code: "queue_waiting",
-        summary: "Queued - will start after current sync completes.",
-        waitingFor: ["dm_messages"],
-      },
-    };
-    overview.pages[0]!.blocks.messages_history = {
-      ...overview.pages[0]!.blocks.messages_history,
       state: "backfilling",
       primaryFresh: false,
       progress: {
@@ -887,7 +835,7 @@ describe("dashboard sync layout", () => {
         percent: 5.53,
         details: {},
       },
-      progressStream: "dm_messages",
+      progressStream: "dm_conversations",
       progressRole: "primary",
     };
     queryMocks.useSyncOverview.mockReturnValue({
@@ -897,8 +845,8 @@ describe("dashboard sync layout", () => {
 
     const html = renderWithRouter(createElement(SettingsPage), ["/settings?tab=sync"]);
 
-    expect(html).toContain("Up to date · waiting for message history to finish");
-    expect(html).not.toContain("Queued — message history is running");
+    expect(html).toContain("Up to date · waiting for conversation sync to finish");
+    expect(html).not.toContain("Queued — conversation sync is running");
     expect(html).toContain("Backfilling… 203/3,669 conversations");
   });
 

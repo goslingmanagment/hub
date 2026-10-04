@@ -257,6 +257,10 @@ describe("LIVE_CONFIG_KEYS", () => {
       expect(LIVE_CONFIG_KEYS.has(key), key).toBe(false);
     }
     expect(LIVE_CONFIG_KEYS.has("agentHydrationMode")).toBe(true);
-    expect(LIVE_CONFIG_KEYS.size).toBe(50);
+    // Step 4 S4-24 retired the follower-sync age threshold of /health/sync
+    // with the legacy Fansly checks that read it.
+    expect(LIVE_CONFIG_KEYS.has("healthSyncFollowerMaxAgeMinutes")).toBe(false);
+    expect(LIVE_CONFIG_KEYS.has("healthSyncLightMaxAgeMinutes")).toBe(true);
+    expect(LIVE_CONFIG_KEYS.size).toBe(49);
   });
 });

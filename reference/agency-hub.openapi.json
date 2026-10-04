@@ -119371,16 +119371,10 @@
                           "type": "integer",
                           "exclusiveMinimum": 0,
                           "maximum": 9007199254740991
-                        },
-                        "followerMaxAgeMinutes": {
-                          "type": "integer",
-                          "exclusiveMinimum": 0,
-                          "maximum": 9007199254740991
                         }
                       },
                       "required": [
-                        "lightMaxAgeMinutes",
-                        "followerMaxAgeMinutes"
+                        "lightMaxAgeMinutes"
                       ],
                       "additionalProperties": false
                     },
@@ -119790,16 +119784,10 @@
                           "type": "integer",
                           "exclusiveMinimum": 0,
                           "maximum": 9007199254740991
-                        },
-                        "followerMaxAgeMinutes": {
-                          "type": "integer",
-                          "exclusiveMinimum": 0,
-                          "maximum": 9007199254740991
                         }
                       },
                       "required": [
-                        "lightMaxAgeMinutes",
-                        "followerMaxAgeMinutes"
+                        "lightMaxAgeMinutes"
                       ],
                       "additionalProperties": false
                     },

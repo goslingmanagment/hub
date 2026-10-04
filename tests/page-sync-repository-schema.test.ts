@@ -11,8 +11,11 @@ import {
   requestPageSync,
   resetPageSync,
   resumePageSync,
+  LEGACY_EXECUTOR_STREAMS,
   SYNC_STREAM_POLICY,
   SYNC_STREAMS,
+  syncStreamOrderIndex,
+  type LegacyExecutorStream,
   type SyncStream,
 } from "../packages/db/src/repositories/page-sync.ts";
 import { sql, type SQL } from "../packages/db/node_modules/drizzle-orm/index.js";
@@ -32,15 +35,19 @@ function findStreamParam(params: unknown[]) {
   return params.find((param) => typeof param === "string" && SYNC_STREAM_SET.has(param));
 }
 
+// The rows of a page are listed and locked in one total order: the executor's
+// streams by their policy index, then the record streams (the former Fansly
+// lanes, OnlyFans's retired dm_messages) in vocabulary order. The ladder is
+// generated from that order for every name of the vocabulary.
 function expectPageSyncLockOrder(statement: string) {
   expect(statement).toContain("order by page_id asc");
   for (const stream of SYNC_STREAMS) {
-    expect(statement).toContain(`when '${stream}' then ${SYNC_STREAM_POLICY[stream].streamIndex}`);
+    expect(statement).toContain(`when '${stream}' then ${syncStreamOrderIndex(stream)}`);
   }
   expect(statement.indexOf("order by page_id asc")).toBeLessThan(statement.indexOf("for update"));
 }
 
-function buildPageSyncStateRow(pageId: number, stream: SyncStream, now: Date) {
+function buildPageSyncStateRow(pageId: number, stream: LegacyExecutorStream, now: Date) {
   const policy = SYNC_STREAM_POLICY[stream];
 
   return {
@@ -141,28 +148,27 @@ describe("page-sync repository schema alignment", () => {
     ]);
   });
 
+  it("orders every stream of the vocabulary: the executor's by policy index, the record streams after them", () => {
+    const order = SYNC_STREAMS.map((stream) => syncStreamOrderIndex(stream));
+    expect(new Set(order).size).toBe(SYNC_STREAMS.length);
+    for (const stream of LEGACY_EXECUTOR_STREAMS) {
+      expect(syncStreamOrderIndex(stream)).toBe(SYNC_STREAM_POLICY[stream].streamIndex);
+    }
+    const lastExecutorIndex = Math.max(...LEGACY_EXECUTOR_STREAMS.map((stream) => syncStreamOrderIndex(stream)));
+    const records = SYNC_STREAMS.filter((stream) => !(LEGACY_EXECUTOR_STREAMS as readonly SyncStream[]).includes(stream));
+    expect(records).toEqual([
+      "followers", "followers_reconcile", "dm_messages", "fan_earnings", "purchase_history",
+      "stats_snapshot", "notifications", "catalog", "post_replies", "payouts", "media_stats",
+    ]);
+    for (const stream of records) expect(syncStreamOrderIndex(stream)).toBeGreaterThan(lastExecutorIndex);
+    expect(normalizePageSyncRequestStreams(["media_stats", "followers", "posts", "light"]))
+      .toEqual(["light", "posts", "followers", "media_stats"]);
+  });
+
   it("requestPageSync locks page rows before updating requested streams in normalized order", async () => {
     const now = new Date("2026-03-24T12:00:00.000Z");
     const pageId = 55;
-    const existingRows = [
-      "light",
-      "transactions",
-      "top_spenders",
-      "subscribers",
-      "followers",
-      "followers_reconcile",
-      "dm_conversations",
-      "dm_messages",
-      "fan_earnings",
-      "purchase_history",
-      "posts",
-      "stats_snapshot",
-      "notifications",
-      "catalog",
-      "post_replies",
-      "payouts",
-      "media_stats",
-    ].map((stream) => buildPageSyncStateRow(pageId, stream as SyncStream, now));
+    const existingRows = LEGACY_EXECUTOR_STREAMS.map((stream) => buildPageSyncStateRow(pageId, stream, now));
     const lockedStatements: string[] = [];
     const updatedStreams: unknown[] = [];
     const execute = vi.fn(async (query: SQL) => {
@@ -189,11 +195,8 @@ describe("page-sync repository schema alignment", () => {
         return {
           rows: [{
             id: pageId,
-            platform: "fansly",
+            platform: "onlyfans",
             lastLightSyncAt: now,
-            lastFollowerSyncAt: now,
-            followerCount: 0,
-            activeFollowerCount: 0,
           }],
         };
       }
@@ -213,7 +216,7 @@ describe("page-sync repository schema alignment", () => {
 
     const result = await requestPageSync(db, {
       pageId,
-      streams: ["dm_messages", "transactions", "light", "transactions", "dm_conversations"],
+      streams: ["dm_conversations", "transactions", "light", "transactions", "subscribers"],
       source: "manual",
       now,
     });
@@ -222,8 +225,8 @@ describe("page-sync repository schema alignment", () => {
     expect(result.map((row) => row.stream)).toEqual([
       "light",
       "transactions",
+      "subscribers",
       "dm_conversations",
-      "dm_messages",
     ]);
     expect(lockedStatements).toHaveLength(1);
     expectPageSyncLockOrder(lockedStatements[0]!);
@@ -231,15 +234,15 @@ describe("page-sync repository schema alignment", () => {
     expect(updatedStreams).toEqual([
       "light",
       "transactions",
+      "subscribers",
       "dm_conversations",
-      "dm_messages",
     ]);
   });
 
   it("manual multi-stream controls update rows in normalized stream order", async () => {
     const now = new Date("2026-03-24T12:00:00.000Z");
     const pageId = 55;
-    const requestedStreams: SyncStream[] = ["dm_messages", "transactions", "light", "transactions", "dm_conversations"];
+    const requestedStreams: SyncStream[] = ["dm_conversations", "transactions", "light", "transactions", "subscribers"];
 
     async function captureControlQueryOrder(
       run: (db: never) => Promise<void>,
@@ -281,8 +284,8 @@ describe("page-sync repository schema alignment", () => {
     expect(pauseControl.updatedStreams).toEqual([
       "light",
       "transactions",
+      "subscribers",
       "dm_conversations",
-      "dm_messages",
     ]);
 
     const resumeControl = await captureControlQueryOrder((db) => resumePageSync(db, {
@@ -296,8 +299,8 @@ describe("page-sync repository schema alignment", () => {
     expect(resumeControl.updatedStreams).toEqual([
       "light",
       "transactions",
+      "subscribers",
       "dm_conversations",
-      "dm_messages",
     ]);
 
     const resetControl = await captureControlQueryOrder((db) => resetPageSync(db, {
@@ -312,8 +315,8 @@ describe("page-sync repository schema alignment", () => {
     expect(resetControl.updatedStreams).toEqual([
       "light",
       "transactions",
+      "subscribers",
       "dm_conversations",
-      "dm_messages",
     ]);
   });
 });
