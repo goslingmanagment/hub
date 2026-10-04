@@ -949,10 +949,22 @@ async function lockPageForHoldWrite(tx: Database, pageId: number, generation: bi
 }
 
 /**
- * One write of a page's hold set: the fence, the rows, then — for this one
- * release — the old hold columns rewritten from them
+ * One write of a page's hold set: the fence, the rows, then — until S4-31
+ * takes the mirror away — the old hold columns rewritten from the rows
  * (`mirrorSyncHoldsToLegacyColumns`), all in one transaction (a savepoint
  * inside the caller's), so the two never part.
+ *
+ * The columns are rewritten from the rows, so the rows must already say what
+ * the columns say. A writer under its generation has that from its
+ * acquisition (`acquireSyncPageOwnership`); the generation fences the
+ * previous image's actor out. A writer under none (the owner's `sync route
+ * raise`) can run before this build has taken the page — after a rollback
+ * and the way back, while `sync` is stopped or its acquisition waits — over
+ * rows the previous image has outdated. It brings them in line itself, under
+ * the same lock, before it writes (`reconcileSyncHoldsWithLegacyColumns`):
+ * what that image left is then part of what is written back, never written
+ * over. Columns that cannot be read refuse the write
+ * (`SyncLegacyHoldsUnreadableError`).
  */
 async function writeHoldSet<T>(
   db: Database,
@@ -962,6 +974,7 @@ async function writeHoldSet<T>(
   return db.transaction(async (raw) => {
     const tx = raw as unknown as Database;
     await lockPageForHoldWrite(tx, input.pageId, input.generation);
+    if (input.generation === undefined) await reconcileSyncHoldsWithLegacyColumns(tx, input.pageId);
     const written = await write(tx);
     await mirrorSyncHoldsToLegacyColumns(tx, input.pageId);
     return written;
@@ -1146,7 +1159,8 @@ export type WriteSyncRouteStateResult =
  * without one): it is written with `expectRevision + 1`. With `generation`,
  * fenced like every actor write (a lost generation throws
  * `OwnershipLostError`); without it (the owner's `sync route raise`) the
- * revision alone orders the writers.
+ * revision alone orders the writers — the previous image among them: a raise
+ * computed from rows that image has outdated meets the revision it left.
  */
 export async function writeSyncRouteState(
   db: Database,

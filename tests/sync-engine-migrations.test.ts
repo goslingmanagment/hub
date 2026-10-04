@@ -678,10 +678,14 @@ describe("sync_holds.sql (step 4, S4-30: the hold set)", () => {
     expect(rollbackCompatible()).toContain(`"${migration}"`);
     const pages = readFileSync("packages/db/src/repositories/sync/pages.ts", "utf8");
     // Every hold write goes through one transaction that rewrites the old
-    // columns from the rows; an acquisition reads them back when they differ.
+    // columns from the rows; an acquisition reads them back when they differ,
+    // and so does a write under no generation before it writes (it can come
+    // before this build has taken the page).
     expect(pages.match(/writeHoldSet\(db, input,/g)).toHaveLength(4);
     expect(pages).toContain("await mirrorSyncHoldsToLegacyColumns(tx, input.pageId);");
     expect(pages).toContain("await reconcileSyncHoldsWithLegacyColumns(tx as unknown as Database, input.pageId);");
+    expect(pages).toContain("if (input.generation === undefined) await reconcileSyncHoldsWithLegacyColumns(tx, input.pageId);");
+    expect(pages.match(/reconcileSyncHoldsWithLegacyColumns\(tx/g)).toHaveLength(2);
     // No other statement writes a hold row.
     for (const file of readdirSync("packages/db/src/repositories/sync")) {
       if (file === "pages.ts" || file === "holds-legacy.ts") continue;

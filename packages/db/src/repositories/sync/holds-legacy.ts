@@ -9,29 +9,45 @@ import {
 } from "./holds.ts";
 import { jsonParam, SYNC_INDEFINITE_UNTIL_MS, timestampParam, toDate, untilParam } from "./values.ts";
 
-// The hold set beside the columns it replaces — for ONE release (step 4,
-// S4-30; the next one, S4-31, deletes this file with the columns).
+// The hold set beside the columns it replaces (step 4, S4-30), until S4-31
+// takes the columns and this file away — in the three releases at the end of
+// this comment.
 //
 // The previous image reads a page's holds only from `sync_pages`: the hold
 // slot (`hold_kind`, `hold_until`, `hold_since`, `hold_detail`, with a network
 // hold carried in `hold_detail.timedHold` beside a credentials hold) and
 // `resource_holds` (the resource breakers by file, and the route state under
 // `route:state`). A rollback to it must not fail open, and what it wrote must
-// not be lost when this image comes back. So, while both exist:
+// not be lost when this image comes back. So:
 //
 //   - every write of the hold set rewrites those columns from the page's rows
 //     in the same transaction (`mirrorSyncHoldsToLegacyColumns`): they are
 //     always exactly what `legacyHoldColumnsOf` makes of the rows;
-//   - whenever a page's ownership is acquired, the columns are compared with
-//     what the rows make them; if they differ, someone who knows only the
-//     columns wrote them — the previous image, or a hand — and the columns
-//     win: the page's rows are replaced by what they say
+//   - whenever a page's ownership is acquired — and before a hold write under
+//     no generation, which can come before that acquisition — the columns
+//     are compared with what the rows make them; if they differ, someone who
+//     knows only the columns wrote them — the previous image, or a hand — and
+//     the columns win: the page's rows are replaced by what they say
 //     (`holdRowsOfLegacyColumns`, `reconcileSyncHoldsWithLegacyColumns`).
 //     That is also how a page's state first reaches the table.
 //
-// Nothing else reads the columns. A change of a page's holds made by hand in
-// this release therefore goes into the columns too — rows changed alone are
-// read back from the columns at the page's next acquisition.
+// Nothing else reads the columns. A hold changed by hand is changed on both
+// sides — or, with `sync` stopped, in the columns alone: rows changed alone
+// are replaced from the columns at the page's next acquisition, and columns
+// changed alone under a running owner are rewritten from the rows by its next
+// hold write.
+//
+// "The columns win" is right only against a writer that knows nothing but the
+// columns. A build that wrote the rows and left the columns behind would, on
+// a rollback to this one, lose every hold it took and get back every hold it
+// lifted. So the way out is three releases, each a safe rollback target of
+// the next:
+//
+//   1. the two `reconcileSyncHoldsWithLegacyColumns` calls go, the mirror
+//      stays: a rollback to this build finds the columns equal to the rows;
+//   2. the mirror and this file go: a rollback to (1) reads no column;
+//   3. the columns are dropped: a rollback to (2) neither reads nor writes
+//      them.
 
 /** Where the old slot carries a network hold beside a credentials hold. */
 const LEGACY_CARRIED_HOLD_FIELD = "timedHold";
@@ -289,7 +305,7 @@ export function sameLegacyHoldColumns(left: SyncLegacyHoldColumns, right: SyncLe
 
 /**
  * Rewrite a page's old hold columns from its rows — the second half of every
- * hold write of this release, in the writer's transaction. `hold_step` is
+ * hold write, in the writer's transaction. `hold_step` is
  * left alone (nothing has stepped it since a 429 holds its route), as is
  * `network_failure_streak`, which is a counter and no hold.
  */
@@ -344,8 +360,9 @@ export interface SyncHoldsReconciliation {
  * its rows make them (`legacyHoldColumnsOf`): someone who knows only the
  * columns wrote them, so they win — the rows are replaced by what they say,
  * and the columns then rewritten from the rows. The caller holds the page row
- * FOR NO KEY UPDATE and is about to own the page
- * (`acquireSyncPageOwnership`): nobody else writes either side meanwhile.
+ * FOR NO KEY UPDATE — about to own the page (`acquireSyncPageOwnership`), or
+ * about to write its hold set under no generation (`writeHoldSet`): nobody
+ * else writes either side meanwhile.
  * Idempotent — a page whose two sides agree is not written. Throws
  * `SyncLegacyHoldsUnreadableError` and writes nothing when columns that
  * disagree hold a route state that cannot be read.

@@ -405,20 +405,35 @@ Writers: the four hold writers of `repositories/sync/pages.ts` — `setPageHold`
 `writeSyncRouteState` (a compare-and-set on the route's `route_budget` revision) — each in one transaction that takes
 the page row FOR NO KEY UPDATE (the lock of every actor transaction) and fences the generation.
 
-**For this one release the old hold columns of `sync_pages` are kept in step** (`repositories/sync/holds-legacy.ts`;
-the next release, S4-31, deletes that file and drops the columns): the previous image reads a page's holds only from
-`hold_kind` … `hold_detail` and `resource_holds`, and a rollback to it must not fail open. So every hold writer
-rewrites those columns from the page's rows in its transaction (`mirrorSyncHoldsToLegacyColumns` — the credentials
-hold carrying the network hold in `hold_detail.timedHold`, the breakers by file and the route state under
-`resource_holds['route:state']`, exactly as that image reads them), and whenever a page's ownership is acquired the
-columns are compared with what the rows make them: if they differ, someone who knows only the columns wrote them (the
-previous image after the migration ran or after a rollback, or a hand), and the columns win — the rows are replaced by
-what they say (`reconcileSyncHoldsWithLegacyColumns`; the host logs it and counts `sync_holds_imported`). That is also
-how a page's state first reaches the table (the migration copies nothing: the previous image is still writing when it
-runs). Columns that disagree and hold a route state no build wrote refuse the acquisition
-(`SyncLegacyHoldsUnreadableError`: the page is not started, alert 1 `ownership_unconfirmed` after 2 min).
-Nothing else reads the columns. **A hold changed by hand in this release is changed in the old columns too** (or in
-them alone, before a restart): rows changed alone are read back from the columns at the page's next acquisition.
+**The old hold columns of `sync_pages` are kept in step** (`repositories/sync/holds-legacy.ts`): the previous image
+reads a page's holds only from `hold_kind` … `hold_detail` and `resource_holds`, and a rollback to it must not fail
+open. So every hold writer rewrites those columns from the page's rows in its transaction
+(`mirrorSyncHoldsToLegacyColumns` — the credentials hold carrying the network hold in `hold_detail.timedHold`, the
+breakers by file and the route state under `resource_holds['route:state']`, exactly as that image reads them). And the
+columns are compared with what the rows make them whenever a page's ownership is acquired, and before a hold write
+under no generation (the owner's `sync route raise`, which can come before this build has taken the page — after a
+rollback and the way back, while `sync` is stopped or its acquisition waits): if they differ, someone who knows only
+the columns wrote them (the previous image after the migration ran or after a rollback, or a hand), and the columns
+win — the rows are replaced by what they say (`reconcileSyncHoldsWithLegacyColumns`; at an acquisition the host logs
+it and counts `sync_holds_imported`). That is also how a page's state first reaches the table (the migration copies
+nothing: the previous image is still writing when it runs). Columns that disagree and hold a route state no build
+wrote refuse the acquisition (`SyncLegacyHoldsUnreadableError`: the page is not started, alert 1
+`ownership_unconfirmed` after 2 min) and that write. Nothing else reads the columns.
+
+**A hold changed by hand is changed on both sides** — or, with `sync` stopped, in the old columns alone (the page's
+next acquisition reads them). Rows changed alone are replaced from the columns at that acquisition; columns changed
+alone under a running owner are rewritten from the rows by its next hold write.
+
+**The columns go in three releases (S4-31), each a safe rollback target of the next.** "The columns win" is right only
+against a writer that knows nothing but the columns: a build that wrote the rows and left the columns behind would, on
+a rollback to this one, lose every hold it took and get back every hold it lifted (a credentials hold, a route's hold
+and slowdown, a breaker).
+
+1. The two `reconcileSyncHoldsWithLegacyColumns` calls go; the mirror stays. A rollback to this build finds the
+   columns equal to the rows. Before it ships, every page's rows are what its columns say: this build has acquired it
+   (a page whose columns hold something and that has no row was never acquired).
+2. The mirror and `holds-legacy.ts` go. A rollback to (1) reads no column.
+3. The columns are dropped. A rollback to (2) neither reads nor writes them.
 
 ## The process: pool timeouts, stall watchdog, shutdown (step 4, 4-3)
 
@@ -593,7 +608,7 @@ Each is enforced in exactly one place and pinned by a test (design §1). The fir
 | I18 | Every WS receipt of a `handover`/`live` page routes its demand exactly once, in the transaction that acks it. | `fansly/ws/route-receipt.ts` |
 | I19 | Between two actual sends of one page on one route (or one family): ≥ the interval of its effective rate, counted from the actual send in the journal the page runs (the legacy send log too on a live page; an unknown outcome at its upper bound); no burst, no borrowing. | `engine/route-policy.ts` (`RouteClocks`) + `engine/actor.ts` (pick exclusion, final check) |
 | I20 | One page-hold rule: a credentials hold clears only by an identity proof sent after its latest refusal, written with the apply; under it only a candidate check and one verify per changed stored digest pass (step 3b ruling 5, A3). | `packages/shared/src/fansly-page-holds.ts` (gate, final admission, status, alerts) + `engine/commit.ts` (`recordIdentityProof`) |
-| I23 | One hold evaluator over one hold set: what holds a request — the page, its subject, its resource file, its route — is `whyHeld`'s answer over the page's `sync_holds` rows; rows it cannot read keep the page closed. While the old hold columns exist, every hold write rewrites them in its transaction and an acquisition reads them back when they differ (step 4, owner decision №26). | `engine/admission.ts` + `repositories/sync/pages.ts` (the four hold writers) + `repositories/sync/holds-legacy.ts`; tests/sync-hold-evaluator.test.ts, tests/sync-hold-set.integration.test.ts, tests/sync-holds-legacy.test.ts |
+| I23 | One hold evaluator over one hold set: what holds a request — the page, its subject, its resource file, its route — is `whyHeld`'s answer over the page's `sync_holds` rows; rows it cannot read keep the page closed. While the old hold columns are read by a previous image, every hold write rewrites them in its transaction, and an acquisition — or a hold write under no generation — reads them back first when they differ (step 4, owner decision №26). | `engine/admission.ts` + `repositories/sync/pages.ts` (the four hold writers) + `repositories/sync/holds-legacy.ts`; tests/sync-hold-evaluator.test.ts, tests/sync-hold-set.integration.test.ts, tests/sync-holds-legacy.test.ts |
 | I21 | The legacy page-sync executor serves only the platforms whose adapter declares streams (OnlyFans since step 4 S4-10): no Fansly page's legacy state is seeded, scheduled, woken, leased or requested, and nothing gives a page back to it. The platform set is a required argument of every query that picks work — the one fence in them since S4-21, with the Fansly rows parked `retired` (0239) beside it — and the planner and the executor assert it before a wake-up or a run; `services/sync/` holds no Fansly handler, error class or Fansly HTTP import (S4-19). | `onlyfans/boundary.ts` (`legacyExecutorPlatforms`, `assertLegacyExecutorPage`) over `platforms/registry.ts` + `repositories/page-sync.ts` (`PageSyncPlatformScope`) + `services/sync/planner.ts` + `services/sync/executor.ts` + `services/sync-control.ts` (`assertLegacyExecutorServes`); tests/sync-onlyfans-boundary.test.ts, tests/sync-legacy-fence.test.ts |
 | I22 | Only a live page's socket source in `sync` opens a Fansly WebSocket (step 4 S4-12): the receiver helper is the one place that constructs a socket, its Upgrade on a send lease (the engine's, over the pacer's one-shot check); no worker, lane or script opens one. | `fansly/ws/source.ts` + `services/egress/fansly-receiver-socket.ts`; tests/fansly-send-guard-boundary.test.ts |
 

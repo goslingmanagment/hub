@@ -28,8 +28,8 @@
 --                                 until `until`, on ladder step `ladder_step`
 --
 -- The engine's one hold evaluator (`engine/admission.ts`) reads these rows and
--- nothing else. For this one release every writer also keeps the old columns
--- in step with them (the previous image reads only those: a rollback must not
+-- nothing else. Every writer of this release also keeps the old columns in
+-- step with them (the previous image reads only those: a rollback must not
 -- fail open), and a page's rows are re-read from the old columns whenever its
 -- ownership is acquired and the two disagree — which is how the state the
 -- previous image left reaches the table (it may write a hold after this

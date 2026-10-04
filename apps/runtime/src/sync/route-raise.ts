@@ -67,7 +67,14 @@ export async function raiseSyncRoute(
       },
     });
     if (written.kind === "stale") {
-      throw new SyncOwnerLeverError(`${input.pageLabel}: ${route} changed while raising (a new 429): read the evidence again; nothing raised`);
+      // A 429 between the read and the write — or the write found the route
+      // as the previous image left it in the old hold columns (after a
+      // rollback, before this build's `sync` has taken the page): the page's
+      // hold set, and so the evidence, shows that state once it has.
+      throw new SyncOwnerLeverError(
+        `${input.pageLabel}: ${route} is no longer at revision ${raise.expectRevision} (a new 429 — after a rollback, one the previous `
+        + "image recorded, shown once `sync` has taken the page): read the evidence again; nothing raised",
+      );
     }
     const budget = routeBudget(route);
     const result: SyncRouteRaiseResult = {

@@ -34,8 +34,9 @@ import {
 // The hold set (0240, step 4 owner decision №26) on a real Postgres: the
 // table's own rules, the old hold columns kept in step with it for the
 // previous image (every hold write rewrites them in its transaction), and the
-// way back — a page's rows re-read from those columns when its ownership is
-// acquired and they say something else.
+// way back — a page's rows re-read from those columns when they say something
+// else: when its ownership is acquired, and before a hold write under no
+// generation.
 
 let testDb: StartedTestDatabase | null = null;
 
@@ -295,7 +296,7 @@ describe("the old hold columns, kept in step for the previous image", () => {
   });
 });
 
-describe("the hold set read back from the old columns when ownership is acquired", () => {
+describe("the hold set read back from the old columns", () => {
   /** What the previous image wrote: the slot and `resource_holds`. */
   async function writeOldColumns(pageId: number, columns: { kind: string | null; until?: string | null; since?: string | null; detail?: unknown; resourceHolds?: unknown }) {
     await testDb!.pool.query(
@@ -426,6 +427,106 @@ describe("the hold set read back from the old columns when ownership is acquired
       .toEqual({ kind: "written", revision: 2 });
   });
 
+  it("a hold write under no generation (the owner's route raise) reads the columns back first: it never writes outdated rows over what the previous image left", async (context) => {
+    if (!testDb) return context.skip();
+    const slowed = { holdUntil: null, ladderStep: 1, effectivePerMin: 5, policyVersion: "v1", last429AttemptId: 42, last429At: new Date("2026-10-04T10:00:00.000Z") };
+    const refusal = { status: 401, credentialsGeneration: "gen-a", failedAttemptId: 50, failedAt: "2026-10-04T10:05:00.000Z" };
+    const breakerUntil = new Date(Date.now() + 1_800_000).toISOString();
+    /** A page this image slowed a route of (revision 1) and released — a
+     *  rollback follows — and that the previous image then ran: it took a
+     *  credentials hold and a breaker, and wrote `route` as `entry`. */
+    async function afterRollback(entry: Record<string, unknown>): Promise<number> {
+      const pageId = await seedPage();
+      const fenced = { pageId, generation: (await own(pageId)).generation };
+      expect(await writeSyncRouteState(db(), { ...fenced, route: "messages.page", expectRevision: 0, entry: slowed })).toEqual({ kind: "written", revision: 1 });
+      await writeSafeRelease(db(), fenced);
+      const routes = (await oldColumns(pageId)).resource_holds["route:state"] as { routes: Record<string, Record<string, unknown>> };
+      await writeOldColumns(pageId, {
+        kind: "auth",
+        until: "infinity",
+        since: refusal.failedAt,
+        detail: refusal,
+        resourceHolds: {
+          posts: { until: breakerUntil, step: 2, since: refusal.failedAt },
+          "route:state": { version: 1, routes: { "messages.page": { ...routes.routes["messages.page"], ...entry } } },
+        },
+      });
+      return pageId;
+    }
+    const held = [
+      { scope: "page", key: "", kind: "auth", ladderStep: 0, detail: refusal, revision: 1 },
+      { scope: "resource", key: "posts", kind: "resource_breaker", ladderStep: 2, detail: {}, revision: 1 },
+    ];
+    const state = { effectivePerMin: 5, policyVersion: "v1", last429AttemptId: 42, last429At: "2026-10-04T10:00:00.000Z" };
+
+    // This image is back and its host has not taken the page yet. A raise of
+    // the route that image left alone is written — over the rows its columns
+    // say, so the holds it took stand on both sides.
+    const untouched = await afterRollback({});
+    expect(await writeSyncRouteState(db(), { pageId: untouched, route: "messages.page", expectRevision: 1, entry: { ...slowed, effectivePerMin: 6 } }))
+      .toEqual({ kind: "written", revision: 2 });
+    expect(shape(await listSyncHolds(db(), untouched))).toEqual([
+      ...held,
+      { scope: "route", key: "messages.page", kind: "route_budget", ladderStep: 1, detail: { ...state, effectivePerMin: 6 }, revision: 2 },
+    ]);
+    expect(await oldColumns(untouched)).toMatchObject({
+      hold_kind: "auth",
+      indefinite: true,
+      hold_detail: refusal,
+      resource_holds: {
+        posts: { until: breakerUntil, step: 2 },
+        "route:state": { version: 1, routes: { "messages.page": { effectivePerMin: 6, revision: 2 } } },
+      },
+    });
+    // The two sides agree, and the page is held as that image held it.
+    expect((await own(untouched)).holdsImported).toBe(false);
+    const page = (await getSyncPage(db(), untouched))!;
+    expect(whyHeld(holdSetOf(page.holds), null, {}, page.dbNow)).toMatchObject({ scope: "credentials", kind: "auth" });
+
+    // A raise computed from this image's rows of a route that image slowed
+    // again (its second 429: revision 2) meets that revision: nothing raised,
+    // and the columns stand as that image left them.
+    const routeUntil = new Date(Date.now() + 300_000).toISOString();
+    const again = { holdUntil: routeUntil, ladderStep: 2, effectivePerMin: 2.5, last429AttemptId: 51, last429At: "2026-10-04T10:06:00.000Z", revision: 2 };
+    const slowedAgain = await afterRollback(again);
+    const before = await oldColumns(slowedAgain);
+    expect(await writeSyncRouteState(db(), { pageId: slowedAgain, route: "messages.page", expectRevision: 1, entry: { ...slowed, effectivePerMin: 6 } }))
+      .toEqual({ kind: "stale" });
+    expect(await oldColumns(slowedAgain)).toEqual(before);
+    expect(shape(await listSyncHolds(db(), slowedAgain))).toEqual([
+      ...held,
+      {
+        scope: "route", key: "messages.page", kind: "route_budget", ladderStep: 2,
+        detail: { ...state, effectivePerMin: 2.5, last429AttemptId: 51, last429At: "2026-10-04T10:06:00.000Z" }, revision: 2,
+      },
+      { scope: "route", key: "messages.page", kind: "route_hold", ladderStep: 0, detail: {}, revision: 1 },
+    ]);
+  });
+
+  it("rows changed alone are replaced by what the columns say — this build is a rollback target only of a build that still writes the columns", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage();
+    await writeSafeRelease(db(), { pageId, generation: (await own(pageId)).generation });
+    // A writer that left the columns alone — a hand, or a later build that no
+    // longer mirrors: a credentials hold and a held, slowed route, rows only.
+    await testDb.pool.query(
+      `insert into sync_holds (page_id, scope, key, kind, until, ladder_step, detail)
+       values ($1, 'page', '', 'auth', 'infinity', 0, '{"credentialsGeneration":"gen-a"}'),
+              ($1, 'route', 'messages.page', 'route_hold', clock_timestamp() + interval '5 minutes', 0, '{}'),
+              ($1, 'route', 'messages.page', 'route_budget', null, 1, '{"effectivePerMin":5,"policyVersion":"v1","last429AttemptId":9,"last429At":"2026-10-04T10:00:00.000Z"}')`,
+      [pageId],
+    );
+    const before = (await getSyncPage(db(), pageId))!;
+    expect(whyHeld(holdSetOf(before.holds), null, {}, before.dbNow)).toMatchObject({ scope: "credentials", kind: "auth" });
+    // The columns hold nothing, and they win: the page is open again. Hence
+    // the order of the releases after this one (README, "The hold set"): the
+    // first only stops reading the columns back and still writes them.
+    expect((await own(pageId)).holdsImported).toBe(true);
+    expect(await listSyncHolds(db(), pageId)).toEqual([]);
+    const after = (await getSyncPage(db(), pageId))!;
+    expect(whyHeld(holdSetOf(after.holds), null, {}, after.dbNow)).toBeNull();
+  });
+
   it("a page-wide 429 hold an older build left holds the page until its end all the same (fail closed)", async (context) => {
     if (!testDb) return context.skip();
     const own429 = await seedPage();
@@ -477,6 +578,9 @@ describe("the hold set read back from the old columns when ownership is acquired
       const refused = acquireSyncPageOwnership(db(), { pageId, owner: owner() });
       await expect(refused).rejects.toBeInstanceOf(SyncLegacyHoldsUnreadableError);
       await expect(refused).rejects.toThrow(diagnostic);
+      // Nor does a hold write under no generation go over them.
+      await expect(setResourceHold(db(), { pageId, file: "posts", hold: { until: new Date(Date.now() + 60_000), step: 1 } }))
+        .rejects.toBeInstanceOf(SyncLegacyHoldsUnreadableError);
       // Nothing was written: the page is not owned, its rows and columns stand.
       expect(await query("select owner_generation::int as generation from sync_pages where page_id = $1", [pageId])).toEqual([{ generation: 0 }]);
       expect(shape(await listSyncHolds(db(), pageId))).toEqual([{ scope: "page", key: "", kind: "auth", ladderStep: 0, detail: {}, revision: 1 }]);

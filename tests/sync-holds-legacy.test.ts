@@ -15,8 +15,8 @@ import { INDEFINITE_UNTIL } from "@agency_hub_core/shared";
 import { holdSetOf } from "../apps/runtime/src/sync/engine/admission.ts";
 import { pageHoldRow, resourceBreakerRow, routeHoldRows } from "./helpers/sync-holds.ts";
 
-// The hold set beside the old hold columns, for the one release both exist
-// (step 4, S4-30): what the previous image must read to hold what the rows
+// The hold set beside the old hold columns, while the previous image reads
+// them (step 4, S4-30): what that image must read to hold what the rows
 // hold, and the rows the columns say — the two pure halves of the dual write
 // and of the import at an acquisition (tests/sync-hold-set.integration.test.ts
 // runs them on a database).
