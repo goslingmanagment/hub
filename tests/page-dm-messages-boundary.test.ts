@@ -103,10 +103,17 @@ const WRITE_STATEMENTS: Record<string, number> = {
   "packages/db/src/repositories/ppv-purchase-facts.ts": 1,
 };
 
+/** `pnpm dev:seed-client`: synthetic chats of the two OnlyFans pages it
+ *  creates, in a local database only (it refuses any other). No Fansly row. */
+const DEV_SEED = "the keyless dev seed's OnlyFans fixtures (a local database only)";
+
 /** The writers of the table (the two last prune it), and every file that may
  *  call them. */
 const WRITERS: Record<string, Record<string, string>> = {
-  upsertPageDmMessages: { "apps/runtime/src/services/ofapi-dm-projection.ts": "OnlyFans" },
+  upsertPageDmMessages: {
+    "apps/runtime/src/services/ofapi-dm-projection.ts": "OnlyFans",
+    "scripts/dev-seed-client.ts": DEV_SEED,
+  },
   deletePageDmMessageByPlatformMessageId: { "apps/runtime/src/services/ofapi-dm-projection.ts": "OnlyFans" },
   markPageDmMessagePurchased: { "apps/runtime/src/services/ofapi-dm-projection.ts": "OnlyFans" },
   raisePageDmMessageTipAmount: { "apps/runtime/src/services/ofapi-dm-projection.ts": "OnlyFans" },
@@ -116,7 +123,10 @@ const WRITERS: Record<string, Record<string, string>> = {
     "apps/runtime/src/sync/fansly/resources/dm-live.ts": "the engine's deletion mark of a legacy row",
   },
   prunePageDmMessagesToLimit: {},
-  refreshPageDmConversationWindow: { "apps/runtime/src/services/ofapi-dm-projection.ts": "OnlyFans" },
+  refreshPageDmConversationWindow: {
+    "apps/runtime/src/services/ofapi-dm-projection.ts": "OnlyFans",
+    "scripts/dev-seed-client.ts": DEV_SEED,
+  },
 };
 
 /** Where each writer is defined (calls inside it are its own). */
