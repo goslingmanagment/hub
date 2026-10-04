@@ -3,7 +3,6 @@ import { and, sql } from "drizzle-orm";
 import type { Database } from "../client.ts";
 import {
   egressEndpoints,
-  pageFollows,
   pageSyncStates,
   pages,
 } from "../schema.ts";
@@ -12,6 +11,13 @@ import { egressKeySql } from "./egress.ts";
 type TimestampValue = Date | string | null | undefined;
 type NumericValue = number | bigint | null | undefined;
 
+// The `sync_stream` vocabulary: every value of the database enum. Rows of
+// `page_sync_states`, `page_sync_cursors`, `sync_runs` and their telemetry
+// carry these names for good, so the type keeps them all. The legacy
+// page-sync executor runs only `LEGACY_EXECUTOR_STREAMS` (below); the other
+// names are records of the Fansly lanes it ran until step 4 and the names the
+// Fansly Sync Engine's status surfaces and levers still address its registry
+// keys by (`apps/runtime/src/sync/fansly/registry.ts`, the lever map).
 export const SYNC_STREAMS = [
   "light",
   "fan_identities",
@@ -25,36 +31,11 @@ export const SYNC_STREAMS = [
   "fan_earnings",
   "purchase_history",
   "posts",
-  // WP-F1: the account-level statistics sweep (maintenance, 6 h cadence; the
-  // daily-slot logic lives inside the handler). Fansly-only, gated off, and
-  // seeded PAUSED like `posts` — see SEED_PAUSED_SYNC_STREAMS below.
   "stats_snapshot",
-  // WP-F2: the notification poll. LIVE class on a 1 800 s cadence, because it
-  // is the only PERMANENTLY-LOSSY lane in the system — a liker, a reply or a
-  // quote is announced once and never re-served, so an hour of downtime is an
-  // hour of facts nobody can recover. Fansly-only, gated off, seeded PAUSED.
   "notifications",
-  // WP-F3: the daily content-catalog sweep — both vaults, tiers, gift codes,
-  // automated messages, walls, and the vault media walk that MEASURES M. It is
-  // maintenance class at 86 400 s because inventory moves in days, and it runs
-  // BEFORE the per-media lane exists on purpose: M is what sizes that lane.
-  // Fansly-only, gated off, seeded PAUSED.
   "catalog",
-  // WP-F5: the comment archive walk. HISTORY class at 21 600 s — it is a big
-  // back-catalogue (≈4 300 Fansly roots fleet-wide) read at 100 calls a page a
-  // day, so it is never "fresh" and never urgent; what it must not do is burst.
-  // Fansly-only, gated off, seeded PAUSED.
   "post_replies",
-  // WP-F7: the money-out lane. MAINTENANCE class at 86 400 s — two routes, two
-  // calls a day in steady state, and the only thing that ever costs more is the
-  // one-off offset walk of the payout-request history (nine calls on the walked
-  // page). Fansly-only, gated off, seeded PAUSED.
   "payouts",
-  // WP-F4: the per-media statistics lane. HISTORY class at 21 600 s — one call
-  // per media per window over the WHOLE catalogue, age-decayed, and the only
-  // lane in this initiative deliberately sized to sit at 100 % of its own daily
-  // cap when M is large (A16). It depends on `catalog`, which is what MEASURES
-  // M. Fansly-only, gated off, seeded PAUSED.
   "media_stats",
 ] as const;
 
@@ -80,59 +61,58 @@ export type SyncRequestSource =
   | "reset";
 export type SyncWorkClass = "live" | "history" | "maintenance";
 
-/** The Fansly streams the legacy executor once held behind a rollout gate.
- *  Since step 4 (S4-10) the legacy executor runs no Fansly stream, so nothing
- *  pauses or resumes them by their gate any more. */
-export const FANSLY_BULK_SYNC_STREAMS = [
-  "fan_earnings",
-  "purchase_history",
-  "stats_snapshot",
-  "notifications",
-  "catalog",
-  "post_replies",
-  "payouts",
-  "media_stats",
-] as const;
+/** The streams the legacy page-sync executor runs: OnlyFans's, the one
+ *  platform it serves since step 4 (owner decision №13). Each has a row in
+ *  `SYNC_STREAM_POLICY` and a pull handler in the platform registry. Fansly
+ *  has none: the Fansly Sync Engine reads every Fansly page, and the names of
+ *  its former lanes stay in `SYNC_STREAMS` as records only. */
+export const LEGACY_EXECUTOR_STREAMS = [
+  "light",
+  "transactions",
+  "fan_identities",
+  "top_spenders",
+  "subscribers",
+  "dm_conversations",
+  "posts",
+] as const satisfies readonly SyncStream[];
 
-export type FanslyBulkSyncStream = typeof FANSLY_BULK_SYNC_STREAMS[number];
+export type LegacyExecutorStream = typeof LEGACY_EXECUTOR_STREAMS[number];
 
+/** Whether the legacy executor runs `stream` (it has a policy row). A row of
+ *  any other stream is a record: a parked Fansly lane (step 4, S4-21) or
+ *  OnlyFans's retired `dm_messages`. */
+export function isLegacyExecutorStream(stream: string): stream is LegacyExecutorStream {
+  return (LEGACY_EXECUTOR_STREAMS as readonly string[]).includes(stream);
+}
+
+/** The blocker a rollout gate once put on a Fansly bulk stream. Nothing sets
+ *  it any more; `pausePageSync` still clears one it meets. */
 export const FANSLY_BULK_STREAM_FEATURE_GATE_BLOCKER_KIND = "feature_gate";
 
 /**
  * Streams that seed PAUSED, with no blocker (paused-without-a-blocker is
- * distinguishable from a `feature_gate` pause).
- *
- * WP-F1 generalizes what used to be a hard `if (stream === "posts")`. Every
- * OTHER stream seeds `pending`/recovery, so a gated-off stream added to
- * SYNC_STREAMS without an entry here would seed one pending row per page,
- * FLEET-WIDE, on the deploy that ships it — before its flag was ever opened.
- * Ungating stays an explicit act: an operator uses the stream's own sync
- * scope.
+ * distinguishable from a blocked row). Every other stream seeds
+ * `pending`/recovery, so a gated-off stream added to the executor without an
+ * entry here would seed one pending row per page, fleet-wide, on the deploy
+ * that ships it. Ungating stays an explicit act: an operator uses the stream's
+ * own sync scope.
  */
 export const SEED_PAUSED_SYNC_STREAMS = [
   "posts",
-  "stats_snapshot",
-  "notifications",
-  "catalog",
-  "post_replies",
-  "payouts",
-  "media_stats",
-] as const;
+] as const satisfies readonly LegacyExecutorStream[];
 
 export function isSeedPausedSyncStream(stream: string): boolean {
   return (SEED_PAUSED_SYNC_STREAMS as readonly string[]).includes(stream);
 }
 
 export interface SyncStreamPolicy {
-  stream: SyncStream;
+  stream: LegacyExecutorStream;
   domain: SyncDomain;
   cadenceSeconds: number;
   basePriority: number;
   streamIndex: number;
   defaultWorkClass: SyncWorkClass;
-  /** How long runnable work may wait before status reports it delayed. For
-   * the lanes in SYNC_STREAM_STARVED_PRIORITY it is also the scheduling
-   * limit: past it a starved lane is served ahead of a DM drain. */
+  /** How long runnable work may wait before status reports it delayed. */
   queueDelayThresholdMs: number;
   progressStallThresholdMs: number;
   freshnessSlaSeconds: number | null;
@@ -140,8 +120,8 @@ export interface SyncStreamPolicy {
 
 export interface SyncDomainPolicy {
   domain: SyncDomain;
-  primaryStreams: SyncStream[];
-  supportingStreams: SyncStream[];
+  primaryStreams: LegacyExecutorStream[];
+  supportingStreams: LegacyExecutorStream[];
   freshnessSlaSeconds: number | null;
 }
 
@@ -160,7 +140,12 @@ export interface PageSyncYieldResult {
   superseded: boolean;
 }
 
-export const SYNC_STREAM_POLICY: Record<SyncStream, SyncStreamPolicy> = {
+// One row per stream the legacy executor runs. The Fansly lanes' rows went at
+// step 4 (S4-24): the Fansly Sync Engine's registry holds their periods,
+// classes and SLOs (`apps/runtime/src/sync/fansly/registry.ts`). `streamIndex`
+// keeps each stream's historical number (the slot offsets of the stored rows
+// are computed from it), so the numbers are not contiguous.
+export const SYNC_STREAM_POLICY: Record<LegacyExecutorStream, SyncStreamPolicy> = {
   light: {
     stream: "light",
     domain: "connection",
@@ -194,13 +179,9 @@ export const SYNC_STREAM_POLICY: Record<SyncStream, SyncStreamPolicy> = {
     progressStallThresholdMs: 10 * 60_000,
     freshnessSlaSeconds: null,
   },
-  // Owner decision 2026-09-30: read Fansly top spenders every 6 h, not hourly.
-  // Nothing reads its rankings (page_fan_identities) any more: the spenders
-  // board reads the fan_earnings projection (Stage 32). The lane stays as an
-  // independent cross-check; money still arrives hourly through
-  // `transactions`. A 6 h gap blocks nothing: the DM lanes wait only for its
-  // FIRST success (dependencyMet), and its freshness is never judged. The
-  // OnlyFans lane shares the cadence; it reads local transactions only.
+  // Every 6 h (owner decision 2026-09-30). It reads local transactions only,
+  // and nothing judges its freshness: the DM lane waits only for its FIRST
+  // success (dependencyMet).
   top_spenders: {
     stream: "top_spenders",
     domain: "financials",
@@ -223,28 +204,6 @@ export const SYNC_STREAM_POLICY: Record<SyncStream, SyncStreamPolicy> = {
     progressStallThresholdMs: 5 * 60_000,
     freshnessSlaSeconds: 3 * 3600,
   },
-  followers: {
-    stream: "followers",
-    domain: "audience",
-    cadenceSeconds: 3600,
-    basePriority: 35,
-    streamIndex: 6,
-    defaultWorkClass: "live",
-    queueDelayThresholdMs: 15 * 60_000,
-    progressStallThresholdMs: 5 * 60_000,
-    freshnessSlaSeconds: 3 * 3600,
-  },
-  followers_reconcile: {
-    stream: "followers_reconcile",
-    domain: "audience",
-    cadenceSeconds: 172800,
-    basePriority: 34,
-    streamIndex: 7,
-    defaultWorkClass: "maintenance",
-    queueDelayThresholdMs: 90 * 60_000,
-    progressStallThresholdMs: 15 * 60_000,
-    freshnessSlaSeconds: null,
-  },
   dm_conversations: {
     stream: "dm_conversations",
     domain: "messages_live",
@@ -255,44 +214,6 @@ export const SYNC_STREAM_POLICY: Record<SyncStream, SyncStreamPolicy> = {
     queueDelayThresholdMs: 15 * 60_000,
     progressStallThresholdMs: 5 * 60_000,
     freshnessSlaSeconds: 3600,
-  },
-  dm_messages: {
-    stream: "dm_messages",
-    domain: "messages_history",
-    cadenceSeconds: 86400,
-    basePriority: 25,
-    streamIndex: 9,
-    defaultWorkClass: "history",
-    queueDelayThresholdMs: 45 * 60_000,
-    progressStallThresholdMs: 15 * 60_000,
-    freshnessSlaSeconds: null,
-  },
-  // Stage 16: Fansly-only bulk streams — lowest priority, behind
-  // transactions/DMs except one chunk per starvation window
-  // (SYNC_STREAM_STARVED_PRIORITY), and deliberately ABSENT from SYNC_DOMAIN_POLICY
-  // supporting lists: a flag-gated bulk stream must not degrade the page's
-  // block-health UX to "catching up" while its ramp gate is off.
-  fan_earnings: {
-    stream: "fan_earnings",
-    domain: "financials",
-    cadenceSeconds: 86400,
-    basePriority: 20,
-    streamIndex: 10,
-    defaultWorkClass: "maintenance",
-    queueDelayThresholdMs: 90 * 60_000,
-    progressStallThresholdMs: 15 * 60_000,
-    freshnessSlaSeconds: null,
-  },
-  purchase_history: {
-    stream: "purchase_history",
-    domain: "messages_history",
-    cadenceSeconds: 4 * 3600,
-    basePriority: 15,
-    streamIndex: 11,
-    defaultWorkClass: "history",
-    queueDelayThresholdMs: 90 * 60_000,
-    progressStallThresholdMs: 15 * 60_000,
-    freshnessSlaSeconds: null,
   },
   // Creator posts ship as a durable but default-paused capture lane. Keep the
   // stream out of block-domain policy until the per-page canary is explicitly
@@ -308,150 +229,19 @@ export const SYNC_STREAM_POLICY: Record<SyncStream, SyncStreamPolicy> = {
     progressStallThresholdMs: 30 * 60_000,
     freshnessSlaSeconds: null,
   },
-  // WP-F1: the statistics sweep. `domain: "financials"` is where its revenue
-  // mix belongs, but note it is deliberately ABSENT from SYNC_DOMAIN_POLICY's
-  // primary/supporting lists — a flag-gated analytics stream must not degrade a
-  // page's block-health UX to "catching up" while its ramp gate is off.
-  // Cadence 21 600 s so a deferred day resumes within six hours; the handler
-  // decides whether a daily sweep is actually due.
-  stats_snapshot: {
-    stream: "stats_snapshot",
-    domain: "financials",
-    cadenceSeconds: 21600,
-    basePriority: 13,
-    streamIndex: 13,
-    defaultWorkClass: "maintenance",
-    queueDelayThresholdMs: 90 * 60_000,
-    progressStallThresholdMs: 30 * 60_000,
-    freshnessSlaSeconds: null,
-  },
-  // WP-F2: the notification poll. LIVE class at 1 800 s — 48 polls a day, and
-  // the cadence is the ONLY thing standing between us and permanent loss: the
-  // provider serves each liker/reply/quote once. `domain: "audience"` labels
-  // what the lane is about (who interacted with the page) and nothing more —
-  // like `stats_snapshot`, it is deliberately ABSENT from SYNC_DOMAIN_POLICY's
-  // primary/supporting lists, so a flag-gated lane cannot degrade a page's
-  // block-health UX to "catching up" while its gate is shut.
-  //
-  // basePriority 12 puts it BELOW transactions and the DM lanes on purpose:
-  // the notification poll is 1–2 calls and can wait for money and messages,
-  // and the plan's own pacing rule is "priority yield to DM/tx". The wait is
-  // bounded: after 30 min starved it gets one chunk ahead of them
-  // (SYNC_STREAM_STARVED_PRIORITY).
-  notifications: {
-    stream: "notifications",
-    domain: "audience",
-    cadenceSeconds: 1800,
-    basePriority: 12,
-    streamIndex: 14,
-    defaultWorkClass: "live",
-    queueDelayThresholdMs: 30 * 60_000,
-    progressStallThresholdMs: 30 * 60_000,
-    freshnessSlaSeconds: null,
-  },
-  // WP-F3: the catalog sweep. MAINTENANCE class at 86 400 s — inventory moves
-  // in days, and every step here is deferrable by construction (nothing in this
-  // lane is announced once). `domain: "financials"` is where its subscription
-  // tiers, plan prices and gift codes belong — there is no `content` domain and
-  // inventing one would be a vocabulary change for a label. Like
-  // `stats_snapshot` and `notifications` it is deliberately ABSENT from
-  // SYNC_DOMAIN_POLICY's primary/supporting lists, so a flag-gated lane cannot
-  // degrade a page's block-health UX to "catching up" while its gate is shut.
-  //
-  // basePriority 11 puts it below the notification poll and far below money and
-  // DMs: a daily inventory read can wait, and the plan's pacing rule is
-  // "priority yield to DM/tx". It stays below transactions and dm_conversations;
-  // the one exception is a chunk per 6 h starved ahead of a dm_messages drain
-  // (SYNC_STREAM_STARVED_PRIORITY).
-  catalog: {
-    stream: "catalog",
-    domain: "financials",
-    cadenceSeconds: 86_400,
-    basePriority: 11,
-    streamIndex: 15,
-    defaultWorkClass: "maintenance",
-    queueDelayThresholdMs: 6 * 60 * 60_000,
-    progressStallThresholdMs: 60 * 60_000,
-    freshnessSlaSeconds: null,
-  },
-  // WP-F5: the replies walk. HISTORY class at 21 600 s — four dispatches a day,
-  // each spending a slice of a 100-call daily budget over a back-catalogue that
-  // takes ~14 days to first-pass on the biggest live page. `domain: "audience"`
-  // is where a comment belongs (it is a fan speaking, not money and not a DM);
-  // like every other gated lane it is deliberately ABSENT from
-  // SYNC_DOMAIN_POLICY's primary/supporting lists, so a shut gate cannot
-  // degrade a page's block-health UX to "catching up".
-  //
-  // basePriority 10 puts it below the catalog sweep and far below money and
-  // DMs: a comment archive that is 14 days from its first pass can wait one
-  // more dispatch, and the plan's pacing rule is "priority yield to DM/tx". It
-  // stays below transactions and dm_conversations; the one exception is a chunk
-  // per 6 h starved ahead of a dm_messages drain (SYNC_STREAM_STARVED_PRIORITY).
-  post_replies: {
-    stream: "post_replies",
-    domain: "audience",
-    cadenceSeconds: 21_600,
-    basePriority: 10,
-    streamIndex: 16,
-    defaultWorkClass: "maintenance",
-    queueDelayThresholdMs: 6 * 60 * 60_000,
-    progressStallThresholdMs: 60 * 60_000,
-    freshnessSlaSeconds: null,
-  },
-  // WP-F7: the payouts lane. MAINTENANCE class at 86 400 s — a payout request
-  // moves in days, and the steady state is exactly two calls: one method
-  // listing and one head page. `domain: "financials"` is where money-out
-  // belongs; like every other gated lane it is deliberately ABSENT from
-  // SYNC_DOMAIN_POLICY's primary/supporting lists, so a shut gate cannot
-  // degrade a page's block-health UX to "catching up".
-  //
-  // basePriority 9 puts it below the comment archive and far below money-IN and
-  // DMs. That is not a judgement about how important payouts are — it is that
-  // this lane reads a HISTORY nobody is waiting on, two calls at a time, and
-  // the plan's pacing rule is "priority yield to DM/tx". It stays below
-  // transactions and dm_conversations; the one exception is a chunk per 6 h
-  // starved ahead of a dm_messages drain (SYNC_STREAM_STARVED_PRIORITY).
-  payouts: {
-    stream: "payouts",
-    domain: "financials",
-    cadenceSeconds: 86_400,
-    basePriority: 9,
-    streamIndex: 17,
-    defaultWorkClass: "maintenance",
-    queueDelayThresholdMs: 6 * 60 * 60_000,
-    progressStallThresholdMs: 60 * 60_000,
-    freshnessSlaSeconds: null,
-  },
-  // WP-F4: the per-media statistics lane. HISTORY class at 21 600 s — four
-  // dispatches a day, each spending a slice of a 300-attempt daily budget over
-  // a catalogue of thousands of media. It is the ONE lane in this initiative
-  // built to saturate its own cap (A16: at M = 2 000 the decay wants 294
-  // calls/day against a cap of 300), so it is never "fresh", never urgent, and
-  // what it must not do is burst.
-  //
-  // `domain: "audience"` is where per-media traffic belongs as a LABEL — it is
-  // viewers, not money and not a DM — and like every other gated lane it is
-  // deliberately ABSENT from SYNC_DOMAIN_POLICY's primary/supporting lists, so
-  // a shut gate cannot degrade a page's block-health UX to "catching up".
-  //
-  // basePriority 8 is the LOWEST in the tree, below the payouts lane: this is
-  // the highest-volume lane in the initiative, it reads a back catalogue nobody
-  // is waiting on, and the plan's pacing rule is "priority yield to DM/tx". It
-  // stays below transactions and dm_conversations; the one exception is a chunk
-  // per 6 h starved ahead of a dm_messages drain (SYNC_STREAM_STARVED_PRIORITY).
-  media_stats: {
-    stream: "media_stats",
-    domain: "audience",
-    cadenceSeconds: 21_600,
-    basePriority: 8,
-    streamIndex: 18,
-    defaultWorkClass: "maintenance",
-    queueDelayThresholdMs: 6 * 60 * 60_000,
-    progressStallThresholdMs: 60 * 60_000,
-    freshnessSlaSeconds: null,
-  },
 };
 
+/** The policy of a stream the legacy executor runs, or null for a stream it
+ *  does not (a record row). */
+export function syncStreamPolicy(stream: SyncStream): SyncStreamPolicy | null {
+  return isLegacyExecutorStream(stream) ? SYNC_STREAM_POLICY[stream] : null;
+}
+
+// The Settings blocks of a page the legacy executor serves. `messages_history`
+// has no stream: OnlyFans's history is acquired by its mirror jobs (the
+// legacy `dm_messages` crawler is retired), so the block reads not available.
+// A Fansly page's blocks are the engine's
+// (`apps/runtime/src/services/sync-status-engine.ts`).
 export const SYNC_DOMAIN_POLICY: Record<SyncDomain, SyncDomainPolicy> = {
   connection: {
     domain: "connection",
@@ -467,8 +257,8 @@ export const SYNC_DOMAIN_POLICY: Record<SyncDomain, SyncDomainPolicy> = {
   },
   audience: {
     domain: "audience",
-    primaryStreams: ["subscribers", "followers"],
-    supportingStreams: ["followers_reconcile"],
+    primaryStreams: ["subscribers"],
+    supportingStreams: [],
     freshnessSlaSeconds: 3 * 3600,
   },
   messages_live: {
@@ -479,54 +269,28 @@ export const SYNC_DOMAIN_POLICY: Record<SyncDomain, SyncDomainPolicy> = {
   },
   messages_history: {
     domain: "messages_history",
-    primaryStreams: ["dm_messages"],
+    primaryStreams: [],
     supportingStreams: [],
     freshnessSlaSeconds: null,
   },
 };
 
-export const SYNC_STREAM_DEPENDENCIES: Partial<Record<SyncStream, SyncStream[]>> = {
-  // WP-F4: the ONE dependency this initiative declares. `catalog` is what
-  // measures M — the media denominator this lane's cadence, its daily demand
-  // and its reported cycle estimate are all computed against. Running the
-  // per-media walk before the catalogue has been enumerated would size a
-  // 300-call-a-day lane against whatever media the DM sidecars happened to
-  // mention. (§3.3 site 14: every other new stream declares none.)
-  media_stats: ["catalog"],
+/** What a stream waits for before its first run (a dependency the page has
+ *  no row for is ignored). */
+export const SYNC_STREAM_DEPENDENCIES: Partial<Record<LegacyExecutorStream, LegacyExecutorStream[]>> = {
   top_spenders: ["transactions"],
-  purchase_history: ["light"],
-  followers_reconcile: ["followers"],
-  dm_conversations: ["light", "top_spenders", "transactions", "subscribers", "followers"],
-  dm_messages: [
-    "light",
-    "top_spenders",
-    "transactions",
-    "subscribers",
-    "followers",
-    "dm_conversations",
-  ],
+  dm_conversations: ["light", "top_spenders", "transactions", "subscribers"],
 };
 
-const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStream, number>> = {
+const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<LegacyExecutorStream, number>> = {
   scheduled: {
     light: 60,
     transactions: 50,
     fan_identities: 49,
     top_spenders: 45,
     subscribers: 40,
-    followers: 35,
-    followers_reconcile: 34,
     dm_conversations: 30,
-    dm_messages: 25,
-    fan_earnings: 20,
-    purchase_history: 19,
     posts: 18,
-    stats_snapshot: 17,
-    notifications: 16,
-    catalog: 15,
-    post_replies: 14,
-    payouts: 13,
-    media_stats: 12,
   },
   event: {
     light: 60,
@@ -534,19 +298,8 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     fan_identities: 49,
     top_spenders: 45,
     subscribers: 40,
-    followers: 35,
-    followers_reconcile: 34,
     dm_conversations: 30,
-    dm_messages: 25,
-    fan_earnings: 20,
-    purchase_history: 19,
     posts: 18,
-    stats_snapshot: 17,
-    notifications: 16,
-    catalog: 15,
-    post_replies: 14,
-    payouts: 13,
-    media_stats: 12,
   },
   recovery: {
     light: 70,
@@ -554,19 +307,8 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     fan_identities: 59,
     top_spenders: 55,
     subscribers: 50,
-    followers: 45,
-    followers_reconcile: 44,
     dm_conversations: 40,
-    dm_messages: 35,
-    fan_earnings: 30,
-    purchase_history: 29,
     posts: 28,
-    stats_snapshot: 27,
-    notifications: 26,
-    catalog: 25,
-    post_replies: 24,
-    payouts: 23,
-    media_stats: 22,
   },
   anomaly: {
     light: 70,
@@ -574,19 +316,8 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     fan_identities: 59,
     top_spenders: 55,
     subscribers: 50,
-    followers: 45,
-    followers_reconcile: 44,
     dm_conversations: 40,
-    dm_messages: 35,
-    fan_earnings: 30,
-    purchase_history: 29,
     posts: 28,
-    stats_snapshot: 27,
-    notifications: 26,
-    catalog: 25,
-    post_replies: 24,
-    payouts: 23,
-    media_stats: 22,
   },
   manual: {
     light: 100,
@@ -594,19 +325,8 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     fan_identities: 89,
     top_spenders: 85,
     subscribers: 80,
-    followers: 75,
-    followers_reconcile: 74,
     dm_conversations: 70,
-    dm_messages: 65,
-    fan_earnings: 60,
-    purchase_history: 59,
     posts: 58,
-    stats_snapshot: 57,
-    notifications: 56,
-    catalog: 55,
-    post_replies: 54,
-    payouts: 53,
-    media_stats: 52,
   },
   onboarding: {
     light: 100,
@@ -614,19 +334,8 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     fan_identities: 89,
     top_spenders: 85,
     subscribers: 80,
-    followers: 75,
-    followers_reconcile: 74,
     dm_conversations: 70,
-    dm_messages: 65,
-    fan_earnings: 60,
-    purchase_history: 59,
     posts: 58,
-    stats_snapshot: 57,
-    notifications: 56,
-    catalog: 55,
-    post_replies: 54,
-    payouts: 53,
-    media_stats: 52,
   },
   reset: {
     light: 100,
@@ -634,68 +343,10 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
     fan_identities: 89,
     top_spenders: 85,
     subscribers: 80,
-    followers: 75,
-    followers_reconcile: 74,
     dm_conversations: 70,
-    dm_messages: 65,
-    fan_earnings: 60,
-    purchase_history: 59,
     posts: 58,
-    stats_snapshot: 57,
-    notifications: 56,
-    catalog: 55,
-    post_replies: 54,
-    payouts: 53,
-    media_stats: 52,
   },
 };
-
-/**
- * Bounded anti-starvation aging for one page's stream selection (owner
- * decision, 2026-09-28). Strict priority alone let a long dm_messages drain
- * (a mass-DM head walk yields back runnable after every chunk) hold every
- * lower lane at zero chunks for 18-29 h. A runnable BACKGROUND Fansly row
- * of a stream listed here that has waited longer than its own
- * SYNC_STREAM_POLICY queueDelayThresholdMs is ranked at this priority for ONE
- * chunk. The wait counts from the latest of its request, its last lease and
- * the retry or pacing deadline it waited out, so a lane coming off a deadline
- * (a daily cap reopening at 00:05 UTC, a backoff) waits a full threshold
- * again. Taking the lease stamps started_at, which restarts the wait, so the
- * row falls back to its table priority until it has starved for another full
- * threshold. Accepted cost: DM drains finish roughly 5-10% later.
- *
- * - 51 sits above every scheduled/event priority except light (60) and below
- *   every manual/onboarding/reset priority (>= 52), so operator work always
- *   wins.
- * - The bulk lanes (catalog, post_replies, payouts, media_stats) get 26:
- *   just above a scheduled dm_messages chain (25), but never ahead of
- *   transactions or dm_conversations (>= 30 from any source).
- * - Only streams ranked below scheduled dm_messages are listed. None belongs
- *   to the DM lanes or followers reconciliation, so aging never lifts those.
- */
-const STARVED_BACKGROUND_PRIORITY = 51;
-const STARVED_BULK_LANE_PRIORITY = 26;
-
-export const SYNC_STREAM_STARVED_PRIORITY: Partial<Record<SyncStream, number>> = {
-  fan_earnings: STARVED_BACKGROUND_PRIORITY,
-  purchase_history: STARVED_BACKGROUND_PRIORITY,
-  posts: STARVED_BACKGROUND_PRIORITY,
-  stats_snapshot: STARVED_BACKGROUND_PRIORITY,
-  notifications: STARVED_BACKGROUND_PRIORITY,
-  catalog: STARVED_BULK_LANE_PRIORITY,
-  post_replies: STARVED_BULK_LANE_PRIORITY,
-  payouts: STARVED_BULK_LANE_PRIORITY,
-  media_stats: STARVED_BULK_LANE_PRIORITY,
-};
-
-/** Dispatch sources that aging may promote. Manual, onboarding and reset
- * already rank above every promoted row. */
-export const SYNC_STARVATION_AGING_SOURCES: readonly SyncRequestSource[] = [
-  "scheduled",
-  "event",
-  "recovery",
-  "anomaly",
-];
 
 export interface PageSyncState {
   pageId: number;
@@ -845,27 +496,25 @@ function pageSyncPlatformScopeSql(pageIdColumn: string, platforms: PageSyncPlatf
   )`;
 }
 
-function streamOrderSql(columnName: string) {
+/** A stream's place in the one order a page's rows are listed and locked in:
+ *  the executor's streams by `streamIndex`, then the record streams in
+ *  vocabulary order. A total order, so two writers that lock a page's rows
+ *  take them the same way whatever rows the page holds. */
+export function syncStreamOrderIndex(stream: SyncStream): number {
+  return syncStreamPolicy(stream)?.streamIndex ?? RECORD_STREAM_ORDER_BASE + SYNC_STREAMS.indexOf(stream);
+}
+
+const RECORD_STREAM_ORDER_BASE = 100;
+
+/** `syncStreamOrderIndex` as a SQL `case` over a stream column: the only
+ *  ladder (the lock order, the lease tie-break and the ops listing share it). */
+export function syncStreamOrderSql(columnName: string) {
+  const ladder = SYNC_STREAMS
+    .map((stream) => `when '${stream}' then ${syncStreamOrderIndex(stream)}`)
+    .join("\n      ");
   return sql.raw(`
     case ${columnName}
-      when 'light' then ${SYNC_STREAM_POLICY.light.streamIndex}
-      when 'transactions' then ${SYNC_STREAM_POLICY.transactions.streamIndex}
-      when 'fan_identities' then ${SYNC_STREAM_POLICY.fan_identities.streamIndex}
-      when 'top_spenders' then ${SYNC_STREAM_POLICY.top_spenders.streamIndex}
-      when 'subscribers' then ${SYNC_STREAM_POLICY.subscribers.streamIndex}
-      when 'followers' then ${SYNC_STREAM_POLICY.followers.streamIndex}
-      when 'followers_reconcile' then ${SYNC_STREAM_POLICY.followers_reconcile.streamIndex}
-      when 'dm_conversations' then ${SYNC_STREAM_POLICY.dm_conversations.streamIndex}
-      when 'dm_messages' then ${SYNC_STREAM_POLICY.dm_messages.streamIndex}
-      when 'fan_earnings' then ${SYNC_STREAM_POLICY.fan_earnings.streamIndex}
-      when 'purchase_history' then ${SYNC_STREAM_POLICY.purchase_history.streamIndex}
-      when 'posts' then ${SYNC_STREAM_POLICY.posts.streamIndex}
-      when 'stats_snapshot' then ${SYNC_STREAM_POLICY.stats_snapshot.streamIndex}
-      when 'notifications' then ${SYNC_STREAM_POLICY.notifications.streamIndex}
-      when 'catalog' then ${SYNC_STREAM_POLICY.catalog.streamIndex}
-      when 'post_replies' then ${SYNC_STREAM_POLICY.post_replies.streamIndex}
-      when 'payouts' then ${SYNC_STREAM_POLICY.payouts.streamIndex}
-      when 'media_stats' then ${SYNC_STREAM_POLICY.media_stats.streamIndex}
+      ${ladder}
       else 999
     end
   `);
@@ -874,24 +523,9 @@ function streamOrderSql(columnName: string) {
 function streamPriorityBySourceSql(streamColumnName: string, sourceColumnName: string) {
   const priorityCase = (source: SyncRequestSource) => `
     case ${streamColumnName}
-      when 'light' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].light}
-      when 'transactions' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].transactions}
-      when 'fan_identities' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].fan_identities}
-      when 'top_spenders' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].top_spenders}
-      when 'subscribers' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].subscribers}
-      when 'followers' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].followers}
-      when 'followers_reconcile' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].followers_reconcile}
-      when 'dm_conversations' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].dm_conversations}
-      when 'dm_messages' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].dm_messages}
-      when 'fan_earnings' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].fan_earnings}
-      when 'purchase_history' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].purchase_history}
-      when 'posts' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].posts}
-      when 'stats_snapshot' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].stats_snapshot}
-      when 'notifications' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].notifications}
-      when 'catalog' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].catalog}
-      when 'post_replies' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].post_replies}
-      when 'payouts' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].payouts}
-      when 'media_stats' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source].media_stats}
+      ${LEGACY_EXECUTOR_STREAMS
+        .map((stream) => `when '${stream}' then ${SYNC_STREAM_PRIORITY_BY_SOURCE[source][stream]}`)
+        .join("\n      ")}
       else 0
     end
   `;
@@ -908,41 +542,6 @@ function streamPriorityBySourceSql(streamColumnName: string, sourceColumnName: s
       else ${priorityCase("scheduled")}
     end
   `);
-}
-
-/** The time a runnable row last became eligible or was last served: its
- * request, its last lease, or the retry/pacing deadline it waited out. The
- * planner keeps a passed retry_at until the next lease outcome or request
- * rewrites it, so the deadline still counts after the row turns pending. */
-export function pageSyncRunnableSinceSql(tableAlias: string) {
-  return sql.raw(
-    `greatest(${tableAlias}.requested_at, ${tableAlias}.started_at, ${tableAlias}.retry_at)`,
-  );
-}
-
-/** SYNC_STREAM_STARVED_PRIORITY for a row that has starved past its stream's
- * queueDelayThresholdMs, else null. */
-function starvedPageSyncPrioritySql(tableAlias: string, platformColumn: string, now: Date) {
-  const agedStreams = SYNC_STREAMS.filter((stream) => SYNC_STREAM_STARVED_PRIORITY[stream] !== undefined);
-  const thresholdCase = agedStreams
-    .map((stream) =>
-      `when '${stream}' then ${SYNC_STREAM_POLICY[stream].queueDelayThresholdMs} * interval '1 millisecond'`)
-    .join("\n        ");
-  const priorityCase = agedStreams
-    .map((stream) => `when '${stream}' then ${SYNC_STREAM_STARVED_PRIORITY[stream]}`)
-    .join("\n        ");
-  const sources = SYNC_STARVATION_AGING_SOURCES.map((source) => `'${source}'`).join(", ");
-
-  return sql`case
-    when ${sql.raw(platformColumn)} = 'fansly'
-      and coalesce(${sql.raw(`${tableAlias}.dispatch_source`)}, 'scheduled') in (${sql.raw(sources)})
-      and ${now}::timestamptz - ${pageSyncRunnableSinceSql(tableAlias)} > case ${sql.raw(`${tableAlias}.stream`)}
-        ${sql.raw(thresholdCase)}
-      end
-    then case ${sql.raw(`${tableAlias}.stream`)}
-        ${sql.raw(priorityCase)}
-      end
-  end`;
 }
 
 function normalizePageSyncState(row: Record<string, unknown>): PageSyncState {
@@ -1012,29 +611,40 @@ function normalizePageSyncLease(row: Record<string, unknown>): PageSyncLease {
   };
 }
 
-export function getSyncStreamsForPlatform(platform: "fansly" | "onlyfans"): SyncStream[] {
-  // OnlyFans: subscribers is the OFAPI audience sweep (docs/ofapi-parity-plan.md
-  // Phase 3) and top_spenders is computed from the transactions table (Phase 5);
-  // the planner force-pauses both for pages outside their flags, mirroring the
-  // DM-polling gate.
-  return platform === "fansly"
-    ? SYNC_STREAMS.filter((stream) => stream !== "fan_identities")
-    : [
-      "light",
-      "transactions",
-      "fan_identities",
-      "top_spenders",
-      "subscribers",
-      "dm_conversations",
-      "posts",
-    ];
+// OnlyFans: subscribers is the OFAPI audience sweep (docs/ofapi-parity-plan.md
+// Phase 3) and top_spenders is computed from the transactions table (Phase 5);
+// the planner force-pauses both for pages outside their flags, mirroring the
+// DM-polling gate. Fansly: none since step 4 (S4-10, the rows deleted in
+// S4-24) — the Fansly Sync Engine reads every Fansly page.
+const LEGACY_EXECUTOR_STREAMS_BY_PLATFORM: Record<"fansly" | "onlyfans", readonly LegacyExecutorStream[]> = {
+  fansly: [],
+  onlyfans: LEGACY_EXECUTOR_STREAMS,
+};
+
+/** The streams the legacy page-sync executor runs on a platform's pages. */
+export function getSyncStreamsForPlatform(platform: "fansly" | "onlyfans"): LegacyExecutorStream[] {
+  return [...LEGACY_EXECUTOR_STREAMS_BY_PLATFORM[platform]];
 }
+
+/** The platforms the legacy executor has a stream for (OnlyFans only): the
+ *  same set the platform registry declares (`legacyExecutorPlatforms`, pinned
+ *  equal by tests/sync-onlyfans-boundary.test.ts), for the SQL surfaces of
+ *  this package that cannot read the runtime's registry. */
+export const LEGACY_EXECUTOR_PLATFORMS: ReadonlyArray<"fansly" | "onlyfans"> =
+  (Object.keys(LEGACY_EXECUTOR_STREAMS_BY_PLATFORM) as Array<"fansly" | "onlyfans">)
+    .filter((platform) => LEGACY_EXECUTOR_STREAMS_BY_PLATFORM[platform].length > 0);
 
 export const ONLYFANS_LEGACY_DM_MESSAGES_BLOCKER_KIND = "retired";
 export const ONLYFANS_LEGACY_DM_MESSAGES_BLOCKER_CODE =
   "legacy_ofapi_dm_messages_retired";
 export const ONLYFANS_LEGACY_DM_MESSAGES_BLOCKER_MESSAGE =
   "Legacy OnlyFans dm_messages crawler is permanently retired; history acquisition is owned by durable OF mirror jobs";
+
+// The cadence and slot index a parked OnlyFans `dm_messages` row is written
+// with. The stream has no policy row (nothing runs it): these fill the row's
+// NOT NULL schedule columns with the values the lane had when it ran.
+const RETIRED_DM_MESSAGES_CADENCE_SECONDS = 86_400;
+const RETIRED_DM_MESSAGES_STREAM_INDEX = 9;
 
 /**
  * Permanently parks any pre-existing OnlyFans dm_messages state row.
@@ -1067,11 +677,11 @@ export async function retireLegacyOnlyFansDmMessages(
       select p.id,
              'dm_messages',
              'paused',
-             ${SYNC_STREAM_POLICY.dm_messages.cadenceSeconds},
+             ${RETIRED_DM_MESSAGES_CADENCE_SECONDS},
              mod(
                (p.id::bigint * 2654435761::bigint) +
-                 (${SYNC_STREAM_POLICY.dm_messages.streamIndex}::bigint * 2246822519::bigint),
-               ${SYNC_STREAM_POLICY.dm_messages.cadenceSeconds}::bigint
+                 (${RETIRED_DM_MESSAGES_STREAM_INDEX}::bigint * 2246822519::bigint),
+               ${RETIRED_DM_MESSAGES_CADENCE_SECONDS}::bigint
              )::int,
              ${ONLYFANS_LEGACY_DM_MESSAGES_BLOCKER_KIND},
              ${ONLYFANS_LEGACY_DM_MESSAGES_BLOCKER_CODE},
@@ -1123,13 +733,14 @@ export async function retireLegacyOnlyFansDmMessages(
   });
 }
 
+/** A request's queue priority; 0 for a stream the executor does not run. */
 export function resolvePageSyncPriority(stream: SyncStream, source: SyncRequestSource) {
-  return SYNC_STREAM_PRIORITY_BY_SOURCE[source][stream];
+  return isLegacyExecutorStream(stream) ? SYNC_STREAM_PRIORITY_BY_SOURCE[source][stream] : 0;
 }
 
 export function computePageSyncSlotOffsetSeconds(
   pageId: number,
-  stream: SyncStream,
+  stream: LegacyExecutorStream,
 ) {
   const policy = SYNC_STREAM_POLICY[stream];
   return Number(
@@ -1175,26 +786,7 @@ export function rebasePageSyncLastScheduledSlot(input: {
 }
 
 export function normalizePageSyncRequestStreams(streams: readonly SyncStream[]) {
-  return [...new Set(streams)].sort((left, right) =>
-    SYNC_STREAM_POLICY[left].streamIndex - SYNC_STREAM_POLICY[right].streamIndex);
-}
-
-function computeTrustedStreamTimestamp(
-  stream: SyncStream,
-  page: {
-    lastLightSyncAt: Date | null;
-    lastFollowerSyncAt: Date | null;
-  },
-) {
-  if (stream === "light") {
-    return page.lastLightSyncAt;
-  }
-
-  if (stream === "followers" || stream === "followers_reconcile") {
-    return page.lastFollowerSyncAt;
-  }
-
-  return null;
+  return [...new Set(streams)].sort((left, right) => syncStreamOrderIndex(left) - syncStreamOrderIndex(right));
 }
 
 function buildSeedPageSyncState(
@@ -1202,29 +794,17 @@ function buildSeedPageSyncState(
     id: number;
     platform: "fansly" | "onlyfans";
     lastLightSyncAt: Date | null;
-    lastFollowerSyncAt: Date | null;
-    followerCount: number;
-    activeFollowerCount: number;
   },
-  stream: SyncStream,
+  stream: LegacyExecutorStream,
   now: Date,
   onboarding: boolean,
 ): typeof pageSyncStates.$inferInsert {
   const policy = SYNC_STREAM_POLICY[stream];
   const slotOffsetSeconds = computePageSyncSlotOffsetSeconds(page.id, stream);
   const currentSlot = computeCurrentPageSyncSlot(now, policy.cadenceSeconds, slotOffsetSeconds);
-  const trustedAt = computeTrustedStreamTimestamp(stream, page);
-  const followersReconcileNeedsRecovery = page.platform === "fansly" && (
-    page.lastFollowerSyncAt === null ||
-    (now.getTime() - page.lastFollowerSyncAt.getTime()) >
-      SYNC_STREAM_POLICY.followers_reconcile.cadenceSeconds * 1000 ||
-    page.followerCount !== page.activeFollowerCount
-  );
-  const shouldRecover = onboarding
-    ? stream !== "followers_reconcile"
-    : stream === "followers_reconcile"
-      ? followersReconcileNeedsRecovery
-      : trustedAt === null;
+  // The one stream whose last success the page row records.
+  const trustedAt = stream === "light" ? page.lastLightSyncAt : null;
+  const shouldRecover = onboarding || trustedAt === null;
   const requestSource: SyncRequestSource | null = shouldRecover
     ? (onboarding ? "onboarding" : "recovery")
     : null;
@@ -1354,7 +934,7 @@ async function listPageSyncStatesInternal(
            updated_at as "updatedAt"
     from ${pageSyncStates}
     where ${and(...clauses)}
-    order by page_id asc, ${streamOrderSql("stream")} asc
+    order by page_id asc, ${syncStreamOrderSql("stream")} asc
     ${options?.lock ? sql`for update` : sql``}
   `);
 
@@ -1374,6 +954,8 @@ export async function listPageSyncStates(
   input?: {
     pageId?: number;
     streams?: SyncStream[];
+    /** Only these platforms' pages; every platform when absent. */
+    platforms?: PageSyncPlatformScope;
   },
 ) {
   return listPageSyncStatesInternal(db, input);
@@ -1437,10 +1019,7 @@ async function repairLegacyLightTrustedPageSyncStates(
     from ${pages} p
     where st.page_id = p.id
       and ${pageClause}
-      and (
-        st.stream = 'transactions'::sync_stream
-        or (st.stream = 'subscribers'::sync_stream and p.platform = 'fansly')
-      )
+      and st.stream = 'transactions'::sync_stream
       and st.status = 'idle'
       and st.request_seq = 0
       and st.applied_seq = 0
@@ -1458,12 +1037,17 @@ export async function ensurePageSyncStates(
     now?: Date;
     dependencyOptions?: PageSyncDependencyOptions;
     /** Seed and maintain only these platforms' pages (the planner and the
-     *  executor pass the legacy-executor set); every platform when absent. */
+     *  executor pass the legacy-executor set); every platform the executor
+     *  serves when absent. */
     platforms?: PageSyncPlatformScope;
   },
 ) {
   const now = input?.now ?? new Date();
-  const platforms = input?.platforms;
+  // A platform the executor runs no stream on (Fansly) has nothing to seed,
+  // repair or reschedule: the rows its pages hold are records, and stay as
+  // they were written whatever scope the caller names.
+  const platforms: PageSyncPlatformScope = (input?.platforms ?? LEGACY_EXECUTOR_PLATFORMS)
+    .filter((platform) => LEGACY_EXECUTOR_PLATFORMS.includes(platform));
   // Tombstoned pages (deletePageByLabel) must never get sync states seeded
   // or maintained — a deleted page otherwise re-enters the planner forever.
   const clauses = [sql`p.status = 'active'`, pageSyncPlatformScopeSql("p.id", platforms)];
@@ -1475,31 +1059,10 @@ export async function ensurePageSyncStates(
     id: NumericValue;
     platform: unknown;
     lastLightSyncAt: TimestampValue;
-    lastFollowerSyncAt: TimestampValue;
-    followerCount: NumericValue;
-    activeFollowerCount: NumericValue;
   }>(sql`
     select p.id as "id",
            p.platform as "platform",
-           p.last_light_sync_at as "lastLightSyncAt",
-           p.last_follower_sync_at as "lastFollowerSyncAt",
-           p.follower_count as "followerCount",
-           -- Only a new followers_reconcile state can consume this count.
-           -- Keep the page metadata and count in one snapshot, but avoid
-           -- reading followers during ordinary planner/executor preflights.
-           case when ${input?.onboarding ?? false} = false
-             and p.platform = 'fansly'
-             and not exists (
-               select 1 from ${pageSyncStates} st
-               where st.page_id = p.id
-                 and st.stream = 'followers_reconcile'
-             )
-           then (
-             select count(*)::int
-             from ${pageFollows} pf
-             where pf.platform_account_id = p.id
-               and pf.is_active = true
-           ) else 0 end as "activeFollowerCount"
+           p.last_light_sync_at as "lastLightSyncAt"
     from ${pages} p
     where ${and(...clauses)}
     order by p.id asc
@@ -1513,16 +1076,11 @@ export async function ensurePageSyncStates(
     id: normalizeNumber(row.id, "id"),
     platform: asPlatform(row.platform, "platform"),
     lastLightSyncAt: normalizeTimestamp(row.lastLightSyncAt, "lastLightSyncAt"),
-    lastFollowerSyncAt: normalizeTimestamp(row.lastFollowerSyncAt, "lastFollowerSyncAt"),
-    followerCount: row.followerCount === null || row.followerCount === undefined
-      ? 0
-      : normalizeNumber(row.followerCount, "followerCount"),
-    activeFollowerCount: normalizeNumber(row.activeFollowerCount, "activeFollowerCount"),
   }));
 
   const scope = {
     ...(input?.pageId !== undefined ? { pageId: input.pageId } : {}),
-    ...(platforms !== undefined ? { platforms } : {}),
+    platforms,
   };
   const existingRows = await listPageSyncStatesInternal(db, scope);
   const existingKeys = new Set(existingRows.map((row) => `${row.pageId}:${row.stream}`));
@@ -1552,6 +1110,11 @@ export async function ensurePageSyncStates(
   await db.transaction(async (tx) => {
     const database = tx as unknown as Database;
     for (const row of refreshedRows) {
+      // A record row (OnlyFans's retired dm_messages) has no policy: its
+      // schedule columns stay as they were written.
+      if (!isLegacyExecutorStream(row.stream)) {
+        continue;
+      }
       const policy = SYNC_STREAM_POLICY[row.stream];
       const slotOffsetSeconds = computePageSyncSlotOffsetSeconds(row.pageId, row.stream);
       if (
@@ -1588,22 +1151,22 @@ export async function ensurePageSyncStates(
 }
 
 /**
- * Stream dependencies are a Fansly/legacy ordering concern (hydrate account and
+ * Stream dependencies are a legacy ordering concern (hydrate account and
  * audience before DMs). OFAPI-fed OnlyFans DM streams are independent of the
- * legacy light/financial/audience sweeps, but legacy/unmapped OnlyFans pages
- * still need the same ordering guarantees as Fansly.
+ * legacy light/financial/audience sweeps; a legacy/unmapped OnlyFans page
+ * keeps the ordering. A stream the executor does not run on the page's
+ * platform (every stream of a Fansly page) has no dependency: its row is a
+ * record, and the refresh below neither blocks nor releases it.
  */
-const ONLYFANS_OFAPI_DM_EXCLUDED_DEPENDENCIES: readonly SyncStream[] = [
+const ONLYFANS_OFAPI_DM_EXCLUDED_DEPENDENCIES: readonly LegacyExecutorStream[] = [
   "light",
   "transactions",
   "subscribers",
-  "followers",
   "top_spenders",
 ];
 
 const ONLYFANS_DM_DEPENDENCY_EXEMPT_STREAMS: readonly SyncStream[] = [
   "dm_conversations",
-  "dm_messages",
 ];
 
 export interface PageSyncDependencyOptions {
@@ -1627,7 +1190,10 @@ export function getSyncStreamDependenciesForPage(input: {
   stream: SyncStream;
   onlyFansOfapiDmEligible?: boolean;
 }): SyncStream[] {
-  const base = SYNC_STREAM_DEPENDENCIES[input.stream] ?? [];
+  const base: readonly LegacyExecutorStream[] =
+    isLegacyExecutorStream(input.stream) && LEGACY_EXECUTOR_STREAMS_BY_PLATFORM[input.platform].includes(input.stream)
+      ? SYNC_STREAM_DEPENDENCIES[input.stream] ?? []
+      : [];
   if (
     input.platform !== "onlyfans" ||
     input.onlyFansOfapiDmEligible !== true ||
@@ -1720,6 +1286,8 @@ async function refreshLockedPageSyncDependencies(
 
   for (const [pageId, pageRows] of rowsByPage) {
     const context = contextByPage.get(pageId) ?? { platform: "fansly" as const, ofapiAccountId: null };
+    // The rows of a platform the executor does not serve are records.
+    if (!LEGACY_EXECUTOR_PLATFORMS.includes(context.platform)) continue;
     const streamByName = new Map(pageRows.map((row) => [row.stream, row] as const));
     for (const row of pageRows) {
       const dependencies = getSyncStreamDependenciesForPage({
@@ -1898,9 +1466,8 @@ export async function scheduleDuePageSync(
       if (row.requestSeq > row.appliedSeq) {
         if (row.status !== "blocked") {
           // A waited-out retry_at stays: every runnable filter already treats
-          // a past deadline as eligible, and starvation aging counts the wait
-          // from it (pageSyncRunnableSinceSql). The next lease outcome or
-          // request rewrites it.
+          // a past deadline as eligible. The next lease outcome or request
+          // rewrites it.
           await database.execute(sql`
             update ${pageSyncStates}
             set status = 'pending',
@@ -2041,18 +1608,14 @@ export async function acquirePageSyncLease(
   },
 ) {
   const now = input.now ?? new Date();
-  // Strict table priority, except that a starved background lane is ranked at
-  // its SYNC_STREAM_STARVED_PRIORITY for one chunk (see there); starved rows
-  // at the same rank go oldest wait first. Other rows keep the plain order.
+  // Strict table priority; the same priority goes oldest request first.
   const result = await db.execute<Record<string, unknown>>(sql`
     with runnable as (
       select st.page_id as "pageId",
              st.stream as "stream",
              st.request_seq as "requestSeq",
              st.requested_at,
-             ${pageSyncRunnableSinceSql("st")} as runnable_since,
-             ${streamPriorityBySourceSql("st.stream", "st.dispatch_source")} as priority,
-             ${starvedPageSyncPrioritySql("st", "p.platform", now)} as starved_priority
+             ${streamPriorityBySourceSql("st.stream", "st.dispatch_source")} as priority
       from ${pageSyncStates} st
       inner join ${pages} p on p.id = st.page_id and p.status = 'active'
       where st.page_id = ${input.pageId}
@@ -2072,11 +1635,9 @@ export async function acquirePageSyncLease(
     ), candidate as (
       select r."pageId", r."stream", r."requestSeq"
       from runnable r
-      order by greatest(r.priority, r.starved_priority) desc,
-               case when r.starved_priority is not null then r.runnable_since end asc nulls last,
-               r.priority desc,
+      order by r.priority desc,
                r.requested_at asc nulls last,
-               ${streamOrderSql('r."stream"')} asc
+               ${syncStreamOrderSql('r."stream"')} asc
       limit 1
     ),
     acquired as (

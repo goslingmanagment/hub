@@ -103,6 +103,11 @@ const BLOCK_LABELS: Record<SyncBlockKey, string> = {
   messages_history: "Messages History",
 };
 
+// A legacy block (any state but `engine`) belongs to a page the legacy
+// page-sync executor serves: OnlyFans. A Fansly page's blocks are the Fansly
+// Sync Engine's (`state: "engine"`), or not available when the engine does not
+// run the page; nothing here formats a legacy Fansly stream any more.
+
 const BLOCK_DESCRIPTIONS: Record<SyncBlockKey, string> = {
   connection: "Confirms this page's account is still connected and authorized.",
   financials: "Earnings transactions and the top-spenders leaderboard.",
@@ -111,6 +116,8 @@ const BLOCK_DESCRIPTIONS: Record<SyncBlockKey, string> = {
   messages_history: "Backfills and stores the full message contents of each conversation.",
 };
 
+// The streams a block lists: the legacy executor's on an OnlyFans page, the
+// engine's lever streams of the five blocks on a Fansly page.
 const STREAM_LABELS: Record<string, string> = {
   light: "connection",
   fan_identities: "fan identities",
@@ -121,26 +128,12 @@ const STREAM_LABELS: Record<string, string> = {
   followers_reconcile: "follower reconcile",
   dm_conversations: "conversation sync",
   dm_messages: "message history",
-  // The fallback renders an unlabelled stream as "stats snapshot", which is
-  // accurate but says nothing about what it captures.
-  stats_snapshot: "account statistics",
-  notifications: "notifications",
-  catalog: "content catalog",
-  post_replies: "post comments",
-  // The fallback would render this "payouts", which reads like a balance
-  // rather than the thing the lane actually captures.
-  payouts: "payout history",
-  // The fallback would render this "media stats", which reads like a summary
-  // of one number rather than the per-item traffic history it captures.
-  media_stats: "per-media statistics",
 };
 
 const PROGRESS_STREAM_LABELS: Record<string, string> = {
   fan_identities: "fan identity enrichment",
   top_spenders: "top spenders enrichment",
-  followers_reconcile: "follower reconcile",
   dm_conversations: "conversation sync",
-  dm_messages: "message history",
 };
 
 const BLOCK_ORDER: SyncBlockKey[] = [
@@ -251,14 +244,6 @@ function getProgressStreamLabel(stream: string | null): string | null {
   return PROGRESS_STREAM_LABELS[stream] ?? getStreamLabel(stream);
 }
 
-function getProgressDetailNumber(
-  details: Record<string, unknown> | null | undefined,
-  key: string,
-): number | null {
-  const value = details?.[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
 export function formatCadence(seconds: number): string {
   if (seconds < 60) return `${seconds}s`;
   const mins = Math.round(seconds / 60);
@@ -334,16 +319,6 @@ export function getDependencyWaitDetail(item: SyncReasonCarrier): string | null 
   return formatDependencyList(streams);
 }
 
-function hasOpaqueAudienceFollowerProgress(block: SyncBlockStatus): boolean {
-  return block.block === "audience" &&
-    block.progress?.unit === "followers" &&
-    (
-      block.progress.total == null ||
-      block.progress.total <= 0 ||
-      block.progress.current >= block.progress.total
-    );
-}
-
 function hasCompletedMessagesLiveProgress(block: SyncBlockStatus): boolean {
   return (
     block.block === "messages_live" &&
@@ -376,15 +351,6 @@ function formatSupportingProgressSummary(block: SyncBlockStatus): string | null 
     }
   }
 
-  if (block.block === "audience") {
-    if (block.state === "backfilling") {
-      return `Audience is current; ${label} is catching up`;
-    }
-    if (block.state === "scheduled") {
-      return `Audience is current; ${label} is queued`;
-    }
-  }
-
   return null;
 }
 
@@ -392,17 +358,6 @@ export function formatBlockProgressCaption(block: SyncBlockStatus): string | nul
   if (!block.progress) return null;
 
   const source = getProgressStreamLabel(block.progressStream);
-  if (block.block === "messages_history" && block.progress.total != null && block.progress.total > 0) {
-    const remaining = Math.max(0, block.progress.total - block.progress.current);
-    const lagging = getProgressDetailNumber(block.progress.details, "laggingConversationCount");
-    const counts = [
-      `${block.progress.current.toLocaleString()} / ${block.progress.total.toLocaleString()} ready`,
-      `${remaining.toLocaleString()} left`,
-      lagging && lagging > 0 ? `${lagging.toLocaleString()} lagging` : null,
-    ].filter(Boolean).join(" · ");
-    return source ? `${source} · ${counts}` : counts;
-  }
-
   const counts = block.progress.total != null && block.progress.total > 0
     ? `${block.progress.current.toLocaleString()} / ${block.progress.total.toLocaleString()} ${block.progress.unit}`
     : block.progress.label;
@@ -414,9 +369,6 @@ export function getBlockProgressFillClass(block: SyncBlockStatus): string {
   if (isHealthyQueueWaitingBlock(block)) {
     return "bg-green";
   }
-  if (block.state === "delayed") {
-    return "bg-warning-dark";
-  }
   return "bg-accent";
 }
 
@@ -424,15 +376,7 @@ export function getBlockProgressBarMode(block: SyncBlockStatus): "hidden" | "det
   if (!block.progress) {
     return "hidden";
   }
-  if (!["syncing", "backfilling", "scheduled", "retrying", "delayed"].includes(block.state)) {
-    return "hidden";
-  }
-
-  if (block.state === "delayed" && block.block !== "messages_history") {
-    return "hidden";
-  }
-
-  if (hasOpaqueAudienceFollowerProgress(block)) {
+  if (!["syncing", "backfilling", "scheduled", "retrying"].includes(block.state)) {
     return "hidden";
   }
 
@@ -498,9 +442,6 @@ export function formatBlockSummary(block: SyncBlockStatus): string {
 
   if (block.state === "failed") {
     if (getReasonCode(block) === "progress_stalled") {
-      if (hasOpaqueAudienceFollowerProgress(block)) {
-        return "Follower sync stalled";
-      }
       if (block.progress?.total != null && block.progress.total > 0) {
         return `Sync stalled at ${block.progress.current.toLocaleString()}/${block.progress.total.toLocaleString()} ${block.progress.unit}`;
       }
@@ -556,22 +497,6 @@ export function formatBlockSummary(block: SyncBlockStatus): string {
       : block.state === "retrying"
       ? "Retrying\u2026"
       : "Syncing\u2026";
-
-  if (hasOpaqueAudienceFollowerProgress(block)) {
-    if (block.state === "syncing") {
-      return "Refreshing followers\u2026";
-    }
-    if (block.state === "backfilling") {
-      return "Reconciling followers\u2026";
-    }
-    if (block.state === "scheduled") {
-      return "Follower sync queued";
-    }
-    if (block.state === "retrying") {
-      const nextRetry = block.nextRetryAt ? formatRelativeFuture(block.nextRetryAt) : null;
-      return nextRetry ? `Retrying follower sync ${nextRetry}` : "Retrying follower sync\u2026";
-    }
-  }
 
   if (hasCompletedMessagesLiveProgress(block)) {
     if (block.state === "syncing") {
@@ -642,16 +567,14 @@ function getMetricCount(block: SyncBlockStatus): string | null {
 
 const METRIC_LABELS: Partial<Record<SyncBlockKey, string>> = {
   financials: "transactions",
-  audience: "followers",
+  audience: "subscribers",
   messages_live: "conversations",
-  messages_history: "conversations ready",
 };
 
 const BLOCK_METRIC_KEYS: Partial<Record<SyncBlockKey, readonly string[]>> = {
   financials: ["transactionCount", "count"],
-  audience: ["followerCount", "subscriberCount", "count"],
+  audience: ["subscriberCount", "count"],
   messages_live: ["visibleConversationCount", "count"],
-  messages_history: ["readyConversationCount", "eligibleConversationCount", "count"],
 };
 
 export function getSubstreamTone(substream: SyncBlockSubstream): BlockTone {

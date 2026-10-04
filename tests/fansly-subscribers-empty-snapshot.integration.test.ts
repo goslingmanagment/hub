@@ -1,12 +1,12 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import {
-  ensurePageSyncStates, openNotificationIncidentWithRecoveryGuard,
+import { openNotificationIncidentWithRecoveryGuard,
   retireLapsedPageSubscriptionsForEmptySnapshot, upsertCheckpointProgress, upsertFanPages, upsertFans,
   upsertPageSubscription,
 } from "@agency_hub_core/db";
 import { incidentKey } from "../apps/runtime/src/services/notification-incidents.ts";
 import { saveProxy } from "../apps/runtime/src/services/page-context.ts";
 import { resetIntegrationDatabase, seedFanslyPage, startTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
+import { seedFormerFanslyRows } from "./helpers/fansly-legacy-rows.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { INTEGRATION_TEST_TIMEOUT_MS } from "./helpers/timeouts.ts";
 
@@ -48,7 +48,8 @@ describe("Fansly subscribers stated-empty snapshot", () => {
     const { page } = await seedFanslyPage(app.db, app.config.encryptionKey, 1, "lilly-1");
     if (!page) throw new Error("test setup: page missing");
     await saveProxy(app, page.id, { url: "http://proxy.example.test:8080", username: "test", password: "test" });
-    await ensurePageSyncStates(app.db, { pageId: page.id });
+    // The rows an old planner seeded this Fansly page (nothing seeds them since step 4).
+    await seedFormerFanslyRows(db.pool, page.id, new Date());
     await db.pool.query("update page_sync_states set status='paused' where page_id=$1 and stream <> 'subscribers'", [page.id]);
     await db.pool.query(`update page_sync_states
       set status='retrying', request_seq=$2::bigint, applied_seq=$2::bigint - 1, retry_kind='transient_network',

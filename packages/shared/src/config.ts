@@ -533,6 +533,7 @@ export interface AppConfig {
   transactionRescanCapDays: number;
   syncObservabilityRetentionDays: number;
   healthSyncLightMaxAgeMinutes: number;
+  /** @deprecated Retired at step 4 (S4-24) with the legacy follower-sync check of /health/sync; nothing reads it. */
   healthSyncFollowerMaxAgeMinutes: number;
   healthSyncMonitoringToken: string | null;
   telegramBotToken: string | null;

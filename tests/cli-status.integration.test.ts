@@ -3,6 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import {
   createFanslyPage,
   createModel,
+  createOnlyFansPage,
   finishSyncRequestAttempt,
   finishSyncRun,
   insertSyncRequestAttempt,
@@ -19,6 +20,7 @@ import {
   startIntegrationTestDatabase,
   type StartedTestDatabase,
 } from "./helpers/db.ts";
+import { seedFormerFanslyRows } from "./helpers/fansly-legacy-rows.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 
 async function loadCliProgram(appContext: ReturnType<typeof createTestAppContext>) {
@@ -221,7 +223,7 @@ async function seedSyncMonitorRows(
   await insertSyncRunEvent(testDb.db, {
     syncRunId: lightRun.id,
     platformAccountId: pageId,
-    provider: "fansly",
+    provider: "onlyfans",
     stream: "light",
     eventType: "phase_started",
     severity: "info",
@@ -247,7 +249,7 @@ async function seedSyncMonitorRows(
   const attempt = await insertSyncRequestAttempt(testDb.db, {
     syncRunId: transactionsRun.id,
     platformAccountId: pageId,
-    provider: "fansly",
+    provider: "onlyfans",
     stream: "transactions",
     operation: "transaction_backfill",
     logicalRequestId: `tx:${transactionsRun.id}`,
@@ -295,7 +297,7 @@ async function seedSyncMonitorRows(
     state: {
       mode: "backfill",
       completed: false,
-      provider: "fansly",
+      provider: "onlyfans",
       phase: "transactions",
       snapshotEnd: "2026-03-20T08:00:00.000Z",
       newestSeenAt: "2026-03-20T07:55:00.000Z",
@@ -309,7 +311,7 @@ async function seedSyncMonitorRows(
     cursorLastSucceededAt: new Date("2026-03-20T09:05:00.000Z"),
   });
   await testDb.db.insert(syncRateLimits).values({
-    provider: "fansly",
+    provider: "onlyfans",
     scope: "global",
     egressKey: "direct",
     minSpacingMs: 1_000,
@@ -479,7 +481,21 @@ describe("CLI status flows", () => {
     vi.setSystemTime(SYNC_MONITOR_NOW);
 
     const appContext = createTestAppContext(testDb);
-    await seedSyncMonitorRows(testDb, lanaPage.id);
+    // The monitor is the legacy page-sync executor's (step 4, S4-24): it lists
+    // OnlyFans pages, one row per stream the executor runs. A Fansly page is
+    // not in it — the Fansly Sync Engine reads it, and its legacy rows are
+    // parked records.
+    const onlyFansPage = async (label: string) => {
+      const model = await createModel(testDb!.db, { slug: `${label}-model`, name: label });
+      if (!model) throw new Error(`Expected the model of ${label}`);
+      const page = await createOnlyFansPage(testDb!.db, { modelId: model.id, label });
+      if (!page) throw new Error(`Expected the OnlyFans page ${label}`);
+      return page;
+    };
+    const loraPage = await onlyFansPage("lora");
+    await onlyFansPage("mila");
+    await seedSyncMonitorRows(testDb, loraPage.id);
+    await seedFormerFanslyRows(testDb.pool, lanaPage.id, SYNC_MONITOR_NOW);
 
     const fullOutput = (await runCli(appContext, [
       "sync",
@@ -489,37 +505,34 @@ describe("CLI status flows", () => {
       "sync",
       "status",
       "--page",
+      "lora",
+    ])).join("\n");
+    const fanslyOutput = (await runCli(appContext, [
+      "sync",
+      "status",
+      "--page",
       "lana",
     ])).join("\n");
 
     expect(fullOutput).toContain("Sync Monitor 2026-03-20T12:00:00.000Z");
-    // 2 pages x 17 MONITORED streams. WP-F1 added `stats_snapshot` AND repaired
-    // the already-missing `posts`, which had been invisible in the monitor since
-    // it shipped — the same blind spot a wedged fan_earnings walk had before
-    // W8.1; WP-F2 added `notifications`, the lane whose wedge costs facts rather
-    // than freshness; WP-F3 added `catalog`, whose wedge is invisible in every
-    // other surface — the page keeps syncing DMs and money while its inventory
-    // silently ages and M stops moving; WP-F5 added `post_replies`, whose wedge
-    // is quieter still — the walk queue keeps every row, nothing errors, and the
-    // comment archive simply stops growing part-way through its first pass;
-    // WP-F7 added `payouts`, whose steady state is TWO calls a day — a volume
-    // no dashboard notices going to zero, and the first thing lost is the
-    // money-out history the finance side reconciles against; WP-F4 added
-    // `media_stats`, the loudest lane in the tree by call volume — it is built
-    // to run at 100 % of its own daily cap, so "calls went to zero" is the
-    // signal and nothing else in the monitor would show it. The
-    // `MONITORED_SYNC_STREAMS ⊇ getSyncStreamsForPlatform("fansly")` pin is what
-    // keeps the next omission from being silent.
-    expect(fullOutput).toContain("Pages=2 Streams=34");
-    expect(fullOutput).toContain("Providers: fansly:limited");
-    expect(fullOutput).toContain("lana");
-    expect(fullOutput).toContain("nova");
+    // 2 OnlyFans pages x the 7 streams the executor runs
+    // (`MONITORED_SYNC_STREAMS` is `LEGACY_EXECUTOR_STREAMS`).
+    expect(fullOutput).toContain("Pages=2 Streams=14");
+    expect(fullOutput).toContain("Providers: onlyfans:limited");
+    expect(fullOutput).toMatch(/^lora\s+light\s+running/m);
+    expect(fullOutput).toMatch(/^lora\s+transactions\s/m);
+    expect(fullOutput).toMatch(/^mila\s+light\s/m);
     expect(fullOutput).toContain("Retrying=1");
     expect(fullOutput).toContain("stalled");
-    expect(fullOutput).toContain("9 items backfilled");
+    // Neither Fansly page has a row, the one holding parked legacy rows included.
+    expect(fullOutput).not.toMatch(/^(lana|nova)\s/m);
 
-    expect(filteredOutput).toContain("lana");
-    expect(filteredOutput).toContain("Pages=1 Streams=17");
+    expect(filteredOutput).toMatch(/^lora\s+light\s/m);
+    expect(filteredOutput).toContain("Pages=1 Streams=7");
     expect(filteredOutput).toContain("Retrying=1");
+    expect(filteredOutput).not.toMatch(/^mila\s/m);
+
+    expect(fanslyOutput).toContain("Pages=0 Streams=0");
+    expect(fanslyOutput).toContain("Providers: -");
   });
 });

@@ -15,18 +15,17 @@ import {
 } from "@agency_hub_core/db";
 
 import { demandToUpsert } from "../sync/engine/resource.ts";
-import { fanslyFilesForStreams, fanslyKeysForStreams } from "../sync/fansly/legacy-streams.ts";
-import { fanslyResourceSpec } from "../sync/fansly/registry.ts";
+import { fanslyFilesForStreams, fanslyKeysForStreams, fanslyResourceSpec } from "../sync/fansly/registry.ts";
 import { OWNER_DEMAND_REASON } from "../sync/fansly/resources/followers.ts";
 import { refreshSyncPage } from "../sync/inspect.ts";
 import { ConflictError } from "./errors.ts";
 import { FanslyPageSwitchingError } from "./sync-engine-guard.ts";
 import type { SyncTriggerScope } from "./sync-queue.ts";
 
-// The owner's legacy levers on a page the Fansly Sync Engine owns (design
-// step 3 §3.2 item 4). The Settings buttons and the admin routes speak in
-// legacy streams; on an engine page each one becomes the engine's own lever
-// over the registry keys that took those streams over:
+// The owner's levers on a page the Fansly Sync Engine owns (design step 3
+// §3.2 item 4). The Settings buttons and the admin routes name a block or a
+// scope; each resolves to lever streams, and through the registry's lever map
+// (`FANSLY_LEVER_STREAMS`) to the registry keys the lever moves:
 //
 //   trigger  → the keys' polls become due now ("sync now", NOTIFY);
 //   pause    → the keys join the page's paused set (the rest is kept);
@@ -38,16 +37,11 @@ import type { SyncTriggerScope } from "./sync-queue.ts";
 // A page in `handover` has no sender (nothing reaches the mode since step 4,
 // S4-21), so a lever that would make the engine read refuses with 409
 // `fansly_page_switching`.
-//
-// Since step 4 (S4-10) the legacy executor serves no Fansly page, so the
-// trigger scopes of a Fansly page ("sync now" for `light`, `data`, … in
-// `POST /admin/sync/trigger` and `trigger-all`) resolve here, straight to the
-// engine's registry keys, and no longer through the platform registry.
 
-/** The legacy streams each trigger scope names on a Fansly page — the scope
- *  policy the platform registry held until step 4 (Stage 16: `all` leaves out
- *  the bulk crawls) — which `fanslyFilesForStreams` turns into the registry
- *  keys' resource files. */
+/** The lever streams each trigger scope names on a Fansly page ("sync now"
+ *  for `light`, `data`, … in `POST /admin/sync/trigger` and `trigger-all`;
+ *  `all` leaves out the bulk reads), which `fanslyFilesForStreams` turns into
+ *  the registry keys' resource files. */
 export const FANSLY_ENGINE_SCOPE_STREAMS: Readonly<Record<SyncTriggerScope, readonly SyncStream[]>> = {
   light: ["light"],
   followers: ["followers"],
@@ -110,7 +104,7 @@ export function assertEngineReads(page: SyncPageRow & { mode: EngineOwnedMode })
   if (page.mode === "handover") throw new FanslyPageSwitchingError(labelOf(page));
 }
 
-/** "Sync now" for legacy streams: the polls of their resource files. */
+/** "Sync now" for lever streams: the polls of their resource files. */
 export async function triggerEngineStreams(
   db: Database,
   page: SyncPageRow & { mode: EngineOwnedMode },
@@ -133,7 +127,7 @@ export async function triggerEngineScope(
   return triggerEngineStreams(db, page, FANSLY_ENGINE_SCOPE_STREAMS[scope]);
 }
 
-/** Pause (or resume) the keys that took the streams over; every other key
+/** Pause (or resume) the keys that answer to the streams; every other key
  *  of the page's paused set is kept. */
 export async function pauseEngineStreams(
   db: Database,
@@ -152,7 +146,7 @@ export async function pauseEngineStreams(
   return { mode: page.mode, resources: keys, affected: changed };
 }
 
-/** Requeue the quarantined live work of the keys that took the streams over
+/** Requeue the quarantined live work of the keys that answer to the streams
  *  (a captured answer re-applies from the journal without a request). */
 export async function requeueEngineStreams(
   db: Database,

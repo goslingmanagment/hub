@@ -3,8 +3,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   acquirePageSyncLease,
   completePageSync,
-  createFanslyPage,
   createModel,
+  createOnlyFansPage,
   ensurePageSyncStates,
   getPageSyncState,
   listRunnablePageSync,
@@ -37,7 +37,7 @@ describe("page sync provider cooldown", () => {
     const now = new Date();
     const model = await createModel(testDb!.db, { slug: "cooldown", name: "Cooldown" });
     if (!model) throw new Error("Expected to create cooldown model");
-    const page = await createFanslyPage(testDb!.db, { modelId: model.id, label: "cooldown" });
+    const page = await createOnlyFansPage(testDb!.db, { modelId: model.id, label: "cooldown" });
     if (!page) throw new Error("Expected to create cooldown page");
     await ensurePageSyncStates(testDb!.db, { pageId: page.id, now });
     // Settle prerequisite history so the real dispatcher can select only this stream.
@@ -143,7 +143,7 @@ describe("page sync provider cooldown", () => {
     const stream = "light";
     const now = new Date();
     const model = await createModel(testDb!.db, { slug: "held", name: "Held" });
-    const page = await createFanslyPage(testDb!.db, { modelId: model!.id, label: "held" });
+    const page = await createOnlyFansPage(testDb!.db, { modelId: model!.id, label: "held" });
     await ensurePageSyncStates(testDb!.db, { pageId: page!.id, now });
     await testDb!.pool.query(
       `update page_sync_states

@@ -242,7 +242,6 @@ describe("sync blocks service", () => {
       now: new Date("2026-03-24T12:00:00.000Z"),
       pageIds: undefined,
       includeMonitorRows: false,
-      monitorStreams: ["dm_messages"],
     });
     expect(overview.generatedAt).toBe("2026-03-24T12:00:00.000Z");
     expect(overview.pages).toHaveLength(2);

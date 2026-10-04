@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { getSyncStreamsForPlatform } from "@agency_hub_core/db";
+import { SYNC_STREAMS } from "@agency_hub_core/db";
 import { FANSLY_SEND_SOURCES, FANSLY_WIRE_SPECS } from "@agency_hub_core/fansly";
 
 import { beforeGateKeys, NOT_IMPLEMENTED_RECHECK_MS, plansBeforeGate } from "../apps/runtime/src/sync/engine/resource.ts";
@@ -44,7 +44,9 @@ const unmapped = new Map(FANSLY_LEGACY_UNMAPPED.map((entry) => [refKey(entry.ref
 
 describe("the Fansly registry covers every legacy stream and sender", () => {
   it("every Fansly stream maps to an entry or a disposition", () => {
-    const fanslyStreams = getSyncStreamsForPlatform("fansly");
+    // The legacy executor ran every stream of the vocabulary on a Fansly page
+    // but the OnlyFans-only `fan_identities`, which carries a disposition.
+    const fanslyStreams = SYNC_STREAMS;
     expect(fanslyStreams.length).toBeGreaterThan(0);
     for (const name of fanslyStreams) {
       const key = `stream:${name}`;

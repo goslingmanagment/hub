@@ -1,29 +1,6 @@
 import type { SyncUxSummary } from "@agency_hub_core/contracts";
-import type { SyncStream } from "@agency_hub_core/db";
 
 type SyncUxState = SyncUxSummary["state"];
-
-/** Stage 16 bulk enrichment streams (decision #166). They stay VISIBLE with
- *  their own honest per-stream state on the detailed monitor, but they must
- *  never dominate a page or fleet rollup: each was a gated legacy lane that
- *  defaulted off, and since step 4 the Fansly Sync Engine reads these resources
- *  while the legacy rows stay frozen. Letting them vote would make every Fansly
- *  page — and the whole fleet — read "Off". Shared by every rollup site so the
- *  filters cannot drift apart. */
-export const BULK_ENRICHMENT_SYNC_STREAMS: readonly SyncStream[] = [
-  "fan_earnings",
-  "purchase_history",
-  "stats_snapshot",
-  "notifications",
-  "catalog",
-  "post_replies",
-  "payouts",
-  "media_stats",
-];
-
-export function isBulkEnrichmentSyncStream(stream: string) {
-  return (BULK_ENRICHMENT_SYNC_STREAMS as readonly string[]).includes(stream);
-}
 
 type SyncMonitorStatus =
   | "idle"
@@ -71,9 +48,6 @@ export interface SyncUxStreamLike {
   lastCompletionGatedSkipReason?: string | null;
   /** Durable checkpoint hold, independent of the latest run's outcome. */
   lastCompletionQualityHold?: string | null;
-  /** The end of a policy interval an outstanding request waits out (the daily
-   *  followers_reconcile floor). Scheduled work, not a queue or a retry. */
-  intervalFloorUntil?: string | null;
   succeededAt: string | null;
   failedAt: string | null;
   lastErrorCode?: string | null;
@@ -213,17 +187,6 @@ export function buildStreamSyncUx(stream: SyncUxStreamLike): SyncUxSummary {
       detail: "This sync is actively processing new work.",
       progressLabel,
       updatedAt: stream.activeRun.lastActivityAt,
-    });
-  }
-
-  if (stream.intervalFloorUntil) {
-    // The held request would only refresh data that is already current.
-    return buildSummary("healthy", {
-      label: "Up to date",
-      headline: "Up to date",
-      detail: "The next full check is scheduled; it runs at most once a day.",
-      progressLabel,
-      updatedAt,
     });
   }
 
