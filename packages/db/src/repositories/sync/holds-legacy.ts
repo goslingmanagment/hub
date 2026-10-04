@@ -1,50 +1,42 @@
 import { sql } from "drizzle-orm";
 
 import type { Database } from "../../client.ts";
-import {
-  listSyncHolds,
-  SYNC_PAGE_HOLD_KEY,
-  SYNC_RESOURCE_HOLD_KIND,
-  type SyncHoldRow,
-} from "./holds.ts";
-import { jsonParam, SYNC_INDEFINITE_UNTIL_MS, timestampParam, toDate, untilParam } from "./values.ts";
+import { listSyncHolds, SYNC_RESOURCE_HOLD_KIND, type SyncHoldRow } from "./holds.ts";
+import { jsonParam, SYNC_INDEFINITE_UNTIL_MS, timestampParam, untilParam } from "./values.ts";
 
-// The hold set beside the columns it replaces (step 4, S4-30), until S4-31
-// takes the columns and this file away — in the three releases at the end of
-// this comment.
+// The old hold columns of `sync_pages`: still written, no longer read (step 4,
+// S4-31 — the first of the three releases that take them away; owner decision
+// №26).
 //
-// The previous image reads a page's holds only from `sync_pages`: the hold
-// slot (`hold_kind`, `hold_until`, `hold_since`, `hold_detail`, with a network
-// hold carried in `hold_detail.timedHold` beside a credentials hold) and
-// `resource_holds` (the resource breakers by file, and the route state under
-// `route:state`). A rollback to it must not fail open, and what it wrote must
-// not be lost when this image comes back. So:
+// A page's holds are its rows of `sync_holds`, and this build reads nothing
+// else. The image before it (the hold-set release) reads them there too —
+// but whenever it acquires a page's ownership, and before a hold write under
+// no generation, it compares the page's old columns with what the rows make
+// them: the hold slot (`hold_kind`, `hold_until`, `hold_since`, `hold_detail`,
+// with a network hold carried in `hold_detail.timedHold` beside a credentials
+// hold) and `resource_holds` (the resource breakers by file, and the route
+// state under `route:state`). Where they differ the columns win: it replaces
+// the rows by what they say. That is right against a writer that knows
+// nothing but the columns; after a rollback from a build that wrote the rows
+// and left the columns behind, it would lose every hold that build took and
+// bring back every hold it lifted.
 //
-//   - every write of the hold set rewrites those columns from the page's rows
-//     in the same transaction (`mirrorSyncHoldsToLegacyColumns`): they are
-//     always exactly what `legacyHoldColumnsOf` makes of the rows;
-//   - whenever a page's ownership is acquired — and before a hold write under
-//     no generation, which can come before that acquisition — the columns
-//     are compared with what the rows make them; if they differ, someone who
-//     knows only the columns wrote them — the previous image, or a hand — and
-//     the columns win: the page's rows are replaced by what they say
-//     (`holdRowsOfLegacyColumns`, `reconcileSyncHoldsWithLegacyColumns`).
-//     That is also how a page's state first reaches the table.
+// So every write of the hold set still rewrites those columns from the page's
+// rows in the same transaction (`mirrorSyncHoldsToLegacyColumns`): they are
+// always exactly what `legacyHoldColumnsOf` makes of the rows, and a rollback
+// to that image finds nothing to read back.
 //
-// Nothing else reads the columns. A hold changed by hand is changed on both
-// sides — or, with `sync` stopped, in the columns alone: rows changed alone
-// are replaced from the columns at the page's next acquisition, and columns
-// changed alone under a running owner are rewritten from the rows by its next
-// hold write.
+// A hold changed by hand is changed in the rows — and in the columns too
+// while that image is a rollback target: rows changed alone stand here (the
+// columns follow at the page's next hold write) and would be replaced from
+// the columns by a rollback before it.
 //
-// "The columns win" is right only against a writer that knows nothing but the
-// columns. A build that wrote the rows and left the columns behind would, on
-// a rollback to this one, lose every hold it took and get back every hold it
-// lifted. So the way out is three releases, each a safe rollback target of
-// the next:
+// The way out is three releases, each a safe rollback target of the next:
 //
-//   1. the two `reconcileSyncHoldsWithLegacyColumns` calls go, the mirror
-//      stays: a rollback to this build finds the columns equal to the rows;
+//   1. this build: nothing reads the columns back, the mirror stays. Before
+//      it ships every page's rows are what its columns say — the hold-set
+//      release has acquired the page. `hold_step`, which that release neither
+//      reads nor writes, is dropped (0243);
 //   2. the mirror and this file go: a rollback to (1) reads no column;
 //   3. the columns are dropped: a rollback to (2) neither reads nor writes
 //      them.
@@ -64,42 +56,6 @@ export interface SyncLegacyHoldColumns {
   holdDetail: Record<string, unknown>;
   /** `resource_holds`, the route-state namespace included. */
   resourceHolds: Record<string, unknown>;
-}
-
-/** A row to write: `since` null takes the database clock. */
-export interface SyncHoldWrite extends Omit<SyncHoldRow, "since"> {
-  since: Date | null;
-}
-
-/** The old columns hold a route state no build ever wrote (another version, a
- *  shape that is not an entry): nothing is imported and the page's ownership
- *  is not taken until it is repaired — an unreadable hold never opens a page. */
-export class SyncLegacyHoldsUnreadableError extends Error {
-  readonly pageId: number;
-  readonly diagnostic: string;
-
-  constructor(pageId: number, diagnostic: string) {
-    super(`Fansly sync page ${pageId}: the old hold columns are not readable (${diagnostic}); the hold set was not imported`);
-    this.name = "SyncLegacyHoldsUnreadableError";
-    this.pageId = pageId;
-    this.diagnostic = diagnostic;
-  }
-}
-
-class UnreadableLegacyState extends Error {}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function instantOf(value: unknown): Date | null {
-  if (typeof value !== "string") return null;
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
-}
-
-function isCount(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
 function isCredentialsKind(kind: string): boolean {
@@ -171,143 +127,12 @@ export function legacyHoldColumnsOf(rows: readonly SyncHoldRow[]): SyncLegacyHol
   return columns;
 }
 
-// ── the old columns → rows ──────────────────────────────────────────────────
-
-function pageRowsOf(columns: SyncLegacyHoldColumns): SyncHoldWrite[] {
-  const { holdKind, holdDetail } = columns;
-  if (holdKind === null || columns.holdUntil === null) return [];
-  const page = { scope: "page", key: SYNC_PAGE_HOLD_KEY, ladderStep: 0, revision: 1 };
-  // An end that is not an instant holds indefinitely: never a way out.
-  const until = Number.isNaN(columns.holdUntil.getTime()) ? new Date(SYNC_INDEFINITE_UNTIL_MS) : columns.holdUntil;
-  if (!isCredentialsKind(holdKind)) {
-    // The network back-off — or a kind no build takes any more (the page-wide
-    // 429 hold an older build wrote): it holds the page until its end all the
-    // same, as the timed hold it is, and names what it was.
-    const detail = holdKind === "network" ? { ...holdDetail } : { ...holdDetail, legacyKind: holdKind };
-    return [{ ...page, kind: "network", until, since: columns.holdSince, detail }];
-  }
-  const rows: SyncHoldWrite[] = [{
-    ...page,
-    kind: holdKind,
-    until,
-    since: columns.holdSince,
-    detail: without(holdDetail, LEGACY_CARRIED_HOLD_FIELD),
-  }];
-  const carried = holdDetail[LEGACY_CARRIED_HOLD_FIELD];
-  if (!isRecord(carried)) return rows;
-  const carriedUntil = instantOf(carried.until);
-  if ((carried.kind !== "network" && carried.kind !== "rate_limit") || carriedUntil === null) return rows;
-  const carriedDetail = isRecord(carried.detail) ? { ...carried.detail } : {};
-  rows.push({
-    ...page,
-    kind: "network",
-    until: carriedUntil,
-    since: instantOf(carried.kind === "network" ? carriedDetail.networkSince : carriedDetail.lastRateLimitAt),
-    detail: carried.kind === "network" ? carriedDetail : { ...carriedDetail, legacyKind: carried.kind },
-  });
-  return rows;
-}
-
-function resourceRowsOf(columns: SyncLegacyHoldColumns): SyncHoldWrite[] {
-  const rows: SyncHoldWrite[] = [];
-  for (const [file, value] of Object.entries(columns.resourceHolds)) {
-    // The route state is read apart; an entry with a `kind` is an older
-    // build's endpoint-group hold, which no build reads any more; an entry
-    // without an end never held anything.
-    if (file === LEGACY_ROUTE_STATE_KEY || file.length === 0 || !isRecord(value) || "kind" in value) continue;
-    const until = instantOf(value.until);
-    if (until === null) continue;
-    rows.push({
-      scope: "resource",
-      key: file,
-      kind: SYNC_RESOURCE_HOLD_KIND,
-      until,
-      since: instantOf(value.since),
-      ladderStep: isCount(value.step) ? value.step : 0,
-      detail: {},
-      revision: 1,
-    });
-  }
-  return rows;
-}
-
-function routeRowsOf(columns: SyncLegacyHoldColumns): SyncHoldWrite[] {
-  const raw = columns.resourceHolds[LEGACY_ROUTE_STATE_KEY];
-  if (raw === undefined || raw === null) return [];
-  if (!isRecord(raw)) throw new UnreadableLegacyState("route_state_not_an_object");
-  if (raw.version !== LEGACY_ROUTE_NAMESPACE_VERSION) throw new UnreadableLegacyState(`route_state_version:${String(raw.version)}`);
-  if (!isRecord(raw.routes)) throw new UnreadableLegacyState("route_state_routes");
-  const rows: SyncHoldWrite[] = [];
-  for (const [route, entry] of Object.entries(raw.routes)) {
-    const unreadable = new UnreadableLegacyState(`route_state_entry:${route}`);
-    if (route.length === 0 || !isRecord(entry)) throw unreadable;
-    const { holdUntil, ladderStep, effectivePerMin, policyVersion, last429AttemptId, last429At, revision } = entry;
-    if (holdUntil !== null && instantOf(holdUntil) === null) throw unreadable;
-    if (last429At !== null && instantOf(last429At) === null) throw unreadable;
-    if (!isCount(ladderStep) || !isCount(revision) || revision === 0) throw unreadable;
-    if (effectivePerMin !== null && !(typeof effectivePerMin === "number" && Number.isFinite(effectivePerMin) && effectivePerMin > 0)) throw unreadable;
-    if (policyVersion !== null && typeof policyVersion !== "string") throw unreadable;
-    if (last429AttemptId !== null && !(isCount(last429AttemptId) && last429AttemptId > 0)) throw unreadable;
-    const base = { scope: "route", key: route, since: null };
-    rows.push({
-      ...base,
-      kind: "route_budget",
-      until: null,
-      ladderStep,
-      detail: { effectivePerMin, policyVersion, last429AttemptId, last429At },
-      revision,
-    });
-    if (holdUntil !== null) {
-      rows.push({ ...base, kind: "route_hold", until: instantOf(holdUntil), ladderStep: 0, detail: {}, revision: 1 });
-    }
-  }
-  return rows;
-}
-
-/**
- * The hold set the old columns say (pure): the rows `legacyHoldColumnsOf`
- * turns back into those columns. Throws `SyncLegacyHoldsUnreadableError` for
- * a route state no build wrote.
- */
-export function holdRowsOfLegacyColumns(pageId: number, columns: SyncLegacyHoldColumns): SyncHoldWrite[] {
-  try {
-    return [...pageRowsOf(columns), ...resourceRowsOf(columns), ...routeRowsOf(columns)];
-  } catch (error) {
-    if (error instanceof UnreadableLegacyState) throw new SyncLegacyHoldsUnreadableError(pageId, error.message);
-    throw error;
-  }
-}
-
-// ── comparison ──────────────────────────────────────────────────────────────
-
-function canonical(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(canonical);
-  if (!isRecord(value)) return value;
-  return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonical(value[key])]));
-}
-
-function instantMs(value: Date | null): number | null {
-  if (value === null) return null;
-  return Number.isNaN(value.getTime()) || value.getTime() >= SYNC_INDEFINITE_UNTIL_MS ? SYNC_INDEFINITE_UNTIL_MS : value.getTime();
-}
-
-/** Whether two sets of old columns say the same: the slot's kind and
- *  instants, and its detail and `resource_holds` as JSON values. */
-export function sameLegacyHoldColumns(left: SyncLegacyHoldColumns, right: SyncLegacyHoldColumns): boolean {
-  return left.holdKind === right.holdKind
-    && instantMs(left.holdUntil) === instantMs(right.holdUntil)
-    && instantMs(left.holdSince) === instantMs(right.holdSince)
-    && JSON.stringify(canonical(left.holdDetail)) === JSON.stringify(canonical(right.holdDetail))
-    && JSON.stringify(canonical(left.resourceHolds)) === JSON.stringify(canonical(right.resourceHolds));
-}
-
 // ── the database ────────────────────────────────────────────────────────────
 
 /**
  * Rewrite a page's old hold columns from its rows — the second half of every
- * hold write, in the writer's transaction. `hold_step` is
- * left alone (nothing has stepped it since a 429 holds its route), as is
- * `network_failure_streak`, which is a counter and no hold.
+ * hold write, in the writer's transaction. `network_failure_streak` is left
+ * alone: a counter and no hold.
  */
 export async function mirrorSyncHoldsToLegacyColumns(db: Database, pageId: number): Promise<void> {
   const columns = legacyHoldColumnsOf(await listSyncHolds(db, pageId));
@@ -321,66 +146,4 @@ export async function mirrorSyncHoldsToLegacyColumns(db: Database, pageId: numbe
            updated_at = clock_timestamp()
      where page_id = ${pageId}
   `);
-}
-
-async function readLegacyHoldColumns(db: Database, pageId: number): Promise<SyncLegacyHoldColumns | null> {
-  const result = await db.execute<{
-    holdKind: string | null;
-    holdUntil: Date | string | number | null;
-    holdSince: Date | string | number | null;
-    holdDetail: Record<string, unknown> | null;
-    resourceHolds: Record<string, unknown> | null;
-  }>(sql`
-    select hold_kind as "holdKind", hold_until as "holdUntil", hold_since as "holdSince",
-           hold_detail as "holdDetail", resource_holds as "resourceHolds"
-      from sync_pages
-     where page_id = ${pageId}
-  `);
-  const row = result.rows[0];
-  if (row === undefined) return null;
-  return {
-    holdKind: row.holdKind,
-    holdUntil: toDate(row.holdUntil),
-    holdSince: toDate(row.holdSince),
-    holdDetail: row.holdDetail ?? {},
-    resourceHolds: row.resourceHolds ?? {},
-  };
-}
-
-/** What `reconcileSyncHoldsWithLegacyColumns` found. */
-export interface SyncHoldsReconciliation {
-  /** The columns said something else than the rows: the rows were replaced. */
-  imported: boolean;
-  /** The page's hold set after it. */
-  holds: number;
-}
-
-/**
- * Bring a page's hold set in line with its old columns when they are not what
- * its rows make them (`legacyHoldColumnsOf`): someone who knows only the
- * columns wrote them, so they win — the rows are replaced by what they say,
- * and the columns then rewritten from the rows. The caller holds the page row
- * FOR NO KEY UPDATE — about to own the page (`acquireSyncPageOwnership`), or
- * about to write its hold set under no generation (`writeHoldSet`): nobody
- * else writes either side meanwhile.
- * Idempotent — a page whose two sides agree is not written. Throws
- * `SyncLegacyHoldsUnreadableError` and writes nothing when columns that
- * disagree hold a route state that cannot be read.
- */
-export async function reconcileSyncHoldsWithLegacyColumns(db: Database, pageId: number): Promise<SyncHoldsReconciliation> {
-  const columns = await readLegacyHoldColumns(db, pageId);
-  const rows = await listSyncHolds(db, pageId);
-  if (columns === null || sameLegacyHoldColumns(columns, legacyHoldColumnsOf(rows))) return { imported: false, holds: rows.length };
-  const said = holdRowsOfLegacyColumns(pageId, columns);
-  await db.execute(sql`delete from sync_holds where page_id = ${pageId}`);
-  for (const row of said) {
-    await db.execute(sql`
-      insert into sync_holds (page_id, scope, key, kind, until, since, ladder_step, detail, revision)
-      values (${pageId}, ${row.scope}, ${row.key}, ${row.kind}, ${untilParam(row.until)},
-              coalesce(${timestampParam(row.since)}, clock_timestamp()), ${row.ladderStep}, ${jsonParam(row.detail)},
-              ${row.revision})
-    `);
-  }
-  await mirrorSyncHoldsToLegacyColumns(db, pageId);
-  return { imported: true, holds: said.length };
 }

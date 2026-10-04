@@ -201,12 +201,14 @@ with the work's status link: the check is queued, not lost. Under a credentials 
 one verify per changed digest go out; a network hold beside it stops those too until it ends.
 
 Every hold is a row of `sync_holds` (the page's hold set: its own holds, each route's hold and slowdown, each
-file's breaker), and one evaluator reads it for the actor, status, "why" and the alerts. While a previous image
-that knows only the old hold columns of `sync_pages` can come back, every hold write rewrites those columns too,
-and they win whenever they differ from the rows: at the page's next acquisition (the host logs it and counts
-`sync_holds_imported`: expected after this release's first deploy and after a rollback, for each page whose holds
-the previous image wrote) and before a `sync route raise`. So a hold is never edited by hand in `sync_holds` alone;
-the rule is in `apps/runtime/src/sync/README.md` ("The hold set and the hold evaluator").
+file's breaker), and one evaluator reads it for the actor, status, "why" and the alerts. Nothing reads the old hold
+columns of `sync_pages` any more: an acquisition of the page and a `sync route raise` take the rows as they stand,
+and nothing is imported from the columns. They are still written: every hold write rewrites them from the rows in
+its transaction, so the previous image (the hold-set release, where those columns win whenever they differ from the
+rows) remains a safe rollback target: it finds the two sides equal and reads nothing back. So a hold is still never
+edited by hand in `sync_holds` alone: until the page's next hold write the columns would say otherwise, and a
+rollback would bring their version back. The rule is in `apps/runtime/src/sync/README.md` ("The hold set and the
+hold evaluator").
 
 **Breakers** stop one subject or one file, never the page:
 

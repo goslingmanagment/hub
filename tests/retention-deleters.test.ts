@@ -194,15 +194,6 @@ const SANCTIONED_DELETER_FILES = [
   "packages/db/src/repositories/runtime-instances.ts",
   "packages/db/src/repositories/spenders.ts",
   "packages/db/src/repositories/sync.ts",
-  // Fansly Sync Engine hold set (0240, owner decision №26): a page's holds
-  // are rows of `sync_holds`, and lifting a hold deletes its row — in the
-  // actor's own transaction (an identity proof, an answer after a hold ended,
-  // a breaker's file answering again); for the one release that reads the
-  // old hold columns back, an ownership acquisition (and a hold write under
-  // no generation) replaces a page's rows by what those columns say when the
-  // two differ (holds-legacy.ts). Engine state, never a captured fact, and
-  // never scheduled: no timer, no retention window.
-  "packages/db/src/repositories/sync/holds-legacy.ts",
   // Fansly Sync Engine media handoff (0234, owner decision №17): the
   // transient buffer that carries a chat file's bytes from the `sync` process
   // to the AI describer. The describer's read deletes the row it consumed; a
@@ -210,8 +201,12 @@ const SANCTIONED_DELETER_FILES = [
   // and every new download of the page). A transient handoff buffer, not a
   // captured fact: the description and the media metadata observation are.
   "packages/db/src/repositories/sync/media-handoff.ts",
-  // The hold writers (see holds-legacy.ts above): `clearPageHold`,
-  // `setResourceHold`, `writeSyncRouteState`.
+  // Fansly Sync Engine hold set (0240, owner decision №26): a page's holds
+  // are rows of `sync_holds`, and lifting a hold deletes its row — in the
+  // actor's own transaction (an identity proof, an answer after a hold ended,
+  // a breaker's file answering again): the hold writers `clearPageHold`,
+  // `setResourceHold`, `writeSyncRouteState`. Engine state, never a captured
+  // fact, and never scheduled: no timer, no retention window.
   "packages/db/src/repositories/sync/pages.ts",
   // Fansly Sync Engine telemetry (0228), scheduled with the sync
   // observability sweep: closed work rows and terminal attempts that are not

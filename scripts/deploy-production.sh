@@ -625,10 +625,11 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # partial unique index, comments and the read-role grant; it starts empty.
   # The previous image never names it: it reads and writes a page's holds in
   # the old columns of sync_pages (hold_kind … hold_detail, resource_holds),
-  # which this release's writers rewrite from the table in the same
-  # transaction as every hold write, so it holds what the table holds after a
-  # rollback. What it writes there meanwhile is read back into the table the
-  # next time this release acquires the page's ownership.
+  # which the hold writers rewrite from the table in the same transaction as
+  # every hold write, so it holds what the table holds after a rollback. What
+  # it writes there meanwhile was read back into the table when the hold-set
+  # release acquired the page's ownership; the release after it (0243) reads
+  # no hold column, so that one ships only after this one has been deployed.
   "0240_sync_holds.sql"
   # chat-extension greeting lease and send custody (hub-pr-plan H-7a): three
   # new tables (client_fan_leases, client_greetings, client_send_custody),
@@ -644,6 +645,18 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # gone it shows their env defaults and runs unchanged; the removed values
   # stay readable in the audit log.
   "0242_retire_fansly_legacy_config_overrides.sql"
+  # The first old hold column goes (step 4, design S4-31): sync_pages.hold_step
+  # is dropped (catalog-only, lock_timeout 5 s). The previous image — the
+  # hold-set release (0240) or a later one — never names it: it reads and
+  # writes sync_pages by named columns, and its hold writers and its
+  # acquisition name hold_kind, hold_until, hold_since, hold_detail and
+  # resource_holds only. Those stay, and this release's hold writers keep
+  # rewriting them from the table, so after a rollback that image runs
+  # unchanged and its acquisition finds them equal to the page's rows (it
+  # reads nothing back). NOT compatible with an image older than the hold-set
+  # release, which selects hold_step by name: 0240 and 0243 never ship in one
+  # deploy.
+  "0243_sync_pages_drop_hold_step.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"
