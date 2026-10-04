@@ -630,6 +630,12 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # rollback. What it writes there meanwhile is read back into the table the
   # next time this release acquires the page's ownership.
   "0240_sync_holds.sql"
+  # chat-extension greeting lease and send custody (hub-pr-plan H-7a): three
+  # new tables (client_fan_leases, client_greetings, client_send_custody),
+  # their checks, indexes and comments. The previous image never names them,
+  # and no route writes them until H-7b ships behind owner switches, so a
+  # rollback finds them empty (or unread) and runs unchanged.
+  "0241_client_claim_tables.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

@@ -829,6 +829,11 @@ export interface FanRefErasureColumn {
  */
 export const FAN_REF_ERASURE_COLUMNS: readonly FanRefErasureColumn[] = [
   { column: "follower_outreach_attempts.fan_ref", target: "follower_outreach_attempts", reach: "predicate" },
+  // chat-extension greeting lease and send custody (0241): clientClaimPred,
+  // `page_id in the platform's pages and fan_ref = ref`, on each table.
+  { column: "client_send_custody.fan_ref", target: "client_send_custody", reach: "predicate" },
+  { column: "client_greetings.fan_ref", target: "client_greetings", reach: "predicate" },
+  { column: "client_fan_leases.fan_ref", target: "client_fan_leases", reach: "predicate" },
   // Only the two earnings endpoint planes use subject_ref as a fan reference.
   { column: "subject_refresh_state.subject_ref", target: "subject_refresh_state", reach: "predicate" },
   // dmArchivePred: `fan_platform_user_id = ref or platform_conversation_id = ref
@@ -979,6 +984,16 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
     rows: await countOf(app, sql`select count(*)::text as n from follower_outreach_attempts where ${outreachPred}`),
     run: tx => execCount(tx, sql`delete from follower_outreach_attempts where ${outreachPred}`),
   });
+  // chat-extension custody, greeting and lease (0241) never expire either.
+  // Custody first: it references the lease it was checked against.
+  const clientClaimPred = sql`page_id in ${scope.pageIds} and fan_ref = ${ref}`;
+  for (const table of ["client_send_custody", "client_greetings", "client_fan_leases"] as const) {
+    targets.push({
+      plane: "hot", target: table, action: "delete",
+      rows: await countOf(app, sql`select count(*)::text as n from ${sql.raw(table)} where ${clientClaimPred}`),
+      run: tx => execCount(tx, sql`delete from ${sql.raw(table)} where ${clientClaimPred}`),
+    });
+  }
 
   // Fansly Sync Engine (0228). Work and attempts name the fan by subject — a
   // thread's work by the fan's chat (group id), fan work (`fan-profiles.*`) by
@@ -1569,6 +1584,10 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
 
   const deletions: Array<[string, string]> = [
     ["follower_outreach_attempts", "platform_account_id"],
+    // chat-extension (0241): custody before the leases it references.
+    ["client_send_custody", "page_id"],
+    ["client_greetings", "page_id"],
+    ["client_fan_leases", "page_id"],
     ["ofapi_media_catalog", "page_id"],
     ["ofapi_media_sources", "page_id"],
     // Desktop media images (0210): signed file locators, where media appear and the decision log.
