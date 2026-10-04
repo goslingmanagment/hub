@@ -15,7 +15,6 @@ import {
   findPageSummaryByLabel,
   insertAiUsageEvents,
   listChatterUsageSummary,
-  listClientBootstrapPages,
   listUserPageDailyUsage,
   listUserUsageReport,
   type UserPageDailyUsageRow,
@@ -32,15 +31,13 @@ import {
 import type { AppContext } from "../bootstrap.ts";
 import { evaluateAiGatewayQuota, isChatMuseAiGatewayEnabled } from "./ai-gateway.ts";
 import {
-  canAccessPage,
   requireApiKeyUser,
   requireSessionUser,
   type AuthPrincipal,
   type HumanAuthPrincipal,
 } from "./auth.ts";
-import { clientVersionRefusal } from "./client-features.ts";
-import { loadClientSwitches, type ClientFeatureRequest } from "./client-switches.ts";
-import { BadRequestError, ClientFeatureDisabledError } from "./errors.ts";
+import { requireClientPage, type ClientFeatureRequest } from "./client-switches.ts";
+import { BadRequestError } from "./errors.ts";
 
 const COMPLETED_AT_FUTURE_SKEW_MS = 5 * 60 * 1000;
 
@@ -233,6 +230,37 @@ function businessDatesEndingAt(lastDate: string, count: number): string[] {
   return dates;
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The first instant of a calendar day in a zone: where the zone's date turns
+ * to `day`.
+ *
+ * businessDateToUtcStart reads the zone's offset once, at the day's UTC
+ * midnight. That is up to 14 hours from the zone's own midnight, so when the
+ * clocks change in between (Sydney, Auckland, Santiago, Cairo and others) its
+ * answer is off by the change, and the hour would be reported under the
+ * neighbouring date. A clock change next to the day moves between the offsets
+ * in force a day before and a day after it, so the day's midnight is taken by
+ * each of them, and the cut is the earliest of those at which the date does
+ * turn. A midnight the clocks skip starts the day where they land; of a
+ * midnight they repeat, the first counts.
+ */
+export function calendarDayStart(day: string, timeZone: string): Date {
+  const plain = businessDateToUtcStart(day, timeZone).getTime();
+  const cuts = [...new Set([
+    businessDateToUtcStart(previousBusinessDate(day), timeZone).getTime() + DAY_MS,
+    plain,
+    businessDateToUtcStart(nextBusinessDate(day), timeZone).getTime() - DAY_MS,
+  ])].sort((left, right) => left - right);
+  const turn = cuts.find((cut) => (
+    toBusinessDate(new Date(cut), timeZone) >= day && toBusinessDate(new Date(cut - 1), timeZone) < day
+  ));
+  // No cut turns the date only if the clocks changed twice within two days,
+  // which no zone does: the plain cut then, an hour off at worst.
+  return new Date(turn ?? plain);
+}
+
 function toClientAiUsageTotals(rows: readonly UserPageDailyUsageRow[]): ClientAiUsageTotals {
   const sum = (pick: (row: UserPageDailyUsageRow) => number) => rows.reduce((total, row) => total + pick(row), 0);
   return {
@@ -255,39 +283,6 @@ function toClientAiUsageTotals(rows: readonly UserPageDailyUsageRow[]): ClientAi
 }
 
 /**
- * The hub's own check of this route. It has no flag of its own, so it is the
- * part of requireClientFeature (client-switches.ts) that every client route
- * shares, refused the same way (409 `client_feature_disabled` + reason):
- * - `not_granted`: not an active page granted to the caller (a missing page
- *   answers the same, so the refusal reveals nothing);
- * - `disabled`: the owner's master switch is off;
- * - `client_outdated`: `x-client-version` is below the owner's minimum, or
- *   unreadable.
- * No platform check: AI is spent on every platform.
- */
-async function requireClientAiUsagePage(
-  app: AppContext,
-  request: ClientFeatureRequest,
-  principal: HumanAuthPrincipal,
-  pageLabel: string,
-): Promise<{ id: number; label: string }> {
-  const found = await findPageSummaryByLabel(app.db, pageLabel);
-  const [page] = found && canAccessPage(principal, found.id) ? await listClientBootstrapPages(app.db, [found.id]) : [];
-  if (page === undefined) {
-    throw new ClientFeatureDisabledError(CLIENT_AI_USAGE_FEATURE, "not_granted");
-  }
-  const switches = await loadClientSwitches(app);
-  if (!switches.settings.enabled) {
-    throw new ClientFeatureDisabledError(CLIENT_AI_USAGE_FEATURE, "disabled");
-  }
-  const outdated = clientVersionRefusal(switches.minVersion, request.headers["x-client-version"]);
-  if (outdated !== null) {
-    throw new ClientFeatureDisabledError(CLIENT_AI_USAGE_FEATURE, outdated);
-  }
-  return page;
-}
-
-/**
  * chat-extension H-15: what the caller spent on AI on one page, by day.
  * Database only: the ledger and the config; no platform request, no queued work.
  *
@@ -296,9 +291,10 @@ async function requireClientAiUsagePage(
  *
  * TWO DAY BOUNDARIES, both printed in the answer:
  * - report days are calendar days in `query.timeZone` (Europe/Moscow by
- *   default, the cabinet's business day), cut by the same helper as every other
- *   report of the hub. The ledger is bucketed by the instants printed as
- *   `from` / `toExclusive`, so what a day shows is exactly what was counted;
+ *   default, the cabinet's business day), cut where the zone's date turns
+ *   (calendarDayStart), so a day the clocks change in is 23 or 25 hours long.
+ *   The ledger is bucketed by the instants printed as `from` / `toExclusive`,
+ *   so what a day shows is exactly what was counted;
  * - `quota` is the gateway's own answer (evaluateAiGatewayQuota), and its day
  *   is the UTC day. Around midnight the two "today"s are different windows.
  *
@@ -317,7 +313,18 @@ export async function getClientAiUsageReport(
   now: Date = new Date(),
 ): Promise<ClientAiUsageResponse> {
   requireApiKeyUser(principal);
-  const page = await requireClientAiUsagePage(app, request, principal, input.pageLabel);
+  // The hub's own check of this route (409 `client_feature_disabled` + reason).
+  // It has no flag of its own, so: `not_granted` (not an active page granted
+  // to the caller; a missing page answers the same), `disabled` (the owner's
+  // master switch is off), `client_outdated`. No platform check: AI is spent
+  // on every platform.
+  const page = await requireClientPage(
+    app,
+    request,
+    principal,
+    await findPageSummaryByLabel(app.db, input.pageLabel),
+    CLIENT_AI_USAGE_FEATURE,
+  );
 
   const { date, days, timeZone } = input.query;
   if (!isKnownTimeZone(timeZone)) {
@@ -337,7 +344,7 @@ export async function getClientAiUsageReport(
 
   const dates = businessDatesEndingAt(date, days);
   // One more boundary than days: day i is [boundaries[i], boundaries[i + 1]).
-  const boundaries = [...dates, nextBusinessDate(date)].map((day) => businessDateToUtcStart(day, timeZone));
+  const boundaries = [...dates, nextBusinessDate(date)].map((day) => calendarDayStart(day, timeZone));
   const userId = principal.user.id;
   const rows = await listUserPageDailyUsage(app.db, {
     userId,

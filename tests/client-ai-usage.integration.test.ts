@@ -53,7 +53,7 @@ vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
 // in Moscow. Report days are Moscow days by default; the quota's day is UTC.
 
 const NOW = "2026-10-03T22:30:00.000Z";
-const PASSWORDS = { owner: "owner-secret", grisha: "grisha-secret" } as const;
+const PASSWORDS = { owner: "owner-secret", lead: "lead-secret", grisha: "grisha-secret" } as const;
 const AUDIT = { source: "cli" } as const;
 const EXTENSION_VERSION = "chat-extension/1.4.2";
 /** A live Agent Read Plane key granted lora-of: refused by its kind, not by the page. */
@@ -134,7 +134,10 @@ let narrowToken = "";
 /** Grisha's full device token. */
 let fullToken = "";
 let nikitaToken = "";
+/** A team lead's full device token; the lead is assigned lora-of only. */
+let leadToken = "";
 let ownerId = 0;
+let leadId = 0;
 let grishaId = 0;
 let nikitaId = 0;
 let seedSequence = 0;
@@ -232,6 +235,18 @@ function expectRefused(response: InjectResponse, statusCode: number, error: stri
   }
 }
 
+/** A cookie session, by the real password sign-in. */
+async function loginCookie(username: keyof typeof PASSWORDS): Promise<string> {
+  const login = await server!.inject({
+    method: "POST",
+    url: "/api/v1/auth/login",
+    payload: { username, password: PASSWORDS[username] },
+  });
+  expect(login.statusCode, login.body).toBe(200);
+  const header = login.headers["set-cookie"];
+  return (Array.isArray(header) ? header[0] : header)!.split(";")[0]!;
+}
+
 async function patchConfig(patches: Array<{ key: string; value: unknown }>) {
   const response = await server!.inject({
     method: "PATCH",
@@ -267,9 +282,11 @@ describe("GET /api/v1/client/pages/:pageLabel/ai-usage", () => {
     await resetIntegrationDatabase(testDb.pool);
     app = createTestAppContext(testDb, { chatMuseAiGatewayEnabled: true });
     await createUserAccount(app, { username: "owner", role: "owner", password: PASSWORDS.owner }, AUDIT);
+    await createUserAccount(app, { username: "lead", role: "team_lead", password: PASSWORDS.lead }, AUDIT);
     await createUserAccount(app, { username: "grisha", role: "chatter" }, AUDIT);
     await createUserAccount(app, { username: "nikita", role: "chatter" }, AUDIT);
     ownerId = await fixtureUserId(app, "owner");
+    leadId = await fixtureUserId(app, "lead");
     grishaId = await fixtureUserId(app, "grisha");
     nikitaId = await fixtureUserId(app, "nikita");
     // Setting a password ends every sign-in, so it comes before the tokens.
@@ -297,11 +314,13 @@ describe("GET /api/v1/client/pages/:pageLabel/ai-usage", () => {
       await assignPageToUser(app, { userId: grishaId, pageLabel: label }, AUDIT);
     }
     await assignPageToUser(app, { userId: nikitaId, pageLabel: "lora-of" }, AUDIT);
+    await assignPageToUser(app, { userId: leadId, pageLabel: "lora-of" }, AUDIT);
     await deletePageByLabel(app.db, "lora-old-of");
 
     ownerToken = (await issueDeviceTokenForUserId(app, { userId: ownerId, label: "owner client" })).token;
     fullToken = (await issueDeviceTokenForUserId(app, { userId: grishaId, label: "grisha full" })).token;
     nikitaToken = (await issueDeviceTokenForUserId(app, { userId: nikitaId, label: "nikita client" })).token;
+    leadToken = (await issueDeviceTokenForUserId(app, { userId: leadId, label: "lead client" })).token;
     await insertAgentKey(app.db, {
       name: "client-ai-usage-probe",
       keyPrefix: AGENT_KEY_TOKEN.slice(0, AGENT_KEY_TOKEN_PREFIX.length + 6),
@@ -338,14 +357,7 @@ describe("GET /api/v1/client/pages/:pageLabel/ai-usage", () => {
     expect(narrow.json()).toMatchObject({ client: "chat-extension" });
     narrowToken = narrow.json<{ token: string }>().token;
 
-    const login = await server.inject({
-      method: "POST",
-      url: "/api/v1/auth/login",
-      payload: { username: "owner", password: PASSWORDS.owner },
-    });
-    expect(login.statusCode, login.body).toBe(200);
-    const header = login.headers["set-cookie"];
-    ownerCookie = (Array.isArray(header) ? header[0] : header)!.split(";")[0]!;
+    ownerCookie = await loginCookie("owner");
     trap = await armNoOutboundTrap(testDb);
   }, 120_000);
 
@@ -493,7 +505,7 @@ describe("GET /api/v1/client/pages/:pageLabel/ai-usage", () => {
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("an owner reads only the owner's own spend, a chatter never a colleague's", async (context) => {
+  it("an owner and a team lead read only their own spend, a chatter never a colleague's", async (context) => {
     if (!server) return context.skip();
     await switchExtensionOn();
 
@@ -503,9 +515,12 @@ describe("GET /api/v1/client/pages/:pageLabel/ai-usage", () => {
       { at: "2026-10-03T11:00:00.000Z", cost: 30_000 },
     ]);
     await seed(ownerId, "lora-of", [{ at: "2026-10-03T12:00:00.000Z", cost: 5000 }]);
+    await seed(leadId, "lora-of", [{ at: "2026-10-03T13:00:00.000Z", cost: 600 }]);
 
     const cases = [
       { who: "owner", token: ownerToken, userId: ownerId, requestCount: 1, costMicroUsd: 5000 },
+      // A team lead too: on a page it shares with chatters it reads only its own rows.
+      { who: "team lead", token: leadToken, userId: leadId, requestCount: 1, costMicroUsd: 600 },
       { who: "grisha, narrow token", token: narrowToken, userId: grishaId, requestCount: 1, costMicroUsd: 1000 },
       { who: "grisha, full token", token: fullToken, userId: grishaId, requestCount: 1, costMicroUsd: 1000 },
       { who: "nikita", token: nikitaToken, userId: nikitaId, requestCount: 2, costMicroUsd: 50_000 },
@@ -622,6 +637,46 @@ describe("GET /api/v1/client/pages/:pageLabel/ai-usage", () => {
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
+  it("cuts a day east of UTC where the zone's date turns, on the day its clocks change too", async (context) => {
+    if (!server) return context.skip();
+    await switchExtensionOn();
+    // Sydney enters summer time on 4 October 2026: 02:00 becomes 03:00, at 16:00Z
+    // on 3 October. Its midnight before that is 14:00Z, the next one 13:00Z. The
+    // offset in force at UTC midnight (+11) would cut 4 October an hour early.
+    const sydney = (body: ClientAiUsageResponse) => body.days.map((day) => [
+      day.date, day.from, day.toExclusive, day.coverage, day.coverageReasons, day.totals.costMicroUsd,
+    ]);
+
+    // 23:30 on 3 October in Sydney: the day is not over there yet.
+    vi.setSystemTime(new Date("2026-10-03T13:30:00.000Z"));
+    // 23:15 on 3 October in Sydney.
+    await seed(grishaId, "lora-of", [{ at: "2026-10-03T13:15:00.000Z", cost: 7 }]);
+    const evening = await report(narrowToken, "lora-of", "date=2026-10-03&timeZone=Australia/Sydney");
+    expect(sydney(evening)).toEqual([
+      ["2026-10-03", "2026-10-02T14:00:00.000Z", "2026-10-03T14:00:00.000Z", "partial", ["day_open"], 7],
+    ]);
+    expectRefused(
+      await usage(narrowToken, "lora-of", "date=2026-10-04&timeZone=Australia/Sydney"), 400, "bad_request", "date_in_future",
+    );
+
+    // 00:30 on 5 October in Sydney: both days are over, and 4 October was 23 hours long.
+    vi.setSystemTime(new Date("2026-10-04T13:30:00.000Z"));
+    await seed(grishaId, "lora-of", [
+      { at: "2026-10-03T14:00:00.000Z", cost: 50 },
+      { at: "2026-10-04T12:59:59.999Z", cost: 300 },
+      // 00:00 on 5 October in Sydney.
+      { at: "2026-10-04T13:00:00.000Z", cost: 2000 },
+    ]);
+    const body = await report(narrowToken, "lora-of", "date=2026-10-04&days=2&timeZone=Australia/Sydney");
+    expect(body.timeZone).toBe("Australia/Sydney");
+    expect(sydney(body)).toEqual([
+      ["2026-10-03", "2026-10-02T14:00:00.000Z", "2026-10-03T14:00:00.000Z", "complete", [], 7],
+      ["2026-10-04", "2026-10-03T14:00:00.000Z", "2026-10-04T13:00:00.000Z", "complete", [], 350],
+    ]);
+
+    await trap!.assertNoOutbound();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
   it("takes 1 to 7 days ending no later than today and no earlier than 8 days back, in the report zone", async (context) => {
     if (!server) return context.skip();
     await switchExtensionOn();
@@ -677,6 +732,12 @@ describe("GET /api/v1/client/pages/:pageLabel/ai-usage", () => {
       expectRefused(await usage(token, "lora-of", "date=2026-10-03"), 409, "client_feature_disabled", "disabled");
     }
     expectRefused(await usage(narrowToken, "lora-of", "date=2030-01-01"), 409, "client_feature_disabled", "disabled");
+    // The page is checked first, as in requireClientFeature: a page that is not
+    // the caller's says so whatever the switch and the version are.
+    expectRefused(
+      await usage(narrowToken, "mia-of", "date=2026-10-03", { clientVersion: null }),
+      409, "client_feature_disabled", "not_granted",
+    );
     // The bootstrap still announces what the hub serves; the switch is checked on the call.
     const bootstrap = await server.inject({
       method: "GET",
@@ -729,14 +790,8 @@ describe("GET /api/v1/client/pages/:pageLabel/ai-usage", () => {
     if (!server || !enforceServer) return context.skip();
     await switchExtensionOn();
 
-    const chatterLogin = await server.inject({
-      method: "POST",
-      url: "/api/v1/auth/login",
-      payload: { username: "grisha", password: PASSWORDS.grisha },
-    });
-    expect(chatterLogin.statusCode, chatterLogin.body).toBe(200);
-    const chatterHeader = chatterLogin.headers["set-cookie"];
-    const chatterCookie = (Array.isArray(chatterHeader) ? chatterHeader[0] : chatterHeader)!.split(";")[0]!;
+    const leadCookie = await loginCookie("lead");
+    const chatterCookie = await loginCookie("grisha");
 
     interface Refusal { status: number; error: string; reason?: string }
     const cases: Array<{
@@ -753,6 +808,7 @@ describe("GET /api/v1/client/pages/:pageLabel/ai-usage", () => {
         expected: { status: 401, error: "unauthorized" },
       },
       { who: "owner cookie", page: "lora-of", headers: { cookie: ownerCookie }, expected: { status: 403, error: "forbidden" } },
+      { who: "team_lead cookie", page: "lora-of", headers: { cookie: leadCookie }, expected: { status: 403, error: "forbidden" } },
       { who: "chatter cookie", page: "lora-of", headers: { cookie: chatterCookie }, expected: { status: 403, error: "forbidden" } },
       // Live and granted lora-of: refused by kind, before any page is looked at.
       {
@@ -761,6 +817,7 @@ describe("GET /api/v1/client/pages/:pageLabel/ai-usage", () => {
         expected: { status: 403, error: "forbidden" },
       },
       { who: "owner device token", page: "mia-of", headers: { authorization: `Bearer ${ownerToken}` }, expected: 200 },
+      { who: "team_lead device token", page: "lora-of", headers: { authorization: `Bearer ${leadToken}` }, expected: 200 },
       { who: "chatter narrow token", page: "lora-of", headers: { authorization: `Bearer ${narrowToken}` }, expected: 200 },
       { who: "chatter full token", page: "lora-of", headers: { authorization: `Bearer ${fullToken}` }, expected: 200 },
       // A page of someone else, a tombstone and a page that never existed: the
@@ -769,6 +826,15 @@ describe("GET /api/v1/client/pages/:pageLabel/ai-usage", () => {
       {
         who: "chatter, a page not granted", page: "mia-of",
         headers: { authorization: `Bearer ${narrowToken}` },
+        expected: {
+          log: { status: 409, error: "client_feature_disabled", reason: "not_granted" },
+          enforce: { status: 403, error: "forbidden" },
+        },
+      },
+      // A team lead reaches its assigned pages only, like a chatter.
+      {
+        who: "team_lead, a page not granted", page: "mia-of",
+        headers: { authorization: `Bearer ${leadToken}` },
         expected: {
           log: { status: 409, error: "client_feature_disabled", reason: "not_granted" },
           enforce: { status: 403, error: "forbidden" },

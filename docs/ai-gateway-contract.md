@@ -492,7 +492,8 @@ Two day boundaries meet in one answer, and it states both:
 
 - **Report days** are calendar days in `timeZone` (default `Europe/Moscow`, the cabinet's business
   day). Each day carries the instants it was cut at (`from`, `toExclusive`), and the ledger is
-  bucketed by exactly those instants on `completed_at`.
+  bucketed by exactly those instants on `completed_at`. A day is cut where the zone's date turns,
+  so a day the zone's clocks change in is 23 or 25 hours long.
 - **The quota's day is the UTC day** (the preflight above). `quota.dayBoundary` is `"UTC"` and
   `remainingRequestsToday` / `remainingMicroUsdToday` are the gateway's own answer for
   `(caller, page)`. At 01:30 Moscow time the report's "today" is 90 minutes old while the quota's
