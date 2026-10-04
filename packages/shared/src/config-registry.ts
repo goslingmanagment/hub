@@ -300,6 +300,10 @@ export const CONFIG_DESCRIPTORS: readonly ConfigDescriptor[] = [
   // chat-extension H-6: how deep the full Recap of an OnlyFans chat reads.
   // Rests at 1500, the AI readers' cap for every other caller.
   { key: "aiTranscriptDeepMaxRows", envName: "AI_TRANSCRIPT_DEEP_MAX_ROWS", configField: "aiTranscriptDeepMaxRows", kind: "string", subsystem: "ChatMuse", label: "AI full Recap transcript depth (messages)", default: "1500", editability: EDITABLE, runtimeApply: "live", comparable: true, enumValues: ["1500", "3000"], costWarning: "At 3000 a full Recap gives the model up to twice as many messages, so its input costs up to twice as much.", note: "chat-extension H-6. 1500 = the full Recap reads what every AI feature reads. 3000 = a full Recap (fan-summary, not the short mode) of an OnlyFans chat reads up to 3000 messages when the client advertises context-v1 and asks for them; the bootstrap announces the value as limits.deepMax. Short Recap, Review, Coach and every reply feature stay at 1500, as do clients without context-v1 and Fansly. Read per generation (live)." },
+  // H-11b: the health intake's own switch, read per capture batch that carries
+  // a client_health report and per bootstrap. It counts only while the master
+  // switch is on.
+  { key: "chatExtensionHealthIngestEnabled", envName: "CHAT_EXTENSION_HEALTH_INGEST_ENABLED", configField: "chatExtensionHealthIngestEnabled", kind: "boolean", subsystem: "Core", label: "Chat extension health reports", default: "false", editability: EDITABLE, runtimeApply: "live", comparable: true, note: "On (with the master switch on) = the bootstrap lists client-health-perf-v1 and the hub folds each client_health report into hourly rollups that hold no user; the report itself is never stored. Off = the extension keeps its reports to itself, and one that still arrives is accepted and dropped. Rollups already written stay." },
 ] as const;
 
 const DESCRIPTOR_BY_KEY = new Map(CONFIG_DESCRIPTORS.map((d) => [d.key, d]));

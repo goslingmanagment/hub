@@ -170,6 +170,9 @@ describe("config registry", () => {
     // chat-extension H-6: how deep the full Recap reads, read per generation
     // and per bootstrap. Rests at 1500, the AI readers' cap for everyone.
     "aiTranscriptDeepMaxRows",
+    // H-11b: the health intake's switch, read per capture batch that carries
+    // a client_health report and per bootstrap.
+    "chatExtensionHealthIngestEnabled",
   ];
   const BOOT_KEYS = [
     "ofapiDmProjectionEnabled",

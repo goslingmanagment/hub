@@ -8,7 +8,11 @@ import {
 } from "@agency_hub_core/contracts";
 import { getDescriptor, loadConfig } from "@agency_hub_core/shared";
 
-import { SERVED_CLIENT_CAPABILITIES } from "../apps/runtime/src/services/client-capabilities.ts";
+import {
+  CLIENT_HEALTH_CAPABILITY,
+  clientBootstrapCapabilities,
+  SERVED_CLIENT_CAPABILITIES,
+} from "../apps/runtime/src/services/client-capabilities.ts";
 import {
   CLIENT_FEATURE_CODE_DEFAULTS,
   CLIENT_FEATURE_REQUIREMENTS,
@@ -202,6 +206,7 @@ describe("chat-extension switches from the effective config", () => {
       settings: { enabled: false, features: {}, hostBindings: {} },
       minVersion: "0.0.0",
       receiptProfiles: [],
+      healthIngestEnabled: false,
     });
     // A config without the keys at all (an older process shape) reads the same.
     expect(readClientSwitches({}).switches).toEqual(switches);
@@ -226,6 +231,7 @@ describe("chat-extension switches from the effective config", () => {
       },
       minVersion: "1.4.0",
       receiptProfiles: [profile],
+      healthIngestEnabled: false,
     });
     // The receipt profiles are exactly what the bootstrap's limits carry.
     expect(clientBootstrapResponseSchema.shape.limits.parse({
@@ -295,7 +301,42 @@ describe("chat-extension switches from the effective config", () => {
     ]))).toEqual([]);
   });
 
-  it("the bootstrap revision covers the five switches and the three settings later PRs add", () => {
+  it("keeps health reports only with the health switch on and the extension as a whole on", () => {
+    const health = (config: Parameters<typeof readClientSwitches>[0], stored?: Parameters<typeof readClientSwitches>[1]) =>
+      readClientSwitches(config, stored).switches.healthIngestEnabled;
+
+    expect(health({ chatExtensionEnabled: true, chatExtensionHealthIngestEnabled: true })).toBe(true);
+    // The master switch off turns everything off, the health intake too.
+    expect(health({ chatExtensionEnabled: false, chatExtensionHealthIngestEnabled: true })).toBe(false);
+    expect(health({ chatExtensionHealthIngestEnabled: true })).toBe(false);
+    expect(health({ chatExtensionEnabled: true })).toBe(false);
+    expect(health({ chatExtensionEnabled: true, chatExtensionHealthIngestEnabled: false })).toBe(false);
+    // An unreadable switch turns the extension off as a whole: nothing is kept.
+    expect(health({ chatExtensionEnabled: true, chatExtensionHealthIngestEnabled: true, chatExtensionMinVersion: "1.4" }))
+      .toBe(false);
+    expect(health(
+      { chatExtensionEnabled: true, chatExtensionHealthIngestEnabled: true },
+      storedClientSwitchProblems(new Map([["chatExtensionEnabled", { value: "yes" }]])),
+    )).toBe(false);
+
+    // The bootstrap lists the capability exactly then, after the standing ones.
+    expect(clientBootstrapCapabilities({ healthIngestEnabled: false })).toEqual([...SERVED_CLIENT_CAPABILITIES]);
+    expect(clientBootstrapCapabilities({ healthIngestEnabled: true }))
+      .toEqual([...SERVED_CLIENT_CAPABILITIES, "client-health-perf-v1"]);
+    expect(CLIENT_HUB_CAPABILITY_NAMES).toContain(CLIENT_HEALTH_CAPABILITY);
+
+    const descriptor = getDescriptor("chatExtensionHealthIngestEnabled");
+    expect(descriptor).toMatchObject({
+      envName: "CHAT_EXTENSION_HEALTH_INGEST_ENABLED",
+      kind: "boolean",
+      default: "false",
+      editability: "editable",
+      runtimeApply: "live",
+      subsystem: "Core",
+    });
+  });
+
+  it("the bootstrap revision covers the five switches, the health switch and the two settings later PRs add", () => {
     expect(CLIENT_BOOTSTRAP_CONFIG_KEYS).toEqual([
       "chatExtensionEnabled",
       "chatExtensionFeatures",

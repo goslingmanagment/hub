@@ -209,6 +209,8 @@ describe("LIVE_CONFIG_KEYS", () => {
       // chat-extension H-6: the full Recap's transcript depth, read per
       // generation and per bootstrap.
       "aiTranscriptDeepMaxRows",
+      // H-11b: the health intake's switch.
+      "chatExtensionHealthIngestEnabled",
     ]) {
       expect(LIVE_CONFIG_KEYS.has(key), key).toBe(true);
     }
@@ -216,6 +218,6 @@ describe("LIVE_CONFIG_KEYS", () => {
     expect(LIVE_CONFIG_KEYS.has("fanslyLiveOverlayReadPages")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("agentHydrationMode")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("healthSyncLightMaxAgeMinutes")).toBe(true);
-    expect(LIVE_CONFIG_KEYS.size).toBe(47);
+    expect(LIVE_CONFIG_KEYS.size).toBe(48);
   });
 });

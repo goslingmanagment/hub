@@ -42,9 +42,11 @@ export const CLIENT_SWITCH_KEYS = [
 ] as const;
 
 /**
- * The settings whose change moves the bootstrap's `configRevision`. The three
- * keys later PRs add are listed already, so the revision means the same thing
- * from the first client on; a key that does not exist yet has no audit row.
+ * The settings whose change moves the bootstrap's `configRevision`: the five
+ * switches, the health intake's own switch (H-11b; it is not one of the five,
+ * see `ClientSwitches.healthIngestEnabled`), and the two keys later PRs add,
+ * listed already so the revision means the same thing from the first client on;
+ * a key that does not exist yet has no audit row.
  */
 export const CLIENT_BOOTSTRAP_CONFIG_KEYS = [
   ...CLIENT_SWITCH_KEYS,
@@ -63,6 +65,16 @@ export interface ClientSwitches {
   minVersion: string;
   /** The admitted send paths of sending from the preview (X8); empty = X8 off. */
   receiptProfiles: readonly ClientReceiptProfile[];
+  /**
+   * Whether the hub keeps `client_health` reports and the bootstrap lists
+   * `client-health-perf-v1` (H-11b): the owner's
+   * `chatExtensionHealthIngestEnabled`, and only while the extension as a whole
+   * is on (the master switch on, every switch readable). Not one of the five
+   * switches: a stored override of it that no longer validates does not turn
+   * the extension off, the environment value stands (off unless a deployment
+   * sets it).
+   */
+  healthIngestEnabled: boolean;
 }
 
 /** A stored switch the process could not read. */
@@ -71,7 +83,7 @@ export interface ClientSwitchProblem {
   error: string;
 }
 
-type ClientSwitchConfig = Pick<AppConfig, (typeof CLIENT_SWITCH_KEYS)[number]>;
+type ClientSwitchConfig = Pick<AppConfig, (typeof CLIENT_SWITCH_KEYS)[number] | "chatExtensionHealthIngestEnabled">;
 
 /**
  * The stored overrides of the five switches that no longer validate. Pure.
@@ -140,15 +152,13 @@ export function readClientSwitches(
     [],
     parseChatExtensionReceiptProfiles,
   );
+  const enabled = config.chatExtensionEnabled === true && problems.length === 0;
   return {
     switches: {
-      settings: {
-        enabled: config.chatExtensionEnabled === true && problems.length === 0,
-        features,
-        hostBindings,
-      },
+      settings: { enabled, features, hostBindings },
       minVersion,
       receiptProfiles,
+      healthIngestEnabled: enabled && config.chatExtensionHealthIngestEnabled === true,
     },
     problems,
   };
