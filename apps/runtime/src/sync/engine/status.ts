@@ -95,14 +95,30 @@ export interface WorkExplanation {
   detail: Record<string, unknown>;
 }
 
-/** The page has an owner that is running a loop: a fresh heartbeat of the
- *  current generation that was not released, in the mode an actor runs in. */
-export function ownerRunning(page: Pick<StatusPage, "mode" | "owner">, now: Date): boolean {
-  if (page.mode !== "live") return false;
+/** Whether an owner runs the page's loop, and when not, why: the page is in
+ *  a mode no actor runs in (`mode`), nobody ever took it (`never_owned`), its
+ *  owner let it go (`released`), or its owner stopped beating
+ *  (`heartbeat_stale`). */
+export type OwnerRunState =
+  | { running: true }
+  | { running: false; why: "mode" | "never_owned" | "released" }
+  | { running: false; why: "heartbeat_stale"; heartbeatAgeMs: number };
+
+/** The page's owner as its row says: running a loop — a fresh heartbeat of
+ *  the current generation that was not released, in the mode an actor runs
+ *  in — or not, and why. */
+export function ownerRunState(page: Pick<StatusPage, "mode" | "owner">, now: Date): OwnerRunState {
+  if (page.mode !== "live") return { running: false, why: "mode" };
   const { owner } = page;
-  if (owner.generation === 0n || owner.heartbeatAt === null) return false;
-  if (owner.releasedAt !== null && owner.releaseGeneration === owner.generation) return false;
-  return now.getTime() - owner.heartbeatAt.getTime() <= OWNER_HEARTBEAT_FRESH_MS;
+  if (owner.generation === 0n || owner.heartbeatAt === null) return { running: false, why: "never_owned" };
+  if (owner.releasedAt !== null && owner.releaseGeneration === owner.generation) return { running: false, why: "released" };
+  const heartbeatAgeMs = now.getTime() - owner.heartbeatAt.getTime();
+  return heartbeatAgeMs <= OWNER_HEARTBEAT_FRESH_MS ? { running: true } : { running: false, why: "heartbeat_stale", heartbeatAgeMs };
+}
+
+/** The page has an owner that is running a loop (`ownerRunState`). */
+export function ownerRunning(page: Pick<StatusPage, "mode" | "owner">, now: Date): boolean {
+  return ownerRunState(page, now).running;
 }
 
 /**

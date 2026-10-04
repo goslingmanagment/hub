@@ -138767,6 +138767,60 @@
                                   "paused": {
                                     "type": "boolean"
                                   },
+                                  "stopped": {
+                                    "type": "string",
+                                    "enum": [
+                                      "none",
+                                      "some",
+                                      "all"
+                                    ]
+                                  },
+                                  "stops": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "reason": {
+                                          "type": "string",
+                                          "enum": [
+                                            "paused",
+                                            "page_hold",
+                                            "resource_hold",
+                                            "route_hold"
+                                          ]
+                                        },
+                                        "by": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string"
+                                          }
+                                        },
+                                        "resources": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string"
+                                          }
+                                        },
+                                        "until": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      "required": [
+                                        "reason",
+                                        "by",
+                                        "resources",
+                                        "until"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
                                   "needsAttention": {
                                     "type": "boolean"
                                   },
@@ -138843,6 +138897,8 @@
                                   "nextDueAt",
                                   "activeWork",
                                   "paused",
+                                  "stopped",
+                                  "stops",
                                   "needsAttention",
                                   "reason",
                                   "waiting",
@@ -142250,6 +142306,161 @@
                                     "live"
                                   ]
                                 },
+                                "engine": {
+                                  "type": "object",
+                                  "properties": {
+                                    "mode": {
+                                      "type": "string",
+                                      "enum": [
+                                        "handover",
+                                        "live"
+                                      ]
+                                    },
+                                    "ownerRunning": {
+                                      "type": "boolean"
+                                    },
+                                    "keys": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "pollKeys": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "pausedKeys": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "pausedAll": {
+                                      "type": "boolean"
+                                    },
+                                    "stopped": {
+                                      "type": "string",
+                                      "enum": [
+                                        "none",
+                                        "some",
+                                        "all"
+                                      ]
+                                    },
+                                    "stops": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "reason": {
+                                            "type": "string",
+                                            "enum": [
+                                              "paused",
+                                              "page_hold",
+                                              "resource_hold",
+                                              "route_hold"
+                                            ]
+                                          },
+                                          "by": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string"
+                                            }
+                                          },
+                                          "resources": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string"
+                                            }
+                                          },
+                                          "until": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          }
+                                        },
+                                        "required": [
+                                          "reason",
+                                          "by",
+                                          "resources",
+                                          "until"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "paused": {
+                                      "type": "boolean"
+                                    },
+                                    "activeWork": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "quarantined": {
+                                      "type": "object",
+                                      "properties": {
+                                        "count": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "resources": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string"
+                                          }
+                                        }
+                                      },
+                                      "required": [
+                                        "count",
+                                        "resources"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    "blockedByVendor": {
+                                      "type": "object",
+                                      "properties": {
+                                        "count": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "resources": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string"
+                                          }
+                                        }
+                                      },
+                                      "required": [
+                                        "count",
+                                        "resources"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "required": [
+                                    "mode",
+                                    "ownerRunning",
+                                    "keys",
+                                    "pollKeys",
+                                    "pausedKeys",
+                                    "pausedAll",
+                                    "stopped",
+                                    "stops",
+                                    "paused",
+                                    "activeWork",
+                                    "quarantined",
+                                    "blockedByVendor"
+                                  ],
+                                  "additionalProperties": false
+                                },
                                 "succeededAt": {
                                   "anyOf": [
                                     {
@@ -142756,6 +142967,80 @@
                                             "type": "null"
                                           }
                                         ]
+                                      },
+                                      "engine": {
+                                        "type": "object",
+                                        "properties": {
+                                          "stopped": {
+                                            "type": "string",
+                                            "enum": [
+                                              "none",
+                                              "some",
+                                              "all"
+                                            ]
+                                          },
+                                          "stops": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "object",
+                                              "properties": {
+                                                "reason": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "paused",
+                                                    "page_hold",
+                                                    "resource_hold",
+                                                    "route_hold"
+                                                  ]
+                                                },
+                                                "by": {
+                                                  "type": "array",
+                                                  "items": {
+                                                    "type": "string"
+                                                  }
+                                                },
+                                                "resources": {
+                                                  "type": "array",
+                                                  "items": {
+                                                    "type": "string"
+                                                  }
+                                                },
+                                                "until": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "string"
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                }
+                                              },
+                                              "required": [
+                                                "reason",
+                                                "by",
+                                                "resources",
+                                                "until"
+                                              ],
+                                              "additionalProperties": false
+                                            }
+                                          },
+                                          "paused": {
+                                            "type": "boolean"
+                                          },
+                                          "activeWork": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 9007199254740991
+                                          }
+                                        },
+                                        "required": [
+                                          "stopped",
+                                          "stops",
+                                          "paused",
+                                          "activeWork"
+                                        ],
+                                        "additionalProperties": false
                                       }
                                     },
                                     "required": [
@@ -142831,6 +143116,161 @@
                                     "live"
                                   ]
                                 },
+                                "engine": {
+                                  "type": "object",
+                                  "properties": {
+                                    "mode": {
+                                      "type": "string",
+                                      "enum": [
+                                        "handover",
+                                        "live"
+                                      ]
+                                    },
+                                    "ownerRunning": {
+                                      "type": "boolean"
+                                    },
+                                    "keys": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "pollKeys": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "pausedKeys": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "pausedAll": {
+                                      "type": "boolean"
+                                    },
+                                    "stopped": {
+                                      "type": "string",
+                                      "enum": [
+                                        "none",
+                                        "some",
+                                        "all"
+                                      ]
+                                    },
+                                    "stops": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "reason": {
+                                            "type": "string",
+                                            "enum": [
+                                              "paused",
+                                              "page_hold",
+                                              "resource_hold",
+                                              "route_hold"
+                                            ]
+                                          },
+                                          "by": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string"
+                                            }
+                                          },
+                                          "resources": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string"
+                                            }
+                                          },
+                                          "until": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          }
+                                        },
+                                        "required": [
+                                          "reason",
+                                          "by",
+                                          "resources",
+                                          "until"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "paused": {
+                                      "type": "boolean"
+                                    },
+                                    "activeWork": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "quarantined": {
+                                      "type": "object",
+                                      "properties": {
+                                        "count": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "resources": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string"
+                                          }
+                                        }
+                                      },
+                                      "required": [
+                                        "count",
+                                        "resources"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    "blockedByVendor": {
+                                      "type": "object",
+                                      "properties": {
+                                        "count": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "resources": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string"
+                                          }
+                                        }
+                                      },
+                                      "required": [
+                                        "count",
+                                        "resources"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "required": [
+                                    "mode",
+                                    "ownerRunning",
+                                    "keys",
+                                    "pollKeys",
+                                    "pausedKeys",
+                                    "pausedAll",
+                                    "stopped",
+                                    "stops",
+                                    "paused",
+                                    "activeWork",
+                                    "quarantined",
+                                    "blockedByVendor"
+                                  ],
+                                  "additionalProperties": false
+                                },
                                 "succeededAt": {
                                   "anyOf": [
                                     {
@@ -143337,6 +143777,80 @@
                                             "type": "null"
                                           }
                                         ]
+                                      },
+                                      "engine": {
+                                        "type": "object",
+                                        "properties": {
+                                          "stopped": {
+                                            "type": "string",
+                                            "enum": [
+                                              "none",
+                                              "some",
+                                              "all"
+                                            ]
+                                          },
+                                          "stops": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "object",
+                                              "properties": {
+                                                "reason": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "paused",
+                                                    "page_hold",
+                                                    "resource_hold",
+                                                    "route_hold"
+                                                  ]
+                                                },
+                                                "by": {
+                                                  "type": "array",
+                                                  "items": {
+                                                    "type": "string"
+                                                  }
+                                                },
+                                                "resources": {
+                                                  "type": "array",
+                                                  "items": {
+                                                    "type": "string"
+                                                  }
+                                                },
+                                                "until": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "string"
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                }
+                                              },
+                                              "required": [
+                                                "reason",
+                                                "by",
+                                                "resources",
+                                                "until"
+                                              ],
+                                              "additionalProperties": false
+                                            }
+                                          },
+                                          "paused": {
+                                            "type": "boolean"
+                                          },
+                                          "activeWork": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 9007199254740991
+                                          }
+                                        },
+                                        "required": [
+                                          "stopped",
+                                          "stops",
+                                          "paused",
+                                          "activeWork"
+                                        ],
+                                        "additionalProperties": false
                                       }
                                     },
                                     "required": [
@@ -143412,6 +143926,161 @@
                                     "live"
                                   ]
                                 },
+                                "engine": {
+                                  "type": "object",
+                                  "properties": {
+                                    "mode": {
+                                      "type": "string",
+                                      "enum": [
+                                        "handover",
+                                        "live"
+                                      ]
+                                    },
+                                    "ownerRunning": {
+                                      "type": "boolean"
+                                    },
+                                    "keys": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "pollKeys": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "pausedKeys": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "pausedAll": {
+                                      "type": "boolean"
+                                    },
+                                    "stopped": {
+                                      "type": "string",
+                                      "enum": [
+                                        "none",
+                                        "some",
+                                        "all"
+                                      ]
+                                    },
+                                    "stops": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "reason": {
+                                            "type": "string",
+                                            "enum": [
+                                              "paused",
+                                              "page_hold",
+                                              "resource_hold",
+                                              "route_hold"
+                                            ]
+                                          },
+                                          "by": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string"
+                                            }
+                                          },
+                                          "resources": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string"
+                                            }
+                                          },
+                                          "until": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          }
+                                        },
+                                        "required": [
+                                          "reason",
+                                          "by",
+                                          "resources",
+                                          "until"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "paused": {
+                                      "type": "boolean"
+                                    },
+                                    "activeWork": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "quarantined": {
+                                      "type": "object",
+                                      "properties": {
+                                        "count": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "resources": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string"
+                                          }
+                                        }
+                                      },
+                                      "required": [
+                                        "count",
+                                        "resources"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    "blockedByVendor": {
+                                      "type": "object",
+                                      "properties": {
+                                        "count": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "resources": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string"
+                                          }
+                                        }
+                                      },
+                                      "required": [
+                                        "count",
+                                        "resources"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "required": [
+                                    "mode",
+                                    "ownerRunning",
+                                    "keys",
+                                    "pollKeys",
+                                    "pausedKeys",
+                                    "pausedAll",
+                                    "stopped",
+                                    "stops",
+                                    "paused",
+                                    "activeWork",
+                                    "quarantined",
+                                    "blockedByVendor"
+                                  ],
+                                  "additionalProperties": false
+                                },
                                 "succeededAt": {
                                   "anyOf": [
                                     {
@@ -143918,6 +144587,80 @@
                                             "type": "null"
                                           }
                                         ]
+                                      },
+                                      "engine": {
+                                        "type": "object",
+                                        "properties": {
+                                          "stopped": {
+                                            "type": "string",
+                                            "enum": [
+                                              "none",
+                                              "some",
+                                              "all"
+                                            ]
+                                          },
+                                          "stops": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "object",
+                                              "properties": {
+                                                "reason": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "paused",
+                                                    "page_hold",
+                                                    "resource_hold",
+                                                    "route_hold"
+                                                  ]
+                                                },
+                                                "by": {
+                                                  "type": "array",
+                                                  "items": {
+                                                    "type": "string"
+                                                  }
+                                                },
+                                                "resources": {
+                                                  "type": "array",
+                                                  "items": {
+                                                    "type": "string"
+                                                  }
+                                                },
+                                                "until": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "string"
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                }
+                                              },
+                                              "required": [
+                                                "reason",
+                                                "by",
+                                                "resources",
+                                                "until"
+                                              ],
+                                              "additionalProperties": false
+                                            }
+                                          },
+                                          "paused": {
+                                            "type": "boolean"
+                                          },
+                                          "activeWork": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 9007199254740991
+                                          }
+                                        },
+                                        "required": [
+                                          "stopped",
+                                          "stops",
+                                          "paused",
+                                          "activeWork"
+                                        ],
+                                        "additionalProperties": false
                                       }
                                     },
                                     "required": [
@@ -143993,6 +144736,161 @@
                                     "live"
                                   ]
                                 },
+                                "engine": {
+                                  "type": "object",
+                                  "properties": {
+                                    "mode": {
+                                      "type": "string",
+                                      "enum": [
+                                        "handover",
+                                        "live"
+                                      ]
+                                    },
+                                    "ownerRunning": {
+                                      "type": "boolean"
+                                    },
+                                    "keys": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "pollKeys": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "pausedKeys": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "pausedAll": {
+                                      "type": "boolean"
+                                    },
+                                    "stopped": {
+                                      "type": "string",
+                                      "enum": [
+                                        "none",
+                                        "some",
+                                        "all"
+                                      ]
+                                    },
+                                    "stops": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "reason": {
+                                            "type": "string",
+                                            "enum": [
+                                              "paused",
+                                              "page_hold",
+                                              "resource_hold",
+                                              "route_hold"
+                                            ]
+                                          },
+                                          "by": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string"
+                                            }
+                                          },
+                                          "resources": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string"
+                                            }
+                                          },
+                                          "until": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          }
+                                        },
+                                        "required": [
+                                          "reason",
+                                          "by",
+                                          "resources",
+                                          "until"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "paused": {
+                                      "type": "boolean"
+                                    },
+                                    "activeWork": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "quarantined": {
+                                      "type": "object",
+                                      "properties": {
+                                        "count": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "resources": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string"
+                                          }
+                                        }
+                                      },
+                                      "required": [
+                                        "count",
+                                        "resources"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    "blockedByVendor": {
+                                      "type": "object",
+                                      "properties": {
+                                        "count": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "resources": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string"
+                                          }
+                                        }
+                                      },
+                                      "required": [
+                                        "count",
+                                        "resources"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "required": [
+                                    "mode",
+                                    "ownerRunning",
+                                    "keys",
+                                    "pollKeys",
+                                    "pausedKeys",
+                                    "pausedAll",
+                                    "stopped",
+                                    "stops",
+                                    "paused",
+                                    "activeWork",
+                                    "quarantined",
+                                    "blockedByVendor"
+                                  ],
+                                  "additionalProperties": false
+                                },
                                 "succeededAt": {
                                   "anyOf": [
                                     {
@@ -144499,6 +145397,80 @@
                                             "type": "null"
                                           }
                                         ]
+                                      },
+                                      "engine": {
+                                        "type": "object",
+                                        "properties": {
+                                          "stopped": {
+                                            "type": "string",
+                                            "enum": [
+                                              "none",
+                                              "some",
+                                              "all"
+                                            ]
+                                          },
+                                          "stops": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "object",
+                                              "properties": {
+                                                "reason": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "paused",
+                                                    "page_hold",
+                                                    "resource_hold",
+                                                    "route_hold"
+                                                  ]
+                                                },
+                                                "by": {
+                                                  "type": "array",
+                                                  "items": {
+                                                    "type": "string"
+                                                  }
+                                                },
+                                                "resources": {
+                                                  "type": "array",
+                                                  "items": {
+                                                    "type": "string"
+                                                  }
+                                                },
+                                                "until": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "string"
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                }
+                                              },
+                                              "required": [
+                                                "reason",
+                                                "by",
+                                                "resources",
+                                                "until"
+                                              ],
+                                              "additionalProperties": false
+                                            }
+                                          },
+                                          "paused": {
+                                            "type": "boolean"
+                                          },
+                                          "activeWork": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 9007199254740991
+                                          }
+                                        },
+                                        "required": [
+                                          "stopped",
+                                          "stops",
+                                          "paused",
+                                          "activeWork"
+                                        ],
+                                        "additionalProperties": false
                                       }
                                     },
                                     "required": [
@@ -144574,6 +145546,161 @@
                                     "live"
                                   ]
                                 },
+                                "engine": {
+                                  "type": "object",
+                                  "properties": {
+                                    "mode": {
+                                      "type": "string",
+                                      "enum": [
+                                        "handover",
+                                        "live"
+                                      ]
+                                    },
+                                    "ownerRunning": {
+                                      "type": "boolean"
+                                    },
+                                    "keys": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "pollKeys": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "pausedKeys": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "pausedAll": {
+                                      "type": "boolean"
+                                    },
+                                    "stopped": {
+                                      "type": "string",
+                                      "enum": [
+                                        "none",
+                                        "some",
+                                        "all"
+                                      ]
+                                    },
+                                    "stops": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "reason": {
+                                            "type": "string",
+                                            "enum": [
+                                              "paused",
+                                              "page_hold",
+                                              "resource_hold",
+                                              "route_hold"
+                                            ]
+                                          },
+                                          "by": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string"
+                                            }
+                                          },
+                                          "resources": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string"
+                                            }
+                                          },
+                                          "until": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          }
+                                        },
+                                        "required": [
+                                          "reason",
+                                          "by",
+                                          "resources",
+                                          "until"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "paused": {
+                                      "type": "boolean"
+                                    },
+                                    "activeWork": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "quarantined": {
+                                      "type": "object",
+                                      "properties": {
+                                        "count": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "resources": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string"
+                                          }
+                                        }
+                                      },
+                                      "required": [
+                                        "count",
+                                        "resources"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    "blockedByVendor": {
+                                      "type": "object",
+                                      "properties": {
+                                        "count": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "resources": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string"
+                                          }
+                                        }
+                                      },
+                                      "required": [
+                                        "count",
+                                        "resources"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "required": [
+                                    "mode",
+                                    "ownerRunning",
+                                    "keys",
+                                    "pollKeys",
+                                    "pausedKeys",
+                                    "pausedAll",
+                                    "stopped",
+                                    "stops",
+                                    "paused",
+                                    "activeWork",
+                                    "quarantined",
+                                    "blockedByVendor"
+                                  ],
+                                  "additionalProperties": false
+                                },
                                 "succeededAt": {
                                   "anyOf": [
                                     {
@@ -145080,6 +146207,80 @@
                                             "type": "null"
                                           }
                                         ]
+                                      },
+                                      "engine": {
+                                        "type": "object",
+                                        "properties": {
+                                          "stopped": {
+                                            "type": "string",
+                                            "enum": [
+                                              "none",
+                                              "some",
+                                              "all"
+                                            ]
+                                          },
+                                          "stops": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "object",
+                                              "properties": {
+                                                "reason": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "paused",
+                                                    "page_hold",
+                                                    "resource_hold",
+                                                    "route_hold"
+                                                  ]
+                                                },
+                                                "by": {
+                                                  "type": "array",
+                                                  "items": {
+                                                    "type": "string"
+                                                  }
+                                                },
+                                                "resources": {
+                                                  "type": "array",
+                                                  "items": {
+                                                    "type": "string"
+                                                  }
+                                                },
+                                                "until": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "string"
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                }
+                                              },
+                                              "required": [
+                                                "reason",
+                                                "by",
+                                                "resources",
+                                                "until"
+                                              ],
+                                              "additionalProperties": false
+                                            }
+                                          },
+                                          "paused": {
+                                            "type": "boolean"
+                                          },
+                                          "activeWork": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 9007199254740991
+                                          }
+                                        },
+                                        "required": [
+                                          "stopped",
+                                          "stops",
+                                          "paused",
+                                          "activeWork"
+                                        ],
+                                        "additionalProperties": false
                                       }
                                     },
                                     "required": [
@@ -145445,6 +146646,161 @@
                             "handover",
                             "live"
                           ]
+                        },
+                        "engine": {
+                          "type": "object",
+                          "properties": {
+                            "mode": {
+                              "type": "string",
+                              "enum": [
+                                "handover",
+                                "live"
+                              ]
+                            },
+                            "ownerRunning": {
+                              "type": "boolean"
+                            },
+                            "keys": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "pollKeys": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "pausedKeys": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "pausedAll": {
+                              "type": "boolean"
+                            },
+                            "stopped": {
+                              "type": "string",
+                              "enum": [
+                                "none",
+                                "some",
+                                "all"
+                              ]
+                            },
+                            "stops": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "reason": {
+                                    "type": "string",
+                                    "enum": [
+                                      "paused",
+                                      "page_hold",
+                                      "resource_hold",
+                                      "route_hold"
+                                    ]
+                                  },
+                                  "by": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "resources": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "until": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "reason",
+                                  "by",
+                                  "resources",
+                                  "until"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "paused": {
+                              "type": "boolean"
+                            },
+                            "activeWork": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "quarantined": {
+                              "type": "object",
+                              "properties": {
+                                "count": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "resources": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
+                                }
+                              },
+                              "required": [
+                                "count",
+                                "resources"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "blockedByVendor": {
+                              "type": "object",
+                              "properties": {
+                                "count": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "resources": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
+                                }
+                              },
+                              "required": [
+                                "count",
+                                "resources"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "required": [
+                            "mode",
+                            "ownerRunning",
+                            "keys",
+                            "pollKeys",
+                            "pausedKeys",
+                            "pausedAll",
+                            "stopped",
+                            "stops",
+                            "paused",
+                            "activeWork",
+                            "quarantined",
+                            "blockedByVendor"
+                          ],
+                          "additionalProperties": false
                         },
                         "succeededAt": {
                           "anyOf": [
@@ -145952,6 +147308,80 @@
                                     "type": "null"
                                   }
                                 ]
+                              },
+                              "engine": {
+                                "type": "object",
+                                "properties": {
+                                  "stopped": {
+                                    "type": "string",
+                                    "enum": [
+                                      "none",
+                                      "some",
+                                      "all"
+                                    ]
+                                  },
+                                  "stops": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "reason": {
+                                          "type": "string",
+                                          "enum": [
+                                            "paused",
+                                            "page_hold",
+                                            "resource_hold",
+                                            "route_hold"
+                                          ]
+                                        },
+                                        "by": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string"
+                                          }
+                                        },
+                                        "resources": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string"
+                                          }
+                                        },
+                                        "until": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      "required": [
+                                        "reason",
+                                        "by",
+                                        "resources",
+                                        "until"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "paused": {
+                                    "type": "boolean"
+                                  },
+                                  "activeWork": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "stopped",
+                                  "stops",
+                                  "paused",
+                                  "activeWork"
+                                ],
+                                "additionalProperties": false
                               }
                             },
                             "required": [
@@ -150041,6 +151471,161 @@
                                       "live"
                                     ]
                                   },
+                                  "engine": {
+                                    "type": "object",
+                                    "properties": {
+                                      "mode": {
+                                        "type": "string",
+                                        "enum": [
+                                          "handover",
+                                          "live"
+                                        ]
+                                      },
+                                      "ownerRunning": {
+                                        "type": "boolean"
+                                      },
+                                      "keys": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "pollKeys": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "pausedKeys": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "pausedAll": {
+                                        "type": "boolean"
+                                      },
+                                      "stopped": {
+                                        "type": "string",
+                                        "enum": [
+                                          "none",
+                                          "some",
+                                          "all"
+                                        ]
+                                      },
+                                      "stops": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "object",
+                                          "properties": {
+                                            "reason": {
+                                              "type": "string",
+                                              "enum": [
+                                                "paused",
+                                                "page_hold",
+                                                "resource_hold",
+                                                "route_hold"
+                                              ]
+                                            },
+                                            "by": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            "resources": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            "until": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "string"
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            }
+                                          },
+                                          "required": [
+                                            "reason",
+                                            "by",
+                                            "resources",
+                                            "until"
+                                          ],
+                                          "additionalProperties": false
+                                        }
+                                      },
+                                      "paused": {
+                                        "type": "boolean"
+                                      },
+                                      "activeWork": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "quarantined": {
+                                        "type": "object",
+                                        "properties": {
+                                          "count": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 9007199254740991
+                                          },
+                                          "resources": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string"
+                                            }
+                                          }
+                                        },
+                                        "required": [
+                                          "count",
+                                          "resources"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      "blockedByVendor": {
+                                        "type": "object",
+                                        "properties": {
+                                          "count": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 9007199254740991
+                                          },
+                                          "resources": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string"
+                                            }
+                                          }
+                                        },
+                                        "required": [
+                                          "count",
+                                          "resources"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "required": [
+                                      "mode",
+                                      "ownerRunning",
+                                      "keys",
+                                      "pollKeys",
+                                      "pausedKeys",
+                                      "pausedAll",
+                                      "stopped",
+                                      "stops",
+                                      "paused",
+                                      "activeWork",
+                                      "quarantined",
+                                      "blockedByVendor"
+                                    ],
+                                    "additionalProperties": false
+                                  },
                                   "succeededAt": {
                                     "anyOf": [
                                       {
@@ -150547,6 +152132,80 @@
                                               "type": "null"
                                             }
                                           ]
+                                        },
+                                        "engine": {
+                                          "type": "object",
+                                          "properties": {
+                                            "stopped": {
+                                              "type": "string",
+                                              "enum": [
+                                                "none",
+                                                "some",
+                                                "all"
+                                              ]
+                                            },
+                                            "stops": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "object",
+                                                "properties": {
+                                                  "reason": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                      "paused",
+                                                      "page_hold",
+                                                      "resource_hold",
+                                                      "route_hold"
+                                                    ]
+                                                  },
+                                                  "by": {
+                                                    "type": "array",
+                                                    "items": {
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "resources": {
+                                                    "type": "array",
+                                                    "items": {
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "until": {
+                                                    "anyOf": [
+                                                      {
+                                                        "type": "string"
+                                                      },
+                                                      {
+                                                        "type": "null"
+                                                      }
+                                                    ]
+                                                  }
+                                                },
+                                                "required": [
+                                                  "reason",
+                                                  "by",
+                                                  "resources",
+                                                  "until"
+                                                ],
+                                                "additionalProperties": false
+                                              }
+                                            },
+                                            "paused": {
+                                              "type": "boolean"
+                                            },
+                                            "activeWork": {
+                                              "type": "integer",
+                                              "minimum": 0,
+                                              "maximum": 9007199254740991
+                                            }
+                                          },
+                                          "required": [
+                                            "stopped",
+                                            "stops",
+                                            "paused",
+                                            "activeWork"
+                                          ],
+                                          "additionalProperties": false
                                         }
                                       },
                                       "required": [
@@ -150622,6 +152281,161 @@
                                       "live"
                                     ]
                                   },
+                                  "engine": {
+                                    "type": "object",
+                                    "properties": {
+                                      "mode": {
+                                        "type": "string",
+                                        "enum": [
+                                          "handover",
+                                          "live"
+                                        ]
+                                      },
+                                      "ownerRunning": {
+                                        "type": "boolean"
+                                      },
+                                      "keys": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "pollKeys": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "pausedKeys": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "pausedAll": {
+                                        "type": "boolean"
+                                      },
+                                      "stopped": {
+                                        "type": "string",
+                                        "enum": [
+                                          "none",
+                                          "some",
+                                          "all"
+                                        ]
+                                      },
+                                      "stops": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "object",
+                                          "properties": {
+                                            "reason": {
+                                              "type": "string",
+                                              "enum": [
+                                                "paused",
+                                                "page_hold",
+                                                "resource_hold",
+                                                "route_hold"
+                                              ]
+                                            },
+                                            "by": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            "resources": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            "until": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "string"
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            }
+                                          },
+                                          "required": [
+                                            "reason",
+                                            "by",
+                                            "resources",
+                                            "until"
+                                          ],
+                                          "additionalProperties": false
+                                        }
+                                      },
+                                      "paused": {
+                                        "type": "boolean"
+                                      },
+                                      "activeWork": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "quarantined": {
+                                        "type": "object",
+                                        "properties": {
+                                          "count": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 9007199254740991
+                                          },
+                                          "resources": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string"
+                                            }
+                                          }
+                                        },
+                                        "required": [
+                                          "count",
+                                          "resources"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      "blockedByVendor": {
+                                        "type": "object",
+                                        "properties": {
+                                          "count": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 9007199254740991
+                                          },
+                                          "resources": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string"
+                                            }
+                                          }
+                                        },
+                                        "required": [
+                                          "count",
+                                          "resources"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "required": [
+                                      "mode",
+                                      "ownerRunning",
+                                      "keys",
+                                      "pollKeys",
+                                      "pausedKeys",
+                                      "pausedAll",
+                                      "stopped",
+                                      "stops",
+                                      "paused",
+                                      "activeWork",
+                                      "quarantined",
+                                      "blockedByVendor"
+                                    ],
+                                    "additionalProperties": false
+                                  },
                                   "succeededAt": {
                                     "anyOf": [
                                       {
@@ -151128,6 +152942,80 @@
                                               "type": "null"
                                             }
                                           ]
+                                        },
+                                        "engine": {
+                                          "type": "object",
+                                          "properties": {
+                                            "stopped": {
+                                              "type": "string",
+                                              "enum": [
+                                                "none",
+                                                "some",
+                                                "all"
+                                              ]
+                                            },
+                                            "stops": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "object",
+                                                "properties": {
+                                                  "reason": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                      "paused",
+                                                      "page_hold",
+                                                      "resource_hold",
+                                                      "route_hold"
+                                                    ]
+                                                  },
+                                                  "by": {
+                                                    "type": "array",
+                                                    "items": {
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "resources": {
+                                                    "type": "array",
+                                                    "items": {
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "until": {
+                                                    "anyOf": [
+                                                      {
+                                                        "type": "string"
+                                                      },
+                                                      {
+                                                        "type": "null"
+                                                      }
+                                                    ]
+                                                  }
+                                                },
+                                                "required": [
+                                                  "reason",
+                                                  "by",
+                                                  "resources",
+                                                  "until"
+                                                ],
+                                                "additionalProperties": false
+                                              }
+                                            },
+                                            "paused": {
+                                              "type": "boolean"
+                                            },
+                                            "activeWork": {
+                                              "type": "integer",
+                                              "minimum": 0,
+                                              "maximum": 9007199254740991
+                                            }
+                                          },
+                                          "required": [
+                                            "stopped",
+                                            "stops",
+                                            "paused",
+                                            "activeWork"
+                                          ],
+                                          "additionalProperties": false
                                         }
                                       },
                                       "required": [
@@ -151203,6 +153091,161 @@
                                       "live"
                                     ]
                                   },
+                                  "engine": {
+                                    "type": "object",
+                                    "properties": {
+                                      "mode": {
+                                        "type": "string",
+                                        "enum": [
+                                          "handover",
+                                          "live"
+                                        ]
+                                      },
+                                      "ownerRunning": {
+                                        "type": "boolean"
+                                      },
+                                      "keys": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "pollKeys": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "pausedKeys": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "pausedAll": {
+                                        "type": "boolean"
+                                      },
+                                      "stopped": {
+                                        "type": "string",
+                                        "enum": [
+                                          "none",
+                                          "some",
+                                          "all"
+                                        ]
+                                      },
+                                      "stops": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "object",
+                                          "properties": {
+                                            "reason": {
+                                              "type": "string",
+                                              "enum": [
+                                                "paused",
+                                                "page_hold",
+                                                "resource_hold",
+                                                "route_hold"
+                                              ]
+                                            },
+                                            "by": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            "resources": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            "until": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "string"
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            }
+                                          },
+                                          "required": [
+                                            "reason",
+                                            "by",
+                                            "resources",
+                                            "until"
+                                          ],
+                                          "additionalProperties": false
+                                        }
+                                      },
+                                      "paused": {
+                                        "type": "boolean"
+                                      },
+                                      "activeWork": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "quarantined": {
+                                        "type": "object",
+                                        "properties": {
+                                          "count": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 9007199254740991
+                                          },
+                                          "resources": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string"
+                                            }
+                                          }
+                                        },
+                                        "required": [
+                                          "count",
+                                          "resources"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      "blockedByVendor": {
+                                        "type": "object",
+                                        "properties": {
+                                          "count": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 9007199254740991
+                                          },
+                                          "resources": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string"
+                                            }
+                                          }
+                                        },
+                                        "required": [
+                                          "count",
+                                          "resources"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "required": [
+                                      "mode",
+                                      "ownerRunning",
+                                      "keys",
+                                      "pollKeys",
+                                      "pausedKeys",
+                                      "pausedAll",
+                                      "stopped",
+                                      "stops",
+                                      "paused",
+                                      "activeWork",
+                                      "quarantined",
+                                      "blockedByVendor"
+                                    ],
+                                    "additionalProperties": false
+                                  },
                                   "succeededAt": {
                                     "anyOf": [
                                       {
@@ -151709,6 +153752,80 @@
                                               "type": "null"
                                             }
                                           ]
+                                        },
+                                        "engine": {
+                                          "type": "object",
+                                          "properties": {
+                                            "stopped": {
+                                              "type": "string",
+                                              "enum": [
+                                                "none",
+                                                "some",
+                                                "all"
+                                              ]
+                                            },
+                                            "stops": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "object",
+                                                "properties": {
+                                                  "reason": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                      "paused",
+                                                      "page_hold",
+                                                      "resource_hold",
+                                                      "route_hold"
+                                                    ]
+                                                  },
+                                                  "by": {
+                                                    "type": "array",
+                                                    "items": {
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "resources": {
+                                                    "type": "array",
+                                                    "items": {
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "until": {
+                                                    "anyOf": [
+                                                      {
+                                                        "type": "string"
+                                                      },
+                                                      {
+                                                        "type": "null"
+                                                      }
+                                                    ]
+                                                  }
+                                                },
+                                                "required": [
+                                                  "reason",
+                                                  "by",
+                                                  "resources",
+                                                  "until"
+                                                ],
+                                                "additionalProperties": false
+                                              }
+                                            },
+                                            "paused": {
+                                              "type": "boolean"
+                                            },
+                                            "activeWork": {
+                                              "type": "integer",
+                                              "minimum": 0,
+                                              "maximum": 9007199254740991
+                                            }
+                                          },
+                                          "required": [
+                                            "stopped",
+                                            "stops",
+                                            "paused",
+                                            "activeWork"
+                                          ],
+                                          "additionalProperties": false
                                         }
                                       },
                                       "required": [
@@ -151784,6 +153901,161 @@
                                       "live"
                                     ]
                                   },
+                                  "engine": {
+                                    "type": "object",
+                                    "properties": {
+                                      "mode": {
+                                        "type": "string",
+                                        "enum": [
+                                          "handover",
+                                          "live"
+                                        ]
+                                      },
+                                      "ownerRunning": {
+                                        "type": "boolean"
+                                      },
+                                      "keys": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "pollKeys": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "pausedKeys": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "pausedAll": {
+                                        "type": "boolean"
+                                      },
+                                      "stopped": {
+                                        "type": "string",
+                                        "enum": [
+                                          "none",
+                                          "some",
+                                          "all"
+                                        ]
+                                      },
+                                      "stops": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "object",
+                                          "properties": {
+                                            "reason": {
+                                              "type": "string",
+                                              "enum": [
+                                                "paused",
+                                                "page_hold",
+                                                "resource_hold",
+                                                "route_hold"
+                                              ]
+                                            },
+                                            "by": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            "resources": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            "until": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "string"
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            }
+                                          },
+                                          "required": [
+                                            "reason",
+                                            "by",
+                                            "resources",
+                                            "until"
+                                          ],
+                                          "additionalProperties": false
+                                        }
+                                      },
+                                      "paused": {
+                                        "type": "boolean"
+                                      },
+                                      "activeWork": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "quarantined": {
+                                        "type": "object",
+                                        "properties": {
+                                          "count": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 9007199254740991
+                                          },
+                                          "resources": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string"
+                                            }
+                                          }
+                                        },
+                                        "required": [
+                                          "count",
+                                          "resources"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      "blockedByVendor": {
+                                        "type": "object",
+                                        "properties": {
+                                          "count": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 9007199254740991
+                                          },
+                                          "resources": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string"
+                                            }
+                                          }
+                                        },
+                                        "required": [
+                                          "count",
+                                          "resources"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "required": [
+                                      "mode",
+                                      "ownerRunning",
+                                      "keys",
+                                      "pollKeys",
+                                      "pausedKeys",
+                                      "pausedAll",
+                                      "stopped",
+                                      "stops",
+                                      "paused",
+                                      "activeWork",
+                                      "quarantined",
+                                      "blockedByVendor"
+                                    ],
+                                    "additionalProperties": false
+                                  },
                                   "succeededAt": {
                                     "anyOf": [
                                       {
@@ -152290,6 +154562,80 @@
                                               "type": "null"
                                             }
                                           ]
+                                        },
+                                        "engine": {
+                                          "type": "object",
+                                          "properties": {
+                                            "stopped": {
+                                              "type": "string",
+                                              "enum": [
+                                                "none",
+                                                "some",
+                                                "all"
+                                              ]
+                                            },
+                                            "stops": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "object",
+                                                "properties": {
+                                                  "reason": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                      "paused",
+                                                      "page_hold",
+                                                      "resource_hold",
+                                                      "route_hold"
+                                                    ]
+                                                  },
+                                                  "by": {
+                                                    "type": "array",
+                                                    "items": {
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "resources": {
+                                                    "type": "array",
+                                                    "items": {
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "until": {
+                                                    "anyOf": [
+                                                      {
+                                                        "type": "string"
+                                                      },
+                                                      {
+                                                        "type": "null"
+                                                      }
+                                                    ]
+                                                  }
+                                                },
+                                                "required": [
+                                                  "reason",
+                                                  "by",
+                                                  "resources",
+                                                  "until"
+                                                ],
+                                                "additionalProperties": false
+                                              }
+                                            },
+                                            "paused": {
+                                              "type": "boolean"
+                                            },
+                                            "activeWork": {
+                                              "type": "integer",
+                                              "minimum": 0,
+                                              "maximum": 9007199254740991
+                                            }
+                                          },
+                                          "required": [
+                                            "stopped",
+                                            "stops",
+                                            "paused",
+                                            "activeWork"
+                                          ],
+                                          "additionalProperties": false
                                         }
                                       },
                                       "required": [
@@ -152365,6 +154711,161 @@
                                       "live"
                                     ]
                                   },
+                                  "engine": {
+                                    "type": "object",
+                                    "properties": {
+                                      "mode": {
+                                        "type": "string",
+                                        "enum": [
+                                          "handover",
+                                          "live"
+                                        ]
+                                      },
+                                      "ownerRunning": {
+                                        "type": "boolean"
+                                      },
+                                      "keys": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "pollKeys": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "pausedKeys": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "pausedAll": {
+                                        "type": "boolean"
+                                      },
+                                      "stopped": {
+                                        "type": "string",
+                                        "enum": [
+                                          "none",
+                                          "some",
+                                          "all"
+                                        ]
+                                      },
+                                      "stops": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "object",
+                                          "properties": {
+                                            "reason": {
+                                              "type": "string",
+                                              "enum": [
+                                                "paused",
+                                                "page_hold",
+                                                "resource_hold",
+                                                "route_hold"
+                                              ]
+                                            },
+                                            "by": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            "resources": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            "until": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "string"
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            }
+                                          },
+                                          "required": [
+                                            "reason",
+                                            "by",
+                                            "resources",
+                                            "until"
+                                          ],
+                                          "additionalProperties": false
+                                        }
+                                      },
+                                      "paused": {
+                                        "type": "boolean"
+                                      },
+                                      "activeWork": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "quarantined": {
+                                        "type": "object",
+                                        "properties": {
+                                          "count": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 9007199254740991
+                                          },
+                                          "resources": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string"
+                                            }
+                                          }
+                                        },
+                                        "required": [
+                                          "count",
+                                          "resources"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      "blockedByVendor": {
+                                        "type": "object",
+                                        "properties": {
+                                          "count": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 9007199254740991
+                                          },
+                                          "resources": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string"
+                                            }
+                                          }
+                                        },
+                                        "required": [
+                                          "count",
+                                          "resources"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "required": [
+                                      "mode",
+                                      "ownerRunning",
+                                      "keys",
+                                      "pollKeys",
+                                      "pausedKeys",
+                                      "pausedAll",
+                                      "stopped",
+                                      "stops",
+                                      "paused",
+                                      "activeWork",
+                                      "quarantined",
+                                      "blockedByVendor"
+                                    ],
+                                    "additionalProperties": false
+                                  },
                                   "succeededAt": {
                                     "anyOf": [
                                       {
@@ -152871,6 +155372,80 @@
                                               "type": "null"
                                             }
                                           ]
+                                        },
+                                        "engine": {
+                                          "type": "object",
+                                          "properties": {
+                                            "stopped": {
+                                              "type": "string",
+                                              "enum": [
+                                                "none",
+                                                "some",
+                                                "all"
+                                              ]
+                                            },
+                                            "stops": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "object",
+                                                "properties": {
+                                                  "reason": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                      "paused",
+                                                      "page_hold",
+                                                      "resource_hold",
+                                                      "route_hold"
+                                                    ]
+                                                  },
+                                                  "by": {
+                                                    "type": "array",
+                                                    "items": {
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "resources": {
+                                                    "type": "array",
+                                                    "items": {
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "until": {
+                                                    "anyOf": [
+                                                      {
+                                                        "type": "string"
+                                                      },
+                                                      {
+                                                        "type": "null"
+                                                      }
+                                                    ]
+                                                  }
+                                                },
+                                                "required": [
+                                                  "reason",
+                                                  "by",
+                                                  "resources",
+                                                  "until"
+                                                ],
+                                                "additionalProperties": false
+                                              }
+                                            },
+                                            "paused": {
+                                              "type": "boolean"
+                                            },
+                                            "activeWork": {
+                                              "type": "integer",
+                                              "minimum": 0,
+                                              "maximum": 9007199254740991
+                                            }
+                                          },
+                                          "required": [
+                                            "stopped",
+                                            "stops",
+                                            "paused",
+                                            "activeWork"
+                                          ],
+                                          "additionalProperties": false
                                         }
                                       },
                                       "required": [

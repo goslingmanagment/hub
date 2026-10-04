@@ -9,6 +9,7 @@ import {
   estimateSlotOpensAt,
   explainWork,
   OWNER_HEARTBEAT_FRESH_MS,
+  ownerRunState,
   ownerRunning,
   summarizeQueue,
   WAITING_REASONS,
@@ -118,6 +119,25 @@ describe("sync status: why a work row waits", () => {
     p.owner.releasedAt = at(-60_000);
     p.owner.releaseGeneration = 2n;
     expect(ownerRunning(p, NOW)).toBe(true);
+  });
+
+  it("says why no owner runs a page: its mode, never taken, released, or a heartbeat gone stale", () => {
+    expect(ownerRunState(page(), NOW)).toEqual({ running: true });
+    expect(ownerRunState(page({ mode: "handover" }), NOW)).toEqual({ running: false, why: "mode" });
+    const neverOwned = page();
+    neverOwned.owner.generation = 0n;
+    expect(ownerRunState(neverOwned, NOW)).toEqual({ running: false, why: "never_owned" });
+    const released = page();
+    released.owner.releasedAt = at(-1_000);
+    released.owner.releaseGeneration = released.owner.generation;
+    expect(ownerRunState(released, NOW)).toEqual({ running: false, why: "released" });
+    const silent = page();
+    silent.owner.heartbeatAt = at(-OWNER_HEARTBEAT_FRESH_MS - 1);
+    expect(ownerRunState(silent, NOW)).toEqual({ running: false, why: "heartbeat_stale", heartbeatAgeMs: OWNER_HEARTBEAT_FRESH_MS + 1 });
+    silent.owner.heartbeatAt = at(-OWNER_HEARTBEAT_FRESH_MS);
+    expect(ownerRunState(silent, NOW)).toEqual({ running: true });
+    // One rule: `ownerRunning` is its verdict.
+    for (const p of [page(), neverOwned, released, silent]) expect(ownerRunning(p, NOW)).toBe(ownerRunState(p, NOW).running);
   });
 
   it("paused: the page, the requests class, or the resource", () => {

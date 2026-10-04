@@ -2,7 +2,13 @@ import type { StatsCoverageResponse } from "@agency_hub_core/contracts";
 
 import { formatDateTime } from "@/lib/format";
 import type { AnalyticsPanelState } from "@/pages/analytics-query-state";
-import { engineWaitLabel } from "@/pages/settings/engine/engineDisplay";
+import {
+  engineReadingState,
+  engineReadingTone,
+  engineReadingWords,
+  engineStopText,
+  engineWaitLabel,
+} from "@/pages/settings/engine/engineDisplay";
 import { getStreamLabel } from "@/pages/settings/sync/syncBlockDisplay";
 
 import {
@@ -36,39 +42,48 @@ type EngineBadge = { text: string; tone: "off" | "on"; detail: string };
 
 /**
  * The one thing that is true of a stream now. "reading" is a claim, not a
- * default: it takes a host that runs the page and work that is open. Without a
+ * default: it takes a host that runs the page, work that is open and keys
+ * nothing stops — by the engine's own hold evaluator (the page's hold, a
+ * resource breaker, a 429's hold of the stream's routes) and the owner's
+ * pauses, which the server judges key by key (`stopped`, `stops`). Without a
  * host nothing of the page is read, whatever its work says; a stream nothing
  * asked for yet has neither work nor a read.
  */
 export function engineStreamBadge(engine: Pick<Engine, "mode" | "ownerRunning">, stream: EngineStreamRow): EngineBadge {
-  if (!engine.ownerRunning) {
-    return engine.mode === "handover"
-      ? {
-        text: "not running: switching",
-        tone: "off",
-        detail: "The page is switching to the engine: nothing of it is read until the switch completes.",
-      }
-      : { text: "not running: no owner", tone: "off", detail: "No sync host owns the page: nothing of it is read." };
-  }
-  if (stream.paused) {
-    return { text: "paused", tone: "off", detail: "The owner paused the page or every key of this stream." };
-  }
-  if (stream.needsAttention) {
-    return { text: "needs attention", tone: "off", detail: "Some of its work is quarantined or refused by Fansly." };
-  }
-  if (stream.activeWork > 0) {
-    return { text: "reading", tone: "on", detail: "A sync host runs the page and work of this stream is open." };
-  }
-  return stream.succeededAt === null
-    ? { text: "nothing asked yet", tone: "on", detail: "No work has been filed for this stream on this page." }
-    : { text: "idle", tone: "on", detail: "No work of this stream is open now; it was read before." };
+  const state = engineReadingState({
+    mode: engine.mode,
+    ownerRunning: engine.ownerRunning,
+    stopped: stream.stopped,
+    stops: stream.stops,
+    paused: stream.paused,
+    needsAttention: stream.needsAttention,
+    activeWork: stream.activeWork,
+    everRead: stream.succeededAt !== null,
+  });
+  // The owner's pause is said as loudly as a hold: the stream is not read.
+  const off = engineReadingTone(state) === "warn" || state === "paused";
+  return { ...engineReadingWords(state, "en"), tone: off ? "off" : "on" };
 }
+
+/** The reasons a stop says for every key it stops: a stream's waiting line
+ *  would only repeat it for one of them. */
+const STOP_REASONS: ReadonlySet<string> = new Set(["paused", "page_hold", "resource_hold", "route_hold"]);
 
 /** Why a stream's earliest work waits, in the words every sync surface uses
  *  for the engine's reasons and the time format of this panel. */
 function waitingText(waiting: NonNullable<EngineStreamRow["waiting"]>): string {
   const until = waiting.until === null ? "" : ` until ${instant(waiting.until)}`;
   return `${waiting.resource}: ${engineWaitLabel(waiting.reason, "en")}${until}`;
+}
+
+/** What stops keys of a stream, one line a cause; the keys are named unless
+ *  it stops them all. */
+function stopLines(stream: EngineStreamRow): string[] {
+  return stream.stops.map((stop) => engineStopText(stop, {
+    language: "en",
+    until: instant,
+    listKeys: stop.resources.length < stream.resources.length,
+  }));
 }
 
 /** A stream's name as the sync tabs give it, as a card title. */
@@ -180,10 +195,15 @@ function EngineStreamCard({ engine, stream }: { engine: Engine; stream: EngineSt
         ) : null}
       </dl>
       {/* What needs attention is the server's sentence (counts, keys and the
-          command that lists them); why work waits is worded here. */}
+          command that lists them); what stops the stream's keys and why its
+          work waits are worded here. */}
       {stream.needsAttention && stream.reason ? (
         <p className="mt-2 break-words text-[12px] text-warning-dark">{stream.reason}</p>
-      ) : stream.waiting ? (
+      ) : null}
+      {stopLines(stream).map((line) => (
+        <p key={line} className="mt-2 break-words text-[12px] text-warning-dark" data-engine-stop>{line}</p>
+      ))}
+      {!stream.needsAttention && stream.waiting && !(stream.stops.length > 0 && STOP_REASONS.has(stream.waiting.reason)) ? (
         <p className="mt-2 break-words text-[12px] text-text-secondary">{waitingText(stream.waiting)}</p>
       ) : null}
       <p className="mt-1 break-words font-mono text-[11px] text-text-muted">

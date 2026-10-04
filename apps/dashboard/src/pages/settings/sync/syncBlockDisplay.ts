@@ -1,8 +1,6 @@
 import type { SyncBlockStatus } from "@agency_hub_core/contracts";
 import { formatRelativeTime } from "@/lib/format";
 
-import { engineWaitWords } from "../engine/engineDisplay.js";
-
 type SyncBlockKey = SyncBlockStatus["block"];
 type SyncBlockState = SyncBlockStatus["state"];
 type SyncBlockSubstream = SyncBlockStatus["substreams"][number];
@@ -68,19 +66,13 @@ const BLOCK_STATE_TONES: Record<SyncBlockState, BlockTone> = {
     dot: "bg-text-muted/50",
     text: "text-text-muted",
   },
+  // A block of a Fansly page: «Синк» shows it with its own cards
+  // (`engine/EngineBlocks.tsx`); nothing here formats one.
   engine: {
     badge: "border-accent/30 bg-accent/10 text-accent",
     dot: "bg-accent",
     text: "text-text-secondary",
   },
-};
-
-/** An engine block (or stream) with quarantined or vendor-blocked work, or a
- *  refused credential. */
-const ENGINE_ATTENTION_TONE: BlockTone = {
-  badge: "border-warning/30 bg-warning/10 text-warning-dark",
-  dot: "bg-warning-dark",
-  text: "text-warning-dark",
 };
 
 const BLOCK_STATE_LABELS: Record<SyncBlockState, string> = {
@@ -108,7 +100,8 @@ const BLOCK_LABELS: Record<SyncBlockKey, string> = {
 // A legacy block (any state but `engine`) belongs to a page the legacy
 // page-sync executor serves: OnlyFans. A Fansly page's blocks are the Fansly
 // Sync Engine's (`state: "engine"`), or not available when the engine does not
-// run the page; nothing here formats a legacy Fansly stream any more.
+// run the page: the «Синк» tab words them itself (`engine/engineBlockDisplay.ts`),
+// and nothing here formats a Fansly block or stream.
 
 const BLOCK_DESCRIPTIONS: Record<SyncBlockKey, string> = {
   connection: "Confirms this page's account is still connected and authorized.",
@@ -118,8 +111,7 @@ const BLOCK_DESCRIPTIONS: Record<SyncBlockKey, string> = {
   messages_history: "Backfills and stores the full message contents of each conversation.",
 };
 
-// The streams a block lists: the legacy executor's on an OnlyFans page, the
-// engine's lever streams of the five blocks on a Fansly page. The analytics
+// The streams a block lists on a page of the legacy executor. The analytics
 // Coverage panel names every lever stream of a Fansly page by the same table;
 // a name that is its own words needs no row (`getStreamLabel`).
 const STREAM_LABELS: Record<string, string> = {
@@ -166,64 +158,12 @@ function getDisplayBlockState(blockOrState: SyncBlockStatus | SyncBlockState): S
   return isHealthyQueueWaitingBlock(blockOrState) ? "up_to_date" : blockOrState.state;
 }
 
-function isEngineAttention(blockOrState: SyncBlockStatus | SyncBlockState): boolean {
-  return typeof blockOrState !== "string" && blockOrState.state === "engine" && blockOrState.needsAttention;
-}
-
 export function getBlockTone(blockOrState: SyncBlockStatus | SyncBlockState): BlockTone {
-  if (isEngineAttention(blockOrState)) return ENGINE_ATTENTION_TONE;
   return BLOCK_STATE_TONES[getDisplayBlockState(blockOrState)];
 }
 
 export function getBlockStateLabel(blockOrState: SyncBlockStatus | SyncBlockState): string {
-  if (isEngineAttention(blockOrState)) return "Attention";
   return BLOCK_STATE_LABELS[getDisplayBlockState(blockOrState)];
-}
-
-/** The page is the Fansly Sync Engine's: its blocks speak for the engine. */
-export function isEngineBlock(block: SyncBlockStatus): boolean {
-  return block.state === "engine";
-}
-
-/** A block's registry keys and those of them the owner paused (engine blocks
- *  only; from the block's metrics). */
-export function getEngineBlockKeys(block: SyncBlockStatus): { keys: string[]; paused: string[]; pausedAll: boolean } {
-  const strings = (value: unknown) => (Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []);
-  return {
-    keys: strings(block.metrics.engineKeys),
-    paused: strings(block.metrics.pausedResources),
-    pausedAll: block.metrics.pausedAll === true,
-  };
-}
-
-/** What the status reader says of an engine block beyond "почему ждёт". */
-const ENGINE_STATUS_LABELS: Record<string, string> = {
-  engine_quarantined: "Quarantined",
-  engine_blocked_by_vendor: "Refused by Fansly",
-  credentials_invalid: "New credentials needed",
-};
-
-/** A reason code of an engine block or stream in the cards' words: the status
- *  reader's own three, else "почему ждёт" (plan §10) from the engine's one
- *  dictionary (`engine/engineDisplay.ts`). */
-function engineReasonLabel(code: string | null): string | undefined {
-  if (code === null) return undefined;
-  const words = ENGINE_STATUS_LABELS[code] ?? engineWaitWords(code, "en");
-  return words === null ? undefined : words.charAt(0).toUpperCase() + words.slice(1);
-}
-
-function formatEngineBlockSummary(block: SyncBlockStatus): string {
-  if (block.needsAttention) {
-    const code = getReasonCode(block);
-    const label = engineReasonLabel(code) ?? "Needs attention";
-    return `Fansly Sync Engine · ${label.toLowerCase()}`;
-  }
-  if (block.engineMode === "handover") {
-    return "Switching to the Fansly Sync Engine";
-  }
-  return block.succeededAt
-    ? `Fansly Sync Engine · updated ${formatRelativeTime(block.succeededAt)}`
-    : "Fansly Sync Engine · nothing applied yet";
 }
 
 export function getBlockLabel(block: SyncBlockKey): string {
@@ -414,7 +354,6 @@ export function shouldShowBlockProgressBar(block: SyncBlockStatus): boolean {
 
 export function formatBlockSummary(block: SyncBlockStatus): string {
   if (block.state === "not_available") return "Not available";
-  if (block.state === "engine") return formatEngineBlockSummary(block);
 
   if (block.block === "connection") {
     if (block.connectionStatus === "connected") {
@@ -581,9 +520,6 @@ const BLOCK_METRIC_KEYS: Partial<Record<SyncBlockKey, readonly string[]>> = {
 };
 
 export function getSubstreamTone(substream: SyncBlockSubstream): BlockTone {
-  if (substream.state === "engine") {
-    return substream.needsAttention ? ENGINE_ATTENTION_TONE : BLOCK_STATE_TONES.engine;
-  }
   if (isHealthyQueueWaitingSubstream(substream)) {
     return BLOCK_STATE_TONES.up_to_date;
   }
@@ -604,10 +540,6 @@ export function getSubstreamTone(substream: SyncBlockSubstream): BlockTone {
 
 export function formatSubstreamStateLabel(substream: SyncBlockSubstream): string {
   const code = getReasonCode(substream);
-
-  if (substream.state === "engine") {
-    return engineReasonLabel(code) ?? "Sync Engine";
-  }
 
   if (substream.state === "delayed") {
     if (code === "unmet_dependency") {

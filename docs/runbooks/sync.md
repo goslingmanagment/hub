@@ -48,7 +48,7 @@ pnpm cli sync ownership status
 | Field | Reads as |
 |---|---|
 | `mode` | `live` for every page the engine runs. A new page is born `live`; no lever takes a page there or out of it |
-| `owner` | the `sync` container that runs the page, its heartbeat (every 10 s) and `running` (a heartbeat younger than 30 s) |
+| `owner` | the `sync` container that runs the page, its heartbeat (every 10 s) and `running` (a heartbeat younger than 30 s). `sync ownership status` concludes the same in its `runs` column: `yes`, or `no:` and why (the heartbeat's age, a release, never taken, a mode no actor runs) |
 | `pause` | S (`settingMs`), the last send, the smallest gap of the last hour, `violationsLastDay` (must be 0) |
 | `sendsLastHour` | sends by class (`urgent`, `requests`, `planned`) and by resource |
 | `queue` | per class: `runnable`, and the open work by waiting reason |
@@ -88,6 +88,7 @@ pnpm cli sync work list --page lora-1 --state quarantined
 id, a fan's account id or a media id for the keys that run per subject. `sync why` prints every open row of the key
 (with `--subject`, the newest closed row when none is open; else `[]`) with its revisions, its last attempt and
 `waiting`: one reason from a closed list, first match wins in the order of `apps/runtime/src/sync/engine/status.ts`.
+`waiting.until` is an instant, or `"infinity"` for a wait no clock ends (a credentials hold), as in `sync page status`.
 
 | Reason | Meaning | What to do |
 |---|---|---|
@@ -166,7 +167,10 @@ pnpm cli sync page resume --page lora-1 --resource media-stats.walk
 Paused work shows `paused` in "why"; its wait opens no `urgent_waiting`, `planned_stale` or `request_stalled`.
 
 The Settings blocks pause and resume the keys of their streams the same way (the lever map is
-`FANSLY_LEVER_STREAMS` in the registry); a block's reset requeues the keys' quarantined work.
+`FANSLY_LEVER_STREAMS` in the registry); a block's reset requeues the keys' quarantined work. No key belongs to two
+blocks: pausing the chat list («Список чатов»: `dm-conversations.*`, `fan-profiles.probe`) leaves the chat messages
+(«Сообщения чатов»: `dm-messages.head`, `.catchup`, `.history`) alone, and the other way round. A key paused by its own
+name shows on its block as a partial pause; the block's buttons then say how many keys each would move.
 
 **How often a key runs on one page**, without a deploy:
 

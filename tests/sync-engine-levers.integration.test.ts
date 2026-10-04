@@ -233,18 +233,99 @@ describe("block levers on an engine page", () => {
     expect(row!.pausedResources).toEqual([
       "fan-profiles.lookup", "followers.head", "followers.reconcile", "media-stats.walk", "subscribers.history", "subscribers.poll",
     ]);
-    // The Settings block reads the pause back for its buttons.
-    const blocks = await ownerGet("/api/v1/pages/lilly-1/sync/blocks");
-    expect(blocks.statusCode).toBe(200);
-    const audience = syncBlocksPageSchema.parse(blocks.json().page).blocks.audience;
-    expect(audience).toMatchObject({ state: "engine", engineMode: "live" });
-    expect(audience.metrics.pausedResources).toHaveLength(5);
+    // The Settings block reads the pause back for its buttons and says it.
+    const readBlocks = async () => {
+      const blocks = await ownerGet("/api/v1/pages/lilly-1/sync/blocks");
+      expect(blocks.statusCode).toBe(200);
+      return syncBlocksPageSchema.parse(blocks.json().page).blocks;
+    };
+    const audience = (await readBlocks()).audience;
+    expect(audience).toMatchObject({ state: "engine", engineMode: "live", metrics: {} });
+    expect(audience.engine).toMatchObject({
+      keys: ["subscribers.poll", "subscribers.history", "followers.head", "followers.reconcile", "fan-profiles.lookup"],
+      pausedKeys: ["subscribers.poll", "subscribers.history", "followers.head", "followers.reconcile", "fan-profiles.lookup"],
+      pausedAll: false,
+      stopped: "all",
+      paused: true,
+    });
+    // A paused block has no next read, whatever its rows' due times are.
+    expect(audience.nextDueAt).toBeNull();
 
     const resumed = await ownerPost("/api/v1/admin/sync/blocks/resume", { pageLabel: "lilly-1", block: "audience" });
     expect(resumed.statusCode).toBe(200);
+    expect(adminSyncBlockResponseSchema.parse(resumed.json()).engine).toMatchObject({ affected: 5 });
     expect((await getSyncPage(db(), pages.live))!.pausedResources).toEqual(["media-stats.walk"]);
+    expect((await readBlocks()).audience.engine).toMatchObject({ pausedKeys: [], stopped: "none", paused: false });
+    // A lever that moved nothing says so: nothing was paused any more.
+    const again = await ownerPost("/api/v1/admin/sync/blocks/resume", { pageLabel: "lilly-1", block: "audience" });
+    expect(adminSyncBlockResponseSchema.parse(again.json()).engine).toMatchObject({ affected: 0 });
     // A page in handover may be paused: nothing reads.
     expect((await ownerPost("/api/v1/admin/sync/blocks/pause", { pageLabel: "lilly-2", block: "audience" })).statusCode).toBe(200);
+  });
+
+  // S4-35: pausing «Messages Live» paused `dm-messages.catchup` and
+  // `fan-profiles.probe` too, so «Messages History» offered Resume — which
+  // un-paused those two and left the first block half paused.
+  it("the chat list and the chat messages are paused and resumed apart: no key of one block is the other's", async () => {
+    const pausedOf = async () => (await getSyncPage(db(), pages.live))!.pausedResources;
+    const engineOf = async (block: "messages_live" | "messages_history") => {
+      const blocks = await ownerGet("/api/v1/pages/lilly-1/sync/blocks");
+      return syncBlocksPageSchema.parse(blocks.json().page).blocks[block].engine!;
+    };
+    const LIVE = [
+      "dm-conversations.detail", "dm-conversations.find", "dm-conversations.full", "dm-conversations.head",
+      "dm-conversations.ws-down", "fan-profiles.probe",
+    ];
+    const HISTORY = ["dm-messages.catchup", "dm-messages.head", "dm-messages.history"];
+
+    const paused = await ownerPost("/api/v1/admin/sync/blocks/pause", { pageLabel: "lilly-1", block: "messages_live" });
+    expect(adminSyncBlockResponseSchema.parse(paused.json()).engine).toMatchObject({ affected: 6 });
+    expect(await pausedOf()).toEqual(LIVE);
+    // The other block has nothing paused: it offers no resume.
+    expect(await engineOf("messages_history")).toMatchObject({ pausedKeys: [], stopped: "none", paused: false });
+    expect(await engineOf("messages_live")).toMatchObject({ stopped: "all", paused: true });
+
+    // Its resume moves nothing, and leaves the first block wholly paused.
+    const stray = await ownerPost("/api/v1/admin/sync/blocks/resume", { pageLabel: "lilly-1", block: "messages_history" });
+    expect(adminSyncBlockResponseSchema.parse(stray.json()).engine).toMatchObject({
+      resources: ["dm-messages.head", "dm-messages.catchup", "dm-messages.history"], affected: 0,
+    });
+    expect(await pausedOf()).toEqual(LIVE);
+
+    // Both paused, one resumed: the other stays paused, whole.
+    await ownerPost("/api/v1/admin/sync/blocks/pause", { pageLabel: "lilly-1", block: "messages_history" });
+    expect(await pausedOf()).toEqual([...LIVE, ...HISTORY].sort());
+    await ownerPost("/api/v1/admin/sync/blocks/resume", { pageLabel: "lilly-1", block: "messages_live" });
+    expect(await pausedOf()).toEqual(HISTORY);
+    expect(await engineOf("messages_history")).toMatchObject({ stopped: "all", paused: true });
+    expect(await engineOf("messages_live")).toMatchObject({ pausedKeys: [], stopped: "none" });
+
+    // A key paused by its own name (`sync page pause --resource`) shows as a partial pause of its block.
+    await ownerPost("/api/v1/admin/sync/blocks/resume", { pageLabel: "lilly-1", block: "messages_history" });
+    await setPagePause(db(), { pageId: pages.live, resources: ["dm-messages.catchup"] });
+    expect(await engineOf("messages_history")).toMatchObject({
+      pausedKeys: ["dm-messages.catchup"],
+      stopped: "some",
+      paused: false,
+      stops: [{ reason: "paused", by: ["keys"], resources: ["dm-messages.catchup"], until: null }],
+    });
+  });
+
+  // "Sync now" reported success whatever it moved. The answer says how many
+  // polls it made due; a block without a poll moves none.
+  it("sync now of a block without a poll moves nothing, and says so", async () => {
+    await parkPolls(pages.live);
+    const history = await ownerPost("/api/v1/admin/sync/blocks/trigger", { pageLabel: "lilly-1", block: "messages_history" });
+    expect(history.statusCode).toBe(200);
+    expect(adminSyncBlockResponseSchema.parse(history.json()).engine).toEqual({ mode: "live", resources: ["dm-messages"], affected: 0 });
+    const blocks = await ownerGet("/api/v1/pages/lilly-1/sync/blocks");
+    const page = syncBlocksPageSchema.parse(blocks.json().page);
+    expect(page.blocks.messages_history.engine!.pollKeys).toEqual([]);
+    expect(page.blocks.messages_live.engine!.pollKeys).toEqual(["dm-conversations.head", "dm-conversations.full"]);
+    // The chat list's polls are due once; a second "sync now" finds them due already.
+    const live = () => ownerPost("/api/v1/admin/sync/blocks/trigger", { pageLabel: "lilly-1", block: "messages_live" });
+    expect(adminSyncBlockResponseSchema.parse((await live()).json()).engine).toMatchObject({ affected: 2 });
+    expect(adminSyncBlockResponseSchema.parse((await live()).json()).engine).toMatchObject({ affected: 0 });
   });
 
   it("reset requeues the block's quarantined work and never touches legacy state", async () => {

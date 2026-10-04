@@ -1,10 +1,9 @@
 import type { ReactNode } from "react";
 import type { SyncBlocksPage } from "@agency_hub_core/contracts";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
-import { SyncBlockRow } from "../sync/SyncBlockRow.js";
-import { SyncPageAttention } from "../sync/SyncPageAttention.js";
-import { getBlockOrder } from "../sync/syncBlockDisplay.js";
+import { EngineBlockRow, EnginePageAttention } from "./EngineBlocks.js";
 import { EngineModeChip, EngineQueueTable, EngineStatusGrid } from "./EngineStatus.js";
+import { engineBlockOrder } from "./engineBlockDisplay.js";
 import { HistoryRequestsBlock, type HistoryRequestsState } from "./HistoryRequests.js";
 import type { EngineStatusState } from "./engineDisplay.js";
 
@@ -14,10 +13,11 @@ const STATUS_MISSING: Record<Exclude<EngineStatusState["kind"], "ready">, string
   idle: "Fansly Sync Engine не читает эту страницу: её ничто не читает.",
 };
 
-/** The page's mode as the engine holds it (nothing while it is not known). */
+/** The page's mode as the engine holds it, with whether a host runs it
+ *  (nothing while it is not known). */
 export function EnginePageMode({ state }: { state: EngineStatusState }) {
-  const mode = state.kind === "ready" ? state.status.mode : state.kind === "idle" ? state.mode : null;
-  return mode === null ? null : <EngineModeChip mode={mode} />;
+  if (state.kind === "ready") return <EngineModeChip mode={state.status.mode} ownerRunning={state.status.owner.running} />;
+  return state.kind === "idle" && state.mode !== null ? <EngineModeChip mode={state.mode} ownerRunning={false} /> : null;
 }
 
 /** What the engine says about a page: the grid and the queue, or why there is
@@ -94,7 +94,7 @@ export function EnginePageCard({
         </button>
       </div>
 
-      <SyncPageAttention page={page} />
+      <EnginePageAttention page={page} className="mt-3" now={now} />
 
       <div className="mt-3 border-t border-border pt-3">
         <EnginePageStatusBody
@@ -103,7 +103,7 @@ export function EnginePageCard({
           now={now}
           aside={(
             <div>
-              {getBlockOrder().map((key) => <SyncBlockRow key={key} block={page.blocks[key]} />)}
+              {engineBlockOrder().map((key) => <EngineBlockRow key={key} block={page.blocks[key]} now={now} />)}
             </div>
           )}
         />

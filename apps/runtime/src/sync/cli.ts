@@ -3,8 +3,10 @@ import { hostname } from "node:os";
 import { Command, InvalidArgumentError } from "commander";
 
 import { listSyncPages, type SyncRegistryOverride, type SyncRegistryTierOverride } from "@agency_hub_core/db";
+import { isIndefinite } from "@agency_hub_core/shared";
 
 import { createSyncContext, type SyncContext } from "./context.ts";
+import { OWNER_HEARTBEAT_FRESH_MS, ownerRunState, type OwnerRunState, type SyncPageModeView } from "./engine/status.ts";
 import { createFanslyRegistry } from "./fansly/registry.ts";
 import {
   changeSyncPageModeByOwner,
@@ -37,8 +39,38 @@ const defaultDeps: SyncCliDeps = {
   print: (line) => console.log(line),
 };
 
+/** JSON for the terminal: a bigint as its digits, and an instant no clock
+ *  reaches — the end of a hold only new credentials lift — as `"infinity"`,
+ *  the word `sync page status` uses for it (`Date#toISOString` writes it as
+ *  the year 275760). */
 function json(value: unknown): string {
-  return JSON.stringify(value, (_key, item: unknown) => (typeof item === "bigint" ? item.toString() : item), 2);
+  return JSON.stringify(value, function (this: unknown, key: string, item: unknown) {
+    // A Date reaches the replacer already serialised: read it off its holder.
+    const raw = (this as Record<string, unknown>)[key];
+    if (raw instanceof Date && isIndefinite(raw)) return "infinity";
+    return typeof item === "bigint" ? item.toString() : item;
+  }, 2);
+}
+
+const SECOND_MS = 1_000;
+
+/** Whether an owner runs the page, as `sync ownership status` concludes it:
+ *  a heartbeat alone says nothing — it may be an hour old, or of an owner
+ *  that released the page. */
+function ownerRunsText(state: OwnerRunState, mode: SyncPageModeView): string {
+  if (state.running) return "yes";
+  switch (state.why) {
+    case "mode":
+      return `no: the page is ${mode} (no actor runs it)`;
+    case "never_owned":
+      return "no: no host has taken the page";
+    case "released":
+      return "no: its owner released it";
+    case "heartbeat_stale":
+      // Whole seconds, rounded down: an age is never overstated.
+      return `no: the heartbeat is ${Math.floor(state.heartbeatAgeMs / SECOND_MS)} s old `
+        + `(an owner beats every 10 s; fresh within ${OWNER_HEARTBEAT_FRESH_MS / SECOND_MS} s)`;
+  }
 }
 
 function parsePositiveMs(value: string): number {
@@ -415,11 +447,16 @@ export function registerSyncEngineCommands(sync: Command, deps: SyncCliDeps = de
 
   ownership
     .command("status")
-    .description("each page's owner generation, process, heartbeat, release and stop confirmation")
+    .description(
+      "each page's owner generation, process, heartbeat, release and stop confirmation, "
+      + "and whether that owner runs the page now (`runs`)",
+    )
     .action(async () => {
       await withContext(deps, async ({ db }) => {
         const rows = await listSyncPages(db);
-        deps.print(["page", "mode", "generation", "owner", "acquired_at", "heartbeat_at", "released", "stop_confirmed_at"].join("\t"));
+        deps.print(
+          ["page", "mode", "generation", "owner", "acquired_at", "heartbeat_at", "released", "stop_confirmed_at", "runs"].join("\t"),
+        );
         for (const row of rows) {
           const owner = row.owner;
           deps.print([
@@ -431,6 +468,7 @@ export function registerSyncEngineCommands(sync: Command, deps: SyncCliDeps = de
             owner.heartbeatAt?.toISOString() ?? "",
             owner.releasedAt !== null && owner.releaseGeneration === owner.generation ? owner.releasedAt.toISOString() : "",
             owner.stopConfirmedAt?.toISOString() ?? "",
+            ownerRunsText(ownerRunState(row, row.dbNow), row.mode),
           ].join("\t"));
         }
       });

@@ -213,17 +213,30 @@ line (`FANSLY_KEYS_WITHOUT_LEVER`: the identity checks, the socket and its repai
 the probes, media download) is addressed by its own name. `services/sync-status-engine.ts` says which lever streams
 each Settings block shows and moves (`ENGINE_BLOCK_STREAMS`), `services/sync-engine-levers.ts` which ones a "sync now"
 scope names (`FANSLY_ENGINE_SCOPE_STREAMS`). tests/sync-lever-map.test.ts pins the three and that every registry key is
-placed.
+placed. The streams of two blocks share no key (`engineBlockKeys`; S4-35): a block's buttons move its own keys, so a
+pause of one block is never half undone by a resume of another. The chat list (`dm-conversations.*`, with
+`fan-profiles.probe`) and the chat messages (`dm-messages.*`, `.catchup` among them) are such two sets.
+
+**What stops a key** (S4-35). The surfaces that describe a page stream by stream say whether a stream is being read
+from one verdict, `engineStops` (`services/sync-status-engine.ts`): for each registry key, the owner's pause (the page,
+the requests class, the key) and what the hold evaluator says of a request of the key (`engine/admission.ts`
+`heldByScope`, the rule the actor admits by) — the page's own hold (`auth`, `identity_mismatch`, `network`, or rows this
+build cannot read), the breaker of the key's resource file, a 429's hold of every route the key reads. Every cause is
+listed, not the first: ending one leaves the others. A route's own pace is no stop (work it puts off is queued). The
+route holds are read from the page's hold set alone — no read of the attempt journal — so the verdict costs the status
+reads nothing. A stream or a block is `stopped` `none` / `some` / `all` of its keys, and `nextDueAt` is the earliest due
+time of open work of a key nothing stops: a paused or held key has no next read while its stop stands. "Reading" is
+said only of keys a host runs and nothing stops.
 
 | Surface | A Fansly page the engine owns (`handover`/`live`) |
 |---|---|
 | `/api/v1/health/sync` | an `engine` block (mode, owner heartbeat age, hold, oldest due urgent work, socket, quarantine, open alerts); unhealthy on an owner silent > 90 s, an `auth`/`identity_mismatch` hold, or `handover` > 10 min. No legacy stream is judged |
-| Settings blocks (`syncOverview`, `pageSyncBlocks`) | every block `state: "engine"` + `engineMode`; each lever stream of the block from its keys' live work (last applied, next due, why the earliest waits, quarantine / vendor block); a refused credential reads `credentials_invalid` on the connection block. Last applied of a key that works per subject (`dm-messages.head` per chat, `purchases.targets` per target) is its newest applied attempt over all its subjects (`lastLiveAppliedAtOverSubjects`: a bounded number of the key's rows, never a read per subject). Work that needs the owner names the command that lists it: `sync work list --state quarantined` for quarantined rows, `--state open --resource <key>` for rows Fansly refuses (they stay open, waiting `blocked_by_vendor`) |
-| Block buttons, `/admin/sync/trigger(-all)` | trigger ⇒ the keys' polls due now (`refreshSyncPage`); pause / resume ⇒ the keys in / out of `paused_resources` (the rest kept); reset ⇒ the keys' quarantined work requeued — `page_sync_states` never touched; `handover` ⇒ 409 `fansly_page_switching` for a lever that would read |
+| Settings blocks (`syncOverview`, `pageSyncBlocks`) | every block `state: "engine"` + `engineMode` + `engine`: whether a host runs the page (`ownerRunning`), the block's own keys (`keys`), its polls (`pollKeys`: what "sync now" makes due — a block without one has nothing to move), the keys the owner paused (`pausedKeys`, `pausedAll`), what stops its keys (`stopped`, `stops`, `paused`), its quarantined rows and the rows Fansly refuses, by key; each lever stream of the block from its keys' live work (last applied, next due, why the earliest waits, quarantine / vendor block, what stops it); a refused credential reads `credentials_invalid` on the connection block. Last applied of a key that works per subject (`dm-messages.head` per chat, `purchases.targets` per target) is its newest applied attempt over all its subjects (`lastLiveAppliedAtOverSubjects`: a bounded number of the key's rows, never a read per subject). Work that needs the owner names the command that lists it: `sync work list --state quarantined` for quarantined rows, `--state open --resource <key>` for rows Fansly refuses (they stay open, waiting `blocked_by_vendor`) |
+| Block buttons, `/admin/sync/trigger(-all)` | trigger ⇒ the keys' polls due now (`refreshSyncPage`); pause / resume ⇒ the keys in / out of `paused_resources` (the rest kept); reset ⇒ the keys' quarantined work requeued — `page_sync_states` never touched; `handover` ⇒ 409 `fansly_page_switching` for a lever that would read. The answer's `engine.affected` is what moved (polls made due, keys paused or resumed, rows requeued): 0 is a lever that did nothing, and the dashboard says so instead of "done" |
 | Page summary (`syncUx` of the overview, the sidebar's connections, the credentials tab) | `buildEnginePageSyncUx`, from the page's row and the counts of its active work: new credentials needed (an `auth`/`identity_mismatch` hold), work of a Settings block quarantined or refused by Fansly, a switch in progress, or managed by the engine |
 | Connection status (`/admin/connections`, the health page item) | `expired` while the engine holds the page for its credentials, else by the age of the account read the engine stamps on the page (`account.poll`); no legacy run is consulted |
 | Follower reconcile reset / blast-radius override | the quarantined `followers.reconcile` row: reset cancels it and files owner demand (a fresh walk); the override reads the walk from the row's cursor and `result.quarantine`, deactivates exactly the previewed set and closes the row done |
-| Insights coverage (`/api/v1/pages/:pageLabel/stats/coverage`) | an `engine` block: mode, whether a host runs the page (`ownerRunning`), and per lever stream its keys, last applied, next due, its open work (`activeWork`), paused, why the earliest waits (`waiting`: key, reason, until — as data; `reason`: one line), quarantine / vendor block, largest failure count |
+| Insights coverage (`/api/v1/pages/:pageLabel/stats/coverage`) | an `engine` block: mode, whether a host runs the page (`ownerRunning`), and per lever stream its keys, last applied, next due, its open work (`activeWork`), paused, what stops its keys (`stopped`, `stops`), why the earliest waits (`waiting`: key, reason, until — as data; `reason`: one line), quarantine / vendor block, largest failure count |
 | Top spenders `source` (`/api/v1/pages/:pageLabel/top-spenders`) | `fan_earnings` from `fan-earnings.roster`'s live work: `ramped` unless the owner paused it (`flag_off`), its last applied read, its largest failure count |
 
 A Fansly page the engine does not own (no engine row, or one in `off` / `shadow`) is read by nothing. `/health/sync`
@@ -238,10 +251,21 @@ the hour's requests, from `/api/v1/sync/pages`; the open history requests with t
 numbers, from `/api/v1/sync/history-requests` — and a page's detail there carries the five Settings blocks with their
 buttons. «Синхронизация» (`?tab=sync`) lists the legacy executor's pages only. `syncSettingsTab` (`lib/navigation.ts`)
 names a page's tab from its platform, and every link to a page's sync goes through it; a page opened on the other tab
-is pointed to its own. A waiting reason has its words in one table, `engine/engineDisplay.ts` (`engineWaitWords`):
-Russian for the «Синк» tab's own rows, English for the block cards both tabs share and for the analytics Coverage
-panel, which reads the insights `engine` block: a stream is "reading" only when a host runs the page and it has open
-work, else it says which of the two is missing.
+is pointed to its own. The engine's words live in one table, `engine/engineDisplay.ts`: a waiting reason
+(`engineWaitWords`), a stop (`engineStopText`) and the one thing that is true of a stream or a block
+(`engineReadingState`: not running without an owner, paused, page held, held, needs attention, partly paused or held,
+reading, idle) — Russian for the «Синк» tab, English for the analytics Coverage panel, which reads the insights
+`engine` block. "Reading" takes a host that runs the page, open work and keys nothing stops; everything else is named.
+
+The «Синк» tab is in one language and has its own block cards (`engine/EngineBlocks.tsx`, worded by
+`engine/engineBlockDisplay.ts`; S4-35): the cards «Синхронизация» keeps know nothing of the engine. A block card says
+what stops the block's keys and until when, omits "next" while nothing of it is due, and shows a partial pause as
+partial (each button says how many keys it moves). "Sync now" is offered for a block with a poll the owner has not
+paused; the requeue only for quarantined rows of the block, which it names; refused credentials point to the
+credentials form. A toast is built from the lever's answer (`engineLeverNotice`): what moved, "nothing moved" when
+nothing did, and a warning when nothing of the block will be sent anyway (no owner, a hold of every key). A page
+without a running owner does not look live: its mode chip reads `live · нет владельца` in the warning colour. After a
+lever the tab refreshes the engine's status and requests with the blocks.
 
 Not for a Fansly page at all: the legacy monitor (`/api/v1/sync/status`, `pnpm cli sync status` — the rows are the
 legacy executor's pages and streams, the events and `/api/v1/sync/requests` its journal as it stands; `sync page

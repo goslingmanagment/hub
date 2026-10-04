@@ -2814,6 +2814,36 @@ export const syncStatusReasonSchema = z.object({
 
 const syncStreamRoleEnum = z.enum(["primary", "supporting"]);
 
+/** One thing that stops registry keys of a page the Fansly Sync Engine owns
+ *  from sending now. `paused` is the owner's; the rest is what the engine's
+ *  hold evaluator says of a request of the key: the page's own hold, the
+ *  breaker of its resource file, a 429's hold of every route it reads. (A
+ *  route's own pace stops nothing: work it puts off is queued.) A key stopped
+ *  by several is named under each: ending one leaves the others. */
+export const syncEngineStopSchema = z.object({
+  reason: z.enum(["paused", "page_hold", "resource_hold", "route_hold"]),
+  /** What stops them. `paused`: `page` (the whole page), `requests` (the
+   *  history requests class) or `keys` (the keys themselves). `page_hold`: the
+   *  hold's kind (`auth`, `identity_mismatch`, `network`, or `unreadable`: rows
+   *  of the hold set the build cannot read). `resource_hold`: the resource
+   *  file on its breaker. `route_hold`: the routes a 429 holds. */
+  by: z.array(z.string()),
+  /** The registry keys it stops. */
+  resources: z.array(z.string()),
+  /** When it ends; null: no instant ends it (a pause, refused credentials,
+   *  unreadable rows). */
+  until: isoTimestamp.nullable(),
+});
+
+/** How many of a set of keys can send nothing now. */
+const syncEngineStoppedEnum = z.enum(["none", "some", "all"]);
+
+/** Quarantined or vendor-refused work: how many rows, of which keys. */
+const syncEngineWorkCountSchema = z.object({
+  count: z.number().int().nonnegative(),
+  resources: z.array(z.string()),
+});
+
 export const syncBlockIntervalSchema = z.object({
   stream: extendedSyncStreamEnum,
   cadenceSeconds: z.number().int(),
@@ -2831,6 +2861,16 @@ export const syncBlockSubstreamSchema = z.object({
   needsAttention: z.boolean(),
   statusReason: syncStatusReasonSchema.nullable(),
   error: syncBlockErrorSchema.nullable(),
+  /** Present exactly when `state` is `engine`: how many of the stream's keys
+   *  can send nothing now, and what stops them. */
+  engine: z.object({
+    stopped: syncEngineStoppedEnum,
+    stops: z.array(syncEngineStopSchema),
+    /** The owner's pause stops every one of its keys, whatever else does. */
+    paused: z.boolean(),
+    /** The live work of its keys that is open, running or quarantined. */
+    activeWork: z.number().int().nonnegative(),
+  }).optional(),
 });
 
 export const syncBlockStatusSchema = z.object({
@@ -2838,6 +2878,33 @@ export const syncBlockStatusSchema = z.object({
   state: syncBlockStateEnum,
   /** Present exactly when `state` is `engine`. */
   engineMode: syncEngineOwnedModeEnum.optional(),
+  /** Present exactly when `state` is `engine`: who runs the page, the keys the
+   *  block's buttons move, what stops them and what needs the owner. */
+  engine: z.object({
+    mode: syncEngineOwnedModeEnum,
+    /** A sync host runs the page (a fresh owner heartbeat). false: nothing of
+     *  the block is read, whatever its work says. */
+    ownerRunning: z.boolean(),
+    /** The registry keys the block's buttons move. No key is another block's. */
+    keys: z.array(z.string()),
+    /** Those of them that are polls: what "sync now" makes due. */
+    pollKeys: z.array(z.string()),
+    /** Those of them the owner paused one by one. */
+    pausedKeys: z.array(z.string()),
+    /** The owner paused the whole page. */
+    pausedAll: z.boolean(),
+    /** How many of the keys can send nothing now, and what stops them. */
+    stopped: syncEngineStoppedEnum,
+    stops: z.array(syncEngineStopSchema),
+    /** The owner's pause stops every one of the keys, whatever else does. */
+    paused: z.boolean(),
+    /** The keys' live work that is open, running or quarantined. */
+    activeWork: z.number().int().nonnegative(),
+    /** The keys' quarantined rows: what the block's reset requeues. */
+    quarantined: syncEngineWorkCountSchema,
+    /** The keys' rows Fansly refuses. */
+    blockedByVendor: syncEngineWorkCountSchema,
+  }).optional(),
   succeededAt: isoTimestamp.nullable(),
   progress: syncBlockProgressSchema.nullable(),
   progressStream: z.string().nullable(),
@@ -5426,13 +5493,21 @@ const insightsEngineStreamSchema = z.object({
   /** When one of them was last applied live — a key that works per subject (a
    *  chat, a fan) over all its subjects; null = not yet. */
   succeededAt: isoTimestamp.nullable(),
-  /** When the next one is due; null = none is open. */
+  /** When the next read of a key nothing stops is due; null = none is open,
+   *  or every key with open work is stopped (`stops`). */
   nextDueAt: isoTimestamp.nullable(),
   /** Their work that is open, running or quarantined. 0 with no last read:
    *  nothing has been asked of the stream. */
   activeWork: z.number().int(),
-  /** The owner paused the whole page or every one of these keys. */
+  /** The owner's pause stops every one of these keys (the whole page, or
+   *  each key), whatever else does. */
   paused: z.boolean(),
+  /** How many of these keys can send nothing now — by the owner's pauses and
+   *  the engine's hold evaluator (the page's hold, a resource breaker, a 429's
+   *  hold of every route of a key) — and what stops them. A stream is being
+   *  read only when a host runs the page and this is `none`. */
+  stopped: syncEngineStoppedEnum,
+  stops: z.array(syncEngineStopSchema),
   /** Some of their work is quarantined or blocked by Fansly. */
   needsAttention: z.boolean(),
   /** What needs attention and the command that lists it, or why the earliest
@@ -8597,6 +8672,7 @@ export type SyncRequestItem = z.infer<typeof syncRequestItemSchema>;
 export type SyncRequestsResponse = z.infer<typeof syncRequestsResponseSchema>;
 export type SyncDiagnosis = z.infer<typeof syncDiagnosisSchema>;
 export type SyncBlockStatus = z.infer<typeof syncBlockStatusSchema>;
+export type SyncEngineStop = z.infer<typeof syncEngineStopSchema>;
 export type SyncBlocksPage = z.infer<typeof syncBlocksPageSchema>;
 export type SyncOverviewResponse = z.infer<typeof syncOverviewResponseSchema>;
 export type PageSyncBlocksResponse = z.infer<typeof pageSyncBlocksResponseSchema>;

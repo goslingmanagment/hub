@@ -190,6 +190,7 @@ function toBlockStatus(block: SyncDomainBlockStatus): SyncBlockStatus {
     block: block.block,
     state: block.state,
     ...(block.engineMode === undefined ? {} : { engineMode: block.engineMode }),
+    ...(block.engine === undefined ? {} : { engine: block.engine }),
     succeededAt: block.succeededAt,
     progress: block.progress
       ? {
@@ -243,6 +244,7 @@ function toBlockStatus(block: SyncDomainBlockStatus): SyncBlockStatus {
           consecutiveFailures: substream.error.consecutiveFailures,
         }
         : null,
+      ...(substream.engine === undefined ? {} : { engine: substream.engine }),
     })),
   };
 }

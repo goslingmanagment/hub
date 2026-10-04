@@ -719,7 +719,10 @@ export function createFanslyRegistry(options: { metrics?: Metrics } = {}): Engin
 // the legacy engine stands behind them (it ran a lane per name until step 4).
 // A key answers to every stream listed with it; a key in no line answers to
 // no such lever (`FANSLY_KEYS_WITHOUT_LEVER`) and is addressed by its own name
-// (`sync page pause --resource`, `sync work`).
+// (`sync page pause --resource`, `sync work`). The streams of two Settings
+// blocks never share a key (`ENGINE_BLOCK_STREAMS`): a block's buttons move
+// its own keys and no other block's, so a pause of one block is never half
+// undone by a resume of another (tests/sync-lever-map.test.ts).
 
 /** One line of the lever map. */
 export interface FanslyLeverStream {
@@ -730,14 +733,16 @@ export interface FanslyLeverStream {
 
 export const FANSLY_LEVER_STREAMS: readonly FanslyLeverStream[] = [
   { stream: "light", keys: ["account.poll"] },
+  // The chat list and the profiles of the fans it names; every read of a
+  // chat's messages (`dm-messages.*`) answers to `dm_messages`.
   {
     stream: "dm_conversations",
     keys: [
       "dm-conversations.head", "dm-conversations.full", "dm-conversations.find", "dm-conversations.detail",
-      "dm-conversations.ws-down", "dm-messages.catchup", "fan-profiles.probe",
+      "dm-conversations.ws-down", "fan-profiles.probe",
     ],
   },
-  { stream: "dm_messages", keys: ["dm-messages.head", "dm-messages.catchup", "dm-messages.history", "fan-profiles.probe"] },
+  { stream: "dm_messages", keys: ["dm-messages.head", "dm-messages.catchup", "dm-messages.history"] },
   {
     stream: "transactions",
     keys: ["transactions.head", "transactions.insurance", "transactions.rescan", "transactions.backfill"],

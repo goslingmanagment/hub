@@ -16,7 +16,7 @@ import {
   fanslyStreamPollSeconds,
 } from "../apps/runtime/src/sync/fansly/registry.ts";
 import { FANSLY_ENGINE_SCOPE_STREAMS } from "../apps/runtime/src/services/sync-engine-levers.ts";
-import { ENGINE_BLOCK_STREAMS, engineBlockStreams } from "../apps/runtime/src/services/sync-status-engine.ts";
+import { ENGINE_BLOCK_STREAMS, engineBlockKeys, engineBlockStreams } from "../apps/runtime/src/services/sync-status-engine.ts";
 import { SYNC_DOMAIN_BLOCKS } from "../apps/runtime/src/services/sync-status.ts";
 
 // Step 4, S4-24: the lever map lives in the engine registry
@@ -26,20 +26,25 @@ import { SYNC_DOMAIN_BLOCKS } from "../apps/runtime/src/services/sync-status.ts"
 // source) resolve a stream name to registry keys through it. Until S4-24 the
 // same table was derived from the registry's `legacy` refs and copied into the
 // database package for the `sync_streams` dataset; both went with the
-// dataset's Fansly rows.
+// dataset's Fansly rows. Since S4-35 the streams of two Settings blocks share
+// no key: a block's buttons move its own keys and nothing of another block.
 
 const ROOT = join(__dirname, "..");
 const registryKeys = FANSLY_RESOURCE_SPECS.map((spec) => spec.key);
 
 describe("the engine registry's lever map", () => {
-  it("is the table the levers moved before it lived in the registry", () => {
+  // The table the levers moved before it lived in the registry, but for the
+  // two keys the chat list and the chat messages used to share
+  // (`dm-messages.catchup`, `fan-profiles.probe`): each answers to one of the
+  // two now (S4-35).
+  it("is the table of the levers", () => {
     expect(FANSLY_LEVER_STREAMS.map((line) => [line.stream, [...line.keys]])).toEqual([
       ["light", ["account.poll"]],
       ["dm_conversations", [
         "dm-conversations.head", "dm-conversations.full", "dm-conversations.find", "dm-conversations.detail",
-        "dm-conversations.ws-down", "dm-messages.catchup", "fan-profiles.probe",
+        "dm-conversations.ws-down", "fan-profiles.probe",
       ]],
-      ["dm_messages", ["dm-messages.head", "dm-messages.catchup", "dm-messages.history", "fan-profiles.probe"]],
+      ["dm_messages", ["dm-messages.head", "dm-messages.catchup", "dm-messages.history"]],
       ["transactions", ["transactions.head", "transactions.insurance", "transactions.rescan", "transactions.backfill"]],
       ["top_spenders", ["top-spenders.window", "top-spenders.bootstrap"]],
       ["fan_earnings", ["fan-earnings.roster"]],
@@ -137,7 +142,46 @@ describe("the Settings blocks of a Fansly page", () => {
     for (const block of SYNC_DOMAIN_BLOCKS) {
       expect(ENGINE_BLOCK_STREAMS[block].some(({ role }) => role === "primary"), block).toBe(true);
       expect(fanslyKeysForStreams(engineBlockStreams(block)).length, block).toBeGreaterThan(0);
+      expect(engineBlockKeys(block), block).toEqual(fanslyKeysForStreams(engineBlockStreams(block)));
     }
+  });
+
+  // S4-35: pausing «Messages Live» used to pause two keys of «Messages
+  // History» too, whose Resume then un-paused them and left the first block
+  // half paused. A lever acts on one well-defined key set: its block's.
+  it("no registry key answers to two blocks: a block's buttons move its own keys only", () => {
+    const blocksOf = new Map<string, string[]>();
+    for (const block of SYNC_DOMAIN_BLOCKS) {
+      for (const key of engineBlockKeys(block)) blocksOf.set(key, [...(blocksOf.get(key) ?? []), block]);
+    }
+    const shared = [...blocksOf].filter(([, blocks]) => blocks.length > 1);
+    expect(shared).toEqual([]);
+    expect(engineBlockKeys("messages_live")).toEqual([
+      "dm-conversations.head", "dm-conversations.full", "dm-conversations.find", "dm-conversations.detail",
+      "dm-conversations.ws-down", "fan-profiles.probe",
+    ]);
+    expect(engineBlockKeys("messages_history")).toEqual(["dm-messages.head", "dm-messages.catchup", "dm-messages.history"]);
+    // Inside a block, streams may share a key: the block's buttons move it once.
+    expect(engineBlockKeys("audience").filter((key) => key === "fan-profiles.lookup")).toHaveLength(1);
+  });
+
+  // "Sync now" makes the polls of the block's resource files due
+  // (`fanslyFilesForStreams`): those are exactly the block's own poll keys —
+  // and a block without one (the chat messages) has nothing a "sync now" moves.
+  it("a block's \"sync now\" moves the block's own poll keys, and nothing where it has none", () => {
+    const pollsOfFiles = (files: readonly string[]) => FANSLY_RESOURCE_SPECS
+      .filter((spec) => spec.kind === "poll" && files.includes(spec.file))
+      .map((spec) => spec.key);
+    for (const block of SYNC_DOMAIN_BLOCKS) {
+      const keys = engineBlockKeys(block);
+      const polls = pollsOfFiles(fanslyFilesForStreams(engineBlockStreams(block)));
+      expect(polls.filter((key) => !keys.includes(key)), block).toEqual([]);
+      expect(polls, block).toEqual(keys.filter((key) => FANSLY_RESOURCE_SPECS.find((spec) => spec.key === key)?.kind === "poll"));
+    }
+    expect(pollsOfFiles(fanslyFilesForStreams(engineBlockStreams("messages_history")))).toEqual([]);
+    expect(pollsOfFiles(fanslyFilesForStreams(engineBlockStreams("messages_live")))).toEqual([
+      "dm-conversations.head", "dm-conversations.full",
+    ]);
   });
 });
 
