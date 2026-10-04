@@ -522,6 +522,7 @@ export interface AppConfig {
   fanslyDmDeepBackfillContinuationDelayMs?: number;
   fanslyDmDeepBackfillContinuationJitterMs?: number;
   onlyFansDefaultDelayMs: number;
+  /** @deprecated Retired at step 4 (S4-19) with its boot invariant; nothing reads it. */
   syncSharedRateLimitEnabled: boolean;
   egressPacerMode: "off" | "shadow" | "enforce";
   lakeDir: string;
@@ -837,21 +838,6 @@ export const IGNORED_FANSLY_ENDPOINT_PAUSE_ENV_KEYS = [
 /** The ignored endpoint pause env vars this environment sets (boot warning). */
 export function listIgnoredFanslyEndpointPauseEnv(env: NodeJS.ProcessEnv = process.env) {
   return IGNORED_FANSLY_ENDPOINT_PAUSE_ENV_KEYS.filter((key) => hasConfiguredValue(env[key]));
-}
-
-/** Concurrency > 1 is only safe when the shared rate limiter is on (the limiter is
- *  what keeps simultaneous workers from hammering an upstream past its budget). The
- *  boot check in bootstrap.ts throws on this; exposed here as a pure validator so the
- *  Stage B/C PATCH can reject the same combination before applying an override.
- *  Returns the boot error message when violated, else null. */
-export function checkSyncConcurrencyInvariant(input: {
-  pageExecutorConcurrency: number;
-  sharedRateLimitEnabled: boolean;
-}): string | null {
-  if (input.pageExecutorConcurrency > 1 && !input.sharedRateLimitEnabled) {
-    return "SYNC_PAGE_EXECUTOR_CONCURRENCY > 1 requires SYNC_SHARED_RATE_LIMIT_ENABLED=true";
-  }
-  return null;
 }
 
 export function loadConfig(

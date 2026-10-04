@@ -66,7 +66,6 @@ import { registerSyncHistoryCommands } from "./sync/cli/history.ts";
 import { registerSyncReportCommands } from "./sync/cli/report.ts";
 import { registerSyncSwitchCommands } from "./sync/cli/switch.ts";
 import { verifyPageOnEngine } from "./services/sync-engine-account.ts";
-import { handleSuccessfulPageVerificationRecovery } from "./services/notification-incidents.ts";
 import { resolveHarvestManifest } from "./services/harvest-manifest.ts";
 import {
   runOfapiTransactionsBackfill,
@@ -138,7 +137,6 @@ import {
   resolveStoredProxyEgressKey,
 } from "./services/page-context.ts";
 import { requestPageSync, waitForRequestedSyncRequests } from "./services/sync-control.ts";
-import { refreshPageMetadata } from "./services/sync/shared.ts";
 import { getSyncMonitorSnapshot } from "./services/sync-monitor.ts";
 import { renderSyncMonitor } from "./services/sync-monitor-view.ts";
 import {
@@ -1578,41 +1576,26 @@ export function buildProgram() {
     .action(async (options) => {
       const app = await createAppContext();
       try {
-        // Step-3 design §3.5 item 6: a live page is verified by its engine
-        // actor; a page being switched refuses (409).
+        // A Fansly page is verified by its engine actor (step-3 design §3.5
+        // item 6); a page being switched, or one the engine does not run,
+        // refuses (409) — no legacy `/account/me` is left (step 4, S4-19).
         const onEngine = await verifyPageOnEngine(app, options.page);
         if (onEngine !== null) {
           console.log(`Verified page ${options.page} through the Fansly Sync Engine (${onEngine.username ?? "?"})`);
           return;
         }
+        // Stage 18: OnlyMonster retired — OnlyFans pages have no pasted
+        // credentials to verify; their access is the OFAPI mapping.
         const context = await resolvePageContext(app, options.page);
-        const egressSummaryPromise = resolvePageEgressSummary({
+        printPageEgressSummary(await resolvePageEgressSummary({
           pageLabel: context.page.label,
           platform: context.platform,
           proxy: context.proxy,
           egressKey: context.egressKey,
-        });
-        if (context.platform === "fansly") {
-          const verified = await refreshPageMetadata(app, context, "light", undefined, null, "account_me_cli");
-          const recoveredAt = new Date();
-          printPageEgressSummary(await egressSummaryPromise);
-          await handleSuccessfulPageVerificationRecovery(app, {
-            platformAccountId: context.page.id,
-            pageLabel: context.page.label,
-            platform: context.platform,
-            recoveredAt,
-          });
-          console.log(
-            `Verified page ${options.page}: ${verified.parsed.account.username} (${verified.parsed.account.id})`,
-          );
-        } else {
-          // Stage 18: OnlyMonster retired — OnlyFans pages have no pasted
-          // credentials to verify; their access is the OFAPI mapping.
-          printPageEgressSummary(await egressSummaryPromise);
-          throw new Error(
-            "OnlyMonster is retired: OnlyFans pages verify via their OFAPI mapping (setPageOfapiAccountId), not pasted credentials",
-          );
-        }
+        }));
+        throw new Error(
+          "OnlyMonster is retired: OnlyFans pages verify via their OFAPI mapping (setPageOfapiAccountId), not pasted credentials",
+        );
       } finally {
         await app.close();
       }

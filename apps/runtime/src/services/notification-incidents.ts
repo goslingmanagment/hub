@@ -1,5 +1,4 @@
 import {
-  clearPageSyncAuthBlock,
   hasRecentTerminalProxyFailure,
   isFanslyPageEngineOwned,
   listNotificationIncidents,
@@ -639,23 +638,6 @@ async function hasTerminalProxyFailure(
   });
 }
 
-export async function notifyAuthFailedIncident(
-  app: Pick<AppContext, "config" | "db" | "logger">,
-  input: {
-    platformAccountId: number;
-    pageLabel: string;
-    platform: "fansly" | "onlyfans";
-    errorCode?: string | null;
-    errorSummary: string;
-    occurredAt?: Date;
-  },
-) {
-  await openIncidentAndNotify(app, {
-    ...input,
-    kind: "auth_blocked",
-  });
-}
-
 export async function notifySyncChunkFailureIncident(
   app: Pick<AppContext, "config" | "db" | "logger">,
   input: {
@@ -1069,6 +1051,13 @@ export async function resolveOfapiGlobalIncident(
   });
 }
 
+/**
+ * A Fansly page's credentials verified — the engine's `account.verify`, or its
+ * identity check of a credentials or proxy change that was then stored: the
+ * page's verification incidents resolve. Nothing else is touched: an engine
+ * hold clears by the engine's own proof (A3), and the legacy executor, whose
+ * auth block this used to lift, serves no Fansly page (step 4).
+ */
 export async function handleSuccessfulPageVerificationRecovery(
   app: Pick<AppContext, "config" | "db" | "logger">,
   input: {
@@ -1076,49 +1065,24 @@ export async function handleSuccessfulPageVerificationRecovery(
     pageLabel: string;
     platform: "fansly" | "onlyfans";
     recoveredAt?: Date;
-    /** False for a page the Fansly Sync Engine owns: the legacy streams'
-     *  state is the legacy engine's own (step-3 J5) and is left as it is; only
-     *  the incidents resolve. */
-    unblockLegacyStreams?: boolean;
   },
-): Promise<{ syncUnblocked: boolean }> {
+): Promise<void> {
   const recoveredAt = input.recoveredAt ?? new Date();
-  const { unblockLegacyStreams, ...incident } = input;
-  try {
-    if (unblockLegacyStreams !== false) {
-      await clearPageSyncAuthBlock(app.db, input.platformAccountId, {
-        maxFailureAt: recoveredAt,
-        now: recoveredAt,
-      });
-    }
-  } catch (error) {
-    // W3.3 (D4-N1): the streams are still blocked, so the incidents are
-    // still TRUE — resolving them here would report a recovery that did not
-    // happen while credential-update kept returning verified:true. The
-    // caller surfaces syncUnblocked:false instead.
-    app.logger.warn({
-      platformAccountId: input.platformAccountId,
-      err: error,
-    }, "Failed to clear auth_blocked during page verification recovery; incidents stay open");
-    return { syncUnblocked: false };
-  }
-
   await resolveIncidentAndNotify(app, {
-    ...incident,
+    ...input,
     kind: "auth_blocked",
     recoveredAt,
   });
   await resolveIncidentAndNotify(app, {
-    ...incident,
+    ...input,
     kind: "proxy_failed",
     recoveredAt,
   });
   // W3.1: a successful verification reached Fansly, which the fail-closed
   // dispatcher only allows with a proxy present.
   await resolveIncidentAndNotify(app, {
-    ...incident,
+    ...input,
     kind: "proxy_missing",
     recoveredAt,
   });
-  return { syncUnblocked: true };
 }

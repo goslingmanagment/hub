@@ -7,7 +7,6 @@ import {
 } from "@agency_hub_core/platform-core";
 
 import { getSyncStreamsForPlatform, type PageSyncLease } from "@agency_hub_core/db";
-import type { Platform } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import {
@@ -55,11 +54,12 @@ export type AppPlatformRegistry = PlatformRegistry<AppPlatformAdapter>;
 //
 // Fansly has none since step 4 (S4-10): the Fansly Sync Engine
 // (`apps/runtime/src/sync/`) reads every Fansly page, so the legacy executor
-// declares no Fansly stream and has no Fansly handler. The planner seeds and
-// schedules only the platforms that declare streams
-// (`legacyExecutorPlatforms`), the app-level `requestPageSync` refuses a
-// platform with none (`LegacySyncRetiredError`), and the owner levers resolve a
-// Fansly page's scopes straight to the engine's registry keys
+// declares no Fansly stream and has no Fansly handler. The streams declared
+// here are the legacy executor's boundary (`sync/onlyfans/boundary.ts`): the
+// planner and the executor seed, schedule and run only the platforms that
+// declare one, the app-level `requestPageSync` refuses a platform with none
+// (`LegacySyncRetiredError`), and the owner levers resolve a Fansly page's
+// scopes straight to the engine's registry keys
 // (`services/sync-engine-levers.ts`).
 const ONLYFANS_PULL: Partial<Record<CanonicalStream, ExecutorPullHandler>> = {
   light: onlyfansLightChunk,
@@ -85,8 +85,9 @@ export const fanslyPlatformAdapter: AppPlatformAdapter = {
   pull: {},
   session: {
     kind: "browser_session",
-    lifecycle: "Pasted session material; verified on paste (resolvePageContext/verifySession); "
-      + "death signal = 401/403 during sync → auth_blocked incident. Capture/refresh mechanics "
+    lifecycle: "Pasted session material; verified on paste by the Fansly Sync Engine (the no-page identity "
+      + "check at onboarding, `account.identity` / `account.verify` on a live page); death signal = "
+      + "401/403 → the engine's credentials hold and its incident. Capture/refresh mechanics "
       + "deliberately unspecified (owner-flagged custody area).",
   },
 };
@@ -145,17 +146,3 @@ export function createAppPlatformRegistry(): AppPlatformRegistry {
  * Built eagerly so a conformance failure is a boot failure, not a 500. */
 export const appPlatformRegistry: AppPlatformRegistry = createAppPlatformRegistry();
 
-/** The platforms the legacy page-sync executor serves: those whose adapter
- *  declares a stream (OnlyFans since step 4 S4-10). The planner seeds,
- *  schedules and executes page-sync state only for their pages. */
-export function legacyExecutorPlatforms(registry: AppPlatformRegistry = appPlatformRegistry): Platform[] {
-  return registry.all().filter((adapter) => adapter.capabilities.streams.length > 0).map((adapter) => adapter.key);
-}
-
-/** Whether the legacy page-sync executor serves `platform`. */
-export function isLegacyExecutorPlatform(
-  platform: Platform,
-  registry: AppPlatformRegistry = appPlatformRegistry,
-): boolean {
-  return legacyExecutorPlatforms(registry).includes(platform);
-}

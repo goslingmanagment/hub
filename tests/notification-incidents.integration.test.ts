@@ -14,13 +14,12 @@ vi.mock("../apps/runtime/src/services/telegram.ts", () => ({
 import {
   createFanslyPage,
   createModel,
+  createOnlyFansPage,
   ensurePageSyncStates,
   finishSyncRequestAttempt,
   getNotificationIncidentByKey,
-  getPageSyncState,
   insertSyncRequestAttempt,
   listNotificationIncidents,
-  markPageSyncAuthBlocked,
   openNotificationIncident,
   resolveNotificationIncident,
   startSyncRun,
@@ -28,8 +27,9 @@ import {
 
 import {
   handleSuccessfulPageVerificationRecovery,
-  notifyAuthFailedIncident,
+  notifyOfapiAuthIncident,
   notifySyncChunkFailureIncident,
+  resolveOfapiAuthIncident,
   resolveSyncChunkRecoveryIncidents,
 } from "../apps/runtime/src/services/notification-incidents.ts";
 import {
@@ -144,6 +144,12 @@ describe("notification incidents integration", () => {
     }
   });
 
+  // The page-wide latch of the cases below is the OFAPI auth alert
+  // (`ofapi_auth`): it opens and resolves through the same latch machinery as
+  // every page-level producer. The legacy executor's own auth latch
+  // (`auth_blocked`) has no producer since step 4 (S4-19: the executor serves
+  // no Fansly page); the resolvers that close one an older build left open are
+  // covered with latches seeded as that producer left them.
   it("opens auth incidents once, resolves them on recovery, and reopens after a later recurrence", async (context) => {
     if (!testDb) {
       context.skip();
@@ -154,55 +160,32 @@ describe("notification incidents integration", () => {
       slug: "auth-model",
       name: "Auth Model",
     });
-    const page = await createFanslyPage(testDb.db, {
-      modelId: model.id,
+    const page = await createOnlyFansPage(testDb.db, {
+      modelId: model!.id,
       label: "auth-page",
     });
-    await ensurePageSyncStates(testDb.db, {
-      pageId: page.id,
-    });
-
+    const latch = { platformAccountId: page!.id, pageLabel: page!.label, platform: "onlyfans" } as const;
     const app = createTestAppContext(testDb);
 
-    await notifyAuthFailedIncident(app, {
-      platformAccountId: page.id,
-      pageLabel: page.label,
-      platform: "fansly",
-      errorSummary: "session expired",
-    });
-    await notifyAuthFailedIncident(app, {
-      platformAccountId: page.id,
-      pageLabel: page.label,
-      platform: "fansly",
-      errorSummary: "session expired",
-    });
+    await notifyOfapiAuthIncident(app, { ...latch, authStatus: "authentication_failed" });
+    await notifyOfapiAuthIncident(app, { ...latch, authStatus: "authentication_failed" });
 
-    let incident = await getNotificationIncidentByKey(testDb.db, `auth_blocked:${page.id}`);
+    let incident = await getNotificationIncidentByKey(testDb.db, `ofapi_auth:${page!.id}`);
     expect(incident?.status).toBe("open");
     expect(telegramMocks.sendTelegramMessage).not.toHaveBeenCalled();
 
-    await resolveSyncChunkRecoveryIncidents(app, {
-      platformAccountId: page.id,
-      pageLabel: page.label,
-      platform: "fansly",
-      stream: "light",
-      providerRecoveredAt: new Date(),
-    });
+    await resolveOfapiAuthIncident(app, { ...latch, recoveredAt: new Date() });
 
-    incident = await getNotificationIncidentByKey(testDb.db, `auth_blocked:${page.id}`);
+    incident = await getNotificationIncidentByKey(testDb.db, `ofapi_auth:${page!.id}`);
     expect(incident?.status).toBe("resolved");
     expect(telegramMocks.sendTelegramMessage).not.toHaveBeenCalled();
 
-    await notifyAuthFailedIncident(app, {
-      platformAccountId: page.id,
-      pageLabel: page.label,
-      platform: "fansly",
-      errorSummary: "session expired again",
-    });
+    await notifyOfapiAuthIncident(app, { ...latch, authStatus: "otp_code_required" });
 
-    incident = await getNotificationIncidentByKey(testDb.db, `auth_blocked:${page.id}`);
+    incident = await getNotificationIncidentByKey(testDb.db, `ofapi_auth:${page!.id}`);
     expect(incident?.status).toBe("open");
     expect(incident?.resolvedAt).toBeNull();
+    expect(incident?.errorCode).toBe("otp_code_required");
     expect(telegramMocks.sendTelegramMessage).not.toHaveBeenCalled();
   });
 
@@ -701,7 +684,7 @@ describe("notification incidents integration", () => {
     expect(incident?.lastSeenAt.toISOString()).toBe(laterSeenAt.toISOString());
   });
 
-  it("clears auth_blocked state and resolves page-level incidents after successful verification recovery", async (context) => {
+  it("resolves the page-level incidents an older build left open after a successful verification", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -717,11 +700,6 @@ describe("notification incidents integration", () => {
     });
     await ensurePageSyncStates(testDb.db, {
       pageId: page.id,
-    });
-    await markPageSyncAuthBlocked(testDb.db, {
-      pageId: page.id,
-      errorCode: "auth_blocked",
-      errorSummary: "expired session",
     });
     await openNotificationIncident(testDb.db, {
       incidentKey: `auth_blocked:${page.id}`,
@@ -746,6 +724,13 @@ describe("notification incidents integration", () => {
       },
     });
 
+    const legacyRows = async () => (await testDb!.pool.query(
+      "select stream, status, blocker_kind, request_seq, applied_seq, updated_at from page_sync_states where page_id = $1 order by stream",
+      [page.id],
+    )).rows;
+    const legacyRowsBefore = await legacyRows();
+    expect(legacyRowsBefore.length).toBeGreaterThan(0);
+
     const app = createTestAppContext(testDb);
     await handleSuccessfulPageVerificationRecovery(app, {
       platformAccountId: page.id,
@@ -753,14 +738,8 @@ describe("notification incidents integration", () => {
       platform: "fansly",
     });
 
-    const statusRows = await testDb.pool.query<{ count: string }>(`
-      select count(*)::int as count
-      from page_sync_states
-      where page_id = $1
-        and status = 'blocked'
-        and blocker_kind = 'auth'
-    `, [page.id]);
-    expect(statusRows.rows[0]?.count).toBe(0);
+    // The page's legacy rows are not the verification's to touch.
+    expect(await legacyRows()).toEqual(legacyRowsBefore);
 
     const incidents = await listNotificationIncidents(testDb.db, {
       platformAccountId: page.id,
@@ -778,7 +757,7 @@ describe("notification incidents integration", () => {
     expect(telegramMocks.sendTelegramMessage).not.toHaveBeenCalled();
   });
 
-  it("does not clear newer page-level failures from stale verification recovery", async (context) => {
+  it("does not resolve newer page-level failures from a stale verification recovery", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -799,12 +778,6 @@ describe("notification incidents integration", () => {
     const recoveredAt = new Date("2026-03-15T12:00:00.000Z");
     const newerFailureAt = new Date("2026-03-15T12:00:01.000Z");
 
-    await markPageSyncAuthBlocked(testDb.db, {
-      pageId: page.id,
-      errorCode: "auth_blocked",
-      errorSummary: "new session failure",
-      now: newerFailureAt,
-    });
     await openNotificationIncident(testDb.db, {
       incidentKey: `auth_blocked:${page.id}`,
       kind: "auth_blocked",
@@ -838,12 +811,6 @@ describe("notification incidents integration", () => {
       recoveredAt,
     });
 
-    expect(await getPageSyncState(testDb.db, page.id, "light")).toMatchObject({
-      status: "blocked",
-      blockerKind: "auth",
-      lastErrorSummary: "new session failure",
-    });
-
     const incidents = await listNotificationIncidents(testDb.db, {
       platformAccountId: page.id,
     });
@@ -872,48 +839,30 @@ describe("notification incidents integration", () => {
       slug: "delayed-failure-recovery-model",
       name: "Delayed Failure Recovery Model",
     });
-    const page = await createFanslyPage(testDb.db, {
-      modelId: model.id,
+    const page = await createOnlyFansPage(testDb.db, {
+      modelId: model!.id,
       label: "delayed-failure-recovery-page",
     });
+    const latch = { platformAccountId: page!.id, pageLabel: page!.label, platform: "onlyfans" } as const;
 
     const failureAt = new Date("2026-03-15T12:00:00.000Z");
     const recoveredAt = new Date("2026-03-15T12:00:01.000Z");
     const laterFailureAt = new Date("2026-03-15T12:00:02.000Z");
     const app = createTestAppContext(testDb);
 
-    await handleSuccessfulPageVerificationRecovery(app, {
-      platformAccountId: page.id,
-      pageLabel: page.label,
-      platform: "fansly",
-      recoveredAt,
-    });
+    await resolveOfapiAuthIncident(app, { ...latch, recoveredAt });
 
-    await notifyAuthFailedIncident(app, {
-      platformAccountId: page.id,
-      pageLabel: page.label,
-      platform: "fansly",
-      errorCode: "auth_blocked",
-      errorSummary: "old delayed failure",
-      occurredAt: failureAt,
-    });
+    await notifyOfapiAuthIncident(app, { ...latch, authStatus: "old_delayed_failure", occurredAt: failureAt });
 
-    expect(await getNotificationIncidentByKey(testDb.db, `auth_blocked:${page.id}`)).toBeNull();
+    expect(await getNotificationIncidentByKey(testDb.db, `ofapi_auth:${page!.id}`)).toBeNull();
     expect(telegramMocks.sendTelegramMessage).not.toHaveBeenCalled();
 
-    await notifyAuthFailedIncident(app, {
-      platformAccountId: page.id,
-      pageLabel: page.label,
-      platform: "fansly",
-      errorCode: "auth_blocked",
-      errorSummary: "new failure after recovery",
-      occurredAt: laterFailureAt,
-    });
+    await notifyOfapiAuthIncident(app, { ...latch, authStatus: "new_failure_after_recovery", occurredAt: laterFailureAt });
 
-    const incident = await getNotificationIncidentByKey(testDb.db, `auth_blocked:${page.id}`);
+    const incident = await getNotificationIncidentByKey(testDb.db, `ofapi_auth:${page!.id}`);
     expect(incident).toMatchObject({
       status: "open",
-      errorSummary: "new failure after recovery",
+      errorCode: "new_failure_after_recovery",
     });
     expect(incident?.lastSeenAt.toISOString()).toBe(laterFailureAt.toISOString());
     expect(telegramMocks.sendTelegramMessage).not.toHaveBeenCalled();
@@ -980,87 +929,6 @@ describe("notification incidents integration", () => {
     expect(telegramMocks.sendTelegramMessage).not.toHaveBeenCalled();
   });
 
-  // W3.3 (D4-N1): if the auth-block clear fails, the incidents are still
-  // TRUE — nothing resolves, and the caller reports syncUnblocked:false.
-  it("keeps incidents open and reports syncUnblocked=false when the auth-block clear fails", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    const model = (await createModel(testDb.db, {
-      slug: "clear-failure-model",
-      name: "Clear Failure Model",
-    }))!;
-    const page = (await createFanslyPage(testDb.db, {
-      modelId: model.id,
-      label: "clear-failure-page",
-    }))!;
-    await ensurePageSyncStates(testDb.db, {
-      pageId: page.id,
-    });
-    await markPageSyncAuthBlocked(testDb.db, {
-      pageId: page.id,
-      errorCode: "auth_blocked",
-      errorSummary: "expired session",
-    });
-    await openNotificationIncident(testDb.db, {
-      incidentKey: `auth_blocked:${page.id}`,
-      kind: "auth_blocked",
-      platformAccountId: page.id,
-      errorCode: "auth_blocked",
-      errorSummary: "expired session",
-      metadata: { pageLabel: page.label, platform: "fansly" },
-    });
-    await openNotificationIncident(testDb.db, {
-      incidentKey: `proxy_failed:${page.id}`,
-      kind: "proxy_failed",
-      platformAccountId: page.id,
-      errorCode: "transport",
-      errorSummary: "proxy down",
-      metadata: { pageLabel: page.label, platform: "fansly" },
-    });
-
-    const app = createTestAppContext(testDb);
-    const failingApp = {
-      ...app,
-      db: new Proxy(app.db, {
-        get(target, prop, receiver) {
-          if (prop === "execute") {
-            return () => Promise.reject(new Error("connection reset during clear"));
-          }
-          return Reflect.get(target, prop, receiver);
-        },
-      }) as typeof app.db,
-    };
-
-    const result = await handleSuccessfulPageVerificationRecovery(failingApp, {
-      platformAccountId: page.id,
-      pageLabel: page.label,
-      platform: "fansly",
-    });
-    expect(result).toEqual({ syncUnblocked: false });
-
-    // Streams stay blocked; both incidents stay open; nothing paged Resolved.
-    const blockedRows = await testDb.pool.query<{ count: number }>(`
-      select count(*)::int as count
-      from page_sync_states
-      where page_id = $1
-        and status = 'blocked'
-        and blocker_kind = 'auth'
-    `, [page.id]);
-    expect(blockedRows.rows[0]?.count).toBeGreaterThan(0);
-
-    const incidents = await listNotificationIncidents(testDb.db, {
-      platformAccountId: page.id,
-    });
-    expect(incidents).toEqual(expect.arrayContaining([
-      expect.objectContaining({ kind: "auth_blocked", status: "open" }),
-      expect.objectContaining({ kind: "proxy_failed", status: "open" }),
-    ]));
-    expect(telegramMocks.sendTelegramMessage).not.toHaveBeenCalled();
-  });
-
   // Producers stamp their event time before persisting, so two concurrent
   // terminals routinely reach the repository in the reverse order. Ordering
   // must follow the EVENT, never the arrival.
@@ -1074,12 +942,13 @@ describe("notification incidents integration", () => {
       slug: "out-of-order-failure-model",
       name: "Out Of Order Failure Model",
     }))!;
-    const page = (await createFanslyPage(testDb.db, {
+    const page = (await createOnlyFansPage(testDb.db, {
       modelId: model.id,
       label: "out-of-order-failure-page",
     }))!;
+    const latch = { platformAccountId: page.id, pageLabel: page.label, platform: "onlyfans" } as const;
     const app = createTestAppContext(testDb);
-    const incidentKey = `auth_blocked:${page.id}`;
+    const incidentKey = `ofapi_auth:${page.id}`;
 
     const earlyFailureAt = new Date("2026-03-15T12:00:00.000Z");
     const recoveredAt = new Date("2026-03-15T12:00:01.500Z");
@@ -1087,49 +956,25 @@ describe("notification incidents integration", () => {
     const laterRecoveryAt = new Date("2026-03-15T12:00:03.000Z");
 
     // The NEWEST failure lands first.
-    await notifyAuthFailedIncident(app, {
-      platformAccountId: page.id,
-      pageLabel: page.label,
-      platform: "fansly",
-      errorCode: "auth_blocked",
-      errorSummary: "newest failure",
-      occurredAt: lateFailureAt,
-    });
+    await notifyOfapiAuthIncident(app, { ...latch, authStatus: "newest_failure", occurredAt: lateFailureAt });
 
     // A delayed OLDER failure is processed afterwards. It must not move
     // last_seen_at backwards, and must not rewrite the current cause.
-    await notifyAuthFailedIncident(app, {
-      platformAccountId: page.id,
-      pageLabel: page.label,
-      platform: "fansly",
-      errorCode: "auth_blocked",
-      errorSummary: "stale delayed failure",
-      occurredAt: earlyFailureAt,
-    });
+    await notifyOfapiAuthIncident(app, { ...latch, authStatus: "stale_delayed_failure", occurredAt: earlyFailureAt });
 
     let incident = await getNotificationIncidentByKey(testDb.db, incidentKey);
-    expect(incident).toMatchObject({ status: "open", errorSummary: "newest failure" });
+    expect(incident).toMatchObject({ status: "open", errorCode: "newest_failure" });
     expect(incident?.lastSeenAt.toISOString()).toBe(lateFailureAt.toISOString());
 
     // A recovery that predates the newest failure must NOT resolve it. With a
     // regressed last_seen_at the maxLastSeenAt guard would have let it through.
-    await handleSuccessfulPageVerificationRecovery(app, {
-      platformAccountId: page.id,
-      pageLabel: page.label,
-      platform: "fansly",
-      recoveredAt,
-    });
+    await resolveOfapiAuthIncident(app, { ...latch, recoveredAt });
 
     incident = await getNotificationIncidentByKey(testDb.db, incidentKey);
-    expect(incident).toMatchObject({ status: "open", errorSummary: "newest failure" });
+    expect(incident).toMatchObject({ status: "open", errorCode: "newest_failure" });
 
     // A recovery that genuinely postdates it still resolves.
-    await handleSuccessfulPageVerificationRecovery(app, {
-      platformAccountId: page.id,
-      pageLabel: page.label,
-      platform: "fansly",
-      recoveredAt: laterRecoveryAt,
-    });
+    await resolveOfapiAuthIncident(app, { ...latch, recoveredAt: laterRecoveryAt });
 
     incident = await getNotificationIncidentByKey(testDb.db, incidentKey);
     expect(incident).toMatchObject({ status: "resolved" });
@@ -1146,27 +991,26 @@ describe("notification incidents integration", () => {
       slug: "tie-timestamp-model",
       name: "Tie Timestamp Model",
     }))!;
-    const page = (await createFanslyPage(testDb.db, {
+    const page = (await createOnlyFansPage(testDb.db, {
       modelId: model.id,
       label: "tie-timestamp-page",
     }))!;
     const app = createTestAppContext(testDb);
     const occurredAt = new Date("2026-03-15T12:00:00.000Z");
 
-    for (const errorSummary of ["first writer", "same-millisecond repeat"]) {
-      await notifyAuthFailedIncident(app, {
+    for (const authStatus of ["first_writer", "same_millisecond_repeat"]) {
+      await notifyOfapiAuthIncident(app, {
         platformAccountId: page.id,
         pageLabel: page.label,
-        platform: "fansly",
-        errorCode: "auth_blocked",
-        errorSummary,
+        platform: "onlyfans",
+        authStatus,
         occurredAt,
       });
     }
 
     // First-writer-wins: two events sharing a millisecond have no trustworthy
     // secondary order, so the stored cause is not churned.
-    const incident = await getNotificationIncidentByKey(testDb.db, `auth_blocked:${page.id}`);
-    expect(incident).toMatchObject({ status: "open", errorSummary: "first writer" });
+    const incident = await getNotificationIncidentByKey(testDb.db, `ofapi_auth:${page.id}`);
+    expect(incident).toMatchObject({ status: "open", errorCode: "first_writer" });
   });
 });

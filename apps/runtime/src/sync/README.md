@@ -18,6 +18,11 @@ so the legacy planner and executor seed, schedule, wake and lease OnlyFans pages
 `legacy_sync_retired`, the owner's trigger scopes of a Fansly page resolve straight to the registry keys
 (`services/sync-engine-levers.ts` `FANSLY_ENGINE_SCOPE_STREAMS`), and `sync rollback` refuses. Nothing writes a Fansly
 page's legacy rows (`page_sync_states`) any more; they are left as they are until S4-21 parks them.
+Since S4-19 the executor holds nothing of Fansly either: `services/sync/` has no Fansly handler, error class, page
+provider hold (R04) or import of the Fansly HTTP package, and the owner's `/account/me` levers (page verify, a
+credentials or proxy change) have no legacy sender behind them. `onlyfans/boundary.ts` is where that executor's
+platform set is read from; the planner and the executor scope every page-sync query with it and assert it before they
+wake or run a page (tests/sync-onlyfans-boundary.test.ts is the ratchet).
 
 ## Map
 
@@ -52,9 +57,9 @@ sync/
                              page's socket (`source.ts`)
     lib/                     chain rules, walk helpers; the money, audience, fan-hydration, purchase-history, stats,
                              media-stats, notifications, payouts, post-replies, catalog, posts and lane rules the
-                             resources use (step 4 moved them here: the legacy executor imports them from here until
-                             it is deleted, the OnlyFans top spenders keeps the window rules and the OnlyFans posts
-                             stream the posts cursor)
+                             resources use (step 4 moved them here; what is left of the legacy executor takes only
+                             pure rules from them: the OnlyFans top spenders the window rules, the OnlyFans posts
+                             stream the posts cursor, the legacy capture seam the journal's body rules)
   requests/                  history requests, ETA, enqueue-and-wait, the legacy hydration wrapper's mapping
   report/                    `sync shadow report`: part A (the live window, the route checks), part B (the past
                              journal), the fingerprint the switch checks
@@ -64,6 +69,8 @@ sync/
   parity/                    step 4, owner decision №11: `sync dm-reader-parity` (`cli/dm-reader-parity.ts`), the
                              read-only DM reader parity of page_dm_messages and message_archive (the readers
                              serve live pages from the archive: "DM readers on the archive")
+  onlyfans/boundary.ts       step 4: where the engine ends — the platform set of the legacy page-sync executor
+                             (`services/sync/`, OnlyFans only) and its assertion in the planner and the executor
 ```
 
 Files appear PR by PR during step 2; a file in this map that is not in the tree is not merged yet. The registry
@@ -395,7 +402,9 @@ CLIs, the probes and the alias backfill answer 409 `fansly_page_on_sync_engine` 
 the engine command to use instead — except the `/account/me` levers (page verify, credentials, proxy), which
 on a `live` page go through the engine (`services/sync-engine-account.ts`: `account.verify` / `account.identity`,
 ≤ 30 s, else 409 `fansly_sync_work_queued` with the work's status link) and answer 409 `fansly_page_switching` in
-`handover`. Hydration rows the engine serves (`execution_lane = 'fansly_sync_engine'`) are never expired,
+`handover`. Since step 4 S4-19 they have no legacy path: on a Fansly page the engine does not run (`off`, `shadow` or
+no engine row) they answer 409 `legacy_sync_retired` before anything is resolved, sent or stored, and a verified
+change resolves the page's verification incidents without touching its legacy rows. Hydration rows the engine serves (`execution_lane = 'fansly_sync_engine'`) are never expired,
 reconciled or swept by the legacy cycle. Since step 4 S4-15 that cycle has no Fansly lane at all (the targeted thread
 backfill with its owner CLI, the auto-approve policy and the projection-debt sweep are deleted): it dispatches
 OnlyFans approvals only, a Fansly approval is refused at the decision, and old Fansly history is read only through
@@ -549,7 +558,7 @@ Each is enforced in exactly one place and pinned by a test (design §1). The fir
 | I18 | Every WS receipt of a `handover`/`live` page routes its demand exactly once, in the transaction that acks it. | `fansly/ws/route-receipt.ts` |
 | I19 | Between two actual sends of one page on one route (or one family): ≥ the interval of its effective rate, counted from the actual send in the journal the page runs (the legacy send log too on a live page; an unknown outcome at its upper bound); no burst, no borrowing. | `engine/route-policy.ts` (`RouteClocks`) + `engine/actor.ts` (pick exclusion, final check) |
 | I20 | One page-hold rule: a credentials hold clears only by an identity proof sent after its latest refusal, written with the apply; under it only a candidate check and one verify per changed stored digest pass (step 3b ruling 5, A3). | `packages/shared/src/fansly-page-holds.ts` (gate, final admission, rollback, status, alerts) + `engine/commit.ts` (`recordIdentityProof`) |
-| I21 | The legacy page-sync executor serves only the platforms whose adapter declares streams (OnlyFans since step 4 S4-10): no Fansly page's legacy state is seeded, scheduled, woken, leased or requested, and `sync rollback` refuses. | `platforms/registry.ts` (`legacyExecutorPlatforms`) + `services/sync/planner.ts` + `services/sync/executor.ts` + `services/sync-control.ts` (`assertLegacyExecutorServes`) |
+| I21 | The legacy page-sync executor serves only the platforms whose adapter declares streams (OnlyFans since step 4 S4-10): no Fansly page's legacy state is seeded, scheduled, woken, leased or requested, and `sync rollback` refuses. The planner and the executor scope their queries to that set and assert it before a wake-up or a run; `services/sync/` holds no Fansly handler, error class or Fansly HTTP import (S4-19). | `onlyfans/boundary.ts` (`legacyExecutorPlatforms`, `assertLegacyExecutorPage`) over `platforms/registry.ts` + `services/sync/planner.ts` + `services/sync/executor.ts` + `services/sync-control.ts` (`assertLegacyExecutorServes`); tests/sync-onlyfans-boundary.test.ts |
 | I22 | Only a live page's socket source in `sync` opens a Fansly WebSocket (step 4 S4-12): the receiver helper is the one place that constructs a socket, its Upgrade on a send lease (the engine's, over the pacer's one-shot check); no worker, lane or script opens one. | `fansly/ws/source.ts` + `services/egress/fansly-receiver-socket.ts`; tests/fansly-send-guard-boundary.test.ts |
 | I23 | The Sync Engine writes no `page_dm_messages` row: a live page's messages go to `message_archive`; the engine only marks the deletion of rows legacy stored (`markFanslyWsHotDeletion`, sticky). | `fansly/resources/dm-messages.ts` + `fansly/resources/dm-live.ts`, pinned by `tests/page-dm-messages-boundary.test.ts` |
 

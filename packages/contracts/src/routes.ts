@@ -3290,9 +3290,10 @@ export const verifyPageResponseSchema = z.object({
   verified: z.boolean(),
   username: z.string().nullable(),
   platform: platformEnum,
-  // W3.3 (D4-N1): false = the credentials verified but the auth block could
-  // not be cleared — streams stay blocked and the incidents stay open; the
-  // dashboard renders a warning instead of an all-clear.
+  // W3.3 (D4-N1): false meant the credentials verified but the legacy auth
+  // block could not be cleared. Always true since step 4 (S4-19): a Fansly
+  // page is verified by the Sync Engine, which clears its own hold by its own
+  // proof, and no legacy block is left to clear. Kept for the clients.
   syncUnblocked: z.boolean(),
 });
 
@@ -7904,9 +7905,11 @@ const baseRouteSchemas = {
     tags: ["admin"],
     summary: "Verify stored credentials for a page",
     description:
-      "On a page the Fansly Sync Engine runs (`live`) the verify is the engine's `account.verify`, answered "
+      "A Fansly page is verified by the Fansly Sync Engine's `account.verify` on the page it runs (`live`), answered "
       + "within 30 s; 409 `fansly_sync_work_queued` (with `statusUrl`) when it is still queued, 409 "
-      + "`fansly_page_switching` while the page is being switched (nothing was sent).",
+      + "`fansly_page_switching` while the page is being switched, 409 `legacy_sync_retired` for a Fansly page "
+      + "the engine does not run (nothing was sent: no legacy check is left). An OnlyFans page has no pasted "
+      + "credentials to verify (400).",
     params: pageParamsSchema,
     response: {
       200: verifyPageResponseSchema,
@@ -7922,10 +7925,11 @@ const baseRouteSchemas = {
     tags: ["admin"],
     summary: "Update credentials for an existing page",
     description:
-      "On a page the Fansly Sync Engine runs (`live`) the candidate session/proxy is checked by the engine's "
-      + "`account.identity` (≤ 30 s) before anything is stored, then stored and trusted as the exact pair the "
-      + "check proved; 409 `fansly_sync_work_queued` (with `statusUrl`) when the check is still queued, 409 "
-      + "`fansly_page_switching` while the page is being switched (nothing was sent and nothing was stored), 409 "
+      "The candidate session/proxy of a Fansly page is checked by the Fansly Sync Engine's `account.identity` "
+      + "on the page it runs (`live`, ≤ 30 s) before anything is stored, then stored and trusted as the exact pair "
+      + "the check proved; 409 `fansly_sync_work_queued` (with `statusUrl`) when the check is still queued, 409 "
+      + "`fansly_page_switching` while the page is being switched, 409 `legacy_sync_retired` for a Fansly page the "
+      + "engine does not run (nothing was sent and nothing was stored: no legacy check is left), 409 "
       + "`fansly_credentials_changed` when the stored credentials changed during the check (nothing was stored). "
       + "An engine auth hold ends once the engine's verify of the stored new credentials passes.",
     params: pageParamsSchema,

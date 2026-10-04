@@ -9,8 +9,7 @@ import {
 } from "../apps/runtime/src/services/staged-config.ts";
 
 // A minimal AppConfig with the fields applyBootOverrides reads/writes: the 11 boot
-// boolean flags plus the fields the generic merged-invariant check consults. Partial
-// cast keeps the test free of the full env schema.
+// boolean flags. Partial cast keeps the test free of the full env schema.
 function baseConfig(): AppConfig {
   return {
     ofapiDmProjectionEnabled: false,
@@ -26,9 +25,6 @@ function baseConfig(): AppConfig {
     onlyFansTopSpendersEnabled: false,
     // A STAGED key with runtimeApply 'none' (must never boot-apply).
     onlyFansDmPollingEnabled: false,
-    // Invariant inputs (generic/defensive; no current boot key touches these).
-    syncPageExecutorConcurrency: 1,
-    syncSharedRateLimitEnabled: true,
     // A runtimeApply:'none' editable key that must never be boot-applied.
     logLevel: "info",
   } as unknown as AppConfig;
@@ -140,30 +136,22 @@ describe("applyBootOverrides", () => {
     expect(result.skipped.map((s) => s.key)).toContain("ofapiDmSyncEnabled");
   });
 
-  it("reverts overrides and records a reason when the merged config breaks an invariant (generic regression)", () => {
-    // No current boot key participates in an invariant, so synthesize one by starting
-    // from a config that is one boot flip away from a violation: concurrency > 1 with
-    // the shared limiter env-OFF, and a boot override that (hypothetically) flips a key.
-    // We exercise the revert path by making the BASE config already invariant-violating
-    // after a boot apply: set concurrency high + limiter off in env, then confirm a
-    // boot apply that leaves the violation intact reverts the applied key.
+  it("applies an override whatever the page executor's concurrency and the retired shared limiter key say", () => {
+    // The last merged-config invariant (concurrency > 1 needs the shared rate
+    // limiter) went with the limiter's last reader (step 4, S4-19): an applied
+    // override is no longer reverted over it.
     const config = {
       ...baseConfig(),
       syncPageExecutorConcurrency: 4,
       syncSharedRateLimitEnabled: false,
     } as unknown as AppConfig;
     const result = applyBootOverrides(config, overrides([["ofapiDmProjectionEnabled", true]]));
-    // The merged config violates the concurrency invariant (independent of the flip), so
-    // the applied key is reverted to env and recorded as skipped; config identity is the
-    // original since nothing survived.
-    expect(result.config).toBe(config);
-    expect(result.config.ofapiDmProjectionEnabled).toBe(false);
-    const skip = result.skipped.find((s) => s.key === "ofapiDmProjectionEnabled");
-    expect(skip).toBeDefined();
-    expect(skip!.reason).toMatch(/SYNC_SHARED_RATE_LIMIT_ENABLED/);
+    expect(result.config).not.toBe(config);
+    expect(result.config.ofapiDmProjectionEnabled).toBe(true);
+    expect(result.skipped).toEqual([]);
   });
 
-  it("does not falsely revert when the merged config satisfies the invariants", () => {
+  it("applies a whole chain whose prerequisites are all on", () => {
     // Both keys participate in a chain (accountHealth requires dmSync requires dmProjection),
     // so enabling accountHealth without its prereqs would trip the requires fail-safe. Use
     // two leaf-ish keys whose prereqs are also satisfied: enable the FULL #49 chain.
