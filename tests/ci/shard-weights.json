@@ -212,6 +212,7 @@
     "tests/schema-guard.test.ts": 1.1,
     "tests/sdk.integration.test.ts": 3.4,
     "tests/subscriber-rollups.integration.test.ts": 1,
+    "tests/sync-fan-lookup-daily.integration.test.ts": 1.3,
     "tests/sync-finalization-race.integration.test.ts": 1.3,
     "tests/sync-latest-run-per-page.integration.test.ts": 1.2,
     "tests/sync-lookup-query-plans.integration.test.ts": 2.3,
