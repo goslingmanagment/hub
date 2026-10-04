@@ -217,7 +217,7 @@ describe("owner switches of the chat extension", () => {
     const switches = {
       chatExtensionEnabled: true,
       chatExtensionFeatures: JSON.stringify({
-        "*": { coach: true, recap: true, someFutureFlag: true },
+        "*": { coach: true, recap: true, stats: true, someFutureFlag: true },
         "lora-of": { coach: false, review: true },
       }),
       chatExtensionMinVersion: "1.2.0",
@@ -252,7 +252,10 @@ describe("owner switches of the chat extension", () => {
     const chatter = await bootstrapAs(chatterToken);
     expect(chatter.configRevision).toBe(firstRevision);
     expect(chatter.minVersion).toBe("1.2.0");
-    expect(chatter.flags).toEqual(Object.fromEntries(CLIENT_FEATURE_FLAG_NAMES.map((flag) => [flag, flag === "coach" || flag === "recap"])));
+    expect(chatter.flags).toEqual(Object.fromEntries(CLIENT_FEATURE_FLAG_NAMES.map((flag) => [
+      flag,
+      flag === "coach" || flag === "recap" || flag === "stats",
+    ])));
     expect(chatter.bindingsByHost).toEqual({ "onlymonster:36409": pageIds["lora-of"] });
     expect(chatter.limits.previewSendReceiptProfiles).toEqual([PROFILE]);
     const features = Object.fromEntries(chatter.pages.map((page) => [page.pageLabel, page.features]));
@@ -260,9 +263,11 @@ describe("owner switches of the chat extension", () => {
     expect(features["lora-of"]).toMatchObject({
       coach: { available: false, reason: "flag_off" },
       review: { available: true },
-      // The owner switched it on, but this hub does not serve all of Recap yet
-      // (the dossier save, `recap-profile-v1`).
-      recap: { available: false, reason: "hub_not_ready" },
+      // The hub serves all of Recap (the shared read and the dossier save).
+      recap: { available: true },
+      // The owner switched it on, but this hub does not serve the Spenders
+      // statistics yet (`spenders-stats-v1`, `awaiting-reply-v1`).
+      stats: { available: false, reason: "hub_not_ready" },
       preview: { available: false, reason: "flag_off" },
     });
     expect(features["lora-fansly"]).toEqual(everyFeature("platform_unsupported"));
@@ -346,7 +351,7 @@ describe("owner switches of the chat extension", () => {
 
     await patchOk([
       { key: "chatExtensionEnabled", value: true },
-      { key: "chatExtensionFeatures", value: JSON.stringify({ "*": { coach: true, recap: true } }) },
+      { key: "chatExtensionFeatures", value: JSON.stringify({ "*": { coach: true, recap: true, stats: true } }) },
       { key: "chatExtensionMinVersion", value: "1.2.0" },
     ]);
 
@@ -371,7 +376,9 @@ describe("owner switches of the chat extension", () => {
     await expectRefused(await probe(chatterToken, "lora-fansly", "coach", current), "platform_unsupported");
     await expectRefused(await probe(chatterToken, "lora-of", "review", current), "flag_off");
     await expectRefused(await probe(chatterToken, "nova-of", "coach", current), "binding_missing");
-    await expectRefused(await probe(chatterToken, "lora-of", "recap", current), "hub_not_ready");
+    // Switched on, but this hub does not serve what the feature needs yet.
+    await expectRefused(await probe(chatterToken, "lora-of", "stats", current), "hub_not_ready");
+    expect((await probe(chatterToken, "lora-of", "recap", current)).statusCode).toBe(200);
     // The feature check answers before the version check.
     await expectRefused(await probe(chatterToken, "lora-of", "review", "chat-extension/0.0.1"), "flag_off");
 

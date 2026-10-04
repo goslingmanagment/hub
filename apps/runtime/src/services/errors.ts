@@ -227,3 +227,25 @@ export class ContextConflictError extends AppError {
     );
   }
 }
+
+// chat-extension H-5: the dossier save named a generation of the caller whose
+// record has not appeared. The gateway writes the record right after the
+// stream's `done` frame, so a request made in that gap is repeated shortly.
+// 409: nothing is wrong with the request, the hub's state is not there yet.
+// It can stay for good when the record's write failed, so a client bounds its
+// repeats.
+export class GenerationNotReadyError extends AppError {
+  constructor() {
+    super("The generation is not recorded yet; ask again shortly", 409, "generation_not_ready");
+  }
+}
+
+// chat-extension H-5: the caller's generation exists and will never become the
+// fan's dossier. 409, never retried. Documented structured extension
+// (docs/error-handling.md §3): the machine `reason` beside the code, one of the
+// open vocabulary CLIENT_GENERATION_NOT_ELIGIBLE_REASONS.
+export class GenerationNotEligibleError extends AppError {
+  constructor(readonly reason: string) {
+    super(`The generation cannot be saved as the fan's dossier (${reason})`, 409, "generation_not_eligible");
+  }
+}

@@ -212,6 +212,64 @@ export const clientConversationRecapsResponseSchema = z.object({
   fullSavedToProfile: z.boolean(),
 });
 
+// ── dossier from a generation (H-5) ──────────────────────────────────────────
+//
+// Saves a finished full recap as the fan's dossier on the page. The client
+// names the generation (`generationRef`, the `meta.requestId` of its own
+// `fan-summary` request) and the hub copies the text from the record it stored:
+// the text never travels back through the client, so the dossier is exactly
+// what the model wrote.
+
+/**
+ * The client's own request id as it travels: 8-4-4-4-12 hex, any case and any
+ * version nibble. Wider than `z.string().uuid()` on purpose: the chat extension
+ * froze this form for the ids it mints, and the value is only compared with the
+ * request id of an AI request the caller already made. Spelled without a flag,
+ * so the OpenAPI document states the same pattern.
+ */
+export const CLIENT_REQUEST_ID_PATTERN = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+/**
+ * Known `reason` values of 409 `generation_not_eligible`: why a stored
+ * generation of the caller will never become the dossier. On the wire an open
+ * token; append-only.
+ * - `not_full_summary`: not a `fan-summary`, or not its full mode;
+ * - `not_completed`: the generation failed or was cancelled;
+ * - `stop_reason_missing`: it recorded no stop reason, so nothing proves it ended;
+ * - `output_exhausted`: its output ran into the limit (`max_tokens`, `length`);
+ * - `empty`: it has no text;
+ * - `context_scope`: its context held something only its caller saw;
+ * - `too_long`: its text is longer than a dossier may be;
+ * - `superseded`: the fan's dossier already holds a text that is not older.
+ */
+export const CLIENT_GENERATION_NOT_ELIGIBLE_REASONS = [
+  "not_full_summary", "not_completed", "stop_reason_missing", "output_exhausted", "empty",
+  "context_scope", "too_long", "superseded",
+] as const;
+export type ClientGenerationNotEligibleReason = (typeof CLIENT_GENERATION_NOT_ELIGIBLE_REASONS)[number];
+
+export const clientFanProfileFromGenerationBodySchema = z.object({
+  /** The generation's `meta.requestId`. */
+  generationRef: z.string().min(1).max(100),
+  /** The `clientRequestId` of the AI request that made the generation. With it
+   *  the hub tells a generation whose record has not appeared yet (409
+   *  `generation_not_ready`) from one it does not know (404). */
+  clientRequestId: z.string().regex(CLIENT_REQUEST_ID_PATTERN).optional(),
+}).strict();
+
+export const clientFanProfileFromGenerationResponseSchema = z.object({
+  /** `created`: a new dossier version was written. `existing`: a version of
+   *  the fan's dossier on this page already has exactly this text. */
+  outcome: z.enum(["created", "existing"]),
+  /** The dossier version that holds the generation's text. */
+  profile: z.object({
+    version: positive,
+    createdAt: isoTimestamp,
+    /** When the text was generated; null on a version an older client wrote without it. */
+    sourceGeneratedAt: isoTimestamp.nullable(),
+  }),
+});
+
 export const clientRouteSchemas = {
   clientBootstrap: {
     auth: { kind: "apiKey" },
@@ -249,6 +307,32 @@ export const clientRouteSchemas = {
       409: errorResponseSchema,
     },
   },
+  clientFanProfileFromGeneration: {
+    auth: { kind: "apiKey", scope: "page" },
+    tags: ["client"],
+    summary: "Save a finished full recap as the fan's dossier, from the generation the hub stored",
+    description: "Database-only: no platform request, no generation, no AI spend. The caller names one of its "
+      + "own generations by `generationRef` (the `meta.requestId` of the AI request) and the hub writes "
+      + "that generation's text as a new dossier version of the fan on the page (`fanRef` is the OnlyFans "
+      + "fan id, which is the chat id). Only a generation of the same user, page and fan is found (404 "
+      + "otherwise), and only a usable full `fan-summary` is saved: 409 `generation_not_eligible` with a "
+      + "`reason` for any other. Idempotent: when a version of the fan's dossier already has exactly this "
+      + "text, the answer is `existing` and nothing is written. The generation's record appears shortly "
+      + "after the stream's `done` frame; until then, a request that names its `clientRequestId` is "
+      + "answered 409 `generation_not_ready` and may be repeated. That answer can stay for good when the "
+      + "record was never written, so a client bounds its repeats. Behind the chat-extension `recap` "
+      + "switch: 409 `client_feature_disabled` with the reason.",
+    params: clientPageFanParamsSchema,
+    body: clientFanProfileFromGenerationBodySchema,
+    response: {
+      200: clientFanProfileFromGenerationResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
 } as const;
 
 export type ClientFeatureAvailability = z.infer<typeof clientFeatureAvailabilitySchema>;
@@ -259,6 +343,8 @@ export type ClientBootstrapResponse = z.infer<typeof clientBootstrapResponseSche
 export type ClientConversationRecapsQuery = z.infer<typeof clientConversationRecapsQuerySchema>;
 export type ClientRecapBody = z.infer<typeof clientRecapBodySchema>;
 export type ClientConversationRecapsResponse = z.infer<typeof clientConversationRecapsResponseSchema>;
+export type ClientFanProfileFromGenerationBody = z.infer<typeof clientFanProfileFromGenerationBodySchema>;
+export type ClientFanProfileFromGenerationResponse = z.infer<typeof clientFanProfileFromGenerationResponseSchema>;
 
 // ── client_health v1 (H-11a) ─────────────────────────────────────────────────
 //

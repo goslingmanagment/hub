@@ -51,6 +51,7 @@ pages that account is granted; the owner is granted every page implicitly.
 | Desktop read gateway — `/ofapi/read/*` (`apiKey`) | no (403) | yes, assigned | no (403) | yes, assigned | no (403) | **yes, assigned** | — | no (403) |
 | Chat-extension bootstrap — `/client/bootstrap` (`apiKey`) | no (403) | yes, every page | no (403) | yes, assigned | no (403) | **yes, assigned** | — | yes, by the role's reach |
 | Chat-extension shared recaps — `/client/pages/{label}/conversations/{fan}/recaps` (`apiKey` + page scope) | no (403) | yes, every page | no (403) | yes, assigned | no (403) | **yes, assigned** | — | yes, by the role's reach |
+| Chat-extension dossier save — `/client/pages/{label}/fans/{fan}/profile/from-generation` (`apiKey` + page scope) | no (403) | own generations, every page | no (403) | own generations, assigned | no (403) | **own generations, assigned** | — | own generations, by the role's reach |
 
 The client bootstrap lists the caller's **active** pages only (a tombstoned
 page is never listed, assigned or not) and announces every feature off until
@@ -99,6 +100,32 @@ Its row is held by `client-recaps.integration`: every cell, the agent key, a
 page that is not granted and one that does not exist, in both auth-policy
 modes, and two chatters of one page reading the same recap.
 
+The dossier save from a stored generation (chat-extension H-5) writes the
+fan's dossier, as the older `PUT …/fans/{fan}/profile` does, with one
+difference in who decides the text: the caller names one of its own
+generations and the hub copies the text from the restricted record. The right
+is narrower than the page grant on purpose:
+
+- only the **author's own** generation is found. Another person's generation
+  answers 404 exactly as one that does not exist, to a chatter of the same
+  page, to the team lead and to the owner alike: the route is no way to learn
+  that a generation exists, and no way to publish someone else's;
+- only of the page in the path and of the fan in the path, and only a usable
+  full recap (the same rule as the shared recaps, so never one with a
+  `contextScope`);
+- nothing of the record comes back: the answer is the dossier version's
+  number and times;
+- only on a page granted to the caller, and only while the owner's `recap`
+  switch is on for it. A page that is not the caller's answers as on the
+  shared recaps (403 / 404 with the policy enforced, `409
+  client_feature_disabled` / `not_granted` in `log` mode).
+
+The chat-extension token saves a dossier this way only: the older write is
+not on its list. Its row is held by `client-profile-from-generation.integration`:
+every cell, the agent key, a page that is not granted and one that does not
+exist, in both auth-policy modes, and another person's generation refused for
+every role.
+
 Fresh text (chat-extension H-4c, `liveTextContext` on the AI feature stream)
 adds no right and no route. A caller who may generate for a page may send the
 last messages its client read off that page's open chat; they join the
@@ -126,8 +153,9 @@ reaches only the routes of `CLIENT_TOKEN_PROFILES["chat-extension"]`
 (`packages/contracts/src/client-token-scopes.ts`; the "chat-extension token"
 column of the [generated policy table](generated/authorization-policy.md)):
 who am I, the bootstrap, the persona catalogue without prompt texts, the AI
-feature stream, the recap status, the shared recaps, the fan and conversation
-profiles, the spenders reads, the capture lane and revoking itself. Every other route
+feature stream, the recap status, the shared recaps, the dossier save from a
+stored generation, the fan and conversation profiles, the spenders reads, the
+capture lane and revoking itself. Every other route
 answers a plain 403 with no `reason`, in **both** auth-policy modes, before any
 handler runs; page scope still applies on the listed routes, and a revoked or
 expired token still answers 401 with its reason. On the capture lane it sends

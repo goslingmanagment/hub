@@ -11,6 +11,11 @@ import { ECMASCRIPT_TRIM_CHARACTERS } from "./ai-completion.ts";
 // ruling "recaps are shared"). That exception is getFreshestUsableRecapBodies
 // below and nothing else: it selects no prompt block, no other feature and no
 // row outside usableFanSummaryPredicate.
+//
+// The dossier save from a stored generation (chat-extension H-5,
+// client-profile-from-generation.ts) reads a record too, and returns none of
+// it: the hub copies the text of the caller's own usable full recap into the
+// fan's dossier.
 
 export interface InsertAiGenerationContentInput {
   usageEventId: number | null;

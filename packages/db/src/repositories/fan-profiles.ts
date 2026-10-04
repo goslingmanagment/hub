@@ -15,7 +15,12 @@ export interface AppendFanProfileInput {
   sourceGeneratedAt?: Date | null;
 }
 
-export async function appendFanProfile(
+/**
+ * Appends a dossier version, and says whether it did. `created` is false when
+ * a rule below answered the fan's latest version instead of writing: the
+ * latest already has this body, or it is not older than the incoming text.
+ */
+export async function appendFanProfileVersion(
   db: Database,
   input: AppendFanProfileInput,
 ) {
@@ -43,7 +48,7 @@ export async function appendFanProfile(
       // Identical body: already stored (a re-push whose ack was lost) — never
       // append a duplicate version.
       if (latest.body === input.body) {
-        return latest;
+        return { profile: latest, created: false };
       }
       // Stale write: an incoming dossier with a KNOWN source time never
       // supersedes a latest whose (source ?? append) time is not older —
@@ -52,7 +57,7 @@ export async function appendFanProfile(
       if (input.sourceGeneratedAt) {
         const latestGeneratedAt = latest.sourceGeneratedAt ?? latest.createdAt;
         if (latestGeneratedAt.getTime() >= input.sourceGeneratedAt.getTime()) {
-          return latest;
+          return { profile: latest, created: false };
         }
       }
     }
@@ -70,8 +75,17 @@ export async function appendFanProfile(
       })
       .returning();
 
-    return created;
+    return { profile: created, created: true };
   });
+}
+
+/** The dossier version the write left as the fan's latest: the new one, or the
+ * one a rule of appendFanProfileVersion kept. */
+export async function appendFanProfile(
+  db: Database,
+  input: AppendFanProfileInput,
+) {
+  return (await appendFanProfileVersion(db, input)).profile;
 }
 
 export async function getLatestFanProfile(

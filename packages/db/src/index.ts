@@ -212,3 +212,6 @@ export { saveOfapiChatQueueState, readOfapiContentEvents } from './repositories/
 // The chat extension's bootstrap page list (active, untombstoned, scoped) and
 // its config revision.
 export * from "./repositories/client-bootstrap.ts";
+// The chat extension's dossier save from a stored generation: the caller's own
+// generation, whether its AI request was admitted, a dossier version by body.
+export * from "./repositories/client-profile-from-generation.ts";

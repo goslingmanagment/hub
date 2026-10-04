@@ -19,7 +19,6 @@ import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { createBundledPersonalities, loadTranscriptContext } from "../apps/runtime/src/modules/ai/index.ts";
 import type { AiGatewayProvider, AiGatewayProviderInput } from "../apps/runtime/src/services/ai-gateway.ts";
 import { assignPageToUser, createUserAccount, setUserPassword } from "../apps/runtime/src/services/auth.ts";
-import type * as ClientCapabilitiesModule from "../apps/runtime/src/services/client-capabilities.ts";
 import { issueDeviceTokenForUserId } from "./helpers/device-credentials.ts";
 import {
   resetIntegrationDatabase,
@@ -43,29 +42,6 @@ import { fixtureUserId } from "./helpers/user-identity.ts";
 // Fixture passwords hash at minimum cost; sign-in still runs the real argon2
 // verify (tests/helpers/cheap-argon2.ts).
 vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
-
-// The chat extension asks with its narrow token, and a narrow token's
-// `fan-summary` is behind the page's `recap` feature. That feature needs
-// `recap-profile-v1` (the dossier save, H-5), which this hub does not serve
-// yet: as merged, the extension's Recap is refused `hub_not_ready` before
-// anything is read. The narrow-token test below holds exactly that first, then
-// stands in for the hub that serves the dossier save, the only state in which
-// the extension's Recap reads a transcript at all. Every other test runs the
-// hub as it is. When H-5 adds `recap-profile-v1` to SERVED_CLIENT_CAPABILITIES,
-// this mock and the `hub_not_ready` step go, here and in
-// tests/client-recaps.integration.test.ts, which carries the same stand-in.
-const hub = vi.hoisted(() => ({ servesDossierSave: false }));
-vi.mock("../apps/runtime/src/services/client-capabilities.ts", async (importOriginal) => {
-  const actual = await importOriginal<typeof ClientCapabilitiesModule>();
-  return {
-    ...actual,
-    get SERVED_CLIENT_CAPABILITIES() {
-      return hub.servesDossierSave
-        ? [...new Set([...actual.SERVED_CLIENT_CAPABILITIES, "recap-profile-v1"])]
-        : actual.SERVED_CLIENT_CAPABILITIES;
-    },
-  };
-});
 
 const PASSWORDS = { owner: "owner-secret", grisha: "grisha-secret" } as const;
 const AUDIT = { source: "cli" } as const;
@@ -314,7 +290,6 @@ describe("full Recap transcript depth (aiTranscriptDeepMaxRows)", () => {
       return;
     }
     await resetIntegrationDatabase(testDb.pool);
-    hub.servesDossierSave = false;
     app = createTestAppContext(testDb, { authPolicyEnforcement: "log" });
     app.config.chatMuseAiGatewayEnabled = true;
     app.aiGatewayProvider = capturingProvider();
@@ -489,16 +464,14 @@ describe("full Recap transcript depth (aiTranscriptDeepMaxRows)", () => {
     // its Recap is refused before anything is read.
     expectFeatureRefused(await send(await extensionRecap()), "disabled");
     expect((await patchConfig("chatExtensionEnabled", true)).statusCode).toBe(200);
-    await setRecapFlag(true);
-
-    // The hub exactly as this change leaves it: Recap on, no dossier save yet.
-    expect(await recapFeature()).toEqual({ available: false, reason: "hub_not_ready" });
-    expectFeatureRefused(await send(await extensionRecap()), "hub_not_ready");
+    // The extension is on, its Recap is not: still refused, still nothing read.
+    expect(await recapFeature()).toEqual({ available: false, reason: "flag_off" });
+    expectFeatureRefused(await send(await extensionRecap()), "flag_off");
     expect(await generationCount()).toBe(0);
 
-    // The hub that serves the whole of Recap: the narrow token passes the
-    // owner's switch and reads the deep window.
-    hub.servesDossierSave = true;
+    // Recap on for the page: the narrow token passes the owner's switch and
+    // reads the deep window.
+    await setRecapFlag(true);
     expect(await recapFeature()).toEqual({ available: true });
     const recap = await ask(await extensionRecap());
     expect(recap.types).toEqual(["meta", "context_v1", "content_delta", "usage", "done"]);
