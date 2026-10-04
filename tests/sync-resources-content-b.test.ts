@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import type { MediaStatsRefreshCandidate } from "@agency_hub_core/db";
 
-import { emptyAlbumWalk } from "../apps/runtime/src/services/sync/fansly-catalog.ts";
-import { monthIndexOf } from "../apps/runtime/src/services/sync/fansly-stats.ts";
+import { emptyAlbumWalk } from "../apps/runtime/src/sync/fansly/lib/catalog-rules.ts";
+import { monthIndexOf } from "../apps/runtime/src/sync/fansly/lib/stats-rules.ts";
 import { requestJsonOf, requestOfAttempt } from "../apps/runtime/src/sync/engine/commit.ts";
 import { registryOverride, registryOverrideProblem } from "../apps/runtime/src/sync/engine/resource.ts";
 import { fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";

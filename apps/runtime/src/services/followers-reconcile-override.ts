@@ -29,7 +29,7 @@ import {
   followersReconcileCandidateGenerationBuckets,
   followersReconcileCandidateSha256,
   followersReconcileDeactivationLimit,
-} from "./sync/followers-reconcile-safety.ts";
+} from "../sync/fansly/lib/followers-reconcile-safety.ts";
 
 const FOLLOWERS_RECONCILE_BLAST_RADIUS_BLOCKER =
   "followers_reconcile_deactivation_blast_radius";

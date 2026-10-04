@@ -15,7 +15,7 @@ import {
   FANSLY_NOTIFICATION_TYPE_GROUPS,
 } from "@agency_hub_core/shared";
 
-import { writeFanslyLaneCoverage } from "../../../services/sync/fansly-lane.ts";
+import { writeFanslyLaneCoverage } from "../lib/lane.ts";
 import {
   classifyNotificationResponse,
   compareNotificationRefs,
@@ -26,7 +26,7 @@ import {
   parseFanslyNotificationsCursorState,
   typesForFilterMode,
   type FanslyNotificationsFilterMode,
-} from "../../../services/sync/fansly-notifications.ts";
+} from "../lib/notifications-rules.ts";
 import { ApplyQuarantine } from "../../engine/commit.ts";
 import type {
   ApplyInput,

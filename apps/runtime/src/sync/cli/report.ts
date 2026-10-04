@@ -3,7 +3,7 @@ import { writeFile } from "node:fs/promises";
 
 import { Command, InvalidArgumentError } from "commander";
 
-import { listSyncPages } from "@agency_hub_core/db";
+import { listSyncPages, type SyncPageRow } from "@agency_hub_core/db";
 
 import { fanslyWsLivePayloadResolver } from "../../services/fansly-ws/live-apply.ts";
 import { runtimeImageTag } from "../../services/runtime-heartbeat.ts";
@@ -12,7 +12,7 @@ import { acknowledgeSyncPaceViolations, readSyncAlertStatus } from "../engine/al
 import { createEffectiveConfigSettingsSource } from "../engine/ports.ts";
 import { createFanslyRegistry } from "../fansly/registry.ts";
 import { findSyncPageByLabel } from "../inspect.ts";
-import { buildShadowReport } from "../report/shadow-report.ts";
+import { buildShadowReport, SHADOW_NOT_JUDGED_REASONS } from "../report/shadow-report.ts";
 import { pageLabel, parseDurationMs } from "./chain.ts";
 
 // Owner CLI of the engine's observability (design §7.6, §3.12, §9.6):
@@ -71,6 +71,17 @@ function isoDate(value: string): Date {
   return parsed;
 }
 
+/** The one page `--page` names, refused unless it is in shadow: the report
+ *  judges the switch candidates alone. */
+async function shadowPageByLabel(db: SyncContext["db"], label: string): Promise<SyncPageRow> {
+  const page = await findSyncPageByLabel(db, label);
+  if (page.mode !== "shadow") {
+    throw new Error(`${label} is ${page.mode}: the shadow report judges only the pages in shadow, the switch candidates `
+      + `(${SHADOW_NOT_JUDGED_REASONS[page.mode]})`);
+  }
+  return page;
+}
+
 /** `<start>/<end>`, or `<start>` alone for one hour. */
 export function parseReportWindow(value: string): { start: Date; end: Date } {
   const [startText, endText, ...rest] = value.split("/");
@@ -115,7 +126,8 @@ export function registerSyncReportCommands(sync: Command, deps: SyncReportCliDep
   shadow
     .command("report")
     .description(
-      "Read-only: the shadow acceptance report (design §3.12) — part A over the live window (demand vs estimate, "
+      "Read-only: the shadow acceptance report (design §3.12) of the pages in shadow (the switch candidates; a live, "
+        + "handover or off page is listed as not judged) — part A over the live window (demand vs estimate, "
         + "legacy volume, live-path decisions, pacer, route budgets, walks per route, the media model), part B over the "
         + "past journal (resource replay ≥ 99.9 %, chain rebuild and end-of-history check, ETA backtest), and the "
         + "fingerprint the switch checks (build, route policy, registry and tiers, S: run it right after the window); "
@@ -128,7 +140,10 @@ export function registerSyncReportCommands(sync: Command, deps: SyncReportCliDep
       parseReportWindow,
     )
     .option("--part <part>", "a, b or all", "all")
-    .option("--page <label>", "one page (default: every Fansly page)")
+    .option(
+      "--page <label>",
+      "one page in shadow (default: every Fansly page; only those in shadow are judged, the others are listed as not judged)",
+    )
     .option("--replay-since <iso>", "B5: replay the observations since (default: 7 days before the window end, or now)", isoDate)
     .option("--replay-min <n>", "B5: at least this many observations per kind", positiveInt, 1_000)
     .option("--replay-max <n>", "B5: at most this many observations per kind", positiveInt, 50_000)
@@ -161,7 +176,7 @@ export function registerSyncReportCommands(sync: Command, deps: SyncReportCliDep
       const label = pageLabel(options, command);
       const now = deps.now();
       await withContext(deps, async (ctx) => {
-        const pages = label === undefined ? await listSyncPages(ctx.db) : [await findSyncPageByLabel(ctx.db, label)];
+        const pages = label === undefined ? await listSyncPages(ctx.db) : [await shadowPageByLabel(ctx.db, label)];
         const report = await buildShadowReport(ctx, {
           pages,
           registry: createFanslyRegistry(),

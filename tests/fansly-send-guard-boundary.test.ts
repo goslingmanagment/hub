@@ -38,7 +38,7 @@ const SANCTIONED_FANSLY_ORIGIN_FILES: Record<string, string> = {
   "apps/runtime/src/services/egress/fansly-probe-socket.ts": "the W0 probe handshake: under a lease of the page's guard",
   "apps/runtime/src/services/egress/fansly-receiver-socket.ts": "the B0 receiver handshake: under a lease of the page's guard",
   "apps/runtime/src/services/egress/media-download.ts": "the CDN host allowlist; a Fansly hop is captured per hop",
-  "apps/runtime/src/services/sync/fansly-cdn-tokens.ts": "comments only: reads signed CDN URLs, sends nothing",
+  "apps/runtime/src/sync/fansly/lib/cdn-tokens.ts": "comments only: reads signed CDN URLs, sends nothing",
   "packages/contracts/src/generate.ts": "the base URL default of the generated docs, sends nothing",
   "packages/contracts/src/routes.ts": "validates avatar URLs the API returns, sends nothing",
   "packages/shared/src/config-registry.ts": "the base URL setting of the adapter (which sends under the guard)",

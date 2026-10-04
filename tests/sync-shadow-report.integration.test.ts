@@ -22,13 +22,16 @@ import { createEffectiveConfigSettingsSource, type SettingsSource } from "../app
 import { runsIn, type EngineRegistry, type ReplayContext, type ReplayObservation, type ResourceModule } from "../apps/runtime/src/sync/engine/resource.ts";
 import { createFanslyRegistry, FANSLY_RESOURCE_SPECS, fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";
 import { fanEarningsRosterNextDueAt } from "../apps/runtime/src/sync/fansly/resources/fan-earnings.ts";
-import { emptyFanslyMediaStatsCursorState } from "../apps/runtime/src/services/sync/fansly-media-stats.ts";
+import { emptyFanslyMediaStatsCursorState } from "../apps/runtime/src/sync/fansly/lib/media-stats-rules.ts";
 import { mediaStatsOwnerTiers } from "../apps/runtime/src/sync/fansly/resources/media-stats.ts";
-import { ROUTE_POLICY_HASH } from "../apps/runtime/src/sync/fansly/routes.ts";
+import { ROUTE_POLICY_HASH, routeOfEngineOperation } from "../apps/runtime/src/sync/fansly/routes.ts";
 import { FANSLY_REGISTRY_HASH, SHADOW_FINGERPRINT_VERSION } from "../apps/runtime/src/sync/report/shadow-fingerprint.ts";
 import { buildShadowReport, type ShadowReport } from "../apps/runtime/src/sync/report/shadow-report.ts";
+import { checkChains } from "../apps/runtime/src/sync/report/shadow-journal.ts";
+import { ScanGovernor } from "../apps/runtime/src/sync/fansly/lib/chain-rebuild.ts";
 import { ratePeriodMs } from "../apps/runtime/src/sync/report/shadow-window.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
+import { currentIntervals } from "./helpers/sync-acceptance-fixtures.ts";
 import { seedWsCapturePage, seedWsThread, wsCreated, wsMessage, wsTransaction, type WsCapturePage } from "./helpers/fansly-ws-capture.ts";
 import { serviceFrame } from "./helpers/fansly-ws-fixtures.ts";
 import { WS_ORDER_NODE } from "../apps/runtime/src/sync/fansly/ws/decode.ts";
@@ -39,7 +42,8 @@ import { changedTables, setModeDirect, tableCounts, testConfig } from "./helpers
 // read-only window transaction (demand vs the computed expectation, the legacy
 // volume, socket frame → shadow admission vs the legacy arrival, the pacer),
 // part B's replay mechanics (newest first, since / at least N, a failing or
-// writing replay costs only its own verdict) and the chain and ETA scans.
+// writing replay costs only its own verdict), the chain and ETA scans, and
+// its scope: the pages in shadow alone are judged.
 
 let testDb: StartedTestDatabase | null = null;
 
@@ -101,13 +105,18 @@ async function shadowAttempt(
   const request = input.params === undefined
     ? {}
     : { spec: operation, params: input.params, ...(input.position === undefined ? {} : { position: input.position }) };
+  // What the admission records: its route's and its family's intervals.
+  const route = routeOfEngineOperation(operation);
+  const intervals = route === null ? { routeIntervalMs: null, familyIntervalMs: null } : currentIntervals(route);
   await testDb!.pool.query(
     `insert into sync_attempts (page_id, shadow, work_id, resource, subject, class, owner_generation, setting_ms, jitter_u, pause_ms,
-                                admitted_at, sent_at, send_mark, operation, request, outcome, apply_state)
+                                admitted_at, sent_at, send_mark, operation, request, outcome, apply_state,
+                                route_interval_ms, family_interval_ms)
      values ($1, true, $6, $2, $3, $4, $9, 2000, 0, 2000, $5,
-             case when $10::boolean then $5::timestamptz + interval '50 milliseconds' end, 'shadow', $7, $8::jsonb, 'shadow', 'skipped')`,
+             case when $10::boolean then $5::timestamptz + interval '50 milliseconds' end, 'shadow', $7, $8::jsonb, 'shadow', 'skipped',
+             $11, $12)`,
     [pageId, input.resource, input.subject ?? "", input.workClass, input.at, input.workId ?? null, operation, JSON.stringify(request),
-      input.generation ?? 1, input.sent ?? true],
+      input.generation ?? 1, input.sent ?? true, intervals.routeIntervalMs, intervals.familyIntervalMs],
   );
 }
 
@@ -217,13 +226,13 @@ describe("the shadow report (design §3.12)", () => {
     );
     await shadowAttempt(page.pageId, { resource: "account.poll", workClass: "planned", at: at(-15 * MINUTE) });
 
-    // The conversation list: 14 finds 4 s apart, one more in a minute than
-    // its 12/min allow.
+    // The conversation list: 14 finds 4 s apart, each pair closer than its
+    // 12/min's 5 s (the span count sees one too many in a minute).
     for (let i = 0; i < 14; i += 1) {
       await shadowAttempt(page.pageId, { resource: "dm-conversations.find", workClass: "urgent", subject: `chat-${i}`, at: at(5 * MINUTE + i * 4_000) });
     }
     // Chat details and heads 2.5 s apart: each route within its own 15/min,
-    // the messaging family over its combined 15/min.
+    // each pair of the messaging family closer than its combined 15/min.
     for (let i = 0; i < 18; i += 1) {
       const resource = i % 2 === 0 ? "dm-conversations.detail" : "dm-messages.head";
       await shadowAttempt(page.pageId, { resource, workClass: i % 2 === 0 ? "planned" : "urgent", subject: `chat-${i}`, at: at(20 * MINUTE + i * 2_500) });
@@ -264,14 +273,15 @@ describe("the shadow report (design §3.12)", () => {
 
     // The vault walk asks one album page twice in its run: a circle. Its next
     // album's page asked again after a restart closed the first ask unsent is
-    // the same step resumed.
+    // the same step resumed — once the route opens again: its clock counts
+    // the unsent ask at its upper bound (admission + 15 s), then an interval.
     const vault = await shadowWorkRow(page.pageId, "catalog.vault");
     const vaultPage = (before: string, album = "a1") => ({ albumId: album, before });
     await shadowAttempt(page.pageId, { resource: "catalog.vault", workClass: "planned", at: at(30 * MINUTE), workId: vault, params: vaultPage("shadow-1") });
     await shadowAttempt(page.pageId, { resource: "catalog.vault", workClass: "planned", at: at(30 * MINUTE + 10_000), workId: vault, params: vaultPage("shadow-2") });
     await shadowAttempt(page.pageId, { resource: "catalog.vault", workClass: "planned", at: at(30 * MINUTE + 20_000), workId: vault, params: vaultPage("shadow-1") });
     await shadowAttempt(page.pageId, { resource: "catalog.vault", workClass: "planned", at: at(31 * MINUTE), workId: vault, params: vaultPage("0", "a2"), sent: false });
-    await shadowAttempt(page.pageId, { resource: "catalog.vault", workClass: "planned", at: at(31 * MINUTE + 10_000), workId: vault, params: vaultPage("0", "a2") });
+    await shadowAttempt(page.pageId, { resource: "catalog.vault", workClass: "planned", at: at(31 * MINUTE + 20_000), workId: vault, params: vaultPage("0", "a2") });
     // Not circles: a reconcile's /account/me before and after its walk (no
     // position), a poll's run re-reading its head, two catch-ups of one chat.
     const reconcile = await shadowWorkRow(page.pageId, "followers.reconcile");
@@ -299,17 +309,20 @@ describe("the shadow report (design §3.12)", () => {
     const report = await build();
     const { budgets, walks } = report.routes!;
     const budget = (name: string) => budgets.rows.find((row) => row.budget === name);
+    // The send audit's pairs (each against the interval its later send was
+    // admitted under); the span counts beside them are diagnostics.
     expect(budget("messaging.groups")).toEqual({
       page: "lilly-1", budget: "messaging.groups", perMin: 12, intervalMs: 5_000, sends: 14, minGapMs: 4_000,
-      max60s: 14, bound60s: 13, max300s: 14, bound300s: 61, violations: 1, firstViolationAt: new Date(at(5 * MINUTE + 13 * 4_000).getTime() + 50),
+      max60s: 14, bound60s: 13, max300s: 14, bound300s: 61, violations: 13, firstViolationAt: new Date(at(5 * MINUTE + 4_000).getTime() + 50),
+      inconclusive: 0,
     });
     expect(budget("group.detail")).toMatchObject({ sends: 9, minGapMs: 5_000, violations: 0 });
     expect(budget("messages.page")).toMatchObject({ sends: 9 + 2, violations: 0 });
-    expect(budget("family:messaging")).toMatchObject({ sends: 14 + 18 + 2, minGapMs: 2_500, max60s: 18, bound60s: 16, violations: 2 });
+    expect(budget("family:messaging")).toMatchObject({ sends: 14 + 18 + 2, minGapMs: 2_500, max60s: 18, bound60s: 16, violations: 17, inconclusive: 0 });
     expect(budget("media.offer_stats")).toMatchObject({ sends: 5, minGapMs: 12_000, max60s: 4, bound60s: 6, violations: 0 });
     expect(budget("earnings.stats_accounts")).toMatchObject({ sends: 3, minGapMs: 30_000, violations: 0 });
     expect(budgets.unplaced).toEqual([{ page: "lilly-1", operation: "retired.route", sends: 1 }]);
-    expect(budgets.violations).toBe(1 + 2 + 1);
+    expect(budgets).toMatchObject({ violations: 13 + 17 + 1, inconclusive: 0 });
     // The media walk, the roster, the vault walk, the reconcile and the two
     // catch-ups.
     expect(walks).toEqual({
@@ -347,7 +360,7 @@ describe("the shadow report (design §3.12)", () => {
     expect(report.summary[0]).toBe(`Fingerprint: sync build build-sync (report written by ${REPORT_BUILD}); route policy ${ROUTE_POLICY_HASH.slice(0, 12)}, `
       + `registry ${FANSLY_REGISTRY_HASH.slice(0, 12)}; S ${report.fingerprint.setting.effectiveMs} ms now, 2000 ms in the window`);
     expect(report.summary).toContainEqual(expect.stringMatching(
-      /^Route budgets in shadow: 4 violation\(s\): lilly-1 family:messaging 2 send\(s\) over \(max 18\/16 in 60 s, .*lilly-1 messaging\.groups 1 send\(s\) over .*; sends this build places on no route: lilly-1 retired\.route 1$/,
+      /^Route budgets in shadow: 31 violation\(s\): lilly-1 family:messaging 17 send\(s\) closer than their recorded interval \(shortest gap 2500 ms of 4000; max 18\/16 in 60 s, .*lilly-1 messaging\.groups 13 send\(s\) closer than their recorded interval .*; sends this build places on no route: lilly-1 retired\.route 1$/,
     ));
     expect(report.summary).toContainEqual(expect.stringMatching(new RegExp(
       "^Walks per route: ENDLESS — 3 repeated request\\(s\\): "
@@ -403,9 +416,10 @@ describe("the shadow report (design §3.12)", () => {
       pageId: page.pageId, groupId: fresh, fanRef: "200000000000000007", firstSeenAt: at(27 * MINUTE),
     });
     await shadowAttempt(page.pageId, { resource: "dm-conversations.find", workClass: "urgent", subject: fresh, at: at(25 * MINUTE + 4_000) });
-    // The daily stats: one snapshot sequence of 11 requests, 3 s apart.
+    // The daily stats: one snapshot sequence of 11 requests, 4 s apart (one
+    // route at its 15/min).
     for (let i = 0; i < 11; i += 1) {
-      await shadowAttempt(page.pageId, { resource: "stats.daily", workClass: "planned", at: at(15 * MINUTE + i * 3_000) });
+      await shadowAttempt(page.pageId, { resource: "stats.daily", workClass: "planned", at: at(15 * MINUTE + i * 4_000) });
     }
     // The hourly followers head: its run done 4.5 min before the window, none in it.
     await shadowAttempt(page.pageId, { resource: "followers.head", workClass: "planned", at: at(-4.5 * MINUTE) });
@@ -1360,6 +1374,131 @@ describe("the shadow report (design §3.12)", () => {
       /^Coverage: NOT an acceptance window — lilly-1 mode_changed \(first shadow admission .+\); the window must start once every page has run in shadow for 10 min$/,
     ));
     expect(report.summary.at(-1)).toMatch(/^Verdict: coverage FAIL, .* — not accepted$/);
+  });
+
+  it("judges the pages in shadow alone: a live page is listed as not judged and counts in no part and no verdict", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await shadowPage();
+    const start = new Date(Math.floor((Date.now() - 2 * 3_600_000) / MINUTE) * MINUTE);
+    await seedWindow(page, start);
+    const at = (ms: number) => new Date(start.getTime() + ms);
+    const pacing = { batchRows: 50, sleepMs: 0, maxDurationMs: null, forceWindow: true };
+    const build = async () => buildShadowReport(ctx(), {
+      reportBuild: REPORT_BUILD,
+      settings: liveSettings(),
+      pages: await listSyncPages(db()),
+      registry: createStubRegistry(),
+      window: { start, end: at(60 * MINUTE) },
+      journal: {
+        replaySince: at(-60 * MINUTE),
+        replayMinPerKind: 1,
+        replayMaxPerKind: 1_000,
+        chainsSince: at(-24 * 60 * MINUTE),
+        pacing,
+        expectedCounterexampleRawIds: [],
+      },
+      maxListed: 50,
+    });
+    const alone = await build();
+    expect(alone.verdict).toMatchObject({ covered: true, a3: true, a4: true, b6: true });
+
+    // A second page with an hour of its own and no shadow traffic at all: a
+    // fan message on its socket nobody read in shadow, a legacy poll.
+    const other = await seedWsCapturePage({ db: db(), pool: testDb.pool }, { ownRef: "100000000000000002", label: "lilly-2" });
+    const otherGroup = "300000000000000002";
+    await seedWsThread({ db: db(), pool: testDb.pool }, { pageId: other.pageId, groupId: otherGroup, fanRef: "200000000000000002", firstSeenAt: LISTED_BEFORE() });
+    await other.capture(wsCreated(wsMessage({ groupId: otherGroup, senderId: "200000000000000002" })), at(15 * MINUTE));
+    await legacyRequest(other.pageId, "light", "account.me", at(5 * MINUTE));
+
+    // Judged — were it in shadow — its hour would be red: A1 (no shadow read
+    // of its own) and A3 (its fan message without a shadow read).
+    await setModeDirect(testDb.pool, other.pageId, "shadow");
+    const judgedBoth = await build();
+    expect(judgedBoth.pages).toEqual([{ page: "lilly-1", mode: "shadow" }, { page: "lilly-2", mode: "shadow" }]);
+    expect(judgedBoth.window!.demand.find((row) => row.page === "lilly-2")).toMatchObject({ passes: false });
+    expect(judgedBoth.window!.livePath.fanMessages.withoutShadowAdmission).toBe(1);
+    expect(judgedBoth.verdict).toMatchObject({ a3: false, accepted: false });
+
+    // Live, it is listed and judged nowhere: every part reads the shadow page
+    // alone, and its verdict is the one the shadow page has by itself.
+    await setModeDirect(testDb.pool, other.pageId, "live");
+    const withLive = await build();
+    expect(withLive.pages).toEqual([{ page: "lilly-1", mode: "shadow" }]);
+    expect(withLive.notJudged).toEqual([{ page: "lilly-2", mode: "live", reason: "live — judged by `sync switch check`" }]);
+    expect(withLive.window!.coverage).toEqual(alone.window!.coverage);
+    expect(withLive.window!.demand).toEqual(alone.window!.demand);
+    expect(withLive.window!.legacy).toEqual(alone.window!.legacy);
+    expect(withLive.window!.livePath).toEqual(alone.window!.livePath);
+    expect(withLive.window!.pacer).toEqual(alone.window!.pacer);
+    expect(withLive.routes).toEqual(alone.routes);
+    expect(withLive.media!.map((row) => row.page)).toEqual(["lilly-1"]);
+    expect(withLive.fingerprint.pages.map((row) => row.page)).toEqual(["lilly-1"]);
+    expect(withLive.journal!.chains.map((row) => row.page)).toEqual(["lilly-1"]);
+    expect(withLive.journal!.eta).toHaveLength(1);
+    expect(withLive.verdict).toEqual(alone.verdict);
+    // B6 on a live page would be its refused rebuild (the engine owns its chains).
+    const liveChains = await checkChains(ctx(), {
+      pages: [(await getSyncPage(db(), other.pageId))!], since: at(-24 * 60 * MINUTE), pacing, maxListed: 10,
+    }, new ScanGovernor(pacing));
+    expect(liveChains[0]!.rebuild).toEqual({ error: "ChainRebuildRefusedError" });
+    expect(withLive.summary[1]).toBe(
+      "Judged: lilly-1 (in shadow, the switch candidates); not judged, in no verdict: lilly-2 live — judged by `sync switch check`",
+    );
+
+    // `--page` names a switch candidate or nothing.
+    const command = buildSyncReportCommandGroup({
+      openContext: async () => ({ ...ctx(), close: async () => undefined }),
+      print: () => undefined,
+      writeFile: async () => undefined,
+      now: () => new Date(),
+      buildSha: () => REPORT_BUILD,
+    });
+    await expect(command.parseAsync([
+      "shadow", "report", "--part", "a", "--page", "lilly-2", "--window", `${start.toISOString()}/${at(60 * MINUTE).toISOString()}`,
+    ], { from: "user" })).rejects.toThrow(
+      "lilly-2 is live: the shadow report judges only the pages in shadow, the switch candidates (live — judged by `sync switch check`)",
+    );
+  });
+
+  it("A4 is the send audit's I1: a shadow pair inside the jitter — over the setting, short of its own pause — fails the pacer's self-check", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await shadowPage();
+    const start = new Date(Math.floor((Date.now() - 2 * 3_600_000) / MINUTE) * MINUTE);
+    await seedWindow(page, start);
+    const at = (ms: number) => new Date(start.getTime() + ms);
+    const build = async () => buildShadowReport(ctx(), {
+      reportBuild: REPORT_BUILD,
+      settings: liveSettings(),
+      pages: await listSyncPages(db()),
+      registry: createStubRegistry(),
+      window: { start, end: at(60 * MINUTE) },
+      journal: null,
+      maxListed: 50,
+    });
+    const clean = await build();
+    expect(clean.window!.pacer).toMatchObject({ violations: 0, inconclusive: 0 });
+    expect(clean.verdict.a4).toBe(true);
+
+    // S = 2 500, u = 0.1: the pause is 2 750, the two simulated sends 2 600 ms
+    // apart — the arena's counterexample, which `gap < setting` passed. An
+    // attempt a restart closed unsent between them simulated no send.
+    await shadowAttempt(page.pageId, { resource: "notifications.forward", workClass: "planned", at: at(52 * MINUTE) });
+    await shadowAttempt(page.pageId, { resource: "account.poll", workClass: "planned", at: at(52 * MINUTE + 1_000), sent: false });
+    await shadowAttempt(page.pageId, { resource: "transactions.head", workClass: "urgent", at: at(52 * MINUTE + 2_600) });
+    const later = `page_id = ${page.pageId} and shadow and admitted_at = '${at(52 * MINUTE + 2_600).toISOString()}'`;
+    await testDb.pool.query(`update sync_attempts set setting_ms = 2500, jitter_u = 0.1, pause_ms = 2750 where ${later}`);
+    const inside = await build();
+    expect(inside.window!.pacer).toMatchObject({ violations: 1, inconclusive: 0, pages: [{ page: "lilly-1", violations: 1, inconclusive: 0 }] });
+    expect(inside.verdict).toMatchObject({ a4: false, accepted: false });
+    expect(inside.summary).toContain("A4 pacer: 1 shadow pairs closer than the later send's pause");
+
+    // The pacer's own monotonic gap says it kept the pause, the recorded
+    // instants say it did not: not judged, and never a pass.
+    await testDb.pool.query(`update sync_attempts set gap_prev_ms = 2750 where ${later}`);
+    const disagree = await build();
+    expect(disagree.window!.pacer).toMatchObject({ violations: 0, inconclusive: 1 });
+    expect(disagree.verdict).toMatchObject({ a4: false, accepted: false });
+    expect(disagree.summary).toContain("A4 pacer: 0 shadow pairs closer than the later send's pause; 1 not judged (inconclusive)");
   });
 
   it("the CLI: `sync shadow report --part a` and `sync alerts ack`", async (context) => {

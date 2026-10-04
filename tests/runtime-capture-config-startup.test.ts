@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type * as DbModule from "@agency_hub_core/db";
 import type * as HeartbeatModule from "../apps/runtime/src/services/runtime-heartbeat.ts";
+import type * as SyncContextModule from "../apps/runtime/src/sync/context.ts";
 
 import {
   getCaptureCasDualWritePages,
@@ -48,7 +49,10 @@ vi.mock("@agency_hub_core/db", async (importOriginal) => ({
 }));
 vi.mock("pg-boss", () => ({ PgBoss: h.PgBoss }));
 vi.mock("../apps/runtime/src/bootstrap.ts", () => ({ createAppContext: h.createAppContext }));
-vi.mock("../apps/runtime/src/sync/context.ts", () => ({ createSyncContext: h.createSyncContext }));
+vi.mock("../apps/runtime/src/sync/context.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof SyncContextModule>()),
+  createSyncContext: h.createSyncContext,
+}));
 // The engine host needs a database; these cases are about what the process
 // published before its first beat, which the host starts after.
 vi.mock("../apps/runtime/src/sync/engine/host.ts", () => ({
@@ -211,6 +215,9 @@ describe("capture CAS settings at role startup", () => {
 
     await runSyncRuntime();
 
+    // Step 4, 4-3 layer 0: the process's pool is the bounded one.
+    const { SYNC_POOL_TIMEOUTS } = await import("../apps/runtime/src/sync/context.ts");
+    expect(h.createSyncContext).toHaveBeenCalledWith({ poolTimeouts: SYNC_POOL_TIMEOUTS });
     expect(h.snapshots).toEqual([
       { at: "sync:heartbeat", dualWrite: "*", pointerOnly: "*", readMode: "serve" },
     ]);

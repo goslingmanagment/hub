@@ -186,6 +186,15 @@ export interface RouteClockView {
   notBefore: Date | null;
 }
 
+/** The intervals an admission on a route is held to: its route's at the
+ *  effective rate, and its family's (null: the route has none). The
+ *  admission records them on its attempt (`sync_attempts.route_interval_ms`,
+ *  `family_interval_ms`), and the send audit judges its gaps by them. */
+export interface RouteAdmissionIntervals {
+  routeIntervalMs: number;
+  familyIntervalMs: number | null;
+}
+
 export interface FamilyClockView {
   family: FanslyRouteFamily;
   ceilingPerMin: number;
@@ -254,12 +263,26 @@ export class RouteClocks {
     return last === null || intervalMs === 0 ? null : last + intervalMs;
   }
 
+  #familyIntervalMs(family: FanslyRouteFamily): number {
+    return scaledInterval(FAMILY_BUDGETS[family].currentPerMin, this.#scale);
+  }
+
   #familyNotBeforeMs(family: FanslyRouteFamily): number | null {
-    return this.#after(this.#familyLastMs.get(family) ?? null, scaledInterval(FAMILY_BUDGETS[family].currentPerMin, this.#scale));
+    return this.#after(this.#familyLastMs.get(family) ?? null, this.#familyIntervalMs(family));
+  }
+
+  /** The intervals a send on `route` is admitted under now (what its
+   *  attempt records). */
+  intervals(route: FanslyRoute): RouteAdmissionIntervals {
+    const family = familyOfRoute(route);
+    return {
+      routeIntervalMs: scaledInterval(effectiveRatePerMin(route, this.#state), this.#scale),
+      familyIntervalMs: family === null ? null : this.#familyIntervalMs(family),
+    };
   }
 
   #notBeforeMs(route: FanslyRoute): number | null {
-    const own = this.#after(this.#routeLastMs(route), scaledInterval(effectiveRatePerMin(route, this.#state), this.#scale));
+    const own = this.#after(this.#routeLastMs(route), this.intervals(route).routeIntervalMs);
     const family = familyOfRoute(route);
     const holdUntil = this.#state.routes[route]?.holdUntil ?? null;
     return maxMs(own, family === null ? null : this.#familyNotBeforeMs(family), holdUntil === null ? null : Date.parse(holdUntil));

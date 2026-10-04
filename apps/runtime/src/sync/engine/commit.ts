@@ -69,9 +69,9 @@ import {
 } from "@agency_hub_core/shared";
 
 import { isCapturePayloadUnavailable, resolveCapturePayloadRow } from "../../services/payload-reader.ts";
-import { fanslyCdnTokenStripApplies, stripFanslySignedCdnTokens } from "../../services/sync/fansly-cdn-tokens.ts";
-import { replaceJournalLoneSurrogates } from "../../services/sync/journal-lone-surrogates.ts";
 import { WrongTransactionsWriterError } from "../../services/transactions-writer-gate.ts";
+import { fanslyCdnTokenStripApplies, stripFanslySignedCdnTokens } from "../fansly/lib/cdn-tokens.ts";
+import { replaceJournalLoneSurrogates } from "../fansly/lib/journal-lone-surrogates.ts";
 import { routeOfWireId } from "../fansly/routes.ts";
 import {
   classifyWireOutcome,
@@ -104,7 +104,8 @@ import {
   type StepPlan,
   type WorkOutcome,
 } from "./resource.ts";
-import { parseRouteState, ROUTE_STATE_VERSION } from "./route-policy.ts";
+import { parseRouteState, ROUTE_STATE_VERSION, type RouteAdmissionIntervals } from "./route-policy.ts";
+import { judgePaceGap, paceGapViolates } from "./send-audit.ts";
 import type { WorkClass } from "./scheduler.ts";
 
 // The transactions of one step (plan §8, design §3.7). Each runs as ONE short
@@ -506,6 +507,9 @@ export async function admit(
   picked: PickedWork,
   request: RequestPlan,
   grant: SlotGrant,
+  /** The route's and its family's intervals the route check applied (I19):
+   *  recorded on the attempt for the send audit. */
+  intervals: RouteAdmissionIntervals,
   module: ResourceModule,
   /** The request the transport built for the plan (a CDN hop's path digest,
    *  the digest of the credentials it carries). */
@@ -550,6 +554,8 @@ export async function admit(
       operation: request.spec,
       request: requestJsonOf(request, prepared),
       evidence: spec.evidence,
+      routeIntervalMs: intervals.routeIntervalMs,
+      familyIntervalMs: intervals.familyIntervalMs,
     });
     // A requests-class read is the turn of one request and one fan: the round
     // robin's stamps and the fan's read count (history_* after sync_work).
@@ -644,11 +650,11 @@ export async function settleShadow(
   for (const [name, by] of Object.entries(result.counters ?? {})) {
     d.metrics.increment("sync_shadow_effect", { resource: admission.work.resource, effect: name }, by);
   }
-  if (armed.gapPrevMs !== null && armed.gapPrevMs < armed.settingMs) {
+  if (armed.gapPrevMs !== null && paceGapViolates(armed.gapPrevMs, "monotonic", armed.pauseMs)) {
     d.metrics.increment("sync_shadow_pace_violations", { pageId: d.pageId });
     d.logger.error(
-      { pageId: d.pageId, attemptId: admission.attemptId, gapMs: armed.gapPrevMs, settingMs: armed.settingMs },
-      "Fansly sync shadow: two simulated sends closer than the setting (pacer bug)",
+      { pageId: d.pageId, attemptId: admission.attemptId, gapMs: armed.gapPrevMs, pauseMs: armed.pauseMs },
+      "Fansly sync shadow: two simulated sends closer than their pause (pacer bug)",
     );
   }
 }
@@ -1159,9 +1165,20 @@ export async function capture(
     }, "Fansly sync: a route is held (only that route waits)");
   }
   const alerts = [...committed.decision.alerts];
-  // "Проверка, а не вера" (plan §2.4): this send against the page's previous
-  // recorded send of ANY owner; closer than the setting opens alert 1.
-  if (committed.paceGapMs !== null && committed.paceGapMs < armed.settingMs) {
+  // "Проверка, а не вера" (plan §2.4, I1): this send against the page's
+  // previous send by both clocks — this pacer's monotonic gap against its own
+  // pause, and the recorded instants of ANY owner (`paceGapMs`) as the
+  // independent test: closer than the setting whatever the pacer measured,
+  // short of the pause when no monotonic gap vouches for the pair. A
+  // violation opens alert 1 (the evaluator's send audit re-reads the journal
+  // by the same rule, and reports the pairs whose clocks disagree).
+  const pace = judgePaceGap({
+    monoGapMs: armed.gapPrevMs,
+    wallGapMs: committed.paceGapMs,
+    pauseMs: armed.pauseMs,
+    settingMs: armed.settingMs,
+  });
+  if (pace?.verdict === "fail") {
     alerts.push({ subKey: "page_stopped", detail: "pace_violation" });
     d.metrics.increment("sync_pace_violations", { pageId: d.pageId });
   }

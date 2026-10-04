@@ -1,10 +1,11 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { getSyncPage, paceFloorFromDb, upsertDemand, type Database } from "@agency_hub_core/db";
+import { getSyncPage, paceFloorFromDb, readFanslySendAudit, upsertDemand, type Database } from "@agency_hub_core/db";
 import type { FanslyWireId } from "@agency_hub_core/fansly";
 
 import { TAKEOVER_FACTOR } from "../apps/runtime/src/sync/engine/pacer.ts";
 import { createEngineRegistry, type EngineRegistry, type EngineResourceSpec, type ResourceModule } from "../apps/runtime/src/sync/engine/resource.ts";
+import { auditPagePace, auditRouteIntervals } from "../apps/runtime/src/sync/engine/send-audit.ts";
 import { FAMILY_BUDGETS, intervalMsOf, routeBudget, type FanslyRoute } from "../apps/runtime/src/sync/fansly/routes.ts";
 import { explainSyncWork, readSyncPageStatus } from "../apps/runtime/src/sync/inspect.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
@@ -251,6 +252,28 @@ describe("route budgets on the journal", () => {
       // Never two sends of the page closer than the pacer's S × (1 + u), nor
       // the restart's first send closer than 1.2 × S to the last one before it.
       expect(expectPagePace(all)).toBe(1);
+
+      // Each admission recorded the intervals its route check applied, and the
+      // send audit over the journal finds every pair within them (I1, I19).
+      const route = (wire: FanslyRoute) => scaled(routeBudget(wire).currentPerMin, SCALE);
+      const messaging = scaled(FAMILY_BUDGETS.messaging.currentPerMin, SCALE);
+      expect((await testDb.pool.query(
+        `select distinct operation, route_interval_ms as "route", family_interval_ms as "family"
+           from sync_attempts where page_id = $1 and shadow = $2 order by operation`,
+        [pageId, mode === "shadow"],
+      )).rows).toEqual([
+        { operation: "media.offer_stats", route: route("media.offer_stats"), family: null },
+        { operation: "messages.page", route: route("messages.page"), family: messaging },
+        { operation: "messaging.groups", route: route("messaging.groups"), family: messaging },
+        { operation: "polls", route: route("polls"), family: null },
+      ]);
+      const window = { start: all[0]!.sent_at, until: null };
+      const journal = await readFanslySendAudit(db(), { pageId, since: window.start, shadow: mode === "shadow" });
+      expect(auditPagePace(journal, window)).toMatchObject({ verdict: "pass", violations: [], inconclusive: [] });
+      // (The scaled test budgets sit below the ceiling's interval: that bound is production's.)
+      const intervals = auditRouteIntervals(journal, window);
+      expect(intervals).toMatchObject({ violations: [], inconclusive: [], unplaced: [] });
+      expect(intervals.pairs).toBeGreaterThan(30);
     }, 90_000);
   }
 });

@@ -10,12 +10,14 @@ import { createSyncContext, type SyncContext } from "../context.ts";
 import { LIVE_LOOP_ENABLED } from "../engine/host.ts";
 import { createFanslyRegistry } from "../fansly/registry.ts";
 import { findSyncPageByLabel } from "../inspect.ts";
+import { isShadowVerdictCheck, SHADOW_RED_LINES, SHADOW_VERDICT_CHECKS } from "../report/shadow-report.ts";
 import { acceptanceExitCode, checkSwitchAcceptance } from "../switch/acceptance.ts";
 import { SWITCH_TIMING, SwitchRefusedError, type SwitchContext, type SwitchTiming } from "../switch/context.ts";
 import { runSyncSwitch, runSyncSwitchOpenRequests } from "../switch/switch.ts";
 
 // The step-3 switch CLIs (design step 3 §3.5 item 8, runbook §6):
 //   pnpm cli sync switch --page P --shadow-report <path> [--dry-run]
+//        [--accept-red-lines <a1,a2,a3,b5,b6,b7> --red-lines-reason "<evidence>"]
 //   pnpm cli sync switch --page P --open-requests
 //   pnpm cli sync switch check --page P [--page Q …] --since <iso> [--until <iso>] [--out <path>]
 //   pnpm cli sync rollback --page P [--with-auth-hold]   (retired at step 4: refuses)
@@ -82,6 +84,22 @@ function isoDate(value: string): Date {
   return parsed;
 }
 
+/** `--accept-red-lines a1,b6` → the red lines, each once; a hard check or an
+ *  unknown name is refused (step 3b ruling 12). */
+export function parseRedLines(value: string): string[] {
+  const listed = [...new Set(value.split(",").map((key) => key.trim().toLowerCase()).filter((key) => key !== ""))];
+  if (listed.length === 0) throw new InvalidArgumentError(`expected red lines (${SHADOW_RED_LINES.join(", ")})`);
+  for (const key of listed) {
+    if (!isShadowVerdictCheck(key)) {
+      throw new InvalidArgumentError(`${key} is no check of the shadow report (red lines: ${SHADOW_RED_LINES.join(", ")})`);
+    }
+    if (SHADOW_VERDICT_CHECKS[key] === "hard") {
+      throw new InvalidArgumentError(`${key} is a hard check of the shadow report, never accepted (red lines: ${SHADOW_RED_LINES.join(", ")})`);
+    }
+  }
+  return listed;
+}
+
 /** `--page a --page b,c` → [a, b, c]. */
 function collectLabels(value: string, previous: string[]): string[] {
   return [...previous, ...value.split(",").map((label) => label.trim()).filter((label) => label !== "")];
@@ -132,18 +150,43 @@ export function registerSyncSwitchCommands(
     )
     .option("--page <label>", "the Fansly page")
     .option("--shadow-report <path>", "the accepted `sync shadow report --out` file")
+    .option(
+      "--accept-red-lines <checks>",
+      `the owner accepts the report's failing red lines (step 3b ruling 12; of ${SHADOW_RED_LINES.join(", ")}, comma-separated; `
+        + "a hard check — coverage, A4, route budgets, walks, build — never): needs --red-lines-reason, audited",
+      parseRedLines,
+    )
+    .option("--red-lines-reason <text>", "the owner's evidence for --accept-red-lines (audited with the switch)")
     .option("--dry-run", "check every precondition and change nothing", false)
     .option("--open-requests", "the first page, once its requests opened: convert its hydration requests", false)
     // `check` takes its own --page: the parent's options come before it.
     .enablePositionalOptions()
-    .action(async (options: { page?: string; shadowReport?: string; dryRun: boolean; openRequests: boolean }) => {
+    .action(async (options: {
+      page?: string;
+      shadowReport?: string;
+      acceptRedLines?: string[];
+      redLinesReason?: string;
+      dryRun: boolean;
+      openRequests: boolean;
+    }) => {
       if (options.page === undefined) throw new Error("sync switch needs --page <label>");
+      const reason = options.redLinesReason?.trim() ?? "";
+      if (options.acceptRedLines !== undefined && reason === "") {
+        throw new Error("--accept-red-lines needs --red-lines-reason \"<the owner's evidence>\" (audited with the switch)");
+      }
+      if (options.acceptRedLines === undefined && options.redLinesReason !== undefined) {
+        throw new Error("--red-lines-reason goes with --accept-red-lines");
+      }
+      if (options.openRequests && options.acceptRedLines !== undefined) {
+        throw new Error("--accept-red-lines judges a shadow report: it goes with --shadow-report, not --open-requests");
+      }
       await withSwitchContext(resolved, async (ctx) => {
         const outcome = options.openRequests
           ? await runSyncSwitchOpenRequests(ctx, { pageLabel: options.page! })
           : await runSyncSwitch(ctx, {
             pageLabel: options.page!,
             shadowReportPath: options.shadowReport ?? null,
+            acceptRedLines: options.acceptRedLines === undefined ? null : { checks: options.acceptRedLines, reason },
             dryRun: options.dryRun,
             registry: createFanslyRegistry(),
             capabilityFor: capabilityFor("sync switch"),
@@ -155,8 +198,8 @@ export function registerSyncSwitchCommands(
   switchCommand
     .command("check")
     .description(
-      "the live-hour acceptance of switched pages (step 3b ruling 13, A6; the same rules as step3-accept.sql) as JSON, "
-      + "read-only; each page over [T_i, T* + 1 h) (exit 0 accepted, 1 a page failed, 2 inconclusive or the owner's review)",
+      "the live-hour acceptance of switched pages (step 3b ruling 13, A6) as JSON on stdout, read-only; each page over "
+      + "[T_i, T* + 1 h) (exit 0 accepted, 1 a page failed, 2 inconclusive or the owner's review)",
     )
     .option("--page <labels>", "a Fansly page; repeat it (or separate by commas) for pages switched together", collectLabels, [])
     .requiredOption("--since <iso>", "no window starts earlier: T_i = the later of this and the page's live instant", isoDate)

@@ -1,14 +1,22 @@
 import { createDb, createPool, upsertDemand, type Database } from "@agency_hub_core/db";
 
 import { createDefaultFanslySendOsProbe } from "../../apps/runtime/src/services/fansly-send-guard/os-probe.ts";
+import { createSyncContext } from "../../apps/runtime/src/sync/context.ts";
 import { SyncEngineHost } from "../../apps/runtime/src/sync/engine/host.ts";
 import { createPacer } from "../../apps/runtime/src/sync/engine/pacer.ts";
 import { fixedShadowLatency } from "../../apps/runtime/src/sync/engine/shadow.ts";
+import { SyncStallWatchdog } from "../../apps/runtime/src/sync/engine/watchdog.ts";
 import { FANSLY_WS_SOURCE_TIMING } from "../../apps/runtime/src/sync/fansly/ws/source.ts";
+import {
+  createStallIncidentReport,
+  handleSyncShutdownSignals,
+  startSyncRuntime,
+} from "../../apps/runtime/src/sync/main.ts";
 import { harnessConfig, harnessHostOptions, harnessRng } from "./sync-engine.ts";
 import { wsHostOptions } from "./sync-ws.ts";
 import {
   childShadowRegistry,
+  containerRunProbe,
   CRASH_READ_KEY,
   crashRegistry,
   makeTestActor,
@@ -34,6 +42,14 @@ import {
 //               fake origin WS_ORIGIN, on the production socket timing (its
 //               drains included; only the guard runs every 200 ms); SIGTERM
 //               stops it as the `sync` runtime does (host, pool, exit 0).
+//   stall-live  a live SyncEngineHost on PAGE_ID (the crash registry, the
+//               recording transport, S = SETTING_MS) running as one run of
+//               the test container (pid namespace SYNC_TEST_PID_NS), whose
+//               step never settles at FAULT_POINT; its stall watchdog
+//               (STALL_AFTER_MS) writes the production incident and exits 70.
+//   shutdown-cap the `sync` runtime (heartbeat only) over a host whose stop
+//               never ends, with the production signal handling at
+//               SHUTDOWN_CAP_MS: SIGTERM ends it at the cap.
 // Prints "ready <pid>" once running.
 
 async function runHost(): Promise<void> {
@@ -133,6 +149,49 @@ async function runWsLive(): Promise<void> {
   console.log(`ready ${process.pid}`);
 }
 
+async function runStallLive(): Promise<void> {
+  const connectionString = process.env.DATABASE_URL!;
+  const pool = createPool(connectionString);
+  const db = createDb(pool) as unknown as Database;
+  const pageId = Number(process.env.PAGE_ID);
+  const settingMs = Number(process.env.SETTING_MS ?? "300");
+  const faultPoint = process.env.FAULT_POINT;
+  const watchdog = new SyncStallWatchdog({
+    staleAfterMs: Number(process.env.STALL_AFTER_MS),
+    checkEveryMs: 100,
+    report: createStallIncidentReport({ connectionString, logger: quietLogger }),
+  });
+  watchdog.start();
+  await upsertDemand(db, { pageId, shadow: false, resource: CRASH_READ_KEY, kind: "trigger", class: "urgent" });
+  const host = new SyncEngineHost({
+    db,
+    connectionString,
+    config: testConfig(connectionString),
+    rawConfig: testConfig(connectionString),
+    logger: quietLogger,
+    registry: crashRegistry(),
+    probe: containerRunProbe(process.env.SYNC_TEST_PID_NS!),
+    pause: { readSettingMs: async () => settingMs },
+    pacerFactory: (deps) => createPacer({ ...deps, minSettingMs: 1 }),
+    routeTimeScale: 0,
+    modeLoopIntervalMs: 250,
+    liveTransportFactory: async () => recordingTransport(db),
+    liveSocket: () => null,
+    faults: (point) => (point === faultPoint ? new Promise<never>(() => undefined) : undefined),
+    watchdog,
+  });
+  await host.start();
+  console.log(`ready ${process.pid}`);
+}
+
+async function runShutdownCap(): Promise<void> {
+  const context = await createSyncContext({ env: process.env });
+  const host = { start: async () => undefined, stop: () => new Promise<void>(() => undefined) };
+  const runtime = await startSyncRuntime(context, { host, alerts: null, watchdog: null, heartbeatIntervalMs: 200 });
+  handleSyncShutdownSignals(context, runtime, { capMs: Number(process.env.SHUTDOWN_CAP_MS) });
+  console.log(`ready ${process.pid}`);
+}
+
 const mode = process.argv[2];
 if (mode === "host") {
   await runHost();
@@ -142,6 +201,10 @@ if (mode === "host") {
   await runHarnessLive();
 } else if (mode === "ws-live") {
   await runWsLive();
+} else if (mode === "stall-live") {
+  await runStallLive();
+} else if (mode === "shutdown-cap") {
+  await runShutdownCap();
 } else if (mode !== undefined) {
   console.error(`unknown mode ${mode}`);
   process.exit(2);

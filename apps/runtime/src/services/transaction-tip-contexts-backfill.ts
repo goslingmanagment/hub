@@ -4,7 +4,7 @@ import {
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
-import { materializeFanslyDmTipContexts } from "./sync/fansly-tip-contexts.ts";
+import { materializeFanslyDmTipContexts } from "../sync/fansly/lib/tip-contexts.ts";
 
 const DEFAULT_BATCH_SIZE = 500;
 

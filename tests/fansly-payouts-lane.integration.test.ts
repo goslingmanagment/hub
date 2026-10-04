@@ -8,11 +8,8 @@ import {
 import { FanslyApiError } from "@agency_hub_core/fansly";
 
 import { SyncChunkBudget } from "../apps/runtime/src/services/sync/chunk-budget.ts";
-import {
-  fanslyPayoutsChunk,
-  parseFanslyPayoutsCursorState,
-  payoutRequestRows,
-} from "../apps/runtime/src/services/sync/fansly-payouts.ts";
+import { fanslyPayoutsChunk } from "../apps/runtime/src/services/sync/fansly-payouts.ts";
+import { parseFanslyPayoutsCursorState, payoutRequestRows } from "../apps/runtime/src/sync/fansly/lib/payouts-rules.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,

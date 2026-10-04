@@ -1,5 +1,4 @@
 import {
-  upsertCaptureCoverage,
   upsertCheckpoint,
   upsertCheckpointProgress,
   type CaptureCoverageProof,
@@ -10,6 +9,7 @@ import {
 import { FanslyApiError, type FanslyRequestContext } from "@agency_hub_core/fansly";
 import type { HttpRequestEvent, HttpRequestObserver } from "@agency_hub_core/shared";
 
+import { fanslyUtcDayKey, writeFanslyLaneCoverage } from "../../sync/fansly/lib/lane.ts";
 import type { SyncRunTelemetry } from "./observability.ts";
 import { summarizeCheckpoint } from "./observability.ts";
 import { persistRawPayload } from "./shared.ts";
@@ -19,25 +19,6 @@ type PersistRawPayloadOptions = NonNullable<Parameters<typeof persistRawPayload>
 export interface FanslyDailyAttemptState {
   utcDay: string;
   callsToday: number;
-}
-
-export type FanslyResponseClass = "nonempty" | "empty" | "invalid";
-
-export function classifyFanslyResponse(
-  payload: unknown,
-  classifier: {
-    isValid: (value: unknown) => boolean;
-    isEmpty: (value: unknown) => boolean;
-  },
-): FanslyResponseClass {
-  if (!classifier.isValid(payload)) {
-    return "invalid";
-  }
-  return classifier.isEmpty(payload) ? "empty" : "nonempty";
-}
-
-export function fanslyUtcDayKey(instant: Date): string {
-  return instant.toISOString().slice(0, 10);
 }
 
 /** Reset only the daily attempt allowance; every lane-specific cursor survives. */
@@ -72,17 +53,6 @@ export function spreadFanslyContinuation(
 
 export function isRepeatedRequest<T>(previous: T | null, next: T): boolean {
   return previous !== null && Object.is(previous, next);
-}
-
-export function advanceOffsetPage(input: {
-  offset: number;
-  pageSize: number;
-  rowCount: number;
-}): { done: boolean; nextOffset: number } {
-  return {
-    done: input.rowCount < input.pageSize,
-    nextOffset: input.offset + input.pageSize,
-  };
 }
 
 type ProgressInput<TState> = {
@@ -344,30 +314,6 @@ export function createFanslyLaneJournal(input: {
     input.onJournal?.();
     return result;
   };
-}
-
-export async function writeFanslyLaneCoverage(input: {
-  db: Database;
-  pageId: number;
-  plane: string;
-  scopeRef: string;
-  status: CaptureCoverageStatus;
-  acquisitionMode: "forward_only" | "retroactive";
-  proof: CaptureCoverageProof;
-  proofObservationId?: number | null;
-  oldestCapturedAt?: Date | null;
-  newestCapturedAt?: Date | null;
-  replaceWindowBounds?: boolean;
-  observedUniqueCount?: number | null;
-  expectedCount?: number | null;
-  reasonCode?: string | null;
-  cursor?: Record<string, unknown>;
-}) {
-  const { db, ...coverage } = input;
-  return upsertCaptureCoverage(db, {
-    ...coverage,
-    platform: "fansly",
-  });
 }
 
 type FanslyLaneCoverageExtra = {

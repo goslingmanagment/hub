@@ -1,7 +1,7 @@
 import type { SyncStream } from "@agency_hub_core/db";
 import type { FanslyObservationKind, FanslySendSource, FanslyWireId } from "@agency_hub_core/fansly";
 
-import { FOLLOWERS_RECONCILE_MIN_INTERVAL_MS } from "../../services/sync/followers-reconcile-floor.ts";
+import { FOLLOWERS_RECONCILE_MIN_INTERVAL_MS } from "./lib/audience-rules.ts";
 import type { Metrics } from "../engine/ports.ts";
 import {
   createEngineRegistry,

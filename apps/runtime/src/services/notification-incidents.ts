@@ -1,6 +1,8 @@
 import {
   clearPageSyncAuthBlock,
   hasRecentTerminalProxyFailure,
+  isFanslyPageEngineOwned,
+  listNotificationIncidents,
   openNotificationIncidentWithRecoveryGuard,
   recoverAndResolveNotificationIncident,
   type NotificationIncidentKind,
@@ -65,7 +67,7 @@ const SYNC_ENGINE_ROUTE_RESOLVE_DETAIL = "Fansly Sync Engine route open again (1
 
 const SYNC_ENGINE_OPEN_TITLES: Record<SyncEngineAlertSubKey | typeof SYNC_ENGINE_PACE_VIOLATION_SUBKEY, string> = {
   page_stopped: "🚨 Fansly Sync Engine stopped a page (429, auth, identity, network or ownership)",
-  [SYNC_ENGINE_PACE_VIOLATION_SUBKEY]: "🚨 Fansly Sync Engine pace violated: two sends of a page closer than the pause setting",
+  [SYNC_ENGINE_PACE_VIOLATION_SUBKEY]: "🚨 Fansly Sync Engine pace violated: two sends of a page closer than their pause, or of a route closer than its interval",
   live_degraded: "🚨 Fansly Sync Engine live path degraded (socket, decode debt or quarantined work)",
   freshness: "🚨 Fansly Sync Engine freshness broken (messages, money or urgent work late)",
   stuck: "🚨 Fansly Sync Engine work stuck (a request or a planned resource without progress)",
@@ -80,6 +82,24 @@ const SYNC_ENGINE_RESOLVE_DETAILS: Record<SyncEngineAlertSubKey | typeof SYNC_EN
   stuck: "Fansly Sync Engine work progressing again",
   process: "Fansly Sync Engine heartbeat back",
 };
+
+/** Why a latch was resolved when the resolve is not its condition's own
+ *  recovery: stored as the resolved row's `metadata.resolution` (a reopen
+ *  replaces the metadata, so it never outlives the episode it closed) and
+ *  named by the resolve message the paging sweep sends. */
+export const INCIDENT_RESOLUTION_REASONS = {
+  /** A legacy stream's latch on a page the Fansly Sync Engine runs live: the
+   *  legacy executor no longer runs the stream, so its own recovery — the only
+   *  thing that resolved it — never comes. */
+  engine_owned: "the page is owned by the Fansly Sync Engine; the legacy stream no longer runs",
+} as const;
+export type IncidentResolution = keyof typeof INCIDENT_RESOLUTION_REASONS;
+
+function incidentResolutionReason(resolution: string | null | undefined): string | null {
+  return resolution !== null && resolution !== undefined && Object.hasOwn(INCIDENT_RESOLUTION_REASONS, resolution)
+    ? INCIDENT_RESOLUTION_REASONS[resolution as IncidentResolution]
+    : null;
+}
 
 function syncEngineSubKey(subKey: string | null | undefined): keyof typeof SYNC_ENGINE_OPEN_TITLES | null {
   return subKey !== null && subKey !== undefined && Object.hasOwn(SYNC_ENGINE_OPEN_TITLES, subKey)
@@ -276,7 +296,7 @@ export function openMessageForIncident(
  * error, not a fallthrough into another kind's text (review R2-7: the old
  * ternary resolved golden_signal_lag as "OFAPI webhooks delivering again"). */
 function resolveDetailForIncident(
-  input: { kind: NotificationIncidentKind; stream?: SyncStream | null; subKey?: string | null },
+  input: { kind: NotificationIncidentKind; stream?: SyncStream | null; subKey?: string | null; resolution?: string | null },
 ): string {
   switch (input.kind) {
     case "auth_blocked":
@@ -286,7 +306,11 @@ function resolveDetailForIncident(
     case "proxy_missing":
       return "Proxy assigned; Fansly egress restored";
     case "stream_failed_threshold":
-      return `Stream ${input.stream ?? "unknown"} recovered`;
+      // Closed, not recovered: the stream stopped running (its reason is the
+      // message's own line), so nothing says it succeeded again.
+      return incidentResolutionReason(input.resolution) === null
+        ? `Stream ${input.stream ?? "unknown"} recovered`
+        : `Stream ${input.stream ?? "unknown"} closed`;
     case "ofapi_auth":
       return "OFAPI account auth recovered";
     case "ofapi_low_credit":
@@ -381,15 +405,20 @@ export function resolveMessageForIncident(
     platform: "fansly" | "onlyfans" | null;
     stream?: SyncStream | null;
     subKey?: string | null;
+    /** The resolved row's `metadata.resolution` (`IncidentResolution`): a
+     *  resolve that is not the condition's own recovery says why. */
+    resolution?: string | null;
   },
 ) {
   const detail = resolveDetailForIncident(input);
+  const reason = incidentResolutionReason(input.resolution);
 
   return [
     "✅ Resolved",
     input.pageLabel
       ? `${detail}: ${input.pageLabel}${input.platform ? ` (${input.platform})` : ""}`
       : detail,
+    ...(reason === null ? [] : [`Reason: ${reason}`]),
   ].join("\n");
 }
 
@@ -505,14 +534,17 @@ async function resolveIncidentAndNotify(
     recoveredAt?: Date;
     stream?: SyncStream | null;
     subKey?: string | null;
+    /** Set only when the resolve is not the condition's own recovery. */
+    resolution?: IncidentResolution;
     deliveryMode?: "policy" | "critical_outbox";
   },
-) {
+): Promise<boolean> {
   const recoveredAt = input.recoveredAt ?? new Date();
   const metadata = {
     pageLabel: input.pageLabel,
     platform: input.platform,
     stream: input.stream ?? null,
+    ...(input.resolution === undefined ? {} : { resolution: input.resolution }),
   };
   try {
     const resolved = await recoverAndResolveNotificationIncident(app.db, {
@@ -534,13 +566,15 @@ async function resolveIncidentAndNotify(
 
     // Decision 381: the recovery notice for every non-critical kind is the
     // paging sweep's, once the condition has stayed quiet for its hold.
-    void resolved;
+    // True: this call moved an open latch to resolved.
+    return resolved !== null;
   } catch (error) {
     app.logger.warn({
       platformAccountId: input.platformAccountId,
       incidentKind: input.kind,
       err: error,
     }, "Notification incident resolve failed; continuing");
+    return false;
   }
 }
 
@@ -637,6 +671,21 @@ export async function notifySyncChunkFailureIncident(
   },
 ) {
   try {
+    if (input.platform === "fansly" && (await isFanslyPageEngineOwned(app.db, input.platformAccountId)).owned) {
+      // A legacy chunk of a page the Fansly Sync Engine owns (one still in
+      // flight when the switch fenced the legacy engine): the legacy stream no
+      // longer runs, so its failure is not the page's state — the engine
+      // reports the page through its own alerts — and a stream latch opened
+      // now would wait for a legacy recovery that never comes (the transition
+      // closed it, `engine_owned`). The streak itself stays on the legacy
+      // row: after a rollback the stream's next failure opens it again.
+      app.logger.warn({
+        platformAccountId: input.platformAccountId,
+        stream: input.stream,
+        errorCode: input.errorCode ?? null,
+      }, "Legacy stream failure on a page the Fansly Sync Engine owns; no legacy incident opened");
+      return;
+    }
     if (input.hasProxy && await hasTerminalProxyFailure(app, input.runId)) {
       await openIncidentAndNotify(app, {
         ...input,
@@ -710,6 +759,61 @@ export async function resolveSyncChunkRecoveryIncidents(
     kind: "stream_failed_threshold",
     recoveredAt,
   });
+}
+
+/**
+ * The transition of a Fansly page to the Fansly Sync Engine: a legacy
+ * stream's latch (`stream_failed_threshold:<page>:<stream>`) resolves only
+ * through the legacy executor's chunk recovery above, and the legacy executor
+ * never runs a stream of a page the engine runs live — such a latch would stay
+ * open for ever (production incident 41, lilly-2 `dm_conversations`, opened
+ * by the legacy engine the day before its switch). The switch's phase C and
+ * every live takeover of the engine host close the page's open ones here,
+ * through the ordinary resolve (the recovery tombstone; the paging sweep's
+ * resolve message, which names the reason `engine_owned`).
+ *
+ * Only a page in `live`: a switch that reverts from `handover` gives the
+ * streams back to the legacy engine, whose latches are still true. Idempotent:
+ * with none open nothing is written. The engine's own latches
+ * (`fansly_sync_engine`) and every other kind stay as they are; an OnlyFans
+ * page has no `sync_pages` row, so it is never live. The legacy executor
+ * cannot open them again while the engine owns the page
+ * (`notifySyncChunkFailureIncident`). Never throws; returns the streams whose
+ * latch this call resolved.
+ */
+export async function resolveLegacyStreamIncidentsOfEnginePage(
+  app: IncidentApp,
+  input: { pageId: number; pageLabel: string | null; recoveredAt?: Date },
+): Promise<SyncStream[]> {
+  try {
+    if ((await isFanslyPageEngineOwned(app.db, input.pageId)).mode !== "live") return [];
+    const open = await listNotificationIncidents(app.db, { status: "open", platformAccountId: input.pageId });
+    const recoveredAt = input.recoveredAt ?? new Date();
+    const closed: SyncStream[] = [];
+    for (const incident of open) {
+      if (incident.kind !== "stream_failed_threshold" || incident.stream === null) continue;
+      const stream = incident.stream;
+      // Only the latch shape the legacy executor keys.
+      if (incident.incidentKey !== incidentKey({ kind: "stream_failed_threshold", platformAccountId: input.pageId, stream })) continue;
+      const resolved = await resolveIncidentAndNotify(app, {
+        kind: "stream_failed_threshold",
+        platformAccountId: input.pageId,
+        pageLabel: input.pageLabel,
+        platform: "fansly",
+        stream,
+        recoveredAt,
+        resolution: "engine_owned",
+      });
+      if (resolved) closed.push(stream);
+    }
+    return closed;
+  } catch (error) {
+    app.logger.warn({
+      platformAccountId: input.pageId,
+      err: error,
+    }, "Legacy stream incidents of an engine page could not be read; they stay open until the next live takeover");
+    return [];
+  }
 }
 
 /**

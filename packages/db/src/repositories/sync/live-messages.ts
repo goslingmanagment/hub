@@ -45,6 +45,7 @@ import type { Database } from "../../client.ts";
 import { capturePayloadRefFromColumns, type CapturePayloadRef } from "../capture-payloads.ts";
 import { appendDomainEventsInTransaction, type DomainEventInput } from "../domain-events.ts";
 import { isDmArchiveScopeFenced, tryAcquireDmArchiveWriterFenceLock } from "../erasure-fence.ts";
+import type { SyncPageMode } from "./pages.ts";
 
 /** Deliverable (SSE v2), never projection-only, never an archive input. */
 export const FANSLY_WS_LIVE_OBSERVED_EVENT = "message.live_observed";
@@ -557,7 +558,10 @@ function retrySeconds(ageMs: number) {
 
 /**
  * One bounded parity pass over due, unconfirmed overlay rows (`skip locked`,
- * so concurrent passes split the work). Reads only Hub's own stores.
+ * so concurrent passes split the work). Reads only Hub's own stores: the hot
+ * copy decides where the page's readers read `page_dm_messages`, the archive
+ * copy otherwise — and only the archive copy on a page whose readers read the
+ * archive (`dmReaderStoreOf`: the engine's live pages, step 4 S4-08).
  */
 export async function confirmDmLiveMessages(
   db: Database,
@@ -579,12 +583,14 @@ export async function confirmDmLiveMessages(
         arc.content_pending as arc_content_pending,
         coalesce(th.excluded, false) as excluded
       from dm_live_messages m
+      left join sync_pages reader on reader.page_id = m.page_id
       left join lateral (
         select pm.id, pm.content, pm.sender_platform_user_id, pm.created_at, pm.in_reply_to_message_id,
           t.platform_conversation_id as group_id
         from page_dm_messages pm
         join page_dm_threads t on t.id = pm.conversation_id
         where pm.platform_account_id = m.page_id and pm.platform_message_id = m.platform_message_id
+          and reader.mode is distinct from 'live'
         order by pm.id
         limit 1
       ) hot on true
@@ -650,64 +656,95 @@ export interface DmLiveInTransactionConfirmCounts {
   mismatchFields: Partial<Record<DmLiveMismatchField, number>>;
 }
 
+/** The overlay rows a DM apply settles (`claimDmLiveMessagesForConfirm`). */
+export interface DmLiveConfirmClaim {
+  pageId: number;
+  /** The unconfirmed overlay rows of the ids, row-locked by the apply's
+   *  transaction, in id order. */
+  messageIds: readonly string[];
+  /** Ids the reads covered without returning them. */
+  notFoundMessageIds: ReadonlySet<string>;
+}
+
 /**
- * The Fansly Sync Engine's confirmation of the overlay rows its DM apply just
- * read (design §5.4 step 7, §14 F3), inside that apply's transaction: the
- * same `judgeDmLiveParity` verdict as the passive pass, against the
- * `page_dm_messages` rows the apply wrote (`confirm_source =
- * 'page_dm_messages'` until step 4). Only rows still unconfirmed are touched,
- * under their row lock, so the passive pass (`skip locked`, same rule) and
- * this writer never both settle a row.
+ * The first half of the Fansly Sync Engine's confirmation of the overlay rows
+ * its DM apply just read (design §5.4 step 7, §14 F3): lock the still
+ * unconfirmed overlay rows of the ids, in the apply's transaction BEFORE its
+ * event appends (lock order: `dm_live_messages` before `domain_event_seq`).
+ * The verdict waits for the archive feed (`confirmDmLiveMessagesInTransaction`).
  *
  * `messageIds`: ids the read returned. `notFoundMessageIds`: ids the reads
- * covered without returning them (a deleted message, or one never shown) —
- * settled `not_found` unless a hot copy exists after all, which is judged
- * like any other. An id with neither stays for the passive pass.
+ * covered without returning them (a deleted message, or one never shown).
  */
-export async function confirmDmLiveMessagesInTransaction(
+export async function claimDmLiveMessagesForConfirm(
   tx: Database,
   input: { pageId: number; messageIds: readonly string[]; notFoundMessageIds?: readonly string[] },
-): Promise<DmLiveInTransactionConfirmCounts> {
-  const counts: DmLiveInTransactionConfirmCounts = { checked: 0, match: 0, mismatch: 0, notFound: 0, mismatchFields: {} };
+): Promise<DmLiveConfirmClaim> {
   const notFound = new Set(input.notFoundMessageIds ?? []);
   const ids = [...new Set([...input.messageIds, ...notFound])].filter((id) => /^[0-9]{1,32}$/.test(id)).sort();
-  if (ids.length === 0) return counts;
-  const rows = await tx.execute<DmLiveParityRow>(sql`
-    select m.page_id::text as page_id, m.platform_message_id, m.platform_conversation_id,
-      m.sender_platform_user_id, m.is_sent_by_page, m.created_at, m.content, m.in_reply_to_message_id,
-      m.field_mask, (extract(epoch from (clock_timestamp() - m.first_visible_at)) * 1000)::bigint::text as age_ms,
-      hot.id is not null as hot_found, hot.content as hot_content, hot.sender_platform_user_id as hot_sender,
-      hot.created_at as hot_created_at, hot.in_reply_to_message_id as hot_reply, hot.group_id as hot_group,
-      false as arc_found, null::text as arc_text, null::boolean as arc_sent_by_me,
-      null::timestamptz as arc_occurred_at, null::text as arc_reply, null::text as arc_group,
-      null::boolean as arc_content_pending, false as excluded
+  if (ids.length === 0) return { pageId: input.pageId, messageIds: [], notFoundMessageIds: notFound };
+  const rows = await tx.execute<{ platform_message_id: string }>(sql`
+    select m.platform_message_id
     from dm_live_messages m
-    left join lateral (
-      select pm.id, pm.content, pm.sender_platform_user_id, pm.created_at, pm.in_reply_to_message_id,
-        t.platform_conversation_id as group_id
-      from page_dm_messages pm
-      join page_dm_threads t on t.id = pm.conversation_id
-      where pm.platform_account_id = m.page_id and pm.platform_message_id = m.platform_message_id
-      order by pm.id
-      limit 1
-    ) hot on true
     where m.page_id = ${input.pageId}
       and m.platform_message_id = any(${sql.param(ids)}::text[])
       and m.confirmed_at is null
     order by m.platform_message_id
     for update of m
   `);
+  return { pageId: input.pageId, messageIds: rows.rows.map((row) => row.platform_message_id), notFoundMessageIds: notFound };
+}
+
+/**
+ * The second half, after the apply fed `message_archive` (step 4, design
+ * S4-08: the engine's pages read the archive): the same `judgeDmLiveParity`
+ * verdict as the passive pass, against the archive rows of the claimed overlay
+ * rows (`confirm_source = 'message_archive'`). Only the claimed rows are
+ * touched — their locks are this transaction's — so the passive pass
+ * (`skip locked`, same rule) and this writer never both settle a row. A
+ * covered id without an archive copy is settled `not_found`; a returned id
+ * without one (its draft fenced, its canonicalization refused) stays for the
+ * passive pass.
+ */
+export async function confirmDmLiveMessagesInTransaction(
+  tx: Database,
+  claim: DmLiveConfirmClaim,
+): Promise<DmLiveInTransactionConfirmCounts> {
+  const counts: DmLiveInTransactionConfirmCounts = { checked: 0, match: 0, mismatch: 0, notFound: 0, mismatchFields: {} };
+  if (claim.messageIds.length === 0) return counts;
+  const rows = await tx.execute<DmLiveParityRow>(sql`
+    select m.page_id::text as page_id, m.platform_message_id, m.platform_conversation_id,
+      m.sender_platform_user_id, m.is_sent_by_page, m.created_at, m.content, m.in_reply_to_message_id,
+      m.field_mask, (extract(epoch from (clock_timestamp() - m.first_visible_at)) * 1000)::bigint::text as age_ms,
+      false as hot_found, null::text as hot_content, null::text as hot_sender,
+      null::timestamptz as hot_created_at, null::text as hot_reply, null::text as hot_group,
+      arc.id is not null as arc_found, arc.text_plain as arc_text, arc.is_sent_by_me as arc_sent_by_me,
+      arc.occurred_at as arc_occurred_at, arc.in_reply_to_ref as arc_reply, arc.conversation_ref as arc_group,
+      arc.content_pending as arc_content_pending, false as excluded
+    from dm_live_messages m
+    left join lateral (
+      select a.id, a.text_plain, a.is_sent_by_me, a.occurred_at, a.in_reply_to_ref, a.conversation_ref,
+        a.content_pending
+      from message_archive a
+      where a.account_id = m.page_id and a.platform = 'fansly' and a.message_ref = m.platform_message_id
+      limit 1
+    ) arc on true
+    where m.page_id = ${claim.pageId}
+      and m.platform_message_id = any(${sql.param([...claim.messageIds])}::text[])
+      and m.confirmed_at is null
+    order by m.platform_message_id
+  `);
   const verdicts: Array<{ message_id: string; outcome: DmLiveConfirmOutcome; source: string | null; fields: string }> = [];
   for (const row of rows.rows) {
     counts.checked += 1;
-    // The hot copy decides; without one only a covered id is `not_found`
+    // The archive copy decides; without one only a covered id is `not_found`
     // (the window never elapses here: the passive pass owns the window).
     const verdict = judgeDmLiveParity(row, Number.POSITIVE_INFINITY);
     if (verdict.outcome === "match" || verdict.outcome === "mismatch") {
       counts[verdict.outcome] += 1;
       for (const field of verdict.fields) counts.mismatchFields[field] = (counts.mismatchFields[field] ?? 0) + 1;
       verdicts.push({ message_id: row.platform_message_id, outcome: verdict.outcome, source: verdict.source, fields: verdict.fields.join(",") });
-    } else if (notFound.has(row.platform_message_id)) {
+    } else if (claim.notFoundMessageIds.has(row.platform_message_id)) {
       counts.notFound += 1;
       verdicts.push({ message_id: row.platform_message_id, outcome: "not_found", source: null, fields: "" });
     }
@@ -722,7 +759,7 @@ export async function confirmDmLiveMessagesInTransaction(
       updated_at = clock_timestamp()
     from jsonb_to_recordset(${JSON.stringify(verdicts)}::jsonb)
       as v(message_id text, outcome text, source text, fields text)
-    where m.page_id = ${input.pageId} and m.platform_message_id = v.message_id and m.confirmed_at is null
+    where m.page_id = ${claim.pageId} and m.platform_message_id = v.message_id and m.confirmed_at is null
   `);
   return counts;
 }
@@ -832,6 +869,25 @@ export async function readFanslyWsLiveGauges(
 
 /** The REST store a reader already reads; the overlay dedups against it. */
 export type DmLiveReaderStore = "page_dm_messages" | "message_archive";
+
+/**
+ * The store the DM readers serve a page from (step 4, design S4-08, owner
+ * decision №11): `message_archive` on a page the Fansly Sync Engine runs live,
+ * `page_dm_messages` on every other page (OnlyFans, which writes it, and a
+ * Fansly page off the engine, where legacy writes it). Chosen by the page's
+ * data, never by its platform.
+ */
+export function dmReaderStoreOf(mode: SyncPageMode | null | undefined): DmLiveReaderStore {
+  return mode === "live" ? "message_archive" : "page_dm_messages";
+}
+
+/** `dmReaderStoreOf` for a page by id (no sync_pages row: `page_dm_messages`). */
+export async function readDmReaderStore(db: Database, pageId: number): Promise<DmLiveReaderStore> {
+  const result = await db.execute<{ mode: SyncPageMode }>(sql`
+    select mode from sync_pages where page_id = ${pageId}
+  `);
+  return dmReaderStoreOf(result.rows[0]?.mode);
+}
 
 /** A provisional message as a reader shows it: socket fields only. */
 export interface DmLiveReaderMessage {

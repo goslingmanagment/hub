@@ -236,6 +236,10 @@ describe("compose config", () => {
     expect(sync).toContain("Date.now() - stat.mtimeMs > 90000");
     expect(sync).not.toMatch(/^\s+(init|volumes|ports):/m);
     expect(main).toContain("export const SYNC_HEARTBEAT_INTERVAL_MS = 30_000;");
+    // Step 4, 4-3: the stall watchdog exits (70) and relies on this restart
+    // policy and on node being PID 1; SIGTERM ends the process at 40 s at the
+    // latest, inside the 45 s grace, so Docker's SIGKILL never comes.
+    expect(main).toContain("export const SYNC_SHUTDOWN_CAP_MS = 40_000;");
   });
 
   it("docker-compose.yml runs the sync role locally after the migrator", async () => {
@@ -690,6 +694,52 @@ describe("compose config", () => {
     expect(lifecycleRollbackForbiddenIndex).toBeGreaterThan(inventoryRecheckIndex);
     expect(promoteIndex).toBeGreaterThan(lifecycleRollbackForbiddenIndex);
     expect(postDeployCapabilityIndex).toBeGreaterThan(healthWaitIndex);
+  });
+
+  it("refuses a candidate that drops a registered client SDK unless the owner names it (H-1c)", async () => {
+    // Behavior: tests/deploy-client-sdk-gate.test.ts. This pins the wiring.
+    const text = await readComposeFile("scripts/deploy-production.sh");
+    const startup = await readComposeFile("apps/runtime/src/startup.ts");
+    const gate = getShellFunction(text, "verify_candidate_client_sdks");
+    const mainStart = text.indexOf('ROLLBACK_RELEASE_ARCHIVE="${TEMP_DIR}/rollback-release-files.tar"');
+    const buildIndex = text.indexOf("\nbuild_candidate_image\n", mainStart);
+    const lifecycleGateIndex = text.indexOf("\nverify_candidate_lifecycle_capability\n", buildIndex);
+    const gateIndex = text.indexOf("\nverify_candidate_client_sdks\n", mainStart);
+    const schemaCaptureIndex = text.indexOf('capture_remote_schema_migrations "$SCHEMA_BEFORE_FILE"', mainStart);
+    const releaseSyncIndex = text.indexOf('log "Syncing release files', mainStart);
+    const recreateIndex = text.indexOf('log "Recreating the remote production stack"', mainStart);
+    const promoteIndex = text.indexOf("docker tag $(printf", recreateIndex);
+
+    expect(startup).toContain('process.argv[2] === "print-compatible-client-sdks"');
+    expect(gate).not.toBeNull();
+    expect(gate).toContain(`$(printf '%q' "$IMAGE_CANDIDATE_TAG") node apps/runtime/dist/startup.js print-compatible-client-sdks`);
+    expect(gate).toContain(`$(printf '%q' "$ROLLBACK_IMAGE_TAG") node apps/runtime/dist/startup.js print-compatible-client-sdks`);
+    expect(gate).toContain('"${ROLLBACK_IMAGE_AVAILABLE:-0}" != "1"');
+    expect(gate).toContain(`grep -qF 'Unsupported Agency Hub runtime role "print-compatible-client-sdks"'`);
+    expect(gate).toContain('node "$SCRIPT_DIR/verify-client-sdk-retention.mjs" "${verifier_args[@]}"');
+    expect(gate).toContain('for drop in "${DROP_CLIENT_SDKS[@]}"; do');
+    expect(text).toContain("DROP_CLIENT_SDKS=()");
+    expect(text).toContain("    --drop-client-sdk)\n");
+    // Every repetition is kept (behavior: deploy-client-sdk-gate.test.ts).
+    expect(text).toContain('      DROP_CLIENT_SDKS+=("$2")\n');
+    expect(text).toContain("  --drop-client-sdk <sha256>\n");
+    // The release kit synced to the host, and archived for rollback, carries
+    // the verifier its deploy-production.sh calls.
+    const releaseFilesStart = text.indexOf("REMOTE_RELEASE_FILES=()");
+    const releaseFiles = text.slice(releaseFilesStart, text.indexOf("\ndo\n", releaseFilesStart) + 1);
+    expect(releaseFilesStart).toBeGreaterThan(-1);
+    expect(releaseFiles).toContain("  scripts/verify-client-sdk-retention.mjs\n");
+    // A drop is the owner's per-run decision: no environment equivalent.
+    expect(text).not.toMatch(/DEPLOY_DROP_CLIENT_SDK/);
+    // Called once, inside candidate verification: after the build and the
+    // lifecycle gate, before anything is quiesced, migrated, synced or promoted.
+    expect(text.split("\nverify_candidate_client_sdks\n")).toHaveLength(2);
+    expect(buildIndex).toBeGreaterThan(mainStart);
+    expect(lifecycleGateIndex).toBeGreaterThan(buildIndex);
+    expect(gateIndex).toBeGreaterThan(lifecycleGateIndex);
+    expect(schemaCaptureIndex).toBeGreaterThan(gateIndex);
+    expect(releaseSyncIndex).toBeGreaterThan(gateIndex);
+    expect(promoteIndex).toBeGreaterThan(gateIndex);
   });
 
   it("deploy-production.sh routes compose recreate failures through rollback handling", async () => {

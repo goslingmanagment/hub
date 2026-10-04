@@ -5,21 +5,6 @@ import { fanslyWireSpec, type FanslyEarningsAccount } from "@agency_hub_core/fan
 import { millsFromInteger } from "@agency_hub_core/shared";
 
 import { parseFanslyMetadataAccountCreatedAt } from "../../../services/fansly.ts";
-import {
-  parseTopSpendersCursorState,
-  type TopSpendersCursorState,
-  type TopSpendersCursorWindow,
-} from "../../../services/sync/cursor-state.ts";
-import {
-  buildTopSpendersBootstrapState,
-  buildTopSpendersBootstrapWindows,
-  buildUtcMonthKey,
-  computeCompletedTopSpenderMonths,
-  partitionTopSpenderItems,
-  splitTopSpendersWindow,
-  TOP_SPENDERS_PROVIDER_CAP,
-  TOP_SPENDERS_STEADY_STATE_WINDOW_MS,
-} from "../../../services/sync/money-rules.ts";
 import type {
   ApplyInput,
   ApplyResult,
@@ -33,6 +18,19 @@ import type {
   ShadowResult,
   StepPlan,
 } from "../../engine/resource.ts";
+import {
+  buildTopSpendersBootstrapState,
+  buildTopSpendersBootstrapWindows,
+  buildUtcMonthKey,
+  computeCompletedTopSpenderMonths,
+  parseTopSpendersCursorState,
+  partitionTopSpenderItems,
+  splitTopSpendersWindow,
+  TOP_SPENDERS_PROVIDER_CAP,
+  TOP_SPENDERS_STEADY_STATE_WINDOW_MS,
+  type TopSpendersCursorState,
+  type TopSpendersCursorWindow,
+} from "../lib/money-rules.ts";
 import { advanceShadowWalk, type ShadowWalkProgress } from "../lib/offset-walk.ts";
 import { readFanslyPageFacts } from "../lib/page-facts.ts";
 

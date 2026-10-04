@@ -14,13 +14,15 @@ import {
 import { SyncChunkBudget } from "../apps/runtime/src/services/sync/chunk-budget.ts";
 import {
   backfillContinuationAt,
-  emptyFanslyStatsCursorState,
   fanslyStatsSnapshotChunk,
-  parseFanslyStatsCursorState,
   rollUtcDay,
   utcDayKey,
   windowsAreContiguous,
 } from "../apps/runtime/src/services/sync/fansly-stats.ts";
+import {
+  emptyFanslyStatsCursorState,
+  parseFanslyStatsCursorState,
+} from "../apps/runtime/src/sync/fansly/lib/stats-rules.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,

@@ -9,7 +9,6 @@ import {
   FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
 } from "@agency_hub_core/shared";
 
-import { truncateDmPreview } from "../apps/runtime/src/services/sync/dm-preview.ts";
 import { prepareJournalBody } from "../apps/runtime/src/sync/fansly/capture.ts";
 import {
   listHeadInstant,
@@ -20,6 +19,7 @@ import {
   type ListHeadFollowupState,
   type ResolveListItemInput,
 } from "../apps/runtime/src/sync/fansly/lib/conversation-list.ts";
+import { truncateDmPreview } from "../apps/runtime/src/sync/fansly/lib/dm-preview.ts";
 import {
   parseDmListFullCursor,
   parseDmListHeadCursor,

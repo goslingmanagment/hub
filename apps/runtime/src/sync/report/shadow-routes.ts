@@ -1,7 +1,8 @@
 import { sql } from "drizzle-orm";
 
-import { SYNC_ROUTE_JOURNAL_SLACK_MS, SYNC_SEND_WINDOW_MS, type Database, type SyncPageRow } from "@agency_hub_core/db";
+import { readFanslySendAudit, SYNC_ROUTE_JOURNAL_SLACK_MS, SYNC_SEND_WINDOW_MS, type Database, type SyncPageRow } from "@agency_hub_core/db";
 
+import { auditRouteIntervals } from "../engine/send-audit.ts";
 import { FANSLY_RESOURCE_SPECS } from "../fansly/registry.ts";
 import {
   FAMILY_BUDGETS,
@@ -12,17 +13,23 @@ import {
   routeBudget,
 } from "../fansly/routes.ts";
 
-// The shadow gate's two SQL checks (step 3b ruling 12), over the shadow
+// The shadow gate's two checks (step 3b ruling 12), over the shadow
 // journal of part A's window, besides the frozen A1–A4 rules:
 //
 //   route budgets  every route and family of `fansly/routes.ts` kept its
-//                  budget in shadow: in every 60 s and 300 s span that ends at
-//                  a send of the window, at most ⌈W / T⌉ + 1 sends (T = the
-//                  budget's interval at its `current` rate; amendment A1's
-//                  bound, the live acceptance's §2b). A send counts at its
+//                  budget in shadow (I19): each pair of adjacent sends of a
+//                  route, and of a family, whose later send lies in the
+//                  window is at least the interval that send's admission
+//                  recorded, and no recorded interval is below its ceiling's
+//                  — the send audit (`engine/send-audit.ts`) the alert
+//                  evaluator and the live acceptance run. A send counts at its
 //                  instant as the route clocks read it (`readRouteJournal`):
 //                  the simulated send, else its admission + the send window.
-//                  A send this build places on no route fails the check.
+//                  A pair without its recorded interval is inconclusive, which
+//                  never passes; a send this build places on no route fails
+//                  the check. The span counts (at most ⌈W / T⌉ + 1 sends in
+//                  every 60 s and 300 s, T = the budget's `current` interval)
+//                  are diagnostics only.
 //   endless walks  no run of a walk — one work row of a key that is not a
 //                  poll — asks a route from the same position twice in the
 //                  window: a walk whose position does not advance goes round
@@ -41,11 +48,11 @@ import {
 //                  shadow attempt unsent (no simulated send) is the same step
 //                  resumed, not a repeat.
 
-/** The spans the budget check counts over (amendment A1). */
+/** The spans the budget diagnostics count over (amendment A1). */
 export const ROUTE_BUDGET_CHECK_WINDOWS_MS = [60_000, 300_000] as const;
 
 /** The most sends a strict budget of `intervalMs` admits in any span of
- *  `windowMs`: ⌈W / T⌉ + 1 (amendment A1). */
+ *  `windowMs`: ⌈W / T⌉ + 1 (amendment A1; a diagnostic). */
 export function routeBudgetBound(windowMs: number, intervalMs: number): number {
   return Math.ceil(windowMs / intervalMs) + 1;
 }
@@ -87,14 +94,18 @@ export interface RouteBudgetRow {
   /** The shortest gap between two sends of the budget ending in the window. */
   minGapMs: number | null;
   /** The most sends in a 60 s / 300 s span ending at a send of the window,
-   *  and the bound. */
+   *  and the bound (diagnostics). */
   max60s: number;
   bound60s: number;
   max300s: number;
   bound300s: number;
-  /** Sends of the window that end a span over its bound. */
+  /** The send audit: pairs closer than the interval their later send was
+   *  admitted under, plus admissions that recorded an interval below the
+   *  ceiling's; the first of them. */
   violations: number;
   firstViolationAt: Date | null;
+  /** Pairs whose later send recorded no interval. */
+  inconclusive: number;
 }
 
 export interface ShadowRouteBudgets {
@@ -102,8 +113,10 @@ export interface ShadowRouteBudgets {
   rows: RouteBudgetRow[];
   /** Sends of the window whose operation this build places on no route. */
   unplaced: Array<{ page: string; operation: string; sends: number }>;
-  /** Over-bound sends plus unplaced sends: 0 passes. */
+  /** The audit's violations plus unplaced sends: 0 (and 0 inconclusive) passes. */
   violations: number;
+  /** Pairs the audit could not judge: never a pass. */
+  inconclusive: number;
 }
 
 export interface EndlessWalkRow {
@@ -175,10 +188,8 @@ async function readRouteBudgets(
     sql`(${operation}::text, ${budget.budget}::text, ${budget.intervalMs}::int)`));
   const { start, end } = input.window;
   const inWindow = sql`c.at >= ${start} and c.at < ${end}`;
-  const over = sql`(c.n60 > ceil(${w60}::numeric / c.interval_ms) + 1 or c.n300 > ceil(${w300}::numeric / c.interval_ms) + 1)`;
   const rows = await db.execute<{
     pageId: string; budget: string; sends: number; minGapMs: number | null; max60: number | null; max300: number | null;
-    violations: number; firstViolationAt: Date | string | null;
   }>(sql`
     with budgets(operation, budget, interval_ms) as (values ${sql.join(members, sql`, `)}),
     sends as (${shadowSends({ pageIds, window: input.window })}),
@@ -194,9 +205,7 @@ async function readRouteBudgets(
            count(*) filter (where ${inWindow})::int as sends,
            min(c.gap_ms) filter (where ${inWindow}) as "minGapMs",
            max(c.n60) filter (where ${inWindow})::int as max60,
-           max(c.n300) filter (where ${inWindow})::int as max300,
-           count(*) filter (where ${inWindow} and ${over})::int as violations,
-           min(c.at) filter (where ${inWindow} and ${over}) as "firstViolationAt"
+           max(c.n300) filter (where ${inWindow})::int as max300
       from counted c
      group by c.page_id, c.budget
     having count(*) filter (where ${inWindow}) > 0
@@ -211,9 +220,16 @@ async function readRouteBudgets(
      group by 1, 2
      order by 1, 2
   `);
+  // The verdict is the send audit's, per page over the shadow journal.
+  const audits = new Map<number, ReturnType<typeof auditRouteIntervals>>();
+  for (const pageId of pageIds) {
+    const sends = await readFanslySendAudit(db, { pageId, since: start, until: end, shadow: true });
+    audits.set(pageId, auditRouteIntervals(sends, { start, until: end }));
+  }
   const byBudget = new Map(budgets.map((budget) => [budget.budget, budget]));
   const budgetRows: RouteBudgetRow[] = rows.rows.map((row) => {
     const budget = byBudget.get(row.budget)!;
+    const audited = audits.get(Number(row.pageId))?.scopes.find((scope) => (scope.kind === "route" ? scope.scope : `family:${scope.scope}`) === row.budget);
     return {
       page: label(Number(row.pageId)),
       budget: row.budget,
@@ -225,8 +241,9 @@ async function readRouteBudgets(
       bound60s: routeBudgetBound(w60, budget.intervalMs),
       max300s: Number(row.max300 ?? 0),
       bound300s: routeBudgetBound(w300, budget.intervalMs),
-      violations: Number(row.violations),
-      firstViolationAt: row.firstViolationAt === null ? null : new Date(row.firstViolationAt),
+      violations: audited?.violations ?? 0,
+      firstViolationAt: audited?.firstViolationAt ?? null,
+      inconclusive: audited?.inconclusive ?? 0,
     };
   });
   const unplacedRows = unplaced.rows.map((row) => ({ page: label(Number(row.pageId)), operation: row.operation, sends: Number(row.sends) }));
@@ -234,6 +251,7 @@ async function readRouteBudgets(
     rows: budgetRows,
     unplaced: unplacedRows,
     violations: budgetRows.reduce((total, row) => total + row.violations, 0) + unplacedRows.reduce((total, row) => total + row.sends, 0),
+    inconclusive: budgetRows.reduce((total, row) => total + row.inconclusive, 0),
   };
 }
 
@@ -292,7 +310,7 @@ export async function readShadowRouteChecks(
   db: Database,
   input: { pages: readonly SyncPageRow[]; window: { start: Date; end: Date }; maxListed: number },
 ): Promise<ShadowRouteChecks> {
-  if (input.pages.length === 0) return { budgets: { rows: [], unplaced: [], violations: 0 }, walks: { runs: 0, endless: [], repeats: 0 } };
+  if (input.pages.length === 0) return { budgets: { rows: [], unplaced: [], violations: 0, inconclusive: 0 }, walks: { runs: 0, endless: [], repeats: 0 } };
   return {
     budgets: await readRouteBudgets(db, input),
     walks: await readWalks(db, input),
@@ -303,15 +321,18 @@ export async function readShadowRouteChecks(
 export function routeCheckLines(checks: ShadowRouteChecks): string[] {
   const { budgets, walks } = checks;
   const over = budgets.rows.filter((row) => row.violations > 0).map((row) => `${row.page} ${row.budget} `
-    + `${row.violations} send(s) over (max ${row.max60s}/${row.bound60s} in 60 s, ${row.max300s}/${row.bound300s} in 300 s, `
-    + `shortest gap ${row.minGapMs ?? "—"} ms of ${row.intervalMs}; first ${row.firstViolationAt?.toISOString() ?? "—"})`);
+    + `${row.violations} send(s) closer than their recorded interval (shortest gap ${row.minGapMs ?? "—"} ms of ${row.intervalMs}; `
+    + `max ${row.max60s}/${row.bound60s} in 60 s, ${row.max300s}/${row.bound300s} in 300 s; first ${row.firstViolationAt?.toISOString() ?? "—"})`);
   const unplaced = budgets.unplaced.map((row) => `${row.page} ${row.operation} ${row.sends}`);
+  const open = budgets.rows.filter((row) => row.inconclusive > 0).map((row) => `${row.page} ${row.budget} ${row.inconclusive}`);
   const spent = budgets.rows.filter((row) => !row.budget.startsWith("family:")).length;
+  const inconclusive = open.length === 0 ? "" : `; pairs without a recorded interval (inconclusive): ${open.join(", ")}`;
   const lines = [
     `Route budgets in shadow: ${budgets.violations === 0
-      ? `0 violations over ${spent} page route(s) with sends (at most ⌈W/T⌉ + 1 sends in every 60 s and 300 s)`
+      ? `0 violations over ${spent} page route(s) with sends (each pair of adjacent sends of a route and of a family `
+        + `≥ the interval its later send was admitted under)${inconclusive}`
       : `${budgets.violations} violation(s)${over.length === 0 ? "" : `: ${over.join("; ")}`}`
-        + `${unplaced.length === 0 ? "" : `; sends this build places on no route: ${unplaced.join(", ")}`}`}`,
+        + `${unplaced.length === 0 ? "" : `; sends this build places on no route: ${unplaced.join(", ")}`}${inconclusive}`}`,
   ];
   const listed = walks.endless.map((row) => `${row.page} ${row.resource} (work ${row.workId}) asked ${row.route} `
     + `${JSON.stringify(row.position)} ${row.times} times ${row.firstAt.toISOString()} … ${row.lastAt.toISOString()}`);

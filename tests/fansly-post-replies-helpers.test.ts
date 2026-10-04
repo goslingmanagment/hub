@@ -4,13 +4,12 @@
 
 import { describe, expect, it } from "vitest";
 
+import { hasAccountSidecar, replyAuthorRefs } from "../apps/runtime/src/services/sync/fansly-post-replies.ts";
 import {
-  hasAccountSidecar,
   nextRepliesCursor,
   p99PostsLength,
-  replyAuthorRefs,
   replyRows,
-} from "../apps/runtime/src/services/sync/fansly-post-replies.ts";
+} from "../apps/runtime/src/sync/fansly/lib/post-replies-rules.ts";
 
 describe("WP-F5 reply-page helpers", () => {
   it("tells an unreadable body from an EMPTY one", () => {

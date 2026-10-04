@@ -2,11 +2,10 @@ import type { UpsertFanPageInput, UpsertPageSubscriptionInput } from "@agency_hu
 import { mapFanslySubscriptionStatus, type FanslyFollower, type FanslySubscriber } from "@agency_hub_core/fansly";
 import { millsFromInteger } from "@agency_hub_core/shared";
 
-// The audience rules both Fansly engines apply (subscribers, followers,
-// followers reconcile): the legacy chunk handlers (executor-handlers.ts) and
-// the Sync Engine's resources (sync/fansly/resources/subscribers.ts,
-// followers.ts). Pure; moved here from executor-handlers.ts unchanged, so the
-// two engines cannot drift while both run (step 2 shadow, step 3 per page).
+// The audience rules of the Sync Engine's resources (resources/subscribers.ts,
+// followers.ts): subscribers, followers, followers reconcile. Pure. The legacy
+// chunk handlers (executor-handlers.ts, followers-reconcile-floor.ts) import
+// them from here until step 4 deletes them.
 
 /** Restarts of a subscribers walk (total changed, partial result, offset
  *  duplicates) before the walk is withheld. */
@@ -25,6 +24,11 @@ export const SUBSCRIBERS_EMPTY_SNAPSHOT_MAX_RETIREMENTS = 5;
 // before the walk began. The counter trails a lapse by about a day, which is
 // the confirmation pause.
 export const SUBSCRIBERS_EMPTY_SNAPSHOT_COUNTER_MAX_AGE_MS = 2 * 60 * 60 * 1000;
+
+/** Owner policy: a full followers walk starts at most once a day on every
+ *  page. The walk's two-walk grace is unchanged, so an unfollow shows 24-48 h
+ *  after it happens instead of within a few hours. */
+export const FOLLOWERS_RECONCILE_MIN_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 export const FOLLOWERS_RECONCILE_PAGE_SIZE = 100;
 export const FOLLOWERS_RECONCILE_MAX_SNAPSHOT_RESTARTS = 2;

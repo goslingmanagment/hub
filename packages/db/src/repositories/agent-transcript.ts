@@ -70,6 +70,11 @@ export interface AgentTranscriptInput {
   readonly filters: AgentTranscriptFilters;
   /** Keyset resume position, exclusive. Rendered by SQL, never by JavaScript. */
   readonly after?: KeysetBoundary | undefined;
+  /** Whether the union reads `page_dm_messages` (its hot arm, and the PPV
+   *  upgrade from `purchased_at`). Default true. False is the archive-only
+   *  transcript of step 4 (design S4-06/S4-08): `message_archive` and the
+   *  OnlyFans arm only, PPV state from `message_archive.is_opened`. */
+  readonly hotArm?: boolean | undefined;
 }
 
 export interface AgentTranscriptRow {
@@ -115,6 +120,7 @@ function boolPredicate(column: SQL, expected: boolean | undefined): SQL {
 function buildUnionQuery(input: AgentTranscriptInput, limit: number): SQL {
   const { filters } = input;
   const includeDeleted = filters.includeDeleted ?? true;
+  const hotArm = input.hotArm ?? true;
   const descending = input.sortDir === "desc";
 
   // Ordering and resumption share ONE rendered key (see agent-keyset.ts). The
@@ -159,13 +165,13 @@ function buildUnionQuery(input: AgentTranscriptInput, limit: number): SQL {
         and d.platform_account_id = ${input.pageId}
         and d.platform_conversation_id = ${input.conversationRef}
         and ${inWindow(sql`d.message_created_at`)}
-      union
+      ${hotArm ? sql`union
       select m.platform_message_id as message_ref
       from page_dm_messages m
       join page_dm_threads t on t.id = m.conversation_id
       where t.platform_account_id = ${input.pageId}
         and t.platform_conversation_id = ${input.conversationRef}
-        and ${inWindow(sql`m.created_at`)}
+        and ${inWindow(sql`m.created_at`)}` : sql``}
     ),
     archive_arm as (
       select ma.message_ref,
@@ -239,6 +245,7 @@ function buildUnionQuery(input: AgentTranscriptInput, limit: number): SQL {
         and d.platform_account_id = ${input.pageId}
         and d.platform_conversation_id = ${input.conversationRef}
     ),
+    -- Without the hot arm (hotArm false) this CTE and hot_upgrade match nothing.
     hot_arm as (
       select m.platform_message_id as message_ref,
              null::text as native_message_ref,
@@ -273,6 +280,7 @@ function buildUnionQuery(input: AgentTranscriptInput, limit: number): SQL {
       join window_refs r on r.message_ref = m.platform_message_id
       where t.platform_account_id = ${input.pageId}
         and t.platform_conversation_id = ${input.conversationRef}
+        and ${hotArm}
     ),
     candidates as (
       select * from archive_arm
@@ -306,6 +314,7 @@ function buildUnionQuery(input: AgentTranscriptInput, limit: number): SQL {
       where t.platform_account_id = ${input.pageId}
         and t.platform_conversation_id = ${input.conversationRef}
         and m.purchased_at is not null
+        and ${hotArm}
     ),
     -- Dedup happens HERE, before any limit: a page truncated by duplicates would
     -- under-report and the count would be a lie.
@@ -431,10 +440,13 @@ export async function listAgentTranscript(
     // BL-A11: only `message_archive`'s floor was established (the caller's
     // dedicated unbounded query runs over that store); stamping the same date
     // on the other three arms fabricated floors nobody computed. They report
-    // `unknown` until someone pays for their own floor queries.
+    // `unknown` until someone pays for their own floor queries. Without the
+    // hot arm the union reads neither `page_dm_messages` nor the threads.
     witnesses: [
       witnessFor("message_archive", input.archiveFloor),
-      ...witnessesFor(["dm_message_archive", "page_dm_messages", "page_dm_threads"]),
+      ...witnessesFor(input.hotArm === false
+        ? ["dm_message_archive"]
+        : ["dm_message_archive", "page_dm_messages", "page_dm_threads"]),
     ],
   };
 }

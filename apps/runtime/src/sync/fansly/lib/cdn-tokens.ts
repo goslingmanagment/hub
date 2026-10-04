@@ -2,7 +2,7 @@
 // from Fansly pull bodies BEFORE they are journaled.
 //
 // A deliberate, owner-approved exception to the verbatim journal, in the same
-// spirit as [A20] (services/sync/shared.ts, FANSLY_FAN_ACCOUNT_CAPTURE_ALLOWLIST):
+// spirit as [A20] (./capture-trims.ts, FANSLY_FAN_ACCOUNT_CAPTURE_ALLOWLIST):
 // a field that changes on nearly every read makes every body unique and
 // destroys the content-address dedup collapse the disk budget rests on. Since
 // 2026-09-25 `/account/wallets/earnings/transactions` embeds full media records
@@ -74,7 +74,7 @@ export const FANSLY_CDN_TOKENS_STRIPPED_KINDS = [
 
 /**
  * Kinds whose signed URLs are READ LATER, named so the refusal is as legible as
- * the acceptance. The AI media describer (ai-media-describe/fansly-source.ts)
+ * the acceptance. The AI media describer (services/ai-media-describe/fansly-source.ts)
  * downloads media from the URLs journaled in the observation that
  * `ai_media_descriptions.source_observation_id` or
  * `message_media_offers.source_observation_id` points at: DM pages today (every

@@ -46,7 +46,7 @@ const { persistRawPayload, retentionDate } = await import("../apps/runtime/src/s
 const {
   JOURNAL_LONE_SURROGATES_REPLACED_MAPPER_SUFFIX,
   replaceJournalLoneSurrogates,
-} = await import("../apps/runtime/src/services/sync/journal-lone-surrogates.ts");
+} = await import("../apps/runtime/src/sync/fansly/lib/journal-lone-surrogates.ts");
 
 const LONE_HIGH = "\ud83d";
 const LONE_LOW = "\udc4b";

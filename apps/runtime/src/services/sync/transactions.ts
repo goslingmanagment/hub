@@ -21,12 +21,13 @@ import {
   FANSLY_TRANSACTION_ITEM_CONTRACT_REJECTED,
   FanslyTransactionsItemContractError,
 } from "./errors.ts";
-import { lookupHydratedFans, upsertHydratedFansForPage } from "./fan-hydration.ts";
+import { upsertHydratedFansForPage } from "../../sync/fansly/lib/fan-hydration.ts";
 import {
   findTransactionPageOverlap,
   inWindowItemsAfterOlder,
   mapFanslyTransactionItem,
-} from "./money-rules.ts";
+} from "../../sync/fansly/lib/money-rules.ts";
+import { lookupHydratedFans } from "./fan-hydration.ts";
 import { summarizeCheckpoint, type SyncRunTelemetry } from "./observability.ts";
 import { assertPageTransactionsWriter } from "../transactions-writer-gate.ts";
 import { DAY_MS, persistRawPayload, retentionDate } from "./shared.ts";

@@ -631,6 +631,57 @@ describe("§7 — roles", () => {
       .toBe(403);
   }, 60_000);
 
+  it("chatter, chat-extension token: the extension's own surface and nothing else (H-3)", async (context) => {
+    const setup = requireSetup(context);
+    if (!setup) return;
+    await registerChatter(setup.app, ["lora-fansly", "lora-of"]);
+    const issued = await setup.server.inject({
+      method: "POST",
+      url: "/api/v1/auth/device-tokens/password",
+      headers: { "x-client-version": "chat-extension/1.0.0" },
+      payload: {
+        username: "grisha",
+        password: CHATTER_PASSWORD,
+        label: "Firefox · macOS · ChatSpace",
+        mode: "active",
+        client: "chat-extension",
+      },
+    });
+    // Sign in at all: yes, and the hub says the token is the narrow one.
+    expect(issued.statusCode, issued.body).toBe(200);
+    expect(issued.json<{ client: string | null }>().client).toBe("chat-extension");
+    const bearer = { authorization: `Bearer ${issued.json<{ token: string }>().token}` };
+    const narrowRefusal = { error: "forbidden", message: "This route is not available to this client", statusCode: 403 };
+
+    // Console, dashboard, cabinet, the plain page list, a page route off its
+    // list, the desktop read gateway: one reason-less 403 for all of them.
+    for (const url of [
+      "/api/v1/admin/users",
+      "/api/v1/models",
+      "/api/v1/auth/devices",
+      "/api/v1/pages",
+      "/api/v1/pages/lora-fansly/subscribers",
+      "/api/v1/ofapi/read/accounts",
+    ]) {
+      const response = await get(setup.server, url, bearer);
+      expect(response.statusCode, url).toBe(403);
+      expect(response.json(), url).toEqual(narrowRefusal);
+    }
+
+    // On its list: who am I, the bootstrap (assigned pages only), a page-scoped
+    // read of an assigned page, and the page scope still holds on it.
+    expect((await get(setup.server, "/api/v1/auth/me", bearer)).statusCode).toBe(200);
+    const bootstrap = await get(setup.server, "/api/v1/client/bootstrap", bearer);
+    expect(bootstrap.statusCode).toBe(200);
+    const identity = bootstrap.json<{ identity: { tokenClient: string | null }; pages: Array<{ pageLabel: string }> }>();
+    expect(identity.identity.tokenClient).toBe("chat-extension");
+    expect(identity.pages.map((page) => page.pageLabel).sort()).toEqual(["lora-fansly", "lora-of"]);
+    expect((await get(setup.server, "/api/v1/pages/lora-of/spender-autolists", bearer)).statusCode).toBe(200);
+    const foreign = await get(setup.server, "/api/v1/pages/lora-vip/spender-autolists", bearer);
+    expect(foreign.statusCode).toBe(403);
+    expect(foreign.json()).not.toEqual(narrowRefusal);
+  }, 60_000);
+
   it("content_manager: cannot sign in anywhere, by either lane", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
