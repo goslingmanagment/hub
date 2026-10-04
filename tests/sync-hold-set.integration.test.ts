@@ -8,7 +8,6 @@ import {
   acquireSyncPageOwnership,
   addSyncPageLiftedDmExclusion,
   adjustPausedResources,
-  advanceWsRouterCursor,
   captureAttempt,
   clearPageHold,
   confirmSyncOwnersStopped,
@@ -514,7 +513,7 @@ describe("the old hold columns stay in the database: every write of the page row
   const UPDATES = [
     "acquireSyncPageOwnership", "heartbeatSyncPageOwner", "trustSyncPageCredentials", "recordSyncPageIdentityProof",
     "setNetworkFailureStreak", "addSyncPageLiftedDmExclusion", "removeSyncPageLiftedDmExclusion", "setPagePause",
-    "adjustPausedResources", "setRegistryOverride", "advanceWsRouterCursor", "insertAdmission", "captureAttempt",
+    "adjustPausedResources", "setRegistryOverride", "insertAdmission", "captureAttempt",
     "writeSafeRelease", "confirmSyncOwnersStopped", "setSyncPageMode",
   ];
 
@@ -574,9 +573,12 @@ describe("the old hold columns stay in the database: every write of the page row
   it("every statement that updates a page row runs over stale columns, whatever they say: an acquisition marks them, every other leaves them as they were — the marker too", async (context) => {
     if (!testDb) return context.skip();
     for (const [what, columns] of Object.entries(STALE)) {
-      // A live page (the engine's writes) and a page in mode `off` (the owner's mode lever).
+      // A live page (the engine's writes) and a page left in mode `shadow`,
+      // which nothing reaches any more (the owner's mode lever takes it `off`,
+      // the one transition there is since step 4 S4-23).
       const pageId = await seedLivePage();
       const offPage = await seedPage();
+      await testDb.pool.query("update sync_pages set mode = 'shadow' where page_id = $1", [offPage]);
       await writeOldColumns(pageId, columns);
       await writeOldColumns(offPage, columns);
       const stale = await oldColumns(pageId);
@@ -586,11 +588,11 @@ describe("the old hold columns stay in the database: every write of the page row
       let attemptId = 0;
       const admit = () => testDb!.db.transaction(async (raw) => {
         const tx = raw as unknown as Database;
-        const work = await upsertDemand(tx, { pageId, shadow: false, resource: "dm-messages.head", subject: "group-1", kind: "trigger", class: "urgent" });
+        const work = await upsertDemand(tx, { pageId, resource: "dm-messages.head", subject: "group-1", kind: "trigger", class: "urgent" });
         await lockOwnedPage(tx, { pageId, generation, lock: "no_key_update", live: true });
         const running = await markWorkRunning(tx, { workId: work.id, generation });
         const admitted = await insertAdmission(tx, {
-          pageId, shadow: false, workId: work.id, resource: "dm-messages.head", subject: "group-1", class: "urgent", slot: 0, nextCyclePos: 1,
+          pageId, workId: work.id, resource: "dm-messages.head", subject: "group-1", class: "urgent", slot: 0, nextCyclePos: 1,
           generation, demandRevision: running!.demandRevision, settingMs: 2_000, jitterU: 0.1, pauseMs: 2_200, operation: "messages.page",
           request: { path: "/api/v1/message", query: { groupId: "group-1" } }, evidence: true,
         });
@@ -621,7 +623,6 @@ describe("the old hold columns stay in the database: every write of the page row
         ["setRegistryOverride", pageId, async () => expect(await setRegistryOverride(db(), {
           pageId, key: "media-stats.walk", override: { everyMs: 86_400_000 },
         })).toBe(true)],
-        ["advanceWsRouterCursor", pageId, () => advanceWsRouterCursor(db(), { pageId, generation, cursor: 5 })],
         ["insertAdmission", pageId, async () => { attemptId = await admit(); }],
         ["captureAttempt", pageId, async () => expect(await captureAttempt(db(), {
           attemptId, pageId, outcome: "response", sent: true, sentAt: new Date(), sendMark: "request_start", httpStatus: 200, applyState: "none",
@@ -632,8 +633,8 @@ describe("the old hold columns stay in the database: every write of the page row
         ["confirmSyncOwnersStopped", pageId, async () => expect(await confirmSyncOwnersStopped(db(), {
           runningHosts: ["sync-host-b"], ownHost: "cli", confirmedBy: "deploy", dryRun: false, pageIds: [pageId],
         })).toMatchObject([{ pageId, confirmed: true }])],
-        ["setSyncPageMode", offPage, async () => expect(await setSyncPageMode(db(), { pageId: offPage, to: "shadow", changedBy: "test" })).toMatchObject({ kind: "changed" })],
-        ["setSyncPageMode", offPage, async () => expect(await setSyncPageMode(db(), { pageId: offPage, to: "off", changedBy: "test" })).toMatchObject({ kind: "changed" })],
+        ["setSyncPageMode", offPage, async () => expect(await setSyncPageMode(db(), { pageId: offPage, to: "off", changedBy: "test" }))
+          .toMatchObject({ kind: "changed", from: "shadow", to: "off" })],
       ];
       expect([...new Set(steps.map(([name]) => name))].sort()).toEqual([...UPDATES].sort());
 
@@ -650,7 +651,7 @@ describe("the old hold columns stay in the database: every write of the page row
         if (name === "acquireSyncPageOwnership") expected.set(page, marked(stale));
         expect(await oldColumns(page), `${what}: ${name}`).toEqual(expected.get(page));
       }
-      // Fifteen statements after the first acquisition, a second acquisition
+      // Fourteen statements after the first acquisition, a second acquisition
       // among them: the marker is there, beside what the columns said. The
       // page never acquired has none.
       expect((await oldColumns(pageId)).resource_holds, what).toEqual({ ...stale.resource_holds, ...MARKER });

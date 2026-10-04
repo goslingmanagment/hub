@@ -175,7 +175,6 @@ describe("the statements that write the page row", () => {
       "update setPagePause",
       "update adjustPausedResources",
       "update setRegistryOverride",
-      "update advanceWsRouterCursor",
     ]);
   });
 
