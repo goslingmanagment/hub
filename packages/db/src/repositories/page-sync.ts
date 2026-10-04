@@ -2317,40 +2317,6 @@ export async function heartbeatPageSyncLease(
   return (result.rowCount ?? 0) > 0;
 }
 
-export async function recordRunningPageSyncProgress(
-  db: Database,
-  input: {
-    pageId: number;
-    stream: SyncStream;
-    requestSeq: number;
-    leaseToken: string;
-    progressedAt?: Date | null;
-    phase?: string | null;
-    workClass?: SyncWorkClass | null;
-    progress?: Record<string, unknown>;
-    now?: Date;
-  },
-) {
-  const now = input.now ?? new Date();
-  const progressedAt = input.progressedAt ?? now;
-  const result = await db.execute(sql`
-    update ${pageSyncStates}
-    set progressed_at = ${progressedAt},
-        phase = coalesce(${input.phase ?? null}, phase),
-        work_class = coalesce(${input.workClass ?? null}, work_class),
-        progress = ${input.progress ?? {}},
-        updated_at = ${now}
-    where page_id = ${input.pageId}
-      and stream = ${input.stream}
-      and lease_token = ${input.leaseToken}
-      and leased_seq = ${input.requestSeq}
-      and status = 'running'
-      and lease_expires_at > clock_timestamp()
-  `);
-
-  return (result.rowCount ?? 0) > 0;
-}
-
 export async function clearPageSyncLease(
   db: Database,
   input: {

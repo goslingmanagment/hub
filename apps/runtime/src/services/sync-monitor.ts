@@ -12,7 +12,6 @@ import {
 import type { AppContext } from "../bootstrap.ts";
 import { followersReconcileFloorWaitUntil } from "./sync/followers-reconcile-floor.ts";
 import { BadRequestError } from "./errors.ts";
-import { parseTransactionBackfillState } from "./sync/transaction-backfill.ts";
 import {
   ofapiAudienceQualityHoldFor,
   parseDmConversationCursorState,
@@ -616,28 +615,6 @@ function buildDmMessagesProgress(row: SyncMonitorStreamRow): SyncMonitorProgress
   };
 }
 
-function buildTransactionsProgress(row: SyncMonitorStreamRow): SyncMonitorProgress | null {
-  const backfill = parseTransactionBackfillState(row.checkpointState);
-  if (!backfill) {
-    return null;
-  }
-
-  const total = typeof backfill.providerReportedTotal === "number"
-    ? Math.max(backfill.providerReportedTotal, 0)
-    : null;
-  const current = clampProgress(
-    backfill.processedTransactions + backfill.processedChargebacks,
-    total,
-  );
-  return {
-    label: labelWithTotal(current, total, "items", " backfilled"),
-    current,
-    total,
-    unit: "items",
-    percent: percent(current, total),
-  };
-}
-
 function progressFor(
   row: SyncMonitorStreamRow,
   status: SyncMonitorStatus,
@@ -653,8 +630,6 @@ function progressFor(
       return buildDmConversationProgress(row, status);
     case "dm_messages":
       return buildDmMessagesProgress(row);
-    case "transactions":
-      return buildTransactionsProgress(row);
     case "light":
     default:
       return null;

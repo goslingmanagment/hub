@@ -1319,9 +1319,9 @@ export const syncRawPayloads = pgTable(
     dmTipContextBackfillIdx: index("sync_raw_payloads_dm_tip_context_backfill_idx")
       .on(table.id)
       .where(sql`${table.endpoint} = 'dm_messages' and ${table.payloadKind} = 'dm_messages'`),
-    // 0223: a purchase_history chunk's capture, probe and storm reads. The
-    // list is the lane's endpoints (fansly-purchase-history.ts); a query only
-    // uses the index when its endpoint is one of them.
+    // 0223: the purchase-history capture, probe and storm reads. The list is
+    // the endpoints the legacy lane journaled (deleted at step 4, S4-16); a
+    // query only uses the index when its endpoint is one of them.
     purchaseHistoryIdx: index("sync_raw_payloads_purchase_history_idx")
       .on(table.pageId, table.endpoint, table.id)
       .where(sql`${table.endpoint} in ('purchase_history', 'purchase_history_contract_probe', 'purchase_history_contract_storm')`),
