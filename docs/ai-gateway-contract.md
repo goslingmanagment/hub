@@ -205,6 +205,14 @@ longer prompt. The read itself is the same statement and plan at either cap: bot
 whole conversation by its index and cut the tail afterwards (tombstones, stubs and duplicates are
 resolved before the cap).
 
+Size: those ceilings bound what a request may cost, not how large its prompt is. The gateway does
+not measure a prompt against the model's context window; the cost preflight's token estimate (4
+characters per token) is used for the price alone. Nothing shortens a full Recap's transcript to fit
+(only Coach has a prompt budget), so a prompt larger than the window of the model the request runs
+on is refused by the provider and the generation fails. At 3000 messages a hub-loaded transcript is
+up to twice as long as any the readers served before. The window to check before raising the
+setting is the Recap model's: the feature default, or the `model` a request names.
+
 ### Feature-lane fresh text (`liveTextContext`)
 
 The hub's archive trails the chat a chatter is looking at by seconds to minutes. A client that

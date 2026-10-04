@@ -262,7 +262,11 @@ describe("the cost of a 3000-message full Recap", () => {
     const likeProduction = estimateAnthropicGatewayRequestCost(fullRecapRequest(transcriptOf(3000, 61))).costMicroUsd;
     expect(likeProduction).toBeLessThan(1_500_000);
 
-    // Four times that message length is still admitted.
+    // Four times that message length still passes the cost preflight. That is
+    // all it says: the preflight prices a prompt (4 characters a token), it
+    // does not measure it against the model's context window, and the gateway
+    // has no such check. Whether the provider takes a prompt this size is the
+    // model's window to decide.
     const fourTimes = estimateAnthropicGatewayRequestCost(fullRecapRequest(transcriptOf(3000, 250))).costMicroUsd;
     expect(fourTimes).toBeGreaterThan(likeProduction);
     expect(fourTimes).toBeLessThan(DEFAULT_AI_GATEWAY_REQUEST_MICRO_USD_LIMIT);
