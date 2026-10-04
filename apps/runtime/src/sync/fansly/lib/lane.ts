@@ -7,8 +7,7 @@ import {
 
 // The lane rules the Sync Engine's resources share: the three-way response
 // class, the UTC day key, one offset page's advance and the capture-coverage
-// writer. What is left of the legacy lane scaffold (fansly-lane.ts) reads the
-// UTC day key from here until the handlers on it are deleted.
+// writer.
 
 export type FanslyResponseClass = "nonempty" | "empty" | "invalid";
 

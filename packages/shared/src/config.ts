@@ -556,9 +556,11 @@ export interface AppConfig {
   ofapiDmProjectionEnabled?: boolean;
   ofapiDmSyncEnabled?: boolean;
   ofapiDmColdArchiveEnabled?: boolean;
+  /** @deprecated Retired at step 4 with the legacy ramp gate of fan_earnings and purchase_history; nothing reads it. */
   fanslyFanEarningsSyncEnabled?: boolean;
   /** @deprecated Retired, ignored, like {@link AppConfig.fanslyFanEarningsRecoveryEnabled}. */
   fanslyPurchaseHistorySyncEnabled?: boolean;
+  /** @deprecated Retired at step 4 with the legacy ramp gate of fan_earnings and purchase_history; nothing reads it. */
   fanslyNewStreamPageAllowlist?: string;
   /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyStatsSnapshotSyncEnabled?: boolean;

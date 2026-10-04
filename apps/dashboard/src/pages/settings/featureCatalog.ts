@@ -53,15 +53,6 @@ export const HUB_FEATURES: readonly HubFeature[] = [
     keys: ["chatMuseAiFanProfileContextFeatures"], gates: [gate("chatMuseAiFanProfileContextFeatures", "none", "")], ...ai,
   },
   {
-    id: "earnings", title: "Траты фанов", group: "Fansly", advice: "keep",
-    summary: "Доход от каждого фана за всё время и по месяцам.",
-    reason: "Оставить для работы со спендерами и проверки доходов. Важна точность и актуальность, а не просто наличие таблицы.",
-    consequence: "Итоги по фанам перестанут обновляться. Основной поток транзакций этим флагом не выключается.",
-    check: "Сверять свежесть полного обхода и совпадение выборочных итогов с сохранёнными платежами.",
-    keys: ["fanslyFanEarningsSyncEnabled", "fanslyNewStreamPageAllowlist"], gates: [gate("fanslyFanEarningsSyncEnabled")],
-    scope: { key: "fanslyNewStreamPageAllowlist", empty: "all" }, ...sync,
-  },
-  {
     id: "ai-core", title: "AI для сотрудников", group: "AI и агенты", advice: "keep",
     summary: "Генерация ответов и помощь в диалогах через Hub.",
     reason: "Оставить как основной путь AI в клиентах. Ненужные функции оцениваются отдельно от общего доступа к AI.",

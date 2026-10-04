@@ -34,9 +34,8 @@ import {
   resetCaptureCasDualWriteForTests,
 } from "../apps/runtime/src/services/capture-cas-dual-write.ts";
 import { buildFanslyMetadata } from "../apps/runtime/src/services/fansly.ts";
-import { createFanslyLaneJournal } from "../apps/runtime/src/services/sync/fansly-lane.ts";
 import { fetchAndJournalFanslyDmMessagePage } from "../apps/runtime/src/services/sync/fansly-dm-messages.ts";
-import { retentionDate } from "../apps/runtime/src/services/sync/shared.ts";
+import { persistRawPayload, retentionDate } from "../apps/runtime/src/services/sync/shared.ts";
 import { upsertHydratedFansForPageDetailed } from "../apps/runtime/src/sync/fansly/lib/fan-hydration.ts";
 import {
   resetIntegrationDatabase,
@@ -127,15 +126,16 @@ describe("a Fansly body with unpaired surrogates is journaled, not refused", () 
     const snapshot = JSON.stringify(served);
 
     const captured = await inRun("stats_snapshot", async (syncRunId) => {
-      const persist = createFanslyLaneJournal({
-        db: testDb!.db,
-        pageId,
+      return persistRawPayload(testDb!.db, {
+        platformAccountId: pageId,
         syncRunId,
+        endpoint: "discovery_feed",
+        requestParams: { page: 0, limit: 25, offset: 0, sampling: "sampled" },
+        responsePayload: served,
         mapperVersion: "fansly-stats-v1",
         payloadKind: "mapping_critical",
         retainUntil: retentionDate(),
-      });
-      return persist("discovery_feed", { page: 0, limit: 25, offset: 0, sampling: "sampled" }, served);
+      }, { action: "inserting Fansly discovery_feed raw payload", platform: "fansly" });
     });
 
     // The lane keeps parsing its in-memory response: it is never rewritten.

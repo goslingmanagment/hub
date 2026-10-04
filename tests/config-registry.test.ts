@@ -96,9 +96,6 @@ describe("config registry", () => {
     "healthSyncLightMaxAgeMinutes",
     "healthSyncFollowerMaxAgeMinutes",
     "ofapiDmReconcileIntervalMinutes",
-    // Stage 16 ramp gates (live so ramp flips need no restart).
-    "fanslyFanEarningsSyncEnabled",
-    "fanslyNewStreamPageAllowlist",
     // The engine's post-replies walk: the cycle decides WHICH posts it reads.
     // (The legacy content lanes' flags, allowlists and budgets were retired
     // at step 4 and are applied nowhere.)
