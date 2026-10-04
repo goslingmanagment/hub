@@ -496,23 +496,6 @@ describe("[A20] the WP-F2 notification lane trims accounts[] and NOTHING else", 
     expect(FANSLY_NOTIFICATIONS_CAPTURE_MAPPER_VERSION)
       .not.toBe(FANSLY_FOLLOWERS_CAPTURE_MAPPER_VERSION);
   });
-
-  it("the handler journals through the trim, and stamps that version", () => {
-    // Pin both halves of the shared-journal seam: the lane-specific mapper
-    // version configures the writer, and the call site passes only the trimmed
-    // payload into it.
-    const source = readFileSync(
-      path.resolve("apps/runtime/src/services/sync/fansly-notifications.ts"),
-      "utf8",
-    );
-    expect(source).toMatch(
-      /createFanslyLaneJournal\(\{[\s\S]*?mapperVersion: FANSLY_NOTIFICATIONS_CAPTURE_MAPPER_VERSION,[\s\S]*?\}\);/,
-    );
-    expect(source).toMatch(
-      /journal\(OBSERVATION_KIND, requestParams, trimFanslyNotificationsPayload\(payload\)\)/,
-    );
-    expect(source).not.toMatch(/journal\(OBSERVATION_KIND, requestParams, payload\)/);
-  });
 });
 
 // WP-F5 — [A20] on the reply walk, and the reason the guard is not optional

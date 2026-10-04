@@ -37,6 +37,7 @@ import {
 } from "@agency_hub_core/db";
 import { findPageByLabel } from "@agency_hub_core/db";
 import {
+  isPageAllowlisted,
   redactSensitiveText,
   sanitizeError,
   type SanitizeErrorOptions,
@@ -48,7 +49,6 @@ import { resolveEgress, type AppEgressContext } from "./egress/resolver.ts";
 import { hasServiceEgressProxy } from "./egress/service-proxy.ts";
 import { loadEffectiveConfig } from "./effective-config.ts";
 import { AppError, NotFoundError } from "./errors.ts";
-import { isPageAllowlisted } from "./sync/fansly-stream-gate.ts";
 import {
   isValidVoiceCharacterCost,
   VOICE_AUDIO_MAX_BYTES,
@@ -60,11 +60,6 @@ import {
   validateVoiceScript,
   type VoiceScriptRejection,
 } from "./voice-script-validation.ts";
-
-// The fail-closed allowlist now lives in sync/fansly-stream-gate.ts (its
-// canonical home, alongside the opposite-semantic ramp gate). Re-exported here
-// so the non-sync callers that grew up around voice-notes keep one import.
-export { isPageAllowlisted };
 
 // The subset of the app context the service reads. `voiceTtsProvider` is
 // present whenever ELEVENLABS_API_KEY and the service proxy were configured at boot; the presence

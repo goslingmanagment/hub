@@ -21,7 +21,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
-  countPostEngagementRefreshProgress,
   createFanslyPage,
   createModel,
   listPostEngagementRefreshChunk,
@@ -57,6 +56,18 @@ const DAY_MS = 24 * 60 * 60_000;
 
 function daysAgo(days: number): Date {
   return new Date(NOW.getTime() - days * DAY_MS);
+}
+
+/** The plane's queue: rows held, ever refreshed, carrying a dirty mark. */
+async function planeCounts(pageId: number) {
+  const result = await testDb!.pool.query<{ known: number; refreshed: number; dirty: number }>(
+    `select count(*)::int as known,
+            (count(*) filter (where last_visited_at is not null))::int as refreshed,
+            (count(*) filter (where dirty_reason is not null))::int as dirty
+       from subject_refresh_state where page_id = $1 and plane = 'post_engagement'`,
+    [pageId],
+  );
+  return result.rows[0]!;
 }
 
 async function seedPage(label: string) {
@@ -153,8 +164,7 @@ describe("[sync-critical] WP-F6 the post_engagement refresh queue", () => {
     // route and an OnlyFans post has no batch read to queue.
     expect(second).toMatchObject({ scanned: 1, inserted: 1, cursor: "p-3" });
 
-    const progress = await countPostEngagementRefreshProgress(testDb.db, page.id);
-    expect(progress).toMatchObject({ subjectsKnown: 3, subjectsRefreshed: 0, postsKnown: 3 });
+    expect(await planeCounts(page.id)).toMatchObject({ known: 3, refreshed: 0 });
   });
 
   it("re-reads by DECAY: daily, weekly, monthly by the post's age", async (context) => {
@@ -307,8 +317,7 @@ describe("[sync-critical] WP-F6 the post_engagement refresh queue", () => {
     expect(tail!.next_due_at.toISOString())
       .toBe(new Date(NOW.getTime() + 30 * DAY_MS).toISOString());
 
-    const progress = await countPostEngagementRefreshProgress(testDb.db, page.id);
-    expect(progress).toMatchObject({ subjectsRefreshed: 2, subjectsDirty: 0 });
+    expect(await planeCounts(page.id)).toMatchObject({ refreshed: 2, dirty: 0 });
   });
 
   it("does NOT count a failed look as a look", async (context) => {
@@ -343,8 +352,7 @@ describe("[sync-critical] WP-F6 the post_engagement refresh queue", () => {
     // reads to tell "unreachable" from "not got to it yet".
     expect(row.rows[0]?.last_visited_at).toBeNull();
     expect(row.rows[0]?.consecutive_failures).toBe(2);
-    expect((await countPostEngagementRefreshProgress(testDb.db, page.id)).subjectsRefreshed)
-      .toBe(0);
+    expect((await planeCounts(page.id)).refreshed).toBe(0);
   });
 
   it("holds a failed post out of the batch until its backoff", async (context) => {

@@ -556,55 +556,61 @@ export interface AppConfig {
   ofapiDmProjectionEnabled?: boolean;
   ofapiDmSyncEnabled?: boolean;
   ofapiDmColdArchiveEnabled?: boolean;
+  /** @deprecated Retired at step 4 with the legacy ramp gate of fan_earnings and purchase_history; nothing reads it. */
   fanslyFanEarningsSyncEnabled?: boolean;
   /** @deprecated Retired, ignored, like {@link AppConfig.fanslyFanEarningsRecoveryEnabled}. */
   fanslyPurchaseHistorySyncEnabled?: boolean;
+  /** @deprecated Retired at step 4 with the legacy ramp gate of fan_earnings and purchase_history; nothing reads it. */
   fanslyNewStreamPageAllowlist?: string;
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyStatsSnapshotSyncEnabled?: boolean;
-  /** CSV of page labels allowed to run the stats sweep; empty = NONE (fails closed). */
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyStatsSnapshotPageAllowlist?: string;
-  /** HTTP ATTEMPTS per page per UTC day for the stats lane; crossing it defers. */
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyStatsSnapshotDailyCallBudget?: number;
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyNotificationsSyncEnabled?: boolean;
-  /** CSV of page labels allowed to poll notifications; empty = NONE (fails closed). */
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyNotificationsPageAllowlist?: string;
-  /** HTTP ATTEMPTS per page per UTC day for the notification lane; crossing it defers. */
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyNotificationsDailyCallBudget?: number;
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyCatalogSyncEnabled?: boolean;
-  /** CSV of page labels allowed to sweep the catalog; empty = NONE (fails closed). */
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyCatalogPageAllowlist?: string;
-  /** HTTP ATTEMPTS per page per UTC day for the catalog lane; crossing it defers. */
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyCatalogDailyCallBudget?: number;
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyPostRepliesSyncEnabled?: boolean;
-  /** CSV of page labels allowed to walk post replies; empty = NONE (fails closed). */
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyPostRepliesPageAllowlist?: string;
-  /** HTTP ATTEMPTS per page per UTC day for the replies walk; crossing it defers. */
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyRepliesDailyCallBudget?: number;
   /** How stale a post's last walk must be before the round-robin re-reads it. */
   fanslyRepliesRewalkCycleDays?: number;
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyPayoutsSyncEnabled?: boolean;
-  /** CSV of page labels allowed to read payouts; empty = NONE (fails closed). */
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyPayoutsPageAllowlist?: string;
-  /** HTTP ATTEMPTS per page per UTC day for the payouts lane; crossing it defers. */
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyPayoutsDailyCallBudget?: number;
-  /** WP-F4: the per-media statistics lane over `/it/moie/statsnew`. */
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyMediaStatsSyncEnabled?: boolean;
-  /** CSV of page labels allowed to walk per-media stats; empty = NONE (fails closed). */
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyMediaStatsPageAllowlist?: string;
-  /** HTTP ATTEMPTS per page per UTC day for the per-media lane; crossing it defers.
-   *  The lane is DESIGNED to spend all of it when M is large (A16). */
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyMediaStatsDailyCallBudget?: number;
-  /** How stale a long-tail media item's last visit must be before the
-   *  round-robin re-reads it (A6's one explicitly tunable cadence). */
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyMediaStatsLongTailCycleDays?: number;
-  /** WP-F6: the decayed `GET /post?ids=` phase on the EXISTING posts stream. */
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyPostEngagementRefreshEnabled?: boolean;
-  /** HTTP ATTEMPTS per page per UTC day for the engagement phase; crossing it
-   *  defers. Counted apart from the timeline walk in the same posts cursor. */
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyPostEngagementDailyCallBudget?: number;
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyStatsHourlyEnabled?: boolean;
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyStatsHourlyBackfillMaxDays?: number;
-  /** Delay + 30% jitter between BACKFILL chunk continuations (burst shape). */
+  /** @deprecated Retired at step 4 with the legacy Fansly content lanes; nothing reads it. */
   fanslyBackfillContinuationDelayMs?: number;
   fanslyDeepBackfillIgnoreRetentionLimit?: boolean;
   ofapiDmColdArchiveRetentionDays?: number;

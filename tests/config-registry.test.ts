@@ -96,53 +96,10 @@ describe("config registry", () => {
     "healthSyncLightMaxAgeMinutes",
     "healthSyncFollowerMaxAgeMinutes",
     "ofapiDmReconcileIntervalMinutes",
-    // Stage 16 ramp gates (live so ramp flips need no restart).
-    "fanslyFanEarningsSyncEnabled",
-    "fanslyNewStreamPageAllowlist",
-    // WP-F1 stats lane (live so a ramp flip and a budget change need no restart).
-    "fanslyStatsSnapshotSyncEnabled",
-    "fanslyStatsSnapshotPageAllowlist",
-    "fanslyStatsSnapshotDailyCallBudget",
-    "fanslyStatsHourlyEnabled",
-    "fanslyStatsHourlyBackfillMaxDays",
-    "fanslyBackfillContinuationDelayMs",
-    // WP-F2 notifications lane (same reasoning: a ramp flip and a budget change
-    // on the only permanently-lossy lane must not wait for a deploy).
-    "fanslyNotificationsSyncEnabled",
-    "fanslyNotificationsPageAllowlist",
-    "fanslyNotificationsDailyCallBudget",
-    // WP-F3 catalog lane (same reasoning again: a ramp flip and a budget
-    // change on the lane that measures M must not wait for a deploy).
-    "fanslyCatalogSyncEnabled",
-    "fanslyCatalogPageAllowlist",
-    "fanslyCatalogDailyCallBudget",
-    // WP-F5 replies walk. The budget and the re-walk cycle are live for
-    // different reasons: the budget is the ramp (100 -> 300 is its own gated
-    // flip), and the cycle decides WHICH posts that budget is spent on.
-    "fanslyPostRepliesSyncEnabled",
-    "fanslyPostRepliesPageAllowlist",
-    "fanslyRepliesDailyCallBudget",
+    // The engine's post-replies walk: the cycle decides WHICH posts it reads.
+    // (The legacy content lanes' flags, allowlists and budgets were retired
+    // at step 4 and are applied nowhere.)
     "fanslyRepliesRewalkCycleDays",
-    // WP-F7 payouts. Three keys on the same template: the ramp flag, its
-    // FAIL-CLOSED page allowlist, and the per-lane daily call budget.
-    "fanslyPayoutsSyncEnabled",
-    "fanslyPayoutsPageAllowlist",
-    "fanslyPayoutsDailyCallBudget",
-    // WP-F4 per-media statistics. FOUR keys: the ramp flag, its FAIL-CLOSED
-    // page allowlist, the per-lane daily call budget — the one number a
-    // cap-raise step moves, and the only request-count enforcement this lane
-    // has — and the long-tail cycle, which A6 asks explicitly to be a tunable.
-    // The three age-class boundaries are constants and are NOT here.
-    "fanslyMediaStatsSyncEnabled",
-    "fanslyMediaStatsPageAllowlist",
-    "fanslyMediaStatsDailyCallBudget",
-    "fanslyMediaStatsLongTailCycleDays",
-    // WP-F6 engagement refresh on the EXISTING posts stream. Live for the same
-    // reason as every other lane gate: the phase must be stoppable, and its cap
-    // re-sizable, without a deploy — and without touching the timeline capture
-    // it rides on.
-    "fanslyPostEngagementRefreshEnabled",
-    "fanslyPostEngagementDailyCallBudget",
     // Fast-reply freshness PR3: union-read mode, read per generation.
     "aiTranscriptFreshUnionMode",
     // Decision #136: fan-dossier context, read per generation.

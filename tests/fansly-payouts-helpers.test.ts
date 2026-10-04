@@ -1,10 +1,8 @@
-// WP-F7 — the payout walk's pure helpers. No database: the form, paging,
-// coverage and physical-attempt invariants that need one stay in
-// fansly-payouts-lane.integration.test.ts.
+// WP-F7 — the payout walk's pure rules (`sync/fansly/lib/payouts-rules.ts`),
+// which the engine's payouts resource reads. No database.
 
 import { describe, expect, it } from "vitest";
 
-import { walkContinuationAt } from "../apps/runtime/src/services/sync/fansly-payouts.ts";
 import {
   oldestCreatedAtMs,
   parseFanslyPayoutsCursorState,
@@ -16,7 +14,6 @@ import {
 } from "../apps/runtime/src/sync/fansly/lib/payouts-rules.ts";
 import {
   LIVE_TOTAL,
-  NOW,
   OLDEST_MS,
   requestPage,
   stableRequestPage,
@@ -95,12 +92,5 @@ describe("WP-F7 payout walk helpers", () => {
     expect(legacy?.catchUp).toBeNull();
     const open = parseFanslyPayoutsCursorState({ version: 1, utcDay: "2026-08-22", walkDone: false });
     expect(open?.walkStop).toBeNull();
-  });
-
-  it("spaces a walk continuation with jitter, never contiguously", () => {
-    // Burst SHAPE is the ban-risk surface, not daily volume.
-    expect(walkContinuationAt(NOW, 20_000, () => 0).getTime() - NOW.getTime()).toBe(14_000);
-    expect(walkContinuationAt(NOW, 20_000, () => 1).getTime() - NOW.getTime()).toBe(26_000);
-    expect(walkContinuationAt(NOW, 0, () => 0.5).getTime()).toBe(NOW.getTime());
   });
 });
