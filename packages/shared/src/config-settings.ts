@@ -94,7 +94,7 @@ export function validateConfigOverride(
       return { ok: true, value: trimmed };
     }
     default:
-      // url/secret/derived/alias/complex are never marked editable in the registry
+      // url/secret/derived/complex are never marked editable in the registry
       // (a parity test enforces this); guard anyway so a future mistake fails closed.
       return { ok: false, error: `Config key is not editable: ${key}` };
   }

@@ -103,8 +103,8 @@ the legacy WebSocket receiver (step 4, S4-12): every Fansly page's socket runs
 in the Sync Engine, whose head read of a chat with a fan's new attachment (a
 fast window, `sync/fansly/ws/router.ts`) journals the fresh DM page, and the
 projector makes its media due from there.
-`AI_MEDIA_DESCRIBE_FANSLY_FAST_LANE_MODE` / `_PAGES` are retired and ignored
-(removed in S4-26). Its rows stay as records: `ai_media_accelerator_reads`
+Its mode and page switches went with the other config keys of the legacy
+Fansly engine (S4-26). Its rows stay as records: `ai_media_accelerator_reads`
 with `lane = 'fast'` and `ai_media_fast_lane_health`. Its incident
 (`ai_provider_failed` / `media_describe_fast_lane`), if an older build left it
 open, resolves on the describer's next sweep.
@@ -121,9 +121,9 @@ open, resolves on the describer's next sweep.
   `dormant`); teasers and free creator media when a generation shows them.
   A media file the hub has not captured yet waits (`awaiting_source`): on a
   page the Fansly Sync Engine reads, its socket confirmation reads the
-  conversation's head. The in-chunk accelerator and its switch
-  `AI_MEDIA_DESCRIBE_FANSLY_ACCELERATOR_ENABLED` are retired since step 4
-  (S4-14); the switch is ignored (removed in S4-26).
+  conversation's head. The in-chunk accelerator is deleted (step 4, S4-14);
+  its switch and its daily limit went with the other config keys of the legacy
+  Fansly engine (S4-26).
 - **OnlyFans** (0216): locators of the desktop images layer, **free sources
   only** — webhook `Expires` URLs (≥120 s left) and `cdn.fansapi.com` URLs the
   desktop resolve handed out (now persisted as `source = 'resolve'`). `policy`
@@ -149,7 +149,6 @@ open, resolves on the describer's next sweep.
 | `AI_MEDIA_DESCRIBE_LIVE_CHAT_ONLY` | on | fan media described on arrival only in chats with an AI generation in 7 days |
 | `AI_MEDIA_DESCRIBE_MODEL_MEDIA` | `teasers` | creator media: `teasers` or `teasers+free` |
 | `AI_MEDIA_DESCRIBE_LOOP_ENABLED` | off | describe due rows within seconds (1 s loop) instead of per minute; re-read every 15 s |
-| `AI_MEDIA_DESCRIBE_FANSLY_ACCELERATOR_DAILY_LIMIT` | 60 | no reader left: the fast lane (S4-12) and the in-chunk accelerator (S4-14) that shared it are deleted |
 | `ANTHROPIC_MEDIA_API_KEY` | unset | optional separate key/workspace (env, restart) |
 
 `since` is the enable boundary: only messages strictly newer are described; a

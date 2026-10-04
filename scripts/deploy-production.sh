@@ -621,6 +621,14 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # resets a Fansly page's legacy state, and its rollback command refuses, so
   # it runs unchanged; no image clears a 'retired' blocker.
   "0239_retire_fansly_legacy_sync_states.sql"
+  # Overrides of the retired legacy Fansly config keys (step 4, design S4-26
+  # [E15]): one data statement that deletes the config_settings rows of the
+  # keys this release drops from the registry and appends one config_audit_log
+  # row per removed row (old value and version, new null). No DDL. The previous
+  # image still registers these keys but reads none of them, so with the rows
+  # gone it shows their env defaults and runs unchanged; the removed values
+  # stay readable in the audit log.
+  "0241_retire_fansly_legacy_config_overrides.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

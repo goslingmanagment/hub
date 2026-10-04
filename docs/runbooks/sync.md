@@ -133,6 +133,15 @@ from the next request, without a restart; a value outside the range is refused, 
 of a page the pacer keeps at least S × (1 + u), u drawn between 0 and 0.2. It is the only speed setting: the engine
 never changes S, and nothing else makes a page faster.
 
+**The legacy engine's settings are gone.** Its lane switches, page allowlists, daily call budgets and endpoint
+pauses left the console and the env schema at step 4. Their stored overrides were removed by a migration, one
+`config_audit_log` row each (the note starts `step 4: retired with the legacy Fansly engine`). An env var that
+still names one is ignored: the `api`, `worker` and `scheduler` processes each log one warning at boot, `Retired
+Fansly env vars are set and ignored`, with the names they found (`RETIRED_FANSLY_ENV_KEYS` in
+`packages/shared/src/config.ts`); remove those lines from `.env.production` with the next deploy. One case stops
+the boot of every process instead: `FANSLY_GLOBAL_DELAY_MS` or `FANSLY_ACCOUNT_LOOKUP_DELAY_MS` set while
+`FANSLY_DEFAULT_DELAY_MS` is not — those aliases used to carry S, so set the pause under its own name.
+
 **Pausing work.** Three scopes, each kept until its `resume`:
 
 ```sh

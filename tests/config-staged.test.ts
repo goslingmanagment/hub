@@ -136,14 +136,14 @@ describe("applyBootOverrides", () => {
     expect(result.skipped.map((s) => s.key)).toContain("ofapiDmSyncEnabled");
   });
 
-  it("applies an override whatever the page executor's concurrency and the retired shared limiter key say", () => {
-    // The last merged-config invariant (concurrency > 1 needs the shared rate
-    // limiter) went with the limiter's last reader (step 4, S4-19): an applied
-    // override is no longer reverted over it.
+  it("applies an override whatever the page executor's concurrency", () => {
+    // The last merged-config invariant (concurrency > 1 needed the shared rate
+    // limiter) went with the limiter's last reader (step 4, S4-19), and the
+    // limiter's key with it (S4-26): an applied override is never reverted
+    // over the executor's concurrency.
     const config = {
       ...baseConfig(),
       syncPageExecutorConcurrency: 4,
-      syncSharedRateLimitEnabled: false,
     } as unknown as AppConfig;
     const result = applyBootOverrides(config, overrides([["ofapiDmProjectionEnabled", true]]));
     expect(result.config).not.toBe(config);

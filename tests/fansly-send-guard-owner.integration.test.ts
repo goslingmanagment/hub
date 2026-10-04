@@ -346,11 +346,7 @@ function seedThreadInput(platformAccountId: number, platformConversationId: stri
 }
 
 async function legacyDmFixture(network: FakeFanslyNetwork) {
-  const app = createTestAppContext(testDb!, {
-    syncSharedRateLimitEnabled: true,
-    fanslyDmMessagesDelayMs: 0,
-    fanslyDmConversationsDelayMs: 0,
-  });
+  const app = createTestAppContext(testDb!);
   const { page } = await seedFanslyPage(app.db, app.config.encryptionKey, 1, "owner-dm");
   if (!page) throw new Error("Expected a fixture page");
   await testDb!.pool.query("update pages set external_page_id = '999' where id = $1", [page.id]);

@@ -34,6 +34,7 @@ import {
   syncMediaHandoff,
   syncPages,
 } from "@agency_hub_core/db";
+import { CONFIG_DESCRIPTORS, ENV_CONFIG_KEYS, RETIRED_FANSLY_ENV_KEYS } from "@agency_hub_core/shared";
 
 // Fansly Sync Engine migrations (design §2.1): forward-only, purely additive,
 // each in ROLLBACK_COMPATIBLE_MIGRATIONS. One block per migration.
@@ -588,6 +589,72 @@ describe("retire_fansly_legacy_sync_states.sql (step 4, S4-21: the point of no r
   });
 
   it("allows application rollback: the previous image serves no Fansly page from these rows", () => {
+    expect(rollbackCompatible()).toContain(`"${migration}"`);
+  });
+});
+
+describe("retire_fansly_legacy_config_overrides.sql (step 4, S4-26: the legacy Fansly config keys go)", () => {
+  // Found by its name, not its number: the number is the next free one at merge.
+  const found = readdirSync("packages/db/migrations").filter((file) => file.endsWith("_retire_fansly_legacy_config_overrides.sql"));
+  const migration = found[0] ?? "";
+  const text = found.length === 1 ? readFileSync(`packages/db/migrations/${migration}`, "utf8") : "";
+  const sql = stripComments(text);
+  const statements = topLevelStatements(sql);
+  const keys = [...(/^with retired \(key\) as \( values (.*?) \), batch as /.exec(statements[0] ?? "")?.[1] ?? "")
+    .matchAll(/\('([^']*)'\)/g)].map((match) => match[1]!);
+  /** The env var a key was read from: its name in upper snake case. */
+  const envName = (key: string) => key.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toUpperCase();
+
+  it("exists once, after the migration that made the override tables (0035)", () => {
+    expect(found).toHaveLength(1);
+    expect(migration > "0035_config_settings.sql").toBe(true);
+  });
+
+  it("is one data statement — the overrides deleted, one audit row for each — and no DDL", () => {
+    expect(statements).toHaveLength(1);
+    const [statement] = statements;
+    // Every scope of a retired key goes; what was stored comes back from the delete.
+    expect(statement).toContain(
+      "removed as ( delete from config_settings cs using retired r where cs.key = r.key "
+        + "returning cs.scope_type, cs.scope_id, cs.key, cs.value, cs.version )",
+    );
+    // The audit row of a clear (repositories/config-settings.ts): the old value
+    // and version, new value and version null, no user — and one group for all.
+    expect(statement).toContain("batch as materialized ( select gen_random_uuid() as group_id )");
+    expect(statement).toMatch(
+      /insert into config_audit_log \(group_id, user_id, scope_type, scope_id, key, old_value, new_value, old_version, new_version, note\) select b\.group_id, null, d\.scope_type, d\.scope_id, d\.key, d\.value, null, d\.version, null, 'step 4: retired with the legacy Fansly engine \(migration retire_fansly_legacy_config_overrides\)' from removed d cross join batch b order by d\.key$/,
+    );
+    expect(sql).not.toMatch(/\b(alter|create|drop|rename|truncate|update|grant|trigger)\b/i);
+    // Nothing but the two override tables is named.
+    expect([...sql.matchAll(/\b(?:from|into|join|using)\s+([a-z_]+)/g)].map((match) => match[1]).sort())
+      .toEqual(["batch", "config_audit_log", "config_settings", "removed", "retired"]);
+  });
+
+  it("names exactly the keys this release drops: none is registered, and their env vars are the retired list", () => {
+    expect(keys).toHaveLength(68);
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(keys).toEqual([...keys].sort());
+    const registered = new Set(CONFIG_DESCRIPTORS.map((descriptor) => descriptor.key));
+    expect(keys.filter((key) => registered.has(key))).toEqual([]);
+    // One list for the stored rows (here) and one for the env (the boot
+    // warning): the same keys, by their two names.
+    expect(keys.map(envName).sort()).toEqual([...RETIRED_FANSLY_ENV_KEYS].sort());
+    expect(keys.map(envName).filter((name) => (ENV_CONFIG_KEYS as string[]).includes(name))).toEqual([]);
+  });
+
+  it("keeps the overrides of the keys the engine and OnlyFans still read", () => {
+    for (const kept of [
+      "fanslyDefaultDelayMs", "fanslyBaseUrl", "fanslyReplayMode", "fanslyRepliesRewalkCycleDays",
+      "fanslyLiveOverlayReadPages", "pageDmPruneEnabled", "syncObservabilityRetentionDays", "syncHttpTraceFile",
+      "syncHttpAttemptTraceStdout", "egressPacerMode", "agentHydrationMode", "syncPageExecutorConcurrency",
+      "healthSyncLightMaxAgeMinutes", "onlyFansDefaultDelayMs", "onlyFansDmPollingEnabled", "onlyFansTopSpendersEnabled",
+    ]) {
+      expect(keys, kept).not.toContain(kept);
+      expect(CONFIG_DESCRIPTORS.some((descriptor) => descriptor.key === kept), kept).toBe(true);
+    }
+  });
+
+  it("allows application rollback: the previous image reads none of these keys", () => {
     expect(rollbackCompatible()).toContain(`"${migration}"`);
   });
 });

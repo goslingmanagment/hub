@@ -3,8 +3,7 @@ import { assertRuntimeSchemaReady, createDb, createPool, type Database } from "@
 import {
   createLogger,
   loadConfig,
-  listIgnoredFanslyEndpointPauseEnv,
-  resolveFanslyDefaultDelayEnvSource,
+  listRetiredFanslyEnv,
   type SkippedOverride,
 } from "@agency_hub_core/shared";
 
@@ -89,25 +88,15 @@ export async function createAppContext(options: CreateAppContextOptions = {}): P
   const rawConfig = loadConfig();
   const logger = createLogger(rawConfig.logLevel);
 
-  const deprecatedFanslyDelayAlias = resolveFanslyDefaultDelayEnvSource(process.env);
-  if (
-    deprecatedFanslyDelayAlias &&
-    deprecatedFanslyDelayAlias !== "FANSLY_DEFAULT_DELAY_MS"
-  ) {
+  // The config keys of the legacy Fansly engine are gone (step 4, plan §14):
+  // an env var that still names one is dropped unparsed. Said once per
+  // long-lived process, naming only the ones set: a CLI run's stdout stays its
+  // own output.
+  const retiredFanslyEnv = listRetiredFanslyEnv(process.env);
+  if (options.processRole !== undefined && options.processRole !== "cli" && retiredFanslyEnv.length > 0) {
     logger.warn(
-      { envVar: deprecatedFanslyDelayAlias },
-      "Deprecated Fansly delay env var in use; prefer FANSLY_DEFAULT_DELAY_MS",
-    );
-  }
-
-  // Plan §2.3: the endpoint pauses are gone; their env vars are parsed but
-  // ignored until the keys are removed (step 4). Said once per long-lived
-  // process: a CLI run's stdout stays its own output.
-  const ignoredEndpointPauseEnv = listIgnoredFanslyEndpointPauseEnv(process.env);
-  if (options.processRole !== undefined && options.processRole !== "cli" && ignoredEndpointPauseEnv.length > 0) {
-    logger.warn(
-      { envVars: ignoredEndpointPauseEnv },
-      "Fansly endpoint pause env vars are ignored: every Fansly request is paced only by its page's send guard (FANSLY_DEFAULT_DELAY_MS × (1 + 0–20 %)); remove them from the env",
+      { envVars: retiredFanslyEnv },
+      "Retired Fansly env vars are set and ignored: their config keys went with the legacy Fansly engine, and every Fansly request is the Sync Engine's (FANSLY_DEFAULT_DELAY_MS × (1 + 0–20 %) between a page's requests); remove them from the env",
     );
   }
 
