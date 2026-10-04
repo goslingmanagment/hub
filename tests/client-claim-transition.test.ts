@@ -359,14 +359,14 @@ describe("the view", () => {
   });
 });
 
-describe("migration 0236", () => {
+describe("migration 0241", () => {
   it("is additive and listed as rollback-compatible", async () => {
-    const migration = await readFile("packages/db/migrations/0236_client_claim_tables.sql", "utf8");
+    const migration = await readFile("packages/db/migrations/0241_client_claim_tables.sql", "utf8");
     expect(migration).not.toMatch(/\b(alter|drop|truncate|delete|update)\b/i);
     for (const table of ["client_fan_leases", "client_greetings", "client_send_custody"]) {
       expect(migration).toContain(`create table if not exists ${table} (`);
     }
     const deploy = await readFile("scripts/deploy-production.sh", "utf8");
-    expect(deploy.match(/ROLLBACK_COMPATIBLE_MIGRATIONS=\([\s\S]*?\n\)/)?.[0]).toContain('"0236_client_claim_tables.sql"');
+    expect(deploy.match(/ROLLBACK_COMPATIBLE_MIGRATIONS=\([\s\S]*?\n\)/)?.[0]).toContain('"0241_client_claim_tables.sql"');
   });
 });

@@ -635,7 +635,7 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # their checks, indexes and comments. The previous image never names them,
   # and no route writes them until H-7b ships behind owner switches, so a
   # rollback finds them empty (or unread) and runs unchanged.
-  "0236_client_claim_tables.sql"
+  "0241_client_claim_tables.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

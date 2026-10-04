@@ -1,4 +1,4 @@
--- 0236_client_claim_tables.sql
+-- 0241_client_claim_tables.sql
 --
 -- chat-extension greeting lease and send custody (hub-pr-plan H-7a;
 -- chat-extension architecture §6.7.7–§6.7.9, §8.6 H-7). Three separate facts

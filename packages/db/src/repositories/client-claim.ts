@@ -22,7 +22,7 @@ import {
 } from "./client-claim-transition.ts";
 
 // chat-extension greeting lease and send custody (hub-pr-plan H-7a): raw SQL
-// over 0236, like follower-outreach.ts. Every action runs in one transaction
+// over 0241, like follower-outreach.ts. Every action runs in one transaction
 // under pg_advisory_xact_lock('client-fan:<page>:<fan>'); a dispatch first
 // takes 'client-user-send:<user>' (always user, then fan) so its rate count
 // cannot race the user's dispatch to another fan. The rules themselves are

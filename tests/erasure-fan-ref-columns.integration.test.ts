@@ -113,7 +113,7 @@ describe("erasure column-shape ratchet (§9.3)", () => {
         where table_schema = 'public'
           and ((table_name = 'subject_refresh_state' and column_name = 'subject_ref')
             or (table_name = 'follower_outreach_attempts' and column_name = 'fan_ref')
-            -- chat-extension tables (0236 on): every client_* fan_ref is a fan id.
+            -- chat-extension tables (0241 on): every client_* fan_ref is a fan id.
             or (left(table_name, 7) = 'client_' and column_name = 'fan_ref') or ${
         FAN_REF_COLUMN_PATTERNS.map((_, index) => `column_name like $${index + 1}`).join(" or ")
       })
