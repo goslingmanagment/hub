@@ -258,7 +258,7 @@ describe("onboarding goes straight to live (S4-05)", () => {
 
     // Adopted within one mode-loop pass (the production loop runs every 2 s).
     await until(async () => host.state(page.id).kind === "running", 2_000, "the live owner");
-    expect(host.state(page.id)).toMatchObject({ kind: "running", mode: "live" });
+    expect(host.state(page.id)).toMatchObject({ kind: "running" });
     // The trusted digest is the stored one: reads go out without a verify first.
     await until(async () => server!.arrivalsAt("/api/v1/polls").length >= 1, 15_000, "the engine's first read");
     expect(takeovers[0]!.floorDelayMs).toBeGreaterThanOrEqual(1.2 * S);

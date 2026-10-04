@@ -107,9 +107,9 @@ export interface WorkExplanation {
 }
 
 /** The page has an owner that is running a loop: a fresh heartbeat of the
- *  current generation that was not released, in a mode an actor runs in. */
+ *  current generation that was not released, in the mode an actor runs in. */
 export function ownerRunning(page: Pick<StatusPage, "mode" | "owner">, now: Date): boolean {
-  if (page.mode !== "shadow" && page.mode !== "live") return false;
+  if (page.mode !== "live") return false;
   const { owner } = page;
   if (owner.generation === 0n || owner.heartbeatAt === null) return false;
   if (owner.releasedAt !== null && owner.releaseGeneration === owner.generation) return false;
@@ -303,12 +303,6 @@ export interface RouteStatusView {
   routes: RouteBudgetStatusView[];
 }
 
-export interface ShadowStatusView {
-  attemptsLastHour: number;
-  /** Shadow attempts of the hour over the computed expectation (§3.12 A1). */
-  demandVsEstimate: number | null;
-}
-
 export interface PageStatus {
   pageLabel: string | null;
   mode: SyncPageModeView;
@@ -327,7 +321,6 @@ export interface PageStatus {
   quarantined: number;
   requests: RequestProgressView[];
   ws: WsStatusView | null;
-  shadow: ShadowStatusView | null;
   /** The route budgets (owner CLI; not on the agent wire). */
   routes: RouteStatusView | null;
 }
@@ -348,12 +341,11 @@ export interface PageStatusInput {
   };
   requests?: readonly RequestProgressView[];
   ws?: WsStatusView | null;
-  shadow?: ShadowStatusView | null;
   routes?: RouteStatusView | null;
 }
 
 /** Assemble the page status from the page row, its open work and the
- *  aggregates the caller read (sends, requests, socket, shadow). */
+ *  aggregates the caller read (sends, requests, socket). */
 export function buildPageStatus(input: PageStatusInput): PageStatus {
   const { page, now } = input;
   const at = now.getTime();
@@ -408,7 +400,6 @@ export function buildPageStatus(input: PageStatusInput): PageStatus {
     quarantined,
     requests: [...(input.requests ?? [])],
     ws: input.ws ?? null,
-    shadow: input.shadow ?? null,
     routes: input.routes ?? null,
   };
 }

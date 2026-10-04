@@ -2,7 +2,6 @@ import { sql } from "drizzle-orm";
 import { FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY } from "@agency_hub_core/shared";
 
 import type { Database } from "../../client.ts";
-import { capturePayloadRefFromColumns, type CapturePayloadRef } from "../capture-payloads.ts";
 import type { SyncPageMode } from "./pages.ts";
 import { textArrayParam } from "./values.ts";
 
@@ -10,9 +9,8 @@ import { textArrayParam } from "./values.ts";
 // The router turns a captured socket frame into work; these are the facts it
 // needs about the page — its mode, the threads a frame names, whether a
 // settled transaction is one the ledger still holds as pending, how many own
-// messages became visible a moment ago — and, for a page in shadow, the
-// captured receipts past its router cursor. Reads only: the router's writes
-// are `upsertDemand` (sync_work) and `advanceWsRouterCursor` (sync_pages).
+// messages became visible a moment ago. Reads only: the router's one write is
+// `upsertDemand` (sync_work).
 
 /** What the post-ack hook reads about the page of a receipt (no lock). */
 export interface WsRoutePage {
@@ -112,94 +110,4 @@ export async function countRecentOwnLiveChats(
        and first_visible_at > clock_timestamp() - ${input.windowMs}::double precision * interval '1 millisecond'
   `);
   return Number(result.rows[0]?.n ?? 0);
-}
-
-/** One captured receipt past the shadow router's cursor. */
-export interface WsRouterReceipt {
-  observationId: number;
-  receivedAt: Date;
-  /** The page's own Fansly account id the frame was captured under. */
-  ownRef: string | null;
-  /** Older than the routing horizon: passed over, its body not read. */
-  stale: boolean;
-  /** The raw observation is gone (erased, tiered away). */
-  missing: boolean;
-  payload: unknown;
-  payloadRef: CapturePayloadRef | null;
-}
-
-/**
- * The page's captured receipts after `after` (observation id order, at most
- * `limit`), whatever their live state: the shadow router reads, it never
- * acks. The observation is joined on its partition key, as the live apply
- * does; a receipt received more than `horizonMs` ago comes back `stale`
- * without its body.
- */
-export async function listWsRouterReceipts(
-  db: Database,
-  input: { pageId: number; after: number; limit: number; horizonMs: number },
-): Promise<WsRouterReceipt[]> {
-  if (!Number.isSafeInteger(input.limit) || input.limit <= 0) throw new Error(`limit must be positive, received ${input.limit}`);
-  const result = await db.execute<{
-    observationId: string;
-    receivedAt: Date | string;
-    stale: boolean;
-    found: boolean;
-    ownRef: string | null;
-    payload: unknown;
-    bucket: string | null;
-    objectId: string | null;
-  }>(sql`
-    select r.observation_id::text as "observationId",
-           r.received_at as "receivedAt",
-           r.received_at <= clock_timestamp() - ${input.horizonMs}::double precision * interval '1 millisecond' as stale,
-           o.id is not null as found,
-           o.native_account_ref as "ownRef",
-           case when r.received_at > clock_timestamp() - ${input.horizonMs}::double precision * interval '1 millisecond'
-             then o.payload end as payload,
-           to_char(o.payload_bucket_month, 'YYYY-MM-DD') as bucket,
-           o.payload_object_id::text as "objectId"
-      from fansly_ws_decode_receipts r
-      left join observations o on o.id = r.observation_id and o.received_at = r.received_at
-     where r.page_id = ${input.pageId}
-       and r.observation_id > ${input.after}::bigint
-     order by r.observation_id
-     limit ${input.limit}
-  `);
-  return result.rows.map((row) => ({
-    observationId: Number(row.observationId),
-    receivedAt: new Date(row.receivedAt),
-    ownRef: row.ownRef,
-    stale: row.stale === true,
-    missing: row.found !== true,
-    payload: row.payload,
-    payloadRef: capturePayloadRefFromColumns(row.bucket, row.objectId),
-  }));
-}
-
-/**
- * The shadow router's floor: the newest receipt of ANY page received more
- * than `horizonMs` ago (0 without one). The table has no `page_id` index, so a
- * page's read walks the primary key from its cursor through every page's
- * receipts; a cursor at this watermark keeps that walk to the routing horizon
- * however long the page has been silent. Nothing the router would route lies
- * at or below it: a capture stamps `received_at` before it allocates its id,
- * so a receipt below the watermark was received before the watermark's
- * receipt was captured — past the horizon, or short of it by no more than
- * that capture's wait in its connection's queue. Served by a backward scan of
- * the primary key that stops at the first receipt older than the horizon (the
- * horizon's rows of all pages).
- */
-export async function wsRouterHorizonWatermark(
-  db: Database,
-  input: { horizonMs: number },
-): Promise<number> {
-  const result = await db.execute<{ id: string }>(sql`
-    select observation_id::text as id
-      from fansly_ws_decode_receipts
-     where received_at <= clock_timestamp() - ${input.horizonMs}::double precision * interval '1 millisecond'
-     order by observation_id desc
-     limit 1
-  `);
-  return Number(result.rows[0]?.id ?? 0);
 }

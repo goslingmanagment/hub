@@ -581,7 +581,7 @@ export class FanslyWsSource {
     // A REST answer decides whether the page's session is bad (a 401/403
     // holds the page, §9); the socket's own refusal is alert 2.
     void this.#writeVerify(generation);
-    void this.#d.alerts?.open({ subKey: "live_degraded", pageId, detail: "ws_auth_refused", shadow: false })
+    void this.#d.alerts?.open({ subKey: "live_degraded", pageId, detail: "ws_auth_refused" })
       .catch(() => undefined);
   }
 
@@ -828,7 +828,7 @@ export class FanslyWsSource {
 
   /** A `ws.connect` step of the page is running (unreadable: no). */
   async #connectRunning(): Promise<boolean> {
-    const open = await getOpenWorkForKey(this.#d.db, { pageId: this.#d.pageId, shadow: false, resource: "ws.connect", subject: "" })
+    const open = await getOpenWorkForKey(this.#d.db, { pageId: this.#d.pageId, resource: "ws.connect", subject: "" })
       .catch(() => null);
     return open?.state === "running";
   }

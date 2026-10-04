@@ -17,7 +17,6 @@ import {
   type StartedTestDatabase,
 } from "./helpers/db.ts";
 import {
-  changedTables,
   countRows,
   makeTestActor,
   okResponse,
@@ -26,18 +25,16 @@ import {
   ScriptedLiveTransport,
   seedSyncPage,
   statusResponse,
-  tableCounts,
   waitFor,
 } from "./helpers/sync-engine-host.ts";
 
 // The money resources of the Fansly Sync Engine (design §5.6–§5.10) through
 // the real actor and commits against a real database: a scripted live
-// transport answers each wire route; shadow runs the same registry with no
-// transport. Pinned: the ledger, rankings, receipts and coverage the legacy
-// lanes write land in the apply transaction with the observation's lineage;
-// every walk keeps its position in its work row and stops on the legacy rule;
-// a page whose ledger has another writer sends nothing; a shadow step writes
-// only sync_work and sync_attempts.
+// transport answers each wire route. Pinned: the ledger, rankings, receipts
+// and coverage the legacy lanes write land in the apply transaction with the
+// observation's lineage; every walk keeps its position in its work row and
+// stops on the legacy rule; a page whose ledger has another writer sends
+// nothing.
 
 let testDb: StartedTestDatabase | null = null;
 
@@ -96,27 +93,24 @@ function param(req: FanslyWireRequest, name: string): string | null {
 
 /** A registry of every Fansly entry whose standing polls are parked far ahead,
  *  so only the work a test makes due runs. */
-async function quietRegistry(pageId: number, shadow: boolean): Promise<EngineRegistry> {
+async function quietRegistry(pageId: number): Promise<EngineRegistry> {
   const registry = createEngineRegistry(FANSLY_RESOURCE_SPECS);
   const page = await getSyncPage(db(), pageId);
   await ensurePollRows(db(), {
     pageId,
-    shadow,
-    polls: pollsFor(registry, page!, shadow).map((poll) => ({ ...poll, phase: 0.999 })),
+    polls: pollsFor(registry, page!).map((poll) => ({ ...poll, phase: 0.999 })),
   });
   return registry;
 }
 
 async function makeDue(
   pageId: number,
-  shadow: boolean,
   resource: string,
   extra: { subject?: string; params?: unknown; txIds?: string[] } = {},
 ) {
   const spec = fanslyResourceSpec(resource)!;
   await upsertDemand(db(), {
     pageId,
-    shadow,
     resource,
     kind: spec.kind,
     class: spec.class,
@@ -126,11 +120,8 @@ async function makeDue(
   });
 }
 
-async function seedPage(mode: "live" | "shadow", options: { accountCreatedAt?: string | null } = {}) {
-  const { pageId } = await seedSyncPage({ db: db(), pool: testDb!.pool }, {
-    mode,
-    guard: mode === "live" ? "fansly_sync_engine" : null,
-  });
+async function seedPage(options: { accountCreatedAt?: string | null } = {}) {
+  const { pageId } = await seedSyncPage({ db: db(), pool: testDb!.pool }, { mode: "live", guard: "fansly_sync_engine" });
   const metadata = options.accountCreatedAt === null ? {} : { accountCreatedAt: options.accountCreatedAt ?? "2026-08-15T00:00:00.000Z" };
   await testDb!.pool.query(
     "update pages set external_page_id = $2, metadata = $3::jsonb, last_verified_at = clock_timestamp() where id = $1",
@@ -139,10 +130,9 @@ async function seedPage(mode: "live" | "shadow", options: { accountCreatedAt?: s
   return pageId;
 }
 
-async function drive(
+async function runLive(
   pageId: number,
-  mode: "live" | "shadow",
-  respond: Responder | null,
+  respond: Responder,
   until: () => Promise<boolean>,
   options: {
     alerts?: RecordingAlerts;
@@ -153,10 +143,14 @@ async function drive(
     onHit?: (req: FanslyWireRequest, index: number) => Promise<void>;
   } = {},
 ) {
-  const registry = options.registry ?? await quietRegistry(pageId, mode === "shadow");
-  const transport = respond === null ? undefined : new ScriptedLiveTransport();
-  if (transport !== undefined && respond !== null) transport.respond = (req, index) => respond(req, index);
-  if (transport !== undefined && options.onHit !== undefined) {
+  const registry = options.registry ?? await quietRegistry(pageId);
+  const transport = new ScriptedLiveTransport();
+  const requests: FanslyWireRequest[] = [];
+  transport.respond = (req, index) => {
+    requests.push(req);
+    return respond(req, index);
+  };
+  if (options.onHit !== undefined) {
     const onHit = options.onHit;
     transport.onHit = (req) => onHit(req, transport.hits.length - 1);
   }
@@ -165,52 +159,31 @@ async function drive(
   const { actor, stop, abort } = await makeTestActor({
     db: db(),
     pageId,
-    mode,
     registry,
     alerts,
     metrics,
     ...(options.settingMs === undefined ? {} : { settingMs: options.settingMs }),
-    ...(transport === undefined ? {} : { transport }),
+    transport,
   });
   const run = actor.run({ stop: stop.signal, abort: abort.signal });
-  const requests: FanslyWireRequest[] = [];
-  if (transport !== undefined) {
-    const respondWith = transport.respond;
-    transport.respond = (req, index) => {
-      requests.push(req);
-      return respondWith(req, index);
-    };
-  }
   try {
     await waitFor(async () => ((await until()) ? true : null), 30_000, "the work to settle");
   } finally {
     stop.abort();
     await run;
   }
-  return { hits: transport?.hits.map((hit) => hit.spec) ?? [], requests, alerts, metrics };
+  return { hits: transport.hits.map((hit) => hit.spec), requests, alerts, metrics };
 }
 
-const runLive = (
-  pageId: number,
-  respond: Responder,
-  until: () => Promise<boolean>,
-  options: {
-    alerts?: RecordingAlerts;
-    metrics?: RecordingMetrics;
-    settingMs?: number;
-    onHit?: (req: FanslyWireRequest, index: number) => Promise<void>;
-  } = {},
-) => drive(pageId, "live", respond, until, options);
-
-async function workRow(pageId: number, resource: string, options: { shadow?: boolean; subject?: string } = {}) {
+async function workRow(pageId: number, resource: string, options: { subject?: string } = {}) {
   const result = await testDb!.pool.query<{
     state: string; cursor: Record<string, unknown>; proof: Record<string, unknown> | null; result: Record<string, unknown> | null;
     waiting_reason: string | null; due_at: Date; params: Record<string, unknown>; close_reason: string | null; subject: string;
   }>(
     `select state, cursor, proof, result, waiting_reason, due_at, params, close_reason, subject from sync_work
-      where page_id = $1 and resource = $2 and shadow = $3 and ($4::text is null or subject = $4)
+      where page_id = $1 and resource = $2 and not shadow and ($3::text is null or subject = $3)
       order by id desc limit 1`,
-    [pageId, resource, options.shadow ?? false, options.subject ?? null],
+    [pageId, resource, options.subject ?? null],
   );
   return result.rows[0] ?? null;
 }
@@ -243,8 +216,8 @@ async function ledger(pageId: number) {
 describe("transactions", () => {
   it("insurance: writes the page with its observation, ensures the fans and asks for lookups, targets and the roster", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
-    await makeDue(pageId, false, "transactions.insurance");
+    const pageId = await seedPage();
+    await makeDue(pageId, "transactions.insurance");
     const fan = { correlationAccountId: "500000000000000001", senderId: "500000000000000001" };
     const served = [
       tx("tx-3", { ...fan, type: 2110, correlationId: "880000000000000001", amount: 5_000, destinationAmount: 5_000, destinationTax: null }),
@@ -293,14 +266,14 @@ describe("transactions", () => {
 
   it("head: walks pages of 20 until a known, unchanged row once every demanded id was served", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
+    const pageId = await seedPage();
     const known = tx("tx-known", { status: 2, createdAt: Date.now() - 3 * DAY });
-    await makeDue(pageId, false, "transactions.backfill");
+    await makeDue(pageId, "transactions.backfill");
     await runLive(pageId, () => okResponse(txPage([known], 1)), async () => (await workRow(pageId, "transactions.backfill"))?.state === "done");
 
     const fresh = Array.from({ length: 20 }, (_, index) => tx(`tx-new-${String(index).padStart(2, "0")}`, { createdAt: Date.now() - index * 1_000 }));
     const second = [tx("tx-demanded", { createdAt: Date.now() - 2 * DAY }), known];
-    await makeDue(pageId, false, "transactions.head", { txIds: ["tx-demanded"] });
+    await makeDue(pageId, "transactions.head", { txIds: ["tx-demanded"] });
     const { requests } = await runLive(pageId, (req) => {
       const offset = param(req, "offset");
       if (offset === "0") return okResponse(txPage(fresh, 22));
@@ -316,8 +289,8 @@ describe("transactions", () => {
 
   it("head: a walk that reaches offset 200 hands over to the rescan", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
-    await makeDue(pageId, false, "transactions.head");
+    const pageId = await seedPage();
+    await makeDue(pageId, "transactions.head");
     const { requests, metrics } = await runLive(pageId, (req) => {
       const offset = Number(param(req, "offset"));
       return okResponse(txPage(Array.from({ length: 20 }, (_, index) => tx(`tx-${offset + index}`)), 500));
@@ -333,9 +306,9 @@ describe("transactions", () => {
 
   it("a page whose ledger has another writer sends nothing; its transactions work waits", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
+    const pageId = await seedPage();
     await testDb.pool.query("update pages set transactions_writer = null where id = $1", [pageId]);
-    await makeDue(pageId, false, "transactions.insurance");
+    await makeDue(pageId, "transactions.insurance");
     const { hits } = await runLive(pageId, () => okResponse(txPage([], 0)),
       async () => (await workRow(pageId, "transactions.insurance"))?.waiting_reason === "dependency");
     expect(hits).toEqual([]);
@@ -345,16 +318,16 @@ describe("transactions", () => {
 
   it("rescan: the window from the checkpoint, early-stopped on the page below it, then the new checkpoint", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
+    const pageId = await seedPage();
     const checkpoint = Date.now() - 2 * DAY;
-    await makeDue(pageId, false, "transactions.backfill");
+    await makeDue(pageId, "transactions.backfill");
     await runLive(pageId, () => okResponse(txPage([tx("tx-old", { status: 2, createdAt: checkpoint })], 1)),
       async () => (await workRow(pageId, "transactions.backfill"))?.state === "done");
 
     // 100 rows inside the window, then a page reaching below it (> 9 days).
     const inWindow = Array.from({ length: 100 }, (_, index) => tx(`tx-w-${String(index).padStart(3, "0")}`, { createdAt: Date.now() - (index + 1) * 60_000 }));
     const below = [tx("tx-below", { createdAt: checkpoint - 10 * DAY }), ...Array.from({ length: 99 }, (_, index) => tx(`tx-b-${index}`, { createdAt: checkpoint - 11 * DAY }))];
-    await makeDue(pageId, false, "transactions.rescan");
+    await makeDue(pageId, "transactions.rescan");
     const { requests } = await runLive(pageId, (req) => {
       const offset = param(req, "offset");
       if (offset === "0") return okResponse(txPage(inWindow, 500));
@@ -372,11 +345,11 @@ describe("transactions", () => {
 
   it("rescan: a total that moves under the walk restarts it; the page is not written", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
-    await makeDue(pageId, false, "transactions.backfill");
+    const pageId = await seedPage();
+    await makeDue(pageId, "transactions.backfill");
     await runLive(pageId, () => okResponse(txPage([tx("tx-seed", { status: 2 })], 1)),
       async () => (await workRow(pageId, "transactions.backfill"))?.state === "done");
-    await makeDue(pageId, false, "transactions.rescan");
+    await makeDue(pageId, "transactions.rescan");
     const first = Array.from({ length: 100 }, (_, index) => tx(`tx-f-${index}`));
     await runLive(pageId, (req) => (param(req, "offset") === "0"
       ? okResponse(txPage(first, 150))
@@ -392,8 +365,8 @@ describe("transactions", () => {
 
   it("backfill: the whole list in pages of 100, fetched equal to total", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
-    await makeDue(pageId, false, "transactions.backfill");
+    const pageId = await seedPage();
+    await makeDue(pageId, "transactions.backfill");
     const rows = Array.from({ length: 150 }, (_, index) => tx(`tx-${String(index).padStart(3, "0")}`, { createdAt: Date.now() - (index + 1) * 60_000 }));
     await runLive(pageId, (req) => {
       const offset = Number(param(req, "offset"));
@@ -408,8 +381,8 @@ describe("transactions", () => {
 
   it("an item that fails the contract quarantines the step and writes nothing", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
-    await makeDue(pageId, false, "transactions.insurance");
+    const pageId = await seedPage();
+    await makeDue(pageId, "transactions.insurance");
     const alerts = new RecordingAlerts();
     await runLive(pageId, () => okResponse(txPage([tx("tx-bad", { amount: 10.5 })], 1)),
       async () => (await workRow(pageId, "transactions.insurance"))?.state === "quarantined", { alerts });
@@ -443,10 +416,10 @@ describe("fan-earnings.roster", () => {
 
   it("reads each never-read spender's two endpoints under a claim, settles the receipts, then closes", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
+    const pageId = await seedPage();
     const fanRef = "500000000000000007";
     await seedSpender(pageId, fanRef);
-    await makeDue(pageId, false, "fan-earnings.roster");
+    await makeDue(pageId, "fan-earnings.roster");
     const row = { correlationAccountId: fanRef, type: 7001, totalGross: 1_000, totalNet: 800 };
     const { hits, requests } = await runLive(pageId, (req) => {
       if (req.spec === "earnings.stats_accounts") return okResponse([row]);
@@ -470,10 +443,10 @@ describe("fan-earnings.roster", () => {
 
   it("a 404 is the subject's answer for now; a 5xx climbs its breaker; the walk goes on", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
+    const pageId = await seedPage();
     const fanRef = "500000000000000008";
     await seedSpender(pageId, fanRef);
-    await makeDue(pageId, false, "fan-earnings.roster");
+    await makeDue(pageId, "fan-earnings.roster");
     const { hits } = await runLive(pageId, (req) => (req.spec === "earnings.stats_accounts"
       ? statusResponse(404, { success: false, error: { code: 404 } })
       : statusResponse(500, { success: false })),
@@ -495,9 +468,9 @@ describe("purchases.targets", () => {
 
   it("walks one target to an empty page, then re-reads it from its head only until a known order", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
+    const pageId = await seedPage();
     const subject = "media:880000000000000002";
-    await makeDue(pageId, false, "purchases.targets", { subject });
+    await makeDue(pageId, "purchases.targets", { subject });
     const { requests } = await runLive(pageId, (req) => (param(req, "before") === null
       ? okResponse({ accountMediaOrderHistory: [order("9002", "500000000000000011"), order("9001", "500000000000000012")] })
       : okResponse({ accountMediaOrderHistory: [] })),
@@ -514,7 +487,7 @@ describe("purchases.targets", () => {
     expect(await countRows(testDb.pool, "select count(*)::int as n from sync_attempts where page_id = $1 and resource = 'purchases.targets' and evidence", [pageId])).toBe(2);
 
     // A new order: the head page holds an order the last walk saw ⇒ one read.
-    await makeDue(pageId, false, "purchases.targets", { subject });
+    await makeDue(pageId, "purchases.targets", { subject });
     const reread = await runLive(pageId, () => okResponse({ accountMediaOrderHistory: [order("9003", "500000000000000013"), order("9002", "500000000000000011")] }),
       async () => (await countRows(testDb!.pool, "select count(*)::int as n from sync_work where page_id = $1 and resource = 'purchases.targets' and state = 'done'", [pageId])) === 2);
     expect(reread.requests).toHaveLength(1);
@@ -527,22 +500,22 @@ describe("purchases.targets", () => {
 
   it("a sale signalled while the stopping page is in flight re-reads the head, never the older history", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
+    const pageId = await seedPage();
     const subject = "media:880000000000000002";
-    await makeDue(pageId, false, "purchases.targets", { subject });
+    await makeDue(pageId, "purchases.targets", { subject });
     await runLive(pageId, (req) => orderPage(param(req, "before") === null ? ["9002", "9001"] : []),
       async () => (await doneTargets(pageId)) === 1);
 
     // A sale reopens the target; while its head page is in flight a second
     // sale bumps the row. The head holds a known order, so the walk would
     // close — but the newer demand keeps the row open.
-    await makeDue(pageId, false, "purchases.targets", { subject });
+    await makeDue(pageId, "purchases.targets", { subject });
     const { requests } = await runLive(pageId, (req, index) => (param(req, "before") !== null
       ? orderPage([])
       : orderPage(index === 0 ? ["9003", "9002"] : ["9004", "9003", "9002"])),
     async () => (await doneTargets(pageId)) === 2,
     { onHit: async (_req, index) => {
-      if (index === 0) await makeDue(pageId, false, "purchases.targets", { subject });
+      if (index === 0) await makeDue(pageId, "purchases.targets", { subject });
     } });
 
     // The reopened row reads the head again (no `before`) and stops on the
@@ -555,9 +528,9 @@ describe("purchases.targets", () => {
 
   it("a sale signalled after the head was read re-reads the head before the walk closes", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
+    const pageId = await seedPage();
     const subject = "media:880000000000000002";
-    await makeDue(pageId, false, "purchases.targets", { subject });
+    await makeDue(pageId, "purchases.targets", { subject });
     const metrics = new RecordingMetrics();
     // The head is read at revision 1; a sale bumps the row while it is in
     // flight, so the next (older) page is admitted at revision 2.
@@ -568,7 +541,7 @@ describe("purchases.targets", () => {
     {
       metrics,
       onHit: async (_req, index) => {
-        if (index === 0) await makeDue(pageId, false, "purchases.targets", { subject });
+        if (index === 0) await makeDue(pageId, "purchases.targets", { subject });
       },
     });
 
@@ -582,9 +555,9 @@ describe("purchases.targets", () => {
 
   it("a 404 closes the target with its answer; contract drift quarantines it", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
-    await makeDue(pageId, false, "purchases.targets", { subject: "bundle:770000000000000001" });
-    await makeDue(pageId, false, "purchases.targets", { subject: "media:770000000000000002" });
+    const pageId = await seedPage();
+    await makeDue(pageId, "purchases.targets", { subject: "bundle:770000000000000001" });
+    await makeDue(pageId, "purchases.targets", { subject: "media:770000000000000002" });
     const { requests } = await runLive(pageId, (req) => (param(req, "accountMediaBundleId") !== null
       ? statusResponse(404, { success: false })
       : okResponse({ unexpected: true })),
@@ -603,8 +576,8 @@ describe("top-spenders", () => {
 
   it("window: the trailing 7 days into the rankings; a capped answer splits into days", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
-    await makeDue(pageId, false, "top-spenders.window");
+    const pageId = await seedPage();
+    await makeDue(pageId, "top-spenders.window");
     const capped = Array.from({ length: 100 }, (_, index) => spender(`5100000000000${String(index).padStart(5, "0")}`, 1_000 + index));
     const { requests } = await runLive(pageId, (req) => {
       const after = Number(param(req, "after"));
@@ -628,9 +601,9 @@ describe("top-spenders", () => {
 
   it("bootstrap waits for the account's creation date and makes account.poll due", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live", { accountCreatedAt: null });
+    const pageId = await seedPage({ accountCreatedAt: null });
     await testDb.pool.query("update pages set last_verified_at = null where id = $1", [pageId]);
-    await makeDue(pageId, false, "top-spenders.bootstrap");
+    await makeDue(pageId, "top-spenders.bootstrap");
     const { hits } = await runLive(pageId, (req) => {
       if (req.spec === "account.me") {
         return okResponse({
@@ -663,8 +636,8 @@ describe("payouts", () => {
 
   it("daily: the method listing, the head, then the first history walk to the floor", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
-    await makeDue(pageId, false, "payouts.daily");
+    const pageId = await seedPage();
+    await makeDue(pageId, "payouts.daily");
     const rows = Array.from({ length: 15 }, (_, index) => payout(1_000 - index, Date.UTC(2026, 6, 1) + index * DAY));
     const { requests } = await runLive(pageId, (req) => {
       if (req.spec === "payouts.methods") return okResponse([{ id: "9001", providerId: "2", status: 3, metadata: "{}" }]);
@@ -688,13 +661,13 @@ describe("payouts", () => {
 
   it("daily: a full head that shares no row with the previous head opens a catch-up walk", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
+    const pageId = await seedPage();
     await testDb.pool.query(
       `insert into capture_coverage (page_id, platform, plane, scope_ref, status, acquisition_mode, proof, reason_code)
        values ($1, 'fansly', 'payouts', 'payout_requests', 'provider_exhausted', 'retroactive', 'none', 'walk_exhausted')`,
       [pageId],
     );
-    await makeDue(pageId, false, "payouts.daily");
+    await makeDue(pageId, "payouts.daily");
     await testDb.pool.query(
       "update sync_work set cursor = $2::jsonb where page_id = $1 and resource = 'payouts.daily'",
       [pageId, JSON.stringify({ step: 1, headRefs: ["500"], walkTotal: 20, unknownStatusCodes: [] })],
@@ -709,56 +682,5 @@ describe("payouts", () => {
     expect(requests.map((req) => param(req, "offset"))).toEqual(["0", "10", "20"]);
     expect(await workRow(pageId, "payouts.walk")).toMatchObject({ close_reason: "exhausted" });
     expect((await coverage(pageId)).find((row) => row.scope === "payout_requests")).toMatchObject({ status: "provider_exhausted" });
-  });
-});
-
-describe("shadow", () => {
-  it("every money resource estimates its steps and writes nothing but sync_work and sync_attempts", async (context) => {
-    if (!testDb) return context.skip();
-    const pageId = await seedPage("shadow");
-    const registry = await quietRegistry(pageId, true);
-    // A dirty roster subject the legacy writer left (it keeps running in shadow).
-    await testDb.pool.query(
-      `insert into subject_refresh_state (page_id, plane, subject_ref, refresh_class, next_due_at, requested_revision)
-       values ($1, 'fan_earnings_lifetime', '500000000000000021', 'dirty', clock_timestamp() - interval '1 minute', 1)`,
-      [pageId],
-    );
-    for (const resource of ["transactions.insurance", "transactions.rescan", "top-spenders.window", "payouts.daily"]) {
-      await makeDue(pageId, true, resource);
-    }
-    await makeDue(pageId, true, "purchases.targets", { subject: "media:880000000000000009" });
-    const before = await tableCounts(testDb.pool);
-    await drive(pageId, "shadow", null, async () =>
-      (await countRows(testDb!.pool, "select count(*)::int as n from sync_work where page_id = $1 and shadow and resource = 'fan-earnings.roster' and state = 'done'", [pageId])) === 1
-      && (await countRows(testDb!.pool, "select count(*)::int as n from sync_work where page_id = $1 and shadow and resource = 'purchases.targets' and state = 'done'", [pageId])) === 1
-      && (await countRows(testDb!.pool, "select count(*)::int as n from sync_attempts where page_id = $1 and shadow and resource = 'payouts.daily'", [pageId])) === 2
-      // The rescan of a page with nothing stored waits for the backfill.
-      && (await countRows(testDb!.pool, "select count(*)::int as n from sync_attempts where page_id = $1 and shadow and resource = 'transactions.backfill'", [pageId])) === 1,
-    { registry });
-    const after = await tableCounts(testDb.pool);
-    expect(changedTables(before, after).filter((table) => !["sync_work", "sync_attempts"].includes(table))).toEqual([]);
-    const shadowAttempts = await testDb.pool.query<{ resource: string; n: number }>(
-      "select resource, count(*)::int as n from sync_attempts where page_id = $1 and shadow group by resource order by resource",
-      [pageId],
-    );
-    expect(Object.fromEntries(shadowAttempts.rows.map((row) => [row.resource, row.n]))).toEqual({
-      "fan-earnings.roster": 1,
-      "payouts.daily": 2,
-      "purchases.targets": 1,
-      "transactions.backfill": 1,
-      "transactions.insurance": 1,
-      "top-spenders.window": 1,
-    });
-    expect(await workRow(pageId, "transactions.rescan", { shadow: true })).toMatchObject({ state: "open", waiting_reason: "dependency" });
-    // The roster asks the fan's history up to the step's clock: the step
-    // names its subject (step 3b ruling 12, the endless-walk check).
-    const roster = await testDb.pool.query(
-      "select request -> 'position' as position from sync_attempts where page_id = $1 and shadow and resource = 'fan-earnings.roster'",
-      [pageId],
-    );
-    expect(roster.rows).toEqual([{ position: { fan: "500000000000000021", window: "lifetime" } }]);
-    // The roster subject was not claimed or settled.
-    const subject = await testDb.pool.query("select claim_token, last_visited_at from subject_refresh_state where page_id = $1", [pageId]);
-    expect(subject.rows).toEqual([{ claim_token: null, last_visited_at: null }]);
   });
 });

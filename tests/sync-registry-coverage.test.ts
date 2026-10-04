@@ -18,7 +18,7 @@ import {
 } from "../apps/runtime/src/sync/fansly/registry.ts";
 import { routeHoldAfter } from "../apps/runtime/src/sync/engine/route-holds.ts";
 import { RouteClocks, routeExclusions, ROUTE_STATE_VERSION } from "../apps/runtime/src/sync/engine/route-policy.ts";
-import { DM_LIST_READ_KEYS } from "../apps/runtime/src/sync/fansly/resources/dm-conversations.ts";
+import { DM_LIST_READ_KEYS, DM_LIST_WS_DOWN_EVERY_MS } from "../apps/runtime/src/sync/fansly/resources/dm-conversations.ts";
 import type { FanslyRoute } from "../apps/runtime/src/sync/fansly/routes.ts";
 import { RecordingMetrics } from "./helpers/sync-engine-host.ts";
 
@@ -192,12 +192,9 @@ describe("the Fansly registry table", () => {
     expect(typeof (await registry.module("repair.ws-gap")).applyLocal).toBe("function");
   });
 
-  it("owner-protected, live-only, evidence and fence sets of design §2.9 and §4.4", () => {
+  it("owner-protected, evidence and fence sets of design §2.9 and §4.4", () => {
     const keys = (predicate: (spec: ResourceSpec) => boolean) => FANSLY_RESOURCE_SPECS.filter(predicate).map((spec) => spec.key).sort();
     expect(keys((spec) => spec.ownerProtected === true)).toEqual(["catalog.fixed", "catalog.vault", "media-stats.walk"]);
-    expect(keys((spec) => spec.liveOnly === true)).toEqual([
-      "account.identity", "dm-conversations.ws-down", "media-download.fetch", "probe.excluded-chat", "repair.ws-gap", "ws.connect",
-    ]);
     expect(keys((spec) => spec.evidence)).toEqual([
       "catalog.vault", "dm-messages.catchup", "dm-messages.head", "dm-messages.history",
       "notifications.backfill", "notifications.forward", "post-replies.walk", "purchases.targets",
@@ -212,12 +209,10 @@ describe("the Fansly registry table", () => {
     const registry = createFanslyRegistry();
     const page = { pausedResources: [] as string[], registryOverrides: {} };
     expect(FANSLY_RESOURCE_SPECS.filter((spec) => spec.planBeforeGate === true).map((spec) => spec.key)).toEqual(["dm-conversations.find"]);
-    for (const shadow of [false, true]) {
-      expect(beforeGateKeys(registry, page, shadow)).toEqual(["dm-live.deletions", "dm-conversations.find"]);
-    }
+    expect(beforeGateKeys(registry, page)).toEqual(["dm-live.deletions", "dm-conversations.find"]);
     // The owner's pause and switch of a key hold there as in every pick.
-    expect(beforeGateKeys(registry, { ...page, pausedResources: ["dm-conversations.find"] }, false)).toEqual(["dm-live.deletions"]);
-    expect(beforeGateKeys(registry, { ...page, registryOverrides: { "dm-live.deletions": { enabled: false } } }, false))
+    expect(beforeGateKeys(registry, { ...page, pausedResources: ["dm-conversations.find"] })).toEqual(["dm-live.deletions"]);
+    expect(beforeGateKeys(registry, { ...page, registryOverrides: { "dm-live.deletions": { enabled: false } } }))
       .toEqual(["dm-conversations.find"]);
     // Never a history read (I12): those wait for a request and their slot.
     expect(FANSLY_RESOURCE_SPECS.filter(plansBeforeGate).every((spec) => spec.class !== "requests")).toBe(true);
@@ -290,10 +285,11 @@ describe("the Fansly registry table", () => {
     }
   });
 
-  it("a cadence is a schedule the engine keeps: only on a subject-queue walk or a standing walk", () => {
-    for (const spec of FANSLY_RESOURCE_SPECS.filter((entry) => entry.cadence !== undefined && entry.liveOnly !== true)) {
-      expect(spec.subjectQueue === true || spec.standing !== undefined, spec.key).toBe(true);
-    }
+  it("a cadence is a schedule something keeps: the vault's standing walk, and the list read its own module re-arms while the socket is down", () => {
+    expect(FANSLY_RESOURCE_SPECS.filter((entry) => entry.cadence !== undefined).map((entry) => entry.key))
+      .toEqual(["dm-conversations.ws-down", "catalog.vault"]);
+    expect(byKey("catalog.vault").standing).toBeDefined();
+    expect(byKey("dm-conversations.ws-down").cadence).toEqual({ everyMs: DM_LIST_WS_DOWN_EVERY_MS });
   });
 
   it("the vault walk stands over the projected album list, re-checked daily (design §5.17, owner decision №6)", () => {
@@ -364,12 +360,109 @@ describe("the shadow report and the questions it asked the resources are gone (s
     expect(cli).not.toMatch(/registerSyncReportCommands|shadow report/);
   });
 
-  it("a resource is plan, apply and shadow: no module answers a report question or replays a legacy observation", async () => {
+  it("no module answers a report question or replays a legacy observation", async () => {
     const registry = createFanslyRegistry();
     for (const spec of FANSLY_RESOURCE_SPECS) {
       const module = await registry.module(spec.key) as unknown as Record<string, unknown>;
       for (const hook of [...QUESTIONS, "replay"]) expect(module[hook], `${spec.key}: ${hook}`).toBeUndefined();
       expect("replayKinds" in spec, spec.key).toBe(false);
     }
+  });
+});
+
+describe("shadow mode is gone (step 4, S4-23)", () => {
+  const root = join(__dirname, "..");
+  // The deletion's proof, kept true: none of these names anywhere in the
+  // sources or the tests. Spelled in halves so this file is no hit itself.
+  const GONE = [
+    ["engine/", "shadow"],
+    ["Shadow", "Transport"],
+    ["Shadow", "Context"],
+    ["Shadow", "Result"],
+    ["Shadow", "Feed"],
+    ["Shadow", "WsFeed"],
+    ["Shadow", "Pass"],
+    ["Shadow", "Visit"],
+    ["Shadow", "Walk"],
+    ["Shadow", "StatusView"],
+    ["Shadow", "Latency"],
+    ["settle", "Shadow"],
+    ["plan", "Shadow"],
+    ["route", "ShadowReceipts"],
+    ["shadow", "Feed"],
+    ["shadow", "Latency"],
+    ["shadow", "Visit"],
+    ["shadow", "After"],
+    ["shadow", "Step"],
+    ["statusJournal", "IsShadow"],
+    ["sync_", "shadow_"],
+    ["SHADOW_", "WS_"],
+    ["ctx.", "shadow"],
+    ["live", "Only"],
+    ["runs", "In("],
+    ["advance", "WsRouterCursor"],
+    ["listWsRouter", "Receipts"],
+    ["wsRouterHorizon", "Watermark"],
+    ["OwnBroadcast", "Window"],
+    ["SubjectQueue", "Keyset"],
+  ].map(([head, tail]) => `${head}${tail}`);
+
+  it.each(GONE)("%s names nothing in apps, packages or tests", (name) => {
+    let hits = "";
+    try {
+      hits = execFileSync(
+        "grep",
+        ["-rlF", name, "--exclude-dir=node_modules", "--exclude-dir=dist", "--exclude-dir=.vite", "apps", "packages", "tests"],
+        { cwd: root, encoding: "utf8" },
+      );
+    } catch {
+      // grep exits 1 when nothing matches.
+    }
+    expect(hits.split("\n").filter(Boolean)).toEqual([]);
+  });
+
+  it("its transport and its own suites are gone", () => {
+    for (const path of [
+      join("apps/runtime/src/sync/engine", "shadow.ts"),
+      "tests/sync-shadow.integration.test.ts",
+      "tests/sync-ws-router.integration.test.ts",
+    ]) {
+      expect(existsSync(join(root, path)), path).toBe(false);
+    }
+  });
+
+  it("no module has a shadow step, no entry is kept out of a mode, and a request names no shadow position", async () => {
+    const registry = createFanslyRegistry();
+    for (const spec of FANSLY_RESOURCE_SPECS) {
+      const module = await registry.module(spec.key) as unknown as Record<string, unknown>;
+      expect(module.shadow, spec.key).toBeUndefined();
+      expect(`${"live"}Only` in spec, spec.key).toBe(false);
+    }
+    const contract = readFileSync(join(root, "apps/runtime/src/sync/engine/resource.ts"), "utf8");
+    expect(contract).not.toMatch(/\bshadow\b/i);
+    expect(contract).not.toMatch(/\bposition\??:/);
+  });
+
+  it("the queue writes `shadow` false, the journal leaves the column to its default, and no reader is told which journal to read", () => {
+    const sources = (dir: string) => readdirSync(join(root, dir), { recursive: true, encoding: "utf8" })
+      .filter((path) => path.endsWith(".ts"))
+      .map((path) => [join(dir, path), readFileSync(join(root, dir, path), "utf8")] as const);
+    const inserts: string[] = [];
+    for (const [path, source] of [...sources("packages/db/src/repositories"), ...sources("apps/runtime/src")]) {
+      // No input selects a journal and nothing binds the column to a value.
+      expect(source, path).not.toMatch(/input\.shadow|options\.shadow|\bshadow\s*=\s*\$\{/);
+      for (const match of source.matchAll(/insert into (sync_work|sync_attempts) \(([^)]*)\)\s*select ([^\n]*)/g)) {
+        inserts.push(`${match[1]}(${match[2]!.replace(/\s+/g, " ").trim()}) ${match[3]!.trim()}`);
+      }
+    }
+    // The only writers of the two tables: demand, the standing rows, an admission.
+    expect(inserts).toHaveLength(3);
+    const [demand, standing] = inserts.filter((insert) => insert.startsWith("sync_work("));
+    for (const insert of [demand!, standing!]) {
+      expect(insert).toMatch(/^sync_work\(page_id, shadow, resource, subject, /);
+      expect(insert).toContain("${input.pageId}::bigint, false, ");
+    }
+    const [admission] = inserts.filter((insert) => insert.startsWith("sync_attempts("));
+    expect(admission).not.toMatch(/\bshadow\b/);
   });
 });

@@ -328,7 +328,7 @@ describe("intake", () => {
     const result = await submitHistoryRequest(ctx(), intake(pageId, [{ kind: "conversation", conversationRef: group(1) }]));
     expect(result.items[0]).toMatchObject({ state: "blocked", probeAt: probeAt.toISOString() });
     expect(new Date((await historyWork(pageId, 1))!.due_at).getTime()).toBe(probeAt.getTime());
-    expect(await pickRequests(db(), { pageId, shadow: false })).toBeNull();
+    expect(await pickRequests(db(), { pageId })).toBeNull();
   });
 
   it("a head confirmed while the page's socket was verified anchors the fan at intake: latest N already met needs no read", async (context) => {
@@ -378,7 +378,7 @@ describe("serving and settling", () => {
     expect(shared).toHaveLength(1);
     const turns: string[] = [];
     for (let turn = 0; turn < 4; turn += 1) {
-      const picked = await pickRequests(db(), { pageId, shadow: false });
+      const picked = await pickRequests(db(), { pageId });
       expect(picked).not.toBeNull();
       const [request] = await rows<{ ref: string }>("select request_ref::text as ref from history_requests where id = $1", [picked!.requestId]);
       turns.push(`${request!.ref === a.request.ref ? "a" : "b"}:${picked!.work.subject === group(1) ? 1 : 2}`);
@@ -469,7 +469,7 @@ describe("serving and settling", () => {
       return okResponse({ messages: [] });
     };
     const registry = createEngineRegistry(FANSLY_RESOURCE_SPECS);
-    const { actor, stop, abort } = await makeTestActor({ db: db(), pageId, mode: "live", registry, transport, ownRef: OWN });
+    const { actor, stop, abort } = await makeTestActor({ db: db(), pageId, registry, transport, ownRef: OWN });
     const run = actor.run({ stop: stop.signal, abort: abort.signal });
     try {
       await waitFor(async () => ((await historyWork(pageId, 1))?.state === "done" ? true : null), 20_000, "the history work to end");
@@ -488,19 +488,19 @@ describe("serving and settling", () => {
     const { pageId } = await seedPage();
     await seedThread(pageId, { n: 1, chain: { from: 1, to: 10 } });
     const orphan = await upsertDemand(db(), {
-      pageId, shadow: false, resource: "dm-messages.history", subject: group(1), kind: "goal", class: "requests",
+      pageId, resource: "dm-messages.history", subject: group(1), kind: "goal", class: "requests",
     });
     const [work] = await rows<Record<string, unknown>>("select * from sync_work where id = $1", [orphan.id]);
     const plan = await dmMessagesModule("history").plan({
       id: orphan.id, subject: group(1), cursor: {}, demand: { messageIds: [], txIds: [], reasons: [], overflow: false },
-    } as never, { db: db(), pageId, shadow: false, now: new Date() } as never);
+    } as never, { db: db(), pageId, now: new Date() } as never);
     expect(plan).toEqual({ kind: "done", reason: "no_open_items" });
     expect(work).toBeDefined();
-    expect(await nextOpenWorkDueAt(db(), { pageId, shadow: false })).toBeNull();
+    expect(await nextOpenWorkDueAt(db(), { pageId })).toBeNull();
 
     await submitHistoryRequest(ctx(), intake(pageId, [{ kind: "conversation", conversationRef: group(1) }]));
-    expect(await nextOpenWorkDueAt(db(), { pageId, shadow: false })).not.toBeNull();
-    expect(await nextOpenWorkDueAt(db(), { pageId, shadow: false, excludeClasses: ["requests"] })).toBeNull();
+    expect(await nextOpenWorkDueAt(db(), { pageId })).not.toBeNull();
+    expect(await nextOpenWorkDueAt(db(), { pageId, excludeClasses: ["requests"] })).toBeNull();
   });
 });
 

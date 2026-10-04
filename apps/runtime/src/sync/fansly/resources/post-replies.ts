@@ -29,21 +29,13 @@ import type {
   DemandSignal,
   RequestPlan,
   ResourceModule,
-  ShadowResult,
   StepPlan,
 } from "../../engine/resource.ts";
 import type { SettingsSource } from "../../engine/ports.ts";
 import {
-  advanceShadowPass,
   clearQueueSubjectBlocks,
-  currentShadowPass,
-  EMPTY_SHADOW_PASS,
-  parseShadowPass,
   recordQueueSubjectFailures,
-  shadowPassNumber,
-  shadowPassWaitUntil,
   standingRecheckAt,
-  type ShadowPass,
   type SubjectQueueWalk,
 } from "../lib/subject-queue.ts";
 
@@ -110,14 +102,13 @@ async function rewalkCycleDays(settings: SettingsSource | undefined): Promise<nu
 /** The due posts of the reply queue in walk order, under a re-walk cycle. */
 export function pickDuePostReplies(
   db: Database,
-  input: { pageId: number; now: Date; limit: number; after: string | null; rewalkCycleDays: number },
+  input: { pageId: number; now: Date; limit: number; rewalkCycleDays: number },
 ): Promise<PostRepliesWalkCandidate[]> {
   return listPostRepliesWalkChunk(db, {
     pageId: input.pageId,
     limit: input.limit,
     rewalkBefore: new Date(input.now.getTime() - input.rewalkCycleDays * DAY_MS),
     now: input.now,
-    ...(input.after === null ? {} : { after: input.after }),
   });
 }
 
@@ -146,7 +137,6 @@ export interface PostRepliesCursor {
   postsLengthSamples: number[];
   walk: PostWalk | null;
   last: Record<string, unknown> | null;
-  shadow: ShadowPass;
 }
 
 export function parsePostRepliesCursor(value: unknown): PostRepliesCursor {
@@ -169,7 +159,6 @@ export function parsePostRepliesCursor(value: unknown): PostRepliesCursor {
       seen: count(walkRecord.seen) ?? 0,
     },
     last: typeof record.last === "object" && record.last !== null ? record.last as Record<string, unknown> : null,
-    shadow: parseShadowPass(record.shadow),
   };
 }
 
@@ -247,26 +236,16 @@ const walkModule: ResourceModule = {
   async plan(work, ctx): Promise<StepPlan> {
     const cursor = parsePostRepliesCursor(work.cursor);
     const cycleDays = await rewalkCycleDays(ctx.settings);
-    if (!ctx.shadow && cursor.walk !== null && cursor.walk.before !== null) {
+    if (cursor.walk !== null && cursor.walk.before !== null) {
       // A post mid-walk continues — unless it failed meanwhile (its breaker
       // is open): then the walk moves on and the post is re-read from its
       // head when it is due again.
       const backoff = await subjectQueueBackoffOpen(ctx.db, { pageId: ctx.pageId, plane: POST_REPLIES_QUEUE.plane, subjectRef: cursor.walk.postId, now: ctx.now });
       if (backoff === false) return { kind: "request", request: repliesRequest(cursor.walk.postId, cursor.walk.before) };
     }
-    const pass = ctx.shadow ? currentShadowPass(cursor.shadow, ctx.now, POST_REPLIES_RECHECK_MS) : EMPTY_SHADOW_PASS;
-    if (pass.ended) return { kind: "wait", reason: "not_due", until: shadowPassWaitUntil(pass, ctx.now, POST_REPLIES_RECHECK_MS) };
-    const [next] = await pickDuePostReplies(ctx.db, { pageId: ctx.pageId, now: ctx.now, limit: 1, after: pass.after, rewalkCycleDays: cycleDays });
-    if (next === undefined) {
-      const until = ctx.shadow ? shadowPassWaitUntil(pass, ctx.now, POST_REPLIES_RECHECK_MS) : standingRecheckAt(ctx.now, POST_REPLIES_RECHECK_MS);
-      return { kind: "wait", reason: "not_due", until };
-    }
-    const request = repliesRequest(next.subjectRef, null);
-    if (!ctx.shadow) return { kind: "request", request };
-    // The next shadow pass asks the posts again (shadow records no visit): a
-    // shadow step names its pass besides the post (`RequestPlan.position`).
-    const passNumber = shadowPassNumber(cursor.shadow, ctx.now, POST_REPLIES_RECHECK_MS);
-    return { kind: "request", request: { ...request, position: { pass: passNumber, postId: next.subjectRef } } };
+    const [next] = await pickDuePostReplies(ctx.db, { pageId: ctx.pageId, now: ctx.now, limit: 1, rewalkCycleDays: cycleDays });
+    if (next === undefined) return { kind: "wait", reason: "not_due", until: standingRecheckAt(ctx.now, POST_REPLIES_RECHECK_MS) };
+    return { kind: "request", request: repliesRequest(next.subjectRef, null) };
   },
 
   async apply(tx, input: ApplyInput): Promise<ApplyResult> {
@@ -287,7 +266,7 @@ const walkModule: ResourceModule = {
     const response = input.response;
     const rows = replyRows(response);
     const counters: Record<string, number> = {};
-    let next: PostRepliesCursor = { ...cursor, shadow: EMPTY_SHADOW_PASS };
+    let next: PostRepliesCursor = cursor;
     const cycleDays = await rewalkCycleDays(input.settings);
 
     if (classifyPostRepliesResponse(response) === "invalid" || rows === null) {
@@ -370,38 +349,6 @@ const walkModule: ResourceModule = {
     if (postId.length === 0) return;
     await recordQueueSubjectFailures(tx, { pageId: work.pageId, plane: POST_REPLIES_QUEUE.plane, subjectRefs: [postId], now: new Date() });
   },
-
-  async shadow(work, request, ctx): Promise<ShadowResult> {
-    // One request per post (the steady state: no live page has served more
-    // than four replies); a post last seen with a full page counts as an
-    // estimated extra page.
-    const cursor = parsePostRepliesCursor(work.cursor);
-    const pass = currentShadowPass(cursor.shadow, ctx.now, POST_REPLIES_RECHECK_MS);
-    const { postId } = repliesParams(request);
-    const cycleDays = await rewalkCycleDays(ctx.settings);
-    const [taken] = await pickDuePostReplies(ctx.db, { pageId: ctx.pageId, now: ctx.now, limit: 1, after: pass.after, rewalkCycleDays: cycleDays });
-    const advanced = advanceShadowPass({
-      pass: cursor.shadow,
-      now: ctx.now,
-      recheckMs: POST_REPLIES_RECHECK_MS,
-      taken: taken !== undefined && taken.subjectRef === postId ? [taken] : [],
-      limit: 1,
-    });
-    const authors = await authorsFollowup(ctx.db, ctx.pageId, cursor);
-    const counters: Record<string, number> = {};
-    if (taken !== undefined && (taken.knownCount ?? 0) >= REPLIES_FULL_PAGE_THRESHOLD && cursor.paginationMode !== "single_page") {
-      counters.reply_full_page_estimated = 1;
-    }
-    return {
-      work: {
-        satisfiesRevision: true,
-        nextDueAt: advanced.nextDueAt,
-        cursor: { ...cursor, hydratedAuthorRefs: authors.memory, shadow: advanced.pass },
-      },
-      followups: authors.followups,
-      counters,
-    };
-  },
 };
 
 // ── authors ─────────────────────────────────────────────────────────────────
@@ -443,10 +390,6 @@ const authorsModule: ResourceModule = {
     // Raw-only (D17): the journal IS the capture; nothing parses it.
     const batch = authorIds(input.request.params).length;
     return { work: stepAuthors(input.work, batch, input.now), followups: [], counters: { authors_asked: batch } };
-  },
-
-  async shadow(work, request, ctx): Promise<ShadowResult> {
-    return { work: stepAuthors(work, authorIds(request.params).length, ctx.now), followups: [] };
   },
 };
 

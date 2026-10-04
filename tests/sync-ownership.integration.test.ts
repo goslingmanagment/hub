@@ -13,7 +13,6 @@ import {
 import type { FanslySendOsProbe } from "../apps/runtime/src/services/fansly-send-guard/os-probe.ts";
 import { SyncEngineHost, type SyncHostOptions } from "../apps/runtime/src/sync/engine/host.ts";
 import { createPacer } from "../apps/runtime/src/sync/engine/pacer.ts";
-import { fixedShadowLatency } from "../apps/runtime/src/sync/engine/shadow.ts";
 import { confirmStoppedSyncOwners } from "../apps/runtime/src/sync/inspect.ts";
 import {
   resetIntegrationDatabase,
@@ -21,9 +20,10 @@ import {
   type StartedTestDatabase,
 } from "./helpers/db.ts";
 import {
-  childShadowRegistry,
+  childPollRegistry,
   countRows,
   quietLogger,
+  ScriptedLiveTransport,
   seedSyncPage,
   testConfig,
   testOwner,
@@ -98,9 +98,9 @@ async function owner(pageId: number) {
   return (await getSyncPage(db(), pageId))!.owner;
 }
 
-/** Every pair of simulated sends of the page, across owners, at least S apart. */
+/** Every pair of sends of the page, across owners, at least S apart. */
 async function assertNoPaceViolation(pageId: number): Promise<number> {
-  const sends = await listSendsForPaceAudit(db(), { pageId, since: new Date(0), shadow: true });
+  const sends = await listSendsForPaceAudit(db(), { pageId, since: new Date(0) });
   for (const send of sends) {
     if (send.gapMs !== null) expect(send.gapMs, `attempt ${send.attemptId}`).toBeGreaterThanOrEqual(SETTING_MS);
   }
@@ -117,6 +117,11 @@ async function firstSendOfGeneration(pageId: number, generation: number): Promis
   }, 20_000, `the first send of generation ${generation}`);
 }
 
+/** A live page the engine owns at the wire (the guard row's owner). */
+function seedLivePage() {
+  return seedSyncPage({ db: db(), pool: testDb!.pool }, { mode: "live", guard: "fansly_sync_engine" });
+}
+
 function hostOptions(probe: FanslySendOsProbe, overrides: Partial<SyncHostOptions> = {}): SyncHostOptions {
   return {
     db: db(),
@@ -124,12 +129,17 @@ function hostOptions(probe: FanslySendOsProbe, overrides: Partial<SyncHostOption
     config: testConfig(testDb!.connectionString),
     rawConfig: testConfig(testDb!.connectionString),
     logger: quietLogger,
-    registry: childShadowRegistry(),
+    registry: childPollRegistry(),
     probe,
     pause: { readSettingMs: async () => SETTING_MS },
     pacerFactory: (deps) => createPacer({ ...deps, minSettingMs: 1 }),
     routeTimeScale: 0,
-    shadowLatency: () => fixedShadowLatency(50),
+    liveTransportFactory: async () => {
+      const transport = new ScriptedLiveTransport();
+      transport.latencyMs = 50;
+      return transport;
+    },
+    liveSocket: () => null,
     modeLoopIntervalMs: 200,
     ...overrides,
   };
@@ -149,7 +159,7 @@ function stubProbe(overrides: Partial<FanslySendOsProbe> = {}): FanslySendOsProb
 describe("two sync processes on one page", () => {
   it("only one owns it; killed -9, the other takes over by the OS proof, not before 1.2 × S", async (context) => {
     if (!testDb) return context.skip();
-    const { pageId } = await seedSyncPage({ db: db(), pool: testDb.pool }, { mode: "shadow" });
+    const { pageId } = await seedLivePage();
     const a = await spawnSyncHost();
     await waitFor(async () => ((await owner(pageId)).pid === a.pid ? true : null), 20_000, "process A owns the page");
     const b = await spawnSyncHost();
@@ -178,7 +188,7 @@ describe("two sync processes on one page", () => {
 
   it("a stopped owner whose session was cut is not taken over until confirmed; resumed, it cannot send", async (context) => {
     if (!testDb) return context.skip();
-    const { pageId } = await seedSyncPage({ db: db(), pool: testDb.pool }, { mode: "shadow" });
+    const { pageId } = await seedLivePage();
     const a = await spawnSyncHost({ SYNC_TEST_HOSTNAME: "sync-host-a" });
     await waitFor(async () => ((await owner(pageId)).pid === a.pid ? true : null), 20_000, "process A owns the page");
     await firstSendOfGeneration(pageId, 1);
@@ -220,7 +230,7 @@ describe("two sync processes on one page", () => {
 describe("the previous owner's stop, confirmed in-process", () => {
   it("a graceful stop's safe release hands the page over, with the takeover floor", async (context) => {
     if (!testDb) return context.skip();
-    const { pageId } = await seedSyncPage({ db: db(), pool: testDb.pool }, { mode: "shadow" });
+    const { pageId } = await seedLivePage();
     const first = new SyncEngineHost(hostOptions(stubProbe()));
     await first.start();
     const second = new SyncEngineHost(hostOptions(stubProbe()));
@@ -246,7 +256,7 @@ describe("the previous owner's stop, confirmed in-process", () => {
 
   it("D23: an owner recorded as this container under another pid namespace was ended with that namespace", async (context) => {
     if (!testDb) return context.skip();
-    const { pageId } = await seedSyncPage({ db: db(), pool: testDb.pool }, { mode: "shadow" });
+    const { pageId } = await seedLivePage();
     const containerHost = "0123456789ab";
     const previous = await acquireSyncPageOwnership(db(), {
       pageId,
@@ -285,7 +295,7 @@ describe("the previous owner's stop, confirmed in-process", () => {
 
   it("an owner that is neither released nor provably gone keeps the page: the page waits", async (context) => {
     if (!testDb) return context.skip();
-    const { pageId } = await seedSyncPage({ db: db(), pool: testDb.pool }, { mode: "shadow" });
+    const { pageId } = await seedLivePage();
     await acquireSyncPageOwnership(db(), {
       pageId,
       owner: testOwner({ host: "in-process-host", pid: 99_999, pidStart: "alive" }),

@@ -22,7 +22,6 @@ import { NETWORK_ALERT_AFTER_MS } from "../apps/runtime/src/sync/engine/errors.t
 import { OWNERSHIP_ALERT_AFTER_MS } from "../apps/runtime/src/sync/engine/host.ts";
 import { quantileOf, syncMetricsDue } from "../apps/runtime/src/sync/engine/metrics.ts";
 import { createFanslyRegistry } from "../apps/runtime/src/sync/fansly/registry.ts";
-import { TIMELINE_PAGE_ESTIMATE } from "../apps/runtime/src/sync/fansly/resources/posts.ts";
 import { moneyFramesMissing } from "../apps/runtime/src/sync/fansly/ws/money-frames.ts";
 
 // The Fansly Sync Engine's alerts 1–4 (plan §10, design §9.6) as pure rules,
@@ -351,9 +350,5 @@ describe("the sampler's pure parts", () => {
     expect(quantileOf([5, 1, 3, 2, 4], 0.95)).toBe(5);
     expect(syncMetricsDue(new Date("2026-10-02T12:05:30Z"))).toBe(true);
     expect(syncMetricsDue(new Date("2026-10-02T12:06:30Z"))).toBe(false);
-  });
-
-  it("the shadow's timeline estimate is the page size legacy measured (15 posts a page)", () => {
-    expect(TIMELINE_PAGE_ESTIMATE).toBe(15);
   });
 });

@@ -34,7 +34,6 @@ function engine(seconds: number, operation: string, overrides: Partial<FanslySen
   ref += 1;
   return {
     journal: "engine",
-    shadow: false,
     source: null,
     ref,
     operation,
@@ -182,13 +181,6 @@ describe("I1: every pair of adjacent sends ≥ the later send's own pause", () =
     expect(auditPagePace([before, left, takeover(31)], WINDOW)).toMatchObject({ verdict: "pass", pairs: 2 });
     // Without it the pair would silently be (previous recorded send → next send): 19 s, a pass.
     expect(auditPagePace([before, takeover(29)], WINDOW).verdict).toBe("pass");
-  });
-
-  it("the shadow journal's sends are simulated: an attempt without an instant simulated none", () => {
-    const shadow = { shadow: true };
-    const closed = unrecorded(11, "notifications.page", shadow);
-    const rows = [engine(10, "notifications.page", shadow), closed, engine(13, "notifications.page", shadow)];
-    expect(auditPagePace(rows, WINDOW)).toMatchObject({ verdict: "pass", pairs: 1, inconclusive: [] });
   });
 
   it("judges the later sends of the window only; an earlier one is the first one's predecessor", () => {

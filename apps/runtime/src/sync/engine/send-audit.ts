@@ -218,13 +218,12 @@ export interface PaceAudit {
  * previous actual send — the recorded one, or a later one never recorded,
  * which only makes it shorter). A send never recorded that may have gone out
  * stands at its upper bound, as the takeover floor counts it (`paceFloorFromDb`),
- * and is judged at its admission. The shadow journal's sends are simulated:
- * an attempt without an instant simulated none and is no send.
+ * and is judged at its admission.
  */
 export function auditPagePace(rows: readonly FanslySendAuditRow[], window: SendAuditWindow): PaceAudit {
   const sends: Placed[] = rows
     .flatMap((row) => {
-      const at = row.sentAt ?? (row.shadow ? null : row.countedAt);
+      const at = row.sentAt ?? row.countedAt;
       return at === null ? [] : [placed(row, at)];
     })
     .sort((a, b) => a.ms - b.ms || byJournalAndRef(a, b));

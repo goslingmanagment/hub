@@ -44,7 +44,6 @@ import type {
   DemandSignal,
   RequestPlan,
   ResourceModule,
-  ShadowResult,
   StepPlan,
   WorkOutcome,
 } from "../../engine/resource.ts";
@@ -63,7 +62,6 @@ import {
 } from "../lib/chain.ts";
 import { normalizeFanslyDmMessages } from "../lib/dm-normalize.ts";
 import { replaceJournalLoneSurrogates } from "../lib/journal-lone-surrogates.ts";
-import { advanceShadowWalk, type ShadowWalkProgress } from "../lib/offset-walk.ts";
 import { readFanslyPageFacts, waitForPageIdentity } from "../lib/page-facts.ts";
 import { normalizeFanslyTimestamp } from "../lib/timestamp.ts";
 import { materializeFanslyDmTipContexts } from "../lib/tip-contexts.ts";
@@ -222,7 +220,6 @@ export interface DmMessagesCursor {
   walkPages: number;
   /** Demanded ids a finished walk did not show yet: misses so far. */
   misses: Record<string, number>;
-  shadow: ShadowWalkProgress | null;
   /** The receipt of the last finished walk. */
   last: Record<string, unknown> | null;
   /** `.history`: capture time of the walk's latest head read (a fan filed
@@ -258,15 +255,11 @@ export function parseDmMessagesCursor(value: unknown): DmMessagesCursor {
     const misses_ = count(n);
     if (DECIMAL_ID.test(id) && misses_ !== null && misses_ > 0) misses[id] = misses_;
   }
-  const shadow = recordOf(record.shadow);
-  const steps = count(shadow.steps);
-  const done = count(shadow.done);
   const historyHeadAt = typeof record.historyHeadAt === "string" ? new Date(record.historyHeadAt) : null;
   return {
     segment: parseSegment(record.segment),
     walkPages: count(record.walkPages) ?? 0,
     misses,
-    shadow: steps === null || done === null ? null : { steps, done },
     last: typeof record.last === "object" && record.last !== null && !Array.isArray(record.last)
       ? record.last as Record<string, unknown>
       : null,
@@ -279,7 +272,6 @@ function cursorJson(cursor: DmMessagesCursor): Record<string, unknown> {
     segment: segmentJson(cursor.segment),
     walkPages: cursor.walkPages,
     misses: cursor.misses,
-    shadow: cursor.shadow,
     last: cursor.last,
     historyHeadAt: cursor.historyHeadAt === null ? null : cursor.historyHeadAt.toISOString(),
   };
@@ -344,10 +336,10 @@ async function planChatFind(work: SyncWorkRow, ctx: { db: Database; pageId: numb
   });
   if (!evidence) return missing;
   const recheck = new Date(ctx.now.getTime() + DM_HEAD_FIND_RECHECK_MS);
-  const open = await getOpenWorkForKey(ctx.db, { pageId: ctx.pageId, shadow: false, resource: FIND_KEY, subject: groupId });
+  const open = await getOpenWorkForKey(ctx.db, { pageId: ctx.pageId, resource: FIND_KEY, subject: groupId });
   if (open !== null) return open.state === "quarantined" ? missing : { kind: "wait", reason: "dependency", until: recheck };
   const ran = await latestClosedWorkForKey(ctx.db, {
-    pageId: ctx.pageId, shadow: false, resource: FIND_KEY, subject: groupId, closedAfter: work.createdAt,
+    pageId: ctx.pageId, resource: FIND_KEY, subject: groupId, closedAfter: work.createdAt,
   });
   if (ran !== null) return missing;
   return {
@@ -359,15 +351,15 @@ async function planChatFind(work: SyncWorkRow, ctx: { db: Database; pageId: numb
 }
 
 async function planStep(variant: DmMessagesVariant, work: SyncWorkRow, ctx: {
-  db: Database; pageId: number; shadow: boolean; now: Date;
+  db: Database; pageId: number; now: Date;
 }): Promise<StepPlan> {
   const groupId = work.subject;
   if (!DECIMAL_ID.test(groupId)) return { kind: "quarantine", reason: "dm_messages_subject_invalid" };
   const facts = await readFanslyPageFacts(ctx.db, ctx.pageId);
   if (facts === null) return { kind: "quarantine", reason: "page_missing" };
-  if (facts.externalId === null) return waitForPageIdentity(KEY_OF[variant], ctx.shadow, ctx.now);
+  if (facts.externalId === null) return waitForPageIdentity(KEY_OF[variant]);
   const thread = await readThread(ctx.db, ctx.pageId, groupId);
-  if (thread === null && variant === "head" && !ctx.shadow) return planChatFind(work, ctx);
+  if (thread === null && variant === "head") return planChatFind(work, ctx);
   const skip = threadSkip(thread);
   if (skip !== null || thread === null) return { kind: "done", reason: skip ?? "thread_missing" };
   const cursor = parseDmMessagesCursor(work.cursor);
@@ -791,7 +783,7 @@ async function applyMessagesPage(variant: DmMessagesVariant, tx: Database, input
   //    the demand; a `.catchup` the walk reached is closed.
   const resolvedIds = [...resolution.found, ...resolution.covered, ...resolution.expired, ...resolution.dropped];
   const catchup = variant === "head" && done && fold.chain.headId !== null
-    ? await getOpenWorkForKey(tx, { pageId: input.pageId, shadow: false, resource: CATCHUP_KEY, subject: groupId })
+    ? await getOpenWorkForKey(tx, { pageId: input.pageId, resource: CATCHUP_KEY, subject: groupId })
     : null;
   const closeCatchup = catchup !== null && catchup.state === "open" && catchupReachedBy(catchup, fold.chain);
   if (resolvedIds.length > 0 || closeCatchup) {
@@ -808,7 +800,6 @@ async function applyMessagesPage(variant: DmMessagesVariant, tx: Database, input
     segment: fold.segment,
     walkPages: done ? 0 : cursor.walkPages + 1,
     misses: resolution.misses,
-    shadow: null,
     historyHeadAt: variant === "history" && before === null ? input.observation.receivedAt : cursor.historyHeadAt,
     last: done
       ? {
@@ -975,41 +966,12 @@ async function canonicalizeAndFeedArchive(tx: Database, input: {
   bump(input.counters, "archive_inserted", archived.inserted);
 }
 
-// ── shadow ──────────────────────────────────────────────────────────────────
-
-/**
- * Shadow (design §3.12, §5.4): `.head`/`.catchup` take ⌈demanded ids / 25⌉
- * reads (at least one) — a burst of new messages above the head is read down
- * page by page; `.history` never exists in shadow (requests are refused on
- * pages that are not live). Writes nothing but the work.
- */
-async function shadowStep(variant: DmMessagesVariant, work: SyncWorkRow, ctx: { now: Date }): Promise<ShadowResult> {
-  const cursor = parseDmMessagesCursor(work.cursor);
-  if (variant === "history") {
-    return { work: { satisfiesRevision: true, close: "done", closeReason: "shadow" }, followups: [] };
-  }
-  const step = advanceShadowWalk(cursor.shadow, () => Math.max(1, Math.ceil(work.demand.messageIds.length / LIMIT)));
-  if (step.finished) {
-    return {
-      work: { satisfiesRevision: true, close: "done", closeReason: "shadow", cursor: cursorJson({ ...cursor, shadow: null }) },
-      followups: [],
-      counters: { simulated_pages: 1 },
-    };
-  }
-  return {
-    work: { satisfiesRevision: false, nextDueAt: ctx.now, cursor: cursorJson({ ...cursor, shadow: step.progress }) },
-    followups: [],
-    counters: { simulated_pages: 1 },
-  };
-}
-
 // ── modules ─────────────────────────────────────────────────────────────────
 
 function variantModule(variant: DmMessagesVariant): ResourceModule {
   return {
     plan: (work, ctx) => planStep(variant, work, ctx),
     apply: (tx, input) => applyMessagesPage(variant, tx, input),
-    shadow: (work, _request, ctx) => shadowStep(variant, work, ctx),
   };
 }
 

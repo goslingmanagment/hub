@@ -111,7 +111,7 @@ async function liveActor(pageId: number, chats: FakeChats, onRead?: (req: Fansly
     reads.push(req);
     await onRead?.(req, reads.length - 1);
   };
-  const made = await makeTestActor({ db: db(), pageId, mode: "live", registry: dmRegistry(), transport, settingMs: 1 });
+  const made = await makeTestActor({ db: db(), pageId, registry: dmRegistry(), transport, settingMs: 1 });
   return { made, reads };
 }
 

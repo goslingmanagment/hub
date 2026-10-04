@@ -21,11 +21,7 @@ import type { ApplyResult, LocalApplyInput, ResourceModule } from "../../engine/
 // page hold or pacer slot delays it (ruling 9) — outside the ack transaction
 // so the lock order holds (hot tables before `domain_event_seq`).
 //
-// Shadow (step 2): the router creates the work from real deletion frames and
-// the step closes at once — a shadow page never writes a hot table, the
-// archive or an event (I14).
-//
-// Live: a `local` step (`applyLocal`, in the commit's generation-fenced
+// A `local` step (`applyLocal`, in the commit's generation-fenced
 // transaction under the erasure fence the entry declares). Per deleted
 // overlay row of the work's ids: an executed erasure covering the chat (or its
 // fan, or the message's sender) at the deletion's instant skips it; the page's hot rows of the message are marked
@@ -262,15 +258,11 @@ export async function applyDmLiveDeletions(tx: Database, input: LocalApplyInput)
 }
 
 export const dmLiveDeletionsModule: ResourceModule = {
-  async plan(_work, ctx) {
-    if (ctx.shadow) return { kind: "done", reason: "shadow_no_writes" };
+  async plan() {
     return { kind: "local", reason: "ws_deletion" };
   },
   applyLocal: applyDmLiveDeletions,
   async apply() {
     throw new Error("dm-live.deletions makes no request: there is no answer to apply");
-  },
-  async shadow() {
-    throw new Error("dm-live.deletions makes no request: there is no step to estimate");
   },
 };
