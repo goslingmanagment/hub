@@ -43,9 +43,11 @@ import {
 // `sync-dm-head`) through the real actor and commits against a real
 // database; a scripted transport plays Fansly's `/message` (newest first, 25
 // a page, `before` strictly below). Pinned: one head read confirms a socket
-// message into every store in one commit (hot table, chain, the summary from
-// the archive, the overlay confirmed against the archive, events, archive); a demand that arrives during the read is read
-// again (I11); an id the vendor does not show yet is retried at 15 s and
+// message into every store in one commit (chain, the summary from the
+// archive, the overlay confirmed against the archive, events, archive) and
+// writes no `page_dm_messages` row (step 4 S4-13, I23: the rows legacy stored
+// stay as they were); a demand that arrives during the read is read again
+// (I11); an id the vendor does not show yet is retried at 15 s and
 // 60 s, then settled not found; more than 25 new messages are read down until
 // the staged walk meets the chain, which moves only then; the archive is fed
 // even when the minutely driver appended the events first; history is read
@@ -325,7 +327,24 @@ async function thread(threadId: number) {
   return result.rows[0]!;
 }
 
+/** The thread's messages in `message_archive`, the store a live page's
+ *  readers and the engine's summary read (step 4 S4-08). */
 async function storedIds(threadId: number): Promise<string[]> {
+  const result = await testDb!.pool.query<{ id: string }>(
+    `select ma.message_ref as id
+       from page_dm_threads t
+       join message_archive ma
+         on ma.account_id = t.platform_account_id and ma.platform = 'fansly' and ma.conversation_ref = t.platform_conversation_id
+      where t.id = $1
+      order by ma.message_ref::numeric`,
+    [threadId],
+  );
+  return result.rows.map((row) => row.id);
+}
+
+/** The thread's `page_dm_messages` rows: only what legacy stored (the engine
+ *  writes none, step 4 S4-13). */
+async function hotIds(threadId: number): Promise<string[]> {
   const result = await testDb!.pool.query<{ id: string }>(
     "select platform_message_id as id from page_dm_messages where conversation_id = $1 order by platform_message_id::numeric",
     [threadId],
@@ -341,7 +360,7 @@ async function scalar(text: string, values: unknown[]): Promise<number> {
 const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, index) => from + index);
 
 describe("dm-messages.head", () => {
-  it("confirms a socket message with one head read: hot table, chain, summary, overlay, events and archive in one commit", async (context) => {
+  it("confirms a socket message with one head read: chain, summary, overlay, events and archive in one commit, no hot row", async (context) => {
     if (!testDb) return context.skip();
     const pageId = await seedPage();
     const threadId = await seedThread(pageId, { n: 1, stored: range(1, 20), chain: true });
@@ -361,6 +380,8 @@ describe("dm-messages.head", () => {
 
     expect(requests.map(beforeOf)).toEqual([null]);
     expect(await storedIds(threadId)).toEqual(range(1, 23).map(msg));
+    // The hot table keeps what legacy stored, nothing of the read.
+    expect(await hotIds(threadId)).toEqual(range(1, 20).map(msg));
     const after = await thread(threadId);
     expect(after).toMatchObject({
       head_confirmed_id: msg(23), contiguous_oldest_id: msg(1), contiguous_count: 23, chain_upward_count: "3",
@@ -499,6 +520,7 @@ describe("dm-messages.head", () => {
       head_confirmed_id: msg(70), contiguous_count: 70, chain_upward_count: "60", contiguous_oldest_id: msg(1), stored_message_count: 70,
     });
     expect(await storedIds(threadId)).toHaveLength(70);
+    expect(await hotIds(threadId)).toEqual(range(1, 10).map(msg));
   });
 
   it("joins a walk that crosses a head the vendor no longer serves", async (context) => {
@@ -584,6 +606,7 @@ describe("dm-messages.head", () => {
       async () => (await workRow(pageId, "dm-messages.head", 8))?.state === "done", { metrics });
     // Even k are the page's own messages.
     expect(await storedIds(threadId)).toEqual([msg(2), msg(4)]);
+    expect(await hotIds(threadId)).toEqual([]);
     expect(await scalar("select count(*)::int as n from domain_events where account_id = $1 and type = 'message.received'", [pageId])).toBe(0);
     expect(await scalar("select count(*)::int as n from domain_events where account_id = $1 and type = 'message.sent'", [pageId])).toBe(2);
     expect(await scalar("select count(*)::int as n from message_archive where account_id = $1", [pageId])).toBe(2);
@@ -632,7 +655,7 @@ describe("dm-messages.head", () => {
     expect(await scalar("select count(*)::int as n from page_dm_messages where platform_account_id = $1", [pageId])).toBe(0);
   });
 
-  it("a chat excluded between the capture and the apply writes no rows, yet its events are appended and the observation stamped", async (context) => {
+  it("a chat excluded between the capture and the apply moves neither its chain nor its summary, yet its events are appended and the observation stamped", async (context) => {
     if (!testDb) return context.skip();
     const pageId = await seedPage();
     const threadId = await seedThread(pageId, { n: 19, stored: range(1, 3), chain: true });
@@ -649,8 +672,8 @@ describe("dm-messages.head", () => {
         },
       });
     expect(await workRow(pageId, "dm-messages.head", 19)).toMatchObject({ state: "done", close_reason: "excluded" });
-    expect(await storedIds(threadId)).toEqual(range(1, 3).map(msg));
-    expect((await thread(threadId)).head_confirmed_id).toBe(msg(3));
+    expect(await thread(threadId)).toMatchObject({ head_confirmed_id: msg(3), stored_message_count: 3 });
+    expect(await hotIds(threadId)).toEqual(range(1, 3).map(msg));
     const observation = await testDb.pool.query<{ parse_version: number | null }>(
       "select o.parse_version from observations o join sync_attempts a on a.observation_id = o.id where a.page_id = $1",
       [pageId],
@@ -843,6 +866,7 @@ describe("dm-messages refusals", () => {
     await runLive(pageId, registry, () => okResponse({ messages: [4, 5].map((k) => wireMessage(groupOf(13), k)) }),
       async () => (await workRow(pageId, "dm-messages.head", 13))?.state === "quarantined", { alerts });
     expect(await storedIds(threadId)).toEqual(range(1, 3).map(msg));
+    expect(await hotIds(threadId)).toEqual(range(1, 3).map(msg));
     expect((await thread(threadId)).head_confirmed_id).toBe(msg(3));
     const attempt = await testDb.pool.query("select apply_state, observation_id is not null as journaled from sync_attempts where page_id = $1", [pageId]);
     expect(attempt.rows).toEqual([{ apply_state: "quarantined", journaled: true }]);
