@@ -46,6 +46,7 @@ sync/
     ports.ts                 Clock, Rng, PauseSource, Wake, OwnershipSession, AlertSink, Metrics, Transport
     pacer.ts                 the ONLY admission authority: the pause rule, one request in flight, takeover floor
     route-policy.ts          the route budgets on top of it: clocks from the journal, route state, pick exclusion, look-ahead
+    admission.ts             the hold evaluator: ONE answer to "what holds this request?" over the page's hold set
     scheduler.ts             the 10-slot cycle U R U R U R U R U P over the three classes (+ the short look-ahead)
     errors.ts                outcome → error class → page hold / network pause / breakers / quarantine
     status.ts                "why waiting" and the page status
@@ -348,11 +349,12 @@ Credentials (step 3; step 3b ruling 5, A3): every live API request carries the d
 proxy (`credentialsGeneration`, journaled with the attempt). Unless it is the digest the engine trusts
 (`sync_pages.credentials_generation`) only the identity checks go out (`account.verify`, `account.identity`) and the
 actor raises one verify — checks-only is read from the database at every pick, never kept in memory. What a page hold
-is, what it admits and what clears it is ONE pure core, `@agency_hub_core/shared` `fansly-page-holds.ts`, read by the
-actor's gate and pick, the final check inside the admission transaction (SQL only locks the rows and CAS-writes what
+is, what it admits and what clears it is ONE pure core, `@agency_hub_core/shared` `fansly-page-holds.ts`, over the
+page-scope rows of the page's hold set (below); the hold evaluator composes it with the route and resource holds for
+the actor's gate and pick, the final check inside the admission transaction (SQL only locks the rows and writes what
 the core decided), status/why and the alerts. A credentials hold (`auth`,
-`identity_mismatch`) records its LATEST refusal in `hold_detail` (`failedAttemptId`, `failedAt`, the refused digest;
-`hold_since` stays the episode's start) and is in force until the apply of an identity proof — an applied
+`identity_mismatch`) records its LATEST refusal in its row's `detail` (`failedAttemptId`, `failedAt`, the refused
+digest; `since` stays the episode's start) and is in force until the apply of an identity proof — an applied
 `/account/me` of the page's own account — whose request was sent after that refusal; nothing else lifts it, a moved
 trusted digest included. The proof (identity, trusted digest, `identity_checked_at` = its send instant, never
 overwritten by an older one) and the clearing are written in the apply's own transaction, which takes the page row
@@ -368,12 +370,55 @@ transaction that raises the verify of the stored ones (audit `sync.credentials_v
 for the stored digest stays, for the owner's requeue. A candidate proxy comes from the egress resolver
 (`page_candidate` scope); the check of a session that belongs to no page yet rides `fansly_candidate`
 (`fansly/identity-without-page.ts`). The socket's Upgrade (`ws.connect`) is checked like an API request, and the
-socket opens only with the digest its admission checked. A credentials hold and a 429/network hold can both be in force (`hold_detail.timedHold`, the
-core's `combineFanslyPageHold`): a credentials hold taken over a 429 hold carries it (as the step-3 switch imported
-a legacy 429 beside a legacy auth block), and a candidate check's network failure under it is carried beside it (its 429 holds only its route) — the
-credentials hold is never replaced or lifted by it. Nothing goes out, not even a candidate check, before the carried
-hold ends; the proof lifts only the credentials hold. The egress follows the digest (a changed proxy is resolved
-again before the next request).
+socket opens only with the digest its admission checked. A credentials hold and a network hold can both be in force,
+each a row of its own: a candidate check's network failures under a credentials hold take the page's network hold
+beside it (its 429 holds only its route) — the credentials hold is never replaced or lifted by it. Nothing goes out,
+not even a candidate check, before the network hold ends; the proof lifts only the credentials hold. The egress
+follows the digest (a changed proxy is resolved again before the next request).
+
+## The hold set and the hold evaluator (step 4, owner decision №26)
+
+What holds a page, a route of it or a resource file is a row of `sync_holds` (0240), one row per hold:
+
+| scope, key | kind | what it stops, until |
+|---|---|---|
+| `page`, `''` | `auth` / `identity_mismatch` | every request but the identity checks the credentials hold admits; `until` = `infinity` (an identity proof sent after its latest refusal clears it). One a page: a refusal of the other kind replaces the row and keeps the episode's start |
+| `page`, `''` | `network` | every request, until its end; a row of its own beside a credentials hold |
+| `route`, the route id | `route_hold` | sends on that route until `until` (a 429's hold, a 5xx's `Retry-After`) |
+| `route`, the route id | `route_budget` | nothing by itself: the route's durable state — the ladder step of its next 429 (`ladder_step`), its slowdown and newest 429 (`detail`), the revision a raise compares against (`revision`); no end |
+| `resource`, the file | `resource_breaker` | every key of the file but the exempt one (`dm-messages.head`), until its end, on ladder step `ladder_step` |
+
+The page row hands a page's rows out with every read (`SyncPageRow.holds`), and ONE function answers "what holds this
+request now?": `engine/admission.ts` `whyHeld(holds, routes, query, now)` (and `heldByScope`, the same answer scope by
+scope) — the page (rows this build cannot read, the network hold, the credentials hold with the exceptions of A3), then
+the subject's breaker, the file's breaker, the route (`route_hold` when a 429 holds one of the routes that keep the
+request closed, `route_budget` when only their budgets' intervals do). It composes the page-hold core, `activeResourceHold`
+and the route admission (`routeAdmissionView` over the route clocks) and re-states none of them. The actor's gate, its
+pick and its final check, the admission transaction, `explainWork` and the page status, the alerts, the history
+requests' view, the Settings blocks and the metrics ask it; none of them reads a hold row or a hold column itself.
+A row of a scope or kind this build does not know (a later build's, after a rollback) keeps the page closed until its
+end — for good when it names none — and route rows of a known route it cannot parse close it with no end: `page_hold`
+with `detail.holdSet` in "why", alert 1 (`hold_set_unreadable`, `route_state_unreadable`), metric
+`sync_route_state_unreadable`.
+
+Writers: the four hold writers of `repositories/sync/pages.ts` — `setPageHold`, `clearPageHold`, `setResourceHold`,
+`writeSyncRouteState` (a compare-and-set on the route's `route_budget` revision) — each in one transaction that takes
+the page row FOR NO KEY UPDATE (the lock of every actor transaction) and fences the generation.
+
+**For this one release the old hold columns of `sync_pages` are kept in step** (`repositories/sync/holds-legacy.ts`;
+the next release, S4-31, deletes that file and drops the columns): the previous image reads a page's holds only from
+`hold_kind` … `hold_detail` and `resource_holds`, and a rollback to it must not fail open. So every hold writer
+rewrites those columns from the page's rows in its transaction (`mirrorSyncHoldsToLegacyColumns` — the credentials
+hold carrying the network hold in `hold_detail.timedHold`, the breakers by file and the route state under
+`resource_holds['route:state']`, exactly as that image reads them), and whenever a page's ownership is acquired the
+columns are compared with what the rows make them: if they differ, someone who knows only the columns wrote them (the
+previous image after the migration ran or after a rollback, or a hand), and the columns win — the rows are replaced by
+what they say (`reconcileSyncHoldsWithLegacyColumns`; the host logs it and counts `sync_holds_imported`). That is also
+how a page's state first reaches the table (the migration copies nothing: the previous image is still writing when it
+runs). Columns that disagree and hold a route state no build wrote refuse the acquisition
+(`SyncLegacyHoldsUnreadableError`: the page is not started, alert 1 `ownership_unconfirmed` after 2 min).
+Nothing else reads the columns. **A hold changed by hand in this release is changed in the old columns too** (or in
+them alone, before a restart): rows changed alone are read back from the columns at the page's next acquisition.
 
 ## The process: pool timeouts, stall watchdog, shutdown (step 4, 4-3)
 
@@ -548,6 +593,7 @@ Each is enforced in exactly one place and pinned by a test (design §1). The fir
 | I18 | Every WS receipt of a `handover`/`live` page routes its demand exactly once, in the transaction that acks it. | `fansly/ws/route-receipt.ts` |
 | I19 | Between two actual sends of one page on one route (or one family): ≥ the interval of its effective rate, counted from the actual send in the journal the page runs (the legacy send log too on a live page; an unknown outcome at its upper bound); no burst, no borrowing. | `engine/route-policy.ts` (`RouteClocks`) + `engine/actor.ts` (pick exclusion, final check) |
 | I20 | One page-hold rule: a credentials hold clears only by an identity proof sent after its latest refusal, written with the apply; under it only a candidate check and one verify per changed stored digest pass (step 3b ruling 5, A3). | `packages/shared/src/fansly-page-holds.ts` (gate, final admission, status, alerts) + `engine/commit.ts` (`recordIdentityProof`) |
+| I23 | One hold evaluator over one hold set: what holds a request — the page, its subject, its resource file, its route — is `whyHeld`'s answer over the page's `sync_holds` rows; rows it cannot read keep the page closed. While the old hold columns exist, every hold write rewrites them in its transaction and an acquisition reads them back when they differ (step 4, owner decision №26). | `engine/admission.ts` + `repositories/sync/pages.ts` (the four hold writers) + `repositories/sync/holds-legacy.ts`; tests/sync-hold-evaluator.test.ts, tests/sync-hold-set.integration.test.ts, tests/sync-holds-legacy.test.ts |
 | I21 | The legacy page-sync executor serves only the platforms whose adapter declares streams (OnlyFans since step 4 S4-10): no Fansly page's legacy state is seeded, scheduled, woken, leased or requested, and nothing gives a page back to it. The platform set is a required argument of every query that picks work — the one fence in them since S4-21, with the Fansly rows parked `retired` (0239) beside it — and the planner and the executor assert it before a wake-up or a run; `services/sync/` holds no Fansly handler, error class or Fansly HTTP import (S4-19). | `onlyfans/boundary.ts` (`legacyExecutorPlatforms`, `assertLegacyExecutorPage`) over `platforms/registry.ts` + `repositories/page-sync.ts` (`PageSyncPlatformScope`) + `services/sync/planner.ts` + `services/sync/executor.ts` + `services/sync-control.ts` (`assertLegacyExecutorServes`); tests/sync-onlyfans-boundary.test.ts, tests/sync-legacy-fence.test.ts |
 | I22 | Only a live page's socket source in `sync` opens a Fansly WebSocket (step 4 S4-12): the receiver helper is the one place that constructs a socket, its Upgrade on a send lease (the engine's, over the pacer's one-shot check); no worker, lane or script opens one. | `fansly/ws/source.ts` + `services/egress/fansly-receiver-socket.ts`; tests/fansly-send-guard-boundary.test.ts |
 
@@ -573,21 +619,24 @@ most two slots. The pointer (`sync_pages.cycle_pos`) survives restarts.
 
 ## Why waiting
 
-Every open `sync_work` row has one reason from this closed list (`engine/status.ts`), first match wins:
+Every open `sync_work` row has one reason from this closed list (`engine/status.ts`), first match wins; what holds
+the row is the hold evaluator's answer (`engine/admission.ts`):
 
 | Reason | Meaning | Lifted by |
 |---|---|---|
 | `running` | admitted; its request or apply is in progress | the step's completion |
 | `ownership_unconfirmed` | no actor runs the page: no fresh owner heartbeat, mode `off`/`handover`, or the previous owner's stop is not confirmed | the host acquiring the page (safe release, OS proof, container restart, `sync ownership confirm-stopped`) |
 | `paused` | the owner paused the page, its requests, or this resource | the owner |
-| `page_hold` | a legacy 429 hold the step-3 switch imported (until its end), 401/403 or identity mismatch (until an identity proof sent after the latest refusal), network (after 3 failures: 10 s → 5 min) | the hold's end; the verify of renewed credentials |
+| `page_hold` | 401/403 or identity mismatch (until an identity proof sent after the latest refusal), network (after 3 failures: 10 s → 5 min); rows of the hold set this build cannot read (`detail.holdSet`) | the hold's end; the verify of renewed credentials; the operator repairing the rows |
 | `quarantined` | the answer broke its contract or the cursor stuck; the raw answer is kept | the owner re-applying it from the journal |
 | `blocked_by_vendor` | the subject failed 5 times; probed once a day while demand exists | a successful probe |
 | `subject_breaker` | the subject failed: 1 min → 10 min → 1 h → 6 h → 24 h | the breaker's end, then a success |
 | `resource_hold` | ≥ 5 subjects of the resource failed within 10 min: 30 min → 2 h → 6 h (never `dm-messages.head`) | the hold's end |
 | `dependency` | the resource waits for other work or data | that work |
 | `not_due` | its time has not come (poll period, coalescing window) | the due time |
-| `pacer` | runnable; the page's next slot has not opened yet, or every route of the key is closed by its budget or a route hold (`detail.routes`, and `detail.held` for the routes a 429 holds; a request its planned route put off is due when that route opens) | the pause; the route's opening |
+| `route_hold` | a 429 (or a 5xx's `Retry-After`) holds a route among those that keep the row closed: every route of its key, or the route its planned request was put off for (`detail.routes`, `detail.held`) | the hold's end (`until`), then the route's pace |
+| `route_budget` | runnable; every route of the key is closed by its budget's interval only, or its planned route put the request off for it (`detail.routes`; the row stores `pacer`) | the route's opening |
+| `pacer` | runnable; the page's next slot has not opened yet | the pause |
 | `class_share` | runnable; the slot belongs to another class or to earlier work of its class | its turn |
 
 ## Errors
@@ -646,19 +695,20 @@ the pause S every route of a page has a strict budget of its own (owner decision
   later class (a planned read squeezed in would push it a whole pause later); nothing is reserved, the pointer
   moves only on an admission. **After the plan** the planned request's own route is checked for every key (a walk
   over several routes, `probe.manual`, the CDN, the Upgrade): closed, the work is put off until it opens
-  (`waiting_reason = 'pacer'`), nothing admitted, the slot open for other work.
-- **Route state**: a page's holds and slowdowns after a 429 live in one versioned namespace of its row
-  (`resource_holds['route:state']`, `SYNC_ROUTE_STATE_KEY`; the page row hands it out apart as `routeState`). It may
-  only make a route slower: the effective rate is the lower of `current` and the stored one, a stored hold closes
-  its route to its end. A namespace this build cannot read closes the page's admission (`page_hold` with
-  `detail.routeState` in "why", alert 1 `route_state_unreadable`, metric `sync_route_state_unreadable`).
+  (`waiting_reason = 'pacer'` on the row; "why" names it `route_hold` or `route_budget`), nothing admitted, the slot
+  open for other work.
+- **Route state**: a page's holds and slowdowns after a 429 are the route-scope rows of its hold set (`sync_holds`:
+  `route_hold`, `route_budget`; `routeStateOfHolds` reads them). It may only make a route slower: the effective rate
+  is the lower of `current` and the stored one, a stored hold closes its route to its end. Rows of a known route this
+  build cannot read close the page's admission (`page_hold` with `detail.holdSet` in "why", alert 1
+  `route_state_unreadable`, metric `sync_route_state_unreadable`).
 - **Route holds** (`engine/route-holds.ts`, owner decisions №22, D3, plan PR 1-2): a 429 holds only the route that
   answered it — a valid `Retry-After` (delta-seconds, or an HTTP-date measured against the answer's own `Date` too)
   to the letter and never shortened, else owner decision №14's ladder 5 → 10 → 20 → 40 → 80 → 160 → 300 s plus
   0–20 % jitter (the ladder climbs by the 429s of one slowdown). Each 429 halves the page+route's effective rate,
   never below ⅛ of the route's ceiling, durably: a restart, new demand, new credentials or a success never lift it.
   A 5xx naming its `Retry-After` holds its route the same way, without a slowdown. The state is written only by
-  `writeSyncRouteState`, a compare-and-set on the entry's revision.
+  `writeSyncRouteState`, a compare-and-set on the route's revision.
 - **Raise** (A2): the only way up is one step of at most +1/min, never above the route's `current` — the owner's
   audited `pnpm cli sync route raise --page P --route R --to <rate> --revision <n> --evidence <report>` (a
   compare-and-set on the revision the evidence was read at, so a 429 after it refuses the stale step; a hold in
@@ -674,7 +724,8 @@ the pause S every route of a page has a strict budget of its own (owner decision
   semantics (S, its page hold on a 429); the engine's route slowdowns are not carried over.
 - **Status and why** (owner CLI): `sync page status` lists each route the page used recently and each family —
   ceiling, current, effective rate, interval, newest send, hold, ladder step, newest 429, revision, when it opens —
-  with the policy hash; `sync why` names the closed routes of a key waiting on `pacer` and those a 429 holds.
+  with the policy hash; `sync why` names a key its routes keep closed `route_hold` (with the hold's deadline and the
+  held routes) or `route_budget` (with the closed routes).
 
 ## Alerts, metrics and the shadow report
 

@@ -6,6 +6,7 @@ import { STEPS_BEFORE_GATE_PER_LAP, stepBeforeGate } from "../apps/runtime/src/s
 import type { EngineRegistry, ResourceModule, StepPlan } from "../apps/runtime/src/sync/engine/resource.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { runActorFor, runActorUntil } from "./helpers/sync-engine.ts";
+import { pageHoldKindOf } from "./helpers/sync-holds.ts";
 import {
   makeTestActor,
   pollsRequest,
@@ -142,11 +143,11 @@ async function attempts(pageId: number): Promise<number> {
 
 async function hold(pageId: number, kind: SyncPageHoldKind): Promise<void> {
   const until = kind === "auth" || kind === "identity_mismatch" ? "infinity" as const : new Date(Date.now() + 120_000);
-  await setPageHold(db(), { pageId, kind, until, step: 1, detail: kind === "auth" ? { credentialsGeneration: "g-failed" } : {} });
+  await setPageHold(db(), { pageId, kind, until, detail: kind === "auth" ? { credentialsGeneration: "g-failed" } : {} });
 }
 
 describe("steps that need no request run before the HTTP gate (ruling 9)", () => {
-  it.each(["rate_limit", "network", "auth", "identity_mismatch"] as const)(
+  it.each(["network", "auth", "identity_mismatch"] as const)(
     "under a %s page hold: the local write and the answered find are taken, nothing is sent, the reads wait; they go at their slot once it ends",
     async (kind) => {
       if (!testDb) return;
@@ -179,12 +180,12 @@ describe("steps that need no request run before the HTTP gate (ruling 9)", () =>
       expect(await works(pageId, READ_KEY)).toMatchObject([{ state: "open", attempts_count: 0 }]);
       expect(transport.hits).toEqual([]);
       expect(await attempts(pageId)).toBe(0);
-      expect((await getSyncPage(db(), pageId))!.holdKind).toBe(kind);
+      expect(pageHoldKindOf((await getSyncPage(db(), pageId))!)).toBe(kind);
       expect(metrics.get("sync_steps_before_gate")).toBe(3);
 
       // The hold ends: the reads the step before the gate left go at their
       // slots, one admission each.
-      await clearPageHold(db(), { pageId });
+      await clearPageHold(db(), { pageId, kinds: [kind] });
       const lifted = await makeTestActor({ db: db(), pageId, mode: "live", registry: fx.registry, transport });
       await runActorUntil(lifted, async () => {
         const open = [...await works(pageId, FIND_KEY), ...await works(pageId, READ_KEY)].filter((row) => row.state !== "done");
@@ -280,7 +281,7 @@ describe("steps that need no request run before the HTTP gate (ruling 9)", () =>
         throw new Error("plan broke");
       },
     });
-    await hold(pageId, "rate_limit");
+    await hold(pageId, "network");
     await demand(pageId, LOCAL_KEY, "a");
     const transport = new ScriptedLiveTransport();
     const made = await makeTestActor({ db: db(), pageId, mode: "live", registry: fx.registry, transport });
@@ -295,7 +296,7 @@ describe("steps that need no request run before the HTTP gate (ruling 9)", () =>
     const { pageId } = await seedSyncPage({ db: db(), pool: testDb.pool }, { label: "before-gate-shadow", mode: "shadow" });
     const fx = fixture();
     fx.answered.add("x");
-    await hold(pageId, "rate_limit");
+    await hold(pageId, "network");
     await demand(pageId, FIND_KEY, "x", { shadow: true });
     await demand(pageId, READ_KEY, "", { shadow: true });
     const made = await makeTestActor({ db: db(), pageId, mode: "shadow", registry: fx.registry });

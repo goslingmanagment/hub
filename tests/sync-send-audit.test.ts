@@ -339,7 +339,6 @@ describe("the intervals an admission records are the ones its route check applie
     const slowed = new RouteClocks({
       sends: [],
       state: {
-        version: 1,
         routes: {
           "messages.page": {
             holdUntil: null, ladderStep: 1, effectivePerMin: 7.5, policyVersion: null, last429AttemptId: 7, last429At: at(0).toISOString(), revision: 1,

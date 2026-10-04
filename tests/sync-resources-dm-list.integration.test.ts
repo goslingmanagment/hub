@@ -8,6 +8,7 @@ import {
   listSharedReadAdmissions,
   readDmFindSharedRead,
   setPageHold,
+  writeSyncRouteState,
   upsertDemand,
   upsertFans,
   type Database,
@@ -47,6 +48,7 @@ import {
   testSpec,
   waitFor,
 } from "./helpers/sync-engine-host.ts";
+import { routeEntryOf, seedRouteState } from "./helpers/sync-holds.ts";
 
 // The conversation list of the Fansly Sync Engine (design §5.3) through the
 // real actor and commits against a real database: a scripted live transport
@@ -820,18 +822,7 @@ describe("the shared list-head read of .find (step 3b, plan PR 1-3)", () => {
   it("while a 429 holds the list route (the page's route state), a find reads its detail alone", async (context) => {
     if (!testDb) return context.skip();
     const pageId = await seedPage("live");
-    await testDb.pool.query(
-      `update sync_pages set resource_holds = jsonb_set(resource_holds, '{route:state}', $2::jsonb) where page_id = $1`,
-      [pageId, JSON.stringify({
-        version: 1,
-        routes: {
-          "messaging.groups": {
-            holdUntil: new Date(Date.now() + 5 * 60_000).toISOString(), ladderStep: 1, effectivePerMin: 6,
-            policyVersion: null, last429AttemptId: null, last429At: null, revision: 1,
-          },
-        },
-      })],
-    );
+    await seedRouteState(testDb, { pageId, route: "messaging.groups", holdSeconds: 5 * 60, ladderStep: 1, effectivePerMin: 6 });
     await makeDue(pageId, false, FIND, groupOf(8));
     const { hits } = await runLive(pageId, (req) => {
       if (req.spec === "group.detail") return okResponse(groupDetail(8, [fanOf(8)], { id: messageOf(8), atMs: NOW_MS - 10_000, senderId: fanOf(8) }));
@@ -863,7 +854,7 @@ describe("the shared list-head read of .find (step 3b, plan PR 1-3)", () => {
       pageId, shadow: false, resource: "dm-messages.head", subject: groupOf(3), kind: "trigger", class: "urgent",
       demand: { messageIds: [messageOf(3)], reasons: ["ws:message_created"] },
     });
-    await setPageHold(db(), { pageId, kind: "network", until: new Date(Date.now() + 5 * 60_000), step: 1 });
+    await setPageHold(db(), { pageId, kind: "network", until: new Date(Date.now() + 5 * 60_000) });
     const metrics = new RecordingMetrics();
     const { hits } = await runLive(pageId, () => {
       throw new Error("nothing is sent under the hold");
@@ -1051,7 +1042,10 @@ describe("a 429 on the conversation list (owner decisions №14, №22)", () => 
     return { account: { id: OWN_ID, username: "model", displayName: "Model", followCount: 0, subscriberCount: 0 } };
   }
 
-  /** The list route's stored state (`resource_holds['route:state']`). */
+  /** The list route's state as the page row's old hold columns say it — which
+   *  every hold write of this release keeps in step with the hold set (the
+   *  previous image reads them): no page hold, no file breaker, the route's
+   *  entry. */
   async function listRoute(pageId: number) {
     const result = await testDb!.pool.query<{ hold_kind: string | null; list_file: unknown; entry: { holdUntil: string; ladderStep: number; effectivePerMin: number } | null }>(
       `select hold_kind, resource_holds -> 'dm-conversations' as list_file,
@@ -1064,11 +1058,20 @@ describe("a 429 on the conversation list (owner decisions №14, №22)", () => 
 
   /** The list route held for 5 more minutes (the test's stand-in for a long Retry-After). */
   async function holdListLonger(pageId: number): Promise<void> {
-    await testDb!.pool.query(
-      `update sync_pages set resource_holds = jsonb_set(resource_holds, '{route:state,routes,messaging.groups,holdUntil}',
-              to_jsonb(clock_timestamp() + interval '5 minutes')) where page_id = $1`,
-      [pageId],
-    );
+    const entry = routeEntryOf((await getSyncPage(db(), pageId))!, "messaging.groups")!;
+    expect(await writeSyncRouteState(db(), {
+      pageId,
+      route: "messaging.groups",
+      expectRevision: entry.revision,
+      entry: {
+        holdUntil: new Date(Date.now() + 5 * 60_000),
+        ladderStep: entry.ladderStep,
+        effectivePerMin: entry.effectivePerMin,
+        policyVersion: entry.policyVersion,
+        last429AttemptId: entry.last429AttemptId,
+        last429At: entry.last429At === null ? null : new Date(entry.last429At),
+      },
+    })).toMatchObject({ kind: "written" });
   }
 
   it("holds only the list's route: the page and every other resource go on, and .find goes straight to the group detail", async (context) => {

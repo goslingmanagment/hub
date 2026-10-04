@@ -10,7 +10,6 @@ import {
   effectiveRatePerMin,
   EMPTY_ROUTE_STATE,
   lookaheadInstants,
-  ROUTE_STATE_VERSION,
   routeExclusions,
   RouteClocks,
   type RouteKeySpec,
@@ -246,7 +245,6 @@ describe("the history ETA's rate holds the actor's fact (step 3b ruling 11)", ()
 
   it("`/message` at half after a 429: the slowdown sets the rate", async () => {
     const state: RouteState = {
-      version: ROUTE_STATE_VERSION,
       routes: {
         "messages.page": {
           holdUntil: null, ladderStep: 1, effectivePerMin: 7.5, policyVersion: null,

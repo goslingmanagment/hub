@@ -1,7 +1,7 @@
 import { getSyncPage, insertAuditEvent, writeSyncRouteState, type Database } from "@agency_hub_core/db";
 
 import { routeRaise } from "./engine/route-holds.ts";
-import { parseRouteState, ROUTE_STATE_VERSION } from "./engine/route-policy.ts";
+import { routeStateOfHolds } from "./engine/route-policy.ts";
 import { isFanslyRoute, routeBudget } from "./fansly/routes.ts";
 import { findSyncPageByLabel, SyncOwnerLeverError } from "./inspect.ts";
 
@@ -46,7 +46,7 @@ export async function raiseSyncRoute(
     const tx = raw as unknown as Database;
     const current = await getSyncPage(tx, page.pageId);
     if (current === null) throw new SyncOwnerLeverError(`${input.pageLabel}: the page row is gone`);
-    const read = parseRouteState(current.routeState);
+    const read = routeStateOfHolds(current.holds);
     if (!read.ok) {
       throw new SyncOwnerLeverError(`${input.pageLabel}: the route state is not one this build reads (${read.diagnostic}); nothing raised`);
     }
@@ -55,7 +55,6 @@ export async function raiseSyncRoute(
     const { entry } = raise;
     const written = await writeSyncRouteState(tx, {
       pageId: page.pageId,
-      version: ROUTE_STATE_VERSION,
       route,
       expectRevision: raise.expectRevision,
       entry: {

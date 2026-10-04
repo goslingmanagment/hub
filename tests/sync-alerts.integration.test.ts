@@ -23,6 +23,7 @@ import { createFanslyRegistry } from "../apps/runtime/src/sync/fansly/registry.t
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { seedWsCapturePage, seedWsThread, wsTransaction, type WsCapturePage } from "./helpers/fansly-ws-capture.ts";
 import { quietLogger, setModeDirect, testConfig } from "./helpers/sync-engine-host.ts";
+import { clearPageHolds, replaceHoldRows, resourceBreakerRow, seedPageHold, seedRouteState } from "./helpers/sync-holds.ts";
 
 // The Fansly Sync Engine's alerts and golden signals against a real database
 // (plan §10, design §9.5, §9.6): the evaluator opens and resolves latches of
@@ -120,20 +121,16 @@ async function attempt(input: {
 }
 
 describe("the alert evaluator (design §9.6)", () => {
-  it("pages a live page's (legacy-imported) 429 hold, keeps alert 1 for 10 clean minutes, then resolves it", async (context) => {
+  it("pages a live page's credentials hold, keeps alert 1 for 10 clean minutes, then resolves it", async (context) => {
     if (!testDb) return context.skip();
     const page = await enginePage("live");
-    await testDb.pool.query(
-      `update sync_pages set hold_kind = 'rate_limit', hold_until = clock_timestamp() + interval '1 minute',
-              hold_since = clock_timestamp() where page_id = $1`,
-      [page.pageId],
-    );
+    await seedPageHold(testDb, { pageId: page.pageId, kind: "identity_mismatch", untilSeconds: "infinity" });
     const first = await pass();
-    expect(first.opened).toEqual([{ pageId: page.pageId, subKey: "page_stopped", detail: "rate_limit" }]);
-    expect(await incident("page_stopped", page.pageId)).toMatchObject({ status: "open", errorCode: "rate_limit", kind: "fansly_sync_engine" });
+    expect(first.opened).toEqual([{ pageId: page.pageId, subKey: "page_stopped", detail: "identity_mismatch" }]);
+    expect(await incident("page_stopped", page.pageId)).toMatchObject({ status: "open", errorCode: "identity_mismatch", kind: "fansly_sync_engine" });
 
     // The hold ended moments ago: the ten clean minutes count from there.
-    await testDb.pool.query("update sync_pages set hold_kind = null, hold_until = null, hold_since = null where page_id = $1", [page.pageId]);
+    await clearPageHolds(testDb, page.pageId);
     expect((await pass()).resolved).toEqual([]);
     expect(await incident("page_stopped", page.pageId)).toMatchObject({ status: "open" });
 
@@ -147,16 +144,8 @@ describe("the alert evaluator (design §9.6)", () => {
     if (!testDb) return context.skip();
     const page = await enginePage("live");
     const shadow = await enginePage("shadow", "route-shadow", "100000000000000002");
-    const holdRoute = async (pageId: number, route: string, seconds: number) => {
-      await testDb!.pool.query(
-        `update sync_pages set resource_holds = jsonb_build_object('route:state', jsonb_build_object('version', 1, 'routes',
-                coalesce(resource_holds #> '{route:state,routes}', '{}'::jsonb) || jsonb_build_object($2::text, jsonb_build_object(
-                  'holdUntil', clock_timestamp() + make_interval(secs => $3::double precision), 'ladderStep', 1,
-                  'effectivePerMin', 6, 'policyVersion', null, 'last429AttemptId', 1, 'last429At', clock_timestamp(), 'revision', 1))))
-          where page_id = $1`,
-        [pageId, route, seconds],
-      );
-    };
+    const holdRoute = (pageId: number, route: string, seconds: number) =>
+      seedRouteState(testDb!, { pageId, route, holdSeconds: seconds, effectivePerMin: 6, last429AttemptId: 1, last429SecondsAgo: 0 });
     await holdRoute(page.pageId, "messaging.groups", 60);
     await holdRoute(shadow.pageId, "messaging.groups", 60);
     // A 429 attempt in the journal is no page stop either.
@@ -177,14 +166,11 @@ describe("the alert evaluator (design §9.6)", () => {
     expect(await incident(listKey, page.pageId)).toMatchObject({ status: "open" });
 
     // The holds ended and their 429s are older than the clean window: resolved 10 min after last seen.
-    await testDb.pool.query(
-      `update sync_pages set resource_holds = jsonb_build_object('route:state', jsonb_build_object('version', 1, 'routes', jsonb_build_object(
-              'messaging.groups', jsonb_build_object('holdUntil', clock_timestamp() - interval '1 second', 'ladderStep', 2,
-                'effectivePerMin', 3, 'policyVersion', null, 'last429AttemptId', 2, 'last429At', clock_timestamp() - interval '11 minutes',
-                'revision', 2))))
-        where page_id = $1`,
-      [page.pageId],
-    );
+    await testDb.pool.query("delete from sync_holds where page_id = $1 and scope = 'route'", [page.pageId]);
+    await seedRouteState(testDb, {
+      pageId: page.pageId, route: "messaging.groups", holdSeconds: -1, ladderStep: 2, effectivePerMin: 3, last429AttemptId: 2,
+      last429SecondsAgo: 11 * 60, revision: 2,
+    });
     expect((await pass()).resolved).toEqual([]);
     await ageLatch(listKey, page.pageId, SYNC_ALERT_CLEAN_MS);
     await ageLatch(syncEngineRouteSubKey("media.offer_stats"), page.pageId, SYNC_ALERT_CLEAN_MS);
@@ -265,10 +251,7 @@ describe("the alert evaluator (design §9.6)", () => {
   it("pages nothing for a shadow page, and resolves the latches of a page set back to shadow or off", async (context) => {
     if (!testDb) return context.skip();
     const shadow = await enginePage("shadow");
-    await testDb.pool.query(
-      `update sync_pages set hold_kind = 'auth', hold_until = 'infinity', hold_since = clock_timestamp() where page_id = $1`,
-      [shadow.pageId],
-    );
+    await seedPageHold(testDb, { pageId: shadow.pageId, kind: "auth", untilSeconds: "infinity" });
     expect((await pass()).opened).toEqual([]);
     expect(await incident("page_stopped", shadow.pageId)).toBeNull();
     // Its conditions are visible to the owner as metrics and in `sync alerts status`.
@@ -422,12 +405,21 @@ describe("the golden signals (design §9.5)", () => {
        values ($1, true, 'dm-messages.head', '1', 'trigger', 'urgent', 'open', clock_timestamp() + interval '1 hour')`,
       [page.pageId],
     );
+    // A credentials hold, a network hold beside it and a file's breaker in
+    // force: each is counted (a breaker that ended is not).
+    await seedPageHold(testDb, { pageId: page.pageId, kind: "auth", untilSeconds: "infinity" });
+    await seedPageHold(testDb, { pageId: page.pageId, kind: "network", untilSeconds: 60 });
+    await replaceHoldRows(testDb, page.pageId, "resource", [
+      resourceBreakerRow("transactions", new Date(Date.now() + 60_000)),
+      resourceBreakerRow("posts", new Date(Date.now() - 1_000)),
+    ]);
     const [row] = await listSyncPages(db());
     const metrics = await computeSyncMetrics(db(), { page: row!, windowMs: 3_600_000 });
     expect(metrics).toMatchObject({
       journal: "shadow",
       sends: { urgent: 1, planned: 2, total: 3, byResource: { "dm-messages.head": 1, "notifications.forward": 2 } },
       paceViolations: 1,
+      holds: { page: ["auth", "network"], resources: ["transactions"] },
       breakersOpen: 1,
     });
     expect(metrics.minSendGapMs).toBeGreaterThan(900);
@@ -438,6 +430,7 @@ describe("the golden signals (design §9.5)", () => {
     expect(value("sync_setting_ms")).toBe(2_000);
     expect(value("sync_shadow_sends")).toBe(3);
     expect(value("sync_shadow_pace_violations")).toBe(1);
+    expect(value("sync_shadow_holds")).toBe(3);
     expect(value("sync_shadow_breakers_open")).toBe(1);
     expect(value("sync_shadow_min_send_gap_ms")).toBeLessThan(1_100);
     // No page is switched: no live journal series.

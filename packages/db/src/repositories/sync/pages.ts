@@ -6,6 +6,16 @@ import {
   type FanslySendGuardOwnerEngine,
   type FanslySendHolderIdentity,
 } from "../fansly-send-guard.ts";
+import { mirrorSyncHoldsToLegacyColumns, reconcileSyncHoldsWithLegacyColumns } from "./holds-legacy.ts";
+import {
+  normalizeSyncHoldRows,
+  SYNC_PAGE_HOLD_KEY,
+  SYNC_PAGE_HOLD_KINDS,
+  SYNC_RESOURCE_HOLD_KIND,
+  syncHoldsOfPageSql,
+  type SyncHoldRow,
+  type SyncPageHoldKind,
+} from "./holds.ts";
 import {
   generationParam,
   jsonParam,
@@ -14,6 +24,7 @@ import {
   toDate,
   toNumber,
   toRequiredDate,
+  untilParam,
 } from "./values.ts";
 
 // Fansly Sync Engine (plan §8, §11; design §2.2, §3.6, §3.7, §11): the per-page
@@ -38,9 +49,6 @@ import {
 export const SYNC_PAGE_MODES = ["off", "shadow", "handover", "live"] as const;
 export type SyncPageMode = (typeof SYNC_PAGE_MODES)[number];
 
-export const SYNC_PAGE_HOLD_KINDS = ["rate_limit", "auth", "identity_mismatch", "network"] as const;
-export type SyncPageHoldKind = (typeof SYNC_PAGE_HOLD_KINDS)[number];
-
 /** Session advisory lock namespace of page ownership: (58215, pageId). */
 export const SYNC_PAGE_OWNERSHIP_LOCK_NAMESPACE = 58_215;
 
@@ -51,15 +59,6 @@ export const SYNC_ENGINE_GUARD_OWNER = "fansly_sync_engine" satisfies FanslySend
 export const SYNC_RESOURCE_KEY_PATTERN = /^[a-z][a-z0-9-]*\.[a-z][a-z0-9-]*$/;
 /** A resource file (the part of a key before the dot). */
 export const SYNC_RESOURCE_FILE_PATTERN = /^[a-z][a-z0-9-]*$/;
-/**
- * The route-state namespace of a page (step 3b ruling 4): one versioned
- * object inside `resource_holds`, under a key no resource file can have (the
- * colon), so `setResourceHold` never touches it and a build that predates it
- * reads it as an entry without an `until` — never a hold. The page row hands
- * it out apart (`SyncPageRow.routeState`, raw); the engine's route policy
- * (`apps/runtime/src/sync/engine/route-policy.ts`) reads it.
- */
-export const SYNC_ROUTE_STATE_KEY = "route:state";
 
 export interface SyncPageRow {
   pageId: number;
@@ -74,17 +73,12 @@ export interface SyncPageRow {
   pausedRequests: boolean;
   pausedResources: string[];
   pauseNote: string | null;
-  holdKind: SyncPageHoldKind | null;
-  holdUntil: Date | null;
-  holdSince: Date | null;
-  holdStep: number;
-  holdDetail: Record<string, unknown>;
+  /** The page's hold set (`sync_holds`): its own holds, its routes' and its
+   *  resource files'. The engine's hold evaluator reads it
+   *  (`apps/runtime/src/sync/engine/admission.ts`); nothing reads the old
+   *  hold columns of the row. */
+  holds: SyncHoldRow[];
   networkFailureStreak: number;
-  /** The resource holds by file, the route-state namespace left out. */
-  resourceHolds: Record<string, SyncResourceHold>;
-  /** `resource_holds['route:state']` as stored (null: none); the route policy
-   *  parses it and closes admission on a shape it does not know. */
-  routeState: unknown;
   identityAccountId: string | null;
   identityCheckedAt: Date | null;
   credentialsGeneration: string | null;
@@ -121,16 +115,6 @@ export interface SyncPageOwnerRecord {
   stopConfirmedBy: string | null;
 }
 
-/** `resource_holds[<file>]`: the §9 resource breaker of one resource file. A
- *  429 holds its route, never a file (`writeSyncRouteState`); the page row
- *  leaves out an older build's endpoint-group 429 hold (an entry with a
- *  `kind`), which nothing reads or writes any more. */
-export interface SyncResourceHold {
-  until: string;
-  step: number;
-  since: string;
-}
-
 type PageSqlRow = {
   pageId: string;
   pageLabel: string | null;
@@ -144,14 +128,8 @@ type PageSqlRow = {
   pausedRequests: boolean;
   pausedResources: string[] | null;
   pauseNote: string | null;
-  holdKind: SyncPageHoldKind | null;
-  holdUntil: Date | string | null;
-  holdSince: Date | string | null;
-  holdStep: number;
-  holdDetail: Record<string, unknown> | null;
+  holds: Parameters<typeof normalizeSyncHoldRows>[0];
   networkFailureStreak: number;
-  resourceHolds: Record<string, SyncResourceHold> | null;
-  routeState: unknown;
   identityAccountId: string | null;
   identityCheckedAt: Date | string | null;
   credentialsGeneration: string | null;
@@ -194,20 +172,8 @@ const pageColumns = sql`
   sp.paused_requests as "pausedRequests",
   sp.paused_resources as "pausedResources",
   sp.pause_note as "pauseNote",
-  sp.hold_kind as "holdKind",
-  sp.hold_until as "holdUntil",
-  sp.hold_since as "holdSince",
-  sp.hold_step as "holdStep",
-  sp.hold_detail as "holdDetail",
+  ${syncHoldsOfPageSql} as "holds",
   sp.network_failure_streak as "networkFailureStreak",
-  -- The resource breakers: the route-state namespace apart, and an entry with
-  -- a kind — an older build's endpoint-group 429 hold (step 3b replaced it
-  -- with route holds) — is no breaker of this build.
-  (select coalesce(jsonb_object_agg(h.key, h.value), '{}'::jsonb)
-     from jsonb_each(sp.resource_holds) h
-    where h.key <> ${SYNC_ROUTE_STATE_KEY}::text
-      and not (jsonb_typeof(h.value) = 'object' and h.value ? 'kind')) as "resourceHolds",
-  sp.resource_holds -> ${SYNC_ROUTE_STATE_KEY}::text as "routeState",
   sp.identity_account_id as "identityAccountId",
   sp.identity_checked_at as "identityCheckedAt",
   sp.credentials_generation as "credentialsGeneration",
@@ -269,14 +235,8 @@ function normalizePageRow(row: PageSqlRow): SyncPageRow {
     pausedRequests: row.pausedRequests === true,
     pausedResources: row.pausedResources ?? [],
     pauseNote: row.pauseNote,
-    holdKind: row.holdKind,
-    holdUntil: toDate(row.holdUntil),
-    holdSince: toDate(row.holdSince),
-    holdStep: Number(row.holdStep),
-    holdDetail: row.holdDetail ?? {},
+    holds: normalizeSyncHoldRows(row.holds),
     networkFailureStreak: Number(row.networkFailureStreak),
-    resourceHolds: row.resourceHolds ?? {},
-    routeState: row.routeState ?? null,
     identityAccountId: row.identityAccountId,
     identityCheckedAt: toDate(row.identityCheckedAt),
     credentialsGeneration: row.credentialsGeneration,
@@ -723,7 +683,15 @@ export type SyncOwnerStopEvidence =
   | `os:${string}`;
 
 export type AcquireSyncPageOwnershipResult =
-  | { kind: "acquired"; generation: bigint; evidence: SyncOwnerStopEvidence; previous: SyncPageOwnerRecord }
+  | {
+    kind: "acquired";
+    generation: bigint;
+    evidence: SyncOwnerStopEvidence;
+    previous: SyncPageOwnerRecord;
+    /** The page's hold set was re-read from the old hold columns: they said
+     *  something else than its rows (`reconcileSyncHoldsWithLegacyColumns`). */
+    holdsImported: boolean;
+  }
   /** The previous owner is not confirmed stopped: nothing was written. */
   | { kind: "unconfirmed"; previous: SyncPageOwnerRecord }
   | { kind: "no_page" };
@@ -741,7 +709,10 @@ export type AcquireSyncPageOwnershipResult =
  *       judges this very process); null = no proof.
  * A lost database session alone is never a confirmation. On success the new
  * generation and this process's identity are written; the caller then computes
- * the takeover floor (`paceFloorFromDb`, I5).
+ * the takeover floor (`paceFloorFromDb`, I5). In the same transaction the
+ * page's hold set is brought in line with the old hold columns
+ * (`reconcileSyncHoldsWithLegacyColumns`); columns that cannot be read fail
+ * the acquisition (`SyncLegacyHoldsUnreadableError`), nothing written.
  */
 export async function acquireSyncPageOwnership(
   db: Database,
@@ -778,6 +749,11 @@ export async function acquireSyncPageOwnership(
     }
     if (evidence === null) return { kind: "unconfirmed", previous };
 
+    // The hold set against the old hold columns (this one release): what the
+    // previous image left in them is the page's state, and the new owner
+    // admits by the rows.
+    const holds = await reconcileSyncHoldsWithLegacyColumns(tx as unknown as Database, input.pageId);
+
     const owner = input.owner;
     const updated = await tx.execute<{ generation: string }>(sql`
       update sync_pages
@@ -801,6 +777,7 @@ export async function acquireSyncPageOwnership(
       generation: BigInt(updated.rows[0]!.generation),
       evidence,
       previous,
+      holdsImported: holds.imported,
     };
   });
 }
@@ -952,12 +929,54 @@ async function assertOwnedWrite(
 }
 
 /**
+ * The fence of a hold write: the page row FOR NO KEY UPDATE — the lock every
+ * actor transaction starts with (`lockOwnedPage`), taken again here so a
+ * writer outside one (the owner's `sync route raise`, a test) orders itself
+ * with them, the page row before its hold rows — and, with `generation`, the
+ * generation that owns it (`OwnershipLostError` otherwise).
+ */
+async function lockPageForHoldWrite(tx: Database, pageId: number, generation: bigint | undefined): Promise<void> {
+  const result = await tx.execute<{ generation: string }>(sql`
+    select owner_generation::text as generation from sync_pages where page_id = ${pageId} for no key update
+  `);
+  const found = result.rows[0];
+  if (generation !== undefined) {
+    const current = found === undefined ? null : BigInt(found.generation);
+    if (current !== generation) throw new OwnershipLostError(pageId, generation, current);
+  } else if (found === undefined) {
+    throw new Error(`Fansly sync page ${pageId} has no sync_pages row: nothing to hold`);
+  }
+}
+
+/**
+ * One write of a page's hold set: the fence, the rows, then — for this one
+ * release — the old hold columns rewritten from them
+ * (`mirrorSyncHoldsToLegacyColumns`), all in one transaction (a savepoint
+ * inside the caller's), so the two never part.
+ */
+async function writeHoldSet<T>(
+  db: Database,
+  input: { pageId: number; generation?: bigint },
+  write: (tx: Database) => Promise<T>,
+): Promise<T> {
+  return db.transaction(async (raw) => {
+    const tx = raw as unknown as Database;
+    await lockPageForHoldWrite(tx, input.pageId, input.generation);
+    const written = await write(tx);
+    await mirrorSyncHoldsToLegacyColumns(tx, input.pageId);
+    return written;
+  });
+}
+
+/**
  * Hold the whole page (§9): every request of the page waits until `until`
  * (`'infinity'` for auth / identity holds, which only an identity proof sent
  * after their latest refusal clears — the shared page-hold core decides).
- * `hold_since` keeps the start of the episode: an ongoing hold of the same
- * kind, or a credentials refusal over a credentials hold in force. With
- * `generation`, fenced like every actor write.
+ * A page holds one credentials hold (a refusal of the other kind replaces the
+ * row) and, beside it, one network hold. `since` keeps the start of the
+ * episode: a credentials refusal over a credentials hold, a network hold
+ * retaken while it is in force. With `generation`, fenced like every actor
+ * write.
  */
 export async function setPageHold(
   db: Database,
@@ -966,49 +985,54 @@ export async function setPageHold(
     generation?: bigint;
     kind: SyncPageHoldKind;
     until: Date | "infinity";
-    step: number;
     detail?: Record<string, unknown>;
   },
 ): Promise<void> {
   if (!(SYNC_PAGE_HOLD_KINDS as readonly string[]).includes(input.kind)) {
     throw new Error(`Unknown Fansly sync page hold kind: ${String(input.kind)}`);
   }
-  const until = input.until === "infinity" ? sql`'infinity'::timestamptz` : sql`${input.until}::timestamptz`;
-  const result = await db.execute(sql`
-    update sync_pages
-       set hold_kind = ${input.kind},
-           hold_until = ${until},
-           hold_since = case when hold_until > clock_timestamp()
-                              and (hold_kind = ${input.kind}
-                                   or (hold_kind in ('auth', 'identity_mismatch')
-                                       and ${input.kind}::text in ('auth', 'identity_mismatch')))
-                             then coalesce(hold_since, clock_timestamp()) else clock_timestamp() end,
-           hold_step = ${input.step},
-           hold_detail = ${jsonParam(input.detail ?? {})},
-           updated_at = clock_timestamp()
-     where page_id = ${input.pageId}
-       ${ownedPageFilter(input.generation)}
-  `);
-  await assertOwnedWrite(db, input.pageId, input.generation, result.rowCount);
+  const until = untilParam(input.until);
+  const detail = jsonParam(input.detail ?? {});
+  // The rows this hold continues: its own, or — a credentials hold — the
+  // page's credentials hold whatever its kind.
+  const family = input.kind === "network" ? [input.kind] : SYNC_PAGE_HOLD_KINDS.filter((kind) => kind !== "network");
+  await writeHoldSet(db, input, async (tx) => {
+    const updated = await tx.execute(sql`
+      update sync_holds
+         set kind = ${input.kind},
+             until = ${until},
+             since = case when until > clock_timestamp() then since else clock_timestamp() end,
+             detail = ${detail},
+             revision = revision + 1,
+             updated_at = clock_timestamp()
+       where page_id = ${input.pageId}
+         and scope = 'page'
+         and key = ${SYNC_PAGE_HOLD_KEY}
+         and kind = any(${textArrayParam(family)})
+    `);
+    if ((updated.rowCount ?? 0) > 0) return;
+    await tx.execute(sql`
+      insert into sync_holds (page_id, scope, key, kind, until, detail)
+      values (${input.pageId}, 'page', ${SYNC_PAGE_HOLD_KEY}, ${input.kind}, ${until}, ${detail})
+    `);
+  });
 }
 
-/** Lift the page hold (the ladder step stays for the §9 decay rule). */
+/** Lift the page's holds of `kinds` (an identity proof lifts the credentials
+ *  hold and leaves a network hold standing; an answer lifts what has ended). */
 export async function clearPageHold(
   db: Database,
-  input: { pageId: number; generation?: bigint; resetStep?: boolean },
+  input: { pageId: number; generation?: bigint; kinds: readonly SyncPageHoldKind[] },
 ): Promise<void> {
-  const result = await db.execute(sql`
-    update sync_pages
-       set hold_kind = null,
-           hold_until = null,
-           hold_since = null,
-           hold_step = case when ${input.resetStep === true} then 0 else hold_step end,
-           hold_detail = '{}'::jsonb,
-           updated_at = clock_timestamp()
-     where page_id = ${input.pageId}
-       ${ownedPageFilter(input.generation)}
-  `);
-  await assertOwnedWrite(db, input.pageId, input.generation, result.rowCount);
+  await writeHoldSet(db, input, async (tx) => {
+    await tx.execute(sql`
+      delete from sync_holds
+       where page_id = ${input.pageId}
+         and scope = 'page'
+         and key = ${SYNC_PAGE_HOLD_KEY}
+         and kind = any(${textArrayParam(input.kinds)})
+    `);
+  });
 }
 
 /**
@@ -1058,9 +1082,9 @@ export async function setNetworkFailureStreak(
 }
 
 /**
- * The §9 resource breaker of one resource file: `resource_holds[file] =
- * {until, step, since}`; `hold: null` lifts it. `since` carries over while an
- * entry stays on the row.
+ * The §9 resource breaker of one resource file (`sync_holds`, scope
+ * `resource`): held until `until` on ladder step `step`; `hold: null` lifts
+ * it. `since` carries over while the row stays.
  */
 export async function setResourceHold(
   db: Database,
@@ -1074,23 +1098,28 @@ export async function setResourceHold(
   if (!SYNC_RESOURCE_FILE_PATTERN.test(input.file)) {
     throw new Error(`Not a resource file: ${input.file}`);
   }
-  const value = input.hold === null
-    ? sql`resource_holds - ${input.file}::text`
-    : sql`jsonb_set(resource_holds, array[${input.file}::text], jsonb_build_object(
-        'until', to_jsonb(${input.hold.until}::timestamptz),
-        'step', ${input.hold.step}::int,
-        'since', coalesce(resource_holds -> ${input.file}::text -> 'since', to_jsonb(clock_timestamp()))))`;
-  const result = await db.execute(sql`
-    update sync_pages
-       set resource_holds = ${value},
-           updated_at = clock_timestamp()
-     where page_id = ${input.pageId}
-       ${ownedPageFilter(input.generation)}
-  `);
-  await assertOwnedWrite(db, input.pageId, input.generation, result.rowCount);
+  const { hold } = input;
+  await writeHoldSet(db, input, async (tx) => {
+    if (hold === null) {
+      await tx.execute(sql`
+        delete from sync_holds
+         where page_id = ${input.pageId} and scope = 'resource' and key = ${input.file} and kind = ${SYNC_RESOURCE_HOLD_KIND}
+      `);
+      return;
+    }
+    await tx.execute(sql`
+      insert into sync_holds (page_id, scope, key, kind, until, ladder_step)
+      values (${input.pageId}, 'resource', ${input.file}, ${SYNC_RESOURCE_HOLD_KIND}, ${hold.until}::timestamptz, ${hold.step}::int)
+      on conflict (page_id, scope, key, kind) do update
+        set until = excluded.until,
+            ladder_step = excluded.ladder_step,
+            revision = sync_holds.revision + 1,
+            updated_at = clock_timestamp()
+    `);
+  });
 }
 
-/** One route's entry of a page's route state as the route-hold code writes it
+/** One route of a page as the route-hold code writes it
  *  (`apps/runtime/src/sync/engine/route-holds.ts`); the writer stamps its
  *  revision. */
 export interface SyncRouteStateEntryWrite {
@@ -1104,18 +1133,18 @@ export interface SyncRouteStateEntryWrite {
 
 export type WriteSyncRouteStateResult =
   | { kind: "written"; revision: number }
-  /** The entry's revision is not `expectRevision` (a newer 429 or raise), or
-   *  the namespace is not `version`: nothing was written. */
+  /** The route's revision is not `expectRevision` (a newer 429 or raise):
+   *  nothing was written. */
   | { kind: "stale" };
 
 /**
- * Write one route's entry of a page's route state — the namespace
- * `resource_holds['route:state'] = {version, routes: {<route>: entry}}` (step
- * 3b ruling 4) has no other writer. A compare-and-set on the entry's
- * `revision` (`expectRevision`: 0 for a route without an entry): the entry is
- * written with `expectRevision + 1`, the namespace created at `version` when
- * the page has none and never written over another version. With
- * `generation`, fenced like every actor write (a lost generation throws
+ * Write one route of a page's hold set — its two rows have no other writer:
+ * `route_budget`, the route's durable state (the ladder step of its next 429,
+ * its slowdown and newest 429, its revision), and `route_hold`, the end of
+ * the hold a 429 (or a 5xx's `Retry-After`) put on it (no row without one).
+ * A compare-and-set on the state's revision (`expectRevision`: 0 for a route
+ * without one): it is written with `expectRevision + 1`. With `generation`,
+ * fenced like every actor write (a lost generation throws
  * `OwnershipLostError`); without it (the owner's `sync route raise`) the
  * revision alone orders the writers.
  */
@@ -1124,7 +1153,6 @@ export async function writeSyncRouteState(
   input: {
     pageId: number;
     generation?: bigint;
-    version: number;
     route: string;
     expectRevision: number;
     entry: SyncRouteStateEntryWrite;
@@ -1133,44 +1161,46 @@ export async function writeSyncRouteState(
   if (!Number.isSafeInteger(input.expectRevision) || input.expectRevision < 0) {
     throw new Error(`A route state revision is a count (got ${input.expectRevision})`);
   }
+  if (input.route.length === 0) throw new Error("A route state names its route");
   const revision = input.expectRevision + 1;
-  const entry = {
-    holdUntil: input.entry.holdUntil?.toISOString() ?? null,
-    ladderStep: input.entry.ladderStep,
-    effectivePerMin: input.entry.effectivePerMin,
-    policyVersion: input.entry.policyVersion,
-    last429AttemptId: input.entry.last429AttemptId,
-    last429At: input.entry.last429At?.toISOString() ?? null,
-    revision,
+  const { entry } = input;
+  const state = {
+    effectivePerMin: entry.effectivePerMin,
+    policyVersion: entry.policyVersion,
+    last429AttemptId: entry.last429AttemptId,
+    last429At: entry.last429At?.toISOString() ?? null,
   };
-  const result = await db.execute(sql`
-    update sync_pages
-       set resource_holds = jsonb_set(
-             case when resource_holds ? ${SYNC_ROUTE_STATE_KEY}::text then resource_holds
-                  else resource_holds || jsonb_build_object(${SYNC_ROUTE_STATE_KEY}::text,
-                    jsonb_build_object('version', ${input.version}::int, 'routes', '{}'::jsonb)) end,
-             array[${SYNC_ROUTE_STATE_KEY}::text, 'routes', ${input.route}::text],
-             ${jsonParam(entry)}),
-           updated_at = clock_timestamp()
-     where page_id = ${input.pageId}
-       ${ownedPageFilter(input.generation)}
-       and (not (resource_holds ? ${SYNC_ROUTE_STATE_KEY}::text)
-            or (resource_holds -> ${SYNC_ROUTE_STATE_KEY}::text -> 'version' = to_jsonb(${input.version}::int)
-                and jsonb_typeof(resource_holds -> ${SYNC_ROUTE_STATE_KEY}::text -> 'routes') = 'object'))
-       and coalesce(resource_holds #> array[${SYNC_ROUTE_STATE_KEY}::text, 'routes', ${input.route}::text, 'revision'], '0'::jsonb)
-           = to_jsonb(${input.expectRevision}::int)
-  `);
-  if ((result.rowCount ?? 0) > 0) return { kind: "written", revision };
-  if (input.generation !== undefined) {
-    const owner = await db.execute<{ generation: string }>(sql`
-      select owner_generation::text as generation from sync_pages where page_id = ${input.pageId}
+  return writeHoldSet(db, input, async (tx): Promise<WriteSyncRouteStateResult> => {
+    const route = sql`page_id = ${input.pageId} and scope = 'route' and key = ${input.route}`;
+    const current = await tx.execute<{ revision: string }>(sql`
+      select revision::text as revision from sync_holds where ${route} and kind = 'route_budget'
     `);
-    const found = owner.rows[0];
-    if (found === undefined || BigInt(found.generation) !== input.generation) {
-      throw new OwnershipLostError(input.pageId, input.generation, found === undefined ? null : BigInt(found.generation));
+    if (Number(current.rows[0]?.revision ?? 0) !== input.expectRevision) return { kind: "stale" };
+    await tx.execute(sql`
+      insert into sync_holds (page_id, scope, key, kind, ladder_step, detail, revision)
+      values (${input.pageId}, 'route', ${input.route}, 'route_budget', ${entry.ladderStep}::int, ${jsonParam(state)}, ${revision})
+      on conflict (page_id, scope, key, kind) do update
+        set ladder_step = excluded.ladder_step,
+            detail = excluded.detail,
+            revision = excluded.revision,
+            updated_at = clock_timestamp()
+    `);
+    if (entry.holdUntil === null) {
+      await tx.execute(sql`delete from sync_holds where ${route} and kind = 'route_hold'`);
+    } else {
+      await tx.execute(sql`
+        insert into sync_holds (page_id, scope, key, kind, until)
+        values (${input.pageId}, 'route', ${input.route}, 'route_hold', ${entry.holdUntil}::timestamptz)
+        on conflict (page_id, scope, key, kind) do update
+          set until = excluded.until,
+              since = case when sync_holds.until > clock_timestamp() then sync_holds.since else clock_timestamp() end,
+              revision = sync_holds.revision + 1,
+              updated_at = clock_timestamp()
+         where sync_holds.until is distinct from excluded.until
+      `);
     }
-  }
-  return { kind: "stale" };
+    return { kind: "written", revision };
+  });
 }
 
 /**

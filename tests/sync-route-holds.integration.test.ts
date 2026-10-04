@@ -8,6 +8,7 @@ import { createEngineRegistry, type EngineRegistry, type EngineResourceSpec, typ
 import { fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";
 import { intervalMsOf, routePolicyVersion, type FanslyRoute } from "../apps/runtime/src/sync/fansly/routes.ts";
 import { explainSyncWork, readSyncPageStatus } from "../apps/runtime/src/sync/inspect.ts";
+import { toSyncWorkWire } from "../apps/runtime/src/sync/requests/wire.ts";
 import { SYNC_ROUTE_RAISE_AUDIT_EVENT } from "../apps/runtime/src/sync/route-raise.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import {
@@ -21,6 +22,7 @@ import {
   testSpec,
   waitFor,
 } from "./helpers/sync-engine-host.ts";
+import { pageHoldKindOf, routeEntryOf } from "./helpers/sync-holds.ts";
 
 // Route holds through the real actor, commits and a real database (step 3b
 // ruling 2 as amended by A2; owner decisions №22, D3, D5; plan PR 1-2): a 429
@@ -144,9 +146,9 @@ interface StoredEntry {
   revision: number;
 }
 
+/** The route's entry as the engine reads it from the page's hold set. */
 async function entryOf(pageId: number, route: FanslyRoute): Promise<StoredEntry | null> {
-  const state = (await getSyncPage(db(), pageId))!.routeState as { version: number; routes: Record<string, StoredEntry> } | null;
-  return state?.routes[route] ?? null;
+  return routeEntryOf((await getSyncPage(db(), pageId))!, route);
 }
 
 async function runUntil(
@@ -243,7 +245,10 @@ describe("a route's 429 through the actor", () => {
     expect(during.filter((attempt) => attempt.operation === "polls").length).toBeGreaterThan(3);
     // Never the page, never a file.
     const page = (await getSyncPage(db(), pageId))!;
-    expect(page).toMatchObject({ holdKind: null, holdStep: 0, resourceHolds: {} });
+    expect(page.holds.map((row) => [row.scope, row.key, row.kind])).toEqual([
+      ["route", "messaging.groups", "route_budget"],
+      ["route", "messaging.groups", "route_hold"],
+    ]);
     // The route's own incident (D5); alert 1 never.
     expect(alerts.opened.filter((alert) => alert.subKey === "route_limited").map((alert) => [alert.route, alert.detail]))
       .toEqual([["messaging.groups", "rate_limit"]]);
@@ -295,12 +300,12 @@ describe("a route's 429 through the actor", () => {
     expect(next!.sent_at.getTime()).toBeGreaterThanOrEqual(holdUntil);
     expect((await sends(pageId)).filter((attempt) => attempt.operation === "polls"
       && attempt.sent_at.getTime() > refusal!.sent_at.getTime() && attempt.sent_at.getTime() < holdUntil).length).toBeGreaterThan(3);
-    expect((await getSyncPage(db(), pageId))!.holdKind).toBeNull();
+    expect(pageHoldKindOf((await getSyncPage(db(), pageId))!)).toBeNull();
     expect(alerts.opened.filter((alert) => alert.subKey === "route_limited").map((alert) => [alert.route, alert.detail]))
       .toEqual([["transactions.page", "unavailable"]]);
   }, 60_000);
 
-  it("why: a key whose routes are all held waits on `pacer` until the hold ends, naming the held route", async (context) => {
+  it("why: a key whose routes are all held waits on `route_hold` until the hold ends, naming the held route", async (context) => {
     if (!testDb) return context.skip();
     const pageId = await seedLive();
     // A running owner (its fresh heartbeat), so "why" gets past ownership.
@@ -313,63 +318,64 @@ describe("a route's 429 through the actor", () => {
     await demand(pageId, reg, "dm-conversations.head");
     const holdUntil = new Date(Date.now() + 60_000);
     expect(await writeSyncRouteState(db(), {
-      pageId, version: 1, route: "messaging.groups", expectRevision: 0,
+      pageId, route: "messaging.groups", expectRevision: 0,
       entry: entryWrite({ holdUntil, effectivePerMin: 6, policyVersion: routePolicyVersion("messaging.groups") }),
     })).toEqual({ kind: "written", revision: 1 });
     const page = (await getSyncPage(db(), pageId))!;
     const [why] = await explainSyncWork(db(), testConfig(testDb.connectionString), page, { resource: "dm-conversations.head" });
-    expect(why!.waiting).toMatchObject({
-      reason: "pacer", detail: { routeHold: true, routes: ["messaging.groups"], held: ["messaging.groups"] },
+    expect(why!.waiting).toEqual({
+      reason: "route_hold", until: holdUntil, detail: { routes: ["messaging.groups"], held: ["messaging.groups"] },
     });
-    expect(why!.waiting!.until!.getTime()).toBe(holdUntil.getTime());
+    // On the wire (`sync why`, the agent and owner routes): the reason and its deadline.
+    expect(toSyncWorkWire(why!)).toMatchObject({ waitingReason: "route_hold", waitingUntil: holdUntil.toISOString() });
+    // The hold over, the halved route's own pace is what the key waits for —
+    // never named a hold.
+    await writeSyncRouteState(db(), {
+      pageId, route: "messaging.groups", expectRevision: 1,
+      entry: entryWrite({ holdUntil: new Date(Date.now() - 1_000), effectivePerMin: 6, policyVersion: routePolicyVersion("messaging.groups") }),
+    });
+    await testDb.pool.query(
+      `insert into sync_attempts (page_id, shadow, resource, subject, class, owner_generation, setting_ms, jitter_u, pause_ms,
+                                  admitted_at, sent_at, send_mark, operation, request, outcome)
+       values ($1, false, 'dm-conversations.head', '', 'urgent', 1, 2000, 0, 2000, clock_timestamp(), clock_timestamp(),
+               'request_start', 'messaging.groups', '{}'::jsonb, 'response')`,
+      [pageId],
+    );
+    const [paced] = await explainSyncWork(db(), testConfig(testDb.connectionString), (await getSyncPage(db(), pageId))!, { resource: "dm-conversations.head" });
+    expect(paced!.waiting).toMatchObject({ reason: "route_budget", detail: { routes: ["messaging.groups"] } });
   }, 60_000);
 });
 
 describe("the route state writer", () => {
-  it("is a compare-and-set on the entry's revision and never writes over another namespace version", async (context) => {
+  it("is a compare-and-set on the route's revision; the route's state and its hold are rows of the page's hold set", async (context) => {
     if (!testDb) return context.skip();
     const pageId = await seedLive();
     const write = (expectRevision: number, overrides: Partial<SyncRouteStateEntryWrite> = {}) =>
-      writeSyncRouteState(db(), { pageId, version: 1, route: "messages.page", expectRevision, entry: entryWrite(overrides) });
+      writeSyncRouteState(db(), { pageId, route: "messages.page", expectRevision, entry: entryWrite(overrides) });
     expect(await write(0)).toEqual({ kind: "written", revision: 1 });
     expect(await write(0)).toEqual({ kind: "stale" });
-    expect(await write(1, { effectivePerMin: 3.75, ladderStep: 2 })).toEqual({ kind: "written", revision: 2 });
-    // Another route of the same namespace is its own entry.
-    expect(await writeSyncRouteState(db(), { pageId, version: 1, route: "polls", expectRevision: 0, entry: entryWrite() }))
+    const holdUntil = new Date(Date.now() + 60_000);
+    expect(await write(1, { effectivePerMin: 3.75, ladderStep: 2, holdUntil })).toEqual({ kind: "written", revision: 2 });
+    // Another route is its own rows.
+    expect(await writeSyncRouteState(db(), { pageId, route: "polls", expectRevision: 0, entry: entryWrite() }))
       .toEqual({ kind: "written", revision: 1 });
     const page = (await getSyncPage(db(), pageId))!;
-    expect(page.routeState).toMatchObject({
-      version: 1,
-      routes: { "messages.page": { effectivePerMin: 3.75, ladderStep: 2, revision: 2 }, polls: { revision: 1 } },
-    });
-    // The resource holds and the route state stay apart.
-    expect(page.resourceHolds).toEqual({});
-    // A namespace of another version is never written over.
-    await testDb.pool.query(
-      "update sync_pages set resource_holds = jsonb_build_object('route:state', '{\"version\": 2, \"routes\": {}}'::jsonb) where page_id = $1",
-      [pageId],
-    );
-    expect(await write(0)).toEqual({ kind: "stale" });
+    expect(page.holds.map((row) => [row.scope, row.key, row.kind, row.ladderStep, row.revision])).toEqual([
+      ["route", "messages.page", "route_budget", 2, 2],
+      ["route", "messages.page", "route_hold", 0, 1],
+      ["route", "polls", "route_budget", 1, 1],
+    ]);
+    expect(page.holds[0]!.until).toBeNull();
+    expect(page.holds[1]!.until).toEqual(holdUntil);
+    expect(routeEntryOf(page, "messages.page")).toMatchObject({ effectivePerMin: 3.75, ladderStep: 2, revision: 2, holdUntil: holdUntil.toISOString() });
+    expect(routeEntryOf(page, "polls")).toMatchObject({ revision: 1, holdUntil: null });
+    // A write without a hold's end lifts the route's hold row; the state stays.
+    expect(await write(2, { effectivePerMin: 3.75, ladderStep: 2 })).toEqual({ kind: "written", revision: 3 });
+    expect(routeEntryOf((await getSyncPage(db(), pageId))!, "messages.page")).toMatchObject({ holdUntil: null, effectivePerMin: 3.75, revision: 3 });
     // A lost generation is an ownership loss, not a stale write.
     await expect(writeSyncRouteState(db(), {
-      pageId, generation: 999n, version: 1, route: "messages.page", expectRevision: 0, entry: entryWrite(),
+      pageId, generation: 999n, route: "messages.page", expectRevision: 3, entry: entryWrite(),
     })).rejects.toThrow(/no longer owns/);
-  }, 60_000);
-
-  it("leaves an older build's endpoint-group 429 hold out of the page's resource holds: no file breaker of this build", async (context) => {
-    if (!testDb) return context.skip();
-    const pageId = await seedLive();
-    const until = new Date(Date.now() + 120_000).toISOString();
-    await testDb.pool.query(
-      `update sync_pages set resource_holds = jsonb_build_object(
-          'dm-conversations', jsonb_build_object('until', $2::text, 'step', 4, 'since', $2::text, 'kind', 'rate_limit_list',
-                                                 'lastRateLimitAt', $2::text),
-          'media-stats', jsonb_build_object('until', $2::text, 'step', 1, 'since', $2::text, 'kind', 'rate_limit_media_stats'),
-          'probe', jsonb_build_object('until', $2::text, 'step', 1, 'since', $2::text))
-        where page_id = $1`,
-      [pageId, until],
-    );
-    expect((await getSyncPage(db(), pageId))!.resourceHolds).toEqual({ probe: { until, step: 1, since: until } });
   }, 60_000);
 });
 
@@ -397,9 +403,9 @@ describe("sync route raise (A2)", () => {
     const label = "raise-1";
     const pageId = await seedLive(label);
     const holdUntil = new Date(Date.now() + 120_000);
-    await writeSyncRouteState(db(), { pageId, version: 1, route: "messages.page", expectRevision: 0, entry: entryWrite() });
+    await writeSyncRouteState(db(), { pageId, route: "messages.page", expectRevision: 0, entry: entryWrite() });
     await writeSyncRouteState(db(), {
-      pageId, version: 1, route: "messages.page", expectRevision: 1, entry: entryWrite({ holdUntil, effectivePerMin: 3.75, ladderStep: 2 }),
+      pageId, route: "messages.page", expectRevision: 1, entry: entryWrite({ holdUntil, effectivePerMin: 3.75, ladderStep: 2 }),
     });
 
     // A stale revision (a 429 after the evidence), a step above +1/min, a route not in the catalogue: refused, nothing written.
@@ -426,7 +432,7 @@ describe("sync route raise (A2)", () => {
 
     // The last step reaches current: the slowdown is over, the ladder starts over on the next 429.
     await writeSyncRouteState(db(), {
-      pageId, version: 1, route: "messages.page", expectRevision: 3, entry: entryWrite({ holdUntil, effectivePerMin: 14, ladderStep: 2 }),
+      pageId, route: "messages.page", expectRevision: 3, entry: entryWrite({ holdUntil, effectivePerMin: 14, ladderStep: 2 }),
     });
     const last: string[] = [];
     await raise(last, label, "messages.page", "15", "4");

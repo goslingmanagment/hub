@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { INDEFINITE_UNTIL } from "@agency_hub_core/shared";
+
 import {
   incidentTitleForKind,
   resolveMessageForIncident,
@@ -64,6 +66,8 @@ import {
   type ScheduleRow,
 } from "../apps/runtime/src/sync/report/shadow-window.ts";
 
+import { pageHoldRow, resourceBreakerRow, routeHoldRows, routeStateRows } from "./helpers/sync-holds.ts";
+
 // The Fansly Sync Engine's alerts 1–4 (plan §10, design §9.6) as pure rules,
 // their incident wiring (titles, keys, paging) and the report's pure parts.
 
@@ -84,11 +88,7 @@ function facts(overrides: {
       pageId: 7,
       mode: "live",
       modeChangedAt: at(-24 * 60 * MINUTE),
-      holdKind: null,
-      holdUntil: null,
-      holdSince: null,
-      holdDetail: {},
-      resourceHolds: {},
+      holds: [],
       pausedAll: false,
       pausedRequests: false,
       pausedResources: [],
@@ -129,18 +129,11 @@ function facts(overrides: {
   };
 }
 
-function routeEntry(overrides: Record<string, unknown> = {}) {
-  return {
-    holdUntil: null,
-    ladderStep: 1,
-    effectivePerMin: null,
-    policyVersion: null,
-    last429AttemptId: null,
-    last429At: null,
-    revision: 1,
-    ...overrides,
-  };
-}
+/** The page's own hold rows: a credentials hold since a minute ago, the
+ *  network hold with what its detail says. */
+const credentialsHeld = (kind: "auth" | "identity_mismatch") => pageHoldRow(kind, INDEFINITE_UNTIL, { since: at(-MINUTE) });
+const networkHeld = (untilMs: number, detail: Record<string, unknown> = {}) =>
+  pageHoldRow("network", at(untilMs), { since: at(-MINUTE), detail });
 
 function evaluate(input: PageAlertFacts) {
   return Object.fromEntries(evaluatePageAlerts(input, registry).map((entry) => [entry.subKey, entry.detail]));
@@ -152,46 +145,52 @@ describe("alert rules (design §9.6)", () => {
   });
 
   it("alert 1: holds in force, most severe first, with every reason listed", () => {
-    const held = facts({ page: { holdKind: "rate_limit", holdUntil: at(MINUTE), holdSince: at(-MINUTE) } });
-    expect(evaluate(held)).toEqual({ page_stopped: "rate_limit" });
-    expect(evaluate(facts({ page: { holdKind: "auth", holdUntil: new Date(8.64e15), holdSince: at(-MINUTE) } })))
-      .toEqual({ page_stopped: "auth" });
-    expect(evaluate(facts({ page: { holdKind: "identity_mismatch", holdUntil: new Date(8.64e15), holdSince: at(-MINUTE) } })))
-      .toEqual({ page_stopped: "identity_mismatch" });
+    expect(evaluate(facts({ page: { holds: [credentialsHeld("auth")] } }))).toEqual({ page_stopped: "auth" });
+    expect(evaluate(facts({ page: { holds: [credentialsHeld("identity_mismatch")] } }))).toEqual({ page_stopped: "identity_mismatch" });
     // An ended hold is no hold.
-    expect(evaluate(facts({ page: { holdKind: "rate_limit", holdUntil: at(-1), holdSince: at(-MINUTE) } }))).toEqual({});
+    const long = { networkSince: at(-NETWORK_ALERT_AFTER_MS - MINUTE).toISOString() };
+    expect(evaluate(facts({ page: { holds: [networkHeld(-1, long)] } }))).toEqual({});
   });
 
-  it("alert 1: a 429 or network hold carried beside an auth hold is listed too", () => {
-    const carried = (kind: string, untilMs: number, detail: Record<string, unknown> = {}) => facts({
-      page: {
-        holdKind: "auth",
-        holdUntil: new Date(8.64e15),
-        holdSince: at(-MINUTE),
-        holdDetail: { credentialsGeneration: "gen-1", timedHold: { kind, until: at(untilMs).toISOString(), detail } },
-      },
+  it("alert 1: a network hold beside an auth hold is listed too", () => {
+    const both = (untilMs: number, detail: Record<string, unknown> = {}) => facts({
+      page: { holds: [pageHoldRow("auth", INDEFINITE_UNTIL, { since: at(-MINUTE), detail: { credentialsGeneration: "gen-1" } }), networkHeld(untilMs, detail)] },
     });
     const reasons = (input: PageAlertFacts) => evaluatePageAlerts(input, registry)
       .flatMap((entry) => entry.reasons.map((reason) => reason.detail));
-    expect(evaluate(carried("rate_limit", MINUTE, { lastRateLimitAt: at(-1_000).toISOString() }))).toEqual({ page_stopped: "auth" });
-    expect(reasons(carried("rate_limit", MINUTE))).toEqual(["auth", "rate_limit"]);
-    expect(reasons(carried("rate_limit", -1))).toEqual(["auth"]);
-    expect(reasons(carried("network", MINUTE, { networkSince: at(-NETWORK_ALERT_AFTER_MS - MINUTE).toISOString() })))
-      .toEqual(["auth", "network"]);
-    expect(reasons(carried("network", MINUTE, { networkSince: at(-MINUTE).toISOString() }))).toEqual(["auth"]);
+    const long = { networkSince: at(-NETWORK_ALERT_AFTER_MS - MINUTE).toISOString() };
+    expect(evaluate(both(MINUTE, long))).toEqual({ page_stopped: "auth" });
+    expect(reasons(both(MINUTE, long))).toEqual(["auth", "network"]);
+    expect(reasons(both(-1, long))).toEqual(["auth"]);
+    expect(reasons(both(MINUTE, { networkSince: at(-MINUTE).toISOString() }))).toEqual(["auth"]);
   });
 
   it("alert 1: a network hold pages only after 10 min without the network", () => {
-    const network = (sinceMs: number) => facts({
-      page: { holdKind: "network", holdUntil: at(MINUTE), holdSince: at(-MINUTE), holdDetail: { networkSince: at(-sinceMs).toISOString() } },
-    });
+    const network = (sinceMs: number) => facts({ page: { holds: [networkHeld(MINUTE, { networkSince: at(-sinceMs).toISOString() })] } });
     expect(evaluate(network(NETWORK_ALERT_AFTER_MS - MINUTE))).toEqual({});
     expect(evaluate(network(NETWORK_ALERT_AFTER_MS + MINUTE))).toEqual({ page_stopped: "network" });
   });
 
   it("alert 1: a route held by a 429 never stops the page — it is the route's own incident (D5)", () => {
-    const held = facts({ page: { routeState: { version: 1, routes: { "messaging.groups": routeEntry({ holdUntil: at(300_000).toISOString() }) } } } });
+    const held = facts({ page: { holds: routeHoldRows("messaging.groups", { holdUntil: at(300_000).toISOString() }) } });
     expect(evaluate(held)).toEqual({});
+  });
+
+  it("alert 1: rows of the hold set this build cannot read stop the page, named by what they are", () => {
+    const routeState = facts({ page: { holds: routeHoldRows("messaging.groups", { effectivePerMin: -1 }) } });
+    expect(evaluatePageAlerts(routeState, registry)).toEqual([expect.objectContaining({
+      subKey: "page_stopped",
+      detail: "route_state_unreadable",
+      reasons: [{ detail: "route_state_unreadable", since: null, context: { diagnostic: "route_state_entry:messaging.groups" } }],
+    })]);
+    const unknownKind = (until: Date | null) => facts({ page: { holds: [pageHoldRow("maintenance", until)] } });
+    expect(evaluatePageAlerts(unknownKind(at(MINUTE)), registry)).toEqual([expect.objectContaining({
+      detail: "hold_set_unreadable",
+      reasons: [{ detail: "hold_set_unreadable", since: null, context: { diagnostic: "hold_row:page::maintenance" } }],
+    })]);
+    // Until its end; for good when it names none.
+    expect(evaluate(unknownKind(at(-1)))).toEqual({});
+    expect(evaluate(unknownKind(null))).toEqual({ page_stopped: "hold_set_unreadable" });
   });
 
   it("alert 1: '10 min clean' — a stop answer within the window keeps the alert after its hold ended", () => {
@@ -202,10 +201,10 @@ describe("alert rules (design §9.6)", () => {
     expect(evaluatePageAlerts(recent, registry)).toEqual([expect.objectContaining({ subKey: "page_stopped", seenAt: answeredAt })]);
     // A hold in force holds now, whatever the journal says.
     const held = facts({
-      page: { holdKind: "rate_limit", holdUntil: at(MINUTE), holdSince: at(-MINUTE) },
+      page: { holds: [credentialsHeld("identity_mismatch")] },
       journal: { lastStopAttempt: { errorClass: "auth", at: answeredAt } },
     });
-    expect(evaluatePageAlerts(held, registry)).toEqual([expect.objectContaining({ detail: "rate_limit", seenAt: NOW })]);
+    expect(evaluatePageAlerts(held, registry)).toEqual([expect.objectContaining({ detail: "identity_mismatch", seenAt: NOW })]);
     const clean = facts({ journal: { lastStopAttempt: { errorClass: "auth", at: at(-SYNC_ALERT_CLEAN_MS - MINUTE) } } });
     expect(evaluate(clean)).toEqual({});
   });
@@ -272,31 +271,31 @@ describe("alert rules (design §9.6)", () => {
     expect(evaluate(facts({
       journal: { urgentWaiting: [{ ...waiting.urgentWaiting[0]!, waitingReason: "dependency" }] },
     }))).toEqual({});
-    expect(evaluate(facts({
-      journal: waiting,
-      page: { resourceHolds: { "dm-messages": { until: at(MINUTE).toISOString(), step: 1, since: at(-MINUTE).toISOString() } } },
-    }))).toEqual({});
     // Every route it reads held by a 429: the route's own incident pages, not alert 3.
-    const routeHeld = (until: Date) => ({ version: 1, routes: { "messages.page": routeEntry({ holdUntil: until.toISOString() }) } });
-    expect(evaluate(facts({ journal: waiting, page: { routeState: routeHeld(at(MINUTE)) } }))).toEqual({});
-    expect(evaluate(facts({ journal: waiting, page: { routeState: routeHeld(at(-1)) } }))).toEqual({ freshness: "urgent_waiting" });
+    const routeHeld = (until: Date) => routeHoldRows("messages.page", { holdUntil: until.toISOString() });
+    expect(evaluate(facts({ journal: waiting, page: { holds: routeHeld(at(MINUTE)) } }))).toEqual({});
+    expect(evaluate(facts({ journal: waiting, page: { holds: routeHeld(at(-1)) } }))).toEqual({ freshness: "urgent_waiting" });
     // A key with another route open is not explained by one held route.
     const find = { urgentWaiting: [{ resource: "dm-conversations.find", subject: "1", dueAt: at(-3 * MINUTE), waitingReason: null }] };
-    const listHeld = { version: 1, routes: { "messaging.groups": routeEntry({ holdUntil: at(MINUTE).toISOString() }) } };
-    expect(evaluate(facts({ journal: find, page: { routeState: listHeld } }))).toEqual({ freshness: "urgent_waiting" });
+    const listHeld = routeHoldRows("messaging.groups", { holdUntil: at(MINUTE).toISOString() });
+    expect(evaluate(facts({ journal: find, page: { holds: listHeld } }))).toEqual({ freshness: "urgent_waiting" });
+    // Its file's breaker explains the wait of every key the breaker stops —
+    // never of the live confirmations, which it does not stop.
+    const breaker = [resourceBreakerRow("dm-messages", at(MINUTE), { since: at(-MINUTE) })];
+    const catchup = { urgentWaiting: [{ resource: "dm-messages.catchup", subject: "g1", dueAt: at(-3 * MINUTE), waitingReason: null }] };
+    expect(evaluate(facts({ journal: catchup, page: { holds: breaker } }))).toEqual({});
+    expect(evaluate(facts({ journal: catchup, page: { holds: [resourceBreakerRow("dm-messages", at(-1))] } }))).toEqual({ freshness: "urgent_waiting" });
+    expect(evaluate(facts({ journal: waiting, page: { holds: breaker } }))).toEqual({ freshness: "urgent_waiting" });
   });
 
   it("the route incident (D5): held routes, and a 429 within the clean window; an unreadable state is alert 1's", () => {
-    const state = {
-      version: 1,
-      routes: {
-        "messaging.groups": routeEntry({ holdUntil: at(5_000).toISOString(), last429At: at(-1_000).toISOString(), effectivePerMin: 6 }),
-        "media.offer_stats": routeEntry({ holdUntil: at(-1).toISOString(), last429At: at(-SYNC_ALERT_CLEAN_MS + MINUTE).toISOString(), effectivePerMin: 2.5 }),
-        "transactions.page": routeEntry({ holdUntil: at(-1).toISOString(), last429At: at(-SYNC_ALERT_CLEAN_MS - MINUTE).toISOString(), effectivePerMin: 8.5 }),
-        "account.me": routeEntry({ holdUntil: at(MINUTE).toISOString() }),
-      },
-    };
-    expect(evaluateRouteAlerts({ routeState: state }, NOW)).toEqual([
+    const holds = routeStateRows({
+      "messaging.groups": { holdUntil: at(5_000).toISOString(), last429At: at(-1_000).toISOString(), effectivePerMin: 6 },
+      "media.offer_stats": { holdUntil: at(-1).toISOString(), last429At: at(-SYNC_ALERT_CLEAN_MS + MINUTE).toISOString(), effectivePerMin: 2.5 },
+      "transactions.page": { holdUntil: at(-1).toISOString(), last429At: at(-SYNC_ALERT_CLEAN_MS - MINUTE).toISOString(), effectivePerMin: 8.5 },
+      "account.me": { holdUntil: at(MINUTE).toISOString() },
+    });
+    expect(evaluateRouteAlerts({ holds }, NOW)).toEqual([
       {
         route: "account.me", detail: "route_held", seenAt: NOW, holdUntil: at(MINUTE), last429At: null, effectivePerMin: 15, currentPerMin: 15,
       },
@@ -308,9 +307,10 @@ describe("alert rules (design §9.6)", () => {
         route: "messaging.groups", detail: "route_held", seenAt: NOW, holdUntil: at(5_000), last429At: at(-1_000), effectivePerMin: 6, currentPerMin: 12,
       },
     ]);
-    expect(evaluateRouteAlerts({ routeState: null }, NOW)).toEqual([]);
-    expect(evaluateRouteAlerts({ routeState: { version: 99, routes: {} } }, NOW)).toEqual([]);
-    expect(evaluate(facts({ page: { routeState: { version: 99, routes: {} } } }))).toEqual({ page_stopped: "route_state_unreadable" });
+    expect(evaluateRouteAlerts({ holds: [] }, NOW)).toEqual([]);
+    const unreadable = routeHoldRows("messaging.groups", { holdUntil: at(MINUTE).toISOString(), effectivePerMin: -1 });
+    expect(evaluateRouteAlerts({ holds: unreadable }, NOW)).toEqual([]);
+    expect(evaluate(facts({ page: { holds: unreadable } }))).toEqual({ page_stopped: "route_state_unreadable" });
   });
 
   it("alert 4: a stalled request, a poll past its SLO, an incomplete ledger", () => {
@@ -331,11 +331,11 @@ describe("alert rules (design §9.6)", () => {
 
   it("several alerts at once, one condition each", () => {
     expect(evaluate(facts({
-      page: { holdKind: "rate_limit", holdUntil: at(MINUTE), holdSince: at(-MINUTE) },
+      page: { holds: [credentialsHeld("auth")] },
       live: { socket: { up: false, lastAliveAt: null }, unconfirmed: { count: 1, oldestVisibleAt: at(-16 * MINUTE) } },
       journal: { ledgerIncomplete: { missing: 1, at: at(-MINUTE) } },
     }))).toEqual({
-      page_stopped: "rate_limit",
+      page_stopped: "auth",
       live_degraded: "socket_down",
       freshness: "message_unconfirmed",
       stuck: "transactions_ledger_incomplete",

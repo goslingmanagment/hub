@@ -15,7 +15,6 @@ import {
   type SyncLivePathFacts,
   type SyncPageRow,
 } from "@agency_hub_core/db";
-import { activeFanslyPageHold } from "@agency_hub_core/shared";
 
 import {
   notifySyncEngineIncident,
@@ -27,14 +26,15 @@ import {
   type SyncEngineAlertSubKey,
   type SyncEngineIncidentSubKey,
 } from "../../services/notification-incidents.ts";
-import { FANSLY_ROUTES, routeBudget, routeOfWireId, type FanslyRoute } from "../fansly/routes.ts";
+import { FANSLY_ROUTES, routeBudget, type FanslyRoute } from "../fansly/routes.ts";
 import { moneyFramesMissing, readMoneyFrames } from "../fansly/ws/money-frames.ts";
+import { heldByScope, holdSetOf, pageHoldsInForce, type HoldSet } from "./admission.ts";
 import type { SyncLogger } from "./commit.ts";
-import { NETWORK_ALERT_AFTER_MS, resourceFileOf } from "./errors.ts";
+import { NETWORK_ALERT_AFTER_MS } from "./errors.ts";
 import { noopMetrics, type AlertSink, type Metrics, type SyncAlertInput } from "./ports.ts";
 import { effectivePeriodMs, resourceDisabled, runsIn, type EngineRegistry } from "./resource.ts";
 import { routeHoldUntil } from "./route-holds.ts";
-import { effectiveRatePerMin, parseRouteState, type RouteState } from "./route-policy.ts";
+import { effectiveRatePerMin, routeAdmissionView, RouteClocks, routeStateOfHolds } from "./route-policy.ts";
 import { auditPagePace, auditRouteIntervals } from "./send-audit.ts";
 import { noStallTracker, type StallTracker, type StallTracking } from "./watchdog.ts";
 
@@ -131,9 +131,8 @@ export interface SyncAlertCondition {
 
 /** Everything one page's evaluation reads. */
 export interface PageAlertFacts {
-  page: Pick<SyncPageRow, "pageId" | "mode" | "modeChangedAt" | "holdKind" | "holdUntil" | "holdSince" | "holdDetail"
-    | "resourceHolds" | "pausedAll" | "pausedRequests" | "pausedResources" | "registryOverrides" | "owner">
-    & Partial<Pick<SyncPageRow, "routeState">>;
+  page: Pick<SyncPageRow, "pageId" | "mode" | "modeChangedAt" | "holds" | "pausedAll" | "pausedRequests"
+    | "pausedResources" | "registryOverrides" | "owner">;
   journal: SyncJournalAlertFacts;
   live: SyncLivePathFacts;
   money: { count: number; oldestReceivedAt: Date } | null;
@@ -150,26 +149,25 @@ function dateOf(value: unknown): Date | null {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
-function inForce(until: Date | null, now: Date): boolean {
-  return until !== null && until.getTime() > now.getTime();
-}
-
 /** A resource whose work waits for a reason the owner or another alert owns:
  *  a pause, a switch-off, its file's breaker, or a hold on every route it
- *  reads (the route's own incident pages for that). */
+ *  reads (the route's own incident pages for that) — the last two by the hold
+ *  evaluator, over the route holds alone (no send is counted: a budget's
+ *  interval explains no wait this long). */
 function resourceExplained(
   page: PageAlertFacts["page"],
+  holds: HoldSet,
   resource: string,
   now: Date,
   registry: Pick<EngineRegistry, "spec">,
-  routes: RouteState | null,
 ): boolean {
   if (page.pausedResources.includes(resource) || resourceDisabled(page, resource)) return true;
-  const hold = page.resourceHolds[resourceFileOf(resource)];
-  if (hold !== undefined && inForce(dateOf(hold.until), now)) return true;
-  const operations = registry.spec(resource)?.operations ?? [];
-  return routes !== null && operations.length > 0
-    && operations.every((operation) => routeHoldUntil(routes, routeOfWireId(operation), now) !== null);
+  const spec = registry.spec(resource);
+  const routes = !holds.routes.ok || spec === null
+    ? null
+    : routeAdmissionView(new RouteClocks({ sends: [], state: holds.routes.state }), [spec], now);
+  const held = heldByScope(holds, routes, { work: { resource } }, now);
+  return held.resource !== null || held.route?.scope === "route_hold";
 }
 
 function condition(
@@ -190,20 +188,24 @@ export function evaluatePageAlerts(facts: PageAlertFacts, registry: Pick<EngineR
   const shadow = page.mode === "shadow" || page.mode === "off";
   const conditions: Array<SyncAlertCondition | null> = [];
 
-  // 1. The page stopped: the page holds in force by the shared page-hold
-  // core (the rule the actor admits by) — a credentials hold, and a 429 or
-  // network hold, the page's own or one a credentials hold carries.
+  // 1. The page stopped: what holds the page itself by the hold evaluator
+  // (the rule the actor admits by) — a credentials hold, a network hold
+  // (alone or beside it), rows of its hold set this build cannot read.
   const stopped: SyncAlertCondition["reasons"] = [];
-  const held = activeFanslyPageHold(page, now);
+  const holds = holdSetOf(page.holds);
+  const held = pageHoldsInForce(holds, now);
   const holdInForce = held !== null;
   if (held?.credentials) stopped.push({ detail: held.credentials.kind, since: held.credentials.since });
-  if (held?.timed?.kind === "rate_limit") stopped.push({ detail: "rate_limit", since: held.timed.since });
-  // A route state this build cannot read keeps the page's admission closed
-  // (`engine/route-policy.ts`).
-  const routeState = parseRouteState(page.routeState);
-  if (!routeState.ok) stopped.push({ detail: "route_state_unreadable", since: null, context: { diagnostic: routeState.diagnostic } });
-  const routes = routeState.ok ? routeState.state : null;
-  if (held?.timed?.kind === "network") {
+  // Rows this build cannot read keep the page's admission closed: a route's
+  // state (`engine/route-policy.ts`), or a row of a kind it does not know.
+  if (held?.unreadable) {
+    stopped.push({
+      detail: held.unreadable.routeState ? "route_state_unreadable" : "hold_set_unreadable",
+      since: null,
+      context: { diagnostic: held.unreadable.diagnostic },
+    });
+  }
+  if (held?.timed) {
     const networkSince = dateOf(held.timed.detail.networkSince) ?? held.timed.since;
     if (msSince(networkSince, now) > NETWORK_ALERT_AFTER_MS) stopped.push({ detail: "network", since: networkSince });
   }
@@ -254,7 +256,7 @@ export function evaluatePageAlerts(facts: PageAlertFacts, registry: Pick<EngineR
   }
   if (!page.pausedAll && !holdInForce) {
     const waiting = journal.urgentWaiting.filter((row) =>
-      row.waitingReason !== "dependency" && !resourceExplained(page, row.resource, now, registry, routes));
+      row.waitingReason !== "dependency" && !resourceExplained(page, holds, row.resource, now, registry));
     const oldest = waiting[0];
     if (oldest !== undefined) {
       late.push({
@@ -279,7 +281,7 @@ export function evaluatePageAlerts(facts: PageAlertFacts, registry: Pick<EngineR
     const stale: Array<{ resource: string; since: Date }> = [];
     for (const poll of journal.polls) {
       const spec = registry.spec(poll.resource);
-      if (spec === null || !runsIn(spec, shadow) || resourceExplained(page, poll.resource, now, registry, routes)) continue;
+      if (spec === null || !runsIn(spec, shadow) || resourceExplained(page, holds, poll.resource, now, registry)) continue;
       const periodMs = effectivePeriodMs(spec, page);
       const staleAfterMs = spec.slo?.staleAfterMs ?? (periodMs === null ? null : SYNC_STALE_PERIODS * periodMs);
       const since = poll.lastServedAt ?? poll.createdAt;
@@ -323,8 +325,8 @@ export interface SyncRouteAlertCondition {
  * min clean", as alert 1) — so the latch the capture opened stands until the
  * route has been clean for 10 minutes. An unreadable route state is alert 1's.
  */
-export function evaluateRouteAlerts(page: Pick<SyncPageRow, "routeState">, now: Date): SyncRouteAlertCondition[] {
-  const read = parseRouteState(page.routeState);
+export function evaluateRouteAlerts(page: Pick<SyncPageRow, "holds">, now: Date): SyncRouteAlertCondition[] {
+  const read = routeStateOfHolds(page.holds);
   if (!read.ok) return [];
   const conditions: SyncRouteAlertCondition[] = [];
   for (const route of (Object.keys(read.state.routes) as FanslyRoute[]).sort()) {

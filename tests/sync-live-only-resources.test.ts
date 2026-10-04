@@ -4,6 +4,8 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
+import { NO_FANSLY_PAGE_HOLDS } from "@agency_hub_core/shared";
+
 import { onOutcome, type OutcomeDecision, type PageErrorState } from "../apps/runtime/src/sync/engine/errors.ts";
 import { requestJsonOf } from "../apps/runtime/src/sync/engine/commit.ts";
 import {
@@ -27,11 +29,7 @@ import { wsConnectModule, wsConnectOutcome, wsConnectPlan } from "../apps/runtim
 const NOW = new Date("2026-10-02T12:00:00.000Z");
 
 const page: PageErrorState = {
-  holdKind: null,
-  holdUntil: null,
-  holdSince: null,
-  holdStep: 0,
-  holdDetail: {},
+  holds: NO_FANSLY_PAGE_HOLDS,
   networkFailureStreak: 2,
   resourceHolds: {},
   credentialsGeneration: "a".repeat(64),

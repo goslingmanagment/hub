@@ -21,6 +21,9 @@ import {
   SYNC_APPLY_STATES,
   SYNC_ENGINE_GUARD_OWNER,
   SYNC_ATTEMPT_OUTCOMES,
+  SYNC_HOLD_KINDS,
+  SYNC_HOLD_KINDS_BY_SCOPE,
+  SYNC_HOLD_SCOPES,
   SYNC_PAGE_HOLD_KINDS,
   SYNC_PAGE_MODES,
   SYNC_SEND_MARKS,
@@ -31,6 +34,7 @@ import {
   SYNC_MEDIA_HANDOFF_MAX_BYTES,
   SYNC_LIFTABLE_DM_EXCLUSIONS,
   syncAttempts,
+  syncHolds,
   syncMediaHandoff,
   syncPages,
 } from "@agency_hub_core/db";
@@ -98,7 +102,10 @@ describe("0228_sync_engine_core.sql", () => {
 
   it("keeps the vocabularies of the checks equal to the repositories' constants", () => {
     expect(checkList(sql, "sync_pages_mode_check")).toEqual([...SYNC_PAGE_MODES]);
-    expect(checkList(sql, "sync_pages_hold_kind_check")).toEqual([...SYNC_PAGE_HOLD_KINDS]);
+    // The old hold slot: every kind a page's hold set has (the hold writers
+    // keep the slot in step with it), and the page-wide 429 kind no build
+    // takes any more.
+    expect(checkList(sql, "sync_pages_hold_kind_check")).toEqual(["rate_limit", ...SYNC_PAGE_HOLD_KINDS]);
     expect(checkList(sql, "sync_work_kind_check")).toEqual([...SYNC_WORK_KINDS]);
     expect(checkList(sql, "sync_work_class_check")).toEqual([...SYNC_WORK_CLASSES]);
     expect(checkList(sql, "sync_attempts_class_check")).toEqual([...SYNC_WORK_CLASSES]);
@@ -589,5 +596,96 @@ describe("retire_fansly_legacy_sync_states.sql (step 4, S4-21: the point of no r
 
   it("allows application rollback: the previous image serves no Fansly page from these rows", () => {
     expect(rollbackCompatible()).toContain(`"${migration}"`);
+  });
+});
+
+describe("sync_holds.sql (step 4, S4-30: the hold set)", () => {
+  // Found by its name, not its number: the number is the next free one at merge.
+  const found = readdirSync("packages/db/migrations").filter((file) => file.endsWith("_sync_holds.sql"));
+  const migration = found[0] ?? "";
+  const text = found.length === 1 ? readFileSync(`packages/db/migrations/${migration}`, "utf8") : "";
+  const sql = stripComments(text);
+  const statements = topLevelStatements(sql);
+  const columns = ["page_id", "scope", "key", "kind", "until", "since", "ladder_step", "detail", "revision", "created_at", "updated_at"];
+
+  it("exists once, after the migration that made the sync pages (0228)", () => {
+    expect(found).toHaveLength(1);
+    expect(migration > "0228_sync_engine_core.sql").toBe(true);
+  });
+
+  it("is purely additive: one table, its partial unique index, comments and the read-role grant — no row, nothing of sync_pages", () => {
+    for (const statement of statements) {
+      expect(statement).toMatch(
+        /^(create table if not exists sync_holds \(|create unique index if not exists sync_holds_page_credentials on sync_holds |comment on (table|column) sync_holds|do \$\$)/,
+      );
+      // A foreign key's own `on delete restrict` is not a deletion.
+      expect(statement.replaceAll("on delete restrict", "")).not.toMatch(/\b(drop|rename|truncate|delete|update|insert|alter)\b/i);
+    }
+    expect(statements.filter((statement) => statement.startsWith("create table"))).toHaveLength(1);
+    // The table starts empty: a page's state reaches it when its ownership is
+    // acquired (`reconcileSyncHoldsWithLegacyColumns`), never by a copy the
+    // previous image could outdate.
+    expect(sql).not.toMatch(/\bsync_pages\b/);
+    expect(text).toContain("grant select on sync_holds to read_only");
+    expect(statements.filter((statement) => statement.startsWith("do $$"))).toHaveLength(1);
+  });
+
+  it("is page-owned (the page delete restricted), keyed by page, scope, key and kind", () => {
+    expect(sql).toContain("page_id bigint not null references pages(id) on delete restrict");
+    expect(sql).toContain("constraint sync_holds_pkey primary key (page_id, scope, key, kind)");
+    expect(sql).not.toMatch(/on delete cascade/);
+    const body = sql.slice(sql.indexOf("create table if not exists sync_holds ("), sql.indexOf("\n);"));
+    expect([...body.matchAll(/^\s{2}([a-z_]+) (?:bigint|text|timestamptz|smallint|jsonb)\b/gm)].map((match) => match[1])).toEqual(columns);
+  });
+
+  it("keeps the vocabularies of its checks equal to the repositories' constants", () => {
+    expect(checkList(sql, "sync_holds_scope_check")).toEqual([...SYNC_HOLD_SCOPES]);
+    expect(checkList(sql, "sync_holds_kind_check")).toEqual([...SYNC_HOLD_KINDS]);
+    const byScope = sql.slice(sql.indexOf("constraint sync_holds_scope_kind_check check"), sql.indexOf("constraint sync_holds_until_check"));
+    const kindsOf = (scope: string) => {
+      const clause = byScope.slice(byScope.indexOf(`scope = '${scope}'`));
+      return [...clause.slice(0, clause.indexOf("\n")).matchAll(/'([a-z_]+)'/g)].map((match) => match[1]).slice(1);
+    };
+    for (const scope of SYNC_HOLD_SCOPES) expect(kindsOf(scope), scope).toEqual([...SYNC_HOLD_KINDS_BY_SCOPE[scope]]);
+    // A page-scope row has no key; a route's and a resource file's name theirs.
+    expect(byScope).toMatch(/scope = 'page' and key = ''/);
+    expect(byScope).toMatch(/scope = 'route' and key <> ''/);
+    expect(byScope).toMatch(/scope = 'resource' and key <> ''/);
+    // Only the route's state is a row without an end.
+    expect(sql).toContain("constraint sync_holds_until_check check ((kind = 'route_budget') = (until is null))");
+  });
+
+  it("holds one credentials hold a page", () => {
+    expect(statements).toContain(
+      "create unique index if not exists sync_holds_page_credentials on sync_holds (page_id) "
+        + "where scope = 'page' and kind in ('auth', 'identity_mismatch')",
+    );
+  });
+
+  it("comments the table and every column", () => {
+    expect(statements.some((statement) => statement.startsWith("comment on table sync_holds is '"))).toBe(true);
+    for (const column of columns) {
+      expect(statements.some((statement) => statement.startsWith(`comment on column sync_holds.${column} is '`)), column).toBe(true);
+    }
+  });
+
+  it("is mirrored in drizzle", () => {
+    const names = Object.values(syncHolds as unknown as Record<string, { name?: unknown }>).map((column) => column.name);
+    expect(names).toEqual(expect.arrayContaining(columns));
+  });
+
+  it("allows application rollback: the previous image reads the old hold columns, which the hold writers keep in step", () => {
+    expect(rollbackCompatible()).toContain(`"${migration}"`);
+    const pages = readFileSync("packages/db/src/repositories/sync/pages.ts", "utf8");
+    // Every hold write goes through one transaction that rewrites the old
+    // columns from the rows; an acquisition reads them back when they differ.
+    expect(pages.match(/writeHoldSet\(db, input,/g)).toHaveLength(4);
+    expect(pages).toContain("await mirrorSyncHoldsToLegacyColumns(tx, input.pageId);");
+    expect(pages).toContain("await reconcileSyncHoldsWithLegacyColumns(tx as unknown as Database, input.pageId);");
+    // No other statement writes a hold row.
+    for (const file of readdirSync("packages/db/src/repositories/sync")) {
+      if (file === "pages.ts" || file === "holds-legacy.ts") continue;
+      expect(readFileSync(`packages/db/src/repositories/sync/${file}`, "utf8"), file).not.toMatch(/(insert into|update|delete from) sync_holds\b/);
+    }
   });
 });
