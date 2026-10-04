@@ -141,7 +141,7 @@ beforeAll(async () => {
     [pageId],
   );
   await upsertDemand(db, {
-    pageId, shadow: false, resource: "media-stats.walk", kind: "goal", class: "planned",
+    pageId, resource: "media-stats.walk", kind: "goal", class: "planned",
     dueAt: new Date("2026-08-20T13:00:00.000Z"),
   });
 

@@ -23,22 +23,13 @@ import type {
   ApplyResult,
   RequestPlan,
   ResourceModule,
-  ShadowResult,
   StepPlan,
 } from "../../engine/resource.ts";
-import { advanceShadowWalk, type ShadowWalkProgress } from "../lib/offset-walk.ts";
 import { readFanslyPageFacts } from "../lib/page-facts.ts";
 import {
-  advanceShadowPass,
   clearQueueSubjectBlocks,
-  currentShadowPass,
-  EMPTY_SHADOW_PASS,
-  parseShadowPass,
   recordQueueSubjectFailures,
-  shadowPassNumber,
-  shadowPassWaitUntil,
   standingRecheckAt,
-  type ShadowPass,
   type SubjectQueueWalk,
 } from "../lib/subject-queue.ts";
 
@@ -67,13 +58,6 @@ import {
 export type PostsVariant = "refresh" | "backfill" | "engagement";
 
 const DAY_MS = 86_400_000;
-/** A shadow walk of a page without its native id re-checks this often. */
-const IDENTITY_RECHECK_MS = 60 * 60 * 1000;
-/** Shadow only: the timeline's page size is the server's; the walk length is
- *  estimated from the stored posts at this many a page — measured on the
- *  legacy journal (`sync_http_attempts.response_shape.returnedItems` of every
- *  `timeline_posts` read, 2026-09-29 … 10-02: 15, 168 of 168). */
-export const TIMELINE_PAGE_ESTIMATE = 15;
 /** The engagement walk looks at its queue again this long after it found
  *  nothing due (the legacy phase ran once per 6-hour posts cadence). */
 export const POST_ENGAGEMENT_RECHECK_MS = 6 * 60 * 60 * 1000;
@@ -95,13 +79,6 @@ function text(value: unknown): string | null {
 
 function stringList(value: unknown): string[] | null {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item.length > 0) : null;
-}
-
-function parseShadow(value: unknown): ShadowWalkProgress | null {
-  const record = recordOf(value);
-  const steps = count(record.steps);
-  const done = count(record.done);
-  return steps === null || done === null ? null : { steps, done };
 }
 
 // ── the timeline walk (refresh / backfill) ──────────────────────────────────
@@ -136,7 +113,6 @@ export interface PostsWalkCursor {
   tipsBackfilledAt: string | null;
   walk: PostsWalk | null;
   last: Record<string, unknown> | null;
-  shadow: ShadowWalkProgress | null;
 }
 
 export function parsePostsWalkCursor(value: unknown): PostsWalkCursor {
@@ -162,7 +138,6 @@ export function parsePostsWalkCursor(value: unknown): PostsWalkCursor {
     tipsBackfilledAt: text(record.tipsBackfilledAt),
     walk,
     last: typeof record.last === "object" && record.last !== null ? record.last as Record<string, unknown> : null,
-    shadow: parseShadow(record.shadow),
   };
 }
 
@@ -215,39 +190,6 @@ function sameIds(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((id, index) => id === right[index]);
 }
 
-/** Estimated steps of a shadow walk: a timeline page per `TIMELINE_PAGE_ESTIMATE`
- *  stored posts in its window plus the closing page, each non-empty page
- *  followed by its tips read. */
-async function estimatedWalkSteps(db: Database, input: { pageId: number; cutoffAt: string | null }): Promise<number> {
-  const result = await db.execute<{ n: string }>(sql`
-    select count(*)::text as n from creator_posts
-     where account_id = ${input.pageId}
-       and platform = 'fansly'
-       and (${input.cutoffAt}::timestamptz is null or published_at >= ${input.cutoffAt}::timestamptz)
-  `);
-  const stored = Number(result.rows[0]?.n ?? 0);
-  const pages = Math.ceil(stored / TIMELINE_PAGE_ESTIMATE) + 1;
-  // A bounded walk ends on a wholly-old page (tips read); a full one on an
-  // empty page (no tips).
-  return input.cutoffAt === null ? 2 * pages - 1 : 2 * pages;
-}
-
-/** The steps of a shadow walk started at `now` (its `shadow()` estimate). */
-async function shadowWalkSteps(db: Database, input: { pageId: number; now: Date; bounded: boolean }): Promise<number> {
-  const cutoffAt = input.bounded ? refreshCutoffAt(input.now) : null;
-  return Math.max(1, await estimatedWalkSteps(db, { pageId: input.pageId, cutoffAt }));
-}
-
-async function newestPostIds(db: Database, pageId: number): Promise<string[]> {
-  const result = await db.execute<{ id: string }>(sql`
-    select platform_post_id as id from creator_posts
-     where account_id = ${pageId} and platform = 'fansly'
-     order by published_at desc nulls last, platform_post_id desc
-     limit ${TIMELINE_PAGE_ESTIMATE}
-  `);
-  return result.rows.map((row) => row.id);
-}
-
 function walkModule(variant: "refresh" | "backfill"): ResourceModule {
   const bounded = variant === "refresh";
   return {
@@ -255,21 +197,13 @@ function walkModule(variant: "refresh" | "backfill"): ResourceModule {
       const facts = await readFanslyPageFacts(ctx.db, ctx.pageId);
       if (facts === null) return { kind: "quarantine", reason: "page_missing" };
       if (facts.externalId === null) {
-        // Live: `account.poll` writes the id (made due); shadow re-checks.
-        return ctx.shadow
-          ? { kind: "wait", reason: "dependency", until: new Date(ctx.now.getTime() + IDENTITY_RECHECK_MS) }
-          : { kind: "wait", reason: "dependency", until: null, enqueue: [{ resource: "account.poll", demand: { reason: `dependency:${work.resource}` } }] };
+        // `account.poll` writes the id (made due).
+        return { kind: "wait", reason: "dependency", until: null, enqueue: [{ resource: "account.poll", demand: { reason: `dependency:${work.resource}` } }] };
       }
       const cursor = parsePostsWalkCursor(work.cursor);
       const walk = cursor.walk;
       if (walk !== null && walk.pendingTips !== null && walk.pendingTips.length > 0) {
         return { kind: "request", request: tipsRequest(walk.pendingTips) };
-      }
-      if (ctx.shadow && cursor.shadow !== null && cursor.shadow.done % 2 === 1) {
-        // A shadow walk alternates as live does: every timeline page is
-        // followed by its tips read (the newest stored posts stand in).
-        const ids = await newestPostIds(ctx.db, ctx.pageId);
-        if (ids.length > 0) return { kind: "request", request: tipsRequest(ids) };
       }
       return { kind: "request", request: timelineRequest(facts.externalId, walk?.before ?? FANSLY_HEAD_CURSOR) };
     },
@@ -300,12 +234,11 @@ function walkModule(variant: "refresh" | "backfill"): ResourceModule {
           tipsBackfilledAt: cursor.tipsBackfilledAt ?? (finished.cutoffAt === null ? completedAt : null),
           walk: null,
           last: receipt,
-          shadow: null,
         };
         return { work: { satisfiesRevision: true, close: "done", closeReason: `walk_${end}`, cursor: next, proof: receipt }, followups: [], counters };
       };
       const goOn = (nextWalk: PostsWalk): ApplyResult => ({
-        work: { satisfiesRevision: false, nextDueAt: now, cursor: { ...cursor, walk: nextWalk, shadow: null } },
+        work: { satisfiesRevision: false, nextDueAt: now, cursor: { ...cursor, walk: nextWalk } },
         followups: [],
         counters,
       });
@@ -360,15 +293,6 @@ function walkModule(variant: "refresh" | "backfill"): ResourceModule {
       }
       return goOn({ ...walk, before: nextBefore, pendingTips: ids });
     },
-
-    async shadow(work, _request, ctx): Promise<ShadowResult> {
-      const cursor = parsePostsWalkCursor(work.cursor);
-      const progress = cursor.shadow ?? { steps: await shadowWalkSteps(ctx.db, { pageId: ctx.pageId, now: ctx.now, bounded }), done: 0 };
-      const step = advanceShadowWalk(progress, () => progress.steps);
-      return step.finished
-        ? { work: { satisfiesRevision: true, close: "done", closeReason: "shadow", cursor: { ...cursor, shadow: null } }, followups: [] }
-        : { work: { satisfiesRevision: false, nextDueAt: ctx.now, cursor: { ...cursor, shadow: step.progress } }, followups: [] };
-    },
   };
 }
 
@@ -376,26 +300,8 @@ function walkModule(variant: "refresh" | "backfill"): ResourceModule {
 
 export const POST_ENGAGEMENT_QUEUE: SubjectQueueWalk<PostEngagementRefreshCandidate> = {
   plane: "post_engagement",
-  pickDue: (db, input) => listPostEngagementRefreshChunk(db, {
-    pageId: input.pageId,
-    limit: input.limit,
-    now: input.now,
-    ...(input.after === null ? {} : { after: input.after }),
-  }),
+  pickDue: (db, input) => listPostEngagementRefreshChunk(db, { pageId: input.pageId, limit: input.limit, now: input.now }),
 };
-
-interface EngagementCursor {
-  last: Record<string, unknown> | null;
-  shadow: ShadowPass;
-}
-
-function parseEngagementCursor(value: unknown): EngagementCursor {
-  const record = recordOf(value);
-  return {
-    last: typeof record.last === "object" && record.last !== null ? record.last as Record<string, unknown> : null,
-    shadow: parseShadowPass(record.shadow),
-  };
-}
 
 function idsOf(request: RequestPlan): string[] {
   return stringList(recordOf(request.params).ids) ?? [];
@@ -412,22 +318,11 @@ async function engagementTiers(db: Database, input: { pageId: number; ids: reado
 }
 
 const engagementModule: ResourceModule = {
-  async plan(work, ctx): Promise<StepPlan> {
-    const cursor = parseEngagementCursor(work.cursor);
-    const pass = ctx.shadow ? currentShadowPass(cursor.shadow, ctx.now, POST_ENGAGEMENT_RECHECK_MS) : EMPTY_SHADOW_PASS;
-    if (pass.ended) return { kind: "wait", reason: "not_due", until: shadowPassWaitUntil(pass, ctx.now, POST_ENGAGEMENT_RECHECK_MS) };
-    const due = await POST_ENGAGEMENT_QUEUE.pickDue(ctx.db, { pageId: ctx.pageId, now: ctx.now, limit: POST_BATCH_SIZE, after: pass.after });
-    if (due.length === 0) {
-      const until = ctx.shadow ? shadowPassWaitUntil(pass, ctx.now, POST_ENGAGEMENT_RECHECK_MS) : standingRecheckAt(ctx.now, POST_ENGAGEMENT_RECHECK_MS);
-      return { kind: "wait", reason: "not_due", until };
-    }
+  async plan(_work, ctx): Promise<StepPlan> {
+    const due = await POST_ENGAGEMENT_QUEUE.pickDue(ctx.db, { pageId: ctx.pageId, now: ctx.now, limit: POST_BATCH_SIZE });
+    if (due.length === 0) return { kind: "wait", reason: "not_due", until: standingRecheckAt(ctx.now, POST_ENGAGEMENT_RECHECK_MS) };
     const ids = due.map((candidate) => candidate.subjectRef);
-    const request: RequestPlan<"posts.by_ids"> = { spec: "posts.by_ids", params: { ids } };
-    if (!ctx.shadow) return { kind: "request", request };
-    // The next shadow pass asks the batches again (shadow records no visit):
-    // a shadow step names its pass besides the batch (`RequestPlan.position`).
-    const passNumber = shadowPassNumber(cursor.shadow, ctx.now, POST_ENGAGEMENT_RECHECK_MS);
-    return { kind: "request", request: { ...request, position: { pass: passNumber, ids } } };
+    return { kind: "request", request: { spec: "posts.by_ids", params: { ids } } satisfies RequestPlan<"posts.by_ids"> };
   },
 
   async apply(tx, input: ApplyInput): Promise<ApplyResult> {
@@ -449,10 +344,9 @@ const engagementModule: ResourceModule = {
     const byTier: Record<string, number> = {};
     for (const visit of visits) byTier[visit.tier] = (byTier[visit.tier] ?? 0) + 1;
     const receipt = { refreshedAt: now.toISOString(), requested: ids.length, refreshed: visits.length, unserved: unserved.length, byTier };
-    const cursor: EngagementCursor = { ...parseEngagementCursor(input.work.cursor), last: receipt };
     // The walk row stays: the next plan takes the next due batch, or rests.
     return {
-      work: { satisfiesRevision: true, nextDueAt: now, cursor, result: receipt },
+      work: { satisfiesRevision: true, nextDueAt: now, cursor: { last: receipt }, result: receipt },
       followups: [],
       counters: { posts_refreshed: visits.length, posts_unserved: unserved.length },
     };
@@ -468,21 +362,6 @@ const engagementModule: ResourceModule = {
       subjectRefs: idsOf(step.request),
       now: new Date(),
     });
-  },
-
-  async shadow(work, request, ctx): Promise<ShadowResult> {
-    const cursor = parseEngagementCursor(work.cursor);
-    const pass = currentShadowPass(cursor.shadow, ctx.now, POST_ENGAGEMENT_RECHECK_MS);
-    const ids = new Set(idsOf(request));
-    // The subjects this step took, with their keysets (the plan's batch).
-    const batch = await POST_ENGAGEMENT_QUEUE.pickDue(ctx.db, { pageId: ctx.pageId, now: ctx.now, limit: POST_BATCH_SIZE, after: pass.after });
-    const taken = batch.filter((candidate) => ids.has(candidate.subjectRef));
-    const advanced = advanceShadowPass({ pass: cursor.shadow, now: ctx.now, recheckMs: POST_ENGAGEMENT_RECHECK_MS, taken, limit: POST_BATCH_SIZE });
-    return {
-      work: { satisfiesRevision: true, nextDueAt: advanced.nextDueAt, cursor: { ...cursor, shadow: advanced.pass } },
-      followups: [],
-      counters: { posts_requested: ids.size },
-    };
   },
 };
 

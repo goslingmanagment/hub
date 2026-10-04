@@ -9,8 +9,8 @@ import { textArrayParam, toDate, toRequiredDate } from "./values.ts";
 // Fansly Sync Engine: the reads behind its alerts and its golden signals
 // (plan §10, design §9.5, §9.6). Reads only; every window is an index range
 // (`sync_attempts_page_admitted`, `_page_sent`, `sync_work_runnable`, the
-// receipts' primary key below an id watermark). Live and shadow are separate
-// journals (`shadow`).
+// receipts' primary key below an id watermark). The rows shadow mode left
+// behind are never read (`not shadow`).
 
 /** Attempt error classes that stop a page (alert 1): a refused credential,
  *  another account behind the credentials. A 429 holds only its route (its
@@ -43,13 +43,13 @@ export interface SyncJournalAlertFacts {
  */
 export async function readSyncJournalAlertFacts(
   db: Database,
-  input: { pageId: number; shadow: boolean; stopLookbackMs: number; urgentAfterMs: number; requestStallMs: number },
+  input: { pageId: number; stopLookbackMs: number; urgentAfterMs: number; requestStallMs: number },
 ): Promise<SyncJournalAlertFacts> {
   const stop = await db.execute<{ errorClass: string; at: Date | string }>(sql`
     select a.error_class as "errorClass", coalesce(a.completed_at, a.admitted_at) as at
       from sync_attempts a
      where a.page_id = ${input.pageId}
-       and a.shadow = ${input.shadow}::boolean
+       and not a.shadow
        and a.admitted_at > statement_timestamp() - ${input.stopLookbackMs}::double precision * interval '1 millisecond'
        and a.error_class = any(${textArrayParam(SYNC_PAGE_STOP_ERROR_CLASSES)})
      order by a.admitted_at desc
@@ -58,14 +58,14 @@ export async function readSyncJournalAlertFacts(
   const quarantined = await db.execute<{ resource: string; n: number }>(sql`
     select w.resource, count(*)::int as n
       from sync_work w
-     where w.page_id = ${input.pageId} and w.shadow = ${input.shadow}::boolean and w.state = 'quarantined'
+     where w.page_id = ${input.pageId} and not w.shadow and w.state = 'quarantined'
      group by w.resource
   `);
   const urgent = await db.execute<{ resource: string; subject: string; dueAt: Date | string; waitingReason: string | null }>(sql`
     select w.resource, w.subject, w.due_at as "dueAt", w.waiting_reason as "waitingReason"
       from sync_work w
      where w.page_id = ${input.pageId}
-       and w.shadow = ${input.shadow}::boolean
+       and not w.shadow
        and w.class = 'urgent'
        and w.state = 'open'
        and w.due_at < statement_timestamp() - ${input.urgentAfterMs}::double precision * interval '1 millisecond'
@@ -76,7 +76,7 @@ export async function readSyncJournalAlertFacts(
     select w.resource, w.last_served_at as "lastServedAt", w.created_at as "createdAt"
       from sync_work w
      where w.page_id = ${input.pageId}
-       and w.shadow = ${input.shadow}::boolean
+       and not w.shadow
        and w.kind = 'poll'
        and w.state in ('open', 'running')
   `);
@@ -86,34 +86,31 @@ export async function readSyncJournalAlertFacts(
      where w.page_id = ${input.pageId}
        and w.resource = 'transactions.rescan'
        and w.subject = ''
-       and w.shadow = ${input.shadow}::boolean
+       and not w.shadow
        and w.state = 'done'
      order by w.id desc
      limit 1
   `);
-  // History requests exist only on live pages (the intake refuses the rest).
-  const stalled = input.shadow
-    ? { rows: [] as Array<{ requestRef: string; lastServedAt: Date | string | null; createdAt: Date | string }> }
-    : await db.execute<{ requestRef: string; lastServedAt: Date | string | null; createdAt: Date | string }>(sql`
-      select r.request_ref::text as "requestRef", r.last_served_at as "lastServedAt", r.created_at as "createdAt"
-        from history_requests r
-       where r.page_id = ${input.pageId}
-         and r.state = 'open'
-         and coalesce(r.last_served_at, r.created_at)
-             < statement_timestamp() - ${input.requestStallMs}::double precision * interval '1 millisecond'
-         and exists (
-           select 1
-             from history_request_items i
-             join sync_work w on w.id = i.work_id
-            where i.request_id = r.id
-              and i.state in ('queued', 'loading')
-              and w.state = 'open'
-              and w.due_at <= statement_timestamp()
-              and (w.breaker_until is null or w.breaker_until <= statement_timestamp())
-              and w.blocked_by_vendor_at is null)
-       order by r.id
-       limit 20
-    `);
+  const stalled = await db.execute<{ requestRef: string; lastServedAt: Date | string | null; createdAt: Date | string }>(sql`
+    select r.request_ref::text as "requestRef", r.last_served_at as "lastServedAt", r.created_at as "createdAt"
+      from history_requests r
+     where r.page_id = ${input.pageId}
+       and r.state = 'open'
+       and coalesce(r.last_served_at, r.created_at)
+           < statement_timestamp() - ${input.requestStallMs}::double precision * interval '1 millisecond'
+       and exists (
+         select 1
+           from history_request_items i
+           join sync_work w on w.id = i.work_id
+          where i.request_id = r.id
+            and i.state in ('queued', 'loading')
+            and w.state = 'open'
+            and w.due_at <= statement_timestamp()
+            and (w.breaker_until is null or w.breaker_until <= statement_timestamp())
+            and w.blocked_by_vendor_at is null)
+     order by r.id
+     limit 20
+  `);
   const ledgerRow = ledger.rows[0];
   const missing = ledgerRow?.missing === null || ledgerRow?.missing === undefined ? 0 : Number(ledgerRow.missing);
   const stopRow = stop.rows[0];
@@ -253,8 +250,10 @@ export async function readSyncPageWsStatus(
  * The newest receipt id received at or before `at` (0 without one). The
  * receipts have no time index: a backward scan of the primary key stops at the
  * first row old enough, so a window `observation_id > floor` reads only the
- * receipts received since (a capture stamps `received_at` before it allocates
- * its id, the same argument as `wsRouterHorizonWatermark`).
+ * receipts received since: a capture stamps `received_at` before it allocates
+ * its id, so a receipt below the floor was received before the floor's
+ * receipt was captured — outside the window, or short of it by no more than
+ * that capture's wait in its connection's queue.
  */
 function receiptIdFloorSql(at: ReturnType<typeof sql>) {
   return sql`coalesce((
@@ -353,7 +352,7 @@ export interface SyncJournalMetrics {
  */
 export async function readSyncJournalMetrics(
   db: Database,
-  input: { pageIds: readonly number[]; shadow: boolean; since: Date; until?: Date },
+  input: { pageIds: readonly number[]; since: Date; until?: Date },
 ): Promise<SyncJournalMetrics[]> {
   if (input.pageIds.length === 0) return [];
   const pages = sql`${sql.param([...input.pageIds])}::bigint[]`;
@@ -377,7 +376,7 @@ export async function readSyncJournalMetrics(
                extract(epoch from a.sent_at - lag(a.sent_at) over (partition by a.page_id order by a.sent_at, a.id)) * 1000 as gap_ms
           from sync_attempts a
          where a.page_id = any(${pages})
-           and a.shadow = ${input.shadow}::boolean
+           and not a.shadow
            and a.sent_at is not null
            and a.sent_at >= ${input.since}::timestamptz - ${SYNC_PACE_AUDIT_LOOKBACK_MS}::double precision * interval '1 millisecond'
            and a.sent_at < ${until}
@@ -392,7 +391,7 @@ export async function readSyncJournalMetrics(
            count(*) filter (where w.state = 'quarantined')::int as quarantined
       from sync_work w
      where w.page_id = any(${pages})
-       and w.shadow = ${input.shadow}::boolean
+       and not w.shadow
        and w.state in ('open', 'running', 'quarantined')
      group by w.page_id
   `);
@@ -479,11 +478,11 @@ export async function readSyncHistoryMetrics(db: Database, input: { since: Date 
 /** The newest owner acknowledgement of a page's pace violations. */
 export const SYNC_ALERTS_ACK_AUDIT_EVENT = "admin.sync_alerts_ack";
 
-/** Whether any Fansly page is in the engine (`shadow`, `handover`, `live`):
- *  then the `sync` process must be beating (alert 5). */
+/** Whether any Fansly page is in the engine (`handover`, `live`): then the
+ *  `sync` process must be beating (alert 5). */
 export async function hasSyncPageInEngine(db: Database): Promise<boolean> {
   const result = await db.execute<{ engaged: boolean }>(sql`
-    select exists (select 1 from sync_pages where mode <> 'off') as engaged
+    select exists (select 1 from sync_pages where mode in ('handover', 'live')) as engaged
   `);
   return result.rows[0]?.engaged === true;
 }

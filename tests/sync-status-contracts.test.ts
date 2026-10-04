@@ -114,7 +114,7 @@ describe("sync status: the capabilities of why", () => {
 
 function statusPage(overrides: Partial<StatusPage> = {}): StatusPage {
   return {
-    mode: "shadow",
+    mode: "live",
     pausedAll: false,
     pausedRequests: false,
     pausedResources: [],
@@ -161,7 +161,6 @@ describe("sync status: the page status on the wire", () => {
         violationsLastDay: 0,
       },
       requests: [],
-      shadow: { attemptsLastHour: 5, demandVsEstimate: null },
     });
     const wire = toSyncPageStatusWire(status);
     expect(agentSyncPageStatusSchema.parse(wire)).toEqual(wire);
@@ -174,6 +173,10 @@ describe("sync status: the page status on the wire", () => {
     expect(wire.sendsLastHour.byResource).toEqual({ "transactions.head": 3, "posts.refresh": 2 });
     // A copy, not the status's own objects.
     expect(wire.queue.urgent).not.toBe(status.queue.urgent);
+    // Shadow mode is gone (step 4 S4-23): the block the released clients'
+    // schemas require is a wire-only null.
+    expect(status).not.toHaveProperty("shadow");
+    expect(wire.shadow).toBeNull();
   });
 });
 
@@ -183,7 +186,6 @@ function why(overrides: Partial<WorkWhy["work"]> = {}, waiting: WorkWhy["waiting
       id: 41,
       resource: "account.verify",
       subject: "",
-      shadow: false,
       kind: "trigger",
       class: "urgent",
       state: "open",
@@ -220,6 +222,9 @@ describe("sync status: a work row on the wire", () => {
     });
     expect(wire).not.toHaveProperty("result");
     expect(wire).not.toHaveProperty("attempts");
+    // One journal (step 4 S4-23): a row shadow mode left is never served, so
+    // the mark the released clients' schemas require is a wire-only false.
+    expect(wire.shadow).toBe(false);
   });
 
   it("closed work waits for nothing; an indefinite instant has none on the wire", () => {

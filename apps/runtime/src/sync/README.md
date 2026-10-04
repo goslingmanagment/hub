@@ -4,11 +4,15 @@ One long-running process (`sync`) hosts one **actor per Fansly page**. The actor
 physical request of the page passes one pacer, one queue (`sync_work`), one journal row per attempt
 (`sync_attempts`). Plan: `docs/plans/2026-10-01-sync-engine/plan.md`. OnlyFans is not here.
 
-The engine landed in steps: step 2 ran it in **shadow** next to the legacy engine (it plans, paces and journals, but
-never sends); step 3 switched the six pages one by one (`sync switch`, gone since step 4 S4-21); step 4 deletes the
-legacy code. A page sends as the engine only on a `live` row with the engine's step-1 guard row and its import mark;
-`sync page mode` moves pages only `off ↔ shadow`, and no lever takes a page to `live` or out of it (I17). Since step 4
-a new Fansly page is born `live`:
+The engine landed in steps: step 2 ran it in **shadow** next to the legacy engine (it planned, paced and journaled,
+but never sent); step 3 switched the six pages one by one (`sync switch`, gone since step 4 S4-21); step 4 deletes the
+legacy code — and shadow mode with it (S4-23): an actor runs a `live` page and nothing else, nothing puts a page in
+`shadow`, and no code path plans, paces or journals without sending. The value `shadow` stays what the CHECKs of
+`sync_pages.mode`, `sync_attempts.outcome` and `send_mark` admit, and the rows shadow mode left (`shadow = true` in
+`sync_work` and `sync_attempts`) stay until the telemetry retention prunes them: nothing writes one, and every read
+of a page's queue or journal leaves them out (`not shadow`). A page sends as the engine only on a `live` row with
+the engine's step-1 guard row and its import mark; `sync page mode` only takes a page left in `shadow` to `off`, and
+no lever takes a page to `live` or out of it (I17). Since step 4 a new Fansly page is born `live`:
 onboarding checks its session through its own proxy without a page (one journaled `/account/me`, `fansly_send_log`
 with `page_id` null — owner decision №4) and creates the page, its credentials, the proven identity, the trusted
 credentials digest, its `live` row and its engine-owned guard row in one transaction (`createLiveSyncPage`); the host
@@ -49,12 +53,11 @@ sync/
     scheduler.ts             the 10-slot cycle U R U R U R U R U P over the three classes (+ the short look-ahead)
     errors.ts                outcome → error class → page hold / network pause / breakers / quarantine
     status.ts                "why waiting" and the page status
-    resource.ts              the resource contract (plan / apply / shadow) and the rules every entry shares
+    resource.ts              the resource contract (plan / apply) and the rules every entry shares
     host.ts                  pages ↔ actors, ownership, LISTEN, mode changes, SIGTERM; LIVE_LOOP_ENABLED
     host-ports.ts            the lock session (advisory locks 58215) and the LISTEN wake
     actor.ts                 one page: recover → loop (steps without a request; plan → admit → send → capture → apply)
     commit.ts                the four transactions of a step, the no-HTTP outcomes and the local writes
-    shadow.ts                the shadow transport (no socket, no credentials)
     alerts.ts                alerts 1–4: the incident sink, the 30 s evaluator, the pace backstop, the owner's ack
                              (`sync alerts status | ack`, `cli/alerts.ts`)
     send-audit.ts            the send audit (I1, I19): the one checker of the evaluator and `sync check live-hour`
@@ -66,8 +69,7 @@ sync/
     transport.ts             the live page transport over the wire layer (packages/fansly/src/wire)
     identity-without-page.ts the no-page `/account/me` of onboarding and the create-page check (unpaced, journaled)
     resources/               one file per resource family
-    ws/                      decode, router, the post-ack routing hook (live), the shadow WS feed and a live
-                             page's socket (`source.ts`)
+    ws/                      decode, router, the post-ack routing hook and a live page's socket (`source.ts`)
     lib/                     chain rules, walk helpers; the money, audience, fan-hydration, purchase-history, stats,
                              media-stats, notifications, payouts, post-replies, catalog, posts and lane rules the
                              resources use (step 4 moved them here; what is left of the legacy executor takes only
@@ -110,8 +112,7 @@ a read wrote since the demand is found with no request, before the HTTP gate: a 
 `found_by_shared_read` and asks the chat's urgent `dm-messages.head` unless one is open (a list or detail apply asks
 it already for every chat a `.find` is open for, never a planned catch-up). A chat such a head read did not show
 goes to its group detail, which creates the thread (D5), as does every chat while a 429 holds the list's route; with
-neither, the find reads the list head itself. A shadow page writes no thread, so its find closes `shared_head_read`
-on the first such read its shadow journal settled.
+neither, the find reads the list head itself.
 
 A message read (`dm-messages.head`, `.catchup`, `.history`) is one `/message` page per step. Its apply folds the page
 into the chain before it writes anything (an anomaly the design sends to review quarantines the step whole), then
@@ -123,8 +124,7 @@ head; a demanded id the vendor's head does not show yet is read again after 15 s
 
 A plan is read-only, so a decision it takes that the apply must fold into — a media visit's windows, an album walk's
 proof header, the floors a history walk crossed without a request — travels with the request (`RequestPlan.step`,
-stored as `sync_attempts.request.step`) and comes back to the apply, the shadow estimate and a re-apply from the
-journal. A media visit is a pure procedure replayed over the answers it has (`fansly/resources/media-stats.ts`), so
+stored as `sync_attempts.request.step`) and comes back to the apply and a re-apply from the journal. A media visit is a pure procedure replayed over the answers it has (`fansly/resources/media-stats.ts`), so
 one visit becomes one window per step, its windows in the order the visit asks for them. A visit in flight
 across a deploy that changed a visit rule no longer replays: it is abandoned (the next due item starts afresh, the
 item it served backs off on its queue-row ladder), never a failed plan or a quarantined walk.
@@ -183,14 +183,14 @@ the agent docs keep the hydration route as the remedy there.
 
 The page status (`engine/status.ts`: owner, pause record, sends by class, the queue by waiting reason, holds,
 breakers, request progress) and "why waiting" (one reason from a closed list per work row, plus its revisions,
-breaker and last attempt) are read by `inspect.ts` from the journal the page runs — the shadow journal while the page
-is `off` or `shadow`. Three clients share those functions and one wire (`requests/wire.ts`): the owner CLI
+breaker and last attempt) are read by `inspect.ts` from the page's queue and journal (never the rows shadow mode
+left). Three clients share those functions and one wire (`requests/wire.ts`): the owner CLI
 (`pnpm cli sync page status`, `sync why`), the owner routes (`syncPages`, `syncPageWork`, `syncPageWorkGet`) and the
 agent plane (`agentSyncStatus`, `agentSyncWhy`, `hub sync-status`, `hub sync-why`; `read:datasets`, and
 `read:messages` too for a key whose subjects are chats or fans).
 
 "Sync now" (`syncPageRefresh`, `refreshSyncPage`) makes the page's poll rows due now and wakes its actor; it sends
-nothing itself, and an `off` page (no actor) answers 409 `sync_page_off`.
+nothing itself, and a page no actor runs (`off`, or one left in `shadow`) answers 409 `sync_page_off`.
 
 ### Engine-owned pages on the legacy surfaces (step 3, S3-02)
 
@@ -215,10 +215,10 @@ shows it; `pnpm cli sync work requeue --page P --work <id> | --quarantined [--re
 quarantine — a live row whose last attempt holds a captured answer goes back to `running` with that attempt
 `deferred`, so the actor re-applies it from the journal before any new read (no request); other rows, and a row
 whose captured body can no longer be read (`apply_error` `payload_unavailable:…`), open due now (audited
-`admin.sync_work_requeue`). It touches only the journal the page runs (live on `handover`/`live`, shadow otherwise),
-and `--work` ids are all-or-nothing. `pnpm cli sync work enqueue --page P --resource <key> [--subject S]
-[--params <json>]` files the owner's own demand for a key with the `owner` trigger on a live page; `--subject` only
-for a key that runs per subject (audited `admin.sync_work_enqueue`).
+`admin.sync_work_requeue`). It never touches a row shadow mode left, and `--work` ids are all-or-nothing.
+`pnpm cli sync work enqueue --page P --resource <key> [--subject S] [--params <json>]` files the owner's own demand
+for a key with the `owner` trigger on a live page; `--subject` only for a key that runs per subject (audited
+`admin.sync_work_enqueue`).
 
 `requests/urgent.ts` is how the API and the CLIs ask the actor for a read instead of calling Fansly: `enqueueAndWait`
 upserts the work of a registry key with the `api` trigger and waits up to 15–30 s for `applied_revision` to reach the
@@ -232,21 +232,17 @@ created fresh or refused, never merged into another candidate's open row.
 
 The socket is the live signal of a page (plan §7). Since step 4 (S4-12) only a live page has one, in `sync` (below):
 the legacy receiver of the worker process is gone. Each frame is captured (observation + pending receipt) and the
-step-1 drivers apply the overlay and ack the receipt. The engine turns receipts into work in two ways, with one decoder (`fansly/ws/decode.ts`: the step-1 message
-decoder plus new chats, money, subscriptions and payouts) and one routing table (`fansly/ws/router.ts`):
-
-- **Live pages (`handover`/`live`, step 3)**: every driver passes the post-ack hook `routeFanslyWsReceiptDemand`
-  (`fansly/ws/route-receipt.ts`), which upserts the receipt's demand in the transaction that acks it — once per
-  receipt, whichever driver wins it (I18). On `off`/`shadow` pages the hook only reads the page's mode.
-- **Shadow pages**: the actor reads the receipts past `sync_pages.ws_router_cursor` once per lap and routes them into
-  shadow work; it never acks a receipt and never writes the overlay. A router that never ran starts 15 minutes back;
-  receipts older than that are passed over (history, not live demand). The receipts have no `page_id` index, so a
-  lap that finds nothing of the page moves its cursor up to that 15-minute watermark (at most once a minute): a
-  silent page's read covers the horizon, not everything captured since its last receipt.
+step-1 drivers apply the overlay and ack the receipt. The engine turns receipts into work with one decoder
+(`fansly/ws/decode.ts`: the step-1 message decoder plus new chats, money, subscriptions and payouts) and one routing
+table (`fansly/ws/router.ts`): on a `handover`/`live` page every driver passes the post-ack hook
+`routeFanslyWsReceiptDemand` (`fansly/ws/route-receipt.ts`), which upserts the receipt's demand in the transaction
+that acks it — once per receipt, whichever driver wins it (I18). On an `off` page, or one left in `shadow`, the hook
+only reads the page's mode. (`sync_pages.ws_router_cursor`, the cursor of the shadow feed that read receipts without
+acking them, is a column nothing reads or writes any more.)
 
 Own mass broadcasts make no work (decision №9): they are `message.type = 2` with one shared correlation id (measured
 on the production journal), and as a fallback more than 20 own messages in distinct chats within 60 s are a
-broadcast. A deletion becomes `dm-live.deletions` (no request): in shadow it closes at once; on a live page it is a
+broadcast. A deletion becomes `dm-live.deletions` (no request): a
 `local` step (a write without a request, in one generation-fenced transaction under the erasure fence, taken before
 the HTTP gate on the actor's next lap — no page hold or pacer slot delays it — and admitting nothing): the page's hot
 rows of the message are marked (sticky), one deliverable `message.deleted` is appended and the archive tombstoned
@@ -273,10 +269,10 @@ before the page's safe release: a graceful stop (shutdown, mode change) captures
 (≤ 20 s) and applies it (≤ 10 s), then closes the connection row at the instant intake stopped — the next connection's
 `gap_since` — and the lock session; a lost ownership does not drain.
 
-## Live-only resources (step 3)
+## The socket, the media downloads and the repair (step 3)
 
-These four keys never run in shadow (`liveOnly`, as the identity check `account.identity` and the excluded-chat probe
-`probe.excluded-chat`, below): they need a page the engine owns.
+These four keys landed with the switch (as the identity check `account.identity` and the excluded-chat probe
+`probe.excluded-chat`, below): they need a page the engine owns — which every page an actor runs is.
 
 - `ws.connect` — the socket's HTTP Upgrade (wire `ws.upgrade`) as an admitted request: the page's socket owner
   (the slot's `FanslyWsSource`, seen by the actor and the transport as a `LivePageSocket`) asks for it at start and
@@ -340,7 +336,7 @@ lock session alone is never a confirmation. The first send after a takeover wait
 database knows of (I5). A `live` page is acquired only with its import mark (`legacy_imported_at`: stamped at a
 page's birth, and by the step-3 switch for the pages it took over); without it the page waits
 (`legacy_not_imported`, alert after 2 min) and nothing is sent.
-`sync page mode` moves pages only between `off` and `shadow`.
+`sync page mode` only takes a page left in `shadow` to `off`.
 
 Credentials (step 3; step 3b ruling 5, A3): every live API request carries the digest of the stored session and
 proxy (`credentialsGeneration`, journaled with the attempt). Unless it is the digest the engine trusts
@@ -544,10 +540,10 @@ Each is enforced in exactly one place and pinned by a test (design §1). The fir
 | I11 | A new event during a read raises `demand_revision`; an older answer never closes newer demand. | `engine/commit.ts` |
 | I12 | No history walk without a request. | `fansly/registry.ts` (`dm-messages.history` triggers only on a request) |
 | I13 | A Fansly HTTP request leaves the process only through the wire layer's single-request send, under the caller's send check; its callers are the page transport in `sync/` (the pacer's admission) and the identity check of a session without a page (journaled, owner decision №4). The legacy adapter and every legacy sender are deleted (step 4 S4-20); nothing in the runtime captures a page's legacy guard. | `packages/fansly/src/wire/send.ts` + `fansly/transport.ts` + `fansly/identity-without-page.ts`; lint rule (no undici HTTP import in `packages/fansly`) + tests/fansly-send-guard-boundary.test.ts |
-| I14 | Shadow never sends and never writes observations, domain tables, receipts or the overlay; it never owns a socket. | `engine/actor.ts` + `engine/commit.ts` |
+| I14 | Shadow mode is gone (step 4 S4-23): an actor runs a `live` page only, nothing writes a row with `shadow = true` or the outcome `shadow`, and no reader of a page's queue or journal sees the rows it left. (Until S4-23: shadow never sent and never wrote observations, domain tables, receipts or the overlay.) | `engine/host.ts` (`#runs`) + `engine/actor.ts` (`#ownershipExit`) + `repositories/sync/work.ts`, `attempts.ts` (`not shadow`); tests/sync-registry-coverage.test.ts, tests/sync-engine-core.integration.test.ts |
 | I15 | The erasure fence is taken in every apply that writes fan material. | `engine/commit.ts` |
 | I16 | The command outbox semantics are untouched (Fansly has no sends). | — |
-| I17 | No live sender by accident: `LIVE_LOOP_ENABLED`, mode `live` (a page is born live by onboarding's `createLiveSyncPage`, refused for any page with a legacy footprint; no lever moves an existing page to `handover` or `live`, or out of them — `setSyncPageMode` knows `off ↔ shadow` alone since step 4 S4-21), the guard row owned by the engine, and the import mark (stamped at birth) — independent gates. | `engine/host.ts` + `lockOwnedPage` + `repositories/sync/pages.ts` (`setSyncPageMode`, `createLiveSyncPage`); tests/sync-engine-repositories.test.ts |
+| I17 | No live sender by accident: `LIVE_LOOP_ENABLED`, mode `live` (a page is born live by onboarding's `createLiveSyncPage`, refused for any page with a legacy footprint; no lever moves an existing page to `shadow`, `handover` or `live`, or out of `handover`/`live` — `setSyncPageMode` knows `shadow → off` alone since step 4 S4-23), the guard row owned by the engine, and the import mark (stamped at birth) — independent gates. | `engine/host.ts` + `lockOwnedPage` + `repositories/sync/pages.ts` (`setSyncPageMode`, `createLiveSyncPage`); tests/sync-engine-repositories.test.ts |
 | I18 | Every WS receipt of a `handover`/`live` page routes its demand exactly once, in the transaction that acks it. | `fansly/ws/route-receipt.ts` |
 | I19 | Between two actual sends of one page on one route (or one family): ≥ the interval of its effective rate, counted from the actual send in the journal the page runs (the legacy send log too on a live page; an unknown outcome at its upper bound); no burst, no borrowing. | `engine/route-policy.ts` (`RouteClocks`) + `engine/actor.ts` (pick exclusion, final check) |
 | I20 | One page-hold rule: a credentials hold clears only by an identity proof sent after its latest refusal, written with the apply; under it only a candidate check and one verify per changed stored digest pass (step 3b ruling 5, A3). | `packages/shared/src/fansly-page-holds.ts` (gate, final admission, status, alerts) + `engine/commit.ts` (`recordIdentityProof`) |
@@ -640,8 +636,8 @@ the pause S every route of a page has a strict budget of its own (owner decision
   interval of its effective rate after its previous ACTUAL send — no burst, an idle hour earns nothing. The admission
   records the two intervals it applied on the attempt (`route_interval_ms`, `family_interval_ms`, 0237), as it
   records its pause: the send audit judges by them (Alerts, below). The clocks
-  are read from the journal at every slot (`readRouteJournal`): the page's own journal (a shadow page its shadow
-  one), and on a live page the legacy send log too (what the legacy engine sent before the switch). A send whose
+  are read from the journal at every slot (`readRouteJournal`): the page's own journal and the legacy send log
+  (what the legacy engine sent before the switch). A send whose
   instant is unknown counts at its upper bound (admission + the send window; a guard capture's completion or lease
   end); an operation nobody can place counts on every route.
 - **At the pick** a key all of whose routes are closed is left out (`routeExclusions`, in SQL like every
@@ -711,17 +707,16 @@ the recorded sends by what each admission recorded it applied, never by a copy o
 A violation (`pace_violation`, `route_interval_violation`, `route_interval_below_ceiling`) opens the pace latch. A
 pair it cannot judge (no recorded pause or interval — an attempt before 0237 —, a send never recorded that its
 admission does not prove, two clocks that disagree) is `inconclusive`: it pages nobody and never passes an
-acceptance. Only `handover`/`live` pages page the owner: a `shadow` page's conditions are counted (`sync_shadow_alerts`),
-never paged (D14). Alert 5 — a page is in the engine and no `sync` process beats — is the api watchdog's, since a
+acceptance. Only `handover`/`live` pages page the owner: an `off` page, or one left in `shadow`, runs no actor and
+has no condition. Alert 5 — a page is in the engine and no `sync` process beats — is the api watchdog's, since a
 process cannot report its own death; a stalled process opens it itself (`stalled`) right before it exits for a
 restart. `pnpm cli sync alerts status` shows what holds per page.
 
 The golden signals (`engine/metrics.ts`) come from the database: `computeSyncMetrics` per page (smallest send gap
 vs the setting, violations, sends by class and resource, holds, breakers, quarantine) and the global families
 (confirmation lag, REST mismatches by field, money lag from a socket frame to the ledger, history requests and the
-ETA's fact over forecast). The ops sampler records a compact set every 5 minutes: aggregates per journal (`sync_*`
-for switched pages, `sync_shadow_*` for shadow ones) — per-page series would double the sample table for figures the
-page status already shows.
+ETA's fact over forecast). The ops sampler records a compact set every 5 minutes: aggregates over the pages the
+engine owns (`sync_*`) — per-page series would double the sample table for figures the page status already shows.
 
 The shadow acceptance report (`sync shadow report`, design §3.12) judged the switch candidates of step 3 against the
 legacy engine: demand against its expectation, the legacy volume, the journal replay of every resource, the chain and
@@ -747,7 +742,7 @@ page is judged by `sync check live-hour` (above) and, continuously, by the alert
 | A new depth or rule of a history request | `requests/history-rules.ts` (satisfaction, anchors) + `requests/history.ts` + the contract |
 | A new WebSocket event | `fansly/ws/decode.ts`, `fansly/ws/router.ts` + a test |
 | "Why is chat X still partial?" | `hub sync-why`; the code is one resource file |
-| One read of a route for a page, now | `pnpm cli sync probe --page <label> --operation <wire id> --params '<json>'` (shadow: simulated) |
+| One read of a route for a page, now | `pnpm cli sync probe --page <label> --operation <wire id> --params '<json>'` (a live page) |
 | Do the excluded chats of a live page load? Lift the exclusion | `pnpm cli sync excluded probe --page <label>`; `… report --page <label> --record`; `… lift --page <label> --reason <reason> --evidence-page <label>` |
 | Quarantined work, after the fix | `pnpm cli sync work list --page <label> --state quarantined`; `pnpm cli sync work requeue --page <label> --quarantined [--resource <key>]` |
 | A backfill / fresh walk on a live page | `pnpm cli sync work enqueue --page <label> --resource <key>` (keys with the `owner` trigger) |

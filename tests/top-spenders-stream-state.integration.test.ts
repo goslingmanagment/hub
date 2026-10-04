@@ -152,7 +152,7 @@ describe("pageTopSpenders source.streamState (W8.1)", () => {
     const appliedAt = new Date("2026-09-30T06:00:00.000Z");
     // A finished roster walk with an applied read, then the open one failing.
     const done = await upsertDemand(appContext.db, {
-      pageId: fansly.id, shadow: false, resource: "fan-earnings.roster", kind: "goal", class: "planned",
+      pageId: fansly.id, resource: "fan-earnings.roster", kind: "goal", class: "planned",
     });
     await testDb.pool.query(
       `insert into sync_attempts (page_id, shadow, work_id, resource, subject, class, owner_generation, setting_ms,
@@ -167,7 +167,7 @@ describe("pageTopSpenders source.streamState (W8.1)", () => {
       [done.id, appliedAt],
     );
     const open = await upsertDemand(appContext.db, {
-      pageId: fansly.id, shadow: false, resource: "fan-earnings.roster", kind: "goal", class: "planned",
+      pageId: fansly.id, resource: "fan-earnings.roster", kind: "goal", class: "planned",
     });
     await testDb.pool.query("update sync_work set failure_count = 3 where id = $1", [open.id]);
 

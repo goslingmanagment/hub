@@ -150,7 +150,8 @@ export const syncPageRefreshBodySchema = z.object({
 export const syncPageRefreshResponseSchema = z.object({
   /** Poll rows made due now. */
   bumped: z.number().int().nonnegative(),
-  /** The page runs in shadow: the bumped polls are simulated, nothing is sent. */
+  /** Always false since step 4 (S4-23, shadow mode is gone): a wire-only
+   *  constant the released clients' schemas require. */
   shadow: z.boolean(),
 }).strict();
 

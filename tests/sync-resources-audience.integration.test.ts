@@ -18,7 +18,6 @@ import {
   type StartedTestDatabase,
 } from "./helpers/db.ts";
 import {
-  changedTables,
   countRows,
   makeTestActor,
   okResponse,
@@ -26,18 +25,16 @@ import {
   RecordingMetrics,
   ScriptedLiveTransport,
   seedSyncPage,
-  tableCounts,
   waitFor,
 } from "./helpers/sync-engine-host.ts";
 
 // The audience resources of the Fansly Sync Engine (design §5.1, §5.11–§5.13)
 // through the real actor and commits against a real database: a scripted
-// live transport answers each wire route; shadow runs the same registry with
-// no transport at all. What is pinned: the legacy writes (pages, subscriptions,
-// follows, fans, lookups, probes) land in the apply transaction; every walk
-// keeps its position in its work row; the refusals the legacy chunks threw are
-// outcomes (restart, refused, quarantine) that never retry by themselves; a
-// shadow step writes only sync_work and sync_attempts.
+// live transport answers each wire route. What is pinned: the legacy writes
+// (pages, subscriptions, follows, fans, lookups, probes) land in the apply
+// transaction; every walk keeps its position in its work row; the refusals the
+// legacy chunks threw are outcomes (restart, refused, quarantine) that never
+// retry by themselves.
 
 let testDb: StartedTestDatabase | null = null;
 
@@ -114,22 +111,20 @@ function fanAccount(id: string, extra: Record<string, unknown> = {}) {
 
 /** A registry of every Fansly entry whose standing polls are parked far ahead,
  *  so only the work a test makes due runs. */
-async function quietRegistry(pageId: number, shadow: boolean): Promise<EngineRegistry> {
+async function quietRegistry(pageId: number): Promise<EngineRegistry> {
   const registry = createEngineRegistry(FANSLY_RESOURCE_SPECS);
   const page = await getSyncPage(db(), pageId);
   await ensurePollRows(db(), {
     pageId,
-    shadow,
-    polls: pollsFor(registry, page!, shadow).map((poll) => ({ ...poll, phase: 0.999 })),
+    polls: pollsFor(registry, page!).map((poll) => ({ ...poll, phase: 0.999 })),
   });
   return registry;
 }
 
-async function makeDue(pageId: number, shadow: boolean, resource: string, extra: { subject?: string; reason?: string; params?: unknown } = {}) {
+async function makeDue(pageId: number, resource: string, extra: { subject?: string; reason?: string; params?: unknown } = {}) {
   const spec = fanslyResourceSpec(resource)!;
   await upsertDemand(db(), {
     pageId,
-    shadow,
     resource,
     kind: spec.kind,
     class: spec.class,
@@ -140,13 +135,9 @@ async function makeDue(pageId: number, shadow: boolean, resource: string, extra:
 }
 
 async function seedPage(
-  mode: "live" | "shadow",
   facts: { followerCount?: number | null; subscriberCount?: number; verifiedAgoMs?: number; externalId?: string | null } = {},
 ) {
-  const { pageId } = await seedSyncPage({ db: db(), pool: testDb!.pool }, {
-    mode,
-    guard: mode === "live" ? "fansly_sync_engine" : null,
-  });
+  const { pageId } = await seedSyncPage({ db: db(), pool: testDb!.pool }, { mode: "live", guard: "fansly_sync_engine" });
   await testDb!.pool.query(
     `update pages set external_page_id = $2, follower_count = $3, subscriber_count = $4,
             last_verified_at = clock_timestamp() - $5::double precision * interval '1 millisecond'
@@ -169,30 +160,28 @@ async function runLive(
   until: () => Promise<boolean>,
   options: { alerts?: RecordingAlerts; metrics?: RecordingMetrics } = {},
 ) {
-  const registry = await quietRegistry(pageId, false);
-  return { registry, ...(await drive(pageId, "live", registry, respond, until, options)) };
+  const registry = await quietRegistry(pageId);
+  return { registry, ...(await drive(pageId, registry, respond, until, options)) };
 }
 
 async function drive(
   pageId: number,
-  mode: "live" | "shadow",
   registry: EngineRegistry,
-  respond: Responder | null,
+  respond: Responder,
   until: () => Promise<boolean>,
   options: { alerts?: RecordingAlerts; metrics?: RecordingMetrics } = {},
 ) {
-  const transport = respond === null ? undefined : new ScriptedLiveTransport();
-  if (transport !== undefined && respond !== null) transport.respond = (req) => respond(req);
+  const transport = new ScriptedLiveTransport();
+  transport.respond = (req) => respond(req);
   const alerts = options.alerts ?? new RecordingAlerts();
   const metrics = options.metrics ?? new RecordingMetrics();
   const { actor, stop, abort } = await makeTestActor({
     db: db(),
     pageId,
-    mode,
     registry,
     alerts,
     metrics,
-    ...(transport === undefined ? {} : { transport }),
+    transport,
   });
   const run = actor.run({ stop: stop.signal, abort: abort.signal });
   try {
@@ -201,17 +190,17 @@ async function drive(
     stop.abort();
     await run;
   }
-  return { hits: transport?.hits.map((hit) => hit.spec) ?? [], alerts, metrics };
+  return { hits: transport.hits.map((hit) => hit.spec), alerts, metrics };
 }
 
-async function workRow(pageId: number, resource: string, shadow = false) {
+async function workRow(pageId: number, resource: string) {
   const result = await testDb!.pool.query<{
     state: string; cursor: Record<string, unknown>; proof: Record<string, unknown> | null; result: Record<string, unknown> | null;
     waiting_reason: string | null; due_at: Date; params: Record<string, unknown>; last_error_class: string | null;
   }>(
     `select state, cursor, proof, result, waiting_reason, due_at, params, last_error_class from sync_work
-      where page_id = $1 and resource = $2 and shadow = $3 order by id desc limit 1`,
-    [pageId, resource, shadow],
+      where page_id = $1 and resource = $2 and not shadow order by id desc limit 1`,
+    [pageId, resource],
   );
   return result.rows[0] ?? null;
 }
@@ -223,8 +212,8 @@ async function appliedAttempts(pageId: number, resource: string): Promise<number
 describe("account.poll", () => {
   it("writes the page's identity, counters and light timestamp, and records the identity", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live", { externalId: null, verifiedAgoMs: 5 * 3_600_000 });
-    await makeDue(pageId, false, "account.poll");
+    const pageId = await seedPage({ externalId: null, verifiedAgoMs: 5 * 3_600_000 });
+    await makeDue(pageId, "account.poll");
     const { hits } = await runLive(pageId, () => okResponse(accountMe(OWN_ID, { followCount: 42, subscriberCount: 7 })),
       async () => (await appliedAttempts(pageId, "account.poll")) === 1);
 
@@ -252,8 +241,8 @@ describe("account.poll", () => {
 
   it("an answer for another account holds the page and quarantines the step", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
-    await makeDue(pageId, false, "account.poll");
+    const pageId = await seedPage();
+    await makeDue(pageId, "account.poll");
     const alerts = new RecordingAlerts();
     await runLive(pageId, () => okResponse(accountMe("399999999999999999")),
       async () => (await workRow(pageId, "account.poll"))?.state === "quarantined", { alerts });
@@ -274,8 +263,8 @@ describe("account.identity", () => {
       { externalId: "300000000000000002", answer: "399999999999999999", closeReason: "identity_differs", matches: false },
     ];
     for (const { externalId, answer, closeReason, matches } of cases) {
-      const pageId = await seedPage("live", { externalId, followerCount: 5, subscriberCount: 4, verifiedAgoMs: 3 * 3_600_000 });
-      await makeDue(pageId, false, "account.identity", { params: { candidate: { generation: "candidate-1" } } });
+      const pageId = await seedPage({ externalId, followerCount: 5, subscriberCount: 4, verifiedAgoMs: 3 * 3_600_000 });
+      await makeDue(pageId, "account.identity", { params: { candidate: { generation: "candidate-1" } } });
       const { hits } = await runLive(pageId, () => okResponse(accountMe(answer, { followCount: 42, subscriberCount: 7 })),
         async () => (await workRow(pageId, "account.identity"))?.state === "done");
 
@@ -304,7 +293,7 @@ describe("account.identity", () => {
 describe("subscribers.poll", () => {
   it("walks the page, retires the unseen subscription, and asks the lookup walk for the new fans' profiles", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live", { subscriberCount: 2 });
+    const pageId = await seedPage({ subscriberCount: 2 });
     // A current subscription the walk will not serve, last seen long before.
     const [stale] = await upsertFans(db(), [{ platform: "fansly", platformUserId: "500000000000000009" }]);
     await testDb.pool.query(
@@ -313,7 +302,7 @@ describe("subscribers.poll", () => {
        values ('sub-stale', $1, $2, 3, 'active', 0, 0, true, clock_timestamp() - interval '2 days')`,
       [pageId, stale!.id],
     );
-    await makeDue(pageId, false, "subscribers.poll");
+    await makeDue(pageId, "subscribers.poll");
     const served = [subscription("sub-1", "500000000000000001"), subscription("sub-2", "500000000000000002")];
     const { hits } = await runLive(pageId, (req) => {
       if (req.spec === "subscribers.page") return okResponse(subscribersPage(served, 2));
@@ -356,8 +345,8 @@ describe("subscribers.poll", () => {
 
   it("waits for a fresh /account/me counter and makes account.poll due", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live", { verifiedAgoMs: 3 * 3_600_000 });
-    await makeDue(pageId, false, "subscribers.poll");
+    const pageId = await seedPage({ verifiedAgoMs: 3 * 3_600_000 });
+    await makeDue(pageId, "subscribers.poll");
     const { hits } = await runLive(pageId, (req) => {
       if (req.spec === "account.me") return okResponse(accountMe(OWN_ID));
       throw new Error(`unexpected ${req.spec}`);
@@ -370,7 +359,7 @@ describe("subscribers.poll", () => {
   it("refuses a stated zero it cannot explain: nothing retired, the poll waits for its period", async (context) => {
     if (!testDb) return context.skip();
     // Six current subscriptions, none lapsed, and a counter that is not 0.
-    const pageId = await seedPage("live", { subscriberCount: 6 });
+    const pageId = await seedPage({ subscriberCount: 6 });
     const fans = await upsertFans(db(), Array.from({ length: 6 }, (_, index) => ({
       platform: "fansly" as const,
       platformUserId: `51000000000000000${index}`,
@@ -383,7 +372,7 @@ describe("subscribers.poll", () => {
         [pageId, fan.id, `sub-${index}`],
       );
     }
-    await makeDue(pageId, false, "subscribers.poll");
+    await makeDue(pageId, "subscribers.poll");
     const metrics = new RecordingMetrics();
     await runLive(pageId, () => okResponse(subscribersPage([], 0)),
       async () => (await appliedAttempts(pageId, "subscribers.poll")) === 1, { metrics });
@@ -398,8 +387,8 @@ describe("subscribers.poll", () => {
 
   it("restarts a walk whose total moved under it, with a fresh generation after 60 s", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live", { subscriberCount: 150 });
-    await makeDue(pageId, false, "subscribers.poll");
+    const pageId = await seedPage({ subscriberCount: 150 });
+    await makeDue(pageId, "subscribers.poll");
     const first = Array.from({ length: 100 }, (_, index) => subscription(`sub-${index}`, `52${String(index).padStart(16, "0")}`));
     await runLive(pageId, (req) => {
       if (req.spec === "subscribers.page") {
@@ -419,7 +408,7 @@ describe("subscribers.poll", () => {
 
   it("a one-page answer short of its own total restarts at most twice, then closes withheld at the poll's period", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live", { subscriberCount: 3 });
+    const pageId = await seedPage({ subscriberCount: 3 });
     // A current subscription the short answer leaves out: never retired.
     const [unseen] = await upsertFans(db(), [{ platform: "fansly", platformUserId: "530000000000000009" }]);
     await testDb.pool.query(
@@ -428,7 +417,7 @@ describe("subscribers.poll", () => {
        values ('sub-unseen', $1, $2, 3, 'active', 0, 0, true, clock_timestamp() - interval '2 days')`,
       [pageId, unseen!.id],
     );
-    await makeDue(pageId, false, "subscribers.poll");
+    await makeDue(pageId, "subscribers.poll");
     const served = [subscription("sub-1", "530000000000000001"), subscription("sub-2", "530000000000000002")];
     const restarts: unknown[] = [];
     const { hits } = await runLive(pageId, (req) => {
@@ -479,7 +468,7 @@ describe("subscribers.poll", () => {
 
   it("a row served on two pages restarts the walk twice, then closes withheld with its membership evidence", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live", { subscriberCount: 150 });
+    const pageId = await seedPage({ subscriberCount: 150 });
     const [unseen] = await upsertFans(db(), [{ platform: "fansly", platformUserId: "540000000000000999" }]);
     await testDb.pool.query(
       `insert into page_subscriptions (platform_subscription_id, platform_account_id, fan_id, raw_status, canonical_status,
@@ -487,7 +476,7 @@ describe("subscribers.poll", () => {
        values ('sub-unseen', $1, $2, 3, 'active', 0, 0, true, clock_timestamp() - interval '2 days')`,
       [pageId, unseen!.id],
     );
-    await makeDue(pageId, false, "subscribers.poll");
+    await makeDue(pageId, "subscribers.poll");
     const all = Array.from({ length: 150 }, (_, index) => subscription(`sub-${index}`, `54${String(index).padStart(16, "0")}`));
     // The second page repeats the first row in place of the 150th: 150 rows
     // served, as stated, but only 149 distinct.
@@ -535,7 +524,7 @@ describe("subscribers.poll", () => {
 describe("followers", () => {
   it("head: new follows above the known one, presence from the served page, the reconcile decision", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live", { followerCount: 5 });
+    const pageId = await seedPage({ followerCount: 5 });
     // The legacy reconcile walked an hour ago: the owner floor holds a new one.
     await testDb.pool.query(
       "insert into page_sync_cursors (page_id, stream, state) values ($1, 'followers_reconcile', $2::jsonb)",
@@ -544,7 +533,7 @@ describe("followers", () => {
     const now = new Date();
     const known = followId(new Date(now.getTime() - 3 * 86_400_000));
     const newer = [followId(new Date(now.getTime() - 60_000), 2), followId(new Date(now.getTime() - 120_000), 1)];
-    await upsertDemand(db(), { pageId, shadow: false, resource: "followers.head", kind: "poll", class: "planned" });
+    await upsertDemand(db(), { pageId, resource: "followers.head", kind: "poll", class: "planned" });
     await testDb.pool.query("update sync_work set cursor = $2 where page_id = $1 and resource = 'followers.head'", [pageId, JSON.stringify({ knownFollowId: known })]);
     const page = {
       followers: [
@@ -589,8 +578,8 @@ describe("followers", () => {
 
   it("head: a follower count /account/me omitted stays unknown — no stated total today, no count mismatch", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live", { followerCount: null });
-    await upsertDemand(db(), { pageId, shadow: false, resource: "followers.head", kind: "poll", class: "planned" });
+    const pageId = await seedPage({ followerCount: null });
+    await upsertDemand(db(), { pageId, resource: "followers.head", kind: "poll", class: "planned" });
     const now = new Date();
     const follows = [followId(now, 2), followId(new Date(now.getTime() - 1_000), 1)];
     const page = {
@@ -614,14 +603,14 @@ describe("followers", () => {
 
   it("reconcile: account, every page, terminal account — membership proven, the unseen follow retired", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live", { followerCount: 3 });
+    const pageId = await seedPage({ followerCount: 3 });
     const [gone] = await upsertFans(db(), [{ platform: "fansly", platformUserId: "610000000000000009" }]);
     await testDb.pool.query(
       `insert into page_follows (platform_account_id, fan_id, platform_follow_id, followed_at, first_seen_at, last_seen_at, is_active)
        values ($1, $2, '1000', clock_timestamp() - interval '30 days', clock_timestamp() - interval '30 days', clock_timestamp() - interval '2 days', true)`,
       [pageId, gone!.id],
     );
-    await makeDue(pageId, false, "followers.reconcile", { reason: "owner" });
+    await makeDue(pageId, "followers.reconcile", { reason: "owner" });
     const now = Date.now();
     const served = {
       followers: [
@@ -651,14 +640,14 @@ describe("followers", () => {
 
   it("reconcile: a count the walk cannot reproduce restarts twice after 15 min, then closes without retiring anything", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live", { followerCount: 5 });
+    const pageId = await seedPage({ followerCount: 5 });
     const [kept] = await upsertFans(db(), [{ platform: "fansly", platformUserId: "615000000000000009" }]);
     await testDb.pool.query(
       `insert into page_follows (platform_account_id, fan_id, platform_follow_id, followed_at, first_seen_at, last_seen_at, is_active)
        values ($1, $2, '1000', clock_timestamp() - interval '30 days', clock_timestamp() - interval '30 days', clock_timestamp() - interval '2 days', true)`,
       [pageId, kept!.id],
     );
-    await makeDue(pageId, false, "followers.reconcile", { reason: "owner" });
+    await makeDue(pageId, "followers.reconcile", { reason: "owner" });
     const now = Date.now();
     const served = {
       followers: [
@@ -707,7 +696,7 @@ describe("followers", () => {
 
   it("reconcile: a deactivation past the safety ceiling is quarantined, nothing retired", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live", { followerCount: 2 });
+    const pageId = await seedPage({ followerCount: 2 });
     const fans = await upsertFans(db(), Array.from({ length: 60 }, (_, index) => ({
       platform: "fansly" as const,
       platformUserId: `62${String(index).padStart(16, "0")}`,
@@ -719,7 +708,7 @@ describe("followers", () => {
         [pageId, fan.id, String(2000 + index)],
       );
     }
-    await makeDue(pageId, false, "followers.reconcile", { reason: "owner" });
+    await makeDue(pageId, "followers.reconcile", { reason: "owner" });
     const now = Date.now();
     const served = {
       followers: [
@@ -750,7 +739,7 @@ describe("followers", () => {
 describe("fan-profiles", () => {
   it("probe: an unresolvable partner is recorded and its conversation excluded from message sync", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
+    const pageId = await seedPage();
     const partner = "650000000000000001";
     const [fan] = await upsertFans(db(), [{ platform: "fansly", platformUserId: partner }]);
     await testDb.pool.query("insert into page_fans (fan_id, platform_account_id) values ($1, $2)", [fan!.id, pageId]);
@@ -761,7 +750,7 @@ describe("fan-profiles", () => {
       lastMessageSenderRole: "fan", lastMessagePreview: null, lastSeenGeneration: null,
     });
     const conversationId = Number((conversation as { id: number }).id);
-    await makeDue(pageId, false, "fan-profiles.probe", { subject: partner, params: { conversationId } });
+    await makeDue(pageId, "fan-profiles.probe", { subject: partner, params: { conversationId } });
     await runLive(pageId, () => okResponse([]), async () => (await workRow(pageId, "fan-profiles.probe"))?.state === "done");
 
     const probe = await testDb.pool.query("select account_probe_resolved from page_fans where fan_id = $1 and platform_account_id = $2", [fan!.id, pageId]);
@@ -773,7 +762,7 @@ describe("fan-profiles", () => {
 
   it("alias backfill: every fan of the page in keyset batches of 100", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
+    const pageId = await seedPage();
     const fans = await upsertFans(db(), Array.from({ length: 101 }, (_, index) => ({
       platform: "fansly" as const,
       platformUserId: `66${String(index).padStart(16, "0")}`,
@@ -781,7 +770,7 @@ describe("fan-profiles", () => {
     for (const fan of fans) {
       await testDb.pool.query("insert into page_fans (fan_id, platform_account_id) values ($1, $2)", [fan.id, pageId]);
     }
-    await makeDue(pageId, false, "fan-profiles.alias-backfill", { reason: "owner" });
+    await makeDue(pageId, "fan-profiles.alias-backfill", { reason: "owner" });
     const batches: number[] = [];
     await runLive(pageId, (req) => {
       const ids = (requestParam(req, "ids") ?? "").split(",");
@@ -798,70 +787,16 @@ describe("fan-profiles", () => {
   });
 });
 
-describe("shadow", () => {
-  it("plans, paces and journals the audience resources, writing nothing but its own work and attempts", async (context) => {
-    if (!testDb) return context.skip();
-    const pageId = await seedPage("shadow", { followerCount: 150, subscriberCount: 1 });
-    const registry = await quietRegistry(pageId, true);
-    for (const key of ["account.poll", "subscribers.poll", "followers.head"]) await makeDue(pageId, true, key);
-    const before = await tableCounts(testDb.pool);
-    const metrics = new RecordingMetrics();
-    await drive(pageId, "shadow", registry, null, async () => {
-      const reconcile = await workRow(pageId, "followers.reconcile", true);
-      return reconcile?.state === "done";
-    }, { metrics });
-
-    const attempts = await testDb.pool.query<{ resource: string; operation: string; n: number }>(
-      `select resource, operation, count(*)::int as n from sync_attempts
-        where page_id = $1 and shadow and outcome = 'shadow' and apply_state = 'skipped'
-        group by 1, 2 order by 1, 2`,
-      [pageId],
-    );
-    // The reconcile the head decision asked for (150 follows stated, none
-    // stored ⇒ mismatch): start and terminal /account/me around two pages.
-    expect(attempts.rows).toEqual([
-      { resource: "account.poll", operation: "account.me", n: 1 },
-      { resource: "followers.head", operation: "followers.page", n: 1 },
-      { resource: "followers.reconcile", operation: "account.me", n: 2 },
-      { resource: "followers.reconcile", operation: "followers.page", n: 2 },
-      { resource: "subscribers.poll", operation: "subscribers.page", n: 1 },
-    ]);
-    expect(await countRows(testDb.pool, "select count(*)::int as n from sync_attempts where page_id = $1 and not shadow", [pageId])).toBe(0);
-    const after = await tableCounts(testDb.pool);
-    expect(changedTables(before, after)).toEqual(["sync_attempts", "sync_work"]);
-    const page = await testDb.pool.query("select identity_account_id from sync_pages where page_id = $1", [pageId]);
-    expect(page.rows[0].identity_account_id).toBeNull();
-  });
-});
-
 describe("the lookup walk's ids", () => {
   it("merge into the open row as a set, the first asked kept, at most the cap", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
-    const base = { pageId, shadow: false, resource: "fan-profiles.lookup", kind: "goal" as const, class: "planned" as const };
+    const pageId = await seedPage();
+    const base = { pageId, resource: "fan-profiles.lookup", kind: "goal" as const, class: "planned" as const };
     const first = await upsertDemand(db(), { ...base, mergeParamIds: { key: "ids", ids: ["3", "1", "3"], cap: 4 } });
     const second = await upsertDemand(db(), { ...base, mergeParamIds: { key: "ids", ids: ["2", "1", "5", "6"], cap: 4 } });
     expect(second.id).toBe(first.id);
     expect(second.demandRevision).toBe(first.demandRevision + 1);
     const row = await workRow(pageId, "fan-profiles.lookup");
     expect(row!.params).toEqual({ ids: ["3", "1", "2", "5"] });
-  });
-
-  it("in shadow, the due ids are walked by keyset without stamping anything", async (context) => {
-    if (!testDb) return context.skip();
-    const pageId = await seedPage("shadow");
-    const registry = await quietRegistry(pageId, true);
-    const ids = Array.from({ length: 150 }, (_, index) => `67${String(index).padStart(16, "0")}`);
-    await upsertDemand(db(), {
-      pageId, shadow: true, resource: "fan-profiles.lookup", kind: "goal", class: "planned",
-      mergeParamIds: { key: "ids", ids, cap: 1_000 },
-    });
-    await drive(pageId, "shadow", registry, null, async () => (await workRow(pageId, "fan-profiles.lookup", true))?.state === "done");
-    const attempts = await testDb.pool.query<{ ids: string }>(
-      "select request -> 'query' ->> 'ids' as ids from sync_attempts where page_id = $1 and resource = 'fan-profiles.lookup' order by id",
-      [pageId],
-    );
-    expect(attempts.rows.map((row) => row.ids.split(",").length)).toEqual([100, 50]);
-    expect(await countRows(testDb.pool, "select count(*)::int as n from page_fans where platform_account_id = $1", [pageId])).toBe(0);
   });
 });

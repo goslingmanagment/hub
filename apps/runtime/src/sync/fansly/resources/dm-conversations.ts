@@ -2,12 +2,10 @@ import { sql } from "drizzle-orm";
 
 import {
   countPageDmThreadsByGeneration,
-  countPageDmVisibleThreads,
   getSyncPage,
   listOpenWorkSubjects,
   listPageDmThreadIdsStampedWithGeneration,
   listPageDmThreadListStates,
-  listPageDmThreadListStatesByRecency,
   maxPageDmThreadGeneration,
   readDmFindSharedRead,
   readFanslyAccountProbe,
@@ -25,7 +23,6 @@ import {
   type FanslyMessagingGroupsPage,
 } from "@agency_hub_core/fansly";
 import {
-  FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS,
   FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
   getFanslyDmMessageSyncExcludedReason,
 } from "@agency_hub_core/shared";
@@ -39,7 +36,6 @@ import type {
   LocalApplyInput,
   RequestPlan,
   ResourceModule,
-  ShadowResult,
   StepPlan,
   WorkOutcome,
 } from "../../engine/resource.ts";
@@ -55,7 +51,6 @@ import {
   type ListHeadFollowupState,
   type ResolvedListItem,
 } from "../lib/conversation-list.ts";
-import { advanceShadowWalk, offsetWalkPages, type ShadowWalkProgress } from "../lib/offset-walk.ts";
 import { readFanslyPageFacts, waitForPageIdentity } from "../lib/page-facts.ts";
 
 // `dm-conversations.head`, `.full`, `.find`, `.detail`, `.ws-down` (plan §6.2,
@@ -159,13 +154,6 @@ function requestedOffset(request: RequestPlan): number | null {
   return count(recordOf(request.params).offset);
 }
 
-function parseShadow(value: unknown): ShadowWalkProgress | null {
-  const record = recordOf(value);
-  const steps = count(record.steps);
-  const done = count(record.done);
-  return steps === null || done === null ? null : { steps, done };
-}
-
 /** The engine's start on the page: chats whose head is later began under it. */
 function engineStartAt(page: Pick<SyncPageRow, "legacyImportedAt" | "modeChangedAt"> | null): Date | null {
   return page === null ? null : page.legacyImportedAt ?? page.modeChangedAt;
@@ -193,12 +181,12 @@ async function pageAccountIdOrQuarantine(db: Database, pageId: number): Promise<
 /** Plans that need the page's own account id (to tell the partner from the page). */
 async function planWithIdentity(
   key: string,
-  ctx: { db: Database; pageId: number; shadow: boolean; now: Date },
+  ctx: { db: Database; pageId: number },
   request: () => StepPlan | Promise<StepPlan>,
 ): Promise<StepPlan> {
   const facts = await readFanslyPageFacts(ctx.db, ctx.pageId);
   if (facts === null) return { kind: "quarantine", reason: "page_missing" };
-  if (facts.externalId === null) return waitForPageIdentity(key, ctx.shadow, ctx.now);
+  if (facts.externalId === null) return waitForPageIdentity(key);
   return request();
 }
 
@@ -243,12 +231,11 @@ interface FollowupThread {
  */
 async function threadFollowups(
   db: Database,
-  input: { pageId: number; shadow: boolean; key: string; engineStartAt: Date | null; threads: readonly FollowupThread[] },
+  input: { pageId: number; key: string; engineStartAt: Date | null; threads: readonly FollowupThread[] },
 ): Promise<{ followups: DemandSignal[]; counters: Record<string, number> }> {
   const needRead = input.threads.filter((thread) => listHeadNeedsRead(thread.state, input.engineStartAt));
   const openFinds = await listOpenWorkSubjects(db, {
     pageId: input.pageId,
-    shadow: input.shadow,
     resource: FIND_KEY,
     subjects: needRead.filter((thread) => thread.followupClass === "planned").map((thread) => thread.state.groupId),
   });
@@ -256,7 +243,6 @@ async function threadFollowups(
     thread.followupClass === "planned" && openFinds.has(thread.state.groupId) ? "urgent" : thread.followupClass;
   const openHeads = await listOpenWorkSubjects(db, {
     pageId: input.pageId,
-    shadow: input.shadow,
     resource: MESSAGES_HEAD_KEY,
     subjects: needRead.filter((thread) => classOf(thread) === "planned").map((thread) => thread.state.groupId),
   });
@@ -437,7 +423,6 @@ export async function applyListPage(
   }
   const followups = await threadFollowups(tx, {
     pageId: input.pageId,
-    shadow: false,
     key: input.key,
     engineStartAt: engineStartAt(page),
     threads,
@@ -507,7 +492,6 @@ async function applyGroupDetail(
   const page = await getSyncPage(tx, input.pageId);
   const followups = await threadFollowups(tx, {
     pageId: input.pageId,
-    shadow: false,
     key: input.key,
     engineStartAt: engineStartAt(page),
     threads: [{
@@ -541,48 +525,6 @@ async function applyGroupDetail(
   };
 }
 
-// ── shadow estimates ────────────────────────────────────────────────────────
-
-/** The follow-ups a live read of these threads would ask for, judged on what
- *  the database holds (the list head legacy last stored stands for the served
- *  one). Never writes. */
-async function shadowFollowups(
-  db: Database,
-  input: { pageId: number; key: string; page: SyncPageRow; now: Date; states: readonly PageDmThreadListState[]; classOf: (groupId: string) => FollowupClass },
-): Promise<{ followups: DemandSignal[]; counters: Record<string, number> }> {
-  const probes = await freshProbeAnswers(db, { pageId: input.pageId, states: input.states, now: input.now });
-  const threads = input.states.map((state): FollowupThread => {
-    const reason = getFanslyDmMessageSyncExcludedReason(state.metadata);
-    const partner = state.partnerPlatformUserId;
-    return {
-      state: {
-        groupId: state.platformConversationId,
-        fanId: state.fanId,
-        metadata: state.metadata,
-        headConfirmedId: state.headConfirmedId,
-        newestStoredMessageId: state.newestStoredMessageId,
-        listHeadId: state.lastMessageId,
-        listHeadAt: listHeadInstant(state.lastMessageId, state.lastMessageAt),
-      },
-      threadId: state.id,
-      partnerId: partner,
-      probeDue: reason === FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP &&
-        partner !== null && !probes.has(partner),
-      requestGroupDetail: partner === null &&
-        reason !== FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS,
-      followupClass: input.classOf(state.platformConversationId),
-    };
-  });
-  const result = await threadFollowups(db, {
-    pageId: input.pageId,
-    shadow: true,
-    key: input.key,
-    engineStartAt: engineStartAt(input.page),
-    threads,
-  });
-  return { followups: result.followups, counters: mergeCounters({ simulated_chats: threads.length }, result.counters) };
-}
-
 // ── head ────────────────────────────────────────────────────────────────────
 
 interface HeadWalk {
@@ -612,10 +554,7 @@ export function parseDmListHeadCursor(value: unknown): DmListHeadCursor {
 const headModule: ResourceModule = {
   async plan(work, ctx): Promise<StepPlan> {
     const cursor = parseDmListHeadCursor(work.cursor);
-    return planWithIdentity(HEAD_KEY, ctx, () => ({
-      kind: "request",
-      request: listRequest(ctx.shadow ? 0 : cursor.walk?.offset ?? 0),
-    }));
+    return planWithIdentity(HEAD_KEY, ctx, () => ({ kind: "request", request: listRequest(cursor.walk?.offset ?? 0) }));
   },
 
   async apply(tx, input: ApplyInput): Promise<ApplyResult> {
@@ -652,17 +591,6 @@ const headModule: ResourceModule = {
       counters: outcome.counters,
     };
   },
-
-  async shadow(work, _request, ctx): Promise<ShadowResult> {
-    // One page (design §5.3): the newest chats as the database holds them.
-    const states = await listPageDmThreadListStatesByRecency(ctx.db, { platformAccountId: ctx.pageId, offset: 0, limit: LIMIT });
-    const estimate = await shadowFollowups(ctx.db, { pageId: ctx.pageId, key: HEAD_KEY, page: ctx.page, now: ctx.now, states, classOf: () => "planned" });
-    return {
-      work: { satisfiesRevision: true, close: "done", closeReason: "shadow", cursor: parseDmListHeadCursor(work.cursor) },
-      followups: estimate.followups,
-      counters: estimate.counters,
-    };
-  },
 };
 
 // ── full ────────────────────────────────────────────────────────────────────
@@ -690,7 +618,6 @@ export interface DmListFullCursor {
   /** The next walk restarts an abandoned one (its restart count). */
   restartCount: number;
   last: Record<string, unknown> | null;
-  shadow: ShadowWalkProgress | null;
 }
 
 export function parseDmListFullCursor(value: unknown): DmListFullCursor {
@@ -713,7 +640,6 @@ export function parseDmListFullCursor(value: unknown): DmListFullCursor {
     },
     restartCount: count(record.restartCount) ?? 0,
     last: typeof record.last === "object" && record.last !== null ? record.last as Record<string, unknown> : null,
-    shadow: parseShadow(record.shadow),
   };
 }
 
@@ -734,7 +660,7 @@ function restartOrWithhold(
         satisfiesRevision: false,
         nextDueAt: new Date(now.getTime() + DM_LIST_WALK_RESTART_DELAY_MS),
         waitingReason: "not_due",
-        cursor: { ...cursor, generation: walk.generation, walk: null, restartCount: walk.restartCount + 1, shadow: null },
+        cursor: { ...cursor, generation: walk.generation, walk: null, restartCount: walk.restartCount + 1 },
         result: { restartReason: reason, restartCount: walk.restartCount + 1, pageCount: walk.pageCount, ...detail },
       },
       followups: [],
@@ -756,7 +682,7 @@ function restartOrWithhold(
       satisfiesRevision: true,
       close: "done",
       closeReason: "walk_withheld",
-      cursor: { ...cursor, generation: walk.generation, walk: null, restartCount: 0, last: receipt, shadow: null },
+      cursor: { ...cursor, generation: walk.generation, walk: null, restartCount: 0, last: receipt },
       result: receipt,
     },
     followups: [],
@@ -764,19 +690,10 @@ function restartOrWithhold(
   };
 }
 
-/** The pages a full sweep of the list reads: the page's visible chats at
- *  `LIMIT` a page, the list stating no total, so it ends on a short page (the
- *  shadow's estimate at a sweep's start). */
-async function fullSweepPages(db: Database, pageId: number): Promise<number> {
-  const total = await countPageDmVisibleThreads(db, pageId);
-  return offsetWalkPages({ total, limit: LIMIT, statedTotal: false });
-}
-
 const fullModule: ResourceModule = {
   async plan(work, ctx): Promise<StepPlan> {
     const cursor = parseDmListFullCursor(work.cursor);
-    const offset = ctx.shadow ? (cursor.shadow?.done ?? 0) * LIMIT : cursor.walk?.offset ?? 0;
-    return planWithIdentity(FULL_KEY, ctx, () => ({ kind: "request", request: listRequest(offset) }));
+    return planWithIdentity(FULL_KEY, ctx, () => ({ kind: "request", request: listRequest(cursor.walk?.offset ?? 0) }));
   },
 
   async apply(tx, input: ApplyInput): Promise<ApplyResult> {
@@ -828,7 +745,7 @@ const fullModule: ResourceModule = {
         work: {
           satisfiesRevision: false,
           nextDueAt: input.now,
-          cursor: { ...cursor, generation: walk.generation, walk: { ...next, offset: walk.offset + LIMIT }, shadow: null },
+          cursor: { ...cursor, generation: walk.generation, walk: { ...next, offset: walk.offset + LIMIT } },
         },
         followups: outcome.followups,
         counters,
@@ -854,35 +771,12 @@ const fullModule: ResourceModule = {
         satisfiesRevision: true,
         close: "done",
         closeReason: "walk_complete",
-        cursor: { ...cursor, generation: walk.generation, walk: null, restartCount: 0, last: receipt, shadow: null },
+        cursor: { ...cursor, generation: walk.generation, walk: null, restartCount: 0, last: receipt },
         proof: receipt,
       },
       followups: outcome.followups,
       counters,
     };
-  },
-
-  async shadow(work, _request, ctx): Promise<ShadowResult> {
-    const cursor = parseDmListFullCursor(work.cursor);
-    const pages = cursor.shadow === null ? await fullSweepPages(ctx.db, ctx.pageId) : cursor.shadow.steps;
-    const step = advanceShadowWalk(cursor.shadow, () => pages);
-    const states = await listPageDmThreadListStatesByRecency(ctx.db, {
-      platformAccountId: ctx.pageId,
-      offset: (step.progress.done - 1) * LIMIT,
-      limit: LIMIT,
-    });
-    const estimate = await shadowFollowups(ctx.db, { pageId: ctx.pageId, key: FULL_KEY, page: ctx.page, now: ctx.now, states, classOf: () => "planned" });
-    return step.finished
-      ? {
-        work: { satisfiesRevision: true, close: "done", closeReason: "shadow", cursor: { ...cursor, shadow: null } },
-        followups: estimate.followups,
-        counters: estimate.counters,
-      }
-      : {
-        work: { satisfiesRevision: false, nextDueAt: ctx.now, cursor: { ...cursor, shadow: step.progress } },
-        followups: estimate.followups,
-        counters: estimate.counters,
-      };
   },
 };
 
@@ -915,11 +809,10 @@ function sharedReadResult(groupId: string, read: DmFindSharedRead["headRead"]): 
 }
 
 /** What the page's reads since this find's first demand tell it. */
-function findSharedRead(db: Database, input: { workId: number; pageId: number; shadow: boolean; groupId: string }): Promise<DmFindSharedRead> {
+function findSharedRead(db: Database, input: { workId: number; pageId: number; groupId: string }): Promise<DmFindSharedRead> {
   return readDmFindSharedRead(db, {
     workId: input.workId,
     pageId: input.pageId,
-    shadow: input.shadow,
     platformConversationId: input.groupId,
     listOperation: LIST_ROUTE,
     listKeys: DM_LIST_READ_KEYS,
@@ -937,15 +830,7 @@ const findModule: ResourceModule = {
     if (groupId.length === 0) return { kind: "quarantine", reason: "find_without_chat" };
     const cursor = parseFindCursor(work.cursor);
     return planWithIdentity(FIND_KEY, ctx, async (): Promise<StepPlan> => {
-      const shared = await findSharedRead(ctx.db, { workId: work.id, pageId: ctx.pageId, shadow: ctx.shadow, groupId });
-      if (ctx.shadow) {
-        // The live burst, modelled: a list head read since the demand answers
-        // the find with no request (its estimate asked the reads of the chats
-        // the database knows); else the find reads the list itself.
-        return shared.headRead === null
-          ? { kind: "request", request: listRequest(0) }
-          : { kind: "done", reason: "shared_head_read", result: sharedReadResult(groupId, shared.headRead) };
-      }
+      const shared = await findSharedRead(ctx.db, { workId: work.id, pageId: ctx.pageId, groupId });
       // A read since the demand wrote the chat: found, nothing to send — the
       // local step makes sure its urgent message read is asked.
       if (shared.found) return { kind: "local", reason: FOUND_BY_SHARED_READ };
@@ -959,7 +844,7 @@ const findModule: ResourceModule = {
   },
 
   /**
-   * Live: a find a read since its demand answered closes, and its chat's
+   * A find a read since its demand answered closes, and its chat's
    * urgent message read is asked unless one is open — the read that wrote the
    * chat asked it when it saw this find open, but a find whose demand
    * committed while that read's apply ran was not there to be seen. Only
@@ -968,12 +853,12 @@ const findModule: ResourceModule = {
    */
   async applyLocal(tx, input: LocalApplyInput): Promise<ApplyResult> {
     const groupId = input.work.subject;
-    const shared = await findSharedRead(tx, { workId: input.work.id, pageId: input.pageId, shadow: false, groupId });
+    const shared = await findSharedRead(tx, { workId: input.work.id, pageId: input.pageId, groupId });
     // The thread is gone since the plan (an erasure ran before this step took
     // the fence): the find plans again.
     if (!shared.found) return { work: { satisfiesRevision: false, nextDueAt: input.now }, followups: [] };
     const [state] = await listPageDmThreadListStates(tx, { platformAccountId: input.pageId, platformConversationIds: [groupId] });
-    const openHead = await listOpenWorkSubjects(tx, { pageId: input.pageId, shadow: false, resource: MESSAGES_HEAD_KEY, subjects: [groupId] });
+    const openHead = await listOpenWorkSubjects(tx, { pageId: input.pageId, resource: MESSAGES_HEAD_KEY, subjects: [groupId] });
     const page = await getSyncPage(tx, input.pageId);
     const listHeadId = state?.lastMessageId ?? null;
     const needsRead = state !== undefined && !openHead.has(groupId) && listHeadNeedsRead({
@@ -1042,25 +927,6 @@ const findModule: ResourceModule = {
       counters: mergeCounters(outcome.counters, { find_not_on_list_head: 1 }),
     };
   },
-
-  async shadow(work, _request, ctx): Promise<ShadowResult> {
-    // One list read (design §5.3), shared like the live one: the urgent read
-    // of each chat a find is open for — its own and those it answers
-    // (`shared_head_read`) — if the database already knows the chat (legacy
-    // listed it meanwhile).
-    const groupId = work.subject;
-    const open = await listOpenWorkSubjects(ctx.db, { pageId: ctx.pageId, shadow: true, resource: FIND_KEY });
-    const states = await listPageDmThreadListStates(ctx.db, {
-      platformAccountId: ctx.pageId,
-      platformConversationIds: [...new Set([groupId, ...open])],
-    });
-    const estimate = await shadowFollowups(ctx.db, { pageId: ctx.pageId, key: FIND_KEY, page: ctx.page, now: ctx.now, states, classOf: () => "urgent" });
-    return {
-      work: { satisfiesRevision: true, close: "done", closeReason: "shadow" },
-      followups: estimate.followups.filter((signal) => signal.resource === MESSAGES_HEAD_KEY),
-      counters: estimate.counters,
-    };
-  },
 };
 
 // ── detail ──────────────────────────────────────────────────────────────────
@@ -1087,13 +953,9 @@ const detailModule: ResourceModule = {
       counters: applied.counters,
     };
   },
-
-  async shadow(): Promise<ShadowResult> {
-    return { work: { satisfiesRevision: true, close: "done", closeReason: "shadow" }, followups: [] };
-  },
 };
 
-// ── ws-down (live only, step 3) ─────────────────────────────────────────────
+// ── ws-down (step 3) ────────────────────────────────────────────────────────
 
 /** A socket whose receiver last proved itself longer ago than this is not
  *  up: the receiver's guard runs every 5 s, so a row it stopped touching is a
@@ -1134,11 +996,6 @@ const wsDownModule: ResourceModule = {
       ? { satisfiesRevision: true, close: "done", closeReason: "socket_up" }
       : { satisfiesRevision: true, nextDueAt: new Date(input.now.getTime() + DM_LIST_WS_DOWN_EVERY_MS) };
     return { work, followups: outcome.followups, counters: outcome.counters };
-  },
-
-  async shadow(): Promise<ShadowResult> {
-    // Live only: a shadow page never runs it (the registry's `liveOnly`).
-    return { work: { satisfiesRevision: true, close: "done", closeReason: "shadow" }, followups: [] };
   },
 };
 

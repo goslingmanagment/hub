@@ -84,7 +84,6 @@ async function liveAttempt(
 ): Promise<{ workId: number; attemptId: number }> {
   const work = await upsertDemand(db(), {
     pageId,
-    shadow: false,
     resource,
     subject: outcome.subject ?? "",
     kind: "poll",
@@ -151,10 +150,10 @@ describe("the sync_streams dataset", () => {
     // A subject's final 404 is an answer, not a failure.
     await liveAttempt(engine, "top-spenders.bootstrap", { errorClass: "subject_terminal", completedAgoS: 60 });
     // subscribers: a read in flight.
-    await upsertDemand(db(), { pageId: engine, shadow: false, resource: "subscribers.poll", kind: "poll", class: "planned" });
+    await upsertDemand(db(), { pageId: engine, resource: "subscribers.poll", kind: "poll", class: "planned" });
     await testDb!.pool.query("update sync_work set state = 'running' where page_id = $1 and resource = 'subscribers.poll'", [engine]);
     // followers: every key of the stream paused by the owner.
-    await upsertDemand(db(), { pageId: engine, shadow: false, resource: "followers.head", kind: "poll", class: "planned" });
+    await upsertDemand(db(), { pageId: engine, resource: "followers.head", kind: "poll", class: "planned" });
     await setPagePause(db(), { pageId: engine, resources: ["fan-profiles.lookup", "followers.head"] });
     // dm_messages (thread keys only): a thread read applied an hour ago and
     // closed; an older one from three days ago is outside the lookup window.
@@ -169,8 +168,12 @@ describe("the sync_streams dataset", () => {
     await closeWork((await liveAttempt(engine, "purchases.targets", {
       subject: "target-1", appliedAgoS: 2 * 86_400, completedAgoS: 2 * 86_400,
     })).workId);
-    // The shadow journal is not the page's any more.
-    await upsertDemand(db(), { pageId: engine, shadow: true, resource: "notifications.forward", kind: "poll", class: "planned" });
+    // A row shadow mode left behind is not the page's work.
+    await testDb!.pool.query(
+      `insert into sync_work (page_id, shadow, resource, subject, kind, class)
+       values ($1, true, 'notifications.forward', '', 'poll', 'planned')`,
+      [engine],
+    );
 
     const rows = await streams(engine);
     expect([...rows.keys()].sort()).toEqual(["dm_messages", "followers", "payouts", "subscribers", "top_spenders", "transactions"]);
@@ -276,7 +279,7 @@ async function oldJournal(pageId: number, n: number): Promise<void> {
     [pageId, n],
   );
   const poll = await upsertDemand(db(), {
-    pageId, shadow: false, resource: "notifications.forward", kind: "poll", class: "planned",
+    pageId, resource: "notifications.forward", kind: "poll", class: "planned",
   });
   await pool.query(
     `insert into sync_attempts (page_id, shadow, work_id, resource, subject, class, owner_generation, setting_ms,

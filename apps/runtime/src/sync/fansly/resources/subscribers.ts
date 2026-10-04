@@ -1,5 +1,3 @@
-import { sql } from "drizzle-orm";
-
 import {
   countCurrentPageSubscriptionsByGeneration,
   deactivatePageSubscriptionsByGeneration,
@@ -11,7 +9,6 @@ import {
   upsertArchivedPageSubscriptions,
   upsertFanPages,
   upsertPageSubscriptions,
-  type Database,
 } from "@agency_hub_core/db";
 import {
   FANSLY_SUBSCRIBERS_PAGE_LIMIT,
@@ -34,12 +31,11 @@ import type {
   ApplyResult,
   DemandSignal,
   ResourceModule,
-  ShadowResult,
   StepPlan,
   WorkOutcome,
 } from "../../engine/resource.ts";
-import { accountCountersFresh, accountCountersReadAt, readFanslyPageFacts } from "../lib/page-facts.ts";
-import { advanceShadowWalk, offsetPageDone, offsetWalkPages, type ShadowWalkProgress } from "../lib/offset-walk.ts";
+import { accountCountersFresh, readFanslyPageFacts } from "../lib/page-facts.ts";
+import { offsetPageDone } from "../lib/offset-walk.ts";
 import { lookupFollowups, partitionLookupIds } from "./fan-profiles.ts";
 
 // `subscribers.poll` and `subscribers.history` (plan §5, design §5.11): the
@@ -93,8 +89,6 @@ export interface SubscribersCursor {
   restartCount: number;
   /** The receipt of the last finished walk. */
   last: Record<string, unknown> | null;
-  /** Shadow: the simulated walk. */
-  shadow: ShadowWalkProgress | null;
 }
 
 function recordOf(value: unknown): Record<string, unknown> {
@@ -128,15 +122,11 @@ function parseWalk(value: unknown): SubscribersWalk | null {
 
 export function parseSubscribersCursor(value: unknown): SubscribersCursor {
   const record = recordOf(value);
-  const shadow = recordOf(record.shadow);
   return {
     generation: count(record.generation) ?? 0,
     walk: parseWalk(record.walk),
     restartCount: count(record.restartCount) ?? 0,
     last: typeof record.last === "object" && record.last !== null ? record.last as Record<string, unknown> : null,
-    shadow: count(shadow.steps) !== null && count(shadow.done) !== null
-      ? { steps: count(shadow.steps)!, done: count(shadow.done)! }
-      : null,
   };
 }
 
@@ -157,7 +147,7 @@ function restartOutcome(
     satisfiesRevision: false,
     nextDueAt: new Date(now.getTime() + SUBSCRIBERS_WALK_RESTART_DELAY_MS),
     waitingReason: "not_due",
-    cursor: { ...cursor, generation: walk.generation, walk: null, restartCount: walk.restartCount + 1, shadow: null },
+    cursor: { ...cursor, generation: walk.generation, walk: null, restartCount: walk.restartCount + 1 },
     result: { restartReason: reason, restartCount: walk.restartCount + 1, pageCount: walk.pageCount, ...detail },
   };
 }
@@ -173,14 +163,12 @@ export function subscribersModule(variant: SubscribersVariant): ResourceModule {
       if (cursor.walk === null && mode === "active") {
         const facts = await readFanslyPageFacts(ctx.db, ctx.pageId);
         if (facts === null) return { kind: "quarantine", reason: "page_missing" };
-        const readAt = await accountCountersReadAt(ctx.db, { facts, shadow: ctx.shadow });
-        if (!accountCountersFresh(readAt, ctx.now)) {
+        if (!accountCountersFresh(facts.lastVerifiedAt, ctx.now)) {
           const enqueue: DemandSignal[] = [{ resource: "account.poll", demand: { reason: `dependency:${key}` } }];
           return { kind: "wait", reason: "dependency", until: null, enqueue };
         }
       }
-      const offset = cursor.walk?.offset ?? (ctx.shadow ? (cursor.shadow?.done ?? 0) * FANSLY_SUBSCRIBERS_PAGE_LIMIT : 0);
-      return { kind: "request", request: { spec: "subscribers.page", params: { status, offset } } };
+      return { kind: "request", request: { spec: "subscribers.page", params: { status, offset: cursor.walk?.offset ?? 0 } } };
     },
 
     async apply(tx, input: ApplyInput): Promise<ApplyResult> {
@@ -289,7 +277,7 @@ export function subscribersModule(variant: SubscribersVariant): ResourceModule {
           distinctObservedCount: walk.distinctObservedCount + pageDistinctCount,
         };
         return {
-          work: { satisfiesRevision: false, nextDueAt: now, cursor: { ...cursor, generation: walk.generation, walk, shadow: null } },
+          work: { satisfiesRevision: false, nextDueAt: now, cursor: { ...cursor, generation: walk.generation, walk } },
           followups,
         };
       }
@@ -311,7 +299,7 @@ export function subscribersModule(variant: SubscribersVariant): ResourceModule {
             satisfiesRevision: true,
             close: "done",
             closeReason: "history_walked",
-            cursor: { ...cursor, generation: walk.generation, walk: null, restartCount: 0, last: receipt, shadow: null },
+            cursor: { ...cursor, generation: walk.generation, walk: null, restartCount: 0, last: receipt },
             proof: receipt,
           },
           followups,
@@ -393,34 +381,11 @@ export function subscribersModule(variant: SubscribersVariant): ResourceModule {
           satisfiesRevision: true,
           close: "done",
           closeReason: finalWithheld === null ? "walk_certified" : "walk_withheld",
-          cursor: { ...cursor, generation: walk.generation, walk: null, restartCount: 0, last: receipt, shadow: null },
+          cursor: { ...cursor, generation: walk.generation, walk: null, restartCount: 0, last: receipt },
           proof: receipt,
         },
         followups,
         ...(finalWithheld === null ? {} : { counters: { walk_withheld: 1 } }),
-      };
-    },
-
-    async shadow(work, _request, ctx): Promise<ShadowResult> {
-      const cursor = parseSubscribersCursor(work.cursor);
-      const total = await countSubscriptions(ctx.db, ctx.pageId, mode);
-      const step = advanceShadowWalk(cursor.shadow, () =>
-        offsetWalkPages({ total, limit: FANSLY_SUBSCRIBERS_PAGE_LIMIT, statedTotal: true }));
-      if (!step.finished) {
-        return { work: { satisfiesRevision: false, nextDueAt: ctx.now, cursor: { ...cursor, shadow: step.progress } }, followups: [] };
-      }
-      // What the live walk would ask of the lookup walk: the current
-      // subscribers whose profile was not read through the page today.
-      const followups = mode === "active"
-        ? lookupFollowups((await partitionLookupIds(ctx.db, {
-          pageId: ctx.pageId,
-          ids: await currentSubscriberIds(ctx.db, ctx.pageId),
-          now: ctx.now,
-        })).due, key)
-        : [];
-      return {
-        work: { satisfiesRevision: true, close: "done", closeReason: "shadow", cursor: { ...cursor, shadow: null } },
-        followups,
       };
     },
   };
@@ -440,25 +405,10 @@ function refused(
       satisfiesRevision: true,
       close: "done",
       closeReason: "empty_snapshot_refused",
-      cursor: { ...cursor, generation: walk.generation, walk: null, restartCount: 0, last: { refused: receipt }, shadow: null },
+      cursor: { ...cursor, generation: walk.generation, walk: null, restartCount: 0, last: { refused: receipt } },
       result: receipt,
     },
     followups: [],
     counters: { empty_snapshot_refused: 1 },
   };
-}
-
-async function countSubscriptions(db: Database, pageId: number, mode: "active" | "expired"): Promise<number> {
-  const result = await db.execute<{ n: number | string }>(sql`
-    select count(*)::int as n from page_subscriptions
-     where platform_account_id = ${pageId} and is_current = ${mode === "active"}
-  `);
-  return Number(result.rows[0]?.n ?? 0);
-}
-
-async function currentSubscriberIds(db: Database, pageId: number): Promise<string[]> {
-  const current = await getCurrentSubscribers(db, pageId);
-  return current.rows
-    .map((row) => (row as { platform_user_id?: unknown }).platform_user_id)
-    .filter((id): id is string => typeof id === "string" && id.length > 0);
 }

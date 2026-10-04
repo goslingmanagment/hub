@@ -47,11 +47,9 @@ import type {
   DemandSignal,
   RequestPlan,
   ResourceModule,
-  ShadowResult,
   StepPlan,
 } from "../../engine/resource.ts";
-import { advanceShadowWalk, offsetWalkPages, type ShadowWalkProgress } from "../lib/offset-walk.ts";
-import { accountCountersFresh, accountCountersReadAt, readFanslyPageFacts, waitForPageIdentity } from "../lib/page-facts.ts";
+import { accountCountersFresh, readFanslyPageFacts, waitForPageIdentity } from "../lib/page-facts.ts";
 import { ACCOUNT_ME_REQUEST, applyAccountMeToPage } from "./account.ts";
 import { lookupFollowups, partitionLookupIds } from "./fan-profiles.ts";
 
@@ -96,13 +94,6 @@ function count(value: unknown): number | null {
 
 function text(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
-}
-
-function parseShadow(value: unknown): ShadowWalkProgress | null {
-  const record = recordOf(value);
-  const steps = count(record.steps);
-  const done = count(record.done);
-  return steps === null || done === null ? null : { steps, done };
 }
 
 function followersRequest(accountId: string, offset: number): RequestPlan<"followers.page"> {
@@ -219,7 +210,6 @@ export interface FollowersHeadCursor {
   knownFollowId: string | null;
   walk: HeadWalk | null;
   last: Record<string, unknown> | null;
-  shadow: ShadowWalkProgress | null;
 }
 
 export function parseFollowersHeadCursor(value: unknown): FollowersHeadCursor {
@@ -239,7 +229,6 @@ export function parseFollowersHeadCursor(value: unknown): FollowersHeadCursor {
     knownFollowId: text(record.knownFollowId),
     walk,
     last: typeof record.last === "object" && record.last !== null ? record.last as Record<string, unknown> : null,
-    shadow: parseShadow(record.shadow),
   };
 }
 
@@ -251,14 +240,10 @@ export const followersHeadModule: ResourceModule = {
     const cursor = parseFollowersHeadCursor(work.cursor);
     const facts = await readFanslyPageFacts(ctx.db, ctx.pageId);
     if (facts === null) return { kind: "quarantine", reason: "page_missing" };
-    if (facts.externalId === null) return waitForPageIdentity(HEAD_KEY, ctx.shadow, ctx.now);
+    if (facts.externalId === null) return waitForPageIdentity(HEAD_KEY);
     // A new walk's count is the one `account.poll` wrote; it must be fresh.
-    if (cursor.walk === null &&
-      !accountCountersFresh(await accountCountersReadAt(ctx.db, { facts, shadow: ctx.shadow }), ctx.now)) {
-      return waitForAccount(HEAD_KEY);
-    }
-    const offset = cursor.walk?.offset ?? (ctx.shadow ? (cursor.shadow?.done ?? 0) * FANSLY_FOLLOWERS_PAGE_LIMIT : 0);
-    return { kind: "request", request: followersRequest(facts.externalId, offset) };
+    if (cursor.walk === null && !accountCountersFresh(facts.lastVerifiedAt, ctx.now)) return waitForAccount(HEAD_KEY);
+    return { kind: "request", request: followersRequest(facts.externalId, cursor.walk?.offset ?? 0) };
   },
 
   async apply(tx, input: ApplyInput): Promise<ApplyResult> {
@@ -324,7 +309,7 @@ export const followersHeadModule: ResourceModule = {
     if (!(sawKnown || crossedBoundary || pageDone)) {
       walk = { ...walk, offset: walk.offset + FANSLY_FOLLOWERS_PAGE_LIMIT };
       return {
-        work: { satisfiesRevision: false, nextDueAt: now, cursor: { ...cursor, walk, shadow: null } },
+        work: { satisfiesRevision: false, nextDueAt: now, cursor: { ...cursor, walk } },
         followups: hydrated.followups,
       };
     }
@@ -334,7 +319,7 @@ export const followersHeadModule: ResourceModule = {
     const activeFollowerCount = Number(await countActivePageFollows(tx, pageId));
     const decision = followersReconcileDecision({
       activeFollowerCount,
-      // An unknown count proves no mismatch (the shadow head judges alike).
+      // An unknown count proves no mismatch.
       sourceFollowerCount: walk.sourceFollowerCount ?? activeFollowerCount,
       knownFollowId: cursor.knownFollowId,
       newestFollowId,
@@ -360,29 +345,11 @@ export const followersHeadModule: ResourceModule = {
         satisfiesRevision: true,
         close: "done",
         closeReason: "head_walked",
-        cursor: { knownFollowId: newestFollowId, walk: null, last: receipt, shadow: null },
+        cursor: { knownFollowId: newestFollowId, walk: null, last: receipt },
         proof: receipt,
       },
       followups,
     };
-  },
-
-  async shadow(work, _request, ctx): Promise<ShadowResult> {
-    const cursor = parseFollowersHeadCursor(work.cursor);
-    // The head of an hourly walk is one page in steady state (design §5.12).
-    const step = advanceShadowWalk(cursor.shadow, () => 1);
-    if (!step.finished) {
-      return { work: { satisfiesRevision: false, nextDueAt: ctx.now, cursor: { ...cursor, shadow: step.progress } }, followups: [] };
-    }
-    // The decision's count branch, as live would take it: the stored active
-    // follows against the count `account.poll` keeps (the floor then holds
-    // the walk to one a day).
-    const facts = await readFanslyPageFacts(ctx.db, ctx.pageId);
-    const active = Number(await countActivePageFollows(ctx.db, ctx.pageId));
-    const followups: DemandSignal[] = facts?.followerCount !== null && facts?.followerCount !== undefined && facts.followerCount !== active
-      ? [{ resource: RECONCILE_KEY, demand: { reason: "head_decision" } }]
-      : [];
-    return { work: { satisfiesRevision: true, close: "done", closeReason: "shadow", cursor: { ...cursor, shadow: null } }, followups };
   },
 };
 
@@ -407,8 +374,6 @@ export interface FollowersReconcileCursor {
   /** ISO: the start of the newest walk (the owner floor's anchor). */
   lastFullSweepStartedAt: string | null;
   last: Record<string, unknown> | null;
-  /** Shadow: the simulated walk and when it began. */
-  shadow: (ShadowWalkProgress & { startedAt: string }) | null;
 }
 
 export function parseFollowersReconcileCursor(value: unknown): FollowersReconcileCursor {
@@ -425,15 +390,12 @@ export function parseFollowersReconcileCursor(value: unknown): FollowersReconcil
     sourceFollowerCount: count(walkRecord.sourceFollowerCount) ?? 0,
     verificationPending: walkRecord.verificationPending === true,
   };
-  const shadow = parseShadow(record.shadow);
-  const shadowStartedAt = text(recordOf(record.shadow).startedAt);
   return {
     generation: count(record.generation) ?? 0,
     walk,
     snapshotRestartCount: count(record.snapshotRestartCount) ?? 0,
     lastFullSweepStartedAt: text(record.lastFullSweepStartedAt),
     last: typeof record.last === "object" && record.last !== null ? record.last as Record<string, unknown> : null,
-    shadow: shadow === null || shadowStartedAt === null ? null : { ...shadow, startedAt: shadowStartedAt },
   };
 }
 
@@ -455,25 +417,18 @@ async function legacyReconcileAnchor(db: Database, pageId: number): Promise<Date
  *  closed row's, else the legacy engine's. */
 async function reconcileAnchor(
   db: Database,
-  input: { pageId: number; shadow: boolean; cursor: FollowersReconcileCursor },
+  input: { pageId: number; cursor: FollowersReconcileCursor },
 ): Promise<Date | null> {
   const own = input.cursor.lastFullSweepStartedAt;
   if (own !== null) return new Date(own);
-  const previous = await latestClosedWorkForKey(db, { pageId: input.pageId, shadow: input.shadow, resource: RECONCILE_KEY, subject: "" });
+  const previous = await latestClosedWorkForKey(db, { pageId: input.pageId, resource: RECONCILE_KEY, subject: "" });
   const previousAt = previous === null ? null : parseFollowersReconcileCursor(previous.cursor).lastFullSweepStartedAt;
   if (previousAt !== null) return new Date(previousAt);
   return legacyReconcileAnchor(db, input.pageId);
 }
 
-/** Which request the reconcile's next step is (live: by its walk; shadow: by
- *  the simulated step). */
-function reconcilePhase(cursor: FollowersReconcileCursor, shadow: boolean): { kind: "start" | "verify" } | { kind: "page"; offset: number } {
-  if (shadow) {
-    const progress = cursor.shadow;
-    if (progress === null || progress.done === 0) return { kind: "start" };
-    if (progress.done >= progress.steps - 1) return { kind: "verify" };
-    return { kind: "page", offset: (progress.done - 1) * FANSLY_FOLLOWERS_PAGE_LIMIT };
-  }
+/** Which request the reconcile's next step is, by its walk. */
+function reconcilePhase(cursor: FollowersReconcileCursor): { kind: "start" | "verify" } | { kind: "page"; offset: number } {
   if (cursor.walk === null) return { kind: "start" };
   return cursor.walk.verificationPending ? { kind: "verify" } : { kind: "page", offset: cursor.walk.offset };
 }
@@ -484,7 +439,6 @@ function restartedCursor(cursor: FollowersReconcileCursor, walk: ReconcileWalk):
     generation: walk.generation,
     walk: null,
     snapshotRestartCount: cursor.snapshotRestartCount + 1,
-    shadow: null,
   };
 }
 
@@ -495,7 +449,6 @@ function finishedCursor(cursor: FollowersReconcileCursor, walk: ReconcileWalk, r
     snapshotRestartCount: 0,
     lastFullSweepStartedAt: walk.fullSweepStartedAt,
     last: receipt,
-    shadow: null,
   };
 }
 
@@ -531,7 +484,7 @@ async function applyReconcileStart(
     verificationPending: false,
   };
   return {
-    work: { satisfiesRevision: false, nextDueAt: input.now, cursor: { ...cursor, generation: walk.generation, walk, shadow: null } },
+    work: { satisfiesRevision: false, nextDueAt: input.now, cursor: { ...cursor, generation: walk.generation, walk } },
     followups: [],
     pageIdentity: { accountId: facts.accountId },
   };
@@ -585,7 +538,7 @@ async function applyReconcilePage(
       offset: walk.offset + FANSLY_FOLLOWERS_PAGE_LIMIT,
     };
   return {
-    work: { satisfiesRevision: false, nextDueAt: input.now, cursor: { ...cursor, walk: next, shadow: null } },
+    work: { satisfiesRevision: false, nextDueAt: input.now, cursor: { ...cursor, walk: next } },
     followups: hydrated.followups,
   };
 }
@@ -698,23 +651,15 @@ async function applyReconcileVerify(
   };
 }
 
-/** The steps of a reconcile walk: the start and terminal `/account/me` and
- *  every followers page to the short one, over the page's follower count
- *  (the shadow's estimate at a walk's start). */
-async function reconcileWalkSteps(db: Database, pageId: number): Promise<number> {
-  const facts = await readFanslyPageFacts(db, pageId);
-  return offsetWalkPages({ total: facts?.followerCount ?? null, limit: FANSLY_FOLLOWERS_PAGE_LIMIT, statedTotal: false }) + 2;
-}
-
 export const followersReconcileModule: ResourceModule = {
   async plan(work, ctx): Promise<StepPlan> {
     const cursor = parseFollowersReconcileCursor(work.cursor);
-    const phase = reconcilePhase(cursor, ctx.shadow);
-    const starting = ctx.shadow ? cursor.shadow === null : cursor.walk === null;
+    const phase = reconcilePhase(cursor);
+    const starting = cursor.walk === null;
     // The owner floor holds a fresh walk, never a restart of the same one,
     // never the owner's own demand.
     if (starting && cursor.snapshotRestartCount === 0 && !work.demand.reasons.includes(OWNER_DEMAND_REASON)) {
-      const anchor = await reconcileAnchor(ctx.db, { pageId: ctx.pageId, shadow: ctx.shadow, cursor });
+      const anchor = await reconcileAnchor(ctx.db, { pageId: ctx.pageId, cursor });
       if (anchor !== null) {
         const until = new Date(anchor.getTime() + FOLLOWERS_RECONCILE_MIN_INTERVAL_MS);
         if (until.getTime() > ctx.now.getTime()) return { kind: "wait", reason: "not_due", until };
@@ -723,7 +668,7 @@ export const followersReconcileModule: ResourceModule = {
     if (phase.kind !== "page") return { kind: "request", request: ACCOUNT_ME_REQUEST };
     const facts = await readFanslyPageFacts(ctx.db, ctx.pageId);
     if (facts === null) return { kind: "quarantine", reason: "page_missing" };
-    if (facts.externalId === null) return waitForPageIdentity(RECONCILE_KEY, ctx.shadow, ctx.now);
+    if (facts.externalId === null) return waitForPageIdentity(RECONCILE_KEY);
     return { kind: "request", request: followersRequest(facts.externalId, phase.offset) };
   },
 
@@ -739,28 +684,6 @@ export const followersReconcileModule: ResourceModule = {
       throw new ApplyQuarantine("followers_reconcile_unexpected_account_read", { offset: walk.offset });
     }
     return applyReconcileVerify(tx, input, cursor, walk);
-  },
-
-  async shadow(work, _request, ctx): Promise<ShadowResult> {
-    const cursor = parseFollowersReconcileCursor(work.cursor);
-    const startedAt = cursor.shadow?.startedAt ?? ctx.now.toISOString();
-    const steps = cursor.shadow === null ? await reconcileWalkSteps(ctx.db, ctx.pageId) : cursor.shadow.steps;
-    const step = advanceShadowWalk(cursor.shadow, () => steps);
-    if (!step.finished) {
-      return {
-        work: { satisfiesRevision: false, nextDueAt: ctx.now, cursor: { ...cursor, shadow: { ...step.progress, startedAt } } },
-        followups: [],
-      };
-    }
-    return {
-      work: {
-        satisfiesRevision: true,
-        close: "done",
-        closeReason: "shadow",
-        cursor: { ...cursor, shadow: null, snapshotRestartCount: 0, lastFullSweepStartedAt: startedAt },
-      },
-      followups: [],
-    };
   },
 };
 

@@ -9,7 +9,6 @@ import type {
   DemandSignal,
   RequestPlan,
   ResourceModule,
-  ShadowResult,
   StepPlan,
 } from "../../engine/resource.ts";
 import {
@@ -25,7 +24,6 @@ import {
   type TopSpendersCursorState,
   type TopSpendersCursorWindow,
 } from "../lib/money-rules.ts";
-import { advanceShadowWalk, type ShadowWalkProgress } from "../lib/offset-walk.ts";
 import { readFanslyPageFacts } from "../lib/page-facts.ts";
 
 // `top-spenders.window` and `.bootstrap` (design §5.7): the page's spenders
@@ -52,7 +50,6 @@ interface TopSpendersCursor {
   pending: TopSpendersCursorWindow[];
   /** Bootstrap: the legacy-shaped walk state. */
   state: TopSpendersCursorState | null;
-  shadow: ShadowWalkProgress | null;
 }
 
 function recordOf(value: unknown): Record<string, unknown> {
@@ -75,14 +72,7 @@ function parseWindows(value: unknown): TopSpendersCursorWindow[] {
 
 function parseCursor(value: unknown): TopSpendersCursor {
   const record = recordOf(value);
-  const shadow = recordOf(record.shadow);
-  return {
-    pending: parseWindows(record.pending),
-    state: parseTopSpendersCursorState(record.state),
-    shadow: typeof shadow.steps === "number" && typeof shadow.done === "number"
-      ? { steps: shadow.steps, done: shadow.done }
-      : null,
-  };
+  return { pending: parseWindows(record.pending), state: parseTopSpendersCursorState(record.state) };
 }
 
 function windowRequest(window: TopSpendersCursorWindow): RequestPlan<"earnings.accounts"> {
@@ -177,10 +167,9 @@ export function topSpendersModule(variant: TopSpendersVariant): ResourceModule {
     async plan(work, ctx): Promise<StepPlan> {
       const cursor = parseCursor(work.cursor);
       if (variant === "window") {
-        if (ctx.shadow) return { kind: "request", request: windowRequest(steadyWindow(ctx.now)) };
         return { kind: "request", request: windowRequest(cursor.pending[0] ?? steadyWindow(ctx.now)) };
       }
-      if (cursor.state !== null && !ctx.shadow) {
+      if (cursor.state !== null) {
         const head = cursor.state.pendingWindows[0];
         return head === undefined
           ? { kind: "done", reason: "bootstrap_complete", cursor }
@@ -204,7 +193,7 @@ export function topSpendersModule(variant: TopSpendersVariant): ResourceModule {
         const window = windowOfRequest(input.request, cursor.pending[0], "week");
         const rest = cursor.pending.length > 0 && cursor.pending[0] === window ? cursor.pending.slice(1) : cursor.pending;
         const read = await readWindow(tx, { pageId: input.pageId, window, rest, items });
-        const next: TopSpendersCursor = { pending: read.pending, state: null, shadow: null };
+        const next: TopSpendersCursor = { pending: read.pending, state: null };
         return read.pending.length === 0
           ? {
             work: {
@@ -238,7 +227,7 @@ export function topSpendersModule(variant: TopSpendersVariant): ResourceModule {
       };
       if (read.pending.length > 0) {
         return {
-          work: { satisfiesRevision: false, nextDueAt: input.now, cursor: { pending: [], state, shadow: null } },
+          work: { satisfiesRevision: false, nextDueAt: input.now, cursor: { pending: [], state } },
           followups: [],
           counters: read.counters,
         };
@@ -249,25 +238,12 @@ export function topSpendersModule(variant: TopSpendersVariant): ResourceModule {
           satisfiesRevision: true,
           close: "done",
           closeReason: "bootstrap_complete",
-          cursor: { pending: [], state, shadow: null },
+          cursor: { pending: [], state },
           proof: { totalMonths: state.totalMonths, accountCreatedAt: state.accountCreatedAt },
         },
         followups: [],
         counters: read.counters,
       };
-    },
-
-    async shadow(work, _request, ctx): Promise<ShadowResult> {
-      const cursor = parseCursor(work.cursor);
-      if (variant === "window") {
-        return { work: { satisfiesRevision: true, close: "done", closeReason: "shadow", cursor: { ...cursor, shadow: null } }, followups: [] };
-      }
-      const created = await accountCreatedAt(ctx.db, ctx.pageId);
-      const step = advanceShadowWalk(cursor.shadow, () =>
-        created === null ? 1 : buildTopSpendersBootstrapWindows(created, ctx.now).length);
-      return step.finished
-        ? { work: { satisfiesRevision: true, close: "done", closeReason: "shadow", cursor: { ...cursor, shadow: null } }, followups: [] }
-        : { work: { satisfiesRevision: false, nextDueAt: ctx.now, cursor: { ...cursor, shadow: step.progress } }, followups: [] };
     },
   };
 }

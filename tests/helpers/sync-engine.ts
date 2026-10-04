@@ -40,6 +40,7 @@ import type {
   Clock,
   LivePageSocket,
   LivePageSocketRef,
+  PageTransport,
   PauseSource,
   Rng,
   SendHooks,
@@ -52,7 +53,6 @@ import {
   type EngineResourceSpec,
   type ResourceModule,
 } from "../../apps/runtime/src/sync/engine/resource.ts";
-import type { PageTransport } from "../../apps/runtime/src/sync/engine/shadow.ts";
 import { fanslyCaptureCodec } from "../../apps/runtime/src/sync/fansly/capture.ts";
 import { fanslyResourceSpec } from "../../apps/runtime/src/sync/fansly/registry.ts";
 import { createMediaDownloadModule, mediaDownloadSubject } from "../../apps/runtime/src/sync/fansly/resources/media-download.ts";
@@ -919,7 +919,6 @@ export async function demandHarnessDownload(
   const descriptionId = Number(description.rows[0]!.id);
   const work = await upsertDemand(handles.db, {
     pageId: input.pageId,
-    shadow: false,
     resource: "media-download.fetch",
     subject: mediaDownloadSubject(descriptionId),
     kind: "trigger",
@@ -957,7 +956,6 @@ function oneRequest(spec: FanslyWireId, extra: Record<string, unknown> = {}): Re
   return {
     plan: async () => ({ kind: "request", request: { spec, params: extra as never } }),
     apply: async () => ({ work: { satisfiesRevision: true, close: "done" }, followups: [] }),
-    shadow: async () => ({ work: { satisfiesRevision: true, close: "done" }, followups: [] }),
   };
 }
 
@@ -972,7 +970,6 @@ export function harnessRegistry(): EngineRegistry {
   const pollModule: ResourceModule = {
     plan: async () => ({ kind: "request", request: { spec: "polls", params: {} } }),
     apply: async () => ({ work: { satisfiesRevision: true }, followups: [] }),
-    shadow: async () => ({ work: { satisfiesRevision: true }, followups: [] }),
   };
   const specs: EngineResourceSpec[] = [
     testSpec(HARNESS_KEY.poll, pollModule, { kind: "poll", class: "planned", period: { everyMs: HARNESS_POLL_EVERY_MS } }),

@@ -21,7 +21,6 @@ import {
   type StartedTestDatabase,
 } from "./helpers/db.ts";
 import {
-  changedTables,
   countRows,
   makeTestActor,
   okResponse,
@@ -30,7 +29,6 @@ import {
   ScriptedLiveTransport,
   seedSyncPage,
   statusResponse,
-  tableCounts,
   testConfig,
   waitFor,
 } from "./helpers/sync-engine-host.ts";
@@ -38,14 +36,12 @@ import {
 // The content resources of the Fansly Sync Engine (design §5.14–§5.16, §4.3)
 // through the real actor and commits against a real database, journaled by
 // the production capture codec: a scripted live transport answers each wire
-// route; shadow runs the same registry with no transport at all. What is
-// pinned: each walk keeps its position in its work row and stops where the
+// route. What is pinned: each walk keeps its position in its work row and stops where the
 // legacy lane stops; the journal carries the legacy envelopes, and an answer
 // applied from the journal (after a crash) does what it does in memory; the
 // coverage claims the legacy lanes write; the subject-queue walks stand open over the
 // projector-fed queues, write each subject's visit or breaker on its queue row,
-// and move on past a failing subject; a shadow pass walks every due subject
-// once and writes nothing but its own work and attempts.
+// and move on past a failing subject.
 
 let testDb: StartedTestDatabase | null = null;
 
@@ -79,34 +75,30 @@ function daysAgo(days: number): Date {
 
 /** A registry of every Fansly entry whose standing rows are parked far ahead,
  *  so only the work a test makes due runs. */
-async function quietRegistry(pageId: number, shadow: boolean): Promise<EngineRegistry> {
+async function quietRegistry(pageId: number): Promise<EngineRegistry> {
   const registry = createEngineRegistry(FANSLY_RESOURCE_SPECS);
   const page = await getSyncPage(db(), pageId);
   await ensurePollRows(db(), {
     pageId,
-    shadow,
-    polls: pollsFor(registry, page!, shadow).map((poll) => ({ ...poll, phase: 0.999 })),
+    polls: pollsFor(registry, page!).map((poll) => ({ ...poll, phase: 0.999 })),
   });
   return registry;
 }
 
-async function makeDue(pageId: number, shadow: boolean, resource: string) {
+async function makeDue(pageId: number, resource: string) {
   const spec = fanslyResourceSpec(resource)!;
-  await upsertDemand(db(), { pageId, shadow, resource, kind: spec.kind, class: spec.class, demand: { reasons: ["test"] } });
+  await upsertDemand(db(), { pageId, resource, kind: spec.kind, class: spec.class, demand: { reasons: ["test"] } });
 }
 
-async function setCursor(pageId: number, resource: string, cursor: unknown, shadow = false) {
+async function setCursor(pageId: number, resource: string, cursor: unknown) {
   await testDb!.pool.query(
-    "update sync_work set cursor = $4::jsonb where page_id = $1 and resource = $2 and shadow = $3 and state = 'open'",
-    [pageId, resource, shadow, JSON.stringify(cursor)],
+    "update sync_work set cursor = $3::jsonb where page_id = $1 and resource = $2 and not shadow and state = 'open'",
+    [pageId, resource, JSON.stringify(cursor)],
   );
 }
 
-async function seedPage(mode: "live" | "shadow", externalId: string | null = OWN_ID) {
-  const { pageId } = await seedSyncPage({ db: db(), pool: testDb!.pool }, {
-    mode,
-    guard: mode === "live" ? "fansly_sync_engine" : null,
-  });
+async function seedPage(externalId: string | null = OWN_ID) {
+  const { pageId } = await seedSyncPage({ db: db(), pool: testDb!.pool }, { mode: "live", guard: "fansly_sync_engine" });
   await testDb!.pool.query(
     "update pages set external_page_id = $2, last_verified_at = clock_timestamp() - interval '1 minute' where id = $1",
     [pageId, externalId],
@@ -184,29 +176,27 @@ type Responder = (req: FanslyWireRequest) => FanslyWireOutcome;
 
 async function drive(
   pageId: number,
-  mode: "live" | "shadow",
   registry: EngineRegistry,
-  respond: Responder | null,
+  respond: Responder,
   until: () => Promise<boolean>,
   options: { alerts?: RecordingAlerts; metrics?: RecordingMetrics; settings?: SettingsSource } = {},
 ) {
-  const transport = respond === null ? undefined : new ScriptedLiveTransport();
-  if (transport !== undefined && respond !== null) transport.respond = (req) => respond(req);
+  const transport = new ScriptedLiveTransport();
+  transport.respond = (req) => respond(req);
   const requests: FanslyWireRequest[] = [];
-  if (transport !== undefined) transport.onHit = async (req) => void requests.push(req);
+  transport.onHit = async (req) => void requests.push(req);
   const alerts = options.alerts ?? new RecordingAlerts();
   const metrics = options.metrics ?? new RecordingMetrics();
   const { actor, stop, abort } = await makeTestActor({
     db: db(),
     pageId,
-    mode,
     registry,
     alerts,
     metrics,
     ownRef: OWN_ID,
     capture: fanslyCaptureCodec,
     ...(options.settings === undefined ? {} : { settings: options.settings }),
-    ...(transport === undefined ? {} : { transport }),
+    transport,
   });
   const run = actor.run({ stop: stop.signal, abort: abort.signal });
   try {
@@ -224,9 +214,9 @@ async function runLive(
   until: () => Promise<boolean>,
   options: { alerts?: RecordingAlerts; metrics?: RecordingMetrics; settings?: SettingsSource; prepare?: (registry: EngineRegistry) => Promise<void> } = {},
 ) {
-  const registry = await quietRegistry(pageId, false);
+  const registry = await quietRegistry(pageId);
   await options.prepare?.(registry);
-  return drive(pageId, "live", registry, respond, until, options);
+  return drive(pageId, registry, respond, until, options);
 }
 
 /**
@@ -241,7 +231,7 @@ async function runLiveCrashingAfterCapture(
   until: () => Promise<boolean>,
   options: { alerts?: RecordingAlerts } = {},
 ) {
-  const registry = await quietRegistry(pageId, false);
+  const registry = await quietRegistry(pageId);
   const transport = new ScriptedLiveTransport();
   transport.respond = (req) => respond(req);
   const firstRequests: FanslyWireRequest[] = [];
@@ -253,7 +243,6 @@ async function runLiveCrashingAfterCapture(
   const dying = await makeTestActor({
     db: db(),
     pageId,
-    mode: "live",
     registry,
     ownRef: OWN_ID,
     capture: fanslyCaptureCodec,
@@ -263,7 +252,7 @@ async function runLiveCrashingAfterCapture(
     },
   });
   await expect(dying.actor.run({ stop: dying.stop.signal, abort: dying.abort.signal })).rejects.toBeInstanceOf(SyncCrashFault);
-  const restarted = await drive(pageId, "live", registry, respond, until, options);
+  const restarted = await drive(pageId, registry, respond, until, options);
   return { firstHits: firstRequests.map((req) => req.spec), firstRequests, ...restarted };
 }
 
@@ -289,11 +278,11 @@ interface WorkRowView {
   failure_count: number;
 }
 
-async function workRow(pageId: number, resource: string, shadow = false): Promise<WorkRowView | null> {
+async function workRow(pageId: number, resource: string): Promise<WorkRowView | null> {
   const result = await testDb!.pool.query<WorkRowView>(
     `select state, cursor, proof, result, waiting_reason, due_at, params, close_reason, failure_count from sync_work
-      where page_id = $1 and resource = $2 and shadow = $3 order by id desc limit 1`,
-    [pageId, resource, shadow],
+      where page_id = $1 and resource = $2 and not shadow order by id desc limit 1`,
+    [pageId, resource],
   );
   return result.rows[0] ?? null;
 }
@@ -336,16 +325,6 @@ async function queueRow(pageId: number, plane: string, subjectRef: string) {
   return result.rows[0] ?? null;
 }
 
-async function queueSnapshot(pageId: number): Promise<unknown[]> {
-  const result = await testDb!.pool.query(
-    `select plane, subject_ref, last_visited_at, next_due_at, consecutive_failures, dirty_reason, known_count,
-            last_refresh_outcome, updated_at
-       from subject_refresh_state where page_id = $1 order by plane, subject_ref`,
-    [pageId],
-  );
-  return result.rows;
-}
-
 function expectNear(actual: Date | null | undefined, expectedMs: number, toleranceMs = 60_000) {
   expect(actual).toBeInstanceOf(Date);
   expect(Math.abs(actual!.getTime() - expectedMs)).toBeLessThan(toleranceMs);
@@ -362,8 +341,8 @@ function notification(id: string, createdAt: Date, type = 3101) {
 describe("notifications.forward", () => {
   it("the first poll reads one page, commits its head, and writes the plane's coverage and the liker plane's standing claim", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
-    await makeDue(pageId, false, "notifications.forward");
+    const pageId = await seedPage();
+    await makeDue(pageId, "notifications.forward");
     const served = {
       notifications: [notification(N(300), daysAgo(0.1)), notification(N(250), daysAgo(0.2))],
       accounts: [{ id: "500000000000000001", username: "fan", lastSeenAt: 1_700_000_000 }],
@@ -396,8 +375,8 @@ describe("notifications.forward", () => {
 
   it("walks down from the head until a page reaches the newest id the last poll saw", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
-    await makeDue(pageId, false, "notifications.forward");
+    const pageId = await seedPage();
+    await makeDue(pageId, "notifications.forward");
     const { hits, requests } = await runLive(pageId, (req) => okResponse({
       notifications: query(req, "before") === "0"
         ? [notification(N(300), daysAgo(0.1)), notification(N(250), daysAgo(0.2))]
@@ -416,8 +395,8 @@ describe("notifications.forward", () => {
 
   it("an empty unfiltered page is probed once with the declared CSV; rows there mean the unfiltered form filters", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
-    await makeDue(pageId, false, "notifications.forward");
+    const pageId = await seedPage();
+    await makeDue(pageId, "notifications.forward");
     const metrics = new RecordingMetrics();
     const { requests } = await runLive(pageId, (req) => okResponse({
       notifications: query(req, "type") === null ? [] : [notification(N(300), daysAgo(0.1))],
@@ -440,8 +419,8 @@ describe("notifications.forward", () => {
 describe("notifications.backfill", () => {
   it("walks `before = oldest id` down to an empty page, the retention floor, proved by that page's observation", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
-    await makeDue(pageId, false, "notifications.backfill");
+    const pageId = await seedPage();
+    await makeDue(pageId, "notifications.backfill");
     const oldest = daysAgo(80);
     const { requests } = await runLive(pageId, (req) => okResponse({
       notifications: query(req, "before") === "0" ? [notification(N(300), daysAgo(1)), notification(N(250), oldest)] : [],
@@ -469,8 +448,8 @@ function timelinePost(id: string, createdAt: Date) {
 describe("posts.refresh", () => {
   it("alternates timeline page and its tips down to a page wholly older than 14 days; an out-of-scope tips answer keeps the legacy envelope", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
-    await makeDue(pageId, false, "posts.refresh");
+    const pageId = await seedPage();
+    await makeDue(pageId, "posts.refresh");
     const { hits, requests } = await runLive(pageId, (req) => {
       if (req.spec === "posts.timeline") {
         return okResponse({
@@ -511,8 +490,8 @@ describe("posts.refresh", () => {
 
   it("a tips answer outside its scope, applied from the journal after a crash, is counted as in memory and the walk goes on", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
-    await makeDue(pageId, false, "posts.refresh");
+    const pageId = await seedPage();
+    await makeDue(pageId, "posts.refresh");
     const alerts = new RecordingAlerts();
     const { firstHits, hits } = await runLiveCrashingAfterCapture(pageId, (req) => {
       if (req.spec === "posts.timeline") {
@@ -545,8 +524,8 @@ describe("posts.refresh", () => {
 
   it("a tips answer that is not an array is journaled raw and counted, and the walk reaches the next timeline page", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
-    await makeDue(pageId, false, "posts.refresh");
+    const pageId = await seedPage();
+    await makeDue(pageId, "posts.refresh");
     const alerts = new RecordingAlerts();
     const drifted = { tips: [{ id: "900000000000000001" }], cursor: "x" };
     const { hits, requests } = await runLive(pageId, (req) => {
@@ -580,8 +559,8 @@ describe("posts.refresh", () => {
 
   it("the full backfill walks to an empty page and records the tips backfill", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
-    await makeDue(pageId, false, "posts.backfill");
+    const pageId = await seedPage();
+    await makeDue(pageId, "posts.backfill");
     const { hits } = await runLive(pageId, (req) => {
       if (req.spec === "posts.timeline") {
         return okResponse({ posts: query(req, "before") === "0" ? [timelinePost(P(2), daysAgo(400)), timelinePost(P(1), daysAgo(500))] : [] });
@@ -597,8 +576,8 @@ describe("posts.refresh", () => {
 
   it("a page without its native id waits for the account poll and makes it due", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live", null);
-    await makeDue(pageId, false, "posts.refresh");
+    const pageId = await seedPage(null);
+    await makeDue(pageId, "posts.refresh");
     const { hits } = await runLive(pageId, (req) => {
       if (req.spec === "account.me") {
         return okResponse({ account: { id: OWN_ID, username: "model", displayName: "Model", createdAt: Date.UTC(2024, 0, 1), followCount: 0, subscriberCount: 0, walls: [], subscriptionTiers: [] } });
@@ -614,11 +593,11 @@ describe("posts.refresh", () => {
 describe("posts.engagement", () => {
   it("re-reads the due posts in one batch: the served ones re-dated by tier, an omitted one a day out; then the walk rests", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
+    const pageId = await seedPage();
     await seedPost(pageId, P(1), daysAgo(1));
     await seedPost(pageId, P(2), daysAgo(40));
     await seedPost(pageId, P(3), daysAgo(200));
-    await makeDue(pageId, false, "posts.engagement");
+    await makeDue(pageId, "posts.engagement");
     const metrics = new RecordingMetrics();
     const { requests } = await runLive(pageId, () => okResponse({ posts: [timelinePost(P(1), daysAgo(1)), timelinePost(P(2), daysAgo(40))] }),
       async () => (await workRow(pageId, "posts.engagement"))?.waiting_reason === "not_due", {
@@ -652,10 +631,10 @@ describe("posts.engagement", () => {
 
   it("a refused batch opens each subject's breaker on its queue row; the walk row keeps none and moves on", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
+    const pageId = await seedPage();
     await seedPost(pageId, P(1), daysAgo(1));
     await seedPost(pageId, P(2), daysAgo(2));
-    await makeDue(pageId, false, "posts.engagement");
+    await makeDue(pageId, "posts.engagement");
     const { hits } = await runLive(pageId, () => statusResponse(404),
       async () => (await workRow(pageId, "posts.engagement"))?.waiting_reason === "not_due");
 
@@ -685,10 +664,10 @@ function replies(postId: string, top: number, count: number) {
 describe("post-replies.walk", () => {
   it("pages a full post with `before`, learns the route pages, visits it on the live re-walk cycle and asks for unnamed authors", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
+    const pageId = await seedPage();
     await seedPost(pageId, P(1), daysAgo(1));
     await seedUnnamedComment(pageId, P(1), "800000000000000001", "500000000000000777");
-    await makeDue(pageId, false, "post-replies.walk");
+    await makeDue(pageId, "post-replies.walk");
     const { hits, requests } = await runLive(pageId, (req) => {
       if (req.spec === "post.replies") {
         return okResponse({ posts: query(req, "before") === null ? replies(repliesPostId(req), 120, 20) : replies(repliesPostId(req), 100, 3), accounts: [] });
@@ -729,9 +708,9 @@ describe("post-replies.walk", () => {
 
   it("a full page applied from the journal after a crash pages on exactly as the in-memory apply does", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
+    const pageId = await seedPage();
     await seedPost(pageId, P(1), daysAgo(1));
-    await makeDue(pageId, false, "post-replies.walk");
+    await makeDue(pageId, "post-replies.walk");
     const { firstRequests, requests } = await runLiveCrashingAfterCapture(pageId, (req) => okResponse({
       posts: query(req, "before") === null ? replies(repliesPostId(req), 120, 20) : replies(repliesPostId(req), 100, 3),
       accounts: [],
@@ -754,10 +733,10 @@ describe("post-replies.walk", () => {
 
   it("a route that serves the same page again is single-page: the walk stops and never pages again", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
+    const pageId = await seedPage();
     await seedPost(pageId, P(1), daysAgo(1));
     await seedPost(pageId, P(2), daysAgo(2));
-    await makeDue(pageId, false, "post-replies.walk");
+    await makeDue(pageId, "post-replies.walk");
     const { requests } = await runLive(pageId, (req) => okResponse({ posts: replies(repliesPostId(req), 120, 20) }),
       async () => (await workRow(pageId, "post-replies.walk"))?.waiting_reason === "not_due");
 
@@ -778,10 +757,10 @@ describe("post-replies.walk", () => {
 
   it("a failing post opens its queue row's breaker and the walk moves on to the next due post", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
+    const pageId = await seedPage();
     await seedPost(pageId, P(1), daysAgo(1));
     await seedPost(pageId, P(2), daysAgo(2));
-    await makeDue(pageId, false, "post-replies.walk");
+    await makeDue(pageId, "post-replies.walk");
     const { requests } = await runLive(pageId, (req) => (repliesPostId(req) === P(1) ? statusResponse(404) : okResponse({ posts: [] })),
       async () => (await workRow(pageId, "post-replies.walk"))?.waiting_reason === "not_due");
 
@@ -792,71 +771,5 @@ describe("post-replies.walk", () => {
     expectNear(failed!.next_due_at, now + 60_000, 30_000);
     expect(await queueRow(pageId, "post_replies", P(2))).toMatchObject({ consecutive_failures: 0, known_count: 0 });
     expect((await workRow(pageId, "post-replies.walk"))!.failure_count).toBe(0);
-  });
-});
-
-// ── shadow ──────────────────────────────────────────────────────────────────
-
-describe("shadow", () => {
-  it("plans and paces the content resources, walks every due subject once, and writes nothing but its own work and attempts", async (context) => {
-    if (!testDb) return context.skip();
-    const pageId = await seedPage("shadow");
-    for (const [index, age] of [1, 2, 3, 40, 200].entries()) await seedPost(pageId, P(index + 1), daysAgo(age));
-    const registry = await quietRegistry(pageId, true);
-    for (const key of ["notifications.forward", "posts.refresh", "posts.engagement", "post-replies.walk"]) await makeDue(pageId, true, key);
-    const queueBefore = await queueSnapshot(pageId);
-    const before = await tableCounts(testDb.pool);
-    await drive(pageId, "shadow", registry, null, async () => {
-      const replies = await workRow(pageId, "post-replies.walk", true);
-      const engagement = await workRow(pageId, "posts.engagement", true);
-      return (await attempts(pageId, "post-replies.walk", "true")) === 5 && replies?.waiting_reason === "not_due" &&
-        engagement?.cursor.shadow !== undefined && (engagement.cursor.shadow as { ended?: boolean }).ended === true &&
-        (await attempts(pageId, "posts.refresh", "true")) === 4 && (await attempts(pageId, "notifications.forward", "true")) === 1;
-    });
-
-    const rows = await testDb.pool.query<{ resource: string; operation: string; n: number }>(
-      `select resource, operation, count(*)::int as n from sync_attempts
-        where page_id = $1 and shadow and outcome = 'shadow' and apply_state = 'skipped'
-        group by 1, 2 order by 1, 2`,
-      [pageId],
-    );
-    // Three posts within 14 days ⇒ two estimated timeline pages, each followed
-    // by its tips read; five due posts ⇒ one engagement batch and one reply
-    // read per post.
-    expect(rows.rows).toEqual([
-      { resource: "notifications.forward", operation: "notifications.page", n: 1 },
-      { resource: "post-replies.walk", operation: "post.replies", n: 5 },
-      { resource: "posts.engagement", operation: "posts.by_ids", n: 1 },
-      { resource: "posts.refresh", operation: "posts.timeline", n: 2 },
-      { resource: "posts.refresh", operation: "posts.tips", n: 2 },
-    ]);
-    // Each due post exactly once, in walk order (newest never-walked first).
-    const replyRequests = await testDb.pool.query<{ path: string }>(
-      "select request ->> 'path' as path from sync_attempts where page_id = $1 and resource = 'post-replies.walk' order by id",
-      [pageId],
-    );
-    expect(replyRequests.rows.map((row) => row.path)).toEqual([1, 2, 3, 4, 5].map((index) => `/post/${P(index)}/replies`));
-    // Each step names its pass besides its subjects (the next pass asks them
-    // again).
-    const positions = await testDb.pool.query<{ resource: string; position: unknown; ids: string[] | null }>(
-      `select resource, request -> 'position' as position, request -> 'params' -> 'ids' as ids from sync_attempts
-        where page_id = $1 and resource in ('posts.engagement', 'post-replies.walk') order by resource, id`,
-      [pageId],
-    );
-    const batch = positions.rows.at(-1)!.ids!;
-    expect(batch).toHaveLength(5);
-    expect(positions.rows.map(({ resource, position }) => ({ resource, position }))).toEqual([
-      ...[1, 2, 3, 4, 5].map((index) => ({ resource: "post-replies.walk", position: { pass: 1, postId: P(index) } })),
-      { resource: "posts.engagement", position: { pass: 1, ids: batch } },
-    ]);
-    expect(await countRows(testDb.pool, "select count(*)::int as n from sync_attempts where page_id = $1 and not shadow", [pageId])).toBe(0);
-    const after = await tableCounts(testDb.pool);
-    // Every work row it moved already stood there (polls and standing walks;
-    // no reply author is unnamed, so no follow-up): only attempts were added.
-    expect(changedTables(before, after)).toEqual(["sync_attempts"]);
-    expect(await queueSnapshot(pageId)).toEqual(queueBefore);
-    // The walks rest until their next pass: no live write, no new attempt.
-    const replies = await workRow(pageId, "post-replies.walk", true);
-    expect(replies!.due_at.getTime() - Date.now()).toBeGreaterThan(5 * HOUR_MS);
   });
 });

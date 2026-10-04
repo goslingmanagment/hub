@@ -170,7 +170,7 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     // (E16) and so must never re-arm one.
     key: "account.identity", file: "account", subject: "page", kind: "trigger", class: "urgent",
     triggers: ["api", "owner"], slo: { resultMs: 30 * SECOND },
-    proof: "snapshot", walk: "single", http: true, liveOnly: true, evidence: false, fence: "none",
+    proof: "snapshot", walk: "single", http: true, evidence: false, fence: "none",
     subjectScopedAuthStatuses: [401, 403],
     operations: ["account.me"],
     legacy: [sender("account_me_api"), sender("account_me_cli"), sender("binding_preflight")],
@@ -185,7 +185,7 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     // page's network streak.
     key: "ws.connect", file: "ws", subject: "page", kind: "trigger", class: "urgent",
     triggers: ["ws_lifecycle"], slo: {},
-    proof: "none", walk: "single", http: true, liveOnly: true, evidence: false, fence: "none",
+    proof: "none", walk: "single", http: true, evidence: false, fence: "none",
     operations: ["ws.upgrade"],
     legacy: [sender("ws_connect")],
     module: wsConnectModule,
@@ -246,7 +246,7 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     // not a standing poll row of the page.
     key: "dm-conversations.ws-down", file: "dm-conversations", subject: "page", kind: "trigger", class: "urgent",
     triggers: ["ws_lifecycle"], cadence: { everyMs: 30 * SECOND }, slo: { resultMs: 45 * SECOND },
-    proof: "head_known_item", walk: "single", http: true, liveOnly: true, evidence: false, fence: "dm_archive",
+    proof: "head_known_item", walk: "single", http: true, evidence: false, fence: "dm_archive",
     operations: ["messaging.groups"],
     legacy: [stream("dm_conversations")],
     module: dmConversationsModule("ws-down"),
@@ -347,10 +347,9 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
   {
     // The transactions steps (≥ every 5 min) ask for a walk whenever a subject
     // is due: dirty (projection queue) or past the roster age (poll-like). No
-    // standing row: between walks the queue alone says when the next is due
-    // (the shadow walks its due roster at most once a `cadence`).
+    // standing row: between walks the queue alone says when the next is due.
     key: "fan-earnings.roster", file: "fan-earnings", subject: "page", kind: "goal", class: "planned",
-    triggers: ["projection_queue", "poll", "apply:transactions.*"], cadence: { everyMs: DAY }, slo: { staleAfterMs: 3 * DAY },
+    triggers: ["projection_queue", "poll", "apply:transactions.*"], slo: { staleAfterMs: 3 * DAY },
     proof: "receipt", walk: "subject-queue", http: true, evidence: false, fence: "none",
     operations: ["earnings.stats_accounts", "earnings.monthly_accounts"],
     terminalStatuses: [400, 404, 410], subjectQueue: true, queuePlane: "fan_earnings_lifetime",
@@ -617,7 +616,7 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     // never the page session's (G16, E8).
     key: "media-download.fetch", file: "media-download", subject: "media", kind: "trigger", class: "planned",
     triggers: ["api"], slo: {},
-    proof: "snapshot", walk: "single", http: true, liveOnly: true, evidence: false, fence: "dm_archive",
+    proof: "snapshot", walk: "single", http: true, evidence: false, fence: "dm_archive",
     subjectScopedAuthStatuses: [401, 403],
     operations: ["cdn.media"],
     legacy: [sender("media_download")],
@@ -627,7 +626,7 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     // Also a frame no chat can be named for (plan §7 p.10 (b), the router).
     key: "repair.ws-gap", file: "repair", subject: "page", kind: "repair", class: "urgent",
     triggers: ["ws_gap", "ws:invalid"], slo: { resultMs: MINUTE },
-    proof: "none", walk: "composite", http: true, liveOnly: true, evidence: false, fence: "dm_archive",
+    proof: "none", walk: "composite", http: true, evidence: false, fence: "dm_archive",
     operations: ["messaging.groups"],
     legacy: [],
     module: repairModule,
@@ -652,7 +651,7 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     // Journaled, never canonicalized (no DM state for an excluded chat).
     key: "probe.excluded-chat", file: "probe", subject: "thread", kind: "trigger", class: "planned",
     triggers: ["owner"], slo: {},
-    proof: "none", walk: "single", http: true, liveOnly: true, evidence: false, fence: "none",
+    proof: "none", walk: "single", http: true, evidence: false, fence: "none",
     subjectScopedAuthStatuses: [403],
     terminalStatuses: [400, 404, 410, 422],
     operations: ["messages.page"],

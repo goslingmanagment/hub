@@ -162,20 +162,21 @@ describe("/health/sync on engine pages", () => {
     await setModeDirect(testDb!.pool, pages.live, "live");
     await beat(pages.live, 1);
     await upsertDemand(db(), {
-      pageId: pages.live, shadow: false, resource: "dm-messages.head", subject: "g-1", kind: "trigger", class: "urgent",
+      pageId: pages.live, resource: "dm-messages.head", subject: "g-1", kind: "trigger", class: "urgent",
       dueAt: new Date(Date.now() - 45_000),
     });
     // Due in the future: not counted.
     await upsertDemand(db(), {
-      pageId: pages.live, shadow: false, resource: "dm-messages.head", subject: "g-2", kind: "trigger", class: "urgent",
+      pageId: pages.live, resource: "dm-messages.head", subject: "g-2", kind: "trigger", class: "urgent",
       dueAt: new Date(Date.now() + 600_000),
     });
-    // A shadow row is not the live journal's.
-    await upsertDemand(db(), {
-      pageId: pages.live, shadow: true, resource: "dm-messages.head", subject: "g-3", kind: "trigger", class: "urgent",
-      dueAt: new Date(Date.now() - 600_000),
-    });
-    await upsertDemand(db(), { pageId: pages.live, shadow: false, resource: "transactions.rescan", kind: "poll", class: "planned" });
+    // A row shadow mode left behind is not the page's work.
+    await testDb!.pool.query(
+      `insert into sync_work (page_id, shadow, resource, subject, kind, class, due_at)
+       values ($1, true, 'dm-messages.head', 'g-3', 'trigger', 'urgent', clock_timestamp() - interval '10 minutes')`,
+      [pages.live],
+    );
+    await upsertDemand(db(), { pageId: pages.live, resource: "transactions.rescan", kind: "poll", class: "planned" });
     await testDb!.pool.query(
       "update sync_work set state = 'quarantined', waiting_reason = 'quarantined' where page_id = $1 and resource = 'transactions.rescan'",
       [pages.live],

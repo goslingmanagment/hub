@@ -27,14 +27,12 @@ import {
   type StartedTestDatabase,
 } from "./helpers/db.ts";
 import {
-  changedTables,
   makeTestActor,
   okResponse,
   RecordingAlerts,
   RecordingMetrics,
   ScriptedLiveTransport,
   seedSyncPage,
-  tableCounts,
   testConfig,
   waitFor,
 } from "./helpers/sync-engine-host.ts";
@@ -126,14 +124,11 @@ function beforeOf(req: FanslyWireRequest): string | null {
   return new URL(req.url).searchParams.get("before");
 }
 
-async function seedPage(mode: "live" | "shadow" = "live") {
-  const { pageId } = await seedSyncPage({ db: db(), pool: testDb!.pool }, {
-    mode,
-    guard: mode === "live" ? "fansly_sync_engine" : null,
-  });
+async function seedPage() {
+  const { pageId } = await seedSyncPage({ db: db(), pool: testDb!.pool }, { mode: "live", guard: "fansly_sync_engine" });
   await testDb!.pool.query("update pages set external_page_id = $2 where id = $1", [pageId, OWN]);
   await testDb!.pool.query(
-    `update sync_pages set legacy_imported_at = case when mode = 'live' then clock_timestamp() - interval '1 day' end,
+    `update sync_pages set legacy_imported_at = clock_timestamp() - interval '1 day',
             mode_changed_at = clock_timestamp() - interval '1 day'
       where page_id = $1`,
     [pageId],
@@ -221,22 +216,20 @@ async function seedThread(pageId: number, seed: ThreadSeed): Promise<number> {
 }
 
 /** Every Fansly entry, standing polls parked far ahead. */
-async function registryFor(pageId: number, shadow = false): Promise<EngineRegistry> {
+async function registryFor(pageId: number): Promise<EngineRegistry> {
   const registry = createEngineRegistry(FANSLY_RESOURCE_SPECS);
   const page = await getSyncPage(db(), pageId);
   await ensurePollRows(db(), {
     pageId,
-    shadow,
-    polls: pollsFor(registry, page!, shadow).map((poll) => ({ ...poll, phase: 0.999 })),
+    polls: pollsFor(registry, page!).map((poll) => ({ ...poll, phase: 0.999 })),
   });
   return registry;
 }
 
-async function demand(pageId: number, resource: string, n: number, messageIds: readonly string[], options: { shadow?: boolean } = {}) {
+async function demand(pageId: number, resource: string, n: number, messageIds: readonly string[]) {
   const spec = fanslyResourceSpec(resource)!;
   return upsertDemand(db(), {
     pageId,
-    shadow: options.shadow ?? false,
     resource,
     subject: groupOf(n),
     kind: spec.kind,
@@ -280,7 +273,6 @@ async function runLive(
   const { actor, stop, abort } = await makeTestActor({
     db: db(),
     pageId,
-    mode: "live",
     registry,
     transport,
     alerts: options.alerts ?? new RecordingAlerts(),
@@ -297,7 +289,7 @@ async function runLive(
   return { requests };
 }
 
-async function workRow(pageId: number, resource: string, n: number, shadow = false) {
+async function workRow(pageId: number, resource: string, n: number) {
   const result = await testDb!.pool.query<{
     id: string; state: string; close_reason: string | null; demand: { messageIds: string[] }; cursor: Record<string, unknown>;
     demand_revision: string; applied_revision: string; due_at: Date; updated_at: Date; attempts_count: number;
@@ -305,8 +297,8 @@ async function workRow(pageId: number, resource: string, n: number, shadow = fal
   }>(
     `select id::text, state, close_reason, demand, cursor, demand_revision::text, applied_revision::text, due_at, updated_at,
             attempts_count, last_error_class
-       from sync_work where page_id = $1 and resource = $2 and subject = $3 and shadow = $4 order by id desc limit 1`,
-    [pageId, resource, groupOf(n), shadow],
+       from sync_work where page_id = $1 and resource = $2 and subject = $3 and not shadow order by id desc limit 1`,
+    [pageId, resource, groupOf(n)],
   );
   return result.rows[0] ?? null;
 }
@@ -962,29 +954,5 @@ describe("dm-messages.history", () => {
       history_state: "complete", history_proof: "empty_page", history_proof_observation_id: proofAttempt.rows[0]!.obs,
       contiguous_count: 3, message_coverage_status: "complete", message_backfill_complete: true,
     });
-  });
-});
-
-describe("dm-messages in shadow", () => {
-  it("estimates ⌈ids / 25⌉ reads and writes nothing but its own work and attempts", async (context) => {
-    if (!testDb) return context.skip();
-    const pageId = await seedPage("shadow");
-    await seedThread(pageId, { n: 16, stored: range(1, 3), chain: true });
-    const registry = await registryFor(pageId, true);
-    await demand(pageId, "dm-messages.head", 16, range(4, 63).map(msg), { shadow: true });
-    const before = await tableCounts(testDb.pool);
-    const { actor, stop, abort } = await makeTestActor({ db: db(), pageId, mode: "shadow", registry });
-    const run = actor.run({ stop: stop.signal, abort: abort.signal });
-    try {
-      await waitFor(async () => ((await workRow(pageId, "dm-messages.head", 16, true))?.state === "done" ? true : null), 30_000, "shadow walk");
-    } finally {
-      stop.abort();
-      await run;
-    }
-    expect(await scalar(
-      "select count(*)::int as n from sync_attempts where page_id = $1 and shadow and resource = 'dm-messages.head' and outcome = 'shadow'", [pageId],
-    )).toBe(3);
-    expect(changedTables(before, await tableCounts(testDb.pool)).filter((name) => !["sync_work", "sync_attempts", "sync_pages"].includes(name)))
-      .toEqual([]);
   });
 });

@@ -5,7 +5,6 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
   acquireSyncPageOwnership,
-  advanceWsRouterCursor,
   captureAttempt,
   clearPageHold,
   confirmSyncOwnersStopped,
@@ -134,7 +133,6 @@ async function secondsFromNow(table: string, column: string, id: number): Promis
 function demand(pageId: number, overrides: Partial<UpsertDemandInput> = {}): UpsertDemandInput {
   return {
     pageId,
-    shadow: false,
     resource: "dm-messages.head",
     subject: "group-1",
     kind: "trigger",
@@ -147,7 +145,7 @@ async function admit(
   pageId: number,
   generation: bigint,
   work: { id: number; resource: string; subject: string; class: SyncEngineWorkClass },
-  options: { shadow?: boolean; evidence?: boolean; slot?: number; nextCyclePos?: number } = {},
+  options: { evidence?: boolean; slot?: number; nextCyclePos?: number } = {},
 ): Promise<{ attemptId: number; demandRevision: number }> {
   return inTx(async (tx) => {
     await lockOwnedPage(tx, { pageId, generation, lock: "no_key_update" });
@@ -155,7 +153,6 @@ async function admit(
     if (!running) throw new Error(`work ${work.id} is not open`);
     const { attemptId } = await insertAdmission(tx, {
       pageId,
-      shadow: options.shadow ?? false,
       workId: work.id,
       resource: work.resource,
       subject: work.subject,
@@ -247,7 +244,6 @@ describe("sync_pages rows and modes", () => {
       pausedAll: false,
       pausedResources: [],
       holdKind: null,
-      wsRouterCursor: 0,
       owner: { generation: 0n, host: null, releasedAt: null },
     });
     expect((await listSyncPages(db())).map((row) => row.pageId)).toEqual([pageId]);
@@ -255,25 +251,17 @@ describe("sync_pages rows and modes", () => {
     expect(await getSyncPage(db(), Number(onlyfans[0]!.id))).toBeNull();
   });
 
-  it("moves off ↔ shadow and nothing else: no way to handover or live, none out of them (I17)", async (context) => {
+  it("takes a page left in shadow to off and nothing else: no way into shadow, handover or live, none out of them (I17)", async (context) => {
     if (!testDb) return context.skip();
     const pageId = await seedPage("modes");
 
-    expect(await setSyncPageMode(db(), { pageId, to: "live", changedBy: "test" }))
-      .toEqual({ kind: "refused", from: "off", to: "live", reason: "transition_not_allowed" });
-    expect(await setSyncPageMode(db(), { pageId, to: "handover", changedBy: "test" }))
-      .toEqual({ kind: "refused", from: "off", to: "handover", reason: "transition_not_allowed" });
-    expect(await setSyncPageMode(db(), { pageId, to: "shadow", changedBy: "owner" }))
-      .toMatchObject({ kind: "changed", from: "off", to: "shadow" });
-    expect(await setSyncPageMode(db(), { pageId, to: "shadow", changedBy: "owner" }))
-      .toEqual({ kind: "unchanged", mode: "shadow" });
-    expect(await setSyncPageMode(db(), { pageId, to: "off", changedBy: "owner", expectFrom: "live" }))
-      .toEqual({ kind: "refused", from: "shadow", to: "off", reason: "expected_mode_mismatch" });
-    for (const to of ["handover", "live"] as const) {
-      expect(await setSyncPageMode(db(), { pageId, to, changedBy: "test" }))
-        .toEqual({ kind: "refused", from: "shadow", to, reason: "transition_not_allowed" });
+    // Nothing leaves off: shadow is a mode no lever reaches any more.
+    for (const to of ["shadow", "handover", "live"] as const) {
+      expect(await setSyncPageMode(db(), { pageId, to, changedBy: "owner" }), `off → ${to}`)
+        .toEqual({ kind: "refused", from: "off", to, reason: "transition_not_allowed" });
     }
-    expect((await getSyncPage(db(), pageId))!.mode).toBe("shadow");
+    expect(await setSyncPageMode(db(), { pageId, to: "off", changedBy: "owner" })).toEqual({ kind: "unchanged", mode: "off" });
+    expect((await getSyncPage(db(), pageId))!.mode).toBe("off");
 
     // A page in handover or live stays there: no lever takes it out.
     for (const from of ["handover", "live"] as const) {
@@ -287,12 +275,21 @@ describe("sync_pages rows and modes", () => {
       expect((await getSyncPage(db(), pageId))!.legacyImportedAt).not.toBeNull();
     }
 
-    // Neither off nor shadow runs a live loop: the change leaves no import mark.
+    // A row left in shadow (the CHECK value stays, forward-only) goes off and
+    // nowhere else; off runs no loop, so the change leaves no import mark.
     await query("update sync_pages set mode = 'shadow' where page_id = $1", [pageId]);
+    for (const to of ["handover", "live"] as const) {
+      expect(await setSyncPageMode(db(), { pageId, to, changedBy: "owner" }))
+        .toEqual({ kind: "refused", from: "shadow", to, reason: "transition_not_allowed" });
+    }
+    expect(await setSyncPageMode(db(), { pageId, to: "off", changedBy: "owner", expectFrom: "live" }))
+      .toEqual({ kind: "refused", from: "shadow", to: "off", reason: "expected_mode_mismatch" });
     expect(await setSyncPageMode(db(), { pageId, to: "off", changedBy: "owner" }))
       .toMatchObject({ kind: "changed", from: "shadow", to: "off" });
     expect(await getSyncPage(db(), pageId)).toMatchObject({ mode: "off", modeChangedBy: "owner", legacyImportedAt: null });
-    expect(await setSyncPageMode(db(), { pageId: 999_999, to: "shadow", changedBy: "owner" }))
+    expect(await setSyncPageMode(db(), { pageId, to: "shadow", changedBy: "owner" }))
+      .toEqual({ kind: "refused", from: "off", to: "shadow", reason: "transition_not_allowed" });
+    expect(await setSyncPageMode(db(), { pageId: 999_999, to: "off", changedBy: "owner" }))
       .toMatchObject({ kind: "refused", reason: "no_page" });
   });
 });
@@ -395,13 +392,6 @@ describe("page ownership (I6, I7)", () => {
     // The switch's flip (design §2.8) opens it.
     await query("update fansly_page_send_guards set owner_engine = 'fansly_sync_engine' where page_id = $1", [pageId]);
     expect(await inTx(live)).toEqual({ mode: "live", ownerEngine: "fansly_sync_engine" });
-
-    // Generation-fenced page writes.
-    await expect(advanceWsRouterCursor(db(), { pageId, generation: generation + 1n, cursor: 10 }))
-      .rejects.toBeInstanceOf(OwnershipLostError);
-    await advanceWsRouterCursor(db(), { pageId, generation, cursor: 10 });
-    await advanceWsRouterCursor(db(), { pageId, generation, cursor: 4 });
-    expect((await getSyncPage(db(), pageId))!.wsRouterCursor).toBe(10);
   });
 });
 
@@ -539,10 +529,11 @@ describe("sync_work demand", () => {
       expect(row!.dueAt.getTime()).toBe(t0 + 1_000);
       expect(row!.demandRevision).toBe(4);
 
-      // Shadow and live, and different subjects, are different keys.
-      expect((await upsertDemand(db(), demand(pageId, { shadow: true }))).created).toBe(true);
+      // Different subjects are different keys.
       expect((await upsertDemand(db(), demand(pageId, { subject: "group-2" }))).created).toBe(true);
-      expect(await getWorkForStatus(db(), { pageId })).toHaveLength(3);
+      expect(await getWorkForStatus(db(), { pageId })).toHaveLength(2);
+      expect(await query<{ shadow: boolean }>("select distinct shadow from sync_work where page_id = $1", [pageId]))
+        .toEqual([{ shadow: false }]);
 
       await expect(upsertDemand(db(), demand(pageId, { resource: "dm_messages.head" }))).rejects.toThrow(/resource key/);
       await expect(upsertDemand(db(), demand(pageId, { subject: "x".repeat(201) }))).rejects.toThrow(/200/);
@@ -584,7 +575,7 @@ describe("sync_work demand", () => {
       breaker: { failureCount: 2, breakerUntil, blockedByVendorAt: null }, lastErrorClass: "subject_failure",
     });
     await settleWork(db(), { workId: first.id, generation, servedRevision: 1, satisfiesRevision: false, close: "cancelled", closeReason: "test" });
-    const closed = await latestClosedWorkForKey(db(), { pageId, shadow: false, resource: "dm-messages.head", subject: "group-1" });
+    const closed = await latestClosedWorkForKey(db(), { pageId, resource: "dm-messages.head", subject: "group-1" });
     expect(closed).toMatchObject({ id: first.id, state: "cancelled", closeReason: "test", failureCount: 2 });
     expect((await query<{ secret_params: string | null }>("select secret_params from sync_work where id = $1", [first.id]))[0]!.secret_params)
       .toBeNull();
@@ -604,10 +595,10 @@ describe("sync_work demand", () => {
       { resource: "account.poll", class: "planned" as const, everyMs: 60_000, phase: 0 },
       { resource: "notifications.forward", class: "planned" as const, everyMs: 1_800_000 },
     ];
-    expect(await ensurePollRows(db(), { pageId, shadow: true, polls })).toBe(3);
-    expect(await ensurePollRows(db(), { pageId, shadow: true, polls })).toBe(0);
-    expect(await ensurePollRows(db(), { pageId, shadow: false, polls: polls.slice(0, 1) })).toBe(1);
-    const rows = await getWorkForStatus(db(), { pageId, shadow: true });
+    expect(await ensurePollRows(db(), { pageId, polls })).toBe(3);
+    expect(await ensurePollRows(db(), { pageId, polls })).toBe(0);
+    expect(await ensurePollRows(db(), { pageId, polls: polls.slice(0, 1) })).toBe(0);
+    const rows = await getWorkForStatus(db(), { pageId });
     expect(rows.map((row) => [row.resource, row.kind, row.class, row.subject]).sort()).toEqual([
       ["account.poll", "poll", "planned", ""],
       ["notifications.forward", "poll", "planned", ""],
@@ -621,7 +612,7 @@ describe("sync_work demand", () => {
     const notifications = await secondsFromNow("sync_work", "due_at", byResource.get("notifications.forward")!);
     expect(notifications).toBeGreaterThan(-1);
     expect(notifications).toBeLessThan(1_801);
-    await expect(ensurePollRows(db(), { pageId, shadow: true, polls: [{ ...polls[0]!, phase: 1 }] })).rejects.toThrow(/phase/);
+    await expect(ensurePollRows(db(), { pageId, polls: [{ ...polls[0]!, phase: 1 }] })).rejects.toThrow(/phase/);
   });
 });
 
@@ -637,21 +628,19 @@ describe("sync_work picks (design §3.4)", () => {
     const c = await upsertDemand(db(), demand(pageId, { subject: "c", dueAt: past(5_000) }));
     const d = await upsertDemand(db(), demand(pageId, { resource: "transactions.head", subject: "", dueAt: past(5_000) }));
     await upsertDemand(db(), demand(pageId, { subject: "later", dueAt: new Date(now + 60_000) }));
-    await upsertDemand(db(), demand(pageId, { subject: "shadow", shadow: true, dueAt: past(5_000) }));
     await upsertDemand(db(), demand(other, { subject: "a", dueAt: past(5_000) }));
     await upsertDemand(db(), demand(pageId, { subject: "planned", class: "planned", dueAt: past(5_000) }));
     const broken = await upsertDemand(db(), demand(pageId, { subject: "broken", dueAt: past(5_000) }));
     await query("update sync_work set breaker_until = clock_timestamp() + interval '1 hour' where id = $1", [broken.id]);
 
     const ids = async (filter: Partial<Parameters<typeof pickUrgent>[1]> = {}) =>
-      (await pickUrgent(db(), { pageId, shadow: false, ...filter })).map((row) => row.id);
+      (await pickUrgent(db(), { pageId, ...filter })).map((row) => row.id);
     expect(await ids()).toEqual([b.id, a.id, c.id, d.id]);
     expect(await ids({ limit: 2 })).toEqual([b.id, a.id]);
     expect(await ids({ excludeResources: ["dm-messages.head"] })).toEqual([d.id]);
     expect(await ids({ excludeFiles: ["transactions"] })).toEqual([b.id, a.id, c.id]);
     expect(await ids({ now: new Date(now + 7_200_000) })).toContain(broken.id);
-    expect((await pickUrgent(db(), { pageId, shadow: true })).map((row) => row.subject)).toEqual(["shadow"]);
-    await expect(pickUrgent(db(), { pageId, shadow: false, excludeFiles: ["no.dots"] })).rejects.toThrow(/resource file/);
+    await expect(pickUrgent(db(), { pageId, excludeFiles: ["no.dots"] })).rejects.toThrow(/resource file/);
   });
 
   it("puts due polls first, then round robin by resource key so triggers never starve a walk", async (context) => {
@@ -669,11 +658,11 @@ describe("sync_work picks (design §3.4)", () => {
     const vaultWalk = await upsertDemand(db(), demand(pageId, {
       resource: "catalog.vault", subject: "", kind: "goal", class: "planned", dueAt: new Date(Date.now() - 1_000),
     }));
-    await ensurePollRows(db(), { pageId, shadow: false, polls: [{ resource: "subscribers.poll", class: "planned", everyMs: 60_000, phase: 0 }] });
+    await ensurePollRows(db(), { pageId, polls: [{ resource: "subscribers.poll", class: "planned", everyMs: 60_000, phase: 0 }] });
 
     const served: string[] = [];
     for (let slot = 0; slot < 12; slot++) {
-      const picked = await pickPlanned(db(), { pageId, shadow: false });
+      const picked = await pickPlanned(db(), { pageId });
       expect(picked).not.toBeNull();
       const work = picked!.work;
       served.push(work.resource);
@@ -701,15 +690,38 @@ describe("sync_work picks (design §3.4)", () => {
 
     // A paused key is skipped, the next key is served.
     const paused = await pickPlanned(db(), {
-      pageId, shadow: false, excludeResources: ["media-stats.walk", "catalog.vault"],
+      pageId, excludeResources: ["media-stats.walk", "catalog.vault"],
     });
     expect(paused!.work.resource).toBe("dm-messages.catchup");
-    const held = await pickPlanned(db(), { pageId, shadow: false, excludeFiles: ["dm-messages", "catalog"] });
+    const held = await pickPlanned(db(), { pageId, excludeFiles: ["dm-messages", "catalog"] });
     expect(held!.work.id).toBe(mediaWalk.id);
-    expect(await pickPlanned(db(), { pageId, shadow: false, plannedRr: { "media-stats.walk": new Date(0).toISOString() } }))
+    expect(await pickPlanned(db(), { pageId, plannedRr: { "media-stats.walk": new Date(0).toISOString() } }))
       .toMatchObject({ level: "round_robin" });
     expect(vaultWalk.created).toBe(true);
-    expect(await pickPlanned(db(), { pageId, shadow: true })).toBeNull();
+  });
+
+  it("never reads a row shadow mode left behind (step 4, S4-23): no pick, no status, and its key opens beside it", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage("left-behind");
+    const past = new Date(Date.now() - 5_000);
+    await query(
+      `insert into sync_work (page_id, shadow, resource, subject, kind, class, due_at)
+       values ($1, true, 'dm-messages.head', 'group-1', 'trigger', 'urgent', $2),
+              ($1, true, 'catalog.vault', '', 'goal', 'planned', $2)`,
+      [pageId, past],
+    );
+    expect(await pickUrgent(db(), { pageId })).toEqual([]);
+    expect(await pickPlanned(db(), { pageId })).toBeNull();
+    expect(await getWorkForStatus(db(), { pageId })).toEqual([]);
+    expect(await latestClosedWorkForKey(db(), { pageId, resource: "dm-messages.head", subject: "group-1" })).toBeNull();
+
+    // The same key opens as the engine's own row, and only that one is served.
+    const opened = await upsertDemand(db(), demand(pageId, { dueAt: past }));
+    expect(opened).toMatchObject({ created: true, demandRevision: 1 });
+    expect((await pickUrgent(db(), { pageId })).map((row) => row.id)).toEqual([opened.id]);
+    expect((await getWorkForStatus(db(), { pageId })).map((row) => row.id)).toEqual([opened.id]);
+    expect(await query<{ n: number }>("select count(*)::int as n from sync_work where page_id = $1 and shadow", [pageId]))
+      .toEqual([{ n: 2 }]);
   });
 });
 
@@ -754,11 +766,11 @@ describe("sync_work settlement", () => {
     expect(await settleWork(db(), { workId: work.id, generation, servedRevision: 2, satisfiesRevision: true })).toBeNull();
   });
 
-  it("reschedules a poll, quarantines, supersedes shadow work and locks rows in id order", async (context) => {
+  it("reschedules a poll, quarantines and locks rows in id order", async (context) => {
     if (!testDb) return context.skip();
     const pageId = await seedPage("misc");
     const generation = await own(pageId);
-    await ensurePollRows(db(), { pageId, shadow: false, polls: [{ resource: "account.poll", class: "planned", everyMs: 3_600_000, phase: 0 }] });
+    await ensurePollRows(db(), { pageId, polls: [{ resource: "account.poll", class: "planned", everyMs: 3_600_000, phase: 0 }] });
     const [poll] = await getWorkForStatus(db(), { pageId });
     const waitingUntil = new Date(Date.now() + 3_600_000);
     expect(await settleWork(db(), {
@@ -773,7 +785,7 @@ describe("sync_work settlement", () => {
     expect(await quarantineWork(db(), { workId: broken.id, generation, errorClass: "contract" })).toBe(true);
     expect(await quarantineWork(db(), { workId: broken.id, generation, errorClass: "contract" })).toBe(false);
     expect(await upsertDemand(db(), demand(pageId, { subject: "broken" }))).toMatchObject({ id: broken.id, created: false, demandRevision: 2 });
-    expect((await pickUrgent(db(), { pageId, shadow: false })).map((row) => row.id)).not.toContain(broken.id);
+    expect((await pickUrgent(db(), { pageId })).map((row) => row.id)).not.toContain(broken.id);
     expect((await getWorkForStatus(db(), { pageId, subject: "broken" }))[0])
       .toMatchObject({ state: "quarantined", waitingReason: "quarantined", lastErrorClass: "contract" });
 
@@ -796,7 +808,7 @@ describe("sync_attempts", () => {
     });
     const attempt = await getSyncAttempt(db(), attemptId);
     expect(attempt).toMatchObject({
-      pageId, shadow: false, workId: work.id, resource: "dm-messages.head", subject: "group-1", class: "urgent", slot: 4,
+      pageId, workId: work.id, resource: "dm-messages.head", subject: "group-1", class: "urgent", slot: 4,
       ownerGeneration: generation, demandRevision: 1, settingMs: 2_000, jitterU: 0.1, pauseMs: 2_200,
       outcome: "admitted", applyState: "none", evidence: true, sentAt: null,
       request: { path: "/api/v1/message", query: { groupId: "group-1", limit: "25" } },
@@ -807,12 +819,14 @@ describe("sync_attempts", () => {
     expect(page!.lastAdmittedAt).not.toBeNull();
     expect((await getWorkForStatus(db(), { pageId }))[0]).toMatchObject({ state: "running", lastAttemptId: attemptId });
 
-    // A planned admission stamps its key; a shadow attempt is never evidence.
-    const shadowWork = await upsertDemand(db(), demand(pageId, { shadow: true, resource: "catalog.vault", subject: "", kind: "goal", class: "planned" }));
-    const shadowAttempt = await admit(pageId, generation, { ...shadowWork, resource: "catalog.vault", subject: "", class: "planned" }, {
-      shadow: true, evidence: true, slot: 9, nextCyclePos: 0,
+    // A planned admission stamps its key; the row is live, evidence as the caller says.
+    const plannedWork = await upsertDemand(db(), demand(pageId, { resource: "catalog.vault", subject: "", kind: "goal", class: "planned" }));
+    const plannedAttempt = await admit(pageId, generation, { ...plannedWork, resource: "catalog.vault", subject: "", class: "planned" }, {
+      evidence: false, slot: 9, nextCyclePos: 0,
     });
-    expect(await getSyncAttempt(db(), shadowAttempt.attemptId)).toMatchObject({ shadow: true, evidence: false, class: "planned" });
+    expect(await getSyncAttempt(db(), plannedAttempt.attemptId)).toMatchObject({ evidence: false, class: "planned" });
+    expect(await query<{ shadow: boolean }>("select distinct shadow from sync_attempts where page_id = $1", [pageId]))
+      .toEqual([{ shadow: false }]);
     expect(Object.keys((await getSyncPage(db(), pageId))!.plannedRr)).toEqual(["catalog.vault"]);
 
     // A foreign generation admits nothing: the whole transaction rolls back.
@@ -821,7 +835,7 @@ describe("sync_attempts", () => {
     await expect(inTx(async (tx) => {
       await markWorkRunning(tx, { workId: third.id, generation });
       await insertAdmission(tx, {
-        pageId, shadow: false, workId: third.id, resource: "dm-messages.head", subject: "group-3", class: "urgent", slot: 0,
+        pageId, workId: third.id, resource: "dm-messages.head", subject: "group-3", class: "urgent", slot: 0,
         nextCyclePos: 1, generation: generation + 1n, demandRevision: 1, settingMs: 2_000, jitterU: 0, pauseMs: 2_000,
         operation: "messages.page", request: {}, evidence: true,
       });
@@ -891,31 +905,22 @@ describe("sync_attempts", () => {
     expect((await getSyncPage(db(), pageId))!.lastCompletedAt).toEqual(lastCompleted);
   });
 
-  it("settles shadow and refused attempts without the live send facts", async (context) => {
+  it("settles a refused attempt without the send facts", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("shadow-settle");
+    const pageId = await seedPage("refused-settle");
     const generation = await own(pageId);
-    const work = await upsertDemand(db(), demand(pageId, { shadow: true }));
-    const shadow = await admit(pageId, generation, { ...work, resource: "dm-messages.head", subject: "group-1", class: "urgent" }, { shadow: true });
-    // A live outcome is never written as 'shadow' onto a live row and vice versa.
-    const simulated = new Date(Date.now() - 100);
-    expect(await settleAttemptWithoutCapture(db(), { attemptId: shadow.attemptId, outcome: "shadow", sentAt: simulated, gapPrevMs: 2_300 }))
-      .toBe(true);
-    expect(await getSyncAttempt(db(), shadow.attemptId)).toMatchObject({
-      outcome: "shadow", sendMark: "shadow", sentAt: simulated, applyState: "skipped", gapPrevMs: 2_300,
-    });
-    expect(await settleAttemptWithoutCapture(db(), { attemptId: shadow.attemptId, outcome: "shadow" })).toBe(false);
-    expect((await getSyncPage(db(), pageId))!.lastSendAt).toBeNull();
-
-    const live = await upsertDemand(db(), demand(pageId, { subject: "live" }));
-    const refused = await admit(pageId, generation, { ...live, resource: "dm-messages.head", subject: "live", class: "urgent" });
-    expect(await settleAttemptWithoutCapture(db(), { attemptId: refused.attemptId, outcome: "shadow" })).toBe(false);
+    const work = await upsertDemand(db(), demand(pageId));
+    const refused = await admit(pageId, generation, { ...work, resource: "dm-messages.head", subject: "group-1", class: "urgent" });
     expect(await settleAttemptWithoutCapture(db(), {
       attemptId: refused.attemptId, outcome: "aborted_before_send", errorClass: "send_deadline_passed",
     })).toBe(true);
     expect(await getSyncAttempt(db(), refused.attemptId)).toMatchObject({
       outcome: "aborted_before_send", errorClass: "send_deadline_passed", sentAt: null, sendMark: null, applyState: "none",
     });
+    // Idempotent like the capture, and the page's send facts are untouched.
+    expect(await settleAttemptWithoutCapture(db(), { attemptId: refused.attemptId, outcome: "unknown" })).toBe(false);
+    expect(await getSyncAttempt(db(), refused.attemptId)).toMatchObject({ outcome: "aborted_before_send" });
+    expect((await getSyncPage(db(), pageId))!.lastSendAt).toBeNull();
   });
 
   it("applies, defers and quarantines by the §3.7.3 rules", async (context) => {
@@ -958,19 +963,18 @@ describe("sync_attempts", () => {
     expect(await listUnfinishedAttempts(db(), { pageId, phase: "apply" })).toEqual([]);
   });
 
-  it("recovers a previous run: unknown live sends, closed shadow admissions, due applies, reopened work", async (context) => {
+  it("recovers a previous run: unknown sends, due applies, reopened work", async (context) => {
     if (!testDb) return context.skip();
     const pageId = await seedPage("recover");
     const generation = await own(pageId);
-    const make = async (subject: string, shadow = false) => {
-      const work = await upsertDemand(db(), demand(pageId, { subject, shadow }));
-      const admitted = await admit(pageId, generation, { ...work, resource: "dm-messages.head", subject, class: "urgent" }, { shadow });
+    const make = async (subject: string) => {
+      const work = await upsertDemand(db(), demand(pageId, { subject }));
+      const admitted = await admit(pageId, generation, { ...work, resource: "dm-messages.head", subject, class: "urgent" });
       return { workId: work.id, attemptId: admitted.attemptId };
     };
     const admitted = await make("admitted");
     const sent = await make("sent");
     await markAttemptSent(db(), { attemptId: sent.attemptId, sentAt: new Date() });
-    const shadow = await make("shadow", true);
     const captured = await make("captured");
     await captureAttempt(db(), {
       attemptId: captured.attemptId, pageId, outcome: "response", sent: true, sentAt: new Date(), sendMark: "request_start",
@@ -978,7 +982,7 @@ describe("sync_attempts", () => {
     });
     await markDeferred(db(), { attemptId: captured.attemptId, error: "erasure_busy", retryInMs: 3_600_000 });
     expect((await listUnfinishedAttempts(db(), { pageId, phase: "send" })).map((row) => row.id).sort((x, y) => x - y))
-      .toEqual([admitted.attemptId, sent.attemptId, shadow.attemptId]);
+      .toEqual([admitted.attemptId, sent.attemptId]);
 
     // The run "crashed": its successor is admitted by an operator's confirmation.
     expect(await acquireSyncPageOwnership(db(), { pageId, owner: owner({ host: "after-restart" }) }))
@@ -986,19 +990,17 @@ describe("sync_attempts", () => {
     await confirmSyncOwnersStopped(db(), { runningHosts: ["after-restart"], ownHost: "cli", confirmedBy: "test", dryRun: false });
     expect(await own(pageId, owner({ host: "after-restart" }))).toBe(generation + 1n);
     expect(await inTx((tx) => recoverUnfinishedAttempts(tx, { pageId })))
-      .toEqual({ unknown: 2, memorySkipped: 0, shadowClosed: 1, workReopened: 3, appliesDue: 1 });
+      .toEqual({ unknown: 2, memorySkipped: 0, workReopened: 2, appliesDue: 1 });
     expect(await getSyncAttempt(db(), admitted.attemptId)).toMatchObject({ outcome: "unknown" });
     expect(await getSyncAttempt(db(), sent.attemptId)).toMatchObject({ outcome: "unknown" });
-    expect(await getSyncAttempt(db(), shadow.attemptId)).toMatchObject({ outcome: "shadow", sendMark: "shadow", applyState: "skipped" });
     expect((await listUnfinishedAttempts(db(), { pageId, phase: "apply", dueOnly: true })).map((row) => row.id))
       .toEqual([captured.attemptId]);
     const states = new Map((await getWorkForStatus(db(), { pageId })).map((row) => [row.id, row.state]));
     expect(states.get(admitted.workId)).toBe("open");
     expect(states.get(sent.workId)).toBe("open");
-    expect(states.get(shadow.workId)).toBe("open");
     expect(states.get(captured.workId)).toBe("running");
     expect(await inTx((tx) => recoverUnfinishedAttempts(tx, { pageId })))
-      .toEqual({ unknown: 0, memorySkipped: 0, shadowClosed: 0, workReopened: 0, appliesDue: 1 });
+      .toEqual({ unknown: 0, memorySkipped: 0, workReopened: 0, appliesDue: 1 });
   });
 });
 
@@ -1036,9 +1038,14 @@ describe("the takeover floor (I5) and the pace audit", () => {
     near(await floor(), 15_000 + 2_400);
     await query("update sync_attempts set admitted_at = clock_timestamp() - interval '11 minutes' where id = $1", [admitted.attemptId]);
     near(await floor(), 2_400);
-    // Shadow attempts never count.
-    const shadowWork = await upsertDemand(db(), demand(pageId, { shadow: true }));
-    await admit(pageId, generation, { ...shadowWork, resource: "dm-messages.head", subject: "group-1", class: "urgent" }, { shadow: true });
+    // A row shadow mode left behind never counts: it was never a send.
+    await query(
+      `insert into sync_attempts (page_id, shadow, resource, subject, class, owner_generation, setting_ms, jitter_u, pause_ms,
+                                  admitted_at, sent_at, send_mark, operation, request, outcome, apply_state)
+       values ($1, true, 'dm-messages.head', 'group-1', 'urgent', $2, 2000, 0.1, 2200, clock_timestamp(),
+               clock_timestamp() + interval '30 seconds', 'shadow', 'messages.page', '{}'::jsonb, 'shadow', 'skipped')`,
+      [pageId, generation.toString()],
+    );
     near(await floor(), 2_400);
 
     // The legacy guard: its last completion, and a request holding it right now.
@@ -1081,54 +1088,52 @@ describe("the takeover floor (I5) and the pace audit", () => {
     ]);
     expect(audit.every((send) => send.settingMs === 2_000 && send.ownerGeneration === generation)).toBe(true);
     expect((await listSendsForPaceAudit(db(), { pageId, since: new Date(base - 1_000) }))[0]).toMatchObject({ attemptId: ids[0], gapMs: null });
-    expect(await listSendsForPaceAudit(db(), { pageId, since: new Date(base - 1_000), shadow: true })).toEqual([]);
   });
 
-  it("looks back a bounded span for the previous send, however long the other journal is", async (context) => {
+  it("looks back a bounded span for the previous send, however many rows shadow mode left behind", async (context) => {
     if (!testDb) return context.skip();
-    // 30 days of one journal (a send every 2 min) and nothing of the other
-    // before the window: the live audit of a page in its first hour after the
-    // switch, or the shadow audit of a page live for a long time. The audit's
-    // reads must stay inside its window and the look-back.
-    for (const shadow of [false, true]) {
-      const pageId = await seedPage(`audit-history-${shadow ? "shadow" : "live"}`);
-      const generation = await own(pageId);
-      const since = new Date(Date.now() - 60_000);
-      const columns = `page_id, shadow, resource, subject, class, owner_generation, setting_ms, jitter_u, pause_ms,
-                       admitted_at, sent_at, send_mark, operation, request, outcome`;
-      const values = `$1, $2::boolean, 'dm-messages.head', 'group-1', 'urgent', $3, 2000, 0.1, 2200, t, t,
-                      case when $2::boolean then 'shadow' else 'request_start' end, 'messages.page', '{}'::jsonb,
-                      case when $2::boolean then 'shadow' else 'response' end`;
-      await query(
-        `insert into sync_attempts (${columns})
-         select ${values} from generate_series(1, 21600) n, lateral (select $4::timestamptz - n * interval '2 minutes') s(t)`,
-        [pageId, !shadow, generation.toString(), since],
+    // 30 days of rows shadow mode left (one every 2 min) and no send before
+    // the window: the audit never reads them, and its reads stay inside its
+    // window and the look-back.
+    const pageId = await seedPage("audit-history");
+    const generation = await own(pageId);
+    const since = new Date(Date.now() - 60_000);
+    const columns = `page_id, shadow, resource, subject, class, owner_generation, setting_ms, jitter_u, pause_ms,
+                     admitted_at, sent_at, send_mark, operation, request, outcome`;
+    const values = `$1, $2::boolean, 'dm-messages.head', 'group-1', 'urgent', $3, 2000, 0.1, 2200, t, t,
+                    case when $2::boolean then 'shadow' else 'request_start' end, 'messages.page', '{}'::jsonb,
+                    case when $2::boolean then 'shadow' else 'response' end`;
+    await query(
+      `insert into sync_attempts (${columns})
+       select ${values} from generate_series(1, 21600) n, lateral (select $4::timestamptz - n * interval '2 minutes') s(t)`,
+      [pageId, true, generation.toString(), since],
+    );
+    const send = async (at: number, shadow = false): Promise<number> => {
+      const rows = await query<{ id: string }>(
+        `insert into sync_attempts (${columns}) select ${values} from (select $4::timestamptz) s(t) returning id::text`,
+        [pageId, shadow, generation.toString(), new Date(at)],
       );
-      const send = async (at: number): Promise<number> => {
-        const rows = await query<{ id: string }>(
-          `insert into sync_attempts (${columns}) select ${values} from (select $4::timestamptz) s(t) returning id::text`,
-          [pageId, shadow, generation.toString(), new Date(at)],
-        );
-        return Number(rows[0]!.id);
-      };
-      const ids = [await send(since.getTime() + 1_000), await send(since.getTime() + 3_100), await send(since.getTime() + 5_300)];
-      await query("analyze sync_attempts");
+      return Number(rows[0]!.id);
+    };
+    const ids = [await send(since.getTime() + 1_000), await send(since.getTime() + 3_100), await send(since.getTime() + 5_300)];
+    // One of the rows left behind inside the window: no send, no gap.
+    await send(since.getTime() + 2_000, true);
+    await query("analyze sync_attempts");
 
-      const audit = await captureStatement(() => listSendsForPaceAudit(db(), { pageId, since, shadow }));
-      expect(audit.result.map((row) => [row.attemptId, row.gapMs])).toEqual([[ids[0], null], [ids[1], 2_100], [ids[2], 2_200]]);
-      expect(await heapVisits(audit, "sync_attempts")).toBeLessThan(50);
+    const audit = await captureStatement(() => listSendsForPaceAudit(db(), { pageId, since }));
+    expect(audit.result.map((row) => [row.attemptId, row.gapMs])).toEqual([[ids[0], null], [ids[1], 2_100], [ids[2], 2_200]]);
+    expect(await heapVisits(audit, "sync_attempts")).toBeLessThan(50);
 
-      // An earlier send of the same journal beyond the look-back is no pace
-      // violation whatever the setting: the window's first gap stays unknown.
-      const earlier = await send(since.getTime() - SYNC_PACE_AUDIT_LOOKBACK_MS - 1);
-      expect((await listSendsForPaceAudit(db(), { pageId, since, shadow }))[0]).toMatchObject({ attemptId: ids[0], gapMs: null });
-      // At the look-back's edge it is the previous send.
-      await query("update sync_attempts set sent_at = $2 where id = $1", [earlier, new Date(since.getTime() - SYNC_PACE_AUDIT_LOOKBACK_MS)]);
-      expect((await listSendsForPaceAudit(db(), { pageId, since, shadow }))[0]).toMatchObject({
-        attemptId: ids[0],
-        gapMs: SYNC_PACE_AUDIT_LOOKBACK_MS + 1_000,
-      });
-    }
+    // An earlier send beyond the look-back is no pace violation whatever the
+    // setting: the window's first gap stays unknown.
+    const earlier = await send(since.getTime() - SYNC_PACE_AUDIT_LOOKBACK_MS - 1);
+    expect((await listSendsForPaceAudit(db(), { pageId, since }))[0]).toMatchObject({ attemptId: ids[0], gapMs: null });
+    // At the look-back's edge it is the previous send.
+    await query("update sync_attempts set sent_at = $2 where id = $1", [earlier, new Date(since.getTime() - SYNC_PACE_AUDIT_LOOKBACK_MS)]);
+    expect((await listSendsForPaceAudit(db(), { pageId, since }))[0]).toMatchObject({
+      attemptId: ids[0],
+      gapMs: SYNC_PACE_AUDIT_LOOKBACK_MS + 1_000,
+    });
   }, 120_000);
 });
 
@@ -1188,7 +1193,7 @@ describe("the capture's reads of the journal (under the page row lock)", () => {
     await query("analyze sync_attempts");
     await query("analyze fansly_send_log");
 
-    const live = { pageId, shadow: false, withinMs, legacy: true };
+    const live = { pageId, withinMs };
     const idle = await captureStatement(() => readRouteJournal(db(), live));
     expect(idle.result).toEqual([]);
     expect(await heapVisits(idle, "sync_attempts")).toBeLessThan(50);
@@ -1224,7 +1229,7 @@ describe("the capture's reads of the journal (under the page row lock)", () => {
     await attempt({ operation: "messages.page", admittedAgoMs: 500, sentAgoMs: null, outcome: "aborted_before_send" });
     await attempt({ operation: "transactions.page", admittedAgoMs: 500, sentAgoMs: null, outcome: "transport_error" });
     await attempt({ operation: "messaging.groups", admittedAgoMs: 2_000, sentAgoMs: null, outcome: "unknown" });
-    // A shadow attempt: the other journal.
+    // A row shadow mode left behind: never a send, never read.
     await attempt({ shadow: true, operation: "polls", admittedAgoMs: 700, sentAgoMs: 600, outcome: "shadow" });
     // Legacy: a send, a capture whose holder never completed (its lease end),
     // a completion without a send mark, a capture released unsent.
@@ -1251,11 +1256,6 @@ describe("the capture's reads of the journal (under the page row lock)", () => {
     expect(await heapVisits(read, "sync_attempts")).toBeLessThan(50);
     expect(await heapVisits(read, "fansly_send_log")).toBeLessThan(50);
 
-    // The shadow journal alone, never the send log; a live read without the
-    // legacy journal has only the engine's.
-    expect((await readRouteJournal(db(), { pageId, shadow: true, withinMs, legacy: true })).map((send) => `${send.journal}:${send.operation}`))
-      .toEqual(["engine:polls"]);
-    expect((await readRouteJournal(db(), { ...live, legacy: false })).every((send) => send.journal === "engine")).toBe(true);
     // Past the look-back and its slack: forgotten.
     await query("update sync_attempts set admitted_at = admitted_at - $2::double precision * interval '1 millisecond' where page_id = $1 and admitted_at > clock_timestamp() - interval '1 minute'",
       [pageId, withinMs + SYNC_ROUTE_JOURNAL_SLACK_MS]);

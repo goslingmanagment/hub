@@ -28,11 +28,10 @@ import type {
   ApplyResult,
   DemandSignal,
   ResourceModule,
-  ShadowResult,
   StepPlan,
   WorkOutcome,
 } from "../../engine/resource.ts";
-import { advanceShadowWalk, offsetPageDone, offsetWalkPages, type ShadowWalkProgress } from "../lib/offset-walk.ts";
+import { offsetPageDone } from "../lib/offset-walk.ts";
 import { fanEarningsRosterFollowups } from "./fan-earnings.ts";
 import { lookupFollowups, partitionLookupIds } from "./fan-profiles.ts";
 import { purchaseTargetFollowups, purchaseTargetsOfTransactions } from "./purchases.ts";
@@ -119,7 +118,6 @@ export interface TransactionsCursor {
   restartCount: number;
   /** The receipt of the last finished walk. */
   last: Record<string, unknown> | null;
-  shadow: ShadowWalkProgress | null;
 }
 
 function recordOf(value: unknown): Record<string, unknown> {
@@ -158,15 +156,11 @@ function parseWalk(value: unknown): TransactionsWalk | null {
 
 export function parseTransactionsCursor(value: unknown): TransactionsCursor {
   const record = recordOf(value);
-  const shadow = recordOf(record.shadow);
   return {
     cursorTimestamp: iso(record.cursorTimestamp),
     walk: parseWalk(record.walk),
     restartCount: count(record.restartCount) ?? 0,
     last: typeof record.last === "object" && record.last !== null ? record.last as Record<string, unknown> : null,
-    shadow: count(shadow.steps) !== null && count(shadow.done) !== null
-      ? { steps: count(shadow.steps)!, done: count(shadow.done)! }
-      : null,
   };
 }
 
@@ -329,7 +323,7 @@ async function writeTransactionsPage(
     ...lookupFollowups(lookup.due, key),
     ...purchaseTargetFollowups(purchases.targets, key),
     // After the writer's dirty marks (stamped with the wall clock as it ran).
-    ...(await fanEarningsRosterFollowups(tx, { pageId, now: new Date(), shadow: false, reason: key })),
+    ...(await fanEarningsRosterFollowups(tx, { pageId, now: new Date(), reason: key })),
   ];
   return { knownUnchanged, followups, counters };
 }
@@ -345,7 +339,7 @@ function restartOutcome(
     satisfiesRevision: false,
     nextDueAt: new Date(now.getTime() + TRANSACTIONS_WALK_RESTART_DELAY_MS),
     waitingReason: "not_due",
-    cursor: { ...cursor, walk: null, restartCount: cursor.restartCount + 1, shadow: null } satisfies TransactionsCursor,
+    cursor: { ...cursor, walk: null, restartCount: cursor.restartCount + 1 } satisfies TransactionsCursor,
     result: { restartReason: reason, restartCount: cursor.restartCount + 1, pages: walk.pages, ...detail },
   };
 }
@@ -361,7 +355,7 @@ function withheldOutcome(
     satisfiesRevision: true,
     close: "done",
     closeReason: "walk_withheld",
-    cursor: { ...cursor, walk: null, restartCount: 0, last: receipt, shadow: null } satisfies TransactionsCursor,
+    cursor: { ...cursor, walk: null, restartCount: 0, last: receipt } satisfies TransactionsCursor,
     proof: receipt,
   };
 }
@@ -419,7 +413,7 @@ export function transactionsModule(variant: TransactionsVariant): ResourceModule
     };
     if (decision.stop === null) {
       return {
-        work: { satisfiesRevision: false, nextDueAt: input.now, cursor: { ...cursor, walk: next, shadow: null } },
+        work: { satisfiesRevision: false, nextDueAt: input.now, cursor: { ...cursor, walk: next } },
         followups: write.followups,
         counters: write.counters,
       };
@@ -439,7 +433,7 @@ export function transactionsModule(variant: TransactionsVariant): ResourceModule
         satisfiesRevision: true,
         close: "done",
         closeReason: decision.stop,
-        cursor: { ...cursor, walk: null, last: receipt, shadow: null },
+        cursor: { ...cursor, walk: null, last: receipt },
         proof: receipt,
       },
       followups,
@@ -507,7 +501,7 @@ export function transactionsModule(variant: TransactionsVariant): ResourceModule
     const allCounters = { ...write.counters, ...counters };
     if (!done && !earlyStopped) {
       return {
-        work: { satisfiesRevision: false, nextDueAt: input.now, cursor: { ...cursor, walk: next, shadow: null } },
+        work: { satisfiesRevision: false, nextDueAt: input.now, cursor: { ...cursor, walk: next } },
         followups: write.followups,
         counters: allCounters,
       };
@@ -536,7 +530,7 @@ export function transactionsModule(variant: TransactionsVariant): ResourceModule
         satisfiesRevision: true,
         close: "done",
         closeReason: earlyStopped ? "early_stop" : "end",
-        cursor: { cursorTimestamp: next.newestSeenAt, walk: null, restartCount: 0, last: receipt, shadow: null },
+        cursor: { cursorTimestamp: next.newestSeenAt, walk: null, restartCount: 0, last: receipt },
         proof: receipt,
       },
       followups: write.followups,
@@ -587,7 +581,7 @@ export function transactionsModule(variant: TransactionsVariant): ResourceModule
     };
     if (!done) {
       return {
-        work: { satisfiesRevision: false, nextDueAt: input.now, cursor: { ...cursor, walk: next, shadow: null } },
+        work: { satisfiesRevision: false, nextDueAt: input.now, cursor: { ...cursor, walk: next } },
         followups: write.followups,
         counters: write.counters,
       };
@@ -607,7 +601,7 @@ export function transactionsModule(variant: TransactionsVariant): ResourceModule
         satisfiesRevision: true,
         close: "done",
         closeReason: "backfill_complete",
-        cursor: { ...cursor, walk: null, restartCount: 0, last: receipt, shadow: null },
+        cursor: { ...cursor, walk: null, restartCount: 0, last: receipt },
         proof: receipt,
       },
       followups: write.followups,
@@ -628,10 +622,7 @@ export function transactionsModule(variant: TransactionsVariant): ResourceModule
         const enqueue: DemandSignal[] = [{ resource: "transactions.backfill", demand: { reason: `dependency:${key}` } }];
         return { kind: "wait", reason: "dependency", until: new Date(ctx.now.getTime() + TRANSACTIONS_WRONG_WRITER_RECHECK_MS), enqueue };
       }
-      const offset = ctx.shadow
-        ? (cursor.shadow?.done ?? 0) * limit
-        : cursor.walk?.offset ?? 0;
-      return { kind: "request", request: { spec: "transactions.page", params: { limit, offset } } };
+      return { kind: "request", request: { spec: "transactions.page", params: { limit, offset: cursor.walk?.offset ?? 0 } } };
     },
 
     async apply(tx, input: ApplyInput): Promise<ApplyResult> {
@@ -651,24 +642,6 @@ export function transactionsModule(variant: TransactionsVariant): ResourceModule
         case "backfill":
           return applyBackfill(tx, input, page, cursor);
       }
-    },
-
-    async shadow(work, _request, ctx): Promise<ShadowResult> {
-      const cursor = parseTransactionsCursor(work.cursor);
-      // What the live step would ask of the roster walk; purchase targets and
-      // profiles need the answer, so shadow names none.
-      const followups = await fanEarningsRosterFollowups(ctx.db, { pageId: ctx.pageId, now: ctx.now, shadow: true, reason: key });
-      if (variant !== "backfill") {
-        return {
-          work: { satisfiesRevision: true, close: "done", closeReason: "shadow", cursor: { ...cursor, shadow: null } },
-          followups,
-        };
-      }
-      const stored = await countTransactionsBySource(ctx.db, { platformAccountId: ctx.pageId, source: "fansly:rest" });
-      const step = advanceShadowWalk(cursor.shadow, () => offsetWalkPages({ total: stored, limit, statedTotal: true }));
-      return step.finished
-        ? { work: { satisfiesRevision: true, close: "done", closeReason: "shadow", cursor: { ...cursor, shadow: null } }, followups }
-        : { work: { satisfiesRevision: false, nextDueAt: ctx.now, cursor: { ...cursor, shadow: step.progress } }, followups: [] };
     },
   };
 }

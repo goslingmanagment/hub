@@ -142,9 +142,5 @@ export function accountModule(variant: AccountVariant): ResourceModule {
         pageIdentity: { accountId: facts.accountId },
       };
     },
-
-    async shadow() {
-      return { work: { satisfiesRevision: true, close: "done", closeReason: "shadow" }, followups: [] };
-    },
   };
 }

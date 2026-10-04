@@ -64,7 +64,7 @@ export function registerSyncAlertsCommands(sync: Command, deps: SyncAlertsCliDep
 
   alerts
     .command("status")
-    .description("per page: the alert conditions that hold now (shadow: metrics only) and the open latches (JSON)")
+    .description("per page: the alert conditions that hold now and the open latches (JSON)")
     .option("--page <label>", "one page (default: every Fansly page)")
     .action(async (options: { page?: string }, command: Command) => {
       const label = pageLabel(options, command);

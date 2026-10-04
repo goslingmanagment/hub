@@ -174,9 +174,6 @@ function oneRead(gate: () => boolean = () => true): ResourceModule {
     async apply() {
       return { work: { satisfiesRevision: true, close: "done", closeReason: "stand_in" }, followups: [] };
     },
-    async shadow() {
-      return { work: { satisfiesRevision: true, close: "done" }, followups: [] };
-    },
   };
 }
 
@@ -192,7 +189,7 @@ function registry(options: { moneyGate?: () => boolean } = {}): EngineRegistry {
 
 async function demand(pageId: number, resource: string, subject = "") {
   const spec = fanslyResourceSpec(resource)!;
-  await upsertDemand(db(), { pageId, shadow: false, resource, subject, kind: spec.kind, class: spec.class, demand: { reasons: ["test"] } });
+  await upsertDemand(db(), { pageId, resource, subject, kind: spec.kind, class: spec.class, demand: { reasons: ["test"] } });
 }
 
 async function workRow(pageId: number, resource: string) {
@@ -222,7 +219,7 @@ async function run(pageId: number, reg: EngineRegistry, respond: Responder, done
   const transport = new ScriptedLiveTransport();
   transport.respond = respond;
   const { actor, stop, abort } = await makeTestActor({
-    db: db(), pageId, mode: "live", registry: reg, transport, ownRef: OWN_ID, routeTimeScale: ROUTE_SCALE,
+    db: db(), pageId, registry: reg, transport, ownRef: OWN_ID, routeTimeScale: ROUTE_SCALE,
   });
   const running = actor.run({ stop: stop.signal, abort: abort.signal });
   try {
@@ -305,7 +302,7 @@ describe("repair.ws-gap", () => {
     const transport = new ScriptedLiveTransport();
     transport.respond = (req) => (req.spec === "messaging.groups" ? okResponse(listPage(chats)) : polls());
     const { actor, stop, abort } = await makeTestActor({
-      db: db(), pageId, mode: "live", registry: registry({ moneyGate: () => released }), transport, ownRef: OWN_ID, routeTimeScale: ROUTE_SCALE,
+      db: db(), pageId, registry: registry({ moneyGate: () => released }), transport, ownRef: OWN_ID, routeTimeScale: ROUTE_SCALE,
     });
     const running = actor.run({ stop: stop.signal, abort: abort.signal });
     try {
@@ -340,7 +337,7 @@ describe("repair.ws-gap", () => {
     const transport = new ScriptedLiveTransport();
     transport.respond = (req) => (req.spec === "messaging.groups" ? okResponse(listPage(offsetOf(req) === 0 ? page1 : page2)) : polls());
     const { actor, stop, abort } = await makeTestActor({
-      db: db(), pageId, mode: "live", registry: registry(), transport, ownRef: OWN_ID, routeTimeScale: ROUTE_SCALE,
+      db: db(), pageId, registry: registry(), transport, ownRef: OWN_ID, routeTimeScale: ROUTE_SCALE,
     });
     const running = actor.run({ stop: stop.signal, abort: abort.signal });
     try {

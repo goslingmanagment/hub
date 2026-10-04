@@ -30,7 +30,6 @@ import type {
   ApplyResult,
   DemandSignal,
   ResourceModule,
-  ShadowResult,
   StepPlan,
 } from "../../engine/resource.ts";
 
@@ -249,8 +248,6 @@ function walkFollowup(start: { lastPageFirstRef: string | null; catchUp: FanslyP
 
 /** The daily snapshot's reads: the method listing, then the request head
  *  (`step` 0 and 1). */
-const DAILY_SNAPSHOT_STEPS = 2;
-
 const dailyModule: ResourceModule = {
   async plan(work): Promise<StepPlan> {
     const cursor = parseDailyCursor(work.cursor);
@@ -350,13 +347,6 @@ const dailyModule: ResourceModule = {
       counters,
     };
   },
-
-  async shadow(work, _request, ctx): Promise<ShadowResult> {
-    const cursor = parseDailyCursor(work.cursor);
-    return cursor.step + 1 < DAILY_SNAPSHOT_STEPS
-      ? { work: { satisfiesRevision: false, nextDueAt: ctx.now, cursor: { ...cursor, step: cursor.step + 1 } }, followups: [] }
-      : { work: { satisfiesRevision: true, close: "done", closeReason: "shadow", cursor: { ...cursor, step: 0 } }, followups: [] };
-  },
 };
 
 const walkModule: ResourceModule = {
@@ -446,11 +436,6 @@ const walkModule: ResourceModule = {
       followups: [],
       counters,
     };
-  },
-
-  async shadow(): Promise<ShadowResult> {
-    // Only a live head starts a walk; a shadow walk (owner) is one page.
-    return { work: { satisfiesRevision: true, close: "done", closeReason: "shadow" }, followups: [] };
   },
 };
 

@@ -20,7 +20,6 @@ import type {
   DemandSignal,
   RequestPlan,
   ResourceModule,
-  ShadowResult,
   StepPlan,
 } from "../../engine/resource.ts";
 
@@ -119,24 +118,17 @@ async function storeLookupAnswer(
 
 // ── lookup ──────────────────────────────────────────────────────────────────
 
-interface LookupCursor {
-  /** Shadow only: the keyset of the due ids already simulated. */
-  shadowAfter?: string;
-}
-
 async function nextLookupBatch(
   work: SyncWorkRow,
-  input: { db: Database; pageId: number; now: Date; after: string | null },
+  input: { db: Database; pageId: number; now: Date },
 ): Promise<string[]> {
   const { due } = await partitionLookupIds(input.db, { pageId: input.pageId, ids: pendingLookupIds(work), now: input.now });
-  const after = input.after;
-  return due.sort().filter((id) => after === null || id > after).slice(0, BATCH);
+  return due.sort().slice(0, BATCH);
 }
 
 export const fanProfilesLookupModule: ResourceModule = {
   async plan(work, ctx): Promise<StepPlan> {
-    const after = ctx.shadow ? (recordOf(work.cursor) as LookupCursor).shadowAfter ?? null : null;
-    const batch = await nextLookupBatch(work, { db: ctx.db, pageId: ctx.pageId, now: ctx.now, after });
+    const batch = await nextLookupBatch(work, { db: ctx.db, pageId: ctx.pageId, now: ctx.now });
     if (batch.length === 0) return { kind: "done", cursor: {}, reason: "profiles_fresh" };
     return { kind: "request", request: lookupRequest(batch) };
   },
@@ -151,7 +143,7 @@ export const fanProfilesLookupModule: ResourceModule = {
     });
     // What is left after this answer's stamps (same transaction): the walk
     // goes on, or closes when nothing it was asked for is due.
-    const left = await nextLookupBatch(input.work, { db: tx, pageId: input.pageId, now: input.now, after: null });
+    const left = await nextLookupBatch(input.work, { db: tx, pageId: input.pageId, now: input.now });
     return {
       work: left.length === 0
         ? { satisfiesRevision: true, close: "done", closeReason: "profiles_fresh", result: stored }
@@ -159,18 +151,6 @@ export const fanProfilesLookupModule: ResourceModule = {
       followups: [],
       counters: { profiles_returned: stored.returned, profiles_missing: stored.fallback },
     };
-  },
-
-  async shadow(work, request, ctx): Promise<ShadowResult> {
-    const batch = requestedIds(request);
-    const last = batch.at(-1) ?? null;
-    const left = await nextLookupBatch(work, { db: ctx.db, pageId: ctx.pageId, now: ctx.now, after: last });
-    return left.length === 0
-      ? { work: { satisfiesRevision: true, close: "done", closeReason: "shadow", cursor: {} }, followups: [] }
-      : {
-        work: { satisfiesRevision: false, nextDueAt: ctx.now, cursor: (last === null ? {} : { shadowAfter: last }) satisfies LookupCursor },
-        followups: [],
-      };
   },
 };
 
@@ -236,10 +216,6 @@ export const fanProfilesProbeModule: ResourceModule = {
       followups: [],
     };
   },
-
-  async shadow(): Promise<ShadowResult> {
-    return { work: { satisfiesRevision: true, close: "done", closeReason: "shadow" }, followups: [] };
-  },
 };
 
 // ── alias backfill ──────────────────────────────────────────────────────────
@@ -304,18 +280,5 @@ export const fanProfilesAliasBackfillModule: ResourceModule = {
     };
     // The next plan reads the next keyset batch, or closes the walk.
     return { work: { satisfiesRevision: false, nextDueAt: input.now, cursor }, followups: [] };
-  },
-
-  async shadow(work, request, ctx): Promise<ShadowResult> {
-    const previous = aliasCursor(work.cursor);
-    const requested = requestedIds(request);
-    return {
-      work: {
-        satisfiesRevision: false,
-        nextDueAt: ctx.now,
-        cursor: { ...previous, after: requested.at(-1) ?? previous.after, batches: previous.batches + 1 },
-      },
-      followups: [],
-    };
   },
 };

@@ -9,13 +9,11 @@ import { registryOverride, registryOverrideProblem } from "../apps/runtime/src/s
 import { fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";
 import { chooseVaultAlbum, servedCardIds, vaultCadence } from "../apps/runtime/src/sync/fansly/resources/catalog.ts";
 import {
-  estimateVisitWindows,
   MediaVisitDivergedError,
   mediaStatsOwnerTiers,
   mediaWindowOutcome,
   replayMediaVisit,
   runMediaVisit,
-  shadowVisitWindows,
   startMediaVisit,
   tierEveryMs,
   type MediaStatsPageState,
@@ -59,7 +57,6 @@ function candidate(overrides: Partial<MediaStatsRefreshCandidate> & { ageDays: n
     knownCount: null,
     backfillCursor: {},
     priorityBand: 1,
-    keyset: "[]",
     ...rest,
   };
 }
@@ -278,28 +275,6 @@ describe("media-stats: one visit, one window a step", () => {
     expect(run.progress).toMatchObject({ nextBeforeMs: NOW.getTime() - 30 * DAY, done: false });
   });
 
-  it("estimates a visit's windows for the shadow walk", () => {
-    expect(estimateVisitWindows(candidate({ ageDays: 10 }), "unproven", NOW)).toBe(2);
-    expect(estimateVisitWindows(candidate({ ageDays: 60 }), "unproven", NOW)).toBe(4);
-    expect(estimateVisitWindows(candidate({ ageDays: 60, lastVisitedAt: new Date(NOW.getTime() - 8 * DAY), backfillCursor: DONE_CURSOR }), "unproven", NOW)).toBe(1);
-    expect(estimateVisitWindows(candidate({ ageDays: 400, lastVisitedAt: new Date(NOW.getTime() - 35 * DAY), backfillCursor: DONE_CURSOR }), "split_31", NOW)).toBe(3);
-    expect(estimateVisitWindows(candidate({ ageDays: 80, lastVisitedAt: new Date(NOW.getTime() - 50 * DAY), backfillCursor: DONE_CURSOR }), "unproven", NOW)).toBe(2);
-  });
-
-  it("models a visit as live asks it (step 3b ruling 12): on an unproven route the long tail asks the 90-day window, then the 31-day split", () => {
-    const longTail = candidate({ ageDays: 400, lastVisitedAt: new Date(NOW.getTime() - 35 * DAY), backfillCursor: DONE_CURSOR });
-    // The refused 90-day window, then the three 31-day windows (`runMediaVisit`).
-    expect(shadowVisitWindows(longTail, "unproven", NOW)).toBe(1 + 3);
-    expect(shadowVisitWindows(longTail, "split_31", NOW)).toBe(3);
-    expect(shadowVisitWindows(longTail, "ninety", NOW)).toBe(1);
-    // A first visit walks back first; the refresh it then asks is the split one.
-    const firstVisit = candidate({ ageDays: 400 });
-    expect(shadowVisitWindows(firstVisit, "unproven", NOW)).toBe(1 + estimateVisitWindows(firstVisit, "split_31", NOW));
-    // Fresh and mid items never ask a 90-day window, whatever the route showed.
-    for (const item of [candidate({ ageDays: 10 }), candidate({ ageDays: 60, lastVisitedAt: new Date(NOW.getTime() - 8 * DAY), backfillCursor: DONE_CURSOR })]) {
-      expect(shadowVisitWindows(item, "unproven", NOW)).toBe(estimateVisitWindows(item, "unproven", NOW));
-    }
-  });
 });
 
 describe("the step a request carries is stored with the attempt and handed back", () => {

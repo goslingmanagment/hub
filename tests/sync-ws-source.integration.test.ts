@@ -210,7 +210,7 @@ describe("the page's socket in the sync process", () => {
       },
     });
     for (let n = 1; n <= 8; n += 1) {
-      await upsertDemand(db(), { pageId, shadow: false, resource: HARNESS_KEY.urgent, subject: `u${n}`, kind: "trigger", class: "urgent" });
+      await upsertDemand(db(), { pageId, resource: HARNESS_KEY.urgent, subject: `u${n}`, kind: "trigger", class: "urgent" });
     }
     const host = await startHost(r, { seed: 7 });
     await until(async () => upgrades(r).length >= 4 && (await scalar(
@@ -349,7 +349,7 @@ describe("the page's socket in the sync process", () => {
     );
     expect(verify.rows).toEqual([{ reasons: ["ws_auth_refused"], state: "open" }]);
     expect(alerts.opened.filter((alert) => alert.subKey === "live_degraded"))
-      .toEqual([expect.objectContaining({ pageId, detail: "ws_auth_refused", shadow: false })]);
+      .toEqual([expect.objectContaining({ pageId, detail: "ws_auth_refused" })]);
     // Down past the (scaled) two minutes: the list head polls in its place, raised once.
     await until(async () => (await scalar(
       "select count(*)::int as n from sync_work where page_id = $1 and resource = 'dm-conversations.ws-down'", [pageId],

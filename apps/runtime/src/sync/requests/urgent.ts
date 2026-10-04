@@ -143,7 +143,7 @@ async function enqueue(db: Database, spec: ResourceSpec, input: EnqueueAndWaitIn
         demand: { reason: input.reason ?? API_TRIGGER },
       },
       spec,
-      { pageId: input.pageId, shadow: false, now: new Date(), page },
+      { pageId: input.pageId, now: new Date(), page },
     );
     if (upsert === null) {
       throw new UrgentWorkRefusedError("disabled_for_page", `${spec.key} is switched off for ${page.pageLabel ?? input.pageId}`);

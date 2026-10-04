@@ -32,10 +32,8 @@ import type {
   ApplyResult,
   RequestPlan,
   ResourceModule,
-  ShadowResult,
   StepPlan,
 } from "../../engine/resource.ts";
-import { advanceShadowWalk, type ShadowWalkProgress } from "../lib/offset-walk.ts";
 
 // `notifications.forward` and `notifications.backfill` (plan §5, design §5.14):
 // `GET /notifications?before=<id|0>&after=0[&type=<csv>]`, journaled as
@@ -160,13 +158,6 @@ function text(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
-function parseShadow(value: unknown): ShadowWalkProgress | null {
-  const record = recordOf(value);
-  const steps = count(record.steps);
-  const done = count(record.done);
-  return steps === null || done === null ? null : { steps, done };
-}
-
 /** The request parameters of a `notifications.page` step. */
 function pageParams(request: { params: unknown }): { before: string; types: readonly number[] | null } {
   const params = recordOf(request.params);
@@ -203,7 +194,6 @@ export interface NotificationsForwardCursor {
   postLikesCoverageWritten: boolean;
   walk: ForwardWalk | null;
   last: Record<string, unknown> | null;
-  shadow: ShadowWalkProgress | null;
 }
 
 export function parseForwardCursor(value: unknown): NotificationsForwardCursor {
@@ -226,7 +216,6 @@ export function parseForwardCursor(value: unknown): NotificationsForwardCursor {
     postLikesCoverageWritten: record.postLikesCoverageWritten === true,
     walk,
     last: typeof record.last === "object" && record.last !== null ? record.last as Record<string, unknown> : null,
-    shadow: parseShadow(record.shadow),
   };
 }
 
@@ -239,7 +228,6 @@ export interface NotificationsBackfillCursor {
   /** The observation of the walk's last page (the floor's proof). */
   lastObservationId: number | null;
   form: NotificationsForm;
-  shadow: ShadowWalkProgress | null;
 }
 
 export function parseBackfillCursor(value: unknown): NotificationsBackfillCursor {
@@ -250,7 +238,6 @@ export function parseBackfillCursor(value: unknown): NotificationsBackfillCursor
     floorAt: text(record.floorAt),
     lastObservationId: count(record.lastObservationId),
     form: parseForm(record.form),
-    shadow: parseShadow(record.shadow),
   };
 }
 
@@ -262,10 +249,10 @@ function emptyForwardWalk(): ForwardWalk {
 
 /** The newest row of the other notifications walk of the page (its form is
  *  the provider's answer too). */
-async function siblingForm(db: Database, input: { pageId: number; shadow: boolean; resource: string }): Promise<NotificationsForm | null> {
+async function siblingForm(db: Database, input: { pageId: number; resource: string }): Promise<NotificationsForm | null> {
   const result = await db.execute<{ cursor: unknown }>(sql`
     select w.cursor from sync_work w
-     where w.page_id = ${input.pageId} and w.shadow = ${input.shadow} and w.resource = ${input.resource}
+     where w.page_id = ${input.pageId} and not w.shadow and w.resource = ${input.resource}
      order by w.id desc
      limit 1
   `);
@@ -285,11 +272,11 @@ async function lastAttemptOf(db: Database, work: SyncWorkRow): Promise<SyncAttem
  */
 async function nextForm(
   db: Database,
-  input: { work: SyncWorkRow; own: NotificationsForm; pageId: number; shadow: boolean; sibling: string; last: SyncAttemptRow | null },
+  input: { own: NotificationsForm; pageId: number; sibling: string; last: SyncAttemptRow | null },
 ): Promise<NotificationsForm> {
-  const shared = narrowerForm(input.own, (await siblingForm(db, { pageId: input.pageId, shadow: input.shadow, resource: input.sibling })) ?? input.own);
+  const shared = narrowerForm(input.own, (await siblingForm(db, { pageId: input.pageId, resource: input.sibling })) ?? input.own);
   const last = input.last;
-  if (last === null || last.shadow || !isTypeFormRefusal(last.httpStatus)) return shared;
+  if (last === null || !isTypeFormRefusal(last.httpStatus)) return shared;
   const refused = formOfTypes(pageParams({ params: recordOf(last.request).params }).types);
   return refused === null ? shared : widenForm(refused);
 }
@@ -367,7 +354,6 @@ export function completeForward(
     form: rotateAtWalkBoundary(input.form),
     walk: null,
     last: { completedAt: input.now.toISOString(), stopReason: input.reason, pages: walk.pages, newestSeenNotificationId: committedHead },
-    shadow: null,
   };
 }
 
@@ -375,7 +361,7 @@ const forwardModule: ResourceModule = {
   async plan(work, ctx): Promise<StepPlan> {
     const cursor = parseForwardCursor(work.cursor);
     const walk = cursor.walk;
-    const last = ctx.shadow ? null : await lastAttemptOf(ctx.db, work);
+    const last = await lastAttemptOf(ctx.db, work);
     if (walk !== null && walk.probeBefore !== null) {
       const lastParams = last === null ? null : pageParams({ params: recordOf(last.request).params });
       if (last !== null && lastParams !== null && lastParams.before === walk.probeBefore && formOfTypes(lastParams.types)?.mode === "declared_csv") {
@@ -386,7 +372,7 @@ const forwardModule: ResourceModule = {
       }
       return { kind: "request", request: notificationsRequest(walk.probeBefore, DECLARED_FORM) };
     }
-    const form = await nextForm(ctx.db, { work, own: cursor.form, pageId: ctx.pageId, shadow: ctx.shadow, sibling: BACKFILL_KEY, last });
+    const form = await nextForm(ctx.db, { own: cursor.form, pageId: ctx.pageId, sibling: BACKFILL_KEY, last });
     return { kind: "request", request: notificationsRequest(walk?.beforeRef ?? HEAD, form) };
   },
 
@@ -401,7 +387,7 @@ const forwardModule: ResourceModule = {
     }
     const rows = notificationRows(response);
     const bounds = pageRefBounds(rows);
-    let next: NotificationsForwardCursor = { ...cursor, shadow: null };
+    let next: NotificationsForwardCursor = cursor;
     const counters: Record<string, number> = {};
     if (!next.postLikesCoverageWritten) {
       await writePostLikesCoverage(tx, input.pageId, now);
@@ -491,16 +477,6 @@ const forwardModule: ResourceModule = {
     if (bounds.oldest === null) return complete("no_cursor", servedForm);
     return goOn({ ...walk, beforeRef: bounds.oldest });
   },
-
-  async shadow(work, _request, ctx): Promise<ShadowResult> {
-    // Steady state: ~15 notifications a day against ≈ 50 rows a page — one
-    // page reaches the overlap.
-    const cursor = parseForwardCursor(work.cursor);
-    const step = advanceShadowWalk(cursor.shadow, () => 1);
-    return step.finished
-      ? { work: { satisfiesRevision: true, close: "done", closeReason: "shadow", cursor: { ...cursor, shadow: null } }, followups: [] }
-      : { work: { satisfiesRevision: false, nextDueAt: ctx.now, cursor: { ...cursor, shadow: step.progress } }, followups: [] };
-  },
 };
 
 // ── backfill ────────────────────────────────────────────────────────────────
@@ -508,8 +484,8 @@ const forwardModule: ResourceModule = {
 const backfillModule: ResourceModule = {
   async plan(work, ctx): Promise<StepPlan> {
     const cursor = parseBackfillCursor(work.cursor);
-    const last = ctx.shadow ? null : await lastAttemptOf(ctx.db, work);
-    const form = await nextForm(ctx.db, { work, own: cursor.form, pageId: ctx.pageId, shadow: ctx.shadow, sibling: FORWARD_KEY, last });
+    const last = await lastAttemptOf(ctx.db, work);
+    const form = await nextForm(ctx.db, { own: cursor.form, pageId: ctx.pageId, sibling: FORWARD_KEY, last });
     return { kind: "request", request: notificationsRequest(cursor.nextBeforeRef, form) };
   },
 
@@ -556,7 +532,6 @@ const backfillModule: ResourceModule = {
       lastObservationId: input.observation.id,
       floorAt,
       form,
-      shadow: null,
     };
     if (bounds.oldest === null) {
       // THE FLOOR: an empty page. Unfiltered it is the archive's end; through
@@ -590,16 +565,6 @@ const backfillModule: ResourceModule = {
       oldestCapturedAt: floorAt === null ? null : new Date(floorAt),
     });
     return { work: { satisfiesRevision: false, nextDueAt: now, cursor: moved }, followups: [] };
-  },
-
-  async shadow(work, _request, ctx): Promise<ShadowResult> {
-    // The depth is unknown until the floor is read: one page per step, the
-    // walk simulated as one page.
-    const cursor = parseBackfillCursor(work.cursor);
-    const step = advanceShadowWalk(cursor.shadow, () => 1);
-    return step.finished
-      ? { work: { satisfiesRevision: true, close: "done", closeReason: "shadow", cursor: { ...cursor, shadow: null } }, followups: [] }
-      : { work: { satisfiesRevision: false, nextDueAt: ctx.now, cursor: { ...cursor, shadow: step.progress } }, followups: [] };
   },
 };
 

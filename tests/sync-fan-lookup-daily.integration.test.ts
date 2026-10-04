@@ -134,8 +134,7 @@ async function seedLivePage(): Promise<LivePage> {
   const syncPage = await getSyncPage(db(), pageId);
   await ensurePollRows(db(), {
     pageId,
-    shadow: false,
-    polls: pollsFor(registry, syncPage!, false).map((poll) => ({ ...poll, phase: 0.999 })),
+    polls: pollsFor(registry, syncPage!).map((poll) => ({ ...poll, phase: 0.999 })),
   });
   return { pageId, registry, subscribers: [], accounts: new Map(), lookups: [] };
 }
@@ -158,7 +157,7 @@ function answer(page: LivePage, req: FanslyWireRequest): FanslyWireOutcome {
 async function startActor(page: LivePage, registry: EngineRegistry = page.registry) {
   const transport = new ScriptedLiveTransport();
   transport.respond = (req) => answer(page, req);
-  const { actor, stop, abort } = await makeTestActor({ db: db(), pageId: page.pageId, mode: "live", registry, transport });
+  const { actor, stop, abort } = await makeTestActor({ db: db(), pageId: page.pageId, registry, transport });
   return { run: actor.run({ stop: stop.signal, abort: abort.signal }), stop };
 }
 
@@ -216,7 +215,7 @@ function journaledLookups(pageId: number): Promise<number> {
 
 async function makeSubscribersPollDue(page: LivePage) {
   const spec = page.registry.spec(SUBSCRIBERS_POLL_KEY)!;
-  await upsertDemand(db(), { pageId: page.pageId, shadow: false, resource: spec.key, kind: spec.kind, class: spec.class });
+  await upsertDemand(db(), { pageId: page.pageId, resource: spec.key, kind: spec.kind, class: spec.class });
 }
 
 /** One read of the page's subscribers: the poll's apply, then the lookup walk
@@ -235,7 +234,6 @@ async function askLookupWalk(page: LivePage, ids: readonly string[]) {
   const [signal] = lookupFollowups(ids, "test");
   const upsert = demandToUpsert(signal!, page.registry.spec(FAN_PROFILES_LOOKUP_KEY)!, {
     pageId: page.pageId,
-    shadow: false,
     now: new Date(),
   });
   await upsertDemand(db(), upsert!);
