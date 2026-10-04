@@ -36,6 +36,8 @@ import {
   engineDurationText,
   engineSocketText,
   engineStatusState,
+  engineWaitLabel,
+  engineWaitingText,
   historyEtaText,
   historyReadsText,
 } from "../apps/dashboard/src/pages/settings/engine/engineDisplay.ts";
@@ -47,6 +49,7 @@ import {
 } from "../apps/dashboard/src/pages/settings/sync/syncBlockDisplay.ts";
 import { SyncPageDetail } from "../apps/dashboard/src/pages/settings/sync/SyncPageDetail.tsx";
 import { SyncPageList } from "../apps/dashboard/src/pages/settings/sync/SyncPageList.tsx";
+import { WAITING_REASONS, isRunnableReason } from "../apps/runtime/src/sync/engine/status.ts";
 
 // The Settings «Синк» tab (step 4, S4-28; plan §10): every Fansly page as the
 // Fansly Sync Engine reads it — owner, holds, socket, the pause, the queue with
@@ -213,6 +216,15 @@ function renderRouted(element: ReturnType<typeof createElement>, initialEntries 
   return plain(renderToStaticMarkup(createElement(MemoryRouter, { initialEntries }, element)));
 }
 
+type ClassQueue = AgentSyncPageStatus["queue"]["requests"];
+type WaitingReason = NonNullable<AgentHistoryRequest["waitingReason"]>;
+
+/** A queue and a reason as the response carries them: a reason is a string on
+ *  the wire, whichever ones the contract this file compiles against lists
+ *  (`route_budget` and `route_hold` are the hold set's, S4-30). */
+const wireQueue = (queue: { runnable: number; waitingByReason: Record<string, number> }) => queue as ClassQueue;
+const wireReason = (reason: string) => reason as WaitingReason;
+
 /** The text of the cell that shows a class's requests of the hour. */
 function sendsCell(html: string, workClass: string): string | undefined {
   return html.match(new RegExp(`data-sends-class="${workClass}"[^>]*>([^<]*)<`))?.[1];
@@ -345,6 +357,43 @@ describe("the «Синк» tab: the list of Fansly pages", () => {
     const failed = renderRouted(createElement(EnginePageList, { onSelectPage: vi.fn() }));
     expect(failed).toContain("Страницы не загрузились");
     expect(failed).toContain("Sync API unavailable");
+  });
+});
+
+describe("the «Синк» tab: why work waits", () => {
+  it("a route's own pace is ready to run; a 429's hold of a route is a wait, in the queue and in a request", () => {
+    // The server counts `route_budget` rows in `runnable` and in
+    // `waitingByReason` alike: under «Ждёт» they would be shown twice.
+    const paced = wireQueue({ runnable: 5, waitingByReason: { route_budget: 4, pacer: 1 } });
+    expect(engineWaitingText(paced)).toBe("");
+    const held = wireQueue({ runnable: 5, waitingByReason: { route_budget: 4, pacer: 1, route_hold: 2, not_due: 7 } });
+    expect(engineWaitingText(held)).toBe("удержание эндпоинта (429): 2, ждёт срока: 7");
+
+    const html = renderRouted(createElement(EngineQueueTable, {
+      status: status({ queue: { urgent: paced, requests: held, planned: { runnable: 0, waitingByReason: {} } } }),
+    }));
+    expect(html).toContain(">удержание эндпоинта (429): 2, ждёт срока: 7<");
+    expect(html).not.toContain("пауза эндпоинта");
+    expect(html).not.toMatch(/route_(budget|hold)/);
+
+    const request = (waitingReason: string) => plain(renderToStaticMarkup(createElement("ul", null,
+      createElement(HistoryRequestCard, {
+        request: historyRequest({ waitingReason: wireReason(waitingReason), waitingUntil: "2026-10-02T12:05:00.000Z" }),
+        now: NOW_MS,
+      }))));
+    expect(request("route_hold")).toMatch(/>удержание эндпоинта \(429\) до \d/);
+    expect(request("route_budget")).toMatch(/>пауза эндпоинта до \d/);
+  });
+
+  // The dictionary is the engine's and closed: a reason the engine gains must
+  // get its words here, and the rows it counts as ready to run must not be
+  // listed as waiting as well.
+  it("names every reason of the engine, and lists as waiting exactly what the engine does not count as ready to run", () => {
+    for (const reason of WAITING_REASONS) {
+      expect(engineWaitLabel(reason), reason).not.toBe(reason);
+      const listed = engineWaitingText(wireQueue({ runnable: 0, waitingByReason: { [reason]: 1 } })) !== "";
+      expect(listed, reason).toBe(!isRunnableReason(reason));
+    }
   });
 });
 

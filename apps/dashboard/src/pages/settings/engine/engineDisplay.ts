@@ -36,12 +36,17 @@ export const ENGINE_CLASS_LABELS: Record<EngineWorkClass, string> = {
   planned: "плановое",
 };
 
-/** "Почему ждёт" (plan §10), the engine's closed dictionary. */
+/** "Почему ждёт" (plan §10), the engine's closed dictionary. A route (an
+ *  endpoint of Fansly) puts work off in two ways: `route_budget` is its own
+ *  pace, `route_hold` a 429's hold of it — the one place the page's status
+ *  shows such a hold. */
 const WAIT_LABELS: Record<string, string> = {
   not_due: "ждёт срока",
   pacer: "пауза между запросами",
   class_share: "очередь класса",
   page_hold: "удержание страницы",
+  route_budget: "пауза эндпоинта",
+  route_hold: "удержание эндпоинта (429)",
   resource_hold: "удержание ресурса",
   subject_breaker: "пауза после ошибок",
   blocked_by_vendor: "Fansly отказывает",
@@ -52,8 +57,13 @@ const WAIT_LABELS: Record<string, string> = {
   running: "читает",
 };
 
+/** The reasons of work that is ready to run — the server counts those rows
+ *  in `runnable` (`isRunnableReason`, `engine/status.ts`): it waits only for
+ *  its turn — the page's pause, its endpoint's own pace, or other work. */
+const RUNNABLE_REASONS: ReadonlySet<string> = new Set(["pacer", "route_budget", "class_share"]);
+
+/** What holds a page. A 429 never does: it holds its route (`route_hold`). */
 const HOLD_LABELS: Record<string, string> = {
-  rate_limit: "429 от Fansly",
   auth: "Fansly не принимает данные входа",
   identity_mismatch: "данные входа другого аккаунта",
   network: "сеть",
@@ -154,11 +164,11 @@ export function engineSocketText(status: EnginePageStatus, now: number = Date.no
   return parts.join(" · ");
 }
 
-/** What a class waits for, without the two reasons that mean "its turn has
- *  not come" (those rows are counted as ready to run). */
+/** What a class waits for, without the reasons that mean "its turn has not
+ *  come" (those rows are counted as ready to run). */
 export function engineWaitingText(queue: EnginePageStatus["queue"][EngineWorkClass]): string {
   return Object.entries(queue.waitingByReason)
-    .filter(([reason, count]) => (count ?? 0) > 0 && reason !== "pacer" && reason !== "class_share")
+    .filter(([reason, count]) => (count ?? 0) > 0 && !RUNNABLE_REASONS.has(reason))
     .map(([reason, count]) => `${engineWaitLabel(reason)}: ${engineCount(count ?? 0)}`)
     .join(", ");
 }
