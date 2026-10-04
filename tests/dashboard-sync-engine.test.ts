@@ -467,7 +467,7 @@ describe("the «Синк» tab: history requests", () => {
 });
 
 describe("the «Синк» tab: a page in detail", () => {
-  it("shows the status with the hour's requests by resource, every open request and the ones that ended lately", () => {
+  it("shows the status with the hour's requests by resource, every open request and the last ones that ended", () => {
     const closed = historyRequest({
       ref: "99999999-9999-4999-8999-999999999999", state: "done", doneAt: "2026-10-02T11:55:00.000Z", queuePosition: null,
     });
@@ -479,7 +479,7 @@ describe("the «Синк» tab: a page in detail", () => {
     expect(html).toContain("Запросов за час по ресурсам");
     expect(html.indexOf("dm-messages.history")).toBeLessThan(html.indexOf("account.poll"));
     expect(html).toContain("Заявки на историю · открыто 1");
-    expect(html).toContain("Недавно закрытые");
+    expect(html).toContain("Последние закрытые");
     expect(html.match(/data-history-request=/g)).toHaveLength(2);
     expect(queries.useSyncHistoryRequests).toHaveBeenCalledWith({ pageLabel: "lilly-1", state: "open", limit: 200 }, { enabled: true });
     expect(queries.useSyncHistoryRequests).toHaveBeenCalledWith({ pageLabel: "lilly-1", limit: 20 }, { enabled: true });
@@ -648,6 +648,8 @@ describe("the tab's words", () => {
     expect(engineAgeText("2026-10-02T11:59:48.000Z", NOW_MS)).toBe("12 с");
     expect(engineAgeText("2026-10-02T11:50:00.000Z", NOW_MS)).toBe("10 мин");
     expect(engineAgeText("2026-10-02T06:00:00.000Z", NOW_MS)).toBe("6 ч");
+    expect(engineAgeText("2026-09-30T13:00:00.000Z", NOW_MS)).toBe("47 ч");
+    expect(engineAgeText("2026-09-27T12:00:00.000Z", NOW_MS)).toBe("5 сут");
     expect(engineAgeText(null, NOW_MS)).toBeNull();
     // A span is rounded down: a lower bound stays one.
     expect(engineDurationText(59.9)).toBe("59 с");

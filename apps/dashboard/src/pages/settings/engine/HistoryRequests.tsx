@@ -103,7 +103,7 @@ export interface HistoryRequestsState {
 
 /**
  * The history requests of a page: its open ones in the order the page serves
- * them, then `closed` (the page's detail shows the ones that ended lately).
+ * them, then `closed` (the page's detail shows the last ones that ended).
  * `limit` caps the open ones a list card shows; `more` is where the rest are.
  */
 export function HistoryRequestsBlock({
@@ -149,7 +149,7 @@ export function HistoryRequestsBlock({
             {closed.length > 0 && (
               <>
                 <p className="mt-3 mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-text-muted">
-                  Недавно закрытые
+                  Последние закрытые
                 </p>
                 <ul className="space-y-2">
                   {closed.map((request) => <HistoryRequestCard key={request.ref} request={request} now={now} />)}

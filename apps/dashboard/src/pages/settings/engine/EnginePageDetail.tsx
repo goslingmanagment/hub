@@ -12,11 +12,11 @@ import { HistoryRequestsBlock } from "./HistoryRequests.js";
 import { useEngineStatusOf } from "./useEngineStatusOf.js";
 
 const BACK = "К списку страниц";
-/** Requests that ended lately, shown under the open ones. */
+/** The last requests that ended, shown under the open ones. */
 const RECENT_CLOSED = 5;
 
 /** A Fansly page in detail: the engine's status with the hour's requests by
- *  resource, every open history request and the ones that ended lately, and
+ *  resource, every open history request and the last ones that ended, and
  *  the five blocks with the buttons that act on the engine. */
 export function EnginePageDetail({ pageLabel, onBack }: { pageLabel: string; onBack: () => void }) {
   const { data, isLoading, isError, error } = usePageSyncBlocks(pageLabel);

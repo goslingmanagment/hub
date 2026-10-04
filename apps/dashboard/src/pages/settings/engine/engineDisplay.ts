@@ -83,14 +83,16 @@ export function engineCount(value: number): string {
   return Math.round(value).toLocaleString("ru-RU");
 }
 
-/** "12 с", "4 мин", "3 ч" since an instant (null: never). */
+/** "12 с", "4 мин", "3 ч", "5 сут" since an instant (null: never). */
 export function engineAgeText(iso: string | null, now: number = Date.now()): string | null {
   if (iso === null) return null;
   const seconds = Math.max(0, Math.round((now - new Date(iso).getTime()) / 1000));
   if (seconds < 120) return `${seconds} с`;
   const minutes = Math.round(seconds / 60);
   if (minutes < 120) return `${minutes} мин`;
-  return `${Math.round(minutes / 60)} ч`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `${hours} ч`;
+  return `${Math.round(hours / 24)} сут`;
 }
 
 /** A span of the ETA: "40 с", "12 мин", "1 ч 5 мин", "2 сут 3 ч". Rounded
