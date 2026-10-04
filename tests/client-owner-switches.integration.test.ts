@@ -207,7 +207,7 @@ describe("owner switches of the chat extension", () => {
     if (!server) return context.skip();
 
     // At rest, and an unrelated setting does not move the revision.
-    await patchOk([{ key: "transactionLookbackDays", value: 14 }]);
+    await patchOk([{ key: "healthSyncLightMaxAgeMinutes", value: 240 }]);
     const atRest = await bootstrapAs(chatterToken);
     expect(atRest.configRevision).toBe(0);
     expect(atRest.minVersion).toBe("0.0.0");
