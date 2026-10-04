@@ -6,7 +6,7 @@ import type { ClientHealthGroup } from "./client-health.ts";
 /**
  * Reads of the chat extension's `client_health` hourly rollups for the owner's
  * view (chat-extension hub-pr-plan H-11c). The writes and the tables are in
- * `client-health.ts` (migration 0239).
+ * `client-health.ts` (migration 0244).
  *
  * Every read adds the hours of a range up in SQL and returns one row per group,
  * so its size follows the number of client versions and host builds, not the
