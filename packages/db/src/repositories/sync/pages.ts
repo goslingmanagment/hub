@@ -75,8 +75,7 @@ export interface SyncPageRow {
   /** The page's hold set (`sync_holds`): its own holds, its routes' and its
    *  resource files'. The engine's hold evaluator reads it
    *  (`apps/runtime/src/sync/engine/admission.ts`). The page row itself says
-   *  nothing of a hold: the old hold columns it still has in the database
-   *  are stale, and no statement names them (step 4, S4-32). */
+   *  nothing of a hold: its old hold columns are dropped (step 4, S4-33). */
   holds: SyncHoldRow[];
   networkFailureStreak: number;
   identityAccountId: string | null;
@@ -934,11 +933,9 @@ async function lockPageForHoldWrite(tx: Database, pageId: number, generation: bi
 /**
  * One write of a page's hold set: the fence, then the rows, in one
  * transaction (a savepoint inside the caller's). The rows are the page's
- * whole hold state. The page row is locked and not written: its old hold
- * columns stay in the database as the last release that wrote them left
- * them, until a migration drops them (step 4, S4-32) — the image before this
- * one reads none of them back and rewrites them from the rows at its first
- * hold write of a page, so a rollback to it runs on what is left here.
+ * whole hold state. The page row is locked and not written: it has no hold
+ * column (the old ones were dropped in step 4, S4-33; the release before
+ * that one already named none of them).
  */
 async function writeHoldSet<T>(
   db: Database,

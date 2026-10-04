@@ -295,14 +295,6 @@ describe("onboarding goes straight to live (S4-05)", () => {
     expect(checkOf("auth_refusals").verdict).toBe("pass");
     expect(checkOf("window_complete").verdict).toBe("inconclusive");
     expect(hour.accepted).toBe(false);
-
-    // The page was born and run by this build, which names none of the old
-    // hold columns its row still has in the database (step 4, S4-32): after
-    // onboarding, an acquisition, heartbeats, admissions and captures they
-    // hold their defaults, which their two CHECKs admit.
-    expect((await testDb.pool.query(
-      "select hold_kind, hold_until, hold_since, hold_detail, resource_holds from sync_pages where page_id = $1", [page.id],
-    )).rows).toEqual([{ hold_kind: null, hold_until: null, hold_since: null, hold_detail: {}, resource_holds: {} }]);
   }, 60_000);
 
   it("leaves nothing behind when the session is refused, and refuses a second page of the same account", async (context) => {

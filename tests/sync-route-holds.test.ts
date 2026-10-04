@@ -254,8 +254,6 @@ describe("budgets-calibration.sql (A2: the evidence behind a step)", () => {
     expect(text).toContain("pnpm cli sync route raise --page %s --route %s --to %s --revision %s --evidence %L");
     expect(text).toContain("from sync_holds h");
     expect(text).toContain("where h.scope = 'route'");
-    // The old columns are no source of it any more.
-    expect(text).not.toMatch(/resource_holds|route:state/);
     expect(text).toContain(`ae.event_type = '${SYNC_ROUTE_RAISE_AUDIT_EVENT}'`);
     // Read-only: a report, never a write.
     expect(text).not.toMatch(/\b(insert|update|delete|truncate|alter|create|drop)\b\s/i);

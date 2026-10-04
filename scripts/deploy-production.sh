@@ -628,14 +628,27 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # columns with the table whenever it acquires a page and lets them win.
   # Both were compatible only while the hold writers rewrote the columns
   # from the table in the transaction of every hold write, which they did
-  # through the release that carried 0241. This tree writes the table alone
-  # and leaves the columns stale, so either image would drop every hold
-  # taken since this release started and bring back every hold lifted. This
-  # release is therefore deployed onto the one that carried 0241, with both
-  # applied already: no delta of its deploy holds them, and its automatic
-  # rollback returns to an image that reads no hold column. A deploy that
+  # through the release that carried 0241. From S4-32 on the tree writes
+  # the table alone: the columns went stale there and are gone since S4-33
+  # (the entry below), so either image would drop every hold taken since
+  # S4-32 started and bring back every hold lifted, and neither runs at all
+  # without the columns. Both migrations are long applied wherever S4-32 has
+  # been deployed, so no delta of a later deploy holds them; a deploy that
   # still had one of them to apply keeps the automatic rollback off rather
   # than fail open (apps/runtime/src/sync/README.md, "Rollback targets").
+  #
+  # The old hold columns of sync_pages dropped (step 4, S4-33, owner decision
+  # №26; the last of the three releases): five columns and the slot's two
+  # CHECKs, one catalog-only ALTER TABLE under lock_timeout 5 s. The previous
+  # image (S4-32) names none of them: no statement selects, writes or returns
+  # them, its drizzle table does not map them, and it reads and writes
+  # sync_pages by named columns only, never by *. So it runs unchanged after
+  # a rollback. That is true of the S4-32 image ALONE: the one before it ends
+  # every hold write by rewriting those columns and would fail each of them.
+  # This release is therefore deployed onto S4-32, deployed and run for its
+  # hour, never in the deploy that brings S4-32 (which has no migration of
+  # its own, so this list could not tell the two apart).
+  "0242_sync_pages_drop_old_hold_columns.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

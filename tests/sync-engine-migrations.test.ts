@@ -39,8 +39,9 @@ import {
   syncPages,
 } from "@agency_hub_core/db";
 
-// Fansly Sync Engine migrations (design §2.1): forward-only, purely additive,
-// each in ROLLBACK_COMPATIBLE_MIGRATIONS. One block per migration.
+// Fansly Sync Engine migrations (design §2.1): forward-only, and additive
+// until step 4, whose last ones drop what the hold set replaced. One block
+// per migration, each with what it means for ROLLBACK_COMPATIBLE_MIGRATIONS.
 
 function stripComments(text: string): string {
   return text
@@ -102,8 +103,8 @@ describe("0228_sync_engine_core.sql", () => {
 
   it("keeps the vocabularies of the checks equal to the repositories' constants", () => {
     expect(checkList(sql, "sync_pages_mode_check")).toEqual([...SYNC_PAGE_MODES]);
-    // The old hold slot, stale since step 4 S4-32 (nothing writes it): its
-    // CHECK admits every kind a page's hold set has, and the page-wide 429
+    // The old hold slot, dropped with its CHECKs in step 4 (S4-33): its
+    // CHECK admitted every kind a page's hold set has, and the page-wide 429
     // kind no build takes any more.
     expect(checkList(sql, "sync_pages_hold_kind_check")).toEqual(["rate_limit", ...SYNC_PAGE_HOLD_KINDS]);
     expect(checkList(sql, "sync_work_kind_check")).toEqual([...SYNC_WORK_KINDS]);
@@ -715,25 +716,31 @@ describe("sync_pages_drop_hold_step.sql (step 4, S4-31: the first old hold colum
     ]);
   });
 
-  it("leaves the other old hold columns in the database: no later migration has dropped them yet", () => {
-    // The image before this one (S4-31) still writes them at every hold
-    // write; this one names none of them (tests/sync-old-hold-columns.test.ts).
+  it("left the other old hold columns in the database: only the last migration of the three drops them, two releases later", () => {
+    // The release that carried this one (S4-31) still wrote them at every
+    // hold write; the next one (S4-32) named none of them; the one after
+    // drops them (the block below).
     const base = stripComments(readFileSync("packages/db/migrations/0228_sync_engine_core.sql", "utf8"));
+    const lastDrop = migrations.filter((file) => file.endsWith("_sync_pages_drop_old_hold_columns.sql"));
+    expect(lastDrop).toHaveLength(1);
+    expect(lastDrop[0]! > migration).toBe(true);
     for (const column of ["hold_kind", "hold_until", "hold_since", "hold_detail", "resource_holds"]) {
       expect(base, column).toMatch(new RegExp(`^\\s{2}${column} `, "m"));
-      for (const later of migrations.filter((file) => file > "0228_sync_engine_core.sql")) {
-        const sql = stripComments(readFileSync(`packages/db/migrations/${later}`, "utf8"));
-        expect(sql, `${later}: ${column}`).not.toMatch(new RegExp(`drop column (if exists )?${column}\\b`, "i"));
-      }
+      const dropping = migrations.filter((file) => file > "0228_sync_engine_core.sql"
+        && new RegExp(`drop column (if exists )?${column}\\b`, "i").test(stripComments(readFileSync(`packages/db/migrations/${file}`, "utf8"))));
+      expect(dropping, column).toEqual(lastDrop);
     }
-    // The counter of consecutive network failures is no hold: it stays.
+    // The counter of consecutive network failures is no hold: no migration drops it.
     expect(base).toMatch(/^\s{2}network_failure_streak smallint not null default 0,$/m);
+    for (const file of migrations) {
+      expect(stripComments(readFileSync(`packages/db/migrations/${file}`, "utf8")), file).not.toMatch(/drop column (if exists )?network_failure_streak\b/i);
+    }
   });
 
   it("no longer allows application rollback (the image before it lets the stale columns win); no source names the column", () => {
     // Listed while the hold writers kept the other old hold columns equal to
     // the rows, which the image before this migration compares at every
-    // acquisition. They are stale since step 4 S4-32.
+    // acquisition. They went stale in step 4 S4-32 and are dropped since S4-33.
     expect(rollbackCompatible()).not.toContain(`"${migration}"`);
     // The page row is read through one list of named columns, never `*`.
     const pages = readFileSync("packages/db/src/repositories/sync/pages.ts", "utf8");
@@ -751,5 +758,107 @@ describe("sync_pages_drop_hold_step.sql (step 4, S4-31: the first old hold colum
     // (and the pin of the old hold columns, which names the migration's file).
     const tests = readdirSync("tests").filter((file) => file.endsWith(".ts") && /hold_step|holdStep/.test(readFileSync(`tests/${file}`, "utf8")));
     expect(tests.sort()).toEqual(["sync-engine-migrations.test.ts", "sync-hold-set.integration.test.ts", "sync-old-hold-columns.test.ts"]);
+  });
+});
+
+describe("sync_pages_drop_old_hold_columns.sql (step 4, S4-33: the old hold columns go)", () => {
+  // Found by its name, not its number: the number is the next free one at merge.
+  const migrations = readdirSync("packages/db/migrations").filter((file) => file.endsWith(".sql")).sort();
+  const found = migrations.filter((file) => file.endsWith("_sync_pages_drop_old_hold_columns.sql"));
+  const migration = found[0] ?? "";
+  const text = found.length === 1 ? readFileSync(`packages/db/migrations/${migration}`, "utf8") : "";
+  const sql = stripComments(text);
+  const statements = topLevelStatements(sql);
+  const columns = ["hold_kind", "hold_until", "hold_since", "hold_detail", "resource_holds"];
+  const checks = ["sync_pages_hold_pair_check", "sync_pages_hold_kind_check"];
+  const sqlOf = (file: string) => stripComments(readFileSync(`packages/db/migrations/${file}`, "utf8"));
+
+  it("exists once, after the hold set's table and the drop of the slot's ladder step", () => {
+    expect(found).toHaveLength(1);
+    const holdSet = migrations.find((file) => file.endsWith("_sync_holds.sql")) ?? "";
+    const dropHoldStep = migrations.find((file) => file.endsWith("_sync_pages_drop_hold_step.sql")) ?? "";
+    expect(holdSet).not.toBe("");
+    expect(dropHoldStep > holdSet).toBe(true);
+    expect(migration > dropHoldStep).toBe(true);
+  });
+
+  it("is one ALTER TABLE — the two CHECKs, then the five columns — its lock wait bounded, and nothing else", () => {
+    expect(statements).toEqual([
+      "set local lock_timeout = '5s'",
+      `alter table sync_pages ${[
+        ...checks.map((check) => `drop constraint if exists ${check}`),
+        ...columns.map((column) => `drop column if exists ${column}`),
+      ].join(", ")}`,
+    ]);
+    // One statement, one ACCESS EXCLUSIVE lock; nothing outside the table
+    // depends on the columns, so nothing is cascaded.
+    expect(sql).not.toMatch(/cascade/i);
+    // The counter of consecutive network failures and the hold set stay.
+    expect(sql).not.toMatch(/network_failure_streak|sync_holds/);
+    // Transactional (the runner's own transaction): `set local` needs one.
+    expect(text.startsWith("-- agency-hub:no-transaction")).toBe(false);
+  });
+
+  it("drops all that was left of the old hold store: what 0228 made of it, less the ladder step 0241 dropped", () => {
+    const base = sqlOf("0228_sync_engine_core.sql");
+    const table = base.slice(base.indexOf("create table if not exists sync_pages ("), base.indexOf("create table if not exists sync_work ("));
+    const made = [...table.matchAll(/^\s{2}(hold_[a-z]+|resource_holds) /gm)].map((match) => match[1]!);
+    expect(made).toEqual(["hold_kind", "hold_until", "hold_since", "hold_step", "hold_detail", "resource_holds"]);
+    expect(made.filter((column) => column !== "hold_step")).toEqual(columns);
+    expect([...table.matchAll(/constraint (sync_pages_hold_[a-z_]+) check/g)].map((match) => match[1]!).sort()).toEqual([...checks].sort());
+
+    // No other migration built anything on them (an index, a comment, a
+    // grant, a default), or brings one back: of all the migrations, only the
+    // one that made them and this one name them in a statement. `hold_until`
+    // is also the name of a column of another table (0219), which stays.
+    const naming = (pattern: RegExp) => migrations.filter((file) => pattern.test(sqlOf(file)));
+    expect(naming(/hold_kind|hold_since|hold_detail|resource_holds|sync_pages_hold_/)).toEqual(["0228_sync_engine_core.sql", migration]);
+    expect(naming(/hold_until/)).toEqual(["0219_page_sync_provider_holds.sql", "0228_sync_engine_core.sql", migration]);
+    expect(sqlOf("0219_page_sync_provider_holds.sql")).not.toMatch(/sync_pages/);
+    // The read role's grant on the page table is the table's (0228): no
+    // column grant to follow a column.
+    expect(base).not.toMatch(/grant select \([^)]*\) on sync_pages/);
+    expect(readFileSync("packages/db/migrations/0228_sync_engine_core.sql", "utf8")).toContain("grant select on sync_pages to read_only");
+  });
+
+  it("is mirrored in drizzle: the page table maps no hold column and declares no hold CHECK", () => {
+    const names = Object.values(syncPages as unknown as Record<string, { name?: unknown }>).map((column) => column.name);
+    for (const column of columns) expect(names, column).not.toContain(column);
+    expect(names).toContain("network_failure_streak");
+    const schema = readFileSync("packages/db/src/schema.ts", "utf8");
+    const table = schema.slice(schema.indexOf('export const syncPages = pgTable('), schema.indexOf('export const syncHolds = pgTable('));
+    expect([...table.matchAll(/check\(\s*"([a-z_]+)"/g)].map((match) => match[1])).toEqual([
+      "sync_pages_mode_check", "sync_pages_cycle_pos_check", "sync_pages_lifted_dm_exclusions_check",
+    ]);
+  });
+
+  it("allows application rollback: the image before it (S4-32) names none of what it drops — and that image alone", () => {
+    const compatible = rollbackCompatible();
+    expect(compatible).toContain(`"${migration}"`);
+    // The two migrations before it stay out: the images before THEM read the columns.
+    for (const file of migrations.filter((name) => /_sync_holds\.sql$|_sync_pages_drop_hold_step\.sql$/.test(name))) {
+      expect(compatible, file).not.toContain(`"${file}"`);
+    }
+    // What the entry rests on, in this tree as in the image before it (this
+    // release changes no statement): the sync repositories — the only files
+    // that write a page row — and the drizzle table name none of the columns,
+    // and read the page row by named columns. The whole of `apps`, `packages`
+    // and `scripts` is scanned in tests/sync-old-hold-columns.test.ts.
+    const repositories = readdirSync("packages/db/src/repositories/sync").map((file) => `packages/db/src/repositories/sync/${file}`);
+    expect(repositories).toContain("packages/db/src/repositories/sync/pages.ts");
+    for (const file of [...repositories, "packages/db/src/schema.ts"]) {
+      const source = readFileSync(file, "utf8");
+      expect(source, file).not.toMatch(/hold_kind|hold_since|hold_detail|resource_holds|sync_pages_hold_/);
+      expect(source, file).not.toMatch(/\bsp\.\*|select \* from sync_pages|to_jsonb\(sp\)/);
+    }
+    // The two files with a statement that writes a page row return it by named columns too.
+    for (const file of ["packages/db/src/repositories/sync/pages.ts", "packages/db/src/repositories/sync/attempts.ts"]) {
+      expect(readFileSync(file, "utf8"), file).not.toMatch(/returning\s+\*/);
+    }
+    // The limit of the entry is written beside it and in the migration: the
+    // image two before rewrites the columns at every hold write.
+    const reasons = compatible.replaceAll("\n  #", "").replace(/\s+/g, " ");
+    expect(reasons).toContain("That is true of the S4-32 image ALONE");
+    expect(text.replace(/\n-- ?/g, " ")).toContain("this ships only after the S4-32 release has been deployed and has run, never in the deploy that brings it");
   });
 });
