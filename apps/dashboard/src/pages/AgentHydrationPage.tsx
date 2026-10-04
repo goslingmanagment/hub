@@ -11,10 +11,14 @@ import { formatRelativeTime } from "@/lib/format";
  * slice C).
  *
  * WHAT THIS SCREEN IS FOR: an agent can write down that it wants a thread
- * deepened. It cannot make that happen. Every row here is a request to spend
- * something real — OFAPI credits, or Fansly egress quota on an account that can
- * be banned for looking too eager — and the only thing that turns one into work
- * is a decision taken here (or through `hub agent hydration decide`).
+ * deepened. It cannot make that happen. Every OnlyFans row here is a request to
+ * spend something real — OFAPI credits — and the only thing that turns one into
+ * work is a decision taken here (or through `hub agent hydration decide`).
+ *
+ * A FANSLY ROW TAKES NO APPROVAL. A Fansly page's history is read by the Fansly
+ * Sync Engine as a history request (the route wraps the request into one), so
+ * there is no lane here to approve and the server refuses an approval; a row
+ * still waiting can only be rejected.
  *
  * THREE THINGS THE FORM REFUSES TO LET YOU SKIP, because each is a way the
  * system could otherwise spend on your behalf without you meaning it:
@@ -115,6 +119,13 @@ export function hydrationDecisionAttempt(
 ): { error: string } | { body: AgentHydrationRequestDecideBody } {
   // A manual recovery repeats the exact idempotent request, including expiry.
   return previous ? { body: previous } : prepareHydrationDecision(request, draft, decision);
+}
+
+/** Whether this queue can approve the request: only a platform with a
+ *  hydration lane to run it. A Fansly request is the Fansly Sync Engine's
+ *  history request and takes no approval. */
+export function hydrationRequestTakesApproval(request: { platform: string }): boolean {
+  return request.platform !== "fansly";
 }
 
 export function hydrationDecisionStatusIsDefiniteRefusal(status: number | null): boolean {
@@ -263,6 +274,7 @@ export function AgentHydrationPage() {
           const draft = draftFor(request);
           const error = errors[request.requestRef];
           const decidable = request.state === "requested";
+          const approvable = hydrationRequestTakesApproval(request);
           const changed = !hydrationDraftMatches(draft, request);
           const approvalError = hydrationApprovalError(draft);
           const attempt = attempts[request.requestRef];
@@ -294,7 +306,11 @@ export function AgentHydrationPage() {
                 </div>
                 <div>
                   <dt className="font-medium text-text-primary">Lane</dt>
-                  <dd>{request.admissibility.selected ?? "none"} · {request.admissibility.costNote ?? "—"}</dd>
+                  <dd>
+                    {approvable
+                      ? `${request.admissibility.selected ?? "none"} · ${request.admissibility.costNote ?? "—"}`
+                      : "Fansly Sync Engine · history request"}
+                  </dd>
                 </div>
                 <div>
                   <dt className="font-medium text-text-primary">Key</dt>
@@ -348,7 +364,13 @@ export function AgentHydrationPage() {
                       }}>I reviewed v{request.rowVersion}; keep limits and reconsider mark-read</button>
                     </div>
                   )}
+                  {!approvable && (
+                    <p className="mb-3 text-xs text-text-muted">
+                      The Fansly Sync Engine reads this page's history as a history request; there is nothing to approve here. A request still waiting can be rejected.
+                    </p>
+                  )}
                   <fieldset disabled={decide.isPending || Boolean(attempt)} className="min-w-0">
+                  {approvable && (
                   <div className="flex flex-wrap items-end gap-3">
                     <label className="text-xs text-text-muted">
                       <span className="block font-medium text-text-primary">Max calls</span>
@@ -417,6 +439,7 @@ export function AgentHydrationPage() {
                       </span>
                     </label>
                   </div>
+                  )}
 
                   <label className="mt-3 block text-xs text-text-muted">
                     <span className="block font-medium text-text-primary">
@@ -434,14 +457,16 @@ export function AgentHydrationPage() {
                   </fieldset>
 
                   <div className="mt-3 flex gap-2">
-                    <button
-                      type="button"
-                      disabled={decide.isPending || isError || changed || approvalError !== null || Boolean(attempt)}
-                      onClick={() => void submit(request, "approve")}
-                      className="rounded-lg bg-accent px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50"
-                    >
-                      Approve
-                    </button>
+                    {approvable && (
+                      <button
+                        type="button"
+                        disabled={decide.isPending || isError || changed || approvalError !== null || Boolean(attempt)}
+                        onClick={() => void submit(request, "approve")}
+                        className="rounded-lg bg-accent px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50"
+                      >
+                        Approve
+                      </button>
+                    )}
                     <button
                       type="button"
                       disabled={decide.isPending || isError || changed || !draft.reason.trim() || Boolean(attempt)}
@@ -452,7 +477,7 @@ export function AgentHydrationPage() {
                     </button>
                   </div>
 
-                  {approvalError && <p className="mt-2 text-xs text-danger">{approvalError}</p>}
+                  {approvable && approvalError && <p className="mt-2 text-xs text-danger">{approvalError}</p>}
 
                   {error && (
                     <p role="alert" className="mt-2 text-xs text-danger">{error}</p>

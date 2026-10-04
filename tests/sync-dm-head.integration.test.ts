@@ -20,7 +20,6 @@ import { canonicalizeObservationInTransaction } from "../apps/runtime/src/sync/e
 import type { SyncFaultPoint } from "../apps/runtime/src/sync/engine/commit.ts";
 import { createEngineRegistry, pollsFor, type EngineRegistry } from "../apps/runtime/src/sync/engine/resource.ts";
 import { FANSLY_RESOURCE_SPECS, fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";
-import { dmMessagesModule } from "../apps/runtime/src/sync/fansly/resources/dm-messages.ts";
 import { getHistoryRequest, submitHistoryRequest } from "../apps/runtime/src/sync/requests/history.ts";
 import {
   resetIntegrationDatabase,
@@ -28,14 +27,12 @@ import {
   type StartedTestDatabase,
 } from "./helpers/db.ts";
 import {
-  changedTables,
   makeTestActor,
   okResponse,
   RecordingAlerts,
   RecordingMetrics,
   ScriptedLiveTransport,
   seedSyncPage,
-  tableCounts,
   testConfig,
   waitFor,
 } from "./helpers/sync-engine-host.ts";
@@ -44,9 +41,11 @@ import {
 // `sync-dm-head`) through the real actor and commits against a real
 // database; a scripted transport plays Fansly's `/message` (newest first, 25
 // a page, `before` strictly below). Pinned: one head read confirms a socket
-// message into every store in one commit (hot table, chain, the summary from
-// the archive, the overlay confirmed against the archive, events, archive); a demand that arrives during the read is read
-// again (I11); an id the vendor does not show yet is retried at 15 s and
+// message into every store in one commit (chain, the summary from the
+// archive, the overlay confirmed against the archive, events, archive) and
+// writes no `page_dm_messages` row (step 4 S4-13, I23: the rows legacy stored
+// stay as they were); a demand that arrives during the read is read again
+// (I11); an id the vendor does not show yet is retried at 15 s and
 // 60 s, then settled not found; more than 25 new messages are read down until
 // the staged walk meets the chain, which moves only then; the archive is fed
 // even when the minutely driver appended the events first; history is read
@@ -125,14 +124,11 @@ function beforeOf(req: FanslyWireRequest): string | null {
   return new URL(req.url).searchParams.get("before");
 }
 
-async function seedPage(mode: "live" | "shadow" = "live") {
-  const { pageId } = await seedSyncPage({ db: db(), pool: testDb!.pool }, {
-    mode,
-    guard: mode === "live" ? "fansly_sync_engine" : null,
-  });
+async function seedPage() {
+  const { pageId } = await seedSyncPage({ db: db(), pool: testDb!.pool }, { mode: "live", guard: "fansly_sync_engine" });
   await testDb!.pool.query("update pages set external_page_id = $2 where id = $1", [pageId, OWN]);
   await testDb!.pool.query(
-    `update sync_pages set legacy_imported_at = case when mode = 'live' then clock_timestamp() - interval '1 day' end,
+    `update sync_pages set legacy_imported_at = clock_timestamp() - interval '1 day',
             mode_changed_at = clock_timestamp() - interval '1 day'
       where page_id = $1`,
     [pageId],
@@ -220,22 +216,20 @@ async function seedThread(pageId: number, seed: ThreadSeed): Promise<number> {
 }
 
 /** Every Fansly entry, standing polls parked far ahead. */
-async function registryFor(pageId: number, shadow = false): Promise<EngineRegistry> {
+async function registryFor(pageId: number): Promise<EngineRegistry> {
   const registry = createEngineRegistry(FANSLY_RESOURCE_SPECS);
   const page = await getSyncPage(db(), pageId);
   await ensurePollRows(db(), {
     pageId,
-    shadow,
-    polls: pollsFor(registry, page!, shadow).map((poll) => ({ ...poll, phase: 0.999 })),
+    polls: pollsFor(registry, page!).map((poll) => ({ ...poll, phase: 0.999 })),
   });
   return registry;
 }
 
-async function demand(pageId: number, resource: string, n: number, messageIds: readonly string[], options: { shadow?: boolean } = {}) {
+async function demand(pageId: number, resource: string, n: number, messageIds: readonly string[]) {
   const spec = fanslyResourceSpec(resource)!;
   return upsertDemand(db(), {
     pageId,
-    shadow: options.shadow ?? false,
     resource,
     subject: groupOf(n),
     kind: spec.kind,
@@ -279,7 +273,6 @@ async function runLive(
   const { actor, stop, abort } = await makeTestActor({
     db: db(),
     pageId,
-    mode: "live",
     registry,
     transport,
     alerts: options.alerts ?? new RecordingAlerts(),
@@ -296,7 +289,7 @@ async function runLive(
   return { requests };
 }
 
-async function workRow(pageId: number, resource: string, n: number, shadow = false) {
+async function workRow(pageId: number, resource: string, n: number) {
   const result = await testDb!.pool.query<{
     id: string; state: string; close_reason: string | null; demand: { messageIds: string[] }; cursor: Record<string, unknown>;
     demand_revision: string; applied_revision: string; due_at: Date; updated_at: Date; attempts_count: number;
@@ -304,8 +297,8 @@ async function workRow(pageId: number, resource: string, n: number, shadow = fal
   }>(
     `select id::text, state, close_reason, demand, cursor, demand_revision::text, applied_revision::text, due_at, updated_at,
             attempts_count, last_error_class
-       from sync_work where page_id = $1 and resource = $2 and subject = $3 and shadow = $4 order by id desc limit 1`,
-    [pageId, resource, groupOf(n), shadow],
+       from sync_work where page_id = $1 and resource = $2 and subject = $3 and not shadow order by id desc limit 1`,
+    [pageId, resource, groupOf(n)],
   );
   return result.rows[0] ?? null;
 }
@@ -326,7 +319,24 @@ async function thread(threadId: number) {
   return result.rows[0]!;
 }
 
+/** The thread's messages in `message_archive`, the store a live page's
+ *  readers and the engine's summary read (step 4 S4-08). */
 async function storedIds(threadId: number): Promise<string[]> {
+  const result = await testDb!.pool.query<{ id: string }>(
+    `select ma.message_ref as id
+       from page_dm_threads t
+       join message_archive ma
+         on ma.account_id = t.platform_account_id and ma.platform = 'fansly' and ma.conversation_ref = t.platform_conversation_id
+      where t.id = $1
+      order by ma.message_ref::numeric`,
+    [threadId],
+  );
+  return result.rows.map((row) => row.id);
+}
+
+/** The thread's `page_dm_messages` rows: only what legacy stored (the engine
+ *  writes none, step 4 S4-13). */
+async function hotIds(threadId: number): Promise<string[]> {
   const result = await testDb!.pool.query<{ id: string }>(
     "select platform_message_id as id from page_dm_messages where conversation_id = $1 order by platform_message_id::numeric",
     [threadId],
@@ -342,7 +352,7 @@ async function scalar(text: string, values: unknown[]): Promise<number> {
 const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, index) => from + index);
 
 describe("dm-messages.head", () => {
-  it("confirms a socket message with one head read: hot table, chain, summary, overlay, events and archive in one commit", async (context) => {
+  it("confirms a socket message with one head read: chain, summary, overlay, events and archive in one commit, no hot row", async (context) => {
     if (!testDb) return context.skip();
     const pageId = await seedPage();
     const threadId = await seedThread(pageId, { n: 1, stored: range(1, 20), chain: true });
@@ -362,6 +372,8 @@ describe("dm-messages.head", () => {
 
     expect(requests.map(beforeOf)).toEqual([null]);
     expect(await storedIds(threadId)).toEqual(range(1, 23).map(msg));
+    // The hot table keeps what legacy stored, nothing of the read.
+    expect(await hotIds(threadId)).toEqual(range(1, 20).map(msg));
     const after = await thread(threadId);
     expect(after).toMatchObject({
       head_confirmed_id: msg(23), contiguous_oldest_id: msg(1), contiguous_count: 23, chain_upward_count: "3",
@@ -500,6 +512,7 @@ describe("dm-messages.head", () => {
       head_confirmed_id: msg(70), contiguous_count: 70, chain_upward_count: "60", contiguous_oldest_id: msg(1), stored_message_count: 70,
     });
     expect(await storedIds(threadId)).toHaveLength(70);
+    expect(await hotIds(threadId)).toEqual(range(1, 10).map(msg));
   });
 
   it("joins a walk that crosses a head the vendor no longer serves", async (context) => {
@@ -585,6 +598,7 @@ describe("dm-messages.head", () => {
       async () => (await workRow(pageId, "dm-messages.head", 8))?.state === "done", { metrics });
     // Even k are the page's own messages.
     expect(await storedIds(threadId)).toEqual([msg(2), msg(4)]);
+    expect(await hotIds(threadId)).toEqual([]);
     expect(await scalar("select count(*)::int as n from domain_events where account_id = $1 and type = 'message.received'", [pageId])).toBe(0);
     expect(await scalar("select count(*)::int as n from domain_events where account_id = $1 and type = 'message.sent'", [pageId])).toBe(2);
     expect(await scalar("select count(*)::int as n from message_archive where account_id = $1", [pageId])).toBe(2);
@@ -633,7 +647,7 @@ describe("dm-messages.head", () => {
     expect(await scalar("select count(*)::int as n from page_dm_messages where platform_account_id = $1", [pageId])).toBe(0);
   });
 
-  it("a chat excluded between the capture and the apply writes no rows, yet its events are appended and the observation stamped", async (context) => {
+  it("a chat excluded between the capture and the apply moves neither its chain nor its summary, yet its events are appended and the observation stamped", async (context) => {
     if (!testDb) return context.skip();
     const pageId = await seedPage();
     const threadId = await seedThread(pageId, { n: 19, stored: range(1, 3), chain: true });
@@ -650,8 +664,8 @@ describe("dm-messages.head", () => {
         },
       });
     expect(await workRow(pageId, "dm-messages.head", 19)).toMatchObject({ state: "done", close_reason: "excluded" });
-    expect(await storedIds(threadId)).toEqual(range(1, 3).map(msg));
-    expect((await thread(threadId)).head_confirmed_id).toBe(msg(3));
+    expect(await thread(threadId)).toMatchObject({ head_confirmed_id: msg(3), stored_message_count: 3 });
+    expect(await hotIds(threadId)).toEqual(range(1, 3).map(msg));
     const observation = await testDb.pool.query<{ parse_version: number | null }>(
       "select o.parse_version from observations o join sync_attempts a on a.observation_id = o.id where a.page_id = $1",
       [pageId],
@@ -844,6 +858,7 @@ describe("dm-messages refusals", () => {
     await runLive(pageId, registry, () => okResponse({ messages: [4, 5].map((k) => wireMessage(groupOf(13), k)) }),
       async () => (await workRow(pageId, "dm-messages.head", 13))?.state === "quarantined", { alerts });
     expect(await storedIds(threadId)).toEqual(range(1, 3).map(msg));
+    expect(await hotIds(threadId)).toEqual(range(1, 3).map(msg));
     expect((await thread(threadId)).head_confirmed_id).toBe(msg(3));
     const attempt = await testDb.pool.query("select apply_state, observation_id is not null as journaled from sync_attempts where page_id = $1", [pageId]);
     expect(attempt.rows).toEqual([{ apply_state: "quarantined", journaled: true }]);
@@ -939,46 +954,5 @@ describe("dm-messages.history", () => {
       history_state: "complete", history_proof: "empty_page", history_proof_observation_id: proofAttempt.rows[0]!.obs,
       contiguous_count: 3, message_coverage_status: "complete", message_backfill_complete: true,
     });
-  });
-});
-
-describe("dm-messages in shadow and replay", () => {
-  it("estimates ⌈ids / 25⌉ reads and writes nothing but its own work and attempts", async (context) => {
-    if (!testDb) return context.skip();
-    const pageId = await seedPage("shadow");
-    await seedThread(pageId, { n: 16, stored: range(1, 3), chain: true });
-    const registry = await registryFor(pageId, true);
-    await demand(pageId, "dm-messages.head", 16, range(4, 63).map(msg), { shadow: true });
-    const before = await tableCounts(testDb.pool);
-    const { actor, stop, abort } = await makeTestActor({ db: db(), pageId, mode: "shadow", registry });
-    const run = actor.run({ stop: stop.signal, abort: abort.signal });
-    try {
-      await waitFor(async () => ((await workRow(pageId, "dm-messages.head", 16, true))?.state === "done" ? true : null), 30_000, "shadow walk");
-    } finally {
-      stop.abort();
-      await run;
-    }
-    expect(await scalar(
-      "select count(*)::int as n from sync_attempts where page_id = $1 and shadow and resource = 'dm-messages.head' and outcome = 'shadow'", [pageId],
-    )).toBe(3);
-    expect(changedTables(before, await tableCounts(testDb.pool)).filter((name) => !["sync_work", "sync_attempts", "sync_pages"].includes(name)))
-      .toEqual([]);
-  });
-
-  it("replays a legacy dm_messages page against what legacy stored", async (context) => {
-    if (!testDb) return context.skip();
-    const pageId = await seedPage("shadow");
-    await seedThread(pageId, { n: 17, stored: range(1, 3) });
-    const replay = dmMessagesModule("head").replay!;
-    // Received after legacy stored the rows (a later re-read would be a match).
-    const observation = (payload: unknown) => ({ id: 1, receivedAt: new Date(Date.now() + HOUR), kind: "dm_messages", pageId, payload });
-    const page = { messages: [3, 2, 1].map((k) => wireMessage(groupOf(17), k)) };
-    expect(await replay(observation(page), { db: db(), pageId })).toMatchObject({ kind: "match" });
-    const edited = { messages: [3, 2, 1].map((k) => wireMessage(groupOf(17), k, k === 2 ? { content: "edited" } : {})) };
-    expect(await replay(observation(edited), { db: db(), pageId })).toMatchObject({ kind: "mismatch", reason: "rows_differ" });
-    const unknown = { messages: [wireMessage(groupOf(99), 1)] };
-    expect(await replay(observation(unknown), { db: db(), pageId })).toMatchObject({ kind: "mismatch", reason: "thread_missing" });
-    expect(await replay(observation({ contractAccepted: false, raw: { error: "x" } }), { db: db(), pageId }))
-      .toMatchObject({ kind: "match", detail: { legacyRefused: true } });
   });
 });

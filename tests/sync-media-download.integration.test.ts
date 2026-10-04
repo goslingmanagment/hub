@@ -187,7 +187,7 @@ describe("media-download.fetch on a live page", () => {
     const r = await rig();
     const lines: string[] = [];
     const { workId, descriptionId } = await download(r, `/cdn/img-1?${SECRET}`);
-    await upsertDemand(db(), { pageId: r.page.pageId, shadow: false, resource: HARNESS_KEY.urgent, subject: "u1", kind: "trigger", class: "urgent" });
+    await upsertDemand(db(), { pageId: r.page.pageId, resource: HARNESS_KEY.urgent, subject: "u1", kind: "trigger", class: "urgent" });
     await startHost(r, { seed: 61, logger: recordingLogger(lines) });
     const row = await closed(workId);
 
@@ -260,7 +260,7 @@ describe("media-download.fetch on a live page", () => {
     await startHost(r, { seed: 64, alerts });
     expect(await closed(expired.workId)).toMatchObject({ close_reason: "subject_terminal:403", result: { failure: "http_status", httpStatus: 403 } });
     expect(await scalar("select count(*)::int as n from sync_holds where page_id = $1 and scope = 'page'", [r.page.pageId])).toBe(0);
-    await upsertDemand(db(), { pageId: r.page.pageId, shadow: false, resource: HARNESS_KEY.urgent, subject: "after", kind: "trigger", class: "urgent" });
+    await upsertDemand(db(), { pageId: r.page.pageId, resource: HARNESS_KEY.urgent, subject: "after", kind: "trigger", class: "urgent" });
     await until(async () => r.server.arrivalsAt("/api/v1/trackinglinks").length === 1, 30_000, "the next REST read");
     expect(alerts.opened.filter((alert) => alert.detail === "auth")).toEqual([]);
   }, 60_000);
@@ -278,7 +278,7 @@ describe("media-download.fetch on a live page", () => {
     expect(await work(busy.workId)).toMatchObject({ state: "open", waiting_reason: null, secret: true });
     expect(alerts.opened.filter((alert) => alert.subKey === "route_limited").map((alert) => [alert.route, alert.detail]))
       .toEqual([["cdn.media", "rate_limit"]]);
-    await upsertDemand(db(), { pageId: r.page.pageId, shadow: false, resource: HARNESS_KEY.urgent, subject: "beside", kind: "trigger", class: "urgent" });
+    await upsertDemand(db(), { pageId: r.page.pageId, resource: HARNESS_KEY.urgent, subject: "beside", kind: "trigger", class: "urgent" });
     await until(async () => r.server.arrivalsAt("/api/v1/trackinglinks").length === 1, 30_000, "a REST read beside the held CDN");
     expect(cdnArrivals(r)).toEqual([["/cdn/busy", 429]]);
   }, 60_000);

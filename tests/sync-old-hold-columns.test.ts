@@ -225,7 +225,7 @@ describe("what the operator is told", () => {
       expect(compatible, migration).toContain(migration);
     }
     const reason = squash(compatible.replaceAll("\n  #", ""));
-    expect(reason).toContain("a route-state version in the old resource-hold map that the image before 0241 cannot read");
+    expect(reason).toContain("a route-state version in the old resource-hold map that the image before 0243 cannot read");
     expect(reason).toContain("keeps the automatic rollback off rather than return to an image that runs no page this release has taken");
   });
 

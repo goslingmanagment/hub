@@ -946,3 +946,113 @@ export async function listUserUsageReport(
     })),
   };
 }
+
+/**
+ * chat-extension H-15: one user's ledger rows on ONE page, cut into days.
+ *
+ * The caller cuts the days (it knows the report zone); this query only buckets
+ * `completed_at` by the instants it is given, so no time-zone name ever reaches
+ * the database and the windows a report prints are exactly the windows counted.
+ */
+export interface ListUserPageDailyUsageInput {
+  userId: number;
+  pageId: number;
+  /** The start of every day, oldest first, strictly ascending. A day ends where
+   *  the next one starts, so the days neither overlap nor leave a gap. */
+  dayStarts: readonly Date[];
+  /** The end of the last day. */
+  toExclusive: Date;
+}
+
+/** One (day, feature) group that has at least one ledger row. */
+export interface UserPageDailyUsageRow {
+  /** Index into `dayStarts`. */
+  dayIndex: number;
+  /** A ledger feature name, as stored. */
+  feature: string;
+  requestCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheWriteTokens: number;
+  cacheReadTokens: number;
+  costMicroUsd: number;
+  costApproximate: boolean;
+  completedCount: number;
+  failedCount: number;
+  cancelledCount: number;
+  quotaDeniedCount: number;
+  openReservationCount: number;
+  regenerationCount: number;
+}
+
+/**
+ * The same counting rules as listUserUsageReport (the cabinet's report), per
+ * day and feature and for one page. A day's totals are the sum of its feature
+ * rows: every ledger row has exactly one feature. Rows come by day, then by
+ * feature name in byte order (whatever the database's collation).
+ *
+ * Always filtered by `user_id`: the report is the caller's own spend whatever
+ * the caller's role. Reads the `(user_id, completed_at)` index range of the
+ * whole window once; one statement, so a row that moves between two days while
+ * its generation finishes is counted once.
+ */
+export async function listUserPageDailyUsage(
+  db: Database,
+  input: ListUserPageDailyUsageInput,
+): Promise<UserPageDailyUsageRow[]> {
+  const from = input.dayStarts[0];
+  if (from === undefined) {
+    return [];
+  }
+  // width_bucket over the days' lower bounds: 1 for the first day, n for the last.
+  const dayStarts = sql`array[${sql.join(input.dayStarts.map((start) => sql`${start}::timestamptz`), sql`, `)}]`;
+  const result = await db.execute(sql`
+    select width_bucket(${aiUsageEvents.completedAt}, ${dayStarts}) - 1 as "dayIndex",
+           ${aiUsageEvents.feature}::text as feature,
+           count(*)::int as "requestCount",
+           coalesce(sum(${aiUsageEvents.inputTokens}), 0)::bigint as "inputTokens",
+           coalesce(sum(${aiUsageEvents.outputTokens}), 0)::bigint as "outputTokens",
+           coalesce(sum(${aiUsageEvents.cacheWriteTokens}), 0)::bigint as "cacheWriteTokens",
+           coalesce(sum(${aiUsageEvents.cacheReadTokens}), 0)::bigint as "cacheReadTokens",
+           coalesce(sum(${aiUsageEvents.costMicroUsd}), 0)::bigint as "costMicroUsd",
+           coalesce(bool_or(${aiUsageEvents.costApproximate}), false) as "costApproximate",
+           count(*) filter (where ${aiUsageEvents.gatewayOutcome} = 'completed')::int as "completedCount",
+           count(*) filter (where ${aiUsageEvents.gatewayOutcome} = 'failed')::int as "failedCount",
+           count(*) filter (where ${aiUsageEvents.gatewayOutcome} = 'cancelled')::int as "cancelledCount",
+           count(*) filter (where ${aiUsageEvents.gatewayOutcome} = 'quota_denied')::int as "quotaDeniedCount",
+           count(*) filter (
+             where ${aiUsageEvents.provider} is not null
+               and ${aiUsageEvents.quotaAccepted} = true
+               and ${aiUsageEvents.gatewayOutcome} is null
+           )::int as "openReservationCount",
+           count(*) filter (where ${aiUsageEvents.isRegeneration})::int as "regenerationCount"
+    from ${aiUsageEvents}
+    where ${aiUsageEvents.userId} = ${input.userId}
+      and ${aiUsageEvents.pageId} = ${input.pageId}
+      and ${aiUsageEvents.completedAt} >= ${from}
+      and ${aiUsageEvents.completedAt} < ${input.toExclusive}
+    group by 1, ${aiUsageEvents.feature}
+    order by 1 asc, ${aiUsageEvents.feature}::text collate "C" asc
+  `);
+
+  return result.rows.map((raw) => {
+    const row = raw as Record<string, unknown>;
+    return {
+      dayIndex: normalizeRowNumber(row, "dayIndex"),
+      feature: String(rowValue(row, "feature")),
+      requestCount: normalizeRowNumber(row, "requestCount"),
+      inputTokens: normalizeRowNumber(row, "inputTokens"),
+      outputTokens: normalizeRowNumber(row, "outputTokens"),
+      cacheWriteTokens: normalizeRowNumber(row, "cacheWriteTokens"),
+      cacheReadTokens: normalizeRowNumber(row, "cacheReadTokens"),
+      costMicroUsd: normalizeRowNumber(row, "costMicroUsd"),
+      costApproximate: normalizeRowBoolean(row, "costApproximate"),
+      completedCount: normalizeRowNumber(row, "completedCount"),
+      failedCount: normalizeRowNumber(row, "failedCount"),
+      cancelledCount: normalizeRowNumber(row, "cancelledCount"),
+      quotaDeniedCount: normalizeRowNumber(row, "quotaDeniedCount"),
+      openReservationCount: normalizeRowNumber(row, "openReservationCount"),
+      regenerationCount: normalizeRowNumber(row, "regenerationCount"),
+    };
+  });
+}

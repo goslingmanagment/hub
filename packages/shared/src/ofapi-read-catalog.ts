@@ -411,6 +411,21 @@ read(
   { ...dates, type: "enum:total|renew|new" },
   { defaultCollect: true, granularity: "window" },
 );
+// The page's automatic welcome template: one 1-credit snapshot per scheduled
+// run (the chat extension's "New" panel reads the newest). Collection-only, so
+// the desktop's gateway read of this path keeps its capture-first
+// `ofapi_gateway_welcome_message` operation and admission. Not the owner action
+// `welcome_message_read`: its cluster-wide action lock would turn a background
+// read into a 409 for the owner's own action.
+read(
+  "welcome_message",
+  "settings/welcome-message",
+  "account_settings",
+  "object",
+  "none",
+  {},
+  { defaultCollect: true, granularity: "snapshot", collectionOnly: true },
+);
 const smartPage = { limit: "int:1:1000", offset: "int:0:1000000" };
 const smartDates = { date_start: "date", date_end: "date" };
 function smartRead(id: string, path: string, shape: OfapiReadShape, pagination: OfapiReadDefinition["pagination"], query: Record<string, string> = {}, options: Partial<OfapiReadDefinition> = {}) {

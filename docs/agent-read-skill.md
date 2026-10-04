@@ -413,11 +413,12 @@ it waits. Two read-only commands show it; both need `read:datasets`:
   `.detail`, `dm-live.deletions`, `fan-profiles.probe`) the key also needs
   `read:messages`.
 
-Until a page is switched to the engine (`off` or `shadow`) both answer from its
-SHADOW journal: `shadow: true` on every work row, the engine planned and paced
-the work but sent nothing. Read it as the engine's rehearsal, never as what
-Fansly answered. On a `handover` or `live` page they answer from the live
-journal: what the engine actually asked Fansly and why the rest waits. The waiting reasons are the closed
+Both answer from the page's journal: what the engine actually asked Fansly and
+why the rest waits. Every page the engine runs is `live`; a page that is `off`
+(or was left in `shadow`, a mode nothing runs any more) has no actor, so its
+queue is empty or waits on `ownership_unconfirmed`. Shadow mode is gone: the
+`shadow` block of a page's status is always `null` and `shadow` on a work row
+always `false` (the fields stay on the wire only). The waiting reasons are the closed
 list above (`not_due`, `pacer`, `class_share`, `page_hold`, `route_budget`,
 `route_hold`, `resource_hold`, `subject_breaker`, `blocked_by_vendor`,
 `quarantined`, `paused`, `dependency`, `ownership_unconfirmed`, `running`);

@@ -480,8 +480,12 @@ describe("narrow chat-extension device token (H-3)", () => {
     expect(coach.body).not.toContain("client_feature_disabled");
     expectFeatureRefused(await generate(narrowToken, "coach-chat", "lora-of", { "x-client-version": "chat-extension/1.1.0" }), "client_outdated");
     expectFeatureRefused(await generate(narrowToken, "chat-review", "lora-of", at), "flag_off");
-    // Recap needs routes this hub does not serve yet.
-    expectFeatureRefused(await generate(narrowToken, "fan-summary", "lora-of", at), "hub_not_ready");
+    // Recap is on for lora-of, and the hub serves all of it (the shared read
+    // and the dossier save): past the switch, the feature's own gate answers.
+    const recap = await generate(narrowToken, "fan-summary", "lora-of", at);
+    expect(recap.statusCode, recap.body).toBe(400);
+    expect(recap.json()).toMatchObject({ error: "gate_min_messages" });
+    expectFeatureRefused(await generate(narrowToken, "fan-summary", "lora-of", { "x-client-version": "chat-extension/1.1.0" }), "client_outdated");
     // A page not granted and a page that does not exist answer the same.
     expectFeatureRefused(await generate(narrowToken, "coach-chat", "mia-of", at), "not_granted");
     expectFeatureRefused(await generate(narrowToken, "coach-chat", "ghost-of", at), "not_granted");

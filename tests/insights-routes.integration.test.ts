@@ -141,9 +141,33 @@ beforeAll(async () => {
     [pageId],
   );
   await upsertDemand(db, {
-    pageId, shadow: false, resource: "media-stats.walk", kind: "goal", class: "planned",
+    pageId, resource: "media-stats.walk", kind: "goal", class: "planned",
     dueAt: new Date("2026-08-20T13:00:00.000Z"),
   });
+  // Two chats were read (`dm-messages.head` works per chat: its rows have a
+  // subject, none is the page's), the second one last; a third is open.
+  for (const [chat, appliedAt] of [["chat-1", "2026-08-20T11:00:00.000Z"], ["chat-2", "2026-08-20T12:30:00.000Z"]] as const) {
+    await testDb.pool.query(
+      `with w as (
+         insert into sync_work (page_id, shadow, resource, subject, kind, class, state, closed_at, close_reason)
+         values ($1, false, 'dm-messages.head', $2, 'trigger', 'urgent', 'done', $3::timestamptz, 'served')
+         returning id),
+       a as (
+         insert into sync_attempts (page_id, shadow, work_id, resource, subject, class, owner_generation, setting_ms,
+                                    jitter_u, pause_ms, operation, request, outcome, http_status, apply_state, applied_at)
+         select $1, false, w.id, 'dm-messages.head', $2, 'urgent', 1, 2500, 0.1, 2750, 'dm-messages.head', '{}'::jsonb,
+                'response', 200, 'applied', $3::timestamptz
+           from w
+         returning id, work_id)
+       update sync_work set last_attempt_id = a.id from a where sync_work.id = a.work_id`,
+      [pageId, chat, appliedAt],
+    );
+  }
+  await testDb.pool.query(
+    `insert into sync_work (page_id, shadow, resource, subject, kind, class, state, due_at)
+     values ($1, false, 'dm-messages.head', 'chat-3', 'trigger', 'urgent', 'open', '2026-08-20T12:45:00.000Z')`,
+    [pageId],
+  );
 
   // ── traffic: the four profile families, both members, plus an unknown code ──
   // 44011 carries views with interactionTime 0 (member 1 is the UI counter);
@@ -850,9 +874,13 @@ describe("WP-S1 serving routes: media, tags and coverage", () => {
     // stream is described by the live work of the registry keys that read it.
     expect(body).not.toHaveProperty("streams");
     expect(body.engine.mode).toBe("live");
+    // No sync host runs in this test: nothing of the page is being read, and
+    // the panel must be able to say so of every stream.
+    expect(body.engine.ownerRunning).toBe(false);
     type EngineStream = {
-      stream: string; resources: string[]; succeededAt: string | null; nextDueAt: string | null;
-      paused: boolean; needsAttention: boolean; reason: string | null; consecutiveFailures: number;
+      stream: string; resources: string[]; succeededAt: string | null; nextDueAt: string | null; activeWork: number;
+      paused: boolean; needsAttention: boolean; reason: string | null;
+      waiting: { resource: string; reason: string; until: string | null } | null; consecutiveFailures: number;
     };
     const streams = new Map<string, EngineStream>(
       body.engine.streams.map((row: EngineStream) => [row.stream, row]),
@@ -861,22 +889,37 @@ describe("WP-S1 serving routes: media, tags and coverage", () => {
       resources: ["media-stats.walk"],
       succeededAt: null,
       nextDueAt: "2026-08-20T13:00:00.000Z",
+      activeWork: 1,
       paused: false,
       needsAttention: false,
       consecutiveFailures: 0,
+      // Why the open walk waits is said, never left blank: as data for the
+      // panel's own words, and as one line for a reader of the API.
+      waiting: { resource: "media-stats.walk", reason: "ownership_unconfirmed", until: null },
+      reason: "media-stats.walk: ownership_unconfirmed",
     });
-    // Why the open walk waits is said, never left blank.
-    expect(streams.get("media_stats")!.reason).toMatch(/^media-stats\.walk: /);
     expect(streams.get("notifications")).toMatchObject({
       resources: ["notifications.forward", "notifications.backfill"],
       paused: true,
       nextDueAt: null,
+      activeWork: 0,
+      waiting: null,
     });
     // A stream nothing read yet still reports, with nothing claimed.
     expect(streams.get("stats_snapshot")).toMatchObject({
       resources: ["stats.daily", "stats.hourly", "stats.backfill"],
       succeededAt: null,
+      activeWork: 0,
       paused: false,
+    });
+    // A stream read chat by chat was last read when its newest chat was
+    // (S4-34a: it used to read "never"), and its open chat is its work.
+    expect(streams.get("dm_messages")).toMatchObject({
+      resources: ["dm-messages.head", "dm-messages.catchup", "dm-messages.history", "fan-profiles.probe"],
+      succeededAt: "2026-08-20T12:30:00.000Z",
+      nextDueAt: "2026-08-20T12:45:00.000Z",
+      activeWork: 1,
+      waiting: null,
     });
 
     const holdings = new Map<string, { rowCount: number }>(

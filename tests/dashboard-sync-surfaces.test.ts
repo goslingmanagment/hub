@@ -246,7 +246,8 @@ describe("dashboard sync product surfaces", () => {
     queryMocks.useOverview.mockReturnValue({ data: buildOverviewPage(buildSyncUx({ state, label: "Needs attention", detail: "Worker needs help." })) });
     const html = renderWithRouter(createElement(OverviewPage), ["/?period=7d&row=lana"]);
     expect(html).toContain("Worker needs help.");
-    expect(html).toContain('href="/settings?tab=sync&amp;page=lana"');
+    // A Fansly page's sync is on the «Синк» tab.
+    expect(html).toContain('href="/settings?tab=engine&amp;page=lana"');
   });
 
   it("keeps revenue available when catalog loading fails, with retry and unknown audience", () => {
@@ -370,7 +371,7 @@ describe("dashboard sync product surfaces", () => {
 
     expect(html).toContain("Data may be incomplete");
     expect(html).toContain("check sync settings");
-    expect(html).toContain("href=\"/settings?tab=sync&amp;page=lana\"");
+    expect(html).toContain("href=\"/settings?tab=engine&amp;page=lana\"");
     expect(html).not.toContain("Sync needs attention");
   });
 
@@ -398,6 +399,33 @@ describe("dashboard sync product surfaces", () => {
     );
 
     expect(html).toContain("Some data updates are paused \u2014 check sync settings");
+    expect(html).toContain("href=\"/settings?tab=engine&amp;page=lana\"");
+  });
+
+  it("deep-links an OnlyFans page's sync controls to «Синхронизация»", () => {
+    const overview = buildOverviewPage(buildSyncUx({
+      state: "off",
+      label: "Off",
+      headline: "Some data updates are paused",
+      detail: "1 sync is paused on this page.",
+    }));
+    overview.pages[0] = { ...overview.pages[0]!, platform: "onlyfans" };
+    queryMocks.useOverview.mockReturnValue({
+      data: overview,
+      isLoading: false,
+    });
+
+    const html = renderWithRouter(
+      createElement(Routes, undefined,
+        createElement(Route, {
+          path: "/pages/:pageLabel",
+          element: createElement(PageDetailPage),
+        }),
+      ),
+      ["/pages/lana"],
+      overview.pages,
+    );
+
     expect(html).toContain("href=\"/settings?tab=sync&amp;page=lana\"");
   });
 

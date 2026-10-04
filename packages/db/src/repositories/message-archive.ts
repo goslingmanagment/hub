@@ -9,6 +9,7 @@ import { normalizeDmMessageText } from "@agency_hub_core/shared";
 import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
+import { aiTranscriptRowCap } from "./ai-transcript-depth.ts";
 import { escapeLikePattern } from "./search.ts";
 import type { DmLiveTombstoneFilter } from "./sync/live-messages.ts";
 
@@ -1538,7 +1539,8 @@ export async function listArchiveConversationMessages(
  * content-pending stubs are filtered HERE, in the reader/repo layer (prompt
  * code never re-filters — the prompt unit is manifest-pinned), and the cap
  * is 1500 (AI windows read deeper than the dashboard's 500 clamp, whose
- * route contract is unchanged).
+ * route contract is unchanged). One caller raises the cap with `maxRows`:
+ * the full Recap (ai-transcript-depth.ts).
  */
 /** The AI transcript reader's deepest window (fastreply-freshness PR2). */
 export const ARCHIVE_AI_TRANSCRIPT_MAX_ROWS = 1500;
@@ -1552,9 +1554,12 @@ export async function listArchiveConversationMessagesForAi(
     /** The Fansly live overlay union's REST arm (sync/live-messages.ts):
      * also hide messages a socket deletion tombstones. */
     notTombstoned?: DmLiveTombstoneFilter;
+    /** Raises the row cap of this read past ARCHIVE_AI_TRANSCRIPT_MAX_ROWS, up
+     * to AI_TRANSCRIPT_DEEP_MAX_ROWS. Only the full Recap passes it. */
+    maxRows?: number | undefined;
   },
 ): Promise<ArchiveMessageRow[]> {
-  const limit = Math.min(input.limit ?? 100, ARCHIVE_AI_TRANSCRIPT_MAX_ROWS);
+  const limit = Math.min(input.limit ?? 100, aiTranscriptRowCap(input.maxRows, ARCHIVE_AI_TRANSCRIPT_MAX_ROWS));
   const result = await db.execute<Record<string, unknown>>(sql`
     select ma.* from message_archive ma
     where ma.conversation_ref = ${input.conversationRef}

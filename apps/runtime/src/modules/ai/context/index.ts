@@ -25,10 +25,18 @@ import {
   type SpendingSums,
   type TranscriptMessage,
 } from "../prompts/index.ts";
+import {
+  servedWindowOf,
+  type AiContextSource,
+  type TranscriptServedSnapshot,
+} from "./context-frame.ts";
 import type { OnlyFansMessageMedia } from "./media-notes.ts";
 
+export * from "./context-frame.ts";
+export * from "./live-text.ts";
 export * from "./media-notes.ts";
 export * from "./media-notes-context.ts";
+export * from "./ping-summary.ts";
 
 // Kernel Stage 30 — context loaders. Pure over kernel data; their outputs
 // are the exact strings the desktop's assembly produces today, built by the
@@ -121,6 +129,10 @@ export interface TranscriptContext {
    * message text. Lands as the ADDITIVE params.contextManifest key on the
    * restricted generation record. */
   contextManifest: Record<string, unknown>;
+  /** chat-extension H-4b: the served snapshot the `context_v1` frame reports.
+   * Beside the manifest, never inside it: the manifest is recorded with the
+   * generation and echoed to debug clients, and neither may change. */
+  served: TranscriptServedSnapshot;
 }
 
 export async function loadTranscriptContext(
@@ -132,6 +144,10 @@ export async function loadTranscriptContext(
     unionMode?: AiTranscriptUnionMode;
     /** Fansly pages only; the OnlyFans union mode never runs beside it. */
     liveOverlay?: AiTranscriptLiveOverlay;
+    /** chat-extension H-6: raises the row cap of the archive and union reads
+     * for this load (the full Recap's deeper read, ai-transcript-depth.ts).
+     * The Fansly live overlay union never reads it and stays at its own cap. */
+    maxRows?: number;
   },
 ): Promise<TranscriptContext> {
   const limit = input.limit ?? 100;
@@ -174,6 +190,7 @@ export async function loadTranscriptContext(
       accountId: input.pageId,
       conversationRef: input.conversationRef,
       limit,
+      maxRows: input.maxRows,
     });
   }
 
@@ -189,6 +206,7 @@ export async function loadTranscriptContext(
         pageId: input.pageId,
         conversationRef: input.conversationRef,
         limit,
+        maxRows: input.maxRows,
       });
     } catch {
       // Union failure is NEVER a hard failure: archive serves, and the
@@ -212,10 +230,11 @@ export async function loadTranscriptContext(
   const unionHead = unionRows?.[0] ?? null;
   const archiveRefs = new Set(archiveRows.map((row) => row.messageRef));
   const unionRefs = unionRows === null ? null : new Set(unionRows.map((row) => row.messageRef));
+  const source: AiContextSource = liveUnion !== null ? "live_union" : serveUnion ? "union" : "archive";
   const contextManifest: Record<string, unknown> = {
     loaderVersion: TRANSCRIPT_LOADER_VERSION,
     mode,
-    source: liveUnion !== null ? "live_union" : serveUnion ? "union" : "archive",
+    source,
     archiveCount: archiveRows.length,
     unionCount: unionRows === null ? null : unionRows.length,
     archiveHeadRef: archiveHead?.messageRef ?? null,
@@ -260,7 +279,19 @@ export async function loadTranscriptContext(
     }
   }
 
-  return { transcript: formatTranscript(messages), messages, mediaByMessage, contextManifest };
+  const served: TranscriptServedSnapshot = {
+    source,
+    window: servedWindowOf(servedRows, messages),
+    archiveHead: archiveHead === null
+      ? null
+      : {
+        messageRef: archiveHead.messageRef,
+        occurredAt: archiveHead.occurredAt,
+        isFromFan: !archiveHead.isSentByMe,
+      },
+  };
+
+  return { transcript: formatTranscript(messages), messages, mediaByMessage, contextManifest, served };
 }
 
 const SPENDING_TYPE_BY_CANONICAL: Record<string, string> = {

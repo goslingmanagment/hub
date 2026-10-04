@@ -191,12 +191,11 @@ describe("Fansly candidates projector", () => {
     expect(live.rows[0]).toEqual({ variant: "poster", status: "pending" });
   });
 
-  // Step 4 (S4-14): the in-chunk accelerator and its request filers are gone,
-  // so a socket signal of fan media queues no accelerator read, whatever the
-  // retired accelerator key says.
-  it("files no accelerator read for a fan media WS signal, even with the retired accelerator key on", async () => {
+  // Step 4 (S4-14): the in-chunk accelerator and its request filers are gone
+  // (and its keys since S4-26), so a socket signal of fan media queues no
+  // accelerator read.
+  it("files no accelerator read for a fan media WS signal", async () => {
     const observationId = await seedObservation({ frame: "x" });
-    app.config.aiMediaDescribeFanslyAcceleratorEnabled = true;
     await seedEvent("fansly.ws_signal_observed", observationId, {
       path: [],
       outcome: "hint",

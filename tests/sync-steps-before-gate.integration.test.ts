@@ -71,7 +71,6 @@ function fixture(overrides: { localPlan?: (subject: string) => Promise<StepPlan>
     apply: async () => {
       throw new Error("no request");
     },
-    shadow: async () => ({ work: { satisfiesRevision: true, close: "done", closeReason: "shadow" }, followups: [] }),
   };
   const find: ResourceModule = {
     plan: async (work) => {
@@ -80,12 +79,10 @@ function fixture(overrides: { localPlan?: (subject: string) => Promise<StepPlan>
       return { kind: "request", request: pollsRequest };
     },
     apply: async () => ({ work: { satisfiesRevision: true, close: "done", closeReason: "read" }, followups: [] }),
-    shadow: async () => ({ work: { satisfiesRevision: true, close: "done", closeReason: "shadow" }, followups: [] }),
   };
   const read: ResourceModule = {
     plan: async () => ({ kind: "request", request: pollsRequest }),
     apply: async () => ({ work: { satisfiesRevision: true, close: "done", closeReason: "read" }, followups: [] }),
-    shadow: async () => ({ work: { satisfiesRevision: true, close: "done", closeReason: "shadow" }, followups: [] }),
   };
   return {
     // The plain read first and the local key last: the order the step takes
@@ -106,10 +103,9 @@ async function livePage(label: string): Promise<number> {
   return pageId;
 }
 
-async function demand(pageId: number, resource: string, subject = "", options: { shadow?: boolean; deadlineAt?: Date } = {}): Promise<void> {
+async function demand(pageId: number, resource: string, subject = "", options: { deadlineAt?: Date } = {}): Promise<void> {
   await upsertDemand(db(), {
     pageId,
-    shadow: options.shadow ?? false,
     resource,
     subject,
     kind: "trigger",
@@ -163,7 +159,7 @@ describe("steps that need no request run before the HTTP gate (ruling 9)", () =>
 
       const transport = new ScriptedLiveTransport();
       const metrics = new RecordingMetrics();
-      const held = await makeTestActor({ db: db(), pageId, mode: "live", registry: fx.registry, transport, metrics });
+      const held = await makeTestActor({ db: db(), pageId, registry: fx.registry, transport, metrics });
       await runActorUntil(held, async () => {
         const local = await works(pageId, LOCAL_KEY);
         const find = await works(pageId, FIND_KEY);
@@ -186,7 +182,7 @@ describe("steps that need no request run before the HTTP gate (ruling 9)", () =>
       // The hold ends: the reads the step before the gate left go at their
       // slots, one admission each.
       await clearPageHold(db(), { pageId, kinds: [kind] });
-      const lifted = await makeTestActor({ db: db(), pageId, mode: "live", registry: fx.registry, transport });
+      const lifted = await makeTestActor({ db: db(), pageId, registry: fx.registry, transport });
       await runActorUntil(lifted, async () => {
         const open = [...await works(pageId, FIND_KEY), ...await works(pageId, READ_KEY)].filter((row) => row.state !== "done");
         return open.length === 0;
@@ -204,7 +200,7 @@ describe("steps that need no request run before the HTTP gate (ruling 9)", () =>
     await demand(pageId, READ_KEY);
     await demand(pageId, LOCAL_KEY, "a");
     const transport = new ScriptedLiveTransport();
-    const made = await makeTestActor({ db: db(), pageId, mode: "live", registry: fx.registry, transport, floorDelayMs: 60_000 });
+    const made = await makeTestActor({ db: db(), pageId, registry: fx.registry, transport, floorDelayMs: 60_000 });
     await runActorUntil(made, async () => (await works(pageId, LOCAL_KEY))[0]?.state === "done", 10_000, "the local write");
     expect(fx.written).toEqual(["a"]);
     expect(transport.hits).toEqual([]);
@@ -219,12 +215,12 @@ describe("steps that need no request run before the HTTP gate (ruling 9)", () =>
     await demand(pageId, LOCAL_KEY, "a");
     await demand(pageId, FIND_KEY, "x");
     await testDb.pool.query("update sync_pages set paused_all = true where page_id = $1", [pageId]);
-    await runActorFor(await makeTestActor({ db: db(), pageId, mode: "live", registry: fx.registry }), 600);
+    await runActorFor(await makeTestActor({ db: db(), pageId, registry: fx.registry }), 600);
     expect(fx.written).toEqual([]);
     expect((await works(pageId, FIND_KEY))[0]?.state).toBe("open");
 
     await testDb.pool.query("update sync_pages set paused_all = false, paused_resources = $2 where page_id = $1", [pageId, [LOCAL_KEY]]);
-    const made = await makeTestActor({ db: db(), pageId, mode: "live", registry: fx.registry });
+    const made = await makeTestActor({ db: db(), pageId, registry: fx.registry });
     await runActorUntil(made, async () => (await works(pageId, FIND_KEY))[0]?.state === "done", 10_000, "the answered find");
     expect(fx.written).toEqual([]);
     expect((await works(pageId, LOCAL_KEY))[0]?.state).toBe("open");
@@ -239,7 +235,7 @@ describe("steps that need no request run before the HTTP gate (ruling 9)", () =>
     await demand(pageId, FIND_KEY, "x", { deadlineAt: new Date(Date.now() - 60_000) });
     const subjects = Array.from({ length: STEPS_BEFORE_GATE_PER_LAP + 2 }, (_, index) => `s${String(index).padStart(2, "0")}`);
     for (const subject of subjects) await demand(pageId, LOCAL_KEY, subject);
-    const made = await makeTestActor({ db: db(), pageId, mode: "live", registry: fx.registry });
+    const made = await makeTestActor({ db: db(), pageId, registry: fx.registry });
     const page = (await getSyncPage(db(), pageId))!;
     const stop = new AbortController().signal;
 
@@ -266,7 +262,7 @@ describe("steps that need no request run before the HTTP gate (ruling 9)", () =>
     });
     await hold(pageId, "network");
     await demand(pageId, LOCAL_KEY, "a");
-    const made = await makeTestActor({ db: db(), pageId, mode: "live", registry: fx.registry });
+    const made = await makeTestActor({ db: db(), pageId, registry: fx.registry });
     const exit = await made.actor.run({ stop: made.stop.signal, abort: made.abort.signal });
     expect(exit).toEqual({ kind: "ownership_lost", foreign: true });
     expect(fx.written).toEqual([]);
@@ -284,25 +280,10 @@ describe("steps that need no request run before the HTTP gate (ruling 9)", () =>
     await hold(pageId, "network");
     await demand(pageId, LOCAL_KEY, "a");
     const transport = new ScriptedLiveTransport();
-    const made = await makeTestActor({ db: db(), pageId, mode: "live", registry: fx.registry, transport });
+    const made = await makeTestActor({ db: db(), pageId, registry: fx.registry, transport });
     await runActorUntil(made, async () => (await works(pageId, LOCAL_KEY))[0]?.last_error_class === "plan:Error", 10_000, "the deferral");
     expect(await works(pageId, LOCAL_KEY)).toMatchObject([{ state: "open", waiting_reason: "dependency" }]);
     expect(fx.written).toEqual([]);
     expect(transport.hits).toEqual([]);
-  }, 30_000);
-
-  it("a shadow page takes its closures before the gate too, under a hold", async (context) => {
-    if (!testDb) return context.skip();
-    const { pageId } = await seedSyncPage({ db: db(), pool: testDb.pool }, { label: "before-gate-shadow", mode: "shadow" });
-    const fx = fixture();
-    fx.answered.add("x");
-    await hold(pageId, "network");
-    await demand(pageId, FIND_KEY, "x", { shadow: true });
-    await demand(pageId, READ_KEY, "", { shadow: true });
-    const made = await makeTestActor({ db: db(), pageId, mode: "shadow", registry: fx.registry });
-    await runActorUntil(made, async () => (await works(pageId, FIND_KEY))[0]?.state === "done", 10_000, "the shadow closure");
-    expect(await works(pageId, FIND_KEY)).toMatchObject([{ state: "done", close_reason: "answered", attempts_count: 0 }]);
-    expect(await works(pageId, READ_KEY)).toMatchObject([{ state: "open", attempts_count: 0 }]);
-    expect(await attempts(pageId)).toBe(0);
   }, 30_000);
 });

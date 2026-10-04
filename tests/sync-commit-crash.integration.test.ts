@@ -68,7 +68,6 @@ async function restartUntilApplied(pageId: number): Promise<void> {
   const { actor, stop, abort } = await makeTestActor({
     db: db(),
     pageId,
-    mode: "live",
     registry: crashRegistry(),
     transport: recordingTransport(db()),
   });
@@ -103,12 +102,11 @@ describe("a crash at every boundary of a live step", () => {
   for (const point of Object.keys(EXPECTED) as SyncFaultPoint[]) it(point, async (context) => {
     if (!testDb) return context.skip();
     const { pageId } = await seedSyncPage({ db: db(), pool: testDb.pool }, { mode: "live", guard: "fansly_sync_engine" });
-    await upsertDemand(db(), { pageId, shadow: false, resource: CRASH_READ_KEY, kind: "trigger", class: "urgent" });
+    await upsertDemand(db(), { pageId, resource: CRASH_READ_KEY, kind: "trigger", class: "urgent" });
 
     const first = await makeTestActor({
       db: db(),
       pageId,
-      mode: "live",
       registry: crashRegistry(),
       transport: recordingTransport(db()),
       faults: (at) => {

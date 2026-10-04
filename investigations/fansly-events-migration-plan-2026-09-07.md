@@ -9,8 +9,9 @@
 недели до первого B1 разрешён ограниченный запуск Lilly-1 / `message_created`
 на 60 минут и не более 10 дополнительных HTTP attempts (также действует предел
 5% измеренного baseline). Обычный polling сохраняется; срок и лимит проверяет
-runtime. Условия входа и выхода — в
-[актуальном B1 runbook](../docs/runbooks/fansly-ws-hints.md#bounded-early-canary-decision-364).
+runtime. Условия входа и выхода были в B1 runbook (раздел «Bounded early canary
+(Decision 364)»); он удалён на шаге 4 Fansly Sync Engine вместе с B1 — см.
+[docs/runbooks/sync.md](../docs/runbooks/sync.md#what-the-legacy-runbooks-became).
 Недельное B0-наблюдение продолжается фоном для общего rollout. Закрытые presence
 и paired-DM проверки повторяются только при релевантном изменении или сбое.
 Тихий gap остаётся неизвестным, но не требует повторного шестичасового опыта

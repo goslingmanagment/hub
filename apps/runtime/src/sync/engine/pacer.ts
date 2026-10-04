@@ -280,7 +280,6 @@ export class Pacer {
     if (this.#st.inFlight !== admission) throw new PacerInvariantError("foreign_admission");
     const now = this.#deps.clock.monoNow();
     const mayHaveSent = outcome.kind === "response" ||
-      outcome.kind === "shadow" ||
       ((outcome.kind === "transport_error" || outcome.kind === "timeout") && outcome.sent);
     if (admission.sentMono === null && mayHaveSent) {
       this.#markSent(admission, now, "completion_fallback");

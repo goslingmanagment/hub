@@ -55,29 +55,6 @@ export interface VaultAlbumWalkState {
   lastCompleteWalkAt?: string | undefined;
 }
 
-export interface FanslyCatalogCursorState {
-  version: 1;
-  /** The UTC day `callsToday` belongs to; a different day resets the counter. */
-  utcDay: string;
-  /** HTTP ATTEMPTS spent by this lane on `utcDay`. Retries included. */
-  callsToday: number;
-  /** The UTC day whose FIXED steps are already done. */
-  fixedStepsDay: string | null;
-  /** Which fixed step the next dispatch resumes at (index into FIXED_STEPS). */
-  fixedStepIndex: number;
-  /** Per-album walk state, keyed by album ref. */
-  vaultWalk: Record<string, VaultAlbumWalkState>;
-  /** Durable round-robin position, independent of the HTTP/page budget. */
-  vaultWalkAfterAlbumRef?: string | null;
-  /** DEPRECATED. An empty FIRST page on an album the platform says is
-   *  non-empty used to set this and stop the whole vault walk; it now parks
-   *  only that album. Still parsed so older cursors load; the vault walk
-   *  clears it and nothing sets it any more. */
-  vaultWalkBlockedAlbumRef: string | null;
-  /** True once every known album's walk has completed at least once. */
-  vaultWalkExhausted: boolean;
-}
-
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -107,38 +84,6 @@ export function parseAlbumWalk(value: unknown): VaultAlbumWalkState | null {
     proof: parseVaultWalkProof(record.proof),
     completedOnUtcDay: asNullableString(record.completedOnUtcDay) ?? undefined,
     lastCompleteWalkAt: asNullableString(record.lastCompleteWalkAt) ?? undefined,
-  };
-}
-
-export function parseFanslyCatalogCursorState(
-  value: unknown,
-): FanslyCatalogCursorState | null {
-  const state = asRecord(value);
-  if (!state || state.version !== 1) {
-    return null;
-  }
-  const utcDay = asNullableString(state.utcDay);
-  if (utcDay === null) {
-    return null;
-  }
-  const walkRecord = asRecord(state.vaultWalk) ?? {};
-  const vaultWalk: Record<string, VaultAlbumWalkState> = {};
-  for (const [albumRef, walk] of Object.entries(walkRecord)) {
-    const parsed = parseAlbumWalk(walk);
-    if (parsed !== null) {
-      vaultWalk[albumRef] = parsed;
-    }
-  }
-  return {
-    version: 1,
-    utcDay,
-    callsToday: Math.max(0, asInt(state.callsToday, 0)),
-    fixedStepsDay: asNullableString(state.fixedStepsDay),
-    fixedStepIndex: Math.max(0, asInt(state.fixedStepIndex, 0)),
-    vaultWalk,
-    vaultWalkAfterAlbumRef: asNullableString(state.vaultWalkAfterAlbumRef),
-    vaultWalkBlockedAlbumRef: asNullableString(state.vaultWalkBlockedAlbumRef),
-    vaultWalkExhausted: state.vaultWalkExhausted === true,
   };
 }
 

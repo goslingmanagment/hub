@@ -1,5 +1,3 @@
-import { sql } from "drizzle-orm";
-
 import type { Database } from "@agency_hub_core/db";
 
 import { resolveFanslyPlatformAccountId } from "../../../services/fansly.ts";
@@ -9,15 +7,9 @@ import type { DemandSignal, StepPlan } from "../../engine/resource.ts";
 // §5.11, §5.12): the native account id the follower routes name, and the two
 // `/account/me` counters with the instant they were read. Read-only.
 
-/** In shadow nothing writes a page's native id: a step that needs it
- *  re-checks this often. */
-export const PAGE_IDENTITY_RECHECK_MS = 60 * 60 * 1000;
-
 /** The plan of a step that needs the page's native Fansly id before it has
- *  one: live, `account.poll` writes it (made due here); in shadow nothing
- *  will, so the step only re-checks hourly. */
-export function waitForPageIdentity(key: string, shadow: boolean, now: Date): StepPlan {
-  if (shadow) return { kind: "wait", reason: "dependency", until: new Date(now.getTime() + PAGE_IDENTITY_RECHECK_MS) };
+ *  one: `account.poll` writes it (made due here). */
+export function waitForPageIdentity(key: string): StepPlan {
   const enqueue: DemandSignal[] = [{ resource: "account.poll", demand: { reason: `dependency:${key}` } }];
   return { kind: "wait", reason: "dependency", until: null, enqueue };
 }
@@ -76,36 +68,8 @@ export async function readFanslyPageFacts(db: Database, pageId: number): Promise
   };
 }
 
-/**
- * The newest `/account/me` read of the page that a step may rely on: the
- * page's `last_verified_at` (every live `account` apply and the legacy light
- * stream write it), and — in shadow, where the engine's own `account` steps
- * write nothing — the newest shadow `account.*` step, which live would have
- * turned into exactly that write.
- */
-export async function accountCountersReadAt(
-  db: Database,
-  input: { facts: FanslyPageFacts; shadow: boolean },
-): Promise<Date | null> {
-  let newest = input.facts.lastVerifiedAt;
-  if (input.shadow) {
-    const result = await db.execute<{ at: Date | string | null }>(sql`
-      select max(a.completed_at) as at
-        from sync_attempts a
-       where a.page_id = ${input.facts.pageId}
-         and a.shadow
-         and a.outcome = 'shadow'
-         and a.operation = 'account.me'
-         and a.admitted_at > clock_timestamp() - ${ACCOUNT_COUNTERS_MAX_AGE_MS}::double precision * interval '1 millisecond'
-    `);
-    const raw = result.rows[0]?.at ?? null;
-    const shadowAt = raw === null ? null : new Date(raw);
-    if (shadowAt !== null && (newest === null || shadowAt.getTime() > newest.getTime())) newest = shadowAt;
-  }
-  return newest;
-}
-
-/** The counters were read within `ACCOUNT_COUNTERS_MAX_AGE_MS` of `now`. */
+/** The counters were read (`pages.last_verified_at`: every `account` apply
+ *  writes it) within `ACCOUNT_COUNTERS_MAX_AGE_MS` of `now`. */
 export function accountCountersFresh(readAt: Date | null, now: Date): boolean {
   return readAt !== null && now.getTime() - readAt.getTime() <= ACCOUNT_COUNTERS_MAX_AGE_MS;
 }

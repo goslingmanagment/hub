@@ -2,6 +2,8 @@ import type { StatsCoverageResponse } from "@agency_hub_core/contracts";
 
 import { formatDateTime } from "@/lib/format";
 import type { AnalyticsPanelState } from "@/pages/analytics-query-state";
+import { engineWaitLabel } from "@/pages/settings/engine/engineDisplay";
+import { getStreamLabel } from "@/pages/settings/sync/syncBlockDisplay";
 
 import {
   AnalyticsEmpty,
@@ -10,24 +12,185 @@ import {
   AnalyticsPanel,
 } from "./AnalyticsPanel.js";
 
-type EngineStreamRow = NonNullable<StatsCoverageResponse["engine"]>["streams"][number];
+type FloorRow = StatsCoverageResponse["planes"][number];
+type Engine = NonNullable<StatsCoverageResponse["engine"]>;
+type EngineStreamRow = Engine["streams"][number];
 
+/** The panel's time format. An instant of another year carries its year: a
+ *  floor two years deep must not read as this autumn's. */
 function instant(value: string | null): string {
-  return value === null ? "—" : formatDateTime(value);
+  return value === null ? "—" : formatDateTime(value, { yearUnlessCurrent: true });
 }
 
 function count(value: number | null): string {
   return value === null ? "—" : value.toLocaleString("en-US");
 }
 
-function engineLabel(stream: EngineStreamRow): { text: string; tone: "off" | "on" } {
+/** A floor's scope as a person reads it: the planes kept per page (media
+ *  statistics, post replies) store the page's own id there. */
+function scopeText(row: FloorRow, pageId: number | null): string {
+  return pageId !== null && row.scopeRef === String(pageId) ? "this page" : row.scopeRef;
+}
+
+type EngineBadge = { text: string; tone: "off" | "on"; detail: string };
+
+/**
+ * The one thing that is true of a stream now. "reading" is a claim, not a
+ * default: it takes a host that runs the page and work that is open. Without a
+ * host nothing of the page is read, whatever its work says; a stream nothing
+ * asked for yet has neither work nor a read.
+ */
+export function engineStreamBadge(engine: Pick<Engine, "mode" | "ownerRunning">, stream: EngineStreamRow): EngineBadge {
+  if (!engine.ownerRunning) {
+    return engine.mode === "handover"
+      ? {
+        text: "not running: switching",
+        tone: "off",
+        detail: "The page is switching to the engine: nothing of it is read until the switch completes.",
+      }
+      : { text: "not running: no owner", tone: "off", detail: "No sync host owns the page: nothing of it is read." };
+  }
   if (stream.paused) {
-    return { text: "paused", tone: "off" };
+    return { text: "paused", tone: "off", detail: "The owner paused the page or every key of this stream." };
   }
   if (stream.needsAttention) {
-    return { text: "needs attention", tone: "off" };
+    return { text: "needs attention", tone: "off", detail: "Some of its work is quarantined or refused by Fansly." };
   }
-  return { text: "reading", tone: "on" };
+  if (stream.activeWork > 0) {
+    return { text: "reading", tone: "on", detail: "A sync host runs the page and work of this stream is open." };
+  }
+  return stream.succeededAt === null
+    ? { text: "nothing asked yet", tone: "on", detail: "No work has been filed for this stream on this page." }
+    : { text: "idle", tone: "on", detail: "No work of this stream is open now; it was read before." };
+}
+
+/** Why a stream's earliest work waits, in the words every sync surface uses
+ *  for the engine's reasons and the time format of this panel. */
+function waitingText(waiting: NonNullable<EngineStreamRow["waiting"]>): string {
+  const until = waiting.until === null ? "" : ` until ${instant(waiting.until)}`;
+  return `${waiting.resource}: ${engineWaitLabel(waiting.reason, "en")}${until}`;
+}
+
+/** A stream's name as the sync tabs give it, as a card title. */
+function streamTitle(stream: string): string {
+  const label = getStreamLabel(stream);
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
+
+const FLOOR_HEAD = "pb-2 pr-4 font-semibold last:pr-0";
+const FLOOR_CELL = "py-2 pr-4 align-top last:pr-0";
+
+/** The capture floors: a table where its six columns fit, and one labelled
+ *  block per floor where they would run together (a phone, a narrow window). */
+function CaptureFloors({ rows, pageId }: { rows: readonly FloorRow[]; pageId: number | null }) {
+  const floors = rows.map((row) => ({
+    key: `${row.plane}:${row.scopeRef}`,
+    plane: row.plane,
+    scope: scopeText(row, pageId),
+    status: row.status.replace(/_/g, " "),
+    proof: row.proof.replace(/_/g, " "),
+    reachesBackTo: instant(row.oldestCapturedAt),
+    seen: `${count(row.observedUniqueCount)} / ${count(row.expectedCount)}`,
+  }));
+  return (
+    <div className="@container overflow-x-auto">
+      <table className="hidden w-full text-[13px] @2xl:table" data-floors="table">
+        <thead>
+          <tr className="text-left text-[11px] uppercase tracking-wider text-text-muted">
+            <th className={FLOOR_HEAD}>Plane</th>
+            <th className={FLOOR_HEAD}>Scope</th>
+            <th className={FLOOR_HEAD}>Status</th>
+            <th className={FLOOR_HEAD}>Proof</th>
+            <th className={`${FLOOR_HEAD} whitespace-nowrap`}>Reaches back to</th>
+            <th className={`${FLOOR_HEAD} whitespace-nowrap text-right`}>Seen / expected</th>
+          </tr>
+        </thead>
+        <tbody>
+          {floors.map((floor) => (
+            <tr key={floor.key} className="border-t border-border">
+              <td className={`${FLOOR_CELL} whitespace-nowrap`}>{floor.plane}</td>
+              <td className={`${FLOOR_CELL} break-all font-mono text-[12px] text-text-secondary`}>
+                {floor.scope}
+              </td>
+              <td className={FLOOR_CELL}>{floor.status}</td>
+              <td className={`${FLOOR_CELL} text-text-secondary`}>{floor.proof}</td>
+              <td className={`${FLOOR_CELL} whitespace-nowrap tabular-nums`}>{floor.reachesBackTo}</td>
+              <td className={`${FLOOR_CELL} whitespace-nowrap text-right tabular-nums`}>{floor.seen}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <ul className="text-[13px] @lg:grid @lg:grid-cols-2 @lg:gap-x-8 @2xl:hidden" data-floors="list">
+        {floors.map((floor) => (
+          <li key={floor.key} className="border-t border-border py-2">
+            <div className="flex flex-wrap items-baseline justify-between gap-x-3">
+              <span className="font-medium text-text-primary">{floor.plane}</span>
+              {floor.scope ? (
+                <span className="break-all font-mono text-[12px] text-text-secondary">{floor.scope}</span>
+              ) : null}
+            </div>
+            <dl className="mt-1 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[12px] text-text-secondary">
+              <dt className="text-text-muted">Status</dt>
+              <dd className="text-text-primary">{floor.status}</dd>
+              <dt className="text-text-muted">Proof</dt>
+              <dd>{floor.proof}</dd>
+              <dt className="text-text-muted">Reaches back to</dt>
+              <dd className="tabular-nums">{floor.reachesBackTo}</dd>
+              <dt className="text-text-muted">Seen / expected</dt>
+              <dd className="tabular-nums">{floor.seen}</dd>
+            </dl>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function EngineStreamCard({ engine, stream }: { engine: Engine; stream: EngineStreamRow }) {
+  const badge = engineStreamBadge(engine, stream);
+  return (
+    <div className="rounded-lg border border-border p-3" data-engine-stream={stream.stream}>
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <span className="text-[13px] font-medium text-text-primary" title={stream.stream}>
+          {streamTitle(stream.stream)}
+        </span>
+        <span
+          title={badge.detail}
+          className={`shrink-0 rounded-full border px-2 py-0.5 text-[11px] ${
+            badge.tone === "off"
+              ? "border-warning-dark/60 text-warning-dark"
+              : "border-border text-text-muted"
+          }`}
+        >
+          {badge.text}
+        </span>
+      </div>
+      <dl className="grid grid-cols-2 gap-x-3 gap-y-1 text-[12px] text-text-secondary">
+        <dt className="text-text-muted">Last read</dt>
+        <dd className="tabular-nums">{instant(stream.succeededAt)}</dd>
+        <dt className="text-text-muted">Next due</dt>
+        <dd className="tabular-nums">{instant(stream.nextDueAt)}</dd>
+        {stream.consecutiveFailures > 0 ? (
+          <>
+            <dt className="text-text-muted">Failures</dt>
+            <dd className="tabular-nums text-warning-dark">
+              {count(stream.consecutiveFailures)}
+            </dd>
+          </>
+        ) : null}
+      </dl>
+      {/* What needs attention is the server's sentence (counts, keys and the
+          command that lists them); why work waits is worded here. */}
+      {stream.needsAttention && stream.reason ? (
+        <p className="mt-2 break-words text-[12px] text-warning-dark">{stream.reason}</p>
+      ) : stream.waiting ? (
+        <p className="mt-2 break-words text-[12px] text-text-secondary">{waitingText(stream.waiting)}</p>
+      ) : null}
+      <p className="mt-1 break-words font-mono text-[11px] text-text-muted">
+        {stream.resources.join(", ")}
+      </p>
+    </div>
+  );
 }
 
 /**
@@ -42,9 +205,12 @@ function engineLabel(stream: EngineStreamRow): { text: string; tone: "off" | "on
  */
 export function CoveragePanel({
   state,
+  pageId = null,
   onRetry,
 }: {
   state: AnalyticsPanelState<StatsCoverageResponse>;
+  /** The page's id, to recognise a floor scoped by the page itself. */
+  pageId?: number | null;
   onRetry: () => void;
 }) {
   // The old shape took `data | undefined` and mapped `!data` to "No coverage
@@ -68,6 +234,7 @@ export function CoveragePanel({
   }
 
   const data = state.data;
+  const engine = data.engine;
   const holdings = data.holdings.filter((row) => row.rowCount > 0);
   const empty = data.holdings.filter((row) => row.rowCount === 0);
 
@@ -87,40 +254,9 @@ export function CoveragePanel({
             Capture floors
           </h3>
           {data.planes.length === 0 ? (
-            <AnalyticsEmpty reason="No capture-coverage rows: no lane has claimed anything for this page." />
+            <AnalyticsEmpty reason="No capture floors: the engine has recorded none for this page yet." />
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-[13px]">
-                <thead>
-                  <tr className="text-left text-[11px] uppercase tracking-wider text-text-muted">
-                    <th className="pb-2 font-semibold">Plane</th>
-                    <th className="pb-2 font-semibold">Scope</th>
-                    <th className="pb-2 font-semibold">Status</th>
-                    <th className="pb-2 font-semibold">Proof</th>
-                    <th className="pb-2 font-semibold">Reaches back to</th>
-                    <th className="pb-2 text-right font-semibold">Seen / expected</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.planes.map((plane) => (
-                    <tr key={`${plane.plane}:${plane.scopeRef}`} className="border-t border-border">
-                      <td className="py-2">{plane.plane}</td>
-                      <td className="py-2 font-mono text-[12px] text-text-secondary">
-                        {plane.scopeRef}
-                      </td>
-                      <td className="py-2">{plane.status.replace(/_/g, " ")}</td>
-                      <td className="py-2 text-text-secondary">
-                        {plane.proof.replace(/_/g, " ")}
-                      </td>
-                      <td className="py-2 tabular-nums">{instant(plane.oldestCapturedAt)}</td>
-                      <td className="py-2 text-right tabular-nums">
-                        {count(plane.observedUniqueCount)} / {count(plane.expectedCount)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <CaptureFloors rows={data.planes} pageId={pageId} />
           )}
         </div>
 
@@ -128,58 +264,27 @@ export function CoveragePanel({
           <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-text-muted">
             Fansly Sync Engine — what it reads
           </h3>
-          {data.engine === null ? (
+          {engine === null ? (
             <AnalyticsEmpty reason="The Fansly Sync Engine does not own this page: nothing reads its data." />
           ) : (
-            <div className="grid gap-3 md:grid-cols-2">
-              {data.engine.streams.map((stream) => {
-                const label = engineLabel(stream);
-                return (
-                  <div key={stream.stream} className="rounded-lg border border-border p-3">
-                    <div className="mb-1 flex items-center justify-between gap-2">
-                      <span className="text-[13px] font-medium text-text-primary">
-                        {stream.stream}
-                      </span>
-                      <span
-                        className={`rounded-full border px-2 py-0.5 text-[11px] ${
-                          label.tone === "off"
-                            ? "border-warning-dark/60 text-warning-dark"
-                            : "border-border text-text-muted"
-                        }`}
-                      >
-                        {label.text}
-                      </span>
-                    </div>
-                    <dl className="grid grid-cols-2 gap-x-3 gap-y-1 text-[12px] text-text-secondary">
-                      <dt className="text-text-muted">Last read</dt>
-                      <dd className="tabular-nums">{instant(stream.succeededAt)}</dd>
-                      <dt className="text-text-muted">Next due</dt>
-                      <dd className="tabular-nums">{instant(stream.nextDueAt)}</dd>
-                      {stream.consecutiveFailures > 0 ? (
-                        <>
-                          <dt className="text-text-muted">Failures</dt>
-                          <dd className="tabular-nums text-warning-dark">
-                            {count(stream.consecutiveFailures)}
-                          </dd>
-                        </>
-                      ) : null}
-                    </dl>
-                    {stream.reason ? (
-                      <p
-                        className={`mt-2 break-words text-[12px] ${
-                          stream.needsAttention ? "text-warning-dark" : "text-text-secondary"
-                        }`}
-                      >
-                        {stream.reason}
-                      </p>
-                    ) : null}
-                    <p className="mt-1 break-words font-mono text-[11px] text-text-muted">
-                      {stream.resources.join(", ")}
-                    </p>
-                  </div>
-                );
-              })}
-            </div>
+            <>
+              {engine.ownerRunning ? null : (
+                <p
+                  className="mb-3 rounded-lg border border-warning-dark/60 px-3 py-2 text-[12px] text-warning-dark"
+                  data-engine-not-running
+                >
+                  {engine.mode === "handover"
+                    ? "The page is switching to the engine (handover): nothing of it is read until the switch completes."
+                    : "No sync host owns this page: none of the streams below is being read "
+                      + "(pnpm cli sync ownership status)."}
+                </p>
+              )}
+              <div className="grid gap-3 md:grid-cols-2">
+                {engine.streams.map((stream) => (
+                  <EngineStreamCard key={stream.stream} engine={engine} stream={stream} />
+                ))}
+              </div>
+            </>
           )}
         </div>
 

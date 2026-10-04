@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import type {
   AiFeatureAttachedRecaps,
+  AiFeatureContextFrame,
   AiFeatureDebugInputFrame,
   AiGatewayQuota,
   AiGatewayStreamBody,
@@ -91,6 +92,8 @@ export interface PreparedAiGatewayStream {
   };
   meta: AiGatewayStreamFrame;
   debugFrame?: AiFeatureDebugInputFrame;
+  /** Feature-lane `context_v1` frame, written after `meta` and the debug frame. */
+  contextFrame?: AiFeatureContextFrame;
   stream(signal: AbortSignal): AsyncIterable<AiGatewayStreamFrame>;
   recordTerminal(input: AiGatewayTerminalRecordInput): Promise<boolean>;
   /** Coach transport ceiling (spec §3/§7, option "c"): when set, the SSE pump
@@ -238,6 +241,9 @@ export async function evaluateAiGatewayQuota(
   };
 }
 
+/** A `context_v1` frame before the gateway names its generation. */
+export type AiFeatureContextFrameBody = Omit<AiFeatureContextFrame, "type" | "generationRef">;
+
 /** PR3: internal-only knobs for a prepared stream. NEVER a field on
  * aiGatewayStreamBodySchema — the body is client-forgeable, shared with the
  * raw gateway route, and a schema change would force an SDK regen. */
@@ -253,6 +259,11 @@ export interface AiGatewayStreamInternalOptions {
    * gateway route and never persisted separately from the existing restricted
    * generation record. */
   debugFrame?: AiFeatureDebugInputFrame;
+  /** Feature-lane-only, capability-gated `context_v1` frame, still without its
+   * identity: the generation ref exists only once the request is reserved, so
+   * it is stamped here from the same request id the meta frame carries. Never
+   * set by the raw gateway route. */
+  contextFrame?: AiFeatureContextFrameBody;
   /** Echoed only for clients that supplied the matching feature precondition. */
   personaDefinitionId?: string;
   /** Coach-only recap provenance for the existing meta frame. Derived from the
@@ -260,6 +271,12 @@ export interface AiGatewayStreamInternalOptions {
   attachedRecaps?: AiFeatureAttachedRecaps;
   /** Coach-only echo of the canonical question substituted for a preset turn. */
   presetQuestion?: string;
+  /** Feature-lane-only structural check of the FINAL completion text
+   * (chat-extension H-10: Split parts and variants; counts, never text). Runs
+   * once on a completed stream and is recorded as the ADDITIVE
+   * params.outputStructure key of the restricted generation record. Write-only:
+   * the stream has already been sent, so it can never filter or change it. */
+  describeOutput?: (completionText: string) => Record<string, unknown>;
 }
 
 /** The feature service builds a stream input from the wire body plus optional
@@ -437,6 +454,9 @@ export async function prepareAiGatewayStream(
       quota: quotaFrame,
     },
     ...(internal?.debugFrame ? { debugFrame: internal.debugFrame } : {}),
+    ...(internal?.contextFrame
+      ? { contextFrame: { type: "context_v1" as const, generationRef: requestId, ...internal.contextFrame } }
+      : {}),
     ...(input.visibleOutputCeilingChars !== undefined
       ? { visibleOutputCeilingChars: input.visibleOutputCeilingChars }
       : {}),
@@ -526,6 +546,15 @@ export async function prepareAiGatewayStream(
           completedAt: record.completedAt,
         },
       });
+      // A record of the finished text, never a reason to lose the terminal row.
+      let outputStructure: Record<string, unknown> | undefined;
+      if (internal?.describeOutput !== undefined && record.outcome === "completed") {
+        try {
+          outputStructure = internal.describeOutput(record.completionText);
+        } catch (error) {
+          app.logger.warn({ requestId, err: error }, "AI gateway output structure check failed");
+        }
+      }
       // Stage 29 (DP 6-A): the restricted class stores the generation
       // VERBATIM — prompt blocks, completion, params — keyed by the
       // gateway-issued requestId (= generation_ref on the meta frame, the
@@ -563,6 +592,7 @@ export async function prepareAiGatewayStream(
           ...(internal?.contextManifest !== undefined
             ? { contextManifest: internal.contextManifest }
             : {}),
+          ...(outputStructure !== undefined ? { outputStructure } : {}),
         },
       });
       if (usageEventId !== null) {
@@ -586,7 +616,9 @@ export async function prepareAiGatewayStream(
   };
 }
 
-export function serializeAiGatewaySseFrame(frame: AiGatewayStreamFrame | AiFeatureDebugInputFrame) {
+export function serializeAiGatewaySseFrame(
+  frame: AiGatewayStreamFrame | AiFeatureDebugInputFrame | AiFeatureContextFrame,
+) {
   return `event: ai\ndata: ${JSON.stringify(frame)}\n\n`;
 }
 

@@ -103,12 +103,240 @@ authorization.
   into one `, `-separated string, which is parsed as usual (the union of the lines) within the same
   256-character cap. The header is not declared in the route schema, so a malformed value is ignored
   instead of failing with 400.
-- Today only `debug-input-v1` changes the stream: the `debug_input_v1` frame, still behind the
-  `chatMuseAiPromptDebugEchoEnabled` kill-switch. The other tokens are reserved for the frames and
-  fields that will read them; until then they change nothing.
+- `debug-input-v1` adds the `debug_input_v1` frame, still behind the
+  `chatMuseAiPromptDebugEchoEnabled` kill-switch. `context-v1` adds the `context_v1` frame (below)
+  and is required to send `liveTextContext`, whose answer rides that frame. It is also what lets a
+  full Recap read past 1500 messages (transcript depth, below).
+- `split-all-v1` lets `replyMode: "preferSplit"` reach `ping`, `hi-greeting` and `coach-chat` on a
+  page whose owner switched the `splitAll` flag on (see "Split for Ping, Hi and Coach drafts"
+  below). It adds no frame.
 - SDK: the header is the union of the `capabilities` option and the legacy `debugPromptEcho` flag,
   deduplicated, in the constant's order, joined by `, `. With nothing to advertise no header is sent,
   so existing callers put exactly the same bytes on the wire as before.
+
+### Feature-lane `context_v1` frame
+
+A caller that advertised `context-v1` gets one more frame, `aiFeatureContextFrameSchema`: which
+transcript snapshot actually served this generation. Without the token the stream is byte for byte
+what it was, so a client built before the frame never meets it.
+
+- Position: after `meta` (and after `debug_input_v1` when both are advertised), before the first
+  `content_delta`.
+- Lane: only a generation whose transcript the hub loaded itself (the kernel-context lane, every
+  feature). A request with `clientContext` carries no frame in this version.
+- Shape: the one frame that is not strict. A later key is dropped by an installed SDK instead of
+  failing its stream, and the vocabularies are open strings. The known values are exported from the
+  SDK (`AI_CONTEXT_SOURCES`, `CLIENT_COVERAGE_LEVELS`, `AI_KNOWN_FAN_MESSAGE_STATES`,
+  `AI_CONTEXT_LIVE_STATUSES`, `AI_FAN_LANGUAGE_EVIDENCE`); a client reads an unknown one as
+  "unknown".
+
+| Field | Meaning |
+|---|---|
+| `generationRef` | Equals `meta.requestId`. |
+| `source` | The reader whose rows became the transcript: `archive`, `union` (`aiTranscriptFreshUnionMode = serve`) or `live_union` (the Fansly socket overlay). In `shadow` mode the union is computed but the archive serves, and the frame says `archive`. |
+| `servedHead` | Newest message of the served window: `{ messageRef, occurredAt, isFromFan }`. `null` for an empty window. |
+| `archiveHead` | Diagnostics only: the plain archive reader's newest row. With `source: "union"` the model may have read past it. |
+| `window` | `requested`: the window the request resolved to. `served`: the messages the prompt holds whole. That is the transcript the hub loaded (after normalization and the window cap), minus what the prompt itself cut: only `coach-chat` cuts, when its whole-prompt budget drops the oldest transcript lines. A line the cut runs through is not counted. |
+| `coverage` | How much of the chat's history the hub can vouch for, from `ofapi_message_coverage` (`services/client-coverage.ts`). `complete`: a standing continuous-history proof under the current proof policy, and the archive has projected everything it covers. `partial`: a standing proof that does not vouch for the whole history. `unknown`: no proof, a revoked one, one under a proof policy the hub no longer accepts, or a failed lookup. A page without the capture lane (Fansly) always reads `unknown`. |
+| `knownFanMessages` | One `{ id, state }` per id of the body's `knownFanMessageIds`, in the same order. Absent when the body named none. |
+| `source` with fresh text | Unchanged: `source` names the hub's own reader. Text a client supplied is described by `live` alone. |
+| `live` | What the hub did with the request's fresh text (`liveTextContext`, below): `{ status, accepted, rejected }`. |
+| `fanLanguageEvidence` | `latin`, `cyrillic`, `mixed` or `unknown`: a rough count of the letters in the fan's latest 20 text messages of the served window. It is not language detection. |
+
+`knownFanMessageIds` (body, optional, 1 to 10 distinct numeric ids) names fan messages the client
+saw in the open chat before it asked. Ids only: no text travels, nothing is added to the prompt and
+nothing is stored. It is accepted on every feature. Without `context-v1` there is no frame to answer
+in and the ids are ignored. Each id is judged against the transcript that served the generation:
+
+| State | Meaning |
+|---|---|
+| `included` | The served window holds the id as a fan message. |
+| `deleted` | Not in the window, and tombstoned for this conversation in one of the hub's stores. The Fansly socket overlay counts only when it served (`source: live_union`). |
+| `absent` | Not in the window: the hub does not hold it for this conversation, or holds it outside what the model read (older than the window, cut by the Coach prompt budget, or only in a store the serving reader did not read). |
+| `unknown` | The hub cannot tell: the stores could not be read, or the window holds the id as the model's own message. |
+
+`included` is the only answer that says the model read the message. The same window serves every
+retry of a request, so an id the hub holds but that lies before the window stays `absent` however
+often the client asks again: `messageCount` can be as low as 5, and ten fan messages with the
+model's replies between them can span more than the 25 of Improve and Hi.
+
+The store lookup (`packages/db/src/repositories/ai-live-context.ts`) runs only after the page was
+admitted and is scoped to the page and the conversation of the request. An id that belongs to
+another fan's chat on the same page reads `absent`, exactly like an id the hub has never seen: the
+answer never says that a message exists, or was deleted, in a chat the caller did not name. A delete
+webhook carries no chat, so its tombstone counts only for an id the hub already holds for this
+conversation; a socket deletion that named no group is the same case.
+
+The frame is built from database reads only (the transcript loader, the coverage row, the known-id
+lookup): no platform request, no queued platform work and no change to a chat's unread state.
+Coverage and the known-id lookup fail open: a failed read reports `unknown` and never fails the
+generation. The frame is not persisted, and the recorded `params.contextManifest` is unchanged.
+
+### Feature-lane transcript depth (`messageCount`, full Recap)
+
+`messageCount` is the window a request asks for (5 to 3000). The hub's two transcript readers (the
+archive reader and the union reader) cap every window at 1500 messages, whatever was asked: a
+request for 3000 is served the newest 1500, and the `context_v1` frame says so in `window`.
+
+One request reads past that cap, up to 3000 messages: the full Recap. All of these must hold:
+
+- the feature is `fan-summary` and the request is not `summaryMode: "short"` (the short Recap keeps
+  its window of 300);
+- the page is an OnlyFans page and the hub loads the transcript itself (a request with
+  `clientContext` brings its own transcript and is not read by the hub's readers at all);
+- the caller advertised `context-v1`;
+- the owner's live setting `aiTranscriptDeepMaxRows` is `3000`. It takes exactly `1500` or `3000`
+  and rests at `1500`.
+
+Everything else stays at 1500: `chat-review` and `coach-chat`, the reply features, a Fansly page's
+hub-loaded transcript (the socket overlay union included), and every client that does not send
+`context-v1`. The released desktop lets a chatter set its deep window as high as 3000; such a Recap
+is served 1500, before and after the owner raises the setting.
+
+A request that names no `messageCount` keeps the full Recap's default window of 1500. A client that
+wants the deeper read asks for it, up to the bootstrap's `limits.deepMax`, which is the value of
+`aiTranscriptDeepMaxRows` (`GET /api/v1/client/bootstrap`).
+
+The recorded generation tells what was read: `params.requestedCount` is the window the request
+resolved to (not clipped by the cap), `params.keptCount` is the number of messages the prompt held,
+and `params.contextManifest.archiveCount` / `unionCount` are the rows each reader returned.
+
+Cost: at 3000 the transcript of a full Recap is up to twice as long. The per-request ceiling
+(`chatMuseAiGatewayRequestMicroUsdLimit`) and the daily ceilings below apply unchanged, to the
+longer prompt. The read itself is the same statement and plan at either cap: both readers fetch the
+whole conversation by its index and cut the tail afterwards (tombstones, stubs and duplicates are
+resolved before the cap).
+
+Size: those ceilings bound what a request may cost, not how large its prompt is. The gateway does
+not measure a prompt against the model's context window; the cost preflight's token estimate (4
+characters per token) is used for the price alone. Nothing shortens a full Recap's transcript to fit
+(only Coach has a prompt budget), so a prompt larger than the window of the model the request runs
+on is refused by the provider and the generation fails. At 3000 messages a hub-loaded transcript is
+up to twice as long as any the readers served before. The window to check before raising the
+setting is the Recap model's: the feature default, or the `model` a request names.
+
+### Feature-lane fresh text (`liveTextContext`)
+
+The hub's archive trails the chat a chatter is looking at by seconds to minutes. A client that
+reads the open OnlyFans chat sends its last confirmed messages with the request, and the hub merges
+them into the transcript it loaded itself, for that one generation
+(`apps/runtime/src/modules/ai/context/live-text.ts`).
+
+Body field (optional, strict):
+
+```json
+{ "capturedAt": "2026-10-04T10:20:00.000Z",
+  "items": [{ "platformMessageId": "4301234567890", "direction": "fan",
+              "occurredAt": "2026-10-04T10:19:30.000Z", "text": "are you there?" }] }
+```
+
+- `items`: 1 to 60 (`AI_LIVE_TEXT_MAX_ITEMS`), each text 1 to 5000 UTF-16 units
+  (`AI_LIVE_TEXT_MAX_CHARS`); the bootstrap announces the same numbers as `freshTextMaxItems` and
+  `freshTextMaxChars`. `platformMessageId` is the platform's own numeric id (no leading zero, at
+  most 30 digits); `direction` is `fan` or `model`; both instants are ISO 8601 with seconds and an
+  explicit offset.
+- An instant is checked for its form and nothing more: the pattern is the client's own frozen one,
+  so the hub accepts exactly what the client's contract does. A string of that form that names no
+  instant (a leap second, a thirteenth month) is not a schema error, which would fail the whole
+  request: its item is rejected by the merge (`unusable`).
+- The client sends only messages the platform confirmed: never a queued (welcome, mass) or an
+  unsent one, and no message that is media alone. No money, no media, no links as markup: text only.
+- `capturedAt` is when the client read the page. Its form is checked and it is otherwise unused:
+  nothing is decided by it, and it is not recorded.
+
+Refused before any context loads, after the page was admitted (a client bug, never retried):
+
+| Case | Answer |
+|---|---|
+| a feature other than `fast-reply`, `improve-draft`, `hi-greeting`, `ping` | 400 `bad_request`, reason `live_text_not_allowed` |
+| a page that is not OnlyFans | 400 `bad_request`, reason `live_text_not_allowed` |
+| together with `clientContext` | 400 `bad_request`, reason `live_text_not_allowed` |
+| no `context-v1` in the capability header | 400 `bad_request`, reason `capability_required` |
+
+Recap (full and short), Review, Coach and Help never take it: a recap built on one person's page
+would be shared with everyone.
+
+Whether it is USED is the owner's switch, and a switch that is off IGNORES the field, it never
+refuses: a client's bootstrap can be up to its TTL old, and a kill switch must not fail
+generations. Two conditions, both read per generation:
+
+- `aiLiveTextContextMode` (`off` | `shadow` | `serve`, rests `off`; stepped up one mode at a time,
+  rolled back freely, like `aiTranscriptFreshUnionMode`);
+- the page's `freshText` flag in `chatExtensionFeatures`, by the evaluation the bootstrap announces
+  (master switch, flag, platform, binding, the `live-text-v1` capability).
+
+| `live.status` | Meaning |
+|---|---|
+| `not_sent` | The request carried no fresh text. |
+| `disabled` | It did, and the switch is off: nothing was read from it, nothing recorded. The generation is the one without the field, byte for byte. |
+| `shadow` | Merged and recorded in the context manifest; the hub's own transcript served. `accepted` is what `serve` would have added. A conflict is recorded and counted in `rejected`, never thrown: shadow changes no generation. |
+| `served` | The merged transcript served. `accepted` can be 0: the hub already held every message. |
+| `rejected` | `serve`, and nothing of the client's joined although something was refused (tombstoned, unusable, unverifiable, or the merge failed). The hub's transcript served. |
+
+The merge, in `serve` and `shadow` alike:
+
+- Only by platform message id, never by text. The hub's rows come first and win: for an id the
+  transcript already holds, the hub's text stands (the page's HTML against the archive's plain text
+  is not a disagreement).
+- An id the hub holds as sent by the OTHER side, or under ANOTHER chat, is a conflict: the snapshot
+  is not of the conversation the request names. `serve` answers 400 `context_conflict`; the message
+  names message ids only. "Another chat" is another conversation of the same page, or a chat of
+  another page the caller may read (the wrong page for this chat). Two pages of this hub writing to
+  each other archive the same message under both; that is the same chat from its other side, not a
+  conflict. A page the caller cannot read is not consulted. Another page is read in both of its
+  message stores (`message_archive` and `dm_message_archive`), so a snapshot of the wrong page is
+  refused even when it is made only of messages seconds old.
+- A tombstone is never restored: an id deleted in any store of the page is rejected.
+- A client item's text goes through `normalizeDmMessageText` and the transcript normalizer, exactly
+  as an archive row does (tags and entities out). An item whose text is empty after that, whose id
+  or time the transcript cannot key, whose text a normalizer fails on, or that repeats an id of the
+  same snapshot is rejected.
+- The result is sorted by time then id and capped to the request's window, like every transcript.
+  Merging never shrinks it, so a gate that counts messages (Hi) can only tighten; the Ping segment
+  and fan silence are computed over the merged window.
+- The time is the client's only for a message the hub cannot place itself. An id a store of the
+  page holds for this conversation outside the served transcript (older than the window, or only in
+  a store the serving reader did not read) keeps the hub's time, `message_archive.occurred_at` first.
+  A client's clock therefore never moves a message the hub can place: an old archived message sent
+  as if it were new stays before the window and is cut (`outsideWindow`), and a message only the
+  webhook store holds joins at the place the hub's own reader would give it. Such an item still
+  carries the client's text, and a generation that served it is scoped like any other.
+- `accepted` counts the client's items the served window holds. Items cut by the window are neither
+  accepted nor rejected.
+
+Where the client's text lives: in the restricted record of that one generation
+(`ai_generation_content.prompt_blocks`), and nowhere else. It is written to no message archive, no
+observation, no dossier. A generation that served at least one accepted item is recorded with
+`params.contextScope = "principal-draft"`, which every shared reader skips (Shared recaps, below).
+Without served fresh text the recorded `params` are exactly what they were for every feature.
+
+`params.contextManifest.liveText` (`shadow` and `serve`) holds message ids, counts and the mode,
+never a message's text or time: `source: "client-supplied"`, `mode`, `status`, `sent`, `accepted`,
+`rejected`, `conflicts`, `matched` (ids the hub already held), `outsideWindow`, `headRef` and
+`archiveSawHead` (the client's newest message, and whether the hub's transcript held it),
+`acceptedRefs`, `rejectedRefs`, `rejectedReasons`, `conflictRefs`, `conflictReasons`. In `shadow`
+this is the evidence to read before `serve`: `matched` close to `sent` proves that the ids the
+client reads are the ids the hub archives; `matched: 0` beside a non-empty archive means they are
+not, and `serve` must wait.
+
+The store lookup (`lookupAiLiveTextMessages`, `packages/db/src/repositories/ai-live-context.ts`) is
+one statement of point lookups on the stores' unique keys, for the ids the transcript does not
+hold. It fails closed: if it cannot be read, nothing the hub cannot vouch for joins the transcript
+(`unverified`), and the generation runs on the hub's own. Like the frame, fresh text costs database
+reads only: no platform request, no queued platform work, no change to a chat's unread state.
+
+The conflict in `serve` is the only way fresh text fails a request. Nothing else about it fails a
+generation:
+
+- a switch that cannot be read is a switch that is off (`disabled`);
+- a lookup that fails rejects every item the hub could not vouch for (`unverified`);
+- a text a normalizer throws on rejects that one item (`unusable`), and the rest of the snapshot
+  is still judged;
+- a merge that fails altogether rejects every item (`failed`) and the hub's own transcript serves.
+  It is logged with the error's name, never its message: the failing code was reading a client's
+  text.
+
+In `shadow` nothing at all changes the generation.
 
 ## Authorization
 
@@ -253,6 +481,33 @@ The existing `/api/v1/ai-usage/batch` endpoint remains during migration for dire
 When gateway mode is active for a request, desktop must not also submit a duplicate usage event for
 that same generation.
 
+### The caller's own spend for the chat extension (chat-extension H-15)
+
+`GET /api/v1/client/pages/:pageLabel/ai-usage?date=YYYY-MM-DD[&days=1..7][&timeZone=…]`
+(`clientAiUsageDaily`, capability `ai-usage-v1`) reads the same ledger for the extension's debug
+panel: the caller's own rows on that page, by day and by feature, in micro-USD. It reads only the
+ledger and the config; it never stores or returns prompt text, generated text or provider bodies.
+
+Two day boundaries meet in one answer, and it states both:
+
+- **Report days** are calendar days in `timeZone` (default `Europe/Moscow`, the cabinet's business
+  day). Each day carries the instants it was cut at (`from`, `toExclusive`), and the ledger is
+  bucketed by exactly those instants on `completed_at`. A day is cut where the zone's date turns,
+  so a day the zone's clocks change in is 23 or 25 hours long.
+- **The quota's day is the UTC day** (the preflight above). `quota.dayBoundary` is `"UTC"` and
+  `remainingRequestsToday` / `remainingMicroUsdToday` are the gateway's own answer for
+  `(caller, page)`. At 01:30 Moscow time the report's "today" is 90 minutes old while the quota's
+  day has 1.5 hours left, so "spent today" and "left today" do not add up to the limit. `quota` is
+  `null` while the gateway is off.
+
+A day is `partial` while its numbers may still move or are not exact: `day_open` (not over yet),
+`open_reservations` (a reservation without an outcome: it carries no cost yet, and on a normal
+finish its `completed_at` becomes the finish time, so the row moves to the day it finished in), and
+`approximate_cost` (a cost in it is an estimate). Otherwise it is `complete`. `date` may be today in
+`timeZone` or up to 8 days before it; a later or older date and an unknown zone answer `400
+bad_request` with a `reason` (`docs/error-handling.md` §3). The route is behind the chat-extension
+master switch and the minimum extension version (`409 client_feature_disabled`).
+
 ## Privacy and Retention
 
 Core may stream prompt text to the selected provider, but must not persist raw prompt text,
@@ -262,6 +517,84 @@ model, provider, provider response id, bounded error code/class, token counts, a
 
 Provider response ids are audit metadata; they are not a substitute for storing prompt or response
 content.
+
+### Shared recaps (chat-extension)
+
+The restricted generation records (`ai_generation_content`: prompt blocks and completions) are
+read by the owner only, with one exception: a recap is shared. `GET
+/api/v1/client/pages/:pageLabel/conversations/:fanRef/recaps` (`clientConversationRecaps`,
+bootstrap capability `shared-recaps-v1`) answers the text of the freshest usable full and short
+`fan-summary` recap of one fan to every chatter granted the page, whoever generated them (owner
+ruling: no private recap per chatter; `docs/identity-rights-matrix.md`).
+
+- Selection: one rule for every reader of a recap, `usableFanSummaryPredicate`
+  (`packages/db/src/repositories/ai-restricted.ts`): a `fan-summary` row of the slot's
+  `summaryMode` with a completed outcome, a present and non-exhausted `stopReason`, a non-empty
+  completion and no `params.contextScope`. `GET /api/v1/ai/recap-status`, the Coach recap attach,
+  this route and the dossier's generation proof all select through it, so they always agree on
+  which recap exists.
+- `params.contextScope` marks a generation whose context held something only its caller saw (the
+  fresh text of an open chat, `principal-draft`). Such a row is that person's draft: it is never a
+  status slot, never attached to Coach, never returned here and never proves a dossier. Fresh text
+  is refused on `fan-summary`, so nothing writes the key on a `fan-summary` row and the condition
+  is a guard.
+- `fanRef` is the OnlyFans fan id, which is the chat id. `personaDefinitionId` (optional, as on
+  the recap status) narrows both slots to one persona.
+- Answer: `{ full, short, fullSavedToProfile }`. A slot is `null` or `{ generationRef,
+  generatedAt, personaDefinitionId, coverage: { transcriptCoverage, requestedCount, keptCount },
+  text }`; `generationRef` is the generation's `meta.requestId`. `fullSavedToProfile` is true when
+  the fan's latest dossier on the page has exactly the full recap's text. Never a prompt block,
+  the author or the context manifest.
+- It reads the database only: no generation, no AI spend, no platform request.
+- Behind the owner's `recap` switch on the page (`requireClientFeature`): a refusal is `409
+  client_feature_disabled` with its `reason`. The `recap` feature needs both `shared-recaps-v1`
+  and `recap-profile-v1` (the dossier save below); this hub serves both.
+
+### Dossier from a stored generation (chat-extension)
+
+`POST /api/v1/client/pages/:pageLabel/fans/:fanRef/profile/from-generation`
+(`clientFanProfileFromGeneration`, bootstrap capability `recap-profile-v1`) saves a finished full
+recap as the fan's dossier on the page. The body is `{ generationRef, clientRequestId? }`: the
+client names the generation (`generationRef` is the `meta.requestId` of its `fan-summary`
+request) and the hub copies the text from the restricted record it stored. No text travels
+through the client, in either direction: the dossier is exactly the model's output, and the
+answer carries none of it.
+
+- Found: only a generation of the same user, the same page and the same fan. On OnlyFans the
+  chat id is the fan id, so the fan in the path names the conversation: the record's
+  `conversation_ref` must equal it, and its `fan_ref` must be absent or equal to it. Anything
+  else answers `404`, another person's generation included, for every role. A record whose two
+  refs differ is found for neither fan: the AI route reads the transcript by `conversationRef`
+  and the fan's own data by `fanRef` and does not make a Recap's two refs agree, so such a
+  record mixes two fans. This is narrower than the dossier's generation proof (`fan_ref`, or
+  `conversation_ref` when no fan is named), which the older write keeps.
+- Eligible: only a usable full recap, by the rule above (`usableFanSummaryPredicate("full")`),
+  and no longer than a dossier body may be (50,000 characters, the cap of the older write). Any
+  other generation answers `409 generation_not_eligible` with a `reason`
+  (`docs/error-handling.md` §3). A dossier saved here is therefore always one the prompts use:
+  the dossier's generation proof selects by the same rule.
+- Written: a new dossier version with `source_generated_at` = the record's `created_at` (the
+  hub's time of the generation, never a client's clock), `created_by_user_id` = the caller and
+  `source` = `chatmuse`. The fan is resolved as every dossier write resolves it (created on first
+  sight on OnlyFans; a fan flagged deleted stays `404`).
+- Idempotent: when a version of the fan's dossier on the page already has exactly this text, the
+  answer is `existing` with that version and nothing is written, however many versions came
+  since. Otherwise the dossier write's own rules apply: a generation that is not newer than the
+  dossier's latest text is never written (`409 generation_not_eligible`, `superseded`). That
+  one reason says nothing against the generation: the dossier already holds a newer text (a
+  colleague's later recap saved first, or an older client's write). The answer stays a refusal
+  because this text was not saved, and `existing` promises a version that holds it; a client
+  may show `superseded` as information rather than as a failed save.
+- Answer: `{ outcome: "created" | "existing", profile: { version, createdAt, sourceGeneratedAt } }`.
+- Not ready: the generation record is written after the stream's `done` frame. Until it exists, a
+  request that names the `clientRequestId` of an AI request the gateway admitted for the caller on
+  that page answers `409 generation_not_ready` and may be repeated; without it the answer is
+  `404`. Not-ready can stay for good when the record's write failed, so a client bounds its
+  repeats.
+- It reads and writes the database only: no generation, no AI spend, no platform request.
+- Behind the same `recap` switch as the shared recaps. The older write (`PUT
+  /api/v1/pages/:pageLabel/fans/:platformUserId/profile`, the text sent by the client) stays for
+  the clients that use it; the chat-extension token does not reach it.
 
 ### AI media describer (system lane)
 
@@ -409,3 +742,53 @@ server-loaded transcript/profile context and rejects clientContext. Page access,
 platform matching, persona revision, quotas and restricted capture are
 unchanged. A greeting is a reviewed draft; the kernel neither sends a message
 nor certifies live first-contact eligibility.
+
+### Split for Ping, Hi and Coach drafts (`split-all-v1`, chat-extension H-10)
+
+`replyMode: "preferSplit"` splits Reply and Fix (`fast-reply`, `improve-draft`) for every client, as
+before. `ping`, `hi-greeting` and `coach-chat` take it only when all of these hold:
+
+- the request advertises `split-all-v1` in `x-kernel-ai-capabilities`;
+- the owner's `splitAll` flag is on for the page, by the same evaluation as every chat-extension
+  flag (`evaluateClientFeature`: an OnlyFans page, `chatExtensionEnabled`, the flag in
+  `chatExtensionFeatures`, a binding, `split-all-v1` among the served capabilities);
+- the feature is `supportsSplitAll` in both policy tables (`FEATURE_POLICIES` and the builder's
+  `PROMPT_POLICIES`).
+
+`replyMode` alone never turns it on: the Fansly extension sends `preferSplit` on every feature, and
+a client that does not advertise the capability keeps its prompts byte for byte
+(`tests/ai-prompts-split-all.test.ts`, `tests/client-sdk-compat.integration.test.ts`). A request
+that does not pass the gate is not refused: it generates the prompt without Split it always did.
+
+With the gate open only the uncached task block changes. Ping gets the instructions for 2-3
+`[NEXT]` parts; Hi asks for `[NEXT]` parts inside each `[VARIANT]`, or inside its one draft. The
+cached prefix, the body schema and the frames are unchanged: the markers travel inside
+`content_delta` text and the client parses them after `done`.
+
+Coach splits its drafts, never its advice. The draft grammar is unchanged: a block opens with a
+` ```draft ` line and closes with a ` ``` ` line, at most two blocks per answer (exactly two on a
+preset turn), each under 1500 characters. With the gate open the `[NEXT]` parts sit inside each
+block, 2-3 per block, and the 1500 characters cover the block with all its parts. A client splits
+a block's body on `[NEXT]` after it has lifted the block out of the answer; `[NEXT]` is asked for
+nowhere else in a Coach answer. An earlier split answer replayed in `coachHistory` reaches a later
+prompt as the client sent it, markers included, whatever that later turn's gate says.
+
+A generation the gate opened also stores `params.outputStructure` in its restricted record: the
+structure of the finished text, counts only. It is written for completed streams only and is a
+record, never a filter: the stream has already been sent.
+
+- Ping and Hi: `{ variantsRequested, partsPerVariant, ok }`, where `ok` means the requested number
+  of variants with two or three parts each.
+- Coach: `{ draftsRequested, partsPerDraft, brokenDrafts, strayMarkers, ok }`. The check reads the
+  answer the way a client does: it lifts the draft blocks out and the rest stays in the advice.
+  `draftsRequested` is `2` on a preset turn and `null` on a question turn, where the coach decides
+  how many messages to propose. `partsPerDraft` counts the parts of every well-formed block:
+  closed, not empty, at most 1500 characters. `brokenDrafts` counts the draft fences the model
+  opened that are not such a block: an opener that is not the ` ```draft ` line (indented,
+  ` ```Draft `, four backticks), a block that never closes (the answer ran out of tokens, the
+  closer is glued to the text), a block over 1500 characters. `strayMarkers` counts the `[NEXT]`
+  markers outside the counted blocks, in the advice or in a broken draft: a client shows those to
+  the chatter as text. `ok` means the requested number of blocks (at most two when the coach
+  decides, none included), each with two or three parts, no broken draft and no stray marker. So
+  an empty `partsPerDraft` with `ok: true` on a question turn is an answer with no draft fence
+  and no marker anywhere in it: as far as the markup can tell, one that proposes no message.

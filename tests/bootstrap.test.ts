@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type * as DbModule from "@agency_hub_core/db";
+import { RETIRED_FANSLY_ENV_KEYS } from "@agency_hub_core/shared";
 import type * as SharedModule from "@agency_hub_core/shared";
 
 const bootstrapMocks = vi.hoisted(() => {
@@ -40,19 +41,12 @@ const bootstrapMocks = vi.hoisted(() => {
       fanslyBaseUrl: "https://example.invalid",
       syncHttpTraceFile: null,
       fanslyDefaultDelayMs: 2500,
-      fanslyDmConversationsDelayMs: 5000,
-      fanslyDmMessagesDelayMs: 5000,
-      followerPageDelayMs: 0,
       onlyFansDefaultDelayMs: 1000,
-      transactionLookbackDays: 7,
-      transactionRescanCapDays: 30,
-      syncSharedRateLimitEnabled: false,
       egressPacerMode: "off" as const,
       lakeDir: "lake",
       syncPageExecutorConcurrency: 1,
       syncObservabilityRetentionDays: 30,
       healthSyncLightMaxAgeMinutes: 180,
-      healthSyncFollowerMaxAgeMinutes: 1080,
       healthSyncMonitoringToken: null,
       telegramBotToken: null,
       telegramChatId: null,
@@ -97,11 +91,7 @@ describe("bootstrap", () => {
     vi.useRealTimers();
     vi.clearAllMocks();
     delete process.env.FANSLY_DEFAULT_DELAY_MS;
-    delete process.env.FANSLY_GLOBAL_DELAY_MS;
-    delete process.env.FANSLY_ACCOUNT_LOOKUP_DELAY_MS;
-    delete process.env.FOLLOWER_PAGE_DELAY_MS;
-    delete process.env.FANSLY_DM_CONVERSATIONS_DELAY_MS;
-    delete process.env.FANSLY_DM_MESSAGES_DELAY_MS;
+    for (const key of RETIRED_FANSLY_ENV_KEYS) delete process.env[key];
   });
 
   it("verifies runtime schema readiness before returning the app context", async () => {
@@ -140,53 +130,40 @@ describe("bootstrap", () => {
     expect(bootstrapMocks.createDb).not.toHaveBeenCalled();
   });
 
-  it("warns when a deprecated Fansly delay alias is the active source", async () => {
-    process.env.FANSLY_GLOBAL_DELAY_MS = "3000";
-    bootstrapMocks.assertRuntimeSchemaReady.mockResolvedValue(undefined);
-    bootstrapMocks.loadConfig.mockReturnValueOnce({
-      ...bootstrapMocks.loadConfig(),
-      fanslyDefaultDelayMs: 3000,
-    });
-    const { createAppContext } = await import("../apps/runtime/src/bootstrap.ts");
-
-    const app = await createAppContext();
-    await app.close();
-
-    expect(bootstrapMocks.logger.warn).toHaveBeenCalledWith(
-      { envVar: "FANSLY_GLOBAL_DELAY_MS" },
-      "Deprecated Fansly delay env var in use; prefer FANSLY_DEFAULT_DELAY_MS",
-    );
-  });
-
-  it("warns a long-lived process that the retired Fansly endpoint pause env vars are ignored, naming the ones set", async () => {
+  it("warns a long-lived process that retired Fansly env vars are set and ignored, naming only the ones set", async () => {
+    // What production's env still carries when the keys go (step 4, S4-26).
     process.env.FANSLY_DM_MESSAGES_DELAY_MS = "7500";
     process.env.FOLLOWER_PAGE_DELAY_MS = "5000";
+    process.env.TRANSACTION_LOOKBACK_DAYS = "7";
+    process.env.SYNC_SHARED_RATE_LIMIT_ENABLED = "true";
+    process.env.FANSLY_DM_CONVERSATIONS_DELAY_MS = " ";
     bootstrapMocks.assertRuntimeSchemaReady.mockResolvedValue(undefined);
     const { createAppContext } = await import("../apps/runtime/src/bootstrap.ts");
 
     const app = await createAppContext({ processRole: "worker" });
     await app.close();
 
+    expect(bootstrapMocks.logger.warn).toHaveBeenCalledTimes(1);
     expect(bootstrapMocks.logger.warn).toHaveBeenCalledWith(
-      { envVars: ["FOLLOWER_PAGE_DELAY_MS", "FANSLY_DM_MESSAGES_DELAY_MS"] },
-      expect.stringMatching(/^Fansly endpoint pause env vars are ignored: every Fansly request is paced only by its page's send guard/),
+      { envVars: ["FOLLOWER_PAGE_DELAY_MS", "FANSLY_DM_MESSAGES_DELAY_MS", "SYNC_SHARED_RATE_LIMIT_ENABLED", "TRANSACTION_LOOKBACK_DAYS"] },
+      expect.stringMatching(/^Retired Fansly env vars are set and ignored: .* remove them from the env$/),
     );
   });
 
-  it("says nothing about endpoint pauses when the env sets none, or to a CLI run", async () => {
+  it("says nothing about retired Fansly env vars when the env sets none, or to a CLI run", async () => {
     bootstrapMocks.assertRuntimeSchemaReady.mockResolvedValue(undefined);
     const { createAppContext } = await import("../apps/runtime/src/bootstrap.ts");
-    const pauseWarning = [expect.objectContaining({ envVars: expect.anything() }), expect.anything()];
+    const retiredWarning = [expect.objectContaining({ envVars: expect.anything() }), expect.anything()];
 
     const quiet = await createAppContext({ processRole: "api" });
     await quiet.close();
-    expect(bootstrapMocks.logger.warn).not.toHaveBeenCalledWith(...pauseWarning);
+    expect(bootstrapMocks.logger.warn).not.toHaveBeenCalledWith(...retiredWarning);
 
     // A CLI command's stdout is its output (some of it is parsed).
     process.env.FANSLY_DM_MESSAGES_DELAY_MS = "7500";
     const cli = await createAppContext();
     await cli.close();
-    expect(bootstrapMocks.logger.warn).not.toHaveBeenCalledWith(...pauseWarning);
+    expect(bootstrapMocks.logger.warn).not.toHaveBeenCalledWith(...retiredWarning);
   });
 
   it("constructs the voice provider only when both the key and proxy tuple are ready", async () => {
@@ -234,13 +211,13 @@ describe("bootstrap", () => {
     expect(bootstrapMocks.logger.warn).toHaveBeenCalledTimes(1);
   });
 
-  it("boots with executor concurrency above 1 whatever the retired shared limiter key says (step 4, S4-19)", async () => {
-    // The boot invariant that tied the page executor's concurrency to
-    // SYNC_SHARED_RATE_LIMIT_ENABLED went with the limiter's last reader.
+  it("boots with executor concurrency above 1: no boot invariant ties it to another key (step 4, S4-19)", async () => {
+    // The invariant that tied the page executor's concurrency to the shared
+    // rate limiter went with the limiter's last reader, and the limiter's key
+    // with the legacy Fansly config keys (S4-26).
     bootstrapMocks.assertRuntimeSchemaReady.mockResolvedValue(undefined);
     bootstrapMocks.loadConfig.mockReturnValueOnce({
       ...bootstrapMocks.loadConfig(),
-      syncSharedRateLimitEnabled: false,
       egressPacerMode: "off" as const,
       lakeDir: "lake",
       syncPageExecutorConcurrency: 4,

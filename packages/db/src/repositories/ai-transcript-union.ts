@@ -23,10 +23,18 @@
 //      policy, guarded-numeric message id (regex-guarded cast — never
 //      throws), lexical fallback;
 //   7. dedupe/tombstones happen BEFORE the final tail cap.
+//
+// Steps 1–5 are one CTE chain (`aiTranscriptUnionCtes`), shared with the
+// chat-extension archive feed (conversation-feed.ts) so the feed pages the
+// very rows a generation reads. Called without options it renders exactly the
+// AI statement's CTEs (`tests/conversation-feed-sql.test.ts` pins that text);
+// the feed adds snapshot bounds on both arms and keeps tombstoned refs as rows
+// flagged `deleted` instead of dropping them.
 
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
+import { aiTranscriptRowCap } from "./ai-transcript-depth.ts";
 
 export interface AiTranscriptUnionRow {
   messageRef: string;
@@ -48,12 +56,51 @@ export interface AiTranscriptUnionInput {
   pageId: number;
   conversationRef: string;
   limit?: number;
+  /** Raises the row cap of this read past AI_TRANSCRIPT_UNION_MAX_LIMIT, up to
+   * AI_TRANSCRIPT_DEEP_MAX_ROWS. Only the full Recap passes it. */
+  maxRows?: number | undefined;
 }
 
-function buildUnionQuery(input: AiTranscriptUnionInput) {
-  const limit = Math.min(input.limit ?? 100, AI_TRANSCRIPT_UNION_MAX_LIMIT);
-  return sql`
-    with page as (
+export interface AiTranscriptUnionCteOptions {
+  /**
+   * Snapshot bounds (the feed) on the two content arms: a row whose id is
+   * above the bound in its store stays outside the walk. Tombstone sources
+   * (cross-source dm deletions, the hot table) are not bounded, so a deletion
+   * recorded after the snapshot still flags its row. Rows updated in place
+   * keep their id and stay inside the walk, including updates that change
+   * their time or which copy wins (conversation-feed.ts says what that costs
+   * a walk).
+   */
+  bounds?: { archiveMaxId: number; dmMaxId: number };
+  /**
+   * "exclude" (the AI read, the default): a tombstoned ref is dropped.
+   * "flag" (the feed): it stays, and `best`/`upgraded` carry `deleted`.
+   * Stubs never serve either way.
+   */
+  tombstones?: "exclude" | "flag";
+}
+
+/**
+ * The union's CTE chain, `page` through `upgraded` (one row per message ref
+ * that has content — live only, unless tombstones are flagged — unordered),
+ * for a statement that starts `with ${ctes}` and reads `upgraded u`.
+ */
+export function aiTranscriptUnionCtes(
+  input: Pick<AiTranscriptUnionInput, "pageId" | "conversationRef">,
+  options: AiTranscriptUnionCteOptions = {},
+): SQL {
+  const archiveBound = options.bounds === undefined ? sql`` : sql`
+        and ma.id <= ${options.bounds.archiveMaxId}`;
+  const dmBound = options.bounds === undefined ? sql`` : sql`
+        and d.id <= ${options.bounds.dmMaxId}`;
+  const flagTombstones = options.tombstones === "flag";
+  const bestDeleted = flagTombstones ? sql`,
+             exists (select 1 from tombstoned x where x.message_ref = c.message_ref) as deleted` : sql``;
+  const excludeTombstoned = flagTombstones ? sql`` : sql`
+        and not exists (select 1 from tombstoned x where x.message_ref = c.message_ref)`;
+  const upgradedDeleted = flagTombstones ? sql`,
+             b.deleted` : sql``;
+  return sql`page as (
       select p.id as page_id, p.ofapi_account_id
       from pages p
       where p.id = ${input.pageId}
@@ -77,7 +124,7 @@ function buildUnionQuery(input: AiTranscriptUnionInput) {
       from message_archive ma
       where ma.account_id = ${input.pageId}
         and ma.platform = 'onlyfans'
-        and ma.conversation_ref = ${input.conversationRef}
+        and ma.conversation_ref = ${input.conversationRef}${archiveBound}
     ),
     dm_arm as (
       select d.platform_message_id as message_ref,
@@ -98,7 +145,7 @@ function buildUnionQuery(input: AiTranscriptUnionInput) {
       from dm_message_archive d
       where d.platform = 'onlyfans'
         and d.platform_account_id = ${input.pageId}
-        and d.platform_conversation_id = ${input.conversationRef}
+        and d.platform_conversation_id = ${input.conversationRef}${dmBound}
     ),
     candidates as (
       select * from archive_arm
@@ -137,10 +184,9 @@ function buildUnionQuery(input: AiTranscriptUnionInput) {
              c.message_ref, c.event_time, c.text_plain, c.sender_role,
              c.is_sent_by_me, c.price_mills, c.is_tip, c.tip_amount_mills,
              c.media_metadata,
-             bool_or(c.is_opened) over (partition by c.message_ref) as is_opened
+             bool_or(c.is_opened) over (partition by c.message_ref) as is_opened${bestDeleted}
       from candidates c
-      where not c.is_stub
-        and not exists (select 1 from tombstoned x where x.message_ref = c.message_ref)
+      where not c.is_stub${excludeTombstoned}
       order by c.message_ref,
                (c.material_observed_at is not null) desc,
                c.vendor_changed_at desc nulls last,
@@ -151,10 +197,16 @@ function buildUnionQuery(input: AiTranscriptUnionInput) {
       select b.message_ref, b.event_time, b.text_plain, b.sender_role,
              b.is_sent_by_me, b.price_mills, b.is_tip, b.tip_amount_mills,
              b.media_metadata,
-             case when h.purchased_at is not null then true else b.is_opened end as is_opened
+             case when h.purchased_at is not null then true else b.is_opened end as is_opened${upgradedDeleted}
       from best b
       left join hot h on h.message_ref = b.message_ref
-    )
+    )`;
+}
+
+function buildUnionQuery(input: AiTranscriptUnionInput) {
+  const limit = Math.min(input.limit ?? 100, aiTranscriptRowCap(input.maxRows, AI_TRANSCRIPT_UNION_MAX_LIMIT));
+  return sql`
+    with ${aiTranscriptUnionCtes(input)}
     select u.message_ref,
            u.event_time,
            u.text_plain,

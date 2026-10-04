@@ -174,7 +174,6 @@ async function runLive(
   const { actor, stop, abort } = await makeTestActor({
     db: db(),
     pageId,
-    mode: "live",
     registry: createEngineRegistry(FANSLY_RESOURCE_SPECS),
     transport,
     alerts,

@@ -6,7 +6,6 @@ import {
   createModel,
   createOnlyFansPage,
   ensureFanslyPageSendGuard,
-  ensurePageSyncStates,
   ensureSyncPage,
   getSyncPage,
   LiveSyncPageRefusedError,
@@ -25,6 +24,7 @@ import { checkLiveHour } from "../apps/runtime/src/sync/checks/live-hour.ts";
 import { SyncEngineHost } from "../apps/runtime/src/sync/engine/host.ts";
 import { checkFanslyIdentityWithoutPage } from "../apps/runtime/src/sync/fansly/identity-without-page.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
+import { seedFormerFanslyRows } from "./helpers/fansly-legacy-rows.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import {
   CountingConnectProxy,
@@ -258,7 +258,7 @@ describe("onboarding goes straight to live (S4-05)", () => {
 
     // Adopted within one mode-loop pass (the production loop runs every 2 s).
     await until(async () => host.state(page.id).kind === "running", 2_000, "the live owner");
-    expect(host.state(page.id)).toMatchObject({ kind: "running", mode: "live" });
+    expect(host.state(page.id)).toMatchObject({ kind: "running" });
     // The trusted digest is the stored one: reads go out without a verify first.
     await until(async () => server!.arrivalsAt("/api/v1/polls").length >= 1, 15_000, "the engine's first read");
     expect(takeovers[0]!.floorDelayMs).toBeGreaterThanOrEqual(1.2 * S);
@@ -376,7 +376,7 @@ describe("createLiveSyncPage refuses a page with a past", () => {
   it("writes nothing for a legacy footprint, an engine or guard row, or a page that is not Fansly", async (context) => {
     if (!testDb) return context.skip();
     const states = await fanslyPage("with-states");
-    await ensurePageSyncStates(db(), { pageId: states });
+    await seedFormerFanslyRows(testDb.pool, states, new Date());
     const cursors = await fanslyPage("with-cursors");
     await upsertCheckpoint(db(), { platformAccountId: cursors, stream: "light", cursorText: "0" });
     const sendLog = await fanslyPage("with-send-log");

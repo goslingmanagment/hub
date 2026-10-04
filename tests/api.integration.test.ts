@@ -46,7 +46,6 @@ import {
 import { PgBoss } from "pg-boss";
 import {
   encryptJson,
-  FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY,
   MOSCOW_TIME_ZONE,
   previousBusinessDate,
   resolveBusinessDateRange,
@@ -76,6 +75,7 @@ import {
   startIntegrationTestDatabase,
   type StartedTestDatabase,
 } from "./helpers/db.ts";
+import { seedFormerFanslyRows } from "./helpers/fansly-legacy-rows.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { setModeDirect } from "./helpers/sync-engine-host.ts";
 import type * as UrgentModule from "../apps/runtime/src/sync/requests/urgent.ts";
@@ -562,7 +562,7 @@ async function seedMonitorCompletedRun(
   testDb: StartedTestDatabase,
   input: {
     pageId: number;
-    stream: "light" | "transactions" | "subscribers" | "dm_conversations" | "dm_messages" | "followers" | "followers_reconcile";
+    stream: "light" | "transactions" | "subscribers" | "dm_conversations" | "dm_messages" | "followers" | "followers_reconcile" | "top_spenders";
     startedAt: Date;
     finishedAt: Date;
     trigger?: string;
@@ -588,7 +588,7 @@ async function seedMonitorRunningRun(
   testDb: StartedTestDatabase,
   input: {
     pageId: number;
-    stream: "light" | "transactions" | "subscribers" | "dm_conversations" | "dm_messages" | "followers" | "followers_reconcile";
+    stream: "light" | "transactions" | "subscribers" | "dm_conversations" | "dm_messages" | "followers" | "followers_reconcile" | "top_spenders";
     startedAt: Date;
     trigger?: string;
   },
@@ -607,7 +607,7 @@ async function seedMonitorAttempt(
   input: {
     runId: number;
     pageId: number;
-    stream: "light" | "transactions" | "subscribers" | "dm_conversations" | "dm_messages" | "followers" | "followers_reconcile";
+    stream: "light" | "transactions" | "subscribers" | "dm_conversations" | "dm_messages" | "followers" | "followers_reconcile" | "top_spenders";
     startedAt: Date;
     finishedAt?: Date;
     state: "started" | "success" | "retry" | "failed";
@@ -649,6 +649,13 @@ async function seedMonitorAttempt(
   return attempt;
 }
 
+/**
+ * A page of the legacy page-sync executor in trouble: its account read stuck
+ * mid-run, its transactions retrying behind a 429, its subscribers paused,
+ * its chat list blocked on the credentials, its top spenders failing on a
+ * 5xx. The executor serves OnlyFans only (step 4), so the page is an OnlyFans
+ * page; the streams are the executor's.
+ */
 async function seedSyncMonitorScenario(
   testDb: StartedTestDatabase,
   pageId: number,
@@ -672,9 +679,9 @@ async function seedSyncMonitorScenario(
   const transactionsFinishedAt = minutesAgo(173);
   const last429At = minutesAgo(178);
   const transactionsEventAt = minutesAgo(177);
-  const followersSucceededAt = hoursAgo(30);
-  const followersStartedAt = minutesAgo(45);
-  const followersFailedAt = minutesAgo(40);
+  const topSpendersSucceededAt = hoursAgo(30);
+  const topSpendersStartedAt = minutesAgo(45);
+  const topSpendersFailedAt = minutesAgo(40);
   const last5xxAt = minutesAgo(44);
   const oldLightStartedAt = hoursAgo(30);
   const oldLightFinishedAt = new Date(oldLightStartedAt.getTime() + 2 * 60_000);
@@ -683,25 +690,25 @@ async function seedSyncMonitorScenario(
 
   const [fanA, fanB, fanC, fanD] = await upsertFans(testDb.db, [
     {
-      platform: "fansly",
+      platform: "onlyfans",
       platformUserId: "monitor-fan-a",
       username: "monitor_a",
       displayName: "Monitor A",
     },
     {
-      platform: "fansly",
+      platform: "onlyfans",
       platformUserId: "monitor-fan-b",
       username: "monitor_b",
       displayName: "Monitor B",
     },
     {
-      platform: "fansly",
+      platform: "onlyfans",
       platformUserId: "monitor-fan-c",
       username: "monitor_c",
       displayName: "Monitor C",
     },
     {
-      platform: "fansly",
+      platform: "onlyfans",
       platformUserId: "monitor-fan-d",
       username: "monitor_d",
       displayName: "Monitor D",
@@ -856,9 +863,7 @@ async function seedSyncMonitorScenario(
     lastMessageSyncAt: null,
     isVisible: true,
     lastSeenGeneration: 1,
-    metadata: {
-      [FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY]: "message sync disabled",
-    },
+    metadata: {},
   });
 
   await testDb.db.insert(pageSyncStateRows).values([
@@ -913,125 +918,19 @@ async function seedSyncMonitorScenario(
     },
     {
       pageId,
-      stream: "dm_messages" as const,
+      stream: "top_spenders" as const,
       status: "idle",
-      cadenceSeconds: 86400,
+      cadenceSeconds: 21600,
       slotOffsetSeconds: 0,
-      lastScheduledSlot: Math.floor(hoursAgo(-2).getTime() / 1000 / 86400) - 1,
-      requestSeq: 2,
-      appliedSeq: 2,
-      finishedAt: completedSyncAt,
-      succeededAt: completedSyncAt,
-    },
-    {
-      pageId,
-      stream: "followers" as const,
-      status: "idle",
-      cadenceSeconds: 3600,
-      slotOffsetSeconds: 0,
-      lastScheduledSlot: Math.floor(hoursAgo(-12).getTime() / 1000 / 3600) - 1,
+      lastScheduledSlot: Math.floor(hoursAgo(-12).getTime() / 1000 / 21600) - 1,
       requestSeq: 6,
       appliedSeq: 6,
-      finishedAt: followersSucceededAt,
-      succeededAt: followersSucceededAt,
-      failedAt: followersFailedAt,
+      finishedAt: topSpendersSucceededAt,
+      succeededAt: topSpendersSucceededAt,
+      failedAt: topSpendersFailedAt,
       consecutiveFailures: 2,
       lastErrorCode: "http_500",
-      lastErrorSummary: "Followers sync failed",
-    },
-    {
-      pageId,
-      stream: "followers_reconcile",
-      status: "idle",
-      cadenceSeconds: 172800,
-      slotOffsetSeconds: 0,
-      lastScheduledSlot: Math.floor(hoursAgo(-48).getTime() / 1000 / 172800) - 1,
-      requestSeq: 1,
-      appliedSeq: 1,
-    },
-  ]);
-
-  await testDb.db.insert(pageSyncCursorRows).values([
-    {
-      pageId,
-      stream: "transactions",
-      state: {
-        mode: "backfill",
-        completed: false,
-        provider: "fansly",
-        phase: "transactions",
-        snapshotEnd: hoursAgo(5).toISOString(),
-        newestSeenAt: hoursAgo(5).toISOString(),
-        dirtyFrom: null,
-        processedTransactions: 15,
-        processedChargebacks: 2,
-        transactionPages: 3,
-        chargebackPages: 0,
-        offset: 15,
-      },
-      cursorLastSucceededAt: completedSyncAt,
-    },
-    {
-      pageId,
-      stream: "subscribers",
-      state: {
-        revision: 1,
-        generation: 1,
-        offset: 2,
-        pageCount: 1,
-        providerReportedTotal: 5,
-      },
-    },
-    {
-      pageId,
-      stream: "dm_conversations",
-      state: {
-        version: 1,
-        mode: "full_scan",
-        generation: 1,
-        offset: 2,
-        pageCount: 1,
-        providerReportedTotal: 4,
-        unchangedPageStreak: 0,
-        fullSweepStartedAt: hoursAgo(4).toISOString(),
-        lastFullSweepCompletedAt: null,
-      },
-    },
-    {
-      pageId,
-      stream: "dm_messages",
-      state: {
-        version: 1,
-        currentConversationId: completedConversation.id,
-        currentPlatformConversationId: "monitor-conv-complete",
-        currentBeforeMessageId: null,
-        currentMode: "backfill",
-      },
-      cursorLastSucceededAt: completedSyncAt,
-    },
-    {
-      pageId,
-      stream: "followers",
-      state: {
-        revision: 6,
-        knownFollowId: "monitor-follow-004",
-        newestFollowId: "monitor-follow-010",
-        offset: 4,
-        pageCount: 2,
-        sourceFollowerCount: 10,
-      },
-      cursorLastSucceededAt: followersSucceededAt,
-    },
-    {
-      pageId,
-      stream: "followers_reconcile" as const,
-      state: {
-        revision: 1,
-        generation: 1,
-        offset: 2,
-        pageCount: 1,
-        sourceFollowerCount: 10,
-      },
+      lastErrorSummary: "Top spenders sync failed",
     },
   ]);
 
@@ -1043,7 +942,7 @@ async function seedSyncMonitorScenario(
   await insertSyncRunEvent(testDb.db, {
     syncRunId: runningLightRun.id,
     platformAccountId: pageId,
-    provider: "fansly",
+    provider: "onlyfans",
     stream: "light",
     eventType: "phase_started",
     severity: "info",
@@ -1061,6 +960,7 @@ async function seedSyncMonitorScenario(
   await seedMonitorAttempt(testDb, {
     runId: transactionsRun.id,
     pageId,
+    provider: "onlyfans",
     stream: "transactions",
     startedAt: last429At,
     finishedAt: new Date(last429At.getTime() + 30_000),
@@ -1072,7 +972,7 @@ async function seedSyncMonitorScenario(
   await insertSyncRunEvent(testDb.db, {
     syncRunId: transactionsRun.id,
     platformAccountId: pageId,
-    provider: "fansly",
+    provider: "onlyfans",
     stream: "transactions",
     eventType: "backfill_progress",
     severity: "warn",
@@ -1080,36 +980,19 @@ async function seedSyncMonitorScenario(
     emittedAt: transactionsEventAt,
   });
 
-  const dmMessagesRun = await seedMonitorCompletedRun(testDb, {
+  const failedTopSpendersRun = present(await seedMonitorCompletedRun(testDb, {
     pageId,
-    stream: "dm_messages",
-    status: "success",
-    startedAt: completedMessageCreatedAt,
-    finishedAt: completedSyncAt,
-  });
-  await insertSyncRunEvent(testDb.db, {
-    syncRunId: dmMessagesRun.id,
-    platformAccountId: pageId,
-    provider: "fansly",
-    stream: "dm_messages",
-    eventType: "run_finished",
-    severity: "info",
-    message: "DM message sync completed",
-    emittedAt: completedSyncAt,
-  });
-
-  const failedFollowersRun = await seedMonitorCompletedRun(testDb, {
-    pageId,
-    stream: "followers",
+    stream: "top_spenders",
     status: "failed",
-    startedAt: followersStartedAt,
-    finishedAt: followersFailedAt,
-    errorSummary: "Followers sync failed",
-  });
+    startedAt: topSpendersStartedAt,
+    finishedAt: topSpendersFailedAt,
+    errorSummary: "Top spenders sync failed",
+  }), "the failed top_spenders run");
   await seedMonitorAttempt(testDb, {
-    runId: failedFollowersRun.id,
+    runId: failedTopSpendersRun.id,
     pageId,
-    stream: "followers",
+    provider: "onlyfans",
+    stream: "top_spenders",
     startedAt: last5xxAt,
     finishedAt: new Date(last5xxAt.getTime() + 30_000),
     state: "failed",
@@ -1118,14 +1001,14 @@ async function seedSyncMonitorScenario(
     errorMessage: "Internal server error",
   });
   await insertSyncRunEvent(testDb.db, {
-    syncRunId: failedFollowersRun.id,
+    syncRunId: failedTopSpendersRun.id,
     platformAccountId: pageId,
-    provider: "fansly",
-    stream: "followers",
+    provider: "onlyfans",
+    stream: "top_spenders",
     eventType: "run_failed",
     severity: "error",
-    message: "Followers sync failed",
-    emittedAt: followersFailedAt,
+    message: "Top spenders sync failed",
+    emittedAt: topSpendersFailedAt,
   });
 
   const oldLightRun = await seedMonitorCompletedRun(testDb, {
@@ -1138,6 +1021,7 @@ async function seedSyncMonitorScenario(
   await seedMonitorAttempt(testDb, {
     runId: oldLightRun.id,
     pageId,
+    provider: "onlyfans",
     stream: "light",
     startedAt: oldLight429At,
     finishedAt: new Date(oldLight429At.getTime() + 20_000),
@@ -1159,7 +1043,7 @@ async function seedSyncMonitorScenario(
   `, [pageId]);
 
   await testDb.db.insert(syncRateLimits).values({
-    provider: "fansly",
+    provider: "onlyfans",
     scope: "global",
     egressKey: "socks5://proxy.example:1080",
     minSpacingMs: 1_000,
@@ -1168,13 +1052,41 @@ async function seedSyncMonitorScenario(
 
   return {
     retryAt,
-    completedSyncAt,
-    followersFailedAt,
+    topSpendersFailedAt,
     last429At,
     last5xxAt,
     lightRunningEventAt,
     lightRunningStartedAt,
   };
+}
+
+function present<T>(value: T | null | undefined, what: string): T {
+  if (value === null || value === undefined) throw new Error(`Expected ${what}`);
+  return value;
+}
+
+/** An OnlyFans page under the model of a fixture page. */
+async function createOnlyFansPageOf(testDb: StartedTestDatabase, model: { id: number } | undefined, label: string) {
+  const page = await createOnlyFansPage(testDb.db, { modelId: present(model, "the fixture model").id, label });
+  return present(page, `the OnlyFans page ${label}`);
+}
+
+/** The monitor's pages: an OnlyFans page of each fixture model, the first one
+ *  assigned to the team lead beside the Fansly page `lana`. */
+async function seedOnlyFansMonitorPages(
+  testDb: StartedTestDatabase,
+  fixture: Awaited<ReturnType<typeof seedPhase2Fixture>>,
+) {
+  const appContext = createTestAppContext(testDb);
+  const lanaOf = await createOnlyFansPageOf(testDb, fixture.lanaModel, "lana-of");
+  const lilyOf = await createOnlyFansPageOf(
+    testDb, { id: present(fixture.lilyPage, "the fixture page lily1").modelId }, "lily-of",
+  );
+  await assignPageToUser(appContext, {
+    userId: await fixtureUserId(appContext, "lead"),
+    pageLabel: "lana-of",
+  }, { source: "cli" });
+  return { lanaOf, lilyOf };
 }
 
 async function seedSyncRequestsScenario(
@@ -6828,7 +6740,10 @@ describe("api integration", () => {
       return;
     }
 
-    await seedSyncMonitorScenario(testDb, fixture.lanaPage.id, new Date());
+    // An OnlyFans page of the legacy executor in trouble, beside the fixture's
+    // two Fansly pages that no engine runs.
+    const onlyFansPage = await createOnlyFansPageOf(testDb, fixture.lanaModel, "lana-of");
+    await seedSyncMonitorScenario(testDb, onlyFansPage.id, new Date());
 
     const anonymous = await server.inject({
       method: "GET",
@@ -6859,15 +6774,14 @@ describe("api integration", () => {
 
     expect(body).toMatchObject({
       status: "degraded",
-      thresholds: {
-        lightMaxAgeMinutes: 180,
-        followerMaxAgeMinutes: 1080,
-      },
       overall: {
-        pageCount: 2,
-        unhealthyPageCount: 2,
+        pageCount: 3,
+        unhealthyPageCount: 3,
       },
     });
+    // The one threshold left: the follower-sync age went with the legacy
+    // Fansly checks (step 4, S4-24).
+    expect(body.thresholds).toEqual({ lightMaxAgeMinutes: 180 });
     expect(typeof body.timestamp).toBe("string");
     expect(body.overall.failedStreams).toBeGreaterThan(0);
     expect(body.overall.stalledStreams).toBeGreaterThan(0);
@@ -6878,25 +6792,35 @@ describe("api integration", () => {
     });
 
     expect(body.pages).toEqual(expect.arrayContaining([
+      // The legacy checks are the legacy executor's pages'.
+      expect.objectContaining({
+        pageLabel: "lana-of",
+        platform: "onlyfans",
+        status: "degraded",
+        issues: expect.arrayContaining([
+          "failed_streams",
+          "stalled_streams",
+        ]),
+      }),
+      // A Fansly page no engine runs is read by nothing: one issue, and no
+      // legacy check of it (no light-sync age, no follower-sync age).
       expect.objectContaining({
         pageLabel: "lana",
         platform: "fansly",
         status: "degraded",
-        issues: expect.arrayContaining([
-          "follower_sync_missing",
-          "failed_streams",
-          "stalled_streams",
-        ]),
+        issues: ["engine:not_live"],
       }),
       expect.objectContaining({
         pageLabel: "lily1",
         platform: "fansly",
         status: "degraded",
-        issues: expect.arrayContaining([
-          "follower_sync_missing",
-        ]),
+        issues: ["engine:not_live"],
       }),
     ]));
+    // No page carries a legacy Fansly issue (the follower-sync age, the DM coverage debt).
+    for (const page of body.pages) {
+      expect(page.issues.filter((issue: string) => /^(follower|coverage)_/.test(issue)), page.pageLabel).toEqual([]);
+    }
 
     await server.close();
     const monitoredContext = createTestAppContext(testDb, {
@@ -8434,9 +8358,12 @@ describe("api integration", () => {
         messageBackfillComplete: true,
         lastMessageSyncAt: "2026-03-17T11:45:00.000Z",
       },
+      // No engine runs this Fansly page (it reads the stored legacy rows), and
+      // the legacy executor serves OnlyFans only: nothing syncs its history,
+      // and the preview says so.
       messageSyncUx: {
-        state: "healthy",
-        headline: "Conversation history is ready",
+        state: "off",
+        headline: "Conversation history is off",
         requiresAction: false,
       },
     });
@@ -8629,13 +8556,19 @@ describe("api integration", () => {
     });
   });
 
-  it("returns scoped sync monitor snapshots with derived statuses, progress, and recent aggregates [sync-critical]", async (context) => {
+  it("returns scoped sync monitor snapshots with derived statuses and recent aggregates [sync-critical]", async (context) => {
     if (!testDb || !server || !fixture) {
       context.skip();
       return;
     }
 
-    const seeded = await seedSyncMonitorScenario(testDb, fixture.lanaPage.id, new Date());
+    // The monitor is the legacy page-sync executor's, and that executor serves
+    // OnlyFans only (step 4): its pages are OnlyFans pages, its rows the
+    // streams the executor runs. The fixture's Fansly pages are not in it.
+    const { lanaOf } = await seedOnlyFansMonitorPages(testDb, fixture);
+    const seeded = await seedSyncMonitorScenario(testDb, lanaOf.id, new Date());
+    // A Fansly page's parked legacy rows are records, not monitor rows.
+    await seedFormerFanslyRows(testDb.pool, present(fixture.lanaPage, "the fixture page lana").id, new Date());
 
     const ownerLogin = await server.inject({
       method: "POST",
@@ -8654,8 +8587,10 @@ describe("api integration", () => {
     const ownerBody = ownerResponse.json();
     expect(typeof ownerBody.generatedAt).toBe("string");
     expect(ownerBody.window.hours).toBe(24);
-    expect(ownerBody.pages.map((page: { pageLabel: string }) => page.pageLabel)).toEqual(["lana", "lily1"]);
+    expect(ownerBody.pages.map((page: { pageLabel: string }) => page.pageLabel)).toEqual(["lana-of", "lily-of"]);
+    expect(ownerBody.pages.map((page: { platform: string }) => page.platform)).toEqual(["onlyfans", "onlyfans"]);
     expect(ownerBody.overall.pages).toBe(2);
+    expect(ownerBody.overall.streams).toBe(14);
     expect(ownerBody.overall.syncUx).toMatchObject({
       state: "attention",
       requiresAction: true,
@@ -8663,7 +8598,7 @@ describe("api integration", () => {
     });
     expect(ownerBody.overall.recentRuns).toMatchObject({
       running: 1,
-      success: 1,
+      success: 0,
       partial: 1,
       failed: 1,
       skipped: 0,
@@ -8677,9 +8612,9 @@ describe("api integration", () => {
       last429At: seeded.last429At.toISOString(),
       last5xxAt: seeded.last5xxAt.toISOString(),
     });
-    expect(ownerBody.overall.providers).toEqual(expect.arrayContaining([
+    expect(ownerBody.overall.providers).toEqual([
       expect.objectContaining({
-        platform: "fansly",
+        platform: "onlyfans",
         recent429s: 1,
         recent5xxs: 1,
         rateHealth: expect.objectContaining({
@@ -8687,34 +8622,41 @@ describe("api integration", () => {
           nextAvailableAt: seeded.retryAt.toISOString(),
         }),
       }),
-    ]));
+    ]);
 
-    const lana = ownerBody.pages.find((page: { pageLabel: string }) => page.pageLabel === "lana");
-    expect(lana).toBeTruthy();
-    expect(lana.syncUx).toMatchObject({
+    const lanaOfPage = ownerBody.pages.find((page: { pageLabel: string }) => page.pageLabel === "lana-of");
+    expect(lanaOfPage).toBeTruthy();
+    expect(lanaOfPage.syncUx).toMatchObject({
       state: "attention",
       requiresAction: true,
       headline: "Reconnect to resume sync",
     });
-    expect(lana.summary).toMatchObject({
+    expect(lanaOfPage.summary).toMatchObject({
       runningStreams: 1,
       blockedStreams: 1,
       stalledStreams: 1,
       pendingStreams: 0,
       retryingStreams: 1,
     });
-    expect(lana.counts).toMatchObject({
-      fans: 5,
-      followers: 1,
-      subscribers: 1,
-      transactions: 3,
+    expect(lanaOfPage.counts).toMatchObject({
+      fans: 4,
+      followers: 0,
+      subscribers: 0,
+      transactions: 0,
       conversations: 4,
       messages: 2,
     });
 
-    const streams = new Map(
-      lana.streams.map((stream: { stream: string }) => [stream.stream, stream]),
+    const streams = new Map<string, Record<string, unknown>>(
+      lanaOfPage.streams.map((stream: { stream: string }) => [stream.stream, stream]),
     );
+    // One row per stream the executor runs, in its order, and no other: not
+    // the retired `dm_messages`, not a Fansly lane.
+    expect([...streams.keys()]).toEqual([
+      "light", "transactions", "fan_identities", "top_spenders", "subscribers", "dm_conversations", "posts",
+    ]);
+    // The monitor derives no progress of its own.
+    for (const stream of streams.values()) expect(stream.progress).toBeNull();
 
     expect(streams.get("light")).toMatchObject({
       status: "running",
@@ -8744,9 +8686,6 @@ describe("api integration", () => {
         state: "retrying",
         headline: "Retrying automatically",
       }),
-      // A legacy Fansly transactions backfill checkpoint renders no progress
-      // since step 4 (S4-16): its writer is gone, the row stays as a record.
-      progress: null,
       recentRuns: expect.objectContaining({
         partial: 1,
       }),
@@ -8761,13 +8700,6 @@ describe("api integration", () => {
     });
     expect(streams.get("subscribers")).toMatchObject({
       status: "paused",
-      progress: {
-        label: "2/5 subscribers",
-        current: 2,
-        total: 5,
-        unit: "subscribers",
-        percent: 40,
-      },
     });
     expect(streams.get("dm_conversations")).toMatchObject({
       status: "blocked",
@@ -8777,67 +8709,27 @@ describe("api integration", () => {
         headline: "Reconnect to resume sync",
         requiresAction: true,
       }),
-      progress: {
-        label: "2/4 conversations",
-        current: 2,
-        total: 4,
-        unit: "conversations",
-        percent: 50,
-      },
     });
-    expect(streams.get("dm_messages")).toMatchObject({
+    expect(streams.get("top_spenders")).toMatchObject({
       status: "idle",
-      succeededAt: seeded.completedSyncAt.toISOString(),
-      syncUx: expect.objectContaining({
-        state: "healthy",
-        headline: "Up to date",
-      }),
-      progress: {
-        label: "1/3 conversations backfilled, 1 lagging",
-        current: 1,
-        total: 3,
-        unit: "conversations",
-        percent: 33.3,
-      },
-    });
-    expect(streams.get("followers")).toMatchObject({
-      status: "idle",
-      failedAt: seeded.followersFailedAt.toISOString(),
-      lastErrorSummary: "Followers sync failed",
+      failedAt: seeded.topSpendersFailedAt.toISOString(),
+      lastErrorSummary: "Top spenders sync failed",
       recentErrors: expect.objectContaining({
         total5xxs: 1,
         failedRuns: 1,
         failedAttempts: 1,
       }),
-      progress: {
-        label: "10/10 followers",
-        current: 10,
-        total: 10,
-        unit: "followers",
-        percent: 100,
-      },
     });
-    expect(streams.get("followers_reconcile")).toMatchObject({
-      status: "idle",
-      progress: {
-        label: "10/10 followers",
-        current: 10,
-        total: 10,
-        unit: "followers",
-        percent: 100,
-      },
-    });
+    const topSpendersStream = streams.get("top_spenders") as
+      | { lastCompletion?: { durationMs?: number | null } }
+      | undefined;
+    expect(typeof topSpendersStream?.lastCompletion?.durationMs).toBe("number");
 
     expect(ownerBody.recentEvents.map((event: { message: string }) => event.message)).toEqual([
-      "Followers sync failed",
-      "DM message sync completed",
+      "Top spenders sync failed",
       "Light sync is active",
       "Transactions backfill slowed by 429s",
     ]);
-    const dmMessagesStream = streams.get("dm_messages") as
-      | { lastCompletion?: { durationMs?: number | null } }
-      | undefined;
-    expect(typeof dmMessagesStream?.lastCompletion?.durationMs).toBe("number");
 
     const leadLogin = await server.inject({
       method: "POST",
@@ -8853,22 +8745,11 @@ describe("api integration", () => {
 
     expect(leadResponse.statusCode).toBe(200);
     const leadBody = leadResponse.json();
-    expect(leadBody.pages.map((page: { pageLabel: string }) => page.pageLabel)).toEqual(["lana"]);
+    // The lead's pages are lana (Fansly: not in the monitor) and lana-of.
+    expect(leadBody.pages.map((page: { pageLabel: string }) => page.pageLabel)).toEqual(["lana-of"]);
     expect(leadBody.overall.pages).toBe(1);
-    // 7 legacy streams + the three ramp-gated Stage 16/32 streams that W8.1
-    // made monitor-visible (top_spenders, fan_earnings, purchase_history)
-    // + `posts` (monitor-visible since WP-F1 repaired the missing entry) +
-    // `stats_snapshot` (WP-F1) + `notifications` (WP-F2 — the lossy lane, and
-    // the one whose wedge would be most expensive to miss) + `catalog` (WP-F3 —
-    // the lane that measures M) + `post_replies` (WP-F5 — the quietest wedge in
-    // the tree: the queue keeps its rows and the archive simply stops growing)
-    // + `payouts` (WP-F7 — two calls a day is a volume no dashboard notices
-    // going to zero) + `media_stats` (WP-F4 — the loudest lane by call volume
-    // and therefore the one whose wedge is most worth seeing: it is designed to
-    // run at 100 % of its own cap, so "calls went to zero" IS the signal).
-    // Pinned by MONITORED_SYNC_STREAMS ⊇ getSyncStreamsForPlatform("fansly") in
-    // fansly-stats-stream-wiring.
-    expect(leadBody.overall.streams).toBe(17);
+    // The 7 streams the legacy executor runs (`LEGACY_EXECUTOR_STREAMS`).
+    expect(leadBody.overall.streams).toBe(7);
   }, 15_000);
 
   it("enforces sync monitor page scoping and missing-page handling [sync-critical]", async (context) => {
@@ -8877,7 +8758,8 @@ describe("api integration", () => {
       return;
     }
 
-    await seedSyncMonitorScenario(testDb, fixture.lanaPage.id, new Date());
+    const { lanaOf } = await seedOnlyFansMonitorPages(testDb, fixture);
+    await seedSyncMonitorScenario(testDb, lanaOf.id, new Date());
 
     const leadLogin = await server.inject({
       method: "POST",
@@ -8886,12 +8768,14 @@ describe("api integration", () => {
     });
     const leadCookie = sessionCookieFrom(leadLogin);
 
-    const forbidden = await server.inject({
-      method: "GET",
-      url: "/api/v1/sync/status?pageLabel=lily1",
-      headers: { cookie: leadCookie },
-    });
-    expect(forbidden.statusCode).toBe(403);
+    for (const label of ["lily-of", "lily1"]) {
+      const forbidden = await server.inject({
+        method: "GET",
+        url: `/api/v1/sync/status?pageLabel=${label}`,
+        headers: { cookie: leadCookie },
+      });
+      expect(forbidden.statusCode, label).toBe(403);
+    }
 
     const ownerLogin = await server.inject({
       method: "POST",
@@ -8909,11 +8793,21 @@ describe("api integration", () => {
 
     const filtered = await server.inject({
       method: "GET",
-      url: "/api/v1/sync/status?pageLabel=lana",
+      url: "/api/v1/sync/status?pageLabel=lana-of",
       headers: { cookie: ownerCookie },
     });
     expect(filtered.statusCode).toBe(200);
-    expect(filtered.json().pages.map((page: { pageLabel: string }) => page.pageLabel)).toEqual(["lana"]);
+    expect(filtered.json().pages.map((page: { pageLabel: string }) => page.pageLabel)).toEqual(["lana-of"]);
+
+    // A Fansly page exists and is in scope, and the monitor has no row of it.
+    const fansly = await server.inject({
+      method: "GET",
+      url: "/api/v1/sync/status?pageLabel=lana",
+      headers: { cookie: ownerCookie },
+    });
+    expect(fansly.statusCode).toBe(200);
+    expect(fansly.json().pages).toEqual([]);
+    expect(fansly.json().overall).toMatchObject({ pages: 0, streams: 0 });
   }, 15_000);
 
   it("returns sync block overview rows and keeps OnlyFans legacy history retired [sync-critical]", async (context) => {
@@ -8923,7 +8817,9 @@ describe("api integration", () => {
     }
 
     const now = new Date("2026-03-24T12:00:00.000Z");
-    await seedSyncMonitorScenario(testDb, fixture.lanaPage.id, now);
+    // lana: a Fansly page the Fansly Sync Engine runs live. lily1: a Fansly
+    // page no engine runs. lana-of-sync: an OnlyFans page of the legacy executor.
+    await makeEngineLive(testDb, present(fixture.lanaPage, "the fixture page lana").id);
 
     const onlyFansPage = await createOnlyFansPage(testDb.db, {
       modelId: fixture.lanaModel.id,
@@ -8960,15 +8856,33 @@ describe("api integration", () => {
     expect(response.statusCode).toBe(200);
     const body = response.json();
     const fanslyPage = body.pages.find((page: { pageLabel: string }) => page.pageLabel === "lana");
+    const unreadFanslyPage = body.pages.find((page: { pageLabel: string }) => page.pageLabel === "lily1");
     const onlyFansOverview = body.pages.find((page: { pageLabel: string }) => page.pageLabel === "lana-of-sync");
 
-    expect(fanslyPage.blocks.messages_live.intervals).toEqual(expect.arrayContaining([
-      expect.objectContaining({ stream: "dm_conversations", cadenceSeconds: 1800 }),
-    ]));
-    expect(fanslyPage.blocks.messages_history.intervals).toEqual(expect.arrayContaining([
-      expect.objectContaining({ stream: "dm_messages", cadenceSeconds: 86400 }),
-    ]));
-    expect(fanslyPage.blocks.connection.connectionStatus).toBeDefined();
+    // A live Fansly page: every block is the engine's, with the cadence of the
+    // engine's own polls (the registry's), not a legacy stream policy's.
+    for (const block of Object.values(fanslyPage.blocks) as Array<{ state: string; engineMode: string }>) {
+      expect(block).toMatchObject({ state: "engine", engineMode: "live", statusReason: { code: "fansly_sync_engine" } });
+    }
+    expect(fanslyPage.blocks.messages_live.intervals).toEqual([
+      { stream: "dm_conversations", cadenceSeconds: 1800 },
+    ]);
+    // The history reads are triggered work, not a poll: no interval.
+    expect(fanslyPage.blocks.messages_history.intervals).toEqual([]);
+    expect(fanslyPage.blocks.audience.intervals).toEqual([
+      { stream: "subscribers", cadenceSeconds: 3600 },
+      { stream: "followers", cadenceSeconds: 3600 },
+    ]);
+    expect(fanslyPage.blocks.connection.connectionStatus).toBe("connected");
+    // A Fansly page no engine runs: nothing reads it, and every block says so.
+    for (const block of Object.values(unreadFanslyPage.blocks) as Array<Record<string, unknown>>) {
+      expect(block).toMatchObject({
+        state: "not_available",
+        statusReason: { code: "fansly_sync_engine_off" },
+        intervals: [],
+        substreams: [],
+      });
+    }
     expect(onlyFansOverview.blocks.connection.connectionStatus).toBeDefined();
     expect(onlyFansOverview.blocks.audience.state).toBe("not_available");
     expect(onlyFansOverview.blocks.messages_live.state).not.toBe("not_available");
@@ -8985,7 +8899,11 @@ describe("api integration", () => {
       return;
     }
 
-    await seedSyncMonitorScenario(testDb, fixture.lanaPage.id, new Date("2026-03-24T12:00:00.000Z"));
+    // An OnlyFans page of the legacy executor, and a Fansly page the engine
+    // runs live.
+    const onlyFansPage = await createOnlyFansPageOf(testDb, fixture.lanaModel, "lana-of");
+    await seedSyncMonitorScenario(testDb, onlyFansPage.id, new Date("2026-03-24T12:00:00.000Z"));
+    await makeEngineLive(testDb, present(fixture.lanaPage, "the fixture page lana").id);
 
     const ownerLogin = await server.inject({
       method: "POST",
@@ -8996,33 +8914,68 @@ describe("api integration", () => {
 
     const blocksResponse = await server.inject({
       method: "GET",
-      url: "/api/v1/pages/lana/sync/blocks",
+      url: "/api/v1/pages/lana-of/sync/blocks",
       headers: { cookie: ownerCookie },
     });
     expect(blocksResponse.statusCode).toBe(200);
-    expect(blocksResponse.json().page.blocks.messages_live.intervals).toEqual(expect.arrayContaining([
-      expect.objectContaining({ stream: "dm_conversations", cadenceSeconds: 1800 }),
+    const onlyFansBlocks = blocksResponse.json().page.blocks;
+    expect(onlyFansBlocks.messages_live.intervals).toEqual([
+      { stream: "dm_conversations", cadenceSeconds: 1800 },
+    ]);
+    expect(onlyFansBlocks.messages_live.substreams.map((substream: { stream: string }) => substream.stream))
+      .toEqual(["dm_conversations"]);
+    expect(onlyFansBlocks.financials.intervals).toEqual(expect.arrayContaining([
+      { stream: "transactions", cadenceSeconds: 3600 },
     ]));
-    expect(blocksResponse.json().page.blocks.messages_history.intervals).toEqual(expect.arrayContaining([
-      expect.objectContaining({ stream: "dm_messages", cadenceSeconds: 86400 }),
-    ]));
+    // The retired history crawler: no block of it on an OnlyFans page.
+    expect(onlyFansBlocks.messages_history).toMatchObject({ state: "not_available", intervals: [], substreams: [] });
 
     const messagesResponse = await server.inject({
       method: "GET",
-      url: "/api/v1/pages/lana/sync/blocks/messages",
+      url: "/api/v1/pages/lana-of/sync/blocks/messages",
       headers: { cookie: ownerCookie },
     });
     expect(messagesResponse.statusCode).toBe(200);
     expect(messagesResponse.json()).toMatchObject({
+      page: {
+        pageLabel: "lana-of",
+        platform: "onlyfans",
+      },
+      block: {
+        block: "messages_history",
+        state: "not_available",
+      },
+    });
+
+    // The Fansly page: the same routes answer with the engine's blocks.
+    const fanslyBlocks = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana/sync/blocks",
+      headers: { cookie: ownerCookie },
+    });
+    expect(fanslyBlocks.statusCode).toBe(200);
+    expect(fanslyBlocks.json().page.blocks.messages_live).toMatchObject({
+      state: "engine",
+      engineMode: "live",
+      intervals: [{ stream: "dm_conversations", cadenceSeconds: 1800 }],
+    });
+    const fanslyMessages = await server.inject({
+      method: "GET",
+      url: "/api/v1/pages/lana/sync/blocks/messages",
+      headers: { cookie: ownerCookie },
+    });
+    expect(fanslyMessages.statusCode).toBe(200);
+    expect(fanslyMessages.json()).toMatchObject({
       page: {
         pageLabel: "lana",
         platform: "fansly",
       },
       block: {
         block: "messages_history",
-        intervals: [
-          { stream: "dm_messages", cadenceSeconds: 86400 },
-        ],
+        state: "engine",
+        engineMode: "live",
+        intervals: [],
+        statusReason: { code: "fansly_sync_engine" },
       },
     });
   }, 15_000);

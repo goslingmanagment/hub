@@ -1,4 +1,8 @@
-import type { ClientBootstrapLimits } from "@agency_hub_core/contracts";
+import {
+  AI_LIVE_TEXT_MAX_CHARS,
+  AI_LIVE_TEXT_MAX_ITEMS,
+  type ClientBootstrapLimits,
+} from "@agency_hub_core/contracts";
 import { ARCHIVE_AI_TRANSCRIPT_MAX_ROWS } from "@agency_hub_core/db";
 
 /**
@@ -10,11 +14,13 @@ import { ARCHIVE_AI_TRANSCRIPT_MAX_ROWS } from "@agency_hub_core/db";
  * the owner's setting, and none is admitted until the owner adds one.
  */
 export const CLIENT_BOOTSTRAP_LIMITS: Readonly<Omit<ClientBootstrapLimits, "previewSendReceiptProfiles">> = {
-  freshTextMaxItems: 60,
-  freshTextMaxChars: 5_000,
+  // The caps of `liveTextContext` in the AI stream's body schema.
+  freshTextMaxItems: AI_LIVE_TEXT_MAX_ITEMS,
+  freshTextMaxChars: AI_LIVE_TEXT_MAX_CHARS,
   feedMax: 100,
-  // The archive readers' row cap today. The full Recap's deeper read raises it
-  // behind its own setting, in the PR that ships that read.
+  // The AI transcript readers' row cap: the resting value. The bootstrap
+  // announces the owner's `aiTranscriptDeepMaxRows` in its place, the depth a
+  // full Recap may read (ai-transcript-depth.ts).
   deepMax: ARCHIVE_AI_TRANSCRIPT_MAX_ROWS,
   audienceWindowHours: 720,
   claimLeaseSec: 120,

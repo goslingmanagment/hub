@@ -3,6 +3,7 @@ import { getClientConfigRevision, listClientBootstrapPages, type ClientBootstrap
 import type { Platform } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
+import { loadAiTranscriptDeepMaxRows } from "./ai-transcript-depth.ts";
 import { SERVED_CLIENT_CAPABILITIES } from "./client-capabilities.ts";
 import {
   clientBootstrapFlags,
@@ -88,6 +89,9 @@ export async function buildClientBootstrap(
 ): Promise<ClientBootstrapResponse> {
   const configRevision = await getClientConfigRevision(app.db, CLIENT_BOOTSTRAP_CONFIG_KEYS);
   const switches = await loadClientSwitches(app);
+  // The depth a full Recap may read: the same value the AI stream hands its
+  // transcript readers.
+  const deepMax = await loadAiTranscriptDeepMaxRows(app);
   const served = SERVED_CLIENT_CAPABILITIES;
   const rows = await listClientBootstrapPages(app.db, caller.pageIds);
   return {
@@ -105,7 +109,7 @@ export async function buildClientBootstrap(
     pages: rows.map((row) => toBootstrapPage(row, switches.settings, served)),
     bindingsByHost: bindingsForCaller(switches.settings.hostBindings, rows),
     flags: clientBootstrapFlags(switches.settings),
-    limits: { ...CLIENT_BOOTSTRAP_LIMITS, previewSendReceiptProfiles: [...switches.receiptProfiles] },
+    limits: { ...CLIENT_BOOTSTRAP_LIMITS, deepMax, previewSendReceiptProfiles: [...switches.receiptProfiles] },
     capabilities: [...served],
   };
 }

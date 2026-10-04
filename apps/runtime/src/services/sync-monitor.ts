@@ -1,4 +1,5 @@
 import {
+  LEGACY_EXECUTOR_STREAMS,
   countDistinctFansForPages,
   listSyncMonitorRecentEvents,
   listSyncMonitorRecentRequests,
@@ -10,21 +11,12 @@ import {
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
-import { followersReconcileFloorWaitUntil } from "./sync/followers-reconcile-floor.ts";
 import { BadRequestError } from "./errors.ts";
-import {
-  ofapiAudienceQualityHoldFor,
-  parseDmConversationCursorState,
-  parseDmMessagesCursorState,
-  parseFollowersCursorState,
-  parseFollowersReconcileProgressState,
-  parseSubscribersCursorState,
-} from "./sync/cursor-state.ts";
+import { ofapiAudienceQualityHoldFor } from "./sync/cursor-state.ts";
 import {
   buildOverallSyncUx,
   buildPageSyncUx,
   buildStreamSyncUx,
-  isBulkEnrichmentSyncStream,
 } from "./sync-ux.ts";
 import type { SyncUxSummary } from "@agency_hub_core/contracts";
 
@@ -35,62 +27,14 @@ const DEFAULT_REQUEST_LIMIT = 100;
 const MAX_REQUEST_LIMIT = 500;
 const STALLED_THRESHOLD_MS = 45_000;
 const RATE_LIMITED_LOOKBACK_MS = 15 * 60 * 1000;
-/** Exported so a pin test can assert MONITORED ⊇ getSyncStreamsForPlatform("fansly").
- *  A Fansly lane the monitor cannot see is a lane that can wedge unobserved —
- *  which is exactly what happened to `fan_earnings` before W8.1, and what was
- *  still true of `posts` until WP-F1 added the pin. */
-export const MONITORED_SYNC_STREAMS = [
-  "light",
-  "fan_identities",
-  "followers",
-  "transactions",
-  "subscribers",
-  "dm_conversations",
-  "dm_messages",
-  "followers_reconcile",
-  // W8.1 (A12/A20): the Stage 16/32 ramp-gated streams become VISIBLE in the
-  // monitor snapshot/CLI (a wedged fan_earnings walk was previously
-  // unobservable). Deliberately still OUT of block health (BLOCK_TASKS /
-  // SYNC_DOMAIN_POLICY): a flag-gated stream must not degrade a page's
-  // block UX to "catching up" while its ramp gate is off.
-  "top_spenders",
-  "fan_earnings",
-  "purchase_history",
-  // WP-F1 adds `stats_snapshot` and repairs the already-missing `posts`; the
-  // pin test is what keeps the next one from going missing too. Both stay OUT
-  // of block health (BLOCK_TASKS / SYNC_DOMAIN_POLICY) for the same reason the
-  // ramp-gated streams do.
-  "posts",
-  "stats_snapshot",
-  // WP-F2. A lane that can wedge unobserved is the one failure this list
-  // exists to prevent, and the notification lane is the one whose downtime
-  // costs facts rather than freshness.
-  "notifications",
-  // WP-F3. A wedged catalog sweep is invisible in every other surface — the
-  // page keeps syncing DMs and money while its inventory silently ages, and M
-  // (the number WP-F4 is sized against) quietly stops moving.
-  "catalog",
-  // WP-F5. A wedged replies walk is the quietest failure in this tree: the
-  // queue keeps its rows, the page keeps syncing everything else, and the
-  // comment archive simply stops growing 3 % into a 14-day first pass.
-  "post_replies",
-  // WP-F7. A wedged payouts lane is invisible everywhere else: two calls a day
-  // is a volume no dashboard notices going to zero, and the first thing lost is
-  // the payout-request history the money side reconciles against.
-  "payouts",
-  // WP-F4. The loudest lane in the tree by call volume and therefore the one
-  // whose wedge is most worth seeing: it is designed to run at 100 % of its own
-  // daily cap, so "calls went to zero" is the signal, and nothing else in the
-  // monitor would show it.
-  "media_stats",
-] as const satisfies readonly SyncStream[];
-const REQUEST_STREAMS = [
-  ...MONITORED_SYNC_STREAMS,
-] as const satisfies readonly SyncStream[];
-
-function isRequestedStream(stream: SyncStream) {
-  return (REQUEST_STREAMS as readonly string[]).includes(stream);
-}
+/** The monitor is the legacy page-sync executor's: it lists the streams that
+ *  executor runs, on the pages of the platforms it serves (OnlyFans). A lane
+ *  the monitor cannot see is a lane that can wedge unobserved, so the list is
+ *  the executor's own. A Fansly page is not here: `pnpm cli sync page status`
+ *  and `/api/v1/sync/pages` report the Fansly Sync Engine. The recent events
+ *  and requests beside the rows are the executor's journal as it stands (any
+ *  page, any stream that wrote a line). */
+export const MONITORED_SYNC_STREAMS: readonly SyncStream[] = LEGACY_EXECUTOR_STREAMS;
 
 export type SyncMonitorStatus = PageSyncStatus;
 
@@ -313,27 +257,6 @@ function parseOptionalTimestamp(value: string | undefined, field: string) {
   return parsed;
 }
 
-function clampProgress(current: number, total: number | null) {
-  if (total === null) {
-    return current;
-  }
-  return Math.min(current, total);
-}
-
-function percent(current: number, total: number | null) {
-  if (total === null || total <= 0) {
-    return null;
-  }
-  return Math.round((current / total) * 1000) / 10;
-}
-
-function labelWithTotal(current: number, total: number | null, unit: string, suffix = "") {
-  if (total === null) {
-    return `${current.toLocaleString()} ${unit}${suffix}`.trim();
-  }
-  return `${current.toLocaleString()}/${total.toLocaleString()} ${unit}${suffix}`.trim();
-}
-
 function isRunning(row: SyncMonitorStreamRow) {
   return row.runningRunId !== null;
 }
@@ -487,155 +410,6 @@ function activeRunFor(row: SyncMonitorStreamRow): SyncMonitorActiveRun | null {
   };
 }
 
-function buildSubscribersProgress(
-  row: SyncMonitorStreamRow,
-  status: SyncMonitorStatus,
-): SyncMonitorProgress | null {
-  const state = parseSubscribersCursorState(
-    row.checkpointState,
-    row.requestSeq ?? row.appliedSeq,
-  );
-  if (!state) {
-    return null;
-  }
-
-  const completed = status === "idle" && row.requestSeq === row.appliedSeq;
-  const total = state.providerReportedTotal ?? (completed ? row.subscriberCount : null);
-  const current = completed
-    ? (total ?? row.subscriberCount)
-    : clampProgress(state.offset, total);
-
-  return {
-    label: labelWithTotal(current, total, "subscribers"),
-    current,
-    total,
-    unit: "subscribers",
-    percent: percent(current, total),
-  };
-}
-
-function buildFollowersProgress(
-  row: SyncMonitorStreamRow,
-  status: SyncMonitorStatus,
-): SyncMonitorProgress | null {
-  const state = parseFollowersCursorState(
-    row.checkpointState,
-    row.requestSeq ?? row.appliedSeq,
-  );
-  if (!state) {
-    return null;
-  }
-
-  const total = state.sourceFollowerCount;
-  const completed = status === "idle" && row.requestSeq === row.appliedSeq;
-  const current = completed ? total : clampProgress(state.offset, total);
-
-  return {
-    label: labelWithTotal(current, total, "followers"),
-    current,
-    total,
-    unit: "followers",
-    percent: percent(current, total),
-  };
-}
-
-function buildFollowersReconcileProgress(
-  row: SyncMonitorStreamRow,
-  status: SyncMonitorStatus,
-): SyncMonitorProgress | null {
-  const state = parseFollowersReconcileProgressState(
-    row.checkpointState,
-    row.requestSeq ?? row.appliedSeq,
-  );
-  if (!state) {
-    return null;
-  }
-
-  const total = state.sourceFollowerCount;
-  const completed = status === "idle" && row.requestSeq === row.appliedSeq;
-  const current = completed ? total : clampProgress(state.offset, total);
-
-  return {
-    label: labelWithTotal(current, total, "followers"),
-    current,
-    total,
-    unit: "followers",
-    percent: percent(current, total),
-  };
-}
-
-function buildDmConversationProgress(
-  row: SyncMonitorStreamRow,
-  status: SyncMonitorStatus,
-): SyncMonitorProgress | null {
-  const state = parseDmConversationCursorState(row.checkpointState);
-  if (!state) {
-    return null;
-  }
-
-  const completed = status === "idle" && row.requestSeq === row.appliedSeq;
-  const total = state.providerReportedTotal ?? (completed ? row.dmConversationCount : null);
-  const current = completed
-    ? (total ?? row.dmConversationCount)
-    : clampProgress(state.offset, total);
-
-  return {
-    label: labelWithTotal(current, total, "conversations"),
-    current,
-    total,
-    unit: "conversations",
-    percent: percent(current, total),
-  };
-}
-
-function buildDmMessagesProgress(row: SyncMonitorStreamRow): SyncMonitorProgress | null {
-  const state = parseDmMessagesCursorState(row.checkpointState);
-  const total = row.dmEligibleConversationCount;
-  const current = row.dmBackfillCompleteConversationCount;
-  const lagging = row.dmLaggingConversationCount;
-
-  if (total === 0 && !state) {
-    return null;
-  }
-
-  const baseLabel = total > 0
-    ? labelWithTotal(current, total, "conversations", " backfilled")
-    : "No eligible conversations";
-  const labelParts = [baseLabel];
-  if (lagging > 0) {
-    labelParts.push(`${lagging.toLocaleString()} lagging`);
-  }
-
-  return {
-    label: labelParts.join(", "),
-    current,
-    total: total || 0,
-    unit: "conversations",
-    percent: total > 0 ? percent(current, total) : null,
-  };
-}
-
-function progressFor(
-  row: SyncMonitorStreamRow,
-  status: SyncMonitorStatus,
-): SyncMonitorProgress | null {
-  switch (row.stream) {
-    case "subscribers":
-      return buildSubscribersProgress(row, status);
-    case "followers":
-      return buildFollowersProgress(row, status);
-    case "followers_reconcile":
-      return buildFollowersReconcileProgress(row, status);
-    case "dm_conversations":
-      return buildDmConversationProgress(row, status);
-    case "dm_messages":
-      return buildDmMessagesProgress(row);
-    case "light":
-    default:
-      return null;
-  }
-}
-
 function streamItemFor(
   row: SyncMonitorStreamRow,
   now: Date,
@@ -644,9 +418,7 @@ function streamItemFor(
   const physicalFailed = row.stalePhysicalAttemptCount > 0 ||
     row.physicalAttemptsSinceLastSuccess >= 3;
   const stalled = isStalled(row, now) || physicalFailed;
-  // The held run's stats carry the floor marker, as `gatedSkip` does a gate's.
-  const floorUntil = followersReconcileFloorWaitUntil(row, row.lastCompletedStats, now);
-  const pending = isPending(row) && floorUntil === null;
+  const pending = isPending(row);
   const retryAt = isRetrying(row, now) ? row.retryAt : null;
   const item = {
     stream: row.stream,
@@ -654,7 +426,9 @@ function streamItemFor(
     stalled,
     pending,
     retryAt: iso(retryAt),
-    progress: progressFor(row, status),
+    // A stream reports no progress here: the executor's OnlyFans walks keep
+    // theirs on the row (`page_sync_states.progress`, the Settings blocks).
+    progress: null,
     recentRuns: recentRunsFor(row),
     recentErrors: recentErrorsFor(row),
     physicalHealth: {
@@ -692,7 +466,6 @@ function streamItemFor(
     blockerKind: row.blockerKind,
     lastCompletionGatedSkipReason: gatedSkipReasonFor(row),
     lastCompletionQualityHold: row.stream === "subscribers" ? ofapiAudienceQualityHoldFor(row.checkpointState) : null,
-    intervalFloorUntil: iso(floorUntil),
   };
 
   return {
@@ -820,8 +593,10 @@ export async function getSyncMonitorSnapshot(
       limit: eventLimit,
     }),
   ]);
-  const monitorRows = rows.filter((row) => isRequestedStream(row.stream));
-  const monitorEvents = events.filter((event) => isRequestedStream(event.stream));
+  // The rows are the executor's streams (the query lists no other). The
+  // events are the run journal as it stands, whatever stream wrote a line.
+  const monitorRows = rows;
+  const monitorEvents = events;
 
   const pageMap = new Map<number, SyncMonitorPageItem>();
   for (const row of monitorRows) {
@@ -876,16 +651,7 @@ export async function getSyncMonitorSnapshot(
   const pages = Array.from(pageMap.values())
     .map((page) => ({
       ...page,
-      // Decision #166, the same filter sync-summary applies: the bulk
-      // enrichment streams keep their own honest entry in `page.streams`, but
-      // they do not get a vote in the page verdict — and, through it, the fleet
-      // verdict. Both ramp flags default to false, so without this every Fansly
-      // page would read "Off" from its first daily run onwards.
-      syncUx: buildPageSyncUx(
-        page.streams
-          .filter((stream) => !isBulkEnrichmentSyncStream(stream.stream))
-          .map((stream) => stream.syncUx),
-      ),
+      syncUx: buildPageSyncUx(page.streams.map((stream) => stream.syncUx)),
     }))
     .sort(comparePages);
   const visiblePageIds = pages.map((page) => page.pageId);
@@ -1030,7 +796,6 @@ export async function getSyncMonitorRecentRequests(
   });
   const previousRequestAtByEgressKey = new Map<string, Date>();
   return rows
-    .filter((row) => isRequestedStream(row.stream))
     .map((row) => {
     const requestShape = asRecord(row.requestShape);
     const egressKey = asNullableString(requestShape?.egressKey);

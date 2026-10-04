@@ -7,14 +7,23 @@ const BASIC_HTML_ENTITIES: Record<string, string> = {
   quot: "\"",
 };
 
+/** A numeric reference names a character only inside Unicode's range.
+ *  `String.fromCodePoint` THROWS past it (`&#1114112;`, or any long run of
+ *  digits), and this runs on every message the hub ingests: one such reference
+ *  must not fail the message it is in. Outside the range the reference is not
+ *  one, and stays the text it was, like an unknown name. */
+function decodeNumericEntity(entity: string, value: number) {
+  return Number.isInteger(value) && value >= 0 && value <= 0x10ffff
+    ? String.fromCodePoint(value)
+    : `&${entity};`;
+}
+
 function decodeHtmlEntity(entity: string) {
   if (entity.startsWith("#x") || entity.startsWith("#X")) {
-    const value = Number.parseInt(entity.slice(2), 16);
-    return Number.isFinite(value) ? String.fromCodePoint(value) : `&${entity};`;
+    return decodeNumericEntity(entity, Number.parseInt(entity.slice(2), 16));
   }
   if (entity.startsWith("#")) {
-    const value = Number.parseInt(entity.slice(1), 10);
-    return Number.isFinite(value) ? String.fromCodePoint(value) : `&${entity};`;
+    return decodeNumericEntity(entity, Number.parseInt(entity.slice(1), 10));
   }
 
   return BASIC_HTML_ENTITIES[entity] ?? `&${entity};`;

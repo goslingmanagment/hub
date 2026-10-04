@@ -111,8 +111,19 @@ async function liveActor(pageId: number, chats: FakeChats, onRead?: (req: Fansly
     reads.push(req);
     await onRead?.(req, reads.length - 1);
   };
-  const made = await makeTestActor({ db: db(), pageId, mode: "live", registry: dmRegistry(), transport, settingMs: 1 });
+  const made = await makeTestActor({ db: db(), pageId, registry: dmRegistry(), transport, settingMs: 1 });
   return { made, reads };
+}
+
+/** The page's messages in `message_archive` (a live page's store, step 4
+ *  S4-08) and in `page_dm_messages`, which the engine never writes (S4-13). */
+async function stored(pageId: number): Promise<{ archive: number; hot: number }> {
+  const result = await testDb!.pool.query<{ archive: number; hot: number }>(
+    `select (select count(*)::int from message_archive where account_id = $1 and platform = 'fansly') as archive,
+            (select count(*)::int from page_dm_messages where platform_account_id = $1) as hot`,
+    [pageId],
+  );
+  return result.rows[0]!;
 }
 
 async function historyReads(pageId: number): Promise<number> {
@@ -154,8 +165,7 @@ describe("history requests through the requests class", () => {
         historyState: "complete", historyProof: "empty_page",
       });
     }
-    const stored = await testDb.pool.query<{ n: number }>("select count(*)::int as n from page_dm_messages where platform_account_id = $1", [pageId]);
-    expect(stored.rows[0]!.n).toBe(sizes.reduce((sum, n) => sum + n, 0));
+    expect(await stored(pageId)).toEqual({ archive: sizes.reduce((sum, n) => sum + n, 0), hot: 0 });
   }, 180_000);
 
   it(`a chat of ${LONG_CHAT} messages: ⌈n/25⌉ + 1 reads, reported monotonically; the lower bound holds and the estimate is near the fact`, async (context) => {
@@ -267,11 +277,15 @@ describe("history requests through the requests class", () => {
     expect(work.rows).toEqual([{ state: "cancelled" }]);
     // Five pages were read and applied; nothing of them was taken back.
     const thread = await testDb.pool.query<{ contiguous_count: number; stored: number }>(
-      `select t.contiguous_count, (select count(*)::int from page_dm_messages m where m.conversation_id = t.id) as stored
+      `select t.contiguous_count,
+              (select count(*)::int from message_archive ma
+                where ma.account_id = t.platform_account_id and ma.platform = 'fansly'
+                  and ma.conversation_ref = t.platform_conversation_id) as stored
          from page_dm_threads t where t.id = $1`,
       [threadId],
     );
     expect(thread.rows[0]).toEqual({ contiguous_count: 5 * PAGE, stored: 5 * PAGE });
+    expect((await stored(pageId)).hot).toBe(0);
   }, 90_000);
 
   it("latest N with full pages: exactly ⌈N/25⌉ reads, inside the request's own bounds", async (context) => {
@@ -292,7 +306,6 @@ describe("history requests through the requests class", () => {
     // The fan counts the N it asked for; the chat holds the three full pages.
     const [item] = (await getHistoryRequest(ctx(), filed.request.ref)).items;
     expect(item).toMatchObject({ state: "ready", satisfiedBy: "latest_n", readsSpent: 3, loadedMessages: 60, anchorMessageRef: chat.messages.at(-1)!.id });
-    const stored = await testDb.pool.query<{ n: number }>("select count(*)::int as n from page_dm_messages where platform_account_id = $1", [pageId]);
-    expect(stored.rows[0]!.n).toBe(3 * PAGE);
+    expect(await stored(pageId)).toEqual({ archive: 3 * PAGE, hot: 0 });
   }, 90_000);
 });

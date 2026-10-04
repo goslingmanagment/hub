@@ -1,6 +1,8 @@
-// Owner decision 2026-09-30: Fansly top spenders are read every 6 hours, not
-// every hour. These tests drive the real planner, lease and completion paths
-// through the deploy that moves an existing hourly row onto the 6-hour grid.
+// Owner decision 2026-09-30: top spenders are read every 6 hours, not every
+// hour. These tests drive the real planner, lease and completion paths through
+// the deploy that moves an existing hourly row onto the 6-hour grid. The legacy
+// lane is OnlyFans's since step 4 (the Fansly Sync Engine reads Fansly top
+// spenders on its own registry period), so the page here is an OnlyFans page.
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
@@ -10,8 +12,8 @@ import {
   computeCurrentPageSyncSlot,
   computePageSyncSlotOffsetSeconds,
   computeSyncStreamNextDueAt,
-  createFanslyPage,
   createModel,
+  createOnlyFansPage,
   ensurePageSyncStates,
   getPageSyncState,
   listRunnablePageSync,
@@ -29,7 +31,7 @@ import { createTestAppContext } from "./helpers/runtime.ts";
 const HOUR_MS = 3600_000;
 const SIX_HOURS_MS = 6 * HOUR_MS;
 const TICK_MS = 5 * 60_000;
-// The last hourly top_spenders run before the deploy (prod lilly-1, 2026-09-30).
+// The last hourly top_spenders run before the deploy (2026-09-30).
 const LAST_HOURLY_RUN = new Date("2026-09-30T03:32:10Z");
 const DEPLOY = new Date("2026-09-30T03:50:00Z");
 
@@ -46,13 +48,13 @@ function hourlySlotOffsetSeconds(pageId: number) {
   );
 }
 
-/** A healthy Fansly page as it stands just before the deploy. Every lane has
+/** A healthy page as it stands just before the deploy. Every lane has
  * succeeded; `active` lanes stay schedulable, the rest are paused so only
  * they move. top_spenders carries the hourly runtime's cadence and slot. */
 async function seedPageBeforeDeploy(active: SyncStream[]) {
   const model = await createModel(db.db, { slug: "tsc", name: "TSC" });
   if (!model) throw new Error("model seed failed");
-  const page = await createFanslyPage(db.db, { modelId: model.id, label: "tsc-fansly" });
+  const page = await createOnlyFansPage(db.db, { modelId: model.id, label: "tsc-onlyfans" });
   if (!page) throw new Error("page seed failed");
   await ensurePageSyncStates(db.db, { pageId: page.id, now: LAST_HOURLY_RUN });
   await db.pool.query(`

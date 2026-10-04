@@ -352,7 +352,7 @@ describe("the hold set table (0240)", () => {
   });
 });
 
-describe("the first old hold column goes (0241)", () => {
+describe("the first old hold column goes (0243)", () => {
   it("the migration drops `hold_step` alone; the hold writes and an acquisition of the image before it run on what is left", async (context) => {
     if (!testDb) return context.skip();
     const migrations = readdirSync("packages/db/migrations").filter((file) => file.endsWith(".sql")).sort();

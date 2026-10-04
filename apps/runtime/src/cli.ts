@@ -58,12 +58,12 @@ import {
   readFanslySendGuardStatus,
 } from "./services/fansly-send-guard/index.ts";
 import { buildFanslySendGuardReport } from "./services/fansly-send-guard/report.ts";
+import { registerSyncAlertsCommands } from "./sync/cli/alerts.ts";
 import { registerSyncChainCommands } from "./sync/cli/chain.ts";
 import { registerSyncCheckCommands } from "./sync/cli/checks.ts";
 import { registerSyncDmReaderParityCommands } from "./sync/cli/dm-reader-parity.ts";
 import { registerSyncExcludedCommands } from "./sync/cli/excluded.ts";
 import { registerSyncHistoryCommands } from "./sync/cli/history.ts";
-import { registerSyncReportCommands } from "./sync/cli/report.ts";
 import { verifyPageOnEngine } from "./services/sync-engine-account.ts";
 import { resolveHarvestManifest } from "./services/harvest-manifest.ts";
 import {
@@ -2941,9 +2941,8 @@ export function buildProgram() {
   // Fansly Sync Engine history requests (design §7.6): `sync history request |
   // status | cancel | list | eta-backtest`.
   registerSyncHistoryCommands(sync);
-  // Fansly Sync Engine observability (design §3.12, §9.6): `sync shadow report`,
-  // `sync alerts status | ack`.
-  registerSyncReportCommands(sync);
+  // Fansly Sync Engine alerts (design §9.6): `sync alerts status | ack`.
+  registerSyncAlertsCommands(sync);
   // Fansly Sync Engine read-only checks (`sync/checks/`): `sync check
   // live-hour` — a page's first hour on the engine and the combined pace audit
   // (`sync switch check` until step 4 S4-21 deleted the switch).

@@ -174,7 +174,6 @@ describe("enqueue and wait: a live page", () => {
       const workId = await openWork(pageId, "account.verify");
       const row = await getSyncWork(db(), workId);
       expect(row).toMatchObject({
-        shadow: false,
         kind: "trigger",
         class: "urgent",
         subject: "",

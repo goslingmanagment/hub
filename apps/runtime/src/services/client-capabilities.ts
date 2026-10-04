@@ -8,4 +8,21 @@ import type { ClientHubCapabilityName } from "@agency_hub_core/contracts";
  * (`CLIENT_FEATURE_REQUIREMENTS` in client-features.ts), whatever the owner's
  * switches say.
  */
-export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [];
+export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
+  // The AI feature stream's `context_v1` frame (H-4b).
+  "context-v1",
+  // The AI feature stream takes `liveTextContext`, the fresh text of the open
+  // chat (H-4c). Taking the field is not using it: `aiLiveTextContextMode`
+  // rests off, and a page needs its `freshText` flag.
+  "live-text-v1",
+  // The shared recaps read (H-13).
+  "shared-recaps-v1",
+  // The dossier save from a stored generation (H-5). With it the hub serves
+  // all of the `recap` feature; the owner's switches decide from here on.
+  "recap-profile-v1",
+  // H-10: Split for Ping, Hi and Coach drafts (the splitAll flag;
+  // docs/ai-gateway-contract.md).
+  "split-all-v1",
+  // H-15: GET /api/v1/client/pages/:pageLabel/ai-usage.
+  "ai-usage-v1",
+];

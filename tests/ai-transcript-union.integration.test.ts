@@ -267,7 +267,7 @@ describe("AI transcript union read (fastreply-freshness PR3)", () => {
     expect(capped.map((row) => row.messageRef)).toEqual(["10", "9"]);
   });
 
-  it("perf gate: hot conversation + spread, ANALYZE, index plans, limit 1500, latency well under provider latency", async (context) => {
+  it("perf gate: hot conversation + spread, ANALYZE, index plans, limit 1500 and 3000, latency well under provider latency", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -377,5 +377,45 @@ describe("AI transcript union read (fastreply-freshness PR3)", () => {
     // that stopped using the conversation indexes.
     const median = [...durations].sort((a, b) => a - b)[Math.floor(durations.length / 2)]!;
     expect(median, `runs: ${durations.map((ms) => ms.toFixed(0)).join(", ")} ms`).toBeLessThan(1500);
+
+    // chat-extension H-6: the same gate for the full Recap's raised cap. The
+    // statement reads the whole conversation from both stores whatever the
+    // cap, so 3000 is the same plan with a longer tail: still the two
+    // conversation indexes, still no account-wide scan.
+    const deepPlan = await explainAiTranscriptUnionQuery(testDb.db, {
+      pageId: page.id,
+      conversationRef: CONV,
+      limit: 3000,
+      maxRows: 3000,
+    });
+    expect(deepPlan).toContain("message_archive_account_conv_idx");
+    expect(deepPlan).toContain("dm_message_archive_page_conversation_idx");
+    expect(deepPlan).not.toMatch(/Seq Scan on message_archive/);
+    expect(deepPlan).not.toMatch(/Seq Scan on dm_message_archive/);
+    const deepDurations: number[] = [];
+    let deepRows: Awaited<ReturnType<typeof listAiTranscriptUnionMessages>> = [];
+    for (let run = 0; run < 5; run += 1) {
+      const startedAt = performance.now();
+      deepRows = await listAiTranscriptUnionMessages(testDb.db, {
+        pageId: page.id,
+        conversationRef: CONV,
+        limit: 3000,
+        maxRows: 3000,
+      });
+      deepDurations.push(performance.now() - startedAt);
+    }
+    // 3000 live, distinct messages: the 50 tombstoned newest refs are out, and
+    // the 2950 refs both stores hold count once (dedupe before the cap).
+    expect(deepRows).toHaveLength(3000);
+    expect(new Set(deepRows.map((row) => row.messageRef)).size).toBe(3000);
+    expect(deepRows[0]!.messageRef).toBe("1000051");
+    expect(deepRows.at(-1)!.messageRef).toBe("1003050");
+    // The first 1500 are exactly what the ordinary cap serves.
+    expect(deepRows.slice(0, 1500).map((row) => row.messageRef)).toEqual(rows.map((row) => row.messageRef));
+    const deepMedian = [...deepDurations].sort((a, b) => a - b)[Math.floor(deepDurations.length / 2)]!;
+    expect(deepMedian, `runs: ${deepDurations.map((ms) => ms.toFixed(0)).join(", ")} ms`).toBeLessThan(1500);
+    // Without `maxRows` the same request stays at the ordinary cap.
+    expect(await listAiTranscriptUnionMessages(testDb.db, { pageId: page.id, conversationRef: CONV, limit: 3000 }))
+      .toHaveLength(1500);
   });
 });

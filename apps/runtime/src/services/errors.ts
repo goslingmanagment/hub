@@ -16,7 +16,9 @@ export class BadRequestError extends AppError {
    * reason beside the human message, serialized only when non-null. Decision
    * 349 uses it for the password rule on link redemption (too_short | too_long
    * | common), so the /join page can say WHICH rule was broken without matching
-   * on prose. Every other bad request stays reason-less. */
+   * on prose; the chat extension's own-AI-spend read uses it for why its query
+   * was refused (CLIENT_AI_USAGE_REFUSAL_REASONS). Every other bad request
+   * stays reason-less. */
   readonly reason: string | null;
 
   constructor(message: string, options?: { reason?: string | null }) {
@@ -202,5 +204,50 @@ export class OfapiCollectionRefusedError extends AppError {
 export class ClientFeatureDisabledError extends AppError {
   constructor(readonly flag: string, readonly reason: string) {
     super(`Chat-extension feature "${flag}" is unavailable (${reason})`, 409, "client_feature_disabled");
+  }
+}
+
+// chat-extension H-4c: the fresh text a client sent with an AI request
+// (`liveTextContext`) contradicts what the hub holds: a message the hub knows
+// as sent by the other side, or a message id of another chat. The snapshot is
+// not of the conversation the request names, so nothing is generated. 400: the
+// request itself is wrong and the same request never succeeds; the client
+// re-reads the open chat and asks again. The message names message IDS ONLY.
+// It is logged and shown, and must never carry a fan's text.
+const CONTEXT_CONFLICT_IDS_SHOWN = 10;
+
+export class ContextConflictError extends AppError {
+  constructor(readonly messageIds: readonly string[]) {
+    const shown = messageIds.slice(0, CONTEXT_CONFLICT_IDS_SHOWN).join(", ");
+    const more = messageIds.length > CONTEXT_CONFLICT_IDS_SHOWN
+      ? ` and ${messageIds.length - CONTEXT_CONFLICT_IDS_SHOWN} more`
+      : "";
+    super(
+      `liveTextContext conflicts with the hub's transcript of this conversation (message ids: ${shown}${more})`,
+      400,
+      "context_conflict",
+    );
+  }
+}
+
+// chat-extension H-5: the dossier save named a generation of the caller whose
+// record has not appeared. The gateway writes the record right after the
+// stream's `done` frame, so a request made in that gap is repeated shortly.
+// 409: nothing is wrong with the request, the hub's state is not there yet.
+// It can stay for good when the record's write failed, so a client bounds its
+// repeats.
+export class GenerationNotReadyError extends AppError {
+  constructor() {
+    super("The generation is not recorded yet; ask again shortly", 409, "generation_not_ready");
+  }
+}
+
+// chat-extension H-5: the caller's generation exists and will never become the
+// fan's dossier. 409, never retried. Documented structured extension
+// (docs/error-handling.md §3): the machine `reason` beside the code, one of the
+// open vocabulary CLIENT_GENERATION_NOT_ELIGIBLE_REASONS.
+export class GenerationNotEligibleError extends AppError {
+  constructor(readonly reason: string) {
+    super(`The generation cannot be saved as the fan's dossier (${reason})`, 409, "generation_not_eligible");
   }
 }
