@@ -106,8 +106,9 @@ export interface PromptBuildInput {
   /** Split by capability (chat-extension H-10, architecture.md D-15): true only
    * when the feature service passed the `split-all-v1` gate (the capability in
    * the request header AND the page's `splitAll` flag). With it, replyMode
-   * 'preferSplit' asks a supportsSplitAll feature (ping, hi-greeting) for
-   * [NEXT] parts. Absent or false, replyMode changes nothing for those
+   * 'preferSplit' asks a supportsSplitAll feature (ping, hi-greeting,
+   * coach-chat) for [NEXT] parts: of the message, of each Hi variant, of each
+   * Coach draft. Absent or false, replyMode changes nothing for those
    * features: released clients send it on every feature and keep their bytes. */
   splitAll?: boolean | undefined;
   replyTone?: ReplyTone | undefined;
@@ -207,7 +208,7 @@ const PROMPT_POLICIES: Record<PromptFeature, PromptFeaturePolicy> = {
   'chat-review': ANALYSIS_POLICY,
   ping: { ...REPLY_POLICY, usesPingSegment: true, supportsSplitAll: true },
   'hi-greeting': { ...REPLY_POLICY, supportsSplitAll: true },
-  'coach-chat': { ...ANALYSIS_POLICY, optionalDraft: true, promptCache: 'full' },
+  'coach-chat': { ...ANALYSIS_POLICY, optionalDraft: true, promptCache: 'full', supportsSplitAll: true },
   'voice-script': { ...REPLY_POLICY, requiresDraft: true, supportsReplyTone: true },
 };
 
@@ -285,6 +286,31 @@ const PING_SPLIT_INSTRUCTIONS = `
 - ALWAYS return at least 2 parts: split even a brief message into an opening send plus a natural follow-up.
 - Use 3 parts only when the content genuinely needs the extra send - never more than 3.
 - Keep each part brief and casual, like real back-to-back texts.`;
+
+// Split by capability, Coach drafts (chat-extension H-10b, architecture.md
+// D-15). It fills {coachSplitInstructions}, a slot at the END of the last line
+// of the uncached "## Your Task" block, so the value opens with its own
+// newline: the empty value renders the prompt byte-identical to the template
+// before the slot existed.
+//
+// The draft grammar lives in the 1h static prefix ("at most two such blocks,
+// each under 1500 characters", "never put anything except the ready-to-send
+// fan message inside a draft fence") and that prefix must keep its bytes. So
+// this text names [NEXT] as the one exception to the fence rule and restates
+// both limits for a split draft: the parts go INSIDE a draft fence, never one
+// fence per part. The same text serves a preset turn, whose "EXACTLY two draft
+// fences" it leaves standing.
+//
+// Its ~700 characters count against the whole-Coach prompt ceiling like every
+// other byte of the task block: a prompt already at the ceiling sheds that
+// much more than its twin without Split, in the reducer's usual order.
+const COACH_SPLIT_INSTRUCTIONS = `
+- Split mode is on for the proposed fan messages.
+- Inside each draft fence, deliver the message as separate short, text-like sends, separated by [NEXT]. The [NEXT] marker is the only thing other than message text allowed inside a draft fence.
+- ALWAYS give each draft at least 2 parts: a main send plus a natural follow-up.
+- Use 3 parts only when the draft genuinely needs the extra send - never more than 3.
+- One proposal is one draft fence with all its parts inside: never open a separate fence for a part. The limits stand: at most two draft fences, each under 1500 characters with its parts together.
+- Keep each part brief and casual, like real back-to-back texts. Never write [NEXT] outside a draft fence.`;
 
 // improve-draft fills two slots: {improveOutputRules} in Rules and
 // {improveLengthRule} at the end of "Sounding human". The single texts are the
@@ -504,6 +530,10 @@ function greetingTask(
 
 function pingSplitInstructions(feature: PromptFeature, splitAll: boolean): string {
   return feature === 'ping' && splitAll ? PING_SPLIT_INSTRUCTIONS : '';
+}
+
+function coachSplitInstructions(feature: PromptFeature, splitAll: boolean): string {
+  return feature === 'coach-chat' && splitAll ? COACH_SPLIT_INSTRUCTIONS : '';
 }
 
 /** The chatter's OWN unsent reply draft, offered to the coach for critique
@@ -941,6 +971,7 @@ function templateValues(input: PromptBuildInput): TemplateValues {
     fanUsernameLine: fanUsernameLine(input.fanUsername, input.fanDisplayName),
     greetingTask: greetingTask(input.feature, input.greetingVariantCount, splitAll),
     pingSplitInstructions: pingSplitInstructions(input.feature, splitAll),
+    coachSplitInstructions: coachSplitInstructions(input.feature, splitAll),
     fanProfileSection: fanProfileSection(input.fanProfile),
     draftSection: draftSection(policy.requiresDraft ? input.draftText : undefined),
     coachDraftSection: coachDraftSection(policy.optionalDraft ? input.draftText : undefined),

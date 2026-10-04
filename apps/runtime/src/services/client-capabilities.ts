@@ -20,8 +20,7 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   // The dossier save from a stored generation (H-5). With it the hub serves
   // all of the `recap` feature; the owner's switches decide from here on.
   "recap-profile-v1",
-  // H-10a: Split for Ping and Hi (the splitAll flag). Coach drafts follow in
-  // H-10b: until then coach-chat drops replyMode even with this token and the
-  // flag, and its drafts come back unsplit (docs/ai-gateway-contract.md).
+  // H-10: Split for Ping, Hi and Coach drafts (the splitAll flag;
+  // docs/ai-gateway-contract.md).
   "split-all-v1",
 ];

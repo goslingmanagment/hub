@@ -275,7 +275,7 @@ export const FEATURE_POLICIES = {
     minMessages: 0,
     rerunAction: 'regenerate',
     supportsReplyMode: false,
-    supportsSplitAll: false,
+    supportsSplitAll: true,
     supportsReplyTone: false,
     requiresDraft: false,
     usesPingSegment: false,

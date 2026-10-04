@@ -73,7 +73,9 @@ import {
   FEATURE_POLICIES,
   HI_GREETING_MAX_TRANSCRIPT,
   BUNDLED_LORA_PERSONALITY_ID,
+  COACH_PRESET_DRAFT_BLOCKS,
   buildPrompt,
+  describeCoachSplitOutput,
   describeSplitOutput,
   formatTranscript,
   isOperationFeature,
@@ -830,10 +832,11 @@ export async function prepareAiFeatureStream(
     }
   }
 
-  // chat-extension H-10 (architecture.md D-15): Split for Ping and Hi. On only
-  // for a request that advertises split-all-v1, on a page whose owner switched
-  // the splitAll flag on. replyMode alone never turns it on: released clients
-  // send it on every feature and keep their prompts.
+  // chat-extension H-10 (architecture.md D-15): Split for Ping, Hi and the
+  // drafts of a Coach answer. On only for a request that advertises
+  // split-all-v1, on a page whose owner switched the splitAll flag on.
+  // replyMode alone never turns it on: released clients send it on every
+  // feature and keep their prompts.
   const splitAll = policy.supportsSplitAll
     && body.replyMode === "preferSplit"
     && options?.capabilities?.has("split-all-v1") === true
@@ -1108,8 +1111,14 @@ export async function prepareAiFeatureStream(
         ...(attachedRecaps !== undefined ? { attachedRecaps } : {}),
         ...(presetQuestion !== undefined ? { presetQuestion } : {}),
         // Written on the finished text only: nothing already streamed changes.
+        // A Coach answer is advice with draft blocks in it, so it has its own reader.
         ...(splitAll
-          ? { describeOutput: (completion: string) => describeSplitOutput(completion, greetingVariantCount ?? 1) }
+          ? {
+            describeOutput: feature === "coach-chat"
+              ? (completion: string) =>
+                describeCoachSplitOutput(completion, body.preset !== undefined ? COACH_PRESET_DRAFT_BLOCKS : null)
+              : (completion: string) => describeSplitOutput(completion, greetingVariantCount ?? 1),
+          }
           : {}),
       }
       : undefined,
