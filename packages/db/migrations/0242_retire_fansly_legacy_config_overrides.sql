@@ -1,4 +1,4 @@
--- 0241_retire_fansly_legacy_config_overrides.sql
+-- 0242_retire_fansly_legacy_config_overrides.sql
 --
 -- Fansly Sync Engine, step 4 (design S4-26 [E15], plan §14): the config keys of
 -- the legacy Fansly engine are removed from the registry in this release —
