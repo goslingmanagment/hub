@@ -226,14 +226,16 @@ describe("GET /api/v1/client/bootstrap", () => {
     });
     // What this hub serves today: the AI stream's context frame (H-4b), the
     // fresh text of the open chat (H-4c), the shared recaps read (H-13), the
-    // dossier save from a stored generation (H-5) and Split for Ping, Hi and
-    // Coach drafts (H-10; the flag itself is off at rest).
+    // dossier save from a stored generation (H-5), Split for Ping, Hi and
+    // Coach drafts (H-10; the flag itself is off at rest) and the caller's own
+    // AI spend (H-15).
     expect(body.capabilities).toEqual([
       "context-v1",
       "live-text-v1",
       "shared-recaps-v1",
       "recap-profile-v1",
       "split-all-v1",
+      "ai-usage-v1",
     ]);
     expect(body.capabilities).toEqual([...SERVED_CLIENT_CAPABILITIES]);
 

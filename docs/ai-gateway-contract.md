@@ -481,6 +481,33 @@ The existing `/api/v1/ai-usage/batch` endpoint remains during migration for dire
 When gateway mode is active for a request, desktop must not also submit a duplicate usage event for
 that same generation.
 
+### The caller's own spend for the chat extension (chat-extension H-15)
+
+`GET /api/v1/client/pages/:pageLabel/ai-usage?date=YYYY-MM-DD[&days=1..7][&timeZone=…]`
+(`clientAiUsageDaily`, capability `ai-usage-v1`) reads the same ledger for the extension's debug
+panel: the caller's own rows on that page, by day and by feature, in micro-USD. It reads only the
+ledger and the config; it never stores or returns prompt text, generated text or provider bodies.
+
+Two day boundaries meet in one answer, and it states both:
+
+- **Report days** are calendar days in `timeZone` (default `Europe/Moscow`, the cabinet's business
+  day). Each day carries the instants it was cut at (`from`, `toExclusive`), and the ledger is
+  bucketed by exactly those instants on `completed_at`. A day is cut where the zone's date turns,
+  so a day the zone's clocks change in is 23 or 25 hours long.
+- **The quota's day is the UTC day** (the preflight above). `quota.dayBoundary` is `"UTC"` and
+  `remainingRequestsToday` / `remainingMicroUsdToday` are the gateway's own answer for
+  `(caller, page)`. At 01:30 Moscow time the report's "today" is 90 minutes old while the quota's
+  day has 1.5 hours left, so "spent today" and "left today" do not add up to the limit. `quota` is
+  `null` while the gateway is off.
+
+A day is `partial` while its numbers may still move or are not exact: `day_open` (not over yet),
+`open_reservations` (a reservation without an outcome: it carries no cost yet, and on a normal
+finish its `completed_at` becomes the finish time, so the row moves to the day it finished in), and
+`approximate_cost` (a cost in it is an estimate). Otherwise it is `complete`. `date` may be today in
+`timeZone` or up to 8 days before it; a later or older date and an unknown zone answer `400
+bad_request` with a `reason` (`docs/error-handling.md` §3). The route is behind the chat-extension
+master switch and the minimum extension version (`409 client_feature_disabled`).
+
 ## Privacy and Retention
 
 Core may stream prompt text to the selected provider, but must not persist raw prompt text,

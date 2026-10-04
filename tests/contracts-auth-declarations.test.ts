@@ -66,6 +66,7 @@ describe("route auth declarations", () => {
       "agentThreadMessages",
       // The chat extension's page routes (`/api/v1/client/pages/:pageLabel/…`):
       // `apiKey` + page scope, the page always in the path.
+      "clientAiUsageDaily",
       "clientConversationRecaps",
       "clientFanProfileFromGeneration",
       // WP-S1 (endpoints-cover serving). All eight are `owner-session` +
