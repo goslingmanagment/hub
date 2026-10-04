@@ -70,7 +70,7 @@ half of that decision (a provider `Retry-After` as the deadline, the immediate
 incident for one more than 30 minutes away, the R04 page hold) went with the
 legacy executor's Fansly branches at step 4 (S4-19); the queue guard stays for
 the same retry classes on OFAPI streams.
-See [the cooldown runbook](runbooks/fansly-provider-cooldown.md).
+See [the legacy queue's cooldown](runbooks/sync.md#onlyfans-the-legacy-page-sync-queue).
 
 ## 2. SSE wire-code registry
 
@@ -607,18 +607,20 @@ metadata later. Unknown children remain debt. An auth 401 blocks its generation
 across restarts; other failures use bounded backoff, reset by a durable capture
 or 60 verified seconds. Socket teardown destroys the upgraded transport even if
 the peer ignores close. Only fixed reasons/page labels enter logs; provider
-errors, SQL errors, tokens and raw frames do not. See the
-[B0 runbook](runbooks/fansly-ws-capture.md) for precise limits and residuals.
+errors, SQL errors, tokens and raw frames do not. See
+[the socket and its repair](runbooks/sync.md#the-socket-and-its-repair) for
+the limits and the erasure residual.
 
-### Fansly B1 addressed reads (Decisions 384–385)
+### Fansly B1 addressed reads (Decisions 384–385; retired)
 
-An admitted hint request with an observed terminal transport/timeout failure is
-subject debt (`target_transport` / `target_timeout`), retried with durable bounded
-backoff. It does not abort unrelated ordinary DM polling. Auth, 429/Retry-After,
-policy cancellation, capture/DB/telemetry and lease errors retain executor policy.
-Hint-only work retains its quality hold and cannot certify ordinary freshness or
-resolve ordinary incidents. Admission refusals retain their concrete bounded reason.
+The B1 hint lane is deleted with the legacy engine (step 4: the projector in S4-11,
+the hint step of the DM handler in S4-14). No hint request is admitted, retried or
+settled any more. What a socket event asks for is the Fansly Sync Engine's work
+(`dm-messages.head`, `transactions.head`, …), and a read that fails follows the
+engine's one error table (`apps/runtime/src/sync/README.md`, "Errors"): a breaker of
+the subject, a hold of the route for a 429, a page hold for a refused credential.
 
-`source_deleted` in fansly_ws_hint_status settles an exact operational target after
-a contiguous REST check, not archive materialization; hot_applied_at remains null.
-See `docs/runbooks/fansly-ws-reliability.md` for verification.
+`fansly_ws_hint_receipts`, its attempts and the `fansly_ws_hint_status` view stay as
+records. A `source_deleted` row there settled an exact operational target after a
+contiguous REST check, not archive materialization; its `hot_applied_at` is null.
+See [what the legacy runbooks became](runbooks/sync.md#what-the-legacy-runbooks-became).
