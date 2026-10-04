@@ -9,7 +9,6 @@ import type {
   ApplyInput,
   ApplyResult,
   DemandSignal,
-  LegacyImport,
   ReplayContext,
   ReplayObservation,
   ReplayVerdict,
@@ -282,21 +281,7 @@ export function topSpendersModule(variant: TopSpendersVariant): ResourceModule {
           return replayEarningsAccounts(observation, ctx);
         },
       }
-      : {
-        async importLegacy(tx: Database, page: { pageId: number }): Promise<LegacyImport> {
-          // A bootstrap the legacy stream left unfinished continues at its
-          // pending windows; a finished one needs nothing.
-          const legacy = await tx.execute<{ state: unknown }>(sql`
-            select state from page_sync_cursors where page_id = ${page.pageId} and stream = 'top_spenders'
-          `);
-          const state = parseTopSpendersCursorState(legacy.rows[0]?.state ?? null);
-          const open = state !== null && state.mode === "bootstrap" && state.pendingWindows.length > 0;
-          return {
-            cursors: open ? [{ resource: key, subject: "", cursor: { pending: [], state, shadow: null } satisfies TopSpendersCursor }] : [],
-            notes: { bootstrap: state === null ? "none" : open ? `pending:${state.pendingWindows.length}` : state.mode },
-          };
-        },
-      }),
+      : {}),
   };
 }
 

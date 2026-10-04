@@ -5,7 +5,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   oldestCreatedAtMs,
-  parseFanslyPayoutsCursorState,
   payoutHeadGap,
   payoutRequestRows,
   payoutRequestTotal,
@@ -76,21 +75,5 @@ describe("WP-F7 payout walk helpers", () => {
       headRows: stableRequestPage(0, 4).data,
       total: 4,
     })).toBeNull();
-  });
-
-  it("reads a cursor saved before the stop was kept as an exhausted walk", () => {
-    const legacy = parseFanslyPayoutsCursorState({
-      version: 1,
-      utcDay: "2026-08-22",
-      walkOffset: 90,
-      walkPages: 9,
-      walkTotal: 83,
-      walkDone: true,
-    });
-    expect(legacy?.walkStop).toBe("exhausted");
-    expect(legacy?.headRefs).toEqual([]);
-    expect(legacy?.catchUp).toBeNull();
-    const open = parseFanslyPayoutsCursorState({ version: 1, utcDay: "2026-08-22", walkDone: false });
-    expect(open?.walkStop).toBeNull();
   });
 });

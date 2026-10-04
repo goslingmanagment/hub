@@ -52,7 +52,6 @@ import {
   effectivePeriodMs,
   type ApplyInput,
   type ApplyResult,
-  type LegacyImport,
   type RequestPlan,
   type ResourceModule,
   type ShadowResult,
@@ -79,20 +78,15 @@ import { fanslyResourceSpec } from "../registry.ts";
 // hourly (poll, 22 h [A15]): the trailing 25 hours at hourly buckets — the
 // only hours the route serves; a hole between two captures is written down
 // for good. The next capture is never planned further out than the legacy
-// 23-hour spacing two windows need to meet — including the first one after
-// the switch, which the import makes due by legacy's last capture instead of
-// the poll row's random phase.
+// 23-hour spacing two windows need to meet.
 //
-// backfill (goal: owner, or the switch for a page still in its first-enable
-// history): the trailing daily window once, then calendar month by month down
-// to the account's creation (two empty months buy one probe a year further
-// back where the creation is unknown), and the earnings in 31-day windows to
-// the same floor; the hourly plane has no history and says so. One request a
-// step; every rule and coverage claim is the legacy lane's.
+// backfill (goal: owner): the trailing daily window once, then calendar month
+// by month down to the account's creation (two empty months buy one probe a
+// year further back where the creation is unknown), and the earnings in
+// 31-day windows to the same floor; the hourly plane has no history and says
+// so. One request a step; every rule and coverage claim is the legacy lane's.
 
-const DAILY_KEY = "stats.daily";
 const HOURLY_KEY = "stats.hourly";
-const BACKFILL_KEY = "stats.backfill";
 const DAY_MS = 86_400_000;
 const HOUR_MS = 3_600_000;
 const DAILY_PERIOD_MS = 86_400_000;
@@ -165,8 +159,6 @@ interface BroadcastState {
   pagesInSweep: number;
   stop: BroadcastWalkStop | null;
 }
-
-const OPEN_BROADCAST: BroadcastState = Object.freeze({ before: null, floorReached: false, pagesInSweep: 0, stop: null });
 
 export interface StatsDailyCursor {
   /** The legacy step index the next read is (0, 2 … 10). */
@@ -447,27 +439,6 @@ const dailyModule: ResourceModule = {
   },
 
   replay: replayByCanonicalDrafts,
-
-  async importLegacy(tx, page): Promise<LegacyImport> {
-    const legacy = await legacyStatsState(tx, page.pageId);
-    // A sweep legacy left mid-way resumes at its step; the broadcast walks
-    // keep their positions (a list not read to its floor goes on walking).
-    const midWay = legacy !== null && legacy.sweepDay !== null && legacy.stepIndex > 0 && DAILY_STEPS[legacy.stepIndex] !== undefined;
-    const cursor: StatsDailyCursor = {
-      stepIndex: midWay ? legacy.stepIndex : 0,
-      earningsWalk: midWay ? legacy.earningsWalk : null,
-      discoveryPage: midWay ? legacy.discoveryPage : 0,
-      broadcasts: legacy === null
-        ? { live: OPEN_BROADCAST, deleted: OPEN_BROADCAST }
-        : {
-          live: { before: legacy.broadcastBefore, floorReached: legacy.broadcastFloorReached, pagesInSweep: 0, stop: legacy.broadcastWalkStop },
-          deleted: { before: legacy.deletedBroadcastBefore, floorReached: legacy.deletedBroadcastFloorReached, pagesInSweep: 0, stop: legacy.deletedBroadcastWalkStop },
-        },
-      seeded: true,
-      last: null,
-    };
-    return { cursors: [{ resource: DAILY_KEY, subject: "", cursor }], notes: { daily: legacy === null ? "none" : midWay ? "resumed" : "head" } };
-  },
 };
 
 // ── hourly ───────────────────────────────────────────────────────────────────
@@ -500,18 +471,6 @@ export function nextHourlyCaptureAt(now: Date, random: number, page: Pick<SyncPa
   const everyMs = effectivePeriodMs(fanslyResourceSpec(HOURLY_KEY)!, page) ?? 22 * HOUR_MS;
   const jittered = everyMs * (0.9 + 0.2 * Math.min(Math.max(random, 0), 1));
   return new Date(now.getTime() + Math.round(Math.min(jittered, HOURLY_CAPTURE_SPACING_MS)));
-}
-
-/** When the first capture after the switch is due (A15): within the period
- *  of legacy's last capture, so the two 25-hour windows meet — at once when
- *  that is already past, or when legacy never captured. Never the poll row's
- *  random phase, which could put the two captures up to 45 h apart. */
-export function firstHourlyCaptureAt(lastCapturedAt: string | null, now: Date): Date {
-  const lastMs = lastCapturedAt === null ? Number.NaN : Date.parse(lastCapturedAt);
-  if (!Number.isFinite(lastMs)) return now;
-  const everyMs = fanslyResourceSpec(HOURLY_KEY)?.period?.everyMs ?? 22 * HOUR_MS;
-  const dueMs = lastMs + Math.min(everyMs, HOURLY_CAPTURE_SPACING_MS);
-  return new Date(Math.min(Math.max(dueMs, now.getTime()), now.getTime() + HOURLY_CAPTURE_SPACING_MS));
 }
 
 const hourlyModule: ResourceModule = {
@@ -594,20 +553,6 @@ const hourlyModule: ResourceModule = {
     return {
       work: { satisfiesRevision: true, close: "done", closeReason: "shadow", nextDueAt: nextHourlyCaptureAt(ctx.now, Math.random(), ctx.page) },
       followups: [],
-    };
-  },
-
-  async importLegacy(tx, page): Promise<LegacyImport> {
-    const legacy = await legacyStatsState(tx, page.pageId);
-    const cursor: StatsHourlyCursor = {
-      lastCapturedAt: legacy?.lastHourlyCapturedAt ?? null,
-      lastServedBefore: legacy?.lastHourlyServedBefore ?? null,
-      last: null,
-    };
-    const dueAt = firstHourlyCaptureAt(cursor.lastCapturedAt, new Date());
-    return {
-      cursors: [{ resource: HOURLY_KEY, subject: "", cursor, dueAt }],
-      notes: { hourly: legacy === null ? "none" : "page_sync_cursors.stats_snapshot", hourlyDueAt: dueAt.toISOString() },
     };
   },
 };
@@ -1137,21 +1082,6 @@ const backfillModule: ResourceModule = {
   },
 
   replay: replayByCanonicalDrafts,
-
-  async importLegacy(tx, page): Promise<LegacyImport> {
-    const legacy = await legacyStatsState(tx, page.pageId);
-    if (legacy === null || legacy.mode !== "backfill" || legacy.backfill === null) {
-      return { cursors: [], notes: { backfill: legacy === null ? "none" : "steady" } };
-    }
-    // The walks resume where legacy left them: a decade of month requests is
-    // paid egress already spent.
-    const state: StatsBackfillState = {
-      daily: legacy.backfill.daily,
-      hourlyDone: legacy.backfill.hourly.done,
-      earnings: legacy.backfill.earnings,
-    };
-    return { cursors: [{ resource: BACKFILL_KEY, subject: "", cursor: { state, shadow: null } }], notes: { backfill: "resumed" } };
-  },
 };
 
 export type StatsVariant = "daily" | "hourly" | "backfill";

@@ -43,7 +43,7 @@ import type { EtaBacktestPageReport } from "../requests/eta-backtest.ts";
 // eta-backtest`). The report judges the pages in shadow alone — the switch
 // candidates: a page `live`, in `handover` or `off` is listed as not judged
 // with its mode and why, and counts in no part and no verdict (a live page is
-// judged by `sync switch check`). Acceptance = every judged page settled in
+// judged by `sync check live-hour`). Acceptance = every judged page settled in
 // shadow through the window (a window that starts before the deploy or a
 // page's switch to shadow is no acceptance window), A1–A4 hold, the route
 // budgets held in shadow and no walk went round in circles (step 3b ruling 12,
@@ -143,8 +143,8 @@ export function isShadowVerdictCheck(name: string): name is ShadowVerdictCheck {
 
 /** Why the report does not judge a page in this mode. */
 export const SHADOW_NOT_JUDGED_REASONS: Readonly<Record<Exclude<SyncPageMode, "shadow">, string>> = {
-  live: "live — judged by `sync switch check`",
-  handover: "handover — a switch is under way; judged by `sync switch check` once live",
+  live: "live — judged by `sync check live-hour`",
+  handover: "handover — no engine runs the page; judged by `sync check live-hour` once live",
   off: "off — the engine does not run the page",
 };
 

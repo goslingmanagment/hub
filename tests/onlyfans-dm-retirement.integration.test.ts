@@ -16,6 +16,7 @@ import {
 } from "@agency_hub_core/db";
 
 import { startIntegrationTestDatabase } from "./helpers/db.ts";
+import { EVERY_PLATFORM } from "./helpers/page-sync-scope.ts";
 
 describe("permanent OnlyFans legacy DM retirement", () => {
   it("creates a retired tombstone and prevents every normal resurrection path", async () => {
@@ -109,6 +110,7 @@ describe("permanent OnlyFans legacy DM retirement", () => {
         streams: ["dm_messages"],
       });
       const acquired = await acquirePageSyncLease(testDb.db, {
+        platforms: EVERY_PLATFORM,
         pageId: onlyFansPage.id,
         workerId: "should-not-run",
         leaseToken: "retired-lane",

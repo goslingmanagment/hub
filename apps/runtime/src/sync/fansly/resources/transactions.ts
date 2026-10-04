@@ -28,7 +28,6 @@ import type {
   ApplyInput,
   ApplyResult,
   DemandSignal,
-  LegacyImport,
   ReplayContext,
   ReplayObservation,
   ReplayVerdict,
@@ -679,25 +678,6 @@ export function transactionsModule(variant: TransactionsVariant): ResourceModule
     async replay(observation: ReplayObservation, ctx: ReplayContext): Promise<ReplayVerdict> {
       return replayTransactionsPage(observation, ctx);
     },
-
-    ...(variant === "rescan"
-      ? {
-        async importLegacy(tx: Database, page: { pageId: number }): Promise<LegacyImport> {
-          // The legacy checkpoint is the rescan's: the next window reaches
-          // back from it exactly as the hourly run would have.
-          const legacy = await tx.execute<{ at: Date | string | null }>(sql`
-            select cursor_timestamp as at from page_sync_cursors where page_id = ${page.pageId} and stream = 'transactions'
-          `);
-          const raw = legacy.rows[0]?.at ?? null;
-          const cursorTimestamp = raw === null ? null : new Date(raw).toISOString();
-          const cursor: TransactionsCursor = { cursorTimestamp, walk: null, restartCount: 0, last: null, shadow: null };
-          return {
-            cursors: [{ resource: key, subject: "", cursor }],
-            notes: { cursorTimestamp: cursorTimestamp === null ? "none" : "page_sync_cursors.transactions" },
-          };
-        },
-      }
-      : {}),
   };
 }
 

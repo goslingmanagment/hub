@@ -8,7 +8,6 @@ import {
   credentialsFailureDetail,
   fanslyPageHoldAfterCredentials,
   fanslyPageHoldInForce,
-  fanslyTimedHoldEnd,
   INDEFINITE_UNTIL,
   proofClearsCredentialsHold,
   readFanslyPageHolds,
@@ -100,14 +99,6 @@ describe("page holds: in force", () => {
     const held = columns({ holdKind: "rate_limit", holdUntil: at(MIN), holdSince: NOW, holdDetail: { status: 429 } });
     expect(activeFanslyPageHold(held, NOW)).toMatchObject({ kind: "rate_limit", until: at(MIN), credentials: null });
     expect(activeFanslyPageHold(held, at(MIN))).toBeNull();
-    expect(fanslyTimedHoldEnd(readFanslyPageHolds(held), NOW)).toEqual(at(MIN));
-    expect(fanslyTimedHoldEnd(readFanslyPageHolds(held), at(MIN))).toBeNull();
-  });
-
-  it("the rollback floor of a page hold is the timed hold's end — the carried one too — never a credentials hold's", () => {
-    const held = authHeld({ attemptId: 1, at: null, digest: null }, carried("rate_limit", 45_000));
-    expect(fanslyTimedHoldEnd(readFanslyPageHolds(held), NOW)).toEqual(at(45_000));
-    expect(fanslyTimedHoldEnd(readFanslyPageHolds(authHeld({ attemptId: 1, at: null, digest: null })), NOW)).toBeNull();
   });
 });
 

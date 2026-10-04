@@ -90,12 +90,12 @@ export const NOTIFICATION_PAGING_POLICY_BY_KIND: Record<
   stream_failed_threshold: sustained(10 * MINUTE_MS, 30 * MINUTE_MS),
   scheduler_silent: sustained(10 * MINUTE_MS, 10 * MINUTE_MS, DEPLOY_TOLERANT_FLAP),
   ops_sampler_silent: sustained(10 * MINUTE_MS, 10 * MINUTE_MS, DEPLOY_TOLERANT_FLAP),
-  // Opens only after 15 min without a Fansly chunk (the widest production
-  // gap between chunk starts over 21 days was 5 min 10 s), so a deploy never
-  // opens it. No flap rule: a single Fansly page runs 15-16.6 min between
-  // chunks up to nine times in six hours (2026-09-22..29), so with the rest of
-  // the fleet blocked the latch flickers while chunks keep starting. A real
-  // stall outlasts the hold and pages as sustained.
+  // The kind's own latch (no sub-key) was the ops watchdog's legacy Fansly
+  // sync deadman: no chunk started for 15 min while a stream was due. Nothing
+  // opens it since step 4 (S4-21: no Fansly page has a legacy stream); the
+  // policy stays for a latch an older build left open. No flap rule: a thin
+  // fleet ran 15-16.6 min between chunks, so the latch flickered while chunks
+  // kept starting; a real stall outlasted the hold and paged as sustained.
   sync_silent: sustained(10 * MINUTE_MS, 10 * MINUTE_MS, null),
   // The Fansly Sync Engine (design §9.6): every alert pages at once — its
   // conditions already carry their own delays (a 429 is never transient for
@@ -119,7 +119,7 @@ export function notificationPagingPolicyFor(
 ): NotificationPagingPolicy {
   // Plan §2.5/§10: the Fansly send guard's page latches page at once — a
   // closed page sends nothing, and a pace violation must never happen. Their
-  // kind's default (a 10-minute hold) is for the sync deadman.
+  // kind's default (a 10-minute hold) was the legacy sync deadman's.
   if (kind === "sync_silent" && subKey === "send_guard_closed") {
     return immediate(5 * MINUTE_MS);
   }

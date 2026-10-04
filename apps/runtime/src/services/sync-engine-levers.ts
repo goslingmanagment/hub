@@ -35,8 +35,9 @@ import type { SyncTriggerScope } from "./sync-queue.ts";
 //              re-applied from the journal, no request) — legacy state
 //              (`page_sync_states`, cursors) is never touched (J5).
 //
-// A page in `handover` is being switched: neither engine sends, so a lever
-// that would make the engine read refuses with 409 `fansly_page_switching`.
+// A page in `handover` has no sender (nothing reaches the mode since step 4,
+// S4-21), so a lever that would make the engine read refuses with 409
+// `fansly_page_switching`.
 //
 // Since step 4 (S4-10) the legacy executor serves no Fansly page, so the
 // trigger scopes of a Fansly page ("sync now" for `light`, `data`, … in
@@ -68,7 +69,7 @@ export const FANSLY_ENGINE_SCOPE_STREAMS: Readonly<Record<SyncTriggerScope, read
 /** The engine modes in which a page is no longer the legacy engine's. */
 export type EngineOwnedMode = "handover" | "live";
 
-/** A lever that would make the engine read, asked during the switch. */
+/** A lever that would make the engine read, asked of a page in `handover`. */
 export { FanslyPageSwitchingError };
 
 /** What an engine lever did: the keys or files it acted on and how many rows

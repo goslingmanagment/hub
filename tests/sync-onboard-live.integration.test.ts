@@ -21,6 +21,7 @@ import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
 import { readFanslyPageGeneration } from "../apps/runtime/src/services/egress/fansly-probe-context.ts";
 import { onboardFanslyPage } from "../apps/runtime/src/services/page-onboarding.ts";
+import { checkLiveHour } from "../apps/runtime/src/sync/checks/live-hour.ts";
 import { SyncEngineHost } from "../apps/runtime/src/sync/engine/host.ts";
 import { checkFanslyIdentityWithoutPage } from "../apps/runtime/src/sync/fansly/identity-without-page.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
@@ -33,6 +34,7 @@ import {
   fanslyJson,
   harnessConfig,
   harnessHostOptions,
+  harnessIdentityRegistry,
   harnessRng,
   harnessRoutes,
   HARNESS_OWN_REF,
@@ -40,7 +42,6 @@ import {
   type FakeAnswer,
   type TakeoverRecord,
 } from "./helpers/sync-engine.ts";
-import { switchRegistry } from "./helpers/sync-switch.ts";
 
 // Fixture passwords hash at minimum cost; sign-in still runs the real argon2
 // verify (tests/helpers/cheap-argon2.ts).
@@ -212,7 +213,7 @@ describe("onboarding goes straight to live (S4-05)", () => {
       connectionString: testDb.connectionString,
       config: harnessConfig(testDb.connectionString, server!.apiBaseUrl),
       rng: harnessRng(5),
-      registry: switchRegistry(),
+      registry: harnessIdentityRegistry(),
       takeovers,
     }));
     hosts.push(host);
@@ -268,6 +269,32 @@ describe("onboarding goes straight to live (S4-05)", () => {
     // Nothing of the legacy engine: no page row in its send log, no stream state.
     expect((await journal()).filter((entry) => entry.page_id !== null)).toEqual([]);
     expect(await counts()).toMatchObject({ sync_states: 0, sync_cursors: 0 });
+
+    // The live-hour check (`sync check live-hour`, step 4 S4-21) judges a page
+    // born live as it judged a switched one: its window starts at its birth,
+    // its takeover boundary is the guard row's seed, and the pace audit reads
+    // both journals. The hour is still open, so the verdict is not a pass yet.
+    await until(async () => (await testDb!.pool.query(
+      "select count(*)::int as n from sync_attempts where page_id = $1 and not shadow and sent_at is not null",
+      [page.id],
+    )).rows[0].n >= 1, 15_000, "the first send journaled");
+    const hour = await checkLiveHour(db(), { pageIds: [page.id], since: new Date(row.modeChangedAt.getTime() - 60_000) });
+    const judged = hour.pages[0]!;
+    expect(judged).toMatchObject({ page: "onboard-live", mode: "live", liveSince: row.modeChangedAt.toISOString() });
+    expect(judged.windowStart).toBe(row.modeChangedAt.toISOString());
+    const checkOf = (name: string) => judged.checks.find((entry) => entry.name === name)!;
+    expect(checkOf("live").verdict).toBe("pass");
+    expect(checkOf("handover_boundary")).toMatchObject({
+      verdict: "pass",
+      detail: { ownerEngine: "fansly_sync_engine", legacyCapturesAfterFlip: 0, requiredMs: Math.round(1.2 * S) },
+    });
+    expect(Number(checkOf("handover_boundary").detail.boundaryGapMs)).toBeGreaterThanOrEqual(1.2 * S);
+    expect(checkOf("pace_combined").verdict).not.toBe("fail");
+    // (`route_budgets` is not asserted: this harness runs the route clocks at
+    // interval 0, under their ceiling, and the check rightly says so.)
+    expect(checkOf("auth_refusals").verdict).toBe("pass");
+    expect(checkOf("window_complete").verdict).toBe("inconclusive");
+    expect(hour.accepted).toBe(false);
   }, 60_000);
 
   it("leaves nothing behind when the session is refused, and refuses a second page of the same account", async (context) => {

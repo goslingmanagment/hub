@@ -3,8 +3,8 @@ import { PAYOUT_REQUESTS_PAGE_SIZE } from "@agency_hub_core/fansly";
 import { classifyFanslyResponse } from "./lane.ts";
 
 // The payouts rules of the Sync Engine's `payouts.*` resources
-// (resources/payouts.ts): the `payouts` cursor, the request-history walk's stop
-// and catch-up rules, and the reads of a served page. Pure.
+// (resources/payouts.ts): the request-history walk's stop and catch-up rules,
+// and the reads of a served page. Pure.
 
 /** One kind PER ROUTE: two routes, two response shapes. */
 export const FANSLY_PAYOUTS_OBSERVATION_KINDS = {
@@ -29,49 +29,7 @@ export const FANSLY_PAYOUTS_COVERAGE_SCOPES = {
  */
 export const REQUEST_WALK_MAX_PAGES = 400;
 
-// ── cursor state ─────────────────────────────────────────────────────────────
-
-export interface FanslyPayoutsCursorState {
-  version: 1;
-  /** The UTC day `callsToday` belongs to; a different day resets the counter. */
-  utcDay: string;
-  /** HTTP ATTEMPTS spent by this lane on `utcDay`. Retries included. */
-  callsToday: number;
-  /** The UTC day whose FIXED steps are already done. */
-  fixedStepsDay: string | null;
-  /** Which fixed step the next dispatch resumes at (index into the two steps). */
-  fixedStepIndex: number;
-  /** `offset` for the next request-history page. 0 until the head read seeds it. */
-  walkOffset: number;
-  /** Repeat-request guard, first trigger: the `offset` the previous WALK call
-   *  carried. */
-  lastRequestedOffset: number | null;
-  /** Repeat-request guard, second trigger: the FIRST row ref of the previous
-   *  page. An offset always advances; the answer to it may not. */
-  lastPageFirstRef: string | null;
-  /** Pages the walk has taken across every dispatch. */
-  walkPages: number;
-  /** `total` as the provider last reported it. */
-  walkTotal: number | null;
-  /** The oldest `createdAt` the walk has reached, in Unix ms — the FLOOR. */
-  floorMs: number | null;
-  /** True once a page came back short or the offset reached `total`, and again
-   *  once a catch-up reaches rows an earlier head read held. */
-  walkDone: boolean;
-  /** Why the history walk stopped; null while the first walk is still open. A
-   *  catch-up that reaches the previous head keeps it; one that ends on a
-   *  repeat, the page cap or a short page before `total` turns `exhausted`
-   *  partial, never the reverse (`settleWalkStop`). */
-  walkStop: FanslyPayoutsWalkStop | null;
-  /** The row refs of the last HEAD page — what the next head read has to share
-   *  a row with for the head alone to have caught every payout since. */
-  headRefs: string[];
-  /** An open catch-up walk, or null. */
-  catchUp: FanslyPayoutsCatchUp | null;
-  /** Payout status codes this page has already reported unknown, so the anomaly
-   *  fires ONCE per code rather than once per sweep forever. */
-  unknownStatusCodes: number[];
-}
+// ── the walk's stop and catch-up ─────────────────────────────────────────────
 
 /**
  * Why the request walk stopped. Only `exhausted` reached the provider's floor;
@@ -82,13 +40,6 @@ export type FanslyPayoutsWalkStop =
   | "short_before_total"
   | "repeat_request"
   | "page_cap";
-
-const WALK_STOPS: ReadonlySet<string> = new Set<FanslyPayoutsWalkStop>([
-  "exhausted",
-  "short_before_total",
-  "repeat_request",
-  "page_cap",
-]);
 
 /** Where a catch-up walk ends: on a page holding one of `stopRefs` (the
  *  previous head's rows), or — for a cursor saved before head refs were kept —
@@ -104,75 +55,12 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function asInt(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isSafeInteger(value) ? value : fallback;
-}
-
 function asNullableInt(value: unknown): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) ? value : null;
 }
 
 function asNullableString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
-}
-
-function asStrings(value: unknown): string[] | null {
-  return Array.isArray(value)
-    ? value.filter((member): member is string => asNullableString(member) !== null)
-    : null;
-}
-
-/** A catch-up with no stop condition left is no catch-up at all. */
-function parseCatchUp(value: unknown): FanslyPayoutsCatchUp | null {
-  const record = asRecord(value);
-  const stopRefs = asStrings(record?.stopRefs) ?? [];
-  const untilOffset = asNullableInt(record?.untilOffset);
-  if (stopRefs.length === 0 && untilOffset === null) {
-    return null;
-  }
-  return { stopRefs: stopRefs.length > 0 ? stopRefs : null, untilOffset };
-}
-
-export function parseFanslyPayoutsCursorState(
-  value: unknown,
-): FanslyPayoutsCursorState | null {
-  const state = asRecord(value);
-  if (!state || state.version !== 1) {
-    return null;
-  }
-  const utcDay = asNullableString(state.utcDay);
-  if (utcDay === null) {
-    return null;
-  }
-  const walkDone = state.walkDone === true;
-  return {
-    version: 1,
-    utcDay,
-    callsToday: Math.max(0, asInt(state.callsToday, 0)),
-    fixedStepsDay: asNullableString(state.fixedStepsDay),
-    fixedStepIndex: Math.max(0, asInt(state.fixedStepIndex, 0)),
-    walkOffset: Math.max(0, asInt(state.walkOffset, 0)),
-    lastRequestedOffset: asNullableInt(state.lastRequestedOffset),
-    lastPageFirstRef: asNullableString(state.lastPageFirstRef),
-    walkPages: Math.max(0, asInt(state.walkPages, 0)),
-    walkTotal: asNullableInt(state.walkTotal),
-    floorMs: asNullableInt(state.floorMs),
-    walkDone,
-    // A cursor saved before the stop was kept: every such walk in production
-    // ended on a short page with its count equal to `total`.
-    walkStop: typeof state.walkStop === "string" && WALK_STOPS.has(state.walkStop)
-      ? state.walkStop as FanslyPayoutsWalkStop
-      : walkDone
-      ? "exhausted"
-      : null,
-    headRefs: asStrings(state.headRefs) ?? [],
-    catchUp: parseCatchUp(state.catchUp),
-    unknownStatusCodes: Array.isArray(state.unknownStatusCodes)
-      ? state.unknownStatusCodes.filter(
-        (code): code is number => typeof code === "number" && Number.isSafeInteger(code),
-      )
-      : [],
-  };
 }
 
 // ── shape helpers over the journaled bodies ──────────────────────────────────

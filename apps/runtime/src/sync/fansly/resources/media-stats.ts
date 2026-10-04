@@ -8,7 +8,6 @@ import {
   recordMediaStatsBackfillCursor,
   recordMediaStatsBackfillProgress,
   recordMediaStatsVisit,
-  seedMediaStatsQueue,
   type CaptureCoverageStatus,
   type Database,
   type MediaStatsRefreshCandidate,
@@ -36,7 +35,6 @@ import {
   mediaStatsWindowIsEmpty,
   parseFanslyMediaStatsCursorState,
   parseMediaBackfillCursor,
-  SEED_BATCH_SIZE,
   servedMediaOfferRef,
   servedWindowCoversRequest,
   servedWindowSpansRequest,
@@ -56,7 +54,6 @@ import {
   effectiveTiers,
   type ApplyInput,
   type ApplyResult,
-  type LegacyImport,
   type LocalApplyInput,
   type RequestPlan,
   type ResourceModule,
@@ -859,9 +856,8 @@ async function legacyMediaStatsCursor(db: Database, pageId: number) {
  * The long-tail window mode the shadow models on a page: shadow never learns
  * the route from an answer, so its own mode is set only once a long-tail visit
  * modelled the refused 90-day window (`shadowVisitWindows`); until then the
- * legacy lane's discovery stands in — the mode the switch imports
- * (`importLegacy`), so the shadow asks what live would ask after the switch.
- * The shadow report prints it per page (its fingerprint).
+ * legacy lane's discovery stands in. The shadow report prints it per page
+ * (its fingerprint).
  */
 export async function shadowLongTailMode(
   db: Database,
@@ -1180,38 +1176,4 @@ export const mediaStatsWalkModule: ResourceModule = {
   },
 
   replay: replayByCanonicalDrafts,
-
-  async importLegacy(tx, page): Promise<LegacyImport> {
-    const legacy = await legacyMediaStatsCursor(tx, page.pageId);
-    // The first-enable seeding (zero platform calls) is finished here when
-    // legacy left it unfinished; media projected later is queued by the
-    // media-plane projector itself.
-    let seedCursor = legacy?.seedCursor ?? null;
-    let seeded = 0;
-    if (legacy?.seedComplete !== true) {
-      for (;;) {
-        const batch = await seedMediaStatsQueue(tx, { pageId: page.pageId, afterSubjectRef: seedCursor, limit: SEED_BATCH_SIZE, dueAt: new Date() });
-        seedCursor = batch.cursor;
-        seeded += batch.inserted;
-        if (batch.scanned < SEED_BATCH_SIZE) break;
-      }
-    }
-    const cursor: MediaStatsWalkCursor = {
-      longTailWindowMode: legacy?.longTailWindowMode ?? "unproven",
-      longTailWindowAnnounced: legacy?.longTailWindowAnnounced ?? false,
-      longTailProbeFailedDay: legacy?.longTailProbeFailedDay ?? null,
-      topMarkedDay: legacy?.topMarkedDay ?? null,
-      visit: null,
-      coverageWrittenAt: null,
-      last: null,
-      shadow: EMPTY_SHADOW_PASS,
-      shadowVisit: null,
-    };
-    // Each item's backfill cursor and visits stay where they are: the queue
-    // rows are the same rows.
-    return {
-      cursors: [{ resource: KEY, subject: "", cursor }],
-      notes: { walk: legacy === null ? "none" : "page_sync_cursors.media_stats", seeded },
-    };
-  },
 };

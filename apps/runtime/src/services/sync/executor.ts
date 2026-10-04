@@ -94,7 +94,7 @@ async function resolveContinuationPriority(
   app: Pick<AppContext, "db" | "config">,
   platformAccountId: number,
 ) {
-  const pages = await listRunnablePageSync(app.db, new Date());
+  const pages = await listRunnablePageSync(app.db, new Date(), { platforms: legacyExecutorPlatforms() });
   const legacyPriority = pages.find((page) => page.pageId === platformAccountId)?.priority ?? null;
   if (!isOfapiBackgroundCaptureRunnable(app.config)) {
     return legacyPriority;
@@ -831,7 +831,7 @@ export async function executeNextPageWorkChunk(
 ): Promise<SyncPageChunkResult> {
   if (isOfapiBackgroundCaptureRunnable(app.config)) {
     const [legacyPages, capturePages] = await Promise.all([
-      listRunnablePageSync(app.db, new Date()),
+      listRunnablePageSync(app.db, new Date(), { platforms: legacyExecutorPlatforms() }),
       listRunnableOfapiCapturePages(app.db),
     ]);
     const legacyPriority = legacyPages.find((page) => page.pageId === platformAccountId)?.priority

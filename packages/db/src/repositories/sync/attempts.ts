@@ -802,7 +802,7 @@ export interface FanslySendAuditRow {
 
 /**
  * The send audit's read (invariants I1 and I19; the alert evaluator, `sync
- * switch check`, the shadow report): every row of a page's engine journal
+ * check live-hour`, the shadow report): every row of a page's engine journal
  * (`shadow` picks the shadow one) and — with `legacy` — of the step-1 legacy
  * send log admitted (captured) in [since − `lookbackMs`, until), with what
  * the audit compares: the admission, the recorded send instant and its upper

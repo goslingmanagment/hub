@@ -4,14 +4,12 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 
 import {
   acquirePageSyncLease,
-  acquireTargetedPageSyncLease,
   createFanslyPage,
   createModel,
   createOnlyFansPage,
   ensurePageSyncStates,
   ensureSyncPage,
   FANSLY_SYNC_ENGINE_HYDRATION_LANE,
-  getFanslySyncLiveness,
   insertAgentKey,
   isFanslyPageEngineOwned,
   listDispatchableAgentHydrationRequests,
@@ -20,9 +18,8 @@ import {
   listRunnablePageSync,
   listStuckAgentHydrationDispatches,
   markPageSyncEnqueued,
-  releaseTargetedPageSyncLease,
   requestPageSync,
-  startSyncRun,
+  setConfigOverride,
   type SyncPageMode,
 } from "@agency_hub_core/db";
 
@@ -31,11 +28,13 @@ import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { downloadAiMediaThroughPageEgress } from "../apps/runtime/src/services/ai-media-describe/worker.ts";
 import {
   reconcileAgentHydrationDispatches,
+  runAgentHydrationCycle,
   sweepStuckAgentHydration,
 } from "../apps/runtime/src/services/agent-hydration.ts";
 import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
 import { saveProxy } from "../apps/runtime/src/services/page-context.ts";
 import { setPageProxy } from "../apps/runtime/src/services/page-proxies.ts";
+import { legacyExecutorPlatforms } from "../apps/runtime/src/sync/onlyfans/boundary.ts";
 import {
   resetIntegrationDatabase,
   seedFanslyPage,
@@ -44,12 +43,15 @@ import {
 } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 
-// Step-3 design §3.1 (S3-01): the legacy fences of a page the Fansly Sync
-// Engine owns. With `sync_pages.mode` written directly, a page in `handover` or
-// `live` is invisible to every legacy scheduler and refused by every legacy
-// lever, while an `off`, a `shadow` and an OnlyFans page (no `sync_pages` row)
-// behave exactly as before (J8); leaving to `off` restores the legacy engine
-// with no other action.
+// The fences between the legacy engine and a Fansly page. Step 3 (S3-01)
+// fenced by the page's engine mode: a page in `handover` or `live` was
+// invisible to every legacy scheduler. Since step 4 (S4-21) the legacy
+// page-sync executor is fenced by its platform set (OnlyFans, the platforms
+// whose adapter declares a stream) whatever a Fansly page's mode, and no mode
+// change brings a page back to it. What a mode still decides is pinned below:
+// the hydration sweeps leave the engine's rows alone, the `/account/me`
+// levers answer only on a `live` page, and the describer's download sends no
+// Fansly request.
 
 // Fixture passwords hash at minimum cost (the owner routes below).
 vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
@@ -74,7 +76,8 @@ function db() {
   return testDb;
 }
 
-/** The mode as the switch would leave it, written directly (no capability). */
+/** The page's engine mode, written directly: no lever reaches `handover` or
+ *  `live` (I17). */
 async function setMode(pageId: number, mode: SyncPageMode) {
   await ensureSyncPage(db().db, { pageId });
   await db().pool.query(
@@ -82,8 +85,6 @@ async function setMode(pageId: number, mode: SyncPageMode) {
     [pageId, mode],
   );
 }
-
-const ENGINE_MODES = ["handover", "live"] as const satisfies readonly SyncPageMode[];
 
 /** A Fansly page with a stored session (tests/helpers/db.ts `seedFanslyPage`). */
 async function seedPage(app: ReturnType<typeof createTestAppContext>, label = "lora-main") {
@@ -134,59 +135,48 @@ async function pendingStream(pageId: number, stream: "light" | "dm_messages", no
 }
 
 describe("(a) the legacy page-sync schedulers", () => {
-  it("never enqueue or lease a stream of a page the engine owns, and resume when it leaves", async () => {
+  it("serve the executor's platforms only: a Fansly page in any mode is never listed, marked or leased, and no mode "
+    + "change brings it back", async () => {
     const pages = await seedFencePages();
     const now = new Date();
-    const all = [pages.handover, pages.live, pages.off, pages.shadow, pages.onlyfans];
+    const fansly = [pages.handover, pages.live, pages.off, pages.shadow];
+    const all = [...fansly, pages.onlyfans];
     for (const page of all) await pendingStream(page.id, "light", now);
-    const legacy = [pages.off.id, pages.shadow.id, pages.onlyfans.id].sort((a, b) => a - b);
+    const platforms = legacyExecutorPlatforms();
+    expect(platforms).toEqual(["onlyfans"]);
 
-    expect((await listRunnablePageSync(db().db, now)).map((row) => row.pageId).sort((a, b) => a - b))
-      .toEqual(legacy);
+    expect((await listRunnablePageSync(db().db, now, { platforms })).map((row) => row.pageId)).toEqual([pages.onlyfans.id]);
 
-    for (const page of all) await markPageSyncEnqueued(db().db, page.id, now);
+    for (const page of all) await markPageSyncEnqueued(db().db, page.id, now, { platforms });
     const enqueued = await db().pool.query<{ page_id: string; enqueued: boolean }>(
       `select page_id::text, enqueued_at is not null as enqueued from page_sync_states
         where stream = 'light' and page_id = any($1::bigint[]) order by page_id`,
       [all.map((page) => page.id)],
     );
     expect(Object.fromEntries(enqueued.rows.map((row) => [Number(row.page_id), row.enqueued]))).toEqual({
-      [pages.handover.id]: false, [pages.live.id]: false,
-      [pages.off.id]: true, [pages.shadow.id]: true, [pages.onlyfans.id]: true,
+      [pages.handover.id]: false, [pages.live.id]: false, [pages.off.id]: false, [pages.shadow.id]: false,
+      [pages.onlyfans.id]: true,
     });
-
-    const targeted = async (pageId: number) => acquireTargetedPageSyncLease(db().db, {
-      pageId, stream: "light", workerId: "targeted", leaseToken: randomUUID(), leaseTtlMs: 60_000, now,
-    });
-    for (const page of [pages.handover, pages.live]) expect(await targeted(page.id)).toBeNull();
-    for (const page of [pages.off, pages.shadow, pages.onlyfans]) {
-      const lease = await targeted(page.id);
-      expect(lease).toMatchObject({ pageId: page.id, stream: "light" });
-      await releaseTargetedPageSyncLease(db().db, { pageId: page.id, stream: "light", leaseToken: lease!.leaseToken });
-    }
 
     const lease = (pageId: number) => acquirePageSyncLease(db().db, {
-      pageId, workerId: "executor", leaseToken: randomUUID(), leaseTtlMs: 60_000, now,
+      pageId, workerId: "executor", leaseToken: randomUUID(), leaseTtlMs: 60_000, now, platforms,
     });
-    for (const page of [pages.handover, pages.live]) expect(await lease(page.id)).toBeNull();
-    for (const page of [pages.off, pages.shadow, pages.onlyfans]) {
-      expect(await lease(page.id)).toMatchObject({ pageId: page.id, stream: "light", status: "running" });
-    }
-    // Nothing of the engine's pages was touched: still pending, unleased.
-    const engineRows = await db().pool.query(
+    for (const page of fansly) expect(await lease(page.id), page.label).toBeNull();
+    expect(await lease(pages.onlyfans.id)).toMatchObject({ pageId: pages.onlyfans.id, stream: "light", status: "running" });
+    // Nothing of a Fansly page was touched: still pending, unleased.
+    const fanslyRows = await db().pool.query(
       `select status, leased_seq, enqueued_at from page_sync_states
         where stream = 'light' and page_id = any($1::bigint[])`,
-      [[pages.handover.id, pages.live.id]],
+      [fansly.map((page) => page.id)],
     );
-    expect(engineRows.rows).toEqual([
-      { status: "pending", leased_seq: null, enqueued_at: null },
-      { status: "pending", leased_seq: null, enqueued_at: null },
-    ]);
+    expect(fanslyRows.rows).toEqual(fansly.map(() => ({ status: "pending", leased_seq: null, enqueued_at: null })));
 
-    // Leaving to `off` (the rollback's last step) restores the page at once.
+    // Through step 3, leaving to `off` gave a page back to the legacy engine.
+    // Not any more: the mode is not part of the fence.
+    await setMode(pages.live.id, "off");
     await setMode(pages.handover.id, "off");
-    expect((await listRunnablePageSync(db().db, now)).map((row) => row.pageId)).toContain(pages.handover.id);
-    expect(await lease(pages.handover.id)).toMatchObject({ pageId: pages.handover.id, stream: "light" });
+    expect((await listRunnablePageSync(db().db, now, { platforms })).map((row) => row.pageId)).toEqual([]);
+    for (const page of fansly) expect(await lease(page.id), page.label).toBeNull();
   });
 
   it("the repository reader names the engine's pages and only them", async () => {
@@ -195,40 +185,6 @@ describe("(a) the legacy page-sync schedulers", () => {
     expect(await isFanslyPageEngineOwned(db().db, pages.live.id)).toEqual({ owned: true, mode: "live" });
     expect(await isFanslyPageEngineOwned(db().db, pages.shadow.id)).toEqual({ owned: false, mode: "shadow" });
     expect(await isFanslyPageEngineOwned(db().db, pages.onlyfans.id)).toEqual({ owned: false, mode: null });
-  });
-});
-
-describe("(b) the sync_silent deadman", () => {
-  it.each(ENGINE_MODES)("ignores a %s page's due streams and runs", async (mode) => {
-    const model = await createModel(db().db, { slug: "silent", name: "Silent" });
-    const page = await createFanslyPage(db().db, { modelId: model!.id, label: "silent" });
-    await setMode(page!.id, mode);
-    const now = new Date();
-    await pendingStream(page!.id, "light", new Date(now.getTime() - 3_600_000));
-    const run = await startSyncRun(db().db, {
-      platformAccountId: page!.id, stream: "light", trigger: "scheduled", startedAt: new Date(now.getTime() - 60_000),
-    });
-    const window = { since: new Date(now.getTime() - 3_600_000), dueBefore: now };
-
-    expect(await getFanslySyncLiveness(db().db, window)).toEqual({ latestStartedAt: null, hasDueStream: false });
-
-    await setMode(page!.id, "off");
-    expect(await getFanslySyncLiveness(db().db, window)).toEqual({
-      latestStartedAt: run!.startedAt, hasDueStream: true,
-    });
-  });
-
-  it("still watches a shadow page's due streams and runs (J8)", async () => {
-    const model = await createModel(db().db, { slug: "silent-shadow", name: "Silent" });
-    const page = await createFanslyPage(db().db, { modelId: model!.id, label: "silent-shadow" });
-    await setMode(page!.id, "shadow");
-    const now = new Date();
-    await pendingStream(page!.id, "light", new Date(now.getTime() - 3_600_000));
-    const run = await startSyncRun(db().db, {
-      platformAccountId: page!.id, stream: "light", trigger: "scheduled", startedAt: new Date(now.getTime() - 60_000),
-    });
-    expect(await getFanslySyncLiveness(db().db, { since: new Date(now.getTime() - 3_600_000), dueBefore: now }))
-      .toEqual({ latestStartedAt: run!.startedAt, hasDueStream: true });
   });
 });
 
@@ -277,25 +233,30 @@ describe("(d) agent hydration", () => {
     return Number(result.rows[0]!.id);
   }
 
-  it("dispatches no request of a page the engine owns", async () => {
+  it("the dispatcher's list carries no mode fence: its lane table refuses a Fansly approval unclaimed, whatever the "
+    + "page's mode", async () => {
     const pages = await seedFencePages();
     const keyId = await seedKey([pages.handover.id, pages.live.id, pages.off.id, pages.shadow.id, pages.onlyfans.id]);
-    const approved: Record<string, number> = {};
-    for (const [name, page] of Object.entries({
-      handover: pages.handover, live: pages.live, off: pages.off, shadow: pages.shadow,
-    })) {
-      approved[name] = await seedRequest({ keyId, pageId: page.id, state: "approved" });
+    // Approvals an earlier image decided (none can be made for Fansly since S4-15).
+    const approved: number[] = [];
+    for (const page of [pages.handover, pages.live, pages.off, pages.shadow]) {
+      approved.push(await seedRequest({ keyId, pageId: page.id, state: "approved" }));
     }
-    approved.onlyfans = await seedRequest({ keyId, pageId: pages.onlyfans.id, state: "approved" });
-
-    const dispatchable = async () => (await listDispatchableAgentHydrationRequests(db().db, { limit: 50 }))
+    const listed = async () => (await listDispatchableAgentHydrationRequests(db().db, { limit: 50 }))
       .map((row) => row.id).sort((a, b) => a - b);
-    expect(await dispatchable())
-      .toEqual([approved.off!, approved.shadow!, approved.onlyfans!].sort((a, b) => a - b));
+    expect(await listed()).toEqual([...approved].sort((a, b) => a - b));
 
-    // Back to `off`: the list sees the page again.
-    await setMode(pages.live.id, "off");
-    expect(await dispatchable()).toContain(approved.live!);
+    // No executor lane serves Fansly: the cycle walks past all four, claims
+    // none and spends no attempt; each stays `approved` until its expiry.
+    await setConfigOverride(db().db, { key: "agentHydrationMode", value: "dispatch", userId: null, groupId: randomUUID() });
+    expect(await runAgentHydrationCycle(createTestAppContext(db())))
+      .toMatchObject({ mode: "dispatch", dispatched: 0, refused: approved.length, expired: 0 });
+    const states = await db().pool.query<{ state: string; execution_lane: string | null }>(
+      "select state, execution_lane from agent_hydration_requests where id = any($1::bigint[])",
+      [approved],
+    );
+    expect(states.rows).toEqual(approved.map(() => ({ state: "approved", execution_lane: null })));
+    expect(await listed()).toEqual([...approved].sort((a, b) => a - b));
   });
 
   it("leaves the engine's rows to the engine: no expiry, no reconcile, no stuck sweep", async () => {

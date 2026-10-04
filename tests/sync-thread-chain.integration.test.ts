@@ -9,13 +9,11 @@ import {
   createOnlyFansPage,
   effectiveHistoryStateSql,
   ensureSyncPage,
-  issueSyncSwitchCapability,
   listPageThreadChains,
   openThreadSummary,
   readThreadChain,
   readThreadStoredFacts,
   resetThreadChain,
-  setSyncPageMode,
   ThreadChainInvalidError,
   ThreadChainRebuildModeError,
   ThreadSummaryRefusedError,
@@ -139,11 +137,13 @@ function withoutChain(row: Record<string, unknown>): Record<string, unknown> {
   return Object.fromEntries(Object.entries(row).filter(([column]) => !CHAIN_COLUMNS.includes(column)));
 }
 
+/** The page's mode, written directly: no lever reaches `handover` or `live` (I17). */
 async function moveTo(pageId: number, path: readonly SyncPageMode[]): Promise<void> {
-  const capability = issueSyncSwitchCapability({ pageId, purpose: "test" });
   for (const to of path) {
-    const result = await setSyncPageMode(db(), { pageId, to, changedBy: "test", capability });
-    expect(result.kind).toBe("changed");
+    await testDb!.pool.query(
+      "update sync_pages set mode = $2, mode_changed_at = clock_timestamp(), mode_changed_by = 'test' where page_id = $1",
+      [pageId, to],
+    );
   }
 }
 
@@ -478,26 +478,22 @@ describe("writeRebuiltThreadChain (the rebuild's write)", () => {
     })).toEqual({ kind: "skipped", reason: "thread_missing" });
   });
 
-  it("refuses a live page, and a handover page without the switch's capability", async () => {
+  it("refuses a page in handover or live: the engine is the only chain writer there", async () => {
     const pageId = await seedPage();
     const threadId = await seedThread(pageId, "942");
     await moveTo(pageId, ["shadow", "handover"]);
     await expect(writeRebuiltThreadChain(db(), {
       pageId, threadId, chain: partialChain, expectedWatermark: 0, journalWatermark: 10,
     })).rejects.toBeInstanceOf(ThreadChainRebuildModeError);
-    const forged = { kind: "sync_switch" as const, pageId, purpose: "final pass" };
     await expect(writeRebuiltThreadChain(db(), {
-      pageId, threadId, chain: partialChain, expectedWatermark: 0, journalWatermark: 10, handoverCapability: forged,
-    })).rejects.toBeInstanceOf(ThreadChainRebuildModeError);
-    const capability = issueSyncSwitchCapability({ pageId, purpose: "final pass" });
-    expect(await writeRebuiltThreadChain(db(), {
-      pageId, threadId, chain: partialChain, expectedWatermark: 0, journalWatermark: 10, handoverCapability: capability,
-    })).toMatchObject({ kind: "written" });
+      pageId, threadId, chain: partialChain, expectedWatermark: 0, journalWatermark: 10,
+    })).rejects.toThrow(/'handover'/);
 
     await moveTo(pageId, ["live"]);
     await expect(writeRebuiltThreadChain(db(), {
-      pageId, threadId, chain: partialChain, expectedWatermark: 10, journalWatermark: 20, handoverCapability: capability,
+      pageId, threadId, chain: partialChain, expectedWatermark: 0, journalWatermark: 10,
     })).rejects.toThrow(/'live'/);
+    expect((await readThreadChain(db(), threadId))!.source).toBeNull();
   });
 });
 

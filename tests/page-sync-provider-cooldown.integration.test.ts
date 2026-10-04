@@ -2,7 +2,6 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
   acquirePageSyncLease,
-  acquireTargetedPageSyncLease,
   completePageSync,
   createFanslyPage,
   createModel,
@@ -16,6 +15,8 @@ import {
 import {
   resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase,
 } from "./helpers/db.ts";
+
+import { EVERY_PLATFORM } from "./helpers/page-sync-scope.ts";
 
 let testDb: StartedTestDatabase | null = null;
 
@@ -52,6 +53,7 @@ describe("page sync provider cooldown", () => {
       requestPayloadByStream: { [stream]: { reason: "older request" } },
     });
     const lease = await acquirePageSyncLease(testDb!.db, {
+      platforms: EVERY_PLATFORM,
       pageId: page.id, workerId: "worker", leaseToken: "original", leaseTtlMs: 60_000, now,
     });
     if (!lease || lease.stream !== stream) throw new Error(`Expected ${stream} lease`);
@@ -88,15 +90,12 @@ describe("page sync provider cooldown", () => {
       leasedSeq: null, leaseToken: null,
     });
     const beforeDeadline = new Date(retryAt.getTime() - 1);
-    expect(await listRunnablePageSync(testDb!.db, beforeDeadline)).toEqual([]);
+    expect(await listRunnablePageSync(testDb!.db, beforeDeadline, { platforms: EVERY_PLATFORM })).toEqual([]);
     const acquire = (at: Date) => acquirePageSyncLease(testDb!.db, {
+      platforms: EVERY_PLATFORM,
       pageId: page.id, workerId: "next-worker", leaseToken: "next", leaseTtlMs: 60_000, now: at,
     });
     expect(await acquire(beforeDeadline)).toBeNull();
-    expect(await acquireTargetedPageSyncLease(testDb!.db, {
-      pageId: page.id, stream: "light", workerId: "targeted", leaseToken: "targeted",
-      leaseTtlMs: 60_000, now: beforeDeadline,
-    })).toBeNull();
     expect(await acquire(retryAt)).toMatchObject({
       requestSeq, leasedSeq: requestSeq, requestSource: source, dispatchSource: source,
       requestPayload: { reason: "latest request", revision: requestSeq },
@@ -131,6 +130,7 @@ describe("page sync provider cooldown", () => {
       retryKind: null, retryAt: null,
     });
     expect(await acquirePageSyncLease(testDb!.db, {
+      platforms: EVERY_PLATFORM,
       pageId: page.id, workerId: "next-worker", leaseToken: "next", leaseTtlMs: 60_000, now,
     })).toMatchObject({ leasedSeq: lease.requestSeq + 1 });
   });
@@ -159,9 +159,10 @@ describe("page sync provider cooldown", () => {
       [page!.id, new Date(now.getTime() + 600_000), now],
     );
 
-    expect((await listRunnablePageSync(testDb!.db, now)).map((row) => row.pageId)).toEqual([page!.id]);
-    expect(await acquireTargetedPageSyncLease(testDb!.db, {
-      pageId: page!.id, stream, workerId: "targeted", leaseToken: "targeted", leaseTtlMs: 60_000, now,
+    expect((await listRunnablePageSync(testDb!.db, now, { platforms: EVERY_PLATFORM })).map((row) => row.pageId)).toEqual([page!.id]);
+    expect(await acquirePageSyncLease(testDb!.db, {
+      platforms: EVERY_PLATFORM,
+      pageId: page!.id, workerId: "held", leaseToken: "held", leaseTtlMs: 60_000, now,
     })).toMatchObject({ stream });
     // The row stays as a record.
     expect((await testDb!.pool.query("select count(*)::int as n from page_sync_provider_holds")).rows[0].n).toBe(1);

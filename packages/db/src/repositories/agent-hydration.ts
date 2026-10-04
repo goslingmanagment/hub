@@ -11,7 +11,6 @@ import type {
 } from "../schema.ts";
 import { insertAgentReadAudit, type InsertAgentReadAuditInput } from "./agent-read-audit.ts";
 import { witnessFor, type PlaneReadWitness } from "./agent-read-witness.ts";
-import { legacyOwnsFanslyPageSql } from "./sync/pages.ts";
 
 /**
  * The hydration request store (Agent Read Plane, slice C).
@@ -220,8 +219,7 @@ const REQUEST_FROM = sql`
  * §3.5 item 10: the hydration wrapper of a live page files a history request
  * and points the legacy row at it). Such a row is `dispatching` for as long as
  * its history request runs, and only the wrapper reads its state; the legacy
- * expiry, reconcile and stuck sweeps never touch it, and the switch's
- * `hydration_settled` precondition never counts it (the column has no CHECK,
+ * expiry, reconcile and stuck sweeps never touch it (the column has no CHECK,
  * 0117).
  */
 export const FANSLY_SYNC_ENGINE_HYDRATION_LANE = "fansly_sync_engine";
@@ -677,7 +675,10 @@ export async function decideAgentHydrationRequest(
 
 /**
  * Approved requests the executor may dispatch: in date, admissible, not
- * expired, on a page the legacy engine owns, oldest decision first.
+ * expired, oldest decision first. Which platforms have an executor lane is
+ * the executor's own table (`LANE_DISPATCHERS`, OnlyFans): an approval of
+ * another platform is refused there before its claim, and none can be made
+ * since step 4 (S4-15).
  *
  * `excludeIds` is the executor's scan cursor: the rows it already walked this
  * cycle. It pages PAST the approvals refused before their claim instead of
@@ -695,9 +696,6 @@ export async function listDispatchableAgentHydrationRequests(
     where r.state = 'approved'
       and r.admissible = true
       and (r.expires_at is null or r.expires_at > ${now})
-      -- A page the Fansly Sync Engine owns: its legacy streams are fenced, and
-      -- the switch converts its open rows (step-3 design §3.5 phase H).
-      and ${legacyOwnsFanslyPageSql(sql.raw("r.page_id"))}
       and r.id <> all(${sql.param([...(input.excludeIds ?? [])])}::bigint[])
     order by r.decided_at asc, r.id asc
     limit ${input.limit}
@@ -978,36 +976,14 @@ export async function expireAgentHydrationRequest(
 }
 
 /**
- * The open hydration requests of a Fansly page (`requested`, `approved`,
- * `dispatching`), oldest first, rows the engine already serves excluded: what
- * the step-3 switch converts into history requests (design step 3 §3.5 item 7,
- * phase H).
- */
-export async function listOpenLegacyHydrationRequestsForPage(
-  db: Database,
-  pageId: number,
-): Promise<AgentHydrationRequestRecord[]> {
-  const result = await db.execute<Record<string, unknown>>(sql`
-    select ${REQUEST_COLUMNS} ${REQUEST_FROM}
-    where r.page_id = ${pageId}
-      and p.platform = 'fansly'
-      and r.state in ('requested', 'approved', 'dispatching')
-      and ${LEGACY_SWEEPABLE}
-    order by r.created_at asc, r.id asc
-  `);
-  return result.rows.map(mapRequest);
-}
-
-/**
  * `requested -> dispatching` for a request the Fansly Sync Engine serves (the
  * hydration wrapper of a live page, design step 3 §3.5 item 10): the row
  * points at the history request it was filed as (`execution_lane =
  * 'fansly_sync_engine'`, `execution_ref` = its ref) and stays `dispatching`
  * while that request runs — its read mirrors the request's item, the legacy
  * sweeps and page slots never count it — and is settled to the mirrored
- * terminal state once the request is over (or `expired` by a rollback). No
- * owner decision: history requests need none (plan §4). CAS'd on the observed
- * version.
+ * terminal state once the request is over. No owner decision: history
+ * requests need none (plan §4). CAS'd on the observed version.
  */
 export async function markAgentHydrationEngineManaged(
   db: Database,
@@ -1048,27 +1024,23 @@ export async function markAgentHydrationEngineManaged(
 
 /**
  * The rows the Fansly Sync Engine serves that are still `dispatching` (the
- * wrapper's rows, step-3 design §3.5 item 10), oldest dispatch first.
- * `pageId` narrows to one page (the rollback); `endedOnly` to the rows whose
- * history request is over (`done`/`cancelled`): the worker's settle pass,
- * which must never be crowded out by requests still running.
+ * wrapper's rows, step-3 design §3.5 item 10) although their history request
+ * is over (`done`/`cancelled`), oldest dispatch first: what the worker's
+ * settle pass closes.
  */
-export async function listEngineManagedAgentHydrationDispatches(
+export async function listEndedEngineManagedAgentHydrationDispatches(
   db: Database,
-  input: { limit: number; pageId?: number; endedOnly?: boolean },
+  input: { limit: number },
 ): Promise<AgentHydrationRequestRecord[]> {
   const result = await db.execute<Record<string, unknown>>(sql`
     select ${REQUEST_COLUMNS} ${REQUEST_FROM}
     where r.state = 'dispatching'
       and r.execution_lane = ${FANSLY_SYNC_ENGINE_HYDRATION_LANE}
       and r.execution_ref is not null
-      ${input.pageId === undefined ? sql`` : sql`and r.page_id = ${input.pageId}`}
-      ${input.endedOnly === true
-        ? sql`and exists (
-            select 1 from history_requests h
-             where h.request_ref::text = r.execution_ref
-               and h.state in ('done', 'cancelled'))`
-        : sql``}
+      and exists (
+        select 1 from history_requests h
+         where h.request_ref::text = r.execution_ref
+           and h.state in ('done', 'cancelled'))
     order by r.dispatched_at asc nulls first, r.id asc
     limit ${input.limit}
   `);

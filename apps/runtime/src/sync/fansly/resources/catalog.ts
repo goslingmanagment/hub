@@ -38,7 +38,6 @@ import {
   type ApplyResult,
   type CadenceSpec,
   type DemandSignal,
-  type LegacyImport,
   type RequestPlan,
   type ResourceModule,
   type ShadowResult,
@@ -82,7 +81,6 @@ import { fanslyResourceSpec } from "../registry.ts";
 
 export type CatalogVariant = "fixed" | "vault" | "hydrate";
 
-const FIXED_KEY = "catalog.fixed";
 const VAULT_KEY = "catalog.vault";
 const HYDRATE_KEY = "catalog.hydrate";
 const DAY_MS = 86_400_000;
@@ -260,15 +258,6 @@ const fixedModule: ResourceModule = {
   },
 
   replay: replayByCanonicalDrafts,
-
-  async importLegacy(tx, page): Promise<LegacyImport> {
-    const legacy = parseFanslyCatalogCursorState((await legacyCatalogState(tx, page.pageId)) ?? null);
-    // A sweep legacy left mid-way today resumes at its step; otherwise the
-    // next sweep starts at the head.
-    const midWay = legacy !== null && legacy.fixedStepsDay !== fanslyUtcDayKey(new Date()) && legacy.fixedStepIndex > 0;
-    const cursor: FixedCursor = { index: midWay ? legacy.fixedStepIndex : 0, last: null };
-    return { cursors: [{ resource: FIXED_KEY, subject: "", cursor }], notes: { fixed: legacy === null ? "none" : midWay ? "resumed" : "head" } };
-  },
 };
 
 async function legacyCatalogState(db: Database, pageId: number): Promise<unknown> {
@@ -287,7 +276,7 @@ interface VaultAlbum {
 }
 
 interface VaultCursor {
-  /** Per-album walk state (the legacy lane's, carried over at the switch). */
+  /** Per-album walk state. */
   vaultWalk: Record<string, VaultAlbumWalkState>;
   /** The album the rotation last served. */
   afterAlbumRef: string | null;
@@ -415,8 +404,7 @@ function closedWalk(walk: VaultAlbumWalkState, album: VaultAlbum, utcDay: string
 }
 
 /** Shadow's walk state: its own, seeded once from the legacy cursor (proofs
- *  without their member lists) so shadow walks what live would walk after
- *  the switch imports that cursor. */
+ *  without their member lists). */
 async function shadowVaultWalk(db: Database, pageId: number, cursor: VaultCursor): Promise<VaultCursor> {
   if (cursor.seeded) return cursor;
   const legacy = parseFanslyCatalogCursorState((await legacyCatalogState(db, pageId)) ?? null);
@@ -655,23 +643,6 @@ const vaultModule: ResourceModule = {
   },
 
   replay: replayByCanonicalDrafts,
-
-  async importLegacy(tx, page): Promise<LegacyImport> {
-    const legacy = parseFanslyCatalogCursorState((await legacyCatalogState(tx, page.pageId)) ?? null);
-    const vaultWalk: Record<string, VaultAlbumWalkState> = { ...legacy?.vaultWalk };
-    // The legacy block of the whole walk is lifted as legacy lifts it: the
-    // refused album is asked once more from its head.
-    const blockedRef = legacy?.vaultWalkBlockedAlbumRef ?? null;
-    if (blockedRef !== null) {
-      vaultWalk[blockedRef] = { ...emptyAlbumWalk(), lastCompleteWalkAt: vaultWalk[blockedRef]?.lastCompleteWalkAt };
-    }
-    // Mid-walk positions (lora-1/2/3: paid egress) are kept page for page.
-    const cursor: VaultCursor = { vaultWalk, afterAlbumRef: legacy?.vaultWalkAfterAlbumRef ?? null, seeded: true, last: null };
-    return {
-      cursors: [{ resource: VAULT_KEY, subject: "", cursor }],
-      notes: { vault: legacy === null ? "none" : "page_sync_cursors.catalog", albums: Object.keys(vaultWalk).length },
-    };
-  },
 };
 
 // ── hydrate ──────────────────────────────────────────────────────────────────

@@ -20,8 +20,7 @@
 // differs from the latest refusal's — one verify per digest: its own refusal
 // records that digest as the latest and closes the exception.
 //
-// Dependency-free so the database layer (the rollback's hand-back) and the
-// runtime share it.
+// Dependency-free so the database layer and the runtime can share it.
 
 export const FANSLY_PAGE_HOLD_KINDS = ["rate_limit", "auth", "identity_mismatch", "network"] as const;
 export type FanslyPageHoldKind = (typeof FANSLY_PAGE_HOLD_KINDS)[number];
@@ -60,8 +59,9 @@ export interface FanslyPageHoldColumns {
  *  every refusal). */
 export interface CredentialsFailure {
   /** The refused attempt (`sync_attempts.id`; a page's attempts are strictly
-   *  sequential). Null: a refusal without an attempt (the switch imported the
-   *  legacy engine's auth block) or one written before refusals carried it. */
+   *  sequential). Null: a refusal without an attempt (the step-3 switch
+   *  imported the legacy engine's auth block) or one written before refusals
+   *  carried it. */
   attemptId: number | null;
   /** When the refused request was sent. */
   at: Date | null;
@@ -328,11 +328,4 @@ export function fanslyPageHoldAfterCredentials(current: FanslyPageHoldColumns, n
   const carried = holds.credentials !== null ? holds.timed : null;
   if (carried === null || carried.until.getTime() <= now.getTime()) return null;
   return { kind: carried.kind, until: carried.until, detail: carried.detail };
-}
-
-/** The end of the timed hold in force — the page's own or the one a
- *  credentials hold carries — or null: the floor the rollback hands the
- *  legacy engine (a page hold, never a credentials hold, has an end). */
-export function fanslyTimedHoldEnd(holds: FanslyPageHolds, now: Date): Date | null {
-  return fanslyPageHoldInForce(holds, now)?.timed?.until ?? null;
 }

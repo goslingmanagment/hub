@@ -220,7 +220,6 @@
     "tests/subscriber-rollups.integration.test.ts": 1,
     "tests/sync-finalization-race.integration.test.ts": 1.3,
     "tests/sync-latest-run-per-page.integration.test.ts": 1.2,
-    "tests/sync-lookup-query-plans.integration.test.ts": 2.3,
     "tests/sync-monitor.integration.test.ts": 1.1,
     "tests/sync-orphaned-runs.integration.test.ts": 1,
     "tests/sync.integration.test.ts": 4.5,

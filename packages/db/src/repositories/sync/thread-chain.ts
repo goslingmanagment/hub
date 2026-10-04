@@ -4,7 +4,7 @@ import type { Database } from "../../client.ts";
 import { type CapturePayloadRef, capturePayloadRefFromColumns } from "../capture-payloads.ts";
 import { archiveSenderRole, archiveStoredMessageSql, archiveThreadRowsFromSql } from "../dm-archive-store.ts";
 import type { DmLiveReaderStore } from "./live-messages.ts";
-import { holdsSyncSwitchCapability, type SyncPageMode, type SyncSwitchCapability } from "./pages.ts";
+import type { SyncPageMode } from "./pages.ts";
 import { textArrayParam, toDate, toRequiredDate } from "./values.ts";
 
 // Fansly Sync Engine (plan §6.2, §6.3; design §2.3, §8): the contiguous-chain
@@ -110,7 +110,7 @@ export class ThreadChainRebuildModeError extends Error {
   constructor(pageId: number, mode: SyncPageMode) {
     super(
       `Page ${pageId} is '${mode}': the Fansly Sync Engine is the only chain writer there; `
-        + "the journal rebuild runs on 'off' and 'shadow' pages (and the switch's own final pass)",
+        + "the journal rebuild runs on 'off' and 'shadow' pages",
     );
     this.name = "ThreadChainRebuildModeError";
     this.pageId = pageId;
@@ -551,7 +551,7 @@ export type RebuiltThreadChainWrite =
  * `for update`, and only then the checks — an engine chain is never
  * overwritten, and a thread another run wrote since this one read it is
  * skipped. A page in `handover`/`live` refuses (the engine is the chain
- * writer there), except `handover` with the switch's own capability.
+ * writer there).
  */
 export async function writeRebuiltThreadChain(
   db: Database,
@@ -563,7 +563,6 @@ export async function writeRebuiltThreadChain(
     expectedWatermark: number;
     /** The journal id the run folded this thread through. */
     journalWatermark: number;
-    handoverCapability?: SyncSwitchCapability;
   },
 ): Promise<RebuiltThreadChainWrite> {
   return db.transaction(async (transaction) => {
@@ -572,9 +571,7 @@ export async function writeRebuiltThreadChain(
       select mode from sync_pages where page_id = ${input.pageId} for share
     `);
     const mode = page.rows[0]?.mode ?? "off";
-    const allowed = mode === "off" || mode === "shadow"
-      || (mode === "handover" && holdsSyncSwitchCapability(input.handoverCapability, input.pageId));
-    if (!allowed) throw new ThreadChainRebuildModeError(input.pageId, mode);
+    if (mode !== "off" && mode !== "shadow") throw new ThreadChainRebuildModeError(input.pageId, mode);
 
     const locked = await tx.execute<{ chainSource: ThreadChainSource | null; watermark: string }>(sql`
       select chain_source as "chainSource", chain_journal_watermark::text as watermark
@@ -603,8 +600,7 @@ export interface ChainRebuildRunRecord {
 }
 
 /** The latest page-wide `--write` rebuild of the page that reached the end of
- *  the journal: an incremental run starts after it, and the step-3 switch
- *  requires one (D21). */
+ *  the journal: an incremental run starts after it. */
 export async function getLatestCompletedChainRebuild(
   db: Database,
   pageId: number,
@@ -698,29 +694,6 @@ async function readThreadArchiveStoredRows(
     occurredAt: toRequiredDate(row.occurredAt),
     senderRole: archiveSenderRole(row.senderRole),
   }));
-}
-
-/**
- * The 0231 marking for one page at its switch (design step 3 §3.5 item 7,
- * I.5): messages the legacy engine stored are not proof (plan §6.3), so a
- * thread with stored messages and no chain yet is `unverified` until a read
- * proves one. Runs only while the switch holds the page in `handover`; the
- * chain columns keep their one writer module (I9). Returns how many threads
- * it marked.
- */
-export async function markPageThreadsUnverified(tx: Database, pageId: number): Promise<number> {
-  const result = await tx.execute(sql`
-    update page_dm_threads t
-       set history_state = 'unverified',
-           updated_at = clock_timestamp()
-      from sync_pages sp
-     where t.platform_account_id = ${pageId}
-       and sp.page_id = t.platform_account_id
-       and sp.mode = 'handover'
-       and t.history_state = 'none'
-       and t.stored_message_count > 0
-  `);
-  return result.rowCount ?? 0;
 }
 
 /**

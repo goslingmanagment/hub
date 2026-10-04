@@ -2,10 +2,9 @@ import { classifyFanslyResponse } from "./lane.ts";
 
 // The purchase-history rules of the Sync Engine's `purchases.targets`
 // resource (resources/purchases.ts) and the purchase announcements report:
-// the media targets money facts and DM pages name, the legacy cursor the
-// switch imports, and the classification of one captured order-history page.
-// Pure; a classification reads only the durable status and body, so a parser
-// repair can reclassify history without a request.
+// the media target a money fact names and the classification of one captured
+// order-history page. Pure; a classification reads only the durable status
+// and body, so a parser repair can reclassify history without a request.
 
 type JsonRecord = Record<string, unknown>;
 
@@ -13,60 +12,6 @@ export type FanslyPurchaseHistoryTarget = {
   kind: "single" | "bundle";
   contentId: string;
 };
-
-export type FanslyPurchaseHistoryPendingTarget = FanslyPurchaseHistoryTarget & {
-  /** Opaque order id passed back to Fansly as `before`. Null is page one. */
-  before: string | null;
-  /**
-   * A rejected target re-queued ONCE after a rejection storm turned out to be
-   * a repaired contract (Decision 358). Checkpoint reconciliation keeps a retry
-   * even though its chain reads complete; a second rejection settles it.
-   */
-  retry?: true;
-};
-
-export type FanslyPurchaseHistoryCursorStateV2 = {
-  version: 2;
-  rawPayloadCursorId: number;
-  pendingTargets: FanslyPurchaseHistoryTarget[];
-};
-
-export type FanslyPurchaseHistoryCursorStateV3 = {
-  version: 3;
-  transactionCursorId: number;
-  rawPayloadCursorId: number;
-  pendingTargets: FanslyPurchaseHistoryTarget[];
-};
-
-export type FanslyPurchaseHistoryCursorStateV4 = {
-  version: 4;
-  transactionCursorId: number;
-  rawPayloadCursorId: number;
-  pendingTargets: FanslyPurchaseHistoryPendingTarget[];
-};
-
-export type FanslyPurchaseHistoryCursorStateV5 = {
-  version: 5;
-  transactionCursorId: number;
-  rawPayloadCursorId: number;
-  pendingTargets: FanslyPurchaseHistoryPendingTarget[];
-  utcDay: string;
-  callsToday: number;
-};
-
-/**
- * Older cursor shapes remain readable so a deploy can resume in-flight work.
- * Parsed state is always normalized to v5: v4's per-target provider cursor,
- * plus the durable UTC-day attempt allowance shared by the other lanes. The
- * rejection streak (Decision 358) is deliberately NOT cursor state: it is
- * derived from the captures themselves, so a crash between a journaled
- * rejection and the checkpoint write cannot lose it.
- */
-export type FanslyPurchaseHistoryCursorState =
-  | FanslyPurchaseHistoryCursorStateV2
-  | FanslyPurchaseHistoryCursorStateV3
-  | FanslyPurchaseHistoryCursorStateV4
-  | FanslyPurchaseHistoryCursorStateV5;
 
 export type FanslyMessagePurchaseTargetSource = {
   rawType: string | number;
@@ -114,10 +59,6 @@ function asString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
-function asNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
 function records(value: unknown): JsonRecord[] {
   return Array.isArray(value)
     ? value.flatMap((item) => {
@@ -125,18 +66,6 @@ function records(value: unknown): JsonRecord[] {
       return record ? [record] : [];
     })
     : [];
-}
-
-function hasPpvPermission(item: JsonRecord) {
-  const permissions = asRecord(item.permissions);
-  return records(permissions?.permissionFlags).some((permission) => {
-    const flags = asNumber(permission.flags) ?? 0;
-    return (flags & 1) === 1;
-  });
-}
-
-export function fanslyPurchaseHistoryTargetKey(target: FanslyPurchaseHistoryTarget) {
-  return `${target.kind}:${target.contentId}`;
 }
 
 function purchaseHistoryTargetKindFromRawType(
@@ -173,193 +102,6 @@ export function fanslyPurchaseHistoryTargetOfTransaction(
 function purchaseHistoryContentIdFromTargetKey(targetKey: string) {
   const separator = targetKey.indexOf(":");
   return separator >= 0 ? targetKey.slice(separator + 1) : targetKey;
-}
-
-/**
- * Finds PPV content ids from a captured Fansly /message page. The endpoint
- * contract is media-scoped: accountMediaId/accountMediaBundleId is required;
- * accountIds is only an optional buyer filter. We therefore walk observed PPV
- * media, never the cartesian product of every fan and every media item.
- */
-export function extractFanslyPurchaseHistoryTargets(
-  payloads: readonly unknown[],
-): FanslyPurchaseHistoryTarget[] {
-  // Fansly content ids are global, but historical DM payloads can describe a
-  // bundle order through `accountMediaId` while the attachment and metadata
-  // correctly identify the same id as a bundle. Keep one target per content
-  // id and let concrete attachment/metadata evidence override the weaker
-  // inline-order inference. Otherwise the same bundle is fetched once
-  // correctly and then again as a single media item, which Fansly rejects.
-  const targets = new Map<
-    string,
-    { target: FanslyPurchaseHistoryTarget; evidencePriority: number }
-  >();
-  const recordTarget = (
-    target: FanslyPurchaseHistoryTarget,
-    evidencePriority: number,
-  ) => {
-    const current = targets.get(target.contentId);
-    if (!current || evidencePriority > current.evidencePriority) {
-      targets.set(target.contentId, { target, evidencePriority });
-    }
-  };
-
-  for (const payloadValue of payloads) {
-    const payload = asRecord(payloadValue);
-    if (!payload) {
-      continue;
-    }
-
-    const mediaById = new Map(
-      records(payload.accountMedia)
-        .flatMap((item) => {
-          const id = asString(item.id);
-          return id ? [[id, item] as const] : [];
-        }),
-    );
-    const bundlesById = new Map(
-      records(payload.accountMediaBundles)
-        .flatMap((item) => {
-          const id = asString(item.id);
-          return id ? [[id, item] as const] : [];
-        }),
-    );
-
-    // An inline order is itself definitive evidence that the media target is
-    // valid, even when the corresponding attachment/metadata was trimmed from
-    // this particular DM page. Fetching that media recovers its other buyers.
-    for (const order of records(payload.accountMediaOrders)) {
-      const bundleId = asString(order.accountMediaBundleId);
-      const mediaId = asString(order.accountMediaId);
-      const target = bundleId
-        ? { kind: "bundle" as const, contentId: bundleId }
-        : mediaId
-          ? {
-            kind: bundlesById.has(mediaId) && !mediaById.has(mediaId)
-              ? "bundle" as const
-              : "single" as const,
-            contentId: mediaId,
-          }
-          : null;
-      if (target) {
-        recordTarget(target, bundleId ? 3 : 1);
-      }
-    }
-
-    for (const message of records(payload.messages)) {
-      for (const attachment of records(message.attachments)) {
-        const contentId = asString(attachment.contentId);
-        if (!contentId) {
-          continue;
-        }
-
-        const contentType = asNumber(attachment.contentType);
-        const candidate = (() => {
-          if (contentType === 1) {
-            return mediaById.has(contentId)
-              ? { kind: "single" as const, item: mediaById.get(contentId)! }
-              : null;
-          }
-          if (contentType === 2) {
-            return bundlesById.has(contentId)
-              ? { kind: "bundle" as const, item: bundlesById.get(contentId)! }
-              : null;
-          }
-
-          // Older payloads occasionally omit contentType. Resolve only when
-          // the id exists in exactly one captured metadata map.
-          const media = mediaById.get(contentId);
-          const bundle = bundlesById.get(contentId);
-          if (media && !bundle) {
-            return { kind: "single" as const, item: media };
-          }
-          if (bundle && !media) {
-            return { kind: "bundle" as const, item: bundle };
-          }
-          return null;
-        })();
-
-        if (!candidate || !hasPpvPermission(candidate.item)) {
-          continue;
-        }
-
-        const target = { kind: candidate.kind, contentId };
-        recordTarget(target, 2);
-      }
-    }
-  }
-
-  return [...targets.values()].map(({ target }) => target).sort((left, right) =>
-    fanslyPurchaseHistoryTargetKey(left).localeCompare(
-      fanslyPurchaseHistoryTargetKey(right),
-      "en",
-      { numeric: true },
-    ));
-}
-
-export function parseFanslyPurchaseHistoryCursorState(
-  value: unknown,
-  now = new Date(),
-): FanslyPurchaseHistoryCursorStateV5 | null {
-  const state = asRecord(value);
-  const version = asNumber(state?.version);
-  if (version !== 2 && version !== 3 && version !== 4 && version !== 5) {
-    return null;
-  }
-  const rawPayloadCursorId = asNumber(state?.rawPayloadCursorId);
-  if (
-    rawPayloadCursorId === null ||
-    !Number.isSafeInteger(rawPayloadCursorId) ||
-    rawPayloadCursorId < 0
-  ) {
-    return null;
-  }
-  const transactionCursorId = version === 2
-    ? 0
-    : asNumber(state?.transactionCursorId);
-  if (
-    transactionCursorId === null ||
-    !Number.isSafeInteger(transactionCursorId) ||
-    transactionCursorId < 0
-  ) {
-    return null;
-  }
-
-  const rawPendingTargets = state?.pendingTargets;
-  if (!Array.isArray(rawPendingTargets)) {
-    return null;
-  }
-  const pendingTargets = rawPendingTargets.flatMap<FanslyPurchaseHistoryPendingTarget>((item) => {
-      const target = asRecord(item);
-      const kind = target?.kind;
-      const contentId = asString(target?.contentId);
-      const rawBefore = version === 4 || version === 5 ? target?.before : null;
-      const before = rawBefore === null ? null : asString(rawBefore);
-      return (kind === "single" || kind === "bundle") && contentId &&
-          (rawBefore === null || before !== null)
-        ? [{ kind, contentId, before, ...(target?.retry === true ? { retry: true as const } : {}) }]
-        : [];
-    });
-  if (pendingTargets.length !== rawPendingTargets.length) {
-    return null;
-  }
-  if (
-    new Set(pendingTargets.map(fanslyPurchaseHistoryTargetKey)).size !==
-      pendingTargets.length
-  ) {
-    return null;
-  }
-
-  return {
-    version: 5,
-    transactionCursorId,
-    rawPayloadCursorId,
-    pendingTargets,
-    utcDay: typeof state?.utcDay === "string"
-      ? state.utcDay
-      : now.toISOString().slice(0, 10),
-    callsToday: Math.max(0, asNumber(state?.callsToday) ?? 0),
-  };
 }
 
 function fanslyPurchaseHistoryRows(payloadValue: unknown): unknown[] | null {

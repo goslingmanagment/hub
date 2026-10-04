@@ -14,6 +14,7 @@ import {
 
 import { getSyncMonitorSnapshot } from "../apps/runtime/src/services/sync-monitor.ts";
 import { startIntegrationTestDatabase } from "./helpers/db.ts";
+import { EVERY_PLATFORM } from "./helpers/page-sync-scope.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 
 /** A ramp-gated chunk (platform / flag / allowlist) short-circuits before any
@@ -76,6 +77,7 @@ describe("page sync gated skip", () => {
     );
 
     const lease = await acquirePageSyncLease(testDb.db, {
+      platforms: EVERY_PLATFORM,
       pageId: page.id,
       workerId: `${label}-worker`,
       leaseToken: `${label}-token`,

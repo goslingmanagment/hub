@@ -10,8 +10,6 @@ import {
   isDmArchiveScopeFenced,
   latestClosedWorkForKey,
   listDomainEventsByDedupKeys,
-  listLegacyDmHeadDebt,
-  listLegacyDmQuarantines,
   listFanslyWsExactDeletedMessageRefs,
   listOpenHistoryItems,
   listPageDmThreadListStates,
@@ -48,8 +46,6 @@ import type {
   ApplyInput,
   ApplyResult,
   DemandSignal,
-  LegacyImport,
-  LegacyImportPage,
   ReplayContext,
   ReplayObservation,
   ReplayVerdict,
@@ -1164,50 +1160,12 @@ async function replayMessagesPage(observation: ReplayObservation, ctx: ReplayCon
 
 // ── modules ─────────────────────────────────────────────────────────────────
 
-/** The legacy breaker of a chat is carried onto each key that reads it. */
-const BREAKER_KEYS: ReadonlyArray<{ resource: string }> = [{ resource: HEAD_KEY }, { resource: CATCHUP_KEY }, { resource: HISTORY_KEY }];
-/** A legacy breaker is carried at most this deep (plan §9: five failures make
- *  `blocked_by_vendor`). */
-const IMPORTED_FAILURES_CAP = 5;
-
-/**
- * The switch's import of the legacy DM state (design step 3 §3.5 item 7,
- * I.3; S2 §5.4 Import), read-only towards the legacy tables: every chat whose
- * legacy breaker is still in force gets a closed row per DM key carrying it
- * (`failure_count = min(n, 5)`, `breaker_until = greatest(next_retry_at,
- * quarantine_until)`) — except a breaker the handover refusal or a failure
- * after the switch began armed; every legacy head debt on a chat the engine
- * may read becomes a `.catchup` demand for its expected ids.
- */
-async function importLegacyDm(tx: Database, page: LegacyImportPage): Promise<LegacyImport> {
-  const quarantines = await listLegacyDmQuarantines(tx, { pageId: page.pageId, startedAfter: page.switchStartedAt ?? null });
-  const debts = await listLegacyDmHeadDebt(tx, { pageId: page.pageId });
-  return {
-    cursors: [],
-    breakers: quarantines.flatMap((row) => BREAKER_KEYS.map(({ resource }) => ({
-      resource,
-      subject: row.groupId,
-      failureCount: Math.min(row.failureCount, IMPORTED_FAILURES_CAP),
-      breakerUntil: row.breakerUntil,
-      lastErrorClass: row.errorClass === null ? "legacy_quarantine" : `legacy:${row.errorClass}`,
-    }))),
-    demands: debts.map((debt) => ({
-      resource: CATCHUP_KEY,
-      subject: debt.groupId,
-      demand: { messageIds: debt.messageIds, reason: "legacy_import" },
-    })),
-    notes: { quarantinedChats: quarantines.length, headDebtChats: debts.length },
-  };
-}
-
 function variantModule(variant: DmMessagesVariant): ResourceModule {
   return {
     plan: (work, ctx) => planStep(variant, work, ctx),
     apply: (tx, input) => applyMessagesPage(variant, tx, input),
     shadow: (work, _request, ctx) => shadowStep(variant, work, ctx),
     replay: replayMessagesPage,
-    // One module of the file imports for all three keys.
-    ...(variant === "head" ? { importLegacy: importLegacyDm } : {}),
   };
 }
 

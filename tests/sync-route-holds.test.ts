@@ -5,7 +5,6 @@ import { describe, expect, it } from "vitest";
 import type { SyncRouteSend } from "@agency_hub_core/db";
 
 import {
-  activeRouteHolds,
   ROUTE_HOLD_JITTER_MAX,
   ROUTE_HOLD_LADDER_MS,
   ROUTE_RAISE_STEP_PER_MIN,
@@ -154,7 +153,7 @@ describe("route holds: Retry-After and holds in force", () => {
     expect(() => routeHoldAfter(hold({ httpStatus: 503, retryAfterMs: null }))).toThrow(/Retry-After/);
   });
 
-  it("finds the routes held at an instant, the latest end first", () => {
+  it("reads a route's hold in force at an instant", () => {
     const state: RouteState = {
       version: ROUTE_STATE_VERSION,
       routes: {
@@ -163,14 +162,11 @@ describe("route holds: Retry-After and holds in force", () => {
         "transactions.page": { ...routeHoldAfter(hold({ route: "transactions.page" }))!.entry, holdUntil: null },
       },
     };
-    expect(activeRouteHolds(state, NOW)).toEqual([
-      { route: "media.offer_stats", until: at(60_000) },
-      { route: "messages.page", until: at(5_000) },
-    ]);
-    expect(activeRouteHolds(state, at(5_000))).toEqual([{ route: "media.offer_stats", until: at(60_000) }]);
+    expect(routeHoldUntil(state, "media.offer_stats", NOW)).toEqual(at(60_000));
     expect(routeHoldUntil(state, "messages.page", at(4_999))).toEqual(at(5_000));
+    expect(routeHoldUntil(state, "messages.page", at(5_000))).toBeNull();
     expect(routeHoldUntil(state, "transactions.page", NOW)).toBeNull();
-    expect(activeRouteHolds(EMPTY_ROUTE_STATE, NOW)).toEqual([]);
+    expect(routeHoldUntil(EMPTY_ROUTE_STATE, "messages.page", NOW)).toBeNull();
   });
 
   it("the stored entry reads back as written (the namespace parser of 1-1)", () => {

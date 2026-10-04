@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 
 import {
-  listEngineManagedAgentHydrationDispatches,
+  listEndedEngineManagedAgentHydrationDispatches,
   settleAgentHydrationRequest,
   type AgentHydrationLastError,
   type AgentHydrationRequestRecord,
@@ -19,10 +19,10 @@ import {
 } from "./history.ts";
 
 // The legacy hydration route on the Fansly Sync Engine (design S2 §7.5, step 3
-// §3.5 items 7 H and 10): a Fansly hydration request — one chat, backfilled
-// before a boundary — is a one-fan history request with depth
-// `before_boundary`. The switch converts the open ones of a page (phase H);
-// on a live page the wrapper files every new one. The conversion is
+// §3.5 item 10): a Fansly hydration request — one chat, backfilled before a
+// boundary — is a one-fan history request with depth `before_boundary`. On a
+// live page the wrapper files every new one (the step-3 switch converted the
+// ones open at a page's switch; it went at step 4, S4-21). The conversion is
 // idempotent by a name-based uuid of the legacy row's ref, and the legacy row
 // reads as the history request's state, with the meaning the step-1
 // hydration repairs gave the legacy states (`completed` = read to an empty
@@ -122,8 +122,6 @@ export function mirrorLegacyHydrationState(
 export interface EngineHydrationSettleResult {
   /** Rows settled to the state their ended history request mirrors. */
   settled: number;
-  /** Rows a rollback expired while their history request still waits. */
-  expired: number;
 }
 
 /** One pass's bound (the worker repeats every cycle). */
@@ -131,29 +129,15 @@ const SETTLE_BATCH_LIMIT = 50;
 
 /**
  * Settle the wrapper rows the engine served (S2 §7.5), CAS'd on `dispatching`
- * (a settle that lost a race is a no-op):
- *
- * - a row whose history request is over takes the terminal legacy state its
- *   fan mirrors (`completed`, `partially_completed`, `failed`, `expired`) —
- *   the worker's hydration cycle runs this for every page (`endedOnly`);
- * - with `rolledBack` (rollback step 4, one page) a row whose request still
- *   waits is `expired` (cause `rolled_back`): the legacy engine owns the page
- *   again and never serves it, while its history request waits `paused`
- *   under the ref the row keeps (`execution_ref`); a missing request also
- *   expires the row.
+ * (a settle that lost a race is a no-op): a row whose history request is over
+ * takes the terminal legacy state its fan mirrors (`completed`,
+ * `partially_completed`, `failed`, `expired`). The worker's hydration cycle
+ * runs this for every page.
  */
-export async function settleEngineManagedHydration(
-  ctx: HistoryServiceContext,
-  input: { pageId?: number; rolledBack?: boolean } = {},
-): Promise<EngineHydrationSettleResult> {
-  const rolledBack = input.rolledBack === true;
-  const result: EngineHydrationSettleResult = { settled: 0, expired: 0 };
+export async function settleEngineManagedHydration(ctx: HistoryServiceContext): Promise<EngineHydrationSettleResult> {
+  const result: EngineHydrationSettleResult = { settled: 0 };
   for (;;) {
-    const rows = await listEngineManagedAgentHydrationDispatches(ctx.db, {
-      limit: SETTLE_BATCH_LIMIT,
-      ...(input.pageId === undefined ? {} : { pageId: input.pageId }),
-      endedOnly: !rolledBack,
-    });
+    const rows = await listEndedEngineManagedAgentHydrationDispatches(ctx.db, { limit: SETTLE_BATCH_LIMIT });
     let progressed = 0;
     for (const row of rows) {
       let mirrored: ReturnType<typeof mirrorLegacyHydrationState> | null;
@@ -163,21 +147,17 @@ export async function settleEngineManagedHydration(
         if (!(error instanceof HistoryRequestError) || error.status !== 404) throw error;
         mirrored = null;
       }
-      const ended = mirrored === null || mirrored.state === "dispatching"
-        ? null
-        : { state: mirrored.state, lastError: mirrored.lastError };
-      if (ended === null && !rolledBack) continue;
+      if (mirrored === null || mirrored.state === "dispatching") continue;
       const outcome = await settleAgentHydrationRequest(ctx.db, {
         id: row.id,
-        toState: ended?.state ?? "expired",
-        lastError: ended?.lastError ?? "none",
+        toState: mirrored.state,
+        lastError: mirrored.lastError,
         actor: "executor",
-        cause: ended !== null ? "history_request_ended" : mirrored === null ? "history_request_missing" : "rolled_back",
+        cause: "history_request_ended",
       });
       if (outcome.outcome !== "applied") continue;
       progressed += 1;
-      if (ended !== null) result.settled += 1;
-      else result.expired += 1;
+      result.settled += 1;
     }
     // A full batch that all settled may hide more; anything else is the end
     // (a row that did not settle stays first in the order).

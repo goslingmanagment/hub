@@ -59,11 +59,11 @@ import {
 } from "./services/fansly-send-guard/index.ts";
 import { buildFanslySendGuardReport } from "./services/fansly-send-guard/report.ts";
 import { registerSyncChainCommands } from "./sync/cli/chain.ts";
+import { registerSyncCheckCommands } from "./sync/cli/checks.ts";
 import { registerSyncDmReaderParityCommands } from "./sync/cli/dm-reader-parity.ts";
 import { registerSyncExcludedCommands } from "./sync/cli/excluded.ts";
 import { registerSyncHistoryCommands } from "./sync/cli/history.ts";
 import { registerSyncReportCommands } from "./sync/cli/report.ts";
-import { registerSyncSwitchCommands } from "./sync/cli/switch.ts";
 import { verifyPageOnEngine } from "./services/sync-engine-account.ts";
 import { resolveHarvestManifest } from "./services/harvest-manifest.ts";
 import {
@@ -563,22 +563,6 @@ async function queueInitialFullSyncAfterPageCreate(
     );
   } finally {
     await boss.stop().catch(() => undefined);
-  }
-}
-
-/** The step-3 rollback's last step (design step 3 §3.5 item 7): the legacy
- *  engine runs every stream of the page it owns again. */
-async function queueLegacyRecoverySync(pageLabel: string) {
-  const app = await createAppContext();
-  const boss = new PgBoss({ connectionString: app.config.databaseUrl });
-  attachCliPgBossErrorLogger(boss);
-  try {
-    await boss.start();
-    await ensureSyncQueues(boss);
-    await requestPageSync(app, boss, { pageLabel, scope: "all", reason: "recovery" });
-  } finally {
-    await boss.stop().catch(() => undefined);
-    await app.close();
   }
 }
 
@@ -2960,9 +2944,10 @@ export function buildProgram() {
   // Fansly Sync Engine observability (design §3.12, §9.6): `sync shadow report`,
   // `sync alerts status | ack`.
   registerSyncReportCommands(sync);
-  // Fansly Sync Engine step 3 (step-3 design §3.5 item 8): `sync switch`,
-  // `sync switch check`, `sync rollback`.
-  registerSyncSwitchCommands(sync, { requestLegacyRecovery: queueLegacyRecoverySync });
+  // Fansly Sync Engine read-only checks (`sync/checks/`): `sync check
+  // live-hour` — a page's first hour on the engine and the combined pace audit
+  // (`sync switch check` until step 4 S4-21 deleted the switch).
+  registerSyncCheckCommands(sync);
   // Owner decision №8 (step-3 design S3-06): `sync excluded probe | report |
   // lift | unlift`.
   registerSyncExcludedCommands(sync);

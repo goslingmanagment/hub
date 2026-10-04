@@ -113,7 +113,7 @@ const ADMISSION_SEARCH_MS = 15 * 60_000;
 const ONE_TIME_BACKLOG_KEYS: ReadonlySet<string> = new Set(["media-stats.walk", "catalog.vault"]);
 /** Triggers of one-time work: a walk only these start is a backfill, not
  *  steady-state demand. */
-const ONE_TIME_TRIGGERS: ReadonlySet<string> = new Set(["owner", "new_page", "legacy_import", "dependency"]);
+const ONE_TIME_TRIGGERS: ReadonlySet<string> = new Set(["owner", "new_page", "dependency"]);
 /** Why the legacy volume of a stream or sender differs from the engine's (design §3.12 A2). */
 const LEGACY_VOLUME_NOTES: Readonly<Record<string, string>> = {
   "stream:followers": "followers.head reuses pages.follower_count; the full reconcile is daily (the owner's floor)",

@@ -109,10 +109,6 @@ export const FIRST_VISIT_REQUESTS = {
   longTail: BACKFILL_WINDOWS_PER_VISIT,
 } as const;
 
-/** Media seeded per dispatch on first enable. Bounded so a page with thousands
- *  of media does not hold a write lock, and keyset so the next batch resumes
- *  exactly where this one stopped. */
-export const SEED_BATCH_SIZE = 500;
 /** The platform's own top-N page size. */
 export const TOP_MEDIA_MARK_LIMIT = 50;
 
