@@ -8,7 +8,6 @@ import type { Database } from "../client.ts";
 import {
   egressEndpoints,
   fanPages,
-  fanSpendLifetime,
   models,
   pageDmConversations,
   pageDmMessages,
@@ -26,9 +25,7 @@ import {
 } from "../schema.ts";
 import {
   SYNC_STREAM_POLICY,
-  computeCurrentPageSyncSlot,
   getSyncStreamsForPlatform,
-  pageSyncRunnableSinceSql,
   resolvePageSyncPriority,
   type PageSyncStatus,
   type SyncRequestSource,
@@ -36,17 +33,10 @@ import {
 } from "./page-sync.ts";
 import {
   type CapturePayloadRef,
-  capturePayloadRefFromColumns,
   lockCapturePayloadRefAlive,
 } from "./capture-payloads.ts";
 import { egressKeySql } from "./egress.ts";
 import { PageSyncLeaseLostError, getPageSyncExecutionContext } from "./sync-context.ts";
-import { legacyOwnsFanslyPageSql } from "./sync/pages.ts";
-import {
-  PAGE_DM_MESSAGE_HISTORY_LIMIT,
-  PAGE_DM_REGULAR_MESSAGE_RETENTION_LIMIT,
-  PAGE_DM_SPENDER_MESSAGE_RETENTION_LIMIT,
-} from "./page-dm.ts";
 
 type TimestampValue = Date | string | null | undefined;
 type NumericValue = number | bigint | null | undefined;
@@ -503,211 +493,6 @@ export async function listCheckpointStates(db: Database, pageIds: number[], stre
   return db.select({ pageId: pageSyncCursors.pageId, state: pageSyncCursors.state })
     .from(pageSyncCursors)
     .where(and(inArray(pageSyncCursors.pageId, pageIds), eq(pageSyncCursors.stream, stream)));
-}
-
-export interface FanslyDmRawPayloadCursorRow {
-  id: number;
-  responsePayload: unknown;
-  /** G5 slice 2: the catalog reference this raw envelope carries, or null. */
-  payloadRef: CapturePayloadRef | null;
-}
-
-/**
- * Durable source cursor for the media-scoped Fansly purchase-history walk.
- * The raw page is already captured before this reader sees it; keyset paging
- * keeps steady-state work bounded to newly captured /message pages.
- */
-export async function listFanslyDmRawPayloadsAfterId(
-  db: Database,
-  input: {
-    pageId: number;
-    afterId: number;
-    limit?: number;
-  },
-): Promise<FanslyDmRawPayloadCursorRow[]> {
-  const result = await db.execute<Record<string, unknown>>(sql`
-    select rp.id::text as id,
-           rp.response_payload as "responsePayload",
-           to_char(rp.payload_bucket_month, 'YYYY-MM-DD') as "payloadBucketMonth",
-           rp.payload_object_id::text as "payloadObjectId"
-    from ${syncRawPayloads} rp
-    where rp.page_id = ${input.pageId}
-      and rp.endpoint = 'dm_messages'
-      and rp.id > ${input.afterId}
-    order by rp.id asc
-    limit ${input.limit ?? 500}
-  `);
-  return result.rows.map((row) => ({
-    id: Number(row.id),
-    responsePayload: row.responsePayload,
-    payloadRef: capturePayloadRefFromColumns(
-      row.payloadBucketMonth as string | null,
-      row.payloadObjectId as string | null,
-    ),
-  }));
-}
-
-export interface FanslyMessagePurchaseTargetCursorRow {
-  id: number;
-  rawType: string;
-  correlationId: string;
-}
-
-/**
- * Durable local discovery source for Fansly media purchase-history targets.
- * Fansly transaction correlation ids identify the purchased media for the
- * four media transaction types; the runtime maps each raw type to the
- * accountMediaId/accountMediaBundleId request parameter.
- *
- * Deliberately do not filter by transaction state or is_active: an unlock is
- * a historical fact even while its payout is pending or after a later
- * financial adjustment. The raw-type allowlist prevents unrelated Fansly
- * correlation-id namespaces (for example subscriptions) from entering the
- * media walk.
- */
-export async function listFanslyMessagePurchaseTargetsAfterId(
-  db: Database,
-  input: {
-    pageId: number;
-    afterId: number;
-    limit?: number;
-  },
-): Promise<FanslyMessagePurchaseTargetCursorRow[]> {
-  const result = await db.execute<{
-    id: string;
-    rawType: string;
-    correlationId: string;
-  }>(sql`
-    select t.id::text as id,
-           t.raw_type as "rawType",
-           btrim(t.correlation_id) as "correlationId"
-    from ${transactions} t
-    where t.platform_account_id = ${input.pageId}
-      and t.id > ${input.afterId}
-      and t.raw_type in ('2010', '2016', '2110', '2116')
-      and nullif(btrim(t.correlation_id), '') is not null
-    order by t.id asc
-    limit ${input.limit ?? 500}
-  `);
-  return result.rows.map((row) => ({
-    id: Number(row.id),
-    rawType: row.rawType,
-    correlationId: row.correlationId,
-  }));
-}
-
-export interface FanslyPurchaseHistoryCaptureRow {
-  id: number;
-  targetKey: string;
-  requestBefore: string | null;
-  statusCode: number | null;
-  responsePayload: unknown;
-  /** G5 slice 2: the catalog reference this raw envelope carries, or null. */
-  payloadRef: CapturePayloadRef | null;
-}
-
-/**
- * The content ids the legacy purchase-history lane has captured on a page (any
- * answer, either namespace) — the ones its discovery skips. Request parameters
- * only: no body is read.
- */
-export async function listFanslyPurchaseHistoryCapturedContentIds(
-  db: Database,
-  pageId: number,
-): Promise<string[]> {
-  const result = await db.execute<{ contentId: string }>(sql`
-    select distinct coalesce(
-             nullif(rp.request_params ->> 'accountMediaId', ''),
-             nullif(rp.request_params ->> 'accountMediaBundleId', '')
-           ) as "contentId"
-    from ${syncRawPayloads} rp
-    where rp.page_id = ${pageId}
-      and rp.endpoint = 'purchase_history'
-      and (
-        nullif(rp.request_params ->> 'accountMediaId', '') is not null
-        or nullif(rp.request_params ->> 'accountMediaBundleId', '') is not null
-      )
-  `);
-  return result.rows.map((row) => row.contentId);
-}
-
-/**
- * Returns the durable target-specific facts for local purchase-history
- * reconciliation. Capture alone prevents another provider request; the
- * runtime classifier decides from status + raw payload whether that fact is
- * complete or must keep the stream visibly blocked.
- */
-export async function listFanslyPurchaseHistoryCaptures(
-  db: Database,
-  pageId: number,
-  // The contract proof (Decision 358) journals witness pages under their own
-  // endpoint so they never enter a target's chain; it reads them back here.
-  endpoint: "purchase_history" | "purchase_history_contract_probe" = "purchase_history",
-): Promise<FanslyPurchaseHistoryCaptureRow[]> {
-  const result = await db.execute<{
-    id: string;
-    targetKey: string;
-    requestBefore: string | null;
-    statusCode: number | null;
-    responsePayload: unknown;
-    payloadBucketMonth: string | null;
-    payloadObjectId: string | null;
-  }>(sql`
-    select rp.id::text as id,
-           case
-             when nullif(rp.request_params ->> 'accountMediaId', '') is not null
-               then 'single:' || (rp.request_params ->> 'accountMediaId')
-             when nullif(rp.request_params ->> 'accountMediaBundleId', '') is not null
-               then 'bundle:' || (rp.request_params ->> 'accountMediaBundleId')
-             else null
-           end as "targetKey",
-           nullif(rp.request_params ->> 'before', '') as "requestBefore",
-           rp.status_code as "statusCode",
-           rp.response_payload as "responsePayload",
-           to_char(rp.payload_bucket_month, 'YYYY-MM-DD') as "payloadBucketMonth",
-           rp.payload_object_id::text as "payloadObjectId"
-    from ${syncRawPayloads} rp
-    where rp.page_id = ${pageId}
-      and rp.endpoint = ${endpoint}
-      and (
-        nullif(rp.request_params ->> 'accountMediaId', '') is not null
-        or nullif(rp.request_params ->> 'accountMediaBundleId', '') is not null
-      )
-    order by rp.id asc
-  `);
-  return result.rows.map((row) => ({
-    id: Number(row.id),
-    targetKey: row.targetKey,
-    requestBefore: row.requestBefore,
-    statusCode: row.statusCode,
-    responsePayload: row.responsePayload,
-    payloadRef: capturePayloadRefFromColumns(row.payloadBucketMonth, row.payloadObjectId),
-  }));
-}
-
-/**
- * The storm verdicts the purchase-history contract proof journaled (Decision
- * 355): the lane's own record that it raised a storm, with the run that
- * raised it — the executor's record of THAT run says whether it blocked.
- */
-export async function listFanslyPurchaseHistoryStormVerdicts(
-  db: Database,
-  pageId: number,
-): Promise<Array<{ id: number; kind: string | null; syncRunId: number | null }>> {
-  const result = await db.execute<{ id: string; kind: string | null; syncRunId: string | null }>(sql`
-    select rp.id::text as id,
-           rp.request_params ->> 'mediaKind' as kind,
-           rp.sync_run_id::text as "syncRunId"
-    from ${syncRawPayloads} rp
-    where rp.page_id = ${pageId}
-      and rp.endpoint = 'purchase_history_contract_storm'
-    order by rp.id asc
-  `);
-  return result.rows.map((row) => ({
-    id: Number(row.id),
-    kind: row.kind,
-    syncRunId: row.syncRunId === null ? null : Number(row.syncRunId),
-  }));
 }
 
 /** Refreshes the page-level reporting cache from the authoritative current
@@ -1661,95 +1446,6 @@ export async function listSyncRequestAttempts(
   return result.rows.map((row) => normalizeSyncRequestAttemptRow(row));
 }
 
-export async function countRecentTerminalDmMessageConversationFailureStreak(
-  db: Database,
-  input: {
-    platformAccountId: number;
-    platformConversationId: string;
-    limit?: number;
-  },
-) {
-  const result = await db.execute<{
-    terminalState: "success" | "failed";
-    httpStatus: number | null;
-  }>(sql`
-    with logical_requests as (
-      select a.logical_request_id as "logicalRequestId",
-             max(a.id) filter (where a.state in ('success', 'failed')) as "terminalAttemptId"
-      from ${syncHttpAttempts} a
-      where a.page_id = ${input.platformAccountId}
-        and a.stream = 'dm_messages'
-        and a.operation = 'messages'
-        and a.request_shape ->> 'groupId' = ${input.platformConversationId}
-      group by a.logical_request_id
-    )
-    select a.state as "terminalState",
-           a.http_status as "httpStatus"
-    from logical_requests lr
-    inner join ${syncHttpAttempts} a on a.id = lr."terminalAttemptId"
-    order by coalesce(a.finished_at, a.started_at) desc, a.id desc
-    limit ${input.limit ?? 20}
-  `);
-
-  let streak = 0;
-  for (const row of result.rows) {
-    if (row.terminalState !== "failed") {
-      break;
-    }
-
-    if (row.httpStatus === null || row.httpStatus < 500 || row.httpStatus >= 600) {
-      break;
-    }
-
-    streak += 1;
-  }
-
-  return streak;
-}
-
-/**
- * Outage guard for the per-thread dm_messages breaker (the #138 vendor-outage
- * rule): how many OTHER groups of the page have a failed /message read newer
- * than the page's latest successful one. A failure is the thread's own only
- * while the endpoint still works for the page; failures across several groups
- * since the last success read as a page-wide outage (5xx, proxy, envelope),
- * which must not quarantine one thread per stream retry. Local policy
- * refusals are not provider failures. Reads journaled attempts only (no
- * request); `since` bounds the scan through the started_at index.
- */
-export async function countOtherDmMessageGroupsFailingSinceLastSuccess(
-  db: Database,
-  input: {
-    platformAccountId: number;
-    platformConversationId: string;
-    since: Date;
-  },
-) {
-  const result = await db.execute<{ count: number | string }>(sql`
-    with recent as (
-      select a.state,
-             a.request_shape ->> 'groupId' as "groupId",
-             coalesce(a.finished_at, a.started_at) as "terminalAt"
-      from ${syncHttpAttempts} a
-      where a.started_at >= ${input.since}::timestamptz
-        and a.page_id = ${input.platformAccountId}
-        and a.operation = 'messages'
-        and (a.state = 'success' or (a.state = 'failed' and a.failure_kind is distinct from 'policy'))
-    )
-    select count(distinct r."groupId")::int as "count"
-    from recent r
-    where r.state = 'failed'
-      and r."groupId" is not null
-      and r."groupId" <> ${input.platformConversationId}
-      and r."terminalAt" > coalesce(
-        (select max(s."terminalAt") from recent s where s.state = 'success'),
-        '-infinity'::timestamptz
-      )
-  `);
-
-  return Number(result.rows[0]?.count ?? 0);
-}
-
 export async function hasRecentTerminalProxyFailure(
   db: Database,
   input: {
@@ -1775,78 +1471,6 @@ export async function hasRecentTerminalProxyFailure(
   `);
 
   return Boolean(result.rows[0]?.hasFailure);
-}
-
-/** E-2: the ops watchdog's Fansly sync deadman. The planner is one
- * all-or-nothing cycle and a wedged executor starts nothing, so either failure
- * shows up the same way: no Fansly chunk starts while a stream is due.
- *
- * A stream counts only once it has been due since `dueBefore`: work that just
- * came due (a slot reached, a request made, a back-off run out) first gets the
- * watchdog's own threshold to start, and a stream idling toward its next slot
- * never counts. It must be runnable (not paused, not blocked, no retry or
- * pacing deadline after `dueBefore`) and either hold an outstanding request
- * (`request_seq > applied_seq`) whose runnable-since clock, the one starvation
- * aging uses, is at or before `dueBefore`, or have a slot the planner would
- * have claimed by then (its own `computeCurrentPageSyncSlot` against
- * `last_scheduled_slot`), which is how a planner that stopped claiming shows.
- *
- * The run lookup is bounded to `since` so it stays on `sync_runs_started_idx`;
- * `latestStartedAt` is null when nothing started inside it.
- *
- * Pages the Fansly Sync Engine owns (`handover`/`live`) are out of both
- * halves: their legacy streams are fenced, so a due stream of theirs is no
- * sign of a wedged executor, and a run of theirs (one that started just before
- * the switch) is no sign of a live one. */
-export async function getFanslySyncLiveness(
-  db: Database,
-  input: { since: Date; dueBefore: Date },
-): Promise<{ latestStartedAt: Date | null; hasDueStream: boolean }> {
-  const latest = await db.execute<{ latestStartedAt: TimestampValue }>(sql`
-    select max(r.started_at) as "latestStartedAt"
-      from ${syncRuns} r
-      join ${pages} p on p.id = r.page_id and p.platform = 'fansly'
-     where r.started_at > ${input.since}
-       and ${legacyOwnsFanslyPageSql(sql.raw("r.page_id"))}
-  `);
-  const streams = await db.execute<{
-    outstanding: boolean;
-    runnableSince: TimestampValue;
-    cadenceSeconds: NumericValue;
-    slotOffsetSeconds: NumericValue;
-    lastScheduledSlot: NumericValue;
-  }>(sql`
-    select st.request_seq > st.applied_seq as "outstanding",
-           ${pageSyncRunnableSinceSql("st")} as "runnableSince",
-           st.cadence_seconds as "cadenceSeconds",
-           st.slot_offset_seconds as "slotOffsetSeconds",
-           st.last_scheduled_slot as "lastScheduledSlot"
-      from ${pageSyncStates} st
-      join ${pages} p on p.id = st.page_id and p.status = 'active' and p.platform = 'fansly'
-     where st.status <> 'paused'
-       and st.blocker_kind is null
-       and (st.retry_at is null or st.retry_at <= ${input.dueBefore})
-       and ${legacyOwnsFanslyPageSql(sql.raw("st.page_id"))}
-  `);
-  const hasDueStream = streams.rows.some((row) => {
-    if (row.outstanding) {
-      // Every request stamps requested_at; a row without any clock is due.
-      const runnableSince = row.runnableSince ? new Date(row.runnableSince) : null;
-      if (runnableSince === null || runnableSince.getTime() <= input.dueBefore.getTime()) {
-        return true;
-      }
-    }
-    return computeCurrentPageSyncSlot(
-      input.dueBefore,
-      normalizeNumber(row.cadenceSeconds, "cadenceSeconds"),
-      normalizeNumber(row.slotOffsetSeconds, "slotOffsetSeconds"),
-    ) > normalizeNumber(row.lastScheduledSlot, "lastScheduledSlot");
-  });
-  const latestStartedAt = latest.rows[0]?.latestStartedAt;
-  return {
-    latestStartedAt: latestStartedAt ? new Date(latestStartedAt) : null,
-    hasDueStream,
-  };
 }
 
 export async function listRunningSyncRuns(
@@ -1927,14 +1551,6 @@ export interface SyncMonitorStreamRow {
   dmEligibleConversationCount: number;
   dmBackfillCompleteConversationCount: number;
   dmLaggingConversationCount: number;
-  dmDeepBackfillPendingConversationCount: number;
-  dmDeepBackfillPendingPageEstimate: number;
-  dmDeepBackfillSpenderPendingConversationCount: number;
-  dmDeepBackfillSpenderPendingPageEstimate: number;
-  dmDeepBackfillRegularPendingConversationCount: number;
-  dmDeepBackfillRegularPendingPageEstimate: number;
-  dmDeepBackfillRecentRequestCount: number;
-  dmDeepBackfillLastCompletedAt: Date | null;
   stream: SyncStream;
   status: PageSyncStatus | null;
   blockerKind: string | null;
@@ -2023,38 +1639,6 @@ function normalizeSyncMonitorStreamRow(row: Record<string, unknown>): SyncMonito
     dmEligibleConversationCount: normalizeNumber(row.dmEligibleConversationCount as NumericValue, "dmEligibleConversationCount"),
     dmBackfillCompleteConversationCount: normalizeNumber(row.dmBackfillCompleteConversationCount as NumericValue, "dmBackfillCompleteConversationCount"),
     dmLaggingConversationCount: normalizeNumber(row.dmLaggingConversationCount as NumericValue, "dmLaggingConversationCount"),
-    dmDeepBackfillPendingConversationCount: normalizeNumber(
-      row.dmDeepBackfillPendingConversationCount as NumericValue,
-      "dmDeepBackfillPendingConversationCount",
-    ),
-    dmDeepBackfillPendingPageEstimate: normalizeNumber(
-      row.dmDeepBackfillPendingPageEstimate as NumericValue,
-      "dmDeepBackfillPendingPageEstimate",
-    ),
-    dmDeepBackfillSpenderPendingConversationCount: normalizeNumber(
-      row.dmDeepBackfillSpenderPendingConversationCount as NumericValue,
-      "dmDeepBackfillSpenderPendingConversationCount",
-    ),
-    dmDeepBackfillSpenderPendingPageEstimate: normalizeNumber(
-      row.dmDeepBackfillSpenderPendingPageEstimate as NumericValue,
-      "dmDeepBackfillSpenderPendingPageEstimate",
-    ),
-    dmDeepBackfillRegularPendingConversationCount: normalizeNumber(
-      row.dmDeepBackfillRegularPendingConversationCount as NumericValue,
-      "dmDeepBackfillRegularPendingConversationCount",
-    ),
-    dmDeepBackfillRegularPendingPageEstimate: normalizeNumber(
-      row.dmDeepBackfillRegularPendingPageEstimate as NumericValue,
-      "dmDeepBackfillRegularPendingPageEstimate",
-    ),
-    dmDeepBackfillRecentRequestCount: normalizeNumber(
-      row.dmDeepBackfillRecentRequestCount as NumericValue,
-      "dmDeepBackfillRecentRequestCount",
-    ),
-    dmDeepBackfillLastCompletedAt: parseTimestamp(
-      row.dmDeepBackfillLastCompletedAt as TimestampValue,
-      "dmDeepBackfillLastCompletedAt",
-    ),
     stream: asSyncStream(String(row.stream ?? "")),
     status: row.status ? row.status as PageSyncStatus : null,
     blockerKind: typeof row.blockerKind === "string" ? row.blockerKind : null,
@@ -2365,63 +1949,6 @@ export async function listSyncMonitorStreamRows(
       inner join visible_pages vp on vp."pageId" = m.platform_account_id
       group by m.platform_account_id
     ),
-    dm_deep_backfill_candidates as (
-      select c.platform_account_id as "pageId",
-             (coalesce(slp.creator_net_amount_mills, 0)::bigint > 0) as "isSpender",
-             c.stored_message_count as "storedMessageCount",
-             case
-               when coalesce(slp.creator_net_amount_mills, 0)::bigint > 0
-                 then ${PAGE_DM_SPENDER_MESSAGE_RETENTION_LIMIT}
-               else ${PAGE_DM_REGULAR_MESSAGE_RETENTION_LIMIT}
-             end::int as "retentionLimit"
-      from ${pageDmConversations} c
-      inner join visible_pages vp on vp."pageId" = c.platform_account_id
-      left join ${fanSpendLifetime} slp
-        on slp.platform_account_id = c.platform_account_id
-       and slp.fan_id = c.fan_id
-      where vp."platform" = 'fansly'
-        and c.is_visible = true
-        and c.fan_id is not null
-        and ${dmMessageSyncEligibleSql("c")}
-        and c.message_coverage_status = 'partial_window'::dm_message_coverage_status
-        and c.stored_message_count > 0
-        and not (
-          c.last_message_id is distinct from c.newest_stored_message_id
-          and (
-            c.last_message_sync_at is null
-            or (c.last_message_at is not null and c.last_message_sync_at < c.last_message_at)
-          )
-        )
-    ),
-    dm_deep_backfill_counts as (
-      select "pageId",
-             count(*) filter (where "storedMessageCount" < "retentionLimit")::int as "pendingConversationCount",
-             coalesce(sum(
-               ceil(greatest("retentionLimit" - "storedMessageCount", 0)::numeric / ${PAGE_DM_MESSAGE_HISTORY_LIMIT})
-             ) filter (where "storedMessageCount" < "retentionLimit"), 0)::int as "pendingPageEstimate",
-             count(*) filter (
-               where "isSpender" = true
-                 and "storedMessageCount" < "retentionLimit"
-             )::int as "spenderPendingConversationCount",
-             coalesce(sum(
-               ceil(greatest("retentionLimit" - "storedMessageCount", 0)::numeric / ${PAGE_DM_MESSAGE_HISTORY_LIMIT})
-             ) filter (
-               where "isSpender" = true
-                 and "storedMessageCount" < "retentionLimit"
-             ), 0)::int as "spenderPendingPageEstimate",
-             count(*) filter (
-               where "isSpender" = false
-                 and "storedMessageCount" < "retentionLimit"
-             )::int as "regularPendingConversationCount",
-             coalesce(sum(
-               ceil(greatest("retentionLimit" - "storedMessageCount", 0)::numeric / ${PAGE_DM_MESSAGE_HISTORY_LIMIT})
-             ) filter (
-               where "isSpender" = false
-                 and "storedMessageCount" < "retentionLimit"
-             ), 0)::int as "regularPendingPageEstimate"
-      from dm_deep_backfill_candidates
-      group by "pageId"
-    ),
     running_runs as (
       select ranked.*,
              greatest(
@@ -2492,30 +2019,6 @@ export async function listSyncMonitorStreamRows(
       -- Load payload only after selecting one completion per page/stream.
       inner join ${syncRuns} sr on sr.id = ranked."runId"
       where ranked."rank" = 1
-    ),
-    deep_backfill_runs as (
-      select page_id as "pageId",
-             coalesce(sum("deepBackfillRequests"), 0)::int as "recentDeepBackfillRequestCount",
-             max(finished_at) filter (
-               where "deepBackfillRequests" > 0
-                 and finished_at is not null
-             ) as "lastDeepBackfillCompletedAt"
-      from (
-        select sr.page_id,
-               sr.finished_at,
-               case
-                 when jsonb_typeof(sr.stats) = 'object'
-                  and (sr.stats ->> 'deepBackfillRequests') ~ '^[0-9]+$'
-                 then (sr.stats ->> 'deepBackfillRequests')::int
-                 else 0
-               end as "deepBackfillRequests"
-        from ${syncRuns} sr
-        inner join visible_pages vp on vp."pageId" = sr.page_id
-        where vp."platform" = 'fansly'
-          and sr.stream = 'dm_messages'::sync_stream
-          and sr.started_at >= ${windowStart}
-      ) runs
-      group by page_id
     ),
     recent_run_counts as (
       select sr.page_id as "pageId",
@@ -2628,14 +2131,6 @@ export async function listSyncMonitorStreamRows(
            coalesce(dcc."dmEligibleConversationCount", 0)::int as "dmEligibleConversationCount",
            coalesce(dcc."dmBackfillCompleteConversationCount", 0)::int as "dmBackfillCompleteConversationCount",
            coalesce(dcc."dmLaggingConversationCount", 0)::int as "dmLaggingConversationCount",
-           coalesce(ddbc."pendingConversationCount", 0)::int as "dmDeepBackfillPendingConversationCount",
-           coalesce(ddbc."pendingPageEstimate", 0)::int as "dmDeepBackfillPendingPageEstimate",
-           coalesce(ddbc."spenderPendingConversationCount", 0)::int as "dmDeepBackfillSpenderPendingConversationCount",
-           coalesce(ddbc."spenderPendingPageEstimate", 0)::int as "dmDeepBackfillSpenderPendingPageEstimate",
-           coalesce(ddbc."regularPendingConversationCount", 0)::int as "dmDeepBackfillRegularPendingConversationCount",
-           coalesce(ddbc."regularPendingPageEstimate", 0)::int as "dmDeepBackfillRegularPendingPageEstimate",
-           coalesce(dbr."recentDeepBackfillRequestCount", 0)::int as "dmDeepBackfillRecentRequestCount",
-           dbr."lastDeepBackfillCompletedAt" as "dmDeepBackfillLastCompletedAt",
            ps."stream" as "stream",
            st.status as "status",
            st.blocker_kind as "blockerKind",
@@ -2721,8 +2216,6 @@ export async function listSyncMonitorStreamRows(
     left join transaction_counts tc on tc."pageId" = ps."pageId"
     left join dm_conversation_counts dcc on dcc."pageId" = ps."pageId"
     left join dm_message_counts dmc on dmc."pageId" = ps."pageId"
-    left join dm_deep_backfill_counts ddbc on ddbc."pageId" = ps."pageId"
-    left join deep_backfill_runs dbr on dbr."pageId" = ps."pageId"
     order by ps."pageLabel" asc, ${streamOrderSql('ps."stream"')} asc
   `);
 

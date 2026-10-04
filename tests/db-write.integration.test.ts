@@ -12,13 +12,13 @@ import {
   createFanslyPage,
   createModel,
   deleteProxyConfig,
+  ensureSyncPage,
   deleteTransactionsMissingFromWindow,
   getFollowersForPage,
   listFollowersForPage,
   recalculateFanPageSpend,
   refreshFanPageFollowerState,
   rebuildRevenueRollups,
-  startSyncRun,
   storeFanslySession,
   storeProxyConfig,
   updatePageMetadata,
@@ -26,6 +26,7 @@ import {
   upsertFanPage,
   upsertFanPageExternalPresences,
   upsertFans,
+  upsertFanslyTransactionWithEarningsDirty,
   upsertPageDmConversation,
   upsertPageTopSpenders,
   upsertPageFollow,
@@ -38,14 +39,58 @@ import { onboardOnlyFansPage } from "../apps/runtime/src/services/page-onboardin
 import { updatePageCredentials } from "../apps/runtime/src/services/connections.ts";
 import { resolvePageContext, saveProxy } from "../apps/runtime/src/services/page-context.ts";
 import { getPageRevenueReport } from "../apps/runtime/src/services/reporting.ts";
-import { syncTransactions } from "../apps/runtime/src/services/sync/transactions.ts";
+import { mapFanslyTransactionItem } from "../apps/runtime/src/sync/fansly/lib/money-rules.ts";
 import { setPageProxy } from "../apps/runtime/src/services/page-proxies.ts";
+import { decryptSyncWorkSecret } from "../apps/runtime/src/sync/requests/secret-params.ts";
+import type * as UrgentModule from "../apps/runtime/src/sync/requests/urgent.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
   type StartedTestDatabase,
 } from "./helpers/db.ts";
+import { setModeDirect } from "./helpers/sync-engine-host.ts";
+
+// The owner's credentials and proxy levers of a Fansly page check the
+// candidate through the page's engine actor (`account.identity`) and store it
+// only when it matches. tests/sync-account-routing.integration.test.ts and
+// tests/sync-credentials-generation.integration.test.ts run that against a real
+// actor; here the actor's answer is stood in for, so the lever cases below
+// stay about what the levers hand the check and what they store.
+const engineCheck = vi.hoisted(() => ({
+  matches: true,
+  accountId: "acct-1",
+  asked: [] as Array<{ pageId: number; resource: string; candidate: Record<string, unknown>; secretParams: string }>,
+}));
+vi.mock("../apps/runtime/src/sync/requests/urgent.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof UrgentModule>();
+  return {
+    ...actual,
+    enqueueAndWait: async (
+      _ctx: unknown,
+      input: { pageId: number; resource: string; params: { candidate: Record<string, unknown> }; secretParams: string },
+    ) => {
+      engineCheck.asked.push({
+        pageId: input.pageId,
+        resource: input.resource,
+        candidate: input.params.candidate,
+        secretParams: input.secretParams,
+      });
+      return {
+        state: "done" as const,
+        workId: engineCheck.asked.length,
+        satisfied: engineCheck.matches,
+        closeReason: engineCheck.matches ? "identity_matches" : "identity_mismatch",
+        result: {
+          accountId: engineCheck.accountId,
+          username: "lana",
+          matches: engineCheck.matches,
+          proof: { attemptId: engineCheck.asked.length, sentAt: new Date().toISOString(), base: input.params.candidate.base },
+        },
+      };
+    },
+  };
+});
 
 describe("db write safety", () => {
   let testDb: StartedTestDatabase | null = null;
@@ -115,11 +160,64 @@ describe("db write safety", () => {
   });
 
   beforeEach(async () => {
+    engineCheck.matches = true;
+    engineCheck.accountId = "acct-1";
+    engineCheck.asked.length = 0;
     if (!testDb) {
       return;
     }
     await resetIntegrationDatabase(testDb.pool);
   });
+
+  /** A Fansly page the engine runs (`live`), with a stored session and proxy:
+   *  the only state in which its credentials and proxy levers act. */
+  async function seedLiveFanslyPage(label: string, proxy: { url: string; rateLimitScopeKey?: string }) {
+    const app = createTestAppContext(testDb!);
+    const model = await createModel(testDb!.db, { slug: `${label}-model`, name: label });
+    const page = (await createFanslyPage(testDb!.db, { modelId: model!.id, label }))!;
+    await storeFanslySession(
+      testDb!.db,
+      page.id,
+      JSON.stringify(encryptJson<StoredPlatformCredentialBundle>(
+        { platform: "fansly", session: { authorization: "stored-token" } },
+        encryptionKey,
+        1,
+      )),
+      1,
+    );
+    await saveProxy(app, page.id, { url: proxy.url },
+      proxy.rateLimitScopeKey === undefined ? {} : { rateLimitScopeKey: proxy.rateLimitScopeKey });
+    await ensureSyncPage(testDb!.db, { pageId: page.id });
+    await setModeDirect(testDb!.pool, page.id, "live");
+    return { app, page };
+  }
+
+  /** What the levers handed the engine's check: the candidate's public half
+   *  and its sealed session/proxy. */
+  function askedCandidates(app: ReturnType<typeof createTestAppContext>) {
+    return engineCheck.asked.map((asked) => ({
+      resource: asked.resource,
+      session: asked.candidate.session,
+      proxy: asked.candidate.proxy,
+      secret: decryptSyncWorkSecret<{ session?: { authorization: string }; proxy?: Record<string, unknown> }>(
+        app.config,
+        asked.secretParams,
+      ),
+    }));
+  }
+
+  async function storedEgress(pageId: number) {
+    return (await testDb!.pool.query(
+      `select url, encrypted_auth is not null as has_encrypted_auth, rate_limit_scope_key
+         from egress_endpoints where platform_account_id = $1`,
+      [pageId],
+    )).rows;
+  }
+
+  async function storedAuthorization(app: ReturnType<typeof createTestAppContext>, label: string) {
+    const context = await resolvePageContext(app, label);
+    return "session" in context ? context.session.authorization : null;
+  }
 
   it("returns a friendly error for duplicate model slugs", async (context) => {
     if (!testDb) {
@@ -270,78 +368,36 @@ describe("db write safety", () => {
     });
   });
 
-  it("verifies credentials before saving a proxy on an existing page", async (context) => {
+  it("checks a new proxy through the page's engine actor before saving it", async (context) => {
     if (!testDb) {
       context.skip();
       return;
     }
-
-    const model = await createModel(testDb.db, {
-      slug: "verify-proxy-model",
-      name: "Verify Proxy Model",
-    });
-    const page = await createFanslyPage(testDb.db, {
-      modelId: model.id,
-      label: "verify-proxy-page",
-    });
-
-    const encryptedSession = JSON.stringify(
-      encryptJson<StoredPlatformCredentialBundle>(
-        {
-          platform: "fansly",
-          session: {
-            authorization: "token",
-          },
-        },
-        encryptionKey,
-        1,
-      ),
-    );
-    await storeFanslySession(testDb.db, page.id, encryptedSession, 1);
-
-    let verifyCallCount = 0;
-    let verifiedProxy: Record<string, unknown> | null = null;
-    const app = createTestAppContext(testDb, {
-      adapter: {
-        async verifySession(contextInput: { proxy?: Record<string, unknown> | null }) {
-          verifyCallCount += 1;
-          verifiedProxy = contextInput.proxy ?? null;
-          return {
-            parsed: {
-              account: {
-                id: "acct-1",
-                username: "lana",
-                displayName: "Lana",
-                followCount: 0,
-                subscriberCount: 0,
-              },
-            },
-            raw: null,
-          };
-        },
-      } as never,
-    });
+    const { app, page } = await seedLiveFanslyPage("verify-proxy-page", { url: "socks5://old-proxy.example:1080" });
 
     await setPageProxy(app, page.label, {
       url: "socks5://proxy-user:proxy-pass@proxy.example:1080",
     });
 
-    const proxyRows = await testDb.pool.query(`
-      select url, encrypted_auth is not null as has_encrypted_auth
-      from egress_endpoints
-      where platform_account_id = ${page.id}
-    `);
-
-    expect(verifyCallCount).toBe(1);
-    expect(verifiedProxy).toEqual({
-      url: "socks5://proxy.example:1080",
-      username: "proxy-user",
-      password: "proxy-pass",
-    });
-    expect(proxyRows.rows[0]).toEqual({
+    // One identity check, with the candidate proxy alone (the stored session
+    // rides it), its inline credentials split off the URL.
+    expect(askedCandidates(app)).toEqual([{
+      resource: "account.identity",
+      session: false,
+      proxy: true,
+      secret: { proxy: { url: "socks5://proxy.example:1080", username: "proxy-user", password: "proxy-pass" } },
+    }]);
+    expect(await storedEgress(page.id)).toEqual([{
       url: "socks5://proxy.example:1080",
       has_encrypted_auth: true,
-    });
+      rate_limit_scope_key: "socks5://proxy.example:1080",
+    }]);
+    // Stored and trusted in one transaction: the engine's digest is the new pair's.
+    const trusted = await testDb.pool.query(
+      "select identity_account_id, credentials_generation ~ '^[0-9a-f]{64}$' as trusted from sync_pages where page_id = $1",
+      [page.id],
+    );
+    expect(trusted.rows).toEqual([{ identity_account_id: "acct-1", trusted: true }]);
   });
 
   it("preserves a custom proxy egress scope when updating the same proxy route", async (context) => {
@@ -349,78 +405,21 @@ describe("db write safety", () => {
       context.skip();
       return;
     }
-
-    const model = await createModel(testDb.db, {
-      slug: "same-route-proxy-model",
-      name: "Same Route Proxy Model",
-    });
-    const page = await createFanslyPage(testDb.db, {
-      modelId: model.id,
-      label: "same-route-proxy-page",
-    });
-
-    const encryptedSession = JSON.stringify(
-      encryptJson<StoredPlatformCredentialBundle>(
-        {
-          platform: "fansly",
-          session: {
-            authorization: "token",
-          },
-        },
-        encryptionKey,
-        1,
-      ),
-    );
-    await storeFanslySession(testDb.db, page.id, encryptedSession, 1);
-    await storeProxyConfig(testDb.db, page.id, {
+    const { app, page } = await seedLiveFanslyPage("same-route-proxy-page", {
       url: "socks5://proxy.example",
-      encryptedAuth: null,
-      keyVersion: null,
       rateLimitScopeKey: "shared-proxy-pool",
-    });
-
-    let verifiedEgressKey: string | null = null;
-    let verifiedContextKeys: string[] = [];
-    const app = createTestAppContext(testDb, {
-      syncSharedRateLimitEnabled: true,
-      adapter: {
-        async verifySession(contextInput: { egressKey?: string }) {
-          verifiedEgressKey = contextInput.egressKey ?? null;
-          verifiedContextKeys = Object.keys(contextInput);
-          return {
-            parsed: {
-              account: {
-                id: "acct-1",
-                username: "lana",
-                displayName: "Lana",
-                followCount: 0,
-                subscriberCount: 0,
-              },
-            },
-            raw: null,
-          };
-        },
-      } as never,
     });
 
     await setPageProxy(app, page.label, {
       url: "socks5://proxy.example:1080",
     });
 
-    const proxyRows = await testDb.pool.query(`
-      select url, rate_limit_scope_key
-      from egress_endpoints
-      where platform_account_id = ${page.id}
-    `);
-
-    expect(verifiedEgressKey).toBe("shared-proxy-pool");
-    // The page's own send guard paces the check; no endpoint pause (§2.3).
-    expect(verifiedContextKeys).toContain("sendGuard");
-    expect(verifiedContextKeys).not.toContain("rateLimitWaiter");
-    expect(proxyRows.rows[0]).toEqual({
+    expect(askedCandidates(app)).toMatchObject([{ proxy: true, secret: { proxy: { url: "socks5://proxy.example:1080" } } }]);
+    expect(await storedEgress(page.id)).toEqual([{
       url: "socks5://proxy.example:1080",
+      has_encrypted_auth: false,
       rate_limit_scope_key: "shared-proxy-pool",
-    });
+    }]);
   });
 
   it("resolves legacy inline-auth proxy URLs when loading page context", async (context) => {
@@ -693,73 +692,31 @@ describe("db write safety", () => {
     expect(proxyRows.rows[0]?.count).toBe(0);
   });
 
-  it("reuses the stored proxy when credential updates omit proxy fields", async (context) => {
+  it("keeps the stored proxy when a credentials update omits proxy fields", async (context) => {
     if (!testDb) {
       context.skip();
       return;
     }
-
-    const model = await createModel(testDb.db, {
-      slug: "stored-proxy-update-model",
-      name: "Stored Proxy Update Model",
-    });
-    const page = await createFanslyPage(testDb.db, {
-      modelId: model.id,
-      label: "stored-proxy-update-page",
-    });
-
-    await saveProxy(createTestAppContext(testDb), page.id, {
+    const { app, page } = await seedLiveFanslyPage("stored-proxy-update-page", {
       url: "socks5://proxy-user:proxy-pass@proxy.example",
     });
 
-    let verifyCallCount = 0;
-    let verifiedProxy: Record<string, unknown> | null = null;
-    const app = createTestAppContext(testDb, {
-      adapter: {
-        async verifySession(contextInput: { proxy?: Record<string, unknown> | null }) {
-          verifyCallCount += 1;
-          verifiedProxy = contextInput.proxy ?? null;
-          return {
-            parsed: {
-              account: {
-                id: "acct-1",
-                username: "lana",
-                displayName: "Lana",
-                followCount: 0,
-                subscriberCount: 0,
-              },
-            },
-            raw: null,
-          };
-        },
-      } as never,
-    });
-
-    await updatePageCredentials(app, page.label, {
+    expect(await updatePageCredentials(app, page.label, {
       platform: "fansly",
       session: {
         authorization: "replacement-token",
       },
-    });
+    })).toEqual({ updated: true, verified: true, syncUnblocked: true });
 
-    const proxyRows = await testDb.pool.query(`
-      select url, encrypted_auth is not null as has_encrypted_auth
-      from egress_endpoints
-      where platform_account_id = ${page.id}
-    `);
-
-    expect(verifyCallCount).toBe(1);
-    expect(verifiedProxy).toEqual({
-      url: "socks5://proxy.example",
-      username: "proxy-user",
-      password: "proxy-pass",
-    });
-    expect(proxyRows.rows).toEqual([
-      {
-        url: "socks5://proxy.example",
-        has_encrypted_auth: true,
-      },
-    ]);
+    // The candidate is the session alone: the check rides the stored proxy.
+    expect(askedCandidates(app)).toEqual([{
+      resource: "account.identity",
+      session: true,
+      proxy: false,
+      secret: { session: { authorization: "replacement-token" } },
+    }]);
+    expect(await storedEgress(page.id)).toMatchObject([{ url: "socks5://proxy.example", has_encrypted_auth: true }]);
+    expect(await storedAuthorization(app, page.label)).toBe("replacement-token");
   });
 
   it("preserves custom egress scope keys when reusing stored proxy auth", async (context) => {
@@ -767,55 +724,9 @@ describe("db write safety", () => {
       context.skip();
       return;
     }
-
-    const model = await createModel(testDb.db, {
-      slug: "stored-proxy-scope-model",
-      name: "Stored Proxy Scope Model",
-    });
-    const page = await createFanslyPage(testDb.db, {
-      modelId: model.id,
-      label: "stored-proxy-scope-page",
-    });
-
-    await saveProxy(createTestAppContext(testDb), page.id, {
+    const { app, page } = await seedLiveFanslyPage("stored-proxy-scope-page", {
       url: "socks5://proxy-user:proxy-pass@proxy.example",
-    });
-    await testDb.pool.query(
-      `
-        update egress_endpoints
-        set rate_limit_scope_key = 'shared-proxy-pool'
-        where platform_account_id = $1
-      `,
-      [page.id],
-    );
-
-    let verifiedProxy: Record<string, unknown> | null = null;
-    let verifiedEgressKey: unknown = null;
-    let verifiedContextKeys: string[] = [];
-    const app = createTestAppContext(testDb, {
-      syncSharedRateLimitEnabled: true,
-      adapter: {
-        async verifySession(contextInput: {
-          proxy?: Record<string, unknown> | null;
-          egressKey?: string | null;
-        }) {
-          verifiedProxy = contextInput.proxy ?? null;
-          verifiedEgressKey = contextInput.egressKey ?? null;
-          verifiedContextKeys = Object.keys(contextInput);
-          return {
-            parsed: {
-              account: {
-                id: "acct-1",
-                username: "lana",
-                displayName: "Lana",
-                followCount: 0,
-                subscriberCount: 0,
-              },
-            },
-            raw: null,
-          };
-        },
-      } as never,
+      rateLimitScopeKey: "shared-proxy-pool",
     });
 
     await updatePageCredentials(app, page.label, {
@@ -828,27 +739,22 @@ describe("db write safety", () => {
       },
     });
 
-    const proxyRows = await testDb.pool.query(`
-      select url, rate_limit_scope_key
-      from egress_endpoints
-      where platform_account_id = ${page.id}
-    `);
-
-    expect(verifiedProxy).toEqual({
-      url: "socks5://proxy.example",
-      username: "proxy-user",
-      password: "proxy-pass",
-    });
-    expect(verifiedEgressKey).toBe("shared-proxy-pool");
-    // The page's own send guard paces the check; no endpoint pause (§2.3).
-    expect(verifiedContextKeys).toContain("sendGuard");
-    expect(verifiedContextKeys).not.toContain("rateLimitWaiter");
-    expect(proxyRows.rows).toEqual([
-      {
-        url: "socks5://proxy.example",
-        rate_limit_scope_key: "shared-proxy-pool",
+    // The same route without credentials reuses the stored proxy and its
+    // auth: that is the proxy the check rides and the one stored.
+    expect(askedCandidates(app)).toEqual([{
+      resource: "account.identity",
+      session: true,
+      proxy: true,
+      secret: {
+        session: { authorization: "replacement-token" },
+        proxy: { url: "socks5://proxy.example", username: "proxy-user", password: "proxy-pass" },
       },
-    ]);
+    }]);
+    expect(await storedEgress(page.id)).toEqual([{
+      url: "socks5://proxy.example",
+      has_encrypted_auth: true,
+      rate_limit_scope_key: "shared-proxy-pool",
+    }]);
   });
 
   it("updates proxy settings without requiring credentials to be re-entered", async (context) => {
@@ -856,44 +762,7 @@ describe("db write safety", () => {
       context.skip();
       return;
     }
-
-    const model = await createModel(testDb.db, {
-      slug: "proxy-only-credentials-model",
-      name: "Proxy Only Credentials Model",
-    });
-    const page = await createFanslyPage(testDb.db, {
-      modelId: model.id,
-      label: "proxy-only-credentials-page",
-    });
-
-    let verifiedAuthorization: string | null;
-    const app = createTestAppContext(testDb, {
-      adapter: {
-        async verifySession(contextInput: { session: { authorization: string } }) {
-          verifiedAuthorization = contextInput.session.authorization;
-          return {
-            parsed: {
-              account: {
-                id: "acct-1",
-                username: "lana",
-                displayName: "Lana",
-                followCount: 0,
-                subscriberCount: 0,
-              },
-            },
-            raw: null,
-          };
-        },
-      } as never,
-    });
-
-    await updatePageCredentials(app, page.label, {
-      platform: "fansly",
-      session: {
-        authorization: "stored-token",
-      },
-    });
-    verifiedAuthorization = null;
+    const { app, page } = await seedLiveFanslyPage("proxy-only-credentials-page", { url: "http://1.1.1.1:8080" });
 
     await updatePageCredentials(app, page.label, {
       platform: "fansly",
@@ -902,14 +771,41 @@ describe("db write safety", () => {
       },
     });
 
-    const proxyRows = await testDb.pool.query(`
-      select url
-      from egress_endpoints
-      where platform_account_id = ${page.id}
-    `);
+    // The candidate is the proxy alone; the stored session rides it and stays.
+    expect(askedCandidates(app)).toEqual([{
+      resource: "account.identity",
+      session: false,
+      proxy: true,
+      secret: { proxy: { url: "http://8.8.8.8:8080", username: null, password: null } },
+    }]);
+    expect(await storedEgress(page.id)).toMatchObject([{ url: "http://8.8.8.8:8080" }]);
+    expect(await storedAuthorization(app, page.label)).toBe("stored-token");
+  });
 
-    expect(verifiedAuthorization).toBe("stored-token");
-    expect(proxyRows.rows).toEqual([{ url: "http://8.8.8.8:8080" }]);
+  it("refuses a credentials or proxy change of a Fansly page the engine does not run: nothing checked, nothing stored", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    // No legacy `/account/me` is left to check a candidate with (step 4,
+    // S4-19): a page without a live engine row has no sender at all.
+    const { app, page } = await seedLiveFanslyPage("not-live-page", { url: "http://1.1.1.1:8080" });
+    const refused = { statusCode: 409, code: "legacy_sync_retired", name: "LegacySyncRetiredError" };
+
+    for (const mode of ["off", "shadow"] as const) {
+      await setModeDirect(testDb.pool, page.id, mode);
+      await expect(updatePageCredentials(app, page.label, {
+        platform: "fansly",
+        session: { authorization: "replacement-token" },
+      })).rejects.toMatchObject(refused);
+      await expect(setPageProxy(app, page.label, { url: "http://8.8.8.8:8080" })).rejects.toMatchObject(refused);
+    }
+    await testDb.pool.query("delete from sync_pages where page_id = $1", [page.id]);
+    await expect(setPageProxy(app, page.label, { url: "http://8.8.8.8:8080" })).rejects.toMatchObject(refused);
+
+    expect(engineCheck.asked).toEqual([]);
+    expect(await storedEgress(page.id)).toMatchObject([{ url: "http://1.1.1.1:8080" }]);
+    expect(await storedAuthorization(app, page.label)).toBe("stored-token");
   });
 
   it("verifies OnlyMonster account access before persisting an OnlyFans page", async (context) => {
@@ -1052,44 +948,10 @@ describe("db write safety", () => {
       context.skip();
       return;
     }
-
-    const model = await createModel(testDb.db, {
-      slug: "fansly-credentials-model",
-      name: "Fansly Credentials Model",
-    });
-    const page = await createFanslyPage(testDb.db, {
-      modelId: model.id,
-      label: "fansly-credentials-page",
-    });
-    await updatePageMetadata(testDb.db, page.id, {
-      platformAccountIdValue: "acct-123",
-      username: "fansly-bound",
-      displayName: "Fansly Bound",
-      followerCount: 0,
-      subscriberCount: 0,
-      earningsBalanceMills: 0n,
-      metadata: {},
-      syncType: "light",
-    });
-
-    const app = createTestAppContext(testDb, {
-      adapter: {
-        async verifySession() {
-          return {
-            parsed: {
-              account: {
-                id: "acct-999",
-                username: "fansly-other",
-                displayName: "Fansly Other",
-                followCount: 0,
-                subscriberCount: 0,
-              },
-            },
-            raw: null,
-          };
-        },
-      } as never,
-    });
+    const { app, page } = await seedLiveFanslyPage("fansly-credentials-page", { url: "http://1.1.1.1:8080" });
+    // The engine's check answered for another account than the page's.
+    engineCheck.matches = false;
+    engineCheck.accountId = "acct-999";
 
     await expect(
       updatePageCredentials(app, page.label, {
@@ -1099,15 +961,11 @@ describe("db write safety", () => {
         },
       }),
     ).rejects.toThrow(
-      'Submitted credentials belong to upstream account "acct-999", but page "fansly-credentials-page" is bound to "acct-123"',
+      'Credential identity mismatch for page "fansly-credentials-page": the session belongs to Fansly account acct-999',
     );
 
-    const credentialRows = await testDb.pool.query(`
-      select count(*)::int as count
-      from page_credentials
-      where platform_account_id = ${page.id}
-    `);
-    expect(credentialRows.rows[0]?.count).toBe(0);
+    expect(engineCheck.asked).toHaveLength(1);
+    expect(await storedAuthorization(app, page.label)).toBe("stored-token");
   });
 
   it("rejects OnlyFans credential updates outright (Stage 18: no hub-held credentials)", async (context) => {
@@ -2420,73 +2278,36 @@ describe("db write safety", () => {
       modelId: model.id,
       label: "fansly-tip-sync",
     });
-    const run = await startSyncRun(testDb.db, {
-      platformAccountId: page.id,
-      stream: "transactions",
-      trigger: "worker",
-    });
-    const app = createTestAppContext(testDb, {
-      adapter: {
-        async getTransactionsPage() {
-          return {
-            items: [{
-              transactionId: "mapped-tip-20001",
-              walletId: null,
-              accountId: null,
-              correlationId: null,
-              correlationAccountId: null,
-              type: 20001,
-              status: 2,
-              destination: null,
-              amount: 12000,
-              destinationAmount: 12000,
-              destinationTax: null,
-              newBalance64: null,
-              senderId: null,
-              receiverId: null,
-              createdAt: new Date("2026-03-10T12:00:00.000Z").getTime(),
-              updatedAt: null,
-            }],
-            total: 1,
-            done: true,
-            raw: {
-              items: [{
-                transactionId: "mapped-tip-20001",
-                type: 20001,
-              }],
-            },
-          };
-        },
-        async getAccountsByIdsPage() {
-          return {
-            parsed: [],
-            raw: [],
-          };
-        },
-      } as never,
-    });
-    const telemetry = {
-      recordCheckpointLoaded: vi.fn(async () => {}),
-      recordCheckpointAdvanced: vi.fn(async () => {}),
-      addAnomaly: vi.fn(async () => {}),
-      addNote: vi.fn(async () => {}),
-      mergeHydrationSummary: vi.fn(),
-      setBoundarySummary: vi.fn(),
-      setScanSummary: vi.fn(),
-    };
+    const app = createTestAppContext(testDb);
 
-    await syncTransactions(app, {
-      pageLabel: page.label,
+    // The Sync Engine's transactions apply (resources/transactions.ts): the
+    // served item through the shared mapper into the ledger, then the
+    // dirty range's revenue rollups.
+    const { row } = mapFanslyTransactionItem({
+      transactionId: "mapped-tip-20001",
+      walletId: null,
+      accountId: null,
+      correlationId: null,
+      correlationAccountId: null,
+      type: 20001,
+      status: 2,
+      destination: null,
+      amount: 12000,
+      destinationAmount: 12000,
+      destinationTax: null,
+      newBalance64: null,
+      senderId: null,
+      receiverId: null,
+      createdAt: new Date("2026-03-10T12:00:00.000Z").getTime(),
+      updatedAt: null,
+    }, 0);
+    await upsertFanslyTransactionWithEarningsDirty(testDb.db, {
       platformAccountId: page.id,
-      commissionRate: 0,
-      requestContext: {
-        session: { authorization: "token" },
-        proxy: null,
-        requestObserver: null,
-      } as never,
-      syncRunId: run.id,
-      telemetry: telemetry as never,
+      source: "fansly:rest",
+      fanId: null,
+      ...row,
     });
+    await rebuildRevenueRollups(testDb.db, page.id, row.occurredAt);
 
     const transactionRows = await testDb.pool.query(`
       select raw_type, canonical_type

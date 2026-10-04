@@ -1,5 +1,4 @@
 import {
-  clearPageSyncAuthBlock,
   hasRecentTerminalProxyFailure,
   isFanslyPageEngineOwned,
   listNotificationIncidents,
@@ -28,7 +27,9 @@ const MAX_OPEN_DELIVERY_ATTEMPTS = 5;
 /** Global latches of the AI media describer under `ai_provider_failed`. */
 export const AI_MEDIA_DESCRIBE_BREAKER_SUBKEY = "media_describe_breaker";
 export const AI_MEDIA_DESCRIBE_ACCOUNT_STOP_SUBKEY = "media_describe_account_stop";
-/** The Fansly fast lane was unavailable on a describer page for > 10 min. */
+/** The Fansly fast lane's "unavailable > 10 min" latch. The lane is deleted
+ * (step 4, S4-12): nothing opens it any more, and one an older build left
+ * open resolves on the describer's next sweep. */
 export const AI_MEDIA_DESCRIBE_FAST_LANE_SUBKEY = "media_describe_fast_lane";
 /** Plan §2.5/§10: the page-scoped latches of the Fansly send guard, under the
  * Fansly-only `sync_silent` kind (a new kind is a contract change). A closed
@@ -374,7 +375,7 @@ function resolveDetailForIncident(
         return "AI image describer re-enabled by the owner";
       }
       if (input.subKey === AI_MEDIA_DESCRIBE_FAST_LANE_SUBKEY) {
-        return "Fansly image fast lane available again";
+        return "Fansly image fast lane retired: the Sync Engine reads a fan's new media";
       }
       return "AI provider generation recovered";
     case "capture_payload_parity":
@@ -637,23 +638,6 @@ async function hasTerminalProxyFailure(
   });
 }
 
-export async function notifyAuthFailedIncident(
-  app: Pick<AppContext, "config" | "db" | "logger">,
-  input: {
-    platformAccountId: number;
-    pageLabel: string;
-    platform: "fansly" | "onlyfans";
-    errorCode?: string | null;
-    errorSummary: string;
-    occurredAt?: Date;
-  },
-) {
-  await openIncidentAndNotify(app, {
-    ...input,
-    kind: "auth_blocked",
-  });
-}
-
 export async function notifySyncChunkFailureIncident(
   app: Pick<AppContext, "config" | "db" | "logger">,
   input: {
@@ -672,13 +656,11 @@ export async function notifySyncChunkFailureIncident(
 ) {
   try {
     if (input.platform === "fansly" && (await isFanslyPageEngineOwned(app.db, input.platformAccountId)).owned) {
-      // A legacy chunk of a page the Fansly Sync Engine owns (one still in
-      // flight when the switch fenced the legacy engine): the legacy stream no
-      // longer runs, so its failure is not the page's state — the engine
-      // reports the page through its own alerts — and a stream latch opened
-      // now would wait for a legacy recovery that never comes (the transition
-      // closed it, `engine_owned`). The streak itself stays on the legacy
-      // row: after a rollback the stream's next failure opens it again.
+      // A legacy chunk failure reported for a page the Fansly Sync Engine
+      // owns: the legacy stream no longer runs, so its failure is not the
+      // page's state — the engine reports the page through its own alerts —
+      // and a stream latch opened now would wait for a legacy recovery that
+      // never comes (the transition closed it, `engine_owned`).
       app.logger.warn({
         platformAccountId: input.platformAccountId,
         stream: input.stream,
@@ -767,13 +749,12 @@ export async function resolveSyncChunkRecoveryIncidents(
  * through the legacy executor's chunk recovery above, and the legacy executor
  * never runs a stream of a page the engine runs live — such a latch would stay
  * open for ever (production incident 41, lilly-2 `dm_conversations`, opened
- * by the legacy engine the day before its switch). The switch's phase C and
- * every live takeover of the engine host close the page's open ones here,
- * through the ordinary resolve (the recovery tombstone; the paging sweep's
- * resolve message, which names the reason `engine_owned`).
+ * by the legacy engine the day before its switch). Every live takeover of the
+ * engine host closes the page's open ones here, through the ordinary resolve
+ * (the recovery tombstone; the paging sweep's resolve message, which names
+ * the reason `engine_owned`).
  *
- * Only a page in `live`: a switch that reverts from `handover` gives the
- * streams back to the legacy engine, whose latches are still true. Idempotent:
+ * Only a page in `live`: the engine runs no other. Idempotent:
  * with none open nothing is written. The engine's own latches
  * (`fansly_sync_engine`) and every other kind stay as they are; an OnlyFans
  * page has no `sync_pages` row, so it is never live. The legacy executor
@@ -1067,6 +1048,13 @@ export async function resolveOfapiGlobalIncident(
   });
 }
 
+/**
+ * A Fansly page's credentials verified — the engine's `account.verify`, or its
+ * identity check of a credentials or proxy change that was then stored: the
+ * page's verification incidents resolve. Nothing else is touched: an engine
+ * hold clears by the engine's own proof (A3), and the legacy executor, whose
+ * auth block this used to lift, serves no Fansly page (step 4).
+ */
 export async function handleSuccessfulPageVerificationRecovery(
   app: Pick<AppContext, "config" | "db" | "logger">,
   input: {
@@ -1074,49 +1062,24 @@ export async function handleSuccessfulPageVerificationRecovery(
     pageLabel: string;
     platform: "fansly" | "onlyfans";
     recoveredAt?: Date;
-    /** False for a page the Fansly Sync Engine owns: the legacy streams'
-     *  state is the legacy engine's own (step-3 J5) and is left as it is; only
-     *  the incidents resolve. */
-    unblockLegacyStreams?: boolean;
   },
-): Promise<{ syncUnblocked: boolean }> {
+): Promise<void> {
   const recoveredAt = input.recoveredAt ?? new Date();
-  const { unblockLegacyStreams, ...incident } = input;
-  try {
-    if (unblockLegacyStreams !== false) {
-      await clearPageSyncAuthBlock(app.db, input.platformAccountId, {
-        maxFailureAt: recoveredAt,
-        now: recoveredAt,
-      });
-    }
-  } catch (error) {
-    // W3.3 (D4-N1): the streams are still blocked, so the incidents are
-    // still TRUE — resolving them here would report a recovery that did not
-    // happen while credential-update kept returning verified:true. The
-    // caller surfaces syncUnblocked:false instead.
-    app.logger.warn({
-      platformAccountId: input.platformAccountId,
-      err: error,
-    }, "Failed to clear auth_blocked during page verification recovery; incidents stay open");
-    return { syncUnblocked: false };
-  }
-
   await resolveIncidentAndNotify(app, {
-    ...incident,
+    ...input,
     kind: "auth_blocked",
     recoveredAt,
   });
   await resolveIncidentAndNotify(app, {
-    ...incident,
+    ...input,
     kind: "proxy_failed",
     recoveredAt,
   });
   // W3.1: a successful verification reached Fansly, which the fail-closed
   // dispatcher only allows with a proxy present.
   await resolveIncidentAndNotify(app, {
-    ...incident,
+    ...input,
     kind: "proxy_missing",
     recoveredAt,
   });
-  return { syncUnblocked: true };
 }

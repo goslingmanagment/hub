@@ -21,6 +21,7 @@ import { OWNER_DEMAND_REASON } from "../sync/fansly/resources/followers.ts";
 import { refreshSyncPage } from "../sync/inspect.ts";
 import { ConflictError } from "./errors.ts";
 import { FanslyPageSwitchingError } from "./sync-engine-guard.ts";
+import type { SyncTriggerScope } from "./sync-queue.ts";
 
 // The owner's legacy levers on a page the Fansly Sync Engine owns (design
 // step 3 §3.2 item 4). The Settings buttons and the admin routes speak in
@@ -34,13 +35,41 @@ import { FanslyPageSwitchingError } from "./sync-engine-guard.ts";
 //              re-applied from the journal, no request) — legacy state
 //              (`page_sync_states`, cursors) is never touched (J5).
 //
-// A page in `handover` is being switched: neither engine sends, so a lever
-// that would make the engine read refuses with 409 `fansly_page_switching`.
+// A page in `handover` has no sender (nothing reaches the mode since step 4,
+// S4-21), so a lever that would make the engine read refuses with 409
+// `fansly_page_switching`.
+//
+// Since step 4 (S4-10) the legacy executor serves no Fansly page, so the
+// trigger scopes of a Fansly page ("sync now" for `light`, `data`, … in
+// `POST /admin/sync/trigger` and `trigger-all`) resolve here, straight to the
+// engine's registry keys, and no longer through the platform registry.
+
+/** The legacy streams each trigger scope names on a Fansly page — the scope
+ *  policy the platform registry held until step 4 (Stage 16: `all` leaves out
+ *  the bulk crawls) — which `fanslyFilesForStreams` turns into the registry
+ *  keys' resource files. */
+export const FANSLY_ENGINE_SCOPE_STREAMS: Readonly<Record<SyncTriggerScope, readonly SyncStream[]>> = {
+  light: ["light"],
+  followers: ["followers"],
+  posts: ["posts"],
+  data: ["light", "transactions", "top_spenders", "subscribers", "followers", "followers_reconcile"],
+  messages: ["dm_conversations", "dm_messages"],
+  all: [
+    "light",
+    "transactions",
+    "top_spenders",
+    "subscribers",
+    "followers",
+    "followers_reconcile",
+    "dm_conversations",
+    "dm_messages",
+  ],
+};
 
 /** The engine modes in which a page is no longer the legacy engine's. */
 export type EngineOwnedMode = "handover" | "live";
 
-/** A lever that would make the engine read, asked during the switch. */
+/** A lever that would make the engine read, asked of a page in `handover`. */
 export { FanslyPageSwitchingError };
 
 /** What an engine lever did: the keys or files it acted on and how many rows
@@ -92,6 +121,16 @@ export async function triggerEngineStreams(
   if (files.length === 0) return { mode: page.mode, resources: [], affected: 0 };
   const { bumped } = await refreshSyncPage(db, page, files);
   return { mode: page.mode, resources: files, affected: bumped };
+}
+
+/** "Sync now" for a trigger scope of a Fansly page: the polls of the
+ *  resource files its streams map to (`FANSLY_ENGINE_SCOPE_STREAMS`). */
+export async function triggerEngineScope(
+  db: Database,
+  page: SyncPageRow & { mode: EngineOwnedMode },
+  scope: SyncTriggerScope,
+): Promise<EngineLeverOutcome> {
+  return triggerEngineStreams(db, page, FANSLY_ENGINE_SCOPE_STREAMS[scope]);
 }
 
 /** Pause (or resume) the keys that took the streams over; every other key

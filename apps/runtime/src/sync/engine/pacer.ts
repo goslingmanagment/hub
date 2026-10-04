@@ -1,7 +1,7 @@
 import { FANSLY_PAUSE_MIN_MS } from "@agency_hub_core/shared";
 
-// The contract module directly, not the package index: the index also loads
-// the adapter (and with it undici's fetch), which the pacer never needs.
+// The contract module directly, not the package index: the pacer needs
+// nothing of the wire layer the index also loads.
 import {
   FanslySendRefusedError,
   type FanslySendRefusalReason,

@@ -40,7 +40,6 @@ const { SESSION_COOKIE_NAME } = await import("../apps/runtime/src/services/auth.
 function createRouteTestContext(input?: {
   healthSyncMonitoringToken?: string | null;
   syncSharedRateLimitEnabled?: boolean;
-  adapter?: AppContext["adapter"];
   ofapi?: AppContext["ofapi"];
 }) {
   const encryptionKey = Buffer.alloc(32, 7);
@@ -85,7 +84,6 @@ function createRouteTestContext(input?: {
     logger: createLogger("silent"),
     pool: {} as AppContext["pool"],
     db: {} as AppContext["db"],
-    adapter: input?.adapter ?? {} as AppContext["adapter"],
     ...(input?.ofapi ? { ofapi: input.ofapi } : {}),
     async close() {},
   } satisfies AppContext;
@@ -411,20 +409,15 @@ describe("admin credential verification", () => {
 
   // The Fansly check's own path (journal, the candidate proxy, the answers) is
   // in tests/sync-onboard-live.integration.test.ts. Here: the refusals that
-  // come before it — no database (`db` is an empty stub) and no adapter.
-  const adapterUnused = new Proxy({}, {
-    get(_target, property) {
-      if (typeof property !== "string" || property === "then") return undefined;
-      throw new Error(`the legacy Fansly adapter was used (${property})`);
-    },
-  }) as AppContext["adapter"];
+  // come before it — with no database (`db` is an empty stub), so nothing
+  // could have been journaled or sent.
 
   it.each([
     ["missing", undefined],
     ["null", null],
   ])("returns 400 for a %s Fansly proxy before anything is sent", async (_label, proxy) => {
     routeMocks.authenticateSessionToken.mockResolvedValue(ownerPrincipal);
-    const server = await buildApiServer(createRouteTestContext({ adapter: adapterUnused }));
+    const server = await buildApiServer(createRouteTestContext());
 
     try {
       const response = await server.inject({
@@ -450,7 +443,7 @@ describe("admin credential verification", () => {
 
   it("rejects private proxy targets before verifying credentials", async () => {
     routeMocks.authenticateSessionToken.mockResolvedValue(ownerPrincipal);
-    const server = await buildApiServer(createRouteTestContext({ adapter: adapterUnused }));
+    const server = await buildApiServer(createRouteTestContext());
 
     try {
       const response = await server.inject({

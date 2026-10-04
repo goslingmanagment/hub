@@ -109,7 +109,7 @@ describe("WP-F5 fansly-comments family registration", () => {
     // Registered as a written kind — the §9.2 ratchet fails otherwise.
     const registered = WRITTEN_OBSERVATION_KINDS.find((entry) => entry.kind === "post_replies");
     expect(registered?.source).toBe("pull");
-    expect(registered?.writer).toBe("services/sync/fansly-post-replies.ts");
+    expect(registered?.writer).toBe("sync/fansly/resources/post-replies.ts");
   });
 
   it("emits exactly two event types", () => {

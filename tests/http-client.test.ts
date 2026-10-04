@@ -6,7 +6,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   assertProxyTargetAllowed,
-  buildProxyDispatcherCacheKey,
   buildProxyEgressKey,
   buildSyncPageExecuteGroupId,
   isDisallowedProxyHostname,
@@ -380,16 +379,6 @@ describe("shared http client helpers", () => {
     // A negative delta-seconds is not a delay; it falls through to the date
     // branch and floors at "now" like any past deadline.
     expect(parseRetryAfterInstant("-5", now)).toEqual(new Date(now));
-  });
-
-  it("builds proxy cache keys without exposing raw credentials", () => {
-    const key = buildProxyDispatcherCacheKey({
-      url: "socks5://proxy-user:proxy-pass@127.0.0.1:1080",
-    });
-
-    expect(key).toContain("socks5://127.0.0.1:1080#");
-    expect(key).not.toContain("proxy-user");
-    expect(key).not.toContain("proxy-pass");
   });
 
   it("rejects proxy targets that point at local or private networks", () => {

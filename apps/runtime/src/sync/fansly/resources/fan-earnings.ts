@@ -59,7 +59,7 @@ import type {
 // Shadow writes nothing: no claim, no receipt. A shadow pass walks the due
 // subjects once in (fan, window) order through a keyset in its cursor; a full
 // pass at most once a day, an incremental one over the subjects marked dirty
-// since the previous pass (the legacy writer keeps marking them).
+// since the previous pass (the transactions writer marks them).
 
 export const FAN_EARNINGS_ROSTER_KEY = "fan-earnings.roster";
 

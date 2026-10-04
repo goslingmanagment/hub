@@ -12,8 +12,7 @@ import { classifyStatsWindow, parseWindowGuard, type BackfillWindowGuard } from 
 // resources (resources/media-stats.ts): the `media_stats` cursor and the
 // per-media backfill cursor, the steady windows of each tier and the refresh
 // that closes a hole below them, the first-month probe and the creation floor,
-// and the checks over a served window. Pure. The legacy `media_stats` lane
-// (fansly-media-stats.ts) imports them from here until step 4 deletes it.
+// and the checks over a served window. Pure.
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -110,10 +109,6 @@ export const FIRST_VISIT_REQUESTS = {
   longTail: BACKFILL_WINDOWS_PER_VISIT,
 } as const;
 
-/** Media seeded per dispatch on first enable. Bounded so a page with thousands
- *  of media does not hold a write lock, and keyset so the next batch resumes
- *  exactly where this one stopped. */
-export const SEED_BATCH_SIZE = 500;
 /** The platform's own top-N page size. */
 export const TOP_MEDIA_MARK_LIMIT = 50;
 

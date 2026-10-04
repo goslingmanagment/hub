@@ -170,8 +170,7 @@ export interface HistoryServiceContext {
 export type HistoryRequester =
   | { kind: "agent_key"; agentKeyId: number }
   | { kind: "owner_session" | "owner_cli"; userId: number | null }
-  | { kind: "legacy_hydration_wrapper"; legacyRequestId: number }
-  | { kind: "switch_migration" };
+  | { kind: "legacy_hydration_wrapper"; legacyRequestId: number };
 
 export type HistoryDepthInput =
   | { kind: "all" }
@@ -330,8 +329,6 @@ function requesterColumns(requester: HistoryRequester): {
       return { kind: requester.kind, agentKeyId: null, userId: requester.userId, legacyHydrationRequestId: null };
     case "legacy_hydration_wrapper":
       return { kind: "legacy_hydration_wrapper", agentKeyId: null, userId: null, legacyHydrationRequestId: requester.legacyRequestId };
-    case "switch_migration":
-      return { kind: "switch_migration", agentKeyId: null, userId: null, legacyHydrationRequestId: null };
   }
 }
 
@@ -1020,9 +1017,9 @@ function statusWorkOf(work: SyncWorkRow): StatusWork {
 /** What a request waits for as a whole: the page (an owner pause, no running
  *  live owner, a page hold, a route state this build cannot read), or the
  *  hold of the route every history read takes, else nothing. The pause is
- *  named first (G19): after a rollback the page is `off` with its requests
- *  paused, and its open requests read `paused` (plan §15), not
- *  `ownership_unconfirmed`. */
+ *  named first (G19): the open requests of a page whose requests are paused
+ *  read `paused` (plan §15), not `ownership_unconfirmed`, also when the page
+ *  runs no owner. */
 function requestWaiting(eta: PageEtaContext, now: Date): { reason: WaitingReason; until: Date | null } | null {
   const page = eta.page;
   if (page === null) return { reason: "ownership_unconfirmed", until: null };

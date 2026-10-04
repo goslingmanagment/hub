@@ -2,18 +2,18 @@
 // mutable head scope, with the reason list as its output rather than a bare
 // boolean.
 //
-// The dm_conversations sweep used to answer this inline, over a HALF of the
-// scope: `lastMessageId`, `unreadCount`, `isVisible` and the two metadata
-// markers. A page on which only `conversationFlags`, `lastUnreadMessageId` or
-// `subscriptionTierId` moved was therefore classified "unchanged" and grew
-// `unchangedPageStreak` — pinned as current-behaviour-not-desired by
-// tests/fansly-dm-conversations-sweep.integration.test.ts.
+// The legacy dm_conversations sweep (deleted at step 4, S4-14) answered this
+// inline, over a HALF of the scope: `lastMessageId`, `unreadCount`,
+// `isVisible` and the two metadata markers. A page on which only
+// `conversationFlags`, `lastUnreadMessageId` or `subscriptionTierId` moved was
+// therefore classified "unchanged" and grew `unchangedPageStreak` — its
+// behaviour, not the desired one.
 //
 // This module keeps both readings available at once, which is the point:
 //   * `reasons` is the FULL scope, for a caller that wants the truth;
-//   * `LEGACY_UNCHANGED_PAGE_REASONS` is the subset the streak predicate looks
-//     at TODAY, so the sweep can reproduce its historical verdict byte for
-//     byte while A0 uses the full scope only in separate diagnostics.
+//   * `LEGACY_UNCHANGED_PAGE_REASONS` is the subset that streak predicate
+//     looked at, so the engine's conversation list (`conversation-list.ts`)
+//     reproduces that verdict byte for byte.
 
 export type ConversationHeadDiffReason =
   /** No stored row at all — every field below is new by construction, so the

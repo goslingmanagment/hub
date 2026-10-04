@@ -20,7 +20,7 @@ import type { ResourceModule } from "../apps/runtime/src/sync/engine/resource.ts
 import { auditPagePace, auditRouteIntervals } from "../apps/runtime/src/sync/engine/send-audit.ts";
 import { createFanslyRegistry } from "../apps/runtime/src/sync/fansly/registry.ts";
 import type { FanslyRoute } from "../apps/runtime/src/sync/fansly/routes.ts";
-import { checkSwitchAcceptance } from "../apps/runtime/src/sync/switch/acceptance.ts";
+import { checkLiveHour } from "../apps/runtime/src/sync/checks/live-hour.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { currentIntervals } from "./helpers/sync-acceptance-fixtures.ts";
 import {
@@ -40,7 +40,7 @@ import {
 // The send audit on recorded rows (I1, I19; arena 3b-review G1): one read of
 // both journals (`readFanslySendAudit`) judged by one checker — the alert
 // evaluator latches what it finds on a `handover`/`live` page (the permanent
-// pace latch), `sync switch check` reports it. I1 by each send's own recorded
+// pace latch), `sync check live-hour` reports it. I1 by each send's own recorded
 // pause, I19 by each admission's recorded route and family intervals; a pair
 // straddling the handover is in neither engine's own audit and is in this
 // one; a history without the recorded intervals pages nobody and passes no
@@ -174,7 +174,7 @@ describe("the send audit on recorded rows", () => {
     const tail = auditPagePace(await readFanslySendAudit(db(), { pageId, since: tailSince }), { start: tailSince, until: null });
     expect(tail.violations).toEqual([expect.objectContaining({ journal: "engine", prevJournal: "legacy:sync_stream" })]);
 
-    const acceptance = await checkSwitchAcceptance(db(), { pageIds: [pageId], since });
+    const acceptance = await checkLiveHour(db(), { pageIds: [pageId], since });
     const page = acceptance.pages[0]!;
     expect(page.checks.find((check) => check.name === "pace_combined")).toMatchObject({
       verdict: "fail", detail: { violations: 1, pairs: 3, inconclusive: 0 },
@@ -204,7 +204,7 @@ describe("the send audit on recorded rows", () => {
 
     // The same rows through the acceptance: both checks fail, by the same audit.
     const since = new Date(Date.now() - 180_000);
-    const page = (await checkSwitchAcceptance(db(), { pageIds: [live], since })).pages[0]!;
+    const page = (await checkLiveHour(db(), { pageIds: [live], since })).pages[0]!;
     expect(page.checks.find((check) => check.name === "pace_combined")).toMatchObject({
       verdict: "fail", detail: { violations: 1, firstViolations: [expect.objectContaining({ pauseMs: 2_750, clock: "wall" })] },
     });
@@ -220,7 +220,7 @@ describe("the send audit on recorded rows", () => {
     const result = await evaluator().runOnce();
     expect(result).toMatchObject({ paceViolations: 0, routeIntervalViolations: 0, inconclusivePairs: 14 });
     expect(await paceLatch(pageId)).toBeNull();
-    const page = (await checkSwitchAcceptance(db(), { pageIds: [pageId], since: new Date(Date.now() - 120_000) })).pages[0]!;
+    const page = (await checkLiveHour(db(), { pageIds: [pageId], since: new Date(Date.now() - 120_000) })).pages[0]!;
     expect(page.checks.find((check) => check.name === "route_budgets")).toMatchObject({
       verdict: "inconclusive", detail: { violations: 0, pairs: 0, inconclusive: 14 },
     });
@@ -277,7 +277,7 @@ describe("the send audit on recorded rows", () => {
     expect(await paceLatch(disagree)).toBeNull();
 
     const since = new Date(Date.now() - 180_000);
-    const report = await checkSwitchAcceptance(db(), { pageIds: [stale, disagree], since });
+    const report = await checkLiveHour(db(), { pageIds: [stale, disagree], since });
     const paceOf = (pageId: number) => report.pages.find((page) => page.pageId === pageId)!.checks.find((check) => check.name === "pace_combined");
     expect(paceOf(stale)).toMatchObject({ verdict: "fail", detail: { violations: 1, firstViolations: [expect.objectContaining({ clock: "wall", pauseMs: 2_750 })] } });
     expect(paceOf(disagree)).toMatchObject({
@@ -392,7 +392,7 @@ describe("the send audit on recorded rows", () => {
     expect(floorLatch).toMatchObject({ status: "open", errorCode: "pace_violation" });
     expect(floorLatch?.errorSummary).toContain("\"clock\":\"wall\"");
 
-    const report = await checkSwitchAcceptance(db(), { pageIds: [early, proven, floor], since });
+    const report = await checkLiveHour(db(), { pageIds: [early, proven, floor], since });
     const checkOf = (pageId: number, name: string) => report.pages.find((page) => page.pageId === pageId)!.checks.find((check) => check.name === name);
     expect(checkOf(early, "route_budgets")).toMatchObject({
       verdict: "inconclusive",

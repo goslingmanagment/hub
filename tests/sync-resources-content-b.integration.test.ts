@@ -20,7 +20,6 @@ import { fanslyCaptureCodec } from "../apps/runtime/src/sync/fansly/capture.ts";
 import { projectionBehind } from "../apps/runtime/src/sync/fansly/lib/projection-lag.ts";
 import { createFanslyRegistry, FANSLY_RESOURCE_SPECS, fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";
 import { mediaStatsOwnerTiers, runMediaVisit, startMediaVisit } from "../apps/runtime/src/sync/fansly/resources/media-stats.ts";
-import { statsModule } from "../apps/runtime/src/sync/fansly/resources/stats.ts";
 import { readShadowRouteChecks } from "../apps/runtime/src/sync/report/shadow-routes.ts";
 import { changeSyncRegistryOverride, requestSyncProbe, SyncOwnerLeverError } from "../apps/runtime/src/sync/inspect.ts";
 import { allZeroBody, statsBody } from "./helpers/fansly-media-stats-fixtures.ts";
@@ -703,7 +702,7 @@ describe("media-stats.walk", () => {
     // The visit began before midnight, after that day's mark, and has its
     // first answer.
     const candidates = await listMediaStatsRefreshChunk(db(), {
-      pageId, limit: 10, now: new Date(), longTailCycleDays: 30, tiers: mediaStatsOwnerTiers({ registryOverrides: {} }),
+      pageId, limit: 10, now: new Date(), tiers: mediaStatsOwnerTiers({ registryOverrides: {} }),
     });
     const begun = startMediaVisit(candidates.find((candidate) => candidate.subjectRef === ITEM_LONG)!, page, new Date(Date.now() - 10 * 60_000));
     const first = runMediaVisit(begun);
@@ -858,7 +857,7 @@ describe("media-stats.walk", () => {
     // The visit in flight began under other rules: the window it recorded is
     // not one today's code asks for.
     const [candidate] = await listMediaStatsRefreshChunk(db(), {
-      pageId, limit: 1, now: new Date(), longTailCycleDays: 30, tiers: mediaStatsOwnerTiers({ registryOverrides: {} }),
+      pageId, limit: 1, now: new Date(), tiers: mediaStatsOwnerTiers({ registryOverrides: {} }),
     });
     const begun = startMediaVisit(candidate!, { longTailWindowMode: "unproven", longTailWindowAnnounced: false, longTailProbeFailedDay: null }, new Date());
     await setCursor(pageId, "media-stats.walk", {
@@ -1160,45 +1159,6 @@ describe("stats.hourly", () => {
     const poll = (await workRow(pageId, "stats.hourly"))!;
     expect(poll.due_at.getTime() - Date.now()).toBeLessThanOrEqual(23 * HOUR_MS);
     expect(poll.due_at.getTime() - Date.now()).toBeGreaterThan(19 * HOUR_MS);
-  });
-
-  it("the switch's import makes the first capture due by legacy's last one, so the two windows meet (A15)", async (context) => {
-    if (!testDb) return context.skip();
-    const { pageId } = await seedPage("live");
-    const legacyState = (capturedAt: Date) => JSON.stringify({
-      version: 2,
-      mode: "steady",
-      utcDay: new Date().toISOString().slice(0, 10),
-      lastHourlyCapturedAt: capturedAt.toISOString(),
-      lastHourlyServedBefore: capturedAt.toISOString(),
-    });
-    const hourly = statsModule("hourly");
-    // Legacy captured 2 h ago: the first capture comes 22 h after it.
-    const recent = new Date(Date.now() - 2 * HOUR_MS);
-    await testDb.pool.query("insert into page_sync_cursors (page_id, stream, state) values ($1, 'stats_snapshot', $2::jsonb)", [pageId, legacyState(recent)]);
-    const soon = (await hourly.importLegacy!(db(), { pageId })).cursors[0]!;
-    expect(soon.dueAt!.getTime()).toBe(recent.getTime() + 22 * HOUR_MS);
-
-    // Legacy captured 23 h ago: due at once.
-    const old = new Date(Date.now() - 23 * HOUR_MS);
-    await testDb.pool.query("update page_sync_cursors set state = $2::jsonb where page_id = $1 and stream = 'stats_snapshot'", [pageId, legacyState(old)]);
-    const imported = await hourly.importLegacy!(db(), { pageId });
-    const [entry] = imported.cursors;
-    expect(entry).toMatchObject({ resource: "stats.hourly", subject: "", cursor: { lastCapturedAt: old.toISOString() } });
-    expect(entry!.dueAt!.getTime()).toBeLessThanOrEqual(Date.now());
-    expect(imported.notes).toMatchObject({ hourlyDueAt: entry!.dueAt!.toISOString() });
-
-    // The live row as the switch writes it — the imported cursor, due at
-    // `dueAt` instead of its random phase (parked a day out here): the first
-    // capture's window meets legacy's last one, no hole is recorded.
-    const registry = await quietRegistry(pageId, false);
-    await testDb.pool.query(
-      "update sync_work set cursor = $3::jsonb, due_at = $4 where page_id = $1 and resource = $2 and not shadow and state = 'open'",
-      [pageId, "stats.hourly", JSON.stringify(entry!.cursor), entry!.dueAt],
-    );
-    await drive(pageId, "live", registry, statsAnswer, async () => (await attempts(pageId, "stats.hourly")) === 1);
-    expect(await coverageScopes(pageId, "stats_account_hourly")).toEqual(["steady"]);
-    expect((await workRow(pageId, "stats.hourly"))!.cursor).toMatchObject({ last: { gap: false } });
   });
 });
 

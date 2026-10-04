@@ -22,8 +22,8 @@ import type {
 } from "./sync-status.ts";
 
 // The legacy status blocks of a page the Fansly Sync Engine owns (design step
-// 3 §3.2 items 2 and 7): its legacy cursors are frozen at the switch, so a
-// block derived from them would read "delayed" for good. Every block reads
+// 3 §3.2 items 2 and 7): its legacy cursors are frozen (parked for good at
+// step 4, S4-21), so a block derived from them would read "delayed" for good. Every block reads
 // `state: "engine"` with the page's engine mode instead, and each legacy
 // stream of the block is described by the live work of the registry keys
 // that took it over: when one was last applied, when the next is due, why the
@@ -138,23 +138,44 @@ function statusWorkOf(work: SyncWorkRow): StatusWork {
 
 type EngineSubstream = SyncDomainBlockStatus["substreams"][number];
 
-/** One legacy stream of an engine page, from the live work of its keys. */
-function engineSubstream(
+/** One legacy stream of an engine page, as the live work of the registry keys
+ *  that took it over says: the read model every surface that speaks in legacy
+ *  streams shares (the Settings blocks, the insights coverage, the top-spenders
+ *  source). */
+export interface EngineStreamState {
+  stream: SyncStream;
+  /** The registry keys that took the stream over, in registry order. */
+  keys: string[];
+  /** When one of them was last applied live (page-level keys). */
+  succeededAt: Date | null;
+  /** The earliest due time of their open work. */
+  nextDueAt: Date | null;
+  /** The owner paused the whole page or every one of the keys. */
+  paused: boolean;
+  /** Some of their work is quarantined or blocked by the vendor. */
+  needsAttention: boolean;
+  /** What needs attention, or why the earliest-due page-level row waits. */
+  statusReason: SyncStatusReason | null;
+  /** The largest subject-breaker failure count among their active rows. */
+  consecutiveFailures: number;
+}
+
+export function engineStreamState(
   stream: SyncStream,
-  role: SyncStreamRole,
   facts: EngineStatusFacts,
-  now: Date,
-): EngineSubstream {
+  now: Date = facts.page.dbNow,
+): EngineStreamState {
   const keys = fanslyKeysForStreams([stream]);
   const counts = keys.map((key) => facts.counts.get(key)).filter((row): row is SyncWorkResourceCounts => row !== undefined);
   const quarantined = counts.reduce((sum, row) => sum + row.quarantined, 0);
   const blocked = counts.reduce((sum, row) => sum + row.blockedByVendor, 0);
-  const maxFailures = counts.reduce((max, row) => Math.max(max, row.maxFailureCount), 0);
+  const consecutiveFailures = counts.reduce((max, row) => Math.max(max, row.maxFailureCount), 0);
   const succeededAt = latest(keys.map((key) => facts.appliedAt.get(key)));
   const nextDueAt = earliest(counts.map((row) => row.nextDueAt));
+  const paused = facts.page.pausedAll
+    || (keys.length > 0 && keys.every((key) => facts.page.pausedResources.includes(key)));
   const needsAttention = quarantined > 0 || blocked > 0;
   let statusReason: SyncStatusReason | null = null;
-  let error: EngineSubstream["error"] = null;
   if (needsAttention) {
     const resources = counts.filter((row) => row.quarantined > 0 || row.blockedByVendor > 0).map((row) => row.resource);
     const summary = [
@@ -165,13 +186,6 @@ function engineSubstream(
       code: quarantined > 0 ? "engine_quarantined" : "engine_blocked_by_vendor",
       summary: `${summary} (${resources.join(", ")}); pnpm cli sync work list --page ${facts.page.pageLabel ?? facts.page.pageId} --state quarantined`,
       waitingFor: null,
-    };
-    error = {
-      stream,
-      code: statusReason.code,
-      summary: statusReason.summary,
-      failedAt: null,
-      consecutiveFailures: maxFailures,
     };
   } else {
     // Why the earliest-due page-level row of the stream waits.
@@ -195,18 +209,37 @@ function engineSubstream(
       };
     }
   }
+  return { stream, keys, succeededAt, nextDueAt, paused, needsAttention, statusReason, consecutiveFailures };
+}
+
+/** One legacy stream of an engine page as a Settings block substream. */
+function engineSubstream(
+  stream: SyncStream,
+  role: SyncStreamRole,
+  facts: EngineStatusFacts,
+  now: Date,
+): EngineSubstream {
+  const state = engineStreamState(stream, facts, now);
   return {
     stream,
     role,
     state: "engine",
-    succeededAt: iso(succeededAt),
-    nextDueAt: iso(nextDueAt),
+    succeededAt: iso(state.succeededAt),
+    nextDueAt: iso(state.nextDueAt),
     nextRetryAt: null,
     cadenceSeconds: fanslyStreamPollSeconds(stream),
-    isFresh: !needsAttention,
-    needsAttention,
-    statusReason,
-    error,
+    isFresh: !state.needsAttention,
+    needsAttention: state.needsAttention,
+    statusReason: state.statusReason,
+    error: state.needsAttention && state.statusReason !== null
+      ? {
+        stream,
+        code: state.statusReason.code,
+        summary: state.statusReason.summary,
+        failedAt: null,
+        consecutiveFailures: state.consecutiveFailures,
+      }
+      : null,
   };
 }
 

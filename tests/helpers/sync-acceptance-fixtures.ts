@@ -4,11 +4,11 @@ import { createFanslyPage, createModel, ensureSyncPage, type Database } from "@a
 
 import type { RouteAdmissionIntervals } from "../../apps/runtime/src/sync/engine/route-policy.ts";
 import { FAMILY_BUDGETS, familyOfRoute, intervalMsOf, routeBudget, type FanslyRoute } from "../../apps/runtime/src/sync/fansly/routes.ts";
-import type { AcceptanceCheckName, CheckVerdict, PageVerdict } from "../../apps/runtime/src/sync/switch/acceptance-rules.ts";
+import type { AcceptanceCheckName, CheckVerdict, PageVerdict } from "../../apps/runtime/src/sync/checks/live-hour-rules.ts";
 
 // The shared fixtures of the live-hour acceptance (step 3b A6, plan PR 1-11):
 // one database with a page per scenario, all switched within seconds of each
-// other an hour and a quarter ago, so `pnpm cli sync switch check` judges one
+// other an hour and a quarter ago, so `pnpm cli sync check live-hour` judges one
 // complete shared window. Each page starts from a healthy hour — the legacy
 // engine reading /message every 2.5 s until 45 s before live (denser than the
 // route's budget: not the budget's sends), then an engine send every 5 s

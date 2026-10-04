@@ -164,7 +164,7 @@ export function registerSyncEngineCommands(sync: Command, deps: SyncCliDeps = de
 
   page
     .command("mode")
-    .description("move a page between off and shadow (handover and live only through `sync switch`, step 3)")
+    .description("move a page between off and shadow (no lever reaches handover or live: a page is born live at onboarding)")
     .requiredOption("--page <label>", "the Fansly page")
     .requiredOption("--to <mode>", `one of ${OWNER_PAGE_MODES.join(", ")}`)
     .option("--note <text>", "why (stored with the change)")

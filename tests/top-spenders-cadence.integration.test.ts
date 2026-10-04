@@ -13,7 +13,6 @@ import {
   createFanslyPage,
   createModel,
   ensurePageSyncStates,
-  getFanslySyncLiveness,
   getPageSyncState,
   listRunnablePageSync,
   requestPageSync,
@@ -24,6 +23,7 @@ import {
 
 import { getSyncStatusSnapshot } from "../apps/runtime/src/services/sync-status.ts";
 import { resetIntegrationDatabase, startTestDatabase } from "./helpers/db.ts";
+import { EVERY_PLATFORM } from "./helpers/page-sync-scope.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 
 const HOUR_MS = 3600_000;
@@ -92,6 +92,7 @@ async function tick(pageId: number, now: Date) {
   const ran: SyncStream[] = [];
   for (;;) {
     const lease = await acquirePageSyncLease(db.db, {
+      platforms: EVERY_PLATFORM,
       pageId, workerId: "test-worker", leaseToken: `lease-${now.getTime()}-${ran.length}`,
       leaseTtlMs: 60_000, now,
     });
@@ -174,20 +175,15 @@ describe("top_spenders runs every 6 hours", () => {
     expect(transactionRuns).toBeGreaterThanOrEqual(13);
   });
 
-  it("keeps the watchdog and Sync now working on the 6-hour grid", async () => {
+  it("keeps Sync now working on the 6-hour grid", async () => {
     const { page, firstBoundary } = await seedPageBeforeDeploy(["top_spenders"]);
     await ensurePageSyncStates(db.db, { pageId: page.id, now: DEPLOY });
     const secondBoundary = new Date(firstBoundary.getTime() + SIX_HOURS_MS);
     expect(await tick(page.id, firstBoundary)).toEqual(["top_spenders"]);
 
-    // sync_silent: an idle lane between 6-hour slots is not due...
+    // An idle lane between 6-hour slots is not due.
     const midGap = new Date(firstBoundary.getTime() + 3 * HOUR_MS);
     expect(await tick(page.id, midGap)).toEqual([]);
-    expect((await getFanslySyncLiveness(db.db, { since: midGap, dueBefore: midGap })).hasDueStream).toBe(false);
-    // ...and a planner that stopped claiming its next slot still shows.
-    const afterSecond = new Date(secondBoundary.getTime() + 10 * 60_000);
-    expect((await getFanslySyncLiveness(db.db, { since: afterSecond, dueBefore: afterSecond })).hasDueStream)
-      .toBe(true);
 
     // Sync now between slots runs at once, at manual priority...
     const manualAt = new Date(midGap.getTime() + 30 * 60_000);
@@ -196,7 +192,7 @@ describe("top_spenders runs every 6 hours", () => {
     });
     expect(requested).toMatchObject({ stream: "top_spenders" });
     expect(await topSpendersRow(page.id)).toMatchObject({ status: "pending", requestSource: "manual" });
-    expect(await listRunnablePageSync(db.db, manualAt)).toEqual([
+    expect(await listRunnablePageSync(db.db, manualAt, { platforms: EVERY_PLATFORM })).toEqual([
       expect.objectContaining({ pageId: page.id, priority: 85 }),
     ]);
     expect(await tick(page.id, manualAt)).toEqual(["top_spenders"]);

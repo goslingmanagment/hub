@@ -3,8 +3,6 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   ensurePollRows,
   getSyncPage,
-  insertRawPayload,
-  putPayloadObject,
   upsertDemand,
   upsertFans,
   type Database,
@@ -580,115 +578,6 @@ describe("purchases.targets", () => {
     expect(await workRow(pageId, "purchases.targets", { subject })).toMatchObject({
       state: "done", close_reason: "known_order", proof: { pages: 1, headOrderIds: ["9003", "9002", "9001"] },
     });
-  });
-
-  it("import: the lane's pending targets, the ledger rows and the /message pages it has not scanned yet", async (context) => {
-    if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
-    const module = await createEngineRegistry(FANSLY_RESOURCE_SPECS).module("purchases.targets");
-    let txSeq = 0;
-    const ledgerRow = async (rawType: string, correlationId: string | null): Promise<number> => {
-      txSeq += 1;
-      const result = await testDb!.pool.query<{ id: string }>(
-        `insert into transactions (platform_account_id, transaction_id, raw_type, canonical_type, transaction_state, raw_status,
-           gross_amount_mills, source_destination_amount_mills, creator_net_amount_mills, occurred_at, source, currency, correlation_id)
-         values ($1, $2, $3, 'tip', 'posted', '1', 10000, 10000, 8000, clock_timestamp(), 'fansly:rest', 'USD', $4)
-         returning id::text`,
-        [pageId, `import-tx-${txSeq}`, rawType, correlationId],
-      );
-      return Number(result.rows[0]!.id);
-    };
-    const journal = async (endpoint: string, params: Record<string, unknown>, body: unknown, storage: "inline" | "pointer" | "unavailable" = "inline") => {
-      let payloadRef: { bucketMonth: string; objectId: number } | null = null;
-      if (storage !== "inline") {
-        const object = await putPayloadObject(db(), {
-          representation: "canonical_json", json: body, captureInstant: new Date(), lane: "platform_capture", platformAccountId: pageId,
-        });
-        payloadRef = { bucketMonth: object.bucketMonth, objectId: object.objectId };
-      }
-      const receipt = await insertRawPayload(db(), {
-        platformAccountId: pageId, endpoint, requestParams: params, responsePayload: body, mapperVersion: "test",
-        payloadKind: endpoint === "dm_messages" ? "dm_messages" : "mapping_critical",
-        retainUntil: new Date("2126-01-01T00:00:00Z"), payloadRef, omitInlinePayload: storage !== "inline",
-      });
-      if (storage === "unavailable") {
-        await testDb!.pool.query("delete from capture_json_hot_bodies where bucket_month = $1 and object_id = $2", [
-          payloadRef!.bucketMonth, payloadRef!.objectId,
-        ]);
-      }
-      return receipt.id;
-    };
-    const dmPage = (orders: Array<{ accountMediaId?: string; accountMediaBundleId?: string }>) => ({ messages: [], accountMediaOrders: orders });
-
-    // Nothing to import before the lane ever ran, on an empty page.
-    expect(await module.importLegacy!(db(), { pageId })).toMatchObject({ cursors: [], notes: { legacyState: "none", targets: 0 } });
-
-    // Scanned by the lane already (at or before its cursors).
-    const scannedTx = await ledgerRow("2010", "880000000000000001");
-    const scannedDm = await journal("dm_messages", { groupId: "g" }, dmPage([{ accountMediaId: "880000000000000010" }]));
-    // Captured by the lane.
-    await journal("purchase_history", { accountMediaId: "880000000000000004", limit: 100 }, { accountMediaOrderHistory: [] });
-    await journal("purchase_history", { accountMediaId: "880000000000000012", limit: 100 }, { accountMediaOrderHistory: [] });
-    // The ledger backlog.
-    await ledgerRow("2010", "880000000000000002");
-    await ledgerRow("2016", "770000000000000001");
-    await ledgerRow("2110", "880000000000000003"); // sells a pending target again
-    await ledgerRow("2010", "880000000000000004"); // sells a captured target again
-    await ledgerRow("2010", "880000000000000005"); // one content id as both kinds
-    await ledgerRow("2016", "880000000000000005");
-    await ledgerRow("7001", "990000000000000001"); // not a PPV sale
-    // The /message backlog: a new target, a captured one, one the ledger
-    // names too, a body served from the catalog and one it cannot serve.
-    await journal("dm_messages", { groupId: "g" }, dmPage([
-      { accountMediaId: "880000000000000011" }, { accountMediaId: "880000000000000012" }, { accountMediaId: "880000000000000002" },
-    ]));
-    await journal("dm_messages", { groupId: "g" }, dmPage([{ accountMediaBundleId: "770000000000000011" }]), "pointer");
-    const lost = await journal("dm_messages", { groupId: "g" }, dmPage([{ accountMediaId: "880000000000000013" }]), "unavailable");
-    await testDb.pool.query(
-      "insert into page_sync_cursors (page_id, stream, state) values ($1, 'purchase_history', $2::jsonb)",
-      [pageId, JSON.stringify({
-        version: 5,
-        transactionCursorId: scannedTx,
-        rawPayloadCursorId: scannedDm,
-        pendingTargets: [
-          { kind: "single", contentId: "880000000000000003", before: "5000" },
-          { kind: "bundle", contentId: "770000000000000002", before: "6000" },
-        ],
-        utcDay: "2026-10-01",
-        callsToday: 3,
-      })],
-    );
-
-    const imported = await module.importLegacy!(db(), { pageId });
-    const head = { before: null, pages: 0, orders: 0, headOrderIds: [], knownOrderIds: null, headRevision: null, shadow: null };
-    expect(imported.cursors).toEqual([
-      { resource: "purchases.targets", subject: "bundle:770000000000000001", cursor: head },
-      { resource: "purchases.targets", subject: "bundle:770000000000000002", cursor: { ...head, before: "6000", knownOrderIds: [] } },
-      { resource: "purchases.targets", subject: "bundle:770000000000000011", cursor: head },
-      { resource: "purchases.targets", subject: "media:880000000000000002", cursor: head },
-      // Sold again past the lane's cursor: walked again from its head.
-      { resource: "purchases.targets", subject: "media:880000000000000003", cursor: { ...head, knownOrderIds: [] } },
-      // A sale of a captured target is a new order ([D7]).
-      { resource: "purchases.targets", subject: "media:880000000000000004", cursor: head },
-      { resource: "purchases.targets", subject: "media:880000000000000011", cursor: head },
-    ]);
-    expect(imported.notes).toMatchObject({
-      legacyState: "v5",
-      targets: 7,
-      pendingTargets: 2,
-      pendingRestarted: 1,
-      ledger: { afterId: scannedTx, rowsScanned: 6, truncated: false, targets: 3 },
-      dmPages: {
-        afterId: scannedDm, pagesScanned: 3, throughId: lost, truncated: false, targets: 2, capturedSkipped: 1,
-        bodiesUnavailable: 1, unavailableExamples: [lost],
-      },
-      ambiguousContentIds: ["880000000000000005"],
-      ambiguousSkipped: 1,
-      kindDisagreements: [],
-      invalidTargets: 0,
-    });
-    // Read-only: the import writes nothing itself.
-    expect(await countRows(testDb.pool, "select count(*)::int as n from sync_work where page_id = $1 and resource = 'purchases.targets'", [pageId])).toBe(0);
   });
 
   it("a 404 closes the target with its answer; contract drift quarantines it", async (context) => {

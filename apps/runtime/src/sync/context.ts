@@ -30,10 +30,10 @@ export const SYNC_POOL_TIMEOUTS: PoolTimeouts = {
   idleInTransactionSessionTimeoutMs: 60_000,
 };
 
-/** Everything the `sync` process runs on. Deliberately adapter-free: no
- *  FanslyAdapter, no OFAPI client (whose credential preflight may call OFAPI
- *  at boot), no AI providers, no legacy send guards — the engine reaches
- *  Fansly only through its own wire layer, from inside a page actor. */
+/** Everything the `sync` process runs on. Deliberately small: no OFAPI
+ *  client (whose credential preflight may call OFAPI at boot), no AI
+ *  providers, no legacy send guards — the engine reaches Fansly only through
+ *  its own wire layer, from inside a page actor. */
 export interface SyncContext {
   /** The env config with the staged ('boot') DB overrides applied, exactly as
    *  every other role boots, so the heartbeat reports the same `running`

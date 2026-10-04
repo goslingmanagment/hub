@@ -1,10 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  buildFanslyDmConversationMetadata,
+  FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY,
   FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
   getFanslyDmMessageSyncExcludedReason,
-  isFanslyDmMessageSyncExcluded,
   resolveFanLabel,
   resolveFanLabelForScope,
 } from "@agency_hub_core/shared";
@@ -136,14 +135,13 @@ describe("resolveFanLabel", () => {
 
 describe("Fansly dm message exclusion helpers", () => {
   it("recognizes the unresolvable account lookup exclusion reason", () => {
-    const metadata = buildFanslyDmConversationMetadata({
-      messageSyncExcludedReason:
+    const metadata = {
+      [FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY]:
         FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
-    });
+    };
 
     expect(getFanslyDmMessageSyncExcludedReason(metadata)).toBe(
       FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
     );
-    expect(isFanslyDmMessageSyncExcluded(metadata)).toBe(true);
   });
 });

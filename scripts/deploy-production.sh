@@ -613,6 +613,14 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # устройстве", i.e. DELETE /api/v1/admin/users/by-id/:userId/device-tokens/
   # :tokenId); the extension signs in again after the forward deploy.
   "0238_device_token_client_profile.sql"
+  # Fansly legacy sync rows parked for good (step 4, design S4-21 [E17], the
+  # point of no return, stage 2): one data update of the Fansly pages'
+  # page_sync_states rows to paused / blocker 'retired' (code
+  # fansly_sync_engine_owned), lease and retry fields cleared. No DDL. The
+  # previous image (S4-10 … S4-20) never seeds, schedules, wakes, leases or
+  # resets a Fansly page's legacy state, and its rollback command refuses, so
+  # it runs unchanged; no image clears a 'retired' blocker.
+  "0239_retire_fansly_legacy_sync_states.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

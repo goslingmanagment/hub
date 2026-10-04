@@ -46,7 +46,6 @@ import type {
   ApplyInput,
   ApplyResult,
   DemandSignal,
-  LegacyImport,
   ReplayContext,
   ReplayObservation,
   ReplayVerdict,
@@ -423,28 +422,6 @@ export const followersHeadModule: ResourceModule = {
   },
 
   replay: replayFollowersPage,
-
-  async importLegacy(tx, page): Promise<LegacyImport> {
-    // Mandatory (design §5.12): without the known follow the first head walk
-    // reads the whole list (≤ 184 pages on lilly-2).
-    const legacy = await tx.execute<{ cursorText: string | null }>(sql`
-      select cursor_text as "cursorText" from page_sync_cursors where page_id = ${page.pageId} and stream = 'followers'
-    `);
-    let knownFollowId = text(legacy.rows[0]?.cursorText);
-    let source = "page_sync_cursors.followers";
-    if (knownFollowId === null) {
-      const newest = await tx.execute<{ id: string }>(sql`
-        select platform_follow_id as id from page_follows
-         where platform_account_id = ${page.pageId}
-         order by followed_at desc, length(platform_follow_id) desc, platform_follow_id desc
-         limit 1
-      `);
-      knownFollowId = text(newest.rows[0]?.id);
-      source = knownFollowId === null ? "none" : "page_follows.newest";
-    }
-    const cursor: FollowersHeadCursor = { knownFollowId, walk: null, last: null, shadow: null };
-    return { cursors: [{ resource: HEAD_KEY, subject: "", cursor }], notes: { knownFollowId: source } };
-  },
 };
 
 // ── reconcile ───────────────────────────────────────────────────────────────
@@ -830,22 +807,6 @@ export const followersReconcileModule: ResourceModule = {
   },
 
   replay: replayFollowersPage,
-
-  async importLegacy(tx, page): Promise<LegacyImport> {
-    const anchor = await legacyReconcileAnchor(tx, page.pageId);
-    const cursor: FollowersReconcileCursor = {
-      generation: Number(await maxPageFollowGeneration(tx, page.pageId)),
-      walk: null,
-      snapshotRestartCount: 0,
-      lastFullSweepStartedAt: anchor?.toISOString() ?? null,
-      last: null,
-      shadow: null,
-    };
-    return {
-      cursors: [{ resource: RECONCILE_KEY, subject: "", cursor }],
-      notes: { lastFullSweepStartedAt: anchor === null ? "none" : "page_sync_cursors.followers_reconcile" },
-    };
-  },
 };
 
 export function followersModule(variant: FollowersVariant): ResourceModule {

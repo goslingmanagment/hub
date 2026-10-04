@@ -26,11 +26,10 @@ describe("validateConfigOverride", () => {
     expect(result).toEqual({ ok: true, value: 45 });
   });
 
-  it("clamps a cost-warned live window key to its upper bound (transactionRescanCapDays max 365)", () => {
-    // L2: raise-expands-work keys carry a max so a live PATCH can't set an unbounded backfill
-    // window. 1_000_000 clamps down to the descriptor max.
-    expect(validateConfigOverride("transactionRescanCapDays", 1_000_000)).toEqual({ ok: true, value: 365 });
-    expect(validateConfigOverride("transactionLookbackDays", 1_000_000)).toEqual({ ok: true, value: 365 });
+  it("clamps a cost-warned live key to its upper bound (ofapiWebhookAutoRedeliveryDailyCap max 1000)", () => {
+    // L2: raise-expands-work keys carry a max so a live PATCH can't set an unbounded
+    // value. 1_000_000 clamps down to the descriptor max.
+    expect(validateConfigOverride("ofapiWebhookAutoRedeliveryDailyCap", 1_000_000)).toEqual({ ok: true, value: 1000 });
   });
 
   describe("reject mode (the Fansly pause)", () => {
@@ -179,7 +178,7 @@ describe("collectCostWarnings", () => {
   it("returns the descriptor costWarning for keys that carry one, keyed by config key", () => {
     const result = collectCostWarnings([
       "ofapiBurnAlertCreditsPerHour",
-      "transactionLookbackDays", // a live key with no costWarning
+      "healthSyncLightMaxAgeMinutes", // a live key with no costWarning
       "ofapiCreditAlertThreshold",
     ]);
     expect(Object.keys(result).sort()).toEqual(

@@ -1424,7 +1424,7 @@ describe("the shadow report (design §3.12)", () => {
     await setModeDirect(testDb.pool, other.pageId, "live");
     const withLive = await build();
     expect(withLive.pages).toEqual([{ page: "lilly-1", mode: "shadow" }]);
-    expect(withLive.notJudged).toEqual([{ page: "lilly-2", mode: "live", reason: "live — judged by `sync switch check`" }]);
+    expect(withLive.notJudged).toEqual([{ page: "lilly-2", mode: "live", reason: "live — judged by `sync check live-hour`" }]);
     expect(withLive.window!.coverage).toEqual(alone.window!.coverage);
     expect(withLive.window!.demand).toEqual(alone.window!.demand);
     expect(withLive.window!.legacy).toEqual(alone.window!.legacy);
@@ -1442,7 +1442,7 @@ describe("the shadow report (design §3.12)", () => {
     }, new ScanGovernor(pacing));
     expect(liveChains[0]!.rebuild).toEqual({ error: "ChainRebuildRefusedError" });
     expect(withLive.summary[1]).toBe(
-      "Judged: lilly-1 (in shadow, the switch candidates); not judged, in no verdict: lilly-2 live — judged by `sync switch check`",
+      "Judged: lilly-1 (in shadow, the switch candidates); not judged, in no verdict: lilly-2 live — judged by `sync check live-hour`",
     );
 
     // `--page` names a switch candidate or nothing.
@@ -1456,7 +1456,7 @@ describe("the shadow report (design §3.12)", () => {
     await expect(command.parseAsync([
       "shadow", "report", "--part", "a", "--page", "lilly-2", "--window", `${start.toISOString()}/${at(60 * MINUTE).toISOString()}`,
     ], { from: "user" })).rejects.toThrow(
-      "lilly-2 is live: the shadow report judges only the pages in shadow, the switch candidates (live — judged by `sync switch check`)",
+      "lilly-2 is live: the shadow report judges only the pages in shadow, the switch candidates (live — judged by `sync check live-hour`)",
     );
   });
 

@@ -10,7 +10,7 @@ import {
   SYNC_STREAM_POLICY,
 } from "@agency_hub_core/db";
 
-import { fanslyPlatformAdapter } from "../apps/runtime/src/platforms/registry.ts";
+import { FANSLY_ENGINE_SCOPE_STREAMS } from "../apps/runtime/src/services/sync-engine-levers.ts";
 
 const HOUR = 3600;
 const SIX_HOURS = 6 * HOUR;
@@ -53,8 +53,8 @@ describe("top_spenders cadence (owner decision 2026-09-30: read Fansly top spend
     for (const stream of ["dm_conversations", "dm_messages"] as const) {
       expect(getSyncStreamDependenciesForPage({ platform: "fansly", stream })).toContain("top_spenders");
     }
-    expect(fanslyPlatformAdapter.syncScopes.data).toContain("top_spenders");
-    expect(fanslyPlatformAdapter.syncScopes.all).toContain("top_spenders");
+    expect(FANSLY_ENGINE_SCOPE_STREAMS.data).toContain("top_spenders");
+    expect(FANSLY_ENGINE_SCOPE_STREAMS.all).toContain("top_spenders");
   });
 
   it("re-expresses the last scheduled slot on the new grid, keeping the instant it covered", () => {

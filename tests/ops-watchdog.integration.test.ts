@@ -72,13 +72,13 @@ async function openIncidents(): Promise<string[]> {
 describe("ops watchdog (W5.2 / A53)", () => {
   it("opens nothing inside the boot grace window (deploy-restart guard)", async () => {
     const result = await runOpsWatchdogCheck(appStub(), { startedAtMs: Date.now() });
-    expect(result).toEqual({ bootGrace: true, schedulerFresh: false, samplerFresh: false, syncStalled: false, syncEngineSilent: false });
+    expect(result).toEqual({ bootGrace: true, schedulerFresh: false, samplerFresh: false, syncEngineSilent: false });
     expect(await openIncidents()).toEqual([]);
   });
 
   it("opens both silences on an empty database, resolves each on recovery", async () => {
     const first = await runOpsWatchdogCheck(appStub(), { startedAtMs: PAST_BOOT_GRACE() });
-    expect(first).toEqual({ bootGrace: false, schedulerFresh: false, samplerFresh: false, syncStalled: false, syncEngineSilent: false });
+    expect(first).toEqual({ bootGrace: false, schedulerFresh: false, samplerFresh: false, syncEngineSilent: false });
     expect(await openIncidents()).toEqual(["ops_sampler_silent", "scheduler_silent"]);
 
     // Scheduler heartbeat lands → scheduler_silent resolves, sampler stays.
@@ -166,6 +166,35 @@ async function schedulerHeartbeat(ageMs: number) {
     [ageMs],
   );
 }
+
+describe("no legacy sync deadman (E-2's leg went with the legacy Fansly streams, step 4 S4-21)", () => {
+  beforeEach(async () => {
+    await resetIntegrationDatabase(harness.pool);
+  });
+
+  it("a legacy stream left due for hours with no chunk ever started opens nothing", async () => {
+    await schedulerHeartbeat(0);
+    await insertOpsMetricSamples(harness.db, [{ metric: "capture", quantile: "p95", valueMs: 1 }]);
+    const model = await createModel(harness.db, { slug: "lilly", name: "Lilly" });
+    for (const page of [
+      await createFanslyPage(harness.db, { modelId: model!.id, label: "lilly-fansly" }),
+      await createOnlyFansPage(harness.db, { modelId: model!.id, label: "lilly-of" }),
+    ]) {
+      await harness.pool.query(
+        `insert into page_sync_states (page_id, stream, status, cadence_seconds, slot_offset_seconds,
+                                       request_seq, applied_seq, requested_at)
+         values ($1, 'transactions', 'pending', 300, 0, 2, 1, now() - interval '3 hours')`,
+        [page!.id],
+      );
+    }
+
+    const result = await runOpsWatchdogCheck(appStub(), { startedAtMs: PAST_BOOT_GRACE() });
+    expect(result).toEqual({ bootGrace: false, schedulerFresh: true, samplerFresh: true, syncEngineSilent: false });
+    expect(opsWatchdogNeedsDeliveryFallback(result)).toBe(false);
+    expect(await getNotificationIncidentByKey(harness.db, "sync_silent:global")).toBeNull();
+    expect((await harness.pool.query("select count(*)::int as n from notification_incidents")).rows[0].n).toBe(0);
+  });
+});
 
 describe("ops watchdog boot grace (deploys opened false scheduler_silent episodes)", () => {
   beforeEach(async () => {
@@ -290,229 +319,5 @@ describe("api-side delivery fallback (pages while the scheduler or worker is dow
       releaseSend();
       await watchdog.stop();
     }
-  });
-});
-
-describe("sync_silent: the Fansly planner / executor deadman (E-2)", () => {
-  let fanslyPageId = 0;
-  let onlyFansPageId = 0;
-
-  beforeEach(async () => {
-    await resetIntegrationDatabase(harness.pool);
-    // Scheduler and sampler healthy: only the sync leg is under test.
-    await schedulerHeartbeat(0);
-    await insertOpsMetricSamples(harness.db, [{ metric: "capture", quantile: "p95", valueMs: 1 }]);
-    const model = await createModel(harness.db, { slug: "lilly", name: "Lilly" });
-    fanslyPageId = (await createFanslyPage(harness.db, { modelId: model!.id, label: "lilly-fansly" }))!.id;
-    onlyFansPageId = (await createOnlyFansPage(harness.db, { modelId: model!.id, label: "lilly-of" }))!.id;
-    await streamState(fanslyPageId, "transactions", {});
-    await streamState(onlyFansPageId, "transactions", {});
-  });
-
-  async function streamState(
-    pageId: number,
-    stream: string,
-    state: { status?: string; blockerKind?: string | null; retryInMs?: number | null },
-  ) {
-    await harness.pool.query(
-      `insert into page_sync_states (page_id, stream, status, blocker_kind, retry_at, cadence_seconds, slot_offset_seconds)
-       values ($1, $2::sync_stream, $3::page_sync_status, $4,
-               case when $5::bigint is null then null else now() + ($5::bigint || ' milliseconds')::interval end,
-               300, 0)
-       on conflict (page_id, stream) do update
-         set status = excluded.status, blocker_kind = excluded.blocker_kind, retry_at = excluded.retry_at`,
-      [pageId, stream, state.status ?? "idle", state.blockerKind ?? null, state.retryInMs ?? null],
-    );
-  }
-
-  /** Start times come from the host clock the watchdog measures with, not
-   * the database's: a Postgres VM clock a few ms ahead of the host would read
-   * "16 min ago" as 15 min 59.99 s. */
-  async function syncRunStarted(pageId: number, agoMs: number) {
-    const startedAt = new Date(Date.now() - agoMs);
-    await harness.pool.query(
-      `insert into sync_runs (page_id, stream, outcome, started_at, finished_at)
-       values ($1, 'transactions', 'succeeded', $2, $2)`,
-      [pageId, startedAt],
-    );
-  }
-
-  async function syncSilent() {
-    return getNotificationIncidentByKey(harness.db, "sync_silent:global");
-  }
-
-  const HOUR = 60 * MINUTE;
-
-  /** A whole hour a few hours back. The scenarios below run each check at a
-   * `now` of their own on this clock, so the heartbeat and the sample written
-   * above stay fresh and the boot grace is measured from the same clock. */
-  function pastHour(): number {
-    return Math.floor(Date.now() / HOUR) * HOUR - 3 * HOUR;
-  }
-
-  function checkAt(atMs: number) {
-    return runOpsWatchdogCheck(appStub(), { startedAtMs: atMs - 10 * MINUTE, now: new Date(atMs) });
-  }
-
-  async function chunkStartedAt(pageId: number, atMs: number) {
-    await harness.pool.query(
-      `insert into sync_runs (page_id, stream, outcome, started_at, finished_at)
-       values ($1, 'light', 'succeeded', $2, $2)`,
-      [pageId, new Date(atMs)],
-    );
-  }
-
-  /** The hourly light stream at slot offset 0, so slot k starts on hour k. */
-  async function lightStream(
-    pageId: number,
-    state: { scheduledAt: number; requestSeq: number; appliedSeq: number; requestedAt: number; startedAt: number },
-  ) {
-    await harness.pool.query(
-      `insert into page_sync_states (page_id, stream, status, cadence_seconds, slot_offset_seconds,
-                                     last_scheduled_slot, request_seq, applied_seq, requested_at, started_at)
-       values ($1, 'light', case when $3::bigint > $4::bigint then 'pending' else 'idle' end::page_sync_status,
-               3600, 0, $2, $3, $4, $5, $6)
-       on conflict (page_id, stream) do update
-         set status = excluded.status, last_scheduled_slot = excluded.last_scheduled_slot,
-             request_seq = excluded.request_seq, applied_seq = excluded.applied_seq,
-             requested_at = excluded.requested_at, started_at = excluded.started_at`,
-      [
-        pageId,
-        Math.floor(state.scheduledAt / HOUR),
-        state.requestSeq,
-        state.appliedSeq,
-        new Date(state.requestedAt),
-        new Date(state.startedAt),
-      ],
-    );
-  }
-
-  it("opens after 16 min without a Fansly chunk while a stream is due, resolves on a fresh run", async () => {
-    await syncRunStarted(fanslyPageId, 14 * MINUTE);
-    const quiet = await runOpsWatchdogCheck(appStub(), { startedAtMs: PAST_BOOT_GRACE() });
-    expect(quiet.syncStalled).toBe(false);
-    expect(await syncSilent()).toBeNull();
-
-    await harness.pool.query("update sync_runs set started_at = $1", [new Date(Date.now() - 16 * MINUTE)]);
-    const stalled = await runOpsWatchdogCheck(appStub(), { startedAtMs: PAST_BOOT_GRACE() });
-    expect(stalled.syncStalled).toBe(true);
-    expect(opsWatchdogNeedsDeliveryFallback(stalled)).toBe(true);
-    expect(await syncSilent()).toMatchObject({
-      status: "open",
-      errorSummary: "No Fansly sync chunk started for 16 min — planner or executor stalled",
-    });
-
-    await syncRunStarted(fanslyPageId, 0);
-    const recovered = await runOpsWatchdogCheck(appStub(), { startedAtMs: PAST_BOOT_GRACE() });
-    expect(recovered.syncStalled).toBe(false);
-    expect((await syncSilent())?.status).toBe("resolved");
-  });
-
-  it("reads a run older than the one-hour lookback as over an hour of silence", async () => {
-    await syncRunStarted(fanslyPageId, 3 * 60 * MINUTE);
-    const stalled = await runOpsWatchdogCheck(appStub(), { startedAtMs: PAST_BOOT_GRACE() });
-    expect(stalled.syncStalled).toBe(true);
-    expect((await syncSilent())?.errorSummary)
-      .toBe("No Fansly sync chunk started for over 60 min — planner or executor stalled");
-  });
-
-  it("stays quiet while every Fansly stream is paused, blocked or backing off", async () => {
-    await syncRunStarted(fanslyPageId, 30 * MINUTE);
-    await streamState(fanslyPageId, "transactions", { status: "paused" });
-    await streamState(fanslyPageId, "dm_messages", { status: "blocked", blockerKind: "auth" });
-    await streamState(fanslyPageId, "posts", { status: "retrying", retryInMs: 20 * MINUTE });
-    const result = await runOpsWatchdogCheck(appStub(), { startedAtMs: PAST_BOOT_GRACE() });
-    expect(result.syncStalled).toBe(false);
-    expect(await syncSilent()).toBeNull();
-
-    // A backoff that ran out a minute ago waits for the next planner tick;
-    // one that ran out a full threshold ago is due work nothing picked up.
-    await streamState(fanslyPageId, "posts", { status: "retrying", retryInMs: -MINUTE });
-    expect((await runOpsWatchdogCheck(appStub(), { startedAtMs: PAST_BOOT_GRACE() })).syncStalled).toBe(false);
-    await streamState(fanslyPageId, "posts", { status: "retrying", retryInMs: -16 * MINUTE });
-    expect((await runOpsWatchdogCheck(appStub(), { startedAtMs: PAST_BOOT_GRACE() })).syncStalled).toBe(true);
-  });
-
-  it("an hourly stream idling to its next slot is not a stall, with every other stream paused", async () => {
-    // Codex review: with only the hourly light stream runnable, a normal run at
-    // 00:00 opened sync_silent at 00:16 and paged at ~00:26, while the next
-    // run was scheduled for 01:00.
-    await streamState(fanslyPageId, "transactions", { status: "paused" });
-    const t0 = pastHour();
-    await lightStream(fanslyPageId, { scheduledAt: t0, requestSeq: 1, appliedSeq: 1, requestedAt: t0, startedAt: t0 });
-    await chunkStartedAt(fanslyPageId, t0 + 5_000);
-
-    for (const minute of [1, 15, 16, 30, 45, 59]) {
-      expect((await checkAt(t0 + minute * MINUTE)).syncStalled, `${minute} min into the idle hour`).toBe(false);
-    }
-
-    // 01:00: the planner claims the slot, and a check lands before the
-    // executor has started the chunk.
-    const claimedAt = t0 + HOUR + 20_000;
-    await lightStream(fanslyPageId, {
-      scheduledAt: t0 + HOUR, requestSeq: 2, appliedSeq: 1, requestedAt: claimedAt, startedAt: t0,
-    });
-    expect((await checkAt(claimedAt + 10_000)).syncStalled).toBe(false);
-    await chunkStartedAt(fanslyPageId, claimedAt + 20_000);
-    expect((await checkAt(t0 + HOUR + MINUTE)).syncStalled).toBe(false);
-    expect(await syncSilent()).toBeNull();
-  });
-
-  it("an outstanding request no chunk has picked up for 16 min opens it", async () => {
-    await streamState(fanslyPageId, "transactions", { status: "paused" });
-    const t0 = pastHour();
-    await chunkStartedAt(fanslyPageId, t0);
-    // A request between slots (manual, event): the next slot is 01:00.
-    const requestedAt = t0 + 10 * MINUTE;
-    await lightStream(fanslyPageId, { scheduledAt: t0, requestSeq: 2, appliedSeq: 1, requestedAt, startedAt: t0 });
-
-    // Outstanding for 10 min, silent for 20: the executor still has time.
-    expect((await checkAt(requestedAt + 10 * MINUTE)).syncStalled).toBe(false);
-    const stalled = await checkAt(requestedAt + 16 * MINUTE);
-    expect(stalled.syncStalled).toBe(true);
-    expect(await syncSilent()).toMatchObject({
-      status: "open",
-      errorSummary: "No Fansly sync chunk started for 26 min — planner or executor stalled",
-    });
-  });
-
-  it("a slot the planner never claimed opens it once it has been due for 16 min", async () => {
-    await streamState(fanslyPageId, "transactions", { status: "paused" });
-    const t0 = pastHour();
-    await lightStream(fanslyPageId, { scheduledAt: t0, requestSeq: 1, appliedSeq: 1, requestedAt: t0, startedAt: t0 });
-    // The last Fansly chunk started at 00:50; the 01:00 slot is never claimed.
-    await chunkStartedAt(fanslyPageId, t0 + 50 * MINUTE);
-
-    // Silent for 24 min, but the slot has been due for 14 only.
-    expect((await checkAt(t0 + HOUR + 14 * MINUTE)).syncStalled).toBe(false);
-    const stalled = await checkAt(t0 + HOUR + 16 * MINUTE);
-    expect(stalled.syncStalled).toBe(true);
-    expect(await syncSilent()).toMatchObject({
-      status: "open",
-      errorSummary: "No Fansly sync chunk started for 26 min — planner or executor stalled",
-    });
-  });
-
-  it("an OnlyFans-only run does not mask a Fansly stall", async () => {
-    await syncRunStarted(fanslyPageId, 20 * MINUTE);
-    await syncRunStarted(onlyFansPageId, 0);
-    const result = await runOpsWatchdogCheck(appStub(), { startedAtMs: PAST_BOOT_GRACE() });
-    expect(result.syncStalled).toBe(true);
-    expect((await syncSilent())?.status).toBe("open");
-  });
-
-  it("inside the boot grace a stall opens nothing, and a fresh run still resolves", async () => {
-    await syncRunStarted(fanslyPageId, 20 * MINUTE);
-    const inGrace = await runOpsWatchdogCheck(appStub(), { startedAtMs: Date.now() - MINUTE });
-    expect(inGrace).toMatchObject({ bootGrace: true, syncStalled: true });
-    expect(await syncSilent()).toBeNull();
-    expect(opsWatchdogNeedsDeliveryFallback(inGrace)).toBe(false);
-
-    await runOpsWatchdogCheck(appStub(), { startedAtMs: PAST_BOOT_GRACE() });
-    expect((await syncSilent())?.status).toBe("open");
-
-    await syncRunStarted(fanslyPageId, 0);
-    await runOpsWatchdogCheck(appStub(), { startedAtMs: Date.now() - MINUTE });
-    expect((await syncSilent())?.status).toBe("resolved");
   });
 });

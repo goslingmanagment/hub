@@ -21,12 +21,11 @@ import { fanslyResourceSpec, type ResourceSpec } from "../fansly/registry.ts";
 // actor's answer — up to 15–30 s, then "queued" with the work's status link.
 //
 // A page that is not `live` answers before anything is written: `switching`
-// while the step-3 switch (or a rollback) holds it in `handover` — neither
-// engine sends for it then, so the caller answers 409 `fansly_page_switching`
-// (E10, G9) — and `not_live` otherwise: the caller takes its legacy path. That
-// includes a page with no `sync_pages` row yet (onboarded since the host
-// started) and a page of another platform; only an id that names no page at
-// all is refused (`no_page`). Which keys a caller may
+// for a row in `handover` — neither engine sends for it, so the caller
+// answers 409 `fansly_page_switching` (E10, G9; nothing reaches the mode
+// since step 4, S4-21) — and `not_live` otherwise: the caller refuses. That
+// includes a page with no `sync_pages` row and a page of another platform;
+// only an id that names no page at all is refused (`no_page`). Which keys a caller may
 // enqueue is the registry's word: an entry with the `api` trigger
 // (`account.verify`, `account.identity`, `media-download.fetch`); its class,
 // coalescing and deadline come from the entry, as for any other demand.
