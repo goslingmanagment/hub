@@ -50,7 +50,8 @@ const REWRITE_OF_THE_IMAGE_TWO_BEFORE = `
   \`);`;
 
 /** What the release before the drop (S4-32) names of the old hold store: the
- *  marker its acquisition leaves in the resource-hold map. Nothing of the
+ *  marker its acquisition leaves in the resource-hold map, as its built code
+ *  has it (the bundles of e8fb51b6, the head of that release). Nothing of the
  *  slot. */
 const MARKER_OF_THE_IMAGE_BEFORE = `
   var STALE_HOLD_COLUMNS_MARKER = sql\`

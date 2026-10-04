@@ -5,6 +5,7 @@ import { performance } from "node:perf_hooks";
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
+import { sql } from "../packages/db/node_modules/drizzle-orm/index.js";
 import {
   acquireSyncPageOwnership,
   addSyncPageLiftedDmExclusion,
@@ -524,18 +525,34 @@ const MARKER = { "route:state": { version: 2, routes: {} } };
 
 /**
  * The one statement of the release before the drop (S4-32) that names an old
- * hold column: whenever it acquires a page it marks the page's row as one
- * whose old hold columns are stale, so that the hold-set release (S4-30),
+ * hold column, frozen from that image: `STALE_HOLD_COLUMNS_MARKER` and the
+ * statement it is the `set` clause of in `acquireSyncPageOwnership`
+ * (`packages/db/src/repositories/sync/pages.ts` at e8fb51b6, the head of that
+ * release, compared with it line by line; the page id is a parameter, as it
+ * is there). Whenever that image acquires a page it marks the page's row as
+ * one whose old hold columns are stale, so that the hold-set release (S4-30),
  * which lets those columns win over the rows, refuses the page instead of
- * opening it by them (`STALE_HOLD_COLUMNS_MARKER` in that image's
- * `acquireSyncPageOwnership`). The rest of the map is kept; a value that is
- * no JSON object is replaced by the marker alone.
+ * opening it by them. The rest of the map is kept; a value that is no JSON
+ * object is replaced by the marker alone.
  */
-const markerOfTheImageBefore = (pageId: number) => `
-  update sync_pages
-     set resource_holds = case when jsonb_typeof(resource_holds) = 'object' then resource_holds else '{}'::jsonb end
-                          || '{"route:state": {"version": 2, "routes": {}}}'::jsonb
-   where page_id = ${pageId}`;
+const STALE_HOLD_COLUMNS_MARKER_OF_THE_IMAGE_BEFORE = sql`
+  resource_holds = case when jsonb_typeof(resource_holds) = 'object' then resource_holds else '{}'::jsonb end
+                   || '{"route:state": {"version": 2, "routes": {}}}'::jsonb`;
+
+const markerOfTheImageBefore = (pageId: number) =>
+  sql`update sync_pages set ${STALE_HOLD_COLUMNS_MARKER_OF_THE_IMAGE_BEFORE} where page_id = ${pageId}`;
+
+/** The one failure of its marker that image lets through (`isUndefinedColumn`
+ *  at the same commit, body for body): SQLSTATE 42703 (`undefined_column`), on
+ *  the error or what caused it. */
+function isUndefinedColumnForTheImageBefore(error: unknown): boolean {
+  let current = error;
+  for (let depth = 0; depth < 6 && typeof current === "object" && current !== null; depth += 1) {
+    if ((current as { code?: unknown }).code === "42703") return true;
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
+}
 
 /** The SQLSTATE of the driver error under a drizzle error. */
 function sqlStateOf(error: unknown): string | null {
@@ -547,15 +564,16 @@ function sqlStateOf(error: unknown): string | null {
 }
 
 /**
- * A page acquired as the release before the drop acquires it: this build's
- * acquisition — the statements are that image's — and then, in the same
- * transaction, that image's marker, as it makes it: a statement of its own in
- * a savepoint, an undefined column (42703) swallowed and nothing else. The
- * columns are dropped under that image, and where they are gone there is
+ * `acquireSyncPageOwnership` of the release before the drop (e8fb51b6), run
+ * on `db` — a pool, or a caller's transaction. One transaction: that image's
+ * ownership statements, which are this build's (the two functions differ by
+ * the marker alone), and then its marker, as it makes it — a statement of its
+ * own in a savepoint, an undefined column (42703) swallowed and nothing else.
+ * The columns are dropped under that image, and where they are gone there is
  * nothing to mark. `marked` says whether the marker was written.
  */
-async function ownAsTheImageBefore(target: StartedTestDatabase, pageId: number): Promise<{ generation: bigint; marked: boolean }> {
-  return target.db.transaction(async (tx) => {
+async function acquireAsTheImageBefore(db: Database, pageId: number): Promise<{ generation: bigint; marked: boolean }> {
+  return db.transaction(async (tx) => {
     const acquired = await acquireSyncPageOwnership(tx as unknown as Database, { pageId, owner: owner() });
     if (acquired.kind !== "acquired") throw new Error(`expected the image before to acquire page ${pageId}: ${acquired.kind}`);
     let marked = true;
@@ -564,11 +582,16 @@ async function ownAsTheImageBefore(target: StartedTestDatabase, pageId: number):
         await savepoint.execute(markerOfTheImageBefore(pageId));
       });
     } catch (error) {
-      if (sqlStateOf(error) !== "42703") throw error;
+      if (!isUndefinedColumnForTheImageBefore(error)) throw error;
       marked = false;
     }
     return { generation: acquired.generation, marked };
   });
+}
+
+/** A page acquired as the release before the drop acquires it. */
+function ownAsTheImageBefore(target: StartedTestDatabase, pageId: number): Promise<{ generation: bigint; marked: boolean }> {
+  return acquireAsTheImageBefore(dbOf(target), pageId);
 }
 
 describe("the old hold columns go: the last migration of the three", () => {
@@ -937,6 +960,20 @@ describe("the old hold columns go: the last migration of the three", () => {
       expect(await writeSafeRelease(dbOf(db), { pageId, generation: taken.generation })).toBe(true);
     }
 
+    // Inside a caller's transaction too: the refused statement costs its
+    // savepoint, not the transaction around it.
+    const inside = await generationOf(fresh);
+    const nested = await db.db.transaction(async (tx) => {
+      const taken = await acquireAsTheImageBefore(tx as unknown as Database, fresh);
+      // A transaction a failed statement had aborted would refuse this one.
+      await setNetworkFailureStreak(tx as unknown as Database, { pageId: fresh, generation: taken.generation, streak: 1 });
+      return taken;
+    });
+    expect(nested).toEqual({ generation: BigInt(inside + 1), marked: false });
+    expect(await query(db, "select owner_generation::int as generation, network_failure_streak::int as streak from sync_pages where page_id = $1", [fresh]))
+      .toEqual([{ generation: inside + 1, streak: 1 }]);
+    expect(await writeSafeRelease(dbOf(db), { pageId: fresh, generation: nested.generation })).toBe(true);
+
     // Why that image makes the marker in a savepoint: the same statement in
     // the acquisition's own transaction would lose the acquisition with it,
     // and no page of the database could be taken — by the `sync` that works
@@ -947,6 +984,7 @@ describe("the old hold columns go: the last migration of the three", () => {
       await tx.execute(markerOfTheImageBefore(fresh));
     }).then(() => null, (error: unknown) => error);
     expect(sqlStateOf(lost)).toBe("42703");
+    expect(isUndefinedColumnForTheImageBefore(lost)).toBe(true);
     expect(await generationOf(fresh)).toBe(before);
   });
 

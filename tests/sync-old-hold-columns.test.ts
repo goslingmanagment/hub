@@ -98,6 +98,21 @@ describe("no statement in apps, packages and scripts names an old hold column of
     expect(OLD_ROUTE_STATE_KEY).toBe("route:state");
   });
 
+  it("an acquisition leaves no marker: the one write the release before the drop made to an old column went with the column", () => {
+    // rg -n "STALE_HOLD_COLUMNS_MARKER" apps packages scripts -g '!packages/db/migrations/*'
+    expect(linesNaming(/STALE_HOLD_COLUMNS_MARKER/)).toEqual([]);
+    // Nor what let that statement fail where the column is gone.
+    const pages = readFileSync("packages/db/src/repositories/sync/pages.ts", "utf8");
+    expect(pages).not.toMatch(/isUndefinedColumn|42703/);
+    // The acquisition is the ownership change alone: one transaction, one
+    // statement that writes the page row, no savepoint for a second one.
+    const acquisition = pages.slice(pages.indexOf("export async function acquireSyncPageOwnership("), pages.indexOf("export async function heartbeatSyncPageOwner("));
+    expect(acquisition.match(/return db\.transaction\(/g)).toHaveLength(1);
+    expect(acquisition.match(/\bupdate sync_pages\b/g)).toHaveLength(1);
+    expect(acquisition).toContain("set owner_generation = owner_generation + 1,");
+    expect(acquisition).not.toMatch(/tx\.transaction\(|savepoint/);
+  });
+
   it("`hold_until` is named only as two namesakes: another table's column and a report's column over the hold set", () => {
     // rg -n "hold_until" apps packages scripts -g '!packages/db/migrations/*'
     expect(filesNaming(/hold_until/, ALL)).toEqual([
@@ -169,11 +184,18 @@ describe("of the tests, only those of the migrations and of the deploy gate name
     }
   });
 
-  it("the image that rewrote the columns is no rollback target, and its rewrite is kept by no helper", () => {
+  it("no image that rewrote the columns or read them is a rollback target, and no helper keeps the code of one", () => {
     // rg -n "sync-holds-previous-image|mirrorHoldsAsPreviousImage|previousImageHoldColumnsOf" tests
-    expect(existsSync("tests/helpers/sync-holds-previous-image.ts")).toBe(false);
-    expect(filesNaming(/sync-holds-previous-image|mirrorHoldsAsPreviousImage|previousImageHoldColumnsOf/, TESTS))
-      .toEqual(["tests/sync-old-hold-columns.test.ts"]);
+    // rg -n "sync-holds-hold-set-image|acquireAsHoldSetImage|acquireAsPreviousImage|reconcileAsHoldSetImage" tests
+    // The release before the drop kept both for its own rollback proofs: the
+    // rewrite of the release before it, and the hold-set release's read.
+    for (const helper of ["tests/helpers/sync-holds-previous-image.ts", "tests/helpers/sync-holds-hold-set-image.ts"]) {
+      expect(existsSync(helper), helper).toBe(false);
+    }
+    expect(filesNaming(
+      /sync-holds-previous-image|mirrorHoldsAsPreviousImage|previousImageHoldColumnsOf|sync-holds-hold-set-image|acquireAsHoldSetImage|acquireAsPreviousImage|reconcileAsHoldSetImage/,
+      TESTS,
+    )).toEqual(["tests/sync-old-hold-columns.test.ts"]);
   });
 });
 
