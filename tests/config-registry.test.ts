@@ -167,6 +167,9 @@ describe("config registry", () => {
     // chat-extension H-4c: what the AI lane does with a client's fresh text of
     // the open chat, read per generation. Rests off.
     "aiLiveTextContextMode",
+    // chat-extension H-6: how deep the full Recap reads, read per generation
+    // and per bootstrap. Rests at 1500, the AI readers' cap for everyone.
+    "aiTranscriptDeepMaxRows",
   ];
   const BOOT_KEYS = [
     "ofapiDmProjectionEnabled",

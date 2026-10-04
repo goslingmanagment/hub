@@ -352,6 +352,11 @@ const envSchema = z.object({
   // AI_TRANSCRIPT_FRESH_UNION_MODE: the PATCH lane owns transitions (stepwise
   // up through shadow, any rollback), and clearing the override resolves to off.
   AI_LIVE_TEXT_CONTEXT_MODE: z.enum(["off", "shadow", "serve"]).default("off"),
+  // chat-extension H-6: how many messages the full Recap of an OnlyFans chat
+  // may read: 1500 (the AI readers' cap for everyone) or 3000. Two values, not
+  // a range: 3000 is the readers' hard ceiling and the window the client
+  // offers. Keep the env at 1500; the owner raises it in the console.
+  AI_TRANSCRIPT_DEEP_MAX_ROWS: z.enum(["1500", "3000"]).default("1500"),
 });
 
 // Machine-readable list of every env var the schema understands. Exported so the
@@ -549,6 +554,8 @@ export interface AppConfig {
   chatExtensionPreviewSendReceiptProfiles?: string;
   /** chat-extension H-4c: what the AI lane does with a client's fresh text (live-wired). */
   aiLiveTextContextMode?: "off" | "shadow" | "serve";
+  /** chat-extension H-6: the row cap of the full Recap's transcript read (live-wired). */
+  aiTranscriptDeepMaxRows?: "1500" | "3000";
 }
 
 function hasConfiguredValue(value: string | undefined) {
@@ -878,6 +885,7 @@ export function loadConfig(
     chatExtensionHostBindings: parsed.CHAT_EXTENSION_HOST_BINDINGS,
     chatExtensionPreviewSendReceiptProfiles: parsed.CHAT_EXTENSION_PREVIEW_SEND_RECEIPT_PROFILES,
     aiLiveTextContextMode: parsed.AI_LIVE_TEXT_CONTEXT_MODE,
+    aiTranscriptDeepMaxRows: parsed.AI_TRANSCRIPT_DEEP_MAX_ROWS,
   };
 }
 

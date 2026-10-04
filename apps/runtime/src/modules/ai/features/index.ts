@@ -20,6 +20,7 @@ import {
   type AiGatewayStreamInput,
   type PreparedAiGatewayStream,
 } from "../../../services/ai-gateway.ts";
+import { resolveAiTranscriptMaxRows } from "../../../services/ai-transcript-depth.ts";
 import { canAccessPage, type HumanAuthPrincipal } from "../../../services/auth.ts";
 import {
   BadRequestError,
@@ -602,6 +603,16 @@ export async function prepareAiFeatureStream(
     } catch {
       liveOverlay = "unknown";
     }
+    // chat-extension H-6: the readers cap every window at 1500 rows. Only the
+    // full Recap of a context-v1 client reads past it, and only where the owner
+    // raised `aiTranscriptDeepMaxRows`; for every other request this is
+    // undefined and nothing is read.
+    const maxRows = await resolveAiTranscriptMaxRows(app, {
+      feature,
+      summaryMode: body.summaryMode,
+      isFanslyRequest,
+      capabilities: options?.capabilities,
+    });
     // Uses the resolved window computed above (short fan-summary already clamped
     // DOWN to 300; every other request keeps its per-bucket default or the
     // caller-supplied messageCount).
@@ -611,6 +622,7 @@ export async function prepareAiFeatureStream(
       limit: resolvedMessageLimit,
       unionMode,
       liveOverlay,
+      ...(maxRows !== undefined ? { maxRows } : {}),
     });
     // chat-extension H-4c: the request's fresh text joins AFTER the loader
     // returns, never inside it. Without fresh text (or with the owner's switch

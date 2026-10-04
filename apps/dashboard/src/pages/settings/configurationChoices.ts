@@ -3,6 +3,7 @@ import { HUB_FEATURES } from "./featureCatalog.js";
 export const CONFIG_MODE_CHOICES: Record<string, readonly { value: string; label: string }[]> = {
   aiTranscriptFreshUnionMode: [{ value: "off", label: "Только архив" }, { value: "shadow", label: "Проверять свежие данные" }, { value: "serve", label: "Использовать свежие данные" }],
   aiLiveTextContextMode: [{ value: "off", label: "Не использовать" }, { value: "shadow", label: "Только сверять" }, { value: "serve", label: "Передавать ИИ" }],
+  aiTranscriptDeepMaxRows: [{ value: "1500", label: "До 1500 сообщений" }, { value: "3000", label: "До 3000 сообщений" }],
   chatMuseAiFanProfileContextFeatures: [{ value: "none", label: "Не передавать досье" }, { value: "fast-reply", label: "Только быстрый ответ" }, { value: "fast-reply,ping", label: "Быстрый ответ и Ping" }, { value: "all", label: "Все поддерживаемые функции" }],
   agentReadPlaneMode: [{ value: "off", label: "Выключен" }, { value: "read_only", label: "Проверочный доступ" }, { value: "full", label: "Обычный доступ по выданным правам" }],
   agentSearchBackend: [{ value: "off", label: "Поиск выключен" }, { value: "fts", label: "Поиск по тексту" }, { value: "fts_trgm", label: "Текстовый поиск с поиском похожих фрагментов" }],
