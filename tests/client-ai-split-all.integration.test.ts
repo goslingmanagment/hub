@@ -116,8 +116,8 @@ function setSwitches(features: Record<string, Record<string, boolean>> | null, e
   app.config.chatExtensionFeatures = JSON.stringify(features ?? {});
 }
 
-/** Coach and Review are flags of their own for a narrow token (H-3). */
-const withAiFlags = (splitAll: boolean) => ({ "lora-of": { coach: true, review: true, splitAll } });
+/** Coach, Recap and Review are flags of their own for a narrow token (H-3). */
+const withAiFlags = (splitAll: boolean) => ({ "lora-of": { coach: true, recap: true, review: true, splitAll } });
 
 async function generate(
   caller: Caller,
@@ -260,8 +260,6 @@ describe("Split for Ping and Hi behind split-all-v1 (H-10a)", () => {
       expect(await isSplitAllOnForPage(app, pageIds["lora-of"]!)).toBe(flagOn);
       for (const caller of [RELEASED, FULL_ADVERTISING, EXTENSION]) {
         for (const call of CALLS) {
-          // Recap needs routes this hub does not serve to a narrow token yet (H-13, H-5).
-          if (caller === EXTENSION && call.feature === "fan-summary") continue;
           const what = `flag=${flagOn} ${caller.name} ${call.name}`;
           const plain = await generate(caller, call, "default");
           const asked = await generate(caller, call, "preferSplit");
@@ -280,7 +278,12 @@ describe("Split for Ping and Hi behind split-all-v1 (H-10a)", () => {
             expect(taskBlock(plain.prompt), what).not.toContain("Split mode is on");
           }
           // No new frame, whatever the gate says (D-15): markers travel inside content_delta.
-          expect(asked.frames.map((frame) => frame.type), what).toEqual(["meta", "content_delta", "usage", "done"]);
+          // A caller that advertises context-v1 has its context_v1 frame (H-4b) with or without Split.
+          const frameTypes = caller.capabilities?.includes("context-v1")
+            ? ["meta", "context_v1", "content_delta", "usage", "done"]
+            : ["meta", "content_delta", "usage", "done"];
+          expect(asked.frames.map((frame) => frame.type), what).toEqual(frameTypes);
+          expect(plain.frames.map((frame) => frame.type), what).toEqual(frameTypes);
           // The structure record exists only for a generation the gate opened.
           expect("outputStructure" in await paramsOf(asked.generationRef), what).toBe(gateOpen);
           expect(await paramsOf(plain.generationRef), what).not.toHaveProperty("outputStructure");
