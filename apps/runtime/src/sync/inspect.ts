@@ -31,15 +31,10 @@ import {
 import type { AppConfig } from "@agency_hub_core/shared";
 
 import { loadEffectiveConfig } from "../services/effective-config.ts";
+import { holdSetOf, type RouteAdmissionView } from "./engine/admission.ts";
 import { SYNC_DECODE_DEBT_WINDOW_MS } from "./engine/alerts.ts";
 import { demandToUpsert, registryOverrideProblem, type EngineRegistry } from "./engine/resource.ts";
-import {
-  parseRouteState,
-  routeAdmissionView,
-  routeJournalLookbackMs,
-  RouteClocks,
-  routeStatusView,
-} from "./engine/route-policy.ts";
+import { routeAdmissionView, routeJournalLookbackMs, RouteClocks, routeStatusView } from "./engine/route-policy.ts";
 import { FANSLY_RESOURCE_SPECS, fanslyResourceSpec, type ResourceSpec } from "./fansly/registry.ts";
 import { probeRequestOf, type ProbeParams } from "./fansly/resources/probe.ts";
 import { pageRequestProgress } from "./requests/history.ts";
@@ -48,7 +43,6 @@ import {
   estimateSlotOpensAt,
   explainWork,
   type PageStatus,
-  type RouteAdmissionView,
   type RouteStatusView,
   type StatusPage,
   type StatusWork,
@@ -56,7 +50,7 @@ import {
 } from "./engine/status.ts";
 
 // The owner's view and levers of the engine (design §3.9, §7.6): page status,
-// "why is this waiting", the mode lever (off ↔ shadow only, I17), pauses,
+// "why is this waiting", the mode lever (shadow → off only, I17), pauses,
 // registry overrides, "sync now" and the ownership confirmation. The owner CLI,
 // the owner routes (`modules/sync-engine`) and the agent plane's status and
 // "why" (`modules/agent-read/handlers-sync.ts`) call these same functions.
@@ -64,9 +58,10 @@ import {
 const HOUR_MS = 3_600_000;
 const DAY_MS = 24 * HOUR_MS;
 
-/** The modes `sync page mode` moves a page between. No lever reaches
- *  `handover` or `live` (I17): a page is born live at onboarding. */
-export const OWNER_PAGE_MODES = ["off", "shadow"] as const satisfies readonly SyncPageMode[];
+/** The mode `sync page mode` moves a page to: `off`, from `shadow` — a mode
+ *  no actor runs since step 4 (S4-23). No lever reaches `shadow`, `handover`
+ *  or `live` (I17): a page is born live at onboarding. */
+export const OWNER_PAGE_MODES = ["off"] as const satisfies readonly SyncPageMode[];
 
 export class SyncPageNotFoundError extends Error {
   constructor(label: string) {
@@ -81,9 +76,10 @@ export async function findSyncPageByLabel(db: Database, label: string): Promise<
   return page;
 }
 
-/** Which journal a page's status reads: live work once the page is in
- *  `handover`/`live`, shadow work otherwise. */
-export function statusJournalIsShadow(page: Pick<SyncPageRow, "mode">): boolean {
+/** Whether an actor ever runs the page: `off` and `shadow` (a mode nothing
+ *  runs since step 4 S4-23) have none, so a lever that only moves work has
+ *  nothing to move there. */
+function runsNoActor(page: Pick<SyncPageRow, "mode">): boolean {
   return page.mode === "off" || page.mode === "shadow";
 }
 
@@ -93,11 +89,7 @@ function statusPage(page: SyncPageRow): StatusPage {
     pausedAll: page.pausedAll,
     pausedRequests: page.pausedRequests,
     pausedResources: page.pausedResources,
-    holdKind: page.holdKind,
-    holdUntil: page.holdUntil,
-    holdSince: page.holdSince,
-    holdDetail: page.holdDetail,
-    resourceHolds: page.resourceHolds,
+    holds: holdSetOf(page.holds),
     owner: page.owner,
   };
 }
@@ -118,28 +110,23 @@ function statusWork(work: SyncWorkRow): StatusWork {
   };
 }
 
-/** The page's route clocks as the actor would read them now: the journal it
- *  runs (and the legacy send log on an engine-owned page). */
+/** The page's route clocks as the actor would read them now: its attempt
+ *  journal and the legacy send log. */
 async function readPageRoutes(
   db: Database,
   page: SyncPageRow,
   now: Date,
-): Promise<{ status: RouteStatusView; admission: RouteAdmissionView }> {
-  const read = parseRouteState(page.routeState);
+): Promise<{ status: RouteStatusView; admission: RouteAdmissionView | null }> {
+  const read = holdSetOf(page.holds).routes;
   let clocks: RouteClocks | null = null;
   if (read.ok) {
-    const sends = await readRouteJournal(db, {
-      pageId: page.pageId,
-      shadow: statusJournalIsShadow(page),
-      withinMs: routeJournalLookbackMs(read.state),
-      legacy: !statusJournalIsShadow(page),
-    });
+    const sends = await readRouteJournal(db, { pageId: page.pageId, withinMs: routeJournalLookbackMs(read.state) });
     clocks = new RouteClocks({ sends, state: read.state });
   }
   const stateError = read.ok ? null : read.diagnostic;
   return {
     status: routeStatusView(clocks, stateError, now),
-    admission: routeAdmissionView(clocks, stateError, FANSLY_RESOURCE_SPECS, now),
+    admission: clocks === null ? null : routeAdmissionView(clocks, FANSLY_RESOURCE_SPECS, now),
   };
 }
 
@@ -170,24 +157,23 @@ export async function readSyncPageStatus(
   now: Date = page.dbNow,
   settingMsRead?: number,
 ): Promise<PageStatus> {
-  const shadow = statusJournalIsShadow(page);
   const settingMs = settingMsRead ?? await readPauseSettingMs(db, rawConfig);
   const works = await getWorkForStatus(db, {
     pageId: page.pageId,
-    shadow,
     states: ["open", "running", "quarantined"],
     limit: 1_000,
   });
-  const lastHour = await countSendsSince(db, { pageId: page.pageId, since: new Date(now.getTime() - HOUR_MS), shadow });
-  const hourSends = await listSendsForPaceAudit(db, { pageId: page.pageId, since: new Date(now.getTime() - HOUR_MS), shadow });
-  const daySends = await listSendsForPaceAudit(db, { pageId: page.pageId, since: new Date(now.getTime() - DAY_MS), shadow });
+  const lastHour = await countSendsSince(db, { pageId: page.pageId, since: new Date(now.getTime() - HOUR_MS) });
+  const hourSends = await listSendsForPaceAudit(db, { pageId: page.pageId, since: new Date(now.getTime() - HOUR_MS) });
+  const daySends = await listSendsForPaceAudit(db, { pageId: page.pageId, since: new Date(now.getTime() - DAY_MS) });
   const gaps = hourSends.map((send) => send.gapMs).filter((gap): gap is number => gap !== null);
-  // History requests exist only on live pages (the intake refuses others).
-  const requests = shadow ? [] : await pageRequestProgress({ db, rawConfig }, page.pageId);
-  // The socket is the engine's to report once it owns the page.
-  const ws = shadow ? null : await readSyncPageWsStatus(db, { pageId: page.pageId, decodeWindowMs: SYNC_DECODE_DEBT_WINDOW_MS });
+  // The socket is the engine's to report only on a page it owns; history
+  // requests exist only there too (the intake refuses every other page).
+  const owned = !runsNoActor(page);
+  const requests = owned ? await pageRequestProgress({ db, rawConfig }, page.pageId) : [];
+  const ws = owned ? await readSyncPageWsStatus(db, { pageId: page.pageId, decodeWindowMs: SYNC_DECODE_DEBT_WINDOW_MS }) : null;
   const routes = await readPageRoutes(db, page, now);
-  const status = buildPageStatus({
+  return buildPageStatus({
     pageLabel: page.pageLabel,
     page: { ...statusPage(page), lastSendAt: page.lastSendAt },
     settingMs,
@@ -213,9 +199,6 @@ export async function readSyncPageStatus(
         decodeDebt: ws.decodeDebt,
       },
   });
-  return shadow
-    ? { ...status, shadow: { attemptsLastHour: lastHour.urgent + lastHour.requests + lastHour.planned, demandVsEstimate: null } }
-    : status;
 }
 
 export interface WorkWhy {
@@ -223,8 +206,6 @@ export interface WorkWhy {
     id: number;
     resource: string;
     subject: string;
-    /** The shadow journal: simulated work, nothing was sent. */
-    shadow: boolean;
     kind: SyncWorkKind;
     class: SyncEngineWorkClass;
     state: SyncWorkState;
@@ -266,7 +247,6 @@ async function workWhys(
       id: work.id,
       resource: work.resource,
       subject: work.subject,
-      shadow: work.shadow,
       kind: work.kind,
       class: work.class,
       state: work.state,
@@ -297,30 +277,23 @@ export async function explainSyncWork(
   input: { resource: string; subject?: string; limit?: number },
   now: Date = page.dbNow,
 ): Promise<WorkWhy[]> {
-  const shadow = statusJournalIsShadow(page);
   const settingMs = await readPauseSettingMs(db, rawConfig);
   let rows = await getWorkForStatus(db, {
     pageId: page.pageId,
-    shadow,
     resource: input.resource,
     ...(input.subject === undefined ? {} : { subject: input.subject }),
     states: ["open", "running", "quarantined"],
     ...(input.limit === undefined ? {} : { limit: input.limit }),
   });
   if (rows.length === 0 && input.subject !== undefined) {
-    const closed = await latestClosedWorkForKey(db, {
-      pageId: page.pageId,
-      shadow,
-      resource: input.resource,
-      subject: input.subject,
-    });
+    const closed = await latestClosedWorkForKey(db, { pageId: page.pageId, resource: input.resource, subject: input.subject });
     rows = closed === null ? [] : [closed];
   }
   return workWhys(db, page, rows, settingMs, now);
 }
 
-/** A page's work rows in the journal it runs, newest first (owner route
- *  `syncPageWork`), each with why it waits. */
+/** A page's work rows, newest first (owner route `syncPageWork`), each with
+ *  why it waits. */
 export async function listSyncPageWork(
   db: Database,
   rawConfig: AppConfig,
@@ -331,7 +304,6 @@ export async function listSyncPageWork(
   const settingMs = await readPauseSettingMs(db, rawConfig);
   const rows = await getWorkForStatus(db, {
     pageId: page.pageId,
-    shadow: statusJournalIsShadow(page),
     ...(input.resource === undefined ? {} : { resource: input.resource }),
     ...(input.subject === undefined ? {} : { subject: input.subject }),
     ...(input.state === undefined ? {} : { states: [input.state] }),
@@ -341,9 +313,9 @@ export async function listSyncPageWork(
   return workWhys(db, page, rows, settingMs, now);
 }
 
-/** One work row of a page (either journal) and why it waits; null when the
- *  id names no row of this page — the status link of a queued "enqueue and
- *  wait" call (design §7.3). */
+/** One work row of a page and why it waits; null when the id names no row
+ *  of this page — the status link of a queued "enqueue and wait" call
+ *  (design §7.3). */
 export async function getSyncPageWork(
   db: Database,
   rawConfig: AppConfig,
@@ -364,45 +336,39 @@ export class SyncOwnerLeverError extends Error {
   }
 }
 
-/** A lever that needs a running actor, asked of a page that is `off`. */
+/** A lever that needs a running actor, asked of a page no actor runs (`off`,
+ *  or left in `shadow`). */
 export class SyncPageOffError extends SyncOwnerLeverError {
-  constructor(label: string, lever: string) {
-    super(`${label} is off: no actor runs it, so ${lever} has nothing to move (sync page mode --to shadow first)`);
+  constructor(label: string, mode: SyncPageMode, lever: string) {
+    super(`${label} is ${mode}: no actor runs it, so ${lever} has nothing to move`);
     this.name = "SyncPageOffError";
   }
 }
 
 /**
  * "Sync now" (design §7.3; owner route `syncPageRefresh`): the page's poll
- * rows — or those of the given resource files — become due now, in the journal
- * the page runs (shadow polls on an `off`/`shadow` page are simulated: nothing
- * is sent). An `off` page has no actor to serve them and is refused.
+ * rows — or those of the given resource files — become due now. A page no
+ * actor runs (`off`, `shadow`) has none to serve them and is refused.
  */
 export async function refreshSyncPage(
   db: Database,
   page: Pick<SyncPageRow, "pageId" | "pageLabel" | "mode">,
   files?: readonly string[],
-): Promise<{ bumped: number; shadow: boolean }> {
-  if (page.mode === "off") throw new SyncPageOffError(page.pageLabel ?? String(page.pageId), "sync now");
-  const shadow = statusJournalIsShadow(page);
-  const bumped = await bumpPagePolls(db, {
-    pageId: page.pageId,
-    shadow,
-    ...(files === undefined ? {} : { files }),
-  });
-  return { bumped, shadow };
+): Promise<{ bumped: number }> {
+  if (runsNoActor(page)) throw new SyncPageOffError(page.pageLabel ?? String(page.pageId), page.mode, "sync now");
+  return { bumped: await bumpPagePolls(db, { pageId: page.pageId, ...(files === undefined ? {} : { files }) }) };
 }
 
-/** `sync page mode`: only `off ↔ shadow`. A target outside those two is
- *  refused before the database is touched (I17). */
+/** `sync page mode`: only `shadow → off`. Any other target is refused before
+ *  the database is touched (I17). */
 export async function changeSyncPageModeByOwner(
   db: Database,
   input: { pageLabel: string; to: string; changedBy: string },
 ): Promise<SetSyncPageModeResult> {
   if (!(OWNER_PAGE_MODES as readonly string[]).includes(input.to)) {
     throw new SyncOwnerLeverError(
-      `sync page mode moves a page only between off and shadow (asked: ${input.to}); `
-      + "no lever reaches handover or live — a page is born live at onboarding",
+      `sync page mode only takes a page left in shadow to off (asked: ${input.to}); `
+      + "no lever reaches shadow, handover or live — a page is born live at onboarding",
     );
   }
   const page = await findSyncPageByLabel(db, input.pageLabel);
@@ -485,14 +451,11 @@ export const SYNC_WORK_ENQUEUE_AUDIT_EVENT = "admin.sync_work_enqueue";
 /**
  * `sync work requeue` (design step 3 §3.2 item 5): take quarantined work of a
  * page out of quarantine — the given rows, or every quarantined row of the
- * journal the page runs (of one key with `resources`). A live row whose last
- * attempt holds a captured answer re-applies it from the journal (no request,
- * plan §9); the rest open due now. Only the journal the page runs: a live row
- * left on a page rolled back to `shadow` stays quarantined (re-armed there,
- * its answer would be applied at the next switch, however stale). Given rows
- * are all-or-nothing — one that is not a quarantined row of that journal
- * refuses the whole requeue. The requeue and its audit row commit together;
- * the actor wakes at commit.
+ * page (of one key with `resources`). A row whose last attempt holds a
+ * captured answer re-applies it from the journal (no request, plan §9); the
+ * rest open due now. Given rows are all-or-nothing — one that is not a
+ * quarantined row of the page refuses the whole requeue. The requeue and its
+ * audit row commit together; the actor wakes at commit.
  */
 export async function requeueSyncWork(
   db: Database,
@@ -508,13 +471,11 @@ export async function requeueSyncWork(
     throw new SyncOwnerLeverError("say what to requeue: --work <id> or --quarantined [--resource <key>]");
   }
   const page = await findSyncPageByLabel(db, input.pageLabel);
-  const shadow = statusJournalIsShadow(page);
   const workIds = input.workIds === undefined || input.workIds.length === 0 ? null : [...new Set(input.workIds)];
   return db.transaction(async (tx) => {
     const txDb = tx as unknown as Database;
     const requeued = await requeueQuarantinedWork(txDb, {
       pageId: page.pageId,
-      shadow,
       ...(workIds === null ? {} : { workIds }),
       ...(input.resources === undefined || input.resources.length === 0 ? {} : { resources: input.resources }),
     });
@@ -524,8 +485,7 @@ export async function requeueSyncWork(
       if (refused.length > 0) {
         // Rolls the transaction back: nothing requeued, nothing audited.
         throw new SyncOwnerLeverError(
-          `not a quarantined row of ${input.pageLabel}'s ${shadow ? "shadow" : "live"} journal (${page.mode}): `
-          + `work ${refused.join(", ")}; nothing requeued`,
+          `not a quarantined row of ${input.pageLabel}: work ${refused.join(", ")}; nothing requeued`,
         );
       }
     }
@@ -568,8 +528,8 @@ export function ownerEnqueueKeys(specs: readonly ResourceSpec[] = FANSLY_RESOURC
  * one registry key of a live page (a backfill, a fresh follower walk, an
  * alias backfill) — the owner levers of the legacy streams that had one.
  * Demand reason `owner` (the follower walk's daily floor yields to it);
- * audited with the demand in one transaction. Only a `live` page: a shadow
- * page's work is simulated, a page in `handover` runs no actor.
+ * audited with the demand in one transaction. Only a `live` page: no actor
+ * runs any other.
  */
 export async function enqueueOwnerSyncWork(
   db: Database,
@@ -613,7 +573,7 @@ export async function enqueueOwnerSyncWork(
       demand: { reason: "owner" },
     },
     spec,
-    { pageId: page.pageId, shadow: false, now: new Date(), page },
+    { pageId: page.pageId, now: new Date(), page },
   );
   if (upsert === null) throw new SyncOwnerLeverError(`${input.resource} is switched off on ${input.pageLabel} (sync page override)`);
   return db.transaction(async (tx) => {
@@ -643,37 +603,32 @@ export const PROBE_KEY = "probe.manual";
 
 /**
  * `sync probe` (design §5.22): queue one admitted read of a wire route for a
- * page, in the journal the page runs (shadow work on an `off`/`shadow` page —
- * simulated, nothing is sent — live work on a switched page). The route and
- * its parameters are checked before anything is written; one probe of a page
- * is open at a time.
+ * page an actor runs. The route and its parameters are checked before
+ * anything is written; one probe of a page is open at a time.
  */
 export async function requestSyncProbe(
   db: Database,
   registry: EngineRegistry,
   input: { pageLabel: string; operation: string; params: Record<string, unknown>; requestedBy: string },
-): Promise<{ workId: number; shadow: boolean }> {
+): Promise<{ workId: number }> {
   const params: ProbeParams = { operation: input.operation as ProbeParams["operation"], params: input.params, requestedBy: input.requestedBy };
   const probe = probeRequestOf(params);
   if ("refused" in probe) throw new SyncOwnerLeverError(`sync probe refused (${probe.refused}): ${input.operation} ${JSON.stringify(input.params)}`);
   const spec = registry.spec(PROBE_KEY);
   if (spec === null) throw new SyncOwnerLeverError(`No registry entry ${PROBE_KEY}`);
   const page = await findSyncPageByLabel(db, input.pageLabel);
-  if (page.mode === "off") {
-    throw new SyncOwnerLeverError(`${input.pageLabel} is off: no actor runs it (sync page mode --to shadow first)`);
-  }
-  const shadow = statusJournalIsShadow(page);
+  if (runsNoActor(page)) throw new SyncOwnerLeverError(`${input.pageLabel} is ${page.mode}: no actor runs it`);
   const upsert = demandToUpsert(
     { resource: PROBE_KEY, params, demand: { reason: "owner_probe" } },
     spec,
-    { pageId: page.pageId, shadow, now: new Date(), page },
+    { pageId: page.pageId, now: new Date(), page },
   );
   if (upsert === null) throw new SyncOwnerLeverError(`${PROBE_KEY} does not run on ${input.pageLabel} (switched off for the page)`);
   const result = await upsertDemand(db, upsert);
   if (!result.created) {
     throw new SyncOwnerLeverError(`${input.pageLabel} already has a probe queued (work ${result.id}); wait for it (sync why --resource ${PROBE_KEY})`);
   }
-  return { workId: result.id, shadow };
+  return { workId: result.id };
 }
 
 /** `sync ownership confirm-stopped` (rule (e)): owners whose host is not among

@@ -4848,7 +4848,7 @@ export const configItemSchema = z.object({
   key: z.string(),
   envName: z.string(),
   configField: z.string().nullable(),
-  kind: z.enum(["boolean", "number", "string", "url", "secret", "derived", "alias", "complex"]),
+  kind: z.enum(["boolean", "number", "string", "url", "secret", "derived", "complex"]),
   subsystem: z.string(),
   label: z.string(),
   default: z.string(),

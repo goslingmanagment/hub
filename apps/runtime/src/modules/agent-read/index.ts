@@ -304,7 +304,7 @@ export function registerAgentReadRoutes(server: ApiServer, ctx: ApiModuleContext
   // --- The Fansly Sync Engine's status and "why waiting" (plan §10, design §7.4) ---
   //
   // Reads of the engine's own queue and journal: no platform call, no
-  // evidence plane. Off and shadow pages report their shadow journal.
+  // evidence plane.
 
   server.get("/api/v1/agent/sync/pages", {
     schema: routeSchemas.agentSyncStatus,

@@ -362,6 +362,8 @@ pnpm dev
 
 `pnpm dev` creates a local `.env` from `.env.example` if needed, generates a local `APP_ENCRYPTION_KEY`, starts the Docker Postgres service, waits for it, runs migrations, then starts the API, worker, and dashboard in one terminal. Use `Ctrl+C` to stop the local Node/Vite processes.
 
+For client development (chat-extension, desktop), `pnpm dev:seed-client` fills that local database with a keyless OnlyFans setup (users, pages, fans, chats, money) and `pnpm dev:fake-ai` stands in for the AI provider; see `docs/runbooks/client-dev-hub.md`.
+
 ### CI integration shards
 
 CI splits `pnpm test:sync-critical:db` with `--shard=k/N`. The root Vitest

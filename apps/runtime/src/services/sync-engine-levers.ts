@@ -157,7 +157,7 @@ export async function requeueEngineStreams(
   const keys = fanslyKeysForStreams(streams);
   const requeued = keys.length === 0
     ? []
-    : await requeueQuarantinedWork(db, { pageId: page.pageId, resources: keys, shadow: false });
+    : await requeueQuarantinedWork(db, { pageId: page.pageId, resources: keys });
   return {
     mode: page.mode,
     resources: keys,
@@ -186,7 +186,6 @@ export async function resetEngineFollowersReconcile(
     const txDb = tx as unknown as Database;
     const open = await getOpenWorkForKey(txDb, {
       pageId: page.pageId,
-      shadow: false,
       resource: FOLLOWERS_RECONCILE_KEY,
       subject: "",
     });
@@ -204,7 +203,7 @@ export async function resetEngineFollowersReconcile(
     const upsert = demandToUpsert(
       { resource: FOLLOWERS_RECONCILE_KEY, demand: { reason: OWNER_DEMAND_REASON } },
       spec,
-      { pageId: page.pageId, shadow: false, now: new Date(), page },
+      { pageId: page.pageId, now: new Date(), page },
     );
     if (upsert === null) {
       throw new ConflictError(`${FOLLOWERS_RECONCILE_KEY} is switched off on ${labelOf(page)} (sync page override)`);

@@ -25,6 +25,7 @@ import {
   type AcceptanceCheck,
   type AcceptanceJournalRow,
   type AcceptanceWindow,
+  type PageHoldRecord,
   type PageStopEpisode,
 } from "../apps/runtime/src/sync/checks/live-hour-rules.ts";
 
@@ -99,7 +100,6 @@ function audited(seconds: number, operation: string, overrides: Partial<FanslySe
   ref += 1;
   return {
     journal: "engine",
-    shadow: false,
     source: null,
     ref,
     operation,
@@ -305,7 +305,7 @@ describe("401/403 and page holds", () => {
     expect(authRefusalsCheck([send(10, "group.detail")], window()).verdict).toBe("pass");
   });
 
-  const noHold = { holdKind: null, holdSince: null, holdUntil: null };
+  const noHold: PageHoldRecord[] = [];
 
   it("finds a page hold from an auth or identity answer", () => {
     expect(pageHoldCheck([send(10, "account.me", { errorClass: "identity_mismatch" })], window(), noHold, []).verdict).toBe("fail");
@@ -364,10 +364,19 @@ describe("401/403 and page holds", () => {
     expect(pageHoldCheck([network(-30), network(-20), network(-10)], window(), noHold, []).verdict).toBe("pass");
   });
 
-  it("finds the page row's hold overlapping the window, not one that ended before it", () => {
-    expect(pageHoldCheck([], window(), { holdKind: "network", holdSince: at(-60), holdUntil: at(30) }, []).verdict).toBe("fail");
-    expect(pageHoldCheck([], window(), { holdKind: "rate_limit", holdSince: at(-600), holdUntil: at(-10) }, []).verdict).toBe("pass");
-    expect(pageHoldCheck([], window(3_600, 1_000), { holdKind: "auth", holdSince: at(2_000), holdUntil: at(9_999_999) }, []).verdict).toBe("pass");
+  it("finds a hold of the page's hold set overlapping the window, not one that ended before it", () => {
+    const network: PageHoldRecord = { kind: "network", since: at(-60), until: at(30) };
+    expect(pageHoldCheck([], window(), [network], [])).toMatchObject({
+      verdict: "fail",
+      detail: { current: { kind: "network", since: at(-60).toISOString(), until: at(30).toISOString() } },
+    });
+    expect(pageHoldCheck([], window(), [{ kind: "network", since: at(-600), until: at(-10) }], []).verdict).toBe("pass");
+    expect(pageHoldCheck([], window(3_600, 1_000), [{ kind: "auth", since: at(2_000), until: at(9_999_999) }], []).verdict).toBe("pass");
+    // The credentials hold is named before the network hold beside it; an
+    // ended one beside a hold in force does not hide it.
+    const auth: PageHoldRecord = { kind: "auth", since: at(100), until: at(9_999_999) };
+    expect(pageHoldCheck([], window(), [auth, network], []).detail).toMatchObject({ current: { kind: "auth" } });
+    expect(pageHoldCheck([], window(), [{ ...auth, until: at(-10) }, network], []).detail).toMatchObject({ current: { kind: "network" } });
   });
 });
 

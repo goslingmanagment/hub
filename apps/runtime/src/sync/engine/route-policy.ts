@@ -1,4 +1,4 @@
-import type { SyncRouteSend } from "@agency_hub_core/db";
+import type { SyncHoldRow, SyncRouteSend } from "@agency_hub_core/db";
 import type { FanslyWireId } from "@agency_hub_core/fansly";
 
 import {
@@ -17,7 +17,8 @@ import {
   type FanslyRoute,
   type FanslyRouteFamily,
 } from "../fansly/routes.ts";
-import type { RouteAdmissionView, RouteBudgetStatusView, RouteStatusView } from "./status.ts";
+import type { RouteAdmissionView } from "./admission.ts";
+import type { RouteBudgetStatusView, RouteStatusView } from "./status.ts";
 
 // The route admission of a page (step 3b rulings 1, 3, 4; plan PR 1-1): on
 // top of the pause S between any two sends of a page, every route and every
@@ -26,10 +27,9 @@ import type { RouteAdmissionView, RouteBudgetStatusView, RouteStatusView } from 
 // no borrowing, no burst, an idle hour earns nothing. The clocks are read
 // from the attempt journal on every slot (`readRouteJournal`), never kept in
 // memory: a restart, a takeover, a demand bump or a restarted walk can never
-// shorten an interval. On a live page the step-1 send log counts too
-// (what the legacy engine sent before the switch); a send whose instant is
-// unknown counts at its upper bound. A shadow page runs the same rule on its
-// own journal, so the shadow report sees the budgets live pages keep.
+// shorten an interval. The step-1 send log counts too (what the legacy
+// engine sent before the switch); a send whose instant is unknown counts at
+// its upper bound.
 //
 // The rule is applied twice per slot, one pure function each:
 //   - at the pick: a key all of whose routes are closed is left out of the
@@ -40,19 +40,16 @@ import type { RouteAdmissionView, RouteBudgetStatusView, RouteStatusView } from 
 //   - after the plan: the planned request's route itself (`notBefore`), for
 //     every key — a multi-route walk, a probe, the CDN, the socket's Upgrade.
 //
-// A page's route state — holds and slowdowns after a 429 — lives in one
-// versioned namespace of its row (`resource_holds['route:state']`,
-// `SYNC_ROUTE_STATE_KEY`). It may only make a route slower: the effective
-// rate is the lower of the table's `current` and the stored one. A namespace
-// this build cannot read closes the page's admission with a diagnostic
-// (status, alert 1) rather than guess.
-
-/** The route-state namespace version this build writes and reads. */
-export const ROUTE_STATE_VERSION = 1;
+// A page's route state — holds and slowdowns after a 429 — lives in the
+// route-scope rows of its hold set (`sync_holds`): `route_hold`, the end of a
+// route's hold, and `route_budget`, its durable slowdown state. It may only
+// make a route slower: the effective rate is the lower of the table's
+// `current` and the stored one. Rows this build cannot read close the page's
+// admission with a diagnostic (status, alert 1) rather than guess.
 
 /** One route of a page, as its 429s left it (written by `route-holds.ts`
- *  through `writeSyncRouteState` only; every field is part of the stored
- *  shape). */
+ *  through `writeSyncRouteState` only: `holdUntil` is its `route_hold` row,
+ *  the rest its `route_budget` row). */
 export interface RouteStateEntry {
   /** No send on the route before this instant (ISO): a 429's hold, a
    *  `Retry-After` honoured to the letter. Null: none. */
@@ -73,62 +70,76 @@ export interface RouteStateEntry {
 }
 
 export interface RouteState {
-  version: typeof ROUTE_STATE_VERSION;
   routes: Partial<Record<FanslyRoute, RouteStateEntry>>;
 }
 
-export const EMPTY_ROUTE_STATE: RouteState = { version: ROUTE_STATE_VERSION, routes: {} };
+export const EMPTY_ROUTE_STATE: RouteState = { routes: {} };
 
 export type RouteStateRead =
   | { ok: true; state: RouteState }
   /** Admission of the page stays closed while this holds. */
   | { ok: false; diagnostic: string };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isInstant(value: unknown): value is string | null {
-  return value === null || (typeof value === "string" && !Number.isNaN(Date.parse(value)));
-}
-
 function isCount(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
-function parseEntry(value: unknown): RouteStateEntry | null {
-  if (!isRecord(value)) return null;
-  const { holdUntil, ladderStep, effectivePerMin, policyVersion, last429AttemptId, last429At, revision } = value;
-  if (!isInstant(holdUntil) || !isInstant(last429At)) return null;
-  if (!isCount(ladderStep) || !isCount(revision)) return null;
+/** A route's `route_budget` row (and the end of its `route_hold` row) as its
+ *  entry; null: not a shape this build reads. */
+function entryOfRows(budget: SyncHoldRow | null, hold: SyncHoldRow | null): RouteStateEntry | null {
+  const detail: Readonly<Record<string, unknown>> = budget?.detail ?? {};
+  const effectivePerMin = detail.effectivePerMin ?? null;
+  const policyVersion = detail.policyVersion ?? null;
+  const last429AttemptId = detail.last429AttemptId ?? null;
+  const last429At = detail.last429At ?? null;
   if (effectivePerMin !== null && !(typeof effectivePerMin === "number" && Number.isFinite(effectivePerMin) && effectivePerMin > 0)) {
     return null;
   }
   if (policyVersion !== null && typeof policyVersion !== "string") return null;
   if (last429AttemptId !== null && !(isCount(last429AttemptId) && last429AttemptId > 0)) return null;
-  return { holdUntil, ladderStep, effectivePerMin, policyVersion, last429AttemptId, last429At, revision };
+  if (last429At !== null && (typeof last429At !== "string" || Number.isNaN(Date.parse(last429At)))) return null;
+  // A hold without the route's state row is a hold all the same: an entry at
+  // revision 0, which the first write of the state takes over.
+  const ladderStep = budget?.ladderStep ?? 0;
+  const revision = budget?.revision ?? 0;
+  if (!isCount(ladderStep) || !isCount(revision)) return null;
+  if (hold !== null && (hold.until === null || Number.isNaN(hold.until.getTime()))) return null;
+  return {
+    holdUntil: hold === null ? null : hold.until!.toISOString(),
+    ladderStep,
+    effectivePerMin,
+    policyVersion,
+    last429AttemptId,
+    last429At,
+    revision,
+  };
 }
 
 /**
- * Read a page's stored route state (`SyncPageRow.routeState`). None stored is
- * the empty state. A version this build does not know, or an entry of a known
- * route it cannot read, is a diagnostic: the caller keeps the page's
- * admission closed. An entry of a route this build does not know is left
- * alone — this build never sends on it.
+ * Read a page's route state from the route-scope rows of its hold set. None
+ * stored is the empty state. Rows of a known route that are not a shape this
+ * build reads — a kind it does not know, a state it cannot parse — are a
+ * diagnostic: the caller keeps the page's admission closed. The rows of a
+ * route this build does not know are left alone — this build never sends on
+ * it.
  */
-export function parseRouteState(raw: unknown): RouteStateRead {
-  if (raw === null || raw === undefined) return { ok: true, state: EMPTY_ROUTE_STATE };
-  if (!isRecord(raw)) return { ok: false, diagnostic: "route_state_not_an_object" };
-  if (raw.version !== ROUTE_STATE_VERSION) return { ok: false, diagnostic: `route_state_version:${String(raw.version)}` };
-  if (!isRecord(raw.routes)) return { ok: false, diagnostic: "route_state_routes" };
+export function routeStateOfHolds(rows: readonly SyncHoldRow[]): RouteStateRead {
   const routes: Partial<Record<FanslyRoute, RouteStateEntry>> = {};
-  for (const [route, value] of Object.entries(raw.routes)) {
-    if (!isFanslyRoute(route)) continue;
-    const entry = parseEntry(value);
+  const byRoute = new Map<FanslyRoute, { budget: SyncHoldRow | null; hold: SyncHoldRow | null }>();
+  for (const row of rows) {
+    if (row.scope !== "route" || !isFanslyRoute(row.key)) continue;
+    const found = byRoute.get(row.key) ?? { budget: null, hold: null };
+    if (row.kind === "route_budget") found.budget = row;
+    else if (row.kind === "route_hold") found.hold = row;
+    else return { ok: false, diagnostic: `route_state_kind:${row.key}:${row.kind}` };
+    byRoute.set(row.key, found);
+  }
+  for (const [route, found] of byRoute) {
+    const entry = entryOfRows(found.budget, found.hold);
     if (entry === null) return { ok: false, diagnostic: `route_state_entry:${route}` };
     routes[route] = entry;
   }
-  return { ok: true, state: { version: ROUTE_STATE_VERSION, routes } };
+  return { ok: true, state: { routes } };
 }
 
 export interface RoutePolicyOptions {
@@ -381,28 +392,32 @@ export function lookaheadInstants(specs: readonly RouteKeySpec[], clocks: RouteC
   return [...instants].sort((a, b) => a - b).map((at) => new Date(at));
 }
 
-/** "Why waiting" over a page's route clocks at `now` (`engine/status.ts`). A
- *  page without readable route state (`clocks` null) admits nothing. */
-export function routeAdmissionView(
-  clocks: RouteClocks | null,
-  stateError: string | null,
-  specs: readonly RouteKeySpec[],
-  now: Date,
-): RouteAdmissionView {
+/** The route admission of a page at `now`, as the hold evaluator asks it
+ *  (`engine/admission.ts`): when a key's declared routes, or one route, next
+ *  admit a send, with the routes still closed and those of them a 429's (or a
+ *  5xx's `Retry-After`) hold keeps closed. */
+export function routeAdmissionView(clocks: RouteClocks, specs: readonly RouteKeySpec[], now: Date): RouteAdmissionView {
   const byKey = new Map(specs.map((spec) => [spec.key, spec.operations]));
+  const heldOf = (routes: readonly FanslyRoute[]): FanslyRoute[] =>
+    routes.filter((route) => {
+      const holdUntil = clocks.state.routes[route]?.holdUntil ?? null;
+      return holdUntil !== null && Date.parse(holdUntil) > now.getTime();
+    });
   return {
-    stateError,
     keyOpensAt(resource) {
-      if (clocks === null) return null;
       const operations = byKey.get(resource);
       const at = clocks.keyNotBefore(operations);
       if (at === null || at.getTime() <= now.getTime()) return null;
       const closed = [...new Set((operations ?? []).map(routeOfWireId).filter((route) => !clocks.admits(route, now)))].sort();
-      const held = closed.filter((route) => {
-        const holdUntil = clocks.state.routes[route]?.holdUntil ?? null;
-        return holdUntil !== null && Date.parse(holdUntil) > now.getTime();
-      });
-      return { at, routes: closed, held };
+      return { at, routes: closed, held: heldOf(closed) };
+    },
+    routeOpensAt(route) {
+      const at = clocks.notBefore(route);
+      if (at === null || at.getTime() <= now.getTime()) return null;
+      return { at, routes: [route], held: heldOf([route]) };
+    },
+    keyHeldRoutes(resource) {
+      return heldOf([...new Set((byKey.get(resource) ?? []).map(routeOfWireId))].sort());
     },
   };
 }

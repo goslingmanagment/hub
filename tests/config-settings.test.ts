@@ -96,11 +96,11 @@ describe("validateConfigOverride", () => {
   it("rejects a type mismatch", () => {
     expect(validateConfigOverride("sessionTtlDays", "45").ok).toBe(false);
     expect(validateConfigOverride("logLevel", 7).ok).toBe(false);
-    expect(validateConfigOverride("fanslyDmDeepBackfillEnabled", "true").ok).toBe(false);
+    expect(validateConfigOverride("accountLinksEnabled", "true").ok).toBe(false);
   });
 
   it("accepts a boolean for a boolean key", () => {
-    expect(validateConfigOverride("fanslyDmDeepBackfillEnabled", true)).toEqual({
+    expect(validateConfigOverride("accountLinksEnabled", true)).toEqual({
       ok: true,
       value: true,
     });

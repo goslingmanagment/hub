@@ -1,7 +1,7 @@
 import { randomInt } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 
-import type { Database } from "@agency_hub_core/db";
+import type { Database, SyncWorkRow } from "@agency_hub_core/db";
 import type {
   FanslySendCheck,
   FanslySendRefusalReason,
@@ -11,6 +11,7 @@ import type {
 import type { AppConfig } from "@agency_hub_core/shared";
 
 import { loadEffectiveConfig } from "../../services/effective-config.ts";
+import type { RequestPlan } from "./resource.ts";
 
 // The ports of the Fansly Sync Engine (design §3.2): everything the engine
 // needs from the outside world, as interfaces, so the pacer, the scheduler and
@@ -143,8 +144,6 @@ export interface SyncAlertInput extends SyncAlertKey {
   /** Why, from a closed per-subKey vocabulary (`rate_limit`, `pace_violation`,
    *  `quarantined`, `handover_stuck`, …). */
   detail: string;
-  /** A shadow page's alert is a metric, never a page (design §3.12, D14). */
-  shadow: boolean;
   context?: Readonly<Record<string, unknown>>;
   /** When the condition happened (a pace violation's send); default: now. An
    *  occurrence older than the latch's last resolution reopens nothing. */
@@ -159,8 +158,8 @@ export interface AlertSink {
 export type SyncMetricLabels = Readonly<Record<string, string | number | boolean>>;
 
 /** In-process counters of the engine (`not_implemented` resources, pacer
- *  refusals, shadow alerts …). The golden signals of design §9.5 are computed
- *  from the database, not from these. */
+ *  refusals …). The golden signals of design §9.5 are computed from the
+ *  database, not from these. */
 export interface Metrics {
   increment(name: string, labels?: SyncMetricLabels, by?: number): void;
 }
@@ -186,17 +185,27 @@ export interface SendHooks {
   check: FanslySendCheck;
 }
 
-/** What one physical request came to. The wire outcomes are the wire layer's
- *  (`sendFanslyWireRequest`); `shadow` is the shadow transport's, which sends
- *  nothing and only simulates the latency. */
-export type TransportOutcome =
-  | FanslyWireOutcome
-  | { kind: "shadow"; simulatedLatencyMs: number };
+/** What one physical request came to: the wire layer's outcomes
+ *  (`sendFanslyWireRequest`). */
+export type TransportOutcome = FanslyWireOutcome;
 
-/** Implemented by `fansly/transport.ts` (live, built only by the live loop)
- *  and `engine/shadow.ts`. One call = at most one physical request. */
-export interface Transport {
+/** Builds the request of a plan and sends it — the actor's view of a page's
+ *  transport. Implemented by `fansly/transport.ts`, built only by the host's
+ *  live loop. */
+export interface PageTransport {
+  /** The request of one plan, built right before its admission; `context`
+   *  names the work it is for (a CDN hop reads the work's secret URL). Throws
+   *  `UnsendableRequestError` for a request that can never be sent. */
+  prepare(request: RequestPlan, context?: { work: SyncWorkRow }): Promise<FanslyWireRequest>;
+  /** At most one physical request. */
   send(req: FanslyWireRequest, hooks: SendHooks, signal: AbortSignal): Promise<TransportOutcome>;
+  /** The digest of the page's stored credentials now (the session and the
+   *  proxy; `readFanslyPageGeneration`), from a read-only snapshot. The actor
+   *  compares it with the trusted digest (checks-only, G2) and with the
+   *  latest refusal a credentials hold names (the verify it admits, A3).
+   *  Absent where the transport stores none. */
+  storedCredentialsGeneration?(): Promise<string | null>;
+  close(): Promise<void>;
 }
 
 /**

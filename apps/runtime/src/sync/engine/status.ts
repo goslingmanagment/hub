@@ -1,10 +1,7 @@
-import { activeFanslyPageHold, isIndefinite, type FanslyPageHoldKind } from "@agency_hub_core/shared";
+import { fanslyPageHoldInForce, isIndefinite, type FanslyPageHoldKind } from "@agency_hub_core/shared";
 
-import {
-  activeResourceHold,
-  type ResourceHoldEntry,
-  type ResourceHoldKind,
-} from "./errors.ts";
+import { heldByScope, resourceFilesHeld, type HoldSet, type RouteAdmissionView } from "./admission.ts";
+import type { ResourceHoldKind } from "./errors.ts";
 import { TAKEOVER_FACTOR } from "./pacer.ts";
 import { WORK_CLASSES, type WorkClass } from "./scheduler.ts";
 
@@ -13,16 +10,21 @@ import { WORK_CLASSES, type WorkClass } from "./scheduler.ts";
 // agent CLI and `pnpm cli sync status` show. Durable reasons (written on the
 // work row when they arise) are `running`, `quarantined`, `blocked_by_vendor`,
 // `subject_breaker`, `dependency` and `not_due` — and `pacer` for a request
-// its route's budget put off (step 3b, `engine/route-policy.ts`); the dynamic
-// ones (pauses, holds, ownership, route budgets, pacer, class share) are
-// computed here, so serving a slot never writes a row just to say why the
-// others wait.
+// its route's budget or hold put off (step 3b, `engine/route-policy.ts`); the
+// dynamic ones (pauses, holds, ownership, route budgets and holds, pacer,
+// class share) are computed here, so serving a slot never writes a row just
+// to say why the others wait. What holds a row — the page, its subject's
+// breaker, its file's breaker, its route — is the hold evaluator's answer
+// (`engine/admission.ts`); `route_budget` and `route_hold` are computed only
+// (a row put off by its route stores `pacer`).
 
 export const WAITING_REASONS = [
   "not_due",
   "pacer",
   "class_share",
   "page_hold",
+  "route_budget",
+  "route_hold",
   "resource_hold",
   "subject_breaker",
   "blocked_by_vendor",
@@ -66,17 +68,14 @@ export interface StatusPageOwner {
   releaseGeneration: bigint | null;
 }
 
-/** The page fields the explanation reads; names follow the `sync_pages` row. */
+/** The page fields the explanation reads; names follow the `sync_pages` row,
+ *  `holds` is its hold set (`holdSetOf(page.holds)`). */
 export interface StatusPage {
   mode: SyncPageModeView;
   pausedAll: boolean;
   pausedRequests: boolean;
   pausedResources: readonly string[];
-  holdKind: FanslyPageHoldKind | null;
-  holdUntil: Date | null;
-  holdSince: Date | null;
-  holdDetail: Readonly<Record<string, unknown>>;
-  resourceHolds: Readonly<Record<string, ResourceHoldEntry>>;
+  holds: HoldSet;
   owner: StatusPageOwner;
 }
 
@@ -85,19 +84,9 @@ export interface RuntimeSnapshot {
   /** When the page's next slot opens by the pacer; null = open now, or not
    *  known (no actor in this process: use `estimateSlotOpensAt`). */
   slotOpensAt: Date | null;
-  /** The page's route admission as its clocks stand (absent: not read). */
-  routes?: RouteAdmissionView;
-}
-
-/** The route admission of a page, for "why waiting" (`engine/route-policy.ts`). */
-export interface RouteAdmissionView {
-  /** The page's route state is one this build cannot read: it admits
-   *  nothing (the diagnostic); null: it reads. */
-  stateError: string | null;
-  /** When a key's routes next admit a send (its own and its family's budget,
-   *  a route hold), with the routes still closed and those of them a 429's
-   *  (or a 5xx's `Retry-After`) hold keeps closed; null: open now. */
-  keyOpensAt(resource: string): { at: Date; routes: string[]; held: string[] } | null;
+  /** The page's route admission as its clocks stand (`routeAdmissionView`;
+   *  absent or null: not read, or the page's route state does not read). */
+  routes?: RouteAdmissionView | null;
 }
 
 export interface WorkExplanation {
@@ -107,9 +96,9 @@ export interface WorkExplanation {
 }
 
 /** The page has an owner that is running a loop: a fresh heartbeat of the
- *  current generation that was not released, in a mode an actor runs in. */
+ *  current generation that was not released, in the mode an actor runs in. */
 export function ownerRunning(page: Pick<StatusPage, "mode" | "owner">, now: Date): boolean {
-  if (page.mode !== "shadow" && page.mode !== "live") return false;
+  if (page.mode !== "live") return false;
   const { owner } = page;
   if (owner.generation === 0n || owner.heartbeatAt === null) return false;
   if (owner.releasedAt !== null && owner.releaseGeneration === owner.generation) return false;
@@ -120,10 +109,12 @@ export function ownerRunning(page: Pick<StatusPage, "mode" | "owner">, now: Date
  * Why `work` is not being served now (design §3.9). Precedence, first match
  * wins: running → ownership_unconfirmed → paused → page_hold → quarantined →
  * blocked_by_vendor → subject_breaker → resource_hold → dependency → not_due →
- * pacer → class_share. A key without requests (`http: false`) never waits on
- * the page hold, the route admission or the pacer (ruling 9): due, it waits
- * for its turn among the steps before the gate (`class_share`). Null for
- * closed work (done, cancelled, superseded): it waits for nothing.
+ * route_hold / route_budget → pacer → class_share. What holds the row — the
+ * page, its subject, its file, its route — is `heldByScope`'s answer. A key
+ * without requests (`http: false`) never waits on the page hold, the route
+ * admission or the pacer (ruling 9): due, it waits for its turn among the
+ * steps before the gate (`class_share`). Null for closed work (done,
+ * cancelled, superseded): it waits for nothing.
  */
 export function explainWork(
   work: StatusWork,
@@ -151,51 +142,39 @@ export function explainWork(
     return { reason: "paused", until: null, detail: { scope: "resource" } };
   }
   const sends = work.http !== false;
-  const hold = activeFanslyPageHold(page, now);
-  if (hold !== null && sends) {
-    return { reason: "page_hold", until: hold.until, detail: { kind: hold.kind } };
-  }
-  if (sends && runtime.routes !== undefined && runtime.routes.stateError !== null) {
-    // A route state this build cannot read closes the page's admission.
-    return { reason: "page_hold", until: null, detail: { routeState: runtime.routes.stateError } };
+  // Its planned route's budget or hold put the request off (the row stores
+  // `pacer`): due again when the route opens.
+  const putOffUntil = sends && work.waitingReason === "pacer" && after(work.dueAt) ? work.dueAt : null;
+  const held = heldByScope(page.holds, sends ? runtime.routes ?? null : null, { work: { ...work, putOffUntil } }, now);
+  if (held.page !== null && sends) {
+    // Rows of the hold set this build cannot read close the page's admission.
+    if (held.page.kind === "unreadable") return { reason: "page_hold", until: held.page.until, detail: { holdSet: held.page.diagnostic } };
+    return { reason: "page_hold", until: held.page.until, detail: { kind: held.page.kind } };
   }
   if (work.state === "quarantined") return { reason: "quarantined", until: null, detail: {} };
-  if (work.blockedByVendorAt !== null) {
-    return {
-      reason: "blocked_by_vendor",
-      until: work.breakerUntil,
-      detail: { since: work.blockedByVendorAt.toISOString() },
-    };
+  if (held.subject !== null) {
+    return held.subject.kind === "blocked_by_vendor"
+      ? { reason: "blocked_by_vendor", until: held.subject.until, detail: { since: work.blockedByVendorAt!.toISOString() } }
+      : { reason: "subject_breaker", until: held.subject.until, detail: {} };
   }
-  if (after(work.breakerUntil)) {
-    return { reason: "subject_breaker", until: work.breakerUntil, detail: {} };
-  }
-  const resourceHold = activeResourceHold(page.resourceHolds, work.resource, now);
-  if (resourceHold !== null) {
+  if (held.resource !== null) {
     return {
       reason: "resource_hold",
-      until: resourceHold.until,
-      detail: { file: resourceHold.file, step: resourceHold.step, kind: resourceHold.kind },
+      until: held.resource.until,
+      detail: { file: held.resource.file, step: held.resource.step, kind: "breaker" satisfies ResourceHoldKind },
     };
   }
   if (work.waitingReason === "dependency" && after(work.dueAt)) {
     return { reason: "dependency", until: work.waitingUntil ?? work.dueAt, detail: {} };
   }
-  // Its planned route's budget or hold put the request off: due again when
-  // the route opens.
-  if (work.waitingReason === "pacer" && after(work.dueAt)) return { reason: "pacer", until: work.dueAt, detail: { routeBudget: true } };
-  if (after(work.dueAt)) return { reason: "not_due", until: work.dueAt, detail: {} };
-  // Every route of the key is closed by its budget or a route hold: the
-  // pick leaves it out until one opens.
-  const routes = sends ? runtime.routes?.keyOpensAt(work.resource) ?? null : null;
-  if (routes !== null && after(routes.at)) {
-    return {
-      reason: "pacer",
-      until: routes.at,
-      detail: routes.held.length > 0
-        ? { routeHold: true, routes: routes.routes, held: routes.held }
-        : { routeBudget: true, routes: routes.routes },
-    };
+  if (putOffUntil === null && after(work.dueAt)) return { reason: "not_due", until: work.dueAt, detail: {} };
+  // The route its request planned put it off, or every route of its key is
+  // closed (the pick leaves it out until one opens): by a 429's hold of a
+  // route (`route_hold`, with the routes held), else by the routes' budgets.
+  if (held.route !== null) {
+    return held.route.scope === "route_hold"
+      ? { reason: "route_hold", until: held.route.until, detail: { routes: held.route.routes, held: held.route.held } }
+      : { reason: "route_budget", until: held.route.until, detail: { routes: held.route.routes } };
   }
   if (sends && after(runtime.slotOpensAt)) return { reason: "pacer", until: runtime.slotOpensAt, detail: {} };
   return { reason: "class_share", until: null, detail: { class: work.class } };
@@ -221,10 +200,12 @@ export function estimateSlotOpensAt(input: {
 
 // ── page status ─────────────────────────────────────────────────────────────
 
-/** A runnable row waits only for its slot (`pacer`) or for other work
- *  (`class_share`); everything else is a wait reason of its own. */
+/** A runnable row waits only for its slot (`pacer`), for its route's budget
+ *  to admit the next send (`route_budget`: the route's own pace, as the page's
+ *  is the pacer's) or for other work (`class_share`); everything else is a
+ *  wait reason of its own. */
 export function isRunnableReason(reason: WaitingReason): boolean {
-  return reason === "pacer" || reason === "class_share";
+  return reason === "pacer" || reason === "route_budget" || reason === "class_share";
 }
 
 export interface ClassQueueStatus {
@@ -303,12 +284,6 @@ export interface RouteStatusView {
   routes: RouteBudgetStatusView[];
 }
 
-export interface ShadowStatusView {
-  attemptsLastHour: number;
-  /** Shadow attempts of the hour over the computed expectation (§3.12 A1). */
-  demandVsEstimate: number | null;
-}
-
 export interface PageStatus {
   pageLabel: string | null;
   mode: SyncPageModeView;
@@ -327,7 +302,6 @@ export interface PageStatus {
   quarantined: number;
   requests: RequestProgressView[];
   ws: WsStatusView | null;
-  shadow: ShadowStatusView | null;
   /** The route budgets (owner CLI; not on the agent wire). */
   routes: RouteStatusView | null;
 }
@@ -348,25 +322,21 @@ export interface PageStatusInput {
   };
   requests?: readonly RequestProgressView[];
   ws?: WsStatusView | null;
-  shadow?: ShadowStatusView | null;
   routes?: RouteStatusView | null;
 }
 
 /** Assemble the page status from the page row, its open work and the
- *  aggregates the caller read (sends, requests, socket, shadow). */
+ *  aggregates the caller read (sends, requests, socket). */
 export function buildPageStatus(input: PageStatusInput): PageStatus {
   const { page, now } = input;
   const at = now.getTime();
-  const hold = activeFanslyPageHold(page, now);
-  const resources = Object.entries(page.resourceHolds)
-    .filter(([, entry]) => new Date(entry.until).getTime() > at)
-    .map(([file, entry]) => ({
-      file,
-      until: new Date(entry.until).toISOString(),
-      step: entry.step,
-      kind: "breaker" as const,
-    }))
-    .sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0));
+  // The page's own holds in force: the credentials hold when there is one,
+  // else the network hold (the later end of the two counts).
+  const hold = fanslyPageHoldInForce(page.holds.page, now);
+  const resources = resourceFilesHeld(page.holds, now).map((file) => {
+    const entry = page.holds.resources[file]!;
+    return { file, until: entry.until.toISOString(), step: entry.step, kind: "breaker" as const };
+  });
   let breakersOpen = 0;
   let blockedByVendor = 0;
   let quarantined = 0;
@@ -400,7 +370,7 @@ export function buildPageStatus(input: PageStatusInput): PageStatus {
         : {
           kind: hold.kind,
           until: isIndefinite(hold.until) ? "infinity" : hold.until.toISOString(),
-          since: page.holdSince?.toISOString() ?? null,
+          since: (hold.credentials ?? hold.timed)!.since?.toISOString() ?? null,
         },
       resources,
     },
@@ -408,7 +378,6 @@ export function buildPageStatus(input: PageStatusInput): PageStatus {
     quarantined,
     requests: [...(input.requests ?? [])],
     ws: input.ws ?? null,
-    shadow: input.shadow ?? null,
     routes: input.routes ?? null,
   };
 }

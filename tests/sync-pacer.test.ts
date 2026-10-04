@@ -380,7 +380,7 @@ describe("sync pacer: completions", () => {
     expect(ctx.pacer.snapshot().lastCompletionMono).toBe(ctx.clock.monoNow());
   });
 
-  it("a shadow transport that checks counts the check instant as the send", async () => {
+  it("an answer after a passed check keeps the check instant as the send", async () => {
     const ctx = setup();
     ctx.pacer.initTakeover(0);
     const grant = await ctx.pacer.waitForSlot(live());
@@ -388,7 +388,7 @@ describe("sync pacer: completions", () => {
     expect(ctx.pacer.check(admission)).toBeNull();
     const sentAt = ctx.clock.monoNow();
     ctx.clock.advance(600);
-    ctx.pacer.complete(admission, { kind: "shadow", simulatedLatencyMs: 600 });
+    ctx.pacer.complete(admission, response());
     expect(admission.sentMono).toBe(sentAt);
     expect(ctx.pacer.snapshot().lastCompletionMono).toBe(sentAt + 600);
   });

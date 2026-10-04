@@ -56,6 +56,14 @@ export function timestampParam(value: Date | null | undefined): SQL {
   return sql`${value ?? null}::timestamptz`;
 }
 
+/** A hold's end as a timestamptz parameter: the JS stand-in of `'infinity'`
+ *  (and the word itself) is `'infinity'`; null stays null. */
+export function untilParam(value: Date | "infinity" | null | undefined): SQL {
+  if (value === null || value === undefined) return sql`null::timestamptz`;
+  if (value === "infinity" || value.getTime() >= SYNC_INDEFINITE_UNTIL_MS) return sql`'infinity'::timestamptz`;
+  return sql`${value}::timestamptz`;
+}
+
 /** `$now` of a pick: the caller's instant, or the database clock. */
 export function nowParam(value: Date | null | undefined): SQL {
   return sql`coalesce(${value ?? null}::timestamptz, clock_timestamp())`;

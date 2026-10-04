@@ -621,6 +621,29 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # resets a Fansly page's legacy state, and its rollback command refuses, so
   # it runs unchanged; no image clears a 'retired' blocker.
   "0239_retire_fansly_legacy_sync_states.sql"
+  # The hold set (step 4, owner decision №26): one new table, sync_holds, its
+  # partial unique index, comments and the read-role grant; it starts empty.
+  # The previous image never names it: it reads and writes a page's holds in
+  # the old columns of sync_pages (hold_kind … hold_detail, resource_holds),
+  # which this release's writers rewrite from the table in the same
+  # transaction as every hold write, so it holds what the table holds after a
+  # rollback. What it writes there meanwhile is read back into the table the
+  # next time this release acquires the page's ownership.
+  "0240_sync_holds.sql"
+  # chat-extension greeting lease and send custody (hub-pr-plan H-7a): three
+  # new tables (client_fan_leases, client_greetings, client_send_custody),
+  # their checks, indexes and comments. The previous image never names them,
+  # and no route writes them until H-7b ships behind owner switches, so a
+  # rollback finds them empty (or unread) and runs unchanged.
+  "0241_client_claim_tables.sql"
+  # Overrides of the retired legacy Fansly config keys (step 4, design S4-26
+  # [E15]): one data statement that deletes the config_settings rows of the
+  # keys this release drops from the registry and appends one config_audit_log
+  # row per removed row (old value and version, new null). No DDL. The previous
+  # image still registers these keys but reads none of them, so with the rows
+  # gone it shows their env defaults and runs unchanged; the removed values
+  # stay readable in the audit log.
+  "0242_retire_fansly_legacy_config_overrides.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

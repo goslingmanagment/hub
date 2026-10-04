@@ -52,10 +52,6 @@ const EVENT = {
   payoutUpdated: 21,
 } as const;
 
-/** The service envelope of a PPV order (svc 2 / type 7), as the receipts'
- *  `nodes` list it: a reader of the order frames alone filters on it. */
-export const WS_ORDER_NODE = { serviceId: SERVICE.order, eventType: EVENT.order } as const;
-
 /** A decoded money/group node that lacks a field its route needs. */
 export type WsInvalidReason =
   | "envelope" | "message_id" | "group_id" | "sender_id" | "created_at" | "limit"

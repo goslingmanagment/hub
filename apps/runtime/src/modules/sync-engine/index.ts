@@ -140,7 +140,7 @@ export function registerSyncEngineRoutes(server: ApiServer, ctx: ApiModuleContex
           ...auditCtx(principal),
           eventType: SYNC_PAGE_REFRESH_AUDIT_EVENT,
           platformAccountId: page.pageId,
-          metadata: { pageLabel, resources: files ?? null, bumped: result.bumped, shadow: result.shadow },
+          metadata: { pageLabel, resources: files ?? null, bumped: result.bumped },
         });
         return result;
       });
@@ -149,7 +149,8 @@ export function registerSyncEngineRoutes(server: ApiServer, ctx: ApiModuleContex
       throw error;
     }
     reply.code(202);
-    return { bumped: refreshed.bumped, shadow: refreshed.shadow };
+    // `shadow` is a wire-only constant since step 4 (S4-23).
+    return { bumped: refreshed.bumped, shadow: false };
   });
 
   async function pageIdOf(label: string): Promise<number> {

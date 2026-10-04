@@ -17,13 +17,6 @@ export function createTestAppContext(
     /** S for the context's Fansly send guards. 0 by default: a test that is
      *  not about pacing does not wait between its requests. */
     fanslySendGuardSettingMs?: number;
-    fanslyDmConversationsDelayMs?: number;
-    fanslyDmMessagesDelayMs?: number;
-    fanslyFanEarningsSyncEnabled?: boolean;
-    fanslyFanEarningsShadowPageAllowlist?: string;
-    fanslyPurchaseHistorySyncEnabled?: boolean;
-    fanslyNewStreamPageAllowlist?: string;
-    followerPageDelayMs?: number;
     logger?: StartedTestDatabase["logger"];
     onlyFansDefaultDelayMs?: number;
     ofapi?: AppContext["ofapi"];
@@ -79,7 +72,6 @@ export function createTestAppContext(
     onlyFansTopSpendersEnabled?: boolean;
     sessionTtlDays?: number;
     syncPageExecutorConcurrency?: number;
-    syncSharedRateLimitEnabled?: boolean;
     healthSyncMonitoringToken?: string | null;
     telegramProxyPageLabel?: string | null;
     serviceEgressProxyUrl?: string | null;
@@ -113,23 +105,12 @@ export function createTestAppContext(
       fanslyBaseUrl: overrides?.fanslyBaseUrl ?? "https://example.invalid",
       syncHttpTraceFile: null,
       fanslyDefaultDelayMs: overrides?.fanslyDefaultDelayMs ?? 2500,
-      fanslyDmConversationsDelayMs: overrides?.fanslyDmConversationsDelayMs ?? 5000,
-      fanslyDmMessagesDelayMs: overrides?.fanslyDmMessagesDelayMs ?? 5000,
-      fanslyFanEarningsSyncEnabled: overrides?.fanslyFanEarningsSyncEnabled ?? false,
-      fanslyFanEarningsShadowPageAllowlist: overrides?.fanslyFanEarningsShadowPageAllowlist ?? "none",
-      fanslyPurchaseHistorySyncEnabled: overrides?.fanslyPurchaseHistorySyncEnabled ?? false,
-      fanslyNewStreamPageAllowlist: overrides?.fanslyNewStreamPageAllowlist ?? "",
-      followerPageDelayMs: overrides?.followerPageDelayMs ?? 0,
       onlyFansDefaultDelayMs: overrides?.onlyFansDefaultDelayMs ?? 1000,
-      transactionLookbackDays: 7,
-      transactionRescanCapDays: 30,
-      syncSharedRateLimitEnabled: overrides?.syncSharedRateLimitEnabled ?? false,
       egressPacerMode: "off" as const,
       lakeDir: "lake",
       syncPageExecutorConcurrency: overrides?.syncPageExecutorConcurrency ?? 1,
       syncObservabilityRetentionDays: 30,
       healthSyncLightMaxAgeMinutes: 180,
-      healthSyncFollowerMaxAgeMinutes: 1080,
       healthSyncMonitoringToken: overrides?.healthSyncMonitoringToken ?? null,
       telegramBotToken: null,
       telegramChatId: null,

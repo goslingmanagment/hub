@@ -148,17 +148,17 @@ describe("ConfigurationTab boolean live editor rendering", () => {
   it("still renders the numeric input for number live keys", () => {
     const html = renderTab([
       configItem({
-        key: "transactionLookbackDays",
-        envName: "TRANSACTION_LOOKBACK_DAYS",
-        configField: "transactionLookbackDays",
+        key: "healthSyncLightMaxAgeMinutes",
+        envName: "HEALTH_SYNC_LIGHT_MAX_AGE_MINUTES",
+        configField: "healthSyncLightMaxAgeMinutes",
         kind: "number",
-        label: "Transaction lookback (days)",
-        default: "7",
+        label: "Health: light sync max age (min)",
+        default: "180",
         running: [
           {
             role: "api",
             instanceId: "api-1",
-            value: 7,
+            value: 180,
             masked: false,
             state: null,
             lastSeenAt: "2026-07-11T00:00:00.000Z",

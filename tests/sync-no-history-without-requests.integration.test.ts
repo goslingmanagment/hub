@@ -135,7 +135,7 @@ describe("I12: no history walk without a request", () => {
       // The hour runs out: whatever came due in it is read.
       for (let tick = 0; tick < 4; tick += 1) {
         await anHourPasses();
-        const made = await makeTestActor({ db: db(), pageId, mode: "live", registry, transport, settingMs: 1, ownRef: OWN });
+        const made = await makeTestActor({ db: db(), pageId, registry, transport, settingMs: 1, ownRef: OWN });
         await runActorUntil(made, nothingDue, 60_000, `hour ${hour}: nothing left due`);
       }
     }

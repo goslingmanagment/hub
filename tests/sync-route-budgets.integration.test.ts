@@ -1,8 +1,18 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { getSyncPage, paceFloorFromDb, readFanslySendAudit, upsertDemand, type Database } from "@agency_hub_core/db";
+import {
+  getSyncPage,
+  paceFloorFromDb,
+  readFanslySendAudit,
+  setPageHold,
+  setResourceHold,
+  upsertDemand,
+  writeSyncRouteState,
+  type Database,
+} from "@agency_hub_core/db";
 import type { FanslyWireId } from "@agency_hub_core/fansly";
 
+import { holdSetOf } from "../apps/runtime/src/sync/engine/admission.ts";
 import { TAKEOVER_FACTOR } from "../apps/runtime/src/sync/engine/pacer.ts";
 import { createEngineRegistry, type EngineRegistry, type EngineResourceSpec, type ResourceModule } from "../apps/runtime/src/sync/engine/resource.ts";
 import { auditPagePace, auditRouteIntervals } from "../apps/runtime/src/sync/engine/send-audit.ts";
@@ -19,13 +29,14 @@ import {
   testSpec,
   waitFor,
 } from "./helpers/sync-engine-host.ts";
+import { pageHoldKindOf, replaceHoldRows, resourceBreakersOf, routeHoldRows } from "./helpers/sync-holds.ts";
 
 // The strict route admission through the real actor, commits and a real
 // database (step 3b rulings 1, 3, 4; plan PR 1-1), the route budgets scaled
 // down with the test pause: every route and family keeps its budget on the
-// journal it runs (live or shadow) while the page's other routes go on; a
-// restarted actor reads its clocks back from the journal; on a live page the
-// legacy engine's sends before the switch count; the planned request's own
+// journal while the page's other routes go on; a restarted actor reads its
+// clocks back from the journal; the legacy engine's sends before the switch
+// count; the planned request's own
 // route is checked last (a probe whose route is closed is put off, nothing
 // admitted); the short look-ahead holds a slot for the class whose turn it
 // is; a route state this build cannot read closes the page's admission and a
@@ -59,9 +70,6 @@ function busy(spec: FanslyWireId): ResourceModule {
     async apply(_tx, input) {
       return { work: { satisfiesRevision: false, nextDueAt: input.now }, followups: [] };
     },
-    async shadow(_work, _request, ctx) {
-      return { work: { satisfiesRevision: false, nextDueAt: ctx.now }, followups: [] };
-    },
   };
 }
 
@@ -73,9 +81,6 @@ function once(spec: FanslyWireId): ResourceModule {
     },
     async apply() {
       return { work: { satisfiesRevision: true, close: "done", closeReason: "read" }, followups: [] };
-    },
-    async shadow() {
-      return { work: { satisfiesRevision: true, close: "done" }, followups: [] };
     },
   };
 }
@@ -113,9 +118,9 @@ function busySpec(key: string, spec: FanslyWireId, overrides: Partial<EngineReso
   return testSpec(key, busy(spec), { kind: "goal", operations: [spec], ...overrides });
 }
 
-async function demand(pageId: number, reg: EngineRegistry, resource: string, shadow = false): Promise<void> {
+async function demand(pageId: number, reg: EngineRegistry, resource: string): Promise<void> {
   const spec = reg.spec(resource)!;
-  await upsertDemand(db(), { pageId, shadow, resource, subject: "", kind: spec.kind, class: spec.class, demand: { reasons: ["test"] } });
+  await upsertDemand(db(), { pageId, resource, subject: "", kind: spec.kind, class: spec.class, demand: { reasons: ["test"] } });
 }
 
 /** The test pause S (the harness default). */
@@ -133,13 +138,13 @@ interface Attempt {
   gap_prev_ms: number | null;
 }
 
-async function sends(pageId: number, shadow = false): Promise<Attempt[]> {
+async function sends(pageId: number): Promise<Attempt[]> {
   const result = await testDb!.pool.query<Attempt>(
     `select id::int as id, resource, operation, sent_at, class, owner_generation::text as generation,
             setting_ms, pause_ms, gap_prev_ms
        from sync_attempts
-      where page_id = $1 and shadow = $2 and sent_at is not null order by sent_at, id`,
-    [pageId, shadow],
+      where page_id = $1 and not shadow and sent_at is not null order by sent_at, id`,
+    [pageId],
   );
   return result.rows;
 }
@@ -185,19 +190,18 @@ function expectPagePace(all: readonly Attempt[]): number {
 async function runUntil(
   pageId: number,
   reg: EngineRegistry,
-  options: { mode?: "live" | "shadow"; scale: number; settingMs?: number; metrics?: RecordingMetrics; transport?: ScriptedLiveTransport },
+  options: { scale: number; settingMs?: number; metrics?: RecordingMetrics; transport?: ScriptedLiveTransport },
   done: () => Promise<boolean>,
   timeoutMs = 30_000,
 ): Promise<void> {
-  const mode = options.mode ?? "live";
   // Each run takes the page over as the host does (I5, `engine/host.ts`): its
   // first send waits the floor the database computes from every earlier one.
   const settingMs = options.settingMs ?? TEST_PAUSE_MS;
   const floorDelayMs = await paceFloorFromDb(db(), { pageId, settingMs });
   const { actor, stop, abort } = await makeTestActor({
-    db: db(), pageId, mode, registry: reg, routeTimeScale: options.scale, settingMs, floorDelayMs,
+    db: db(), pageId, registry: reg, routeTimeScale: options.scale, settingMs, floorDelayMs,
     ...(options.metrics === undefined ? {} : { metrics: options.metrics }),
-    ...(mode === "live" ? { transport: options.transport ?? routeTransport() } : {}),
+    transport: options.transport ?? routeTransport(),
   });
   const running = actor.run({ stop: stop.signal, abort: abort.signal });
   try {
@@ -212,10 +216,6 @@ async function seedLive(): Promise<number> {
   return (await seedSyncPage({ db: db(), pool: testDb!.pool }, { mode: "live", guard: "fansly_sync_engine" })).pageId;
 }
 
-async function seedShadow(): Promise<number> {
-  return (await seedSyncPage({ db: db(), pool: testDb!.pool }, { mode: "shadow" })).pageId;
-}
-
 describe("route budgets on the journal", () => {
   const SCALE = 0.05;
   // Four endless planned walks (round robin by key): `/message` and the list
@@ -227,55 +227,53 @@ describe("route budgets on the journal", () => {
     busySpec("media.read", "media.offer_stats", { class: "planned" }),
   ]);
 
-  for (const mode of ["live", "shadow"] as const) {
-    it(`a ${mode} page: every route and the messaging family keep their budgets, the other routes going on between; a restart reads the clocks back`, async (context) => {
-      if (!testDb) return context.skip();
-      const pageId = mode === "live" ? await seedLive() : await seedShadow();
-      const reg = registry();
-      for (const key of ["msg.read", "list.read", "polls.read", "media.read"]) await demand(pageId, reg, key, mode === "shadow");
-      const enough = (n: number) => async () => (await sends(pageId, mode === "shadow")).length >= n;
-      await runUntil(pageId, reg, { mode, scale: SCALE }, enough(20));
-      // The actor restarts — a new owner generation: its route clocks come
-      // from the journal, its first send waits the takeover floor.
-      await runUntil(pageId, reg, { mode, scale: SCALE }, enough(40));
+  it("every route and the messaging family keep their budgets, the other routes going on between; a restart reads the clocks back", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedLive();
+    const reg = registry();
+    for (const key of ["msg.read", "list.read", "polls.read", "media.read"]) await demand(pageId, reg, key);
+    const enough = (n: number) => async () => (await sends(pageId)).length >= n;
+    await runUntil(pageId, reg, { scale: SCALE }, enough(20));
+    // The actor restarts — a new owner generation: its route clocks come
+    // from the journal, its first send waits the takeover floor.
+    await runUntil(pageId, reg, { scale: SCALE }, enough(40));
 
-      const all = await sends(pageId, mode === "shadow");
-      const media = expectBudget(all, ["media.offer_stats"], scaled(routeBudget("media.offer_stats").currentPerMin, SCALE));
-      const list = expectBudget(all, ["messaging.groups"], scaled(routeBudget("messaging.groups").currentPerMin, SCALE));
-      const polls = expectBudget(all, ["polls"], scaled(routeBudget("polls").currentPerMin, SCALE));
-      const family = expectBudget(all, ["messages.page", "messaging.groups", "group.detail"], scaled(FAMILY_BUDGETS.messaging.currentPerMin, SCALE));
-      // Every walk had its turns (≈ 6 / 8 / 17 / 17 here): no route starves another.
-      expect(media).toBeGreaterThanOrEqual(3);
-      expect(list).toBeGreaterThanOrEqual(4);
-      expect(polls).toBeGreaterThanOrEqual(8);
-      expect(family - list).toBeGreaterThanOrEqual(4);
-      // Never two sends of the page closer than the pacer's S × (1 + u), nor
-      // the restart's first send closer than 1.2 × S to the last one before it.
-      expect(expectPagePace(all)).toBe(1);
+    const all = await sends(pageId);
+    const media = expectBudget(all, ["media.offer_stats"], scaled(routeBudget("media.offer_stats").currentPerMin, SCALE));
+    const list = expectBudget(all, ["messaging.groups"], scaled(routeBudget("messaging.groups").currentPerMin, SCALE));
+    const polls = expectBudget(all, ["polls"], scaled(routeBudget("polls").currentPerMin, SCALE));
+    const family = expectBudget(all, ["messages.page", "messaging.groups", "group.detail"], scaled(FAMILY_BUDGETS.messaging.currentPerMin, SCALE));
+    // Every walk had its turns (≈ 6 / 8 / 17 / 17 here): no route starves another.
+    expect(media).toBeGreaterThanOrEqual(3);
+    expect(list).toBeGreaterThanOrEqual(4);
+    expect(polls).toBeGreaterThanOrEqual(8);
+    expect(family - list).toBeGreaterThanOrEqual(4);
+    // Never two sends of the page closer than the pacer's S × (1 + u), nor
+    // the restart's first send closer than 1.2 × S to the last one before it.
+    expect(expectPagePace(all)).toBe(1);
 
-      // Each admission recorded the intervals its route check applied, and the
-      // send audit over the journal finds every pair within them (I1, I19).
-      const route = (wire: FanslyRoute) => scaled(routeBudget(wire).currentPerMin, SCALE);
-      const messaging = scaled(FAMILY_BUDGETS.messaging.currentPerMin, SCALE);
-      expect((await testDb.pool.query(
-        `select distinct operation, route_interval_ms as "route", family_interval_ms as "family"
-           from sync_attempts where page_id = $1 and shadow = $2 order by operation`,
-        [pageId, mode === "shadow"],
-      )).rows).toEqual([
-        { operation: "media.offer_stats", route: route("media.offer_stats"), family: null },
-        { operation: "messages.page", route: route("messages.page"), family: messaging },
-        { operation: "messaging.groups", route: route("messaging.groups"), family: messaging },
-        { operation: "polls", route: route("polls"), family: null },
-      ]);
-      const window = { start: all[0]!.sent_at, until: null };
-      const journal = await readFanslySendAudit(db(), { pageId, since: window.start, shadow: mode === "shadow" });
-      expect(auditPagePace(journal, window)).toMatchObject({ verdict: "pass", violations: [], inconclusive: [] });
-      // (The scaled test budgets sit below the ceiling's interval: that bound is production's.)
-      const intervals = auditRouteIntervals(journal, window);
-      expect(intervals).toMatchObject({ violations: [], inconclusive: [], unplaced: [] });
-      expect(intervals.pairs).toBeGreaterThan(30);
-    }, 90_000);
-  }
+    // Each admission recorded the intervals its route check applied, and the
+    // send audit over the journal finds every pair within them (I1, I19).
+    const route = (wire: FanslyRoute) => scaled(routeBudget(wire).currentPerMin, SCALE);
+    const messaging = scaled(FAMILY_BUDGETS.messaging.currentPerMin, SCALE);
+    expect((await testDb.pool.query(
+      `select distinct operation, route_interval_ms as "route", family_interval_ms as "family"
+         from sync_attempts where page_id = $1 and not shadow order by operation`,
+      [pageId],
+    )).rows).toEqual([
+      { operation: "media.offer_stats", route: route("media.offer_stats"), family: null },
+      { operation: "messages.page", route: route("messages.page"), family: messaging },
+      { operation: "messaging.groups", route: route("messaging.groups"), family: messaging },
+      { operation: "polls", route: route("polls"), family: null },
+    ]);
+    const window = { start: all[0]!.sent_at, until: null };
+    const journal = await readFanslySendAudit(db(), { pageId, since: window.start });
+    expect(auditPagePace(journal, window)).toMatchObject({ verdict: "pass", violations: [], inconclusive: [] });
+    // (The scaled test budgets sit below the ceiling's interval: that bound is production's.)
+    const intervals = auditRouteIntervals(journal, window);
+    expect(intervals).toMatchObject({ violations: [], inconclusive: [], unplaced: [] });
+    expect(intervals.pairs).toBeGreaterThan(30);
+  }, 90_000);
 });
 
 describe("the legacy engine's sends before the switch (takeover)", () => {
@@ -294,7 +292,7 @@ describe("the legacy engine's sends before the switch (takeover)", () => {
     return result.rows[0]!.sent_at;
   }
 
-  it("count on a live page through the operation map: the engine's first /message waits the family's interval after the legacy list read", async (context) => {
+  it("count through the operation map: the engine's first /message waits the family's interval after the legacy list read", async (context) => {
     if (!testDb) return context.skip();
     const pageId = await seedLive();
     const reg = createEngineRegistry([testSpec("msg.once", once("messages.page"), { operations: ["messages.page"] })]);
@@ -303,17 +301,6 @@ describe("the legacy engine's sends before the switch (takeover)", () => {
     await runUntil(pageId, reg, { scale: SCALE }, async () => (await sends(pageId)).length >= 1);
     const [first] = await sends(pageId);
     expect(first!.sent_at.getTime() - legacyAt.getTime()).toBeGreaterThanOrEqual(FAMILY_MS);
-  }, 60_000);
-
-  it("never on a shadow page: its clocks are its own journal's", async (context) => {
-    if (!testDb) return context.skip();
-    const pageId = await seedShadow();
-    const reg = createEngineRegistry([testSpec("msg.once", once("messages.page"), { operations: ["messages.page"] })]);
-    const legacyAt = await legacySend(pageId, "messages");
-    await demand(pageId, reg, "msg.once", true);
-    await runUntil(pageId, reg, { mode: "shadow", scale: SCALE }, async () => (await sends(pageId, true)).length >= 1);
-    const [first] = await sends(pageId, true);
-    expect(first!.sent_at.getTime() - legacyAt.getTime()).toBeLessThan(FAMILY_MS);
   }, 60_000);
 });
 
@@ -379,42 +366,39 @@ describe("the short look-ahead", () => {
   }, 90_000);
 });
 
-describe("the route state namespace", () => {
-  async function writeRouteState(pageId: number, value: unknown): Promise<void> {
-    await testDb!.pool.query(
-      "update sync_pages set resource_holds = jsonb_set(resource_holds, '{route:state}', $2::jsonb) where page_id = $1",
-      [pageId, JSON.stringify(value)],
-    );
-  }
-
-  it("is apart from the resource holds on the page row", async (context) => {
+describe("the route state in the page's hold set", () => {
+  it("is apart from the resource breakers and the page's own holds on the page row", async (context) => {
     if (!testDb) return context.skip();
     const pageId = await seedLive();
-    await testDb.pool.query(
-      `update sync_pages set resource_holds = '{"posts": {"until": "2099-01-01T00:00:00Z", "step": 1, "since": "2026-10-03T00:00:00Z"}}'::jsonb
-        where page_id = $1`, [pageId]);
-    await writeRouteState(pageId, { version: 1, routes: {} });
-    const page = await getSyncPage(db(), pageId);
-    expect(Object.keys(page!.resourceHolds)).toEqual(["posts"]);
-    expect(page!.routeState).toEqual({ version: 1, routes: {} });
+    await setResourceHold(db(), { pageId, file: "posts", hold: { until: new Date("2099-01-01T00:00:00Z"), step: 1 } });
+    await setPageHold(db(), { pageId, kind: "network", until: new Date(Date.now() + 60_000) });
+    await writeSyncRouteState(db(), {
+      pageId, route: "polls", expectRevision: 0,
+      entry: { holdUntil: null, ladderStep: 1, effectivePerMin: 7.5, policyVersion: null, last429AttemptId: null, last429At: null },
+    });
+    const page = (await getSyncPage(db(), pageId))!;
+    expect(Object.keys(resourceBreakersOf(page))).toEqual(["posts"]);
+    expect(pageHoldKindOf(page)).toBe("network");
+    expect(holdSetOf(page.holds).routes).toEqual({
+      ok: true,
+      state: { routes: { polls: { holdUntil: null, ladderStep: 1, effectivePerMin: 7.5, policyVersion: null, last429AttemptId: null, last429At: null, revision: 1 } } },
+    });
   }, 60_000);
 
-  it("a version this build cannot read admits nothing; a readable state's route hold closes that route only", async (context) => {
+  it("route rows this build cannot read admit nothing; a readable state's route hold closes that route only", async (context) => {
     if (!testDb) return context.skip();
     const pageId = await seedLive();
     const reg = createEngineRegistry([busySpec("msg.read", "messages.page"), busySpec("polls.read", "polls", { class: "planned" })]);
     await demand(pageId, reg, "msg.read");
     await demand(pageId, reg, "polls.read");
-    await writeRouteState(pageId, { version: 9, routes: {} });
+    // The state of one route is no rate: the whole page admits nothing.
+    await replaceHoldRows(testDb, pageId, "route", routeHoldRows("polls", { effectivePerMin: -1 }));
     const metrics = new RecordingMetrics();
     await runUntil(pageId, reg, { scale: 0, metrics }, async () => metrics.get("sync_route_state_unreadable") >= 2, 30_000);
     expect(await sends(pageId)).toEqual([]);
 
     const holdUntil = new Date(Date.now() + 1_500);
-    await writeRouteState(pageId, {
-      version: 1,
-      routes: { polls: { holdUntil: holdUntil.toISOString(), ladderStep: 1, effectivePerMin: null, policyVersion: null, last429AttemptId: null, last429At: null, revision: 1 } },
-    });
+    await replaceHoldRows(testDb, pageId, "route", routeHoldRows("polls", { holdUntil: holdUntil.toISOString(), ladderStep: 1 }));
     await runUntil(pageId, reg, { scale: 0 }, async () => (await sends(pageId)).some((attempt) => attempt.operation === "polls"));
     const all = await sends(pageId);
     const firstPolls = all.find((attempt) => attempt.operation === "polls")!;
@@ -425,7 +409,7 @@ describe("the route state namespace", () => {
 });
 
 describe("the owner's status and why", () => {
-  it("show each route's budget, its newest send and when it opens; a closed key waits on `pacer` naming its routes", async (context) => {
+  it("show each route's budget, its newest send and when it opens; a closed key waits on `route_budget` naming its routes", async (context) => {
     if (!testDb) return context.skip();
     const pageId = await seedLive();
     const reg = createEngineRegistry([testSpec("media-stats.walk", once("media.offer_stats"), { class: "planned", kind: "goal", operations: ["media.offer_stats"] })]);
@@ -442,7 +426,7 @@ describe("the owner's status and why", () => {
     expect(Date.parse(media.opensAt!) - Date.parse(media.lastSendAt!)).toBe(12_000);
     expect(status.routes!.stateError).toBeNull();
     const [why] = await explainSyncWork(db(), config, page, { resource: "media-stats.walk" });
-    expect(why!.waiting).toMatchObject({ reason: "pacer", detail: { routeBudget: true, routes: ["media.offer_stats"] } });
+    expect(why!.waiting).toMatchObject({ reason: "route_budget", detail: { routes: ["media.offer_stats"] } });
     expect(why!.waiting!.until!.toISOString()).toBe(media.opensAt);
   }, 60_000);
 });

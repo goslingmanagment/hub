@@ -95,7 +95,8 @@ export function toSyncPageStatusWire(status: PageStatus): AgentSyncPageStatus {
     quarantined: status.quarantined,
     requests: status.requests.map((request) => ({ ...request })),
     ws: status.ws === null ? null : { ...status.ws },
-    shadow: status.shadow === null ? null : { ...status.shadow },
+    // Wire-only since step 4 (S4-23): no page has a shadow journal.
+    shadow: null,
   };
 }
 
@@ -105,7 +106,8 @@ export function toSyncWorkWire(why: WorkWhy): AgentSyncWork {
     id: work.id,
     resource: work.resource,
     subject: work.subject,
-    shadow: work.shadow,
+    // Wire-only since step 4 (S4-23): a row shadow mode left is never served.
+    shadow: false,
     kind: work.kind,
     class: work.class,
     state: work.state,

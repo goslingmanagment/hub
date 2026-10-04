@@ -56,8 +56,8 @@ describe("validateLiveConfigPatches", () => {
       { key: "fanslyDefaultDelayMs", value: 2500 },
     ]))).toBe("A patch may not set the same key twice");
     // Editable but not wired live: the runtime would not apply it without a restart.
-    expect(rejection(() => validateLiveConfigPatches([{ key: "fanslyDmMessagesDelayMs", value: 7500 }])))
-      .toBe("Config key is not runtime-editable: fanslyDmMessagesDelayMs");
+    expect(rejection(() => validateLiveConfigPatches([{ key: "ofapiDmDailyCreditBudget", value: 750 }])))
+      .toBe("Config key is not runtime-editable: ofapiDmDailyCreditBudget");
     expect(rejection(() => validateLiveConfigPatches([{ key: "databaseUrl", value: "postgres://x" }])))
       .toBe("Config key is not runtime-editable: databaseUrl");
     expect(rejection(() => assertLiveEditableConfigKey("noSuchKey")))
@@ -97,7 +97,7 @@ describe("parseLiveConfigCliValue", () => {
     expect(parseLiveConfigCliValue("accountLinksEnabled", "true")).toBe(true);
     expect(parseLiveConfigCliValue("accountLinksEnabled", "false")).toBe(false);
     expect(parseLiveConfigCliValue("accountLinksEnabled", "yes")).toBe("yes");
-    expect(parseLiveConfigCliValue("fanslyDmHeadCatchupPageAllowlist", "lora-1")).toBe("lora-1");
+    expect(parseLiveConfigCliValue("fanslyLiveOverlayReadPages", "lora-1")).toBe("lora-1");
     expect(parseLiveConfigCliValue("noSuchKey", "1")).toBe("1");
   });
 

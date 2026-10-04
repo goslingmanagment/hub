@@ -21,10 +21,9 @@ import { seedFanslyLanePage } from "./helpers/fansly-lane-harness.ts";
 // The media-stats queue of the Fansly Sync Engine (design §4.3, §5.18), on a
 // real database: `listMediaStatsRefreshChunk` selects exactly what a frozen copy
 // of its statement selects (a fixture covering every band, NULL ages, failures
-// in and out of backoff and microsecond ties); the keyset steps through the
-// order exactly; the owner's tiers (30/90/monthly) differ from 30/180-day tiers
-// where they should; and the queue's census counts under the tiers its walk
-// reads.
+// in and out of backoff and microsecond ties); the owner's tiers
+// (30/90/monthly) differ from 30/180-day tiers where they should; and the
+// queue's census counts under the tiers its walk reads.
 
 let testDb: StartedTestDatabase | null = null;
 
@@ -163,10 +162,6 @@ async function seedQueueFixture(pageId: number) {
   for (const item of items) await seedItem(pageId, item);
 }
 
-function withoutKeyset<T extends { keyset: string }>(rows: readonly T[]): Array<Omit<T, "keyset">> {
-  return rows.map(({ keyset: _keyset, ...rest }) => rest);
-}
-
 describe("the media-stats chunk", () => {
   it("selects the same items, fields and order as its frozen statement", async (context) => {
     if (!testDb) return context.skip();
@@ -175,31 +170,9 @@ describe("the media-stats chunk", () => {
     for (const cycle of [30, 45]) {
       for (const limit of [1, 3, 50]) {
         const now = await listMediaStatsRefreshChunk(db(), { pageId, limit, now: NOW, tiers: weeklyTo180Tiers(cycle) });
-        expect(withoutKeyset(now)).toEqual(await frozenChunk(pageId, limit, cycle));
+        expect(now).toEqual(await frozenChunk(pageId, limit, cycle));
       }
     }
-  });
-
-  it("steps through the order one item at a time with the keyset, microsecond ties included, under either tiers", async (context) => {
-    if (!testDb) return context.skip();
-    const { pageId } = await seedPage();
-    await seedQueueFixture(pageId);
-    for (const tiers of [weeklyTo180Tiers(30), mediaStatsOwnerTiers({ registryOverrides: {} })]) {
-      const options = { pageId, now: NOW, tiers };
-      const all = await listMediaStatsRefreshChunk(db(), { ...options, limit: 100 });
-      expect(all.length).toBeGreaterThan(8);
-      const stepped: string[] = [];
-      let after: string | null = null;
-      for (;;) {
-        const [next] = await listMediaStatsRefreshChunk(db(), { ...options, limit: 1, after });
-        if (next === undefined) break;
-        stepped.push(next.subjectRef);
-        after = next.keyset;
-      }
-      expect(stepped).toEqual(all.map((row) => row.subjectRef));
-    }
-    await expect(listMediaStatsRefreshChunk(db(), { pageId, limit: 1, now: NOW, tiers: weeklyTo180Tiers(30), after: "[1,2]" }))
-      .rejects.toThrow(RangeError);
   });
 
   it("the owner's tiers class an item by 30/90 days and make the older ones monthly", async (context) => {

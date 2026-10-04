@@ -76,7 +76,7 @@ describe("the engine's owner commands through `pnpm cli`", () => {
     mocks.findSyncPageByLabel.mockResolvedValue(PAGE_ROW);
     mocks.readSyncPageStatuses.mockResolvedValue([{ page: "lora-1" }]);
     mocks.explainSyncWork.mockResolvedValue({ why: "test" });
-    mocks.changeSyncPageModeByOwner.mockResolvedValue({ kind: "changed", from: "off", to: "shadow" });
+    mocks.changeSyncPageModeByOwner.mockResolvedValue({ kind: "changed", from: "shadow", to: "off" });
     mocks.changeSyncPagePause.mockResolvedValue({
       pageLabel: "lora-1",
       pausedAll: false,
@@ -85,7 +85,7 @@ describe("the engine's owner commands through `pnpm cli`", () => {
       pauseNote: null,
     });
     mocks.confirmStoppedSyncOwners.mockResolvedValue([]);
-    mocks.requestSyncProbe.mockResolvedValue({ workId: 9, shadow: true });
+    mocks.requestSyncProbe.mockResolvedValue({ workId: 9 });
     vi.spyOn(console, "log").mockImplementation(() => {});
   });
 
@@ -94,11 +94,11 @@ describe("the engine's owner commands through `pnpm cli`", () => {
   });
 
   it("sync page mode takes its --page", async () => {
-    await run(["sync", "page", "mode", "--page", "lora-1", "--to", "shadow", "--note", "acceptance"]);
+    await run(["sync", "page", "mode", "--page", "lora-1", "--to", "off", "--note", "retired"]);
     expect(mocks.changeSyncPageModeByOwner).toHaveBeenCalledWith({}, {
       pageLabel: "lora-1",
-      to: "shadow",
-      changedBy: expect.stringMatching(/: acceptance$/),
+      to: "off",
+      changedBy: expect.stringMatching(/: retired$/),
     });
     expect(mocks.close).toHaveBeenCalledTimes(1);
   });
@@ -201,7 +201,7 @@ describe("the engine's owner commands through `pnpm cli`", () => {
   });
 
   it("a missing --page is still refused", async () => {
-    await expect(run(["sync", "page", "mode", "--to", "shadow"])).rejects.toThrow("required option '--page <label>' not specified");
+    await expect(run(["sync", "page", "mode", "--to", "off"])).rejects.toThrow("required option '--page <label>' not specified");
     expect(mocks.changeSyncPageModeByOwner).not.toHaveBeenCalled();
   });
 

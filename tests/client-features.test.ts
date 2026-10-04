@@ -262,7 +262,7 @@ describe("chat-extension switches from the effective config", () => {
       // Written past the write check (a hand-made SQL fix, a stricter parser later).
       ["chatExtensionMinVersion", { value: "1.4" }],
       // Another subsystem's broken row is not the switches' concern.
-      ["transactionLookbackDays", { value: "fourteen" }],
+      ["sessionTtlDays", { value: "thirty" }],
     ]);
     const stored = storedClientSwitchProblems(overrides);
     expect(stored).toEqual([{ key: "chatExtensionMinVersion", error: expect.stringMatching(/^the stored override is refused: chatExtensionMinVersion: the value must read MAJOR\.MINOR\.PATCH/) }]);

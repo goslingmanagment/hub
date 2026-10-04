@@ -435,7 +435,7 @@ describe("cursors, preview and journal", () => {
     expect(parseDmListHeadCursor({ walk: { offset: 200, pageCount: 2, startedAt: NOW.toISOString() } }).walk)
       .toEqual({ offset: 200, pageCount: 2, startedAt: NOW.toISOString() });
     expect(parseDmListHeadCursor({ walk: { offset: -1, startedAt: "x" } }).walk).toBeNull();
-    expect(parseDmListFullCursor({})).toEqual({ generation: 0, walk: null, restartCount: 0, last: null, shadow: null });
+    expect(parseDmListFullCursor({})).toEqual({ generation: 0, walk: null, restartCount: 0, last: null });
     const full = parseDmListFullCursor({
       generation: 7,
       restartCount: 1,
@@ -446,8 +446,9 @@ describe("cursors, preview and journal", () => {
       generation: 7,
       restartCount: 1,
       walk: { generation: 8, offset: 100, pageCount: 1, observedCount: 100, repeatsCountedOnce: 0, repeatOnlyPageStreak: 0 },
-      shadow: { steps: 3, done: 1 },
     });
+    // What a shadow sweep left in a cursor (step 4 S4-23 removed it) is not read.
+    expect(full).not.toHaveProperty("shadow");
   });
 
   it("the list preview is the legacy one", () => {

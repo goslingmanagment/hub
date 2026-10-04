@@ -1078,7 +1078,6 @@
                                     "url",
                                     "secret",
                                     "derived",
-                                    "alias",
                                     "complex"
                                   ]
                                 },
@@ -33942,7 +33941,8 @@
                               "balances",
                               "profile_notifications",
                               "content_history",
-                              "media_previews"
+                              "media_previews",
+                              "account_settings"
                             ]
                           },
                           "label": {
@@ -34074,7 +34074,8 @@
                               "balances",
                               "profile_notifications",
                               "content_history",
-                              "media_previews"
+                              "media_previews",
+                              "account_settings"
                             ]
                           },
                           "mode": {
@@ -34217,7 +34218,8 @@
                               "balances",
                               "profile_notifications",
                               "content_history",
-                              "media_previews"
+                              "media_previews",
+                              "account_settings"
                             ]
                           },
                           "state": {
@@ -34514,7 +34516,8 @@
                             "balances",
                             "profile_notifications",
                             "content_history",
-                            "media_previews"
+                            "media_previews",
+                            "account_settings"
                           ]
                         },
                         "mode": {
@@ -34777,7 +34780,8 @@
                       "balances",
                       "profile_notifications",
                       "content_history",
-                      "media_previews"
+                      "media_previews",
+                      "account_settings"
                     ]
                   },
                   "expectedRevision": {
@@ -35531,7 +35535,8 @@
                             "balances",
                             "profile_notifications",
                             "content_history",
-                            "media_previews"
+                            "media_previews",
+                            "account_settings"
                           ]
                         },
                         "mode": {
@@ -35634,7 +35639,8 @@
                               "balances",
                               "profile_notifications",
                               "content_history",
-                              "media_previews"
+                              "media_previews",
+                              "account_settings"
                             ]
                           },
                           "mode": {
@@ -72251,6 +72257,8 @@
                                   "pacer",
                                   "class_share",
                                   "page_hold",
+                                  "route_budget",
+                                  "route_hold",
                                   "resource_hold",
                                   "subject_breaker",
                                   "blocked_by_vendor",
@@ -73908,6 +73916,8 @@
                                 "pacer",
                                 "class_share",
                                 "page_hold",
+                                "route_budget",
+                                "route_hold",
                                 "resource_hold",
                                 "subject_breaker",
                                 "blocked_by_vendor",
@@ -74063,6 +74073,8 @@
                                   "pacer",
                                   "class_share",
                                   "page_hold",
+                                  "route_budget",
+                                  "route_hold",
                                   "resource_hold",
                                   "subject_breaker",
                                   "blocked_by_vendor",
@@ -75856,6 +75868,8 @@
                                 "pacer",
                                 "class_share",
                                 "page_hold",
+                                "route_budget",
+                                "route_hold",
                                 "resource_hold",
                                 "subject_breaker",
                                 "blocked_by_vendor",
@@ -88742,6 +88756,8 @@
                                 "pacer",
                                 "class_share",
                                 "page_hold",
+                                "route_budget",
+                                "route_hold",
                                 "resource_hold",
                                 "subject_breaker",
                                 "blocked_by_vendor",
@@ -88897,6 +88913,8 @@
                                   "pacer",
                                   "class_share",
                                   "page_hold",
+                                  "route_budget",
+                                  "route_hold",
                                   "resource_hold",
                                   "subject_breaker",
                                   "blocked_by_vendor",
@@ -90495,6 +90513,8 @@
                                   "pacer",
                                   "class_share",
                                   "page_hold",
+                                  "route_budget",
+                                  "route_hold",
                                   "resource_hold",
                                   "subject_breaker",
                                   "blocked_by_vendor",
@@ -106346,6 +106366,8 @@
                                         "pacer",
                                         "class_share",
                                         "page_hold",
+                                        "route_budget",
+                                        "route_hold",
                                         "resource_hold",
                                         "subject_breaker",
                                         "blocked_by_vendor",
@@ -106386,6 +106408,8 @@
                                         "pacer",
                                         "class_share",
                                         "page_hold",
+                                        "route_budget",
+                                        "route_hold",
                                         "resource_hold",
                                         "subject_breaker",
                                         "blocked_by_vendor",
@@ -106426,6 +106450,8 @@
                                         "pacer",
                                         "class_share",
                                         "page_hold",
+                                        "route_budget",
+                                        "route_hold",
                                         "resource_hold",
                                         "subject_breaker",
                                         "blocked_by_vendor",
@@ -106468,7 +106494,6 @@
                                       "kind": {
                                         "type": "string",
                                         "enum": [
-                                          "rate_limit",
                                           "auth",
                                           "identity_mismatch",
                                           "network"
@@ -138001,6 +138026,8 @@
                                               "pacer",
                                               "class_share",
                                               "page_hold",
+                                              "route_budget",
+                                              "route_hold",
                                               "resource_hold",
                                               "subject_breaker",
                                               "blocked_by_vendor",
@@ -147360,6 +147387,8 @@
                                   "pacer",
                                   "class_share",
                                   "page_hold",
+                                  "route_budget",
+                                  "route_hold",
                                   "resource_hold",
                                   "subject_breaker",
                                   "blocked_by_vendor",
@@ -147955,6 +147984,8 @@
                                 "pacer",
                                 "class_share",
                                 "page_hold",
+                                "route_budget",
+                                "route_hold",
                                 "resource_hold",
                                 "subject_breaker",
                                 "blocked_by_vendor",
@@ -148110,6 +148141,8 @@
                                   "pacer",
                                   "class_share",
                                   "page_hold",
+                                  "route_budget",
+                                  "route_hold",
                                   "resource_hold",
                                   "subject_breaker",
                                   "blocked_by_vendor",
@@ -148820,6 +148853,8 @@
                                 "pacer",
                                 "class_share",
                                 "page_hold",
+                                "route_budget",
+                                "route_hold",
                                 "resource_hold",
                                 "subject_breaker",
                                 "blocked_by_vendor",
@@ -152413,6 +152448,8 @@
                                         "pacer",
                                         "class_share",
                                         "page_hold",
+                                        "route_budget",
+                                        "route_hold",
                                         "resource_hold",
                                         "subject_breaker",
                                         "blocked_by_vendor",
@@ -152453,6 +152490,8 @@
                                         "pacer",
                                         "class_share",
                                         "page_hold",
+                                        "route_budget",
+                                        "route_hold",
                                         "resource_hold",
                                         "subject_breaker",
                                         "blocked_by_vendor",
@@ -152493,6 +152532,8 @@
                                         "pacer",
                                         "class_share",
                                         "page_hold",
+                                        "route_budget",
+                                        "route_hold",
                                         "resource_hold",
                                         "subject_breaker",
                                         "blocked_by_vendor",
@@ -152535,7 +152576,6 @@
                                       "kind": {
                                         "type": "string",
                                         "enum": [
-                                          "rate_limit",
                                           "auth",
                                           "identity_mismatch",
                                           "network"
@@ -153386,6 +153426,8 @@
                                 "pacer",
                                 "class_share",
                                 "page_hold",
+                                "route_budget",
+                                "route_hold",
                                 "resource_hold",
                                 "subject_breaker",
                                 "blocked_by_vendor",
@@ -153541,6 +153583,8 @@
                                   "pacer",
                                   "class_share",
                                   "page_hold",
+                                  "route_budget",
+                                  "route_hold",
                                   "resource_hold",
                                   "subject_breaker",
                                   "blocked_by_vendor",
@@ -154365,6 +154409,8 @@
                                   "pacer",
                                   "class_share",
                                   "page_hold",
+                                  "route_budget",
+                                  "route_hold",
                                   "resource_hold",
                                   "subject_breaker",
                                   "blocked_by_vendor",
@@ -154783,6 +154829,8 @@
                                 "pacer",
                                 "class_share",
                                 "page_hold",
+                                "route_budget",
+                                "route_hold",
                                 "resource_hold",
                                 "subject_breaker",
                                 "blocked_by_vendor",

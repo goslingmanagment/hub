@@ -14,6 +14,7 @@ import {
 } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { seedSyncPage, setModeDirect } from "./helpers/sync-engine-host.ts";
+import { clearPageHolds, seedPageHold } from "./helpers/sync-holds.ts";
 
 /**
  * `/health/sync` for Fansly pages (design step 3 §3.2 item 1, E14; step 4
@@ -124,11 +125,7 @@ describe("/health/sync on engine pages", () => {
     await beat(pages.stale, 120);
     await setModeDirect(testDb!.pool, pages.auth, "live");
     await beat(pages.auth, 1);
-    await testDb!.pool.query(
-      `update sync_pages set hold_kind = 'auth', hold_until = 'infinity', hold_since = clock_timestamp(),
-              hold_detail = '{"status":401,"credentialsGeneration":null}'::jsonb where page_id = $1`,
-      [pages.auth],
-    );
+    await seedPageHold(testDb!, { pageId: pages.auth, kind: "auth", untilSeconds: "infinity", detail: { status: 401, credentialsGeneration: null } });
     await setModeDirect(testDb!.pool, pages.stuck, "handover");
     await beat(pages.stuck, 2);
     await modeChangedMinutesAgo(pages.stuck, 11);
@@ -187,20 +184,21 @@ describe("/health/sync on engine pages", () => {
     await setModeDirect(testDb!.pool, pages.live, "live");
     await beat(pages.live, 1);
     await upsertDemand(db(), {
-      pageId: pages.live, shadow: false, resource: "dm-messages.head", subject: "g-1", kind: "trigger", class: "urgent",
+      pageId: pages.live, resource: "dm-messages.head", subject: "g-1", kind: "trigger", class: "urgent",
       dueAt: new Date(Date.now() - 45_000),
     });
     // Due in the future: not counted.
     await upsertDemand(db(), {
-      pageId: pages.live, shadow: false, resource: "dm-messages.head", subject: "g-2", kind: "trigger", class: "urgent",
+      pageId: pages.live, resource: "dm-messages.head", subject: "g-2", kind: "trigger", class: "urgent",
       dueAt: new Date(Date.now() + 600_000),
     });
-    // A shadow row is not the live journal's.
-    await upsertDemand(db(), {
-      pageId: pages.live, shadow: true, resource: "dm-messages.head", subject: "g-3", kind: "trigger", class: "urgent",
-      dueAt: new Date(Date.now() - 600_000),
-    });
-    await upsertDemand(db(), { pageId: pages.live, shadow: false, resource: "transactions.rescan", kind: "poll", class: "planned" });
+    // A row shadow mode left behind is not the page's work.
+    await testDb!.pool.query(
+      `insert into sync_work (page_id, shadow, resource, subject, kind, class, due_at)
+       values ($1, true, 'dm-messages.head', 'g-3', 'trigger', 'urgent', clock_timestamp() - interval '10 minutes')`,
+      [pages.live],
+    );
+    await upsertDemand(db(), { pageId: pages.live, resource: "transactions.rescan", kind: "poll", class: "planned" });
     await testDb!.pool.query(
       "update sync_work set state = 'quarantined', waiting_reason = 'quarantined' where page_id = $1 and resource = 'transactions.rescan'",
       [pages.live],
@@ -238,34 +236,23 @@ describe("/health/sync on engine pages", () => {
     expect(down.wsDownSeconds).toBeGreaterThanOrEqual(110);
   });
 
-  it("an identity hold degrades the page; an expired rate-limit hold does not", async () => {
+  it("an identity hold degrades the page; a network hold that has ended does not", async () => {
     await setModeDirect(testDb!.pool, pages.live, "live");
     await beat(pages.live, 1);
-    await testDb!.pool.query(
-      `update sync_pages set hold_kind = 'identity_mismatch', hold_until = 'infinity', hold_since = clock_timestamp(),
-              hold_detail = '{}'::jsonb where page_id = $1`,
-      [pages.live],
-    );
+    await seedPageHold(testDb!, { pageId: pages.live, kind: "identity_mismatch", untilSeconds: "infinity" });
     expect((await health([pages.live])).byId.get(pages.live)).toMatchObject({
       status: "degraded",
       issues: ["engine:identity_mismatch_hold"],
     });
-    await testDb!.pool.query(
-      `update sync_pages set hold_kind = 'rate_limit', hold_until = clock_timestamp() - interval '1 second'
-        where page_id = $1`,
-      [pages.live],
-    );
+    await clearPageHolds(testDb!, pages.live);
+    await seedPageHold(testDb!, { pageId: pages.live, kind: "network", untilSeconds: -1 });
     expect((await health([pages.live])).byId.get(pages.live)).toMatchObject({ status: "ok", engine: { hold: null } });
   });
 
   it("the status snapshot behind it reads every block of an engine page as the engine's", async () => {
     await setModeDirect(testDb!.pool, pages.auth, "live");
     await beat(pages.auth, 1);
-    await testDb!.pool.query(
-      `update sync_pages set hold_kind = 'auth', hold_until = 'infinity', hold_since = clock_timestamp(),
-              hold_detail = '{}'::jsonb where page_id = $1`,
-      [pages.auth],
-    );
+    await seedPageHold(testDb!, { pageId: pages.auth, kind: "auth", untilSeconds: "infinity" });
     const snapshot = await getSyncStatusSnapshot(app, { pageIds: [pages.auth, pages.unowned, pages.onlyfans] });
     const engine = snapshot.pages.find((page) => page.pageId === pages.auth)!;
     for (const block of Object.values(engine.blocks)) {

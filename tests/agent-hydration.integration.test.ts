@@ -503,11 +503,11 @@ describe("[sync-critical] agent hydration requests", () => {
     expect(expired.request?.state).toBe("expired");
   });
 
-  it("the retired auto-approve keys decide nothing, whatever they are set to", async () => {
+  it("approves nothing on its own: a dispatch cycle leaves a filed request for the owner's decision", async () => {
+    // The auto-approve policy went at step 4 (S4-15) and its keys with the
+    // legacy Fansly config keys (S4-26): no setting decides a request.
     const { request } = await fileRequest();
     await setFlag("agentHydrationMode", "dispatch");
-    await setFlag("agentHydrationAutoApproveMode", "enforce");
-    await setFlag("agentHydrationAutoDailyCallBudget", 2000);
 
     const cycle = await runAgentHydrationCycle(appContext);
     expect(cycle).toEqual({

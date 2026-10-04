@@ -57,7 +57,6 @@ function requestModule(apply: ResourceModule["apply"]): ResourceModule {
   return {
     plan: async () => ({ kind: "request", request: pollsRequest }),
     apply,
-    shadow: async () => done,
   };
 }
 
@@ -91,15 +90,15 @@ describe("a poisoned apply", () => {
       })),
     ]);
     for (const resource of ["poison.dup", "poison.boom", "poison.deadlock"]) {
-      await upsertDemand(db(), { pageId, shadow: false, resource, kind: "trigger", class: "urgent" });
+      await upsertDemand(db(), { pageId, resource, kind: "trigger", class: "urgent" });
     }
     for (const subject of ["a", "b", "c"]) {
-      await upsertDemand(db(), { pageId, shadow: false, resource: "fine.read", subject, kind: "trigger", class: "urgent" });
+      await upsertDemand(db(), { pageId, resource: "fine.read", subject, kind: "trigger", class: "urgent" });
     }
 
     const transport = new ScriptedLiveTransport();
     const alerts = new RecordingAlerts();
-    const { actor, stop, abort } = await makeTestActor({ db: db(), pageId, mode: "live", registry, transport, alerts });
+    const { actor, stop, abort } = await makeTestActor({ db: db(), pageId, registry, transport, alerts });
     const run = actor.run({ stop: stop.signal, abort: abort.signal });
     try {
       await waitFor(async () => {
@@ -138,9 +137,8 @@ describe("a poisoned apply", () => {
     expect(order.sort()).toEqual(["a", "b", "c"]);
     // Alert 2 for each quarantine (two), nothing for the transient error.
     expect(alerts.opened.filter((alert) => alert.subKey === "live_degraded" && alert.detail === "quarantined")).toHaveLength(2);
-    expect(alerts.opened.every((alert) => alert.shadow === false)).toBe(true);
     // The quarantined work still takes demand (it merges into the row) but no admission.
-    await upsertDemand(db(), { pageId, shadow: false, resource: "poison.dup", kind: "trigger", class: "urgent" });
+    await upsertDemand(db(), { pageId, resource: "poison.dup", kind: "trigger", class: "urgent" });
     const dup = await testDb.pool.query<{ state: string; demand_revision: string }>(
       "select state, demand_revision::text from sync_work where resource = 'poison.dup'",
     );
@@ -162,11 +160,11 @@ describe("a poisoned apply", () => {
         return done;
       })),
     ]);
-    await upsertDemand(db(), { pageId, shadow: false, resource: "account.verify", kind: "trigger", class: "urgent" });
+    await upsertDemand(db(), { pageId, resource: "account.verify", kind: "trigger", class: "urgent" });
 
     const transport = new ScriptedLiveTransport();
     const alerts = new RecordingAlerts();
-    const { actor, stop, abort } = await makeTestActor({ db: db(), pageId, mode: "live", registry, transport, alerts });
+    const { actor, stop, abort } = await makeTestActor({ db: db(), pageId, registry, transport, alerts });
     const run = actor.run({ stop: stop.signal, abort: abort.signal });
     try {
       await waitFor(async () => {
@@ -174,7 +172,7 @@ describe("a poisoned apply", () => {
         return rows.rowCount === 1 ? true : null;
       }, 30_000, "the identity hold");
       // Demand that arrives under the hold is never admitted.
-      await upsertDemand(db(), { pageId, shadow: false, resource: "fine.read", subject: "a", kind: "trigger", class: "urgent" });
+      await upsertDemand(db(), { pageId, resource: "fine.read", subject: "a", kind: "trigger", class: "urgent" });
       await sleep(1_500);
     } finally {
       stop.abort();
@@ -229,11 +227,11 @@ describe("a poisoned apply", () => {
         return done;
       })),
     ]);
-    await upsertDemand(db(), { pageId, shadow: false, resource: "transactions.head", kind: "trigger", class: "urgent" });
+    await upsertDemand(db(), { pageId, resource: "transactions.head", kind: "trigger", class: "urgent" });
 
     const transport = new ScriptedLiveTransport();
     const alerts = new RecordingAlerts();
-    const { actor, stop, abort } = await makeTestActor({ db: db(), pageId, mode: "live", registry, transport, alerts });
+    const { actor, stop, abort } = await makeTestActor({ db: db(), pageId, registry, transport, alerts });
     const run = actor.run({ stop: stop.signal, abort: abort.signal });
     const heldAt = Date.now();
     try {
@@ -241,8 +239,8 @@ describe("a poisoned apply", () => {
         const rows = await testDb!.pool.query("select 1 from sync_pages where page_id = $1 and resource_holds ? 'transactions'", [pageId]);
         return rows.rowCount === 1 ? true : null;
       }, 30_000, "the resource hold");
-      await upsertDemand(db(), { pageId, shadow: false, resource: "transactions.rescan", kind: "trigger", class: "urgent" });
-      await upsertDemand(db(), { pageId, shadow: false, resource: "fine.read", subject: "a", kind: "trigger", class: "urgent" });
+      await upsertDemand(db(), { pageId, resource: "transactions.rescan", kind: "trigger", class: "urgent" });
+      await upsertDemand(db(), { pageId, resource: "fine.read", subject: "a", kind: "trigger", class: "urgent" });
       await waitFor(async () => (served.includes("fine.read:a") ? true : null), 30_000, "the other file's work");
       await sleep(500);
     } finally {

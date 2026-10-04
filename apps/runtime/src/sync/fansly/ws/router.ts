@@ -6,7 +6,7 @@ import type { WsItem } from "./decode.ts";
 // for registry resources. Pure: the facts it needs (the page's threads, the
 // ledger's pending transactions, whether an own message is part of a mass
 // broadcast) come in through `RouteContext`, loaded by the caller — the
-// post-ack hook of a live page (I18) or the shadow feed of a shadow page.
+// post-ack hook of a page the engine owns (I18).
 // One table decides every route; the coalescing windows, classes and
 // deadlines of each target come from its registry entry when the demand is
 // written (`demandToUpsert`).
@@ -281,48 +281,4 @@ export function mergeDemandSignals(signals: readonly DemandSignal[]): DemandSign
 /** Whether an own message carries the measured broadcast marker ([A6]). */
 export function isOwnBroadcastMarked(item: Extract<WsItem, { kind: "message_created" }>): boolean {
   return item.isOwn && item.message.type === OWN_BROADCAST_MESSAGE_TYPE;
-}
-
-/**
- * The rate fallback of a shadow page, over the receipts the shadow feed
- * routes (design §6.2 "in shadow the same count over receipts of the
- * window"): the distinct chats of own messages by receipt time. A live page
- * counts the overlay instead (`countRecentOwnLiveChats`).
- */
-export class OwnBroadcastWindow {
-  readonly #windowMs: number;
-  readonly #threshold: number;
-  /** groupId → latest receipt time of an own message in it. */
-  #lastSeen = new Map<string, number>();
-  #prunedAtMs = Number.NEGATIVE_INFINITY;
-
-  constructor(options: { windowMs?: number; threshold?: number } = {}) {
-    this.#windowMs = options.windowMs ?? OWN_BROADCAST_FALLBACK_WINDOW_MS;
-    this.#threshold = options.threshold ?? OWN_BROADCAST_FALLBACK_CHATS;
-  }
-
-  /** Record an own message received at `atMs` in `groupId`. */
-  record(groupId: string, atMs: number): void {
-    const seen = this.#lastSeen.get(groupId);
-    if (seen === undefined || atMs > seen) this.#lastSeen.set(groupId, atMs);
-    // Forget chats that left the window, at most four times a window.
-    if (atMs - this.#prunedAtMs >= this.#windowMs / 4) {
-      this.#lastSeen = new Map([...this.#lastSeen].filter(([, at]) => at > atMs - this.#windowMs));
-      this.#prunedAtMs = atMs;
-    }
-  }
-
-  /** Distinct chats with an own message in (atMs − window, atMs]. */
-  chatsAt(atMs: number): number {
-    let count = 0;
-    for (const seen of this.#lastSeen.values()) {
-      if (seen > atMs - this.#windowMs && seen <= atMs) count += 1;
-    }
-    return count;
-  }
-
-  /** More than the threshold of distinct chats within the window. */
-  activeAt(atMs: number): boolean {
-    return this.chatsAt(atMs) > this.#threshold;
-  }
 }

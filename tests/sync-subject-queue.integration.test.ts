@@ -23,14 +23,10 @@ import {
 // The per-subject queue of the Fansly Sync Engine's subject-queue walks
 // (design §4.3, D2), against a real database:
 //
-//  - LEGACY-CALL PARITY: the optional `after` input of
-//    `listPostRepliesWalkChunk` / `listPostEngagementRefreshChunk` leaves a
-//    call without it selecting exactly what the statement selected before the
-//    input existed (pinned against a frozen copy of that statement on a
+//  - THE WALK ORDER: `listPostRepliesWalkChunk` /
+//    `listPostEngagementRefreshChunk` select exactly what their statements
+//    selected in the legacy lanes (pinned against a frozen copy of each on a
 //    fixture covering every band, NULLs and microsecond timestamps).
-//  - THE KEYSET: stepping one subject at a time through `after` reproduces the
-//    one-call order exactly, ties at the microsecond included — the shadow
-//    walk's pass never takes a subject twice and never skips one.
 //  - THE QUEUE BREAKER: failures climb the engine's ladder on the queue row,
 //    the fifth blocks the subject (daily probe), an answer lifts the block.
 
@@ -150,7 +146,7 @@ async function seedQueue(pageId: number) {
   await set("900000000000000011", "consecutive_failures = 1, next_due_at = $3::timestamptz", [new Date(NOW.getTime() - 60_000)]);
 }
 
-/** The replies statement exactly as it stood before `after` existed. */
+/** The replies statement exactly as the legacy lane ran it. */
 async function legacyRepliesChunk(pageId: number, limit: number, rewalkBefore: Date) {
   const band = sql`case when s.last_visited_at is null then 0 when s.dirty_reason is not null then 1 else 2 end`;
   const result = await db().execute<Record<string, unknown>>(sql`
@@ -176,7 +172,7 @@ async function legacyRepliesChunk(pageId: number, limit: number, rewalkBefore: D
   }));
 }
 
-/** The engagement statement exactly as it stood before `after` existed. */
+/** The engagement statement exactly as the legacy lane ran it. */
 async function legacyEngagementChunk(pageId: number, limit: number) {
   const tier = sql`case when p.published_at is null then 'fresh'
     when p.published_at >= ${new Date(NOW.getTime() - 30 * DAY_MS)} then 'fresh'
@@ -212,12 +208,8 @@ async function legacyEngagementChunk(pageId: number, limit: number) {
   }));
 }
 
-function withoutKeyset<T extends { keyset: string }>(rows: readonly T[]): Array<Omit<T, "keyset">> {
-  return rows.map(({ keyset: _keyset, ...rest }) => rest);
-}
-
-describe("the legacy calls of the queue chunk functions are unchanged", () => {
-  it("post_replies: the same subjects, fields and order as the pre-keyset statement", async (context) => {
+describe("the queue chunk functions keep the legacy lanes' order", () => {
+  it("post_replies: the same subjects, fields and order as the frozen statement", async (context) => {
     if (!testDb) return context.skip();
     const pageId = await seedPage("parity-replies");
     await seedQueue(pageId);
@@ -226,7 +218,7 @@ describe("the legacy calls of the queue chunk functions are unchanged", () => {
     const rewalkBefore = daysAgo(30);
     for (const limit of [1, 3, 50]) {
       const now = await listPostRepliesWalkChunk(db(), { pageId, limit, rewalkBefore, now: NOW });
-      expect(withoutKeyset(now)).toEqual(await legacyRepliesChunk(pageId, limit, rewalkBefore));
+      expect(now).toEqual(await legacyRepliesChunk(pageId, limit, rewalkBefore));
     }
     const all = await listPostRepliesWalkChunk(db(), { pageId, limit: 50, rewalkBefore, now: NOW });
     expect(all.map((row) => row.subjectRef)).toEqual([
@@ -241,57 +233,14 @@ describe("the legacy calls of the queue chunk functions are unchanged", () => {
     ]);
   });
 
-  it("post_engagement: the same subjects, fields and order as the pre-keyset statement", async (context) => {
+  it("post_engagement: the same subjects, fields and order as the frozen statement", async (context) => {
     if (!testDb) return context.skip();
     const pageId = await seedPage("parity-engagement");
     await seedQueue(pageId);
     for (const limit of [1, 4, 100]) {
       const now = await listPostEngagementRefreshChunk(db(), { pageId, limit, now: NOW });
-      expect(withoutKeyset(now)).toEqual(await legacyEngagementChunk(pageId, limit));
+      expect(now).toEqual(await legacyEngagementChunk(pageId, limit));
     }
-  });
-});
-
-describe("the keyset steps through a walk's order exactly", () => {
-  it("one subject at a time reproduces the one-call order, microsecond ties included", async (context) => {
-    if (!testDb) return context.skip();
-    const pageId = await seedPage("keyset");
-    await seedQueue(pageId);
-    const rewalkBefore = daysAgo(30);
-
-    const replies = await listPostRepliesWalkChunk(db(), { pageId, limit: 100, rewalkBefore, now: NOW });
-    const steppedReplies: string[] = [];
-    let after: string | null = null;
-    for (;;) {
-      const [next] = await listPostRepliesWalkChunk(db(), { pageId, limit: 1, rewalkBefore, now: NOW, after });
-      if (next === undefined) break;
-      steppedReplies.push(next.subjectRef);
-      after = next.keyset;
-    }
-    expect(steppedReplies).toEqual(replies.map((row) => row.subjectRef));
-
-    const engagement = await listPostEngagementRefreshChunk(db(), { pageId, limit: 100, now: NOW });
-    expect(engagement.length).toBeGreaterThan(3);
-    const steppedEngagement: string[] = [];
-    let cursor: string | null = null;
-    for (;;) {
-      const batch = await listPostEngagementRefreshChunk(db(), { pageId, limit: 2, now: NOW, after: cursor });
-      if (batch.length === 0) break;
-      steppedEngagement.push(...batch.map((row) => row.subjectRef));
-      cursor = batch.at(-1)!.keyset;
-    }
-    expect(steppedEngagement).toEqual(engagement.map((row) => row.subjectRef));
-  });
-
-  it("refuses a keyset of another walk", async (context) => {
-    if (!testDb) return context.skip();
-    const pageId = await seedPage("keyset-refuse");
-    await seedQueue(pageId);
-    const [engagement] = await listPostEngagementRefreshChunk(db(), { pageId, limit: 1, now: NOW });
-    await expect(listPostRepliesWalkChunk(db(), { pageId, limit: 1, rewalkBefore: NOW, now: NOW, after: engagement!.keyset }))
-      .rejects.toThrow(RangeError);
-    await expect(listPostRepliesWalkChunk(db(), { pageId, limit: 1, rewalkBefore: NOW, now: NOW, after: "not json" }))
-      .rejects.toThrow(RangeError);
   });
 });
 

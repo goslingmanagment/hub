@@ -20,6 +20,7 @@ import { DM_LIVE_DELETIONS_OVERFLOW_BATCH } from "../apps/runtime/src/sync/fansl
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { seedWsCapturePage, seedWsThread, wsCreated, wsDeleted, wsMessage, type WsCapturePage } from "./helpers/fansly-ws-capture.ts";
 import { runActorUntil, until } from "./helpers/sync-engine.ts";
+import { pageHoldKindOf } from "./helpers/sync-holds.ts";
 import {
   makeTestActor,
   quietLogger,
@@ -152,7 +153,7 @@ async function runDeletions(
 ): Promise<ScriptedLiveTransport> {
   const transport = new ScriptedLiveTransport();
   const made = await makeTestActor({
-    db: db(), pageId, mode: "live", registry: deletionsRegistry(), transport, metrics, ownRef: OWN, ...options,
+    db: db(), pageId, registry: deletionsRegistry(), transport, metrics, ownRef: OWN, ...options,
   });
   await runActorUntil(made, async () => (await work(pageId, subject))?.state === "done", 20_000, "the deletions carried");
   return transport;
@@ -374,7 +375,6 @@ describe("dm-live.deletions on a live page", () => {
   it.each([
     ["auth", "infinity"],
     ["identity_mismatch", "infinity"],
-    ["rate_limit", 120_000],
     ["network", 60_000],
   ] as const)("a %s page hold delays requests only: the deletion is carried under it, and the hold stays (ruling 9)", async (kind, forMs) => {
     if (!testDb) return;
@@ -384,7 +384,6 @@ describe("dm-live.deletions on a live page", () => {
       pageId: page.pageId,
       kind,
       until: forMs === "infinity" ? "infinity" : new Date(Date.now() + forMs),
-      step: 1,
       detail: {},
     });
     const metrics = new RecordingMetrics();
@@ -396,7 +395,7 @@ describe("dm-live.deletions on a live page", () => {
     expect((await archiveRow(page.pageId, ids[2]))!.deleted_at).not.toBeNull();
     expect(await threadWindow(threadId)).toMatchObject({ stored_message_count: 2, newest_stored_message_id: ids[1] });
     expect(metrics.get("sync_steps_before_gate")).toBe(1);
-    expect((await getSyncPage(db(), page.pageId))!.holdKind).toBe(kind);
+    expect(pageHoldKindOf((await getSyncPage(db(), page.pageId))!)).toBe(kind);
   }, 30_000);
 
   it("the pacer's closed slot does not delay it: carried while the takeover floor keeps the first request a minute away", async (context) => {
@@ -444,33 +443,32 @@ describe("dm-live.deletions on a live page", () => {
     expect(await work(page.pageId)).toMatchObject({ state: "done" });
   }, 30_000);
 
-  it("a local step writes only on a live page: in shadow it is refused before the module runs, and the work waits", async (context) => {
-    if (!testDb) return context.skip();
-    const { page } = await seedLivePage("shadow", "ws-local-shadow");
-    const wrote: string[] = [];
+  it.each(["off", "shadow"] as const)("a local step writes only on a live page: an actor leaves an %s page before any module runs", async (mode) => {
+    if (!testDb) return;
+    const { page } = await seedLivePage(mode, `ws-local-${mode}`);
+    const ran: string[] = [];
     const module: ResourceModule = {
-      plan: async () => ({ kind: "local", reason: "test" }),
+      plan: async () => {
+        ran.push("planned");
+        return { kind: "local", reason: "test" };
+      },
       applyLocal: async () => {
-        wrote.push("written");
+        ran.push("written");
         return { work: { satisfiesRevision: true, close: "done" }, followups: [] };
       },
       apply: async () => {
         throw new Error("no request");
       },
-      shadow: async () => {
-        throw new Error("no request");
-      },
     };
-    await upsertDemand(db(), { pageId: page.pageId, shadow: true, resource: "local.test", kind: "trigger", class: "urgent" });
-    const made = await makeTestActor({
-      db: db(), pageId: page.pageId, mode: "shadow", registry: createEngineRegistry([testSpec("local.test", module, { http: false })]),
+    await upsertDemand(db(), { pageId: page.pageId, resource: "local.test", kind: "trigger", class: "urgent" });
+    const { actor, stop, abort } = await makeTestActor({
+      db: db(), pageId: page.pageId, registry: createEngineRegistry([testSpec("local.test", module, { http: false })]),
     });
-    const row = async () => (await testDb!.pool.query<{ state: string; waiting_reason: string | null; last_error_class: string | null }>(
+    expect(await actor.run({ stop: stop.signal, abort: abort.signal })).toEqual({ kind: "mode_changed", mode });
+    expect(ran).toEqual([]);
+    expect((await testDb.pool.query<{ state: string; waiting_reason: string | null; last_error_class: string | null }>(
       "select state, waiting_reason, last_error_class from sync_work where page_id = $1 and resource = 'local.test'", [page.pageId],
-    )).rows[0] ?? null;
-    await runActorUntil(made, async () => (await row())?.last_error_class === "local:LocalStepRefusedError", 10_000, "the refusal");
-    expect(wrote).toEqual([]);
-    expect(await row()).toMatchObject({ state: "open", waiting_reason: "dependency" });
+    )).rows).toEqual([{ state: "open", waiting_reason: null, last_error_class: null }]);
   }, 30_000);
 
   it("a local step whose write is refused for good is quarantined, and the quarantine records why, as an apply's does", async (context) => {
@@ -484,14 +482,11 @@ describe("dm-live.deletions on a live page", () => {
       apply: async () => {
         throw new Error("no request");
       },
-      shadow: async () => {
-        throw new Error("no request");
-      },
     };
-    await upsertDemand(db(), { pageId: page.pageId, shadow: false, resource: "local.test", kind: "trigger", class: "urgent" });
+    await upsertDemand(db(), { pageId: page.pageId, resource: "local.test", kind: "trigger", class: "urgent" });
     const transport = new ScriptedLiveTransport();
     const made = await makeTestActor({
-      db: db(), pageId: page.pageId, mode: "live", transport, ownRef: OWN,
+      db: db(), pageId: page.pageId, transport, ownRef: OWN,
       registry: createEngineRegistry([testSpec("local.test", module, { http: false })]),
     });
     const row = async () => (await testDb!.pool.query<{
