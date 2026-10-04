@@ -4,7 +4,7 @@ import type { Database } from "../client.ts";
 
 /**
  * Hourly rollups of the chat extension's `client_health` reports (migration
- * 0239, chat-extension hub-pr-plan H-11b, storage variant B′).
+ * 0244, chat-extension hub-pr-plan H-11b, storage variant B′).
  *
  * The tables hold no user, page, fan or device and no report body: a report is
  * folded into counts and merged buckets under the hour the hub received it, and

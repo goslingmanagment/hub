@@ -667,7 +667,7 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # from the extension's narrow token is refused there (400: the kind is not
   # in the token's profile), never journaled. Rollups already written stay
   # unread until a forward deploy returns.
-  "0239_client_health_rollups.sql"
+  "0244_client_health_rollups.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

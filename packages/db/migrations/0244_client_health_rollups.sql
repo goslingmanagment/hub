@@ -1,4 +1,4 @@
--- 0239_client_health_rollups.sql
+-- 0244_client_health_rollups.sql
 --
 -- chat-extension client_health intake (hub-pr-plan H-11b, storage variant B′).
 --
