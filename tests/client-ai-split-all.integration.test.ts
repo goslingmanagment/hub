@@ -35,12 +35,13 @@ import { fixtureUserId } from "./helpers/user-identity.ts";
 // Fixture passwords hash at minimum cost; sign-in still runs the real verify.
 vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
 
-// chat-extension H-10a (architecture.md D-15): Split for Ping and Hi. The gate
-// is the `split-all-v1` capability in the request header AND the owner's
-// `splitAll` flag of the page AND the feature. This file is the matrix
-// "feature × Split on/off × released/new client" over the real route; the
-// prompt texts themselves are pinned in tests/ai-prompts-split-all.test.ts,
-// and the frozen released SDKs in tests/client-sdk-compat.integration.test.ts.
+// chat-extension H-10 (architecture.md D-15): Split for Ping and Hi (H-10a) and
+// for the drafts of a Coach answer (H-10b). The gate is the `split-all-v1`
+// capability in the request header AND the owner's `splitAll` flag of the page
+// AND the feature. This file is the matrix "feature × Split on/off ×
+// released/new client" over the real route; the prompt texts themselves are
+// pinned in tests/ai-prompts-split-all.test.ts, and the frozen released SDKs in
+// tests/client-sdk-compat.integration.test.ts.
 
 const AUDIT = { source: "cli" } as const;
 const PASSWORD = "chatter-secret";
@@ -96,13 +97,17 @@ interface FeatureCall {
   alwaysSplits?: true;
 }
 
+const COACH_SPLIT_MARKER = "- Inside each draft fence, deliver the message as separate short, text-like sends, separated by [NEXT].";
+
 const CALLS: readonly FeatureCall[] = [
   { name: "Reply", feature: "fast-reply", body: { replyTone: "none" }, alwaysSplits: true },
   { name: "Fix", feature: "improve-draft", body: { draftText: "draft to fix" }, alwaysSplits: true },
   { name: "Help", feature: "help-me" },
   { name: "Recap", feature: "fan-summary" },
   { name: "Review", feature: "chat-review" },
-  { name: "Coach", feature: "coach-chat", body: { chatterQuestion: "what next?" } },
+  { name: "Coach", feature: "coach-chat", body: { chatterQuestion: "what next?" },
+    splitAllMarker: COACH_SPLIT_MARKER },
+  { name: "Coach preset", feature: "coach-chat", body: { preset: "situation" }, splitAllMarker: COACH_SPLIT_MARKER },
   { name: "Ping", feature: "ping", splitAllMarker: "- Split mode is on for this message." },
   { name: "Hi", feature: "hi-greeting", body: { conversationRef: FOLLOWER },
     splitAllMarker: "separated by [NEXT] inside the variant" },
@@ -110,6 +115,7 @@ const CALLS: readonly FeatureCall[] = [
     splitAllMarker: "deliver the greeting as separate short, text-like sends, separated by [NEXT]" },
 ];
 const SPLIT_ALL_CALLS = CALLS.filter((call) => call.splitAllMarker !== undefined);
+const callNamed = (name: string) => CALLS.find((call) => call.name === name)!;
 
 function setSwitches(features: Record<string, Record<string, boolean>> | null, enabled = true) {
   app.config.chatExtensionEnabled = enabled;
@@ -251,8 +257,8 @@ beforeEach(() => {
   stopReason = "end_turn";
 });
 
-describe("Split for Ping and Hi behind split-all-v1 (H-10a)", () => {
-  it("matrix: the Split toggle reaches Ping and Hi only with the capability AND the page's flag", async (context) => {
+describe("Split for Ping, Hi and Coach drafts behind split-all-v1 (H-10)", () => {
+  it("matrix: the Split toggle reaches Ping, Hi and Coach only with the capability AND the page's flag", async (context) => {
     if (!server) return context.skip();
 
     for (const flagOn of [false, true]) {
@@ -350,6 +356,25 @@ describe("Split for Ping and Hi behind split-all-v1 (H-10a)", () => {
         },
       },
     });
+    // Coach is the feature the Fansly extension has and the desktop does not:
+    // its drafts stay unsplit there too, capability or not.
+    const coach = callNamed("Coach");
+    const fanslyCoach = await generate(FULL_ADVERTISING, coach, "preferSplit", {
+      label: "lora-fansly",
+      platform: "fansly",
+      body: {
+        fanRef: FAN,
+        clientContext: {
+          transcript: "[10:00] Fan: hey", messageCount: 12, fanDisplayName: "Fan",
+          fanSpendingData: "", fanSubscriptionData: "", transcriptCoverage: "window",
+        },
+      },
+    });
+    expect(taskBlock(fanslyCoach.prompt)).toContain("Keep the explanation outside the fence.");
+    expect(taskBlock(fanslyCoach.prompt)).not.toContain("Split mode is on");
+    expect(await paramsOf(fanslyCoach.generationRef)).not.toHaveProperty("outputStructure");
+    // On the OnlyFans page the same request splits.
+    expect(taskBlock((await generate(FULL_ADVERTISING, coach, "preferSplit")).prompt)).toContain(coach.splitAllMarker!);
 
     // A switch that cannot be read turns the extension off as a whole.
     app.config.chatExtensionFeatures = "{\"*\": {\"splitAll\": true}";
@@ -360,7 +385,7 @@ describe("Split for Ping and Hi behind split-all-v1 (H-10a)", () => {
   it("records the structure of the finished text, a marker cut by a chunk boundary included, and changes no frame", async (context) => {
     if (!server) return context.skip();
     setSwitches(withAiFlags(true));
-    const [ping, hi, hiOne] = SPLIT_ALL_CALLS as [FeatureCall, FeatureCall, FeatureCall];
+    const [ping, hi, hiOne] = [callNamed("Ping"), callNamed("Hi"), callNamed("Hi, one draft")];
     const trap = await armNoOutboundTrap(testDb!);
     try {
       // Ping: [NEXT] arrives in two chunks; the client receives exactly those chunks.
@@ -401,6 +426,62 @@ describe("Split for Ping and Hi behind split-all-v1 (H-10a)", () => {
       expect(cutParams).not.toHaveProperty("outputStructure");
 
       // The gate reads the database only.
+      await trap.assertNoOutbound();
+    } finally {
+      await trap.restore();
+    }
+  }, AI_TEST_TIMEOUT_MS);
+
+  it("Coach: records the parts of each draft block, a fence and a marker cut by chunk boundaries included", async (context) => {
+    if (!server) return context.skip();
+    setSwitches(withAiFlags(true));
+    const [coach, preset] = [callNamed("Coach"), callNamed("Coach preset")];
+    const trap = await armNoOutboundTrap(testDb!);
+    try {
+      // Two draft blocks between the advice. No chunk carries a whole opener or
+      // a whole marker, and the client receives exactly those chunks.
+      completionChunks = [
+        "Сначала ответь на вопрос.\n``", "`draft\nhey you [NE", "XT] what's up\n`", "``\nИли смелее.\n```dra",
+        "ft\na [NEXT", "] b [NE", "XT] c\n``", "`",
+      ];
+      expect(completionChunks.some((chunk) => chunk.includes("[NEXT]") || chunk.includes("```draft"))).toBe(false);
+      const answered = await generate(EXTENSION, coach, "preferSplit");
+      expect(answered.frames.map((frame) => frame.type))
+        .toEqual(["meta", ...completionChunks.map(() => "content_delta"), "usage", "done"]);
+      expect(answered.frames.filter((frame) => frame.type === "content_delta").map((frame) => frame.text))
+        .toEqual(completionChunks);
+      expect(await paramsOf(answered.generationRef)).toMatchObject({
+        clientProfile: "chat-extension",
+        outcome: "completed",
+        outputStructure: { draftsRequested: null, partsPerDraft: [2, 3], ok: true },
+      });
+
+      // A preset turn asks for exactly two drafts. The model gave one: the record says so.
+      completionChunks = ["СИТУАЦИЯ: тёплый.\n```draft\nhey [NEXT] you\n```"];
+      const presetTurn = await generate(EXTENSION, preset, "preferSplit");
+      expect((await paramsOf(presetTurn.generationRef))["outputStructure"])
+        .toEqual({ draftsRequested: 2, partsPerDraft: [2], ok: false });
+
+      // One fence per part is the miss Split on Coach can cause; the stream is not touched.
+      completionChunks = ["```draft\nhey you\n```\n```draft\nwhat's up\n```"];
+      const fencePerPart = await generate(FULL_ADVERTISING, coach, "preferSplit");
+      expect(fencePerPart.frames.map((frame) => frame.type)).toEqual(["meta", "content_delta", "usage", "done"]);
+      const fencePerPartParams = await paramsOf(fencePerPart.generationRef);
+      expect(fencePerPartParams["outputStructure"]).toEqual({ draftsRequested: null, partsPerDraft: [1, 1], ok: false });
+      expect(fencePerPartParams).not.toHaveProperty("clientProfile");
+
+      // Advice with no message to propose has nothing to split; a marker in the advice is not a part.
+      completionChunks = ["Подожди его ответа [NEXT] не пиши первым."];
+      expect((await paramsOf((await generate(EXTENSION, coach, "preferSplit")).generationRef))["outputStructure"])
+        .toEqual({ draftsRequested: null, partsPerDraft: [], ok: true });
+
+      // Split not asked for: no record, whatever the answer looks like.
+      completionChunks = ["```draft\na [NEXT] b\n```"];
+      expect(await paramsOf((await generate(EXTENSION, coach, "default")).generationRef)).not.toHaveProperty("outputStructure");
+      // Nor for a released client that asks without the capability.
+      expect(await paramsOf((await generate(RELEASED, coach, "preferSplit")).generationRef)).not.toHaveProperty("outputStructure");
+
+      // The gate and the Coach context read the database only.
       await trap.assertNoOutbound();
     } finally {
       await trap.restore();

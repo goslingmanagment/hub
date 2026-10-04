@@ -107,8 +107,9 @@ authorization.
   `chatMuseAiPromptDebugEchoEnabled` kill-switch. `context-v1` adds the `context_v1` frame (below)
   and is required to send `liveTextContext`, whose answer rides that frame. It is also what lets a
   full Recap read past 1500 messages (transcript depth, below).
-- `split-all-v1` lets `replyMode: "preferSplit"` reach `ping` and `hi-greeting` on a page whose
-  owner switched the `splitAll` flag on (see "Split for Ping and Hi" below). It adds no frame.
+- `split-all-v1` lets `replyMode: "preferSplit"` reach `ping`, `hi-greeting` and `coach-chat` on a
+  page whose owner switched the `splitAll` flag on (see "Split for Ping, Hi and Coach drafts"
+  below). It adds no frame.
 - SDK: the header is the union of the `capabilities` option and the legacy `debugPromptEcho` flag,
   deduplicated, in the constant's order, joined by `, `. With nothing to advertise no header is sent,
   so existing callers put exactly the same bytes on the wire as before.
@@ -715,10 +716,10 @@ platform matching, persona revision, quotas and restricted capture are
 unchanged. A greeting is a reviewed draft; the kernel neither sends a message
 nor certifies live first-contact eligibility.
 
-### Split for Ping and Hi (`split-all-v1`, chat-extension H-10a)
+### Split for Ping, Hi and Coach drafts (`split-all-v1`, chat-extension H-10)
 
 `replyMode: "preferSplit"` splits Reply and Fix (`fast-reply`, `improve-draft`) for every client, as
-before. `ping` and `hi-greeting` take it only when all of these hold:
+before. `ping`, `hi-greeting` and `coach-chat` take it only when all of these hold:
 
 - the request advertises `split-all-v1` in `x-kernel-ai-capabilities`;
 - the owner's `splitAll` flag is on for the page, by the same evaluation as every chat-extension
@@ -730,20 +731,28 @@ before. `ping` and `hi-greeting` take it only when all of these hold:
 `replyMode` alone never turns it on: the Fansly extension sends `preferSplit` on every feature, and
 a client that does not advertise the capability keeps its prompts byte for byte
 (`tests/ai-prompts-split-all.test.ts`, `tests/client-sdk-compat.integration.test.ts`). A request
-that does not pass the gate is not refused: it generates the single-message prompt it always did.
-
-`coach-chat` is not in the gate yet; H-10b adds it. The chat extension reads this one token and
-this one flag for Hi, Ping and Coach drafts alike, so with `splitAll` on before H-10b it asks for
-Split on Coach too. Such a request is not refused: `replyMode` is dropped as for any other client,
-the Coach prompt is the one without Split, the drafts come back unsplit and no
-`params.outputStructure` is stored (`tests/client-ai-split-all.integration.test.ts`, row Coach).
+that does not pass the gate is not refused: it generates the prompt without Split it always did.
 
 With the gate open only the uncached task block changes. Ping gets the instructions for 2-3
 `[NEXT]` parts; Hi asks for `[NEXT]` parts inside each `[VARIANT]`, or inside its one draft. The
 cached prefix, the body schema and the frames are unchanged: the markers travel inside
 `content_delta` text and the client parses them after `done`.
 
+Coach splits its drafts, never its advice. The draft grammar is unchanged: a block opens with a
+` ```draft ` line and closes with a ` ``` ` line, at most two blocks per answer (exactly two on a
+preset turn), each under 1500 characters. With the gate open the `[NEXT]` parts sit inside each
+block, 2-3 per block, and the 1500 characters cover the block with all its parts. A client splits
+a block's body on `[NEXT]` after it has lifted the block out of the answer; `[NEXT]` is asked for
+nowhere else in a Coach answer. An earlier split answer replayed in `coachHistory` reaches a later
+prompt as the client sent it, markers included, whatever that later turn's gate says.
+
 A generation the gate opened also stores `params.outputStructure` in its restricted record: the
-structure of the finished text as `{ variantsRequested, partsPerVariant, ok }`, counts only, where
-`ok` means the requested number of variants with two or three parts each. It is written for
-completed streams only and is a record, never a filter: the stream has already been sent.
+structure of the finished text, counts only. It is written for completed streams only and is a
+record, never a filter: the stream has already been sent.
+
+- Ping and Hi: `{ variantsRequested, partsPerVariant, ok }`, where `ok` means the requested number
+  of variants with two or three parts each.
+- Coach: `{ draftsRequested, partsPerDraft, ok }`. `draftsRequested` is `2` on a preset turn and
+  `null` on a question turn, where the coach decides how many messages to propose. `partsPerDraft`
+  counts the parts of every closed draft block. `ok` means the requested number of blocks (at most
+  two when the coach decides, none included), each with two or three parts.

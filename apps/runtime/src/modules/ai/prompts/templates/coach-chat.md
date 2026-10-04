@@ -48,4 +48,4 @@ The chatter asks:
 
 {coachDraftSection}
 {presetInstructions}
-Answer the chatter now in the language they asked in. Use a draft fence for any proposed fan message, in the fan's language (English by default). Keep the explanation outside the fence.
+Answer the chatter now in the language they asked in. Use a draft fence for any proposed fan message, in the fan's language (English by default). Keep the explanation outside the fence.{coachSplitInstructions}

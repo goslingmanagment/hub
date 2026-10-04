@@ -226,8 +226,8 @@ describe("GET /api/v1/client/bootstrap", () => {
     });
     // What this hub serves today: the AI stream's context frame (H-4b), the
     // fresh text of the open chat (H-4c), the shared recaps read (H-13), the
-    // dossier save from a stored generation (H-5) and Split for Ping and Hi
-    // (H-10a; the flag itself is off at rest).
+    // dossier save from a stored generation (H-5) and Split for Ping, Hi and
+    // Coach drafts (H-10; the flag itself is off at rest).
     expect(body.capabilities).toEqual([
       "context-v1",
       "live-text-v1",

@@ -9,14 +9,14 @@ import { loadClientSwitches } from "./client-switches.ts";
  * The owner's `splitAll` flag, as an AI generation reads it (chat-extension
  * hub-pr-plan H-10; architecture.md D-15).
  *
- * Split for the features that never split for a released client (Ping and Hi)
- * is served only when the request advertises `split-all-v1` AND this answers
- * true for the page. It is the same evaluation the bootstrap and every client
- * route run: platform, master switch, the flag, the binding, what the hub
- * serves.
+ * Split for the features that never split for a released client (Ping, Hi and
+ * Coach drafts) is served only when the request advertises `split-all-v1` AND
+ * this answers true for the page. It is the same evaluation the bootstrap and
+ * every client route run: platform, master switch, the flag, the binding, what
+ * the hub serves.
  *
  * Unlike requireClientFeature it never refuses. With the flag off the
- * generation runs as it always has and returns one message; the client asked
+ * generation runs as it always has and returns unsplit text; the client asked
  * for parts and shows that it got one. A read that fails answers false for the
  * same reason: Split is an enhancement, never a reason to fail a generation.
  *
