@@ -1,6 +1,8 @@
 import type { SyncBlockStatus } from "@agency_hub_core/contracts";
 import { formatRelativeTime } from "@/lib/format";
 
+import { engineWaitWords } from "../engine/engineDisplay.js";
+
 type SyncBlockKey = SyncBlockStatus["block"];
 type SyncBlockState = SyncBlockStatus["state"];
 type SyncBlockSubstream = SyncBlockStatus["substreams"][number];
@@ -117,7 +119,9 @@ const BLOCK_DESCRIPTIONS: Record<SyncBlockKey, string> = {
 };
 
 // The streams a block lists: the legacy executor's on an OnlyFans page, the
-// engine's lever streams of the five blocks on a Fansly page.
+// engine's lever streams of the five blocks on a Fansly page. The analytics
+// Coverage panel names every lever stream of a Fansly page by the same table;
+// a name that is its own words needs no row (`getStreamLabel`).
 const STREAM_LABELS: Record<string, string> = {
   light: "connection",
   fan_identities: "fan identities",
@@ -128,6 +132,8 @@ const STREAM_LABELS: Record<string, string> = {
   followers_reconcile: "follower reconcile",
   dm_conversations: "conversation sync",
   dm_messages: "message history",
+  media_stats: "media statistics",
+  stats_snapshot: "account statistics",
 };
 
 const PROGRESS_STREAM_LABELS: Record<string, string> = {
@@ -190,29 +196,26 @@ export function getEngineBlockKeys(block: SyncBlockStatus): { keys: string[]; pa
   };
 }
 
-/** "Почему ждёт" (plan §10) of an engine stream, in the words of the tab. */
-const ENGINE_REASON_LABELS: Record<string, string> = {
-  not_due: "Not due",
-  pacer: "Queued",
-  class_share: "Queued",
-  page_hold: "Page held",
-  resource_hold: "Resource held",
-  subject_breaker: "Backing off",
-  blocked_by_vendor: "Refused by Fansly",
-  quarantined: "Quarantined",
-  paused: "Paused",
-  dependency: "Waiting for other work",
-  ownership_unconfirmed: "No owner",
-  running: "Reading",
+/** What the status reader says of an engine block beyond "почему ждёт". */
+const ENGINE_STATUS_LABELS: Record<string, string> = {
   engine_quarantined: "Quarantined",
   engine_blocked_by_vendor: "Refused by Fansly",
   credentials_invalid: "New credentials needed",
 };
 
+/** A reason code of an engine block or stream in the cards' words: the status
+ *  reader's own three, else "почему ждёт" (plan §10) from the engine's one
+ *  dictionary (`engine/engineDisplay.ts`). */
+function engineReasonLabel(code: string | null): string | undefined {
+  if (code === null) return undefined;
+  const words = ENGINE_STATUS_LABELS[code] ?? engineWaitWords(code, "en");
+  return words === null ? undefined : words.charAt(0).toUpperCase() + words.slice(1);
+}
+
 function formatEngineBlockSummary(block: SyncBlockStatus): string {
   if (block.needsAttention) {
     const code = getReasonCode(block);
-    const label = (code !== null ? ENGINE_REASON_LABELS[code] : undefined) ?? "Needs attention";
+    const label = engineReasonLabel(code) ?? "Needs attention";
     return `Fansly Sync Engine · ${label.toLowerCase()}`;
   }
   if (block.engineMode === "handover") {
@@ -603,7 +606,7 @@ export function formatSubstreamStateLabel(substream: SyncBlockSubstream): string
   const code = getReasonCode(substream);
 
   if (substream.state === "engine") {
-    return (code !== null ? ENGINE_REASON_LABELS[code] : undefined) ?? "Sync Engine";
+    return engineReasonLabel(code) ?? "Sync Engine";
   }
 
   if (substream.state === "delayed") {

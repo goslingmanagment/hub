@@ -1502,6 +1502,89 @@ export async function lastLiveAppliedAtByResource(
   return applied;
 }
 
+/** How many of a key's newest rows `lastLiveAppliedAtOverSubjects` reads. */
+export const SYNC_LAST_APPLIED_RECENT_ROWS = 20;
+/** And how many of the key's active rows, the most recently attempted first. */
+export const SYNC_LAST_APPLIED_ACTIVE_ROWS = 3;
+
+/**
+ * When each key that works per subject (a chat, a fan, a purchase target) was
+ * last applied live on a page, over all its subjects. A key has a row per
+ * subject and no index orders them by their last attempt, so two bounded sets
+ * of its rows are read, each row for its newest applied attempt:
+ *
+ *  - its `SYNC_LAST_APPLIED_RECENT_ROWS` newest rows whatever their subject (a
+ *    trigger's row closes when it is served, so the newest attempts sit on the
+ *    newest rows): the key's range of `sync_work_key_recent`, ids only;
+ *  - its `SYNC_LAST_APPLIED_ACTIVE_ROWS` active rows attempted last (a goal's
+ *    row stays open for hours, and a request's rows take turns): the key's
+ *    range of `sync_work_open_uniq`.
+ *
+ * Each row costs one read along `sync_attempts_work`: at most
+ * `SYNC_LAST_APPLIED_RECENT_ROWS + SYNC_LAST_APPLIED_ACTIVE_ROWS` reads a key
+ * however many subjects it has — never a read per subject, never a scan of the
+ * page's attempt journal. A shadow row holds only shadow attempts and adds
+ * nothing.
+ *
+ * The answer is always an applied attempt of the key, and its newest one
+ * unless that sits on a closed row older than the newest read here — a
+ * finished request of more chats than that, whose rows closed out of the
+ * order they were filed in. The time is then earlier than the true one, never
+ * later.
+ */
+export async function lastLiveAppliedAtOverSubjects(
+  db: Database,
+  input: { pageId: number; resources: readonly string[] },
+): Promise<Map<string, Date>> {
+  const resources = [...new Set(input.resources)];
+  for (const resource of resources) assertResourceKey(resource);
+  if (resources.length === 0) return new Map();
+  const newestApplied = sql`
+    select a.applied_at
+      from sync_attempts a
+     where a.work_id = w.id
+       and not a.shadow
+       and a.applied_at is not null
+     order by a.id desc
+     limit 1`;
+  // `offset 0` keeps the key's rows a scan of their own index range: flattened,
+  // "order by id desc limit" invites a walk of the whole table backwards along
+  // its primary key, which never ends for a key the page has no rows of.
+  const result = await db.execute<{ resource: string; appliedAt: Date | string | null }>(sql`
+    select k.resource,
+           (select max(recent.applied_at)
+              from ((select a.applied_at
+                       from (select s.id
+                               from (select w.id
+                                       from sync_work w
+                                      where w.page_id = ${input.pageId}
+                                        and w.resource = k.resource
+                                     offset 0) s
+                              order by s.id desc
+                              limit ${sql.raw(String(SYNC_LAST_APPLIED_RECENT_ROWS))}) w
+                      cross join lateral (${newestApplied}) a)
+                    union all
+                    (select a.applied_at
+                       from (select w.id
+                               from sync_work w
+                              where w.page_id = ${input.pageId}
+                                and not w.shadow
+                                and w.resource = k.resource
+                                and w.state in ('open', 'running', 'quarantined')
+                                and w.last_attempt_id is not null
+                              order by w.last_attempt_id desc
+                              limit ${sql.raw(String(SYNC_LAST_APPLIED_ACTIVE_ROWS))}) w
+                      cross join lateral (${newestApplied}) a)) recent) as "appliedAt"
+      from unnest(${textArrayParam(resources)}) as k(resource)
+  `);
+  const applied = new Map<string, Date>();
+  for (const row of result.rows) {
+    const at = toDate(row.appliedAt);
+    if (at !== null) applied.set(row.resource, at);
+  }
+  return applied;
+}
+
 /** The due time of the page's oldest open urgent live work that is due now
  *  (null: none) — `/health/sync`'s urgent age (`sync_work_runnable`). */
 export async function oldestDueLiveUrgentWork(db: Database, input: { pageId: number }): Promise<Date | null> {

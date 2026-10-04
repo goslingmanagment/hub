@@ -165,7 +165,7 @@ export function TrafficBySourcePanel({
         <AnalyticsEmpty
           reason={emptyPanelReason(
             verdict,
-            "The statistics lane holds no bucket in this window.",
+            "No statistics bucket is held for this window.",
           )}
         />
       ) : (
@@ -210,7 +210,7 @@ export function TrafficBySourcePanel({
 /**
  * Panel 2 — FYP against direct, on MEDIA views, plus the FYP share.
  *
- * The share is ours, computed at read time from each lane's full + preview
+ * The share is ours, computed at read time from each source's full + preview
  * views, and it says so. A13: the platform serves no averages and no shares;
  * anything of that shape in this system was computed here.
  */

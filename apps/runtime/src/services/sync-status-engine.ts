@@ -2,6 +2,7 @@ import {
   countActiveLiveWorkByResource,
   getWorkForStatus,
   lastLiveAppliedAtByResource,
+  lastLiveAppliedAtOverSubjects,
   listSyncPages,
   type Database,
   type SyncPageRow,
@@ -10,10 +11,22 @@ import {
   type SyncWorkRow,
 } from "@agency_hub_core/db";
 import type { SyncUxSummary } from "@agency_hub_core/contracts";
-import { activeFanslyPageHold } from "@agency_hub_core/shared";
+import { activeFanslyPageHold, isIndefinite } from "@agency_hub_core/shared";
 
-import { estimateSlotOpensAt, explainWork, type StatusPage, type StatusWork } from "../sync/engine/status.ts";
-import { FANSLY_RESOURCE_SPECS, fanslyKeysForStreams, fanslyStreamPollSeconds } from "../sync/fansly/registry.ts";
+import {
+  estimateSlotOpensAt,
+  explainWork,
+  ownerRunning,
+  type StatusPage,
+  type StatusWork,
+  type WaitingReason,
+} from "../sync/engine/status.ts";
+import {
+  FANSLY_RESOURCE_SPECS,
+  fanslyKeysForStreams,
+  fanslyLeverStreams,
+  fanslyStreamPollSeconds,
+} from "../sync/fansly/registry.ts";
 import type {
   SyncDomainBlockKey,
   SyncDomainBlockStatus,
@@ -27,9 +40,9 @@ import type {
 // `FANSLY_LEVER_STREAMS`) is described by the live work of the registry keys
 // that answer to it: when one was last applied, when the next is due, why the
 // earliest waits, and what is quarantined or blocked by the vendor. Reads are
-// bounded (the page's active rows by the open-row index, page-level keys'
-// newest attempts along `sync_attempts_work`): the Settings overview polls it
-// every 10 s.
+// bounded (the page's active rows by the open-row index, each key's newest
+// attempts along `sync_attempts_work`, a few rows a key): the Settings
+// overview polls it every 10 s.
 
 export type EngineMode = "handover" | "live";
 
@@ -40,7 +53,8 @@ export interface EngineStatusFacts {
   counts: ReadonlyMap<string, SyncWorkResourceCounts>;
   /** The page-level (subject '') rows that are open, running or quarantined. */
   pageRows: readonly SyncWorkRow[];
-  /** When each page-level key was last applied live. */
+  /** When each key was last applied live: a page-level key, and a lever key
+   *  that works per subject (a chat, a fan) over all its subjects. */
   appliedAt: ReadonlyMap<string, Date>;
   /** S, for when the page's next slot opens. */
   settingMs: number;
@@ -79,6 +93,14 @@ export function engineBlockStreams(block: SyncDomainBlockKey): SyncStream[] {
 
 const PAGE_LEVEL_KEYS = FANSLY_RESOURCE_SPECS.filter((spec) => spec.subject === "page").map((spec) => spec.key);
 
+/** The lever keys that work per subject (`dm-messages.head` per chat,
+ *  `purchases.targets` per target, …): a stream of such keys alone
+ *  (`dm_messages`, `purchase_history`) was last read when any subject was. */
+export const SUBJECT_LEVEL_LEVER_KEYS: readonly string[] = (() => {
+  const lever = new Set(fanslyKeysForStreams(fanslyLeverStreams()));
+  return FANSLY_RESOURCE_SPECS.filter((spec) => spec.subject !== "page" && lever.has(spec.key)).map((spec) => spec.key);
+})();
+
 /** The engine facts of every engine-owned page among `pageIds` (all pages
  *  when omitted), keyed by page id. Pages in `off`/`shadow` are absent. */
 export async function readEngineStatusFacts(
@@ -100,7 +122,9 @@ export async function readEngineStatusFacts(
       states: ["open", "running", "quarantined"],
       limit: 200,
     });
-    const appliedAt = await lastLiveAppliedAtByResource(db, { pageId: page.pageId, resources: PAGE_LEVEL_KEYS });
+    const pageLevel = await lastLiveAppliedAtByResource(db, { pageId: page.pageId, resources: PAGE_LEVEL_KEYS });
+    const perSubject = await lastLiveAppliedAtOverSubjects(db, { pageId: page.pageId, resources: SUBJECT_LEVEL_LEVER_KEYS });
+    const appliedAt = new Map([...pageLevel, ...perSubject]);
     facts.set(page.pageId, {
       page,
       counts: new Map(counts.filter((row) => row.pageId === page.pageId).map((row) => [row.resource, row])),
@@ -172,18 +196,51 @@ export interface EngineStreamState {
   stream: SyncStream;
   /** The registry keys that answer to the stream, in registry order. */
   keys: string[];
-  /** When one of them was last applied live (page-level keys). */
+  /** When one of them was last applied live (a key that works per subject:
+   *  over all its subjects). */
   succeededAt: Date | null;
   /** The earliest due time of their open work. */
   nextDueAt: Date | null;
+  /** Their live rows that are open, running or quarantined (any subject). */
+  activeWork: number;
   /** The owner paused the whole page or every one of the keys. */
   paused: boolean;
   /** Some of their work is quarantined or blocked by the vendor. */
   needsAttention: boolean;
-  /** What needs attention, or why the earliest-due page-level row waits. */
+  /** What needs attention (and the command that lists it), or why the
+   *  earliest-due page-level row waits, as one line. */
   statusReason: SyncStatusReason | null;
+  /** Why that earliest-due page-level row waits, as data: its key, the
+   *  engine's reason and until when. Null when the stream needs attention, or
+   *  none of its page-level work is open. */
+  waiting: EngineStreamWaiting | null;
   /** The largest subject-breaker failure count among their active rows. */
   consecutiveFailures: number;
+}
+
+/** Why a stream's earliest-due page-level work waits ("почему ждёт", plan §10). */
+export interface EngineStreamWaiting {
+  resource: string;
+  reason: WaitingReason;
+  until: Date | null;
+}
+
+/** A host runs the page's loop: a fresh heartbeat of its owner, in a mode an
+ *  actor runs in. False: nothing of the page is read, whatever its work says
+ *  (every row waits `ownership_unconfirmed`). */
+export function engineOwnerRunning(facts: Pick<EngineStatusFacts, "page">, now: Date = facts.page.dbNow): boolean {
+  return ownerRunning(facts.page, now);
+}
+
+/** The commands that list the work a stream needs the owner for: quarantined
+ *  rows are a state of their own; rows Fansly refuses stay `open` (they wait
+ *  `blocked_by_vendor`), so those are listed by their key. */
+function attentionCommands(page: string | number, quarantined: readonly string[], blocked: readonly string[]): string[] {
+  const list = `pnpm cli sync work list --page ${page}`;
+  return [
+    ...(quarantined.length > 0 ? [`${list} --state quarantined`] : []),
+    ...blocked.map((resource) => `${list} --state open --resource ${resource}`),
+  ];
 }
 
 export function engineStreamState(
@@ -198,19 +255,23 @@ export function engineStreamState(
   const consecutiveFailures = counts.reduce((max, row) => Math.max(max, row.maxFailureCount), 0);
   const succeededAt = latest(keys.map((key) => facts.appliedAt.get(key)));
   const nextDueAt = earliest(counts.map((row) => row.nextDueAt));
+  const activeWork = counts.reduce((sum, row) => sum + row.active, 0);
   const paused = facts.page.pausedAll
     || (keys.length > 0 && keys.every((key) => facts.page.pausedResources.includes(key)));
   const needsAttention = quarantined > 0 || blocked > 0;
   let statusReason: SyncStatusReason | null = null;
+  let waiting: EngineStreamWaiting | null = null;
   if (needsAttention) {
-    const resources = counts.filter((row) => row.quarantined > 0 || row.blockedByVendor > 0).map((row) => row.resource);
+    const quarantinedKeys = counts.filter((row) => row.quarantined > 0).map((row) => row.resource);
+    const blockedKeys = counts.filter((row) => row.blockedByVendor > 0).map((row) => row.resource);
     const summary = [
-      quarantined > 0 ? `${quarantined} quarantined` : null,
-      blocked > 0 ? `${blocked} blocked by Fansly` : null,
+      quarantined > 0 ? `${quarantined} quarantined (${quarantinedKeys.join(", ")})` : null,
+      blocked > 0 ? `${blocked} blocked by Fansly (${blockedKeys.join(", ")})` : null,
     ].filter(Boolean).join(", ");
+    const commands = attentionCommands(facts.page.pageLabel ?? facts.page.pageId, quarantinedKeys, blockedKeys);
     statusReason = {
       code: quarantined > 0 ? "engine_quarantined" : "engine_blocked_by_vendor",
-      summary: `${summary} (${resources.join(", ")}); pnpm cli sync work list --page ${facts.page.pageLabel ?? facts.page.pageId} --state quarantined`,
+      summary: `${summary}; ${commands.join("; ")}`,
       waitingFor: null,
     };
   } else {
@@ -228,14 +289,19 @@ export function engineStreamState(
         }),
       }, now);
     if (explanation !== null && row !== undefined) {
+      // A hold with no end (refused credentials) has no "until" to show.
+      const until = explanation.until !== null && !isIndefinite(explanation.until) ? explanation.until : null;
+      waiting = { resource: row.resource, reason: explanation.reason, until };
       statusReason = {
         code: explanation.reason,
-        summary: `${row.resource}: ${explanation.reason}${explanation.until === null ? "" : ` until ${explanation.until.toISOString()}`}`,
+        summary: `${row.resource}: ${explanation.reason}${until === null ? "" : ` until ${until.toISOString()}`}`,
         waitingFor: null,
       };
     }
   }
-  return { stream, keys, succeededAt, nextDueAt, paused, needsAttention, statusReason, consecutiveFailures };
+  return {
+    stream, keys, succeededAt, nextDueAt, activeWork, paused, needsAttention, statusReason, waiting, consecutiveFailures,
+  };
 }
 
 /** One lever stream of an engine page as a Settings block substream. */

@@ -7,8 +7,8 @@ import { kernel } from "./sdk.js";
  *
  * READ-ONLY, and that is not incidental: **serving never authorizes capture**.
  * Nothing here can start a sync — the routes behind these hooks are GETs over
- * projections some capture lane already filled, and a page whose lane flag is
- * off answers with what it holds and says the flag is off.
+ * projections the Fansly Sync Engine already filled, and a page nothing reads
+ * answers with what it holds and says that nothing reads it.
  */
 
 type QueryOptions = { enabled?: boolean };

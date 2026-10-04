@@ -216,12 +216,12 @@ placed.
 | Surface | A Fansly page the engine owns (`handover`/`live`) |
 |---|---|
 | `/api/v1/health/sync` | an `engine` block (mode, owner heartbeat age, hold, oldest due urgent work, socket, quarantine, open alerts); unhealthy on an owner silent > 90 s, an `auth`/`identity_mismatch` hold, or `handover` > 10 min. No legacy stream is judged |
-| Settings blocks (`syncOverview`, `pageSyncBlocks`) | every block `state: "engine"` + `engineMode`; each lever stream of the block from its keys' live work (last applied, next due, why the earliest waits, quarantine / vendor block); a refused credential reads `credentials_invalid` on the connection block |
+| Settings blocks (`syncOverview`, `pageSyncBlocks`) | every block `state: "engine"` + `engineMode`; each lever stream of the block from its keys' live work (last applied, next due, why the earliest waits, quarantine / vendor block); a refused credential reads `credentials_invalid` on the connection block. Last applied of a key that works per subject (`dm-messages.head` per chat, `purchases.targets` per target) is its newest applied attempt over all its subjects (`lastLiveAppliedAtOverSubjects`: a bounded number of the key's rows, never a read per subject). Work that needs the owner names the command that lists it: `sync work list --state quarantined` for quarantined rows, `--state open --resource <key>` for rows Fansly refuses (they stay open, waiting `blocked_by_vendor`) |
 | Block buttons, `/admin/sync/trigger(-all)` | trigger ⇒ the keys' polls due now (`refreshSyncPage`); pause / resume ⇒ the keys in / out of `paused_resources` (the rest kept); reset ⇒ the keys' quarantined work requeued — `page_sync_states` never touched; `handover` ⇒ 409 `fansly_page_switching` for a lever that would read |
 | Page summary (`syncUx` of the overview, the sidebar's connections, the credentials tab) | `buildEnginePageSyncUx`, from the page's row and the counts of its active work: new credentials needed (an `auth`/`identity_mismatch` hold), work of a Settings block quarantined or refused by Fansly, a switch in progress, or managed by the engine |
 | Connection status (`/admin/connections`, the health page item) | `expired` while the engine holds the page for its credentials, else by the age of the account read the engine stamps on the page (`account.poll`); no legacy run is consulted |
 | Follower reconcile reset / blast-radius override | the quarantined `followers.reconcile` row: reset cancels it and files owner demand (a fresh walk); the override reads the walk from the row's cursor and `result.quarantine`, deactivates exactly the previewed set and closes the row done |
-| Insights coverage (`/api/v1/pages/:pageLabel/stats/coverage`) | an `engine` block: mode, and per lever stream its keys, last applied, next due, paused, why the earliest waits, quarantine / vendor block, largest failure count |
+| Insights coverage (`/api/v1/pages/:pageLabel/stats/coverage`) | an `engine` block: mode, whether a host runs the page (`ownerRunning`), and per lever stream its keys, last applied, next due, its open work (`activeWork`), paused, why the earliest waits (`waiting`: key, reason, until — as data; `reason`: one line), quarantine / vendor block, largest failure count |
 | Top spenders `source` (`/api/v1/pages/:pageLabel/top-spenders`) | `fan_earnings` from `fan-earnings.roster`'s live work: `ramped` unless the owner paused it (`flag_off`), its last applied read, its largest failure count |
 
 A Fansly page the engine does not own (no engine row, or one in `off` / `shadow`) is read by nothing. `/health/sync`
@@ -236,7 +236,10 @@ the hour's requests, from `/api/v1/sync/pages`; the open history requests with t
 numbers, from `/api/v1/sync/history-requests` — and a page's detail there carries the five Settings blocks with their
 buttons. «Синхронизация» (`?tab=sync`) lists the legacy executor's pages only. `syncSettingsTab` (`lib/navigation.ts`)
 names a page's tab from its platform, and every link to a page's sync goes through it; a page opened on the other tab
-is pointed to its own.
+is pointed to its own. A waiting reason has its words in one table, `engine/engineDisplay.ts` (`engineWaitWords`):
+Russian for the «Синк» tab's own rows, English for the block cards both tabs share and for the analytics Coverage
+panel, which reads the insights `engine` block: a stream is "reading" only when a host runs the page and it has open
+work, else it says which of the two is missing.
 
 Not for a Fansly page at all: the legacy monitor (`/api/v1/sync/status`, `pnpm cli sync status` — the rows are the
 legacy executor's pages and streams, the events and `/api/v1/sync/requests` its journal as it stands; `sync page

@@ -37,6 +37,7 @@ import {
   engineSocketText,
   engineStatusState,
   engineWaitLabel,
+  engineWaitWords,
   engineWaitingText,
   historyEtaText,
   historyReadsText,
@@ -44,6 +45,7 @@ import {
 import { getSyncBlockActionPresentation } from "../apps/dashboard/src/pages/settings/sync/SyncBlockActions.tsx";
 import {
   formatBlockSummary,
+  formatSubstreamStateLabel,
   getBlockStateLabel,
   needsVisualAttention,
 } from "../apps/dashboard/src/pages/settings/sync/syncBlockDisplay.ts";
@@ -394,6 +396,25 @@ describe("the «Синк» tab: why work waits", () => {
       const listed = engineWaitingText(wireQueue({ runnable: 0, waitingByReason: { [reason]: 1 } })) !== "";
       expect(listed, reason).toBe(!isRunnableReason(reason));
     }
+  });
+
+  // One dictionary for every surface (S4-34): the tab's own rows read it in
+  // Russian; the block cards and the analytics Coverage panel in English. A
+  // reason the engine gains needs both, in this one table.
+  it("holds every reason's words in both languages, and the block cards read their state from it", () => {
+    for (const reason of WAITING_REASONS) {
+      const english = engineWaitWords(reason, "en");
+      expect(english, reason).not.toBeNull();
+      expect(english, reason).not.toMatch(/_/);
+      expect(engineWaitWords(reason, "ru"), reason).toMatch(/[а-яё]/i);
+      expect(engineWaitLabel(reason, "en"), reason).toBe(english);
+      // Ready to run is one word in English, whatever it waits its turn behind.
+      if (isRunnableReason(reason)) expect(english, reason).toBe("queued");
+      const substream = { ...engineBlock("connection").substreams[0]!, statusReason: { code: reason, summary: "", waitingFor: null } };
+      expect(formatSubstreamStateLabel(substream), reason).toBe(english!.charAt(0).toUpperCase() + english!.slice(1));
+    }
+    expect(engineWaitWords("engine_quarantined", "en")).toBeNull();
+    expect(engineWaitLabel("a_reason_of_tomorrow", "en")).toBe("a_reason_of_tomorrow");
   });
 });
 

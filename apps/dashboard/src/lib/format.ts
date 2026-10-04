@@ -27,13 +27,17 @@ export function formatDate(iso: string, options?: { includeYear?: boolean }): st
   });
 }
 
-export function formatDateTime(iso: string): string {
+/** "Oct 4, 12:01". `yearUnlessCurrent`: an instant of another year carries it
+ *  ("Aug 30, 2025, 11:59") — a date without one reads as this year's. */
+export function formatDateTime(iso: string, options?: { yearUnlessCurrent?: boolean }): string {
   if (!iso) return "—";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "—";
+  const withYear = options?.yearUnlessCurrent === true && d.getFullYear() !== new Date().getFullYear();
   return d.toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",
+    year: withYear ? "numeric" : undefined,
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
