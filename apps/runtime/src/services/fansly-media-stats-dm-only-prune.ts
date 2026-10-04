@@ -11,8 +11,7 @@
 // Owner-run, never scheduled: dry-run is the DEFAULT and is provably read-only
 // (a READ ONLY transaction); `--execute` opts in; a re-run reports zeros. It
 // deletes queue state only — the heads, the collected buckets and the journal
-// stay — and it makes no platform call. A page's first enable does not need
-// it: the seeding skips the same heads (see `seedMediaStatsQueue`).
+// stay — and it makes no platform call.
 //
 // `--execute` WAITS FOR THE PROJECTORS, AND REFUSES WITHOUT THEM. A row queued
 // before the deploy carries no stamp of the post that showed its media; what

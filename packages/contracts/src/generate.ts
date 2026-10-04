@@ -49,7 +49,6 @@ async function main() {
     logger: createLogger("silent"),
     pool: {} as never,
     db: {} as never,
-    adapter: {} as never,
     async close() {},
   });
 

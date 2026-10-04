@@ -363,39 +363,6 @@ export type ReplayVerdict =
   | { kind: "mismatch"; reason: string; detail?: Readonly<Record<string, unknown>> }
   | { kind: "not_replayable"; reason: string };
 
-/** What the step-3 switch carries over from the legacy engine for one key
- *  (design §11.1 C): the cursor its live work row starts from, and — for a key
- *  whose continuity hangs on when legacy last read (the hourly stats' 25-hour
- *  window, A15) — when that row is first due. The switch's import writes
- *  both; without `dueAt` the row keeps its own schedule (a poll's random
- *  phase). A `dueAt` in the past means at once. */
-export interface LegacyImport {
-  cursors: ReadonlyArray<{ resource: ResourceKey; subject: string; cursor: unknown; dueAt?: Date }>;
-  /** Demand the legacy state leaves open (a head debt's catch-up read),
-   *  raised through the registry like any follow-up. */
-  demands?: readonly DemandSignal[];
-  /** Subject breakers the legacy engine had armed (a quarantined chat),
-   *  merged monotonically into the key's open work, else into a closed row of
-   *  the key that its next demand inherits (`importWorkBreaker`). */
-  breakers?: ReadonlyArray<{
-    resource: ResourceKey;
-    subject: string;
-    failureCount: number;
-    breakerUntil: Date | null;
-    lastErrorClass: string | null;
-  }>;
-  /** Where each imported value came from (the switch report). */
-  notes: Readonly<Record<string, unknown>>;
-}
-
-/** What `importLegacy` knows of the switch. */
-export interface LegacyImportPage {
-  pageId: number;
-  /** When the current switch began (its first audit row): legacy failures
-   *  after it are the switch's own fences, not the vendor's. Absent: none. */
-  switchStartedAt?: Date | null;
-}
-
 export interface ResourceModule<C = unknown> {
   /** Read-only: what the next step of this work is. */
   plan(work: SyncWorkRow, ctx: PlanContext): Promise<StepPlan<C>>;
@@ -440,9 +407,6 @@ export interface ResourceModule<C = unknown> {
   /** Read-only: one legacy observation of a kind this resource owns through
    *  the new contract and the resource's intended effects (design §3.12 B5). */
   replay?(observation: ReplayObservation, ctx: ReplayContext): Promise<ReplayVerdict>;
-  /** One-time, at the step-3 switch of the page: the legacy state this key's
-   *  live work starts from. */
-  importLegacy?(tx: Database, page: LegacyImportPage): Promise<LegacyImport>;
   /** A subject-queue walk's subject outcome (the breaker lives on the queue
    *  row). `step.request` names the subject(s) the failed step asked for (the
    *  walk row's own subject is the page's); the breaker fields are the work

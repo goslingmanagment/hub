@@ -2473,21 +2473,6 @@ export const syncMonitorActiveRunSchema = z.object({
   lastActivityAt: isoTimestamp,
 });
 
-export const syncMonitorDeepBackfillSchema = z.object({
-  pendingConversations: z.number().int(),
-  pendingPagesEstimate: z.number().int(),
-  spenderPendingConversations: z.number().int(),
-  spenderPendingPagesEstimate: z.number().int(),
-  regularPendingConversations: z.number().int(),
-  regularPendingPagesEstimate: z.number().int(),
-  recentRequests: z.number().int(),
-  lastCompletedAt: isoTimestamp.nullable(),
-  liveRequestsSinceDeepBackfill: z.number().int(),
-  active: z.boolean(),
-  stalled: z.boolean(),
-  stallReason: z.string().nullable(),
-});
-
 const extendedSyncStreamEnum = z.enum([
   "light",
   "fan_identities",
@@ -2523,7 +2508,6 @@ export const syncMonitorStreamItemSchema = z.object({
   pending: z.boolean(),
   retryAt: isoTimestamp.nullable(),
   progress: syncMonitorProgressSchema.nullable(),
-  deepBackfill: syncMonitorDeepBackfillSchema.nullable().optional(),
   recentRuns: syncMonitorRecentRunsSchema,
   recentErrors: syncMonitorRecentErrorsSchema,
   rateHealth: syncMonitorRateHealthSchema,
@@ -3306,9 +3290,10 @@ export const verifyPageResponseSchema = z.object({
   verified: z.boolean(),
   username: z.string().nullable(),
   platform: platformEnum,
-  // W3.3 (D4-N1): false = the credentials verified but the auth block could
-  // not be cleared — streams stay blocked and the incidents stay open; the
-  // dashboard renders a warning instead of an all-clear.
+  // W3.3 (D4-N1): false meant the credentials verified but the legacy auth
+  // block could not be cleared. Always true since step 4 (S4-19): a Fansly
+  // page is verified by the Sync Engine, which clears its own hold by its own
+  // proof, and no legacy block is left to clear. Kept for the clients.
   syncUnblocked: z.boolean(),
 });
 
@@ -5302,47 +5287,25 @@ export const statsTagsResponseSchema = z.object({
   nextCursor: z.string().nullable(),
 });
 
-/** One lane's live operating state, read straight off `page_sync_states`. Every
- *  field is nullable because every field is written by ONE lane's progress
- *  block and no lane writes them all. */
-const insightsLaneProgressSchema = z.object({
-  journaled: z.number().int().nullable(),
-  callsToday: z.number().int().nullable(),
-  calledToday: z.number().int().nullable(),
-  dailyCap: z.number().int().nullable(),
-  deferred: z.string().nullable(),
-  // WP-F4's queue + honesty block.
-  mediaKnown: z.number().int().nullable(),
-  queueSize: z.number().int().nullable(),
-  dueToday: z.number().int().nullable(),
-  deferredToday: z.number().int().nullable(),
-  neverVisited: z.number().int().nullable(),
-  backfillComplete: z.number().int().nullable(),
-  backfillStopped: z.number().int().nullable(),
-  /** A16 item 3: the LIVE long-tail cycle, computed by the lane from the live
-   *  class census and the live cap. Never a documentation constant. */
-  estimatedCycleDays: z.number().nullable(),
-  requestsPerDayWanted: z.number().nullable(),
-  saturating: z.boolean().nullable(),
-  longTailCycleDays: z.number().nullable(),
-  // WP-F3's M block.
-  uniqueMediaCount: z.number().int().nullable(),
-  vaultMemberUniqueCount: z.number().int().nullable(),
-  /** Σ `item_count`. NON-UNIQUE by construction — the system albums are views
-   *  over the same media, so this double-counts. Labelled, never used as M. */
-  albumMembershipSum: z.number().int().nullable(),
-  vaultWalkStatus: z.string().nullable(),
-  // WP-F5's walk + truncation block.
-  rootsKnown: z.number().int().nullable(),
-  rootsWalked: z.number().int().nullable(),
-  rootsDirty: z.number().int().nullable(),
-  postsKnown: z.number().int().nullable(),
-  commentsSeen: z.number().int().nullable(),
-  commentsMissing: z.number().int().nullable(),
-  possiblyTruncated: z.number().int().nullable(),
-  paginationMode: z.string().nullable(),
-  phase: z.string().nullable(),
-  seedComplete: z.boolean().nullable(),
+/** One legacy stream of a page the Fansly Sync Engine owns, as the live work
+ *  of the registry keys that took it over says (the Settings sync blocks read
+ *  the same model). */
+const insightsEngineStreamSchema = z.object({
+  stream: z.string(),
+  /** The engine's registry keys that read this stream's data. */
+  resources: z.array(z.string()),
+  /** When one of them was last applied live; null = not yet. */
+  succeededAt: isoTimestamp.nullable(),
+  /** When the next one is due; null = none is open. */
+  nextDueAt: isoTimestamp.nullable(),
+  /** The owner paused the whole page or every one of these keys. */
+  paused: z.boolean(),
+  /** Some of their work is quarantined or blocked by Fansly. */
+  needsAttention: z.boolean(),
+  /** What needs attention, or why the earliest of them waits. */
+  reason: z.string().nullable(),
+  /** The largest failure count among their active work. */
+  consecutiveFailures: z.number().int(),
 });
 
 export const statsCoverageResponseSchema = z.object({
@@ -5351,26 +5314,14 @@ export const statsCoverageResponseSchema = z.object({
   /** Every `capture_coverage` row this page holds: the floors, in the
    *  `(status, acquisition_mode, proof)` vocabulary. */
   planes: z.array(insightsCoverageRowSchema),
-  /** Per lane: is its gate open, is this page on its allowlist, and what did it
-   *  last report. A lane whose flag is off holds no data for a reason, and a
-   *  panel that cannot tell that apart from "no activity" is the panel this one
-   *  replaces. */
-  streams: z.array(z.object({
-    stream: z.string(),
-    status: z.string(),
-    phase: z.string().nullable(),
-    succeededAt: isoTimestamp.nullable(),
-    failedAt: isoTimestamp.nullable(),
-    consecutiveFailures: z.number().int(),
-    blockerKind: z.string().nullable(),
-    blockerCode: z.string().nullable(),
-    /** null when this lane has no ramp flag of its own. */
-    flagEnabled: z.boolean().nullable(),
-    /** null when this lane has no page allowlist of its own. FAIL-CLOSED on
-     *  every lane this initiative shipped: empty allowlist = NO pages. */
-    allowlisted: z.boolean().nullable(),
-    progress: insightsLaneProgressSchema,
-  })),
+  /** Who reads this page's data and how far it got: the Fansly Sync Engine's
+   *  live work per legacy stream. A stream nobody reads holds no data for a
+   *  reason, and a panel that cannot tell that apart from "no activity" is the
+   *  panel this one replaces. null when the engine does not own the page. */
+  engine: z.object({
+    mode: z.enum(["handover", "live"]),
+    streams: z.array(insightsEngineStreamSchema),
+  }).nullable(),
   /** What we actually hold, per projection: row count and the range it spans.
    *  A zero count next to an open floor is a real answer; a zero count with no
    *  coverage row is "never started" and reads that way. */
@@ -6585,12 +6536,17 @@ const baseRouteSchemas = {
         fanCount: z.number().int().nonnegative(),
         /** W8.1 (A12/A20): why the projection is (or is not) being fed — a
          * `builtAt: null` response is no longer ambiguous between "no
-         * spenders" and "stream not ramped for this page". Additive. */
+         * spenders" and "nobody reads this page's fan earnings". Additive. */
         source: z.object({
+          /** `ramped`: the Fansly Sync Engine reads the page's fan earnings;
+           *  `flag_off`: it does not (the owner paused it, or the engine does
+           *  not own the page). `not_allowlisted` was the legacy executor's
+           *  page allowlist and is no longer served. */
           streamState: z.enum(["ramped", "flag_off", "not_allowlisted", "unsupported_platform"]),
-          /** fan_earnings stream's last successful sync for this page. */
+          /** When the engine last applied a fan-earnings read for this page. */
           lastSyncedAt: z.string().nullable(),
-          /** null = the page has no fan_earnings sync state row yet. */
+          /** The largest failure count among its active fan-earnings work;
+           *  null = the engine does not own the page. */
           consecutiveFailures: z.number().int().nullable(),
         }),
         entries: z.array(z.object({
@@ -7686,7 +7642,8 @@ const baseRouteSchemas = {
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
-      // fansly_page_switching: the page is being switched to the Fansly Sync Engine
+      // fansly_page_switching: the page is being switched to the Fansly Sync Engine;
+      // legacy_sync_retired: a Fansly page the engine does not own (step 4 S4-10)
       409: errorResponseSchema,
     },
   },
@@ -7701,7 +7658,8 @@ const baseRouteSchemas = {
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
-      // fansly_page_switching: the page is being switched to the Fansly Sync Engine
+      // fansly_page_switching: the page is being switched to the Fansly Sync Engine;
+      // legacy_sync_retired: a Fansly page the engine does not own (step 4 S4-10)
       409: errorResponseSchema,
       503: errorResponseSchema,
     },
@@ -7717,6 +7675,8 @@ const baseRouteSchemas = {
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
+      // legacy_sync_retired: a Fansly page the engine does not own (step 4 S4-10)
+      409: errorResponseSchema,
     },
   },
   adminSyncBlockResume: {
@@ -7730,6 +7690,8 @@ const baseRouteSchemas = {
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
+      // legacy_sync_retired: a Fansly page the engine does not own (step 4 S4-10)
+      409: errorResponseSchema,
     },
   },
   adminSyncBlockReset: {
@@ -7743,7 +7705,8 @@ const baseRouteSchemas = {
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
-      // fansly_page_switching: the page is being switched to the Fansly Sync Engine
+      // fansly_page_switching: the page is being switched to the Fansly Sync Engine;
+      // legacy_sync_retired: a Fansly page the engine does not own (step 4 S4-10)
       409: errorResponseSchema,
       503: errorResponseSchema,
     },
@@ -7759,9 +7722,9 @@ const baseRouteSchemas = {
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
-      // fansly_page_switching: the page is being switched to the Fansly Sync Engine
+      // fansly_page_switching: the page is being switched to the Fansly Sync Engine;
+      // legacy_sync_retired: a Fansly page the engine does not own (step 4 S4-10)
       409: errorResponseSchema,
-      503: errorResponseSchema,
     },
   },
   adminFollowersReconcileOverridePreview: {
@@ -7775,6 +7738,7 @@ const baseRouteSchemas = {
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
+      // legacy_sync_retired: a Fansly page the engine does not own (step 4 S4-17)
       409: errorResponseSchema,
     },
   },
@@ -7789,6 +7753,7 @@ const baseRouteSchemas = {
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
+      // legacy_sync_retired: a Fansly page the engine does not own (step 4 S4-17)
       409: errorResponseSchema,
     },
   },
@@ -7940,9 +7905,11 @@ const baseRouteSchemas = {
     tags: ["admin"],
     summary: "Verify stored credentials for a page",
     description:
-      "On a page the Fansly Sync Engine runs (`live`) the verify is the engine's `account.verify`, answered "
+      "A Fansly page is verified by the Fansly Sync Engine's `account.verify` on the page it runs (`live`), answered "
       + "within 30 s; 409 `fansly_sync_work_queued` (with `statusUrl`) when it is still queued, 409 "
-      + "`fansly_page_switching` while the page is being switched (nothing was sent).",
+      + "`fansly_page_switching` while the page is being switched, 409 `legacy_sync_retired` for a Fansly page "
+      + "the engine does not run (nothing was sent: no legacy check is left). An OnlyFans page has no pasted "
+      + "credentials to verify (400).",
     params: pageParamsSchema,
     response: {
       200: verifyPageResponseSchema,
@@ -7958,10 +7925,11 @@ const baseRouteSchemas = {
     tags: ["admin"],
     summary: "Update credentials for an existing page",
     description:
-      "On a page the Fansly Sync Engine runs (`live`) the candidate session/proxy is checked by the engine's "
-      + "`account.identity` (≤ 30 s) before anything is stored, then stored and trusted as the exact pair the "
-      + "check proved; 409 `fansly_sync_work_queued` (with `statusUrl`) when the check is still queued, 409 "
-      + "`fansly_page_switching` while the page is being switched (nothing was sent and nothing was stored), 409 "
+      "The candidate session/proxy of a Fansly page is checked by the Fansly Sync Engine's `account.identity` "
+      + "on the page it runs (`live`, ≤ 30 s) before anything is stored, then stored and trusted as the exact pair "
+      + "the check proved; 409 `fansly_sync_work_queued` (with `statusUrl`) when the check is still queued, 409 "
+      + "`fansly_page_switching` while the page is being switched, 409 `legacy_sync_retired` for a Fansly page the "
+      + "engine does not run (nothing was sent and nothing was stored: no legacy check is left), 409 "
       + "`fansly_credentials_changed` when the stored credentials changed during the check (nothing was stored). "
       + "An engine auth hold ends once the engine's verify of the stored new credentials passes.",
     params: pageParamsSchema,

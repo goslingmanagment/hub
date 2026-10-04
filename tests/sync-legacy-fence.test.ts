@@ -1,32 +1,26 @@
-import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
 import {
   ENGINE_OWNED_SYNC_PAGE_MODES,
-  engineOwnsFanslyPageSql,
   FANSLY_SYNC_ENGINE_HYDRATION_LANE,
-  legacyOwnsFanslyPageSql,
   SYNC_PAGE_MODES,
 } from "@agency_hub_core/db";
 
-import {
-  FANSLY_PAGE_ON_SYNC_ENGINE_CODE,
-  FanslyPageOnSyncEngineError,
-} from "../apps/runtime/src/services/sync-engine-guard.ts";
-import { PgDialect } from "../packages/db/node_modules/drizzle-orm/pg-core/index.js";
-import { sql } from "../packages/db/node_modules/drizzle-orm/index.js";
-
-// Step-3 design §3.1 (S3-01): the legacy fences of a page the Fansly Sync
-// Engine owns. The behaviour is pinned by tests/sync-legacy-fence.integration.
-// test.ts; this file pins the TEXT, so a later edit cannot quietly drop a
-// fence from a legacy scheduler or lever: one predicate, named `handover` and
-// `live` only (J8: `shadow` never fences legacy), in every place the design
-// lists.
+// The fence between the legacy page-sync executor and a Fansly page (plan
+// §12, I21). Through step 3 it was a predicate over `sync_pages` in every
+// legacy picker (S3-01: a page in `handover`/`live` is the engine's). Since
+// step 4 (S4-21) it is the executor's platform set — the platforms whose
+// adapter declares a stream, OnlyFans — handed to every query that picks
+// work, and the Fansly pages' legacy rows are parked `retired` (0239). The
+// behaviour is pinned by tests/sync-legacy-fence.integration.test.ts; this
+// file pins the TEXT, so a later edit cannot quietly drop the scope from a
+// picker, make it optional again, or bring a `sync_pages` fence back.
 
 const root = join(__dirname, "..");
-const dialect = new PgDialect();
 
 function source(path: string): string {
   return readFileSync(join(root, path), "utf8");
@@ -42,62 +36,105 @@ function functionBody(path: string, name: string): string {
   return text.slice(start, end < 0 ? undefined : end);
 }
 
-function rendered(fragment: ReturnType<typeof sql>) {
-  const query = dialect.sqlToQuery(fragment);
-  return { sql: query.sql.replace(/\s+/g, " ").trim(), params: query.params };
+/** Every TypeScript source under `dir`. */
+function sourcesUnder(dir: string): string[] {
+  return readdirSync(join(root, dir), { recursive: true, encoding: "utf8" })
+    .filter((path) => path.endsWith(".ts"))
+    .map((path) => join(dir, path));
 }
 
-describe("the legacy-owns predicate", () => {
-  it("names handover and live only, never shadow or off (J8)", () => {
+describe("the engine's modes", () => {
+  it("owns a page in handover and live only, never shadow or off (J8)", () => {
     expect([...ENGINE_OWNED_SYNC_PAGE_MODES]).toEqual(["handover", "live"]);
     expect(SYNC_PAGE_MODES.filter((mode) => !(ENGINE_OWNED_SYNC_PAGE_MODES as readonly string[]).includes(mode)))
       .toEqual(["off", "shadow"]);
   });
-
-  it("is one not-exists over sync_pages with its own alias", () => {
-    expect(rendered(engineOwnsFanslyPageSql(sql.raw("st.page_id")))).toEqual({
-      sql: "exists ( select 1 from sync_pages engine_owned_page where engine_owned_page.page_id = st.page_id"
-        + " and engine_owned_page.mode in ('handover', 'live') )",
-      params: [],
-    });
-    expect(rendered(legacyOwnsFanslyPageSql(sql.raw("st.page_id")))).toEqual({
-      sql: "not exists ( select 1 from sync_pages engine_owned_page where engine_owned_page.page_id = st.page_id"
-        + " and engine_owned_page.mode in ('handover', 'live') )",
-      params: [],
-    });
-    // A bound page id is a parameter, not text.
-    expect(rendered(legacyOwnsFanslyPageSql(sql`${42}`)).params).toEqual([42]);
-  });
 });
 
-describe("the legacy schedulers carry the predicate", () => {
+describe("the legacy pickers carry the executor's platform set", () => {
   const pageSync = "packages/db/src/repositories/page-sync.ts";
 
   it.each([
-    ["listRunnablePageSync", 'legacyOwnsFanslyPageSql(sql.raw("st.page_id"))'],
-    ["markPageSyncEnqueued", "legacyOwnsFanslyPageSql(sql`${pageId}`)"],
-    ["acquirePageSyncLease", 'legacyOwnsFanslyPageSql(sql.raw("st.page_id"))'],
-    ["acquireTargetedPageSyncLease", 'legacyOwnsFanslyPageSql(sql.raw("st.page_id"))'],
-  ])("%s", (name, predicate) => {
-    expect(functionBody(pageSync, name)).toContain(predicate);
+    ["listRunnablePageSync", 'and ${pageSyncPlatformScopeSql("st.page_id", options.platforms)}'],
+    ["markPageSyncEnqueued", 'and ${pageSyncPlatformScopeSql("page_id", options.platforms)}'],
+    ["acquirePageSyncLease", 'and ${pageSyncPlatformScopeSql("st.page_id", input.platforms)}'],
+  ])("%s filters by it and cannot be called without it", (name, predicate) => {
+    const body = functionBody(pageSync, name);
+    expect(body).toContain(predicate);
+    expect(body).toContain("platforms: PageSyncPlatformScope;");
+    expect(body).not.toContain("platforms?: PageSyncPlatformScope");
   });
 
-  it("the sync_silent deadman leaves engine pages out of both halves", () => {
-    const body = functionBody("packages/db/src/repositories/sync.ts", "getFanslySyncLiveness");
-    expect(body).toContain('legacyOwnsFanslyPageSql(sql.raw("r.page_id"))');
-    expect(body).toContain('legacyOwnsFanslyPageSql(sql.raw("st.page_id"))');
+  it("an empty set matches no page; only the queries that maintain state may leave it out", () => {
+    const scope = functionBody(pageSync, "pageSyncPlatformScopeSql");
+    expect(scope).toContain("if (platforms.length === 0) return sql`false`;");
+    expect(scope).toContain("where scoped.platform in (");
+    // The optional scope is left to the queries that read, seed, schedule and
+    // repair state and never hand a page to a worker.
+    const optional = [...source(pageSync).matchAll(/\n(?:export )?(?:async )?function (\w+)\([\s\S]*?\n\}\n/g)]
+      .filter(([text]) => text.includes("platforms?: PageSyncPlatformScope"))
+      .map(([, name]) => name)
+      .sort();
+    expect(optional).toEqual([
+      "ensurePageSyncStates",
+      "listPageSyncStatesInternal",
+      "reclaimExpiredPageSync",
+      "refreshPageSyncDependencies",
+      "repairLegacyLightTrustedPageSyncStates",
+      "scheduleDuePageSync",
+    ]);
   });
 
-  it("the AI fast lane holds an engine page", () => {
-    expect(functionBody("packages/db/src/repositories/ai-media-descriptions.ts", "getFanslyFastLanePageSyncGate"))
-      .toContain("engineOwnsFanslyPageSql(sql`${input.pageId}`)} as held");
-  });
-
-  it("the hydration dispatcher and auto-approval skip engine pages; the sweeps skip engine rows", () => {
-    const hydration = "packages/db/src/repositories/agent-hydration.ts";
-    for (const name of ["listDispatchableAgentHydrationRequests", "listAutoApprovableAgentHydrationRequests"]) {
-      expect(functionBody(hydration, name)).toContain('legacyOwnsFanslyPageSql(sql.raw("r.page_id"))');
+  it("the planner and the executor pass the registry's set at every call", () => {
+    const planner = source("apps/runtime/src/services/sync/planner.ts");
+    expect(planner).toContain("const platforms = legacyExecutorPlatforms();");
+    expect(planner).toContain("await listRunnablePageSync(app.db, now, { platforms });");
+    expect(planner).toContain("await markPageSyncEnqueued(app.db, page.pageId, now, { platforms });");
+    const executor = source("apps/runtime/src/services/sync/executor.ts");
+    expect(executor.match(/listRunnablePageSync\(app\.db, new Date\(\), \{ platforms: legacyExecutorPlatforms\(\) \}\)/g)).toHaveLength(2);
+    expect(executor.match(/listRunnablePageSync\(/g)).toHaveLength(2);
+    expect(functionBody("apps/runtime/src/services/sync/executor.ts", "executeNextSyncPageChunk")).toMatch(
+      /const platforms = legacyExecutorPlatforms\(\);[\s\S]*?await acquirePageSyncLease\(app\.db, \{[\s\S]{0,240}?\n {4}platforms,\n {2}\}\);/,
+    );
+    // No other runtime caller of a picker.
+    for (const name of ["listRunnablePageSync", "markPageSyncEnqueued", "acquirePageSyncLease"]) {
+      const callers = sourcesUnder("apps/runtime/src").filter((path) => new RegExp(`\\b${name}\\(`).test(source(path)));
+      expect(callers.sort(), name).toEqual(
+        name === "markPageSyncEnqueued"
+          ? ["apps/runtime/src/services/sync/planner.ts"]
+          : name === "acquirePageSyncLease"
+            ? ["apps/runtime/src/services/sync/executor.ts"]
+            : ["apps/runtime/src/services/sync/executor.ts", "apps/runtime/src/services/sync/planner.ts"],
+      );
     }
+  });
+
+  it("no legacy query reads sync_pages: the mode fence is gone, with the lease by stream name", () => {
+    for (const path of [
+      pageSync,
+      "packages/db/src/repositories/sync.ts",
+      "packages/db/src/repositories/agent-hydration.ts",
+      ...sourcesUnder("apps/runtime/src/services/sync"),
+    ]) {
+      expect(source(path), path).not.toMatch(/\b(from|join|update|into)\s+sync_pages\b/i);
+      expect(source(path), path).not.toMatch(/isFanslyPageEngineOwned|OwnsFanslyPageSql/);
+    }
+    expect(source(pageSync)).not.toMatch(/TargetedPageSyncLease/);
+    // The legacy Fansly sync deadman read the fenced rows; it went with them.
+    expect(source("packages/db/src/repositories/sync.ts")).not.toMatch(/SyncLiveness/);
+    expect(source("apps/runtime/src/services/ops-watchdog.ts")).not.toMatch(/syncStalled|SyncLiveness/);
+  });
+
+  it("the hydration dispatcher lists every approval and its lane table refuses a platform without an executor; the sweeps skip engine rows", () => {
+    const hydration = "packages/db/src/repositories/agent-hydration.ts";
+    expect(functionBody(hydration, "listDispatchableAgentHydrationRequests")).not.toMatch(/sync_pages|platform/);
+    const service = source("apps/runtime/src/services/agent-hydration.ts");
+    expect(service).toMatch(
+      /const dispatcher = LANE_DISPATCHERS\[platform\];[\s\S]{0,400}?return refuse\("no executor lane serves this platform"\);/,
+    );
+    // The auto-approval that also skipped them is gone with the legacy Fansly
+    // hydration lane (step 4, S4-15).
+    expect(source(hydration)).not.toContain("listAutoApprovableAgentHydrationRequests");
     for (const name of [
       "listStuckAgentHydrationDispatches",
       "listDispatchingAgentHydrationRequests",
@@ -110,82 +147,138 @@ describe("the legacy schedulers carry the predicate", () => {
     );
     expect(FANSLY_SYNC_ENGINE_HYDRATION_LANE).toBe("fansly_sync_engine");
   });
+});
 
-  it("the deletion window drift pass leaves engine pages out", () => {
-    expect(functionBody("packages/db/src/repositories/fansly-ws-deletions.ts", "listFanslyWsDeletionWindowDrift"))
-      .toContain('legacyOwnsFanslyPageSql(sql.raw("t.platform_account_id"))');
+describe("the step-3 switch, its roll-back and the legacy import are gone (step 4, S4-21)", () => {
+  // The deletion's proof, kept true: none of these names anywhere in the
+  // sources or the tests. Spelled in halves so this file is no hit itself.
+  const GONE = [
+    ["import", "Legacy"],
+    ["legacyOwns", "FanslyPageSql"],
+    ["assertLegacyOwns", "FanslyPage"],
+    ["sync ", "rollback"],
+    ["legacy", "-stop"],
+  ].map(([head, tail]) => `${head}${tail}`);
+
+  it.each(GONE)("%s names nothing in apps, packages or tests", (name) => {
+    let hits = "";
+    try {
+      hits = execFileSync(
+        "grep",
+        ["-rlF", name, "--exclude-dir=node_modules", "--exclude-dir=dist", "--exclude-dir=.vite", "apps", "packages", "tests"],
+        { cwd: root, encoding: "utf8" },
+      );
+    } catch {
+      // grep exits 1 when nothing matches.
+    }
+    expect(hits.split("\n").filter(Boolean)).toEqual([]);
+  });
+
+  it("their files and the database's side of them are gone", () => {
+    for (const path of [
+      "apps/runtime/src/sync/switch",
+      "apps/runtime/src/sync/cli/switch.ts",
+      "packages/db/src/repositories/sync/legacy-import.ts",
+    ]) {
+      expect(existsSync(join(root, path)), path).toBe(false);
+    }
+    const repositories = sourcesUnder("packages/db/src/repositories").map(source).join("\n");
+    for (const name of [
+      "handFanslySendGuardToEngine", "handFanslySendGuardBackToLegacy", "markSyncPageLegacyImported",
+      "setSyncRequestsEnabledAt", "importWorkCursor", "importWorkBreaker", "lockBreakerImportFence",
+      "cancelLiveWorkForRollback", "supersedeShadowWork", "markPageThreadsUnverified",
+      "listOpenLegacyHydrationRequestsForPage", "listFanslyDmRawPayloadsAfterId",
+      "listFanslyPurchaseHistoryCapturedContentIds", "listFanslyMessagePurchaseTargetsAfterId",
+    ]) {
+      expect(repositories, name).not.toContain(name);
+    }
+    // The audit rows the switch wrote stay as records; nothing writes one.
+    expect(sourcesUnder("apps/runtime/src").map(source).join("\n")).not.toMatch(/admin\.sync_(switch|rollback)/);
   });
 });
 
 describe("the legacy processes ask before they act", () => {
   it.each([
-    ["apps/runtime/src/services/fansly-ws/worker.ts", "startFanslyWsWorker", "listEngineOwnedFanslyPages(app.db)"],
-    ["apps/runtime/src/services/fansly-ws/worker.ts", "runPage", "isFanslyPageEngineOwned(owner.db, stored.page.id)"],
-    ["apps/runtime/src/services/fansly-ws/worker.ts", "runPage", "isFanslyPageOwnedBySyncEngineError(error)"],
-    // Per event, in its transaction (no policy, receipt still filed) …
-    [
-      "apps/runtime/src/services/projections/fansly-ws-hints.ts",
-      "runFanslyWsHintProjection",
-      "isFanslyPageEngineOwned(db, accountId)",
-    ],
-    // … and before the DM stream wake.
-    [
-      "apps/runtime/src/services/projections/fansly-ws-hints.ts",
-      "runFanslyWsHintProjection",
-      "isFanslyPageEngineOwned(app.db, accountId)",
-    ],
-    [
-      "apps/runtime/src/services/projections/ai-media-candidates.ts",
-      "runAiMediaCandidatesProjection",
-      "isFanslyPageEngineOwned(app.db, accountId)",
-    ],
-    ["apps/runtime/src/services/ai-media-describe/fansly-source.ts", "maybeAccelerate", "isFanslyPageEngineOwned(app.db, row.pageId)"],
     ["apps/runtime/src/services/ai-media-describe/worker.ts", "downloadAiMediaThroughPageEgress", "isFanslyPageEngineOwned(app.db, input.pageId)"],
-    ["apps/runtime/src/services/fansly-ws-deletions.ts", "applyFanslyWsDeletions", "listEngineOwnedFanslyPages(db)"],
-    // S3-05: the /account/me levers route a live page through the engine and
-    // refuse a page being switched before anything is resolved or sent.
-    ["apps/runtime/src/services/connections.ts", "updatePageCredentials", "const route = await fanslyAccountRoute(app, stored.page)"],
-    ["apps/runtime/src/services/page-proxies.ts", "setPageProxy", "await fanslyAccountRoute(app, known.page)"],
-    ["apps/runtime/src/services/fansly-replay-probe.ts", "runFanslyReplayProbe", "assertLegacyOwnsFanslyPageLabels(app, options.pageLabels"],
-    ["apps/runtime/src/services/fansly-endpoint-probe.ts", "runFanslyEndpointProbe", "assertLegacyOwnsFanslyPageLabels(app, options.pageLabels"],
-    ["apps/runtime/src/services/fansly-page-alias-backfill.ts", "backfillFanslyPageAliases", "assertLegacyOwnsFanslyPageLabels(app, requestedPageLabels"],
-    ["apps/runtime/src/services/fansly-page-alias-backfill.ts", "backfillFanslyPageAliases", "listEngineOwnedFanslyPages(app.db)"],
-    ["apps/runtime/src/services/fansly-ws-policy-repair.ts", "inspectBinding", "await fanslyAccountRoute(app, known.page)"],
+    // S3-05, S4-19: the /account/me levers go through the engine and refuse a
+    // page being switched, or one the engine does not run, before anything is
+    // resolved or sent — no legacy `/account/me` is left behind them.
+    ["apps/runtime/src/services/connections.ts", "updatePageCredentials", "await assertFanslyPageOnEngine(app, stored.page);"],
+    ["apps/runtime/src/services/page-proxies.ts", "setPageProxy", "await assertFanslyPageOnEngine(app, known.page);"],
   ])("%s %s", (path, name, check) => {
     expect(functionBody(path, name)).toContain(check);
   });
 
-  it("the verify route and the CLI verify go through the engine (S3-05), the targeted backfill CLI refuses an engine page", () => {
-    // Before the page's context is resolved (which may open a proxy incident).
-    expect(source("apps/runtime/src/modules/catalog/index.ts")).toMatch(
-      /const onEngine = await verifyPageOnEngine\(appContext, request\.params\.pageLabel\);\s*if \(onEngine !== null\) return onEngine;\s*const pageContext = await resolvePageContext\(/,
+  // Step 4 (S4-20): the legacy senders that were fenced here are deleted with
+  // the adapter's HTTP — the probes (`sync probe` is the engine's) and the
+  // alias backfill (`sync work enqueue --resource fan-profiles.alias-backfill`)
+  // — and the describer's page-egress download asks for no send guard: it
+  // sends no Fansly request at all.
+  it("the probes, the alias backfill and the adapter are gone, and no runtime code asks for a page's send guard", () => {
+    for (const path of [
+      "packages/fansly/src/adapter.ts",
+      "apps/runtime/src/services/fansly-endpoint-probe.ts",
+      "apps/runtime/src/services/fansly-replay-probe.ts",
+      "apps/runtime/src/services/fansly-page-alias-backfill.ts",
+    ]) {
+      expect(existsSync(join(root, path)), path).toBe(false);
+    }
+    const cli = source("apps/runtime/src/cli.ts");
+    for (const command of ["fansly:endpoint-probe", "fansly:replay-probe", "fansly-page-alias-backfill"]) {
+      expect(cli, command).not.toContain(command);
+    }
+    expect(source("apps/runtime/src/bootstrap.ts")).not.toMatch(/FanslyAdapter|\badapter\b/);
+    const describer = source("apps/runtime/src/services/ai-media-describe/worker.ts");
+    expect(describer).not.toMatch(/SendGuard/);
+    expect(functionBody("apps/runtime/src/services/ai-media-describe/worker.ts", "downloadAiMediaThroughPageEgress"))
+      .toContain("return await downloadMediaForDescribe({ url: input.url, dispatcher: egress.dispatcher });");
+    const download = source("apps/runtime/src/services/egress/media-download.ts");
+    expect(download).not.toMatch(/SendGuard|SendLease|\.acquire\(/);
+    expect(functionBody("apps/runtime/src/services/egress/media-download.ts", "downloadMediaForDescribe")).toMatch(
+      /if \(isFanslyHost\(current\.hostname\)\) \{[\s\S]{0,200}?return \{ ok: false, reason: "send_guard", httpStatus: null \};/,
     );
+  });
+
+  // Step 4 (S4-10): the legacy executor runs no Fansly stream, so the AI
+  // describer's candidates and source wake none; since S4-14 they file no
+  // accelerator read either (the head read is the engine's WS confirmation).
+  it.each([
+    "apps/runtime/src/services/projections/ai-media-candidates.ts",
+    "apps/runtime/src/services/ai-media-describe/fansly-source.ts",
+  ])("%s wakes no legacy DM stream and files no accelerator read", (path) => {
+    expect(source(path)).not.toContain("requestPageSync");
+    expect(source(path)).not.toContain("requestAiMediaAcceleratorRead");
+  });
+
+  it("the verify route and the CLI verify go through the engine (S3-05) and have no legacy fallback (S4-19); the targeted backfill CLI is gone (S4-15)", () => {
+    // The route: the engine's answer or a refusal — the page's context (which
+    // may open a proxy incident) is never resolved, and nothing sends.
+    const route = functionBody("apps/runtime/src/modules/catalog/index.ts", "registerCatalogRoutes");
+    const verify = route.slice(route.indexOf('server.post("/api/v1/admin/pages/:pageLabel/verify"'), route.indexOf('server.patch("/api/v1/admin/pages/:pageLabel/credentials"'));
+    expect(verify).toMatch(
+      /const onEngine = await verifyPageOnEngine\(appContext, request\.params\.pageLabel\);\s*if \(onEngine !== null\) return onEngine;/,
+    );
+    expect(verify).not.toMatch(/resolvePageContext|adapter|SendGuard/);
     const cli = source("apps/runtime/src/cli.ts");
     expect(cli).toMatch(
-      /const onEngine = await verifyPageOnEngine\(app, options\.page\);[\s\S]{0,300}?const context = await resolvePageContext\(/,
+      /const onEngine = await verifyPageOnEngine\(app, options\.page\);[\s\S]{0,300}?return;\s*\}/,
     );
-    // `dm backfill-thread`: before the job is queued.
-    const refusal = cli.indexOf("await assertLegacyOwnsFanslyPageId(app, thread.platformAccountId, SYNC_ENGINE_HINTS.history);");
-    expect(refusal).toBeGreaterThan(0);
-    expect(refusal).toBeLessThan(cli.indexOf("const jobId = await queueTargetedThreadBackfill("));
-  });
-
-  it.each([
-    "scripts/fansly-ws/binding-preflight.ts",
-    "scripts/fansly-ws/continuity-runtime.ts",
-    "scripts/fansly-ws/probe.ts",
-  ])("the operator script %s checks before its snapshot", (path) => {
-    expect(source(path)).toMatch(/await refuseEngineOwnedPage\(db, [^)]+\);\s*\S+ = await readProbeSnapshot\(/);
-  });
-});
-
-describe("the refusal", () => {
-  it("is a 409 with the page, the mode and the hint", () => {
-    const error = new FanslyPageOnSyncEngineError({ pageId: 4, pageLabel: "lilly-1", mode: "live", hint: "ask the engine" });
-    expect(error).toMatchObject({ statusCode: 409, code: FANSLY_PAGE_ON_SYNC_ENGINE_CODE, pageId: 4, mode: "live" });
-    expect(FANSLY_PAGE_ON_SYNC_ENGINE_CODE).toBe("fansly_page_on_sync_engine");
-    expect(error.message).toBe(
-      "Page lilly-1 is on the Fansly Sync Engine (mode live): the legacy engine sends nothing for it; ask the engine",
+    // No sender behind the levers any more: the legacy `/account/me` of the
+    // adapter and its page send guard are reached by none of them.
+    for (const path of [
+      "apps/runtime/src/modules/catalog/index.ts",
+      "apps/runtime/src/cli.ts",
+      "apps/runtime/src/services/connections.ts",
+      "apps/runtime/src/services/page-proxies.ts",
+      "apps/runtime/src/services/sync-engine-account.ts",
+    ]) {
+      expect(source(path), path).not.toMatch(/refreshPageMetadata|adapter\.verifySession|adapter\.getAccountMe|fanslyPageSendGuard/);
+    }
+    expect(functionBody("apps/runtime/src/services/sync-engine-account.ts", "assertFanslyPageOnEngine")).toContain(
+      "if (!ownership.owned) throw new LegacySyncRetiredError(",
     );
+    // `dm backfill-thread` queued a legacy read of one thread; nothing queues one now.
+    expect(cli).not.toContain("backfill-thread");
+    expect(cli).not.toContain("sync.thread.backfill");
   });
 });

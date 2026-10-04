@@ -26,7 +26,6 @@ import {
 import { probeRequestOf } from "../apps/runtime/src/sync/fansly/resources/probe.ts";
 import {
   advanceStatsBackfill,
-  firstHourlyCaptureAt,
   foldStatsBackfill,
   nextHourlyCaptureAt,
   type StatsBackfillState,
@@ -476,17 +475,6 @@ describe("stats: the hourly capture's spacing", () => {
   it("takes the page's period override, still never past 23 h", () => {
     expect(nextHourlyCaptureAt(NOW, 0.5, overriding("stats.hourly", { everyMs: 12 * HOUR })).getTime() - NOW.getTime()).toBe(12 * HOUR);
     expect(nextHourlyCaptureAt(NOW, 0.5, overriding("stats.hourly", { everyMs: 30 * HOUR })).getTime() - NOW.getTime()).toBe(23 * HOUR);
-  });
-
-  it("the first capture after the switch is due by legacy's last one (A15), never by the poll row's random phase", () => {
-    const ago = (hours: number) => new Date(NOW.getTime() - hours * HOUR).toISOString();
-    expect(firstHourlyCaptureAt(ago(2), NOW).getTime()).toBe(NOW.getTime() + 20 * HOUR);
-    // Already past the period (or never captured, or unreadable): at once.
-    expect(firstHourlyCaptureAt(ago(23), NOW)).toEqual(NOW);
-    expect(firstHourlyCaptureAt(null, NOW)).toEqual(NOW);
-    expect(firstHourlyCaptureAt("not a date", NOW)).toEqual(NOW);
-    // A last capture stamped ahead of this clock: never more than 23 h out.
-    expect(firstHourlyCaptureAt(ago(-5), NOW).getTime()).toBe(NOW.getTime() + 23 * HOUR);
   });
 });
 

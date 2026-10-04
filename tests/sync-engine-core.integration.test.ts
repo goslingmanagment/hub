@@ -20,7 +20,6 @@ import {
   heartbeatSyncPageOwner,
   insertAdmission,
   countRecentFailedSubjects,
-  issueSyncSwitchCapability,
   latestClosedWorkForKey,
   listSendsForPaceAudit,
   listSyncPages,
@@ -48,7 +47,6 @@ import {
   setSyncPageMode,
   settleAttemptWithoutCapture,
   settleWork,
-  supersedeShadowWork,
   SYNC_PACE_AUDIT_LOOKBACK_MS,
   SYNC_ROUTE_JOURNAL_SLACK_MS,
   SYNC_SEND_WINDOW_MS,
@@ -58,7 +56,6 @@ import {
   type Database,
   type FanslySendHolderIdentity,
   type SyncEngineWorkClass,
-  type SyncSwitchCapability,
   type UpsertDemandInput,
 } from "@agency_hub_core/db";
 
@@ -258,55 +255,43 @@ describe("sync_pages rows and modes", () => {
     expect(await getSyncPage(db(), Number(onlyfans[0]!.id))).toBeNull();
   });
 
-  it("moves off ↔ shadow freely and handover/live only with the switch capability (I17)", async (context) => {
+  it("moves off ↔ shadow and nothing else: no way to handover or live, none out of them (I17)", async (context) => {
     if (!testDb) return context.skip();
     const pageId = await seedPage("modes");
-    const other = await seedPage("modes-other");
 
     expect(await setSyncPageMode(db(), { pageId, to: "live", changedBy: "test" }))
       .toEqual({ kind: "refused", from: "off", to: "live", reason: "transition_not_allowed" });
+    expect(await setSyncPageMode(db(), { pageId, to: "handover", changedBy: "test" }))
+      .toEqual({ kind: "refused", from: "off", to: "handover", reason: "transition_not_allowed" });
     expect(await setSyncPageMode(db(), { pageId, to: "shadow", changedBy: "owner" }))
       .toMatchObject({ kind: "changed", from: "off", to: "shadow" });
     expect(await setSyncPageMode(db(), { pageId, to: "shadow", changedBy: "owner" }))
       .toEqual({ kind: "unchanged", mode: "shadow" });
     expect(await setSyncPageMode(db(), { pageId, to: "off", changedBy: "owner", expectFrom: "live" }))
       .toEqual({ kind: "refused", from: "shadow", to: "off", reason: "expected_mode_mismatch" });
-
-    // No capability, a forged one, one for another page: all refused.
-    expect(await setSyncPageMode(db(), { pageId, to: "handover", changedBy: "test" }))
-      .toMatchObject({ kind: "refused", reason: "capability_required" });
-    const forged = { kind: "sync_switch", pageId, purpose: "forged" } as SyncSwitchCapability;
-    expect(await setSyncPageMode(db(), { pageId, to: "handover", changedBy: "test", capability: forged }))
-      .toMatchObject({ kind: "refused", reason: "capability_required" });
-    const foreign = issueSyncSwitchCapability({ pageId: other, purpose: "test" });
-    expect(await setSyncPageMode(db(), { pageId, to: "handover", changedBy: "test", capability: foreign }))
-      .toMatchObject({ kind: "refused", reason: "capability_required" });
+    for (const to of ["handover", "live"] as const) {
+      expect(await setSyncPageMode(db(), { pageId, to, changedBy: "test" }))
+        .toEqual({ kind: "refused", from: "shadow", to, reason: "transition_not_allowed" });
+    }
     expect((await getSyncPage(db(), pageId))!.mode).toBe("shadow");
 
-    const capability = issueSyncSwitchCapability({ pageId, purpose: "test switch" });
-    expect(await setSyncPageMode(db(), { pageId, to: "live", changedBy: "switch", capability }))
-      .toMatchObject({ kind: "refused", reason: "transition_not_allowed" });
-    expect(await setSyncPageMode(db(), { pageId, to: "handover", changedBy: "switch", capability }))
-      .toMatchObject({ kind: "changed", from: "shadow", to: "handover" });
-    // Out of handover/live the owner's lever does not work either.
-    expect(await setSyncPageMode(db(), { pageId, to: "shadow", changedBy: "owner" }))
-      .toMatchObject({ kind: "refused", reason: "capability_required" });
-    expect(await setSyncPageMode(db(), { pageId, to: "live", changedBy: "switch", capability }))
-      .toMatchObject({ kind: "changed", from: "handover", to: "live" });
-    expect(await setSyncPageMode(db(), { pageId, to: "off", changedBy: "switch", capability }))
-      .toMatchObject({ kind: "refused", reason: "transition_not_allowed" });
-    expect(await setSyncPageMode(db(), { pageId, to: "shadow", changedBy: "switch", capability }))
-      .toMatchObject({ kind: "refused", reason: "transition_not_allowed" });
+    // A page in handover or live stays there: no lever takes it out.
+    for (const from of ["handover", "live"] as const) {
+      await query("update sync_pages set mode = $2, legacy_imported_at = clock_timestamp() where page_id = $1", [pageId, from]);
+      for (const to of ["off", "shadow", "handover", "live"] as const) {
+        expect(await setSyncPageMode(db(), { pageId, to, changedBy: "owner" }), `${from} → ${to}`).toEqual(
+          to === from ? { kind: "unchanged", mode: from } : { kind: "refused", from, to, reason: "transition_not_allowed" },
+        );
+      }
+      expect(await getSyncPage(db(), pageId)).toMatchObject({ mode: from });
+      expect((await getSyncPage(db(), pageId))!.legacyImportedAt).not.toBeNull();
+    }
 
-    // Rollback: live → handover → off clears the legacy import mark.
-    await query("update sync_pages set legacy_imported_at = clock_timestamp() where page_id = $1", [pageId]);
-    expect(await setSyncPageMode(db(), { pageId, to: "handover", changedBy: "rollback", capability }))
-      .toMatchObject({ kind: "changed" });
-    expect((await getSyncPage(db(), pageId))!.legacyImportedAt).not.toBeNull();
-    expect(await setSyncPageMode(db(), { pageId, to: "off", changedBy: "rollback", capability }))
-      .toMatchObject({ kind: "changed", from: "handover", to: "off" });
-    const page = await getSyncPage(db(), pageId);
-    expect(page).toMatchObject({ mode: "off", modeChangedBy: "rollback", legacyImportedAt: null });
+    // Neither off nor shadow runs a live loop: the change leaves no import mark.
+    await query("update sync_pages set mode = 'shadow' where page_id = $1", [pageId]);
+    expect(await setSyncPageMode(db(), { pageId, to: "off", changedBy: "owner" }))
+      .toMatchObject({ kind: "changed", from: "shadow", to: "off" });
+    expect(await getSyncPage(db(), pageId)).toMatchObject({ mode: "off", modeChangedBy: "owner", legacyImportedAt: null });
     expect(await setSyncPageMode(db(), { pageId: 999_999, to: "shadow", changedBy: "owner" }))
       .toMatchObject({ kind: "refused", reason: "no_page" });
   });
@@ -791,14 +776,6 @@ describe("sync_work settlement", () => {
     expect((await pickUrgent(db(), { pageId, shadow: false })).map((row) => row.id)).not.toContain(broken.id);
     expect((await getWorkForStatus(db(), { pageId, subject: "broken" }))[0])
       .toMatchObject({ state: "quarantined", waitingReason: "quarantined", lastErrorClass: "contract" });
-
-    const shadowOpen = await upsertDemand(db(), demand(pageId, { shadow: true, subject: "s1" }));
-    const shadowRunning = await upsertDemand(db(), demand(pageId, { shadow: true, subject: "s2" }));
-    await markWorkRunning(db(), { workId: shadowRunning.id, generation });
-    expect(await supersedeShadowWork(db(), { pageId })).toBe(2);
-    expect((await getWorkForStatus(db(), { pageId, shadow: true })).map((row) => [row.id, row.state, row.closeReason]).sort())
-      .toEqual([[shadowOpen.id, "superseded", "shadow_ended"], [shadowRunning.id, "superseded", "shadow_ended"]].sort());
-    expect((await getWorkForStatus(db(), { pageId, shadow: false })).every((row) => row.state !== "superseded")).toBe(true);
 
     const locked = await inTx((tx) => lockWorkRows(tx, [broken.id, poll!.id, broken.id]));
     expect(locked.map((row) => row.id)).toEqual([poll!.id, broken.id].sort((x, y) => x - y));

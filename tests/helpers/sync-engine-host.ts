@@ -186,11 +186,10 @@ export async function seedSyncPage(
   return { pageId, label };
 }
 
-/** Write a mode without the switch capability (tests only: `live` and
- *  `handover` are otherwise reachable only through the step-3 switch). A
- *  `live` page gets the legacy import stamped, as the switch leaves it (the
- *  host starts no live loop without it, S3-05); `importedLegacy: false` leaves
- *  it out. */
+/** Write a mode directly (tests only: no lever reaches `live` or `handover`
+ *  — a page is born live at onboarding, I17). A `live` page gets its import
+ *  mark stamped, as a page's birth leaves it (the host starts no live loop
+ *  without it, S3-05); `importedLegacy: false` leaves it out. */
 export async function setModeDirect(
   pool: Pool,
   pageId: number,

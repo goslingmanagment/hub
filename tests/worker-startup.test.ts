@@ -290,17 +290,6 @@ vi.mock("../apps/runtime/src/services/fansly-ws/live-apply.ts", () => ({
   })),
   createFanslyWsLiveApplier: vi.fn(() => ({ enqueue: vi.fn(), drain: vi.fn(async () => {}) })),
 }));
-const targetedBackfillMocks = vi.hoisted(() => ({
-  parseTargetedThreadBackfillJob: vi.fn((): unknown => null),
-  runTargetedThreadBackfill: vi.fn(),
-}));
-vi.mock("../apps/runtime/src/services/sync/targeted-thread-backfill.ts", () => ({
-  TARGETED_THREAD_BACKFILL_QUEUE: "sync.thread.backfill",
-  ensureTargetedThreadBackfillQueue: vi.fn(),
-  parseTargetedThreadBackfillJob: targetedBackfillMocks.parseTargetedThreadBackfillJob,
-  runTargetedThreadBackfill: targetedBackfillMocks.runTargetedThreadBackfill,
-  targetedThreadBackfillRequestRefOf: vi.fn(() => null),
-}));
 
 import { startWorkerServices } from "../apps/runtime/src/worker-services.ts";
 
@@ -1111,7 +1100,7 @@ describe("worker startup", () => {
     await runtime.shutdown();
   });
 
-  it("returns the targeted backfill result so pg-boss keeps it as the job output", async () => {
+  it("works neither the legacy thread backfill queue nor the projection-debt sweep (step 4, S4-15)", async () => {
     const app = {
       db: {},
       logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -1141,37 +1130,16 @@ describe("worker startup", () => {
         retryLimit: 0,
       })),
     };
-    const result = {
-      outcome: "retention_limit_reached",
-      threadId: 1807,
-      platformAccountId: 2,
-      syncRunId: null,
-      requests: 0,
-      insertedMessages: 0,
-      journaledMessages: 0,
-      overlapFound: false,
-      providerHistoryExhausted: false,
-      storedMessageCountBefore: 1027,
-      oldestStoredMessageIdBefore: null,
-      messageCoverageStatus: null,
-      retentionLimit: 1000,
-      projectionDebtRecorded: false,
-    };
-    targetedBackfillMocks.parseTargetedThreadBackfillJob.mockReturnValueOnce({
-      threadId: 1807,
-      ignoreRetentionLimit: false,
-    });
-    targetedBackfillMocks.runTargetedThreadBackfill.mockResolvedValueOnce(result);
 
     const runtime = await startWorkerServices(app as never, boss as never);
-    const handler = getWorkHandler(boss, "sync.thread.backfill") as unknown as (
-      jobs: Array<{ id: string; data: unknown }>,
-    ) => Promise<unknown>;
+    const worked = (boss.work.mock.calls as unknown as Array<[string]>).map(([name]) => name);
 
-    // pg-boss 12 stores a batchSize-1 handler's return value in
-    // pgboss.job.output; a handler that only logs leaves the outcome nowhere
-    // the owner can read it once the worker's log is gone.
-    await expect(handler([{ id: "job-1807", data: { threadId: 1807 } }])).resolves.toEqual(result);
+    // Their consumers are deleted: a job left on either queue by an older
+    // image is never picked up by this one.
+    expect(worked).not.toContain("sync.thread.backfill");
+    expect(worked).not.toContain("projections.debt.sweep");
+    // The hydration executor still runs (OnlyFans approvals, engine-served rows).
+    expect(worked).toContain("agent.hydration.execute");
 
     await runtime.shutdown();
   });

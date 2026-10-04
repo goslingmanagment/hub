@@ -12,7 +12,7 @@ import {
 
 // The send audit of a page (invariants I1 and I19; arena 3b-review G1): the
 // one checker of the alert evaluator (alert 1's permanent pace latch), `sync
-// switch check` and the shadow report (A4 and the route budgets). It judges
+// check live-hour` and the shadow report (A4 and the route budgets). It judges
 // the sends the journals recorded against what each admission recorded it
 // applied — never against a copy of the policy that chose it:
 //

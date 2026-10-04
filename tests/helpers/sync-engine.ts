@@ -990,6 +990,17 @@ export function harnessRegistry(): EngineRegistry {
   return createEngineRegistry(specs);
 }
 
+/** The harness registry plus the production identity checks the credentials
+ *  flows use (`account.verify` is a new owner's first read of a page,
+ *  `account.identity` the check of a candidate session or proxy). */
+export function harnessIdentityRegistry(): EngineRegistry {
+  return createEngineRegistry([
+    ...harnessRegistry().specs,
+    fanslyResourceSpec("account.verify")!,
+    fanslyResourceSpec("account.identity")!,
+  ]);
+}
+
 /** The origin routes the harness registry's REST keys need. */
 export function harnessRoutes(chats: FakeChats): FakeRoute[] {
   const api = (suffix: string) => (request: FakeRequest) => request.url.pathname === `/api/v1${suffix}`;

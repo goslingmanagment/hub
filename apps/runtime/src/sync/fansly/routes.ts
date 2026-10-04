@@ -14,7 +14,7 @@ import { FANSLY_WIRE_SPECS, type FanslyWireId } from "@agency_hub_core/fansly";
 // A canonical route is one method + host class + path template: one GET
 // endpoint. Its parameters (a chat, a media, an offset, a window) never make
 // another route. The engine sends only wire routes, under their wire id; the
-// legacy send log (`fansly_send_log.operation`) names the adapter's
+// legacy send log (`fansly_send_log.operation`) names the deleted adapter's
 // operation, mapped here so both journals count against the same budgets
 // after a switch (`FANSLY_LEGACY_OPERATION_ROUTES`, pinned complete by
 // tests/sync-route-policy.test.ts).
@@ -25,7 +25,7 @@ import { FANSLY_WIRE_SPECS, type FanslyWireId } from "@agency_hub_core/fansly";
 // above the ceiling (A2). A page's stored route state (`engine/route-policy.ts`)
 // may only make a route slower.
 
-/** The endpoints only the legacy engine reads (its adapter's lanes and
+/** The endpoints only the legacy engine read (its adapter's lanes and
  *  probes without an engine resource): routes of their own, so a legacy send
  *  on them is counted where it belongs. */
 const LEGACY_ONLY_ROUTES = {
@@ -108,10 +108,12 @@ export const FAMILY_BUDGETS: Readonly<Record<FanslyRouteFamily, RouteBudget>> = 
 
 /**
  * `fansly_send_log.operation` → the route it read: every operation a legacy
- * sender journals — the adapter's lanes and probes (`packages/fansly/src/
- * adapter.ts`), the media download, the binding preflight, the socket
- * connect and the socket probes. Pinned complete against the code and each
- * wire spec's `legacyOperation` by tests/sync-route-policy.test.ts.
+ * sender journaled. Their writers are deleted — the adapter's lanes and
+ * probes and the describer's guarded CDN hop (step 4, S4-20), the legacy
+ * socket connect and the socket probes (S4-12) — and the log holds their
+ * rows. The list is frozen in tests/sync-route-policy.test.ts, which also pins
+ * each wire spec's `legacyOperation` (the identity check of a session without
+ * a page still journals under `account.me`'s).
  */
 export const FANSLY_LEGACY_OPERATION_ROUTES: Readonly<Record<string, FanslyRoute>> = {
   account_me: "account.me",

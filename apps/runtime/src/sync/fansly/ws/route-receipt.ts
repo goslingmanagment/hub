@@ -5,7 +5,6 @@ import {
   listKnownPendingTransactionIds,
   listWsRouterReceipts,
   loadWsRouteThreads,
-  lockBreakerImportFence,
   lockOwnedPage,
   readWsRoutePage,
   upsertDemands,
@@ -48,8 +47,7 @@ import {
 // (shadow pages are fed below); on a `handover`/`live` page it decodes the
 // frame, routes it and upserts the work. The lock order holds: the apply's
 // overlay rows and `domain_event_seq` come first, the hook touches only
-// `sync_work`, last (on a `handover` page behind the switch's breaker import
-// fence, `lockBreakerImportFence`).
+// `sync_work`, last.
 //
 // Shadow (step 2): the legacy receiver owns the socket and the step-1 drivers
 // ack the receipts; the page's shadow actor reads the receipts past its
@@ -216,10 +214,6 @@ export function createFanslyWsReceiptRouter(options: RouteReceiptOptions = {}) {
       metrics,
     });
     if (upserts.length === 0) return;
-    // In handover the switch may be importing legacy breakers: the upsert
-    // waits for an import in flight, so its work either takes the imported
-    // breaker or is found open by the import (step 3b ruling 8).
-    if (page.mode === "handover") await lockBreakerImportFence(tx, { pageId: receipt.pageId, side: "demand" });
     await upsertDemands(tx, upserts);
   };
 }

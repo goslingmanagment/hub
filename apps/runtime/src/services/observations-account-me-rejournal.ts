@@ -2,7 +2,8 @@
 // sync_raw_payloads but never became an observation
 // (`observations:rejournal-account-me`).
 //
-// Until J4, refreshPageMetadata journaled account_me without a sync run id, so
+// Until J4 the legacy page metadata refresh (`refreshPageMetadata`, deleted at
+// step 4) journaled account_me without a sync run id, so
 // its observation key was `page:stream:norun:requestSeq.fetchN`. Continuation
 // chunks of one request share requestSeq and restart fetchN, so when
 // followers_reconcile ran its closing account_me as the first capture of a

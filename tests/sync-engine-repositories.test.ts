@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
@@ -7,14 +8,13 @@ import { sortDemandSignals } from "@agency_hub_core/db";
 
 // Fansly Sync Engine core repositories (design §2.10): the structural pins.
 //
-// I17 — nothing but the step-3 switch can make an existing page
-// `handover`/`live`. `setSyncPageMode` moves a page there only with a switch
-// capability, and the capability is issued by `issueSyncSwitchCapability`
-// alone. Its one sanctioned production caller is the switch/rollback CLI
-// (S3-05, `sync/cli/switch.ts`); otherwise only tests issue one. The one other
-// way to `live` is a page's birth: Fansly onboarding creates the page's row
-// live in the transaction that creates the page (`createLiveSyncPage`, step 4
-// S4-05), and nothing else calls it.
+// I17 — a page is `live` only by its birth: Fansly onboarding creates the
+// page's row live in the transaction that creates the page
+// (`createLiveSyncPage`, step 4 S4-05), and nothing else calls it. Nothing
+// makes an existing page `handover` or `live`, takes a page out of `live`, or
+// flips a send guard row's owner: the step-3 switch, its rollback and the
+// switch capability that opened those transitions are gone (step 4 S4-21), and
+// `setSyncPageMode` knows `off ↔ shadow` alone.
 
 const root = join(__dirname, "..");
 
@@ -38,11 +38,18 @@ function filesMatching(pattern: string, dirs: readonly string[]): string[] {
 const SOURCES = ["apps/runtime/src", "packages"] as const;
 
 describe("Fansly Sync Engine repository boundaries", () => {
-  it("issues the switch capability nowhere outside its own module (I17)", () => {
-    expect(filesMatching("issueSyncSwitchCapability", SOURCES)).toEqual([
-      "apps/runtime/src/sync/cli/switch.ts",
-      "packages/db/src/repositories/sync/pages.ts",
-    ]);
+  it("has no switch capability and no mode change but off ↔ shadow (I17, step 4 S4-21)", () => {
+    expect(filesMatching("SyncSwitchCapability|issueSyncSwitchCapability|capability_required", SOURCES)).toEqual([]);
+    const pages = readFileSync(join(root, "packages/db/src/repositories/sync/pages.ts"), "utf8");
+    expect(pages).toContain('const OWNER_TRANSITIONS: ReadonlySet<string> = new Set(["off>shadow", "shadow>off"]);');
+    expect(pages).not.toMatch(/[a-z]+>(handover|live)|(handover|live)>[a-z]+/);
+    // The one statement that changes a mode is setSyncPageMode's, behind that set.
+    expect(pages.match(/set mode = \$\{input\.to\}/g)).toHaveLength(1);
+    expect(pages).toMatch(/if \(!OWNER_TRANSITIONS\.has\(`\$\{from\}>\$\{input\.to\}`\)\) \{\s+return \{ kind: "refused", from, to: input\.to, reason: "transition_not_allowed" \};/);
+  });
+
+  it("flips no send guard row's owner: a row keeps the engine it was born or switched to (step 4 S4-21)", () => {
+    expect(filesMatching("set owner_engine|handFanslySendGuard", SOURCES)).toEqual([]);
   });
 
   it("creates a page live only at its onboarding (I17, step 4 S4-05)", () => {
@@ -74,7 +81,7 @@ describe("Fansly Sync Engine repository boundaries", () => {
 
   it("captures the step-1 guard only while the legacy engine owns it (0229, design §2.7)", () => {
     // The capture statement is the only writer of a holder; it requires the
-    // legacy owner, so a page the switch gave away refuses every legacy sender.
+    // legacy owner, so a page of the engine refuses every legacy sender.
     expect(filesMatching("set holder_token = \\$\\{", SOURCES)).toEqual([
       "packages/db/src/repositories/fansly-send-guard.ts",
     ]);

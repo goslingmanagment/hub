@@ -13,6 +13,8 @@ import {
 import { type SQL } from "../packages/db/node_modules/drizzle-orm/index.js";
 import { PgDialect } from "../packages/db/node_modules/drizzle-orm/pg-core/index.js";
 
+import { EVERY_PLATFORM } from "./helpers/page-sync-scope.ts";
+
 const OPERATOR_SOURCES: SyncRequestSource[] = ["manual", "onboarding", "reset"];
 const BULK_LANES: SyncStream[] = ["catalog", "post_replies", "payouts", "media_stats"];
 const agedStreams = SYNC_STREAMS.filter((stream) => SYNC_STREAM_STARVED_PRIORITY[stream] !== undefined);
@@ -69,6 +71,7 @@ describe("page sync starvation aging policy", () => {
   it("uses each lane's own queueDelayThresholdMs as the starvation limit", async () => {
     const execute = vi.fn().mockResolvedValue({ rows: [] });
     await acquirePageSyncLease({ execute } as never, {
+      platforms: EVERY_PLATFORM,
       pageId: 55,
       workerId: "worker-1",
       leaseToken: "lease-1",

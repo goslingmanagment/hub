@@ -167,7 +167,7 @@ export interface ExcludedProbeSummary {
   served: number;
   notServed: number;
   pending: number;
-  /** Closed without the probe's answer (cancelled by a rollback, quarantined). */
+  /** Closed without the probe's answer (cancelled, quarantined). */
   unanswered: number;
   pageErrors: number;
   workIds: number[];

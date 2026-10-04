@@ -1,8 +1,9 @@
-// W8.1 (A12/A20, decision #133): the pageTopSpenders `source` block. A
-// non-ramped page's `builtAt: null / entries: []` used to be
-// indistinguishable from "no spenders" — the response now says WHY, computed
-// from the SAME gate helper the executor uses (effective config + allowlist)
-// plus the page's fan_earnings sync state.
+// W8.1 (A12/A20, decision #133): the pageTopSpenders `source` block. An
+// unfed page's `builtAt: null / entries: []` used to be indistinguishable from
+// "no spenders" — the response says WHY. The Fansly Sync Engine feeds the
+// projection (`fan-earnings.roster`), so the block is that key's live work
+// (step 4, S4-18): `ramped` while the engine owns the page and the owner has
+// not paused the key, its last applied read and its largest failure count.
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -10,7 +11,8 @@ import {
   createFanslyPage,
   createModel,
   createOnlyFansPage,
-  ensurePageSyncStates,
+  ensureSyncPage,
+  upsertDemand,
   upsertFans,
 } from "@agency_hub_core/db";
 
@@ -23,6 +25,7 @@ import {
   type StartedTestDatabase,
 } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
+import { setModeDirect } from "./helpers/sync-engine-host.ts";
 
 // Fixture passwords hash at minimum cost; sign-in still runs the real argon2
 // verify (tests/helpers/cheap-argon2.ts).
@@ -41,16 +44,17 @@ function sessionCookieFrom(response: { headers: Record<string, unknown> }) {
   return value.split(";")[0]!;
 }
 
-async function startServer(configOverrides?: {
-  fanslyFanEarningsSyncEnabled?: boolean;
-  fanslyNewStreamPageAllowlist?: string;
-}) {
-  appContext = createTestAppContext(testDb!, configOverrides);
+/** The Fansly page is live on the engine unless `engine` is false. */
+async function startServer(options: { engine?: boolean } = {}) {
+  appContext = createTestAppContext(testDb!);
   const model = await createModel(appContext.db, { slug: "tss-model", name: "TSS" });
   if (!model) throw new Error("model seed failed");
   const fansly = await createFanslyPage(appContext.db, { modelId: model.id, label: "tss-fansly" });
   if (!fansly) throw new Error("fansly page seed failed");
-  await ensurePageSyncStates(appContext.db, { pageId: fansly.id });
+  if (options.engine !== false) {
+    await ensureSyncPage(appContext.db, { pageId: fansly.id });
+    await setModeDirect(testDb!.pool, fansly.id, "live");
+  }
   const onlyfans = await createOnlyFansPage(appContext.db, { modelId: model.id, label: "tss-of" });
   await createUserAccount(
     appContext,
@@ -109,88 +113,96 @@ describe("pageTopSpenders source.streamState (W8.1)", () => {
     await testDb?.stop();
   });
 
-  it("reports flag_off with the honest empty projection (the old ambiguous shape)", async (context) => {
+  it("reports flag_off with the honest empty projection on a page the engine does not own", async (context) => {
     if (!testDb) {
       context.skip();
       return;
     }
-    const { cookie, fansly } = await startServer({ fanslyFanEarningsSyncEnabled: false });
-    void fansly;
+    const { cookie } = await startServer({ engine: false });
     const body = await fetchTopSpenders(cookie, "tss-fansly");
     expect(body.builtAt).toBeNull();
     expect(body.entries).toEqual([]);
     expect(body.source).toEqual({
       streamState: "flag_off",
       lastSyncedAt: null,
+      consecutiveFailures: null,
+    });
+  });
+
+  it("reports ramped on a live page before the roster was read, claiming nothing", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const { cookie } = await startServer();
+    const body = await fetchTopSpenders(cookie, "tss-fansly");
+    expect(body.source).toEqual({
+      streamState: "ramped",
+      lastSyncedAt: null,
       consecutiveFailures: 0,
     });
   });
 
-  it("reports not_allowlisted for a page outside a NON-empty allowlist", async (context) => {
+  it("surfaces the roster's last applied read and its failure count", async (context) => {
     if (!testDb) {
       context.skip();
       return;
     }
-    const { cookie } = await startServer({
-      fanslyFanEarningsSyncEnabled: true,
-      fanslyNewStreamPageAllowlist: "some-other-page",
+    const { cookie, fansly } = await startServer();
+    const appliedAt = new Date("2026-09-30T06:00:00.000Z");
+    // A finished roster walk with an applied read, then the open one failing.
+    const done = await upsertDemand(appContext.db, {
+      pageId: fansly.id, shadow: false, resource: "fan-earnings.roster", kind: "goal", class: "planned",
     });
-    const body = await fetchTopSpenders(cookie, "tss-fansly");
-    expect(body.source.streamState).toBe("not_allowlisted");
-    expect(body.entries).toEqual([]);
-  });
-
-  it("reports ramped under the EMPTY allowlist (empty CSV = all pages) and surfaces sync state", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-    const { cookie, fansly } = await startServer({
-      fanslyFanEarningsSyncEnabled: true,
-      fanslyNewStreamPageAllowlist: "",
-    });
-    // Give the fan_earnings cursor a real data success plus state failures.
-    const succeededAt = new Date("2026-07-10T06:00:00Z");
     await testDb.pool.query(
-      `update page_sync_states
-         set consecutive_failures = 3
-       where page_id = $1 and stream = 'fan_earnings'`,
-      [fansly.id],
+      `insert into sync_attempts (page_id, shadow, work_id, resource, subject, class, owner_generation, setting_ms,
+              jitter_u, pause_ms, operation, request, outcome, send_mark, sent_at, completed_at, http_status,
+              apply_state, applied_at)
+       values ($1, false, $2, 'fan-earnings.roster', '', 'planned', 1, 2000, 0.1, 2200, 'earnings_stats',
+               '{}'::jsonb, 'response', 'request_start', $3, $3, 200, 'applied', $3)`,
+      [fansly.id, done.id, appliedAt],
     );
     await testDb.pool.query(
-      `insert into page_sync_cursors (
-         page_id, stream, state, updated_at, last_succeeded_at
-       ) values ($1, 'fan_earnings', '{}'::jsonb, $2, $2)`,
-      [fansly.id, succeededAt],
+      "update sync_work set state = 'done', closed_at = $2, close_reason = 'applied' where id = $1",
+      [done.id, appliedAt],
     );
+    const open = await upsertDemand(appContext.db, {
+      pageId: fansly.id, shadow: false, resource: "fan-earnings.roster", kind: "goal", class: "planned",
+    });
+    await testDb.pool.query("update sync_work set failure_count = 3 where id = $1", [open.id]);
 
     const body = await fetchTopSpenders(cookie, "tss-fansly");
     expect(body.source).toEqual({
       streamState: "ramped",
-      lastSyncedAt: succeededAt.toISOString(),
+      lastSyncedAt: appliedAt.toISOString(),
       consecutiveFailures: 3,
     });
   });
 
-  it("reports ramped for a page INSIDE the allowlist", async (context) => {
+  it("reports flag_off when the owner paused the roster, or the whole page", async (context) => {
     if (!testDb) {
       context.skip();
       return;
     }
-    const { cookie } = await startServer({
-      fanslyFanEarningsSyncEnabled: true,
-      fanslyNewStreamPageAllowlist: "tss-fansly, some-other-page",
-    });
-    const body = await fetchTopSpenders(cookie, "tss-fansly");
-    expect(body.source.streamState).toBe("ramped");
+    const { cookie, fansly } = await startServer();
+    await testDb.pool.query(
+      "update sync_pages set paused_resources = array['fan-earnings.roster'] where page_id = $1",
+      [fansly.id],
+    );
+    expect((await fetchTopSpenders(cookie, "tss-fansly")).source.streamState).toBe("flag_off");
+    await testDb.pool.query(
+      "update sync_pages set paused_resources = '{}', paused_all = true where page_id = $1",
+      [fansly.id],
+    );
+    expect((await fetchTopSpenders(cookie, "tss-fansly")).source.streamState).toBe("flag_off");
   });
 
-  it("reports unsupported_platform for an OnlyFans page regardless of flags", async (context) => {
+  it("reports unsupported_platform for an OnlyFans page", async (context) => {
     if (!testDb) {
       context.skip();
       return;
     }
-    const { cookie } = await startServer({ fanslyFanEarningsSyncEnabled: true });
+    const { cookie } = await startServer();
     const body = await fetchTopSpenders(cookie, "tss-of");
     expect(body.source.streamState).toBe("unsupported_platform");
   });
@@ -205,10 +217,7 @@ describe("pageTopSpenders source.streamState (W8.1)", () => {
       context.skip();
       return;
     }
-    const { cookie, fansly } = await startServer({
-      fanslyFanEarningsSyncEnabled: true,
-      fanslyNewStreamPageAllowlist: "",
-    });
+    const { cookie, fansly } = await startServer();
     const deletedDetectedAt = new Date("2026-07-14T09:30:00.000Z");
     const [gone, alive] = await upsertFans(appContext.db, [
       {
@@ -250,10 +259,7 @@ describe("pageTopSpenders source.streamState (W8.1)", () => {
       context.skip();
       return;
     }
-    const { cookie, fansly } = await startServer({
-      fanslyFanEarningsSyncEnabled: true,
-      fanslyNewStreamPageAllowlist: "",
-    });
+    const { cookie, fansly } = await startServer();
     const fanRows = await upsertFans(appContext.db, Array.from({ length: 1001 }, (_, index) => ({
       platform: "fansly" as const,
       platformUserId: `cap-fan-${String(index).padStart(4, "0")}`,

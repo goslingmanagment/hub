@@ -366,9 +366,9 @@ describe("sync blocks service", () => {
   it("triggers the financials domain through the v2 task request path", async () => {
     dbMocks.findPageByLabel.mockResolvedValue({
       page: {
-        id: 7,
-        label: "lana",
-        platform: "fansly",
+        id: 9,
+        label: "lana-of",
+        platform: "onlyfans",
       },
       proxy: {
         url: "socks5://proxy.example",
@@ -378,6 +378,7 @@ describe("sync blocks service", () => {
     dbMocks.ensurePageSyncStates.mockResolvedValue(undefined);
     dbMocks.requestPageSync.mockResolvedValue([
       { stream: "transactions", requestedSeq: 5 },
+      { stream: "fan_identities", requestedSeq: 5 },
       { stream: "top_spenders", requestedSeq: 5 },
     ]);
     queueMocks.sendSyncPageWakeup.mockResolvedValue("job-1");
@@ -385,7 +386,7 @@ describe("sync blocks service", () => {
     const response = await triggerSyncBlock({ db: {} } as never, {
       send: vi.fn(),
     } as never, {
-      pageLabel: "lana",
+      pageLabel: "lana-of",
       block: "financials",
       now: new Date("2026-03-24T12:00:00.000Z"),
     });
@@ -393,57 +394,79 @@ describe("sync blocks service", () => {
     expect(response).toMatchObject({
       accepted: true,
       action: "trigger",
-      pageLabel: "lana",
+      pageLabel: "lana-of",
       block: "financials",
       requests: [
         { stream: "transactions", requestedSeq: 5 },
+        { stream: "fan_identities", requestedSeq: 5 },
         { stream: "top_spenders", requestedSeq: 5 },
       ],
     });
     expect(dbMocks.requestPageSync).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
-      pageId: 7,
-      streams: ["transactions", "top_spenders"],
+      pageId: 9,
+      streams: ["transactions", "fan_identities", "top_spenders"],
       source: "manual",
     }));
     expect(queueMocks.sendSyncPageWakeup).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
-      platformAccountId: 7,
-      provider: "fansly",
+      platformAccountId: 9,
+      provider: "onlyfans",
       egressKey: "shared-proxy-pool",
-      priority: resolvePageSyncPriority("transactions", "manual"),
+      priority: Math.max(
+        ...(["transactions", "fan_identities", "top_spenders"] as const)
+          .map((stream) => resolvePageSyncPriority(stream, "manual")),
+      ),
     }));
   });
 
-  it("pauses the audience domain including follower reconcile support work", async () => {
+  // Step 4 (S4-10): the legacy executor serves no Fansly page. A Fansly page
+  // the engine owns takes the engine levers (sync-engine-levers.integration);
+  // any other Fansly page is refused before anything is read, written or
+  // queued.
+  it("refuses every legacy lever on a Fansly page the engine does not own (409 legacy_sync_retired)", async () => {
+    const db = {
+      transaction: vi.fn(async (callback: (tx: object) => Promise<unknown>) => callback({})),
+    };
     dbMocks.findPageByLabel.mockResolvedValue({
-      page: {
-        id: 7,
-        label: "lana",
-        platform: "fansly",
-      },
+      page: { id: 7, label: "lana", platform: "fansly" },
       proxy: null,
     });
-    dbMocks.ensurePageSyncStates.mockResolvedValue(undefined);
-    dbMocks.pausePageSync.mockResolvedValue(undefined);
-
-    await pauseSyncBlock({ db: {} } as never, {
-      pageLabel: "lana",
-      block: "audience",
-      now: new Date("2026-03-24T12:00:00.000Z"),
+    const boss = { send: vi.fn() };
+    const refused = expect.objectContaining({
+      name: "LegacySyncRetiredError",
+      statusCode: 409,
+      code: "legacy_sync_retired",
     });
+    const input = { pageLabel: "lana", now: new Date("2026-03-24T12:00:00.000Z") };
 
-    expect(dbMocks.pausePageSync).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
-      pageId: 7,
-      streams: ["subscribers", "followers", "followers_reconcile"],
-      now: new Date("2026-03-24T12:00:00.000Z"),
-    }));
+    await expect(triggerSyncBlock({ db } as never, boss as never, { ...input, block: "financials" })).rejects.toThrow(refused);
+    await expect(pauseSyncBlock({ db } as never, { ...input, block: "audience" })).rejects.toThrow(refused);
+    await expect(resumeSyncBlock({ db } as never, boss as never, { ...input, block: "messages_history" }))
+      .rejects.toThrow(refused);
+    await expect(resetSyncBlock({ db } as never, boss as never, { ...input, block: "financials" })).rejects.toThrow(refused);
+    await expect(resetFollowersReconcileStream({ db } as never, input)).rejects.toThrow(refused);
+
+    for (const writer of [
+      dbMocks.ensurePageSyncStates,
+      dbMocks.requestPageSync,
+      dbMocks.pausePageSync,
+      dbMocks.resumePageSync,
+      dbMocks.resetPageSync,
+      dbMocks.deleteCheckpoints,
+      dbMocks.deletePageTopSpenders,
+    ]) {
+      expect(writer).not.toHaveBeenCalled();
+    }
+    expect(db.transaction).not.toHaveBeenCalled();
+    expect(queueMocks.sendSyncPageWakeup).not.toHaveBeenCalled();
+    expect(boss.send).not.toHaveBeenCalled();
   });
 
   it("resumes the messages live domain through v2 task control", async () => {
     dbMocks.findPageByLabel.mockResolvedValue({
       page: {
-        id: 7,
-        label: "lana",
-        platform: "fansly",
+        id: 9,
+        label: "lana-of",
+        platform: "onlyfans",
       },
       proxy: null,
     });
@@ -460,7 +483,7 @@ describe("sync blocks service", () => {
     const response = await resumeSyncBlock({ db: {} } as never, {
       send: vi.fn(),
     } as never, {
-      pageLabel: "lana",
+      pageLabel: "lana-of",
       block: "messages_live",
       now: new Date("2026-03-24T12:00:00.000Z"),
     });
@@ -472,11 +495,11 @@ describe("sync blocks service", () => {
       requests: [{ stream: "dm_conversations", requestedSeq: 3 }],
     });
     expect(dbMocks.resumePageSync).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
-      pageId: 7,
+      pageId: 9,
       streams: ["dm_conversations"],
     }));
     expect(dbMocks.requestPageSync).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
-      pageId: 7,
+      pageId: 9,
       streams: ["dm_conversations"],
       source: "manual",
     }));
@@ -608,51 +631,6 @@ describe("sync blocks service", () => {
     }));
   });
 
-  it("resumes message history by re-requesting work and enqueueing a wakeup", async () => {
-    dbMocks.findPageByLabel.mockResolvedValue({
-      page: {
-        id: 7,
-        label: "lana",
-        platform: "fansly",
-      },
-      proxy: null,
-    });
-    dbMocks.ensurePageSyncStates.mockResolvedValue(undefined);
-    dbMocks.listPageSyncStates.mockResolvedValue([
-      { stream: "dm_messages", status: "paused" },
-    ]);
-    dbMocks.resumePageSync.mockResolvedValue(undefined);
-    dbMocks.requestPageSync.mockResolvedValue([
-      { stream: "dm_messages", requestedSeq: 4 },
-    ]);
-    queueMocks.sendSyncPageWakeup.mockResolvedValue("job-3");
-
-    const response = await resumeSyncBlock({ db: {} } as never, {
-      send: vi.fn(),
-    } as never, {
-      pageLabel: "lana",
-      block: "messages_history",
-      now: new Date("2026-03-24T12:00:00.000Z"),
-    });
-
-    expect(response).toMatchObject({
-      accepted: true,
-      action: "resume",
-      block: "messages_history",
-      requests: [{ stream: "dm_messages", requestedSeq: 4 }],
-    });
-    expect(dbMocks.resumePageSync).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
-      pageId: 7,
-      streams: ["dm_messages"],
-    }));
-    expect(dbMocks.requestPageSync).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
-      pageId: 7,
-      streams: ["dm_messages"],
-      source: "manual",
-    }));
-    expect(queueMocks.sendSyncPageWakeup).toHaveBeenCalledTimes(1);
-  });
-
   it("refuses the message-history reset before touching any state (Stage 2 guard)", async () => {
     // Stage 2 destruction-door guard: this reset would hard-delete every
     // stored DM for the page (resetPageDmSyncState); it refuses until the
@@ -661,14 +639,14 @@ describe("sync blocks service", () => {
       transaction: vi.fn(async (callback: (tx: object) => Promise<unknown>) => callback({})),
     };
     dbMocks.findPageByLabel.mockResolvedValue({
-      page: { id: 7, label: "lana", platform: "fansly" },
+      page: { id: 9, label: "lana-of", platform: "onlyfans" },
       proxy: null,
     });
 
     await expect(resetSyncBlock({ db } as never, {
       send: vi.fn(),
     } as never, {
-      pageLabel: "lana",
+      pageLabel: "lana-of",
       block: "messages_history",
       now: new Date("2026-03-24T12:00:00.000Z"),
     })).rejects.toMatchObject({
@@ -678,54 +656,5 @@ describe("sync blocks service", () => {
     expect(db.transaction).not.toHaveBeenCalled();
     expect(dbMocks.resetPageDmSyncState).not.toHaveBeenCalled();
     expect(dbMocks.resetPageSync).not.toHaveBeenCalled();
-  });
-
-  it("resets only follower reconcile without deleting audience checkpoints", async () => {
-    const tx = {};
-    const db = {
-      transaction: vi.fn(async (callback: (dbTx: object) => Promise<unknown>) => callback(tx)),
-    };
-    dbMocks.findPageByLabel.mockResolvedValue({
-      page: { id: 7, label: "lana", platform: "fansly" },
-      proxy: null,
-    });
-    dbMocks.ensurePageSyncStates.mockResolvedValue(undefined);
-    dbMocks.requestPageSync.mockResolvedValue([
-      { stream: "followers_reconcile", requestedSeq: 2052 },
-    ]);
-    queueMocks.sendSyncPageWakeup.mockResolvedValue("job-followers-reconcile");
-
-    const response = await resetFollowersReconcileStream({ db } as never, {
-      send: vi.fn(),
-    } as never, {
-      pageLabel: "lana",
-      now: new Date("2026-08-25T00:00:00.000Z"),
-    });
-
-    expect(response).toEqual({
-      accepted: true,
-      action: "reset",
-      pageLabel: "lana",
-      stream: "followers_reconcile",
-      requests: [{ stream: "followers_reconcile", requestedSeq: 2052 }],
-    });
-    expect(dbMocks.resetPageSync).toHaveBeenCalledWith(tx, {
-      pageId: 7,
-      streams: ["followers_reconcile"],
-      now: new Date("2026-08-25T00:00:00.000Z"),
-    });
-    expect(dbMocks.deleteCheckpoints).not.toHaveBeenCalled();
-    expect(dbMocks.requestPageSync).toHaveBeenCalledWith(tx, expect.objectContaining({
-      pageId: 7,
-      streams: ["followers_reconcile"],
-      source: "reset",
-    }));
-    expect(queueMocks.sendSyncPageWakeup).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        platformAccountId: 7,
-        provider: "fansly",
-      }),
-    );
   });
 });

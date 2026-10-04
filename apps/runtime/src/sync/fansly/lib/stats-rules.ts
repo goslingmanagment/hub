@@ -9,8 +9,7 @@ import { classifyFanslyResponse, fanslyUtcDayKey, type FanslyResponseClass } fro
 // (resources/stats.ts): the `stats_snapshot` cursor with its backfill walks'
 // durable state, the served-window and month checks, the hourly plane's gap
 // and the broadcast walks. The per-media rules share the window guard and the
-// window classifier (media-stats-rules.ts). Pure. The legacy `stats_snapshot`
-// lane (fansly-stats.ts) imports them from here until step 4 deletes it.
+// window classifier (media-stats-rules.ts). Pure.
 
 /** Stamped on every `fansly-stats` family capture (this lane and the media
  *  stats lane); the Fansly Sync Engine's capture helper reports the same. */
@@ -28,7 +27,7 @@ export const DAILY_TRAILING_DAYS = 30;
 export const HOURLY_TRAILING_HOURS = 25;
 /** The route serves hourly buckets only inside this window, so two hourly
  *  captures further apart than it leave hours that no window will reach again. */
-export const HOURLY_WINDOW_MS = HOURLY_TRAILING_HOURS * HOUR_MS;
+const HOURLY_WINDOW_MS = HOURLY_TRAILING_HOURS * HOUR_MS;
 /** The furthest apart two hourly captures may be. A served window is 25
  *  buckets, dateAfter to dateBefore inclusive, and ends 0–2 h short of the
  *  hour asked for, varying from call to call (production 2026-09). Two windows
@@ -63,7 +62,7 @@ export const DISCOVERY_PAGES_PER_SWEEP = 2;
  * and NOT a reason to raise the cap.
  */
 const BACKFILL_DAILY_WINDOW_DAYS = 31;
-export const BACKFILL_HOURLY_STEP_DAYS = 4;
+const BACKFILL_HOURLY_STEP_DAYS = 4;
 /**
  * The bounds the MONTH form carries, which the server ignores.
  *
@@ -95,7 +94,7 @@ const PLAUSIBLE_ACCOUNT_CREATED_AFTER_MS = Date.UTC(2019, 0, 1);
  *  evidence: the one observed call carried a 30-day window and nothing anywhere
  *  shows this route answering a longer one. The unhonoured-window guard below is
  *  what makes being wrong here cost one extra request instead of a day's cap. */
-export const BACKFILL_EARNINGS_WINDOW_DAYS = 31;
+const BACKFILL_EARNINGS_WINDOW_DAYS = 31;
 /** A window the provider did not honour is halved ONCE before its lane gives
  *  up — and never below this floor, because a span this short buys nothing that
  *  a stopped lane and a `capture_coverage` row do not say more honestly. */

@@ -9,14 +9,9 @@ import {
   insertSyncRunEvent,
   nextPageSyncObservationSeq,
   recordSyncHttpAttemptResponseBodyBytes,
-  updatePageMetadata,
 } from "@agency_hub_core/db";
-import { FANSLY_MAPPER_VERSION, type FanslySendSource } from "@agency_hub_core/fansly";
-import { type HttpRequestObserver, millsFromInteger } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
-import type { ResolvedFanslyPageContext } from "../page-context.ts";
-import { buildFanslyMetadata } from "../fansly.ts";
 import { noteCaptureCasRefVanished, putCaptureCasPayloads } from "../capture-cas-dual-write.ts";
 import type { NormalizedSyncError } from "./errors.ts";
 import { SyncPayloadPersistenceError } from "./errors.ts";
@@ -30,11 +25,10 @@ import {
   JOURNAL_LONE_SURROGATES_REPLACED_NOTE_CODE,
   replaceJournalLoneSurrogates,
 } from "../../sync/fansly/lib/journal-lone-surrogates.ts";
-import type { SyncRunTelemetry } from "./observability.ts";
-import { fanslyPageSendGuard } from "../fansly-send-guard/index.ts";
 
-// Legacy mapper tag for OnlyFans failed-payload rows (kept byte-identical to
-// the retired packages/onlyfans export so recorded rows stay comparable).
+// Mapper tag of the legacy executor's failed-payload rows (kept byte-identical
+// to the retired packages/onlyfans export so recorded rows stay comparable).
+// The executor serves OnlyFans only since step 4, so it is the only tag here.
 const ONLYMONSTER_MAPPER_VERSION = "onlymonster-phase3-v1";
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
@@ -276,72 +270,14 @@ export async function persistRawPayload(
   return { ...rawPayload, observationId: journalledObservationId, observationPayload: observedPayload };
 }
 
-/** Fansly-only since Stage 18: the OnlyMonster metadata refresh is retired
- * (OnlyFans page identity is static post-onboarding; counts ride the OFAPI
- * audience sweep). */
-export async function refreshPageMetadata(
-  app: AppContext,
-  pageContext: ResolvedFanslyPageContext,
-  syncType?: "light" | "followers",
-  telemetry?: SyncRunTelemetry,
-  requestObserver?: HttpRequestObserver | null,
-  /** Who sends, for the page's send guard journal. A sync chunk (with
-   *  telemetry) by default; the API and CLI page checks name themselves. */
-  sendSource: FanslySendSource = telemetry ? "sync_stream" : "account_me_api",
-) {
-  {
-    const accountMe = await app.adapter.getAccountMe({
-      session: pageContext.session,
-      proxy: pageContext.proxy,
-      egressKey: pageContext.egressKey,
-      requestObserver: requestObserver ?? telemetry?.getRequestObserver() ?? null,
-      sendGuard: fanslyPageSendGuard(app, pageContext.page.id, sendSource),
-    });
-    await persistRawPayload(app.db, {
-      platformAccountId: pageContext.page.id,
-      // The run id keeps the observation key unique per chunk: continuation
-      // chunks of one request share requestSeq and restart the fetch counter,
-      // so without it followers_reconcile's terminal account_me collided with
-      // the sweep-start one and was silently dropped by the key claim.
-      syncRunId: telemetry?.metadata.runId ?? null,
-      endpoint: "account_me",
-      requestParams: {},
-      responsePayload: accountMe.raw,
-      mapperVersion: FANSLY_MAPPER_VERSION,
-      payloadKind: "mapping_critical",
-      retainUntil: retentionDate(),
-    }, {
-      action: "inserting account_me raw payload",
-      platform: "fansly",
-    });
-
-    await updatePageMetadata(app.db, pageContext.page.id, {
-      platformAccountIdValue: accountMe.parsed.account.id,
-      username: accountMe.parsed.account.username,
-      displayName: accountMe.parsed.account.displayName,
-      followerCount: accountMe.parsed.account.followCount,
-      // This write always advances last_verified_at, which the stated-empty
-      // subscribers rule reads as the counter's freshness. A counter missing
-      // from the response is cleared, not skipped (Drizzle drops undefined),
-      // so the last 0 cannot keep looking fresh.
-      subscriberCount: typeof accountMe.parsed.account.subscriberCount === "number"
-        ? accountMe.parsed.account.subscriberCount
-        : null,
-      earningsBalanceMills: millsFromInteger(accountMe.parsed.account.earningsWallet?.balance ?? 0),
-      metadata: buildFanslyMetadata(accountMe.parsed.account, pageContext.page.metadata),
-      ...(syncType ? { syncType } : {}),
-    });
-
-    return accountMe;
-  }
-}
-
 export async function persistFailedSyncPayload(
   app: Pick<AppContext, "db" | "logger">,
   input: {
     platformAccountId: number;
     syncRunId: number;
     endpoint: string;
+    /** The page's platform, for the observation: one the legacy executor
+     *  serves (`sync/onlyfans/boundary.ts`). */
     platform: "fansly" | "onlyfans";
     failure: NormalizedSyncError;
   },
@@ -353,9 +289,7 @@ export async function persistFailedSyncPayload(
       endpoint: input.endpoint,
       requestParams: {},
       responsePayload: { error: input.failure.error },
-      mapperVersion: input.platform === "fansly"
-        ? FANSLY_MAPPER_VERSION
-        : ONLYMONSTER_MAPPER_VERSION,
+      mapperVersion: ONLYMONSTER_MAPPER_VERSION,
       payloadKind: "failed",
       errorMessage: input.failure.summary,
       retainUntil: retentionDate(),

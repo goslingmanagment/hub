@@ -786,8 +786,11 @@ export const pageSyncStates = pgTable("page_sync_states",
   }),
 );
 
-// 0219 (R04): a provider rate limit holds every sync stream of the page until
-// holdUntil, apart from the per-stream retry state that requests rewrite.
+// 0219 (R04): a Fansly 429 held every legacy sync stream of the page until
+// holdUntil. Nothing writes or obeys it since step 4 (S4-19: the legacy
+// executor serves OnlyFans only, and only a Fansly answer armed it), and
+// nothing reads it since S4-21 (the switch import carried a hold in force);
+// the rows stay as records.
 export const pageSyncProviderHolds = pgTable("page_sync_provider_holds", {
   pageId: bigint("page_id", { mode: "number" }).primaryKey().references(() => pages.id, {
     onDelete: "cascade",
@@ -806,7 +809,7 @@ export const pageSyncProviderHolds = pgTable("page_sync_provider_holds", {
 // the legacy engine. The capture and its completion are conditional UPDATEs by
 // DB clock (repositories/fansly-send-guard.ts); an expired lease never opens
 // the page by itself. 0229 (sync engine design §2.7): `owner_engine` — a row
-// the step-3 switch gave to the Fansly Sync Engine refuses every legacy
+// of the Fansly Sync Engine (every Fansly page's) refuses every legacy
 // capture.
 export const fanslyPageSendGuards = pgTable(
   "fansly_page_send_guards",
@@ -899,7 +902,8 @@ export const fanslySendPaceCursor = pgTable(
 // 0228 (Fansly Sync Engine, plan §11): the new engine's per-page state. Mode,
 // pauses, holds, ownership (generation + the owner process's identity), the
 // scheduler's cycle position and the pacer's facts. Written through
-// repositories/sync/pages.ts only; `handover`/`live` only by the switch CLI.
+// repositories/sync/pages.ts only; `live` only at a page's birth
+// (`createLiveSyncPage`), `handover` by nothing since step 4 (S4-21).
 export const syncPages = pgTable(
   "sync_pages",
   {
@@ -1319,9 +1323,9 @@ export const syncRawPayloads = pgTable(
     dmTipContextBackfillIdx: index("sync_raw_payloads_dm_tip_context_backfill_idx")
       .on(table.id)
       .where(sql`${table.endpoint} = 'dm_messages' and ${table.payloadKind} = 'dm_messages'`),
-    // 0223: a purchase_history chunk's capture, probe and storm reads. The
-    // list is the lane's endpoints (fansly-purchase-history.ts); a query only
-    // uses the index when its endpoint is one of them.
+    // 0223: the purchase-history capture, probe and storm reads. The list is
+    // the endpoints the legacy lane journaled (deleted at step 4, S4-16); a
+    // query only uses the index when its endpoint is one of them.
     purchaseHistoryIdx: index("sync_raw_payloads_purchase_history_idx")
       .on(table.pageId, table.endpoint, table.id)
       .where(sql`${table.endpoint} in ('purchase_history', 'purchase_history_contract_probe', 'purchase_history_contract_storm')`),
@@ -1546,7 +1550,7 @@ export const pageFans = pgTable(
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).defaultNow().notNull(),
     // 0224: the Fansly account lookup through this page whose result Hub
     // stored, and the DM partner probe's own answer (fan-hydration.ts,
-    // fansly-account-probe.ts). Neither is asked again within a day.
+    // sync/fansly/resources/fan-profiles.ts). Neither is asked again within a day.
     accountLookupAt: timestamp("account_lookup_at", { withTimezone: true }),
     accountProbeAt: timestamp("account_probe_at", { withTimezone: true }),
     accountProbeResolved: boolean("account_probe_resolved"),

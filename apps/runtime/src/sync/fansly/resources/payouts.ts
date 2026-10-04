@@ -13,7 +13,6 @@ import {
   FANSLY_PAYOUTS_OBSERVATION_KINDS,
   firstPayoutRef,
   oldestCreatedAtMs,
-  parseFanslyPayoutsCursorState,
   payoutHeadGap,
   payoutRefs,
   payoutRequestRows,
@@ -30,7 +29,6 @@ import type {
   ApplyInput,
   ApplyResult,
   DemandSignal,
-  LegacyImport,
   ReplayContext,
   ReplayObservation,
   ReplayVerdict,
@@ -371,27 +369,6 @@ const dailyModule: ResourceModule = {
 
   async replay(observation: ReplayObservation, ctx: ReplayContext): Promise<ReplayVerdict> {
     return replayPayouts(observation, ctx);
-  },
-
-  async importLegacy(tx, page): Promise<LegacyImport> {
-    const legacy = await tx.execute<{ state: unknown }>(sql`
-      select state from page_sync_cursors where page_id = ${page.pageId} and stream = 'payouts'
-    `);
-    const state = parseFanslyPayoutsCursorState(legacy.rows[0]?.state ?? null);
-    if (state === null) return { cursors: [], notes: { payouts: "none" } };
-    const daily: DailyCursor = { step: 0, headRefs: state.headRefs, walkTotal: state.walkTotal, unknownStatusCodes: state.unknownStatusCodes };
-    const cursors: LegacyImport["cursors"][number][] = [{ resource: "payouts.daily", subject: "", cursor: daily }];
-    if (!state.walkDone && state.walkOffset > 0) {
-      const walk: WalkCursor = {
-        offset: state.walkOffset,
-        lastRequestedOffset: state.lastRequestedOffset,
-        lastPageFirstRef: state.lastPageFirstRef,
-        pages: state.walkPages,
-        catchUp: state.catchUp,
-      };
-      cursors.push({ resource: PAYOUTS_WALK_KEY, subject: "", cursor: walk });
-    }
-    return { cursors, notes: { payouts: state.walkDone ? "walk_done" : `walk_open:${state.walkOffset}` } };
   },
 };
 

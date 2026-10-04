@@ -247,10 +247,11 @@ async function buildShadowForAccount(
       { accountId, includeHot: true },
       "message_archive_shadow",
     );
-    // D-6: Fansly WS deletions are marks from exact receipts, not message.*
-    // events, so the replay cannot re-derive them. Same facts, same writer as
-    // the live reconcile and archive:backfill-fansly-ws-deletions; after the
-    // backfills, because a mark lands only on a row that exists.
+    // D-6: Fansly WS deletions from before the engine applied them itself
+    // (step 4, S4-11) are marks from exact receipts, not message.* events, so
+    // the replay cannot re-derive them; the engine's later deletions are
+    // `message.deleted` events the replay carries. After the backfills,
+    // because a mark lands only on a row that exists.
     const wsDeletionsMarked = await markFanslyWsArchiveDeletions(
       db,
       { accountId },

@@ -3,9 +3,7 @@ import { mapFanslySubscriptionStatus, type FanslyFollower, type FanslySubscriber
 import { millsFromInteger } from "@agency_hub_core/shared";
 
 // The audience rules of the Sync Engine's resources (resources/subscribers.ts,
-// followers.ts): subscribers, followers, followers reconcile. Pure. The legacy
-// chunk handlers (executor-handlers.ts, followers-reconcile-floor.ts) import
-// them from here until step 4 deletes them.
+// followers.ts): subscribers, followers, followers reconcile. Pure.
 
 /** Restarts of a subscribers walk (total changed, partial result, offset
  *  duplicates) before the walk is withheld. */
@@ -30,7 +28,7 @@ export const SUBSCRIBERS_EMPTY_SNAPSHOT_COUNTER_MAX_AGE_MS = 2 * 60 * 60 * 1000;
  *  after it happens instead of within a few hours. */
 export const FOLLOWERS_RECONCILE_MIN_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
-export const FOLLOWERS_RECONCILE_PAGE_SIZE = 100;
+const FOLLOWERS_RECONCILE_PAGE_SIZE = 100;
 export const FOLLOWERS_RECONCILE_MAX_SNAPSHOT_RESTARTS = 2;
 export const FOLLOWERS_RECONCILE_RETRY_DELAY_MS = 15 * 60_000;
 

@@ -17,6 +17,7 @@ import {
   HarnessSocket,
   harnessConfig,
   harnessHostOptions,
+  harnessIdentityRegistry,
   harnessRng,
   harnessRoutes,
   HARNESS_KEY,
@@ -26,7 +27,6 @@ import {
   type FakeArrival,
   type HarnessPage,
 } from "./helpers/sync-engine.ts";
-import { switchRegistry } from "./helpers/sync-switch.ts";
 
 // `ws.connect` (design S3-04 item 4, §5.2): the page's WebSocket Upgrade as an
 // admitted request of a live page, through the production host, page
@@ -191,7 +191,7 @@ describe("ws.connect on a live page", () => {
     const rotated = { authorization: "rotated-token", fanslyClientId: "client-id", fanslyClientCheck: "client-check", fanslySessionId: "session-id" };
     await storeFanslySession(db(), pageId, JSON.stringify(encryptJson(rotated, HARNESS_ENCRYPTION_KEY, 1)), 1);
     await demand(pageId, HARNESS_KEY.ws, "");
-    await startHost(r, { seed: 87, registry: switchRegistry() });
+    await startHost(r, { seed: 87, registry: harnessIdentityRegistry() });
     await until(async () => (await wsWork(pageId))[0]?.state === "done", 30_000, "the Upgrade after the verify");
 
     // The verify of the rotated session first, the Upgrade only after it.

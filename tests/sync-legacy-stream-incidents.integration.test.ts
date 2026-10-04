@@ -4,6 +4,7 @@ import {
   createModel,
   createOnlyFansPage,
   getSyncPage,
+  openNotificationIncident,
   type Database,
 } from "@agency_hub_core/db";
 import { createLogger } from "@agency_hub_core/shared";
@@ -13,15 +14,11 @@ import {
   incidentKey,
   notifySyncChunkFailureIncident,
   notifySyncEngineIncident,
-  notifyAuthFailedIncident,
   resolveLegacyStreamIncidentsOfEnginePage,
 } from "../apps/runtime/src/services/notification-incidents.ts";
 import { runNotificationPagingSweep } from "../apps/runtime/src/services/notification-paging-sweep.ts";
 import { SyncEngineHost, type SyncHostOptions } from "../apps/runtime/src/sync/engine/host.ts";
 import { createPacer } from "../apps/runtime/src/sync/engine/pacer.ts";
-import { recordSwitchAudit } from "../apps/runtime/src/sync/switch/audit.ts";
-import { SWITCH_EXIT } from "../apps/runtime/src/sync/switch/context.ts";
-import { runSyncSwitch } from "../apps/runtime/src/sync/switch/switch.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import {
   quietLogger,
@@ -32,15 +29,14 @@ import {
   testRegistry,
   waitFor,
 } from "./helpers/sync-engine-host.ts";
-import { SWITCH_TEST_TIMING, switchContext, switchRegistry, testCapability } from "./helpers/sync-switch.ts";
 
 // The transition of a Fansly page to the Fansly Sync Engine closes the page's
 // legacy stream incidents (`stream_failed_threshold:<page>:<stream>`), which
 // only the legacy executor's chunk recovery resolved and which nothing
 // resolves once the engine runs the page (production incident 41, lilly-2
 // `dm_conversations`, open since the day before its switch): every live
-// takeover of the host and the switch's phase C resolve them through the
-// ordinary resolve, once, with reason `engine_owned` in the resolve message.
+// takeover of the host resolves them through the ordinary resolve, once,
+// with reason `engine_owned` in the resolve message.
 // The engine's own latches, the page-wide ones the page verify resolves,
 // other pages and OnlyFans stay as they are; the legacy executor cannot open
 // them again while the engine owns the page.
@@ -162,8 +158,16 @@ describe("legacy stream incidents at the transition to the Fansly Sync Engine", 
     const engine = await seedSyncPage(handles(), { label: "lilly-2", guard: "fansly_sync_engine" });
     await legacyStreamFailure({ pageId: engine.pageId, label: engine.label, stream: "dm_conversations", at: openedAt });
     await legacyStreamFailure({ pageId: engine.pageId, label: engine.label, stream: "posts", at: openedAt });
-    await notifyAuthFailedIncident(app(), {
-      platformAccountId: engine.pageId, pageLabel: engine.label, platform: "fansly", errorSummary: "401", occurredAt: openedAt,
+    // The page-wide auth latch a legacy chunk opened before the page was
+    // switched (nothing opens one since step 4, S4-19: the legacy executor
+    // serves no Fansly page).
+    await openNotificationIncident(db(), {
+      incidentKey: incidentKey({ kind: "auth_blocked", platformAccountId: engine.pageId }),
+      kind: "auth_blocked",
+      platformAccountId: engine.pageId,
+      errorSummary: "401",
+      metadata: { pageLabel: engine.label, platform: "fansly" },
+      now: openedAt,
     });
     // Another Fansly page the legacy engine still runs, and an OnlyFans page.
     const legacy = await seedSyncPage(handles(), { label: "lora-9" });
@@ -256,7 +260,7 @@ describe("legacy stream incidents at the transition to the Fansly Sync Engine", 
     expect(resolved).not.toContain("recovered");
   }, 90_000);
 
-  it("the switch's phase C closes them before it waits for the owner; a page in handover keeps them", async (context) => {
+  it("only a live page's are closed, once: a page in handover keeps them, a second pass changes nothing", async (context) => {
     if (!testDb) return context.skip();
     const openedAt = new Date(Date.now() - 60 * MINUTE);
     const page = await seedSyncPage(handles(), { label: "lilly-3", guard: "fansly_sync_engine" });
@@ -264,33 +268,21 @@ describe("legacy stream incidents at the transition to the Fansly Sync Engine", 
     const handover = await seedSyncPage(handles(), { label: "lilly-4", guard: "fansly_sync_engine" });
     await legacyStreamFailure({ pageId: handover.pageId, label: handover.label, stream: "dm_conversations", at: openedAt });
 
-    // A handover may still revert to shadow, where the legacy stream runs again: not closed.
+    // A page in handover is not the engine's to run: not closed.
     await setModeDirect(testDb.pool, handover.pageId, "handover");
     expect(await resolveLegacyStreamIncidentsOfEnginePage(app(), { pageId: handover.pageId, pageLabel: handover.label })).toEqual([]);
     expect((await latch(streamKey(handover.pageId, "dm_conversations")))?.status).toBe("open");
 
-    // A switch past C (mode live, its C_live row) resumed with no host running:
-    // the latch closes at C, then the wait for an owner times out (exit 4).
+    // A live page with no host running yet: the resolver closes its latch.
     await setModeDirect(testDb.pool, page.pageId, "live");
-    await recordSwitchAudit(db(), { pageId: page.pageId, phase: "C_live", actor: "test", detail: { generationAtC: "0" } });
-    const lines: string[] = [];
-    const outcome = await runSyncSwitch(
-      switchContext({ db: db(), config: testConfig(testDb.connectionString), lines }, { timing: { ...SWITCH_TEST_TIMING, ownerTimeoutMs: 300 } }),
-      { pageLabel: page.label, shadowReportPath: null, dryRun: false, registry: switchRegistry(), capabilityFor: testCapability("test switch") },
-    );
-    expect(outcome).toEqual({ exitCode: SWITCH_EXIT.noLiveOwner, phase: "C_live", page: page.label });
-    expect(lines[0]).toBe("C lilly-3: 1 legacy stream incident(s) closed (dm_conversations) — the page is owned by the Fansly Sync Engine");
+    expect(await resolveLegacyStreamIncidentsOfEnginePage(app(), { pageId: page.pageId, pageLabel: page.label }))
+      .toEqual(["dm_conversations"]);
     const row = (await latch(streamKey(page.pageId, "dm_conversations")))!;
     expect(row.status).toBe("resolved");
     expect(row.metadata).toMatchObject({ resolution: "engine_owned" });
 
-    // Run again: nothing left to close, nothing printed about it.
-    lines.length = 0;
-    await runSyncSwitch(
-      switchContext({ db: db(), config: testConfig(testDb.connectionString), lines }, { timing: { ...SWITCH_TEST_TIMING, ownerTimeoutMs: 300 } }),
-      { pageLabel: page.label, shadowReportPath: null, dryRun: false, registry: switchRegistry(), capabilityFor: testCapability("test switch") },
-    );
-    expect(lines.some((line) => line.includes("legacy stream incident"))).toBe(false);
+    // Run again (every live takeover of the host does): nothing left to close.
+    expect(await resolveLegacyStreamIncidentsOfEnginePage(app(), { pageId: page.pageId, pageLabel: page.label })).toEqual([]);
     expect((await latch(streamKey(page.pageId, "dm_conversations")))!.updated_at.getTime()).toBe(row.updated_at.getTime());
   }, 60_000);
 });

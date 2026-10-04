@@ -7,10 +7,6 @@ const repoMocks = vi.hoisted(() => ({
   getPageConversationPreview: vi.fn(),
   getPageConversationMessages: vi.fn(),
   getPageDmSyncCoverage: vi.fn(),
-  listFanslyFanPageIdentityBackfillTargets: vi.fn(),
-  // Step-3 legacy fences (S3-01): no page is the Fansly Sync Engine's here.
-  findPageByLabel: vi.fn(async () => null),
-  listEngineOwnedFanslyPages: vi.fn(async () => []),
   // Step 4 (S4-08): the store a page's DM readers read.
   readDmReaderStore: vi.fn(async () => "page_dm_messages"),
   millsToNumber: (value: bigint) => Number(value),
@@ -30,17 +26,8 @@ const fanslyPageMocks = vi.hoisted(() => ({
   resolveAccessibleDmPage: vi.fn(),
 }));
 
-const pageContextMocks = vi.hoisted(() => ({
-  resolvePageContext: vi.fn(),
-}));
-
 const liveOverlayMocks = vi.hoisted(() => ({
   pageReadsLiveOverlay: vi.fn(),
-}));
-
-const fanHydrationMocks = vi.hoisted(() => ({
-  upsertHydratedFansForPage: vi.fn(),
-  upsertHydratedFansForPageDetailed: vi.fn(),
 }));
 
 vi.mock("@agency_hub_core/db", () => repoMocks);
@@ -78,15 +65,7 @@ vi.mock("../apps/runtime/src/services/fansly-page.ts", () => ({
 vi.mock("../apps/runtime/src/services/live-overlay-read.ts", () => ({
   pageReadsLiveOverlay: liveOverlayMocks.pageReadsLiveOverlay,
 }));
-vi.mock("../apps/runtime/src/services/page-context.ts", () => ({
-  resolvePageContext: pageContextMocks.resolvePageContext,
-}));
-vi.mock("../apps/runtime/src/sync/fansly/lib/fan-hydration.ts", () => ({
-  upsertHydratedFansForPage: fanHydrationMocks.upsertHydratedFansForPage,
-  upsertHydratedFansForPageDetailed: fanHydrationMocks.upsertHydratedFansForPageDetailed,
-}));
 
-import { backfillFanslyPageAliases } from "../apps/runtime/src/services/fansly-page-alias-backfill.ts";
 import {
   getPageConversationMessagesReport,
   getPageConversationPreviewReport,
@@ -326,61 +305,4 @@ describe("runtime page services", () => {
       content: "hey & hi",
     });
   });
-
-
-  it("passes custom egress keys into Fansly page alias backfills", async () => {
-    const pageContext = {
-      platform: "fansly",
-      page: {
-        id: 7,
-        label: "lana",
-        platformAccountId: "acct-1",
-        metadata: {},
-      },
-      session: { authorization: "token" },
-      proxy: { url: "socks5://proxy.example" },
-      egressKey: "shared-proxy-pool",
-    };
-    let observedContext: Record<string, unknown> | null = null;
-    pageContextMocks.resolvePageContext.mockResolvedValue(pageContext);
-    repoMocks.listFanslyFanPageIdentityBackfillTargets.mockResolvedValue([{
-      platformAccountId: 7,
-      pageLabel: "lana",
-      platformUserId: "fan-1",
-    }]);
-    fanHydrationMocks.upsertHydratedFansForPageDetailed.mockResolvedValue({
-      reconciledAccountCount: 1,
-      noteCount: 0,
-      upsertedNoteCount: 0,
-      deactivatedNoteCount: 0,
-      aliasesSet: 0,
-      aliasesCleared: 0,
-    });
-
-    await backfillFanslyPageAliases(
-      {
-        db: {},
-        adapter: {
-          async getAccountsByIdsPage(context: Record<string, unknown>) {
-            observedContext = context;
-            return {
-              parsed: [{
-                id: "fan-1",
-                username: "fan_1",
-                displayName: "Fan 1",
-                createdAt: 1_770_000_000_000,
-              }],
-            };
-          },
-        },
-      } as never,
-      { pageLabels: ["lana"], chunkSize: 1 },
-    );
-
-    expect(observedContext).toMatchObject({
-      egressKey: "shared-proxy-pool",
-      proxy: { url: "socks5://proxy.example" },
-    });
-  });
-
 });

@@ -1,7 +1,5 @@
 import { describe, expect, it } from "vitest";
 
-import { FanslyApiError } from "@agency_hub_core/fansly";
-
 import { OfapiApiError } from "../apps/runtime/src/services/ofapi.ts";
 import {
   boundSyncErrorSummary,
@@ -64,37 +62,10 @@ describe("sync error normalization", () => {
     expect(normalized.summary).not.toContain("params:");
   });
 
-  // Decision #248: ari-1/purchase_history was blocked on a Fansly 422 whose
-  // journaled failure held only the summary — the body it came with is the
-  // fact that makes the block diagnosable.
-  it("journals the Fansly response snippet without changing the summary", () => {
-    const responseSnippet = '{"success":false,"error":{"code":4,"details":"invalid accountId"}}';
-    const normalized = buildNormalizedSyncError(
-      new FanslyApiError("Fansly request failed (422)", 422, 4, responseSnippet),
-      {
-        endpoint: "purchase_history",
-        action: "running purchase history sync",
-      },
-    );
-
-    expect(normalized.summary).toBe("Fansly request failed (422)");
-    expect(normalized.error.summary).toBe("Fansly request failed (422)");
-    expect(normalized.error.responseSnippet).toBe(responseSnippet);
-  });
-
-  it("keeps a snippetless Fansly failure null", () => {
-    const normalized = buildNormalizedSyncError(
-      new FanslyApiError("Fansly request failed (500)", 500),
-      {
-        endpoint: "purchase_history",
-        action: "running purchase history sync",
-      },
-    );
-
-    expect(normalized.summary).toBe("Fansly request failed (500)");
-    expect(normalized.error.responseSnippet).toBeNull();
-  });
-
+  // Decision #248: a stream blocked on a provider's 422 whose journaled
+  // failure held only the summary could not be diagnosed — the body it came
+  // with is the fact that makes the block diagnosable. The legacy executor
+  // serves OnlyFans only (step 4), so the provider here is OFAPI.
   it("redacts and bounds an OFAPI response body before journaling it", () => {
     const body = [
       '{"error":"unprocessable","hint":"retry with token=s3cr3tvalue0001",',
@@ -137,17 +108,28 @@ describe("sync error normalization", () => {
   it("unwraps a persistence error to reach the provider snippet", () => {
     const normalized = buildNormalizedSyncError(
       new SyncPayloadPersistenceError({
-        endpoint: "purchase_history",
-        action: "inserting purchase history raw payload",
-        cause: new FanslyApiError("Fansly request failed (422)", 422, 4, '{"code":4}'),
+        endpoint: "ofapi_dm",
+        action: "inserting ofapi_dm raw payload",
+        cause: new OfapiApiError("OFAPI request failed (422)", 422, '{"code":4}'),
       }),
       {
-        endpoint: "purchase_history",
-        action: "running purchase history sync",
+        endpoint: "ofapi_dm",
+        action: "running OFAPI DM sync",
       },
     );
 
     expect(normalized.error.responseSnippet).toBe('{"code":4}');
+  });
+
+  it("journals no snippet for an error of any other class, whatever it carries", () => {
+    const foreign = Object.assign(new Error("request failed (422)"), { status: 422, responseSnippet: '{"code":4}', body: '{"code":4}' });
+    const normalized = buildNormalizedSyncError(foreign, {
+      endpoint: "subscribers",
+      action: "running subscribers sync",
+    });
+
+    expect(normalized.summary).toBe("request failed (422)");
+    expect(normalized.error.responseSnippet).toBeNull();
   });
 
   it("bounds arbitrary run summaries before persistence", () => {

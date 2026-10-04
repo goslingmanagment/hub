@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
@@ -540,6 +540,54 @@ describe("0237_sync_attempt_route_intervals.sql", () => {
   });
 
   it("allows application rollback after the additive migration", () => {
+    expect(rollbackCompatible()).toContain(`"${migration}"`);
+  });
+});
+
+describe("retire_fansly_legacy_sync_states.sql (step 4, S4-21: the point of no return, stage 2)", () => {
+  // Found by its name, not its number: the number is the next free one at merge.
+  const found = readdirSync("packages/db/migrations").filter((file) => file.endsWith("_retire_fansly_legacy_sync_states.sql"));
+  const migration = found[0] ?? "";
+  const text = found.length === 1 ? readFileSync(`packages/db/migrations/${migration}`, "utf8") : "";
+  const sql = stripComments(text);
+  const statements = topLevelStatements(sql);
+
+  it("exists once, after the migration that made the sync pages (0228)", () => {
+    expect(found).toHaveLength(1);
+    expect(migration > "0228_sync_engine_core.sql").toBe(true);
+  });
+
+  it("is one data update that parks the Fansly pages' legacy stream rows, and no DDL", () => {
+    expect(statements).toHaveLength(1);
+    const [update] = statements;
+    expect(update).toMatch(
+      /^update page_sync_states st set status = 'paused', blocker_kind = 'retired', blocker_code = 'fansly_sync_engine_owned', blocker_message = '[^']+', blocked_at = coalesce\(st\.blocked_at, clock_timestamp\(\)\), /,
+    );
+    // The lease and the retry are cleared, as 0097 parked the OnlyFans DM rows.
+    for (const column of ["leased_seq", "lease_owner", "lease_token", "lease_heartbeat_at", "lease_expires_at", "retry_kind", "retry_at"]) {
+      expect(update, column).toContain(`${column} = null`);
+    }
+    // Fansly pages only, and a row parked already is not rewritten.
+    expect(update).toMatch(
+      / from pages p where p\.id = st\.page_id and p\.platform = 'fansly' and not \(st\.status = 'paused' and st\.blocker_kind is not distinct from 'retired'\)$/,
+    );
+    // What a stream asked for and applied, its cursors and its runs stay.
+    expect(update).not.toMatch(/request_seq|applied_seq|request_payload|progress|phase|consecutive_failures/);
+    expect(sql).not.toMatch(/\b(alter|create|drop|rename|truncate|delete|insert|grant|trigger)\b/i);
+    expect(sql).not.toMatch(/page_sync_cursors|sync_pages|onlyfans/);
+  });
+
+  it("uses the blocker no image clears: the one 0097 parked the OnlyFans DM rows with", () => {
+    const retired = readFileSync("packages/db/migrations/0097_retire_onlyfans_legacy_dm_messages.sql", "utf8");
+    expect(retired).toContain("blocker_kind = 'retired'");
+    const pageSync = readFileSync("packages/db/src/repositories/page-sync.ts", "utf8");
+    expect(pageSync).toContain('export const ONLYFANS_LEGACY_DM_MESSAGES_BLOCKER_KIND = "retired";');
+    // A resume skips the kind; a reset keeps it and keeps the row paused.
+    expect(pageSync).toContain("and blocker_kind is distinct from ${ONLYFANS_LEGACY_DM_MESSAGES_BLOCKER_KIND}");
+    expect(pageSync).toContain("when blocker_kind = ${ONLYFANS_LEGACY_DM_MESSAGES_BLOCKER_KIND} then 'paused'::page_sync_status");
+  });
+
+  it("allows application rollback: the previous image serves no Fansly page from these rows", () => {
     expect(rollbackCompatible()).toContain(`"${migration}"`);
   });
 });

@@ -1,17 +1,12 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { fanslyWireSpec, readFanslyWireResponse, type FanslyWireId, type FanslyWireParams } from "@agency_hub_core/fansly";
+import { describe, expect, it } from "vitest";
 
-import {
-  isDmHeadStaleByTime,
-  resolveDmConversationCoverageStatus,
-} from "../apps/runtime/src/services/sync/fansly-dm-messages.ts";
 import { trimFanslyMessagingGroupsPayload } from "../apps/runtime/src/sync/fansly/lib/capture-trims.ts";
 import { normalizeDmTipAmountCents } from "../apps/runtime/src/sync/fansly/lib/dm-normalize.ts";
 import { normalizeFanslyTimestamp } from "../apps/runtime/src/sync/fansly/lib/timestamp.ts";
-import { FanslyAdapter } from "../packages/fansly/src/adapter.ts";
-import { createTestFanslySendGuard } from "./helpers/fansly-send-guard.ts";
 
 async function loadResponseFixture<T>(name: string) {
   const file = path.resolve("tests/fixtures/fansly", name);
@@ -26,9 +21,17 @@ async function loadResponseFixture<T>(name: string) {
   return parsed.data;
 }
 
-afterEach(() => {
-  vi.restoreAllMocks();
-});
+/** The fixture's answer as its wire route reads it: a 200 whose body is the
+ *  envelope, through the route's own contract. */
+function acceptedBy<I extends FanslyWireId>(id: I, params: FanslyWireParams<I>, envelope: { success: boolean; response: unknown }) {
+  const read = readFanslyWireResponse(fanslyWireSpec(id), params, {
+    status: 200,
+    headers: {},
+    bodyText: JSON.stringify(envelope),
+  });
+  if (read.kind !== "accepted") throw new Error(`${id} did not accept the fixture: ${JSON.stringify(read)}`);
+  return read.value;
+}
 
 describe("Fansly DM fixtures", () => {
   it("parses rich messaging_groups payloads with aggregation data", async () => {
@@ -40,38 +43,22 @@ describe("Fansly DM fixtures", () => {
         groups?: Array<Record<string, unknown>>;
       };
     }>("messaging_groups.json");
-    const adapter = new FanslyAdapter({
-      baseUrl: "https://fansly.example",
-    });
-    vi.spyOn(adapter as unknown as { request: () => Promise<unknown> }, "request").mockResolvedValue({
-      parsed: fixture.response,
-      raw: fixture.response,
-    });
 
-    const result = await adapter.getMessagingGroupsPage({
-      sendGuard: createTestFanslySendGuard(),
-      session: {
-        authorization: "token",
-      },
-    }, {
-      offset: 0,
-      limit: 100,
-      sortOrder: 1,
-      flags: 0,
-    });
+    const page = acceptedBy("messaging.groups", { offset: 0 }, fixture);
+    const groups = page.aggregationData?.groups ?? [];
 
-    expect(result.total).toBe(fixture.response.aggregationData?.total);
-    expect(result.items.length).toBeGreaterThan(0);
-    expect(result.accounts.length).toBeGreaterThan(0);
-    expect(result.groups.length).toBeGreaterThan(0);
-    expect(result.items[0]).toMatchObject({
+    expect(page.aggregationData?.total).toBe(fixture.response.aggregationData?.total);
+    expect(page.data.length).toBeGreaterThan(0);
+    expect((page.aggregationData?.accounts ?? []).length).toBeGreaterThan(0);
+    expect(groups.length).toBeGreaterThan(0);
+    expect(page.data[0]).toMatchObject({
       groupId: "group_alpha",
       partnerAccountId: "acct_fan_alpha",
     });
-    expect(result.groups[0]).toMatchObject({
+    expect(groups[0]).toMatchObject({
       id: "group_alpha",
     });
-    expect(result.groups.some((group) => (
+    expect(groups.some((group) => (
       typeof group.lastMessage?.id === "string" &&
       typeof group.lastMessage?.createdAt === "number"
     ))).toBe(true);
@@ -84,7 +71,8 @@ describe("Fansly DM fixtures", () => {
         total?: number;
       };
     }>("messaging_groups.json");
-    const payload = {
+
+    const page = acceptedBy("messaging.groups", { offset: 0 }, {
       success: fixture.success,
       response: {
         ...fixture.response,
@@ -92,58 +80,26 @@ describe("Fansly DM fixtures", () => {
           total: fixture.response.aggregationData?.total,
         },
       },
-    };
-
-    const adapter = new FanslyAdapter({
-      baseUrl: "https://fansly.example",
-    });
-    vi.spyOn(adapter as unknown as { request: () => Promise<unknown> }, "request").mockResolvedValue({
-      parsed: payload.response,
-      raw: payload.response,
     });
 
-    const result = await adapter.getMessagingGroupsPage({
-      sendGuard: createTestFanslySendGuard(),
-      session: {
-        authorization: "token",
-      },
-    }, {
-      offset: 0,
-      limit: 100,
-      sortOrder: 1,
-      flags: 0,
-    });
-
-    expect(result.items.length).toBeGreaterThan(0);
-    expect(result.accounts).toEqual([]);
-    expect(result.groups).toEqual([]);
+    expect(page.data.length).toBeGreaterThan(0);
+    expect(page.aggregationData?.accounts).toBeUndefined();
+    expect(page.aggregationData?.groups).toBeUndefined();
   });
 
   it("parses group_detail payloads with a last message head", async () => {
     const fixture = await loadResponseFixture<Record<string, unknown>>("group_detail.json");
-    const adapter = new FanslyAdapter({
-      baseUrl: "https://fansly.example",
-    });
-    vi.spyOn(adapter as unknown as { request: () => Promise<unknown> }, "request").mockResolvedValue({
-      parsed: fixture.response,
-      raw: fixture.response,
-    });
 
-    const result = await adapter.getGroupDetail({
-      sendGuard: createTestFanslySendGuard(),
-      session: {
-        authorization: "token",
-      },
-    }, "group_alpha");
+    const detail = acceptedBy("group.detail", { groupId: "group_alpha" }, fixture);
 
-    expect(result.parsed).toMatchObject({
+    expect(detail).toMatchObject({
       id: "group_alpha",
       users: expect.arrayContaining([
         expect.objectContaining({ userId: "acct_fan_alpha" }),
         expect.objectContaining({ userId: "acct_creator" }),
       ]),
     });
-    expect(result.parsed.lastMessage).toMatchObject({
+    expect(detail.lastMessage).toMatchObject({
       id: "message_head",
       senderId: "acct_creator",
       createdAt: 1767323105,
@@ -154,31 +110,15 @@ describe("Fansly DM fixtures", () => {
     const fixture = await loadResponseFixture<{
       messages: Array<Record<string, unknown>>;
     }>("message.json");
-    const adapter = new FanslyAdapter({
-      baseUrl: "https://fansly.example",
-    });
-    vi.spyOn(adapter as unknown as { request: () => Promise<unknown> }, "request").mockResolvedValue({
-      parsed: fixture.response,
-      raw: fixture.response,
-    });
 
-    const result = await adapter.getMessagesPage({
-      sendGuard: createTestFanslySendGuard(),
-      session: {
-        authorization: "token",
-      },
-    }, {
-      groupId: "group_alpha",
-      limit: 25,
-    });
+    const page = acceptedBy("messages.page", { groupId: "group_alpha", before: null }, fixture);
 
-    expect(result.groupId).toBe("group_alpha");
-    expect(result.items).toHaveLength(2);
-    expect(result.items[0]).toMatchObject({
+    expect(page.messages).toHaveLength(2);
+    expect(page.messages[0]).toMatchObject({
       id: "message_head",
       senderId: "acct_creator",
     });
-    expect(result.items[1]).toMatchObject({
+    expect(page.messages[1]).toMatchObject({
       id: "message_reply",
       inReplyTo: "message_head",
       totalTipAmount: 321,
@@ -189,44 +129,6 @@ describe("Fansly DM fixtures", () => {
     expect(normalizeFanslyTimestamp(1_772_616_871).toISOString()).toBe("2026-03-04T09:34:31.000Z");
     expect(normalizeFanslyTimestamp(1_772_616_871_000).toISOString()).toBe("2026-03-04T09:34:31.000Z");
     expect(normalizeFanslyTimestamp(1_000_000_000_000).toISOString()).toBe("2001-09-09T01:46:40.000Z");
-  });
-
-  it.each([
-    // [mode, existing, overlap, exhausted, cap, verdict without debt, verdict with debt]
-    ["backfill", "pending_backfill", false, true, false, "complete", "partial_window"],
-    ["backfill", "pending_backfill", true, false, false, "complete", "partial_window"],
-    ["backfill", "pending_backfill", false, false, true, "partial_window", "partial_window"],
-    ["backfill", "pending_backfill", false, false, false, "pending_backfill", "pending_backfill"],
-    ["deep_backfill", "partial_window", false, true, false, "complete", "partial_window"],
-    ["deep_backfill", "partial_window", false, false, false, "partial_window", "partial_window"],
-    ["incremental", "complete", true, false, false, "complete", "partial_window"],
-    ["incremental", "partial_window", true, false, false, "partial_window", "partial_window"],
-    // Never pending_backfill: that would re-offer the thread at priority 1 forever.
-    ["incremental", "pending_backfill", true, false, false, "pending_backfill", "pending_backfill"],
-    // A head walk that reaches the provider's end has read the whole history.
-    ["incremental", "pending_backfill", false, true, false, "complete", "partial_window"],
-    ["incremental", "pending_backfill", true, true, false, "complete", "partial_window"],
-    ["incremental", "partial_window", false, true, false, "partial_window", "partial_window"],
-  ] as const)("coverage verdict for %s over %s (overlap %s, exhausted %s, cap %s) never claims complete with normalization debt", (
-    currentMode, existingStatus, overlapFound, providerHistoryExhausted, hitWindowCap, clean, withDebt,
-  ) => {
-    const input = { currentMode, existingStatus, overlapFound, providerHistoryExhausted, hitWindowCap };
-    expect(resolveDmConversationCoverageStatus(input)).toBe(clean);
-    expect(resolveDmConversationCoverageStatus({ ...input, normalizationDebt: false })).toBe(clean);
-    expect(resolveDmConversationCoverageStatus({ ...input, normalizationDebt: true })).toBe(withDebt);
-  });
-
-  it("treats a head as due only when it differs from the newest stored message and arrived after the last head read", () => {
-    const headAt = new Date("2026-03-10T12:00:00.000Z");
-    const base = {
-      lastMessageId: "head", newestStoredMessageId: "older", lastMessageAt: headAt, lastMessageSyncAt: null,
-    };
-    expect(isDmHeadStaleByTime(base)).toBe(true);
-    expect(isDmHeadStaleByTime({ ...base, lastMessageSyncAt: new Date("2026-03-10T11:59:59.000Z") })).toBe(true);
-    expect(isDmHeadStaleByTime({ ...base, lastMessageSyncAt: headAt })).toBe(false);
-    expect(isDmHeadStaleByTime({ ...base, lastMessageAt: null, lastMessageSyncAt: headAt })).toBe(false);
-    expect(isDmHeadStaleByTime({ ...base, newestStoredMessageId: "head" })).toBe(false);
-    expect(isDmHeadStaleByTime({ ...base, lastMessageId: null, newestStoredMessageId: null })).toBe(false);
   });
 
   it("normalizes provider DM tip units into stored cents", () => {

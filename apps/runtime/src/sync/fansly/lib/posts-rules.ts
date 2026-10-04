@@ -2,8 +2,8 @@
 // (resources/posts.ts, capture.ts): the `posts` stream's cursor (the legacy
 // executor's walk, shared by both platforms, with the Fansly engagement
 // phase's state inside it), the Fansly timeline page's item contract and
-// publication instant, and the post-tips scope check. Pure. The legacy `posts`
-// stream (posts.ts) imports them from here.
+// publication instant, and the post-tips scope check. Pure. The legacy
+// executor's OnlyFans `posts` stream (posts.ts) reads the same cursor.
 
 /** Every six-hour posts run refreshes at least this recent publication window.
  * One additional fully-old provider page may be captured to prove the bound. */

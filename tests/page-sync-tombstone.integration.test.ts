@@ -12,6 +12,7 @@ import {
 } from "@agency_hub_core/db";
 
 import { startIntegrationTestDatabase } from "./helpers/db.ts";
+import { EVERY_PLATFORM } from "./helpers/page-sync-scope.ts";
 
 // Review finding (P1): deletePageByLabel only tombstones the page, and the
 // planner/lease queries used to ignore page status entirely — a deleted page
@@ -49,7 +50,7 @@ describe("page sync tombstone", () => {
       });
 
       // Pre-condition: with the page active, the planner sees it.
-      const runnableBefore = await listRunnablePageSync(testDb.db);
+      const runnableBefore = await listRunnablePageSync(testDb.db, new Date(), { platforms: EVERY_PLATFORM });
       expect(runnableBefore.some((row) => row.pageId === page.id)).toBe(true);
 
       await deletePageByLabel(testDb.db, "tombstone-page");
@@ -60,11 +61,12 @@ describe("page sync tombstone", () => {
 
       // A full planner cycle produces no runnable work for the page…
       await scheduleDuePageSync(testDb.db);
-      const runnableAfter = await listRunnablePageSync(testDb.db);
+      const runnableAfter = await listRunnablePageSync(testDb.db, new Date(), { platforms: EVERY_PLATFORM });
       expect(runnableAfter.some((row) => row.pageId === page.id)).toBe(false);
 
       // …and the executor can no longer lease it, despite the pending request.
       const lease = await acquirePageSyncLease(testDb.db, {
+        platforms: EVERY_PLATFORM,
         pageId: page.id,
         workerId: "worker-tombstone",
         leaseToken: "lease-tombstone",
