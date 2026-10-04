@@ -28,6 +28,7 @@ import {
 import { FANSLY_RESOURCE_SPECS } from "../apps/runtime/src/sync/fansly/registry.ts";
 import { changeSyncRegistryOverride, SyncOwnerLeverError } from "../apps/runtime/src/sync/inspect.ts";
 import { RecordingMetrics } from "./helpers/sync-engine-host.ts";
+import { resourceBreakerRow } from "./helpers/sync-holds.ts";
 
 // The pure parts of the engine host (design §3.5–§3.7, §4.1–§4.2): the
 // registry rules every entry shares, what a pick leaves out and how apply
@@ -46,7 +47,7 @@ function page(overrides: Partial<SyncPageRow> = {}): SyncPageRow {
   return {
     registryOverrides: {},
     pausedResources: [],
-    resourceHolds: {},
+    holds: [],
     ...overrides,
   } as SyncPageRow;
 }
@@ -130,7 +131,7 @@ describe("what a pick leaves out", () => {
     spec("media-stats.walk", { class: "planned", kind: "goal" }),
     spec("media-download.fetch"),
   ]);
-  const later = new Date(NOW.getTime() + 60_000).toISOString();
+  const later = new Date(NOW.getTime() + 60_000);
 
   it("paused and switched-off keys", () => {
     const exclusions = pickExclusions(page({
@@ -150,11 +151,11 @@ describe("what a pick leaves out", () => {
 
   it("a held file, but never the key a hold does not stop (dm-messages.head)", () => {
     const exclusions = pickExclusions(page({
-      resourceHolds: {
-        "media-stats": { until: later, step: 1, since: NOW.toISOString() },
-        "dm-messages": { until: later, step: 1, since: NOW.toISOString() },
-        "posts": { until: new Date(NOW.getTime() - 1).toISOString(), step: 1, since: NOW.toISOString() },
-      },
+      holds: [
+        resourceBreakerRow("media-stats", later),
+        resourceBreakerRow("dm-messages", later),
+        resourceBreakerRow("posts", new Date(NOW.getTime() - 1)),
+      ],
     }), registry, NOW);
     expect(exclusions).toEqual({ excludeResources: ["dm-messages.catchup"], excludeFiles: ["media-stats"], excludeClasses: [] });
   });
@@ -222,7 +223,7 @@ describe("apply errors (design §3.7.3)", () => {
 
 describe("the resource hold of a wrong transactions writer", () => {
   const NOW = new Date("2026-10-02T12:00:00.000Z");
-  const iso = (offsetMs: number) => new Date(NOW.getTime() + offsetMs).toISOString();
+  const iso = (offsetMs: number) => new Date(NOW.getTime() + offsetMs);
 
   it("climbs the 30 m → 2 h → 6 h ladder and keeps a hold in force", () => {
     expect(escalateResourceHold({}, "transactions.head", NOW)).toEqual({

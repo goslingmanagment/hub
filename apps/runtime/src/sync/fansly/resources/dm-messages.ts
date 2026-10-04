@@ -19,7 +19,6 @@ import {
   readThreadStoredFacts,
   resolveWorkDemandMessageIds,
   tryAcquireDmArchiveWriterFenceLock,
-  upsertPageDmMessages,
   writeThreadChain,
   writeThreadSummary,
   type Database,
@@ -94,18 +93,19 @@ import { purchaseTargetFollowups, purchaseTargetSubject, type PurchaseTarget } f
 // The apply (one transaction, the commit holds the erasure fence): the page
 // contract → the chain fold (pure, before any write; an anomaly the design
 // sends to review quarantines the step with nothing written) → per-message
-// erasure fence → `page_dm_messages` (kept written in step 4 until S4-13) →
-// tip contexts → the chain (`writeThreadChain`, the only chain writer, I9) and
-// the thread summary opened (the thread row locked, the archive's copies of
-// the page noted) → sync health → the overlay rows claimed → the inline
-// canonicalization and the archive feed by dedup keys → the summary columns
-// from the archive messages the feed stored (`writeThreadSummary`, engine-owned
-// pages only) and the overlay confirmed against the archive (step 4, S4-08:
-// the page's readers read the archive) → the work rows (demand ids resolved, a
-// covered `.catchup` closed). Excluded and unbound threads are never read (decision №8 has its
-// own probe); a page whose thread was deleted, unbound or excluded since the
-// plan only canonicalizes its observation under the same fence (stamped, so
-// the unfenced minutely sweep never appends it) and closes the work.
+// erasure fence → tip contexts → the chain (`writeThreadChain`, the only chain
+// writer, I9) and the thread summary opened (the thread row locked, the
+// archive's copies of the page noted) → sync health → the overlay rows
+// claimed → the inline canonicalization and the archive feed by dedup keys →
+// the summary columns from the archive messages the feed stored
+// (`writeThreadSummary`, engine-owned pages only) and the overlay confirmed
+// against the archive (step 4, S4-08: the page's readers read the archive) →
+// the work rows (demand ids resolved, a covered `.catchup` closed). The apply
+// writes no `page_dm_messages` row (step 4 S4-13, I23). Excluded and unbound
+// threads are never read (decision №8 has its own probe); a page whose thread
+// was deleted, unbound or excluded since the plan only canonicalizes its
+// observation under the same fence (stamped, so the unfenced minutely sweep
+// never appends it) and closes the work.
 //
 // A live head for a chat with no thread row at all (a fan's first chat the
 // legacy engine deferred until its list showed it — the takeover's carried
@@ -682,7 +682,11 @@ async function applyMessagesPage(variant: DmMessagesVariant, tx: Database, input
   bump(counters, "messages_fenced", fence.fencedIds.size);
   const kept = fence.fencedIds.size === 0 ? messages : messages.filter((message) => !fence.fencedIds.has(message.id));
 
-  // 3. The hot table (sticky deletes) and the tip contexts.
+  // 3. The tip contexts. The page's messages go to `message_archive` (step 7);
+  //    `page_dm_messages` is not written (step 4 S4-13, I23): a live page's
+  //    readers read the archive, and the hot rows legacy stored stay as they
+  //    were (deletion marks only, `dm-live.deletions`). The normalized rows
+  //    are the page's storable messages, whose overlay rows are judged below.
   const normalized = normalizeFanslyDmMessages(kept, {
     conversationId: thread.state.id,
     platformAccountId: input.pageId,
@@ -693,8 +697,6 @@ async function applyMessagesPage(variant: DmMessagesVariant, tx: Database, input
   });
   bump(counters, "messages_unparseable", normalized.unparseable.length);
   bump(counters, "timestamps_implausible", normalized.implausible.length);
-  const insertedIds = new Set(await upsertPageDmMessages(tx, normalized.rows));
-  bump(counters, "messages_inserted", insertedIds.size);
   const tips = await materializeFanslyDmTipContexts(tx, {
     accountId: input.pageId,
     requestParams: { groupId, limit: LIMIT, before },
@@ -720,12 +722,12 @@ async function applyMessagesPage(variant: DmMessagesVariant, tx: Database, input
   const restHeadId = before === null
     ? chainPage.ids[0] ?? null
     : cursor.segment !== null && sameMessageId(before, cursor.segment.oldestId) ? cursor.segment.headId : thread.chain.headId;
-  const written = new Set(normalized.rows.map((row) => row.platformMessageId));
+  const storable = new Set(normalized.rows.map((row) => row.platformMessageId));
   const resolution = resolveDemand({
     variant,
     demandIds: input.work.demand.messageIds,
-    // Shown is confirmed visible, also when the row stays unwritten (fenced,
-    // no date): only the overlay verdict below needs the stored copy.
+    // Shown is confirmed visible, also when the message stays unstored
+    // (fenced, no date): only the overlay verdict below needs the stored copy.
     pageIds: chainPage.ids,
     walkDone: done,
     restHeadId,
@@ -737,9 +739,10 @@ async function applyMessagesPage(variant: DmMessagesVariant, tx: Database, input
   // judged against the archive once the feed below wrote it.
   const claim = await claimDmLiveMessagesForConfirm(tx, {
     pageId: input.pageId,
-    // Every id this page wrote: a read confirms what it shows, demanded or
-    // not (an own broadcast's row is confirmed by any read of its chat, D22).
-    messageIds: [...written],
+    // Every message of the page that can be stored (unfenced, dated): a read
+    // confirms what it shows, demanded or not (an own broadcast's row is
+    // confirmed by any read of its chat, D22).
+    messageIds: [...storable],
     notFoundMessageIds: [...resolution.covered, ...resolution.expired],
   });
   bump(counters, "demand_dropped", resolution.dropped.length);
@@ -825,8 +828,8 @@ async function applyMessagesPage(variant: DmMessagesVariant, tx: Database, input
 
 /**
  * The thread was deleted, unbound or excluded between the plan and this
- * apply: nothing of the page reaches the hot table, the chain or the
- * overlay, and the work is over. The observation is still settled here, under
+ * apply: nothing of the page reaches the chain, the summary or the overlay,
+ * and the work is over. The observation is still settled here, under
  * the same per-message erasure fence (§5.4 step 1): its unfenced events are
  * appended and archived and the row is stamped. Left unstamped, the minutely
  * sweep would append every event of it with no fence, and an erasure (which

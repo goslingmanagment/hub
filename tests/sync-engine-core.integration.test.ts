@@ -243,7 +243,7 @@ describe("sync_pages rows and modes", () => {
       cyclePos: 0,
       pausedAll: false,
       pausedResources: [],
-      holdKind: null,
+      holds: [],
       owner: { generation: 0n, host: null, releasedAt: null },
     });
     expect((await listSyncPages(db())).map((row) => row.pageId)).toEqual([pageId]);
@@ -401,40 +401,60 @@ describe("holds, pauses and overrides", () => {
     const pageId = await seedPage("holds");
     const generation = await own(pageId);
     const until = new Date(Date.now() + 120_000);
-    await setPageHold(db(), { pageId, generation, kind: "rate_limit", until, step: 1, detail: { status: 429 } });
-    const first = await getSyncPage(db(), pageId);
-    expect(first).toMatchObject({ holdKind: "rate_limit", holdStep: 1, holdDetail: { status: 429 } });
-    expect(first!.holdUntil!.getTime()).toBe(until.getTime());
-    await setPageHold(db(), { pageId, generation, kind: "rate_limit", until: new Date(Date.now() + 240_000), step: 2 });
-    const second = await getSyncPage(db(), pageId);
-    expect(second!.holdSince).toEqual(first!.holdSince);
-    expect(second!.holdStep).toBe(2);
-    await setPageHold(db(), { pageId, generation, kind: "auth", until: "infinity", step: 0, detail: { credentialsGeneration: "g1" } });
-    const auth = await getSyncPage(db(), pageId);
-    expect(auth!.holdKind).toBe("auth");
+    const pageHolds = async () => (await getSyncPage(db(), pageId))!.holds.filter((row) => row.scope === "page");
+    await setPageHold(db(), { pageId, generation, kind: "network", until, detail: { streak: 3 } });
+    const [first] = await pageHolds();
+    expect(first).toMatchObject({ scope: "page", key: "", kind: "network", detail: { streak: 3 }, revision: 1 });
+    expect(first!.until!.getTime()).toBe(until.getTime());
+    // Retaken while in force: the episode keeps its start.
+    await setPageHold(db(), { pageId, generation, kind: "network", until: new Date(Date.now() + 240_000), detail: { streak: 4 } });
+    const [second] = await pageHolds();
+    expect(second).toMatchObject({ kind: "network", detail: { streak: 4 }, revision: 2 });
+    expect(second!.since).toEqual(first!.since);
+    // A credentials hold is a row of its own beside it, indefinite.
+    await setPageHold(db(), { pageId, generation, kind: "auth", until: "infinity", detail: { credentialsGeneration: "g1" } });
+    const both = await pageHolds();
+    expect(both.map((row) => row.kind)).toEqual(["auth", "network"]);
     // 'infinity': the latest instant a Date holds.
-    expect(auth!.holdUntil!.getTime()).toBe(8.64e15);
-    await expect(setPageHold(db(), { pageId, generation: generation + 1n, kind: "network", until, step: 0 }))
+    expect(both[0]!.until!.getTime()).toBe(8.64e15);
+    // The other credentials kind replaces it — one credentials hold a page —
+    // and keeps the episode's start.
+    await setPageHold(db(), { pageId, generation, kind: "identity_mismatch", until: "infinity", detail: { credentialsGeneration: "g2" } });
+    const replaced = await pageHolds();
+    expect(replaced.map((row) => row.kind)).toEqual(["identity_mismatch", "network"]);
+    expect(replaced[0]).toMatchObject({ detail: { credentialsGeneration: "g2" }, since: both[0]!.since });
+    await expect(setPageHold(db(), { pageId, generation: generation + 1n, kind: "network", until }))
       .rejects.toBeInstanceOf(OwnershipLostError);
-    await clearPageHold(db(), { pageId, generation });
-    expect(await getSyncPage(db(), pageId)).toMatchObject({ holdKind: null, holdUntil: null, holdSince: null, holdStep: 0 });
+    // Lifting the credentials hold leaves the network hold standing.
+    await clearPageHold(db(), { pageId, generation, kinds: ["auth", "identity_mismatch"] });
+    expect((await pageHolds()).map((row) => row.kind)).toEqual(["network"]);
+    await expect(clearPageHold(db(), { pageId, generation: generation + 1n, kinds: ["network"] }))
+      .rejects.toBeInstanceOf(OwnershipLostError);
     // The owner may lift a hold without a generation.
-    await setPageHold(db(), { pageId, generation, kind: "network", until, step: 3 });
-    await clearPageHold(db(), { pageId });
-    expect(await getSyncPage(db(), pageId)).toMatchObject({ holdKind: null, holdStep: 3 });
+    await clearPageHold(db(), { pageId, kinds: ["network"] });
+    expect(await pageHolds()).toEqual([]);
+    // A hold taken after one that ended starts a new episode.
+    await setPageHold(db(), { pageId, generation, kind: "network", until: new Date(Date.now() - 1_000) });
+    const [ended] = await pageHolds();
+    await setPageHold(db(), { pageId, generation, kind: "network", until });
+    expect((await pageHolds())[0]!.since.getTime()).toBeGreaterThan(ended!.since.getTime());
+    await clearPageHold(db(), { pageId, generation, kinds: ["network"] });
 
     await setNetworkFailureStreak(db(), { pageId, generation, streak: 2 });
     expect((await getSyncPage(db(), pageId))!.networkFailureStreak).toBe(2);
 
     await setResourceHold(db(), { pageId, generation, file: "media-stats", hold: { until, step: 0 } });
-    const held = (await getSyncPage(db(), pageId))!.resourceHolds["media-stats"];
-    expect(held).toMatchObject({ step: 0 });
-    expect(new Date(held!.until).getTime()).toBe(until.getTime());
+    const [held] = (await getSyncPage(db(), pageId))!.holds;
+    expect(held).toMatchObject({ scope: "resource", key: "media-stats", kind: "resource_breaker", ladderStep: 0 });
+    expect(held!.until!.getTime()).toBe(until.getTime());
     await setResourceHold(db(), { pageId, generation, file: "media-stats", hold: { until, step: 1 } });
-    expect((await getSyncPage(db(), pageId))!.resourceHolds["media-stats"]).toMatchObject({ step: 1, since: held!.since });
+    expect((await getSyncPage(db(), pageId))!.holds).toEqual([expect.objectContaining({ key: "media-stats", ladderStep: 1, since: held!.since })]);
     await setResourceHold(db(), { pageId, generation, file: "media-stats", hold: null });
-    expect((await getSyncPage(db(), pageId))!.resourceHolds).toEqual({});
+    expect((await getSyncPage(db(), pageId))!.holds).toEqual([]);
     await expect(setResourceHold(db(), { pageId, file: "Media Stats", hold: null })).rejects.toThrow(/resource file/);
+    await expect(setResourceHold(db(), { pageId, generation: generation + 1n, file: "media-stats", hold: { until, step: 1 } }))
+      .rejects.toBeInstanceOf(OwnershipLostError);
+    expect((await getSyncPage(db(), pageId))!.holds).toEqual([]);
   });
 
   it("sets the owner's pauses field by field and the registry overrides per key, waking the actor", async (context) => {

@@ -56,7 +56,8 @@ export interface SchedulerPage {
   pausedAll: boolean;
   /** Owner pause of history requests (the requests class). */
   pausedRequests: boolean;
-  /** Page hold (§9: 429, auth, identity, network): every class waits. */
+  /** The end of what holds the page itself (§9: auth, identity, network —
+   *  `engine/admission.ts`): every class waits. */
   holdUntil: Date | null;
 }
 

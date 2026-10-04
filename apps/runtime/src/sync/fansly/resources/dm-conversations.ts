@@ -40,7 +40,7 @@ import type {
   WorkOutcome,
 } from "../../engine/resource.ts";
 import { routeHoldUntil } from "../../engine/route-holds.ts";
-import { parseRouteState } from "../../engine/route-policy.ts";
+import { routeStateOfHolds } from "../../engine/route-policy.ts";
 import type { FanslyRoute } from "../routes.ts";
 import {
   listHeadInstant,
@@ -792,9 +792,9 @@ function parseFindCursor(value: unknown): DmListFindCursor {
 }
 
 /** The list cannot be read now: a 429 holds its route (`messaging.groups`,
- *  owner decision №22) in the page's route state. */
+ *  owner decision №22) in the page's hold set. */
 function listHeld(page: SyncPageRow, now: Date): boolean {
-  const read = parseRouteState(page.routeState);
+  const read = routeStateOfHolds(page.holds);
   return read.ok && routeHoldUntil(read.state, LIST_ROUTE, now) !== null;
 }
 

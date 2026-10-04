@@ -9,6 +9,7 @@ import { routePolicyVersion, type FanslyRoute } from "../apps/runtime/src/sync/f
 import { SYNC_ROUTE_RAISE_AUDIT_EVENT } from "../apps/runtime/src/sync/route-raise.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { seedSyncPage, testConfig } from "./helpers/sync-engine-host.ts";
+import { replaceHoldRows, routeEntryOf, routeHoldRows } from "./helpers/sync-holds.ts";
 
 // `budgets-calibration.sql` (step 3b A2, owner decisions D3, №21–№22) on a
 // fixture database: the read-only evidence behind a route budget step. Per
@@ -139,7 +140,7 @@ function entry(route: FanslyRoute, overrides: Partial<SyncRouteStateEntryWrite>)
 /** Write the route's entry `revisions` times (the revision the report reads). */
 async function routeState(pageId: number, route: FanslyRoute, revisions: number, value: SyncRouteStateEntryWrite): Promise<void> {
   for (let revision = 0; revision < revisions; revision += 1) {
-    expect(await writeSyncRouteState(db(), { pageId, version: 1, route, expectRevision: revision, entry: value }))
+    expect(await writeSyncRouteState(db(), { pageId, route, expectRevision: revision, entry: value }))
       .toEqual({ kind: "written", revision: revision + 1 });
   }
 }
@@ -203,10 +204,9 @@ describe("budgets-calibration.sql", () => {
     const shadow = await seedSyncPage(handles, { label: "cal-shadow", mode: "shadow" });
     await sendsAt(shadow.pageId, "notifications.page", [now - HOUR_S]);
     const unreadable = await seedSyncPage(handles, { label: "cal-unreadable", mode: "live" });
-    await testDb.pool.query(
-      `update sync_pages set resource_holds = jsonb_build_object('route:state', '{"version": 9, "routes": {}}'::jsonb) where page_id = $1`,
-      [unreadable.pageId],
-    );
+    // The state of another of its routes is no rate: one unreadable route
+    // closes the page (as the engine judges it), so every route says so.
+    await replaceHoldRows(testDb, unreadable.pageId, "route", routeHoldRows("polls", { effectivePerMin: -1 }));
     await sendsAt(unreadable.pageId, "followers.page", [now - HOUR_S]);
 
     const rows = await report(since);
@@ -239,9 +239,7 @@ describe("budgets-calibration.sql", () => {
     expect(await runStep(media.step!)).toMatchObject({
       page: "cal-a", route: "media.offer_stats", fromPerMin: 2.5, toPerMin: 3.5, revision: 3, slowdownEnded: false,
     });
-    expect((await getSyncPage(db(), a.pageId))!.routeState).toMatchObject({
-      routes: { "media.offer_stats": { effectivePerMin: 3.5, revision: 3 } },
-    });
+    expect(routeEntryOf((await getSyncPage(db(), a.pageId))!, "media.offer_stats")).toMatchObject({ effectivePerMin: 3.5, revision: 3 });
     // The next step starts with the raise: nothing proven on it yet, and the
     // same evidence is refused (its revision is gone).
     const after = row(await report(since), "cal-a", "media.offer_stats");

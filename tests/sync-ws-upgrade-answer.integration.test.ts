@@ -20,6 +20,7 @@ import {
   type FakeArrival,
   type HarnessPage,
 } from "./helpers/sync-engine.ts";
+import { pageHoldKindOf, routeEntryOf } from "./helpers/sync-holds.ts";
 import { productionWsHostOptions, speakFansly } from "./helpers/sync-ws.ts";
 
 // The answer of a refused WebSocket Upgrade reaches the classifier whole
@@ -175,8 +176,8 @@ describe("a refused Upgrade's answer on the production socket path", () => {
     expect(waitMs).toBeGreaterThanOrEqual(600_000);
     expect(waitMs).toBeLessThan(630_000);
     const page = await findSyncPageByLabel(db(), r.page.pageLabel);
-    expect(page.holdKind).toBeNull();
-    expect(page.routeState).toMatchObject({ version: 1, routes: { "ws.upgrade": { ladderStep: 1, effectivePerMin: 7.5 } } });
+    expect(pageHoldKindOf(page)).toBeNull();
+    expect(routeEntryOf(page, "ws.upgrade")).toMatchObject({ ladderStep: 1, effectivePerMin: 7.5 });
     // The socket's reconnect ladder (≈ 200 ms on this timing) asks again at
     // once; the Upgrade still waits.
     await sleep(2_000);

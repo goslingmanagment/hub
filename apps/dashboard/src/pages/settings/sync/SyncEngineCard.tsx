@@ -21,6 +21,8 @@ const WAIT_LABELS: Record<string, string> = {
   pacer: "пауза между запросами",
   class_share: "очередь класса",
   page_hold: "удержание страницы",
+  route_budget: "пауза эндпоинта",
+  route_hold: "удержание эндпоинта (429)",
   resource_hold: "удержание ресурса",
   subject_breaker: "пауза после ошибок",
   blocked_by_vendor: "Fansly отказывает",
@@ -31,8 +33,11 @@ const WAIT_LABELS: Record<string, string> = {
   running: "читает",
 };
 
+/** Reasons of work that is ready to run: it waits only for its turn — the
+ *  page's pause, its endpoint's own pace, or other work. */
+const RUNNABLE_REASONS: ReadonlySet<string> = new Set(["pacer", "route_budget", "class_share"]);
+
 const HOLD_LABELS: Record<string, string> = {
-  rate_limit: "429 от Fansly",
   auth: "Fansly не принимает данные входа",
   identity_mismatch: "данные входа другого аккаунта",
   network: "сеть",
@@ -114,7 +119,7 @@ function QueueTable({ status }: { status: EnginePageStatus }) {
           {classes.map((workClass) => {
             const queue = status.queue[workClass];
             const waiting = Object.entries(queue.waitingByReason)
-              .filter(([reason, count]) => (count ?? 0) > 0 && reason !== "pacer" && reason !== "class_share")
+              .filter(([reason, count]) => (count ?? 0) > 0 && !RUNNABLE_REASONS.has(reason))
               .map(([reason, count]) => `${WAIT_LABELS[reason] ?? reason}: ${count}`)
               .join(", ");
             return (

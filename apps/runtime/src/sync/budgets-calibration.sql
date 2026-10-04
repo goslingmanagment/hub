@@ -6,7 +6,8 @@
 --
 -- with psql variable `since`: the start of the evidence window (the deploy of
 -- the budgets under review). One row per live page and route the engine sent
--- on (or holds route state for) and per live page and family. A step up is
+-- on (or holds route state for: the route-scope rows of its hold set,
+-- `sync_holds`) and per live page and family. A step up is
 -- +1/min at most, never above the route's ceiling, and only on evidence:
 --
 --   * ≥ 24 h on the step: since the window's start, the route's newest 429
@@ -56,11 +57,40 @@ evidence as (
   select :since::timestamptz as since, clock_timestamp() as now
 ),
 live_page as (
-  select sp.page_id, coalesce(p.label, sp.page_id::text) as label,
-         sp.resource_holds -> 'route:state' as route_state
+  select sp.page_id, coalesce(p.label, sp.page_id::text) as label
     from sync_pages sp
     left join pages p on p.id = sp.page_id
    where sp.mode in ('live', 'handover')
+),
+-- A page's routes after their 429s, from its hold set: the route's durable
+-- state (`route_budget`: its slowdown, its newest 429, the revision a raise
+-- compares against) and the end of its hold (`route_hold`). `readable`: rows
+-- the engine reads (`engine/route-policy.ts` `routeStateOfHolds`) — a route
+-- whose rows it cannot read closes the page's admission.
+route_state as (
+  select h.page_id, h.key as route,
+         max(h.revision) filter (where h.kind = 'route_budget') as revision,
+         (jsonb_agg(h.detail) filter (where h.kind = 'route_budget')) -> 0 as state,
+         max(h.until) filter (where h.kind = 'route_hold') as hold_until,
+         bool_and(h.kind in ('route_budget', 'route_hold')) as known_kinds
+    from sync_holds h
+    join live_page lp on lp.page_id = h.page_id
+   where h.scope = 'route'
+   group by h.page_id, h.key
+),
+route_read as (
+  select rs.page_id, rs.route, rs.revision, rs.hold_until,
+         case when jsonb_typeof(rs.state -> 'effectivePerMin') = 'number'
+              then (rs.state ->> 'effectivePerMin')::numeric end as effective_per_min,
+         case when rs.state ->> 'last429At' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+(Z|[+-][0-9:]+)$'
+              then (rs.state ->> 'last429At')::timestamptz end as last_429_at,
+         rs.known_kinds
+           and case when jsonb_typeof(rs.state -> 'effectivePerMin') = 'number'
+                    then (rs.state ->> 'effectivePerMin')::numeric > 0
+                    else coalesce(jsonb_typeof(rs.state -> 'effectivePerMin'), 'null') = 'null' end
+           and (coalesce(jsonb_typeof(rs.state -> 'last429At'), 'null') = 'null'
+                or rs.state ->> 'last429At' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+(Z|[+-][0-9:]+)$') as readable
+    from route_state rs
 ),
 send as (
   select a.page_id, a.operation as route, a.sent_at, a.http_status
@@ -74,31 +104,26 @@ send as (
 page_route as (
   select page_id, route from send group by page_id, route
   union
-  select lp.page_id, r.route
-    from live_page lp,
-         jsonb_object_keys(case when jsonb_typeof(lp.route_state -> 'routes') = 'object'
-                                then lp.route_state -> 'routes' else '{}'::jsonb end) as r(route)
+  select page_id, route from route_read
 ),
 route_row as (
   select pr.page_id, lp.label, pr.route, fm.family,
          coalesce(rb.ceiling_per_min, db.ceiling_per_min)::numeric as ceiling_per_min,
          coalesce(rb.current_per_min, db.current_per_min)::numeric as current_per_min,
-         lp.route_state is null
-           or (lp.route_state -> 'version' = '1'::jsonb and jsonb_typeof(lp.route_state -> 'routes') = 'object') as state_readable,
-         lp.route_state -> 'routes' -> pr.route as entry
+         -- As the engine judges it: one unreadable route closes the page.
+         coalesce((select bool_and(rr.readable) from route_read rr where rr.page_id = pr.page_id), true) as state_readable,
+         rs.effective_per_min as stored_per_min, rs.revision, rs.hold_until, rs.last_429_at
     from page_route pr
     join live_page lp on lp.page_id = pr.page_id
     cross join default_budget db
     left join route_budget rb on rb.route = pr.route
     left join family_member fm on fm.route = pr.route
+    left join route_read rs on rs.page_id = pr.page_id and rs.route = pr.route
 ),
 route_step as (
   select r.*,
-         least(r.current_per_min, coalesce((r.entry ->> 'effectivePerMin')::numeric, r.current_per_min)) as effective_per_min,
-         (r.entry ->> 'revision')::bigint as revision,
-         (r.entry ->> 'holdUntil')::timestamptz as hold_until,
-         (r.entry ->> 'last429At')::timestamptz as last_429_at,
-         greatest(e.since, (r.entry ->> 'last429At')::timestamptz,
+         least(r.current_per_min, coalesce(r.stored_per_min, r.current_per_min)) as effective_per_min,
+         greatest(e.since, r.last_429_at,
                   (select max(ae.created_at) from audit_events ae
                     where ae.event_type = 'admin.sync_route_raise'
                       and ae.platform_account_id = r.page_id

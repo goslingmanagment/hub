@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import { fanslyWireSpec, type FanslyWireOutcome } from "@agency_hub_core/fansly";
-import { activeFanslyPageHold, CARRIED_TIMED_HOLD_FIELD, INDEFINITE_UNTIL } from "@agency_hub_core/shared";
+import {
+  fanslyPageHoldInForce,
+  INDEFINITE_UNTIL,
+  NO_FANSLY_PAGE_HOLDS,
+  readFanslyPageHolds,
+  type FanslyPageHoldRow,
+} from "@agency_hub_core/shared";
 
 import {
   activeResourceHold,
@@ -164,18 +170,15 @@ describe("sync errors: classification of one outcome", () => {
 // ── decisions ──────────────────────────────────────────────────────────────
 
 function pageState(overrides: Partial<PageErrorState> = {}): PageErrorState {
-  return {
-    holdKind: null,
-    holdUntil: null,
-    holdSince: null,
-    holdStep: 0,
-    holdDetail: {},
-    networkFailureStreak: 0,
-    resourceHolds: {},
-    credentialsGeneration: "gen-1",
-    ...overrides,
-  };
+  return { holds: NO_FANSLY_PAGE_HOLDS, networkFailureStreak: 0, resourceHolds: {}, credentialsGeneration: "gen-1", ...overrides };
 }
+
+/** The page's own holds, from the page-scope rows of its hold set. */
+const holds = (...rows: FanslyPageHoldRow[]) => readFanslyPageHolds(rows);
+const authRow = (detail: Record<string, unknown> = {}, since: Date | null = at(-HOUR)): FanslyPageHoldRow =>
+  ({ kind: "auth", until: INDEFINITE_UNTIL, since, detail });
+const networkRow = (until: Date, detail: Record<string, unknown> = {}, since: Date | null = null): FanslyPageHoldRow =>
+  ({ kind: "network", until, since, detail });
 
 function input(errorClass: OutcomeClass, overrides: Partial<OutcomeInput> = {}): OutcomeInput {
   return {
@@ -215,19 +218,18 @@ describe("sync errors: ok", () => {
     expect(decision.routeHold).toEqual({ action: "keep" });
   });
 
-  it("clears an expired hold (an imported legacy 429 hold) without a ladder of its own", () => {
-    const decision = onOutcome(input("ok", { page: pageState({ holdKind: "rate_limit", holdUntil: at(-1) }) }));
-    expect(decision.pageHold).toEqual({ action: "clear", resetStep: false });
+  it("clears a network hold that has ended", () => {
+    const decision = onOutcome(input("ok", { page: pageState({ holds: holds(networkRow(at(-1))) }) }));
+    expect(decision.pageHold).toEqual({ action: "clear", kinds: ["network"] });
   });
 
-  it("zeroes a page-wide 429 ladder step an older build left on the row", () => {
-    expect(onOutcome(input("ok", { page: pageState({ holdStep: 3 }) })).pageHold).toEqual({ action: "clear", resetStep: true });
-    expect(onOutcome(input("ok", { page: pageState({ holdKind: "rate_limit", holdUntil: at(-1), holdStep: 2 }) })).pageHold)
-      .toEqual({ action: "clear", resetStep: true });
+  it("clears only what has ended: the network hold beside a credentials hold, never that hold", () => {
+    const decision = onOutcome(input("ok", { page: pageState({ holds: holds(authRow(), networkRow(at(-1))) }) }));
+    expect(decision.pageHold).toEqual({ action: "clear", kinds: ["network"] });
   });
 
   it("never lifts a hold still in force", () => {
-    const decision = onOutcome(input("ok", { page: pageState({ holdKind: "network", holdUntil: at(5_000), holdStep: 3 }) }));
+    const decision = onOutcome(input("ok", { page: pageState({ holds: holds(networkRow(at(5_000))) }) }));
     expect(decision.pageHold).toEqual({ action: "keep" });
   });
 
@@ -243,9 +245,7 @@ describe("sync errors: ok", () => {
   it("never clears a credentials hold, whatever digest the engine trusts now (ruling 5: only an identity proof's apply does)", () => {
     const decision = onOutcome(input("ok", {
       page: pageState({
-        holdKind: "auth",
-        holdUntil: INDEFINITE_UNTIL,
-        holdDetail: { credentialsGeneration: "gen-0", failedAttemptId: 7, failedAt: at(-MIN).toISOString() },
+        holds: holds(authRow({ credentialsGeneration: "gen-0", failedAttemptId: 7, failedAt: at(-MIN).toISOString() })),
         credentialsGeneration: "gen-1",
       }),
     }));
@@ -254,7 +254,7 @@ describe("sync errors: ok", () => {
 
   it("clears an expired resource hold of its file", () => {
     const decision = onOutcome(input("ok", {
-      page: pageState({ resourceHolds: { "media-stats": { until: at(-1).toISOString(), step: 1, since: at(-HOUR).toISOString() } } }),
+      page: pageState({ resourceHolds: { "media-stats": { until: at(-1), step: 1, since: at(-HOUR) } } }),
     }));
     expect(decision.resourceHold).toEqual({ action: "clear", file: "media-stats" });
   });
@@ -288,22 +288,26 @@ describe("sync errors: network", () => {
     expect(holds[0]!.work).toEqual({ action: "reopen", dueAt: null, waitingReason: "page_hold", waitingUntil: at(10_000) });
   });
 
-  it("alerts once the network has been gone for more than 10 minutes; keeps the 429 ladder", () => {
+  it("alerts once the network has been gone for more than 10 minutes", () => {
     const since = at(-NETWORK_ALERT_AFTER_MS - 1);
     const page = pageState({
       networkFailureStreak: 8,
-      holdKind: "network",
-      holdUntil: at(-1),
-      holdSince: at(-1_000),
-      holdStep: 2,
-      holdDetail: { streak: 8, networkSince: since.toISOString() },
+      holds: holds(networkRow(at(-1), { streak: 8, networkSince: since.toISOString() }, at(-1_000))),
     });
     const decision = onOutcome(input("network", { page }));
     expect(decision.alerts).toEqual([{ subKey: "page_stopped", detail: "network" }]);
-    expect(decision.pageHold).toMatchObject({ action: "set", kind: "network", step: 2, detail: { networkSince: since.toISOString() } });
+    expect(decision.pageHold).toMatchObject({ action: "set", kind: "network", detail: { networkSince: since.toISOString() } });
     const fresh = onOutcome(input("network", { page: pageState({ networkFailureStreak: 2 }) }));
     expect(fresh.alerts).toEqual([]);
     expect(fresh.pageHold).toMatchObject({ detail: { networkSince: NOW.toISOString() } });
+  });
+
+  it("a recorded network hold that ends later keeps its end (a later answer never shortens a hold)", () => {
+    const page = pageState({ networkFailureStreak: 2, holds: holds(networkRow(at(10 * MIN), { streak: 9 })) });
+    const decision = onOutcome(input("network", { page }));
+    expect(decision.pageHold).toEqual({ action: "keep" });
+    expect(decision.networkFailureStreak).toBe(3);
+    expect(decision.work).toEqual({ action: "reopen", dueAt: null, waitingReason: "page_hold", waitingUntil: at(10 * MIN) });
   });
 });
 
@@ -368,7 +372,7 @@ describe("sync errors: a 429 holds only its route", () => {
   });
 
   it("a candidate identity check's 429 under an auth hold holds its route and leaves the auth hold alone", () => {
-    const authHeld = pageState({ holdKind: "auth", holdUntil: INDEFINITE_UNTIL, holdDetail: { status: 401, credentialsGeneration: "gen-1" } });
+    const authHeld = pageState({ holds: holds(authRow({ status: 401, credentialsGeneration: "gen-1" })) });
     const decision = onOutcome(input("rate_limit", {
       resource: "account.identity",
       subject: "",
@@ -419,7 +423,6 @@ describe("sync errors: auth and identity", () => {
       action: "set",
       kind: "auth",
       until: "infinity",
-      step: 0,
       detail: { status: 401, credentialsGeneration: "gen-1", failedAttemptId: 42, failedAt: at(-300).toISOString() },
     });
     expect(decision.alerts).toEqual([{ subKey: "page_stopped", detail: "auth" }]);
@@ -433,10 +436,7 @@ describe("sync errors: auth and identity", () => {
 
   it("a later refusal under the hold replaces the latest refusal (the episode start is the row's, setPageHold)", () => {
     const held = pageState({
-      holdKind: "auth",
-      holdUntil: INDEFINITE_UNTIL,
-      holdSince: at(-HOUR),
-      holdDetail: { status: 401, credentialsGeneration: "gen-1", failedAttemptId: 7, failedAt: at(-HOUR).toISOString() },
+      holds: holds(authRow({ status: 401, credentialsGeneration: "gen-1", failedAttemptId: 7, failedAt: at(-HOUR).toISOString() })),
     });
     const decision = onOutcome(input("auth", {
       httpStatus: 401,
@@ -456,7 +456,6 @@ describe("sync errors: auth and identity", () => {
       action: "set",
       kind: "identity_mismatch",
       until: "infinity",
-      step: 0,
       detail: { credentialsGeneration: "gen-1", failedAttemptId: 5, failedAt: at(-2_000).toISOString() },
     });
     expect(decision.work).toEqual({ action: "quarantine", reason: "identity_mismatch" });
@@ -465,59 +464,56 @@ describe("sync errors: auth and identity", () => {
   });
 
   it("an auth hold is in force whatever digest the engine trusts (the A-verified, B-refused case)", () => {
-    const held = { holdKind: "auth" as const, holdUntil: INDEFINITE_UNTIL, holdSince: at(-MIN), holdDetail: { credentialsGeneration: "gen-B" } };
     for (const trusted of ["gen-A", "gen-B", null]) {
-      const page = pageState({ ...held, credentialsGeneration: trusted });
-      expect(activeFanslyPageHold(page, NOW)?.credentials?.kind).toBe("auth");
+      const page = pageState({ holds: holds(authRow({ credentialsGeneration: "gen-B" }, at(-MIN))), credentialsGeneration: trusted });
+      expect(fanslyPageHoldInForce(page.holds, NOW)?.credentials?.kind).toBe("auth");
     }
   });
 });
 
-// A 429 hold of the page comes only from the legacy engine now (the switch's
-// import, I.4); a network hold is the engine's own.
-describe("sync errors: an auth/identity hold and a 429/network hold at once", () => {
-  const authHeld = (detail: Record<string, unknown> = {}) => pageState({
-    holdKind: "auth",
-    holdUntil: INDEFINITE_UNTIL,
-    holdSince: at(-HOUR),
-    holdDetail: { status: 401, credentialsGeneration: "gen-1", failedAttemptId: 3, failedAt: at(-HOUR).toISOString(), ...detail },
-  });
-  const carried = (kind: "rate_limit" | "network", untilMs: number, detail: Record<string, unknown> = {}) => ({
-    [CARRIED_TIMED_HOLD_FIELD]: { kind, until: at(untilMs).toISOString(), detail },
-  });
+// A page holds a credentials hold and a network hold side by side, each a row
+// of its own in its hold set: neither is taken over the other.
+describe("sync errors: a credentials hold and a network hold at once", () => {
+  const refused = { status: 401, credentialsGeneration: "gen-1", failedAttemptId: 3, failedAt: at(-HOUR).toISOString() };
 
-  it("a candidate identity check's network failures under an auth hold carry a network hold beside it", () => {
+  it("a candidate identity check's network failures under an auth hold take a network hold beside it", () => {
     const decision = onOutcome(input("network", {
       resource: "account.identity",
-      page: { ...authHeld(), networkFailureStreak: NETWORK_FAILURES_TO_PAUSE - 1 },
+      page: pageState({ holds: holds(authRow(refused)), networkFailureStreak: NETWORK_FAILURES_TO_PAUSE - 1 }),
     }));
-    expect(decision.pageHold).toMatchObject({
+    // The network hold's own row: the credentials hold is not written.
+    expect(decision.pageHold).toEqual({
       action: "set",
-      kind: "auth",
-      until: "infinity",
-      detail: { credentialsGeneration: "gen-1", [CARRIED_TIMED_HOLD_FIELD]: { kind: "network", until: at(NETWORK_PAUSE_LADDER_MS[0]!).toISOString() } },
+      kind: "network",
+      until: at(NETWORK_PAUSE_LADDER_MS[0]!),
+      detail: { streak: NETWORK_FAILURES_TO_PAUSE, networkSince: NOW.toISOString() },
     });
-    // The network's start rides along across retries of the carried hold.
+    // The network's start rides along across retries of the hold.
     const since = at(-20 * MIN).toISOString();
     const again = onOutcome(input("network", {
       resource: "account.identity",
-      page: { ...authHeld(carried("network", -1, { streak: 3, networkSince: since })), networkFailureStreak: NETWORK_FAILURES_TO_PAUSE },
+      page: pageState({
+        holds: holds(authRow(refused), networkRow(at(-1), { streak: 3, networkSince: since })),
+        networkFailureStreak: NETWORK_FAILURES_TO_PAUSE,
+      }),
     }));
-    expect(again.pageHold).toMatchObject({ kind: "auth", detail: { [CARRIED_TIMED_HOLD_FIELD]: { kind: "network", detail: { networkSince: since } } } });
+    expect(again.pageHold).toMatchObject({ action: "set", kind: "network", detail: { networkSince: since } });
     expect(again.alerts).toEqual([{ subKey: "page_stopped", detail: "network" }]);
   });
 
-  it("an auth refusal over a 429 hold in force carries it", () => {
-    const rateLimited = pageState({ holdKind: "rate_limit", holdUntil: at(5 * MIN), holdStep: 2, holdDetail: { status: 429 } });
-    expect(onOutcome(input("auth", { httpStatus: 401, page: rateLimited })).pageHold).toMatchObject({
+  it("an auth refusal beside a network hold in force takes its own row and leaves that one standing", () => {
+    const backingOff = pageState({ holds: holds(networkRow(at(5 * MIN), { streak: 3 })) });
+    const decision = onOutcome(input("auth", { httpStatus: 401, page: backingOff, attempt: { id: 9, sentAt: at(-100) } }));
+    expect(decision.pageHold).toEqual({
+      action: "set",
       kind: "auth",
-      step: 2,
-      detail: { [CARRIED_TIMED_HOLD_FIELD]: { kind: "rate_limit", until: at(5 * MIN).toISOString() } },
+      until: "infinity",
+      detail: { status: 401, credentialsGeneration: "gen-1", failedAttemptId: 9, failedAt: at(-100).toISOString() },
     });
   });
 
-  it("a 429 under an auth hold whose trusted digest moved holds only its route: the hold (not history) and its carried 429 stay", () => {
-    const moved = { ...authHeld(carried("rate_limit", 30_000)), credentialsGeneration: "renewed" };
+  it("a 429 under an auth hold whose trusted digest moved holds only its route: both page holds stay", () => {
+    const moved = pageState({ holds: holds(authRow(refused), networkRow(at(30_000))), credentialsGeneration: "renewed" });
     const decision = onOutcome(input("rate_limit", {
       httpStatus: 429,
       retryAfterMs: 60_000,
@@ -526,7 +522,7 @@ describe("sync errors: an auth/identity hold and a 429/network hold at once", ()
     }));
     expect(decision.pageHold).toEqual({ action: "keep" });
     expect(decision.routeHold).toMatchObject({ action: "set", route: "account.me", holdUntil: at(60_000) });
-    expect(activeFanslyPageHold(moved, NOW)).toMatchObject({ kind: "auth", timed: { kind: "rate_limit", until: at(30_000), carried: true } });
+    expect(fanslyPageHoldInForce(moved.holds, NOW)).toMatchObject({ kind: "auth", timed: { kind: "network", until: at(30_000) } });
   });
 });
 
@@ -601,7 +597,7 @@ describe("sync errors: resource breaker", () => {
     const first = onOutcome(input("subject_failure", { recentFailedSubjects: 5 }));
     expect(first.resourceHold).toEqual({ action: "set", file: "media-stats", until: at(30 * MIN), step: 1 });
     const expired = (step: number) => pageState({
-      resourceHolds: { "media-stats": { until: at(-1).toISOString(), step, since: at(-HOUR).toISOString() } },
+      resourceHolds: { "media-stats": { until: at(-1), step, since: at(-HOUR) } },
     });
     expect(onOutcome(input("subject_failure", { recentFailedSubjects: 5, page: expired(1) })).resourceHold)
       .toEqual({ action: "set", file: "media-stats", until: at(2 * HOUR), step: 2 });
@@ -613,7 +609,7 @@ describe("sync errors: resource breaker", () => {
 
   it("an active hold is not re-taken", () => {
     const page = pageState({
-      resourceHolds: { "media-stats": { until: at(MIN).toISOString(), step: 1, since: at(-MIN).toISOString() } },
+      resourceHolds: { "media-stats": { until: at(MIN), step: 1, since: at(-MIN) } },
     });
     expect(onOutcome(input("subject_failure", { recentFailedSubjects: 9, page })).resourceHold).toEqual({ action: "keep" });
   });
@@ -623,11 +619,11 @@ describe("sync errors: resource breaker", () => {
     expect(head.resourceHold).toEqual({ action: "keep" });
     const catchup = onOutcome(input("subject_failure", { resource: "dm-messages.catchup", recentFailedSubjects: 5 }));
     expect(catchup.resourceHold).toMatchObject({ action: "set", file: "dm-messages" });
-    const holds = { "dm-messages": { until: at(MIN).toISOString(), step: 1, since: NOW.toISOString() } };
-    expect(activeResourceHold(holds, "dm-messages.head", NOW)).toBeNull();
-    expect(activeResourceHold(holds, "dm-messages.catchup", NOW))
+    const breakers = { "dm-messages": { until: at(MIN), step: 1, since: NOW } };
+    expect(activeResourceHold(breakers, "dm-messages.head", NOW)).toBeNull();
+    expect(activeResourceHold(breakers, "dm-messages.catchup", NOW))
       .toEqual({ file: "dm-messages", until: at(MIN), step: 1, kind: "breaker" });
-    expect(activeResourceHold(holds, "dm-messages.catchup", at(MIN))).toBeNull();
+    expect(activeResourceHold(breakers, "dm-messages.catchup", at(MIN))).toBeNull();
   });
 });
 

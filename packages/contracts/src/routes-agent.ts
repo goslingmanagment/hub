@@ -2136,12 +2136,16 @@ export const agentHistorySatisfiedByEnum = z.enum([
 ]);
 
 /** "Почему ждёт" (plan §10): the engine's one closed dictionary. A reason is a
- *  BODY field, never a blocker — progress is not an epistemic limitation. */
+ *  BODY field, never a blocker — progress is not an epistemic limitation.
+ *  `route_budget` (the route's own pace admits the next request later) and
+ *  `route_hold` (a 429 holds the route) name what `pacer` covered for a route. */
 export const agentSyncWaitingReasonEnum = z.enum([
   "not_due",
   "pacer",
   "class_share",
   "page_hold",
+  "route_budget",
+  "route_hold",
   "resource_hold",
   "subject_breaker",
   "blocked_by_vendor",
@@ -2399,7 +2403,7 @@ export const agentSyncPageModeEnum = z.enum(["off", "shadow", "handover", "live"
 export const agentSyncWorkClassEnum = z.enum(["urgent", "requests", "planned"]);
 export const agentSyncWorkKindEnum = z.enum(["poll", "trigger", "goal", "repair"]);
 export const agentSyncWorkStateEnum = z.enum(["open", "running", "quarantined", "done", "cancelled", "superseded"]);
-export const agentSyncPageHoldKindEnum = z.enum(["rate_limit", "auth", "identity_mismatch", "network"]);
+export const agentSyncPageHoldKindEnum = z.enum(["auth", "identity_mismatch", "network"]);
 export const agentSyncAttemptOutcomeEnum = z.enum([
   "admitted",
   "sent",

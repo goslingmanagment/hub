@@ -17,9 +17,8 @@ import {
 } from "../apps/runtime/src/sync/engine/route-holds.ts";
 import {
   EMPTY_ROUTE_STATE,
-  parseRouteState,
   RouteClocks,
-  ROUTE_STATE_VERSION,
+  routeStateOfHolds,
   type RouteState,
   type RouteStateEntry,
 } from "../apps/runtime/src/sync/engine/route-policy.ts";
@@ -33,6 +32,7 @@ import {
   type FanslyRoute,
 } from "../apps/runtime/src/sync/fansly/routes.ts";
 import { SYNC_ROUTE_RAISE_AUDIT_EVENT } from "../apps/runtime/src/sync/route-raise.ts";
+import { routeHoldRows } from "./helpers/sync-holds.ts";
 
 // Route holds and slowdowns (step 3b ruling 2 as amended by A2; owner
 // decisions №14, №22, D3): a 429 holds only its route — Retry-After to the
@@ -111,7 +111,7 @@ describe("route holds: a 429 without Retry-After", () => {
   it("with the halved interval the route's next send is ≥ 8 s (default), 10 s (list), 24 s (media) after its last", () => {
     for (const [route, gapMs] of [["messages.page", 8_000], ["messaging.groups", 10_000], ["media.offer_stats", 24_000]] as const) {
       const after = routeHoldAfter(hold({ route }))!;
-      const state: RouteState = { version: ROUTE_STATE_VERSION, routes: { [route]: after.entry } };
+      const state: RouteState = { routes: { [route]: after.entry } };
       const sends: SyncRouteSend[] = [{ journal: "engine", operation: route, lastAt: NOW }];
       const clocks = new RouteClocks({ sends, state });
       // The hold (5 s) is shorter than the halved interval: the interval rules.
@@ -155,7 +155,6 @@ describe("route holds: Retry-After and holds in force", () => {
 
   it("reads a route's hold in force at an instant", () => {
     const state: RouteState = {
-      version: ROUTE_STATE_VERSION,
       routes: {
         "messages.page": routeHoldAfter(hold())!.entry,
         "media.offer_stats": routeHoldAfter(hold({ route: "media.offer_stats", retryAfterMs: 60_000 }))!.entry,
@@ -169,10 +168,9 @@ describe("route holds: Retry-After and holds in force", () => {
     expect(routeHoldUntil(EMPTY_ROUTE_STATE, "messages.page", NOW)).toBeNull();
   });
 
-  it("the stored entry reads back as written (the namespace parser of 1-1)", () => {
+  it("the entry reads back from the route's rows of the hold set as written", () => {
     const entry = climb("media.offer_stats", 2)[1]!.entry;
-    const read = parseRouteState(JSON.parse(JSON.stringify({ version: ROUTE_STATE_VERSION, routes: { "media.offer_stats": entry } })));
-    expect(read).toEqual({ ok: true, state: { version: ROUTE_STATE_VERSION, routes: { "media.offer_stats": entry } } });
+    expect(routeStateOfHolds(routeHoldRows("media.offer_stats", entry))).toEqual({ ok: true, state: { routes: { "media.offer_stats": entry } } });
   });
 });
 
@@ -252,10 +250,12 @@ describe("budgets-calibration.sql (A2: the evidence behind a step)", () => {
       .map(([family, budget]) => [family, String(budget.ceilingPerMin), String(budget.currentPerMin)]));
   });
 
-  it("proposes the raise lever's own command, and reads the namespace version this build writes", () => {
+  it("proposes the raise lever's own command, and reads the route rows of the hold set", () => {
     expect(text).toContain("pnpm cli sync route raise --page %s --route %s --to %s --revision %s --evidence %L");
-    expect(text).toContain(`'route:state'`);
-    expect(text).toContain(`-> 'version' = '${ROUTE_STATE_VERSION}'::jsonb`);
+    expect(text).toContain("from sync_holds h");
+    expect(text).toContain("where h.scope = 'route'");
+    // The old columns are no source of it any more.
+    expect(text).not.toMatch(/resource_holds|route:state/);
     expect(text).toContain(`ae.event_type = '${SYNC_ROUTE_RAISE_AUDIT_EVENT}'`);
     // Read-only: a report, never a write.
     expect(text).not.toMatch(/\b(insert|update|delete|truncate|alter|create|drop)\b\s/i);

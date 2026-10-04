@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
+import type { SyncHoldRow } from "@agency_hub_core/db";
 import { INDEFINITE_UNTIL } from "@agency_hub_core/shared";
 
+import { holdSetOf, type RouteAdmissionView } from "../apps/runtime/src/sync/engine/admission.ts";
 import {
   buildPageStatus,
   estimateSlotOpensAt,
@@ -14,6 +16,7 @@ import {
   type StatusPage,
   type StatusWork,
 } from "../apps/runtime/src/sync/engine/status.ts";
+import { pageHoldRow, resourceBreakerRow, routeHoldRows } from "./helpers/sync-holds.ts";
 
 // "Почему ждёт" (plan §10, design §3.9): the closed dictionary, its
 // precedence, and the page status assembled from it.
@@ -22,17 +25,14 @@ const NOW = new Date("2026-10-02T12:00:00.000Z");
 const at = (ms: number) => new Date(NOW.getTime() + ms);
 const OPEN_SLOT: RuntimeSnapshot = { slotOpensAt: null };
 
-function page(overrides: Partial<StatusPage> = {}): StatusPage {
+/** A page whose hold set is `rows` (`sync_holds`). */
+function page(overrides: Partial<Omit<StatusPage, "holds">> = {}, rows: readonly SyncHoldRow[] = []): StatusPage {
   return {
     mode: "live",
     pausedAll: false,
     pausedRequests: false,
     pausedResources: [],
-    holdKind: null,
-    holdUntil: null,
-    holdSince: null,
-    holdDetail: {},
-    resourceHolds: {},
+    holds: holdSetOf(rows),
     owner: {
       generation: 3n,
       host: "sync-1",
@@ -65,8 +65,13 @@ function work(overrides: Partial<StatusWork> = {}): StatusWork {
 const reason = (w: StatusWork, p: StatusPage = page(), rt: RuntimeSnapshot = OPEN_SLOT) =>
   explainWork(w, p, rt, NOW)?.reason ?? null;
 
+/** A route admission whose every key and route is closed by `closure`. */
+function closedRoutes(closure: NonNullable<ReturnType<RouteAdmissionView["keyOpensAt"]>>): RouteAdmissionView {
+  return { keyOpensAt: () => closure, routeOpensAt: () => closure, keyHeldRoutes: () => closure.held };
+}
+
 describe("sync status: the closed dictionary", () => {
-  it("is plan §10's list, nothing more (endpoint_interval is gone)", () => {
+  it("is plan §10's list and a route's two computed reasons, nothing more (endpoint_interval is gone)", () => {
     expect([...WAITING_REASONS].sort()).toEqual([
       "blocked_by_vendor",
       "class_share",
@@ -78,6 +83,8 @@ describe("sync status: the closed dictionary", () => {
       "paused",
       "quarantined",
       "resource_hold",
+      "route_budget",
+      "route_hold",
       "running",
       "subject_breaker",
     ]);
@@ -123,30 +130,43 @@ describe("sync status: why a work row waits", () => {
   });
 
   it("page_hold, with the hold's end", () => {
-    const held = page({ holdKind: "rate_limit", holdUntil: at(120_000) });
-    expect(explainWork(work(), held, OPEN_SLOT, NOW)).toEqual({ reason: "page_hold", until: at(120_000), detail: { kind: "rate_limit" } });
-    expect(reason(work(), page({ holdKind: "rate_limit", holdUntil: at(-1) }))).toBe("class_share");
+    const held = page({}, [pageHoldRow("network", at(120_000))]);
+    expect(explainWork(work(), held, OPEN_SLOT, NOW)).toEqual({ reason: "page_hold", until: at(120_000), detail: { kind: "network" } });
+    expect(reason(work(), page({}, [pageHoldRow("network", at(-1))]))).toBe("class_share");
     // A credentials hold is in force until an identity proof clears it,
     // whatever digest the engine trusts since (ruling 5).
-    expect(explainWork(work(), page({ holdKind: "auth", holdUntil: INDEFINITE_UNTIL, holdDetail: { credentialsGeneration: "gen-0" } }), OPEN_SLOT, NOW))
+    expect(explainWork(work(), page({}, [pageHoldRow("auth", INDEFINITE_UNTIL, { detail: { credentialsGeneration: "gen-0" } })]), OPEN_SLOT, NOW))
       .toEqual({ reason: "page_hold", until: INDEFINITE_UNTIL, detail: { kind: "auth" } });
+    // A network hold beside it is named first: nothing goes out before it ends.
+    const both = page({}, [pageHoldRow("auth"), pageHoldRow("network", at(30_000))]);
+    expect(explainWork(work(), both, OPEN_SLOT, NOW)).toEqual({ reason: "page_hold", until: at(30_000), detail: { kind: "network" } });
+  });
+
+  it("page_hold for rows of the hold set this build cannot read: until their end, for good when they name none", () => {
+    const unknownKind = page({}, [pageHoldRow("maintenance", at(90_000))]);
+    expect(explainWork(work(), unknownKind, OPEN_SLOT, NOW))
+      .toEqual({ reason: "page_hold", until: at(90_000), detail: { holdSet: "hold_row:page::maintenance" } });
+    expect(reason(work(), page({}, [pageHoldRow("maintenance", at(-1))]))).toBe("class_share");
+    const routeState = page({}, routeHoldRows("messaging.groups", { effectivePerMin: -1 }));
+    expect(explainWork(work(), routeState, OPEN_SLOT, NOW))
+      .toEqual({ reason: "page_hold", until: null, detail: { holdSet: "route_state_entry:messaging.groups" } });
   });
 
   it("then quarantined, blocked_by_vendor, subject_breaker, resource_hold, in that order", () => {
-    const resourceHolds = { subscribers: { until: at(60_000).toISOString(), step: 1, since: at(-60_000).toISOString() } };
+    const breaker = [resourceBreakerRow("subscribers", at(60_000), { step: 1, since: at(-60_000) })];
     expect(reason(work({ state: "quarantined", blockedByVendorAt: at(-1) }))).toBe("quarantined");
     expect(explainWork(work({ blockedByVendorAt: at(-5_000), breakerUntil: at(86_000_000) }), page(), OPEN_SLOT, NOW))
-      .toMatchObject({ reason: "blocked_by_vendor", until: at(86_000_000) });
-    expect(explainWork(work({ breakerUntil: at(60_000) }), page({ resourceHolds }), OPEN_SLOT, NOW))
+      .toMatchObject({ reason: "blocked_by_vendor", until: at(86_000_000), detail: { since: at(-5_000).toISOString() } });
+    expect(explainWork(work({ breakerUntil: at(60_000) }), page({}, breaker), OPEN_SLOT, NOW))
       .toMatchObject({ reason: "subject_breaker", until: at(60_000) });
-    expect(explainWork(work(), page({ resourceHolds }), OPEN_SLOT, NOW))
-      .toMatchObject({ reason: "resource_hold", until: at(60_000), detail: { file: "subscribers", step: 1 } });
+    expect(explainWork(work(), page({}, breaker), OPEN_SLOT, NOW))
+      .toMatchObject({ reason: "resource_hold", until: at(60_000), detail: { file: "subscribers", step: 1, kind: "breaker" } });
   });
 
   it("a resource hold never stops dm-messages.head", () => {
-    const resourceHolds = { "dm-messages": { until: at(60_000).toISOString(), step: 1, since: NOW.toISOString() } };
-    expect(reason(work({ resource: "dm-messages.head", class: "urgent" }), page({ resourceHolds }))).toBe("class_share");
-    expect(reason(work({ resource: "dm-messages.catchup" }), page({ resourceHolds }))).toBe("resource_hold");
+    const breaker = [resourceBreakerRow("dm-messages", at(60_000))];
+    expect(reason(work({ resource: "dm-messages.head", class: "urgent" }), page({}, breaker))).toBe("class_share");
+    expect(reason(work({ resource: "dm-messages.catchup" }), page({}, breaker))).toBe("resource_hold");
   });
 
   it("dependency and not_due wait for their time", () => {
@@ -168,9 +188,9 @@ describe("sync status: why a work row waits", () => {
       work({ resource: "dm-live.deletions", class: "urgent", http: false, ...overrides });
     const closed = { slotOpensAt: at(1_500) };
     for (const held of [
-      page({ holdKind: "rate_limit", holdUntil: at(120_000) }),
-      page({ holdKind: "network", holdUntil: at(30_000) }),
-      page({ holdKind: "auth", holdUntil: INDEFINITE_UNTIL, holdDetail: { credentialsGeneration: "gen-1" } }),
+      page({}, [pageHoldRow("network", at(30_000))]),
+      page({}, [pageHoldRow("auth", INDEFINITE_UNTIL, { detail: { credentialsGeneration: "gen-1" } })]),
+      page({}, [pageHoldRow("auth"), pageHoldRow("network", at(30_000))]),
     ]) {
       expect(explainWork(deletion(), held, closed, NOW)).toEqual({ reason: "class_share", until: null, detail: { class: "urgent" } });
       // A busy erasure fence is what it waits for, not the hold.
@@ -181,18 +201,42 @@ describe("sync status: why a work row waits", () => {
       expect(reason(deletion(), { ...held, pausedResources: ["dm-live.deletions"] }, closed)).toBe("paused");
       expect(reason(work({ http: true }), held, closed)).toBe("page_hold");
     }
-    expect(reason(deletion({ state: "quarantined" }), page({ holdKind: "network", holdUntil: at(30_000) }))).toBe("quarantined");
+    expect(reason(deletion({ state: "quarantined" }), page({}, [pageHoldRow("network", at(30_000))]))).toBe("quarantined");
     // Nor on the route admission: a route state this build cannot read, or
     // closed routes, delay the requests only.
-    const routesClosed: RuntimeSnapshot = {
-      slotOpensAt: null,
-      routes: { stateError: "route_state_version:9", keyOpensAt: () => ({ at: at(30_000), routes: ["messaging.groups"], held: [] }) },
-    };
-    expect(reason(deletion(), page(), routesClosed)).toBe("class_share");
-    expect(reason(work({ http: true }), page(), routesClosed)).toBe("page_hold");
-    const budgetClosed: RuntimeSnapshot = { ...routesClosed, routes: { ...routesClosed.routes!, stateError: null } };
+    const unreadable = page({}, routeHoldRows("messaging.groups", { effectivePerMin: -1 }));
+    expect(reason(deletion(), unreadable)).toBe("class_share");
+    expect(reason(work({ http: true }), unreadable)).toBe("page_hold");
+    const budgetClosed: RuntimeSnapshot = { slotOpensAt: null, routes: closedRoutes({ at: at(30_000), routes: ["messaging.groups"], held: [] }) };
     expect(reason(deletion(), page(), budgetClosed)).toBe("class_share");
-    expect(reason(work({ http: true }), page(), budgetClosed)).toBe("pacer");
+    expect(reason(work({ http: true }), page(), budgetClosed)).toBe("route_budget");
+  });
+
+  it("a route's budget and a route's hold are told apart: route_budget, route_hold with its deadline", () => {
+    const budget: RuntimeSnapshot = { slotOpensAt: null, routes: closedRoutes({ at: at(4_000), routes: ["messaging.groups"], held: [] }) };
+    expect(explainWork(work({ resource: "dm-conversations.head" }), page(), budget, NOW))
+      .toEqual({ reason: "route_budget", until: at(4_000), detail: { routes: ["messaging.groups"] } });
+    const held: RuntimeSnapshot = {
+      slotOpensAt: null,
+      routes: closedRoutes({ at: at(300_000), routes: ["messaging.groups"], held: ["messaging.groups"] }),
+    };
+    expect(explainWork(work({ resource: "dm-conversations.head" }), page(), held, NOW))
+      .toEqual({ reason: "route_hold", until: at(300_000), detail: { routes: ["messaging.groups"], held: ["messaging.groups"] } });
+    // A request its planned route put off stores `pacer`; it is named by what
+    // keeps its key's routes closed, and waits until its own due time.
+    const putOff = work({ resource: "dm-conversations.head", waitingReason: "pacer", dueAt: at(9_000) });
+    expect(explainWork(putOff, page(), held, NOW))
+      .toEqual({ reason: "route_hold", until: at(9_000), detail: { routes: ["messaging.groups"], held: ["messaging.groups"] } });
+    expect(explainWork(putOff, page(), budget, NOW)).toEqual({ reason: "route_budget", until: at(9_000), detail: { routes: ["messaging.groups"] } });
+    // Another route of its key is open now, but the one it planned is held.
+    const oneHeld: RuntimeSnapshot = { slotOpensAt: null, routes: { keyOpensAt: () => null, routeOpensAt: () => null, keyHeldRoutes: () => ["messaging.groups"] } };
+    expect(explainWork({ ...putOff, resource: "dm-conversations.find" }, page(), oneHeld, NOW))
+      .toEqual({ reason: "route_hold", until: at(9_000), detail: { routes: [], held: ["messaging.groups"] } });
+    // The route clocks not read: its route's pace, as far as anyone knows.
+    expect(explainWork(putOff, page(), OPEN_SLOT, NOW)).toEqual({ reason: "route_budget", until: at(9_000), detail: { routes: [] } });
+    // The page's own hold, a breaker and the due time come first.
+    expect(reason(work({ resource: "dm-conversations.head" }), page({}, [pageHoldRow("auth")]), held)).toBe("page_hold");
+    expect(reason(work({ resource: "dm-conversations.head", dueAt: at(1_000) }), page(), held)).toBe("not_due");
   });
 
   it("closed work waits for nothing", () => {
@@ -225,10 +269,13 @@ describe("sync status: estimates and summaries", () => {
   });
 
   it("assembles the page status", () => {
-    const p = { ...page({ holdKind: "auth", holdUntil: INDEFINITE_UNTIL, holdDetail: { credentialsGeneration: "gen-1" } }), holdSince: at(-60_000), lastSendAt: at(-10_000) };
-    p.resourceHolds = {
-      "media-stats": { until: at(600_000).toISOString(), step: 1, since: at(-60_000).toISOString() },
-      catalog: { until: at(-1).toISOString(), step: 2, since: at(-9_000_000).toISOString() },
+    const p = {
+      ...page({}, [
+        pageHoldRow("auth", INDEFINITE_UNTIL, { since: at(-60_000), detail: { credentialsGeneration: "gen-1" } }),
+        resourceBreakerRow("media-stats", at(600_000), { step: 1, since: at(-60_000) }),
+        resourceBreakerRow("catalog", at(-1), { step: 2, since: at(-9_000_000) }),
+      ]),
+      lastSendAt: at(-10_000),
     };
     const status = buildPageStatus({
       pageLabel: "lora-1",

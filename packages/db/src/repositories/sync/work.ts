@@ -507,7 +507,7 @@ export interface SyncWorkPickFilter {
   now?: Date | null;
   /** Paused keys (`sync_pages.paused_resources`). */
   excludeResources?: readonly string[];
-  /** Resource files under a live resource hold (`sync_pages.resource_holds`). */
+  /** Resource files whose breaker is in force (the page's hold set). */
   excludeFiles?: readonly string[];
   /** Classes the page may not serve now (the owner's requests pause). */
   excludeClasses?: readonly SyncEngineWorkClass[];

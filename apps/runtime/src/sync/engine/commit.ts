@@ -59,20 +59,14 @@ import {
   type FanslyWireRead,
   type FanslyWireRequest,
 } from "@agency_hub_core/fansly";
-import {
-  admitUnderFanslyPageHolds,
-  fanslyPageHoldAfterCredentials,
-  fanslyPageHoldInForce,
-  proofClearsCredentialsHold,
-  readFanslyPageHolds,
-  type FanslyPageHoldOperation,
-} from "@agency_hub_core/shared";
+import { proofClearsCredentialsHold, type FanslyPageHoldOperation } from "@agency_hub_core/shared";
 
 import { isCapturePayloadUnavailable, resolveCapturePayloadRow } from "../../services/payload-reader.ts";
 import { WrongTransactionsWriterError } from "../../services/transactions-writer-gate.ts";
 import { fanslyCdnTokenStripApplies, stripFanslySignedCdnTokens } from "../fansly/lib/cdn-tokens.ts";
 import { replaceJournalLoneSurrogates } from "../fansly/lib/journal-lone-surrogates.ts";
 import { routeOfWireId } from "../fansly/routes.ts";
+import { holdSetOf, whyHeld, type HoldSet } from "./admission.ts";
 import {
   classifyWireOutcome,
   escalateResourceHold,
@@ -85,7 +79,6 @@ import {
   type AlertDecision,
   type OutcomeDecision,
   type PageErrorState,
-  type ResourceHoldEntry,
   VERIFY_KEY,
 } from "./errors.ts";
 import type { Admission, SlotGrant } from "./pacer.ts";
@@ -103,7 +96,7 @@ import {
   type StepPlan,
   type WorkOutcome,
 } from "./resource.ts";
-import { parseRouteState, ROUTE_STATE_VERSION, type RouteAdmissionIntervals } from "./route-policy.ts";
+import type { RouteAdmissionIntervals } from "./route-policy.ts";
 import { judgePaceGap } from "./send-audit.ts";
 import type { WorkClass } from "./scheduler.ts";
 
@@ -471,10 +464,11 @@ export function pageHoldOperationOf(
 }
 
 /** A page hold refused the request at its admission (tx 1 rolled back:
- *  nothing was written, the slot is not consumed). */
+ *  nothing was written, the slot is not consumed). `until` null: no instant
+ *  ends it (rows of the hold set this build cannot read). */
 export class AdmissionHeldError extends Error {
-  constructor(readonly kind: string, readonly until: Date) {
-    super(`The page is held (${kind}) until ${until.toISOString()}`);
+  constructor(readonly kind: string, readonly until: Date | null) {
+    super(`The page is held (${kind}) until ${until === null ? "it is repaired" : until.toISOString()}`);
     this.name = "AdmissionHeldError";
   }
 }
@@ -508,12 +502,8 @@ export async function admit(
     // here, before anything is counted. The work stays open.
     const page = await getSyncPage(tx, d.pageId);
     if (page === null) throw new OwnershipLostError(d.pageId, d.generation, null);
-    const holds = admitUnderFanslyPageHolds(
-      readFanslyPageHolds(page),
-      pageHoldOperationOf(picked.work, prepared),
-      d.clock.wallNow(),
-    );
-    if (!holds.admitted) throw new AdmissionHeldError(holds.kind, holds.until);
+    const held = whyHeld(holdSetOf(page.holds), null, { operation: pageHoldOperationOf(picked.work, prepared) }, d.clock.wallNow());
+    if (held !== null) throw new AdmissionHeldError(held.kind, held.until);
     const running = await markWorkRunning(tx, { workId: picked.work.id, generation: d.generation });
     if (running === null) return null;
     const admitted = await insertAdmission(tx, {
@@ -905,15 +895,11 @@ export interface CaptureResult {
   inMemory: { response: unknown; parsed: unknown } | null;
 }
 
-function pageErrorState(page: SyncPageRow): PageErrorState {
+function pageErrorState(page: SyncPageRow, holds: HoldSet): PageErrorState {
   return {
-    holdKind: page.holdKind,
-    holdUntil: page.holdUntil,
-    holdSince: page.holdSince,
-    holdStep: page.holdStep,
-    holdDetail: page.holdDetail,
+    holds: holds.page,
     networkFailureStreak: page.networkFailureStreak,
-    resourceHolds: page.resourceHolds as Record<string, ResourceHoldEntry>,
+    resourceHolds: holds.resources,
     credentialsGeneration: page.credentialsGeneration,
   };
 }
@@ -1018,9 +1004,10 @@ export async function capture(
     const page = await getSyncPage(tx, d.pageId);
     if (page === null) throw new OwnershipLostError(d.pageId, d.generation, null);
     const file = resourceFileOf(admission.work.resource);
-    // The route state as of this transaction (the page row is locked): a 429
+    // The hold set as of this transaction (the page row is locked): a 429
     // holds and slows the route the request went out on.
-    const routeState = parseRouteState(page.routeState);
+    const holds = holdSetOf(page.holds);
+    const routeState = holds.routes;
     const route = routeOfWireId(admission.request.spec);
     const decided = onOutcome({
       errorClass: classified.errorClass,
@@ -1029,7 +1016,7 @@ export async function capture(
       subject: admission.work.subject,
       httpStatus: classified.httpStatus,
       retryAfterMs: classified.retryAfterMs,
-      page: pageErrorState(page),
+      page: pageErrorState(page, holds),
       ...(routeState.ok
         ? {
           route: {
@@ -1147,9 +1134,9 @@ async function writeOutcomeDecision(
   const fenced = { pageId: d.pageId, generation: d.generation };
   const hold = decision.pageHold;
   if (hold.action === "set") {
-    await setPageHold(tx, { ...fenced, kind: hold.kind, until: hold.until, step: hold.step, detail: hold.detail });
+    await setPageHold(tx, { ...fenced, kind: hold.kind, until: hold.until, detail: hold.detail });
   } else if (hold.action === "clear") {
-    await clearPageHold(tx, { ...fenced, resetStep: hold.resetStep });
+    await clearPageHold(tx, { ...fenced, kinds: hold.kinds });
   }
   if (decision.networkFailureStreak !== null) {
     await setNetworkFailureStreak(tx, { ...fenced, streak: decision.networkFailureStreak });
@@ -1159,7 +1146,6 @@ async function writeOutcomeDecision(
     const { entry } = routeHold;
     const written = await writeSyncRouteState(tx, {
       ...fenced,
-      version: ROUTE_STATE_VERSION,
       route: routeHold.route,
       expectRevision: routeHold.expectRevision,
       entry: {
@@ -1566,8 +1552,8 @@ interface IdentityProofWrite {
  * apply's transaction (ruling 5): the page's identity and the digest of the
  * credentials that request carried — the engine has verified them (G1) —
  * unless a newer proof is recorded already; and a credentials hold whose
- * latest refusal came before this request was sent is cleared — the timed
- * hold it carried staying while in force — with its audit row naming the
+ * latest refusal came before this request was sent is cleared — a network
+ * hold beside it stands — with its audit row naming the
  * verifying attempt and the refusal it cleared. Requires the page row FOR NO KEY
  * UPDATE (`IDENTITY_PROOF_OPERATIONS`).
  */
@@ -1593,15 +1579,10 @@ async function recordIdentityProof(
   // `superseded`: an answer applied late — a newer proof stands; the hold
   // rule below still judges this one by its own send.
   const proof = { cleared: null, superseded: !recorded };
-  const held = fanslyPageHoldInForce(readFanslyPageHolds(page), d.clock.wallNow())?.credentials ?? null;
+  const { credentials: held } = holdSetOf(page.holds).page;
   if (held === null || !proofClearsCredentialsHold(held, { attemptId: attempt.id, sentAt })) return proof;
-  const left = fanslyPageHoldAfterCredentials(page, d.clock.wallNow());
-  const fenced = { pageId: d.pageId, generation: d.generation };
-  if (left === null) {
-    await clearPageHold(tx, fenced);
-  } else {
-    await setPageHold(tx, { ...fenced, kind: left.kind, until: left.until, step: page.holdStep, detail: left.detail });
-  }
+  // The credentials hold alone: a network hold beside it stands until its end.
+  await clearPageHold(tx, { pageId: d.pageId, generation: d.generation, kinds: [held.kind] });
   await insertAuditEvent(tx, {
     platformAccountId: d.pageId,
     source: "sync",
@@ -1692,7 +1673,7 @@ async function recordApplyError(d: CommitDeps, attemptId: number, error: unknown
         subject: attempt.subject,
         httpStatus: attempt.httpStatus,
         retryAfterMs: null,
-        page: pageErrorState(page),
+        page: pageErrorState(page, holdSetOf(page.holds)),
         subjectState: {
           failureCount: work?.failureCount ?? 0,
           breakerUntil: work?.breakerUntil ?? null,
@@ -1719,11 +1700,7 @@ async function recordApplyError(d: CommitDeps, attemptId: number, error: unknown
       // resource-hold ladder instead of failing every one of its works.
       const page = await getSyncPage(tx, d.pageId);
       if (page === null) throw new OwnershipLostError(d.pageId, d.generation, null);
-      const hold = escalateResourceHold(
-        page.resourceHolds as Record<string, ResourceHoldEntry>,
-        attempt.resource,
-        now,
-      );
+      const hold = escalateResourceHold(holdSetOf(page.holds).resources, attempt.resource, now);
       if (hold.action === "set") {
         await setResourceHold(tx, {
           pageId: d.pageId,

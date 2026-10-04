@@ -123,7 +123,8 @@ open, resolves on the describer's next sweep.
   page the Fansly Sync Engine reads, its socket confirmation reads the
   conversation's head. The in-chunk accelerator is deleted (step 4, S4-14);
   its switch and its daily limit went with the other config keys of the legacy
-  Fansly engine (S4-26).
+  Fansly engine (S4-26). Its rows stay as records:
+  `ai_media_accelerator_reads` with `lane = 'chunk'`.
 - **OnlyFans** (0216): locators of the desktop images layer, **free sources
   only** — webhook `Expires` URLs (≥120 s left) and `cdn.fansapi.com` URLs the
   desktop resolve handed out (now persisted as `source = 'resolve'`). `policy`

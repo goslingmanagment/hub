@@ -31,15 +31,10 @@ import {
 import type { AppConfig } from "@agency_hub_core/shared";
 
 import { loadEffectiveConfig } from "../services/effective-config.ts";
+import { holdSetOf, type RouteAdmissionView } from "./engine/admission.ts";
 import { SYNC_DECODE_DEBT_WINDOW_MS } from "./engine/alerts.ts";
 import { demandToUpsert, registryOverrideProblem, type EngineRegistry } from "./engine/resource.ts";
-import {
-  parseRouteState,
-  routeAdmissionView,
-  routeJournalLookbackMs,
-  RouteClocks,
-  routeStatusView,
-} from "./engine/route-policy.ts";
+import { routeAdmissionView, routeJournalLookbackMs, RouteClocks, routeStatusView } from "./engine/route-policy.ts";
 import { FANSLY_RESOURCE_SPECS, fanslyResourceSpec, type ResourceSpec } from "./fansly/registry.ts";
 import { probeRequestOf, type ProbeParams } from "./fansly/resources/probe.ts";
 import { pageRequestProgress } from "./requests/history.ts";
@@ -48,7 +43,6 @@ import {
   estimateSlotOpensAt,
   explainWork,
   type PageStatus,
-  type RouteAdmissionView,
   type RouteStatusView,
   type StatusPage,
   type StatusWork,
@@ -95,11 +89,7 @@ function statusPage(page: SyncPageRow): StatusPage {
     pausedAll: page.pausedAll,
     pausedRequests: page.pausedRequests,
     pausedResources: page.pausedResources,
-    holdKind: page.holdKind,
-    holdUntil: page.holdUntil,
-    holdSince: page.holdSince,
-    holdDetail: page.holdDetail,
-    resourceHolds: page.resourceHolds,
+    holds: holdSetOf(page.holds),
     owner: page.owner,
   };
 }
@@ -126,8 +116,8 @@ async function readPageRoutes(
   db: Database,
   page: SyncPageRow,
   now: Date,
-): Promise<{ status: RouteStatusView; admission: RouteAdmissionView }> {
-  const read = parseRouteState(page.routeState);
+): Promise<{ status: RouteStatusView; admission: RouteAdmissionView | null }> {
+  const read = holdSetOf(page.holds).routes;
   let clocks: RouteClocks | null = null;
   if (read.ok) {
     const sends = await readRouteJournal(db, { pageId: page.pageId, withinMs: routeJournalLookbackMs(read.state) });
@@ -136,7 +126,7 @@ async function readPageRoutes(
   const stateError = read.ok ? null : read.diagnostic;
   return {
     status: routeStatusView(clocks, stateError, now),
-    admission: routeAdmissionView(clocks, stateError, FANSLY_RESOURCE_SPECS, now),
+    admission: clocks === null ? null : routeAdmissionView(clocks, FANSLY_RESOURCE_SPECS, now),
   };
 }
 

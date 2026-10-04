@@ -29,6 +29,7 @@ vi.mock("@agency_hub_core/db", async () => {
 });
 
 import { getSyncStatusSummarySnapshot } from "../apps/runtime/src/services/sync-summary.ts";
+import { pageHoldRow } from "./helpers/sync-holds.ts";
 
 const NOW = new Date("2026-03-24T12:00:00.000Z");
 /** `'infinity'` as the driver reads it: a hold only new credentials lift. */
@@ -61,10 +62,7 @@ function buildEnginePage(overrides: Record<string, unknown> = {}) {
     mode: "live",
     pausedAll: false,
     pausedResources: [],
-    holdKind: null,
-    holdUntil: null,
-    holdSince: null,
-    holdDetail: {},
+    holds: [],
     lastCompletedAt: new Date("2026-03-24T11:59:30.000Z"),
     dbNow: NOW,
     ...overrides,
@@ -200,8 +198,10 @@ describe("sync summary service", () => {
       ["identity_mismatch", "The credentials belong to another Fansly account: the engine holds the page until new ones are saved"],
     ] as const) {
       dbMocks.listSyncPages.mockResolvedValue([buildEnginePage({
-        holdKind, holdUntil: INDEFINITE, holdSince: new Date("2026-03-24T11:00:00.000Z"),
-        holdDetail: { credentialsGeneration: "gen-1" },
+        holds: [pageHoldRow(holdKind, INDEFINITE, {
+          since: new Date("2026-03-24T11:00:00.000Z"),
+          detail: { credentialsGeneration: "gen-1" },
+        })],
       })]);
       const snapshot = await getSyncStatusSummarySnapshot({ db: {}, config: {} } as never, { pageIds: [7], now: NOW });
       expect(snapshot.pages[0]?.syncUx, holdKind).toMatchObject({
@@ -210,7 +210,7 @@ describe("sync summary service", () => {
     }
     // A timed hold (the network's back-off) is the engine's own business.
     dbMocks.listSyncPages.mockResolvedValue([buildEnginePage({
-      holdKind: "network", holdUntil: new Date("2026-03-24T12:05:00.000Z"), holdSince: NOW,
+      holds: [pageHoldRow("network", new Date("2026-03-24T12:05:00.000Z"), { since: NOW })],
     })]);
     const held = await getSyncStatusSummarySnapshot({ db: {}, config: {} } as never, { pageIds: [7], now: NOW });
     expect(held.pages[0]?.syncUx).toMatchObject({ state: "healthy", requiresAction: false });

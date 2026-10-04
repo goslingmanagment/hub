@@ -4,10 +4,7 @@ import type {
   AiGatewayReasoningEffort,
   AiStreamCapability,
 } from "@agency_hub_core/contracts";
-import {
-  COACH_ANSWER_MAX_CHARS,
-  FAN_SILENCE_DAYS_MAX,
-} from "@agency_hub_core/contracts";
+import { COACH_ANSWER_MAX_CHARS } from "@agency_hub_core/contracts";
 import {
   findAiPersonaByKey,
   findPageByLabel,
@@ -47,6 +44,7 @@ import {
   type MediaNoteItem,
   type MediaNotesGate,
   type MediaNotesManifest,
+  computePingSummary,
   isFanProfileFeatureEnabled,
   loadFanBio,
   loadFanDisplayName,
@@ -65,7 +63,6 @@ import {
   FEATURE_POLICIES,
   HI_GREETING_MAX_TRANSCRIPT,
   BUNDLED_LORA_PERSONALITY_ID,
-  analyzePingSegment,
   buildPrompt,
   formatTranscript,
   isOperationFeature,
@@ -149,8 +146,6 @@ export interface AiFeatureRequestBody {
     };
   };
 }
-
-const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** Decision 379: one hi-greeting feature with an explicit variant count instead
  * of a mode. An explicit variantCount always wins; the deprecated greetingMode
@@ -588,11 +583,10 @@ export async function prepareAiFeatureStream(
     const subscription = policy.includesEarnings
       ? await loadSubscriptionContext(app, { pageId, fanRef })
       : null;
-    // One analysis call and one clock feed both values. A Date.now() per field
-    // could disagree exactly at the 5-day segment boundary (Decision #127).
-    const pingNowMs = Date.now();
-    const pingAnalysis = policy.usesPingSegment
-      ? analyzePingSegment(transcript.messages, pingNowMs)
+    // One clock for the segment and the silence (Decision #127); readers
+    // that show the conversation call the same helper.
+    const pingSummary = policy.usesPingSegment
+      ? computePingSummary(transcript.messages, Date.now())
       : null;
     contextValues = {
       transcript: transcript.transcript,
@@ -605,13 +599,8 @@ export async function prepareAiFeatureStream(
         : undefined,
       // Kernel-context platforms carry no chatter-saved fan name today.
       fanCustomName: undefined,
-      pingSegment: pingAnalysis?.segment,
-      fanSilenceDays: pingAnalysis && pingAnalysis.latestFanTextAtMs !== null
-        ? Math.min(
-            FAN_SILENCE_DAYS_MAX,
-            Math.max(0, Math.floor((pingNowMs - pingAnalysis.latestFanTextAtMs) / DAY_MS)),
-          )
-        : undefined,
+      pingSegment: pingSummary?.segment,
+      fanSilenceDays: pingSummary?.fanSilenceDays ?? undefined,
     };
     // Image notes on OnlyFans: the hub builds the labels itself, so the
     // inactive path leaves the migrated normalizer's bytes untouched.

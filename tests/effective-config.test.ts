@@ -172,9 +172,9 @@ describe("LIVE_CONFIG_KEYS", () => {
     // WP-F5 added the replies re-walk cycle, live because it re-aims a running
     // first pass without a deploy (the engine's post-replies walk reads it);
     // step 4 retired the legacy Fansly engine's keys with their last readers
-    // and S4-26 removed them from the registry — the five that were still live
-    // among them (the four ws-hint keys and the AI media accelerator's daily
-    // limit), which is what took the set from 50 to 45.
+    // (the AI media accelerator's daily limit stopped being live then) and
+    // S4-26 removed them from the registry — the four ws-hint keys were the
+    // ones still live among them, which is what took the set from 49 to 45.
     // Decision 349 added the public invite/reset link kill switch, read per
     // request so a flip never waits for a deploy.
     expect(LIVE_CONFIG_KEYS.has("accountLinksEnabled")).toBe(true);

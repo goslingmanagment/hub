@@ -522,11 +522,12 @@ export function authRefusalsCheck(rows: readonly AcceptanceJournalRow[], window:
   return { name: "auth_refusals", verdict: refusals === 0 ? "pass" : "fail", detail: { refusals, byRoute } };
 }
 
-/** The page row's hold columns as they stand. */
-export interface PageHoldColumns {
-  holdKind: string | null;
-  holdSince: Date | null;
-  holdUntil: Date | null;
+/** One of the page's own holds as its hold set records it (a credentials
+ *  hold, a network hold), in force or not. */
+export interface PageHoldRecord {
+  kind: string;
+  since: Date | null;
+  until: Date;
 }
 
 /**
@@ -557,18 +558,19 @@ export function pageStopSeenUntil(episode: PageStopEpisode): Date {
  * A page hold within the window (A6): an answer that holds the page
  * (`auth`, `identity_mismatch`), a network failure that reached the streak
  * that holds it (`engine/errors.ts` `onOutcome`: every other answer ends the
- * streak; a request never sent leaves it), the page row's hold overlapping
- * the window (a carried or imported hold, one still in force), or an episode
+ * streak; a request never sent leaves it), a hold of the page's hold set
+ * overlapping the window (one still in force; the credentials hold first), or
+ * an episode
  * of alert 1 — the page stopped — seen within the window, resolved ones
  * included: the only trace of a hold that has ended and been cleared, such as
- * a 429 that held the whole page instead of its route (a `rate_limit` page
- * hold, imported from the legacy engine or set by a regression). A stop that
+ * a 429 that held the whole page instead of its route (an older build's
+ * page-wide hold, or a regression). A stop that
  * ended before T_i (its latch still in its clean minutes) is not the window's.
  */
 export function pageHoldCheck(
   rows: readonly AcceptanceJournalRow[],
   window: AcceptanceWindow,
-  page: PageHoldColumns,
+  holds: readonly PageHoldRecord[],
   stops: readonly PageStopEpisode[],
 ): AcceptanceCheck {
   let credentialsAnswers = 0;
@@ -588,9 +590,8 @@ export function pageHoldCheck(
     streak = row.errorClass === "network" ? streak + 1 : 0;
     if (row.errorClass === "network" && streak >= ACCEPTANCE_RULES.networkFailuresToHold && inWindow(row.doneAt, window)) networkHolds += 1;
   }
-  const current = page.holdKind !== null && page.holdUntil !== null
-    && page.holdUntil.getTime() > window.start.getTime()
-    && (page.holdSince === null || page.holdSince.getTime() < window.observedUntil.getTime());
+  const current = holds.find((hold) => hold.until.getTime() > window.start.getTime()
+    && (hold.since === null || hold.since.getTime() < window.observedUntil.getTime())) ?? null;
   const stopped = stops
     .map((episode) => ({ episode, seenUntil: pageStopSeenUntil(episode) }))
     .filter(({ episode, seenUntil }) => episode.openedAt.getTime() < window.observedUntil.getTime()
@@ -598,13 +599,13 @@ export function pageHoldCheck(
     .sort((a, b) => a.episode.openedAt.getTime() - b.episode.openedAt.getTime());
   return {
     name: "page_hold",
-    verdict: credentialsAnswers > 0 || networkHolds > 0 || current || stopped.length > 0 ? "fail" : "pass",
+    verdict: credentialsAnswers > 0 || networkHolds > 0 || current !== null || stopped.length > 0 ? "fail" : "pass",
     detail: {
       credentialsAnswers,
       networkHolds,
-      current: current
-        ? { kind: page.holdKind, since: page.holdSince?.toISOString() ?? null, until: page.holdUntil!.toISOString() }
-        : null,
+      current: current === null
+        ? null
+        : { kind: current.kind, since: current.since?.toISOString() ?? null, until: current.until.toISOString() },
       stopped: stopped.map(({ episode, seenUntil }) => ({
         openedAt: episode.openedAt.toISOString(),
         seenUntil: seenUntil.toISOString(),

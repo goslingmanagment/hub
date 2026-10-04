@@ -17,7 +17,7 @@ import {
   type ResourceSpec,
 } from "../apps/runtime/src/sync/fansly/registry.ts";
 import { routeHoldAfter } from "../apps/runtime/src/sync/engine/route-holds.ts";
-import { RouteClocks, routeExclusions, ROUTE_STATE_VERSION } from "../apps/runtime/src/sync/engine/route-policy.ts";
+import { RouteClocks, routeExclusions } from "../apps/runtime/src/sync/engine/route-policy.ts";
 import { DM_LIST_READ_KEYS, DM_LIST_WS_DOWN_EVERY_MS } from "../apps/runtime/src/sync/fansly/resources/dm-conversations.ts";
 import type { FanslyRoute } from "../apps/runtime/src/sync/fansly/routes.ts";
 import { RecordingMetrics } from "./helpers/sync-engine-host.ts";
@@ -140,7 +140,7 @@ describe("the Fansly registry table", () => {
     const now = new Date("2026-10-03T12:00:00.000Z");
     const heldOnly = (route: FanslyRoute): string[] => {
       const hold = routeHoldAfter({ route, entry: null, now, httpStatus: 429, retryAfterMs: 60_000, attemptId: 1, jitter: () => 0 })!;
-      const clocks = new RouteClocks({ sends: [], state: { version: ROUTE_STATE_VERSION, routes: { [route]: hold.entry } } });
+      const clocks = new RouteClocks({ sends: [], state: { routes: { [route]: hold.entry } } });
       return routeExclusions(FANSLY_RESOURCE_SPECS, clocks, now);
     };
     const onlyReading = (route: FanslyRoute) => FANSLY_RESOURCE_SPECS

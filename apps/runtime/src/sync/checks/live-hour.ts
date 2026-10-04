@@ -9,6 +9,7 @@ import {
   type SyncPageRow,
 } from "@agency_hub_core/db";
 
+import { holdSetOf } from "../engine/admission.ts";
 import {
   acceptanceIncidentKeys,
   acceptanceRouteOf,
@@ -31,6 +32,7 @@ import {
   type AcceptanceCheckName,
   type AcceptanceJournalRow,
   type AcceptanceWindow,
+  type PageHoldRecord,
   type PageStopEpisode,
   type PageVerdict,
 } from "./live-hour-rules.ts";
@@ -155,6 +157,13 @@ async function readJournal(db: Database, pageId: number, from: Date): Promise<Ac
     retryAfterMs: num(row.retryAfterMs),
     errorClass: row.errorClass,
   }));
+}
+
+/** The page's own holds as its hold set records them, the credentials hold
+ *  first (`engine/admission.ts`). */
+function pageHoldRecords(page: SyncPageRow): PageHoldRecord[] {
+  const { credentials, timed } = holdSetOf(page.holds).page;
+  return [credentials, timed].flatMap((hold) => (hold === null ? [] : [{ kind: hold.kind, since: hold.since, until: hold.until }]));
 }
 
 /** Every episode of the page's alert 1 (`page_stopped`): the latch row's
@@ -436,7 +445,7 @@ async function checkPage(db: Database, page: SyncPageRow, window: AcceptanceWind
     routeBudgetsCheck(sends, window),
     route429Check(route429Outcomes(rows, window)),
     authRefusalsCheck(rows, window),
-    pageHoldCheck(rows, window, page, await readPageStops(db, pageId)),
+    pageHoldCheck(rows, window, pageHoldRecords(page), await readPageStops(db, pageId)),
     mediaStartCheck(rows, window, paused),
     await stuckCheck(db, pageId, window),
     ...await sloChecks(db, pageId, window),

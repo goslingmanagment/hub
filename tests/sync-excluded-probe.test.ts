@@ -4,6 +4,7 @@ import { NEVER_CANONICALIZED_PARSE_VERSION, type SyncAttemptRow, type SyncWorkRo
 import { fanslyWireSpec, type FanslyWireOutcome } from "@agency_hub_core/fansly";
 import {
   FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS,
+  NO_FANSLY_PAGE_HOLDS,
 } from "@agency_hub_core/shared";
 
 import { CANONICALIZER_FAMILIES } from "../apps/runtime/src/services/canonicalize/index.ts";
@@ -33,11 +34,7 @@ const CHAT = "710000000000000001";
 const REASON = FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS;
 
 const page: PageErrorState = {
-  holdKind: null,
-  holdUntil: null,
-  holdSince: null,
-  holdStep: 0,
-  holdDetail: {},
+  holds: NO_FANSLY_PAGE_HOLDS,
   networkFailureStreak: 0,
   resourceHolds: {},
   credentialsGeneration: "a".repeat(64),
