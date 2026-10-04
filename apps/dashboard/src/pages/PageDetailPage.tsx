@@ -28,7 +28,7 @@ import {
   resolveDashboardPeriod,
   buildPageSectionRoute,
   buildPageSpenderAutoListRoute,
-  buildSettingsRoute,
+  buildPageSyncRoute,
 } from "@/lib/navigation";
 import { listOffset } from "@/lib/overviewNavigation";
 import { usePeriodStore, type PeriodOption } from "@/stores/periodStore";
@@ -260,7 +260,7 @@ export function PageDetailPage() {
             </span>
             {isOwner && (
               <Link
-                to={buildSettingsRoute("sync", page.label)}
+                to={buildPageSyncRoute(page.platform, page.label)}
                 className="font-semibold text-accent hover:underline"
               >
                 Open Sync Settings

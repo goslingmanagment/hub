@@ -1,0 +1,278 @@
+import type { AgentHistoryRequest, AgentSyncPageStatus } from "@agency_hub_core/contracts";
+
+// The words of the «Синк» tab: the Fansly Sync Engine's page status
+// (`/api/v1/sync/pages`) and its history requests
+// (`/api/v1/sync/history-requests`) as the owner reads them. No engine rule
+// lives here: every count, bound and estimate is the server's; the tab names
+// them, adds the three classes up and turns instants into ages and spans.
+
+export type EnginePageStatus = AgentSyncPageStatus;
+export type EngineWorkClass = keyof EnginePageStatus["queue"];
+export type EngineHistoryRequest = AgentHistoryRequest;
+
+/** The engine status of a page as the tab holds it: the status of a page the
+ *  engine reads, still loading, failed, or `idle` — the engine has no row for
+ *  the page, or holds it in a mode in which it sends nothing (`mode`). */
+export type EngineStatusState =
+  | { kind: "ready"; status: EnginePageStatus }
+  | { kind: "loading" }
+  | { kind: "error" }
+  | { kind: "idle"; mode: EnginePageStatus["mode"] | null };
+
+/** The modes in which the engine is the page's sender. */
+const ENGINE_READING_MODES: ReadonlySet<EnginePageStatus["mode"]> = new Set(["handover", "live"]);
+
+export function engineStatusState(status: EnginePageStatus | undefined): EngineStatusState {
+  if (status === undefined) return { kind: "idle", mode: null };
+  return ENGINE_READING_MODES.has(status.mode) ? { kind: "ready", status } : { kind: "idle", mode: status.mode };
+}
+
+/** The classes in the order the scheduler serves them. */
+export const ENGINE_WORK_CLASSES: readonly EngineWorkClass[] = ["urgent", "requests", "planned"];
+
+export const ENGINE_CLASS_LABELS: Record<EngineWorkClass, string> = {
+  urgent: "срочное",
+  requests: "заявки",
+  planned: "плановое",
+};
+
+/** "Почему ждёт" (plan §10), the engine's closed dictionary. A route (an
+ *  endpoint of Fansly) puts work off in two ways: `route_budget` is its own
+ *  pace, `route_hold` a 429's hold of it — the one place the page's status
+ *  shows such a hold. */
+const WAIT_LABELS: Record<string, string> = {
+  not_due: "ждёт срока",
+  pacer: "пауза между запросами",
+  class_share: "очередь класса",
+  page_hold: "удержание страницы",
+  route_budget: "пауза эндпоинта",
+  route_hold: "удержание эндпоинта (429)",
+  resource_hold: "удержание ресурса",
+  subject_breaker: "пауза после ошибок",
+  blocked_by_vendor: "Fansly отказывает",
+  quarantined: "карантин",
+  paused: "пауза владельца",
+  dependency: "ждёт другую работу",
+  ownership_unconfirmed: "нет владельца",
+  running: "читает",
+};
+
+/** The reasons of work that is ready to run — the server counts those rows
+ *  in `runnable` (`isRunnableReason`, `engine/status.ts`): it waits only for
+ *  its turn — the page's pause, its endpoint's own pace, or other work. */
+const RUNNABLE_REASONS: ReadonlySet<string> = new Set(["pacer", "route_budget", "class_share"]);
+
+/** What holds a page. A 429 never does: it holds its route (`route_hold`). */
+const HOLD_LABELS: Record<string, string> = {
+  auth: "Fansly не принимает данные входа",
+  identity_mismatch: "данные входа другого аккаунта",
+  network: "сеть",
+};
+
+const REQUESTER_LABELS: Record<EngineHistoryRequest["requesterKind"], string> = {
+  agent_key: "агент",
+  owner_session: "владелец",
+  owner_cli: "владелец (CLI)",
+  legacy_hydration_wrapper: "старый маршрут заявок",
+  switch_migration: "перенос при переключении",
+};
+
+/** The budget that sets a request's rate (step 3b ruling 11). */
+const LIMITED_BY_LABELS: Record<EngineHistoryRequest["eta"]["limitedBy"], string> = {
+  page: "пауза страницы",
+  route: "лимит чтения сообщений",
+  family: "общий лимит запросов к сообщениям",
+};
+
+export function engineWaitLabel(reason: string): string {
+  return WAIT_LABELS[reason] ?? reason;
+}
+
+/** 1 234 567: the page's numbers are counts, grouped the Russian way. */
+export function engineCount(value: number): string {
+  return Math.round(value).toLocaleString("ru-RU");
+}
+
+/** "12 с", "4 мин", "3 ч", "5 сут" since an instant (null: never). */
+export function engineAgeText(iso: string | null, now: number = Date.now()): string | null {
+  if (iso === null) return null;
+  const seconds = Math.max(0, Math.round((now - new Date(iso).getTime()) / 1000));
+  if (seconds < 120) return `${seconds} с`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 120) return `${minutes} мин`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `${hours} ч`;
+  return `${Math.round(hours / 24)} сут`;
+}
+
+/** A span of the ETA: "40 с", "12 мин", "1 ч 5 мин", "2 сут 3 ч". Rounded
+ *  down, so a lower bound stays a lower bound. */
+export function engineDurationText(totalSeconds: number): string {
+  const seconds = Math.max(0, Math.floor(totalSeconds));
+  if (seconds < 60) return `${seconds} с`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} мин`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return minutes % 60 === 0 ? `${hours} ч` : `${hours} ч ${minutes % 60} мин`;
+  const days = Math.floor(hours / 24);
+  return hours % 24 === 0 ? `${days} сут` : `${days} сут ${hours % 24} ч`;
+}
+
+/** An instant as a clock time, with its date when it is not today's. */
+export function engineClockText(iso: string, now: number = Date.now()): string {
+  const at = new Date(iso);
+  const time = at.toLocaleTimeString("ru-RU");
+  if (at.toDateString() === new Date(now).toDateString()) return time;
+  return `${at.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" })} ${time}`;
+}
+
+export function engineModeLabel(mode: EnginePageStatus["mode"]): string {
+  return mode === "handover" ? "переключение" : mode;
+}
+
+export function engineHoldText(status: EnginePageStatus, now: number = Date.now()): string | null {
+  const hold = status.holds.page;
+  if (hold === null) return null;
+  const until = hold.until === "infinity" ? "до новых данных входа" : `до ${engineClockText(hold.until, now)}`;
+  return `${HOLD_LABELS[hold.kind] ?? hold.kind}, ${until}`;
+}
+
+export function engineOwnerText(status: EnginePageStatus, now: number): string {
+  if (!status.owner.running) return "владельца нет";
+  const age = engineAgeText(status.owner.heartbeatAt, now);
+  return age === null ? "владелец работает" : `владелец отвечал ${age} назад`;
+}
+
+/** The page's socket: connected or not, since when, and how long intake had
+ *  stopped before this connection (`gapSince` is the gap every connection
+ *  opens with, not a break in the one that runs). */
+export function engineSocketText(status: EnginePageStatus, now: number = Date.now()): string {
+  const ws = status.ws;
+  if (ws === null) return "нет данных";
+  if (!ws.connected) {
+    return ws.since === null ? "отключён" : `отключён · последнее подключение в ${engineClockText(ws.since, now)}`;
+  }
+  const parts = ["подключён"];
+  if (ws.since !== null) {
+    parts.push(`с ${engineClockText(ws.since, now)}`);
+    const gapSeconds = ws.gapSince === null
+      ? 0
+      : (new Date(ws.since).getTime() - new Date(ws.gapSince).getTime()) / 1000;
+    if (gapSeconds >= 1) parts.push(`перерыв приёма перед этим ${engineDurationText(gapSeconds)}`);
+  }
+  if (ws.decodeDebt > 0) parts.push(`не разобрано кадров: ${engineCount(ws.decodeDebt)}`);
+  return parts.join(" · ");
+}
+
+/** What a class waits for, without the reasons that mean "its turn has not
+ *  come" (those rows are counted as ready to run). */
+export function engineWaitingText(queue: EnginePageStatus["queue"][EngineWorkClass]): string {
+  return Object.entries(queue.waitingByReason)
+    .filter(([reason, count]) => (count ?? 0) > 0 && !RUNNABLE_REASONS.has(reason))
+    .map(([reason, count]) => `${engineWaitLabel(reason)}: ${engineCount(count ?? 0)}`)
+    .join(", ");
+}
+
+/** Requests the page sent over the last hour, all classes. */
+export function engineSendsLastHour(status: EnginePageStatus): number {
+  return ENGINE_WORK_CLASSES.reduce((sum, workClass) => sum + status.sendsLastHour[workClass], 0);
+}
+
+/** The hour's requests by resource, the busiest first. */
+export function engineSendsByResource(status: EnginePageStatus): Array<{ resource: string; sends: number }> {
+  return Object.entries(status.sendsLastHour.byResource)
+    .filter(([, sends]) => sends > 0)
+    .map(([resource, sends]) => ({ resource, sends }))
+    .sort((a, b) => b.sends - a.sends || a.resource.localeCompare(b.resource));
+}
+
+// ── history requests ────────────────────────────────────────────────────────
+
+export function historyDepthText(depth: EngineHistoryRequest["depth"]): string {
+  if (depth.kind === "all") return "вся история";
+  if (depth.kind === "latest") return `последние ${engineCount(depth.count ?? 0)} сообщений`;
+  return "до прежней границы";
+}
+
+export function historyRequesterText(kind: EngineHistoryRequest["requesterKind"]): string {
+  return REQUESTER_LABELS[kind];
+}
+
+/** Fans whose reading is over, of all the request names. */
+export function historyFansText(request: EngineHistoryRequest): string {
+  const { counts } = request;
+  const parts = [`готово ${engineCount(counts.ready)} из ${engineCount(counts.total)} фанов`];
+  if (counts.loading > 0) parts.push(`читается ${engineCount(counts.loading)}`);
+  if (counts.queued > 0) parts.push(`в очереди ${engineCount(counts.queued)}`);
+  if (counts.blocked > 0) parts.push(`Fansly отказывает ${engineCount(counts.blocked)}`);
+  if (counts.refused > 0) parts.push(`отклонено ${engineCount(counts.refused)}`);
+  if (counts.cancelled > 0) parts.push(`отменено ${engineCount(counts.cancelled)}`);
+  return parts.join(" · ");
+}
+
+/** The share of the request's fans that are ready, for its bar. */
+export function historyReadyPercent(request: EngineHistoryRequest): number {
+  if (request.counts.total === 0) return 0;
+  return Math.min(100, (request.counts.ready / request.counts.total) * 100);
+}
+
+/** Reads made and still needed: always "не меньше", and "по оценке" when the
+ *  server has one (plan §4.3). */
+export function historyReadsText(request: EngineHistoryRequest): string {
+  const { reads } = request;
+  const done = `сделано ${engineCount(reads.done)}`;
+  if (request.state !== "open") return done;
+  const estimate = reads.remainingEstimate === null ? "оценки нет" : `по оценке ${engineCount(reads.remainingEstimate)}`;
+  return `${done} · осталось не меньше ${engineCount(reads.remainingMin)}, ${estimate}`;
+}
+
+/** The two numbers of the ETA and the rate they are counted at. */
+export function historyEtaText(request: EngineHistoryRequest): string {
+  const { eta } = request;
+  const estimate = eta.estimateSeconds === null ? "оценки нет" : `по оценке ${engineDurationText(eta.estimateSeconds)}`;
+  return `не меньше ${engineDurationText(eta.lowerBoundSeconds)}, ${estimate}`;
+}
+
+export function historyRateText(request: EngineHistoryRequest): string {
+  const { eta } = request;
+  return `${engineCount(eta.ratePerHour)} чтений в час · доля заявок ${eta.sharePercent} % · ограничивает ${LIMITED_BY_LABELS[eta.limitedBy]}`;
+}
+
+/** A hold in force: nothing is read until it ends, and its span is not in the
+ *  ETA's seconds. Null: none. */
+export function historyHoldText(request: EngineHistoryRequest, now: number = Date.now()): string | null {
+  const hold = request.eta.hold;
+  if (hold === null) return null;
+  const scope = hold.scope === "page" ? "Удержание страницы" : "Удержание чтения сообщений";
+  const until = hold.until === null ? "без срока" : `до ${engineClockText(hold.until, now)}`;
+  return `${scope} ${until}: чтения стоят, в оценку времени оно не входит`;
+}
+
+/** The `/message` route reads slower than its budget since a 429. */
+export function historySlowdownText(request: EngineHistoryRequest): string | null {
+  const slowdown = request.eta.slowdown;
+  if (slowdown === null) return null;
+  const perMinute = (rate: number) => rate.toLocaleString("ru-RU", { maximumFractionDigits: 1 });
+  return `Чтение замедлено после 429: ${perMinute(slowdown.effectivePerMin)} в минуту вместо ${perMinute(slowdown.currentPerMin)} (уже в оценке)`;
+}
+
+export function historyWaitingText(request: EngineHistoryRequest, now: number = Date.now()): string | null {
+  if (request.waitingReason === null) return null;
+  const until = request.waitingUntil === null ? "" : ` до ${engineClockText(request.waitingUntil, now)}`;
+  return `${engineWaitLabel(request.waitingReason)}${until}`;
+}
+
+/** When the request stopped being open, in the owner's words. */
+export function historyClosedText(request: EngineHistoryRequest, now: number): string | null {
+  if (request.state === "done") return `выполнена ${engineAgeText(request.doneAt, now) ?? "—"} назад`;
+  if (request.state === "cancelled") return `отменена ${engineAgeText(request.cancelledAt, now) ?? "—"} назад`;
+  return null;
+}
+
+/** Open requests in the order the page serves them (its round robin; the
+ *  server lists them newest first). */
+export function openHistoryRequests(requests: readonly EngineHistoryRequest[]): EngineHistoryRequest[] {
+  const position = (request: EngineHistoryRequest) => request.queuePosition ?? Number.MAX_SAFE_INTEGER;
+  return requests.filter((request) => request.state === "open")
+    .sort((a, b) => position(a) - position(b) || a.createdAt.localeCompare(b.createdAt));
+}

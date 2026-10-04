@@ -18,6 +18,7 @@ export interface FanProfileNavigationState {
 export type SettingsTab =
   | "features"
   | "credentials"
+  | "engine"
   | "sync"
   | "collection"
   | "models"
@@ -30,6 +31,7 @@ export type SettingsTab =
 const SETTINGS_TABS = new Set<SettingsTab>([
   "features",
   "credentials",
+  "engine",
   "sync",
   "collection",
   "models",
@@ -157,12 +159,34 @@ export function resolveFanLabelFromState(state: unknown): string | undefined {
   return undefined;
 }
 
+/** The two Settings tabs that show how a page is read: «Синк» (`engine`) is
+ *  the Fansly Sync Engine's, «Синхронизация» (`sync`) the legacy page-sync
+ *  executor's. Both select a page with `?page=`. */
+export type SyncSettingsTab = Extract<SettingsTab, "engine" | "sync">;
+
+/** The platforms the Fansly Sync Engine reads; every other platform's pages
+ *  are the legacy executor's. One table, so no screen compares a platform to
+ *  decide where a page's sync is shown. */
+const SYNC_SETTINGS_TAB_BY_PLATFORM: Readonly<Partial<Record<string, SyncSettingsTab>>> = {
+  fansly: "engine",
+};
+
+/** The Settings tab that shows the sync of a page of this platform. */
+export function syncSettingsTab(platform: string): SyncSettingsTab {
+  return SYNC_SETTINGS_TAB_BY_PLATFORM[platform] ?? "sync";
+}
+
 export function buildSettingsRoute(tab: SettingsTab, pageLabel?: string) {
   const params = new URLSearchParams({ tab });
-  if (tab === "sync" && pageLabel) {
+  if ((tab === "sync" || tab === "engine") && pageLabel) {
     params.set("page", pageLabel);
   }
   return `/settings?${params.toString()}`;
+}
+
+/** A page's sync detail, on the tab that shows its platform. */
+export function buildPageSyncRoute(platform: string, pageLabel: string) {
+  return buildSettingsRoute(syncSettingsTab(platform), pageLabel);
 }
 
 export function buildSettingsSectionRoute(source: URLSearchParams, tab: SettingsTab): string {

@@ -1,0 +1,295 @@
+import type { SyncBlockStatus } from "@agency_hub_core/contracts";
+import { formatRelativeTime } from "@/lib/format";
+import { SyncBlockBadge } from "./SyncBlockRow.js";
+import { SyncBlockActions } from "./SyncBlockActions.js";
+import {
+  getBlockLabel,
+  getBlockDescription,
+  formatBlockSummary,
+  formatBlockProgressCaption,
+  getBlockProgressFillClass,
+  getBlockProgressBarMode,
+  formatCadence,
+  formatNextTime,
+  getDependencyWaitDetail,
+  getBlockTone,
+  getReasonSummary,
+  getStreamLabel,
+  getSubstreamTone,
+  isDependencyWait,
+  isEngineBlock,
+  formatSubstreamStateLabel,
+} from "./syncBlockDisplay.js";
+
+/** One block of a page in detail — its state, timing, streams and buttons.
+ *  «Синхронизация» shows the legacy executor's blocks with it, «Синк» the
+ *  Fansly Sync Engine's. */
+export function SyncBlockDetailCard({
+  block,
+  pageLabel,
+}: {
+  block: SyncBlockStatus;
+  pageLabel: string;
+}) {
+  const label = getBlockLabel(block.block);
+  const description = getBlockDescription(block.block);
+  const isNA = block.state === "not_available";
+
+  if (isNA) {
+    return (
+      <div className="rounded-xl border border-border bg-card px-5 py-4">
+        <div className="flex items-center justify-between">
+          <span className="text-sm font-semibold text-text-muted">{label}</span>
+          <SyncBlockBadge block={block} />
+        </div>
+        <p className="mt-1 text-xs text-text-muted">
+          {block.statusReason?.summary ?? "Not available on this platform"}
+        </p>
+      </div>
+    );
+  }
+
+  const summary = formatBlockSummary(block);
+  const dependencyWait = isDependencyWait(block);
+  const statusSummary = getReasonSummary(block) ??
+    (block.state === "delayed"
+      ? formatBlockSummary(block)
+      : block.state === "failed"
+        ? `${label} needs attention`
+        : null);
+  const statusTitle = dependencyWait
+    ? "Waiting for prerequisite syncs"
+    : statusSummary ?? (block.state === "failed" ? `${label} needs attention` : "Sync is delayed");
+  const queueWaiting = block.statusReason?.code === "queue_waiting";
+  const engineAttention = isEngineBlock(block) && block.needsAttention;
+  const hasStatusNotice = dependencyWait || block.state === "failed" || block.state === "delayed" || engineAttention;
+  const hasSubstreams = block.substreams.length > 1;
+  const dependencyDetail = getDependencyWaitDetail(block);
+  const progressCaption = formatBlockProgressCaption(block);
+  const progressBarMode = getBlockProgressBarMode(block);
+  const statusTone = dependencyWait || queueWaiting
+    ? "border-border bg-hover-alt text-text-secondary"
+    : block.state === "failed"
+    ? "border-danger/20 bg-danger/[0.04] text-danger"
+    : "border-warning/25 bg-warning/10 text-warning-dark";
+  const physicalAttemptCount24h = typeof block.metrics.physicalAttemptCount24h === "number"
+    ? block.metrics.physicalAttemptCount24h
+    : 0;
+  const physicalSuccessCount24h = typeof block.metrics.physicalSuccessCount24h === "number"
+    ? block.metrics.physicalSuccessCount24h
+    : 0;
+  const maxPhysicalAttemptsSinceLastSuccess =
+    typeof block.metrics.maxPhysicalAttemptsSinceLastSuccess === "number"
+      ? block.metrics.maxPhysicalAttemptsSinceLastSuccess
+      : 0;
+  const stalePhysicalAttemptCount = typeof block.metrics.stalePhysicalAttemptCount === "number"
+    ? block.metrics.stalePhysicalAttemptCount
+    : 0;
+
+  return (
+    <div className="rounded-xl border border-border bg-card px-5 py-4">
+      {/* Header */}
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-sm font-semibold text-text-primary">{label}</span>
+        <SyncBlockBadge block={block} />
+      </div>
+
+      {/* What this block does */}
+      <p className="mt-0.5 text-xs text-text-muted">{description}</p>
+
+      {/* Summary */}
+      <p className={`mt-2 text-xs ${getBlockTone(block).text}`}>
+        {summary}
+      </p>
+
+      {/* Progress bar */}
+      {progressBarMode !== "hidden" && block.progress && (
+        <div className="mt-2 flex items-center gap-2">
+          <div className="h-1.5 flex-1 max-w-[240px] rounded-full bg-hover-alt overflow-hidden">
+            {progressBarMode === "determinate"
+              ? (
+                <div
+                  className={`h-full rounded-full transition-all ${getBlockProgressFillClass(block)}`}
+                  style={{
+                    width: `${Math.min(100, block.progress.percent ?? (
+                      block.progress.total && block.progress.total > 0
+                        ? (block.progress.current / block.progress.total) * 100
+                        : 0
+                    ))}%`,
+                  }}
+                />
+              )
+              : (
+                <div
+                  className={`h-full w-[35%] rounded-full animate-pulse ${getBlockProgressFillClass(block)}`}
+                />
+              )}
+          </div>
+          <span className="text-[11px] text-text-muted">
+            {progressCaption ?? block.progress.label}
+          </span>
+        </div>
+      )}
+
+      {/* Status details */}
+      {hasStatusNotice && (
+        <div className={`mt-3 rounded-lg border px-3 py-2.5 space-y-1 ${statusTone}`}>
+          <p className="text-xs font-medium">
+            {statusTitle}
+          </p>
+          {dependencyWait && dependencyDetail && (
+            <p className="text-[11px] text-text-secondary">
+              Prerequisites: {dependencyDetail}
+            </p>
+          )}
+          {!dependencyWait && block.statusReason?.summary && block.statusReason.summary !== statusSummary && (
+            <p className="text-[11px] text-text-secondary">{block.statusReason.summary}</p>
+          )}
+          {block.error?.code && (
+            <p className="text-[11px] text-text-muted">Code: {block.error.code}</p>
+          )}
+          {block.error?.failedAt && (
+            <p className="text-[11px] text-text-muted">
+              Last failed: {formatRelativeTime(block.error.failedAt)}
+            </p>
+          )}
+          {block.error && block.error.consecutiveFailures > 0 && (
+            <p className="text-[11px] text-text-muted">
+              Consecutive failures: {block.error.consecutiveFailures}
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* Timing */}
+      <div className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-0.5 text-xs">
+        {physicalAttemptCount24h > 0 && (
+          <>
+            <span className="text-text-muted">Sync HTTP attempts (24h)</span>
+            <span className="text-text-secondary">
+              {physicalSuccessCount24h}/{physicalAttemptCount24h} succeeded (
+              {Math.round((physicalSuccessCount24h / physicalAttemptCount24h) * 100)}%)
+            </span>
+          </>
+        )}
+        {stalePhysicalAttemptCount > 0 && (
+          <>
+            <span className="text-text-muted">Stuck sync attempts</span>
+            <span className="text-danger font-medium">{stalePhysicalAttemptCount}</span>
+          </>
+        )}
+        {maxPhysicalAttemptsSinceLastSuccess > 0 && (
+          <>
+            <span className="text-text-muted">Attempts without success</span>
+            <span className="text-warning-dark font-medium">
+              {maxPhysicalAttemptsSinceLastSuccess}
+            </span>
+          </>
+        )}
+        {block.succeededAt && (
+          <>
+            <span className="text-text-muted">Last success</span>
+            <span className="text-text-secondary">
+              {formatRelativeTime(block.succeededAt)}
+            </span>
+          </>
+        )}
+        {block.nextDueAt && (
+          <>
+            <span className="text-text-muted">Next due</span>
+            <span className="text-text-secondary">{formatNextTime(block.nextDueAt)}</span>
+          </>
+        )}
+        {block.nextRetryAt && (
+          <>
+            <span className="text-text-muted">Next retry</span>
+            <span className="text-text-secondary">
+              {formatNextTime(block.nextRetryAt)}
+            </span>
+          </>
+        )}
+        {block.intervals.length > 0 && (
+          <>
+            <span className="text-text-muted">Intervals</span>
+            <span className="text-text-secondary">
+              {block.intervals
+                .map((i) => `${getStreamLabel(i.stream)} (${formatCadence(i.cadenceSeconds)})`)
+                .join(", ")}
+            </span>
+          </>
+        )}
+      </div>
+
+      {/* Substreams (Messages) */}
+      {hasSubstreams && (
+        <div className="mt-3">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-text-muted mb-1.5">
+            Substreams
+          </p>
+          <div className="rounded-lg border border-border overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="bg-hover-alt">
+                  <th className="px-3 py-1.5 text-left font-medium text-text-muted">
+                    Stream
+                  </th>
+                  <th className="px-3 py-1.5 text-left font-medium text-text-muted">
+                    State
+                  </th>
+                  <th className="px-3 py-1.5 text-left font-medium text-text-muted">
+                    Last success
+                  </th>
+                  <th className="px-3 py-1.5 text-left font-medium text-text-muted">
+                    Next due
+                  </th>
+                  <th className="px-3 py-1.5 text-left font-medium text-text-muted">
+                    Interval
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {block.substreams.map((sub) => {
+                  const subTone = getSubstreamTone(sub);
+                  return (
+                    <tr key={sub.stream} className="border-t border-border">
+                      <td className="px-3 py-1.5 text-text-primary font-medium">
+                        {getStreamLabel(sub.stream)}
+                      </td>
+                      <td className="px-3 py-1.5">
+                        <span className="flex items-center gap-1.5">
+                          <span
+                            className={`inline-block h-1.5 w-1.5 rounded-full ${subTone.dot}`}
+                          />
+                          <span className={subTone.text}>
+                            {formatSubstreamStateLabel(sub)}
+                          </span>
+                        </span>
+                      </td>
+                      <td className="px-3 py-1.5 text-text-secondary">
+                        {sub.succeededAt
+                          ? formatRelativeTime(sub.succeededAt)
+                          : "\u2014"}
+                      </td>
+                      <td className="px-3 py-1.5 text-text-secondary">
+                        {formatNextTime(sub.nextDueAt) ?? "\u2014"}
+                      </td>
+                      <td className="px-3 py-1.5 text-text-secondary">
+                        {/* An engine stream with no poll (triggered work) has no interval. */}
+                        {sub.cadenceSeconds > 0 ? formatCadence(sub.cadenceSeconds) : "\u2014"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Actions */}
+      <div className="mt-4 flex justify-end">
+        <SyncBlockActions pageLabel={pageLabel} block={block} />
+      </div>
+    </div>
+  );
+}

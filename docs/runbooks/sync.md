@@ -67,12 +67,13 @@ When a page looks wrong, read it in this order: `owner.running` false is
 `quarantined` above 0 is [Quarantine](#quarantine); a route with `holdUntil` or a lowered `effectivePerMin` is
 [Route holds](#route-holds-and-sync-route-raise). Otherwise ask "why" for the key that is late.
 
-The same state elsewhere: the Settings sync tab (a Fansly page shows the engine card above its blocks), the owner
-routes `GET /api/v1/sync/pages` and `GET /api/v1/sync/pages/:pageLabel/work`, agents through `hub sync-status` and
-`hub sync-why` (`docs/agent-read-skill.md`), and `GET /api/v1/health/sync`. Health gives a Fansly page an `engine`
-block and calls it unhealthy on `engine:owner_stale` (no heartbeat for 90 s), `engine:auth_hold`,
-`engine:identity_mismatch_hold` or `engine:handover_stuck`; a Fansly page no engine runs is `engine:not_live`.
-`pnpm cli sync status` (no `page` in it) is the legacy monitor: it lists OnlyFans pages only.
+The same state elsewhere: the dashboard's «Синк» tab in Settings (each Fansly page as the engine reads it; a page's
+detail there adds its history requests and its five blocks), the owner routes `GET /api/v1/sync/pages` and
+`GET /api/v1/sync/pages/:pageLabel/work`, agents through `hub sync-status` and `hub sync-why`
+(`docs/agent-read-skill.md`), and `GET /api/v1/health/sync`. Health gives a Fansly page an `engine` block and calls it
+unhealthy on `engine:owner_stale` (no heartbeat for 90 s), `engine:auth_hold`, `engine:identity_mismatch_hold` or
+`engine:handover_stuck`; a Fansly page no engine runs is `engine:not_live`. `pnpm cli sync status` (no `page` in it)
+is the legacy monitor, and «Синхронизация» the legacy executor's Settings tab: both list OnlyFans pages only.
 
 ### Why is this work waiting
 

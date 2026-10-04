@@ -5,76 +5,11 @@ import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
+import { buildSettingsRoute, syncSettingsTab } from "@/lib/navigation";
 import { SyncBlockRow } from "./SyncBlockRow.js";
 import { SyncDiagnosisNotice } from "./SyncDiagnosisNotice.js";
-import { SyncEngineNotice } from "./SyncEngineCard.js";
-import {
-  formatBlockSummary,
-  getBlockLabel,
-  getBlockOrder,
-  getReasonSummary,
-  isDependencyWait,
-  isEngineBlock,
-  needsVisualAttention,
-} from "./syncBlockDisplay.js";
-
-function PageErrorBar({ page }: { page: SyncBlocksPage }) {
-  if (page.diagnosis) {
-    return <SyncDiagnosisNotice diagnosis={page.diagnosis} className="mt-3" />;
-  }
-
-  const blocks = getBlockOrder().map((key) => page.blocks[key]);
-  const attentionBlocks = blocks.filter(needsVisualAttention).filter((block) => !isDependencyWait(block));
-  if (attentionBlocks.length === 0) return null;
-
-  const authFailed = attentionBlocks.find((b) => b.statusReason?.code === "credentials_invalid");
-  if (authFailed) {
-    return (
-      <div className="mt-3 rounded-lg border border-danger/20 bg-danger/[0.04] px-3 py-2.5">
-        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-xs">
-          <span className="text-danger font-medium">
-            {getReasonSummary(authFailed) ?? "Credentials may have expired"}
-          </span>
-          <Link
-            to="/settings?tab=credentials"
-            className="font-semibold text-accent hover:underline"
-          >
-            Update credentials
-          </Link>
-        </div>
-      </div>
-    );
-  }
-
-  const failedBlock = attentionBlocks.find((block) => block.state === "failed");
-  const tone = failedBlock
-    ? {
-      container: "mt-3 rounded-lg border border-danger/20 bg-danger/[0.04] px-3 py-2.5",
-      text: "text-danger",
-    }
-    : {
-      container: "mt-3 rounded-lg border border-warning/25 bg-warning/10 px-3 py-2.5",
-      text: "text-warning-dark",
-    };
-
-  return (
-    <div className={tone.container}>
-      {attentionBlocks.map((b) => (
-        <div
-          key={b.block}
-          className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-xs"
-        >
-          <span className={`${tone.text} font-medium`}>
-            {getReasonSummary(b) ??
-              (b.state === "delayed"
-                ? formatBlockSummary(b)
-                : `${getBlockLabel(b.block)} needs attention`)}
-          </span>
-        </div>
-      ))}
-    </div>
-  );
-}
+import { SyncPageAttention } from "./SyncPageAttention.js";
+import { getBlockOrder } from "./syncBlockDisplay.js";
 
 function PageCard({
   page,
@@ -83,9 +18,6 @@ function PageCard({
   page: SyncBlocksPage;
   onSelect: () => void;
 }) {
-  const blockKeys = getBlockOrder();
-  const engine = blockKeys.some((key) => isEngineBlock(page.blocks[key]));
-
   return (
     <div className="rounded-xl border border-border bg-card px-5 py-4">
       {/* Header */}
@@ -110,20 +42,31 @@ function PageCard({
 
       {/* Block rows */}
       <div className="mt-3 border-t border-border pt-2">
-        {blockKeys.map((key) => (
+        {getBlockOrder().map((key) => (
           <SyncBlockRow key={key} block={page.blocks[key]} />
         ))}
       </div>
 
-      {/* The Fansly Sync Engine serves the page */}
-      {engine && <SyncEngineNotice pageLabel={page.pageLabel} />}
-
       {/* Error bar */}
-      <PageErrorBar page={page} />
+      <SyncPageAttention page={page} />
     </div>
   );
 }
 
+/** The pages the Fansly Sync Engine reads are not listed here: say where. */
+function EnginePagesPointer({ count }: { count: number }) {
+  return (
+    <p className="text-xs text-text-secondary">
+      Страницы Fansly ({count}) читает Fansly Sync Engine — они на вкладке{" "}
+      <Link to={buildSettingsRoute("engine")} className="font-semibold text-accent hover:underline">
+        «Синк»
+      </Link>
+      .
+    </p>
+  );
+}
+
+/** The pages of the legacy page-sync executor with their five blocks. */
 export function SyncPageList({
   onSelectPage,
 }: {
@@ -145,7 +88,12 @@ export function SyncPageList({
     );
   }
 
-  const pages = data?.pages ?? [];
+  const visible = data?.pages ?? [];
+  const pages = visible.filter((page) => syncSettingsTab(page.platform) === "sync");
+  const enginePages = visible.length - pages.length;
+  // The overview's own diagnosis is that of its first page in trouble, of
+  // either engine; this tab speaks for its pages only.
+  const diagnosis = pages.find((page) => page.diagnosis !== null)?.diagnosis ?? null;
 
   if (pages.length === 0) {
     return (
@@ -153,10 +101,14 @@ export function SyncPageList({
         {isError && data && (
           <StaleDataNotice error={error} />
         )}
-        <EmptyState
-          title="No pages configured"
-          description="Add a page to start syncing."
-        />
+        {enginePages > 0
+          ? <EnginePagesPointer count={enginePages} />
+          : (
+            <EmptyState
+              title="No pages configured"
+              description="Add a page to start syncing."
+            />
+          )}
       </div>
     );
   }
@@ -166,8 +118,8 @@ export function SyncPageList({
       {isError && data && (
         <StaleDataNotice error={error} />
       )}
-      {data?.diagnosis && (
-        <SyncDiagnosisNotice diagnosis={data.diagnosis} />
+      {diagnosis && (
+        <SyncDiagnosisNotice diagnosis={diagnosis} />
       )}
       {pages.map((page) => (
         <PageCard
@@ -176,6 +128,7 @@ export function SyncPageList({
           onSelect={() => onSelectPage(page.pageLabel)}
         />
       ))}
+      {enginePages > 0 && <EnginePagesPointer count={enginePages} />}
     </div>
   );
 }
