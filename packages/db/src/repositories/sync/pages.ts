@@ -934,8 +934,8 @@ async function lockPageForHoldWrite(tx: Database, pageId: number, generation: bi
  * One write of a page's hold set: the fence, then the rows, in one
  * transaction (a savepoint inside the caller's). The rows are the page's
  * whole hold state. The page row is locked and not written: it has no hold
- * column (the old ones were dropped in step 4, S4-33; the release before
- * that one already named none of them).
+ * column (the old ones were dropped in step 4, S4-33; no hold write of the
+ * release before that one wrote them any more).
  */
 async function writeHoldSet<T>(
   db: Database,

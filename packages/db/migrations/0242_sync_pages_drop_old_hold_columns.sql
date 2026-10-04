@@ -17,16 +17,26 @@
 --   S4-31  nothing reads the columns back; every hold write still rewrites
 --          them from the rows (for the hold-set release, which lets the
 --          columns win over the rows);
---   S4-32  the rewrite is gone: no statement selects, writes or returns the
---          columns, the drizzle table does not map them, and `sync_pages` is
---          read and written by named columns only, never by `*`. They are
---          stale from that deploy on;
+--   S4-32  the rewrite is gone: no statement selects or returns the columns,
+--          the drizzle table does not map them, and `sync_pages` is read and
+--          written by named columns only, never by `*`. They are stale from
+--          that deploy on. One statement still writes one: whenever that
+--          image acquires a page it leaves a marker in `resource_holds` (a
+--          route-state version the hold-set release cannot read, so that
+--          release refuses the page instead of opening it by stale columns).
+--          It is a statement of its own inside the acquisition, and it goes
+--          on where the column is gone;
 --   S4-33  this migration.
 -- So the image before this one runs unchanged without the columns — provided
 -- it is the S4-32 image. The one before THAT ends every hold write by
--- rewriting the five columns, and would fail each of them here: this ships
--- only after the S4-32 release has been deployed and has run, never in the
--- deploy that brings it.
+-- rewriting the five columns, and would fail each of them here, taking no
+-- hold and lifting none while its pages keep sending: this ships only after
+-- the S4-32 release has been deployed and has run, never in the deploy that
+-- brings it. The deploy checks that itself: while this migration is still to
+-- be applied it searches the images of the running containers for the hold
+-- slot's columns and stops before it migrates anything if one names them
+-- (scripts/deploy-production.sh,
+-- `verify_running_images_run_without_old_hold_columns`).
 --
 -- Nothing else of the page row goes. `network_failure_streak` is a counter,
 -- not a hold: the build reads and writes it, and it stays.

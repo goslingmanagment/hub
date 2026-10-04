@@ -718,8 +718,8 @@ describe("sync_pages_drop_hold_step.sql (step 4, S4-31: the first old hold colum
 
   it("left the other old hold columns in the database: only the last migration of the three drops them, two releases later", () => {
     // The release that carried this one (S4-31) still wrote them at every
-    // hold write; the next one (S4-32) named none of them; the one after
-    // drops them (the block below).
+    // hold write; the next one (S4-32) read none of them and wrote one, the
+    // marker of an acquisition; the one after drops them (the block below).
     const base = stripComments(readFileSync("packages/db/migrations/0228_sync_engine_core.sql", "utf8"));
     const lastDrop = migrations.filter((file) => file.endsWith("_sync_pages_drop_old_hold_columns.sql"));
     expect(lastDrop).toHaveLength(1);
@@ -832,18 +832,20 @@ describe("sync_pages_drop_old_hold_columns.sql (step 4, S4-33: the old hold colu
     ]);
   });
 
-  it("allows application rollback: the image before it (S4-32) names none of what it drops — and that image alone", () => {
+  it("allows application rollback: the image before it (S4-32) runs without what it drops — that image alone, and the deploy refuses the drop under an older one", () => {
     const compatible = rollbackCompatible();
     expect(compatible).toContain(`"${migration}"`);
     // The two migrations before it stay out: the images before THEM read the columns.
     for (const file of migrations.filter((name) => /_sync_holds\.sql$|_sync_pages_drop_hold_step\.sql$/.test(name))) {
       expect(compatible, file).not.toContain(`"${file}"`);
     }
-    // What the entry rests on, in this tree as in the image before it (this
-    // release changes no statement): the sync repositories — the only files
-    // that write a page row — and the drizzle table name none of the columns,
-    // and read the page row by named columns. The whole of `apps`, `packages`
-    // and `scripts` is scanned in tests/sync-old-hold-columns.test.ts.
+    // What the entry rests on: the sync repositories — the only files that
+    // write a page row — and the drizzle table name none of the columns, and
+    // read the page row by named columns. The whole of `apps`, `packages` and
+    // `scripts` is scanned in tests/sync-old-hold-columns.test.ts. The image
+    // before this one has one statement more, the marker its acquisition
+    // leaves in the resource-hold map, made so that it goes on without the
+    // column: tests/sync-hold-set.integration.test.ts runs it after the drop.
     const repositories = readdirSync("packages/db/src/repositories/sync").map((file) => `packages/db/src/repositories/sync/${file}`);
     expect(repositories).toContain("packages/db/src/repositories/sync/pages.ts");
     for (const file of [...repositories, "packages/db/src/schema.ts"]) {
@@ -856,9 +858,18 @@ describe("sync_pages_drop_old_hold_columns.sql (step 4, S4-33: the old hold colu
       expect(readFileSync(file, "utf8"), file).not.toMatch(/returning\s+\*/);
     }
     // The limit of the entry is written beside it and in the migration: the
-    // image two before rewrites the columns at every hold write.
+    // image two before rewrites the columns at every hold write. The list
+    // cannot tell which image runs, so the deploy asks the running images
+    // before it migrates anything (tests/deploy-old-hold-columns-gate.test.ts).
     const reasons = compatible.replaceAll("\n  #", "").replace(/\s+/g, " ");
     expect(reasons).toContain("That is true of the S4-32 image ALONE");
-    expect(text.replace(/\n-- ?/g, " ")).toContain("this ships only after the S4-32 release has been deployed and has run, never in the deploy that brings it");
+    expect(reasons).toContain("verify_running_images_run_without_old_hold_columns");
+    const header = text.replace(/\n-- ?/g, " ").replace(/\s+/g, " ");
+    expect(header).toContain("One statement still writes one: whenever that image acquires a page it leaves a marker in `resource_holds`");
+    expect(header).toContain("It is a statement of its own inside the acquisition, and it goes on where the column is gone");
+    expect(header).toContain("this ships only after the S4-32 release has been deployed and has run, never in the deploy that brings it");
+    expect(header).toContain("`verify_running_images_run_without_old_hold_columns`");
+    const deploy = readFileSync("scripts/deploy-production.sh", "utf8");
+    expect(deploy).toMatch(/^verify_running_images_run_without_old_hold_columns\(\) \{$/m);
   });
 });

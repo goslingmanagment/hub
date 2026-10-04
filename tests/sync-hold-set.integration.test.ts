@@ -63,14 +63,19 @@ import { syncPageRowWriters } from "./helpers/sync-page-row-writers.ts";
 //
 // The old columns (`hold_kind`, `hold_until`, `hold_since`, `hold_detail`,
 // `resource_holds`) and the slot's two CHECKs are gone. The release before
-// the drop named none of them (tests/sync-old-hold-columns.test.ts), which is
-// what makes it the drop's rollback target — proved here on a database that
-// went through the drop with holds still written in those columns: every
-// statement of the sources that writes a page row, the hold writes and the
-// readers run on what is left. This file and the two pins beside it
+// the drop read none of them, and wrote one in one statement: the marker its
+// acquisition leaves in `resource_holds`, a statement of its own in a
+// savepoint, which goes on where the column is gone. That is what makes it
+// the drop's rollback target — proved here on a database that went through
+// the drop with holds still written in those columns and that marker in its
+// pages: that image's acquisition as it has it, every statement of the
+// sources that writes a page row, the hold writes and the readers run on what
+// is left. This file and the two pins beside it
 // (tests/sync-engine-migrations.test.ts, tests/sync-old-hold-columns.test.ts)
-// are the only tests that still name the columns: the tests of the
-// migrations that made and dropped them.
+// are the tests of the migrations that made and dropped the columns; with
+// the test of the deploy gate that searches the running images for them
+// (tests/deploy-old-hold-columns-gate.test.ts) they are the only tests that
+// still name them.
 
 const OLD_HOLD_COLUMNS = ["hold_kind", "hold_until", "hold_since", "hold_detail", "resource_holds"];
 const OLD_HOLD_CHECKS = ["sync_pages_hold_kind_check", "sync_pages_hold_pair_check"];
@@ -244,8 +249,15 @@ const UPDATES = [
 
 /** Run every function that updates a page row over a live page (the engine's
  *  writes) and a page in mode `off` (the owner's mode lever): each writes a
- *  new version of the row. */
-async function runEveryPageRowUpdate(target: StartedTestDatabase, pageId: number, offPage: number, what: string): Promise<void> {
+ *  new version of the row. `acquire` is the acquisition of the image that
+ *  runs them: this build's, or the one of the release before it. */
+async function runEveryPageRowUpdate(
+  target: StartedTestDatabase,
+  pageId: number,
+  offPage: number,
+  what: string,
+  acquire: (target: StartedTestDatabase, pageId: number) => Promise<{ generation: bigint }> = own,
+): Promise<void> {
   const db = dbOf(target);
   let generation = 0n;
   let attemptId = 0;
@@ -262,7 +274,7 @@ async function runEveryPageRowUpdate(target: StartedTestDatabase, pageId: number
     return admitted.attemptId;
   });
   const steps: Array<[name: string, page: number, run: () => Promise<unknown>]> = [
-    ["acquireSyncPageOwnership", pageId, async () => { generation = (await own(target, pageId)).generation; }],
+    ["acquireSyncPageOwnership", pageId, async () => { generation = (await acquire(target, pageId)).generation; }],
     ["heartbeatSyncPageOwner", pageId, async () => expect(await heartbeatSyncPageOwner(db, { pageId, generation })).toBe(true)],
     ["trustSyncPageCredentials", pageId, async () => expect(await trustSyncPageCredentials(db, {
       pageId, generation: "b".repeat(64), accountId: "acct", verifiedAt: new Date(),
@@ -293,7 +305,7 @@ async function runEveryPageRowUpdate(target: StartedTestDatabase, pageId: number
     })).toMatchObject({ captured: true })],
     ["writeSafeRelease", pageId, async () => expect(await writeSafeRelease(db, { pageId, generation })).toBe(true)],
     // A second owner, gone with its container: the deploy confirms it stopped.
-    ["acquireSyncPageOwnership", pageId, async () => { generation = (await own(target, pageId)).generation; }],
+    ["acquireSyncPageOwnership", pageId, async () => { generation = (await acquire(target, pageId)).generation; }],
     ["confirmSyncOwnersStopped", pageId, async () => expect(await confirmSyncOwnersStopped(db, {
       runningHosts: ["sync-host-b"], ownHost: "cli", confirmedBy: "deploy", dryRun: false, pageIds: [pageId],
     })).toMatchObject([{ pageId, confirmed: true }])],
@@ -505,6 +517,60 @@ const REWRITE_OF_THE_IMAGE_TWO_BEFORE = `
 const READ_OF_THE_HOLD_SET_IMAGE =
   "select hold_kind, hold_until = 'infinity'::timestamptz as indefinite, hold_since, hold_detail, resource_holds from sync_pages where page_id = $1";
 
+/** What the marker of the release before the drop leaves in the old
+ *  resource-hold map: the route-state entry at a version no build ever read,
+ *  with no route. */
+const MARKER = { "route:state": { version: 2, routes: {} } };
+
+/**
+ * The one statement of the release before the drop (S4-32) that names an old
+ * hold column: whenever it acquires a page it marks the page's row as one
+ * whose old hold columns are stale, so that the hold-set release (S4-30),
+ * which lets those columns win over the rows, refuses the page instead of
+ * opening it by them (`STALE_HOLD_COLUMNS_MARKER` in that image's
+ * `acquireSyncPageOwnership`). The rest of the map is kept; a value that is
+ * no JSON object is replaced by the marker alone.
+ */
+const markerOfTheImageBefore = (pageId: number) => `
+  update sync_pages
+     set resource_holds = case when jsonb_typeof(resource_holds) = 'object' then resource_holds else '{}'::jsonb end
+                          || '{"route:state": {"version": 2, "routes": {}}}'::jsonb
+   where page_id = ${pageId}`;
+
+/** The SQLSTATE of the driver error under a drizzle error. */
+function sqlStateOf(error: unknown): string | null {
+  for (let current = error; typeof current === "object" && current !== null; current = (current as { cause?: unknown }).cause) {
+    const { code } = current as { code?: unknown };
+    if (typeof code === "string") return code;
+  }
+  return null;
+}
+
+/**
+ * A page acquired as the release before the drop acquires it: this build's
+ * acquisition — the statements are that image's — and then, in the same
+ * transaction, that image's marker, as it makes it: a statement of its own in
+ * a savepoint, an undefined column (42703) swallowed and nothing else. The
+ * columns are dropped under that image, and where they are gone there is
+ * nothing to mark. `marked` says whether the marker was written.
+ */
+async function ownAsTheImageBefore(target: StartedTestDatabase, pageId: number): Promise<{ generation: bigint; marked: boolean }> {
+  return target.db.transaction(async (tx) => {
+    const acquired = await acquireSyncPageOwnership(tx as unknown as Database, { pageId, owner: owner() });
+    if (acquired.kind !== "acquired") throw new Error(`expected the image before to acquire page ${pageId}: ${acquired.kind}`);
+    let marked = true;
+    try {
+      await tx.transaction(async (savepoint) => {
+        await savepoint.execute(markerOfTheImageBefore(pageId));
+      });
+    } catch (error) {
+      if (sqlStateOf(error) !== "42703") throw error;
+      marked = false;
+    }
+    return { generation: acquired.generation, marked };
+  });
+}
+
 describe("the old hold columns go: the last migration of the three", () => {
   const migration = MIGRATIONS.find((file) => file.endsWith("_sync_pages_drop_old_hold_columns.sql"))!;
 
@@ -514,7 +580,8 @@ describe("the old hold columns go: the last migration of the three", () => {
     live: number;
     /** In mode `off`; no hold row. For the owner's mode lever. */
     off: number;
-    /** Held by its rows (an identity refusal), whatever the columns say. */
+    /** Taken by the release before the drop, so marked; held by its rows (an
+     *  identity refusal), whatever the columns say. */
     held: number;
     /** In mode `off`; no hold row: free, whatever the columns say. */
     free: number;
@@ -525,24 +592,31 @@ describe("the old hold columns go: the last migration of the three", () => {
   /**
    * A database as the release before the drop leaves it, and the deploy of
    * the drop over it: the pages (their old columns stale, saying what the
-   * last release that wrote them left, beside rows that say something else),
-   * the migration tried while a transaction held a page row, then applied.
+   * last release that wrote them left, beside rows that say something else;
+   * the pages that release took marked so), the migration tried while a
+   * transaction held a page row, then applied.
    */
   interface Stand {
     db: StartedTestDatabase;
     pages: Record<string, StalePages>;
-    /** Born live under the release before the drop: columns at their
-     *  defaults, held by rows it took since. */
+    /** Born live under the release before the drop: the slot at its
+     *  defaults, that release's marker in the map, held by rows it took since. */
     born: number;
-    /** A page with three consecutive network failures counted. */
+    /** A page with three consecutive network failures counted, taken by that
+     *  release too. */
     counted: number;
     before: {
       columns: string[];
       constraints: Awaited<ReturnType<typeof pageTableConstraints>>;
       defaults: Array<Record<string, unknown>>;
       /** What the old columns say, page by page: the kind in the slot, and
-       *  whether the resource-hold map carries a route state. */
+       *  what the resource-hold map carries — a route state as the last
+       *  release that wrote one left it, or the marker of the release before
+       *  the drop. */
       stale: Array<Record<string, unknown>>;
+      /** The resource-hold map of the page of each shape that the release
+       *  before the drop took. */
+      takenMaps: unknown[];
       /** Every page row without its five old columns. */
       pageRows: Array<Record<string, unknown>>;
       holdRows: Array<Record<string, unknown>>;
@@ -585,25 +659,33 @@ describe("the old hold columns go: the last migration of the three", () => {
         [pageId, columns.kind, columns.until ?? null, columns.since ?? null, JSON.stringify(columns.detail ?? {}), JSON.stringify(columns.resourceHolds ?? {})],
       );
 
-      // The pages, by this build's own statements: the release before the
-      // drop is this build without the migration (it names no old column, so
-      // its inserts leave them at their defaults).
+      // The pages, by the statements of the release before the drop: this
+      // build's (its inserts name no old column and leave them at their
+      // defaults) and, at an acquisition, that release's marker.
+      const takenByTheImageBefore = async (pageId: number) => {
+        const taken = await ownAsTheImageBefore(db, pageId);
+        expect(taken.marked, `page ${pageId}`).toBe(true);
+        return taken.generation;
+      };
       const pages: Record<string, StalePages> = {};
       for (const [what, columns] of Object.entries(STALE)) {
         const live = await seedLivePage(db);
         const off = await seedPage(db);
         const held = await seedPage(db);
-        const { generation } = await own(db, held);
+        const free = await seedPage(db);
+        const reader = await seedLivePage(db);
+        // What the last release that wrote the columns left in them.
+        for (const pageId of [live, off, held, free, reader]) await writeOldColumns(pageId, columns);
+        // The release before the drop took one of them: its marker in the
+        // map, beside what was there, and a hold in the rows alone.
+        const generation = await takenByTheImageBefore(held);
         await setPageHold(dbOf(db), { pageId: held, generation, kind: "identity_mismatch", until: "infinity", detail: { credentialsGeneration: "gen-x" } });
         // `sync` stops for the deploy: a safe release.
         await writeSafeRelease(dbOf(db), { pageId: held, generation });
-        const free = await seedPage(db);
-        const reader = await seedLivePage(db);
-        for (const pageId of [live, off, held, free, reader]) await writeOldColumns(pageId, columns);
         pages[what] = { live, off, held, free, reader };
       }
       const born = await seedLivePage(db);
-      const fenced = { pageId: born, generation: (await own(db, born)).generation };
+      const fenced = { pageId: born, generation: await takenByTheImageBefore(born) };
       await setPageHold(dbOf(db), { ...fenced, kind: "auth", until: "infinity", detail: { status: 401, credentialsGeneration: "gen-b" } });
       await setResourceHold(dbOf(db), { ...fenced, file: "transactions", hold: { until: new Date("2099-01-01T00:00:00.000Z"), step: 1 } });
       await writeSyncRouteState(dbOf(db), {
@@ -612,7 +694,7 @@ describe("the old hold columns go: the last migration of the three", () => {
       });
       await writeSafeRelease(dbOf(db), fenced);
       const counted = await seedPage(db);
-      const counting = { pageId: counted, generation: (await own(db, counted)).generation };
+      const counting = { pageId: counted, generation: await takenByTheImageBefore(counted) };
       await setNetworkFailureStreak(dbOf(db), { ...counting, streak: 3 });
       await writeSafeRelease(dbOf(db), counting);
 
@@ -627,10 +709,17 @@ describe("the old hold columns go: the last migration of the three", () => {
         stale: await query(
           db,
           `select coalesce(sp.hold_kind, 'none') as slot, count(*)::int as pages,
-                  count(*) filter (where sp.resource_holds ? 'route:state')::int as with_route_state,
+                  count(*) filter (where sp.resource_holds #>> '{route:state,version}' = '1')::int as with_route_state,
+                  count(*) filter (where sp.resource_holds -> 'route:state' = $1::jsonb)::int as marked,
                   count(*) filter (where exists (select 1 from sync_holds h where h.page_id = sp.page_id))::int as held_by_rows
              from sync_pages sp group by 1 order by 1`,
+          [JSON.stringify(MARKER["route:state"])],
         ),
+        takenMaps: (await query<{ map: unknown }>(
+          db,
+          "select resource_holds as map from sync_pages where page_id = any($1::bigint[]) order by page_id",
+          [Object.values(pages).map((shape) => shape.held)],
+        )).map((row) => row.map),
         pageRows: await query(db, PAGE_ROWS_WITHOUT_OLD_COLUMNS, [OLD_HOLD_COLUMNS]),
         holdRows: await query(db, HOLD_ROWS),
         grants: await query(db, GRANTS),
@@ -705,18 +794,24 @@ describe("the old hold columns go: the last migration of the three", () => {
       },
       { conname: "sync_pages_hold_pair_check", convalidated: true, definition: "CHECK (((hold_kind IS NULL) = (hold_until IS NULL)))" },
     ]);
-    // A page born under the release before the drop: defaults in the columns, its holds in its rows.
-    const defaults = { hold_kind: null, hold_until: null, hold_since: null, hold_detail: {}, resource_holds: {} };
+    // A page born under the release before the drop: defaults in the slot,
+    // that release's marker alone in the map, its holds in its rows.
+    const defaults = { hold_kind: null, hold_until: null, hold_since: null, hold_detail: {}, resource_holds: MARKER };
     expect(stand.before.defaults).toEqual([defaults, defaults]);
-    // Five pages for each of the four shapes, one of the five held by its
-    // rows — by an identity refusal, which none of the slots says; the page
-    // born live (held by its rows, its slot empty) and the page that counted
-    // failures.
+    // Five pages for each of the four shapes. That release took one of the
+    // five: it is held by its rows — by an identity refusal, which none of
+    // the slots says — and marked, the marker over the route state that was
+    // there and beside the rest of the map. The page born live (held by its
+    // rows, its slot empty) and the page that counted failures are marked too.
     expect(stand.before.stale).toEqual([
-      { slot: "auth", pages: 5, with_route_state: 5, held_by_rows: 1 },
-      { slot: "network", pages: 5, with_route_state: 0, held_by_rows: 1 },
-      { slot: "none", pages: 7, with_route_state: 0, held_by_rows: 2 },
-      { slot: "rate_limit", pages: 5, with_route_state: 0, held_by_rows: 1 },
+      { slot: "auth", pages: 5, with_route_state: 4, marked: 1, held_by_rows: 1 },
+      { slot: "network", pages: 5, with_route_state: 0, marked: 1, held_by_rows: 1 },
+      { slot: "none", pages: 7, with_route_state: 0, marked: 3, held_by_rows: 2 },
+      { slot: "rate_limit", pages: 5, with_route_state: 0, marked: 1, held_by_rows: 1 },
+    ]);
+    expect(stand.before.takenMaps).toEqual([
+      { probe: { until: "2099-01-01T00:00:00.000Z", step: 7, since: "2026-10-02T21:54:26.507Z" }, ...MARKER },
+      MARKER, MARKER, MARKER,
     ]);
     expect(stand.before.pageRows).toHaveLength(22);
     // Four identity refusals; the page born live: a credentials hold, a breaker, a route's state and hold.
@@ -797,7 +892,7 @@ describe("the old hold columns go: the last migration of the three", () => {
   it("the image before it runs on what is left: every statement that updates a page row, over the pages that went through the drop", async (context) => {
     if (!stand) return context.skip();
     for (const [what, pages] of Object.entries(stand.pages)) {
-      await runEveryPageRowUpdate(stand.db, pages.live, pages.off, what);
+      await runEveryPageRowUpdate(stand.db, pages.live, pages.off, what, ownAsTheImageBefore);
     }
   });
 
@@ -816,23 +911,58 @@ describe("the old hold columns go: the last migration of the three", () => {
     expect((await getSyncPage(dbOf(db), onboarded))!.mode).toBe("live");
     for (const pageId of [ensured, first, second, onboarded]) expect(await holdRows(db, pageId)).toEqual([]);
     // And it runs like any other: its updates, its hold writes.
-    await runEveryPageRowUpdate(db, onboarded, ensured, "a page onboarded after the drop");
-    await writeEveryKindOfHold(db, first, (await own(db, first)).generation, "a page ensured after the drop");
+    await runEveryPageRowUpdate(db, onboarded, ensured, "a page onboarded after the drop", ownAsTheImageBefore);
+    await writeEveryKindOfHold(db, first, (await ownAsTheImageBefore(db, first)).generation, "a page ensured after the drop");
   });
 
-  it("…its hold writes and its acquisition: a page holds what its rows say, whatever its old columns said", async (context) => {
+  it("…its acquisition, the marker's statement in it: the page is taken, and there is nothing left to mark", async (context) => {
+    if (!stand) return context.skip();
+    const { db } = stand;
+    const generationOf = async (pageId: number) => Number((await query<{ generation: number }>(
+      db, "select owner_generation::int as generation from sync_pages where page_id = $1", [pageId],
+    ))[0]!.generation);
+
+    // A page that image took and marked before the drop, and one it takes
+    // for the first time after it.
+    const fresh = await seedPage(db);
+    for (const pageId of [stand.counted, fresh]) {
+      const before = await generationOf(pageId);
+      const taken = await ownAsTheImageBefore(db, pageId);
+      // The marker's statement names a column that is gone (42703): it costs
+      // its savepoint and nothing else. The owner generation is written, and
+      // the page runs.
+      expect(taken).toEqual({ generation: BigInt(before + 1), marked: false });
+      expect(await generationOf(pageId)).toBe(before + 1);
+      expect(await heartbeatSyncPageOwner(dbOf(db), { pageId, generation: taken.generation })).toBe(true);
+      expect(await writeSafeRelease(dbOf(db), { pageId, generation: taken.generation })).toBe(true);
+    }
+
+    // Why that image makes the marker in a savepoint: the same statement in
+    // the acquisition's own transaction would lose the acquisition with it,
+    // and no page of the database could be taken — by the `sync` that works
+    // while the migration is applied, or after a rollback.
+    const before = await generationOf(fresh);
+    const lost: unknown = await db.db.transaction(async (tx) => {
+      await acquireSyncPageOwnership(tx as unknown as Database, { pageId: fresh, owner: owner() });
+      await tx.execute(markerOfTheImageBefore(fresh));
+    }).then(() => null, (error: unknown) => error);
+    expect(sqlStateOf(lost)).toBe("42703");
+    expect(await generationOf(fresh)).toBe(before);
+  });
+
+  it("…its hold writes: a page holds what its rows say, whatever its old columns said", async (context) => {
     if (!stand) return context.skip();
     const { db } = stand;
     for (const [what, pages] of Object.entries(stand.pages)) {
       // The page its rows hold (an identity refusal): acquired, it is held by them.
-      const { generation } = await own(db, pages.held);
+      const { generation } = await ownAsTheImageBefore(db, pages.held);
       expect(shape(await holdRows(db, pages.held)), what).toEqual([
         { scope: "page", key: "", kind: "identity_mismatch", ladderStep: 0, detail: { credentialsGeneration: "gen-x" }, revision: 1 },
       ]);
       const held = (await getSyncPage(dbOf(db), pages.held))!;
       expect(whyHeld(holdSetOf(held.holds), null, {}, held.dbNow), what).toMatchObject({ scope: "credentials", kind: "identity_mismatch" });
       // A page whose columns said "held" and whose rows say nothing is free.
-      await own(db, pages.free);
+      await ownAsTheImageBefore(db, pages.free);
       expect(await holdRows(db, pages.free), what).toEqual([]);
       const free = (await getSyncPage(dbOf(db), pages.free))!;
       expect(whyHeld(holdSetOf(free.holds), null, {}, free.dbNow), what).toBeNull();
@@ -864,12 +994,12 @@ describe("the old hold columns go: the last migration of the three", () => {
     // and a held, slowed route; a network hold; the page-wide 429 hold;
     // nothing. Their rows say nothing: nothing is held.
     for (const [what, pages] of Object.entries(stand.pages)) {
-      await own(db, pages.reader);
+      await ownAsTheImageBefore(db, pages.reader);
       expect(await read(pages.reader), what).toEqual({ holds: { page: null, resources: [] }, heldRoutes: [], stopped: [], routeAlerts: [] });
     }
 
-    // Its columns said nothing; its rows say all of that.
-    await own(db, stand.born);
+    // Its columns said nothing but the marker; its rows say all of that.
+    await ownAsTheImageBefore(db, stand.born);
     expect(await read(stand.born)).toMatchObject({
       holds: { page: { kind: "auth", until: "infinity" }, resources: [{ file: "transactions", step: 1 }] },
       heldRoutes: ["messaging.groups"],

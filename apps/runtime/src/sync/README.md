@@ -408,29 +408,40 @@ the page row FOR NO KEY UPDATE (the lock of every actor transaction) and fences 
 **The page row holds nothing, and it has no hold column** (step 4, S4-33, the last of the three releases below). The
 hold writers write the rows and lock the page row without writing it, and no statement of this build names the old
 hold columns of `sync_pages`: the hold slot of 0228 (its kind, end, start and detail) and the resource-hold map beside
-it, where the route state lived too (`tests/sync-old-hold-columns.test.ts` pins it over `apps`, `packages` and
-`scripts`). `0242_sync_pages_drop_old_hold_columns.sql` dropped those five columns and the slot's two CHECKs: one
-catalog-only `ALTER TABLE`, its lock wait bounded to 5 s. **Read a page's holds from `sync_holds` or
-`sync page status`**: a query that selects one of the old columns fails. The page row keeps its counter of consecutive
-network failures, which is no hold.
+it, where the route state lived too. `tests/sync-old-hold-columns.test.ts` pins it over `apps`, `packages` and
+`scripts`: the one line there that names any of them is the deploy's search for them in the running images (below).
+`0242_sync_pages_drop_old_hold_columns.sql` dropped those five columns and the slot's two CHECKs: one catalog-only
+`ALTER TABLE`, its lock wait bounded to 5 s. **Read a page's holds from `sync_holds` or `sync page status`**: a query
+that selects one of the old columns fails. The page row keeps its counter of consecutive network failures, which is no
+hold.
 
 **Rollback targets from this release on.**
 
-- **The release before this one** (S4-32) is a safe rollback target, and the only one. It names none of the dropped
-  columns: no statement of it selects, writes or returns them, its drizzle table does not map them, and it reads and
-  writes the page row by named columns, never by `*`. So the migration is in `ROLLBACK_COMPATIBLE_MIGRATIONS`.
-  `tests/sync-hold-set.integration.test.ts` runs every statement that writes a page row, the hold writes and the
-  readers on a Postgres whose pages went through the drop with holds in the old columns.
+- **The release before this one** (S4-32) is a safe rollback target, and the only one. No statement of it reads the
+  dropped columns, its drizzle table does not map them, and it reads and writes the page row by named columns, never
+  by `*`. It writes one of them, in one statement: whenever it acquires a page it leaves a marker in the resource-hold
+  map (a route-state version the hold-set release cannot read, so that release refuses the page rather than open it
+  by stale columns). That statement is made on its own inside the acquisition and goes on where the column is gone:
+  the page is taken all the same, and there is nothing left to mark. So the migration is in
+  `ROLLBACK_COMPATIBLE_MIGRATIONS`. `tests/sync-hold-set.integration.test.ts` runs that acquisition as that image
+  makes it, every statement that writes a page row, the hold writes and the readers on a Postgres whose pages went
+  through the drop with holds in the old columns.
 - **Every image older than that is NOT a rollback target any more.** S4-31 ends every hold write by rewriting the
   dropped columns from the rows, in the write's transaction: each hold write fails there, so a page can neither take
-  a hold nor lift one. The hold-set release (S4-30, the one that brought `sync_holds`) selects them whenever it
-  acquires a page, and an older image knows a page's holds from them alone: neither runs at all.
+  a hold nor lift one, **and it keeps sending meanwhile** (the actor's commit fails, the host restarts it, and a 200
+  needs no hold, so every health gate stays green). The hold-set release (S4-30, the one that brought `sync_holds`)
+  selects them whenever it acquires a page, and an older image knows a page's holds from them alone: neither runs at
+  all.
 - So this release is deployed onto the previous one, once that one has been deployed and has run its hour, **never in
-  the deploy that brings S4-32**. S4-32 has no migration of its own, so `ROLLBACK_COMPATIBLE_MIGRATIONS` cannot tell
-  that deploy apart: with the drop its only pending migration, the automatic rollback would be armed and would return
-  to S4-31, whose hold writes fail; and the S4-31 `sync` still running while the migration is applied would fail them
-  already. Before the deploy, check that every running service's image is a build with S4-32 (its
-  `agency-hub.source-revision` label).
+  the deploy that brings S4-32, and never over an older image** (after a rollback to S4-31, say). S4-32 has no
+  migration of its own, so `ROLLBACK_COMPATIBLE_MIGRATIONS` cannot tell those deploys apart: with the drop its only
+  pending migration the automatic rollback would be armed and would return to S4-31, and the S4-31 `sync`, which
+  keeps working while the new api applies the migration, would be on the migrated table at once. **The deploy checks
+  it itself.** While the drop is still to be applied, `verify_running_images_run_without_old_hold_columns`
+  (`scripts/deploy-production.sh`) searches the built code of the image of every running `api`, `worker`, `scheduler`
+  and `sync` container for the columns of the hold slot, and stops, before anything is quiesced or migrated, if one
+  names them or cannot be searched (`tests/deploy-old-hold-columns-gate.test.ts`). The way past a refusal is to
+  deploy S4-32 first, from a checkout of its commit, and to let it run its hour.
 - `0240_sync_holds.sql` and `0241_sync_pages_drop_hold_step.sql` stay out of `ROLLBACK_COMPATIBLE_MIGRATIONS`, which
   keeps the automatic rollback off in a deploy that still has one of them to apply (the image such a deploy would
   roll back to reads the columns).
@@ -442,11 +453,13 @@ network failures, which is no hold.
 1. S4-31: the two read-backs went (`acquireSyncPageOwnership`, a hold write under no generation); the hold writers
    still rewrote the columns from the rows, so a rollback to the hold-set release found the two sides equal. The
    ladder-step column of the slot, which that release neither read nor wrote, was dropped (0241).
-2. S4-32: the rewrite, the repository file that held it and the drizzle fields of the columns went. A rollback to (1)
-   read no old column. The columns were stale from that deploy on.
-3. This release drops the five columns and the two CHECKs. A rollback to (2) neither reads nor writes them. Read-only
-   SQL kept outside the repository (the post-deploy check, the production watch) reads `sync_holds`: a query of the
-   old columns read history since (2), and fails from here on.
+2. S4-32: the rewrite, the repository file that held it and the drizzle fields of the columns went; the one write
+   left was the marker of an acquisition. A rollback to (1) read no old column. The columns were stale from that
+   deploy on.
+3. This release drops the five columns and the two CHECKs, and has no marker to leave. A rollback to (2) reads none
+   of them, and its acquisition goes on without its marker. Read-only SQL kept outside the repository (the
+   post-deploy check, the production watch) reads `sync_holds`: a query of the old columns read history since (2),
+   and fails from here on.
 
 ## The process: pool timeouts, stall watchdog, shutdown (step 4, 4-3)
 
@@ -621,7 +634,7 @@ Each is enforced in exactly one place and pinned by a test (design §1). The fir
 | I18 | Every WS receipt of a `handover`/`live` page routes its demand exactly once, in the transaction that acks it. | `fansly/ws/route-receipt.ts` |
 | I19 | Between two actual sends of one page on one route (or one family): ≥ the interval of its effective rate, counted from the actual send in the journal the page runs (the legacy send log too on a live page; an unknown outcome at its upper bound); no burst, no borrowing. | `engine/route-policy.ts` (`RouteClocks`) + `engine/actor.ts` (pick exclusion, final check) |
 | I20 | One page-hold rule: a credentials hold clears only by an identity proof sent after its latest refusal, written with the apply; under it only a candidate check and one verify per changed stored digest pass (step 3b ruling 5, A3). | `packages/shared/src/fansly-page-holds.ts` (gate, final admission, status, alerts) + `engine/commit.ts` (`recordIdentityProof`) |
-| I23 | One hold evaluator over one hold set: what holds a request — the page, its subject, its resource file, its route — is `whyHeld`'s answer over the page's `sync_holds` rows; rows it cannot read keep the page closed. The rows are a page's whole hold state: the page row has no hold column — the old ones were dropped, so no image that names them is a rollback target (step 4, owner decision №26; S4-33). | `engine/admission.ts` + `repositories/sync/pages.ts` (the four hold writers); tests/sync-hold-evaluator.test.ts, tests/sync-hold-set.integration.test.ts, tests/sync-old-hold-columns.test.ts |
+| I23 | One hold evaluator over one hold set: what holds a request — the page, its subject, its resource file, its route — is `whyHeld`'s answer over the page's `sync_holds` rows; rows it cannot read keep the page closed. The rows are a page's whole hold state: the page row has no hold column — the old ones were dropped, so the one rollback target is the release before the drop, and the deploy refuses the drop under an image older than it (step 4, owner decision №26; S4-33). | `engine/admission.ts` + `repositories/sync/pages.ts` (the four hold writers) + `scripts/deploy-production.sh` (`verify_running_images_run_without_old_hold_columns`); tests/sync-hold-evaluator.test.ts, tests/sync-hold-set.integration.test.ts, tests/sync-old-hold-columns.test.ts, tests/deploy-old-hold-columns-gate.test.ts |
 | I21 | The legacy page-sync executor serves only the platforms whose adapter declares streams (OnlyFans since step 4 S4-10): no Fansly page's legacy state is seeded, scheduled, woken, leased or requested, and nothing gives a page back to it. The platform set is a required argument of every query that picks work — the one fence in them since S4-21, with the Fansly rows parked `retired` (0239) beside it — and the planner and the executor assert it before a wake-up or a run; `services/sync/` holds no Fansly handler, error class or Fansly HTTP import (S4-19). | `onlyfans/boundary.ts` (`legacyExecutorPlatforms`, `assertLegacyExecutorPage`) over `platforms/registry.ts` + `repositories/page-sync.ts` (`PageSyncPlatformScope`) + `services/sync/planner.ts` + `services/sync/executor.ts` + `services/sync-control.ts` (`assertLegacyExecutorServes`); tests/sync-onlyfans-boundary.test.ts, tests/sync-legacy-fence.test.ts |
 | I22 | Only a live page's socket source in `sync` opens a Fansly WebSocket (step 4 S4-12): the receiver helper is the one place that constructs a socket, its Upgrade on a send lease (the engine's, over the pacer's one-shot check); no worker, lane or script opens one. | `fansly/ws/source.ts` + `services/egress/fansly-receiver-socket.ts`; tests/fansly-send-guard-boundary.test.ts |
 
