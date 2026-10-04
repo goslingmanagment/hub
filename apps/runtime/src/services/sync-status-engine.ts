@@ -10,8 +10,8 @@ import {
   type SyncWorkRow,
 } from "@agency_hub_core/db";
 import type { SyncUxSummary } from "@agency_hub_core/contracts";
-import { activeFanslyPageHold } from "@agency_hub_core/shared";
 
+import { holdSetOf, pageHoldsInForce } from "../sync/engine/admission.ts";
 import { estimateSlotOpensAt, explainWork, type StatusPage, type StatusWork } from "../sync/engine/status.ts";
 import { FANSLY_RESOURCE_SPECS, fanslyKeysForStreams, fanslyStreamPollSeconds } from "../sync/fansly/registry.ts";
 import type {
@@ -137,11 +137,7 @@ function statusPageOf(page: SyncPageRow): StatusPage {
     pausedAll: page.pausedAll,
     pausedRequests: page.pausedRequests,
     pausedResources: page.pausedResources,
-    holdKind: page.holdKind,
-    holdUntil: page.holdUntil,
-    holdSince: page.holdSince,
-    holdDetail: page.holdDetail,
-    resourceHolds: page.resourceHolds,
+    holds: holdSetOf(page.holds),
     owner: page.owner,
   };
 }
@@ -335,7 +331,7 @@ export function engineCredentialsRefusal(
   page: SyncPageRow,
   now: Date = page.dbNow,
 ): { kind: "auth" | "identity_mismatch"; summary: string } | null {
-  const hold = activeFanslyPageHold(page, now)?.credentials ?? null;
+  const hold = pageHoldsInForce(holdSetOf(page.holds), now)?.credentials ?? null;
   if (hold === null) return null;
   return {
     kind: hold.kind,

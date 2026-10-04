@@ -158,6 +158,8 @@ export * from "./repositories/fansly-send-guard-checks.ts";
 // journal and its telemetry retention; the DM thread chain (0231); the
 // conversation list's own writer; the DM message reads; the subject-queue
 // walks; the history requests (0232).
+export * from "./repositories/sync/holds.ts";
+export * from "./repositories/sync/holds-legacy.ts";
 export * from "./repositories/sync/pages.ts";
 export * from "./repositories/sync/work.ts";
 export * from "./repositories/sync/attempts.ts";

@@ -328,8 +328,8 @@ Reading progress (`hub history-status`):
   NOT in the seconds above: the reads start when it ends. `until: null` means no
   known instant ends it (the page needs new credentials or the operator).
 - `waitingReason` / `waitingUntil` say why the request, or one fan, waits right
-  now (`pacer`, `class_share`, `paused`, `page_hold`, `ownership_unconfirmed`,
-  ...). They are body fields, never blockers.
+  now (`pacer`, `class_share`, `paused`, `page_hold`, `route_hold`,
+  `ownership_unconfirmed`, ...). They are body fields, never blockers.
 - a fan is `ready` once satisfied: `all` only when its chat is `complete` with
   `historyProof: "empty_page"`; `latest N` once the contiguous chain from the
   anchor (the chat's head when the request was filed) holds N messages, or the
@@ -419,9 +419,11 @@ why the rest waits. Every page the engine runs is `live`; a page that is `off`
 queue is empty or waits on `ownership_unconfirmed`. Shadow mode is gone: the
 `shadow` block of a page's status is always `null` and `shadow` on a work row
 always `false` (the fields stay on the wire only). The waiting reasons are the closed
-list above (`not_due`, `pacer`, `class_share`, `page_hold`, `resource_hold`,
-`subject_breaker`, `blocked_by_vendor`, `quarantined`, `paused`, `dependency`,
-`ownership_unconfirmed`, `running`); like history progress they are body
+list above (`not_due`, `pacer`, `class_share`, `page_hold`, `route_budget`,
+`route_hold`, `resource_hold`, `subject_breaker`, `blocked_by_vendor`,
+`quarantined`, `paused`, `dependency`, `ownership_unconfirmed`, `running`);
+`route_hold` is a 429's hold of the route the work reads (until
+`waitingUntil`), `route_budget` that route's own pace. Like history progress they are body
 fields, and the envelope always carries `capture_floor_unknown` because the
 engine's queue is not captured platform data.
 

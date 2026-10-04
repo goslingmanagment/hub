@@ -1666,9 +1666,11 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     ["history_request_items", "page_id"],
     ["history_requests", "page_id"],
     // Fansly Sync Engine (0228): the page's attempt journal, its work queue and
-    // its engine row (mode, ownership, holds). RESTRICT FKs; erasure keeps pages.
+    // its engine row (mode, ownership), with its hold set (0240). RESTRICT FKs;
+    // erasure keeps pages.
     ["sync_attempts", "page_id"],
     ["sync_work", "page_id"],
+    ["sync_holds", "page_id"],
     ["sync_pages", "page_id"],
     ["projection_watermarks", "platform_account_id"],
     ["revenue_mix_daily", "page_id"],

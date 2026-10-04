@@ -93,17 +93,19 @@ id, a fan's account id or a media id for the keys that run per subject. `sync wh
 | `running` | admitted; its request or its apply is in progress | nothing |
 | `ownership_unconfirmed` | no actor runs the page: no fresh owner heartbeat, or the previous owner's stop is not confirmed | [Watchdog restarts](#watchdog-restarts-shutdown-and-deploys) |
 | `paused` | the owner paused the page, its history requests or this resource (`detail.scope`) | `sync page resume`, when the reason for the pause is gone |
-| `page_hold` | a credentials hold (`auth`, `identity_mismatch`), a network hold, or a route state this build cannot read (`detail.routeState`) | [Holds](#holds-breakers-and-quarantine) |
+| `page_hold` | a credentials hold (`auth`, `identity_mismatch`), a network hold, or rows of the page's hold set this build cannot read (`detail.holdSet`) | [Holds](#holds-breakers-and-quarantine) |
 | `quarantined` | the answer broke its contract or the cursor stuck; the raw answer is kept | fix the cause, then requeue ([Quarantine](#quarantine)) |
 | `blocked_by_vendor` | the subject failed 5 times; probed once a day while demand exists | nothing: a successful probe lifts it |
 | `subject_breaker` | the subject failed: 1 min → 10 min → 1 h → 6 h → 24 h | wait; read `lastAttempt` for the answer that failed |
 | `resource_hold` | 5 or more subjects of the resource's file failed within 10 minutes: 30 min → 2 h → 6 h (never `dm-messages.head`) | wait; the cause is in the failing subjects' last attempts |
 | `dependency` | the work waits for other work or data | look at the work it waits for (a chat's `dm-conversations.find` before its head read) |
 | `not_due` | its time has not come: a poll's period, a coalescing window | nothing; "sync now" makes the page's polls due |
-| `pacer` | runnable; the page's next slot has not opened, or every route of the key is closed by its budget or by a route hold (`detail.routes`; `detail.held` names the routes a 429 holds) | nothing for the pause or a budget; a held route: [Route holds](#route-holds-and-sync-route-raise) |
+| `route_hold` | a 429 (or a 5xx naming its `Retry-After`) holds a route among those that keep the row closed: every route of its key, or the route its planned request was put off for (`detail.routes`; `detail.held` names the held ones); `until` is the hold's end | [Route holds](#route-holds-and-sync-route-raise) |
+| `route_budget` | runnable; every route of the key is closed by its budget's interval only, or its planned route put the request off for it (`detail.routes`) | nothing: the route's own pace |
+| `pacer` | runnable; the page's next slot has not opened | nothing |
 | `class_share` | runnable; the slot belongs to another class or to earlier work of its class | nothing |
 
-A key without requests (`dm-live.deletions`) never waits on a page hold or the pacer. "Sync now" (the block buttons,
+A key without requests (`dm-live.deletions`) never waits on a page hold, a route or the pacer. "Sync now" (the block buttons,
 `POST /api/v1/sync/pages/:pageLabel/refresh`) makes the page's poll rows due and wakes its actor; it sends nothing
 itself.
 
@@ -182,11 +184,19 @@ state under `routes`.
 | `auth` | Fansly answered 401 or 403 to the page's session | an identity proof sent after the latest refusal: store a new session (the dashboard's credentials tab, `PATCH /api/v1/admin/pages/:pageLabel/credentials`). The engine checks the candidate against the page before anything is stored (`account.identity`), stores and trusts it, then verifies what is stored (`account.verify`); that proof clears the hold. A page verify of the refused session is not admitted: one verify per stored digest |
 | `identity_mismatch` | the session answers as another account | the same: the right account's session. Never edit the stored identity |
 | `network` | 3 transport failures or timeouts in a row; the page waits 10 s → 30 s → 1 min → 2 min → 5 min between tries | the first success. Alert 1 only after 10 minutes of it: then check the page's proxy and Fansly's reachability |
-| unreadable route state | the page's route state was written by a build this one cannot read (`detail.routeState`) | deploy the build that reads it. Admission stays closed until then |
+| unreadable hold rows | a row of the page's hold set is of a scope or kind this build does not know, or a route's rows do not parse (`detail.holdSet`): a later build wrote them | deploy the build that reads them. Admission stays closed until the row's end, for good when it names none |
 
 A change of credentials or proxy that the engine could not answer within 30 s returns 409 `fansly_sync_work_queued`
 with the work's status link: the check is queued, not lost. Under a credentials hold only the candidate check and
 one verify per changed digest go out; a network hold beside it stops those too until it ends.
+
+Every hold is a row of `sync_holds` (the page's hold set: its own holds, each route's hold and slowdown, each
+file's breaker), and one evaluator reads it for the actor, status, "why" and the alerts. While a previous image
+that knows only the old hold columns of `sync_pages` can come back, every hold write rewrites those columns too,
+and they win whenever they differ from the rows: at the page's next acquisition (the host logs it and counts
+`sync_holds_imported`: expected after this release's first deploy and after a rollback, for each page whose holds
+the previous image wrote) and before a `sync route raise`. So a hold is never edited by hand in `sync_holds` alone;
+the rule is in `apps/runtime/src/sync/README.md` ("The hold set and the hold evaluator").
 
 **Breakers** stop one subject or one file, never the page:
 
@@ -234,7 +244,8 @@ next send no sooner than one interval of its effective rate after its previous a
 
 The page's other routes keep running. Nothing is asked of the operator at once: read `routes` in `sync page status`
 (`effectivePerMin` below `currentPerMin`, `holdUntil`, `ladderStep`, `last429At`, `revision`) and the `routes` of
-`sync alerts status`. Work behind the route shows `pacer` with `detail.held` in "why".
+`sync alerts status`. Work behind the route shows `route_hold` in "why", with the hold's end in `until` and the
+held routes in `detail.held`.
 
 ```sql
 select p.label, a.operation as route, count(*) as r429, max(a.sent_at) as newest,
@@ -317,7 +328,7 @@ their clean window (`routes`) and the open latches (`openLatches`), and the glob
 |---|---|---|---|
 | 1 `page_stopped` | `auth`, `identity_mismatch` | Fansly refused the session, or it is another account's | new credentials ([Holds](#holds-breakers-and-quarantine)) |
 | | `network` | the network hold has lasted 10 minutes | the page's proxy, Fansly's reachability |
-| | `route_state_unreadable` | this build cannot read the page's route state | deploy the build that wrote it |
+| | `route_state_unreadable`, `hold_set_unreadable` | this build cannot read rows of the page's hold set: a route's state, or a row of a kind it does not know | deploy the build that wrote them |
 | | `ownership_unconfirmed` | no owner heartbeat for 2 minutes | [Watchdog restarts](#watchdog-restarts-shutdown-and-deploys) |
 | | `handover_stuck` | a row has said `handover` for 10 minutes; nothing reaches that mode any more | the owner: a row was edited by hand |
 | `page_stopped:pace_violation` | | two sends of a page closer than the later one's pause, or two sends of a route or family closer than the interval the later one was admitted under | below |

@@ -9,13 +9,12 @@ import { FANSLY_WIRE_IDS, FANSLY_WIRE_SPECS, type FanslyWireId } from "@agency_h
 import {
   EMPTY_ROUTE_STATE,
   lookaheadInstants,
-  parseRouteState,
   routeAdmissionView,
   routeExclusions,
   routeJournalLookbackMs,
   RouteClocks,
+  routeStateOfHolds,
   routeStatusView,
-  ROUTE_STATE_VERSION,
   type RouteState,
   type RouteStateEntry,
 } from "../apps/runtime/src/sync/engine/route-policy.ts";
@@ -36,6 +35,7 @@ import {
   routePolicyVersion,
   type FanslyRoute,
 } from "../apps/runtime/src/sync/fansly/routes.ts";
+import { pageHoldRow, resourceBreakerRow, routeHoldRows } from "./helpers/sync-holds.ts";
 
 // The route policy (step 3b rulings 1, 3, 4; A2; plan PR 1-1): the catalogue
 // of every route a request of a page can take, the legacy send log's map onto
@@ -61,7 +61,7 @@ function entry(overrides: Partial<RouteStateEntry> = {}): RouteStateEntry {
 }
 
 function state(routes: RouteState["routes"]): RouteState {
-  return { version: ROUTE_STATE_VERSION, routes };
+  return { routes };
 }
 
 describe("the route catalogue", () => {
@@ -204,43 +204,49 @@ describe("the budget table (owner decisions №21, D2, D4; A2)", () => {
   });
 });
 
-describe("the route state namespace (ruling 4)", () => {
-  it("none stored is the empty state; a version-1 object reads", () => {
-    expect(parseRouteState(null)).toEqual({ ok: true, state: EMPTY_ROUTE_STATE });
-    expect(parseRouteState(undefined)).toEqual({ ok: true, state: EMPTY_ROUTE_STATE });
-    const stored = {
-      version: 1,
-      routes: {
-        "media.offer_stats": entry({ holdUntil: at(30_000).toISOString(), ladderStep: 2, effectivePerMin: 2.5, policyVersion: "abc", last429AttemptId: 7, last429At: NOW.toISOString(), revision: 3 }),
-      },
-    };
-    expect(parseRouteState(stored)).toEqual({ ok: true, state: stored });
+describe("the route state in the hold set (ruling 4; step 4)", () => {
+  it("none stored is the empty state; a route's two rows read as its entry", () => {
+    expect(routeStateOfHolds([])).toEqual({ ok: true, state: EMPTY_ROUTE_STATE });
+    const stored = entry({ holdUntil: at(30_000).toISOString(), ladderStep: 2, effectivePerMin: 2.5, policyVersion: "abc", last429AttemptId: 7, last429At: NOW.toISOString(), revision: 3 });
+    expect(routeStateOfHolds(routeHoldRows("media.offer_stats", stored))).toEqual({ ok: true, state: state({ "media.offer_stats": stored }) });
+    // A state without a hold (a raise after its hold ended), a hold whose state
+    // row is missing: an entry either way.
+    expect(routeStateOfHolds(routeHoldRows("polls", { effectivePerMin: 7.5, revision: 4 })))
+      .toEqual({ ok: true, state: state({ polls: entry({ effectivePerMin: 7.5, revision: 4 }) }) });
+    const holdOnly = routeHoldRows("polls", { holdUntil: at(9_000).toISOString() }).filter((row) => row.kind === "route_hold");
+    expect(routeStateOfHolds(holdOnly)).toEqual({ ok: true, state: state({ polls: entry({ holdUntil: at(9_000).toISOString(), revision: 0 }) }) });
   });
 
-  it("closes admission on a version it does not know, or an entry of a known route it cannot read", () => {
-    expect(parseRouteState({ version: 2, routes: {} })).toEqual({ ok: false, diagnostic: "route_state_version:2" });
-    expect(parseRouteState({ routes: {} })).toEqual({ ok: false, diagnostic: "route_state_version:undefined" });
-    expect(parseRouteState("v1")).toEqual({ ok: false, diagnostic: "route_state_not_an_object" });
-    expect(parseRouteState({ version: 1, routes: [] })).toEqual({ ok: false, diagnostic: "route_state_routes" });
+  it("reads the route rows only: a page's own holds and its breakers are not route state", () => {
+    const rows = [pageHoldRow("auth"), resourceBreakerRow("transactions", at(60_000)), ...routeHoldRows("polls", { revision: 2 })];
+    expect(routeStateOfHolds(rows)).toEqual({ ok: true, state: state({ polls: entry({ revision: 2 }) }) });
+  });
+
+  it("closes admission on rows of a known route it cannot read", () => {
     for (const bad of [
-      { holdUntil: "soon" },
       { effectivePerMin: 0 },
       { effectivePerMin: -1 },
       { effectivePerMin: Number.NaN },
       { ladderStep: -1 },
       { revision: 1.5 },
       { last429AttemptId: 0 },
-      { policyVersion: 3 },
+      { last429At: "soon" },
+      { policyVersion: 3 as unknown as string },
     ]) {
-      expect(parseRouteState({ version: 1, routes: { "messages.page": { ...entry(), ...bad } } }), JSON.stringify(bad))
+      expect(routeStateOfHolds(routeHoldRows("messages.page", bad)), JSON.stringify(bad))
         .toEqual({ ok: false, diagnostic: "route_state_entry:messages.page" });
     }
-    expect(parseRouteState({ version: 1, routes: { "messages.page": "held" } })).toMatchObject({ ok: false });
+    // A hold row without an end, a kind a later build added.
+    const [budget] = routeHoldRows("messages.page");
+    expect(routeStateOfHolds([budget!, { ...budget!, kind: "route_hold", until: null }]))
+      .toEqual({ ok: false, diagnostic: "route_state_entry:messages.page" });
+    expect(routeStateOfHolds([budget!, { ...budget!, kind: "route_quota" }]))
+      .toEqual({ ok: false, diagnostic: "route_state_kind:messages.page:route_quota" });
   });
 
-  it("leaves an entry of a route this build does not know alone (it never sends there)", () => {
-    expect(parseRouteState({ version: 1, routes: { "future.route": { anything: true }, polls: entry() } }))
-      .toEqual({ ok: true, state: state({ polls: entry() }) });
+  it("leaves the rows of a route this build does not know alone (it never sends there)", () => {
+    const future = routeHoldRows("future.route", { effectivePerMin: -1 }).map((row) => ({ ...row, kind: row.kind === "route_budget" ? "route_quota" : row.kind }));
+    expect(routeStateOfHolds([...future, ...routeHoldRows("polls")])).toEqual({ ok: true, state: state({ polls: entry() }) });
   });
 });
 
@@ -363,15 +369,20 @@ describe("the admission at the pick", () => {
 
   it("why waiting names the routes still closed; the status lists the routes and families", () => {
     const clocks = new RouteClocks({ sends: [engine("messaging.groups", 1_000)], state: state({ polls: entry({ holdUntil: at(9_000).toISOString() }) }) });
-    const why = routeAdmissionView(clocks, null, specs, NOW);
+    const why = routeAdmissionView(clocks, specs, NOW);
     expect(why.keyOpensAt("dm-conversations.find")).toEqual({ at: at(3_000), routes: ["group.detail", "messaging.groups"], held: [] });
     // A route a 429 holds is named as held too.
     const listHeld = new RouteClocks({ sends: [], state: state({ "messaging.groups": entry({ holdUntil: at(9_000).toISOString() }) }) });
-    expect(routeAdmissionView(listHeld, null, [...specs, { key: "dm-conversations.head", operations: ["messaging.groups"] }], NOW)
-      .keyOpensAt("dm-conversations.head")).toEqual({ at: at(9_000), routes: ["messaging.groups"], held: ["messaging.groups"] });
+    const heldView = routeAdmissionView(listHeld, [...specs, { key: "dm-conversations.head", operations: ["messaging.groups"] }], NOW);
+    expect(heldView.keyOpensAt("dm-conversations.head")).toEqual({ at: at(9_000), routes: ["messaging.groups"], held: ["messaging.groups"] });
     expect(why.keyOpensAt("media-stats.walk")).toBeNull();
     expect(why.keyOpensAt("probe.manual")).toBeNull();
-    expect(routeAdmissionView(null, "route_state_version:9", specs, NOW)).toMatchObject({ stateError: "route_state_version:9" });
+    // One route, as the final check of a planned request asks: its budget's
+    // interval, or its hold.
+    expect(why.routeOpensAt("messaging.groups")).toEqual({ at: at(4_000), routes: ["messaging.groups"], held: [] });
+    expect(why.routeOpensAt("polls")).toEqual({ at: at(9_000), routes: ["polls"], held: ["polls"] });
+    expect(why.routeOpensAt("media.offer_stats")).toBeNull();
+    expect(heldView.routeOpensAt("messaging.groups")).toEqual({ at: at(9_000), routes: ["messaging.groups"], held: ["messaging.groups"] });
     const status = routeStatusView(clocks, null, NOW);
     expect(status.policyHash).toBe(ROUTE_POLICY_HASH);
     expect(status.routes.map((route) => route.name)).toEqual(["messaging.groups", "polls", "family:messaging", "family:earnings"]);

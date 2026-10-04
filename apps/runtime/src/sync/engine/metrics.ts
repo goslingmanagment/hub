@@ -10,7 +10,10 @@ import {
   type SyncPageRow,
 } from "@agency_hub_core/db";
 
+import type { FanslyPageHoldKind } from "@agency_hub_core/shared";
+
 import { moneyFramesMissing, readMoneyFrames, type MoneyFrame } from "../fansly/ws/money-frames.ts";
+import { holdSetOf, pageHoldsInForce, resourceFilesHeld } from "./admission.ts";
 import { collectPageAlerts, pagesOwnerAlerts, SYNC_MONEY_FRAME_MS, SYNC_MONEY_LOOKBACK_MS } from "./alerts.ts";
 import type { EngineRegistry } from "./resource.ts";
 
@@ -37,27 +40,22 @@ export interface SyncPageMetrics {
   minSendGapMs: number | null;
   /** `sync_pace_violations{page}`: pairs closer than the setting in force for the later send. */
   paceViolations: number;
-  /** `sync_holds{page,kind}`: the page hold and the resource files held, in force at `until`. */
-  holds: { page: SyncPageRow["holdKind"]; resources: string[] };
+  /** `sync_holds{page,kind}`: the page's own holds (a credentials hold, a
+   *  network hold — both when both stand) and the resource files held, in
+   *  force at `until`, by the hold evaluator. */
+  holds: { page: FanslyPageHoldKind[]; resources: string[] };
   breakersOpen: number;
   blockedByVendor: number;
   quarantined: number;
 }
 
-function inForce(until: string | Date | null | undefined, now: Date): boolean {
-  if (until === null || until === undefined) return false;
-  const at = until instanceof Date ? until : new Date(until);
-  return !Number.isNaN(at.getTime()) && at.getTime() > now.getTime();
-}
-
-/** The holds of a page in force at `now`. */
-export function holdsInForce(page: SyncPageRow, now: Date): SyncPageMetrics["holds"] {
+/** The holds of a page in force at `now` (`engine/admission.ts`). */
+function holdsOf(page: SyncPageRow, now: Date): SyncPageMetrics["holds"] {
+  const holds = holdSetOf(page.holds);
+  const held = pageHoldsInForce(holds, now);
   return {
-    page: page.holdKind !== null && inForce(page.holdUntil, now) ? page.holdKind : null,
-    resources: Object.entries(page.resourceHolds)
-      .filter(([, hold]) => inForce(hold.until, now))
-      .map(([file]) => file)
-      .sort(),
+    page: [held?.credentials?.kind, held?.timed?.kind].filter((kind): kind is FanslyPageHoldKind => kind !== undefined),
+    resources: resourceFilesHeld(holds, now),
   };
 }
 
@@ -84,7 +82,7 @@ export async function computeSyncMetrics(
     },
     minSendGapMs: row?.minGapMs ?? null,
     paceViolations: row?.paceViolations ?? 0,
-    holds: holdsInForce(input.page, until),
+    holds: holdsOf(input.page, until),
     breakersOpen: row?.breakersOpen ?? 0,
     blockedByVendor: row?.blockedByVendor ?? 0,
     quarantined: row?.quarantined ?? 0,
@@ -210,8 +208,8 @@ export async function sampleSyncEngineMetrics(
     let holds = 0;
     let conditions = 0;
     for (const page of engaged) {
-      const held = holdsInForce(page, now);
-      holds += (held.page === null ? 0 : 1) + held.resources.length;
+      const held = holdsOf(page, now);
+      holds += held.page.length + held.resources.length;
       conditions += (await collectPageAlerts(db, { page, registry: input.registry, money })).length;
     }
     const sum = (pick: (row: (typeof rows)[number]) => number) => rows.reduce((total, row) => total + pick(row), 0);

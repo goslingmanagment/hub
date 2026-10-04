@@ -25,8 +25,10 @@ import type { RouteState, RouteStateEntry } from "./route-policy.ts";
 // that answered it the same way, to the letter, without a slowdown or a
 // ladder step (it is no quota answer).
 //
-// The state lives in the page's route-state namespace (`route-policy.ts`,
-// written by `writeSyncRouteState` only); this file is pure.
+// The state lives in the route-scope rows of the page's hold set
+// (`sync_holds`: `route_hold`, `route_budget`; read by `route-policy.ts`
+// `routeStateOfHolds`, written by `writeSyncRouteState` only); this file is
+// pure.
 
 /** A route 429 without `Retry-After` (owner decision №14): by the ladder step
  *  of the route's slowdown. */

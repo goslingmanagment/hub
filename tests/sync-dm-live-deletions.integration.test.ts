@@ -20,6 +20,7 @@ import { DM_LIVE_DELETIONS_OVERFLOW_BATCH } from "../apps/runtime/src/sync/fansl
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { seedWsCapturePage, seedWsThread, wsCreated, wsDeleted, wsMessage, type WsCapturePage } from "./helpers/fansly-ws-capture.ts";
 import { runActorUntil, until } from "./helpers/sync-engine.ts";
+import { pageHoldKindOf } from "./helpers/sync-holds.ts";
 import {
   makeTestActor,
   quietLogger,
@@ -374,7 +375,6 @@ describe("dm-live.deletions on a live page", () => {
   it.each([
     ["auth", "infinity"],
     ["identity_mismatch", "infinity"],
-    ["rate_limit", 120_000],
     ["network", 60_000],
   ] as const)("a %s page hold delays requests only: the deletion is carried under it, and the hold stays (ruling 9)", async (kind, forMs) => {
     if (!testDb) return;
@@ -384,7 +384,6 @@ describe("dm-live.deletions on a live page", () => {
       pageId: page.pageId,
       kind,
       until: forMs === "infinity" ? "infinity" : new Date(Date.now() + forMs),
-      step: 1,
       detail: {},
     });
     const metrics = new RecordingMetrics();
@@ -396,7 +395,7 @@ describe("dm-live.deletions on a live page", () => {
     expect((await archiveRow(page.pageId, ids[2]))!.deleted_at).not.toBeNull();
     expect(await threadWindow(threadId)).toMatchObject({ stored_message_count: 2, newest_stored_message_id: ids[1] });
     expect(metrics.get("sync_steps_before_gate")).toBe(1);
-    expect((await getSyncPage(db(), page.pageId))!.holdKind).toBe(kind);
+    expect(pageHoldKindOf((await getSyncPage(db(), page.pageId))!)).toBe(kind);
   }, 30_000);
 
   it("the pacer's closed slot does not delay it: carried while the takeover floor keeps the first request a minute away", async (context) => {

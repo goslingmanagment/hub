@@ -14,6 +14,7 @@ import {
 } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { seedSyncPage, setModeDirect } from "./helpers/sync-engine-host.ts";
+import { clearPageHolds, seedPageHold } from "./helpers/sync-holds.ts";
 
 /**
  * `/health/sync` for Fansly pages (design step 3 §3.2 item 1, E14; step 4
@@ -124,11 +125,7 @@ describe("/health/sync on engine pages", () => {
     await beat(pages.stale, 120);
     await setModeDirect(testDb!.pool, pages.auth, "live");
     await beat(pages.auth, 1);
-    await testDb!.pool.query(
-      `update sync_pages set hold_kind = 'auth', hold_until = 'infinity', hold_since = clock_timestamp(),
-              hold_detail = '{"status":401,"credentialsGeneration":null}'::jsonb where page_id = $1`,
-      [pages.auth],
-    );
+    await seedPageHold(testDb!, { pageId: pages.auth, kind: "auth", untilSeconds: "infinity", detail: { status: 401, credentialsGeneration: null } });
     await setModeDirect(testDb!.pool, pages.stuck, "handover");
     await beat(pages.stuck, 2);
     await modeChangedMinutesAgo(pages.stuck, 11);
@@ -239,34 +236,23 @@ describe("/health/sync on engine pages", () => {
     expect(down.wsDownSeconds).toBeGreaterThanOrEqual(110);
   });
 
-  it("an identity hold degrades the page; an expired rate-limit hold does not", async () => {
+  it("an identity hold degrades the page; a network hold that has ended does not", async () => {
     await setModeDirect(testDb!.pool, pages.live, "live");
     await beat(pages.live, 1);
-    await testDb!.pool.query(
-      `update sync_pages set hold_kind = 'identity_mismatch', hold_until = 'infinity', hold_since = clock_timestamp(),
-              hold_detail = '{}'::jsonb where page_id = $1`,
-      [pages.live],
-    );
+    await seedPageHold(testDb!, { pageId: pages.live, kind: "identity_mismatch", untilSeconds: "infinity" });
     expect((await health([pages.live])).byId.get(pages.live)).toMatchObject({
       status: "degraded",
       issues: ["engine:identity_mismatch_hold"],
     });
-    await testDb!.pool.query(
-      `update sync_pages set hold_kind = 'rate_limit', hold_until = clock_timestamp() - interval '1 second'
-        where page_id = $1`,
-      [pages.live],
-    );
+    await clearPageHolds(testDb!, pages.live);
+    await seedPageHold(testDb!, { pageId: pages.live, kind: "network", untilSeconds: -1 });
     expect((await health([pages.live])).byId.get(pages.live)).toMatchObject({ status: "ok", engine: { hold: null } });
   });
 
   it("the status snapshot behind it reads every block of an engine page as the engine's", async () => {
     await setModeDirect(testDb!.pool, pages.auth, "live");
     await beat(pages.auth, 1);
-    await testDb!.pool.query(
-      `update sync_pages set hold_kind = 'auth', hold_until = 'infinity', hold_since = clock_timestamp(),
-              hold_detail = '{}'::jsonb where page_id = $1`,
-      [pages.auth],
-    );
+    await seedPageHold(testDb!, { pageId: pages.auth, kind: "auth", untilSeconds: "infinity" });
     const snapshot = await getSyncStatusSnapshot(app, { pageIds: [pages.auth, pages.unowned, pages.onlyfans] });
     const engine = snapshot.pages.find((page) => page.pageId === pages.auth)!;
     for (const block of Object.values(engine.blocks)) {

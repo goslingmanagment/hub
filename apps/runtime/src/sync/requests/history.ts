@@ -51,23 +51,16 @@ import {
   type SyncWorkRow,
   type UpsertDemandInput,
 } from "@agency_hub_core/db";
-import { activeFanslyPageHold, getFanslyDmMessageSyncExcludedReason, isIndefinite, type AppConfig } from "@agency_hub_core/shared";
+import { getFanslyDmMessageSyncExcludedReason, isIndefinite, type AppConfig } from "@agency_hub_core/shared";
 
 import { recordAudit } from "../../services/auth.ts";
 import { loadEffectiveConfig } from "../../services/effective-config.ts";
-import { type ResourceHoldEntry } from "../engine/errors.ts";
-import {
-  EMPTY_ROUTE_STATE,
-  parseRouteState,
-  routeAdmissionView,
-  routeJournalLookbackMs,
-  RouteClocks,
-} from "../engine/route-policy.ts";
+import { EMPTY_HOLD_SET, heldByScope, holdSetOf, type HoldSet, type RouteAdmissionView } from "../engine/admission.ts";
+import { EMPTY_ROUTE_STATE, routeAdmissionView, routeJournalLookbackMs, RouteClocks } from "../engine/route-policy.ts";
 import {
   estimateSlotOpensAt,
   explainWork,
   ownerRunning,
-  type RouteAdmissionView,
   type StatusPage,
   type StatusWork,
   type WaitingReason,
@@ -391,17 +384,17 @@ interface EtaSlowdown {
 
 interface PageEtaContext {
   page: SyncPageRow | null;
+  /** The page's hold set (none without a page row). */
+  holds: HoldSet;
   settingMs: number;
   /** The requests class's reads a minute between holds. */
   capacity: RequestsCapacity;
   slowdown: EtaSlowdown | null;
   /** The history read route's own hold in force (a 429's), when it ends. */
   routeHoldUntil: Date | null;
-  /** The page's route state is one this build cannot read: it admits
-   *  nothing (the diagnostic); null: it reads. */
-  routeStateError: string | null;
-  /** The route admission, for each fan's "why waiting". */
-  routes: RouteAdmissionView;
+  /** The route admission, for each fan's "why waiting" (null: the page's
+   *  route state is one this build cannot read — it admits nothing). */
+  routes: RouteAdmissionView | null;
   /** The page's open requests in round-robin order. */
   openRequests: Array<{ id: number; ref: string; runnable: boolean }>;
 }
@@ -417,7 +410,8 @@ async function pageEtaContext(ctx: HistoryServiceContext, pageId: number): Promi
   const page = await getSyncPage(ctx.db, pageId);
   const settingMs = (await loadEffectiveConfig(ctx.db, ctx.rawConfig)).fanslyDefaultDelayMs;
   const now = page?.dbNow ?? new Date();
-  const read = parseRouteState(page?.routeState ?? null);
+  const holds = page === null ? EMPTY_HOLD_SET : holdSetOf(page.holds);
+  const read = holds.routes;
   const state = read.ok ? read.state : EMPTY_ROUTE_STATE;
   const sends = page === null
     ? []
@@ -426,9 +420,9 @@ async function pageEtaContext(ctx: HistoryServiceContext, pageId: number): Promi
   const route = clocks.view(HISTORY_READ_ROUTE);
   const family = route.family === null ? null : clocks.familyView(route.family);
   const use = budgetUseOf(await readRouteUse(ctx.db, { pageId, withinMs: ETA_USE_WINDOW_MS }), ETA_USE_WINDOW_MS);
-  const stateError = read.ok ? null : read.diagnostic;
   return {
     page,
+    holds,
     settingMs,
     capacity: requestsCapacity({
       settingMs,
@@ -440,22 +434,22 @@ async function pageEtaContext(ctx: HistoryServiceContext, pageId: number): Promi
       ? { route: route.route, effectivePerMin: route.effectivePerMin, currentPerMin: route.currentPerMin }
       : null,
     routeHoldUntil: route.holdUntil !== null && route.holdUntil.getTime() > now.getTime() ? route.holdUntil : null,
-    routeStateError: stateError,
-    routes: routeAdmissionView(read.ok ? clocks : null, stateError, FANSLY_RESOURCE_SPECS, now),
+    routes: read.ok ? routeAdmissionView(clocks, FANSLY_RESOURCE_SPECS, now) : null,
     openRequests: await listOpenRequestsForPage(ctx.db, { pageId }),
   };
 }
 
 /** A known stop of a request's reads, shown beside its estimate (never in
- *  it): the page's hold, a route state this build cannot read (the page
+ *  it), by the hold evaluator: what holds the page itself (a credentials or
+ *  network hold, rows of its hold set this build cannot read — the page
  *  admits nothing), or the history read route's own hold. Until null: no
  *  known instant ends it (an auth or identity hold only new credentials
- *  lift; an unreadable route state, the operator). */
+ *  lift; unreadable rows, the operator). */
 function etaHold(eta: PageEtaContext, now: Date): { scope: "page" | "route"; until: Date | null } | null {
-  const held = eta.page === null ? null : activeFanslyPageHold(statusPageOf(eta.page), now);
-  if (held !== null) return { scope: "page", until: isIndefinite(held.until) ? null : held.until };
-  if (eta.routeStateError !== null) return { scope: "page", until: null };
-  if (eta.routeHoldUntil !== null) return { scope: "route", until: eta.routeHoldUntil };
+  const held = heldByScope(eta.holds, eta.routes, { plannedRoute: HISTORY_READ_ROUTE }, now);
+  if (held.page !== null) return { scope: "page", until: held.page.until === null || isIndefinite(held.page.until) ? null : held.page.until };
+  // The route's budget is the estimate's business; its hold is a stop.
+  if (held.route?.scope === "route_hold") return { scope: "route", until: eta.routeHoldUntil ?? held.route.until };
   return null;
 }
 
@@ -982,17 +976,13 @@ function iso(date: Date | null | undefined): string | null {
   return date === null || date === undefined || isIndefinite(date) ? null : date.toISOString();
 }
 
-function statusPageOf(page: SyncPageRow): StatusPage {
+function statusPageOf(page: SyncPageRow, holds: HoldSet): StatusPage {
   return {
     mode: page.mode,
     pausedAll: page.pausedAll,
     pausedRequests: page.pausedRequests,
     pausedResources: page.pausedResources,
-    holdKind: page.holdKind,
-    holdUntil: page.holdUntil,
-    holdSince: page.holdSince,
-    holdDetail: page.holdDetail,
-    resourceHolds: page.resourceHolds as Record<string, ResourceHoldEntry>,
+    holds,
     owner: page.owner,
   };
 }
@@ -1022,13 +1012,13 @@ function requestWaiting(eta: PageEtaContext, now: Date): { reason: WaitingReason
   const page = eta.page;
   if (page === null) return { reason: "ownership_unconfirmed", until: null };
   if (page.pausedAll || page.pausedRequests) return { reason: "paused", until: null };
-  const status = statusPageOf(page);
+  const status = statusPageOf(page, eta.holds);
   if (page.mode !== "live" || !ownerRunning(status, now)) return { reason: "ownership_unconfirmed", until: null };
   const hold = etaHold(eta, now);
   if (hold === null) return null;
-  // A route's hold is its budget's business (`pacer`, as "why waiting" names
-  // a route its hold or budget keeps closed).
-  return { reason: hold.scope === "page" ? "page_hold" : "pacer", until: hold.until };
+  // The hold of the route every history read takes (`route_hold`, as "why
+  // waiting" names a route a 429 holds).
+  return { reason: hold.scope === "page" ? "page_hold" : "route_hold", until: hold.until };
 }
 
 const OPEN_ITEM_STATES: ReadonlySet<string> = new Set(HISTORY_ITEM_OPEN_STATES);
@@ -1070,7 +1060,7 @@ function itemView(item: HistoryItemRow, depth: HistoryDepth, inputs: ViewInputs,
   const waiting = paused
     ? { reason: "paused" as const, until: null }
     : open && work !== undefined && eta !== undefined && page !== null
-    ? explainWork(statusWorkOf(work), statusPageOf(page), {
+    ? explainWork(statusWorkOf(work), statusPageOf(page, eta.holds), {
       slotOpensAt: estimateSlotOpensAt({
         lastSendAt: page.lastSendAt,
         lastCompletedAt: page.lastCompletedAt,

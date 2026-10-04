@@ -196,6 +196,8 @@ const ENGINE_REASON_LABELS: Record<string, string> = {
   pacer: "Queued",
   class_share: "Queued",
   page_hold: "Page held",
+  route_budget: "Queued",
+  route_hold: "Endpoint held (429)",
   resource_hold: "Resource held",
   subject_breaker: "Backing off",
   blocked_by_vendor: "Refused by Fansly",
