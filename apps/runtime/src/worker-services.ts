@@ -1,4 +1,3 @@
-import { startFanslyWsWorker } from "./services/fansly-ws/worker.ts";
 import { startFanslyWsLiveTimer } from "./services/fansly-ws/live-apply.ts";
 import { routeFanslyWsReceiptDemand } from "./sync/fansly/ws/route-receipt.ts";
 import { ensureOfapiMediaQueue, OFAPI_MEDIA_SWEEP_QUEUE, runOfapiMediaUploadSweep } from "./services/ofapi-media-worker.ts";
@@ -62,7 +61,6 @@ import {
   ensureAiMediaDescribeSweepQueue,
   runAiMediaDescribeSweepJob,
 } from "./services/ai-media-describe/sweep.ts";
-import { createFanslyFastLane } from "./services/ai-media-describe/fansly-fast-lane.ts";
 import { startAiMediaDescribeLoop } from "./services/ai-media-describe/loop.ts";
 import { runDmCorrectionsReconcile } from "./services/dm-corrections-reconciler.ts";
 import { runOfapiDmReadthroughReconcile } from "./services/ofapi-dm-readthrough.ts";
@@ -639,14 +637,10 @@ export async function startWorkerServices(
   // minutely job's slot, so still one image at a time from this process.
   const aiMediaDescribeLoop = startAiMediaDescribeLoop(app);
 
-  // AI media fast lane (AI_MEDIA_DESCRIBE_FANSLY_FAST_LANE_MODE, off): told
-  // about each committed B0 frame; reads a fan's fresh media conversation.
-  const fanslyFastLane = createFanslyFastLane(app);
-  const fanslyWs = startFanslyWsWorker(app, { onCaptured: fanslyFastLane.onCaptured });
   // Live overlay replay + passive parity over every Fansly page (plan §7.2);
   // its first pass at start is the start-up replay. No HTTP. Each ack routes
   // the receipt's demand on pages the Sync Engine owns (I18; a no-op on
-  // `off`/`shadow` pages).
+  // `off`/`shadow` pages). The pages' sockets run in the `sync` process.
   const fanslyWsLive = startFanslyWsLiveTimer(app, { afterAck: routeFanslyWsReceiptDemand });
   const domainEventsSmoke = startDomainEventsSmokeConsumer(app);
   await startGoldenSignalWorker(app, boss);
@@ -735,12 +729,8 @@ export async function startWorkerServices(
       await aiMediaDescribeLoop.stop().catch((error) => {
         app.logger.warn({ err: error }, "AI media describe loop failed during shutdown");
       });
-      await fanslyWs.stop();
       await fanslyWsLive.stop().catch((error) => {
         app.logger.warn({ err: error }, "Fansly live overlay timer failed during shutdown");
-      });
-      await fanslyFastLane.stop().catch((error) => {
-        app.logger.warn({ err: error }, "AI media fast lane failed during shutdown");
       });
       await domainEventsSmoke.stop().catch((error) => {
         app.logger.warn({ err: error }, "v2 smoke consumer failed during shutdown");

@@ -1,6 +1,5 @@
 export * from "./fansly-ws-capture.ts";
 export * from "./fansly-ws-hints.ts";
-export * from "./fansly-ws-media.ts";
 export * from "./fansly-ws-messages.ts";
 export * from "./fansly-live-overlay-read.ts";
 export * from "./fansly-ws-hint-policy.ts";

@@ -43,13 +43,13 @@ import type { DemandSignal } from "../../engine/resource.ts";
 import { routeFanslyWsReceiptDemand } from "./route-receipt.ts";
 
 // The page's WebSocket in the `sync` process (step-3 design §3.3, S2 §6.3): the
-// step-1 receiver (`services/fansly-ws/worker.ts` `runPage`) re-cut around the
-// engine's pacer. One source per LIVE page slot of the host (a shadow page has
-// none: the legacy worker owns its socket).
+// step-1 receiver re-cut around the engine's pacer; the legacy receiver it came
+// from is gone (step 4, S4-12). One source per LIVE page slot of the host (a
+// page that is not live has no socket).
 //
 // - Ownership (J6): the source holds the page's socket lock `(58213, page)` on
-//   its own dedicated session for as long as it runs — the lock the legacy
-//   receiver takes, so the two can never both hold a page's socket. Every
+//   its own dedicated session for as long as it runs, so no two sources (an
+//   old host draining, a new one starting) ever both hold a page's socket. Every
 //   capture and status write goes through that session (step-1 rule). A lost
 //   session ends the connection without a drain; the source takes the lock
 //   again and asks for a new connection.
@@ -85,7 +85,7 @@ import { routeFanslyWsReceiptDemand } from "./route-receipt.ts";
  *  `sync` (the leftovers stay pending for the worker timer, I18). */
 export const SYNC_WS_APPLY_DRAIN_MS = 10_000;
 
-/** The reconnect ladder (the step-1 receiver's, `worker.ts`): after `f`
+/** The reconnect ladder (the step-1 receiver's): after `f`
  *  failed connections the next is due `min(60 s, 1.5 s × 2^min(f, 6)) ×
  *  U[0.8, 1.2]` later; after 10 failures in a row, 30 minutes. A connection
  *  that stayed up a minute resets the count. */
@@ -473,8 +473,8 @@ export class FanslyWsSource {
         logger.warn({ pageId, err: errorName(error) }, "Fansly sync WS: the socket lock session could not be opened");
       }
       if (owner === null) {
-        // Another session holds the page's socket (the legacy receiver
-        // drops a page leaving its mode within its 10 s poll).
+        // Another session holds the page's socket (a host still releasing
+        // the page): look again shortly.
         this.#state = "idle";
         metrics.increment("sync_ws_lock_held_elsewhere", { pageId });
         await this.#sleep(this.#timing.recheckMs);

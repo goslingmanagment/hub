@@ -35,6 +35,7 @@ import { fanslyPageSendGuard } from "../fansly-send-guard/index.ts";
 import {
   AI_MEDIA_DESCRIBE_ACCOUNT_STOP_SUBKEY,
   AI_MEDIA_DESCRIBE_BREAKER_SUBKEY,
+  AI_MEDIA_DESCRIBE_FAST_LANE_SUBKEY,
   incidentKey,
   openCriticalNotificationIncident,
   resolveCriticalNotificationIncident,
@@ -214,24 +215,32 @@ async function isAccountStopped(app: AppContext) {
   return incident?.status === "open";
 }
 
-/** Owner, 2026-09-30: the refusal breaker is removed (refusals of explicit
- * images are a normal outcome, not a provider fault). A breaker incident left
- * open by an older build resolves on the next sweep. */
-async function resolveRetiredBreakerIncident(app: AppContext, now: Date): Promise<void> {
-  const incident = await getNotificationIncidentByKey(app.db, incidentKey({
-    kind: "ai_provider_failed",
-    platformAccountId: null,
-    subKey: AI_MEDIA_DESCRIBE_BREAKER_SUBKEY,
-  }));
-  if (incident?.status === "open") {
-    await resolveCriticalNotificationIncident(app, {
+/** Latches whose producer is gone; one an older build left open resolves on
+ * the next sweep. The refusal breaker (owner, 2026-09-30: refusals of explicit
+ * images are a normal outcome, not a provider fault) and the Fansly fast lane
+ * (step 4, S4-12: deleted with the legacy WebSocket receiver). */
+const RETIRED_INCIDENTS = [
+  { subKey: AI_MEDIA_DESCRIBE_BREAKER_SUBKEY, platform: null },
+  { subKey: AI_MEDIA_DESCRIBE_FAST_LANE_SUBKEY, platform: "fansly" },
+] as const;
+
+async function resolveRetiredIncidents(app: AppContext, now: Date): Promise<void> {
+  for (const { subKey, platform } of RETIRED_INCIDENTS) {
+    const incident = await getNotificationIncidentByKey(app.db, incidentKey({
       kind: "ai_provider_failed",
       platformAccountId: null,
-      pageLabel: null,
-      platform: null,
-      subKey: AI_MEDIA_DESCRIBE_BREAKER_SUBKEY,
-      recoveredAt: now,
-    });
+      subKey,
+    }));
+    if (incident?.status === "open") {
+      await resolveCriticalNotificationIncident(app, {
+        kind: "ai_provider_failed",
+        platformAccountId: null,
+        pageLabel: null,
+        platform,
+        subKey,
+        recoveredAt: now,
+      });
+    }
   }
 }
 
@@ -270,7 +279,7 @@ export async function runAiMediaDescribeSweep(
   if (await isAccountStopped(app)) {
     return { ...result, skipped: "account_stopped" };
   }
-  await resolveRetiredBreakerIncident(app, startedAt);
+  await resolveRetiredIncidents(app, startedAt);
 
   const pagesById = new Map(pages.map((page) => [page.id, page]));
   const model = effective.aiMediaDescribeModel ?? MEDIA_DESCRIBE_DEFAULT_MODEL;

@@ -81,8 +81,6 @@ const SANCTIONED_DELETER_FILES = [
   "apps/runtime/src/sync/engine/resource.ts",
   "apps/runtime/src/sync/engine/watchdog.ts",
   "apps/runtime/src/sync/inspect.ts",
-  // B0: Map.delete releases an in-memory supervisor handle only. No SQL deletion.
-  "apps/runtime/src/services/fansly-ws/worker.ts",
   // Plan §2.5 send guard: Map/Set.delete forget this process's lease handles
   // once their completion is written. No SQL deletion.
   "apps/runtime/src/services/fansly-send-guard/engine.ts",

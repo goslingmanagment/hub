@@ -13,11 +13,7 @@ import { FanslyApiError } from "@agency_hub_core/fansly";
 import { isFanslyDmMessageSyncExcluded, type HttpRequestObserver } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
-import {
-  aiMediaNotesPolicyForPage,
-  isAiMediaDescribeWindowOpen,
-  isFanslyFastLaneServing,
-} from "../ai-media-describe/policy.ts";
+import { aiMediaNotesPolicyForPage, isAiMediaDescribeWindowOpen } from "../ai-media-describe/policy.ts";
 import { loadEffectiveConfig } from "../effective-config.ts";
 import type { ResolvedFanslyPageContext } from "../page-context.ts";
 import type { ExecutorRequestContext } from "./executor-types.ts";
@@ -40,9 +36,6 @@ class AcceleratorDeferred extends Error {}
 
 const PER_CONVERSATION_GAP_MS = 2 * 60 * 1000;
 const STALE_AFTER_MS = 30 * 60 * 1000;
-/** While the fast lane serves the page, fresh requests are its to take; the
- * chunk step only picks up what it left (a restart, a busy egress). */
-const FAST_LANE_HANDOFF_MS = 60 * 1000;
 
 export async function runAiMediaAcceleratorStep(
   app: AppContext,
@@ -73,7 +66,6 @@ export async function runAiMediaAcceleratorStep(
   try {
     claim = await owned((db) => claimAiMediaAcceleratorRead(db, {
       pageId, now: new Date(), perConversationGapMs: PER_CONVERSATION_GAP_MS, staleAfterMs: STALE_AFTER_MS,
-      ...(isFanslyFastLaneServing(effective, label) ? { minAgeMs: FAST_LANE_HANDOFF_MS } : {}),
     }));
   } catch (error) {
     if (error instanceof AcceleratorDeferred) return;
@@ -106,7 +98,7 @@ export async function runAiMediaAcceleratorStep(
         const admission = await owned((db) => admitAiMediaAcceleratorReadOutcome(db, {
           id: claim!.id, requestId: event.requestId, limit24h, now: new Date(),
         }));
-        // Taken: the fast lane admitted it first; the row is its to settle.
+        // Taken: another claimant admitted it first; the row is its to settle.
         if (admission === "taken") throw new AcceleratorDeferred("capacity");
         if (admission === "cap") throw new AcceleratorDeferred("budget_exhausted");
         admitted += 1;

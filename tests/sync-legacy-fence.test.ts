@@ -88,11 +88,6 @@ describe("the legacy schedulers carry the predicate", () => {
     expect(body).toContain('legacyOwnsFanslyPageSql(sql.raw("st.page_id"))');
   });
 
-  it("the AI fast lane holds an engine page", () => {
-    expect(functionBody("packages/db/src/repositories/ai-media-descriptions.ts", "getFanslyFastLanePageSyncGate"))
-      .toContain("engineOwnsFanslyPageSql(sql`${input.pageId}`)} as held");
-  });
-
   it("the hydration dispatcher and auto-approval skip engine pages; the sweeps skip engine rows", () => {
     const hydration = "packages/db/src/repositories/agent-hydration.ts";
     for (const name of ["listDispatchableAgentHydrationRequests", "listAutoApprovableAgentHydrationRequests"]) {
@@ -114,9 +109,6 @@ describe("the legacy schedulers carry the predicate", () => {
 
 describe("the legacy processes ask before they act", () => {
   it.each([
-    ["apps/runtime/src/services/fansly-ws/worker.ts", "startFanslyWsWorker", "listEngineOwnedFanslyPages(app.db)"],
-    ["apps/runtime/src/services/fansly-ws/worker.ts", "runPage", "isFanslyPageEngineOwned(owner.db, stored.page.id)"],
-    ["apps/runtime/src/services/fansly-ws/worker.ts", "runPage", "isFanslyPageOwnedBySyncEngineError(error)"],
     ["apps/runtime/src/services/ai-media-describe/worker.ts", "downloadAiMediaThroughPageEgress", "isFanslyPageEngineOwned(app.db, input.pageId)"],
     // S3-05: the /account/me levers route a live page through the engine and
     // refuse a page being switched before anything is resolved or sent.
@@ -126,7 +118,6 @@ describe("the legacy processes ask before they act", () => {
     ["apps/runtime/src/services/fansly-endpoint-probe.ts", "runFanslyEndpointProbe", "assertLegacyOwnsFanslyPageLabels(app, options.pageLabels"],
     ["apps/runtime/src/services/fansly-page-alias-backfill.ts", "backfillFanslyPageAliases", "assertLegacyOwnsFanslyPageLabels(app, requestedPageLabels"],
     ["apps/runtime/src/services/fansly-page-alias-backfill.ts", "backfillFanslyPageAliases", "listEngineOwnedFanslyPages(app.db)"],
-    ["apps/runtime/src/services/fansly-ws-policy-repair.ts", "inspectBinding", "await fanslyAccountRoute(app, known.page)"],
   ])("%s %s", (path, name, check) => {
     expect(functionBody(path, name)).toContain(check);
   });
@@ -155,14 +146,6 @@ describe("the legacy processes ask before they act", () => {
     const refusal = cli.indexOf("await assertLegacyOwnsFanslyPageId(app, thread.platformAccountId, SYNC_ENGINE_HINTS.history);");
     expect(refusal).toBeGreaterThan(0);
     expect(refusal).toBeLessThan(cli.indexOf("const jobId = await queueTargetedThreadBackfill("));
-  });
-
-  it.each([
-    "scripts/fansly-ws/binding-preflight.ts",
-    "scripts/fansly-ws/continuity-runtime.ts",
-    "scripts/fansly-ws/probe.ts",
-  ])("the operator script %s checks before its snapshot", (path) => {
-    expect(source(path)).toMatch(/await refuseEngineOwnedPage\(db, [^)]+\);\s*\S+ = await readProbeSnapshot\(/);
   });
 });
 
