@@ -119,9 +119,12 @@ open, resolves on the describer's next sweep.
   Candidates: a projector over `message.attachments_observed` (fan media after
   `since`; `pending` in a chat with an AI generation in 7 days, else
   `dormant`); teasers and free creator media when a generation shows them.
-  Accelerator (off): a WS frame with a fan's attachments → one journal-only
-  head read of that conversation (own budget, 60 per rolling 24 h agency-wide,
-  one per conversation per 2 minutes).
+  A media file the hub has not captured yet waits (`awaiting_source`): on a
+  page the Fansly Sync Engine reads, its socket confirmation reads the
+  conversation's head. The in-chunk accelerator and its keys
+  `AI_MEDIA_DESCRIBE_FANSLY_ACCELERATOR_ENABLED` / `_DAILY_LIMIT` are retired
+  since step 4 (S4-14); the keys are ignored (removed in S4-26). Its rows stay
+  as records: `ai_media_accelerator_reads` with `lane = 'chunk'`.
 - **OnlyFans** (0216): locators of the desktop images layer, **free sources
   only** — webhook `Expires` URLs (≥120 s left) and `cdn.fansapi.com` URLs the
   desktop resolve handed out (now persisted as `source = 'resolve'`). `policy`
@@ -147,7 +150,6 @@ open, resolves on the describer's next sweep.
 | `AI_MEDIA_DESCRIBE_LIVE_CHAT_ONLY` | on | fan media described on arrival only in chats with an AI generation in 7 days |
 | `AI_MEDIA_DESCRIBE_MODEL_MEDIA` | `teasers` | creator media: `teasers` or `teasers+free` |
 | `AI_MEDIA_DESCRIBE_LOOP_ENABLED` | off | describe due rows within seconds (1 s loop) instead of per minute; re-read every 15 s |
-| `AI_MEDIA_DESCRIBE_FANSLY_ACCELERATOR_DAILY_LIMIT` | 60 | in-chunk accelerator reads per rolling 24 h |
 | `ANTHROPIC_MEDIA_API_KEY` | unset | optional separate key/workspace (env, restart) |
 
 `since` is the enable boundary: only messages strictly newer are described; a

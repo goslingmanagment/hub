@@ -3,10 +3,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import {
-  isDmHeadStaleByTime,
-  resolveDmConversationCoverageStatus,
-} from "../apps/runtime/src/services/sync/fansly-dm-messages.ts";
+import { resolveDmConversationCoverageStatus } from "../apps/runtime/src/services/sync/fansly-dm-messages.ts";
 import { trimFanslyMessagingGroupsPayload } from "../apps/runtime/src/sync/fansly/lib/capture-trims.ts";
 import { normalizeDmTipAmountCents } from "../apps/runtime/src/sync/fansly/lib/dm-normalize.ts";
 import { normalizeFanslyTimestamp } from "../apps/runtime/src/sync/fansly/lib/timestamp.ts";
@@ -214,19 +211,6 @@ describe("Fansly DM fixtures", () => {
     expect(resolveDmConversationCoverageStatus(input)).toBe(clean);
     expect(resolveDmConversationCoverageStatus({ ...input, normalizationDebt: false })).toBe(clean);
     expect(resolveDmConversationCoverageStatus({ ...input, normalizationDebt: true })).toBe(withDebt);
-  });
-
-  it("treats a head as due only when it differs from the newest stored message and arrived after the last head read", () => {
-    const headAt = new Date("2026-03-10T12:00:00.000Z");
-    const base = {
-      lastMessageId: "head", newestStoredMessageId: "older", lastMessageAt: headAt, lastMessageSyncAt: null,
-    };
-    expect(isDmHeadStaleByTime(base)).toBe(true);
-    expect(isDmHeadStaleByTime({ ...base, lastMessageSyncAt: new Date("2026-03-10T11:59:59.000Z") })).toBe(true);
-    expect(isDmHeadStaleByTime({ ...base, lastMessageSyncAt: headAt })).toBe(false);
-    expect(isDmHeadStaleByTime({ ...base, lastMessageAt: null, lastMessageSyncAt: headAt })).toBe(false);
-    expect(isDmHeadStaleByTime({ ...base, newestStoredMessageId: "head" })).toBe(false);
-    expect(isDmHeadStaleByTime({ ...base, lastMessageId: null, newestStoredMessageId: null })).toBe(false);
   });
 
   it("normalizes provider DM tip units into stored cents", () => {

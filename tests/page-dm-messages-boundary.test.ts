@@ -85,14 +85,11 @@ const SANCTIONED_FILES: Record<string, string> = {
   "packages/db/src/repositories/sync/dm-reader-parity.ts": "the reader parity",
   "packages/db/src/repositories/sync/dm-messages.ts": "the replay's comparison with the rows legacy stored",
   "packages/db/src/repositories/sync/observability.ts": "the shadow report: when legacy first held a message",
-  // Legacy Fansly DM code, idle since S4-10, deleted by the PR named.
-  "apps/runtime/src/services/sync/fansly-dm-messages.ts": "the legacy DM lane (S4-14)",
-  "apps/runtime/src/services/sync/ai-media-accelerator.ts": "the legacy AI accelerator (S4-14)",
-  "packages/db/src/repositories/fansly-dm-head-debt.ts": "the legacy head debt (S4-14)",
-  "packages/db/src/repositories/fansly-dm-reader-heads.ts": "the legacy DM shadow snapshot (S4-14)",
-  "packages/db/src/repositories/fansly-dm-shadow.ts": "the legacy DM shadow (S4-14)",
-  "packages/db/src/repositories/fansly-ws-hints.ts": "the legacy hint claims (S4-14)",
-  "packages/db/src/repositories/sync.ts": "the legacy sync monitor's DM counts (S4-14)",
+  // What is left of the legacy Fansly DM code since S4-14 deleted its handlers.
+  "apps/runtime/src/services/sync/fansly-dm-messages.ts":
+    "comment: the legacy DM page fetch, kept for the targeted backfill (S4-15)",
+  "packages/db/src/repositories/fansly-dm-reader-heads.ts": "the exact-id reader heads of the WS recovery manifest",
+  "packages/db/src/repositories/sync.ts": "the sync monitor's DM message count (listSyncMonitorStreamRows)",
 };
 
 /** Files with an INSERT, UPDATE or DELETE on the table (SQL or Drizzle), and
@@ -113,8 +110,6 @@ const WRITE_STATEMENTS: Record<string, number> = {
 const WRITERS: Record<string, Record<string, string>> = {
   upsertPageDmMessages: {
     "apps/runtime/src/services/ofapi-dm-projection.ts": "OnlyFans",
-    "apps/runtime/src/services/sync/executor-handlers.ts": "the legacy Fansly DM handler (S4-14)",
-    "apps/runtime/src/services/sync/fansly-ws-hints.ts": "the legacy hint claims (S4-14)",
     "apps/runtime/src/services/sync/targeted-thread-backfill.ts": "the legacy targeted backfill (S4-15)",
   },
   deletePageDmMessageByPlatformMessageId: { "apps/runtime/src/services/ofapi-dm-projection.ts": "OnlyFans" },
@@ -129,8 +124,6 @@ const WRITERS: Record<string, Record<string, string>> = {
   refreshPageDmConversationWindow: { "apps/runtime/src/services/ofapi-dm-projection.ts": "OnlyFans" },
   finalizePageDmConversationMessageSync: {
     "apps/runtime/src/services/projection-debt-sweep.ts": "the legacy DM projection debt (S4-15)",
-    "apps/runtime/src/services/sync/executor-handlers.ts": "the legacy Fansly DM handler (S4-14)",
-    "apps/runtime/src/services/sync/fansly-ws-hints.ts": "the legacy hint claims (S4-14)",
     "apps/runtime/src/services/sync/targeted-thread-backfill.ts": "the legacy targeted backfill (S4-15)",
   },
 };

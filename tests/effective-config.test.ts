@@ -178,16 +178,11 @@ describe("LIVE_CONFIG_KEYS", () => {
     // the whole request-count enforcement on the highest-volume lane in the
     // system) and the long-tail cycle, live because it re-aims a running
     // round-robin without a deploy.
-    expect(LIVE_CONFIG_KEYS.has("fanslyDmHeadCatchupPageAllowlist")).toBe(true);
-    expect(LIVE_CONFIG_KEYS.has("fanslyDmShadowPageAllowlist")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyFanEarningsShadowPageAllowlist")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyWsHintsEnabled")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyWsHintsPageAllowlist")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyWsHintsTypeAllowlist")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyWsHintsPolicies")).toBe(true);
-    expect(LIVE_CONFIG_KEYS.has("fanslyDmBoundedEnabled")).toBe(true);
-    expect(LIVE_CONFIG_KEYS.has("fanslyDmBoundedPageAllowlist")).toBe(true);
-    expect(LIVE_CONFIG_KEYS.has("fanslyDmBoundedPolicies")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyFollowersSettlementReuseEnabled")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyFollowersSettlementReusePageAllowlist")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyFanEarningsRecoveryEnabled")).toBe(true);
@@ -213,9 +208,6 @@ describe("LIVE_CONFIG_KEYS", () => {
       "aiMediaDescribeLiveChatOnly",
       "aiMediaDescribeModelMedia",
       "aiMediaDescribeLoopEnabled",
-      // H3: the Fansly freshness accelerator switch and its budget.
-      "aiMediaDescribeFanslyAcceleratorEnabled",
-      "aiMediaDescribeFanslyAcceleratorDailyLimit",
       // Fansly Sync Engine step 1: the live overlay read kill-switch.
       "fanslyLiveOverlayReadPages",
       // Chat extension (hub-pr-plan H-2b): the owner's five switches, read per
@@ -240,6 +232,22 @@ describe("LIVE_CONFIG_KEYS", () => {
     ]) {
       expect(LIVE_CONFIG_KEYS.has(key), key).toBe(false);
     }
-    expect(LIVE_CONFIG_KEYS.size).toBe(98);
+    // Step 4 (S4-14): retired with the legacy DM handlers (the bounded scan, the
+    // sweep shadow, the head catch-up, the deep backfill) and the in-chunk AI
+    // media accelerator — nothing reads them, so no override applies. The
+    // accelerator's daily limit lost its last readers with S4-12 and S4-14.
+    for (const key of [
+      "fanslyDmBoundedEnabled",
+      "fanslyDmBoundedPageAllowlist",
+      "fanslyDmBoundedPolicies",
+      "fanslyDmShadowPageAllowlist",
+      "fanslyDmHeadCatchupPageAllowlist",
+      "fanslyDeepBackfillIgnoreRetentionLimit",
+      "aiMediaDescribeFanslyAcceleratorEnabled",
+      "aiMediaDescribeFanslyAcceleratorDailyLimit",
+    ]) {
+      expect(LIVE_CONFIG_KEYS.has(key), key).toBe(false);
+    }
+    expect(LIVE_CONFIG_KEYS.size).toBe(90);
   });
 });

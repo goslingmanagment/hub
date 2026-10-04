@@ -1546,7 +1546,7 @@ export const pageFans = pgTable(
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).defaultNow().notNull(),
     // 0224: the Fansly account lookup through this page whose result Hub
     // stored, and the DM partner probe's own answer (fan-hydration.ts,
-    // fansly-account-probe.ts). Neither is asked again within a day.
+    // sync/fansly/resources/fan-profiles.ts). Neither is asked again within a day.
     accountLookupAt: timestamp("account_lookup_at", { withTimezone: true }),
     accountProbeAt: timestamp("account_probe_at", { withTimezone: true }),
     accountProbeResolved: boolean("account_probe_resolved"),

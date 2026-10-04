@@ -60,35 +60,6 @@ function firstFailedTaskSummary(entries: ReturnType<typeof listFailedTaskEntries
   return first?.task.statusReason?.summary ?? first?.task.error?.summary ?? null;
 }
 
-function numericMetric(block: SyncDomainBlockStatus, key: string) {
-  const value = block.metrics?.[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function isDeepBackfillOnlyDelay(block: SyncDomainBlockStatus) {
-  if (
-    block.block !== "messages_history" ||
-    block.state !== "delayed" ||
-    block.statusReason?.code !== "history_incomplete"
-  ) {
-    return false;
-  }
-
-  const eligibleConversations = numericMetric(block, "eligibleConversationCount");
-  const readyConversations = numericMetric(block, "readyConversationCount");
-  const laggingConversations = numericMetric(block, "laggingConversationCount");
-  const pendingDeepPages = numericMetric(block, "deepBackfillPendingPagesEstimate");
-
-  return (
-    eligibleConversations !== null &&
-    readyConversations !== null &&
-    laggingConversations === 0 &&
-    pendingDeepPages !== null &&
-    pendingDeepPages > 0 &&
-    readyConversations >= eligibleConversations
-  );
-}
-
 function isOfapiMappedConnectionUsable(block: SyncDomainBlockStatus | undefined) {
   const metrics = block?.metrics ?? {};
   if (!block || !Object.prototype.hasOwnProperty.call(metrics, "ofapiAuthStatus")) {
@@ -358,7 +329,6 @@ export async function getPublicSyncHealth(
       };
     }
     const blocks = page ? Object.values(page.blocks).filter((block) => block.state !== "not_available") : [];
-    const healthBlocks = blocks.filter((block) => !isDeepBackfillOnlyDelay(block));
     const connectionBlock = page?.blocks.connection;
     const hasOfapiConnection = isOfapiMappedConnectionUsable(connectionBlock);
     const allSupportedBlocksPaused = blocks.length > 0 && blocks.every((block) => block.state === "paused");
@@ -366,14 +336,14 @@ export async function getPublicSyncHealth(
     const followerAge = (page?.platform ?? connection?.platform) === "fansly"
       ? ageMinutes(connection?.lastFollowerSyncAt ?? null, now)
       : null;
-    const failedStreams = healthBlocks.filter((block) => block.state === "failed").length;
+    const failedStreams = blocks.filter((block) => block.state === "failed").length;
     const failedTaskEntries = listFailedTaskEntries(blocks);
     // A failed supporting task can be hidden by an up-to-date or paused primary
     // aggregate. Keep failedStreams block-level for compatibility, and surface
     // the otherwise-unrepresented task failure as its own issue.
     const hiddenFailedTaskEntries = failedTaskEntries.filter(({ blockState }) => blockState !== "failed");
-    const stalledStreams = healthBlocks.filter((block) => block.state === "delayed").length;
-    const pendingStreams = healthBlocks.filter((block) =>
+    const stalledStreams = blocks.filter((block) => block.state === "delayed").length;
+    const pendingStreams = blocks.filter((block) =>
       block.state === "scheduled" ||
       block.state === "retrying" ||
       block.state === "syncing" ||
@@ -420,7 +390,7 @@ export async function getPublicSyncHealth(
 
     // #135 A2b (widened by the #137 addendum): any active stream with a wedge-length
     // failure streak degrades the page the same way failed streams do.
-    const wedgedStreams = new Set(healthBlocks.flatMap(retryWedgedStreamNames));
+    const wedgedStreams = new Set(blocks.flatMap(retryWedgedStreamNames));
     for (const stream of wedgedStreams) {
       issues.push(`${stream}:retry_wedged`);
     }
@@ -432,11 +402,13 @@ export async function getPublicSyncHealth(
     // page_dm_message_sync_health rows of OnlyFans pages are historical, left
     // by the permanently retired legacy dm_messages crawler. They are not
     // mirror coverage debt and must not keep /health/sync at 503 after the
-    // retirement fence. The Fansly dm_messages lane writes the table (its
-    // per-thread breaker), so a Fansly page stays coverage_degraded while a
-    // thread the lane still selects carries failures: until a successful read
-    // of that thread clears them, or the thread leaves the lane (excluded,
-    // hidden, unbound).
+    // retirement fence. On a Fansly page the per-thread breaker wrote the table
+    // (the legacy dm_messages lane until step 4 S4-14; the legacy targeted
+    // thread backfill still does), so the page stays coverage_degraded while a
+    // visible, bound, not excluded thread carries failures: until a successful
+    // read of that thread clears them (a targeted backfill, or the Fansly Sync
+    // Engine's DM read), or the thread leaves that set (excluded, hidden,
+    // unbound).
     if (platform !== "onlyfans" && (coverageDebtByPageId.get(pageId) ?? 0) > 0) {
       issues.push("dm_messages:coverage_degraded");
     }
@@ -459,7 +431,7 @@ export async function getPublicSyncHealth(
       stalledStreams,
       pendingStreams,
       lastErrorSummary: firstFailedTaskSummary(hiddenFailedTaskEntries) ??
-        firstErrorSummary(healthBlocks) ??
+        firstErrorSummary(blocks) ??
         (hasOfapiConnection ? null : connection?.lastSyncError ?? null),
       issues,
     };
@@ -475,9 +447,7 @@ export async function getPublicSyncHealth(
     return count + Object.values(page.blocks).filter((block) => block.state === "failed").length;
   }, 0);
   const stalledStreams = snapshot.pages.reduce((count, page) => {
-    return count + Object.values(page.blocks).filter((block) =>
-      block.state === "delayed" && !isDeepBackfillOnlyDelay(block)
-    ).length;
+    return count + Object.values(page.blocks).filter((block) => block.state === "delayed").length;
   }, 0);
   const pendingStreams = snapshot.pages.reduce((count, page) => {
     return count + Object.values(page.blocks).filter((block) =>

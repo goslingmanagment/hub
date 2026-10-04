@@ -11,8 +11,6 @@ import {
   listArchiveConversationMessagesForAi,
   markFanslyWsArchiveDeletions,
   markFanslyWsHotDeletion,
-  observeFanslyDmHead,
-  resolveCapturedFanslyDmHeads,
   searchAgentArchive,
   upsertFans,
   upsertPageDmConversation,
@@ -196,24 +194,6 @@ describe("Fansly WS deletions mark stored messages (D-6)", () => {
     expect((await search("second")).rows.map((row) => [row.messageRef, row.snippet, row.deletedAt]))
       .toEqual([["150", "second", deletedAt]]);
     expect((await search("first")).rows.map((row) => [row.messageRef, row.deletedAt])).toEqual([["149", null]]);
-  });
-
-  it("a marked head the conversation list keeps advertising opens no head debt", async () => {
-    const f = await fixture();
-    // Debt recorded while the head was not yet captured is resolved by the
-    // marked row, and the list naming the deleted head records none.
-    await db.pool.query("insert into fansly_dm_head_debt (conversation_id, message_id) values ($1, '150')", [f.thread.id]);
-    await f.mark("150", new Date(Date.now() - 30_000));
-
-    await resolveCapturedFanslyDmHeads(f.app.db, f.thread.id);
-    expect((await db.pool.query("select message_id, captured_at is not null as captured from fansly_dm_head_debt"))
-      .rows).toEqual([{ message_id: "150", captured: true }]);
-
-    await db.pool.query("delete from fansly_dm_head_debt");
-    await observeFanslyDmHead(f.app.db, {
-      conversationId: f.thread.id, messageId: "150", messageAt: new Date(f.base.getTime() + 60_000),
-    });
-    expect((await db.pool.query("select message_id, captured_at from fansly_dm_head_debt")).rows).toEqual([]);
   });
 
   it("keeps the mark and the captured text when REST reads the message again", async () => {

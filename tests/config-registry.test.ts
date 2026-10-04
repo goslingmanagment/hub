@@ -79,9 +79,6 @@ describe("config registry", () => {
     "accountLinksEnabled",
     "fanslyFollowersSettlementReuseEnabled",
     "fanslyFollowersSettlementReusePageAllowlist",
-    "fanslyDmBoundedEnabled",
-    "fanslyDmBoundedPageAllowlist",
-    "fanslyDmBoundedPolicies",
     // Fansly Sync Engine step 1: the live overlay readers, page by page.
     "fanslyLiveOverlayReadPages",
     "fanslyFanEarningsRecoveryEnabled",
@@ -95,8 +92,6 @@ describe("config registry", () => {
     "fanslyWsHintsTypeAllowlist",
     "fanslyWsHintsPolicies",
     "fanslyFanEarningsShadowPageAllowlist",
-    "fanslyDmShadowPageAllowlist",
-    "fanslyDmHeadCatchupPageAllowlist",
     // Fansly Sync Engine plan §2.1: the owner's one pace setting, editable live and
     // rejected (never clamped) outside 2000..60000 ms.
     "fanslyDefaultDelayMs",
@@ -160,7 +155,6 @@ describe("config registry", () => {
     // it rides on.
     "fanslyPostEngagementRefreshEnabled",
     "fanslyPostEngagementDailyCallBudget",
-    "fanslyDeepBackfillIgnoreRetentionLimit",
     // Fast-reply freshness PR3: union-read mode, read per generation.
     "aiTranscriptFreshUnionMode",
     // Decision #136: fan-dossier context, read per generation.
@@ -186,8 +180,6 @@ describe("config registry", () => {
     "aiMediaDescribeLiveChatOnly",
     "aiMediaDescribeModelMedia",
     "aiMediaDescribeLoopEnabled",
-    "aiMediaDescribeFanslyAcceleratorEnabled",
-    "aiMediaDescribeFanslyAcceleratorDailyLimit",
     // Agent Read Plane (slice 0a): read per request / per cycle so the owner's
     // ramp needs no restart. Every one of them rests at off/false.
     "agentReadPlaneMode",

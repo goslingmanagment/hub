@@ -151,10 +151,7 @@ export * from "./repositories/telegram-settings.ts";
 export * from "./repositories/reporting.ts";
 export * from "./repositories/runtime-instances.ts";
 export * from "./repositories/page-dm.ts";
-export * from "./repositories/fansly-dm-head-debt.ts";
-export * from "./repositories/fansly-dm-shadow.ts";
 export * from "./repositories/fansly-dm-reader-heads.ts";
-export * from "./repositories/fansly-dm-shadow-snapshot.ts";
 export * from "./repositories/fansly-send-guard.ts";
 export * from "./repositories/fansly-send-guard-checks.ts";
 // Fansly Sync Engine core state (0228): pages, the work queue, the attempt

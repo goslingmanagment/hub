@@ -152,20 +152,3 @@ export function isFanslyDmMessageSyncExcluded(
 ) {
   return getFanslyDmMessageSyncExcludedReason(metadata) !== null;
 }
-
-export function buildFanslyDmConversationMetadata(input: {
-  unresolvedIdentity?: boolean;
-  messageSyncExcludedReason?: FanslyDmMessageSyncExcludedReason | null;
-}) {
-  const metadata: Record<string, unknown> = {};
-
-  if (input.unresolvedIdentity) {
-    metadata.unresolvedIdentity = true;
-  }
-
-  if (input.messageSyncExcludedReason) {
-    metadata[FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY] = input.messageSyncExcludedReason;
-  }
-
-  return metadata;
-}
