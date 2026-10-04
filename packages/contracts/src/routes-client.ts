@@ -28,7 +28,7 @@ import {
 } from "@agency_hub_core/shared";
 import { z } from "zod";
 
-import { businessDate, errorResponseSchema, intId, isoTimestamp } from "./primitives.ts";
+import { businessDate, errorResponseSchema, intId, isoTimestamp, mills } from "./primitives.ts";
 
 /** Open token: the wire form of every growing vocabulary (reason, flag, capability, platform, role…). */
 export const clientOpenToken = z.string().min(1).max(64);
@@ -364,6 +364,165 @@ export const clientAiUsageResponseSchema = z.object({
   }).nullable(),
 });
 
+// ── Spenders statistics (H-8b) ───────────────────────────────────────────────
+//
+// The numbers of one page's Spenders panel: 30 local days of money, tiers,
+// silence, new payers and how many payers wait for a reply. The hub counts all
+// of it (packages/shared/src/spender-stats.ts holds what each number means);
+// the client shows what it is sent and never rebuilds a page total from the
+// rows it happens to list.
+//
+// Money is integer mills, signed (a refund is negative). `null` is "unknown",
+// never 0. What the hub cannot vouch for it says in `coverage`.
+
+/** v1 serves one window length; another one is a new value of `windowDays`. */
+export const CLIENT_SPENDER_STATS_WINDOW_DAYS = 30;
+/**
+ * Known values of `coverage.reasons`: why the answer is not `complete`. On the
+ * wire open tokens; a client reads one it does not know as "partial".
+ * - `no_revenue_history`: the page has no transaction and no spender
+ *   projection, so nothing is known (`coverage.state` is `unknown`);
+ * - `projection_missing`: the spender projection was never built; tiers,
+ *   silence and the queue read it;
+ * - `projection_behind`: a transaction is newer than the projection, so tier
+ *   membership may lag the window totals;
+ * - `history_starts_in_window`: the page's oldest transaction is inside the
+ *   window; earlier days may be missing, and a new payer's first purchase is
+ *   only the first one observed (`newPayers.firstPurchaseKnown` is false);
+ * - `messages_missing`: the page has payers and no message at all, so every
+ *   payer's silence is `unknown`.
+ */
+export const CLIENT_SPENDER_STATS_COVERAGE_REASONS = [
+  "no_revenue_history", "projection_missing", "projection_behind", "history_starts_in_window", "messages_missing",
+] as const;
+/**
+ * The two `tiers[].key` rows after the hub's spender buckets, both without
+ * bounds: `untiered` is window spend by fans in no tier, `unattributed` is
+ * window spend whose transaction names no fan. With them the tiers' window
+ * gross sums to `totals.d30.grossMills`.
+ */
+export const CLIENT_SPENDER_STATS_REMAINDER_TIER_KEYS = ["untiered", "unattributed"] as const;
+/** The `reason` beside this route's 400 `bad_request`. */
+export const CLIENT_SPENDER_STATS_REFUSAL_REASONS = ["unknown_time_zone"] as const;
+
+export type ClientSpenderStatsCoverageReason = (typeof CLIENT_SPENDER_STATS_COVERAGE_REASONS)[number];
+export type ClientSpenderStatsRefusalReason = (typeof CLIENT_SPENDER_STATS_REFUSAL_REASONS)[number];
+
+export const clientSpenderStatsQuerySchema = z.object({
+  /** The window, in local dates ending today. v1: 30 only. */
+  windowDays: z.coerce.number().int()
+    .min(CLIENT_SPENDER_STATS_WINDOW_DAYS).max(CLIENT_SPENDER_STATS_WINDOW_DAYS)
+    .default(CLIENT_SPENDER_STATS_WINDOW_DAYS),
+  /** The IANA zone the dates are local to. A zone the hub does not know is refused. */
+  timeZone: z.string().min(1).max(64),
+}).strict();
+
+/** Money of one calendar window. */
+export const clientSpenderStatsMoneyWindowSchema = z.object({
+  /** What fans paid, refunds and chargebacks already in it: purchases + adjustments. */
+  grossMills: mills,
+  purchasesGrossMills: mills,
+  /** Refunds, chargebacks and every other row that is not a purchase. Zero or negative as a rule. */
+  adjustmentsMills: mills,
+  creatorNetMills: mills,
+  purchaseCount: count,
+  /** Distinct fans with a purchase in the window. */
+  payerCount: count,
+});
+
+export const clientSpenderStatsDaySchema = z.object({
+  /** A local date of `timeZone`, YYYY-MM-DD. */
+  date: z.string(),
+  grossMills: mills,
+  purchasesGrossMills: mills,
+  adjustmentsMills: mills,
+  creatorNetMills: mills,
+  purchaseCount: count,
+  /** Gross by transaction state (an open token: `posted`, `pending`, `unknown`); the states sum to `grossMills`. */
+  byState: z.record(clientOpenToken, mills),
+});
+
+export const clientSpenderStatsTierSchema = z.object({
+  /** Open token: a hub spender bucket, or one of CLIENT_SPENDER_STATS_REMAINDER_TIER_KEYS. */
+  key: clientOpenToken,
+  label: z.string(),
+  /** Inclusive lower bound of lifetime gross; null for the two remainders. */
+  minMills: mills.nullable(),
+  /** Exclusive upper bound; null for the top bucket and the two remainders. */
+  maxMills: mills.nullable(),
+  /** Fans whose lifetime gross is in the band (a remainder: fans with window spend). */
+  members: count,
+  /** Of the row's fans, those with a purchase in the window. */
+  windowPayers: count,
+  windowGrossMills: mills,
+});
+
+const clientSpenderStatsSilenceBucketSchema = z.object({
+  fans: count,
+  /** What those fans paid in all: context, not lost revenue and not a forecast. */
+  lifetimeGrossMills: mills,
+});
+
+export const clientSpenderStatsResponseSchema = z.object({
+  pageLabel: z.string(),
+  /** Grows when a definition changes what a number means. */
+  metricVersion: z.number().int().positive(),
+  moneyUnit: z.literal("USD-mills"),
+  basis: z.literal("gross"),
+  /** The zone the dates are local to, as asked. */
+  timeZone: z.string(),
+  /** First and last local date of the window, YYYY-MM-DD; `to` is today in `timeZone`. */
+  from: z.string(),
+  to: z.string(),
+  /** The instant the numbers are of; nothing after it is counted. An answer may be up to a minute old. */
+  asOf: isoTimestamp,
+  /** When the spender projection behind tiers, silence and the queue was last rebuilt; null when never. */
+  projectionAsOf: isoTimestamp.nullable(),
+  /** The transaction states the money counts (open tokens). */
+  includedStates: z.array(clientOpenToken),
+  coverage: z.object({
+    /** Open token; known values: CLIENT_COVERAGE_LEVELS. */
+    state: clientOpenToken,
+    /** Open tokens, empty when complete; known values: CLIENT_SPENDER_STATS_COVERAGE_REASONS. */
+    reasons: z.array(clientOpenToken),
+  }),
+  /** One entry per date of the window, oldest first; a date without a transaction is listed with zeros. */
+  days: z.array(clientSpenderStatsDaySchema),
+  totals: z.object({
+    /** Today so far. */
+    today: clientSpenderStatsMoneyWindowSchema,
+    /** The last 7 dates, today included. */
+    d7: clientSpenderStatsMoneyWindowSchema,
+    /** The 7 dates before `d7`. */
+    prev7: clientSpenderStatsMoneyWindowSchema,
+    d30: clientSpenderStatsMoneyWindowSchema,
+    /** `(d7 − prev7) / |prev7|` of gross, in percent; null when prev7 is zero. */
+    d7DeltaPct: z.number().nullable(),
+  }),
+  /** Purchases gross over the number of purchases in the window; null without a purchase. */
+  avgCheckMills: mills.nullable(),
+  /** The hub's spender buckets in their order, then the two remainders. */
+  tiers: z.array(clientSpenderStatsTierSchema),
+  /**
+   * Payers by how long ago the fan last wrote TEXT, in whole days: 8 to 21,
+   * more than 21, and `unknown` for a payer with no text message the hub
+   * holds. Fewer than 8 days is not silence and is not listed.
+   */
+  silence: z.object({
+    d8to21: clientSpenderStatsSilenceBucketSchema,
+    over21: clientSpenderStatsSilenceBucketSchema,
+    unknown: clientSpenderStatsSilenceBucketSchema,
+  }),
+  /**
+   * Fans whose first purchase on the page is in the window. With
+   * `firstPurchaseKnown` false the page's history starts inside the window,
+   * and "first" is only the first purchase the hub observed.
+   */
+  newPayers: z.object({ count, firstPurchaseKnown: z.boolean() }),
+  /** Payers whose fan wrote after the page's last message; `unknown` of them have an unknown read state. */
+  queueSummary: z.object({ total: count, unknown: count }),
+});
+
 // ── the owner's client-health view (H-11c) ───────────────────────────────────
 //
 // What the owner reads of the `client_health` rollups (H-11b): figures by client
@@ -572,6 +731,32 @@ export const clientRouteSchemas = {
       409: errorResponseSchema,
     },
   },
+  clientSpenderStats: {
+    auth: { kind: "apiKey", scope: "page" },
+    tags: ["client"],
+    summary: "Spenders statistics of one page: 30 local days of money, tiers, silence, new payers, awaiting reply",
+    description: "Read-only and database-only: no platform request, no queued work. The window is `windowDays` "
+      + "(30) local dates of `timeZone`, today included up to `asOf`; money is gross integer mills, every "
+      + "transaction state counted (`includedStates`), so with `timeZone=UTC` `totals.d30.grossMills` equals "
+      + "the `/api/v2/spenders` `period=30d` total of the page at the same instant. `tiers` are the hub's "
+      + "spender buckets by lifetime gross plus the remainders `untiered` and `unattributed`, and their "
+      + "window gross sums to the window total. `silence` counts payers by whole days since the fan's last "
+      + "text message, among the messages a generation of the page reads. What the hub cannot vouch for it "
+      + "says in `coverage` (`complete`, `partial`, `unknown`, with reasons); an unknown number is null, "
+      + "never 0. An answer is kept for up to 60 seconds: `asOf` is the instant it was counted at. Refused "
+      + "with 400 and the `reason` `unknown_time_zone` for a zone that is not an IANA name the hub knows. "
+      + "Behind the chat-extension `stats` switch: 409 `client_feature_disabled` with the reason.",
+    params: clientPageParamsSchema,
+    querystring: clientSpenderStatsQuerySchema,
+    response: {
+      200: clientSpenderStatsResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
   adminClientHealth: {
     auth: { kind: "owner-session" },
     tags: ["admin"],
@@ -608,6 +793,9 @@ export type ClientAiUsageQuery = z.infer<typeof clientAiUsageQuerySchema>;
 export type ClientAiUsageTotals = z.infer<typeof clientAiUsageTotalsSchema>;
 export type ClientAiUsageDay = z.infer<typeof clientAiUsageDaySchema>;
 export type ClientAiUsageResponse = z.infer<typeof clientAiUsageResponseSchema>;
+export type ClientSpenderStatsQuery = z.infer<typeof clientSpenderStatsQuerySchema>;
+export type ClientSpenderStatsMoneyWindow = z.infer<typeof clientSpenderStatsMoneyWindowSchema>;
+export type ClientSpenderStatsResponse = z.infer<typeof clientSpenderStatsResponseSchema>;
 export type AdminClientHealthQuery = z.infer<typeof adminClientHealthQuerySchema>;
 export type AdminClientHealthResponse = z.infer<typeof adminClientHealthResponseSchema>;
 

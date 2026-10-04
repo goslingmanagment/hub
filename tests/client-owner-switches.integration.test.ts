@@ -265,8 +265,9 @@ describe("owner switches of the chat extension", () => {
       review: { available: true },
       // The hub serves all of Recap (the shared read and the dossier save).
       recap: { available: true },
-      // The owner switched it on, but this hub does not serve the Spenders
-      // statistics yet (`spenders-stats-v1`, `awaiting-reply-v1`).
+      // The owner switched it on, and this hub serves the Spenders statistics
+      // (`spenders-stats-v1`, H-8b) but not the awaiting-reply queue yet
+      // (`awaiting-reply-v1`, H-8c); the feature needs both.
       stats: { available: false, reason: "hub_not_ready" },
       preview: { available: false, reason: "flag_off" },
     });

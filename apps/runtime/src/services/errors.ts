@@ -17,8 +17,9 @@ export class BadRequestError extends AppError {
    * 349 uses it for the password rule on link redemption (too_short | too_long
    * | common), so the /join page can say WHICH rule was broken without matching
    * on prose; the chat extension's own-AI-spend read uses it for why its query
-   * was refused (CLIENT_AI_USAGE_REFUSAL_REASONS). Every other bad request
-   * stays reason-less. */
+   * was refused (CLIENT_AI_USAGE_REFUSAL_REASONS), and its Spenders statistics
+   * for a time zone the hub does not know (CLIENT_SPENDER_STATS_REFUSAL_REASONS).
+   * Every other bad request stays reason-less. */
   readonly reason: string | null;
 
   constructor(message: string, options?: { reason?: string | null }) {
