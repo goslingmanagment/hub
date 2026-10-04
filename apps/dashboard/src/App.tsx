@@ -32,6 +32,7 @@ const QueuePage = lazy(() => import("./pages/dev/QueuePage.js").then((m) => ({ d
 const DbStatsPage = lazy(() => import("./pages/dev/DbStatsPage.js").then((m) => ({ default: m.DbStatsPage })));
 const IncidentsPage = lazy(() => import("./pages/dev/IncidentsPage.js").then((m) => ({ default: m.IncidentsPage })));
 const SyncStatusPage = lazy(() => import("./pages/dev/SyncStatusPage.js").then((m) => ({ default: m.SyncStatusPage })));
+const ClientHealthPage = lazy(() => import("./pages/dev/ClientHealthPage.js").then((m) => ({ default: m.ClientHealthPage })));
 
 function LazyFallback() {
   return <div role="status" className="flex items-center justify-center h-full py-20 text-text-muted">Загружаем страницу…</div>;
@@ -83,6 +84,7 @@ export function App() {
             <Route path="dev/db-stats" element={<OwnerRoute><DbStatsPage /></OwnerRoute>} />
             <Route path="dev/incidents" element={<OwnerRoute><IncidentsPage /></OwnerRoute>} />
             <Route path="dev/sync-status" element={<OwnerRoute><SyncStatusPage /></OwnerRoute>} />
+            <Route path="dev/client-health" element={<OwnerRoute><ClientHealthPage /></OwnerRoute>} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

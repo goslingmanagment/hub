@@ -9,6 +9,7 @@ export const kernelOperations = {
   adminAiPersonasList: { method: "GET", path: "/api/v1/admin/ai/personas" },
   adminAssignPage: { method: "POST", path: "/api/v1/admin/users/by-id/:userId/pages" },
   adminChatterUsage: { method: "GET", path: "/api/v1/admin/usage/chatters" },
+  adminClientHealth: { method: "GET", path: "/api/v1/admin/client-health" },
   adminConfig: { method: "GET", path: "/api/v1/admin/config" },
   adminConfigClear: { method: "DELETE", path: "/api/v1/admin/config/:key" },
   adminConfigStaged: { method: "PATCH", path: "/api/v1/admin/config/staged" },
