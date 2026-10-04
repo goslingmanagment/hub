@@ -126,7 +126,6 @@ async function startHost(r: Rig, options: { seed: number; takeovers?: TakeoverRe
 async function demand(pageId: number, resource: string, subject: string, params?: Record<string, unknown>) {
   await upsertDemand(db(), {
     pageId,
-    shadow: false,
     resource,
     subject,
     kind: "trigger",

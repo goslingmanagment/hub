@@ -5,7 +5,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { agentHistoryRequestSchema } from "@agency_hub_core/contracts";
 import { upsertFans, writeThreadChain, type Database } from "@agency_hub_core/db";
 
-import { ROUTE_STATE_VERSION, type RouteStateEntry } from "../apps/runtime/src/sync/engine/route-policy.ts";
+import type { RouteStateEntry } from "../apps/runtime/src/sync/engine/route-policy.ts";
 import {
   getHistoryRequest,
   submitHistoryRequest,
@@ -15,6 +15,7 @@ import {
 import { toHistoryRequestWire } from "../apps/runtime/src/sync/requests/wire.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { seedSyncPage, testConfig } from "./helpers/sync-engine-host.ts";
+import { clearPageHolds, replaceHoldRows, routeStateRows, seedPageHold } from "./helpers/sync-holds.ts";
 
 // A history request's ETA against a real database (step 3b ruling 11, owner
 // decision №24): the rate is the messaging family's 15/min less what the
@@ -148,11 +149,9 @@ async function busyQuarter(pageId: number): Promise<void> {
   await journal(pageId, { workClass: "requests", operation: "messages.page", count: 150, secondsAgo: 1, everySeconds: 5.9 });
 }
 
-async function setRouteState(pageId: number, value: unknown): Promise<void> {
-  await testDb!.pool.query(
-    "update sync_pages set resource_holds = jsonb_set(resource_holds, '{route:state}', $2::jsonb) where page_id = $1",
-    [pageId, JSON.stringify(value)],
-  );
+/** The page's route rows of its hold set (`sync_holds`). */
+async function setRouteState(pageId: number, routes: Readonly<Record<string, Partial<RouteStateEntry>>>): Promise<void> {
+  await replaceHoldRows(testDb!, pageId, "route", routeStateRows(routes));
 }
 
 function messagesEntry(overrides: Partial<RouteStateEntry>): RouteStateEntry {
@@ -219,8 +218,7 @@ describe("holds and slowdowns are shown apart; the estimate at submit is never r
 
     const holdUntil = new Date(Date.now() + 5 * 60_000).toISOString();
     await setRouteState(pageId, {
-      version: ROUTE_STATE_VERSION,
-      routes: { "messages.page": messagesEntry({ holdUntil, ladderStep: 2, effectivePerMin: 7.5, last429AttemptId: 1, last429At: new Date().toISOString() }) },
+      "messages.page": messagesEntry({ holdUntil, ladderStep: 2, effectivePerMin: 7.5, last429AttemptId: 1, last429At: new Date().toISOString() }),
     });
     const held = await getHistoryRequest(ctx(), filed.request.ref);
     expect(held.request.eta).toMatchObject({
@@ -232,15 +230,14 @@ describe("holds and slowdowns are shown apart; the estimate at submit is never r
     });
     // The hold is not in the seconds: they are the reads at 6.5/min.
     expect(held.request.eta.lowerBoundSeconds).toBe(Math.ceil(Math.round(held.request.reads.remainingMin * (60_000 / 6.5)) / 1000));
-    expect(held.request).toMatchObject({ waitingReason: "pacer", waitingUntil: holdUntil });
+    expect(held.request).toMatchObject({ waitingReason: "route_hold", waitingUntil: holdUntil });
     // The fan's chat waits on its route like any work.
-    expect(held.items[0]).toMatchObject({ waitingReason: "pacer", waitingUntil: holdUntil });
+    expect(held.items[0]).toMatchObject({ waitingReason: "route_hold", waitingUntil: holdUntil });
     expect(agentHistoryRequestSchema.safeParse(toHistoryRequestWire(held.request)).success).toBe(true);
 
     // The hold over, the slowdown stays (only a deliberate step lifts it).
     await setRouteState(pageId, {
-      version: ROUTE_STATE_VERSION,
-      routes: { "messages.page": messagesEntry({ holdUntil: new Date(Date.now() - 1_000).toISOString(), effectivePerMin: 7.5, revision: 2 }) },
+      "messages.page": messagesEntry({ holdUntil: new Date(Date.now() - 1_000).toISOString(), effectivePerMin: 7.5, revision: 2 }),
     });
     const slowed = await getHistoryRequest(ctx(), filed.request.ref);
     expect(slowed.request.eta).toMatchObject({ limitedBy: "route", ratePerHour: 390, hold: null, slowdown: { effectivePerMin: 7.5 } });
@@ -256,19 +253,16 @@ describe("holds and slowdowns are shown apart; the estimate at submit is never r
     const pageId = await livePage();
     await seedThread(pageId, 1);
     const filed = await submitHistoryRequest(ctx(), intake(pageId, [1]));
-    await testDb.pool.query(
-      `update sync_pages set hold_kind = 'rate_limit', hold_until = clock_timestamp() + interval '2 minutes',
-              hold_since = clock_timestamp() where page_id = $1`,
-      [pageId],
-    );
-    const [held] = await rows<{ until: Date }>("select hold_until as until from sync_pages where page_id = $1", [pageId]);
+    await seedPageHold(testDb, { pageId, kind: "network", untilSeconds: 120, detail: { streak: 3 } });
+    const [held] = await rows<{ until: Date }>("select until from sync_holds where page_id = $1 and kind = 'network'", [pageId]);
     const until = held!.until.toISOString();
     const pageHeld = await getHistoryRequest(ctx(), filed.request.ref);
     expect(pageHeld.request.eta).toMatchObject({ hold: { scope: "page", until }, ratePerHour: 900 });
     expect(pageHeld.request).toMatchObject({ waitingReason: "page_hold", waitingUntil: until });
 
-    await testDb.pool.query("update sync_pages set hold_kind = null, hold_until = null, hold_since = null where page_id = $1", [pageId]);
-    await setRouteState(pageId, { version: ROUTE_STATE_VERSION + 1, routes: {} });
+    await clearPageHolds(testDb, pageId);
+    // A state of the route that is no rate: not one this build reads.
+    await setRouteState(pageId, { "messages.page": messagesEntry({ effectivePerMin: -1 }) });
     const unreadable = await getHistoryRequest(ctx(), filed.request.ref);
     expect(unreadable.request.eta.hold).toEqual({ scope: "page", until: null });
     expect(unreadable.request).toMatchObject({ waitingReason: "page_hold", waitingUntil: null });
@@ -281,7 +275,7 @@ describe("holds and slowdowns are shown apart; the estimate at submit is never r
     const pageId = await livePage();
     await seedThread(pageId, 1);
     const holdUntil = new Date(Date.now() + 60_000).toISOString();
-    await setRouteState(pageId, { version: ROUTE_STATE_VERSION, routes: { "messages.page": messagesEntry({ holdUntil }) } });
+    await setRouteState(pageId, { "messages.page": messagesEntry({ holdUntil }) });
     const { request } = await submitHistoryRequest(ctx(), intake(pageId, [1]));
     expect(request.eta).toMatchObject({ ratePerHour: 900, slowdown: null, hold: { scope: "route", until: holdUntil } });
     expect(await storedEstimate(request.ref)).toMatchObject({

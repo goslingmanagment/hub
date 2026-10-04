@@ -32,12 +32,6 @@ export type RuntimeHeartbeatContext = Pick<AppContext, "db" | "config" | "logger
 export const HEARTBEAT_INTERVAL_MS = 60_000;
 export const HEARTBEAT_STOP_TIMEOUT_MS = 5_000;
 
-/** The build identity a process's heartbeat row carries (`image_tag`): the
- *  image's tag, else the source revision the image was built from. */
-export function runtimeImageTag(): string | null {
-  return process.env.IMAGE_TAG ?? process.env.GIT_SHA ?? null;
-}
-
 export interface RuntimeHeartbeat {
   readonly instanceId: string;
   stop(): Promise<void>;
@@ -163,7 +157,7 @@ export function startRuntimeHeartbeat(
 ): RuntimeHeartbeat {
   const instanceId = randomUUID();
   const startedAt = options.startedAt ?? new Date();
-  const imageTag = runtimeImageTag();
+  const imageTag = process.env.IMAGE_TAG ?? process.env.GIT_SHA ?? null;
   const stopTimeoutMs = options.stopTimeoutMs ?? HEARTBEAT_STOP_TIMEOUT_MS;
   const healthFilePath = options.healthFilePath ?? null;
   const intervalMs = options.intervalMs ?? HEARTBEAT_INTERVAL_MS;

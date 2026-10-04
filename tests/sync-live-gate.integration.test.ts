@@ -23,6 +23,7 @@ import {
   RecordingMetrics,
   ScriptedLiveTransport,
   seedSyncPage,
+  setModeDirect,
   testConfig,
   testRegistry,
   testSpec,
@@ -62,7 +63,6 @@ function liveRegistry() {
   const read: ResourceModule = {
     plan: async () => ({ kind: "request", request: pollsRequest }),
     apply: async () => ({ work: { satisfiesRevision: true, close: "done" }, followups: [] }),
-    shadow: async () => ({ work: { satisfiesRevision: true, close: "done" }, followups: [] }),
   };
   return testRegistry([testSpec("gate.read", read)]);
 }
@@ -87,7 +87,7 @@ describe("I17: the live gates", () => {
   it("a page written 'live' is never acquired by a host without a live loop: no owner, no attempt, no transport", async (context) => {
     if (!testDb) return context.skip();
     const { pageId } = await seedSyncPage(handles(), { mode: "live", guard: "fansly_sync_engine" });
-    await upsertDemand(db(), { pageId, shadow: false, resource: "gate.read", kind: "trigger", class: "urgent" });
+    await upsertDemand(db(), { pageId, resource: "gate.read", kind: "trigger", class: "urgent" });
     let transports = 0;
     const host = new SyncEngineHost(hostOptions({
       liveLoopEnabled: false,
@@ -115,7 +115,7 @@ describe("I17: the live gates", () => {
     expect(LIVE_LOOP_ENABLED).toBe(true);
     const { pageId } = await seedSyncPage(handles(), { mode: "live", guard: "fansly_sync_engine" });
     await testDb.pool.query("update sync_pages set legacy_imported_at = null where page_id = $1", [pageId]);
-    await upsertDemand(db(), { pageId, shadow: false, resource: "gate.read", kind: "trigger", class: "urgent" });
+    await upsertDemand(db(), { pageId, resource: "gate.read", kind: "trigger", class: "urgent" });
     const transport = new ScriptedLiveTransport();
     let transports = 0;
     const host = new SyncEngineHost(hostOptions({
@@ -139,7 +139,7 @@ describe("I17: the live gates", () => {
       await waitFor(async () => (
         await countRows(testDb!.pool, "select count(*)::int as n from sync_attempts where apply_state = 'applied'") === 1 ? true : null
       ), 15_000, "the admission after the import");
-      expect(host.state(pageId)).toMatchObject({ kind: "running", mode: "live" });
+      expect(host.state(pageId)).toMatchObject({ kind: "running" });
     } finally {
       await host.stop();
     }
@@ -148,7 +148,7 @@ describe("I17: the live gates", () => {
   it("a guard row still owned by the legacy engine refuses every live admission", async (context) => {
     if (!testDb) return context.skip();
     const { pageId } = await seedSyncPage(handles(), { mode: "live", guard: "legacy" });
-    await upsertDemand(db(), { pageId, shadow: false, resource: "gate.read", kind: "trigger", class: "urgent" });
+    await upsertDemand(db(), { pageId, resource: "gate.read", kind: "trigger", class: "urgent" });
     const transport = new ScriptedLiveTransport();
     const metrics = new RecordingMetrics();
     const host = new SyncEngineHost(hostOptions({
@@ -161,7 +161,7 @@ describe("I17: the live gates", () => {
       // Owned (ownership is not the gate), but past the takeover floor every
       // admission meets the legacy guard owner in its transaction.
       await waitFor(() => (metrics.get("sync_live_gate_closed") >= 1 ? true : null), 15_000, "a refused live admission");
-      expect(host.state(pageId)).toMatchObject({ kind: "running", mode: "live" });
+      expect(host.state(pageId)).toMatchObject({ kind: "running" });
       expect(transport.hits).toHaveLength(0);
       expect(await countRows(testDb.pool, "select count(*)::int as n from sync_attempts")).toBe(0);
 
@@ -177,10 +177,10 @@ describe("I17: the live gates", () => {
     }
   }, 45_000);
 
-  it("`sync page mode` moves a page only between off and shadow", async (context) => {
+  it("`sync page mode` only takes a page left in shadow to off: no lever reaches shadow, handover or live", async (context) => {
     if (!testDb) return context.skip();
     const { label, pageId } = await seedSyncPage(handles());
-    for (const to of ["live", "handover"]) {
+    for (const to of ["shadow", "live", "handover"]) {
       await expect(changeSyncPageModeByOwner(db(), { pageLabel: label, to, changedBy: "test" }))
         .rejects.toBeInstanceOf(SyncOwnerLeverError);
     }
@@ -189,15 +189,55 @@ describe("I17: the live gates", () => {
       openContext: async () => ({ db: db(), rawConfig: testConfig(testDb!.connectionString), close: async () => undefined }),
       print: (line) => printed.push(line),
     });
-    await expect(sync.parseAsync(["page", "mode", "--page", label, "--to", "live"], { from: "user" }))
-      .rejects.toThrow(/only between off and shadow/);
+    for (const to of ["shadow", "live"]) {
+      await expect(sync.parseAsync(["page", "mode", "--page", label, "--to", to], { from: "user" }))
+        .rejects.toThrow(/only takes a page left in shadow to off/);
+    }
     expect((await getSyncPage(db(), pageId))!.mode).toBe("off");
+    await sync.parseAsync(["page", "mode", "--page", label, "--to", "off"], { from: "user" });
+    expect(printed.at(-1)).toBe(`${label}: already off`);
 
-    await sync.parseAsync(["page", "mode", "--page", label, "--to", "shadow", "--note", "acceptance"], { from: "user" });
+    // A row left in shadow (nothing writes one any more) goes off.
+    await setModeDirect(testDb.pool, pageId, "shadow");
+    await sync.parseAsync(["page", "mode", "--page", label, "--to", "off", "--note", "acceptance"], { from: "user" });
     const page = await getSyncPage(db(), pageId);
-    expect(page!.mode).toBe("shadow");
+    expect(page!.mode).toBe("off");
     expect(page!.modeChangedBy).toMatch(/^cli@.+: acceptance$/);
-    expect(printed.at(-1)).toBe(`${label}: off → shadow (the sync host follows within 2 s)`);
+    expect(printed.at(-1)).toBe(`${label}: shadow → off (the sync host follows within 2 s)`);
+
+    // A live page stays live.
+    await setModeDirect(testDb.pool, pageId, "live");
+    await expect(sync.parseAsync(["page", "mode", "--page", label, "--to", "off"], { from: "user" }))
+      .rejects.toThrow(/sync page mode refused \(transition_not_allowed\): live → off/);
+    expect((await getSyncPage(db(), pageId))!.mode).toBe("live");
+  }, 30_000);
+
+  it("a host runs no actor for a page left in shadow: no owner, no attempt, no transport (step 4, S4-23)", async (context) => {
+    if (!testDb) return context.skip();
+    const { pageId } = await seedSyncPage(handles(), { mode: "shadow" });
+    await upsertDemand(db(), { pageId, resource: "gate.read", kind: "trigger", class: "urgent" });
+    let transports = 0;
+    const host = new SyncEngineHost(hostOptions({
+      liveLoopEnabled: true,
+      liveTransportFactory: async () => {
+        transports += 1;
+        return new ScriptedLiveTransport();
+      },
+    }));
+    await host.start();
+    try {
+      await host.tick();
+      await sleep(1_500);
+      await host.tick();
+      expect(host.state(pageId)).toEqual({ kind: "idle" });
+    } finally {
+      await host.stop();
+    }
+    expect(transports).toBe(0);
+    expect((await getSyncPage(db(), pageId))!.owner.generation).toBe(0n);
+    expect(await countRows(testDb.pool, "select count(*)::int as n from sync_attempts")).toBe(0);
+    expect(await countRows(testDb.pool, "select count(*)::int as n from sync_work where shadow")).toBe(0);
+    expect(await countRows(testDb.pool, "select count(*)::int as n from sync_work where state = 'open'")).toBe(1);
   }, 30_000);
 });
 
@@ -207,7 +247,9 @@ describe("I17: source pins", () => {
   it("LIVE_LOOP_ENABLED is the switch PR's flip (S3-05), and the host still gates a live loop on the legacy import", () => {
     const host = read("apps/runtime/src/sync/engine/host.ts");
     expect(host).toContain("export const LIVE_LOOP_ENABLED = true;");
-    expect(host).toContain('if (desired === "live" && page.legacyImportedAt === null) {');
+    // An actor runs a `live` page and no other (step 4, S4-23).
+    expect(host).toContain('return page.mode === "live" && this.#liveLoopEnabled;');
+    expect(host).toContain("if (run && page.legacyImportedAt === null) {");
     expect(host).toContain('this.#markWaiting(page, "legacy_not_imported", UNCONFIRMED_RETRY_MS);');
   });
 

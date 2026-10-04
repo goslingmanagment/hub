@@ -59,20 +59,14 @@ import {
   type FanslyWireRead,
   type FanslyWireRequest,
 } from "@agency_hub_core/fansly";
-import {
-  admitUnderFanslyPageHolds,
-  fanslyPageHoldAfterCredentials,
-  fanslyPageHoldInForce,
-  proofClearsCredentialsHold,
-  readFanslyPageHolds,
-  type FanslyPageHoldOperation,
-} from "@agency_hub_core/shared";
+import { proofClearsCredentialsHold, type FanslyPageHoldOperation } from "@agency_hub_core/shared";
 
 import { isCapturePayloadUnavailable, resolveCapturePayloadRow } from "../../services/payload-reader.ts";
 import { WrongTransactionsWriterError } from "../../services/transactions-writer-gate.ts";
 import { fanslyCdnTokenStripApplies, stripFanslySignedCdnTokens } from "../fansly/lib/cdn-tokens.ts";
 import { replaceJournalLoneSurrogates } from "../fansly/lib/journal-lone-surrogates.ts";
 import { routeOfWireId } from "../fansly/routes.ts";
+import { holdSetOf, whyHeld, type HoldSet } from "./admission.ts";
 import {
   classifyWireOutcome,
   escalateResourceHold,
@@ -85,7 +79,6 @@ import {
   type AlertDecision,
   type OutcomeDecision,
   type PageErrorState,
-  type ResourceHoldEntry,
   VERIFY_KEY,
 } from "./errors.ts";
 import type { Admission, SlotGrant } from "./pacer.ts";
@@ -100,29 +93,26 @@ import {
   type EngineResourceSpec,
   type RequestPlan,
   type ResourceModule,
-  type ShadowResult,
   type StepPlan,
   type WorkOutcome,
 } from "./resource.ts";
-import { parseRouteState, ROUTE_STATE_VERSION, type RouteAdmissionIntervals } from "./route-policy.ts";
-import { judgePaceGap, paceGapViolates } from "./send-audit.ts";
+import type { RouteAdmissionIntervals } from "./route-policy.ts";
+import { judgePaceGap } from "./send-audit.ts";
 import type { WorkClass } from "./scheduler.ts";
 
 // The transactions of one step (plan §8, design §3.7). Each runs as ONE short
 // transaction that starts with the generation fence (`lockOwnedPage`, I7):
 //
 //   admit   (tx 1)  the work becomes `running`, the attempt is journaled and
-//                   counted BEFORE anything is sent; for a live page also the
-//                   live gate (I17);
-//   capture (tx 2)  live: the raw answer is committed to `observations` before
+//                   counted BEFORE anything is sent, behind the live gate
+//                   (I17);
+//   capture (tx 2)  the raw answer is committed to `observations` before
 //                   anything parses it (I8), with the outcome and every error
 //                   consequence (`errors.onOutcome`);
-//   apply   (tx 3)  live: erasure fence → the resource's writes → the work's
+//   apply   (tx 3)  erasure fence → the resource's writes → the work's
 //                   cursor/proof and `applied_revision` (I11) → follow-ups →
 //                   `applied`. A failing apply is classified, never thrown out
-//                   of the actor;
-//   shadow  (tx 2') shadow: the simulated outcome, the work's estimated
-//                   progress and shadow follow-ups — nothing else (I14).
+//                   of the actor.
 //
 // Lock order (design §3.7): sync_pages → erasure fence → hot tables →
 // domain_event_seq → sync_work → history_requests → history_request_items.
@@ -246,7 +236,6 @@ export interface CommitDeps {
   /** `pages.external_page_id`: the observations' native account ref. */
   ownRef: string | null;
   generation: bigint;
-  mode: "shadow" | "live";
   registry: EngineRegistry;
   clock: Clock;
   rng: Rng;
@@ -259,8 +248,8 @@ export interface CommitDeps {
   onWorkClosed?: WorkClosedHook;
   /** The live settings resources read (absent: the registry defaults). */
   settings?: SettingsSource;
-  /** The box of the works' secret parameters (live: the host's; absent in
-   *  shadow, where no secret is ever read or written). */
+  /** The box of the works' secret parameters (the host's; absent where a
+   *  test reads and writes none). */
   secrets?: SecretBox;
   faults?: SyncFaultHook;
 }
@@ -325,9 +314,8 @@ export function isAnswerInMemory(operation: string): boolean {
 
 /** `sync_attempts.request` of an API route: the wire id, its parameters (the
  *  coverage evidence, design §2.9 D1), the request line and — when the
- *  resource keeps them — its account of the step (`RequestPlan.step`) and the
- *  shadow step's walk position (`RequestPlan.position`). Never a header. A
- *  route of another host keeps no request line (design J7): the
+ *  resource keeps it — its account of the step (`RequestPlan.step`). Never a
+ *  header. A route of another host keeps no request line (design J7): the
  *  Upgrade has nothing to name, and a CDN hop names only its hop and the
  *  sha256 of its URL path — the signed URL itself stays in the work's
  *  ciphertext. */
@@ -343,14 +331,10 @@ export function requestJsonOf(
   hop?: number;
   pathSha256?: string | null;
   step?: unknown;
-  position?: unknown;
   credentialsGeneration?: string;
 } {
   const host = fanslyWireSpec(request.spec).host;
-  const step = {
-    ...(request.step === undefined ? {} : { step: request.step }),
-    ...(request.position === undefined ? {} : { position: request.position }),
-  };
+  const step = request.step === undefined ? {} : { step: request.step };
   // Not a secret: the sha256 of the stored (or candidate) credentials, so an
   // auth hold names the credentials that failed (step-3 §3.5 item 3) — the
   // Upgrade is sent with the page's stored session too.
@@ -411,12 +395,7 @@ function upsertsOf(
       d.metrics.increment("sync_followup_unknown_resource", { resource: signal.resource });
       continue;
     }
-    const upsert = demandToUpsert(signal, spec, {
-      pageId: d.pageId,
-      shadow: d.mode === "shadow",
-      now,
-      ...(page === null ? {} : { page }),
-    });
+    const upsert = demandToUpsert(signal, spec, { pageId: d.pageId, now, ...(page === null ? {} : { page }) });
     if (upsert !== null) upserts.push(upsert);
   }
   return upserts;
@@ -472,25 +451,24 @@ async function afterSettle(
 
 // ── tx 1: admission ─────────────────────────────────────────────────────────
 
-/** What a picked work's request is to the page holds: a live candidate
- *  identity check, the live verify of the stored credentials with the digest
- *  its request carries (A3), or any other request. */
+/** What a picked work's request is to the page holds: a candidate identity
+ *  check, the verify of the stored credentials with the digest its request
+ *  carries (A3), or any other request. */
 export function pageHoldOperationOf(
-  d: Pick<CommitDeps, "mode">,
   work: Pick<SyncWorkRow, "resource" | "params">,
   prepared: Pick<FanslyWireRequest, "credentialsGeneration"> | null,
 ): FanslyPageHoldOperation {
-  if (d.mode !== "live") return { kind: "request" };
   if (work.resource === IDENTITY_CHECK_KEY && identityCandidateOf(work) !== null) return { kind: "candidate_check" };
   if (work.resource === VERIFY_KEY) return { kind: "verify", digest: prepared?.credentialsGeneration ?? null };
   return { kind: "request" };
 }
 
 /** A page hold refused the request at its admission (tx 1 rolled back:
- *  nothing was written, the slot is not consumed). */
+ *  nothing was written, the slot is not consumed). `until` null: no instant
+ *  ends it (rows of the hold set this build cannot read). */
 export class AdmissionHeldError extends Error {
-  constructor(readonly kind: string, readonly until: Date) {
-    super(`The page is held (${kind}) until ${until.toISOString()}`);
+  constructor(readonly kind: string, readonly until: Date | null) {
+    super(`The page is held (${kind}) until ${until === null ? "it is repaired" : until.toISOString()}`);
     this.name = "AdmissionHeldError";
   }
 }
@@ -500,7 +478,7 @@ export class AdmissionHeldError extends Error {
  * step took it): nothing was written and the slot is not consumed. Throws
  * `AdmissionHeldError` when a page hold refuses the request now,
  * `OwnershipLostError` for a foreign generation and `LiveGateClosedError` for
- * a live admission without its gates (I17).
+ * an admission without its gates (I17).
  */
 export async function admit(
   d: CommitDeps,
@@ -518,28 +496,18 @@ export async function admit(
   const spec = d.registry.spec(picked.work.resource);
   if (spec === null) throw new Error(`No registry entry for ${picked.work.resource}`);
   return inTx(d.db, async (tx) => {
-    await lockOwnedPage(tx, {
-      pageId: d.pageId,
-      generation: d.generation,
-      lock: "no_key_update",
-      live: d.mode === "live",
-    });
+    await lockOwnedPage(tx, { pageId: d.pageId, generation: d.generation, lock: "no_key_update", live: true });
     // The final word of the page holds, under the row lock (ruling 5): the
     // gate and the pick judged a snapshot; a hold written since refuses
     // here, before anything is counted. The work stays open.
     const page = await getSyncPage(tx, d.pageId);
     if (page === null) throw new OwnershipLostError(d.pageId, d.generation, null);
-    const holds = admitUnderFanslyPageHolds(
-      readFanslyPageHolds(page),
-      pageHoldOperationOf(d, picked.work, prepared),
-      d.clock.wallNow(),
-    );
-    if (!holds.admitted) throw new AdmissionHeldError(holds.kind, holds.until);
+    const held = whyHeld(holdSetOf(page.holds), null, { operation: pageHoldOperationOf(picked.work, prepared) }, d.clock.wallNow());
+    if (held !== null) throw new AdmissionHeldError(held.kind, held.until);
     const running = await markWorkRunning(tx, { workId: picked.work.id, generation: d.generation });
     if (running === null) return null;
     const admitted = await insertAdmission(tx, {
       pageId: d.pageId,
-      shadow: d.mode === "shadow",
       workId: picked.work.id,
       resource: picked.work.resource,
       subject: picked.work.subject,
@@ -559,11 +527,10 @@ export async function admit(
     });
     // A requests-class read is the turn of one request and one fan: the round
     // robin's stamps and the fan's read count (history_* after sync_work).
-    if (d.mode === "live" && picked.requestTurn !== undefined && picked.requestTurn !== null) {
+    if (picked.requestTurn !== undefined && picked.requestTurn !== null) {
       await markHistoryTurnServed(tx, picked.requestTurn);
     }
-    // Claims are live-only: a shadow step never touches another table.
-    if (d.mode === "live" && module.onAdmit !== undefined) await module.onAdmit(tx, picked.work, request);
+    if (module.onAdmit !== undefined) await module.onAdmit(tx, picked.work, request);
     return {
       attemptId: admitted.attemptId,
       admittedAt: admitted.admittedAt,
@@ -578,7 +545,7 @@ export async function admit(
 }
 
 /** Best effort right after `onRequestStart` (never awaited by the send): the
- *  send instant, so a takeover after a crash sees it. Live only. */
+ *  send instant, so a takeover after a crash sees it. */
 export function markSentBestEffort(d: CommitDeps, attemptId: number, sentAt: Date): void {
   markAttemptSent(d.db, { attemptId, sentAt }).catch((error: unknown) => {
     d.logger.debug({ attemptId, err: errorName(error) }, "Fansly sync: best-effort send mark failed");
@@ -595,7 +562,7 @@ export async function settleNotSent(
   outcome: Extract<FanslyWireOutcome, { kind: "aborted_before_send" }>,
 ): Promise<void> {
   const refusal = outcome.refusal;
-  d.metrics.increment("sync_send_refused", { reason: refusal, shadow: d.mode === "shadow" });
+  d.metrics.increment("sync_send_refused", { reason: refusal });
   await inTx(d.db, async (tx) => {
     await lockOwnedPage(tx, { pageId: d.pageId, generation: d.generation, lock: "no_key_update" });
     await settleAttemptWithoutCapture(tx, {
@@ -613,50 +580,6 @@ export async function settleNotSent(
       lastErrorClass: "not_sent",
     });
   });
-}
-
-// ── tx 2': shadow ───────────────────────────────────────────────────────────
-
-/**
- * Settle a shadow step: the attempt as `shadow` with its simulated send
- * instant, the work's estimated progress, shadow follow-ups. The page's live
- * send facts (`last_send_at`, `last_completed_at`) are never written: they are
- * the takeover truth of live owners. A pace self-check violation in shadow is
- * a pacer bug: metric and log, never a page.
- */
-export async function settleShadow(
-  d: CommitDeps,
-  admission: AdmissionRecord,
-  armed: Admission,
-  simulatedLatencyMs: number,
-  result: ShadowResult,
-): Promise<void> {
-  const now = d.clock.wallNow();
-  const page = await getSyncPage(d.db, d.pageId);
-  await inTx(d.db, async (tx) => {
-    await lockOwnedPage(tx, { pageId: d.pageId, generation: d.generation, lock: "no_key_update" });
-    await settleAttemptWithoutCapture(tx, {
-      attemptId: admission.attemptId,
-      outcome: "shadow",
-      sentAt: armed.sentWall,
-      sendMonoOffsetMs: armed.sentMono === null ? null : armed.sentMono - armed.issuedMono,
-      gapPrevMs: armed.gapPrevMs,
-      durationMs: simulatedLatencyMs,
-    });
-    await settleWork(tx, settleInputOf(d, admission.work, admission.spec, result.work, admission.demandRevision, page, now));
-    const upserts = upsertsOf(d, result.followups, page, now);
-    if (upserts.length > 0) await upsertDemands(tx, upserts);
-  });
-  for (const [name, by] of Object.entries(result.counters ?? {})) {
-    d.metrics.increment("sync_shadow_effect", { resource: admission.work.resource, effect: name }, by);
-  }
-  if (armed.gapPrevMs !== null && paceGapViolates(armed.gapPrevMs, "monotonic", armed.pauseMs)) {
-    d.metrics.increment("sync_shadow_pace_violations", { pageId: d.pageId });
-    d.logger.error(
-      { pageId: d.pageId, attemptId: admission.attemptId, gapMs: armed.gapPrevMs, pauseMs: armed.pauseMs },
-      "Fansly sync shadow: two simulated sends closer than their pause (pacer bug)",
-    );
-  }
 }
 
 // ── no-HTTP outcomes ────────────────────────────────────────────────────────
@@ -739,8 +662,7 @@ export async function deferForRoute(d: CommitDeps, work: SyncWorkRow, until: Dat
  *  flight holds the fence for seconds). */
 export const LOCAL_FENCE_BUSY_RETRY_MS = 1_000;
 
-/** A `local` plan on a page that is not live: a module bug (a shadow page
- *  never writes, I14). */
+/** A `local` plan of a module that has no `applyLocal`: a module bug. */
 export class LocalStepRefusedError extends Error {
   constructor(readonly resource: string, readonly why: string) {
     super(`Fansly sync: ${resource} planned a local write ${why}`);
@@ -763,7 +685,6 @@ export type LocalOutcome = "applied" | "fence_busy" | "nothing" | ApplyErrorKind
  */
 export async function applyLocal(d: CommitDeps, work: SyncWorkRow, module: ResourceModule): Promise<LocalOutcome> {
   try {
-    if (d.mode !== "live") throw new LocalStepRefusedError(work.resource, "on a page that is not live");
     const write = module.applyLocal;
     if (write === undefined) throw new LocalStepRefusedError(work.resource, "but has no applyLocal");
     const spec = d.registry.spec(work.resource);
@@ -898,7 +819,7 @@ export async function ensureCredentialsVerify(d: CommitDeps, reason: string, sto
     if (upserts.length === 0) return { created: false, superseded: null };
     const superseded = storedDigest === null
       ? null
-      : await supersedeQuarantinedVerify(tx, d, { shadow: upserts[0]!.shadow, storedDigest });
+      : await supersedeQuarantinedVerify(tx, d, storedDigest);
     const created = (await upsertDemands(tx, upserts)).some((result) => result.created);
     return { created, superseded };
   });
@@ -917,15 +838,15 @@ export async function ensureCredentialsVerify(d: CommitDeps, reason: string, sto
 async function supersedeQuarantinedVerify(
   tx: Database,
   d: CommitDeps,
-  input: { shadow: boolean; storedDigest: string },
+  storedDigest: string,
 ): Promise<SupersededVerify | null> {
-  const current = await getOpenWorkForKey(tx, { pageId: d.pageId, shadow: input.shadow, resource: VERIFY_KEY, subject: "" });
+  const current = await getOpenWorkForKey(tx, { pageId: d.pageId, resource: VERIFY_KEY, subject: "" });
   if (current === null || current.state !== "quarantined") return null;
   const [work] = await lockWorkRows(tx, [current.id]);
   if (work === undefined || work.state !== "quarantined") return null;
   const attempt = work.lastAttemptId === null ? null : await getSyncAttempt(tx, work.lastAttemptId);
   const credentialsGeneration = attempt === null ? null : credentialsGenerationOfAttempt(attempt);
-  if (credentialsGeneration === input.storedDigest) return null;
+  if (credentialsGeneration === storedDigest) return null;
   const closed = await closeQuarantinedWork(tx, { workId: work.id, to: "superseded", closeReason: "credentials_changed" });
   if (!closed) return null;
   await insertAuditEvent(tx, {
@@ -937,7 +858,7 @@ async function supersedeQuarantinedVerify(
       attemptId: attempt?.id ?? null,
       quarantine: work.lastErrorClass,
       credentialsGeneration,
-      storedCredentialsGeneration: input.storedDigest,
+      storedCredentialsGeneration: storedDigest,
     },
   });
   return { workId: work.id, attemptId: attempt?.id ?? null, credentialsGeneration };
@@ -965,7 +886,7 @@ export async function deferAfterPlanError(d: CommitDeps, work: SyncWorkRow, erro
   });
 }
 
-// ── tx 2: capture (live) ────────────────────────────────────────────────────
+// ── tx 2: capture ───────────────────────────────────────────────────────────
 
 export interface CaptureResult {
   /** A 2xx-ok answer was captured: apply it now (tx 3). */
@@ -974,15 +895,11 @@ export interface CaptureResult {
   inMemory: { response: unknown; parsed: unknown } | null;
 }
 
-function pageErrorState(page: SyncPageRow): PageErrorState {
+function pageErrorState(page: SyncPageRow, holds: HoldSet): PageErrorState {
   return {
-    holdKind: page.holdKind,
-    holdUntil: page.holdUntil,
-    holdSince: page.holdSince,
-    holdStep: page.holdStep,
-    holdDetail: page.holdDetail,
+    holds: holds.page,
     networkFailureStreak: page.networkFailureStreak,
-    resourceHolds: page.resourceHolds as Record<string, ResourceHoldEntry>,
+    resourceHolds: holds.resources,
     credentialsGeneration: page.credentialsGeneration,
   };
 }
@@ -1001,7 +918,7 @@ function failedBody(outcome: Extract<FanslyWireOutcome, { kind: "response" }>): 
 }
 
 /**
- * Capture a live outcome (tx 2): the raw answer as an observation (2xx under
+ * Capture an outcome (tx 2): the raw answer as an observation (2xx under
  * the spec's kind, anything else under `<kind>:failed`; a transport error or
  * timeout journals nothing), the attempt's outcome and send instant, the
  * page's send facts, and every consequence `onOutcome` decides (holds, the
@@ -1087,9 +1004,10 @@ export async function capture(
     const page = await getSyncPage(tx, d.pageId);
     if (page === null) throw new OwnershipLostError(d.pageId, d.generation, null);
     const file = resourceFileOf(admission.work.resource);
-    // The route state as of this transaction (the page row is locked): a 429
+    // The hold set as of this transaction (the page row is locked): a 429
     // holds and slows the route the request went out on.
-    const routeState = parseRouteState(page.routeState);
+    const holds = holdSetOf(page.holds);
+    const routeState = holds.routes;
     const route = routeOfWireId(admission.request.spec);
     const decided = onOutcome({
       errorClass: classified.errorClass,
@@ -1098,7 +1016,7 @@ export async function capture(
       subject: admission.work.subject,
       httpStatus: classified.httpStatus,
       retryAfterMs: classified.retryAfterMs,
-      page: pageErrorState(page),
+      page: pageErrorState(page, holds),
       ...(routeState.ok
         ? {
           route: {
@@ -1216,9 +1134,9 @@ async function writeOutcomeDecision(
   const fenced = { pageId: d.pageId, generation: d.generation };
   const hold = decision.pageHold;
   if (hold.action === "set") {
-    await setPageHold(tx, { ...fenced, kind: hold.kind, until: hold.until, step: hold.step, detail: hold.detail });
+    await setPageHold(tx, { ...fenced, kind: hold.kind, until: hold.until, detail: hold.detail });
   } else if (hold.action === "clear") {
-    await clearPageHold(tx, { ...fenced, resetStep: hold.resetStep });
+    await clearPageHold(tx, { ...fenced, kinds: hold.kinds });
   }
   if (decision.networkFailureStreak !== null) {
     await setNetworkFailureStreak(tx, { ...fenced, streak: decision.networkFailureStreak });
@@ -1228,7 +1146,6 @@ async function writeOutcomeDecision(
     const { entry } = routeHold;
     const written = await writeSyncRouteState(tx, {
       ...fenced,
-      version: ROUTE_STATE_VERSION,
       route: routeHold.route,
       expectRevision: routeHold.expectRevision,
       entry: {
@@ -1321,7 +1238,7 @@ async function writeOutcomeDecision(
   }
 }
 
-// ── tx 3: apply (live) ──────────────────────────────────────────────────────
+// ── tx 3: apply ─────────────────────────────────────────────────────────────
 
 export type ApplyErrorKind = "deferred" | "deterministic" | "transient" | "other";
 
@@ -1472,7 +1389,7 @@ export async function apply(
     const applied = await inTx(d.db, async (tx) => {
       await lockOwnedPage(tx, { pageId: d.pageId, generation: d.generation, lock });
       const attempt = await lockAttemptForApply(tx, attemptId);
-      if (attempt === null || attempt.shadow) return "nothing" as const;
+      if (attempt === null) return "nothing" as const;
       const spec = d.registry.spec(attempt.resource);
       if (spec === null) throw new ApplyDeferred("no_registry_entry");
       const module = await d.registry.module(attempt.resource);
@@ -1635,8 +1552,8 @@ interface IdentityProofWrite {
  * apply's transaction (ruling 5): the page's identity and the digest of the
  * credentials that request carried — the engine has verified them (G1) —
  * unless a newer proof is recorded already; and a credentials hold whose
- * latest refusal came before this request was sent is cleared — the timed
- * hold it carried staying while in force — with its audit row naming the
+ * latest refusal came before this request was sent is cleared — a network
+ * hold beside it stands — with its audit row naming the
  * verifying attempt and the refusal it cleared. Requires the page row FOR NO KEY
  * UPDATE (`IDENTITY_PROOF_OPERATIONS`).
  */
@@ -1662,15 +1579,10 @@ async function recordIdentityProof(
   // `superseded`: an answer applied late — a newer proof stands; the hold
   // rule below still judges this one by its own send.
   const proof = { cleared: null, superseded: !recorded };
-  const held = fanslyPageHoldInForce(readFanslyPageHolds(page), d.clock.wallNow())?.credentials ?? null;
+  const { credentials: held } = holdSetOf(page.holds).page;
   if (held === null || !proofClearsCredentialsHold(held, { attemptId: attempt.id, sentAt })) return proof;
-  const left = fanslyPageHoldAfterCredentials(page, d.clock.wallNow());
-  const fenced = { pageId: d.pageId, generation: d.generation };
-  if (left === null) {
-    await clearPageHold(tx, fenced);
-  } else {
-    await setPageHold(tx, { ...fenced, kind: left.kind, until: left.until, step: page.holdStep, detail: left.detail });
-  }
+  // The credentials hold alone: a network hold beside it stands until its end.
+  await clearPageHold(tx, { pageId: d.pageId, generation: d.generation, kinds: [held.kind] });
   await insertAuditEvent(tx, {
     platformAccountId: d.pageId,
     source: "sync",
@@ -1761,7 +1673,7 @@ async function recordApplyError(d: CommitDeps, attemptId: number, error: unknown
         subject: attempt.subject,
         httpStatus: attempt.httpStatus,
         retryAfterMs: null,
-        page: pageErrorState(page),
+        page: pageErrorState(page, holdSetOf(page.holds)),
         subjectState: {
           failureCount: work?.failureCount ?? 0,
           breakerUntil: work?.breakerUntil ?? null,
@@ -1788,11 +1700,7 @@ async function recordApplyError(d: CommitDeps, attemptId: number, error: unknown
       // resource-hold ladder instead of failing every one of its works.
       const page = await getSyncPage(tx, d.pageId);
       if (page === null) throw new OwnershipLostError(d.pageId, d.generation, null);
-      const hold = escalateResourceHold(
-        page.resourceHolds as Record<string, ResourceHoldEntry>,
-        attempt.resource,
-        now,
-      );
+      const hold = escalateResourceHold(holdSetOf(page.holds).resources, attempt.resource, now);
       if (hold.action === "set") {
         await setResourceHold(tx, {
           pageId: d.pageId,
@@ -1828,14 +1736,12 @@ async function recordApplyError(d: CommitDeps, attemptId: number, error: unknown
   return kind;
 }
 
-/** Live: apply the captured/deferred attempts whose retry time passed, at most
+/** Apply the captured/deferred attempts whose retry time passed, at most
  *  `max` per lap; never waits for one (a failing apply never blocks the page). */
 export async function drainDueApplies(d: CommitDeps, max: number): Promise<number> {
-  if (d.mode !== "live") return 0;
   const due = await listUnfinishedAttempts(d.db, { pageId: d.pageId, phase: "apply", dueOnly: true, limit: max });
   let applied = 0;
   for (const attempt of due) {
-    if (attempt.shadow) continue;
     if ((await apply(d, { attemptId: attempt.id, operation: attempt.operation })) === "applied") applied += 1;
   }
   return applied;
@@ -1845,10 +1751,10 @@ export async function drainDueApplies(d: CommitDeps, max: number): Promise<numbe
 
 /**
  * Recovery at actor start (design §3.7.5), under the new generation: unfinished
- * live attempts become `unknown` (the read is repeated as a new attempt; the
- * takeover floor covers a possible send), admitted shadow attempts close as
- * `shadow`, running work without a pending apply opens again, and pending
- * applies are due now (applied by `drainDueApplies` before any admission).
+ * attempts become `unknown` (the read is repeated as a new attempt; the
+ * takeover floor covers a possible send), running work without a pending
+ * apply opens again, and pending applies are due now (applied by
+ * `drainDueApplies` before any admission).
  */
 export async function recoverUnfinished(d: CommitDeps): Promise<RecoverUnfinishedAttemptsResult> {
   return inTx(d.db, async (tx) => {
@@ -1859,8 +1765,8 @@ export async function recoverUnfinished(d: CommitDeps): Promise<RecoverUnfinishe
 
 // ── alerts ──────────────────────────────────────────────────────────────────
 
-/** Open the decided alerts. A shadow page's alert is a metric only (D14);
- *  the sink decides what pages the owner. Never throws. */
+/** Open the decided alerts; the sink decides what pages the owner. Never
+ *  throws. */
 export async function openAlerts(
   d: CommitDeps,
   alerts: readonly AlertDecision[],
@@ -1868,14 +1774,13 @@ export async function openAlerts(
 ): Promise<void> {
   for (const alert of alerts) {
     const route = alert.subKey === "route_limited" ? { route: alert.route } : {};
-    d.metrics.increment("sync_alerts", { subKey: alert.subKey, detail: alert.detail, shadow: d.mode === "shadow", ...route });
+    d.metrics.increment("sync_alerts", { subKey: alert.subKey, detail: alert.detail, ...route });
     try {
       await d.alerts.open({
         subKey: alert.subKey,
         pageId: d.pageId,
         ...route,
         detail: alert.detail,
-        shadow: d.mode === "shadow",
         context,
       });
     } catch (error) {

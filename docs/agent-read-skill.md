@@ -328,8 +328,8 @@ Reading progress (`hub history-status`):
   NOT in the seconds above: the reads start when it ends. `until: null` means no
   known instant ends it (the page needs new credentials or the operator).
 - `waitingReason` / `waitingUntil` say why the request, or one fan, waits right
-  now (`pacer`, `class_share`, `paused`, `page_hold`, `ownership_unconfirmed`,
-  ...). They are body fields, never blockers.
+  now (`pacer`, `class_share`, `paused`, `page_hold`, `route_hold`,
+  `ownership_unconfirmed`, ...). They are body fields, never blockers.
 - a fan is `ready` once satisfied: `all` only when its chat is `complete` with
   `historyProof: "empty_page"`; `latest N` once the contiguous chain from the
   anchor (the chat's head when the request was filed) holds N messages, or the
@@ -413,14 +413,17 @@ it waits. Two read-only commands show it; both need `read:datasets`:
   `.detail`, `dm-live.deletions`, `fan-profiles.probe`) the key also needs
   `read:messages`.
 
-Until a page is switched to the engine (`off` or `shadow`) both answer from its
-SHADOW journal: `shadow: true` on every work row, the engine planned and paced
-the work but sent nothing. Read it as the engine's rehearsal, never as what
-Fansly answered. On a `handover` or `live` page they answer from the live
-journal: what the engine actually asked Fansly and why the rest waits. The waiting reasons are the closed
-list above (`not_due`, `pacer`, `class_share`, `page_hold`, `resource_hold`,
-`subject_breaker`, `blocked_by_vendor`, `quarantined`, `paused`, `dependency`,
-`ownership_unconfirmed`, `running`); like history progress they are body
+Both answer from the page's journal: what the engine actually asked Fansly and
+why the rest waits. Every page the engine runs is `live`; a page that is `off`
+(or was left in `shadow`, a mode nothing runs any more) has no actor, so its
+queue is empty or waits on `ownership_unconfirmed`. Shadow mode is gone: the
+`shadow` block of a page's status is always `null` and `shadow` on a work row
+always `false` (the fields stay on the wire only). The waiting reasons are the closed
+list above (`not_due`, `pacer`, `class_share`, `page_hold`, `route_budget`,
+`route_hold`, `resource_hold`, `subject_breaker`, `blocked_by_vendor`,
+`quarantined`, `paused`, `dependency`, `ownership_unconfirmed`, `running`);
+`route_hold` is a 429's hold of the route the work reads (until
+`waitingUntil`), `route_budget` that route's own pace. Like history progress they are body
 fields, and the envelope always carries `capture_floor_unknown` because the
 engine's queue is not captured platform data.
 

@@ -21,6 +21,9 @@ import {
   SYNC_APPLY_STATES,
   SYNC_ENGINE_GUARD_OWNER,
   SYNC_ATTEMPT_OUTCOMES,
+  SYNC_HOLD_KINDS,
+  SYNC_HOLD_KINDS_BY_SCOPE,
+  SYNC_HOLD_SCOPES,
   SYNC_PAGE_HOLD_KINDS,
   SYNC_PAGE_MODES,
   SYNC_SEND_MARKS,
@@ -31,9 +34,11 @@ import {
   SYNC_MEDIA_HANDOFF_MAX_BYTES,
   SYNC_LIFTABLE_DM_EXCLUSIONS,
   syncAttempts,
+  syncHolds,
   syncMediaHandoff,
   syncPages,
 } from "@agency_hub_core/db";
+import { CONFIG_DESCRIPTORS, ENV_CONFIG_KEYS, RETIRED_FANSLY_ENV_KEYS } from "@agency_hub_core/shared";
 
 // Fansly Sync Engine migrations (design §2.1): forward-only, purely additive,
 // each in ROLLBACK_COMPATIBLE_MIGRATIONS. One block per migration.
@@ -98,7 +103,10 @@ describe("0228_sync_engine_core.sql", () => {
 
   it("keeps the vocabularies of the checks equal to the repositories' constants", () => {
     expect(checkList(sql, "sync_pages_mode_check")).toEqual([...SYNC_PAGE_MODES]);
-    expect(checkList(sql, "sync_pages_hold_kind_check")).toEqual([...SYNC_PAGE_HOLD_KINDS]);
+    // The old hold slot: every kind a page's hold set has (the hold writers
+    // keep the slot in step with it), and the page-wide 429 kind no build
+    // takes any more.
+    expect(checkList(sql, "sync_pages_hold_kind_check")).toEqual(["rate_limit", ...SYNC_PAGE_HOLD_KINDS]);
     expect(checkList(sql, "sync_work_kind_check")).toEqual([...SYNC_WORK_KINDS]);
     expect(checkList(sql, "sync_work_class_check")).toEqual([...SYNC_WORK_CLASSES]);
     expect(checkList(sql, "sync_attempts_class_check")).toEqual([...SYNC_WORK_CLASSES]);
@@ -588,6 +596,167 @@ describe("retire_fansly_legacy_sync_states.sql (step 4, S4-21: the point of no r
   });
 
   it("allows application rollback: the previous image serves no Fansly page from these rows", () => {
+    expect(rollbackCompatible()).toContain(`"${migration}"`);
+  });
+});
+
+describe("sync_holds.sql (step 4, S4-30: the hold set)", () => {
+  // Found by its name, not its number: the number is the next free one at merge.
+  const found = readdirSync("packages/db/migrations").filter((file) => file.endsWith("_sync_holds.sql"));
+  const migration = found[0] ?? "";
+  const text = found.length === 1 ? readFileSync(`packages/db/migrations/${migration}`, "utf8") : "";
+  const sql = stripComments(text);
+  const statements = topLevelStatements(sql);
+  const columns = ["page_id", "scope", "key", "kind", "until", "since", "ladder_step", "detail", "revision", "created_at", "updated_at"];
+
+  it("exists once, after the migration that made the sync pages (0228)", () => {
+    expect(found).toHaveLength(1);
+    expect(migration > "0228_sync_engine_core.sql").toBe(true);
+  });
+
+  it("is purely additive: one table, its partial unique index, comments and the read-role grant — no row, nothing of sync_pages", () => {
+    for (const statement of statements) {
+      expect(statement).toMatch(
+        /^(create table if not exists sync_holds \(|create unique index if not exists sync_holds_page_credentials on sync_holds |comment on (table|column) sync_holds|do \$\$)/,
+      );
+      // A foreign key's own `on delete restrict` is not a deletion.
+      expect(statement.replaceAll("on delete restrict", "")).not.toMatch(/\b(drop|rename|truncate|delete|update|insert|alter)\b/i);
+    }
+    expect(statements.filter((statement) => statement.startsWith("create table"))).toHaveLength(1);
+    // The table starts empty: a page's state reaches it when its ownership is
+    // acquired (`reconcileSyncHoldsWithLegacyColumns`), never by a copy the
+    // previous image could outdate.
+    expect(sql).not.toMatch(/\bsync_pages\b/);
+    expect(text).toContain("grant select on sync_holds to read_only");
+    expect(statements.filter((statement) => statement.startsWith("do $$"))).toHaveLength(1);
+  });
+
+  it("is page-owned (the page delete restricted), keyed by page, scope, key and kind", () => {
+    expect(sql).toContain("page_id bigint not null references pages(id) on delete restrict");
+    expect(sql).toContain("constraint sync_holds_pkey primary key (page_id, scope, key, kind)");
+    expect(sql).not.toMatch(/on delete cascade/);
+    const body = sql.slice(sql.indexOf("create table if not exists sync_holds ("), sql.indexOf("\n);"));
+    expect([...body.matchAll(/^\s{2}([a-z_]+) (?:bigint|text|timestamptz|smallint|jsonb)\b/gm)].map((match) => match[1])).toEqual(columns);
+  });
+
+  it("keeps the vocabularies of its checks equal to the repositories' constants", () => {
+    expect(checkList(sql, "sync_holds_scope_check")).toEqual([...SYNC_HOLD_SCOPES]);
+    expect(checkList(sql, "sync_holds_kind_check")).toEqual([...SYNC_HOLD_KINDS]);
+    const byScope = sql.slice(sql.indexOf("constraint sync_holds_scope_kind_check check"), sql.indexOf("constraint sync_holds_until_check"));
+    const kindsOf = (scope: string) => {
+      const clause = byScope.slice(byScope.indexOf(`scope = '${scope}'`));
+      return [...clause.slice(0, clause.indexOf("\n")).matchAll(/'([a-z_]+)'/g)].map((match) => match[1]).slice(1);
+    };
+    for (const scope of SYNC_HOLD_SCOPES) expect(kindsOf(scope), scope).toEqual([...SYNC_HOLD_KINDS_BY_SCOPE[scope]]);
+    // A page-scope row has no key; a route's and a resource file's name theirs.
+    expect(byScope).toMatch(/scope = 'page' and key = ''/);
+    expect(byScope).toMatch(/scope = 'route' and key <> ''/);
+    expect(byScope).toMatch(/scope = 'resource' and key <> ''/);
+    // Only the route's state is a row without an end.
+    expect(sql).toContain("constraint sync_holds_until_check check ((kind = 'route_budget') = (until is null))");
+  });
+
+  it("holds one credentials hold a page", () => {
+    expect(statements).toContain(
+      "create unique index if not exists sync_holds_page_credentials on sync_holds (page_id) "
+        + "where scope = 'page' and kind in ('auth', 'identity_mismatch')",
+    );
+  });
+
+  it("comments the table and every column", () => {
+    expect(statements.some((statement) => statement.startsWith("comment on table sync_holds is '"))).toBe(true);
+    for (const column of columns) {
+      expect(statements.some((statement) => statement.startsWith(`comment on column sync_holds.${column} is '`)), column).toBe(true);
+    }
+  });
+
+  it("is mirrored in drizzle", () => {
+    const names = Object.values(syncHolds as unknown as Record<string, { name?: unknown }>).map((column) => column.name);
+    expect(names).toEqual(expect.arrayContaining(columns));
+  });
+
+  it("allows application rollback: the previous image reads the old hold columns, which the hold writers keep in step", () => {
+    expect(rollbackCompatible()).toContain(`"${migration}"`);
+    const pages = readFileSync("packages/db/src/repositories/sync/pages.ts", "utf8");
+    // Every hold write goes through one transaction that rewrites the old
+    // columns from the rows; an acquisition reads them back when they differ,
+    // and so does a write under no generation before it writes (it can come
+    // before this build has taken the page).
+    expect(pages.match(/writeHoldSet\(db, input,/g)).toHaveLength(4);
+    expect(pages).toContain("await mirrorSyncHoldsToLegacyColumns(tx, input.pageId);");
+    expect(pages).toContain("await reconcileSyncHoldsWithLegacyColumns(tx as unknown as Database, input.pageId);");
+    expect(pages).toContain("if (input.generation === undefined) await reconcileSyncHoldsWithLegacyColumns(tx, input.pageId);");
+    expect(pages.match(/reconcileSyncHoldsWithLegacyColumns\(tx/g)).toHaveLength(2);
+    // No other statement writes a hold row.
+    for (const file of readdirSync("packages/db/src/repositories/sync")) {
+      if (file === "pages.ts" || file === "holds-legacy.ts") continue;
+      expect(readFileSync(`packages/db/src/repositories/sync/${file}`, "utf8"), file).not.toMatch(/(insert into|update|delete from) sync_holds\b/);
+    }
+  });
+});
+
+describe("retire_fansly_legacy_config_overrides.sql (step 4, S4-26: the legacy Fansly config keys go)", () => {
+  // Found by its name, not its number: the number is the next free one at merge.
+  const found = readdirSync("packages/db/migrations").filter((file) => file.endsWith("_retire_fansly_legacy_config_overrides.sql"));
+  const migration = found[0] ?? "";
+  const text = found.length === 1 ? readFileSync(`packages/db/migrations/${migration}`, "utf8") : "";
+  const sql = stripComments(text);
+  const statements = topLevelStatements(sql);
+  const keys = [...(/^with retired \(key\) as \( values (.*?) \), batch as /.exec(statements[0] ?? "")?.[1] ?? "")
+    .matchAll(/\('([^']*)'\)/g)].map((match) => match[1]!);
+  /** The env var a key was read from: its name in upper snake case. */
+  const envName = (key: string) => key.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toUpperCase();
+
+  it("exists once, after the migration that made the override tables (0035)", () => {
+    expect(found).toHaveLength(1);
+    expect(migration > "0035_config_settings.sql").toBe(true);
+  });
+
+  it("is one data statement — the overrides deleted, one audit row for each — and no DDL", () => {
+    expect(statements).toHaveLength(1);
+    const [statement] = statements;
+    // Every scope of a retired key goes; what was stored comes back from the delete.
+    expect(statement).toContain(
+      "removed as ( delete from config_settings cs using retired r where cs.key = r.key "
+        + "returning cs.scope_type, cs.scope_id, cs.key, cs.value, cs.version )",
+    );
+    // The audit row of a clear (repositories/config-settings.ts): the old value
+    // and version, new value and version null, no user — and one group for all.
+    expect(statement).toContain("batch as materialized ( select gen_random_uuid() as group_id )");
+    expect(statement).toMatch(
+      /insert into config_audit_log \(group_id, user_id, scope_type, scope_id, key, old_value, new_value, old_version, new_version, note\) select b\.group_id, null, d\.scope_type, d\.scope_id, d\.key, d\.value, null, d\.version, null, 'step 4: retired with the legacy Fansly engine \(migration retire_fansly_legacy_config_overrides\)' from removed d cross join batch b order by d\.key$/,
+    );
+    expect(sql).not.toMatch(/\b(alter|create|drop|rename|truncate|update|grant|trigger)\b/i);
+    // Nothing but the two override tables is named.
+    expect([...sql.matchAll(/\b(?:from|into|join|using)\s+([a-z_]+)/g)].map((match) => match[1]).sort())
+      .toEqual(["batch", "config_audit_log", "config_settings", "removed", "retired"]);
+  });
+
+  it("names exactly the keys this release drops: none is registered, and their env vars are the retired list", () => {
+    expect(keys).toHaveLength(68);
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(keys).toEqual([...keys].sort());
+    const registered = new Set(CONFIG_DESCRIPTORS.map((descriptor) => descriptor.key));
+    expect(keys.filter((key) => registered.has(key))).toEqual([]);
+    // One list for the stored rows (here) and one for the env (the boot
+    // warning): the same keys, by their two names.
+    expect(keys.map(envName).sort()).toEqual([...RETIRED_FANSLY_ENV_KEYS].sort());
+    expect(keys.map(envName).filter((name) => (ENV_CONFIG_KEYS as string[]).includes(name))).toEqual([]);
+  });
+
+  it("keeps the overrides of the keys the engine and OnlyFans still read", () => {
+    for (const kept of [
+      "fanslyDefaultDelayMs", "fanslyBaseUrl", "fanslyReplayMode", "fanslyRepliesRewalkCycleDays",
+      "fanslyLiveOverlayReadPages", "pageDmPruneEnabled", "syncObservabilityRetentionDays", "syncHttpTraceFile",
+      "syncHttpAttemptTraceStdout", "egressPacerMode", "agentHydrationMode", "syncPageExecutorConcurrency",
+      "healthSyncLightMaxAgeMinutes", "onlyFansDefaultDelayMs", "onlyFansDmPollingEnabled", "onlyFansTopSpendersEnabled",
+    ]) {
+      expect(keys, kept).not.toContain(kept);
+      expect(CONFIG_DESCRIPTORS.some((descriptor) => descriptor.key === kept), kept).toBe(true);
+    }
+  });
+
+  it("allows application rollback: the previous image reads none of these keys", () => {
     expect(rollbackCompatible()).toContain(`"${migration}"`);
   });
 });

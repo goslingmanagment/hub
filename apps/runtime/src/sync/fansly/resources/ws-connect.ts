@@ -6,7 +6,6 @@ import type {
   PlanContext,
   RequestPlan,
   ResourceModule,
-  ShadowResult,
   StepPlan,
 } from "../../engine/resource.ts";
 
@@ -95,8 +94,6 @@ export function wsConnectOutcome(decision: OutcomeDecision): OutcomeDecision {
 
 export const wsConnectModule: ResourceModule = {
   async plan(_work, ctx: PlanContext): Promise<StepPlan> {
-    // Live only: a shadow page never owns a socket (I14).
-    if (ctx.shadow) return { kind: "done", reason: "shadow_no_socket" };
     return wsConnectPlan(ctx.socket?.state ?? null, ctx.now, ctx.socket?.connectNotBefore ?? null);
   },
 
@@ -113,9 +110,4 @@ export const wsConnectModule: ResourceModule = {
   },
 
   outcome: (decision) => wsConnectOutcome(decision),
-
-  async shadow(): Promise<ShadowResult> {
-    // Live only (the registry's `liveOnly`): a shadow page never runs it.
-    return { work: { satisfiesRevision: true, close: "done", closeReason: "shadow" }, followups: [] };
-  },
 };

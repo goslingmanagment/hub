@@ -40,8 +40,7 @@ import {
  * Neither reads an evidence plane: the engine's queue and journal are not
  * captured platform data. The envelope therefore lists no plane, establishes
  * no capture floor, and carries `capture_floor_unknown` honestly; a reason to
- * wait is a body field, never a blocker. Off and shadow pages report their
- * shadow journal (`shadow: true` on every work row): simulated, nothing sent.
+ * wait is a body field, never a blocker.
  */
 
 /** Registry subject kinds whose ids name a fan's chat or the fan. */

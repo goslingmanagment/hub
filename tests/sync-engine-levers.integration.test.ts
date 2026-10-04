@@ -141,8 +141,7 @@ async function parkPolls(pageId: number): Promise<EngineRegistry> {
   const page = await getSyncPage(db(), pageId);
   await ensurePollRows(db(), {
     pageId,
-    shadow: false,
-    polls: pollsFor(registry, page!, false).map((poll) => ({ ...poll, phase: 0.999 })),
+    polls: pollsFor(registry, page!).map((poll) => ({ ...poll, phase: 0.999 })),
   });
   return registry;
 }
@@ -316,7 +315,7 @@ describe("the follower reconcile on an engine page", () => {
     const registry = await parkPolls(pageId);
     const spec = fanslyResourceSpec("followers.reconcile")!;
     await upsertDemand(db(), {
-      pageId, shadow: false, resource: spec.key, kind: spec.kind, class: spec.class, demand: { reasons: ["owner"] },
+      pageId, resource: spec.key, kind: spec.kind, class: spec.class, demand: { reasons: ["owner"] },
     });
     const now = Date.now();
     const served = {
@@ -336,7 +335,7 @@ describe("the follower reconcile on an engine page", () => {
       if (req.spec === "followers.page") return okResponse(served);
       throw new Error(`unexpected ${req.spec}`);
     };
-    const { actor, stop, abort } = await makeTestActor({ db: db(), pageId, mode: "live", registry, transport });
+    const { actor, stop, abort } = await makeTestActor({ db: db(), pageId, registry, transport });
     const run = actor.run({ stop: stop.signal, abort: abort.signal });
     try {
       await waitFor(async () => {
@@ -460,19 +459,17 @@ describe("sync work requeue and enqueue", () => {
         if (!fixed) throw new ApplyQuarantine("unmapped_rows", { rows: 3 });
         return { work: { satisfiesRevision: true, close: "done" }, followups: [] };
       },
-      shadow: async () => ({ work: { satisfiesRevision: true, close: "done" }, followups: [] }),
     };
     const planQuarantine: ResourceModule = {
       plan: async () => ({ kind: "quarantine", reason: "page_missing" }),
       apply: async () => { throw new Error("never"); },
-      shadow: async () => ({ work: { satisfiesRevision: true, close: "done" }, followups: [] }),
     };
     const registry = testRegistry([testSpec("fix.read", module), testSpec("plan.stuck", planQuarantine)]);
-    await upsertDemand(db(), { pageId: pages.live, shadow: false, resource: "fix.read", kind: "trigger", class: "urgent" });
-    await upsertDemand(db(), { pageId: pages.live, shadow: false, resource: "plan.stuck", kind: "trigger", class: "urgent" });
+    await upsertDemand(db(), { pageId: pages.live, resource: "fix.read", kind: "trigger", class: "urgent" });
+    await upsertDemand(db(), { pageId: pages.live, resource: "plan.stuck", kind: "trigger", class: "urgent" });
     const transport = new ScriptedLiveTransport();
     const { actor, stop, abort } = await makeTestActor({
-      db: db(), pageId: pages.live, mode: "live", registry, transport, alerts: new RecordingAlerts(),
+      db: db(), pageId: pages.live, registry, transport, alerts: new RecordingAlerts(),
     });
     const run = actor.run({ stop: stop.signal, abort: abort.signal });
     try {
@@ -552,13 +549,12 @@ describe("sync work requeue and enqueue", () => {
         }
         return { work: { satisfiesRevision: true, close: "done" }, followups: [] };
       },
-      shadow: async () => ({ work: { satisfiesRevision: true, close: "done" }, followups: [] }),
     };
     const registry = testRegistry([testSpec("gone.read", module)]);
-    await upsertDemand(db(), { pageId: pages.live, shadow: false, resource: "gone.read", kind: "trigger", class: "urgent" });
+    await upsertDemand(db(), { pageId: pages.live, resource: "gone.read", kind: "trigger", class: "urgent" });
     const transport = new ScriptedLiveTransport();
     const { actor, stop, abort } = await makeTestActor({
-      db: db(), pageId: pages.live, mode: "live", registry, transport, alerts: new RecordingAlerts(),
+      db: db(), pageId: pages.live, registry, transport, alerts: new RecordingAlerts(),
     });
     const run = actor.run({ stop: stop.signal, abort: abort.signal });
     let workId = 0;
@@ -615,9 +611,9 @@ describe("sync work requeue and enqueue", () => {
     expect(attempts.rows.map((row) => row.applyState)).toEqual(["quarantined", "applied"]);
   }, 60_000);
 
-  it("requeues only quarantined rows of the journal the page runs, all or nothing", async () => {
+  it("requeues only quarantined rows, all or nothing", async () => {
     const quarantine = async (pageId: number, resource: string): Promise<number> => {
-      const work = await upsertDemand(db(), { pageId, shadow: false, resource, kind: "trigger", class: "urgent" });
+      const work = await upsertDemand(db(), { pageId, resource, kind: "trigger", class: "urgent" });
       await testDb!.pool.query(
         "update sync_work set state = 'quarantined', waiting_reason = 'quarantined' where id = $1",
         [work.id],
@@ -626,18 +622,12 @@ describe("sync work requeue and enqueue", () => {
     };
     const stateOf = async (workId: number): Promise<string | undefined> =>
       (await testDb!.pool.query<{ state: string }>("select state from sync_work where id = $1", [workId])).rows[0]?.state;
-    // A live row left on a page rolled back to shadow: re-armed there, its
-    // answer would be applied at the next switch.
-    const stale = await quarantine(pages.legacy, "fix.read");
-    await expect(cli([]).parseAsync(["node", "sync", "work", "requeue", "--page", "ari-1", "--work", String(stale)]))
-      .rejects.toThrow(/not a quarantined row of ari-1's shadow journal \(shadow\): work \d+; nothing requeued/);
-    expect(await stateOf(stale)).toBe("quarantined");
-    // On a live page, one row that is not quarantined refuses the whole list.
+    // One row that is not quarantined refuses the whole list.
     const stuck = await quarantine(pages.live, "fix.read");
-    const open = await upsertDemand(db(), { pageId: pages.live, shadow: false, resource: "other.read", kind: "trigger", class: "urgent" });
+    const open = await upsertDemand(db(), { pageId: pages.live, resource: "other.read", kind: "trigger", class: "urgent" });
     await expect(cli([]).parseAsync([
       "node", "sync", "work", "requeue", "--page", "lilly-1", "--work", String(stuck), "--work", String(open.id),
-    ])).rejects.toThrow(new RegExp(`live journal \\(live\\): work ${open.id}; nothing requeued`));
+    ])).rejects.toThrow(new RegExp(`not a quarantined row of lilly-1: work ${open.id}; nothing requeued`));
     expect(await stateOf(stuck)).toBe("quarantined");
     expect(await countRows(testDb!.pool, "select count(*)::int as n from audit_events where event_type = $1", [SYNC_WORK_REQUEUE_AUDIT_EVENT])).toBe(0);
     // The quarantined row alone goes.

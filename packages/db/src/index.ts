@@ -1,10 +1,12 @@
 export * from "./repositories/fansly-ws.ts";
-export * from "./repositories/fansly-ws-hints.ts";
 export * from "./repositories/fansly-ws-deletions.ts";
 export * from "./repositories/sync/live-messages.ts";
 export * from "./repositories/fan-earnings-targets.ts";
 export * from "./client.ts";
 export * from "./repositories/follower-outreach.ts";
+// chat-extension greeting lease and send custody (0241, H-7a).
+export * from "./repositories/client-claim.ts";
+export * from "./repositories/client-claim-transition.ts";
 export * from "./schema.ts";
 export * from "./repositories/creator-raw-media.ts";
 export * from "./repositories/vault-album-scans.ts";
@@ -97,6 +99,7 @@ export * from "./repositories/agent-hydration.ts";
 export * from "./repositories/agent-read.ts";
 export * from "./repositories/agent-transcript.ts";
 export * from "./repositories/ai-transcript-union.ts";
+export * from "./repositories/conversation-feed.ts";
 export * from "./repositories/erasure-fence.ts";
 export * from "./repositories/catalog.ts";
 export * from "./repositories/config-settings.ts";
@@ -158,6 +161,8 @@ export * from "./repositories/fansly-send-guard-checks.ts";
 // journal and its telemetry retention; the DM thread chain (0231); the
 // conversation list's own writer; the DM message reads; the subject-queue
 // walks; the history requests (0232).
+export * from "./repositories/sync/holds.ts";
+export * from "./repositories/sync/holds-legacy.ts";
 export * from "./repositories/sync/pages.ts";
 export * from "./repositories/sync/work.ts";
 export * from "./repositories/sync/attempts.ts";
@@ -177,6 +182,7 @@ export * from "./repositories/sync/dm-exclusions.ts";
 export * from "./repositories/sync/observability.ts";
 export * from "./repositories/sync/subject-queue.ts";
 export * from "./repositories/spenders.ts";
+export * from "./repositories/spender-stats.ts";
 export * from "./repositories/sync-context.ts";
 export * from "./repositories/sync.ts";
 export * from "./repositories/top-spenders.ts";

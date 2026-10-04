@@ -8,7 +8,7 @@ import { bindFanslyUpgradeLease } from "../../apps/runtime/src/services/egress/f
 import type { FanslyReceiverSocket } from "../../apps/runtime/src/services/fansly-ws/connection.ts";
 import type { LivePageLinks, SyncHostOptions } from "../../apps/runtime/src/sync/engine/host.ts";
 import { REQUEST_TIMEOUT_MS } from "../../apps/runtime/src/sync/engine/pacer.ts";
-import type { SendHooks, TransportOutcome } from "../../apps/runtime/src/sync/engine/ports.ts";
+import type { PageTransport, SendHooks, TransportOutcome } from "../../apps/runtime/src/sync/engine/ports.ts";
 import {
   createEngineRegistry,
   type EngineRegistry,
@@ -16,7 +16,6 @@ import {
   type RequestPlan,
   type ResourceModule,
 } from "../../apps/runtime/src/sync/engine/resource.ts";
-import type { PageTransport } from "../../apps/runtime/src/sync/engine/shadow.ts";
 import { fanslyResourceSpec } from "../../apps/runtime/src/sync/fansly/registry.ts";
 import { createPageTransport } from "../../apps/runtime/src/sync/fansly/transport.ts";
 import {
@@ -158,7 +157,6 @@ export function wsConnectTestModule(sourceOf: () => FanslyWsSource | null): Reso
       return { kind: "request", request };
     },
     apply: async () => ({ work: { satisfiesRevision: true, close: "done", closeReason: "upgraded" }, followups: [] }),
-    shadow: async () => ({ work: { satisfiesRevision: true, close: "done" }, followups: [] }),
   };
 }
 
@@ -181,10 +179,9 @@ export function wsTestRegistry(sourceOf: () => FanslyWsSource | null, extra: rea
   const urgent: ResourceModule = {
     plan: async () => ({ kind: "request", request: { spec: "trackinglinks", params: {} as never } }),
     apply: async () => ({ work: { satisfiesRevision: true, close: "done" }, followups: [] }),
-    shadow: async () => ({ work: { satisfiesRevision: true, close: "done" }, followups: [] }),
   };
   return createEngineRegistry([
-    testSpec("ws.connect", wsConnectTestModule(sourceOf), { terminalStatuses: [101], liveOnly: true }),
+    testSpec("ws.connect", wsConnectTestModule(sourceOf), { terminalStatuses: [101] }),
     testSpec(HARNESS_KEY.urgent, urgent),
     waiting("repair.ws-gap"),
     waiting("dm-conversations.ws-down"),

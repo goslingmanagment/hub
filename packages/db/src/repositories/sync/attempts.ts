@@ -14,12 +14,16 @@ import {
 } from "./values.ts";
 
 // Fansly Sync Engine (plan §2.4, §8, §11; design §2.2, §3.3, §3.7): the
-// journal of attempts — one row per physical request of a page (or per
-// simulated one in shadow). An attempt is ADMITTED before anything is sent
-// (tx 1), records its actual send instant and outcome, the observation that
-// captured its raw response (tx 2), and its apply state (tx 3). The rows are
-// the truth for the takeover floor (I5) and for the pace audit (§2.4
-// "проверка, а не вера").
+// journal of attempts — one row per physical request of a page. An attempt is
+// ADMITTED before anything is sent (tx 1), records its actual send instant and
+// outcome, the observation that captured its raw response (tx 2), and its
+// apply state (tx 3). The rows are the truth for the takeover floor (I5) and
+// for the pace audit (§2.4 "проверка, а не вера").
+//
+// Shadow mode is gone (step 4 S4-23): nothing writes a row with `shadow`
+// true. The rows it left are telemetry the retention prunes; until then every
+// read of a page's journal leaves them out (`not shadow`). The column, the
+// outcome `shadow` and the send mark `shadow` stay what the CHECKs admit.
 
 export const SYNC_ATTEMPT_OUTCOMES = [
   "admitted",
@@ -64,7 +68,6 @@ export const SYNC_APPLY_FAILURES_TO_QUARANTINE = 3;
 export interface SyncAttemptRow {
   id: number;
   pageId: number;
-  shadow: boolean;
   workId: number | null;
   resource: string;
   subject: string;
@@ -121,7 +124,6 @@ type AttemptSqlRow = Omit<
 const attemptColumns = sql`
   a.id::text as id,
   a.page_id::text as "pageId",
-  a.shadow,
   a.work_id::text as "workId",
   a.resource,
   a.subject,
@@ -161,7 +163,6 @@ function normalizeAttemptRow(row: AttemptSqlRow): SyncAttemptRow {
     ...row,
     id: Number(row.id),
     pageId: Number(row.pageId),
-    shadow: row.shadow === true,
     workId: toNumber(row.workId),
     slot: toNumber(row.slot),
     ownerGeneration: BigInt(row.ownerGeneration),
@@ -196,7 +197,6 @@ function boundedInt(value: number | null | undefined, max = 2_147_483_647): numb
 
 export interface InsertAdmissionInput {
   pageId: number;
-  shadow: boolean;
   workId: number;
   resource: string;
   subject: string;
@@ -215,7 +215,7 @@ export interface InsertAdmissionInput {
   operation: string;
   /** Request shape without secrets: `{path, query}`. */
   request: unknown;
-  /** Coverage evidence (registry); a shadow attempt never is. */
+  /** Coverage evidence (registry). */
   evidence: boolean;
   /** The interval its route admitted it under (the route's effective rate,
    *  I19); null: none applied (an admission that recorded none reads as
@@ -258,15 +258,15 @@ export async function insertAdmission(
       returning page_id
     ), attempt as (
       insert into sync_attempts (
-        page_id, shadow, work_id, resource, subject, class, slot, owner_generation, demand_revision,
+        page_id, work_id, resource, subject, class, slot, owner_generation, demand_revision,
         setting_ms, jitter_u, pause_ms, operation, request, evidence, route_interval_ms, family_interval_ms
       )
-      select page.page_id, ${input.shadow}::boolean, ${input.workId}::bigint, ${input.resource}::text,
+      select page.page_id, ${input.workId}::bigint, ${input.resource}::text,
              ${input.subject}::text, ${input.class}::text, ${input.slot}::smallint,
              ${generationParam(input.generation)}, ${input.demandRevision}::bigint,
              ${input.settingMs}::integer, ${input.jitterU}::double precision, ${input.pauseMs}::integer,
              ${input.operation}::text, ${jsonParam(input.request)},
-             ${input.evidence}::boolean and not ${input.shadow}::boolean,
+             ${input.evidence}::boolean,
              ${boundedInt(input.routeIntervalMs)}::integer, ${boundedInt(input.familyIntervalMs)}::integer
         from page
       returning id, admitted_at
@@ -409,38 +409,24 @@ export async function captureAttempt(db: Database, input: CaptureAttemptInput): 
 
 /**
  * Settle an attempt that captured nothing: `aborted_before_send` (the send
- * check refused, no bytes), `shadow` (simulated: `send_mark='shadow'`, the
- * simulated send instant, apply `skipped`), or `unknown`. Never touches the
- * page's live send facts. Idempotent like the capture.
+ * check refused, no bytes) or `unknown`. Never touches the page's send facts.
+ * Idempotent like the capture.
  */
 export async function settleAttemptWithoutCapture(
   db: Database,
   input: {
     attemptId: number;
-    outcome: "aborted_before_send" | "shadow" | "unknown";
-    sentAt?: Date | null;
-    sendMonoOffsetMs?: number | null;
-    gapPrevMs?: number | null;
+    outcome: "aborted_before_send" | "unknown";
     errorClass?: string | null;
-    durationMs?: number | null;
   },
 ): Promise<boolean> {
-  const isShadow = input.outcome === "shadow";
   const result = await db.execute(sql`
     update sync_attempts
        set outcome = ${input.outcome}::text,
-           send_mark = case when ${isShadow}::boolean then 'shadow' else send_mark end,
-           sent_at = case when ${isShadow}::boolean then coalesce(${timestampParam(input.sentAt)}, clock_timestamp())
-                          else sent_at end,
-           send_mono_offset_ms = coalesce(${input.sendMonoOffsetMs ?? null}::double precision, send_mono_offset_ms),
-           gap_prev_ms = coalesce(${input.gapPrevMs ?? null}::double precision, gap_prev_ms),
            error_class = coalesce(${input.errorClass ?? null}::text, error_class),
-           duration_ms = coalesce(${boundedInt(input.durationMs)}::integer, duration_ms),
-           completed_at = clock_timestamp(),
-           apply_state = case when ${isShadow}::boolean then 'skipped' else apply_state end
+           completed_at = clock_timestamp()
      where id = ${input.attemptId}
        and outcome in ('admitted', 'sent')
-       and (shadow = ${isShadow}::boolean or ${input.outcome}::text <> 'shadow')
   `);
   return (result.rowCount ?? 0) > 0;
 }
@@ -531,8 +517,8 @@ export async function recordApplyFailure(
 
 /**
  * Unfinished attempts of a page: `send` = admitted or sent (no outcome yet),
- * `apply` = captured or deferred (live), `any` = both. `dueOnly` limits the
- * apply side to rows whose retry time passed (the actor's apply drain).
+ * `apply` = captured or deferred, `any` = both. `dueOnly` limits the apply
+ * side to rows whose retry time passed (the actor's apply drain).
  */
 export async function listUnfinishedAttempts(
   db: Database,
@@ -548,6 +534,7 @@ export async function listUnfinishedAttempts(
     select ${attemptColumns}
       from sync_attempts a
      where a.page_id = ${input.pageId}
+       and not a.shadow
        and ${predicate}
      order by ${input.dueOnly === true ? sql`a.apply_retry_at nulls first, a.id` : sql`a.id`}
      limit ${Math.max(1, Math.min(10_000, input.limit ?? 1_000))}
@@ -556,26 +543,23 @@ export async function listUnfinishedAttempts(
 }
 
 export interface RecoverUnfinishedAttemptsResult {
-  /** Live attempts admitted or sent by a previous run: outcome `unknown`. */
+  /** Attempts admitted or sent by a previous run: outcome `unknown`. */
   unknown: number;
   /** Captured answers that lived in memory only: `skipped`, their work open again. */
   memorySkipped: number;
-  /** Shadow attempts left admitted: closed as `shadow` (nothing was sent). */
-  shadowClosed: number;
   /** Running work rows whose attempt ended without anything to apply: open again. */
   workReopened: number;
-  /** Live captured/deferred applies made due now (applied before any admission). */
+  /** Captured/deferred applies made due now (applied before any admission). */
   appliesDue: number;
 }
 
 /**
  * Recovery at actor start (design §3.7.5), after `acquireSyncPageOwnership`
- * and inside the new generation's transaction: an unfinished live attempt
- * becomes `unknown` (the read is safe to repeat as a NEW attempt; the takeover
- * floor already covers its possible send), an admitted shadow attempt is
- * closed as `shadow`, running work without a pending apply opens again, and
- * pending applies are due now — "сбой между (3) и (4) доприменяется из
- * сохранённого ответа без нового HTTP".
+ * and inside the new generation's transaction: an unfinished attempt becomes
+ * `unknown` (the read is safe to repeat as a NEW attempt; the takeover floor
+ * already covers its possible send), running work without a pending apply
+ * opens again, and pending applies are due now — "сбой между (3) и (4)
+ * доприменяется из сохранённого ответа без нового HTTP".
  */
 export async function recoverUnfinishedAttempts(
   db: Database,
@@ -588,7 +572,7 @@ export async function recoverUnfinishedAttempts(
   },
 ): Promise<RecoverUnfinishedAttemptsResult> {
   const inMemory = textArrayParam(input.answerInMemoryOperations ?? []);
-  const result = await db.execute<{ unknown: number; memorySkipped: number; shadowClosed: number; appliesDue: number }>(sql`
+  const result = await db.execute<{ unknown: number; memorySkipped: number; appliesDue: number }>(sql`
     with live_unknown as (
       update sync_attempts
          set outcome = 'unknown', completed_at = clock_timestamp()
@@ -600,11 +584,6 @@ export async function recoverUnfinishedAttempts(
        where page_id = ${input.pageId} and not shadow and apply_state in ('captured', 'deferred')
          and operation = any(${inMemory})
       returning id
-    ), shadow_closed as (
-      update sync_attempts
-         set outcome = 'shadow', send_mark = 'shadow', completed_at = clock_timestamp(), apply_state = 'skipped'
-       where page_id = ${input.pageId} and shadow and outcome in ('admitted', 'sent')
-      returning id
     ), applies_due as (
       update sync_attempts
          set apply_retry_at = clock_timestamp()
@@ -614,7 +593,6 @@ export async function recoverUnfinishedAttempts(
     )
     select (select count(*) from live_unknown)::int as unknown,
            (select count(*) from memory_skipped)::int as "memorySkipped",
-           (select count(*) from shadow_closed)::int as "shadowClosed",
            (select count(*) from applies_due)::int as "appliesDue"
   `);
   // A separate statement, so it sees the attempts settled above.
@@ -636,7 +614,6 @@ export async function recoverUnfinishedAttempts(
   return {
     unknown: Number(row?.unknown ?? 0),
     memorySkipped: Number(row?.memorySkipped ?? 0),
-    shadowClosed: Number(row?.shadowClosed ?? 0),
     workReopened: reopened.rowCount ?? 0,
     appliesDue: Number(row?.appliesDue ?? 0),
   };
@@ -703,16 +680,13 @@ export interface SyncPaceAuditSend {
  * Every recorded send of a page in [since, until), in send order, each with
  * the gap to the previous send of the page (including the last one in the
  * `SYNC_PACE_AUDIT_LOOKBACK_MS` before `since`) — the pace audit of §2.4 and
- * alert 1. Live and shadow are separate journals (`shadow`). The look-back
- * bound keeps the search for that previous send an index range: the
- * `sync_attempts_page_sent` index does not carry `shadow`, so an unbounded
- * search on a page whose whole history is the other journal walks all of it.
+ * alert 1. The look-back bound keeps the search for that previous send an
+ * index range, however long the page's journal is.
  */
 export async function listSendsForPaceAudit(
   db: Database,
-  input: { pageId: number; since: Date; until?: Date | null; shadow?: boolean },
+  input: { pageId: number; since: Date; until?: Date | null },
 ): Promise<SyncPaceAuditSend[]> {
-  const shadow = input.shadow === true;
   const until = input.until === undefined || input.until === null ? sql`'infinity'::timestamptz` : sql`${input.until}::timestamptz`;
   const result = await db.execute<{
     attemptId: string;
@@ -728,12 +702,12 @@ export async function listSendsForPaceAudit(
                extract(epoch from a.sent_at - lag(a.sent_at) over (order by a.sent_at, a.id)) * 1000 as gap_ms
           from sync_attempts a
          where a.page_id = ${input.pageId}
-           and a.shadow = ${shadow}::boolean
+           and not a.shadow
            and a.sent_at is not null
            and a.sent_at >= coalesce((
              select max(b.sent_at) from sync_attempts b
               where b.page_id = ${input.pageId}
-                and b.shadow = ${shadow}::boolean
+                and not b.shadow
                 and b.sent_at < ${input.since}::timestamptz
                 and b.sent_at >= ${input.since}::timestamptz
                   - ${SYNC_PACE_AUDIT_LOOKBACK_MS}::double precision * interval '1 millisecond'
@@ -758,14 +732,10 @@ export async function listSendsForPaceAudit(
  *  × 1.2) and the longest route interval (⅛ of the lowest ceiling: 40 s). */
 export const SYNC_SEND_AUDIT_LOOKBACK_MS = 10 * 60_000;
 
-/** One row of a page's send journals as the send audit reads it: a live (or,
- *  for the shadow report, a shadow) engine attempt, or a send of the step-1
- *  legacy send log. */
+/** One row of a page's send journals as the send audit reads it: an engine
+ *  attempt, or a send of the step-1 legacy send log. */
 export interface FanslySendAuditRow {
   journal: "engine" | "legacy";
-  /** The shadow journal's: its sends are simulated, so an attempt without a
-   *  send instant simulated none (the takeover floor never counts it). */
-  shadow: boolean;
   /** `fansly_send_log.source` of a legacy row; null for the engine. */
   source: string | null;
   /** The row's id in its journal. */
@@ -802,21 +772,18 @@ export interface FanslySendAuditRow {
 
 /**
  * The send audit's read (invariants I1 and I19; the alert evaluator, `sync
- * check live-hour`, the shadow report): every row of a page's engine journal
- * (`shadow` picks the shadow one) and — with `legacy` — of the step-1 legacy
- * send log admitted (captured) in [since − `lookbackMs`, until), with what
- * the audit compares: the admission, the recorded send instant and its upper
- * bound, the pause and the route and family intervals each admission applied,
- * the answer's status. Two short
+ * check live-hour`): every row of a page's engine journal and of the step-1
+ * legacy send log admitted (captured) in [since − `lookbackMs`, until), with
+ * what the audit compares: the admission, the recorded send instant and its
+ * upper bound, the pause and the route and family intervals each admission
+ * applied, the answer's status. Two short
  * range scans (`sync_attempts_page_admitted`, `fansly_send_log_page_captured_idx`);
  * the rules are the audit's (`apps/runtime/src/sync/engine/send-audit.ts`).
  */
 export async function readFanslySendAudit(
   db: Database,
-  input: { pageId: number; since: Date; until?: Date | null; shadow?: boolean; legacy?: boolean; lookbackMs?: number },
+  input: { pageId: number; since: Date; until?: Date | null; lookbackMs?: number },
 ): Promise<FanslySendAuditRow[]> {
-  const shadow = input.shadow === true;
-  const legacy = (input.legacy ?? !shadow) && !shadow;
   const lookbackMs = Math.max(0, input.lookbackMs ?? SYNC_SEND_AUDIT_LOOKBACK_MS);
   const until = input.until === undefined || input.until === null
     ? sql`'infinity'::timestamptz`
@@ -842,14 +809,14 @@ export async function readFanslySendAudit(
   }>(sql`
     select 'engine'::text as journal, null::text as source, a.id::text as ref, a.operation,
            a.owner_generation::text as "ownerGeneration", a.admitted_at as "admittedAt", a.sent_at as "sentAt",
-           case when a.sent_at is not null or a.outcome in ('admitted', 'sent', 'unknown', 'shadow')
+           case when a.sent_at is not null or a.outcome in ('admitted', 'sent', 'unknown')
                 then coalesce(a.sent_at, a.admitted_at + ${sendWindow}) end as "countedAt",
            a.setting_ms as "settingMs", a.pause_ms as "pauseMs", a.gap_prev_ms as "gapPrevMs",
            a.route_interval_ms as "routeIntervalMs", a.family_interval_ms as "familyIntervalMs",
            a.http_status as "httpStatus", a.completed_at as "completedAt"
       from sync_attempts a
      where a.page_id = ${input.pageId}
-       and a.shadow = ${shadow}::boolean
+       and not a.shadow
        and a.admitted_at >= ${from}
        and a.admitted_at < ${until}
     union all
@@ -859,15 +826,13 @@ export async function readFanslySendAudit(
            l.setting_ms, l.pause_ms, null::double precision, null::integer, null::integer,
            l.http_status, l.completed_at
       from fansly_send_log l
-     where ${legacy}::boolean
-       and l.page_id = ${input.pageId}
+     where l.page_id = ${input.pageId}
        and l.captured_at >= ${from}
        and l.captured_at < ${until}
   `);
   const num = (value: number | string | null): number | null => (value === null ? null : Number(value));
   return result.rows.map((row) => ({
     journal: row.journal,
-    shadow,
     source: row.source,
     ref: Number(row.ref),
     operation: row.operation,
@@ -951,23 +916,20 @@ export const SYNC_ROUTE_JOURNAL_SLACK_MS = SYNC_FLOOR_LOOKBACK_MS;
  * short range scan of `sync_attempts_page_admitted` (and
  * `fansly_send_log_page_captured_idx`), however long the journal is.
  *
- * - Engine attempts of the page's journal (`shadow`: the shadow one): the
- *   actual send (`sent_at`); without one, an attempt that may still have
- *   gone out (`admitted`, `sent`, `unknown`, a recovered `shadow`) counts at
+ * - Engine attempts: the actual send (`sent_at`); without one, an attempt
+ *   that may still have gone out (`admitted`, `sent`, `unknown`) counts at
  *   its admission + the send window, the latest its send check could pass. A
  *   refusal before sending and a failure that never reached
  *   `onRequestStart` (no `sent_at`) sent nothing.
- * - With `legacy` (a page the engine owns live), the step-1 send log too:
- *   what the legacy engine sent before the switch (or after a rollback)
- *   counts against the same routes. A send never marked counts at its
- *   completion, else its lease end; a capture released unsent does not.
+ * - The step-1 send log: what the legacy engine sent for the page counts
+ *   against the same routes. A send never marked counts at its completion,
+ *   else its lease end; a capture released unsent does not.
  */
 export async function readRouteJournal(
   db: Database,
-  input: { pageId: number; shadow: boolean; withinMs: number; legacy: boolean },
+  input: { pageId: number; withinMs: number },
 ): Promise<SyncRouteSend[]> {
   const scanMs = Math.max(0, input.withinMs) + SYNC_ROUTE_JOURNAL_SLACK_MS;
-  const legacy = input.legacy && !input.shadow;
   const result = await db.execute<{ journal: SyncRouteJournal; operation: string; lastAt: Date | string }>(sql`
     select 'engine'::text as journal, a.operation,
            max(coalesce(a.sent_at,
@@ -975,16 +937,15 @@ export async function readRouteJournal(
       from sync_attempts a
      where a.page_id = ${input.pageId}
        and a.admitted_at > statement_timestamp() - ${scanMs}::double precision * interval '1 millisecond'
-       and a.shadow = ${input.shadow}::boolean
-       and (a.sent_at is not null or a.outcome in ('admitted', 'sent', 'unknown', 'shadow'))
+       and not a.shadow
+       and (a.sent_at is not null or a.outcome in ('admitted', 'sent', 'unknown'))
      group by a.operation
     union all
     select 'legacy'::text, l.operation,
            max(coalesce(l.sent_at, l.completed_at, l.lease_until,
              l.captured_at + ${SYNC_SEND_WINDOW_MS}::double precision * interval '1 millisecond'))
       from fansly_send_log l
-     where ${legacy}::boolean
-       and l.page_id = ${input.pageId}
+     where l.page_id = ${input.pageId}
        and l.captured_at > statement_timestamp() - ${scanMs}::double precision * interval '1 millisecond'
        and (l.sent_at is not null or l.outcome is distinct from 'aborted_before_send')
      group by l.operation
@@ -1023,17 +984,16 @@ export interface SyncSendCounts {
   byResource: Record<string, number>;
 }
 
-/** Sends of a page since `since` by class and by resource (status). Live and
- *  shadow are separate journals. */
+/** Sends of a page since `since` by class and by resource (status). */
 export async function countSendsSince(
   db: Database,
-  input: { pageId: number; since: Date; shadow: boolean },
+  input: { pageId: number; since: Date },
 ): Promise<SyncSendCounts> {
   const result = await db.execute<{ class: SyncEngineWorkClass; resource: string; sends: number }>(sql`
     select a.class, a.resource, count(*)::int as sends
       from sync_attempts a
      where a.page_id = ${input.pageId}
-       and a.shadow = ${input.shadow}::boolean
+       and not a.shadow
        and a.sent_at >= ${input.since}::timestamptz
      group by a.class, a.resource
   `);
@@ -1059,25 +1019,25 @@ export interface SyncRouteUse {
  * ruling 11: the history ETA's measure of what the other classes take of
  * the page's slots and budgets). Counted as the route clocks count them
  * (`readRouteJournal`): an attempt that may have gone out without a recorded
- * send (`admitted`, `sent`, `unknown`, a recovered `shadow`) counts at its
- * admission; a refusal before sending does not. A short range scan of
+ * send (`admitted`, `sent`, `unknown`) counts at its admission; a refusal
+ * before sending does not. A short range scan of
  * `sync_attempts_page_admitted`.
  */
 export async function readRouteUse(
   db: Database,
-  input: { pageId: number; shadow: boolean; withinMs: number },
+  input: { pageId: number; withinMs: number },
 ): Promise<SyncRouteUse[]> {
   const withinMs = Math.max(0, input.withinMs);
   const result = await db.execute<{ class: SyncEngineWorkClass; operation: string; sends: number }>(sql`
     select a.class, a.operation, count(*)::int as sends
       from sync_attempts a
      where a.page_id = ${input.pageId}
-       and a.shadow = ${input.shadow}::boolean
+       and not a.shadow
        and a.admitted_at > statement_timestamp()
          - ${withinMs + SYNC_ROUTE_JOURNAL_SLACK_MS}::double precision * interval '1 millisecond'
        and coalesce(a.sent_at, a.admitted_at)
          > statement_timestamp() - ${withinMs}::double precision * interval '1 millisecond'
-       and (a.sent_at is not null or a.outcome in ('admitted', 'sent', 'unknown', 'shadow'))
+       and (a.sent_at is not null or a.outcome in ('admitted', 'sent', 'unknown'))
      group by a.class, a.operation
   `);
   return result.rows.map((row) => ({ class: row.class, operation: row.operation, sends: Number(row.sends) }));

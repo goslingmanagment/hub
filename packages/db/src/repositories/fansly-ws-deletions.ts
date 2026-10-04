@@ -14,10 +14,9 @@
 // each deletion as an exact `mutation_debt` receipt in
 // fansly_ws_hint_receipts, and a minutely reconcile turned the receipts into
 // marks. Those receipts stay as records: no event carries those marks, so the
-// message-archive shadow rebuild re-applies them (`markFanslyWsArchiveDeletions`),
-// and the shadow report's replay reads them
-// (`listFanslyWsExactDeletedMessageRefs`). Erasure deletes the receipts with
-// the fan's rows, so a mark can never reach erased material.
+// message-archive shadow rebuild re-applies them (`markFanslyWsArchiveDeletions`).
+// Erasure deletes the receipts with the fan's rows, so a mark can never reach
+// erased material.
 //
 // Evidence is exact: page + native group + native message from a frame with
 // a known credential/route generation. A correlation or bulk marker is never
@@ -58,29 +57,6 @@ function deletionsCte(scope: FanslyWsDeletionScope): SQL {
         ${accountFilter}
       group by r.page_id, r.group_ref, r.message_ref
     )`;
-}
-
-/** Which of these messages of one group carry an exact deletion receipt
- *  (the fact `deletionsCte` reads, through the partial index
- *  fansly_ws_hint_exact_delete). Read-only: the shadow report's replay judges
- *  rows a journal-only read served moments before Fansly deleted them. */
-export async function listFanslyWsExactDeletedMessageRefs(
-  db: Database,
-  input: { pageId: number; groupRef: string; messageRefs: readonly string[] },
-): Promise<string[]> {
-  const refs = [...new Set(input.messageRefs)];
-  if (refs.length === 0) return [];
-  const result = await db.execute<{ messageRef: string }>(sql`
-    select distinct r.message_ref as "messageRef"
-      from fansly_ws_hint_receipts r
-     where r.page_id = ${input.pageId}
-       and r.group_ref = ${input.groupRef}
-       and r.message_ref = any(${sql.param(refs)}::text[])
-       and r.outcome = 'mutation_debt'
-       and r.generation is not null
-     order by 1
-  `);
-  return result.rows.map((row) => row.messageRef);
 }
 
 /** Archive rows still live for an exact deletion. A row without a

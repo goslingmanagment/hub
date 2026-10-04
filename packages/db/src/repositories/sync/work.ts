@@ -17,9 +17,14 @@ import {
 } from "./values.ts";
 
 // Fansly Sync Engine (plan §3, §11; design §2.2, §3.4, §3.7, §4.1): the ONE
-// work queue. One open row per page × shadow × resource × subject; new demand
-// merges into it in the database (`upsertDemand`), raising `demand_revision`
-// so an attempt admitted earlier never closes newer demand (I11).
+// work queue. One open row per page × resource × subject; new demand merges
+// into it in the database (`upsertDemand`), raising `demand_revision` so an
+// attempt admitted earlier never closes newer demand (I11).
+//
+// Shadow mode is gone (step 4 S4-23): every row this module writes has
+// `shadow` false (`sync_work_open_uniq` still carries the column), and every
+// read of a page's queue leaves out the closed rows shadow mode left behind
+// (`not shadow`) until the retention prunes them.
 //
 // Lock order (design §3.7): `sync_pages` → erasure fence → hot tables →
 // `domain_event_seq` → `sync_work` → `history_requests` → `history_request_items`.
@@ -65,11 +70,9 @@ export const SYNC_WORK_PARAM_IDS_CAP = 1_000;
 /** LISTEN/NOTIFY channel that wakes a page's actor; the payload is the page id. */
 export const SYNC_WORK_NOTIFY_CHANNEL = "fansly_sync_work";
 
-/** LISTEN/NOTIFY channel a settled LIVE work row announces itself on
+/** LISTEN/NOTIFY channel a settled work row announces itself on
  *  (`settleWork`), payload `<workId>:<appliedRevision>`: the wake of the
- *  "enqueue work and wait" wrapper (design §7.3). Shadow rows stay silent —
- *  the wrapper answers `not_live` on every page that is not live, so a shadow
- *  row never has a waiter. */
+ *  "enqueue work and wait" wrapper (design §7.3). */
 export const SYNC_WORK_DONE_NOTIFY_CHANNEL = "fansly_sync_work_done";
 
 /** Candidates a class pick reads at once (design §3.4). */
@@ -85,7 +88,6 @@ export interface SyncWorkDemand {
 export interface SyncWorkRow {
   id: number;
   pageId: number;
-  shadow: boolean;
   resource: string;
   subject: string;
   kind: SyncWorkKind;
@@ -122,7 +124,6 @@ export interface SyncWorkRow {
 type WorkSqlRow = {
   id: string;
   pageId: string;
-  shadow: boolean;
   resource: string;
   subject: string;
   kind: SyncWorkKind;
@@ -160,7 +161,6 @@ type WorkSqlRow = {
 const workColumns = sql`
   w.id::text as id,
   w.page_id::text as "pageId",
-  w.shadow,
   w.resource,
   w.subject,
   w.kind,
@@ -203,7 +203,6 @@ function normalizeWorkRow(row: WorkSqlRow): SyncWorkRow {
   return {
     id: Number(row.id),
     pageId: Number(row.pageId),
-    shadow: row.shadow === true,
     resource: row.resource,
     subject: row.subject,
     kind: row.kind,
@@ -261,7 +260,6 @@ async function notifyWork(db: Database, pageId: number): Promise<void> {
 
 export interface UpsertDemandInput {
   pageId: number;
-  shadow: boolean;
   /** Registry key `<file>.<variant>`. */
   resource: string;
   /** '' for page-level work; a group id, fan id, media id … otherwise. */
@@ -344,7 +342,7 @@ export async function upsertDemand(db: Database, input: UpsertDemandInput): Prom
       page_id, shadow, resource, subject, kind, class, due_at, coalesce_until, deadline_at, demand, params,
       secret_params, failure_count, breaker_until, blocked_by_vendor_at, last_error_class
     )
-    select ${input.pageId}::bigint, ${input.shadow}::boolean, ${input.resource}::text, ${subject}::text,
+    select ${input.pageId}::bigint, false, ${input.resource}::text, ${subject}::text,
            ${input.kind}::text, ${input.class}::text,
            coalesce(${timestampParam(input.dueAt)}, clock_timestamp()),
            ${timestampParam(input.coalesceUntil)},
@@ -363,7 +361,7 @@ export async function upsertDemand(db: Database, input: UpsertDemandInput): Prom
          where c.page_id = ${input.pageId}
            and c.resource = ${input.resource}
            and c.subject = ${subject}
-           and c.shadow = ${input.shadow}
+           and not c.shadow
            and c.closed_at is not null
          order by c.id desc
          limit 1
@@ -387,12 +385,7 @@ export async function upsertDemand(db: Database, input: UpsertDemandInput): Prom
   if (!row) {
     if (input.createOnly !== true) throw new Error("sync_work upsert returned no row");
     // The open row of the key stays as it is: no demand merged, nothing to wake.
-    const open = await getOpenWorkForKey(db, {
-      pageId: input.pageId,
-      shadow: input.shadow,
-      resource: input.resource,
-      subject,
-    });
+    const open = await getOpenWorkForKey(db, { pageId: input.pageId, resource: input.resource, subject });
     if (open === null) throw new Error(`sync_work ${input.resource} conflicted with an open row that is gone; retry`);
     return { id: open.id, demandRevision: open.demandRevision, created: false };
   }
@@ -434,7 +427,6 @@ export async function ensurePollRows(
   db: Database,
   input: {
     pageId: number;
-    shadow: boolean;
     polls: ReadonlyArray<{
       resource: string;
       class: SyncEngineWorkClass;
@@ -460,7 +452,7 @@ export async function ensurePollRows(
   });
   const result = await db.execute(sql`
     insert into sync_work (page_id, shadow, resource, subject, kind, class, due_at)
-    select ${input.pageId}::bigint, ${input.shadow}::boolean, x.resource, '', x.kind, x.class,
+    select ${input.pageId}::bigint, false, x.resource, '', x.kind, x.class,
            clock_timestamp() + (x.every_ms * coalesce(x.phase, random())) * interval '1 millisecond'
       from jsonb_to_recordset(${jsonParam(polls)})
         as x(resource text, class text, every_ms double precision, phase double precision, kind text)
@@ -474,15 +466,15 @@ export async function ensurePollRows(
 }
 
 /**
- * "Sync now" (design §7.3): every open poll row of a page in one journal —
- * or only those of the given resource files — becomes due now. A running row,
+ * "Sync now" (design §7.3): every open poll row of a page — or only those of
+ * the given resource files — becomes due now. A running row,
  * a row already due and the standing walks are left alone; a poll's next due
  * time after its read is the registry's period again. Wakes the page's actor
  * when anything moved. Returns how many rows were bumped.
  */
 export async function bumpPagePolls(
   db: Database,
-  input: { pageId: number; shadow: boolean; files?: readonly string[] },
+  input: { pageId: number; files?: readonly string[] },
 ): Promise<number> {
   const files = input.files ?? null;
   for (const file of files ?? []) {
@@ -496,7 +488,7 @@ export async function bumpPagePolls(
        set due_at = clock_timestamp(),
            updated_at = clock_timestamp()
      where w.page_id = ${input.pageId}
-       and w.shadow = ${input.shadow}
+       and not w.shadow
        and w.kind = 'poll'
        and w.state = 'open'
        and w.due_at > clock_timestamp()
@@ -511,12 +503,11 @@ export async function bumpPagePolls(
 
 export interface SyncWorkPickFilter {
   pageId: number;
-  shadow: boolean;
   /** The pick instant; default: the database clock. */
   now?: Date | null;
   /** Paused keys (`sync_pages.paused_resources`). */
   excludeResources?: readonly string[];
-  /** Resource files under a live resource hold (`sync_pages.resource_holds`). */
+  /** Resource files whose breaker is in force (the page's hold set). */
   excludeFiles?: readonly string[];
   /** Classes the page may not serve now (the owner's requests pause). */
   excludeClasses?: readonly SyncEngineWorkClass[];
@@ -550,7 +541,7 @@ function exclusionPredicate(filter: Pick<SyncWorkPickFilter, "excludeResources" 
 function runnablePredicate(filter: SyncWorkPickFilter, workClass: SyncEngineWorkClass): SQL {
   const now = nowParam(filter.now);
   return sql`w.page_id = ${filter.pageId}
-    and w.shadow = ${filter.shadow}
+    and not w.shadow
     and w.class = ${workClass}
     and w.state = 'open'
     and w.due_at <= ${now}
@@ -579,10 +570,10 @@ export async function pickUrgent(
 
 /**
  * The work a credentials page hold lets through (step-3 §3.5 item 3 (b),
- * E16; step 3b A3), due, oldest demand first: a live `account.identity` check
+ * E16; step 3b A3), due, oldest demand first: an `account.identity` check
  * that carries a candidate session or proxy (`secret_params`) — its request
  * uses the candidate, not the stored credentials that failed — and, with
- * `verify`, the live `account.verify` of stored credentials the page-hold
+ * `verify`, the `account.verify` of stored credentials the page-hold
  * core admits under the hold (their digest is not the latest refusal's; the
  * caller judged it). A 429 or network hold exempts nothing (the caller
  * checks the hold).
@@ -616,7 +607,7 @@ export async function pickCredentialsCheck(
  */
 export async function pickBeforeGateWork(
   db: Database,
-  input: { pageId: number; shadow: boolean; resources: readonly string[]; limit: number },
+  input: { pageId: number; resources: readonly string[]; limit: number },
 ): Promise<SyncWorkRow[]> {
   if (input.resources.length === 0) return [];
   const resources = textArrayParam(input.resources);
@@ -624,7 +615,7 @@ export async function pickBeforeGateWork(
     select ${workColumns}
       from sync_work w
      where w.page_id = ${input.pageId}
-       and w.shadow = ${input.shadow}::boolean
+       and not w.shadow
        and w.state = 'open'
        and w.resource = any(${resources})
        and w.due_at <= clock_timestamp()
@@ -817,7 +808,7 @@ export interface SettleWorkResult {
  * Settle a work row after a step (apply, no-HTTP plan, failed attempt). The
  * row closes only when the step asked to AND no demand newer than
  * `servedRevision` arrived during the step; otherwise it stays open and runs
- * again (I11). A closing row drops its `secret_params`. A live row announces
+ * again (I11). A closing row drops its `secret_params`. The row announces
  * the settle on `fansly_sync_work_done` (delivered at commit). Null: the row
  * is not open or running any more (erased, superseded).
  */
@@ -829,7 +820,7 @@ export async function settleWork(db: Database, input: SettleWorkInput): Promise<
   // statement waits for the row lock is seen (the re-checked row version).
   const closing = sql`(${close}::text is not null and w.demand_revision <= ${input.servedRevision}::bigint)`;
   const newerDemand = sql`(w.demand_revision > ${input.servedRevision}::bigint)`;
-  const result = await db.execute<{ state: SyncWorkState; demandRevision: string; appliedRevision: string; shadow: boolean }>(sql`
+  const result = await db.execute<{ state: SyncWorkState; demandRevision: string; appliedRevision: string }>(sql`
     update sync_work w
        set applied_revision = greatest(w.applied_revision,
              least(w.demand_revision, coalesce(${applied}::bigint, w.applied_revision))),
@@ -858,13 +849,11 @@ export async function settleWork(db: Database, input: SettleWorkInput): Promise<
            updated_at = clock_timestamp()
      where w.id = ${input.workId}
        and w.state in ('open', 'running')
-    returning w.state, w.demand_revision::text as "demandRevision", w.applied_revision::text as "appliedRevision", w.shadow
+    returning w.state, w.demand_revision::text as "demandRevision", w.applied_revision::text as "appliedRevision"
   `);
   const row = result.rows[0];
   if (!row) return null;
-  if (!row.shadow) {
-    await db.execute(sql`select pg_notify(${SYNC_WORK_DONE_NOTIFY_CHANNEL}, ${`${input.workId}:${row.appliedRevision}`})`);
-  }
+  await db.execute(sql`select pg_notify(${SYNC_WORK_DONE_NOTIFY_CHANNEL}, ${`${input.workId}:${row.appliedRevision}`})`);
   return {
     state: row.state,
     demandRevision: Number(row.demandRevision),
@@ -986,13 +975,13 @@ export interface RequeuedSyncWork {
  * The owner's requeue of quarantined work (design step 3 §3.2 item 5, plan
  * §9: "после исправления — повторное применение из журнала без HTTP").
  *
- * A row whose last attempt is a live attempt quarantined with an answer in
- * the journal is re-applied from it: the attempt becomes `deferred` (due now,
- * failures reset) and the row `running` — the state of a captured answer
- * whose apply is pending, so the actor's apply drain (and a restart's
- * recovery) applies it and no pick admits a new read of the key before that.
- * Every other quarantined row (a plan quarantine, a shadow row, an answer
- * whose body is gone from the journal — its attempt quarantined as
+ * A row whose last attempt was quarantined with an answer in the journal is
+ * re-applied from it: the attempt becomes `deferred` (due now, failures
+ * reset) and the row `running` — the state of a captured answer whose apply
+ * is pending, so the actor's apply drain (and a restart's recovery) applies
+ * it and no pick admits a new read of the key before that. Every other
+ * quarantined row (a plan quarantine, an answer whose body is gone from the
+ * journal — its attempt quarantined as
  * `SYNC_APPLY_ERROR_PAYLOAD_UNAVAILABLE`) opens due now for a fresh read.
  * Both drop `result.quarantine`; a second refusal writes a new one. Only rows
  * of the page in `quarantined` are touched; NOTIFY wakes the page's actor at
@@ -1000,7 +989,7 @@ export interface RequeuedSyncWork {
  */
 export async function requeueQuarantinedWork(
   db: Database,
-  input: { pageId: number; workIds?: readonly number[]; resources?: readonly string[]; shadow?: boolean },
+  input: { pageId: number; workIds?: readonly number[]; resources?: readonly string[] },
 ): Promise<RequeuedSyncWork[]> {
   for (const resource of input.resources ?? []) assertResourceKey(resource);
   const ids = input.workIds === undefined ? null : [...new Set(input.workIds)].map(String);
@@ -1008,16 +997,15 @@ export async function requeueQuarantinedWork(
   const resourceFilter = input.resources === undefined || input.resources.length === 0
     ? sql``
     : sql`and w.resource = any(${textArrayParam(input.resources)})`;
-  const shadowFilter = input.shadow === undefined ? sql`` : sql`and w.shadow = ${input.shadow}::boolean`;
   const result = await db.execute<{ id: string; resource: string; subject: string; reapplyAttemptId: string | null }>(sql`
     with target as (
       select w.id, w.last_attempt_id
         from sync_work w
        where w.page_id = ${input.pageId}
+         and not w.shadow
          and w.state = 'quarantined'
          ${idFilter}
          ${resourceFilter}
-         ${shadowFilter}
        order by w.id
          for update of w
     ),
@@ -1100,7 +1088,7 @@ export async function closeQuarantinedWork(
 
 /**
  * How many of these keys still have demand no step has served: an open (or
- * running, or quarantined) live row whose `applied_revision` is behind its
+ * running, or quarantined) row whose `applied_revision` is behind its
  * `demand_revision`. A row that closed, or a poll whose read since applied
  * the demand, is served. Read by a repair waiting for the work it spawned.
  */
@@ -1124,27 +1112,28 @@ export async function countUnservedWorkForKeys(
 }
 
 /** One work row by id, unlocked (the apply reads it first and settles it
- *  last, after its event appends — the lock order of §3.7). */
+ *  last, after its event appends — the lock order of §3.7). A row shadow mode
+ *  left behind is no work: null. */
 export async function getSyncWork(db: Database, workId: number): Promise<SyncWorkRow | null> {
   const result = await db.execute<WorkSqlRow>(sql`
-    select ${workColumns} from sync_work w where w.id = ${workId}
+    select ${workColumns} from sync_work w where w.id = ${workId} and not w.shadow
   `);
   const row = result.rows[0];
   return row ? normalizeWorkRow(row) : null;
 }
 
-/** The earliest due time of the page's open work in this journal that a
- *  pick with the same exclusions could take (the actor sleeps until then, at
- *  most a second). Null: no such open work. */
+/** The earliest due time of the page's open work that a pick with the same
+ *  exclusions could take (the actor sleeps until then, at most a second).
+ *  Null: no such open work. */
 export async function nextOpenWorkDueAt(
   db: Database,
-  input: Pick<SyncWorkPickFilter, "pageId" | "shadow" | "excludeResources" | "excludeFiles" | "excludeClasses">,
+  input: Pick<SyncWorkPickFilter, "pageId" | "excludeResources" | "excludeFiles" | "excludeClasses">,
 ): Promise<Date | null> {
   const result = await db.execute<{ dueAt: Date | string | null }>(sql`
     select min(greatest(w.due_at, coalesce(w.breaker_until, w.due_at))) as "dueAt"
       from sync_work w
      where w.page_id = ${input.pageId}
-       and w.shadow = ${input.shadow}::boolean
+       and not w.shadow
        and w.state = 'open'
        and ${exclusionPredicate(input)}
        and ${requestsWorkHasOpenItem}
@@ -1153,10 +1142,10 @@ export async function nextOpenWorkDueAt(
 }
 
 /** Which of these subjects (absent: any) have an open (or running) row of
- *  `resource` in this journal — plain read, no lock. */
+ *  `resource` — plain read, no lock. */
 export async function listOpenWorkSubjects(
   db: Database,
-  input: { pageId: number; shadow: boolean; resource: string; subjects?: readonly string[] },
+  input: { pageId: number; resource: string; subjects?: readonly string[] },
 ): Promise<Set<string>> {
   const subjects = input.subjects === undefined ? null : [...new Set(input.subjects)];
   if (subjects !== null && subjects.length === 0) return new Set();
@@ -1164,7 +1153,7 @@ export async function listOpenWorkSubjects(
     select w.subject
       from sync_work w
      where w.page_id = ${input.pageId}
-       and w.shadow = ${input.shadow}::boolean
+       and not w.shadow
        and w.resource = ${input.resource}
        and w.state in ('open', 'running')
        ${subjects === null ? sql`` : sql`and w.subject = any(${textArrayParam(subjects)})`}
@@ -1172,17 +1161,17 @@ export async function listOpenWorkSubjects(
   return new Set(result.rows.map((row) => row.subject));
 }
 
-/** The open (or running, or quarantined) row of one key in this journal, if
- *  any — plain read, no lock (`lockWorkRows` takes it before a write). */
+/** The open (or running, or quarantined) row of one key, if any — plain read,
+ *  no lock (`lockWorkRows` takes it before a write). */
 export async function getOpenWorkForKey(
   db: Database,
-  input: { pageId: number; shadow: boolean; resource: string; subject: string },
+  input: { pageId: number; resource: string; subject: string },
 ): Promise<SyncWorkRow | null> {
   const result = await db.execute<WorkSqlRow>(sql`
     select ${workColumns}
       from sync_work w
      where w.page_id = ${input.pageId}
-       and w.shadow = ${input.shadow}::boolean
+       and not w.shadow
        and w.resource = ${input.resource}
        and w.subject = ${input.subject}
        and w.state in ('open', 'running', 'quarantined')
@@ -1296,7 +1285,7 @@ export async function getSyncWorkRows(db: Database, workIds: readonly number[]):
  *  subject — plain read, no lock (`lockWorkRows` takes them). */
 export async function openWorkIdsForSubjects(
   db: Database,
-  input: { pageId: number; shadow: boolean; resource: string; subjects: readonly string[] },
+  input: { pageId: number; resource: string; subjects: readonly string[] },
 ): Promise<Map<string, number>> {
   const subjects = [...new Set(input.subjects)];
   if (subjects.length === 0) return new Map();
@@ -1304,7 +1293,7 @@ export async function openWorkIdsForSubjects(
     select w.subject, w.id::text as id
       from sync_work w
      where w.page_id = ${input.pageId}
-       and w.shadow = ${input.shadow}::boolean
+       and not w.shadow
        and w.resource = ${input.resource}
        and w.state in ('open', 'running', 'quarantined')
        and w.subject = any(${textArrayParam(subjects)})
@@ -1313,10 +1302,10 @@ export async function openWorkIdsForSubjects(
 }
 
 /** The newest row (open or closed) of each subject among a resource file's
- *  keys in the live journal: the subject breaker a new demand would meet. */
+ *  keys: the subject breaker a new demand would meet. */
 export async function latestWorkForSubjects(
   db: Database,
-  input: { pageId: number; shadow: boolean; resourceFile: string; subjects: readonly string[] },
+  input: { pageId: number; resourceFile: string; subjects: readonly string[] },
 ): Promise<Map<string, SyncWorkRow>> {
   if (!SYNC_RESOURCE_FILE_PATTERN.test(input.resourceFile)) throw new Error(`Not a resource file: ${input.resourceFile}`);
   const subjects = [...new Set(input.subjects)];
@@ -1325,7 +1314,7 @@ export async function latestWorkForSubjects(
     select distinct on (w.subject) ${workColumns}
       from sync_work w
      where w.page_id = ${input.pageId}
-       and w.shadow = ${input.shadow}::boolean
+       and not w.shadow
        and w.resource like ${`${input.resourceFile}.%`}
        and w.subject = any(${textArrayParam(subjects)})
      order by w.subject, w.id desc
@@ -1354,7 +1343,6 @@ export async function getWorkForStatus(
   db: Database,
   input: {
     pageId: number;
-    shadow?: boolean;
     resource?: string;
     subject?: string;
     states?: readonly SyncWorkState[];
@@ -1362,8 +1350,7 @@ export async function getWorkForStatus(
     offset?: number;
   },
 ): Promise<SyncWorkRow[]> {
-  const filters: SQL[] = [sql`w.page_id = ${input.pageId}`];
-  if (input.shadow !== undefined) filters.push(sql`w.shadow = ${input.shadow}`);
+  const filters: SQL[] = [sql`w.page_id = ${input.pageId}`, sql`not w.shadow`];
   if (input.resource !== undefined) filters.push(sql`w.resource = ${input.resource}`);
   if (input.subject !== undefined) filters.push(sql`w.subject = ${input.subject}`);
   if (input.states !== undefined) filters.push(sql`w.state = any(${textArrayParam(input.states)})`);
@@ -1383,7 +1370,7 @@ export async function getWorkForStatus(
  *  caller reusing a recent result, e.g. the describer's earlier download). */
 export async function latestClosedWorkForKey(
   db: Database,
-  input: { pageId: number; shadow: boolean; resource: string; subject: string; closedAfter?: Date },
+  input: { pageId: number; resource: string; subject: string; closedAfter?: Date },
 ): Promise<SyncWorkRow | null> {
   const closedAfter = input.closedAfter === undefined ? sql`` : sql`and w.closed_at > ${timestampParam(input.closedAfter)}`;
   const result = await db.execute<WorkSqlRow>(sql`
@@ -1392,7 +1379,7 @@ export async function latestClosedWorkForKey(
      where w.page_id = ${input.pageId}
        and w.resource = ${input.resource}
        and w.subject = ${input.subject}
-       and w.shadow = ${input.shadow}
+       and not w.shadow
        and w.closed_at is not null
        ${closedAfter}
      order by w.id desc

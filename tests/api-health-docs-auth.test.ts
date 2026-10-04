@@ -39,7 +39,6 @@ const { SESSION_COOKIE_NAME } = await import("../apps/runtime/src/services/auth.
 
 function createRouteTestContext(input?: {
   healthSyncMonitoringToken?: string | null;
-  syncSharedRateLimitEnabled?: boolean;
   ofapi?: AppContext["ofapi"];
 }) {
   const encryptionKey = Buffer.alloc(32, 7);
@@ -58,19 +57,12 @@ function createRouteTestContext(input?: {
       fanslyBaseUrl: "https://example.invalid",
       syncHttpTraceFile: null,
       fanslyDefaultDelayMs: 2500,
-      fanslyDmConversationsDelayMs: 5000,
-      fanslyDmMessagesDelayMs: 5000,
-      followerPageDelayMs: 0,
       onlyFansDefaultDelayMs: 1000,
-      transactionLookbackDays: 7,
-      transactionRescanCapDays: 30,
-      syncSharedRateLimitEnabled: input?.syncSharedRateLimitEnabled ?? false,
       egressPacerMode: "off" as const,
       lakeDir: "lake",
       syncPageExecutorConcurrency: 1,
       syncObservabilityRetentionDays: 30,
       healthSyncLightMaxAgeMinutes: 180,
-      healthSyncFollowerMaxAgeMinutes: 1080,
       healthSyncMonitoringToken: input?.healthSyncMonitoringToken ?? null,
       telegramBotToken: null,
       telegramChatId: null,

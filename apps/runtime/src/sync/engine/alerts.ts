@@ -15,7 +15,6 @@ import {
   type SyncLivePathFacts,
   type SyncPageRow,
 } from "@agency_hub_core/db";
-import { activeFanslyPageHold } from "@agency_hub_core/shared";
 
 import {
   notifySyncEngineIncident,
@@ -27,14 +26,15 @@ import {
   type SyncEngineAlertSubKey,
   type SyncEngineIncidentSubKey,
 } from "../../services/notification-incidents.ts";
-import { FANSLY_ROUTES, routeBudget, routeOfWireId, type FanslyRoute } from "../fansly/routes.ts";
+import { FANSLY_ROUTES, routeBudget, type FanslyRoute } from "../fansly/routes.ts";
 import { moneyFramesMissing, readMoneyFrames } from "../fansly/ws/money-frames.ts";
+import { heldByScope, holdSetOf, pageHoldsInForce, type HoldSet } from "./admission.ts";
 import type { SyncLogger } from "./commit.ts";
-import { NETWORK_ALERT_AFTER_MS, resourceFileOf } from "./errors.ts";
-import { noopMetrics, type AlertSink, type Metrics, type SyncAlertInput } from "./ports.ts";
-import { effectivePeriodMs, resourceDisabled, runsIn, type EngineRegistry } from "./resource.ts";
+import { NETWORK_ALERT_AFTER_MS } from "./errors.ts";
+import type { AlertSink, SyncAlertInput } from "./ports.ts";
+import { effectivePeriodMs, resourceDisabled, type EngineRegistry } from "./resource.ts";
 import { routeHoldUntil } from "./route-holds.ts";
-import { effectiveRatePerMin, parseRouteState, type RouteState } from "./route-policy.ts";
+import { effectiveRatePerMin, routeAdmissionView, RouteClocks, routeStateOfHolds } from "./route-policy.ts";
 import { auditPagePace, auditRouteIntervals } from "./send-audit.ts";
 import { noStallTracker, type StallTracker, type StallTracking } from "./watchdog.ts";
 
@@ -62,12 +62,11 @@ import { noStallTracker, type StallTracker, type StallTracking } from "./watchdo
 // first 429, refreshed (never repeated) by the next ones and by the evaluator
 // while the route is held, resolved 10 clean minutes after.
 //
-// Pages: `handover` and `live` page the owner. A `shadow` page's alerts are
-// metrics only (D14): the golden-signal sampler counts them
-// (`sync_shadow_alerts`), the sink logs the actor's. On `handover` — a mode
-// nothing reaches since step 4 (S4-21), still honoured where a row says it —
-// the ownership alert is suppressed (no owner runs there by design); a
-// handover older than 10 min is `handover_stuck`.
+// Pages: `handover` and `live` page the owner; a page in `off` or `shadow`
+// runs no actor and has no alert. On `handover` — a mode nothing reaches since
+// step 4 (S4-21), still honoured where a row says it — the ownership alert is
+// suppressed (no owner runs there by design); a handover older than 10 min is
+// `handover_stuck`.
 
 /** The evaluator's cadence. */
 export const SYNC_ALERT_EVAL_INTERVAL_MS = 30_000;
@@ -131,9 +130,8 @@ export interface SyncAlertCondition {
 
 /** Everything one page's evaluation reads. */
 export interface PageAlertFacts {
-  page: Pick<SyncPageRow, "pageId" | "mode" | "modeChangedAt" | "holdKind" | "holdUntil" | "holdSince" | "holdDetail"
-    | "resourceHolds" | "pausedAll" | "pausedRequests" | "pausedResources" | "registryOverrides" | "owner">
-    & Partial<Pick<SyncPageRow, "routeState">>;
+  page: Pick<SyncPageRow, "pageId" | "mode" | "modeChangedAt" | "holds" | "pausedAll" | "pausedRequests"
+    | "pausedResources" | "registryOverrides" | "owner">;
   journal: SyncJournalAlertFacts;
   live: SyncLivePathFacts;
   money: { count: number; oldestReceivedAt: Date } | null;
@@ -150,26 +148,25 @@ function dateOf(value: unknown): Date | null {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
-function inForce(until: Date | null, now: Date): boolean {
-  return until !== null && until.getTime() > now.getTime();
-}
-
 /** A resource whose work waits for a reason the owner or another alert owns:
  *  a pause, a switch-off, its file's breaker, or a hold on every route it
- *  reads (the route's own incident pages for that). */
+ *  reads (the route's own incident pages for that) — the last two by the hold
+ *  evaluator, over the route holds alone (no send is counted: a budget's
+ *  interval explains no wait this long). */
 function resourceExplained(
   page: PageAlertFacts["page"],
+  holds: HoldSet,
   resource: string,
   now: Date,
   registry: Pick<EngineRegistry, "spec">,
-  routes: RouteState | null,
 ): boolean {
   if (page.pausedResources.includes(resource) || resourceDisabled(page, resource)) return true;
-  const hold = page.resourceHolds[resourceFileOf(resource)];
-  if (hold !== undefined && inForce(dateOf(hold.until), now)) return true;
-  const operations = registry.spec(resource)?.operations ?? [];
-  return routes !== null && operations.length > 0
-    && operations.every((operation) => routeHoldUntil(routes, routeOfWireId(operation), now) !== null);
+  const spec = registry.spec(resource);
+  const routes = !holds.routes.ok || spec === null
+    ? null
+    : routeAdmissionView(new RouteClocks({ sends: [], state: holds.routes.state }), [spec], now);
+  const held = heldByScope(holds, routes, { work: { resource } }, now);
+  return held.resource !== null || held.route?.scope === "route_hold";
 }
 
 function condition(
@@ -187,23 +184,26 @@ function condition(
  */
 export function evaluatePageAlerts(facts: PageAlertFacts, registry: Pick<EngineRegistry, "spec">): SyncAlertCondition[] {
   const { page, journal, live, now } = facts;
-  const shadow = page.mode === "shadow" || page.mode === "off";
   const conditions: Array<SyncAlertCondition | null> = [];
 
-  // 1. The page stopped: the page holds in force by the shared page-hold
-  // core (the rule the actor admits by) — a credentials hold, and a 429 or
-  // network hold, the page's own or one a credentials hold carries.
+  // 1. The page stopped: what holds the page itself by the hold evaluator
+  // (the rule the actor admits by) — a credentials hold, a network hold
+  // (alone or beside it), rows of its hold set this build cannot read.
   const stopped: SyncAlertCondition["reasons"] = [];
-  const held = activeFanslyPageHold(page, now);
+  const holds = holdSetOf(page.holds);
+  const held = pageHoldsInForce(holds, now);
   const holdInForce = held !== null;
   if (held?.credentials) stopped.push({ detail: held.credentials.kind, since: held.credentials.since });
-  if (held?.timed?.kind === "rate_limit") stopped.push({ detail: "rate_limit", since: held.timed.since });
-  // A route state this build cannot read keeps the page's admission closed
-  // (`engine/route-policy.ts`).
-  const routeState = parseRouteState(page.routeState);
-  if (!routeState.ok) stopped.push({ detail: "route_state_unreadable", since: null, context: { diagnostic: routeState.diagnostic } });
-  const routes = routeState.ok ? routeState.state : null;
-  if (held?.timed?.kind === "network") {
+  // Rows this build cannot read keep the page's admission closed: a route's
+  // state (`engine/route-policy.ts`), or a row of a kind it does not know.
+  if (held?.unreadable) {
+    stopped.push({
+      detail: held.unreadable.routeState ? "route_state_unreadable" : "hold_set_unreadable",
+      since: null,
+      context: { diagnostic: held.unreadable.diagnostic },
+    });
+  }
+  if (held?.timed) {
     const networkSince = dateOf(held.timed.detail.networkSince) ?? held.timed.since;
     if (msSince(networkSince, now) > NETWORK_ALERT_AFTER_MS) stopped.push({ detail: "network", since: networkSince });
   }
@@ -254,7 +254,7 @@ export function evaluatePageAlerts(facts: PageAlertFacts, registry: Pick<EngineR
   }
   if (!page.pausedAll && !holdInForce) {
     const waiting = journal.urgentWaiting.filter((row) =>
-      row.waitingReason !== "dependency" && !resourceExplained(page, row.resource, now, registry, routes));
+      row.waitingReason !== "dependency" && !resourceExplained(page, holds, row.resource, now, registry));
     const oldest = waiting[0];
     if (oldest !== undefined) {
       late.push({
@@ -279,7 +279,7 @@ export function evaluatePageAlerts(facts: PageAlertFacts, registry: Pick<EngineR
     const stale: Array<{ resource: string; since: Date }> = [];
     for (const poll of journal.polls) {
       const spec = registry.spec(poll.resource);
-      if (spec === null || !runsIn(spec, shadow) || resourceExplained(page, poll.resource, now, registry, routes)) continue;
+      if (spec === null || resourceExplained(page, holds, poll.resource, now, registry)) continue;
       const periodMs = effectivePeriodMs(spec, page);
       const staleAfterMs = spec.slo?.staleAfterMs ?? (periodMs === null ? null : SYNC_STALE_PERIODS * periodMs);
       const since = poll.lastServedAt ?? poll.createdAt;
@@ -323,8 +323,8 @@ export interface SyncRouteAlertCondition {
  * min clean", as alert 1) — so the latch the capture opened stands until the
  * route has been clean for 10 minutes. An unreadable route state is alert 1's.
  */
-export function evaluateRouteAlerts(page: Pick<SyncPageRow, "routeState">, now: Date): SyncRouteAlertCondition[] {
-  const read = parseRouteState(page.routeState);
+export function evaluateRouteAlerts(page: Pick<SyncPageRow, "holds">, now: Date): SyncRouteAlertCondition[] {
+  const read = routeStateOfHolds(page.holds);
   if (!read.ok) return [];
   const conditions: SyncRouteAlertCondition[] = [];
   for (const route of (Object.keys(read.state.routes) as FanslyRoute[]).sort()) {
@@ -366,10 +366,8 @@ export async function collectPageAlerts(
     money?: Map<number, { count: number; oldestReceivedAt: Date }>;
   },
 ): Promise<SyncAlertCondition[]> {
-  const shadow = input.page.mode === "shadow" || input.page.mode === "off";
   const journal = await readSyncJournalAlertFacts(db, {
     pageId: input.page.pageId,
-    shadow,
     stopLookbackMs: SYNC_ALERT_CLEAN_MS,
     urgentAfterMs: SYNC_URGENT_WAIT_MS,
     requestStallMs: SYNC_REQUEST_STALL_MS,
@@ -416,21 +414,14 @@ function summaryOf(detail: string, since: Date | null, context: Readonly<Record<
 }
 
 /**
- * The production `AlertSink` of the engine: a `handover`/`live` page's alert
- * opens its latch at once; a shadow page's is logged and counted (D14).
+ * The production `AlertSink` of the engine: an alert opens its latch at once.
  * Resolution is the evaluator's alone, so `resolve` only logs.
  */
-export function createIncidentAlertSink(input: { db: Database; logger: SyncLogger; metrics?: Metrics }): AlertSink {
-  const metrics = input.metrics ?? noopMetrics;
+export function createIncidentAlertSink(input: { db: Database; logger: SyncLogger }): AlertSink {
   const app: IncidentApp = { db: input.db, logger: input.logger };
   return {
     async open(alert: SyncAlertInput) {
       const fields = { pageId: alert.pageId, subKey: alert.subKey, detail: alert.detail, ...(alert.route === undefined ? {} : { route: alert.route }) };
-      if (alert.shadow) {
-        metrics.increment("sync_shadow_alerts", { subKey: alert.subKey, detail: alert.detail });
-        input.logger.info(fields, "Fansly sync shadow alert (metric only)");
-        return;
-      }
       input.logger.error(fields, "Fansly sync alert");
       let subKey: SyncEngineIncidentSubKey;
       if (alert.subKey === "route_limited") {
@@ -493,7 +484,7 @@ export interface SyncAlertEvaluatorOptions {
  * latch whose condition has stayed false for `syncAlertResolveAfterMs` since
  * its `last_seen_at` is resolved — the clean time lives in the latch, so it
  * survives a restart of the evaluator. The latches of every other page are
- * resolved at once (a page set back to `off` or `shadow` pages nothing). The
+ * resolved at once (a page in `off` or `shadow` pages nothing). The
  * pace backstop re-reads the journal's new sends (a violation the capture
  * path could not report, e.g. across a crash, still opens the pace latch).
  */
@@ -740,7 +731,7 @@ export async function readSyncAlertStatus(
 ) {
   const now = input.pages[0]?.dbNow ?? new Date();
   const money = await readMissingMoneyFrames(db, {
-    pageIds: input.pages.filter((page) => page.mode !== "off").map((page) => page.pageId),
+    pageIds: input.pages.filter(pagesOwnerAlerts).map((page) => page.pageId),
     now,
     ...(input.resolvePayload === undefined ? {} : { resolvePayload: input.resolvePayload }),
   });
@@ -748,15 +739,15 @@ export async function readSyncAlertStatus(
     .filter((incident) => incident.kind === "fansly_sync_engine");
   const statuses = [];
   for (const page of input.pages) {
-    const conditions = page.mode === "off" ? [] : await collectPageAlerts(db, { page, registry: input.registry, money });
+    // Only handover/live page the owner: no other page has a condition.
+    const pagesOwner = pagesOwnerAlerts(page);
     statuses.push({
       page: page.pageLabel ?? String(page.pageId),
       mode: page.mode,
-      // A shadow page's conditions are metrics; only handover/live page the owner.
-      pages: pagesOwnerAlerts(page),
-      conditions,
+      pages: pagesOwner,
+      conditions: pagesOwner ? await collectPageAlerts(db, { page, registry: input.registry, money }) : [],
       // The routes held now or within their clean window (D5).
-      routes: page.mode === "off" ? [] : evaluateRouteAlerts(page, page.dbNow),
+      routes: pagesOwner ? evaluateRouteAlerts(page, page.dbNow) : [],
       // A latch whose condition no longer holds resolves 10 clean minutes
       // after `lastSeenAt` (alert 4 at once).
       openLatches: incidents

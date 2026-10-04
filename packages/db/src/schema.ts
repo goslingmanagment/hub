@@ -920,10 +920,13 @@ export const syncPages = pgTable(
     pausedRequests: boolean("paused_requests").notNull().default(false),
     pausedResources: text("paused_resources").array().notNull().default(sql`'{}'::text[]`),
     pauseNote: text("pause_note"),
+    // The old hold slot and `resource_holds` below: kept in step with the
+    // hold set (`sync_holds`, 0240) for the previous image, read by nothing
+    // (repositories/sync/holds-legacy.ts). `hold_step` is no longer mapped:
+    // the database column keeps its default.
     holdKind: text("hold_kind").$type<"rate_limit" | "auth" | "identity_mismatch" | "network">(),
     holdUntil: timestamp("hold_until", { withTimezone: true }),
     holdSince: timestamp("hold_since", { withTimezone: true }),
-    holdStep: smallint("hold_step").notNull().default(0),
     holdDetail: jsonbSafe("hold_detail").$type<Record<string, unknown>>().notNull().default({}),
     networkFailureStreak: smallint("network_failure_streak").notNull().default(0),
     resourceHolds: jsonbSafe("resource_holds").$type<Record<string, unknown>>().notNull().default({}),
@@ -949,6 +952,7 @@ export const syncPages = pgTable(
     lastSendAt: timestamp("last_send_at", { withTimezone: true }),
     lastSendAttemptId: bigint("last_send_attempt_id", { mode: "number" }),
     lastCompletedAt: timestamp("last_completed_at", { withTimezone: true }),
+    // The shadow WS feed's cursor: unread and unwritten since step 4 (S4-23).
     wsRouterCursor: bigint("ws_router_cursor", { mode: "number" }).notNull().default(0),
     // 0235 (step 3, owner decision №8): DM exclusion reasons lifted on the page.
     liftedDmExclusions: text("lifted_dm_exclusions").array().notNull().default(sql`'{}'::text[]`),
@@ -966,9 +970,56 @@ export const syncPages = pgTable(
   }),
 );
 
+// 0240 (plan §9, §11; step 4, owner decision №26): the hold set of the new
+// engine — one row per hold of a page (scope `page`, key ''), of a route
+// (scope `route`, key = the route id) or of a resource file (scope
+// `resource`, key = the file). Written through the hold writers of
+// repositories/sync/pages.ts only; read by the engine's one hold evaluator
+// (apps/runtime/src/sync/engine/admission.ts).
+export const syncHolds = pgTable(
+  "sync_holds",
+  {
+    pageId: bigint("page_id", { mode: "number" }).notNull().references(() => pages.id, { onDelete: "restrict" }),
+    scope: text("scope").$type<"page" | "route" | "resource">().notNull(),
+    key: text("key").notNull().default(""),
+    kind: text("kind")
+      .$type<"auth" | "identity_mismatch" | "network" | "route_hold" | "route_budget" | "resource_breaker">()
+      .notNull(),
+    until: timestamp("until", { withTimezone: true }),
+    since: timestamp("since", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    ladderStep: smallint("ladder_step").notNull().default(0),
+    detail: jsonbSafe("detail").$type<Record<string, unknown>>().notNull().default({}),
+    revision: bigint("revision", { mode: "number" }).notNull().default(1),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+  },
+  (table) => ({
+    pk: primaryKey({ name: "sync_holds_pkey", columns: [table.pageId, table.scope, table.key, table.kind] }),
+    scopeCheck: check("sync_holds_scope_check", sql`${table.scope} in ('page', 'route', 'resource')`),
+    kindCheck: check(
+      "sync_holds_kind_check",
+      sql`${table.kind} in ('auth', 'identity_mismatch', 'network', 'route_hold', 'route_budget', 'resource_breaker')`,
+    ),
+    scopeKindCheck: check(
+      "sync_holds_scope_kind_check",
+      sql`(${table.scope} = 'page' and ${table.key} = '' and ${table.kind} in ('auth', 'identity_mismatch', 'network'))
+        or (${table.scope} = 'route' and ${table.key} <> '' and ${table.kind} in ('route_hold', 'route_budget'))
+        or (${table.scope} = 'resource' and ${table.key} <> '' and ${table.kind} = 'resource_breaker')`,
+    ),
+    untilCheck: check("sync_holds_until_check", sql`(${table.kind} = 'route_budget') = (${table.until} is null)`),
+    ladderStepCheck: check("sync_holds_ladder_step_check", sql`${table.ladderStep} >= 0`),
+    revisionCheck: check("sync_holds_revision_check", sql`${table.revision} >= 1`),
+    pageCredentialsUidx: uniqueIndex("sync_holds_page_credentials")
+      .on(table.pageId)
+      .where(sql`${table.scope} = 'page' and ${table.kind} in ('auth', 'identity_mismatch')`),
+  }),
+);
+
 // 0228 (plan §3, §11): the one work queue of the new engine. One open row per
 // page × shadow × resource × subject (`sync_work_open_uniq`); demand merges
-// into it through `upsertDemand` (repositories/sync/work.ts).
+// into it through `upsertDemand` (repositories/sync/work.ts). `shadow` is
+// false in every row written since step 4 (S4-23, shadow mode is gone); the
+// rows it left stay until the retention prunes them.
 export const syncWork = pgTable(
   "sync_work",
   {
@@ -1028,9 +1079,10 @@ export const syncWork = pgTable(
   }),
 );
 
-// 0228 (plan §8, §11): one row per physical attempt of the new engine (or a
-// simulated one in shadow). 30-day telemetry, except coverage evidence and
-// unfinished rows (repositories/sync/retention.ts).
+// 0228 (plan §8, §11): one row per physical attempt of the new engine (a row
+// with `shadow` is a simulated one shadow mode left; nothing writes one since
+// step 4 S4-23). 30-day telemetry, except coverage evidence and unfinished
+// rows (repositories/sync/retention.ts).
 export const syncAttempts = pgTable(
   "sync_attempts",
   {

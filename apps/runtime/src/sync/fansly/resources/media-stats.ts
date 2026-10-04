@@ -1,5 +1,3 @@
-import { sql } from "drizzle-orm";
-
 import {
   countMediaStatsRefreshProgress,
   getSyncAttempt,
@@ -13,7 +11,6 @@ import {
   type MediaStatsRefreshCandidate,
   type MediaStatsTier,
   type MediaStatsTiers,
-  type SubjectQueueKeyset,
   type SyncAttemptRow,
   type SyncPageRow,
 } from "@agency_hub_core/db";
@@ -27,13 +24,11 @@ import {
   BACKFILL_WINDOWS_PER_VISIT,
   backfillCursorJson,
   countMediaStatBuckets,
-  FIRST_VISIT_REQUESTS,
   isProviderRefusal,
   MEDIA_STATS_DAILY_PERIOD_MS,
   mediaBackfillCreationFloorMs,
   mediaBackfillFirstMonthProbe,
   mediaStatsWindowIsEmpty,
-  parseFanslyMediaStatsCursorState,
   parseMediaBackfillCursor,
   servedMediaOfferRef,
   servedWindowCoversRequest,
@@ -57,23 +52,9 @@ import {
   type LocalApplyInput,
   type RequestPlan,
   type ResourceModule,
-  type ShadowResult,
   type StepPlan,
 } from "../../engine/resource.ts";
-import { replayByCanonicalDrafts } from "../lib/family-replay.ts";
-import {
-  advanceShadowPass,
-  clearQueueSubjectBlocks,
-  currentShadowPass,
-  dueAtLookOf,
-  EMPTY_SHADOW_PASS,
-  parseShadowPass,
-  recordQueueSubjectFailures,
-  shadowPassNumber,
-  shadowPassWaitUntil,
-  standingRecheckAt,
-  type ShadowPass,
-} from "../lib/subject-queue.ts";
+import { clearQueueSubjectBlocks, recordQueueSubjectFailures, standingRecheckAt } from "../lib/subject-queue.ts";
 import { fanslyResourceSpec } from "../registry.ts";
 
 // `media-stats.walk` (plan §5, design §5.18, owner decision №6 "экономно"):
@@ -168,15 +149,9 @@ export function tierEveryMs(tiers: MediaStatsTiers, tier: MediaStatsTier): numbe
 
 export function pickDueMedia(
   db: Database,
-  input: { pageId: number; now: Date; limit: number; after: SubjectQueueKeyset | null; tiers: MediaStatsTiers },
+  input: { pageId: number; now: Date; limit: number; tiers: MediaStatsTiers },
 ): Promise<MediaStatsRefreshCandidate[]> {
-  return listMediaStatsRefreshChunk(db, {
-    pageId: input.pageId,
-    limit: input.limit,
-    now: input.now,
-    tiers: input.tiers,
-    ...(input.after === null ? {} : { after: input.after }),
-  });
+  return listMediaStatsRefreshChunk(db, { pageId: input.pageId, limit: input.limit, now: input.now, tiers: input.tiers });
 }
 
 // ── one visit, replayed ──────────────────────────────────────────────────────
@@ -660,21 +635,6 @@ export function mediaWindowOutcome(
 
 // ── the walk's cursor ────────────────────────────────────────────────────────
 
-interface ShadowVisit {
-  subjectRef: string;
-  keyset: SubjectQueueKeyset;
-  tier: MediaStatsTier;
-  /** Windows the visit is estimated to take. */
-  steps: number;
-  done: number;
-  /** The long-tail window mode the visit was estimated under
-   *  (`shadowLongTailMode`); absent on a visit an older build began. */
-  mode?: LongTailWindowMode;
-  /** The shadow pass that picked the item (`shadowPassNumber`); absent on a
-   *  visit an older build began. */
-  pass?: number;
-}
-
 export interface MediaStatsWalkCursor extends MediaStatsPageState {
   /** The UTC day the top-50 media were last marked dirty (zero calls). */
   topMarkedDay: string | null;
@@ -682,8 +642,6 @@ export interface MediaStatsWalkCursor extends MediaStatsPageState {
   visit: MediaVisit | null;
   coverageWrittenAt: string | null;
   last: Record<string, unknown> | null;
-  shadow: ShadowPass;
-  shadowVisit: ShadowVisit | null;
 }
 
 function parseLongTailMode(value: unknown): LongTailWindowMode {
@@ -697,20 +655,7 @@ function parseVisit(value: unknown): MediaVisit | null {
   return value as MediaVisit;
 }
 
-function parseShadowVisit(value: unknown): ShadowVisit | null {
-  const record = recordOf(value);
-  const subjectRef = text(record.subjectRef);
-  const keyset = text(record.keyset);
-  const steps = int(record.steps);
-  const done = int(record.done);
-  if (subjectRef === null || keyset === null || steps === null || done === null) return null;
-  const tier = record.tier === "mid" || record.tier === "long_tail" ? record.tier : "fresh";
-  const mode = record.mode === undefined ? undefined : parseLongTailMode(record.mode);
-  const pass = int(record.pass);
-  return { subjectRef, keyset, tier, steps, done, ...(mode === undefined ? {} : { mode }), ...(pass === null ? {} : { pass }) };
-}
-
-export function parseMediaStatsWalkCursor(value: unknown): MediaStatsWalkCursor {
+function parseMediaStatsWalkCursor(value: unknown): MediaStatsWalkCursor {
   const record = recordOf(value);
   return {
     longTailWindowMode: parseLongTailMode(record.longTailWindowMode),
@@ -720,8 +665,6 @@ export function parseMediaStatsWalkCursor(value: unknown): MediaStatsWalkCursor 
     visit: parseVisit(record.visit),
     coverageWrittenAt: text(record.coverageWrittenAt),
     last: typeof record.last === "object" && record.last !== null ? record.last as Record<string, unknown> : null,
-    shadow: parseShadowPass(record.shadow),
-    shadowVisit: parseShadowVisit(record.shadowVisit),
   };
 }
 
@@ -737,18 +680,15 @@ function pageStateOf(cursor: MediaStatsPageState): MediaStatsPageState {
  *  whose stored visit the plan abandoned to make it (counted by the apply). */
 interface MediaStatsStep {
   visit?: MediaVisit;
-  shadowVisit?: ShadowVisit;
   abandoned?: string;
 }
 
 function stepOf(request: Pick<RequestPlan, "step">): MediaStatsStep {
   const record = recordOf(request.step);
   const visit = parseVisit(record.visit);
-  const shadowVisit = parseShadowVisit(record.shadowVisit);
   const abandoned = text(record.abandoned);
   return {
     ...(visit === null ? {} : { visit }),
-    ...(shadowVisit === null ? {} : { shadowVisit }),
     ...(abandoned === null ? {} : { abandoned }),
   };
 }
@@ -784,36 +724,6 @@ function failedVisitOf(attempt: SyncAttemptRow): MediaVisit | null {
   });
 }
 
-/** Estimated windows of one visit (shadow): a first visit's walk holds its
- *  refresh; an open walk in the past adds its windows to the refresh. */
-export function estimateVisitWindows(candidate: MediaStatsRefreshCandidate, mode: LongTailWindowMode, now: Date): number {
-  const cursor = parseMediaBackfillCursor(candidate.backfillCursor, now);
-  const walkFromToday = !cursor.done && cursor.nextBeforeMs >= now.getTime() - DAY_MS;
-  const refreshed = cursor.refreshedThroughMs ?? candidate.lastVisitedAt?.getTime() ?? null;
-  const holeFrom = walkFromToday || refreshed === null ? null : new Date(refreshed);
-  const refresh = steadyRefreshPlan(candidate.tier, now, mode, holeFrom).windows.length;
-  if (cursor.done) return refresh;
-  const tierKey = candidate.tier === "long_tail" ? "longTail" : candidate.tier;
-  if (walkFromToday) return Math.max(refresh, FIRST_VISIT_REQUESTS[tierKey]);
-  const floorMs = mediaBackfillCreationFloorMs(candidate);
-  const spanMs = cursor.guard.spanDays * DAY_MS;
-  const toFloor = floorMs === null ? BACKFILL_WINDOWS_PER_VISIT : Math.ceil(Math.max(0, cursor.nextBeforeMs - floorMs) / spanMs);
-  return refresh + Math.min(BACKFILL_WINDOWS_PER_VISIT, toFloor);
-}
-
-/**
- * The windows a visit takes as a live page asks them (shadow, step 3b ruling
- * 12: the shadow models media as live). On a page whose route has not shown
- * its answer to the 90-day window (`unproven`), live's first long-tail visit
- * asks that window and — Fansly refusing it on every page that asked
- * (production: `split_31` on the five legacy pages and on lilly-1 live) —
- * falls back to the three 31-day windows (`runMediaVisit`): both are counted.
- */
-export function shadowVisitWindows(candidate: MediaStatsRefreshCandidate, mode: LongTailWindowMode, now: Date): number {
-  if (mode === "unproven" && candidate.tier === "long_tail") return 1 + estimateVisitWindows(candidate, "split_31", now);
-  return estimateVisitWindows(candidate, mode, now);
-}
-
 /** The page's coverage row (one per page, never one per item): an aggregate
  *  over the queue under the page's tiers, the per-look evidence being the
  *  journal. */
@@ -845,71 +755,7 @@ async function writeQueueCoverage(tx: Database, input: { pageId: number; now: Da
   });
 }
 
-async function legacyMediaStatsCursor(db: Database, pageId: number) {
-  const result = await db.execute<{ state: unknown }>(sql`
-    select state from page_sync_cursors where page_id = ${pageId} and stream = 'media_stats'
-  `);
-  return parseFanslyMediaStatsCursorState(result.rows[0]?.state ?? null);
-}
-
-/**
- * The long-tail window mode the shadow models on a page: shadow never learns
- * the route from an answer, so its own mode is set only once a long-tail visit
- * modelled the refused 90-day window (`shadowVisitWindows`); until then the
- * legacy lane's discovery stands in. The shadow report prints it per page
- * (its fingerprint).
- */
-export async function shadowLongTailMode(
-  db: Database,
-  input: { pageId: number; cursor: Pick<MediaStatsPageState, "longTailWindowMode"> },
-): Promise<LongTailWindowMode> {
-  if (input.cursor.longTailWindowMode !== "unproven") return input.cursor.longTailWindowMode;
-  return (await legacyMediaStatsCursor(db, input.pageId))?.longTailWindowMode ?? "unproven";
-}
-
 // ── the module ───────────────────────────────────────────────────────────────
-
-/**
- * A shadow visit's next window. Shadow asks the visit's first steady window
- * at every step — its bounds cut at the step's clock — so the request names
- * its place in the walk (`RequestPlan.position`): the pass that picked the
- * item, the item's queue position and the window's number in the visit. A
- * walk that does not advance asks one of them twice (the shadow report's
- * endless-walk check); the next pass re-reading the item is another pass.
- */
-function shadowWindowRequest(visit: ShadowVisit, mode: LongTailWindowMode, now: Date): RequestPlan<"media.offer_stats"> {
-  const [window] = steadyWindows(visit.tier, now, mode);
-  return {
-    ...windowRequest(visit.subjectRef, window!, { shadowVisit: visit }),
-    position: { pass: visit.pass ?? null, item: visit.keyset, window: visit.done },
-  };
-}
-
-async function planShadow(
-  cursor: MediaStatsWalkCursor,
-  ctx: { db: Database; pageId: number; now: Date; tiers: MediaStatsTiers },
-): Promise<StepPlan> {
-  const visit = cursor.shadowVisit;
-  if (visit !== null && visit.done < visit.steps) {
-    return { kind: "request", request: shadowWindowRequest(visit, visit.mode ?? cursor.longTailWindowMode, ctx.now) };
-  }
-  const pass = currentShadowPass(cursor.shadow, ctx.now, MEDIA_STATS_RECHECK_MS);
-  const [candidate] = await pickDueMedia(ctx.db, { pageId: ctx.pageId, now: ctx.now, limit: 1, after: pass.after, tiers: ctx.tiers });
-  if (candidate === undefined) {
-    return { kind: "wait", reason: "not_due", until: shadowPassWaitUntil(pass, ctx.now, MEDIA_STATS_RECHECK_MS) };
-  }
-  const mode = await shadowLongTailMode(ctx.db, { pageId: ctx.pageId, cursor });
-  const shadowVisit: ShadowVisit = {
-    subjectRef: candidate.subjectRef,
-    keyset: candidate.keyset,
-    tier: candidate.tier,
-    steps: Math.max(1, shadowVisitWindows(candidate, mode, ctx.now)),
-    done: 0,
-    mode,
-    pass: shadowPassNumber(cursor.shadow, ctx.now, MEDIA_STATS_RECHECK_MS),
-  };
-  return { kind: "request", request: shadowWindowRequest(shadowVisit, mode, ctx.now) };
-}
 
 /** Mark the page's latest top-50 media dirty, due now (the items visited
  *  within the day left alone); how many were marked. */
@@ -924,27 +770,9 @@ async function markTopMedia(tx: Database, pageId: number, now: Date): Promise<nu
 }
 
 export const mediaStatsWalkModule: ResourceModule = {
-  /** The shadow report's look check (rule A1.floor-idle): `planShadow`'s pick
-   *  at the look, less what changed since. */
-  async dueAtLook(work, ctx) {
-    const cursor = parseMediaStatsWalkCursor(work.cursor);
-    const visit = cursor.shadowVisit;
-    // A visit in flight asks its next window: such a look reads, never waits.
-    if (visit !== null && visit.done < visit.steps) return { count: 0, examples: [], queued: null };
-    const pass = currentShadowPass(cursor.shadow, ctx.now, MEDIA_STATS_RECHECK_MS);
-    const tiers = mediaStatsOwnerTiers(ctx.page);
-    return dueAtLookOf(ctx.db, {
-      pageId: ctx.pageId,
-      plane: PLANE,
-      at: ctx.now,
-      pick: (limit) => pickDueMedia(ctx.db, { pageId: ctx.pageId, now: ctx.now, limit, after: pass.after, tiers }),
-    });
-  },
-
   async plan(work, ctx): Promise<StepPlan> {
     const cursor = parseMediaStatsWalkCursor(work.cursor);
     const tiers = mediaStatsOwnerTiers(ctx.page);
-    if (ctx.shadow) return planShadow(cursor, { db: ctx.db, pageId: ctx.pageId, now: ctx.now, tiers });
     // The free signal (zero calls): today's top-50 jump the queue once a UTC
     // day, marked before the pick as legacy marks them — also on a day the
     // queue holds nothing else due. This is the walk's only mark. Never
@@ -990,7 +818,7 @@ export const mediaStatsWalkModule: ResourceModule = {
       if (run === null) abandoned = visit.snapshot.subjectRef;
       else if (run.kind === "need") return { kind: "request", request: windowRequest(visit.snapshot.subjectRef, run.window, { visit }) };
     }
-    const [candidate] = await pickDueMedia(ctx.db, { pageId: ctx.pageId, now: ctx.now, limit: 1, after: null, tiers });
+    const [candidate] = await pickDueMedia(ctx.db, { pageId: ctx.pageId, now: ctx.now, limit: 1, tiers });
     if (candidate === undefined) return { kind: "wait", reason: "not_due", until: standingRecheckAt(ctx.now, MEDIA_STATS_RECHECK_MS) };
     const fresh = startMediaVisit(candidate, page, ctx.now);
     const run = runMediaVisit(fresh);
@@ -1003,8 +831,8 @@ export const mediaStatsWalkModule: ResourceModule = {
     };
   },
 
-  /** The plan's `top_media_mark` (live): today's top-50 marked, the walk
-   *  picks again at once. */
+  /** The plan's `top_media_mark`: today's top-50 marked, the walk picks again
+   *  at once. */
   async applyLocal(tx, input: LocalApplyInput): Promise<ApplyResult> {
     const cursor = parseMediaStatsWalkCursor(input.work.cursor);
     const today = fanslyUtcDayKey(input.now);
@@ -1031,7 +859,7 @@ export const mediaStatsWalkModule: ResourceModule = {
     const replays = pending !== null && pending.kind === "need" && sameWindow(input.request, subjectRef, pending.window);
     let visit: MediaVisit = asked;
     let run: MediaVisitRun | null = null;
-    let next: MediaStatsWalkCursor = { ...cursor, visit: null, shadow: EMPTY_SHADOW_PASS, shadowVisit: null };
+    let next: MediaStatsWalkCursor = { ...cursor, visit: null };
     if (replays) {
       const folded = mediaWindowOutcome(pending.window, { subjectRef, response: input.response, observationId: input.observation.id });
       if (folded.refusal !== null) counters[folded.refusal] = 1;
@@ -1132,48 +960,4 @@ export const mediaStatsWalkModule: ResourceModule = {
       await recordMediaStatsBackfillCursor(tx, { pageId: work.pageId, subjectRef, backfillCursor: run.progress });
     }
   },
-
-  async shadow(work, request, ctx): Promise<ShadowResult> {
-    const cursor = parseMediaStatsWalkCursor(work.cursor);
-    const visit = stepOf(request).shadowVisit;
-    if (visit === undefined) {
-      return { work: { satisfiesRevision: true, nextDueAt: ctx.now, cursor: { ...cursor, shadowVisit: null } }, followups: [] };
-    }
-    const counters: Record<string, number> = {};
-    const today = fanslyUtcDayKey(ctx.now);
-    let next: MediaStatsWalkCursor = { ...cursor };
-    if (cursor.topMarkedDay !== today) {
-      counters.top_media_mark_estimated = 1;
-      next = { ...next, topMarkedDay: today };
-    }
-    const done = visit.done + 1;
-    if (done < visit.steps) {
-      return {
-        work: { satisfiesRevision: false, nextDueAt: ctx.now, cursor: { ...next, shadowVisit: { ...visit, done } } },
-        followups: [],
-        counters,
-      };
-    }
-    const advanced = advanceShadowPass({
-      pass: cursor.shadow,
-      now: ctx.now,
-      recheckMs: MEDIA_STATS_RECHECK_MS,
-      taken: [{ keyset: visit.keyset }],
-      limit: 1,
-    });
-    counters.media_visits_estimated = 1;
-    if (visit.mode === "unproven" && visit.tier === "long_tail") {
-      // Live's first long-tail visit has learned the route's answer by now
-      // (`shadowVisitWindows`): every later visit asks the 31-day windows.
-      next = { ...next, longTailWindowMode: "split_31", longTailWindowAnnounced: true };
-      counters.long_tail_window_split_estimated = 1;
-    }
-    return {
-      work: { satisfiesRevision: true, nextDueAt: advanced.nextDueAt, cursor: { ...next, shadow: advanced.pass, shadowVisit: null } },
-      followups: [],
-      counters,
-    };
-  },
-
-  replay: replayByCanonicalDrafts,
 };

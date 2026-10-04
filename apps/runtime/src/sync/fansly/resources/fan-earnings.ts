@@ -10,20 +10,14 @@ import {
   type FanEarningsRefreshWindow,
 } from "@agency_hub_core/db";
 
-import { parseFanslyEarningsObservation } from "../../../services/canonicalize/fansly-earnings.ts";
 import { buildFanEarningsReceipt } from "../lib/fan-earnings-receipt.ts";
 import { BLOCKED_PROBE_EVERY_MS, SUBJECT_BLOCK_AFTER, SUBJECT_BREAKER_LADDER_MS } from "../../engine/errors.ts";
 import type {
   ApplyInput,
   ApplyResult,
   DemandSignal,
-  ReplayContext,
-  ReplayObservation,
-  ReplayVerdict,
-  QueueNextDue,
   RequestPlan,
   ResourceModule,
-  ShadowResult,
   StepPlan,
 } from "../../engine/resource.ts";
 
@@ -55,22 +49,14 @@ import type {
 // at the roster age. Retired: the daily target cap, the target attempt
 // journal, the recovery roster (its debt stays readable as
 // `countFanEarningsRecoveryDebt`).
-//
-// Shadow writes nothing: no claim, no receipt. A shadow pass walks the due
-// subjects once in (fan, window) order through a keyset in its cursor; a full
-// pass at most once a day, an incremental one over the subjects marked dirty
-// since the previous pass (the transactions writer marks them).
 
 export const FAN_EARNINGS_ROSTER_KEY = "fan-earnings.roster";
 
 const HOUR_MS = 3_600_000;
-/** The roster age (registry parameter; the production owner setting
- *  `fanslyFanEarningsRosterMaxAgeHours` = 156): a spender is read again this
+/** The roster age (registry parameter: 156 h, the owner's production setting
+ *  of the legacy roster when it was retired): a spender is read again this
  *  long after its last read. */
 export const FAN_EARNINGS_ROSTER_MAX_AGE_MS = 156 * HOUR_MS;
-/** A full shadow pass over the due roster at most this often (the entry's
- *  cadence). */
-export const FAN_EARNINGS_SHADOW_PASS_EVERY_MS = 24 * HOUR_MS;
 
 export type FanEarningsWindow = FanEarningsRefreshWindow;
 
@@ -92,14 +78,6 @@ function windowOf(value: unknown): FanEarningsWindow | null {
   return value === "lifetime" || value === "monthly" ? value : null;
 }
 
-function subjectOf(value: unknown): FanEarningsSubject | null {
-  const record = recordOf(value);
-  const window = windowOf(record.window);
-  return typeof record.fanRef === "string" && record.fanRef.length > 0 && window !== null
-    ? { fanRef: record.fanRef, window }
-    : null;
-}
-
 /** The fan and window a request reads. */
 export function fanEarningsSubjectOfRequest(request: RequestPlan): FanEarningsSubject | null {
   const params = recordOf(request.params);
@@ -119,32 +97,15 @@ export function fanEarningsRequest(subject: FanEarningsSubject, now: Date): Requ
 }
 
 /**
- * The next due subject of the page (read-only). `priority`: marked due first
- * (by due time), then never read, then the oldest read. `keyset`: (fan,
- * window) order after `after`; with `since`, only the subjects marked due
- * after that instant (a shadow pass over new dirty marks).
+ * The next due subject of the page (read-only): marked due first (by due
+ * time), then never read, then the oldest read.
  */
 export async function nextDueFanEarningsSubject(
   db: Database,
-  input: {
-    pageId: number;
-    now: Date;
-    maxAgeMs?: number;
-    order: "priority" | "keyset";
-    after?: FanEarningsSubject | null;
-    since?: Date | null;
-  },
+  input: { pageId: number; now: Date; maxAgeMs?: number },
 ): Promise<DueFanEarningsSubject | null> {
   const now = input.now;
   const ageCutoff = new Date(now.getTime() - (input.maxAgeMs ?? FAN_EARNINGS_ROSTER_MAX_AGE_MS));
-  const since = input.since ?? null;
-  const after = input.after ?? null;
-  const keyset = input.order === "keyset" && after !== null
-    ? sql`where (fan_ref, window_name) > (${after.fanRef}, ${after.window})`
-    : sql``;
-  const order = input.order === "priority"
-    ? sql`order by rank, at nulls first, fan_ref, window_name`
-    : sql`order by fan_ref, window_name`;
   const result = await db.execute<{ fanRef: string; window: string; rank: number }>(sql`
     with planes(window_name, plane) as (
       values ('lifetime', 'fan_earnings_lifetime'), ('monthly', 'fan_earnings_monthly')
@@ -160,7 +121,6 @@ export async function nextDueFanEarningsSubject(
         join planes p on p.plane = s.plane
        where s.page_id = ${input.pageId}
          and s.next_due_at <= ${now}
-         and (${since}::timestamptz is null or s.next_due_at > ${since}::timestamptz)
          and (s.claim_token is null or s.claim_expires_at <= ${now})
          and (s.retry_after_at is null or s.retry_after_at <= ${now})
       union all
@@ -169,11 +129,10 @@ export async function nextDueFanEarningsSubject(
        cross join planes p
         left join subject_refresh_state s
           on s.page_id = ${input.pageId} and s.plane = p.plane and s.subject_ref = r.fan_ref
-       where ${since}::timestamptz is null
-         and (s.subject_ref is null or (
+       where s.subject_ref is null or (
                (s.last_visited_at is null or s.last_visited_at <= ${ageCutoff})
            and (s.claim_token is null or s.claim_expires_at <= ${now})
-           and (s.retry_after_at is null or s.retry_after_at <= ${now})))
+           and (s.retry_after_at is null or s.retry_after_at <= ${now}))
     ), ranked as (
       select fan_ref, window_name, min(rank) as rank, min(at) as at
         from due
@@ -181,8 +140,7 @@ export async function nextDueFanEarningsSubject(
     )
     select fan_ref as "fanRef", window_name as "window", rank::int as rank
       from ranked
-      ${keyset}
-      ${order}
+     order by rank, at nulls first, fan_ref, window_name
      limit 1
   `);
   const row = result.rows[0];
@@ -190,150 +148,16 @@ export async function nextDueFanEarningsSubject(
   return row === undefined || window === null ? null : { fanRef: row.fanRef, window, rank: Number(row.rank) };
 }
 
-/** When the newest shadow roster pass of the page closed; `open` when one runs. */
-async function lastShadowPass(db: Database, pageId: number): Promise<{ open: boolean; closedAt: Date | null }> {
-  const result = await db.execute<{ open: boolean; closedAt: Date | string | null }>(sql`
-    select bool_or(closed_at is null) as open, max(closed_at) as "closedAt"
-      from sync_work
-     where page_id = ${pageId} and shadow and resource = ${FAN_EARNINGS_ROSTER_KEY}
-  `);
-  const row = result.rows[0];
-  return { open: row?.open === true, closedAt: row?.closedAt ? new Date(row.closedAt) : null };
-}
-
 /**
  * The roster walk a page needs now (a follow-up of the transactions steps,
- * which run at least every five minutes): live, whenever a subject is due;
- * shadow, a full pass a day, else a pass over the subjects marked dirty since
- * the previous one.
+ * which run at least every five minutes): one whenever a subject is due.
  */
 export async function fanEarningsRosterFollowups(
   db: Database,
-  input: { pageId: number; now: Date; shadow: boolean; reason: string },
+  input: { pageId: number; now: Date; reason: string },
 ): Promise<DemandSignal[]> {
-  if (!input.shadow) {
-    const due = await nextDueFanEarningsSubject(db, { pageId: input.pageId, now: input.now, order: "priority" });
-    return due === null ? [] : [{ resource: FAN_EARNINGS_ROSTER_KEY, demand: { reason: input.reason } }];
-  }
-  const pass = await lastShadowPass(db, input.pageId);
-  if (pass.open) return [];
-  const full = pass.closedAt === null || input.now.getTime() - pass.closedAt.getTime() >= FAN_EARNINGS_SHADOW_PASS_EVERY_MS;
-  const since = full ? null : pass.closedAt;
-  const due = await nextDueFanEarningsSubject(db, { pageId: input.pageId, now: input.now, order: "keyset", since });
-  if (due === null) return [];
-  return [{
-    resource: FAN_EARNINGS_ROSTER_KEY,
-    demand: { reason: input.reason },
-    params: { shadowSince: since === null ? null : since.toISOString() },
-  }];
-}
-
-/**
- * When the transactions steps of the page next ask for a roster walk, the
- * queue as it stood at `at` (read-only; the shadow report, rule
- * A1.floor-queue): the earliest instant `fanEarningsRosterFollowups` finds a
- * subject due — a mark or retry at its `next_due_at`, one read before at its
- * last read + the roster age, each no earlier than its open claim or retry
- * hold. Shadow also keeps its pass rhythm: while a pass runs, at once; within
- * a day of the last pass, a mark newer than it at its time and everything else
- * when the day is over. `nextDueAt` null: no subject comes due without a new
- * write.
- *
- * The subject rows are read as they stand now, so the queue at `at` is told
- * only while no writer has touched them since (`updated_at`, `last_visited_at`
- * no later than `at`): a subject legacy read, marked or claimed after `at`
- * leaves it `unjudgeable`. A spender never read is due at once since it was
- * queued (its row's creation); one without a queue row since an instant
- * nothing dates — `unjudgeable` too.
- */
-export async function fanEarningsRosterNextDueAt(
-  db: Database,
-  input: { pageId: number; at: Date; shadow: boolean; maxAgeMs?: number },
-): Promise<QueueNextDue> {
-  const at = input.at;
-  const changed = await db.execute<{ changed: number | string; newest: Date | string | null }>(sql`
-    select count(*) as changed, max(greatest(s.updated_at, s.last_visited_at)) as newest
-      from subject_refresh_state s
-     where s.page_id = ${input.pageId}
-       and s.plane in ('fan_earnings_lifetime', 'fan_earnings_monthly')
-       and (s.updated_at > ${at} or s.last_visited_at > ${at})
-  `);
-  const touched = Number(changed.rows[0]?.changed ?? 0);
-  if (touched > 0) {
-    const newest = changed.rows[0]?.newest;
-    return {
-      unjudgeable: `${touched} roster subject row${touched === 1 ? "" : "s"} changed after ${at.toISOString()}`
-        + `${newest ? ` (the newest ${new Date(newest).toISOString()})` : ""}: the queue as it stood then is not known`,
-    };
-  }
-  let passClosedAt: Date | null = null;
-  if (input.shadow) {
-    const pass = await db.execute<{ open: boolean; closedAt: Date | string | null }>(sql`
-      select bool_or(closed_at is null or closed_at > ${at}) as open, max(closed_at) filter (where closed_at <= ${at}) as "closedAt"
-        from sync_work
-       where page_id = ${input.pageId} and shadow and resource = ${FAN_EARNINGS_ROSTER_KEY} and created_at <= ${at}
-    `);
-    const row = pass.rows[0];
-    if (row?.open === true) return { nextDueAt: at };
-    const closedAt = row?.closedAt ? new Date(row.closedAt) : null;
-    passClosedAt = closedAt !== null && at.getTime() - closedAt.getTime() < FAN_EARNINGS_SHADOW_PASS_EVERY_MS ? closedAt : null;
-  }
-  const fullFrom = passClosedAt === null ? null : new Date(passClosedAt.getTime() + FAN_EARNINGS_SHADOW_PASS_EVERY_MS);
-  const ageMs = input.maxAgeMs ?? FAN_EARNINGS_ROSTER_MAX_AGE_MS;
-  const result = await db.execute<{ dueAt: Date | string | null }>(sql`
-    with planes(plane) as (
-      values ('fan_earnings_lifetime'), ('fan_earnings_monthly')
-    ), roster as (
-      select f.platform_user_id as fan_ref
-        from page_fans pf
-        join fans f on f.id = pf.fan_id
-       where pf.platform_account_id = ${input.pageId}
-         and pf.total_creator_net_mills > 0
-    ), subjects as (
-      -- Each spender of the page in both windows: read before, due at its
-      -- read + the roster age; never read, due at once — since it was queued
-      -- (its row's creation), or undated without a row.
-      select s.next_due_at as marked,
-             case
-               when s.subject_ref is null then '-infinity'::timestamptz
-               when s.last_visited_at is null then s.created_at
-               else s.last_visited_at + make_interval(secs => ${ageMs / 1000})
-             end as aged,
-             greatest(case when s.claim_token is not null then s.claim_expires_at end, s.retry_after_at) as held
-        from roster r
-       cross join planes p
-        left join subject_refresh_state s
-          on s.page_id = ${input.pageId} and s.plane = p.plane and s.subject_ref = r.fan_ref
-      union all
-      -- Marks and retries of subjects that are no spender (any more).
-      select s.next_due_at, null,
-             greatest(case when s.claim_token is not null then s.claim_expires_at end, s.retry_after_at)
-        from subject_refresh_state s
-        join planes p on p.plane = s.plane
-       where s.page_id = ${input.pageId}
-         and s.next_due_at is not null
-         and not exists (select 1 from roster r where r.fan_ref = s.subject_ref)
-    ), due as (
-      select case
-               when ${fullFrom}::timestamptz is null then greatest(least(marked, aged), held)
-               else least(
-                 -- the pass over the marks newer than the last pass
-                 case when marked > ${passClosedAt}::timestamptz then greatest(marked, held) end,
-                 -- the next full pass
-                 greatest(least(marked, aged), held, ${fullFrom}::timestamptz))
-             end as due_at
-        from subjects
-    )
-    select min(due_at) as "dueAt" from due where due_at is not null
-  `);
-  const raw = result.rows[0]?.dueAt ?? null;
-  if (raw === null) return { nextDueAt: null };
-  const dueAt = raw instanceof Date ? raw : new Date(raw);
-  // '-infinity': a spender without a queue row, due at once since an instant
-  // nothing dates.
-  return Number.isFinite(dueAt.getTime())
-    ? { nextDueAt: dueAt }
-    : { unjudgeable: "a spender of the page without a queue row: due at once since it became a spender, which nothing dates" };
+  const due = await nextDueFanEarningsSubject(db, { pageId: input.pageId, now: input.now });
+  return due === null ? [] : [{ resource: FAN_EARNINGS_ROSTER_KEY, demand: { reason: input.reason } }];
 }
 
 /** The page's open claim of one subject (the actor is its only claimant). */
@@ -405,50 +229,20 @@ export async function breakFanEarningsSubject(
 }
 
 interface RosterCursor {
-  /** Shadow: the keyset of the subjects already simulated in this pass. */
-  shadowAfter: FanEarningsSubject | null;
-  /** Steps of this pass. */
+  /** Steps of this walk. */
   steps: number;
 }
 
 function parseRosterCursor(value: unknown): RosterCursor {
-  const record = recordOf(value);
-  const steps = record.steps;
-  return {
-    shadowAfter: subjectOf(record.shadowAfter),
-    steps: typeof steps === "number" && Number.isSafeInteger(steps) && steps >= 0 ? steps : 0,
-  };
-}
-
-function shadowSinceOf(params: unknown): Date | null {
-  const raw = recordOf(params).shadowSince;
-  if (typeof raw !== "string") return null;
-  const at = new Date(raw);
-  return Number.isNaN(at.getTime()) ? null : at;
+  const steps = recordOf(value).steps;
+  return { steps: typeof steps === "number" && Number.isSafeInteger(steps) && steps >= 0 ? steps : 0 };
 }
 
 export const fanEarningsRosterModule: ResourceModule = {
   async plan(work, ctx): Promise<StepPlan> {
-    const cursor = parseRosterCursor(work.cursor);
-    const due = ctx.shadow
-      ? await nextDueFanEarningsSubject(ctx.db, {
-        pageId: ctx.pageId,
-        now: ctx.now,
-        order: "keyset",
-        after: cursor.shadowAfter,
-        since: shadowSinceOf(work.params),
-      })
-      : await nextDueFanEarningsSubject(ctx.db, { pageId: ctx.pageId, now: ctx.now, order: "priority" });
-    if (due === null) {
-      return { kind: "done", reason: ctx.shadow ? "shadow" : "roster_fresh", cursor: { shadowAfter: null, steps: cursor.steps } };
-    }
-    const request = fanEarningsRequest(due, ctx.now);
-    // The request's history runs up to the step's clock: a shadow step names
-    // its subject, the roster pass's place (`RequestPlan.position`).
-    return {
-      kind: "request",
-      request: ctx.shadow ? { ...request, position: { fan: due.fanRef, window: due.window } } : request,
-    };
+    const due = await nextDueFanEarningsSubject(ctx.db, { pageId: ctx.pageId, now: ctx.now });
+    if (due === null) return { kind: "done", reason: "roster_fresh", cursor: parseRosterCursor(work.cursor) };
+    return { kind: "request", request: fanEarningsRequest(due, ctx.now) };
   },
 
   async onAdmit(tx, work, request) {
@@ -484,7 +278,7 @@ export const fanEarningsRosterModule: ResourceModule = {
       work: {
         satisfiesRevision: false,
         nextDueAt: input.now,
-        cursor: { ...cursor, steps: cursor.steps + 1 },
+        cursor: { steps: cursor.steps + 1 } satisfies RosterCursor,
         result: {
           last: { ...subject, outcome: receipt.outcome, settled, ...(breaker === null ? {} : { breaker }) },
         },
@@ -518,69 +312,4 @@ export const fanEarningsRosterModule: ResourceModule = {
       ...subject,
     });
   },
-
-  async shadow(work, request, ctx): Promise<ShadowResult> {
-    const subject = fanEarningsSubjectOfRequest(request);
-    const cursor = parseRosterCursor(work.cursor);
-    return {
-      work: {
-        satisfiesRevision: false,
-        nextDueAt: ctx.now,
-        cursor: { shadowAfter: subject ?? cursor.shadowAfter, steps: cursor.steps + 1 } satisfies RosterCursor,
-      },
-      followups: [],
-    };
-  },
-
-  async queueNextDueAt(ctx) {
-    return fanEarningsRosterNextDueAt(ctx.db, { pageId: ctx.pageId, at: ctx.now, shadow: true });
-  },
-
-  replay: replayFanEarnings,
 };
-
-/**
- * Replay of a legacy `fan_earnings_stats` / `fan_earnings_monthly`
- * observation (design §5.8): the receipt the engine would build from it has
- * the fingerprint legacy stored for that observation, or legacy has checked
- * the subject again since.
- */
-async function replayFanEarnings(observation: ReplayObservation, ctx: ReplayContext): Promise<ReplayVerdict> {
-  const window: FanEarningsWindow = observation.kind === "fan_earnings_monthly" ? "monthly" : "lifetime";
-  const parsed = parseFanslyEarningsObservation({
-    id: observation.id,
-    source: "pull",
-    producer: "sync:fansly:fan_earnings",
-    platform: "fansly",
-    accountId: ctx.pageId,
-    kind: observation.kind,
-    payload: observation.payload,
-    observedAt: observation.receivedAt,
-    receivedAt: observation.receivedAt,
-  });
-  const fans = [...new Set(parsed.events.map((event) => event.fanIdentityRef).filter((ref): ref is string => typeof ref === "string"))];
-  if (fans.length === 0) {
-    return { kind: "not_replayable", reason: parsed.rejection === null ? "no_rows" : `rejected:${parsed.rejection.code}` };
-  }
-  if (fans.length > 1) return { kind: "mismatch", reason: "several_fans", detail: { fans: fans.length } };
-  const fanRef = fans[0]!;
-  const receipt = buildFanEarningsReceipt({
-    pageId: ctx.pageId,
-    fanRef,
-    window,
-    observationId: observation.id,
-    payload: observation.payload,
-    checkedAt: observation.receivedAt,
-  });
-  const stored = await ctx.db.execute<{ fingerprint: string | null; checkedObservationId: string | null }>(sql`
-    select last_content_fingerprint as fingerprint, last_checked_observation_id::text as "checkedObservationId"
-      from subject_refresh_state
-     where page_id = ${ctx.pageId} and plane = ${fanEarningsPlane(window)} and subject_ref = ${fanRef}
-  `);
-  const row = stored.rows[0];
-  if (row === undefined || row.checkedObservationId === null) return { kind: "mismatch", reason: "no_receipt", detail: { fanRef } };
-  const checked = Number(row.checkedObservationId);
-  if (checked > observation.id) return { kind: "match", detail: { laterReceipt: true } };
-  if (checked === observation.id && row.fingerprint === receipt.fingerprint) return { kind: "match", detail: { outcome: receipt.outcome } };
-  return { kind: "mismatch", reason: checked === observation.id ? "fingerprint_differs" : "receipt_older", detail: { fanRef, outcome: receipt.outcome } };
-}

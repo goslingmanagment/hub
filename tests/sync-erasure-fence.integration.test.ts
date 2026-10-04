@@ -23,8 +23,9 @@ import { makeTestActor, okResponse, pollsRequest, ScriptedLiveTransport, testSpe
 //   second request.
 // - A fan erased before the read: when the chat comes back (the fan writes
 //   again), the vendor still serves the old messages; none of them reaches
-//   the hot tables, the ledger's events or the archive — only what the fan
-//   wrote after the erasure (the fence is material-time-bounded).
+//   the ledger's events or the archive (nor `page_dm_messages`, which the
+//   engine never writes, step 4 S4-13) — only what the fan wrote after the
+//   erasure (the fence is material-time-bounded).
 // - A read captured before the erasure and applied after it (the process
 //   died in between): the restarted actor finds nothing to bring back.
 //
@@ -69,7 +70,6 @@ function registry(): EngineRegistry {
   const free = {
     plan: async () => ({ kind: "request" as const, request: pollsRequest }),
     apply: async () => ({ work: { satisfiesRevision: true, close: "done" as const }, followups: [] }),
-    shadow: async () => ({ work: { satisfiesRevision: true, close: "done" as const }, followups: [] }),
   };
   return createEngineRegistry([
     ...["dm-messages.head", "dm-messages.catchup", "dm-messages.history", "transactions.head"].map((key) => fanslyResourceSpec(key)!),
@@ -89,7 +89,7 @@ async function livePage(): Promise<number> {
 
 async function headDemand(pageId: number, chat: FakeChat, messageIds: readonly string[]) {
   await upsertDemand(db(), {
-    pageId, shadow: false, resource: "dm-messages.head", subject: chat.groupId, kind: "trigger", class: "urgent",
+    pageId, resource: "dm-messages.head", subject: chat.groupId, kind: "trigger", class: "urgent",
     dueAt: new Date(Date.now() - 1_000), demand: { messageIds: [...messageIds], txIds: [], reasons: ["test"] },
   });
 }
@@ -129,7 +129,19 @@ function eraseFan(fanRef: string) {
     executeErasure(app, { scopeType: "fan", platform: "fansly", fanRef }, { initiatedBy: operatorId }));
 }
 
+/** The chat's messages in `message_archive`, a live page's store (step 4 S4-08). */
 async function storedIds(pageId: number, groupId: string): Promise<string[]> {
+  const result = await rows<{ id: string }>(
+    `select message_ref as id from message_archive
+      where account_id = $1 and platform = 'fansly' and conversation_ref = $2 order by message_ref::numeric`,
+    [pageId, groupId],
+  );
+  return result.map((row) => row.id);
+}
+
+/** The chat's `page_dm_messages` rows: what legacy stored (the fixture's
+ *  `stored`); the engine writes none (step 4 S4-13). */
+async function hotIds(pageId: number, groupId: string): Promise<string[]> {
   const result = await rows<{ id: string }>(
     `select m.platform_message_id as id from page_dm_messages m join page_dm_threads t on t.id = m.conversation_id
       where t.platform_account_id = $1 and t.platform_conversation_id = $2 order by m.platform_message_id::numeric`,
@@ -147,10 +159,10 @@ describe("the erasure fence of the applies (I15)", () => {
     await seedChatThread(handles(), pageId, chat, { stored: chat.messages.slice(0, 5), chain: true });
     await headDemand(pageId, chat, [chat.messages[9]!.id]);
     await upsertDemand(db(), {
-      pageId, shadow: false, resource: "transactions.head", subject: "", kind: "trigger", class: "urgent",
+      pageId, resource: "transactions.head", subject: "", kind: "trigger", class: "urgent",
       dueAt: new Date(Date.now() - 1_000), demand: { messageIds: [], txIds: ["tx-1"], reasons: ["test"] },
     });
-    await upsertDemand(db(), { pageId, shadow: false, resource: FREE_KEY, subject: "x", kind: "trigger", class: "urgent" });
+    await upsertDemand(db(), { pageId, resource: FREE_KEY, subject: "x", kind: "trigger", class: "urgent" });
     const scripted = transport(chats, [transaction("tx-1", chat.fanRef)]);
 
     // An erasure of the page holds the exclusive fence (its delete transaction).
@@ -158,7 +170,7 @@ describe("the erasure fence of the applies (I15)", () => {
     try {
       await erasure.query("begin");
       await erasure.query("select pg_advisory_xact_lock($1, $2)", [DM_ARCHIVE_ERASURE_FENCE_LOCK_NS, pageId]);
-      const held = await makeTestActor({ db: db(), pageId, mode: "live", registry: registry(), transport: scripted, settingMs: 1 });
+      const held = await makeTestActor({ db: db(), pageId, registry: registry(), transport: scripted, settingMs: 1 });
       await runActorUntil(held, async () => (await count(
         "select count(*)::int as n from sync_attempts where page_id = $1 and apply_state = 'deferred'", [pageId],
       )) === 2 && (await count(
@@ -175,7 +187,7 @@ describe("the erasure fence of the applies (I15)", () => {
         { resource: "transactions.head", apply_error: expect.stringContaining("erasure_busy"), work_state: "running" },
       ]);
       // Nothing of either answer was written under the erasure.
-      expect(await storedIds(pageId, chat.groupId)).toEqual(chat.messages.slice(0, 5).map((message) => message.id));
+      expect(await storedIds(pageId, chat.groupId)).toEqual([]);
       expect(await count("select count(*)::int as n from transactions where platform_account_id = $1", [pageId])).toBe(0);
       expect(scripted.hits.map((hit) => hit.spec).sort()).toEqual(["messages.page", "polls", "transactions.page"]);
     } finally {
@@ -184,13 +196,14 @@ describe("the erasure fence of the applies (I15)", () => {
     }
 
     // The fence is free: the restarted actor applies both from the journal.
-    const freed = await makeTestActor({ db: db(), pageId, mode: "live", registry: registry(), transport: scripted, settingMs: 1 });
+    const freed = await makeTestActor({ db: db(), pageId, registry: registry(), transport: scripted, settingMs: 1 });
     await runActorUntil(freed, async () => (await count(
       "select count(*)::int as n from sync_attempts where page_id = $1 and apply_state = 'applied'", [pageId],
     )) === 3, 30_000, "every apply done");
     expect(scripted.hits).toHaveLength(3);
     expect(await count("select count(*)::int as n from sync_attempts where page_id = $1", [pageId])).toBe(3);
     expect(await storedIds(pageId, chat.groupId)).toEqual(chat.messages.map((message) => message.id));
+    expect(await hotIds(pageId, chat.groupId)).toEqual(chat.messages.slice(0, 5).map((message) => message.id));
     expect(await rows("select transaction_id from transactions where platform_account_id = $1", [pageId])).toEqual([{ transaction_id: "tx-1" }]);
     expect(await count(
       "select count(*)::int as n from sync_work where page_id = $1 and resource in ('dm-messages.head', 'transactions.head') and state = 'running'",
@@ -220,7 +233,7 @@ describe("the erasure fence of the applies (I15)", () => {
     await headDemand(pageId, erased, [fresh!.id]);
     await headDemand(pageId, bystander, [bystanderNew.at(-1)!.id]);
     const scripted = transport(chats);
-    const made = await makeTestActor({ db: db(), pageId, mode: "live", registry: registry(), transport: scripted, settingMs: 1 });
+    const made = await makeTestActor({ db: db(), pageId, registry: registry(), transport: scripted, settingMs: 1 });
     await runActorUntil(made, async () => (await count(
       "select count(*)::int as n from sync_work where page_id = $1 and resource = 'dm-messages.head' and state = 'done'", [pageId],
     )) === 2, 30_000, "both heads read");
@@ -238,6 +251,9 @@ describe("the erasure fence of the applies (I15)", () => {
     )).toBe(0);
     // The bystander's chat is untouched by the fence.
     expect(await storedIds(pageId, bystander.groupId)).toEqual(bystander.messages.map((message) => message.id));
+    const bystanderNewIds = new Set(bystanderNew.map((message) => message.id));
+    expect(await hotIds(pageId, bystander.groupId))
+      .toEqual(bystander.messages.filter((message) => !bystanderNewIds.has(message.id)).map((message) => message.id));
   }, 90_000);
 
   it("a read captured before the erasure and applied after it: the restarted actor brings nothing back and reads nothing again", async (context) => {
@@ -251,7 +267,7 @@ describe("the erasure fence of the applies (I15)", () => {
 
     // The process dies between the capture and the apply.
     const dying = await makeTestActor({
-      db: db(), pageId, mode: "live", registry: registry(), transport: scripted, settingMs: 1,
+      db: db(), pageId, registry: registry(), transport: scripted, settingMs: 1,
       faults: (point) => {
         if (point === "after_capture") throw new SyncCrashFault(point);
       },
@@ -263,7 +279,7 @@ describe("the erasure fence of the applies (I15)", () => {
     await eraseFan(erased.fanRef);
 
     // The restart recovers and drains every pending apply; nothing is left.
-    const restarted = await makeTestActor({ db: db(), pageId, mode: "live", registry: registry(), transport: scripted, settingMs: 1 });
+    const restarted = await makeTestActor({ db: db(), pageId, registry: registry(), transport: scripted, settingMs: 1 });
     await runActorUntil(restarted, async () => (await count(
       "select count(*)::int as n from sync_attempts where page_id = $1 and apply_state in ('captured', 'deferred')", [pageId],
     )) === 0, 30_000, "no pending apply");

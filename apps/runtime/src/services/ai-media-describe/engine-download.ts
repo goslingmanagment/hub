@@ -100,7 +100,6 @@ export async function downloadThroughSyncEngine(
   const now = (ctx.clock?.wallNow() ?? new Date()).getTime();
   const recent = await latestClosedWorkForKey(ctx.db, {
     pageId: input.pageId,
-    shadow: false,
     resource: MEDIA_DOWNLOAD_KEY,
     subject,
     closedAfter: new Date(now - ENGINE_DOWNLOAD_REUSE_MS),

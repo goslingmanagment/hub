@@ -33,6 +33,7 @@ import {
   type AlertSink,
   type Metrics,
   type OwnershipSession,
+  type PageTransport,
   type SendHooks,
   type SettingsSource,
   type SyncAlertInput,
@@ -48,11 +49,6 @@ import {
   type RequestPlan,
   type ResourceModule,
 } from "../../apps/runtime/src/sync/engine/resource.ts";
-import {
-  fixedShadowLatency,
-  ShadowTransport,
-  type PageTransport,
-} from "../../apps/runtime/src/sync/engine/shadow.ts";
 import { onHistoryThreadChainChanged, onHistoryWorkClosed } from "../../apps/runtime/src/sync/requests/history.ts";
 
 // Shared doubles of the Fansly Sync Engine host and actor for the integration
@@ -123,7 +119,7 @@ export const immediateWake: Wake = {
   },
 };
 
-/** A config for host tests (no secrets are read in shadow). */
+/** A config for host tests. */
 export function testConfig(connectionString: string): AppConfig {
   return loadConfig({
     DATABASE_URL: connectionString,
@@ -285,9 +281,9 @@ export class ScriptedLiveTransport implements PageTransport {
 export interface TestActorOptions {
   db: Database;
   pageId: number;
-  mode: "shadow" | "live";
   registry: EngineRegistry;
   settingMs?: number;
+  /** Default: a `ScriptedLiveTransport` answering every request 200. */
   transport?: PageTransport;
   ownership?: OwnershipSession;
   alerts?: AlertSink;
@@ -350,7 +346,6 @@ export async function makeTestActor(options: TestActorOptions): Promise<{
     pageId: options.pageId,
     ownRef: options.ownRef === undefined ? "fansly-own-ref" : options.ownRef,
     generation: acquired.generation,
-    mode: options.mode,
     registry: options.registry,
     clock: systemClock,
     rng: { next: () => 0.5 },
@@ -358,7 +353,7 @@ export async function makeTestActor(options: TestActorOptions): Promise<{
     metrics: options.metrics ?? new RecordingMetrics(),
     logger: quietLogger,
     pacer,
-    transport: options.transport ?? new ShadowTransport({ clock: systemClock, latency: fixedShadowLatency(0) }),
+    transport: options.transport ?? new ScriptedLiveTransport(),
     ownership,
     wake: options.wake ?? immediateWake,
     ...(options.faults === undefined ? {} : { faults: options.faults }),
@@ -417,12 +412,11 @@ export function changedTables(before: Map<string, number>, after: Map<string, nu
 export const CHILD_POLL_KEY = "own.poll";
 export const CRASH_READ_KEY = "crash.read";
 
-/** The shadow registry of the `host` mode: one planned poll, always due. */
-export function childShadowRegistry() {
+/** The registry of the `host` mode: one planned poll, always due. */
+export function childPollRegistry() {
   const poll: ResourceModule = {
     plan: async () => ({ kind: "request", request: pollsRequest }),
     apply: async () => ({ work: { satisfiesRevision: true }, followups: [] }),
-    shadow: async () => ({ work: { satisfiesRevision: true }, followups: [] }),
   };
   return testRegistry([testSpec(CHILD_POLL_KEY, poll, { kind: "poll", class: "planned", period: { everyMs: 100 } })]);
 }
@@ -438,7 +432,6 @@ export function crashRegistry() {
       );
       return { work: { satisfiesRevision: true, close: "done" }, followups: [] };
     },
-    shadow: async () => ({ work: { satisfiesRevision: true, close: "done" }, followups: [] }),
   };
   return testRegistry([testSpec(CRASH_READ_KEY, read)]);
 }

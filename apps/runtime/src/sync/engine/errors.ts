@@ -1,12 +1,10 @@
 import type { FanslyWireOutcome, FanslyWireRead, FanslyWireSpec } from "@agency_hub_core/fansly";
 import { readFanslyWireResponse } from "@agency_hub_core/fansly";
 import {
-  activeFanslyPageHold,
-  combineFanslyPageHold,
   credentialsFailureDetail,
   parseRetryAfterDelayMsUnclamped,
-  readFanslyPageHolds,
   type FanslyPageHoldKind,
+  type FanslyPageHolds,
 } from "@agency_hub_core/shared";
 
 import type { FanslyRoute } from "../fansly/routes.ts";
@@ -24,9 +22,11 @@ import type { RouteStateEntry } from "./route-policy.ts";
 //                         subject breaker, resource breaker, quarantine).
 //
 // What a page hold IS — in force, what it admits, what clears a credentials
-// hold, how two holds share the row — is the shared page-hold core
-// (`@agency_hub_core/shared` fansly-page-holds, step 3b ruling 5); this file
-// only decides which hold an outcome takes.
+// hold — is the shared page-hold core (`@agency_hub_core/shared`
+// fansly-page-holds, step 3b ruling 5), and what holds a request the hold
+// evaluator (`engine/admission.ts`); this file only decides which hold an
+// outcome takes. A page's holds are rows of its hold set (`sync_holds`): a
+// credentials hold and a network hold stand side by side.
 //
 // The commit transactions write the decisions; nothing here touches the
 // database. The pause setting S is never changed by the engine: a 429 holds
@@ -215,24 +215,21 @@ function retryAfterDelayMs(retryAfter: string | null, served: string | null, now
 
 // ── decisions ───────────────────────────────────────────────────────────────
 
-/** `sync_pages.resource_holds[<file>]`: the §9 resource breaker of the file. */
+/** The §9 resource breaker of a resource file (its `resource_breaker` row of
+ *  the page's hold set). */
 export interface ResourceHoldEntry {
-  until: string;
+  until: Date;
   step: number;
-  since: string;
+  since: Date;
 }
 
 export type ResourceHoldKind = "breaker";
 
-/** The page fields `onOutcome` reads; names follow the `sync_pages` row. */
+/** What `onOutcome` reads of the page: its own holds and its resource
+ *  breakers (`engine/admission.ts` `holdSetOf`), and two fields of its row. */
 export interface PageErrorState {
-  holdKind: FanslyPageHoldKind | null;
-  holdUntil: Date | null;
-  holdSince: Date | null;
-  /** `sync_pages.hold_step`, carried with a hold (no ladder of its own: a 429
-   *  holds its route, `route-holds.ts`). */
-  holdStep: number;
-  holdDetail: Readonly<Record<string, unknown>>;
+  /** The page's credentials and network holds, as its hold set records them. */
+  holds: FanslyPageHolds;
   networkFailureStreak: number;
   resourceHolds: Readonly<Record<string, ResourceHoldEntry>>;
   credentialsGeneration: string | null;
@@ -291,16 +288,11 @@ export interface OutcomeInput {
 
 export type PageHoldDecision =
   | { action: "keep" }
-  | {
-    action: "set";
-    kind: FanslyPageHoldKind;
-    until: Date | "infinity";
-    /** `sync_pages.hold_step` to store. */
-    step: number;
-    detail: Record<string, unknown>;
-  }
-  /** Lift a hold no longer in force; `resetStep` also zeroes `hold_step`. */
-  | { action: "clear"; resetStep: boolean };
+  /** Take the page's hold of `kind` (`setPageHold`): its row beside the
+   *  page's other hold, never over it. */
+  | { action: "set"; kind: FanslyPageHoldKind; until: Date | "infinity"; detail: Record<string, unknown> }
+  /** Lift the recorded holds of `kinds`, which are no longer in force. */
+  | { action: "clear"; kinds: FanslyPageHoldKind[] };
 
 export type WorkDecision =
   /** A 2xx-ok answer: the apply transaction settles the work. */
@@ -362,8 +354,7 @@ export function isResourceHoldExempt(resource: string): boolean {
 
 function inForce(entry: ResourceHoldEntry | undefined, now: Date): Date | null {
   if (entry === undefined) return null;
-  const until = new Date(entry.until);
-  return Number.isNaN(until.getTime()) || until.getTime() <= now.getTime() ? null : until;
+  return Number.isNaN(entry.until.getTime()) || entry.until.getTime() <= now.getTime() ? null : entry.until;
 }
 
 /** The resource hold that stops `resource` now, or null: its file's breaker
@@ -378,14 +369,6 @@ export function activeResourceHold(
   const entry = holds[file];
   const until = inForce(entry, now);
   return until === null ? null : { file, until, step: entry!.step, kind: "breaker" };
-}
-
-type PageHoldSet = Extract<PageHoldDecision, { action: "set" }>;
-
-/** The hold to write when `incoming` is taken over the row's current hold
- *  (`combineFanslyPageHold`), with the 429 ladder step `incoming` stores. */
-function combinePageHold(page: PageErrorState, incoming: PageHoldSet, now: Date): PageHoldSet {
-  return { action: "set", ...combineFanslyPageHold(page, incoming, now), step: incoming.step };
 }
 
 function ladder(values: readonly number[], index: number): number {
@@ -442,8 +425,7 @@ export function escalateResourceHold(
 /**
  * Every consequence of one outcome (design §3.8 "one place"). Pure: the
  * caller writes the decision in the transaction that records the outcome
- * (capture, or the apply's error settlement) and opens the alerts (a shadow
- * page records them as metrics only).
+ * (capture, or the apply's error settlement) and opens the alerts.
  */
 export function onOutcome(input: OutcomeInput): OutcomeDecision {
   const { now, page } = input;
@@ -467,12 +449,11 @@ export function onOutcome(input: OutcomeInput): OutcomeDecision {
       // A hold still in force is never lifted by an answer: a credentials
       // hold only by the apply of an identity proof sent after its latest
       // refusal (ruling 5), in the apply's own transaction. A recorded hold
-      // that is no longer in force (expired) is cleared, with a `hold_step`
-      // an older build's page-wide 429 ladder left. A route's hold and
+      // that is no longer in force (expired) is cleared. A route's hold and
       // slowdown are not an answer's to lift.
-      const holdInForce = activeFanslyPageHold(page, now) !== null;
-      const staleStep = page.holdStep !== 0;
-      const staleHold = page.holdKind !== null && !holdInForce;
+      const expired = [page.holds.credentials, page.holds.timed]
+        .filter((hold) => hold !== null && hold.until.getTime() <= now.getTime())
+        .map((hold) => hold!.kind);
       const file = resourceFileOf(input.resource);
       const entry = page.resourceHolds[file];
       const resourceExpired = entry !== undefined && inForce(entry, now) === null;
@@ -481,7 +462,7 @@ export function onOutcome(input: OutcomeInput): OutcomeDecision {
         input.subjectState.blockedByVendorAt !== null;
       return {
         ...base,
-        pageHold: !holdInForce && (staleHold || staleStep) ? { action: "clear", resetStep: staleStep } : KEEP_HOLD,
+        pageHold: expired.length > 0 ? { action: "clear", kinds: expired } : KEEP_HOLD,
         networkFailureStreak: streakReset,
         work: { action: "apply" },
         subjectBreaker: breakerSet
@@ -504,28 +485,24 @@ export function onOutcome(input: OutcomeInput): OutcomeDecision {
         return { ...base, networkFailureStreak: streak, work: reopenNow };
       }
       const until = later(now, ladder(NETWORK_PAUSE_LADDER_MS, streak - NETWORK_FAILURES_TO_PAUSE));
-      // The hold is re-taken after every failed retry; the instant the network
-      // went away rides along in the detail so "> 10 min" is measurable (also
-      // from a network hold carried beside an auth hold).
-      const recorded = readFanslyPageHolds(page).timed;
-      const priorSince = recorded?.kind === "network"
-        ? sinceOf(recorded.detail.networkSince) ?? (recorded.carried ? null : page.holdSince)
-        : null;
-      const networkSince = priorSince ?? now;
+      // The hold is re-taken after every failed retry — its row beside a
+      // credentials hold when the failure is a check's under one, never over
+      // it; the instant the network went away rides along in the detail so
+      // "> 10 min" is measurable. A recorded hold that ends later keeps its
+      // end.
+      const recorded = page.holds.timed;
+      const networkSince = (recorded === null ? null : sinceOf(recorded.detail.networkSince) ?? recorded.since) ?? now;
       const alerts: AlertDecision[] = now.getTime() - networkSince.getTime() > NETWORK_ALERT_AFTER_MS
         ? [{ subKey: "page_stopped", detail: "network" }]
         : [];
+      const heldLonger = recorded !== null && recorded.until.getTime() > until.getTime();
       return {
         ...base,
         networkFailureStreak: streak,
-        pageHold: combinePageHold(page, {
-          action: "set",
-          kind: "network",
-          until,
-          step: page.holdStep,
-          detail: { streak, networkSince: networkSince.toISOString() },
-        }, now),
-        work: { action: "reopen", dueAt: null, waitingReason: "page_hold", waitingUntil: until },
+        pageHold: heldLonger
+          ? KEEP_HOLD
+          : { action: "set", kind: "network", until, detail: { streak, networkSince: networkSince.toISOString() } },
+        work: { action: "reopen", dueAt: null, waitingReason: "page_hold", waitingUntil: heldLonger ? recorded.until : until },
         alerts,
       };
     }
@@ -563,13 +540,12 @@ export function onOutcome(input: OutcomeInput): OutcomeDecision {
       return {
         ...base,
         networkFailureStreak: streakReset,
-        pageHold: combinePageHold(page, {
+        pageHold: {
           action: "set",
           kind: "auth",
           until: "infinity",
-          step: page.holdStep,
           detail: credentialsFailureDetail(credentialsFailure(input), { status: input.httpStatus }),
-        }, now),
+        },
         work: { action: "reopen", dueAt: null, waitingReason: "page_hold", waitingUntil: null },
         alerts: [{ subKey: "page_stopped", detail: "auth" }],
       };
@@ -578,13 +554,12 @@ export function onOutcome(input: OutcomeInput): OutcomeDecision {
       return {
         ...base,
         networkFailureStreak: streakReset,
-        pageHold: combinePageHold(page, {
+        pageHold: {
           action: "set",
           kind: "identity_mismatch",
           until: "infinity",
-          step: page.holdStep,
           detail: credentialsFailureDetail(credentialsFailure(input)),
-        }, now),
+        },
         work: { action: "quarantine", reason: "identity_mismatch" },
         quarantineAttempt: true,
         alerts: [

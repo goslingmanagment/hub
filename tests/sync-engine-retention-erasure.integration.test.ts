@@ -11,6 +11,8 @@ import {
   deleteExpiredSyncEngineTelemetry,
   deleteExpiredSyncMediaHandoff,
   ensureSyncPage,
+  setPageHold,
+  setResourceHold,
   storeSyncMediaHandoff,
   type Database,
 } from "@agency_hub_core/db";
@@ -477,12 +479,16 @@ describe("erasure of the engine's state (design §2.9)", () => {
       await storeSyncMediaHandoff(db(), { pageId: page, descriptionId: description, workId: 1, contentType: null, bytes: Buffer.from("x") });
       const request = await insertHistoryRequest(page, 1);
       await insertHistoryItem(request, page, 0, { input_kind: "conversation_ref", input_ref: "g", conversation_ref: "g" });
+      // Its hold set: a credentials hold and a breaker.
+      await setPageHold(db(), { pageId: page, kind: "auth", until: "infinity", detail: { credentialsGeneration: "gen-a" } });
+      await setResourceHold(db(), { pageId: page, file: "transactions", hold: { until: new Date(Date.now() + 60_000), step: 1 } });
     }
     await withEraser(async (app, operatorId) => {
       const scope = { scopeType: "page" as const, pageLabel: "erase-page" };
       const plan = await planErasure(app, scope);
       const targets = new Map(plan.targets.map((target) => [`${target.plane}:${target.target}:${target.action}`, target.rows]));
       expect(targets.get("hot:sync_pages:delete")).toBe(1);
+      expect(targets.get("hot:sync_holds:delete")).toBe(2);
       expect(targets.get("hot:sync_work:delete")).toBe(1);
       expect(targets.get("hot:sync_attempts:delete")).toBe(1);
       await executeErasure(app, scope, { initiatedBy: operatorId });
@@ -490,5 +496,9 @@ describe("erasure of the engine's state (design §2.9)", () => {
     for (const table of ["sync_pages", "sync_work", "sync_attempts", "history_requests", "history_request_items", "sync_media_handoff"]) {
       expect(await query(`select page_id::int from ${table}`), table).toEqual([{ page_id: other }]);
     }
+    expect(await query("select page_id::int, kind from sync_holds order by kind")).toEqual([
+      { page_id: other, kind: "auth" },
+      { page_id: other, kind: "resource_breaker" },
+    ]);
   });
 });

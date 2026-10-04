@@ -1092,7 +1092,7 @@ export const HUB_COMMANDS: readonly HubCommand[] = [
     operation: "agentSyncStatus",
     summary:
       "The Fansly Sync Engine's status of your pages: pause record, sends by class, queue by why it waits,"
-      + " holds, request progress. Off and shadow pages show simulated (shadow) work.",
+      + " holds, request progress.",
     options: {
       "page-label": { kind: "string", describe: "Narrow to one page" },
     },

@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 
 import {
   getSyncPage,
+  setPageHold,
   storeFanslySession,
   upsertDemand,
   type Database,
@@ -48,6 +49,7 @@ import {
   type FakeRoute,
   type HarnessPage,
 } from "./helpers/sync-engine.ts";
+import { clearPageHolds, seedPageHold } from "./helpers/sync-holds.ts";
 
 // The credentials holds of a live page (step 3b ruling 5, A3), end to end:
 // a credentials hold records its LATEST refusal and is in force whatever
@@ -169,19 +171,15 @@ async function storeSession(page: HarnessPage, token: string): Promise<string> {
   return storedGeneration(page);
 }
 
-/** A legacy-shaped auth hold of `failed` (no refused attempt): only a proof
- *  sent after it was taken clears it. */
+/** An auth hold of `failed` that names no refused attempt (as an import
+ *  from the legacy engine left one): only a proof sent after it was taken
+ *  clears it. */
 async function holdAuth(page: HarnessPage, failed: string): Promise<void> {
-  await testDb!.pool.query(
-    `update sync_pages set hold_kind = 'auth', hold_until = 'infinity', hold_since = clock_timestamp(),
-            hold_detail = jsonb_build_object('status', 401, 'credentialsGeneration', $2::text)
-      where page_id = $1`,
-    [page.pageId, failed],
-  );
+  await setPageHold(db(), { pageId: page.pageId, kind: "auth", until: "infinity", detail: { status: 401, credentialsGeneration: failed } });
 }
 
 async function urgent(pageId: number, subject: string): Promise<void> {
-  await upsertDemand(db(), { pageId, shadow: false, resource: HARNESS_KEY.urgent, subject, kind: "trigger", class: "urgent", demand: { reasons: ["test"] } });
+  await upsertDemand(db(), { pageId, resource: HARNESS_KEY.urgent, subject, kind: "trigger", class: "urgent", demand: { reasons: ["test"] } });
 }
 
 function appContext(): AppContext {
@@ -216,6 +214,9 @@ async function auditMetadata(pageId: number, eventType: string): Promise<Array<R
   )).rows.map((row) => row.metadata);
 }
 
+/** The page row's old hold slot — which every hold write of this release keeps
+ *  in step with the hold set (the previous image reads it) — and its trusted
+ *  credentials. */
 async function pageRow(pageId: number) {
   return (await testDb!.pool.query<{
     hold_kind: string | null;
@@ -408,7 +409,7 @@ describe("credentials holds of a live page (ruling 5, A3)", () => {
     // The trusted digest is stale and the page's only verify is closed (what
     // a lost in-memory mode and a failed identity write left behind).
     await testDb.pool.query("update sync_pages set credentials_generation = $2 where page_id = $1", [r.page.pageId, "e".repeat(64)]);
-    await upsertDemand(db(), { pageId: r.page.pageId, shadow: false, resource: "account.verify", kind: "trigger", class: "urgent" });
+    await upsertDemand(db(), { pageId: r.page.pageId, resource: "account.verify", kind: "trigger", class: "urgent" });
     await testDb.pool.query(
       `update sync_work set state = 'done', closed_at = clock_timestamp(), close_reason = 'verified'
         where page_id = $1 and resource = 'account.verify'`,
@@ -577,25 +578,25 @@ describe("the candidate save is a CAS on the pair its check proved (ruling 5)", 
 
 describe("the final admission under the page row lock (ruling 5)", () => {
   for (const [kind, hold] of [
-    ["network", `hold_kind = 'network', hold_until = clock_timestamp() + interval '1 minute', hold_detail = '{"streak": 3}'`],
-    ["auth", `hold_kind = 'auth', hold_until = 'infinity', hold_detail = '{"credentialsGeneration": null}'`],
+    ["network", { untilSeconds: 60, detail: { streak: 3 } }],
+    ["auth", { untilSeconds: "infinity", detail: { credentialsGeneration: null } }],
   ] as const) {
     it(`a ${kind} hold written after the gate looked refuses the request before anything is counted`, async (context) => {
       if (!testDb) return context.skip();
       const { pageId } = await seedSyncPage({ db: db(), pool: testDb.pool }, { mode: "live", guard: "fansly_sync_engine" });
-      await upsertDemand(db(), { pageId, shadow: false, resource: CRASH_READ_KEY, kind: "trigger", class: "urgent" });
+      await upsertDemand(db(), { pageId, resource: CRASH_READ_KEY, kind: "trigger", class: "urgent" });
       const transport = new ScriptedLiveTransport();
       const prepare = transport.prepare.bind(transport);
       let held = false;
       transport.prepare = async (request) => {
         if (!held) {
           held = true;
-          await testDb!.pool.query(`update sync_pages set ${hold}, hold_since = clock_timestamp() where page_id = $1`, [pageId]);
+          await seedPageHold(testDb!, { pageId, kind, ...hold });
         }
         return prepare(request);
       };
       const metrics = new RecordingMetrics();
-      const { actor, stop, abort } = await makeTestActor({ db: db(), pageId, mode: "live", registry: crashRegistry(), transport, metrics });
+      const { actor, stop, abort } = await makeTestActor({ db: db(), pageId, registry: crashRegistry(), transport, metrics });
       const run = actor.run({ stop: stop.signal, abort: abort.signal });
       try {
         await waitFor(() => (held ? true : null), 10_000, "the hold written at the prepare");
@@ -607,7 +608,7 @@ describe("the final admission under the page row lock (ruling 5)", () => {
         expect(work.rows).toEqual([{ state: "open" }]);
         expect(metrics.get("sync_admission_page_held")).toBeGreaterThanOrEqual(1);
         // The hold lifted: the read goes out.
-        await testDb.pool.query("update sync_pages set hold_kind = null, hold_until = null, hold_since = null, hold_detail = '{}' where page_id = $1", [pageId]);
+        await clearPageHolds(testDb, pageId);
         await waitFor(() => (transport.hits.length === 1 ? true : null), 10_000, "the read after the hold");
       } finally {
         stop.abort();

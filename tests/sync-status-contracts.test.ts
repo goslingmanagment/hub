@@ -28,6 +28,7 @@ import {
 import { INDEFINITE_UNTIL } from "@agency_hub_core/shared";
 
 import { agentSyncWhyCapabilities } from "../apps/runtime/src/modules/agent-read/index.ts";
+import { EMPTY_HOLD_SET, holdSetOf } from "../apps/runtime/src/sync/engine/admission.ts";
 import { buildPageStatus, type StatusPage } from "../apps/runtime/src/sync/engine/status.ts";
 import { FANSLY_RESOURCE_SPECS } from "../apps/runtime/src/sync/fansly/registry.ts";
 import type { WorkWhy } from "../apps/runtime/src/sync/inspect.ts";
@@ -38,6 +39,7 @@ import {
   workIdOfDonePayload,
 } from "../apps/runtime/src/sync/requests/urgent.ts";
 import { toSyncPageStatusWire, toSyncWorkWire } from "../apps/runtime/src/sync/requests/wire.ts";
+import { pageHoldRow, resourceBreakerRow } from "./helpers/sync-holds.ts";
 
 // The engine's status and "why waiting" on the wire (design §3.9, §7.4) and
 // the "enqueue and wait" wrapper's pure parts (§7.3). The contracts package
@@ -114,15 +116,11 @@ describe("sync status: the capabilities of why", () => {
 
 function statusPage(overrides: Partial<StatusPage> = {}): StatusPage {
   return {
-    mode: "shadow",
+    mode: "live",
     pausedAll: false,
     pausedRequests: false,
     pausedResources: [],
-    holdKind: null,
-    holdUntil: null,
-    holdSince: null,
-    holdDetail: {},
-    resourceHolds: {},
+    holds: EMPTY_HOLD_SET,
     owner: {
       generation: 3n,
       host: "sync-1",
@@ -141,11 +139,11 @@ describe("sync status: the page status on the wire", () => {
       pageLabel: "lora-1",
       page: {
         ...statusPage({
-          holdKind: "auth",
-          holdUntil: INDEFINITE_UNTIL,
-          resourceHolds: { "dm-conversations": { until: at(60_000).toISOString(), step: 1, since: at(-1_000).toISOString() } },
+          holds: holdSetOf([
+            pageHoldRow("auth", INDEFINITE_UNTIL, { since: at(-60_000) }),
+            resourceBreakerRow("dm-conversations", at(60_000), { step: 1, since: at(-1_000) }),
+          ]),
         }),
-        holdSince: at(-60_000),
         lastSendAt: at(-2_000),
       },
       settingMs: 2_000,
@@ -161,7 +159,6 @@ describe("sync status: the page status on the wire", () => {
         violationsLastDay: 0,
       },
       requests: [],
-      shadow: { attemptsLastHour: 5, demandVsEstimate: null },
     });
     const wire = toSyncPageStatusWire(status);
     expect(agentSyncPageStatusSchema.parse(wire)).toEqual(wire);
@@ -174,6 +171,10 @@ describe("sync status: the page status on the wire", () => {
     expect(wire.sendsLastHour.byResource).toEqual({ "transactions.head": 3, "posts.refresh": 2 });
     // A copy, not the status's own objects.
     expect(wire.queue.urgent).not.toBe(status.queue.urgent);
+    // Shadow mode is gone (step 4 S4-23): the block the released clients'
+    // schemas require is a wire-only null.
+    expect(status).not.toHaveProperty("shadow");
+    expect(wire.shadow).toBeNull();
   });
 });
 
@@ -183,7 +184,6 @@ function why(overrides: Partial<WorkWhy["work"]> = {}, waiting: WorkWhy["waiting
       id: 41,
       resource: "account.verify",
       subject: "",
-      shadow: false,
       kind: "trigger",
       class: "urgent",
       state: "open",
@@ -220,6 +220,9 @@ describe("sync status: a work row on the wire", () => {
     });
     expect(wire).not.toHaveProperty("result");
     expect(wire).not.toHaveProperty("attempts");
+    // One journal (step 4 S4-23): a row shadow mode left is never served, so
+    // the mark the released clients' schemas require is a wire-only false.
+    expect(wire.shadow).toBe(false);
   });
 
   it("closed work waits for nothing; an indefinite instant has none on the wire", () => {

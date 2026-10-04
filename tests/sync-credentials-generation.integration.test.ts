@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 
 import {
   getSyncPage,
+  setPageHold,
   storeFanslySession,
   upsertDemand,
   type Database,
@@ -37,6 +38,7 @@ import {
   type FakeRoute,
   type HarnessPage,
 } from "./helpers/sync-engine.ts";
+import { pageHoldKindOf, pageHoldsOf, routeEntryOf } from "./helpers/sync-holds.ts";
 
 // The engine's credentials generation on a live page (design step 3 §3.5
 // item 3, G1/G2/G18, E16; step 3b ruling 5, A3): an applied `account.verify`
@@ -126,16 +128,11 @@ async function storedGeneration(page: HarnessPage): Promise<string> {
 }
 
 async function holdAuth(page: HarnessPage, failedGeneration: string): Promise<void> {
-  await testDb!.pool.query(
-    `update sync_pages set hold_kind = 'auth', hold_until = 'infinity', hold_since = clock_timestamp(),
-            hold_detail = jsonb_build_object('status', 401, 'credentialsGeneration', $2::text)
-      where page_id = $1`,
-    [page.pageId, failedGeneration],
-  );
+  await setPageHold(db(), { pageId: page.pageId, kind: "auth", until: "infinity", detail: { status: 401, credentialsGeneration: failedGeneration } });
 }
 
 async function urgent(pageId: number, subject: string): Promise<void> {
-  await upsertDemand(db(), { pageId, shadow: false, resource: HARNESS_KEY.urgent, subject, kind: "trigger", class: "urgent", demand: { reasons: ["test"] } });
+  await upsertDemand(db(), { pageId, resource: HARNESS_KEY.urgent, subject, kind: "trigger", class: "urgent", demand: { reasons: ["test"] } });
 }
 
 function appContext(): AppContext {
@@ -204,7 +201,7 @@ describe("the credentials generation of a live page", () => {
     await until(async () => r.server.arrivalsAt("/api/v1/trackinglinks").length === 1, 15_000, "the read after the hold");
     expect(r.identityTokens).toEqual(["fresh-token", "fresh-token"]);
     expect(await verifyAttempts(r.page.pageId)).toBe(1);
-    expect((await getSyncPage(db(), r.page.pageId))!.holdKind).toBeNull();
+    expect(pageHoldKindOf((await getSyncPage(db(), r.page.pageId))!)).toBeNull();
     const identity = await testDb.pool.query<{ state: string; close_reason: string; secret_params: string | null }>(
       "select state, close_reason, secret_params from sync_work where page_id = $1 and resource = 'account.identity'", [r.page.pageId],
     );
@@ -223,9 +220,9 @@ describe("the credentials generation of a live page", () => {
     // verified yet); the verify it raises meets the 401.
     await urgent(r.page.pageId, "u1");
     await startHost(r, 36);
-    await until(async () => (await getSyncPage(db(), r.page.pageId))!.holdKind === "auth", 15_000, "the auth hold of the takeover verify");
+    await until(async () => pageHoldKindOf((await getSyncPage(db(), r.page.pageId))!) === "auth", 15_000, "the auth hold of the takeover verify");
     const held = (await getSyncPage(db(), r.page.pageId))!;
-    expect(held.holdDetail.credentialsGeneration).toBe(refused);
+    expect(pageHoldsOf(held).credentials?.failure.digest).toBe(refused);
     expect(r.server.arrivalsAt("/api/v1/trackinglinks")).toEqual([]);
 
     const result = await updatePageCredentials(appContext(), r.page.pageLabel, {
@@ -257,7 +254,7 @@ describe("the credentials generation of a live page", () => {
       platform: "fansly", session: { authorization: "bad-token" },
     })).rejects.toThrow(/refused|identity/);
     const page = (await getSyncPage(db(), r.page.pageId))!;
-    expect(page.holdKind).toBeNull();
+    expect(page.holds).toEqual([]);
     expect(await storedGeneration(r.page)).toBe(before);
   }, 60_000);
 
@@ -277,7 +274,7 @@ describe("the credentials generation of a live page", () => {
     expect(r.server.arrivals[0]!.path.split("?")[0]).toBe("/api/v1/account/me");
     expect(r.identityTokens).toEqual(["rotated-token"]);
     const page = (await getSyncPage(db(), r.page.pageId))!;
-    expect(page.holdKind).toBeNull();
+    expect(pageHoldKindOf(page)).toBeNull();
     expect(page.credentialsGeneration).toBe(await storedGeneration(r.page));
     expect(await verifyAttempts(r.page.pageId)).toBe(1);
   }, 60_000);
@@ -299,15 +296,11 @@ describe("the credentials generation of a live page", () => {
     const checked = runFanslyIdentityCheck(appContext(), page, { session: fresh });
 
     // The 429 holds the identity route (`account.me`); the auth hold is
-    // neither replaced nor lifted, and carries nothing beside itself.
-    const routeHold = async () => ((await getSyncPage(db(), r.page.pageId))!.routeState as {
-      routes?: Record<string, { holdUntil: string | null }>;
-    } | null)?.routes?.["account.me"]?.holdUntil ?? null;
+    // neither replaced nor lifted, and no page hold stands beside it.
+    const routeHold = async () => routeEntryOf((await getSyncPage(db(), r.page.pageId))!, "account.me")?.holdUntil ?? null;
     await until(async () => (await routeHold()) !== null, 15_000, "the candidate's 429");
     const held = (await getSyncPage(db(), r.page.pageId))!;
-    expect(held.holdKind).toBe("auth");
-    expect(held.holdDetail.credentialsGeneration).toBe(failed);
-    expect(held.holdDetail.timedHold).toBeUndefined();
+    expect(pageHoldsOf(held)).toMatchObject({ credentials: { kind: "auth", failure: { digest: failed } }, timed: null });
     const holdEnd = new Date((await routeHold())!).getTime();
 
     // The check runs again only after the 429 ended, and passes.
@@ -318,7 +311,7 @@ describe("the credentials generation of a live page", () => {
     // The auth hold outlived the 429: the stored session that failed sends nothing.
     await new Promise((resolve) => setTimeout(resolve, 4 * S));
     expect(r.server.arrivalsAt("/api/v1/trackinglinks")).toEqual([]);
-    expect((await getSyncPage(db(), r.page.pageId))!.holdKind).toBe("auth");
+    expect(pageHoldKindOf((await getSyncPage(db(), r.page.pageId))!)).toBe("auth");
 
     // The renewal (stored and trusted as the credentials route does, a CAS on
     // the pair the check proved): the verify of it lifts the hold.
