@@ -2,6 +2,7 @@ import type {
   AiFeatureAttachedRecaps,
   AiFeatureDebugInputFrame,
   AiGatewayReasoningEffort,
+  AiStreamCapability,
 } from "@agency_hub_core/contracts";
 import {
   COACH_ANSWER_MAX_CHARS,
@@ -285,7 +286,11 @@ export async function prepareAiFeatureStream(
   principal: HumanAuthPrincipal,
   featureKey: string,
   body: AiFeatureRequestBody,
-  options?: { debugPromptEcho?: boolean },
+  options?: {
+    debugPromptEcho?: boolean;
+    /** Parsed `x-kernel-ai-capabilities` of the request (empty when absent). */
+    capabilities?: ReadonlySet<AiStreamCapability>;
+  },
 ): Promise<PreparedAiGatewayStream> {
   if (!(featureKey in FEATURE_POLICIES) || !isOperationFeature(featureKey as never)) {
     throw new UnknownAiFeatureError(`Unknown AI feature: ${featureKey}`);

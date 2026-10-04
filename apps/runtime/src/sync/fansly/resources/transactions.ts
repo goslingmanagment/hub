@@ -186,8 +186,8 @@ function maxIso(a: string | null, b: Date | null): string | null {
 }
 
 /**
- * The rescan's local lower bound at a walk's start (legacy
- * `syncTransactionsIncremental`): the checkpoint minus the lookback, or the
+ * The rescan's local lower bound at a walk's start (the legacy incremental
+ * scan's rule): the checkpoint minus the lookback, or the
  * oldest pending row if older, clamped to the rescan cap — but never above
  * the checkpoint itself (cursor + 1 ms keeps the cursor row older, so a quiet
  * page still stops on the page that holds it).

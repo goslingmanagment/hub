@@ -35,6 +35,8 @@ import { agentKeyAdminRouteSchemas } from "./routes-agent-keys.ts";
 // The Fansly Sync Engine's owner routes (history requests). Owner-session, no
 // agent envelope, so a sibling module for the same reason as the keys above.
 import { syncRouteSchemas } from "./routes-sync.ts";
+// The chat extension's routes (client bootstrap and what follows); same spread.
+import { clientRouteSchemas } from "./routes-client.ts";
 // House primitives shared with the sibling route modules (see primitives.ts).
 import {
   businessDate,
@@ -303,10 +305,24 @@ export const authIssueDeviceTokenWithPasswordBodySchema = z.object({
   // pending → a 10-minute reservation, activated through authActivateDeviceToken
   //           after the client has durably staged custody (the desktop).
   mode: deviceTokenIssueModeEnum,
+  // chat-extension H-3: a narrow token bound to this client's route allowlist
+  // (client-token-scopes.ts), stored immutably on the token. Active only. A hub
+  // without H-3 drops the key and issues a full token, so the client requires
+  // the echo below (and the bootstrap's identity.tokenClient) before using it.
+  client: z.enum(["chat-extension"]).optional(),
+}).superRefine((value, ctx) => {
+  if (value.client !== undefined && value.mode !== "active") {
+    ctx.addIssue({ code: "custom", path: ["client"], message: "client requires mode active" });
+  }
 });
 
 export const authIssueDeviceTokenWithPasswordResponseSchema = z.discriminatedUnion("mode", [
-  issuedDeviceTokenResponseSchema.extend({ mode: z.literal("active") }),
+  issuedDeviceTokenResponseSchema.extend({
+    mode: z.literal("active"),
+    // The profile the token was issued with: null for a full token. Open on
+    // the wire, absent from a hub without H-3.
+    client: z.string().min(1).max(64).nullable().optional(),
+  }),
   reservedDeviceTokenResponseSchema.extend({ mode: z.literal("pending") }),
 ]);
 
@@ -378,6 +394,9 @@ export const healthResponseSchema = z.object({
   timestamp: isoTimestamp,
   contractHash: z.string().regex(/^[a-f0-9]{64}$/),
   capabilities: z.array(z.literal("desktop-lifecycle-v2")),
+  /** Client SDK contract hashes this hub serves: its own first, then every frozen SDK
+   *  in its registry, no repeats. A client release gate checks its vendored hash here. */
+  compatibleClientSdks: z.array(z.string().regex(/^[a-f0-9]{64}$/)).max(64).optional(),
   checks: z.object({
     api: z.object({
       status: z.literal("ok"),
@@ -2454,21 +2473,6 @@ export const syncMonitorActiveRunSchema = z.object({
   lastActivityAt: isoTimestamp,
 });
 
-export const syncMonitorDeepBackfillSchema = z.object({
-  pendingConversations: z.number().int(),
-  pendingPagesEstimate: z.number().int(),
-  spenderPendingConversations: z.number().int(),
-  spenderPendingPagesEstimate: z.number().int(),
-  regularPendingConversations: z.number().int(),
-  regularPendingPagesEstimate: z.number().int(),
-  recentRequests: z.number().int(),
-  lastCompletedAt: isoTimestamp.nullable(),
-  liveRequestsSinceDeepBackfill: z.number().int(),
-  active: z.boolean(),
-  stalled: z.boolean(),
-  stallReason: z.string().nullable(),
-});
-
 const extendedSyncStreamEnum = z.enum([
   "light",
   "fan_identities",
@@ -2504,7 +2508,6 @@ export const syncMonitorStreamItemSchema = z.object({
   pending: z.boolean(),
   retryAt: isoTimestamp.nullable(),
   progress: syncMonitorProgressSchema.nullable(),
-  deepBackfill: syncMonitorDeepBackfillSchema.nullable().optional(),
   recentRuns: syncMonitorRecentRunsSchema,
   recentErrors: syncMonitorRecentErrorsSchema,
   rateHealth: syncMonitorRateHealthSchema,
@@ -7721,7 +7724,6 @@ const baseRouteSchemas = {
       // fansly_page_switching: the page is being switched to the Fansly Sync Engine;
       // legacy_sync_retired: a Fansly page the engine does not own (step 4 S4-10)
       409: errorResponseSchema,
-      503: errorResponseSchema,
     },
   },
   adminFollowersReconcileOverridePreview: {
@@ -7735,6 +7737,7 @@ const baseRouteSchemas = {
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
+      // legacy_sync_retired: a Fansly page the engine does not own (step 4 S4-17)
       409: errorResponseSchema,
     },
   },
@@ -7749,6 +7752,7 @@ const baseRouteSchemas = {
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
+      // legacy_sync_retired: a Fansly page the engine does not own (step 4 S4-17)
       409: errorResponseSchema,
     },
   },
@@ -8255,13 +8259,15 @@ export type RouteSchemas = typeof baseRouteSchemas
   & typeof ofapiActionRouteSchemas
   & typeof agentRouteSchemas
   & typeof agentKeyAdminRouteSchemas
-  & typeof syncRouteSchemas;
+  & typeof syncRouteSchemas
+  & typeof clientRouteSchemas;
 export const routeSchemas: RouteSchemas = {
   ...baseRouteSchemas,
   ...ofapiActionRouteSchemas,
   ...agentRouteSchemas,
   ...agentKeyAdminRouteSchemas,
   ...syncRouteSchemas,
+  ...clientRouteSchemas,
 };
 export type AuthState = z.infer<typeof authStateSchema>;
 export type AuthUser = z.infer<typeof authUserSchema>;

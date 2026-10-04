@@ -242,7 +242,6 @@ describe("(2) census — the registry is compared against what the tree writes",
     // Non-vacuous: the census must actually have found the lanes.
     expect(census.has("dm_messages")).toBe(true);
     expect(census.has("link_stats_tracking")).toBe(true);
-    expect(census.has("fan_earnings_monthly")).toBe(true);
   });
 
   it("knows every OF capture-plane observationKind literal", () => {

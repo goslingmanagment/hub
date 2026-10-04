@@ -1,4 +1,4 @@
-import { getSyncPage, listPageThreadChains, readThreadStoredFacts } from "@agency_hub_core/db";
+import { dmReaderStoreOf, getSyncPage, listPageThreadChains, readThreadStoredFacts } from "@agency_hub_core/db";
 import { fanslySnowflakeToDate } from "@agency_hub_core/shared";
 
 import {
@@ -134,7 +134,8 @@ export async function backtestPageEta(
     belowLowerBound: 0,
     examples: [],
   };
-  const readStored = (threadId: number) => readThreadStoredFacts(app.db, threadId);
+  const store = dmReaderStoreOf(page?.mode);
+  const readStored = (threadId: number) => readThreadStoredFacts(app.db, threadId, { store });
   const now = new Date();
   if (report.scan.stoppedBy === null) {
     for await (const batch of legacyJournalBatches(app, {

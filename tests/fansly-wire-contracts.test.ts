@@ -21,7 +21,6 @@ import {
 } from "@agency_hub_core/fansly";
 
 import { WRITTEN_OBSERVATION_KINDS } from "../apps/runtime/src/services/observation-kinds.ts";
-import { FANSLY_PURCHASE_HISTORY_RESULT_LIMIT } from "../apps/runtime/src/services/sync/fansly-purchase-history.ts";
 
 // The response contracts of the wire layer: the three new parsers, the order
 // in which an answer is read (auth, empty answer, status, envelope, contract),
@@ -61,8 +60,8 @@ describe("the wire registry", () => {
     expect(isFanslyWireId(null)).toBe(false);
   });
 
-  it("keeps the page sizes the legacy lanes walk with", () => {
-    expect(FANSLY_ORDER_HISTORY_PAGE_LIMIT).toBe(FANSLY_PURCHASE_HISTORY_RESULT_LIMIT);
+  it("keeps the page sizes the lanes walk with", () => {
+    expect(FANSLY_ORDER_HISTORY_PAGE_LIMIT).toBe(100);
     expect(FANSLY_MESSAGES_PAGE_LIMIT).toBe(25);
   });
 

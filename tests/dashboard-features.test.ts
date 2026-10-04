@@ -7,7 +7,7 @@ import { CONFIG_DESCRIPTORS } from "../packages/shared/src/config-registry.ts";
 import { validateConfigOverride } from "../packages/shared/src/config-settings.ts";
 import { isPageAllowlisted } from "../packages/shared/src/page-allowlist.ts";
 import { fanslyNewStreamAllowed } from "../apps/runtime/src/services/sync/fansly-stream-gate.ts";
-import { HUB_FEATURES, findHubFeature, featureSettingsHref, featureReturnHref } from "../apps/dashboard/src/pages/settings/featureCatalog.ts";
+import { HUB_FEATURES, findHubFeature, featureSettingsHref, featureReturnHref, type HubFeature } from "../apps/dashboard/src/pages/settings/featureCatalog.ts";
 import { featureState } from "../apps/dashboard/src/pages/settings/featuresView.ts";
 import { CONFIG_MODE_CHOICES, selectedConfigPages, serializeConfigPages, humanConfigValue } from "../apps/dashboard/src/pages/settings/configurationChoices.ts";
 
@@ -33,6 +33,13 @@ function view(values: Record<string, string | number | boolean>): ConfigViewResp
   return { generatedAt: "2026-09-11T19:00:00Z", roleStatuses: roles.map((role) => ({ role, status: "active" })), instances: [], subsystems: [{ subsystem: "Test", items }] };
 }
 function state(id: string, data: ConfigViewResponse) { return featureState(findHubFeature(id)!, data); }
+// No card of the catalog has a "none" sentinel scope since step 4 retired the
+// legacy Fansly diagnostics that used it (S4-12, S4-14, S4-16); the scope shape
+// stays an option of the catalog, so its state is pinned on a feature built here.
+const sentinelScoped: HubFeature = {
+  ...findHubFeature("voice")!, id: "sentinel-scoped", keys: ["voiceNotesPageAllowlist"], gates: [],
+  scope: { key: "voiceNotesPageAllowlist", empty: "none", none: "none" },
+};
 function render(component: typeof FeaturesTab | typeof ConfigurationTab, path: string) {
   return renderToStaticMarkup(createElement(MemoryRouter, { initialEntries: [path] }, createElement(component)));
 }
@@ -55,14 +62,14 @@ describe("feature configuration truth", () => {
   it("does not confuse a true gate with any enabled pages", () => {
     expect(state("voice", view({ voiceNotesEnabled: true, voiceNotesPageAllowlist: "" })).label).toBe("Нет выбранных страниц");
     expect(state("earnings", view({ fanslyFanEarningsSyncEnabled: true, fanslyNewStreamPageAllowlist: "" })).detail).toContain("Все страницы");
-    expect(state("dm-shadow", view({ fanslyDmShadowPageAllowlist: "none" })).kind).toBe("off");
+    expect(featureState(sentinelScoped, view({ voiceNotesPageAllowlist: "none" })).kind).toBe("off");
   });
   it.each(["", "   ", ",", " , , "])("matches the runtime's opposite empty-CSV gates for %j", (value) => {
     expect(fanslyNewStreamAllowed(value, "future-page")).toBe(true);
     expect(isPageAllowlisted(value, "future-page")).toBe(false);
     expect(state("earnings", view({ fanslyFanEarningsSyncEnabled: true, fanslyNewStreamPageAllowlist: value })).detail).toContain("Все страницы");
     expect(state("voice", view({ voiceNotesEnabled: true, voiceNotesPageAllowlist: value })).kind).toBe("off");
-    expect(state("dm-shadow", view({ fanslyDmShadowPageAllowlist: value })).kind).toBe("off");
+    expect(featureState(sentinelScoped, view({ voiceNotesPageAllowlist: value })).kind).toBe("off");
   });
   it("never promotes saved intent to applied state", () => {
     const data = view({ chatMuseAiPromptDebugEchoEnabled: false });
@@ -127,9 +134,8 @@ describe("page and mode choices", () => {
     expect(validateConfigOverride("fanslyNewStreamPageAllowlist", value).ok).toBe(false);
     expect(validateConfigOverride("voiceNotesPageAllowlist", value).ok).toBe(false);
   });
-  it("retains unknown labels and disables diagnostics with the supported sentinel", () => {
+  it("retains unknown labels and serializes an empty selection as the empty list", () => {
     expect(selectedConfigPages("old-page,lora-1", "voiceNotesPageAllowlist", ["lora-1"], true)).toEqual(["old-page", "lora-1"]);
-    expect(serializeConfigPages("fanslyDmShadowPageAllowlist", [])).toBe("none");
     expect(serializeConfigPages("voiceNotesPageAllowlist", [])).toBe("");
     expect(validateConfigOverride("voiceNotesPageAllowlist", "").ok).toBe(false);
   });

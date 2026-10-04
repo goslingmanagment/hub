@@ -1,11 +1,12 @@
 import { sql, type SQL } from "drizzle-orm";
 
-// The `message_archive` side of the DM readers that read `page_dm_messages`
-// today (step-4 design S4-06/S4-08, owner decision №11): what "a stored
-// message of a thread" means when a reader is pointed at the archive. Shared
-// by the archive variants in page-dm.ts and sync/thread-chain.ts and by the
+// The `message_archive` side of the DM readers (step-4 design S4-06/S4-08,
+// owner decision №11): what "a stored message of a thread" means when a
+// reader serves a page from the archive (the engine's live pages). Shared by
+// the archive variants in page-dm.ts and sync/thread-chain.ts, by the thread
+// summary the engine writes from the archive (sync/thread-chain.ts) and by the
 // read-only reader parity (sync/dm-reader-parity.ts), so the parity measures
-// exactly the code S4-08 serves from. Not exported from the package.
+// exactly the code that serves. Not exported from the package.
 
 /** A stored message in the archive, as the hot-shaped readers count and show
  *  one: no tombstone, not a tombstone-first stub whose content has not
@@ -16,11 +17,11 @@ export function archiveStoredMessageSql(alias: string): SQL {
   return sql`${a}.deleted_at is null and ${a}.content_pending = false and ${a}.occurred_at is not null`;
 }
 
-/** The archive rows of one DM thread (`page_dm_threads.id`), aliased `ma`,
- *  with the thread as `t` and its page as `p`: the page's rows of the
- *  thread's conversation on the page's platform. The caller adds the row
- *  predicate (usually `archiveStoredMessageSql("ma")`). */
-export function archiveThreadRowsFromSql(threadId: number): SQL {
+/** The archive rows of one DM thread (`page_dm_threads.id`, a value or a
+ *  correlated column), aliased `ma`, with the thread as `t` and its page as
+ *  `p`: the page's rows of the thread's conversation on the page's platform.
+ *  The caller adds the row predicate (usually `archiveStoredMessageSql("ma")`). */
+export function archiveThreadRowsFromSql(threadId: number | SQL): SQL {
   return sql`page_dm_threads t
       join pages p on p.id = t.platform_account_id
       join message_archive ma

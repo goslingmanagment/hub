@@ -151,10 +151,7 @@ export * from "./repositories/telegram-settings.ts";
 export * from "./repositories/reporting.ts";
 export * from "./repositories/runtime-instances.ts";
 export * from "./repositories/page-dm.ts";
-export * from "./repositories/fansly-dm-head-debt.ts";
-export * from "./repositories/fansly-dm-shadow.ts";
 export * from "./repositories/fansly-dm-reader-heads.ts";
-export * from "./repositories/fansly-dm-shadow-snapshot.ts";
 export * from "./repositories/fansly-send-guard.ts";
 export * from "./repositories/fansly-send-guard-checks.ts";
 // Fansly Sync Engine core state (0228): pages, the work queue, the attempt
@@ -206,3 +203,7 @@ export * from "./repositories/ofapi-read-collections.ts";
 
 export * from "./repositories/ofapi-typed-exports.ts";
 export { saveOfapiChatQueueState, readOfapiContentEvents } from './repositories/ofapi-content-events.ts';
+
+// The chat extension's bootstrap page list (active, untombstoned, scoped) and
+// its config revision.
+export * from "./repositories/client-bootstrap.ts";

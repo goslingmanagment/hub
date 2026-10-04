@@ -40,20 +40,6 @@ describe("Fansly lane scaffold ratchet", () => {
         .toContain("classifyFanslyResponse");
     }
   });
-
-  it("keeps purchase-history journal and checkpoint work on the same scaffold", () => {
-    const handlers = syncSource("executor-handlers.ts");
-    const start = handlers.indexOf("export async function executePurchaseHistoryChunk");
-    const end = handlers.indexOf("\nexport async function", start + 1);
-    const purchaseHistory = handlers.slice(start, end < 0 ? undefined : end);
-    expect(start).toBeGreaterThanOrEqual(0);
-    expect(purchaseHistory).toContain("createFanslyLaneRuntime");
-    expect(purchaseHistory).toContain("saveProgress: savePurchaseHistoryProgress");
-    expect(purchaseHistory).toContain("complete(input.syncRunId");
-    expect(purchaseHistory).toContain("createFanslyLaneJournal");
-    expect(purchaseHistory).not.toContain("upsertCheckpointProgress");
-    expect(purchaseHistory).not.toContain("persistRawPayload");
-  });
 });
 
 /** Every TypeScript source file under `dir`, relative to the repository root. */

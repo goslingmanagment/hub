@@ -10,14 +10,15 @@ import {
   hasDispatchingAgentHydrationRequestOnPage,
   insertAgentKey,
   listAgentHydrationEvents,
-  listCombinedFanslySendsForPaceAudit,
   markAgentHydrationEngineManaged,
+  readFanslySendAudit,
   setPagePause,
   type Database,
 } from "@agency_hub_core/db";
 
 import { updatePageCredentials } from "../apps/runtime/src/services/connections.ts";
 import { SyncEngineHost } from "../apps/runtime/src/sync/engine/host.ts";
+import { auditPagePace } from "../apps/runtime/src/sync/engine/send-audit.ts";
 import { getHistoryRequest, submitHistoryRequest } from "../apps/runtime/src/sync/requests/history.ts";
 import { historyIntakeOfLegacyHydration } from "../apps/runtime/src/sync/requests/legacy-hydration.ts";
 import { checkSwitchPreconditions } from "../apps/runtime/src/sync/switch/preconditions.ts";
@@ -292,8 +293,9 @@ describe("sync rollback", () => {
     await until(async () => legacy.sent >= 2, 15_000, "legacy sends");
     const firstLegacy = r.server.arrivalsAt(LEGACY_PATH)[0]!;
     expect(firstLegacy.mono - lastEngine).toBeGreaterThanOrEqual(1.2 * S);
-    const combined = await listCombinedFanslySendsForPaceAudit(db(), { pageId: page.pageId, since: new Date(rolledAt.getTime() - 60_000) });
-    expect(combined.filter((send) => send.violation)).toEqual([]);
+    const since = new Date(rolledAt.getTime() - 60_000);
+    const combined = await readFanslySendAudit(db(), { pageId: page.pageId, since });
+    expect(auditPagePace(combined, { start: since, until: null })).toMatchObject({ verdict: "pass", violations: [], inconclusive: [] });
     // J5: the legacy engine's own rows are what they were before the switch.
     expect(await legacySnapshot(page.pageId)).toBe(before);
   }, 180_000);

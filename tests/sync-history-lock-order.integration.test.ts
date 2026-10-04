@@ -202,7 +202,7 @@ describe("history requests vs the actor: lock order", () => {
         slot: 1,
         nextCyclePos: 2,
         requestTurn: { requestId: picked.requestId, itemId: picked.itemId },
-      }, { spec: "messages.page", params: { groupId, before: null } }, grant, module);
+      }, { spec: "messages.page", params: { groupId, before: null } }, grant, { routeIntervalMs: 4_000, familyIntervalMs: 4_000 }, module);
       if (admitted === null) return "lost_race";
       await db().transaction(async (raw) => {
         const tx = raw as unknown as Database;

@@ -112,9 +112,11 @@ export type ChainVerdict =
   | { kind: "contract_violation"; reason: ChainContractViolationReason };
 
 /**
- * What the hub stores for the thread: its non-deleted `page_dm_messages`, read
- * in the transaction of the fold (engine) or at rebuild time (today's rows,
- * conservative). Needed only for empty pages (`chainPageNeedsStoredFacts`).
+ * What the hub stores for the thread: its non-deleted messages in the store
+ * the page's readers read (`message_archive` on a live page, step 4 S4-08;
+ * `page_dm_messages` elsewhere), read in the transaction of the fold (engine)
+ * or at rebuild time (today's rows, conservative). Needed only for empty pages
+ * (`chainPageNeedsStoredFacts`).
  */
 export interface StoredFacts {
   nonDeletedCount: number;
