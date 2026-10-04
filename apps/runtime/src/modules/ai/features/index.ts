@@ -15,6 +15,7 @@ import {
 import type { AppContext } from "../../../bootstrap.ts";
 import {
   prepareAiGatewayStream,
+  type AiFeatureContextFrameBody,
   type AiGatewayStreamInput,
   type PreparedAiGatewayStream,
 } from "../../../services/ai-gateway.ts";
@@ -46,15 +47,18 @@ import {
   type MediaNotesManifest,
   computePingSummary,
   isFanProfileFeatureEnabled,
+  loadAiContextFrameBody,
   loadFanBio,
   loadFanDisplayName,
   loadFanProfileContext,
   loadSpendingContext,
   loadSubscriptionContext,
   loadTranscriptContext,
+  transcriptMessagesOmittedByBudget,
   type AiTranscriptLiveOverlay,
   type AiTranscriptUnionMode,
   type FanProfilePromptContext,
+  type TranscriptContext,
 } from "../context/index.ts";
 import {
   DEFAULT_FEATURE_MODELS,
@@ -73,6 +77,7 @@ import {
   type RecapAttach,
   type ReplyMode,
   type ReplyTone,
+  type TranscriptMessage,
 } from "../prompts/index.ts";
 
 // Kernel Stage 30 — feature services. Prompt assembly moves kernel-side:
@@ -116,6 +121,9 @@ export interface AiFeatureRequestBody {
    * validations, one message unless variantCount says otherwise, and the
    * freshness gate skipped. New clients send variantCount. */
   greetingMode?: "new-follower";
+  /** chat-extension H-4b: fan message ids the client saw before it asked;
+   * answered in the `context_v1` frame, never read into the prompt. */
+  knownFanMessageIds?: string[];
   /** Stage 32: client-loaded context (Fansly — the kernel archive is
    * pull-cadenced: dm_conversations 30 min / dm_messages 24 h, no webhooks;
    * the extension reads the conversation live at generation time). */
@@ -447,6 +455,11 @@ export async function prepareAiFeatureStream(
   // PR3: the per-generation transcript context manifest (kernel-context path
   // only); rides an INTERNAL argument into the gateway, never the body.
   let contextManifest: Record<string, unknown> | undefined;
+  // chat-extension H-4b: the transcript the hub loaded itself, kept for the
+  // `context_v1` frame. Unset on the client-context lane, which has no frame.
+  // `rendered` are the messages the prompt's transcript text was built from:
+  // the loader's, or the same ones with their image notes filled in.
+  let kernelTranscript: { context: TranscriptContext; rendered: readonly TranscriptMessage[] } | undefined;
   // AI media describer: image notes rendered into the transcript (one config
   // read + one indexed select, no network), and the files to ask for after.
   let mediaNotes: {
@@ -577,6 +590,7 @@ export async function prepareAiFeatureStream(
       liveOverlay,
     });
     contextManifest = transcript.contextManifest;
+    kernelTranscript = { context: transcript, rendered: transcript.messages };
     const spending = policy.includesEarnings
       ? await loadSpendingContext(app, { pageId, fanRef })
       : null;
@@ -620,6 +634,7 @@ export async function prepareAiFeatureStream(
         });
         if (!applied.manifest.mismatch) {
           contextValues.transcript = `${formatTranscript(applied.messages)}${MEDIA_NOTES_GUIDE}`;
+          kernelTranscript.rendered = applied.messages;
         }
         mediaNotes = {
           gate,
@@ -966,6 +981,29 @@ export async function prepareAiFeatureStream(
       // failure yields no frame and never affects the generation itself.
     }
   }
+  // chat-extension H-4b: only a caller that advertised `context-v1` gets the
+  // frame (and pays its two indexed reads), so every other stream stays byte
+  // for byte what it was. The page was admitted above, before any context load.
+  // The same what-the-provider-actually-received rule as the recaps above: the
+  // Coach budget may have cut the oldest transcript lines, and the frame's
+  // window is what is left.
+  let contextFrame: AiFeatureContextFrameBody | undefined;
+  if (kernelTranscript && options?.capabilities?.has("context-v1")) {
+    contextFrame = await loadAiContextFrameBody(app, {
+      pageId,
+      platform: stored.page.platform,
+      conversationRef: body.conversationRef,
+      served: kernelTranscript.context.served,
+      messages: kernelTranscript.context.messages,
+      omittedByPromptBudget: transcriptMessagesOmittedByBudget({
+        transcript: contextValues.transcript,
+        messages: kernelTranscript.rendered,
+        omittedChars: prompt.coachTranscriptOmittedChars ?? 0,
+      }),
+      requestedCount: resolvedMessageLimit,
+      ...(body.knownFanMessageIds !== undefined ? { knownFanMessageIds: body.knownFanMessageIds } : {}),
+    });
+  }
   if (mediaNotes?.gate.active && mediaNotes.gate.policy && mediaNotes.items.length > 0) {
     requestMediaDescriptionsInBackground(app, {
       pageId,
@@ -985,12 +1023,14 @@ export async function prepareAiFeatureStream(
     gatewayBody,
     contextManifest !== undefined
       || debugFrame !== undefined
+      || contextFrame !== undefined
       || body.expectedPersonaDefinitionId !== undefined
       || attachedRecaps !== undefined
       || presetQuestion !== undefined
       ? {
         ...(contextManifest !== undefined ? { contextManifest } : {}),
         ...(debugFrame !== undefined ? { debugFrame } : {}),
+        ...(contextFrame !== undefined ? { contextFrame } : {}),
         ...(body.expectedPersonaDefinitionId !== undefined
           ? { personaDefinitionId: persona.definitionId }
           : {}),

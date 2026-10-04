@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import type {
   AiFeatureAttachedRecaps,
+  AiFeatureContextFrame,
   AiFeatureDebugInputFrame,
   AiGatewayQuota,
   AiGatewayStreamBody,
@@ -91,6 +92,8 @@ export interface PreparedAiGatewayStream {
   };
   meta: AiGatewayStreamFrame;
   debugFrame?: AiFeatureDebugInputFrame;
+  /** Feature-lane `context_v1` frame, written after `meta` and the debug frame. */
+  contextFrame?: AiFeatureContextFrame;
   stream(signal: AbortSignal): AsyncIterable<AiGatewayStreamFrame>;
   recordTerminal(input: AiGatewayTerminalRecordInput): Promise<boolean>;
   /** Coach transport ceiling (spec §3/§7, option "c"): when set, the SSE pump
@@ -238,6 +241,9 @@ export async function evaluateAiGatewayQuota(
   };
 }
 
+/** A `context_v1` frame before the gateway names its generation. */
+export type AiFeatureContextFrameBody = Omit<AiFeatureContextFrame, "type" | "generationRef">;
+
 /** PR3: internal-only knobs for a prepared stream. NEVER a field on
  * aiGatewayStreamBodySchema — the body is client-forgeable, shared with the
  * raw gateway route, and a schema change would force an SDK regen. */
@@ -253,6 +259,11 @@ export interface AiGatewayStreamInternalOptions {
    * gateway route and never persisted separately from the existing restricted
    * generation record. */
   debugFrame?: AiFeatureDebugInputFrame;
+  /** Feature-lane-only, capability-gated `context_v1` frame, still without its
+   * identity: the generation ref exists only once the request is reserved, so
+   * it is stamped here from the same request id the meta frame carries. Never
+   * set by the raw gateway route. */
+  contextFrame?: AiFeatureContextFrameBody;
   /** Echoed only for clients that supplied the matching feature precondition. */
   personaDefinitionId?: string;
   /** Coach-only recap provenance for the existing meta frame. Derived from the
@@ -437,6 +448,9 @@ export async function prepareAiGatewayStream(
       quota: quotaFrame,
     },
     ...(internal?.debugFrame ? { debugFrame: internal.debugFrame } : {}),
+    ...(internal?.contextFrame
+      ? { contextFrame: { type: "context_v1" as const, generationRef: requestId, ...internal.contextFrame } }
+      : {}),
     ...(input.visibleOutputCeilingChars !== undefined
       ? { visibleOutputCeilingChars: input.visibleOutputCeilingChars }
       : {}),
@@ -586,7 +600,9 @@ export async function prepareAiGatewayStream(
   };
 }
 
-export function serializeAiGatewaySseFrame(frame: AiGatewayStreamFrame | AiFeatureDebugInputFrame) {
+export function serializeAiGatewaySseFrame(
+  frame: AiGatewayStreamFrame | AiFeatureDebugInputFrame | AiFeatureContextFrame,
+) {
   return `event: ai\ndata: ${JSON.stringify(frame)}\n\n`;
 }
 

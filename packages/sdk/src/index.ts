@@ -36,6 +36,7 @@ export {
   // The feature lane's frames are a SUPERSET of the raw gateway's (#140
   // debug echo): a client handling streamAiFeature must widen to
   // AiFeatureStreamFrame, not AiGatewayStreamFrame.
+  type AiFeatureContextFrame,
   type AiFeatureDebugInputFrame,
   type AiFeatureStreamFrame,
   type AiGatewayStreamFrame,
@@ -52,15 +53,26 @@ export { KERNEL_CONTRACT_HASH, KERNEL_SDK_VERSION } from "./meta.ts";
 // vocabularies are open strings; the client narrows to these constants and
 // reads an unknown member as off / unknown.
 export {
+  CLIENT_COVERAGE_LEVELS,
   CLIENT_FEATURE_FLAG_NAMES,
   CLIENT_FEATURE_UNAVAILABLE_REASONS,
   CLIENT_HUB_CAPABILITY_NAMES,
   CLIENT_KNOWN_PLATFORMS,
   CLIENT_KNOWN_ROLES,
   CLIENT_NUMERIC_ID_PATTERN,
+  type ClientCoverageLevel,
   type ClientFeatureFlagName,
   type ClientFeatureUnavailableReason,
   type ClientHubCapabilityName,
+} from "@agency_hub_core/contracts";
+// The AI context frame's known values (routes.ts, `context_v1`): its open
+// tokens narrow to these, and `knownFanMessageIds` takes at most the MAX.
+export {
+  AI_CONTEXT_LIVE_STATUSES,
+  AI_CONTEXT_SOURCES,
+  AI_FAN_LANGUAGE_EVIDENCE,
+  AI_KNOWN_FAN_MESSAGE_IDS_MAX,
+  AI_KNOWN_FAN_MESSAGE_STATES,
 } from "@agency_hub_core/contracts";
 // The chat extension's health report (routes-client.ts). No route carries it:
 // it rides one ingest batch of its own once the bootstrap lists

@@ -103,12 +103,69 @@ authorization.
   into one `, `-separated string, which is parsed as usual (the union of the lines) within the same
   256-character cap. The header is not declared in the route schema, so a malformed value is ignored
   instead of failing with 400.
-- Today only `debug-input-v1` changes the stream: the `debug_input_v1` frame, still behind the
-  `chatMuseAiPromptDebugEchoEnabled` kill-switch. The other tokens are reserved for the frames and
-  fields that will read them; until then they change nothing.
+- `debug-input-v1` adds the `debug_input_v1` frame, still behind the
+  `chatMuseAiPromptDebugEchoEnabled` kill-switch. `context-v1` adds the `context_v1` frame (below).
+  `split-all-v1` is reserved for the fields that will read it; until then it changes nothing.
 - SDK: the header is the union of the `capabilities` option and the legacy `debugPromptEcho` flag,
   deduplicated, in the constant's order, joined by `, `. With nothing to advertise no header is sent,
   so existing callers put exactly the same bytes on the wire as before.
+
+### Feature-lane `context_v1` frame
+
+A caller that advertised `context-v1` gets one more frame, `aiFeatureContextFrameSchema`: which
+transcript snapshot actually served this generation. Without the token the stream is byte for byte
+what it was, so a client built before the frame never meets it.
+
+- Position: after `meta` (and after `debug_input_v1` when both are advertised), before the first
+  `content_delta`.
+- Lane: only a generation whose transcript the hub loaded itself (the kernel-context lane, every
+  feature). A request with `clientContext` carries no frame in this version.
+- Shape: the one frame that is not strict. A later key is dropped by an installed SDK instead of
+  failing its stream, and the vocabularies are open strings. The known values are exported from the
+  SDK (`AI_CONTEXT_SOURCES`, `CLIENT_COVERAGE_LEVELS`, `AI_KNOWN_FAN_MESSAGE_STATES`,
+  `AI_CONTEXT_LIVE_STATUSES`, `AI_FAN_LANGUAGE_EVIDENCE`); a client reads an unknown one as
+  "unknown".
+
+| Field | Meaning |
+|---|---|
+| `generationRef` | Equals `meta.requestId`. |
+| `source` | The reader whose rows became the transcript: `archive`, `union` (`aiTranscriptFreshUnionMode = serve`) or `live_union` (the Fansly socket overlay). In `shadow` mode the union is computed but the archive serves, and the frame says `archive`. |
+| `servedHead` | Newest message of the served window: `{ messageRef, occurredAt, isFromFan }`. `null` for an empty window. |
+| `archiveHead` | Diagnostics only: the plain archive reader's newest row. With `source: "union"` the model may have read past it. |
+| `window` | `requested`: the window the request resolved to. `served`: the messages the prompt holds whole. That is the transcript the hub loaded (after normalization and the window cap), minus what the prompt itself cut: only `coach-chat` cuts, when its whole-prompt budget drops the oldest transcript lines. A line the cut runs through is not counted. |
+| `coverage` | How much of the chat's history the hub can vouch for, from `ofapi_message_coverage` (`services/client-coverage.ts`). `complete`: a standing continuous-history proof under the current proof policy, and the archive has projected everything it covers. `partial`: a standing proof that does not vouch for the whole history. `unknown`: no proof, a revoked one, one under a proof policy the hub no longer accepts, or a failed lookup. A page without the capture lane (Fansly) always reads `unknown`. |
+| `knownFanMessages` | One `{ id, state }` per id of the body's `knownFanMessageIds`, in the same order. Absent when the body named none. |
+| `live` | What the hub did with the client's fresh text. No request can send it yet: always `{ status: "not_sent", accepted: 0, rejected: 0 }`. |
+| `fanLanguageEvidence` | `latin`, `cyrillic`, `mixed` or `unknown`: a rough count of the letters in the fan's latest 20 text messages of the served window. It is not language detection. |
+
+`knownFanMessageIds` (body, optional, 1 to 10 distinct numeric ids) names fan messages the client
+saw in the open chat before it asked. Ids only: no text travels, nothing is added to the prompt and
+nothing is stored. It is accepted on every feature. Without `context-v1` there is no frame to answer
+in and the ids are ignored. Each id is judged against the transcript that served the generation:
+
+| State | Meaning |
+|---|---|
+| `included` | The served window holds the id as a fan message. |
+| `deleted` | Not in the window, and tombstoned for this conversation in one of the hub's stores. The Fansly socket overlay counts only when it served (`source: live_union`). |
+| `absent` | Not in the window: the hub does not hold it for this conversation, or holds it outside what the model read (older than the window, cut by the Coach prompt budget, or only in a store the serving reader did not read). |
+| `unknown` | The hub cannot tell: the stores could not be read, or the window holds the id as the model's own message. |
+
+`included` is the only answer that says the model read the message. The same window serves every
+retry of a request, so an id the hub holds but that lies before the window stays `absent` however
+often the client asks again: `messageCount` can be as low as 5, and ten fan messages with the
+model's replies between them can span more than the 25 of Improve and Hi.
+
+The store lookup (`packages/db/src/repositories/ai-live-context.ts`) runs only after the page was
+admitted and is scoped to the page and the conversation of the request. An id that belongs to
+another fan's chat on the same page reads `absent`, exactly like an id the hub has never seen: the
+answer never says that a message exists, or was deleted, in a chat the caller did not name. A delete
+webhook carries no chat, so its tombstone counts only for an id the hub already holds for this
+conversation; a socket deletion that named no group is the same case.
+
+The frame is built from database reads only (the transcript loader, the coverage row, the known-id
+lookup): no platform request, no queued platform work and no change to a chat's unread state.
+Coverage and the known-id lookup fail open: a failed read reports `unknown` and never fails the
+generation. The frame is not persisted, and the recorded `params.contextManifest` is unchanged.
 
 ## Authorization
 

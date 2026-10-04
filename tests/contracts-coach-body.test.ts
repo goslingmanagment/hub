@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   AI_FEATURE_CLIENT_MEDIA_MAX_ITEMS,
   AI_FEATURE_STREAM_BODY_LIMIT_BYTES,
+  AI_KNOWN_FAN_MESSAGE_IDS_MAX,
   COACH_ANSWER_MAX_CHARS,
   FAN_SILENCE_DAYS_MAX,
   routeSchemas,
@@ -125,6 +126,12 @@ describe("aiFeatureStream body limit vs the worst-case schema-valid body", () =>
     model: unit.repeat(100),
     draftText: unit.repeat(20_000),
     chatterQuestion: unit.repeat(2_000),
+    // Ids are digits only, so their worst case does not depend on `unit`:
+    // ten distinct 30-digit ids.
+    knownFanMessageIds: Array.from(
+      { length: AI_KNOWN_FAN_MESSAGE_IDS_MAX },
+      (_, index) => `${index + 1}`.padEnd(30, "9"),
+    ),
     // 20 x (2k question + 64k answer) = the 1.32M-code-unit bulk.
     coachHistory: Array.from({ length: 20 }, () => ({
       question: unit.repeat(2_000),

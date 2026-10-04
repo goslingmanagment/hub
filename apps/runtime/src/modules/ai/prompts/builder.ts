@@ -139,6 +139,13 @@ export interface PromptPayload {
    * be correctable post-budget, exactly like the recap slots. Omitted for every
    * other feature. */
   coachDossierIncluded?: boolean;
+  /** How many leading UTF-16 code units of `input.transcript` the Coach
+   * whole-prompt reducer left out: the final prompt holds exactly
+   * `input.transcript.slice(n)`, behind the omission marker when n > 0. 0 when
+   * the transcript is whole. Lets a caller tell which transcript messages the
+   * provider actually received, like the recap slots. Omitted for every other
+   * feature. */
+  coachTranscriptOmittedChars?: number;
 }
 
 interface PromptFeaturePolicy {
@@ -1007,7 +1014,7 @@ function budgetCoachTemplateValues(
   template: string,
   systemBlocks: PromptBlock[],
   initialValues: TemplateValues,
-): TemplateValues {
+): { values: TemplateValues; transcriptOmittedChars: number } {
   const transcriptCodePoints = Array.from(input.transcript);
   const hasDraft = (initialValues.coachDraftSection ?? '') !== '';
   // Review round 6 — same honesty rule as the history omission marker: when an
@@ -1051,7 +1058,12 @@ function budgetCoachTemplateValues(
    * knows it cannot keep. */
   const reduce = (
     draftAllowed: boolean,
-  ): { values: TemplateValues; draftKept: boolean; displacedContext: boolean } => {
+  ): {
+    values: TemplateValues;
+    draftKept: boolean;
+    displacedContext: boolean;
+    transcriptCodePointsKept: number;
+  } => {
     let history = [...(input.coachHistory ?? [])];
     const suppliedHistoryCount = history.length;
     let recapAttach: RecapAttach | undefined = input.recapAttach
@@ -1085,12 +1097,12 @@ function budgetCoachTemplateValues(
     // (and its transcript binary search) entirely.
     const hadOptionalContext =
       suppliedHistoryCount > 0 || dossierChars > 0 || fullRecapChars > 0 || shortRecapChars > 0;
-    const done = (
-      values: TemplateValues,
-    ): { values: TemplateValues; draftKept: boolean; displacedContext: boolean } => ({
+    const done = (values: TemplateValues) => ({
       values,
       draftKept: includeDraft,
       displacedContext: hadOptionalContext,
+      // Read at return time: step 3 settles it before it calls done().
+      transcriptCodePointsKept: transcriptChars,
     });
 
     const makeValues = (): TemplateValues => ({
@@ -1229,6 +1241,12 @@ function budgetCoachTemplateValues(
   // binary search on the common first-question-with-draft path).
   const chosen =
     hasDraft && !first.draftKept && first.displacedContext ? reduce(false) : first;
+  // The reducer counts code points; a caller locates the cut in the string.
+  let transcriptOmittedChars = 0;
+  const omittedCodePoints = transcriptCodePoints.length - chosen.transcriptCodePointsKept;
+  for (let index = 0; index < omittedCodePoints; index += 1) {
+    transcriptOmittedChars += transcriptCodePoints[index]!.length;
+  }
   if (hasDraft && !chosen.draftKept) {
     // Review round 7: the omission note must never DISPLACE context. Round 6
     // let it ride the cascade, where at an exact-ceiling boundary the note
@@ -1237,10 +1255,10 @@ function budgetCoachTemplateValues(
     // survives in coachDraftIncluded / the manifest alone.
     const withNote: TemplateValues = { ...chosen.values, coachDraftSection: draftOmissionNote };
     if (fits(withNote)) {
-      return withNote;
+      return { values: withNote, transcriptOmittedChars };
     }
   }
-  return chosen.values;
+  return { values: chosen.values, transcriptOmittedChars };
 }
 
 export function flattenPromptBlocks(blocks: ReadonlyArray<PromptBlock>): string {
@@ -1274,10 +1292,11 @@ export function buildPrompt(
   const template = applyPlatformWording(selectedTemplate, platform);
   const systemBlocks = buildSystemBlocks(input.feature, input.personality, platform);
   const initialValues = templateValues(input);
-  const values =
+  const budgeted =
     input.feature === 'coach-chat'
       ? budgetCoachTemplateValues(input, template, systemBlocks, initialValues)
-      : initialValues;
+      : null;
+  const values = budgeted?.values ?? initialValues;
   const segmentedUserBlocks = buildUserBlocks(input.feature, template, values);
   const cacheOff = PROMPT_POLICIES[input.feature].promptCache === 'none';
   const system = flattenPromptBlocks(systemBlocks);
@@ -1299,5 +1318,6 @@ export function buildPrompt(
           coachDossierIncluded: user.includes('<fan_dossier>'),
         }
       : {}),
+    ...(budgeted ? { coachTranscriptOmittedChars: budgeted.transcriptOmittedChars } : {}),
   };
 }
