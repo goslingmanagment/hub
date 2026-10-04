@@ -81,10 +81,10 @@ export const HUB_FEATURES: readonly HubFeature[] = [
   {
     id: "hydration", title: "Дозагрузка по запросу агента", group: "AI и агенты", advice: "optional",
     summary: "Загружает недостающую историю с площадки в пределах разрешений.",
-    reason: "Оставить ограниченную дозагрузку для конкретных вопросов. Автоодобрение и общий доступ — отдельные решения.",
+    reason: "Оставить ограниченную дозагрузку для конкретных вопросов. Общий доступ — отдельное решение.",
     consequence: "Режим «Только заявки» принимает запросы без исполнения; «Выключено» закрывает маршрут. Уже начатая ограниченная попытка может завершиться.",
     check: "Посмотреть заявки, число реально полезных загрузок и использованные запросы.",
-    keys: ["agentHydrationMode", "agentHydrationAutoApproveMode", "agentHydrationAutoDailyCallBudget", "agentReadPlaneMode"], gates: [gate("agentHydrationMode", "off"), gate("agentReadPlaneMode", "off")],
+    keys: ["agentHydrationMode", "agentReadPlaneMode"], gates: [gate("agentHydrationMode", "off"), gate("agentReadPlaneMode", "off")],
     evidenceHref: "/agent-hydration", evidenceLabel: "Посмотреть заявки на дозагрузку",
   },
   {

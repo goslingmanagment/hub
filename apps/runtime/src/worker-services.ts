@@ -46,11 +46,6 @@ import {
   ensureMessageArchiveQueues,
 } from "./services/projections/message-archive.ts";
 import {
-  PROJECTION_DEBT_SWEEP_QUEUE,
-  ensureProjectionDebtQueue,
-  runProjectionDebtSweep,
-} from "./services/projection-debt-sweep.ts";
-import {
   VOICE_NOTES_SWEEP_QUEUE,
   ensureVoiceNotesSweepQueue,
   runVoiceNotesNightlyRetention,
@@ -104,18 +99,8 @@ import {
   AGENT_HYDRATION_QUEUE,
   ensureAgentHydrationQueue,
   runAgentHydrationCycle,
-  settleAgentHydrationFromBackfill,
-  settleAgentHydrationFromFailedRun,
 } from "./services/agent-hydration.ts";
 import { startSyncPageExecutor } from "./services/sync/executor.ts";
-import {
-  ensureTargetedThreadBackfillQueue,
-  parseTargetedThreadBackfillJob,
-  runTargetedThreadBackfill,
-  TARGETED_THREAD_BACKFILL_QUEUE,
-  targetedThreadBackfillRequestRefOf,
-  type TargetedThreadBackfillResult,
-} from "./services/sync/targeted-thread-backfill.ts";
 import { runSyncPlannerCycle } from "./services/sync/planner.ts";
 import {
   ensureSyncQueues,
@@ -187,79 +172,6 @@ function listPendingTelegramReportDates(
  */
 const PROJECTION_TICK_DURATION_ALERT_MS = 45_000;
 
-/**
- * Slice C′: owner-initiated targeted thread backfill. One job = one bounded
- * run of ONE thread under the page's real dm_messages sync lease; the queue
- * policy keeps at most one job per page queued or active.
- *
- * The run's result is RETURNED: with batchSize 1, pg-boss stores a handler's
- * return value as pgboss.job.output, which is where the CLI's `--wait` (and
- * anyone after the worker's log is gone) reads the outcome — a refusal
- * included.
- *
- * Slice C: a run that answered a hydration request settles it HERE, on every
- * way out — the result, the run's failure (with the spend the failure
- * carries; the job then still fails, for the CLI and the log), or a payload
- * that could not run at all. Whatever this cannot settle (the process died,
- * the settle itself failed) the hydration cycle settles from the job record
- * once the run is provably gone (`reconcileAgentHydrationDispatches`).
- */
-export async function handleTargetedThreadBackfillJobs(
-  app: AppContext,
-  jobs: ReadonlyArray<{ id: string; data: unknown }>,
-): Promise<TargetedThreadBackfillResult | undefined> {
-  let output: TargetedThreadBackfillResult | undefined;
-  for (const job of jobs) {
-    const payload = parseTargetedThreadBackfillJob(job.data);
-    if (!payload) {
-      app.logger.error({ jobId: job.id, data: job.data },
-        "Targeted thread backfill job carried no usable threadId");
-      const requestRef = targetedThreadBackfillRequestRefOf(job.data);
-      if (requestRef !== null) {
-        // Nothing ran, so nothing was sent.
-        await settleHydrationOrLeaveToReconcile(app, job.id, () =>
-          settleAgentHydrationFromFailedRun(app, requestRef, { cause: "job_data_invalid", vendorCalls: 0 }));
-      }
-      continue;
-    }
-    let result: TargetedThreadBackfillResult;
-    try {
-      result = await runTargetedThreadBackfill(app, payload, { jobId: job.id });
-    } catch (error) {
-      const requestRef = payload.hydrationRequestRef;
-      if (requestRef !== undefined) {
-        await settleHydrationOrLeaveToReconcile(app, job.id, () =>
-          settleAgentHydrationFromFailedRun(app, requestRef, { error }));
-      }
-      throw error;
-    }
-    const requestRef = payload.hydrationRequestRef;
-    if (requestRef !== undefined) {
-      await settleHydrationOrLeaveToReconcile(app, job.id, () =>
-        settleAgentHydrationFromBackfill(app, requestRef, result));
-    }
-    app.logger.info({ jobId: job.id, ...result }, "Targeted thread backfill job complete");
-    output = result;
-  }
-  return output;
-}
-
-/** A settle that fails must not take the job's own record with it: the result
- *  (or the run's error) still lands in pgboss.job.output, and reconciliation
- *  settles the request from there. */
-async function settleHydrationOrLeaveToReconcile(
-  app: AppContext,
-  jobId: string,
-  settle: () => Promise<unknown>,
-) {
-  try {
-    await settle();
-  } catch (error) {
-    app.logger.error({ err: error, jobId },
-      "Targeted thread backfill could not settle its hydration request; left to reconciliation");
-  }
-}
-
 export async function startWorkerServices(
   app: AppContext,
   boss: WorkerBoss,
@@ -310,13 +222,11 @@ export async function startWorkerServices(
   await ensureCapturePayloadParityQueue(boss, createdQueues);
   await ensureCanonicalizeQueues(boss, createdQueues);
   await ensureMessageArchiveQueues(boss, createdQueues);
-  await ensureProjectionDebtQueue(boss, createdQueues);
   await ensureVoiceNotesSweepQueue(boss, createdQueues);
   await ensureAiMediaDescribeSweepQueue(boss, createdQueues);
   await ensureOpsMetricsQueue(boss, createdQueues);
   await ensureNotificationDeliveryOutboxQueue(boss, createdQueues);
   await ensureNotificationPagingSweepQueue(boss, createdQueues);
-  await ensureTargetedThreadBackfillQueue(boss, createdQueues);
   await ensureAgentHydrationQueue(boss, createdQueues);
   // Hoisted out of the worker-startup section below (it used to sit next to
   // startTieringWorker): every queue this role creates must exist before the
@@ -350,21 +260,15 @@ export async function startWorkerServices(
     await runSyncPlannerCycle(app, boss);
   });
 
-  // Slice C′: see handleTargetedThreadBackfillJobs. batchSize MUST stay 1 —
-  // pg-boss keeps the returned result as the job output only for a batch of one.
-  await boss.work(TARGETED_THREAD_BACKFILL_QUEUE, { batchSize: 1 }, (jobs) =>
-    handleTargetedThreadBackfillJobs(app, jobs));
-
   // Slice C: the hydration executor. It expires, sweeps, reconciles and — only
-  // when `agentHydrationMode` is `dispatch` — hands approvals to the backfill
-  // queue or to an ofapi capture job. It never calls a vendor itself.
+  // when `agentHydrationMode` is `dispatch` — hands OnlyFans approvals to an
+  // ofapi capture job; it settles the Fansly rows the Fansly Sync Engine
+  // served as history requests. It never calls a vendor itself.
   await boss.work(AGENT_HYDRATION_QUEUE, { batchSize: 1 }, async () => {
-    const cycle = await runAgentHydrationCycle(app, boss);
-    const autoActed = cycle.autoApprove !== null
-      && (cycle.autoApprove.considered > 0 || cycle.autoApprove.approved > 0);
+    const cycle = await runAgentHydrationCycle(app);
     if (
       cycle.dispatched > 0 || cycle.swept > 0 || cycle.expired > 0 || cycle.reconciled > 0
-      || autoActed || cycle.autoHeld > 0 || cycle.pageBusy > 0 || cycle.refused > 0 || cycle.engineSettled > 0
+      || cycle.refused > 0 || cycle.engineSettled > 0
     ) {
       app.logger.info(cycle, "Agent hydration cycle complete");
     }
@@ -601,15 +505,6 @@ export async function startWorkerServices(
       }
     } catch (error) {
       app.logger.error({ error }, "AI acceptance projection sweep failed");
-    }
-  });
-
-  await boss.work(PROJECTION_DEBT_SWEEP_QUEUE, { batchSize: 1 }, async () => {
-    // #135 A2b: re-run wedged rebuildable-projection recomputes (thread
-    // summaries) recorded by the dm_messages executor; quiet when idle.
-    const result = await runProjectionDebtSweep(app);
-    if (result.scanned > 0) {
-      app.logger.info(result, "Projection debt sweep complete");
     }
   });
 

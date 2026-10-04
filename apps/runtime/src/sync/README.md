@@ -386,7 +386,7 @@ While the engine owns a page (`handover` or `live`) no legacy component even tri
 §3.1); the step-1 guard row (`owner_engine`, 0229) stays the catch-all at the wire. One predicate,
 `legacyOwnsFanslyPageSql` (`repositories/sync/pages.ts`), gates the legacy planner and leases
 (`listRunnablePageSync`, `markPageSyncEnqueued`, `acquirePageSyncLease`, `acquireTargetedPageSyncLease`), the
-`sync_silent` deadman, and hydration dispatch and auto-approval. The legacy processes ask `isFanslyPageEngineOwned` /
+`sync_silent` deadman, and hydration dispatch. The legacy processes ask `isFanslyPageEngineOwned` /
 `listEngineOwnedFanslyPages`: the AI describer downloads nothing itself (a `live` page's CDN hops are its actor's
 `media-download.fetch`) and wakes no DM stream. The ws-hints projector and its minutely deletion reconcile are
 gone since step 4 S4-11 (after the A5 drain check over the captured frames): a socket deletion reaches the stores only
@@ -396,7 +396,10 @@ the engine command to use instead — except the `/account/me` levers (page veri
 on a `live` page go through the engine (`services/sync-engine-account.ts`: `account.verify` / `account.identity`,
 ≤ 30 s, else 409 `fansly_sync_work_queued` with the work's status link) and answer 409 `fansly_page_switching` in
 `handover`. Hydration rows the engine serves (`execution_lane = 'fansly_sync_engine'`) are never expired,
-reconciled or swept by the legacy cycle. `shadow` fences nothing, and every check is per query. Leaving to `off` no
+reconciled or swept by the legacy cycle. Since step 4 S4-15 that cycle has no Fansly lane at all (the targeted thread
+backfill with its owner CLI, the auto-approve policy and the projection-debt sweep are deleted): it dispatches
+OnlyFans approvals only, a Fansly approval is refused at the decision, and old Fansly history is read only through
+history requests. `shadow` fences nothing, and every check is per query. Leaving to `off` no
 longer restores the legacy engine since step 4 S4-10: the legacy executor serves no Fansly page whatever its mode (I21).
 Since S4-12 the legacy WS receiver, the AI media fast lane, the WS policy repair (`fansly:ws-policy`) and the W0
 operator scripts are deleted, so no legacy component opens a Fansly socket on any page.

@@ -1,10 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
-import type * as DbModule from "@agency_hub_core/db";
 import type { SyncWorkRow } from "@agency_hub_core/db";
 import type { FanslyMessage } from "@agency_hub_core/fansly";
 
-import { normalizeFanslyDmMessagePage } from "../apps/runtime/src/services/sync/fansly-dm-messages.ts";
 import { demandToUpsert } from "../apps/runtime/src/sync/engine/resource.ts";
 import { emptyChain, type ThreadChain } from "../apps/runtime/src/sync/fansly/lib/chain.ts";
 import { normalizeFanslyDmMessages } from "../apps/runtime/src/sync/fansly/lib/dm-normalize.ts";
@@ -17,18 +15,9 @@ import {
   type DemandResolutionInput,
 } from "../apps/runtime/src/sync/fansly/resources/dm-messages.ts";
 
-// The DM message reads' rules without I/O (design §5.4): the pure split of
-// the legacy page normalization (and that the legacy lane still gets exactly
-// what it got), what one read does for the demanded ids (the not-found ladder
+// The DM message reads' rules without I/O (design §5.4): the pure page
+// normalization, what one read does for the demanded ids (the not-found ladder
 // of plan §7 p.4), the cursor, and the shadow estimate.
-
-vi.mock("@agency_hub_core/db", async (importOriginal) => ({
-  ...(await importOriginal<typeof DbModule>()),
-  // The legacy page normalization reads which ids are stored already; this
-  // file runs without a database.
-  getExistingPageDmMessageIds: vi.fn(async () => new Set(["910000000000000002"])),
-  getPageDmMessageIdsAtOrBefore: vi.fn(async () => new Set<string>()),
-}));
 
 const EPOCH_MS = 1561494359900;
 const PAGE = "300000000000000001";
@@ -102,29 +91,6 @@ describe("normalizeFanslyDmMessages", () => {
     const normalized = normalizeFanslyDmMessages([message("910000000000000009", { createdAt: 5 })], context);
     expect(normalized.rows).toHaveLength(1);
     expect(normalized.implausible).toEqual([{ id: "910000000000000009", rawValue: 5, normalizedAt: new Date(5_000) }]);
-  });
-
-  it("is exactly what the legacy page normalization stores and reports", async () => {
-    const items = [
-      message("910000000000000003", { senderId: PAGE }),
-      message("910000000000000002", { createdAt: 7 }),
-      message("910000000000000001", { createdAt: null as never }),
-    ];
-    const anomalies: Array<{ code: string; details?: unknown }> = [];
-    const legacy = await normalizeFanslyDmMessagePage({ db: {} } as never, {
-      telemetry: { addAnomaly: async (anomaly: { code: string; details?: unknown }) => void anomalies.push(anomaly) } as never,
-      platformAccountId: 7,
-      platform: "fansly",
-      pageAccountId: PAGE,
-      conversation: { id: 42, platformConversationId: "700000000000000001", partnerPlatformUserId: FAN },
-    }, { items, groupId: "700000000000000001", before: null, done: true, raw: {} } as never);
-    const pure = normalizeFanslyDmMessages(items, { ...context, now: new Date() });
-    expect(legacy.normalizedMessages).toEqual(pure.rows);
-    expect(legacy.normalizationDebt).toBe(true);
-    expect(legacy.insertedMessageCount).toBe(1);
-    expect(legacy.overlapFound).toBe(true);
-    expect(legacy.oldestMessageId).toBe("910000000000000001");
-    expect(anomalies.map((anomaly) => anomaly.code)).toEqual(["dm_timestamp_implausible", "dm_message_timestamp_unparseable"]);
   });
 });
 

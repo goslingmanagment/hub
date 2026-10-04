@@ -239,8 +239,11 @@ describe("(2) census — the registry is compared against what the tree writes",
     const unregistered = [...census]
       .filter((kind) => !registered.has(kind) && !CENSUS_NON_KIND_LITERALS.has(kind));
     expect(unregistered, "sync-seam kinds written but not registered").toEqual([]);
-    // Non-vacuous: the census must actually have found the lanes.
-    expect(census.has("dm_messages")).toBe(true);
+    // Non-vacuous: the census must actually have found the lanes (the Fansly
+    // `dm_messages` literal left this seam with the legacy DM lanes, step 4
+    // S4-15: the engine journals it through its capture; OnlyFans' DM sync
+    // still journals its list here).
+    expect(census.has("dm_conversations")).toBe(true);
     expect(census.has("link_stats_tracking")).toBe(true);
   });
 

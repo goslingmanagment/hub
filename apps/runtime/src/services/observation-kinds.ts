@@ -61,7 +61,7 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
   { kind: "account_lookup", source: "pull", writer: "sync/fansly/capture.ts" },
   { kind: "account_me", source: "pull", writer: "services/sync/executor-handlers.ts" },
   { kind: "dm_conversations", source: "pull", writer: "sync/fansly/capture.ts" },
-  { kind: "dm_messages", source: "pull", writer: "services/sync/fansly-dm-messages.ts" },
+  { kind: "dm_messages", source: "pull", writer: "sync/fansly/capture.ts" },
   { kind: "earnings_accounts", source: "pull", writer: "sync/engine/commit.ts (wire spec earnings.accounts)" },
   { kind: "earnings_transactions", source: "pull", writer: "sync/engine/commit.ts (wire spec transactions.page)" },
   { kind: "fan_earnings_stats", source: "pull", writer: "sync/engine/commit.ts (wire spec earnings.stats_accounts)" },

@@ -88,11 +88,13 @@ describe("the legacy schedulers carry the predicate", () => {
     expect(body).toContain('legacyOwnsFanslyPageSql(sql.raw("st.page_id"))');
   });
 
-  it("the hydration dispatcher and auto-approval skip engine pages; the sweeps skip engine rows", () => {
+  it("the hydration dispatcher skips engine pages; the sweeps skip engine rows", () => {
     const hydration = "packages/db/src/repositories/agent-hydration.ts";
-    for (const name of ["listDispatchableAgentHydrationRequests", "listAutoApprovableAgentHydrationRequests"]) {
-      expect(functionBody(hydration, name)).toContain('legacyOwnsFanslyPageSql(sql.raw("r.page_id"))');
-    }
+    expect(functionBody(hydration, "listDispatchableAgentHydrationRequests"))
+      .toContain('legacyOwnsFanslyPageSql(sql.raw("r.page_id"))');
+    // The auto-approval that also skipped them is gone with the legacy Fansly
+    // hydration lane (step 4, S4-15).
+    expect(source(hydration)).not.toContain("listAutoApprovableAgentHydrationRequests");
     for (const name of [
       "listStuckAgentHydrationDispatches",
       "listDispatchingAgentHydrationRequests",
@@ -133,7 +135,7 @@ describe("the legacy processes ask before they act", () => {
     expect(source(path)).not.toContain("requestAiMediaAcceleratorRead");
   });
 
-  it("the verify route and the CLI verify go through the engine (S3-05), the targeted backfill CLI refuses an engine page", () => {
+  it("the verify route and the CLI verify go through the engine (S3-05); the targeted backfill CLI is gone (S4-15)", () => {
     // Before the page's context is resolved (which may open a proxy incident).
     expect(source("apps/runtime/src/modules/catalog/index.ts")).toMatch(
       /const onEngine = await verifyPageOnEngine\(appContext, request\.params\.pageLabel\);\s*if \(onEngine !== null\) return onEngine;\s*const pageContext = await resolvePageContext\(/,
@@ -142,10 +144,9 @@ describe("the legacy processes ask before they act", () => {
     expect(cli).toMatch(
       /const onEngine = await verifyPageOnEngine\(app, options\.page\);[\s\S]{0,300}?const context = await resolvePageContext\(/,
     );
-    // `dm backfill-thread`: before the job is queued.
-    const refusal = cli.indexOf("await assertLegacyOwnsFanslyPageId(app, thread.platformAccountId, SYNC_ENGINE_HINTS.history);");
-    expect(refusal).toBeGreaterThan(0);
-    expect(refusal).toBeLessThan(cli.indexOf("const jobId = await queueTargetedThreadBackfill("));
+    // `dm backfill-thread` queued a legacy read of one thread; nothing queues one now.
+    expect(cli).not.toContain("backfill-thread");
+    expect(cli).not.toContain("sync.thread.backfill");
   });
 });
 

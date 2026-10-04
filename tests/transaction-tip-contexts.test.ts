@@ -1,8 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { materializeFanslyDmTipContextsBestEffort } from
-  "../apps/runtime/src/services/sync/fansly-tip-contexts.ts";
-import { parseFanslyDmTipSidecar } from
+import { materializeFanslyDmTipContexts, parseFanslyDmTipSidecar } from
   "../apps/runtime/src/sync/fansly/lib/tip-contexts.ts";
 import { runBackfillMaterializationSafely } from
   "../apps/runtime/src/services/transaction-tip-contexts-backfill.ts";
@@ -168,17 +166,13 @@ describe("Fansly DM tip sidecar parser", () => {
     ]);
   });
 
-  it("fails open on projection writes and logs no verbatim note or payload", async () => {
-    const warn = vi.fn();
-    const result = await materializeFanslyDmTipContextsBestEffort({
-      db: {
-        transaction: vi.fn(async (run) => run({
-          execute: vi.fn(async () => {
-            throw new Error("db unavailable");
-          }),
-        })),
-      },
-      logger: { warn },
+  it("throws on a failed projection write, so its caller's transaction decides", async () => {
+    await expect(materializeFanslyDmTipContexts({
+      transaction: vi.fn(async (run) => run({
+        execute: vi.fn(async () => {
+          throw new Error("db unavailable");
+        }),
+      })),
     } as never, {
       accountId: 7,
       requestParams: { groupId: "group-secret" },
@@ -193,43 +187,26 @@ describe("Fansly DM tip sidecar parser", () => {
       },
       sourceRawPayloadId: 99,
       capturedAt: new Date("2026-08-03T00:00:00.000Z"),
-    });
-
-    expect(result).toMatchObject({ failed: true, tipItemsSeen: 1, upserted: 0 });
-    expect(warn).toHaveBeenCalledWith({
-      accountId: 7,
-      sourceRawPayloadId: 99,
-      tipItemsSeen: 1,
-      acceptedItemCount: 1,
-      errorClass: "Error",
-    }, "Fansly DM tip context materialization failed after durable raw capture");
-    const logged = JSON.stringify(warn.mock.calls);
-    expect(logged).not.toContain("do not log this note");
-    expect(logged).not.toContain("group-secret");
-    expect(logged).not.toContain("tip-secret");
+    })).rejects.toThrow("db unavailable");
   });
 
-  it("surfaces conversation identity conflicts with bounded diagnostics", async () => {
-    const warn = vi.fn();
+  it("counts a conversation identity conflict instead of writing over it", async () => {
     const execute = vi.fn()
       .mockResolvedValueOnce({ rows: [{ locked: true }] })
       .mockResolvedValueOnce({ rows: [{ fenced: false }] })
       .mockResolvedValueOnce({
         rows: [{ id: "1", status: "conversation_conflict" }],
       });
-    const result = await materializeFanslyDmTipContextsBestEffort({
-      db: {
-        transaction: vi.fn(async (run) => run({ execute })),
-      },
-      logger: { warn },
+    const result = await materializeFanslyDmTipContexts({
+      transaction: vi.fn(async (run) => run({ execute })),
     } as never, {
       accountId: 8,
-      requestParams: { groupId: "conflicting-secret-group" },
+      requestParams: { groupId: "conflicting-group" },
       responsePayload: {
         tips: [{
-          id: "conflicting-secret-tip",
-          message: "secret conflict note",
-          senderId: "fan-secret",
+          id: "conflicting-tip",
+          message: "conflict note",
+          senderId: "fan",
           createdAt: 1_770_000_000,
         }],
       },
@@ -238,45 +215,29 @@ describe("Fansly DM tip sidecar parser", () => {
     });
 
     expect(result).toMatchObject({
-      failed: false,
+      envelopeStatus: "accepted",
+      tipItemsSeen: 1,
       upserted: 0,
       unchanged: 0,
       conversationConflicts: 1,
+      deferredWrites: 0,
+      erasureFenced: 0,
     });
-    expect(warn).toHaveBeenCalledWith({
-      accountId: 8,
-      sourceRawPayloadId: 100,
-      envelopeStatus: "accepted",
-      tipItemsSeen: 1,
-      rejectedItemCount: 0,
-      droppedOptionalMemberCount: 0,
-      conversationConflictCount: 1,
-      deferredCount: 0,
-      erasureFencedCount: 0,
-    }, "Fansly DM tip sidecar materialized with bounded drift");
-    const logged = JSON.stringify(warn.mock.calls);
-    expect(logged).not.toContain("conflicting-secret-group");
-    expect(logged).not.toContain("conflicting-secret-tip");
-    expect(logged).not.toContain("secret conflict note");
   });
 
-  it("marks a shared-lock miss failed and deferred without leaking material", async () => {
-    const warn = vi.fn();
-    const result = await materializeFanslyDmTipContextsBestEffort({
-      db: {
-        transaction: vi.fn(async (run) => run({
-          execute: vi.fn(async () => ({ rows: [{ locked: false }] })),
-        })),
-      },
-      logger: { warn },
+  it("counts a shared-lock miss as a deferred write", async () => {
+    const result = await materializeFanslyDmTipContexts({
+      transaction: vi.fn(async (run) => run({
+        execute: vi.fn(async () => ({ rows: [{ locked: false }] })),
+      })),
     } as never, {
       accountId: 9,
-      requestParams: { groupId: "deferred-secret-group" },
+      requestParams: { groupId: "deferred-group" },
       responsePayload: {
         tips: [{
-          id: "deferred-secret-tip",
-          message: "deferred secret note",
-          senderId: "deferred-secret-fan",
+          id: "deferred-tip",
+          message: "deferred note",
+          senderId: "deferred-fan",
           createdAt: 1_770_000_000,
         }],
       },
@@ -285,28 +246,11 @@ describe("Fansly DM tip sidecar parser", () => {
     });
 
     expect(result).toMatchObject({
-      failed: true,
-      deferred: true,
       deferredWrites: 1,
       upserted: 0,
+      conversationConflicts: 0,
       erasureFenced: 0,
     });
-    expect(warn).toHaveBeenCalledWith({
-      accountId: 9,
-      sourceRawPayloadId: 101,
-      envelopeStatus: "accepted",
-      tipItemsSeen: 1,
-      rejectedItemCount: 0,
-      droppedOptionalMemberCount: 0,
-      conversationConflictCount: 0,
-      deferredCount: 1,
-      erasureFencedCount: 0,
-    }, "Fansly DM tip sidecar materialized with bounded drift");
-    const logged = JSON.stringify(warn.mock.calls);
-    expect(logged).not.toContain("deferred-secret-group");
-    expect(logged).not.toContain("deferred-secret-tip");
-    expect(logged).not.toContain("deferred secret note");
-    expect(logged).not.toContain("deferred-secret-fan");
   });
 
   it("sanitizes backfill DB errors without retaining note or provider refs", async () => {

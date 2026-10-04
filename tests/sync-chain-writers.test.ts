@@ -83,7 +83,7 @@ describe("DM thread chain writers (I9)", () => {
   });
 
   it("keeps the engine off the legacy coverage writers", () => {
-    const legacyWriters = /\b(finalizePageDmConversationMessageSync|refreshPageDmConversationWindow|resetPageDmSyncState|upsertPageDmConversation)\b/;
+    const legacyWriters = /\b(refreshPageDmConversationWindow|resetPageDmSyncState|upsertPageDmConversation)\b/;
     const engine = SOURCES.filter((path) => path.startsWith("apps/runtime/src/sync/"));
     expect(engine.length).toBeGreaterThan(0);
     expect(engine.filter((path) => legacyWriters.test(readFileSync(join(root, path), "utf8")))).toEqual([]);

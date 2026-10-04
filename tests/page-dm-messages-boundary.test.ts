@@ -76,7 +76,7 @@ const SANCTIONED_FILES: Record<string, string> = {
   // The Sync Engine: no hot row is written (I23); deletion marks only.
   "apps/runtime/src/sync/fansly/resources/dm-live.ts": "the deletion mark of the rows legacy stored (markFanslyWsHotDeletion)",
   "apps/runtime/src/sync/fansly/resources/dm-messages.ts": "comment: the DM apply writes no hot row",
-  "apps/runtime/src/sync/fansly/lib/dm-normalize.ts": "comment: the legacy lanes store its rows, the engine does not",
+  "apps/runtime/src/sync/fansly/lib/dm-normalize.ts": "comment: the legacy lanes stored its rows, the engine does not",
   "packages/db/src/repositories/fansly-ws-deletions.ts": "markFanslyWsHotDeletion (the engine's mark)",
   // The reader parity (S4-06) and the shadow report compare against legacy's rows.
   "apps/runtime/src/sync/cli/dm-reader-parity.ts": "the reader parity CLI",
@@ -85,9 +85,8 @@ const SANCTIONED_FILES: Record<string, string> = {
   "packages/db/src/repositories/sync/dm-reader-parity.ts": "the reader parity",
   "packages/db/src/repositories/sync/dm-messages.ts": "the replay's comparison with the rows legacy stored",
   "packages/db/src/repositories/sync/observability.ts": "the shadow report: when legacy first held a message",
-  // What is left of the legacy Fansly DM code since S4-14 deleted its handlers.
-  "apps/runtime/src/services/sync/fansly-dm-messages.ts":
-    "comment: the legacy DM page fetch, kept for the targeted backfill (S4-15)",
+  // What is left of the legacy Fansly DM code since S4-14 deleted its handlers
+  // and S4-15 the targeted backfill with its page fetch.
   "packages/db/src/repositories/fansly-dm-reader-heads.ts": "the exact-id reader heads of the WS recovery manifest",
   "packages/db/src/repositories/sync.ts": "the sync monitor's DM message count (listSyncMonitorStreamRows)",
 };
@@ -108,10 +107,7 @@ const WRITE_STATEMENTS: Record<string, number> = {
 /** The writers of the table (the two last prune it), and every file that may
  *  call them. */
 const WRITERS: Record<string, Record<string, string>> = {
-  upsertPageDmMessages: {
-    "apps/runtime/src/services/ofapi-dm-projection.ts": "OnlyFans",
-    "apps/runtime/src/services/sync/targeted-thread-backfill.ts": "the legacy targeted backfill (S4-15)",
-  },
+  upsertPageDmMessages: { "apps/runtime/src/services/ofapi-dm-projection.ts": "OnlyFans" },
   deletePageDmMessageByPlatformMessageId: { "apps/runtime/src/services/ofapi-dm-projection.ts": "OnlyFans" },
   markPageDmMessagePurchased: { "apps/runtime/src/services/ofapi-dm-projection.ts": "OnlyFans" },
   raisePageDmMessageTipAmount: { "apps/runtime/src/services/ofapi-dm-projection.ts": "OnlyFans" },
@@ -122,10 +118,6 @@ const WRITERS: Record<string, Record<string, string>> = {
   },
   prunePageDmMessagesToLimit: {},
   refreshPageDmConversationWindow: { "apps/runtime/src/services/ofapi-dm-projection.ts": "OnlyFans" },
-  finalizePageDmConversationMessageSync: {
-    "apps/runtime/src/services/projection-debt-sweep.ts": "the legacy DM projection debt (S4-15)",
-    "apps/runtime/src/services/sync/targeted-thread-backfill.ts": "the legacy targeted backfill (S4-15)",
-  },
 };
 
 /** Where each writer is defined (calls inside it are its own). */
@@ -136,7 +128,6 @@ const WRITER_HOME: Record<string, string> = {
   raisePageDmMessageTipAmount: "packages/db/src/repositories/page-dm.ts",
   prunePageDmMessagesToLimit: "packages/db/src/repositories/page-dm.ts",
   refreshPageDmConversationWindow: "packages/db/src/repositories/page-dm.ts",
-  finalizePageDmConversationMessageSync: "packages/db/src/repositories/page-dm.ts",
   resetPageDmSyncState: "packages/db/src/repositories/page-dm.ts",
   markFanslyWsHotDeletion: "packages/db/src/repositories/fansly-ws-deletions.ts",
   markHotPurchasesFromLedger: "packages/db/src/repositories/ppv-purchase-facts.ts",

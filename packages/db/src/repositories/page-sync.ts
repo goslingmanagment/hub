@@ -2174,10 +2174,12 @@ export interface TargetedPageSyncLease {
 
 /**
  * Slice C′: take the page's REAL sync lease for ONE named stream so an
- * out-of-band run (today: the targeted thread backfill) fences against the
- * regular executor instead of racing it. Same row, same lease columns, same
- * fence token that `assertOwnedPageSyncLease` verifies — acquire or return
- * null, never run lease-less.
+ * out-of-band run fences against the regular executor instead of racing it.
+ * Same row, same lease columns, same fence token that
+ * `assertOwnedPageSyncLease` verifies — acquire or return null, never run
+ * lease-less. Its one runtime caller, the legacy targeted thread backfill, is
+ * gone since step 4 (S4-15); the legacy lease tests still take a named
+ * stream's lease through it, and it goes with the legacy fence (S4-21).
  *
  * Differences from `acquirePageSyncLease`, both deliberate:
  *  - the stream is named by the caller instead of being picked by priority;
