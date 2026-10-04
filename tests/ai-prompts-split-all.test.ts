@@ -30,10 +30,15 @@ describe("reference prompts without the split-all gate", () => {
 
   it("covers every feature on both platforms", () => {
     expect(new Set(references.map((reference) => reference.name)).size).toBe(references.length);
-    for (const platform of ["onlyfans", "fansly"] as const) {
-      const features = references.filter((reference) => reference.input.platform === platform)
-        .map((reference) => reference.input.feature);
-      expect(new Set(features), platform).toEqual(new Set(OPERATION_FEATURES));
+    const featuresByPlatform = new Map<string, Set<OperationFeature>>();
+    for (const { input } of references) {
+      const platform = String(input.platform);
+      const features = featuresByPlatform.get(platform) ?? new Set<OperationFeature>();
+      featuresByPlatform.set(platform, features.add(input.feature));
+    }
+    expect([...featuresByPlatform.keys()].sort()).toEqual(["fansly", "onlyfans"]);
+    for (const [platform, features] of featuresByPlatform) {
+      expect(features, platform).toEqual(new Set(OPERATION_FEATURES));
     }
   });
 
