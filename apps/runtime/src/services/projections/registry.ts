@@ -406,8 +406,8 @@ export const OPERATIONAL_STATE_TABLES: readonly {
   },
   {
     table: "ai_media_accelerator_reads", stateClass: "operational_state",
-    writer: "services/ai-media-describe/fansly-fast-lane.ts (the in-chunk accelerator and its request filers are gone since step 4 S4-14)",
-    justification: "Fansly accelerator physical-attempt admissions enforce the agency-wide rolling cap; resetting them would grant additional Fansly requests again within the same window.",
+    writer: "none since step 4 S4-12 and S4-14 (the retired AI media fast lane and in-chunk accelerator admitted them); records only",
+    justification: "Physical attempt admissions of the retired Fansly accelerator lanes: the record of the additional Fansly requests they sent. No event carries them, so a rebuild could not restore them.",
   },
   {
     table: "fansly_ws_hint_receipts", stateClass: "operational_state",

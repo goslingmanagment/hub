@@ -208,8 +208,6 @@ describe("LIVE_CONFIG_KEYS", () => {
       "aiMediaDescribeLiveChatOnly",
       "aiMediaDescribeModelMedia",
       "aiMediaDescribeLoopEnabled",
-      // H3: the Fansly freshness accelerator's budget (the fast lane shares it).
-      "aiMediaDescribeFanslyAcceleratorDailyLimit",
       // Fansly Sync Engine step 1: the live overlay read kill-switch.
       "fanslyLiveOverlayReadPages",
       // Chat extension (hub-pr-plan H-2b): the owner's five switches, read per
@@ -236,7 +234,8 @@ describe("LIVE_CONFIG_KEYS", () => {
     }
     // Step 4 (S4-14): retired with the legacy DM handlers (the bounded scan, the
     // sweep shadow, the head catch-up, the deep backfill) and the in-chunk AI
-    // media accelerator — nothing reads them, so no override applies.
+    // media accelerator — nothing reads them, so no override applies. The
+    // accelerator's daily limit lost its last readers with S4-12 and S4-14.
     for (const key of [
       "fanslyDmBoundedEnabled",
       "fanslyDmBoundedPageAllowlist",
@@ -245,6 +244,7 @@ describe("LIVE_CONFIG_KEYS", () => {
       "fanslyDmHeadCatchupPageAllowlist",
       "fanslyDeepBackfillIgnoreRetentionLimit",
       "aiMediaDescribeFanslyAcceleratorEnabled",
+      "aiMediaDescribeFanslyAcceleratorDailyLimit",
     ]) {
       expect(LIVE_CONFIG_KEYS.has(key), key).toBe(false);
     }

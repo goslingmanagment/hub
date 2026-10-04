@@ -121,9 +121,10 @@ open, resolves on the describer's next sweep.
   `dormant`); teasers and free creator media when a generation shows them.
   A media file the hub has not captured yet waits (`awaiting_source`): on a
   page the Fansly Sync Engine reads, its socket confirmation reads the
-  conversation's head. The in-chunk accelerator and its switch
-  `AI_MEDIA_DESCRIBE_FANSLY_ACCELERATOR_ENABLED` are retired since step 4
-  (S4-14); the switch is ignored (removed in S4-26).
+  conversation's head. The in-chunk accelerator and its keys
+  `AI_MEDIA_DESCRIBE_FANSLY_ACCELERATOR_ENABLED` / `_DAILY_LIMIT` are retired
+  since step 4 (S4-14); the keys are ignored (removed in S4-26). Its rows stay
+  as records: `ai_media_accelerator_reads` with `lane = 'chunk'`.
 - **OnlyFans** (0216): locators of the desktop images layer, **free sources
   only** — webhook `Expires` URLs (≥120 s left) and `cdn.fansapi.com` URLs the
   desktop resolve handed out (now persisted as `source = 'resolve'`). `policy`
