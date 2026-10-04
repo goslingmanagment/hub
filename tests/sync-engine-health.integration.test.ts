@@ -210,7 +210,7 @@ describe("/health/sync on engine pages", () => {
     expect(down.wsDownSeconds).toBeGreaterThanOrEqual(110);
   });
 
-  it("an identity hold degrades the page; a network hold that has ended does not", async () => {
+  it("an identity hold degrades the page; a network hold that has ended does not, nor a stale old hold column", async () => {
     await setModeDirect(testDb!.pool, pages.live, "live");
     await beat(pages.live, 1);
     await seedPageHold(testDb!, { pageId: pages.live, kind: "identity_mismatch", untilSeconds: "infinity" });
@@ -220,6 +220,14 @@ describe("/health/sync on engine pages", () => {
     });
     await clearPageHolds(testDb!, pages.live);
     await seedPageHold(testDb!, { pageId: pages.live, kind: "network", untilSeconds: -1 });
+    expect((await health([pages.live])).byId.get(pages.live)).toMatchObject({ status: "ok", engine: { hold: null } });
+    // The old hold columns of the page row are stale since step 4 S4-32 and
+    // read by nothing: one that still says `auth` degrades nothing.
+    await testDb!.pool.query(
+      `update sync_pages set hold_kind = 'auth', hold_until = 'infinity', hold_since = clock_timestamp(),
+              hold_detail = '{"status":401}'::jsonb where page_id = $1`,
+      [pages.live],
+    );
     expect((await health([pages.live])).byId.get(pages.live)).toMatchObject({ status: "ok", engine: { hold: null } });
   });
 

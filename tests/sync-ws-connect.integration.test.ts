@@ -224,7 +224,7 @@ describe("ws.connect on a live page", () => {
     r.server.upgradeStatus = () => 401;
     await demand(pageId, HARNESS_KEY.ws, "");
     await startHost(r, { seed: 84, alerts });
-    await until(async () => (await scalar("select count(*)::int as n from sync_pages where page_id = $1 and hold_kind = 'auth'", [pageId])) === 1,
+    await until(async () => (await scalar("select count(*)::int as n from sync_holds where page_id = $1 and scope = 'page' and kind = 'auth'", [pageId])) === 1,
       30_000, "the auth hold");
     expect(await wsWork(pageId)).toEqual([{ subject: "", state: "open", close_reason: null, waiting_reason: "page_hold" }]);
     expect(alerts.opened.map((alert) => [alert.subKey, alert.detail])).toContainEqual(["page_stopped", "auth"]);
@@ -243,9 +243,9 @@ describe("ws.connect on a live page", () => {
     await demand(pageId, HARNESS_KEY.ws, "");
     await startHost(r, { seed: 85, alerts });
     await until(async () => (await scalar(
-      "select count(*)::int as n from sync_pages where page_id = $1 and resource_holds #> '{route:state,routes,ws.upgrade,holdUntil}' is not null",
+      "select count(*)::int as n from sync_holds where page_id = $1 and scope = 'route' and key = 'ws.upgrade' and kind = 'route_hold'",
       [pageId])) === 1, 30_000, "the Upgrade route's hold");
-    expect(await scalar("select count(*)::int as n from sync_pages where page_id = $1 and hold_kind is not null", [pageId])).toBe(0);
+    expect(await scalar("select count(*)::int as n from sync_holds where page_id = $1 and scope = 'page'", [pageId])).toBe(0);
     expect(await wsWork(pageId)).toEqual([{ subject: "", state: "open", close_reason: null, waiting_reason: null }]);
     expect(alerts.opened.filter((alert) => alert.subKey === "route_limited").map((alert) => [alert.route, alert.detail]))
       .toEqual([["ws.upgrade", "rate_limit"]]);
@@ -270,8 +270,11 @@ describe("ws.connect on a live page", () => {
       "select outcome, http_status, error_class from sync_attempts where page_id = $1 and resource = 'ws.connect' order by id", [pageId]);
     expect(attempts.map((attempt) => attempt.outcome)).toEqual(["response", "transport_error", "transport_error"]);
     expect(attempts[0]).toMatchObject({ http_status: 400, error_class: "subject_failure" });
-    expect(await rows("select hold_kind, network_failure_streak from sync_pages where page_id = $1", [pageId]))
-      .toEqual([{ hold_kind: null, network_failure_streak: 0 }]);
+    expect(await rows(
+      `select (select count(*)::int from sync_holds h where h.page_id = sp.page_id and h.scope = 'page') as page_holds,
+              sp.network_failure_streak
+         from sync_pages sp where sp.page_id = $1`, [pageId]))
+      .toEqual([{ page_holds: 0, network_failure_streak: 0 }]);
     for (let n = 1; n <= 3; n += 1) await demand(pageId, HARNESS_KEY.urgent, `after-${n}`);
     await until(async () => r.server.arrivalsAt("/api/v1/trackinglinks").length === 3, 30_000, "the REST reads after the failures");
   }, 90_000);

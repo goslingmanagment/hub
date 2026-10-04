@@ -170,7 +170,7 @@ describe("a poisoned apply", () => {
     const run = actor.run({ stop: stop.signal, abort: abort.signal });
     try {
       await waitFor(async () => {
-        const rows = await testDb!.pool.query("select 1 from sync_pages where page_id = $1 and hold_kind = 'identity_mismatch'", [pageId]);
+        const rows = await testDb!.pool.query("select 1 from sync_holds where page_id = $1 and scope = 'page' and kind = 'identity_mismatch'", [pageId]);
         return rows.rowCount === 1 ? true : null;
       }, 30_000, "the identity hold");
       // Demand that arrives under the hold is never admitted.
@@ -184,13 +184,16 @@ describe("a poisoned apply", () => {
     expect(transport.hits).toHaveLength(1);
     expect(identityCalls).toBe(1);
     expect(fine).toEqual([]);
-    const page = await testDb.pool.query<{ hold_kind: string; indefinite: boolean; held_under: unknown; credentials_generation: unknown }>(
-      `select hold_kind, hold_until = 'infinity'::timestamptz as indefinite,
-              hold_detail -> 'credentialsGeneration' as held_under, to_jsonb(credentials_generation) as credentials_generation
-         from sync_pages where page_id = $1`,
+    // The page's own holds: the identity hold alone, taken under the stored credentials.
+    const page = await testDb.pool.query<{ kind: string; indefinite: boolean; held_under: unknown; credentials_generation: unknown }>(
+      `select h.kind, h.until = 'infinity'::timestamptz as indefinite,
+              h.detail -> 'credentialsGeneration' as held_under, to_jsonb(sp.credentials_generation) as credentials_generation
+         from sync_holds h
+         join sync_pages sp on sp.page_id = h.page_id
+        where h.page_id = $1 and h.scope = 'page'`,
       [pageId],
     );
-    expect(page.rows[0]).toMatchObject({ hold_kind: "identity_mismatch", indefinite: true });
+    expect(page.rows).toMatchObject([{ kind: "identity_mismatch", indefinite: true }]);
     expect(page.rows[0]!.held_under).toEqual(page.rows[0]!.credentials_generation);
     const attempts = await testDb.pool.query<{ resource: string; apply_state: string; apply_failures: number; apply_error: string }>(
       "select resource, apply_state, apply_failures, apply_error from sync_attempts order by id",
@@ -238,7 +241,7 @@ describe("a poisoned apply", () => {
     const heldAt = Date.now();
     try {
       await waitFor(async () => {
-        const rows = await testDb!.pool.query("select 1 from sync_pages where page_id = $1 and resource_holds ? 'transactions'", [pageId]);
+        const rows = await testDb!.pool.query("select 1 from sync_holds where page_id = $1 and scope = 'resource' and key = 'transactions'", [pageId]);
         return rows.rowCount === 1 ? true : null;
       }, 30_000, "the resource hold");
       await upsertDemand(db(), { pageId, shadow: false, resource: "transactions.rescan", kind: "trigger", class: "urgent" });
@@ -253,14 +256,14 @@ describe("a poisoned apply", () => {
     // The held file's other work waits; the other file is served.
     expect(served).toEqual(["transactions.head", "fine.read:a"]);
     expect(transport.hits).toHaveLength(2);
-    const page = await testDb.pool.query<{ hold_kind: string | null; step: number; until_ms: number }>(
-      `select hold_kind, (resource_holds -> 'transactions' ->> 'step')::int as step,
-              (extract(epoch from (resource_holds -> 'transactions' ->> 'until')::timestamptz) * 1000)::float8 as until_ms
-         from sync_pages where page_id = $1`,
+    // The file's breaker on its first step, and no hold of the page itself.
+    const holds = await testDb.pool.query<{ scope: string; key: string; kind: string; step: number; until_ms: number }>(
+      `select scope, key, kind, ladder_step::int as step, (extract(epoch from until) * 1000)::float8 as until_ms
+         from sync_holds where page_id = $1 and scope in ('page', 'resource') order by scope, key, kind`,
       [pageId],
     );
-    expect(page.rows[0]).toMatchObject({ hold_kind: null, step: 1 });
-    expect(page.rows[0]!.until_ms).toBeGreaterThan(heldAt + RESOURCE_HOLD_LADDER_MS[0]! - 60_000);
+    expect(holds.rows).toMatchObject([{ scope: "resource", key: "transactions", kind: "resource_breaker", step: 1 }]);
+    expect(holds.rows[0]!.until_ms).toBeGreaterThan(heldAt + RESOURCE_HOLD_LADDER_MS[0]! - 60_000);
     const attempts = await testDb.pool.query<{ resource: string; apply_state: string; apply_failures: number; apply_error: string | null }>(
       "select resource, apply_state, apply_failures, apply_error from sync_attempts order by id",
     );

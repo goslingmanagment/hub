@@ -6,7 +6,6 @@ import {
   type FanslySendGuardOwnerEngine,
   type FanslySendHolderIdentity,
 } from "../fansly-send-guard.ts";
-import { mirrorSyncHoldsToLegacyColumns } from "./holds-legacy.ts";
 import {
   normalizeSyncHoldRows,
   SYNC_PAGE_HOLD_KEY,
@@ -75,8 +74,9 @@ export interface SyncPageRow {
   pauseNote: string | null;
   /** The page's hold set (`sync_holds`): its own holds, its routes' and its
    *  resource files'. The engine's hold evaluator reads it
-   *  (`apps/runtime/src/sync/engine/admission.ts`); nothing reads the old
-   *  hold columns of the row. */
+   *  (`apps/runtime/src/sync/engine/admission.ts`). The page row itself says
+   *  nothing of a hold: the old hold columns it still has in the database
+   *  are stale, and no statement names them (step 4, S4-32). */
   holds: SyncHoldRow[];
   networkFailureStreak: number;
   identityAccountId: string | null;
@@ -932,14 +932,13 @@ async function lockPageForHoldWrite(tx: Database, pageId: number, generation: bi
 }
 
 /**
- * One write of a page's hold set: the fence, the rows, then — for the
- * rollback's sake, until the next release takes the mirror away — the old
- * hold columns rewritten from the rows (`mirrorSyncHoldsToLegacyColumns`),
- * all in one transaction (a savepoint inside the caller's), so the two never
- * part. The rows are the page's state: nothing reads the columns back,
- * neither here nor when the page's ownership is acquired — the image before
- * this one keeps the two sides equal itself, so the way back from a rollback
- * to it finds the rows current.
+ * One write of a page's hold set: the fence, then the rows, in one
+ * transaction (a savepoint inside the caller's). The rows are the page's
+ * whole hold state. The page row is locked and not written: its old hold
+ * columns stay in the database as the last release that wrote them left
+ * them, until a migration drops them (step 4, S4-32) — the image before this
+ * one reads none of them back and rewrites them from the rows at its first
+ * hold write of a page, so a rollback to it runs on what is left here.
  */
 async function writeHoldSet<T>(
   db: Database,
@@ -949,9 +948,7 @@ async function writeHoldSet<T>(
   return db.transaction(async (raw) => {
     const tx = raw as unknown as Database;
     await lockPageForHoldWrite(tx, input.pageId, input.generation);
-    const written = await write(tx);
-    await mirrorSyncHoldsToLegacyColumns(tx, input.pageId);
-    return written;
+    return write(tx);
   });
 }
 

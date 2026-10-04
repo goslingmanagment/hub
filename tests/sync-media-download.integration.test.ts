@@ -259,7 +259,7 @@ describe("media-download.fetch on a live page", () => {
     const expired = await download(r, "/cdn/expired");
     await startHost(r, { seed: 64, alerts });
     expect(await closed(expired.workId)).toMatchObject({ close_reason: "subject_terminal:403", result: { failure: "http_status", httpStatus: 403 } });
-    expect(await scalar("select count(*)::int as n from sync_pages where page_id = $1 and hold_kind is not null", [r.page.pageId])).toBe(0);
+    expect(await scalar("select count(*)::int as n from sync_holds where page_id = $1 and scope = 'page'", [r.page.pageId])).toBe(0);
     await upsertDemand(db(), { pageId: r.page.pageId, shadow: false, resource: HARNESS_KEY.urgent, subject: "after", kind: "trigger", class: "urgent" });
     await until(async () => r.server.arrivalsAt("/api/v1/trackinglinks").length === 1, 30_000, "the next REST read");
     expect(alerts.opened.filter((alert) => alert.detail === "auth")).toEqual([]);
@@ -272,9 +272,9 @@ describe("media-download.fetch on a live page", () => {
     const busy = await download(r, "/cdn/busy");
     await startHost(r, { seed: 65, alerts });
     await until(async () => (await scalar(
-      "select count(*)::int as n from sync_pages where page_id = $1 and resource_holds #> '{route:state,routes,cdn.media,holdUntil}' is not null",
+      "select count(*)::int as n from sync_holds where page_id = $1 and scope = 'route' and key = 'cdn.media' and kind = 'route_hold'",
       [r.page.pageId])) === 1, 30_000, "the CDN route's hold");
-    expect(await scalar("select count(*)::int as n from sync_pages where page_id = $1 and hold_kind is not null", [r.page.pageId])).toBe(0);
+    expect(await scalar("select count(*)::int as n from sync_holds where page_id = $1 and scope = 'page'", [r.page.pageId])).toBe(0);
     expect(await work(busy.workId)).toMatchObject({ state: "open", waiting_reason: null, secret: true });
     expect(alerts.opened.filter((alert) => alert.subKey === "route_limited").map((alert) => [alert.route, alert.detail]))
       .toEqual([["cdn.media", "rate_limit"]]);

@@ -621,28 +621,21 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # resets a Fansly page's legacy state, and its rollback command refuses, so
   # it runs unchanged; no image clears a 'retired' blocker.
   "0239_retire_fansly_legacy_sync_states.sql"
-  # The hold set (step 4, owner decision №26): one new table, sync_holds, its
-  # partial unique index, comments and the read-role grant; it starts empty.
-  # The previous image never names it: it reads and writes a page's holds in
-  # the old columns of sync_pages (hold_kind … hold_detail, resource_holds),
-  # which the hold writers rewrite from the table in the same transaction as
-  # every hold write, so it holds what the table holds after a rollback. What
-  # it writes there meanwhile was read back into the table when the hold-set
-  # release acquired the page's ownership; the release after it (0241) reads
-  # no hold column, so that one ships only after this one has been deployed.
-  "0240_sync_holds.sql"
-  # The first old hold column goes (step 4, design S4-31): sync_pages.hold_step
-  # is dropped (catalog-only, lock_timeout 5 s). The previous image — the
-  # hold-set release (0240) or a later one — never names it: it reads and
-  # writes sync_pages by named columns, and its hold writers and its
-  # acquisition name hold_kind, hold_until, hold_since, hold_detail and
-  # resource_holds only. Those stay, and this release's hold writers keep
-  # rewriting them from the table, so after a rollback that image runs
-  # unchanged and its acquisition finds them equal to the page's rows (it
-  # reads nothing back). NOT compatible with an image older than the hold-set
-  # release, which selects hold_step by name: 0240 and 0241 never ship in one
-  # deploy.
-  "0241_sync_pages_drop_hold_step.sql"
+  # NOT listed any more (step 4, S4-32): 0240_sync_holds.sql (the hold set's
+  # table) and 0241_sync_pages_drop_hold_step.sql (the first old hold column
+  # of sync_pages). The image before 0240 knows a page's holds in the old
+  # hold columns of sync_pages alone; the one before 0241 compares those
+  # columns with the table whenever it acquires a page and lets them win.
+  # Both were compatible only while the hold writers rewrote the columns
+  # from the table in the transaction of every hold write, which they did
+  # through the release that carried 0241. This tree writes the table alone
+  # and leaves the columns stale, so either image would drop every hold
+  # taken since this release started and bring back every hold lifted. This
+  # release is therefore deployed onto the one that carried 0241, with both
+  # applied already: no delta of its deploy holds them, and its automatic
+  # rollback returns to an image that reads no hold column. A deploy that
+  # still had one of them to apply keeps the automatic rollback off rather
+  # than fail open (apps/runtime/src/sync/README.md, "Rollback targets").
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

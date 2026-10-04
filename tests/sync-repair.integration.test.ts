@@ -417,11 +417,14 @@ describe("repair.ws-gap", () => {
     expect(secondList).toBeGreaterThan(firstList);
     // Both other reads went out inside the list's hold.
     expect(order.slice(firstList + 1, secondList).filter((spec) => spec === "polls").length).toBeGreaterThanOrEqual(2);
-    const page = await testDb.pool.query<{ hold_kind: string | null; list_file: unknown; list_step: string | null }>(
-      `select hold_kind, resource_holds -> 'dm-conversations' as list_file,
-              resource_holds #>> '{route:state,routes,messaging.groups,ladderStep}' as list_step
-         from sync_pages where page_id = $1`, [pageId]);
-    expect(page.rows).toEqual([{ hold_kind: null, list_file: null, list_step: "1" }]);
+    // The 429 held the list's route alone (its ladder is on step 1): no hold
+    // of the page, no breaker of the list's file.
+    const holds = await testDb.pool.query<{ page_holds: number; list_breakers: number; list_step: number | null }>(
+      `select count(*) filter (where scope = 'page')::int as page_holds,
+              count(*) filter (where scope = 'resource' and key = 'dm-conversations')::int as list_breakers,
+              max(ladder_step) filter (where scope = 'route' and key = 'messaging.groups' and kind = 'route_budget')::int as list_step
+         from sync_holds where page_id = $1`, [pageId]);
+    expect(holds.rows).toEqual([{ page_holds: 0, list_breakers: 0, list_step: 1 }]);
     expect((await listOffsets(pageId, "repair.ws-gap")).map((read) => read.http_status)).toEqual([429, 200]);
   }, 60_000);
 });

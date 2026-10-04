@@ -214,18 +214,25 @@ async function auditMetadata(pageId: number, eventType: string): Promise<Array<R
   )).rows.map((row) => row.metadata);
 }
 
-/** The page row's old hold slot — which every hold write of this release keeps
- *  in step with the hold set (the previous image reads it) — and its trusted
- *  credentials. */
+/** The page's own hold in its hold set (`sync_holds`: the credentials hold,
+ *  else the network hold; nulls without one) and its trusted credentials. */
 async function pageRow(pageId: number) {
   return (await testDb!.pool.query<{
-    hold_kind: string | null;
-    hold_since: Date | null;
-    hold_detail: Record<string, unknown>;
+    hold: string | null;
+    since: Date | null;
+    detail: Record<string, unknown> | null;
     credentials_generation: string | null;
     identity_checked_at: Date | null;
   }>(
-    "select hold_kind, hold_since, hold_detail, credentials_generation, identity_checked_at from sync_pages where page_id = $1",
+    `select h.kind as hold, h.since, h.detail, sp.credentials_generation, sp.identity_checked_at
+       from sync_pages sp
+       left join lateral (
+         select kind, since, detail from sync_holds
+          where page_id = sp.page_id and scope = 'page'
+          order by (kind = 'network'), kind
+          limit 1
+       ) h on true
+      where sp.page_id = $1`,
     [pageId],
   )).rows[0]!;
 }
@@ -239,11 +246,11 @@ describe("credentials holds of a live page (ruling 5, A3)", () => {
     await urgent(r.page.pageId, "u1");
     await startHost(r, 41);
 
-    await until(async () => (await pageRow(r.page.pageId)).hold_kind === "auth", 15_000, "B's refusal");
+    await until(async () => (await pageRow(r.page.pageId)).hold === "auth", 15_000, "B's refusal");
     const [refusedVerify] = await verifyAttempts(r.page.pageId);
     const held = await pageRow(r.page.pageId);
     // The latest refusal is recorded; the digest the engine trusts is still A.
-    expect(held.hold_detail).toMatchObject({
+    expect(held.detail).toMatchObject({
       status: 401,
       credentialsGeneration: digestB,
       failedAttemptId: Number(refusedVerify!.id),
@@ -266,7 +273,7 @@ describe("credentials holds of a live page (ruling 5, A3)", () => {
     // The proof, the trusted digest and the clearing were written together,
     // the proof's instant being its send.
     const cleared = await pageRow(r.page.pageId);
-    expect(cleared).toMatchObject({ hold_kind: null, hold_since: null, hold_detail: {}, credentials_generation: digestC });
+    expect(cleared).toMatchObject({ hold: null, since: null, detail: null, credentials_generation: digestC });
     expect(cleared.identity_checked_at).toEqual(attempts[1]!.sent_at);
     const work = await testDb.pool.query<{ state: string; close_reason: string }>(
       "select state, close_reason from sync_work where page_id = $1 and resource = 'account.verify' order by id", [r.page.pageId],
@@ -283,7 +290,7 @@ describe("credentials holds of a live page (ruling 5, A3)", () => {
       credentialsGeneration: digestC,
       cleared: {
         kind: "auth",
-        since: held.hold_since!.toISOString(),
+        since: held.since!.toISOString(),
         failedAttemptId: Number(refusedVerify!.id),
         failedAt: refusedVerify!.sent_at.toISOString(),
         credentialsGeneration: digestB,
@@ -305,7 +312,7 @@ describe("credentials holds of a live page (ruling 5, A3)", () => {
       if (latest.rows[0]?.resource !== "account.verify") return;
       crashed = true;
       // The answer is captured, the proof not written: still held.
-      expect((await pageRow(r.page.pageId)).hold_kind).toBe("auth");
+      expect((await pageRow(r.page.pageId)).hold).toBe("auth");
       throw new SyncCrashFault(point);
     });
     await new Promise((resolve) => setTimeout(resolve, 500));
@@ -318,7 +325,7 @@ describe("credentials holds of a live page (ruling 5, A3)", () => {
     const attempts = await verifyAttempts(r.page.pageId);
     expect(attempts.map((attempt) => attempt.apply_state)).toEqual(["applied"]);
     const cleared = await pageRow(r.page.pageId);
-    expect(cleared).toMatchObject({ hold_kind: null, credentials_generation: digestC });
+    expect(cleared).toMatchObject({ hold: null, credentials_generation: digestC });
   }, 90_000);
 
   it("a proof write that fails leaves the attempt deferred and the hold in force; the stored answer is applied again, without a request", async (context) => {
@@ -343,12 +350,12 @@ describe("credentials holds of a live page (ruling 5, A3)", () => {
       await startHost(r, 43);
       const digestC = await storeSession(r.page, "token-c");
       await until(async () => (await verifyAttempts(r.page.pageId))[0]?.apply_state === "deferred", 15_000, "the deferred proof");
-      expect((await pageRow(r.page.pageId)).hold_kind).toBe("auth");
+      expect((await pageRow(r.page.pageId)).hold).toBe("auth");
 
       await until(async () => r.server.arrivalsAt("/api/v1/trackinglinks").length === 1, 20_000, "the read after the re-applied proof");
       expect(r.identityTokens).toEqual(["token-c"]);
       expect((await verifyAttempts(r.page.pageId)).map((attempt) => attempt.apply_state)).toEqual(["applied"]);
-      expect(await pageRow(r.page.pageId)).toMatchObject({ hold_kind: null, credentials_generation: digestC });
+      expect(await pageRow(r.page.pageId)).toMatchObject({ hold: null, credentials_generation: digestC });
     } finally {
       await testDb.pool.query(`
         drop trigger if exists sync_test_fail_proof_once on sync_pages;
@@ -439,9 +446,9 @@ describe("credentials holds of a live page (ruling 5, A3)", () => {
       await urgent(r.page.pageId, "u1");
       await startHost(r, 48);
 
-      await until(async () => (await pageRow(r.page.pageId)).hold_kind === "identity_mismatch", 15_000, "B's identity_mismatch");
+      await until(async () => (await pageRow(r.page.pageId)).hold === "identity_mismatch", 15_000, "B's identity_mismatch");
       const [mismatch] = await verifyAttempts(r.page.pageId);
-      expect((await pageRow(r.page.pageId)).hold_detail).toMatchObject({ credentialsGeneration: digestB, failedAttemptId: Number(mismatch!.id) });
+      expect((await pageRow(r.page.pageId)).detail).toMatchObject({ credentialsGeneration: digestB, failedAttemptId: Number(mismatch!.id) });
       const [quarantined] = await verifyWork(r.page.pageId);
       expect(quarantined).toMatchObject({ state: "quarantined" });
       // B stays stored: its verify is neither superseded nor sent again.
@@ -471,7 +478,7 @@ describe("credentials holds of a live page (ruling 5, A3)", () => {
         { id: quarantined!.id, state: "superseded", close_reason: "credentials_changed" },
         { id: expect.any(Number), state: "done", close_reason: "verified" },
       ]);
-      expect(await pageRow(r.page.pageId)).toMatchObject({ hold_kind: null, credentials_generation: digestC });
+      expect(await pageRow(r.page.pageId)).toMatchObject({ hold: null, credentials_generation: digestC });
       expect(await auditMetadata(r.page.pageId, "sync.credentials_verify_superseded")).toEqual([{
         workId: quarantined!.id,
         attemptId: Number(mismatch!.id),
@@ -498,7 +505,7 @@ describe("credentials holds of a live page (ruling 5, A3)", () => {
     await until(async () => (await verifyWork(r.page.pageId))[0]?.state === "quarantined", 15_000, "B's quarantined verify");
     const [quarantined] = await verifyWork(r.page.pageId);
     const [refused] = await verifyAttempts(r.page.pageId);
-    expect((await pageRow(r.page.pageId)).hold_kind).toBeNull();
+    expect((await pageRow(r.page.pageId)).hold).toBeNull();
     // One verify per digest: B's is not raised again, nothing else goes out.
     await new Promise((resolve) => setTimeout(resolve, 6 * S + 1_000));
     expect(r.identityTokens).toEqual(["token-b"]);

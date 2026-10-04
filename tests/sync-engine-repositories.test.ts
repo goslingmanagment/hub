@@ -66,9 +66,6 @@ describe("Fansly Sync Engine repository boundaries", () => {
   it("writes sync_pages only through the sync repositories, and the mode only through setSyncPageMode", () => {
     expect(filesMatching("update sync_pages", SOURCES)).toEqual([
       "packages/db/src/repositories/sync/attempts.ts",
-      // The old hold columns, rewritten from the hold set for a rollback's
-      // image (step 4 S4-31; the file goes a release before the columns).
-      "packages/db/src/repositories/sync/holds-legacy.ts",
       "packages/db/src/repositories/sync/pages.ts",
     ]);
     // The hold set is written by the hold writers alone.
