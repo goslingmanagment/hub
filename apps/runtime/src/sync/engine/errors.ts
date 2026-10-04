@@ -442,8 +442,7 @@ export function escalateResourceHold(
 /**
  * Every consequence of one outcome (design §3.8 "one place"). Pure: the
  * caller writes the decision in the transaction that records the outcome
- * (capture, or the apply's error settlement) and opens the alerts (a shadow
- * page records them as metrics only).
+ * (capture, or the apply's error settlement) and opens the alerts.
  */
 export function onOutcome(input: OutcomeInput): OutcomeDecision {
   const { now, page } = input;

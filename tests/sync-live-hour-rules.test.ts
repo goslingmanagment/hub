@@ -99,7 +99,6 @@ function audited(seconds: number, operation: string, overrides: Partial<FanslySe
   ref += 1;
   return {
     journal: "engine",
-    shadow: false,
     source: null,
     ref,
     operation,

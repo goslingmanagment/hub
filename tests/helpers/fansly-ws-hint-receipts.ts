@@ -5,8 +5,8 @@ import type { Pool } from "pg";
 // one `fansly_ws_hint_receipts` row per canonicalized socket signal and, for a
 // hint the page's B1 policy routes, the `fansly_ws_dm` dirty subject the
 // legacy B1 step claims. Nothing writes them any more; they stay as records
-// that the B1 claims, the archive shadow rebuild, the shadow report's replay,
-// erasure and `fansly:ws-recovery-manifest` read. Tests seed them here.
+// that the B1 claims, the archive shadow rebuild, erasure and
+// `fansly:ws-recovery-manifest` read. Tests seed them here.
 
 export interface FanslyWsHintReceiptFixture {
   /** The signal's domain event id (the receipt's key). */

@@ -192,13 +192,12 @@ describe("layer 1: what never settles is a stall, what fails is not", () => {
   it("an actor whose step never settles after its admission", async (context) => {
     if (!testDb) return context.skip();
     const { pageId } = await seedSyncPage({ db: db(), pool: testDb.pool }, { mode: "live", guard: "fansly_sync_engine" });
-    await upsertDemand(db(), { pageId, shadow: false, resource: CRASH_READ_KEY, kind: "trigger", class: "urgent" });
+    await upsertDemand(db(), { pageId, resource: CRASH_READ_KEY, kind: "trigger", class: "urgent" });
     const { watchdog, exits, stalls } = testWatchdog();
     try {
       const { actor, stop, abort, generation } = await makeTestActor({
         db: db(),
         pageId,
-        mode: "live",
         registry: crashRegistry(),
         transport: recordingTransport(db()),
         faults: (point) => (point === "after_admit" ? new Promise<never>(() => undefined) : undefined),

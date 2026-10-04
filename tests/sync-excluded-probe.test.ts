@@ -82,14 +82,13 @@ function decide(outcome: FanslyWireOutcome): OutcomeDecision {
 }
 
 describe("probe.excluded-chat", () => {
-  it("is live-only, planned and subject-scoped on 403 only", () => {
+  it("is planned and subject-scoped on 403 only", () => {
     const spec = fanslyResourceSpec(EXCLUDED_CHAT_PROBE_KEY)!;
     expect(spec).toMatchObject({
       subject: "thread",
       kind: "trigger",
       class: "planned",
       triggers: ["owner"],
-      liveOnly: true,
       evidence: false,
       fence: "none",
       subjectScopedAuthStatuses: [403],
@@ -97,15 +96,14 @@ describe("probe.excluded-chat", () => {
     });
   });
 
-  it("plans one head read of the chat, never a `before` page; nothing in shadow", async () => {
+  it("plans one head read of the chat, never a `before` page", async () => {
     const work = { subject: CHAT } as SyncWorkRow;
-    const live = { shadow: false, now: NOW } as unknown as PlanContext;
-    await expect(probeExcludedChatModule.plan(work, live)).resolves.toEqual({
+    const ctx = { now: NOW } as unknown as PlanContext;
+    await expect(probeExcludedChatModule.plan(work, ctx)).resolves.toEqual({
       kind: "request",
       request: { spec: "messages.page", params: { groupId: CHAT, before: null } },
     });
-    await expect(probeExcludedChatModule.plan(work, { ...live, shadow: true } as PlanContext)).resolves.toEqual({ kind: "done", reason: "shadow" });
-    await expect(probeExcludedChatModule.plan({ subject: "" } as SyncWorkRow, live)).resolves.toEqual({ kind: "quarantine", reason: "probe_without_chat" });
+    await expect(probeExcludedChatModule.plan({ subject: "" } as SyncWorkRow, ctx)).resolves.toEqual({ kind: "quarantine", reason: "probe_without_chat" });
   });
 
   it("stamps a served answer above every canonicalizer family's version, so no sweep or bump replays it", () => {
@@ -167,7 +165,6 @@ function work(overrides: Partial<SyncWorkRow>): SyncWorkRow {
   return {
     id: 1,
     pageId: 4,
-    shadow: false,
     resource: EXCLUDED_CHAT_PROBE_KEY,
     subject: CHAT,
     kind: "trigger",

@@ -24,7 +24,7 @@ import {
   parseFollowersReconcileCursor,
 } from "../apps/runtime/src/sync/fansly/resources/followers.ts";
 import { parseSubscribersCursor } from "../apps/runtime/src/sync/fansly/resources/subscribers.ts";
-import { advanceShadowWalk, offsetPageDone, offsetWalkPages } from "../apps/runtime/src/sync/fansly/lib/offset-walk.ts";
+import { offsetPageDone } from "../apps/runtime/src/sync/fansly/lib/offset-walk.ts";
 import { ACCOUNT_COUNTERS_MAX_AGE_MS, accountCountersFresh } from "../apps/runtime/src/sync/fansly/lib/page-facts.ts";
 
 // The pure parts of the audience resources (design §5.1, §5.11–§5.13): the
@@ -42,23 +42,6 @@ describe("offset walks", () => {
     expect(offsetPageDone({ offset: 100, itemCount: 0, limit: 100, total: null })).toBe(true);
   });
 
-  it("estimate their pages: a stated total ends on its page, an unstated list on a short one", () => {
-    expect(offsetWalkPages({ total: 43, limit: 100, statedTotal: true })).toBe(1);
-    expect(offsetWalkPages({ total: 0, limit: 100, statedTotal: true })).toBe(1);
-    expect(offsetWalkPages({ total: 200, limit: 100, statedTotal: true })).toBe(2);
-    expect(offsetWalkPages({ total: 200, limit: 100, statedTotal: false })).toBe(3);
-    expect(offsetWalkPages({ total: 18_329, limit: 100, statedTotal: false })).toBe(184);
-    expect(offsetWalkPages({ total: null, limit: 100, statedTotal: false })).toBe(1);
-  });
-
-  it("simulate a walk step by step in shadow", () => {
-    const first = advanceShadowWalk(null, () => 3);
-    expect(first).toEqual({ progress: { steps: 3, done: 1 }, finished: false });
-    const second = advanceShadowWalk(first.progress, () => 99);
-    expect(second).toEqual({ progress: { steps: 3, done: 2 }, finished: false });
-    expect(advanceShadowWalk(second.progress, () => 99).finished).toBe(true);
-    expect(advanceShadowWalk(null, () => 0)).toEqual({ progress: { steps: 1, done: 1 }, finished: true });
-  });
 });
 
 describe("the audience rules both engines apply", () => {
@@ -147,20 +130,21 @@ describe("the engine's Fansly journal", () => {
 
 describe("cursors survive whatever a row holds", () => {
   it("subscribers", () => {
-    expect(parseSubscribersCursor(null)).toEqual({ generation: 0, walk: null, restartCount: 0, last: null, shadow: null });
+    expect(parseSubscribersCursor(null)).toEqual({ generation: 0, walk: null, restartCount: 0, last: null });
+    // What a shadow walk left in a cursor (step 4 S4-23 removed it) is not read.
+    expect(parseSubscribersCursor({ generation: 2, shadow: { steps: 4, done: 1 } })).toEqual({ generation: 2, walk: null, restartCount: 0, last: null });
     expect(parseSubscribersCursor({ generation: 3, walk: { generation: 4 } }).walk).toBeNull();
     const walk = { generation: 4, walkStartedAt: NOW.toISOString(), offset: 100, observedCount: 100, distinctObservedCount: 99, pageCount: 1, providerReportedTotal: 150, restartCount: 1 };
     expect(parseSubscribersCursor({ generation: 4, walk }).walk).toEqual(walk);
   });
 
   it("followers head and reconcile", () => {
-    expect(parseFollowersHeadCursor("garbage")).toEqual({ knownFollowId: null, walk: null, last: null, shadow: null });
+    expect(parseFollowersHeadCursor("garbage")).toEqual({ knownFollowId: null, walk: null, last: null });
     expect(parseFollowersHeadCursor({ knownFollowId: "9", walk: { offset: 100 } }).walk).toMatchObject({ offset: 100, processed: 0 });
     expect(parseFollowersReconcileCursor([])).toMatchObject({ generation: 0, walk: null, snapshotRestartCount: 0, lastFullSweepStartedAt: null });
     expect(parseFollowersReconcileCursor({ walk: { generation: 2 } }).walk).toBeNull();
-    expect(parseFollowersReconcileCursor({ shadow: { steps: 4, done: 1 } }).shadow).toBeNull();
-    expect(parseFollowersReconcileCursor({ shadow: { steps: 4, done: 1, startedAt: NOW.toISOString() } }).shadow)
-      .toEqual({ steps: 4, done: 1, startedAt: NOW.toISOString() });
+    expect(parseFollowersReconcileCursor({ shadow: { steps: 4, done: 1, startedAt: NOW.toISOString() } }))
+      .toEqual({ generation: 0, walk: null, snapshotRestartCount: 0, lastFullSweepStartedAt: null, last: null });
   });
 
   it("the lookup's asked ids", () => {
@@ -180,7 +164,7 @@ describe("fan profiles", () => {
     expect(lookupFollowups([], "subscribers.poll")).toEqual([]);
     const [signal] = lookupFollowups(["2", "1", "2"], "subscribers.poll");
     expect(signal).toEqual({ resource: "fan-profiles.lookup", ids: ["2", "1"], demand: { reason: "subscribers.poll" } });
-    const upsert = demandToUpsert(signal!, fanslyResourceSpec("fan-profiles.lookup")!, { pageId: 1, shadow: false, now: NOW });
+    const upsert = demandToUpsert(signal!, fanslyResourceSpec("fan-profiles.lookup")!, { pageId: 1, now: NOW });
     expect(upsert).toMatchObject({ resource: "fan-profiles.lookup", kind: "goal", class: "planned", mergeParamIds: { key: "ids", ids: ["2", "1"], cap: 1_000 } });
   });
 });

@@ -126,7 +126,6 @@ describe("config registry", () => {
     "aiMediaDescribeLiveChatOnly",
     "aiMediaDescribeModelMedia",
     "aiMediaDescribeLoopEnabled",
-    "aiMediaDescribeFanslyAcceleratorDailyLimit",
     // Agent Read Plane (slice 0a): read per request / per cycle so the owner's
     // ramp needs no restart. Every one of them rests at off/false.
     "agentReadPlaneMode",

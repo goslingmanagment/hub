@@ -7,7 +7,6 @@ import { setTimeout as sleep } from "node:timers/promises";
 import type { Pool } from "pg";
 
 import {
-  capturePayloadRefFromColumns,
   createFanslyPage,
   createModel,
   ensureFanslyPageSendGuard,
@@ -35,13 +34,13 @@ import { encryptJson, loadConfig, type AppConfig } from "@agency_hub_core/shared
 
 import { readFanslyPageGeneration } from "../../apps/runtime/src/services/egress/fansly-probe-context.ts";
 import { resolveEgress, type AppEgressContext } from "../../apps/runtime/src/services/egress/resolver.ts";
-import { resolveCapturePayloadRow } from "../../apps/runtime/src/services/payload-reader.ts";
 import type { SyncHostOptions } from "../../apps/runtime/src/sync/engine/host.ts";
 import { createPacer, REQUEST_TIMEOUT_MS, type Pacer } from "../../apps/runtime/src/sync/engine/pacer.ts";
 import type {
   Clock,
   LivePageSocket,
   LivePageSocketRef,
+  PageTransport,
   PauseSource,
   Rng,
   SendHooks,
@@ -52,12 +51,10 @@ import {
   createEngineRegistry,
   type EngineRegistry,
   type EngineResourceSpec,
-  type ReplayVerdict,
   type ResourceModule,
 } from "../../apps/runtime/src/sync/engine/resource.ts";
-import type { PageTransport } from "../../apps/runtime/src/sync/engine/shadow.ts";
 import { fanslyCaptureCodec } from "../../apps/runtime/src/sync/fansly/capture.ts";
-import { fanslyReplayOwner, fanslyResourceSpec } from "../../apps/runtime/src/sync/fansly/registry.ts";
+import { fanslyResourceSpec } from "../../apps/runtime/src/sync/fansly/registry.ts";
 import { createMediaDownloadModule, mediaDownloadSubject } from "../../apps/runtime/src/sync/fansly/resources/media-download.ts";
 import { createPageTransport } from "../../apps/runtime/src/sync/fansly/transport.ts";
 import { encryptSyncWorkSecret } from "../../apps/runtime/src/sync/requests/secret-params.ts";
@@ -86,7 +83,7 @@ export { FakeClock, SeededRng, seededRandom } from "./sync-fakes.ts";
 //   (`ws.connect`), whose page socket owner — S3-03's `FanslyWsSource` in
 //   production — is `HarnessSocket`: a real Upgrade of the fake origin
 //   through the page egress with the admission's check.
-// - The journal replay driver, the actor runner and the child process.
+// - The actor runner and the child process.
 //
 // The fake origin speaks plain HTTP behind the CONNECT proxy, as the step-1
 // network helpers do: the tunnel (and with it the "long connect before the
@@ -922,7 +919,6 @@ export async function demandHarnessDownload(
   const descriptionId = Number(description.rows[0]!.id);
   const work = await upsertDemand(handles.db, {
     pageId: input.pageId,
-    shadow: false,
     resource: "media-download.fetch",
     subject: mediaDownloadSubject(descriptionId),
     kind: "trigger",
@@ -960,7 +956,6 @@ function oneRequest(spec: FanslyWireId, extra: Record<string, unknown> = {}): Re
   return {
     plan: async () => ({ kind: "request", request: { spec, params: extra as never } }),
     apply: async () => ({ work: { satisfiesRevision: true, close: "done" }, followups: [] }),
-    shadow: async () => ({ work: { satisfiesRevision: true, close: "done" }, followups: [] }),
   };
 }
 
@@ -975,7 +970,6 @@ export function harnessRegistry(): EngineRegistry {
   const pollModule: ResourceModule = {
     plan: async () => ({ kind: "request", request: { spec: "polls", params: {} } }),
     apply: async () => ({ work: { satisfiesRevision: true }, followups: [] }),
-    shadow: async () => ({ work: { satisfiesRevision: true }, followups: [] }),
   };
   const specs: EngineResourceSpec[] = [
     testSpec(HARNESS_KEY.poll, pollModule, { kind: "poll", class: "planned", period: { everyMs: HARNESS_POLL_EVERY_MS } }),
@@ -1137,67 +1131,6 @@ export function harnessHostOptions(input: {
     liveSocket: input.liveSocket ?? ((page) => new HarnessSocket({ db: input.db, config: input.config }, page.pageId)),
     modeLoopIntervalMs: 200,
   };
-}
-
-// ── the journal replay ("повтор ресурсов на журнале") ───────────────────────
-
-export interface ReplayTally {
-  resource: string;
-  kind: string;
-  total: number;
-  matched: number;
-  mismatches: Array<{ observationId: number; reason: string }>;
-  notReplayable: Array<{ observationId: number; reason: string }>;
-}
-
-/**
- * Every journaled observation of the page whose kind a registry entry
- * replays, oldest first, through its body seam (inline or pointer-only in the
- * content-addressed catalog) and that entry's `replay()` (design §3.12 B5).
- * Read-only. One tally per resource and kind.
- */
-export async function replayPageJournal(
-  handles: HarnessHandles,
-  input: { pageId: number; registry: EngineRegistry; kinds?: readonly string[] },
-): Promise<ReplayTally[]> {
-  const { db } = handles;
-  const rows = await handles.pool.query<{ id: string; receivedAt: Date; kind: string; payload: unknown; bucket: string | null; objectId: string | null }>(
-    `select o.id::text as id, o.received_at as "receivedAt", o.kind, o.payload,
-            to_char(o.payload_bucket_month, 'YYYY-MM-DD') as bucket, o.payload_object_id::text as "objectId"
-       from observations o
-      where o.account_id = $1 and o.platform = 'fansly' and o.source = 'pull'
-      order by o.received_at, o.id`,
-    [input.pageId],
-  );
-  const tallies = new Map<string, ReplayTally>();
-  for (const row of rows.rows) {
-    if (input.kinds !== undefined && !input.kinds.includes(row.kind)) continue;
-    const owner = fanslyReplayOwner(row.kind);
-    if (owner === null) continue;
-    const key = `${owner.key}\u0000${row.kind}`;
-    let tally = tallies.get(key);
-    if (tally === undefined) {
-      tally = { resource: owner.key, kind: row.kind, total: 0, matched: 0, mismatches: [], notReplayable: [] };
-      tallies.set(key, tally);
-    }
-    const observationId = Number(row.id);
-    const resolved = await resolveCapturePayloadRow({ db, logger: quietLogger as never }, "observation", observationId, {
-      payload: row.payload,
-      payloadRef: capturePayloadRefFromColumns(row.bucket, row.objectId),
-    });
-    const module = await input.registry.module(owner.key);
-    const verdict: ReplayVerdict = module.replay === undefined
-      ? { kind: "not_replayable", reason: "no_replay" }
-      : await module.replay(
-        { id: observationId, receivedAt: new Date(row.receivedAt), kind: row.kind, pageId: input.pageId, payload: resolved.payload },
-        { db, pageId: input.pageId },
-      );
-    tally.total += 1;
-    if (verdict.kind === "match") tally.matched += 1;
-    else if (verdict.kind === "mismatch") tally.mismatches.push({ observationId, reason: verdict.reason });
-    else tally.notReplayable.push({ observationId, reason: verdict.reason });
-  }
-  return [...tallies.values()].sort((a, b) => a.resource.localeCompare(b.resource) || a.kind.localeCompare(b.kind));
 }
 
 // ── running ─────────────────────────────────────────────────────────────────

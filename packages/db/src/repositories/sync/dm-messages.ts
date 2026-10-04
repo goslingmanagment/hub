@@ -1,87 +1,11 @@
 import { sql } from "drizzle-orm";
 
 import type { Database } from "../../client.ts";
-import type { DmSenderRole } from "../page-dm.ts";
-import { textArrayParam, toDate, toRequiredDate } from "./values.ts";
+import { textArrayParam } from "./values.ts";
 
 // The Fansly Sync Engine's DM message reads (design §5.4): what its
-// `dm-messages` resource reads besides the thread and its chain — the stored
-// rows a journaled page is replayed against, and which order sidecars of a
-// page the media plane has not recorded yet. Read-only.
-
-export interface StoredDmMessageForReplay {
-  platformMessageId: string;
-  senderRole: DmSenderRole;
-  createdAt: Date;
-  content: string;
-  totalTipAmountCents: number;
-  syncedAt: Date;
-  deletedAt: Date | null;
-}
-
-/** The stored rows of these message ids in one thread (deleted ones too). */
-export async function listStoredDmMessagesForReplay(
-  db: Database,
-  input: { conversationId: number; platformMessageIds: readonly string[] },
-): Promise<StoredDmMessageForReplay[]> {
-  const ids = [...new Set(input.platformMessageIds)];
-  if (ids.length === 0) return [];
-  const result = await db.execute<{
-    platformMessageId: string;
-    senderRole: DmSenderRole;
-    createdAt: Date | string;
-    content: string;
-    totalTipAmountCents: number | string;
-    syncedAt: Date | string;
-    deletedAt: Date | string | null;
-  }>(sql`
-    select m.platform_message_id as "platformMessageId",
-           m.sender_role::text as "senderRole",
-           m.created_at as "createdAt",
-           m.content,
-           m.total_tip_amount_cents as "totalTipAmountCents",
-           m.synced_at as "syncedAt",
-           m.deleted_at as "deletedAt"
-      from page_dm_messages m
-     where m.conversation_id = ${input.conversationId}
-       and m.platform_message_id = any(${textArrayParam(ids)})
-  `);
-  return result.rows.map((row) => ({
-    platformMessageId: row.platformMessageId,
-    senderRole: row.senderRole,
-    createdAt: toRequiredDate(row.createdAt),
-    content: row.content,
-    totalTipAmountCents: Number(row.totalTipAmountCents),
-    syncedAt: toRequiredDate(row.syncedAt),
-    deletedAt: toDate(row.deletedAt),
-  }));
-}
-
-/** What legacy stored of one thread, for judging the rows of a journaled
- *  page it did not store (design §3.12 B5): the oldest stored message by
- *  snowflake order (deleted rows included: they were stored too), and whether
- *  legacy marks the thread's history complete. */
-export interface LegacyDmStoredWindow {
-  lowestStoredId: string | null;
-  legacyClaimsComplete: boolean;
-}
-
-export async function readLegacyDmStoredWindow(
-  db: Database,
-  input: { conversationId: number },
-): Promise<LegacyDmStoredWindow> {
-  const result = await db.execute<{ lowestStoredId: string | null; legacyClaimsComplete: boolean | null }>(sql`
-    select (select min(m.platform_message_id::numeric)::text
-              from page_dm_messages m
-             where m.conversation_id = t.id
-               and m.platform_message_id ~ '^[0-9]{1,30}$') as "lowestStoredId",
-           t.message_coverage_status = 'complete' as "legacyClaimsComplete"
-      from page_dm_threads t
-     where t.id = ${input.conversationId}
-  `);
-  const row = result.rows[0];
-  return { lowestStoredId: row?.lowestStoredId ?? null, legacyClaimsComplete: row?.legacyClaimsComplete === true };
-}
+// `dm-messages` resource reads besides the thread and its chain — which order
+// sidecars of a page the media plane has not recorded yet. Read-only.
 
 export interface SidecarOrderKey {
   /** `media_orders.media_offer_ref`: the bundle id, else the media id. */

@@ -2383,9 +2383,11 @@ export const agentHistoryRequestListResponseSchema = z.object({
 // `agentSyncStatus` / `agentSyncWhy`; the owner routes in `routes-sync.ts`
 // serve the same shapes.
 //
-// A page that is `off` or `shadow` reports its SHADOW journal (`shadow: true`
-// on each work row): simulated work, nothing was sent. In step 2 every page is
-// one of the two.
+// No actor runs a page that is `off` or `shadow` (shadow mode is gone, step 4
+// S4-23; both stay values a row may hold): nothing is sent for it, and the
+// rows shadow mode left are never served. The `shadow` fields below are
+// wire-only constants since then — the released clients' schemas require the
+// keys, so they stay until a contract change retires them.
 //
 // The vocabularies mirror closed lists of the server
 // (`packages/db/src/repositories/sync/*.ts`, `apps/runtime/src/sync/engine/
@@ -2535,7 +2537,7 @@ export const agentSyncPageStatusSchema = z.object({
     gapSince: agentIsoTimestamp.nullable(),
     decodeDebt: agentSyncCountSchema,
   }).strict().nullable(),
-  /** A page in `off`/`shadow`: what its shadow journal did over the hour. */
+  /** Always null since step 4 (S4-23): no page has a shadow journal. */
   shadow: z.object({
     attemptsLastHour: agentSyncCountSchema,
     demandVsEstimate: z.number().nonnegative().nullable(),
@@ -2549,7 +2551,7 @@ export const agentSyncWorkSchema = z.object({
   resource: z.string().min(1),
   /** '' for page-level work; a chat, fan, media … id otherwise. */
   subject: z.string(),
-  /** The shadow journal: simulated work, nothing was sent. */
+  /** Always false since step 4 (S4-23): a row shadow mode left is never served. */
   shadow: z.boolean(),
   kind: agentSyncWorkKindEnum,
   class: agentSyncWorkClassEnum,

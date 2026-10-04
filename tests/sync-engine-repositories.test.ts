@@ -13,8 +13,9 @@ import { sortDemandSignals } from "@agency_hub_core/db";
 // (`createLiveSyncPage`, step 4 S4-05), and nothing else calls it. Nothing
 // makes an existing page `handover` or `live`, takes a page out of `live`, or
 // flips a send guard row's owner: the step-3 switch, its rollback and the
-// switch capability that opened those transitions are gone (step 4 S4-21), and
-// `setSyncPageMode` knows `off ↔ shadow` alone.
+// switch capability that opened those transitions are gone (step 4 S4-21).
+// Nothing makes a page `shadow` either (step 4 S4-23): `setSyncPageMode` knows
+// `shadow → off` alone, the way out of a mode no actor runs any more.
 
 const root = join(__dirname, "..");
 
@@ -38,11 +39,11 @@ function filesMatching(pattern: string, dirs: readonly string[]): string[] {
 const SOURCES = ["apps/runtime/src", "packages"] as const;
 
 describe("Fansly Sync Engine repository boundaries", () => {
-  it("has no switch capability and no mode change but off ↔ shadow (I17, step 4 S4-21)", () => {
+  it("has no switch capability and no mode change but shadow → off (I17, step 4 S4-21 and S4-23)", () => {
     expect(filesMatching("SyncSwitchCapability|issueSyncSwitchCapability|capability_required", SOURCES)).toEqual([]);
     const pages = readFileSync(join(root, "packages/db/src/repositories/sync/pages.ts"), "utf8");
-    expect(pages).toContain('const OWNER_TRANSITIONS: ReadonlySet<string> = new Set(["off>shadow", "shadow>off"]);');
-    expect(pages).not.toMatch(/[a-z]+>(handover|live)|(handover|live)>[a-z]+/);
+    expect(pages).toContain('const OWNER_TRANSITIONS: ReadonlySet<string> = new Set(["shadow>off"]);');
+    expect(pages).not.toMatch(/[a-z]+>(handover|live|shadow)|(handover|live)>[a-z]+/);
     // The one statement that changes a mode is setSyncPageMode's, behind that set.
     expect(pages.match(/set mode = \$\{input\.to\}/g)).toHaveLength(1);
     expect(pages).toMatch(/if \(!OWNER_TRANSITIONS\.has\(`\$\{from\}>\$\{input\.to\}`\)\) \{\s+return \{ kind: "refused", from, to: input\.to, reason: "transition_not_allowed" \};/);

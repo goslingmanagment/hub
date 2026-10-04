@@ -5,7 +5,6 @@ import {
   type MediaStatsTier,
 } from "@agency_hub_core/db";
 
-import { fanslyUtcDayKey } from "./lane.ts";
 import { classifyStatsWindow, parseWindowGuard, type BackfillWindowGuard } from "./stats-rules.ts";
 
 // The per-media statistics rules of the Sync Engine's `media-stats.*`
@@ -94,21 +93,6 @@ export const LONG_TAIL_SPLIT_WINDOWS = 3;
  *  that does not is clamped to the chunk, and its hole is left open, visit
  *  after visit. */
 const REFRESH_WINDOWS_PER_VISIT = 4;
-/**
- * What a FIRST visit costs, per tier: the first-sight walk it starts. A fresh
- * item's walk is its trailing window and the one below it, where the item's
- * creation ends it; a mid or long-tail walk takes the visit's whole allowance,
- * whose four windows reach 121 days back and so hold any steady plan. An upper
- * bound on the one visit — production 2026-09-30, a mid visit that walked spent
- * 2.6 calls on average, the chunk's five requests cutting some short — and the
- * rest of the walk is spent on the item's next visits anyway.
- */
-export const FIRST_VISIT_REQUESTS = {
-  fresh: 2,
-  mid: BACKFILL_WINDOWS_PER_VISIT,
-  longTail: BACKFILL_WINDOWS_PER_VISIT,
-} as const;
-
 /** The platform's own top-N page size. */
 export const TOP_MEDIA_MARK_LIMIT = 50;
 
@@ -122,31 +106,6 @@ export const TOP_MEDIA_MARK_LIMIT = 50;
  * long-tail visit costs, so the mode is reported in the progress block.
  */
 export type LongTailWindowMode = "unproven" | "ninety" | "split_31";
-
-export interface FanslyMediaStatsCursorState {
-  version: 1;
-  /** The UTC day `callsToday` belongs to; a different day resets the counters. */
-  utcDay: string;
-  /** HTTP ATTEMPTS spent by this lane on `utcDay`. Retries included. */
-  callsToday: number;
-  /** Due items this lane could not reach today because the cap was spent.
-   *  Reported, never acted on: they are simply first in tomorrow's queue. */
-  deferredToday: number;
-  /** Keyset cursor of the first-enable seeding sweep. */
-  seedCursor: string | null;
-  seedComplete: boolean;
-  /** The UTC day the top-50 dirty marks were last refreshed. Zero calls. */
-  topMarkedDay: string | null;
-  longTailWindowMode: LongTailWindowMode;
-  /** The narrow-answer discovery is announced ONCE, ever. A downgrade after an
-   *  HTTP refusal of the 90-day window is announced when it happens. */
-  longTailWindowAnnounced: boolean;
-  /** The UTC day a 31-day probe after a refused 90-day window last FAILED on
-   *  this page. One failed probe per page per day: an item that is simply gone
-   *  fails on 31 days too, and must not buy a second failing request on every
-   *  admission. */
-  longTailProbeFailedDay: string | null;
-}
 
 /** The per-MEDIA first-sight backfill, stored in
  *  `subject_refresh_state.backfill_cursor`. */
@@ -202,50 +161,6 @@ function asNullableString(value: unknown): string | null {
 
 function asNullableSafeInt(value: unknown): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) ? value : null;
-}
-
-function asLongTailMode(value: unknown): LongTailWindowMode {
-  return value === "ninety" || value === "split_31" ? value : "unproven";
-}
-
-export function parseFanslyMediaStatsCursorState(
-  value: unknown,
-): FanslyMediaStatsCursorState | null {
-  const state = asRecord(value);
-  if (!state || state.version !== 1) {
-    return null;
-  }
-  const utcDay = asNullableString(state.utcDay);
-  if (utcDay === null) {
-    return null;
-  }
-  return {
-    version: 1,
-    utcDay,
-    callsToday: Math.max(0, asInt(state.callsToday, 0)),
-    deferredToday: Math.max(0, asInt(state.deferredToday, 0)),
-    seedCursor: asNullableString(state.seedCursor),
-    seedComplete: state.seedComplete === true,
-    topMarkedDay: asNullableString(state.topMarkedDay),
-    longTailWindowMode: asLongTailMode(state.longTailWindowMode),
-    longTailWindowAnnounced: state.longTailWindowAnnounced === true,
-    longTailProbeFailedDay: asNullableString(state.longTailProbeFailedDay),
-  };
-}
-
-export function emptyFanslyMediaStatsCursorState(now: Date): FanslyMediaStatsCursorState {
-  return {
-    version: 1,
-    utcDay: fanslyUtcDayKey(now),
-    callsToday: 0,
-    deferredToday: 0,
-    seedCursor: null,
-    seedComplete: false,
-    topMarkedDay: null,
-    longTailWindowMode: "unproven",
-    longTailWindowAnnounced: false,
-    longTailProbeFailedDay: null,
-  };
 }
 
 /** A cursor written before this lane existed parses as an item that has walked

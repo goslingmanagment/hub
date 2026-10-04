@@ -12,15 +12,7 @@ import {
   prepareJournalBody,
   servedFromJournalBody,
 } from "../apps/runtime/src/sync/fansly/capture.ts";
-import {
-  advanceShadowPass,
-  currentShadowPass,
-  EMPTY_SHADOW_PASS,
-  parseShadowPass,
-  QUEUE_SUBJECT_BREAKER,
-  shadowPassNumber,
-  shadowPassWaitUntil,
-} from "../apps/runtime/src/sync/fansly/lib/subject-queue.ts";
+import { QUEUE_SUBJECT_BREAKER } from "../apps/runtime/src/sync/fansly/lib/subject-queue.ts";
 import { FANSLY_RESOURCE_SPECS } from "../apps/runtime/src/sync/fansly/registry.ts";
 import {
   completeForward,
@@ -42,7 +34,7 @@ import {
 
 // The pure parts of the content resources (design §5.14–§5.16, §4.3): the
 // notification type-form fork, the walk boundaries, the reply pagination
-// discovery, the shadow pass of a subject-queue walk, the journal envelopes
+// discovery, the queue breaker of a subject-queue walk, the journal envelopes
 // and the standing rows of a page.
 
 const NOW = new Date("2026-10-02T12:00:00Z");
@@ -110,7 +102,7 @@ describe("the notifications walks", () => {
   it("cursors survive whatever a row holds", () => {
     expect(parseForwardCursor(null)).toEqual({
       newestSeenNotificationId: null, lastForwardPollAt: null, form: UNFILTERED_FORM, unfilteredProbeSpent: false,
-      postLikesCoverageWritten: false, walk: null, last: null, shadow: null,
+      postLikesCoverageWritten: false, walk: null, last: null,
     });
     expect(parseForwardCursor({ form: { mode: "nonsense", groupIndex: -3 }, walk: "x" }).form).toEqual(UNFILTERED_FORM);
     expect(parseBackfillCursor({})).toMatchObject({ nextBeforeRef: "0", lastRequestedBefore: null, floorAt: null, lastObservationId: null });
@@ -133,7 +125,10 @@ describe("the posts walk", () => {
   });
 
   it("cursors survive whatever a row holds", () => {
-    expect(parsePostsWalkCursor(null)).toEqual({ headPostId: null, tipsBackfilledAt: null, walk: null, last: null, shadow: null });
+    expect(parsePostsWalkCursor(null)).toEqual({ headPostId: null, tipsBackfilledAt: null, walk: null, last: null });
+    // What a shadow walk left in a cursor (step 4 S4-23 removed it) is not read.
+    expect(parsePostsWalkCursor({ headPostId: "7", shadow: { steps: 5, done: 2 } }))
+      .toEqual({ headPostId: "7", tipsBackfilledAt: null, walk: null, last: null });
     expect(parsePostsWalkCursor({ walk: { before: "9", pendingTips: ["1", 2], end: "nope" } }).walk).toMatchObject({
       before: "9", pendingTips: ["1"], end: null, pageIndex: 0,
     });
@@ -160,52 +155,7 @@ describe("the reply walk", () => {
   });
 });
 
-describe("the shadow pass of a subject-queue walk", () => {
-  const recheckMs = 6 * HOUR;
-
-  it("steps through the due subjects by keyset and rests at the end of the pass", () => {
-    const first = advanceShadowPass({ pass: EMPTY_SHADOW_PASS, now: NOW, recheckMs, taken: [{ keyset: "k1" }, { keyset: "k2" }], limit: 2 });
-    expect(first).toEqual({ pass: { after: "k2", startedAt: NOW.toISOString(), ended: false, number: 1 }, nextDueAt: NOW });
-    const later = new Date(NOW.getTime() + 60_000);
-    const last = advanceShadowPass({ pass: first.pass, now: later, recheckMs, taken: [{ keyset: "k3" }], limit: 2 });
-    expect(last.pass).toEqual({ after: null, startedAt: NOW.toISOString(), ended: true, number: 1 });
-    // The next pass starts one re-check period after this one started.
-    expect(last.nextDueAt).toEqual(new Date(NOW.getTime() + recheckMs));
-    expect(currentShadowPass(last.pass, later, recheckMs).ended).toBe(true);
-    expect(currentShadowPass(last.pass, new Date(NOW.getTime() + recheckMs), recheckMs)).toEqual(EMPTY_SHADOW_PASS);
-  });
-
-  it("waits a whole period when no pass is running, and never waits into the past", () => {
-    expect(shadowPassWaitUntil(EMPTY_SHADOW_PASS, NOW, recheckMs)).toEqual(new Date(NOW.getTime() + recheckMs));
-    const stale = { after: null, startedAt: new Date(NOW.getTime() - 2 * recheckMs).toISOString(), ended: true, number: 1 };
-    expect(shadowPassWaitUntil(stale, NOW, recheckMs).getTime()).toBeGreaterThan(NOW.getTime());
-  });
-
-  it("numbers the passes: a step names the current pass, or the next one it begins", () => {
-    const first = advanceShadowPass({ pass: EMPTY_SHADOW_PASS, now: NOW, recheckMs, taken: [{ keyset: "k1" }], limit: 1 }).pass;
-    expect(shadowPassNumber(EMPTY_SHADOW_PASS, NOW, recheckMs)).toBe(1);
-    const later = new Date(NOW.getTime() + 60_000);
-    expect(shadowPassNumber(first, later, recheckMs)).toBe(1);
-    // A visit picked in the pass and finished after its period: the next
-    // pass goes on after the visit's subject.
-    const expired = new Date(NOW.getTime() + recheckMs);
-    expect(shadowPassNumber(first, expired, recheckMs)).toBe(2);
-    expect(advanceShadowPass({ pass: first, now: expired, recheckMs, taken: [{ keyset: "k2" }], limit: 1 }).pass)
-      .toEqual({ after: "k2", startedAt: expired.toISOString(), ended: false, number: 2 });
-    // The next pass from the head names 2 until a step stores it: a walk that
-    // never stores its pass names the same one again and again.
-    expect(shadowPassNumber(first, new Date(expired.getTime() + 1), recheckMs)).toBe(2);
-  });
-
-  it("parses a pass without a start as no pass, and one an older build began as unnumbered", () => {
-    expect(parseShadowPass({ after: "k" })).toEqual(EMPTY_SHADOW_PASS);
-    expect(parseShadowPass({ after: "k", startedAt: NOW.toISOString(), ended: false, number: 3 }))
-      .toEqual({ after: "k", startedAt: NOW.toISOString(), ended: false, number: 3 });
-    const older = parseShadowPass({ after: "k", startedAt: NOW.toISOString(), ended: false });
-    expect(older).toEqual({ after: "k", startedAt: NOW.toISOString(), ended: false, number: 0 });
-    expect(shadowPassNumber(older, new Date(NOW.getTime() + recheckMs), recheckMs)).toBe(1);
-  });
-
+describe("subject-queue walks", () => {
   it("the queue breaker climbs the engine's subject ladder", () => {
     expect(QUEUE_SUBJECT_BREAKER).toEqual({
       stepsMs: [60_000, 600_000, 3_600_000, 21_600_000, 86_400_000],
@@ -292,7 +242,7 @@ describe("the engine's journal of the content routes", () => {
 describe("standing rows", () => {
   it("a page keeps one open row per poll and per standing walk", () => {
     const registry = createEngineRegistry(FANSLY_RESOURCE_SPECS);
-    const rows = pollsFor(registry, { registryOverrides: {} }, true);
+    const rows = pollsFor(registry, { registryOverrides: {} });
     expect(rows.filter((row) => row.kind === "goal").map((row) => row.resource).sort()).toEqual([
       "catalog.vault", "media-stats.walk", "post-replies.walk", "posts.engagement",
     ]);
@@ -300,7 +250,7 @@ describe("standing rows", () => {
     // A poll row stays exactly what it was.
     expect(rows.find((row) => row.resource === "notifications.forward")).toEqual({ resource: "notifications.forward", class: "planned", everyMs: 30 * 60_000 });
     // The owner switches a walk off like any key.
-    expect(pollsFor(registry, { registryOverrides: { "post-replies.walk": { enabled: false } } }, true).map((row) => row.resource)).not.toContain("post-replies.walk");
+    expect(pollsFor(registry, { registryOverrides: { "post-replies.walk": { enabled: false } } }).map((row) => row.resource)).not.toContain("post-replies.walk");
   });
 
   it("a standing walk must be a goal with a re-check period", () => {

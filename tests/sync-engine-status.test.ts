@@ -24,7 +24,7 @@ const OPEN_SLOT: RuntimeSnapshot = { slotOpensAt: null };
 
 function page(overrides: Partial<StatusPage> = {}): StatusPage {
   return {
-    mode: "shadow",
+    mode: "live",
     pausedAll: false,
     pausedRequests: false,
     pausedResources: [],
@@ -92,6 +92,8 @@ describe("sync status: why a work row waits", () => {
   it("ownership_unconfirmed when no actor runs the page", () => {
     expect(reason(work(), page({ mode: "off" }))).toBe("ownership_unconfirmed");
     expect(reason(work(), page({ mode: "handover" }))).toBe("ownership_unconfirmed");
+    // Shadow mode is gone (step 4 S4-23): a row left in it has no actor either.
+    expect(reason(work(), page({ mode: "shadow" }))).toBe("ownership_unconfirmed");
     const stale = page();
     stale.owner.heartbeatAt = at(-OWNER_HEARTBEAT_FRESH_MS - 1);
     expect(reason(work(), stale)).toBe("ownership_unconfirmed");
@@ -243,7 +245,7 @@ describe("sync status: estimates and summaries", () => {
     });
     expect(status).toMatchObject({
       pageLabel: "lora-1",
-      mode: "shadow",
+      mode: "live",
       owner: { generation: "3", host: "sync-1", running: true },
       pause: { settingMs: 2_000, lastSendAt: at(-10_000).toISOString(), minGapLastHourMs: 2_013, violationsLastDay: 0 },
       holds: {
@@ -254,7 +256,6 @@ describe("sync status: estimates and summaries", () => {
       quarantined: 1,
       requests: [],
       ws: null,
-      shadow: null,
     });
     expect(status.queue.planned.waitingByReason).toEqual({ page_hold: 3 });
     expect(JSON.parse(JSON.stringify(status))).toEqual(status);

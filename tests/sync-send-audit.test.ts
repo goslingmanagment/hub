@@ -16,7 +16,7 @@ import { RouteClocks, EMPTY_ROUTE_STATE } from "../apps/runtime/src/sync/engine/
 import { FAMILY_BUDGETS, intervalMsOf, routeBudget } from "../apps/runtime/src/sync/fansly/routes.ts";
 
 // The send audit (invariants I1 and I19; arena 3b-review G1), pure: the one
-// checker of the alert evaluator, `sync check live-hour` and the shadow report.
+// checker of the alert evaluator and `sync check live-hour`.
 // I1 by each send's own recorded pause — on the recorded instants and, one
 // owner's pair, on its pacer's monotonic gap too — I19 by each admission's
 // recorded route and family intervals over adjacent pairs — with the arena's
@@ -34,7 +34,6 @@ function engine(seconds: number, operation: string, overrides: Partial<FanslySen
   ref += 1;
   return {
     journal: "engine",
-    shadow: false,
     source: null,
     ref,
     operation,
@@ -182,13 +181,6 @@ describe("I1: every pair of adjacent sends ≥ the later send's own pause", () =
     expect(auditPagePace([before, left, takeover(31)], WINDOW)).toMatchObject({ verdict: "pass", pairs: 2 });
     // Without it the pair would silently be (previous recorded send → next send): 19 s, a pass.
     expect(auditPagePace([before, takeover(29)], WINDOW).verdict).toBe("pass");
-  });
-
-  it("the shadow journal's sends are simulated: an attempt without an instant simulated none", () => {
-    const shadow = { shadow: true };
-    const closed = unrecorded(11, "notifications.page", shadow);
-    const rows = [engine(10, "notifications.page", shadow), closed, engine(13, "notifications.page", shadow)];
-    expect(auditPagePace(rows, WINDOW)).toMatchObject({ verdict: "pass", pairs: 1, inconclusive: [] });
   });
 
   it("judges the later sends of the window only; an earlier one is the first one's predecessor", () => {

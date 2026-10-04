@@ -176,7 +176,6 @@ async function answeredUpgrade(answer: (handler: FakeHandler, controller: { abor
   answer(handler, controller);
   const settled = await lease.settled;
   const outcome = upgradeOutcome(lease, settled);
-  if (outcome.kind === "shadow") throw new Error("an Upgrade is never a shadow outcome");
   const classified = classifyWireOutcome(outcome, fanslyWireSpec("ws.upgrade"), {}, { now: NOW });
   return { settled, classified, upstream, controller };
 }
@@ -285,9 +284,11 @@ describe("the socket source", () => {
     expect(enqueued).toEqual([]);
   });
 
-  it("is created only for a live slot, started after its actor and stopped before the page's safe release", () => {
+  it("is created with its page's slot — a live page's alone — started after its actor and stopped before the page's safe release", () => {
     const host = read("apps/runtime/src/sync/engine/host.ts");
-    expect(host).toContain('const ws = mode === "live" ? this.#createWsSource(page, generation) : null;');
+    // A slot is a live page's: the mode loop acquires no other.
+    expect(host).toMatch(/#runs\(page: SyncPageRow\): boolean \{\s+return page\.mode === "live" && this\.#liveLoopEnabled;/);
+    expect(host).toContain("const ws = this.#createWsSource(page, generation);");
     const exit = host.slice(host.indexOf("async #onActorExit("));
     expect(exit.indexOf("await slot.ws?.stop(")).toBeGreaterThan(-1);
     expect(exit.indexOf("await slot.ws?.stop(")).toBeLessThan(exit.indexOf("this.#release(slot.pageId, slot.generation)"));
