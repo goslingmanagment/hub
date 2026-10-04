@@ -206,6 +206,8 @@ export interface CreateDeviceTokenInput {
   expiresAt: Date;
   /** Decision 349 (Р7): the issuing client's x-client-version, when known. */
   lastClientVersion?: string | null | undefined;
+  /** chat-extension H-3: the narrow token's client profile; absent/null = a full token. */
+  clientProfile?: string | null | undefined;
 }
 
 export interface CreatePendingDeviceTokenInput {
@@ -224,6 +226,7 @@ export async function createDeviceToken(db: Database, input: CreateDeviceTokenIn
     keyPrefix: input.keyPrefix,
     expiresAt: input.expiresAt,
     lastClientVersion: input.lastClientVersion ?? null,
+    clientProfile: input.clientProfile ?? null,
   }).returning();
   return created!;
 }

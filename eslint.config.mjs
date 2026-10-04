@@ -51,6 +51,8 @@ export default tseslint.config(
       "docs/**",
       "packages/contracts/src/generated/**",
       ".playwright-cli/**",
+      // Frozen client SDK bundles (H-1a): generated third-party code, ~1 MB each.
+      "tests/fixtures/client-sdks/**",
     ],
   },
   js.configs.recommended,

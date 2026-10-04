@@ -63,6 +63,19 @@ export function millsFromCents(value: number | bigint): Mills {
   return cents * 10n;
 }
 
+/**
+ * Mills → whole cents, the way back over the same bridge (a reader of
+ * `message_archive.tip_amount_mills` serving a `…Cents` field). Exact on
+ * whole cents (the inverse of `millsFromCents`); a sub-cent rest rounds half
+ * away from zero, as the legacy Fansly cents write rounds a mills amount.
+ */
+export function millsToWholeCents(value: MillsLike): number {
+  const mills = millsFromInteger(value);
+  const magnitude = mills < 0n ? -mills : mills;
+  const cents = (magnitude + 5n) / 10n;
+  return Number(mills < 0n ? -cents : cents);
+}
+
 /** Dollars → micro-USD (AI plane). Rounded to the nearest integer micro-USD. */
 export function microUsdFromDollars(value: number): MicroUsd {
   if (!Number.isFinite(value)) {

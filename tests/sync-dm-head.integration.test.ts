@@ -44,8 +44,8 @@ import {
 // `sync-dm-head`) through the real actor and commits against a real
 // database; a scripted transport plays Fansly's `/message` (newest first, 25
 // a page, `before` strictly below). Pinned: one head read confirms a socket
-// message into every store in one commit (hot table, chain, legacy summary,
-// overlay, events, archive); a demand that arrives during the read is read
+// message into every store in one commit (hot table, chain, the summary from
+// the archive, the overlay confirmed against the archive, events, archive); a demand that arrives during the read is read
 // again (I11); an id the vendor does not show yet is retried at 15 s and
 // 60 s, then settled not found; more than 25 new messages are read down until
 // the staged walk meets the chain, which moves only then; the archive is fed
@@ -150,7 +150,9 @@ interface ThreadSeed {
   excluded?: boolean;
 }
 
-/** A thread as legacy and the journal rebuild left it. */
+/** A thread as legacy and the journal rebuild left it: its stored messages in
+ *  page_dm_messages and, projected, in message_archive (the store a live
+ *  page's readers and the engine's summary read, step 4 S4-08). */
 async function seedThread(pageId: number, seed: ThreadSeed): Promise<number> {
   const groupId = groupOf(seed.n);
   const [fan] = await upsertFans(db(), [{ platform: "fansly" as const, platformUserId: FAN }]);
@@ -184,6 +186,17 @@ async function seedThread(pageId: number, seed: ThreadSeed): Promise<number> {
       inReplyToMessageId: null,
       inReplyToRootMessageId: null,
     })));
+    await testDb!.pool.query(
+      `insert into message_archive (account_id, platform, conversation_ref, message_ref, fan_native_id, sender_role,
+              is_sent_by_me, occurred_at, text_plain)
+       select $1, 'fansly', $2, m.ref, $3, case when m.mine then 'model' else 'fan' end, m.mine, m.at, m.text
+         from unnest($4::text[], $5::boolean[], $6::timestamptz[], $7::text[]) as m(ref, mine, at, text)
+       on conflict (account_id, platform, message_ref) do nothing`,
+      [
+        pageId, groupId, FAN, stored.map(msg), stored.map((k) => senderOf(k) === OWN),
+        stored.map((k) => new Date(Math.floor((BASE_MS + k * 1000) / 1000) * 1000)), stored.map((k) => `message ${k}`),
+      ],
+    );
   }
   if (seed.chain === true && stored.length > 0) {
     const chain: ThreadChainState = {
@@ -329,7 +342,7 @@ async function scalar(text: string, values: unknown[]): Promise<number> {
 const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, index) => from + index);
 
 describe("dm-messages.head", () => {
-  it("confirms a socket message with one head read: hot table, chain, legacy summary, overlay, events and archive in one commit", async (context) => {
+  it("confirms a socket message with one head read: hot table, chain, summary, overlay, events and archive in one commit", async (context) => {
     if (!testDb) return context.skip();
     const pageId = await seedPage();
     const threadId = await seedThread(pageId, { n: 1, stored: range(1, 20), chain: true });
@@ -353,7 +366,8 @@ describe("dm-messages.head", () => {
     expect(after).toMatchObject({
       head_confirmed_id: msg(23), contiguous_oldest_id: msg(1), contiguous_count: 23, chain_upward_count: "3",
       history_state: "partial", chain_source: "engine",
-      // Incremental: the 3 inserted rows on top of what legacy counted.
+      // Incremental: the 3 messages the archive feed stored on top of what
+      // the archive held.
       stored_message_count: 23, newest_stored_message_id: msg(23), oldest_stored_message_id: msg(1),
       message_coverage_status: "partial_window", message_backfill_complete: false,
     });
@@ -363,9 +377,9 @@ describe("dm-messages.head", () => {
     expect(head!.applied_revision).toBe(head!.demand_revision);
     expect(await workRow(pageId, "dm-messages.catchup", 1)).toMatchObject({ state: "done", close_reason: "covered_by_head" });
 
-    // The overlay row is confirmed against the row this read wrote.
+    // The overlay row is confirmed against the archive row this read fed.
     const overlay = await testDb.pool.query("select confirm_outcome, confirm_source, confirmed_at from dm_live_messages where platform_message_id = $1", [msg(23)]);
-    expect(overlay.rows[0]).toMatchObject({ confirm_outcome: "match", confirm_source: "page_dm_messages" });
+    expect(overlay.rows[0]).toMatchObject({ confirm_outcome: "match", confirm_source: "message_archive" });
     // The journal: the verbatim page, its request as coverage evidence.
     const attempt = await testDb.pool.query<{ evidence: boolean; request: { params: unknown; query: Record<string, string> }; observation_id: string; apply_state: string }>(
       "select evidence, request, observation_id::text, apply_state from sync_attempts where page_id = $1 and resource = 'dm-messages.head'",
@@ -601,6 +615,7 @@ describe("dm-messages.head", () => {
             [`fan:fansly:${FAN}`, Number(user.rows[0]!.id), JSON.stringify({ resolvedFanGroupIds: [groupOf(18)] })],
           );
           await testDb!.pool.query("delete from page_dm_threads where id = $1", [threadId]);
+          await testDb!.pool.query("delete from message_archive where account_id = $1 and conversation_ref = $2", [pageId, groupOf(18)]);
         },
       });
     expect(await workRow(pageId, "dm-messages.head", 18)).toMatchObject({ state: "done", close_reason: "thread_missing" });
