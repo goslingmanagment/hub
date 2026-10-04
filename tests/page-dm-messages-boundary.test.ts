@@ -78,13 +78,12 @@ const SANCTIONED_FILES: Record<string, string> = {
   "apps/runtime/src/sync/fansly/resources/dm-messages.ts": "comment: the DM apply writes no hot row",
   "apps/runtime/src/sync/fansly/lib/dm-normalize.ts": "comment: the legacy lanes stored its rows, the engine does not",
   "packages/db/src/repositories/fansly-ws-deletions.ts": "markFanslyWsHotDeletion (the engine's mark)",
-  // The reader parity (S4-06) and the shadow report compare against legacy's rows.
+  // The reader parity (S4-06) compares against legacy's rows. (The shadow
+  // report and its replay did too, until S4-22 deleted them.)
   "apps/runtime/src/sync/cli/dm-reader-parity.ts": "the reader parity CLI",
   "apps/runtime/src/sync/parity/classify.ts": "the reader parity",
   "apps/runtime/src/sync/parity/run.ts": "the reader parity",
   "packages/db/src/repositories/sync/dm-reader-parity.ts": "the reader parity",
-  "packages/db/src/repositories/sync/dm-messages.ts": "the replay's comparison with the rows legacy stored",
-  "packages/db/src/repositories/sync/observability.ts": "the shadow report: when legacy first held a message",
   // What is left of the legacy Fansly DM code since S4-14 deleted its handlers
   // and S4-15 the targeted backfill with its page fetch.
   "packages/db/src/repositories/fansly-dm-reader-heads.ts": "the exact-id reader heads of the WS recovery manifest",

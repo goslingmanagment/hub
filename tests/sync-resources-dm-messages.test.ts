@@ -6,7 +6,7 @@ import type { FanslyMessage } from "@agency_hub_core/fansly";
 import { demandToUpsert } from "../apps/runtime/src/sync/engine/resource.ts";
 import { emptyChain, type ThreadChain } from "../apps/runtime/src/sync/fansly/lib/chain.ts";
 import { normalizeFanslyDmMessages } from "../apps/runtime/src/sync/fansly/lib/dm-normalize.ts";
-import { createFanslyRegistry, fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";
+import { fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";
 import {
   DM_HEAD_NOT_FOUND_RETRY_MS,
   dmMessagesModule,
@@ -202,13 +202,10 @@ describe("registry and shadow", () => {
     } as unknown as SyncWorkRow;
   }
 
-  it("the three variants are implemented and replay the journal's dm_messages pages", async () => {
-    const registry = createFanslyRegistry();
+  it("the three variants are implemented", () => {
     for (const key of ["dm-messages.head", "dm-messages.catchup", "dm-messages.history"]) {
       expect(fanslyResourceSpec(key)?.module, key).toBeDefined();
-      expect(typeof (await registry.module(key)).replay, key).toBe("function");
     }
-    expect(fanslyResourceSpec("dm-messages.head")?.replayKinds).toEqual(["dm_messages"]);
   });
 
   it("coalesces a head read 5 s / 20 s, and 2 s / 6 s for a fast signal", () => {

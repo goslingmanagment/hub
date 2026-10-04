@@ -16,7 +16,7 @@ import { RouteClocks, EMPTY_ROUTE_STATE } from "../apps/runtime/src/sync/engine/
 import { FAMILY_BUDGETS, intervalMsOf, routeBudget } from "../apps/runtime/src/sync/fansly/routes.ts";
 
 // The send audit (invariants I1 and I19; arena 3b-review G1), pure: the one
-// checker of the alert evaluator, `sync check live-hour` and the shadow report.
+// checker of the alert evaluator and `sync check live-hour`.
 // I1 by each send's own recorded pause — on the recorded instants and, one
 // owner's pair, on its pacer's monotonic gap too — I19 by each admission's
 // recorded route and family intervals over adjacent pairs — with the arena's

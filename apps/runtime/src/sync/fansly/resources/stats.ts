@@ -57,7 +57,6 @@ import {
   type ShadowResult,
   type StepPlan,
 } from "../../engine/resource.ts";
-import { replayByCanonicalDrafts } from "../lib/family-replay.ts";
 import { advanceShadowWalk, type ShadowWalkProgress } from "../lib/offset-walk.ts";
 import { readFanslyPageFacts } from "../lib/page-facts.ts";
 import { fanslyResourceSpec } from "../registry.ts";
@@ -288,14 +287,10 @@ function foldBroadcast(walk: BroadcastState, response: unknown, counters: Record
   return { walk: { ...next.walk, stop: next.stop ?? walk.stop }, stepDone: next.stepDone };
 }
 
-/** A shadow sweep's steps at most (a guard on the estimate's loop). */
-const DAILY_SWEEP_STEPS_MAX = 100;
-
 /**
  * One shadow step of the daily sweep at `index` (no answers): the discovery
  * read counts its sweep's pages, the earnings window one read, a broadcast
- * list not at its floor a sweep's three pages. Pure: `shadow()` and the
- * report's assumed run size (rule A1.rate-assumed) step the same way.
+ * list not at its floor a sweep's three pages. Pure.
  */
 function shadowDailyStep(input: StatsDailyCursor, index: number, now: Date): { cursor: StatsDailyCursor; sweepDone: boolean } {
   let cursor = input;
@@ -417,28 +412,6 @@ const dailyModule: ResourceModule = {
       ? { work: { satisfiesRevision: true, close: "done", closeReason: "shadow", cursor: next.cursor }, followups: [] }
       : { work: { satisfiesRevision: false, nextDueAt: ctx.now, cursor: next.cursor }, followups: [] };
   },
-
-  async estimateRunSteps(work, ctx): Promise<number> {
-    // A whole sweep from its head, the broadcast walks where the row (or the
-    // legacy lane it is seeded from) holds them, stepped as `shadow()` steps.
-    const seeded = await seededDailyCursor(ctx.db, ctx.pageId, parseStatsDailyCursor(work.cursor));
-    const reset = (walk: BroadcastState): BroadcastState => ({ ...walk, pagesInSweep: 0 });
-    let cursor: StatsDailyCursor = {
-      ...seeded,
-      stepIndex: 0,
-      earningsWalk: null,
-      discoveryPage: 0,
-      broadcasts: { live: reset(seeded.broadcasts.live), deleted: reset(seeded.broadcasts.deleted) },
-    };
-    for (let steps = 1; steps <= DAILY_SWEEP_STEPS_MAX; steps += 1) {
-      const next = shadowDailyStep(cursor, cursor.stepIndex, ctx.now);
-      if (next.sweepDone) return steps;
-      cursor = next.cursor;
-    }
-    return DAILY_SWEEP_STEPS_MAX;
-  },
-
-  replay: replayByCanonicalDrafts,
 };
 
 // ── hourly ───────────────────────────────────────────────────────────────────
@@ -1080,8 +1053,6 @@ const backfillModule: ResourceModule = {
       ? { work: { satisfiesRevision: true, close: "done", closeReason: "shadow", cursor: { ...cursor, shadow: null } }, followups: [] }
       : { work: { satisfiesRevision: false, nextDueAt: ctx.now, cursor: { ...cursor, shadow: step.progress } }, followups: [] };
   },
-
-  replay: replayByCanonicalDrafts,
 };
 
 export type StatsVariant = "daily" | "hourly" | "backfill";

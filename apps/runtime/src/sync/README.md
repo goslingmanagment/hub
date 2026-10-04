@@ -56,7 +56,8 @@ sync/
     commit.ts                the four transactions of a step, the no-HTTP outcomes and the local writes
     shadow.ts                the shadow transport (no socket, no credentials)
     alerts.ts                alerts 1–4: the incident sink, the 30 s evaluator, the pace backstop, the owner's ack
-    send-audit.ts            the send audit (I1, I19): the one checker of the evaluator, `sync check live-hour`, the shadow report
+                             (`sync alerts status | ack`, `cli/alerts.ts`)
+    send-audit.ts            the send audit (I1, I19): the one checker of the evaluator and `sync check live-hour`
     watchdog.ts              the stall watchdog: a step, pass or beat stuck for 120 s ends the process (exit 70)
     metrics.ts               the golden signals (per page; the ops sampler's compact set every 5 min)
   fansly/
@@ -73,8 +74,6 @@ sync/
                              pure rules from them: the OnlyFans top spenders the window rules, the OnlyFans posts
                              stream the posts cursor, the legacy capture seam the journal's body rules)
   requests/                  history requests, ETA, enqueue-and-wait, the legacy hydration wrapper's mapping
-  report/                    `sync shadow report`: part A (the live window, the route checks), part B (the past
-                             journal), the fingerprint
   checks/                    read-only checks of live pages: `sync check live-hour` (`cli/checks.ts`) — a page's
                              first hour on the engine and the combined pace audit of both journals
   excluded.ts                step 3, owner decision №8: `sync excluded probe | report | lift | unlift` (`cli/excluded.ts`)
@@ -112,8 +111,7 @@ a read wrote since the demand is found with no request, before the HTTP gate: a 
 it already for every chat a `.find` is open for, never a planned catch-up). A chat such a head read did not show
 goes to its group detail, which creates the thread (D5), as does every chat while a 429 holds the list's route; with
 neither, the find reads the list head itself. A shadow page writes no thread, so its find closes `shared_head_read`
-on the first such read its shadow journal settled, and the shadow report counts the chat read at that read's
-admission.
+on the first such read its shadow journal settled.
 
 A message read (`dm-messages.head`, `.catchup`, `.history`) is one `/message` page per step. Its apply folds the page
 into the chain before it writes anything (an anomaly the design sends to review quarantines the step whole), then
@@ -643,9 +641,9 @@ the pause S every route of a page has a strict budget of its own (owner decision
   records the two intervals it applied on the attempt (`route_interval_ms`, `family_interval_ms`, 0237), as it
   records its pause: the send audit judges by them (Alerts, below). The clocks
   are read from the journal at every slot (`readRouteJournal`): the page's own journal (a shadow page its shadow
-  one, so the shadow report sees the budgets live pages keep), and on a live page the legacy send log too (what the
-  legacy engine sent before the switch). A send whose instant is unknown counts at its upper bound (admission +
-  the send window; a guard capture's completion or lease end); an operation nobody can place counts on every route.
+  one), and on a live page the legacy send log too (what the legacy engine sent before the switch). A send whose
+  instant is unknown counts at its upper bound (admission + the send window; a guard capture's completion or lease
+  end); an operation nobody can place counts on every route.
 - **At the pick** a key all of whose routes are closed is left out (`routeExclusions`, in SQL like every
   exclusion): a spent route never takes a slot. **The short look-ahead**: when the class whose turn it is has
   nothing admissible now but a candidate that opens within 1.2 × S, the slot waits for it rather than serve a
@@ -682,7 +680,7 @@ the pause S every route of a page has a strict budget of its own (owner decision
   ceiling, current, effective rate, interval, newest send, hold, ladder step, newest 429, revision, when it opens —
   with the policy hash; `sync why` names the closed routes of a key waiting on `pacer` and those a 429 holds.
 
-## Alerts, metrics and the shadow report
+## Alerts and metrics
 
 Plan §10's five alerts are one incident kind, `fansly_sync_engine`, one latch per page and alert (`page_stopped`,
 `live_degraded`, `freshness`, `stuck`) plus the global `process`. The actor opens alert 1 at once from its capture
@@ -693,7 +691,7 @@ view. Alerts 1–3 resolve after their condition has stayed false for 10 minutes
 soon as progress resumes), so a condition that comes and goes keeps one standing page. A pace violation has its own
 latch that only the owner closes (`pnpm cli sync alerts ack --page <label>`); the evaluator also re-reads the
 journal's new live sends, so a violation the capture path could not report still opens it. That re-read is the
-**send audit** (`engine/send-audit.ts`), the one checker `sync check live-hour` and the shadow report run too. It judges
+**send audit** (`engine/send-audit.ts`), the one checker `sync check live-hour` runs too. It judges
 the recorded sends by what each admission recorded it applied, never by a copy of the policy:
 - I1: every pair of adjacent sends of the page (both journals) ≥ the later one's own pause `S × (1 + u)`
   (`pause_ms`), by two tests. The recorded instants (`sent_at`) with a 2 ms tolerance: closer than the setting itself
@@ -725,54 +723,12 @@ ETA's fact over forecast). The ops sampler records a compact set every 5 minutes
 for switched pages, `sync_shadow_*` for shadow ones) — per-page series would double the sample table for figures the
 page status already shows.
 
-`pnpm cli sync shadow report --window <start>/<end>` is the shadow acceptance's evidence (design §3.12, read-only).
-It judges the pages in shadow alone — the switch candidates: every part, verdict and fingerprint reads them; a page
-`live`, in `handover` or `off` is listed under `notJudged` with its mode and why (a live page is judged by `sync check
-live-hour`) and counts nowhere, and `--page` of such a page is refused. Its parts:
-part A over the live hour in one repeatable-read transaction — the coverage (every page in shadow, its actor running,
-from 10 min before the start: a window begun before the deploy or a page's switch to shadow is never accepted), demand against a computed expectation (polls
-judged in runs against their schedule, the reads the hour's socket frames imply after coalescing; keys on a period
-longer than the hour counted at their rate; one-time backlog walks listed apart), the legacy engine's volume per
-stream and sender with the reason it differs (the hour, or 7-day rates for streams slower than the hour; live-only
-senders listed apart; legacy's scheduled purchase poll listed apart once every order it read in the hour is one the
-engine hears of — a PPV ledger row or a socket order frame — since `purchases.targets` runs on demand only and its
-live demand, the transactions apply's new sales, names no target in shadow), the live-path decisions (a fan message or a new ledger
-row on the socket → the shadow admission vs the legacy arrival; an offline replay of the previous day's routing when
-the hour is too quiet), the pacer's self-check (A4: the send audit's I1 over the shadow journal — every pair of
-simulated sends ≥ the later one's own pause, a pair it cannot judge never passes); part B over the past journal — every resource's replay of its legacy
-observations (≥ 99.9 %, every mismatch listed), the chain rebuild and end-of-history check since 05.07 (the 16.09
-counterexamples listed, no empty-page soundness hit) and the ETA backtest. Besides the frozen A1–A4 rules part A runs
-two checks over the shadow journal (step 3b ruling 12, `report/shadow-routes.ts`): the **route budgets** — the send
-audit's I19 over the shadow journal, every pair of a route's and a family's sends ≥ the interval its later send was
-admitted under (a send this build places on no route fails, a pair without its recorded interval never passes; the
-counts of ⌈W / T⌉ + 1 per 60 s and 300 s span are printed beside them as diagnostics) — and the **walks per route** — no run of a non-poll key asks a
-route from the same position twice: its parameters, or the place a shadow step names when they cannot
-(`RequestPlan.position`: a media window, cut at the step's clock, names its pass, item and window number; the fan
-earnings roster its subject; a subject-queue walk its pass, so the next pass is not a repeat). It prints the **media
-model** the shadow walk ran per page (the owner's tiers, the long-tail window mode: an unproven route is modelled as
-live meets it, the refused 90-day window then the 31-day split) with the queue under those tiers, and the
-**fingerprint** (`report/shadow-fingerprint.ts`): the `sync` build of the whole window, proven from the database — one
-fresh `sync` heartbeat build started before the window, every shadow page's owner taken since then and before the
-window, no shadow attempt of another owner generation in it (so run the report right after its hour: a deploy or restart
-since leaves the build unproven and the report not accepted) —, `ROUTE_POLICY_HASH`, the registry's hash, each page's
-overrides and media model, and S (now and as the window's admissions recorded it). `--out <path>` keeps the report
-(the step-3 switch took it, and accepted it only of the build `sync` ran and of that build's route policy). The
-verdict's checks are hard or red lines (`SHADOW_VERDICT_CHECKS`): a red line of a frozen rule (A1–A3, B5–B7) that failed
-was the owner's to judge at the switch, a hard check never; no rule or threshold changes for it. Where the design's
-wording needed a rule to be measurable (`SHADOW_WINDOW_RULES` in `report/shadow-window.ts`: A1.rate, A1.rate-assumed,
-A1.ceiling, A1.ceiling-demand, A1.shared-read, A1.floor, A1.floor-scheduled, A1.floor-queue, A1.floor-idle,
-A1.poll-schedule, A2.rate, A2.legacy-regime, A2.live-only, A2.demand-replaced), every report prints the rule it applied.
-Three of them ask the resource modules read-only questions (`ResourceModule`), each in its own savepoint:
-`estimateRunSteps` sizes a key on a period longer than the hour before its first shadow run, while its row keeps that
-run on schedule (its `shadow()` estimate, A1.rate-assumed; a key that ran before stays unknown until it runs again),
-`queueNextDueAt` says when a queue walk without a standing row is next asked for, or that its queue changed after the
-window end (`fan-earnings.roster`, A1.floor-queue), and `dueAtLook` re-runs a standing walk's look over the subjects
-nobody changed since and probes its due rule 5 years on (A1.floor-idle: the look was on time and the rule reads at all
-— which subjects it takes is not verified while legacy reads the same queue first); the registry test pins that every
-such key implements its question. The checks read the live settings as the engine host does (the report requires a
-`SettingsSource`; the CLI builds it from the env config and the database's overrides): `post-replies.walk`'s pick reads
-`fanslyRepliesRewalkCycleDays` live (prod 30 d, registry 14 d), so its look check fails without them rather than re-run
-another pick.
+The shadow acceptance report (`sync shadow report`, design §3.12) judged the switch candidates of step 3 against the
+legacy engine: demand against its expectation, the legacy volume, the journal replay of every resource, the chain and
+ETA checks, the build's fingerprint. Step 4 (S4-22) deleted it, with the questions it asked the resource modules (a
+run's size, a standing walk's look, a queue's next due instant, the replay of a legacy observation) and the readers
+only it used: every page is `live`, a new page is born `live`, and there is no legacy engine to compare with. A live
+page is judged by `sync check live-hour` (above) and, continuously, by the alerts and the send audit.
 
 ## Recipes
 
@@ -797,5 +753,4 @@ another pick.
 | A backfill / fresh walk on a live page | `pnpm cli sync work enqueue --page <label> --resource <key>` (keys with the `owner` trigger) |
 | What alerts hold on a page; close a pace violation | `pnpm cli sync alerts status [--page <label>]`; `pnpm cli sync alerts ack --page <label> --note '…'` |
 | An alert's threshold or condition | one constant or rule in `engine/alerts.ts` + `tests/sync-alerts.test.ts` |
-| The shadow acceptance | `pnpm cli sync shadow report --window <start>/<end> --out <path>` (the pages in shadow; part B alone: `--part b`, outside 00:00–05:00 UTC) |
 | A page's first hour on the engine, and the pace audit of both journals | `pnpm cli sync check live-hour --page <label> [--page <label> …] --since <iso> [--out <path>]` (read-only; exit 0 accepted, 1 failed, 2 open) |

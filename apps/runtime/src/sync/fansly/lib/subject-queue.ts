@@ -1,5 +1,3 @@
-import { sql } from "drizzle-orm";
-
 import {
   clearSubjectQueueBlocks,
   recordSubjectQueueFailures,
@@ -10,7 +8,6 @@ import {
 } from "@agency_hub_core/db";
 
 import { BLOCKED_PROBE_EVERY_MS, SUBJECT_BLOCK_AFTER, SUBJECT_BREAKER_LADDER_MS } from "../../engine/errors.ts";
-import type { LookCheck } from "../../engine/resource.ts";
 
 // Subject-queue walks of the Fansly Sync Engine (design §4.3, D2).
 //
@@ -81,8 +78,8 @@ export interface ShadowPass {
   /** The pass's ordinal in the walk row's shadow passes, from 1 (0: none
    *  begun, or begun by a build that did not number them). A pass re-reads
    *  the subjects an earlier one read (shadow records no visit), so a step
-   *  names its pass (`shadowPassNumber`) for the shadow report to tell the
-   *  next pass from a walk going round in circles. */
+   *  names its pass (`shadowPassNumber`): the next pass is not a walk going
+   *  round in circles. */
   number: number;
 }
 
@@ -145,42 +142,4 @@ export function advanceShadowPass(input: {
     return { pass, nextDueAt: shadowPassWaitUntil(pass, input.now, input.recheckMs) };
   }
   return { pass: { after: last.keyset, startedAt, ended: false, number }, nextDueAt: input.now };
-}
-
-// ── the shadow report's look check (rule A1.floor-idle) ─────────────────────
-
-/** A look check reads at most this many due subjects of one queue (its count
- *  is a lower bound past it). */
-export const LOOK_CHECK_LIMIT = 5_000;
-/** Due subjects a look check names. */
-const LOOK_CHECK_EXAMPLES = 5;
-
-/**
- * What a standing walk's look at `at` should have read (`dueAtLook`): the
- * subjects its own pick finds due at that instant (`pick`, in walk order, at
- * most `LOOK_CHECK_LIMIT`), less every subject a writer changed after it — a
- * subject legacy read, dirtied or seeded since stands as it does now, not as
- * the look saw it — and the subjects its queue holds at all. Read-only.
- */
-export async function dueAtLookOf(
-  db: Database,
-  input: { pageId: number; plane: string; at: Date; pick: (limit: number) => Promise<ReadonlyArray<{ subjectRef: string }>> },
-): Promise<LookCheck> {
-  const queuedRows = await db.execute<{ queued: number | string }>(sql`
-    select count(*) as queued from subject_refresh_state where page_id = ${input.pageId} and plane = ${input.plane}
-  `);
-  const queued = Number(queuedRows.rows[0]?.queued ?? 0);
-  const picked = [...new Set((await input.pick(LOOK_CHECK_LIMIT)).map((subject) => subject.subjectRef))];
-  if (picked.length === 0) return { count: 0, examples: [], queued };
-  const result = await db.execute<{ subjectRef: string }>(sql`
-    select subject_ref as "subjectRef"
-      from subject_refresh_state
-     where page_id = ${input.pageId}
-       and plane = ${input.plane}
-       and subject_ref = any(${sql.param(picked)}::text[])
-       and updated_at <= ${input.at}
-  `);
-  const untouched = new Set(result.rows.map((row) => row.subjectRef));
-  const due = picked.filter((ref) => untouched.has(ref));
-  return { count: due.length, examples: due.slice(0, LOOK_CHECK_EXAMPLES), queued };
 }

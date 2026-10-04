@@ -758,9 +758,9 @@ export async function listSendsForPaceAudit(
  *  × 1.2) and the longest route interval (⅛ of the lowest ceiling: 40 s). */
 export const SYNC_SEND_AUDIT_LOOKBACK_MS = 10 * 60_000;
 
-/** One row of a page's send journals as the send audit reads it: a live (or,
- *  for the shadow report, a shadow) engine attempt, or a send of the step-1
- *  legacy send log. */
+/** One row of a page's send journals as the send audit reads it: an engine
+ *  attempt (live, or of the shadow journal), or a send of the step-1 legacy
+ *  send log. */
 export interface FanslySendAuditRow {
   journal: "engine" | "legacy";
   /** The shadow journal's: its sends are simulated, so an attempt without a
@@ -802,7 +802,7 @@ export interface FanslySendAuditRow {
 
 /**
  * The send audit's read (invariants I1 and I19; the alert evaluator, `sync
- * check live-hour`, the shadow report): every row of a page's engine journal
+ * check live-hour`): every row of a page's engine journal
  * (`shadow` picks the shadow one) and — with `legacy` — of the step-1 legacy
  * send log admitted (captured) in [since − `lookbackMs`, until), with what
  * the audit compares: the admission, the recorded send instant and its upper

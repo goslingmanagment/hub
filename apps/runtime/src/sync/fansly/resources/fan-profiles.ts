@@ -1,5 +1,3 @@
-import { sql } from "drizzle-orm";
-
 import {
   excludePageDmConversationMessageSync,
   listFanslyFanPageIdentityBackfillTargets,
@@ -11,7 +9,6 @@ import {
 } from "@agency_hub_core/db";
 import {
   FANSLY_ACCOUNT_LOOKUP_BATCH_SIZE,
-  parseFanslyAccountsByIds,
   type FanslyAccount,
 } from "@agency_hub_core/fansly";
 import { FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP } from "@agency_hub_core/shared";
@@ -21,9 +18,6 @@ import type {
   ApplyInput,
   ApplyResult,
   DemandSignal,
-  ReplayContext,
-  ReplayObservation,
-  ReplayVerdict,
   RequestPlan,
   ResourceModule,
   ShadowResult,
@@ -123,26 +117,6 @@ async function storeLookupAnswer(
   };
 }
 
-/** Replay of an `account_lookup` observation: the contract accepts it and
- *  every account it returned is a known fan. */
-async function replayLookup(observation: ReplayObservation, ctx: ReplayContext): Promise<ReplayVerdict> {
-  const parsed = parseFanslyAccountsByIds(observation.payload);
-  if (!parsed.ok) return { kind: "mismatch", reason: "contract_refused", detail: { ...parsed.violation } };
-  const ids = [...new Set(parsed.value.map((account) => account.id))];
-  if (ids.length === 0) return { kind: "match", detail: { returned: 0 } };
-  const result = await ctx.db.execute<{ platformUserId: string }>(sql`
-    select f.platform_user_id as "platformUserId"
-      from fans f
-      join page_fans fp on fp.fan_id = f.id and fp.platform_account_id = ${ctx.pageId}
-     where f.platform_user_id = any(${sql.param(ids)}::text[])
-  `);
-  const known = new Set(result.rows.map((row) => row.platformUserId));
-  const missing = ids.filter((id) => !known.has(id));
-  return missing.length === 0
-    ? { kind: "match", detail: { returned: ids.length } }
-    : { kind: "mismatch", reason: "fans_missing", detail: { missing: missing.length, examples: missing.slice(0, 5) } };
-}
-
 // ── lookup ──────────────────────────────────────────────────────────────────
 
 interface LookupCursor {
@@ -198,8 +172,6 @@ export const fanProfilesLookupModule: ResourceModule = {
         followups: [],
       };
   },
-
-  replay: replayLookup,
 };
 
 // ── probe ───────────────────────────────────────────────────────────────────
@@ -268,8 +240,6 @@ export const fanProfilesProbeModule: ResourceModule = {
   async shadow(): Promise<ShadowResult> {
     return { work: { satisfiesRevision: true, close: "done", closeReason: "shadow" }, followups: [] };
   },
-
-  replay: replayLookup,
 };
 
 // ── alias backfill ──────────────────────────────────────────────────────────
@@ -348,6 +318,4 @@ export const fanProfilesAliasBackfillModule: ResourceModule = {
       followups: [],
     };
   },
-
-  replay: replayLookup,
 };

@@ -30,8 +30,7 @@ import {
 // other work keeps going in between; a 429 there holds only its route
 // (`Retry-After`, else the ladder of owner decision №14, then the route at half
 // rate), never the page, and the chat and money reads still go out; a shadow
-// page paces its simulated walk the
-// same way, so the shadow report counts what the live walk will send.
+// page paces its simulated walk the same way.
 
 let testDb: StartedTestDatabase | null = null;
 
@@ -364,8 +363,8 @@ describe("shadow paces the media-stats walk the same way (owner decisions №20,
     const all = await attemptsOf(pageId);
     expect(all.every((attempt) => attempt.shadow)).toBe(true);
     const media = all.filter((attempt) => attempt.operation === "media.offer_stats");
-    // One shadow step per item (each a one-window refresh): the demand the
-    // shadow report counts is the live walk's.
+    // One shadow step per item (each a one-window refresh): the shadow's
+    // demand is the live walk's.
     expect(media).toHaveLength(3);
     expectSpaced(media, MEDIA_INTERVAL_MS);
     expectSpaced(all.filter((attempt) => attempt.operation === "polls"), POLLS_INTERVAL_MS);

@@ -10,7 +10,6 @@ import {
   type Database,
 } from "@agency_hub_core/db";
 import {
-  fanslyWireSpec,
   isKnownFanslyTransactionType,
   type FanslyEarningsTransaction,
   type FanslyTransactionsPageContract,
@@ -28,9 +27,6 @@ import type {
   ApplyInput,
   ApplyResult,
   DemandSignal,
-  ReplayContext,
-  ReplayObservation,
-  ReplayVerdict,
   ResourceModule,
   ShadowResult,
   StepPlan,
@@ -674,54 +670,5 @@ export function transactionsModule(variant: TransactionsVariant): ResourceModule
         ? { work: { satisfiesRevision: true, close: "done", closeReason: "shadow", cursor: { ...cursor, shadow: null } }, followups }
         : { work: { satisfiesRevision: false, nextDueAt: ctx.now, cursor: { ...cursor, shadow: step.progress } }, followups: [] };
     },
-
-    async replay(observation: ReplayObservation, ctx: ReplayContext): Promise<ReplayVerdict> {
-      return replayTransactionsPage(observation, ctx);
-    },
   };
-}
-
-/**
- * Replay of a legacy `earnings_transactions` observation (design §5.6): the
- * new contract accepts what legacy accepted (both parse with the same
- * function, so a refused page is refused by both), and every served row maps
- * to the stored ledger row: amounts (mills), raw type, canonical type and
- * occurred_at equal; the state may have advanced since.
- */
-async function replayTransactionsPage(observation: ReplayObservation, ctx: ReplayContext): Promise<ReplayVerdict> {
-  const parsed = fanslyWireSpec("transactions.page").parse(observation.payload, { limit: TRANSACTIONS_SCAN_LIMIT, offset: 0 });
-  if (!parsed.ok) return { kind: "match", detail: { refusedByBoth: true, field: parsed.violation.field } };
-  const items = parsed.value.data;
-  if (items.length === 0) return { kind: "match", detail: { served: 0 } };
-  const commissionRate = await pageCommissionRate(ctx.db, ctx.pageId);
-  const stored = await ctx.db.execute<{
-    id: string; gross: string; net: string; destination: string; rawType: string; canonicalType: string; occurredAt: Date | string;
-  }>(sql`
-    select transaction_id as id, gross_amount_mills::text as gross, creator_net_amount_mills::text as net,
-           source_destination_amount_mills::text as destination, raw_type as "rawType",
-           canonical_type::text as "canonicalType", occurred_at as "occurredAt"
-      from transactions
-     where platform_account_id = ${ctx.pageId}
-       and transaction_id = any(${sql.param(items.map((item) => item.transactionId))}::text[])
-  `);
-  const byId = new Map(stored.rows.map((row) => [row.id, row] as const));
-  const mismatched: string[] = [];
-  for (const item of items) {
-    const row = byId.get(item.transactionId);
-    const { row: mapped } = mapFanslyTransactionItem(item, commissionRate);
-    if (
-      row === undefined ||
-      row.gross !== mapped.grossAmountMills.toString() ||
-      row.net !== mapped.creatorNetAmountMills.toString() ||
-      row.destination !== mapped.sourceDestinationAmountMills.toString() ||
-      row.rawType !== String(mapped.rawType) ||
-      row.canonicalType !== mapped.canonicalType ||
-      new Date(row.occurredAt).getTime() !== mapped.occurredAt.getTime()
-    ) {
-      mismatched.push(item.transactionId);
-    }
-  }
-  return mismatched.length === 0
-    ? { kind: "match", detail: { served: items.length } }
-    : { kind: "mismatch", reason: "ledger_differs", detail: { served: items.length, mismatched: mismatched.length, examples: mismatched.slice(0, 5) } };
 }

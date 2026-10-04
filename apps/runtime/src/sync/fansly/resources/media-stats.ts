@@ -60,12 +60,10 @@ import {
   type ShadowResult,
   type StepPlan,
 } from "../../engine/resource.ts";
-import { replayByCanonicalDrafts } from "../lib/family-replay.ts";
 import {
   advanceShadowPass,
   clearQueueSubjectBlocks,
   currentShadowPass,
-  dueAtLookOf,
   EMPTY_SHADOW_PASS,
   parseShadowPass,
   recordQueueSubjectFailures,
@@ -710,7 +708,7 @@ function parseShadowVisit(value: unknown): ShadowVisit | null {
   return { subjectRef, keyset, tier, steps, done, ...(mode === undefined ? {} : { mode }), ...(pass === null ? {} : { pass }) };
 }
 
-export function parseMediaStatsWalkCursor(value: unknown): MediaStatsWalkCursor {
+function parseMediaStatsWalkCursor(value: unknown): MediaStatsWalkCursor {
   const record = recordOf(value);
   return {
     longTailWindowMode: parseLongTailMode(record.longTailWindowMode),
@@ -856,10 +854,9 @@ async function legacyMediaStatsCursor(db: Database, pageId: number) {
  * The long-tail window mode the shadow models on a page: shadow never learns
  * the route from an answer, so its own mode is set only once a long-tail visit
  * modelled the refused 90-day window (`shadowVisitWindows`); until then the
- * legacy lane's discovery stands in. The shadow report prints it per page
- * (its fingerprint).
+ * legacy lane's discovery stands in.
  */
-export async function shadowLongTailMode(
+async function shadowLongTailMode(
   db: Database,
   input: { pageId: number; cursor: Pick<MediaStatsPageState, "longTailWindowMode"> },
 ): Promise<LongTailWindowMode> {
@@ -874,8 +871,8 @@ export async function shadowLongTailMode(
  * at every step — its bounds cut at the step's clock — so the request names
  * its place in the walk (`RequestPlan.position`): the pass that picked the
  * item, the item's queue position and the window's number in the visit. A
- * walk that does not advance asks one of them twice (the shadow report's
- * endless-walk check); the next pass re-reading the item is another pass.
+ * walk that does not advance asks one of them twice; the next pass re-reading
+ * the item is another pass.
  */
 function shadowWindowRequest(visit: ShadowVisit, mode: LongTailWindowMode, now: Date): RequestPlan<"media.offer_stats"> {
   const [window] = steadyWindows(visit.tier, now, mode);
@@ -924,23 +921,6 @@ async function markTopMedia(tx: Database, pageId: number, now: Date): Promise<nu
 }
 
 export const mediaStatsWalkModule: ResourceModule = {
-  /** The shadow report's look check (rule A1.floor-idle): `planShadow`'s pick
-   *  at the look, less what changed since. */
-  async dueAtLook(work, ctx) {
-    const cursor = parseMediaStatsWalkCursor(work.cursor);
-    const visit = cursor.shadowVisit;
-    // A visit in flight asks its next window: such a look reads, never waits.
-    if (visit !== null && visit.done < visit.steps) return { count: 0, examples: [], queued: null };
-    const pass = currentShadowPass(cursor.shadow, ctx.now, MEDIA_STATS_RECHECK_MS);
-    const tiers = mediaStatsOwnerTiers(ctx.page);
-    return dueAtLookOf(ctx.db, {
-      pageId: ctx.pageId,
-      plane: PLANE,
-      at: ctx.now,
-      pick: (limit) => pickDueMedia(ctx.db, { pageId: ctx.pageId, now: ctx.now, limit, after: pass.after, tiers }),
-    });
-  },
-
   async plan(work, ctx): Promise<StepPlan> {
     const cursor = parseMediaStatsWalkCursor(work.cursor);
     const tiers = mediaStatsOwnerTiers(ctx.page);
@@ -1174,6 +1154,4 @@ export const mediaStatsWalkModule: ResourceModule = {
       counters,
     };
   },
-
-  replay: replayByCanonicalDrafts,
 };

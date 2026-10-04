@@ -146,9 +146,8 @@ export interface RequestPlan<I extends FanslyWireId = FanslyWireId> {
    * and a subject-queue walk names its shadow pass (each pass re-reads the
    * subjects an earlier one read: shadow records no visit). Never sent and
    * never read back by the resource; journaled with the attempt
-   * (`sync_attempts.request.position`), where the shadow report's
-   * endless-walk check (`report/shadow-routes.ts`) takes it for the request's
-   * identity in place of its parameters.
+   * (`sync_attempts.request.position`) as the request's identity in place of
+   * its parameters.
    */
   position?: unknown;
 }
@@ -315,19 +314,6 @@ export interface LocalApplyInput {
   ownRef: string | null;
 }
 
-/** A standing walk's look re-run (`ResourceModule.dueAtLook`): how many
- *  subjects were due at the look and untouched since, a few of them, and how
- *  many subjects its queue holds at all (null: the check did not pick, e.g.
- *  a pass that has ended or a visit in flight). */
-export interface LookCheck {
-  count: number;
-  examples: string[];
-  queued: number | null;
-}
-
-/** A queue walk's queue at an instant (`ResourceModule.queueNextDueAt`). */
-export type QueueNextDue = { nextDueAt: Date | null } | { unjudgeable: string };
-
 export interface ShadowResult<C = unknown> {
   work: WorkOutcome<C>;
   /** Demand the live apply would have created: upserted as shadow work. */
@@ -335,33 +321,6 @@ export interface ShadowResult<C = unknown> {
   /** Effects that are not work (subject-queue writes, …), counted only. */
   counters?: Readonly<Record<string, number>>;
 }
-
-/** One journaled observation offered to a resource's replay (the shadow
- *  report, design §3.12 B5): the body as the journal holds it. */
-export interface ReplayObservation {
-  id: number;
-  receivedAt: Date;
-  kind: string;
-  pageId: number;
-  payload: unknown;
-}
-
-export interface ReplayContext {
-  /** Read-only: a replay never writes. */
-  db: Database;
-  pageId: number;
-}
-
-/** What a replay concluded about one observation: the new wire contract and
- *  the resource's intended effects against what legacy stored. A match that
- *  needed a named, checked legacy rule to hold (an older key scheme legacy
- *  stored the same fact under, rows legacy never stored) names each rule in
- *  `via`; the shadow report counts the observations of every rule, so no
- *  such allowance is silent. */
-export type ReplayVerdict =
-  | { kind: "match"; detail?: Readonly<Record<string, unknown>>; via?: readonly string[] }
-  | { kind: "mismatch"; reason: string; detail?: Readonly<Record<string, unknown>> }
-  | { kind: "not_replayable"; reason: string };
 
 export interface ResourceModule<C = unknown> {
   /** Read-only: what the next step of this work is. */
@@ -384,29 +343,8 @@ export interface ResourceModule<C = unknown> {
   outcome?(decision: OutcomeDecision, step: OutcomeStep): OutcomeDecision;
   /** Shadow: estimate the outcome of the step without an answer. */
   shadow(work: SyncWorkRow, request: RequestPlan, ctx: ShadowContext): Promise<ShadowResult<C>>;
-  /** Read-only (the shadow report, rule A1.rate-assumed): the steps a shadow
-   *  run of this key would take if it started at `ctx.now` from the work
-   *  row's cursor — the estimate its `shadow()` fixes at a run's start, by
-   *  the same helper. A multi-step key on a period longer than the report
-   *  window implements it (pinned by tests/sync-registry-coverage.test.ts). */
-  estimateRunSteps?(work: Pick<SyncWorkRow, "cursor">, ctx: ShadowContext): Promise<number>;
-  /** Read-only, a standing walk (the shadow report, rule A1.floor-idle): the
-   *  subjects its own shadow pick finds due at `ctx.now` from the work row's
-   *  cursor, among those no writer has changed since — what a look at that
-   *  instant that found nothing due should have read. */
-  dueAtLook?(work: Pick<SyncWorkRow, "cursor">, ctx: ShadowContext): Promise<LookCheck>;
-  /** Read-only, a subject-queue walk without a standing row (the shadow
-   *  report, rule A1.floor-queue): the earliest instant from which the
-   *  shadow's driver asks for a walk of the page's queue as it stood at
-   *  `ctx.now` (in the past: a subject is due already; null: no subject comes
-   *  due without a new write) — or why the queue at that instant cannot be
-   *  told from the rows as they stand now (a writer changed them since). */
-  queueNextDueAt?(ctx: ShadowContext): Promise<QueueNextDue>;
   /** The resource's own journal trim of the served answer (default: as served). */
   journal?(response: unknown): unknown;
-  /** Read-only: one legacy observation of a kind this resource owns through
-   *  the new contract and the resource's intended effects (design §3.12 B5). */
-  replay?(observation: ReplayObservation, ctx: ReplayContext): Promise<ReplayVerdict>;
   /** A subject-queue walk's subject outcome (the breaker lives on the queue
    *  row). `step.request` names the subject(s) the failed step asked for (the
    *  walk row's own subject is the page's); the breaker fields are the work
@@ -433,7 +371,7 @@ export const WAIT_RECHECK_MS = 60_000;
 /** A module that is not implemented re-checks after this long. */
 export const NOT_IMPLEMENTED_RECHECK_MS = 3_600_000;
 /** Poll jitter: every period is ±10 % (design §4.4). */
-export const POLL_JITTER = 0.1;
+const POLL_JITTER = 0.1;
 
 const KEY_PATTERN = /^[a-z][a-z0-9-]*\.[a-z][a-z0-9-]*$/;
 

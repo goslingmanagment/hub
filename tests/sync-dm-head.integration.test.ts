@@ -20,7 +20,6 @@ import { canonicalizeObservationInTransaction } from "../apps/runtime/src/sync/e
 import type { SyncFaultPoint } from "../apps/runtime/src/sync/engine/commit.ts";
 import { createEngineRegistry, pollsFor, type EngineRegistry } from "../apps/runtime/src/sync/engine/resource.ts";
 import { FANSLY_RESOURCE_SPECS, fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";
-import { dmMessagesModule } from "../apps/runtime/src/sync/fansly/resources/dm-messages.ts";
 import { getHistoryRequest, submitHistoryRequest } from "../apps/runtime/src/sync/requests/history.ts";
 import {
   resetIntegrationDatabase,
@@ -966,7 +965,7 @@ describe("dm-messages.history", () => {
   });
 });
 
-describe("dm-messages in shadow and replay", () => {
+describe("dm-messages in shadow", () => {
   it("estimates ⌈ids / 25⌉ reads and writes nothing but its own work and attempts", async (context) => {
     if (!testDb) return context.skip();
     const pageId = await seedPage("shadow");
@@ -987,22 +986,5 @@ describe("dm-messages in shadow and replay", () => {
     )).toBe(3);
     expect(changedTables(before, await tableCounts(testDb.pool)).filter((name) => !["sync_work", "sync_attempts", "sync_pages"].includes(name)))
       .toEqual([]);
-  });
-
-  it("replays a legacy dm_messages page against what legacy stored", async (context) => {
-    if (!testDb) return context.skip();
-    const pageId = await seedPage("shadow");
-    await seedThread(pageId, { n: 17, stored: range(1, 3) });
-    const replay = dmMessagesModule("head").replay!;
-    // Received after legacy stored the rows (a later re-read would be a match).
-    const observation = (payload: unknown) => ({ id: 1, receivedAt: new Date(Date.now() + HOUR), kind: "dm_messages", pageId, payload });
-    const page = { messages: [3, 2, 1].map((k) => wireMessage(groupOf(17), k)) };
-    expect(await replay(observation(page), { db: db(), pageId })).toMatchObject({ kind: "match" });
-    const edited = { messages: [3, 2, 1].map((k) => wireMessage(groupOf(17), k, k === 2 ? { content: "edited" } : {})) };
-    expect(await replay(observation(edited), { db: db(), pageId })).toMatchObject({ kind: "mismatch", reason: "rows_differ" });
-    const unknown = { messages: [wireMessage(groupOf(99), 1)] };
-    expect(await replay(observation(unknown), { db: db(), pageId })).toMatchObject({ kind: "mismatch", reason: "thread_missing" });
-    expect(await replay(observation({ contractAccepted: false, raw: { error: "x" } }), { db: db(), pageId }))
-      .toMatchObject({ kind: "match", detail: { legacyRefused: true } });
   });
 });

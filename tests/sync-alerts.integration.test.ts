@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { getNotificationIncidentByKey, listSyncPages, type Database } from "@agency_hub_core/db";
+import { createLogger } from "@agency_hub_core/shared";
 
 import { runGoldenSignalSample, SYNC_ENGINE_METRICS_PROBE } from "../apps/runtime/src/services/golden-signals.ts";
 import {
@@ -11,6 +12,7 @@ import {
   syncEngineRouteSubKey,
 } from "../apps/runtime/src/services/notification-incidents.ts";
 import { runOpsWatchdogCheck } from "../apps/runtime/src/services/ops-watchdog.ts";
+import { buildSyncAlertsCommandGroup } from "../apps/runtime/src/sync/cli/alerts.ts";
 import {
   acknowledgeSyncPaceViolations,
   createIncidentAlertSink,
@@ -381,6 +383,54 @@ describe("the alert evaluator (design §9.6)", () => {
     expect(await query("select 1 from notification_incidents where incident_key = $1",
       [syncEngineIncidentKey({ subKey: syncEngineRouteSubKey("media.offer_stats"), pageId: page.pageId })])).toHaveLength(1);
     expect(await incident(syncEngineRouteSubKey("media.offer_stats"), page.pageId)).toMatchObject({ status: "open", errorCode: "rate_limit" });
+  });
+});
+
+describe("the owner's CLI: `sync alerts status | ack` (`cli/alerts.ts`)", () => {
+  /** One `pnpm cli sync …` call on the test database; what it printed. */
+  async function sync(argv: string[]): Promise<string[]> {
+    const printed: string[] = [];
+    const command = buildSyncAlertsCommandGroup({
+      openContext: async () => ({ db: db(), logger: createLogger("silent"), close: async () => undefined }),
+      print: (line) => void printed.push(line),
+    });
+    await command.parseAsync(argv, { from: "user" });
+    return printed;
+  }
+
+  it("status prints what holds per page as JSON; ack closes the page's pace latch and records it; the page is required", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await enginePage("live", "lilly-1");
+    await enginePage("shadow", "lilly-2", "100000000000000002");
+    await attempt({ pageId: page.pageId, shadow: false, sentSecondsAgo: 120 });
+    await attempt({ pageId: page.pageId, shadow: false, sentSecondsAgo: 119.5 });
+    expect((await pass()).paceViolations).toBe(1);
+    const paceKey = syncEngineIncidentKey({ subKey: SYNC_ENGINE_PACE_VIOLATION_SUBKEY, pageId: page.pageId });
+
+    const status = JSON.parse((await sync(["alerts", "status"]))[0]!) as {
+      pages: Array<{ page: string; mode: string; pages: boolean; openLatches: Array<{ key: string }> }>;
+    };
+    expect(status.pages.map((row) => [row.page, row.mode, row.pages, row.openLatches.map((latch) => latch.key)])).toEqual([
+      ["lilly-1", "live", true, [paceKey]],
+      ["lilly-2", "shadow", false, []],
+    ]);
+    const one = JSON.parse((await sync(["alerts", "status", "--page", "lilly-2"]))[0]!) as { pages: Array<{ page: string }> };
+    expect(one.pages.map((row) => row.page)).toEqual(["lilly-2"]);
+
+    await expect(sync(["alerts", "ack"])).rejects.toThrow("required option '--page <label>' not specified");
+    expect(await incident(SYNC_ENGINE_PACE_VIOLATION_SUBKEY, page.pageId)).toMatchObject({ status: "open" });
+    expect((await sync(["alerts", "ack", "--page", "lilly-1", "--note", "looked"]))[0]).toMatch(/^lilly-1: pace latch resolved at /);
+    expect(await incident(SYNC_ENGINE_PACE_VIOLATION_SUBKEY, page.pageId)).toMatchObject({ status: "resolved" });
+    expect(await query<{ eventType: string; note: string; actor: string }>(
+      `select event_type as "eventType", metadata ->> 'note' as note, metadata ->> 'actor' as actor
+         from audit_events where platform_account_id = $1`,
+      [page.pageId],
+    )).toEqual([{ eventType: "admin.sync_alerts_ack", note: "looked", actor: expect.stringMatching(/^cli@.+ pid \d+$/) }]);
+    expect((await sync(["alerts", "ack", "--page", "lilly-1"]))[0]).toMatch(/^lilly-1: pace latch was not open at /);
+  });
+
+  it("is all that is left of the observability CLI: the shadow report is no command (step 4, S4-22)", async () => {
+    await expect(sync(["shadow", "report", "--part", "b"])).rejects.toThrow(/unknown command/);
   });
 });
 

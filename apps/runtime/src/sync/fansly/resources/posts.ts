@@ -26,14 +26,12 @@ import type {
   ShadowResult,
   StepPlan,
 } from "../../engine/resource.ts";
-import { replayByCanonicalDrafts } from "../lib/family-replay.ts";
 import { advanceShadowWalk, type ShadowWalkProgress } from "../lib/offset-walk.ts";
 import { readFanslyPageFacts } from "../lib/page-facts.ts";
 import {
   advanceShadowPass,
   clearQueueSubjectBlocks,
   currentShadowPass,
-  dueAtLookOf,
   EMPTY_SHADOW_PASS,
   parseShadowPass,
   recordQueueSubjectFailures,
@@ -234,8 +232,7 @@ async function estimatedWalkSteps(db: Database, input: { pageId: number; cutoffA
   return input.cutoffAt === null ? 2 * pages - 1 : 2 * pages;
 }
 
-/** The steps of a shadow walk started at `now` (its `shadow()` estimate, and
- *  the shadow report's assumed run size, rule A1.rate-assumed). */
+/** The steps of a shadow walk started at `now` (its `shadow()` estimate). */
 async function shadowWalkSteps(db: Database, input: { pageId: number; now: Date; bounded: boolean }): Promise<number> {
   const cutoffAt = input.bounded ? refreshCutoffAt(input.now) : null;
   return Math.max(1, await estimatedWalkSteps(db, { pageId: input.pageId, cutoffAt }));
@@ -372,12 +369,6 @@ function walkModule(variant: "refresh" | "backfill"): ResourceModule {
         ? { work: { satisfiesRevision: true, close: "done", closeReason: "shadow", cursor: { ...cursor, shadow: null } }, followups: [] }
         : { work: { satisfiesRevision: false, nextDueAt: ctx.now, cursor: { ...cursor, shadow: step.progress } }, followups: [] };
     },
-
-    async estimateRunSteps(_work, ctx): Promise<number> {
-      return shadowWalkSteps(ctx.db, { pageId: ctx.pageId, now: ctx.now, bounded });
-    },
-
-    replay: replayByCanonicalDrafts,
   };
 }
 
@@ -421,20 +412,6 @@ async function engagementTiers(db: Database, input: { pageId: number; ids: reado
 }
 
 const engagementModule: ResourceModule = {
-  /** The shadow report's look check (rule A1.floor-idle): the shadow plan's
-   *  pick at the look, less what changed since. */
-  async dueAtLook(work, ctx) {
-    const cursor = parseEngagementCursor(work.cursor);
-    const pass = currentShadowPass(cursor.shadow, ctx.now, POST_ENGAGEMENT_RECHECK_MS);
-    if (pass.ended) return { count: 0, examples: [], queued: null };
-    return dueAtLookOf(ctx.db, {
-      pageId: ctx.pageId,
-      plane: POST_ENGAGEMENT_QUEUE.plane,
-      at: ctx.now,
-      pick: (limit) => POST_ENGAGEMENT_QUEUE.pickDue(ctx.db, { pageId: ctx.pageId, now: ctx.now, limit, after: pass.after }),
-    });
-  },
-
   async plan(work, ctx): Promise<StepPlan> {
     const cursor = parseEngagementCursor(work.cursor);
     const pass = ctx.shadow ? currentShadowPass(cursor.shadow, ctx.now, POST_ENGAGEMENT_RECHECK_MS) : EMPTY_SHADOW_PASS;
@@ -507,8 +484,6 @@ const engagementModule: ResourceModule = {
       counters: { posts_requested: ids.size },
     };
   },
-
-  replay: replayByCanonicalDrafts,
 };
 
 export function postsModule(variant: PostsVariant): ResourceModule {

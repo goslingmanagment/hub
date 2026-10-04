@@ -17,9 +17,6 @@ import type {
   ApplyInput,
   ApplyResult,
   DemandSignal,
-  ReplayContext,
-  ReplayObservation,
-  ReplayVerdict,
   RequestPlan,
   ResourceModule,
   ShadowResult,
@@ -315,55 +312,4 @@ export const purchasesTargetsModule: ResourceModule = {
       ? { work: { satisfiesRevision: true, close: "done", closeReason: "shadow", cursor: { ...cursor, shadow: null } }, followups: [] }
       : { work: { satisfiesRevision: false, nextDueAt: ctx.now, cursor: { ...cursor, shadow: step.progress } }, followups: [] };
   },
-
-  async replay(observation: ReplayObservation, ctx: ReplayContext): Promise<ReplayVerdict> {
-    return replayPurchaseHistory(observation, ctx);
-  },
 };
-
-/**
- * Replay of a legacy `purchase_history` observation (design §5.9): the
- * classifier accepts the page, and every (offer, buyer) it served has a
- * `media_orders` row on the page.
- */
-async function replayPurchaseHistory(observation: ReplayObservation, ctx: ReplayContext): Promise<ReplayVerdict> {
-  const payload = recordOf(observation.payload);
-  if (recordOf(payload.error).status !== undefined) {
-    return { kind: "not_replayable", reason: "legacy_rejection_receipt" };
-  }
-  const classified = classifyFanslyPurchaseHistoryCapture({
-    id: observation.id,
-    targetKey: "single:replay",
-    requestBefore: null,
-    statusCode: null,
-    responsePayload: observation.payload,
-  });
-  if (classified.blocked) return { kind: "mismatch", reason: `contract:${classified.outcome}` };
-  const aggregation = recordOf(payload.aggregationData);
-  const rows = (Array.isArray(payload.accountMediaOrderHistory)
-    ? payload.accountMediaOrderHistory
-    : Array.isArray(payload.accountMediaOrders)
-      ? payload.accountMediaOrders
-      : Array.isArray(aggregation.accountMediaOrders) ? aggregation.accountMediaOrders : []) as unknown[];
-  const pairs = new Map<string, { offer: string; buyer: string }>();
-  for (const row of rows) {
-    const record = recordOf(row);
-    const offer = typeof record.accountMediaBundleId === "string" && record.accountMediaBundleId.length > 0
-      ? record.accountMediaBundleId
-      : typeof record.accountMediaId === "string" ? record.accountMediaId : "";
-    const buyer = typeof record.accountId === "string" ? record.accountId : "";
-    if (offer.length > 0 && buyer.length > 0) pairs.set(`${offer}:${buyer}`, { offer, buyer });
-  }
-  if (pairs.size === 0) return { kind: "match", detail: { orders: 0 } };
-  const offers = [...new Set([...pairs.values()].map((pair) => pair.offer))];
-  const stored = await ctx.db.execute<{ offer: string; buyer: string }>(sql`
-    select distinct media_offer_ref as offer, buyer_platform_user_id as buyer
-      from media_orders
-     where page_id = ${ctx.pageId} and media_offer_ref = any(${sql.param(offers)}::text[])
-  `);
-  const known = new Set(stored.rows.map((row) => `${row.offer}:${row.buyer}`));
-  const missing = [...pairs.keys()].filter((key) => !known.has(key));
-  return missing.length === 0
-    ? { kind: "match", detail: { orders: pairs.size } }
-    : { kind: "mismatch", reason: "orders_missing", detail: { orders: pairs.size, missing: missing.length, examples: missing.slice(0, 5) } };
-}
