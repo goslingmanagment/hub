@@ -7,6 +7,8 @@ export * from "./repositories/follower-outreach.ts";
 // chat-extension greeting lease and send custody (0241, H-7a).
 export * from "./repositories/client-claim.ts";
 export * from "./repositories/client-claim-transition.ts";
+// chat-extension "new subscribers" list reads (H-7c).
+export * from "./repositories/client-audience-new.ts";
 // chat-extension client_health hourly rollups (0244, H-11b).
 export * from "./repositories/client-health.ts";
 // Their reads for the owner's view (H-11c).
