@@ -413,9 +413,11 @@ export const clientConversationFeedResponseSchema = z.object({
   head: clientFeedHeadSchema.nullable(),
   /**
    * The time of the newest message the hub has heard of in this chat: the
-   * head's, or the chat list's last message when that is later. Later than
-   * `head.at` means the reader has not caught up with the chat yet. Null when
-   * the hub knows of no message.
+   * head's, or the chat list's last message when that is later than every
+   * message the reader holds. Later than `head.at` means the reader has not
+   * caught up with the chat yet. A newest message that was deleted does not
+   * count as such: the reader holds its row, so nothing is behind and this is
+   * the head's time. Null when the hub knows of no message.
    */
   newestKnownAt: isoTimestamp.nullable(),
   /** Continues the walk toward older messages; null at its end. */

@@ -259,6 +259,34 @@ function laterInstant(left: string | null, right: string | null): string | null 
   return Date.parse(right) > Date.parse(left) ? right : left;
 }
 
+/**
+ * The time of the newest message the hub has heard of that the reader does not
+ * have to answer for: the head's, or the chat list's last message when the
+ * chat list is ahead of the reader.
+ *
+ * The chat list is ahead only of what the reader does not hold. Its time is not
+ * taken back when the newest message is unsent, so compared with the head (the
+ * newest LIVE message) it would read "the stores are behind" for as long as
+ * nobody writes again. A time at or before the newest row the reader holds,
+ * deleted or not, names a message the reader has: nothing is behind.
+ */
+export function conversationFeedNewestKnownAt(input: {
+  /** The head's time: the newest live message. */
+  headAt: string | null;
+  /** The time of the newest row the reader holds, a deleted one included; null when it holds no dated row. */
+  newestHeldAt: Date | null;
+  /** `page_dm_threads.last_message_at`. */
+  threadLastMessageAt: Date | null;
+}): string | null {
+  const listed = input.threadLastMessageAt;
+  const ahead = listed !== null
+    && !Number.isNaN(listed.getTime())
+    && (input.newestHeldAt === null
+      || Number.isNaN(input.newestHeldAt.getTime())
+      || listed.getTime() > input.newestHeldAt.getTime());
+  return ahead ? laterInstant(input.headAt, isoInstantOrNull(listed)) : input.headAt;
+}
+
 function refuseCursor(): never {
   // One message and one reason for every refusal: saying WHY (another person's
   // cursor versus a cut one) would describe a scope the caller does not hold.
@@ -325,7 +353,12 @@ async function readFirstPage(
       asOf: input.now.getTime(),
       coverage,
       head,
-      newestKnownAt: laterInstant(head?.at ?? null, isoInstantOrNull(threadLastMessageAt)),
+      newestKnownAt: conversationFeedNewestKnownAt({
+        headAt: head?.at ?? null,
+        // Newest first, undated rows last: the first row is the newest the reader holds.
+        newestHeldAt: page.rows[0]?.occurredAt ?? null,
+        threadLastMessageAt,
+      }),
     },
     snapshot: {
       archiveHighSeq: input.snapshot.archiveHighSeq,

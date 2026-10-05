@@ -628,9 +628,11 @@ generation would read it**, and three of its answers are a generation's own.
   Ping window; 1500 at most, the readers' cap; the 3000 depth is the full Recap's alone). A client
   never recounts the segment from the rows of a page.
 - `coverage`: the same answer as the frame's `coverage` (`services/client-coverage.ts`).
-  `newestKnownAt`: the later of the head's time and the chat list's last message time
-  (`page_dm_threads.last_message_at`); later than `head.at` means the stores have not caught up
-  with the chat.
+  `newestKnownAt`: the head's time, or the chat list's last message time
+  (`page_dm_threads.last_message_at`) when that is later than every row the reader holds, a
+  deleted row included; later than `head.at` means the stores have not caught up with the chat.
+  An unsent newest message does not read as a lag: the chat list keeps its time, the reader holds
+  its row, and `newestKnownAt` is the head's time.
 - A walk is frozen at its first page: `snapshotRevision`, `asOf`, `coverage`, `head` and
   `newestKnownAt` are read once and repeated on every later page, and a message that arrives
   meanwhile is not in the walk (`packages/db/src/repositories/conversation-feed.ts` says what a

@@ -32,6 +32,7 @@ import { CLIENT_FEATURE_REQUIREMENTS, evaluateClientFeature } from "../apps/runt
 import { CLIENT_BOOTSTRAP_LIMITS } from "../apps/runtime/src/services/client-limits.ts";
 import {
   CLIENT_FEED_CURSOR_DOMAIN,
+  conversationFeedNewestKnownAt,
   conversationFeedSourceOf,
   toClientFeedItem,
 } from "../apps/runtime/src/services/conversation-feed.ts";
@@ -420,6 +421,50 @@ describe("archive feed rows on the wire (H-9c)", () => {
     // toISOString spells a year past 9999 with six digits and a sign.
     expect(wire({ occurredAt: new Date("+010000-01-01T00:00:00.000Z") }).at).toBeNull();
     expect(wire({ occurredAt: new Date("1970-01-01T00:00:00.000Z") }).at).toBe("1970-01-01T00:00:00.000Z");
+  });
+});
+
+describe("archive feed newestKnownAt (H-9c)", () => {
+  const HEAD = "2026-10-03T10:00:00.000Z";
+  const at = (iso: string) => new Date(iso);
+  const known = (newestHeldAt: string | null, threadLastMessageAt: string | null, headAt: string | null = HEAD) =>
+    conversationFeedNewestKnownAt({
+      headAt,
+      newestHeldAt: newestHeldAt === null ? null : at(newestHeldAt),
+      threadLastMessageAt: threadLastMessageAt === null ? null : at(threadLastMessageAt),
+    });
+
+  it("is the chat list's time only when the chat list is ahead of every row the reader holds", () => {
+    // Caught up: the chat list names the head, something older, or nothing.
+    expect(known(HEAD, HEAD)).toBe(HEAD);
+    expect(known(HEAD, "2026-10-02T10:00:00.000Z")).toBe(HEAD);
+    expect(known(HEAD, null)).toBe(HEAD);
+    // Behind: the chat list has heard of a message the reader does not hold.
+    expect(known(HEAD, "2026-10-03T10:00:00.001Z")).toBe("2026-10-03T10:00:00.001Z");
+    expect(known(HEAD, "2026-10-03T11:00:00.000Z")).toBe("2026-10-03T11:00:00.000Z");
+  });
+
+  it("does not read an unsent newest message as a lag: its row is held, its time is not ahead", () => {
+    const unsentAt = "2026-10-03T11:00:00.000Z";
+    // The reader's newest row is the deleted one; the head is the live one before it.
+    expect(known(unsentAt, unsentAt)).toBe(HEAD);
+    expect(known(unsentAt, "2026-10-03T10:30:00.000Z")).toBe(HEAD);
+    // A message newer than the deleted one is still ahead.
+    expect(known(unsentAt, "2026-10-03T11:00:01.000Z")).toBe("2026-10-03T11:00:01.000Z");
+    // Every message was unsent: no head, nothing behind, nothing known.
+    expect(known(unsentAt, unsentAt, null)).toBeNull();
+  });
+
+  it("reads the chat list alone when the reader holds no dated row", () => {
+    expect(known(null, "2026-10-03T11:00:00.000Z", null)).toBe("2026-10-03T11:00:00.000Z");
+    expect(known(null, null, null)).toBeNull();
+    // A time the client's schema would refuse is not answered.
+    expect(conversationFeedNewestKnownAt({
+      headAt: HEAD, newestHeldAt: at(HEAD), threadLastMessageAt: new Date(Number.NaN),
+    })).toBe(HEAD);
+    expect(conversationFeedNewestKnownAt({
+      headAt: HEAD, newestHeldAt: at(HEAD), threadLastMessageAt: new Date("+010000-01-01T00:00:00.000Z"),
+    })).toBe(HEAD);
   });
 });
 

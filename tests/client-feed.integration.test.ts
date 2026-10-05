@@ -693,6 +693,66 @@ describe("GET /api/v1/client/pages/:pageLabel/conversations/:fanRef/feed", () =>
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
+  it("does not read an unsent newest message as the stores lagging behind the chat", async (context) => {
+    if (!server) return context.skip();
+    await switchPreviewOn();
+    const base = Math.floor(Date.now() / 1000) * 1000;
+    const olderAt = new Date(base - 3 * HOUR_MS);
+    const newestAt = new Date(base - 2 * HOUR_MS);
+    await archiveRow({ ref: "9001", at: olderAt, text: "hi" });
+    await archiveRow({ ref: "9002", at: newestAt, text: "sent then unsent", mine: true });
+    // The chat list names the newest message, and the reader holds it: caught up.
+    await setThreadLastMessageAt(newestAt);
+    expect(await feedOk(grishaToken)).toMatchObject({
+      head: { messageRef: "9002", at: newestAt.toISOString() },
+      newestKnownAt: newestAt.toISOString(),
+    });
+
+    // The page unsends it. The chat list keeps its time; the reader holds its row.
+    await testDb!.pool.query(
+      "update message_archive set deleted_at = now() where account_id = $1 and message_ref = '9002'",
+      [pageIds["lora-of"]],
+    );
+    const unsent = await feedOkRaw(grishaToken);
+    expect(unsent.raw).not.toContain("sent then unsent");
+    expect(unsent.body.items.map((item) => [item.messageId, item.deleted])).toEqual([["9002", true], ["9001", false]]);
+    expect(unsent.body.head).toEqual({ messageRef: "9001", at: olderAt.toISOString(), sender: "fan" });
+    // Nothing is behind: the newest known message is the head, not the unsent one.
+    expect(unsent.body.newestKnownAt).toBe(olderAt.toISOString());
+
+    // The chat list hears of a message newer than every row the reader holds: now it is ahead.
+    const laterAt = new Date(base - HOUR_MS);
+    await setThreadLastMessageAt(laterAt);
+    expect((await feedOk(grishaToken)).newestKnownAt).toBe(laterAt.toISOString());
+
+    // The union reader, the same rule: the webhook store catches up with that
+    // message, then the message is unsent there in place.
+    app.config.aiTranscriptFreshUnionMode = "serve";
+    await dmRow({ ref: "9003", at: laterAt, text: "fresh then unsent" });
+    expect(await feedOk(grishaToken)).toMatchObject({
+      source: "union",
+      head: { messageRef: "9003", at: laterAt.toISOString() },
+      newestKnownAt: laterAt.toISOString(),
+    });
+    await testDb!.pool.query(
+      "update dm_message_archive set deleted_at = now() where platform_account_id = $1 and platform_message_id = '9003'",
+      [pageIds["lora-of"]],
+    );
+    const unionUnsent = await feedOkRaw(grishaToken);
+    expect(unionUnsent.raw).not.toContain("fresh then unsent");
+    expect(unionUnsent.body.items.map((item) => [item.messageId, item.deleted]))
+      .toEqual([["9003", true], ["9002", true], ["9001", false]]);
+    expect(unionUnsent.body).toMatchObject({
+      source: "union",
+      head: { messageRef: "9001", at: olderAt.toISOString(), sender: "fan" },
+      newestKnownAt: olderAt.toISOString(),
+    });
+    // And a generation served now reads the same head.
+    expect((await ping()).context).toMatchObject({ source: "union", servedHead: asServedHead(unionUnsent.body.head) });
+
+    await trap!.assertNoOutbound();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
   it("counts the Ping summary by the generation's own rule: the same last date, one fan text or three, is segment B or A", async (context) => {
     if (!server) return context.skip();
     await switchPreviewOn();
