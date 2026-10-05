@@ -51,9 +51,12 @@ export const clientCursorSchema = z.string().min(1).max(2048);
 /**
  * The `reason` beside 400 `bad_request` on a client read that takes a cursor:
  * the cursor is not one this hub issued for this request (forged or cut,
- * issued for another page, fan, person or reader, expired, or issued before
- * the archive was rebuilt). The answer never says which. Not retried as is:
- * the client reads the first page again.
+ * issued for something else than the read binds its cursors to, or past the
+ * read's lifetime). The answer never says which. Not retried as is: the client
+ * reads the first page again. What each read binds a cursor to, and for how
+ * long:
+ * - the awaiting-reply queue (`clientSpenderAwaitingReply`): the page and the
+ *   person; a cursor is good for an hour after the page that carried it.
  */
 export const CLIENT_CURSOR_REFUSAL_REASONS = ["cursor_invalid"] as const;
 export type ClientCursorRefusalReason = (typeof CLIENT_CURSOR_REFUSAL_REASONS)[number];
@@ -555,9 +558,12 @@ export const clientSpenderStatsResponseSchema = z.object({
 // walk (wrote again, paid more) can be met a second time or not at all until
 // the next walk; a client keeps the first row of a fan.
 //
-// `nextCursor` is opaque and signed, valid only for the same page and person
-// and for an hour: any other use is 400 `bad_request` with the reason
-// `cursor_invalid`, and the client reads the first page again.
+// `nextCursor` is opaque (its state is sealed: its holder reads nothing from
+// it) and signed, valid only for the same page and person, and for an hour
+// after the page that carried it. Every page carries a newly issued one, so the
+// hour bounds the gap between two pages of a walk, not the walk. Any other use
+// is 400 `bad_request` with the reason `cursor_invalid`, and the client reads
+// the first page again.
 
 /** The most rows one page carries. */
 export const CLIENT_SPENDER_AWAITING_REPLY_MAX_LIMIT = 100;
@@ -860,9 +866,11 @@ export const clientRouteSchemas = {
       + "`unknown` count the whole queue at `asOf`; `loaded` counts the rows the walk has served so far. "
       + "Every page is read at its own instant: a fan whose place in the order does not change is served "
       + "exactly once, a fan answered meanwhile is not served, and a fan whose place changed can be met "
-      + "twice. `nextCursor` is opaque, signed, and valid only for the same page and person, for an hour: "
-      + "anything else is 400 `bad_request` with the reason `cursor_invalid`, and the client reads the first "
-      + "page again. Behind the chat-extension `stats` switch: 409 `client_feature_disabled` with the reason.",
+      + "twice. `nextCursor` is opaque, signed, and valid only for the same page and person, for an hour "
+      + "after the page that carried it (every page carries a new one, so the hour bounds the gap between "
+      + "two pages, not the walk): anything else is 400 `bad_request` with the reason `cursor_invalid`, and "
+      + "the client reads the first page again. Behind the chat-extension `stats` switch: 409 "
+      + "`client_feature_disabled` with the reason.",
     params: clientPageParamsSchema,
     querystring: clientSpenderAwaitingReplyQuerySchema,
     response: {
