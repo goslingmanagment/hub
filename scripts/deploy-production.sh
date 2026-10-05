@@ -621,7 +621,7 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # resets a Fansly page's legacy state, and its rollback command refuses, so
   # it runs unchanged; no image clears a 'retired' blocker.
   "0239_retire_fansly_legacy_sync_states.sql"
-  # 0240_sync_holds.sql is NOT listed any more (step 4, S4-32). The reason is
+  # 0240_sync_holds.sql is NOT listed (since step 4, S4-32). The reason is
   # below, where 0243_sync_pages_drop_hold_step.sql was.
 
   # chat-extension greeting lease and send custody (hub-pr-plan H-7a): three
@@ -638,26 +638,28 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # gone it shows their env defaults and runs unchanged; the removed values
   # stay readable in the audit log.
   "0242_retire_fansly_legacy_config_overrides.sql"
-  # NOT listed any more (step 4, S4-32): 0240_sync_holds.sql (the hold set's
+  # NOT listed (since step 4, S4-32): 0240_sync_holds.sql (the hold set's
   # table) and 0243_sync_pages_drop_hold_step.sql (the first old hold column
   # of sync_pages). The image before 0240 knows a page's holds in the old
   # hold columns of sync_pages alone; the one before 0243 compares those
   # columns with the table whenever it acquires a page and lets them win.
   # Both were compatible only while the hold writers rewrote the columns
   # from the table in the transaction of every hold write, which they did
-  # through the release that carried 0243. This tree writes the table alone
-  # and leaves the columns stale, so by them either image would drop every
-  # hold taken since this release started and bring back every hold lifted.
-  # The one thing this tree writes there is a marker, whenever it takes a
-  # page: a route-state version in the old resource-hold map that the image
-  # before 0243 cannot read. That image then refuses the page instead of
-  # opening it by stale columns: it fails closed, and runs no page this
-  # release has taken. This release is therefore deployed onto the one that
-  # carried 0243, with both applied already: no delta of its deploy holds
-  # them, and its automatic rollback returns to an image that reads no hold
-  # column. A deploy that still had one of them to apply keeps the automatic
-  # rollback off rather than return to an image that runs no page this
-  # release has taken (apps/runtime/src/sync/README.md, "Rollback targets").
+  # through the release that carried 0243. From S4-32 on the tree writes
+  # the table alone: the columns went stale there and are gone since S4-33
+  # (the last entry of this list about them, below), so either image would
+  # drop every hold taken since S4-32 started and bring back every hold
+  # lifted, and neither runs at all without the columns. Both migrations
+  # are long applied wherever S4-32 has been deployed, so no delta of a
+  # later deploy holds them; a deploy that still had one of them to apply
+  # keeps the automatic rollback off rather than fail open
+  # (apps/runtime/src/sync/README.md, "Rollback targets").
+  #
+  # With the drop the question of the old columns is closed: no image that
+  # reads or writes one runs on the table. The rollback targets of a
+  # database that has the drop are the S4-32 image and the images after it;
+  # the images before 0240 and before 0243, and the one that carried 0243
+  # (S4-31), are not.
 
   # chat-extension client_health rollups (chat-extension H-11b): five new
   # tables (client_health_receipts and four *_hourly rollups), their checks,
@@ -670,6 +672,23 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # in the token's profile), never journaled. Rollups already written stay
   # unread until a forward deploy returns.
   "0244_client_health_rollups.sql"
+  # The old hold columns of sync_pages dropped (step 4, S4-33, owner decision
+  # №26; the last of the three releases): five columns and the slot's two
+  # CHECKs, one catalog-only ALTER TABLE under lock_timeout 5 s. The previous
+  # image (S4-32) reads none of them: no statement selects or returns them,
+  # its drizzle table does not map them, and it reads and writes sync_pages
+  # by named columns only, never by *. It writes one, in one statement: the
+  # marker its acquisition leaves in the old resource-hold map, a statement
+  # of its own that goes on where the column is gone. So it runs unchanged
+  # after a rollback. That is true of the S4-32 image ALONE: the one before
+  # it ends every hold write by rewriting those columns, so on the migrated
+  # table it takes no hold and lifts none while its pages keep sending. This
+  # release is therefore deployed onto S4-32, deployed and run for its hour,
+  # never in the deploy that brings S4-32 and never over an older image.
+  # This list cannot tell those deploys apart (S4-32 has no migration of its
+  # own), so the deploy asks the running images before it migrates anything:
+  # verify_running_images_run_without_old_hold_columns.
+  "0245_sync_pages_drop_old_hold_columns.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"
@@ -1013,6 +1032,109 @@ forbid_rollback_for_pending_pre_recreate_migrations() {
       return 0
     fi
   done
+}
+
+# The drop of the old hold columns of sync_pages (step 4, S4-33:
+# *_sync_pages_drop_old_hold_columns.sql) is applied by the new api while the
+# `sync` of the running image still works, and it is in
+# ROLLBACK_COMPATIBLE_MIGRATIONS, so a failed deploy returns to that image.
+# Both are safe under ONE image, the release before the drop (S4-32), and the
+# list cannot say so: that release has no migration of its own. Every image
+# older than it names the columns of the old hold slot in a statement. The one
+# just before it ends every hold write by rewriting them, in the write's
+# transaction: on the migrated table it takes no hold and lifts none (after a
+# 401, a 429, a network failure) while its page keeps sending. It fails open,
+# and every health gate stays green, since a 200 writes no hold.
+#
+# So the running images are asked before anything is migrated. While the drop
+# is not in the schema baseline, the built code of the image of every running
+# app container is searched for the slot's columns, and the deploy stops if
+# one names them: the deploy that would bring S4-32 and the drop at once, and
+# any deploy of this tree after a rollback to an older image.
+#
+# The witness is the three columns of the slot that have no namesake. The
+# resource-hold map, dropped with them, is not part of it: the S4-32 image
+# names it once, in the marker its acquisition leaves there, and that
+# statement goes on where the column is gone
+# (tests/sync-hold-set.integration.test.ts runs it after the drop).
+#
+# Fails closed: a container that cannot be listed or an image that cannot be
+# searched stops the deploy too.
+verify_running_images_run_without_old_hold_columns() {
+  if grep -Eq '^[0-9]{4}_sync_pages_drop_old_hold_columns\.sql$' "$SCHEMA_BEFORE_FILE"; then
+    return 0
+  fi
+
+  local slot_columns='hold_kind|hold_since|hold_detail'
+  local report
+  report="$(run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}
+defined=\"\$(${REMOTE_COMPOSE} config --services)\"
+searched=' '
+for service in api worker scheduler sync; do
+  grep -qx \"\$service\" <<<\"\$defined\" || continue
+  containers=\"\$(${REMOTE_COMPOSE} ps -q \"\$service\")\"
+  for container_id in \$containers; do
+    image_id=\"\$(docker inspect -f '{{.Image}}' \"\$container_id\")\"
+    revision=\"\$(docker image inspect -f '{{ index .Config.Labels \"agency-hub.source-revision\" }}' \"\$image_id\")\"
+    case \"\$searched\" in
+      *\" \$image_id=names \"*) verdict=names ;;
+      *\" \$image_id=clean \"*) verdict=clean ;;
+      *)
+        if docker run --rm \"\$image_id\" grep -rqE '${slot_columns}' apps/runtime/dist packages/db/dist; then
+          verdict=names
+        else
+          status=\$?
+          [[ \"\$status\" == 1 ]] || exit \"\$status\"
+          verdict=clean
+        fi
+        searched+=\"\$image_id=\$verdict \"
+        ;;
+    esac
+    printf '%s|%s|%s\\n' \"\$service\" \"\$revision\" \"\$verdict\"
+  done
+done")" \
+    || fail "Unable to search the running images for the old hold slot of sync_pages; its drop is still to be applied and is safe only under the release before it"
+
+  local older=()
+  local containers=0
+  local service
+  local revision
+  local verdict
+  while IFS='|' read -r service revision verdict; do
+    [[ -n "$service" ]] || continue
+    if [[ -z "$revision" || "$revision" == "<no value>" ]]; then
+      revision="unlabelled"
+    fi
+    case "$verdict" in
+      clean)
+        ;;
+      names)
+        older+=("${service} (source revision ${revision})")
+        ;;
+      *)
+        fail "Unreadable answer about the running ${service} image; refusing to drop the old hold columns of sync_pages under it"
+        ;;
+    esac
+    containers=$((containers + 1))
+  done <<<"$report"
+
+  if (( ${#older[@]} > 0 )); then
+    printf '[deploy] The drop of the old hold columns of sync_pages is still to be applied, and these running\n' >&2
+    printf '[deploy] images name the old hold slot in a statement:\n' >&2
+    printf '[deploy]   %s\n' "${older[@]}" >&2
+    printf '[deploy] Such an image does not run on the migrated table. The release just before S4-32 rewrites\n' >&2
+    printf '[deploy] the dropped columns at every hold write: there it takes no hold and lifts none while its\n' >&2
+    printf '[deploy] pages keep sending, and the automatic rollback would return to it. Deploy the release\n' >&2
+    printf '[deploy] before the drop first (S4-32, from a checkout of its commit), let it run its hour, then\n' >&2
+    printf '[deploy] deploy this one (apps/runtime/src/sync/README.md, "Rollback targets from this release on").\n' >&2
+    fail "A running image is older than the release the drop of the old hold columns of sync_pages needs"
+  fi
+
+  if (( containers == 0 )); then
+    log "No app container is running: nothing works on sync_pages while its old hold columns are dropped"
+  else
+    log "No running image names the old hold slot of sync_pages (${containers} running app container(s)); its drop may run under them"
+  fi
 }
 
 read_remote_env_value() {
@@ -2135,6 +2257,9 @@ capture_remote_schema_migrations "$SCHEMA_BEFORE_FILE" \
   || fail "Unable to capture remote schema migration state before pre-recreate migration"
 SCHEMA_BASELINE_CAPTURED=1
 log "Captured remote schema migration state for rollback safety"
+# Before anything is quiesced or migrated: a refusal here leaves the running
+# stack as it was.
+verify_running_images_run_without_old_hold_columns
 quiesce_remote_legacy_sync_services \
   || fail "Unable to quiesce the legacy scheduler and worker"
 forbid_rollback_for_pending_pre_recreate_migrations

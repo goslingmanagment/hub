@@ -208,16 +208,15 @@ Every hold is a row of `sync_holds` (the page's hold set: its own holds, each ro
 file's breaker), and one evaluator reads it for the actor, status, "why" and the alerts.
 
 **Rollback targets and the old hold columns.** A page's holds are its rows of `sync_holds` (`sync page status`
-shows them). The old hold columns of `sync_pages` are stale since the release that stopped writing them (step 4,
-S4-32): never read a hold from the page row, and never edit one there. The release before that one is a safe
-rollback target: it reads the rows alone. The hold-set release (the one that brought `sync_holds`) and every image
-older than it are NOT a rollback target any more: the hold-set release lets the stale columns win over the rows
-whenever it acquires a page, so by them it would drop every hold taken, and bring back every hold lifted, since.
-Every page that release (S4-32) has taken carries a marker in its old columns at which the hold-set release refuses
-the page instead (`Fansly sync host: acquire failed` with `SyncLegacyHoldsUnreadableError`; alert 1
-`ownership_unconfirmed` after 2 min): sync is down on that image, not open. Go forward — that release or the one
-before it again — and never edit the marker away. Details: `apps/runtime/src/sync/README.md`, "Rollback targets
-from this release on".
+shows them). The old hold columns of `sync_pages` are dropped (step 4, S4-33): a query that selects one fails, so
+never read a hold from the page row. The release before the drop (S4-32) is a safe rollback target, and the only one:
+it reads none of them, and the marker its acquisition used to leave in the row is skipped where the column is gone.
+Every image older than it is NOT a rollback target any more: S4-31 rewrites the dropped columns at every hold write,
+so every hold write fails there and a page can neither take a hold nor lift one while it keeps sending; the hold-set
+release (the one that brought `sync_holds`) and the images before it read them. The deploy refuses to apply the drop
+while a running image is older than S4-32 (`verify_running_images_run_without_old_hold_columns`); deploy S4-32
+first, from a checkout of its commit. Details: `apps/runtime/src/sync/README.md`, "Rollback targets from this
+release on".
 
 **Breakers** stop one subject or one file, never the page:
 

@@ -295,20 +295,6 @@ describe("onboarding goes straight to live (S4-05)", () => {
     expect(checkOf("auth_refusals").verdict).toBe("pass");
     expect(checkOf("window_complete").verdict).toBe("inconclusive");
     expect(hour.accepted).toBe(false);
-
-    // The page was born and run by this build, which reads none of the old
-    // hold columns its row still has in the database (step 4, S4-32): after
-    // onboarding, an acquisition, heartbeats, admissions and captures the
-    // hold slot holds its defaults, which its two CHECKs admit, and the
-    // resource-hold map holds what the host's acquisition put there and
-    // nothing else — the marker that says the columns are stale, at which
-    // the hold-set release would refuse the page rather than open it.
-    expect((await testDb.pool.query(
-      "select hold_kind, hold_until, hold_since, hold_detail, resource_holds from sync_pages where page_id = $1", [page.id],
-    )).rows).toEqual([{
-      hold_kind: null, hold_until: null, hold_since: null, hold_detail: {},
-      resource_holds: { "route:state": { version: 2, routes: {} } },
-    }]);
   }, 60_000);
 
   it("leaves nothing behind when the session is refused, and refuses a second page of the same account", async (context) => {

@@ -6,48 +6,65 @@ import { syncPages } from "@agency_hub_core/db";
 
 import { sourceFiles, syncPageRowWriters } from "./helpers/sync-page-row-writers.ts";
 
-// The old hold columns of the page row (step 4, S4-32 — the second of the
-// three releases that take them away; owner decision №26).
+// The old hold columns of the page row (step 4, S4-33 — the last of the
+// three releases that took them away; owner decision №26).
 //
-// A page's holds are its rows of `sync_holds`. Until this release every hold
-// write also rewrote the hold slot of `sync_pages` (`hold_kind`, `hold_until`,
-// `hold_since`, `hold_detail`) and `resource_holds` from the rows, for the
-// hold-set release, which lets those columns win over the rows. That rewrite
-// is gone, with its file and the drizzle fields: the columns stay in the
-// database, stale, until the next release drops them, and nothing in `apps`,
-// `packages` or `scripts` names them — with ONE exception, one constant of
-// one file: the marker an acquisition leaves in the resource-hold map to say
-// that the columns are stale, at which the hold-set release refuses the page
-// instead of letting them win. No statement reads any of them, and the
-// marker's statement survives their absence, which is what makes the drop
-// compatible with this image. Pinned here; the migrations (and their pin
-// tests) are the other place that still names them. What it means on a
-// Postgres: tests/sync-hold-set.integration.test.ts.
+// A page's holds are its rows of `sync_holds`. The hold slot of `sync_pages`
+// (`hold_kind`, `hold_until`, `hold_since`, `hold_detail`) and
+// `resource_holds` were written through S4-31, left stale by S4-32 — which
+// read none of them and wrote one, the marker its acquisition left in
+// `resource_holds` — and are dropped by the migration of this release, with
+// the slot's two CHECKs. No statement of `apps`, `packages` or `scripts`
+// names them. One line does: the three columns of the slot that have no
+// namesake, which the deploy searches the running images for before it lets
+// the drop run under them (S4-32 names none of the three; every image older
+// than it does). Pinned here. The migrations name them, and so do the three
+// tests of those migrations (this file, tests/sync-engine-migrations.test.ts
+// and tests/sync-hold-set.integration.test.ts, which runs the drop and what
+// is left of the page table on a Postgres) and the test of that deploy gate
+// (tests/deploy-old-hold-columns-gate.test.ts, whose fixture images are made
+// of them) — and nothing else.
 
 const OLD_HOLD_COLUMNS = ["hold_kind", "hold_until", "hold_since", "hold_detail", "resource_holds"] as const;
 /** The key the route state had inside `resource_holds`. */
 const OLD_ROUTE_STATE_KEY = "route:state";
 
-/** The one file that names an old hold column, and the constant that does. */
-const MARKER_FILE = "packages/db/src/repositories/sync/pages.ts";
-const MARKER_CONSTANT = [
-  "const STALE_HOLD_COLUMNS_MARKER = sql`",
-  "  resource_holds = case when jsonb_typeof(resource_holds) = 'object' then resource_holds else '{}'::jsonb end",
-  `                   || '{"route:state": {"version": 2, "routes": {}}}'::jsonb\`;`,
-];
+const TEXT_FILE = /\.(ts|tsx|mts|mjs|cjs|js|sql|sh|json|md|css|html|ya?ml)$/;
 
 /** Every text file of the three trees but the migrations (and built output). */
-const ALL = ["apps", "packages", "scripts"]
-  .flatMap((root) => sourceFiles(root, /\.(ts|tsx|mts|mjs|cjs|js|sql|sh|json|md|css|html|ya?ml)$/))
-  .sort();
+const ALL = ["apps", "packages", "scripts"].flatMap((root) => sourceFiles(root, TEXT_FILE)).sort();
 
-/** `file:line` of every line of `ALL` that matches. */
-function linesNaming(pattern: RegExp): string[] {
-  return ALL.flatMap((file) => readFileSync(file, "utf8").split("\n")
+/** Every text file of the tests. */
+const TESTS = sourceFiles("tests", TEXT_FILE).sort();
+
+/** The tests of the migrations that made and dropped the columns. */
+const MIGRATION_TESTS = [
+  "tests/sync-engine-migrations.test.ts",
+  "tests/sync-hold-set.integration.test.ts",
+  "tests/sync-old-hold-columns.test.ts",
+];
+
+/** The test of the deploy gate that searches the running images for them. */
+const DEPLOY_GATE_TEST = "tests/deploy-old-hold-columns-gate.test.ts";
+
+/** The tests that name an old hold column: those, and no other. */
+const NAMING_TESTS = [DEPLOY_GATE_TEST, ...MIGRATION_TESTS];
+
+/** The one line of the three trees that names any: the deploy gate's
+ *  witness, the columns of the slot that have no namesake. */
+const DEPLOY_GATE_WITNESS = "  local slot_columns='hold_kind|hold_since|hold_detail'";
+
+/** `file:line` of every line of `files` that matches. */
+function linesNaming(pattern: RegExp, files: readonly string[] = ALL): string[] {
+  return files.flatMap((file) => readFileSync(file, "utf8").split("\n")
     .flatMap((line, index) => (pattern.test(line) ? [`${file}:${index + 1}`] : [])));
 }
 
-describe("nothing in apps, packages and scripts names an old hold column of the page row", () => {
+function filesNaming(pattern: RegExp, files: readonly string[]): string[] {
+  return [...new Set(linesNaming(pattern, files).map((hit) => hit.slice(0, hit.lastIndexOf(":"))))];
+}
+
+describe("no statement in apps, packages and scripts names an old hold column of the page row", () => {
   it("scans the three trees, the migrations excepted", () => {
     expect(ALL.length).toBeGreaterThan(500);
     expect(ALL).toContain("packages/db/src/repositories/sync/pages.ts");
@@ -58,48 +75,47 @@ describe("nothing in apps, packages and scripts names an old hold column of the 
     expect(ALL.filter((file) => file.includes("/migrations/"))).toEqual([]);
   });
 
-  it("no line names the hold slot's kind, start or detail, the resource-hold map or its route-state key — but the two lines of one constant: the marker", () => {
+  it("one line names the hold slot's kind, start and detail — what the deploy searches the running images for — and none the resource-hold map or its route-state key", () => {
     // rg -n "hold_kind|hold_since|hold_detail|resource_holds|route:state" apps packages scripts -g '!packages/db/migrations/*'
-    const lines = readFileSync(MARKER_FILE, "utf8").split("\n");
-    const first = lines.indexOf(MARKER_CONSTANT[0]!);
-    expect(first).toBeGreaterThan(0);
-    expect(lines.slice(first, first + MARKER_CONSTANT.length)).toEqual(MARKER_CONSTANT);
-    expect(linesNaming(/hold_kind|hold_since|hold_detail|resource_holds|route:state/)).toEqual([
-      `${MARKER_FILE}:${first + 2}`,
-      `${MARKER_FILE}:${first + 3}`,
-    ]);
-    // The slot itself is named nowhere at all.
-    expect(linesNaming(/hold_kind|hold_since|hold_detail/)).toEqual([]);
+    const hits = linesNaming(/hold_kind|hold_since|hold_detail|resource_holds|route:state/);
+    expect(hits).toHaveLength(1);
+    const [file, line] = hits[0]!.split(":");
+    expect(file).toBe("scripts/deploy-production.sh");
+    const deploy = readFileSync("scripts/deploy-production.sh", "utf8");
+    expect(deploy.split("\n")[Number(line) - 1]).toBe(DEPLOY_GATE_WITNESS);
+    // It is the gate's: the pattern of its search of an image's built code,
+    // never a statement the deploy sends to the database.
+    const gate = deploy.match(/^verify_running_images_run_without_old_hold_columns\(\) \{\n[\s\S]*?^\}\n/m)?.[0] ?? "";
+    expect(gate).toContain(`${DEPLOY_GATE_WITNESS}\n`);
+    expect(gate).toContain("grep -rqE '${slot_columns}' apps/runtime/dist packages/db/dist");
+    // The witness: the slot's columns but its end, whose name another table's
+    // column has. The map is no part of it: the release before the drop
+    // names it, in the marker of an acquisition, and runs without it.
+    expect(DEPLOY_GATE_WITNESS.match(/'(.+)'/)![1]!.split("|")).toEqual(
+      OLD_HOLD_COLUMNS.filter((column) => column !== "hold_until" && column !== "resource_holds"),
+    );
+    expect(linesNaming(/resource_holds|route:state/)).toEqual([]);
     expect(OLD_ROUTE_STATE_KEY).toBe("route:state");
   });
 
-  it("the marker is written by one statement, in the transaction of an acquisition, and by nothing else", () => {
-    const pages = readFileSync(MARKER_FILE, "utf8");
-    // Declared once, not exported, used once.
-    expect(pages.match(/^(export )?const STALE_HOLD_COLUMNS_MARKER = /gm)).toEqual(["const STALE_HOLD_COLUMNS_MARKER = "]);
-    expect(pages.match(/\$\{STALE_HOLD_COLUMNS_MARKER\}/g)).toHaveLength(1);
-
+  it("an acquisition leaves no marker: the one write the release before the drop made to an old column went with the column", () => {
+    // rg -n "STALE_HOLD_COLUMNS_MARKER" apps packages scripts -g '!packages/db/migrations/*'
+    expect(linesNaming(/STALE_HOLD_COLUMNS_MARKER/)).toEqual([]);
+    // Nor what let that statement fail where the column is gone.
+    const pages = readFileSync("packages/db/src/repositories/sync/pages.ts", "utf8");
+    expect(pages).not.toMatch(/isUndefinedColumn|42703/);
+    // The acquisition is the ownership change alone: one transaction, one
+    // statement that writes the page row, no savepoint for a second one.
     const acquisition = pages.slice(pages.indexOf("export async function acquireSyncPageOwnership("), pages.indexOf("export async function heartbeatSyncPageOwner("));
-    const ownership = acquisition.indexOf("set owner_generation = owner_generation + 1,");
-    const marker = acquisition.search(/await savepoint\.execute\(sql`update sync_pages set \$\{STALE_HOLD_COLUMNS_MARKER\} where page_id = \$\{input\.pageId\}`\);/);
-    const acquired = acquisition.indexOf('kind: "acquired",');
-    // One transaction: the owner generation, then the marker, then the result.
     expect(acquisition.match(/return db\.transaction\(/g)).toHaveLength(1);
-    expect(ownership).toBeGreaterThan(0);
-    expect(marker).toBeGreaterThan(ownership);
-    expect(acquired).toBeGreaterThan(marker);
-    // In a savepoint, and only a column that is gone (the next release's
-    // migration) is let through: every other failure fails the acquisition.
-    const guarded = acquisition.slice(ownership, acquired).replace(/\s+/g, " ");
-    expect(guarded).toContain("try { await tx.transaction(async (savepoint) => { await savepoint.execute(");
-    expect(guarded).toContain("} catch (error) { if (!isUndefinedColumn(error)) throw error; }");
-    expect(pages).toContain('if ((current as { code?: unknown }).code === "42703") return true;');
+    expect(acquisition.match(/\bupdate sync_pages\b/g)).toHaveLength(1);
+    expect(acquisition).toContain("set owner_generation = owner_generation + 1,");
+    expect(acquisition).not.toMatch(/tx\.transaction\(|savepoint/);
   });
 
   it("`hold_until` is named only as two namesakes: another table's column and a report's column over the hold set", () => {
     // rg -n "hold_until" apps packages scripts -g '!packages/db/migrations/*'
-    const named = linesNaming(/hold_until/);
-    expect([...new Set(named.map((hit) => hit.slice(0, hit.lastIndexOf(":"))))]).toEqual([
+    expect(filesNaming(/hold_until/, ALL)).toEqual([
       "apps/runtime/src/sync/budgets-calibration.sql",
       "packages/db/src/schema.ts",
     ]);
@@ -125,21 +141,16 @@ describe("nothing in apps, packages and scripts names an old hold column of the 
     const mapped = Object.values(syncPages as unknown as Record<string, { name?: unknown }>).map((column) => column.name);
     expect(mapped).toContain("network_failure_streak");
     for (const column of OLD_HOLD_COLUMNS) expect(mapped, column).not.toContain(column);
-    // Nor the slot's two CHECKs, which go with the columns.
+    // Nor the slot's two CHECKs, which went with the columns.
     expect(linesNaming(/sync_pages_hold_(kind|pair)_check/)).toEqual([]);
 
     expect(existsSync("packages/db/src/repositories/sync/holds-legacy.ts")).toBe(false);
     expect(linesNaming(
-      /holds-legacy|mirrorSyncHoldsToLegacyColumns|legacyHoldColumnsOf|SyncLegacyHoldColumns|reconcileSyncHoldsWithLegacyColumns|holdRowsOfLegacyColumns|sameLegacyHoldColumns/,
+      /holds-legacy|mirrorSyncHoldsToLegacyColumns|legacyHoldColumnsOf|SyncLegacyHoldColumns|reconcileSyncHoldsWithLegacyColumns|holdRowsOfLegacyColumns|sameLegacyHoldColumns|SyncLegacyHoldsUnreadableError/,
     )).toEqual([]);
-    // The error the hold-set release refuses a marked page with is named
-    // where the operator reads what that image's log means, and nowhere else.
-    expect([...new Set(linesNaming(/SyncLegacyHoldsUnreadableError/).map((hit) => hit.slice(0, hit.lastIndexOf(":"))))]).toEqual([
-      "apps/runtime/src/sync/README.md",
-    ]);
   });
 
-  it("the page row is never read by `*`: a stale column reaches no reader", () => {
+  it("the page row is never read by `*`: a column dropped, or added later, changes no result", () => {
     expect(linesNaming(/\bsp\.\*|\*\s+from\s+sync_pages\b|(to_jsonb|row_to_json)\((sp|sync_pages)\)/)).toEqual([]);
     for (const file of ["packages/db/src/repositories/sync/pages.ts", "packages/db/src/repositories/sync/attempts.ts"]) {
       expect(readFileSync(file, "utf8"), file).not.toMatch(/returning\s+\*/);
@@ -147,8 +158,49 @@ describe("nothing in apps, packages and scripts names an old hold column of the 
   });
 });
 
+describe("of the tests, only those of the migrations and of the deploy gate name an old hold column", () => {
+  it("scans every test, helper and fixture", () => {
+    expect(TESTS.length).toBeGreaterThan(400);
+    for (const file of NAMING_TESTS) expect(TESTS, file).toContain(file);
+    expect(TESTS).toContain("tests/helpers/sync-holds.ts");
+  });
+
+  it("the hold slot's kind, start and detail, the resource-hold map and its route-state key", () => {
+    // rg -l "hold_kind|hold_since|hold_detail|resource_holds|route:state" tests
+    expect(filesNaming(/hold_kind|hold_since|hold_detail|resource_holds|route:state/, TESTS)).toEqual(NAMING_TESTS);
+  });
+
+  it("the slot's two CHECKs: the tests of the migrations alone", () => {
+    // rg -l "sync_pages_hold_" tests
+    expect(filesNaming(/sync_pages_hold_/, TESTS)).toEqual(MIGRATION_TESTS);
+  });
+
+  it("`hold_until`: they, and the test of the legacy queue's cooldown table, which has a column of that name", () => {
+    // rg -l "hold_until" tests
+    expect(filesNaming(/hold_until/, TESTS)).toEqual([DEPLOY_GATE_TEST, "tests/page-sync-provider-cooldown.integration.test.ts", ...MIGRATION_TESTS]);
+    const cooldown = readFileSync("tests/page-sync-provider-cooldown.integration.test.ts", "utf8");
+    for (const line of cooldown.split("\n").filter((text) => /hold_until/.test(text))) {
+      expect(line, line).toContain("insert into page_sync_provider_holds (page_id, hold_until, reason, stream, armed_at)");
+    }
+  });
+
+  it("no image that rewrote the columns or read them is a rollback target, and no helper keeps the code of one", () => {
+    // rg -n "sync-holds-previous-image|mirrorHoldsAsPreviousImage|previousImageHoldColumnsOf" tests
+    // rg -n "sync-holds-hold-set-image|acquireAsHoldSetImage|acquireAsPreviousImage|reconcileAsHoldSetImage" tests
+    // The release before the drop kept both for its own rollback proofs: the
+    // rewrite of the release before it, and the hold-set release's read.
+    for (const helper of ["tests/helpers/sync-holds-previous-image.ts", "tests/helpers/sync-holds-hold-set-image.ts"]) {
+      expect(existsSync(helper), helper).toBe(false);
+    }
+    expect(filesNaming(
+      /sync-holds-previous-image|mirrorHoldsAsPreviousImage|previousImageHoldColumnsOf|sync-holds-hold-set-image|acquireAsHoldSetImage|acquireAsPreviousImage|reconcileAsHoldSetImage/,
+      TESTS,
+    )).toEqual(["tests/sync-old-hold-columns.test.ts"]);
+  });
+});
+
 describe("the statements that write the page row", () => {
-  it("are these, in the sync repositories alone — each runs over stale old columns in tests/sync-hold-set.integration.test.ts", () => {
+  it("are these, in the sync repositories alone — each runs after the drop in tests/sync-hold-set.integration.test.ts", () => {
     const writers = syncPageRowWriters();
     expect([...new Set(writers.map((writer) => writer.file))]).toEqual([
       "packages/db/src/repositories/sync/attempts.ts",
@@ -162,8 +214,6 @@ describe("the statements that write the page row", () => {
       "update setSyncPageMode",
       "insert createLiveSyncPage",
       "update trustSyncPageCredentials",
-      // Two statements: the owner generation, then the marker.
-      "update acquireSyncPageOwnership",
       "update acquireSyncPageOwnership",
       "update heartbeatSyncPageOwner",
       "update writeSafeRelease",
@@ -195,26 +245,30 @@ describe("what the operator is told", () => {
   const migrations = readdirSync("packages/db/migrations").filter((file) => file.endsWith(".sql"));
   const holdSet = migrations.find((file) => file.endsWith("_sync_holds.sql"))!;
   const dropHoldStep = migrations.find((file) => file.endsWith("_sync_pages_drop_hold_step.sql"))!;
+  const dropOldColumns = migrations.find((file) => file.endsWith("_sync_pages_drop_old_hold_columns.sql"))!;
   const squash = (text: string) => text.replace(/\s+/g, " ");
 
-  it("the README: the columns are stale and marked so, the previous release is the rollback target, the hold-set release is none and refuses", () => {
+  it("the README: the columns are gone, the release before the drop is the one rollback target, no older image is one, and the deploy checks it", () => {
     const readme = squash(readFileSync("apps/runtime/src/sync/README.md", "utf8"));
-    expect(readme).toContain("**The page row holds nothing; its old hold columns are stale**");
-    expect(readme).toContain("**The marker: a page this release has taken says that its old hold columns are stale.**");
-    expect(readme).toContain('old resource-hold map to `{"version": 2, "routes": {}}`');
-    expect(readme).toContain("with `SyncLegacyHoldsUnreadableError` (`route_state_version:2`), nothing written. A rollback past the previous release therefore fails closed, not open.");
-    expect(readme).toContain("Where the old columns are already dropped the acquisition skips the marker");
-    expect(readme).toContain("The marker turns that into a refusal: that image acquires no page this release has taken");
-    expect(readme).toContain("Never edit the marker away to get that image going");
-    expect(readme).toContain("**Read a page's holds from `sync_holds` or `sync page status`, never from the page row**");
-    expect(readme).toContain("**The release before this one** (S4-31:");
-    expect(readme).toContain(
-      "**The hold-set release (S4-30, the one that brought `sync_holds`) and every image older than it are NOT rollback targets any more.**",
-    );
-    expect(readme).toContain(`never in a deploy that still has \`${holdSet}\` or \`${dropHoldStep}\` to apply`);
+    expect(readme).toContain("**The page row holds nothing, and it has no hold column**");
+    expect(readme).toContain(`\`${dropOldColumns}\` dropped those five columns and the slot's two CHECKs`);
+    expect(readme).toContain("**Read a page's holds from `sync_holds` or `sync page status`**: a query that selects one of the old columns fails.");
+    expect(readme).toContain("**The release before this one** (S4-32) is a safe rollback target, and the only one.");
+    // What that image still names of them, and why it runs without it.
+    expect(readme).toContain("It writes one of them, in one statement: whenever it acquires a page it leaves a marker in the resource-hold map");
+    expect(readme).toContain("That statement is made on its own inside the acquisition and goes on where the column is gone");
+    expect(readme).toContain("**Every image older than that is NOT a rollback target any more.**");
+    expect(readme).toContain("a page can neither take a hold nor lift one, **and it keeps sending meanwhile**");
+    // The list cannot tell which image runs; the deploy asks the images.
+    expect(readme).toContain("**never in the deploy that brings S4-32, and never over an older image**");
+    expect(readme).toContain("**The deploy checks it itself.** While the drop is still to be applied, `verify_running_images_run_without_old_hold_columns`");
+    expect(readme).toContain("stops, before anything is quiesced or migrated, if one names them or cannot be searched");
+    expect(readme).toContain(`\`${holdSet}\` and \`${dropHoldStep}\` stay out of \`ROLLBACK_COMPATIBLE_MIGRATIONS\``);
+    // Nothing of the release before is left standing as "this release".
+    expect(readme).not.toMatch(/old hold columns are stale|still in the database until the next release/);
   });
 
-  it("the deploy: neither migration arms an automatic rollback any more", () => {
+  it("the deploy: the drop arms the automatic rollback, the two migrations before it do not", () => {
     const deploy = readFileSync("scripts/deploy-production.sh", "utf8");
     const compatible = deploy.match(/ROLLBACK_COMPATIBLE_MIGRATIONS=\([\s\S]*?\n\)/)?.[0] ?? "";
     expect(compatible).toContain('"0239_retire_fansly_legacy_sync_states.sql"');
@@ -223,17 +277,28 @@ describe("what the operator is told", () => {
       // The reason stays where the entry was.
       expect(compatible, migration).toContain(migration);
     }
-    const reason = squash(compatible.replaceAll("\n  #", ""));
-    expect(reason).toContain("a route-state version in the old resource-hold map that the image before 0243 cannot read");
-    expect(reason).toContain("keeps the automatic rollback off rather than return to an image that runs no page this release has taken");
+    const reasons = squash(compatible.replaceAll("\n  #", ""));
+    expect(reasons).toContain("keeps the automatic rollback off rather than fail open");
+
+    // The drop is an entry of the list, under its reason: the image before it
+    // runs without the columns — the S4-32 image, and that one alone — and
+    // the deploy asks the running images which one they are.
+    expect(compatible).toContain(`\n  "${dropOldColumns}"\n`);
+    const reason = squash(compatible.slice(compatible.indexOf("The old hold columns of sync_pages dropped"), compatible.indexOf(`"${dropOldColumns}"`)).replaceAll("\n  #", ""));
+    expect(reason).toContain("The previous image (S4-32) reads none of them");
+    expect(reason).toContain("It writes one, in one statement: the marker its acquisition leaves in the old resource-hold map, a statement of its own that goes on where the column is gone");
+    expect(reason).toContain("That is true of the S4-32 image ALONE");
+    expect(reason).toContain("never in the deploy that brings S4-32 and never over an older image");
+    expect(reason).toContain("so the deploy asks the running images before it migrates anything: verify_running_images_run_without_old_hold_columns.");
+    expect(deploy).toMatch(/^verify_running_images_run_without_old_hold_columns$/m);
   });
 
   // The engine's runbook (docs/runbooks/sync.md) is another branch of the
   // same step: where the tree has it, it says the same.
-  it.runIf(existsSync("docs/runbooks/sync.md"))("the runbook: the hold-set release is no rollback target", () => {
+  it.runIf(existsSync("docs/runbooks/sync.md"))("the runbook: the columns are dropped, and only the release before the drop is a rollback target", () => {
     const runbook = squash(readFileSync("docs/runbooks/sync.md", "utf8"));
     expect(runbook).toContain("NOT a rollback target");
     expect(runbook).toContain("`sync_holds`");
-    expect(runbook).toMatch(/old hold columns of `sync_pages` are stale/);
+    expect(runbook).toMatch(/old hold columns of `sync_pages` are dropped/);
   });
 });

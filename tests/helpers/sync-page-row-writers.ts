@@ -1,11 +1,11 @@
 import { readdirSync, readFileSync } from "node:fs";
 
 // Every statement of the sources that inserts or updates a row of
-// `sync_pages`, by the function it sits in (step 4, S4-32). The page row
-// still carries the old hold columns and their two CHECKs in the database,
-// and no statement names them: tests/sync-old-hold-columns.test.ts pins this
-// list, tests/sync-hold-set.integration.test.ts runs every function of it on
-// a Postgres over a page whose old columns are stale.
+// `sync_pages`, by the function it sits in (step 4, S4-32 and S4-33). No
+// statement names the old hold columns the page row had until they were
+// dropped: tests/sync-old-hold-columns.test.ts pins this list,
+// tests/sync-hold-set.integration.test.ts runs every function of it on a
+// Postgres whose pages went through the drop with holds in those columns.
 
 const SOURCE_FILE = /\.(ts|tsx|mts|mjs|js|sql|sh)$/;
 const SKIPPED_DIRECTORIES = new Set(["node_modules", "dist", "migrations"]);
