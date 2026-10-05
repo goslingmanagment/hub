@@ -116,6 +116,16 @@ export {
   type ClientSpenderStatsCoverageReason,
   type ClientSpenderStatsRefusalReason,
 } from "@agency_hub_core/contracts";
+// The awaiting-reply queue (routes-client.ts, clientSpenderAwaitingReply): its
+// limits, the known values of `readState`, and the refusal reason of a cursor.
+export {
+  CLIENT_CURSOR_REFUSAL_REASONS,
+  CLIENT_SPENDER_AWAITING_REPLY_DEFAULT_LIMIT,
+  CLIENT_SPENDER_AWAITING_REPLY_MAX_LIMIT,
+  CLIENT_SPENDER_AWAITING_REPLY_READ_STATES,
+  type ClientCursorRefusalReason,
+  type ClientSpenderAwaitingReplyReadState,
+} from "@agency_hub_core/contracts";
 // The narrow token's profiles (client-token-scopes.ts): which operations a
 // token issued with `client` reaches; the hub refuses the rest with 403.
 export {

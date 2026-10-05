@@ -265,10 +265,9 @@ describe("owner switches of the chat extension", () => {
       review: { available: true },
       // The hub serves all of Recap (the shared read and the dossier save).
       recap: { available: true },
-      // The owner switched it on, and this hub serves the Spenders statistics
-      // (`spenders-stats-v1`, H-8b) but not the awaiting-reply queue yet
-      // (`awaiting-reply-v1`, H-8c); the feature needs both.
-      stats: { available: false, reason: "hub_not_ready" },
+      // The hub serves all of Statistics (the numbers, H-8b, and the
+      // awaiting-reply queue, H-8c).
+      stats: { available: true },
       preview: { available: false, reason: "flag_off" },
     });
     expect(features["lora-fansly"]).toEqual(everyFeature("platform_unsupported"));
@@ -352,7 +351,10 @@ describe("owner switches of the chat extension", () => {
 
     await patchOk([
       { key: "chatExtensionEnabled", value: true },
-      { key: "chatExtensionFeatures", value: JSON.stringify({ "*": { coach: true, recap: true, stats: true } }) },
+      {
+        key: "chatExtensionFeatures",
+        value: JSON.stringify({ "*": { coach: true, recap: true, stats: true, newcomers: true } }),
+      },
       { key: "chatExtensionMinVersion", value: "1.2.0" },
     ]);
 
@@ -377,9 +379,11 @@ describe("owner switches of the chat extension", () => {
     await expectRefused(await probe(chatterToken, "lora-fansly", "coach", current), "platform_unsupported");
     await expectRefused(await probe(chatterToken, "lora-of", "review", current), "flag_off");
     await expectRefused(await probe(chatterToken, "nova-of", "coach", current), "binding_missing");
-    // Switched on, but this hub does not serve what the feature needs yet.
-    await expectRefused(await probe(chatterToken, "lora-of", "stats", current), "hub_not_ready");
+    // Switched on, but this hub does not serve what the feature needs yet
+    // (`audience-new-v1`, `preview-send-custody-v1`).
+    await expectRefused(await probe(chatterToken, "lora-of", "newcomers", current), "hub_not_ready");
     expect((await probe(chatterToken, "lora-of", "recap", current)).statusCode).toBe(200);
+    expect((await probe(chatterToken, "lora-of", "stats", current)).statusCode).toBe(200);
     // The feature check answers before the version check.
     await expectRefused(await probe(chatterToken, "lora-of", "review", "chat-extension/0.0.1"), "flag_off");
 

@@ -144,6 +144,7 @@ export const kernelOperations = {
   clientBootstrap: { method: "GET", path: "/api/v1/client/bootstrap" },
   clientConversationRecaps: { method: "GET", path: "/api/v1/client/pages/:pageLabel/conversations/:fanRef/recaps" },
   clientFanProfileFromGeneration: { method: "POST", path: "/api/v1/client/pages/:pageLabel/fans/:fanRef/profile/from-generation" },
+  clientSpenderAwaitingReply: { method: "GET", path: "/api/v1/client/pages/:pageLabel/spenders/awaiting-reply" },
   clientSpenderStats: { method: "GET", path: "/api/v1/client/pages/:pageLabel/spenders/stats" },
   contentComments: { method: "GET", path: "/api/v1/pages/:pageLabel/content/comments" },
   contentMedia: { method: "GET", path: "/api/v1/pages/:pageLabel/content/media" },

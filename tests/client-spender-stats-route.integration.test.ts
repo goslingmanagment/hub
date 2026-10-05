@@ -30,7 +30,6 @@ import {
   unassignPageFromUser,
   type HumanAuthPrincipal,
 } from "../apps/runtime/src/services/auth.ts";
-import type * as ClientCapabilitiesModule from "../apps/runtime/src/services/client-capabilities.ts";
 import { getClientSpenderStats, toClientSpenderStats } from "../apps/runtime/src/services/spender-stats.ts";
 import { frozenClientSpenderStatsSchema } from "./helpers/client-frozen-spender-stats.ts";
 import { issueDeviceTokenForUserId } from "./helpers/device-credentials.ts";
@@ -60,26 +59,6 @@ import { fixtureUserId } from "./helpers/user-identity.ts";
 // Fixture passwords hash at minimum cost; sign-in still runs the real argon2
 // verify (tests/helpers/cheap-argon2.ts).
 vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
-
-// The `stats` feature needs two hub capabilities: `spenders-stats-v1` (this
-// route) and `awaiting-reply-v1` (the queue, H-8c, not served yet). As merged,
-// the route therefore answers `hub_not_ready` whatever the owner switches on;
-// the first test below holds exactly that. Every other test stands in for the
-// hub that serves both, which is the only state the route answers in. When
-// H-8c adds `awaiting-reply-v1` to SERVED_CLIENT_CAPABILITIES, this mock and
-// the `hub_not_ready` half of the first test go.
-const hub = vi.hoisted(() => ({ servesQueue: true }));
-vi.mock("../apps/runtime/src/services/client-capabilities.ts", async (importOriginal) => {
-  const actual = await importOriginal<typeof ClientCapabilitiesModule>();
-  return {
-    ...actual,
-    get SERVED_CLIENT_CAPABILITIES() {
-      return hub.servesQueue
-        ? [...new Set([...actual.SERVED_CLIENT_CAPABILITIES, "awaiting-reply-v1"])]
-        : actual.SERVED_CLIENT_CAPABILITIES;
-    },
-  };
-});
 
 /** The instant every seeded number is of: 2026-10-03 12:00Z. */
 const NOW = SPENDER_STATS_FIXTURE_AS_OF;
@@ -227,7 +206,6 @@ describe("GET /api/v1/client/pages/:pageLabel/spenders/stats", () => {
       context.skip();
       return;
     }
-    hub.servesQueue = true;
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(NOW);
     await resetIntegrationDatabase(testDb.pool);
@@ -325,9 +303,8 @@ describe("GET /api/v1/client/pages/:pageLabel/spenders/stats", () => {
     await testDb?.stop();
   });
 
-  it("is inert as merged: disabled at rest, then hub_not_ready until the awaiting-reply queue is served", async (context) => {
+  it("is inert as merged: every caller is refused until the owner switches Statistics on", async (context) => {
     if (!server) return context.skip();
-    hub.servesQueue = false;
 
     // At rest (what a merge leaves): every caller is refused, whatever the query.
     for (const token of [narrowToken, fullToken, ownerToken]) {
@@ -335,22 +312,17 @@ describe("GET /api/v1/client/pages/:pageLabel/spenders/stats", () => {
     }
     expectRefused(await stats(narrowToken, PAGE, "timeZone=Mars/Olympus"), 409, "client_feature_disabled", "disabled");
     const atRest = await bootstrapOf(narrowToken);
-    expect(atRest.capabilities).toContain("spenders-stats-v1");
-    expect(atRest.capabilities).not.toContain("awaiting-reply-v1");
+    // The hub serves both halves of the feature (these numbers and the
+    // awaiting-reply queue, H-8c), and the feature is still off: serving a
+    // capability switches nothing on.
+    expect(atRest.capabilities).toEqual(expect.arrayContaining(["spenders-stats-v1", "awaiting-reply-v1"]));
     expect(atRest.pages.find((page) => page.pageLabel === PAGE)?.features.stats)
       .toEqual({ available: false, reason: "disabled" });
 
-    // The owner switches Statistics on: the hub still does not serve the whole
-    // feature (the queue is H-8c), so the route stays shut and says why.
+    // The owner switches Statistics on: the feature is available and the route answers.
     await switchStatsOn();
-    for (const token of [narrowToken, fullToken, ownerToken]) {
-      expectRefused(await stats(token, PAGE, "windowDays=30&timeZone=UTC"), 409, "client_feature_disabled", "hub_not_ready");
-    }
     expect((await bootstrapOf(narrowToken)).pages.find((page) => page.pageLabel === PAGE)?.features.stats)
-      .toEqual({ available: false, reason: "hub_not_ready" });
-
-    // The hub that serves both capabilities answers.
-    hub.servesQueue = true;
+      .toEqual({ available: true });
     expect((await report(narrowToken, PAGE)).pageLabel).toBe(PAGE);
 
     await trap!.assertNoOutbound();

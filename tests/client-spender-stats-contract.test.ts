@@ -307,21 +307,21 @@ describe("client Spenders statistics contract (H-8b)", () => {
     });
   });
 
-  it("is on the narrow token's list and served as spenders-stats-v1; the stats feature still waits for the queue", () => {
+  it("is on the narrow token's list and served as spenders-stats-v1, one of the two capabilities the stats feature needs", () => {
     expect(CLIENT_TOKEN_PROFILES["chat-extension"].operations).toContain("clientSpenderStats");
     expect(CLIENT_HUB_CAPABILITY_NAMES).toContain("spenders-stats-v1");
     expect(SERVED_CLIENT_CAPABILITIES).toContain("spenders-stats-v1");
 
-    // As merged: `stats` also needs `awaiting-reply-v1` (H-8c), so the owner's
-    // switch alone does not open the route. H-8c flips the first half.
+    // `stats` needs this route and the awaiting-reply queue (H-8c). The hub
+    // serves both, so the owner's switch opens the feature; a hub that served
+    // only one of them would not.
     const page = { label: "lora-of", platform: "onlyfans" as const, platformAccountId: "100000001" };
     const settings = { enabled: true, features: { "*": { stats: true } }, hostBindings: {} };
-    expect(SERVED_CLIENT_CAPABILITIES).not.toContain("awaiting-reply-v1");
     expect(evaluateClientFeature({ settings, page, flag: "stats", served: SERVED_CLIENT_CAPABILITIES }))
-      .toEqual({ available: false, reason: "hub_not_ready" });
+      .toEqual({ available: true });
     expect(evaluateClientFeature({
-      settings, page, flag: "stats", served: [...SERVED_CLIENT_CAPABILITIES, "awaiting-reply-v1"],
-    })).toEqual({ available: true });
+      settings, page, flag: "stats", served: SERVED_CLIENT_CAPABILITIES.filter((name) => name !== "awaiting-reply-v1"),
+    })).toEqual({ available: false, reason: "hub_not_ready" });
   });
 
   it("re-exports the known values from the generated SDK, equal to the definitions the numbers follow", () => {
