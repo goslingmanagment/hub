@@ -54,6 +54,7 @@ pages that account is granted; the owner is granted every page implicitly.
 | Chat-extension dossier save — `/client/pages/{label}/fans/{fan}/profile/from-generation` (`apiKey` + page scope) | no (403) | own generations, every page | no (403) | own generations, assigned | no (403) | **own generations, assigned** | — | own generations, by the role's reach |
 | Chat-extension own AI spend — `/client/pages/{label}/ai-usage` (`apiKey` + page scope) | no (403) | yes, every page, **own rows only** | no (403) | yes, assigned, own rows only | no (403) | **yes, assigned, own rows only** | — | yes, by the role's reach |
 | Chat-extension Spenders statistics — `/client/pages/{label}/spenders/stats` (`apiKey` + page scope) | no (403) | yes, every page | no (403) | yes, assigned | no (403) | **yes, assigned** | — | yes, by the role's reach |
+| Chat-extension awaiting-reply queue — `/client/pages/{label}/spenders/awaiting-reply` (`apiKey` + page scope) | no (403) | yes, every page | no (403) | yes, assigned | no (403) | **yes, assigned** | — | yes, by the role's reach |
 
 The client bootstrap lists the caller's **active** pages only (a tombstoned
 page is never listed, assigned or not) and announces every feature off until
@@ -178,6 +179,25 @@ row is held by `client-spender-stats-route.integration`: every cell, the agent
 key, and a page that is not granted, tombstoned or missing, in both auth-policy
 modes.
 
+The awaiting-reply queue (chat-extension H-8c) lists **one page's** payers
+whose fan wrote after the page's last message, biggest spender first, the same
+rows to everyone granted the page. A row names a fan: the platform id and the
+names, the lifetime gross, when the fan and the page last wrote, and how many
+messages are unread or that this is not known. It opens nothing a device token
+could not already read: `/api/v2/spenders` answers the same fields of every
+payer of the page to the same callers, and the queue is the hub's own choice
+and order of them over the whole page. It only reads: nothing is asked of the
+platform and nothing is queued, so a chat listed here stays unread on
+OnlyFans. It waits for the same `stats` switch as the statistics (OnlyFans
+only) and the extension's version, a page that is not the caller's answers as
+on the shared recaps, and nothing is kept between requests. Its cursor adds no
+right: it is signed and bound to the page and the person for an hour, so one
+chatter's cursor opens nothing for another, and it is checked after the page
+and the switch, never in their place. Its row is held by
+`client-spender-awaiting-reply.integration`: every cell, the agent key, a page
+that is not granted, tombstoned or missing, in both auth-policy modes, and a
+cursor presented by another person and for another page.
+
 The **chat-extension token** (chat-extension H-3) is a device token the
 extension asks for at password sign-in with `client: "chat-extension"`. The
 sign-in echoes `client`, the token row keeps the profile for good (a trigger
@@ -188,7 +208,7 @@ column of the [generated policy table](generated/authorization-policy.md)):
 who am I, the bootstrap, the persona catalogue without prompt texts, the AI
 feature stream, the recap status, the shared recaps, the dossier save from a
 stored generation, the fan and conversation profiles, the spenders reads, the
-Spenders statistics, its own AI spend, the capture lane and revoking itself. Every other route
+Spenders statistics and the awaiting-reply queue, its own AI spend, the capture lane and revoking itself. Every other route
 answers a plain 403 with no `reason`, in **both** auth-policy modes, before any
 handler runs; page scope still applies on the listed routes, and a revoked or
 expired token still answers 401 with its reason. On the capture lane it sends
