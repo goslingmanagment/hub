@@ -9,6 +9,7 @@ import { registerClientProfileFromGenerationRoutes } from "./profile-from-genera
 import { registerClientRecapRoutes } from "./recaps.ts";
 import { registerClientAiUsageRoutes } from "./ai-usage.ts";
 import { registerClientClaimRoutes } from "./claim.ts";
+import { registerClientAudienceNewRoutes } from "./audience-new.ts";
 import { registerClientHealthViewRoutes } from "./health.ts";
 import { registerClientSpenderAwaitingReplyRoutes } from "./spender-awaiting-reply.ts";
 import { registerClientSpenderStatsRoutes } from "./spender-stats.ts";
@@ -45,5 +46,6 @@ export function registerClientRoutes(server: ApiServer, ctx: ApiModuleContext) {
   registerClientSpenderStatsRoutes(server, ctx);
   registerClientSpenderAwaitingReplyRoutes(server, ctx);
   registerClientClaimRoutes(server, ctx);
+  registerClientAudienceNewRoutes(server, ctx);
   registerClientHealthViewRoutes(server, ctx);
 }

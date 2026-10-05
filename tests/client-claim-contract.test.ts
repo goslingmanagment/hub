@@ -288,13 +288,18 @@ describe("claim and custody contract", () => {
     // With this route the hub serves all of `previewSend`: the owner's switch decides from here on.
     expect(evaluateClientFeature({ settings: on, page, flag: "previewSend", served: SERVED_CLIENT_CAPABILITIES }))
       .toEqual({ available: true });
-    // As merged, `newcomers` still waits for `audience-new-v1` (H-7c): claim,
-    // renew and a greeting's dispatch answer `hub_not_ready` until it lands.
+    // `newcomers` needs this capability and the list's (`audience-new-v1`, H-7c):
+    // the hub serves both, so claim, renew and a greeting's dispatch wait only
+    // for the owner's switch. Without either capability they would answer
+    // `hub_not_ready`.
     expect(evaluateClientFeature({ settings: on, page, flag: "newcomers", served: SERVED_CLIENT_CAPABILITIES }))
-      .toEqual({ available: false, reason: "hub_not_ready" });
-    expect(evaluateClientFeature({
-      settings: on, page, flag: "newcomers", served: [...SERVED_CLIENT_CAPABILITIES, "audience-new-v1"],
-    })).toEqual({ available: true });
+      .toEqual({ available: true });
+    for (const missing of ["audience-new-v1", "preview-send-custody-v1"]) {
+      expect(evaluateClientFeature({
+        settings: on, page, flag: "newcomers",
+        served: SERVED_CLIENT_CAPABILITIES.filter((capability) => capability !== missing),
+      }), missing).toEqual({ available: false, reason: "hub_not_ready" });
+    }
 
     // The flag-less status and native record exist where sending from the preview does.
     expect(clientFeatureExistsOn("previewSend", "onlyfans")).toBe(true);

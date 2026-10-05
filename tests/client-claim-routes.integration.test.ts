@@ -20,7 +20,6 @@ import {
   createUserAccount,
   setUserPassword,
 } from "../apps/runtime/src/services/auth.ts";
-import type * as ClientCapabilitiesModule from "../apps/runtime/src/services/client-capabilities.ts";
 import { frozenClaimBodySchema, frozenClaimStateSchema, frozenErrorBodySchema } from "./helpers/client-claim-frozen.ts";
 import { issueDeviceTokenForUserId } from "./helpers/device-credentials.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
@@ -42,26 +41,6 @@ import { fixtureUserId } from "./helpers/user-identity.ts";
 // Fixture passwords hash at minimum cost; sign-in still runs the real argon2
 // verify (tests/helpers/cheap-argon2.ts).
 vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
-
-// The `newcomers` feature (claim, renew, a greeting's dispatch) needs two hub
-// capabilities: `preview-send-custody-v1` (these routes) and `audience-new-v1`
-// (the «Новые» list, H-7c, not served yet). As merged, those actions therefore
-// answer `hub_not_ready` whatever the owner switches on; the first test below
-// holds exactly that. Every other test stands in for the hub that serves both.
-// When H-7c adds `audience-new-v1` to SERVED_CLIENT_CAPABILITIES, this mock and
-// the `hub_not_ready` half of the first test go.
-const hub = vi.hoisted(() => ({ servesAudienceNew: true }));
-vi.mock("../apps/runtime/src/services/client-capabilities.ts", async (importOriginal) => {
-  const actual = await importOriginal<typeof ClientCapabilitiesModule>();
-  return {
-    ...actual,
-    get SERVED_CLIENT_CAPABILITIES() {
-      return hub.servesAudienceNew
-        ? [...new Set([...actual.SERVED_CLIENT_CAPABILITIES, "audience-new-v1"])]
-        : actual.SERVED_CLIENT_CAPABILITIES;
-    },
-  };
-});
 
 const PASSWORDS = {
   owner: "owner-secret", lead: "lead-secret", grisha: "grisha-secret", nikita: "nikita-secret",
@@ -364,7 +343,6 @@ describe("chat-extension claim and custody routes", () => {
       context.skip();
       return;
     }
-    hub.servesAudienceNew = true;
     // Every test starts with the switches at rest and outside the previous
     // tests' 60 s preview-send rate window.
     await testDb.pool.query("delete from config_settings where key like 'chatExtension%'");
@@ -384,8 +362,6 @@ describe("chat-extension claim and custody routes", () => {
   });
 
   it("is inert at merge: nothing is claimed or sent until the owner switches it on, and each action waits for its own switch", async () => {
-    // As merged: the hub does not serve `audience-new-v1` yet (H-7c).
-    hub.servesAudienceNew = false;
     const fan = nextFan();
     // Everything that starts something: a lease, a send, and the status read.
     const starting = [
@@ -424,17 +400,14 @@ describe("chat-extension claim and custody routes", () => {
     expectRefused(await act(grishaToken, fan, replyBody()), 409, "client_feature_disabled", "flag_off");
     expectRefused(await act(grishaToken, fan, dispatchBody()), 409, "client_feature_disabled", "flag_off");
 
-    // Both flags on. As merged, «Новые» still waits for H-7c; a reply from the preview does not.
-    await patchConfig([features({ newcomers: true, previewSend: true })]);
-    expectRefused(await act(grishaToken, fan, claimBody(I1)), 409, "client_feature_disabled", "hub_not_ready");
-    expectRefused(await act(grishaToken, fan, dispatchBody()), 409, "client_feature_disabled", "hub_not_ready");
+    // Nothing was claimed or recorded by the refusals above.
     expect(await query("select 1 from client_fan_leases where fan_ref = $1", [fan])).toEqual([]);
     expect(await custodyRows(fan)).toEqual([]);
+
+    // Both flags on: the hub serves everything «Новые» needs (the list is H-7c), so the owner's switches decide.
+    await patchConfig([features({ newcomers: true, previewSend: true })]);
     const replyFan = nextFan();
     expect(ok(await act(grishaToken, replyFan, replyBody())).custody).toMatchObject({ state: "dispatching" });
-
-    // The hub that serves «Новые» too (after H-7c).
-    hub.servesAudienceNew = true;
     expect(ok(await act(grishaToken, fan, claimBody(I1))).lease.state).toBe("owned");
 
     // A greeting needs both flags; a reply only `previewSend`; a lease only `newcomers`.

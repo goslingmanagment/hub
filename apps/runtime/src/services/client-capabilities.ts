@@ -36,9 +36,12 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   // hub serves all of the `preview` feature.
   "archive-feed-v1",
   // H-7b: the greeting lease and send custody (the claim POST and GET). With it
-  // the hub serves all of `previewSend`. `newcomers` also needs
-  // `audience-new-v1` (H-7c), so it stays `hub_not_ready` until that lands.
+  // the hub serves all of `previewSend`.
   "preview-send-custody-v1",
+  // H-7c: GET /api/v1/client/pages/:pageLabel/audience-new, the "new
+  // subscribers" list. With it the hub serves all of `newcomers`; the owner's
+  // switches decide from here on.
+  "audience-new-v1",
 ];
 
 /**

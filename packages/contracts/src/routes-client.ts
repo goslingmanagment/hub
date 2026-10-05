@@ -1096,6 +1096,215 @@ export const clientSendCustodyItemSchema = z.object({
   ticketExpiresAt: isoTimestamp.nullable(),
 });
 
+// ── the "new subscribers" list (H-7c) ────────────────────────────────────────
+//
+// Who subscribed to an OnlyFans page, or came back to it, inside a window of
+// hours: newest first, one row per subscription notification the hub collected,
+// with what the hub holds about the fan right now (the subscription, the chat,
+// the greeting). Database only: the hub's own collected events and projections.
+//
+// THE CLIENT'S SHAPE. The chat extension froze the query and the answer in its
+// contracts (`AudienceNewQuerySchema`, `AudienceNewPageSchema`,
+// packages/contracts/src/hub/newcomers.ts). The hub takes every query that
+// schema lets out and answers only what it reads: `fanRef` is the one numeric
+// id shape there, so an event whose fan id is not one is never a row.
+//
+// ONE WALK, ONE WINDOW. A request without a cursor starts a walk and fixes its
+// window: `window.to` and `window.snapshotAt` are the hub's clock at that
+// moment, `window.from` is `hours` before, and every later page repeats them. A
+// subscription the hub learns of during the walk is not in it; the next walk
+// from the first page has it. The cursor is opaque and signed, valid for the
+// same page and person, for an hour: anything else is 400 `bad_request` with
+// the reason `cursor_invalid`, and a cursor presented with another
+// `windowHours` is 400 with `cursor_window_mismatch`. Either way the client
+// reads the first page again.
+//
+// The rows of a walk are fixed; what is said ABOUT each fan (`status`,
+// `thread`, `claim`) and the page-level `coverage` and `welcomeTemplate` are
+// read when the page is asked for.
+
+export const CLIENT_AUDIENCE_NEW_DEFAULT_WINDOW_HOURS = 48;
+/** The widest window; the bootstrap announces it as `limits.audienceWindowHours`. */
+export const CLIENT_AUDIENCE_NEW_MAX_WINDOW_HOURS = 720;
+export const CLIENT_AUDIENCE_NEW_DEFAULT_LIMIT = 50;
+export const CLIENT_AUDIENCE_NEW_MAX_LIMIT = 100;
+
+/**
+ * Known values of `kind`. On the wire an open token. `new`: a first
+ * subscription (with `trial` when it is a free trial). `returning`: a fan who
+ * was subscribed before and came back. There is no "renewed": OnlyFans sends
+ * no notification when a subscription renews by itself.
+ */
+export const CLIENT_AUDIENCE_NEW_KINDS = ["new", "returning"] as const;
+/**
+ * Known values of `subscribedAtSource`. On the wire an open token.
+ * `notification`: the time of the subscription notification, which OnlyFans
+ * gives to the minute. `subscribeAt`: the subscription's own start as a
+ * subscriber sweep read it from OnlyFans, used once it names the same
+ * subscription as the notification.
+ */
+export const CLIENT_AUDIENCE_NEW_SUBSCRIBED_AT_SOURCES = ["subscribeAt", "notification"] as const;
+/** Known values of `status.subscriptionStatus`. On the wire an open token. */
+export const CLIENT_AUDIENCE_NEW_SUBSCRIPTION_STATUSES = ["active", "expired", "unknown"] as const;
+/**
+ * Known values of `status.source`: which collector the subscription's state
+ * rests on. On the wire an open token. `sweep`: the newest subscriber sweep
+ * saw the fan, or a sweep's end retired a subscription it no longer found.
+ * `webhook`: a notification wrote the state and no sweep has confirmed it
+ * since. `none`: the hub holds no subscription of the fan on the page.
+ */
+export const CLIENT_AUDIENCE_NEW_STATUS_SOURCES = ["sweep", "webhook", "none"] as const;
+/**
+ * Known values of `coverage.reasons`: why the list may be missing a
+ * subscription or a row's `status` may be out of date. On the wire open
+ * tokens; the list is append-only.
+ * - `delivery_history_off`: the hub does not collect the provider's webhook
+ *   delivery history, so nothing would tell it of a notification that never
+ *   arrived (`unknown`);
+ * - `delivery_history_pending`: the collection is on and has not finished a
+ *   first window (`unknown`);
+ * - `delivery_history_before_window`: the delivery history is checked only up
+ *   to a moment before the window starts (`unknown`);
+ * - `delivery_history_behind`: it is checked up to a moment inside the window
+ *   that lies further back from the window's end than the collector normally
+ *   lags (`partial`);
+ * - `subscription_projection_pending`, `subscription_projection_failed`: a
+ *   subscription notification received since the window started is not applied
+ *   to the page's subscriber state yet, or could not be (`partial`);
+ * - `audience_sweep_missing`: no subscriber sweep of the page has completed, so
+ *   nothing but notifications vouches for any `status` (`partial`);
+ * - `audience_sweep_unverified`: the last sweep ended without a result the hub
+ *   trusts (`partial`).
+ */
+export const CLIENT_AUDIENCE_NEW_COVERAGE_REASONS = [
+  "delivery_history_off", "delivery_history_pending", "delivery_history_before_window", "delivery_history_behind",
+  "subscription_projection_pending", "subscription_projection_failed",
+  "audience_sweep_missing", "audience_sweep_unverified",
+] as const;
+/**
+ * The `reason` beside this route's 400 `bad_request`. `cursor_invalid`: the
+ * cursor is not one this hub issued for this request (forged or cut, issued
+ * for another page or person, or older than an hour); the answer never says
+ * which. `cursor_window_mismatch`: the cursor is the caller's own, of a walk
+ * with another `windowHours`.
+ */
+export const CLIENT_AUDIENCE_NEW_REFUSAL_REASONS = ["cursor_invalid", "cursor_window_mismatch"] as const;
+
+export type ClientAudienceNewKind = (typeof CLIENT_AUDIENCE_NEW_KINDS)[number];
+export type ClientAudienceNewSubscribedAtSource = (typeof CLIENT_AUDIENCE_NEW_SUBSCRIBED_AT_SOURCES)[number];
+export type ClientAudienceNewSubscriptionStatus = (typeof CLIENT_AUDIENCE_NEW_SUBSCRIPTION_STATUSES)[number];
+export type ClientAudienceNewStatusSource = (typeof CLIENT_AUDIENCE_NEW_STATUS_SOURCES)[number];
+export type ClientAudienceNewCoverageReason = (typeof CLIENT_AUDIENCE_NEW_COVERAGE_REASONS)[number];
+export type ClientAudienceNewRefusalReason = (typeof CLIENT_AUDIENCE_NEW_REFUSAL_REASONS)[number];
+
+export const clientAudienceNewQuerySchema = z.object({
+  /** How far back the window reaches from the moment the walk starts. */
+  windowHours: z.coerce.number().int().min(1).max(CLIENT_AUDIENCE_NEW_MAX_WINDOW_HOURS)
+    .default(CLIENT_AUDIENCE_NEW_DEFAULT_WINDOW_HOURS),
+  /** `nextCursor` of the previous page, with the same `windowHours`. */
+  cursor: clientCursorSchema.optional(),
+  limit: z.coerce.number().int().min(1).max(CLIENT_AUDIENCE_NEW_MAX_LIMIT)
+    .default(CLIENT_AUDIENCE_NEW_DEFAULT_LIMIT),
+}).strict();
+
+/**
+ * The greeting, lease and custody of one fan as a list row carries them: the
+ * states the claim status read (`clientFanClaimStatus`) answers for the same
+ * fan and caller, without the tokens and ids. The read names no client
+ * install, so the caller's own live lease reads `held` by `you-elsewhere`.
+ */
+export const clientClaimSummarySchema = z.object({
+  greeting: z.enum(CLIENT_GREETING_STATES),
+  lease: z.enum(CLIENT_LEASE_STATES),
+  heldBy: z.enum(CLIENT_LEASE_HOLDERS).nullable(),
+  custody: z.enum(CLIENT_CUSTODY_STATES).nullable(),
+});
+
+export const clientAudienceNewItemSchema = z.object({
+  /** The hub's id of the subscription event: stable, so a client can tell an event it already announced. */
+  eventRef: z.string(),
+  fanRef: clientFanRefSchema,
+  username: z.string().nullable(),
+  displayName: z.string().nullable(),
+  /** Open token; known values: CLIENT_AUDIENCE_NEW_KINDS. */
+  kind: clientOpenToken,
+  /** The subscription started as a free trial. */
+  trial: z.boolean(),
+  subscribedAt: isoTimestamp,
+  /** Open token; known values: CLIENT_AUDIENCE_NEW_SUBSCRIBED_AT_SOURCES. */
+  subscribedAtSource: clientOpenToken,
+  /** The fan's subscription to this page as the hub holds it now. */
+  status: z.object({
+    /** The page's fan record; null while the hub holds no subscription of the fan. */
+    isSubscriber: z.boolean().nullable(),
+    /** Open token; known values: CLIENT_AUDIENCE_NEW_SUBSCRIPTION_STATUSES. */
+    subscriptionStatus: clientOpenToken,
+    endsAt: isoTimestamp.nullable(),
+    /** When the subscription's state was last written; null with `source: "none"`. */
+    asOf: isoTimestamp.nullable(),
+    /** Open token; known values: CLIENT_AUDIENCE_NEW_STATUS_SOURCES. */
+    source: clientOpenToken,
+  }),
+  /** The chat with the fan as the hub stores it; null while it holds no chat with them. */
+  thread: z.object({
+    lastMessageAt: isoTimestamp.nullable(),
+    lastFanMessageAt: isoTimestamp.nullable(),
+    lastModelMessageAt: isoTimestamp.nullable(),
+    /** Messages of the chat the hub stores, automatic ones included. */
+    storedMessageCount: count,
+    /** Open token; known values: CLIENT_COVERAGE_LEVELS. */
+    coverage: clientOpenToken,
+    /** The chat's history was read from OnlyFans to its first message. */
+    backfillComplete: z.boolean(),
+  }).nullable(),
+  claim: clientClaimSummarySchema,
+});
+
+export const clientAudienceNewResponseSchema = z.object({
+  pageLabel: z.string(),
+  /** Fixed by the first page of the walk and repeated on every later one. */
+  window: z.object({
+    hours: positive,
+    from: isoTimestamp,
+    to: isoTimestamp,
+    /** Events the hub recorded after this moment are not in the walk. */
+    snapshotAt: isoTimestamp,
+  }),
+  serverNow: isoTimestamp,
+  /** Whether the hub can vouch that the window's list is whole and its rows' `status` current. */
+  coverage: z.object({
+    /** Open token; known values: CLIENT_COVERAGE_LEVELS. */
+    state: clientOpenToken,
+    /** Up to when the provider's webhook delivery history is checked. */
+    deliveryFrontier: isoTimestamp.nullable(),
+    /** When the last subscriber sweep of the page completed. */
+    lastAudienceSweepAt: isoTimestamp.nullable(),
+    /** Open tokens, empty when complete; known values: CLIENT_AUDIENCE_NEW_COVERAGE_REASONS. */
+    reasons: z.array(clientOpenToken),
+  }),
+  /**
+   * Subscription events of the window that are not rows: one the hub cannot
+   * classify, a top-fan award (OnlyFans reports it as a subscription), and an
+   * event without a usable fan id. Counted over the whole window, not the page.
+   */
+  unknownCount: count,
+  /** The page's automatic welcome message as last collected; null until it is collected. */
+  welcomeTemplate: z.object({
+    /** The provider's id of the template: changes when a new one is saved. */
+    ref: z.string(),
+    observedAt: isoTimestamp,
+    /** Whether OnlyFans sends it; null when the provider did not say. */
+    enabled: z.boolean().nullable(),
+    hasText: z.boolean(),
+    hasMedia: z.boolean(),
+    /** Its price; null when the provider gave none the hub can use. */
+    priceMills: mills.nullable(),
+  }).nullable(),
+  items: z.array(clientAudienceNewItemSchema),
+  /** Null on the last page of the walk. */
+  nextCursor: clientCursorSchema.nullable(),
+});
+
 export const clientRouteSchemas = {
   clientBootstrap: {
     auth: { kind: "apiKey" },
@@ -1342,6 +1551,40 @@ export const clientRouteSchemas = {
       409: errorResponseSchema,
     },
   },
+  clientAudienceNew: {
+    auth: { kind: "apiKey", scope: "page" },
+    tags: ["client"],
+    summary: "Who subscribed to an OnlyFans page or came back, inside a window of hours, with each fan's greeting state",
+    description: "Read-only and database-only: the hub's own collected subscription notifications and "
+      + "projections; no platform request, no queued work, and no chat is marked read. One row per "
+      + "subscription notification, newest first. `kind` is `new` (with `trial` for a free trial) or "
+      + "`returning`; there is no renewal row, because OnlyFans sends no notification when a subscription "
+      + "renews by itself. A notification the hub cannot classify, a top-fan award and one without a usable "
+      + "fan id are not rows: `unknownCount` counts them over the whole window. `subscribedAt` is the "
+      + "notification's time (to the minute) until a subscriber sweep has read the same subscription's own "
+      + "start (`subscribedAtSource`). `status` is the fan's subscription as the hub holds it now, with when "
+      + "it was written (`asOf`) and by which collector; `thread` what the hub stores of the chat; `claim` "
+      + "the states `clientFanClaimStatus` answers for the same fan and caller, where a greeting the desktop "
+      + "sent counts as confirmed. `coverage` says whether the hub can vouch for the list (`complete`, "
+      + "`partial`, `unknown`) and why not. `welcomeTemplate` is the page's automatic welcome message as last "
+      + "collected, null until the owner switches its collection on. A request without `cursor` starts a "
+      + "walk and fixes its window (`window`); a later page repeats the window and never shows a "
+      + "subscription the hub learned of after `window.snapshotAt`. `cursor` is valid for the same page and "
+      + "person for an hour: otherwise 400 `bad_request` with the reason `cursor_invalid`, and with another "
+      + "`windowHours` than its walk's, `cursor_window_mismatch`; the client then reads the first page again. "
+      + "Behind the chat-extension `newcomers` switch, on an OnlyFans page: 409 `client_feature_disabled` "
+      + "with the reason.",
+    params: clientPageParamsSchema,
+    querystring: clientAudienceNewQuerySchema,
+    response: {
+      200: clientAudienceNewResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
   clientSendCustodyResolve: {
     auth: { kind: "session", scope: "page" },
     tags: ["client"],
@@ -1419,6 +1662,10 @@ export type ClientFanClaimBody = z.infer<typeof clientFanClaimBodySchema>;
 export type ClientFanClaimResponse = z.infer<typeof clientFanClaimResponseSchema>;
 export type ClientSendCustodyResolveBody = z.infer<typeof clientSendCustodyResolveBodySchema>;
 export type ClientSendCustodyItem = z.infer<typeof clientSendCustodyItemSchema>;
+export type ClientAudienceNewQuery = z.infer<typeof clientAudienceNewQuerySchema>;
+export type ClientClaimSummary = z.infer<typeof clientClaimSummarySchema>;
+export type ClientAudienceNewItem = z.infer<typeof clientAudienceNewItemSchema>;
+export type ClientAudienceNewResponse = z.infer<typeof clientAudienceNewResponseSchema>;
 export type AdminClientHealthQuery = z.infer<typeof adminClientHealthQuerySchema>;
 export type AdminClientHealthResponse = z.infer<typeof adminClientHealthResponseSchema>;
 

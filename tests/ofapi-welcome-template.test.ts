@@ -53,7 +53,8 @@ describe("account_settings: the welcome-template collection category", () => {
       label: "Account settings: welcome message",
       modes: ["off", "on_demand", "scheduled"],
       baseline: false,
-      consumers: ["dashboard"],
+      // The owner's stored-read report, and the chat extension's "new subscribers" list (H-7c).
+      consumers: ["dashboard", "chatters"],
       supportsOneOff: true,
       priceUnit: "physical_calls",
       legacyOperations: [],

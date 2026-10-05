@@ -161,6 +161,26 @@ export {
   type ClientGreetingSource,
   type ClientSendPurpose,
 } from "@agency_hub_core/contracts";
+// The "new subscribers" list (routes-client.ts, clientAudienceNew): its
+// limits and the known values of its open tokens and refusal reasons.
+export {
+  CLIENT_AUDIENCE_NEW_COVERAGE_REASONS,
+  CLIENT_AUDIENCE_NEW_DEFAULT_LIMIT,
+  CLIENT_AUDIENCE_NEW_DEFAULT_WINDOW_HOURS,
+  CLIENT_AUDIENCE_NEW_KINDS,
+  CLIENT_AUDIENCE_NEW_MAX_LIMIT,
+  CLIENT_AUDIENCE_NEW_MAX_WINDOW_HOURS,
+  CLIENT_AUDIENCE_NEW_REFUSAL_REASONS,
+  CLIENT_AUDIENCE_NEW_STATUS_SOURCES,
+  CLIENT_AUDIENCE_NEW_SUBSCRIBED_AT_SOURCES,
+  CLIENT_AUDIENCE_NEW_SUBSCRIPTION_STATUSES,
+  type ClientAudienceNewCoverageReason,
+  type ClientAudienceNewKind,
+  type ClientAudienceNewRefusalReason,
+  type ClientAudienceNewStatusSource,
+  type ClientAudienceNewSubscribedAtSource,
+  type ClientAudienceNewSubscriptionStatus,
+} from "@agency_hub_core/contracts";
 // The narrow token's profiles (client-token-scopes.ts): which operations a
 // token issued with `client` reaches; the hub refuses the rest with 403.
 export {
