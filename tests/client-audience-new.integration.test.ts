@@ -17,6 +17,8 @@ import {
   createModel,
   createOnlyFansPage,
   insertAgentKey,
+  insertObservation,
+  markObservationParsed,
   saveOfapiReadSnapshot,
   supersessionDedupKey,
   upsertOfapiWebhookConfig,
@@ -31,7 +33,10 @@ import {
   createUserAccount,
   setUserPassword,
 } from "../apps/runtime/src/services/auth.ts";
-import { canonicalizeOfapiWebhookObservation } from "../apps/runtime/src/services/canonicalize/ofapi-webhook.ts";
+import {
+  OFAPI_WEBHOOK_CANONICALIZER_VERSION,
+  canonicalizeOfapiWebhookObservation,
+} from "../apps/runtime/src/services/canonicalize/ofapi-webhook.ts";
 import {
   CLIENT_AUDIENCE_NEW_CURSOR_DOMAIN,
   CLIENT_AUDIENCE_NEW_CURSOR_TTL_MS,
@@ -73,6 +78,8 @@ const EXTENSION_VERSION = "chat-extension/1.4.2";
 const AGENT_KEY_TOKEN = `${AGENT_KEY_TOKEN_PREFIX}clientaudience000000`;
 /** The pages' own OnlyFans account ids (`pages.external_page_id`). */
 const CREATORS = { "lora-of": "100000001", "mia-of": "100000003" } as const;
+/** The pages' accounts at the provider (`pages.ofapi_account_id`): how a journaled webhook names its page. */
+const OFAPI_ACCOUNTS = { "lora-of": "acct_audiencelora", "mia-of": "acct_audiencemia" } as const;
 const WEBHOOK = "wh_audience_test";
 /** Client installs: grisha's and nikita's. */
 const I1 = randomUUID();
@@ -268,6 +275,8 @@ async function seedSubscription(fan: string, fanId: number, input: {
   canonicalStatus?: string;
   generation?: number | null;
   startedAt?: Date | null;
+  /** `source_updated_at`, the row's last lifecycle evidence: the last notification applied, or what a sweep read. */
+  evidenceAt?: Date | null;
   endsAt?: Date | null;
   seenAt?: Date;
 }) {
@@ -275,10 +284,45 @@ async function seedSubscription(fan: string, fanId: number, input: {
     `insert into page_subscriptions (platform_subscription_id, platform_account_id, fan_id, raw_status, canonical_status,
        price_mills, renew_price_mills, source_created_at, source_updated_at, ends_at, is_current, last_seen_generation,
        last_seen_at)
-     values ($1, $2, $3, 0, $4, 0, 0, $5, $5, $6, $7, $8, $9)`,
-    [fan, pageIds["lora-of"], fanId, input.canonicalStatus ?? "active", input.startedAt ?? null, input.endsAt ?? null,
+     values ($1, $2, $3, 0, $4, 0, 0, $5, $6, $7, $8, $9, $10)`,
+    [fan, pageIds["lora-of"], fanId, input.canonicalStatus ?? "active", input.startedAt ?? null,
+      input.evidenceAt === undefined ? input.startedAt ?? null : input.evidenceAt, input.endsAt ?? null,
       input.isCurrent ?? true, input.generation ?? null, input.seenAt ?? new Date()],
   );
+}
+
+/**
+ * A subscription webhook as the receiver journals it, before the canonicalizer
+ * has turned it into an event: it names its page by the provider's account id
+ * and carries no page id. `parseVersion` stamps it as the canonicalizer would.
+ */
+async function journalNotification(input: {
+  receivedAt: Date;
+  kind?: string;
+  page?: OfPage;
+  nativeAccountRef?: string;
+  parseVersion?: number;
+}) {
+  const kind = input.kind ?? "subscriptions.new";
+  const nativeAccountRef = input.nativeAccountRef ?? OFAPI_ACCOUNTS[input.page ?? "lora-of"];
+  const idempotencyKey = `evt_${randomUUID()}`;
+  const journaled = await insertObservation(app.db, {
+    source: "webhook",
+    producer: "ofapi:webhook",
+    platform: "onlyfans",
+    nativeAccountRef,
+    kind,
+    payload: { event: kind, account_id: nativeAccountRef, payload: { id: idempotencyKey } },
+    payloadHash: Buffer.from(sha256Hex(idempotencyKey), "hex"),
+    idempotencyKey,
+    receivedAt: input.receivedAt,
+  });
+  expect(journaled.inserted).toBe(true);
+  if (input.parseVersion !== undefined) {
+    await markObservationParsed(app.db, {
+      observationId: journaled.observationId, receivedAt: journaled.receivedAt, parseVersion: input.parseVersion,
+    });
+  }
 }
 
 async function seedThread(fan: string, input: {
@@ -502,8 +546,11 @@ describe("GET /api/v1/client/pages/:pageLabel/audience-new", () => {
     ] as const) {
       pageIds[label] = (await create(app.db, { modelId: lora!.id, label }))!.id;
     }
-    for (const [label, account] of Object.entries(CREATORS)) {
-      await testDb.pool.query("update pages set external_page_id = $1 where id = $2", [account, pageIds[label]]);
+    for (const label of Object.keys(CREATORS) as OfPage[]) {
+      await testDb.pool.query(
+        "update pages set external_page_id = $1, ofapi_account_id = $2 where id = $3",
+        [CREATORS[label], OFAPI_ACCOUNTS[label], pageIds[label]],
+      );
     }
     for (const [userId, labels] of [
       [userIds.grisha, ["lora-of", "lora-fansly"]],
@@ -558,6 +605,8 @@ describe("GET /api/v1/client/pages/:pageLabel/audience-new", () => {
       delete from page_fans;
       delete from fans;
       delete from ofapi_webhook_events;
+      delete from observation_keys;
+      delete from observations;
       delete from page_sync_cursors;
       delete from ofapi_read_snapshots;
       delete from ofapi_webhook_delivery_scans;
@@ -637,7 +686,7 @@ describe("GET /api/v1/client/pages/:pageLabel/audience-new", () => {
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("lists new, trial and returning subscribers; the top-fan award and what it cannot classify are counted, not listed", async () => {
+  it("lists new, trial and returning subscribers; what it cannot classify is counted, the top-fan award is neither", async () => {
     await switchOn();
     const [fresh, trial, back, awarded, odd, bare, contradictory, gone] = Array.from({ length: 8 }, nextFan);
 
@@ -647,8 +696,11 @@ describe("GET /api/v1/client/pages/:pageLabel/audience-new", () => {
     const firstRef = await notify({ fan: back!, at: minutesAgo(20 * 24 * 60) });
     const backRef = await notify({ fan: back!, at: minutesAgo(30), kind: "subscriptions.renewed", subType: "returning_subscriber" });
 
-    // Not rows. OnlyFans reports the top-fan award as a subscription.
+    // Not a row and not an unknown: OnlyFans reports the top-fan award as a subscription, and the
+    // list leaves it out knowingly. On either event type.
     await notify({ fan: awarded!, at: minutesAgo(40), subType: "customer_award_for_model_top" });
+    await notify({ fan: nextFan(), at: minutesAgo(40), kind: "subscriptions.renewed", subType: "customer_award_for_model_top" });
+    // Not rows, and counted: the hub cannot say what they are.
     await notify({ fan: odd!, at: minutesAgo(41), subType: "some_later_sub_type" });
     await notify({ fan: bare!, at: minutesAgo(42), subType: null });
     // A renewed notification that calls itself new is never a row of kind new.
@@ -665,9 +717,9 @@ describe("GET /api/v1/client/pages/:pageLabel/audience-new", () => {
       observationId: ++observationSeq, dedupKey: "sub:started:0700:legacy",
     });
 
-    // Neither rows nor counted: an award before the window, an expiry, another page's subscriber,
-    // an event a repair superseded.
-    await notify({ fan: nextFan(), at: minutesAgo(3 * 24 * 60), subType: "customer_award_for_model_top" });
+    // Neither rows nor counted: an unknown subType before the window, an expiry, another page's
+    // subscriber, an event a repair superseded.
+    await notify({ fan: nextFan(), at: minutesAgo(3 * 24 * 60), subType: "some_later_sub_type" });
     await notify({ fan: gone!, at: minutesAgo(46), kind: "subscriptions.expired" });
     await notify({ fan: nextFan(), at: minutesAgo(47), page: "mia-of" });
     const supersededRef = await notify({ fan: nextFan(), at: minutesAgo(48) });
@@ -690,7 +742,9 @@ describe("GET /api/v1/client/pages/:pageLabel/audience-new", () => {
       [trial, "new", true],
       [back, "returning", false],
     ]);
-    expect(body.unknownCount).toBe(6);
+    // The unknown subType, the missing one, the renewed "new", the creator-keyed and the malformed id.
+    // Not the two awards: counting them would mark every long window as incomplete.
+    expect(body.unknownCount).toBe(5);
     expect(body.nextCursor).toBeNull();
     expect(body.items.map((row) => [row.username, row.displayName])).toEqual([
       ["fresh_fan", "Fresh Fan"],
@@ -717,8 +771,8 @@ describe("GET /api/v1/client/pages/:pageLabel/audience-new", () => {
     const month = await listOk(grishaToken, { windowHours: 720 });
     expect(refs(month)).toEqual([freshRef, trialRef, backRef, firstRef]);
     expect(month.items.filter((row) => row.fanRef === back).map((row) => row.kind)).toEqual(["returning", "new"]);
-    // The count is the window's: the award of three days ago is in this one.
-    expect(month.unknownCount).toBe(7);
+    // The count is the window's: the unknown subType of three days ago is in this one.
+    expect(month.unknownCount).toBe(6);
     expect((await listOk(svetaToken, { pageLabel: "mia-of" })).items).toHaveLength(1);
 
     await trap!.assertNoOutbound();
@@ -745,10 +799,10 @@ describe("GET /api/v1/client/pages/:pageLabel/audience-new", () => {
     expect(Math.abs(Date.parse(first.serverNow) - before)).toBeLessThan(60_000);
 
     // While the client pages: a new subscriber, a notification that arrives late for a minute
-    // already paged past, and an award.
+    // already paged past, and one the hub cannot classify.
     const late = await notify({ fan: nextFan(), at: minutesAgo(7) });
     const newest = await notify({ fan: nextFan(), at: minutesAgo(0) });
-    await notify({ fan: nextFan(), at: minutesAgo(3), subType: "customer_award_for_model_top" });
+    await notify({ fan: nextFan(), at: minutesAgo(3), subType: "some_later_sub_type" });
 
     const second = await listOk(grishaToken, { limit: 2, cursor: first.nextCursor! });
     expect(refs(second)).toEqual([e2, e4]);
@@ -849,12 +903,14 @@ describe("GET /api/v1/client/pages/:pageLabel/audience-new", () => {
     await switchOn();
     const sweptAt = minutesAgo(60);
     await seedSweep({ generation: 91, completedAt: sweptAt });
-    const [notified, swept, back, expired, retired, recordOnly, unknown] = Array.from({ length: 7 }, nextFan);
+    const [notified, swept, back, expired, retired, recordOnly, unknown, trialBack, renotified] = Array.from({ length: 9 }, nextFan);
     const subscribed = minutesAgo(180);
-    for (const fan of [notified, swept, expired, retired, recordOnly, unknown]) {
+    for (const fan of [notified, swept, expired, retired, recordOnly, unknown, renotified]) {
       await notify({ fan: fan!, at: subscribed });
     }
     await notify({ fan: back!, at: subscribed, kind: "subscriptions.renewed", subType: "returning_subscriber" });
+    // OnlyFans announces a fan who comes back through a free-trial link as a new trial.
+    await notify({ fan: trialBack!, at: subscribed, subType: "new_subscriber_trial" });
 
     // Only the notification wrote the row: its start is the notification's time.
     const notifiedAt = minutesAgo(179);
@@ -868,15 +924,26 @@ describe("GET /api/v1/client/pages/:pageLabel/audience-new", () => {
       generation: 91, startedAt: preciseStart, endsAt, seenAt: sweptAt,
     });
     // Came back: a sweep long ago saw the first subscription; the notification reactivated the row
-    // and kept that old start.
+    // and kept that old start and that old period's end.
     const oldStart = minutesAgo(200 * 24 * 60);
+    const oldEnd = minutesAgo(170 * 24 * 60);
     await seedSubscription(back!, await seedFan(back!, { isSubscriber: true }), {
-      generation: 60, startedAt: oldStart, seenAt: notifiedAt,
+      generation: 60, startedAt: oldStart, evidenceAt: subscribed, endsAt: oldEnd, seenAt: notifiedAt,
+    });
+    // The same fan history under OnlyFans' word "new trial": the newest sweep read a subscription
+    // that started seven months ago.
+    await seedSubscription(trialBack!, await seedFan(trialBack!, { isSubscriber: true }), {
+      generation: 91, startedAt: oldStart, endsAt, seenAt: sweptAt,
+    });
+    // And one no sweep ever read: an earlier notification created the row forty days ago.
+    await seedSubscription(renotified!, await seedFan(renotified!, { isSubscriber: true }), {
+      startedAt: minutesAgo(40 * 24 * 60), evidenceAt: subscribed, seenAt: notifiedAt,
     });
     // Expired by its notification; retired by a sweep that no longer found it.
     const expiredAt = minutesAgo(30);
     await seedSubscription(expired!, await seedFan(expired!, { isSubscriber: false }), {
-      isCurrent: false, canonicalStatus: "expired", generation: 91, startedAt: preciseStart, endsAt: expiredAt, seenAt: expiredAt,
+      isCurrent: false, canonicalStatus: "expired", generation: 91, startedAt: preciseStart, evidenceAt: expiredAt,
+      endsAt: expiredAt, seenAt: expiredAt,
     });
     await seedSubscription(retired!, await seedFan(retired!, { isSubscriber: false }), {
       isCurrent: false, startedAt: subscribed, seenAt: sweptAt,
@@ -898,13 +965,28 @@ describe("GET /api/v1/client/pages/:pageLabel/audience-new", () => {
         source: "sweep",
       },
     });
-    // The stale start of a returning fan is never the row's date, and the old sweep does not vouch for the return.
+    // The stale start of a returning fan is never the row's date, the old sweep does not vouch for
+    // the return, and the end of the period before is not the end of this one.
     expect(rowOf(body, back!)).toMatchObject({
       kind: "returning",
       subscribedAt: subscribed.toISOString(),
       subscribedAtSource: "notification",
-      status: { isSubscriber: true, subscriptionStatus: "active", source: "webhook" },
+      status: { isSubscriber: true, subscriptionStatus: "active", endsAt: null, source: "webhook" },
     });
+    // A subscription OnlyFans names new is a return when the hub holds an earlier one of the fan:
+    // read by a sweep, or created by an earlier notification. `trial` stays as OnlyFans said it.
+    expect(rowOf(body, trialBack!)).toMatchObject({
+      kind: "returning",
+      trial: true,
+      subscribedAt: subscribed.toISOString(),
+      subscribedAtSource: "notification",
+      status: { isSubscriber: true, subscriptionStatus: "active", endsAt: endsAt.toISOString(), source: "sweep" },
+    });
+    expect(rowOf(body, renotified!)).toMatchObject({ kind: "returning", trial: false, subscribedAtSource: "notification" });
+    // Everyone else is the new subscriber OnlyFans named: a start within a minute of the notification is this subscription's.
+    for (const fan of [notified, swept, expired, retired, recordOnly, unknown]) {
+      expect(rowOf(body, fan!), fan).toMatchObject({ kind: "new", trial: false });
+    }
     expect(rowOf(body, expired!)).toMatchObject({
       // The sweep read this subscription's start before it ended.
       subscribedAt: preciseStart.toISOString(),
@@ -982,18 +1064,27 @@ describe("GET /api/v1/client/pages/:pageLabel/audience-new", () => {
       greeted: nextFan(),
       desktopGreeted: nextFan(),
       desktopQueued: nextFan(),
+      desktopIndeterminate: nextFan(),
+      desktopFailedUnproven: nextFan(),
       desktopCancelled: nextFan(),
+      desktopRefusedLocally: nextFan(),
       dispatching: nextFan(),
       uncertain: nextFan(),
+      twoSenders: nextFan(),
     };
     let minute = 1;
     for (const fan of Object.values(fans)) {
       await notify({ fan, at: minutesAgo(minute += 1) });
     }
-    // The desktop's outbox: confirmed by OnlyFans, still queued, cancelled before any attempt.
+    // The desktop's outbox. Confirmed by OnlyFans; an outcome nobody knows (queued, indeterminate,
+    // failed without proof it never left); and proof it never left (cancelled before any attempt,
+    // refused inside the hub).
     await seedDesktopCommand(fans.desktopGreeted, "confirmed", 1, { source: "ofapi_response" });
     await seedDesktopCommand(fans.desktopQueued, "queued", 0, null);
+    await seedDesktopCommand(fans.desktopIndeterminate, "indeterminate", 1, { source: "stale_recovery" });
+    await seedDesktopCommand(fans.desktopFailedUnproven, "failed_terminal", 1, { source: "ofapi_response", httpStatus: 400 });
     await seedDesktopCommand(fans.desktopCancelled, "cancelled", 0, null);
+    await seedDesktopCommand(fans.desktopRefusedLocally, "failed_terminal", 1, { source: "local_precondition", reason: "binding_replaced" });
     await rearm();
 
     await act(grishaToken, fans.leased, claimBody(I1));
@@ -1010,6 +1101,18 @@ describe("GET /api/v1/client/pages/:pageLabel/audience-new", () => {
     await query("update client_send_custody set ticket_expires_at = now() - interval '1 second' where attempt_id = $1", [lostAttempt]);
     // Nikita holds a lease of his own on the fan the desktop cancelled for.
     await act(nikitaToken, fans.desktopCancelled, claimBody(I3));
+    // Two people sent a reply to one fan from the preview: first grisha's, which never left the
+    // page, then nikita's, which did. Each reads their own send's end, never the other's.
+    const mineFailed = dispatchBody({ purpose: "preview-reply" });
+    await act(grishaToken, fans.twoSenders, mineFailed);
+    await act(grishaToken, fans.twoSenders, {
+      action: "failed", attemptId: mineFailed.attemptId, instanceId: I1, reason: "not_enqueued",
+    });
+    const theirsSent = dispatchBody({ purpose: "preview-reply", instanceId: I3 });
+    await act(nikitaToken, fans.twoSenders, theirsSent);
+    await act(nikitaToken, fans.twoSenders, {
+      action: "sent", attemptId: theirsSent.attemptId, instanceId: I3, platformMessageId: "880002", evidence: "receipt+echo",
+    });
     // A ticket lasts 10 s and a lease 120 s: keep what is alive alive for the whole test.
     await query("update client_send_custody set ticket_expires_at = now() + interval '1 hour' where attempt_id = $1", [liveAttempt]);
     await query("update client_fan_leases set expires_at = now() + interval '1 hour' where state = 'active' and lease_id <> $1", [lapsedLease]);
@@ -1035,11 +1138,20 @@ describe("GET /api/v1/client/pages/:pageLabel/audience-new", () => {
     expect(rowOf(mine, fans.greeted).claim).toMatchObject({ greeting: "confirmed", custody: "sent" });
     // A finished send is the sender's own business: nobody else sees its custody.
     expect(rowOf(theirs, fans.greeted).claim).toMatchObject({ greeting: "confirmed", custody: null });
+    // The newest send to the fan is nikita's; grisha still reads his own.
+    expect(rowOf(mine, fans.twoSenders).claim.custody).toBe("failed");
+    expect(rowOf(theirs, fans.twoSenders).claim.custody).toBe("sent");
+    expect(rowOf(await listOk(ownerToken), fans.twoSenders).claim.custody).toBeNull();
     for (const body of [mine, theirs]) {
       expect(rowOf(body, fans.desktopGreeted).claim).toMatchObject({ greeting: "confirmed", custody: null });
-      // A command that may still greet, and one that never left, are not a greeting.
-      expect(rowOf(body, fans.desktopQueued).claim.greeting).toBe("none");
-      expect(rowOf(body, fans.desktopCancelled).claim.greeting).toBe("none");
+      // A command that may have greeted is not a greeting, and not a free row either: it holds the
+      // fan like a send nobody can vouch for, so nobody greets by hand over it.
+      for (const fan of [fans.desktopQueued, fans.desktopIndeterminate, fans.desktopFailedUnproven]) {
+        expect(rowOf(body, fan).claim, fan).toEqual({ greeting: "none", lease: "none", heldBy: null, custody: "uncertain-held" });
+      }
+      // One that provably never left holds nothing.
+      expect(rowOf(body, fans.desktopRefusedLocally).claim).toEqual({ greeting: "none", lease: "none", heldBy: null, custody: null });
+      expect(rowOf(body, fans.desktopCancelled).claim).toMatchObject({ greeting: "none", lease: "held", custody: null });
       // An unresolved send holds the fan for everyone.
       expect(rowOf(body, fans.dispatching).claim.custody).toBe("dispatching");
       expect(rowOf(body, fans.uncertain).claim.custody).toBe("uncertain-held");
@@ -1093,6 +1205,31 @@ describe("GET /api/v1/client/pages/:pageLabel/audience-new", () => {
     await seedWebhookRow({ eventType: "subscriptions.new", projection: "pending", receivedAt: minutesAgo(7), page: "mia-of" });
     await seedWebhookRow({ eventType: "subscriptions.new", projection: "failed", receivedAt: minutesAgo(49 * 60) });
     expect(await coverage()).toMatchObject({ state: "complete", reasons: [] });
+
+    // A subscription notification the hub journaled and has not turned into an event: the list
+    // reads events, so its row is missing. Never stamped, or stamped by an older canonicalizer.
+    await journalNotification({ receivedAt: minutesAgo(4) });
+    expect(await coverage()).toMatchObject({ state: "partial", reasons: ["subscription_event_pending"] });
+    await query("update observations set parse_version = $1", [OFAPI_WEBHOOK_CANONICALIZER_VERSION]);
+    expect(await coverage()).toMatchObject({ state: "complete", reasons: [] });
+    await journalNotification({ receivedAt: minutesAgo(4), kind: "subscriptions.renewed", parseVersion: OFAPI_WEBHOOK_CANONICALIZER_VERSION - 1 });
+    expect(await coverage()).toMatchObject({ state: "partial", reasons: ["subscription_event_pending"] });
+    // The driver also resolves a page by its own account id.
+    await query("update observations set parse_version = $1", [OFAPI_WEBHOOK_CANONICALIZER_VERSION]);
+    await journalNotification({ receivedAt: minutesAgo(4), nativeAccountRef: CREATORS["lora-of"] });
+    expect((await coverage()).reasons).toEqual(["subscription_event_pending"]);
+    await query("update observations set parse_version = $1", [OFAPI_WEBHOOK_CANONICALIZER_VERSION]);
+    // Canonicalized ones, another page's, other notifications and one from before the window do not count.
+    await journalNotification({ receivedAt: minutesAgo(4), parseVersion: OFAPI_WEBHOOK_CANONICALIZER_VERSION });
+    await journalNotification({ receivedAt: minutesAgo(4), page: "mia-of" });
+    await journalNotification({ receivedAt: minutesAgo(4), kind: "subscriptions.expired" });
+    await journalNotification({ receivedAt: minutesAgo(4), kind: "messages.received" });
+    await journalNotification({ receivedAt: minutesAgo(49 * 60) });
+    expect(await coverage()).toMatchObject({ state: "complete", reasons: [] });
+    expect((await listOk(svetaToken, { pageLabel: "mia-of" })).coverage.reasons).toContain("subscription_event_pending");
+    // A wider window reaches the notification of 49 hours ago, and the unapplied one seeded above.
+    expect((await coverage({ windowHours: 720 })).reasons)
+      .toEqual(["subscription_event_pending", "subscription_projection_failed"]);
 
     // The last sweep ended without a result the hub trusts.
     await seedSweep({ completedAt: sweptAt, unverifiedAt: sweptAt });

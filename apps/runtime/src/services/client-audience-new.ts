@@ -2,6 +2,7 @@ import {
   CLIENT_AUDIENCE_NEW_MAX_WINDOW_HOURS,
   type ClientAudienceNewCoverageReason,
   type ClientAudienceNewItem,
+  type ClientAudienceNewKind,
   type ClientAudienceNewQuery,
   type ClientAudienceNewRefusalReason,
   type ClientAudienceNewResponse,
@@ -13,6 +14,7 @@ import {
 import {
   classifyClientAudienceNewEvent,
   countClientAudienceNewUnlisted,
+  countClientAudiencePendingNotifications,
   countClientAudienceProjectionBacklog,
   findPageSummaryByLabel,
   getWebhookDeliveryHistoryCoverage,
@@ -21,6 +23,7 @@ import {
   readClientAudienceClock,
   readClientAudienceNewFans,
   readClientFanClaimSummaries,
+  type ClientAudienceNewClass,
   type ClientAudienceNewFan,
   type ClientAudienceNewSubscription,
   type ClientAudienceNewThread,
@@ -31,6 +34,7 @@ import { z } from "zod";
 
 import type { AppContext } from "../bootstrap.ts";
 import { requireApiKeyUser, type HumanAuthPrincipal } from "./auth.ts";
+import { OFAPI_WEBHOOK_CANONICALIZER_VERSION } from "./canonicalize/ofapi-webhook.ts";
 import { requireClientFeature, type ClientFeatureRequest } from "./client-switches.ts";
 import { BadRequestError, ClientFeatureDisabledError } from "./errors.ts";
 import { OFAPI_DELIVERY_HISTORY_AGE_THRESHOLD_MS } from "./ofapi-delivery-history-signal.ts";
@@ -77,13 +81,20 @@ export const CLIENT_AUDIENCE_NEW_CURSOR_DOMAIN = "agency-hub:client-audience-new
  */
 export const CLIENT_AUDIENCE_NEW_CURSOR_TTL_MS = 60 * 60_000;
 /**
- * How far a sweep's `subscribeAt` may lie from a notification's time and still
- * be the same subscription. OnlyFans stamps the notification to the minute and
- * the subscription to the second, so the two differ by up to a minute; a fan
- * who came back keeps a start that is days or months older, and that one is
- * never used.
+ * How far a stored subscription start may lie from a notification's time and
+ * still be the same subscription. OnlyFans stamps the notification to the
+ * minute and the subscription to the second, so the two differ by up to a
+ * minute. A start older than the notification by more than this belongs to an
+ * earlier subscription of the fan: it is never the row's date, and it makes
+ * the row a return.
  */
 export const CLIENT_AUDIENCE_SUBSCRIBE_AT_TOLERANCE_MS = 5 * 60_000;
+/**
+ * The webhook kinds the list's rows are canonicalized from (`subscriptions.new`
+ * → `subscription.started`, `subscriptions.renewed` → `subscription.renewed`).
+ * One of them journaled and not canonicalized yet is a row the list lacks.
+ */
+export const CLIENT_AUDIENCE_NOTIFICATION_KINDS = ["subscriptions.new", "subscriptions.renewed"] as const;
 
 const READ_SNAPSHOT = { isolationLevel: "repeatable read", accessMode: "read only" } as const;
 const HOUR_MS = 60 * 60_000;
@@ -159,6 +170,34 @@ export function audienceSweepState(checkpointState: unknown): AudienceSweepState
 }
 
 /**
+ * The row's kind. OnlyFans' own word decides it, with one correction: what it
+ * calls a new subscriber is a return when the hub holds a subscription of the
+ * fan that started before this notification, by more than the tolerance. A fan
+ * who comes back through a free-trial link is announced as
+ * `new_subscriber_trial`; on production 5 of 65 trial notifications of a month
+ * were fans whose subscription a sweep had read as 5 to 10 months old.
+ *
+ * Whoever wrote the stored start, it is evidence of an earlier subscription: a
+ * sweep writes OnlyFans' own `subscribeAt`, and a notification writes its own
+ * time once, when it creates the row, so a later notification that finds an
+ * older start found an earlier one's row. `trial` stays as OnlyFans said it.
+ *
+ * The chat is not asked. The read holds only the time of the fan's LAST
+ * message, and a kind decided by it would flip back to `new` the moment a
+ * returning fan writes again.
+ */
+export function audienceKind(
+  listed: ClientAudienceNewClass,
+  occurredAt: Date,
+  subscription: Pick<ClientAudienceNewSubscription, "sourceCreatedAt"> | null,
+): { kind: ClientAudienceNewKind; trial: boolean } {
+  const start = subscription?.sourceCreatedAt ?? null;
+  const subscribedBefore = start !== null
+    && occurredAt.getTime() - start.getTime() > CLIENT_AUDIENCE_SUBSCRIBE_AT_TOLERANCE_MS;
+  return { kind: listed.kind === "new" && subscribedBefore ? "returning" : listed.kind, trial: listed.trial };
+}
+
+/**
  * When the fan subscribed. The notification's time, unless a subscriber sweep
  * has read the subscription's own start and that start names the same
  * subscription as the notification: within the tolerance of it. The stored
@@ -215,6 +254,25 @@ function subscriptionStatus(subscription: ClientAudienceNewSubscription | null):
 }
 
 /**
+ * When the subscription ends. A notification carries no end, so a fan who came
+ * back keeps the end of the period before until a sweep reads the new one: on
+ * a current subscription an end that is not after the row's last lifecycle
+ * evidence (the notification that reactivated it) is that old end, and the
+ * answer is "not known". A subscription that is over keeps its end: there the
+ * end IS the last evidence.
+ */
+export function audienceEndsAt(
+  subscription: Pick<ClientAudienceNewSubscription, "isCurrent" | "endsAt" | "lastEvidenceAt"> | null,
+): Date | null {
+  if (subscription === null || subscription.endsAt === null) {
+    return null;
+  }
+  const { endsAt, lastEvidenceAt } = subscription;
+  const stale = subscription.isCurrent && lastEvidenceAt !== null && endsAt.getTime() <= lastEvidenceAt.getTime();
+  return stale ? null : endsAt;
+}
+
+/**
  * The fan's subscription as the hub holds it now. `isSubscriber` and
  * `subscriptionStatus` come from two projections (the page's fan record and
  * the subscription row), so a client can require that they agree. Without a
@@ -230,7 +288,7 @@ export function audienceStatus(
   return {
     isSubscriber: subscription === null ? null : fan.isSubscriber,
     subscriptionStatus: subscriptionStatus(subscription),
-    endsAt: wireInstant(subscription?.endsAt ?? null),
+    endsAt: wireInstant(audienceEndsAt(subscription)),
     asOf: wireInstant(subscription?.lastSeenAt ?? null),
     source: audienceStatusSource(subscription, sweep),
   };
@@ -264,12 +322,14 @@ const COVERAGE_ORDER: readonly ClientCoverageLevel[] = ["complete", "partial", "
 /**
  * Whether the hub can vouch for the window's list, and why not.
  *
- * Three things could leave the list short or a row's `status` stale, and each
+ * Four things could leave the list short or a row's `status` stale, and each
  * has a witness:
  * - a notification that never reached the hub: the provider's webhook delivery
  *   history, which the hub collects and checks a few minutes behind real time.
  *   Without it nothing is known (`unknown`); checked only up to a moment well
  *   before the window's end, the tail is unchecked (`partial`);
+ * - a notification that arrived and is not an event yet: journaled, waiting
+ *   for the canonicalizer. The list reads events, so that row is missing;
  * - a notification that arrived and is not applied to the subscriber state;
  * - a subscriber state that only notifications ever wrote: no completed sweep.
  */
@@ -278,6 +338,8 @@ export function evaluateAudienceCoverage(input: {
   to: Date;
   /** Null: the delivery history is not collected. `frontier` null: no window of it is complete yet. */
   delivery: { frontier: Date | null } | null;
+  /** Subscription notifications of the window journaled and not canonicalized yet. */
+  pendingNotifications: number;
   backlog: { pending: number; failed: number };
   sweep: Pick<AudienceSweepState, "lastCompletedAt" | "unverified"> | null;
 }): { state: ClientCoverageLevel; reasons: ClientAudienceNewCoverageReason[] } {
@@ -292,6 +354,9 @@ export function evaluateAudienceCoverage(input: {
   } else if (frontier.getTime() < input.to.getTime() - OFAPI_DELIVERY_HISTORY_AGE_THRESHOLD_MS) {
     // Beyond the collector's own "stuck" threshold: its normal lag is not a hole.
     found.push(["delivery_history_behind", "partial"]);
+  }
+  if (input.pendingNotifications > 0) {
+    found.push(["subscription_event_pending", "partial"]);
   }
   if (input.backlog.pending > 0) {
     found.push(["subscription_projection_pending", "partial"]);
@@ -387,6 +452,12 @@ export async function getClientAudienceNew(
 
     const unknownCount = await countClientAudienceNewUnlisted(tx, window);
     const delivery = await getWebhookDeliveryHistoryCoverage(tx);
+    const pendingNotifications = await countClientAudiencePendingNotifications(tx, {
+      pageId: page.id,
+      since: window.from,
+      kinds: CLIENT_AUDIENCE_NOTIFICATION_KINDS,
+      belowParseVersion: OFAPI_WEBHOOK_CANONICALIZER_VERSION,
+    });
     const backlog = await countClientAudienceProjectionBacklog(tx, {
       pageId: page.id,
       since: window.from,
@@ -394,17 +465,20 @@ export async function getClientAudienceNew(
     });
     const [checkpoint] = await listCheckpointStates(tx, [page.id], "subscribers");
     const sweep = audienceSweepState(checkpoint?.state);
-    const coverage = evaluateAudienceCoverage({ from: window.from, to: window.to, delivery, backlog, sweep });
+    const coverage = evaluateAudienceCoverage({
+      from: window.from, to: window.to, delivery, pendingNotifications, backlog, sweep,
+    });
     const welcomeTemplate = await readLatestOfapiWelcomeTemplate(tx, page.id);
 
     const items = events.rows.flatMap((event): ClientAudienceNewItem[] => {
-      const kind = classifyClientAudienceNewEvent(event.type, event.subType);
+      const listed = classifyClientAudienceNewEvent(event.type, event.subType);
       const fan = fans.get(event.fanRef);
       const claim = claims.get(event.fanRef);
       // The reader lists only classified events and answers every fan it was asked for.
-      if (kind === null || fan === undefined || claim === undefined) {
+      if (listed === null || fan === undefined || claim === undefined) {
         return [];
       }
+      const kind = audienceKind(listed, event.occurredAt, fan.subscription);
       const subscribed = audienceSubscribedAt(event.occurredAt, fan.subscription);
       return [{
         eventRef: event.eventId,

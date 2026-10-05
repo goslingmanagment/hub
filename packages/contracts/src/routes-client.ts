@@ -1132,8 +1132,11 @@ export const CLIENT_AUDIENCE_NEW_MAX_LIMIT = 100;
 /**
  * Known values of `kind`. On the wire an open token. `new`: a first
  * subscription (with `trial` when it is a free trial). `returning`: a fan who
- * was subscribed before and came back. There is no "renewed": OnlyFans sends
- * no notification when a subscription renews by itself.
+ * was subscribed before and came back: OnlyFans says so, or it names the
+ * subscription new (a free-trial link taken again reads as a new trial) while
+ * the hub holds a subscription of the fan that started earlier. `trial` stays
+ * as OnlyFans said it. There is no "renewed": OnlyFans sends no notification
+ * when a subscription renews by itself.
  */
 export const CLIENT_AUDIENCE_NEW_KINDS = ["new", "returning"] as const;
 /**
@@ -1168,6 +1171,9 @@ export const CLIENT_AUDIENCE_NEW_STATUS_SOURCES = ["sweep", "webhook", "none"] a
  * - `delivery_history_behind`: it is checked up to a moment inside the window
  *   that lies further back from the window's end than the collector normally
  *   lags (`partial`);
+ * - `subscription_event_pending`: a subscription notification received since
+ *   the window started is journaled and not turned into an event yet, so its
+ *   row is not in the list (`partial`);
  * - `subscription_projection_pending`, `subscription_projection_failed`: a
  *   subscription notification received since the window started is not applied
  *   to the page's subscriber state yet, or could not be (`partial`);
@@ -1178,7 +1184,7 @@ export const CLIENT_AUDIENCE_NEW_STATUS_SOURCES = ["sweep", "webhook", "none"] a
  */
 export const CLIENT_AUDIENCE_NEW_COVERAGE_REASONS = [
   "delivery_history_off", "delivery_history_pending", "delivery_history_before_window", "delivery_history_behind",
-  "subscription_projection_pending", "subscription_projection_failed",
+  "subscription_event_pending", "subscription_projection_pending", "subscription_projection_failed",
   "audience_sweep_missing", "audience_sweep_unverified",
 ] as const;
 /**
@@ -1239,6 +1245,7 @@ export const clientAudienceNewItemSchema = z.object({
     isSubscriber: z.boolean().nullable(),
     /** Open token; known values: CLIENT_AUDIENCE_NEW_SUBSCRIPTION_STATUSES. */
     subscriptionStatus: clientOpenToken,
+    /** Null too when the hub holds only the end of the period before the fan came back. */
     endsAt: isoTimestamp.nullable(),
     /** When the subscription's state was last written; null with `source: "none"`. */
     asOf: isoTimestamp.nullable(),
@@ -1250,7 +1257,11 @@ export const clientAudienceNewItemSchema = z.object({
     lastMessageAt: isoTimestamp.nullable(),
     lastFanMessageAt: isoTimestamp.nullable(),
     lastModelMessageAt: isoTimestamp.nullable(),
-    /** Messages of the chat the hub stores, automatic ones included. */
+    /**
+     * Messages of the chat the hub's chat record counts, automatic ones included.
+     * NOT the number the Hi gate checks: that gate counts the transcript a
+     * generation reads (the message archive), which can run ahead of this record.
+     */
     storedMessageCount: count,
     /** Open token; known values: CLIENT_COVERAGE_LEVELS. */
     coverage: clientOpenToken,
@@ -1283,9 +1294,10 @@ export const clientAudienceNewResponseSchema = z.object({
     reasons: z.array(clientOpenToken),
   }),
   /**
-   * Subscription events of the window that are not rows: one the hub cannot
-   * classify, a top-fan award (OnlyFans reports it as a subscription), and an
-   * event without a usable fan id. Counted over the whole window, not the page.
+   * Subscription events of the window that are not rows and that the hub
+   * cannot account for: one it cannot classify, and one without a usable fan
+   * id. Counted over the whole window, not the page. A top-fan award (OnlyFans
+   * reports it as a subscription) is left out on purpose and is not counted.
    */
   unknownCount: count,
   /** The page's automatic welcome message as last collected; null until it is collected. */
@@ -1564,10 +1576,12 @@ export const clientRouteSchemas = {
       + "projections; no platform request, no queued work, and no chat is marked read. One row per "
       + "subscription notification, newest first. `kind` is `new` (with `trial` for a free trial) or "
       + "`returning`; there is no renewal row, because OnlyFans sends no notification when a subscription "
-      + "renews by itself. A notification the hub cannot classify, a top-fan award and one without a usable "
-      + "fan id are not rows: `unknownCount` counts them over the whole window. `subscribedAt` is the "
-      + "notification's time (to the minute) until a subscriber sweep has read the same subscription's own "
-      + "start (`subscribedAtSource`). `status` is the fan's subscription as the hub holds it now, with when "
+      + "renews by itself. A subscription OnlyFans names new is `returning` when the hub holds an earlier "
+      + "subscription of the fan. A notification the hub cannot classify and one without a usable fan id are "
+      + "not rows: `unknownCount` counts them over the whole window. A top-fan award is not a row either and "
+      + "is not counted. `subscribedAt` is the notification's time (to the minute) until a subscriber sweep "
+      + "has read the same subscription's own start (`subscribedAtSource`). "
+      + "`status` is the fan's subscription as the hub holds it now, with when "
       + "it was written (`asOf`) and by which collector; `thread` what the hub stores of the chat; `claim` "
       + "the states `clientFanClaimStatus` answers for the same fan and caller, where a greeting the desktop "
       + "sent counts as confirmed and a desktop command that may have greeted reads as custody "

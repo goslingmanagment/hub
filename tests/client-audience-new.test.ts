@@ -1,9 +1,20 @@
 import { describe, expect, it } from "vitest";
 
-import { CLIENT_AUDIENCE_NEW_CLASSES, classifyClientAudienceNewEvent } from "@agency_hub_core/db";
+import {
+  CLIENT_AUDIENCE_NEW_CLASSES,
+  CLIENT_AUDIENCE_NEW_IGNORED_SUB_TYPES,
+  classifyClientAudienceNewEvent,
+} from "@agency_hub_core/db";
 
 import {
+  OFAPI_WEBHOOK_CANONICALIZED_KINDS,
+  canonicalizeOfapiWebhookObservation,
+} from "../apps/runtime/src/services/canonicalize/ofapi-webhook.ts";
+import {
+  CLIENT_AUDIENCE_NOTIFICATION_KINDS,
   CLIENT_AUDIENCE_SUBSCRIBE_AT_TOLERANCE_MS,
+  audienceEndsAt,
+  audienceKind,
   audienceStatus,
   audienceStatusSource,
   audienceSubscribedAt,
@@ -57,6 +68,68 @@ describe("which subscription events are rows", () => {
   });
 });
 
+describe("what is left out on purpose, and what the rows are made from", () => {
+  it("knows the top-fan award: never a row, and never an unknown", () => {
+    expect(CLIENT_AUDIENCE_NEW_IGNORED_SUB_TYPES).toEqual(["customer_award_for_model_top"]);
+    for (const subType of CLIENT_AUDIENCE_NEW_IGNORED_SUB_TYPES) {
+      expect(CLIENT_AUDIENCE_NEW_CLASSES.map((entry): string => entry.subType), subType).not.toContain(subType);
+      for (const type of ["subscription.started", "subscription.renewed"]) {
+        expect(classifyClientAudienceNewEvent(type, subType), `${type} / ${subType}`).toBeNull();
+      }
+    }
+  });
+
+  it("names the webhook kinds the real canonicalizer turns into the list's events", () => {
+    const listed = new Set<string>(CLIENT_AUDIENCE_NEW_CLASSES.map((entry) => entry.type));
+    const made = CLIENT_AUDIENCE_NOTIFICATION_KINDS.map((kind) => {
+      expect(OFAPI_WEBHOOK_CANONICALIZED_KINDS.has(kind), kind).toBe(true);
+      const [event] = canonicalizeOfapiWebhookObservation({
+        id: 1, source: "webhook", producer: "ofapi:webhook", platform: "onlyfans", accountId: null, kind,
+        payload: { event: kind, payload: { id: "9", createdAt: "2026-10-04T23:08:00+00:00", subType: "x", user: { id: 77 } } },
+        observedAt: null, receivedAt: NOTIFIED,
+      });
+      return event!.type;
+    });
+    // Every event type the list reads comes from one of these kinds, and from nothing else.
+    expect(new Set(made)).toEqual(listed);
+  });
+});
+
+describe("new or returning", () => {
+  const fresh = { kind: "new", trial: false } as const;
+  const trial = { kind: "new", trial: true } as const;
+  const months = (count: number) => new Date(NOTIFIED.getTime() - count * 30 * 24 * 60 * 60_000);
+
+  it("keeps OnlyFans' word while nothing says the fan was subscribed before", () => {
+    expect(audienceKind(fresh, NOTIFIED, null)).toEqual({ kind: "new", trial: false });
+    expect(audienceKind(trial, NOTIFIED, null)).toEqual({ kind: "new", trial: true });
+    // The start the notification itself wrote, the same subscription as a sweep read it, no start at all.
+    for (const start of [NOTIFIED, at("2026-10-04T23:08:41.000Z"), at("2026-10-04T23:07:57.000Z"), null]) {
+      expect(audienceKind(trial, NOTIFIED, { sourceCreatedAt: start }), String(start)).toEqual({ kind: "new", trial: true });
+    }
+    // A start after the notification is a later subscription: this one was still the first.
+    expect(audienceKind(fresh, NOTIFIED, { sourceCreatedAt: at("2026-10-20T10:00:00.000Z") }).kind).toBe("new");
+  });
+
+  it("a subscription OnlyFans names new is a return when the hub holds an earlier one of the fan", () => {
+    // A fan who comes back through a free-trial link is announced as a new trial.
+    expect(audienceKind(trial, NOTIFIED, { sourceCreatedAt: months(7) })).toEqual({ kind: "returning", trial: true });
+    expect(audienceKind(fresh, NOTIFIED, { sourceCreatedAt: months(5) })).toEqual({ kind: "returning", trial: false });
+    // The bound: more than the tolerance before the notification.
+    const edge = new Date(NOTIFIED.getTime() - CLIENT_AUDIENCE_SUBSCRIBE_AT_TOLERANCE_MS);
+    expect(audienceKind(trial, NOTIFIED, { sourceCreatedAt: edge }).kind).toBe("new");
+    expect(audienceKind(trial, NOTIFIED, { sourceCreatedAt: new Date(edge.getTime() - 1) }).kind).toBe("returning");
+  });
+
+  it("never turns a return into a new subscriber", () => {
+    const back = { kind: "returning", trial: false } as const;
+    for (const start of [null, NOTIFIED, months(7), at("2026-10-20T10:00:00.000Z")]) {
+      expect(audienceKind(back, NOTIFIED, start === null ? null : { sourceCreatedAt: start }), String(start))
+        .toEqual({ kind: "returning", trial: false });
+    }
+  });
+});
+
 describe("when the fan subscribed", () => {
   const swept = (start: string | null) => ({ lastSeenGeneration: 91, sourceCreatedAt: start === null ? null : at(start) });
 
@@ -96,6 +169,7 @@ describe("the fan's subscription as the hub holds it", () => {
     isCurrent: true,
     endsAt: at("2026-11-04T23:08:41.000Z"),
     lastSeenAt: at("2026-10-05T00:06:33.000Z"),
+    lastEvidenceAt: at("2026-10-04T23:08:41.000Z") as Date | null,
     lastSeenGeneration: 91 as number | null,
     sourceCreatedAt: at("2026-10-04T23:08:41.000Z"),
     ...over,
@@ -126,9 +200,11 @@ describe("the fan's subscription as the hub holds it", () => {
       asOf: "2026-10-05T00:06:33.000Z",
       source: "sweep",
     });
+    // Expired by its notification: the end is the expiry, which is also the row's last evidence.
+    const expiredAt = at("2026-10-05T01:00:00.000Z");
     expect(audienceStatus({
       isSubscriber: false,
-      subscription: subscription({ isCurrent: false, canonicalStatus: "expired", endsAt: at("2026-10-05T01:00:00.000Z") }),
+      subscription: subscription({ isCurrent: false, canonicalStatus: "expired", endsAt: expiredAt, lastEvidenceAt: expiredAt }),
     }, sweep)).toMatchObject({ isSubscriber: false, subscriptionStatus: "expired", endsAt: "2026-10-05T01:00:00.000Z", source: "webhook" });
     // A row retired by a sweep keeps the status its last writer gave it, and is expired all the same.
     expect(audienceStatus({ isSubscriber: false, subscription: subscription({ isCurrent: false }) }, sweep))
@@ -142,6 +218,29 @@ describe("the fan's subscription as the hub holds it", () => {
     });
     // The fan record is missing beside a subscription: unknown, not false.
     expect(audienceStatus({ isSubscriber: null, subscription: subscription() }, sweep).isSubscriber).toBeNull();
+  });
+
+  it("does not answer the end of the period before a fan came back", () => {
+    const returned = at("2026-10-04T23:08:00.000Z");
+    // The notification that reactivated the row carried no end: the stored one is the old period's.
+    const stale = subscription({ endsAt: at("2026-06-01T10:00:00.000Z"), lastEvidenceAt: returned, lastSeenGeneration: 60 });
+    expect(audienceEndsAt(stale)).toBeNull();
+    expect(audienceStatus({ isSubscriber: true, subscription: stale }, sweep))
+      .toMatchObject({ subscriptionStatus: "active", endsAt: null, source: "webhook" });
+    expect(audienceEndsAt(subscription({ endsAt: returned, lastEvidenceAt: returned }))).toBeNull();
+    // A sweep read the new period: its end lies after the renewal or start it also read.
+    const read = subscription({ endsAt: at("2026-11-04T23:08:41.000Z"), lastEvidenceAt: at("2026-10-04T23:08:41.000Z") });
+    expect(audienceEndsAt(read)).toEqual(at("2026-11-04T23:08:41.000Z"));
+    // Nothing to compare with, or no end at all.
+    expect(audienceEndsAt(subscription({ lastEvidenceAt: null }))).toEqual(at("2026-11-04T23:08:41.000Z"));
+    expect(audienceEndsAt(subscription({ endsAt: null }))).toBeNull();
+    expect(audienceEndsAt(null)).toBeNull();
+    // A subscription that is over keeps its end, whoever ended it.
+    const over = at("2026-10-05T01:00:00.000Z");
+    expect(audienceEndsAt(subscription({ isCurrent: false, canonicalStatus: "expired", endsAt: over, lastEvidenceAt: over })))
+      .toEqual(over);
+    expect(audienceEndsAt(subscription({ isCurrent: false, endsAt: at("2026-06-01T10:00:00.000Z"), lastEvidenceAt: returned })))
+      .toEqual(at("2026-06-01T10:00:00.000Z"));
   });
 
   it("never answers an instant the client's frozen pattern cannot read", () => {
@@ -217,9 +316,17 @@ describe("whether the hub can vouch for the list", () => {
     from,
     to,
     delivery: { frontier: at("2026-10-05T11:52:00.000Z") },
+    pendingNotifications: 0,
     backlog: { pending: 0, failed: 0 },
     sweep: { lastCompletedAt: at("2026-10-05T00:06:33.869Z"), unverified: false },
   };
+
+  it("is partial while a subscription notification is journaled and not an event yet", () => {
+    expect(evaluateAudienceCoverage({ ...healthy, pendingNotifications: 1 }))
+      .toEqual({ state: "partial", reasons: ["subscription_event_pending"] });
+    expect(evaluateAudienceCoverage({ ...healthy, pendingNotifications: 3, backlog: { pending: 3, failed: 0 } }))
+      .toEqual({ state: "partial", reasons: ["subscription_event_pending", "subscription_projection_pending"] });
+  });
 
   it("is complete when the delivery history is current, nothing waits and a sweep has completed", () => {
     expect(evaluateAudienceCoverage(healthy)).toEqual({ state: "complete", reasons: [] });
@@ -258,12 +365,12 @@ describe("whether the hub can vouch for the list", () => {
 
   it("names every reason and answers the worst of them", () => {
     expect(evaluateAudienceCoverage({
-      from, to, delivery: null, backlog: { pending: 1, failed: 1 }, sweep: null,
+      from, to, delivery: null, pendingNotifications: 2, backlog: { pending: 1, failed: 1 }, sweep: null,
     })).toEqual({
       state: "unknown",
       reasons: [
-        "delivery_history_off", "subscription_projection_pending", "subscription_projection_failed",
-        "audience_sweep_missing",
+        "delivery_history_off", "subscription_event_pending", "subscription_projection_pending",
+        "subscription_projection_failed", "audience_sweep_missing",
       ],
     });
   });
