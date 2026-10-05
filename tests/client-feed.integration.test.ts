@@ -140,8 +140,11 @@ async function feed(token: string, input: FeedCall = {}) {
   return server!.inject({ method: "GET", url: feedUrl(input), headers: bearer(token, input.clientVersion) });
 }
 
-/** A 200 whose body is the declared shape, nothing more, and a page the client's frozen schema parses. */
-async function feedOk(token: string, input: FeedCall = {}): Promise<ClientConversationFeedResponse> {
+/**
+ * A 200 whose body is the declared shape, nothing more, and a page the client's
+ * frozen schema parses. `raw` is the answer's bytes, for what must not be in them.
+ */
+async function feedOkRaw(token: string, input: FeedCall = {}): Promise<{ body: ClientConversationFeedResponse; raw: string }> {
   const response = await feed(token, input);
   expect(response.statusCode, response.body).toBe(200);
   const body = clientConversationFeedResponseSchema.parse(response.json());
@@ -150,7 +153,15 @@ async function feedOk(token: string, input: FeedCall = {}): Promise<ClientConver
   expect(frozenFeedPageSchema.parse(response.json())).toEqual(body);
   // Captions only: no media id ever leaves.
   expect(response.body).not.toContain(String(MEDIA_ID));
-  return body;
+  // A deleted message is a row without its text, on every page of every reader.
+  for (const item of body.items) {
+    if (item.deleted) expect(item.text, `deleted ${item.messageId}`).toBe("");
+  }
+  return { body, raw: response.body };
+}
+
+async function feedOk(token: string, input: FeedCall = {}): Promise<ClientConversationFeedResponse> {
+  return (await feedOkRaw(token, input)).body;
 }
 
 function expectRefused(response: InjectResponse, statusCode: number, error: string, reason?: string) {
@@ -559,12 +570,15 @@ describe("GET /api/v1/client/pages/:pageLabel/conversations/:fanRef/feed", () =>
     const before = { archive: await count("message_archive"), generations: await count("ai_generation_content"), usage: await count("ai_usage_events") };
 
     const startedAt = Date.now();
-    const body = await feedOk(grishaToken);
+    const { body, raw } = await feedOkRaw(grishaToken);
+    // The archive still holds what the fan took back; the route does not hand it on.
+    expect(raw).not.toContain("said then deleted");
     const plain = { automatic: null, deleted: false, tipMills: null, priceMills: null, attachmentLabels: [] };
     expect(body.items).toEqual([
       { ...plain, messageId: "9008", at: at(1).toISOString(), sender: "system", text: "a system line" },
       { ...plain, messageId: "9006", at: at(2).toISOString(), sender: "model", text: "look", attachmentLabels: ["[Media Bundle: 2 Photos, 1 Video]"] },
-      { ...plain, messageId: "9005", at: at(3).toISOString(), sender: "fan", text: "said then deleted", deleted: true },
+      // Deleted on the platform: the row stays, its text does not.
+      { ...plain, messageId: "9005", at: at(3).toISOString(), sender: "fan", text: "", deleted: true },
       { ...plain, messageId: "9004", at: at(4).toISOString(), sender: "model", text: "", priceMills: 15_000, attachmentLabels: ["[Photo]"] },
       { ...plain, messageId: "9003", at: at(5).toISOString(), sender: "fan", text: "for you", tipMills: 5000 },
       { ...plain, messageId: "9002", at: at(6).toISOString(), sender: "model", text: "hey you" },
@@ -588,7 +602,9 @@ describe("GET /api/v1/client/pages/:pageLabel/conversations/:fanRef/feed", () =>
     // Every chatter of the page, the team lead, the owner and an old client's
     // full token read the same conversation.
     for (const token of [nikitaToken, leadToken, ownerToken, grishaFullToken]) {
-      const other = await feedOk(token);
+      const { body: other, raw: otherRaw } = await feedOkRaw(token);
+      // Nobody reads a deleted message's text here, the owner included.
+      expect(otherRaw).not.toContain("said then deleted");
       expect(other.items).toEqual(body.items);
       expect(other.head).toEqual(body.head);
       expect(other.snapshotRevision).toBe(body.snapshotRevision);
@@ -759,14 +775,20 @@ describe("GET /api/v1/client/pages/:pageLabel/conversations/:fanRef/feed", () =>
       if (mode !== null) {
         await patchConfig([{ key: "aiTranscriptFreshUnionMode", value: mode }]);
       }
-      const body = await feedOk(grishaToken);
+      const { body, raw } = await feedOkRaw(grishaToken);
       expect(body, String(mode)).toMatchObject(expected);
       expect(body.newestKnownAt, String(mode)).toBe(expected.head.at);
-      expect(body.items.map((item) => [item.messageId, item.deleted]), String(mode)).toEqual(
+      expect(body.items.map((item) => [item.messageId, item.deleted, item.text]), String(mode)).toEqual(
         expected.source === "union"
-          ? [["9004", false], ["9003", false], ["9002", true], ["9001", false]]
-          : [["9003", false], ["9002", false], ["9001", false]],
+          // The archive row still holds "how are you"; the delete webhook's
+          // chat-less stub marks it deleted, and the union answers it blank.
+          ? [["9004", false, "are you there?"], ["9003", false, "busy week"], ["9002", true, ""], ["9001", false, "hi"]]
+          // The archive alone has not heard of the deletion: to it the message is live.
+          : [["9003", false, "busy week"], ["9002", false, "how are you"], ["9001", false, "hi"]],
       );
+      if (expected.source === "union") {
+        expect(raw, String(mode)).not.toContain("how are you");
+      }
       // One snapshot, one head: a generation served right now reports this reader and this head.
       const generated = await ping();
       expect(generated.context, String(mode)).toMatchObject({

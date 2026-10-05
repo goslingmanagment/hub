@@ -123,9 +123,11 @@ a page at a time:
 - the text, the time, the sender, a tip or a price in mills and a caption of
   what is attached. No media id or URL, no prompt, no generation, and nothing
   about who of the team read or wrote what;
-- a message deleted on the platform is served as a row flagged `deleted`, with
-  the text the store still has: the archive keeps what it captured, and the
-  row says the message is gone from the chat;
+- a message deleted on the platform is served as a row flagged `deleted`,
+  without its text: the row says a message was there and is gone from the
+  chat, with its time, its sender, a tip or a price and a caption. The stores
+  keep the text they captured (nothing captured is deleted), and no client
+  route hands it on, to the owner's device token no more than to a chatter's;
 - it only reads. Nothing is asked of the platform and nothing is queued, so a
   chat read here stays unread on OnlyFans.
 

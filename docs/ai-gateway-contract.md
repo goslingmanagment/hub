@@ -609,7 +609,9 @@ generation would read it**, and three of its answers are a generation's own.
 - Rows: newest first by (event time, message id), `limit` a page (50 by default, 100 at most; the
   bootstrap announces the cap as `limits.feedMax`). A row is `{ messageId, at, sender, text,
   automatic, deleted, tipMills, priceMills, attachmentLabels }`. A message deleted on the platform
-  is a row with `deleted: true` (a generation drops it); a content-pending stub is never a row.
+  is a row with `deleted: true` and an empty `text`, whatever the stores still hold of it (a
+  generation drops the message altogether); its time, sender, money and captions stay. A
+  content-pending stub is never a row.
   `automatic` is always `null`: the stores hold no automation signal. `attachmentLabels` are the
   transcript's own media captions (`[Photo]`, `[Media Bundle: 2 Photos, 1 Video]`), never a media
   id; the price and the tip are fields, in mills, not part of a caption.

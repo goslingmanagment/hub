@@ -212,13 +212,19 @@ function attachmentLabelsOf(media: ConversationFeedRow["mediaMetadata"]): string
  * A stored row as the wire carries it. A tip message stores its amount as its
  * price too (OnlyFans sends one number), so its price is not repeated as a
  * paid message's.
+ *
+ * A message deleted on the platform keeps its place, its sender, its money and
+ * its captions, and loses its text: the stores keep what they captured, but a
+ * chatter does not read here what the sender took back. The reader still
+ * returns the stored text (other callers decide for themselves); it is dropped
+ * in this mapper, the one place a row becomes this route's answer.
  */
 export function toClientFeedItem(row: ConversationFeedRow): ClientFeedItem {
   return {
     messageId: row.messageRef,
     at: isoInstantOrNull(row.occurredAt),
     sender: feedSenderOf(row),
-    text: row.textPlain,
+    text: row.deleted ? "" : row.textPlain,
     // Neither store records whether an automation sent the message.
     automatic: null,
     deleted: row.deleted,

@@ -299,8 +299,9 @@ export const clientFanProfileFromGenerationResponseSchema = z.object({
 // THE READER is the one a generation uses: the owner's
 // `aiTranscriptFreshUnionMode` decides between the archive and the archive ∪
 // webhook-store union, and `source` says which one served. A message deleted on
-// the platform stays in the feed as a row with `deleted: true` (a generation
-// drops it).
+// the platform stays in the feed as a row with `deleted: true` and an empty
+// `text` (a generation drops it): the row says a message was there and is gone,
+// never what it said.
 //
 // ONE WALK, ONE SNAPSHOT. A request without a cursor starts a walk and freezes
 // it: `snapshotRevision`, `asOf`, `coverage`, `head` and `newestKnownAt` are
@@ -353,7 +354,7 @@ export const clientFeedItemSchema = z.object({
   at: isoTimestamp.nullable(),
   /** Open token; known values: CLIENT_FEED_SENDERS. */
   sender: clientOpenToken,
-  /** Plain text as stored; kept on a deleted message when the store still has it. */
+  /** Plain text as stored. Always empty on a deleted message, whatever the store still holds of it. */
   text: z.string(),
   /** Whether the message was sent by an automation. The stores hold no such signal: always null today. */
   automatic: z.boolean().nullable(),
@@ -924,7 +925,8 @@ export const clientRouteSchemas = {
       + "never marked read on the platform. `fanRef` is the OnlyFans fan id, which is the chat id. The reader is "
       + "the one a generation uses (`aiTranscriptFreshUnionMode`): `source` is `archive` or `union`. Rows come "
       + "newest first, `limit` (1 to 100) a page; a message deleted on the platform stays as a row with "
-      + "`deleted: true`. A request without `cursor` starts a walk and freezes it: `snapshotRevision`, `asOf`, "
+      + "`deleted: true` and an empty `text`. A request without `cursor` starts a walk and freezes it: "
+      + "`snapshotRevision`, `asOf`, "
       + "`coverage`, `head` and `newestKnownAt` are the same on every page of the walk, and a message that "
       + "arrives meanwhile is not in it. `head` is the reader's newest live message, the `servedHead` a "
       + "generation's `context_v1` frame reports from the same stored state. `summary` comes on the first page "

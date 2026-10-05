@@ -339,10 +339,36 @@ describe("archive feed rows on the wire (H-9c)", () => {
     expect(sender("", false)).toBe("unknown");
   });
 
-  it("keeps a deleted message as a flagged row with the text the store still has", () => {
-    expect(wire({ deleted: true, textPlain: "said then deleted" }))
-      .toMatchObject({ deleted: true, text: "said then deleted" });
+  it("keeps a deleted message as a flagged row without its text, whatever the store still has", () => {
+    // The stores keep what they captured; the route never hands it on. The
+    // client's schema takes an empty string, never null.
+    const taken = wire({ deleted: true, textPlain: "said then deleted" });
+    expect(taken).toMatchObject({ deleted: true, text: "" });
+    expect(JSON.stringify(taken)).not.toContain("said then deleted");
     expect(wire({ deleted: true, textPlain: "" })).toMatchObject({ deleted: true, text: "" });
+    // Only the text goes: the row keeps its place, its sender, its money and its captions.
+    expect(wire({
+      deleted: true,
+      textPlain: "look at this",
+      isSentByMe: true,
+      senderRole: "model",
+      priceMills: "15000",
+      mediaMetadata: [{ id: 31, type: "photo" }],
+    })).toEqual({
+      messageId: "9002",
+      at: ISO,
+      sender: "model",
+      text: "",
+      automatic: null,
+      deleted: true,
+      tipMills: null,
+      priceMills: 15_000,
+      attachmentLabels: ["[Photo]"],
+    });
+    expect(wire({ deleted: true, textPlain: "for you", isTip: true, tipAmountMills: "5000", priceMills: "5000" }))
+      .toMatchObject({ deleted: true, text: "", tipMills: 5000, priceMills: null });
+    // A live message keeps its text.
+    expect(wire({ deleted: false, textPlain: "said and kept" })).toMatchObject({ deleted: false, text: "said and kept" });
   });
 
   it("carries money as whole mills: a tip is a tip, a price is a price, nothing is zero", () => {
