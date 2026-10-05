@@ -15,8 +15,10 @@ import {
   SPENDER_STATS_MONEY_UNIT,
   millsToNumber,
   normalizeSpenderStatsTimeZone,
+  resolveSpenderStatsWindows,
   type SpenderStatsMessageSource,
   type SpenderStatsMoneyWindow,
+  type SpenderStatsWindows,
 } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
@@ -127,23 +129,36 @@ function cacheFor(app: AppContext): KeyedLoadCache<PageSpenderStats> {
 }
 
 /**
- * What an answer depends on besides the clock: the page, the window, the zone,
- * the messages silence reads and the spender projection's watermark. Every
- * writer of a transaction rebuilds the projection and moves the watermark, so
- * a purchase is in the next answer and never waits out the 60 seconds; a new
- * message can.
+ * What an answer depends on besides the clock: the page, the window, the
+ * messages silence reads and the spender projection's watermark.
+ *
+ * The window is keyed as the read receives it: its first local date and the
+ * instants its dates start and end at. Not by the zone's name: one zone has
+ * many spellings ("Europe/Kyiv", "EUROPE/KYIV", "Europe/Kiev"; "UTC",
+ * "Etc/UTC", "GMT", "Etc/Zulu"), and under the name each of them would be
+ * counted anew, the silence statement included. Whatever the runtime's Intl
+ * makes of a name, the same dates at the same instants are the same numbers,
+ * so zones that agree on every date of the window share the answer as well;
+ * the name is only echoed (`getClientSpenderStats`). The first date is in the
+ * key because zones a whole day apart (Pacific/Kiritimati, Pacific/Honolulu)
+ * start their dates at the same instants and call them differently. When the
+ * local date turns, the window moves and the key with it.
+ *
+ * Every writer of a transaction rebuilds the projection and moves the
+ * watermark, so a purchase is in the next answer and never waits out the 60
+ * seconds; a new message can.
  */
 export function spenderStatsCacheKey(input: {
   pageId: number;
-  windowDays: number;
-  timeZone: string;
+  windows: Pick<SpenderStatsWindows, "dates" | "dateStarts" | "end">;
   messageSource: SpenderStatsMessageSource;
   projectionAsOf: Date | null;
 }): string {
+  const { dates, dateStarts, end } = input.windows;
   return [
     input.pageId,
-    input.windowDays,
-    input.timeZone,
+    dates[0],
+    [...dateStarts, end].map((instant) => instant.getTime()).join(","),
     input.messageSource,
     input.projectionAsOf === null ? "never" : input.projectionAsOf.toISOString(),
   ].join("|");
@@ -252,8 +267,10 @@ export function toClientSpenderStats(pageLabel: string, stats: PageSpenderStats)
  *    would not know ("Europe/Kiev") or would read differently ("CET") is
  *    neither an error nor a different answer;
  * 3. the answer, from this process's cache when it has one no older than 60
- *    seconds for the same page, window, zone, message source and projection
- *    watermark. `asOf` is the instant the answer was counted at.
+ *    seconds for the same page, window, message source and projection
+ *    watermark (`spenderStatsCacheKey`: the window, however its zone is
+ *    spelled). `asOf` is the instant the answer was counted at; `timeZone` is
+ *    always this caller's own spelling.
  */
 export async function getClientSpenderStats(
   app: AppContext,
@@ -275,15 +292,19 @@ export async function getClientSpenderStats(
     refuseSpenderStats("timeZone is not an IANA time zone this hub knows", "unknown_time_zone");
   }
   const { windowDays } = input.query;
+  // The window this caller's zone gives right now: what the answer is kept under.
+  const windows = resolveSpenderStatsWindows({ asOf: now, timeZone, windowDays });
 
   const [messageSource, projectionAsOf] = await Promise.all([
     resolveSpenderStatsMessageSource(app),
     getSpenderProjectionAsOf(app.db, { pageIds: [page.id] }),
   ]);
   const stats = await cacheFor(app).get(
-    spenderStatsCacheKey({ pageId: page.id, windowDays, timeZone, messageSource, projectionAsOf }),
+    spenderStatsCacheKey({ pageId: page.id, windows, messageSource, projectionAsOf }),
     now.getTime(),
     () => getPageSpenderStats(app.db, { pageId: page.id, timeZone, asOf: now, windowDays, messageSource }),
   );
-  return toClientSpenderStats(page.label, stats);
+  // A kept answer carries the zone as whoever had it counted spelled it; the
+  // numbers are this caller's too, the name is not.
+  return toClientSpenderStats(page.label, { ...stats, timeZone });
 }

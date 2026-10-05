@@ -18,7 +18,7 @@ import {
   rebuildSpenderProjections,
   setPageOfapiAccountId,
 } from "@agency_hub_core/db";
-import { nextBusinessDate, sha256Hex } from "@agency_hub_core/shared";
+import { nextBusinessDate, normalizeSpenderStatsTimeZone, sha256Hex } from "@agency_hub_core/shared";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
@@ -629,7 +629,9 @@ describe("GET /api/v1/client/pages/:pageLabel/spenders/stats", () => {
 
     // Names a browser still sends and the hub's Postgres has no zone for (no
     // tzdata-legacy), or reads as a fixed offset (CET): the same answer as the
-    // zone's primary name, never an error. Only Intl reads the name.
+    // zone's primary name, never an error. Only Intl reads the name. The legacy
+    // name is asked first, so its answer is counted under that name; the
+    // primary name's numbers are the repository's own count, not a kept answer.
     for (const [legacy, primary] of [
       ["Europe/Kiev", "Europe/Kyiv"],
       ["Asia/Calcutta", "Asia/Kolkata"],
@@ -638,7 +640,9 @@ describe("GET /api/v1/client/pages/:pageLabel/spenders/stats", () => {
     ] as const) {
       const fromLegacy = await report(narrowToken, PAGE, `timeZone=${legacy}`);
       expect(fromLegacy.timeZone).toBe(legacy);
-      expect({ ...fromLegacy, timeZone: primary }, legacy).toEqual(await report(narrowToken, PAGE, `timeZone=${primary}`));
+      const counted = await getPageSpenderStats(app.db, { pageId: pageIds[PAGE]!, timeZone: primary, asOf: NOW });
+      expect({ ...fromLegacy, timeZone: primary }, legacy).toEqual(toClientSpenderStats(PAGE, counted));
+      expect(await report(narrowToken, PAGE, `timeZone=${primary}`), primary).toEqual({ ...fromLegacy, timeZone: primary });
     }
     // Only the letter case is normalized.
     expect((await report(narrowToken, PAGE, "timeZone=europe/moscow")).timeZone).toBe("Europe/Moscow");
@@ -783,6 +787,56 @@ describe("GET /api/v1/client/pages/:pageLabel/spenders/stats", () => {
     ]);
     expect(new Set(together.map((answer) => answer.asOf)).size).toBe(1);
     expect(together[1]).toEqual(together[0]);
+
+    await trap!.assertNoOutbound();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("keeps one answer for a zone however it is spelled, and names the zone as each caller did", async (context) => {
+    if (!server) return context.skip();
+    await switchStatsOn();
+    const at = (seconds: number) => new Date(NOW.getTime() + seconds * 1000);
+    let seconds = 0;
+
+    // One zone under several names: its letter case, the name it had before, an
+    // alias. Each is asked five seconds after the last. A spelling counted for
+    // itself would carry its own `asOf` and would see the reply sent meanwhile.
+    for (const zone of [
+      { spellings: ["Europe/Kyiv", "EUROPE/KYIV", "europe/kyiv", "Europe/Kiev", "europe/kiev"], repliedChat: "1001", elsewhere: "America/New_York" },
+      { spellings: ["UTC", "Etc/UTC", "GMT", "Etc/Zulu"], repliedChat: "1006", elsewhere: "Asia/Tokyo" },
+    ]) {
+      const [first, ...others] = zone.spellings as [string, ...string[]];
+      vi.setSystemTime(at(seconds));
+      const counted = await report(narrowToken, PAGE, `timeZone=${first}`);
+      expect(counted.asOf, first).toBe(at(seconds).toISOString());
+      expect(counted.timeZone, first).toBe(first);
+
+      // We reply to one of the payers who waited: an answer counted from here on has one fewer in the queue.
+      await db().pool.query(
+        `update page_dm_threads set last_model_message_at = $1, last_message_at = $1, last_message_sender_role = 'model'
+         where platform_account_id = $2 and platform_conversation_id = $3`,
+        [at(seconds + 1).toISOString(), pageIds[PAGE], zone.repliedChat],
+      );
+
+      for (const [index, spelling] of others.entries()) {
+        seconds += 5;
+        vi.setSystemTime(at(seconds));
+        // Whoever asks: the owner and the chatter read the same kept answer.
+        const answer = await report(index % 2 === 0 ? ownerToken : narrowToken, PAGE, `timeZone=${spelling}`);
+        // The zone is named as this caller named it (only the letter case of a zone's own name is set right).
+        expect(answer.timeZone, spelling).toBe(normalizeSpenderStatsTimeZone(spelling));
+        expect(answer.timeZone.toLowerCase(), spelling).toBe(spelling.toLowerCase());
+        // Everything else is the one kept answer: its instant, its dates, its numbers.
+        expect({ ...answer, timeZone: first }, spelling).toEqual(counted);
+      }
+
+      // A zone with other dates is another answer: counted now, and it sees the reply.
+      seconds += 5;
+      vi.setSystemTime(at(seconds));
+      const elsewhere = await report(narrowToken, PAGE, `timeZone=${zone.elsewhere}`);
+      expect(elsewhere.asOf, zone.elsewhere).toBe(at(seconds).toISOString());
+      expect(elsewhere.queueSummary.total, zone.elsewhere).toBe(counted.queueSummary.total - 1);
+      seconds += 5;
+    }
 
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
