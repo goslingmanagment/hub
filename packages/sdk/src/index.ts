@@ -141,6 +141,26 @@ export {
   type ClientFeedSender,
   type ClientFeedSource,
 } from "@agency_hub_core/contracts";
+// The greeting lease and send custody (routes-client.ts, clientFanClaim): the
+// states of its three automata, closed on the wire, and the known values of
+// its open tokens (the greeting's source; the purpose and state of a
+// resolved send).
+export {
+  CLIENT_CLAIM_ACTIONS,
+  CLIENT_CLAIM_MAX_PARTS,
+  CLIENT_CLAIM_MAX_VARIANTS,
+  CLIENT_CUSTODY_STATES,
+  CLIENT_GREETING_SOURCES,
+  CLIENT_GREETING_STATES,
+  CLIENT_LEASE_HOLDERS,
+  CLIENT_LEASE_STATES,
+  CLIENT_SEND_FAILURE_REASONS,
+  CLIENT_SEND_PURPOSES,
+  type ClientClaimAction,
+  type ClientCustodyState,
+  type ClientGreetingSource,
+  type ClientSendPurpose,
+} from "@agency_hub_core/contracts";
 // The narrow token's profiles (client-token-scopes.ts): which operations a
 // token issued with `client` reaches; the hub refuses the rest with 403.
 export {

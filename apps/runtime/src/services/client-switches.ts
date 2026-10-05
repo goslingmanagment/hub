@@ -1,5 +1,11 @@
 import type { ClientFeatureFlagName, ClientReceiptProfile } from "@agency_hub_core/contracts";
-import { getConfigOverrides, listClientBootstrapPages, type ClientBootstrapPageRow } from "@agency_hub_core/db";
+import {
+  getConfigOverrides,
+  listClientBootstrapPages,
+  lockConfigOverridesForShare,
+  type ClientBootstrapPageRow,
+  type Database,
+} from "@agency_hub_core/db";
 import {
   parseChatExtensionFeatures,
   parseChatExtensionHostBindings,
@@ -15,6 +21,7 @@ import { canAccessPage, type HumanAuthPrincipal } from "./auth.ts";
 import { SERVED_CLIENT_CAPABILITIES } from "./client-capabilities.ts";
 import {
   CLIENT_FEATURE_CODE_DEFAULTS,
+  clientFeatureExistsOn,
   clientVersionRefusal,
   evaluateClientFeature,
   type ClientFeatureSettings,
@@ -29,7 +36,8 @@ import { ClientFeatureDisabledError } from "./errors.ts";
  * Nothing here caches. Every bootstrap and every check reads the effective
  * config afresh (one `config_settings` read), so a switch the owner turns off
  * holds from the very next request. Sending from the preview (H-7b `dispatch`)
- * must go further and read the switch inside its own transaction.
+ * goes further and reads the switches inside its own transaction, from rows it
+ * holds locked: loadClientSwitchesForSend.
  */
 
 /** The owner's five switches of the chat extension. */
@@ -177,6 +185,39 @@ export async function loadClientSwitches(app: AppContext): Promise<ClientSwitche
   const overrides = await getConfigOverrides(app.db);
   const effective = applyEffectiveOverrides(app.config, overrides);
   const { switches, problems } = readClientSwitches(effective, storedClientSwitchProblems(overrides));
+  logClientSwitchProblems(app, problems);
+  return switches;
+}
+
+/**
+ * The switches as a send from the preview is decided (hub-pr-plan H-7b
+ * `dispatch`, critic 7): read inside the dispatch's own transaction `tx`, from
+ * the five stored rows locked FOR SHARE until it ends. The owner's change of a
+ * switch that has a row waits for the dispatch, and a dispatch waits for a
+ * change already under way and then reads it: a send is never admitted on a
+ * switch value older than the last committed one.
+ *
+ * Only a STORED row of `chatExtensionEnabled` and of `chatExtensionFeatures`
+ * admits a send. Without the row the key reads at rest (off, no flag), whatever
+ * the environment says: a value the environment alone sets has no row to lock,
+ * so turning it off would not wait for a send in flight, and no audit row says
+ * who switched sending on. The other three switches keep their environment
+ * value when they have no row, as everywhere else.
+ */
+export async function loadClientSwitchesForSend(app: AppContext, tx: Database): Promise<ClientSwitches> {
+  const overrides = await lockConfigOverridesForShare(tx, CLIENT_SWITCH_KEYS);
+  const atRest = {
+    ...app.config,
+    chatExtensionEnabled: CLIENT_FEATURE_CODE_DEFAULTS.enabled,
+    chatExtensionFeatures: JSON.stringify(CLIENT_FEATURE_CODE_DEFAULTS.features),
+  };
+  const effective = applyEffectiveOverrides(atRest, overrides);
+  const { switches, problems } = readClientSwitches(effective, storedClientSwitchProblems(overrides));
+  logClientSwitchProblems(app, problems);
+  return switches;
+}
+
+function logClientSwitchProblems(app: AppContext, problems: readonly ClientSwitchProblem[]): void {
   for (const problem of problems) {
     const fingerprint = `${problem.key}\u0000${problem.error}`;
     if (loggedProblems.has(fingerprint) || loggedProblems.size >= LOGGED_PROBLEMS_MAX) {
@@ -188,12 +229,52 @@ export async function loadClientSwitches(app: AppContext): Promise<ClientSwitche
       "chat-extension switch unreadable; the chat extension is off until it is fixed",
     );
   }
-  return switches;
 }
 
 /** The request as the check reads it: only the client's version header. */
 export interface ClientFeatureRequest {
   headers: Record<string, string | string[] | undefined>;
+}
+
+/**
+ * The first step of every client page route, and the whole check of the claim
+ * actions that only end what the hub already admitted (H-7b `release`, `sent`,
+ * `failed`): the page is an active page granted to the caller, else 409
+ * `client_feature_disabled` / `not_granted` (a missing page answers the same,
+ * so the refusal reveals nothing). No switch is read: turning one off must not
+ * strand a lease or a send in flight. Returns the page as the bootstrap lists it.
+ */
+export async function requireClientGrantedPage(
+  app: AppContext,
+  principal: HumanAuthPrincipal,
+  page: { id: number } | null | undefined,
+  feature: string,
+): Promise<ClientBootstrapPageRow> {
+  const [row] = page && canAccessPage(principal, page.id) ? await listClientBootstrapPages(app.db, [page.id]) : [];
+  if (row === undefined) {
+    throw new ClientFeatureDisabledError(feature, "not_granted");
+  }
+  return row;
+}
+
+/**
+ * Why these switches refuse a flagged feature on a page, null when they do not:
+ * the feature evaluation (`platform_unsupported`, `disabled`, `flag_off`,
+ * `binding_missing`, `hub_not_ready`). Pure: requireClientFeature reads the
+ * switches per request, a dispatch (H-7b) from rows locked in its transaction.
+ */
+export function clientFeatureRefusal(
+  switches: ClientSwitches,
+  row: ClientBootstrapPageRow,
+  flag: ClientFeatureFlagName,
+): string | null {
+  const availability = evaluateClientFeature({
+    settings: switches.settings,
+    page: { label: row.label, platform: row.platform, platformAccountId: row.platformAccountId },
+    flag,
+    served: SERVED_CLIENT_CAPABILITIES,
+  });
+  return availability.available ? null : availability.reason ?? "disabled";
 }
 
 /**
@@ -216,10 +297,7 @@ async function requireClientPageRow(
   feature: string,
   refusal: (switches: ClientSwitches, row: ClientBootstrapPageRow) => string | null,
 ): Promise<ClientBootstrapPageRow> {
-  const [row] = page && canAccessPage(principal, page.id) ? await listClientBootstrapPages(app.db, [page.id]) : [];
-  if (row === undefined) {
-    throw new ClientFeatureDisabledError(feature, "not_granted");
-  }
+  const row = await requireClientGrantedPage(app, principal, page, feature);
   const switches = await loadClientSwitches(app);
   const reason = refusal(switches, row);
   if (reason !== null) {
@@ -254,25 +332,23 @@ export async function requireClientFeature(
   page: { id: number },
   flag: ClientFeatureFlagName,
 ): Promise<ClientBootstrapPageRow> {
-  return requireClientPageRow(app, request, principal, page, flag, (switches, row) => {
-    const availability = evaluateClientFeature({
-      settings: switches.settings,
-      page: { label: row.label, platform: row.platform, platformAccountId: row.platformAccountId },
-      flag,
-      served: SERVED_CLIENT_CAPABILITIES,
-    });
-    return availability.available ? null : availability.reason ?? "disabled";
-  });
+  return requireClientPageRow(app, request, principal, page, flag, (switches, row) => (
+    clientFeatureRefusal(switches, row, flag)
+  ));
 }
 
 /**
  * The same check for a client route that has no flag of its own (the
- * own-AI-spend read, H-15): `not_granted`, then `disabled` while the owner's
- * master switch is off, then `client_outdated`. No platform, flag, host
- * binding or served capability is asked for.
+ * own-AI-spend read, H-15; the claim status and registerNativeSend, H-7b):
+ * `not_granted`, then `disabled` while the owner's master switch is off, then
+ * `client_outdated`. No flag, host binding or served capability is asked for.
  *
  * `page` is what the route resolved from its path, null or undefined when
  * there is no such page; `feature` is how the refusal names the route.
+ * `existsWith` names the flagged feature the route belongs to, when it exists
+ * only where that feature does: `platform_unsupported` on any other platform,
+ * before `disabled`, as in the feature evaluation. Without it no platform is
+ * asked for.
  */
 export async function requireClientPage(
   app: AppContext,
@@ -280,8 +356,12 @@ export async function requireClientPage(
   principal: HumanAuthPrincipal,
   page: { id: number } | null | undefined,
   feature: string,
+  existsWith?: ClientFeatureFlagName,
 ): Promise<ClientBootstrapPageRow> {
-  return requireClientPageRow(app, request, principal, page, feature, (switches) => (
-    switches.settings.enabled ? null : "disabled"
-  ));
+  return requireClientPageRow(app, request, principal, page, feature, (switches, row) => {
+    if (existsWith !== undefined && !clientFeatureExistsOn(existsWith, row.platform)) {
+      return "platform_unsupported";
+    }
+    return switches.settings.enabled ? null : "disabled";
+  });
 }

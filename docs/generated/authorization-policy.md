@@ -24,10 +24,10 @@ body remain handler-checked and are noted per route in the service layer.
 
 The `chat-extension token` column is the narrow device token a client asks
 for at password sign-in (`client: "chat-extension"`): it reaches only the
-19 routes marked "yes", and every route marked "no" refuses it with 403 in
+21 routes marked "yes", and every route marked "no" refuses it with 403 in
 both enforcement modes. A full device token is not affected.
 
-## Routes (279)
+## Routes (282)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -222,6 +222,8 @@ both enforcement modes. A full device token is not affected.
 | GET | `/api/v1/client/pages/:pageLabel/ai-usage` | `clientAiUsageDaily` | `apiKey` | — | page | yes |
 | GET | `/api/v1/client/pages/:pageLabel/conversations/:fanRef/feed` | `clientConversationFeed` | `apiKey` | — | page | yes |
 | GET | `/api/v1/client/pages/:pageLabel/conversations/:fanRef/recaps` | `clientConversationRecaps` | `apiKey` | — | page | yes |
+| GET | `/api/v1/client/pages/:pageLabel/fans/:fanRef/claim` | `clientFanClaimStatus` | `apiKey` | — | page | yes |
+| POST | `/api/v1/client/pages/:pageLabel/fans/:fanRef/claim` | `clientFanClaim` | `apiKey` | — | page | yes |
 | POST | `/api/v1/client/pages/:pageLabel/fans/:fanRef/profile/from-generation` | `clientFanProfileFromGeneration` | `apiKey` | — | page | yes |
 | GET | `/api/v1/client/pages/:pageLabel/spenders/awaiting-reply` | `clientSpenderAwaitingReply` | `apiKey` | — | page | yes |
 | GET | `/api/v1/client/pages/:pageLabel/spenders/stats` | `clientSpenderStats` | `apiKey` | — | page | yes |
@@ -257,6 +259,7 @@ both enforcement modes. A full device token is not affected.
 | GET | `/api/v1/overview/revenue/by-model` | `overviewRevenueByModel` | `session` | — | — | no |
 | GET | `/api/v1/overview/revenue/daily` | `overviewRevenueDaily` | `session` | — | — | no |
 | GET | `/api/v1/pages` | `pages` | `any` | — | — | no |
+| POST | `/api/v1/pages/:pageLabel/client-send-custody/:attemptId/resolve` | `clientSendCustodyResolve` | `session` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/content/comments` | `contentComments` | `owner-session` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/content/media` | `contentMedia` | `owner-session` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/conversations/:conversationId/messages` | `pageConversationMessages` | `session` | — | page | no |

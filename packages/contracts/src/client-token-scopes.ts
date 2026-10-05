@@ -43,10 +43,14 @@ export const CLIENT_TOKEN_PROFILES = {
       "clientConversationFeed",
       "clientFanProfileFromGeneration",
       // Every later client route joins here in its own PR:
-      // clientFanClaim, clientFanClaimStatus, clientAudienceNew.
+      // clientAudienceNew.
       "clientAiUsageDaily",
       "clientSpenderStats",
       "clientSpenderAwaitingReply",
+      // H-7b: the greeting lease and send custody. The manual resolve
+      // (clientSendCustodyResolve) is a cookie-session route and never joins.
+      "clientFanClaim",
+      "clientFanClaimStatus",
     ] as const satisfies readonly KernelOperationKey[],
     // `client_health` (H-11b) is never journaled: the capture lane folds it
     // into hourly rollups that hold no user.

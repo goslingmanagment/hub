@@ -69,7 +69,13 @@ describe("route auth declarations", () => {
       "clientAiUsageDaily",
       "clientConversationFeed",
       "clientConversationRecaps",
+      "clientFanClaim",
+      "clientFanClaimStatus",
       "clientFanProfileFromGeneration",
+      // The manual resolve of a held chat-extension send: a cabinet route
+      // (`session` + page scope, owner and team leads), not a client's. It
+      // sorts between the client's page routes; the two after it are theirs.
+      "clientSendCustodyResolve",
       "clientSpenderAwaitingReply",
       "clientSpenderStats",
       // WP-S1 (endpoints-cover serving). All eight are `owner-session` +
