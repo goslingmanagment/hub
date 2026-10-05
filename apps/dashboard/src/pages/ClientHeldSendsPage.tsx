@@ -14,16 +14,18 @@ import {
   EMPTY_RESOLVE_DRAFT,
   HELD_SENDS_PAGE_SIZE,
   HELD_SENDS_TABS,
+  NOT_SENT_OUTCOME_HINT,
   RESOLVE_NOTE_MAX,
+  changeHeldSendsView,
   heldCountLabel,
   heldSendRows,
   heldSendsPageLabels,
-  heldSendsSearch,
   notSentWarning,
   parseHeldSendsView,
   resolveFailure,
   resolveForm,
   resolvedSendRows,
+  sentOutcomeHint,
   shortId,
   type HeldSendRow,
   type HeldSendsView,
@@ -32,11 +34,19 @@ import {
   type ResolvedSendRow,
 } from "./clientHeldSendsView.js";
 
-const HEAD_CELL = "whitespace-nowrap px-4 py-3 text-left text-[12px] font-semibold uppercase tracking-wider text-text-muted";
-const CELL = "px-4 py-3 align-top text-sm text-text-secondary";
+// Tighter cells below a wide window: with «Разобрать» pinned at the right edge, the columns up to
+// «Когда» have to fit beside it at 1024 px, or the minutes of the time end up under the button.
+const HEAD_CELL = "whitespace-nowrap px-3 py-3 text-left text-[12px] font-semibold uppercase tracking-wider text-text-muted xl:px-4";
+const CELL = "px-3 py-3 align-top text-sm text-text-secondary xl:px-4";
 const CELL_MAIN = `${CELL} font-medium text-text-primary`;
 const SUB = "mt-0.5 text-xs text-text-muted";
 const INPUT = "w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm text-text-primary outline-none focus:border-accent";
+/**
+ * The column of «Разобрать» stays at the right edge while a narrow window
+ * scrolls the table sideways: the one thing to do with a row is never off
+ * screen. The cell brings its own background (the head's, the body's).
+ */
+const ACTION_COLUMN = "sticky right-0 border-l border-border";
 
 /** The fan's OnlyFans id, as a link to what the hub knows of the fan. */
 function FanLink({ pageLabel, fanRef, backTo }: { pageLabel: string; fanRef: string; backTo: string }) {
@@ -45,6 +55,18 @@ function FanLink({ pageLabel, fanRef, backTo }: { pageLabel: string; fanRef: str
     <Link to={navigation.to} state={navigation.state} className="font-mono text-accent hover:underline">
       {fanRef}
     </Link>
+  );
+}
+
+/** "часть 1 из 3, вариант 2" may wrap after the comma and nowhere else: no lone "2" on a line of its own. */
+function Clauses({ text }: { text: string }) {
+  const clauses = text.split(", ");
+  return (
+    <>
+      {clauses.map((clause, index) => (
+        <span key={clause} className="whitespace-nowrap">{clause}{index < clauses.length - 1 ? ", " : ""}</span>
+      ))}
+    </>
   );
 }
 
@@ -62,7 +84,7 @@ function HeldTable({ rows, backTo, onResolve }: {
           <th className={HEAD_CELL}>Кто отправлял</th>
           <th className={HEAD_CELL}>Когда</th>
           <th className={HEAD_CELL}>Приветствие фана</th>
-          <th className={HEAD_CELL}><span className="sr-only">Действие</span></th>
+          <th className={`${HEAD_CELL} ${ACTION_COLUMN} bg-hover-alt`}><span className="sr-only">Действие</span></th>
         </tr>
       </thead>
       <tbody>
@@ -74,21 +96,30 @@ function HeldTable({ rows, backTo, onResolve }: {
             </td>
             <td className={CELL}>
               <span className="text-text-primary">{row.purpose}</span>
-              <div className={SUB}>{row.part}</div>
+              <div className={`${SUB} xl:whitespace-nowrap`}><Clauses text={row.part} /></div>
             </td>
             <td className={CELL}>
               <span className="text-text-primary">{row.username}</span>
-              <div className={SUB}>установка <span className="font-mono">{row.install}</span></div>
+              {/* Short here: the card's description says once that it is the extension's install. On a
+                  wide window one line; on a narrow one it may wrap, so that «Когда» stays in view. */}
+              <div className={`${SUB} xl:whitespace-nowrap`}>установка <span className="font-mono">{row.install}</span></div>
             </td>
             <td className={`${CELL} whitespace-nowrap`}>
               {row.dispatchedAt}
               <div className={SUB}>без отчёта {row.heldFor}</div>
             </td>
             <td className={`${CELL} max-w-[260px]`}>
-              <span className={row.greeting.sentByHand ? "font-medium text-warning-dark" : "text-text-primary"}>{row.greeting.label}</span>
-              {row.greeting.hint !== null && <div className={SUB}>{row.greeting.hint}</div>}
+              {row.greeting === null ? (
+                // A held reply says nothing of a greeting, and its resolve changes nothing about one.
+                <span className="text-text-muted" title="Это не приветствие">—</span>
+              ) : (
+                <>
+                  <span className={row.greeting.sentByHand ? "font-medium text-warning-dark" : "text-text-primary"}>{row.greeting.label}</span>
+                  {row.greeting.hint !== null && <div className={SUB}>{row.greeting.hint}</div>}
+                </>
+              )}
             </td>
-            <td className={`${CELL} whitespace-nowrap text-right`}>
+            <td className={`${CELL} ${ACTION_COLUMN} whitespace-nowrap bg-card text-right`}>
               <button
                 type="button"
                 onClick={() => onResolve(row.item)}
@@ -199,16 +230,20 @@ export function ResolveSendDialog({ item, serverNow, isPending, failure, onSubmi
           <SummaryLine label="Страница">{row.pageLabel}</SummaryLine>
           <SummaryLine label="Фан"><span className="font-mono">{row.fanRef}</span></SummaryLine>
           <SummaryLine label="Что отправляли">{row.purpose}, {row.part}</SummaryLine>
-          <SummaryLine label="Кто отправлял">{row.username}, установка <span className="font-mono">{row.install}</span></SummaryLine>
+          <SummaryLine label="Кто отправлял">{row.username}, установка расширения <span className="font-mono">{row.install}</span></SummaryLine>
           <SummaryLine label="Когда">{row.dispatchedAt}, без отчёта {row.heldFor}</SummaryLine>
-          <SummaryLine label="Приветствие фана">
-            {greeting.label}
-            {greeting.hint !== null && <span className="block text-xs text-text-muted">{greeting.hint}</span>}
-          </SummaryLine>
+          {greeting !== null && (
+            <SummaryLine label="Приветствие фана">
+              {greeting.label}
+              {greeting.hint !== null && <span className="block text-xs text-text-muted">{greeting.hint}</span>}
+            </SummaryLine>
+          )}
+          {/* One line: the attempt short (whole in the tooltip; the audit trail names the send by it),
+              the generation whole, because the owner looks the draft up by it. */}
           <SummaryLine label="Попытка">
-            <span className="break-all font-mono text-xs">{item.attemptId}</span>
-            <span className="block break-all text-xs text-text-muted">
-              генерация <span className="font-mono">{item.generationRef}</span>
+            <span className="break-all text-xs">
+              <span className="font-mono" title={`Попытка ${item.attemptId}`}>{shortId(item.attemptId)}</span>
+              <span className="text-text-muted"> · генерация <span className="font-mono">{item.generationRef}</span></span>
             </span>
           </SummaryLine>
         </dl>
@@ -216,14 +251,14 @@ export function ResolveSendDialog({ item, serverNow, isPending, failure, onSubmi
         <p className="text-[13px] text-text-secondary">
           Расширение отправило это сообщение из превью и не сообщило, чем кончилось. Hub не знает, ушло ли оно,
           и сам не узнает. Откройте чат с этим фаном там, где вы работаете с OnlyFans, и найдите исходящее сообщение
-          около указанного времени. Текста сообщения в Hub нет: какой текст отправляли, знает сотрудник.
+          около указанного времени. На этой странице текста нет: Hub не знает, какой текст ушёл, это знает сотрудник.
         </p>
 
         <fieldset disabled={isPending || gone} className="space-y-2">
           <legend className="mb-1 text-sm font-semibold text-text-primary">Что вы увидели в чате</legend>
           {([
-            ["sent", "Сообщение ушло", "Оно есть в чате. Отправка закрывается как состоявшаяся; первая часть приветствия отмечает фана поприветствованным."],
-            ["not_sent", "Сообщение не ушло", "В чате его нет. Отправка закрывается как несостоявшаяся; что это меняет для фана, написано ниже."],
+            ["sent", "Сообщение ушло", sentOutcomeHint(item)],
+            ["not_sent", "Сообщение не ушло", NOT_SENT_OUTCOME_HINT],
           ] as const).map(([value, title, description]) => (
             <label
               key={value}
@@ -295,7 +330,9 @@ export function ResolveSendDialog({ item, serverNow, isPending, failure, onSubmi
           </p>
         )}
 
-        <div className="flex flex-wrap items-center justify-end gap-3">
+        {/* The dialog scrolls inside ModalShell's box (p-6): the buttons stay at its bottom edge, over
+            the form, so they are on screen at any height and in any state of the form. */}
+        <div className="sticky -bottom-6 -mx-6 -mb-6 flex flex-wrap items-center justify-end gap-3 border-t border-border bg-card px-6 py-4">
           {!gone && form.missing !== null && <span className="mr-auto text-xs text-text-muted">{form.missing}</span>}
           <button
             type="button"
@@ -347,9 +384,15 @@ export function ClientHeldSendsPage() {
   const [failure, setFailure] = useState<ResolveFailure | null>(null);
   const pageFilterId = useId();
 
-  function show(next: Partial<HeldSendsView>) {
-    // A new tab or page starts its list from the top.
-    setSearch(heldSendsSearch({ ...view, offset: 0, ...next }));
+  // A change starts from the address the browser shows now, not from this render's `view`: the
+  // router hands a new address to React in a transition, and a second change made before that
+  // render commits would otherwise undo the first (changeHeldSendsView).
+  function show(change: Partial<HeldSendsView>) {
+    setSearch(changeHeldSendsView(
+      new URLSearchParams(window.location.search),
+      pageCatalogState === "ready" ? pageLabels : null,
+      change,
+    ));
   }
 
   function closeDialog() {
@@ -378,8 +421,8 @@ export function ClientHeldSendsPage() {
       <p className="mt-1 max-w-3xl text-sm text-text-muted">
         Когда сотрудник отправляет сообщение из превью, расширение сообщает Hub, ушло оно или нет. Если отчёт не
         пришёл, Hub этого не знает и держит фана: из превью ему больше не отправят, а нового подписчика не
-        поприветствуют, пока человек не посмотрит чат и не запишет здесь, что произошло. Сама отправка не снимается
-        никогда. Текста сообщений на этой странице нет: Hub его не хранит.
+        поприветствуют, пока человек не посмотрит чат и не запишет здесь, что произошло. Само удержание не снимается
+        никогда: ни со временем, ни после нового входа. На этой странице текста нет: Hub не знает, какой текст ушёл.
       </p>
       <div className="mt-4 flex flex-wrap items-end justify-between gap-3">
         <FilterButtons
@@ -462,7 +505,7 @@ export function ClientHeldSendsPage() {
             </h2>
             <p className="mt-1 max-w-3xl text-[13px] text-text-muted">
               {held
-                ? "Сверху те, что ждут дольше всех. Время на странице ваше местное, как в чате. Список обновляется сам раз в полминуты."
+                ? "Сверху те, что ждут дольше всех. Под именем сотрудника — установка расширения, с которой ушла отправка: у одного человека их может быть несколько. Время на странице ваше местное, как в чате. Список обновляется сам раз в полминуты."
                 : "Журнал разборов: сверху последние. Каждый разбор записан и в журнале аудита Hub."}
             </p>
           </div>
@@ -480,7 +523,7 @@ export function ClientHeldSendsPage() {
             offset={view.offset}
             limit={HELD_SENDS_PAGE_SIZE}
             total={data.total}
-            onPageChange={(offset) => setSearch(heldSendsSearch({ ...view, offset }))}
+            onPageChange={(offset) => show({ offset })}
             emptyLabel="0 отправок"
             previousLabel="Назад"
             nextLabel="Дальше"

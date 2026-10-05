@@ -23,6 +23,10 @@ export function clientHeldSendsQueryOptions(params: ClientHeldSendsParams) {
   return queryOptions({
     queryKey: [...HELD_SENDS_KEY, params] as const,
     queryFn: () => kernel.clientSendCustodyList({ query: params }),
+    // The page says in its own words that the list did not load or did not
+    // refresh. Without this every failed poll, twice a minute, would also
+    // toast the hub's English error.
+    meta: { suppressGlobalError: true },
     // A held send appears when a ticket runs out, with nobody on this page
     // doing anything: half a minute is as stale as the queue gets. The
     // resolved list changes only by a resolve, which refreshes it below.

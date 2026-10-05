@@ -35,6 +35,8 @@ import { ClientHeldSendsPage, ResolveSendDialog } from "../apps/dashboard/src/pa
 import {
   EMPTY_RESOLVE_DRAFT,
   HELD_SENDS_PAGE_SIZE,
+  NOT_SENT_OUTCOME_HINT,
+  changeHeldSendsView,
   formatMoment,
   formatSpan,
   greetingCell,
@@ -49,6 +51,7 @@ import {
   resolveFailure,
   resolveForm,
   resolvedSendRows,
+  sentOutcomeHint,
   shortId,
   type ResolveDraft,
 } from "../apps/dashboard/src/pages/clientHeldSendsView.ts";
@@ -138,6 +141,36 @@ describe("held-sends view model", () => {
     }
   });
 
+  it("builds each change from the address the one before it produced, so a second quick change keeps the first", () => {
+    const labels = ["lora-of", "mia-of"];
+    const address = (search: URLSearchParams) => search.toString();
+    // Tab, then the page filter, each from the address the browser shows at that moment.
+    const shown = new URLSearchParams("state=resolved&page=mia-of&offset=50");
+    const afterTab = changeHeldSendsView(shown, labels, { state: "held" });
+    expect(address(afterTab)).toBe("page=mia-of");
+    expect(address(changeHeldSendsView(afterTab, labels, { pageLabel: null }))).toBe("");
+    // The mirror: the filter, then the tab.
+    const afterFilter = changeHeldSendsView(new URLSearchParams("page=mia-of"), labels, { pageLabel: null });
+    expect(address(afterFilter)).toBe("");
+    expect(address(changeHeldSendsView(afterFilter, labels, { state: "resolved" }))).toBe("state=resolved");
+    // What the page did before: the second change built from the address of the last RENDER, which the
+    // first had not reached yet. The tab click was lost and the page stayed on «Разобранные».
+    expect(address(changeHeldSendsView(shown, labels, { pageLabel: null }))).toBe("state=resolved");
+
+    // A new tab or filter starts its list from the top; paging keeps both and moves only the offset.
+    expect(address(changeHeldSendsView(new URLSearchParams("state=resolved&page=mia-of&offset=50"), labels, { pageLabel: "lora-of" })))
+      .toBe("state=resolved&page=lora-of");
+    expect(address(changeHeldSendsView(new URLSearchParams("state=resolved&page=mia-of"), labels, { offset: 25 })))
+      .toBe("state=resolved&page=mia-of&offset=25");
+    expect(address(changeHeldSendsView(new URLSearchParams("state=resolved&page=mia-of&offset=25"), labels, { offset: 0 })))
+      .toBe("state=resolved&page=mia-of");
+    // «К началу списка»: no change but the offset back to the start.
+    expect(address(changeHeldSendsView(new URLSearchParams("page=mia-of&offset=75"), labels, {}))).toBe("page=mia-of");
+    // A page the viewer does not have in the address is dropped on the way, like on a read.
+    expect(address(changeHeldSendsView(new URLSearchParams("state=resolved&page=ghost-of"), labels, { offset: 25 })))
+      .toBe("state=resolved&offset=25");
+  });
+
   it("offers only the pages that can hold a send", () => {
     expect(heldSendsPageLabels([
       { label: "lora-fansly", platform: "fansly" },
@@ -182,11 +215,15 @@ describe("held-sends view model", () => {
   it("says where the fan's greeting stands, and singles out a part sent by hand over the held one", () => {
     const now = new Date(NOW);
     expect(greetingCell(item(), now, MSK)).toEqual({ label: "Нет", hint: null, sentByHand: false });
-    expect(greetingCell(REPLY, now, MSK)).toEqual({ label: "Есть", hint: "отправлено из десктопа, 21 сентября, 13:00", sentByHand: false });
+    // A held reply says nothing of a greeting, whatever is on record for the fan.
+    expect(greetingCell(REPLY, now, MSK)).toBeNull();
+    expect(greetingCell(item({ purpose: "story-reply" }), now, MSK)).toBeNull();
+    expect(greetingCell(item({ greeting: REPLY.greeting }), now, MSK))
+      .toEqual({ label: "Есть", hint: "отправлено из десктопа, 21 сентября, 13:00", sentByHand: false });
     const byHand = greetingCell(BY_HAND, now, MSK);
     expect(byHand).toMatchObject({ label: "Есть: эту часть отправили вручную", sentByHand: true });
-    expect(byHand.hint).toContain("5 октября, 12:50");
-    expect(byHand.hint).toContain("ответьте только про отправку из превью");
+    expect(byHand?.hint).toContain("5 октября, 12:50");
+    expect(byHand?.hint).toContain("ответьте только про отправку из превью");
     // The same source on another attempt's greeting is an ordinary "greeted".
     expect(greetingCell(item({
       greeting: { state: "confirmed", at: null, source: "native-register", firstPartIsThisAttempt: false },
@@ -194,10 +231,10 @@ describe("held-sends view model", () => {
     // A source or a state this build does not know: the code, and "not greeted" for anything but `confirmed`.
     expect(greetingCell(item({
       greeting: { state: "confirmed", at: null, source: "import", firstPartIsThisAttempt: false },
-    }), now, MSK).hint).toBe("import");
+    }), now, MSK)?.hint).toBe("import");
     expect(greetingCell(item({
       greeting: { state: "pending", at: null, source: null, firstPartIsThisAttempt: false },
-    }), now, MSK).label).toBe("Нет");
+    }), now, MSK)?.label).toBe("Нет");
   });
 
   it("builds the queue's rows from the hub's answer, counted against the hub's clock", () => {
@@ -215,7 +252,8 @@ describe("held-sends view model", () => {
       dispatchedAt: "5 октября, 12:45", heldFor: "2 ч 14 мин",
       greeting: { label: "Нет", sentByHand: false },
     });
-    expect(rows[2]!.greeting.sentByHand).toBe(true);
+    expect(rows[0]!.greeting).toBeNull();
+    expect(rows[2]!.greeting!.sentByHand).toBe(true);
     // The row carries the hub's own item: the dialog resolves exactly that attempt on that page.
     expect(rows[1]!.item).toBe(list.items[1]);
     // A row with no ticket on record counts from its dispatch.
@@ -326,6 +364,14 @@ describe("the resolve, from the form to the hub", () => {
     expect(byHand.join(" ")).not.toContain("получит приветствие дважды");
   });
 
+  it("says of a greeting what «ушло» records for the fan, and of a reply nothing about greetings", () => {
+    expect(sentOutcomeHint(item())).toContain("первая часть приветствия отмечает фана поприветствованным");
+    expect(sentOutcomeHint(REPLY)).toBe("Оно есть в чате. Отправка закрывается как состоявшаяся.");
+    expect(sentOutcomeHint(REPLY)).not.toMatch(/приветств/i);
+    expect(NOT_SENT_OUTCOME_HINT).not.toMatch(/приветств/i);
+    expect(notSentWarning(REPLY).join(" ")).not.toMatch(/приветств/i);
+  });
+
   describe("through the hook", () => {
     const clients: QueryClient[] = [];
     beforeEach(() => {
@@ -395,6 +441,10 @@ describe("the resolve, from the form to the hub", () => {
         expect(observer.getCurrentResult()).toMatchObject({ data: undefined, isPlaceholderData: false, isLoading: true });
       } finally {
         stop();
+      }
+      // A failed read is said by the page, in its own words; no toast of the hub's English on every poll.
+      for (const state of ["held", "resolved"] as const) {
+        expect(clientHeldSendsQueryOptions({ state, limit: 25, offset: 0 }).meta).toEqual({ suppressGlobalError: true });
       }
       // Only the queue refreshes by itself.
       expect(clientHeldSendsQueryOptions({ state: "held", limit: 25, offset: 0 }).refetchInterval).toBe(30_000);
@@ -507,7 +557,10 @@ describe("held-sends page", () => {
     const html = renderPage();
 
     expect(html).toContain("Зависшие отправки расширения");
-    expect(html).toContain("Текста сообщений на этой странице нет: Hub его не хранит.");
+    expect(html).toContain("На этой странице текста нет: Hub не знает, какой текст ушёл.");
+    // It does not claim the hub holds no text at all: the generation's draft is the owner's to read elsewhere.
+    expect(html).not.toMatch(/Hub его не хранит|в Hub нет/);
+    expect(html).toContain("Само удержание не снимается никогда: ни со временем, ни после нового входа.");
     expect(html).toContain("28 отправок ждут разбора");
     for (const column of ["Страница и фан", "Что отправляли", "Кто отправлял", "Когда", "Приветствие фана"]) {
       expect(html).toContain(column);
@@ -515,13 +568,23 @@ describe("held-sends page", () => {
     expect(html.match(/>Разобрать<\/button>/g)).toHaveLength(3);
     // Each row: the page, the fan (a link to what the hub knows of them), the part, the person, the install.
     expect(html).toContain('href="/pages/lora-of/fans/onlyfans/777000777"');
-    expect(html).toContain("часть 1 из 3, вариант 2");
     expect(html).toContain("Ответ из превью");
     expect(html).toContain("nikita");
-    expect(html).toContain("5d3c1c0a");
+    // The word is explained where the page first uses it, above the table; the rows keep it short.
+    expect(html).toContain("Под именем сотрудника — установка расширения, с которой ушла отправка");
+    expect(html.indexOf("установка расширения")).toBeLessThan(html.indexOf("установка <span"));
+    expect(html).toContain("установка <span class=\"font-mono\">5d3c1c0a</span>");
     expect(html).not.toContain("5d3c1c0a-7a7e");
+    // The part may wrap after its comma only.
+    expect(html).toContain("<span class=\"whitespace-nowrap\">часть 1 из 3, </span><span class=\"whitespace-nowrap\">вариант 2</span>");
     expect(html).toContain("без отчёта 2 ч 14 мин");
     expect(html).toContain("Есть: эту часть отправили вручную");
+    // The reply's row says nothing of a greeting, though the fan's is on record; the two greetings' rows do.
+    expect(html).not.toContain("отправлено из десктопа");
+    expect(html.match(/title="Это не приветствие"/g)).toHaveLength(1);
+    // «Разобрать» stays at the right edge when a narrow window scrolls the table sideways.
+    expect(html.match(/<td class="[^"]*sticky right-0[^"]*bg-card[^"]*">/g)).toHaveLength(3);
+    expect(html).toMatch(/<th class="[^"]*sticky right-0[^"]*bg-hover-alt[^"]*">/);
     // The filter offers the pages that can hold a send, and the list is paged in Russian.
     expect(html).toContain("<option value=\"\" selected=\"\">Все страницы</option>");
     expect(html).toContain("<option value=\"lora-of\">lora-of</option>");
@@ -590,10 +653,15 @@ describe("held-sends page", () => {
       expect(html).toContain("lora-of");
       expect(html).toContain("777000777");
       expect(html).toContain("Приветствие, часть 1 из 3, вариант 2");
-      // The attempt and its generation, whole: what the sender's extension and the audit trail call this send.
-      expect(html).toContain(ATTEMPT);
+      // The attempt short, whole in the tooltip; the generation whole, for the owner to look the draft up by.
+      expect(html).toContain(`title="Попытка ${ATTEMPT}"`);
+      expect(html).toContain(">9f1b2c3d<");
       expect(html).toContain("3c2b1a09-8f7e-4d6c-b5a4-fedcba987654");
-      expect(html).toContain("Текста сообщения в Hub нет");
+      expect(html).toContain("установка расширения");
+      expect(html).toContain("На этой странице текста нет: Hub не знает, какой текст ушёл");
+      expect(html).not.toMatch(/Hub его не хранит|в Hub нет/);
+      // The buttons ride the bottom edge of the dialog's scrolling box: on screen in every state.
+      expect(html).toMatch(/<div class="sticky -bottom-6 -mx-6 -mb-6 [^"]*bg-card[^"]*">/);
       expect(html).toContain("Сообщение ушло");
       expect(html).toContain("Сообщение не ушло");
       expect(html).not.toContain('checked=""');
@@ -623,9 +691,14 @@ describe("held-sends page", () => {
       expect(html.indexOf("Проверьте, прежде чем записать")).toBeLessThan(html.indexOf("Записать: сообщение не ушло"));
       expect(html).toMatch(/<button type="submit" class="[^"]*bg-danger[^"]*">Записать: сообщение не ушло<\/button>/);
       expect(html).not.toContain("ID сообщения в OnlyFans");
-      // A reply's warning speaks of the part, not of a greeting.
+      // A reply's dialog speaks of the part and never of a greeting: no line, no clause, no warning about one.
       const reply = dialog({ item: REPLY, initialDraft: { outcome: "not_sent", platformMessageId: "", note: "пусто" } });
       expect(reply).toContain("снова можно будет отправить эту часть из превью");
+      expect(reply).not.toMatch(/приветств/i);
+      expect(dialog({ item: REPLY })).not.toMatch(/приветств/i);
+      // A greeting's dialog does.
+      expect(html).toContain("Приветствие фана");
+      expect(dialog()).toContain("первая часть приветствия отмечает фана поприветствованным");
       // Without a reason there is nothing to record.
       expect(dialog({ initialDraft: { outcome: "not_sent", platformMessageId: "", note: "" } }))
         .toMatch(/<button type="submit" disabled=""/);

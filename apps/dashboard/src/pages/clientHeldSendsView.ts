@@ -13,10 +13,12 @@ import { ruPlural } from "@/lib/plural";
  * (chat-extension H-7e). Pure: the page renders what this returns, and the
  * resolve it sends is the body this builds.
  *
- * The hub answers ids, states and times and holds no text of a message, so
- * there is none here. Everything this model words for a person, it words
- * without the hub's own terms: a "ticket" is "the hub waited 10 seconds for
- * the report", custody is "the fan is held".
+ * The hub answers ids, states and times, so there is no text of a message
+ * here: the hub does not know which text went out. (`generationRef` names the
+ * AI generation the text came from, a record only the owner reads, elsewhere.)
+ * Everything this model words for a person, it words without the hub's own
+ * terms: a "ticket" is "the hub waited 10 seconds for the report", custody is
+ * "the fan is held".
  */
 
 type Item = ClientSendCustodyListItem;
@@ -62,6 +64,27 @@ export function heldSendsSearch(view: HeldSendsView): URLSearchParams {
   if (view.pageLabel !== null) search.set("page", view.pageLabel);
   if (view.offset > 0) search.set("offset", String(view.offset));
   return search;
+}
+
+/**
+ * The address after one change of the view, built from the address given.
+ *
+ * `current` must be the address the browser shows NOW (`location.search` at
+ * the moment of the click), not the one the page last rendered. The router
+ * publishes a new address to React in a transition, so a second change made
+ * before that render commits would otherwise start from the old view and undo
+ * the first: a tab click followed at once by a change of the page filter left
+ * the page on the other tab.
+ *
+ * A new tab or page filter starts its list from the top; only a change of the
+ * offset itself keeps a position in the list.
+ */
+export function changeHeldSendsView(
+  current: URLSearchParams,
+  pageLabels: readonly string[] | null,
+  change: Partial<HeldSendsView>,
+): URLSearchParams {
+  return heldSendsSearch({ ...parseHeldSendsView(current, pageLabels), ...change, offset: change.offset ?? 0 });
 }
 
 /**
@@ -154,8 +177,13 @@ export interface GreetingCell {
   sentByHand: boolean;
 }
 
-/** The fan's greeting as the resolver reads it next to a held send. */
-export function greetingCell(item: Pick<Item, "greeting" | "state">, now: Date, timeZone?: string): GreetingCell {
+/**
+ * The fan's greeting as the resolver reads it next to a held greeting. Null for
+ * any other send: whether the fan was greeted says nothing about a held reply,
+ * and its resolve changes nothing about the greeting.
+ */
+export function greetingCell(item: Pick<Item, "purpose" | "greeting">, now: Date, timeZone?: string): GreetingCell | null {
+  if (item.purpose !== "greeting") return null;
   const { greeting } = item;
   if (greeting.state !== "confirmed") {
     return { label: "Нет", hint: null, sentByHand: false };
@@ -188,7 +216,8 @@ export interface HeldSendRow {
   dispatchedAt: string;
   /** How long ago the hub stopped waiting for the client's report. */
   heldFor: string;
-  greeting: GreetingCell;
+  /** Null for a send that is not a greeting. */
+  greeting: GreetingCell | null;
 }
 
 export interface ResolvedSendRow {
@@ -317,6 +346,16 @@ export function resolveForm(draft: ResolveDraft): ResolveForm {
     ? { body: parsed.data, platformMessageIdError, noteLeft, missing: null }
     : { body: null, platformMessageIdError, noteLeft, missing: "Hub не примет такой разбор. Проверьте поля." };
 }
+
+/** What "sent" records, under that answer. Only a greeting's resolve says anything about a greeting. */
+export function sentOutcomeHint(item: Pick<Item, "purpose">): string {
+  return item.purpose === "greeting"
+    ? "Оно есть в чате. Отправка закрывается как состоявшаяся; первая часть приветствия отмечает фана поприветствованным."
+    : "Оно есть в чате. Отправка закрывается как состоявшаяся.";
+}
+
+/** What "not sent" records, under that answer; what it changes for the fan is the warning's (notSentWarning). */
+export const NOT_SENT_OUTCOME_HINT = "В чате его нет. Отправка закрывается как несостоявшаяся; что это меняет для фана, написано ниже.";
 
 const ARCHIVE_IS_NO_PROOF = "Правила «в архиве Hub нет — значит не ушло» не существует: архив мог ещё не получить это сообщение. "
   + "Смотрите сам чат на OnlyFans.";
