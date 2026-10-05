@@ -23,6 +23,7 @@ const OfapiMarketing = lazy(() => import("./pages/OfapiMarketing.js").then((m) =
 const OfapiActions = lazy(() => import("./pages/OfapiActions.js").then((m) => ({ default: m.OfapiActions })));
 const OfapiExportsPage = lazy(() => import("./pages/OfapiExportsPage.js").then((m) => ({ default: m.OfapiExportsPage })));
 const OfapiCreditsPage = lazy(() => import("./pages/OfapiCreditsPage.js").then((m) => ({ default: m.OfapiCreditsPage })));
+const ClientHeldSendsPage = lazy(() => import("./pages/ClientHeldSendsPage.js").then((m) => ({ default: m.ClientHeldSendsPage })));
 const AnalyticsPage = lazy(() => import("./pages/AnalyticsPage.js").then((m) => ({ default: m.AnalyticsPage })));
 const AgentHydrationPage = lazy(() => import("./pages/AgentHydrationPage.js").then((m) => ({ default: m.AgentHydrationPage })));
 const SettingsPage = lazy(() => import("./pages/SettingsPage.js").then((m) => ({ default: m.SettingsPage })));
@@ -66,6 +67,9 @@ export function App() {
             <Route path="ofapi-actions" element={<OwnerRoute><OfapiActions /></OwnerRoute>} />
             <Route path="ofapi-exports" element={<OfapiExportsPage />} />
             <Route path="ofapi-credits" element={<OwnerRoute><OfapiCreditsPage /></OwnerRoute>} />
+            {/* chat-extension H-7e. The owner and team leads, like the two routes
+                behind it (`session`); a chatter never reaches this layout. */}
+            <Route path="held-sends" element={<ClientHeldSendsPage />} />
             {/* WP-S1. Owner-only, matching the routes behind it: every serving
                 endpoint this page calls declares `owner-session` + page scope. */}
             <Route path="analytics" element={<OwnerRoute><AnalyticsPage /></OwnerRoute>} />
