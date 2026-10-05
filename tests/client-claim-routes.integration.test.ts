@@ -387,13 +387,12 @@ describe("chat-extension claim and custody routes", () => {
     // As merged: the hub does not serve `audience-new-v1` yet (H-7c).
     hub.servesAudienceNew = false;
     const fan = nextFan();
-    // Everything that starts something: a lease, a send, a native record, and the status read.
+    // Everything that starts something: a lease, a send, and the status read.
     const starting = [
       claimBody(I1),
       { ...claimBody(I1), action: "renew" },
       dispatchBody({ leaseToken: randomUUID() }),
       replyBody(),
-      nativeBody(),
     ];
     for (const token of [grishaToken, grishaFullToken]) {
       for (const body of starting) {
@@ -410,8 +409,13 @@ describe("chat-extension claim and custody routes", () => {
       409,
       "custody_not_owned",
     );
+    // Nor does the report of a send that already happened: it starts nothing, and refusing it
+    // would only lose the fact. The one thing the hub takes at rest; no client sends it yet.
+    const atRest = nextFan();
+    expect(ok(await act(grishaToken, atRest, nativeBody())).greeting).toMatchObject({ state: "confirmed", source: "native-register" });
+    expect((await custodyRows(atRest)).map((row) => [row.state, row.origin])).toEqual([["sent", "native-register"]]);
 
-    // The master switch alone: the flag-less status and native record answer, the flagged actions do not.
+    // The master switch alone: the flag-less status answers, the flagged actions do not.
     await patchConfig([{ key: "chatExtensionEnabled", value: true }]);
     expect(ok(await status(grishaToken, fan))).toMatchObject({
       greeting: { state: "none" }, lease: { state: "none" }, group: null, custody: null,
@@ -454,7 +458,7 @@ describe("chat-extension claim and custody routes", () => {
     expect(await query("select 1 from client_send_custody where page_id = $1", [pageIds["lora-fansly"]])).toEqual([]);
     // An old client's version, or none, is not the extension: refused, never passed.
     for (const clientVersion of ["chatgoose-extension/2.7.1", "0.1.64", null]) {
-      for (const body of [claimBody(I1), replyBody(), nativeBody()]) {
+      for (const body of [claimBody(I1), replyBody()]) {
         expectRefused(await act(grishaFullToken, nextFan(), body, { clientVersion }), 409, "client_feature_disabled", "client_outdated");
       }
       expectRefused(await status(grishaFullToken, fan, { clientVersion }), 409, "client_feature_disabled", "client_outdated");
@@ -467,7 +471,6 @@ describe("chat-extension claim and custody routes", () => {
     // The master switch ends everything that starts something.
     await patchConfig([{ key: "chatExtensionEnabled", value: false }]);
     expectRefused(await act(grishaToken, nextFan(), replyBody()), 409, "client_feature_disabled", "disabled");
-    expectRefused(await act(grishaToken, nextFan(), nativeBody()), 409, "client_feature_disabled", "disabled");
     expectRefused(await status(grishaToken, fan), 409, "client_feature_disabled", "disabled");
 
     await trap!.assertNoOutbound();
@@ -552,7 +555,8 @@ describe("chat-extension claim and custody routes", () => {
     expect(answer).toMatchObject({
       greeting: { state: "none" },
       lease: { state: "owned" },
-      group: { ...sentGroup, sentParts: [], heldParts: [0] },
+      // In flight, not held: `custody` says the part is on its way.
+      group: { ...sentGroup, sentParts: [], heldParts: [] },
       custody: { attemptId, state: "dispatching" },
       flagRevision: revision,
     });
@@ -783,7 +787,9 @@ describe("chat-extension claim and custody routes", () => {
 
     // The owner of the greeting sends the rest of the same group without a lease, from any install.
     const second = dispatchBody({ group: parts, partIndex: 1, instanceId: I2 });
-    expect(ok(await act(grishaToken, fan, second))).toMatchObject({ group: { sentParts: [0], heldParts: [1] } });
+    expect(ok(await act(grishaToken, fan, second))).toMatchObject({
+      group: { sentParts: [0], heldParts: [] }, custody: { state: "dispatching" },
+    });
     ok(await act(grishaToken, fan, sentBody(second.attemptId as string, "7202", I2)));
     // A second greeting after the confirmation (critic 13): another generation of the owner's, anyone else's at all.
     expectRefused(await act(grishaToken, fan, dispatchBody({ partIndex: 2 })), 409, "generation_mismatch");
@@ -973,6 +979,237 @@ describe("chat-extension claim and custody routes", () => {
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
+  it("a native send of the caller's own held part confirms the greeting: no colleague greets again", async () => {
+    await switchOn();
+    const fan = nextFan();
+    const { leaseToken, attemptId, group: heldGroup } = await dispatchedGreeting(fan);
+    // The page held the command (nothing enqueued), but the report missed the ticket.
+    await expireTicket(attemptId);
+    expectRefused(await act(grishaToken, fan, { action: "failed", attemptId, instanceId: I1, reason: "not_enqueued" }), 409, "custody_held");
+    // The chatter pastes that very part into the composer and presses Send: receipt and echo, a message id.
+    const native = nativeBody({ group: heldGroup, partIndex: 0 });
+    const registered = ok(await act(grishaToken, fan, native));
+    // The fan IS greeted, and the hub says so. The preview send stays held: only its own report or a resolve ends it.
+    expect(registered).toMatchObject({
+      greeting: { state: "confirmed", messageRef: native.platformMessageId, source: "native-register" },
+      group: { ...heldGroup, sentParts: [0], heldParts: [0] },
+      custody: { attemptId, state: "uncertain-held", ticket: null },
+    });
+    // On the greeting alone: the held send keeps the part's one custody row.
+    expect((await custodyRows(fan)).map((row) => [row.attempt_id, row.state, row.platform_message_id]))
+      .toEqual([[attemptId, "dispatching", null]]);
+    expect(await query("select owner_user_id::text, first_message_ref, first_attempt_id::text, source from client_greetings where fan_ref = $1", [fan]))
+      .toEqual([{
+        owner_user_id: String(userIds.grisha), first_message_ref: native.platformMessageId, first_attempt_id: attemptId,
+        source: "native-register",
+      }]);
+    // The same proof again reads (the client lost the answer); the same message as another part contradicts it.
+    expect(ok(await act(grishaToken, fan, native)).greeting.state).toBe("confirmed");
+    expect(ok(await act(grishaToken, fan, { ...native, attemptId: randomUUID() })).greeting.state).toBe("confirmed");
+    expectRefused(await act(grishaToken, fan, { ...native, attemptId: randomUUID(), partIndex: 1 }), 409, "attempt_conflict");
+    expect(await query("select 1 from client_greetings where fan_ref = $1", [fan])).toHaveLength(1);
+
+    // A colleague sees a greeted fan with an unresolved send, and gets no lease when grisha's runs out.
+    expect(ok(await status(nikitaToken, fan))).toMatchObject({ greeting: { state: "confirmed" }, custody: { attemptId, state: "uncertain-held" } });
+    await expireLease(leaseToken);
+    const theirs = randomUUID();
+    expectRefused(await act(nikitaToken, fan, claimBody(I3, theirs)), 409, "greeting_done");
+    // The lead answers truthfully about the PREVIEW send: it never left. The fan is still greeted.
+    const resolved = await resolve(leadCookie, attemptId, { outcome: "not_sent", note: "the preview send never left" });
+    expect(resolved.statusCode, resolved.body).toBe(200);
+    expectRefused(await act(nikitaToken, fan, claimBody(I3, theirs)), 409, "greeting_done");
+    expectRefused(await act(nikitaToken, fan, dispatchBody({ instanceId: I3, leaseToken: theirs })), 409, "greeting_done");
+    // Nor does grisha send that part a second time from the preview; the rest of the group is his to send.
+    expect(ok(await status(grishaToken, fan))).toMatchObject({
+      greeting: { state: "confirmed", messageRef: native.platformMessageId },
+      group: { ...heldGroup, sentParts: [0], heldParts: [] },
+      custody: { attemptId, state: "resolved-not-sent" },
+    });
+    expectRefused(await act(grishaToken, fan, dispatchBody({ group: heldGroup, partIndex: 0 })), 409, "part_already_sent");
+    expectRefused(await act(grishaToken, fan, nativeBody({ group: heldGroup, partIndex: 0 })), 409, "part_already_sent");
+    expect(ok(await act(grishaToken, fan, dispatchBody({ group: heldGroup, partIndex: 1 })))).toMatchObject({
+      group: { sentParts: [0] }, custody: { state: "dispatching" },
+    });
+
+    // The same while the preview send is still inside its ticket, and when the hand-sent part is a held reply's
+    // (no greeting to confirm there: the part stays held and nothing is written).
+    const inFlight = nextFan();
+    const flying = await dispatchedGreeting(inFlight);
+    expect(ok(await act(grishaToken, inFlight, nativeBody({ group: flying.group, partIndex: 0 })))).toMatchObject({
+      greeting: { state: "confirmed", source: "native-register" }, custody: { attemptId: flying.attemptId, state: "dispatching" },
+    });
+    // The preview send then proves itself too: both went out, and each is on record.
+    expect(ok(await act(grishaToken, inFlight, sentBody(flying.attemptId, "7951")))).toMatchObject({
+      greeting: { state: "confirmed", source: "native-register" }, custody: { state: "sent" }, group: { sentParts: [0] },
+    });
+
+    await trap!.assertNoOutbound();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("a proven native send is recorded whatever the switches and the client's version say now", async () => {
+    await switchOn({ newcomers: true, previewSend: false });
+    const fan = nextFan();
+    const leaseToken = randomUUID();
+    ok(await act(grishaToken, fan, claimBody(I1, leaseToken)));
+    // grisha pasted the Hi and pressed Send; the owner raises the minimum version a moment before the report lands.
+    await patchConfig([{ key: "chatExtensionMinVersion", value: "1.5.0" }]);
+    const native = nativeBody();
+    expect(ok(await act(grishaToken, fan, native))).toMatchObject({
+      greeting: { state: "confirmed", messageRef: native.platformMessageId, source: "native-register" },
+      custody: { attemptId: native.attemptId, state: "sent" },
+    });
+    // ...or the owner used the kill switch, or the report comes from a client that names no version at all.
+    await patchConfig([{ key: "chatExtensionEnabled", value: false }]);
+    const second = nextFan();
+    expect(ok(await act(grishaToken, second, nativeBody())).greeting.state).toBe("confirmed");
+    expect(ok(await act(grishaFullToken, nextFan(), nativeBody(), { clientVersion: null })).greeting.state).toBe("confirmed");
+    // The repeat of a report (the client lost the answer) reads as before.
+    expect(ok(await act(grishaToken, fan, native)).custody).toMatchObject({ attemptId: native.attemptId, state: "sent" });
+    // Nothing else opened with it: every action that starts something, and the status read, stay refused.
+    expectRefused(await act(grishaToken, nextFan(), claimBody(I1)), 409, "client_feature_disabled", "disabled");
+    expectRefused(await act(grishaToken, fan, replyBody()), 409, "client_feature_disabled", "disabled");
+    expectRefused(await status(grishaToken, fan), 409, "client_feature_disabled", "disabled");
+    // The page grant and the platform still hold.
+    expectRefused(await act(svetaToken, nextFan(), nativeBody()), 409, "client_feature_disabled", "not_granted");
+    expectRefused(await act(grishaToken, nextFan(), nativeBody(), { pageLabel: "lora-fansly" }), 409, "client_feature_disabled", "platform_unsupported");
+    expectRefused(await act(grishaToken, nextFan(), nativeBody(), { pageLabel: "ghost-of" }), 409, "client_feature_disabled", "not_granted");
+
+    // Switched back on: the colleague who takes the fans next finds them greeted.
+    await patchConfig([{ key: "chatExtensionEnabled", value: true }, { key: "chatExtensionMinVersion", value: "1.4.2" }]);
+    await expireLease(leaseToken);
+    for (const greeted of [fan, second]) {
+      expectRefused(await act(nikitaToken, greeted, claimBody(I3)), 409, "greeting_done");
+    }
+    await patchConfig([features({ newcomers: true, previewSend: true })]);
+    expectRefused(await act(nikitaToken, fan, dispatchBody({ instanceId: I3, leaseToken: randomUUID() })), 409, "greeting_done");
+
+    await trap!.assertNoOutbound();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("a part inside its ticket is in flight, not held; past it the part is held for everyone", async () => {
+    await switchOn();
+    const fan = nextFan();
+    const { leaseToken, attemptId, group: flying, answer } = await dispatchedGreeting(fan);
+    // The client stops a row on heldParts[0]: a normal send must never read as one nobody can vouch for.
+    expect(answer).toMatchObject({ group: { ...flying, sentParts: [], heldParts: [] }, custody: { state: "dispatching" } });
+    const renewed = ok(await act(grishaToken, fan, { ...claimBody(I1, leaseToken), action: "renew" }));
+    expect(renewed).toMatchObject({ group: { ...flying, sentParts: [], heldParts: [] }, custody: { attemptId, state: "dispatching" } });
+    expect(ok(await status(nikitaToken, fan))).toMatchObject({
+      group: { ...flying, sentParts: [], heldParts: [] }, custody: { attemptId, state: "dispatching" },
+    });
+    await expireTicket(attemptId);
+    for (const token of [grishaToken, nikitaToken]) {
+      expect(ok(await status(token, fan))).toMatchObject({
+        group: { ...flying, sentParts: [], heldParts: [0] }, custody: { attemptId, state: "uncertain-held" },
+      });
+    }
+    expect(ok(await act(grishaToken, fan, { ...claimBody(I1, leaseToken), action: "renew" })).group).toMatchObject({ heldParts: [0] });
+
+    await trap!.assertNoOutbound();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("a greeting under the install's own dead or missing token is claim_expired, never claim_busy", async () => {
+    await switchOn();
+    const fan = nextFan();
+    const old = randomUUID();
+    ok(await act(grishaToken, fan, claimBody(I1, old)));
+    await expireLease(old);
+    const fresh = randomUUID();
+    ok(await act(grishaToken, fan, claimBody(I1, fresh)));
+    // This very install holds the fan: the lease the request names is gone ("press Hi again"), nobody else is working on it.
+    expectRefused(await act(grishaToken, fan, dispatchBody({ leaseToken: old })), 409, "claim_expired");
+    expectRefused(await act(grishaToken, fan, dispatchBody()), 409, "claim_expired");
+    // Another install of the same person, and another person, are elsewhere: busy.
+    expectRefused(await act(grishaToken, fan, dispatchBody({ instanceId: I2, leaseToken: old })), 409, "claim_busy");
+    expectRefused(await act(grishaToken, fan, dispatchBody({ instanceId: I2 })), 409, "claim_busy");
+    expectRefused(await act(nikitaToken, fan, dispatchBody({ instanceId: I3 })), 409, "claim_busy");
+    expect(await custodyRows(fan)).toEqual([]);
+    expect(ok(await act(grishaToken, fan, dispatchBody({ leaseToken: fresh }))).custody).toMatchObject({ state: "dispatching" });
+
+    await trap!.assertNoOutbound();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("races on one fan end in one outcome: one ticket, one lease, one owner of a message id", async () => {
+    await switchOn();
+    // Five dispatches at once from tabs, installs and people: one ticket, the rest see the fan held.
+    const fan = nextFan();
+    const racers = await Promise.all([
+      act(grishaToken, fan, replyBody({ instanceId: I1 })),
+      act(grishaToken, fan, replyBody({ instanceId: I1 })),
+      act(grishaToken, fan, replyBody({ instanceId: I2 })),
+      act(nikitaToken, fan, replyBody({ instanceId: I3 })),
+      act(nikitaToken, fan, replyBody({ instanceId: I3 })),
+    ]);
+    const winners = racers.filter((response) => response.statusCode === 200);
+    expect(winners).toHaveLength(1);
+    expect(ok(winners[0]!).custody!.ticket).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    for (const response of racers) {
+      if (response.statusCode !== 200) expectRefused(response, 409, "custody_held");
+    }
+    expect(await custodyRows(fan)).toHaveLength(1);
+
+    // The same attempt five times at once: every answer reads the one attempt, exactly one carries the ticket.
+    const sameFan = nextFan();
+    const same = replyBody({ instanceId: I3 });
+    const repeats = (await Promise.all(Array.from({ length: 5 }, () => act(nikitaToken, sameFan, same)))).map(ok);
+    expect(repeats.every((answer) => answer.custody!.attemptId === same.attemptId)).toBe(true);
+    expect(repeats.filter((answer) => answer.custody!.ticket !== null)).toHaveLength(1);
+    expect(await custodyRows(sameFan)).toHaveLength(1);
+    await agePreviewSends();
+
+    // A report, a failure and a resolve on one attempt at once: one of them ends it.
+    for (let round = 0; round < 4; round += 1) {
+      const raced = nextFan();
+      const { attemptId } = await dispatchedGreeting(raced);
+      // Odd rounds past the ticket, where a failure no longer counts and "not sent" may be resolved.
+      if (round % 2 === 1) await expireTicket(attemptId);
+      const outcomes = await Promise.all([
+        act(grishaToken, raced, sentBody(attemptId, String(++fanSeq))),
+        resolve(ownerCookie, attemptId, round % 2 === 1 ? { outcome: "not_sent", note: "race" } : { outcome: "sent", note: "race" }),
+        act(grishaToken, raced, { action: "failed", attemptId, instanceId: I1, reason: "not_enqueued" }),
+      ]);
+      expect(outcomes.map((response) => response.statusCode).sort(), `round ${round}`).toEqual([200, 409, 409]);
+      const [row] = await custodyRows(raced);
+      expect(["sent", "failed", "resolved_sent", "resolved_not_sent"]).toContain(row!.state);
+      // Greeted exactly when the part went out.
+      expect(await query("select 1 from client_greetings where fan_ref = $1", [raced]))
+        .toHaveLength(row!.state === "sent" || row!.state === "resolved_sent" ? 1 : 0);
+      await agePreviewSends();
+    }
+
+    // Claims over a dead lease, at once: one new holder.
+    const leased = nextFan();
+    const dead = randomUUID();
+    ok(await act(grishaToken, leased, claimBody(I1, dead)));
+    await expireLease(dead);
+    const claims = await Promise.all([
+      act(grishaToken, leased, claimBody(I2)),
+      act(nikitaToken, leased, claimBody(I3)),
+      act(grishaToken, leased, claimBody(I1)),
+      act(grishaToken, leased, claimBody(I1, dead)),
+    ]);
+    expect(claims.map((response) => response.statusCode).sort()).toEqual([200, 409, 409, 409]);
+    expect(await query("select 1 from client_fan_leases where fan_ref = $1 and state = 'active'", [leased])).toHaveLength(1);
+    // One lease token on two fans at once (a client bug): one lease, never a 500.
+    const token = randomUUID();
+    const twoFans = await Promise.all([act(grishaToken, nextFan(), claimBody(I1, token)), act(grishaToken, nextFan(), claimBody(I1, token))]);
+    expect(twoFans.map((response) => response.statusCode).sort()).toEqual([200, 409]);
+    // One message id reported for two attempts on two fans at once: one of them owns it.
+    const [fanA, fanB] = [nextFan(), nextFan()];
+    const [replyA, replyB] = [replyBody({ instanceId: I1 }), replyBody({ instanceId: I3 })];
+    ok(await act(grishaToken, fanA, replyA));
+    ok(await act(nikitaToken, fanB, replyB));
+    const message = String(++fanSeq);
+    const reports = await Promise.all([
+      act(grishaToken, fanA, sentBody(replyA.attemptId as string, message, I1)),
+      act(nikitaToken, fanB, sentBody(replyB.attemptId as string, message, I3)),
+    ]);
+    expect(reports.map((response) => response.statusCode).sort()).toEqual([200, 409]);
+    expectRefused(reports.find((response) => response.statusCode !== 200)!, 409, "attempt_conflict");
+
+    await trap!.assertNoOutbound();
+  }, 2 * INTEGRATION_TEST_TIMEOUT_MS);
+
   it("the manual resolve is the owner's and the team lead's, by cookie, audited once", async () => {
     await switchOn();
     const fan = nextFan();
@@ -1054,20 +1291,29 @@ describe("chat-extension claim and custody routes", () => {
     const reply = replyBody();
     ok(await act(grishaToken, replyFan, reply));
     await patchConfig([{ key: "chatExtensionEnabled", value: false }]);
+    // Inside the ticket the page may still send the part: "not sent" would free it for a second
+    // dispatch while the first can yet go out. Refused until the ticket has run out.
+    expectRefused(
+      await resolve(ownerCookie, reply.attemptId as string, { outcome: "not_sent", note: "nothing in the chat" }),
+      409,
+      "conflict",
+      "ticket_live",
+    );
+    expect((await custodyRows(replyFan))[0]).toMatchObject({ state: "dispatching" });
+    await expireTicket(reply.attemptId as string);
     const notSent = await resolve(ownerCookie, reply.attemptId as string, { outcome: "not_sent", note: "nothing in the chat" });
     expect(notSent.statusCode, notSent.body).toBe(200);
     expect(clientSendCustodyItemSchema.parse(notSent.json())).toMatchObject({
       purpose: "preview-reply", state: "resolved-not-sent", userId: userIds.grisha,
     });
     // (The status read is the client's: it answers again once the extension is switched back on, below.)
-    // Resolved inside its ticket's ten seconds: the trail says it was still dispatching.
     expect(await query(
       `select actor_user_id::text, metadata from audit_events
        where event_type = 'client.send_custody_resolved' and metadata->>'attemptId' = $1`,
       [reply.attemptId],
     )).toEqual([{
       actor_user_id: String(userIds.owner),
-      metadata: { attemptId: reply.attemptId, outcome: "not_sent", priorState: "dispatching", platformMessageIdRecorded: false },
+      metadata: { attemptId: reply.attemptId, outcome: "not_sent", priorState: "uncertain-held", platformMessageIdRecorded: false },
     }]);
     await patchConfig([{ key: "chatExtensionEnabled", value: true }]);
     expect(ok(await status(grishaToken, replyFan))).toMatchObject({

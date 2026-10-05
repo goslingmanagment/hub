@@ -56,13 +56,17 @@ import {
  *   after the repeat check: a repeat of an attempt the hub already holds reads
  *   its state whatever the switches say now, so a client that lost the first
  *   answer learns it has no ticket and reports `failed`.
- * - `registerNativeSend` and the status read: no flag, so the master switch and
- *   the minimum version only (requireClientPage), on a page of a platform where
- *   sending from the preview exists. They answer while `previewSend` and
- *   `newcomers` are off.
+ * - the status read: no flag, so the master switch and the minimum version only
+ *   (requireClientPage), on a page of a platform where sending from the preview
+ *   exists. It answers while `previewSend` and `newcomers` are off.
  * - `release`, `sent`, `failed`: the page grant only. They end a lease or a send
  *   the hub already admitted; a switch turned off in between must not strand it
  *   (an unreported send holds the fan until someone resolves it by hand).
+ * - `registerNativeSend`: the page grant and the platform only, like them. The
+ *   message is already in the chat when the report comes, and the client ends a
+ *   registration on any answer. Refused by the master switch, a flag or the
+ *   minimum version, the fan would read as not greeted and a colleague would
+ *   greet again. It admits nothing: a dispatch after it waits for its switches.
  *
  * Database only: nothing here asks OnlyFans or queues work. The hub never sends
  * the message; the ticket only marks the page-world command of the client.
@@ -119,6 +123,11 @@ async function refuse(app: AppContext, code: ClientClaimRejectionCode, userId: n
       throw new ConflictError("The send attempt is not held: it was already reported sent or failed", {
         reason: "custody_not_held",
       });
+    case "ticket_live":
+      throw new ConflictError(
+        "The send attempt is still inside its ticket: the page may yet send the part. Resolve it as not sent once the ticket has run out",
+        { reason: "ticket_live" },
+      );
     case "preview_send_rate_limited":
       throw new ClientPreviewSendRateLimitedError(await readClientPreviewSendRetryAfterMs(app.db, userId));
     default:
@@ -228,12 +237,14 @@ export async function applyClientFanClaim(
       }
       page = await requireClientFeature(app, request, principal, stored, NEWCOMERS_FLAG);
       break;
-    case "registerNativeSend":
-      page = await requireClientPage(app, request, principal, stored, CLAIM_FEATURE, PREVIEW_SEND_FLAG);
-      break;
     case "dispatch":
       // The grant only: the switches are read in the dispatch's transaction.
       page = await requireClientGrantedPage(app, principal, stored, PREVIEW_SEND_FLAG);
+      break;
+    case "registerNativeSend":
+      // A proven send is recorded whatever the switches and the client's
+      // version say now: the grant, on a platform where the custody exists.
+      page = await requireClientGrantedPage(app, principal, stored, CLAIM_FEATURE, PREVIEW_SEND_FLAG);
       break;
     case "release":
     case "sent":

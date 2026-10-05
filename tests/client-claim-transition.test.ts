@@ -91,7 +91,7 @@ describe("lease: claim, renew, release", () => {
     const claim: ClientClaimRequest = { ...actor, action: "claim", leaseToken: L1, instanceId: I1 };
     const greeted = (ownerUserId: number | null) => ({
       ownerUserId, generationRef: GROUP.generationRef, variant: GROUP.variant, partCount: GROUP.partCount,
-      confirmedAt: NOW, firstMessageRef: "901", source: "preview-send" as const,
+      confirmedAt: NOW, firstMessageRef: "901", firstAttemptId: A1, source: "preview-send" as const,
     });
     // Someone else's greeting, one whose owner is gone, and the desktop's: no first greeting is left to work out.
     for (const state of [
@@ -202,7 +202,7 @@ describe("dispatch, in the plan's order", () => {
   it("after confirmation lets only its owner send the rest of the same group, without a lease", () => {
     const greeting = {
       ownerUserId: ME, generationRef: GROUP.generationRef, variant: GROUP.variant, partCount: GROUP.partCount,
-      confirmedAt: NOW, firstMessageRef: "901", source: "preview-send" as const,
+      confirmedAt: NOW, firstMessageRef: "901", firstAttemptId: A1, source: "preview-send" as const,
     };
     const sentPart = custody({ state: "sent", platformMessageId: "901" });
     const state = snapshot({ greeting, group: GROUP, groupParts: [sentPart] });
@@ -226,7 +226,13 @@ describe("dispatch, in the plan's order", () => {
       .toMatchObject({ code: "claim_expired" });
     expect(decideClaimTransition(snapshot({ activeLease: lease({ userId: OTHER }) }), dispatch())).toMatchObject({ code: "claim_busy" });
     expect(decideClaimTransition(snapshot({ activeLease: lease({ instanceId: I2 }) }), dispatch())).toMatchObject({ code: "claim_busy" });
-    expect(decideClaimTransition(snapshot(ownedLease), dispatch({ leaseToken: L2 }))).toMatchObject({ code: "claim_busy" });
+    // The fan held by this very install under another token, or no token named: the lease the
+    // request speaks of is gone ("press Hi again"), not "someone else is working on the fan".
+    expect(decideClaimTransition(snapshot(ownedLease), dispatch({ leaseToken: L2 }))).toMatchObject({ code: "claim_expired" });
+    expect(decideClaimTransition(snapshot(ownedLease), dispatch({ leaseToken: null }))).toMatchObject({ code: "claim_expired" });
+    // Another install of the same person is elsewhere: busy, whatever token is named.
+    expect(decideClaimTransition(snapshot({ activeLease: lease({ instanceId: I2 }) }), dispatch({ leaseToken: null })))
+      .toMatchObject({ code: "claim_busy" });
     // A preview reply needs no lease.
     expect(decideClaimTransition(snapshot(), dispatch({ purpose: "preview-reply", leaseToken: null })).outcome).toBe("applied");
   });
@@ -326,10 +332,68 @@ describe("registerNativeSend and resolve", () => {
     const foreign = custody({ userId: OTHER, generationRef: "gen-9", purpose: "preview-reply" });
     const writes = decideClaimTransition(snapshot({ openCustody: foreign }), register()).writes;
     expect(writes.map((write) => write.op)).toEqual(["insertNativeSend", "confirmGreeting"]);
-    expect(decideClaimTransition(snapshot({ group: GROUP, groupParts: [custody({ userId: OTHER })] }), register()))
-      .toMatchObject({ code: "custody_held" });
     expect(decideClaimTransition(snapshot({ group: GROUP, groupParts: [custody({ state: "sent", platformMessageId: "1" })] }), register()))
       .toMatchObject({ code: "part_already_sent" });
+  });
+
+  it("confirms the greeting over a held preview send of the same part, and leaves that send held", () => {
+    // The preview send of part 0 is unresolved (in flight or past its ticket); the chatter sent the part by hand.
+    for (const held of [custody({ ticketExpiresAt: later(-60_000) }), custody(), custody({ userId: OTHER, instanceId: I2 })]) {
+      const state = snapshot({ openCustody: held, group: GROUP, groupParts: [held] });
+      // The greeting alone: no custody row (the held send keeps the part's one), nothing of the held send changes.
+      expect(decideClaimTransition(state, register())).toEqual({
+        outcome: "applied",
+        writes: [{ op: "confirmGreeting", source: "native-register", ownerUserId: ME, attemptId: A1, messageRef: "905", group: GROUP }],
+      });
+    }
+    // A reply has no greeting to confirm, and a fan already greeted needs none: the part stays held, nothing is written.
+    const held = custody({ ticketExpiresAt: later(-60_000) });
+    expect(decideClaimTransition(snapshot({ openCustody: held, group: GROUP, groupParts: [held] }), register({ purpose: "preview-reply" })))
+      .toEqual({ outcome: "rejected", code: "custody_held", writes: [] });
+    const desktop = { commandId: "c", state: "confirmed" as const, at: NOW, messageRef: "1" };
+    expect(decideClaimTransition(snapshot({ desktop, openCustody: held, group: GROUP, groupParts: [held] }), register()))
+      .toEqual({ outcome: "rejected", code: "custody_held", writes: [] });
+  });
+
+  it("counts the natively confirmed part as sent whatever becomes of the held send", () => {
+    const greeting = {
+      ownerUserId: ME, generationRef: GROUP.generationRef, variant: GROUP.variant, partCount: GROUP.partCount,
+      confirmedAt: NOW, firstMessageRef: "905", firstAttemptId: A1, source: "native-register" as const,
+    };
+    const reader = { userId: OTHER, instanceId: I2, leaseToken: null, attemptId: null };
+    // Still held: the part is sent (by hand) and a preview send of it is unresolved. Both are true.
+    const held = custody({ ticketExpiresAt: later(-60_000) });
+    const whileHeld = snapshot({ greeting, openCustody: held, group: GROUP, groupParts: [held] });
+    expect(deriveClientClaimView(whileHeld, reader)).toMatchObject({
+      greeting: { state: "confirmed", messageRef: "905", source: "native-register" },
+      group: { ...GROUP, sentParts: [0], heldParts: [0] },
+      custody: { attemptId: A1, state: "uncertain-held" },
+    });
+    // The same proof again reads; the same message with other facts contradicts it.
+    expect(decideClaimTransition(whileHeld, register())).toEqual({ outcome: "applied", writes: [] });
+    for (const other of [register({ partIndex: 1 }), { ...register(), userId: OTHER },
+      register({ group: { ...GROUP, generationRef: "gen-9" } }), register({ purpose: "preview-reply" })]) {
+      expect(decideClaimTransition(whileHeld, other)).toEqual({ outcome: "rejected", code: "attempt_conflict", writes: [] });
+    }
+    // Resolved "not sent" (true of the preview send) or failed in time: the part is sent all the same.
+    for (const state of ["resolved_not_sent", "failed"] as const) {
+      const ended = snapshot({ greeting, group: GROUP, groupParts: [custody({ state })] });
+      expect(deriveClientClaimView(ended, reader).group, state).toEqual({ ...GROUP, sentParts: [0], heldParts: [] });
+      expect(decideClaimTransition(ended, dispatch({ partIndex: 0, leaseToken: null })), state)
+        .toMatchObject({ outcome: "rejected", code: "part_already_sent" });
+      expect(decideClaimTransition(ended, register({ platformMessageId: "906" })), state)
+        .toMatchObject({ outcome: "rejected", code: "part_already_sent" });
+      // The owner sends the rest of the group; nobody else greets.
+      expect(decideClaimTransition(ended, dispatch({ partIndex: 1, leaseToken: null })), state).toMatchObject({ outcome: "applied" });
+      expect(decideClaimTransition(ended, { ...dispatch({ partIndex: 1 }), userId: OTHER }), state)
+        .toMatchObject({ outcome: "rejected", code: "greeting_done" });
+    }
+    // A greeting the preview confirmed makes no such exception: its failed rows are just failed.
+    const byPreview = snapshot({
+      greeting: { ...greeting, source: "preview-send" as const, firstAttemptId: A2 }, group: GROUP,
+      groupParts: [custody({ state: "resolved_not_sent" })],
+    });
+    expect(deriveClientClaimView(byPreview, reader).group).toEqual({ ...GROUP, sentParts: [], heldParts: [] });
   });
 
   it("is idempotent per page and message, only for a record of the same part", () => {
@@ -372,6 +436,12 @@ describe("registerNativeSend and resolve", () => {
     expect(decideClaimTransition(snapshot({ attempt: resolved }), resolve("not_sent"))).toEqual({ outcome: "applied", writes: [] });
     expect(decideClaimTransition(snapshot({ attempt: resolved }), resolve("sent"))).toMatchObject({ code: "attempt_conflict" });
     expect(decideClaimTransition(snapshot(), resolve("sent"))).toMatchObject({ code: "not_found" });
+    // Inside the ticket the page may still send the part: "not sent" would free it for a second dispatch.
+    for (const ticketExpiresAt of [later(1), later(5_000)]) {
+      expect(decideClaimTransition(snapshot({ attempt: custody({ ticketExpiresAt }) }), resolve("not_sent")))
+        .toEqual({ outcome: "rejected", code: "ticket_live", writes: [] });
+    }
+    expect(decideClaimTransition(snapshot({ attempt: custody({ ticketExpiresAt: NOW }) }), resolve("not_sent")).outcome).toBe("applied");
   });
 
   it("refuses a not-sent resolve that carries a message id: it would take the real send's id slot", () => {
@@ -400,6 +470,16 @@ describe("the view", () => {
     });
     expect(view.group).toEqual({ ...GROUP, sentParts: [2], heldParts: [1] });
     expect(view.custody).toEqual({ attemptId: A1, state: "uncertain-held", ticket: null, ticketExpiresAt: NOW });
+  });
+
+  it("lists as held only a part nobody can vouch for: one inside its ticket is in flight", () => {
+    const inFlight = custody({ partIndex: 1, ticketExpiresAt: later(1) });
+    const view = deriveClientClaimView(snapshot({ group: GROUP, groupParts: [inFlight], openCustody: inFlight }), {
+      userId: ME, instanceId: I1, leaseToken: null, attemptId: null,
+    });
+    // The client stops a row on heldParts[0]; `custody` already says the part is on its way.
+    expect(view.group).toEqual({ ...GROUP, sentParts: [], heldParts: [] });
+    expect(view.custody).toMatchObject({ attemptId: A1, state: "dispatching" });
   });
 });
 
@@ -438,5 +518,21 @@ describe("migration 0241", () => {
     }
     const deploy = await readFile("scripts/deploy-production.sh", "utf8");
     expect(deploy.match(/ROLLBACK_COMPATIBLE_MIGRATIONS=\([\s\S]*?\n\)/)?.[0]).toContain('"0241_client_claim_tables.sql"');
+  });
+});
+
+describe("migration 0246", () => {
+  it("adds one plain index on the fan's sends and is listed as rollback-compatible", async () => {
+    const migration = await readFile("packages/db/migrations/0246_client_send_custody_fan_index.sql", "utf8");
+    const statements = migration.split("\n").filter((line) => !line.trim().startsWith("--")).join("\n");
+    expect(statements).not.toMatch(/\b(alter|drop|truncate|delete|update|insert)\b/i);
+    // Every state of a fan's sends: no predicate, unlike each index of 0241.
+    expect(statements.replace(/\s+/g, " ")).toContain(
+      "create index if not exists client_send_custody_fan on client_send_custody (page_id, fan_ref, created_at);",
+    );
+    expect(statements.match(/create (unique )?index/gi)).toHaveLength(1);
+    const deploy = await readFile("scripts/deploy-production.sh", "utf8");
+    expect(deploy.match(/ROLLBACK_COMPATIBLE_MIGRATIONS=\([\s\S]*?\n\)/)?.[0])
+      .toContain('"0246_client_send_custody_fan_index.sql"');
   });
 });

@@ -254,18 +254,22 @@ another is deliberately small:
   the fan, so their client learns of a manual resolve), never to anyone else;
 - the outcome of a send (`sent`, `failed`) is taken only from the person and
   the client install that dispatched it. `registerNativeSend` records the
-  caller's own proven send and frees nobody else's custody;
+  caller's own proven send and frees nobody's custody: over a held send of
+  the same part it records the greeting alone, and the send stays held;
 - only a confirmed greeting's owner may dispatch the rest of its group, and
   only the owner still gets a lease on a greeted fan.
 
 Which of the owner's switches an action waits for: `claim` and `renew` need
 `newcomers`; `dispatch` needs `previewSend` (and `newcomers` for a greeting),
 read from the owner's stored switches inside the dispatch's own transaction;
-`registerNativeSend` and the status read need only the master switch and the
-minimum version, on an OnlyFans page; `release`, `sent` and `failed` end what
-the hub already admitted and need only the page grant. A page that is not the caller's
-answers as on every chat-extension page route (403 / 404 with the policy
-enforced, `409 client_feature_disabled` / `not_granted` in `log` mode).
+the status read needs only the master switch and the minimum version, on an
+OnlyFans page; `release`, `sent` and `failed` end what the hub already
+admitted and need only the page grant; `registerNativeSend` reports a send
+that already happened and needs only the page grant on an OnlyFans page, so
+no switch, flag or minimum version ever loses the proof of a send. A page
+that is not the caller's answers as on every chat-extension page route (403 /
+404 with the policy enforced, `409 client_feature_disabled` / `not_granted`
+in `log` mode).
 
 The **manual resolve** of a held send is the one right here that is not the
 sender's: the owner, or a team lead of the page, ends an unresolved attempt
@@ -275,7 +279,8 @@ chat-extension token are refused; it is audited as
 `client.send_custody_resolved` (who, which page, which attempt, which
 outcome; no fan id) in the transaction that resolves; and no chat-extension
 switch gates it, so a held send stays resolvable while the extension is
-switched off. Both rows are held by `client-claim-routes.integration`: every
+switched off. "Not sent" waits for the attempt's ticket to run out (`409
+conflict` / `ticket_live` before that): inside it the page may still send. Both rows are held by `client-claim-routes.integration`: every
 cell, the agent key, a page that is not granted and one that does not exist,
 in both auth-policy modes.
 

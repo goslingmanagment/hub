@@ -173,6 +173,28 @@ const custodyRow = (row: CustodyDbRow): ClientCustodyRow => ({
   failureHttpStatus: row.failure_http_status === null ? null : Number(row.failure_http_status),
 });
 
+/**
+ * The reader's own last send to this fan dispatched from the preview, in whatever state it ended
+ * (the status read). The fan's sends are few, and client_send_custody_fan (0246) reads them newest
+ * first: the cost is the sends to one fan, not every send of the reader.
+ */
+function lastOwnDispatchQuery(input: { pageId: number; fanRef: string; userId: number }): SQL {
+  return sql`
+    select ${CUSTODY_COLUMNS} from client_send_custody
+    where page_id = ${input.pageId} and fan_ref = ${input.fanRef}
+      and user_id = ${input.userId} and origin = 'preview-send'
+    order by created_at desc limit 1`;
+}
+
+/** The plan of exactly that statement, for the test that holds it to the fan's index. */
+export async function explainClientLastOwnDispatchQuery(
+  db: Database,
+  input: { pageId: number; fanRef: string; userId: number },
+): Promise<string> {
+  const result = await db.execute<{ "QUERY PLAN": string }>(sql`explain (format text) ${lastOwnDispatchQuery(input)}`);
+  return result.rows.map((row) => row["QUERY PLAN"]).join("\n");
+}
+
 interface SnapshotRefs {
   leaseToken: string | null;
   attemptId: string | null;
@@ -198,9 +220,11 @@ async function loadSnapshot(db: Database, pageId: number, fanRef: string, refs: 
     }));
   const greetingRow = (await db.execute<{
     owner_user_id: bigint | null; generation_ref: string | null; variant: number | null; part_count: number | null;
-    confirmed_at: Date; first_message_ref: string | null; source: ClientGreetingRow["source"];
+    confirmed_at: Date; first_message_ref: string | null; first_attempt_id: string | null;
+    source: ClientGreetingRow["source"];
   }>(sql`
-    select owner_user_id, generation_ref, variant, part_count, confirmed_at, first_message_ref, source
+    select owner_user_id, generation_ref, variant, part_count, confirmed_at, first_message_ref,
+      first_attempt_id::text, source
     from client_greetings where page_id = ${pageId} and fan_ref = ${fanRef}`)).rows[0];
   const greeting: ClientGreetingRow | null = greetingRow ? {
     ownerUserId: greetingRow.owner_user_id === null ? null : Number(greetingRow.owner_user_id),
@@ -208,7 +232,7 @@ async function loadSnapshot(db: Database, pageId: number, fanRef: string, refs: 
     variant: greetingRow.variant === null ? null : Number(greetingRow.variant),
     partCount: greetingRow.part_count === null ? null : Number(greetingRow.part_count),
     confirmedAt: new Date(greetingRow.confirmed_at), firstMessageRef: greetingRow.first_message_ref,
-    source: greetingRow.source,
+    firstAttemptId: greetingRow.first_attempt_id, source: greetingRow.source,
   } : null;
   const desktop = (await readDesktopFollowerOutreach(db, pageId, [fanRef])).get(fanRef) ?? null;
   const custody = (await db.execute<CustodyDbRow>(sql`
@@ -221,20 +245,18 @@ async function loadSnapshot(db: Database, pageId: number, fanRef: string, refs: 
   const messageOwner = refs.platformMessageId === null ? null
     : custody.find((row) => row.pageId === pageId && row.platformMessageId === refs.platformMessageId) ?? null;
   const fanAttempt = attempt && attempt.pageId === pageId && attempt.fanRef === fanRef ? attempt : null;
-  // Walks the reader's own dispatches newest first (client_send_custody_rate: user, created_at,
-  // origin preview-send) and stops at the first to this fan, which is where a client that asks
-  // about a send of its own finds it. The per-user lock gives a user's dispatches distinct times.
   const lastOwnDispatch = refs.lastDispatchUserId === null || openCustody !== null ? null
-    : (await db.execute<CustodyDbRow>(sql`
-      select ${CUSTODY_COLUMNS} from client_send_custody
-      where user_id = ${refs.lastDispatchUserId} and origin = 'preview-send'
-        and page_id = ${pageId} and fan_ref = ${fanRef}
-      order by created_at desc limit 1`)).rows.map(custodyRow)[0] ?? null;
+    : (await db.execute<CustodyDbRow>(lastOwnDispatchQuery({ pageId, fanRef, userId: refs.lastDispatchUserId })))
+      .rows.map(custodyRow)[0] ?? null;
   const group = viewGroup({ requestGroup: refs.requestGroup, attempt: fanAttempt, greeting, openCustody, lastOwnDispatch });
+  // With them, in whatever state, the row of the greeting's first confirmed part: a native send
+  // that confirmed the greeting over a held preview send is recorded on that row's id alone.
   const groupParts = group === null ? [] : (await db.execute<CustodyDbRow>(sql`
     select ${CUSTODY_COLUMNS} from client_send_custody
     where page_id = ${pageId} and fan_ref = ${fanRef} and generation_ref = ${group.generationRef}
-      and variant = ${group.variant} and state in ('dispatching', 'sent', 'resolved_sent')`)).rows.map(custodyRow);
+      and variant = ${group.variant}
+      and (state in ('dispatching', 'sent', 'resolved_sent') or attempt_id = ${greeting?.firstAttemptId ?? null}::uuid)`))
+    .rows.map(custodyRow);
   const recentPreviewSends = refs.rateUserId === null ? 0 : Number((await db.execute<{ n: number }>(sql`
     select count(*)::int as n from client_send_custody
     where user_id = ${refs.rateUserId} and origin = 'preview-send'

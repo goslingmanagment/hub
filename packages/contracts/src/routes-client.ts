@@ -1037,7 +1037,10 @@ export const clientFanClaimResponseSchema = z.object({
     variant: count,
     partCount: positive,
     sentParts: z.array(count),
-    /** Parts whose send is not resolved (`dispatching` or `uncertain-held`). */
+    /**
+     * Parts whose send nobody can vouch for (`uncertain-held`). A part still
+     * inside its ticket is in flight, not held: `custody` says so.
+     */
     heldParts: z.array(count),
   }).nullable(),
   custody: z.object({
@@ -1280,8 +1283,10 @@ export const clientRouteSchemas = {
       + "the rate (6 per 60 s per person, 429 `preview_send_rate_limited` with `retryAfterMs`); no unresolved "
       + "send to the fan (409 `custody_held`); for a greeting, no desktop new-follower command that greeted the "
       + "fan (409 `greeting_done`) or may have (409 `custody_held`), then either the confirmed greeting's owner "
-      + "and group (409 `greeting_done`, `generation_mismatch`) or the caller's live lease (409 `claim_busy`, "
-      + "`claim_expired`); the part not sent yet (409 `part_already_sent`). It answers a one-time `ticket` once. "
+      + "and group (409 `greeting_done`, `generation_mismatch`) or the caller's live lease (409 `claim_busy` "
+      + "while another person or install holds the fan, `claim_expired` when there is no live lease or this "
+      + "install holds the fan under another token than the one named); the part not sent yet (409 "
+      + "`part_already_sent`). It answers a one-time `ticket` once. "
       + "The switches of a dispatch are the owner's stored `chatExtensionEnabled` and `chatExtensionFeatures`, "
       + "read under a row lock inside that transaction, so a change of them waits for the dispatch and holds "
       + "from the next one; a value that only the environment sets admits no dispatch. Custody never expires: "
@@ -1290,11 +1295,16 @@ export const clientRouteSchemas = {
       + "`custody_not_owned`); `failed` only with proof the native queue never took the part, and only while "
       + "the ticket lasts (409 `custody_held` after it: `uncertain-held` never becomes `failed`). "
       + "`registerNativeSend` records a proven send from the composer, once per page and message, and frees "
-      + "nobody's custody. Switches by action: `claim` and `renew` need `newcomers`; `dispatch` needs "
-      + "`previewSend`, and `newcomers` too for a greeting; `registerNativeSend` needs only the master switch "
-      + "and the minimum version, on an OnlyFans page; `release`, `sent` and `failed` end what the hub already "
-      + "admitted and need only the page grant. A refusal by the switches is 409 `client_feature_disabled` "
-      + "with the reason.",
+      + "nobody's custody: a part whose send from the preview is unresolved stays held (409 `custody_held`). "
+      + "A greeting is the exception in what it records, not in what it frees: the proof confirms the fan's "
+      + "greeting (200, `greeting.source` `native-register`) while that part's send stays held, so the fan "
+      + "never reads as not greeted after it. In the group `heldParts` lists only the parts nobody can vouch "
+      + "for (`uncertain-held`); a part inside its ticket is in flight. Switches by action: `claim` and "
+      + "`renew` need `newcomers`; `dispatch` needs `previewSend`, and `newcomers` too for a greeting; "
+      + "`release`, `sent` and `failed` end what the hub already admitted and need only the page grant; "
+      + "`registerNativeSend` reports a send that already happened and needs only the page grant on an "
+      + "OnlyFans page: no switch, flag or minimum version refuses it, and it admits no dispatch. A refusal "
+      + "by the switches is 409 `client_feature_disabled` with the reason.",
     params: clientPageFanParamsSchema,
     body: clientFanClaimBodySchema,
     response: {
@@ -1340,10 +1350,12 @@ export const clientRouteSchemas = {
       + "token reaches it and it is on no narrow-token list. Ends the custody of one attempt that is still "
       + "`dispatching` or `uncertain-held`, after the resolver looked at the chat: `sent` (optionally with the "
       + "OnlyFans message id; the first part of a greeting then confirms the greeting) or `not_sent` (the part "
-      + "may be sent again). Audited as `client.send_custody_resolved` in the same transaction. Idempotent: "
-      + "the same resolve again answers the same and writes nothing. 404 for an attempt that is not of this "
-      + "page; 409 `conflict` with the reason `custody_not_held` for one already reported sent or failed; 409 "
-      + "`attempt_conflict` for one resolved otherwise, or a message id another send already carries.",
+      + "may be sent again). `not_sent` waits for the attempt's ticket to run out: inside it the page may still "
+      + "send the part (409 `conflict` with the reason `ticket_live`). Audited as "
+      + "`client.send_custody_resolved` in the same transaction. Idempotent: the same resolve again answers "
+      + "the same and writes nothing. 404 for an attempt that is not of this page; 409 `conflict` with the "
+      + "reason `custody_not_held` for one already reported sent or failed; 409 `attempt_conflict` for one "
+      + "resolved otherwise, or a message id another send already carries.",
     params: clientSendCustodyParamsSchema,
     body: clientSendCustodyResolveBodySchema,
     response: {

@@ -46,6 +46,12 @@ export interface ClientGreetingRow {
   partCount: number | null;
   confirmedAt: Date;
   firstMessageRef: string | null;
+  /**
+   * The custody row of the first confirmed part (`first_attempt_id`). The rules read it to know
+   * the part a native send confirmed over a held preview send; a reader that only shows the
+   * greeting may leave it out.
+   */
+  firstAttemptId?: string | null;
   source: "preview-send" | "native-register" | "resolve";
 }
 
@@ -99,7 +105,10 @@ export interface ClientFanClaimSnapshot {
   attempt: ClientCustodyRow | null;
   /** The row that already carries the request's platform message id on this page. */
   messageOwner: ClientCustodyRow | null;
-  /** The group the view reports, and its dispatching / sent / resolved-sent parts. */
+  /**
+   * The group the view reports, and its dispatching / sent / resolved-sent parts, plus, in whatever
+   * state, the row of the greeting's first confirmed part when it is of this group.
+   */
   group: ClientClaimGroup | null;
   groupParts: ClientCustodyRow[];
   /** The user's preview sends inside the rate window (dispatch only). */
@@ -138,7 +147,10 @@ export type ClientClaimRequest = ActorFields & (
   | { action: "resolve"; attemptId: string; outcome: "sent" | "not_sent"; platformMessageId: string | null; note: string }
 );
 
-/** Refusals. `invalid_request` is a 400; `not_found` a 404; the rest are 409/429 (plan §4.11). */
+/**
+ * Refusals. `invalid_request` is a 400; `not_found` a 404; the rest are 409/429 (plan §4.11).
+ * `custody_not_held` and `ticket_live` are the manual resolve's alone.
+ */
 export type ClientClaimRejectionCode =
   | "invalid_request"
   | "not_found"
@@ -147,6 +159,7 @@ export type ClientClaimRejectionCode =
   | "custody_held"
   | "custody_not_owned"
   | "custody_not_held"
+  | "ticket_live"
   | "greeting_done"
   | "generation_mismatch"
   | "part_already_sent"
@@ -200,6 +213,20 @@ const recordsSend = (
   send: { pageId: number; fanRef: string; purpose: ClientClaimPurpose; group: ClientClaimGroup; partIndex: number },
 ) => isPartOf(row, send) && (row.state === "sent" || row.state === "resolved_sent") && row.purpose === send.purpose
   && sameGroup(row, send.group) && row.partIndex === send.partIndex;
+
+/**
+ * The part a proven native send confirmed the fan's greeting with while a send of that very part
+ * from the preview was still held. The held send keeps the part's one custody row, so the proof is
+ * recorded on the greeting alone (its first attempt is that row, its source native-register), and
+ * the part counts as sent whatever becomes of the row.
+ */
+const greetedNativelyOver = (snapshot: Pick<ClientFanClaimSnapshot, "greeting">, row: ClientCustodyRow) =>
+  snapshot.greeting?.source === "native-register" && snapshot.greeting.firstAttemptId === row.attemptId
+  && row.origin === "preview-send";
+
+/** The part is sent: its row says so, or a native send of it confirmed the greeting over a held one. */
+const partSent = (snapshot: Pick<ClientFanClaimSnapshot, "greeting">, row: ClientCustodyRow) =>
+  row.state === "sent" || row.state === "resolved_sent" || greetedNativelyOver(snapshot, row);
 
 /** failed releases custody: only proof the native queue never took the part. */
 export function isAcceptedFailureEvidence(reason: ClientSendFailureReason, httpStatus: number | null): boolean {
@@ -299,15 +326,16 @@ export function decideClaimTransition(snapshot: ClientFanClaimSnapshot, request:
         } else {
           // Before confirmation only the live lease of this user, instance and token.
           if (!isLive(activeLease, now)) return reject("claim_expired");
-          if (activeLease.leaseId !== request.leaseToken || !ownsLease(activeLease, request.instanceId)) {
-            return reject("claim_busy");
-          }
+          // The fan is held by this very install under another token: the lease the request names
+          // (or fails to name) is gone, which is not "someone else is working on the fan".
+          if (!ownsLease(activeLease, request.instanceId)) return reject("claim_busy");
+          if (activeLease.leaseId !== request.leaseToken) return reject("claim_expired");
           leaseId = activeLease.leaseId;
         }
       }
       // 7. Each part once.
       if (snapshot.groupParts.some((row) => sameGroup(row, request.group) && row.partIndex === request.partIndex
-        && (row.state === "sent" || row.state === "resolved_sent"))) return reject("part_already_sent");
+        && partSent(snapshot, row))) return reject("part_already_sent");
       return apply({
         op: "insertDispatch", attemptId: request.attemptId, instanceId: request.instanceId, purpose: request.purpose,
         group: request.group, partIndex: request.partIndex, textRevision: request.textRevision,
@@ -353,10 +381,31 @@ export function decideClaimTransition(snapshot: ClientFanClaimSnapshot, request:
       // and answering ok would drop the send (and with it the greeting) unrecorded.
       if (snapshot.messageOwner) return recordsSend(snapshot.messageOwner, request) ? apply() : reject("attempt_conflict");
       if (snapshot.attempt) return snapshot.attempt.requestHash === request.requestHash ? apply() : reject("attempt_conflict");
-      const part = snapshot.groupParts.find((row) => sameGroup(row, request.group) && row.partIndex === request.partIndex);
-      // Never touches another attempt's custody: a held part stays held.
-      if (part?.state === "dispatching") return reject("custody_held");
-      if (part) return reject("part_already_sent");
+      // The message that confirmed the greeting over a held send (below) is on no custody row: a
+      // repeat of that proof reads, the same message with other facts contradicts it.
+      const greeting = snapshot.greeting;
+      if (greeting?.source === "native-register" && greeting.firstMessageRef === request.platformMessageId) {
+        const first = snapshot.groupParts.find((row) => row.attemptId === greeting.firstAttemptId);
+        return request.purpose === "greeting" && greeting.ownerUserId === request.userId && first !== undefined
+          && sameGroup(first, request.group) && first.partIndex === request.partIndex ? apply() : reject("attempt_conflict");
+      }
+      const parts = snapshot.groupParts.filter((row) => sameGroup(row, request.group) && row.partIndex === request.partIndex);
+      const held = parts.find((row) => row.state === "dispatching");
+      if (held) {
+        // Never touches another attempt's custody: a held part stays held, and its one row stays
+        // the preview send's, which only its own report or the manual resolve ends. But the proof
+        // that the fan IS greeted is not dropped with the refusal. Dropped, the fan would read as
+        // not greeted, and after a truthful "not sent" resolve of the preview send a colleague
+        // would greet again. So a greeting is confirmed here, on the greeting alone.
+        if (request.purpose === "greeting" && !confirmedGreeting(snapshot)) {
+          return apply({
+            op: "confirmGreeting", source: "native-register", ownerUserId: request.userId, group: request.group,
+            messageRef: request.platformMessageId, attemptId: held.attemptId,
+          });
+        }
+        return reject("custody_held");
+      }
+      if (parts.some((row) => partSent(snapshot, row))) return reject("part_already_sent");
       const row: ClientCustodyRow = {
         attemptId: request.attemptId, pageId: request.pageId, fanRef: request.fanRef, userId: request.userId,
         instanceId: request.instanceId, purpose: request.purpose, origin: "native-register",
@@ -386,6 +435,9 @@ export function decideClaimTransition(snapshot: ClientFanClaimSnapshot, request:
         return same ? apply() : reject("attempt_conflict");
       }
       if (attempt.state !== "dispatching") return reject("custody_not_held");
+      // Inside its ticket the page may still put the part into the native queue. "Not sent" would
+      // free the part for a second dispatch while the first can yet go out.
+      if (request.outcome === "not_sent" && custodyViewState(attempt, now) === "dispatching") return reject("ticket_live");
       if (request.platformMessageId !== null && snapshot.messageOwner) return reject("attempt_conflict");
       const resolveWrite: ClientClaimWrite = {
         op: "resolve", attemptId: attempt.attemptId, outcome: request.outcome, platformMessageId: request.platformMessageId,
@@ -466,8 +518,10 @@ export function deriveClientClaimView(snapshot: ClientFanClaimSnapshot, viewer: 
   const shown = attempt ?? snapshot.openCustody ?? lastOwn;
   const group = snapshot.group && {
     ...snapshot.group,
-    sentParts: partIndexes(snapshot, (row) => row.state === "sent" || row.state === "resolved_sent"),
-    heldParts: partIndexes(snapshot, (row) => row.state === "dispatching"),
+    sentParts: partIndexes(snapshot, (row) => partSent(snapshot, row)),
+    // Held is what stops the row for a person: a send nobody can vouch for. A part still inside
+    // its ticket is only in flight, and `custody` says so.
+    heldParts: partIndexes(snapshot, (row) => row.state === "dispatching" && custodyViewState(row, now) === "uncertain-held"),
   };
   return {
     greeting: greeting

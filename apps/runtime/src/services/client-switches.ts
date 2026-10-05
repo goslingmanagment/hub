@@ -238,21 +238,31 @@ export interface ClientFeatureRequest {
 
 /**
  * The first step of every client page route, and the whole check of the claim
- * actions that only end what the hub already admitted (H-7b `release`, `sent`,
- * `failed`): the page is an active page granted to the caller, else 409
- * `client_feature_disabled` / `not_granted` (a missing page answers the same,
- * so the refusal reveals nothing). No switch is read: turning one off must not
- * strand a lease or a send in flight. Returns the page as the bootstrap lists it.
+ * actions that no switch may refuse (H-7b): `release`, `sent` and `failed`,
+ * which only end what the hub already admitted, and `registerNativeSend`,
+ * which reports a send that has already happened. The page is an active page
+ * granted to the caller, else 409 `client_feature_disabled` / `not_granted` (a
+ * missing page answers the same, so the refusal reveals nothing). No switch
+ * and no version is read: turning one off must not strand a lease, a send in
+ * flight or the proof of a send. Returns the page as the bootstrap lists it.
+ *
+ * `existsWith` names the flagged feature the action belongs to, when it exists
+ * only where that feature does: `platform_unsupported` on any other platform.
+ * That is no switch: nothing of the feature can have happened there.
  */
 export async function requireClientGrantedPage(
   app: AppContext,
   principal: HumanAuthPrincipal,
   page: { id: number } | null | undefined,
   feature: string,
+  existsWith?: ClientFeatureFlagName,
 ): Promise<ClientBootstrapPageRow> {
   const [row] = page && canAccessPage(principal, page.id) ? await listClientBootstrapPages(app.db, [page.id]) : [];
   if (row === undefined) {
     throw new ClientFeatureDisabledError(feature, "not_granted");
+  }
+  if (existsWith !== undefined && !clientFeatureExistsOn(existsWith, row.platform)) {
+    throw new ClientFeatureDisabledError(feature, "platform_unsupported");
   }
   return row;
 }
@@ -339,7 +349,7 @@ export async function requireClientFeature(
 
 /**
  * The same check for a client route that has no flag of its own (the
- * own-AI-spend read, H-15; the claim status and registerNativeSend, H-7b):
+ * own-AI-spend read, H-15; the claim status, H-7b):
  * `not_granted`, then `disabled` while the owner's master switch is off, then
  * `client_outdated`. No flag, host binding or served capability is asked for.
  *

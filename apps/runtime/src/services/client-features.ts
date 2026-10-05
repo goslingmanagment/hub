@@ -123,8 +123,8 @@ function bindable(settings: ClientFeatureSettings, page: ClientFeaturePage): boo
 
 /**
  * Whether a flagged feature exists on a platform at all: the first thing the
- * evaluation asks. Also for a client route that has no flag of its own but
- * exists only where a feature does (H-7b: the claim status and
+ * evaluation asks. Also for a client route or action that has no flag of its
+ * own but exists only where a feature does (H-7b: the claim status and
  * registerNativeSend exist where sending from the preview does).
  */
 export function clientFeatureExistsOn(flag: ClientFeatureFlagName, platform: Platform): boolean {
