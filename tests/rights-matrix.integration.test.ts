@@ -662,6 +662,9 @@ describe("§7 — roles", () => {
       "/api/v1/pages",
       "/api/v1/pages/lora-fansly/subscribers",
       "/api/v1/ofapi/read/accounts",
+      // The cabinet's list of held chat-extension sends (H-7e): the owner's
+      // and a team lead's cookie, never the extension's own token.
+      "/api/v1/client-send-custody",
     ]) {
       const response = await get(setup.server, url, bearer);
       expect(response.statusCode, url).toBe(403);
