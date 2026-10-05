@@ -1,7 +1,7 @@
 import { and, eq, ne } from "drizzle-orm";
 
 import { pages, updatePageMetadata, type Database } from "@agency_hub_core/db";
-import { parseFanslyAccountMe, type FanslyAccountMe } from "@agency_hub_core/fansly";
+import type { FanslyAccountMe } from "@agency_hub_core/fansly";
 import { millsFromInteger } from "@agency_hub_core/shared";
 
 import { buildFanslyMetadata } from "../../../services/fansly.ts";
@@ -9,9 +9,6 @@ import { identityCandidateOf } from "../../engine/errors.ts";
 import type {
   ApplyInput,
   ApplyResult,
-  ReplayContext,
-  ReplayObservation,
-  ReplayVerdict,
   RequestPlan,
   ResourceModule,
   StepPlan,
@@ -144,22 +141,6 @@ export function accountModule(variant: AccountVariant): ResourceModule {
         followups: [],
         pageIdentity: { accountId: facts.accountId },
       };
-    },
-
-    async shadow() {
-      return { work: { satisfiesRevision: true, close: "done", closeReason: "shadow" }, followups: [] };
-    },
-
-    async replay(observation: ReplayObservation, ctx: ReplayContext): Promise<ReplayVerdict> {
-      const parsed = parseFanslyAccountMe(observation.payload);
-      if (!parsed.ok) {
-        return { kind: "mismatch", reason: "contract_refused", detail: { ...parsed.violation } };
-      }
-      const facts = await readFanslyPageFacts(ctx.db, ctx.pageId);
-      if (facts === null || facts.externalId === null) return { kind: "not_replayable", reason: "page_without_identity" };
-      return parsed.value.account.id === facts.externalId
-        ? { kind: "match" }
-        : { kind: "mismatch", reason: "account_differs", detail: { served: parsed.value.account.id, page: facts.externalId } };
     },
   };
 }

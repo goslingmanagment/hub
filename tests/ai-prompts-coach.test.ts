@@ -300,6 +300,41 @@ Answer the chatter now in the language they asked in. Use a draft fence for any 
     expect(built.coachRecapSlots).toEqual({ full: false, short: true });
   });
 
+  it("reports how much of the transcript the budget left out, in the string's own units", () => {
+    // Whole transcript: nothing left out. Other features have no reducer and no report.
+    expect(buildPrompt(baseInput).coachTranscriptOmittedChars).toBe(0);
+    expect(buildPrompt({ ...baseInput, feature: "help-me" })).not.toHaveProperty("coachTranscriptOmittedChars");
+
+    // Astral characters: the reducer counts code points, the report is UTF-16
+    // units, so `slice` on the caller's string lands exactly on the cut.
+    const transcript = Array.from({ length: 4_000 }, (_, index) => `[10:00] Fan: line ${index} 🎉 ${"x".repeat(90)}`)
+      .join("\n");
+    const variants: Array<Partial<PromptBuildInput>> = [
+      {},
+      // The shed-draft path: the cascade runs twice and reuses the first search.
+      {
+        draftText: "d".repeat(20_000),
+        coachHistory: [{ question: "earlier question", answer: "a".repeat(5_000) }],
+        recapAttach: { full: { body: "FULL RECAP", ageMs: 86_400_000 }, short: null },
+      },
+      // A small draft rides the transcript search and costs its own size.
+      { draftText: "short draft" },
+    ];
+    const cuts = variants.map((variant) => {
+      const built = buildPrompt({ ...baseInput, transcript, ...variant });
+      const omitted = built.coachTranscriptOmittedChars!;
+      expect(built.system.length + built.user.length).toBeLessThanOrEqual(COACH_PROMPT_MAX_CHARS);
+      expect(omitted).toBeGreaterThan(0);
+      expect(omitted).toBeLessThan(transcript.length);
+      // The prompt holds exactly the rest, behind the marker, and not one unit more.
+      expect(built.user).toContain(`[older transcript omitted]\n${transcript.slice(omitted)}`);
+      expect(built.user).not.toContain(transcript.slice(omitted - 1));
+      return omitted;
+    });
+    // The small draft took its room from the oldest transcript lines.
+    expect(cuts[2]).toBeGreaterThan(cuts[0]!);
+  });
+
   it("deduplicates a byte-identical recap already carried as the dossier", () => {
     const built = buildPrompt({
       ...baseInput,

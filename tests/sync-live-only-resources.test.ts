@@ -76,7 +76,7 @@ describe("ws.connect", () => {
       expect(wsConnectPlan(state, NOW, new Date(NOW.getTime() - 1)), state).toMatchObject({ kind: "request" });
     }
     // Through the module, from the owner the plan context names.
-    const ctx = { shadow: false, now: NOW, socket: { state: "down", connectNotBefore: later } } as unknown as PlanContext;
+    const ctx = { now: NOW, socket: { state: "down", connectNotBefore: later } } as unknown as PlanContext;
     return expect(wsConnectModule.plan({} as SyncWorkRow, ctx)).resolves.toEqual({ kind: "wait", reason: "not_due", until: later });
   });
 

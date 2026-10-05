@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { getNotificationIncidentByKey, listSyncPages, type Database } from "@agency_hub_core/db";
+import { createLogger } from "@agency_hub_core/shared";
 
 import { runGoldenSignalSample, SYNC_ENGINE_METRICS_PROBE } from "../apps/runtime/src/services/golden-signals.ts";
 import {
@@ -11,6 +12,7 @@ import {
   syncEngineRouteSubKey,
 } from "../apps/runtime/src/services/notification-incidents.ts";
 import { runOpsWatchdogCheck } from "../apps/runtime/src/services/ops-watchdog.ts";
+import { buildSyncAlertsCommandGroup } from "../apps/runtime/src/sync/cli/alerts.ts";
 import {
   acknowledgeSyncPaceViolations,
   createIncidentAlertSink,
@@ -96,9 +98,11 @@ async function ageLatch(subKey: Parameters<typeof syncEngineIncidentKey>[0]["sub
   );
 }
 
+/** A sent attempt of the page's journal; `shadow` makes it a row shadow mode
+ *  left behind, which nothing reads. */
 async function attempt(input: {
   pageId: number;
-  shadow: boolean;
+  shadow?: boolean;
   sentSecondsAgo: number;
   resource?: string;
   workClass?: string;
@@ -113,9 +117,9 @@ async function attempt(input: {
              clock_timestamp() - make_interval(secs => $6::double precision),
              $7, 'notifications.page', '{}'::jsonb, $8, $9)`,
     [
-      input.pageId, input.shadow, input.resource ?? "notifications.forward", input.workClass ?? "planned",
-      input.settingMs ?? 2_000, input.sentSecondsAgo, input.shadow ? "shadow" : "request_start",
-      input.shadow ? "shadow" : "response", input.errorClass ?? null,
+      input.pageId, input.shadow === true, input.resource ?? "notifications.forward", input.workClass ?? "planned",
+      input.settingMs ?? 2_000, input.sentSecondsAgo, input.shadow === true ? "shadow" : "request_start",
+      input.shadow === true ? "shadow" : "response", input.errorClass ?? null,
     ],
   );
 }
@@ -149,13 +153,13 @@ describe("the alert evaluator (design §9.6)", () => {
     await holdRoute(page.pageId, "messaging.groups", 60);
     await holdRoute(shadow.pageId, "messaging.groups", 60);
     // A 429 attempt in the journal is no page stop either.
-    await attempt({ pageId: page.pageId, shadow: false, sentSecondsAgo: 1, errorClass: "rate_limit" });
+    await attempt({ pageId: page.pageId, sentSecondsAgo: 1, errorClass: "rate_limit" });
     const first = await pass();
     expect(first.opened).toEqual([{ pageId: page.pageId, subKey: "route_limited:messaging.groups", detail: "route_held" }]);
     const listKey = syncEngineRouteSubKey("messaging.groups");
     expect(await incident(listKey, page.pageId)).toMatchObject({ status: "open", errorCode: "route_held" });
     expect(await incident("page_stopped", page.pageId)).toBeNull();
-    // A shadow page's route pages nobody.
+    // A page left in shadow runs no actor: its route pages nobody.
     expect(await incident(listKey, shadow.pageId)).toBeNull();
 
     // A second 429 on the same route refreshes the one latch; another route has its own.
@@ -188,7 +192,7 @@ describe("the alert evaluator (design §9.6)", () => {
   it("alert 1 opened from the journal alone (the capture path's open lost) resolves 10 min after the refusal", async (context) => {
     if (!testDb) return context.skip();
     const page = await enginePage("live");
-    await attempt({ pageId: page.pageId, shadow: false, sentSecondsAgo: 9 * 60, errorClass: "auth" });
+    await attempt({ pageId: page.pageId, sentSecondsAgo: 9 * 60, errorClass: "auth" });
     expect((await pass()).opened).toEqual([{ pageId: page.pageId, subKey: "page_stopped", detail: "auth" }]);
     // The latch holds as of the answer, not of the pass.
     const latch = await incident("page_stopped", page.pageId);
@@ -248,22 +252,25 @@ describe("the alert evaluator (design §9.6)", () => {
     expect((await pass()).resolved).toEqual([{ pageId: page.pageId, subKey: "stuck" }]);
   });
 
-  it("pages nothing for a shadow page, and resolves the latches of a page set back to shadow or off", async (context) => {
+  it("has no alert for a page left in shadow, and resolves the latches of a page that is off", async (context) => {
     if (!testDb) return context.skip();
     const shadow = await enginePage("shadow");
     await seedPageHold(testDb, { pageId: shadow.pageId, kind: "auth", untilSeconds: "infinity" });
-    expect((await pass()).opened).toEqual([]);
+    await attempt({ pageId: shadow.pageId, shadow: true, sentSecondsAgo: 30 });
+    await attempt({ pageId: shadow.pageId, shadow: true, sentSecondsAgo: 29.5 });
+    expect(await pass()).toMatchObject({ opened: [], paceViolations: 0 });
     expect(await incident("page_stopped", shadow.pageId)).toBeNull();
-    // Its conditions are visible to the owner as metrics and in `sync alerts status`.
+    // No actor runs it: `sync alerts status` lists the page with nothing to hold.
     const status = await readSyncAlertStatus(db(), { registry, pages: await listSyncPages(db()) });
-    expect(status.pages.find((row) => row.mode === "shadow")).toMatchObject({
-      pages: false,
-      conditions: [expect.objectContaining({ subKey: "page_stopped", detail: "auth" })],
-    });
+    expect(status.pages.find((row) => row.mode === "shadow")).toMatchObject({ pages: false, conditions: [], routes: [] });
 
     await setModeDirect(testDb.pool, shadow.pageId, "live");
     await testDb.pool.query("update sync_pages set owner_heartbeat_at = clock_timestamp() where page_id = $1", [shadow.pageId]);
-    expect((await pass()).opened).toEqual([{ pageId: shadow.pageId, subKey: "page_stopped", detail: "auth" }]);
+    // The rows shadow mode left are no sends of the live page either.
+    expect(await pass()).toMatchObject({
+      opened: [{ pageId: shadow.pageId, subKey: "page_stopped", detail: "auth" }],
+      paceViolations: 0,
+    });
     await setModeDirect(testDb.pool, shadow.pageId, "off");
     expect((await pass()).resolved).toEqual([{ pageId: shadow.pageId, subKey: "page_stopped" }]);
   });
@@ -313,8 +320,8 @@ describe("the alert evaluator (design §9.6)", () => {
   it("the pace backstop opens the pace latch from the journal; only the owner's ack closes it, and an older violation never reopens it", async (context) => {
     if (!testDb) return context.skip();
     const page = await enginePage("live", "lilly-1");
-    await attempt({ pageId: page.pageId, shadow: false, sentSecondsAgo: 120 });
-    await attempt({ pageId: page.pageId, shadow: false, sentSecondsAgo: 119.5 });
+    await attempt({ pageId: page.pageId, sentSecondsAgo: 120 });
+    await attempt({ pageId: page.pageId, sentSecondsAgo: 119.5 });
     const first = await pass();
     expect(first.paceViolations).toBe(1);
     const latch = await incident(SYNC_ENGINE_PACE_VIOLATION_SUBKEY, page.pageId);
@@ -340,30 +347,76 @@ describe("the alert evaluator (design §9.6)", () => {
     expect(await incident(SYNC_ENGINE_PACE_VIOLATION_SUBKEY, page.pageId)).toMatchObject({ status: "resolved" });
 
     // A new violation (sent after the acknowledgement) reopens it.
-    await attempt({ pageId: page.pageId, shadow: false, sentSecondsAgo: -2 });
-    await attempt({ pageId: page.pageId, shadow: false, sentSecondsAgo: -2.5 });
+    await attempt({ pageId: page.pageId, sentSecondsAgo: -2 });
+    await attempt({ pageId: page.pageId, sentSecondsAgo: -2.5 });
     await pass();
     expect(await incident(SYNC_ENGINE_PACE_VIOLATION_SUBKEY, page.pageId)).toMatchObject({ status: "open" });
   });
 
-  it("the incident sink: a shadow alert pages nothing, a live pace violation opens the pace latch at once, resolve is the evaluator's", async (context) => {
+  it("the incident sink: a pace violation opens the pace latch at once, resolve is the evaluator's", async (context) => {
     if (!testDb) return context.skip();
     const page = await enginePage("live");
     const sink = createIncidentAlertSink({ db: db(), logger });
-    await sink.open({ subKey: "page_stopped", pageId: page.pageId, detail: "rate_limit", shadow: true });
-    expect(await query("select 1 from notification_incidents")).toEqual([]);
-    await sink.open({ subKey: "page_stopped", pageId: page.pageId, detail: "pace_violation", shadow: false, context: { attemptId: 1 } });
+    await sink.open({ subKey: "page_stopped", pageId: page.pageId, detail: "pace_violation", context: { attemptId: 1 } });
     expect(await incident(SYNC_ENGINE_PACE_VIOLATION_SUBKEY, page.pageId)).toMatchObject({ status: "open" });
-    await sink.open({ subKey: "page_stopped", pageId: page.pageId, detail: "rate_limit", shadow: false });
+    await sink.open({ subKey: "page_stopped", pageId: page.pageId, detail: "rate_limit" });
     expect(await incident("page_stopped", page.pageId)).toMatchObject({ status: "open", errorCode: "rate_limit" });
     await sink.resolve({ subKey: "page_stopped", pageId: page.pageId });
     expect(await incident("page_stopped", page.pageId)).toMatchObject({ status: "open" });
     // A route's 429 opens the page+route latch; the next one refreshes it.
-    await sink.open({ subKey: "route_limited", pageId: page.pageId, route: "media.offer_stats", detail: "rate_limit", shadow: false });
-    await sink.open({ subKey: "route_limited", pageId: page.pageId, route: "media.offer_stats", detail: "rate_limit", shadow: false });
+    await sink.open({ subKey: "route_limited", pageId: page.pageId, route: "media.offer_stats", detail: "rate_limit" });
+    await sink.open({ subKey: "route_limited", pageId: page.pageId, route: "media.offer_stats", detail: "rate_limit" });
     expect(await query("select 1 from notification_incidents where incident_key = $1",
       [syncEngineIncidentKey({ subKey: syncEngineRouteSubKey("media.offer_stats"), pageId: page.pageId })])).toHaveLength(1);
     expect(await incident(syncEngineRouteSubKey("media.offer_stats"), page.pageId)).toMatchObject({ status: "open", errorCode: "rate_limit" });
+  });
+});
+
+describe("the owner's CLI: `sync alerts status | ack` (`cli/alerts.ts`)", () => {
+  /** One `pnpm cli sync …` call on the test database; what it printed. */
+  async function sync(argv: string[]): Promise<string[]> {
+    const printed: string[] = [];
+    const command = buildSyncAlertsCommandGroup({
+      openContext: async () => ({ db: db(), logger: createLogger("silent"), close: async () => undefined }),
+      print: (line) => void printed.push(line),
+    });
+    await command.parseAsync(argv, { from: "user" });
+    return printed;
+  }
+
+  it("status prints what holds per page as JSON; ack closes the page's pace latch and records it; the page is required", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await enginePage("live", "lilly-1");
+    await enginePage("shadow", "lilly-2", "100000000000000002");
+    await attempt({ pageId: page.pageId, sentSecondsAgo: 120 });
+    await attempt({ pageId: page.pageId, sentSecondsAgo: 119.5 });
+    expect((await pass()).paceViolations).toBe(1);
+    const paceKey = syncEngineIncidentKey({ subKey: SYNC_ENGINE_PACE_VIOLATION_SUBKEY, pageId: page.pageId });
+
+    const status = JSON.parse((await sync(["alerts", "status"]))[0]!) as {
+      pages: Array<{ page: string; mode: string; pages: boolean; openLatches: Array<{ key: string }> }>;
+    };
+    expect(status.pages.map((row) => [row.page, row.mode, row.pages, row.openLatches.map((latch) => latch.key)])).toEqual([
+      ["lilly-1", "live", true, [paceKey]],
+      ["lilly-2", "shadow", false, []],
+    ]);
+    const one = JSON.parse((await sync(["alerts", "status", "--page", "lilly-2"]))[0]!) as { pages: Array<{ page: string }> };
+    expect(one.pages.map((row) => row.page)).toEqual(["lilly-2"]);
+
+    await expect(sync(["alerts", "ack"])).rejects.toThrow("required option '--page <label>' not specified");
+    expect(await incident(SYNC_ENGINE_PACE_VIOLATION_SUBKEY, page.pageId)).toMatchObject({ status: "open" });
+    expect((await sync(["alerts", "ack", "--page", "lilly-1", "--note", "looked"]))[0]).toMatch(/^lilly-1: pace latch resolved at /);
+    expect(await incident(SYNC_ENGINE_PACE_VIOLATION_SUBKEY, page.pageId)).toMatchObject({ status: "resolved" });
+    expect(await query<{ eventType: string; note: string; actor: string }>(
+      `select event_type as "eventType", metadata ->> 'note' as note, metadata ->> 'actor' as actor
+         from audit_events where platform_account_id = $1`,
+      [page.pageId],
+    )).toEqual([{ eventType: "admin.sync_alerts_ack", note: "looked", actor: expect.stringMatching(/^cli@.+ pid \d+$/) }]);
+    expect((await sync(["alerts", "ack", "--page", "lilly-1"]))[0]).toMatch(/^lilly-1: pace latch was not open at /);
+  });
+
+  it("is all that is left of the observability CLI: the shadow report is no command (step 4, S4-22)", async () => {
+    await expect(sync(["shadow", "report", "--part", "b"])).rejects.toThrow(/unknown command/);
   });
 });
 
@@ -377,7 +430,12 @@ describe("alert 5: the api watchdog (design §9.6)", () => {
     expect(await runOpsWatchdogCheck(app(), { startedAtMs: pastGrace() })).toMatchObject({ syncEngineSilent: false });
     expect(await incident("process", null)).toBeNull();
 
+    // A page left in shadow is not in the engine: no actor runs it.
     await setModeDirect(testDb.pool, page.pageId, "shadow");
+    expect(await runOpsWatchdogCheck(app(), { startedAtMs: pastGrace() })).toMatchObject({ syncEngineSilent: false });
+    expect(await incident("process", null)).toBeNull();
+
+    await setModeDirect(testDb.pool, page.pageId, "live");
     // Inside the boot grace a silence opens nothing.
     expect(await runOpsWatchdogCheck(app(), { startedAtMs: Date.now() })).toMatchObject({ syncEngineSilent: true });
     expect(await incident("process", null)).toBeNull();
@@ -394,15 +452,15 @@ describe("alert 5: the api watchdog (design §9.6)", () => {
 });
 
 describe("the golden signals (design §9.5)", () => {
-  it("computes one page's pace and queue families, and the sampler's compact set per journal", async (context) => {
+  it("computes one page's pace and queue families, and the sampler's compact set over the engine's pages", async (context) => {
     if (!testDb) return context.skip();
-    const page = await enginePage("shadow");
-    await attempt({ pageId: page.pageId, shadow: true, sentSecondsAgo: 30, workClass: "urgent", resource: "dm-messages.head" });
-    await attempt({ pageId: page.pageId, shadow: true, sentSecondsAgo: 29 });
-    await attempt({ pageId: page.pageId, shadow: true, sentSecondsAgo: 20 });
+    const page = await enginePage("live");
+    await attempt({ pageId: page.pageId, sentSecondsAgo: 30, workClass: "urgent", resource: "dm-messages.head" });
+    await attempt({ pageId: page.pageId, sentSecondsAgo: 29 });
+    await attempt({ pageId: page.pageId, sentSecondsAgo: 20 });
     await testDb.pool.query(
       `insert into sync_work (page_id, shadow, resource, subject, kind, class, state, breaker_until)
-       values ($1, true, 'dm-messages.head', '1', 'trigger', 'urgent', 'open', clock_timestamp() + interval '1 hour')`,
+       values ($1, false, 'dm-messages.head', '1', 'trigger', 'urgent', 'open', clock_timestamp() + interval '1 hour')`,
       [page.pageId],
     );
     // A credentials hold, a network hold beside it and a file's breaker in
@@ -413,37 +471,50 @@ describe("the golden signals (design §9.5)", () => {
       resourceBreakerRow("transactions", new Date(Date.now() + 60_000)),
       resourceBreakerRow("posts", new Date(Date.now() - 1_000)),
     ]);
-    const [row] = await listSyncPages(db());
+    // What shadow mode left behind — on this page and on one still in shadow —
+    // is in no family.
+    const left = await enginePage("shadow", "left-in-shadow", "100000000000000002");
+    for (const pageId of [page.pageId, left.pageId]) {
+      await attempt({ pageId, shadow: true, sentSecondsAgo: 25 });
+      await attempt({ pageId, shadow: true, sentSecondsAgo: 24.9 });
+      await testDb.pool.query(
+        `insert into sync_work (page_id, shadow, resource, subject, kind, class, state, breaker_until)
+         values ($1, true, 'dm-messages.head', '1', 'trigger', 'urgent', 'open', clock_timestamp() + interval '1 hour')`,
+        [pageId],
+      );
+    }
+    const row = (await listSyncPages(db())).find((candidate) => candidate.pageId === page.pageId);
     const metrics = await computeSyncMetrics(db(), { page: row!, windowMs: 3_600_000 });
     expect(metrics).toMatchObject({
-      journal: "shadow",
+      mode: "live",
       sends: { urgent: 1, planned: 2, total: 3, byResource: { "dm-messages.head": 1, "notifications.forward": 2 } },
       paceViolations: 1,
       holds: { page: ["auth", "network"], resources: ["transactions"] },
       breakersOpen: 1,
     });
+    expect(metrics).not.toHaveProperty("journal");
     expect(metrics.minSendGapMs).toBeGreaterThan(900);
     expect(metrics.minSendGapMs).toBeLessThan(1_100);
 
     const samples = await sampleSyncEngineMetrics(db(), { registry, settingMs: 2_000 });
     const value = (metric: string) => samples.find((sample) => sample.metric === metric && sample.quantile === "p95")?.valueMs;
     expect(value("sync_setting_ms")).toBe(2_000);
-    expect(value("sync_shadow_sends")).toBe(3);
-    expect(value("sync_shadow_pace_violations")).toBe(1);
-    expect(value("sync_shadow_holds")).toBe(3);
-    expect(value("sync_shadow_breakers_open")).toBe(1);
-    expect(value("sync_shadow_min_send_gap_ms")).toBeLessThan(1_100);
-    // No page is switched: no live journal series.
-    expect(samples.some((sample) => sample.metric === "sync_sends")).toBe(false);
+    expect(value("sync_sends")).toBe(3);
+    expect(value("sync_pace_violations")).toBe(1);
+    expect(value("sync_holds")).toBe(3);
+    expect(value("sync_breakers_open")).toBe(1);
+    expect(value("sync_min_send_gap_ms")).toBeLessThan(1_100);
+    // The shadow families are gone with the mode.
+    expect(samples.filter((sample) => sample.metric.startsWith("sync_" + "shadow"))).toEqual([]);
 
     // The worker records them only when asked (every 5 minutes).
     const app = { db: db(), config: testConfig(testDb.connectionString), logger: { ...quietLogger, warn: () => {} } } as never;
     await runGoldenSignalSample(app);
-    expect(await query("select 1 from ops_metric_samples where metric = 'sync_shadow_sends'")).toEqual([]);
+    expect(await query("select 1 from ops_metric_samples where metric = 'sync_sends'")).toEqual([]);
     const sampled = await runGoldenSignalSample(app, { syncEngine: true });
     expect(sampled.breaches).not.toContain(SYNC_ENGINE_METRICS_PROBE);
     expect(await query<{ value: string }>(
-      "select value_ms::text as value from ops_metric_samples where metric = 'sync_shadow_sends' and quantile = 'p95'",
+      "select value_ms::text as value from ops_metric_samples where metric = 'sync_sends' and quantile = 'p95'",
     )).toEqual([{ value: "3" }]);
   });
 });

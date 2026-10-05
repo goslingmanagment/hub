@@ -24,6 +24,9 @@ describe("fan profile navigation", () => {
   it("builds stable settings deep links", () => {
     expect(buildSettingsRoute("sync")).toBe("/settings?tab=sync");
     expect(buildSettingsRoute("sync", "lora/of")).toBe("/settings?tab=sync&page=lora%2Fof");
+    expect(buildSettingsRoute("engine", "lora-1")).toBe("/settings?tab=engine&page=lora-1");
+    // Only the two sync tabs select a page.
+    expect(buildSettingsRoute("personas", "lora-1")).toBe("/settings?tab=personas");
     expect(buildSettingsRoute("personas")).toBe("/settings?tab=personas");
   });
 });

@@ -50,6 +50,9 @@ pages that account is granted; the owner is granted every page implicitly.
 | Clients — `/pages`, `/pages/{label}/…` (`any` + page scope) | every page | every page | assigned | assigned | assigned | **assigned** | — | **listed reads only**, by the role's reach; `/pages` no (403) |
 | Desktop read gateway — `/ofapi/read/*` (`apiKey`) | no (403) | yes, assigned | no (403) | yes, assigned | no (403) | **yes, assigned** | — | no (403) |
 | Chat-extension bootstrap — `/client/bootstrap` (`apiKey`) | no (403) | yes, every page | no (403) | yes, assigned | no (403) | **yes, assigned** | — | yes, by the role's reach |
+| Chat-extension shared recaps — `/client/pages/{label}/conversations/{fan}/recaps` (`apiKey` + page scope) | no (403) | yes, every page | no (403) | yes, assigned | no (403) | **yes, assigned** | — | yes, by the role's reach |
+| Chat-extension dossier save — `/client/pages/{label}/fans/{fan}/profile/from-generation` (`apiKey` + page scope) | no (403) | own generations, every page | no (403) | own generations, assigned | no (403) | **own generations, assigned** | — | own generations, by the role's reach |
+| Chat-extension own AI spend — `/client/pages/{label}/ai-usage` (`apiKey` + page scope) | no (403) | yes, every page, **own rows only** | no (403) | yes, assigned, own rows only | no (403) | **yes, assigned, own rows only** | — | yes, by the role's reach |
 
 The client bootstrap lists the caller's **active** pages only (a tombstoned
 page is never listed, assigned or not) and announces every feature off until
@@ -63,6 +66,100 @@ held by `client-bootstrap.integration`: every cell of it, plus the agent key,
 in both auth-policy modes; the switches and bindings by
 `client-owner-switches.integration`.
 
+The shared recaps read (chat-extension H-13) is the one route on which a
+chatter reads a **restricted generation record**. A stored AI generation
+(`ai_generation_content`: its prompt and its output) is otherwise read back
+only by the owner; here every chatter granted a page reads the **text** of
+that page's recaps, whoever generated them. The owner ruled recaps shared, with
+no private recap per chatter (chat-extension `docs/architecture.md` §19,
+decision 1, and question 8 of its `docs/hub-pr-plan.md` §6), and the widening
+stops exactly there:
+
+- only `fan-summary` generations, and only the two usable ones the recap
+  status already describes: the freshest completed full and short recap of the
+  fan (and of the persona, when the caller names one);
+- never a generation that carries a `contextScope`: one whose context held
+  something only its caller saw is that person's draft, not a shared recap, so
+  it is excluded from this read, from the recap status, from the Coach attach
+  and from the proof of a dossier alike;
+- only on a page granted to the caller (page scope, as on every page route),
+  and only while the owner's `recap` switch is on for it;
+- only the text and its provenance (`generationRef`, time, persona, coverage):
+  no prompt block, no author, no context manifest. The reader names its
+  columns, so the rest never leaves the database for this route.
+
+A page that is not the caller's serves no recap in either auth-policy mode;
+only the refusal differs. With the policy enforced, the declared page scope
+answers before the handler, as on every page route: 403 for a page that is not
+granted, 404 for one that does not exist. In `log` mode the handler decides,
+and the chat-extension feature check (`requireClientFeature`, the same on
+every chat-extension page route) answers both `409 client_feature_disabled`
+with the reason `not_granted`, which does not tell a missing page from another
+person's.
+
+Its row is held by `client-recaps.integration`: every cell, the agent key, a
+page that is not granted and one that does not exist, in both auth-policy
+modes, and two chatters of one page reading the same recap.
+
+The dossier save from a stored generation (chat-extension H-5) writes the
+fan's dossier, as the older `PUT …/fans/{fan}/profile` does, with one
+difference in who decides the text: the caller names one of its own
+generations and the hub copies the text from the restricted record. The right
+is narrower than the page grant on purpose:
+
+- only the **author's own** generation is found. Another person's generation
+  answers 404 exactly as one that does not exist, to a chatter of the same
+  page, to the team lead and to the owner alike: the route is no way to learn
+  that a generation exists, and no way to publish someone else's;
+- only of the page in the path and of the fan in the path, and only a usable
+  full recap (the same rule as the shared recaps, so never one with a
+  `contextScope`). The fan in the path is the chat: a generation of one fan's
+  chat that names another fan is found for neither, so the route never writes
+  one fan's recap into another fan's dossier;
+- nothing of the record comes back: the answer is the dossier version's
+  number and times;
+- only on a page granted to the caller, and only while the owner's `recap`
+  switch is on for it. A page that is not the caller's answers as on the
+  shared recaps (403 / 404 with the policy enforced, `409
+  client_feature_disabled` / `not_granted` in `log` mode).
+
+The chat-extension token saves a dossier this way only: the older write is
+not on its list. Its row is held by `client-profile-from-generation.integration`:
+every cell, the agent key, a page that is not granted and one that does not
+exist, in both auth-policy modes, and another person's generation refused for
+every role.
+
+Fresh text (chat-extension H-4c, `liveTextContext` on the AI feature stream)
+adds no right and no route. A caller who may generate for a page may send the
+last messages its client read off that page's open chat; they join the
+transcript of that one generation and are stored in its restricted record
+only, scoped `contextScope: principal-draft` as above. Two limits keep it
+inside what the caller could already do:
+
+- nothing the client sends is read back by anyone else: it reaches no message
+  archive, no observation and no dossier, and no shared reader selects a scoped
+  generation;
+- the check that a snapshot belongs to the chat the request names reads other
+  pages' message stores (the archive and the webhook archive) only for pages
+  granted to the caller (every page for the owner). A message id that exists
+  on a page the caller is not granted is not looked up, so the
+  `context_conflict` refusal never says that an id exists there.
+
+Held by `client-ai-live-text.integration` (a chatter of two pages, the owner,
+a page that is not the chatter's) and `client-ai-live-text-lookup.integration`.
+
+The own-AI-spend read (chat-extension H-15) answers the **caller's own**
+ledger rows on the page of the path, by day, and nothing else: an owner's
+device token reads the owner's spend, never a chatter's (everyone's spend is
+the owner console's usage report, cookie only). The page is in the path, so
+page scope applies as on every page route; a page or a user named in the query
+is refused, not ignored. It waits for the owner's master switch
+(`chatExtensionEnabled`) and the extension's version
+(`chatExtensionMinVersion`); it has no flag of its own and asks for no
+platform or host binding. Its row is held by `client-ai-usage.integration`:
+every cell, the agent key, and a page that is not granted, tombstoned or
+missing, in both auth-policy modes.
+
 The **chat-extension token** (chat-extension H-3) is a device token the
 extension asks for at password sign-in with `client: "chat-extension"`. The
 sign-in echoes `client`, the token row keeps the profile for good (a trigger
@@ -71,14 +168,33 @@ reaches only the routes of `CLIENT_TOKEN_PROFILES["chat-extension"]`
 (`packages/contracts/src/client-token-scopes.ts`; the "chat-extension token"
 column of the [generated policy table](generated/authorization-policy.md)):
 who am I, the bootstrap, the persona catalogue without prompt texts, the AI
-feature stream, the recap status, the fan and conversation profiles, the
-spenders reads, the capture lane and revoking itself. Every other route
+feature stream, the recap status, the shared recaps, the dossier save from a
+stored generation, the fan and conversation profiles, the spenders reads, its
+own AI spend, the capture lane and revoking itself. Every other route
 answers a plain 403 with no `reason`, in **both** auth-policy modes, before any
 handler runs; page scope still applies on the listed routes, and a revoked or
 expired token still answers 401 with its reason. On the capture lane it sends
-only `ai_acceptance`, journaled as `chat-extension@<version>`, and it can never
-carry the desktop harvest capability. Its AI generations wait for the owner's
-switches (`chatExtensionEnabled`, the Coach / Recap / Review flags) and its
+only `ai_acceptance`, journaled as `chat-extension@<version>`, and
+`client_health` (chat-extension H-11b), and it can never carry the desktop
+harvest capability. A `client_health` report is never journaled, from any
+token: the journal keeps the payload and the user forever. The lane folds it
+into hourly rollups that hold no user, page or fan (the `client_health_*_hourly`
+tables) and drops the report; with `chatExtensionHealthIngestEnabled` off (or
+the master switch off) it accepts the report and keeps nothing, and the
+bootstrap does not list `client-health-perf-v1`, so the extension does not send
+one. Held by `client-health-intake.integration`. The owner reads the rollups at
+`GET /api/v1/admin/client-health` (chat-extension H-11c), an `owner-session`
+route like the rest of the owner console: no device token reaches it, the
+extension's own included. It names no person, since the rollups hold none: the
+figures are by client version and host build, and a group of fewer than 20
+observations in the range asked for shows its size and no mean, maximum or
+percentile. That floor is on the range of one read and no narrower: the mean
+and the maximum of a few observations can be worked out from two reads of
+larger ranges, so it keeps a thin figure from being read as the version's and
+does not seal a small group off. Contract verdicts and counters are counts of
+reports and events and are shown at any size. Held by
+`client-health-view.integration`. Its AI generations wait for
+the owner's switches (`chatExtensionEnabled`, the Coach / Recap / Review flags) and its
 version for `chatExtensionMinVersion`, and each generation record is labelled
 `clientProfile: "chat-extension"`. A full device token of the same person is
 untouched. Held by `device-token-client-profile.integration` (every route of

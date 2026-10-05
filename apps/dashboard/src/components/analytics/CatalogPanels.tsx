@@ -393,13 +393,13 @@ export function ContentPerformancePanel({
  * was captured, never the whole surface, and the doubt belongs to the row that
  * outlives the sweep that created it.
  */
-/** [E4]: no Fansly like code is live-confirmed, so the lane writes nothing. */
-const LIKERS_LANE_VERDICT: CoverageVerdict = {
+/** [E4]: no Fansly like code is live-confirmed, so nothing reads likers. */
+const LIKERS_VERDICT: CoverageVerdict = {
   state: "not_started",
   label: "not started",
   detail:
-    "No Fansly like code is live-confirmed ([E4]), so the liker lane writes "
-    + "nothing. The panel is shown empty rather than hidden.",
+    "No Fansly like code is live-confirmed ([E4]), so nothing reads likers. "
+    + "The panel is shown empty rather than hidden.",
 };
 
 export function CommentsPanel({
@@ -414,12 +414,12 @@ export function CommentsPanel({
   onRetry: () => void;
 }) {
   const verdict = coverageBadgeVerdict(coverage, ANALYTICS_COVERAGE_PLANES.comments, selectedWindow);
-  // The liker lane's verdict is a CONSTANT — no capture-coverage row proves it
+  // The likers' verdict is a CONSTANT — no capture-coverage row proves it
   // — but it is still a definitive claim about Fansly, and stating it under a
   // coverage request that is pending or failed is the same lie as a chart that
   // quietly reads "complete". So it goes through the same wrapper as every
   // other badge on the page.
-  const likersVerdict = coverageRequestVerdict(coverage, () => LIKERS_LANE_VERDICT);
+  const likersVerdict = coverageRequestVerdict(coverage, () => LIKERS_VERDICT);
   const data = panelData(state);
   const cached = state.status === "ready" && state.refreshFailed;
   const perPost = (data?.perPost ?? []).slice(0, 20);

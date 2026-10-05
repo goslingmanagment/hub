@@ -163,6 +163,7 @@ function buildBreadcrumbs(
       queue: "Queue",
       "db-stats": "DB Stats",
       incidents: "Incidents",
+      "client-health": "Client health",
     };
     const crumbs: { label: string; href?: string }[] = [
       { label: "Overview", href: "/" },

@@ -1,5 +1,4 @@
 import {
-  countConversationSyncFailuresByAccount,
   listNotificationIncidents,
   listSyncPages,
   oldestDueLiveUrgentWork,
@@ -17,6 +16,7 @@ import { PUBLIC_RUNTIME_CAPABILITIES } from "./public-capabilities.ts";
 import { getSyncStatusSnapshot, type SyncDomainBlockStatus } from "./sync-status.ts";
 import { readSyncPageStatuses } from "../sync/inspect.ts";
 import { SYNC_DECODE_DEBT_WINDOW_MS, SYNC_UNCONFIRMED_MESSAGE_MS } from "../sync/engine/alerts.ts";
+import { legacyExecutorPlatforms } from "../sync/onlyfans/boundary.ts";
 
 type ServiceHealthStatus = "ok" | "degraded";
 type SystemCheckStatus = "ok" | "error";
@@ -102,8 +102,13 @@ export const ENGINE_OWNER_HEARTBEAT_STALE_SECONDS = 90;
  *  `handover_stuck`). */
 export const ENGINE_HANDOVER_STUCK_SECONDS = 10 * 60;
 
+/** The issue of a Fansly page the Fansly Sync Engine does not own (no engine
+ *  row, or one in `off` / `shadow`): nothing reads the page — the legacy
+ *  executor serves no Fansly page — so it is unhealthy. */
+export const ENGINE_NOT_LIVE_ISSUE = "engine:not_live";
+
 /** `/health/sync`'s view of a page the Fansly Sync Engine owns (design step 3
- *  §3.2 item 1, E14): its legacy blocks are frozen, so they are not judged. */
+ *  §3.2 item 1, E14): the engine alone judges it. */
 export interface EngineSyncHealth {
   mode: "handover" | "live";
   ownerHeartbeatAgeSeconds: number | null;
@@ -244,9 +249,9 @@ export async function getPublicSyncHealth(
   },
 ) {
   const now = input?.now ?? new Date();
-  // One effective-config snapshot for both live health thresholds read below, so the
-  // reported `running` values match exactly what this check consumes (no field skew).
-  const [connections, snapshot, effective, coverageDebtCounts, syncPages] = await Promise.all([
+  // The effective-config snapshot of the live health threshold read below, so the
+  // reported value matches exactly what this check consumes.
+  const [connections, snapshot, effective, syncPages] = await Promise.all([
     listConnectionStatuses(app, {
       pageIds: input?.pageIds,
     }),
@@ -255,20 +260,12 @@ export async function getPublicSyncHealth(
       pageIds: input?.pageIds,
     }),
     loadEffectiveConfig(app.db, app.config),
-    // #138 addendum: conversation-level coverage debt. The page-level failure
-    // streak is reset to 0 by every partial yield that read something, and a
-    // deferred thread no longer fails the stream, so once the breaker keeps a
-    // stream moving the streak can no longer carry the wedge signal — the
-    // breaker rows themselves can: they clear only when their conversation
-    // actually syncs.
-    countConversationSyncFailuresByAccount(
-      app.db,
-      input?.pageIds ? { platformAccountIds: input.pageIds } : undefined,
-    ),
-    // Pages the Fansly Sync Engine owns are judged by the engine, not by
-    // their frozen legacy streams (design step 3 §3.2 item 1).
+    // A Fansly page is judged by the Fansly Sync Engine (design step 3 §3.2
+    // item 1); the legacy stream checks below serve the legacy executor's
+    // platforms (OnlyFans) only.
     listSyncPages(app.db, { modes: ["handover", "live"] }),
   ]);
+  const legacyPlatforms = legacyExecutorPlatforms();
   const scopedPageIds = input?.pageIds ? new Set(input.pageIds) : null;
   const engineHealth = await readEngineSyncHealth(app, syncPages.filter(
     (page): page is SyncPageRow & { mode: "handover" | "live" } =>
@@ -277,9 +274,6 @@ export async function getPublicSyncHealth(
 
   const connectionsById = new Map(connections.map((connection) => [connection.id, connection]));
   const snapshotPagesById = new Map(snapshot.pages.map((page) => [page.pageId, page]));
-  const coverageDebtByPageId = new Map(
-    coverageDebtCounts.map((row) => [row.platformAccountId, row.failingConversationCount]),
-  );
   const recentCounters = recentCountersFromSnapshot(snapshot);
   const allPageIds = new Set([
     ...connectionsById.keys(),
@@ -287,45 +281,45 @@ export async function getPublicSyncHealth(
   ]);
   const thresholds = {
     lightMaxAgeMinutes: effective.healthSyncLightMaxAgeMinutes,
-    followerMaxAgeMinutes: effective.healthSyncFollowerMaxAgeMinutes,
   };
 
   const pages = Array.from(allPageIds, (pageId) => {
     const page = snapshotPagesById.get(pageId);
     const connection = connectionsById.get(pageId);
     const platform = page?.platform ?? connection?.platform ?? "fansly";
+    const identity = {
+      pageId,
+      pageLabel: page?.pageLabel ?? connection?.label ?? "unknown",
+      platform,
+      modelSlug: page?.modelSlug ?? connection?.modelSlug ?? "unknown",
+      modelName: page?.modelName ?? connection?.modelName ?? "unknown",
+    };
+    const lightAge = ageMinutes(connection?.lastLightSyncAt ?? null, now);
     const engineSync = engineHealth.get(pageId);
-    if (engineSync !== undefined) {
-      const lightAge = ageMinutes(connection?.lastLightSyncAt ?? null, now);
-      const followerAge = ageMinutes(connection?.lastFollowerSyncAt ?? null, now);
+    if (engineSync !== undefined || !legacyPlatforms.includes(platform)) {
+      // The engine's page: its own issues, or — a page the engine does not
+      // own — the one issue that nothing reads it. No legacy stream is judged.
+      const issues = engineSync?.issues ?? [ENGINE_NOT_LIVE_ISSUE];
       return {
-        pageId,
-        pageLabel: page?.pageLabel ?? connection?.label ?? "unknown",
-        platform,
-        modelSlug: page?.modelSlug ?? connection?.modelSlug ?? "unknown",
-        modelName: page?.modelName ?? connection?.modelName ?? "unknown",
-        status: (engineSync.issues.length > 0 ? "degraded" : "ok") as ServiceHealthStatus,
+        ...identity,
+        status: (issues.length > 0 ? "degraded" : "ok") as ServiceHealthStatus,
         connectionStatus: connection?.connectionStatus ?? "unverified",
         lastLightSyncAt: connection?.lastLightSyncAt ?? null,
         lightAgeMinutes: lightAge,
         lastFollowerSyncAt: connection?.lastFollowerSyncAt ?? null,
-        followerAgeMinutes: followerAge,
+        followerAgeMinutes: ageMinutes(connection?.lastFollowerSyncAt ?? null, now),
         failedStreams: 0,
         stalledStreams: 0,
         pendingStreams: 0,
-        lastErrorSummary: engineSync.issues[0] ?? null,
-        issues: engineSync.issues,
-        engine: engineSync.engine,
+        lastErrorSummary: issues[0] ?? null,
+        issues,
+        ...(engineSync === undefined ? {} : { engine: engineSync.engine }),
       };
     }
     const blocks = page ? Object.values(page.blocks).filter((block) => block.state !== "not_available") : [];
     const connectionBlock = page?.blocks.connection;
     const hasOfapiConnection = isOfapiMappedConnectionUsable(connectionBlock);
     const allSupportedBlocksPaused = blocks.length > 0 && blocks.every((block) => block.state === "paused");
-    const lightAge = ageMinutes(connection?.lastLightSyncAt ?? null, now);
-    const followerAge = (page?.platform ?? connection?.platform) === "fansly"
-      ? ageMinutes(connection?.lastFollowerSyncAt ?? null, now)
-      : null;
     const failedStreams = blocks.filter((block) => block.state === "failed").length;
     const failedTaskEntries = listFailedTaskEntries(blocks);
     // A failed supporting task can be hidden by an up-to-date or paused primary
@@ -356,14 +350,6 @@ export async function getPublicSyncHealth(
       } else if (lightAge > thresholds.lightMaxAgeMinutes) {
         issues.push("light_sync_stale");
       }
-
-      if ((page?.platform ?? connection?.platform) === "fansly") {
-        if (followerAge === null) {
-          issues.push("follower_sync_missing");
-        } else if (followerAge > thresholds.followerMaxAgeMinutes) {
-          issues.push("follower_sync_stale");
-        }
-      }
     }
 
     if (failedStreams > 0) {
@@ -385,33 +371,17 @@ export async function getPublicSyncHealth(
       issues.push(`${stream}:retry_wedged`);
     }
 
-    // page_dm_message_sync_health rows of OnlyFans pages are historical, left
-    // by the permanently retired legacy dm_messages crawler. They are not
-    // mirror coverage debt and must not keep /health/sync at 503 after the
-    // retirement fence. On a Fansly page the legacy DM lanes' per-thread
-    // breaker wrote the table (the dm_messages lane until step 4 S4-14, the
-    // targeted thread backfill until S4-15), so a page the engine does not own
-    // stays coverage_degraded while a visible, bound, not excluded thread
-    // carries failures: until the Fansly Sync Engine's DM read of that thread
-    // clears them, or the thread leaves that set (excluded, hidden, unbound).
-    if (platform !== "onlyfans" && (coverageDebtByPageId.get(pageId) ?? 0) > 0) {
-      issues.push("dm_messages:coverage_degraded");
-    }
-
     const status: ServiceHealthStatus = issues.length > 0 ? "degraded" : "ok";
 
     return {
-      pageId,
-      pageLabel: page?.pageLabel ?? connection?.label ?? "unknown",
-      platform,
-      modelSlug: page?.modelSlug ?? connection?.modelSlug ?? "unknown",
-      modelName: page?.modelName ?? connection?.modelName ?? "unknown",
+      ...identity,
       status,
       connectionStatus: connection?.connectionStatus ?? "unverified",
       lastLightSyncAt: connection?.lastLightSyncAt ?? null,
       lightAgeMinutes: lightAge,
+      // A page of the legacy executor (OnlyFans) has no follower read.
       lastFollowerSyncAt: connection?.lastFollowerSyncAt ?? null,
-      followerAgeMinutes: followerAge,
+      followerAgeMinutes: null,
       failedStreams,
       stalledStreams,
       pendingStreams,

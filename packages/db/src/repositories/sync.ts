@@ -24,9 +24,11 @@ import {
   transactions,
 } from "../schema.ts";
 import {
-  SYNC_STREAM_POLICY,
+  LEGACY_EXECUTOR_PLATFORMS,
+  LEGACY_EXECUTOR_STREAMS,
+  SYNC_STREAMS,
   getSyncStreamsForPlatform,
-  resolvePageSyncPriority,
+  syncStreamOrderSql,
   type PageSyncStatus,
   type SyncRequestSource,
   type SyncStream,
@@ -42,36 +44,6 @@ type TimestampValue = Date | string | null | undefined;
 type NumericValue = number | bigint | null | undefined;
 
 export * from "./page-sync.ts";
-
-export const SYNC_CONTROL_STREAMS = [...Object.keys(SYNC_STREAM_POLICY)] as SyncStream[];
-export const SYNC_STREAM_CONFIG: Record<SyncStream, {
-  stream: SyncStream;
-  cadenceSeconds: number;
-  basePriority: number;
-  streamIndex: number;
-}> = Object.fromEntries(
-  Object.entries(SYNC_STREAM_POLICY).map(([stream, policy]) => [
-    stream,
-    {
-      stream: stream as SyncStream,
-      cadenceSeconds: policy.cadenceSeconds,
-      basePriority: policy.basePriority,
-      streamIndex: policy.streamIndex,
-    },
-  ]),
-) as Record<SyncStream, {
-  stream: SyncStream;
-  cadenceSeconds: number;
-  basePriority: number;
-  streamIndex: number;
-}>;
-export const DM_SYNC_DEPENDENCY_STREAMS = [
-  "light",
-  "top_spenders",
-  "transactions",
-  "subscribers",
-  "followers",
-] as const satisfies readonly SyncStream[];
 
 function normalizeNumber(value: NumericValue, field: string) {
   if (value === null || value === undefined) {
@@ -169,7 +141,7 @@ function normalizeJsonRecord(value: unknown, field: string) {
 }
 
 function asSyncStream(value: string): SyncStream {
-  if ((SYNC_CONTROL_STREAMS as readonly string[]).includes(value)) {
+  if ((SYNC_STREAMS as readonly string[]).includes(value)) {
     return value as SyncStream;
   }
 
@@ -211,17 +183,6 @@ function computeNextDueAt(state: {
   return new Date(((state.lastScheduledSlot + 1) * state.cadenceSeconds + state.slotOffsetSeconds) * 1000);
 }
 
-export function computeSyncStreamSlotOffsetSeconds(
-  platformAccountId: number,
-  stream: SyncStream,
-) {
-  const policy = SYNC_STREAM_POLICY[stream];
-  return Number(
-    ((BigInt(platformAccountId) * 2654435761n) + (BigInt(policy.streamIndex) * 2246822519n)) %
-      BigInt(policy.cadenceSeconds),
-  );
-}
-
 export function computeSyncStreamNextDueAt(
   input: {
     cadenceSeconds: number;
@@ -232,53 +193,12 @@ export function computeSyncStreamNextDueAt(
   return computeNextDueAt(input);
 }
 
-export function resolveSyncRequestPriority(stream: SyncStream, reason: SyncRequestSource) {
-  return resolvePageSyncPriority(stream, reason);
-}
-
 function streamArraySql(streams: readonly SyncStream[]) {
   if (streams.length === 0) {
     return sql`ARRAY[]::sync_stream[]`;
   }
 
   return sql`ARRAY[${sql.join(streams.map((stream) => sql`${stream}::sync_stream`), sql`, `)}]::sync_stream[]`;
-}
-
-/**
- * The ops-ordering ladder — the THIRD hand-written copy of the stream order
- * (page-sync.ts has two).
- *
- * DRIFT FIX (WP-F1): it had silently omitted `fan_earnings` and
- * `purchase_history` since Stage 16, so both fell to `else 999` and sorted last
- * in the ops view regardless of their real stream index. A hand-written third
- * copy of a table is exactly the shape that drifts; the repository schema test
- * iterates SYNC_STREAMS against every ladder, which is what turns the next
- * omission into a failure instead of a quiet mis-sort.
- */
-function streamOrderSql(columnName: string) {
-  return sql.raw(`
-    case ${columnName}
-      when 'light' then ${SYNC_STREAM_POLICY.light.streamIndex}
-      when 'transactions' then ${SYNC_STREAM_POLICY.transactions.streamIndex}
-      when 'fan_identities' then ${SYNC_STREAM_POLICY.fan_identities.streamIndex}
-      when 'top_spenders' then ${SYNC_STREAM_POLICY.top_spenders.streamIndex}
-      when 'subscribers' then ${SYNC_STREAM_POLICY.subscribers.streamIndex}
-      when 'followers' then ${SYNC_STREAM_POLICY.followers.streamIndex}
-      when 'followers_reconcile' then ${SYNC_STREAM_POLICY.followers_reconcile.streamIndex}
-      when 'dm_conversations' then ${SYNC_STREAM_POLICY.dm_conversations.streamIndex}
-      when 'dm_messages' then ${SYNC_STREAM_POLICY.dm_messages.streamIndex}
-      when 'fan_earnings' then ${SYNC_STREAM_POLICY.fan_earnings.streamIndex}
-      when 'purchase_history' then ${SYNC_STREAM_POLICY.purchase_history.streamIndex}
-      when 'posts' then ${SYNC_STREAM_POLICY.posts.streamIndex}
-      when 'stats_snapshot' then ${SYNC_STREAM_POLICY.stats_snapshot.streamIndex}
-      when 'notifications' then ${SYNC_STREAM_POLICY.notifications.streamIndex}
-      when 'catalog' then ${SYNC_STREAM_POLICY.catalog.streamIndex}
-      when 'post_replies' then ${SYNC_STREAM_POLICY.post_replies.streamIndex}
-      when 'payouts' then ${SYNC_STREAM_POLICY.payouts.streamIndex}
-      when 'media_stats' then ${SYNC_STREAM_POLICY.media_stats.streamIndex}
-      else 999
-    end
-  `);
 }
 
 function dmMessageSyncEligibleSql(alias: string) {
@@ -1829,7 +1749,9 @@ export async function listSyncMonitorStreamRows(
     return [] as SyncMonitorStreamRow[];
   }
 
-  const pageClauses = [sql`true`];
+  // The legacy executor's monitor: only pages of the platforms it serves. A
+  // Fansly page yields no row here — the Fansly Sync Engine reports it.
+  const pageClauses = [inArray(pages.platform, [...LEGACY_EXECUTOR_PLATFORMS])];
   if (input?.pageIds !== undefined) {
     pageClauses.push(inArray(pages.id, input.pageIds));
   }
@@ -1840,13 +1762,17 @@ export async function listSyncMonitorStreamRows(
   const windowStart = input?.windowStart ?? new Date(Date.now() - 24 * 60 * 60 * 1000);
   const now = input?.now ?? new Date();
   const stalePhysicalAttemptBefore = new Date(now.getTime() - 2 * 60 * 1000);
-  const requestedStreams = input?.streams ?? SYNC_CONTROL_STREAMS;
+  const requestedStreams: readonly SyncStream[] = input?.streams ?? LEGACY_EXECUTOR_STREAMS;
   const requestedStreamsSql = streamArraySql(requestedStreams);
-  const fanslyStreamsSql = streamArraySql(
-    requestedStreams.filter((stream) => getSyncStreamsForPlatform("fansly").includes(stream)),
-  );
-  const onlyFansStreamsSql = streamArraySql(
-    requestedStreams.filter((stream) => getSyncStreamsForPlatform("onlyfans").includes(stream)),
+  // A page is monitored on the streams the executor runs for its platform.
+  const platformStreamsSql = sql.join(
+    LEGACY_EXECUTOR_PLATFORMS.map((platform) => {
+      const served: readonly SyncStream[] = getSyncStreamsForPlatform(platform);
+      return sql`when vp."platform" = ${platform} then ${
+        streamArraySql(requestedStreams.filter((stream) => served.includes(stream)))
+      }`;
+    }),
+    sql` `,
   );
 
   const result = await db.execute<Record<string, unknown>>(sql`
@@ -1877,9 +1803,8 @@ export async function listSyncMonitorStreamRows(
       from visible_pages vp
       cross join lateral unnest(
         case
-          when vp."platform" = 'fansly'
-            then ${fanslyStreamsSql}
-          else ${onlyFansStreamsSql}
+          ${platformStreamsSql}
+          else ARRAY[]::sync_stream[]
         end
       ) as s(stream)
     ),
@@ -2216,7 +2141,7 @@ export async function listSyncMonitorStreamRows(
     left join transaction_counts tc on tc."pageId" = ps."pageId"
     left join dm_conversation_counts dcc on dcc."pageId" = ps."pageId"
     left join dm_message_counts dmc on dmc."pageId" = ps."pageId"
-    order by ps."pageLabel" asc, ${streamOrderSql('ps."stream"')} asc
+    order by ps."pageLabel" asc, ${syncStreamOrderSql('ps."stream"')} asc
   `);
 
   return result.rows.map((row) => normalizeSyncMonitorStreamRow(row));

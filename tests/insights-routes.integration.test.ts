@@ -24,6 +24,7 @@ import {
   upsertStatsTrafficBucket,
 } from "@agency_hub_core/db";
 
+import { statsCoverageResponseSchema, type StatsCoverageResponse } from "@agency_hub_core/contracts";
 import { AGENT_DATASET_SQL } from "@agency_hub_core/db";
 import { CAPTURE_COVERAGE_PLANES } from "@agency_hub_core/shared";
 
@@ -32,6 +33,7 @@ import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { setModeDirect } from "./helpers/sync-engine-host.ts";
+import { seedPageHold, seedRouteState } from "./helpers/sync-holds.ts";
 
 // Fixture passwords hash at minimum cost; sign-in still runs the real argon2
 // verify (tests/helpers/cheap-argon2.ts).
@@ -141,9 +143,33 @@ beforeAll(async () => {
     [pageId],
   );
   await upsertDemand(db, {
-    pageId, shadow: false, resource: "media-stats.walk", kind: "goal", class: "planned",
+    pageId, resource: "media-stats.walk", kind: "goal", class: "planned",
     dueAt: new Date("2026-08-20T13:00:00.000Z"),
   });
+  // Two chats were read (`dm-messages.head` works per chat: its rows have a
+  // subject, none is the page's), the second one last; a third is open.
+  for (const [chat, appliedAt] of [["chat-1", "2026-08-20T11:00:00.000Z"], ["chat-2", "2026-08-20T12:30:00.000Z"]] as const) {
+    await testDb.pool.query(
+      `with w as (
+         insert into sync_work (page_id, shadow, resource, subject, kind, class, state, closed_at, close_reason)
+         values ($1, false, 'dm-messages.head', $2, 'trigger', 'urgent', 'done', $3::timestamptz, 'served')
+         returning id),
+       a as (
+         insert into sync_attempts (page_id, shadow, work_id, resource, subject, class, owner_generation, setting_ms,
+                                    jitter_u, pause_ms, operation, request, outcome, http_status, apply_state, applied_at)
+         select $1, false, w.id, 'dm-messages.head', $2, 'urgent', 1, 2500, 0.1, 2750, 'dm-messages.head', '{}'::jsonb,
+                'response', 200, 'applied', $3::timestamptz
+           from w
+         returning id, work_id)
+       update sync_work set last_attempt_id = a.id from a where sync_work.id = a.work_id`,
+      [pageId, chat, appliedAt],
+    );
+  }
+  await testDb.pool.query(
+    `insert into sync_work (page_id, shadow, resource, subject, kind, class, state, due_at)
+     values ($1, false, 'dm-messages.head', 'chat-3', 'trigger', 'urgent', 'open', '2026-08-20T12:45:00.000Z')`,
+    [pageId],
+  );
 
   // ── traffic: the four profile families, both members, plus an unknown code ──
   // 44011 carries views with interactionTime 0 (member 1 is the UI counter);
@@ -850,10 +876,10 @@ describe("WP-S1 serving routes: media, tags and coverage", () => {
     // stream is described by the live work of the registry keys that read it.
     expect(body).not.toHaveProperty("streams");
     expect(body.engine.mode).toBe("live");
-    type EngineStream = {
-      stream: string; resources: string[]; succeededAt: string | null; nextDueAt: string | null;
-      paused: boolean; needsAttention: boolean; reason: string | null; consecutiveFailures: number;
-    };
+    // No sync host runs in this test: nothing of the page is being read, and
+    // the panel must be able to say so of every stream.
+    expect(body.engine.ownerRunning).toBe(false);
+    type EngineStream = NonNullable<StatsCoverageResponse["engine"]>["streams"][number];
     const streams = new Map<string, EngineStream>(
       body.engine.streams.map((row: EngineStream) => [row.stream, row]),
     );
@@ -861,22 +887,44 @@ describe("WP-S1 serving routes: media, tags and coverage", () => {
       resources: ["media-stats.walk"],
       succeededAt: null,
       nextDueAt: "2026-08-20T13:00:00.000Z",
+      activeWork: 1,
       paused: false,
+      // Nothing stops its key: no pause, no hold of the page, its file or its route.
+      stopped: "none",
+      stops: [],
       needsAttention: false,
       consecutiveFailures: 0,
+      // Why the open walk waits is said, never left blank: as data for the
+      // panel's own words, and as one line for a reader of the API.
+      waiting: { resource: "media-stats.walk", reason: "ownership_unconfirmed", until: null },
+      reason: "media-stats.walk: ownership_unconfirmed",
     });
-    // Why the open walk waits is said, never left blank.
-    expect(streams.get("media_stats")!.reason).toMatch(/^media-stats\.walk: /);
     expect(streams.get("notifications")).toMatchObject({
       resources: ["notifications.forward", "notifications.backfill"],
       paused: true,
+      stopped: "all",
+      stops: [{ reason: "paused", by: ["keys"], resources: ["notifications.forward", "notifications.backfill"], until: null }],
       nextDueAt: null,
+      activeWork: 0,
+      waiting: null,
     });
     // A stream nothing read yet still reports, with nothing claimed.
     expect(streams.get("stats_snapshot")).toMatchObject({
       resources: ["stats.daily", "stats.hourly", "stats.backfill"],
       succeededAt: null,
+      activeWork: 0,
       paused: false,
+    });
+    // A stream read chat by chat was last read when its newest chat was
+    // (S4-34a: it used to read "never"), and its open chat is its work.
+    expect(streams.get("dm_messages")).toMatchObject({
+      resources: ["dm-messages.head", "dm-messages.catchup", "dm-messages.history"],
+      succeededAt: "2026-08-20T12:30:00.000Z",
+      nextDueAt: "2026-08-20T12:45:00.000Z",
+      activeWork: 1,
+      stopped: "none",
+      stops: [],
+      waiting: null,
     });
 
     const holdings = new Map<string, { rowCount: number }>(
@@ -886,6 +934,105 @@ describe("WP-S1 serving routes: media, tags and coverage", () => {
     // The liker table is EMPTY on Fansly ([E4]) and the honest report of that is
     // a zero count, not a missing row.
     expect(holdings.get("post_likes")!.rowCount).toBe(0);
+  });
+
+  // S4-35: the panel said "reading" of a stream whose only route a 429 held,
+  // and of every stream of a page held for its credentials. What stops a
+  // stream's keys comes from the page's hold set (`sync_holds`), by the hold
+  // evaluator the engine admits by — for a stream whose work is per chat too.
+  it("says what stops a stream: a 429's hold of its route, then the page's refused credentials", async (context) => {
+    if (!requireServer(context)) return;
+    const target = { pool: testDb!.pool };
+    const read = async () => {
+      const response = await get(`/api/v1/pages/${PAGE}/stats/coverage`);
+      expect(response.statusCode).toBe(200);
+      const body = statsCoverageResponseSchema.parse(response.json());
+      return new Map(body.engine!.streams.map((row) => [row.stream, row]));
+    };
+    try {
+      await seedRouteState(target, { pageId, route: "messages.page", holdSeconds: 3_600, last429SecondsAgo: 30 });
+      const held = await read();
+      const messages = held.get("dm_messages")!;
+      expect(messages).toMatchObject({ stopped: "all", paused: false, activeWork: 1, nextDueAt: null });
+      expect(messages.stops).toEqual([{
+        reason: "route_hold",
+        by: ["messages.page"],
+        resources: ["dm-messages.head", "dm-messages.catchup", "dm-messages.history"],
+        until: expect.any(String),
+      }]);
+      expect(new Date(messages.stops[0]!.until!).getTime()).toBeGreaterThan(Date.now() + 3_000_000);
+      // The route holds nothing else: the chat list and the media walk go on.
+      expect(held.get("dm_conversations")).toMatchObject({ stopped: "none", stops: [] });
+      expect(held.get("media_stats")).toMatchObject({ stopped: "none", nextDueAt: "2026-08-20T13:00:00.000Z" });
+
+      await seedPageHold(target, { pageId, kind: "auth", untilSeconds: "infinity" });
+      const refused = await read();
+      for (const [stream, row] of refused) {
+        expect(row.stopped, stream).toBe("all");
+        expect(row.nextDueAt, stream).toBeNull();
+        expect(row.stops.find((stop) => stop.reason === "page_hold"), stream).toEqual({
+          reason: "page_hold", by: ["auth"], resources: row.resources, until: null,
+        });
+      }
+      // Every cause is named: the route's hold stays under the page's.
+      expect(refused.get("dm_messages")!.stops.map((stop) => stop.reason)).toEqual(["page_hold", "route_hold"]);
+      // The owner's pause comes first, and is not the whole of it any more.
+      expect(refused.get("notifications")!.stops.map((stop) => stop.reason)).toEqual(["paused", "page_hold"]);
+      expect(refused.get("notifications")).toMatchObject({ paused: true, stopped: "all" });
+    } finally {
+      await testDb!.pool.query("delete from sync_holds where page_id = $1", [pageId]);
+    }
+    expect((await read()).get("dm_messages")).toMatchObject({ stopped: "none", stops: [], nextDueAt: "2026-08-20T12:45:00.000Z" });
+  });
+
+  // S4-35 (review): "Posts [reading]" stood above "posts.refresh: endpoint
+  // held (429) until …". A key that reads several routes is picked while one
+  // of them is open, so a hold of the route its request takes shows only on
+  // its row — the final check before the admission leaves it `pacer`, due
+  // when the route opens (`deferForRoute`). The verdict reads that row.
+  it("a 429's hold of one of a key's routes stops the key once it has put the key's work off", async (context) => {
+    if (!requireServer(context)) return;
+    const target = { pool: testDb!.pool };
+    const posts = async () => {
+      const response = await get(`/api/v1/pages/${PAGE}/stats/coverage`);
+      expect(response.statusCode).toBe(200);
+      return statsCoverageResponseSchema.parse(response.json()).engine!.streams.find((row) => row.stream === "posts")!;
+    };
+    const dueAgain = new Date(Date.now() + 1_800_000);
+    try {
+      // `posts.refresh` reads the timeline and the tips; the timeline is held
+      // for an hour and the poll is due: its next request may take the tips.
+      await seedRouteState(target, { pageId, route: "posts.timeline", holdSeconds: 3_600, last429SecondsAgo: 30 });
+      await testDb!.pool.query(
+        `insert into sync_work (page_id, shadow, resource, subject, kind, class, state, due_at)
+         values ($1, false, 'posts.refresh', '', 'poll', 'planned', 'open', '2026-08-20T12:00:00.000Z')`,
+        [pageId],
+      );
+      expect(await posts()).toMatchObject({
+        resources: ["posts.refresh", "posts.backfill", "posts.engagement"],
+        activeWork: 1, stopped: "none", stops: [], nextDueAt: "2026-08-20T12:00:00.000Z",
+      });
+      // Its request took the timeline: the final check put the poll off.
+      await testDb!.pool.query(
+        `update sync_work set due_at = $2::timestamptz, waiting_reason = 'pacer', waiting_until = $2::timestamptz
+          where page_id = $1 and resource = 'posts.refresh' and state = 'open'`,
+        [pageId, dueAgain.toISOString()],
+      );
+      expect(await posts()).toMatchObject({
+        activeWork: 1,
+        paused: false,
+        stopped: "some",
+        stops: [{ reason: "route_hold", by: ["posts.timeline"], resources: ["posts.refresh"], until: dueAgain.toISOString() }],
+        // Held work has no next read.
+        nextDueAt: null,
+      });
+      // The hold over (the row still waits for its route's pace): queued again.
+      await seedRouteState(target, { pageId, route: "posts.timeline", holdSeconds: null });
+      expect(await posts()).toMatchObject({ stopped: "none", stops: [], nextDueAt: dueAgain.toISOString() });
+    } finally {
+      await testDb!.pool.query("delete from sync_work where page_id = $1 and resource = 'posts.refresh'", [pageId]);
+      await testDb!.pool.query("delete from sync_holds where page_id = $1", [pageId]);
+    }
   });
 });
 

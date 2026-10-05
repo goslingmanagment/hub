@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { syncHealthResponseSchema } from "@agency_hub_core/contracts";
-import { upsertDemand, type Database } from "@agency_hub_core/db";
+import { createModel, createOnlyFansPage, upsertDemand, type Database } from "@agency_hub_core/db";
 
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { getPublicSyncHealth } from "../apps/runtime/src/services/health.ts";
@@ -17,12 +17,14 @@ import { seedSyncPage, setModeDirect } from "./helpers/sync-engine-host.ts";
 import { clearPageHolds, seedPageHold } from "./helpers/sync-holds.ts";
 
 /**
- * `/health/sync` for pages the Fansly Sync Engine owns (design step 3 §3.2
- * item 1, E14), against a real database: a `handover`/`live` page is judged
- * by the engine — unhealthy on an owner silent for more than 90 s, an
+ * `/health/sync` for Fansly pages (design step 3 §3.2 item 1, E14; step 4
+ * S4-24), against a real database: a `handover`/`live` page is judged by the
+ * engine — unhealthy on an owner silent for more than 90 s, an
  * `auth`/`identity_mismatch` hold, or a handover older than 10 minutes — and
- * reports an `engine` block; its frozen legacy streams are not judged. Every
- * other page reads exactly as before.
+ * reports an `engine` block. A Fansly page the engine does not own is read by
+ * nothing: unhealthy with the one issue `engine:not_live`, whatever its legacy
+ * rows say. The legacy stream checks judge the legacy executor's pages
+ * (OnlyFans) only.
  */
 
 let testDb: StartedTestDatabase | null = null;
@@ -69,7 +71,7 @@ async function health(pageIds?: number[]) {
   return { statusCode: result.statusCode, body, byId };
 }
 
-const pages = { live: 0, stale: 0, auth: 0, stuck: 0, fresh: 0, legacy: 0 };
+const pages = { live: 0, stale: 0, auth: 0, stuck: 0, fresh: 0, unowned: 0, onlyfans: 0 };
 
 beforeEach(async (context) => {
   if (!testDb) {
@@ -84,14 +86,38 @@ beforeEach(async (context) => {
   pages.auth = (await seedSyncPage(handles, { label: "lora-1" })).pageId;
   pages.stuck = (await seedSyncPage(handles, { label: "lora-2" })).pageId;
   pages.fresh = (await seedSyncPage(handles, { label: "lora-3" })).pageId;
-  pages.legacy = (await seedSyncPage(handles, { label: "ari-1", mode: "shadow" })).pageId;
+  pages.unowned = (await seedSyncPage(handles, { label: "ari-1", mode: "shadow" })).pageId;
+  const model = await createModel(db(), { slug: "of-model", name: "OF model" });
+  pages.onlyfans = (await createOnlyFansPage(db(), { modelId: model!.id, label: "lora-of" }))!.id;
 });
 
 describe("/health/sync on engine pages", () => {
-  it("judges a page by the engine once it owns it; every other page reads as before", async () => {
-    // Baseline: no page is the engine's.
+  it("judges a Fansly page by the engine once it owns it, and as read by nothing until then; an OnlyFans page by "
+    + "its legacy streams", async () => {
+    // Baseline: no page is the engine's. Every Fansly page is one nothing
+    // reads — no legacy check speaks for it (no light sync ever ran, no
+    // follower read, no credentials: none of it is an issue of its own).
     const before = await health();
     for (const page of before.body.pages) expect(page).not.toHaveProperty("engine");
+    for (const pageId of [pages.live, pages.stale, pages.auth, pages.stuck, pages.fresh, pages.unowned]) {
+      expect(before.byId.get(pageId)).toMatchObject({
+        platform: "fansly",
+        status: "degraded",
+        issues: ["engine:not_live"],
+        lastErrorSummary: "engine:not_live",
+        failedStreams: 0,
+        stalledStreams: 0,
+        pendingStreams: 0,
+      });
+    }
+    // The legacy executor's page keeps its legacy checks, and has no follower read.
+    expect(before.byId.get(pages.onlyfans)).toMatchObject({
+      platform: "onlyfans",
+      status: "degraded",
+      followerAgeMinutes: null,
+    });
+    expect(before.byId.get(pages.onlyfans)!.issues).toEqual(["connection:unverified", "light_sync_missing"]);
+    expect(before.body.thresholds).toEqual({ lightMaxAgeMinutes: app.config.healthSyncLightMaxAgeMinutes });
 
     await setModeDirect(testDb!.pool, pages.live, "live");
     await beat(pages.live, 3);
@@ -109,8 +135,10 @@ describe("/health/sync on engine pages", () => {
 
     const after = await health();
     expect(after.statusCode).toBe(503);
-    // The legacy (shadow) page is byte-identical to the baseline.
-    expect(after.byId.get(pages.legacy)).toEqual(before.byId.get(pages.legacy));
+    // The page the engine does not own (shadow) and the OnlyFans page are
+    // byte-identical to the baseline.
+    expect(after.byId.get(pages.unowned)).toEqual(before.byId.get(pages.unowned));
+    expect(after.byId.get(pages.onlyfans)).toEqual(before.byId.get(pages.onlyfans));
 
     const live = after.byId.get(pages.live)!;
     expect(live).toMatchObject({
@@ -132,8 +160,6 @@ describe("/health/sync on engine pages", () => {
       openAlerts: [],
     });
     expect(live.engine!.ownerHeartbeatAgeSeconds).toBeLessThanOrEqual(30);
-    // The frozen legacy streams no longer fail the page (no light sync ever ran).
-    expect(before.byId.get(pages.live)!.issues).toContain("light_sync_missing");
 
     expect(after.byId.get(pages.stale)).toMatchObject({ status: "degraded", issues: ["engine:owner_stale"] });
     expect(after.byId.get(pages.stale)!.engine!.ownerHeartbeatAgeSeconds).toBeGreaterThan(90);
@@ -144,9 +170,8 @@ describe("/health/sync on engine pages", () => {
     });
     expect(after.byId.get(pages.stuck)).toMatchObject({ status: "degraded", issues: ["engine:handover_stuck"] });
     expect(after.byId.get(pages.fresh)).toMatchObject({ status: "ok", issues: [], engine: { mode: "handover" } });
-    expect(after.body.overall.unhealthyPageCount).toBe(
-      before.byId.get(pages.legacy)!.status === "degraded" ? 4 : 3,
-    );
+    // stale, auth, stuck; the page nothing reads; the unverified OnlyFans page.
+    expect(after.body.overall.unhealthyPageCount).toBe(5);
 
     // Only healthy engine pages in scope: 200, and their blocks count as no
     // failed, stalled or pending stream.
@@ -159,20 +184,21 @@ describe("/health/sync on engine pages", () => {
     await setModeDirect(testDb!.pool, pages.live, "live");
     await beat(pages.live, 1);
     await upsertDemand(db(), {
-      pageId: pages.live, shadow: false, resource: "dm-messages.head", subject: "g-1", kind: "trigger", class: "urgent",
+      pageId: pages.live, resource: "dm-messages.head", subject: "g-1", kind: "trigger", class: "urgent",
       dueAt: new Date(Date.now() - 45_000),
     });
     // Due in the future: not counted.
     await upsertDemand(db(), {
-      pageId: pages.live, shadow: false, resource: "dm-messages.head", subject: "g-2", kind: "trigger", class: "urgent",
+      pageId: pages.live, resource: "dm-messages.head", subject: "g-2", kind: "trigger", class: "urgent",
       dueAt: new Date(Date.now() + 600_000),
     });
-    // A shadow row is not the live journal's.
-    await upsertDemand(db(), {
-      pageId: pages.live, shadow: true, resource: "dm-messages.head", subject: "g-3", kind: "trigger", class: "urgent",
-      dueAt: new Date(Date.now() - 600_000),
-    });
-    await upsertDemand(db(), { pageId: pages.live, shadow: false, resource: "transactions.rescan", kind: "poll", class: "planned" });
+    // A row shadow mode left behind is not the page's work.
+    await testDb!.pool.query(
+      `insert into sync_work (page_id, shadow, resource, subject, kind, class, due_at)
+       values ($1, true, 'dm-messages.head', 'g-3', 'trigger', 'urgent', clock_timestamp() - interval '10 minutes')`,
+      [pages.live],
+    );
+    await upsertDemand(db(), { pageId: pages.live, resource: "transactions.rescan", kind: "poll", class: "planned" });
     await testDb!.pool.query(
       "update sync_work set state = 'quarantined', waiting_reason = 'quarantined' where page_id = $1 and resource = 'transactions.rescan'",
       [pages.live],
@@ -227,7 +253,7 @@ describe("/health/sync on engine pages", () => {
     await setModeDirect(testDb!.pool, pages.auth, "live");
     await beat(pages.auth, 1);
     await seedPageHold(testDb!, { pageId: pages.auth, kind: "auth", untilSeconds: "infinity" });
-    const snapshot = await getSyncStatusSnapshot(app, { pageIds: [pages.auth, pages.legacy] });
+    const snapshot = await getSyncStatusSnapshot(app, { pageIds: [pages.auth, pages.unowned, pages.onlyfans] });
     const engine = snapshot.pages.find((page) => page.pageId === pages.auth)!;
     for (const block of Object.values(engine.blocks)) {
       expect(block).toMatchObject({ state: "engine", engineMode: "live" });
@@ -238,10 +264,20 @@ describe("/health/sync on engine pages", () => {
       statusReason: { code: "credentials_invalid" },
     });
     expect(engine.syncUx).toMatchObject({ state: "attention", requiresAction: true });
-    const legacy = snapshot.pages.find((page) => page.pageId === pages.legacy)!;
-    for (const block of Object.values(legacy.blocks)) {
+    // The page the engine does not own: no block of any engine.
+    const unowned = snapshot.pages.find((page) => page.pageId === pages.unowned)!;
+    for (const block of Object.values(unowned.blocks)) {
+      expect(block).toMatchObject({ state: "not_available", statusReason: { code: "fansly_sync_engine_off" }, substreams: [] });
+      expect(block).not.toHaveProperty("engineMode");
+    }
+    expect(unowned.syncUx).toMatchObject({ state: "off", headline: "Not syncing" });
+    // The OnlyFans page: legacy blocks, none of the engine's.
+    const onlyfans = snapshot.pages.find((page) => page.pageId === pages.onlyfans)!;
+    for (const block of Object.values(onlyfans.blocks)) {
       expect(block.state).not.toBe("engine");
       expect(block).not.toHaveProperty("engineMode");
     }
+    expect(onlyfans.blocks.connection.substreams.map((substream) => substream.stream)).toEqual(["light"]);
+    expect(onlyfans.blocks.messages_history).toMatchObject({ state: "not_available", statusReason: null });
   });
 });

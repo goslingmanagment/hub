@@ -31,9 +31,9 @@ docs/runbooks/*
 # Tracked because a test executes its command lines against the real contract:
 # an enablement runbook whose smoke test has drifted is worse than none.
 !docs/runbooks/agent-read-plane-enablement.md
-# Tracked because this undocumented provider endpoint needs a recorded live
-# acceptance and parse-debt/reconciliation ritual after deployment.
-!docs/runbooks/fansly-post-tips-acceptance.md
+# The Fansly Sync Engine's operator runbook. Tracked because tests parse its
+# command lines against the real CLI and run its SQL on the migrated schema.
+!docs/runbooks/sync.md
 # Operational acceptance for the OFAPI vendor transport and bounded recovery.
 !docs/runbooks/ofapi-posts-transport-recovery.md
 # Local replay and serving invariants for captured OFAPI message material.

@@ -8,4 +8,37 @@ import type { ClientHubCapabilityName } from "@agency_hub_core/contracts";
  * (`CLIENT_FEATURE_REQUIREMENTS` in client-features.ts), whatever the owner's
  * switches say.
  */
-export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [];
+export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
+  // The AI feature stream's `context_v1` frame (H-4b).
+  "context-v1",
+  // The AI feature stream takes `liveTextContext`, the fresh text of the open
+  // chat (H-4c). Taking the field is not using it: `aiLiveTextContextMode`
+  // rests off, and a page needs its `freshText` flag.
+  "live-text-v1",
+  // The shared recaps read (H-13).
+  "shared-recaps-v1",
+  // The dossier save from a stored generation (H-5). With it the hub serves
+  // all of the `recap` feature; the owner's switches decide from here on.
+  "recap-profile-v1",
+  // H-10: Split for Ping, Hi and Coach drafts (the splitAll flag;
+  // docs/ai-gateway-contract.md).
+  "split-all-v1",
+  // H-15: GET /api/v1/client/pages/:pageLabel/ai-usage.
+  "ai-usage-v1",
+];
+
+/**
+ * Served only while the owner's health intake is on (H-11b,
+ * `chatExtensionHealthIngestEnabled`): the client sends `client_health` reports
+ * only to a hub that lists it, and keeps them to itself otherwise. Not in
+ * SERVED_CLIENT_CAPABILITIES because no feature waits for it and it follows a
+ * live switch, not a shipped route.
+ */
+export const CLIENT_HEALTH_CAPABILITY: ClientHubCapabilityName = "client-health-perf-v1";
+
+/** The bootstrap's `capabilities` under the owner's switches as they are right now. */
+export function clientBootstrapCapabilities(switches: { healthIngestEnabled: boolean }): ClientHubCapabilityName[] {
+  return switches.healthIngestEnabled
+    ? [...SERVED_CLIENT_CAPABILITIES, CLIENT_HEALTH_CAPABILITY]
+    : [...SERVED_CLIENT_CAPABILITIES];
+}

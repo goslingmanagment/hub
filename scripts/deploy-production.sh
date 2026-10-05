@@ -621,22 +621,57 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # resets a Fansly page's legacy state, and its rollback command refuses, so
   # it runs unchanged; no image clears a 'retired' blocker.
   "0239_retire_fansly_legacy_sync_states.sql"
-  # NOT listed any more (step 4, S4-32): 0240_sync_holds.sql (the hold set's
-  # table) and 0241_sync_pages_drop_hold_step.sql (the first old hold column
+  # 0240_sync_holds.sql is NOT listed (since step 4, S4-32). The reason is
+  # below, where 0243_sync_pages_drop_hold_step.sql was.
+
+  # chat-extension greeting lease and send custody (hub-pr-plan H-7a): three
+  # new tables (client_fan_leases, client_greetings, client_send_custody),
+  # their checks, indexes and comments. The previous image never names them,
+  # and no route writes them until H-7b ships behind owner switches, so a
+  # rollback finds them empty (or unread) and runs unchanged.
+  "0241_client_claim_tables.sql"
+  # Overrides of the retired legacy Fansly config keys (step 4, design S4-26
+  # [E15]): one data statement that deletes the config_settings rows of the
+  # keys this release drops from the registry and appends one config_audit_log
+  # row per removed row (old value and version, new null). No DDL. The previous
+  # image still registers these keys but reads none of them, so with the rows
+  # gone it shows their env defaults and runs unchanged; the removed values
+  # stay readable in the audit log.
+  "0242_retire_fansly_legacy_config_overrides.sql"
+  # NOT listed (since step 4, S4-32): 0240_sync_holds.sql (the hold set's
+  # table) and 0243_sync_pages_drop_hold_step.sql (the first old hold column
   # of sync_pages). The image before 0240 knows a page's holds in the old
-  # hold columns of sync_pages alone; the one before 0241 compares those
+  # hold columns of sync_pages alone; the one before 0243 compares those
   # columns with the table whenever it acquires a page and lets them win.
   # Both were compatible only while the hold writers rewrote the columns
   # from the table in the transaction of every hold write, which they did
-  # through the release that carried 0241. From S4-32 on the tree writes
+  # through the release that carried 0243. From S4-32 on the tree writes
   # the table alone: the columns went stale there and are gone since S4-33
-  # (the entry below), so either image would drop every hold taken since
-  # S4-32 started and bring back every hold lifted, and neither runs at all
-  # without the columns. Both migrations are long applied wherever S4-32 has
-  # been deployed, so no delta of a later deploy holds them; a deploy that
-  # still had one of them to apply keeps the automatic rollback off rather
-  # than fail open (apps/runtime/src/sync/README.md, "Rollback targets").
+  # (the last entry of this list about them, below), so either image would
+  # drop every hold taken since S4-32 started and bring back every hold
+  # lifted, and neither runs at all without the columns. Both migrations
+  # are long applied wherever S4-32 has been deployed, so no delta of a
+  # later deploy holds them; a deploy that still had one of them to apply
+  # keeps the automatic rollback off rather than fail open
+  # (apps/runtime/src/sync/README.md, "Rollback targets").
   #
+  # With the drop the question of the old columns is closed: no image that
+  # reads or writes one runs on the table. The rollback targets of a
+  # database that has the drop are the S4-32 image and the images after it;
+  # the images before 0240 and before 0243, and the one that carried 0243
+  # (S4-31), are not.
+
+  # chat-extension client_health rollups (chat-extension H-11b): five new
+  # tables (client_health_receipts and four *_hourly rollups), their checks,
+  # comments and a read_only grant on the rollups. Nothing writes them until
+  # the owner turns chatExtensionHealthIngestEnabled on. The previous image
+  # never names them and runs unchanged after a rollback: its bootstrap does
+  # not list client-health-perf-v1, so the extension stops sending reports
+  # within its bootstrap cache (5 minutes), and a report that still arrives
+  # from the extension's narrow token is refused there (400: the kind is not
+  # in the token's profile), never journaled. Rollups already written stay
+  # unread until a forward deploy returns.
+  "0244_client_health_rollups.sql"
   # The old hold columns of sync_pages dropped (step 4, S4-33, owner decision
   # №26; the last of the three releases): five columns and the slot's two
   # CHECKs, one catalog-only ALTER TABLE under lock_timeout 5 s. The previous
@@ -653,7 +688,7 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # This list cannot tell those deploys apart (S4-32 has no migration of its
   # own), so the deploy asks the running images before it migrates anything:
   # verify_running_images_run_without_old_hold_columns.
-  "0242_sync_pages_drop_old_hold_columns.sql"
+  "0245_sync_pages_drop_old_hold_columns.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

@@ -523,20 +523,19 @@ export interface UpsertPageDmMessageInput {
 
 /**
  * Insert or refresh message rows; a row deleted earlier stays as it is
- * (sticky). Returns the platform ids of the rows this statement INSERTED (new
- * to the thread, hence not deleted) — the Fansly Sync Engine's incremental
- * legacy summary counts them; every other caller ignores the result.
+ * (sticky). The Fansly Sync Engine never calls it (step 4 S4-13): a live
+ * page's messages go to `message_archive`.
  */
 export async function upsertPageDmMessages(
   db: Database,
   inputs: UpsertPageDmMessageInput[],
-): Promise<string[]> {
+): Promise<void> {
   if (inputs.length === 0) {
-    return [];
+    return;
   }
 
   const syncedAt = new Date();
-  const written = await db
+  await db
     .insert(pageDmMessages)
     .values(inputs.map((input) => ({
       conversationId: input.conversationId,
@@ -564,11 +563,7 @@ export async function upsertPageDmMessages(
         inReplyToRootMessageId: sql`excluded.in_reply_to_root_message_id`,
         syncedAt: sql`excluded.synced_at`,
       },
-    })
-    // xmax = 0 only on a row this statement inserted (an updated row carries
-    // this transaction's id); a sticky-deleted conflict returns nothing.
-    .returning({ platformMessageId: pageDmMessages.platformMessageId, inserted: sql<boolean>`(xmax = 0)` });
-  return written.filter((row) => row.inserted === true).map((row) => row.platformMessageId);
+    });
 }
 
 export interface PageDmMessageLookupRow {
@@ -1534,34 +1529,4 @@ export async function clearConversationSyncHealth(db: Database, conversationId: 
     where conversation_id = ${conversationId}
       and not exists (select 1 from kept)
   `);
-}
-
-/** Conversation-level coverage debt per account: breaker rows still carrying
- * failures. They clear only when THEIR conversation is read successfully —
- * the health signal while poison threads sit out. A thread the lane no longer
- * selects (excluded, hidden, unbound) sits out for good and stops counting;
- * its row stays and applies again if the thread returns. Rows kept only for
- * preferred_page_limit (failure_count = 0) do not count. */
-export async function countConversationSyncFailuresByAccount(
-  db: Database,
-  input?: { platformAccountIds?: readonly number[] },
-): Promise<Array<{ platformAccountId: number; failingConversationCount: number }>> {
-  const accountFilter = input?.platformAccountIds && input.platformAccountIds.length > 0
-    ? sql`and h.platform_account_id in (${sql.join(input.platformAccountIds.map((id) => sql`${id}`), sql`, `)})`
-    : sql``;
-  const result = await db.execute<{ platformAccountId: NumericValue; count: NumericValue }>(sql`
-    select h.platform_account_id as "platformAccountId", count(*)::bigint as "count"
-    from page_dm_message_sync_health h
-    join page_dm_threads c on c.id = h.conversation_id
-    where h.failure_count > 0
-      ${accountFilter}
-      and c.is_visible = true
-      and c.fan_id is not null
-      and ${dmMessageSyncEligibleSql("c")}
-    group by h.platform_account_id
-  `);
-  return result.rows.map((row) => ({
-    platformAccountId: normalizeNumber(row.platformAccountId, "platformAccountId"),
-    failingConversationCount: normalizeNumber(row.count, "count"),
-  }));
 }

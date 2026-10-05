@@ -99,7 +99,7 @@ async function fixture() {
         messageRef: input.messageRef, groupRef: input.groupRef === undefined ? GROUP : input.groupRef,
         correlationRef: "77", bulk: false,
       } },
-    }, null);
+    });
   };
   /** Mark message `ref` deleted in the hot table and the archive. */
   const mark = async (ref: string, deletedAt: Date) => {

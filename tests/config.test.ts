@@ -7,9 +7,9 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   FANSLY_PAUSE_MAX_MS,
   FANSLY_PAUSE_MIN_MS,
-  IGNORED_FANSLY_ENDPOINT_PAUSE_ENV_KEYS,
-  listIgnoredFanslyEndpointPauseEnv,
+  listRetiredFanslyEnv,
   loadConfig,
+  RETIRED_FANSLY_ENV_KEYS,
 } from "@agency_hub_core/shared";
 
 const baseEnv = {
@@ -54,14 +54,8 @@ describe("config", () => {
     const config = loadConfig(baseEnv);
 
     expect(config.fanslyDefaultDelayMs).toBe(2500);
-    expect(config.fanslyDmConversationsDelayMs).toBe(5000);
-    expect(config.fanslyDmMessagesDelayMs).toBe(5000);
-    expect(config.fanslyDmDeepBackfillLiveRequestsPerDeep).toBe(4);
-    expect(config.fanslyDmDeepBackfillContinuationDelayMs).toBe(0);
-    expect(config.fanslyDmDeepBackfillContinuationJitterMs).toBe(0);
     expect(config.onlyFansDefaultDelayMs).toBe(1000);
     expect(config.onlyFansDmPollingEnabled).toBe(false);
-    expect(config.syncSharedRateLimitEnabled).toBe(true);
     expect(config.syncPageExecutorConcurrency).toBe(4);
     expect(config.trustProxy).toBe(false);
     expect(config.chatMuseAiGatewayDailyRequestLimit).toBe(500);
@@ -106,48 +100,43 @@ describe("config", () => {
       .toBe("127.0.0.1, 10.0.0.0/8");
   });
 
-  it("still parses the retired Fansly endpoint pause env vars the production env sets, without the old floor", () => {
-    // Plan §2.3 / §14: the pauses no longer pace anything, but an env that
-    // sets them (production: 7500 / 5000 / 5000) must keep booting until the
-    // keys are removed. The values are carried as given; nothing reads them.
-    const config = loadConfig({
-      ...baseEnv,
-      FOLLOWER_PAGE_DELAY_MS: "5000",
-      FANSLY_DM_CONVERSATIONS_DELAY_MS: "2000",
-      FANSLY_DM_MESSAGES_DELAY_MS: "7500",
-    });
+  it("boots an environment that still sets the retired Fansly env vars, whatever their values, and carries none of them", () => {
+    // Step 4 (S4-26): the keys are gone from the schema, so a value the env still
+    // sets is dropped unparsed — production sets seven of them — and a value the
+    // old schema would have refused no longer stops the boot.
+    const canonical = { ...baseEnv, FANSLY_DEFAULT_DELAY_MS: "2500" };
+    const stale = Object.fromEntries(RETIRED_FANSLY_ENV_KEYS.map((key) => [key, "not-a-value"]));
 
-    expect(config.followerPageDelayMs).toBe(5000);
-    expect(config.fanslyDmConversationsDelayMs).toBe(2000);
-    expect(config.fanslyDmMessagesDelayMs).toBe(7500);
+    expect(loadConfig({ ...canonical, ...stale })).toEqual(loadConfig(canonical));
+    expect(loadConfig({
+      ...canonical,
+      FOLLOWER_PAGE_DELAY_MS: "5000",
+      FANSLY_DM_CONVERSATIONS_DELAY_MS: "5000",
+      FANSLY_DM_MESSAGES_DELAY_MS: "7500",
+      HEALTH_SYNC_FOLLOWER_MAX_AGE_MINUTES: "1080",
+      SYNC_SHARED_RATE_LIMIT_ENABLED: "true",
+      TRANSACTION_LOOKBACK_DAYS: "7",
+      TRANSACTION_RESCAN_CAP_DAYS: "30",
+    })).toEqual(loadConfig(canonical));
   });
 
-  it("names the retired Fansly endpoint pause env vars an environment sets", () => {
-    expect(IGNORED_FANSLY_ENDPOINT_PAUSE_ENV_KEYS).toEqual([
-      "FOLLOWER_PAGE_DELAY_MS",
-      "FANSLY_DM_CONVERSATIONS_DELAY_MS",
-      "FANSLY_DM_MESSAGES_DELAY_MS",
-    ]);
-    expect(listIgnoredFanslyEndpointPauseEnv({})).toEqual([]);
-    expect(listIgnoredFanslyEndpointPauseEnv({
+  it("names the retired Fansly env vars an environment still sets, in the list's order", () => {
+    expect(new Set(RETIRED_FANSLY_ENV_KEYS).size).toBe(RETIRED_FANSLY_ENV_KEYS.length);
+    expect(listRetiredFanslyEnv({})).toEqual([]);
+    expect(listRetiredFanslyEnv({
+      TRANSACTION_LOOKBACK_DAYS: "7",
       FANSLY_DM_MESSAGES_DELAY_MS: "7500",
       FOLLOWER_PAGE_DELAY_MS: "5000",
       FANSLY_DM_CONVERSATIONS_DELAY_MS: "  ",
+      AGENT_HYDRATION_AUTO_APPROVE_MODE: "enforce",
       FANSLY_DEFAULT_DELAY_MS: "2500",
-    })).toEqual(["FOLLOWER_PAGE_DELAY_MS", "FANSLY_DM_MESSAGES_DELAY_MS"]);
-  });
-
-  it("accepts Fansly DM deep backfill pacing overrides", () => {
-    const config = loadConfig({
-      ...baseEnv,
-      FANSLY_DM_DEEP_BACKFILL_LIVE_REQUESTS_PER_DEEP: "6",
-      FANSLY_DM_DEEP_BACKFILL_CONTINUATION_DELAY_MS: "22000",
-      FANSLY_DM_DEEP_BACKFILL_CONTINUATION_JITTER_MS: "8000",
-    });
-
-    expect(config.fanslyDmDeepBackfillLiveRequestsPerDeep).toBe(6);
-    expect(config.fanslyDmDeepBackfillContinuationDelayMs).toBe(22_000);
-    expect(config.fanslyDmDeepBackfillContinuationJitterMs).toBe(8_000);
+      FANSLY_REPLIES_REWALK_CYCLE_DAYS: "30",
+    })).toEqual([
+      "FOLLOWER_PAGE_DELAY_MS",
+      "FANSLY_DM_MESSAGES_DELAY_MS",
+      "TRANSACTION_LOOKBACK_DAYS",
+      "AGENT_HYDRATION_AUTO_APPROVE_MODE",
+    ]);
   });
 
   it("accepts an explicit Fansly default delay override", () => {
@@ -164,20 +153,27 @@ describe("config", () => {
   // the flags could only crash boot, never enable anything. An unknown env
   // var is simply ignored by the schema — nothing left to pin here.
 
-  it("falls back to the deprecated account lookup delay alias when the global var is unset", () => {
-    const config = loadConfig({
-      ...baseEnv,
-      FANSLY_ACCOUNT_LOOKUP_DELAY_MS: "3000",
-    });
-
-    expect(config.fanslyDefaultDelayMs).toBe(3000);
+  it("fails the boot when only a retired pause alias sets the Fansly pause, and names the fix", () => {
+    // The aliases fed the pause while FANSLY_DEFAULT_DELAY_MS was unset. Dropping
+    // one silently would move the owner's pause to the default.
+    expect(() => loadConfig({ ...baseEnv, FANSLY_GLOBAL_DELAY_MS: "3000" })).toThrow(
+      "FANSLY_GLOBAL_DELAY_MS is retired and no longer sets the Fansly pause; "
+        + "set FANSLY_DEFAULT_DELAY_MS=3000 instead and remove FANSLY_GLOBAL_DELAY_MS",
+    );
+    expect(() => loadConfig({ ...baseEnv, FANSLY_ACCOUNT_LOOKUP_DELAY_MS: " 3500 " })).toThrow(
+      "FANSLY_ACCOUNT_LOOKUP_DELAY_MS is retired and no longer sets the Fansly pause; "
+        + "set FANSLY_DEFAULT_DELAY_MS=3500 instead and remove FANSLY_ACCOUNT_LOOKUP_DELAY_MS",
+    );
+    // A blank canonical name is an unset one.
+    expect(() => loadConfig({ ...baseEnv, FANSLY_DEFAULT_DELAY_MS: " ", FANSLY_GLOBAL_DELAY_MS: "3000" }))
+      .toThrow("FANSLY_GLOBAL_DELAY_MS is retired");
   });
 
-  it("prefers FANSLY_DEFAULT_DELAY_MS over deprecated aliases", () => {
+  it("ignores a retired pause alias beside FANSLY_DEFAULT_DELAY_MS, whatever it says", () => {
     const config = loadConfig({
       ...baseEnv,
-      FANSLY_GLOBAL_DELAY_MS: "3000",
-      FANSLY_ACCOUNT_LOOKUP_DELAY_MS: "3500",
+      FANSLY_GLOBAL_DELAY_MS: "1500",
+      FANSLY_ACCOUNT_LOOKUP_DELAY_MS: "90000",
       FANSLY_DEFAULT_DELAY_MS: "2800",
     });
 
@@ -195,33 +191,13 @@ describe("config", () => {
     // The old example env said 1900; it must stop the process, not be clamped silently.
     for (const value of ["1", "1900", String(FANSLY_PAUSE_MIN_MS - 1)]) {
       expect(() => loadConfig({ ...baseEnv, FANSLY_DEFAULT_DELAY_MS: value }), value)
-        .toThrow(`FANSLY_DEFAULT_DELAY_MS must be between 2000 and 60000 ms (got ${value} from FANSLY_DEFAULT_DELAY_MS)`);
+        .toThrow(`FANSLY_DEFAULT_DELAY_MS must be between 2000 and 60000 ms (got ${value})`);
     }
   });
 
   it("fails the boot on a Fansly pause above 60000 ms", () => {
     expect(() => loadConfig({ ...baseEnv, FANSLY_DEFAULT_DELAY_MS: String(FANSLY_PAUSE_MAX_MS + 1) }))
-      .toThrow("FANSLY_DEFAULT_DELAY_MS must be between 2000 and 60000 ms (got 60001 from FANSLY_DEFAULT_DELAY_MS)");
-  });
-
-  it("range-checks a deprecated alias that supplies the Fansly pause and names it", () => {
-    expect(() => loadConfig({ ...baseEnv, FANSLY_GLOBAL_DELAY_MS: "1500" }))
-      .toThrow("(got 1500 from FANSLY_GLOBAL_DELAY_MS)");
-    expect(() => loadConfig({ ...baseEnv, FANSLY_ACCOUNT_LOOKUP_DELAY_MS: "90000" }))
-      .toThrow("(got 90000 from FANSLY_ACCOUNT_LOOKUP_DELAY_MS)");
-    // The canonical value wins the coalesce, so an ignored alias cannot fail the boot.
-    expect(loadConfig({ ...baseEnv, FANSLY_DEFAULT_DELAY_MS: "2500", FANSLY_GLOBAL_DELAY_MS: "1500" })
-      .fanslyDefaultDelayMs).toBe(2500);
-  });
-
-  it("prefers FANSLY_GLOBAL_DELAY_MS over the legacy account lookup alias when canonical is unset", () => {
-    const config = loadConfig({
-      ...baseEnv,
-      FANSLY_GLOBAL_DELAY_MS: "3000",
-      FANSLY_ACCOUNT_LOOKUP_DELAY_MS: "3500",
-    });
-
-    expect(config.fanslyDefaultDelayMs).toBe(3000);
+      .toThrow("FANSLY_DEFAULT_DELAY_MS must be between 2000 and 60000 ms (got 60001)");
   });
 
   it("enables Telegram delivery when bot token and chat id are configured", () => {

@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+  CLIENT_HEALTH_INGEST_KIND,
   CLIENT_TOKEN_PROFILE_NAMES,
   CLIENT_TOKEN_PROFILES,
   authIssueDeviceTokenWithPasswordBodySchema,
@@ -92,9 +93,11 @@ describe("CLIENT_TOKEN_PROFILES[\"chat-extension\"]", () => {
     }
   });
 
-  it("captures only ai_acceptance, a kind the capture lane already journals", () => {
-    expect(clientTokenIngestKinds("chat-extension")).toEqual(["ai_acceptance"]);
-    expect(EXTENSION.ingestKinds.every((kind) => INGEST_KIND_ALLOWLIST.has(kind))).toBe(true);
+  it("captures only ai_acceptance, a journaled kind, and client_health, which is never journaled", () => {
+    expect(clientTokenIngestKinds("chat-extension")).toEqual(["ai_acceptance", "client_health"]);
+    // Every kind of the profile has a home: the journal's allowlist, or the
+    // health intake (H-11b), which folds the report into rollups with no user.
+    expect(EXTENSION.ingestKinds.filter((kind) => !INGEST_KIND_ALLOWLIST.has(kind))).toEqual([CLIENT_HEALTH_INGEST_KIND]);
   });
 
   it("finds the operations a frozen SDK calls that the profile refuses (the H-1a registry check)", () => {

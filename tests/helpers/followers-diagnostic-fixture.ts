@@ -1,13 +1,13 @@
 import {
   createFanslyPage,
   createModel,
-  ensurePageSyncStates,
   requestPageSync,
   startSyncRun,
 } from "@agency_hub_core/db";
 import { SyncRunTelemetry } from "../../apps/runtime/src/services/sync/observability.ts";
 import { followersReconcileDecision } from "../../apps/runtime/src/sync/fansly/lib/followers-reconcile-decision.ts";
 import type { StartedTestDatabase } from "./db.ts";
+import { seedFormerFanslyRows } from "./fansly-legacy-rows.ts";
 import { createTestAppContext } from "./runtime.ts";
 
 // The C1 readers (fansly_followers_diagnostic_report and
@@ -65,7 +65,9 @@ export async function followersDiagnosticFixture(
   if (!model) throw new Error("model seed failed");
   const page = await createFanslyPage(db.db, { modelId: model.id, label: "followers-diagnostic" });
   if (!page) throw new Error("page seed failed");
-  await ensurePageSyncStates(db.db, { pageId: page.id });
+  // The page's legacy rows as an old planner seeded them (nothing seeds a
+  // Fansly page's rows since step 4, S4-24): the diagnostics read records.
+  await seedFormerFanslyRows(db.pool, page.id, new Date());
   const run = await startSyncRun(db.db, {
     platformAccountId: page.id,
     stream: "followers",

@@ -27,10 +27,9 @@ import type { RouteBudgetStatusView, RouteStatusView } from "./status.ts";
 // no borrowing, no burst, an idle hour earns nothing. The clocks are read
 // from the attempt journal on every slot (`readRouteJournal`), never kept in
 // memory: a restart, a takeover, a demand bump or a restarted walk can never
-// shorten an interval. On a live page the step-1 send log counts too
-// (what the legacy engine sent before the switch); a send whose instant is
-// unknown counts at its upper bound. A shadow page runs the same rule on its
-// own journal, so the shadow report sees the budgets live pages keep.
+// shorten an interval. The step-1 send log counts too (what the legacy
+// engine sent before the switch); a send whose instant is unknown counts at
+// its upper bound.
 //
 // The rule is applied twice per slot, one pure function each:
 //   - at the pick: a key all of whose routes are closed is left out of the

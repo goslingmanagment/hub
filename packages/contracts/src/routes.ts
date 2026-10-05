@@ -27,7 +27,7 @@ import { z } from "zod";
 // contract with its own envelope law and principal) and spread into routeSchemas
 // below, so registration, the auth-declaration gate and the OpenAPI generator
 // keep seeing ONE flat registry.
-import { agentExportPolicyEnum, agentRouteSchemas } from "./routes-agent.ts";
+import { agentExportPolicyEnum, agentRouteSchemas, agentSyncWaitingReasonEnum } from "./routes-agent.ts";
 // Owner administration of the plane's KEYS. A sibling module rather than part of
 // the read plane: issuing a credential carries no evidence envelope, and folding
 // it into agentRouteSchemas would have meant loosening that module's pins.
@@ -36,7 +36,7 @@ import { agentKeyAdminRouteSchemas } from "./routes-agent-keys.ts";
 // agent envelope, so a sibling module for the same reason as the keys above.
 import { syncRouteSchemas } from "./routes-sync.ts";
 // The chat extension's routes (client bootstrap and what follows); same spread.
-import { clientRouteSchemas } from "./routes-client.ts";
+import { clientNumericIdSchema, clientOpenToken, clientRouteSchemas } from "./routes-client.ts";
 // House primitives shared with the sibling route modules (see primitives.ts).
 import {
   businessDate,
@@ -405,10 +405,11 @@ export const healthResponseSchema = z.object({
   }),
 });
 
-/** `/health/sync`'s block of a page the Fansly Sync Engine owns: its legacy
- *  streams are not judged; the page is unhealthy on a stale owner (> 90 s),
- *  a refused credential (an `auth`/`identity_mismatch` hold) or a handover
- *  older than 10 minutes. */
+/** `/health/sync`'s block of a page the Fansly Sync Engine owns: the page is
+ *  unhealthy on a stale owner (> 90 s), a refused credential (an
+ *  `auth`/`identity_mismatch` hold) or a handover older than 10 minutes. A
+ *  Fansly page without the block is one the engine does not own: nothing
+ *  reads it, and it is unhealthy with the issue `engine:not_live`. */
 export const syncHealthEngineSchema = z.object({
   mode: z.enum(["handover", "live"]),
   ownerHeartbeatAgeSeconds: z.number().int().nonnegative().nullable(),
@@ -446,9 +447,10 @@ export const syncHealthPageSchema = z.object({
 export const syncHealthResponseSchema = z.object({
   status: serviceHealthStatusEnum,
   timestamp: isoTimestamp,
+  /** The legacy stream checks' threshold; they judge the pages of the legacy
+   *  page-sync executor (OnlyFans). */
   thresholds: z.object({
     lightMaxAgeMinutes: z.number().int().positive(),
-    followerMaxAgeMinutes: z.number().int().positive(),
   }),
   overall: z.object({
     pageCount: z.number().int(),
@@ -1944,12 +1946,74 @@ export const aiGatewayStreamFrameSchema = z.discriminatedUnion("type", [
   }).strict(),
 ]);
 
+// chat-extension H-4b. The newest message of a transcript reader, as the
+// context frame names it.
+const aiContextHeadSchema = z.object({
+  messageRef: z.string(),
+  occurredAt: isoTimestamp.nullable(),
+  isFromFan: z.boolean(),
+});
+
+/** How many ids `knownFanMessageIds` may name, and so how many answers the
+ *  context frame carries. */
+export const AI_KNOWN_FAN_MESSAGE_IDS_MAX = 10;
+
+// Known values of the frame's open tokens. On the wire they are open strings
+// (the shape law in routes-client.ts): a client narrows to these and reads an
+// unknown value as "unknown", so a later value never breaks an installed
+// client. `coverage` narrows to CLIENT_COVERAGE_LEVELS (routes-client.ts),
+// which the client reads share.
+export const AI_CONTEXT_SOURCES = ["archive", "union", "live_union"] as const;
+export const AI_KNOWN_FAN_MESSAGE_STATES = ["included", "absent", "deleted", "unknown"] as const;
+export const AI_CONTEXT_LIVE_STATUSES = ["not_sent", "disabled", "shadow", "served", "rejected"] as const;
+export const AI_FAN_LANGUAGE_EVIDENCE = ["latin", "cyrillic", "mixed", "unknown"] as const;
+
+// Feature-lane-only: the transcript snapshot that ACTUALLY served this
+// generation. Emitted right after `meta` (and `debug_input_v1`), before the
+// first `content_delta`, and only to a caller that advertised `context-v1`.
+// Deliberately NOT strict, unlike every other frame: a later key must not fail
+// the stream of a client already in the field.
+export const aiFeatureContextFrameSchema = z.object({
+  type: z.literal("context_v1"),
+  /** Equals `meta.requestId`. */
+  generationRef: z.string().uuid(),
+  /** The hub reader that served the transcript: AI_CONTEXT_SOURCES. */
+  source: clientOpenToken,
+  /** Newest message of the served window, after normalization and the window
+   *  cap; null when the window is empty. */
+  servedHead: aiContextHeadSchema.nullable(),
+  /** Diagnostics only: the plain archive reader's head. With `source: "union"`
+   *  the model may have read past it. */
+  archiveHead: aiContextHeadSchema.nullable().optional(),
+  window: z.object({
+    requested: z.number().int().nonnegative(),
+    served: z.number().int().nonnegative(),
+  }),
+  /** How much of the conversation's history the hub can vouch for:
+   *  CLIENT_COVERAGE_LEVELS. */
+  coverage: clientOpenToken,
+  /** One answer per id of the body's `knownFanMessageIds`, in the same order;
+   *  absent when the body named none. `state`: AI_KNOWN_FAN_MESSAGE_STATES. */
+  knownFanMessages: z.array(z.object({ id: z.string(), state: clientOpenToken }))
+    .max(AI_KNOWN_FAN_MESSAGE_IDS_MAX)
+    .optional(),
+  /** What the hub did with the client's fresh text: AI_CONTEXT_LIVE_STATUSES. */
+  live: z.object({
+    status: clientOpenToken,
+    accepted: z.number().int().nonnegative(),
+    rejected: z.number().int().nonnegative(),
+  }),
+  /** AI_FAN_LANGUAGE_EVIDENCE. */
+  fanLanguageEvidence: clientOpenToken.optional(),
+});
+
 // Unknown frames remain fatal for the raw gateway. Only streamAiFeature uses
-// this additive union, and the server emits debug_input_v1 only when the
-// caller advertised the matching capability header.
+// this additive union, and the server emits debug_input_v1 and context_v1 only
+// when the caller advertised the matching capability header.
 export const aiFeatureStreamFrameSchema = z.union([
   aiGatewayStreamFrameSchema,
   aiFeatureDebugInputFrameSchema,
+  aiFeatureContextFrameSchema,
 ]);
 
 // Stage 29 restricted capture class (DP 6-A): owner-only reads.
@@ -2113,11 +2177,57 @@ export const FAN_SILENCE_DAYS_MAX = 20_000;
 // ~= 10.1MB (a printable 3-byte-UTF-8 char like the CJK "no" is only the 3-byte
 // ceiling -> ~5.06MB, well under this). The former 4 MiB and 8 MiB limits both
 // 413'd this six-byte worst case before validation; 12 MiB (12,582,912) clears
-// ~10.1MB with headroom while genuine transport abuse still 413s. Kept in the
-// contract next to the schema so the limit and the field caps that drive it
-// cannot drift apart; asserted against the measured worst case in
+// it with headroom while genuine transport abuse still 413s.
+//
+// chat-extension H-4c adds `liveTextContext`: 60 items x 5k = 300k more code
+// units, 1.8MB at six bytes each. The service refuses it on Coach and beside
+// `clientContext`, but that is decided AFTER this limit and the schema, and the
+// schema cannot refuse it (the feature is a path parameter). So the worst
+// schema-valid body carries both: ~1.99M code units, measured 12.13MB with the
+// media list and JSON framing, which 12 MiB (12.58MB) still clears by about
+// 0.45MB. No request the service accepts comes near it. A field added after
+// this one has to be counted in the test before it ships.
+//
+// Kept in the contract next to the schema so the limit and the field caps that
+// drive it cannot drift apart; asserted against the measured worst case in
 // tests/contracts-coach-body.test.ts.
 export const AI_FEATURE_STREAM_BODY_LIMIT_BYTES = 12 * 1024 * 1024;
+
+// chat-extension H-4c — the fresh text of the open OnlyFans chat: the last
+// confirmed messages the client reads off the page it is showing, for the
+// features that draft a message to the fan (Reply, Fix, Hi, Ping). The hub's
+// archive lags the page by seconds to minutes; these fill that gap for ONE
+// generation and are stored nowhere else (docs/ai-gateway-contract.md).
+export const AI_LIVE_TEXT_MAX_ITEMS = 60;
+/** Per item, in UTF-16 code units. */
+export const AI_LIVE_TEXT_MAX_CHARS = 5_000;
+
+// An instant as the client writes it: ISO 8601 with seconds and an explicit
+// offset, at most nine fractional digits. The house `isoTimestamp` is a bare
+// string; these order the transcript, so their form is checked, which also
+// bounds their length (they count toward the body limit above).
+//
+// The pattern is the client's frozen one (chat-extension IsoTimestampSchema)
+// and the whole check: this schema accepts exactly what the client's does. A
+// string of the right form that names no instant (a leap second, a thirteenth
+// month) is therefore NOT refused here, where it would fail the whole request:
+// the merge rejects that one item as `unusable` (context/live-text.ts).
+const aiLiveTextInstantSchema = z.string()
+  .regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/);
+
+export const aiLiveTextContextSchema = z.object({
+  /** When the client read the messages off the page. */
+  capturedAt: aiLiveTextInstantSchema,
+  items: z.array(z.object({
+    /** The platform's own message id. Only messages the platform confirmed:
+     *  never a queued (mass, welcome) or an unsent one. */
+    platformMessageId: clientNumericIdSchema,
+    direction: z.enum(["fan", "model"]),
+    occurredAt: aiLiveTextInstantSchema,
+    /** Text only: a message that is media alone is not sent. */
+    text: z.string().min(1).max(AI_LIVE_TEXT_MAX_CHARS),
+  }).strict()).min(1).max(AI_LIVE_TEXT_MAX_ITEMS),
+}).strict();
 
 export const aiFeatureStreamBodySchema = z.object({
   clientRequestId: z.string().uuid(),
@@ -2158,6 +2268,25 @@ export const aiFeatureStreamBodySchema = z.object({
   // freshness gate skipped. New clients send variantCount instead. Do not
   // remove while a supported client still sends it.
   greetingMode: z.literal("new-follower").optional(),
+  // chat-extension H-4b: ids only, never text. Fan messages the client saw in
+  // the open chat before it asked for this generation, newest first. The hub
+  // answers each one in the `context_v1` frame (`knownFanMessages`) from the
+  // transcript that actually served the generation, scoped to this page and
+  // this conversation. Accepted on every feature; without the `context-v1`
+  // capability there is no frame to answer in, so the ids are ignored.
+  knownFanMessageIds: z.array(clientNumericIdSchema)
+    .min(1)
+    .max(AI_KNOWN_FAN_MESSAGE_IDS_MAX)
+    .refine((ids) => new Set(ids).size === ids.length, { message: "knownFanMessageIds repeat" })
+    .optional(),
+  // chat-extension H-4c: the fresh text of the open OnlyFans chat (above).
+  // Accepted only on fast-reply, improve-draft, hi-greeting and ping, only for
+  // an OnlyFans page, never beside clientContext, and only from a caller that
+  // advertised `context-v1`: anything else is a 400 with a machine reason.
+  // Whether it is USED is the owner's switch (`aiLiveTextContextMode` and the
+  // page's `freshText` flag); switched off, it is ignored and the `context_v1`
+  // frame says `live.status: "disabled"`.
+  liveTextContext: aiLiveTextContextSchema.optional(),
   // Stage 32: client-loaded context for platforms whose kernel archive is
   // pull-cadenced (Fansly: dm_conversations 30 min / dm_messages 24 h — no
   // webhook lane), where the client reads the conversation live at
@@ -2650,8 +2779,8 @@ const syncBlockStateEnum = z.enum([
   "failed",
   "paused",
   "not_available",
-  // The page is the Fansly Sync Engine's (`handover`/`live`): its legacy
-  // streams are frozen and the block describes the engine's live work.
+  // The page is the Fansly Sync Engine's (`handover`/`live`): the block
+  // describes the engine's live work.
   "engine",
 ]);
 
@@ -2685,6 +2814,38 @@ export const syncStatusReasonSchema = z.object({
 
 const syncStreamRoleEnum = z.enum(["primary", "supporting"]);
 
+/** One thing that stops registry keys of a page the Fansly Sync Engine owns
+ *  from sending now. `paused` is the owner's; the rest is what the engine's
+ *  hold evaluator says of a request of the key: the page's own hold, the
+ *  breaker of its resource file, a 429's hold of its routes — of every route
+ *  it reads, or of one of them once that hold has put the key's work off. (A
+ *  route's own pace stops nothing: work it puts off is queued.) A key stopped
+ *  by several is named under each: ending one leaves the others. */
+export const syncEngineStopSchema = z.object({
+  reason: z.enum(["paused", "page_hold", "resource_hold", "route_hold"]),
+  /** What stops them. `paused`: `page` (the whole page), `requests` (the
+   *  history requests class) or `keys` (the keys themselves). `page_hold`: the
+   *  hold's kind (`auth`, `identity_mismatch`, `network`, or `unreadable`: rows
+   *  of the hold set the build cannot read). `resource_hold`: the resource
+   *  file on its breaker. `route_hold`: the routes a 429 holds. */
+  by: z.array(z.string()),
+  /** The registry keys it stops. */
+  resources: z.array(z.string()),
+  /** When it ends (work a route's hold put off: when it is due again, or the
+   *  hold ends if that is sooner); null: no instant ends it (a pause, refused
+   *  credentials, unreadable rows). */
+  until: isoTimestamp.nullable(),
+});
+
+/** How many of a set of keys can send nothing now. */
+const syncEngineStoppedEnum = z.enum(["none", "some", "all"]);
+
+/** Quarantined or vendor-refused work: how many rows, of which keys. */
+const syncEngineWorkCountSchema = z.object({
+  count: z.number().int().nonnegative(),
+  resources: z.array(z.string()),
+});
+
 export const syncBlockIntervalSchema = z.object({
   stream: extendedSyncStreamEnum,
   cadenceSeconds: z.number().int(),
@@ -2702,6 +2863,16 @@ export const syncBlockSubstreamSchema = z.object({
   needsAttention: z.boolean(),
   statusReason: syncStatusReasonSchema.nullable(),
   error: syncBlockErrorSchema.nullable(),
+  /** Present exactly when `state` is `engine`: how many of the stream's keys
+   *  can send nothing now, and what stops them. */
+  engine: z.object({
+    stopped: syncEngineStoppedEnum,
+    stops: z.array(syncEngineStopSchema),
+    /** The owner's pause stops every one of its keys, whatever else does. */
+    paused: z.boolean(),
+    /** The live work of its keys that is open, running or quarantined. */
+    activeWork: z.number().int().nonnegative(),
+  }).optional(),
 });
 
 export const syncBlockStatusSchema = z.object({
@@ -2709,6 +2880,33 @@ export const syncBlockStatusSchema = z.object({
   state: syncBlockStateEnum,
   /** Present exactly when `state` is `engine`. */
   engineMode: syncEngineOwnedModeEnum.optional(),
+  /** Present exactly when `state` is `engine`: who runs the page, the keys the
+   *  block's buttons move, what stops them and what needs the owner. */
+  engine: z.object({
+    mode: syncEngineOwnedModeEnum,
+    /** A sync host runs the page (a fresh owner heartbeat). false: nothing of
+     *  the block is read, whatever its work says. */
+    ownerRunning: z.boolean(),
+    /** The registry keys the block's buttons move. No key is another block's. */
+    keys: z.array(z.string()),
+    /** Those of them that are polls: what "sync now" makes due. */
+    pollKeys: z.array(z.string()),
+    /** Those of them the owner paused one by one. */
+    pausedKeys: z.array(z.string()),
+    /** The owner paused the whole page. */
+    pausedAll: z.boolean(),
+    /** How many of the keys can send nothing now, and what stops them. */
+    stopped: syncEngineStoppedEnum,
+    stops: z.array(syncEngineStopSchema),
+    /** The owner's pause stops every one of the keys, whatever else does. */
+    paused: z.boolean(),
+    /** The keys' live work that is open, running or quarantined. */
+    activeWork: z.number().int().nonnegative(),
+    /** The keys' quarantined rows: what the block's reset requeues. */
+    quarantined: syncEngineWorkCountSchema,
+    /** The keys' rows Fansly refuses. */
+    blockedByVendor: syncEngineWorkCountSchema,
+  }).optional(),
   succeededAt: isoTimestamp.nullable(),
   progress: syncBlockProgressSchema.nullable(),
   progressStream: z.string().nullable(),
@@ -4846,7 +5044,7 @@ export const configItemSchema = z.object({
   key: z.string(),
   envName: z.string(),
   configField: z.string().nullable(),
-  kind: z.enum(["boolean", "number", "string", "url", "secret", "derived", "alias", "complex"]),
+  kind: z.enum(["boolean", "number", "string", "url", "secret", "derived", "complex"]),
   subsystem: z.string(),
   label: z.string(),
   default: z.string(),
@@ -5294,16 +5492,37 @@ const insightsEngineStreamSchema = z.object({
   stream: z.string(),
   /** The engine's registry keys that read this stream's data. */
   resources: z.array(z.string()),
-  /** When one of them was last applied live; null = not yet. */
+  /** When one of them was last applied live — a key that works per subject (a
+   *  chat, a fan) over all its subjects; null = not yet. */
   succeededAt: isoTimestamp.nullable(),
-  /** When the next one is due; null = none is open. */
+  /** When the next read of a key nothing stops is due; null = none is open,
+   *  or every key with open work is stopped (`stops`). */
   nextDueAt: isoTimestamp.nullable(),
-  /** The owner paused the whole page or every one of these keys. */
+  /** Their work that is open, running or quarantined. 0 with no last read:
+   *  nothing has been asked of the stream. */
+  activeWork: z.number().int(),
+  /** The owner's pause stops every one of these keys (the whole page, or
+   *  each key), whatever else does. */
   paused: z.boolean(),
+  /** How many of these keys can send nothing now — by the owner's pauses and
+   *  the engine's hold evaluator (the page's hold, a resource breaker, a 429's
+   *  hold of a key's routes) — and what stops them. A stream is being
+   *  read only when a host runs the page and this is `none`. */
+  stopped: syncEngineStoppedEnum,
+  stops: z.array(syncEngineStopSchema),
   /** Some of their work is quarantined or blocked by Fansly. */
   needsAttention: z.boolean(),
-  /** What needs attention, or why the earliest of them waits. */
+  /** What needs attention and the command that lists it, or why the earliest
+   *  of them waits: one line for a reader of the API (the engine's codes, UTC). */
   reason: z.string().nullable(),
+  /** Why the earliest-due page-level work of the stream waits, as data, for a
+   *  surface that words it itself. null: the stream needs attention, or none
+   *  of its page-level work is open. */
+  waiting: z.object({
+    resource: z.string(),
+    reason: agentSyncWaitingReasonEnum,
+    until: isoTimestamp.nullable(),
+  }).nullable(),
   /** The largest failure count among their active work. */
   consecutiveFailures: z.number().int(),
 });
@@ -5320,6 +5539,9 @@ export const statsCoverageResponseSchema = z.object({
    *  panel this one replaces. null when the engine does not own the page. */
   engine: z.object({
     mode: z.enum(["handover", "live"]),
+    /** A sync host runs the page (a fresh owner heartbeat). false: nothing of
+     *  it is read, whatever the streams' work says. */
+    ownerRunning: z.boolean(),
     streams: z.array(insightsEngineStreamSchema),
   }).nullable(),
   /** What we actually hold, per projection: row count and the range it spans.
@@ -8288,6 +8510,8 @@ export type AiGatewayReasoningEffort = z.infer<typeof aiGatewayReasoningEffortSc
 export type AiGatewayPromptBlock = z.infer<typeof aiGatewayPromptBlockSchema>;
 export type AiFeatureDebugPromptBlock = z.infer<typeof aiFeatureDebugPromptBlockSchema>;
 export type AiFeatureDebugInputFrame = z.infer<typeof aiFeatureDebugInputFrameSchema>;
+export type AiFeatureContextFrame = z.infer<typeof aiFeatureContextFrameSchema>;
+export type AiLiveTextContext = z.infer<typeof aiLiveTextContextSchema>;
 export type AiGatewayStreamBody = z.infer<typeof aiGatewayStreamBodySchema>;
 export type AiGatewayUsage = z.infer<typeof aiGatewayUsageSchema>;
 export type AiGatewayQuota = z.infer<typeof aiGatewayQuotaSchema>;
@@ -8450,6 +8674,7 @@ export type SyncRequestItem = z.infer<typeof syncRequestItemSchema>;
 export type SyncRequestsResponse = z.infer<typeof syncRequestsResponseSchema>;
 export type SyncDiagnosis = z.infer<typeof syncDiagnosisSchema>;
 export type SyncBlockStatus = z.infer<typeof syncBlockStatusSchema>;
+export type SyncEngineStop = z.infer<typeof syncEngineStopSchema>;
 export type SyncBlocksPage = z.infer<typeof syncBlocksPageSchema>;
 export type SyncOverviewResponse = z.infer<typeof syncOverviewResponseSchema>;
 export type PageSyncBlocksResponse = z.infer<typeof pageSyncBlocksResponseSchema>;

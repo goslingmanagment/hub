@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   changeSyncRegistryOverride: vi.fn(),
   confirmStoppedSyncOwners: vi.fn(),
   explainSyncWork: vi.fn(),
+  listSyncPageWork: vi.fn(),
   findSyncPageByLabel: vi.fn(),
   readSyncPageStatuses: vi.fn(),
   requestSyncProbe: vi.fn(),
@@ -36,6 +37,7 @@ vi.mock("../apps/runtime/src/sync/inspect.ts", async (importOriginal) => {
     changeSyncRegistryOverride: mocks.changeSyncRegistryOverride,
     confirmStoppedSyncOwners: mocks.confirmStoppedSyncOwners,
     explainSyncWork: mocks.explainSyncWork,
+    listSyncPageWork: mocks.listSyncPageWork,
     findSyncPageByLabel: mocks.findSyncPageByLabel,
     readSyncPageStatuses: mocks.readSyncPageStatuses,
     requestSyncProbe: mocks.requestSyncProbe,
@@ -53,6 +55,8 @@ vi.mock("../apps/runtime/src/bootstrap.ts", () => ({
     throw new Error("legacy sync reached createAppContext");
   }),
 }));
+
+import { INDEFINITE_UNTIL } from "@agency_hub_core/shared";
 
 import { buildProgram } from "../apps/runtime/src/cli.ts";
 
@@ -76,7 +80,7 @@ describe("the engine's owner commands through `pnpm cli`", () => {
     mocks.findSyncPageByLabel.mockResolvedValue(PAGE_ROW);
     mocks.readSyncPageStatuses.mockResolvedValue([{ page: "lora-1" }]);
     mocks.explainSyncWork.mockResolvedValue({ why: "test" });
-    mocks.changeSyncPageModeByOwner.mockResolvedValue({ kind: "changed", from: "off", to: "shadow" });
+    mocks.changeSyncPageModeByOwner.mockResolvedValue({ kind: "changed", from: "shadow", to: "off" });
     mocks.changeSyncPagePause.mockResolvedValue({
       pageLabel: "lora-1",
       pausedAll: false,
@@ -85,7 +89,7 @@ describe("the engine's owner commands through `pnpm cli`", () => {
       pauseNote: null,
     });
     mocks.confirmStoppedSyncOwners.mockResolvedValue([]);
-    mocks.requestSyncProbe.mockResolvedValue({ workId: 9, shadow: true });
+    mocks.requestSyncProbe.mockResolvedValue({ workId: 9 });
     vi.spyOn(console, "log").mockImplementation(() => {});
   });
 
@@ -94,11 +98,11 @@ describe("the engine's owner commands through `pnpm cli`", () => {
   });
 
   it("sync page mode takes its --page", async () => {
-    await run(["sync", "page", "mode", "--page", "lora-1", "--to", "shadow", "--note", "acceptance"]);
+    await run(["sync", "page", "mode", "--page", "lora-1", "--to", "off", "--note", "retired"]);
     expect(mocks.changeSyncPageModeByOwner).toHaveBeenCalledWith({}, {
       pageLabel: "lora-1",
-      to: "shadow",
-      changedBy: expect.stringMatching(/: acceptance$/),
+      to: "off",
+      changedBy: expect.stringMatching(/: retired$/),
     });
     expect(mocks.close).toHaveBeenCalledTimes(1);
   });
@@ -200,8 +204,63 @@ describe("the engine's owner commands through `pnpm cli`", () => {
     expect(input.dryRun).toBe(false);
   });
 
+  // S4-35: the table listed an ownerless page with a heartbeat and left the
+  // reader to judge its age. It concludes now: `runs`.
+  it("sync ownership status says whether each page's owner runs it, and why not", async () => {
+    const now = new Date("2026-10-04T12:00:00.000Z");
+    const ago = (seconds: number) => new Date(now.getTime() - seconds * 1000);
+    const owner = (overrides: Record<string, unknown> = {}) => ({
+      generation: 4n, host: "sync-1", pid: 1, acquiredAt: ago(7200), heartbeatAt: ago(4), releasedAt: null,
+      releaseGeneration: null, stopConfirmedAt: null, ...overrides,
+    });
+    mocks.listSyncPages.mockResolvedValue([
+      { pageId: 1, pageLabel: "lora-1", mode: "live", dbNow: now, owner: owner() },
+      { pageId: 2, pageLabel: "lora-2", mode: "live", dbNow: now, owner: owner({ heartbeatAt: ago(3600) }) },
+      { pageId: 3, pageLabel: "lora-3", mode: "live", dbNow: now, owner: owner({ releasedAt: ago(60), releaseGeneration: 4n }) },
+      { pageId: 4, pageLabel: "lora-4", mode: "live", dbNow: now, owner: owner({ generation: 0n, host: null, pid: null, acquiredAt: null, heartbeatAt: null }) },
+      { pageId: 5, pageLabel: "lora-5", mode: "off", dbNow: now, owner: owner() },
+    ]);
+    await run(["sync", "ownership", "status"]);
+    const lines = vi.mocked(console.log).mock.calls.map(([line]) => String(line).split("\t"));
+    expect(lines[0]).toEqual(["page", "mode", "generation", "owner", "acquired_at", "heartbeat_at", "released", "stop_confirmed_at", "runs"]);
+    const runs = Object.fromEntries(lines.slice(1).map((cells) => [cells[0], cells[8]]));
+    expect(runs).toEqual({
+      "lora-1": "yes",
+      "lora-2": "no: the heartbeat is 3600 s old (an owner beats every 10 s; fresh within 30 s)",
+      "lora-3": "no: its owner released it",
+      "lora-4": "no: no host has taken the page",
+      "lora-5": "no: the page is off (no actor runs it)",
+    });
+    // The heartbeat itself is still printed: the conclusion stands beside it.
+    expect(lines[2]![5]).toBe(ago(3600).toISOString());
+  });
+
+  // A hold only new credentials lift ends at no instant: `Date#toISOString`
+  // wrote it as the year 275760.
+  it("sync work list and sync why print an endless hold as infinity", async () => {
+    const waiting = [{
+      work: { id: 9, resource: "account.poll", subject: "", dueAt: new Date("2026-10-04T12:00:00.000Z"), breakerUntil: null },
+      waiting: { reason: "page_hold", until: INDEFINITE_UNTIL, detail: { kind: "auth" } },
+    }];
+    mocks.listSyncPageWork.mockResolvedValue(waiting);
+    mocks.explainSyncWork.mockResolvedValue(waiting);
+    for (const argv of [
+      ["sync", "work", "list", "--page", "lora-1", "--state", "open"],
+      ["sync", "why", "--page", "lora-1", "--resource", "account.poll"],
+    ]) {
+      vi.mocked(console.log).mockClear();
+      await run(argv);
+      const printed = JSON.parse(String(vi.mocked(console.log).mock.calls[0]?.[0])) as typeof waiting;
+      expect(printed[0]!.waiting, argv.join(" ")).toEqual({ reason: "page_hold", until: "infinity", detail: { kind: "auth" } });
+      // An instant a clock reaches is printed as it was.
+      expect(printed[0]!.work.dueAt).toBe("2026-10-04T12:00:00.000Z");
+      expect(String(vi.mocked(console.log).mock.calls[0]?.[0])).not.toContain("275760");
+    }
+    expect(mocks.listSyncPageWork).toHaveBeenCalledWith({}, {}, PAGE_ROW, { state: "open", limit: 50, offset: 0 });
+  });
+
   it("a missing --page is still refused", async () => {
-    await expect(run(["sync", "page", "mode", "--to", "shadow"])).rejects.toThrow("required option '--page <label>' not specified");
+    await expect(run(["sync", "page", "mode", "--to", "off"])).rejects.toThrow("required option '--page <label>' not specified");
     expect(mocks.changeSyncPageModeByOwner).not.toHaveBeenCalled();
   });
 

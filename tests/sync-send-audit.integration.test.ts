@@ -183,7 +183,7 @@ describe("the send audit on recorded rows", () => {
     expect(acceptance.accepted).toBe(false);
   });
 
-  it("the evaluator latches I1 by the send's own pause and I19 by its recorded interval; a shadow page pages nobody", async (context) => {
+  it("the evaluator latches I1 by the send's own pause and I19 by its recorded interval; a page left in shadow pages nobody", async (context) => {
     if (!testDb) return context.skip();
     const live = await livePage("audit-live");
     const shadow = await seedPage("audit-shadow");
@@ -294,14 +294,13 @@ describe("the send audit on recorded rows", () => {
     const busy: ResourceModule = {
       plan: async () => ({ kind: "request", request: pollsRequest }),
       apply: async (_tx, input) => ({ work: { satisfiesRevision: false, nextDueAt: input.now }, followups: [] }),
-      shadow: async (_work, _request, ctx) => ({ work: { satisfiesRevision: false, nextDueAt: ctx.now }, followups: [] }),
     };
     const registry = testRegistry([testSpec("busy.polls", busy, { kind: "goal", operations: ["polls"] })]);
-    await upsertDemand(db(), { pageId, shadow: false, resource: "busy.polls", subject: "", kind: "goal", class: "urgent", demand: { reasons: ["test"] } });
+    await upsertDemand(db(), { pageId, resource: "busy.polls", subject: "", kind: "goal", class: "urgent", demand: { reasons: ["test"] } });
     const transport = new ScriptedLiveTransport();
     const alerts = new RecordingAlerts();
     const metrics = new RecordingMetrics();
-    const { actor, deps, stop, abort } = await makeTestActor({ db: db(), pageId, mode: "live", registry, transport, alerts, metrics, settingMs });
+    const { actor, deps, stop, abort } = await makeTestActor({ db: db(), pageId, registry, transport, alerts, metrics, settingMs });
     // The bug the monotonic gap cannot see: two pacers pace one page, turn by
     // turn. Each keeps its own pause from ITS previous send and records that
     // gap truthfully; the page's sends are as close as the two interleave.
@@ -376,7 +375,7 @@ describe("the send audit on recorded rows", () => {
     const since = new Date(Date.now() - 120_000);
     const rows = await readFanslySendAudit(db(), { pageId: early, since });
     const left = rows.find((row) => row.sentAt === null)!;
-    expect(left).toMatchObject({ journal: "engine", shadow: false, httpStatus: null, completedAt: null });
+    expect(left).toMatchObject({ journal: "engine", httpStatus: null, completedAt: null });
     expect(left.countedAt!.getTime() - left.admittedAt.getTime()).toBe(15_000);
     const window = { start: since, until: null };
     const unproven = [expect.objectContaining({ open: "send_not_recorded", judgedAt: "admission" })];

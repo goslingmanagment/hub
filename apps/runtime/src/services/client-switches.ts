@@ -42,9 +42,11 @@ export const CLIENT_SWITCH_KEYS = [
 ] as const;
 
 /**
- * The settings whose change moves the bootstrap's `configRevision`. The three
- * keys later PRs add are listed already, so the revision means the same thing
- * from the first client on; a key that does not exist yet has no audit row.
+ * The settings whose change moves the bootstrap's `configRevision`: the five
+ * switches, the health intake's own switch (H-11b; it is not one of the five,
+ * see `ClientSwitches.healthIngestEnabled`), and the two keys later PRs add,
+ * listed already so the revision means the same thing from the first client on;
+ * a key that does not exist yet has no audit row.
  */
 export const CLIENT_BOOTSTRAP_CONFIG_KEYS = [
   ...CLIENT_SWITCH_KEYS,
@@ -63,6 +65,16 @@ export interface ClientSwitches {
   minVersion: string;
   /** The admitted send paths of sending from the preview (X8); empty = X8 off. */
   receiptProfiles: readonly ClientReceiptProfile[];
+  /**
+   * Whether the hub keeps `client_health` reports and the bootstrap lists
+   * `client-health-perf-v1` (H-11b): the owner's
+   * `chatExtensionHealthIngestEnabled`, and only while the extension as a whole
+   * is on (the master switch on, every switch readable). Not one of the five
+   * switches: a stored override of it that no longer validates does not turn
+   * the extension off, the environment value stands (off unless a deployment
+   * sets it).
+   */
+  healthIngestEnabled: boolean;
 }
 
 /** A stored switch the process could not read. */
@@ -71,7 +83,7 @@ export interface ClientSwitchProblem {
   error: string;
 }
 
-type ClientSwitchConfig = Pick<AppConfig, (typeof CLIENT_SWITCH_KEYS)[number]>;
+type ClientSwitchConfig = Pick<AppConfig, (typeof CLIENT_SWITCH_KEYS)[number] | "chatExtensionHealthIngestEnabled">;
 
 /**
  * The stored overrides of the five switches that no longer validate. Pure.
@@ -140,15 +152,13 @@ export function readClientSwitches(
     [],
     parseChatExtensionReceiptProfiles,
   );
+  const enabled = config.chatExtensionEnabled === true && problems.length === 0;
   return {
     switches: {
-      settings: {
-        enabled: config.chatExtensionEnabled === true && problems.length === 0,
-        features,
-        hostBindings,
-      },
+      settings: { enabled, features, hostBindings },
       minVersion,
       receiptProfiles,
+      healthIngestEnabled: enabled && config.chatExtensionHealthIngestEnabled === true,
     },
     problems,
   };
@@ -187,9 +197,45 @@ export interface ClientFeatureRequest {
 }
 
 /**
+ * The one check behind both requireClientFeature and requireClientPage, so a
+ * refusal added here reaches every client route. In this order:
+ * - `not_granted`: the page is not an active page granted to the caller (a
+ *   missing page answers the same, so the refusal reveals nothing);
+ * - what the route asks of the owner's switches on that page (`refusal`);
+ * - `client_outdated`: the caller's `x-client-version` is below the owner's
+ *   minimum or unreadable.
+ *
+ * `feature` is how the refusal names what was asked for. Returns the page as
+ * the bootstrap lists it.
+ */
+async function requireClientPageRow(
+  app: AppContext,
+  request: ClientFeatureRequest,
+  principal: HumanAuthPrincipal,
+  page: { id: number } | null | undefined,
+  feature: string,
+  refusal: (switches: ClientSwitches, row: ClientBootstrapPageRow) => string | null,
+): Promise<ClientBootstrapPageRow> {
+  const [row] = page && canAccessPage(principal, page.id) ? await listClientBootstrapPages(app.db, [page.id]) : [];
+  if (row === undefined) {
+    throw new ClientFeatureDisabledError(feature, "not_granted");
+  }
+  const switches = await loadClientSwitches(app);
+  const reason = refusal(switches, row);
+  if (reason !== null) {
+    throw new ClientFeatureDisabledError(feature, reason);
+  }
+  const outdated = clientVersionRefusal(switches.minVersion, request.headers["x-client-version"]);
+  if (outdated !== null) {
+    throw new ClientFeatureDisabledError(feature, outdated);
+  }
+  return row;
+}
+
+/**
  * The server-side check of a chat-extension feature, which every client route
- * runs after resolving its page: the client may switch a feature off in its own
- * UI, but the hub decides for itself on every call.
+ * behind a flag runs after resolving its page: the client may switch a feature
+ * off in its own UI, but the hub decides for itself on every call.
  *
  * Refuses with 409 `client_feature_disabled` and the reason, in this order:
  * - `not_granted`: the page is not an active page granted to the caller (a
@@ -208,23 +254,34 @@ export async function requireClientFeature(
   page: { id: number },
   flag: ClientFeatureFlagName,
 ): Promise<ClientBootstrapPageRow> {
-  const [row] = canAccessPage(principal, page.id) ? await listClientBootstrapPages(app.db, [page.id]) : [];
-  if (row === undefined) {
-    throw new ClientFeatureDisabledError(flag, "not_granted");
-  }
-  const switches = await loadClientSwitches(app);
-  const availability = evaluateClientFeature({
-    settings: switches.settings,
-    page: { label: row.label, platform: row.platform, platformAccountId: row.platformAccountId },
-    flag,
-    served: SERVED_CLIENT_CAPABILITIES,
+  return requireClientPageRow(app, request, principal, page, flag, (switches, row) => {
+    const availability = evaluateClientFeature({
+      settings: switches.settings,
+      page: { label: row.label, platform: row.platform, platformAccountId: row.platformAccountId },
+      flag,
+      served: SERVED_CLIENT_CAPABILITIES,
+    });
+    return availability.available ? null : availability.reason ?? "disabled";
   });
-  if (!availability.available) {
-    throw new ClientFeatureDisabledError(flag, availability.reason ?? "disabled");
-  }
-  const outdated = clientVersionRefusal(switches.minVersion, request.headers["x-client-version"]);
-  if (outdated !== null) {
-    throw new ClientFeatureDisabledError(flag, outdated);
-  }
-  return row;
+}
+
+/**
+ * The same check for a client route that has no flag of its own (the
+ * own-AI-spend read, H-15): `not_granted`, then `disabled` while the owner's
+ * master switch is off, then `client_outdated`. No platform, flag, host
+ * binding or served capability is asked for.
+ *
+ * `page` is what the route resolved from its path, null or undefined when
+ * there is no such page; `feature` is how the refusal names the route.
+ */
+export async function requireClientPage(
+  app: AppContext,
+  request: ClientFeatureRequest,
+  principal: HumanAuthPrincipal,
+  page: { id: number } | null | undefined,
+  feature: string,
+): Promise<ClientBootstrapPageRow> {
+  return requireClientPageRow(app, request, principal, page, feature, (switches) => (
+    switches.settings.enabled ? null : "disabled"
+  ));
 }

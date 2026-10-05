@@ -136,4 +136,51 @@ describe("client_health histogram fit (the intake drops one that does not fit)",
     const sum = samples.reduce((total, sample) => total + sample, 0);
     expect(clientHealthHistogramFits({ bounds, counts, sum, max: 120 })).toBe(true);
   });
+
+  it("takes the client's rounding: sum to three decimals, max as measured", () => {
+    /** One histogram as the client sends it (its Histogram.toWire). */
+    const wire = (bounds: readonly number[], samples: number[]) => {
+      const counts: number[] = Array.from({ length: bounds.length + 1 }, () => 0);
+      for (const sample of samples) {
+        const index = bounds.findIndex((bound) => sample <= bound);
+        counts[index === -1 ? bounds.length : index]! += 1;
+      }
+      const sum = Math.round(samples.reduce((total, sample) => total + sample, 0) * 1000) / 1000;
+      return { bounds, counts, sum, max: Math.max(...samples) };
+    };
+    const panel = CLIENT_HEALTH_PERF_METRICS.panelOpenMs.bounds;
+    const handler = CLIENT_HEALTH_PERF_METRICS.handlerMs.bounds;
+
+    // One sample: the rounded sum lands above the max it is made of…
+    expect(wire(panel, [37.4567891])).toMatchObject({ sum: 37.457, max: 37.4567891 });
+    expect(clientHealthHistogramFits(wire(panel, [37.4567891]))).toBe(true);
+    // …or below it, down to 0.
+    expect(wire(handler, [0.0004])).toMatchObject({ sum: 0, max: 0.0004 });
+    expect(clientHealthHistogramFits(wire(handler, [0.0004]))).toBe(true);
+    // Samples just above a bucket edge, where the least sum is the samples themselves.
+    expect(clientHealthHistogramFits(wire(panel, [50.0004, 50.0004, 50.0004]))).toBe(true);
+
+    // Three tabs, one sample each: the background adds up three rounded sums.
+    const tabs = [37.4567891, 37.4567891, 37.4567891].map((sample) => wire(panel, [sample]));
+    const merged = {
+      bounds: panel,
+      counts: tabs[0]!.counts.map((_, index) => tabs.reduce((total, tab) => total + tab.counts[index]!, 0)),
+      sum: Math.round(tabs.reduce((total, tab) => total + tab.sum, 0) * 1000) / 1000,
+      max: 37.4567891,
+    };
+    expect(merged.sum).toBe(112.371);
+    expect(clientHealthHistogramFits(merged)).toBe(true);
+  });
+
+  it("allows a thousandth per observation for that rounding and no more", () => {
+    // Two observations in (10, 20] and the max, 30, in the overflow: sum lies in (50, 70].
+    expect(fits([0, 2, 1], 70.003, 30)).toBe(true);
+    expect(fits([0, 2, 1], 70.01, 30)).toBe(false);
+    expect(fits([0, 2, 1], 49.997, 30)).toBe(true);
+    expect(fits([0, 2, 1], 49.99, 30)).toBe(false);
+    // One observation, the max itself: the sum is the max, give or take one rounding.
+    expect(fits([1, 0, 0], 6.001, 6)).toBe(true);
+    expect(fits([1, 0, 0], 6.01, 6)).toBe(false);
+    expect(fits([1, 0, 0], 5.99, 6)).toBe(false);
+  });
 });

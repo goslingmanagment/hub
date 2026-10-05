@@ -1,10 +1,16 @@
 export * from "./repositories/fansly-ws.ts";
-export * from "./repositories/fansly-ws-hints.ts";
 export * from "./repositories/fansly-ws-deletions.ts";
 export * from "./repositories/sync/live-messages.ts";
 export * from "./repositories/fan-earnings-targets.ts";
 export * from "./client.ts";
 export * from "./repositories/follower-outreach.ts";
+// chat-extension greeting lease and send custody (0241, H-7a).
+export * from "./repositories/client-claim.ts";
+export * from "./repositories/client-claim-transition.ts";
+// chat-extension client_health hourly rollups (0244, H-11b).
+export * from "./repositories/client-health.ts";
+// Their reads for the owner's view (H-11c).
+export * from "./repositories/client-health-view.ts";
 export * from "./schema.ts";
 export * from "./repositories/creator-raw-media.ts";
 export * from "./repositories/vault-album-scans.ts";
@@ -96,7 +102,10 @@ export * from "./repositories/agent-dataset-map.ts";
 export * from "./repositories/agent-hydration.ts";
 export * from "./repositories/agent-read.ts";
 export * from "./repositories/agent-transcript.ts";
+export * from "./repositories/ai-live-context.ts";
+export * from "./repositories/ai-transcript-depth.ts";
 export * from "./repositories/ai-transcript-union.ts";
+export * from "./repositories/conversation-feed.ts";
 export * from "./repositories/erasure-fence.ts";
 export * from "./repositories/catalog.ts";
 export * from "./repositories/config-settings.ts";
@@ -176,9 +185,9 @@ export * from "./repositories/sync/ws-gap.ts";
 export * from "./repositories/sync/media-handoff.ts";
 export * from "./repositories/sync/dm-exclusions.ts";
 export * from "./repositories/sync/observability.ts";
-export * from "./repositories/sync/legacy-streams.ts";
 export * from "./repositories/sync/subject-queue.ts";
 export * from "./repositories/spenders.ts";
+export * from "./repositories/spender-stats.ts";
 export * from "./repositories/sync-context.ts";
 export * from "./repositories/sync.ts";
 export * from "./repositories/top-spenders.ts";
@@ -206,3 +215,6 @@ export { saveOfapiChatQueueState, readOfapiContentEvents } from './repositories/
 // The chat extension's bootstrap page list (active, untombstoned, scoped) and
 // its config revision.
 export * from "./repositories/client-bootstrap.ts";
+// The chat extension's dossier save from a stored generation: the caller's own
+// generation, whether its AI request was admitted, a dossier version by body.
+export * from "./repositories/client-profile-from-generation.ts";

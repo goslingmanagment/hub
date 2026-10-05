@@ -1,15 +1,19 @@
 import type { SyncUxSummary } from "@agency_hub_core/contracts";
 import {
   activePageSyncRetryAt,
+  LEGACY_EXECUTOR_STREAMS,
   getOfapiFinancialTruthSummaries,
   getLatestSettledOfapiDmEventTimes,
   getSyncStreamsForPlatform,
+  isLegacyExecutorStream,
   listSyncMonitorStreamRows,
   listPageSyncStates,
   listVisiblePages,
+  type LegacyExecutorStream,
   type PageSyncState,
   SYNC_DOMAIN_POLICY,
   SYNC_STREAM_POLICY,
+  syncStreamOrderIndex,
   type SyncDomain,
   type SyncStream,
   type SyncMonitorStreamRow,
@@ -24,20 +28,16 @@ import {
   isOfapiDmProjectionEnabled,
   OFAPI_DM_PROJECTION_EVENT_TYPES,
 } from "./ofapi-dm-projection.ts";
-import {
-  parseDmConversationCursorState,
-  parseFollowersCursorState,
-  parseFollowersReconcileProgressState,
-  parseSubscribersCursorState,
-} from "./sync/cursor-state.ts";
 import { loadEffectiveConfig } from "./effective-config.ts";
-import {
-  FOLLOWERS_RECONCILE_FLOOR_DEFERRAL,
-  followersReconcileFloorWaitUntil,
-  followersReconcileQueuedSince,
-} from "./sync/followers-reconcile-floor.ts";
 import { filterOnlyFansAudienceStreams } from "./sync/ofapi-audience-sync.ts";
-import { buildEngineDomainBlock, readEngineStatusFacts, type EngineStatusFacts } from "./sync-status-engine.ts";
+import { legacyExecutorPlatforms } from "../sync/onlyfans/boundary.ts";
+import {
+  buildEngineDomainBlock,
+  readEngineStatusFacts,
+  type EngineBlockInfo,
+  type EngineStatusFacts,
+  type EngineSubstreamInfo,
+} from "./sync-status-engine.ts";
 
 export const SYNC_DOMAIN_BLOCKS = [
   "connection",
@@ -63,8 +63,7 @@ export type SyncDomainBlockState =
   | "paused"
   | "not_available"
   /** The page is the Fansly Sync Engine's (`handover`/`live`, design step 3
-   *  §3.2): its legacy streams are frozen, the block describes the engine's
-   *  live work instead (`engineMode`). */
+   *  §3.2): the block describes the engine's live work (`engineMode`). */
   | "engine";
 
 export interface SyncDomainProgress {
@@ -85,8 +84,9 @@ export interface SyncStatusReason {
 
 export type SyncStreamRole = "primary" | "supporting";
 
+/** A legacy stream of a block of a page the legacy executor serves. */
 export interface SyncTaskReadStatus {
-  stream: SyncStream;
+  stream: LegacyExecutorStream;
   domain: SyncDomainBlockKey;
   runtimeState: PageSyncState["status"] | "not_started";
   state: Exclude<SyncDomainBlockState, "not_available">;
@@ -117,11 +117,22 @@ type QueueContext = {
   activeSiblingStreams: SyncStream[];
 };
 
+/** A `page_sync_states` row of a stream the legacy executor runs: the only
+ *  rows the legacy blocks are derived from. */
+type LegacyTaskRow = PageSyncState & { stream: LegacyExecutorStream };
+
+function isLegacyTaskRow(row: PageSyncState): row is LegacyTaskRow {
+  return isLegacyExecutorStream(row.stream);
+}
+
 export interface SyncDomainBlockStatus {
   block: SyncDomainBlockKey;
   state: SyncDomainBlockState;
   /** Set exactly when `state` is `engine`: the page's engine mode. */
   engineMode?: "handover" | "live";
+  /** Set exactly when `state` is `engine`: who runs the page, the keys the
+   *  block's buttons move, what stops them and what needs the owner. */
+  engine?: EngineBlockInfo;
   succeededAt: string | null;
   progress: SyncDomainProgress | null;
   progressStream: SyncStream | null;
@@ -162,6 +173,8 @@ export interface SyncDomainBlockStatus {
       failedAt: string | null;
       consecutiveFailures: number;
     } | null;
+    /** Set exactly when `state` is `engine`: what stops the stream's keys. */
+    engine?: EngineSubstreamInfo;
   }>;
   tasks: SyncTaskReadStatus[];
 }
@@ -223,14 +236,6 @@ function percent(current: number, total: number | null) {
   }
 
   return Math.max(0, Math.min(100, (current / total) * 100));
-}
-
-function clampProgress(current: number, total: number | null) {
-  if (total === null) {
-    return Math.max(0, current);
-  }
-
-  return Math.max(0, Math.min(current, total));
 }
 
 function latestIso(values: Array<Date | null | undefined>) {
@@ -311,7 +316,7 @@ function isOfapiOnlyOnlyFansPage(page: {
     page.hasCredentials === false;
 }
 
-function hasActiveProgress(task: PageSyncState, now: Date) {
+function hasActiveProgress(task: LegacyTaskRow, now: Date) {
   if (task.status !== "running") {
     return false;
   }
@@ -326,7 +331,7 @@ function hasActiveProgress(task: PageSyncState, now: Date) {
 }
 
 function sortTasksByPolicyOrder(tasks: Iterable<SyncStream>) {
-  return [...new Set(tasks)].sort((left, right) => SYNC_STREAM_POLICY[left].streamIndex - SYNC_STREAM_POLICY[right].streamIndex);
+  return [...new Set(tasks)].sort((left, right) => syncStreamOrderIndex(left) - syncStreamOrderIndex(right));
 }
 
 function buildStatusReason(
@@ -398,26 +403,6 @@ function buildOfapiBudgetStatusReason(progress: unknown, retryAt: Date | null): 
   }
 }
 
-function buildDelayedDomainReason(input: {
-  block: SyncDomainBlockKey;
-  state: SyncDomainBlockState;
-  statusReason: SyncStatusReason | null;
-  messagesHistoryComplete: boolean;
-}): SyncStatusReason | null {
-  if (input.statusReason || input.state !== "delayed") {
-    return input.statusReason;
-  }
-
-  if (input.block === "messages_history" && !input.messagesHistoryComplete) {
-    return buildStatusReason(
-      "history_incomplete",
-      "Conversation history is still catching up.",
-    );
-  }
-
-  return null;
-}
-
 function buildTaskError(
   task: PageSyncState,
   statusReason: SyncStatusReason | null,
@@ -441,17 +426,13 @@ function firstAttentionTask(tasks: SyncTaskReadStatus[]) {
 }
 
 function hasPendingWork(task: SyncTaskReadStatus) {
-  // A walk the daily floor holds is scheduled for later, not queued now.
-  if (task.statusReason?.code === FOLLOWERS_RECONCILE_FLOOR_DEFERRAL) {
-    return false;
-  }
   return task.requestedSeq > task.appliedSeq ||
     task.runtimeState === "pending" ||
     task.runtimeState === "retrying";
 }
 
 function taskRoleForBlock(policy: (typeof SYNC_DOMAIN_POLICY)[SyncDomainBlockKey], stream: SyncStream): SyncStreamRole {
-  return policy.primaryStreams.includes(stream) ? "primary" : "supporting";
+  return (policy.primaryStreams as readonly SyncStream[]).includes(stream) ? "primary" : "supporting";
 }
 
 function pickProgressTask(
@@ -521,7 +502,7 @@ export function mapDomainBlockToSyncUx(block: SyncDomainBlockStatus): SyncUxSumm
         requiresAction: reasonCode === "credentials_invalid",
       });
     case "delayed":
-      if (reasonCode === "history_incomplete" || reasonCode === "unmet_dependency") {
+      if (reasonCode === "unmet_dependency") {
         return summary("catching_up", {
           label: "Catching up",
           headline: "Sync is catching up",
@@ -734,110 +715,14 @@ function buildPageSyncUx(blocks: SyncDomainBlockStatus[]) {
   });
 }
 
-function buildProgressFromPayload(
-  task: PageSyncState,
-  monitorRow: SyncMonitorStreamRow | null,
-): SyncDomainProgress | null {
+function buildProgressFromPayload(task: LegacyTaskRow): SyncDomainProgress | null {
   const payload = task.progress ?? {};
-
-  if (monitorRow) {
-    const checkpointRevision = monitorRow.requestSeq ?? monitorRow.appliedSeq;
-    const completed = task.status === "idle" && task.requestSeq === task.appliedSeq;
-
-    if (task.stream === "subscribers") {
-      const state = parseSubscribersCursorState(monitorRow.checkpointState, checkpointRevision);
-      if (state) {
-        const total = state.providerReportedTotal ?? (completed ? monitorRow.subscriberCount : null);
-        const current = completed && total !== null ? total : clampProgress(state.offset, total);
-        return {
-          label: total !== null
-            ? `${current.toLocaleString()} / ${total.toLocaleString()} subscribers`
-            : `${current.toLocaleString()} subscribers`,
-          current,
-          total,
-          unit: "subscribers",
-          percent: percent(current, total),
-          percentValid: total !== null && total > 0,
-          details: {
-            ...payload,
-            ...state,
-          },
-        };
-      }
-    }
-
-    if (task.stream === "followers") {
-      const state = parseFollowersCursorState(monitorRow.checkpointState, checkpointRevision);
-      if (state) {
-        const total = state.sourceFollowerCount;
-        const current = completed ? total : clampProgress(state.offset, total);
-        return {
-          label: `${current.toLocaleString()} / ${total.toLocaleString()} followers`,
-          current,
-          total,
-          unit: "followers",
-          percent: percent(current, total),
-          percentValid: total > 0,
-          details: {
-            ...payload,
-            ...state,
-          },
-        };
-      }
-    }
-
-    if (task.stream === "followers_reconcile") {
-      const state = parseFollowersReconcileProgressState(
-        monitorRow.checkpointState,
-        checkpointRevision,
-      );
-      if (state) {
-        const total = state.sourceFollowerCount;
-        const current = completed ? total : clampProgress(state.offset, total);
-        return {
-          label: `${current.toLocaleString()} / ${total.toLocaleString()} followers`,
-          current,
-          total,
-          unit: "followers",
-          percent: percent(current, total),
-          percentValid: total > 0,
-          details: {
-            ...payload,
-            ...state,
-          },
-        };
-      }
-    }
-
-    if (task.stream === "dm_conversations") {
-      const state = parseDmConversationCursorState(monitorRow.checkpointState);
-      if (state) {
-        const total = state.providerReportedTotal ?? (completed ? monitorRow.dmConversationCount : null);
-        const current = completed && total !== null ? total : clampProgress(state.offset, total);
-        return {
-          label: total !== null
-            ? `${current.toLocaleString()} / ${total.toLocaleString()} conversations`
-            : `${current.toLocaleString()} conversations`,
-          current,
-          total,
-          unit: "conversations",
-          percent: percent(current, total),
-          percentValid: total !== null && total > 0,
-          details: {
-            ...payload,
-            ...state,
-          },
-        };
-      }
-    }
-  }
 
   if (typeof payload.pageCount === "number" && typeof payload.offset === "number") {
     const total = Math.max(payload.pageCount, 0);
     const current = Math.max(0, Math.min(payload.offset, total));
-    const unit = task.stream === "dm_conversations" ? "conversations" : task.stream === "subscribers"
-      ? "subscribers"
-      : "followers";
+    // The two walks that report a page count: the chat list and the fans.
+    const unit = task.stream === "dm_conversations" ? "conversations" : "subscribers";
     return {
       label: `${current.toLocaleString()} / ${total.toLocaleString()} ${unit}`,
       current,
@@ -913,34 +798,6 @@ function buildProgressFromPayload(
     }
   }
 
-  if (task.stream === "dm_messages" && monitorRow) {
-    const total = monitorRow.dmEligibleConversationCount;
-    const current = monitorRow.dmBackfillCompleteConversationCount;
-    const lagging = monitorRow.dmLaggingConversationCount;
-    if (total > 0 || current > 0 || lagging > 0) {
-      const labelParts = [
-        total > 0
-          ? `${current.toLocaleString()} / ${total.toLocaleString()} conversations ready`
-          : "No conversation backlog",
-      ];
-      if (lagging > 0) {
-        labelParts.push(`${lagging.toLocaleString()} lagging`);
-      }
-      return {
-        label: labelParts.join(", "),
-        current,
-        total,
-        unit: "conversations",
-        percent: percent(current, total),
-        percentValid: total > 0,
-        details: {
-          ...payload,
-          laggingConversationCount: lagging,
-        },
-      };
-    }
-  }
-
   if (typeof payload.processedMessages === "number") {
     return {
       label: `${payload.processedMessages.toLocaleString()} messages processed`,
@@ -957,20 +814,14 @@ function buildProgressFromPayload(
 }
 
 function deriveTaskState(
-  task: PageSyncState,
-  monitorRow: SyncMonitorStreamRow | null,
+  task: LegacyTaskRow,
   now: Date,
   queueContext?: QueueContext,
 ): SyncTaskReadStatus {
   const policy = SYNC_STREAM_POLICY[task.stream];
   const freshnessSlaSeconds = policy.freshnessSlaSeconds;
-  const floorUntil = followersReconcileFloorWaitUntil(task, task.progress, now);
-  // A floored walk's request can be a day old by the time the walk runs.
-  const queuedSince = task.stream === "followers_reconcile"
-    ? followersReconcileQueuedSince(task)
-    : task.requestedAt;
-  const queueAgeSeconds = task.requestSeq > task.appliedSeq && queuedSince
-    ? ageSeconds(queuedSince, now)
+  const queueAgeSeconds = task.requestSeq > task.appliedSeq && task.requestedAt
+    ? ageSeconds(task.requestedAt, now)
     : null;
   const freshnessAgeSeconds = ageSeconds(task.succeededAt, now);
   const lastActiveAt = latestDate([task.progressedAt, task.startedAt]);
@@ -980,7 +831,7 @@ function deriveTaskState(
   const queueDelayed = queueAgeSeconds !== null &&
     (queueAgeSeconds * 1000) > policy.queueDelayThresholdMs;
   const nextDueAt = computeNextDueAt(task);
-  const progress = buildProgressFromPayload(task, monitorRow);
+  const progress = buildProgressFromPayload(task);
 
   let state: Exclude<SyncDomainBlockState, "not_available">;
   let statusReason: SyncStatusReason | null = null;
@@ -1020,13 +871,7 @@ function deriveTaskState(
     }
   } else if (task.requestSeq > task.appliedSeq || task.status === "pending") {
     const budgetReason = buildOfapiBudgetStatusReason(task.progress, activePageSyncRetryAt(task.retryAt, now));
-    if (floorUntil) {
-      state = "scheduled";
-      statusReason = buildStatusReason(
-        FOLLOWERS_RECONCILE_FLOOR_DEFERRAL,
-        "The full follower check runs at most once a day; the next one is scheduled.",
-      );
-    } else if (budgetReason) {
+    if (budgetReason) {
       state = budgetReason.code === "ofapi_request_budget" ? "scheduled" : "delayed";
       statusReason = budgetReason;
     } else if ((queueContext?.activeSiblingStreams.length ?? 0) > 0) {
@@ -1079,9 +924,8 @@ function deriveTaskState(
     succeededAt: iso(task.succeededAt),
     progressedAt: iso(task.progressedAt),
     failedAt: iso(task.failedAt),
-    // The floor's end is when the walk is due, not a retry of a failure.
-    nextDueAt: iso(floorUntil ?? nextDueAt),
-    nextRetryAt: floorUntil ? null : iso(activePageSyncRetryAt(task.retryAt, now)),
+    nextDueAt: iso(nextDueAt),
+    nextRetryAt: iso(activePageSyncRetryAt(task.retryAt, now)),
     queueAgeSeconds,
     freshnessAgeSeconds,
     isFresh,
@@ -1096,6 +940,41 @@ function isFreshEnough(task: SyncTaskReadStatus) {
   return task.isFresh;
 }
 
+/** Why a block of a page neither engine reads is not available. */
+const UNSERVED_PAGE_REASON: SyncStatusReason = {
+  code: "fansly_sync_engine_off",
+  summary: "The Fansly Sync Engine does not run this page: nothing reads it.",
+  waitingFor: null,
+};
+
+function notAvailableDomainBlock(block: SyncDomainBlockKey, statusReason: SyncStatusReason | null): SyncDomainBlockStatus {
+  return {
+    block,
+    state: "not_available",
+    succeededAt: null,
+    progress: null,
+    progressStream: null,
+    progressRole: null,
+    error: null,
+    statusReason,
+    primaryFresh: false,
+    needsAttention: false,
+    nextDueAt: null,
+    nextRetryAt: null,
+    intervals: [],
+    metrics: {},
+    connectionStatus: null,
+    substreams: [],
+    tasks: [],
+  };
+}
+
+/** A block of a page neither engine reads (a Fansly page the Fansly Sync
+ *  Engine does not own). */
+function buildUnservedDomainBlock(block: SyncDomainBlockKey): SyncDomainBlockStatus {
+  return notAvailableDomainBlock(block, UNSERVED_PAGE_REASON);
+}
+
 function deriveDomainState(
   block: SyncDomainBlockKey,
   page: Awaited<ReturnType<typeof listVisiblePages>>[number],
@@ -1105,29 +984,13 @@ function deriveDomainState(
   const policy = SYNC_DOMAIN_POLICY[block];
   const supportedTasks = tasks;
   if (supportedTasks.length === 0) {
-    return {
-      block,
-      state: "not_available",
-      succeededAt: null,
-      progress: null,
-      progressStream: null,
-      progressRole: null,
-      error: null,
-      statusReason: null,
-      primaryFresh: false,
-      needsAttention: false,
-      nextDueAt: null,
-      nextRetryAt: null,
-      intervals: [],
-      metrics: {},
-      connectionStatus: null,
-      substreams: [],
-      tasks: [],
-    };
+    return notAvailableDomainBlock(block, null);
   }
 
-  const primaryTasks = supportedTasks.filter((task) => policy.primaryStreams.includes(task.stream));
-  const supportingTasks = supportedTasks.filter((task) => policy.supportingStreams.includes(task.stream));
+  const primaryStreams: readonly SyncStream[] = policy.primaryStreams;
+  const supportingStreams: readonly SyncStream[] = policy.supportingStreams;
+  const primaryTasks = supportedTasks.filter((task) => primaryStreams.includes(task.stream));
+  const supportingTasks = supportedTasks.filter((task) => supportingStreams.includes(task.stream));
   const earliestRetryAt = earliestIso(supportedTasks.map((task) => (
     task.nextRetryAt ? new Date(task.nextRetryAt) : null
   )));
@@ -1159,12 +1022,6 @@ function deriveDomainState(
   const allPrimaryNeverSucceeded = primaryTasks.every((task) => task.succeededAt === null);
   const allPrimaryFresh = primaryTasks.every(isFreshEnough);
   const primaryFresh = allPrimaryFresh;
-  const messagesMonitorRow = monitorRows.find((row) => row.stream === "dm_messages") ?? monitorRows[0] ?? null;
-  const messagesHistoryComplete = messagesMonitorRow
-    ? messagesMonitorRow.dmEligibleConversationCount === 0 ||
-      (messagesMonitorRow.dmBackfillCompleteConversationCount >= messagesMonitorRow.dmEligibleConversationCount &&
-        messagesMonitorRow.dmLaggingConversationCount === 0)
-    : !primaryPending;
   const maxPhysicalAttemptsSinceLastSuccess = monitorRows.reduce(
     (maximum, row) => Math.max(maximum, row.physicalAttemptsSinceLastSuccess),
     0,
@@ -1202,52 +1059,12 @@ function deriveDomainState(
   } else if (allPrimaryNeverSucceeded && !primaryPending && !supportingPending) {
     state = "not_started";
   } else {
-    const domainUpToDate = (() => {
-      switch (block) {
-        case "connection":
-          return page.hasCredentials && allPrimaryFresh;
-        case "financials":
-          return allPrimaryFresh;
-        case "audience":
-          return allPrimaryFresh;
-        case "messages_live":
-          return allPrimaryFresh;
-        case "messages_history":
-          return !primaryPending && !anyPrimaryDelayed && messagesHistoryComplete;
-      }
-    })();
-
+    const domainUpToDate = block === "connection" ? page.hasCredentials && allPrimaryFresh : allPrimaryFresh;
     state = domainUpToDate ? "up_to_date" : "delayed";
   }
 
-  const progressTask = block === "messages_history"
-    ? primaryTasks.find((task) => task.stream === "dm_messages") ?? null
-    : pickProgressTask(supportedTasks, policy, primaryFresh);
-  const progress = block === "messages_history" && messagesMonitorRow
-    ? {
-      label: messagesMonitorRow.dmEligibleConversationCount === 0
-        ? "No conversation backlog"
-        : `${messagesMonitorRow.dmBackfillCompleteConversationCount.toLocaleString()} / ${
-          messagesMonitorRow.dmEligibleConversationCount.toLocaleString()
-        } conversations ready${
-          messagesMonitorRow.dmLaggingConversationCount > 0
-            ? `, ${messagesMonitorRow.dmLaggingConversationCount.toLocaleString()} lagging`
-            : ""
-        }`,
-      current: messagesMonitorRow.dmBackfillCompleteConversationCount,
-      total: messagesMonitorRow.dmEligibleConversationCount,
-      unit: "conversations",
-      percent: percent(
-        messagesMonitorRow.dmBackfillCompleteConversationCount,
-        messagesMonitorRow.dmEligibleConversationCount,
-      ),
-      percentValid: messagesMonitorRow.dmEligibleConversationCount > 0,
-      details: {
-        laggingConversationCount: messagesMonitorRow.dmLaggingConversationCount,
-        messageCount: messagesMonitorRow.dmMessageCount,
-      },
-    } satisfies SyncDomainProgress
-    : progressTask?.progress ?? null;
+  const progressTask = pickProgressTask(supportedTasks, policy, primaryFresh);
+  const progress = progressTask?.progress ?? null;
   const progressStream = progress ? progressTask?.stream ?? null : null;
   const progressRole = progressStream ? taskRoleForBlock(policy, progressStream) : null;
 
@@ -1263,19 +1080,14 @@ function deriveDomainState(
       case "audience":
         return {
           subscriberCount: page.subscriberCount ?? 0,
-          followerCount: page.followerCount ?? 0,
         };
       case "messages_live":
         return {
           visibleConversationCount: metricsRow?.dmConversationCount ?? 0,
         };
+      // No legacy stream: the block returned not available above.
       case "messages_history":
-        return {
-          eligibleConversationCount: metricsRow?.dmEligibleConversationCount ?? 0,
-          readyConversationCount: metricsRow?.dmBackfillCompleteConversationCount ?? 0,
-          laggingConversationCount: metricsRow?.dmLaggingConversationCount ?? 0,
-          messageCount: metricsRow?.dmMessageCount ?? 0,
-        };
+        return {};
     }
   })();
   const physicalAttemptCount24h = monitorRows.reduce(
@@ -1316,12 +1128,7 @@ function deriveDomainState(
         : `${maxPhysicalAttemptsSinceLastSuccess.toLocaleString()} HTTP attempts completed without a success.`,
       waitingFor: null,
     }
-    : buildDelayedDomainReason({
-      block,
-      state,
-      statusReason: activeReasonTask?.statusReason ?? null,
-      messagesHistoryComplete,
-    });
+    : activeReasonTask?.statusReason ?? null;
   const errorTask = state === "failed" || state === "retrying"
     ? primaryTasks.find((task) => task.error !== null) ?? supportingTasks.find((task) => task.error !== null) ?? null
     : null;
@@ -1565,12 +1372,15 @@ export async function getSyncStatusSnapshot(
   // Seeding/repair stays in the planner tick, the executor and the explicit
   // admin paths (sync-control.ts, sync-blocks.ts).
   const includeMonitorRows = input?.includeMonitorRows ?? true;
-  const monitorStreams = includeMonitorRows
-    ? (input?.monitorStreams ?? [...getSyncStreamsForPlatform("fansly")])
+  const monitorStreams: SyncStream[] = includeMonitorRows
+    ? (input?.monitorStreams ?? [...LEGACY_EXECUTOR_STREAMS])
     : (input?.monitorStreams ?? []);
-  const fanslyPageIds = scopedPages.filter((page) => page.platform === "fansly").map((page) => page.id);
-  const [taskRows, monitorRows, effectiveConfig] = await Promise.all([
-    listPageSyncStates(app.db),
+  // A page of a platform the legacy executor serves (OnlyFans) is described
+  // by its legacy streams; any other page (Fansly) by the Fansly Sync Engine.
+  const legacyPlatforms = legacyExecutorPlatforms();
+  const enginePageIds = scopedPages.filter((page) => !legacyPlatforms.includes(page.platform)).map((page) => page.id);
+  const [allTaskRows, monitorRows, effectiveConfig] = await Promise.all([
+    listPageSyncStates(app.db, { platforms: legacyPlatforms }),
     monitorStreams.length > 0
       ? listSyncMonitorStreamRows(app.db, {
         pageIds: scopedPageIds,
@@ -1579,12 +1389,15 @@ export async function getSyncStatusSnapshot(
         streams: monitorStreams,
       })
       : Promise.resolve([] as SyncMonitorStreamRow[]),
-    fanslyPageIds.length > 0 ? loadEffectiveConfig(app.db, app.config) : Promise.resolve(null),
+    enginePageIds.length > 0 ? loadEffectiveConfig(app.db, app.config) : Promise.resolve(null),
   ]);
-  // Pages the Fansly Sync Engine owns report its live work, not their frozen
-  // legacy cursors (design step 3 §3.2 item 2).
-  const engineFacts: Map<number, EngineStatusFacts> = fanslyPageIds.length > 0 && effectiveConfig !== null
-    ? await readEngineStatusFacts(app.db, { pageIds: fanslyPageIds, settingMs: effectiveConfig.fanslyDefaultDelayMs })
+  // The record rows of a legacy page (OnlyFans's retired dm_messages) are no
+  // stream of its blocks.
+  const taskRows = allTaskRows.filter(isLegacyTaskRow);
+  // Pages the Fansly Sync Engine owns report its live work (design step 3
+  // §3.2 item 2).
+  const engineFacts: Map<number, EngineStatusFacts> = enginePageIds.length > 0 && effectiveConfig !== null
+    ? await readEngineStatusFacts(app.db, { pageIds: enginePageIds, settingMs: effectiveConfig.fanslyDefaultDelayMs })
     : new Map();
 
   const ofapiDmIngestPageIds = isOfapiDmProjectionEnabled(app.config)
@@ -1638,14 +1451,48 @@ export async function getSyncStatusSnapshot(
       .filter((row) => scopedPageIds.includes(row.pageId))
       .map((row) => [`${row.pageId}:${row.stream}`, row] as const),
   );
-  const monitorRowsByPageTask = new Map(
-    monitorRows.map((row) => [`${row.pageId}:${row.stream}`, row] as const),
-  );
 
   return {
     generatedAt: now.toISOString(),
     recentCounters: recentCountersFor(monitorRows),
     pages: scopedPages.map((page) => {
+      const identity = {
+        pageId: page.id,
+        pageLabel: page.label,
+        platform: page.platform,
+        modelSlug: page.modelSlug,
+        modelName: page.modelName,
+        username: page.username,
+        displayName: page.displayName,
+      };
+      const engine = engineFacts.get(page.id);
+      if (engine !== undefined) {
+        const engineBlocks = Object.fromEntries(SYNC_DOMAIN_BLOCKS.map((block) =>
+          [block, buildEngineDomainBlock(block, engine)] as const
+        )) as Record<SyncDomainBlockKey, SyncDomainBlockStatus>;
+        return {
+          ...identity,
+          blocks: engineBlocks,
+          syncUx: buildPageSyncUx(SYNC_DOMAIN_BLOCKS.map((block) => engineBlocks[block])),
+        } satisfies SyncStatusPage;
+      }
+      if (!legacyPlatforms.includes(page.platform)) {
+        // Nothing reads the page: the legacy executor serves no page of its
+        // platform, and the Fansly Sync Engine does not own it (no engine row,
+        // or a row in `off` / `shadow`).
+        const unservedBlocks = Object.fromEntries(SYNC_DOMAIN_BLOCKS.map((block) =>
+          [block, buildUnservedDomainBlock(block)] as const
+        )) as Record<SyncDomainBlockKey, SyncDomainBlockStatus>;
+        return {
+          ...identity,
+          blocks: unservedBlocks,
+          syncUx: summary("off", {
+            label: "Off",
+            headline: "Not syncing",
+            detail: UNSERVED_PAGE_REASON.summary,
+          }),
+        } satisfies SyncStatusPage;
+      }
       // OnlyFans audience sync exists only for OFAPI-mapped pages with
       // OFAPI_AUDIENCE_SYNC_ENABLED on; for everyone else the block must read
       // not_available rather than nag about a sync that is intentionally not
@@ -1655,36 +1502,13 @@ export async function getSyncStatusSnapshot(
         getSyncStreamsForPlatform(page.platform),
         app.config,
         page,
-      );
-      const engine = engineFacts.get(page.id);
-      if (engine !== undefined) {
-        const engineBlocks = Object.fromEntries(SYNC_DOMAIN_BLOCKS.map((block) => {
-          const policy = SYNC_DOMAIN_POLICY[block];
-          const streams = supportedTasks
-            .filter((stream) => policy.primaryStreams.includes(stream) || policy.supportingStreams.includes(stream))
-            .map((stream) => ({ stream, role: policy.primaryStreams.includes(stream) ? "primary" as const : "supporting" as const }));
-          return [block, streams.length === 0
-            ? deriveDomainState(block, page, [], [])
-            : buildEngineDomainBlock(block, streams, engine)] as const;
-        })) as Record<SyncDomainBlockKey, SyncDomainBlockStatus>;
-        return {
-          pageId: page.id,
-          pageLabel: page.label,
-          platform: page.platform,
-          modelSlug: page.modelSlug,
-          modelName: page.modelName,
-          username: page.username,
-          displayName: page.displayName,
-          blocks: engineBlocks,
-          syncUx: buildPageSyncUx(SYNC_DOMAIN_BLOCKS.map((block) => engineBlocks[block])),
-        } satisfies SyncStatusPage;
-      }
+      ).filter(isLegacyExecutorStream);
       const blocks = Object.fromEntries(SYNC_DOMAIN_BLOCKS.map((block) => {
+        const policy = SYNC_DOMAIN_POLICY[block];
         const domainTasks = supportedTasks
-          .filter((stream) => SYNC_DOMAIN_POLICY[block].primaryStreams.includes(stream) || SYNC_DOMAIN_POLICY[block].supportingStreams.includes(stream))
+          .filter((stream) => policy.primaryStreams.includes(stream) || policy.supportingStreams.includes(stream))
           .map((stream) => {
             const taskRow = taskRowsByPageTask.get(`${page.id}:${stream}`);
-            const monitorRow = monitorRowsByPageTask.get(`${page.id}:${stream}`) ?? null;
             const effectiveTaskRow = taskRow ?? {
               pageId: page.id,
               stream,
@@ -1723,12 +1547,12 @@ export async function getSyncStatusSnapshot(
               lastErrorSummary: null,
               createdAt: now,
               updatedAt: now,
-            } satisfies PageSyncState;
+            } satisfies LegacyTaskRow;
 
             const groupId = runtimeGroupByPageId.get(page.id) ?? buildRuntimeGroupId(page);
             const activeSiblingStreams = sortTasksByPolicyOrder(activeStreamsByGroupId.get(groupId) ?? []);
 
-            return deriveTaskState(effectiveTaskRow, monitorRow, now, {
+            return deriveTaskState(effectiveTaskRow, now, {
               activeSiblingStreams,
             });
           });
@@ -1762,13 +1586,7 @@ export async function getSyncStatusSnapshot(
 
       const blockList = SYNC_DOMAIN_BLOCKS.map((block) => blocks[block]);
       return {
-        pageId: page.id,
-        pageLabel: page.label,
-        platform: page.platform,
-        modelSlug: page.modelSlug,
-        modelName: page.modelName,
-        username: page.username,
-        displayName: page.displayName,
+        ...identity,
         blocks,
         syncUx: buildPageSyncUx(blockList),
       } satisfies SyncStatusPage;

@@ -39,13 +39,16 @@ export const CLIENT_TOKEN_PROFILES = {
       "spenderBatch",
       "pageSpenderAutoLists",
       "ingestObservations",
+      "clientConversationRecaps",
+      "clientFanProfileFromGeneration",
       // Every later client route joins here in its own PR:
-      // clientConversationRecaps, clientFanProfileFromGeneration,
       // clientConversationFeed, clientSpenderStats, clientSpenderAwaitingReply,
-      // clientFanClaim, clientFanClaimStatus, clientAudienceNew, clientAiUsageDaily.
+      // clientFanClaim, clientFanClaimStatus, clientAudienceNew.
+      "clientAiUsageDaily",
     ] as const satisfies readonly KernelOperationKey[],
-    // + "client_health" with H-11b.
-    ingestKinds: ["ai_acceptance"] as const,
+    // `client_health` (H-11b) is never journaled: the capture lane folds it
+    // into hourly rollups that hold no user.
+    ingestKinds: ["ai_acceptance", "client_health"] as const,
   },
 } as const;
 

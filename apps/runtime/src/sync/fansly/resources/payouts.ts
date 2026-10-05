@@ -29,11 +29,7 @@ import type {
   ApplyInput,
   ApplyResult,
   DemandSignal,
-  ReplayContext,
-  ReplayObservation,
-  ReplayVerdict,
   ResourceModule,
-  ShadowResult,
   StepPlan,
 } from "../../engine/resource.ts";
 
@@ -252,15 +248,7 @@ function walkFollowup(start: { lastPageFirstRef: string | null; catchUp: FanslyP
 
 /** The daily snapshot's reads: the method listing, then the request head
  *  (`step` 0 and 1). */
-const DAILY_SNAPSHOT_STEPS = 2;
-
 const dailyModule: ResourceModule = {
-  /** The shadow report's assumed run size (rule A1.rate-assumed): the two
-   *  reads `shadow()` steps through. */
-  async estimateRunSteps(): Promise<number> {
-    return DAILY_SNAPSHOT_STEPS;
-  },
-
   async plan(work): Promise<StepPlan> {
     const cursor = parseDailyCursor(work.cursor);
     return cursor.step === 0
@@ -359,17 +347,6 @@ const dailyModule: ResourceModule = {
       counters,
     };
   },
-
-  async shadow(work, _request, ctx): Promise<ShadowResult> {
-    const cursor = parseDailyCursor(work.cursor);
-    return cursor.step + 1 < DAILY_SNAPSHOT_STEPS
-      ? { work: { satisfiesRevision: false, nextDueAt: ctx.now, cursor: { ...cursor, step: cursor.step + 1 } }, followups: [] }
-      : { work: { satisfiesRevision: true, close: "done", closeReason: "shadow", cursor: { ...cursor, step: 0 } }, followups: [] };
-  },
-
-  async replay(observation: ReplayObservation, ctx: ReplayContext): Promise<ReplayVerdict> {
-    return replayPayouts(observation, ctx);
-  },
 };
 
 const walkModule: ResourceModule = {
@@ -460,49 +437,8 @@ const walkModule: ResourceModule = {
       counters,
     };
   },
-
-  async shadow(): Promise<ShadowResult> {
-    // Only a live head starts a walk; a shadow walk (owner) is one page.
-    return { work: { satisfiesRevision: true, close: "done", closeReason: "shadow" }, followups: [] };
-  },
 };
 
 export function payoutsModule(variant: PayoutsVariant): ResourceModule {
   return variant === "daily" ? dailyModule : walkModule;
-}
-
-function methodRows(payload: unknown): Record<string, unknown>[] {
-  if (Array.isArray(payload)) return payload.filter((row): row is Record<string, unknown> => recordOf(row) === row);
-  for (const value of Object.values(recordOf(payload))) {
-    if (Array.isArray(value)) return value.filter((row): row is Record<string, unknown> => recordOf(row) === row);
-  }
-  return [];
-}
-
-/**
- * Replay of a legacy `payout_methods` / `payout_requests` observation: the
- * lane's predicate accepts the body, and every method / payout it served has
- * its projected row on the page.
- */
-async function replayPayouts(observation: ReplayObservation, ctx: ReplayContext): Promise<ReplayVerdict> {
-  if (classifyPayoutResponse(observation.kind, observation.payload) === "invalid") {
-    return { kind: "mismatch", reason: "contract_refused" };
-  }
-  const methods = observation.kind === FANSLY_PAYOUTS_OBSERVATION_KINDS.payoutMethods;
-  const refs = [...new Set((methods ? methodRows(observation.payload) : payoutRequestRows(observation.payload))
-    .map((row) => nonEmpty(row.id))
-    .filter((id): id is string => id !== null))];
-  if (refs.length === 0) return { kind: "match", detail: { served: 0 } };
-  const stored = methods
-    ? await ctx.db.execute<{ ref: string }>(sql`
-      select method_ref as ref from page_payout_methods where page_id = ${ctx.pageId} and method_ref = any(${sql.param(refs)}::text[])
-    `)
-    : await ctx.db.execute<{ ref: string }>(sql`
-      select payout_ref as ref from page_payout_requests where page_id = ${ctx.pageId} and payout_ref = any(${sql.param(refs)}::text[])
-    `);
-  const known = new Set(stored.rows.map((row) => row.ref));
-  const missing = refs.filter((ref) => !known.has(ref));
-  return missing.length === 0
-    ? { kind: "match", detail: { served: refs.length } }
-    : { kind: "mismatch", reason: "rows_missing", detail: { served: refs.length, missing: missing.length } };
 }

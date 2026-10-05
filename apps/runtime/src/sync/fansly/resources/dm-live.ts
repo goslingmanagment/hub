@@ -21,24 +21,22 @@ import type { ApplyResult, LocalApplyInput, ResourceModule } from "../../engine/
 // page hold or pacer slot delays it (ruling 9) — outside the ack transaction
 // so the lock order holds (hot tables before `domain_event_seq`).
 //
-// Shadow (step 2): the router creates the work from real deletion frames so
-// the shadow report sees the demand, and the step closes at once — a shadow
-// page never writes a hot table, the archive or an event (I14).
-//
-// Live: a `local` step (`applyLocal`, in the commit's generation-fenced
+// A `local` step (`applyLocal`, in the commit's generation-fenced
 // transaction under the erasure fence the entry declares). Per deleted
 // overlay row of the work's ids: an executed erasure covering the chat (or its
 // fan, or the message's sender) at the deletion's instant skips it; the page's hot rows of the message are marked
 // (`markFanslyWsHotDeletion`, sticky — also when a row was marked before, as
-// the retired receipt reconcile did until step 4 S4-11; the hot table stays
-// written in step 4 until S4-13); one deliverable `message.deleted` per
-// message (dedup `msg-deleted:fansly:<id>`), and the archive tombstone from
-// the stored events (tombstone-first, sticky: a later REST copy hydrates the
-// stub and keeps the tombstone). Then the stored window of every thread whose
-// archive holds one of the messages is recounted from the archive
-// (`writeThreadSummaryAfterDeletion`, the only engine writer of those columns
-// besides the read's, I9/E7; step 4 S4-08: the page's readers read the
-// archive); its head stays the conversation list's, its chain is not touched.
+// the retired receipt reconcile did until step 4 S4-11; the engine inserts no
+// hot row since step 4 S4-13, so the rows are the ones legacy stored, and their
+// frozen copy never shows a deleted message as live); one deliverable
+// `message.deleted` per message (dedup `msg-deleted:fansly:<id>`), and the
+// archive tombstone from the stored events (tombstone-first, sticky: a
+// later REST copy hydrates the stub and keeps the tombstone). Then the stored
+// window of every thread whose archive holds one of the messages is recounted
+// from the archive (`writeThreadSummaryAfterDeletion`, the only engine writer
+// of those columns besides the read's, I9/E7; step 4 S4-08: the page's
+// readers read the archive); its head stays the conversation list's, its
+// chain is not touched.
 //
 // Lock order: sync_pages → erasure fence → page_dm_threads (FOR UPDATE, id
 // order) → page_dm_messages → domain_event_seq → message_archive → sync_work
@@ -143,8 +141,9 @@ async function chatFanRefs(tx: Database, pageId: number, groupIds: readonly stri
   return refs;
 }
 
-/** The page's hot rows of the messages, to mark (the hot table stays written
- *  until S4-13, so a revert finds the deletions marked). */
+/** The page's hot rows of the messages, to mark: the rows legacy stored before
+ *  the page went live (frozen since step 4 S4-13), so their snapshot never
+ *  shows a deleted message as live. */
 async function hotRowsOf(tx: Database, pageId: number, messageIds: readonly string[]): Promise<Map<string, HotRow[]>> {
   const rows = new Map<string, HotRow[]>();
   if (messageIds.length === 0) return rows;
@@ -262,15 +261,11 @@ export async function applyDmLiveDeletions(tx: Database, input: LocalApplyInput)
 }
 
 export const dmLiveDeletionsModule: ResourceModule = {
-  async plan(_work, ctx) {
-    if (ctx.shadow) return { kind: "done", reason: "shadow_no_writes" };
+  async plan() {
     return { kind: "local", reason: "ws_deletion" };
   },
   applyLocal: applyDmLiveDeletions,
   async apply() {
     throw new Error("dm-live.deletions makes no request: there is no answer to apply");
-  },
-  async shadow() {
-    throw new Error("dm-live.deletions makes no request: there is no step to estimate");
   },
 };

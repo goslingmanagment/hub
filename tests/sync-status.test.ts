@@ -28,6 +28,11 @@ vi.mock("@agency_hub_core/db", async () => {
   };
 });
 
+// The legacy blocks are those of the legacy page-sync executor's pages:
+// OnlyFans. The page of these tests is a credentialed OnlyFans page with no
+// OFAPI mapping, so no OFAPI overlay replaces a block and each one is derived
+// from its legacy stream rows.
+
 import { getSyncStatusSnapshot, mapDomainBlockToSyncUx } from "../apps/runtime/src/services/sync-status.ts";
 import { buildConversationHistorySyncUx } from "../apps/runtime/src/services/sync-ux.ts";
 
@@ -76,7 +81,7 @@ function buildMonitorRow(overrides: Record<string, unknown> = {}) {
   return {
     pageId: 7,
     pageLabel: "lana",
-    platform: "fansly",
+    platform: "onlyfans",
     modelSlug: "lana",
     modelName: "Lana",
     username: "lana_page",
@@ -151,13 +156,16 @@ function buildVisiblePage(overrides: Record<string, unknown> = {}) {
   return {
     id: 7,
     label: "lana",
-    platform: "fansly",
+    platform: "onlyfans",
     username: "lana_page",
     displayName: "Lana",
-    followerCount: 9,
+    followerCount: null,
     subscriberCount: 4,
     lastLightSyncAt: new Date("2026-03-24T12:00:00.000Z"),
-    lastFollowerSyncAt: new Date("2026-03-24T12:00:00.000Z"),
+    lastFollowerSyncAt: null,
+    ofapiAccountId: null,
+    ofapiAuthStatus: null,
+    ofapiAuthChangedAt: null,
     modelSlug: "lana",
     modelName: "Lana",
     hasCredentials: true,
@@ -165,19 +173,6 @@ function buildVisiblePage(overrides: Record<string, unknown> = {}) {
     egressKey: "direct",
     proxyHasAuth: false,
     ...overrides,
-  };
-}
-
-function boundedCheckpoint(fullCompletedAt: string | null) {
-  return {
-    version: 2, mode: "bounded", generation: 7,
-    completedAt: "2026-03-24T12:00:00.000Z", offset: 300, observedCount: 300,
-    pageCount: 3, unchangedPageStreak: 3, providerTotalMode: "present", providerReportedTotal: 500,
-    fullSweepStartedAt: "2026-03-24T11:59:00.000Z", lastFullSweepCompletedAt: fullCompletedAt,
-    polling: { anchorSlot: 100, slotOffsetSeconds: 0, lastCertifiedFull: fullCompletedAt === null ? null : {
-      anchorSlot: 100, startedAt: "2026-03-24T10:00:00.000Z", completedAt: fullCompletedAt,
-    } },
-    previousTimestampMs: null, stopInvalidated: false,
   };
 }
 
@@ -198,34 +193,64 @@ describe("sync status service", () => {
     vi.clearAllMocks();
   });
 
-  // Step 4 (S4-14): the legacy dm_conversations sweep and its bounded scan are
-  // gone, so their last cursor (a certified full hours old) no longer speaks
-  // for the page; the stream row alone does.
-  it.each([true, false])("ignores a legacy dm_conversations full-sweep cursor, monitor=%s", async (includeMonitorRows) => {
-    dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage()]);
-    dbMocks.listPageSyncStates.mockResolvedValue([buildTaskRow({ stream: "dm_conversations" })]);
-    dbMocks.listCheckpointStates.mockResolvedValue([{ pageId: 7, state: boundedCheckpoint("2026-03-24T10:12:00.000Z") }]);
-    dbMocks.listSyncMonitorStreamRows.mockResolvedValue([buildMonitorRow({ stream: "dm_conversations" })]);
-    const snapshot = await getSyncStatusSnapshot({ db: {}, config: {} } as never, {
-      pageIds: [7], now: new Date("2026-03-24T12:00:00.000Z"), includeMonitorRows,
+  // Step 4 (S4-24): the legacy blocks describe the legacy executor's pages
+  // only. A Fansly page is the Fansly Sync Engine's; one the engine does not
+  // own is read by nothing, and no legacy row speaks for it.
+  it("reads a Fansly page the engine does not own as not syncing, whatever its legacy rows say", async () => {
+    dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage({ platform: "fansly" })]);
+    // The parked rows of the page (step 4, S4-21), were the scoped read to return them.
+    dbMocks.listPageSyncStates.mockResolvedValue([
+      buildTaskRow({ stream: "light", status: "paused", blockerKind: "retired" }),
+      buildTaskRow({ stream: "followers", status: "paused", blockerKind: "retired" }),
+    ]);
+    dbMocks.listSyncMonitorStreamRows.mockResolvedValue([]);
+
+    const snapshot = await getSyncStatusSnapshot({ db: {}, config: { fanslyDefaultDelayMs: 2_200 } } as never, {
+      pageIds: [7], now: new Date("2026-03-24T12:00:00.000Z"),
     });
-    const block = snapshot.pages[0]?.blocks.messages_live;
-    expect(block).toMatchObject({
-      state: "up_to_date", primaryFresh: true,
-      substreams: expect.arrayContaining([expect.objectContaining({
-        stream: "dm_conversations", succeededAt: "2026-03-24T12:00:00.000Z", state: "up_to_date",
-      })]),
-    });
-    expect(block?.metrics).not.toHaveProperty("lastFullSweepCompletedAt");
-    expect(dbMocks.listCheckpointStates).not.toHaveBeenCalled();
-    if (!includeMonitorRows) expect(dbMocks.listSyncMonitorStreamRows).not.toHaveBeenCalled();
+
+    const page = snapshot.pages[0]!;
+    for (const block of Object.values(page.blocks)) {
+      expect(block).toMatchObject({
+        state: "not_available",
+        needsAttention: false,
+        substreams: [],
+        tasks: [],
+        statusReason: { code: "fansly_sync_engine_off", summary: "The Fansly Sync Engine does not run this page: nothing reads it." },
+      });
+    }
+    expect(page.syncUx).toMatchObject({ state: "off", label: "Off", headline: "Not syncing" });
   });
 
-  it.each(["ready", "coverage", "physical debt", "active sibling"] as const)(
-    "preserves preview DM blocks and UX with a scoped monitor read: %s",
+  it("reads legacy rows of the legacy executor's platforms only, and no record row as a stream", async () => {
+    dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage()]);
+    dbMocks.listPageSyncStates.mockResolvedValue([
+      buildTaskRow({ stream: "light" }),
+      buildTaskRow({ stream: "dm_conversations" }),
+      // OnlyFans's retired legacy crawler: a parked record, not a stream.
+      buildTaskRow({ stream: "dm_messages", status: "paused", blockerKind: "retired", succeededAt: null }),
+    ]);
+    dbMocks.listSyncMonitorStreamRows.mockResolvedValue([]);
+    const app = { db: {}, config: {} };
+
+    const snapshot = await getSyncStatusSnapshot(app as never, { pageIds: [7], now: new Date("2026-03-24T12:00:00.000Z") });
+
+    expect(dbMocks.listPageSyncStates).toHaveBeenLastCalledWith(app.db, { platforms: ["onlyfans"] });
+    const page = snapshot.pages[0]!;
+    expect(page.blocks.messages_live).toMatchObject({
+      state: "up_to_date", primaryFresh: true,
+      substreams: [expect.objectContaining({ stream: "dm_conversations", state: "up_to_date" })],
+    });
+    expect(page.blocks.messages_history).toMatchObject({ state: "not_available", statusReason: null, substreams: [] });
+    expect(Object.values(page.blocks).flatMap((block) => block.substreams.map((substream) => substream.stream)))
+      .not.toContain("dm_messages");
+  });
+
+  it.each(["ready", "physical debt", "active sibling"] as const)(
+    "preserves the preview's DM block and UX with a scoped monitor read: %s",
     async (scenario) => {
       const now = new Date("2026-03-24T12:00:00.000Z");
-      const dmStreams: DbModule.SyncStream[] = ["dm_conversations", "dm_messages"];
+      const dmStreams: DbModule.SyncStream[] = ["dm_conversations"];
       dbMocks.listVisiblePages.mockResolvedValue([
         buildVisiblePage(),
         buildVisiblePage({ id: 8, label: "lana-alt" }),
@@ -238,7 +263,6 @@ describe("sync status service", () => {
             requestedAt: new Date("2026-03-24T11:20:00.000Z"),
           } : {}),
         }),
-        buildTaskRow({ stream: "dm_messages", workClass: "history" }),
         // A different page and non-DM stream still owns the same runtime group.
         buildTaskRow({
           pageId: 8, stream: "transactions", status: "running", requestSeq: 2,
@@ -246,13 +270,8 @@ describe("sync status service", () => {
         }),
       ]);
       const monitorRows = [
-        buildMonitorRow({ stream: "dm_conversations" }),
         buildMonitorRow({
-          stream: "dm_messages",
-          ...(scenario === "coverage" ? {
-            dmBackfillCompleteConversationCount: 4,
-            dmLaggingConversationCount: 1,
-          } : {}),
+          stream: "dm_conversations",
           ...(scenario === "physical debt" ? {
             stalePhysicalAttemptCount: 1, physicalAttemptsSinceLastSuccess: 2,
             recentPhysicalAttemptCount: 0, recentPhysicalSuccessCount: 0,
@@ -281,7 +300,7 @@ describe("sync status service", () => {
       const previewUx = (page: typeof fullPage) => buildConversationHistorySyncUx({
         conversationSyncUx: mapDomainBlockToSyncUx(page.blocks.messages_live),
         messageSyncUx: mapDomainBlockToSyncUx(page.blocks.messages_history),
-        pendingMessageBackfillCount: scenario === "coverage" ? 2 : 0,
+        pendingMessageBackfillCount: 0,
         previewReadyConversationCount: 4,
       });
       expect(previewUx(scopedPage)).toEqual(previewUx(fullPage));
@@ -289,22 +308,17 @@ describe("sync status service", () => {
         pageIds: [7], now, streams: dmStreams,
         windowStart: new Date("2026-03-23T12:00:00.000Z"),
       });
-      expect(dbMocks.listPageSyncStates).toHaveBeenLastCalledWith(app.db);
-      if (scenario === "coverage") {
-        expect(scopedPage.blocks.messages_history).toMatchObject({
-          state: "delayed", statusReason: { code: "history_incomplete" },
-          progress: { label: "4 / 6 conversations ready, 1 lagging" },
-        });
-      } else if (scenario === "physical debt") {
+      if (scenario === "physical debt") {
         expect(previewUx(scopedPage).state).toBe("attention");
-        expect(scopedPage.blocks.messages_history.statusReason?.code).toBe("physical_attempt_stuck");
+        expect(scopedPage.blocks.messages_live.statusReason?.code).toBe("physical_attempt_stuck");
       } else if (scenario === "active sibling") {
         expect(scopedPage.blocks.messages_live).toMatchObject({
           state: "scheduled", statusReason: { code: "queue_waiting", waitingFor: ["transactions"] },
         });
-        expect(previewUx(scopedPage).state).toBe("healthy");
+        // The history block is not available on the page, which reads as off.
+        expect(previewUx(scopedPage).state).toBe("off");
       } else {
-        expect(previewUx(scopedPage).state).toBe("healthy");
+        expect(previewUx(scopedPage).state).toBe("off");
       }
     },
   );
@@ -319,7 +333,7 @@ describe("sync status service", () => {
         recent429Count: 2,
       }),
       buildMonitorRow({
-        stream: "followers",
+        stream: "dm_conversations",
         recentFailedCount: 3,
         recent5xxCount: 4,
       }),
@@ -405,95 +419,18 @@ describe("sync status service", () => {
     });
   });
 
-  it("does not report message history as up_to_date while backlog remains", async () => {
-    dbMocks.listVisiblePages.mockResolvedValue([{
-      id: 7,
-      label: "lana",
-      platform: "fansly",
-      username: "lana_page",
-      displayName: "Lana",
-      followerCount: 9,
-      subscriberCount: 4,
-      lastLightSyncAt: new Date("2026-03-24T12:00:00.000Z"),
-      lastFollowerSyncAt: new Date("2026-03-24T12:00:00.000Z"),
-      modelSlug: "lana",
-      modelName: "Lana",
-      hasCredentials: true,
-      proxyUrl: null,
-      egressKey: "direct",
-      proxyHasAuth: false,
-    }]);
-    dbMocks.listPageSyncStates.mockResolvedValue([
-      buildTaskRow({ stream: "light" }),
-      buildTaskRow({ stream: "dm_conversations", cadenceSeconds: 1800 }),
-      buildTaskRow({ stream: "dm_messages", cadenceSeconds: 86400, workClass: "history" }),
-    ]);
-    dbMocks.listSyncMonitorStreamRows.mockResolvedValue([
-      buildMonitorRow({ stream: "light" }),
-      buildMonitorRow({ stream: "dm_conversations", cadenceSeconds: 1800 }),
-      buildMonitorRow({
-        stream: "dm_messages",
-        cadenceSeconds: 86400,
-        dmEligibleConversationCount: 10,
-        dmBackfillCompleteConversationCount: 3,
-        dmLaggingConversationCount: 2,
-      }),
-    ]);
-
-    const snapshot = await getSyncStatusSnapshot({ db: {}, config: {} } as never, {
-      pageIds: [7],
-      now: new Date("2026-03-24T12:00:00.000Z"),
-    });
-
-    expect(snapshot.pages[0]?.blocks.messages_history).toMatchObject({
-      state: "delayed",
-      statusReason: {
-        code: "history_incomplete",
-        summary: "Conversation history is still catching up.",
-      },
-      progress: expect.objectContaining({
-        current: 3,
-        total: 10,
-      }),
-      metrics: expect.objectContaining({
-        readyConversationCount: 3,
-        eligibleConversationCount: 10,
-        laggingConversationCount: 2,
-      }),
-    });
-    expect(snapshot.pages[0]?.syncUx.state).toBe("catching_up");
-  });
-
   it("keeps a live failure streak visible on a running task (#137 addendum: false-green)", async () => {
-    // Prod 2026-07-11: a 425-streak dm_messages task flipped retrying →
-    // running between failures and the snapshot nulled its error, so
-    // /health/sync read 200/ok mid-wedge. The streak resets only on a real
-    // success — the task error must survive every state until then.
-    dbMocks.listVisiblePages.mockResolvedValue([{
-      id: 9,
-      label: "lora-vip-fansly",
-      platform: "fansly",
-      username: "lora_vip",
-      displayName: "Lora VIP",
-      followerCount: 9,
-      subscriberCount: 4,
-      lastLightSyncAt: new Date("2026-03-24T12:00:00.000Z"),
-      lastFollowerSyncAt: null,
-      modelSlug: "lora",
-      modelName: "Lora",
-      hasCredentials: true,
-      proxyUrl: null,
-      egressKey: "direct",
-      proxyHasAuth: false,
-    }]);
+    // Prod 2026-07-11: a 425-streak task flipped retrying → running between
+    // failures and the snapshot nulled its error, so /health/sync read 200/ok
+    // mid-wedge. The streak resets only on a real success — the task error
+    // must survive every state until then.
+    dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage({ id: 9, label: "lora-vip-of", username: "lora_vip" })]);
     dbMocks.listPageSyncStates.mockResolvedValue([
       buildTaskRow({ pageId: 9, stream: "light" }),
-      buildTaskRow({ pageId: 9, stream: "dm_conversations", cadenceSeconds: 1800 }),
       buildTaskRow({
         pageId: 9,
-        stream: "dm_messages",
-        cadenceSeconds: 86400,
-        workClass: "history",
+        stream: "dm_conversations",
+        cadenceSeconds: 1800,
         status: "running",
         succeededAt: null,
         startedAt: new Date("2026-03-24T11:58:00.000Z"),
@@ -502,7 +439,7 @@ describe("sync status service", () => {
         failedAt: new Date("2026-03-24T11:55:00.000Z"),
         consecutiveFailures: 425,
         lastErrorCode: null,
-        lastErrorSummary: "OFAPI request failed: GET .../chats/292065372/messages",
+        lastErrorSummary: "OFAPI request failed: GET .../chats",
         leaseOwner: "worker-1",
         leaseToken: "token",
         leaseHeartbeatAt: new Date("2026-03-24T11:59:30.000Z"),
@@ -510,18 +447,17 @@ describe("sync status service", () => {
       }),
     ]);
     dbMocks.listSyncMonitorStreamRows.mockResolvedValue([
-      buildMonitorRow({ pageId: 9, pageLabel: "lora-vip-fansly", stream: "light" }),
-      buildMonitorRow({ pageId: 9, pageLabel: "lora-vip-fansly", stream: "dm_conversations", cadenceSeconds: 1800 }),
+      buildMonitorRow({ pageId: 9, pageLabel: "lora-vip-of", stream: "light" }),
       buildMonitorRow({
         pageId: 9,
-        pageLabel: "lora-vip-fansly",
-        stream: "dm_messages",
-        cadenceSeconds: 86400,
+        pageLabel: "lora-vip-of",
+        stream: "dm_conversations",
+        cadenceSeconds: 1800,
         status: "running",
         succeededAt: null,
         failedAt: new Date("2026-03-24T11:55:00.000Z"),
         consecutiveFailures: 425,
-        lastErrorSummary: "OFAPI request failed: GET .../chats/292065372/messages",
+        lastErrorSummary: "OFAPI request failed: GET .../chats",
       }),
     ]);
 
@@ -530,32 +466,16 @@ describe("sync status service", () => {
       now: new Date("2026-03-24T12:00:00.000Z"),
     });
 
-    const historyBlock = snapshot.pages[0]?.blocks.messages_history;
-    const dmTask = historyBlock?.tasks?.find((task) => task.stream === "dm_messages");
+    const liveBlock = snapshot.pages[0]?.blocks.messages_live;
+    const dmTask = liveBlock?.tasks?.find((task) => task.stream === "dm_conversations");
     expect(dmTask?.error).toMatchObject({
       consecutiveFailures: 425,
-      summary: "OFAPI request failed: GET .../chats/292065372/messages",
+      summary: "OFAPI request failed: GET .../chats",
     });
   });
 
   it("surfaces an auth blocker as failed connection sync and requires action", async () => {
-    dbMocks.listVisiblePages.mockResolvedValue([{
-      id: 7,
-      label: "lana",
-      platform: "fansly",
-      username: "lana_page",
-      displayName: "Lana",
-      followerCount: 9,
-      subscriberCount: 4,
-      lastLightSyncAt: null,
-      lastFollowerSyncAt: null,
-      modelSlug: "lana",
-      modelName: "Lana",
-      hasCredentials: true,
-      proxyUrl: null,
-      egressKey: "direct",
-      proxyHasAuth: false,
-    }]);
+    dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage({ lastLightSyncAt: null })]);
     dbMocks.listPageSyncStates.mockResolvedValue([
       buildTaskRow({
         stream: "light",
@@ -814,23 +734,7 @@ describe("sync status service", () => {
   });
 
   it("prefers the current dependency blocker over stale last-error fields", async () => {
-    dbMocks.listVisiblePages.mockResolvedValue([{
-      id: 7,
-      label: "lana",
-      platform: "fansly",
-      username: "lana_page",
-      displayName: "Lana",
-      followerCount: 9,
-      subscriberCount: 4,
-      lastLightSyncAt: new Date("2026-03-24T12:00:00.000Z"),
-      lastFollowerSyncAt: new Date("2026-03-24T12:00:00.000Z"),
-      modelSlug: "lana",
-      modelName: "Lana",
-      hasCredentials: true,
-      proxyUrl: null,
-      egressKey: "direct",
-      proxyHasAuth: false,
-    }]);
+    dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage()]);
     dbMocks.listPageSyncStates.mockResolvedValue([
       buildTaskRow({ stream: "light" }),
       buildTaskRow({ stream: "transactions" }),
@@ -1087,9 +991,8 @@ describe("sync status service", () => {
   });
 
   it("drops a retry deadline that pending work has already waited out", async () => {
-    // The planner keeps a passed retry_at on pending work (starvation aging
-    // counts the wait from it); status must read it as neither a retry nor a
-    // budget wait.
+    // The planner keeps a passed retry_at on pending work; status must read
+    // it as neither a retry nor a budget wait.
     dbMocks.listVisiblePages.mockResolvedValue([
       buildVisiblePage({
         platform: "onlyfans",
@@ -1163,11 +1066,10 @@ describe("sync status service", () => {
       }),
       buildTaskRow({
         pageId: 8,
-        stream: "dm_messages",
+        stream: "dm_conversations",
         status: "running",
         requestSeq: 1,
         appliedSeq: 0,
-        workClass: "history",
         succeededAt: null,
         startedAt: new Date("2026-03-24T11:58:00.000Z"),
         progressedAt: new Date("2026-03-24T11:59:00.000Z"),
@@ -1187,7 +1089,7 @@ describe("sync status service", () => {
     expect(snapshot.pages[0]?.blocks.financials.statusReason).toMatchObject({
       code: "queue_waiting",
       summary: "Queued - will start after current sync completes.",
-      waitingFor: ["dm_messages"],
+      waitingFor: ["dm_conversations"],
     });
     expect(snapshot.pages[0]?.blocks.financials.substreams[0]).toMatchObject({
       stream: "transactions",
@@ -1195,7 +1097,7 @@ describe("sync status service", () => {
       needsAttention: false,
       statusReason: expect.objectContaining({
         code: "queue_waiting",
-        waitingFor: ["dm_messages"],
+        waitingFor: ["dm_conversations"],
       }),
     });
     expect(snapshot.pages[0]?.syncUx.state).toBe("healthy");
@@ -1239,7 +1141,7 @@ describe("sync status service", () => {
     ]));
   });
 
-  it("keeps page sync UX blue while history backfill runs and fresh siblings wait in queue", async () => {
+  it("reads fresh blocks queued behind the page's own running capture as up to date", async () => {
     dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage()]);
     dbMocks.listPageSyncStates.mockResolvedValue([
       buildTaskRow({
@@ -1255,22 +1157,6 @@ describe("sync status service", () => {
         requestedAt: new Date("2026-03-24T11:20:00.000Z"),
       }),
       buildTaskRow({
-        stream: "subscribers",
-        status: "queued",
-        requestSeq: 2,
-        appliedSeq: 1,
-        succeededAt: new Date("2026-03-24T11:54:00.000Z"),
-        requestedAt: new Date("2026-03-24T11:20:00.000Z"),
-      }),
-      buildTaskRow({
-        stream: "followers",
-        status: "queued",
-        requestSeq: 2,
-        appliedSeq: 1,
-        succeededAt: new Date("2026-03-24T11:54:00.000Z"),
-        requestedAt: new Date("2026-03-24T11:20:00.000Z"),
-      }),
-      buildTaskRow({
         stream: "dm_conversations",
         status: "queued",
         requestSeq: 2,
@@ -1278,8 +1164,10 @@ describe("sync status service", () => {
         succeededAt: new Date("2026-03-24T11:54:00.000Z"),
         requestedAt: new Date("2026-03-24T11:20:00.000Z"),
       }),
+      // The posts capture is a stream of no block; while it runs, the page's
+      // other requests wait behind it.
       buildTaskRow({
-        stream: "dm_messages",
+        stream: "posts",
         status: "running",
         requestSeq: 1,
         appliedSeq: 0,
@@ -1293,15 +1181,7 @@ describe("sync status service", () => {
       buildMonitorRow({ stream: "light" }),
       buildMonitorRow({ stream: "transactions" }),
       buildMonitorRow({ stream: "top_spenders" }),
-      buildMonitorRow({ stream: "subscribers" }),
-      buildMonitorRow({ stream: "followers" }),
       buildMonitorRow({ stream: "dm_conversations" }),
-      buildMonitorRow({
-        stream: "dm_messages",
-        dmEligibleConversationCount: 3669,
-        dmBackfillCompleteConversationCount: 203,
-        dmLaggingConversationCount: 3466,
-      }),
     ]);
 
     const snapshot = await getSyncStatusSnapshot({ db: {}, config: {} } as never, {
@@ -1311,16 +1191,13 @@ describe("sync status service", () => {
 
     expect(snapshot.pages[0]?.blocks.financials.statusReason).toMatchObject({
       code: "queue_waiting",
-    });
-    expect(snapshot.pages[0]?.blocks.audience.statusReason).toMatchObject({
-      code: "queue_waiting",
+      waitingFor: ["posts"],
     });
     expect(snapshot.pages[0]?.blocks.connection.state).toBe("up_to_date");
     expect(snapshot.pages[0]?.blocks.financials.state).toBe("scheduled");
-    expect(snapshot.pages[0]?.blocks.audience.state).toBe("scheduled");
     expect(snapshot.pages[0]?.blocks.messages_live.state).toBe("scheduled");
-    expect(snapshot.pages[0]?.blocks.messages_history.state).toBe("backfilling");
-    expect(snapshot.pages[0]?.syncUx.state).toBe("syncing");
+    expect(snapshot.pages[0]?.blocks.messages_history.state).toBe("not_available");
+    expect(snapshot.pages[0]?.syncUx.state).toBe("healthy");
   });
 
   it("still marks queue waits as delayed when active siblings are in another queue group", async () => {
@@ -1345,11 +1222,10 @@ describe("sync status service", () => {
       }),
       buildTaskRow({
         pageId: 8,
-        stream: "dm_messages",
+        stream: "dm_conversations",
         status: "running",
         requestSeq: 1,
         appliedSeq: 0,
-        workClass: "history",
         succeededAt: null,
         startedAt: new Date("2026-03-24T11:58:00.000Z"),
         progressedAt: new Date("2026-03-24T11:59:00.000Z"),
@@ -1391,11 +1267,10 @@ describe("sync status service", () => {
       }),
       buildTaskRow({
         pageId: 8,
-        stream: "dm_messages",
+        stream: "dm_conversations",
         status: "running",
         requestSeq: 1,
         appliedSeq: 0,
-        workClass: "history",
         succeededAt: null,
         startedAt: new Date("2026-03-24T11:20:00.000Z"),
         progressedAt: new Date("2026-03-24T11:00:00.000Z"),

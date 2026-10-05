@@ -1,15 +1,23 @@
 # @agency_hub_core/chatgoose-hotkeys
 
-The single hotkey scheme of both ChatGoose clients — the Fansly extension
-(`fansly-ext`) and the OnlyFans desktop app (`of-desktop`). This README is the
-human-readable spec; `src/scheme.ts` is the table the clients run.
+The single hotkey scheme of ALL ChatGoose clients — the Fansly extension
+(`fansly-chat`), the OnlyFans desktop app (`onlyfans-chat`) and the ChatSpace
+extension (`chat-extension`). This README is the human-readable spec;
+`src/scheme.ts` is the table the clients run.
 
 Clients never import this package from the hub: `scripts/vendor-hotkeys.mjs`
-compiles it into `fansly-ext/vendor/chatgoose-hotkeys/` and
-`of-desktop/packages/chatgoose-hotkeys/` as `@chatgoose/hotkeys`, with a
+compiles it into `fansly-chat/vendor/chatgoose-hotkeys/`,
+`onlyfans-chat/packages/chatgoose-hotkeys/` and
+`chat-extension/vendor/chatgoose-hotkeys/` as `@chatgoose/hotkeys`, with a
 manifest (`chatgoose-hotkeys.vendor.json`: scheme version, source commit,
-sha256 of every file). Both client releases must carry the same sha from the
-same hub commit. Re-vendor both in one session; never hand-edit the copies.
+sha256 of every file). ALL client releases must carry the same manifest sha256,
+vendored from one clean hub commit. Re-vendor all three in one session; never
+hand-edit the copies.
+
+`chat-extension` runs the scheme as hotkey client `'extension'`, the same rows
+as the Fansly extension; the scheme's client type stays `'extension' |
+'desktop'`. In the table below "all" means every client, "extensions" means both
+extensions.
 
 ## The scheme
 
@@ -21,18 +29,18 @@ works without switching.
 
 | Action | macOS | Windows | ЙЦУКЕН key | Clients |
 |---|---|---|---|---|
-| Reply | ⌘E | Ctrl+E | У | both |
-| Fix (desktop: Improve) | ⌘I | Ctrl+I | Ш | both |
-| Hi | ⌘G | Ctrl+G | П | both |
-| Ping | ⌘P | Ctrl+P | З | both |
-| Cancel AI | ⌘. | Ctrl+. | Ю | both |
-| Help (desktop: Help Me) | ⌘⇧H | Ctrl+Alt+H | Р | both |
-| Recap (desktop: Scan) | ⌘⇧S | Ctrl+Alt+S | Ы | both |
-| Tone | ⌘⇧O | Ctrl+Alt+O | Щ | both |
-| Review | ⌘⇧B | Ctrl+Alt+B | И | both |
-| Split | ⌘⇧L | Ctrl+Alt+L | Д | both |
-| Spenders | ⌘⇧M | Ctrl+Alt+M | Ь | both |
-| Coach | ⌘⇧C | Ctrl+Alt+C | С | extension (reserved in desktop) |
+| Reply | ⌘E | Ctrl+E | У | all |
+| Fix (desktop: Improve) | ⌘I | Ctrl+I | Ш | all |
+| Hi | ⌘G | Ctrl+G | П | all |
+| Ping | ⌘P | Ctrl+P | З | all |
+| Cancel AI | ⌘. | Ctrl+. | Ю | all |
+| Help (desktop: Help Me) | ⌘⇧H | Ctrl+Alt+H | Р | all |
+| Recap (desktop: Scan) | ⌘⇧S | Ctrl+Alt+S | Ы | all |
+| Tone | ⌘⇧O | Ctrl+Alt+O | Щ | all |
+| Review | ⌘⇧B | Ctrl+Alt+B | И | all |
+| Split | ⌘⇧L | Ctrl+Alt+L | Д | all |
+| Spenders | ⌘⇧M | Ctrl+Alt+M | Ь | all |
+| Coach | ⌘⇧C | Ctrl+Alt+C | С | extensions (reserved in desktop) |
 
 The cheatsheet key (`?` outside inputs), send, chat navigation and board keys
 stay client-owned and are not part of this table.
@@ -83,5 +91,7 @@ tests/chatgoose-hotkeys.test.ts`, commit, then from the clean hub tree:
 
     node scripts/vendor-hotkeys.mjs ../fansly-chat/vendor/chatgoose-hotkeys
     node scripts/vendor-hotkeys.mjs ../onlyfans-chat/packages/chatgoose-hotkeys
+    node scripts/vendor-hotkeys.mjs ../chat-extension/vendor/chatgoose-hotkeys
 
-and commit both clients with their labels, cheatsheets and docs.
+and commit all three clients with their labels, cheatsheets and docs. The
+three manifests must show the same sha256 and the same `sourceCommit`.

@@ -5,7 +5,6 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   ensurePollRows,
   getSyncPage,
-  listSharedReadAdmissions,
   readDmFindSharedRead,
   setPageHold,
   writeSyncRouteState,
@@ -34,7 +33,6 @@ import {
   type StartedTestDatabase,
 } from "./helpers/db.ts";
 import {
-  changedTables,
   countRows,
   makeTestActor,
   okResponse,
@@ -44,7 +42,6 @@ import {
   ScriptedLiveTransport,
   seedSyncPage,
   statusResponse,
-  tableCounts,
   testSpec,
   waitFor,
 } from "./helpers/sync-engine-host.ts";
@@ -52,15 +49,13 @@ import { pageHoldKindOf, resourceBreakersOf, routeEntryOf, seedRouteState } from
 
 // The conversation list of the Fansly Sync Engine (design §5.3) through the
 // real actor and commits against a real database: a scripted live transport
-// answers `/messaging/groups` and `/group/:id`; shadow runs the same registry
-// without one. What is pinned: the list writes only its own fields (never the
+// answers `/messaging/groups` and `/group/:id`. What is pinned: the list writes only its own fields (never the
 // stored window, the coverage verdict or the chain, never an unbinding), a
 // head walk stops at the first page it already knows, a full walk stamps its
 // generation and hides nothing, a list head newer than the message reads asks
 // for exactly one read, an unknown chat is found through its detail, a burst
-// of unknown chats shares one read of the list head (live and shadow, inside
-// the 12 s at the production ratios), and a shadow step writes only
-// sync_work and sync_attempts.
+// of unknown chats shares one read of the list head (inside the 12 s at the
+// production ratios).
 
 let testDb: StartedTestDatabase | null = null;
 
@@ -208,22 +203,20 @@ async function seedThreads(pageId: number, threads: readonly SeedThread[]): Prom
 
 /** A registry of every Fansly entry whose standing polls are parked far
  *  ahead, so only the work a test makes due runs. */
-async function quietRegistry(pageId: number, shadow: boolean): Promise<EngineRegistry> {
+async function quietRegistry(pageId: number): Promise<EngineRegistry> {
   const registry = createEngineRegistry(FANSLY_RESOURCE_SPECS);
   const page = await getSyncPage(db(), pageId);
   await ensurePollRows(db(), {
     pageId,
-    shadow,
-    polls: pollsFor(registry, page!, shadow).map((poll) => ({ ...poll, phase: 0.999 })),
+    polls: pollsFor(registry, page!).map((poll) => ({ ...poll, phase: 0.999 })),
   });
   return registry;
 }
 
-async function makeDue(pageId: number, shadow: boolean, resource: string, subject?: string) {
+async function makeDue(pageId: number, resource: string, subject?: string) {
   const spec = fanslyResourceSpec(resource)!;
   await upsertDemand(db(), {
     pageId,
-    shadow,
     resource,
     kind: spec.kind,
     class: spec.class,
@@ -232,14 +225,11 @@ async function makeDue(pageId: number, shadow: boolean, resource: string, subjec
   });
 }
 
-async function seedPage(mode: "live" | "shadow", engineStartedAgoMs = 24 * HOUR) {
-  const { pageId } = await seedSyncPage({ db: db(), pool: testDb!.pool }, {
-    mode,
-    guard: mode === "live" ? "fansly_sync_engine" : null,
-  });
+async function seedPage(engineStartedAgoMs = 24 * HOUR) {
+  const { pageId } = await seedSyncPage({ db: db(), pool: testDb!.pool }, { mode: "live", guard: "fansly_sync_engine" });
   await testDb!.pool.query("update pages set external_page_id = $2 where id = $1", [pageId, OWN_ID]);
   await testDb!.pool.query(
-    `update sync_pages set legacy_imported_at = case when mode = 'live' then clock_timestamp() - $2::double precision * interval '1 millisecond' end,
+    `update sync_pages set legacy_imported_at = clock_timestamp() - $2::double precision * interval '1 millisecond',
             mode_changed_at = clock_timestamp() - $2::double precision * interval '1 millisecond'
       where page_id = $1`,
     [pageId, engineStartedAgoMs],
@@ -251,22 +241,20 @@ type Responder = (req: FanslyWireRequest) => FanslyWireOutcome;
 
 async function drive(
   pageId: number,
-  mode: "live" | "shadow",
   registry: EngineRegistry,
-  respond: Responder | null,
+  respond: Responder,
   until: () => Promise<boolean>,
   options: { alerts?: RecordingAlerts; metrics?: RecordingMetrics } = {},
 ) {
-  const transport = respond === null ? undefined : new ScriptedLiveTransport();
-  if (transport !== undefined && respond !== null) transport.respond = (req) => respond(req);
+  const transport = new ScriptedLiveTransport();
+  transport.respond = (req) => respond(req);
   const { actor, stop, abort } = await makeTestActor({
     db: db(),
     pageId,
-    mode,
     registry,
     alerts: options.alerts ?? new RecordingAlerts(),
     metrics: options.metrics ?? new RecordingMetrics(),
-    ...(transport === undefined ? {} : { transport }),
+    transport,
   });
   const run = actor.run({ stop: stop.signal, abort: abort.signal });
   try {
@@ -275,19 +263,19 @@ async function drive(
     stop.abort();
     await run;
   }
-  return { hits: transport?.hits.map((hit) => hit.spec) ?? [] };
+  return { hits: transport.hits.map((hit) => hit.spec) };
 }
 
 async function runLive(pageId: number, respond: Responder, until: () => Promise<boolean>, options: { metrics?: RecordingMetrics } = {}) {
-  const registry = await quietRegistry(pageId, false);
-  return drive(pageId, "live", registry, respond, until, options);
+  const registry = await quietRegistry(pageId);
+  return drive(pageId, registry, respond, until, options);
 }
 
 function offsetOf(req: FanslyWireRequest): number {
   return Number(new URL(req.url).searchParams.get("offset"));
 }
 
-async function workRow(pageId: number, resource: string, options: { shadow?: boolean; subject?: string } = {}) {
+async function workRow(pageId: number, resource: string, options: { subject?: string } = {}) {
   const result = await testDb!.pool.query<{
     state: string; class: string; cursor: Record<string, unknown>; proof: Record<string, unknown> | null;
     result: Record<string, unknown> | null; demand: { messageIds: string[] }; params: Record<string, unknown>;
@@ -295,17 +283,17 @@ async function workRow(pageId: number, resource: string, options: { shadow?: boo
   }>(
     `select state, class, cursor, proof, result, demand, params, due_at, close_reason, failure_count, breaker_until, waiting_reason
        from sync_work
-      where page_id = $1 and resource = $2 and shadow = $3 and ($4::text is null or subject = $4)
+      where page_id = $1 and resource = $2 and not shadow and ($3::text is null or subject = $3)
       order by id desc limit 1`,
-    [pageId, resource, options.shadow ?? false, options.subject ?? null],
+    [pageId, resource, options.subject ?? null],
   );
   return result.rows[0] ?? null;
 }
 
-async function subjectsOf(pageId: number, resource: string, shadow = false): Promise<string[]> {
+async function subjectsOf(pageId: number, resource: string): Promise<string[]> {
   const result = await testDb!.pool.query<{ subject: string }>(
-    "select subject from sync_work where page_id = $1 and resource = $2 and shadow = $3 order by subject",
-    [pageId, resource, shadow],
+    "select subject from sync_work where page_id = $1 and resource = $2 and not shadow order by subject",
+    [pageId, resource],
   );
   return result.rows.map((row) => row.subject);
 }
@@ -330,7 +318,7 @@ async function thread(pageId: number, n: number) {
 describe("dm-conversations.head", () => {
   it("walks to the first page it already knows, writes only the list's fields, and asks for exactly the reads it needs", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
+    const pageId = await seedPage();
     const recent = NOW_MS - 10 * 60_000;
     const old = NOW_MS - 3 * 24 * HOUR;
     // Page 2: one hundred chats exactly as stored.
@@ -364,7 +352,7 @@ describe("dm-conversations.head", () => {
       ...moved,
     ]);
     const second = listPage(known);
-    await makeDue(pageId, false, "dm-conversations.head");
+    await makeDue(pageId, "dm-conversations.head");
     const { hits } = await runLive(pageId, (req) => {
       if (req.spec === "messaging.groups") return okResponse(offsetOf(req) === 0 ? first : second);
       if (req.spec === "group.detail") return okResponse(groupDetail(103, [fanOf(103)], null));
@@ -431,7 +419,7 @@ describe("dm-conversations.head", () => {
 
   it("lifts an unresolvable exclusion on a resolved answer of the day, and asks nothing of a chat already read", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
+    const pageId = await seedPage();
     const at = NOW_MS - HOUR;
     await seedThreads(pageId, [{
       n: 1, headId: messageOf(1), headAtMs: at, newestStored: messageOf(1),
@@ -442,7 +430,7 @@ describe("dm-conversations.head", () => {
        select f.id, $1, clock_timestamp() - interval '1 hour', true from fans f where f.platform_user_id = $2`,
       [pageId, fanOf(1)],
     );
-    await makeDue(pageId, false, "dm-conversations.head");
+    await makeDue(pageId, "dm-conversations.head");
     const { hits } = await runLive(pageId, () => okResponse(listPage([{ n: 1, headId: messageOf(1), headAtMs: at }])),
       async () => (await workRow(pageId, "dm-conversations.head"))?.cursor.last != null);
     expect(hits).toEqual(["messaging.groups"]);
@@ -456,12 +444,12 @@ describe("dm-conversations.head", () => {
 describe("dm-conversations.full", () => {
   it("the first full walk over 500 chats whose heads equal their stored newest ids: 0 follow-ups, 0 head reads, nothing hidden", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live", HOUR);
+    const pageId = await seedPage(HOUR);
     const at = NOW_MS - 2 * HOUR;
     const chats = Array.from({ length: 500 }, (_, index) => ({ n: 1000 + index, headId: messageOf(1000 + index), headAtMs: at }));
     // 9999: visible, never listed by this walk.
     await seedThreads(pageId, [...chats.map((chat) => ({ ...chat, newestStored: chat.headId })), { n: 9999, headId: null, headAtMs: null }]);
-    await makeDue(pageId, false, "dm-conversations.full");
+    await makeDue(pageId, "dm-conversations.full");
     const offsets: number[] = [];
     const { hits } = await runLive(pageId, (req) => {
       const offset = offsetOf(req);
@@ -488,10 +476,10 @@ describe("dm-conversations.full", () => {
 
   it("restarts a walk the provider serves repeats to, under a new generation after a minute; past the bound it closes withheld", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
+    const pageId = await seedPage();
     const at = NOW_MS - 2 * HOUR;
     const chats = Array.from({ length: 100 }, (_, index) => ({ n: 3000 + index, headId: messageOf(3000 + index), headAtMs: at }));
-    await makeDue(pageId, false, "dm-conversations.full");
+    await makeDue(pageId, "dm-conversations.full");
     // An offset the provider ignores: the same page at every offset.
     const first = await runLive(pageId, () => okResponse(listPage(chats)),
       async () => (await workRow(pageId, "dm-conversations.full"))?.result?.restartReason != null);
@@ -509,7 +497,7 @@ describe("dm-conversations.full", () => {
       [pageId],
     );
     const doubled = listPage([chats[0]!, { n: 4000, headId: messageOf(4000), headAtMs: at }, chats[0]!]);
-    const second = await drive(pageId, "live", createEngineRegistry(FANSLY_RESOURCE_SPECS), () => okResponse(doubled),
+    const second = await drive(pageId, createEngineRegistry(FANSLY_RESOURCE_SPECS), () => okResponse(doubled),
       async () => (await workRow(pageId, "dm-conversations.full"))?.cursor.last != null);
     expect(second.hits).toEqual(["messaging.groups"]);
     const withheld = await workRow(pageId, "dm-conversations.full");
@@ -525,11 +513,11 @@ describe("dm-conversations.full", () => {
 describe("dm-conversations.find and .detail", () => {
   it("finds a chat the list head does not show through its group detail, creates its thread and reads it now", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
+    const pageId = await seedPage();
     const at = NOW_MS - 2 * HOUR;
     await seedThreads(pageId, [{ n: 1, headId: messageOf(1), headAtMs: at, newestStored: messageOf(1) }]);
     const newMessage = { id: messageOf(2, 7), atMs: NOW_MS - 30_000, senderId: fanOf(2) };
-    await makeDue(pageId, false, "dm-conversations.find", groupOf(2));
+    await makeDue(pageId, "dm-conversations.find", groupOf(2));
     const { hits } = await runLive(pageId, (req) => {
       if (req.spec === "messaging.groups") return okResponse(listPage([{ n: 1, headId: messageOf(1), headAtMs: at }]));
       if (req.spec === "group.detail") return okResponse(groupDetail(2, [fanOf(2)], newMessage));
@@ -551,7 +539,7 @@ describe("dm-conversations.find and .detail", () => {
 
   it("a group detail that is no direct chat (the page's own mass-message container) creates nothing (D5)", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
+    const pageId = await seedPage();
     const at = NOW_MS - 2 * HOUR;
     await seedThreads(pageId, [{ n: 1, headId: messageOf(1), headAtMs: at, newestStored: messageOf(1) }]);
     const fansBefore = await countRows(testDb.pool, "select count(*)::int as n from fans");
@@ -564,7 +552,7 @@ describe("dm-conversations.find and .detail", () => {
       recipients: [{ id: "920000000000000001", type: 30001 }],
     };
     container.lastMessage = { ...container.lastMessage!, type: 3, correlationId: groupOf(9) as never };
-    await makeDue(pageId, false, "dm-conversations.find", groupOf(9));
+    await makeDue(pageId, "dm-conversations.find", groupOf(9));
     const { hits } = await runLive(pageId, (req) => {
       if (req.spec === "messaging.groups") return okResponse(listPage([{ n: 1, headId: messageOf(1), headAtMs: at }]));
       if (req.spec === "group.detail") return okResponse(container);
@@ -584,10 +572,10 @@ describe("dm-conversations.find and .detail", () => {
 
   it("a group detail naming several members besides the page creates nothing either (D5)", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
+    const pageId = await seedPage();
     const fansBefore = await countRows(testDb.pool, "select count(*)::int as n from fans");
     const group = groupDetail(10, [fanOf(10), fanOf(11)], { id: messageOf(10, 2), atMs: NOW_MS - 60_000, senderId: fanOf(10) });
-    await makeDue(pageId, false, "dm-conversations.detail", groupOf(10));
+    await makeDue(pageId, "dm-conversations.detail", groupOf(10));
     const { hits } = await runLive(pageId, (req) => {
       if (req.spec === "group.detail") return okResponse(group);
       throw new Error(`unexpected ${req.spec}`);
@@ -605,10 +593,10 @@ describe("dm-conversations.find and .detail", () => {
 
   it("a chat on the list head is found with one read, and only its own read is urgent", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
+    const pageId = await seedPage();
     const recent = NOW_MS - 60_000;
     await seedThreads(pageId, [{ n: 1, headId: messageOf(1), headAtMs: recent - HOUR, newestStored: messageOf(1) }]);
-    await makeDue(pageId, false, "dm-conversations.find", groupOf(2));
+    await makeDue(pageId, "dm-conversations.find", groupOf(2));
     const { hits } = await runLive(pageId, () => okResponse(listPage([
       { n: 2, headId: messageOf(2), headAtMs: recent },
       { n: 1, headId: messageOf(1, 1), headAtMs: recent },
@@ -621,9 +609,9 @@ describe("dm-conversations.find and .detail", () => {
 
   it("a group detail that keeps failing breaks only its own chat", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
+    const pageId = await seedPage();
     await seedThreads(pageId, [{ n: 5, partner: null, headId: null, headAtMs: null, metadata: { unresolvedIdentity: true } }]);
-    await makeDue(pageId, false, "dm-conversations.detail", groupOf(5));
+    await makeDue(pageId, "dm-conversations.detail", groupOf(5));
     const { hits } = await runLive(pageId, () => statusResponse(500, { success: false, error: { code: 500 } }),
       async () => ((await workRow(pageId, "dm-conversations.detail"))?.failure_count ?? 0) >= 1);
     expect(hits).toEqual(["group.detail"]);
@@ -638,35 +626,36 @@ describe("dm-conversations.find and .detail", () => {
 
 const FIND = "dm-conversations.find";
 
-async function findRows(pageId: number, shadow = false) {
+async function findRows(pageId: number) {
   const result = await testDb!.pool.query<{
     subject: string; state: string; close_reason: string | null; result: Record<string, unknown> | null;
     first_demand_at: Date; closed_at: Date | null;
   }>(
     `select subject, state, close_reason, result, first_demand_at, closed_at from sync_work
-      where page_id = $1 and resource = $2 and shadow = $3 order by subject`,
-    [pageId, FIND, shadow],
+      where page_id = $1 and resource = $2 and not shadow order by subject`,
+    [pageId, FIND],
   );
   return result.rows;
 }
 
-async function attemptsOf(pageId: number, shadow = false) {
+async function attemptsOf(pageId: number) {
   const result = await testDb!.pool.query<{ id: number; resource: string; subject: string; operation: string; admitted_at: Date; sent_at: Date | null }>(
     `select id::int as id, resource, subject, operation, admitted_at, sent_at from sync_attempts
-      where page_id = $1 and shadow = $2 order by id`,
-    [pageId, shadow],
+      where page_id = $1 and not shadow order by id`,
+    [pageId],
   );
   return result.rows;
 }
 
-async function openFinds(pageId: number, shadow = false): Promise<number> {
+async function openFinds(pageId: number): Promise<number> {
   return countRows(testDb!.pool,
-    "select count(*)::int as n from sync_work where page_id = $1 and resource = $2 and shadow = $3 and state in ('open', 'running')",
-    [pageId, FIND, shadow]);
+    "select count(*)::int as n from sync_work where page_id = $1 and resource = $2 and not shadow and state in ('open', 'running')",
+    [pageId, FIND]);
 }
 
 describe("the shared list-head read of .find (step 3b, plan PR 1-3)", () => {
-  /** A journaled list read of the page (no request: the row only). */
+  /** A journaled list read of the page (no request: the row only); `shadow`
+   *  makes it a row shadow mode left behind. */
   async function journalListRead(pageId: number, input: {
     resource: string; offset: number; shadow?: boolean; applyState?: string; outcome?: string; workId?: number;
   }): Promise<number> {
@@ -682,19 +671,18 @@ describe("the shared list-head read of .find (step 3b, plan PR 1-3)", () => {
     return Number(result.rows[0]!.id);
   }
 
-  async function findWorkId(pageId: number, n: number, shadow = false): Promise<number> {
+  async function findWorkId(pageId: number, n: number): Promise<number> {
     const result = await testDb!.pool.query<{ id: string }>(
-      "select id from sync_work where page_id = $1 and resource = $2 and subject = $3 and shadow = $4 and state = 'open'",
-      [pageId, FIND, groupOf(n), shadow],
+      "select id from sync_work where page_id = $1 and resource = $2 and subject = $3 and not shadow and state = 'open'",
+      [pageId, FIND, groupOf(n)],
     );
     return Number(result.rows[0]!.id);
   }
 
-  async function sharedRead(pageId: number, n: number, shadow = false) {
+  async function sharedRead(pageId: number, n: number) {
     return readDmFindSharedRead(db(), {
-      workId: await findWorkId(pageId, n, shadow),
+      workId: await findWorkId(pageId, n),
       pageId,
-      shadow,
       platformConversationId: groupOf(n),
       listOperation: "messaging.groups",
       listKeys: DM_LIST_READ_KEYS,
@@ -703,15 +691,15 @@ describe("the shared list-head read of .find (step 3b, plan PR 1-3)", () => {
 
   it("counts only an applied read of the list head by a list key admitted since the find's first demand; a chat a write since served is found", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
+    const pageId = await seedPage();
     const at = NOW_MS - HOUR;
     // Admitted before the demand: it may have been served before the chat existed.
     await journalListRead(pageId, { resource: "dm-conversations.head", offset: 0 });
     // Chat 2's thread was listed before the demand too.
     await seedThreads(pageId, [{ n: 2, headId: messageOf(2), headAtMs: at }]);
     await testDb.pool.query("update page_dm_threads set last_seen_at = clock_timestamp() - interval '1 minute' where platform_account_id = $1", [pageId]);
-    await makeDue(pageId, false, FIND, groupOf(1));
-    await makeDue(pageId, false, FIND, groupOf(2));
+    await makeDue(pageId, FIND, groupOf(1));
+    await makeDue(pageId, FIND, groupOf(2));
     expect(await sharedRead(pageId, 1)).toEqual({ found: false, headRead: null });
     expect(await sharedRead(pageId, 2)).toEqual({ found: false, headRead: null });
 
@@ -721,6 +709,8 @@ describe("the shared list-head read of .find (step 3b, plan PR 1-3)", () => {
     await journalListRead(pageId, { resource: "dm-conversations.full", offset: 100 });
     await journalListRead(pageId, { resource: "probe.manual", offset: 0 });
     await journalListRead(pageId, { resource: "dm-conversations.head", offset: 0, outcome: "unknown", applyState: "none" });
+    // … nor an estimate shadow mode left in the journal.
+    await journalListRead(pageId, { resource: "dm-conversations.head", offset: 0, shadow: true, applyState: "applied" });
     expect(await sharedRead(pageId, 1)).toEqual({ found: false, headRead: null });
 
     // An applied head read of any list key (here the socket repair's) does;
@@ -736,31 +726,15 @@ describe("the shared list-head read of .find (step 3b, plan PR 1-3)", () => {
     expect(await sharedRead(pageId, 2)).toMatchObject({ found: true });
   });
 
-  it("on a shadow page, counts its own settled estimates of the list head, and finds nothing by a thread", async (context) => {
-    if (!testDb) return context.skip();
-    const shadowPageId = await seedPage("shadow");
-    const at = NOW_MS - HOUR;
-    await seedThreads(shadowPageId, [{ n: 3, headId: messageOf(3), headAtMs: at }]);
-    await makeDue(shadowPageId, true, FIND, groupOf(3));
-    await journalListRead(shadowPageId, { resource: FIND, offset: 0, shadow: true, outcome: "admitted", applyState: "none" });
-    expect(await sharedRead(shadowPageId, 3, true)).toEqual({ found: false, headRead: null });
-    const settled = await journalListRead(shadowPageId, { resource: "dm-conversations.head", offset: 0, shadow: true });
-    await testDb.pool.query("update page_dm_threads set last_seen_at = clock_timestamp() where platform_account_id = $1", [shadowPageId]);
-    expect(await sharedRead(shadowPageId, 3, true)).toEqual({
-      found: false,
-      headRead: { attemptId: settled, resource: "dm-conversations.head", subject: "", admittedAt: expect.any(Date) },
-    });
-  });
-
   it("a burst: one list head read answers every find — the chats it shows close with no request before the HTTP gate, the one it does not show reads its detail, every found chat is read urgently", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
+    const pageId = await seedPage();
     const old = NOW_MS - 2 * HOUR;
     const recent = NOW_MS - 30_000;
     await seedThreads(pageId, [{ n: 1, headId: messageOf(1), headAtMs: old, newestStored: messageOf(1) }]);
     const listed = [2, 3, 4, 5, 6];
     const hidden = 7;
-    for (const n of [...listed, hidden]) await makeDue(pageId, false, FIND, groupOf(n));
+    for (const n of [...listed, hidden]) await makeDue(pageId, FIND, groupOf(n));
     const metrics = new RecordingMetrics();
     const { hits } = await runLive(pageId, (req) => {
       if (req.spec === "messaging.groups") {
@@ -802,13 +776,13 @@ describe("the shared list-head read of .find (step 3b, plan PR 1-3)", () => {
 
   it("a list head read before the find's demand answers nothing: the find reads the list itself, not the detail", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
+    const pageId = await seedPage();
     const recent = NOW_MS - 30_000;
     // The planned head poll reads the list before the chat's first message.
-    await makeDue(pageId, false, "dm-conversations.head");
+    await makeDue(pageId, "dm-conversations.head");
     await runLive(pageId, () => okResponse(listPage([{ n: 1, headId: messageOf(1), headAtMs: recent }])),
       async () => (await workRow(pageId, "dm-conversations.head"))?.cursor.last != null);
-    await makeDue(pageId, false, FIND, groupOf(8));
+    await makeDue(pageId, FIND, groupOf(8));
     const { hits } = await runLive(pageId, (req) => {
       if (req.spec === "messaging.groups") {
         return okResponse(listPage([{ n: 8, headId: messageOf(8), headAtMs: recent }, { n: 1, headId: messageOf(1), headAtMs: recent }]));
@@ -821,9 +795,9 @@ describe("the shared list-head read of .find (step 3b, plan PR 1-3)", () => {
 
   it("while a 429 holds the list route (the page's route state), a find reads its detail alone", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
+    const pageId = await seedPage();
     await seedRouteState(testDb, { pageId, route: "messaging.groups", holdSeconds: 5 * 60, ladderStep: 1, effectivePerMin: 6 });
-    await makeDue(pageId, false, FIND, groupOf(8));
+    await makeDue(pageId, FIND, groupOf(8));
     const { hits } = await runLive(pageId, (req) => {
       if (req.spec === "group.detail") return okResponse(groupDetail(8, [fanOf(8)], { id: messageOf(8), atMs: NOW_MS - 10_000, senderId: fanOf(8) }));
       return okResponse({ messages: [] });
@@ -834,9 +808,9 @@ describe("the shared list-head read of .find (step 3b, plan PR 1-3)", () => {
 
   it("under a page hold, a find a list read answered still closes before the gate, asking its chat's urgent read unless one is open; one it did not answer waits for its detail's slot", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
+    const pageId = await seedPage();
     const at = NOW_MS - HOUR;
-    for (const n of [1, 2, 3, 4]) await makeDue(pageId, false, FIND, groupOf(n));
+    for (const n of [1, 2, 3, 4]) await makeDue(pageId, FIND, groupOf(n));
     // The socket repair's head read since the demands served chats 1, 3 and
     // 4 (its apply wrote the threads) but did not see their finds — their
     // demands committed while it applied, so it asked no urgent read; chat 3
@@ -851,7 +825,7 @@ describe("the shared list-head read of .find (step 3b, plan PR 1-3)", () => {
     await testDb.pool.query("update page_dm_threads set last_seen_at = clock_timestamp() where platform_account_id = $1", [pageId]);
     await testDb.pool.query("update page_dm_threads set head_confirmed_id = last_message_id where platform_account_id = $1 and platform_conversation_id = $2", [pageId, groupOf(4)]);
     await upsertDemand(db(), {
-      pageId, shadow: false, resource: "dm-messages.head", subject: groupOf(3), kind: "trigger", class: "urgent",
+      pageId, resource: "dm-messages.head", subject: groupOf(3), kind: "trigger", class: "urgent",
       demand: { messageIds: [messageOf(3)], reasons: ["ws:message_created"] },
     });
     await setPageHold(db(), { pageId, kind: "network", until: new Date(Date.now() + 5 * 60_000) });
@@ -884,49 +858,6 @@ describe("the shared list-head read of .find (step 3b, plan PR 1-3)", () => {
     expect(three.rows.map((row) => Number(row.demand_revision))).toEqual([1]);
     expect(await subjectsOf(pageId, "dm-messages.catchup")).toEqual([]);
   });
-
-  it("in shadow, as live: one list read for the burst, every other find closed on it naming that read (the report counts its chat read with it), the urgent reads of the chats the database knows", async (context) => {
-    if (!testDb) return context.skip();
-    const pageId = await seedPage("shadow");
-    const old = NOW_MS - 3 * HOUR;
-    const recent = NOW_MS - 30_000;
-    // Legacy listed chats 2 and 3 already (heads newer than what was read);
-    // 4 and 5 it has not.
-    await seedThreads(pageId, [
-      { n: 2, headId: messageOf(2, 1), headAtMs: recent, newestStored: messageOf(2) },
-      { n: 3, headId: messageOf(3, 1), headAtMs: recent, newestStored: messageOf(3) },
-      { n: 9, headId: messageOf(9), headAtMs: old, newestStored: messageOf(9) },
-    ]);
-    const registry = await quietRegistry(pageId, true);
-    for (const n of [2, 3, 4, 5]) await makeDue(pageId, true, FIND, groupOf(n));
-    const from = new Date(Date.now() - 1_000);
-    await drive(pageId, "shadow", registry, null, async () => (await openFinds(pageId, true)) === 0);
-
-    const attempts = (await attemptsOf(pageId, true)).filter((attempt) => attempt.resource === FIND);
-    expect(attempts.map((attempt) => [attempt.operation, attempt.subject])).toEqual([["messaging.groups", groupOf(2)]]);
-    const reader = attempts[0]!;
-    const finds = await findRows(pageId, true);
-    expect(finds.map((row) => [row.subject, row.close_reason])).toEqual([
-      [groupOf(2), "shadow"],
-      [groupOf(3), "shared_head_read"],
-      [groupOf(4), "shared_head_read"],
-      [groupOf(5), "shared_head_read"],
-    ]);
-    for (const row of finds.slice(1)) {
-      expect(row.result).toMatchObject({ sharedRead: { attemptId: reader.id, resource: FIND, subject: groupOf(2) } });
-    }
-    // The read's estimate asked the urgent read of each known chat a find was
-    // open for — the reader's and the one it answered.
-    expect(await subjectsOf(pageId, "dm-messages.head", true)).toEqual([groupOf(2), groupOf(3)]);
-    expect((await workRow(pageId, "dm-messages.head", { shadow: true, subject: groupOf(3) }))!.class).toBe("urgent");
-    // The shadow report's live path counts every chat read at the shared read.
-    const admissions = await listSharedReadAdmissions(db(), {
-      pageIds: [pageId], shadow: true, resources: [FIND], from, to: new Date(Date.now() + 60_000),
-    });
-    expect(admissions.map((row) => [row.subject, row.admittedAt.getTime()])).toEqual(
-      [3, 4, 5].map((n) => [groupOf(n), reader.admitted_at.getTime()]),
-    );
-  });
 });
 
 describe("a burst of .find under saturated history at the production ratios (A1: ≤ 12 s)", () => {
@@ -948,25 +879,22 @@ describe("a burst of .find under saturated history at the production ratios (A1:
       async apply(_tx, input) {
         return { work: { satisfiesRevision: false, nextDueAt: input.now }, followups: [] };
       },
-      async shadow(_work, _request, ctx) {
-        return { work: { satisfiesRevision: false, nextDueAt: ctx.now }, followups: [] };
-      },
     };
   }
 
   it("every find of the burst a head read shows closes within 12 s (scaled), one list read; the chat it does not show reads its detail", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
+    const pageId = await seedPage();
     const registry = createEngineRegistry([
       ...FANSLY_RESOURCE_SPECS,
       testSpec("history.busy", busy("messages.page"), { kind: "goal", class: "requests", operations: ["messages.page"] }),
       testSpec("media.busy", busy("media.offer_stats"), { kind: "goal", class: "planned", operations: ["media.offer_stats"] }),
     ]);
     const page = await getSyncPage(db(), pageId);
-    await ensurePollRows(db(), { pageId, shadow: false, polls: pollsFor(registry, page!, false).map((poll) => ({ ...poll, phase: 0.999 })) });
+    await ensurePollRows(db(), { pageId, polls: pollsFor(registry, page!).map((poll) => ({ ...poll, phase: 0.999 })) });
     // The history request whose endless read keeps the requests class busy.
     for (const key of ["history.busy", "media.busy"]) {
-      await upsertDemand(db(), { pageId, shadow: false, resource: key, kind: "goal", class: key === "history.busy" ? "requests" : "planned", demand: { reasons: ["test"] } });
+      await upsertDemand(db(), { pageId, resource: key, kind: "goal", class: key === "history.busy" ? "requests" : "planned", demand: { reasons: ["test"] } });
     }
     const request = await testDb.pool.query<{ id: string }>(
       `insert into history_requests (request_ref, page_id, requester_kind, idempotency_key, request_fingerprint, depth_kind,
@@ -992,13 +920,13 @@ describe("a burst of .find under saturated history at the production ratios (A1:
       return okResponse();
     };
     const { actor, stop, abort } = await makeTestActor({
-      db: db(), pageId, mode: "live", registry, transport, settingMs: SETTING_MS, routeTimeScale: SCALE, ownRef: OWN_ID,
+      db: db(), pageId, registry, transport, settingMs: SETTING_MS, routeTimeScale: SCALE, ownRef: OWN_ID,
     });
     const run = actor.run({ stop: stop.signal, abort: abort.signal });
     try {
       // History saturates the family first; then the burst arrives.
       await waitFor(async () => (transport.hits.filter((hit) => hit.spec === "messages.page").length >= 8 ? true : null), 30_000, "history");
-      for (const n of [...listed, hidden]) await makeDue(pageId, false, FIND, groupOf(n));
+      for (const n of [...listed, hidden]) await makeDue(pageId, FIND, groupOf(n));
       await waitFor(async () => ((await openFinds(pageId)) === 0 ? true : null), 30_000, "the burst's finds");
       // History goes on beside it.
       const before = transport.hits.length;
@@ -1073,10 +1001,10 @@ describe("a 429 on the conversation list (owner decisions №14, №22)", () => 
 
   it("holds only the list's route: the page and every other resource go on, and .find goes straight to the group detail", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
+    const pageId = await seedPage();
     await testDb.pool.query("update pages set last_verified_at = clock_timestamp() - interval '3 hours' where id = $1", [pageId]);
-    await makeDue(pageId, false, "dm-conversations.head");
-    await makeDue(pageId, false, "account.poll");
+    await makeDue(pageId, "dm-conversations.head");
+    await makeDue(pageId, "account.poll");
     const metrics = new RecordingMetrics();
     const first = await runLive(pageId, (req) => {
       if (req.spec === "messaging.groups") return statusResponse(429, { success: false });
@@ -1102,8 +1030,8 @@ describe("a 429 on the conversation list (owner decisions №14, №22)", () => 
 
     // While the list is held, a chat the socket names is found by its detail alone.
     await holdListLonger(pageId);
-    await makeDue(pageId, false, "dm-conversations.find", groupOf(8));
-    const second = await drive(pageId, "live", createEngineRegistry(FANSLY_RESOURCE_SPECS), (req) => {
+    await makeDue(pageId, "dm-conversations.find", groupOf(8));
+    const second = await drive(pageId, createEngineRegistry(FANSLY_RESOURCE_SPECS), (req) => {
       if (req.spec === "group.detail") return okResponse(groupDetail(8, [fanOf(8)], { id: messageOf(8), atMs: NOW_MS - 10_000, senderId: fanOf(8) }));
       throw new Error(`unexpected ${req.spec}`);
     }, async () => (await workRow(pageId, "dm-conversations.find"))?.state === "done");
@@ -1117,15 +1045,15 @@ describe("a 429 on the conversation list (owner decisions №14, №22)", () => 
     // Both run their own modules (S2-07b `transactions.head`, S2-08b
     // `dm-messages.head`): what is pinned is the engine's side — the pick, the
     // hold, the admission — and that each read still applies while held.
-    const pageId = await seedPage("live");
-    const registry = await quietRegistry(pageId, false);
+    const pageId = await seedPage();
+    const registry = await quietRegistry(pageId);
     // The chat the message arrives in: bound, nothing stored, no chain yet.
     const headAtMs = NOW_MS - 60_000;
     await seedThreads(pageId, [{ n: 3, headId: messageOf(3), headAtMs }]);
 
     // The list read takes a 429.
-    await makeDue(pageId, false, "dm-conversations.head");
-    const first = await drive(pageId, "live", registry, (req) => {
+    await makeDue(pageId, "dm-conversations.head");
+    const first = await drive(pageId, registry, (req) => {
       if (req.spec === "messaging.groups") return statusResponse(429, { success: false });
       throw new Error(`unexpected ${req.spec}`);
     }, async () => (await listRoute(pageId)).entry !== null);
@@ -1138,14 +1066,14 @@ describe("a 429 on the conversation list (owner decisions №14, №22)", () => 
         where page_id = $1 and shadow = false and resource = 'dm-conversations.head' and state = 'open'`,
       [pageId],
     );
-    await makeDue(pageId, false, "dm-messages.head", groupOf(3));
-    await makeDue(pageId, false, "transactions.head");
+    await makeDue(pageId, "dm-messages.head", groupOf(3));
+    await makeDue(pageId, "transactions.head");
     const message = {
       id: messageOf(3), type: 1, dataVersion: 1, content: "hello", groupId: groupOf(3), senderId: fanOf(3),
       correlationId: null, inReplyTo: null, inReplyToRoot: null, createdAt: Math.floor(headAtMs / 1000),
       attachments: [], embeds: [], interactions: [], likes: [],
     };
-    const second = await drive(pageId, "live", registry, (req) => {
+    const second = await drive(pageId, registry, (req) => {
       if (req.spec === "messages.page") return okResponse({ messages: [message] });
       if (req.spec === "transactions.page") return okResponse({ total: 0, data: [] });
       throw new Error(`unexpected ${req.spec}`);
@@ -1165,11 +1093,11 @@ describe("a 429 on the conversation list (owner decisions №14, №22)", () => 
 
   it("keeps the idle actor asleep while the list is held: a held row is never due to it", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
+    const pageId = await seedPage();
     // Both list walks due: one takes the 429, the other is held before it is sent.
-    await makeDue(pageId, false, "dm-conversations.head");
-    await makeDue(pageId, false, "dm-conversations.full");
-    const registry = await quietRegistry(pageId, false);
+    await makeDue(pageId, "dm-conversations.head");
+    await makeDue(pageId, "dm-conversations.full");
+    const registry = await quietRegistry(pageId);
     // The production wake answers a wait of 0 ms at once (host-ports.ts).
     const productionWake: Wake = {
       async wait(_pageId, ms, signal) {
@@ -1197,7 +1125,7 @@ describe("a 429 on the conversation list (owner decisions №14, №22)", () => 
       throw new Error(`unexpected ${req.spec}`);
     };
     const { actor, stop, abort } = await makeTestActor({
-      db: counted, pageId, mode: "live", registry, transport, wake: productionWake, metrics: new RecordingMetrics(),
+      db: counted, pageId, registry, transport, wake: productionWake, metrics: new RecordingMetrics(),
     });
     const run = actor.run({ stop: stop.signal, abort: abort.signal });
     try {
@@ -1226,84 +1154,5 @@ describe("a 429 on the conversation list (owner decisions №14, №22)", () => 
       { resource: "dm-conversations.head", waiting_reason: null },
     ]);
     expect((await listRoute(pageId)).entry).toMatchObject({ ladderStep: 1 });
-  });
-});
-
-describe("shadow", () => {
-  it("estimates the walks and their reads from what the database holds, writing nothing but its own work and attempts", async (context) => {
-    if (!testDb) return context.skip();
-    const pageId = await seedPage("shadow");
-    const at = NOW_MS - 2 * HOUR;
-    await seedThreads(pageId, [
-      ...Array.from({ length: 147 }, (_, index) => ({ n: 100 + index, headId: messageOf(100 + index), headAtMs: at - index * 1000, newestStored: messageOf(100 + index) })),
-      // Two heads legacy listed but has not read yet, one chat without a partner.
-      { n: 10, headId: messageOf(10, 1), headAtMs: at + 1000, newestStored: messageOf(10) },
-      { n: 11, headId: messageOf(11, 1), headAtMs: at - 200_000, newestStored: messageOf(11) },
-      { n: 12, partner: null, headId: messageOf(12), headAtMs: at - 300_000 },
-    ]);
-    const registry = await quietRegistry(pageId, true);
-    await makeDue(pageId, true, "dm-conversations.full");
-    await makeDue(pageId, true, "dm-conversations.head");
-    const before = await tableCounts(testDb.pool);
-    const threadsBefore = await testDb.pool.query("select max(updated_at) as at from page_dm_threads where platform_account_id = $1", [pageId]);
-    await drive(pageId, "shadow", registry, null, async () =>
-      (await workRow(pageId, "dm-conversations.full", { shadow: true }))?.cursor.shadow === null
-      && (await countRows(testDb!.pool, "select count(*)::int as n from sync_attempts where page_id = $1 and resource = 'dm-conversations.full'", [pageId])) === 2
-      && (await countRows(testDb!.pool, "select count(*)::int as n from sync_attempts where page_id = $1 and resource = 'dm-conversations.head'", [pageId])) === 1
-      && (await workRow(pageId, "dm-conversations.detail", { shadow: true }))?.state === "done");
-
-    const attempts = await testDb.pool.query<{ resource: string; operation: string; n: number }>(
-      `select resource, operation, count(*)::int as n from sync_attempts
-        where page_id = $1 and shadow and outcome = 'shadow' and apply_state = 'skipped' group by 1, 2 order by 1, 2`,
-      [pageId],
-    );
-    // 150 visible chats, no stated total: two pages to the short one.
-    expect(attempts.rows).toEqual([
-      { resource: "dm-conversations.detail", operation: "group.detail", n: 1 },
-      { resource: "dm-conversations.full", operation: "messaging.groups", n: 2 },
-      { resource: "dm-conversations.head", operation: "messaging.groups", n: 1 },
-    ]);
-    expect(await subjectsOf(pageId, "dm-messages.catchup", true)).toEqual([groupOf(10), groupOf(11)]);
-    expect(await subjectsOf(pageId, "dm-conversations.detail", true)).toEqual([groupOf(12)]);
-    expect(await countRows(testDb.pool, "select count(*)::int as n from sync_work where page_id = $1 and not shadow and resource like 'dm-%'", [pageId])).toBe(0);
-    const after = await tableCounts(testDb.pool);
-    expect(changedTables(before, after)).toEqual(["sync_attempts", "sync_work"]);
-    const threadsAfter = await testDb.pool.query("select max(updated_at) as at from page_dm_threads where platform_account_id = $1", [pageId]);
-    expect(threadsAfter.rows[0].at).toEqual(threadsBefore.rows[0].at);
-  });
-});
-
-describe("replay of legacy observations (shadow report B5)", () => {
-  it("dm_conversations and group_detail against what legacy stored", async (context) => {
-    if (!testDb) return context.skip();
-    const pageId = await seedPage("live");
-    const at = NOW_MS - 2 * HOUR;
-    await seedThreads(pageId, [{ n: 1, headId: messageOf(1), headAtMs: at }, { n: 2, headId: messageOf(2), headAtMs: at }]);
-    const registry = createEngineRegistry(FANSLY_RESOURCE_SPECS);
-    const ctx = { db: db(), pageId };
-    const later = new Date(Date.now() + HOUR);
-    const observation = (kind: string, payload: unknown, receivedAt = later) => ({ id: 1, receivedAt, kind, pageId, payload });
-
-    const list = await registry.module("dm-conversations.head");
-    const served = listPage([{ n: 1, headId: messageOf(1), headAtMs: at }, { n: 2, headId: messageOf(2), headAtMs: at }]);
-    expect(await list.replay!(observation("dm_conversations", served), ctx)).toEqual({ kind: "match", detail: { served: 2 } });
-    expect(await list.replay!(observation("dm_conversations", listPage([{ n: 3, headId: null, headAtMs: null }])), ctx))
-      .toMatchObject({ kind: "mismatch", reason: "threads_missing" });
-    expect(await list.replay!(observation("dm_conversations", listPage([{ n: 1, partner: fanOf(9), headId: null, headAtMs: null }])), ctx))
-      .toMatchObject({ kind: "mismatch", reason: "partner_differs" });
-    // The row changed after an older observation: not a mismatch.
-    expect(await list.replay!(observation("dm_conversations", listPage([{ n: 1, partner: fanOf(9), headId: null, headAtMs: null }]), new Date(at)), ctx))
-      .toMatchObject({ kind: "match" });
-    expect(await list.replay!(observation("dm_conversations", { contractAccepted: false, captured: {} }), ctx)).toMatchObject({ kind: "not_replayable" });
-    expect(await list.replay!(observation("dm_conversations", { data: [{ nope: 1 }] }), ctx)).toMatchObject({ kind: "mismatch", reason: "contract_refused" });
-
-    const find = await registry.module("dm-conversations.find");
-    expect(await find.replay!(observation("group_detail", groupDetail(1, [fanOf(1)], null)), ctx)).toMatchObject({ kind: "match" });
-    expect(await find.replay!(observation("group_detail", groupDetail(1, [fanOf(9)], null)), ctx))
-      .toMatchObject({ kind: "mismatch", reason: "partner_differs" });
-    expect(await find.replay!(observation("group_detail", groupDetail(7, [fanOf(7)], null)), ctx))
-      .toMatchObject({ kind: "mismatch", reason: "thread_missing" });
-    expect(await find.replay!(observation("group_detail", { contractAccepted: false, raw: { id: groupOf(1), users: [{}] } }), ctx))
-      .toMatchObject({ kind: "match", detail: { legacyRefused: true } });
   });
 });

@@ -8,18 +8,15 @@ import {
 } from "@/api/queries";
 import { ConfirmModal } from "@/components/shared/ConfirmModal";
 import { toast } from "sonner";
-import { getBlockLabel, getEngineBlockKeys, getStreamLabel } from "./syncBlockDisplay.js";
+import { getBlockLabel, getStreamLabel } from "./syncBlockDisplay.js";
 import type { SyncBlockKey, SyncBlockState } from "./syncBlockDisplay.js";
 
-type SyncPlatform = "fansly" | "onlyfans";
-
 // Detailed status keeps compatibility rows visible for auditability, but they
-// must not create a fake recovery action. OnlyFans `light` and `transactions`
-// are webhook/OFAPI-era no-ops, while legacy `dm_messages` is retired.
+// must not create a fake recovery action: OnlyFans `light` and `transactions`
+// are webhook/OFAPI-era no-ops.
 const ONLYFANS_NON_RESUMABLE_STREAMS = new Set([
   "light",
   "transactions",
-  "dm_messages",
 ]);
 
 function canTrigger(state: SyncBlockState): boolean {
@@ -49,37 +46,15 @@ function canReset(state: SyncBlockState): boolean {
   return state !== "not_available";
 }
 
-/** The buttons of a block the Fansly Sync Engine owns: the routes branch on
- *  the page's engine mode server-side — "sync now" makes the block's polls
- *  due (live only), pause/resume move its registry keys in and out of the
- *  page's paused set, and the reset requeues its quarantined work. */
-function getEngineBlockActionPresentation(block: SyncBlockStatus) {
-  const { keys, paused, pausedAll } = getEngineBlockKeys(block);
-  const live = block.engineMode === "live";
-  return {
-    showTrigger: live && !pausedAll,
-    showPause: keys.length > 0 && paused.length < keys.length,
-    showResume: paused.length > 0,
-    showReset: live && block.needsAttention,
-    resumeLabel: "Resume",
-    resetLabel: "Requeue",
-  };
-}
-
-export function getSyncBlockActionPresentation(
-  block: SyncBlockStatus,
-  platform: SyncPlatform,
-) {
-  if (block.state === "engine") return getEngineBlockActionPresentation(block);
+/** The buttons of a block of a page the legacy page-sync executor serves
+ *  (OnlyFans). A Fansly page's blocks have their own on «Синк»
+ *  (`engine/EngineBlocks.tsx`). */
+export function getSyncBlockActionPresentation(block: SyncBlockStatus) {
   const pausedSubstreams = block.substreams.filter((substream) => (
-    substream.state === "paused" && !(
-      platform === "onlyfans" && ONLYFANS_NON_RESUMABLE_STREAMS.has(substream.stream)
-    )
+    substream.state === "paused" && !ONLYFANS_NON_RESUMABLE_STREAMS.has(substream.stream)
   ));
   const hasPartialPause = block.state !== "paused" && pausedSubstreams.length > 0;
-  const showResume = platform === "onlyfans" && block.substreams.length > 0
-    ? pausedSubstreams.length > 0
-    : canResume(block.state) || hasPartialPause;
+  const showResume = block.substreams.length > 0 ? pausedSubstreams.length > 0 : canResume(block.state);
 
   return {
     showTrigger: !hasPartialPause && (canTrigger(block.state) || canTriggerDisabled(block.state)),
@@ -95,11 +70,9 @@ export function getSyncBlockActionPresentation(
 
 export function SyncBlockActions({
   pageLabel,
-  platform,
   block,
 }: {
   pageLabel: string;
-  platform: SyncPlatform;
   block: SyncBlockStatus;
 }) {
   const [showResetConfirm, setShowResetConfirm] = useState(false);
@@ -109,7 +82,6 @@ export function SyncBlockActions({
   const resetMut = useAdminSyncBlockReset();
 
   const state = block.state;
-  const engine = state === "engine";
   const blockKey = block.block as SyncBlockKey;
   const label = getBlockLabel(blockKey);
   const anyPending =
@@ -147,7 +119,7 @@ export function SyncBlockActions({
   async function handleReset() {
     try {
       await resetMut.mutateAsync({ pageLabel, block: blockKey });
-      toast.success(engine ? `${label}: quarantined work requeued` : `${label} reset`);
+      toast.success(`${label} reset`);
       setShowResetConfirm(false);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to reset");
@@ -161,7 +133,7 @@ export function SyncBlockActions({
     showReset,
     resumeLabel,
     resetLabel,
-  } = getSyncBlockActionPresentation(block, platform);
+  } = getSyncBlockActionPresentation(block);
 
   return (
     <>
@@ -210,10 +182,8 @@ export function SyncBlockActions({
 
       {showResetConfirm && (
         <ConfirmModal
-          title={engine ? `Requeue ${label}?` : `Reset ${label}?`}
-          message={engine
-            ? `The quarantined Fansly Sync Engine work of ${label} on ${pageLabel} runs again: a captured answer is re-applied from the journal without a new request. Nothing is deleted.`
-            : `This will clear all sync state for ${label} on ${pageLabel}. The block will re-sync from scratch.`}
+          title={`Reset ${label}?`}
+          message={`This will clear all sync state for ${label} on ${pageLabel}. The block will re-sync from scratch.`}
           confirmLabel={resetLabel}
           isPending={resetMut.isPending}
           onConfirm={handleReset}

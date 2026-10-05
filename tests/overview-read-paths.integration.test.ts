@@ -3,6 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   createFanslyPage,
   createModel,
+  createOnlyFansPage,
   ensurePageSyncStates,
 } from "@agency_hub_core/db";
 
@@ -15,6 +16,7 @@ import {
   startIntegrationTestDatabase,
   type StartedTestDatabase,
 } from "./helpers/db.ts";
+import { seedFormerFanslyRows } from "./helpers/fansly-legacy-rows.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 
 let testDb: StartedTestDatabase | null = null;
@@ -59,21 +61,25 @@ describe("overview read paths", () => {
 
     const app = createTestAppContext(testDb);
     const model = (await createModel(testDb.db, { slug: "lana", name: "Lana" }))!;
-    const page = (await createFanslyPage(testDb.db, { modelId: model.id, label: "lana-1" }))!;
+    // A page of each platform: the legacy executor's (OnlyFans) and one it
+    // does not serve (Fansly).
+    const fansly = (await createFanslyPage(testDb.db, { modelId: model.id, label: "lana-1" }))!;
+    const onlyFans = (await createOnlyFansPage(testDb.db, { modelId: model.id, label: "lana-of" }))!;
+    const pageIds = [fansly.id, onlyFans.id];
 
     expect((await pageSyncStateFingerprint()).rows).toBe(0);
 
-    const summary = await getSyncStatusSummarySnapshot(app, { pageIds: [page.id] });
-    expect(summary.pages.map((p) => p.pageId)).toEqual([page.id]);
-    expect(summary.pages[0]?.syncUx).toBeDefined();
+    const summary = await getSyncStatusSummarySnapshot(app, { pageIds });
+    expect(summary.pages.map((p) => p.pageId).sort()).toEqual(pageIds);
+    for (const page of summary.pages) expect(page.syncUx).toBeDefined();
     expect((await pageSyncStateFingerprint()).rows).toBe(0);
 
-    const status = await getSyncStatusSnapshot(app, { pageIds: [page.id] });
-    expect(status.pages.map((p) => p.pageId)).toEqual([page.id]);
+    const status = await getSyncStatusSnapshot(app, { pageIds });
+    expect(status.pages.map((p) => p.pageId).sort()).toEqual(pageIds);
     expect((await pageSyncStateFingerprint()).rows).toBe(0);
 
     const connections = await listConnectionStatuses(app);
-    expect(connections.map((c) => c.id)).toEqual([page.id]);
+    expect(connections.map((c) => c.id).sort()).toEqual(pageIds);
     expect((await pageSyncStateFingerprint()).rows).toBe(0);
   });
 
@@ -85,10 +91,12 @@ describe("overview read paths", () => {
 
     const app = createTestAppContext(testDb);
     const model = (await createModel(testDb.db, { slug: "lana", name: "Lana" }))!;
-    const pageA = (await createFanslyPage(testDb.db, { modelId: model.id, label: "lana-1" }))!;
+    // An OnlyFans page with the rows the planner seeds, and a Fansly page
+    // with the rows an old planner left it (records since step 4).
+    const pageA = (await createOnlyFansPage(testDb.db, { modelId: model.id, label: "lana-of" }))!;
     const pageB = (await createFanslyPage(testDb.db, { modelId: model.id, label: "lana-2" }))!;
     await ensurePageSyncStates(testDb.db, { pageId: pageA.id });
-    await ensurePageSyncStates(testDb.db, { pageId: pageB.id });
+    await seedFormerFanslyRows(testDb.pool, pageB.id, new Date());
 
     const before = await pageSyncStateFingerprint();
     expect(before.rows).toBeGreaterThan(0);

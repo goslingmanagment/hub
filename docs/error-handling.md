@@ -1,11 +1,15 @@
 # Error-handling canon
 
 This is the single canonical error-handling reference for the Agency Hub family:
-the core kernel, the ChatGoose Firefox extension, and the ChatGoose Desktop
-Electron application. It records the currently implemented contract and the
+the core kernel, the ChatGoose Firefox extension (`fansly-chat`), the ChatGoose
+Desktop Electron application (`onlyfans-chat`), and the ChatSpace extension
+(`chat-extension`). It records the currently implemented contract and the
 family law from core Decisions #154/#182/#183/#184, extension Decisions
-E38/E57/E58, and desktop Decision D25. Change this document in the same family
-change as any behavior recorded here; do not maintain client-side copies.
+E38/E57/E58, and desktop Decision D25; the `chat-extension` columns follow its
+frozen CG registry (`chat-extension` `docs/error-registry.md`, `architecture.md`
+Appendix A) and its hub→CG map (`packages/contracts/src/hub/error-map.ts`).
+Change this document in the same family change as any behavior recorded here;
+do not maintain client-side copies.
 
 ## 1. The law
 
@@ -48,7 +52,9 @@ change as any behavior recorded here; do not maintain client-side copies.
 | Core AI SSE generation | An error frame terminates the stream; core does not restart the generation. | A chatter may explicitly start a new generation only when the card's recovery permits it. |
 | Firefox extension AI generation | No SSE error code is auto-retried. A generic pre-stream `service_unavailable` failure gets exactly one transparent retry after 5 seconds, and only before the first output chunk. | Manual retry after the mapped card; a provider-rate countdown is display only. |
 | Desktop AI generation | No automatic generation retry. EOF without `done` fails closed. | Manual action after the mapped card; a provider-rate deadline is display only. |
-| Anthropic adapter | The SDK's HTTP-level retry behavior remains intact. For a page-proxy connect failure, `createStickyConnectFailureFetch` permits one physical proxy dial per resolved generation client; later SDK attempts receive the cached connect failure immediately. | The provider SDK owns eligible response-level attempts; neither client owns them. |
+| chat-extension AI generation | No SSE error code is auto-retried. A structured HTTP 503 `service_unavailable` on the AI stream before the first output frame gets exactly one transparent retry after 5 seconds ("Сервис недоступен, повтор через 5 с…"); never after an output frame and never for a send. EOF without `done` fails closed as `CG-STREAM-TRUNCATED`. | Manual retry after the mapped card; a provider-rate `retryAfterMs` is kept as an absolute display deadline only. |
+| chat-extension hub calls (non-AI) | No transport failure (network, timeout, contract, truncation) is repeated automatically. A rejected cursor (`cursor_invalid`, `cursor_window_mismatch`) is read again once from the first page, without a toast. H-5 `generation_not_ready` repeats only the idempotent link write, never the generation: 5 s, 15 s, 60 s, then every 3 min up to 30 min while the tab is open, then `CG-RECAP-SAVE`. A claim `dispatch` that fails in transport ends its attempt held: no ticket, so no command was enqueued. | The chatter's next click; only a new click makes a new send attempt. |
+| Anthropic adapter | The SDK's HTTP-level retry behavior remains intact. For a page-proxy connect failure, `createStickyConnectFailureFetch` permits one physical proxy dial per resolved generation client; later SDK attempts receive the cached connect failure immediately. | The provider SDK owns eligible response-level attempts; no client owns them. |
 | OpenRouter adapter | One local fetch; there is no adapter retry loop. | A later generation is a new explicit action. |
 | Voice synthesis | One paid provider dispatch. A timeout, transport failure, or ambiguous status remains dispatched and is swept to the existing indeterminate outcome; it is never redispatched automatically. Idempotent replay reads the same request result. A queued waiter heartbeats durable ownership until a process-local synthesis slot opens. | A deliberate new take is a new paid attempt. |
 | OFAPI state-changing commands | One execution attempt per command row; an indeterminate mutation is never automatically sent again. Typing, unsend, and mark-read reject retry lineage. | Only an explicitly requested, policy-permitted same-kind retry creates a new command row and lineage; it is never a second attempt on the old row. |
@@ -70,7 +76,7 @@ half of that decision (a provider `Retry-After` as the deadline, the immediate
 incident for one more than 30 minutes away, the R04 page hold) went with the
 legacy executor's Fansly branches at step 4 (S4-19); the queue guard stays for
 the same retry classes on OFAPI streams.
-See [the cooldown runbook](runbooks/fansly-provider-cooldown.md).
+See [the legacy queue's cooldown](runbooks/sync.md#onlyfans-the-legacy-page-sync-queue).
 
 ## 2. SSE wire-code registry
 
@@ -81,18 +87,18 @@ incident column, `global` means the singleton latch
 `ai_provider_failed:<pageId>:proxy`. A page incident requires a non-null
 `pageId`.
 
-| Wire code | Static wire message | Meaning and failure phase | `retryAfterMs` | Default recovery disposition | Incident policy | Firefox extension mapping | Desktop mapping |
-|---|---|---|---|---|---|---|---|
-| `provider_billing` | `AI provider billing requires attention` | Anthropic HTTP 400 `invalid_request_error` whose provider message exactly matches the production low-credit signature; `provider_response`. Near matches remain generic. | Always `null`. | Do not retry until an operator restores provider credit. | `ai_provider_billing`; `global`; immediate on first failure. | `hub_provider_billing` / `CG-HUB-12` | `CG-HUB-04` |
-| `provider_auth` | `AI provider authentication failed` | Structured provider authentication/permission evidence or HTTP 401/403; `provider_response`. | Always `null`. | Do not retry until an operator repairs the server-side provider credential or permission. | `ai_provider_billing`; `global`; immediate on first failure. | `hub_provider_auth` / `CG-HUB-13` | `CG-HUB-05` |
-| `provider_rate_limited` | `AI provider rate limit reached` | Structured provider rate-limit evidence or HTTP 429; `provider_response`. | Parsed from `Retry-After` seconds or HTTP date when valid, otherwise `null`; this is the only code that can carry a value. | No automatic retry; wait until the displayed deadline, then retry manually if needed. | `ai_provider_failed`; `page/provider`; threshold 3. | `hub_provider_rate_limited` / `CG-HUB-14` | `CG-HUB-06` |
-| `provider_unavailable` | `AI provider is temporarily unavailable` | Structured provider unavailable/overload evidence, HTTP 529, or any provider 5xx; `provider_response`. | Always `null`. | No automatic retry; retry manually later and escalate a continuing outage. | `ai_provider_failed`; `page/provider`; threshold 3. | `hub_provider_unavailable` / `CG-HUB-15` | `CG-HUB-07` |
-| `provider_proxy_unreachable` | `AI gateway could not reach the page's egress proxy` | Named/code-based connect failure in the cause chain, or an explicit connect-phase failure; `connect`. | Always `null`. | Do not retry until the page's egress route is restored. | `ai_provider_failed`; `page/proxy`; threshold 3. | `hub_provider_failed` / `CG-HUB-10` | `CG-HUB-08` |
-| `provider_stream_failed` | `AI gateway provider stream failed` | Generic provider/transport failure. A supplied `provider_response` phase or status-bearing unclassified response is `provider_response`; a failure after output starts, a stream-phase hint, or an otherwise statusless fallback is `stream`. | Always `null`. | Do not blind-retry; inspect the provider path and retry manually only after judgment. | `ai_provider_failed`; `page/provider`; threshold 3. | `hub_provider_failed` / `CG-HUB-10` | Provider fallback: `CG-HUB-10` |
-| `provider_output_empty` | `AI gateway provider completed without usable output` | Provider termination produced no non-whitespace output after stronger terminal-integrity checks; `stream`. | Always `null`. | Discard the unusable result; a later regeneration is manual. | `ai_provider_failed`; `page/provider`; threshold 3. | `ai_output_unusable` / `CG-API-06` | Provider fallback: `CG-HUB-10` |
-| `provider_usage_missing` | `AI gateway provider ended without usage metadata` | Output exists but the terminal provider stream supplied no usage metadata; `stream`. | Always `null`. | Discard as an incomplete terminal; investigate before repeated manual generation. | `ai_provider_failed`; `page/provider`; threshold 3. | Provider fallback: `hub_provider_failed` / `CG-HUB-10` | Provider fallback: `CG-HUB-10` |
-| `provider_stream_incomplete` | `AI gateway provider stream ended without a terminal stop reason` | Output and usage exist, but no `done`/terminal stop reason exists; `stream`. | Always `null`. | Discard the partial result; investigate before repeated manual generation. | `ai_provider_failed`; `page/provider`; threshold 3. | Provider fallback: `hub_provider_failed` / `CG-HUB-10` | Provider fallback: `CG-HUB-10` |
-| `coach_output_too_long` | `AI gateway output exceeded the coach transport ceiling` | Coach output crossed the 64,000-character transport ceiling; `stream`. The crossing delta is emitted, then this error, with no `done`. | Always `null`. | Change or narrow the request before a new manual generation; retrying the same request is not recovery. | `ai_provider_failed`; `page/provider`; threshold 3. | Non-provider fallback: `hub_request_failed` / `CG-HUB-07` | Non-provider fallback: `CG-HUB-02` |
+| Wire code | Static wire message | Meaning and failure phase | `retryAfterMs` | Default recovery disposition | Incident policy | Firefox extension mapping | Desktop mapping | chat-extension mapping |
+|---|---|---|---|---|---|---|---|---|
+| `provider_billing` | `AI provider billing requires attention` | Anthropic HTTP 400 `invalid_request_error` whose provider message exactly matches the production low-credit signature; `provider_response`. Near matches remain generic. | Always `null`. | Do not retry until an operator restores provider credit. | `ai_provider_billing`; `global`; immediate on first failure. | `hub_provider_billing` / `CG-HUB-12` | `CG-HUB-04` | `CG-PROVIDER-BILLING` |
+| `provider_auth` | `AI provider authentication failed` | Structured provider authentication/permission evidence or HTTP 401/403; `provider_response`. | Always `null`. | Do not retry until an operator repairs the server-side provider credential or permission. | `ai_provider_billing`; `global`; immediate on first failure. | `hub_provider_auth` / `CG-HUB-13` | `CG-HUB-05` | `CG-PROVIDER-AUTH` |
+| `provider_rate_limited` | `AI provider rate limit reached` | Structured provider rate-limit evidence or HTTP 429; `provider_response`. | Parsed from `Retry-After` seconds or HTTP date when valid, otherwise `null`; this is the only code that can carry a value. | No automatic retry; wait until the displayed deadline, then retry manually if needed. | `ai_provider_failed`; `page/provider`; threshold 3. | `hub_provider_rate_limited` / `CG-HUB-14` | `CG-HUB-06` | `CG-PROVIDER-RATE-LIMIT`; `retryAfterMs` kept as an absolute display deadline |
+| `provider_unavailable` | `AI provider is temporarily unavailable` | Structured provider unavailable/overload evidence, HTTP 529, or any provider 5xx; `provider_response`. | Always `null`. | No automatic retry; retry manually later and escalate a continuing outage. | `ai_provider_failed`; `page/provider`; threshold 3. | `hub_provider_unavailable` / `CG-HUB-15` | `CG-HUB-07` | `CG-PROVIDER-UNAVAILABLE` |
+| `provider_proxy_unreachable` | `AI gateway could not reach the page's egress proxy` | Named/code-based connect failure in the cause chain, or an explicit connect-phase failure; `connect`. | Always `null`. | Do not retry until the page's egress route is restored. | `ai_provider_failed`; `page/proxy`; threshold 3. | `hub_provider_failed` / `CG-HUB-10` | `CG-HUB-08` | `CG-PROVIDER-PROXY` |
+| `provider_stream_failed` | `AI gateway provider stream failed` | Generic provider/transport failure. A supplied `provider_response` phase or status-bearing unclassified response is `provider_response`; a failure after output starts, a stream-phase hint, or an otherwise statusless fallback is `stream`. | Always `null`. | Do not blind-retry; inspect the provider path and retry manually only after judgment. | `ai_provider_failed`; `page/provider`; threshold 3. | `hub_provider_failed` / `CG-HUB-10` | Provider fallback: `CG-HUB-10` | `CG-PROVIDER-STREAM` |
+| `provider_output_empty` | `AI gateway provider completed without usable output` | Provider termination produced no non-whitespace output after stronger terminal-integrity checks; `stream`. | Always `null`. | Discard the unusable result; a later regeneration is manual. | `ai_provider_failed`; `page/provider`; threshold 3. | `ai_output_unusable` / `CG-API-06` | Provider fallback: `CG-HUB-10` | `CG-PROVIDER-EMPTY` |
+| `provider_usage_missing` | `AI gateway provider ended without usage metadata` | Output exists but the terminal provider stream supplied no usage metadata; `stream`. | Always `null`. | Discard as an incomplete terminal; investigate before repeated manual generation. | `ai_provider_failed`; `page/provider`; threshold 3. | Provider fallback: `hub_provider_failed` / `CG-HUB-10` | Provider fallback: `CG-HUB-10` | `CG-PROVIDER-USAGE-MISSING` |
+| `provider_stream_incomplete` | `AI gateway provider stream ended without a terminal stop reason` | Output and usage exist, but no `done`/terminal stop reason exists; `stream`. | Always `null`. | Discard the partial result; investigate before repeated manual generation. | `ai_provider_failed`; `page/provider`; threshold 3. | Provider fallback: `hub_provider_failed` / `CG-HUB-10` | Provider fallback: `CG-HUB-10` | `CG-PROVIDER-INCOMPLETE` |
+| `coach_output_too_long` | `AI gateway output exceeded the coach transport ceiling` | Coach output crossed the 64,000-character transport ceiling; `stream`. The crossing delta is emitted, then this error, with no `done`. | Always `null`. | Change or narrow the request before a new manual generation; retrying the same request is not recovery. | `ai_provider_failed`; `page/provider`; threshold 3. | Non-provider fallback: `hub_request_failed` / `CG-HUB-07` | Non-provider fallback: `CG-HUB-02` | `CG-OUTPUT-COACH-LIMIT` |
 
 Classifier precedence is structural: stream-phase hint; typed
 authentication/permission, rate-limit, then unavailable/overload evidence;
@@ -107,11 +113,117 @@ Unknown-code behavior is mandatory rollback safety:
   other unknown codes → `hub_request_failed` / `CG-HUB-07`.
 - Desktop: unknown `provider*` → `CG-HUB-10`; other unknown codes →
   `CG-HUB-02`.
+- chat-extension: unknown `provider*` → `CG-PROVIDER-UNKNOWN`; other unknown
+  codes → `CG-HUB-UNKNOWN` (kept apart in diagnostics).
 - A transport EOF without an explicit error frame and without `done` is a
   client-observed truncation, not a kernel wire code: Firefox uses
-  `hub_stream_truncated` / `CG-HUB-16`; Desktop uses `CG-HUB-09`.
-- Both clients preserve a non-null `retryAfterMs` as an absolute display
-  deadline. Neither schedules an SSE generation retry from it.
+  `hub_stream_truncated` / `CG-HUB-16`; Desktop uses `CG-HUB-09`;
+  chat-extension uses `CG-STREAM-TRUNCATED`.
+- Every client preserves a non-null `retryAfterMs` as an absolute display
+  deadline. None schedules an SSE generation retry from it.
+
+### chat-extension: HTTP errors and transport failures
+
+§3 below is the core's `AppError` registry and carries no client columns. The
+chat-extension reads every non-SSE hub failure by the ordered rules below
+(`HUB_HTTP_ERROR_RULES`): the first matching row wins, so route- and
+fact-dependent rows come before the general row of the same code, and status
+fallbacks and the catch-all come last. A rule matches on the machine `error`
+code, the optional machine `reason`, the HTTP status, the route class and one
+fact of the call; it never parses message text.
+
+Route classes: **sign-in** (password sign-in that issues the device token),
+**sign-out**, **account** (health, me, client bootstrap, persona catalog),
+**ai-stream** (the AI feature stream), **page** (page-scoped reads, the
+client's own page routes included), **claim** (fan claim and claim status,
+H-7b), **recap-profile** (dossier from a generation, H-5), **ingest**
+(observations). Facts: *stale sign-in* (the call carried an older token or
+sign-in epoch than the current one), *page not granted* (the page is not in the
+current bootstrap), *fan lookup* (a lookup of one fan: dossier, fan card),
+*before first frame* (AI stream, no output frame yet), *dispatch* (claim action
+`dispatch`).
+
+Codes and reasons marked † are not emitted by core yet. They arrive with the
+chat-extension hub changes planned in `chat-extension` `docs/hub-pr-plan.md`, and
+each lands its §3 row in the change that introduces it; the client mapping is
+frozen ahead of them.
+
+| # | `error` | `reason` | Route class / fact | chat-extension code | Client action |
+|---:|---|---|---|---|---|
+| 1 | any | any | stale sign-in | — | Ignore: nothing changes, nothing is shown (the client's AU-014). |
+| 2 | `unauthorized` | `token_revoked` | any | `CG-AUTH-REVOKED` | Wipe the sign-in. |
+| 3 | `unauthorized` | `token_expired` | any | `CG-AUTH-EXPIRED` | Wipe the sign-in. |
+| 4 | `unauthorized` | any other | sign-in | `CG-LOGIN-CREDENTIALS` | Show. |
+| 5 | `unauthorized` | none or any other | any | `CG-AUTH-REJECTED` | Show; a 401 without a known reason never wipes the sign-in. |
+| 6 | `forbidden` | any | any | `CG-HUB-FORBIDDEN` | Show; a 403 never wipes the sign-in. |
+| 7 | `rate_limit_exceeded` | any | sign-in | `CG-LOGIN-RATE-LIMIT` | Show with an absolute deadline from `retryAfterMs` / `Retry-After`. |
+| 8 | any (status 5xx) | any | sign-in | `CG-LOGIN-UNAVAILABLE` | Show. |
+| 9 | `rate_limit_exceeded` | any | any | `CG-HUB-RATE-LIMIT` | Show with an absolute deadline from `retryAfterMs` / `Retry-After`. |
+| 10 | `preview_send_rate_limited` † | any | claim | `CG-HUB-RATE-LIMIT` | Show with an absolute deadline from `retryAfterMs` / `Retry-After`. |
+| 11 | `quota_denied` | any | any | `CG-QUOTA-DAILY` | Show with the deadline at the next 00:00 UTC. |
+| 12 | `service_unavailable` | any | ai-stream, before first frame | `CG-HUB-UNAVAILABLE` | One transparent retry after 5 s (§1). |
+| 13 | `service_unavailable` | any | any | `CG-HUB-UNAVAILABLE` | Show. |
+| 14 | `internal_error` | any | any | `CG-HUB-UNAVAILABLE` | Show. |
+| 15 | `unknown_ai_feature` | any | any | `CG-HUB-CAPABILITY` | Show. |
+| 16 | `persona_definition_changed` | any | any | `CG-PERSONA-CHANGED` | Drop the result, refresh the persona catalog, show. |
+| 17 | `gate_draft_required` | any | any | `CG-GATE-DRAFT` | Show. |
+| 18 | `gate_min_messages` | any | any | `CG-GATE-HISTORY` | Show. |
+| 19 | `gate_hi_greeting_limit` | any | any | `CG-GATE-HI` | Show. |
+| 20 | `gate_ping_active` | any | any | `CG-GATE-PING` | Show. |
+| 21 | `context_conflict` † | any | any | `CG-CONTEXT-CONFLICT` | Show. |
+| 22 | `client_feature_disabled` † | `binding_missing` † | any | `CG-BINDING-MISSING` | Refresh bootstrap, show. |
+| 23 | `client_feature_disabled` † | `client_outdated` † | any | `CG-HUB-OUTDATED` | Refresh bootstrap, show. |
+| 24 | `client_feature_disabled` † | any other | claim, dispatch | `CG-SEND-OFF` | Refresh bootstrap, show. |
+| 25 | `client_feature_disabled` † | any other | any | `CG-FEATURE-DISABLED` | Refresh bootstrap, show. |
+| 26 | `bad_request` | `cursor_invalid` † | any | `CG-HUB-REQUEST` | Read again once from the first page, no toast. |
+| 27 | `bad_request` | `cursor_window_mismatch` † | any | `CG-HUB-REQUEST` | Read again once from the first page, no toast. |
+| 28 | `bad_request` | `live_text_not_allowed` † | any | `CG-HUB-REQUEST` | Show. |
+| 29 | `bad_request` | `capability_required` † | any | `CG-HUB-REQUEST` | Show. |
+| 30 | `generation_not_ready` † | any | recap-profile | `CG-RECAP-SAVE` | Repeat the idempotent link write on the §1 schedule; the code only when it runs out. |
+| 31 | `generation_not_eligible` † | any | any | `CG-HUB-REQUEST` | Show. |
+| 32 | `claim_busy` † | any | any | `CG-CLAIM-BUSY` | Show. |
+| 33 | `greeting_done` † | any | any | `CG-CLAIM-BUSY` | Show (the fan is already greeted: a sub-case of busy). |
+| 34 | `claim_expired` † | any | any | `CG-CLAIM-EXPIRED` | Show. |
+| 35 | `custody_held` † | any | any | `CG-SEND-UNCERTAIN` | Show (an unresolved send to this fan, the desktop's included). |
+| 36 | `part_already_sent` † | any | claim | `CG-SEND-PART` | Read the claim status, no toast. |
+| 37 | `generation_mismatch` † | any | any | `CG-CONTEXT-CHANGED` | Show. |
+| 38 | `attempt_conflict` † | any | any | `CG-HUB-REQUEST` | Show. |
+| 39 | `custody_not_owned` † | any | any | `CG-HUB-REQUEST` | Show. |
+| 40 | `conflict` | any | claim | `CG-CLAIM-BUSY` | Show. |
+| 41 | `conflict` | any | any | `CG-HUB-REQUEST` | Show. |
+| 42 | `not_found` | any | recap-profile | `CG-HUB-REQUEST` | Show: not this user's, page's or fan's generation, rejected for good. |
+| 43 | `not_found` | any | page or claim, page not granted | `CG-BINDING-NOT-GRANTED` | Show. |
+| 44 | `not_found` | any | page, fan lookup | — | Empty: the lookup answers null, nothing is shown. |
+| 45 | `not_found` | any | any | `CG-HUB-REQUEST` | Show. |
+| 46 | `bad_request` | any | any | `CG-HUB-REQUEST` | Show. |
+| 47 | not matched above (status 400) | any | any | `CG-HUB-REQUEST` | Show. |
+| 48 | not matched above (status 401) | any | sign-in | `CG-LOGIN-CREDENTIALS` | Show. |
+| 49 | not matched above (status 401) | any | any | `CG-AUTH-REJECTED` | Show; never wipes the sign-in. |
+| 50 | not matched above (status 403) | any | any | `CG-HUB-FORBIDDEN` | Show. |
+| 51 | not matched above (status 429) | any | sign-in | `CG-LOGIN-RATE-LIMIT` | Show with an absolute deadline from `retryAfterMs` / `Retry-After`. |
+| 52 | not matched above (status 429) | any | any | `CG-HUB-RATE-LIMIT` | Show with an absolute deadline from `retryAfterMs` / `Retry-After`. |
+| 53 | not matched above (status 5xx) | any | any | `CG-HUB-UNAVAILABLE` | Show. |
+| 54 | anything else | any | any | `CG-HUB-UNKNOWN` | Show; kept apart in diagnostics. |
+
+Rows 47–53 read a code no earlier row matched by its status alone: 400, 401,
+403, 429 and 5xx. That includes a known code outside its route-restricted row
+(`preview_send_rate_limited` off a claim route, 429 → row 52). Any other status falls to row 54, so a §3 code without a row
+here reads by its status (`voice_script_invalid`, 400 → `CG-HUB-REQUEST`) or
+as `CG-HUB-UNKNOWN` (`proxy_missing`, 409). A known code that comes with an
+unexpected status is still read by its code. Every deadline is fixed once as an
+absolute time.
+
+Failures that carry no hub error code:
+
+| Failure | chat-extension code |
+|---|---|
+| Network: no connection | `CG-NETWORK`; on sign-in `CG-LOGIN-UNAVAILABLE` |
+| Timeout: the client's own deadline (sign-in 20 s) | `CG-HUB-TIMEOUT`; on sign-in `CG-LOGIN-TIMEOUT` |
+| Contract: a response or frame failed its schema, an undeclared status, an unknown frame type | `CG-HUB-REQUEST` |
+| Truncated: SSE EOF without `done` and without an error frame | `CG-STREAM-TRUNCATED` |
+| Aborted: the client cancelled | none; the operation ends cancelled |
+
+None of them is repeated automatically (§1).
 
 ## 3. HTTP AppError registry
 
@@ -121,7 +233,7 @@ status, code, and intentional message.
 
 | Family | Code | Status | Semantics |
 |---|---|---:|---|
-| General | `bad_request` | 400 | Route/service-specific invalid request represented intentionally by `BadRequestError`. Decision 349: account-link redemption additionally carries the machine `reason` for the password rule it refused — `too_short`, `too_long` or `common` — so the /join page can point at the broken rule instead of matching on prose. Every other bad request stays reason-less. |
+| General | `bad_request` | 400 | Route/service-specific invalid request represented intentionally by `BadRequestError`. Decision 349: account-link redemption additionally carries the machine `reason` for the password rule it refused — `too_short`, `too_long` or `common` — so the /join page can point at the broken rule instead of matching on prose. chat-extension H-4c: a request that sends `liveTextContext` where the AI feature lane can never use it carries `live_text_not_allowed` (a feature other than `fast-reply`/`improve-draft`/`hi-greeting`/`ping`, a page that is not OnlyFans, or together with `clientContext`) or `capability_required` (no `context-v1` in `x-kernel-ai-capabilities`). The chat extension's own-AI-spend read (`clientAiUsageDaily`, hub-pr-plan H-15) carries why its query was refused — `unknown_time_zone`, `date_in_future` (after today in the report zone) or `date_too_old` (more than 8 days before it); the list is `CLIENT_AI_USAGE_REFUSAL_REASONS`. Every other bad request stays reason-less. |
 | General | `unauthorized` | 401 | Missing, invalid, or rejected principal. Decision 349: when the rejected credential is a device token that MATCHED a row, the body also carries the machine `reason` — `token_revoked` or `token_expired` — so a client can stop re-presenting a dead token. A bearer whose digest is unknown, a refused session and every other 401 carry no `reason`: naming one there would be an enumeration oracle. |
 | General | `forbidden` | 403 | Authenticated principal is not permitted to perform the operation. |
 | Identity | ~~`password_change_required`~~ | — | **Retired by Decision 370** with the `must_change_password` flag itself (tombstone of #116(b)). No route emits it; `mustChangePassword` is a deprecated wire constant `false`. Nothing maps to it any more — a client that still has a branch for it will simply never take it. |
@@ -136,8 +248,11 @@ status, code, and intentional message.
 | Egress | `proxy_missing` | 409 | A Fansly page has no stored proxy, so fail-closed egress refuses the request. |
 | OFAPI | `follower_outreach_conflict` | 409 | Another first-greeting command already holds page/fan custody. Do not enqueue again automatically; show the held/uncertain state. The error discloses no other chatter's command identity. |
 | OFAPI | `ofapi_collection_refused` | 429 / 409 | A local collection-policy refusal before any vendor fetch (review #136); the body also carries the machine `reason` and `retryAfterMs`. 429 when only time clears it (`daily_limit`, `interval_limit` — `retryAfterMs` is the reset advice and `Retry-After` mirrors it); 409 when only an owner policy change clears it (`background_paused`, `collection_off`, `on_demand_only`, `detail_disabled`, job and configuration reasons). Never retried automatically; never 500/503. |
-| Client | `client_feature_disabled` | 409 | A chat-extension feature is not available to this call (hub-pr-plan H-2b): the owner's switches (`chatExtension*` config), the page, or the extension's version refuse it. Raised by `requireClientFeature`, which every chat-extension client route runs after resolving its page, and by the narrow token's AI switch. Documented structured extension: the machine `reason` — `disabled` (master switch off, or a `chatExtension*` value the hub cannot read: a bad environment value or a stored override that no longer validates, which is logged), `flag_off` (the feature's flag is off for the page), `platform_unsupported`, `binding_missing` (no platform account id and no owner host binding), `hub_not_ready` (this hub does not serve the feature yet), `not_granted` (not an active page granted to the caller; a missing page answers the same), `client_outdated` (`x-client-version` below `chatExtensionMinVersion` or not `chat-extension/<MAJOR.MINOR.PATCH>`); the vocabulary is open (`CLIENT_FEATURE_UNAVAILABLE_REASONS`) and an unknown reason reads as off. 409 because only the owner (or an extension update, for `client_outdated`) lifts it: never retried automatically. The bootstrap is never refused this way: it answers 200 with every feature's availability and the minimum version. |
+| Client | `client_feature_disabled` | 409 | A chat-extension feature is not available to this call (hub-pr-plan H-2b): the owner's switches (`chatExtension*` config), the page, or the extension's version refuse it. Raised by `requireClientFeature`, which every chat-extension client route behind a flag runs after resolving its page, by `requireClientPage`, the same check for a client route that has no flag of its own (the own-AI-spend read, H-15: the page, the master switch and the version only), and by the narrow token's AI switch. Documented structured extension: the machine `reason` — `disabled` (master switch off, or a `chatExtension*` value the hub cannot read: a bad environment value or a stored override that no longer validates, which is logged), `flag_off` (the feature's flag is off for the page), `platform_unsupported`, `binding_missing` (no platform account id and no owner host binding), `hub_not_ready` (this hub does not serve the feature yet), `not_granted` (not an active page granted to the caller; a missing page answers the same), `client_outdated` (`x-client-version` below `chatExtensionMinVersion` or not `chat-extension/<MAJOR.MINOR.PATCH>`); the vocabulary is open (`CLIENT_FEATURE_UNAVAILABLE_REASONS`) and an unknown reason reads as off. 409 because only the owner (or an extension update, for `client_outdated`) lifts it: never retried automatically. The bootstrap is never refused this way: it answers 200 with every feature's availability and the minimum version. |
+| Client | `generation_not_ready` | 409 | chat-extension H-5: the dossier save (`POST /api/v1/client/pages/:pageLabel/fans/:fanRef/profile/from-generation`) named a generation of the caller whose record has not appeared. The gateway writes the record right after the stream's `done` frame, so a save sent in that gap is answered this way, and only when the request names the `clientRequestId` of an AI request the gateway admitted for the caller on that page; without it, or for a request the hub does not know, the answer is 404. Retriable: the same request succeeds once the record exists. It can stay for good when the record's write failed (the gateway only logs that), so a client bounds its repeats. No `reason`. |
+| Client | `generation_not_eligible` | 409 | chat-extension H-5: the caller's generation exists and will never become the fan's dossier. Documented structured extension: the machine `reason` — `not_full_summary` (not a `fan-summary`, or not its full mode), `not_completed` (failed or cancelled), `stop_reason_missing` (no stop reason recorded), `output_exhausted` (stop reason `max_tokens` or `length`), `empty` (no text), `context_scope` (its context held something only its caller saw), `too_long` (longer than a dossier body may be, 50,000 characters), `superseded` (the fan's dossier already holds a text that is not older than this generation); the vocabulary is open (`CLIENT_GENERATION_NOT_ELIGIBLE_REASONS`). The first six restate the one definition of a usable full recap (`usableFanSummaryPredicate`). Never retried: the same generation is refused every time. `superseded` alone says nothing against the generation (the dossier already holds a newer text), so a client may show it as information rather than as a failed save. A generation of another user, page or fan is not this error but 404. |
 | AI | `quota_denied` | 429 | Core AI daily budget/quota rejected the generation before provider dispatch. |
+| AI | `context_conflict` | 400 | chat-extension H-4c: the fresh text a client sent with an AI request (`liveTextContext`) contradicts what the hub holds for the conversation the request names: a message the hub knows as sent by the other side, or a message id of another chat (another conversation of the page, or a chat of another page the caller may read). The snapshot is not of this conversation, so nothing is generated and nothing is recorded. Raised only while `aiLiveTextContextMode = serve` (in `shadow` the conflict is recorded in the context manifest). The message names message ids only, at most ten, never a fan's text. Not retried as is: the client re-reads the open chat and asks again. |
 | AI gate | `gate_draft_required` | 400 | Feature policy requires nonblank `draftText`. |
 | AI gate | `gate_voice_unsupported_platform` | 400 | `voice-script` was requested for a non-Fansly page. |
 | AI gate | `gate_voice_identity_required` | 400 | `voice-script` requires nonblank, matching conversation and fan identities. |
@@ -160,7 +275,7 @@ status, code, and intentional message.
 | Sync | `history_request_not_found` | 404 | Owner routes and the owner CLI: no request with that ref. The agent plane answers its one static `not_found` instead, for a missing ref and for a request on a page outside the key's grant alike. |
 | Sync | `sync_page_not_found` | 404 | Owner routes of the Fansly Sync Engine (`/api/v1/sync/pages/:pageLabel/…`): no engine page with that label. The agent plane answers its one static `not_found` instead. |
 | Sync | `sync_work_not_found` | 404 | Owner route `GET /api/v1/sync/pages/:pageLabel/work/:workId`: no work row with that id on that page. |
-| Sync | `sync_page_off` | 409 | "Sync now" (`POST /api/v1/sync/pages/:pageLabel/refresh`) on a page whose engine mode is `off`: no actor runs it, so there is nothing to make due. Move the page to `shadow` first. |
+| Sync | `sync_page_off` | 409 | "Sync now" (`POST /api/v1/sync/pages/:pageLabel/refresh`) on a page no actor runs — its engine mode is `off`, or it was left in `shadow` (a mode nothing runs since step 4 S4-23): there is nothing to make due. |
 | Sync | `fansly_page_switching` | 409 | A request that would make a page read, asked of a page in `sync_pages.mode = 'handover'`: the legacy owner levers (`/admin/sync/trigger`, the block trigger and reset, the follower-reconcile reset), the owner page verify and credentials routes, `page verify`, `page set-proxy`, an agent hydration request, and the engine's own enqueue-and-wait. Neither engine reads such a page. Nothing puts a page in `handover` since step 4 of the Fansly Sync Engine (the step-3 switch and its rollback are deleted), so the code is not expected; a row that says so is still refused. |
 | Sync | `legacy_sync_retired` | 409 | A legacy sync lever on a page whose platform the legacy page-sync executor no longer serves: since step 4 (S4-10) every Fansly page is read by the Fansly Sync Engine. The owner routes `/admin/sync/trigger`, the block trigger, pause, resume and reset, the follower-reconcile reset, its blast-radius preview and apply (step 4 S4-17) and the CLI `sync --page`, on a Fansly page the engine does not own (a page it owns takes the engine's levers). Also the `/account/me` levers — the owner page verify and credentials routes, `page verify` and `page set-proxy` — on a Fansly page the engine does not run (`off`, `shadow` or no engine row; step 4 S4-19 deleted their legacy check, a `live` page goes through the engine). Nothing was written, queued, sent or stored; the message names the page and the engine command to read it with. |
 | Sync | `fansly_sync_work_queued` | 409 | The owner page verify, or a credentials or proxy change on a `live` page: the Fansly Sync Engine took the check (`account.verify` / `account.identity`) but has not answered within 30 s (its page is held, or its queue is busy). Documented structured extension: `statusUrl`, the engine work's status link (`/api/v1/sync/pages/:pageLabel/work/:workId`). Nothing was stored. A second credentials check while one is queued answers the same code without a link. |
@@ -222,7 +337,7 @@ metrics, or error frames.
 | `db_disk_usage` (percent) | Hourly `statfs("/")`: used ≥ `DISK_USAGE_ALERT_PERCENT` (default 80). | `db_disk_usage:global`; `subKey = null`. | Usage measured back under the threshold resolves. |
 | `db_disk_usage` (runway, #213) | Hourly least-squares fit of the `disk_free_bytes` gauges over a 24h window; fires when fitted days-to-full < 30 (`runway_warning`) or < 7 (`runway_critical`). Requires ≥ 6h of gauge span — unknown history is NOT a state: it neither opens nor resolves these latches. | `db_disk_usage:global:runway_warning` and `:runway_critical` — independent latches; a warning→critical escalation therefore pages exactly once more (deliberate: one latch cannot re-page on severity without losing its anti-flap property). | A MEASURED recovery resolves per latch: runway back above that latch's threshold, or a flat/positive slope (disk no longer shrinking). Resolve texts are subKey-specific — a runway resolve must not read as a disk-wide all-clear while the percent latch stands open. |
 | `sync_silent` (Fansly send guard, plan §2.5/§10) | The api's minutely send-guard monitor (`services/fansly-send-guard/monitor.ts`). **Closed page:** a guard row whose holder overran its lease and is neither completed nor confirmed gone — nothing is sent for the page; not opened inside the api's 5-minute boot grace (a deploy's own confirmation releases the holders of the containers it removed). **Pace violation:** any two consecutive sends of one page (`fansly_send_log.sent_at`, every source and process) closer than the pause setting in force for the later one; the check walks every new journal row once behind a durable cursor (`fansly_send_pace_cursor`, 0227), so it must never fire. | Page-scoped: `sync_silent:<pageId>:send_guard_closed` and `sync_silent:<pageId>:pace_violation` — own subKeys under the Fansly-only kind (a new kind is a contract change), own titles; the summary of a closed page names the holder and the exact `fansly-send-guard confirm-terminated --holder-token …` to run. Both page immediately. | Closed page: resolves on the first pass that finds the page open again (completion, a sweeper's or the deploy's confirmation, or the CLI). Pace violation: resolves after an hour without a new violation on that page; `fansly-send-guard report --since …` shows every pair. |
-| `fansly_sync_engine` (Fansly Sync Engine, plan §10, design §9.6) | Alerts 1–4 come from the `sync` process: the actor's capture transaction opens alert 1 at once (a 429, a refused credential, another identity behind the credentials, a pace violation), and `engine/alerts.ts` re-derives every condition from the database every 30 s. **1 `page_stopped`:** a page hold (429, auth, identity), the conversation list's 429 hold at the top of its ladder, a network hold older than 10 min, no beating owner for 2 min (suppressed in `handover`; a `handover` older than 10 min is `handover_stuck`), and a page-stopping answer within the last 10 min. **2 `live_degraded`:** the page's socket down > 5 min, decode debt > 1 % of the receipts of 10 min, any quarantined work. **3 `freshness`:** a fan message the socket showed unconfirmed > 15 min after it became visible, whenever the parity pass looks next (excluded and hidden chats left out), a socket money frame (status 1, not a payout) not in the ledger > 5 min, urgent work due > 2 min ago (not while the page is held or paused). **4 `stuck`:** a history request with runnable work and no read for 30 min, a poll not served for its SLO (default 3 periods), the newest rescan proving the ledger short (`transactions_ledger_incomplete`). **5 `process`:** the api's ops watchdog — a page is not `off` and no `sync` heartbeat within 2 min (outside the api's 5-minute boot grace). Only `handover`/`live` pages page the owner; a `shadow` page's conditions are the `sync_shadow_alerts` gauge (D14). | Page alerts: `fansly_sync_engine:<pageId>:<subKey>`; the pace violation has its own latch `fansly_sync_engine:<pageId>:page_stopped:pace_violation` (a refresh for a 429 must not overwrite it). Alert 5: `fansly_sync_engine:global:process`. One title per alert. All page at once (`immediate`). | The evaluator alone resolves alerts 1–4. Alerts 1–3 resolve once their condition has stayed false for 10 minutes since the latch's `last_seen_at` (every pass that sees the condition refreshes it, so the clean time survives a restart and a condition that comes and goes keeps one standing page); alert 1's "10 min clean" also counts from its last page-stopping answer. Alert 4 resolves on the first pass that sees progress again. Every latch of a page that is `off` or `shadow` resolves at once. The pace latch resolves only by the owner's `pnpm cli sync alerts ack --page <label>` (audited `admin.sync_alerts_ack`); a violation sent before the acknowledgement never reopens it. Alert 5 resolves on the first watchdog pass that sees a fresh `sync` heartbeat. `pnpm cli sync alerts status` shows what holds per page. |
+| `fansly_sync_engine` (Fansly Sync Engine, plan §10, design §9.6) | Alerts 1–4 come from the `sync` process: the actor's capture transaction opens alert 1 at once (a 429, a refused credential, another identity behind the credentials, a pace violation), and `engine/alerts.ts` re-derives every condition from the database every 30 s. **1 `page_stopped`:** a page hold (429, auth, identity), the conversation list's 429 hold at the top of its ladder, a network hold older than 10 min, no beating owner for 2 min (suppressed in `handover`; a `handover` older than 10 min is `handover_stuck`), and a page-stopping answer within the last 10 min. **2 `live_degraded`:** the page's socket down > 5 min, decode debt > 1 % of the receipts of 10 min, any quarantined work. **3 `freshness`:** a fan message the socket showed unconfirmed > 15 min after it became visible, whenever the parity pass looks next (excluded and hidden chats left out), a socket money frame (status 1, not a payout) not in the ledger > 5 min, urgent work due > 2 min ago (not while the page is held or paused). **4 `stuck`:** a history request with runnable work and no read for 30 min, a poll not served for its SLO (default 3 periods), the newest rescan proving the ledger short (`transactions_ledger_incomplete`). **5 `process`:** the api's ops watchdog — a page is `handover` or `live` and no `sync` heartbeat within 2 min (outside the api's 5-minute boot grace). Only `handover`/`live` pages page the owner; an `off` page, or one left in `shadow`, runs no actor and has no condition. | Page alerts: `fansly_sync_engine:<pageId>:<subKey>`; the pace violation has its own latch `fansly_sync_engine:<pageId>:page_stopped:pace_violation` (a refresh for a 429 must not overwrite it). Alert 5: `fansly_sync_engine:global:process`. One title per alert. All page at once (`immediate`). | The evaluator alone resolves alerts 1–4. Alerts 1–3 resolve once their condition has stayed false for 10 minutes since the latch's `last_seen_at` (every pass that sees the condition refreshes it, so the clean time survives a restart and a condition that comes and goes keeps one standing page); alert 1's "10 min clean" also counts from its last page-stopping answer. Alert 4 resolves on the first pass that sees progress again. Every latch of a page that is `off` or `shadow` resolves at once. The pace latch resolves only by the owner's `pnpm cli sync alerts ack --page <label>` (audited `admin.sync_alerts_ack`); a violation sent before the acknowledgement never reopens it. Alert 5 resolves on the first watchdog pass that sees a fresh `sync` heartbeat. `pnpm cli sync alerts status` shows what holds per page. |
 | `capture_payload_parity` (copy divergence, #215) | Hourly bounded sample (≤50) of capture envelopes that carry a content-addressed payload reference; fires when any sampled catalog body fails to reproduce its inline body — full canonical octets compared, never digests — or when the reference points at a missing object or a missing body. Since #220 an envelope written POINTER-ONLY (no inline body) is not compared at all — it is counted as `skippedNullInline` and is neither `checked` nor `matched`, because a comparison with one operand is not evidence of agreement. | `capture_payload_parity:global`; `subKey = null`. | Only a pass that actually COMPARED something and found no mismatch resolves it. With the dual-write canary off nothing is measured, so the job touches neither side of the latch — switching the canary off must never clear an alarm a real mismatch opened. The same asymmetry covers a fully pointer-only page: its `checked` falls to zero by construction and the latch stays exactly where it was. **This job is the SOLE owner of the latch (#217).** The slice-2 read seam in `shadow` mode compares the same two copies on every read and will see a divergence first, but it deliberately neither opens nor resolves this incident: a traffic-driven path cannot promise a clean pass during a quiet hour, cannot bound its own paging rate, and would race this job for the latch. Its counters ride this job's telemetry line instead. Its resolve text names the condition that cleared, so it cannot be read as an all-clear over the collision latch below. |
 | `capture_payload_parity` (sha256 collision, #219) | Same hourly job, second condition: `count(*) from capture_payload_objects where collision_ordinal > 0`. A non-zero ordinal is the durable record that `settlePayloadObject` found a stored body under an identical digest, length and scope, proved the FULL contents differ, and gave the new content its own ordinal rather than coalescing it. Every capture is stored and readable — the DIGEST is what stopped being unique. | `capture_payload_parity:global:sha256_collision` — same kind, own subKey, own lifecycle (the #213 `db_disk_usage` runway shape). | **Measured on EVERY pass, canary or not.** A collision is a durable row, not a sample: switching the dual-write canary off does not un-collide anything, so this check runs before the canary early-return. Resolves ONLY when the collision count is back at zero; a clean parity sample must never resolve it, and its resolve text says which condition cleared. The DETECTOR (`settlePayloadObject`, packages/db) owns no latch (#217): it is the hottest write path in the system, and what it owes the alarm is the durable evidence it already writes. |
 | `capture_payload_parity` (dangling reference, #222) | Same hourly job, third condition: a bounded census over the head of BOTH envelope tables (`observations`, `sync_raw_payloads`) counting references whose catalog row is absent. Fires on any non-zero count. Since #220 a row may carry NO inline body, so for such a row the reference IS the fact and a reference into a hole is a captured fact nobody can read; on a dual-written row it is "only" a lie the verifier reports as `object_missing`. | `capture_payload_parity:global:dangling_reference` — same kind, own subKey, own lifecycle (the #213 `db_disk_usage` runway shape). | **Measured on EVERY pass, canary or not**, for the collision census's reason and a stronger one: rolling the canary back or putting `capture_cas_read_mode` on `inline` does not re-attach a body to a reference that points at nothing, and that is exactly the configuration an operator reaches for when worried. The window is BOUNDED (a total anti-join over `observations` is not an hourly cost) and travels in the incident text and the log line, so a zero is read as "zero in the newest N rows per table", never as "zero in history" — the total sweep per scope is `capture:verify-backfill`'s. Resolves ONLY on a zero count; a clean parity sample or a cleared collision must never resolve it. The WRITERS own no latch (#217): they drop the stale reference, write the inline body, and count `refVanished` at the capture seam. |
@@ -359,9 +474,11 @@ An additive class in the existing error frame requires one family change:
 6. Choose and test an explicit incident policy: kind, latch scope/cause bucket,
    threshold, streak effect, and resolve rule—or deliberately `none`. Incident
    failure must remain log-and-continue after terminal persistence.
-7. Add explicit presentation mappings and registry entries in both clients,
-   while retaining tests for the namespace-based unknown-code fallback and
-   terminal EOF behavior.
+7. Add explicit presentation mappings and registry entries in every client
+   (fansly-chat, onlyfans-chat, chat-extension), while retaining tests for the
+   namespace-based unknown-code fallback and terminal EOF behavior. A new HTTP
+   `AppError` code that a chat-extension route can return also gets its row in
+   the §2 chat-extension HTTP table; without one it falls to the status rows.
 8. Add or update the row in this registry and update any affected retry,
    ledger, incident, outbox, or boundary section in the same change.
 
@@ -370,9 +487,10 @@ Changing the discriminated frame union does. A new frame `type`, a
 required/renamed/retyped field, or a closed-enum change requires:
 
 1. core contract/schema and generated OpenAPI/SDK changes;
-2. vendored SDK updates in both clients;
+2. vendored SDK updates in every client (fansly-chat, onlyfans-chat,
+   chat-extension);
 3. client readers capable of the new shape before core can emit it; and
-4. an explicit rollout/rollback gate across all three repositories.
+4. an explicit rollout/rollback gate across core and every client repository.
 
 Removing or repurposing a code and changing an established retry disposition
 are also coordinated family changes even when the TypeScript schema hash would
@@ -607,18 +725,20 @@ metadata later. Unknown children remain debt. An auth 401 blocks its generation
 across restarts; other failures use bounded backoff, reset by a durable capture
 or 60 verified seconds. Socket teardown destroys the upgraded transport even if
 the peer ignores close. Only fixed reasons/page labels enter logs; provider
-errors, SQL errors, tokens and raw frames do not. See the
-[B0 runbook](runbooks/fansly-ws-capture.md) for precise limits and residuals.
+errors, SQL errors, tokens and raw frames do not. See
+[the socket and its repair](runbooks/sync.md#the-socket-and-its-repair) for
+the limits and the erasure residual.
 
-### Fansly B1 addressed reads (Decisions 384–385)
+### Fansly B1 addressed reads (Decisions 384–385; retired)
 
-An admitted hint request with an observed terminal transport/timeout failure is
-subject debt (`target_transport` / `target_timeout`), retried with durable bounded
-backoff. It does not abort unrelated ordinary DM polling. Auth, 429/Retry-After,
-policy cancellation, capture/DB/telemetry and lease errors retain executor policy.
-Hint-only work retains its quality hold and cannot certify ordinary freshness or
-resolve ordinary incidents. Admission refusals retain their concrete bounded reason.
+The B1 hint lane is deleted with the legacy engine (step 4: the projector in S4-11,
+the hint step of the DM handler in S4-14). No hint request is admitted, retried or
+settled any more. What a socket event asks for is the Fansly Sync Engine's work
+(`dm-messages.head`, `transactions.head`, …), and a read that fails follows the
+engine's one error table (`apps/runtime/src/sync/README.md`, "Errors"): a breaker of
+the subject, a hold of the route for a 429, a page hold for a refused credential.
 
-`source_deleted` in fansly_ws_hint_status settles an exact operational target after
-a contiguous REST check, not archive materialization; hot_applied_at remains null.
-See `docs/runbooks/fansly-ws-reliability.md` for verification.
+`fansly_ws_hint_receipts`, its attempts and the `fansly_ws_hint_status` view stay as
+records. A `source_deleted` row there settled an exact operational target after a
+contiguous REST check, not archive materialization; its `hot_applied_at` is null.
+See [what the legacy runbooks became](runbooks/sync.md#what-the-legacy-runbooks-became).

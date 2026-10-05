@@ -415,11 +415,11 @@ async function pageEtaContext(ctx: HistoryServiceContext, pageId: number): Promi
   const state = read.ok ? read.state : EMPTY_ROUTE_STATE;
   const sends = page === null
     ? []
-    : await readRouteJournal(ctx.db, { pageId, shadow: false, withinMs: routeJournalLookbackMs(state), legacy: true });
+    : await readRouteJournal(ctx.db, { pageId, withinMs: routeJournalLookbackMs(state) });
   const clocks = new RouteClocks({ sends, state });
   const route = clocks.view(HISTORY_READ_ROUTE);
   const family = route.family === null ? null : clocks.familyView(route.family);
-  const use = budgetUseOf(await readRouteUse(ctx.db, { pageId, shadow: false, withinMs: ETA_USE_WINDOW_MS }), ETA_USE_WINDOW_MS);
+  const use = budgetUseOf(await readRouteUse(ctx.db, { pageId, withinMs: ETA_USE_WINDOW_MS }), ETA_USE_WINDOW_MS);
   return {
     page,
     holds,
@@ -545,7 +545,6 @@ export async function submitHistoryRequest(
   const threads = resolved.flatMap((entry) => (entry.kind === "thread" ? [entry.thread] : []));
   const latest = await latestWorkForSubjects(ctx.db, {
     pageId: input.pageId,
-    shadow: false,
     resourceFile: "dm-messages",
     subjects: threads.map((thread) => thread.groupId),
   });
@@ -662,12 +661,11 @@ export async function submitHistoryRequest(
       await lockThreadsForHistoryItems(tx, items.flatMap((item) => (item.threadId === null ? [] : [item.threadId])));
       const groups = [...needWork.keys()].sort();
       const existing = await openWorkIdsForSubjects(tx, {
-        pageId: input.pageId, shadow: false, resource: HISTORY_WORK_RESOURCE, subjects: groups,
+        pageId: input.pageId, resource: HISTORY_WORK_RESOURCE, subjects: groups,
       });
       await lockWorkRows(tx, [...existing.values()]);
       const upserts: UpsertDemandInput[] = groups.map((groupId) => ({
         pageId: input.pageId,
-        shadow: false,
         resource: HISTORY_WORK_RESOURCE,
         subject: groupId,
         kind: "goal",

@@ -1,6 +1,7 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type {
   AdminSyncBlockBody,
+  SyncHistoryRequestsQuery,
   UpdateCredentialsBody,
 } from "@agency_hub_core/contracts";
 
@@ -31,17 +32,27 @@ export function usePageSyncBlocks(pageLabel: string) {
   });
 }
 
+/**
+ * What a block lever (sync now, pause, resume, reset) makes stale: the blocks,
+ * the page summaries built from them — and, on a Fansly page, the engine's own
+ * status and history requests (`/api/v1/sync/pages`, `…/history-requests`): a
+ * pause moves rows of the queue between "ready" and "paused" at once, and the
+ * «Синк» tab shows both beside the buttons.
+ */
+function invalidateAfterSyncBlockLever(qc: QueryClient): void {
+  void qc.invalidateQueries({ queryKey: ["syncBlocks"] });
+  void qc.invalidateQueries({ queryKey: ["syncEngine"] });
+  void qc.invalidateQueries({ queryKey: ["admin", "connections"] });
+  void qc.invalidateQueries({ queryKey: ["overview"] });
+}
+
 export function useAdminSyncBlockTrigger() {
   const qc = useQueryClient();
   return useMutation({
     meta: { suppressGlobalError: true },
     mutationFn: (body: AdminSyncBlockBody) =>
       kernel.adminSyncBlockTrigger({ body }),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["syncBlocks"] });
-      void qc.invalidateQueries({ queryKey: ["admin", "connections"] });
-      void qc.invalidateQueries({ queryKey: ["overview"] });
-    },
+    onSuccess: () => invalidateAfterSyncBlockLever(qc),
   });
 }
 
@@ -51,11 +62,7 @@ export function useAdminSyncBlockPause() {
     meta: { suppressGlobalError: true },
     mutationFn: (body: AdminSyncBlockBody) =>
       kernel.adminSyncBlockPause({ body }),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["syncBlocks"] });
-      void qc.invalidateQueries({ queryKey: ["admin", "connections"] });
-      void qc.invalidateQueries({ queryKey: ["overview"] });
-    },
+    onSuccess: () => invalidateAfterSyncBlockLever(qc),
   });
 }
 
@@ -65,11 +72,7 @@ export function useAdminSyncBlockResume() {
     meta: { suppressGlobalError: true },
     mutationFn: (body: AdminSyncBlockBody) =>
       kernel.adminSyncBlockResume({ body }),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["syncBlocks"] });
-      void qc.invalidateQueries({ queryKey: ["admin", "connections"] });
-      void qc.invalidateQueries({ queryKey: ["overview"] });
-    },
+    onSuccess: () => invalidateAfterSyncBlockLever(qc),
   });
 }
 
@@ -79,11 +82,7 @@ export function useAdminSyncBlockReset() {
     meta: { suppressGlobalError: true },
     mutationFn: (body: AdminSyncBlockBody) =>
       kernel.adminSyncBlockReset({ body }),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["syncBlocks"] });
-      void qc.invalidateQueries({ queryKey: ["admin", "connections"] });
-      void qc.invalidateQueries({ queryKey: ["overview"] });
-    },
+    onSuccess: () => invalidateAfterSyncBlockLever(qc),
   });
 }
 
@@ -108,6 +107,22 @@ export function useSyncEnginePages(options: { enabled?: boolean } = {}) {
     queryKey: ["syncEngine", "pages"],
     queryFn: () => kernel.syncPages(),
     refetchInterval: 10_000,
+    enabled: options.enabled ?? true,
+  });
+}
+
+/** The engine's history requests, newest first (`/api/v1/sync/history-requests`,
+ *  owner session): fans ready, reads made and left, the ETA and why each
+ *  waits. A request moves one read at a time, so it is polled slower than the
+ *  page status. */
+export function useSyncHistoryRequests(
+  query: Partial<Pick<SyncHistoryRequestsQuery, "pageLabel" | "state" | "limit">>,
+  options: { enabled?: boolean } = {},
+) {
+  return useQuery({
+    queryKey: ["syncEngine", "historyRequests", query.pageLabel ?? null, query.state ?? null, query.limit ?? null],
+    queryFn: () => kernel.syncHistoryRequests({ query }),
+    refetchInterval: 30_000,
     enabled: options.enabled ?? true,
   });
 }

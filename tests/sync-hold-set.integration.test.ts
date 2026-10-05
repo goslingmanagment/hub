@@ -10,7 +10,6 @@ import {
   acquireSyncPageOwnership,
   addSyncPageLiftedDmExclusion,
   adjustPausedResources,
-  advanceWsRouterCursor,
   captureAttempt,
   clearPageHold,
   confirmSyncOwnersStopped,
@@ -140,6 +139,13 @@ async function seedPage(target: StartedTestDatabase): Promise<number> {
   return pageId;
 }
 
+/** A page left in mode `shadow` by a release that still had the mode: no
+ *  statement of this build takes a page there (step 4, S4-23). */
+async function leaveInShadow(target: StartedTestDatabase, pageId: number): Promise<number> {
+  await target.pool.query("update sync_pages set mode = 'shadow' where page_id = $1", [pageId]);
+  return pageId;
+}
+
 /** A page born live, as onboarding creates it (`createLiveSyncPage`). */
 async function seedLivePage(target: StartedTestDatabase): Promise<number> {
   const pageId = await seedFanslyPage(target);
@@ -244,14 +250,16 @@ const INSERTS = ["ensureSyncPage", "ensureFanslySyncPages", "createLiveSyncPage"
 const UPDATES = [
   "acquireSyncPageOwnership", "heartbeatSyncPageOwner", "trustSyncPageCredentials", "recordSyncPageIdentityProof",
   "setNetworkFailureStreak", "addSyncPageLiftedDmExclusion", "removeSyncPageLiftedDmExclusion", "setPagePause",
-  "adjustPausedResources", "setRegistryOverride", "advanceWsRouterCursor", "insertAdmission", "captureAttempt",
+  "adjustPausedResources", "setRegistryOverride", "insertAdmission", "captureAttempt",
   "writeSafeRelease", "confirmSyncOwnersStopped", "setSyncPageMode",
 ];
 
 /** Run every function that updates a page row over a live page (the engine's
- *  writes) and a page in mode `off` (the owner's mode lever): each writes a
- *  new version of the row. `acquire` is the acquisition of the image that
- *  runs them: this build's, or the one of the release before it. */
+ *  writes) and a page left in mode `shadow`, which nothing reaches any more
+ *  (the owner's mode lever takes it `off`, the one transition there is since
+ *  step 4 S4-23; `leaveInShadow` puts a page there): each writes a new version
+ *  of the row. `acquire` is the acquisition of the image that runs them: this
+ *  build's, or the one of the release before it. */
 async function runEveryPageRowUpdate(
   target: StartedTestDatabase,
   pageId: number,
@@ -264,11 +272,11 @@ async function runEveryPageRowUpdate(
   let attemptId = 0;
   const admit = () => target.db.transaction(async (raw) => {
     const tx = raw as unknown as Database;
-    const work = await upsertDemand(tx, { pageId, shadow: false, resource: "dm-messages.head", subject: "group-1", kind: "trigger", class: "urgent" });
+    const work = await upsertDemand(tx, { pageId, resource: "dm-messages.head", subject: "group-1", kind: "trigger", class: "urgent" });
     await lockOwnedPage(tx, { pageId, generation, lock: "no_key_update", live: true });
     const running = await markWorkRunning(tx, { workId: work.id, generation });
     const admitted = await insertAdmission(tx, {
-      pageId, shadow: false, workId: work.id, resource: "dm-messages.head", subject: "group-1", class: "urgent", slot: 0, nextCyclePos: 1,
+      pageId, workId: work.id, resource: "dm-messages.head", subject: "group-1", class: "urgent", slot: 0, nextCyclePos: 1,
       generation, demandRevision: running!.demandRevision, settingMs: 2_000, jitterU: 0.1, pauseMs: 2_200, operation: "messages.page",
       request: { path: "/api/v1/message", query: { groupId: "group-1" } }, evidence: true,
     });
@@ -299,7 +307,6 @@ async function runEveryPageRowUpdate(
     ["setRegistryOverride", pageId, async () => expect(await setRegistryOverride(db, {
       pageId, key: "media-stats.walk", override: { everyMs: 86_400_000 },
     })).toBe(true)],
-    ["advanceWsRouterCursor", pageId, () => advanceWsRouterCursor(db, { pageId, generation, cursor: 5 })],
     ["insertAdmission", pageId, async () => { attemptId = await admit(); }],
     ["captureAttempt", pageId, async () => expect(await captureAttempt(db, {
       attemptId, pageId, outcome: "response", sent: true, sentAt: new Date(), sendMark: "request_start", httpStatus: 200, applyState: "none",
@@ -310,8 +317,8 @@ async function runEveryPageRowUpdate(
     ["confirmSyncOwnersStopped", pageId, async () => expect(await confirmSyncOwnersStopped(db, {
       runningHosts: ["sync-host-b"], ownHost: "cli", confirmedBy: "deploy", dryRun: false, pageIds: [pageId],
     })).toMatchObject([{ pageId, confirmed: true }])],
-    ["setSyncPageMode", offPage, async () => expect(await setSyncPageMode(db, { pageId: offPage, to: "shadow", changedBy: "test" })).toMatchObject({ kind: "changed" })],
-    ["setSyncPageMode", offPage, async () => expect(await setSyncPageMode(db, { pageId: offPage, to: "off", changedBy: "test" })).toMatchObject({ kind: "changed" })],
+    ["setSyncPageMode", offPage, async () => expect(await setSyncPageMode(db, { pageId: offPage, to: "off", changedBy: "test" }))
+      .toMatchObject({ kind: "changed", from: "shadow", to: "off" })],
   ];
   expect([...new Set(steps.map(([name]) => name))].sort()).toEqual([...UPDATES].sort());
 
@@ -419,7 +426,7 @@ describe("a hold write writes the rows and nothing of the page row", () => {
   });
 });
 
-describe("the first old hold column goes (0241)", () => {
+describe("the first old hold column goes (0243)", () => {
   it("the migration drops `hold_step` alone", async (context) => {
     if (!testDb) return context.skip();
     const migration = MIGRATIONS.find((file) => file.endsWith("_sync_pages_drop_hold_step.sql"))!;
@@ -527,13 +534,13 @@ const MARKER = { "route:state": { version: 2, routes: {} } };
  * The one statement of the release before the drop (S4-32) that names an old
  * hold column, frozen from that image: `STALE_HOLD_COLUMNS_MARKER` and the
  * statement it is the `set` clause of in `acquireSyncPageOwnership`
- * (`packages/db/src/repositories/sync/pages.ts` at e8fb51b6, the head of that
- * release, compared with it line by line; the page id is a parameter, as it
- * is there). Whenever that image acquires a page it marks the page's row as
- * one whose old hold columns are stale, so that the hold-set release (S4-30),
- * which lets those columns win over the rows, refuses the page instead of
- * opening it by them. The rest of the map is kept; a value that is no JSON
- * object is replaced by the marker alone.
+ * (`packages/db/src/repositories/sync/pages.ts` at e7e1037b, that release on
+ * main — #473, squash-merged — compared with it line by line; the page id is
+ * a parameter, as it is there). Whenever that image acquires a page it marks
+ * the page's row as one whose old hold columns are stale, so that the
+ * hold-set release (S4-30), which lets those columns win over the rows,
+ * refuses the page instead of opening it by them. The rest of the map is
+ * kept; a value that is no JSON object is replaced by the marker alone.
  */
 const STALE_HOLD_COLUMNS_MARKER_OF_THE_IMAGE_BEFORE = sql`
   resource_holds = case when jsonb_typeof(resource_holds) = 'object' then resource_holds else '{}'::jsonb end
@@ -564,7 +571,7 @@ function sqlStateOf(error: unknown): string | null {
 }
 
 /**
- * `acquireSyncPageOwnership` of the release before the drop (e8fb51b6), run
+ * `acquireSyncPageOwnership` of the release before the drop (e7e1037b), run
  * on `db` — a pool, or a caller's transaction. One transaction: that image's
  * ownership statements, which are this build's (the two functions differ by
  * the marker alone), and then its marker, as it makes it — a statement of its
@@ -601,7 +608,8 @@ describe("the old hold columns go: the last migration of the three", () => {
   interface StalePages {
     /** Born live (onboarding); no hold row. For the engine's writes of the row. */
     live: number;
-    /** In mode `off`; no hold row. For the owner's mode lever. */
+    /** Left in mode `shadow`; no hold row. For the owner's mode lever, which
+     *  takes it `off`. */
     off: number;
     /** Taken by the release before the drop, so marked; held by its rows (an
      *  identity refusal), whatever the columns say. */
@@ -693,7 +701,7 @@ describe("the old hold columns go: the last migration of the three", () => {
       const pages: Record<string, StalePages> = {};
       for (const [what, columns] of Object.entries(STALE)) {
         const live = await seedLivePage(db);
-        const off = await seedPage(db);
+        const off = await leaveInShadow(db, await seedPage(db));
         const held = await seedPage(db);
         const free = await seedPage(db);
         const reader = await seedLivePage(db);
@@ -925,6 +933,7 @@ describe("the old hold columns go: the last migration of the three", () => {
     // `ensureSyncPage`: a page's row in mode `off`.
     const ensured = await seedFanslyPage(db);
     expect(await ensureSyncPage(dbOf(db), { pageId: ensured })).toEqual({ created: true });
+    expect((await getSyncPage(dbOf(db), ensured))!.mode).toBe("off");
     // `ensureFanslySyncPages`: the host at start, for every page without one.
     const first = await seedFanslyPage(db);
     const second = await seedFanslyPage(db);
@@ -933,8 +942,9 @@ describe("the old hold columns go: the last migration of the three", () => {
     const onboarded = await seedLivePage(db);
     expect((await getSyncPage(dbOf(db), onboarded))!.mode).toBe("live");
     for (const pageId of [ensured, first, second, onboarded]) expect(await holdRows(db, pageId)).toEqual([]);
-    // And it runs like any other: its updates, its hold writes.
-    await runEveryPageRowUpdate(db, onboarded, ensured, "a page onboarded after the drop", ownAsTheImageBefore);
+    // And it runs like any other: its updates (the mode lever's on the
+    // ensured page, left in `shadow` for it), its hold writes.
+    await runEveryPageRowUpdate(db, onboarded, await leaveInShadow(db, ensured), "a page onboarded after the drop", ownAsTheImageBefore);
     await writeEveryKindOfHold(db, first, (await ownAsTheImageBefore(db, first)).generation, "a page ensured after the drop");
   });
 

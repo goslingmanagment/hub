@@ -947,6 +947,7 @@ export const syncPages = pgTable(
     lastSendAt: timestamp("last_send_at", { withTimezone: true }),
     lastSendAttemptId: bigint("last_send_attempt_id", { mode: "number" }),
     lastCompletedAt: timestamp("last_completed_at", { withTimezone: true }),
+    // The shadow WS feed's cursor: unread and unwritten since step 4 (S4-23).
     wsRouterCursor: bigint("ws_router_cursor", { mode: "number" }).notNull().default(0),
     // 0235 (step 3, owner decision №8): DM exclusion reasons lifted on the page.
     liftedDmExclusions: text("lifted_dm_exclusions").array().notNull().default(sql`'{}'::text[]`),
@@ -1010,7 +1011,9 @@ export const syncHolds = pgTable(
 
 // 0228 (plan §3, §11): the one work queue of the new engine. One open row per
 // page × shadow × resource × subject (`sync_work_open_uniq`); demand merges
-// into it through `upsertDemand` (repositories/sync/work.ts).
+// into it through `upsertDemand` (repositories/sync/work.ts). `shadow` is
+// false in every row written since step 4 (S4-23, shadow mode is gone); the
+// rows it left stay until the retention prunes them.
 export const syncWork = pgTable(
   "sync_work",
   {
@@ -1070,9 +1073,10 @@ export const syncWork = pgTable(
   }),
 );
 
-// 0228 (plan §8, §11): one row per physical attempt of the new engine (or a
-// simulated one in shadow). 30-day telemetry, except coverage evidence and
-// unfinished rows (repositories/sync/retention.ts).
+// 0228 (plan §8, §11): one row per physical attempt of the new engine (a row
+// with `shadow` is a simulated one shadow mode left; nothing writes one since
+// step 4 S4-23). 30-day telemetry, except coverage evidence and unfinished
+// rows (repositories/sync/retention.ts).
 export const syncAttempts = pgTable(
   "sync_attempts",
   {

@@ -58,8 +58,26 @@ export function clientHealthPercentile(buckets: ClientHealthBuckets, q: number):
 const SUM_SLACK = 1e-6;
 
 /**
+ * Absolute slack on `sum` checks, per observation, in the histogram's unit.
+ *
+ * The client sends `max` as measured and `sum` rounded to three decimals (its
+ * `Histogram.toWire`), and rounds again each time a histogram leaves a tab for
+ * the background or is stored between two wakes of the background. A rounding
+ * moves the sum by at most 0.0005, and only when an observation was added since
+ * the last one, so a sum is never further than 0.0005 per observation from its
+ * samples; twice that leaves room for the float noise of adding them up.
+ *
+ * The relative slack covers this only for sums above 500. Without this one a
+ * single sample of 37.4567891 ms, sent as sum 37.457 and max 37.4567891, has a
+ * sum above its own max, and a sample of 0.0004 ms a sum of 0 below it: both
+ * honest histograms would be dropped.
+ */
+const SUM_ROUNDING_SLACK = 0.001;
+
+/**
  * Whether a histogram's `max` and `sum` are what its buckets can hold: max in
- * the highest non-empty bucket, sum between what the bucket edges and max allow.
+ * the highest non-empty bucket, sum between what the bucket edges and max allow,
+ * give or take the client's rounding of the sum.
  * The report schema does not refuse a histogram that fails this (the client's
  * frozen schema does not check it, and one off histogram must not cost a report
  * its counters); the intake (H-11b) drops that histogram before it merges,
@@ -86,11 +104,14 @@ export function clientHealthHistogramFits(histogram: ClientHealthBuckets & { rea
   // one of them: in the highest bucket it stands in for one lower edge.
   let least = max - lower(top);
   let most = 0;
+  let observations = 0;
   for (let index = 0; index < counts.length; index += 1) {
     least += counts[index]! * lower(index);
     most += counts[index]! * Math.min(upper(index), max);
+    observations += counts[index]!;
   }
-  return sum >= least * (1 - SUM_SLACK) && sum <= most * (1 + SUM_SLACK);
+  const rounding = SUM_ROUNDING_SLACK * observations;
+  return sum >= least * (1 - SUM_SLACK) - rounding && sum <= most * (1 + SUM_SLACK) + rounding;
 }
 
 /** p50 and p95 for one group; a group under `minGroupSize` observations is suppressed. */

@@ -2,7 +2,7 @@ import { and, desc, eq, getTableColumns, isNull, or, sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 import { aiGenerationContent, fanPages, fanProfiles, fans } from "../schema.ts";
-import { ECMASCRIPT_TRIM_CHARACTERS } from "./ai-completion.ts";
+import { usableFanSummaryPredicate } from "./ai-restricted.ts";
 import { findVisiblePageDmConversationByPlatformConversationId } from "./page-dm.ts";
 
 export interface AppendFanProfileInput {
@@ -15,7 +15,12 @@ export interface AppendFanProfileInput {
   sourceGeneratedAt?: Date | null;
 }
 
-export async function appendFanProfile(
+/**
+ * Appends a dossier version, and says whether it did. `created` is false when
+ * a rule below answered the fan's latest version instead of writing: the
+ * latest already has this body, or it is not older than the incoming text.
+ */
+export async function appendFanProfileVersion(
   db: Database,
   input: AppendFanProfileInput,
 ) {
@@ -43,7 +48,7 @@ export async function appendFanProfile(
       // Identical body: already stored (a re-push whose ack was lost) — never
       // append a duplicate version.
       if (latest.body === input.body) {
-        return latest;
+        return { profile: latest, created: false };
       }
       // Stale write: an incoming dossier with a KNOWN source time never
       // supersedes a latest whose (source ?? append) time is not older —
@@ -52,7 +57,7 @@ export async function appendFanProfile(
       if (input.sourceGeneratedAt) {
         const latestGeneratedAt = latest.sourceGeneratedAt ?? latest.createdAt;
         if (latestGeneratedAt.getTime() >= input.sourceGeneratedAt.getTime()) {
-          return latest;
+          return { profile: latest, created: false };
         }
       }
     }
@@ -70,8 +75,17 @@ export async function appendFanProfile(
       })
       .returning();
 
-    return created;
+    return { profile: created, created: true };
   });
+}
+
+/** The dossier version the write left as the fan's latest: the new one, or the
+ * one a rule of appendFanProfileVersion kept. */
+export async function appendFanProfile(
+  db: Database,
+  input: AppendFanProfileInput,
+) {
+  return (await appendFanProfileVersion(db, input)).profile;
 }
 
 export async function getLatestFanProfile(
@@ -94,9 +108,11 @@ export async function getLatestFanProfile(
  * Newest dossier that Core can independently prove came from a complete full
  * fan-summary generation. The profile write is a separate, client-driven
  * request, so eligibility is established by an exact body match against the
- * restricted generation ledger plus page/fan identity and the same terminal
- * rules used by recap attachment. Filtering happens before version ordering:
- * an unproven newer profile must never hide an older proven one.
+ * restricted generation ledger plus page/fan identity and the same usable-recap
+ * rule as recap attachment (usableFanSummaryPredicate: terminal outcome, and no
+ * `contextScope`, so a generation that read one person's draft context proves
+ * no dossier). Filtering happens before version ordering: an unproven newer
+ * profile must never hide an older proven one.
  */
 export async function getLatestPromptEligibleFanProfile(
   db: Database,
@@ -119,12 +135,7 @@ export async function getLatestPromptEligibleFanProfile(
     .where(and(
       eq(fanProfiles.fanId, input.fanId),
       eq(fanProfiles.platformAccountId, input.platformAccountId),
-      eq(aiGenerationContent.feature, "fan-summary"),
-      sql`${aiGenerationContent.params} ->> 'summaryMode' = 'full'`,
-      sql`${aiGenerationContent.params} ->> 'outcome' = 'completed'`,
-      sql`${aiGenerationContent.params} ->> 'stopReason' is not null`,
-      sql`${aiGenerationContent.params} ->> 'stopReason' not in ('max_tokens', 'length')`,
-      sql`btrim(${aiGenerationContent.completion}, ${ECMASCRIPT_TRIM_CHARACTERS}) <> ''`,
+      usableFanSummaryPredicate("full"),
       or(
         eq(aiGenerationContent.fanRef, input.platformUserId),
         and(

@@ -2,12 +2,10 @@ import type {
   AiFeatureAttachedRecaps,
   AiFeatureDebugInputFrame,
   AiGatewayReasoningEffort,
+  AiLiveTextContext,
   AiStreamCapability,
 } from "@agency_hub_core/contracts";
-import {
-  COACH_ANSWER_MAX_CHARS,
-  FAN_SILENCE_DAYS_MAX,
-} from "@agency_hub_core/contracts";
+import { COACH_ANSWER_MAX_CHARS } from "@agency_hub_core/contracts";
 import {
   findAiPersonaByKey,
   findPageByLabel,
@@ -18,10 +16,13 @@ import {
 import type { AppContext } from "../../../bootstrap.ts";
 import {
   prepareAiGatewayStream,
+  type AiFeatureContextFrameBody,
   type AiGatewayStreamInput,
   type PreparedAiGatewayStream,
 } from "../../../services/ai-gateway.ts";
+import { resolveAiTranscriptMaxRows } from "../../../services/ai-transcript-depth.ts";
 import { canAccessPage, type HumanAuthPrincipal } from "../../../services/auth.ts";
+import { isSplitAllOnForPage } from "../../../services/client-split-all.ts";
 import {
   BadRequestError,
   NotFoundError,
@@ -47,16 +48,23 @@ import {
   type MediaNoteItem,
   type MediaNotesGate,
   type MediaNotesManifest,
+  applyLiveTextContext,
+  assertLiveTextRequestShape,
+  computePingSummary,
   isFanProfileFeatureEnabled,
+  loadAiContextFrameBody,
   loadFanBio,
   loadFanDisplayName,
   loadFanProfileContext,
   loadSpendingContext,
   loadSubscriptionContext,
   loadTranscriptContext,
+  transcriptMessagesOmittedByBudget,
   type AiTranscriptLiveOverlay,
   type AiTranscriptUnionMode,
+  type AppliedLiveText,
   type FanProfilePromptContext,
+  type TranscriptContext,
 } from "../context/index.ts";
 import {
   DEFAULT_FEATURE_MODELS,
@@ -65,8 +73,10 @@ import {
   FEATURE_POLICIES,
   HI_GREETING_MAX_TRANSCRIPT,
   BUNDLED_LORA_PERSONALITY_ID,
-  analyzePingSegment,
+  COACH_PRESET_DRAFT_BLOCKS,
   buildPrompt,
+  describeCoachSplitOutput,
+  describeSplitOutput,
   formatTranscript,
   isOperationFeature,
   type GreetingVariantCount,
@@ -76,6 +86,7 @@ import {
   type RecapAttach,
   type ReplyMode,
   type ReplyTone,
+  type TranscriptMessage,
 } from "../prompts/index.ts";
 
 // Kernel Stage 30 — feature services. Prompt assembly moves kernel-side:
@@ -119,6 +130,12 @@ export interface AiFeatureRequestBody {
    * validations, one message unless variantCount says otherwise, and the
    * freshness gate skipped. New clients send variantCount. */
   greetingMode?: "new-follower";
+  /** chat-extension H-4b: fan message ids the client saw before it asked;
+   * answered in the `context_v1` frame, never read into the prompt. */
+  knownFanMessageIds?: string[];
+  /** chat-extension H-4c: the fresh text of the open OnlyFans chat, merged
+   * into the hub's transcript for this generation only (context/live-text.ts). */
+  liveTextContext?: AiLiveTextContext;
   /** Stage 32: client-loaded context (Fansly — the kernel archive is
    * pull-cadenced: dm_conversations 30 min / dm_messages 24 h, no webhooks;
    * the extension reads the conversation live at generation time). */
@@ -149,8 +166,6 @@ export interface AiFeatureRequestBody {
     };
   };
 }
-
-const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** Decision 379: one hi-greeting feature with an explicit variant count instead
  * of a mode. An explicit variantCount always wins; the deprecated greetingMode
@@ -380,6 +395,19 @@ export async function prepareAiFeatureStream(
   }
   const pageId = stored.page.id;
 
+  // chat-extension H-4c: fresh text is refused where it can never be used
+  // (the feature, the platform, beside clientContext, without the frame that
+  // answers it), before any context loads. The owner's switch is not a
+  // refusal: switched off, the text is ignored further down.
+  if (body.liveTextContext !== undefined) {
+    assertLiveTextRequestShape({
+      feature,
+      isFanslyRequest,
+      hasClientContext: body.clientContext !== undefined,
+      capabilities: options?.capabilities,
+    });
+  }
+
   // Decision #174: voice-script is part of the voice-notes lane, which ships
   // INERT (VOICE_NOTES_ENABLED default-off). Gate this PAID generation on the
   // SAME live flag + fail-closed page allowlist the voice-notes service admits
@@ -452,6 +480,14 @@ export async function prepareAiFeatureStream(
   // PR3: the per-generation transcript context manifest (kernel-context path
   // only); rides an INTERNAL argument into the gateway, never the body.
   let contextManifest: Record<string, unknown> | undefined;
+  // chat-extension H-4b: the transcript the hub loaded itself, kept for the
+  // `context_v1` frame. Unset on the client-context lane, which has no frame.
+  // `rendered` are the messages the prompt's transcript text was built from:
+  // the loader's, or the same ones with their image notes filled in.
+  let kernelTranscript: { context: TranscriptContext; rendered: readonly TranscriptMessage[] } | undefined;
+  // chat-extension H-4c: what the hub did with the request's fresh text. Set
+  // on the kernel-context lane only (fresh text never rides with clientContext).
+  let liveText: AppliedLiveText<TranscriptContext> | undefined;
   // AI media describer: image notes rendered into the transcript (one config
   // read + one indexed select, no network), and the files to ask for after.
   let mediaNotes: {
@@ -571,28 +607,53 @@ export async function prepareAiFeatureStream(
     } catch {
       liveOverlay = "unknown";
     }
+    // chat-extension H-6: the readers cap every window at 1500 rows. Only the
+    // full Recap of a context-v1 client reads past it, and only where the owner
+    // raised `aiTranscriptDeepMaxRows`; for every other request this is
+    // undefined and nothing is read.
+    const maxRows = await resolveAiTranscriptMaxRows(app, {
+      feature,
+      summaryMode: body.summaryMode,
+      isFanslyRequest,
+      capabilities: options?.capabilities,
+    });
     // Uses the resolved window computed above (short fan-summary already clamped
     // DOWN to 300; every other request keeps its per-bucket default or the
     // caller-supplied messageCount).
-    const transcript = await loadTranscriptContext(app, {
+    const loaded = await loadTranscriptContext(app, {
       pageId,
       conversationRef: body.conversationRef,
       limit: resolvedMessageLimit,
       unionMode,
       liveOverlay,
+      ...(maxRows !== undefined ? { maxRows } : {}),
     });
+    // chat-extension H-4c: the request's fresh text joins AFTER the loader
+    // returns, never inside it. Without fresh text (or with the owner's switch
+    // off, or in shadow) `transcript` is the loaded one; in serve it is the
+    // merged one, so everything below (the gates, the Ping analysis, the image
+    // notes, the frame) reads what the model reads.
+    liveText = await applyLiveTextContext(app, {
+      principal,
+      page: stored.page,
+      conversationRef: body.conversationRef,
+      limit: resolvedMessageLimit,
+      transcript: loaded,
+      liveTextContext: body.liveTextContext,
+    });
+    const transcript = liveText.transcript;
     contextManifest = transcript.contextManifest;
+    kernelTranscript = { context: transcript, rendered: transcript.messages };
     const spending = policy.includesEarnings
       ? await loadSpendingContext(app, { pageId, fanRef })
       : null;
     const subscription = policy.includesEarnings
       ? await loadSubscriptionContext(app, { pageId, fanRef })
       : null;
-    // One analysis call and one clock feed both values. A Date.now() per field
-    // could disagree exactly at the 5-day segment boundary (Decision #127).
-    const pingNowMs = Date.now();
-    const pingAnalysis = policy.usesPingSegment
-      ? analyzePingSegment(transcript.messages, pingNowMs)
+    // One clock for the segment and the silence (Decision #127); readers
+    // that show the conversation call the same helper.
+    const pingSummary = policy.usesPingSegment
+      ? computePingSummary(transcript.messages, Date.now())
       : null;
     contextValues = {
       transcript: transcript.transcript,
@@ -605,13 +666,8 @@ export async function prepareAiFeatureStream(
         : undefined,
       // Kernel-context platforms carry no chatter-saved fan name today.
       fanCustomName: undefined,
-      pingSegment: pingAnalysis?.segment,
-      fanSilenceDays: pingAnalysis && pingAnalysis.latestFanTextAtMs !== null
-        ? Math.min(
-            FAN_SILENCE_DAYS_MAX,
-            Math.max(0, Math.floor((pingNowMs - pingAnalysis.latestFanTextAtMs) / DAY_MS)),
-          )
-        : undefined,
+      pingSegment: pingSummary?.segment,
+      fanSilenceDays: pingSummary?.fanSilenceDays ?? undefined,
     };
     // Image notes on OnlyFans: the hub builds the labels itself, so the
     // inactive path leaves the migrated normalizer's bytes untouched.
@@ -631,6 +687,7 @@ export async function prepareAiFeatureStream(
         });
         if (!applied.manifest.mismatch) {
           contextValues.transcript = `${formatTranscript(applied.messages)}${MEDIA_NOTES_GUIDE}`;
+          kernelTranscript.rendered = applied.messages;
         }
         mediaNotes = {
           gate,
@@ -775,6 +832,17 @@ export async function prepareAiFeatureStream(
     }
   }
 
+  // chat-extension H-10 (architecture.md D-15): Split for Ping, Hi and the
+  // drafts of a Coach answer. On only for a request that advertises
+  // split-all-v1, on a page whose owner switched the splitAll flag on.
+  // replyMode alone never turns it on: released clients send it on every
+  // feature and keep their prompts.
+  const splitAll = policy.supportsSplitAll
+    && body.replyMode === "preferSplit"
+    && options?.capabilities?.has("split-all-v1") === true
+    && await isSplitAllOnForPage(app, pageId);
+  const greetingVariantCount = feature === "hi-greeting" ? resolveGreetingVariantCount(body) : undefined;
+
   const prompt = buildPrompt({
     feature,
     personality: persona.personality,
@@ -786,7 +854,7 @@ export async function prepareAiFeatureStream(
     fanBio: contextValues.fanBio,
     fanCustomName: contextValues.fanCustomName,
     fanUsername: body.clientContext?.fanUsername,
-    greetingVariantCount: feature === "hi-greeting" ? resolveGreetingVariantCount(body) : undefined,
+    greetingVariantCount,
     fanProfile: fanProfile
       ? { body: fanProfile.body, generatedAt: fanProfile.generatedAt }
       : undefined,
@@ -794,7 +862,8 @@ export async function prepareAiFeatureStream(
     pingSegment: contextValues.pingSegment,
     fanSilenceDays: contextValues.fanSilenceDays,
     replyTone: policy.supportsReplyTone ? body.replyTone : undefined,
-    replyMode: policy.supportsReplyMode ? body.replyMode : undefined,
+    replyMode: policy.supportsReplyMode || splitAll ? body.replyMode : undefined,
+    splitAll,
     chatterQuestion: effectiveChatterQuestion,
     coachHistory: feature === "coach-chat" ? body.coachHistory : undefined,
     preset: feature === "coach-chat" ? body.preset : undefined,
@@ -953,6 +1022,13 @@ export async function prepareAiFeatureStream(
       ...(body.clientContext?.fanAvatarUrl ? { images: [{ url: body.clientContext.fanAvatarUrl }] } : {}),
     },
   };
+  // chat-extension H-4c: featureParams for every feature, not fan-summary
+  // alone. A generation whose transcript held text only the caller's client
+  // supplied is scoped, so no shared reader ever selects it. Without served
+  // fresh text nothing is added and the recorded params are what they were.
+  if (liveText?.contextScope !== undefined) {
+    gatewayBody.featureParams = { ...gatewayBody.featureParams, contextScope: liveText.contextScope };
+  }
   let debugFrame: AiFeatureDebugInputFrame | undefined;
   if (options?.debugPromptEcho) {
     try {
@@ -977,6 +1053,30 @@ export async function prepareAiFeatureStream(
       // failure yields no frame and never affects the generation itself.
     }
   }
+  // chat-extension H-4b: only a caller that advertised `context-v1` gets the
+  // frame (and pays its two indexed reads), so every other stream stays byte
+  // for byte what it was. The page was admitted above, before any context load.
+  // The same what-the-provider-actually-received rule as the recaps above: the
+  // Coach budget may have cut the oldest transcript lines, and the frame's
+  // window is what is left.
+  let contextFrame: AiFeatureContextFrameBody | undefined;
+  if (kernelTranscript && options?.capabilities?.has("context-v1")) {
+    contextFrame = await loadAiContextFrameBody(app, {
+      pageId,
+      platform: stored.page.platform,
+      conversationRef: body.conversationRef,
+      served: kernelTranscript.context.served,
+      messages: kernelTranscript.context.messages,
+      omittedByPromptBudget: transcriptMessagesOmittedByBudget({
+        transcript: contextValues.transcript,
+        messages: kernelTranscript.rendered,
+        omittedChars: prompt.coachTranscriptOmittedChars ?? 0,
+      }),
+      requestedCount: resolvedMessageLimit,
+      ...(body.knownFanMessageIds !== undefined ? { knownFanMessageIds: body.knownFanMessageIds } : {}),
+      ...(liveText !== undefined ? { live: liveText.live } : {}),
+    });
+  }
   if (mediaNotes?.gate.active && mediaNotes.gate.policy && mediaNotes.items.length > 0) {
     requestMediaDescriptionsInBackground(app, {
       pageId,
@@ -996,17 +1096,30 @@ export async function prepareAiFeatureStream(
     gatewayBody,
     contextManifest !== undefined
       || debugFrame !== undefined
+      || contextFrame !== undefined
       || body.expectedPersonaDefinitionId !== undefined
       || attachedRecaps !== undefined
       || presetQuestion !== undefined
+      || splitAll
       ? {
         ...(contextManifest !== undefined ? { contextManifest } : {}),
         ...(debugFrame !== undefined ? { debugFrame } : {}),
+        ...(contextFrame !== undefined ? { contextFrame } : {}),
         ...(body.expectedPersonaDefinitionId !== undefined
           ? { personaDefinitionId: persona.definitionId }
           : {}),
         ...(attachedRecaps !== undefined ? { attachedRecaps } : {}),
         ...(presetQuestion !== undefined ? { presetQuestion } : {}),
+        // Written on the finished text only: nothing already streamed changes.
+        // A Coach answer is advice with draft blocks in it, so it has its own reader.
+        ...(splitAll
+          ? {
+            describeOutput: feature === "coach-chat"
+              ? (completion: string) =>
+                describeCoachSplitOutput(completion, body.preset !== undefined ? COACH_PRESET_DRAFT_BLOCKS : null)
+              : (completion: string) => describeSplitOutput(completion, greetingVariantCount ?? 1),
+          }
+          : {}),
       }
       : undefined,
   );

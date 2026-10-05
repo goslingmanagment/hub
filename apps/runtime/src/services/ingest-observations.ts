@@ -4,7 +4,8 @@
 // dedup on <principal>:<clientEventId>, so resend-until-2xx is free. Unknown
 // kinds are journaled under desktop.unknown:<kind>, never dropped
 // (capture-first). Whole-batch atomic: a failure rolls back every claim, so
-// the client resends the whole batch (3c contract).
+// the client resends the whole batch (3c contract). The one kind that is never
+// journaled is the chat extension's `client_health` (see ingestClientObservations).
 
 import { createHash } from "node:crypto";
 
@@ -19,9 +20,10 @@ import type {
   IngestObservationsBody,
   IngestObservationsResponse,
 } from "../../../../packages/contracts/src/routes.ts";
-import type { ClientTokenProfile } from "@agency_hub_core/contracts";
+import { CLIENT_HEALTH_INGEST_KIND, type ClientTokenProfile } from "@agency_hub_core/contracts";
 
 import type { AppContext } from "../bootstrap.ts";
+import { clientHealthIngestEnabled, intakeClientHealthReports } from "./client-health-intake.ts";
 import { clientTokenIngestKinds, clientTokenIngestProducer } from "./client-token-profile.ts";
 
 // Canonicalizer-backed desktop kinds (Stage 11 §2). Everything else journals
@@ -134,9 +136,16 @@ export async function ingestClientObservations(
     events: IngestObservationsBody["events"];
   },
 ): Promise<IngestObservationsResponse> {
+  // chat-extension H-11b: a `client_health` report is never journaled. The
+  // journal keeps the payload and the user forever; this kind is folded into
+  // hourly rollups with no user instead (client-health-intake.ts), under the
+  // hour the hub received it, so its envelope's observedAt and pageLabel are
+  // never read.
+  const healthEvents = input.events.filter((event) => event.kind === CLIENT_HEALTH_INGEST_KIND);
+
   // Validate BEFORE any write so a schema-invalid batch is all-or-nothing 400.
   const observedAts = input.events.map((event, index) =>
-    parseObservedAt(event.observedAt, index));
+    event.kind === CLIENT_HEALTH_INGEST_KIND ? undefined : parseObservedAt(event.observedAt, index));
 
   const clientProfile = input.clientProfile ?? null;
   if (clientProfile !== null) {
@@ -208,10 +217,16 @@ export async function ingestClientObservations(
     }
   }
 
+  // The owner's switch, read only for a batch that carries a health report.
+  const healthEnabled = healthEvents.length > 0 && await clientHealthIngestEnabled(app);
+
   return app.db.transaction(async (tx) => {
     let accepted = 0;
     let duplicates = 0;
     for (const [index, event] of input.events.entries()) {
+      if (event.kind === CLIENT_HEALTH_INGEST_KIND) {
+        continue;
+      }
       const harvestAccountRef = hasHarvestEvents &&
           HARVEST_KIND_ALLOWLIST.has(event.kind) &&
           typeof event.payload.ofapiAccountId === "string"
@@ -248,6 +263,8 @@ export async function ingestClientObservations(
         duplicates += 1;
       }
     }
-    return { accepted, duplicates };
+    // Last, so the rollup rows are locked only for the moment before the commit.
+    const health = await intakeClientHealthReports(app, tx, { events: healthEvents, enabled: healthEnabled });
+    return { accepted: accepted + health.accepted, duplicates: duplicates + health.duplicates };
   });
 }
