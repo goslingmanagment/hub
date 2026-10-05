@@ -20,7 +20,7 @@ If no report comes (the tab was reloaded, the answer was lost, the network
 dropped, OnlyFans answered 401), nobody knows whether the message went out. The
 hub then **holds the fan**: no further send to that fan from anyone's preview,
 and no first greeting for them, until a person looks at the chat and says what
-happened. Nothing frees a held send by itself: not time, not a new sign-in, not
+happened. Nothing lifts the hold by itself: not time, not a new sign-in, not
 the end of the greeting lease. The extension shows the sender «Неизвестно, ушло
 ли сообщение. Повторно не отправляем».
 
@@ -37,12 +37,18 @@ Without sending from the preview (`previewSend` off) there are no held sends.
 |---|---|
 | Страница и фан | The page, and the fan's OnlyFans id (a link to what the hub knows of the fan) |
 | Что отправляли | A greeting or a reply from the preview, which part of a split message, and for a greeting which of the offered variants |
-| Кто отправлял | The person's login and the short id of the extension install it came from |
+| Кто отправлял | The person's login and the short id of the extension install it came from («установка расширения») |
 | Когда | When it was dispatched, in your local time, and how long the hub has been without a report |
-| Приветствие фана | Whether the fan's first greeting is on record at all |
+| Приветствие фана | For a greeting: whether the fan's first greeting is on record at all. «—» for a reply: a held reply says nothing of a greeting |
 
-It does **not** show the text. The hub holds no text of a message sent from the
-preview: the person who sent it knows what it said.
+It does **not** show the text, and the hub does not know which text went out:
+the person who sent it knows. What the hub does keep is the draft the model
+wrote. The dialog shows the send's generation id («генерация …»), and the
+owner, only the owner, can read that generation's record at
+`GET /api/v1/ai/restricted/generations/{generationRef}`. Treat it as a hint
+of what to look for in the chat, not as what was sent: the person may have
+edited the draft, a split message is one part of it, and the hub does not
+check that the id the extension reported names a stored generation.
 
 A send still inside its 10 seconds is not listed: it is in flight, not held.
 Sends of a deleted page are not listed.
@@ -87,7 +93,8 @@ characters), «Записать».
 
 - The send is closed as sent; the part will not be sent again.
 - If it was the first part of a greeting, the fan is greeted, for good. Only the
-  person who dispatched it can send the remaining parts of that greeting.
+  person who dispatched it can send the remaining parts of that greeting. A
+  reply's resolve changes nothing about a greeting.
 - «ID сообщения в OnlyFans» is optional. Fill it only with the id of this very
   message. An id already recorded for another send is refused.
 
@@ -125,7 +132,8 @@ extension was switched off stays listed and resolvable.
 
 ## What the hub does not know
 
-- The text of the message.
+- Which text went out. It keeps the model's draft under the generation id
+  (owner only, see above), not the message as it was sent.
 - Anything the extension said after the dispatch. A held send is one with no
   report; a late "failed" that arrives after the 10 seconds is refused and not
   kept.

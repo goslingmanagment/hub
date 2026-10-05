@@ -307,9 +307,14 @@ resolved by hand. It is the resolve's right and no wider:
   from, and for a resolved one the resolver and their note. That is more than
   the claim routes tell a chatter (a lease holder is never named there): the
   resolver has to know whom to ask what was sent;
-- it serves no text of a message: the custody tables hold none. It says
-  whether the fan's greeting is on record, in the words of the claim status
-  read, and not the greeting's message id;
+- it serves no text of a message: the custody tables hold none, and the hub
+  does not know which text went out. It does serve each send's
+  `generationRef`, the id of the AI generation the text came from. That
+  generation's record (its prompt and its output) stays restricted: the
+  owner reads it on `/ai/restricted/generations/{ref}`, and a team lead
+  learns the id here, not the text. It says whether the fan's greeting is on
+  record, in the words of the claim status read, and not the greeting's
+  message id;
 - it only reads the hub's own records: nothing is asked of OnlyFans, nothing
   is queued and nothing is written, the audit trail included. No
   chat-extension switch gates it.

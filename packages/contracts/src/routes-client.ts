@@ -1097,9 +1097,11 @@ export const clientSendCustodyItemSchema = z.object({
 });
 
 // The list of held sends, for the same cabinet (H-7e): what the owner and a
-// team lead read before they resolve. It carries ids, states and times only:
-// the hub holds no text of a message sent from the preview, and the list shows
-// none.
+// team lead read before they resolve. It carries ids, states and times only.
+// The custody tables hold no text and the list serves none: the hub does not
+// know which text went out. `generationRef` names the AI generation the text
+// came from; that generation's record (prompt and output) is restricted, and
+// only the owner reads it, on its own route.
 
 /**
  * `held`: sends past their ticket that nobody ended (`uncertain-held`), the
@@ -1720,8 +1722,11 @@ export const clientRouteSchemas = {
       + "owner reads every active page, a team lead the pages assigned to them; `pageLabel` narrows the list to one "
       + "page (404 for a page that does not exist, 403 for one the viewer does not reach). Each item names the "
       + "page, the fan, the purpose, the part of its group, the attempt, who dispatched it and from which client "
-      + "install, when, and whether the fan's greeting is on record. No text of any message is served: the hub "
-      + "holds none for these sends. `limit` and `offset` page the list; `total` counts the whole of it.",
+      + "install, when, and whether the fan's greeting is on record. No text of any message is served: the "
+      + "custody tables hold none, and the hub does not know which text went out. `generationRef` names the AI "
+      + "generation the text came from; its record stays the owner's alone, on "
+      + "`GET /api/v1/ai/restricted/generations/:generationRef`. `limit` and `offset` page the list; `total` "
+      + "counts the whole of it.",
     querystring: clientSendCustodyListQuerySchema,
     response: {
       200: clientSendCustodyListResponseSchema,
