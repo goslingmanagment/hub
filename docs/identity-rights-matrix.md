@@ -193,7 +193,8 @@ only) and the extension's version, a page that is not the caller's answers as
 on the shared recaps, and nothing is kept between requests. Its cursor adds no
 right: it is signed and bound to the page and the person for an hour, so one
 chatter's cursor opens nothing for another, and it is checked after the page
-and the switch, never in their place. Its row is held by
+and the switch, never in their place. Its state is sealed, so its holder reads
+nothing from it, the hub's own id of a fan included. Its row is held by
 `client-spender-awaiting-reply.integration`: every cell, the agent key, a page
 that is not granted, tombstoned or missing, in both auth-policy modes, and a
 cursor presented by another person and for another page.

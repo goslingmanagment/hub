@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
@@ -18,7 +18,7 @@ import {
   insertAgentKey,
   listPageSpenderAwaitingReply,
 } from "@agency_hub_core/db";
-import { sha256Hex } from "@agency_hub_core/shared";
+import { encryptJson, sha256Hex } from "@agency_hub_core/shared";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
@@ -37,6 +37,7 @@ import {
 } from "../apps/runtime/src/services/signed-cursor.ts";
 import {
   CLIENT_SPENDER_AWAITING_REPLY_CURSOR_DOMAIN,
+  CLIENT_SPENDER_AWAITING_REPLY_CURSOR_SEAL_PURPOSE,
   CLIENT_SPENDER_AWAITING_REPLY_CURSOR_TTL_MS,
 } from "../apps/runtime/src/services/spender-awaiting-reply.ts";
 import { frozenClientSpenderAwaitingReplySchema } from "./helpers/client-frozen-spender-awaiting-reply.ts";
@@ -239,31 +240,48 @@ async function fanWrites(pageId: number, conversationRefs: string[], when: Date)
   );
 }
 
+/** A key for one purpose, derived from one key of the encryption ring, as the routes derive theirs. */
+const subkeyOf = (rootKey: Buffer, purpose: string) => createHmac("sha256", rootKey).update(purpose, "utf8").digest();
+
+/** The route's own seal of a walk's state. */
+const sealOf = (state: unknown, ring: SignedCursorKeyRing) =>
+  encryptJson(state, subkeyOf(ring.key, CLIENT_SPENDER_AWAITING_REPLY_CURSOR_SEAL_PURPOSE), ring.keyVersion);
+
 /**
- * A cursor a test signs itself (the route's own spec is private to it): by
- * default for the route's domain, with a state of the route's shape that
- * stands between F (700 000 in all) and C (197 000) on the seeded page.
+ * A cursor a test builds itself (the route's own spec is private to it). By
+ * default it is what the route issues: its domain, its seal, the hub's keys,
+ * and a state of its shape that stands between F (700 000 in all) and C
+ * (197 000) on the seeded page. `signed` puts something else where the sealed
+ * state goes.
  */
 function mintCursor(input: {
   scope: SignedCursorScope;
   state?: unknown;
+  signed?: (state: unknown, ring: SignedCursorKeyRing) => unknown;
   domain?: string;
   ring?: SignedCursorKeyRing;
   now?: Date;
 }): string {
+  const ring = input.ring ?? signedCursorKeyRing(app.config);
+  const state = input.state ?? { after: { gross: "200000", at: "0", fan: 1 }, loaded: 0 };
   return encodeSignedCursor(
     {
       domain: input.domain ?? CLIENT_SPENDER_AWAITING_REPLY_CURSOR_DOMAIN,
       state: z.unknown(),
       ttlMs: CLIENT_SPENDER_AWAITING_REPLY_CURSOR_TTL_MS,
     },
-    {
-      scope: input.scope,
-      state: input.state ?? { after: { gross: "200000", at: "0", fan: 1 }, loaded: 0 },
-      now: input.now ?? new Date(),
-    },
-    input.ring ?? signedCursorKeyRing(app.config),
+    { scope: input.scope, state: (input.signed ?? sealOf)(state, ring), now: input.now ?? new Date() },
+    ring,
   );
+}
+
+/** What a cursor's holder can read of it: the envelope its base64url text decodes to. */
+function readCursor(cursor: string) {
+  const text = Buffer.from(cursor, "base64url").toString("utf8");
+  const envelope = z.record(z.string(), z.unknown()).parse(JSON.parse(text));
+  const payload = z.record(z.string(), z.unknown()).parse(envelope.payload);
+  const state = z.record(z.string(), z.unknown()).parse(payload.st);
+  return { text, envelope, payload, state };
 }
 
 describe("GET /api/v1/client/pages/:pageLabel/spenders/awaiting-reply", () => {
@@ -767,8 +785,8 @@ describe("GET /api/v1/client/pages/:pageLabel/spenders/awaiting-reply", () => {
     await refused(narrowToken, "stats-second-of", cursor, "another page's cursor");
     expect((await page(narrowToken, "stats-second-of")).total).toBe(0);
 
-    // Minted by a test with the hub's own keys: the same binding, domain and
-    // state the route uses is taken, so each refusal below is for what it names.
+    // Minted by a test with the hub's own keys: the same binding, domain, seal
+    // and state the route uses is taken, so each refusal below is for what it names.
     const scope = { pageId: pageIds[PAGE]!, userId: grishaId };
     const own = await page(narrowToken, PAGE, cursorQuery(mintCursor({ scope }), 1));
     expect(own).toMatchObject({ items: [{ fanRef: "1003" }], loaded: 1 });
@@ -789,20 +807,109 @@ describe("GET /api/v1/client/pages/:pageLabel/spenders/awaiting-reply", () => {
       ["a fan id that is not one", mintCursor({ scope, state: { after: { gross: "1", at: "1", fan: 0 }, loaded: 0 } })],
       ["a negative count", mintCursor({ scope, state: { after: { gross: "1", at: "1", fan: 1 }, loaded: -1 } })],
       ["another state altogether", mintCursor({ scope, state: "next" })],
+      // Signed by this hub for this caller, with a state that is not sealed as the route seals it.
+      ["a state in the clear", mintCursor({ scope, signed: (state) => state })],
+      ["sealed with the ring's own key", mintCursor({ scope, signed: (state, ring) => encryptJson(state, ring.key, ring.keyVersion) })],
+      ["sealed as another route seals", mintCursor({
+        scope,
+        signed: (state, ring) => encryptJson(state, subkeyOf(ring.key, "agency-hub:client-feed-cursor-seal:v1"), ring.keyVersion),
+      })],
+      ["sealed under a key version the ring does not hold", mintCursor({
+        scope,
+        signed: (state, ring) =>
+          encryptJson(state, subkeyOf(ring.key, CLIENT_SPENDER_AWAITING_REPLY_CURSOR_SEAL_PURPOSE), ring.keyVersion + 98),
+      })],
+      ["a seal whose ciphertext was changed", mintCursor({
+        scope,
+        signed: (state, ring) => {
+          const sealed = sealOf(state, ring);
+          return { ...sealed, ciphertext: `${sealed.ciphertext[0] === "A" ? "B" : "A"}${sealed.ciphertext.slice(1)}` };
+        },
+      })],
+      ["a seal with a key too many", mintCursor({ scope, signed: (state, ring) => ({ ...sealOf(state, ring), note: "x" }) })],
     ];
     for (const [label, value] of minted) {
       await refused(narrowToken, PAGE, value, label);
     }
 
-    // A walk may go on for an hour, to the millisecond, and no longer.
-    vi.setSystemTime(new Date(NOW.getTime() + CLIENT_SPENDER_AWAITING_REPLY_CURSOR_TTL_MS));
+    // None of it used the route's cursor up.
     expect(refs(await page(narrowToken, PAGE, cursorQuery(cursor, 1)))).toEqual(["1003"]);
-    vi.setSystemTime(new Date(NOW.getTime() + CLIENT_SPENDER_AWAITING_REPLY_CURSOR_TTL_MS + 1));
-    await refused(narrowToken, PAGE, cursor, "older than an hour");
-    // The client then reads the first page again, and that walk's cursor is good.
+
+    await trap!.assertNoOutbound();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("keeps a cursor good for an hour after its page: the hour bounds the gap between two pages, not the walk", async (context) => {
+    if (!server) return context.skip();
+    await switchStatsOn();
+    const hour = CLIENT_SPENDER_AWAITING_REPLY_CURSOR_TTL_MS;
+    const later = (ms: number) => new Date(NOW.getTime() + ms);
+
+    const first = await page(narrowToken, PAGE, "limit=1");
+    expect(refs(first)).toEqual(["1006"]);
+
+    // To the millisecond.
+    vi.setSystemTime(later(hour));
+    const second = await page(narrowToken, PAGE, cursorQuery(first.nextCursor!, 1));
+    expect(refs(second)).toEqual(["1003"]);
+    vi.setSystemTime(later(hour + 1));
+    expectCursorRefused(await queue(narrowToken, PAGE, cursorQuery(first.nextCursor!, 1)), "issued more than an hour ago");
+
+    // Every page carries a newly issued cursor. Two hours after the walk began,
+    // the cursor the second page carried is an hour old, and the walk goes on.
+    vi.setSystemTime(later(2 * hour));
+    const third = await page(narrowToken, PAGE, cursorQuery(second.nextCursor!, 1));
+    expect(refs(third)).toEqual(["1001"]);
+    expect(third).toMatchObject({ loaded: 3, nextCursor: null, asOf: later(2 * hour).toISOString() });
+    vi.setSystemTime(later(2 * hour + 1));
+    expectCursorRefused(await queue(narrowToken, PAGE, cursorQuery(second.nextCursor!, 1)), "the second page's cursor, an hour and a millisecond old");
+
+    // After a refusal the client reads the first page again, and that walk's cursor is good.
     const restarted = await page(narrowToken, PAGE, "limit=1");
     expect(refs(restarted)).toEqual(["1006"]);
     expect(refs(await page(narrowToken, PAGE, cursorQuery(restarted.nextCursor!, 1)))).toEqual(["1003"]);
+
+    await trap!.assertNoOutbound();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("hands out a cursor its holder cannot read: no position, no count, no id of the hub's", async (context) => {
+    if (!server) return context.skip();
+    await switchStatsOn();
+
+    // The cursor after F stands at F's place in the order: F's lifetime gross,
+    // the microsecond of F's last message, and the hub's own id of F.
+    const top = (await listPageSpenderAwaitingReply(app.db, { pageId: pageIds[PAGE]!, limit: 1 })).items[0]!;
+    expect(top.fanRef).toBe("1006");
+    const first = await page(narrowToken, PAGE, "limit=1");
+    expect(refs(first)).toEqual(["1006"]);
+    const held = readCursor(first.nextCursor!);
+
+    // The token is the signed envelope, and what it signs is a seal: an
+    // AES-256-GCM envelope and nothing beside it.
+    expect(Object.keys(held.envelope).sort()).toEqual(["format", "keyVersion", "mac", "payload"]);
+    expect(Object.keys(held.payload).sort()).toEqual(["iat", "st", "v"]);
+    expect(Object.keys(held.state).sort()).toEqual(["alg", "ciphertext", "iv", "keyVersion", "tag"]);
+    expect(held.state.alg).toBe("aes-256-gcm");
+    // Nothing of the walk's state can be read off it: no field of the state
+    // (as JSON spells one), no value of the position, and nothing of what the
+    // cursor is bound to. Not in the token's text, and not in the bytes its
+    // ciphertext decodes to.
+    const sealedBytes = Buffer.from(String(held.state.ciphertext), "base64").toString("latin1");
+    for (const secret of [
+      ...["after", "gross", "at", "fan", "loaded", "pageId", "userId", "scope"].map((name) => JSON.stringify(name)),
+      top.position.lifetimeGrossMills.toString(),
+      top.position.lastFanMessageAtMicros.toString(),
+    ]) {
+      expect(held.text, secret).not.toContain(secret);
+      expect(sealedBytes, secret).not.toContain(secret);
+    }
+
+    // The same place sealed twice is two different tokens, and both read the same page.
+    const again = await page(narrowToken, PAGE, "limit=1");
+    expect(again.nextCursor).not.toBe(first.nextCursor);
+    expect(readCursor(again.nextCursor!).state.ciphertext).not.toBe(held.state.ciphertext);
+    for (const cursor of [first.nextCursor!, again.nextCursor!]) {
+      expect(refs(await page(narrowToken, PAGE, cursorQuery(cursor, 1)))).toEqual(["1003"]);
+    }
 
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);

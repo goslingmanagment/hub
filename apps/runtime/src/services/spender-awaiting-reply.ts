@@ -1,3 +1,5 @@
+import { createHmac } from "node:crypto";
+
 import {
   CLIENT_NUMERIC_ID_PATTERN,
   type ClientCursorRefusalReason,
@@ -11,7 +13,7 @@ import {
   type SpenderAwaitingReplyItem,
   type SpenderAwaitingReplyPosition,
 } from "@agency_hub_core/db";
-import { millsToNumber } from "@agency_hub_core/shared";
+import { decryptJson, encryptJson, millsToNumber } from "@agency_hub_core/shared";
 import { z } from "zod";
 
 import type { AppContext } from "../bootstrap.ts";
@@ -21,6 +23,7 @@ import { BadRequestError, ClientFeatureDisabledError } from "./errors.ts";
 import {
   decodeSignedCursor,
   encodeSignedCursor,
+  SIGNED_CURSOR_MAX_LENGTH,
   signedCursorKeyRing,
   SignedCursorInvalidError,
   type SignedCursorKeyRing,
@@ -45,6 +48,11 @@ import {
  * meanwhile is not served; a fan whose place changed (wrote again, paid more)
  * can be met again or missed until the next walk.
  *
+ * THE CURSOR is signed and bound to the page and the person (presented for
+ * anything else it fails its signature like a forgery), and its state is
+ * sealed: the position names the hub's own id of a fan, and a token handed to
+ * a client names no internal id (services/signed-cursor.ts).
+ *
  * Nothing is kept between requests: unlike the statistics, a queue of people
  * waiting right now is read anew each time.
  */
@@ -54,25 +62,38 @@ const STATS_FLAG = "stats";
 /** A new state shape is a new domain: an old cursor then fails its signature instead of being misread. */
 export const CLIENT_SPENDER_AWAITING_REPLY_CURSOR_DOMAIN = "agency-hub:client-awaiting-reply-cursor:v1";
 /**
- * How long a walk may go on. Its pages are not of one instant, so they are
- * kept close in time: an hour is longer than any scroll through the queue, and
- * past it the rows a client already holds are too old to extend. The client
- * then reads the first page again.
+ * How long ONE CURSOR is good for, counted from the page that carried it. Every
+ * page of a walk hands out a newly issued cursor, so the hour bounds the gap
+ * between two pages of a walk and not the walk: a walk that takes a page at
+ * least once an hour goes on. That is the bound this queue needs. A walk holds
+ * no frozen state that could age (every page is read anew), so there is
+ * nothing to end it for; what must not happen is a page appended to rows a
+ * client has held untouched for hours. Past the hour the client reads the
+ * first page again.
  */
 export const CLIENT_SPENDER_AWAITING_REPLY_CURSOR_TTL_MS = 60 * 60_000;
+/**
+ * The purpose of the subkey that seals a cursor's state, derived from one key
+ * of the encryption ring. Versioned like the domain: a new seal is a new
+ * purpose, and an old cursor then does not open.
+ */
+export const CLIENT_SPENDER_AWAITING_REPLY_CURSOR_SEAL_PURPOSE = "agency-hub:client-awaiting-reply-cursor-seal:v1";
 
 const CURSOR_INVALID: ClientCursorRefusalReason = "cursor_invalid";
 
 /** A Postgres bigint as decimal text: JSON numbers cannot carry one exactly. */
 const BIGINT_TEXT = /^-?(?:0|[1-9]\d{0,18})$/;
 
-/** What an awaiting-reply cursor carries. Strict at every depth: the decoder accepts only the bytes that were signed. */
+/**
+ * What a walk's cursor remembers. Strict at every depth. Never on the wire in
+ * the clear: the cursor carries it sealed (`sealedCursorStateSchema`).
+ */
 const awaitingReplyCursorStateSchema = z.object({
   /**
    * The last row the walk read: the next page holds the rows after it in the
    * queue's order (lifetime gross descending, last fan message ascending, fan
-   * id ascending). `fan` is the hub's id of that fan, the order's tie-breaker:
-   * it is of a row this caller was served, and opens nothing by itself.
+   * id ascending). `fan` is the hub's id of that fan, the order's tie-breaker,
+   * and the reason the state is sealed.
    */
   after: z.object({
     /** Lifetime gross, mills. */
@@ -85,13 +106,78 @@ const awaitingReplyCursorStateSchema = z.object({
   loaded: z.number().int().nonnegative(),
 }).strict();
 
-type AwaitingReplyCursorState = z.infer<typeof awaitingReplyCursorStateSchema>;
+export type SpenderAwaitingReplyCursorState = z.infer<typeof awaitingReplyCursorStateSchema>;
 
-const AWAITING_REPLY_CURSOR_SPEC: SignedCursorSpec<AwaitingReplyCursorState> = {
+const base64Text = (max: number) => z.string().min(1).max(max).regex(/^[A-Za-z0-9+/]+={0,2}$/);
+
+/**
+ * A cursor's state on the wire: the walk's state encrypted with the hub's own
+ * envelope (`encryptJson`, AES-256-GCM) under a subkey of the encryption ring.
+ * The signature around it binds the cursor to its scope; the seal keeps its
+ * holder from reading it, so the token names neither the walk's position nor
+ * the hub's id of a fan.
+ */
+const sealedCursorStateSchema = z.object({
+  alg: z.literal("aes-256-gcm"),
+  keyVersion: z.number().int().positive(),
+  iv: base64Text(24),
+  tag: base64Text(32),
+  ciphertext: base64Text(SIGNED_CURSOR_MAX_LENGTH),
+}).strict();
+
+type SealedCursorState = z.infer<typeof sealedCursorStateSchema>;
+
+const AWAITING_REPLY_CURSOR_SPEC: SignedCursorSpec<SealedCursorState> = {
   domain: CLIENT_SPENDER_AWAITING_REPLY_CURSOR_DOMAIN,
-  state: awaitingReplyCursorStateSchema,
+  state: sealedCursorStateSchema,
   ttlMs: CLIENT_SPENDER_AWAITING_REPLY_CURSOR_TTL_MS,
 };
+
+/**
+ * The key that seals this route's cursors, derived from one key of the
+ * encryption ring. The ring's own keys encrypt secrets at rest; they never
+ * seal a cursor directly.
+ */
+function sealKey(rootKey: Buffer): Buffer {
+  return createHmac("sha256", rootKey).update(CLIENT_SPENDER_AWAITING_REPLY_CURSOR_SEAL_PURPOSE, "utf8").digest();
+}
+
+/** The cursor that continues a walk: its state sealed, then signed for `scope`. */
+export function encodeSpenderAwaitingReplyCursor(
+  ring: SignedCursorKeyRing,
+  input: { scope: SignedCursorScope; state: SpenderAwaitingReplyCursorState; now: Date },
+): string {
+  const sealed = encryptJson(awaitingReplyCursorStateSchema.parse(input.state), sealKey(ring.key), ring.keyVersion);
+  return encodeSignedCursor(AWAITING_REPLY_CURSOR_SPEC, { scope: input.scope, state: sealed, now: input.now }, ring);
+}
+
+/**
+ * The state of a cursor presented for `expected.scope`, or the one refusal
+ * (`SignedCursorInvalidError`): not this hub's cursor for this request (the
+ * signature), issued more than an hour ago, or a state that does not open.
+ */
+export function decodeSpenderAwaitingReplyCursor(
+  ring: Pick<SignedCursorKeyRing, "keysByVersion">,
+  cursor: string,
+  expected: { scope: SignedCursorScope; now: Date },
+): SpenderAwaitingReplyCursorState {
+  const sealed = decodeSignedCursor(AWAITING_REPLY_CURSOR_SPEC, cursor, expected, ring);
+  const rootKey = ring.keysByVersion.get(sealed.keyVersion);
+  if (!rootKey) {
+    throw new SignedCursorInvalidError("unknown_key_version");
+  }
+  let opened: unknown;
+  try {
+    opened = decryptJson<unknown>(sealed, sealKey(rootKey));
+  } catch {
+    throw new SignedCursorInvalidError("payload");
+  }
+  const state = awaitingReplyCursorStateSchema.safeParse(opened);
+  if (!state.success) {
+    throw new SignedCursorInvalidError("payload");
+  }
+  return state.data;
+}
 
 function refuseCursor(): never {
   // One message and one reason for every refusal: saying WHY (another person's
@@ -105,9 +191,9 @@ function openCursor(
   scope: SignedCursorScope,
   now: Date,
   ring: SignedCursorKeyRing,
-): AwaitingReplyCursorState {
+): SpenderAwaitingReplyCursorState {
   try {
-    return decodeSignedCursor(AWAITING_REPLY_CURSOR_SPEC, cursor, { scope, now }, ring);
+    return decodeSpenderAwaitingReplyCursor(ring, cursor, { scope, now });
   } catch (error) {
     if (error instanceof SignedCursorInvalidError) {
       refuseCursor();
@@ -116,7 +202,7 @@ function openCursor(
   }
 }
 
-function positionOf(state: AwaitingReplyCursorState["after"]): SpenderAwaitingReplyPosition {
+function positionOf(state: SpenderAwaitingReplyCursorState["after"]): SpenderAwaitingReplyPosition {
   return {
     lifetimeGrossMills: BigInt(state.gross),
     lastFanMessageAtMicros: BigInt(state.at),
@@ -124,7 +210,7 @@ function positionOf(state: AwaitingReplyCursorState["after"]): SpenderAwaitingRe
   };
 }
 
-function stateOf(position: SpenderAwaitingReplyPosition): AwaitingReplyCursorState["after"] {
+function stateOf(position: SpenderAwaitingReplyPosition): SpenderAwaitingReplyCursorState["after"] {
   return {
     gross: position.lifetimeGrossMills.toString(),
     at: position.lastFanMessageAtMicros.toString(),
@@ -240,11 +326,7 @@ export async function getClientSpenderAwaitingReply(
     loaded,
     unknown: read.unknown,
     nextCursor: read.items.length > limit && last !== undefined
-      ? encodeSignedCursor(AWAITING_REPLY_CURSOR_SPEC, {
-        scope,
-        state: { after: stateOf(last.position), loaded },
-        now,
-      }, ring)
+      ? encodeSpenderAwaitingReplyCursor(ring, { scope, state: { after: stateOf(last.position), loaded }, now })
       : null,
     asOf: now.toISOString(),
   };

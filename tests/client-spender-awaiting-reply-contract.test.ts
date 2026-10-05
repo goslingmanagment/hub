@@ -1,4 +1,7 @@
+import { createHmac } from "node:crypto";
+
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 
 import * as contracts from "@agency_hub_core/contracts";
 import {
@@ -13,15 +16,25 @@ import {
   routeSchemas,
 } from "@agency_hub_core/contracts";
 import { SPENDER_AWAITING_REPLY_MAX_LIMIT, type SpenderAwaitingReplyItem } from "@agency_hub_core/db";
-import { SPENDER_AWAITING_REPLY_READ_STATES } from "@agency_hub_core/shared";
+import { encryptJson, SPENDER_AWAITING_REPLY_READ_STATES } from "@agency_hub_core/shared";
 
 import { SERVED_CLIENT_CAPABILITIES } from "../apps/runtime/src/services/client-capabilities.ts";
 import { CLIENT_FEATURE_REQUIREMENTS, evaluateClientFeature } from "../apps/runtime/src/services/client-features.ts";
-import { SIGNED_CURSOR_MAX_LENGTH } from "../apps/runtime/src/services/signed-cursor.ts";
+import {
+  encodeSignedCursor,
+  SIGNED_CURSOR_MAX_LENGTH,
+  SignedCursorInvalidError,
+  type SignedCursorKeyRing,
+  type SignedCursorScope,
+} from "../apps/runtime/src/services/signed-cursor.ts";
 import {
   CLIENT_SPENDER_AWAITING_REPLY_CURSOR_DOMAIN,
+  CLIENT_SPENDER_AWAITING_REPLY_CURSOR_SEAL_PURPOSE,
   CLIENT_SPENDER_AWAITING_REPLY_CURSOR_TTL_MS,
+  decodeSpenderAwaitingReplyCursor,
+  encodeSpenderAwaitingReplyCursor,
   toClientSpenderAwaitingReplyItem,
+  type SpenderAwaitingReplyCursorState,
 } from "../apps/runtime/src/services/spender-awaiting-reply.ts";
 import * as sdk from "../packages/sdk/src/index.ts";
 import { kernelOperations } from "../packages/sdk/src/operations.ts";
@@ -281,9 +294,130 @@ describe("client awaiting-reply contract (H-8c)", () => {
     expect(CLIENT_SPENDER_AWAITING_REPLY_MAX_LIMIT + 1).toBeLessThanOrEqual(SPENDER_AWAITING_REPLY_MAX_LIMIT);
   });
 
-  it("names its cursor's domain by route and version, and lets a walk go on for an hour", () => {
+  it("names its cursor's domain and seal by route and version, and keeps a cursor good for an hour", () => {
+    // Changing either name ends every walk under way: a deliberate act, pinned here.
     expect(CLIENT_SPENDER_AWAITING_REPLY_CURSOR_DOMAIN).toBe("agency-hub:client-awaiting-reply-cursor:v1");
+    expect(CLIENT_SPENDER_AWAITING_REPLY_CURSOR_SEAL_PURPOSE).toBe("agency-hub:client-awaiting-reply-cursor-seal:v1");
     expect(CLIENT_SPENDER_AWAITING_REPLY_CURSOR_TTL_MS).toBe(60 * 60_000);
+  });
+
+  describe("the cursor", () => {
+    const NOW = new Date("2026-10-03T12:00:00.000Z");
+    const later = (ms: number) => new Date(NOW.getTime() + ms);
+    const keyOne = Buffer.alloc(32, 7);
+    const keyTwo = Buffer.alloc(32, 9);
+    const ring: SignedCursorKeyRing = { key: keyOne, keyVersion: 1, keysByVersion: new Map([[1, keyOne]]) };
+    const scope = { pageId: 8, userId: 41 };
+    const state: SpenderAwaitingReplyCursorState = {
+      after: { gross: "9007199254740993", at: "1759478400123456", fan: 314159 },
+      loaded: 150,
+    };
+    const subkeyOf = (rootKey: Buffer, purpose: string) => createHmac("sha256", rootKey).update(purpose, "utf8").digest();
+    /** Signs `signed` where the route's sealed state goes, with the route's domain. */
+    const signWith = (signed: unknown, keys: SignedCursorKeyRing = ring) => encodeSignedCursor(
+      { domain: CLIENT_SPENDER_AWAITING_REPLY_CURSOR_DOMAIN, state: z.unknown() },
+      { scope, state: signed, now: NOW },
+      keys,
+    );
+    const refusal = (
+      cursor: string,
+      expected: { scope: SignedCursorScope; now: Date } = { scope, now: NOW },
+      keys: Pick<SignedCursorKeyRing, "keysByVersion"> = ring,
+    ) => {
+      try {
+        decodeSpenderAwaitingReplyCursor(keys, cursor, expected);
+      } catch (error) {
+        expect(error).toBeInstanceOf(SignedCursorInvalidError);
+        return (error as SignedCursorInvalidError).reason;
+      }
+      throw new Error("the cursor was taken");
+    };
+
+    it("carries a walk's place and count back exactly, bigints included", () => {
+      const cursor = encodeSpenderAwaitingReplyCursor(ring, { scope, state, now: NOW });
+      expect(decodeSpenderAwaitingReplyCursor(ring, cursor, { scope, now: NOW })).toEqual(state);
+      // A cursor fits the contract's cursor field with room to spare.
+      expect(cursor.length).toBeLessThan(SIGNED_CURSOR_MAX_LENGTH / 2);
+      expect(cursor).toMatch(/^[A-Za-z0-9_-]+$/);
+    });
+
+    it("is sealed: its holder reads an AES-GCM envelope and nothing of the walk", () => {
+      const cursor = encodeSpenderAwaitingReplyCursor(ring, { scope, state, now: NOW });
+      const text = Buffer.from(cursor, "base64url").toString("utf8");
+      const envelope = JSON.parse(text) as { payload: { st: Record<string, unknown> } };
+      expect(Object.keys(envelope.payload.st).sort()).toEqual(["alg", "ciphertext", "iv", "keyVersion", "tag"]);
+      const sealedBytes = Buffer.from(String(envelope.payload.st.ciphertext), "base64").toString("latin1");
+      for (const secret of [
+        ...["after", "gross", "at", "fan", "loaded", "pageId", "userId"].map((name) => JSON.stringify(name)),
+        state.after.gross,
+        state.after.at,
+        String(state.after.fan),
+      ]) {
+        expect(text, secret).not.toContain(secret);
+        expect(sealedBytes, secret).not.toContain(secret);
+      }
+      // One place, two tokens: the seal is not a fingerprint of the position.
+      expect(encodeSpenderAwaitingReplyCursor(ring, { scope, state, now: NOW })).not.toBe(cursor);
+    });
+
+    it("is good for an hour after it was issued, for the page and the person it was issued for", () => {
+      const cursor = encodeSpenderAwaitingReplyCursor(ring, { scope, state, now: NOW });
+      const hour = CLIENT_SPENDER_AWAITING_REPLY_CURSOR_TTL_MS;
+      expect(decodeSpenderAwaitingReplyCursor(ring, cursor, { scope, now: later(hour) })).toEqual(state);
+      expect(refusal(cursor, { scope, now: later(hour + 1) })).toBe("expired");
+      // The hour counts from the cursor's own issue, so the cursor of a later
+      // page of the same walk is good again: the hour bounds a gap, not a walk.
+      const next = encodeSpenderAwaitingReplyCursor(ring, { scope, state: { ...state, loaded: 250 }, now: later(hour) });
+      expect(decodeSpenderAwaitingReplyCursor(ring, next, { scope, now: later(2 * hour) }).loaded).toBe(250);
+      expect(refusal(next, { scope, now: later(2 * hour + 1) })).toBe("expired");
+
+      for (const other of [{ ...scope, pageId: 9 }, { ...scope, userId: 42 }, { pageId: 8 }, { ...scope, fanRef: "1" }]) {
+        expect(refusal(cursor, { scope: other, now: NOW }), JSON.stringify(other)).toBe("signature");
+      }
+    });
+
+    it("refuses a state that is not sealed as the route seals it, though this hub signed it", () => {
+      const sealKey = subkeyOf(keyOne, CLIENT_SPENDER_AWAITING_REPLY_CURSOR_SEAL_PURPOSE);
+      // The construction the tests below vary is the route's own.
+      expect(decodeSpenderAwaitingReplyCursor(ring, signWith(encryptJson(state, sealKey, 1)), { scope, now: NOW }))
+        .toEqual(state);
+
+      const sealed = encryptJson(state, sealKey, 1);
+      const cases: Array<[string, unknown]> = [
+        ["the state in the clear", state],
+        ["sealed with the ring's own key", encryptJson(state, keyOne, 1)],
+        ["sealed as another route seals", encryptJson(state, subkeyOf(keyOne, "agency-hub:client-feed-cursor-seal:v1"), 1)],
+        ["a seal with one byte changed", { ...sealed, ciphertext: `${sealed.ciphertext[0] === "A" ? "B" : "A"}${sealed.ciphertext.slice(1)}` }],
+        ["a seal with a key too many", { ...sealed, note: "x" }],
+        ["a seal of another state", encryptJson({ ...state, offset: 5 }, sealKey, 1)],
+        ["a seal of a position that is not a number", encryptJson({ ...state, after: { ...state.after, gross: "abc" } }, sealKey, 1)],
+        ["a seal of a position past a bigint", encryptJson({ ...state, after: { ...state.after, at: "1".repeat(20) } }, sealKey, 1)],
+        ["a seal of text", encryptJson("next", sealKey, 1)],
+      ];
+      for (const [label, signed] of cases) {
+        expect(refusal(signWith(signed)), label).toBe("payload");
+      }
+      expect(refusal(signWith(encryptJson(state, sealKey, 99)))).toBe("unknown_key_version");
+    });
+
+    it("outlives a key rotation while the old key stays in the ring, and no longer", () => {
+      const cursor = encodeSpenderAwaitingReplyCursor(ring, { scope, state, now: NOW });
+      const rotated: SignedCursorKeyRing = { key: keyTwo, keyVersion: 2, keysByVersion: new Map([[1, keyOne], [2, keyTwo]]) };
+      expect(decodeSpenderAwaitingReplyCursor(rotated, cursor, { scope, now: NOW })).toEqual(state);
+      // A cursor issued after the rotation is signed and sealed with the new key.
+      const fresh = encodeSpenderAwaitingReplyCursor(rotated, { scope, state, now: NOW });
+      expect(decodeSpenderAwaitingReplyCursor(rotated, fresh, { scope, now: NOW })).toEqual(state);
+      expect(refusal(fresh)).toBe("unknown_key_version");
+      // The old key leaves the ring: the old cursor stops opening.
+      expect(refusal(cursor, { scope, now: NOW }, { keysByVersion: new Map([[2, keyTwo]]) })).toBe("unknown_key_version");
+      // Another deployment's key under the same version number is not ours.
+      expect(refusal(cursor, { scope, now: NOW }, { keysByVersion: new Map([[1, keyTwo]]) })).toBe("signature");
+    });
+
+    it("does not issue a cursor for a state that is not the route's", () => {
+      const broken = { ...state, after: { ...state.after, fan: 0 } };
+      expect(() => encodeSpenderAwaitingReplyCursor(ring, { scope, state: broken, now: NOW })).toThrow();
+    });
   });
 
   it("re-exports the known values from the generated SDK, equal to the definitions the rows follow", () => {
