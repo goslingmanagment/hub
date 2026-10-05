@@ -131,9 +131,11 @@ a page at a time:
 - it only reads. Nothing is asked of the platform and nothing is queued, so a
   chat read here stays unread on OnlyFans.
 
-Its cursor adds no right: it is signed and bound to the page, the fan and the
-person, so one chatter's cursor opens nothing for another, and it is checked
-after the page and the switch, never in their place. Its row is held by
+Its cursor adds no right and tells nothing: it is signed and bound to the page,
+the fan and the person, so one chatter's cursor opens nothing for another; it
+is checked after the page and the switch, never in their place; and its state
+is sealed, so its holder cannot read from it the hub-wide row ids that bound a
+walk (they would say how many messages the whole hub holds). Its row is held by
 `client-feed.integration`: every cell, the agent key, a page that is not
 granted and one that does not exist, in both auth-policy modes, and a cursor
 presented by another person, for another fan and for another page.

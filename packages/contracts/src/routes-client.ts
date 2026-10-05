@@ -307,10 +307,12 @@ export const clientFanProfileFromGenerationResponseSchema = z.object({
 // it: `snapshotRevision`, `asOf`, `coverage`, `head` and `newestKnownAt` are
 // read once and every later page of the walk repeats them. A message that
 // arrives during the walk is not in it; the next walk from the first page has
-// it. `nextOlderCursor` is opaque and signed, and it is valid only for the same
-// page, fan and person, on the same reader, for a day, and until the archive is
-// rebuilt: any other use is 400 `bad_request` with the reason `cursor_invalid`,
-// and the client reads the first page again.
+// it. `nextOlderCursor` is opaque (its state is sealed: its holder reads
+// nothing from it) and signed, and it is valid only for the same page, fan and
+// person, on the same reader, until the archive is rebuilt, and for a day after
+// the walk's FIRST page (taking a page does not renew a walk): any other use is
+// 400 `bad_request` with the reason `cursor_invalid`, and the client reads the
+// first page again.
 
 /** The most rows one page carries; the bootstrap announces it as `limits.feedMax`. */
 export const CLIENT_FEED_MAX_LIMIT = 100;
@@ -934,7 +936,8 @@ export const clientRouteSchemas = {
       + "generation's `context_v1` frame reports from the same stored state. `summary` comes on the first page "
       + "only: the Ping segment and the fan's silence, counted by the generation's own rule over the newest "
       + "`summaryWindow` messages (5 to 1500, 100 by default). `nextOlderCursor` is opaque, signed, and valid "
-      + "only for the same page, fan and person on the same reader, for a day, until the archive is rebuilt: "
+      + "only for the same page, fan and person on the same reader, until the archive is rebuilt, and for a "
+      + "day after the walk's first page (taking a page does not renew a walk): "
       + "anything else is 400 `bad_request` with the reason `cursor_invalid`, and the client reads the first "
       + "page again. Behind the chat-extension `preview` switch: 409 `client_feature_disabled` with the reason.",
     params: clientPageFanParamsSchema,

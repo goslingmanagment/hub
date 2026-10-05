@@ -638,8 +638,12 @@ generation would read it**, and three of its answers are a generation's own.
   meanwhile is not in the walk (`packages/db/src/repositories/conversation-feed.ts` says what a
   walk guarantees). `nextOlderCursor` is opaque and signed (`services/signed-cursor.ts`, domain
   `agency-hub:client-feed-cursor:v1`), bound to the page, the fan, the person, the reader and the
-  archive generation, and lives a day. Anything else is `400 bad_request` with the reason
-  `cursor_invalid` (`docs/error-handling.md` §3): the client reads the first page again.
+  archive generation. Its state is sealed (AES-256-GCM under a subkey of the encryption ring):
+  the walk's bounds are ids of hub-wide sequences, and a holder reads from the token neither them
+  nor where the walk stands; `snapshotRevision` is a keyed digest for the same reason. A walk ends
+  a day after its **first** page: every page issues a new cursor, and taking a page does not renew
+  the walk. Anything else is `400 bad_request` with the reason `cursor_invalid`
+  (`docs/error-handling.md` §3): the client reads the first page again.
 - It reads the database only, in one read-only snapshot per request: no platform request, no
   refresh, no queued work, no change to a chat's unread state.
 - Behind the owner's `preview` switch on the page (`requireClientFeature`): a refusal is `409

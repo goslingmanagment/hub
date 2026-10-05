@@ -1,3 +1,5 @@
+import { Buffer } from "node:buffer";
+
 import { describe, expect, it } from "vitest";
 
 import * as contracts from "@agency_hub_core/contracts";
@@ -32,11 +34,20 @@ import { CLIENT_FEATURE_REQUIREMENTS, evaluateClientFeature } from "../apps/runt
 import { CLIENT_BOOTSTRAP_LIMITS } from "../apps/runtime/src/services/client-limits.ts";
 import {
   CLIENT_FEED_CURSOR_DOMAIN,
+  CLIENT_FEED_WALK_TTL_MS,
   conversationFeedNewestKnownAt,
   conversationFeedSourceOf,
+  decodeConversationFeedCursor,
+  encodeConversationFeedCursor,
   toClientFeedItem,
+  type ConversationFeedCursorState,
 } from "../apps/runtime/src/services/conversation-feed.ts";
-import { SIGNED_CURSOR_MAX_LENGTH } from "../apps/runtime/src/services/signed-cursor.ts";
+import {
+  SIGNED_CURSOR_MAX_LENGTH,
+  SignedCursorInvalidError,
+  type SignedCursorKeyRing,
+  type SignedCursorRefusal,
+} from "../apps/runtime/src/services/signed-cursor.ts";
 import * as sdk from "../packages/sdk/src/index.ts";
 import { kernelOperations } from "../packages/sdk/src/operations.ts";
 import {
@@ -465,6 +476,124 @@ describe("archive feed newestKnownAt (H-9c)", () => {
     expect(conversationFeedNewestKnownAt({
       headAt: HEAD, newestHeldAt: at(HEAD), threadLastMessageAt: new Date("+010000-01-01T00:00:00.000Z"),
     })).toBe(HEAD);
+  });
+});
+
+describe("archive feed cursor (H-9c)", () => {
+  const KEY_V1 = Buffer.alloc(32, 7);
+  const KEY_V2 = Buffer.alloc(32, 8);
+  const ring: SignedCursorKeyRing = { key: KEY_V1, keyVersion: 1, keysByVersion: new Map([[1, KEY_V1]]) };
+  const scope = { pageId: 8, fanRef: FAN, userId: 77, source: "union", archiveGeneration: 3 };
+  const startedAt = Date.parse("2026-10-03T12:00:00.000Z");
+  const at = (ms: number) => new Date(startedAt + ms);
+  const state: ConversationFeedCursorState = {
+    // Ids of hub-wide sequences: the numbers a holder must not read.
+    snapshot: { archiveMaxId: 48_123_457, dmMaxId: 7_654_321 },
+    before: { at: "2026-10-03T11:59:00.123456Z", ref: "9006000111" },
+    walk: {
+      revision: "rev-of-the-walk-000001",
+      asOf: startedAt,
+      coverage: "complete",
+      head: { messageRef: "9007000222", at: ISO, sender: "fan" },
+      newestKnownAt: ISO,
+    },
+  };
+
+  function refusal(run: () => unknown): SignedCursorRefusal {
+    try {
+      run();
+    } catch (error) {
+      expect(error).toBeInstanceOf(SignedCursorInvalidError);
+      return (error as SignedCursorInvalidError).reason;
+    }
+    throw new Error("expected the cursor to be refused");
+  }
+
+  it("round-trips the walk's state for the scope it was issued for, and for no other", () => {
+    const cursor = encodeConversationFeedCursor(ring, { scope, state, now: at(0) });
+    expect(clientCursorSchema.safeParse(cursor).success).toBe(true);
+    expect(decodeConversationFeedCursor(ring, cursor, { scope, now: at(60_000) })).toEqual(state);
+    for (const other of [
+      { ...scope, pageId: 9 },
+      { ...scope, fanRef: "777000888" },
+      { ...scope, userId: 78 },
+      { ...scope, source: "archive" },
+      { ...scope, archiveGeneration: 4 },
+    ]) {
+      expect(refusal(() => decodeConversationFeedCursor(ring, cursor, { scope: other, now: at(60_000) }))).toBe("signature");
+    }
+  });
+
+  it("is sealed: the token shows its holder neither the walk's position nor the stores' hub-wide bounds", () => {
+    const cursor = encodeConversationFeedCursor(ring, { scope, state, now: at(0) });
+    const envelope = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as {
+      payload: { st: Record<string, unknown> };
+    };
+    expect(Object.keys(envelope.payload.st).sort()).toEqual(["alg", "ciphertext", "iv", "keyVersion", "tag"]);
+    const readable = [
+      JSON.stringify(envelope),
+      Buffer.from(String(envelope.payload.st.ciphertext), "base64").toString("latin1"),
+    ].join("\n");
+    for (const hidden of [
+      "48123457", "7654321", "9006000111", "9007000222", "rev-of-the-walk", "complete", FAN,
+      "archiveMaxId", "dmMaxId", "archiveHighSeq", "snapshot", "before", "walk", "pageId", "userId",
+    ]) {
+      expect(readable, hidden).not.toContain(hidden);
+    }
+    // Where the archive projection stood is not carried at all: only the first page reads it.
+    expect(Object.keys(state.snapshot).sort()).toEqual(["archiveMaxId", "dmMaxId"]);
+    expect(() => encodeConversationFeedCursor(ring, {
+      scope,
+      state: { ...state, snapshot: { ...state.snapshot, archiveHighSeq: 5 } } as ConversationFeedCursorState,
+      now: at(0),
+    })).toThrow();
+    // Sealed afresh each time: one state, two tokens, both open to it.
+    const again = encodeConversationFeedCursor(ring, { scope, state, now: at(0) });
+    expect(again).not.toBe(cursor);
+    expect(decodeConversationFeedCursor(ring, again, { scope, now: at(0) })).toEqual(state);
+  });
+
+  it("ends a walk a day after its first page, however recently the cursor was issued", () => {
+    // Issued with the first page: good for the walk's day, not a minute longer.
+    const first = encodeConversationFeedCursor(ring, { scope, state, now: at(0) });
+    expect(decodeConversationFeedCursor(ring, first, { scope, now: at(CLIENT_FEED_WALK_TTL_MS) })).toEqual(state);
+    expect(refusal(() => decodeConversationFeedCursor(ring, first, { scope, now: at(CLIENT_FEED_WALK_TTL_MS + 1) })))
+      .toBe("expired");
+    // Issued by a page taken a minute before the day ended: the cursor is fresh,
+    // the walk is not. Taking a page every 23 hours does not keep a walk alive.
+    const late = encodeConversationFeedCursor(ring, { scope, state, now: at(CLIENT_FEED_WALK_TTL_MS - 60_000) });
+    expect(decodeConversationFeedCursor(ring, late, { scope, now: at(CLIENT_FEED_WALK_TTL_MS - 1) })).toEqual(state);
+    expect(refusal(() => decodeConversationFeedCursor(ring, late, { scope, now: at(CLIENT_FEED_WALK_TTL_MS + 60_000) })))
+      .toBe("expired");
+  });
+
+  it("opens across a key rotation while the old version stays in the ring, and not after it leaves", () => {
+    const cursor = encodeConversationFeedCursor(ring, { scope, state, now: at(0) });
+    const rotated: SignedCursorKeyRing = { key: KEY_V2, keyVersion: 2, keysByVersion: new Map([[1, KEY_V1], [2, KEY_V2]]) };
+    expect(decodeConversationFeedCursor(rotated, cursor, { scope, now: at(0) })).toEqual(state);
+    const retired: SignedCursorKeyRing = { key: KEY_V2, keyVersion: 2, keysByVersion: new Map([[2, KEY_V2]]) };
+    expect(refusal(() => decodeConversationFeedCursor(retired, cursor, { scope, now: at(0) }))).toBe("unknown_key_version");
+    // The same version number over another key: not this hub's cursor.
+    const foreign: SignedCursorKeyRing = { key: KEY_V2, keyVersion: 1, keysByVersion: new Map([[1, KEY_V2]]) };
+    expect(refusal(() => decodeConversationFeedCursor(foreign, cursor, { scope, now: at(0) }))).toBe("signature");
+  });
+
+  it("fits the wire with the longest state it accepts", () => {
+    const longest: ConversationFeedCursorState = {
+      snapshot: { archiveMaxId: Number.MAX_SAFE_INTEGER, dmMaxId: Number.MAX_SAFE_INTEGER },
+      before: { at: "2026-10-03T11:59:00.123456Z", ref: "9".repeat(200) },
+      walk: {
+        revision: "r".repeat(64),
+        asOf: startedAt,
+        coverage: "c".repeat(64),
+        head: { messageRef: "8".repeat(200), at: "2026-10-03T12:00:00.000Z", sender: "s".repeat(64) },
+        newestKnownAt: "2026-10-03T12:00:00.000Z",
+      },
+    };
+    const cursor = encodeConversationFeedCursor(ring, { scope, state: longest, now: at(0) });
+    expect(cursor.length).toBeLessThanOrEqual(SIGNED_CURSOR_MAX_LENGTH);
+    expect(clientCursorSchema.safeParse(cursor).success).toBe(true);
+    expect(decodeConversationFeedCursor(ring, cursor, { scope, now: at(0) })).toEqual(longest);
   });
 });
 

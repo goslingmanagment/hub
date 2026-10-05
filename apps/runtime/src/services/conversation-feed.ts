@@ -1,4 +1,5 @@
-import { createHash } from "node:crypto";
+import type { Buffer } from "node:buffer";
+import { createHmac } from "node:crypto";
 
 import {
   CLIENT_FEED_SENDERS,
@@ -25,6 +26,7 @@ import {
   type ConversationFeedSource,
   type Database,
 } from "@agency_hub_core/db";
+import { decryptJson, encryptJson } from "@agency_hub_core/shared";
 import { z } from "zod";
 
 import type { AppContext } from "../bootstrap.ts";
@@ -38,8 +40,10 @@ import {
   canonicalJson,
   decodeSignedCursor,
   encodeSignedCursor,
+  SIGNED_CURSOR_MAX_LENGTH,
   signedCursorKeyRing,
   SignedCursorInvalidError,
+  type SignedCursorKeyRing,
   type SignedCursorScope,
   type SignedCursorSpec,
 } from "./signed-cursor.ts";
@@ -60,11 +64,13 @@ import {
  *
  * A WALK is frozen at its first page. What that page learned about the
  * conversation (the bounds of the two stores, the head, the coverage, the
- * newest known time, the snapshot's name and time) travels in the signed
- * cursor and is repeated on every later page: a later page reads its rows and
- * nothing else. The cursor is bound to the page, the fan, the person, the
- * reader and the archive generation; presented for anything else it fails its
- * signature like a forgery.
+ * newest known time, the snapshot's name and time) travels in the cursor and is
+ * repeated on every later page: a later page reads its rows and nothing else.
+ * The cursor is signed and bound to the page, the fan, the person, the reader
+ * and the archive generation (presented for anything else it fails its
+ * signature like a forgery), and its state is sealed: the bounds are ids of
+ * hub-wide sequences, and a chatter must not read from a cursor how many
+ * messages the whole hub holds. A walk ends a day after its first page.
  *
  * THE HEAD is the newest message of the transcript the summary read, so it is
  * by construction what `context_v1.servedHead` reports for a generation served
@@ -79,12 +85,20 @@ const FEED_FLAG = "preview";
 /** A new state shape is a new domain: an old cursor then fails its signature instead of being misread. */
 export const CLIENT_FEED_CURSOR_DOMAIN = "agency-hub:client-feed-cursor:v1";
 /**
- * How long a walk may go on. The stores' bounds freeze inserts only: deletions
- * and repairs keep reaching an old walk (conversation-feed.ts in packages/db
- * says what that costs), so a walk is not kept alive for days. A day is longer
- * than any open preview; after it the client reads the first page again.
+ * How long a walk may go on, counted from its FIRST page. The stores' bounds
+ * freeze inserts only: deletions and repairs keep reaching an old walk
+ * (conversation-feed.ts in packages/db says what that costs), so a walk is not
+ * kept alive for days, and walking it does not renew it: every page hands out
+ * a freshly issued cursor, and a lifetime counted from the cursor's own issue
+ * time would let a walk that takes a page every 23 hours go on for ever. A day
+ * is longer than any open preview; after it the client reads the first page
+ * again.
  */
-export const CLIENT_FEED_CURSOR_TTL_MS = 24 * 60 * 60_000;
+export const CLIENT_FEED_WALK_TTL_MS = 24 * 60 * 60_000;
+
+/** Purposes of the two subkeys this route derives from the encryption ring. */
+const CURSOR_SEAL_PURPOSE = "agency-hub:client-feed-cursor-seal:v1";
+const SNAPSHOT_REVISION_PURPOSE = "agency-hub:client-feed-snapshot-revision:v1";
 
 const CURSOR_INVALID: ClientCursorRefusalReason = "cursor_invalid";
 const READ_SNAPSHOT = { isolationLevel: "repeatable read", accessMode: "read only" } as const;
@@ -98,11 +112,18 @@ const feedHeadStateSchema = z.object({
   sender: z.string().min(1).max(64),
 }).strict();
 
-/** What a feed cursor carries. Strict at every depth: the decoder accepts only the bytes that were signed. */
+/**
+ * What a walk's cursor remembers. Strict at every depth. Never on the wire in
+ * the clear: the cursor carries it sealed (`sealedFeedCursorSchema`).
+ */
 const feedCursorStateSchema = z.object({
-  /** The walk's bounds on the two content stores, and where the archive projection stood. */
+  /**
+   * The walk's bounds on the two content stores (the reader's `snapshot`).
+   * They are ids of hub-wide sequences: read in the clear, two cursors a day
+   * apart would tell a chatter how many messages the whole hub took in. Where
+   * the archive projection stood is not carried: only the first page reads it.
+   */
   snapshot: z.object({
-    archiveHighSeq: nonNegativeInt,
     archiveMaxId: nonNegativeInt,
     dmMaxId: nonNegativeInt,
   }).strict(),
@@ -114,7 +135,7 @@ const feedCursorStateSchema = z.object({
   /** What the first page answered about the conversation; every page repeats it. */
   walk: z.object({
     revision: z.string().min(1).max(64),
-    /** Epoch milliseconds. */
+    /** When the walk's first page was read, epoch milliseconds: the walk's lifetime counts from here. */
     asOf: nonNegativeInt,
     coverage: z.string().min(1).max(64),
     head: feedHeadStateSchema.nullable(),
@@ -122,14 +143,90 @@ const feedCursorStateSchema = z.object({
   }).strict(),
 }).strict();
 
-type FeedCursorState = z.infer<typeof feedCursorStateSchema>;
-type FeedWalk = FeedCursorState["walk"];
+export type ConversationFeedCursorState = z.infer<typeof feedCursorStateSchema>;
+type FeedWalk = ConversationFeedCursorState["walk"];
 
-const FEED_CURSOR_SPEC: SignedCursorSpec<FeedCursorState> = {
+const base64Text = (max: number) => z.string().min(1).max(max).regex(/^[A-Za-z0-9+/]+={0,2}$/);
+
+/**
+ * A feed cursor's state on the wire: the walk's state encrypted with the hub's
+ * own envelope (`encryptJson`, AES-256-GCM) under a subkey of the encryption
+ * ring. The signature around it binds the cursor to its scope; the seal keeps
+ * its holder from reading it, so the token names neither the position of the
+ * walk nor anything of the hub's stores.
+ */
+const sealedFeedCursorSchema = z.object({
+  alg: z.literal("aes-256-gcm"),
+  keyVersion: z.number().int().positive(),
+  iv: base64Text(24),
+  tag: base64Text(32),
+  ciphertext: base64Text(SIGNED_CURSOR_MAX_LENGTH),
+}).strict();
+
+type SealedFeedCursor = z.infer<typeof sealedFeedCursorSchema>;
+
+const FEED_CURSOR_SPEC: SignedCursorSpec<SealedFeedCursor> = {
   domain: CLIENT_FEED_CURSOR_DOMAIN,
-  state: feedCursorStateSchema,
-  ttlMs: CLIENT_FEED_CURSOR_TTL_MS,
+  state: sealedFeedCursorSchema,
+  // The outer bound of one cursor. The walk's own lifetime, checked once the
+  // state is open, is the stricter one: a cursor is never issued before its
+  // walk began.
+  ttlMs: CLIENT_FEED_WALK_TTL_MS,
 };
+
+/**
+ * A key of this route for one purpose, derived from one key of the encryption
+ * ring. The ring's own keys encrypt secrets at rest; they never seal a cursor
+ * or name a snapshot directly.
+ */
+function feedSubkey(rootKey: Buffer, purpose: string): Buffer {
+  return createHmac("sha256", rootKey).update(purpose, "utf8").digest();
+}
+
+/** The cursor that continues a walk: its state sealed, then signed for `scope`. */
+export function encodeConversationFeedCursor(
+  ring: SignedCursorKeyRing,
+  input: { scope: SignedCursorScope; state: ConversationFeedCursorState; now: Date },
+): string {
+  const sealed = encryptJson(
+    feedCursorStateSchema.parse(input.state),
+    feedSubkey(ring.key, CURSOR_SEAL_PURPOSE),
+    ring.keyVersion,
+  );
+  return encodeSignedCursor(FEED_CURSOR_SPEC, { scope: input.scope, state: sealed, now: input.now }, ring);
+}
+
+/**
+ * The state of a cursor presented for `expected.scope`, or the one refusal
+ * (`SignedCursorInvalidError`): not this hub's cursor for this request (the
+ * signature), a state that does not open, or a walk that began more than
+ * `CLIENT_FEED_WALK_TTL_MS` ago, however recently this cursor was issued.
+ */
+export function decodeConversationFeedCursor(
+  ring: Pick<SignedCursorKeyRing, "keysByVersion">,
+  cursor: string,
+  expected: { scope: SignedCursorScope; now: Date },
+): ConversationFeedCursorState {
+  const sealed = decodeSignedCursor(FEED_CURSOR_SPEC, cursor, expected, ring);
+  const rootKey = ring.keysByVersion.get(sealed.keyVersion);
+  if (!rootKey) {
+    throw new SignedCursorInvalidError("unknown_key_version");
+  }
+  let opened: unknown;
+  try {
+    opened = decryptJson<unknown>(sealed, feedSubkey(rootKey, CURSOR_SEAL_PURPOSE));
+  } catch {
+    throw new SignedCursorInvalidError("payload");
+  }
+  const state = feedCursorStateSchema.safeParse(opened);
+  if (!state.success) {
+    throw new SignedCursorInvalidError("payload");
+  }
+  if (expected.now.getTime() - state.data.walk.asOf > CLIENT_FEED_WALK_TTL_MS) {
+    throw new SignedCursorInvalidError("expired");
+  }
+  return state.data;
+}
 
 /**
  * The reader the owner's `aiTranscriptFreshUnionMode` names: the generation's
@@ -237,16 +334,18 @@ export function toClientFeedItem(row: ConversationFeedRow): ClientFeedItem {
 /**
  * The name of a walk's snapshot: a digest of what the walk is frozen to, so two
  * walks carry the same name only when they stand on the same stored state. A
- * label, not a secret, and not a cursor: nothing is ever looked up by it.
+ * label, not a cursor: nothing is ever looked up by it. The digest is keyed,
+ * because its input holds the stores' hub-wide bounds and a plain hash of a few
+ * small numbers can be searched for them.
  */
-function snapshotRevisionOf(input: {
+function snapshotRevisionOf(revisionKey: Buffer, input: {
   pageId: number;
   conversationRef: string;
   source: ConversationFeedSource;
   snapshot: ConversationFeedSnapshot;
   headRef: string | null;
 }): string {
-  return createHash("sha256")
+  return createHmac("sha256", revisionKey)
     .update(canonicalJson(input), "utf8")
     .digest("base64url")
     .slice(0, SNAPSHOT_REVISION_LENGTH);
@@ -295,7 +394,7 @@ function refuseCursor(): never {
 
 interface FeedRead {
   walk: FeedWalk;
-  snapshot: FeedCursorState["snapshot"];
+  snapshot: ConversationFeedCursorState["snapshot"];
   page: ConversationFeedPage;
   summary: ClientFeedSummary | null;
 }
@@ -311,6 +410,7 @@ async function readFirstPage(
     limit: number;
     summaryWindow: number;
     now: Date;
+    revisionKey: Buffer;
   },
 ): Promise<FeedRead> {
   const target = { pageId: input.pageId, conversationRef: input.conversationRef };
@@ -349,7 +449,12 @@ async function readFirstPage(
   const ping = computePingSummary(transcript.messages, input.now.getTime());
   return {
     walk: {
-      revision: snapshotRevisionOf({ ...target, source: input.source, snapshot: input.snapshot, headRef: head?.messageRef ?? null }),
+      revision: snapshotRevisionOf(input.revisionKey, {
+        ...target,
+        source: input.source,
+        snapshot: input.snapshot,
+        headRef: head?.messageRef ?? null,
+      }),
       asOf: input.now.getTime(),
       coverage,
       head,
@@ -361,7 +466,6 @@ async function readFirstPage(
       }),
     },
     snapshot: {
-      archiveHighSeq: input.snapshot.archiveHighSeq,
       archiveMaxId: input.snapshot.archiveMaxId,
       dmMaxId: input.snapshot.dmMaxId,
     },
@@ -424,12 +528,13 @@ export async function getClientConversationFeed(
           limit,
           summaryWindow: conversationFeedSummaryWindow(input.query.summaryWindow),
           now,
+          revisionKey: feedSubkey(ring.key, SNAPSHOT_REVISION_PURPOSE),
         }),
       };
     }
-    let state: FeedCursorState;
+    let state: ConversationFeedCursorState;
     try {
-      state = decodeSignedCursor(FEED_CURSOR_SPEC, cursor, { scope, now }, ring);
+      state = decodeConversationFeedCursor(ring, cursor, { scope, now });
     } catch (error) {
       if (error instanceof SignedCursorInvalidError) {
         refuseCursor();
@@ -465,11 +570,11 @@ export async function getClientConversationFeed(
     newestKnownAt: walk.newestKnownAt,
     nextOlderCursor: rows.nextBefore === null
       ? null
-      : encodeSignedCursor(FEED_CURSOR_SPEC, {
+      : encodeConversationFeedCursor(ring, {
         scope: read.scope,
         state: { snapshot, before: rows.nextBefore, walk },
         now,
-      }, ring),
+      }),
     items: rows.rows.map(toClientFeedItem),
     summary,
   };

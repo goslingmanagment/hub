@@ -32,7 +32,7 @@ import {
   createUserAccount,
   setUserPassword,
 } from "../apps/runtime/src/services/auth.ts";
-import { CLIENT_FEED_CURSOR_TTL_MS } from "../apps/runtime/src/services/conversation-feed.ts";
+import { CLIENT_FEED_WALK_TTL_MS } from "../apps/runtime/src/services/conversation-feed.ts";
 import { frozenFeedPageSchema } from "./helpers/client-feed-frozen.ts";
 import { issueDeviceTokenForUserId } from "./helpers/device-credentials.ts";
 import {
@@ -997,11 +997,31 @@ describe("GET /api/v1/client/pages/:pageLabel/conversations/:fanRef/feed", () =>
     const first = await feedOk(grishaToken, { query: { limit: 2 } });
     expect(first.items.map((item) => item.messageId)).toEqual(["9007", "9006"]);
     const cursor = first.nextOlderCursor!;
-    // Opaque: the token names the position in the feed and nothing internal.
-    const signed = Buffer.from(cursor, "base64url").toString("utf8");
-    expect(signed).toContain("9006");
-    expect(signed).not.toMatch(/pageId|userId|fanRef|archiveGeneration/);
-    expect(signed).not.toContain(FAN);
+    // Sealed: a holder reads nothing from the token. Not what it is bound to
+    // (that is never carried), not where the walk stands, and not the bounds of
+    // the walk: those are ids of hub-wide sequences, and in the clear they
+    // would tell a chatter how many messages the whole hub holds.
+    const envelope = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as {
+      payload: { st: Record<string, unknown> };
+    };
+    expect(Object.keys(envelope.payload.st).sort()).toEqual(["alg", "ciphertext", "iv", "keyVersion", "tag"]);
+    expect(envelope.payload.st.alg).toBe("aes-256-gcm");
+    const readable = [
+      JSON.stringify(envelope),
+      Buffer.from(String(envelope.payload.st.ciphertext), "base64").toString("latin1"),
+    ].join("\n");
+    expect(readable).not.toMatch(
+      /pageId|userId|fanRef|archiveGeneration|archiveHighSeq|archiveMaxId|dmMaxId|snapshot|before|walk|revision|coverage/,
+    );
+    for (const hidden of ["9006", "9007", FAN, first.snapshotRevision, first.asOf]) {
+      expect(readable, hidden).not.toContain(hidden);
+    }
+    // Sealed afresh each time: the same position is never the same token, and
+    // either token continues the walk to the same page.
+    const again = (await feedOk(grishaToken, { query: { limit: 2 } })).nextOlderCursor!;
+    expect(again).not.toBe(cursor);
+    expect((await feedOk(grishaToken, { query: { cursor: again, limit: 3 } })).items.map((item) => item.messageId))
+      .toEqual(["9005", "9004", "9003"]);
 
     // The walk goes on; the page size may change, a summary window is not read on a later page.
     const second = await feedOk(grishaToken, { query: { cursor, limit: 3, summaryWindow: 5 } });
@@ -1051,16 +1071,28 @@ describe("GET /api/v1/client/pages/:pageLabel/conversations/:fanRef/feed", () =>
     expect(rebuilt.snapshotRevision).not.toBe(first.snapshotRevision);
     expect((await feed(grishaToken, { query: { cursor: rebuilt.nextOlderCursor! } })).statusCode).toBe(200);
 
-    // A walk does not go on for days: the cursor lives a day.
-    const issuedAt = Date.now();
-    vi.useFakeTimers({ toFake: ["Date"], now: issuedAt });
-    const fresh = (await feedOk(grishaToken, { query: { limit: 2 } })).nextOlderCursor!;
-    vi.setSystemTime(issuedAt + CLIENT_FEED_CURSOR_TTL_MS - 60_000);
-    expect((await feed(grishaToken, { query: { cursor: fresh } })).statusCode).toBe(200);
-    vi.setSystemTime(issuedAt + CLIENT_FEED_CURSOR_TTL_MS + 60_000);
-    expectCursorRefused(await feed(grishaToken, { query: { cursor: fresh } }));
-    // The answer to a refused cursor: the first page again.
-    expect((await feedOk(grishaToken, { query: { limit: 2 } })).items.map((item) => item.messageId)).toEqual(["9007", "9006"]);
+    // A walk does not go on for days: it ends a day after its FIRST page,
+    // however it is walked.
+    const startedAt = Date.now();
+    vi.useFakeTimers({ toFake: ["Date"], now: startedAt });
+    const start = await feedOk(grishaToken, { query: { limit: 2 } });
+    // A minute before the day is over the walk goes on, and the page hands out
+    // a cursor issued right now.
+    vi.setSystemTime(startedAt + CLIENT_FEED_WALK_TTL_MS - 60_000);
+    const hop = await feedOk(grishaToken, { query: { cursor: start.nextOlderCursor!, limit: 2 } });
+    expect(hop.items.map((item) => item.messageId)).toEqual(["9005", "9004"]);
+    expect(hop.asOf).toBe(start.asOf);
+    expect(hop.nextOlderCursor).not.toBeNull();
+    // Two minutes later the day is over. The cursor of the hop is two minutes
+    // old: taking a page did not buy the walk another day.
+    vi.setSystemTime(startedAt + CLIENT_FEED_WALK_TTL_MS + 60_000);
+    expectCursorRefused(await feed(grishaToken, { query: { cursor: hop.nextOlderCursor! } }));
+    expectCursorRefused(await feed(grishaToken, { query: { cursor: start.nextOlderCursor! } }));
+    // The answer to a refused cursor: the first page again, a new walk with its own day.
+    const restarted = await feedOk(grishaToken, { query: { limit: 2 } });
+    expect(restarted.items.map((item) => item.messageId)).toEqual(["9007", "9006"]);
+    expect(Date.parse(restarted.asOf)).toBe(startedAt + CLIENT_FEED_WALK_TTL_MS + 60_000);
+    expect((await feed(grishaToken, { query: { cursor: restarted.nextOlderCursor! } })).statusCode).toBe(200);
 
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
