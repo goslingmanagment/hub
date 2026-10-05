@@ -253,6 +253,10 @@ another is deliberately small:
   the dispatcher, and only its sha256 is stored. A finished send is shown by
   the status read only to the person who dispatched it (their own last send to
   the fan, so their client learns of a manual resolve), never to anyone else;
+- a desktop new-follower command whose outcome is unknown shows the same way
+  to everyone granted the page, as a send nobody can vouch for
+  (`uncertain-held`) under the command's id, and gives no lease: it may have
+  greeted the fan. Who queued it is not shown;
 - the outcome of a send (`sent`, `failed`) is taken only from the person and
   the client install that dispatched it. `registerNativeSend` records the
   caller's own proven send and frees nobody's custody: over a held send of

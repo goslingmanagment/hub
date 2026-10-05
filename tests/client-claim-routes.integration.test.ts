@@ -903,23 +903,25 @@ describe("chat-extension claim and custody routes", () => {
     await switchOn();
     const insertCommand = async (state: string, attempts: number, verifier: unknown) => {
       const fan = nextFan();
+      const commandId = randomUUID();
       await query(
         `insert into ofapi_commands (id, client_command_id, page_id, chatter_user_id, ofapi_account_id, conversation_id,
            outreach_purpose, kind, payload, payload_hash, state, attempt_count, verifier_result, platform_message_id,
            attempt_finished_at, dedupe_expires_at)
          values ($1, $2, $3, $4, 'acct_claim', $5, 'new-follower', 'send_text_message_v1', '{}'::jsonb, $6, $7, $8, $9, $10, $11,
            now() + interval '1 day')`,
-        [randomUUID(), randomUUID(), pageIds["lora-of"], userIds.nikita, fan, "a".repeat(64), state, attempts,
+        [commandId, randomUUID(), pageIds["lora-of"], userIds.nikita, fan, "a".repeat(64), state, attempts,
           verifier === null ? null : JSON.stringify(verifier),
           state === "confirmed" ? "9001" : null, state === "confirmed" ? new Date("2026-09-21T10:00:00Z") : null],
       );
-      return fan;
+      return { fan, commandId };
     };
-    const greeted = await insertCommand("confirmed", 1, { source: "ofapi_response" });
+    const { fan: greeted } = await insertCommand("confirmed", 1, { source: "ofapi_response" });
     const queued = await insertCommand("queued", 0, null);
     const indeterminate = await insertCommand("indeterminate", 1, { source: "stale_recovery" });
-    const cancelledBeforeCapture = await insertCommand("cancelled", 0, null);
-    const refusedLocally = await insertCommand("failed_terminal", 1, { source: "local_precondition", reason: "binding_replaced" });
+    const failedUnproven = await insertCommand("failed_terminal", 1, { source: "ofapi_response", httpStatus: 400 });
+    const { fan: cancelledBeforeCapture } = await insertCommand("cancelled", 0, null);
+    const { fan: refusedLocally } = await insertCommand("failed_terminal", 1, { source: "local_precondition", reason: "binding_replaced" });
     // The fixtures are the desktop's rows; the trap counts from here.
     await trap!.restore();
     trap = await armNoOutboundTrap(testDb!);
@@ -936,18 +938,32 @@ describe("chat-extension claim and custody routes", () => {
     expect(ok(await status(nikitaToken, greeted)).greeting).toEqual({
       state: "confirmed", at: "2026-09-21T10:00:00.000Z", messageRef: "9001", source: "desktop-outbox",
     });
-    // Queued, in flight or indeterminate: it may have greeted. Held, never a second greeting.
-    for (const fan of [queued, indeterminate]) {
-      expectRefused(await greet(fan), 409, "custody_held");
-      expect(ok(await status(grishaToken, fan)).greeting.state).toBe("none");
-      expect(await custodyRows(fan)).toEqual([]);
+    // Queued, indeterminate, or failed without proof it never left: it may have greeted. The fan is
+    // held for everyone like a send nobody can vouch for, under the command's id: no lease, no
+    // dispatch, and never a row that reads as free (a greeting by hand would be the second one).
+    for (const held of [queued, indeterminate, failedUnproven]) {
+      expectRefused(await act(grishaToken, held.fan, claimBody(I1)), 409, "custody_held");
+      expectRefused(await act(grishaToken, held.fan, dispatchBody({ leaseToken: randomUUID() })), 409, "custody_held");
+      for (const token of [grishaToken, nikitaToken]) {
+        expect(ok(await status(token, held.fan))).toMatchObject({
+          greeting: { state: "none" },
+          lease: { state: "none", heldBy: null },
+          group: null,
+          custody: { attemptId: held.commandId, state: "uncertain-held", ticket: null, ticketExpiresAt: null },
+        });
+      }
+      expect(await query("select 1 from client_fan_leases where fan_ref = $1", [held.fan])).toEqual([]);
+      expect(await custodyRows(held.fan)).toEqual([]);
     }
     // Cancelled before any attempt, or refused before it left the hub: the fan is free.
     for (const fan of [cancelledBeforeCapture, refusedLocally]) {
       expect(ok(await greet(fan)).custody).toMatchObject({ state: "dispatching" });
     }
-    // The desktop's command holds the greeting only: a reply from the preview is another send.
-    expect(ok(await act(grishaToken, queued, replyBody())).custody).toMatchObject({ state: "dispatching" });
+    // The desktop's command holds the greeting only: a reply from the preview is another send,
+    // and while it is open it is what the status shows.
+    const reply = replyBody();
+    expect(ok(await act(grishaToken, queued.fan, reply)).custody).toMatchObject({ attemptId: reply.attemptId, state: "dispatching" });
+    expect(ok(await status(nikitaToken, queued.fan)).custody).toMatchObject({ attemptId: reply.attemptId, state: "dispatching" });
 
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);

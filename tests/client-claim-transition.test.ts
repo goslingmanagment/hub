@@ -103,10 +103,22 @@ describe("lease: claim, renew, release", () => {
     ]) {
       expect(decideClaimTransition(state, claim)).toEqual({ outcome: "rejected", code: "greeting_done", writes: [] });
     }
-    // The owner still holds the fan for the rest of the group; a desktop command that only may have greeted refuses no lease.
+    // The owner still holds the fan for the rest of the group.
     expect(decideClaimTransition(snapshot({ greeting: greeted(ME) }), claim)).toMatchObject({ outcome: "applied" });
-    expect(decideClaimTransition(snapshot({ desktop: { commandId: "c1", state: "held", at: NOW, messageRef: null } }), claim))
-      .toMatchObject({ outcome: "applied" });
+    // A desktop command that may have greeted gives no lease either: its outcome is unknown, and a
+    // lease would only lead to a second greeting by hand. Not to the fan's own lease holder, and
+    // not to the owner of a greeting the extension confirmed.
+    const mayHaveGreeted = { commandId: "c1", state: "held" as const, at: NOW, messageRef: null };
+    for (const state of [
+      snapshot({ desktop: mayHaveGreeted }),
+      snapshot({ ...ownedLease, desktop: mayHaveGreeted }),
+      snapshot({ greeting: greeted(ME), desktop: mayHaveGreeted }),
+    ]) {
+      expect(decideClaimTransition(state, claim)).toEqual({ outcome: "rejected", code: "custody_held", writes: [] });
+    }
+    // A greeted fan answers that first, whatever the desktop's outbox holds.
+    expect(decideClaimTransition(snapshot({ greeting: greeted(OTHER), desktop: mayHaveGreeted }), claim))
+      .toMatchObject({ outcome: "rejected", code: "greeting_done" });
     // A lease that is already running is renewed and released as before.
     expect(decideClaimTransition(snapshot({ ...ownedLease, greeting: greeted(OTHER) }), { ...claim, action: "renew" }))
       .toMatchObject({ outcome: "applied" });
@@ -191,10 +203,29 @@ describe("dispatch, in the plan's order", () => {
     expect(deriveClientClaimView(confirmed, { userId: ME, instanceId: I1, leaseToken: L1, attemptId: null }).greeting).toEqual({
       state: "confirmed", at: later(-60_000), messageRef: "901", source: "desktop-outbox",
     });
-    const held = snapshot({ ...ownedLease, desktop: { commandId: "c", state: "held", at: NOW, messageRef: null } });
+    const command = { commandId: A2, state: "held" as const, at: NOW, messageRef: null };
+    const held = snapshot({ ...ownedLease, desktop: command });
     expect(decideClaimTransition(held, dispatch())).toMatchObject({ outcome: "rejected", code: "custody_held" });
+    // It reads as a send nobody can vouch for, under the command's id: never as a free fan.
+    const reader = { userId: ME, instanceId: null, leaseToken: null, attemptId: null };
+    const uncertain = { attemptId: A2, state: "uncertain-held", ticket: null, ticketExpiresAt: null };
+    expect(deriveClientClaimView(snapshot({ desktop: command }), reader)).toMatchObject({
+      greeting: { state: "none" }, lease: { state: "none", heldBy: null }, group: null, custody: uncertain,
+      desktopOutreachHeld: true,
+    });
     expect(deriveClientClaimView(held, { userId: ME, instanceId: I1, leaseToken: L1, attemptId: null }))
-      .toMatchObject({ greeting: { state: "none" }, desktopOutreachHeld: true });
+      .toMatchObject({ greeting: { state: "none" }, lease: { state: "owned" }, custody: uncertain, desktopOutreachHeld: true });
+    // A send of the extension comes first: the one the answer is about, and the fan's open one.
+    const open = custody({ attemptId: A1, purpose: "preview-reply" });
+    expect(deriveClientClaimView(snapshot({ desktop: command, openCustody: open }), reader).custody)
+      .toMatchObject({ attemptId: A1, state: "dispatching" });
+    expect(deriveClientClaimView(snapshot({ desktop: command, attempt: open }), { ...reader, attemptId: A1 }).custody)
+      .toMatchObject({ attemptId: A1, state: "dispatching" });
+    // The reader's own finished send holds nothing, so the command that does is what shows.
+    expect(deriveClientClaimView(snapshot({ desktop: command, lastOwnDispatch: custody({ state: "failed" }) }), reader).custody)
+      .toEqual(uncertain);
+    // A confirmed command is a greeting, not a hold.
+    expect(deriveClientClaimView(confirmed, reader)).toMatchObject({ custody: null, desktopOutreachHeld: false });
     // A reply to a fan the desktop greeted is not a greeting.
     expect(decideClaimTransition(confirmed, dispatch({ purpose: "preview-reply" })).outcome).toBe("applied");
   });

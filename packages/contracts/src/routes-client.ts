@@ -1485,8 +1485,9 @@ export const clientRouteSchemas = {
       + "`fanRef` is the OnlyFans fan id, which is the chat id. Three facts per fan: the first greeting is "
       + "confirmed; one person and client install holds the lease on working it out (`claim`, `renew`, "
       + "`release`); one attempt holds the custody of a part being sent (`dispatch`, then `sent` or `failed`). "
-      + "A lease is refused while another person or install holds the fan (409 `claim_busy`) and, to everyone "
-      + "but the greeting's owner, once the fan is greeted (409 `greeting_done`). "
+      + "A lease is refused while another person or install holds the fan (409 `claim_busy`), to everyone "
+      + "but the greeting's owner once the fan is greeted (409 `greeting_done`), and to everyone while a "
+      + "desktop new-follower command may have greeted the fan (409 `custody_held`). "
       + "`dispatch` decides in one transaction, in this order: a repeat of the same `attemptId` with the same "
       + "body only reads (never a second ticket), another body is 409 `attempt_conflict`; the owner's switches; "
       + "the rate (6 per 60 s per person, 429 `preview_send_rate_limited` with `retryAfterMs`); no unresolved "
@@ -1538,9 +1539,13 @@ export const clientRouteSchemas = {
       + "it ended (`sent`, `failed`, `resolved-sent`, `resolved-not-sent`). That is how a client that lost "
       + "track of its send learns of a manual resolve. Nobody else's finished send is shown. A desktop "
       + "new-follower command that OnlyFans confirmed reads as a confirmed greeting with the source "
-      + "`desktop-outbox`. Behind the chat-extension master switch and minimum version, with no flag of its "
-      + "own: it answers while `previewSend` and `newcomers` are off. 409 `client_feature_disabled` with the "
-      + "reason (`not_granted`, `platform_unsupported`, `disabled`, `client_outdated`).",
+      + "`desktop-outbox`. One whose outcome is unknown (queued, in flight, indeterminate, or failed without "
+      + "proof it never left) may have greeted the fan and holds it the same way as a send nobody can vouch "
+      + "for: while no send of the extension is unresolved, `custody` reads `uncertain-held` under the "
+      + "command's id, and the fan never reads as free. Behind the chat-extension master switch and minimum "
+      + "version, with no flag of its own: it answers while `previewSend` and `newcomers` are off. 409 "
+      + "`client_feature_disabled` with the reason (`not_granted`, `platform_unsupported`, `disabled`, "
+      + "`client_outdated`).",
     params: clientPageFanParamsSchema,
     response: {
       200: clientFanClaimResponseSchema,
@@ -1565,7 +1570,8 @@ export const clientRouteSchemas = {
       + "start (`subscribedAtSource`). `status` is the fan's subscription as the hub holds it now, with when "
       + "it was written (`asOf`) and by which collector; `thread` what the hub stores of the chat; `claim` "
       + "the states `clientFanClaimStatus` answers for the same fan and caller, where a greeting the desktop "
-      + "sent counts as confirmed. `coverage` says whether the hub can vouch for the list (`complete`, "
+      + "sent counts as confirmed and a desktop command that may have greeted reads as custody "
+      + "`uncertain-held`. `coverage` says whether the hub can vouch for the list (`complete`, "
       + "`partial`, `unknown`) and why not. `welcomeTemplate` is the page's automatic welcome message as last "
       + "collected, null until the owner switches its collection on. A request without `cursor` starts a "
       + "walk and fixes its window (`window`); a later page repeats the window and never shows a "
