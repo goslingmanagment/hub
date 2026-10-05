@@ -58,6 +58,7 @@ pages that account is granted; the owner is granted every page implicitly.
 | Chat-extension awaiting-reply queue — `/client/pages/{label}/spenders/awaiting-reply` (`apiKey` + page scope) | no (403) | yes, every page | no (403) | yes, assigned | no (403) | **yes, assigned** | — | yes, by the role's reach |
 | Chat-extension greeting lease and send custody — `/client/pages/{label}/fans/{fan}/claim`, POST and GET (`apiKey` + page scope) | no (403) | yes, every page | no (403) | yes, assigned | no (403) | **yes, assigned** | — | yes, by the role's reach |
 | Manual resolve of a held chat-extension send — `/pages/{label}/client-send-custody/{attempt}/resolve` (`session` + page scope) | **yes, every page** | no (403) | **yes, assigned** | no (403) | no (403) | no (403) | — | no (403) |
+| Chat-extension "new subscribers" list — `/client/pages/{label}/audience-new` (`apiKey` + page scope) | no (403) | yes, every page | no (403) | yes, assigned | no (403) | **yes, assigned** | — | yes, by the role's reach |
 
 The client bootstrap lists the caller's **active** pages only (a tombstoned
 page is never listed, assigned or not) and announces every feature off until
@@ -283,6 +284,34 @@ switched off. "Not sent" waits for the attempt's ticket to run out (`409
 conflict` / `ticket_live` before that): inside it the page may still send. Both rows are held by `client-claim-routes.integration`: every
 cell, the agent key, a page that is not granted and one that does not exist,
 in both auth-policy modes.
+
+The "new subscribers" list (chat-extension H-7c) answers who subscribed to a
+page, or came back to it, inside a window of up to 720 hours: the fan's id and
+names, when they subscribed, their subscription as the hub holds it, a
+summary of the chat (times and a count, no text) and where the greeting
+stands. A full device token of the same role already reads the page's
+subscribers (`/pages/{label}/subscribers`); the chat-extension token does not
+reach that route, so this list is how that token learns of a page's
+subscribers, and only of those of the window:
+
+- only on a page granted to the caller (page scope, as on every page route),
+  and only while the owner's `newcomers` switch is on for it. A page that is
+  not the caller's answers as on the shared recaps (403 / 404 with the policy
+  enforced, `409 client_feature_disabled` / `not_granted` in `log` mode);
+- nobody of the team is named. A row's `claim` carries the states the claim
+  status read answers for the same fan and caller and nothing more: a lease
+  reads `you-elsewhere` or `someone-else`, a finished send shows only to the
+  person who dispatched it, and a greeting says that the fan is greeted, never
+  by whom;
+- it only reads the hub's own records. Nothing is asked of the platform and
+  nothing is queued, so no chat is marked read on OnlyFans.
+
+Its cursor adds no right: it is signed and bound to the page and the person,
+so one chatter's cursor opens nothing for another, and it is checked after the
+page and the switch, never in their place. Its row is held by
+`client-audience-new.integration`: every cell, the agent key, a page that is
+not granted and one that does not exist, in both auth-policy modes, and a
+cursor presented by another person and for another page.
 
 The **chat-extension token** (chat-extension H-3) is a device token the
 extension asks for at password sign-in with `client: "chat-extension"`. The
