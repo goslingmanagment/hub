@@ -1,6 +1,7 @@
 import {
   AI_LIVE_TEXT_MAX_CHARS,
   AI_LIVE_TEXT_MAX_ITEMS,
+  CLIENT_AUDIENCE_NEW_MAX_WINDOW_HOURS,
   CLIENT_FEED_MAX_LIMIT,
   type ClientBootstrapLimits,
 } from "@agency_hub_core/contracts";
@@ -24,7 +25,8 @@ export const CLIENT_BOOTSTRAP_LIMITS: Readonly<Omit<ClientBootstrapLimits, "prev
   // announces the owner's `aiTranscriptDeepMaxRows` in its place, the depth a
   // full Recap may read (ai-transcript-depth.ts).
   deepMax: ARCHIVE_AI_TRANSCRIPT_MAX_ROWS,
-  audienceWindowHours: 720,
+  // The widest window of the "new subscribers" list, as its query schema bounds it.
+  audienceWindowHours: CLIENT_AUDIENCE_NEW_MAX_WINDOW_HOURS,
   claimLeaseSec: 120,
   claimRenewSec: 40,
   claimActivityWindowSec: 120,

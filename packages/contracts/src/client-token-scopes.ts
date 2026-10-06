@@ -42,8 +42,7 @@ export const CLIENT_TOKEN_PROFILES = {
       "clientConversationRecaps",
       "clientConversationFeed",
       "clientFanProfileFromGeneration",
-      // Every later client route joins here in its own PR:
-      // clientAudienceNew.
+      // Every later client route joins here in its own PR.
       "clientAiUsageDaily",
       "clientSpenderStats",
       "clientSpenderAwaitingReply",
@@ -51,6 +50,8 @@ export const CLIENT_TOKEN_PROFILES = {
       // (clientSendCustodyResolve) is a cookie-session route and never joins.
       "clientFanClaim",
       "clientFanClaimStatus",
+      // H-7c: the "new subscribers" list.
+      "clientAudienceNew",
     ] as const satisfies readonly KernelOperationKey[],
     // `client_health` (H-11b) is never journaled: the capture lane folds it
     // into hourly rollups that hold no user.

@@ -284,6 +284,10 @@ export function decideClaimTransition(snapshot: ClientFanClaimSnapshot, request:
       // hold the fan (the rest of its group); for everyone else the lease would only lead to a
       // second greeting, by hand if not from the preview.
       if (confirmedGreeting(snapshot) && snapshot.greeting?.ownerUserId !== request.userId) return reject("greeting_done");
+      // A desktop new-follower command whose outcome is unknown may have greeted the fan. Until it
+      // is resolved there is no first greeting to work out either: the dispatch is refused with the
+      // same code, and a lease would only lead to a second greeting by hand.
+      if (snapshot.desktop?.state === "held") return reject("custody_held");
       if (isLive(activeLease, now)) {
         return activeLease.leaseId === request.leaseToken && ownsLease(activeLease, request.instanceId) ? apply() : reject("claim_busy");
       }
@@ -515,7 +519,12 @@ export function deriveClientClaimView(snapshot: ClientFanClaimSnapshot, viewer: 
   // track of it (a restart, a manual resolve) learns the outcome.
   const lastOwn = snapshot.lastOwnDispatch && snapshot.lastOwnDispatch.userId === viewer.userId
     && isPartOf(snapshot.lastOwnDispatch, snapshot) ? snapshot.lastOwnDispatch : null;
-  const shown = attempt ?? snapshot.openCustody ?? lastOwn;
+  // A desktop new-follower command whose outcome is unknown holds the fan like a send from the
+  // preview nobody can vouch for: it may have greeted. It reads as one, under the command's id,
+  // unless the answer is about a send of the extension or one of those is open. Without it the
+  // fan would read as free, and a greeting by hand would be the second one.
+  const desktopHeld = snapshot.desktop?.state === "held" ? snapshot.desktop : null;
+  const shown = attempt ?? snapshot.openCustody ?? (desktopHeld ? null : lastOwn);
   const group = snapshot.group && {
     ...snapshot.group,
     sentParts: partIndexes(snapshot, (row) => partSent(snapshot, row)),
@@ -529,11 +538,10 @@ export function deriveClientClaimView(snapshot: ClientFanClaimSnapshot, viewer: 
       : { state: "none", at: null, messageRef: null, source: null },
     lease,
     group,
-    custody: shown && {
-      attemptId: shown.attemptId, state: custodyViewState(shown, now), ticket: null,
-      ticketExpiresAt: shown.ticketExpiresAt,
-    },
-    desktopOutreachHeld: snapshot.desktop?.state === "held",
+    custody: shown
+      ? { attemptId: shown.attemptId, state: custodyViewState(shown, now), ticket: null, ticketExpiresAt: shown.ticketExpiresAt }
+      : desktopHeld && { attemptId: desktopHeld.commandId, state: "uncertain-held", ticket: null, ticketExpiresAt: null },
+    desktopOutreachHeld: desktopHeld !== null,
     serverNow: now,
   };
 }

@@ -451,16 +451,26 @@ describe("desktop new-follower greetings (critic 1)", () => {
     for (const [state, attempts, verifier, holds] of cases) {
       const label = `${state}/${attempts}/${JSON.stringify(verifier)}`;
       const fanRef = nextFan();
-      await insertCommand(fanRef, state, attempts, verifier);
+      const commandId = await insertCommand(fanRef, state, attempts, verifier);
       const leaseToken = randomUUID();
-      // A fan the desktop greeted has no greeting left to work out: nobody takes a lease on it.
+      // The command may have greeted: its outcome is unknown, and it reads as a send nobody can vouch for.
+      const mayHaveGreeted = holds && state !== "confirmed";
+      const uncertain = { attemptId: commandId, state: "uncertain-held", ticket: null, ticketExpiresAt: null };
+      // A fan the desktop greeted, or may have, has no greeting left to work out: nobody takes a lease on it.
       expect.soft(await claim(fanRef, me, I1, leaseToken), label).toMatchObject(state === "confirmed"
         ? { ok: false, code: "greeting_done", view: { lease: { state: "none" } } }
-        : { ok: true, view: { lease: { state: "owned" } } });
+        : mayHaveGreeted
+          ? { ok: false, code: "custody_held", view: { lease: { state: "none" }, custody: uncertain } }
+          : { ok: true, view: { lease: { state: "owned" } } });
       const view = await readClientFanClaimStatus(harness.db, { pageId, fanRef, userId: me, instanceId: I1, leaseToken });
       expect.soft(view, label).toMatchObject(state === "confirmed"
-        ? { greeting: { state: "confirmed", source: "desktop-outbox" }, desktopOutreachHeld: false, lease: { state: "none" } }
-        : { greeting: { state: "none" }, desktopOutreachHeld: holds, lease: { state: "owned" } });
+        ? { greeting: { state: "confirmed", source: "desktop-outbox" }, desktopOutreachHeld: false, lease: { state: "none" }, custody: null }
+        : mayHaveGreeted
+          ? { greeting: { state: "none" }, desktopOutreachHeld: true, lease: { state: "none" }, custody: uncertain }
+          // Cancelled before any attempt, or refused before it left the hub: the fan is free.
+          : { greeting: { state: "none" }, desktopOutreachHeld: false, lease: { state: "owned" }, custody: null });
+      expect.soft((await harness.pool.query("select 1 from client_fan_leases where fan_ref = $1", [fanRef])).rowCount, label)
+        .toBe(mayHaveGreeted || state === "confirmed" ? 0 : 1);
       const expected = !holds ? { ok: true } : state === "confirmed"
         ? { ok: false, code: "greeting_done", view: { greeting: { state: "confirmed", source: "desktop-outbox", messageRef: "9001" } } }
         : { ok: false, code: "custody_held" };

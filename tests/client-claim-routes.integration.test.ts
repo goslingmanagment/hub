@@ -20,7 +20,6 @@ import {
   createUserAccount,
   setUserPassword,
 } from "../apps/runtime/src/services/auth.ts";
-import type * as ClientCapabilitiesModule from "../apps/runtime/src/services/client-capabilities.ts";
 import { frozenClaimBodySchema, frozenClaimStateSchema, frozenErrorBodySchema } from "./helpers/client-claim-frozen.ts";
 import { issueDeviceTokenForUserId } from "./helpers/device-credentials.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
@@ -42,26 +41,6 @@ import { fixtureUserId } from "./helpers/user-identity.ts";
 // Fixture passwords hash at minimum cost; sign-in still runs the real argon2
 // verify (tests/helpers/cheap-argon2.ts).
 vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
-
-// The `newcomers` feature (claim, renew, a greeting's dispatch) needs two hub
-// capabilities: `preview-send-custody-v1` (these routes) and `audience-new-v1`
-// (the «Новые» list, H-7c, not served yet). As merged, those actions therefore
-// answer `hub_not_ready` whatever the owner switches on; the first test below
-// holds exactly that. Every other test stands in for the hub that serves both.
-// When H-7c adds `audience-new-v1` to SERVED_CLIENT_CAPABILITIES, this mock and
-// the `hub_not_ready` half of the first test go.
-const hub = vi.hoisted(() => ({ servesAudienceNew: true }));
-vi.mock("../apps/runtime/src/services/client-capabilities.ts", async (importOriginal) => {
-  const actual = await importOriginal<typeof ClientCapabilitiesModule>();
-  return {
-    ...actual,
-    get SERVED_CLIENT_CAPABILITIES() {
-      return hub.servesAudienceNew
-        ? [...new Set([...actual.SERVED_CLIENT_CAPABILITIES, "audience-new-v1"])]
-        : actual.SERVED_CLIENT_CAPABILITIES;
-    },
-  };
-});
 
 const PASSWORDS = {
   owner: "owner-secret", lead: "lead-secret", grisha: "grisha-secret", nikita: "nikita-secret",
@@ -364,7 +343,6 @@ describe("chat-extension claim and custody routes", () => {
       context.skip();
       return;
     }
-    hub.servesAudienceNew = true;
     // Every test starts with the switches at rest and outside the previous
     // tests' 60 s preview-send rate window.
     await testDb.pool.query("delete from config_settings where key like 'chatExtension%'");
@@ -384,8 +362,6 @@ describe("chat-extension claim and custody routes", () => {
   });
 
   it("is inert at merge: nothing is claimed or sent until the owner switches it on, and each action waits for its own switch", async () => {
-    // As merged: the hub does not serve `audience-new-v1` yet (H-7c).
-    hub.servesAudienceNew = false;
     const fan = nextFan();
     // Everything that starts something: a lease, a send, and the status read.
     const starting = [
@@ -424,17 +400,14 @@ describe("chat-extension claim and custody routes", () => {
     expectRefused(await act(grishaToken, fan, replyBody()), 409, "client_feature_disabled", "flag_off");
     expectRefused(await act(grishaToken, fan, dispatchBody()), 409, "client_feature_disabled", "flag_off");
 
-    // Both flags on. As merged, «Новые» still waits for H-7c; a reply from the preview does not.
-    await patchConfig([features({ newcomers: true, previewSend: true })]);
-    expectRefused(await act(grishaToken, fan, claimBody(I1)), 409, "client_feature_disabled", "hub_not_ready");
-    expectRefused(await act(grishaToken, fan, dispatchBody()), 409, "client_feature_disabled", "hub_not_ready");
+    // Nothing was claimed or recorded by the refusals above.
     expect(await query("select 1 from client_fan_leases where fan_ref = $1", [fan])).toEqual([]);
     expect(await custodyRows(fan)).toEqual([]);
+
+    // Both flags on: the hub serves everything «Новые» needs (the list is H-7c), so the owner's switches decide.
+    await patchConfig([features({ newcomers: true, previewSend: true })]);
     const replyFan = nextFan();
     expect(ok(await act(grishaToken, replyFan, replyBody())).custody).toMatchObject({ state: "dispatching" });
-
-    // The hub that serves «Новые» too (after H-7c).
-    hub.servesAudienceNew = true;
     expect(ok(await act(grishaToken, fan, claimBody(I1))).lease.state).toBe("owned");
 
     // A greeting needs both flags; a reply only `previewSend`; a lease only `newcomers`.
@@ -930,23 +903,25 @@ describe("chat-extension claim and custody routes", () => {
     await switchOn();
     const insertCommand = async (state: string, attempts: number, verifier: unknown) => {
       const fan = nextFan();
+      const commandId = randomUUID();
       await query(
         `insert into ofapi_commands (id, client_command_id, page_id, chatter_user_id, ofapi_account_id, conversation_id,
            outreach_purpose, kind, payload, payload_hash, state, attempt_count, verifier_result, platform_message_id,
            attempt_finished_at, dedupe_expires_at)
          values ($1, $2, $3, $4, 'acct_claim', $5, 'new-follower', 'send_text_message_v1', '{}'::jsonb, $6, $7, $8, $9, $10, $11,
            now() + interval '1 day')`,
-        [randomUUID(), randomUUID(), pageIds["lora-of"], userIds.nikita, fan, "a".repeat(64), state, attempts,
+        [commandId, randomUUID(), pageIds["lora-of"], userIds.nikita, fan, "a".repeat(64), state, attempts,
           verifier === null ? null : JSON.stringify(verifier),
           state === "confirmed" ? "9001" : null, state === "confirmed" ? new Date("2026-09-21T10:00:00Z") : null],
       );
-      return fan;
+      return { fan, commandId };
     };
-    const greeted = await insertCommand("confirmed", 1, { source: "ofapi_response" });
+    const { fan: greeted } = await insertCommand("confirmed", 1, { source: "ofapi_response" });
     const queued = await insertCommand("queued", 0, null);
     const indeterminate = await insertCommand("indeterminate", 1, { source: "stale_recovery" });
-    const cancelledBeforeCapture = await insertCommand("cancelled", 0, null);
-    const refusedLocally = await insertCommand("failed_terminal", 1, { source: "local_precondition", reason: "binding_replaced" });
+    const failedUnproven = await insertCommand("failed_terminal", 1, { source: "ofapi_response", httpStatus: 400 });
+    const { fan: cancelledBeforeCapture } = await insertCommand("cancelled", 0, null);
+    const { fan: refusedLocally } = await insertCommand("failed_terminal", 1, { source: "local_precondition", reason: "binding_replaced" });
     // The fixtures are the desktop's rows; the trap counts from here.
     await trap!.restore();
     trap = await armNoOutboundTrap(testDb!);
@@ -963,18 +938,32 @@ describe("chat-extension claim and custody routes", () => {
     expect(ok(await status(nikitaToken, greeted)).greeting).toEqual({
       state: "confirmed", at: "2026-09-21T10:00:00.000Z", messageRef: "9001", source: "desktop-outbox",
     });
-    // Queued, in flight or indeterminate: it may have greeted. Held, never a second greeting.
-    for (const fan of [queued, indeterminate]) {
-      expectRefused(await greet(fan), 409, "custody_held");
-      expect(ok(await status(grishaToken, fan)).greeting.state).toBe("none");
-      expect(await custodyRows(fan)).toEqual([]);
+    // Queued, indeterminate, or failed without proof it never left: it may have greeted. The fan is
+    // held for everyone like a send nobody can vouch for, under the command's id: no lease, no
+    // dispatch, and never a row that reads as free (a greeting by hand would be the second one).
+    for (const held of [queued, indeterminate, failedUnproven]) {
+      expectRefused(await act(grishaToken, held.fan, claimBody(I1)), 409, "custody_held");
+      expectRefused(await act(grishaToken, held.fan, dispatchBody({ leaseToken: randomUUID() })), 409, "custody_held");
+      for (const token of [grishaToken, nikitaToken]) {
+        expect(ok(await status(token, held.fan))).toMatchObject({
+          greeting: { state: "none" },
+          lease: { state: "none", heldBy: null },
+          group: null,
+          custody: { attemptId: held.commandId, state: "uncertain-held", ticket: null, ticketExpiresAt: null },
+        });
+      }
+      expect(await query("select 1 from client_fan_leases where fan_ref = $1", [held.fan])).toEqual([]);
+      expect(await custodyRows(held.fan)).toEqual([]);
     }
     // Cancelled before any attempt, or refused before it left the hub: the fan is free.
     for (const fan of [cancelledBeforeCapture, refusedLocally]) {
       expect(ok(await greet(fan)).custody).toMatchObject({ state: "dispatching" });
     }
-    // The desktop's command holds the greeting only: a reply from the preview is another send.
-    expect(ok(await act(grishaToken, queued, replyBody())).custody).toMatchObject({ state: "dispatching" });
+    // The desktop's command holds the greeting only: a reply from the preview is another send,
+    // and while it is open it is what the status shows.
+    const reply = replyBody();
+    expect(ok(await act(grishaToken, queued.fan, reply)).custody).toMatchObject({ attemptId: reply.attemptId, state: "dispatching" });
+    expect(ok(await status(nikitaToken, queued.fan)).custody).toMatchObject({ attemptId: reply.attemptId, state: "dispatching" });
 
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);

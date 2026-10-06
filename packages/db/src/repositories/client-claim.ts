@@ -32,7 +32,7 @@ import {
 // the pure decideClaimTransition (client-claim-transition.ts). H-7b serves the
 // action, the status and the manual resolve (apps/runtime services/client-claim.ts
 // maps the view to its wire shape); H-7c reads the list's claim column from the
-// same tables.
+// same tables through the same view (readClientFanClaimSummaries).
 
 /**
  * The predicate of `ofapi_commands_follower_outreach_uniq` (0195, schema.ts),
@@ -195,6 +195,36 @@ export async function explainClientLastOwnDispatchQuery(
   return result.rows.map((row) => row["QUERY PLAN"]).join("\n");
 }
 
+const LEASE_COLUMNS = sql`lease_id::text, page_id, fan_ref, user_id, instance_id::text, state, expires_at`;
+
+type LeaseDbRow = {
+  lease_id: string; page_id: bigint; fan_ref: string; user_id: bigint; instance_id: string;
+  state: ClientLeaseRow["state"]; expires_at: Date;
+};
+
+const leaseRow = (row: LeaseDbRow): ClientLeaseRow => ({
+  leaseId: row.lease_id, pageId: Number(row.page_id), fanRef: row.fan_ref, userId: Number(row.user_id),
+  instanceId: row.instance_id, state: row.state, expiresAt: new Date(row.expires_at),
+});
+
+const GREETING_COLUMNS = sql`owner_user_id, generation_ref, variant, part_count, confirmed_at, first_message_ref,
+  first_attempt_id::text, source`;
+
+type GreetingDbRow = {
+  owner_user_id: bigint | null; generation_ref: string | null; variant: number | null; part_count: number | null;
+  confirmed_at: Date; first_message_ref: string | null; first_attempt_id: string | null;
+  source: ClientGreetingRow["source"];
+};
+
+const greetingRow = (row: GreetingDbRow): ClientGreetingRow => ({
+  ownerUserId: row.owner_user_id === null ? null : Number(row.owner_user_id),
+  generationRef: row.generation_ref,
+  variant: row.variant === null ? null : Number(row.variant),
+  partCount: row.part_count === null ? null : Number(row.part_count),
+  confirmedAt: new Date(row.confirmed_at), firstMessageRef: row.first_message_ref,
+  firstAttemptId: row.first_attempt_id, source: row.source,
+});
+
 interface SnapshotRefs {
   leaseToken: string | null;
   attemptId: string | null;
@@ -207,33 +237,13 @@ interface SnapshotRefs {
 
 async function loadSnapshot(db: Database, pageId: number, fanRef: string, refs: SnapshotRefs): Promise<ClientFanClaimSnapshot> {
   const now = new Date((await db.execute<{ now: Date }>(sql`select clock_timestamp() as now`)).rows[0]!.now);
-  const leases = (await db.execute<{
-    lease_id: string; page_id: bigint; fan_ref: string; user_id: bigint; instance_id: string;
-    state: ClientLeaseRow["state"]; expires_at: Date;
-  }>(sql`
-    select lease_id::text, page_id, fan_ref, user_id, instance_id::text, state, expires_at
-    from client_fan_leases
+  const leases = (await db.execute<LeaseDbRow>(sql`
+    select ${LEASE_COLUMNS} from client_fan_leases
     where (page_id = ${pageId} and fan_ref = ${fanRef} and state = 'active') or lease_id = ${refs.leaseToken}::uuid`))
-    .rows.map((row): ClientLeaseRow => ({
-      leaseId: row.lease_id, pageId: Number(row.page_id), fanRef: row.fan_ref, userId: Number(row.user_id),
-      instanceId: row.instance_id, state: row.state, expiresAt: new Date(row.expires_at),
-    }));
-  const greetingRow = (await db.execute<{
-    owner_user_id: bigint | null; generation_ref: string | null; variant: number | null; part_count: number | null;
-    confirmed_at: Date; first_message_ref: string | null; first_attempt_id: string | null;
-    source: ClientGreetingRow["source"];
-  }>(sql`
-    select owner_user_id, generation_ref, variant, part_count, confirmed_at, first_message_ref,
-      first_attempt_id::text, source
-    from client_greetings where page_id = ${pageId} and fan_ref = ${fanRef}`)).rows[0];
-  const greeting: ClientGreetingRow | null = greetingRow ? {
-    ownerUserId: greetingRow.owner_user_id === null ? null : Number(greetingRow.owner_user_id),
-    generationRef: greetingRow.generation_ref,
-    variant: greetingRow.variant === null ? null : Number(greetingRow.variant),
-    partCount: greetingRow.part_count === null ? null : Number(greetingRow.part_count),
-    confirmedAt: new Date(greetingRow.confirmed_at), firstMessageRef: greetingRow.first_message_ref,
-    firstAttemptId: greetingRow.first_attempt_id, source: greetingRow.source,
-  } : null;
+    .rows.map(leaseRow);
+  const stored = (await db.execute<GreetingDbRow>(sql`
+    select ${GREETING_COLUMNS} from client_greetings where page_id = ${pageId} and fan_ref = ${fanRef}`)).rows[0];
+  const greeting: ClientGreetingRow | null = stored ? greetingRow(stored) : null;
   const desktop = (await readDesktopFollowerOutreach(db, pageId, [fanRef])).get(fanRef) ?? null;
   const custody = (await db.execute<CustodyDbRow>(sql`
     select ${CUSTODY_COLUMNS} from client_send_custody
@@ -493,6 +503,85 @@ export async function readClientFanClaimStatus(db: Database, input: {
   return deriveClientClaimView(snapshot, {
     userId: input.userId, instanceId: input.instanceId, leaseToken: input.leaseToken, attemptId: null,
   });
+}
+
+/** The claim column of one row of the "new subscribers" list (H-7c): the view's states, no token and no id. */
+export interface ClientFanClaimSummary {
+  greeting: ClientFanClaimView["greeting"]["state"];
+  lease: ClientFanClaimView["lease"]["state"];
+  heldBy: ClientFanClaimView["lease"]["heldBy"];
+  custody: ClientCustodyViewState | null;
+}
+
+/**
+ * The claim state of many fans of one page at once, for the "new subscribers"
+ * list (H-7c): per fan, exactly what readClientFanClaimStatus answers a reader
+ * that names no client install and no lease token, reduced to its states. The
+ * same rows through the same view (deriveClientClaimView), so the list and the
+ * status read cannot disagree: a desktop new-follower command that OnlyFans
+ * confirmed reads as a confirmed greeting here too (critic 1), and the
+ * reader's own live lease as `held` by `you-elsewhere`.
+ *
+ * No lock and no write. The caller brings the snapshot: it runs this inside
+ * the read-only transaction the rest of its read uses. Every fan asked for has
+ * an entry.
+ */
+export async function readClientFanClaimSummaries(db: Database, input: {
+  pageId: number;
+  fanRefs: readonly string[];
+  userId: number;
+}): Promise<Map<string, ClientFanClaimSummary>> {
+  const fanRefs = [...new Set(input.fanRefs)];
+  for (const fanRef of fanRefs) assertShape(OF_ID.test(fanRef), "fanRef");
+  if (fanRefs.length === 0) return new Map();
+  const { pageId, userId } = input;
+  const ofFans = sql`page_id = ${pageId} and fan_ref = any(${sql.param(fanRefs)}::text[])`;
+  const now = new Date((await db.execute<{ now: Date }>(sql`select clock_timestamp() as now`)).rows[0]!.now);
+  const byFan = <Row extends { fanRef: string }>(rows: Row[]) => new Map(rows.map((row) => [row.fanRef, row]));
+
+  const leases = byFan((await db.execute<LeaseDbRow>(sql`
+    select ${LEASE_COLUMNS} from client_fan_leases where ${ofFans} and state = 'active'`)).rows.map(leaseRow));
+  const greetings = new Map((await db.execute<GreetingDbRow & { fan_ref: string }>(sql`
+    select fan_ref, ${GREETING_COLUMNS} from client_greetings where ${ofFans}`))
+    .rows.map((row) => [row.fan_ref, greetingRow(row)]));
+  const desktop = await readDesktopFollowerOutreach(db, pageId, fanRefs);
+  const open = byFan((await db.execute<CustodyDbRow>(sql`
+    select ${CUSTODY_COLUMNS} from client_send_custody where ${ofFans} and state = 'dispatching'`)).rows.map(custodyRow));
+  // The reader's own last send to each fan dispatched from the preview: what the status read shows
+  // while no send to the fan is open. Per fan, the statement of lastOwnDispatchQuery: each fan's
+  // sends newest first off client_send_custody_fan (0246), never every send of the reader.
+  const lastOwn = byFan((await db.execute<CustodyDbRow>(sql`
+    select own.* from unnest(${sql.param(fanRefs)}::text[]) as asked(fan_ref)
+    cross join lateral (
+      select ${CUSTODY_COLUMNS} from client_send_custody
+      where page_id = ${pageId} and fan_ref = asked.fan_ref
+        and user_id = ${userId} and origin = 'preview-send'
+      order by created_at desc limit 1
+    ) own`)).rows.map(custodyRow));
+
+  return new Map(fanRefs.map((fanRef) => {
+    const openCustody = open.get(fanRef) ?? null;
+    const view = deriveClientClaimView({
+      pageId, fanRef, now,
+      activeLease: leases.get(fanRef) ?? null,
+      requestedLease: null,
+      greeting: greetings.get(fanRef) ?? null,
+      desktop: desktop.get(fanRef) ?? null,
+      openCustody,
+      attempt: null,
+      messageOwner: null,
+      group: null,
+      groupParts: [],
+      recentPreviewSends: 0,
+      lastOwnDispatch: openCustody === null ? lastOwn.get(fanRef) ?? null : null,
+    }, { userId, instanceId: null, leaseToken: null, attemptId: null });
+    return [fanRef, {
+      greeting: view.greeting.state,
+      lease: view.lease.state,
+      heldBy: view.lease.heldBy,
+      custody: view.custody?.state ?? null,
+    }];
+  }));
 }
 
 /** One send attempt as the cabinet reads it (the manual resolve, H-7b; the held list, H-7e). */

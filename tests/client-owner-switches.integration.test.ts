@@ -24,6 +24,7 @@ import {
   createUserAccount,
   setUserPassword,
 } from "../apps/runtime/src/services/auth.ts";
+import type * as ClientCapabilitiesModule from "../apps/runtime/src/services/client-capabilities.ts";
 import { requireClientFeature } from "../apps/runtime/src/services/client-switches.ts";
 import { issueDeviceTokenForUserId } from "./helpers/device-credentials.ts";
 import {
@@ -38,6 +39,24 @@ import { fixtureUserId } from "./helpers/user-identity.ts";
 // Fixture passwords hash at minimum cost; sign-in still runs the real argon2
 // verify (tests/helpers/cheap-argon2.ts).
 vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
+
+// From H-7c on this hub serves the capabilities of every feature, so no switch
+// of the real hub reads `hub_not_ready` any more. The reason is still what the
+// next feature answers until its route ships, so one probe below stands in for
+// a hub that has no `audience-new-v1` yet. Everything else in the file reads
+// the real list.
+const hub = vi.hoisted(() => ({ servesAudienceNew: true }));
+vi.mock("../apps/runtime/src/services/client-capabilities.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof ClientCapabilitiesModule>();
+  return {
+    ...actual,
+    get SERVED_CLIENT_CAPABILITIES() {
+      return hub.servesAudienceNew
+        ? actual.SERVED_CLIENT_CAPABILITIES
+        : actual.SERVED_CLIENT_CAPABILITIES.filter((capability) => capability !== "audience-new-v1");
+    },
+  };
+});
 
 const PASSWORDS = { owner: "owner-secret", chatter: "chatter-secret" } as const;
 const AUDIT = { source: "cli" } as const;
@@ -379,9 +398,15 @@ describe("owner switches of the chat extension", () => {
     await expectRefused(await probe(chatterToken, "lora-fansly", "coach", current), "platform_unsupported");
     await expectRefused(await probe(chatterToken, "lora-of", "review", current), "flag_off");
     await expectRefused(await probe(chatterToken, "nova-of", "coach", current), "binding_missing");
-    // Switched on, but this hub does not serve what the feature needs yet
-    // (`audience-new-v1`, `preview-send-custody-v1`).
-    await expectRefused(await probe(chatterToken, "lora-of", "newcomers", current), "hub_not_ready");
+    // Switched on, but the hub does not serve what the feature needs: a hub
+    // without `audience-new-v1` (see the mock above). The real one serves it.
+    hub.servesAudienceNew = false;
+    try {
+      await expectRefused(await probe(chatterToken, "lora-of", "newcomers", current), "hub_not_ready");
+    } finally {
+      hub.servesAudienceNew = true;
+    }
+    expect((await probe(chatterToken, "lora-of", "newcomers", current)).statusCode).toBe(200);
     expect((await probe(chatterToken, "lora-of", "recap", current)).statusCode).toBe(200);
     expect((await probe(chatterToken, "lora-of", "stats", current)).statusCode).toBe(200);
     // The feature check answers before the version check.
