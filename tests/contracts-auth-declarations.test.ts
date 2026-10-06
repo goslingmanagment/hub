@@ -69,6 +69,7 @@ describe("route auth declarations", () => {
       "clientAiUsageDaily",
       "clientConversationRecaps",
       "clientFanProfileFromGeneration",
+      "clientSpenderAwaitingReply",
       "clientSpenderStats",
       // WP-S1 (endpoints-cover serving). All eight are `owner-session` +
       // `scope: "page"`, which is also what gates the two `/money/*` routes:

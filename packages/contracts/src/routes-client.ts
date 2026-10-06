@@ -48,6 +48,18 @@ const pageLabelSchema = z.string().min(1).max(120);
 export const clientPageParamsSchema = z.object({ pageLabel: pageLabelSchema });
 export const clientPageFanParamsSchema = z.object({ pageLabel: pageLabelSchema, fanRef: clientFanRefSchema });
 export const clientCursorSchema = z.string().min(1).max(2048);
+/**
+ * The `reason` beside 400 `bad_request` on a client read that takes a cursor:
+ * the cursor is not one this hub issued for this request (forged or cut,
+ * issued for something else than the read binds its cursors to, or past the
+ * read's lifetime). The answer never says which. Not retried as is: the client
+ * reads the first page again. What each read binds a cursor to, and for how
+ * long:
+ * - the awaiting-reply queue (`clientSpenderAwaitingReply`): the page and the
+ *   person; a cursor is good for an hour after the page that carried it.
+ */
+export const CLIENT_CURSOR_REFUSAL_REASONS = ["cursor_invalid"] as const;
+export type ClientCursorRefusalReason = (typeof CLIENT_CURSOR_REFUSAL_REASONS)[number];
 
 const count = z.number().int().nonnegative();
 const positive = z.number().int().positive();
@@ -523,6 +535,90 @@ export const clientSpenderStatsResponseSchema = z.object({
   queueSummary: z.object({ total: count, unknown: count }),
 });
 
+// ── awaiting reply (H-8c) ────────────────────────────────────────────────────
+//
+// The queue behind the Spenders panel's "awaiting reply": the page's payers
+// whose fan wrote after the page's last message, counted and ordered by the hub
+// over the whole page, not over the rows a board happens to list. The same
+// payers and the same rule as `queueSummary` of the statistics above.
+//
+// WHO WAITS. A payer (lifetime gross at or above the lowest spender bucket, as
+// the statistics count payers) whose fan's last message in the chat is later
+// than the page's last message there, or to whom the page never wrote. A fan
+// with several chats is judged on the visible one with the newest message.
+//
+// ORDER. Lifetime gross, largest first; among equals the fan waiting longest
+// first; then a fixed tie-breaker. The order is total, so a walk has no ties.
+//
+// A WALK IS NOT A SNAPSHOT. Every page is read at its own instant (`asOf`), with
+// the queue's `total` and `unknown` of that instant: a queue of people waiting
+// right now is not frozen for a reader. The cursor holds a position in the
+// order, so a fan whose place does not change is served exactly once, and a fan
+// answered meanwhile is simply not served. A fan whose place changed during the
+// walk (wrote again, paid more) can be met a second time or not at all until
+// the next walk; a client keeps the first row of a fan.
+//
+// `nextCursor` is opaque (its state is sealed: its holder reads nothing from
+// it) and signed, valid only for the same page and person, and for an hour
+// after the page that carried it. Every page carries a newly issued one, so the
+// hour bounds the gap between two pages of a walk, not the walk. Any other use
+// is 400 `bad_request` with the reason `cursor_invalid`, and the client reads
+// the first page again.
+
+/** The most rows one page carries. */
+export const CLIENT_SPENDER_AWAITING_REPLY_MAX_LIMIT = 100;
+export const CLIENT_SPENDER_AWAITING_REPLY_DEFAULT_LIMIT = 50;
+/**
+ * Known values of `readState`. On the wire an open token; a client reads one
+ * it does not know as `unknown`.
+ * - `unread`: the chat has unread fan messages (`unreadCount` says how many);
+ * - `read`: nothing is unread and the chat's newest message is the fan's;
+ * - `unknown`: the fan wrote after the page's last message, but the hub cannot
+ *   tell whether it was read. Its own category, never folded into the other
+ *   two; `unreadCount` is null.
+ */
+export const CLIENT_SPENDER_AWAITING_REPLY_READ_STATES = ["unread", "read", "unknown"] as const;
+
+export type ClientSpenderAwaitingReplyReadState = (typeof CLIENT_SPENDER_AWAITING_REPLY_READ_STATES)[number];
+
+export const clientSpenderAwaitingReplyQuerySchema = z.object({
+  /** `nextCursor` of the page before; absent starts a new walk at the head of the queue. */
+  cursor: clientCursorSchema.optional(),
+  limit: z.coerce.number().int()
+    .min(1).max(CLIENT_SPENDER_AWAITING_REPLY_MAX_LIMIT).default(CLIENT_SPENDER_AWAITING_REPLY_DEFAULT_LIMIT),
+}).strict();
+
+export const clientSpenderAwaitingReplyItemSchema = z.object({
+  /** The OnlyFans fan id, which is the chat id. */
+  fanRef: clientFanRefSchema,
+  username: z.string().nullable(),
+  displayName: z.string().nullable(),
+  /** What the fan paid on the page in all. */
+  lifetimeGrossMills: mills,
+  lastFanMessageAt: isoTimestamp,
+  /** Null when the page never wrote to the fan. */
+  lastModelMessageAt: isoTimestamp.nullable(),
+  /** Null when `readState` is `unknown`: an unknown count is never 0. */
+  unreadCount: count.nullable(),
+  /** Open token; known values: CLIENT_SPENDER_AWAITING_REPLY_READ_STATES. */
+  readState: clientOpenToken,
+});
+
+export const clientSpenderAwaitingReplyResponseSchema = z.object({
+  /** In the queue's order. */
+  items: z.array(clientSpenderAwaitingReplyItemSchema),
+  /** Payers waiting for a reply on the page at `asOf`. */
+  total: count,
+  /** Rows the walk has served so far, this page included. The queue moves between pages, so the last page's `loaded` need not equal its `total`. */
+  loaded: count,
+  /** Of `total`, the payers whose read state is unknown. */
+  unknown: count,
+  /** Continues the walk; null at its end. */
+  nextCursor: clientCursorSchema.nullable(),
+  /** The instant this page and its counts were read at. */
+  asOf: isoTimestamp,
+});
+
 // ── the owner's client-health view (H-11c) ───────────────────────────────────
 //
 // What the owner reads of the `client_health` rollups (H-11b): figures by client
@@ -757,6 +853,35 @@ export const clientRouteSchemas = {
       409: errorResponseSchema,
     },
   },
+  clientSpenderAwaitingReply: {
+    auth: { kind: "apiKey", scope: "page" },
+    tags: ["client"],
+    summary: "The payers of one page whose fan waits for a reply, biggest spender first, a page at a time",
+    description: "Read-only and database-only: no platform request, no queued work, so no chat is marked read on "
+      + "the platform. A payer waits when the last fan message of the chat is later than the page's last "
+      + "message there, or the page never wrote; the payers and the rule are those of `queueSummary` in the "
+      + "Spenders statistics. Rows come by lifetime gross, largest first, then the fan waiting longest, "
+      + "`limit` (1 to 100, 50 by default) a page. `readState` is `unread`, `read` or `unknown`: a fan whose "
+      + "read state the hub cannot tell is its own category, with a null `unreadCount`. `total` and "
+      + "`unknown` count the whole queue at `asOf`; `loaded` counts the rows the walk has served so far. "
+      + "Every page is read at its own instant: a fan whose place in the order does not change is served "
+      + "exactly once, a fan answered meanwhile is not served, and a fan whose place changed can be met "
+      + "twice. `nextCursor` is opaque, signed, and valid only for the same page and person, for an hour "
+      + "after the page that carried it (every page carries a new one, so the hour bounds the gap between "
+      + "two pages, not the walk): anything else is 400 `bad_request` with the reason `cursor_invalid`, and "
+      + "the client reads the first page again. Behind the chat-extension `stats` switch: 409 "
+      + "`client_feature_disabled` with the reason.",
+    params: clientPageParamsSchema,
+    querystring: clientSpenderAwaitingReplyQuerySchema,
+    response: {
+      200: clientSpenderAwaitingReplyResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
   adminClientHealth: {
     auth: { kind: "owner-session" },
     tags: ["admin"],
@@ -796,6 +921,9 @@ export type ClientAiUsageResponse = z.infer<typeof clientAiUsageResponseSchema>;
 export type ClientSpenderStatsQuery = z.infer<typeof clientSpenderStatsQuerySchema>;
 export type ClientSpenderStatsMoneyWindow = z.infer<typeof clientSpenderStatsMoneyWindowSchema>;
 export type ClientSpenderStatsResponse = z.infer<typeof clientSpenderStatsResponseSchema>;
+export type ClientSpenderAwaitingReplyQuery = z.infer<typeof clientSpenderAwaitingReplyQuerySchema>;
+export type ClientSpenderAwaitingReplyItem = z.infer<typeof clientSpenderAwaitingReplyItemSchema>;
+export type ClientSpenderAwaitingReplyResponse = z.infer<typeof clientSpenderAwaitingReplyResponseSchema>;
 export type AdminClientHealthQuery = z.infer<typeof adminClientHealthQuerySchema>;
 export type AdminClientHealthResponse = z.infer<typeof adminClientHealthResponseSchema>;
 

@@ -228,7 +228,8 @@ describe("GET /api/v1/client/bootstrap", () => {
     // fresh text of the open chat (H-4c), the shared recaps read (H-13), the
     // dossier save from a stored generation (H-5), Split for Ping, Hi and
     // Coach drafts (H-10; the flag itself is off at rest), the caller's own
-    // AI spend (H-15) and the Spenders statistics (H-8b).
+    // AI spend (H-15), the Spenders statistics (H-8b) and the awaiting-reply
+    // queue (H-8c).
     expect(body.capabilities).toEqual([
       "context-v1",
       "live-text-v1",
@@ -237,6 +238,7 @@ describe("GET /api/v1/client/bootstrap", () => {
       "split-all-v1",
       "ai-usage-v1",
       "spenders-stats-v1",
+      "awaiting-reply-v1",
     ]);
     expect(body.capabilities).toEqual([...SERVED_CLIENT_CAPABILITIES]);
 

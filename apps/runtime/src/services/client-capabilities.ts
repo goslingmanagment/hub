@@ -25,10 +25,12 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   "split-all-v1",
   // H-15: GET /api/v1/client/pages/:pageLabel/ai-usage.
   "ai-usage-v1",
-  // H-8b: GET /api/v1/client/pages/:pageLabel/spenders/stats. The `stats`
-  // feature also needs `awaiting-reply-v1` (H-8c), so it stays `hub_not_ready`
-  // until that lands.
+  // H-8b: GET /api/v1/client/pages/:pageLabel/spenders/stats.
   "spenders-stats-v1",
+  // H-8c: GET /api/v1/client/pages/:pageLabel/spenders/awaiting-reply. With it
+  // the hub serves all of the `stats` feature; the owner's switches decide from
+  // here on.
+  "awaiting-reply-v1",
 ];
 
 /**
