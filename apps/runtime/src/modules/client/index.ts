@@ -4,6 +4,7 @@ import { pageScopeFor } from "../../api/request-auth.ts";
 import { requireApiKeyUser } from "../../services/auth.ts";
 import { buildClientBootstrap } from "../../services/client-bootstrap.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
+import { registerClientFeedRoutes } from "./feed.ts";
 import { registerClientProfileFromGenerationRoutes } from "./profile-from-generation.ts";
 import { registerClientRecapRoutes } from "./recaps.ts";
 import { registerClientAiUsageRoutes } from "./ai-usage.ts";
@@ -37,6 +38,7 @@ export function registerClientRoutes(server: ApiServer, ctx: ApiModuleContext) {
   });
 
   registerClientRecapRoutes(server, ctx);
+  registerClientFeedRoutes(server, ctx);
   registerClientProfileFromGenerationRoutes(server, ctx);
   registerClientAiUsageRoutes(server, ctx);
   registerClientSpenderStatsRoutes(server, ctx);

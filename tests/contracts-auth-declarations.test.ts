@@ -67,6 +67,7 @@ describe("route auth declarations", () => {
       // The chat extension's page routes (`/api/v1/client/pages/:pageLabel/…`):
       // `apiKey` + page scope, the page always in the path.
       "clientAiUsageDaily",
+      "clientConversationFeed",
       "clientConversationRecaps",
       "clientFanProfileFromGeneration",
       "clientSpenderAwaitingReply",

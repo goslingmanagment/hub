@@ -596,6 +596,59 @@ answer carries none of it.
   /api/v1/pages/:pageLabel/fans/:platformUserId/profile`, the text sent by the client) stays for
   the clients that use it; the chat-extension token does not reach it.
 
+### Archive feed (chat-extension)
+
+`GET /api/v1/client/pages/:pageLabel/conversations/:fanRef/feed[?cursor=…][&limit=1..100][&summaryWindow=5..1500]`
+(`clientConversationFeed`, bootstrap capability `archive-feed-v1`) is not an AI route: it generates
+nothing and spends nothing. It is described here because it shows a chatter the conversation **as a
+generation would read it**, and three of its answers are a generation's own.
+
+- Reader: the generation's switch decides, `aiTranscriptFreshUnionMode`. `serve` reads the archive
+  ∪ webhook-store union; `off`, `shadow` and a value that cannot be read serve the archive.
+  `source` is `archive` or `union`, the same words as the `context_v1` frame's `source`.
+- Rows: newest first by (event time, message id), `limit` a page (50 by default, 100 at most; the
+  bootstrap announces the cap as `limits.feedMax`). A row is `{ messageId, at, sender, text,
+  automatic, deleted, tipMills, priceMills, attachmentLabels }`. A message deleted on the platform
+  is a row with `deleted: true` and an empty `text`, whatever the stores still hold of it (a
+  generation drops the message altogether); its time, sender, money and captions stay. A
+  content-pending stub is never a row.
+  `automatic` is always `null`: the stores hold no automation signal. `attachmentLabels` are the
+  transcript's own media captions (`[Photo]`, `[Media Bundle: 2 Photos, 1 Video]`), never a media
+  id; the price and the tip are fields, in mills, not part of a caption.
+- `head`: the newest message of the transcript the summary read, `{ messageRef, at, sender }`. It
+  is the `servedHead` a `context_v1` frame reports for a generation served by the same reader from
+  the same stored state: live, never a deleted message, `null` when the reader holds no live
+  message. Its `sender` is the frame's `isFromFan` in the feed's words: `model` for the page's own
+  message, `fan` for every other one (a system line too; the row in `items` keeps its stored
+  role). A generation that was sent fresh text (`liveTextContext`) may read past it; the feed
+  never holds fresh text.
+- `summary` (first page only): `{ pingSegment, fanSilenceDays, window: { requested, served },
+  coverage, asOf }`, counted by `computePingSummary` over `loadTranscriptContext`, the one function
+  and loader a Ping generation uses, over the newest `summaryWindow` messages (100 by default, the
+  Ping window; 1500 at most, the readers' cap; the 3000 depth is the full Recap's alone). A client
+  never recounts the segment from the rows of a page.
+- `coverage`: the same answer as the frame's `coverage` (`services/client-coverage.ts`).
+  `newestKnownAt`: the head's time, or the chat list's last message time
+  (`page_dm_threads.last_message_at`) when that is later than every row the reader holds, a
+  deleted row included; later than `head.at` means the stores have not caught up with the chat.
+  An unsent newest message does not read as a lag: the chat list keeps its time, the reader holds
+  its row, and `newestKnownAt` is the head's time.
+- A walk is frozen at its first page: `snapshotRevision`, `asOf`, `coverage`, `head` and
+  `newestKnownAt` are read once and repeated on every later page, and a message that arrives
+  meanwhile is not in the walk (`packages/db/src/repositories/conversation-feed.ts` says what a
+  walk guarantees). `nextOlderCursor` is opaque and signed (`services/signed-cursor.ts`, domain
+  `agency-hub:client-feed-cursor:v1`), bound to the page, the fan, the person, the reader and the
+  archive generation. Its state is sealed (AES-256-GCM under a subkey of the encryption ring):
+  the walk's bounds are ids of hub-wide sequences, and a holder reads from the token neither them
+  nor where the walk stands; `snapshotRevision` is a keyed digest for the same reason. A walk ends
+  a day after its **first** page: every page issues a new cursor, and taking a page does not renew
+  the walk. Anything else is `400 bad_request` with the reason `cursor_invalid`
+  (`docs/error-handling.md` §3): the client reads the first page again.
+- It reads the database only, in one read-only snapshot per request: no platform request, no
+  refresh, no queued work, no change to a chat's unread state.
+- Behind the owner's `preview` switch on the page (`requireClientFeature`): a refusal is `409
+  client_feature_disabled` with its `reason`.
+
 ### AI media describer (system lane)
 
 The hub's background image describer (`docs/runbooks/ai-media-describe.md`) is

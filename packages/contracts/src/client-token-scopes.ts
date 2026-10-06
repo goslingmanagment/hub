@@ -40,9 +40,9 @@ export const CLIENT_TOKEN_PROFILES = {
       "pageSpenderAutoLists",
       "ingestObservations",
       "clientConversationRecaps",
+      "clientConversationFeed",
       "clientFanProfileFromGeneration",
       // Every later client route joins here in its own PR:
-      // clientConversationFeed,
       // clientFanClaim, clientFanClaimStatus, clientAudienceNew.
       "clientAiUsageDaily",
       "clientSpenderStats",
