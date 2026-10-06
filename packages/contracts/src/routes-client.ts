@@ -161,7 +161,7 @@ export const clientBootstrapResponseSchema = z.object({
   }),
   /** The caller's active pages: every page for the owner, the assigned ones otherwise. */
   pages: z.array(clientBootstrapPageSchema),
-  /** Explicit owner binding of a host account ("onlymonster:36408") to a page id. */
+  /** Explicit owner binding of a host account ("onlymonster:10001") to a page id. */
   bindingsByHost: z.record(z.string().min(1).max(128), intId),
   /** Emergency switches, flag name → on. */
   flags: z.record(clientOpenToken, z.boolean()),
@@ -779,7 +779,7 @@ export const clientHealthReportV1Schema = z.object({
     kind: healthName,
     /**
      * The host's build fingerprint (the hashed name of its entry module, such as
-     * `index-DEVowLko`); null when it could not be read. The client's bounded
+     * `index-AbCdEfGh`); null when it could not be read. The client's bounded
      * string, not a code.
      */
     build: z.string().max(80).nullable(),
