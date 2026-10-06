@@ -58,6 +58,7 @@ pages that account is granted; the owner is granted every page implicitly.
 | Chat-extension awaiting-reply queue — `/client/pages/{label}/spenders/awaiting-reply` (`apiKey` + page scope) | no (403) | yes, every page | no (403) | yes, assigned | no (403) | **yes, assigned** | — | yes, by the role's reach |
 | Chat-extension greeting lease and send custody — `/client/pages/{label}/fans/{fan}/claim`, POST and GET (`apiKey` + page scope) | no (403) | yes, every page | no (403) | yes, assigned | no (403) | **yes, assigned** | — | yes, by the role's reach |
 | Manual resolve of a held chat-extension send — `/pages/{label}/client-send-custody/{attempt}/resolve` (`session` + page scope) | **yes, every page** | no (403) | **yes, assigned** | no (403) | no (403) | no (403) | — | no (403) |
+| List of held chat-extension sends and of the ones resolved by hand — `/client-send-custody` (`session`; the page is a filter in the query) | **yes, every page** | no (403) | **yes, assigned** | no (403) | no (403) | no (403) | — | no (403) |
 | Chat-extension "new subscribers" list — `/client/pages/{label}/audience-new` (`apiKey` + page scope) | no (403) | yes, every page | no (403) | yes, assigned | no (403) | **yes, assigned** | — | yes, by the role's reach |
 
 The client bootstrap lists the caller's **active** pages only (a tombstoned
@@ -288,6 +289,40 @@ switched off. "Not sent" waits for the attempt's ticket to run out (`409
 conflict` / `ticket_live` before that): inside it the page may still send. Both rows are held by `client-claim-routes.integration`: every
 cell, the agent key, a page that is not granted and one that does not exist,
 in both auth-policy modes.
+
+The **list of held sends** (chat-extension H-7e) is what those two people
+read before they resolve: every send from the preview whose client never
+reported and whose ticket ran out, and, on request, the sends already
+resolved by hand. It is the resolve's right and no wider:
+
+- a cabinet route (cookie session) of the owner and team leads. A chatter,
+  any device token (the owner's and a team lead's included), the
+  chat-extension token and an agent key are refused with 403;
+- the owner reads every active page, a team lead the pages assigned to them,
+  and a team lead with no page reads an empty list. The page is an optional
+  filter in the query, not a path parameter, so the route declares no page
+  scope and the handler checks the page itself: 404 for a page that does not
+  exist, 403 for one the viewer does not reach, in both auth-policy modes;
+- it names the person who dispatched each send and the client install it came
+  from, and for a resolved one the resolver and their note. That is more than
+  the claim routes tell a chatter (a lease holder is never named there): the
+  resolver has to know whom to ask what was sent;
+- it serves no text of a message: the custody tables hold none, and the hub
+  does not know which text went out. It does serve each send's
+  `generationRef`, the id of the AI generation the text came from. That
+  generation's record (its prompt and its output) stays restricted: the
+  owner reads it on `/ai/restricted/generations/{ref}`, and a team lead
+  learns the id here, not the text. It says whether the fan's greeting is on
+  record, in the words of the claim status read, and not the greeting's
+  message id;
+- it only reads the hub's own records: nothing is asked of OnlyFans, nothing
+  is queued and nothing is written, the audit trail included. No
+  chat-extension switch gates it.
+
+Its row is held by `client-held-sends.integration`: every cell, the agent
+key, a page that is not the viewer's and one that does not exist, in both
+auth-policy modes. How to judge a held send is
+[the held-sends runbook](runbooks/client-held-sends.md).
 
 The "new subscribers" list (chat-extension H-7c) answers who subscribed to a
 page, or came back to it, inside a window of up to 720 hours: the fan's id and

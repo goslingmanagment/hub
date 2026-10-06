@@ -150,6 +150,8 @@ function buildBreadcrumbs(
 
   if (parts[0] === "ofapi-credits") return [{ label: "Overview", href: "/" }, { label: "OFAPI Credits" }];
 
+  if (parts[0] === "held-sends") return [{ label: "Overview", href: "/" }, { label: "Зависшие отправки" }];
+
   if (parts[0] === "notifications") return [{ label: "Overview", href: "/" }, { label: "Notifications" }];
 
   if (parts[0] === "agent-hydration") {

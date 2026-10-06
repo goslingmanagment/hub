@@ -1,5 +1,5 @@
 import { NavLink, useLocation, Link } from "react-router";
-import { Activity, BarChart3, Bell, Coins, LineChart, Settings, Users, Heart, Trophy, Terminal, ListTodo, Database, AlertTriangle, Droplets, Code2, ChevronDown, UserX } from "lucide-react";
+import { Activity, BarChart3, Bell, Coins, LineChart, MailQuestion, Settings, Users, Heart, Trophy, Terminal, ListTodo, Database, AlertTriangle, Droplets, Code2, ChevronDown, UserX } from "lucide-react";
 import { useState } from "react";
 import { useAdminConnections } from "@/api/queries";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
@@ -82,6 +82,20 @@ export function Sidebar({ user }: SidebarProps) {
         {user.role === "owner" && <NavLink to="/ofapi-actions" className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-sm text-text-secondary hover:bg-hover"><Database size={16} /> Управление OnlyFans</NavLink>}
         {(user.role === "owner" || user.role === "team_lead") && <NavLink to="/ofapi-exports" className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-sm text-text-secondary hover:bg-hover"><Database size={16} /> OFAPI exports</NavLink>}
         {(user.role === "owner" || user.role === "team_lead") && <NavLink to="/ofapi-media" className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-sm text-text-secondary hover:bg-hover"><Database size={16} /> OnlyFans media</NavLink>}
+        {/* chat-extension H-7e: sends from the preview whose outcome the hub
+            never learned, for the owner and team leads to resolve by hand. */}
+        {(user.role === "owner" || user.role === "team_lead") && (
+          <NavLink
+            to="/held-sends"
+            className={({ isActive }) =>
+              `flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-sm transition-colors ${
+                isActive ? "bg-hover text-text-primary font-semibold" : "text-text-secondary hover:bg-hover hover:text-text-primary"
+              }`
+            }
+          >
+            <MailQuestion size={16} /> Зависшие отправки
+          </NavLink>
+        )}
 
         {pageCatalogState === "loading" && <p role="status" className="px-3.5 py-4 text-sm text-text-muted">Загружаем страницы…</p>}
         {pageCatalogState === "error" && <p className="px-3.5 py-4 text-sm text-text-muted">Список страниц недоступен.</p>}

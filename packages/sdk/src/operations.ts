@@ -148,6 +148,7 @@ export const kernelOperations = {
   clientFanClaim: { method: "POST", path: "/api/v1/client/pages/:pageLabel/fans/:fanRef/claim" },
   clientFanClaimStatus: { method: "GET", path: "/api/v1/client/pages/:pageLabel/fans/:fanRef/claim" },
   clientFanProfileFromGeneration: { method: "POST", path: "/api/v1/client/pages/:pageLabel/fans/:fanRef/profile/from-generation" },
+  clientSendCustodyList: { method: "GET", path: "/api/v1/client-send-custody" },
   clientSendCustodyResolve: { method: "POST", path: "/api/v1/pages/:pageLabel/client-send-custody/:attemptId/resolve" },
   clientSpenderAwaitingReply: { method: "GET", path: "/api/v1/client/pages/:pageLabel/spenders/awaiting-reply" },
   clientSpenderStats: { method: "GET", path: "/api/v1/client/pages/:pageLabel/spenders/stats" },

@@ -116445,6 +116445,431 @@
         }
       }
     },
+    "/api/v1/client-send-custody": {
+      "get": {
+        "summary": "Held chat-extension sends of the pages the viewer reaches, and the ones resolved by hand",
+        "tags": [
+          "client"
+        ],
+        "description": "A cabinet route for the owner and team leads (cookie session); no device token reaches it and it is on no narrow-token list. Read-only and database-only: it asks OnlyFans nothing and queues nothing. `state=held` (the default) lists the sends past their ticket that nobody ended (`uncertain-held`), the longest held first; a send still inside its ticket is in flight and is not listed. `state=resolved` lists the sends ended by hand, the last resolved first, each with its resolver, time, outcome and note. The owner reads every active page, a team lead the pages assigned to them; `pageLabel` narrows the list to one page (404 for a page that does not exist, 403 for one the viewer does not reach). Each item names the page, the fan, the purpose, the part of its group, the attempt, who dispatched it and from which client install, when, and whether the fan's greeting is on record. No text of any message is served: the custody tables hold none, and the hub does not know which text went out. `generationRef` names the AI generation the text came from; its record stays the owner's alone, on `GET /api/v1/ai/restricted/generations/:generationRef`. `limit` and `offset` page the list; `total` counts the whole of it.",
+        "parameters": [
+          {
+            "schema": {
+              "default": "held",
+              "type": "string",
+              "enum": [
+                "held",
+                "resolved"
+              ]
+            },
+            "in": "query",
+            "name": "state",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            },
+            "in": "query",
+            "name": "pageLabel",
+            "required": false
+          },
+          {
+            "schema": {
+              "default": 50,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "in": "query",
+            "name": "limit",
+            "required": false
+          },
+          {
+            "schema": {
+              "default": 0,
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100000
+            },
+            "in": "query",
+            "name": "offset",
+            "required": false
+          }
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "attemptId": {
+                            "type": "string"
+                          },
+                          "fanRef": {
+                            "type": "string"
+                          },
+                          "userId": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "purpose": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64
+                          },
+                          "state": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64
+                          },
+                          "generationRef": {
+                            "type": "string"
+                          },
+                          "partIndex": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "partCount": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "createdAt": {
+                            "type": "string"
+                          },
+                          "ticketExpiresAt": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "pageLabel": {
+                            "type": "string"
+                          },
+                          "variant": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "username": {
+                            "type": "string"
+                          },
+                          "instanceId": {
+                            "type": "string"
+                          },
+                          "updatedAt": {
+                            "type": "string"
+                          },
+                          "greeting": {
+                            "type": "object",
+                            "properties": {
+                              "state": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 64
+                              },
+                              "at": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "source": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 64
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "firstPartIsThisAttempt": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "state",
+                              "at",
+                              "source",
+                              "firstPartIsThisAttempt"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "resolution": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "outcome": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 64
+                                  },
+                                  "at": {
+                                    "type": "string"
+                                  },
+                                  "userId": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "username": {
+                                    "type": "string"
+                                  },
+                                  "note": {
+                                    "type": "string"
+                                  },
+                                  "platformMessageId": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "outcome",
+                                  "at",
+                                  "userId",
+                                  "username",
+                                  "note",
+                                  "platformMessageId"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "attemptId",
+                          "fanRef",
+                          "userId",
+                          "purpose",
+                          "state",
+                          "generationRef",
+                          "partIndex",
+                          "partCount",
+                          "createdAt",
+                          "ticketExpiresAt",
+                          "pageLabel",
+                          "variant",
+                          "username",
+                          "instanceId",
+                          "updatedAt",
+                          "greeting",
+                          "resolution"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "limit": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "offset": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "total": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "serverNow": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "limit",
+                    "offset",
+                    "total",
+                    "serverNow"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/client/bootstrap": {
       "get": {
         "summary": "Chat-extension bootstrap: who the caller is, their pages, switches, limits and the hub's capabilities",

@@ -1096,6 +1096,86 @@ export const clientSendCustodyItemSchema = z.object({
   ticketExpiresAt: isoTimestamp.nullable(),
 });
 
+// The list of held sends, for the same cabinet (H-7e): what the owner and a
+// team lead read before they resolve. It carries ids, states and times only.
+// The custody tables hold no text and the list serves none: the hub does not
+// know which text went out. `generationRef` names the AI generation the text
+// came from; that generation's record (prompt and output) is restricted, and
+// only the owner reads it, on its own route.
+
+/**
+ * `held`: sends past their ticket that nobody ended (`uncertain-held`), the
+ * longest held first. A send still inside its ticket is in flight and is not
+ * listed. `resolved`: sends the owner or a team lead ended by hand, the last
+ * resolved first, each with who resolved it, when, how and why.
+ */
+export const CLIENT_SEND_CUSTODY_LIST_STATES = ["held", "resolved"] as const;
+/** Known values of `resolution.outcome`; on the wire an open token. The resolve body's own. */
+export const CLIENT_SEND_CUSTODY_RESOLVE_OUTCOMES = ["sent", "not_sent"] as const;
+
+export type ClientSendCustodyListState = (typeof CLIENT_SEND_CUSTODY_LIST_STATES)[number];
+
+export const clientSendCustodyListQuerySchema = z.object({
+  state: z.enum(CLIENT_SEND_CUSTODY_LIST_STATES).default("held"),
+  /** One page. Absent: every page the viewer reaches. */
+  pageLabel: pageLabelSchema.optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  offset: z.coerce.number().int().min(0).max(100_000).default(0),
+}).strict();
+
+export const clientSendCustodyListItemSchema = clientSendCustodyItemSchema.extend({
+  /** The page of the send: the resolve route takes it in its path. */
+  pageLabel: z.string(),
+  /** With `generationRef`, `partIndex` and `partCount`: which part of which group. */
+  variant: count,
+  /** The login of `userId`, who dispatched the send. */
+  username: z.string(),
+  /** The client install that dispatched it. Only that install could report the outcome. */
+  instanceId: z.string(),
+  /**
+   * The last recorded change of the attempt. For a held send it is the dispatch
+   * itself: a held send is one whose client never reported, and a late report
+   * the hub refuses is not recorded. For a resolved one it is the resolve.
+   */
+  updatedAt: isoTimestamp,
+  /** Whether the fan's first greeting is on record, whoever sent it and however. */
+  greeting: z.object({
+    /** Open token; known values: CLIENT_GREETING_STATES. */
+    state: clientOpenToken,
+    at: isoTimestamp.nullable(),
+    /** Open token; known values: CLIENT_GREETING_SOURCES. */
+    source: clientOpenToken.nullable(),
+    /**
+     * The greeting names this attempt as its first part. With the source
+     * `native-register` on a held send: the person sent this very part by hand
+     * from the composer while the send from the preview was held.
+     */
+    firstPartIsThisAttempt: z.boolean(),
+  }),
+  /** How the send was ended by hand; null while it is held. */
+  resolution: z.object({
+    /** Open token; known values: CLIENT_SEND_CUSTODY_RESOLVE_OUTCOMES. */
+    outcome: clientOpenToken,
+    at: isoTimestamp,
+    userId: intId,
+    username: z.string(),
+    /** The resolver's reason, as they wrote it. */
+    note: z.string(),
+    /** The OnlyFans message id the resolver recorded with `sent`, if any. */
+    platformMessageId: z.string().nullable(),
+  }).nullable(),
+});
+
+export const clientSendCustodyListResponseSchema = z.object({
+  items: z.array(clientSendCustodyListItemSchema),
+  limit: positive,
+  offset: count,
+  /** Sends in the asked state on the asked pages, whatever the page of the list. */
+  total: count,
+  /** The hub's clock when it read the list: "held for" is counted against it. */
+  serverNow: isoTimestamp,
+});
+
 // ── the "new subscribers" list (H-7c) ────────────────────────────────────────
 //
 // Who subscribed to an OnlyFans page, or came back to it, inside a window of
@@ -1630,6 +1710,32 @@ export const clientRouteSchemas = {
       409: errorResponseSchema,
     },
   },
+  clientSendCustodyList: {
+    auth: { kind: "session" },
+    tags: ["client"],
+    summary: "Held chat-extension sends of the pages the viewer reaches, and the ones resolved by hand",
+    description: "A cabinet route for the owner and team leads (cookie session); no device token reaches it and it "
+      + "is on no narrow-token list. Read-only and database-only: it asks OnlyFans nothing and queues nothing. "
+      + "`state=held` (the default) lists the sends past their ticket that nobody ended (`uncertain-held`), the "
+      + "longest held first; a send still inside its ticket is in flight and is not listed. `state=resolved` lists "
+      + "the sends ended by hand, the last resolved first, each with its resolver, time, outcome and note. The "
+      + "owner reads every active page, a team lead the pages assigned to them; `pageLabel` narrows the list to one "
+      + "page (404 for a page that does not exist, 403 for one the viewer does not reach). Each item names the "
+      + "page, the fan, the purpose, the part of its group, the attempt, who dispatched it and from which client "
+      + "install, when, and whether the fan's greeting is on record. No text of any message is served: the "
+      + "custody tables hold none, and the hub does not know which text went out. `generationRef` names the AI "
+      + "generation the text came from; its record stays the owner's alone, on "
+      + "`GET /api/v1/ai/restricted/generations/:generationRef`. `limit` and `offset` page the list; `total` "
+      + "counts the whole of it.",
+    querystring: clientSendCustodyListQuerySchema,
+    response: {
+      200: clientSendCustodyListResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
   adminClientHealth: {
     auth: { kind: "owner-session" },
     tags: ["admin"],
@@ -1682,6 +1788,9 @@ export type ClientFanClaimBody = z.infer<typeof clientFanClaimBodySchema>;
 export type ClientFanClaimResponse = z.infer<typeof clientFanClaimResponseSchema>;
 export type ClientSendCustodyResolveBody = z.infer<typeof clientSendCustodyResolveBodySchema>;
 export type ClientSendCustodyItem = z.infer<typeof clientSendCustodyItemSchema>;
+export type ClientSendCustodyListQuery = z.infer<typeof clientSendCustodyListQuerySchema>;
+export type ClientSendCustodyListItem = z.infer<typeof clientSendCustodyListItemSchema>;
+export type ClientSendCustodyListResponse = z.infer<typeof clientSendCustodyListResponseSchema>;
 export type ClientAudienceNewQuery = z.infer<typeof clientAudienceNewQuerySchema>;
 export type ClientClaimSummary = z.infer<typeof clientClaimSummarySchema>;
 export type ClientAudienceNewItem = z.infer<typeof clientAudienceNewItemSchema>;
