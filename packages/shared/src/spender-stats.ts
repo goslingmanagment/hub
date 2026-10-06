@@ -85,8 +85,9 @@ export type SpenderStatsCoverageState = (typeof SPENDER_STATS_COVERAGE_STATES)[n
  * - `history_starts_in_window`: the page's oldest transaction is inside the
  *   window; earlier days may be missing and a "new" payer is only the first
  *   one observed.
- * - `messages_missing`: the page has payers but no archived message at all, so
- *   every payer's silence is unknown and the queue is empty for lack of data.
+ * - `messages_missing`: the page has payers but no message at all in the
+ *   store(s) silence reads, so every payer's silence is unknown and the queue
+ *   is empty for lack of data.
  */
 export const SPENDER_STATS_COVERAGE_REASONS = [
   "no_revenue_history",
@@ -103,11 +104,23 @@ export type SpenderStatsCoverageReason = (typeof SPENDER_STATS_COVERAGE_REASONS)
  * differs from the desktop. 8–21 whole days is one bucket, more than 21 the
  * other; fewer than 8 is not silence. No text message at all is `unknown`.
  * The lifetime spend of silent payers is context, not lost revenue.
+ *
+ * The messages are the ones a generation of the page reads
+ * (`SpenderStatsMessageSource`), so the stats and the Ping chip of a chat do
+ * not disagree about a fan who wrote a minute ago.
  */
 export const SPENDER_SILENCE_MIN_DAYS = 8;
 export const SPENDER_SILENCE_LONG_AFTER_DAYS = 21;
 export const SPENDER_SILENCE_BUCKETS = ["d8to21", "over21", "unknown"] as const;
 export type SpenderSilenceBucket = (typeof SPENDER_SILENCE_BUCKETS)[number];
+
+/**
+ * Where silence reads the fan's messages: the store(s) the page's AI
+ * transcript is served from. `archive` is message_archive; `union` is the AI
+ * transcript union with the webhook store (OnlyFans while the owner's
+ * `aiTranscriptFreshUnionMode` is `serve`).
+ */
+export type SpenderStatsMessageSource = "archive" | "union";
 
 /** `unknown`: the fan wrote after our last message, but whether we read it is not known. */
 export const SPENDER_AWAITING_REPLY_READ_STATES = ["unread", "read", "unknown"] as const;

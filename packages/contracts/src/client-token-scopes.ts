@@ -42,9 +42,10 @@ export const CLIENT_TOKEN_PROFILES = {
       "clientConversationRecaps",
       "clientFanProfileFromGeneration",
       // Every later client route joins here in its own PR:
-      // clientConversationFeed, clientSpenderStats, clientSpenderAwaitingReply,
+      // clientConversationFeed, clientSpenderAwaitingReply,
       // clientFanClaim, clientFanClaimStatus, clientAudienceNew.
       "clientAiUsageDaily",
+      "clientSpenderStats",
     ] as const satisfies readonly KernelOperationKey[],
     // `client_health` (H-11b) is never journaled: the capture lane folds it
     // into hourly rollups that hold no user.

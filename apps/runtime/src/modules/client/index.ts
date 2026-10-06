@@ -8,6 +8,7 @@ import { registerClientProfileFromGenerationRoutes } from "./profile-from-genera
 import { registerClientRecapRoutes } from "./recaps.ts";
 import { registerClientAiUsageRoutes } from "./ai-usage.ts";
 import { registerClientHealthViewRoutes } from "./health.ts";
+import { registerClientSpenderStatsRoutes } from "./spender-stats.ts";
 
 /**
  * The chat extension's routes under `/api/v1/client/` (chat-extension
@@ -37,5 +38,6 @@ export function registerClientRoutes(server: ApiServer, ctx: ApiModuleContext) {
   registerClientRecapRoutes(server, ctx);
   registerClientProfileFromGenerationRoutes(server, ctx);
   registerClientAiUsageRoutes(server, ctx);
+  registerClientSpenderStatsRoutes(server, ctx);
   registerClientHealthViewRoutes(server, ctx);
 }

@@ -53,6 +53,14 @@ Desktop: NOTHING to build (0.1.33 is live) — at deploy, only verify the feed s
   watch `additions` (union rows the archive lacked), `unionError` (must be zero),
   `queryDurationMs`, `gapMs`. Backlog gauges `obs_backlog_<source>_v<N>` ride the
   golden-signal latch (threshold 600 000 ms; a failed probe latches too).
+- **Second reader (chat-extension H-8b):** the Spenders statistics of the chat extension
+  (`GET /api/v1/client/pages/:pageLabel/spenders/stats`) read the fan's last text message
+  from the store a generation reads, by this same key, read per request: `serve` → the
+  union, `off`/`shadow` → the archive (shadow runs no union query for it). So a fan who
+  wrote a minute ago is not counted silent while the Ping chip of the chat says otherwise.
+  A rollback moves silence back with the next request (the switch is part of the stats
+  cache key). A failed union read there is an error of that request, not an archive
+  fallback; the route is behind the chat-extension `stats` switch.
 - **Rollout (owner override 2026-07-10):** NO 24–48 h shadow window — deploy → shadow
   for MINUTES (one smoke pass: several live generations, manifests show union additions
   and zero errors) → serve immediately, same day. The off→shadow→serve order stays

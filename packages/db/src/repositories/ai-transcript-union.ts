@@ -203,6 +203,142 @@ export function aiTranscriptUnionCtes(
     )`;
 }
 
+/**
+ * chat-extension H-8b: when the fan last wrote TEXT in one conversation, among
+ * the rows the chain above serves. A scalar subquery (timestamptz, NULL when
+ * no served row is the fan's text), for a statement that asks it of many
+ * conversations at once (the Spenders stats ask it of every payer's chats), so
+ * `conversationRef` is an SQL expression of the outer row.
+ *
+ * The chain itself cannot answer that at the scale of a page: it reads every
+ * row of a conversation before it picks one. This reads two tails instead: the
+ * newest row of each store that is the fan's text and that the chain would
+ * serve, and stops there. "Would serve" is steps 1-4 of the chain, asked of
+ * one row:
+ *   - a stub never serves (`content_pending`, a dm row without a creation time);
+ *   - a ref tombstoned in either store or in page_dm_messages is dead (step 3);
+ *   - of two copies of one message the chain serves one (step 4): the copy in
+ *     the other store must not outrank this one. The dm copy wins a tie.
+ * Step 5 (the PPV upgrade) changes neither the sender, the text nor the time.
+ *
+ * Both lookups into dm_message_archive by message id go through its UNIQUE
+ * (platform, ofapi_account_id, platform_message_id) under the page's current
+ * OFAPI account, as the chain's own cross-source tombstones do: there is no
+ * (platform_account_id, platform_message_id) index. A dm row filed under an
+ * account id the page no longer has is therefore read as a message of its own
+ * (the second tail finds it), but it does not outrank the archive's copy of
+ * the same message and its deletion mark does not reach the other copies,
+ * where the chain would let both. Two copies of one message carry the same
+ * sender and creation time, so the answer moves only if such a copy was
+ * deleted and the archive never heard.
+ *
+ * `tests/client-spender-stats-union.integration.test.ts` holds the two
+ * together: for every conversation of its fixture this answer equals the
+ * newest fan text among the rows `listAiTranscriptUnionMessages` returns.
+ */
+export function aiTranscriptUnionLastFanTextAtSql(input: { pageId: number; conversationRef: SQL }): SQL {
+  const { pageId, conversationRef } = input;
+  const ofapiAccount = sql`(select p.ofapi_account_id from pages p where p.id = ${pageId})`;
+  // Step 4's order, as a row to compare: REST material first, then the
+  // platform's own change time, then the observation time; NULLs last.
+  const materialRank = (observedAt: SQL, changedAt: SQL) => sql`(
+                   ${observedAt} is not null,
+                   coalesce(${changedAt}, '-infinity'::timestamptz),
+                   coalesce(${observedAt}, '-infinity'::timestamptz)
+                 )`;
+  // Steps 2-3 beyond the row's own store: a deletion the other store or the
+  // hot table recorded.
+  const tombstonedElsewhere = (messageRef: SQL) => sql`exists (
+              select 1
+              from dm_message_archive x
+              where x.platform = 'onlyfans'
+                and x.ofapi_account_id = ${ofapiAccount}
+                and x.platform_message_id = ${messageRef}
+                and x.deleted_at is not null
+            )
+            or exists (
+              select 1
+              from page_dm_messages h
+              join page_dm_threads t on t.id = h.conversation_id
+              where t.platform_account_id = ${pageId}
+                and t.platform_conversation_id = ${conversationRef}
+                and h.platform_message_id = ${messageRef}
+                and h.deleted_at is not null
+            )`;
+  // Each tail's last condition is ONE `not (… or …)` over its lookups by
+  // message id, on purpose: under an OR none of them can be planned as a join,
+  // so each stays a lookup of one row through a unique index, run only for a
+  // row that is already the fan's text. As a separate `not exists`, the lookup
+  // of the other store's copy becomes an anti-join over the whole chat.
+  return sql`(
+    select max(tail.event_time)
+    from (
+      (
+        select ma.occurred_at as event_time
+        from message_archive ma
+        where ma.account_id = ${pageId}
+          and ma.platform = 'onlyfans'
+          and ma.conversation_ref = ${conversationRef}
+          and ma.occurred_at is not null
+          and ma.is_sent_by_me = false
+          and ma.deleted_at is null
+          and ma.content_pending = false
+          and ma.text_plain ~ '[^[:space:]]'
+          and not (
+            ${tombstonedElsewhere(sql`ma.message_ref`)}
+            or exists (
+              select 1
+              from dm_message_archive w
+              where w.platform = 'onlyfans'
+                and w.ofapi_account_id = ${ofapiAccount}
+                and w.platform_message_id = ma.message_ref
+                and w.platform_account_id = ${pageId}
+                and w.platform_conversation_id = ${conversationRef}
+                and w.message_created_at is not null
+                and ${materialRank(sql`w.rest_material_observed_at`, sql`w.rest_platform_changed_at`)}
+                    >= ${materialRank(sql`ma.material_observed_at`, sql`ma.vendor_changed_at`)}
+            )
+          )
+        order by ma.occurred_at desc
+        limit 1
+      )
+      union all
+      (
+        select d.message_created_at as event_time
+        from dm_message_archive d
+        where d.platform = 'onlyfans'
+          and d.platform_account_id = ${pageId}
+          and d.platform_conversation_id = ${conversationRef}
+          and d.message_created_at is not null
+          and d.is_sent_by_me = false
+          and d.deleted_at is null
+          and d.text_plain ~ '[^[:space:]]'
+          and not (
+            ${tombstonedElsewhere(sql`d.platform_message_id`)}
+            or exists (
+              select 1
+              from message_archive a
+              where a.account_id = ${pageId}
+                and a.platform = 'onlyfans'
+                and a.message_ref = d.platform_message_id
+                and a.conversation_ref = ${conversationRef}
+                and (
+                  a.deleted_at is not null
+                  or (
+                    a.content_pending = false
+                    and ${materialRank(sql`a.material_observed_at`, sql`a.vendor_changed_at`)}
+                        > ${materialRank(sql`d.rest_material_observed_at`, sql`d.rest_platform_changed_at`)}
+                  )
+                )
+            )
+          )
+        order by d.message_created_at desc
+        limit 1
+      )
+    ) tail
+  )`;
+}
+
 function buildUnionQuery(input: AiTranscriptUnionInput) {
   const limit = Math.min(input.limit ?? 100, aiTranscriptRowCap(input.maxRows, AI_TRANSCRIPT_UNION_MAX_LIMIT));
   return sql`

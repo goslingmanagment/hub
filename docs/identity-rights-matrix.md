@@ -53,6 +53,7 @@ pages that account is granted; the owner is granted every page implicitly.
 | Chat-extension shared recaps — `/client/pages/{label}/conversations/{fan}/recaps` (`apiKey` + page scope) | no (403) | yes, every page | no (403) | yes, assigned | no (403) | **yes, assigned** | — | yes, by the role's reach |
 | Chat-extension dossier save — `/client/pages/{label}/fans/{fan}/profile/from-generation` (`apiKey` + page scope) | no (403) | own generations, every page | no (403) | own generations, assigned | no (403) | **own generations, assigned** | — | own generations, by the role's reach |
 | Chat-extension own AI spend — `/client/pages/{label}/ai-usage` (`apiKey` + page scope) | no (403) | yes, every page, **own rows only** | no (403) | yes, assigned, own rows only | no (403) | **yes, assigned, own rows only** | — | yes, by the role's reach |
+| Chat-extension Spenders statistics — `/client/pages/{label}/spenders/stats` (`apiKey` + page scope) | no (403) | yes, every page | no (403) | yes, assigned | no (403) | **yes, assigned** | — | yes, by the role's reach |
 
 The client bootstrap lists the caller's **active** pages only (a tombstoned
 page is never listed, assigned or not) and announces every feature off until
@@ -160,6 +161,23 @@ platform or host binding. Its row is held by `client-ai-usage.integration`:
 every cell, the agent key, and a page that is not granted, tombstoned or
 missing, in both auth-policy modes.
 
+The Spenders statistics (chat-extension H-8b) answer **one page's** numbers to
+everyone granted it, the same body whoever asks: 30 local days of gross and
+creator-net money, tiers by lifetime spend, silence, new payers and how many
+payers wait for a reply. They name no fan, and they open no money a device
+token could not already read: `/api/v2/spenders` answers the same page's gross
+and creator-net totals for a period (`diagnostics`) and every payer's own
+amounts to the same callers. The dashboard's revenue routes stay session-only.
+The page is in the path; a page or an instant named in the query is refused,
+not ignored. It waits for the owner's `stats` switch on the page (OnlyFans
+only) and the extension's version, and a page that is not the caller's answers
+as on the shared recaps. An answer is kept in the process for up to 60 seconds
+and shared between callers; the checks above run on **every** request, before
+the kept answer is looked at, so a caller the hub refuses never reads one. Its
+row is held by `client-spender-stats-route.integration`: every cell, the agent
+key, and a page that is not granted, tombstoned or missing, in both auth-policy
+modes.
+
 The **chat-extension token** (chat-extension H-3) is a device token the
 extension asks for at password sign-in with `client: "chat-extension"`. The
 sign-in echoes `client`, the token row keeps the profile for good (a trigger
@@ -169,8 +187,8 @@ reaches only the routes of `CLIENT_TOKEN_PROFILES["chat-extension"]`
 column of the [generated policy table](generated/authorization-policy.md)):
 who am I, the bootstrap, the persona catalogue without prompt texts, the AI
 feature stream, the recap status, the shared recaps, the dossier save from a
-stored generation, the fan and conversation profiles, the spenders reads, its
-own AI spend, the capture lane and revoking itself. Every other route
+stored generation, the fan and conversation profiles, the spenders reads, the
+Spenders statistics, its own AI spend, the capture lane and revoking itself. Every other route
 answers a plain 403 with no `reason`, in **both** auth-policy modes, before any
 handler runs; page scope still applies on the listed routes, and a revoked or
 expired token still answers 401 with its reason. On the capture lane it sends

@@ -24,10 +24,10 @@ body remain handler-checked and are noted per route in the service layer.
 
 The `chat-extension token` column is the narrow device token a client asks
 for at password sign-in (`client: "chat-extension"`): it reaches only the
-16 routes marked "yes", and every route marked "no" refuses it with 403 in
+17 routes marked "yes", and every route marked "no" refuses it with 403 in
 both enforcement modes. A full device token is not affected.
 
-## Routes (276)
+## Routes (277)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -222,6 +222,7 @@ both enforcement modes. A full device token is not affected.
 | GET | `/api/v1/client/pages/:pageLabel/ai-usage` | `clientAiUsageDaily` | `apiKey` | — | page | yes |
 | GET | `/api/v1/client/pages/:pageLabel/conversations/:fanRef/recaps` | `clientConversationRecaps` | `apiKey` | — | page | yes |
 | POST | `/api/v1/client/pages/:pageLabel/fans/:fanRef/profile/from-generation` | `clientFanProfileFromGeneration` | `apiKey` | — | page | yes |
+| GET | `/api/v1/client/pages/:pageLabel/spenders/stats` | `clientSpenderStats` | `apiKey` | — | page | yes |
 | GET | `/api/v1/events/snapshot` | `eventsSnapshot` | `apiKey` | — | — | no |
 | GET | `/api/v1/events/stream` | `eventsStream` | `apiKey` | — | — | no |
 | GET | `/api/v1/events/v2/facts` | `eventsV2Facts` | `any` | — | — | no |

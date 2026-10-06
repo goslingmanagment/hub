@@ -106,6 +106,16 @@ export {
   type ClientAiUsageCoverageReason,
   type ClientAiUsageRefusalReason,
 } from "@agency_hub_core/contracts";
+// The Spenders statistics (routes-client.ts, clientSpenderStats): the one
+// window it serves and the known values of its open tokens and refusal reason.
+export {
+  CLIENT_SPENDER_STATS_COVERAGE_REASONS,
+  CLIENT_SPENDER_STATS_REFUSAL_REASONS,
+  CLIENT_SPENDER_STATS_REMAINDER_TIER_KEYS,
+  CLIENT_SPENDER_STATS_WINDOW_DAYS,
+  type ClientSpenderStatsCoverageReason,
+  type ClientSpenderStatsRefusalReason,
+} from "@agency_hub_core/contracts";
 // The narrow token's profiles (client-token-scopes.ts): which operations a
 // token issued with `client` reaches; the hub refuses the rest with 403.
 export {
