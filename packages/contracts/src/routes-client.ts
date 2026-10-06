@@ -884,6 +884,218 @@ export const adminClientHealthResponseSchema = z.object({
   asOf: isoTimestamp,
 });
 
+// ── greeting lease and send custody (H-7b) ───────────────────────────────────
+//
+// Three separate facts about one OnlyFans fan of one page (chat-extension
+// architecture §6.7.7–§6.7.9; the tables are migration 0241):
+// 1. greeting: the fan's first greeting is confirmed, for good;
+// 2. lease: who is working on that one greeting now (120 s, renewed while the
+//    person works);
+// 3. custody: one dispatched part of a send from the preview. It never expires:
+//    a dispatch whose ticket ran out reads `uncertain-held` until it is reported
+//    sent, failed with evidence, or resolved by the owner or a team lead.
+//
+// THE CLIENT'S SHAPE. The chat extension froze the body and the answer in its
+// contracts (`ClaimBodySchema`, `ClaimStateSchema`,
+// packages/contracts/src/hub/newcomers.ts). The hub takes every body that schema
+// lets out and answers only what it reads. The states of the three automata are
+// closed enums here and there: a new state is a new route version.
+
+/** An id the client mints (lease token, install id, attempt id): its UUID form. */
+const clientMintedId = z.string().regex(CLIENT_REQUEST_ID_PATTERN);
+
+export const CLIENT_CLAIM_ACTIONS = [
+  "claim", "renew", "release", "dispatch", "sent", "failed", "registerNativeSend",
+] as const;
+export const CLIENT_GREETING_STATES = ["none", "confirmed"] as const;
+export const CLIENT_LEASE_STATES = ["none", "owned", "held", "expired", "released"] as const;
+/** The holder of a lease is never named: only whether it is the caller elsewhere. */
+export const CLIENT_LEASE_HOLDERS = ["you-elsewhere", "someone-else"] as const;
+export const CLIENT_CUSTODY_STATES = [
+  "dispatching", "sent", "failed", "uncertain-held", "resolved-sent", "resolved-not-sent",
+] as const;
+/**
+ * Known values of `greeting.source`; on the wire an open token. `desktop-outbox`:
+ * the desktop's new-follower command that OnlyFans confirmed greeted the fan.
+ */
+export const CLIENT_GREETING_SOURCES = ["preview-send", "native-register", "resolve", "desktop-outbox"] as const;
+export const CLIENT_SEND_PURPOSES = ["greeting", "preview-reply"] as const;
+export const CLIENT_SEND_FAILURE_REASONS = ["not_enqueued", "native_rejected"] as const;
+/** A group has at most this many variants (Hi) and parts. */
+export const CLIENT_CLAIM_MAX_VARIANTS = 3;
+export const CLIENT_CLAIM_MAX_PARTS = 10;
+
+export type ClientClaimAction = (typeof CLIENT_CLAIM_ACTIONS)[number];
+export type ClientCustodyState = (typeof CLIENT_CUSTODY_STATES)[number];
+export type ClientGreetingSource = (typeof CLIENT_GREETING_SOURCES)[number];
+export type ClientSendPurpose = (typeof CLIENT_SEND_PURPOSES)[number];
+
+/** `native_rejected` proves a refusal only with a 4xx other than 401: a 401 says nothing about the send. */
+function isNativeRefusalStatus(httpStatus: number): boolean {
+  return httpStatus >= 400 && httpStatus <= 499 && httpStatus !== 401;
+}
+
+/** The parts of one generation: one group. `variant` is the Hi variant, 0 elsewhere. */
+export const clientClaimGroupSchema = z.object({
+  /** The generation's `meta.requestId`. */
+  generationRef: z.string().min(1).max(100),
+  variant: z.number().int().min(0).max(CLIENT_CLAIM_MAX_VARIANTS - 1),
+  partCount: z.number().int().min(1).max(CLIENT_CLAIM_MAX_PARTS),
+}).strict();
+
+const clientPartIndex = z.number().int().min(0).max(CLIENT_CLAIM_MAX_PARTS - 1);
+const clientSendPurpose = z.enum(CLIENT_SEND_PURPOSES);
+/** The columns that keep the two revisions are 32-bit. */
+const clientRevision = z.number().int().min(0).max(2_147_483_647);
+
+function clientLeaseAction<A extends "claim" | "renew" | "release">(action: A) {
+  return z.object({ action: z.literal(action), leaseToken: clientMintedId, instanceId: clientMintedId }).strict();
+}
+
+export const clientFanClaimBodySchema = z.discriminatedUnion("action", [
+  clientLeaseAction("claim"),
+  clientLeaseAction("renew"),
+  clientLeaseAction("release"),
+  z.object({
+    action: z.literal("dispatch"),
+    attemptId: clientMintedId,
+    instanceId: clientMintedId,
+    purpose: clientSendPurpose,
+    group: clientClaimGroupSchema,
+    partIndex: clientPartIndex,
+    textRevision: clientRevision,
+    /** A greeting needs the caller's live lease until the greeting is confirmed. */
+    leaseToken: clientMintedId.optional(),
+    /**
+     * The bootstrap `configRevision` the client acted on. Recorded with the
+     * attempt and never decided by: the owner's switches are read under a lock
+     * in the dispatch's own transaction, so an out-of-date revision is not a
+     * refusal and an up-to-date one admits nothing.
+     */
+    flagRevision: clientRevision,
+  }).strict(),
+  z.object({
+    action: z.literal("sent"),
+    attemptId: clientMintedId,
+    instanceId: clientMintedId,
+    platformMessageId: clientNumericIdSchema,
+    evidence: z.literal("receipt+echo"),
+  }).strict(),
+  z.object({
+    action: z.literal("failed"),
+    attemptId: clientMintedId,
+    instanceId: clientMintedId,
+    reason: z.enum(CLIENT_SEND_FAILURE_REASONS),
+    httpStatus: z.number().int().min(100).max(599).optional(),
+  }).strict(),
+  z.object({
+    action: z.literal("registerNativeSend"),
+    attemptId: clientMintedId,
+    instanceId: clientMintedId,
+    purpose: clientSendPurpose,
+    group: clientClaimGroupSchema,
+    partIndex: clientPartIndex,
+    platformMessageId: clientNumericIdSchema,
+  }).strict(),
+]).superRefine((body, ctx) => {
+  if ((body.action === "dispatch" || body.action === "registerNativeSend") && body.partIndex >= body.group.partCount) {
+    ctx.addIssue({ code: "custom", path: ["partIndex"], message: "partIndex must be below group.partCount" });
+  }
+  if (body.action === "failed") {
+    const proven = body.reason === "native_rejected"
+      ? body.httpStatus !== undefined && isNativeRefusalStatus(body.httpStatus)
+      : body.httpStatus === undefined;
+    if (!proven) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["httpStatus"],
+        message: "native_rejected needs a 4xx other than 401; not_enqueued carries no status",
+      });
+    }
+  }
+});
+
+/** The answer of the claim POST and, never with a ticket, of the status GET. */
+export const clientFanClaimResponseSchema = z.object({
+  greeting: z.object({
+    state: z.enum(CLIENT_GREETING_STATES),
+    at: isoTimestamp.nullable(),
+    /** The OnlyFans message id of the first confirmed part, when known. */
+    messageRef: z.string().nullable(),
+    /** Open token; known values: CLIENT_GREETING_SOURCES. */
+    source: clientOpenToken.nullable(),
+  }),
+  lease: z.object({
+    state: z.enum(CLIENT_LEASE_STATES),
+    /** The caller's own token only. */
+    leaseToken: z.string().nullable(),
+    expiresAt: isoTimestamp.nullable(),
+    heldBy: z.enum(CLIENT_LEASE_HOLDERS).nullable(),
+  }),
+  group: z.object({
+    generationRef: z.string(),
+    variant: count,
+    partCount: positive,
+    sentParts: z.array(count),
+    /**
+     * Parts whose send nobody can vouch for (`uncertain-held`). A part still
+     * inside its ticket is in flight, not held: `custody` says so.
+     */
+    heldParts: z.array(count),
+  }).nullable(),
+  custody: z.object({
+    attemptId: z.string(),
+    state: z.enum(CLIENT_CUSTODY_STATES),
+    /** Only in the answer to the dispatch that created the attempt. */
+    ticket: z.string().nullable(),
+    ticketExpiresAt: isoTimestamp.nullable(),
+  }).nullable(),
+  serverNow: isoTimestamp,
+  /** The bootstrap's `configRevision` as the hub reads it now. */
+  flagRevision: count,
+});
+
+/** 429 `preview_send_rate_limited`: the error body plus when the window frees a slot. */
+export const clientPreviewSendRateLimitedResponseSchema = errorResponseSchema.extend({
+  retryAfterMs: count.optional(),
+});
+
+// The manual resolve of a held send, for the owner and team leads in the
+// cabinet (cookie session). Not a client route: the extension never calls it.
+
+export const clientSendCustodyParamsSchema = z.object({ pageLabel: pageLabelSchema, attemptId: clientMintedId });
+
+export const clientSendCustodyResolveBodySchema = z.object({
+  outcome: z.enum(["sent", "not_sent"]),
+  /** The OnlyFans message id, when the resolver found the message. Only with `sent`. */
+  platformMessageId: clientNumericIdSchema.optional(),
+  note: z.string().trim().min(1).max(500),
+}).strict().superRefine((body, ctx) => {
+  if (body.outcome === "not_sent" && body.platformMessageId !== undefined) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["platformMessageId"],
+      message: "a message id is evidence of a send: it cannot come with not_sent",
+    });
+  }
+});
+
+export const clientSendCustodyItemSchema = z.object({
+  attemptId: z.string(),
+  fanRef: z.string(),
+  /** Who dispatched or registered the send. */
+  userId: intId,
+  /** Open token; known values: CLIENT_SEND_PURPOSES. */
+  purpose: clientOpenToken,
+  /** Open token; known values: CLIENT_CUSTODY_STATES. */
+  state: clientOpenToken,
+  generationRef: z.string(),
+  partIndex: count,
+  partCount: positive,
+  createdAt: isoTimestamp,
+  ticketExpiresAt: isoTimestamp.nullable(),
+});
+
 export const clientRouteSchemas = {
   clientBootstrap: {
     auth: { kind: "apiKey" },
@@ -1056,6 +1268,105 @@ export const clientRouteSchemas = {
       409: errorResponseSchema,
     },
   },
+  clientFanClaim: {
+    auth: { kind: "apiKey", scope: "page" },
+    tags: ["client"],
+    summary: "The greeting lease and the send custody of one fan: claim, renew, release, dispatch, sent, failed, registerNativeSend",
+    description: "Database-only: no platform request, no queued work; the hub never sends the message itself. "
+      + "`fanRef` is the OnlyFans fan id, which is the chat id. Three facts per fan: the first greeting is "
+      + "confirmed; one person and client install holds the lease on working it out (`claim`, `renew`, "
+      + "`release`); one attempt holds the custody of a part being sent (`dispatch`, then `sent` or `failed`). "
+      + "A lease is refused while another person or install holds the fan (409 `claim_busy`) and, to everyone "
+      + "but the greeting's owner, once the fan is greeted (409 `greeting_done`). "
+      + "`dispatch` decides in one transaction, in this order: a repeat of the same `attemptId` with the same "
+      + "body only reads (never a second ticket), another body is 409 `attempt_conflict`; the owner's switches; "
+      + "the rate (6 per 60 s per person, 429 `preview_send_rate_limited` with `retryAfterMs`); no unresolved "
+      + "send to the fan (409 `custody_held`); for a greeting, no desktop new-follower command that greeted the "
+      + "fan (409 `greeting_done`) or may have (409 `custody_held`), then either the confirmed greeting's owner "
+      + "and group (409 `greeting_done`, `generation_mismatch`) or the caller's live lease (409 `claim_busy` "
+      + "while another person or install holds the fan, `claim_expired` when there is no live lease or this "
+      + "install holds the fan under another token than the one named); the part not sent yet (409 "
+      + "`part_already_sent`). It answers a one-time `ticket` once. "
+      + "The switches of a dispatch are the owner's stored `chatExtensionEnabled` and `chatExtensionFeatures`, "
+      + "read under a row lock inside that transaction, so a change of them waits for the dispatch and holds "
+      + "from the next one; a value that only the environment sets admits no dispatch. Custody never expires: "
+      + "past its ticket an unreported dispatch reads `uncertain-held` and holds the fan until `sent` or a "
+      + "manual resolve. `sent` and `failed` come only from the person and install that dispatched (409 "
+      + "`custody_not_owned`); `failed` only with proof the native queue never took the part, and only while "
+      + "the ticket lasts (409 `custody_held` after it: `uncertain-held` never becomes `failed`). "
+      + "`registerNativeSend` records a proven send from the composer, once per page and message, and frees "
+      + "nobody's custody: a part whose send from the preview is unresolved stays held (409 `custody_held`). "
+      + "A greeting is the exception in what it records, not in what it frees: the proof confirms the fan's "
+      + "greeting (200, `greeting.source` `native-register`) while that part's send stays held, so the fan "
+      + "never reads as not greeted after it. In the group `heldParts` lists only the parts nobody can vouch "
+      + "for (`uncertain-held`); a part inside its ticket is in flight. Switches by action: `claim` and "
+      + "`renew` need `newcomers`; `dispatch` needs `previewSend`, and `newcomers` too for a greeting; "
+      + "`release`, `sent` and `failed` end what the hub already admitted and need only the page grant; "
+      + "`registerNativeSend` reports a send that already happened and needs only the page grant on an "
+      + "OnlyFans page: no switch, flag or minimum version refuses it, and it admits no dispatch. A refusal "
+      + "by the switches is 409 `client_feature_disabled` with the reason.",
+    params: clientPageFanParamsSchema,
+    body: clientFanClaimBodySchema,
+    response: {
+      200: clientFanClaimResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+      429: clientPreviewSendRateLimitedResponseSchema,
+    },
+  },
+  clientFanClaimStatus: {
+    auth: { kind: "apiKey", scope: "page" },
+    tags: ["client"],
+    summary: "The greeting, lease and custody state of one fan, read only",
+    description: "Read-only and database-only: one snapshot, no lock, no write, never a ticket. The same answer "
+      + "as the claim POST. The request names no client install, so the caller's own live lease reads `held` "
+      + "by `you-elsewhere`; an idempotent `claim` with the lease's token answers `owned`. It names no attempt "
+      + "either: `custody` is the fan's unresolved send (anyone's, `dispatching` or `uncertain-held`), and "
+      + "while there is none, the caller's own last send to the fan dispatched from the preview, in the state "
+      + "it ended (`sent`, `failed`, `resolved-sent`, `resolved-not-sent`). That is how a client that lost "
+      + "track of its send learns of a manual resolve. Nobody else's finished send is shown. A desktop "
+      + "new-follower command that OnlyFans confirmed reads as a confirmed greeting with the source "
+      + "`desktop-outbox`. Behind the chat-extension master switch and minimum version, with no flag of its "
+      + "own: it answers while `previewSend` and `newcomers` are off. 409 `client_feature_disabled` with the "
+      + "reason (`not_granted`, `platform_unsupported`, `disabled`, `client_outdated`).",
+    params: clientPageFanParamsSchema,
+    response: {
+      200: clientFanClaimResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
+  clientSendCustodyResolve: {
+    auth: { kind: "session", scope: "page" },
+    tags: ["client"],
+    summary: "Resolve a held chat-extension send by hand: sent or not sent, with a note",
+    description: "A cabinet route for the owner and team leads (cookie session, a page they reach); no device "
+      + "token reaches it and it is on no narrow-token list. Ends the custody of one attempt that is still "
+      + "`dispatching` or `uncertain-held`, after the resolver looked at the chat: `sent` (optionally with the "
+      + "OnlyFans message id; the first part of a greeting then confirms the greeting) or `not_sent` (the part "
+      + "may be sent again). `not_sent` waits for the attempt's ticket to run out: inside it the page may still "
+      + "send the part (409 `conflict` with the reason `ticket_live`). Audited as "
+      + "`client.send_custody_resolved` in the same transaction. Idempotent: the same resolve again answers "
+      + "the same and writes nothing. 404 for an attempt that is not of this page; 409 `conflict` with the "
+      + "reason `custody_not_held` for one already reported sent or failed; 409 `attempt_conflict` for one "
+      + "resolved otherwise, or a message id another send already carries.",
+    params: clientSendCustodyParamsSchema,
+    body: clientSendCustodyResolveBodySchema,
+    response: {
+      200: clientSendCustodyItemSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
   adminClientHealth: {
     auth: { kind: "owner-session" },
     tags: ["admin"],
@@ -1103,6 +1414,11 @@ export type ClientSpenderStatsResponse = z.infer<typeof clientSpenderStatsRespon
 export type ClientSpenderAwaitingReplyQuery = z.infer<typeof clientSpenderAwaitingReplyQuerySchema>;
 export type ClientSpenderAwaitingReplyItem = z.infer<typeof clientSpenderAwaitingReplyItemSchema>;
 export type ClientSpenderAwaitingReplyResponse = z.infer<typeof clientSpenderAwaitingReplyResponseSchema>;
+export type ClientClaimGroup = z.infer<typeof clientClaimGroupSchema>;
+export type ClientFanClaimBody = z.infer<typeof clientFanClaimBodySchema>;
+export type ClientFanClaimResponse = z.infer<typeof clientFanClaimResponseSchema>;
+export type ClientSendCustodyResolveBody = z.infer<typeof clientSendCustodyResolveBodySchema>;
+export type ClientSendCustodyItem = z.infer<typeof clientSendCustodyItemSchema>;
 export type AdminClientHealthQuery = z.infer<typeof adminClientHealthQuerySchema>;
 export type AdminClientHealthResponse = z.infer<typeof adminClientHealthResponseSchema>;
 

@@ -5,7 +5,9 @@ import { sql, type SQL } from "drizzle-orm";
 import type { Database } from "../client.ts";
 import { insertAuditEvent, isUniqueViolation } from "./auth.ts";
 import {
+  CLIENT_PREVIEW_SEND_RATE_LIMIT,
   CLIENT_PREVIEW_SEND_RATE_WINDOW_MS,
+  custodyViewState,
   decideClaimTransition,
   deriveClientClaimView,
   viewGroup,
@@ -14,6 +16,7 @@ import {
   type ClientClaimRequest,
   type ClientClaimWrite,
   type ClientCustodyRow,
+  type ClientCustodyViewState,
   type ClientFanClaimSnapshot,
   type ClientFanClaimView,
   type ClientGreetingRow,
@@ -26,9 +29,10 @@ import {
 // under pg_advisory_xact_lock('client-fan:<page>:<fan>'); a dispatch first
 // takes 'client-user-send:<user>' (always user, then fan) so its rate count
 // cannot race the user's dispatch to another fan. The rules themselves are
-// the pure decideClaimTransition (client-claim-transition.ts). No route calls
-// this yet: H-7b serves the action and the status (mapping the view to its
-// wire shape), H-7c reads the list's claim column from the same tables.
+// the pure decideClaimTransition (client-claim-transition.ts). H-7b serves the
+// action, the status and the manual resolve (apps/runtime services/client-claim.ts
+// maps the view to its wire shape); H-7c reads the list's claim column from the
+// same tables.
 
 /**
  * The predicate of `ofapi_commands_follower_outreach_uniq` (0195, schema.ts),
@@ -169,12 +173,36 @@ const custodyRow = (row: CustodyDbRow): ClientCustodyRow => ({
   failureHttpStatus: row.failure_http_status === null ? null : Number(row.failure_http_status),
 });
 
+/**
+ * The reader's own last send to this fan dispatched from the preview, in whatever state it ended
+ * (the status read). The fan's sends are few, and client_send_custody_fan (0246) reads them newest
+ * first: the cost is the sends to one fan, not every send of the reader.
+ */
+function lastOwnDispatchQuery(input: { pageId: number; fanRef: string; userId: number }): SQL {
+  return sql`
+    select ${CUSTODY_COLUMNS} from client_send_custody
+    where page_id = ${input.pageId} and fan_ref = ${input.fanRef}
+      and user_id = ${input.userId} and origin = 'preview-send'
+    order by created_at desc limit 1`;
+}
+
+/** The plan of exactly that statement, for the test that holds it to the fan's index. */
+export async function explainClientLastOwnDispatchQuery(
+  db: Database,
+  input: { pageId: number; fanRef: string; userId: number },
+): Promise<string> {
+  const result = await db.execute<{ "QUERY PLAN": string }>(sql`explain (format text) ${lastOwnDispatchQuery(input)}`);
+  return result.rows.map((row) => row["QUERY PLAN"]).join("\n");
+}
+
 interface SnapshotRefs {
   leaseToken: string | null;
   attemptId: string | null;
   platformMessageId: string | null;
   requestGroup: ClientClaimGroup | null;
   rateUserId: number | null;
+  /** The status read: whose own last dispatched send to report while no send to the fan is open. */
+  lastDispatchUserId: number | null;
 }
 
 async function loadSnapshot(db: Database, pageId: number, fanRef: string, refs: SnapshotRefs): Promise<ClientFanClaimSnapshot> {
@@ -192,9 +220,11 @@ async function loadSnapshot(db: Database, pageId: number, fanRef: string, refs: 
     }));
   const greetingRow = (await db.execute<{
     owner_user_id: bigint | null; generation_ref: string | null; variant: number | null; part_count: number | null;
-    confirmed_at: Date; first_message_ref: string | null; source: ClientGreetingRow["source"];
+    confirmed_at: Date; first_message_ref: string | null; first_attempt_id: string | null;
+    source: ClientGreetingRow["source"];
   }>(sql`
-    select owner_user_id, generation_ref, variant, part_count, confirmed_at, first_message_ref, source
+    select owner_user_id, generation_ref, variant, part_count, confirmed_at, first_message_ref,
+      first_attempt_id::text, source
     from client_greetings where page_id = ${pageId} and fan_ref = ${fanRef}`)).rows[0];
   const greeting: ClientGreetingRow | null = greetingRow ? {
     ownerUserId: greetingRow.owner_user_id === null ? null : Number(greetingRow.owner_user_id),
@@ -202,7 +232,7 @@ async function loadSnapshot(db: Database, pageId: number, fanRef: string, refs: 
     variant: greetingRow.variant === null ? null : Number(greetingRow.variant),
     partCount: greetingRow.part_count === null ? null : Number(greetingRow.part_count),
     confirmedAt: new Date(greetingRow.confirmed_at), firstMessageRef: greetingRow.first_message_ref,
-    source: greetingRow.source,
+    firstAttemptId: greetingRow.first_attempt_id, source: greetingRow.source,
   } : null;
   const desktop = (await readDesktopFollowerOutreach(db, pageId, [fanRef])).get(fanRef) ?? null;
   const custody = (await db.execute<CustodyDbRow>(sql`
@@ -215,11 +245,18 @@ async function loadSnapshot(db: Database, pageId: number, fanRef: string, refs: 
   const messageOwner = refs.platformMessageId === null ? null
     : custody.find((row) => row.pageId === pageId && row.platformMessageId === refs.platformMessageId) ?? null;
   const fanAttempt = attempt && attempt.pageId === pageId && attempt.fanRef === fanRef ? attempt : null;
-  const group = viewGroup({ requestGroup: refs.requestGroup, attempt: fanAttempt, greeting, openCustody });
+  const lastOwnDispatch = refs.lastDispatchUserId === null || openCustody !== null ? null
+    : (await db.execute<CustodyDbRow>(lastOwnDispatchQuery({ pageId, fanRef, userId: refs.lastDispatchUserId })))
+      .rows.map(custodyRow)[0] ?? null;
+  const group = viewGroup({ requestGroup: refs.requestGroup, attempt: fanAttempt, greeting, openCustody, lastOwnDispatch });
+  // With them, in whatever state, the row of the greeting's first confirmed part: a native send
+  // that confirmed the greeting over a held preview send is recorded on that row's id alone.
   const groupParts = group === null ? [] : (await db.execute<CustodyDbRow>(sql`
     select ${CUSTODY_COLUMNS} from client_send_custody
     where page_id = ${pageId} and fan_ref = ${fanRef} and generation_ref = ${group.generationRef}
-      and variant = ${group.variant} and state in ('dispatching', 'sent', 'resolved_sent')`)).rows.map(custodyRow);
+      and variant = ${group.variant}
+      and (state in ('dispatching', 'sent', 'resolved_sent') or attempt_id = ${greeting?.firstAttemptId ?? null}::uuid)`))
+    .rows.map(custodyRow);
   const recentPreviewSends = refs.rateUserId === null ? 0 : Number((await db.execute<{ n: number }>(sql`
     select count(*)::int as n from client_send_custody
     where user_id = ${refs.rateUserId} and origin = 'preview-send'
@@ -228,7 +265,7 @@ async function loadSnapshot(db: Database, pageId: number, fanRef: string, refs: 
     pageId, fanRef, now,
     activeLease: leases.find((row) => row.pageId === pageId && row.fanRef === fanRef && row.state === "active") ?? null,
     requestedLease: leases.find((row) => row.leaseId === refs.leaseToken) ?? null,
-    greeting, desktop, openCustody, attempt, messageOwner, group, groupParts, recentPreviewSends,
+    greeting, desktop, openCustody, attempt, messageOwner, group, groupParts, recentPreviewSends, lastOwnDispatch,
   };
 }
 
@@ -239,6 +276,7 @@ function snapshotRefs(request: ClientClaimRequest): SnapshotRefs {
     platformMessageId: "platformMessageId" in request ? request.platformMessageId : null,
     requestGroup: "group" in request ? request.group : null,
     rateUserId: request.action === "dispatch" ? request.userId : null,
+    lastDispatchUserId: null,
   };
 }
 
@@ -429,6 +467,11 @@ export async function resolveClientSendCustody(db: Database, input: {
  * holder and as none to others. One read-only snapshot for every table, so a
  * send confirmed between two reads cannot show the fan as free (greeting not
  * yet confirmed, custody already gone).
+ *
+ * `custody` is the fan's open send, anyone's; while there is none, the
+ * reader's own last send to the fan dispatched from the preview, in the state
+ * it ended. A read names no attempt, and this is the one way a client that
+ * lost track of its send (a restart, a manual resolve) learns the outcome.
  */
 export async function readClientFanClaimStatus(db: Database, input: {
   pageId: number;
@@ -443,10 +486,67 @@ export async function readClientFanClaimStatus(db: Database, input: {
   const snapshot = await db.transaction(
     (transaction) => loadSnapshot(transaction as unknown as Database, input.pageId, input.fanRef, {
       leaseToken: input.leaseToken, attemptId: null, platformMessageId: null, requestGroup: null, rateUserId: null,
+      lastDispatchUserId: input.userId,
     }),
     { isolationLevel: "repeatable read", accessMode: "read only" },
   );
   return deriveClientClaimView(snapshot, {
     userId: input.userId, instanceId: input.instanceId, leaseToken: input.leaseToken, attemptId: null,
   });
+}
+
+/** One send attempt as the cabinet reads it (the manual resolve, H-7b; the held list, H-7e). */
+export interface ClientSendCustodyItem {
+  attemptId: string;
+  fanRef: string;
+  userId: number;
+  purpose: ClientCustodyRow["purpose"];
+  state: ClientCustodyViewState;
+  generationRef: string;
+  partIndex: number;
+  partCount: number;
+  createdAt: Date;
+  ticketExpiresAt: Date | null;
+}
+
+/** The attempt of this page, its state as a viewer reads it now; null when the page has no such attempt. */
+export async function findClientSendCustodyItem(
+  db: Database,
+  input: { pageId: number; attemptId: string },
+): Promise<ClientSendCustodyItem | null> {
+  assertShape(UUID.test(input.attemptId), "attemptId");
+  const row = (await db.execute<{
+    attempt_id: string; fan_ref: string; user_id: bigint; purpose: ClientCustodyRow["purpose"];
+    state: ClientCustodyRow["state"]; generation_ref: string; part_index: number; part_count: number;
+    created_at: Date; ticket_expires_at: Date | null; now: Date;
+  }>(sql`
+    select attempt_id::text, fan_ref, user_id, purpose, state, generation_ref, part_index, part_count, created_at,
+      ticket_expires_at, clock_timestamp() as now
+    from client_send_custody where attempt_id = ${input.attemptId}::uuid and page_id = ${input.pageId}`)).rows[0];
+  if (!row) return null;
+  const ticketExpiresAt = row.ticket_expires_at === null ? null : new Date(row.ticket_expires_at);
+  return {
+    attemptId: row.attempt_id, fanRef: row.fan_ref, userId: Number(row.user_id), purpose: row.purpose,
+    state: custodyViewState({ state: row.state, ticketExpiresAt }, new Date(row.now)),
+    generationRef: row.generation_ref, partIndex: Number(row.part_index), partCount: Number(row.part_count),
+    createdAt: new Date(row.created_at), ticketExpiresAt,
+  };
+}
+
+/**
+ * How long until the user's preview-send rate window frees a slot: the oldest
+ * of the last CLIENT_PREVIEW_SEND_RATE_LIMIT sends leaves the window. 0 when a
+ * slot is free already. Advice for a 429, read outside the dispatch's lock:
+ * the dispatch itself counts again under the user's lock.
+ */
+export async function readClientPreviewSendRetryAfterMs(db: Database, userId: number): Promise<number> {
+  const row = (await db.execute<{ wait_ms: number }>(sql`
+    select greatest(0, ceil(extract(epoch from (
+      created_at + make_interval(secs => ${CLIENT_PREVIEW_SEND_RATE_WINDOW_MS / 1000}) - clock_timestamp()
+    )) * 1000))::int as wait_ms
+    from client_send_custody
+    where user_id = ${userId} and origin = 'preview-send'
+    order by created_at desc
+    offset ${CLIENT_PREVIEW_SEND_RATE_LIMIT - 1} limit 1`)).rows[0];
+  return row ? Number(row.wait_ms) : 0;
 }

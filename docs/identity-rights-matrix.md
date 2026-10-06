@@ -56,6 +56,8 @@ pages that account is granted; the owner is granted every page implicitly.
 | Chat-extension own AI spend — `/client/pages/{label}/ai-usage` (`apiKey` + page scope) | no (403) | yes, every page, **own rows only** | no (403) | yes, assigned, own rows only | no (403) | **yes, assigned, own rows only** | — | yes, by the role's reach |
 | Chat-extension Spenders statistics — `/client/pages/{label}/spenders/stats` (`apiKey` + page scope) | no (403) | yes, every page | no (403) | yes, assigned | no (403) | **yes, assigned** | — | yes, by the role's reach |
 | Chat-extension awaiting-reply queue — `/client/pages/{label}/spenders/awaiting-reply` (`apiKey` + page scope) | no (403) | yes, every page | no (403) | yes, assigned | no (403) | **yes, assigned** | — | yes, by the role's reach |
+| Chat-extension greeting lease and send custody — `/client/pages/{label}/fans/{fan}/claim`, POST and GET (`apiKey` + page scope) | no (403) | yes, every page | no (403) | yes, assigned | no (403) | **yes, assigned** | — | yes, by the role's reach |
+| Manual resolve of a held chat-extension send — `/pages/{label}/client-send-custody/{attempt}/resolve` (`session` + page scope) | **yes, every page** | no (403) | **yes, assigned** | no (403) | no (403) | no (403) | — | no (403) |
 
 The client bootstrap lists the caller's **active** pages only (a tombstoned
 page is never listed, assigned or not) and announces every feature off until
@@ -235,6 +237,52 @@ nothing from it, the hub's own id of a fan included. Its row is held by
 `client-spender-awaiting-reply.integration`: every cell, the agent key, a page
 that is not granted, tombstoned or missing, in both auth-policy modes, and a
 cursor presented by another person and for another page.
+
+The greeting lease and send custody (chat-extension H-7b) let a person
+granted a page hold a fan's first greeting for themselves and report a send
+from the preview; the hub sends nothing itself. What one caller learns about
+another is deliberately small:
+
+- the holder of a lease is never named. The answer says `you-elsewhere` (the
+  caller's own lease, held by another of their client installs) or
+  `someone-else`, and a lease token is answered only to the install that
+  holds it;
+- a send in flight shows its attempt id and state to everyone granted the
+  page, so nobody dispatches over it; its one-time ticket is answered once, to
+  the dispatcher, and only its sha256 is stored. A finished send is shown by
+  the status read only to the person who dispatched it (their own last send to
+  the fan, so their client learns of a manual resolve), never to anyone else;
+- the outcome of a send (`sent`, `failed`) is taken only from the person and
+  the client install that dispatched it. `registerNativeSend` records the
+  caller's own proven send and frees nobody's custody: over a held send of
+  the same part it records the greeting alone, and the send stays held;
+- only a confirmed greeting's owner may dispatch the rest of its group, and
+  only the owner still gets a lease on a greeted fan.
+
+Which of the owner's switches an action waits for: `claim` and `renew` need
+`newcomers`; `dispatch` needs `previewSend` (and `newcomers` for a greeting),
+read from the owner's stored switches inside the dispatch's own transaction;
+the status read needs only the master switch and the minimum version, on an
+OnlyFans page; `release`, `sent` and `failed` end what the hub already
+admitted and need only the page grant; `registerNativeSend` reports a send
+that already happened and needs only the page grant on an OnlyFans page, so
+no switch, flag or minimum version ever loses the proof of a send. A page
+that is not the caller's answers as on every chat-extension page route (403 /
+404 with the policy enforced, `409 client_feature_disabled` / `not_granted`
+in `log` mode).
+
+The **manual resolve** of a held send is the one right here that is not the
+sender's: the owner, or a team lead of the page, ends an unresolved attempt
+as sent or not sent after looking at the chat, with a note. It is a cabinet
+route (cookie session), so a chatter, any device token and the
+chat-extension token are refused; it is audited as
+`client.send_custody_resolved` (who, which page, which attempt, which
+outcome; no fan id) in the transaction that resolves; and no chat-extension
+switch gates it, so a held send stays resolvable while the extension is
+switched off. "Not sent" waits for the attempt's ticket to run out (`409
+conflict` / `ticket_live` before that): inside it the page may still send. Both rows are held by `client-claim-routes.integration`: every
+cell, the agent key, a page that is not granted and one that does not exist,
+in both auth-policy modes.
 
 The **chat-extension token** (chat-extension H-3) is a device token the
 extension asks for at password sign-in with `client: "chat-extension"`. The

@@ -122,6 +122,16 @@ function bindable(settings: ClientFeatureSettings, page: ClientFeaturePage): boo
 }
 
 /**
+ * Whether a flagged feature exists on a platform at all: the first thing the
+ * evaluation asks. Also for a client route or action that has no flag of its
+ * own but exists only where a feature does (H-7b: the claim status and
+ * registerNativeSend exist where sending from the preview does).
+ */
+export function clientFeatureExistsOn(flag: ClientFeatureFlagName, platform: Platform): boolean {
+  return CLIENT_FEATURE_REQUIREMENTS[flag].platforms.includes(platform);
+}
+
+/**
  * The reasons, in the order they are checked: the feature does not exist on the
  * page's platform; the master switch is off; the flag is off for the page; the
  * extension has no way to bind a host account to the page; the hub does not
@@ -134,7 +144,7 @@ export function evaluateClientFeature(input: {
   served: readonly string[];
 }): ClientFeatureAvailability {
   const requirement = CLIENT_FEATURE_REQUIREMENTS[input.flag];
-  if (!requirement.platforms.includes(input.page.platform)) {
+  if (!clientFeatureExistsOn(input.flag, input.page.platform)) {
     return unavailable("platform_unsupported");
   }
   if (!input.settings.enabled) {

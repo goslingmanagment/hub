@@ -229,7 +229,8 @@ describe("GET /api/v1/client/bootstrap", () => {
     // dossier save from a stored generation (H-5), Split for Ping, Hi and
     // Coach drafts (H-10; the flag itself is off at rest), the caller's own
     // AI spend (H-15), the Spenders statistics (H-8b), the awaiting-reply
-    // queue (H-8c) and the archive feed of one conversation (H-9c).
+    // queue (H-8c), the archive feed of one conversation (H-9c) and the
+    // greeting lease and send custody (H-7b).
     expect(body.capabilities).toEqual([
       "context-v1",
       "live-text-v1",
@@ -240,6 +241,7 @@ describe("GET /api/v1/client/bootstrap", () => {
       "spenders-stats-v1",
       "awaiting-reply-v1",
       "archive-feed-v1",
+      "preview-send-custody-v1",
     ]);
     expect(body.capabilities).toEqual([...SERVED_CLIENT_CAPABILITIES]);
 

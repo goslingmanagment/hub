@@ -8,6 +8,7 @@ import {
   createModel,
   createOnlyFansPage,
   createUser,
+  explainClientLastOwnDispatchQuery,
   readClientFanClaimStatus,
   readDesktopFollowerOutreach,
   resolveClientSendCustody,
@@ -103,7 +104,8 @@ describe("greeting send custody", () => {
     await claim(fanRef, me, I1, leaseToken);
     const attemptId = randomUUID();
     const first = await dispatch(fanRef, { attemptId, leaseToken });
-    expect(first).toMatchObject({ ok: true, view: { custody: { attemptId, state: "dispatching" }, group: { heldParts: [0], sentParts: [] } } });
+    // In flight, not held: `custody` says the part is on its way; heldParts is what nobody can vouch for.
+    expect(first).toMatchObject({ ok: true, view: { custody: { attemptId, state: "dispatching" }, group: { heldParts: [], sentParts: [] } } });
     const ticket = first.view.custody!.ticket!;
     expect(ticket).toMatch(/^[A-Za-z0-9_-]{43}$/);
     const row = await custodyRow(attemptId);
@@ -133,6 +135,17 @@ describe("greeting send custody", () => {
       .toMatchObject({ ok: false, code: "custody_not_owned" });
     expect(await act({ action: "failed", pageId, fanRef, userId: me, attemptId, instanceId: I1, reason: "native_rejected", httpStatus: 401 }))
       .toMatchObject({ ok: false, code: "invalid_request" });
+    // Nor does the dispatcher's own failure report, once the ticket is over: uncertain-held never becomes failed.
+    for (const [reason, httpStatus] of [["not_enqueued", null], ["native_rejected", 403]] as const) {
+      expect(await act({ action: "failed", pageId, fanRef, userId: me, attemptId, instanceId: I1, reason, httpStatus }))
+        .toMatchObject({ ok: false, code: "custody_held", view: { custody: { attemptId, state: "uncertain-held" } } });
+    }
+    expect(await custodyRow(attemptId)).toMatchObject({ state: "dispatching" });
+    // The status read shows the held send to everyone, and nobody's finished one to anybody else.
+    for (const userId of [me, other]) {
+      expect((await readClientFanClaimStatus(harness.db, { pageId, fanRef, userId, instanceId: null, leaseToken: null })).custody)
+        .toMatchObject({ attemptId, state: "uncertain-held", ticket: null });
+    }
     // The manual resolve frees it, audited.
     const resolved = await resolveClientSendCustody(harness.db, {
       pageId, attemptId, resolverUserId: owner, outcome: "not_sent", platformMessageId: null, note: "not in the chat",
@@ -146,6 +159,30 @@ describe("greeting send custody", () => {
       attemptId, outcome: "not_sent", priorState: "uncertain-held", platformMessageIdRecorded: false,
     } }]);
     expect(JSON.stringify(audit.rows[0].metadata)).not.toContain(fanRef);
+    // The dispatcher's client names no attempt when it reads: it finds its own last send, resolved. Nobody else does.
+    expect(await readClientFanClaimStatus(harness.db, { pageId, fanRef, userId: me, instanceId: null, leaseToken: null }))
+      .toMatchObject({
+        greeting: { state: "none" },
+        group: { ...GROUP, sentParts: [], heldParts: [] },
+        custody: { attemptId, state: "resolved-not-sent", ticket: null },
+      });
+    expect(await readClientFanClaimStatus(harness.db, { pageId, fanRef, userId: other, instanceId: null, leaseToken: null }))
+      .toMatchObject({ group: null, custody: null });
+    // A send to the fan that is open comes first, for its dispatcher too.
+    const next = randomUUID();
+    expect((await act({
+      action: "dispatch", pageId, fanRef, userId: other, attemptId: next, instanceId: I2, purpose: "preview-reply",
+      group: { ...GROUP, generationRef: "gen-reply", partCount: 1 }, partIndex: 0, textRevision: 1, leaseToken: null, flagRevision: 3,
+    })).ok).toBe(true);
+    expect((await readClientFanClaimStatus(harness.db, { pageId, fanRef, userId: me, instanceId: null, leaseToken: null })).custody)
+      .toMatchObject({ attemptId: next, state: "dispatching" });
+    expect((await act({ action: "failed", pageId, fanRef, userId: other, attemptId: next, instanceId: I2, reason: "not_enqueued", httpStatus: null })).ok)
+      .toBe(true);
+    // Each reader then finds their own last send.
+    expect((await readClientFanClaimStatus(harness.db, { pageId, fanRef, userId: other, instanceId: null, leaseToken: null })).custody)
+      .toMatchObject({ attemptId: next, state: "failed" });
+    expect((await readClientFanClaimStatus(harness.db, { pageId, fanRef, userId: me, instanceId: null, leaseToken: null })).custody)
+      .toMatchObject({ attemptId, state: "resolved-not-sent" });
     expect(await resolveClientSendCustody(harness.db, {
       pageId, attemptId: randomUUID(), resolverUserId: owner, outcome: "sent", platformMessageId: null, note: "x",
     })).toEqual({ ok: false, code: "not_found", view: null });
@@ -167,6 +204,12 @@ describe("greeting send custody", () => {
          resolved_by_user_id = $2, resolution_note = 'x' where attempt_id = $1`,
       [attemptId, owner],
     )).rejects.toMatchObject({ code: "23514", constraint: "client_send_custody_message_state_check" });
+    // Inside the ticket the page may still send the part: "not sent" waits for the ticket to run out.
+    expect(await resolveClientSendCustody(harness.db, {
+      pageId, attemptId, resolverUserId: owner, outcome: "not_sent", platformMessageId: null, note: "not in the chat",
+    })).toMatchObject({ ok: false, code: "ticket_live", view: { custody: { attemptId, state: "dispatching" } } });
+    expect(await custodyRow(attemptId)).toMatchObject({ state: "dispatching" });
+    await harness.pool.query("update client_send_custody set ticket_expires_at = now() - interval '1 second' where attempt_id = $1", [attemptId]);
     expect((await resolveClientSendCustody(harness.db, {
       pageId, attemptId, resolverUserId: owner, outcome: "not_sent", platformMessageId: null, note: "not in the chat",
     })).ok).toBe(true);
@@ -188,6 +231,12 @@ describe("greeting send custody", () => {
       ok: true, view: { greeting: { state: "confirmed", messageRef: "7001", source: "preview-send" }, custody: { state: "sent" } },
     });
     await act({ action: "release", pageId, fanRef, userId: me, instanceId: I1, leaseToken });
+    // A greeted fan gives no lease to anyone else: nothing to work out but a second greeting.
+    expect(await claim(fanRef, other, I2)).toMatchObject({
+      ok: false, code: "greeting_done", view: { greeting: { state: "confirmed" }, lease: { state: "none" } },
+    });
+    expect(await harness.pool.query("select state from client_fan_leases where fan_ref = $1", [fanRef]))
+      .toMatchObject({ rows: [{ state: "released" }] });
     // The owner continues the same group without a lease; nobody else greets.
     expect((await dispatch(fanRef, { attemptId: parts[1], partIndex: 1 })).ok).toBe(true);
     expect(await sent(fanRef, parts[1], "7002")).toMatchObject({ ok: true });
@@ -404,10 +453,13 @@ describe("desktop new-follower greetings (critic 1)", () => {
       const fanRef = nextFan();
       await insertCommand(fanRef, state, attempts, verifier);
       const leaseToken = randomUUID();
-      await claim(fanRef, me, I1, leaseToken);
+      // A fan the desktop greeted has no greeting left to work out: nobody takes a lease on it.
+      expect.soft(await claim(fanRef, me, I1, leaseToken), label).toMatchObject(state === "confirmed"
+        ? { ok: false, code: "greeting_done", view: { lease: { state: "none" } } }
+        : { ok: true, view: { lease: { state: "owned" } } });
       const view = await readClientFanClaimStatus(harness.db, { pageId, fanRef, userId: me, instanceId: I1, leaseToken });
       expect.soft(view, label).toMatchObject(state === "confirmed"
-        ? { greeting: { state: "confirmed", source: "desktop-outbox" }, desktopOutreachHeld: false, lease: { state: "owned" } }
+        ? { greeting: { state: "confirmed", source: "desktop-outbox" }, desktopOutreachHeld: false, lease: { state: "none" } }
         : { greeting: { state: "none" }, desktopOutreachHeld: holds, lease: { state: "owned" } });
       const expected = !holds ? { ok: true } : state === "confirmed"
         ? { ok: false, code: "greeting_done", view: { greeting: { state: "confirmed", source: "desktop-outbox", messageRef: "9001" } } }
@@ -434,6 +486,47 @@ describe("the claim GET", () => {
     expect((await readClientFanClaimStatus(spy, { pageId, fanRef, userId: me, instanceId: I1, leaseToken: null })).lease)
       .toMatchObject({ state: "owned" });
     expect(seen).toEqual([{ isolationLevel: "repeatable read", accessMode: "read only" }]);
+  });
+
+  it("finds the reader's own last dispatch through the fan's index, not by walking the reader's sends", async () => {
+    // One chatter with 20,000 past sends from the preview to 4,000 fans, in every final state.
+    const busy = (await createUser(harness.db, { username: "claim-busy", role: "chatter" }))!.id;
+    await harness.pool.query(
+      `insert into client_send_custody (attempt_id, page_id, fan_ref, user_id, instance_id, purpose, origin, generation_ref,
+         variant, part_count, part_index, text_revision, request_hash, state, ticket_hash, ticket_expires_at,
+         platform_message_id, failure_reason, resolved_by_user_id, resolved_at, resolution_note, created_at, updated_at)
+       select gen_random_uuid(), $1, (800000000 + g % 4000)::text, $2, $3, 'preview-reply', 'preview-send', 'gen-plan-' || g,
+         0, 1, 0, 1, sha256(g::text::bytea), state, sha256(g::text::bytea), at + interval '10 seconds',
+         case state when 'sent' then (810000000 + g)::text end,
+         case state when 'failed' then 'not_enqueued' end,
+         case state when 'resolved_not_sent' then $4::bigint end,
+         case state when 'resolved_not_sent' then at end,
+         case state when 'resolved_not_sent' then 'not in the chat' end,
+         at, at
+       from (select g, (array['sent', 'failed', 'resolved_not_sent'])[1 + g % 3] as state,
+               now() - interval '1 day' - (g || ' seconds')::interval as at
+             from generate_series(1, 20000) g) rows`,
+      [pageId, busy, I1, owner],
+    );
+    await harness.pool.query("analyze client_send_custody");
+
+    // A fan the chatter sent to, and one they never did (the walk that would read all 20,000).
+    for (const fanRef of ["800000007", "899999999"]) {
+      const plan = await explainClientLastOwnDispatchQuery(harness.db, { pageId, fanRef, userId: busy });
+      expect(plan, plan).toContain("client_send_custody_fan");
+      expect(plan, plan).not.toContain("client_send_custody_rate");
+      expect(plan, plan).not.toMatch(/Seq Scan/);
+    }
+    // And it is the newest of the fan's five that the read reports, in the state it ended.
+    const newest = (await harness.pool.query<{ attempt_id: string; state: string }>(
+      `select attempt_id::text, state from client_send_custody where page_id = $1 and fan_ref = '800000007' and user_id = $2
+       order by created_at desc limit 1`,
+      [pageId, busy],
+    )).rows[0]!;
+    expect((await readClientFanClaimStatus(harness.db, { pageId, fanRef: "800000007", userId: busy, instanceId: null, leaseToken: null })).custody)
+      .toMatchObject({ attemptId: newest.attempt_id, state: newest.state.replaceAll("_", "-"), ticket: null });
+    expect((await readClientFanClaimStatus(harness.db, { pageId, fanRef: "899999999", userId: busy, instanceId: null, leaseToken: null })).custody)
+      .toBeNull();
   });
 });
 

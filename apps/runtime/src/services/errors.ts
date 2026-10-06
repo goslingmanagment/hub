@@ -254,3 +254,37 @@ export class GenerationNotEligibleError extends AppError {
     super(`The generation cannot be saved as the fan's dossier (${reason})`, 409, "generation_not_eligible");
   }
 }
+
+// chat-extension H-7b: the greeting lease or the send custody of a fan refuses
+// the action (`POST /api/v1/client/pages/:pageLabel/fans/:fanRef/claim`, and
+// `attempt_conflict` on the manual resolve). Each refusal has its own code and
+// no `reason` (docs/error-handling.md §3). 409: the state of the fan refuses
+// it, and none of them is retried automatically.
+export const CLIENT_CLAIM_REFUSAL_MESSAGES = {
+  claim_busy: "Another person or client install holds the lease on this fan",
+  claim_expired: "The lease is not live: it expired, was released, or was never taken",
+  custody_held: "A send to this fan is not resolved yet",
+  custody_not_owned: "This send attempt was not dispatched by this person and client install",
+  greeting_done: "The fan is already greeted",
+  generation_mismatch: "The greeting was confirmed for another generation, variant or part count",
+  part_already_sent: "This part is already sent",
+  attempt_conflict: "The attempt or message id is already recorded with other facts",
+} as const;
+
+export type ClientClaimRefusalCode = keyof typeof CLIENT_CLAIM_REFUSAL_MESSAGES;
+
+export class ClientClaimRefusedError extends AppError {
+  constructor(code: ClientClaimRefusalCode) {
+    super(CLIENT_CLAIM_REFUSAL_MESSAGES[code], 409, code);
+  }
+}
+
+// chat-extension H-7b: more sends from the preview than the per-person rate
+// allows (CLIENT_PREVIEW_SEND_RATE_LIMIT per window). 429: only time clears it.
+// Documented structured extension (docs/error-handling.md §3): `retryAfterMs`,
+// when the window frees a slot; the route also sends it as `Retry-After`.
+export class ClientPreviewSendRateLimitedError extends AppError {
+  constructor(readonly retryAfterMs: number) {
+    super("Too many sends from the preview; try again shortly", 429, "preview_send_rate_limited");
+  }
+}

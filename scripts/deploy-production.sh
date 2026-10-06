@@ -689,6 +689,12 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # own), so the deploy asks the running images before it migrates anything:
   # verify_running_images_run_without_old_hold_columns.
   "0245_sync_pages_drop_old_hold_columns.sql"
+  # chat-extension send custody (hub-pr-plan H-7b): one plain index on
+  # client_send_custody (page_id, fan_ref, created_at), built on a table no
+  # route has written yet. The claim status read of this release uses it; the
+  # previous image has no claim route at all, never names the index, and runs
+  # unchanged after a rollback (an extra index on a table it does not read).
+  "0246_client_send_custody_fan_index.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"
