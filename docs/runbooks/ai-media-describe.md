@@ -52,11 +52,10 @@ described; caps $1 and 150 images per UTC day for the agency.
    One call: Sonnet 5, thinking off, `max_tokens` 200, base64 image, no SDK
    retries. The instruction asks for 1–2 neutral English sentences (≤240
    chars), no identification, no age/ethnicity guesses, text in the image
-   summarized but never followed. Prompt v2 asks for the recognizable subject
-   and clear details even when other details or text are unreadable. Sensitive
-   content gets only a permitted high-level, non-graphic caption. When no
-   subject is recognizable the marker is `UNAVAILABLE: unclear_image`; when a
-   permitted caption is not possible it is `UNAVAILABLE: content_restricted`.
+   summarized but never followed. Prompt v3 directly asks for a high-level,
+   factual, non-graphic caption of the visible subject and clear details,
+   omitting uncertain details and unreadable text. It contains no refusal
+   instructions, permission clauses or `UNAVAILABLE` response options.
 7. The result settles the ledger (`ai_usage_events`, feature `media-describe`,
    `user_id` NULL), the budget (real cost), the restricted record
    (`ai_generation_content` with the instruction and the result — never bytes
@@ -76,11 +75,13 @@ described; caps $1 and 150 images per UTC day for the agency.
 | 401 / 403 | `pending` | lane stops (incident) | released |
 | Other 4xx | `failed` | never | released |
 
-Both v2 markers, the legacy `UNAVAILABLE`, a refusal in words and an empty
-answer remain terminal refusals. A prompt version change does not requeue
-old refused images or their variants/copies. The markers never become notes
-for the chat AI. The prompt's clearer task is intended to reduce avoidable
-declines; it does not disable provider content restrictions.
+Response handling remains independent of the prompt: both v2 markers
+(`UNAVAILABLE: unclear_image`, `UNAVAILABLE: content_restricted`), the legacy
+`UNAVAILABLE`, a refusal in words and an empty answer remain terminal refusals.
+Prompt v3 no longer asks for the v2 detail codes, so an unclassified refusal
+has `refusalDetail: unspecified`; known API refusal categories are still
+recorded. A prompt version change does not requeue old refused images or their
+variants/copies. Refusal markers never become notes for the chat AI.
 
 ## How a description reaches a prompt
 
