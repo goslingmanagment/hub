@@ -37,8 +37,12 @@ response; the capture was made independently, and its own manifest and checks ar
 - of the 196 captures, 127 are requests the official UI can produce and all of them match the
   mapped wire order, parameter names and values; the other 69 are the capture session's own probes
   (values or ranges the UI never sends), which is where the server-behaviour facts below come from;
-- 257 of the 259 fields the official client reads occur in the bodies (the two missing are
-  `aggregationData.stories[].{id, content}`: the sampled supporters bought no locked text);
+- 257 of the 259 fields the official client reads on the thirteen routes occur in the bodies (the
+  two missing are `aggregationData.stories[].{id, content}`: the sampled supporters bought no locked
+  text);
+- on the five reused routes of section 6, 32 of the 36 fields the statistics pages read occur; the
+  missing ones are `refundable` and `productOrder` of a transaction row and the same `stories[]`
+  pair;
 - 45 of the 46 FBuddy-only fields occur (`offers[].media[].likes` does not: the server sends likes
   per offer only);
 - the bodies carry 304 more leaf fields that neither client reads; they are listed per route as `L:`;
@@ -49,11 +53,11 @@ response; the capture was made independently, and its own manifest and checks ar
   binds a different string, so the card does not refresh its description.
 
 **Limits of the live layer.** One account, one day, a browser session. It does not show how the
-routes answer the hub's own header plan or what their quotas are. It has no refund, no locked-text
-purchase and no non-empty `kind=2` tag answer, and for the first two no page of the agency can supply
-one: the hub's archive holds no `refund` and no `locked_text` transaction for any of its six Fansly
-pages since their capture floors (2024-05 … 2025-03; `ari-1` from 2026-08-22; read through the Agent
-Read Plane on 2026-10-09). Section 9 lists what is settled and what is open.
+routes answer the hub's own header plan. It is not a rate measurement either: a capture file records
+when a response was saved from the browser's buffer, not when its request was sent, and 49 of the
+115 distinct statistics responses were saved more than once (174 files in all). It has no refund, no
+locked-text purchase and no non-empty `kind=2` tag answer. Section 9 lists what is settled and what
+is open.
 
 The bundle is the same build the 2026-10-06 quota research recorded (main SHA-256 `5e59696b…ca99ab`).
 Notation in section 5: a field listed plainly is read by the official client; a line starting with
@@ -159,11 +163,14 @@ and the tracking-link routes concatenate their own strings (order given below).
   Hub consequence: `fanslyClientCheckRoute()` returns `null` for the twelve `/account/stats/*`
   paths, so today the hub would send them without a check header, as it does for `/it/amoie/stats`;
   route 13 falls into the `earnings` family and would carry that family's stored value. The hub
-  already sends one stored value per family across paths whose true checks differ (every
-  `/account/wallets/earnings/*` path hashes differently) and FBuddy replays a single captured value
-  on every route, both without rejections, so the server evidently does not enforce the check per
-  path today. Whether the new routes behave the same is a live question (section 9); if one ever
-  requires the exact value, the hub can compute it from the stored `fanslyClientId`.
+  already sends one stored value per family, when the page's session has one, across paths whose
+  true checks differ (every `/account/wallets/earnings/*` path hashes differently), and Fansly
+  answers them: production journaled responses of all six earnings routes in the 24 hours before
+  2026-10-08 22:48 UTC. So the server does not enforce the check per path on those routes. FBuddy's
+  code replays a single captured value on every route, the new ones included; that is read from its
+  code, and no FBuddy request was observed. Whether the new routes accept a missing or foreign check
+  is a live question (section 9); if one ever requires the exact value, the hub can compute it from
+  the stored `fanslyClientId`.
 
 **Access.** The `/creator` route tree requires a logged-in creator account. `overwriteAccountId`
 (below) is the only account selector and is authorised server-side.
@@ -337,9 +344,12 @@ watchPctSum, replays, imageImpressions, imageViews, imageWatchMs}`, daily the sa
 `{source, bucket, profileVisits, profileWatchMs, uniqueVisitors}`; `follows` `{bucket, follows,
 unfollows}`; `subscriptions` `{tierId, bucket, subscriptionsNew, subscriptionsRenewed,
 subscriptionsExpired, subscriptionsCancelled, subscriptionsMovedIn, subscriptionsMovedOut}`.
-`views` asked at `month` is answered at `day` (echoed `granularity=day`). Hourly views were served
-for a 400-day span. Hourly revenue has rows only for hours with a sale, so the three-day call is
-often empty. Rows exist only for buckets with activity.
+`views` asked at `month` is answered at `day` (echoed `granularity=day`). Hourly views were accepted
+for a 400-day span, but the rows began on 2026-09-25 00:00 UTC, fourteen days including the day of
+the capture, while the daily rows of the same account go back to 2026-02-07: hourly view rows are
+either kept for two weeks or exist only since then. Hourly revenue has rows only for hours with a
+sale, so the three-day call is often empty; one such row was served for 2026-09-17, three weeks
+back. Rows exist only for buckets with activity.
 
 ### 5.3 `GET /account/stats/media/top`
 
@@ -374,6 +384,10 @@ L: source, mediaType, afterBucket, beforeBucket (echo); offers[].unlikes; media[
 Live: `aggregationData` holds `accountMedia`, `accountMediaBundles` and `creatorMediaOfferLocations`
 (the full location shape of 5.4). The list is capped at 100 offers: `limit=200` and `limit=1000`
 returned the same 100. An empty surface answers `offers: []`.
+The figures are those of the window: for the four offer-and-window pairs both routes covered, an
+offer's `views`, `uniqueViewers`, `watchMs` and `completedViews` equal the sums of its `daily[]`
+rows in 5.4. For `uniqueViewers` that means either a sum of per-day counts or a window in which no
+viewer came back on another day; the capture cannot tell which.
 
 ### 5.4 `GET /account/stats/media`
 
@@ -389,7 +403,7 @@ The modal fires this twice (selected source, then `-1`) plus one benchmarks call
 ```
 media[]
   mediaId, mediaType
-  totals                {durationMs, views (all time)}      F: declared nullable, a full row object
+  totals                {durationMs, views (all time)}      F: declared nullable, as a row object
   daily[]               {bucket, source, views, impressions, watchMs, videoViews, completedViews,
                          watchPctSum, replays, uniqueViewers, durationMs}
   hours[]               {hourBucket, views}
@@ -406,11 +420,31 @@ aggregationData
 F: top-level mediaOfferId, source, afterBucket, beforeBucket
 ```
 
-Live: `totals` is a full row (the `daily[]` fields without `bucket`, plus `mediaOfferId`) and does
-not change with the window; `hours[]` rows carry the full metric set and spanned about 45 hours;
-`retention[]` has 20 points for a video, none for an image; `tags[]` and `tagSeries[]` rows carry
-`kind`. With `source=-1` the answer has `daily[]` per surface but `totals: null` and empty
-`retention`, `tags` and `hours`, so it does not replace the per-surface calls.
+Live: the three row shapes differ.
+
+| Rows | Fields | Not present |
+|---|---|---|
+| `totals` | `mediaOfferId`, `mediaId`, `mediaType`, `source`, `views`, `impressions`, `videoViews`, `completedViews`, `watchMs`, `watchPctSum`, `replays`, `durationMs` | `uniqueViewers`, any bucket |
+| `daily[]` | `bucket`, `mediaId`, `mediaType`, `source`, `views`, `impressions`, `videoViews`, `completedViews`, `watchMs`, `watchPctSum`, `replays`, `durationMs`, `uniqueViewers` | `mediaOfferId` |
+| `hours[]` | `hourBucket`, `mediaId`, `mediaType`, `source`, `views`, `impressions`, `videoViews`, `completedViews`, `watchMs`, `watchPctSum`, `replays` | `uniqueViewers`, `durationMs`, `mediaOfferId` |
+
+`totals` is the all-time figure of the requested surface, not a sum of the window: for one video it
+was the same in a 30-day, a 400-day and a 2019-based request (the last is cut to 400 days, see the
+echoed `afterBucket`). It cannot be rebuilt from `daily[]` either: that video was posted on
+2026-06-24, its daily rows start on that day, and they add up to 748 views against 1 410 in
+`totals`. Why they differ is not known; the beta notice says past For You interactions are still
+being backfilled.
+On this route `uniqueViewers` exists per day only: there is no all-time and no per-hour count.
+`hours[]` is not bound to the window: a request for 2026-10-08 alone returned 20 rows from
+2026-10-06 21:00 to 2026-10-08 18:00 UTC. Only that one offer had hourly rows; the others had no
+view on the requested surface in the preceding two days.
+`retention[]` has 20 points (`percent` 0 … 95) for a video and none for an image;
+`retentionSampleSize` equalled `totals.views` for both captured videos. `tags[]` rows carry
+`tagId`, `kind`, `mediaId`, `mediaType`, `views`, `videoViews`, `completedViews`, `watchMs`,
+`watchPctSum`; `tagSeries[]` rows also carry `kind`.
+With `source=-1` the answer has `daily[]` rows of every surface and `likes[]`, but `totals: null`
+and empty `hours`, `tags`, `retention` and `tagSeries`: those come only from a call that names one
+surface.
 
 `daily[].uniqueViewers` is per day; both clients sum it, which double-counts across days.
 In the `source=-1` answer the official client groups `daily[]` by `source` and renders only
@@ -636,7 +670,7 @@ did not overlap. Rows also carry `accountId`, `correlationAccountId`, `walletId`
 | `GET /trackinglinks/stats?trackingLinkId&before&after` | same, per link | `before` = window end + 1 d, `after` = window start − (days + 1) d, so one call spans current and previous period; bare array of `{timestamp, clicks, claims, follows, subscriptions}`, kept when `after < timestamp < before`; only `follows` is displayed; a 60 s client cache suppresses repeat calls |
 | `GET /trackinglinks/revenuestats?…` | same, per link | bare array of `{timestamp, totalGross}`; fetched, never displayed |
 | `GET /account/wallets/earnings` | Earnings wallet strip | only `pendingBalance` is read |
-| `GET /account/wallets/earnings/transactions?before=&after=&limit=5&offset=0` | Earnings "Recent purchases" | `{data[], total, aggregationData}`; skipped when `overwriteAccountId` is set |
+| `GET /account/wallets/earnings/transactions?before=&after=&limit=5&offset=0` | Earnings "Recent purchases" | `{data[], total, aggregationData}`; each row passes through the wallet transaction model (`walletId`, `transactionId`, `accountId`, `correlationId`, `correlationAccountId`, `amount`, `newBalance`, `type`, `destination`, `status`, `createdAt`, `updatedAt`, `senderId`, `receiverId`, `refundable`, `productOrder`) and is joined to `subscriptionHistory`, `tips` and `stories` as in 5.13; skipped when `overwriteAccountId` is set |
 | `GET /account/{accountId}/wallets` | app-wide | "Available for Payout" is the type-2 (earnings) wallet balance, kept current by wallet WebSocket events |
 
 ## 7. What each tab requests
@@ -681,10 +715,17 @@ and names the nearest existing source for each.
   family or a raw-only justification).
 - **What one page needs for full coverage.** `summary` for the window (everything with its
   comparison period and daily series); `series` `revenue` for history (monthly since 2019-06 in one
-  call, daily per window, hourly for three days) and `views` hourly; `media/top` per surface, then
-  `media` per offer with `source=-1` for per-surface daily rows, retention, hours and tags;
-  `benchmarks`, `geo`, `activehours`, `tags` per surface; `media/shown`; `fans/top`, then `fans` and
-  route 13 per supporter.
+  call, daily per window, hourly for three days) and `views` hourly; `benchmarks`, `geo`,
+  `activehours`, `tags` per surface; `media/shown`; `fans/top`, then `fans` and route 13 per
+  supporter. Hourly rows may not wait: account-level hourly views reached back fourteen days and a
+  media offer's `hours[]` two days (5.2, 5.4), so what is not read in time may be gone.
+- **Media needs more than the top list.** `media/top` is a ranking cut at 100 offers per surface,
+  media type, order and window, with no paging, so it cannot enumerate a page's media. The ids for
+  a full walk have to come from the hub's own `media_stats` queue, the one `media-stats.walk`
+  already iterates for `/it/moie/statsnew`. Per offer, `media` has to be asked for each surface
+  separately (`0`, `1`, `4`): only a call that names a surface returns `totals`, `hours`, `tags`,
+  `tagSeries` and `retention`. `source=-1` returns the daily rows of all surfaces and `likes[]`,
+  nothing else, so it replaces the per-surface calls only where daily rows are all that is wanted.
 - **Overlap with existing lanes.** `summary` and `series` cover what `account.stats`
   (`/it/amoie/stats`) and the earnings snapshot routes give, with server-side comparison values;
   `media` covers `media.offer_stats` (`/it/moie/statsnew`) and adds retention, unique viewers,
@@ -701,6 +742,7 @@ Settled by the live capture (L), details in sections 4 and 5:
 - The fields neither client reads, and the `aggregationData` keys of each route.
 - `/account/stats/series` serves all five families; `views` has no monthly form.
 - Span caps of 400, 120 and 90 days; the 100-offer cap of `media/top`.
+- The three row shapes of `media` (5.4): `totals` is all-time and per surface; `hours`, `tags`, `tagSeries` and `retention` come only with a named surface.
 - `source` 2 and 3 are not filters of `media/top`; `orderBy=watchLift` works.
 - `activehours` is 7 × 24 and echoes the offset it was given.
 - `end=0` on `media/shown` means the current hour.
@@ -709,10 +751,12 @@ Settled by the live capture (L), details in sections 4 and 5:
 Still open:
 
 1. Whether the hub's header plan (no `fansly-client-check` on `/account/stats/*`) gets a `200`. The capture was a browser session, which always sends the check. The owner's assessment (2026-10-09) is that it will be accepted, in line with every other route the hub reads without a check; it is unobserved until the hub's first request. Draft PR goslingmanagment/hub#507 adds the wire specs that let `sync probe` make that request.
-2. Quotas of the family and whether its routes share a bucket. Unknown. What the capture shows is a floor only: 174 requests to the family in 27 minutes, all `200`; up to 30 of them recorded within one minute, and within ten seconds up to 9 on `series` and 7 on `media/top` (record times of a browser session, not send times). The official page itself fires 5 to 7 family requests at once on every tab open and 2 more a minute on Overview. The owner asked for a measurement; its plan is in `~/code/8-docs/2026-10-09-fansly-stats-quota/plan.md`.
-3. Refunds. The live bodies carry the refund fields (`refunds`, `refundedNetMills`, `refundedGrossMills`) with zero values, and no page of the agency has a refund in the hub's archive, so non-zero refunds, `productType 6101` rows, the date a refund is booked on, and `status` 5 / 6 or `destination 1` rows are known from client code only. They cannot be observed until a refund happens on one of the pages.
-4. Locked text, for the same reason: no page has such a sale, so the `stories` join of route 13 and product types 32001 / 32101 in the stats rows are known from client code only.
+2. Quotas of the family and whether its routes share a bucket. Unknown, and the capture gives no figure for them: its timestamps are save times, not send times (section 1), so no request rate can be read from it. It shows only that every request of that session was answered `200`. By its code the official page sends 2 to 7 family requests at once when a tab opens and two more every minute while Overview is visible (section 7). The owner asked for a measurement; its plan is in `~/code/8-docs/2026-10-09-fansly-stats-quota/plan.md`.
+3. Refunds. The live bodies carry the refund fields (`refunds`, `refundedNetMills`, `refundedGrossMills`) with zero values, so non-zero refunds, `productType 6101` rows, the date a refund is booked on, and `status` 5 / 6 or `destination 1` rows are known from client code only. Whether a page of the agency has had a refund is unknown as well: the hub has no refund lane for Fansly (its transactions stay `posted`; the Agent Read Plane answers `refundState: not_captured`, `capture_lane_unimplemented`), so its archive cannot say either way. A monthly `revenue` `series` request per page would: it returns `refunds` per month and product type back to 2019-06.
+4. Locked text. The sampled supporters bought none, so the `stories` join of route 13 and product types 32001 / 32101 in the stats rows are known from client code only. Pages to observe them on exist: the hub's revenue mix holds locked-text revenue (type 32101) for `lora-1` on 2026-01-14 and for `lora-2` on 2025-05-20, 2025-06-28, 2026-02-10 and 2026-02-16 (read through the Agent Read Plane on 2026-10-09).
 5. A non-empty `tags` answer for `kind=2`.
 6. Maximum `limit` on `geo`, `tags`, `fans/top` and route 13 (the observed answers were below the limit asked).
 7. `overwriteAccountId`.
 8. Whether a post id missing from `/account/stats/posts` means zero engagement.
+9. How long hourly rows are kept. Account-level hourly views reached back fourteen days and a media offer's `hours[]` two days (5.2, 5.4); whether that is retention or the start of collection is not known.
+10. Why `totals` of a media offer exceeds the sum of its `daily[]` rows over the offer's whole life (5.4).

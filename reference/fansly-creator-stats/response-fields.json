@@ -1,5 +1,5 @@
 {
- "note": "Field paths and JSON types observed in authenticated responses of one creator session (2026-10-08). '*' is an array element. readBy: which client consumes the field. Entries of aggregationData.accountMedia / accountMediaBundles / accounts are the platform's generic models and are not expanded. An absent path was not observed, not proven absent.",
+ "note": "Field paths and JSON types observed in authenticated responses of one creator session (2026-10-08). '*' is an array element. readBy: which client consumes the field (fansly-web = the official web client, fbuddy-schema = declared only by FBuddy, none = neither); an array or object is marked by whoever reads something inside it. Entries of aggregationData.accountMedia / accountMediaBundles / accounts are the platform's generic models: the web client's shared store takes them whole and they are not expanded. For the five older routes the statistics pages reuse (/account/wallets/earnings, /account/wallets/earnings/transactions, /trackinglinks, /trackinglinks/stats, /trackinglinks/revenuestats) fansly-web marks what the statistics pages and the shared wallet transaction model read; other pages of the web app read more, and FBuddy's schema was not mapped for them. An absent path was not observed, not proven absent.",
  "routes": {
   "/account/stats/series": {
    "fields": {
@@ -41,13 +41,13 @@
       0,
       487
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "rows/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "rows/*/bucket": {
      "types": [
@@ -278,13 +278,13 @@
       6,
       6
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "buckets/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "buckets/*/avgWatchMs": {
      "types": [
@@ -389,13 +389,13 @@
       3,
       3
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "rows/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "rows/*/mediaShown": {
      "types": [
@@ -442,13 +442,13 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "engagement/comments": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "engagement/comments/delta": {
      "types": [
@@ -482,19 +482,19 @@
       3,
       3
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "engagement/mediaLikes/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "engagement/mediaLikes/*/likes": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "engagement/mediaLikes/*/likes/delta": {
      "types": [
@@ -525,7 +525,7 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "engagement/mediaLikes/*/series/likes": {
      "types": [
@@ -535,13 +535,13 @@
       7,
       400
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "engagement/mediaLikes/*/series/likes/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "engagement/mediaLikes/*/series/likes/*/bucket": {
      "types": [
@@ -596,7 +596,7 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "engagement/postLikes/delta": {
      "types": [
@@ -656,7 +656,7 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "engagement/series/comments": {
      "types": [
@@ -666,13 +666,13 @@
       7,
       400
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "engagement/series/comments/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "engagement/series/comments/*/bucket": {
      "types": [
@@ -694,13 +694,13 @@
       7,
       400
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "engagement/series/postLikes/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "engagement/series/postLikes/*/bucket": {
      "types": [
@@ -750,13 +750,13 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "follows/follows": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "follows/follows/delta": {
      "types": [
@@ -787,7 +787,7 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "follows/netFollows/delta": {
      "types": [
@@ -818,7 +818,7 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "follows/series/follows": {
      "types": [
@@ -828,13 +828,13 @@
       7,
       400
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "follows/series/follows/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "follows/series/follows/*/bucket": {
      "types": [
@@ -856,13 +856,13 @@
       7,
       400
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "follows/series/unfollows/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "follows/series/unfollows/*/bucket": {
      "types": [
@@ -880,7 +880,7 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "follows/unfollows/delta": {
      "types": [
@@ -915,13 +915,13 @@
       0,
       18
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "levels/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "levels/*/bucket": {
      "types": [
@@ -957,13 +957,13 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "profile/avgProfileWatchMs": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "profile/avgProfileWatchMs/delta": {
      "types": [
@@ -998,19 +998,19 @@
       5,
       5
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "profile/bySource/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "profile/bySource/*/profileVisits": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "profile/bySource/*/profileVisits/delta": {
      "types": [
@@ -1078,7 +1078,7 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "profile/bySource/*/uniqueVisitors/delta": {
      "types": [
@@ -1109,7 +1109,7 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "profile/profileVisits/delta": {
      "types": [
@@ -1171,7 +1171,7 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "profile/series/profileVisits": {
      "types": [
@@ -1181,13 +1181,13 @@
       7,
       400
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "profile/series/profileVisits/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "profile/series/profileVisits/*/bucket": {
      "types": [
@@ -1217,7 +1217,7 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "profile/uniqueVisitors/delta": {
      "types": [
@@ -1248,7 +1248,7 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "revenue/byProductType": {
      "types": [
@@ -1258,19 +1258,19 @@
       0,
       4
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "revenue/byProductType/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "revenue/byProductType/*/grossMills": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "revenue/byProductType/*/grossMills/delta": {
      "types": [
@@ -1301,7 +1301,7 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "revenue/byProductType/*/netMills/delta": {
      "types": [
@@ -1398,7 +1398,7 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fbuddy-schema"
     },
     "revenue/byProductType/*/refunds/delta": {
      "types": [
@@ -1428,7 +1428,7 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "revenue/byProductType/*/transactions/delta": {
      "types": [
@@ -1459,7 +1459,7 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "revenue/grossMills/delta": {
      "types": [
@@ -1490,7 +1490,7 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "revenue/netAfterRefundsMills/delta": {
      "types": [
@@ -1521,7 +1521,7 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "revenue/netMills/delta": {
      "types": [
@@ -1552,7 +1552,7 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "revenue/newPayingFans/delta": {
      "types": [
@@ -1583,7 +1583,7 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "revenue/payingFans/delta": {
      "types": [
@@ -1644,7 +1644,7 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "revenue/refundedNetMills/delta": {
      "types": [
@@ -1674,7 +1674,7 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "revenue/refunds/delta": {
      "types": [
@@ -1704,7 +1704,7 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "revenue/series/grossMills": {
      "types": [
@@ -1714,13 +1714,13 @@
       7,
       400
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "revenue/series/grossMills/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "revenue/series/grossMills/*/bucket": {
      "types": [
@@ -1742,13 +1742,13 @@
       7,
       400
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "revenue/series/netMills/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "revenue/series/netMills/*/bucket": {
      "types": [
@@ -1770,13 +1770,13 @@
       7,
       400
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "revenue/series/refundedNetMills/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "revenue/series/refundedNetMills/*/bucket": {
      "types": [
@@ -1794,7 +1794,7 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "revenue/transactions/delta": {
      "types": [
@@ -1856,7 +1856,7 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "subscriptions/byTier": {
      "types": [
@@ -1866,13 +1866,13 @@
       0,
       1
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "subscriptions/byTier/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "subscriptions/byTier/*/levels": {
      "types": [
@@ -1906,7 +1906,7 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "subscriptions/byTier/*/subscriberCount/delta": {
      "types": [
@@ -1997,7 +1997,7 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "subscriptions/byTier/*/subscriptionsMovedIn/delta": {
      "types": [
@@ -2027,7 +2027,7 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "subscriptions/byTier/*/subscriptionsMovedOut/delta": {
      "types": [
@@ -2057,7 +2057,7 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "subscriptions/byTier/*/subscriptionsNew/delta": {
      "types": [
@@ -2147,7 +2147,7 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "subscriptions/series/subscriptionsExpired": {
      "types": [
@@ -2157,13 +2157,13 @@
       7,
       400
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "subscriptions/series/subscriptionsExpired/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "subscriptions/series/subscriptionsExpired/*/bucket": {
      "types": [
@@ -2185,13 +2185,13 @@
       7,
       400
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "subscriptions/series/subscriptionsNew/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "subscriptions/series/subscriptionsNew/*/bucket": {
      "types": [
@@ -2209,7 +2209,7 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "subscriptions/subscriptionsCancelled/delta": {
      "types": [
@@ -2239,7 +2239,7 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "subscriptions/subscriptionsExpired/delta": {
      "types": [
@@ -2300,7 +2300,7 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "subscriptions/subscriptionsNew/delta": {
      "types": [
@@ -2330,7 +2330,7 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "subscriptions/subscriptionsRenewed/delta": {
      "types": [
@@ -2364,19 +2364,19 @@
       3,
       3
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "views/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "views/*/avgImageWatchMs": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "views/*/avgImageWatchMs/delta": {
      "types": [
@@ -2407,7 +2407,7 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "views/*/avgWatchMs/delta": {
      "types": [
@@ -2438,7 +2438,7 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "views/*/avgWatchPercent/delta": {
      "types": [
@@ -2469,7 +2469,7 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "views/*/completedViews/delta": {
      "types": [
@@ -2543,7 +2543,7 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "views/*/imageViews/delta": {
      "types": [
@@ -2668,7 +2668,7 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "views/*/replays/delta": {
      "types": [
@@ -2699,7 +2699,7 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "views/*/series/imageViews": {
      "types": [
@@ -2709,13 +2709,13 @@
       7,
       400
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "views/*/series/imageViews/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "views/*/series/imageViews/*/bucket": {
      "types": [
@@ -2737,13 +2737,13 @@
       7,
       400
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "views/*/series/views/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "views/*/series/views/*/bucket": {
      "types": [
@@ -2765,13 +2765,13 @@
       7,
       400
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "views/*/series/watchMs/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "views/*/series/watchMs/*/bucket": {
      "types": [
@@ -2795,7 +2795,7 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "views/*/uniqueImageViewers/delta": {
      "types": [
@@ -2838,7 +2838,7 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "views/*/uniqueViewers/delta": {
      "types": [
@@ -2869,7 +2869,7 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "views/*/videoViews/delta": {
      "types": [
@@ -2900,7 +2900,7 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "views/*/views/delta": {
      "types": [
@@ -2973,7 +2973,7 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/accounts": {
      "types": [
@@ -2983,13 +2983,13 @@
       1,
       59
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/accounts/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "beforeBucket": {
      "types": [
@@ -3005,13 +3005,13 @@
       1,
       89
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "rows/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "rows/*/fanId": {
      "types": [
@@ -3088,7 +3088,7 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/accountMedia": {
      "types": [
@@ -3098,13 +3098,13 @@
       0,
       100
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/accountMedia/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/accountMediaBundles": {
      "types": [
@@ -3114,13 +3114,13 @@
       0,
       9
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/accountMediaBundles/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/creatorMediaOfferLocations": {
      "types": [
@@ -3130,13 +3130,13 @@
       0,
       92
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/creatorMediaOfferLocations/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/creatorMediaOfferLocations/*/accountId": {
      "types": [
@@ -3227,13 +3227,13 @@
       0,
       100
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "offers/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "offers/*/bestMediaId": {
      "types": [
@@ -3255,13 +3255,13 @@
       1,
       1
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "offers/*/media/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "offers/*/media/*/completedViews": {
      "types": [
@@ -3380,7 +3380,7 @@
       7,
       7
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "imageViews/*": {
      "types": [
@@ -3390,7 +3390,7 @@
       24,
       24
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "imageViews/*/*": {
      "types": [
@@ -3418,7 +3418,7 @@
       7,
       7
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "views/*": {
      "types": [
@@ -3428,7 +3428,7 @@
       24,
       24
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "views/*/*": {
      "types": [
@@ -3451,7 +3451,7 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/accountMedia": {
      "types": [
@@ -3461,13 +3461,13 @@
       1,
       1
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/accountMedia/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/accountMediaBundles": {
      "types": [
@@ -3477,13 +3477,13 @@
       0,
       1
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/accountMediaBundles/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/creatorMediaOfferLocations": {
      "types": [
@@ -3493,13 +3493,13 @@
       0,
       1
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/creatorMediaOfferLocations/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/creatorMediaOfferLocations/*/accountId": {
      "types": [
@@ -3575,13 +3575,13 @@
       0,
       8
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/tags/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/tags/*/createdAt": {
      "types": [
@@ -3645,13 +3645,13 @@
       0,
       4
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "likes/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "likes/*/bucket": {
      "types": [
@@ -3685,13 +3685,13 @@
       1,
       1
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "media/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "media/*/daily": {
      "types": [
@@ -3701,13 +3701,13 @@
       1,
       98
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "media/*/daily/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "media/*/daily/*/bucket": {
      "types": [
@@ -3795,13 +3795,13 @@
       0,
       20
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "media/*/hours/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "media/*/hours/*/completedViews": {
      "types": [
@@ -3889,13 +3889,13 @@
       0,
       20
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "media/*/retention/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "media/*/retention/*/percent": {
      "types": [
@@ -3923,13 +3923,13 @@
       0,
       8
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "media/*/tags/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "media/*/tags/*/completedViews": {
      "types": [
@@ -4084,13 +4084,13 @@
       0,
       125
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "tagSeries/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "tagSeries/*/bucket": {
      "types": [
@@ -4131,7 +4131,7 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/tags": {
      "types": [
@@ -4141,13 +4141,13 @@
       0,
       112
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/tags/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/tags/*/createdAt": {
      "types": [
@@ -4225,13 +4225,13 @@
       0,
       112
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "rows/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "rows/*/completedViews": {
      "types": [
@@ -4301,13 +4301,13 @@
       0,
       5564
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "series/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "series/*/bucket": {
      "types": [
@@ -4364,13 +4364,13 @@
       10,
       47
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "profileRows/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "profileRows/*/country": {
      "types": [
@@ -4392,13 +4392,13 @@
       10,
       198
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "rows/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "rows/*/avgWatchMs": {
      "types": [
@@ -4463,7 +4463,7 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "*/accountId": {
      "types": [
@@ -4505,13 +4505,13 @@
      "types": [
       "string"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "*/internalId": {
      "types": [
       "string"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "*/label": {
      "types": [
@@ -4553,7 +4553,7 @@
      "types": [
       "number"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     }
    },
    "mappedButNotObserved": []
@@ -4564,19 +4564,19 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "*/claims": {
      "types": [
       "number"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "*/clicks": {
      "types": [
       "number"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "*/date": {
      "types": [
@@ -4588,7 +4588,7 @@
      "types": [
       "number"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "*/month": {
      "types": [
@@ -4600,13 +4600,13 @@
      "types": [
       "number"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "*/timestamp": {
      "types": [
       "string"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "*/trackingLinkId": {
      "types": [
@@ -4629,7 +4629,7 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "*/date": {
      "types": [
@@ -4647,13 +4647,13 @@
      "types": [
       "string"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "*/totalGross": {
      "types": [
       "number"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "*/totalNet": {
      "types": [
@@ -4745,7 +4745,7 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/accountMedia": {
      "types": [
@@ -4755,13 +4755,13 @@
       0,
       2
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/accountMedia/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/accountMediaBundles": {
      "types": [
@@ -4771,13 +4771,13 @@
       0,
       1
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/accountMediaBundles/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/accounts": {
      "types": [
@@ -4787,13 +4787,13 @@
       1,
       1
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/accounts/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/stories": {
      "types": [
@@ -4803,7 +4803,7 @@
       0,
       0
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/subscriptionHistory": {
      "types": [
@@ -4813,13 +4813,13 @@
       0,
       1
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/subscriptionHistory/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/subscriptionHistory/*/accountId": {
      "types": [
@@ -4919,13 +4919,13 @@
       2,
       30
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/tips/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/tips/*/amount": {
      "types": [
@@ -4999,13 +4999,13 @@
       2,
       30
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "data/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "data/*/accountId": {
      "types": [
@@ -5121,7 +5121,7 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/accountMedia": {
      "types": [
@@ -5131,13 +5131,13 @@
       3,
       3
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/accountMedia/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/accountMediaBundles": {
      "types": [
@@ -5147,13 +5147,13 @@
       1,
       1
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/accountMediaBundles/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/accounts": {
      "types": [
@@ -5163,13 +5163,13 @@
       4,
       4
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/accounts/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/stories": {
      "types": [
@@ -5179,7 +5179,7 @@
       0,
       0
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/subscriptionHistory": {
      "types": [
@@ -5189,13 +5189,13 @@
       1,
       1
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/subscriptionHistory/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/subscriptionHistory/*/accountId": {
      "types": [
@@ -5207,7 +5207,7 @@
      "types": [
       "number"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/subscriptionHistory/*/createdAt": {
      "types": [
@@ -5237,7 +5237,7 @@
      "types": [
       "string"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/subscriptionHistory/*/planId": {
      "types": [
@@ -5273,7 +5273,7 @@
      "types": [
       "string"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/subscriptionHistory/*/subscriptionTierId": {
      "types": [
@@ -5285,7 +5285,7 @@
      "types": [
       "string"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/tips": {
      "types": [
@@ -5295,13 +5295,13 @@
       3,
       3
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/tips/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/tips/*/amount": {
      "types": [
@@ -5319,13 +5319,13 @@
      "types": [
       "string"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/tips/*/message": {
      "types": [
       "string"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/tips/*/receiverId": {
      "types": [
@@ -5375,49 +5375,49 @@
       5,
       5
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "data/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "data/*/accountId": {
      "types": [
       "string"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "data/*/amount": {
      "types": [
       "number"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "data/*/correlationAccountId": {
      "types": [
       "string"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "data/*/correlationId": {
      "types": [
       "string"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "data/*/createdAt": {
      "types": [
       "number"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "data/*/destination": {
      "types": [
       "number"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "data/*/destinationAmount": {
      "types": [
@@ -5435,7 +5435,7 @@
      "types": [
       "number"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "data/*/newBalance64": {
      "types": [
@@ -5447,52 +5447,57 @@
      "types": [
       "string"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "data/*/senderId": {
      "types": [
       "null"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "data/*/status": {
      "types": [
       "number"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "data/*/transactionId": {
      "types": [
       "string"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "data/*/type": {
      "types": [
       "number"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "data/*/updatedAt": {
      "types": [
       "null"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "data/*/walletId": {
      "types": [
       "string"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "total": {
      "types": [
       "number"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     }
    },
-   "mappedButNotObserved": []
+   "mappedButNotObserved": [
+    "data/*/refundable",
+    "data/*/productOrder",
+    "aggregationData/stories/*/id",
+    "aggregationData/stories/*/content"
+   ]
   },
   "/account/wallets/earnings": {
    "fields": {
@@ -5500,7 +5505,7 @@
      "types": [
       "number"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     }
    },
    "mappedButNotObserved": []
@@ -5517,7 +5522,7 @@
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/accounts": {
      "types": [
@@ -5527,13 +5532,13 @@
       1,
       1
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "aggregationData/accounts/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "beforeBucket": {
      "types": [
@@ -5549,13 +5554,13 @@
       1,
       3
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "byProductType/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "byProductType/*/grossMills": {
      "types": [
@@ -5631,13 +5636,13 @@
       1,
       3
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "rows/*": {
      "types": [
       "object"
      ],
-     "readBy": "none"
+     "readBy": "fansly-web"
     },
     "rows/*/bucket": {
      "types": [
