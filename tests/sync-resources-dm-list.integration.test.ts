@@ -335,7 +335,8 @@ describe("dm-conversations.head", () => {
       { n: 103, partner: null, headId: null, headAtMs: null, metadata: { unresolvedIdentity: true, keep: "me" } },
       // 104: bound; this answer names no partner.
       { n: 104, headId: messageOf(104), headAtMs: old, newestStored: messageOf(104) },
-      // 105: excluded as unresolvable, no probe answer yet.
+      // 105: excluded as unresolvable (a lookup miss, before arena "vanished
+      // chat" R4), its head read: the list takes the reason off, asks no probe.
       {
         n: 105, headId: messageOf(105), headAtMs: old, newestStored: messageOf(105),
         metadata: { messageSyncExcludedReason: FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP },
@@ -356,14 +357,12 @@ describe("dm-conversations.head", () => {
     const { hits } = await runLive(pageId, (req) => {
       if (req.spec === "messaging.groups") return okResponse(offsetOf(req) === 0 ? first : second);
       if (req.spec === "group.detail") return okResponse(groupDetail(103, [fanOf(103)], null));
-      if (req.spec === "accounts.by_ids") return okResponse([]);
       throw new Error(`unexpected ${req.spec}`);
     }, async () => (await workRow(pageId, "dm-conversations.head"))?.cursor.last != null
-      && (await workRow(pageId, "dm-conversations.detail"))?.state === "done"
-      && (await workRow(pageId, "fan-profiles.probe"))?.state === "done");
+      && (await workRow(pageId, "dm-conversations.detail"))?.state === "done");
 
     expect(hits.filter((spec) => spec === "messaging.groups")).toHaveLength(2);
-    expect(hits.filter((spec) => spec !== "messaging.groups").sort()).toEqual(["accounts.by_ids", "group.detail"]);
+    expect(hits.filter((spec) => spec !== "messaging.groups")).toEqual(["group.detail"]);
     const head = await workRow(pageId, "dm-conversations.head");
     expect(head!.state).toBe("open");
     expect(head!.cursor).toMatchObject({ walk: null, last: { stop: "unchanged_page", pageCount: 2, knownChats: 100 } });
@@ -404,40 +403,45 @@ describe("dm-conversations.head", () => {
     const t103 = await thread(pageId, 103);
     expect(t103).toMatchObject({ partner: fanOf(103), metadata: { keep: "me" } });
     expect(t103!.fan_id).not.toBeNull();
-    // The unresolvable partner was probed (the answer `[]` keeps it excluded).
-    expect((await workRow(pageId, "fan-profiles.probe"))!.params).toEqual({ conversationId: expect.any(Number) });
-    expect((await thread(pageId, 105))!.metadata).toEqual({
-      messageSyncExcludedReason: FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
-    });
+    // The unresolvable exclusion is gone, and nobody probes its partner.
+    expect((await thread(pageId, 105))!.metadata).toEqual({});
+    expect(await subjectsOf(pageId, "fan-profiles.probe")).toEqual([]);
     const kinds = await testDb.pool.query("select kind, count(*)::int as n from observations where account_id = $1 group by 1 order by 1", [pageId]);
     expect(kinds.rows).toEqual([
-      { kind: "account_lookup", n: 1 },
       { kind: "dm_conversations", n: 2 },
       { kind: "group_detail", n: 1 },
     ]);
   });
 
-  it("lifts an unresolvable exclusion on a resolved answer of the day, and asks nothing of a chat already read", async (context) => {
+  it("forgets an unresolvable exclusion whatever the stored probe said: no probe, one read only of a chat whose head is newer than the reads", async (context) => {
     if (!testDb) return context.skip();
     const pageId = await seedPage();
     const at = NOW_MS - HOUR;
-    await seedThreads(pageId, [{
-      n: 1, headId: messageOf(1), headAtMs: at, newestStored: messageOf(1),
-      metadata: { messageSyncExcludedReason: FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP },
-    }]);
+    const excluded = { messageSyncExcludedReason: FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP };
+    await seedThreads(pageId, [
+      // 1: its head read already; 2: a head newer than what the reads reached.
+      { n: 1, headId: messageOf(1), headAtMs: at, newestStored: messageOf(1), metadata: excluded },
+      { n: 2, headId: messageOf(2), headAtMs: at, newestStored: messageOf(2), metadata: { ...excluded, keep: "me" } },
+    ]);
+    // A fresh unresolved answer of the page's account probe changes nothing.
     await testDb.pool.query(
       `insert into page_fans (fan_id, platform_account_id, account_probe_at, account_probe_resolved)
-       select f.id, $1, clock_timestamp() - interval '1 hour', true from fans f where f.platform_user_id = $2`,
-      [pageId, fanOf(1)],
+       select f.id, $1, clock_timestamp() - interval '1 hour', false from fans f where f.platform_user_id = any($2::text[])`,
+      [pageId, [fanOf(1), fanOf(2)]],
     );
     await makeDue(pageId, "dm-conversations.head");
-    const { hits } = await runLive(pageId, () => okResponse(listPage([{ n: 1, headId: messageOf(1), headAtMs: at }])),
-      async () => (await workRow(pageId, "dm-conversations.head"))?.cursor.last != null);
+    const { hits } = await runLive(pageId, () => okResponse(listPage([
+      { n: 1, headId: messageOf(1), headAtMs: at },
+      { n: 2, headId: messageOf(2, 1), headAtMs: at },
+    ])), async () => (await workRow(pageId, "dm-conversations.head"))?.cursor.last != null);
     expect(hits).toEqual(["messaging.groups"]);
     expect((await thread(pageId, 1))!.metadata).toEqual({});
+    expect((await thread(pageId, 2))!.metadata).toEqual({ keep: "me" });
     expect((await workRow(pageId, "dm-conversations.head"))!.cursor).toMatchObject({ last: { stop: "short_page", pageCount: 1 } });
     expect(await subjectsOf(pageId, "fan-profiles.probe")).toEqual([]);
-    expect(await subjectsOf(pageId, "dm-messages.catchup")).toEqual([]);
+    expect(await subjectsOf(pageId, "dm-messages.catchup")).toEqual([groupOf(2)]);
+    expect((await workRow(pageId, "dm-messages.catchup", { subject: groupOf(2) }))!.demand)
+      .toEqual(expect.objectContaining({ messageIds: [messageOf(2, 1)] }));
   });
 });
 

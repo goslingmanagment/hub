@@ -44,7 +44,14 @@ import {
   syncMediaHandoff,
   syncPages,
 } from "@agency_hub_core/db";
-import { CONFIG_DESCRIPTORS, ENV_CONFIG_KEYS, RETIRED_FANSLY_ENV_KEYS } from "@agency_hub_core/shared";
+import {
+  CONFIG_DESCRIPTORS,
+  ENV_CONFIG_KEYS,
+  FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY,
+  FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS,
+  FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
+  RETIRED_FANSLY_ENV_KEYS,
+} from "@agency_hub_core/shared";
 
 // Fansly Sync Engine migrations (design §2.1): forward-only, and additive
 // until step 4, whose last ones drop what the hold set replaced. One block
@@ -1152,5 +1159,50 @@ describe("page_dm_thread_unavailability.sql (arena \"vanished chat\", R2: the ch
     // tests/sync-engine-retention-erasure.integration.test.ts runs the page
     // and fan erasure (unchanged by this release) on the new schema.
     expect(flat).toContain("references page_dm_threads(id) on delete cascade");
+  });
+});
+
+describe("retire_dm_unresolvable_exclusion.sql (arena \"vanished chat\", R4: a lookup miss no longer excludes a chat)", () => {
+  // Found by its name, not its number: the number is the next free one at merge.
+  const found = readdirSync("packages/db/migrations").filter((file) => file.endsWith("_retire_dm_unresolvable_exclusion.sql"));
+  const migration = found[0] ?? "";
+  const text = found.length === 1 ? readFileSync(`packages/db/migrations/${migration}`, "utf8") : "";
+  const sql = stripComments(text);
+  const statements = topLevelStatements(sql);
+
+  it("exists once, after the episodes that took over a chat Fansly stops serving (0251)", () => {
+    expect(found).toHaveLength(1);
+    expect(migration > "0251_page_dm_thread_unavailability.sql").toBe(true);
+  });
+
+  it("is one data update that takes that one reason off the threads carrying it, and no DDL", () => {
+    expect(statements).toEqual([
+      "update page_dm_threads t set metadata = t.metadata - 'messageSyncExcludedReason', updated_at = clock_timestamp() "
+        + "where t.metadata ->> 'messageSyncExcludedReason' = 'partner_unresolvable_from_account_lookup'",
+    ]);
+    expect(sql).not.toMatch(/\b(alter|create|drop|rename|truncate|delete|insert|grant|trigger)\b/i);
+    // Nothing else: no other reason, no lift list, no work.
+    expect(sql).not.toContain(FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS);
+    expect(sql).not.toMatch(/sync_pages|sync_work|lifted_dm_exclusions/);
+  });
+
+  it("names the metadata key and the reason the shared vocabulary has", () => {
+    expect(sql).toContain(`'${FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY}'`);
+    expect(sql).toContain(`'${FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP}'`);
+  });
+
+  it("allows application rollback: no code of this release writes the reason, and the previous image writes it only on a chat that has it", () => {
+    expect(rollbackCompatible()).toContain(`"${migration}"`);
+    // The runtime names the reason nowhere any more (the account probe and
+    // the conversation list were its writers); only the shared reader and the
+    // owner's levers know it, for rows written before.
+    const runtimeSources = (readdirSync("apps/runtime/src", { recursive: true }) as string[])
+      .filter((file) => file.endsWith(".ts"))
+      .map((file) => [file, readFileSync(`apps/runtime/src/${file}`, "utf8")] as const);
+    expect(runtimeSources.length).toBeGreaterThan(100);
+    for (const [file, source] of runtimeSources) {
+      expect(source, file).not.toContain("PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP");
+      expect(source, file).not.toContain(`"${FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP}"`);
+    }
   });
 });

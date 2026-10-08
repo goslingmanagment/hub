@@ -8,12 +8,10 @@ import {
   listPageDmThreadListStates,
   maxPageDmThreadGeneration,
   readDmFindSharedRead,
-  readFanslyAccountProbe,
   readOpenChatUnavailability,
   upsertPageDmConversationListFields,
   type Database,
   type DmFindSharedRead,
-  type PageDmThreadListState,
   type SyncPageRow,
 } from "@agency_hub_core/db";
 import {
@@ -23,12 +21,8 @@ import {
   type FanslyMessagingGroup,
   type FanslyMessagingGroupsPage,
 } from "@agency_hub_core/fansly";
-import {
-  FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
-  getFanslyDmMessageSyncExcludedReason,
-} from "@agency_hub_core/shared";
 
-import { FANSLY_ACCOUNT_LOOKUP_REUSE_MS, upsertHydratedFansForPage } from "../lib/fan-hydration.ts";
+import { upsertHydratedFansForPage } from "../lib/fan-hydration.ts";
 import { ApplyQuarantine } from "../../engine/commit.ts";
 import type {
   ApplyInput,
@@ -103,7 +97,6 @@ const DETAIL_KEY = "dm-conversations.detail";
 const WS_DOWN_KEY = "dm-conversations.ws-down";
 const MESSAGES_HEAD_KEY = "dm-messages.head";
 const MESSAGES_CATCHUP_KEY = "dm-messages.catchup";
-const PROBE_KEY = "fan-profiles.probe";
 const REPAIR_KEY = "repair.ws-gap";
 
 /** The conversation list's route. */
@@ -191,26 +184,6 @@ async function planWithIdentity(
   return request();
 }
 
-/** The stored probe answers of the last day for the threads excluded as
- *  unresolvable, by partner id. */
-async function freshProbeAnswers(
-  db: Database,
-  input: { pageId: number; states: readonly PageDmThreadListState[]; now: Date },
-): Promise<Map<string, "resolved" | "unresolved">> {
-  const answers = new Map<string, "resolved" | "unresolved">();
-  for (const state of input.states) {
-    const partner = state.partnerPlatformUserId;
-    if (partner === null || answers.has(partner)) continue;
-    if (getFanslyDmMessageSyncExcludedReason(state.metadata) !==
-      FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP) continue;
-    const probe = await readFanslyAccountProbe(db, { platformAccountId: input.pageId, platformUserId: partner });
-    if (probe !== null && input.now.getTime() - probe.probedAt.getTime() < FANSLY_ACCOUNT_LOOKUP_REUSE_MS) {
-      answers.set(partner, probe.resolved ? "resolved" : "unresolved");
-    }
-  }
-  return answers;
-}
-
 // ── follow-ups ──────────────────────────────────────────────────────────────
 
 /** The list heads the established chat-unavailability episodes of these
@@ -226,9 +199,6 @@ async function unavailableHandledHeads(db: Database, pageId: number, groupIds: r
 
 interface FollowupThread {
   state: ListHeadFollowupState;
-  threadId: number;
-  partnerId: string | null;
-  probeDue: boolean;
   requestGroupDetail: boolean;
   followupClass: FollowupClass;
 }
@@ -239,7 +209,8 @@ interface FollowupThread {
  * planned — skipped while the chat has an open `dm-messages.head` — or
  * `dm-messages.head` urgent; urgent too for a chat a `.find` is open for, as
  * this read answers that find), the group detail of a chat without a
- * partner, the probe of an unresolvable partner.
+ * partner. No account probe: a lookup miss excludes no chat (arena "vanished
+ * chat" §6).
  */
 async function threadFollowups(
   db: Database,
@@ -292,15 +263,6 @@ async function threadFollowups(
       followups.push({ resource: DETAIL_KEY, subject: thread.state.groupId, demand: { reason: `partner:${input.key}` } });
       bump("followup_group_detail");
     }
-    if (thread.probeDue && thread.partnerId !== null) {
-      followups.push({
-        resource: PROBE_KEY,
-        subject: thread.partnerId,
-        params: { conversationId: thread.threadId },
-        demand: { reason: `exclusion:${input.key}` },
-      });
-      bump("followup_probe");
-    }
   }
   return { followups, counters };
 }
@@ -349,26 +311,20 @@ export async function applyListPage(
     platformConversationIds: rows.map((row) => row.groupId),
   });
   const existingByGroup = new Map(states.map((state) => [state.platformConversationId, state] as const));
-  const probes = await freshProbeAnswers(tx, { pageId: input.pageId, states, now: input.now });
   // The page row: its lifted exclusions (owner decision №8) and the engine's
   // start on it (the follow-ups).
   const page = await getSyncPage(tx, input.pageId);
   const liftedExclusions = page?.liftedDmExclusions ?? [];
 
-  const items = rows.map((item) => {
-    const existing = existingByGroup.get(item.groupId) ?? null;
-    const partner = existing?.partnerPlatformUserId ?? null;
-    return resolveConversationListItem({
-      item,
-      group: groupsById.get(item.groupId) ?? null,
-      accountsById,
-      aggregationAccountCount: accounts.length,
-      existing,
-      pageAccountId,
-      probe: partner === null ? null : probes.get(partner) ?? null,
-      liftedExclusions,
-    }, input.now);
-  });
+  const items = rows.map((item) => resolveConversationListItem({
+    item,
+    group: groupsById.get(item.groupId) ?? null,
+    accountsById,
+    aggregationAccountCount: accounts.length,
+    existing: existingByGroup.get(item.groupId) ?? null,
+    pageAccountId,
+    liftedExclusions,
+  }, input.now));
 
   // The partners' fans: a profile served with the list, or an id ensured
   // unverified (no profile is not deletion evidence).
@@ -435,9 +391,6 @@ export async function applyListPage(
         listHeadId: item.head.listMessageId,
         listHeadAt: listHeadInstant(item.head.listMessageId, servedAt),
       },
-      threadId: written.id,
-      partnerId: written.partnerPlatformUserId,
-      probeDue: item.probeDue,
       requestGroupDetail: item.requestGroupDetail,
       followupClass: input.classOf(item.groupId),
     });
@@ -460,7 +413,8 @@ export async function applyListPage(
  * One accepted group detail into its thread (`.find` step 2, `.detail`): the
  * partner when the group names exactly one besides the page (its fan ensured
  * unverified), the detail's head when it is newer than the stored one; the
- * list's own fields and the exclusion stay as they are. A new thread is
+ * list's own fields and an aggregation-missing exclusion stay as they are (a
+ * stored unresolvable one goes, as on any list write). A new thread is
  * created from the detail alone (D5) only for a direct chat: a detail that
  * names no single partner (the page's own mass-message container, a group of
  * several) creates nothing — a thread for it would be a visible inbox row
@@ -485,7 +439,6 @@ async function applyGroupDetail(
   const fanMap = partner === null
     ? new Map<string, number>()
     : await upsertHydratedFansForPage(tx, { platformAccountId: input.pageId, accounts: [], unverifiedIds: [partner] });
-  const exclusion = getFanslyDmMessageSyncExcludedReason(existing?.metadata);
   const head = resolved.head;
   const written = await upsertPageDmConversationListFields(tx, {
     platformAccountId: input.pageId,
@@ -505,7 +458,7 @@ async function applyGroupDetail(
     }),
     lastSeenGeneration: null,
     unresolvedIdentity: resolved.writtenPartnerId === null,
-    messageSyncExcludedReason: exclusion,
+    messageSyncExcludedReason: resolved.messageSyncExcludedReason,
   });
   const message = input.detail.lastMessage ?? null;
   const listHeadId = typeof message?.id === "string" && message.id.length > 0 ? message.id : null;
@@ -525,9 +478,6 @@ async function applyGroupDetail(
         listHeadId,
         listHeadAt: listHeadInstant(listHeadId, servedAt),
       },
-      threadId: written.id,
-      partnerId: written.partnerPlatformUserId,
-      probeDue: false,
       requestGroupDetail: false,
       followupClass: input.followupClass,
     }],

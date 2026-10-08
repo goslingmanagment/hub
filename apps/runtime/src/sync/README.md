@@ -401,11 +401,17 @@ pending) with the evidence ids; `--record` keeps the summary as `admin.sync_dm_e
 --page P --reason R --evidence-page L` needs a live page and L's newest recorded probe of R with ≥ 10 probed chats,
 ≥ 80 % served and no page-level error (E2): in one transaction the reason joins `sync_pages.lifted_dm_exclusions`
 (0235) and the page's bound threads lose it (audited `admin.sync_dm_exclusion_lift`). The engine's conversation list
-then never assigns a lifted reason to a thread it leaves bound, nor does the account probe re-exclude a lifted
-unresolvable chat, so those chats sync like any other (new heads are read; history only by request). An unbound
-thread keeps its reason. `sync excluded unlift --page P --reason R` takes the reason off the page's list; the next
-list pass assigns it again. The lift is per page: a later page is lifted after its own acceptance, naming the
-first page's recorded probe as evidence.
+then never assigns a lifted reason to a thread it leaves bound, so those chats sync like any other (new heads are
+read; history only by request). An unbound thread keeps its reason. `sync excluded unlift --page P --reason R` takes
+the reason off the page's list; the next list pass assigns it again. The lift is per page: a later page is lifted
+after its own acceptance, naming the first page's recorded probe as evidence.
+
+`partner_unresolvable_from_account_lookup` is retired (arena "vanished chat", R4): a lookup that resolves no partner
+is the page's own evidence (the fan blocked the page, or a transient miss), so `fan-profiles.probe` excludes nothing
+(no apply asks for it any more), the conversation list neither assigns nor keeps the reason (its next write of a
+chat, a group detail's too, takes it off), and `*_retire_dm_unresolvable_exclusion.sql` took it off every thread
+without asking for any work. A chat Fansly stops serving is the chat-unavailability episode's (next section). The
+owner's levers still accept the reason, for rows and recorded probes written before.
 
 ## A chat Fansly stopped serving (arena "vanished chat", R2)
 

@@ -1,0 +1,45 @@
+-- 0254_retire_dm_unresolvable_exclusion.sql
+--
+-- A lookup miss no longer excludes a chat (arena "vanished chat", plan §6,
+-- M3b). `fan-profiles.probe` excluded a chat from message sync
+-- (`page_dm_threads.metadata.messageSyncExcludedReason =
+-- 'partner_unresolvable_from_account_lookup'`) when `/account?ids=` resolved
+-- no partner for the page, and the conversation list kept the reason until a
+-- probe of the day resolved the partner. A lookup miss is the page's own
+-- evidence (the fan blocked that page, or a transient miss), not a reason to
+-- stop reading the chat; a chat Fansly itself stops serving to the page is the
+-- chat-unavailability episode's (`page_dm_thread_unavailability`, 0251). From
+-- this release the probe excludes nothing and the conversation list neither
+-- assigns the reason nor keeps it on a chat it writes.
+--
+-- This takes the reason off the threads that carry it, and nothing else: no
+-- other key of their metadata, no other reason
+-- (`partner_missing_from_aggregation_accounts` stays), no
+-- `sync_pages.lifted_dm_exclusions`, no work row. The chats are read by
+-- ordinary demand only: when the conversation list next lists one whose head
+-- is newer than what the message reads reached, one `dm-messages.catchup`; a
+-- socket message in it, one `dm-messages.head`; a history request, its own
+-- read. A chat whose head was read asks for nothing.
+--
+-- (Production, 2026-10-09: 17 threads on six live pages, all bound, 11
+-- visible; 7 of them have a list head newer than what the reads reached, none
+-- is a never-read chat that began under the engine.)
+--
+-- Data only: one statement, no DDL. A database without such a thread (a new
+-- one, or this migration applied before) changes nothing.
+--
+-- After the deploy (read-only):
+--   select count(*) from page_dm_threads
+--    where metadata ->> 'messageSyncExcludedReason' = 'partner_unresolvable_from_account_lookup';   -- 0
+--
+-- Rollback-compatible: the previous image writes the reason only from its
+-- account probe, which only its conversation list asks for, and only for a
+-- chat that carries the reason already. None does after this, so it excludes
+-- no chat again and reads the re-included chats like any other. The one way
+-- back is a `fan-profiles.probe` row it asked for before this ran and nothing
+-- answered yet (production: none open): it may exclude that one chat, which
+-- stays excluded until a list pass of this release lists it again.
+update page_dm_threads t
+   set metadata = t.metadata - 'messageSyncExcludedReason',
+       updated_at = clock_timestamp()
+ where t.metadata ->> 'messageSyncExcludedReason' = 'partner_unresolvable_from_account_lookup';

@@ -443,6 +443,9 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     module: fanProfilesModule("lookup"),
   },
   {
+    // No apply of this build asks for it: a lookup miss excludes no chat
+    // (arena "vanished chat" §6). Kept so a row an older image asked for
+    // still runs — it stores the page's answer and excludes nothing.
     key: "fan-profiles.probe", file: "fan-profiles", subject: "fan", kind: "trigger", class: "planned",
     triggers: ["apply:dm-conversations.*", "apply:dm-messages.*"], slo: {},
     proof: "snapshot", walk: "single", http: true, evidence: false, fence: "none",

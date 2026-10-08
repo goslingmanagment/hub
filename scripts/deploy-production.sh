@@ -739,6 +739,16 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # its readers show it; its page and fan erasure delete the threads and the
   # episodes go with them through the cascade.
   "0251_page_dm_thread_unavailability.sql"
+  # A lookup miss no longer excludes a chat (arena "vanished chat", M3b): one
+  # data update that takes `partner_unresolvable_from_account_lookup` off the
+  # threads that carry it (production: 17), no other metadata key, reason or
+  # row, no work, no DDL. The previous image writes that reason only from its
+  # account probe, which only its conversation list asks for, and only for a
+  # chat that carries the reason already; with none left it excludes no chat
+  # again (but through a probe row it asked for before the deploy and nothing
+  # answered: production has none open) and reads the re-included chats like
+  # any other. So it runs unchanged after a rollback.
+  "0254_retire_dm_unresolvable_exclusion.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

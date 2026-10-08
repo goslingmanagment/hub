@@ -63,8 +63,8 @@ import {
 // only, on a recorded verdict of ≥ 10 chats, ≥ 80 % served, no page-level
 // error — clears the reason from bound threads of that reason only; the next
 // list pass keeps them lifted on that page and excludes them on a page
-// without the lift; unlift; a lifted unresolvable reason is never assigned
-// again by the account probe.
+// without the lift; unlift; the account probe excludes no chat, lifted or
+// not; the migration that takes the unresolvable reason off every thread.
 
 let testDb: StartedTestDatabase | null = null;
 
@@ -665,7 +665,7 @@ describe("the conversation list after a lift", () => {
     expect(await scalar("select count(*)::int as n from page_dm_threads where id = $1 and fan_id is not null", [liftedBound])).toBe(1);
   });
 
-  it("a lifted unresolvable reason is never assigned again by the account probe", async (context) => {
+  it("the account probe excludes no chat: an unresolved answer is the page's fact, lifted or not", async (context) => {
     if (!testDb) return context.skip();
     const pageId = await seedPage("probe-unresolvable");
     const threadId = await seedThread(pageId, 1, { reason: null });
@@ -675,17 +675,72 @@ describe("the conversation list after a lift", () => {
         pageId,
         now: new Date(),
         ownRef: OWN,
+        // A row an older image asked for names the chat.
         work: { subject: fanOf(1), params: { conversationId: threadId } },
         parsed: [],
         page,
       } as never);
     });
-    await testDb.pool.query("update sync_pages set lifted_dm_exclusions = array[$2]::text[] where page_id = $1", [pageId, UNRESOLVABLE]);
-    expect((await apply()).work.result).toEqual({ resolution: "unresolved", excluded: false });
-    expect(await reasonOf(threadId)).toBeNull();
-    await testDb.pool.query("update sync_pages set lifted_dm_exclusions = '{}' where page_id = $1", [pageId]);
-    expect((await apply()).work.result).toEqual({ resolution: "unresolved", excluded: true });
-    expect(await reasonOf(threadId)).toBe(UNRESOLVABLE);
+    for (const lifted of [[UNRESOLVABLE], []]) {
+      await testDb.pool.query("update sync_pages set lifted_dm_exclusions = $2::text[] where page_id = $1", [pageId, lifted]);
+      expect((await apply()).work).toMatchObject({ close: "done", closeReason: "probe_unresolved", result: { resolution: "unresolved" } });
+      expect(await reasonOf(threadId)).toBeNull();
+    }
+  });
+});
+
+describe("the migration that takes the unresolvable exclusion off (arena \"vanished chat\", M3b)", () => {
+  // Found by its name, not its number: the number is the next free one at merge.
+  const found = readdirSync("packages/db/migrations").filter((file) => file.endsWith("_retire_dm_unresolvable_exclusion.sql"));
+  const migrationSql = found.length === 1 ? readFileSync(`packages/db/migrations/${found[0]}`, "utf8") : "";
+
+  async function threadRows(): Promise<Array<{ id: string; metadata: Record<string, unknown>; updated_at: Date }>> {
+    return (await testDb!.pool.query<{ id: string; metadata: Record<string, unknown>; updated_at: Date }>(
+      "select id::text, metadata, updated_at from page_dm_threads order by id",
+    )).rows;
+  }
+
+  it("takes the reason off every thread that carries it, keeps the rest of its metadata, and touches nothing else", async (context) => {
+    if (!testDb) return context.skip();
+    expect(found).toHaveLength(1);
+    const first = await seedPage("migrate-a");
+    const second = await seedPage("migrate-b", "live", OWN_2);
+    const bound = await seedThread(first, 1, { reason: UNRESOLVABLE, storedHead: 3 });
+    const hidden = await seedThread(first, 2, { reason: UNRESOLVABLE, visible: false });
+    const unbound = await seedThread(first, 3, { reason: UNRESOLVABLE, bound: false });
+    const missing = await seedThread(first, 4, { reason: MISSING });
+    const plain = await seedThread(first, 5, { reason: null });
+    const elsewhere = await seedThread(second, 6, { reason: UNRESOLVABLE });
+    await testDb.pool.query(
+      "update page_dm_threads set metadata = metadata || '{\"unresolvedIdentity\": true, \"keep\": \"me\"}'::jsonb where id = $1",
+      [bound],
+    );
+    await testDb.pool.query("update sync_pages set lifted_dm_exclusions = array[$2]::text[] where page_id = $1", [second, UNRESOLVABLE]);
+    await testDb.pool.query("update page_dm_threads set updated_at = '2026-01-01T00:00:00Z'");
+    const pagesBefore = (await testDb.pool.query("select page_id, lifted_dm_exclusions, updated_at from sync_pages order by page_id")).rows;
+    const work = "select count(*)::int as n from sync_work";
+    const workBefore = await scalar(work, []);
+
+    await testDb.pool.query(migrationSql);
+
+    expect((await threadRows()).map((row) => [Number(row.id), row.metadata])).toEqual([
+      [bound, { unresolvedIdentity: true, keep: "me" }],
+      [hidden, {}],
+      [unbound, {}],
+      [missing, { messageSyncExcludedReason: MISSING }],
+      [plain, {}],
+      [elsewhere, {}],
+    ]);
+    const touched = (await threadRows()).filter((row) => row.updated_at.getTime() !== Date.parse("2026-01-01T00:00:00Z")).map((row) => Number(row.id));
+    expect(touched).toEqual([bound, hidden, unbound, elsewhere]);
+    // No work, no demand, and the pages' lift lists as they were.
+    expect(await scalar(work, [])).toBe(workBefore);
+    expect((await testDb.pool.query("select page_id, lifted_dm_exclusions, updated_at from sync_pages order by page_id")).rows).toEqual(pagesBefore);
+
+    // Once is all: a second run changes nothing.
+    const after = await threadRows();
+    await testDb.pool.query(migrationSql);
+    expect(await threadRows()).toEqual(after);
   });
 });
 

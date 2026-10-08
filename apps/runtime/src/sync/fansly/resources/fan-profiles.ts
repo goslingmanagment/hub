@@ -1,5 +1,4 @@
 import {
-  excludePageDmConversationMessageSync,
   listFanslyFanPageIdentityBackfillTargets,
   listFanslyFansLookedUpSince,
   readFanslyAccountProbe,
@@ -11,7 +10,6 @@ import {
   FANSLY_ACCOUNT_LOOKUP_BATCH_SIZE,
   type FanslyAccount,
 } from "@agency_hub_core/fansly";
-import { FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP } from "@agency_hub_core/shared";
 
 import { FANSLY_ACCOUNT_LOOKUP_REUSE_MS, upsertHydratedFansForPageDetailed } from "../lib/fan-hydration.ts";
 import type {
@@ -39,10 +37,11 @@ import type {
 //   page is omitted too (arena "vanished chat" D2; all of it only for an answer the contract
 //   accepted: a non-array is quarantined and marks nothing).
 // - probe (planned trigger, subject = the DM partner id): "does this partner
-//   still resolve?", answer reused for a day; `unresolved` excludes the
-//   conversation the probe names from message sync. A `resolved` answer
-//   clears an exclusion through the conversation list's own writer, which
-//   reads the stored answer on its next read of the chat.
+//   still resolve for the page?", answer stored and reused for a day. It
+//   excludes no chat: a lookup miss is the page's own evidence (the fan
+//   blocked the page, or a transient miss), and a chat Fansly stops serving
+//   is the chat-unavailability episode's (arena "vanished chat" §6). No apply
+//   asks for it any more; a row an older image left open still runs.
 // - alias-backfill (planned goal, owner): every fan of the page in keyset
 //   batches of 100 — the old CLI, now journaled, transactional and paced.
 
@@ -167,11 +166,6 @@ export function probeResolution(accounts: readonly FanslyAccount[], partner: str
   return accounts.some((account) => account.id === partner) ? "resolved" : "unknown";
 }
 
-function probeConversationId(work: SyncWorkRow): number | null {
-  const id = recordOf(work.params).conversationId;
-  return typeof id === "number" && Number.isSafeInteger(id) && id > 0 ? id : null;
-}
-
 export const fanProfilesProbeModule: ResourceModule = {
   async plan(work, ctx): Promise<StepPlan> {
     const partner = work.subject;
@@ -199,21 +193,10 @@ export const fanProfilesProbeModule: ResourceModule = {
         resolved: resolution === "resolved",
       });
     }
-    const conversationId = probeConversationId(input.work);
-    // A reason the page lifted (owner decision №8) is never assigned again.
-    const lifted = input.page.liftedDmExclusions.includes(
-      FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
-    );
-    const excluded = resolution === "unresolved" && conversationId !== null && !lifted
-      ? await excludePageDmConversationMessageSync(tx, {
-        conversationId,
-        platformAccountId: input.pageId,
-        partnerPlatformUserId: partner,
-        reason: FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
-      })
-      : false;
+    // The answer is the page's fact about the partner; the chat a row of an
+    // older image names (`params.conversationId`) stays read like any other.
     return {
-      work: { satisfiesRevision: true, close: "done", closeReason: `probe_${resolution}`, result: { resolution, excluded } },
+      work: { satisfiesRevision: true, close: "done", closeReason: `probe_${resolution}`, result: { resolution } },
       followups: [],
     };
   },

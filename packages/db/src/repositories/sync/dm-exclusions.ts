@@ -22,7 +22,9 @@ import { textArrayParam, toDate } from "./values.ts";
 // binds its fan. `unlift` only takes the reason off the page's list: the next
 // list pass assigns it again.
 
-/** The reasons a page can lift (the 0235 CHECK). */
+/** The reasons a page can lift (the 0235 CHECK). Nothing assigns the
+ *  unresolvable one any more (arena "vanished chat", R4: a lookup miss excludes
+ *  no chat); it stays for the rows and recorded probes written before. */
 export const SYNC_LIFTABLE_DM_EXCLUSIONS = [
   FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS,
   FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,

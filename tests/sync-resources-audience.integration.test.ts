@@ -743,7 +743,7 @@ describe("followers", () => {
 });
 
 describe("fan-profiles", () => {
-  it("probe: an unresolvable partner is recorded and its conversation excluded from message sync", async (context) => {
+  it("probe: an unresolvable partner is recorded for the page, and its conversation stays in message sync", async (context) => {
     if (!testDb) return context.skip();
     const pageId = await seedPage();
     const partner = "650000000000000001";
@@ -761,9 +761,10 @@ describe("fan-profiles", () => {
 
     const probe = await testDb.pool.query("select account_probe_resolved from page_fans where fan_id = $1 and platform_account_id = $2", [fan!.id, pageId]);
     expect(probe.rows[0].account_probe_resolved).toBe(false);
+    // A lookup miss is the page's own evidence: the chat is not excluded.
     const metadata = await testDb.pool.query("select metadata from page_dm_threads where id = $1", [conversationId]);
-    expect(metadata.rows[0].metadata).toMatchObject({ messageSyncExcludedReason: "partner_unresolvable_from_account_lookup" });
-    expect((await workRow(pageId, "fan-profiles.probe"))!.result).toEqual({ resolution: "unresolved", excluded: true });
+    expect(metadata.rows[0].metadata).not.toHaveProperty("messageSyncExcludedReason");
+    expect((await workRow(pageId, "fan-profiles.probe"))!.result).toEqual({ resolution: "unresolved" });
   });
 
   it("alias backfill: every fan of the page in keyset batches of 100", async (context) => {
