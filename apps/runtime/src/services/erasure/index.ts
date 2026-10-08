@@ -50,6 +50,10 @@ import {
 // - Undeclared kinds (parse_version 0, no events) are reached by a payload
 //   text match on the fan ref (quoted-JSON form always; bare-numeric form
 //   with boundaries when the ref is numeric).
+// - Page-less kinds: a fan's platform material journaled with NO page
+//   (account_id null) is reached by the same payload match, but only under a
+//   kind named in PAGELESS_FAN_OBSERVATION_KINDS (below) — never every
+//   page-less row, because the erasure's own audit trail is page-less too.
 // - G5 slice 3b: execution reaches the CONTENT-ADDRESSED CATALOG too, in the
 //   same run. A capture body now lives twice — inline (still the authority)
 //   and once in capture_payload_objects — and slice 3c is about to remove the
@@ -324,6 +328,89 @@ function eventPredSql(scope: ResolvedScope, alias = ""): SQL {
   return sql`${a}account_id in ${scope.pageIds}`;
 }
 
+/** One observation kind a writer journals with no page. */
+export interface PagelessFanObservationKind {
+  kind: string;
+  /** The writer, as observation-kinds.ts names it. */
+  writer: string;
+}
+
+/** The session-less public Fansly account reader's journal kind (arena plan
+ *  §7, owner decision Р1). Its writer imports this constant. */
+export const ACCOUNT_LOOKUP_PUBLIC_OBSERVATION_KIND = "account_lookup_public";
+
+/**
+ * Arena plan §7 «Стирание» (R4, PR10): the observation kinds journaled with NO
+ * page that can name a fan, by platform, which the fan-scope plan therefore
+ * reaches by kind instead of by `account_id in` the platform's pages.
+ *
+ * Shipped one release BEFORE the writer, so the image a failed deploy rolls
+ * back to already erases what the writer journals. The reach is a payload
+ * match over this kind's rows only (the `(kind, received_at)` index of every
+ * partition keeps it an index scan), with the same subject literals as every
+ * other observation arm, and the same verdict as any other payload-matched
+ * capture: no domain event can reference a page-less observation
+ * (`domain_events.account_id` is NOT NULL), so a matching envelope is never
+ * "shared" by lineage and is erased WHOLE — a batch that also named other fans
+ * included, exactly like an unprojected batch receipt (the `ofapi_action_intents`
+ * target below says the same of a mixed command). A body is never rewritten
+ * under one fan's subject. The lake's fan predicate was never page-scoped, so a
+ * tiered copy of such a row is reached already.
+ *
+ * THE CONTRACT A WRITER OF A KIND ON THIS LIST FOLLOWS:
+ *   1. `account_id` and `native_account_ref` null, `platform` set to the
+ *      platform the kind is listed under, `kind` exactly the listed kind. A row
+ *      of another platform or with a page is not reached by this arm.
+ *   2. Every fan the payload covers is named by its platform id as a JSON
+ *      string (`"123"`, Fansly's own id form) or a bare JSON number — never only
+ *      inside a URL or query string (`ids=1,2,3`), which the subject match
+ *      cannot see. A requested-id list, if journaled, is a JSON array of ids.
+ *   3. A body stored in the capture catalog uses the `platform_capture` lane
+ *      (erasure domain `fan_subject`, platform account null): the fan scope's
+ *      catalog scan reaches unmapped fan-subject bodies, and the lineage step
+ *      translates them back to the page-less envelopes below.
+ *   4. Nothing relies on the envelope surviving: a later erasure of ANY fan in
+ *      a batch deletes it whole. A bystander's verdict written from it (e.g.
+ *      `fans.public_checked_at`) stays; its evidence row may not.
+ *   5. Not fenced. Like every capture, a page-less journal is not behind the
+ *      erasure fence (it guards archive material only): a writer selects its
+ *      fans from live rows at send time — an erased fan has no `fans` row —
+ *      and a re-run of the erasure takes whatever a racing answer journaled.
+ */
+export const PAGELESS_FAN_OBSERVATION_KINDS: Readonly<
+  Record<"onlyfans" | "fansly", readonly PagelessFanObservationKind[]>
+> = {
+  onlyfans: [],
+  fansly: [
+    {
+      kind: ACCOUNT_LOOKUP_PUBLIC_OBSERVATION_KIND,
+      writer: "sync/fansly/public-lookup.ts (arena R5, PR12)",
+    },
+    // The sync plane journals a failed answer's body under `<kind>:failed`
+    // (sync/engine/commit.ts failedBody); the reader may do the same.
+    {
+      kind: `${ACCOUNT_LOOKUP_PUBLIC_OBSERVATION_KIND}:failed`,
+      writer: "sync/fansly/public-lookup.ts (arena R5, PR12)",
+    },
+  ],
+};
+
+/** The page-less arm of a fan scope's observation reach: rows of the fan's
+ *  platform with no page, under a kind on PAGELESS_FAN_OBSERVATION_KINDS.
+ *  Null for a page/model scope and for a platform without such kinds. */
+function pagelessFanObservationPredSql(scope: ResolvedScope, alias = ""): SQL | null {
+  if (scope.input.scopeType !== "fan") {
+    return null;
+  }
+  const platform = scope.input.platform;
+  const kinds = PAGELESS_FAN_OBSERVATION_KINDS[platform].map((entry) => entry.kind);
+  if (kinds.length === 0) {
+    return null;
+  }
+  const a = alias ? sql.raw(`${alias}.`) : sql.raw("");
+  return sql`(${a}account_id is null and ${a}platform = ${platform} and ${a}kind in ${kinds})`;
+}
+
 function observationPagePredSql(scope: ResolvedScope): SQL {
   const extra = scope.ofapiExclusiveObservationIds?.length
     ? sql`or id in ${scope.ofapiExclusiveObservationIds}` : sql``;
@@ -587,18 +674,23 @@ async function collectFanLineage(
   }
 
   // Payload-matched observations (undeclared kinds carry the fan ref only
-  // inside the payload), hot + parked.
+  // inside the payload), hot + parked: the platform's pages, then the
+  // page-less kinds (one statement each, so each stays on its own index).
   const obsSources = ["observations", ...parked.observations];
+  const pagelessPred = pagelessFanObservationPredSql(scope);
+  const obsReaches = [sql`account_id in ${scope.pageIds}`, ...(pagelessPred === null ? [] : [pagelessPred])];
   for (const source of obsSources) {
-    const matched = await rows<{ id: string; kind: string }>(app, sql`
-      select id::text as id,kind from ${sql.raw(source)}
-      where account_id in ${scope.pageIds} and ${payloadMatchPredSql(scope.fanRef!, sql.raw("payload"), [scope.fanRef!, ...scope.fanGroupIds])}
-    `);
-    for (const row of matched) {
-      candidates.add(Number(row.id));
-      // B0 preserves whole envelopes; native fan exclusivity is not certified.
-      // Apply the existing unknown/shared residual law, never erase bystanders.
-      if (row.kind === "fansly.ws.frame.v1") shared.add(Number(row.id));
+    for (const reach of obsReaches) {
+      const matched = await rows<{ id: string; kind: string }>(app, sql`
+        select id::text as id,kind from ${sql.raw(source)}
+        where ${reach} and ${payloadMatchPredSql(scope.fanRef!, sql.raw("payload"), [scope.fanRef!, ...scope.fanGroupIds])}
+      `);
+      for (const row of matched) {
+        candidates.add(Number(row.id));
+        // B0 preserves whole envelopes; native fan exclusivity is not certified.
+        // Apply the existing unknown/shared residual law, never erase bystanders.
+        if (row.kind === "fansly.ws.frame.v1") shared.add(Number(row.id));
+      }
     }
     // Capture precedes response indexing. A crash between those writes must
     // not hide returned fan data, and a retry after hot deletion must still
@@ -636,8 +728,13 @@ async function collectFanLineage(
   // that is the point of landing it now: after slice 3c nulls the inline
   // column it becomes the ONLY arm that can find these rows, and the erasure
   // will not have to change on the day the heap is rewritten. Scoped to
-  // `account_id in pageIds` like the inline arm, so the two planes reach the
-  // same envelopes and neither can quietly out-erase the other.
+  // `account_id in pageIds` plus the page-less kinds, like the inline arm, so
+  // the two planes reach the same envelopes and neither can quietly out-erase
+  // the other.
+  const pagelessEnvelopePred = pagelessFanObservationPredSql(scope, "o");
+  const envelopeReach = pagelessEnvelopePred === null
+    ? sql`o.account_id in ${scope.pageIds}`
+    : sql`(o.account_id in ${scope.pageIds} or ${pagelessEnvelopePred})`;
   for (let offset = 0; offset < catalog.matches.length; offset += CATALOG_LINEAGE_BATCH) {
     const batch = catalog.matches.slice(offset, offset + CATALOG_LINEAGE_BATCH);
     const refs = sql.join(
@@ -655,7 +752,7 @@ async function collectFanLineage(
       join observations o
         on o.payload_bucket_month = t.bucket_month
        and o.payload_object_id = t.object_id
-      where o.account_id in ${scope.pageIds}
+      where ${envelopeReach}
     `);
     for (const row of referencing) {
       candidates.add(Number(row.id));
