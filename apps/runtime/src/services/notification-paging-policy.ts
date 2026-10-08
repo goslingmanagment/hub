@@ -77,7 +77,6 @@ export const NOTIFICATION_PAGING_POLICY_BY_KIND: Record<
   read_gateway_capture: immediate(15 * MINUTE_MS),
   capture_payload_parity: immediate(15 * MINUTE_MS),
   ofapi_chargebacks_reconcile_failed: immediate(HOUR_MS),
-  ofapi_link_stats_reconcile_failed: immediate(HOUR_MS),
   // Percent and runway_critical; runway_warning is overridden below.
   db_disk_usage: immediate(HOUR_MS),
 
@@ -106,6 +105,14 @@ export const NOTIFICATION_PAGING_POLICY_BY_KIND: Record<
   golden_signal_lag: sustained(30 * MINUTE_MS, HOUR_MS),
   ofapi_burn_rate: sustained(30 * MINUTE_MS, HOUR_MS),
   ofapi_webhook_silence: sustained(10 * MINUTE_MS, 30 * MINUTE_MS),
+  // The kind's own latch (no sub-key, global) is ONE failed pass of the
+  // OnlyFans link series. The pass is retried inside its window and read
+  // again at the next one, the reads are free, and a series that really
+  // stopped pages through its own latch (`series_stale`, below) — so a failed
+  // pass is a line in the daily digest, and a message only if nothing has
+  // closed it for 30 hours. No flap rule: one that fails and recovers every
+  // window is exactly the case the retries exist for.
+  ofapi_link_stats_reconcile_failed: sustained(30 * HOUR_MS, HOUR_MS, null),
 
   // Excluded from the sweep (see NOTIFICATION_PAGING_EXCLUDED_KINDS); rows
   // exist only so the record stays exhaustive.
@@ -125,6 +132,18 @@ export function notificationPagingPolicyFor(
   }
   if (kind === "sync_silent" && subKey === "pace_violation") {
     return immediate(15 * MINUTE_MS);
+  }
+  // Traffic sources plan §2.10: the link series' page latches.
+  if (kind === "ofapi_link_stats_reconcile_failed" && subKey === "series_stale") {
+    // Two windows and more without a usable result for a page: the condition
+    // already carries its own delay (two intervals plus the retries), so it
+    // pages on the sweep that sees it.
+    return immediate(HOUR_MS);
+  }
+  if (kind === "ofapi_link_stats_reconcile_failed" && subKey === "page_unmapped") {
+    // The binding reconciler repairs a lost mapping within five minutes; a
+    // page still unmapped after thirty needs a hand.
+    return sustained(30 * MINUTE_MS, 5 * MINUTE_MS, null);
   }
   if (kind === "db_disk_usage" && subKey === "runway_warning") {
     // A 30-day runway that hovers at 29 days flips hourly; the warning is
