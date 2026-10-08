@@ -6,6 +6,21 @@ import {
 } from "../apps/runtime/src/services/ai-gateway-pricing.ts";
 
 describe("AI gateway pricing", () => {
+  it("prices Opus 5.5 input, output and both cache TTLs at its published rates", () => {
+    expect(estimateAiGatewayUsageCost("anthropic:claude-opus-5-5", {
+      inputTokens: 1000,
+      outputTokens: 1000,
+      cacheWriteTokens: 2000,
+      cacheWrite5mTokens: 1000,
+      cacheWrite1hTokens: 1000,
+      cacheReadTokens: 1000,
+    })).toMatchObject({
+      provider: "anthropic",
+      providerModelId: "claude-opus-5-5",
+      costMicroUsd: 37200,
+      costApproximate: false,
+    });
+  });
   it("prices Anthropic prompt-cache usage in integer micro-USD", () => {
     const estimate = estimateAiGatewayUsageCost("anthropic:claude-sonnet-4-6", {
       inputTokens: 100,

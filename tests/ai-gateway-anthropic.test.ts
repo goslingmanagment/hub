@@ -213,7 +213,44 @@ describe("Anthropic AI gateway request builder", () => {
     })).toEqual({ maxTokens: 8192, thinking: { type: "between_tools" } });
   });
 
-  it("builds the reply-feature default (Sonnet 5.5, low) as an adaptive request with no sampling params", () => {
+  it.each(["off", "low", "medium", "high", "max"] as const)(
+    "keeps Opus 5.5 thinking enabled with %s effort and no sampling params",
+    (reasoningEffort) => {
+      const request = buildAnthropicGatewayStreamRequest(body({
+        model: "anthropic:claude-opus-5-5",
+        reasoningEffort,
+        temperature: 0.65,
+      }));
+      expect(request).toMatchObject({
+        model: "claude-opus-5-5",
+        max_tokens: 8000,
+        thinking: { type: "adaptive", display: "summarized" },
+        output_config: { effort: reasoningEffort === "off" ? "low" : reasoningEffort },
+      });
+      expect(request).not.toHaveProperty("temperature");
+    },
+  );
+
+  it("uses low effort for a short Opus 5.5 recap and prices the whole thinking-plus-text cap", () => {
+    const input = body({
+      model: "anthropic:claude-opus-5-5",
+      feature: "fan-summary",
+      reasoningEffort: "medium",
+      maxTokens: 4096,
+    });
+    const request = buildAnthropicGatewayStreamRequest(input, { disableAdaptiveThinking: true });
+    expect(request).toMatchObject({
+      max_tokens: 4096,
+      thinking: { type: "adaptive", display: "summarized" },
+      output_config: { effort: "low" },
+    });
+    expect(request).not.toHaveProperty("temperature");
+    const estimate = estimateAnthropicGatewayRequestCost(input);
+    const withoutOutput = estimateAnthropicGatewayRequestCost({ ...input, maxTokens: 1 });
+    expect(estimate.costMicroUsd - withoutOutput.costMicroUsd).toBe((4096 - 1) * 20);
+  });
+
+  it("builds Sonnet 5.5 at low effort as an adaptive request with no sampling params", () => {
     const request = buildAnthropicGatewayStreamRequest(body({
       model: "anthropic:claude-sonnet-5-5",
       feature: "fast-reply",

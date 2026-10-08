@@ -21,6 +21,7 @@ import {
   type PreparedAiGatewayStream,
 } from "../../../services/ai-gateway.ts";
 import { resolveAiTranscriptMaxRows } from "../../../services/ai-transcript-depth.ts";
+import { requiresAnthropicThinking } from "../../../services/ai-gateway-anthropic.ts";
 import { canAccessPage, type HumanAuthPrincipal } from "../../../services/auth.ts";
 import { isSplitAllOnForPage } from "../../../services/client-split-all.ts";
 import {
@@ -281,6 +282,9 @@ async function resolvePersona(
 // so it stays cheap and terse — the cap reaches the provider on the gateway
 // body (input.maxTokens ?? tuning.maxTokens, honored by both providers).
 const SHORT_SUMMARY_MAX_TOKENS = 2048;
+// Mandatory-thinking models need room for reasoning as well as the compact
+// answer. This total cap is sent to both the provider and the quota estimator.
+const SHORT_SUMMARY_THINKING_MAX_TOKENS = 4096;
 
 // Short recap also bounds its INPUT window: the compact template promises the
 // model "300 recent messages max are provided", so the archive lane must not
@@ -950,6 +954,7 @@ export async function prepareAiFeatureStream(
     };
   }
 
+  const model = body.model ?? DEFAULT_FEATURE_MODELS[policy.modelFeature];
   const gatewayBody: AiGatewayStreamInput = {
     clientRequestId: body.clientRequestId,
     feature,
@@ -970,16 +975,18 @@ export async function prepareAiFeatureStream(
     // writer paths (coach-chat / short fan-summary), so those rows always carry
     // a true fan identity.
     fanRef: body.fanRef ?? null,
-    model: body.model ?? DEFAULT_FEATURE_MODELS[policy.modelFeature],
+    model,
     reasoningEffort: body.reasoningEffort ?? DEFAULT_FEATURE_REASONING[policy.modelFeature],
     isRegeneration: body.isRegeneration ?? false,
-    // Short fan-summary caps output at 2048 tokens (Task 8); every other
-    // feature leaves maxTokens unset so the provider's per-feature tuning wins.
-    // disableAdaptiveThinking keeps that 2048 a PURE output budget — the default
-    // fan-summary model is adaptive, and Anthropic counts summarized thinking
-    // inside max_tokens, so without it the recap truncates before it finishes.
+    // Short recap turns thinking off where supported. Opus 5.5 uses low effort
+    // and a larger total cap instead, since thinking cannot be disabled.
     ...(feature === "fan-summary" && body.summaryMode === "short"
-      ? { maxTokens: SHORT_SUMMARY_MAX_TOKENS, disableAdaptiveThinking: true }
+      ? {
+          maxTokens: requiresAnthropicThinking(model)
+            ? SHORT_SUMMARY_THINKING_MAX_TOKENS
+            : SHORT_SUMMARY_MAX_TOKENS,
+          disableAdaptiveThinking: true,
+        }
       : {}),
     // Coach transport ceiling (spec §3/§7, option "c"): the coach keeps its
     // adaptive 16k thinking budget (no output-token cap games), but the SSE pump

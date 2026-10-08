@@ -142,6 +142,11 @@ function isAdaptiveAnthropicModel(providerModelId: string) {
   return !ANTHROPIC_LEGACY_SAMPLING_MODELS.has(providerModelId);
 }
 
+/** Accepts either the gateway model ID or the provider ID. */
+export function requiresAnthropicThinking(model: string) {
+  return model === "claude-opus-5-5" || model === "anthropic:claude-opus-5-5";
+}
+
 function hasRemovedSamplingParams(providerModelId: string) {
   return isAdaptiveAnthropicModel(providerModelId)
     && !ANTHROPIC_SAMPLING_TOLERANT_MODELS.has(providerModelId);
@@ -215,10 +220,23 @@ export function resolveAnthropicGatewayRequestTuning(input: {
   /** Per-request off-switch for adaptive summarized thinking. Anthropic counts
    * thinking tokens inside `max_tokens`, so a caller enforcing a tight output
    * budget (fan-summary short recap: 2048) sets this to keep the cap a PURE
-   * output budget — otherwise summarized thinking eats the budget and truncates
-   * the answer (stopReason: 'max_tokens'). */
+   * output budget. Models with mandatory thinking use low effort instead;
+   * the caller must include thinking headroom in its explicit token cap. */
   disableAdaptiveThinking?: boolean | undefined;
 }): AnthropicGatewayRequestTuning {
+  // Opus 5.5 rejects disabled/between_tools thinking. Even an older client's
+  // "off" preference must become low adaptive effort, never the API default.
+  if (requiresAnthropicThinking(input.providerModelId)) {
+    return {
+      maxTokens: ANTHROPIC_ADAPTIVE_MAX_TOKENS[input.feature],
+      thinking: { type: "adaptive", display: "summarized" },
+      outputConfig: {
+        effort: input.disableAdaptiveThinking || input.reasoningEffort === "off"
+          ? "low"
+          : input.reasoningEffort,
+      },
+    };
+  }
   const adaptive = isAdaptiveAnthropicModel(input.providerModelId) && !input.disableAdaptiveThinking;
   const maxTokens = adaptive
     ? ANTHROPIC_ADAPTIVE_MAX_TOKENS[input.feature]
