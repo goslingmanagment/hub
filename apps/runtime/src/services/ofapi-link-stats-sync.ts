@@ -86,7 +86,10 @@ const OFAPI_LINK_STATS_RETRY_QUEUE_OPTIONS = {
 } as const;
 
 /** Rows a (page, kind) can get in one window from the scheduled pass and its
- * retries. A pair that used them all waits for the next window. */
+ * retries, under one OFAPI binding. A pair that used them all waits for the
+ * next window. Counted per binding: after a rebind the new account gets its
+ * own attempts — the old binding's `skipped/page_auth_dead` rows must not
+ * stop the retry that finds the new account's cache warm. */
 const MAX_ATTEMPTS_PER_WINDOW = 1 + OFAPI_LINK_STATS_RETRY_DELAYS_MS.length;
 
 /** A pair whose last row of the window says the pass could make no request
@@ -942,7 +945,7 @@ export async function runOfapiLinkStatsReconcile(
           if (target.trigger === "rebind") {
             return true;
           }
-          return state.attempts < MAX_ATTEMPTS_PER_WINDOW &&
+          return state.attemptsUnderCurrentBinding < MAX_ATTEMPTS_PER_WINDOW &&
             !(state.lastStatus === "skipped" && state.lastReason !== null &&
               NOT_RETRIED_SKIP_REASONS.has(state.lastReason));
         }),

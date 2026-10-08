@@ -1824,6 +1824,65 @@ describe("OFAPI link-stats series: a window is read again until it has a result"
     ]);
   });
 
+  it("after a rebind the old binding's attempts do not use up the new account's retries", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    // The page had links under the old account (an earlier window)…
+    const page = await seedOfapiPage("retry-binding-cap-of", "acct_cap_old");
+    const inventory = {
+      trackingByAccount: new Map<string, Record<string, unknown>[]>([["acct_cap_old", [trackingItem()]]]),
+      trialByAccount: new Map<string, Record<string, unknown>[]>([["acct_cap_old", [trialItem()]]]),
+    };
+    appContext = { ...appContext, ofapi: linksClient(inventory) };
+    const boss = fakeBoss();
+    const previous = ofapiLinkStatsWindowAt(new Date(WINDOW.getTime() - 1));
+    await runOfapiLinkStatsReconcile(appContext, { now: new Date(previous.getTime() + 30_000), boss });
+
+    // …then its session died: the window's pass and its three retries all
+    // skip it — four rows under the old binding.
+    await testDb.pool.query(`update pages set ofapi_auth_status = 'authentication_failed' where id = $1`, [page.id]);
+    await runOfapiLinkStatsReconcile(appContext, { now: at(0.5), boss });
+    for (const [retry, minutes] of [[1, 15.5], [2, 60.5], [3, 180.5]] as const) {
+      await runOfapiLinkStatsReconcile(appContext, {
+        now: at(minutes), boss, target: { trigger: "retry", windowAt: WINDOW, retry },
+      });
+    }
+    expect((await seriesOf(page.id, "tracking")).slice(1).map((run) => [run.attempt, run.status, run.ofapiAccountId]))
+      .toEqual([1, 2, 3, 4].map((attempt) => [attempt, "skipped", "acct_cap_old"]));
+
+    // Rebound; the run after it meets a cold cache: a fifth row, no result.
+    await rebindPage(page.id, "acct_cap_new");
+    await testDb.pool.query(`update pages set ofapi_auth_status = null where id = $1`, [page.id]);
+    const afterRebind = await runOfapiLinkStatsReconcile(appContext, {
+      now: at(200), boss, target: { trigger: "rebind", pageId: page.id },
+    });
+    expect(afterRebind.pages[0]!.kinds.map((kind) => [kind.linkKind, kind.reason])).toEqual([
+      ["tracking", "empty_unverified"],
+      ["trial", "empty_unverified"],
+    ]);
+    expect(afterRebind.queuedRetry).toMatchObject({ windowAt: WINDOW, retry: 1 });
+
+    // The cache warms; the retry the rebind run queued reads the page.
+    inventory.trackingByAccount.set("acct_cap_new", [trackingItem()]);
+    inventory.trialByAccount.set("acct_cap_new", [trialItem()]);
+    const warmed = await runOfapiLinkStatsReconcile(appContext, {
+      now: at(215.5), boss, target: { trigger: "retry", windowAt: WINDOW, retry: 1 },
+    });
+    expect(warmed.pages).toEqual([expect.objectContaining({ pageLabel: page.label, status: "partial", reason: "binding_changed" })]);
+    expect((await seriesOf(page.id, "trial")).slice(-2).map((run) => [run.attempt, run.status, run.reason, run.ofapiAccountId]))
+      .toEqual([
+        [5, "partial", "empty_unverified", "acct_cap_new"],
+        [6, "partial", "binding_changed", "acct_cap_new"],
+      ]);
+    expect((await listLinkStatWindowPairStates(appContext.db, { windowAt: WINDOW }))
+      .find((state) => state.linkKind === "trial")).toMatchObject({
+      attempts: 6, attemptsUnderCurrentBinding: 2, hasUsableResult: true,
+    });
+  });
+
   it("a newly connected page that reads empty is read again — its first day of empty reads is no result", async (context) => {
     if (!testDb) {
       context.skip();
@@ -2705,12 +2764,12 @@ describe("OFAPI link-stats series: a window's usable result", () => {
 
     expect(await listLinkStatWindowPairStates(appContext.db, { windowAt: WINDOW })).toEqual([
       {
-        platformAccountId: page.id, linkKind: "tracking", attempts: 3, hasUsableResult: true,
-        lastStatus: "complete", lastReason: null,
+        platformAccountId: page.id, linkKind: "tracking", attempts: 3, attemptsUnderCurrentBinding: 3,
+        hasUsableResult: true, lastStatus: "complete", lastReason: null,
       },
       {
-        platformAccountId: page.id, linkKind: "trial", attempts: 3, hasUsableResult: false,
-        lastStatus: "truncated", lastReason: "pagination_contradiction",
+        platformAccountId: page.id, linkKind: "trial", attempts: 3, attemptsUnderCurrentBinding: 3,
+        hasUsableResult: false, lastStatus: "truncated", lastReason: "pagination_contradiction",
       },
     ]);
     // Another window knows nothing of these rows.

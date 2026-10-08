@@ -3490,6 +3490,10 @@ export interface LinkStatWindowPairState {
   linkKind: LinkStatKind;
   /** Rows the pair has in the window, of any status. */
   attempts: number;
+  /** Of those, the rows made under the page's CURRENT OFAPI binding (its
+   * `ofapi_account_id` now). Attempts of an earlier binding stay in the
+   * history but do not use up the retries of the binding that replaced it. */
+  attemptsUnderCurrentBinding: number;
   /** At least one of them is a usable result (linkStatRunUsableResultSql). */
   hasUsableResult: boolean;
   lastStatus: LinkStatRunStatus;
@@ -3508,6 +3512,7 @@ export async function listLinkStatWindowPairStates(
     platformAccountId: number | string;
     linkKind: LinkStatKind;
     attempts: number | string;
+    attemptsUnderCurrentBinding: number | string;
     hasUsableResult: boolean;
     lastStatus: LinkStatRunStatus;
     lastReason: string | null;
@@ -3515,18 +3520,22 @@ export async function listLinkStatWindowPairStates(
     select r.platform_account_id as "platformAccountId",
            r.link_kind as "linkKind",
            count(*)::int as "attempts",
+           (count(*) filter (where r.ofapi_account_id is not distinct from p.ofapi_account_id))::int
+             as "attemptsUnderCurrentBinding",
            bool_or(${linkStatRunUsableResultSql(run)}) as "hasUsableResult",
            (array_agg(r.status order by r.attempt desc, r.id desc))[1] as "lastStatus",
            (array_agg(r.reason order by r.attempt desc, r.id desc))[1] as "lastReason"
     from page_link_stat_runs r
+    join pages p on p.id = r.platform_account_id
     where r.window_at = ${input.windowAt.toISOString()}::timestamptz
-    group by r.platform_account_id, r.link_kind
+    group by r.platform_account_id, r.link_kind, p.ofapi_account_id
     order by r.platform_account_id, r.link_kind
   `);
   return result.rows.map((row) => ({
     platformAccountId: Number(row.platformAccountId),
     linkKind: row.linkKind,
     attempts: Number(row.attempts),
+    attemptsUnderCurrentBinding: Number(row.attemptsUnderCurrentBinding),
     hasUsableResult: row.hasUsableResult === true,
     lastStatus: row.lastStatus,
     lastReason: row.lastReason,
