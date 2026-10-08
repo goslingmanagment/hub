@@ -28,6 +28,7 @@
 // are GENERATED from these frozen constants, so a second copy of a code→label
 // map cannot drift away from the first.
 import { POST_ATTACHMENTS_DATASET, RAW_MEDIA_DATASET } from "./agent-content-media-sql.ts";
+import { CLIENT_AUDIENCE_NEW_IGNORED_SUB_TYPES } from "./client-audience-new.ts";
 import { LEGACY_EXECUTOR_PLATFORMS } from "./page-sync.ts";
 
 import {
@@ -189,6 +190,17 @@ const SUBSCRIPTIONS = `
   where s.source_created_at is not null
 `;
 
+// OnlyFans reports some facts that are no subscription under the subscription
+// notification (the top-fan award arrives as `subscriptions.new`). The event
+// stays in `domain_events` as it was captured; this dataset does not serve it
+// as a row. ONE list says which subTypes those are: the one the client's "new
+// subscribers" list already reads. Eligibility, not a source filter: such an
+// event is still a stored row of this lane, so it keeps its say in the capture
+// floor. An event with no subType is not on the list and stays a row.
+const NOT_A_SUBSCRIPTION_SUB_TYPES_SQL = `array[${
+  CLIENT_AUDIENCE_NEW_IGNORED_SUB_TYPES.map((subType) => sqlText(subType)).join(", ")
+}]::text[]`;
+
 const SUBSCRIPTION_EVENTS = `
   select e.account_id          as k_page_id,
          p.platform::text      as k_platform,
@@ -200,6 +212,8 @@ const SUBSCRIPTION_EVENTS = `
              then f.platform_user_id
            else null
          end                   as k_fan,
+         coalesce(e.data ->> 'subType', '') <> all (${NOT_A_SUBSCRIPTION_SUB_TYPES_SQL})
+                               as k_eligible,
          e.observation_id      as k_observation_ref,
          'ofapi_webhook'::text as k_ingest_path,
          'final'::text         as k_convergence,
@@ -1135,6 +1149,7 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
     windowColumn: "k_occurred_at",
     readPlanes: ["domain_events", "fans", "page_fans"],
     captureFloorPlane: "domain_events",
+    eligibilityColumn: "k_eligible",
     provenanceColumns: {
       observationRef: "k_observation_ref",
       ingestPath: "k_ingest_path",
