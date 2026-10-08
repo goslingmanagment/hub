@@ -1686,6 +1686,55 @@ describe("OFAPI link-stats series: a window's usable result", () => {
     });
   });
 
+  it("after a rebind a cold cache's empty reads are no result, while a kind that never had a link stays a result across the rebind", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    // tracking has links under the first account; trial never had one under
+    // any account (lora-of's trial links on production).
+    const page = await seedOfapiPage("usable-rebind-of", "acct_usable_before");
+    appContext = {
+      ...appContext,
+      ofapi: linksClient({
+        trackingByAccount: new Map([["acct_usable_before", [trackingItem()]]]),
+        trialByAccount: new Map([["acct_usable_before", []]]),
+      }),
+    };
+    const first = ofapiLinkStatsWindowAt(new Date("2026-10-08T12:00:00Z"));
+    const second = nextOfapiLinkStatsWindowAt(first);
+    const third = nextOfapiLinkStatsWindowAt(second);
+    const usableIn = async (windowAt: Date) => Object.fromEntries(
+      (await listLinkStatWindowPairStates(appContext.db, { windowAt }))
+        .map((state) => [state.linkKind, [state.hasUsableResult, state.lastReason]]),
+    );
+
+    await runOfapiLinkStatsReconcile(appContext, { now: new Date(first.getTime() + 60_000) });
+    expect(await usableIn(first)).toEqual({
+      tracking: [true, null],
+      trial: [true, "empty_unverified"],
+    });
+
+    // Rebound; the new account's stored cache is cold for both kinds.
+    await rebindPage(page.id, "acct_usable_after");
+    for (const windowAt of [second, third]) {
+      await runOfapiLinkStatsReconcile(appContext, { now: new Date(windowAt.getTime() + 60_000) });
+      expect(await usableIn(windowAt)).toEqual({
+        // Had links under the old account: an empty read under the new one
+        // is no result — it is retried and, if it persists, signalled.
+        tracking: [false, "empty_unverified"],
+        // Never had one under any account: nothing to lose, still a result.
+        trial: [true, "empty_unverified"],
+      });
+    }
+    expect((await seriesOf(page.id, "tracking")).map((run) => [run.status, run.ofapiAccountId])).toEqual([
+      ["complete", "acct_usable_before"],
+      ["partial", "acct_usable_after"],
+      ["partial", "acct_usable_after"],
+    ]);
+  });
+
   it("a partial that wrote nothing is not a result; one that wrote snapshots is", async (context) => {
     if (!testDb) {
       context.skip();

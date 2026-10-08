@@ -3402,19 +3402,27 @@ export async function hasNonEmptyLinkStatRunUnderAnotherAccount(
  * gives the series a point a reader can use. `run` is the SQL alias of a
  * page_link_stat_runs row.
  *
- *   - `complete` — a whole read, including a confirmed empty one;
+ *   - `complete` — a whole read. An empty one is the confirmed absence the
+ *     reconcile mints only after THE SAME OFAPI account showed links and then
+ *     read empty twice (the per-account guard): "every link was deleted" is a
+ *     point of the series, not a missing one. A cold cache can never get here
+ *     — under a new account its empty reads stay `partial`;
  *   - `partial` that wrote snapshots;
- *   - an empty `partial` on a pair that had NEVER shown a link under any
- *     account by then. Such a pair stays `partial` (empty_unverified) for
- *     good — a page with no trial links at all — and that is its steady
- *     state, not a missing point.
+ *   - an empty `partial` on a pair that had NEVER shown a link, under any
+ *     OFAPI account (rows of unknown account included), before this row.
+ *     Nothing can be lost there: the page genuinely shows none. Such a pair
+ *     stays `partial` (empty_unverified) for good — lora-of's trial links,
+ *     154 runs on production, none ever non-empty — and that is its steady
+ *     state, not a missing point that would retry every window and page as
+ *     stale forever.
  *
  * Everything else is an attempt without a result: `failed`, `skipped`,
  * `truncated`, a `partial` that wrote nothing (every item dropped), and an
- * empty `partial` on a pair that has had links (a cold cache after an account
- * change, an inventory that vanished and is not confirmed yet). The presence
- * of such a row neither cancels a retry of its window nor advances the
- * freshness of the series.
+ * empty `partial` on a pair that has had links under some account — a cold
+ * cache after a rebind (`empty_unverified` under the new account), an
+ * inventory that vanished and is not confirmed yet (`inventory_vanished`).
+ * The presence of such a row neither cancels a retry of its window nor
+ * advances the freshness of the series.
  */
 export function linkStatRunUsableResultSql(run: SQL): SQL {
   return sql`(
