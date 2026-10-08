@@ -4,12 +4,14 @@ import {
   getFanslySendGuard,
   getSyncPage,
   readFanslySendAudit,
+  syncUrgentWaitingSql,
   type Database,
   type SyncPageMode,
   type SyncPageRow,
 } from "@agency_hub_core/db";
 
 import { holdSetOf } from "../engine/admission.ts";
+import { SYNC_URGENT_WAIT_MS } from "../engine/alerts.ts";
 import {
   acceptanceIncidentKeys,
   acceptanceRouteOf,
@@ -230,10 +232,10 @@ async function boundaryCheck(db: Database, pageId: number): Promise<AcceptanceCh
   };
 }
 
-/** Nothing stuck, nothing lost — the page as it stands now. Urgent work a
- *  subject breaker (an imported one included) or the vendor's block holds is
- *  not stuck: judged by `breaker_until` / `blocked_by_vendor_at`, not by a
- *  stored waiting reason an imported breaker never writes. */
+/** Nothing stuck, nothing lost — the page as it stands now. Urgent work
+ *  waits by alert 3's rule (`syncUrgentWaitingSql`): from its due time or the
+ *  end of its own subject breaker (the vendor's block included), whichever
+ *  is later — judged by `breaker_until`, not by a stored waiting reason. */
 async function stuckCheck(db: Database, pageId: number, window: AcceptanceWindow): Promise<AcceptanceCheck> {
   const now = sql`${window.now}::timestamptz`;
   const result = await db.execute<Record<string, number>>(sql`
@@ -248,10 +250,8 @@ async function stuckCheck(db: Database, pageId: number, window: AcceptanceWindow
          and w.state = 'quarantined') as "workQuarantined",
       (select count(*)::int from fansly_ws_decode_receipts r where r.page_id = ${pageId}
          and r.live_state = 'pending' and r.received_at < ${now} - interval '1 minute') as "receiptsPending",
-      (select count(*)::int from sync_work w where w.page_id = ${pageId} and not w.shadow and w.class = 'urgent'
-         and w.state = 'open' and w.first_demand_at < ${now} - interval '2 minutes'
-         and (w.breaker_until is null or w.breaker_until <= ${now})
-         and w.blocked_by_vendor_at is null) as "urgentWaiting",
+      (select count(*)::int from sync_work w where w.page_id = ${pageId} and not w.shadow
+         and ${syncUrgentWaitingSql({ now, afterMs: SYNC_URGENT_WAIT_MS })}) as "urgentWaiting",
       (select count(*)::int from page_dm_threads t where t.platform_account_id = ${pageId}
          and t.fan_id is not null and not (t.metadata ? 'messageSyncExcludedReason')
          and t.last_message_sender_role is distinct from 'model'

@@ -30,6 +30,7 @@ import {
   markAttemptSent,
   markDeferred,
   markWorkRunning,
+  nextOpenWorkDueAt,
   OwnershipLostError,
   paceFloorFromDb,
   pickPlanned,
@@ -605,6 +606,93 @@ describe("sync_work demand", () => {
     const [row] = await getWorkForStatus(db(), { pageId, states: ["open"] });
     expect(row).toMatchObject({ id: next.id, failureCount: 2, lastErrorClass: "subject_failure" });
     expect(row!.breakerUntil!.getTime()).toBe(breakerUntil.getTime());
+    // Due when the inherited breaker ends, not before.
+    expect(row!.dueAt.getTime()).toBe(breakerUntil.getTime());
+  });
+
+  it("never makes a row due before its own breaker ends; a passed coalescing cap gives way to the signal's window (row 362195)", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage("own-breaker");
+    const generation = await own(pageId);
+    const DAY = 86_400_000;
+    const t0 = Date.now();
+    // Row 362195's shape: its first signal's fast window (2 s quiet, 6 s cap)
+    // closed four days ago; the eighth failure set the vendor's daily probe
+    // 16 h ahead, and the step's due time with it.
+    const first = await upsertDemand(db(), demand(pageId, {
+      dueAt: new Date(t0 - 4 * DAY + 2_000), coalesceUntil: new Date(t0 - 4 * DAY + 6_000), deadlineAt: new Date(t0 - 4 * DAY + 30_000),
+      extendOnSignal: true, demand: { messageIds: ["m1"], reasons: ["ws:message_created"] },
+    }));
+    expect(await markWorkRunning(db(), { workId: first.id, generation })).toEqual({ demandRevision: 1 });
+    const breakerUntil = new Date(t0 + 16 * 3_600_000);
+    await settleWork(db(), {
+      workId: first.id, generation, servedRevision: 1, satisfiesRevision: false,
+      nextDueAt: breakerUntil, waitingReason: "blocked_by_vendor", waitingUntil: breakerUntil,
+      breaker: { failureCount: 8, breakerUntil, blockedByVendorAt: new Date(t0 - 3 * DAY) }, lastErrorClass: "subject_failure",
+    });
+    // A new message in the chat: the same fast window.
+    const signal = (at: number, messageId: string) => demand(pageId, {
+      dueAt: new Date(at + 2_000), coalesceUntil: new Date(at + 6_000), deadlineAt: new Date(at + 30_000),
+      extendOnSignal: true, demand: { messageIds: [messageId], reasons: ["ws:message_created"] },
+    });
+    const s1 = Date.now();
+    expect(await upsertDemand(db(), signal(s1, "m2"))).toEqual({ id: first.id, demandRevision: 2, created: false });
+    let [row] = await getWorkForStatus(db(), { pageId });
+    // Not the four-day-old cap: due when the breaker ends; the window is the signal's.
+    expect(row!.dueAt.getTime()).toBe(breakerUntil.getTime());
+    expect(row!.coalesceUntil!.getTime()).toBe(s1 + 6_000);
+    expect(row!.demand.messageIds).toEqual(["m1", "m2"]);
+    // A further signal inside that window moves nothing before the breaker either.
+    expect(await upsertDemand(db(), signal(Date.now(), "m3"))).toMatchObject({ id: first.id, demandRevision: 3 });
+    [row] = await getWorkForStatus(db(), { pageId });
+    expect(row!.dueAt.getTime()).toBe(breakerUntil.getTime());
+    expect(row!.coalesceUntil!.getTime()).toBe(s1 + 6_000);
+    // Without extension the earlier due time wins — not over the breaker.
+    await upsertDemand(db(), demand(pageId, { dueAt: new Date(Date.now() + 1_000) }));
+    [row] = await getWorkForStatus(db(), { pageId });
+    expect(row!.dueAt.getTime()).toBe(breakerUntil.getTime());
+    expect(row!.demandRevision).toBe(4);
+
+    // The actor's pick and its idle wait: not before the breaker ends.
+    const picked = async (now?: Date) => (await pickUrgent(db(), { pageId, ...(now === undefined ? {} : { now }) })).map((work) => work.id);
+    expect(await picked()).toEqual([]);
+    expect(await picked(new Date(breakerUntil.getTime() - 1_000))).toEqual([]);
+    expect(await picked(breakerUntil)).toEqual([first.id]);
+    expect((await nextOpenWorkDueAt(db(), { pageId }))!.getTime()).toBe(breakerUntil.getTime());
+  });
+
+  it("a passed coalescing cap never delays a runnable row, and a waiting one takes the signal's window", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage("closed-window");
+    const generation = await own(pageId);
+    const t0 = Date.now();
+    const signal = (at: number, overrides: Partial<UpsertDemandInput> = {}) => demand(pageId, {
+      dueAt: new Date(at + 5_000), coalesceUntil: new Date(at + 20_000), extendOnSignal: true, ...overrides,
+    });
+    // Runnable since its cap passed a minute ago (it waits for a slot): a
+    // signal leaves it due — it still reads at the next slot.
+    const due = await upsertDemand(db(), signal(t0 - 80_000, { subject: "due" }));
+    expect(await upsertDemand(db(), signal(Date.now(), { subject: "due" }))).toMatchObject({ id: due.id, demandRevision: 2 });
+    let [row] = await getWorkForStatus(db(), { pageId, subject: "due" });
+    expect(row!.dueAt.getTime()).toBe(t0 - 75_000);
+    expect(row!.coalesceUntil!.getTime()).toBe(t0 - 60_000);
+
+    // A step put the row off for an hour after its window closed: a signal
+    // opens its own window, so the row is due within its cap (20 s), not at
+    // once and not in an hour.
+    const waits = await upsertDemand(db(), signal(t0 - 80_000, { subject: "waits" }));
+    await markWorkRunning(db(), { workId: waits.id, generation });
+    await settleWork(db(), { workId: waits.id, generation, servedRevision: 1, satisfiesRevision: true, nextDueAt: new Date(t0 + 3_600_000) });
+    const s1 = Date.now();
+    await upsertDemand(db(), signal(s1, { subject: "waits" }));
+    [row] = await getWorkForStatus(db(), { pageId, subject: "waits" });
+    expect(row!.dueAt.getTime()).toBe(s1 + 20_000);
+    expect(row!.coalesceUntil!.getTime()).toBe(s1 + 20_000);
+    // Inside the new window a signal moves it as ever: never past the cap.
+    await upsertDemand(db(), signal(s1 + 30_000, { subject: "waits" }));
+    [row] = await getWorkForStatus(db(), { pageId, subject: "waits" });
+    expect(row!.dueAt.getTime()).toBe(s1 + 20_000);
+    expect(row!.coalesceUntil!.getTime()).toBe(s1 + 20_000);
   });
 
   it("creates the registry's polls once, each with a random phase", async (context) => {
@@ -784,6 +872,36 @@ describe("sync_work settlement", () => {
     expect((await query<{ secret_params: string | null }>("select secret_params from sync_work where id = $1", [work.id]))[0]!.secret_params)
       .toBeNull();
     expect(await settleWork(db(), { workId: work.id, generation, servedRevision: 2, satisfiesRevision: true })).toBeNull();
+  });
+
+  it("leaves a row a step failed due when its breaker ends, a demand that came during the step included", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage("settle-breaker");
+    const generation = await own(pageId);
+    const work = await upsertDemand(db(), demand(pageId));
+    await markWorkRunning(db(), { workId: work.id, generation });
+    // A new event while the read is in flight, then the read fails.
+    await upsertDemand(db(), demand(pageId, { dueAt: new Date(Date.now() + 2_000), demand: { messageIds: ["m9"] } }));
+    const breakerUntil = new Date(Date.now() + 60_000);
+    expect(await settleWork(db(), {
+      workId: work.id, generation, servedRevision: 1, satisfiesRevision: false,
+      nextDueAt: breakerUntil, waitingReason: "subject_breaker", waitingUntil: breakerUntil,
+      breaker: { failureCount: 1, breakerUntil, blockedByVendorAt: null }, lastErrorClass: "subject_failure",
+    })).toEqual({ state: "open", demandRevision: 2, appliedRevision: 0 });
+    let [row] = await getWorkForStatus(db(), { pageId });
+    expect(row!.breakerUntil!.getTime()).toBe(breakerUntil.getTime());
+    expect(row!.dueAt.getTime()).toBe(breakerUntil.getTime());
+
+    // The next read answers: the breaker resets, and a newer demand's due time stands again.
+    await markWorkRunning(db(), { workId: work.id, generation });
+    await upsertDemand(db(), demand(pageId, { dueAt: new Date(Date.now() + 2_000), demand: { messageIds: ["m10"] } }));
+    await settleWork(db(), {
+      workId: work.id, generation, servedRevision: 2, satisfiesRevision: true, close: "done",
+      breaker: { failureCount: 0, breakerUntil: null, blockedByVendorAt: null },
+    });
+    [row] = await getWorkForStatus(db(), { pageId });
+    expect(row).toMatchObject({ state: "open", breakerUntil: null, demandRevision: 3, appliedRevision: 2 });
+    expect(await secondsFromNow("sync_work", "due_at", work.id)).toBeLessThan(3);
   });
 
   it("reschedules a poll, quarantines and locks rows in id order", async (context) => {

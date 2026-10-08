@@ -223,7 +223,7 @@ describe("alert rules (design §9.6)", () => {
     expect(evaluate(facts({ live: { unconfirmed: { count: 2, oldestVisibleAt: at(-20 * MINUTE) } } })))
       .toEqual({ freshness: "message_unconfirmed" });
     expect(evaluate(facts({ money: { count: 1, oldestReceivedAt: at(-6 * MINUTE) } }))).toEqual({ freshness: "money_not_in_ledger" });
-    const waiting = { urgentWaiting: [{ resource: "dm-messages.head", subject: "1", dueAt: at(-3 * MINUTE), waitingReason: null }] };
+    const waiting = { urgentWaiting: [{ resource: "dm-messages.head", subject: "1", dueAt: at(-3 * MINUTE), breakerUntil: null, waitingReason: null }] };
     expect(evaluate(facts({ journal: waiting }))).toEqual({ freshness: "urgent_waiting" });
     // A held, paused or not-implemented wait is explained elsewhere.
     expect(evaluate(facts({ journal: waiting, page: { pausedAll: true } }))).toEqual({});
@@ -236,16 +236,43 @@ describe("alert rules (design §9.6)", () => {
     expect(evaluate(facts({ journal: waiting, page: { holds: routeHeld(at(MINUTE)) } }))).toEqual({});
     expect(evaluate(facts({ journal: waiting, page: { holds: routeHeld(at(-1)) } }))).toEqual({ freshness: "urgent_waiting" });
     // A key with another route open is not explained by one held route.
-    const find = { urgentWaiting: [{ resource: "dm-conversations.find", subject: "1", dueAt: at(-3 * MINUTE), waitingReason: null }] };
+    const find = { urgentWaiting: [{ resource: "dm-conversations.find", subject: "1", dueAt: at(-3 * MINUTE), breakerUntil: null, waitingReason: null }] };
     const listHeld = routeHoldRows("messaging.groups", { holdUntil: at(MINUTE).toISOString() });
     expect(evaluate(facts({ journal: find, page: { holds: listHeld } }))).toEqual({ freshness: "urgent_waiting" });
     // Its file's breaker explains the wait of every key the breaker stops —
     // never of the live confirmations, which it does not stop.
     const breaker = [resourceBreakerRow("dm-messages", at(MINUTE), { since: at(-MINUTE) })];
-    const catchup = { urgentWaiting: [{ resource: "dm-messages.catchup", subject: "g1", dueAt: at(-3 * MINUTE), waitingReason: null }] };
+    const catchup = { urgentWaiting: [{ resource: "dm-messages.catchup", subject: "g1", dueAt: at(-3 * MINUTE), breakerUntil: null, waitingReason: null }] };
     expect(evaluate(facts({ journal: catchup, page: { holds: breaker } }))).toEqual({});
     expect(evaluate(facts({ journal: catchup, page: { holds: [resourceBreakerRow("dm-messages", at(-1))] } }))).toEqual({ freshness: "urgent_waiting" });
     expect(evaluate(facts({ journal: waiting, page: { holds: breaker } }))).toEqual({ freshness: "urgent_waiting" });
+  });
+
+  it("alert 3: a row its own subject breaker holds is explained; it waits from the breaker's end", () => {
+    const row = (breakerUntil: Date, waitingReason: string, dueAt = at(-3 * MINUTE)) => ({
+      resource: "dm-messages.head", subject: "g1", dueAt, breakerUntil, waitingReason,
+    });
+    const freshness = (rows: PageAlertFacts["journal"]["urgentWaiting"]) =>
+      evaluatePageAlerts(facts({ journal: { urgentWaiting: rows } }), registry).find((entry) => entry.subKey === "freshness");
+    // The subject breaker's ladder: due long ago, held for another minute.
+    expect(freshness([row(at(MINUTE), "subject_breaker")])).toBeUndefined();
+    // Ended a minute ago: within the 2 minutes a pick has.
+    expect(freshness([row(at(-MINUTE), "subject_breaker")])).toBeUndefined();
+    // Ended 3 minutes ago and no pick took it: waiting, since the breaker's end
+    // (not the older due time), whatever reason the row still stores.
+    expect(freshness([row(at(-3 * MINUTE), "subject_breaker", at(-10 * MINUTE))]))
+      .toMatchObject({ detail: "urgent_waiting", since: at(-3 * MINUTE), reasons: [expect.objectContaining({ context: { works: 1, resources: ["dm-messages.head"] } })] });
+    // The vendor's block (row 362195's shape): a signal pulled the due time to
+    // a first-signal cap five days old, the daily probe is 16 h ahead.
+    const capFiveDaysOld = at(-5 * 24 * 60 * MINUTE);
+    expect(freshness([row(at(16 * 60 * MINUTE), "blocked_by_vendor", capFiveDaysOld)])).toBeUndefined();
+    // Its probe 3 minutes overdue: a genuinely stuck runnable row still pages.
+    expect(freshness([row(at(-3 * MINUTE), "blocked_by_vendor", capFiveDaysOld)]))
+      .toMatchObject({ detail: "urgent_waiting", since: at(-3 * MINUTE) });
+    // Beside a waiting row the held one neither counts nor sets the date.
+    const plain = { ...row(at(-3 * MINUTE), "subject_breaker", at(-4 * MINUTE)), breakerUntil: null, subject: "g2" };
+    expect(freshness([row(at(16 * 60 * MINUTE), "blocked_by_vendor", capFiveDaysOld), plain]))
+      .toMatchObject({ since: at(-4 * MINUTE), reasons: [expect.objectContaining({ context: { works: 1, resources: ["dm-messages.head"] } })] });
   });
 
   it("the route incident (D5): held routes, and a 429 within the clean window; an unreadable state is alert 1's", () => {

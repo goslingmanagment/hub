@@ -317,6 +317,47 @@ describe("the alert evaluator (design §9.6)", () => {
     expect((await pass()).opened).toEqual([{ pageId: page.pageId, subKey: "freshness", detail: "message_unconfirmed" }]);
   });
 
+  it("alert 3: urgent work its own breaker holds pages nobody (row 362195); once the breaker ends, a row no pick takes does", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await enginePage("live");
+    const urgentRow = (subject: string, row: { dueMins: number; breakerMins: number; blocked: boolean }) => testDb!.pool.query(
+      `insert into sync_work (page_id, shadow, resource, subject, kind, class, state, due_at, coalesce_until, first_demand_at,
+                              failure_count, breaker_until, blocked_by_vendor_at, waiting_reason)
+       values ($1, false, 'dm-messages.head', $2, 'trigger', 'urgent', 'open',
+               clock_timestamp() + make_interval(mins => $3::int), clock_timestamp() + make_interval(mins => $3::int),
+               clock_timestamp() + make_interval(mins => $3::int), case when $5 then 8 else 1 end,
+               clock_timestamp() + make_interval(mins => $4::int),
+               case when $5 then clock_timestamp() - interval '4 days' end,
+               case when $5 then 'blocked_by_vendor' else 'subject_breaker' end)`,
+      [page.pageId, subject, row.dueMins, row.breakerMins, row.blocked],
+    );
+    // The vendor's block as a signal left it before this rule: due at a
+    // first-signal cap five days old, the daily probe 16 h ahead. And a
+    // subject breaker that holds the row for another minute.
+    await urgentRow("blocked", { dueMins: -5 * 24 * 60, breakerMins: 16 * 60, blocked: true });
+    await urgentRow("breaker", { dueMins: -10, breakerMins: 1, blocked: false });
+    expect(await pass()).toMatchObject({ opened: [] });
+    const freshness = async () => (await readSyncAlertStatus(db(), { registry, pages: await listSyncPages(db()) }))
+      .pages.find((row) => row.mode === "live")!.conditions.find((entry) => entry.subKey === "freshness");
+    expect(await freshness()).toBeUndefined();
+
+    // The daily probe is 3 minutes overdue and no pick took it: it pages, from the probe's instant.
+    await testDb.pool.query(
+      `update sync_work set breaker_until = clock_timestamp() - interval '3 minutes' where page_id = $1 and subject = 'blocked'`,
+      [page.pageId],
+    );
+    expect((await pass()).opened).toEqual([{ pageId: page.pageId, subKey: "freshness", detail: "urgent_waiting" }]);
+    const [probe] = await query<{ breakerUntil: Date }>(
+      `select breaker_until as "breakerUntil" from sync_work where page_id = $1 and subject = 'blocked'`,
+      [page.pageId],
+    );
+    expect(await freshness()).toMatchObject({
+      detail: "urgent_waiting",
+      since: probe!.breakerUntil,
+      reasons: [expect.objectContaining({ context: { works: 1, resources: ["dm-messages.head"] } })],
+    });
+  });
+
   it("the pace backstop opens the pace latch from the journal; only the owner's ack closes it, and an older violation never reopens it", async (context) => {
     if (!testDb) return context.skip();
     const page = await enginePage("live", "lilly-1");
