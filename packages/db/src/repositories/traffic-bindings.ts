@@ -371,6 +371,8 @@ export interface TrafficBindingsApplyOptions {
   command: "import" | "set";
   /** Extra audit metadata, e.g. the file name and its SHA-256. */
   auditContext?: Record<string, unknown>;
+  /** Tests: called with the page labels resolved, before the keys are locked. */
+  afterResolve?: () => Promise<void>;
   /** Tests: called with the keys locked and the plan checked, before the first write. */
   afterPlan?: () => Promise<void>;
 }
@@ -393,7 +395,8 @@ function groupBy<T>(items: readonly T[], keyOf: (item: T) => string) {
   return groups;
 }
 
-async function buildPlan(db: Database, change: TrafficBindingsChangeSet): Promise<{
+/** `pages`: the operation's one label → page mapping (the keys were locked under it). */
+async function buildPlan(db: Database, change: TrafficBindingsChangeSet, pages: Map<string, PageRow>): Promise<{
   plan: TrafficBindingsPlan;
   pages: Map<string, PageRow>;
 }> {
@@ -474,7 +477,6 @@ async function buildPlan(db: Database, change: TrafficBindingsChangeSet): Promis
     for (const action of plan.actions) terms.push({ channelKey, change: action });
   }
 
-  const pages = await resolvePages(db, change.bindings.map((b) => b.pageLabel));
   const bindings: TrafficLinkBindingChange[] = [];
   for (const [, wanted] of groupBy(change.bindings, (b) => `${b.pageLabel}\u0000${b.linkKind}\u0000${b.linkId}`)) {
     const first = wanted[0]!;
@@ -703,30 +705,57 @@ interface DerivedTrafficChange {
   conflicts: string[];
 }
 
-async function planDerived(database: Database, derived: DerivedTrafficChange) {
-  const built = await buildPlan(database, derived.change);
+async function planDerived(database: Database, derived: DerivedTrafficChange, pages: Map<string, PageRow>) {
+  const built = await buildPlan(database, derived.change, pages);
   built.plan.conflicts.unshift(...derived.conflicts);
   return built;
+}
+
+/** The labels whose page is no longer the one the operation resolved (relabelled meanwhile). */
+async function relabelledPages(database: Database, pages: Map<string, PageRow>, labels: readonly string[]) {
+  const now = await resolvePages(database, labels);
+  const conflicts: string[] = [];
+  for (const label of new Set(labels)) {
+    const before = pages.get(label)?.id ?? null;
+    const after = now.get(label)?.id ?? null;
+    if (before !== after) {
+      conflicts.push(
+        `page ${label}: was page ${before ?? "none"} when the operation started, is page ${after ?? "none"} `
+          + "once its locks are held (relabelled meanwhile); nothing written — run it again",
+      );
+    }
+  }
+  return conflicts;
 }
 
 async function runTrafficChange(
   db: Database,
   options: TrafficBindingsApplyOptions,
-  keysOf: (tx: Database) => Promise<string[]>,
-  changeOf: (tx: Database) => Promise<DerivedTrafficChange>,
+  labels: readonly string[],
+  keysOf: (pages: Map<string, PageRow>) => string[],
+  changeOf: (tx: Database, pages: Map<string, PageRow>) => Promise<DerivedTrafficChange>,
 ): Promise<TrafficBindingsApplyResult> {
   const batchId = randomUUID();
   if (!options.write) {
     return db.transaction(async (tx) => {
       const database = tx as unknown as Database;
-      const { plan } = await planDerived(database, await changeOf(database));
+      const pages = await resolvePages(database, labels);
+      const { plan } = await planDerived(database, await changeOf(database, pages), pages);
       return { written: false, batchId, plan, auditEventIds: [] };
     }, { accessMode: "read only" });
   }
   return db.transaction(async (tx) => {
     const database = tx as unknown as Database;
-    await lockTrafficKeys(database, await keysOf(database));
-    const built = await planDerived(database, await changeOf(database));
+    // One label → page mapping per operation: the link keys are locked, the
+    // plan is made and the rows are written under it. A label that names
+    // another page once the locks are held (relabelled while waiting) would
+    // put rows under a key this transaction does not hold: refuse.
+    const pages = await resolvePages(database, labels);
+    await options.afterResolve?.();
+    await lockTrafficKeys(database, keysOf(pages));
+    const relabelled = await relabelledPages(database, pages, labels);
+    if (relabelled.length > 0) throw new TrafficBindingsConflictError(relabelled);
+    const built = await planDerived(database, await changeOf(database, pages), pages);
     if (built.plan.conflicts.length > 0) throw new TrafficBindingsConflictError(built.plan.conflicts);
     await options.afterPlan?.();
     const auditEventIds = await writePlan(database, built.plan, built.pages, options, batchId);
@@ -743,8 +772,8 @@ export async function applyTrafficBindingsChange(
   return runTrafficChange(
     db,
     options,
-    // Page ids are needed for the link keys; a page row is not what is locked.
-    async (tx) => lockKeysOf(change, await resolvePages(tx, change.bindings.map((b) => b.pageLabel))),
+    change.bindings.map((b) => b.pageLabel),
+    (pages) => lockKeysOf(change, pages),
     async () => ({ change, conflicts: [] }),
   );
 }
@@ -773,8 +802,7 @@ export async function rehangTrafficLink(
   input: TrafficLinkRehangInput,
   options: Omit<TrafficBindingsApplyOptions, "command">,
 ): Promise<TrafficBindingsApplyResult> {
-  const derive = async (database: Database): Promise<DerivedTrafficChange> => {
-    const pages = await resolvePages(database, [input.pageLabel]);
+  const derive = async (database: Database, pages: Map<string, PageRow>): Promise<DerivedTrafficChange> => {
     const page = pages.get(input.pageLabel);
     const existing = page
       ? await readLinkBindings(database, { pageId: page.id, linkKind: input.linkKind, linkId: input.linkId })
@@ -823,8 +851,9 @@ export async function rehangTrafficLink(
   return runTrafficChange(
     db,
     { ...options, command: "set" },
-    async (tx) => {
-      const page = (await resolvePages(tx, [input.pageLabel])).get(input.pageLabel);
+    [input.pageLabel],
+    (pages) => {
+      const page = pages.get(input.pageLabel);
       return page ? [linkLockKey({ pageId: page.id, linkKind: input.linkKind, linkId: input.linkId })] : [];
     },
     // The open row is read only after the link's lock is held.

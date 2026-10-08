@@ -6,6 +6,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 
 import {
   applyTrafficBindingsChange,
+  rehangTrafficLink,
   createFanslyPage,
   createModel,
   createOnlyFansPage,
@@ -408,6 +409,47 @@ describe("traffic:bindings:set", () => {
     expect(closed.json().conflicts).toEqual([expect.stringMatching(/lora\.insta-farm .* overlaps lora\.erome/)]);
     const rows = await count("traffic_link_bindings where valid_to is null and platform_link_id = '11170786'");
     expect(rows).toBe(1);
+  });
+});
+
+describe("a page relabelled between resolution and the lock (review #512)", () => {
+  it("import and set refuse, nothing is written under the other page", async () => {
+    await applyTrafficBindingsChange(testDb!.db, {
+      contractors: [], channels: [{ key: "lora.a", title: "A" }], terms: [], bindings: [],
+    }, { write: true, actor: "test", command: "import" });
+    // While the operation holds lora-vip-of = page vip and before it locks
+    // that page's link key, the label moves to the other OnlyFans page.
+    const relabel = async () => {
+      await testDb!.pool.query("update pages set label = 'lora-vip-of-old' where label = 'lora-vip-of'");
+      await testDb!.pool.query("update pages set label = 'lora-vip-of' where label = 'lora-of'");
+    };
+    const binding = {
+      pageLabel: "lora-vip-of", linkKind: "trial" as const, linkId: "11577238", channelKey: "lora.a",
+      validFrom: new Date("2026-09-10T00:00:00Z"), validTo: null, validFromBasis: "confirmed" as const,
+    };
+    const otherPage = await testDb!.pool.query<{ id: number }>("select id::int as id from pages where label = 'lora-of'");
+
+    const imported = applyTrafficBindingsChange(
+      testDb!.db,
+      { contractors: [], channels: [], terms: [], bindings: [binding] },
+      { write: true, actor: "test", command: "import", afterResolve: relabel },
+    );
+    await expect(imported).rejects.toBeInstanceOf(TrafficBindingsConflictError);
+    await expect(imported).rejects.toMatchObject({
+      conflicts: [
+        `page lora-vip-of: was page ${vipPageId} when the operation started, is page ${otherPage.rows[0]!.id} `
+          + "once its locks are held (relabelled meanwhile); nothing written — run it again",
+      ],
+    });
+
+    // Back to the first mapping, then the same race through `set`.
+    await testDb!.pool.query("update pages set label = 'lora-of' where label = 'lora-vip-of'");
+    await testDb!.pool.query("update pages set label = 'lora-vip-of' where label = 'lora-vip-of-old'");
+    const rehung = rehangTrafficLink(testDb!.db, binding, { write: true, actor: "test", afterResolve: relabel });
+    await expect(rehung).rejects.toMatchObject({ conflicts: [expect.stringMatching(/^page lora-vip-of: .*relabelled meanwhile/)] });
+
+    expect(await count("traffic_link_bindings")).toBe(0);
+    expect(await count("audit_events where event_type like 'admin.traffic\\_link\\_binding%'")).toBe(0);
   });
 });
 
