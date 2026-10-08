@@ -14,6 +14,8 @@ computed from.
 | [tab-earnings.md](tab-earnings.md) | Earnings tab, statements, CSV exports, supporter (fan) modal |
 | [fbuddy-cross-evidence.md](fbuddy-cross-evidence.md) | What the FBuddy extension sends to and expects from the same routes |
 | [response-fields.json](response-fields.json) | Every field path and JSON type observed in live responses, per route, with the client that reads it |
+| [hub-coverage.md](hub-coverage.md) | Route by route: what the hub's engine, observation kinds, canonicalizers and projections already cover and what they do not (written by the capture session, in Russian) |
+| [live/](live/README.md) | The capture session's evidence: manifest of the 196 live responses, field dictionary with evidence links, 898 numeric checks, and the scripts that reproduce them from the private pack |
 
 ## 1. Evidence and its limits
 
@@ -28,8 +30,9 @@ Every claim below carries one or more of these tags.
 | **L** | 196 saved responses of one authenticated creator session on the same build, 2026-10-08: the native traffic of all four tabs and both modals plus direct GET probes, recorded in the owner's Chrome by the parallel capture session (private pack `~/Documents/Codex/fansly-new-stats-2026-10-08/network/`, not in Git) | Real requests and bodies for all 13 routes |
 
 **How the map and the live capture relate.** The map was derived from client code without seeing a
-response; the capture was made independently. Run over the raw bodies
-(`analysis/verify-live-pack.mjs`, `analysis/compare-live-shapes.mjs`):
+response; the capture was made independently, and its own manifest and checks are kept in
+[live/](live/README.md). Run over the raw bodies (`analysis/verify-live-pack.mjs`,
+`analysis/compare-live-shapes.mjs`):
 
 - of the 196 captures, 127 are requests the official UI can produce and all of them match the
   mapped wire order, parameter names and values; the other 69 are the capture session's own probes
@@ -650,7 +653,9 @@ verdict lines) are client arithmetic over the fields above; formulas are in the 
 
 ## 8. Hub notes
 
-Nothing in the hub requests these routes yet.
+Nothing in the hub requests these routes yet. [hub-coverage.md](hub-coverage.md) goes through each
+route against the engine's wire specs, resources, observation kinds, canonicalizers and projections
+and names the nearest existing source for each.
 
 - **Sending.** The engine sends only wire specs (`packages/fansly/src/wire/specs.ts`), so each route
   needs a spec before it can be read at all, including by the owner's one-off
@@ -698,8 +703,8 @@ Settled by the live capture (L), details in sections 4 and 5:
 
 Still open:
 
-1. Whether the hub's header plan (no `fansly-client-check` on `/account/stats/*`) gets a `200`. The capture was a browser session, which always sends the check.
-2. Quotas of the family and whether its routes share a bucket.
+1. Whether the hub's header plan (no `fansly-client-check` on `/account/stats/*`) gets a `200`. The capture was a browser session, which always sends the check. The owner's assessment (2026-10-09) is that it will be accepted, in line with every other route the hub reads without a check; it is unobserved until the hub's first request.
+2. Quotas of the family and whether its routes share a bucket. Unknown.
 3. Refunds. The live bodies carry the refund fields (`refunds`, `refundedNetMills`, `refundedGrossMills`) with zero values, and no page of the agency has a refund in the hub's archive, so non-zero refunds, `productType 6101` rows, the date a refund is booked on, and `status` 5 / 6 or `destination 1` rows are known from client code only. They cannot be observed until a refund happens on one of the pages.
 4. Locked text, for the same reason: no page has such a sale, so the `stories` join of route 13 and product types 32001 / 32101 in the stats rows are known from client code only.
 5. A non-empty `tags` answer for `kind=2`.
