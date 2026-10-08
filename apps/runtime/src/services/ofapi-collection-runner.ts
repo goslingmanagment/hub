@@ -7,6 +7,7 @@ import {
   checkpointOfapiCollectionJob,
   claimOfapiCollectionJob,
   closeAdmissionRefusedOfapiCollectionRuns,
+  closeSafeReadFailedOfapiCollectionRuns,
   enqueueDueOfapiCollectionSchedules,
   findPageById,
   getEffectiveOfapiCollectionPolicy,
@@ -69,6 +70,15 @@ class OfapiCollectionCapturedHttpError extends Error {
   constructor(readonly status: number) {
     super(`Vendor HTTP ${status}; response captured`);
   }
+}
+/**
+ * Captured vendor statuses that end a scheduled run as failed. 401 and 403 are
+ * authorization, which someone has to restore, so those runs stay paused, as
+ * does any status outside 4xx/5xx. `closeSafeReadFailedOfapiCollectionRuns`
+ * applies the same rule in SQL to runs parked before this one existed.
+ */
+function capturedStatusEndsScheduledRun(status: number) {
+  return status >= 400 && status <= 599 && status !== 401 && status !== 403;
 }
 export function planOfapiReadCollection(
   job: OfapiCollectionJob,
@@ -349,11 +359,21 @@ export async function runOfapiCollectionJob(
     const scheduledLimit = job.purpose === "background" && admissionError instanceof OfapiCollectionPolicyError
       && ["job_limit", "daily_limit", "interval_limit"].includes(admissionError.reason)
       ? admissionError.reason : null;
-    // Only a captured safe-read response permits the next scheduled window.
-    // Auth, parse and uncertain transport failures still require recovery.
+    // A captured 4xx/5xx answers this step, and a replay of the step reads
+    // the same retained response, so the run cannot move. It ends failed and
+    // the next interval starts a new bounded run. Authorization, a rejected
+    // contract and a cursor cycle still wait for the owner.
     const scheduledHttpFailure = job.purpose === "background"
       && error instanceof OfapiCollectionCapturedHttpError
-      && (error.status === 429 || (error.status >= 500 && error.status <= 599));
+      && capturedStatusEndsScheduledRun(error.status);
+    // The request left and no response was captured. The step allows one
+    // request, so this run can never read it again; parked as paused it held
+    // its category until an owner noticed (2026-09-08..10-06: eight runs on
+    // both OF pages, the oldest for a month). The attempt is already settled
+    // as billed by the transport. The next interval starts a new run under its
+    // own limits; it does not resume this cursor.
+    const scheduledTransportFailure = job.purpose === "background"
+      && error instanceof OfapiGovernedRequestError && error.phase === "post_dispatch";
     // A capture-admission refusal (disk gate, credit floor, caps) comes before
     // any vendor request, so nothing is paid or uncertain. A scheduled run
     // ends failed like an exhausted allowance and the next interval starts a
@@ -384,7 +404,8 @@ export async function runOfapiCollectionJob(
       id: jobId,
       token,
       checkpoint,
-      state: scheduledLimit || scheduledRefusal || scheduledHttpFailure ? "failed" : localRecovery ? "queued" : "paused",
+      state: scheduledLimit || scheduledRefusal || scheduledHttpFailure || scheduledTransportFailure ? "failed"
+        : localRecovery ? "queued" : "paused",
       bytesAdded: capturedFailureBytes,
       reason,
     }).catch((err) =>
@@ -419,6 +440,12 @@ export async function sweepOfapiCollections(
     app.logger.warn(
       { runs: closed },
       "Closed scheduled collection runs parked by a capture-admission refusal",
+    );
+  const ended = await closeSafeReadFailedOfapiCollectionRuns(app.db);
+  if (ended.length > 0)
+    app.logger.warn(
+      { runs: ended },
+      "Closed scheduled collection runs parked by a failed safe read",
     );
   await enqueueDueOfapiCollectionSchedules(app.db, [
     ...new Set([
