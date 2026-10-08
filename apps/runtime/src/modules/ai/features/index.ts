@@ -51,6 +51,7 @@ import {
   type MediaNotesManifest,
   applyLiveTextContext,
   assertLiveTextRequestShape,
+  chatUnavailableTranscriptNote,
   computePingSummary,
   isFanProfileFeatureEnabled,
   loadAiContextFrameBody,
@@ -60,6 +61,7 @@ import {
   loadSpendingContext,
   loadSubscriptionContext,
   loadTranscriptContext,
+  readAiChatAccess,
   transcriptMessagesOmittedByBudget,
   type AiTranscriptLiveOverlay,
   type AiTranscriptUnionMode,
@@ -518,6 +520,20 @@ export async function prepareAiFeatureStream(
     // client values there would let a bearer fabricate transcript/spend.
     throw new BadRequestError("clientContext is only accepted for fansly pages");
   }
+  // Arena "vanished chat" (plan §5): whether Fansly still serves this chat to
+  // the page — read once, for both lanes. An established episode ends the
+  // transcript with one line (below, after both lanes); on the kernel lane it
+  // also labels the hub's socket messages of the chat. A failed read never
+  // fails the generation: no line, and the manifest says so.
+  const chatAccess = await readAiChatAccess(app, {
+    pageId,
+    conversationRef: body.conversationRef,
+    fanRef: body.fanRef ?? null,
+    groupRef: body.clientContext?.media?.groupRef ?? null,
+  });
+  // The kernel lane's labelled socket messages; null on the client-context
+  // lane, whose transcript the hub keeps exactly as the client sent it.
+  let unconfirmedSocketMessages: number | null = null;
   if (body.clientContext) {
     // Client-loaded context path (Stage 32). The product gates run on the
     // client-reported counts/segment — the same values the client's own
@@ -631,8 +647,7 @@ export async function prepareAiFeatureStream(
       unionMode,
       liveOverlay,
       ...(maxRows !== undefined ? { maxRows } : {}),
-      // Only the Fansly engine writes episodes; another platform's chat reads none.
-      readChatAccess: true,
+      chatUnavailable: chatAccess.unavailable,
     });
     // chat-extension H-4c: the request's fresh text joins AFTER the loader
     // returns, never inside it. Without fresh text (or with the owner's switch
@@ -705,11 +720,21 @@ export async function prepareAiFeatureStream(
         };
       }
     }
-    // Arena "vanished chat" (plan §5): a chat Fansly no longer serves to the
-    // page says so after its transcript, whichever step rendered it last.
-    if (transcript.chatAccess !== null) {
-      contextValues.transcript += transcript.chatAccess.note;
-    }
+    unconfirmedSocketMessages = transcript.unconfirmedSocketMessages;
+  }
+  // Arena "vanished chat" (plan §5), both lanes: a chat Fansly no longer
+  // serves to the page says so after its transcript, whichever step rendered
+  // it last. The client's own transcript is appended to, never relabelled.
+  // Manifest keys only then (or on a failed read), so every other generation
+  // records what it did before.
+  if (chatAccess.unavailable) {
+    contextValues.transcript += chatUnavailableTranscriptNote({ unconfirmed: unconfirmedSocketMessages });
+    contextManifest = {
+      ...(contextManifest ?? {}),
+      chatAccess: { state: "established", unconfirmed: unconfirmedSocketMessages },
+    };
+  } else if (chatAccess.error) {
+    contextManifest = { ...(contextManifest ?? {}), chatAccessError: true };
   }
   if (mediaNotes) {
     contextManifest = { ...(contextManifest ?? {}), mediaNotes: mediaNotes.manifest };

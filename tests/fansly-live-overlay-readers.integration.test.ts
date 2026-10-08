@@ -12,6 +12,7 @@ import {
   getPageConversationPreview,
   listAgentTranscript,
   listArchiveConversationMessages,
+  readOpenChatUnavailabilityForRequest,
   upsertFans,
   upsertPageDmConversation,
   upsertPageDmMessages,
@@ -467,25 +468,20 @@ describe("chat access: a chat Fansly no longer serves to the page (arena vanishe
     expect(endedPreview).toEqual(baselinePreview);
   });
 
-  it("the AI transcript labels the chat's socket messages and says the chat is unavailable, only while established", async () => {
+  it("the AI loader labels the chat's socket messages only when told the chat is unavailable", async () => {
     const f = await fixture();
     await f.archive("7801", 0, "hey babe");
     await f.archive("7802", 60, "hey you", { mine: true });
     await f.live("7803", { seconds: 120, content: "enjoy baby" });
     await f.live("7804", { seconds: 150, sender: PAGE_REF, content: "live reply" });
-    const load = (readChatAccess?: boolean) => loadTranscriptContext(f.app, {
-      pageId: f.page.id, conversationRef: GROUP, liveOverlay: "serve", ...(readChatAccess === undefined ? {} : { readChatAccess }),
+    const load = (chatUnavailable?: boolean) => loadTranscriptContext(f.app, {
+      pageId: f.page.id, conversationRef: GROUP, liveOverlay: "serve", ...(chatUnavailable === undefined ? {} : { chatUnavailable }),
     });
 
-    const plain = await load(true);
-    expect(plain.chatAccess).toBeNull();
-    expect(plain.contextManifest).not.toHaveProperty("chatAccess");
+    const plain = await load();
+    expect(plain.unconfirmedSocketMessages).toBe(0);
+    expect(await load(false)).toEqual(plain);
 
-    await seedEpisode(f.main.id, { state: "refusing", refusals: 3 });
-    expect(await load(true)).toEqual(plain);
-
-    await testDb.pool.query("delete from page_dm_thread_unavailability");
-    await seedEpisode(f.main.id, { state: "established", refusals: 5 });
     const unavailable = await load(true);
     expect(unavailable.messages.map((message) => [String(message.id), message.sender, message.text, message.labels])).toEqual([
       ["7801", "Fan", "hey babe", []],
@@ -497,45 +493,48 @@ describe("chat access: a chat Fansly no longer serves to the page (arena vanishe
       expect.stringMatching(/^\[\d\d:\d\d\] Fan: \[Unconfirmed\] enjoy baby$/),
       expect.stringMatching(/^\[\d\d:\d\d\] Model: \[Unconfirmed\] live reply$/),
     ]);
-    expect(unavailable.chatAccess).toEqual({
-      state: "established",
-      unconfirmed: 2,
-      note: "\n\nChat status: Fansly no longer serves this chat's history to the page — the fan probably blocked the page "
-        + "or deleted their account. Messages marked [Unconfirmed] arrived over the live socket and are not confirmed.",
-    });
-    expect(unavailable.contextManifest).toMatchObject({ chatAccess: { state: "established", unconfirmed: 2 } });
-    expect(unavailable.contextManifest).not.toHaveProperty("chatAccessError");
-    // The same rows, only labelled: the window and its refs do not move.
+    expect(unavailable.unconfirmedSocketMessages).toBe(2);
+    // The loader's own manifest and the served window do not change: only the labels.
+    expect(unavailable.contextManifest).toEqual(plain.contextManifest);
     expect(unavailable.served).toEqual(plain.served);
 
-    // Without the overlay there is nothing to label, and the chat is still unavailable.
-    const archiveOnly = await loadTranscriptContext(f.app, { pageId: f.page.id, conversationRef: GROUP, readChatAccess: true });
+    // Without the overlay there is nothing to label.
+    const archiveOnly = await loadTranscriptContext(f.app, { pageId: f.page.id, conversationRef: GROUP, chatUnavailable: true });
     expect(archiveOnly.messages.every((message) => message.labels.length === 0)).toBe(true);
-    expect(archiveOnly.chatAccess).toMatchObject({ state: "established", unconfirmed: 0 });
-    expect(archiveOnly.chatAccess!.note).not.toContain("[Unconfirmed]");
-
-    // Not asked (another platform's caller): the episode is not read.
-    expect(await load()).toEqual(plain);
-    expect(await load(false)).toEqual(plain);
+    expect(archiveOnly.unconfirmedSocketMessages).toBe(0);
   });
 
-  it("serves the transcript without its access and says so when the episode read fails", async () => {
+  it("an AI request's chat resolves by group id first, else by the fan's account id; only an open episode counts", async () => {
     const f = await fixture();
-    await f.archive("7901", 0, "hey babe");
-    await f.live("7902", { seconds: 10 });
+    const read = (groupIds: string[], partnerIds: string[]) => readOpenChatUnavailabilityForRequest(f.app.db, {
+      pageId: f.page.id, groupIds, partnerIds,
+    });
+    expect(await read([GROUP], [FAN])).toBeNull();
+    expect(await read([], [])).toBeNull();
+
     await seedEpisode(f.main.id, { state: "established", refusals: 5 });
-    await testDb.pool.query("alter table page_dm_thread_unavailability rename column state to state_moved");
-    try {
-      const served = await loadTranscriptContext(f.app, {
-        pageId: f.page.id, conversationRef: GROUP, liveOverlay: "serve", readChatAccess: true,
-      });
-      expect(served.messages.map((message) => [String(message.id), message.labels])).toEqual([["7901", []], ["7902", []]]);
-      expect(served.chatAccess).toBeNull();
-      expect(served.contextManifest).toMatchObject({ source: "live_union", chatAccessError: true });
-      expect(served.contextManifest).not.toHaveProperty("chatAccess");
-    } finally {
-      await testDb.pool.query("alter table page_dm_thread_unavailability rename column state_moved to state");
-    }
+    expect(await read([GROUP], [])).toMatchObject({ groupId: GROUP, state: "established", refusals: 5 });
+    // An older client names the chat by the fan's account id: the fan's newest chat with the page.
+    await testDb.pool.query("update page_dm_threads set last_message_at = $2 where id = $1", [f.other.id, at(-60)]);
+    expect(await read([FAN], [FAN])).toMatchObject({ groupId: GROUP });
+    // A group id of the page wins over the fan's other chats.
+    expect(await read([OTHER_GROUP], [FAN])).toBeNull();
+    // Another page's chat, an unknown ref: nothing.
+    expect(await readOpenChatUnavailabilityForRequest(f.app.db, { pageId: f.page.id + 1000, groupIds: [GROUP], partnerIds: [FAN] }))
+      .toBeNull();
+    expect(await read([UNKNOWN_GROUP], ["700000000000000999"])).toBeNull();
+
+    // The fan's newest chat decides: once the other chat is newer, it has no episode.
+    await testDb.pool.query("update page_dm_threads set last_message_at = now() where id = $1", [f.other.id]);
+    expect(await read([FAN], [FAN])).toBeNull();
+
+    // A refusing episode is read (the caller decides what it means); an ended one is not.
+    await testDb.pool.query("delete from page_dm_thread_unavailability");
+    await seedEpisode(f.main.id, { state: "refusing", refusals: 2 });
+    expect(await read([GROUP], [])).toMatchObject({ state: "refusing" });
+    await testDb.pool.query("delete from page_dm_thread_unavailability");
+    await seedEpisode(f.main.id, { state: "established", refusals: 5, ended: true });
+    expect(await read([GROUP], [FAN])).toBeNull();
   });
 });
 

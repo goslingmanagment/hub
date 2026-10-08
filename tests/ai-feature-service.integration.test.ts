@@ -3384,9 +3384,148 @@ describe("Fansly live overlay in the kernel context (plan §7.11)", () => {
     await episode("established");
     const unavailable = await runKernelFastReply();
     expect(unavailable.promptText).toContain(NOTE);
+    expect(unavailable.promptText).toContain("Messages marked [Unconfirmed] arrived over the live socket and are not confirmed.");
     expect(unavailable.promptText).toContain("Fan: [Unconfirmed] LIVE_SOCKET_LINE");
     expect(unavailable.promptText).toContain("Fan: archived hello");
     expect(unavailable.manifest).toMatchObject({ source: "live_union", chatAccess: { state: "established", unconfirmed: 1 } });
+
+    // A failed episode read never fails the generation: no line, no labels, and the manifest says so.
+    await testDb.pool.query("alter table page_dm_thread_unavailability rename column state to state_moved");
+    try {
+      const failed = await runKernelFastReply();
+      expect(failed.promptText).not.toContain(NOTE);
+      expect(failed.promptText).toContain("Fan: LIVE_SOCKET_LINE");
+      expect(failed.manifest).toMatchObject({ source: "live_union", chatAccessError: true });
+      expect(failed.manifest).not.toHaveProperty("chatAccess");
+    } finally {
+      await testDb.pool.query("alter table page_dm_thread_unavailability rename column state_moved to state");
+    }
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+});
+
+describe("a chat Fansly no longer serves, on the client-context lane (arena vanished chat, plan §5)", () => {
+  // The released fansly-chat client sends its own transcript (clientContext).
+  // The hub keeps it exactly as sent and only appends the one-line status of a
+  // chat with an established unavailability episode.
+  const group = "880101";
+  const CLIENT_TRANSCRIPT = "[10:00] Fan: CLIENT_LINE_ONE\n[10:01] Model: CLIENT_LINE_TWO";
+  const NOTE = "\n\nChat status: Fansly no longer serves this chat's history to the page — the fan probably blocked the page "
+    + "or deleted their account. Its newest messages may have arrived over the live socket only and are not confirmed.";
+
+  async function seedThread() {
+    const { rows } = await testDb!.pool.query<{ id: string }>(
+      `insert into page_dm_threads (platform_account_id, platform_conversation_id, partner_platform_user_id)
+       values ($1, $2, $3) returning id::text as id`,
+      [fanslyPageId, group, FAN],
+    );
+    return Number(rows[0]!.id);
+  }
+
+  async function seedEpisode(threadId: number, state: "refusing" | "established") {
+    await testDb!.pool.query("delete from page_dm_thread_unavailability");
+    await testDb!.pool.query(
+      `insert into page_dm_thread_unavailability (thread_id, state, opened_at, established_at, refusals, last_refusal_at,
+              last_http_status, retry_not_before, first_attempt_id, last_attempt_id, first_observation_id,
+              first_observation_received_at, last_observation_id, last_observation_received_at)
+       values ($1, $2::text, now() - interval '7 hours', case when $2::text = 'established' then now() end,
+               case when $2::text = 'established' then 5 else 2 end, now(), 500,
+               case when $2::text = 'established' then now() + interval '1 day' end, 0, 0, 0, now(), 0, now())`,
+      [threadId, state],
+    );
+  }
+
+  async function clientReply(refs: { conversationRef: string; fanRef?: string }, feature = "fast-reply") {
+    const capture: { input?: AiGatewayProviderInput } = {};
+    appContext.aiGatewayProvider = capturingProvider(capture);
+    const res = await apiServer!.inject({
+      method: "POST",
+      url: `/api/v1/ai/features/${feature}`,
+      headers: { authorization: `Bearer ${chatterKey}` },
+      payload: {
+        clientRequestId: randomUUID(),
+        pageLabel: "svc-fs",
+        platform: "fansly",
+        ...refs,
+        clientContext: {
+          transcript: CLIENT_TRANSCRIPT,
+          messageCount: 35,
+          fanDisplayName: "Charles",
+          fanSpendingData: "Total: $42.00",
+          fanSubscriptionData: "Subscribed: yes",
+        },
+      },
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    const { rows } = await testDb!.pool.query<{ params: { contextManifest?: Record<string, unknown> } }>(
+      `select params from ai_generation_content where feature = $1 order by id desc limit 1`,
+      [feature],
+    );
+    return {
+      promptText: capture.input!.body.prompt.userBlocks.map((block) => block.text).join("\n"),
+      manifest: rows[0]?.params.contextManifest,
+    };
+  }
+
+  it("appends the line to the client's transcript, unchanged otherwise, only while the episode is established", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const threadId = await seedThread();
+
+    const none = await clientReply({ conversationRef: group, fanRef: FAN });
+    expect(none.promptText).toContain(`<transcript>\n${CLIENT_TRANSCRIPT}\n</transcript>`);
+    expect(none.promptText).not.toContain("Chat status:");
+    expect(none.manifest).toBeUndefined();
+
+    await seedEpisode(threadId, "refusing");
+    const refusing = await clientReply({ conversationRef: group, fanRef: FAN });
+    expect(refusing.promptText).toBe(none.promptText);
+    expect(refusing.manifest).toBeUndefined();
+
+    await seedEpisode(threadId, "established");
+    const unavailable = await clientReply({ conversationRef: group, fanRef: FAN });
+    // The client's lines exactly as sent (no relabelling, no archive), then the line.
+    expect(unavailable.promptText).toContain(`<transcript>\n${CLIENT_TRANSCRIPT}${NOTE}\n</transcript>`);
+    expect(unavailable.promptText).not.toContain("[Unconfirmed]");
+    expect(unavailable.promptText.replace(NOTE, "")).toBe(none.promptText);
+    expect(unavailable.manifest).toEqual({ chatAccess: { state: "established", unconfirmed: null } });
+
+    // Every feature of the lane, not only Reply.
+    const recap = await clientReply({ conversationRef: group, fanRef: FAN }, "fan-summary");
+    expect(recap.promptText).toContain(`${CLIENT_TRANSCRIPT}${NOTE}`);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("resolves an older client's fan-id ref to the fan's chat on the page; an unknown ref gets no line", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    await seedEpisode(await seedThread(), "established");
+
+    const legacy = await clientReply({ conversationRef: FAN });
+    expect(legacy.promptText).toContain(`<transcript>\n${CLIENT_TRANSCRIPT}${NOTE}\n</transcript>`);
+
+    const unknown = await clientReply({ conversationRef: "880999", fanRef: "777000999" });
+    expect(unknown.promptText).toContain(`<transcript>\n${CLIENT_TRANSCRIPT}\n</transcript>`);
+    expect(unknown.manifest).toBeUndefined();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("serves the request without the line when the episode read fails, and says so in the manifest", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    await seedEpisode(await seedThread(), "established");
+    await testDb.pool.query("alter table page_dm_thread_unavailability rename column state to state_moved");
+    try {
+      const served = await clientReply({ conversationRef: group, fanRef: FAN });
+      expect(served.promptText).toContain(`<transcript>\n${CLIENT_TRANSCRIPT}\n</transcript>`);
+      expect(served.promptText).not.toContain("Chat status:");
+      expect(served.manifest).toEqual({ chatAccessError: true });
+    } finally {
+      await testDb.pool.query("alter table page_dm_thread_unavailability rename column state_moved to state");
+    }
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
 
