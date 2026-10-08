@@ -1,4 +1,5 @@
 import {
+  CHAT_UNAVAILABLE_REASON,
   closeWorkRows,
   countHistoryItems,
   endHistoryItems,
@@ -15,11 +16,11 @@ import {
   insertHistoryItems,
   insertHistoryRequest,
   isPageErased,
-  latestWorkForSubjects,
   listHistoryItems,
   listHistoryRequests,
   listOpenHistoryItems,
   listOpenRequestsForPage,
+  lockOpenChatUnavailability,
   lockRequestsOfOpenItems,
   lockThreadsForHistoryItems,
   lockWorkRows,
@@ -27,6 +28,7 @@ import {
   markHistoryRequestCancelled,
   openWorkIdsForSubjects,
   readHistoryThreadFacts,
+  readOpenChatUnavailability,
   readOpenVerifiedWsConnection,
   readRouteJournal,
   readRouteUse,
@@ -90,6 +92,7 @@ import {
   HistoryInputError,
   judgeSatisfaction,
   loadedMessages,
+  needsHistoryHeadRead,
   normalizeHistoryInputs,
   reasonDigest,
   type HistoryFanInput,
@@ -543,10 +546,12 @@ export async function submitHistoryRequest(
   // (1) Resolve and classify every input — reads only.
   const resolved = await resolveInputs(ctx.db, input.pageId, inputs, ctx.planeReads);
   const threads = resolved.flatMap((entry) => (entry.kind === "thread" ? [entry.thread] : []));
-  const latest = await latestWorkForSubjects(ctx.db, {
+  // Whether Fansly serves the chat is the chat's unavailability episode
+  // (arena "vanished chat" §2.4) — never the latest work of any DM read: a
+  // deeper page's refusal says nothing of the head a new fan needs first.
+  const unavailable = await readOpenChatUnavailability(ctx.db, {
     pageId: input.pageId,
-    resourceFile: "dm-messages",
-    subjects: threads.map((thread) => thread.groupId),
+    groupIds: threads.map((thread) => thread.groupId),
   });
   const socket = threads.length === 0 ? null : await readOpenVerifiedWsConnection(ctx.db, input.pageId);
   const now = page.dbNow;
@@ -565,23 +570,17 @@ export async function submitHistoryRequest(
       conversationRef: entry.thread?.groupId ?? entry.input.groupId,
     };
     if (entry.kind === "refused") {
-      items.push({
-        ...base,
-        state: "refused",
-        refusal: entry.refusal,
-        excludedReason: entry.excludedReason,
-        workId: null,
-        anchor: null,
-        estimateReadsMin: null,
-        estimateReads: null,
-        satisfiedBy: null,
-        satisfiedOldestId: null,
-        satisfiedCount: null,
-        final: { readsSpent: 0, refusedAtIntake: true },
-      });
+      items.push(refusedAtIntake(base, entry.refusal, entry.excludedReason));
       continue;
     }
     const thread = entry.thread;
+    // A chat Fansly refuses to the page (an established episode) is refused
+    // like an excluded one: its head is not read before the episode's retry
+    // boundary, so no fan of it can be served.
+    if (unavailable.get(thread.groupId)?.state === "established") {
+      items.push(refusedAtIntake(base, "excluded", CHAT_UNAVAILABLE_REASON));
+      continue;
+    }
     const anchor = anchorAtIntake(thread, socket);
     const satisfied = judgeSatisfaction({ depth, anchor }, thread);
     if (satisfied !== null) {
@@ -601,17 +600,17 @@ export async function submitHistoryRequest(
       });
       continue;
     }
-    // The vendor keeps refusing this chat (any of its DM reads): the fan is
-    // blocked and its first read waits for the daily probe.
-    const previous = latest.get(thread.groupId) ?? null;
-    const blocked = previous !== null && previous.blockedByVendorAt !== null;
+    // Queued: a chat still refusing (an episode not established) is read as
+    // any other — the chat's history work waits under its own breaker
+    // (`upsertDemand` carries it over); a refusal the walk meets later
+    // shows the fan `blocked` through the work (`effectiveItemState`).
     const estimate = itemEstimate({ depth, anchor }, thread, now);
     estimates.push(estimate);
     if (anchor === null) unanchored += 1;
-    needWork.set(thread.groupId, { thread, dueAt: blocked ? previous.breakerUntil : null });
+    needWork.set(thread.groupId, { thread, dueAt: null });
     items.push({
       ...base,
-      state: blocked ? "blocked" : "queued",
+      state: "queued",
       refusal: null,
       excludedReason: null,
       workId: null,
@@ -659,7 +658,25 @@ export async function submitHistoryRequest(
       //     locked in id order, then the demand upserted by group id (new
       //     rows in key order).
       await lockThreadsForHistoryItems(tx, items.flatMap((item) => (item.threadId === null ? [] : [item.threadId])));
-      const groups = [...needWork.keys()].sort();
+      // (2a) Whether Fansly serves the chats, again, under their episode rows
+      //      (before any work row, as the actor's refusal takes them): an
+      //      establishment since the read above is waited for and seen — its
+      //      fans are refused now, with no work and no read — and one that
+      //      comes after this transaction finds the fans it filed.
+      const episodes = await lockOpenChatUnavailability(tx, {
+        threadIds: [...needWork.values()].map((entry) => entry.thread.threadId),
+      });
+      const refusedNow = new Set<string>();
+      for (const [groupId, entry] of needWork) {
+        if (episodes.get(entry.thread.threadId)?.state !== "established") continue;
+        refusedNow.add(groupId);
+        for (const [index, item] of items.entries()) {
+          if (item.state === "queued" && item.threadId === entry.thread.threadId) {
+            items[index] = refusedAtIntake(item, "excluded", CHAT_UNAVAILABLE_REASON);
+          }
+        }
+      }
+      const groups = [...needWork.keys()].filter((groupId) => !refusedNow.has(groupId)).sort();
       const existing = await openWorkIdsForSubjects(tx, {
         pageId: input.pageId, resource: HISTORY_WORK_RESOURCE, subjects: groups,
       });
@@ -704,7 +721,7 @@ export async function submitHistoryRequest(
       //     ones') against the chain as it stands.
       await settleOpenItemsOfThreads(tx, {
         pageId: input.pageId,
-        threadIds: [...needWork.values()].map((entry) => entry.thread.threadId),
+        threadIds: groups.map((groupId) => needWork.get(groupId)!.thread.threadId),
       });
       await refreshHistoryRequestCompletion(tx, [request.id]);
       if (options.audit !== undefined) {
@@ -737,6 +754,34 @@ export async function submitHistoryRequest(
     limit: HISTORY_ITEMS_PAGE,
   });
   return { disposition: "created", ...document };
+}
+
+/** A fan refused at intake: no work, no read. */
+function refusedAtIntake(
+  base: Pick<NewHistoryItem, "ordinal" | "inputKind" | "inputRef" | "fanPlatformUserId" | "fanId" | "threadId" | "conversationRef">,
+  refusal: HistoryItemRefusal,
+  excludedReason: string | null,
+): NewHistoryItem {
+  return {
+    ordinal: base.ordinal,
+    inputKind: base.inputKind,
+    inputRef: base.inputRef,
+    fanPlatformUserId: base.fanPlatformUserId,
+    fanId: base.fanId,
+    threadId: base.threadId,
+    conversationRef: base.conversationRef,
+    state: "refused",
+    refusal,
+    excludedReason,
+    workId: null,
+    anchor: null,
+    estimateReadsMin: null,
+    estimateReads: null,
+    satisfiedBy: null,
+    satisfiedOldestId: null,
+    satisfiedCount: null,
+    final: { readsSpent: 0, refusedAtIntake: true },
+  };
 }
 
 // ── satisfaction (design §7.1.6) ──────────────────────────────────────────────
@@ -852,9 +897,11 @@ export async function onHistoryThreadChainChanged(tx: Database, input: { pageId:
 /**
  * The engine's work-closed hook (`CommitDeps.onWorkClosed`): a chat's history
  * work closed for a reason of its own — the chat was deleted, unbound or
- * excluded since intake, or proven complete. Its open fans end now: satisfied
- * ones `ready`, the rest refused (`not_found`, `excluded`) or `cancelled`
- * with the reason in `final`. Other works are not the requests' business.
+ * excluded since intake, Fansly's refusal of it was established
+ * (`chat_unavailable`), or proven complete. Its open fans end now: satisfied
+ * ones `ready`, the rest refused (`not_found`, `excluded` with the exclusion,
+ * `unbound` or `chat_unavailable`) or `cancelled` with the reason in `final`;
+ * what was loaded stays loaded. Other works are not the requests' business.
  */
 export async function onHistoryWorkClosed(
   tx: Database,
@@ -886,7 +933,8 @@ export async function onHistoryWorkClosed(
       continue;
     }
     const excluded = exclusionOf(thread);
-    if (excluded !== null || input.closeReason === "excluded" || input.closeReason === "unbound") {
+    if (excluded !== null || input.closeReason === "excluded" || input.closeReason === "unbound"
+      || input.closeReason === CHAT_UNAVAILABLE_REASON) {
       ended.push({ item, state: "refused", refusal: "excluded", excludedReason: excluded ?? input.closeReason, thread });
       continue;
     }
@@ -903,6 +951,54 @@ export async function onHistoryWorkClosed(
     });
   }
   await refreshHistoryRequestCompletion(tx, requestIds);
+}
+
+/**
+ * The engine's chat-unavailable hook (`CommitDeps.onChatUnavailable`, arena
+ * "vanished chat" §2.4): a refusal left the chat's unavailability episode
+ * established, so its head is not read before the retry boundary. Its open
+ * fans that need a head read — the chain is not partial yet, or the fan has
+ * no anchor and the walk read no head since it was filed — are refused
+ * (`excluded`, `chat_unavailable`, what was loaded stays loaded in `final`);
+ * an anchored fan of a partial chain keeps its walk below the chain. A
+ * history work no open fan rides on any more is closed `chat_unavailable`,
+ * its demand unserved. Runs in the refusal's capture transaction after its
+ * work rows (the chat's history work is held already), requests before fans.
+ */
+export async function onHistoryChatUnavailable(tx: Database, input: { pageId: number; threadId: number }): Promise<void> {
+  const riding = await listOpenHistoryItems(tx, { threadIds: [input.threadId] });
+  if (riding.length === 0) return;
+  const lockedWorks = await lockWorkRows(tx, riding.flatMap((item) => (item.workId === null ? [] : [item.workId])));
+  const requestIds = await lockRequestsOfOpenItems(tx, { threadIds: [input.threadId] });
+  if (requestIds.length === 0) return;
+  const items = await listOpenHistoryItems(tx, { threadIds: [input.threadId], requestIds, lock: true });
+  const thread = (await readHistoryThreadFacts(tx, [input.threadId])).get(input.threadId) ?? null;
+  const works = new Map(lockedWorks.map((work) => [work.id, work]));
+  const needsHead = (item: OpenHistoryItem): boolean => {
+    if (thread === null || thread.historyState === "none" || thread.historyState === "unverified") return true;
+    if (thread.historyState === "complete") return false;
+    const work = item.workId === null ? undefined : works.get(item.workId);
+    return needsHistoryHeadRead([item], parseDmMessagesCursor(work?.cursor).historyHeadAt);
+  };
+  const refused = items.filter(needsHead);
+  for (const item of refused) {
+    await endHistoryItems(tx, {
+      itemIds: [item.id],
+      state: "refused",
+      refusal: "excluded",
+      excludedReason: CHAT_UNAVAILABLE_REASON,
+      final: finalOf(item, thread, { closeReason: CHAT_UNAVAILABLE_REASON }),
+    });
+  }
+  await refreshHistoryRequestCompletion(tx, requestIds);
+  const workIds = [...new Set(refused.flatMap((item) => (item.workId !== null && works.has(item.workId) ? [item.workId] : [])))];
+  const stillNeeded = await workIdsWithOpenHistoryItems(tx, workIds);
+  await closeWorkRows(tx, {
+    workIds: workIds.filter((id) => !stillNeeded.has(id)),
+    to: "done",
+    closeReason: CHAT_UNAVAILABLE_REASON,
+    satisfies: false,
+  });
 }
 
 // ── cancel (design §7.1.7) ────────────────────────────────────────────────────

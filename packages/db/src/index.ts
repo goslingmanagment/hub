@@ -190,6 +190,8 @@ export * from "./repositories/sync/media-handoff.ts";
 export * from "./repositories/sync/dm-exclusions.ts";
 export * from "./repositories/sync/observability.ts";
 export * from "./repositories/sync/subject-queue.ts";
+// The chat-unavailability episodes (0251, arena "vanished chat" plan §2).
+export * from "./repositories/sync/chat-unavailability.ts";
 export * from "./repositories/spenders.ts";
 export * from "./repositories/spender-stats.ts";
 export * from "./repositories/sync-context.ts";

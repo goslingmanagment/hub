@@ -257,12 +257,52 @@ export interface OutcomeStep {
   httpStatus: number | null;
   /** How the send ended (a response, or the wire failing). */
   outcome: "response" | "transport_error" | "timeout";
-  /** The answer is a non-2xx that carries Fansly's own well-formed error
+  /** The answer is not a success and carries Fansly's own well-formed error
    *  envelope (`isFanslyErrorEnvelope`: `success: false`, a numeric
-   *  `error.code`, a non-empty `error.details`): the application answered,
-   *  not a proxy or a gateway. False for a 2xx, an HTML or empty body and a
-   *  wire failure. */
+   *  `error.code`, a non-empty `error.details`) — a non-2xx, or a 2xx whose
+   *  envelope is unsuccessful: the application answered, not a proxy or a
+   *  gateway. False for an accepted answer, an HTML or empty body and a wire
+   *  failure. */
   fanslyErrorEnvelope: boolean;
+}
+
+/** What a module's capture-transaction hook knows of the step
+ *  (`ResourceModule.outcomeInCapture`). */
+export interface CaptureOutcomeInput {
+  pageId: number;
+  /** The live owner generation (every write is fenced by it). */
+  generation: bigint;
+  /** The capture's instant. */
+  now: Date;
+  /** The work as it was admitted. */
+  work: SyncWorkRow;
+  attemptId: number;
+  /** The work's demand revision at admission (I11). */
+  demandRevision: number;
+  /** The work's demand at that revision, read under the admission's row lock
+   *  (`work` is the pick's snapshot: a signal between the pick and the
+   *  admission is only here). */
+  demand: SyncWorkRow["demand"];
+  step: OutcomeStep;
+  /** The request reached the wire: an answer came back, or the transport
+   *  says a byte may have left (`sent` of a timeout or transport error). A
+   *  request that never left (a proxy tunnel that never came up) is no read. */
+  sent: boolean;
+  /** When the request was sent — the admission's instant when no send mark
+   *  was taken: never later than the actual send. */
+  sentAt: Date;
+  /** The answer as this capture journaled it (null: nothing was journaled). */
+  observation: { id: number; receivedAt: Date } | null;
+}
+
+/** A capture hook's word: the decision to write, and what the commit asks of
+ *  the page's other hooks after the work row is settled. */
+export interface CaptureOutcomeResult {
+  decision: OutcomeDecision;
+  /** Fansly's refusal of this chat is established (arena "vanished chat"
+   *  §2.4): the history requests drop the chat's open fans that need its head
+   *  (`CommitDeps.onChatUnavailable`, `history_*` last in the lock order). */
+  chatUnavailable?: { threadId: number };
 }
 
 export interface ApplyResult<C = unknown> {
@@ -278,6 +318,11 @@ export interface ApplyResult<C = unknown> {
   /** Outcomes worth counting that are not work (a refused empty snapshot, a
    *  restarted walk, …): `sync_apply_effect{resource, effect}` after commit. */
   counters?: Readonly<Record<string, number>>;
+  /** A `local` step of a chat whose unavailability episode is established
+   *  (arena "vanished chat" §2.4): after the work row is settled, the history
+   *  requests refuse the chat's fans that need its head
+   *  (`CommitDeps.onChatUnavailable`, `history_*` last in the lock order). */
+  chatUnavailable?: { threadId: number };
   /** The account the page's credentials answered for (`/account/me` only,
    *  `IDENTITY_PROOF_OPERATIONS`): the engine writes the identity proof —
    *  `sync_pages.identity_account_id` and the trusted digest — and clears a
@@ -316,6 +361,15 @@ export interface ResourceModule<C = unknown> {
    *  hop's final answer closes its download with the describer's failure.
    *  Pure. */
   outcome?(decision: OutcomeDecision, step: OutcomeStep): OutcomeDecision;
+  /** The module's transactional word on an outcome, in the capture
+   *  transaction after `outcome` and before the decision is written (the
+   *  attempt and its journaled answer are already there): the DM reads' chat
+   *  refusals open, advance and establish a chat-unavailability episode, and
+   *  an established one closes the chat's work. The commit runs it under a
+   *  savepoint: a failure (a thread erased under it) rolls back only its own
+   *  writes, and the decision it was given is written — the capture is never
+   *  lost to it. */
+  outcomeInCapture?(tx: Database, decision: OutcomeDecision, input: CaptureOutcomeInput): Promise<CaptureOutcomeResult>;
   /** The resource's own journal trim of the served answer (default: as served). */
   journal?(response: unknown): unknown;
   /** A subject-queue walk's subject outcome (the breaker lives on the queue

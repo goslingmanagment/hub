@@ -625,7 +625,9 @@ describe("sync_work demand", () => {
       dueAt: new Date(t0 - 4 * DAY + 2_000), coalesceUntil: new Date(t0 - 4 * DAY + 6_000), deadlineAt: new Date(t0 - 4 * DAY + 30_000),
       extendOnSignal: true, demand: { messageIds: ["m1"], reasons: ["ws:message_created"] },
     }));
-    expect(await markWorkRunning(db(), { workId: first.id, generation })).toEqual({ demandRevision: 1 });
+    expect(await markWorkRunning(db(), { workId: first.id, generation })).toEqual({
+      demandRevision: 1, demand: { messageIds: ["m1"], txIds: [], reasons: ["ws:message_created"], overflow: false },
+    });
     const breakerUntil = new Date(t0 + 16 * 3_600_000);
     await settleWork(db(), {
       workId: first.id, generation, servedRevision: 1, satisfiesRevision: false,
@@ -894,7 +896,7 @@ describe("sync_work settlement", () => {
     const generation = await own(pageId);
     const work = await upsertDemand(db(), demand(pageId, { secretParams: "secret" }));
     const running = await markWorkRunning(db(), { workId: work.id, generation });
-    expect(running).toEqual({ demandRevision: 1 });
+    expect(running).toMatchObject({ demandRevision: 1 });
     expect(await markWorkRunning(db(), { workId: work.id, generation })).toBeNull();
     let [row] = await getWorkForStatus(db(), { pageId });
     expect(row).toMatchObject({ state: "running", waitingReason: "running", attemptsCount: 1, ownerGeneration: generation });
@@ -915,7 +917,7 @@ describe("sync_work settlement", () => {
 
     // The next read serves revision 2: now it closes.
     const again = await markWorkRunning(db(), { workId: work.id, generation });
-    expect(again).toEqual({ demandRevision: 2 });
+    expect(again).toMatchObject({ demandRevision: 2 });
     expect(await settleWork(db(), {
       workId: work.id, generation, servedRevision: 2, satisfiesRevision: true, close: "done", proof: { kind: "head_known_item" },
       result: { visible: 1 },

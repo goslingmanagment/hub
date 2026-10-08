@@ -22,6 +22,7 @@ import {
 import { SyncActor, type ActorDeps } from "../../apps/runtime/src/sync/engine/actor.ts";
 import type {
   CaptureCodec,
+  ChatUnavailableHook,
   SyncFaultHook,
   SyncLogger,
   ThreadChainChangedHook,
@@ -49,7 +50,11 @@ import {
   type RequestPlan,
   type ResourceModule,
 } from "../../apps/runtime/src/sync/engine/resource.ts";
-import { onHistoryThreadChainChanged, onHistoryWorkClosed } from "../../apps/runtime/src/sync/requests/history.ts";
+import {
+  onHistoryChatUnavailable,
+  onHistoryThreadChainChanged,
+  onHistoryWorkClosed,
+} from "../../apps/runtime/src/sync/requests/history.ts";
 
 // Shared doubles of the Fansly Sync Engine host and actor for the integration
 // tests: a page with its sync row, test-only registry entries, a scripted live
@@ -305,6 +310,7 @@ export interface TestActorOptions {
    *  ones, as `main.ts` wires them; null: none). */
   onThreadChainChanged?: ThreadChainChangedHook | null;
   onWorkClosed?: WorkClosedHook | null;
+  onChatUnavailable?: ChatUnavailableHook | null;
   /** The route budgets' time scale (default 0: no route budget — the test
    *  pause is 30 ms; `routeTestScale(settingMs)` keeps the production
    *  ratios). */
@@ -361,6 +367,7 @@ export async function makeTestActor(options: TestActorOptions): Promise<{
     ...(options.settings === undefined ? {} : { settings: options.settings }),
     ...(options.onThreadChainChanged === null ? {} : { onThreadChainChanged: options.onThreadChainChanged ?? onHistoryThreadChainChanged }),
     ...(options.onWorkClosed === null ? {} : { onWorkClosed: options.onWorkClosed ?? onHistoryWorkClosed }),
+    ...(options.onChatUnavailable === null ? {} : { onChatUnavailable: options.onChatUnavailable ?? onHistoryChatUnavailable }),
     routeTimeScale: options.routeTimeScale ?? 0,
   };
   return {

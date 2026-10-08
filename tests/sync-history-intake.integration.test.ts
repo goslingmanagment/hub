@@ -46,8 +46,9 @@ import {
 
 // History requests against a real database (design §7.1): the 409 gate of
 // step 2, validation, resolution and refusals, idempotency, one shared work
-// per chat, the requests class's round robin and its stamps, blocked chats,
-// anchors at intake, satisfaction through the engine's hook, the end of a
+// per chat, the requests class's round robin and its stamps, chats Fansly
+// refuses to the page (the chat-unavailability episode decides), anchors at
+// intake, satisfaction through the engine's hook, the end of a
 // chat's work, cancel, views and the owner CLI.
 
 let testDb: StartedTestDatabase | null = null;
@@ -314,21 +315,52 @@ describe("intake", () => {
     expect(await rows("select id from history_requests")).toHaveLength(2);
   });
 
-  it("a chat the vendor keeps refusing makes its fan blocked; the first read waits for the probe", async (context) => {
+  /** A chat-unavailability episode of the chat (arena "vanished chat" §2). */
+  async function seedEpisode(threadId: number, state: "refusing" | "established", refusals: number): Promise<void> {
+    await testDb!.pool.query(
+      `insert into page_dm_thread_unavailability (thread_id, state, opened_at, established_at, refusals, last_refusal_at,
+              last_http_status, retry_not_before, first_attempt_id, last_attempt_id, first_observation_id,
+              first_observation_received_at, last_observation_id, last_observation_received_at)
+       values ($1, $2::text, now() - interval '7 hours', case when $2::text = 'established' then now() end, $3::int, now(), 500,
+               case when $2::text = 'established' then now() + interval '1 day' end, 0, 0, 0, now(), 0, now())`,
+      [threadId, state, refusals],
+    );
+  }
+
+  it("a chat Fansly refuses to the page (an established episode) is refused at intake: excluded, chat_unavailable, no read", async (context) => {
+    if (!testDb) return context.skip();
+    const { pageId } = await seedPage();
+    const threadId = await seedThread(pageId, { n: 1, chain: { from: 1, to: 10 } });
+    await seedEpisode(threadId, "established", 5);
+    const result = await submitHistoryRequest(ctx(), intake(pageId, [{ kind: "conversation", conversationRef: group(1) }]));
+    expect(result.items[0]).toMatchObject({ state: "refused", refusal: "excluded", excludedReason: "chat_unavailable" });
+    expect(result.request.state).toBe("done");
+    expect(await historyWork(pageId, 1)).toBeNull();
+    expect(await pickRequests(db(), { pageId })).toBeNull();
+  });
+
+  it("the chat's episode decides, never the latest work of a DM read: a blocked read without an established episode leaves the fan queued", async (context) => {
     if (!testDb) return context.skip();
     const { pageId } = await seedPage();
     await seedThread(pageId, { n: 1, chain: { from: 1, to: 10 } });
-    const probeAt = new Date(Date.now() + 6 * HOUR);
+    const refusing = await seedThread(pageId, { n: 2, chain: { from: 1, to: 10 } });
+    await seedEpisode(refusing, "refusing", 4);
+    // The chat's history walk met refusals of a deeper page (blocked by the
+    // vendor) — the head the new fan needs first says nothing of it.
     await testDb.pool.query(
       `insert into sync_work (page_id, resource, subject, kind, class, state, closed_at, close_reason, failure_count,
               breaker_until, blocked_by_vendor_at)
-       values ($1, 'dm-messages.head', $2, 'trigger', 'urgent', 'done', now(), 'test', 5, $3, now() - interval '1 hour')`,
-      [pageId, group(1), probeAt],
+       values ($1, 'dm-messages.head', $2, 'trigger', 'urgent', 'done', now(), 'test', 5, now() + interval '6 hours', now() - interval '1 hour')`,
+      [pageId, group(1)],
     );
-    const result = await submitHistoryRequest(ctx(), intake(pageId, [{ kind: "conversation", conversationRef: group(1) }]));
-    expect(result.items[0]).toMatchObject({ state: "blocked", probeAt: probeAt.toISOString() });
-    expect(new Date((await historyWork(pageId, 1))!.due_at).getTime()).toBe(probeAt.getTime());
-    expect(await pickRequests(db(), { pageId })).toBeNull();
+    const result = await submitHistoryRequest(ctx(), intake(pageId, [
+      { kind: "conversation", conversationRef: group(1) },
+      { kind: "conversation", conversationRef: group(2) },
+    ]));
+    expect(result.items.map((item) => ({ state: item.state, probeAt: item.probeAt })))
+      .toEqual([{ state: "queued", probeAt: null }, { state: "queued", probeAt: null }]);
+    expect(new Date((await historyWork(pageId, 1))!.due_at).getTime()).toBeLessThanOrEqual(Date.now());
+    expect(await pickRequests(db(), { pageId })).not.toBeNull();
   });
 
   it("a head confirmed while the page's socket was verified anchors the fan at intake: latest N already met needs no read", async (context) => {

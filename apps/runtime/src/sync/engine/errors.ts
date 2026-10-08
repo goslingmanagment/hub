@@ -314,8 +314,22 @@ export type WorkDecision =
   | { action: "reopen"; dueAt: Date | null; waitingReason: WaitingReasonForError | null; waitingUntil: Date | null }
   | { action: "quarantine"; reason: string }
   /** Close the work; `result` is what its waiter reads (a resource's own
-   *  account of the subject's final answer, set by its outcome hook). */
-  | { action: "close"; closeReason: string; result?: unknown };
+   *  account of the subject's final answer, set by its outcome hook). The
+   *  close is honoured only when no newer demand arrived during the step
+   *  (I11). `satisfiesRevision` (default true): the step served the demand it
+   *  was admitted at; false closes the row with its demand unserved (a chat
+   *  Fansly stopped serving, `chat_unavailable`). While newer demand keeps
+   *  the row open it is due at `dueAt` and waits for `waitingReason` until
+   *  `waitingUntil` (absent: as the row was, under its breaker). */
+  | {
+    action: "close";
+    closeReason: string;
+    result?: unknown;
+    satisfiesRevision?: boolean;
+    dueAt?: Date | null;
+    waitingReason?: WaitingReasonForError | null;
+    waitingUntil?: Date | null;
+  };
 
 export type WaitingReasonForError = "page_hold" | "subject_breaker" | "blocked_by_vendor" | "resource_hold";
 

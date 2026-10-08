@@ -783,13 +783,15 @@ export async function pickRequests(db: Database, filter: SyncWorkPickFilter): Pr
 /**
  * Admission, step 1 (tx 1 after `lockOwnedPage`): the open row becomes
  * `running`. Null when the row is no longer open (re-pick). Returns the demand
- * revision the attempt is admitted at.
+ * revision the attempt is admitted at and the demand at that revision (read
+ * under the row lock this update takes: the pick's snapshot may be older — a
+ * signal that came between the pick and the admission is in it).
  */
 export async function markWorkRunning(
   db: Database,
   input: { workId: number; generation: bigint },
-): Promise<{ demandRevision: number } | null> {
-  const result = await db.execute<{ demandRevision: string }>(sql`
+): Promise<{ demandRevision: number; demand: SyncWorkDemand } | null> {
+  const result = await db.execute<{ demandRevision: string; demand: Partial<SyncWorkDemand> | null }>(sql`
     update sync_work
        set state = 'running',
            waiting_reason = 'running',
@@ -800,10 +802,20 @@ export async function markWorkRunning(
            updated_at = clock_timestamp()
      where id = ${input.workId}
        and state = 'open'
-    returning demand_revision::text as "demandRevision"
+    returning demand_revision::text as "demandRevision", demand
   `);
   const row = result.rows[0];
-  return row ? { demandRevision: Number(row.demandRevision) } : null;
+  if (!row) return null;
+  const demand = row.demand ?? {};
+  return {
+    demandRevision: Number(row.demandRevision),
+    demand: {
+      messageIds: stringList(demand.messageIds),
+      txIds: stringList(demand.txIds),
+      reasons: stringList(demand.reasons),
+      overflow: demand.overflow === true,
+    },
+  };
 }
 
 export interface SettleWorkInput {
@@ -1282,22 +1294,25 @@ export async function closeOpenWork(
  * running one is closed by its own apply, whose hook sees the same), or
  * `cancelled` when the requests that asked for it were cancelled (open or
  * running: a read already in flight still applies, its settle finds the row
- * closed and leaves it). The caller holds the rows (`lockWorkRows`). Returns
- * the ids it closed.
+ * closed and leaves it). `satisfies: false` closes `done` rows with their
+ * demand unserved (no fan left after a chat Fansly stopped serving refused
+ * them, arena "vanished chat" §2.4). The caller holds the rows
+ * (`lockWorkRows`). Returns the ids it closed.
  */
 export async function closeWorkRows(
   db: Database,
-  input: { workIds: readonly number[]; to: "done" | "cancelled"; closeReason: string },
+  input: { workIds: readonly number[]; to: "done" | "cancelled"; closeReason: string; satisfies?: boolean },
 ): Promise<number[]> {
   const ids = [...new Set(input.workIds)].sort((a, b) => a - b);
   if (ids.length === 0) return [];
   const done = input.to === "done";
+  const served = done && input.satisfies !== false;
   const result = await db.execute<{ id: string }>(sql`
     update sync_work
        set state = ${input.to}::text,
            closed_at = clock_timestamp(),
            close_reason = ${input.closeReason},
-           applied_revision = case when ${done} then demand_revision else applied_revision end,
+           applied_revision = case when ${served} then demand_revision else applied_revision end,
            secret_params = null,
            waiting_reason = null,
            waiting_until = null,

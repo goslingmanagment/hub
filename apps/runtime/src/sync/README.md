@@ -404,6 +404,72 @@ thread keeps its reason. `sync excluded unlift --page P --reason R` takes the re
 list pass assigns it again. The lift is per page: a later page is lifted after its own acceptance, naming the
 first page's recorded probe as evidence.
 
+## A chat Fansly stopped serving (arena "vanished chat", R2)
+
+A chat whose every read Fansly answers `500 {"success":false,"error":{"code":500,"details":"error getting group
+messages"}}` (lora-1, 04.10: the fan blocked the page) is not an excluded chat: the engine keeps reading what the
+socket shows, but it keeps a **chat-unavailability episode** of the page × chat
+(`page_dm_thread_unavailability`, 0251; `repositories/sync/chat-unavailability.ts`) — "Fansly does not serve this
+chat's history to this page since T", with the attempt and observation ids that prove it and, apart, the owner's note.
+The page's actor is its one writer:
+
+- **Opened, counted** — in the capture transaction of a refusal (`ResourceModule.outcomeInCapture` of the three
+  `dm-messages.*` keys, under a savepoint the commit opens): a `messages.page` read **without `before`** of
+  `dm-messages.head`, `.catchup` or `.history` (all three read the head), class `subject_failure` or
+  `envelope_unsuccessful`, **with Fansly's own error envelope** (`OutcomeStep.fanslyErrorEnvelope`). A proxy's HTML
+  page, an empty 5xx, a 429, a 401/403 or a wire failure is the wire's, not the chat's: it neither opens an episode
+  nor counts. `refusals` counts one per attempt since the last applied head read. The insert is a `… select … from
+  page_dm_threads` fenced by the owner generation; a chat without a thread row gets none. The erasure fence is not
+  taken (the episode has no fan identity; nothing here writes archive material): a thread an erasure deletes under
+  the refusal makes the savepoint fail and the capture is kept without its episode.
+- **Established** at the episode's own 5th refusal — never the work row's `blocked_by_vendor`, which counts the
+  wire's answers too. It takes `retry_not_before` — the later of the refused attempt's breaker and the daily step
+  (24 h), only ever later — and `handled_list_head_id`, the answered head: the newest of the chat's list head and the
+  ids of the demand the read was **admitted** with (read under the admission's row lock — the pick's snapshot may be
+  older) that was **created before the read was sent** (a message created during the flight is a new demand).
+- **Only a work row settles itself.** A failed head read of an established chat settles its own work, in its
+  capture transaction (lock order: the episode → the overlay rows → the work row → the history rows after the
+  settle): the chat's unconfirmed socket messages are deferred `chat_unavailable` (still shown); a `.head` or
+  `.catchup` work closes `chat_unavailable` with its demand unserved (`satisfiesRevision: false`, the breaker kept
+  on the closed row) through `settleWork`'s compare-and-set on the revision it was admitted at — a demand that
+  arrived during the flight keeps it open; a `.history` walk is never closed by its refused read: the history
+  requests refuse its open fans that need the head (`CommitDeps.onChatUnavailable`; `refusal: excluded`,
+  `excludedReason: chat_unavailable`), an anchored fan of a partial chain keeps reading below the chain under the
+  key's own breaker, and the walk closes when no fan is left. No other row of the chat is touched by that capture:
+  each `.head` / `.catchup` row decides in its own plan. A row whose next read is the head and whose demand the
+  episode answered (`demandAnswered`: every id at or below `handled_list_head_id`, no overflow, and every reason one
+  that names its messages by id — `ws:message_created`, `ws:message_created:own`, `list_head:*`,
+  `takeover_unconfirmed`; a broken frame's `ws:message_invalid_known_chat` names none, so it is never answered)
+  closes itself without a request — a `local` step, re-judged under the commit's transaction and settled
+  at the revision its plan read, deferring the socket messages too; a row with a newer demand waits for
+  `retry_not_before` (the plan's `not_due`, no second timer) and then reads once. A row that continues a staged walk
+  below its head read (`before`) finishes it under its own breaker. A `.history` walk whose next read is the head of
+  an established chat never reads it either: its own `local` step has the history requests refuse its fans that need
+  the head (`ApplyResult.chatUnavailable` → `CommitDeps.onChatUnavailable`, after the settle), the walk closes when no
+  fan is left, and a fan anchored below the chain keeps reading `before` — so a request filed before the episode was
+  established (by the migration, say) costs no read. So no demand that lands during a read is lost, by construction.
+- **No background read** (owner decision Р5): one demand is one read. Any head read of an established chat that
+  went out and does not end the episode — a refusal, a timeout, the wire, a 5xx without the envelope, a 429 or a 401
+  that reached the send — moves the boundary by the same rule and the answered head (`postponeChatUnavailabilityRetry`
+  for the ones that are not Fansly's refusal: no refusal counted, the page's and the route's holds as ever) and
+  settles its own work as above. A request that never left (a proxy tunnel that never came up: `sent: false`) is no
+  read and touches nothing. Nothing reads the chat again without a new message or a new list head (a list head the
+  episode answered opens no work). A silent established chat costs no request.
+- **Ended** by an applied head read of the chat by any of the three keys (`read_served`, in the DM apply, which
+  holds the erasure fence; the read confirms what it shows), or when the chat is excluded or unbound since
+  (`thread_excluded` / `thread_unbound`: the plan asks for a `local` step that ends the episode and closes the work;
+  the apply of a read that finds it so ends it too). A deeper page's read (`before`) neither counts nor ends it.
+
+The history intake decides by the episode, never by the latest work of a DM read (a deeper page's refusal says
+nothing of the head a new fan needs first): a chat with an established episode is refused at intake (`excluded`,
+`chat_unavailable`); any other chat is queued. The intake reads the episodes again in its transaction, `for share`
+after the threads and before any work row (`lockOpenChatUnavailability`): an establishment in flight is waited for
+and its fans are refused with no work; one that comes after the intake finds the fans it filed. The passive parity pass defers a message the 24-hour window passed
+`chat_unavailable` while its chat has an open episode (`openChatUnavailabilitySql`), else `age_without_rest`.
+Alerts, the page summary's counter, the CLI and the metric take the episode in the next release; the shared test is
+`dmLiveChatUnavailableSql` (`repositories/sync/observability.ts`). The episodes are erased with their threads (the
+foreign key cascades): a fan or page erasure needs no target of its own.
+
 ## Ownership
 
 A page has one owner generation at a time (`sync_pages.owner_generation`, fenced in every write) and its owner holds
@@ -659,7 +725,8 @@ branch. On a live page:
   'age_without_rest'`, `confirm_due_at` null), stays visible and is no longer awaited — alert 3 and `sync check
   live-hour` share that predicate (`dmLiveAwaitingConfirmSql`, `repositories/sync/observability.ts`) — and a later
   read still claims it by `confirmed_at is null`, settles it and clears the reason. A chat Fansly stopped serving to
-  the page keeps its socket messages so. The image before the column leaves a deferred row alone (no next look, no
+  the page keeps its socket messages so: while its chat-unavailability episode is open the window defers them
+  `chat_unavailable`, and an established episode defers them at once (above). The image before the column leaves a deferred row alone (no next look, no
   alert, shown) but closes new rows `not_found` on its timer while it runs (docs/runbooks/sync.md);
 - the thread summary columns (`stored_message_count`, newest/oldest stored ids, last fan/model times) count the
   thread's archive messages [E4]: `writeThreadSummary` adds the messages the apply's archive feed stored (the thread
@@ -722,6 +789,7 @@ Each is enforced in exactly one place and pinned by a test (design §1). The fir
 | I22 | Only a live page's socket source in `sync` opens a Fansly WebSocket (step 4 S4-12): the receiver helper is the one place that constructs a socket, its Upgrade on a send lease (the engine's, over the pacer's one-shot check); no worker, lane or script opens one. | `fansly/ws/source.ts` + `services/egress/fansly-receiver-socket.ts`; tests/fansly-send-guard-boundary.test.ts |
 | I23 | The Sync Engine writes no `page_dm_messages` row: a live page's messages go to `message_archive`; the engine only marks the deletion of rows legacy stored (`markFanslyWsHotDeletion`, sticky). | `fansly/resources/dm-messages.ts` + `fansly/resources/dm-live.ts`, pinned by `tests/page-dm-messages-boundary.test.ts` |
 | I24 | One hold evaluator over one hold set: what holds a request — the page, its subject, its resource file, its route — is `whyHeld`'s answer over the page's `sync_holds` rows; rows it cannot read keep the page closed. The rows are a page's whole hold state: the page row has no hold column — the old ones were dropped, so the one rollback target is the release before the drop, and the deploy refuses the drop under an image older than it (step 4, owner decision №26; S4-33). | `engine/admission.ts` + `repositories/sync/pages.ts` (the four hold writers) + `scripts/deploy-production.sh` (`verify_running_images_run_without_old_hold_columns`); tests/sync-hold-evaluator.test.ts, tests/sync-hold-set.integration.test.ts, tests/sync-old-hold-columns.test.ts, tests/deploy-old-hold-columns-gate.test.ts |
+| I25 | A chat's unavailability episode has one writer, the page's actor: only a head read (no `before`) of `dm-messages.head`/`.catchup`/`.history` that Fansly refuses with its own error envelope counts; it is established at its own 5th refusal, never by the work's breaker; while it is established no key reads the chat's head before `retry_not_before`, every head read that went out and does not end it moves that boundary and settles its own work (one demand, one read; only a work row settles itself — another row decides in its own plan), and no background read is planned; an applied head read ends it. The capture is never lost to it (savepoint). | `fansly/resources/dm-messages.ts` (`outcomeInCapture`, the plan's wait, the apply's end) + `repositories/sync/chat-unavailability.ts`; tests/sync-chat-unavailability.integration.test.ts |
 
 What the pacer guarantees, concretely: the slot opens at `max(last send + ceil(S × (1 + u)), last completion,
 takeover floor)`; `u` is drawn once per send and kept across re-waits; a waiting pacer re-reads `S` at least every
@@ -755,11 +823,11 @@ the row is the hold evaluator's answer (`engine/admission.ts`):
 | `paused` | the owner paused the page, its requests, or this resource | the owner |
 | `page_hold` | 401/403 or identity mismatch (until an identity proof sent after the latest refusal), network (after 3 failures: 10 s → 5 min); rows of the hold set this build cannot read (`detail.holdSet`) | the hold's end; the verify of renewed credentials; the operator repairing the rows |
 | `quarantined` | the answer broke its contract or the cursor stuck; the raw answer is kept | the owner re-applying it from the journal |
-| `blocked_by_vendor` | the subject failed 5 times; probed once a day while demand exists | a successful probe |
+| `blocked_by_vendor` | the subject failed 5 times; probed once a day while demand exists. A DM read of a chat whose unavailability episode is established is not probed: its work closes `chat_unavailable` (above) | a successful probe |
 | `subject_breaker` | the subject failed: 1 min → 10 min → 1 h → 6 h → 24 h | the breaker's end, then a success |
 | `resource_hold` | ≥ 5 subjects of the resource failed within 10 min: 30 min → 2 h → 6 h (never `dm-messages.head`) | the hold's end |
 | `dependency` | the resource waits for other work or data | that work |
-| `not_due` | its time has not come (poll period, coalescing window) | the due time |
+| `not_due` | its time has not come (poll period, coalescing window; a head read of a chat Fansly refuses to the page waits for its episode's `retry_not_before`) | the due time |
 | `route_hold` | a 429 (or a 5xx's `Retry-After`) holds a route among those that keep the row closed: every route of its key, or the route its planned request was put off for (`detail.routes`, `detail.held`) | the hold's end (`until`), then the route's pace |
 | `route_budget` | runnable; every route of the key is closed by its budget's interval only, or its planned route put the request off for it (`detail.routes`; the row stores `pacer`) | the route's opening |
 | `pacer` | runnable; the page's next slot has not opened yet | the pause |
@@ -782,7 +850,7 @@ A retry after an error is always a new attempt through the same admission.
 | a 5xx naming its own `Retry-After` | `rate_limit` | a hold of that route until `Retry-After`, no slowdown, no ladder step; the route's incident |
 | 401 / 403 the resource declares about its subject (`subjectScopedAuthStatuses`: a CDN hop's signed URL) | `subject_terminal` | the subject closes with its receipt, no hold |
 | 401 / 403 | `auth` | page hold until an identity proof sent after this refusal (recorded as the latest), alert 1 |
-| any other non-2xx | `subject_failure` | subject breaker; ≥ 5 subjects of a file in 10 min ⇒ resource hold (failures of `dm-messages.head` and of the owner's probes `probe.*` are not counted) |
+| any other non-2xx | `subject_failure` | subject breaker; ≥ 5 subjects of a file in 10 min ⇒ resource hold (failures of `dm-messages.head` and of the owner's probes `probe.*` are not counted); a DM head read Fansly refuses with its own error envelope also counts toward the chat's unavailability episode (above) |
 | a status the resource declares terminal | `subject_terminal` | the subject closes with a receipt, no breaker |
 | transport error, timeout, 408 | `network` | streak; at 3 ⇒ page hold; alert 1 after 10 min |
 | refused before sending | `not_sent` | nothing learned: the work is admitted again |

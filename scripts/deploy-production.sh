@@ -728,6 +728,17 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # previous image's own queries only where it would have read those rows
   # anyway, so it runs unchanged after a rollback (an extra index it ignores).
   "0250_ofapi_webhook_events_transactions_page_received_idx.sql"
+  # The chat-unavailability episode (arena "vanished chat" §2, M2): a new
+  # table page_dm_thread_unavailability (IF NOT EXISTS; FK to page_dm_threads
+  # ON DELETE CASCADE, no fan identity, no page key), the open episodes the
+  # attempt journal already proves (production: lora-1's and lora-2's refused
+  # chats), the owner's note on lora-1's, and their unconfirmed socket
+  # messages deferred chat_unavailable (a wait reason the 0247 CHECK already
+  # admits). The previous image never names the table; its parity pass never
+  # looks at a deferred row (no confirm_due_at), its alert 3 never counts one,
+  # its readers show it; its page and fan erasure delete the threads and the
+  # episodes go with them through the cascade.
+  "0251_page_dm_thread_unavailability.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"
