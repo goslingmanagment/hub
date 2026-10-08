@@ -33,6 +33,18 @@ export type FanslyObservationKind =
   | "broadcast_scheduled"
   | "broadcast_stats"
   | "broadcast_stats_deleted"
+  | "creator_stats_active_hours"
+  | "creator_stats_fan"
+  | "creator_stats_fans_top"
+  | "creator_stats_geo"
+  | "creator_stats_media"
+  | "creator_stats_media_benchmarks"
+  | "creator_stats_media_shown"
+  | "creator_stats_media_top"
+  | "creator_stats_posts"
+  | "creator_stats_series"
+  | "creator_stats_summary"
+  | "creator_stats_tags"
   | "discovery_feed"
   | "dm_conversations"
   | "dm_messages"
@@ -42,6 +54,7 @@ export type FanslyObservationKind =
   | "earnings_transactions"
   | "fan_earnings_monthly"
   | "fan_earnings_stats"
+  | "fan_earnings_transactions"
   | "followers"
   | "gift_codes"
   | "group_detail"
@@ -128,6 +141,43 @@ export interface FanslyWireParamsById {
   "broadcast.scheduled": FanslyWireNoParams;
   "polls": FanslyWireNoParams;
   "recapstats": FanslyWireNoParams;
+  // The creator statistics pages of 2026-10 (`/account/stats/*`,
+  // reference/fansly-creator-stats). Every window is a pair of UTC day
+  // buckets, both included; the server rounds other instants to the day and
+  // shortens a span past its cap without an error (it echoes the bounds).
+  "stats.summary": FanslyStatsWindow;
+  "stats.series": FanslyStatsWindow & { family: FanslyStatsSeriesFamily; granularity: FanslyStatsGranularity };
+  "stats.media_top": FanslyStatsWindow & {
+    source: FanslyStatsSource;
+    /** 1 = images, 2 = videos; null = both (the key is then not sent). */
+    mediaType: 1 | 2 | null;
+    orderBy: FanslyStatsMediaOrder;
+    limit: number;
+  };
+  /** `source` -1 = every surface, with per-surface daily rows but no totals,
+   *  retention, tags or hours. */
+  "stats.media": FanslyStatsWindow & { mediaOfferId: string; source: FanslyStatsSource | -1 };
+  "stats.media_benchmarks": FanslyStatsWindow & { source: FanslyStatsSource };
+  /** `endMs` 0 = the current hour. */
+  "stats.media_shown": { endMs: EpochMs; hours: number };
+  "stats.geo": FanslyStatsWindow & { source: FanslyStatsSource; limit: number };
+  /** `timezoneOffsetMinutes` = minutes east of UTC (UTC+3 is 180). */
+  "stats.active_hours": FanslyStatsWindow & { source: FanslyStatsSource; timezoneOffsetMinutes: number };
+  /** `kind` 1 = tags viewers browsed by, 2 = tags of posts. */
+  "stats.tags": FanslyStatsWindow & { source: FanslyStatsSource; kind: 1 | 2; limit: number };
+  "stats.posts": FanslyStatsWindow & { postIds: readonly string[] };
+  "stats.fans_top": FanslyStatsWindow & { orderBy: FanslyStatsFanOrder; limit: number };
+  "stats.fan": FanslyStatsWindow & { fanId: string; granularity: "day" | "month" };
+  /** One supporter's transactions. The bounds are instants in milliseconds
+   *  (not transaction ids, unlike `transactions.page`); `cursor` is "0" for
+   *  the first page, then the answer's `nextCursor`. */
+  "earnings.transactions_account": {
+    correlationAccountId: string;
+    beforeMs: EpochMs;
+    afterMs: EpochMs;
+    cursor: string;
+    limit: number;
+  };
   /** The socket's HTTP Upgrade: the page's socket owner sends it. */
   "ws.upgrade": FanslyWireNoParams;
   /** One hop of a CDN download (0 = the signed URL, 1–2 = redirects). The URL
@@ -137,6 +187,20 @@ export interface FanslyWireParamsById {
 
 export type FanslyWireId = keyof FanslyWireParamsById;
 export type FanslyWireParams<I extends FanslyWireId> = FanslyWireParamsById[I];
+
+/** The window of a statistics route: the first and the last UTC day, both included. */
+export interface FanslyStatsWindow {
+  afterMs: EpochMs;
+  beforeMs: EpochMs;
+}
+
+/** A surface of the statistics pages: 0 For You, 1 Timeline, 4 Other. (2 and 3
+ *  exist in profile-visit answers; as a filter the server treats them as 0.) */
+export type FanslyStatsSource = 0 | 1 | 4;
+export type FanslyStatsSeriesFamily = "views" | "profile" | "follows" | "subscriptions" | "revenue";
+export type FanslyStatsGranularity = "hour" | "day" | "month";
+export type FanslyStatsMediaOrder = "views" | "uniqueViewers" | "watchMs" | "completedViews" | "watchLift";
+export type FanslyStatsFanOrder = "netMills" | "grossMills" | "transactions";
 
 /** `/subscribers` status filters: active (3,4) and expired (5). */
 export type FanslySubscribersStatus = "3,4" | "5";
@@ -239,6 +303,19 @@ export interface FanslyWireResultById {
   "broadcast.scheduled": unknown;
   "polls": unknown;
   "recapstats": unknown;
+  "stats.summary": unknown;
+  "stats.series": unknown;
+  "stats.media_top": unknown;
+  "stats.media": unknown;
+  "stats.media_benchmarks": unknown;
+  "stats.media_shown": unknown;
+  "stats.geo": unknown;
+  "stats.active_hours": unknown;
+  "stats.tags": unknown;
+  "stats.posts": unknown;
+  "stats.fans_top": unknown;
+  "stats.fan": unknown;
+  "earnings.transactions_account": unknown;
   "ws.upgrade": FanslyWsUpgradeAnswer;
   "cdn.media": FanslyCdnAnswer;
 }
@@ -271,8 +348,9 @@ export interface FanslyWireSpec<P, R> {
   readonly endpointTemplate: string;
   /** The operation the legacy adapter journaled this route under
    *  (`sync_http_attempts.operation`, `fansly_send_log.operation`), so legacy
-   *  volume maps onto wire ids. */
-  readonly legacyOperation: string;
+   *  volume maps onto wire ids. Null for a route no legacy sender ever read:
+   *  the send log holds nothing to map. */
+  readonly legacyOperation: string | null;
   path(params: P): string;
   /** The query, in the order the app sends it; `ngsw-bypass=true` is added by
    *  the request builder. A key that is absent is omitted; an empty string is

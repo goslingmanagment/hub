@@ -69,7 +69,7 @@ interface FrozenRequest {
   /** What the adapter sent: the URL after the base, the journal's operation
    *  and endpoint template, and the check family whose value rode along. */
   url: string;
-  operation: string;
+  operation: string | null;
   template: string;
   check: FanslyClientCheckRoute | null;
 }
@@ -77,7 +77,7 @@ interface FrozenRequest {
 function sent<I extends FanslyWireId>(
   id: I,
   params: FanslyWireParams<I>,
-  frozen: { label?: string; url: string; operation: string; template: string; check: FanslyClientCheckRoute | null },
+  frozen: { label?: string; url: string; operation: string | null; template: string; check: FanslyClientCheckRoute | null },
 ): FrozenRequest {
   const request = buildFanslyWireRequest(id, params, { baseUrl: BASE_URL, session: SESSION, timeoutMs: 20_000 });
   return {
@@ -382,6 +382,95 @@ const FROZEN: readonly FrozenRequest[] = [
     template: "/recapstats",
     check: null,
   }),
+  // ── The statistics pages of 2026-10 (reference/fansly-creator-stats) ───────
+  // The adapter never read these routes (`operation: null`). Each URL is the
+  // web app's own request, key for key and in its order, as the bundle builds
+  // it and the live capture of 2026-10-08 shows it.
+  sent("stats.summary", { afterMs: AFTER, beforeMs: BEFORE }, {
+    url: "/account/stats/summary?ngsw-bypass=true&after=1788220800000&before=1788825600000",
+    operation: null,
+    template: "/account/stats/summary",
+    check: null,
+  }),
+  sent("stats.series", { family: "revenue", granularity: "day", afterMs: AFTER, beforeMs: BEFORE }, {
+    url: "/account/stats/series?ngsw-bypass=true&family=revenue&granularity=day&after=1788220800000&before=1788825600000",
+    operation: null,
+    template: "/account/stats/series",
+    check: null,
+  }),
+  sent("stats.media_top", { source: 0, mediaType: null, orderBy: "views", limit: 20, afterMs: AFTER, beforeMs: BEFORE }, {
+    url: "/account/stats/media/top?ngsw-bypass=true&source=0&after=1788220800000&before=1788825600000&orderBy=views&limit=20",
+    operation: null,
+    template: "/account/stats/media/top",
+    check: null,
+  }),
+  sent("stats.media_top", { source: 1, mediaType: 2, orderBy: "watchMs", limit: 20, afterMs: AFTER, beforeMs: BEFORE }, {
+    label: " (videos)",
+    url: "/account/stats/media/top?ngsw-bypass=true&source=1&mediaType=2&after=1788220800000&before=1788825600000&orderBy=watchMs&limit=20",
+    operation: null,
+    template: "/account/stats/media/top",
+    check: null,
+  }),
+  sent("stats.media", { mediaOfferId: "offer-1", source: -1, afterMs: AFTER, beforeMs: BEFORE }, {
+    url: "/account/stats/media?ngsw-bypass=true&mediaOfferId=offer-1&source=-1&after=1788220800000&before=1788825600000",
+    operation: null,
+    template: "/account/stats/media",
+    check: null,
+  }),
+  sent("stats.media_benchmarks", { source: 4, afterMs: AFTER, beforeMs: BEFORE }, {
+    url: "/account/stats/media/benchmarks?ngsw-bypass=true&source=4&after=1788220800000&before=1788825600000",
+    operation: null,
+    template: "/account/stats/media/benchmarks",
+    check: null,
+  }),
+  sent("stats.media_shown", { endMs: 0, hours: 24 }, {
+    url: "/account/stats/media/shown?ngsw-bypass=true&end=0&hours=24",
+    operation: null,
+    template: "/account/stats/media/shown",
+    check: null,
+  }),
+  sent("stats.geo", { source: 0, limit: 10, afterMs: AFTER, beforeMs: BEFORE }, {
+    url: "/account/stats/geo?ngsw-bypass=true&source=0&after=1788220800000&before=1788825600000&limit=10",
+    operation: null,
+    template: "/account/stats/geo",
+    check: null,
+  }),
+  sent("stats.active_hours", { source: 0, timezoneOffsetMinutes: -300, afterMs: AFTER, beforeMs: BEFORE }, {
+    url: "/account/stats/activehours?ngsw-bypass=true&source=0&after=1788220800000&before=1788825600000&timezoneOffsetMinutes=-300",
+    operation: null,
+    template: "/account/stats/activehours",
+    check: null,
+  }),
+  sent("stats.tags", { source: 0, kind: 1, limit: 10, afterMs: AFTER, beforeMs: BEFORE }, {
+    url: "/account/stats/tags?ngsw-bypass=true&source=0&kind=1&after=1788220800000&before=1788825600000&orderBy=views&limit=10",
+    operation: null,
+    template: "/account/stats/tags",
+    check: null,
+  }),
+  sent("stats.posts", { postIds: ["post-1", "post-2"], afterMs: AFTER, beforeMs: BEFORE }, {
+    url: "/account/stats/posts?ngsw-bypass=true&postIds=post-1%2Cpost-2&after=1788220800000&before=1788825600000",
+    operation: null,
+    template: "/account/stats/posts",
+    check: null,
+  }),
+  sent("stats.fans_top", { orderBy: "netMills", limit: 25, afterMs: AFTER, beforeMs: BEFORE }, {
+    url: "/account/stats/fans/top?ngsw-bypass=true&after=1788220800000&before=1788825600000&orderBy=netMills&limit=25",
+    operation: null,
+    template: "/account/stats/fans/top",
+    check: null,
+  }),
+  sent("stats.fan", { fanId: "fan-1", granularity: "month", afterMs: AFTER, beforeMs: BEFORE }, {
+    url: "/account/stats/fans?ngsw-bypass=true&fanId=fan-1&after=1788220800000&before=1788825600000&granularity=month",
+    operation: null,
+    template: "/account/stats/fans",
+    check: null,
+  }),
+  sent("earnings.transactions_account", { correlationAccountId: "fan-1", beforeMs: BEFORE, afterMs: AFTER, cursor: "0", limit: 30 }, {
+    url: "/account/wallets/earnings/transactions/accounts?ngsw-bypass=true&correlationAccountId=fan-1&before=1788825600000&after=1788220800000&cursor=0&limit=30",
+    operation: null,
+    template: "/account/wallets/earnings/transactions/accounts",
+    check: "earnings",
+  }),
 ];
 
 function expectedHeaders(check: FanslyClientCheckRoute | null): Array<readonly [string, string]> {
@@ -397,7 +486,27 @@ const cases = FROZEN.map((entry) => [entry.label, entry] as const);
 describe("Fansly wire specs against the requests the legacy adapter sent", () => {
   it("cover every API route; the socket's Upgrade and a CDN hop never had an adapter twin", () => {
     expect(new Set(FROZEN.map((entry) => entry.id))).toEqual(new Set(FANSLY_WIRE_IDS.filter((id) => isFanslyApiWireId(id))));
-    expect(FROZEN).toHaveLength(46);
+    expect(FROZEN).toHaveLength(60);
+  });
+
+  it("names the routes no legacy sender read: the statistics pages of 2026-10", () => {
+    expect(FANSLY_WIRE_IDS.filter((id) => fanslyWireSpec(id).legacyOperation === null)).toEqual([
+      "stats.summary", "stats.series", "stats.media_top", "stats.media", "stats.media_benchmarks", "stats.media_shown",
+      "stats.geo", "stats.active_hours", "stats.tags", "stats.posts", "stats.fans_top", "stats.fan",
+      "earnings.transactions_account",
+    ]);
+  });
+
+  it("refuses a statistics request no caller may build, before anything is sent", () => {
+    const build = <I extends FanslyWireId>(id: I, params: FanslyWireParams<I>) =>
+      () => buildFanslyWireRequest(id, params, { baseUrl: BASE_URL, session: SESSION, timeoutMs: 20_000 });
+    expect(build("stats.summary", { afterMs: BEFORE, beforeMs: AFTER })).toThrow(/window is reversed/);
+    expect(build("stats.series", { family: "likes" as never, granularity: "day", afterMs: AFTER, beforeMs: BEFORE })).toThrow(/family must be one of/);
+    expect(build("stats.media_top", { source: 2 as never, mediaType: null, orderBy: "views", limit: 20, afterMs: AFTER, beforeMs: BEFORE })).toThrow(/source must be one of 0, 1, 4/);
+    expect(build("stats.geo", { source: 0, limit: 0, afterMs: AFTER, beforeMs: BEFORE })).toThrow(/limit must be a positive integer/);
+    expect(build("stats.active_hours", { source: 0, timezoneOffsetMinutes: 1.5, afterMs: AFTER, beforeMs: BEFORE })).toThrow(/timezoneOffsetMinutes must be an integer/);
+    expect(build("stats.posts", { postIds: [], afterMs: AFTER, beforeMs: BEFORE })).toThrow(/postIds takes/);
+    expect(build("stats.media", { mediaOfferId: " ", source: 0, afterMs: AFTER, beforeMs: BEFORE })).toThrow(/mediaOfferId must be nonblank/);
   });
 
   it.each(cases)("%s sends the adapter's exact URL", (_label, entry) => {

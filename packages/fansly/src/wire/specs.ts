@@ -15,6 +15,7 @@ import {
 import type {
   FanslyCdnAnswer,
   FanslyContractResult,
+  FanslyStatsWindow,
   FanslyTransactionsPageContract,
   FanslyWsUpgradeAnswer,
   FanslyWireId,
@@ -28,7 +29,8 @@ import type {
 // including the present-and-empty values the app sends
 // (`tests/fansly-wire-specs.test.ts` pins each URL to the one the adapter
 // sent). Only what varies per request is a parameter; page sizes and fixed
-// filters are the app's and live here.
+// filters are the app's and live here. A route the adapter never read
+// (`legacyOperation: null`) takes its shape from the web app's own request.
 
 /**
  * WP-F3: `/media/vaultnew`'s head cursor is the LITERAL STRING "0", for both
@@ -143,6 +145,42 @@ function idList(name: string, ids: readonly string[], max?: number): string {
   }
   ids.forEach((id, index) => nonBlank(`${name}[${index}]`, id));
   return ids.join(",");
+}
+
+/** A count of at least one (a page size, a span in hours). */
+function positive(name: string, value: number): string {
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new RangeError(`Fansly wire parameter ${name} must be a positive integer (got ${value})`);
+  }
+  return String(value);
+}
+
+/** An integer that may be negative (a time-zone offset). */
+function integer(name: string, value: number): string {
+  if (!Number.isSafeInteger(value)) {
+    throw new RangeError(`Fansly wire parameter ${name} must be an integer (got ${value})`);
+  }
+  return String(value);
+}
+
+/** One of the values the route defines. Parameters arrive as JSON from a work
+ *  row or the owner's probe, so their type alone does not hold them. */
+function oneOf<T extends string | number>(name: string, value: T, allowed: readonly T[]): string {
+  if (!allowed.includes(value)) {
+    throw new RangeError(`Fansly wire parameter ${name} must be one of ${allowed.join(", ")} (got ${String(value)})`);
+  }
+  return String(value);
+}
+
+const STATS_SOURCES = [0, 1, 4] as const;
+
+/** The window of a statistics route, as the app sends it: the first and the
+ *  last UTC day. A reversed window is a caller bug. */
+function statsWindow(p: FanslyStatsWindow): { after: string; before: string } {
+  if (p.afterMs > p.beforeMs) {
+    throw new RangeError(`Fansly statistics window is reversed (afterMs ${p.afterMs} > beforeMs ${p.beforeMs})`);
+  }
+  return { after: count("afterMs", p.afterMs), before: count("beforeMs", p.beforeMs) };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -705,6 +743,184 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
     legacyOperation: "recapstats_probe",
     path: () => "/recapstats",
     query: noQuery,
+    parse: journalFirst,
+  },
+  // ── The creator statistics pages of 2026-10 ──────────────────────────────
+  // (reference/fansly-creator-stats). No legacy sender ever read these routes
+  // and no resource collects them yet: the specs exist so the owner's
+  // `sync probe` can send them and journal the answer. Keys are in the order
+  // the web app writes them.
+  "stats.summary": {
+    id: "stats.summary",
+    kind: "creator_stats_summary",
+    host: "api",
+    endpointTemplate: "/account/stats/summary",
+    legacyOperation: null,
+    path: () => "/account/stats/summary",
+    query: (p) => statsWindow(p),
+    parse: journalFirst,
+  },
+  "stats.series": {
+    id: "stats.series",
+    kind: "creator_stats_series",
+    host: "api",
+    endpointTemplate: "/account/stats/series",
+    legacyOperation: null,
+    path: () => "/account/stats/series",
+    query: (p) => ({
+      family: oneOf("family", p.family, ["views", "profile", "follows", "subscriptions", "revenue"]),
+      granularity: oneOf("granularity", p.granularity, ["hour", "day", "month"]),
+      ...statsWindow(p),
+    }),
+    parse: journalFirst,
+  },
+  "stats.media_top": {
+    id: "stats.media_top",
+    kind: "creator_stats_media_top",
+    host: "api",
+    endpointTemplate: "/account/stats/media/top",
+    legacyOperation: null,
+    path: () => "/account/stats/media/top",
+    query: (p) => ({
+      source: oneOf("source", p.source, STATS_SOURCES),
+      ...(p.mediaType === null ? {} : { mediaType: oneOf("mediaType", p.mediaType, [1, 2]) }),
+      ...statsWindow(p),
+      orderBy: oneOf("orderBy", p.orderBy, ["views", "uniqueViewers", "watchMs", "completedViews", "watchLift"]),
+      limit: positive("limit", p.limit),
+    }),
+    parse: journalFirst,
+  },
+  "stats.media": {
+    id: "stats.media",
+    kind: "creator_stats_media",
+    host: "api",
+    endpointTemplate: "/account/stats/media",
+    legacyOperation: null,
+    path: () => "/account/stats/media",
+    query: (p) => ({
+      mediaOfferId: nonBlank("mediaOfferId", p.mediaOfferId),
+      source: oneOf("source", p.source, [-1, ...STATS_SOURCES]),
+      ...statsWindow(p),
+    }),
+    parse: journalFirst,
+  },
+  "stats.media_benchmarks": {
+    id: "stats.media_benchmarks",
+    kind: "creator_stats_media_benchmarks",
+    host: "api",
+    endpointTemplate: "/account/stats/media/benchmarks",
+    legacyOperation: null,
+    path: () => "/account/stats/media/benchmarks",
+    query: (p) => ({ source: oneOf("source", p.source, STATS_SOURCES), ...statsWindow(p) }),
+    parse: journalFirst,
+  },
+  "stats.media_shown": {
+    id: "stats.media_shown",
+    kind: "creator_stats_media_shown",
+    host: "api",
+    endpointTemplate: "/account/stats/media/shown",
+    legacyOperation: null,
+    path: () => "/account/stats/media/shown",
+    query: (p) => ({ end: count("endMs", p.endMs), hours: positive("hours", p.hours) }),
+    parse: journalFirst,
+  },
+  "stats.geo": {
+    id: "stats.geo",
+    kind: "creator_stats_geo",
+    host: "api",
+    endpointTemplate: "/account/stats/geo",
+    legacyOperation: null,
+    path: () => "/account/stats/geo",
+    query: (p) => ({
+      source: oneOf("source", p.source, STATS_SOURCES),
+      ...statsWindow(p),
+      limit: positive("limit", p.limit),
+    }),
+    parse: journalFirst,
+  },
+  "stats.active_hours": {
+    id: "stats.active_hours",
+    kind: "creator_stats_active_hours",
+    host: "api",
+    endpointTemplate: "/account/stats/activehours",
+    legacyOperation: null,
+    path: () => "/account/stats/activehours",
+    query: (p) => ({
+      source: oneOf("source", p.source, STATS_SOURCES),
+      ...statsWindow(p),
+      timezoneOffsetMinutes: integer("timezoneOffsetMinutes", p.timezoneOffsetMinutes),
+    }),
+    parse: journalFirst,
+  },
+  "stats.tags": {
+    id: "stats.tags",
+    kind: "creator_stats_tags",
+    host: "api",
+    endpointTemplate: "/account/stats/tags",
+    legacyOperation: null,
+    path: () => "/account/stats/tags",
+    // The app always asks for `orderBy=views` and sorts the other modes itself.
+    query: (p) => ({
+      source: oneOf("source", p.source, STATS_SOURCES),
+      kind: oneOf("kind", p.kind, [1, 2]),
+      ...statsWindow(p),
+      orderBy: "views",
+      limit: positive("limit", p.limit),
+    }),
+    parse: journalFirst,
+  },
+  "stats.posts": {
+    id: "stats.posts",
+    kind: "creator_stats_posts",
+    host: "api",
+    endpointTemplate: "/account/stats/posts",
+    legacyOperation: null,
+    path: () => "/account/stats/posts",
+    query: (p) => ({ postIds: idList("postIds", p.postIds, POST_BATCH_SIZE), ...statsWindow(p) }),
+    parse: journalFirst,
+  },
+  "stats.fans_top": {
+    id: "stats.fans_top",
+    kind: "creator_stats_fans_top",
+    host: "api",
+    endpointTemplate: "/account/stats/fans/top",
+    legacyOperation: null,
+    path: () => "/account/stats/fans/top",
+    query: (p) => ({
+      ...statsWindow(p),
+      orderBy: oneOf("orderBy", p.orderBy, ["netMills", "grossMills", "transactions"]),
+      limit: positive("limit", p.limit),
+    }),
+    parse: journalFirst,
+  },
+  "stats.fan": {
+    id: "stats.fan",
+    kind: "creator_stats_fan",
+    host: "api",
+    endpointTemplate: "/account/stats/fans",
+    legacyOperation: null,
+    path: () => "/account/stats/fans",
+    query: (p) => ({
+      fanId: nonBlank("fanId", p.fanId),
+      ...statsWindow(p),
+      granularity: oneOf("granularity", p.granularity, ["day", "month"]),
+    }),
+    parse: journalFirst,
+  },
+  "earnings.transactions_account": {
+    id: "earnings.transactions_account",
+    kind: "fan_earnings_transactions",
+    host: "api",
+    endpointTemplate: "/account/wallets/earnings/transactions/accounts",
+    legacyOperation: null,
+    path: () => "/account/wallets/earnings/transactions/accounts",
+    query: (p) => ({
+      correlationAccountId: nonBlank("correlationAccountId", p.correlationAccountId),
+      before: count("beforeMs", p.beforeMs),
+      after: count("afterMs", p.afterMs),
+      cursor: nonBlank("cursor", p.cursor),
+      limit: positive("limit", p.limit),
+    }),
     parse: journalFirst,
   },
   // Step 3, live only. Neither journals its answer (`capture`): the Upgrade's

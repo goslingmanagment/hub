@@ -39,7 +39,7 @@ function answer(status: number, bodyText: string, headers: Record<string, string
 describe("the wire registry", () => {
   it("declares one spec per id, each API route under a kind the observation registry already knows", () => {
     const registered = new Map(WRITTEN_OBSERVATION_KINDS.map((entry) => [entry.kind, entry.source]));
-    expect(FANSLY_WIRE_IDS).toHaveLength(41);
+    expect(FANSLY_WIRE_IDS).toHaveLength(54);
     for (const id of FANSLY_WIRE_IDS) {
       const spec = FANSLY_WIRE_SPECS[id];
       expect(spec.id, id).toBe(id);

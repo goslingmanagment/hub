@@ -93,6 +93,12 @@ describe("the route catalogue", () => {
       [...FANSLY_ROUTES.values()].filter((route) => route.template.startsWith("/account/wallets/earnings")).map((route) => route.route).sort(),
     );
     expect(familyOfRoute("media.offer_stats")).toBeNull();
+    // `/account/stats/*`, the statistics pages of 2026-10: one family until their quota is measured.
+    expect([...FANSLY_ROUTE_FAMILIES.creator_stats].sort()).toEqual(
+      [...FANSLY_ROUTES.values()].filter((route) => route.template.startsWith("/account/stats/")).map((route) => route.route).sort(),
+    );
+    expect(familyOfRoute("stats.summary")).toBe("creator_stats");
+    expect(familyOfRoute("earnings.transactions_account")).toBe("earnings");
   });
 });
 
@@ -142,7 +148,15 @@ describe("the legacy send log's operations", () => {
   });
 
   it("each wire spec's legacy operation is its own route", () => {
-    for (const id of FANSLY_WIRE_IDS) expect(routeOfLegacyOperation(FANSLY_WIRE_SPECS[id].legacyOperation), id).toBe(id);
+    for (const id of FANSLY_WIRE_IDS) {
+      const operation = FANSLY_WIRE_SPECS[id].legacyOperation;
+      // A route no legacy sender read has no operation in the send log.
+      if (operation === null) continue;
+      expect(routeOfLegacyOperation(operation), id).toBe(id);
+    }
+    // Those routes are the statistics pages of 2026-10 and nothing else.
+    expect(FANSLY_WIRE_IDS.filter((id) => FANSLY_WIRE_SPECS[id].legacyOperation === null))
+      .toEqual([...FANSLY_ROUTE_FAMILIES.creator_stats, "earnings.transactions_account"]);
     // The socket probes are Upgrades too; the legacy-only endpoints are their own.
     expect(routeOfLegacyOperation("ws_probe")).toBe("ws.upgrade");
     expect(routeOfLegacyOperation("list_items")).toBe("lists.items");
@@ -166,7 +180,7 @@ describe("the legacy send log's operations", () => {
 });
 
 describe("the budget table (owner decisions №21, D2, D4; A2)", () => {
-  it("pins every budget: 15/min a route, the list 12, the media statistics 5 under a 12 ceiling; messaging 15, earnings 17", () => {
+  it("pins every budget: 15/min a route, the list 12, the media statistics 5 under a 12 ceiling; messaging 15, earnings 17, the 2026-10 statistics 5 under 12", () => {
     expect(DEFAULT_ROUTE_BUDGET).toEqual({ ceilingPerMin: 15, currentPerMin: 15 });
     expect(ROUTE_BUDGETS).toEqual({
       "messaging.groups": { ceilingPerMin: 12, currentPerMin: 12 },
@@ -175,8 +189,10 @@ describe("the budget table (owner decisions №21, D2, D4; A2)", () => {
     expect(FAMILY_BUDGETS).toEqual({
       messaging: { ceilingPerMin: 15, currentPerMin: 15 },
       earnings: { ceilingPerMin: 17, currentPerMin: 17 },
+      creator_stats: { ceilingPerMin: 12, currentPerMin: 5 },
     });
     expect(routeBudget("messages.page")).toEqual(DEFAULT_ROUTE_BUDGET);
+    expect(routeBudget("stats.summary")).toEqual(DEFAULT_ROUTE_BUDGET);
     expect(routeBudget("ws.upgrade")).toEqual(DEFAULT_ROUTE_BUDGET);
     // No route above the owner's 15/min; `current` never above its ceiling.
     for (const route of FANSLY_ROUTES.keys()) {
@@ -190,7 +206,7 @@ describe("the budget table (owner decisions №21, D2, D4; A2)", () => {
   });
 
   it("the policy hash moves with any budget; a route's version with its own and its family's", () => {
-    expect(ROUTE_POLICY_HASH).toBe("26722f8d6396edad21d3eae73c835225a4f4189f1e7573ecdbe7acd396b056fa");
+    expect(ROUTE_POLICY_HASH).toBe("83f306f5bb015298cd49dc9e99d65cffd71bd9c3fb8bc11c429736854c0f3495");
     expect(routePolicyVersion("messages.page")).toBe("6bcdab5900273521");
     expect(routePolicyVersion("messages.page")).not.toBe(routePolicyVersion("group.detail"));
     expect(routePolicyVersion("media.offer_stats")).toMatch(/^[0-9a-f]{16}$/);
@@ -385,7 +401,7 @@ describe("the admission at the pick", () => {
     expect(heldView.routeOpensAt("messaging.groups")).toEqual({ at: at(9_000), routes: ["messaging.groups"], held: ["messaging.groups"] });
     const status = routeStatusView(clocks, null, NOW);
     expect(status.policyHash).toBe(ROUTE_POLICY_HASH);
-    expect(status.routes.map((route) => route.name)).toEqual(["messaging.groups", "polls", "family:messaging", "family:earnings"]);
+    expect(status.routes.map((route) => route.name)).toEqual(["messaging.groups", "polls", "family:messaging", "family:earnings", "family:creator_stats"]);
     expect(status.routes[0]).toEqual({
       name: "messaging.groups", family: "messaging", ceilingPerMin: 12, currentPerMin: 12, effectivePerMin: 12, intervalMs: 5_000,
       lastSendAt: at(-1_000).toISOString(), holdUntil: null, ladderStep: null, last429At: null, revision: null, opensAt: at(4_000).toISOString(),
@@ -395,6 +411,7 @@ describe("the admission at the pick", () => {
     });
     expect(status.routes[2]).toMatchObject({ name: "family:messaging", opensAt: at(3_000).toISOString() });
     expect(status.routes[3]).toMatchObject({ name: "family:earnings", lastSendAt: null, opensAt: null });
+    expect(status.routes[4]).toMatchObject({ name: "family:creator_stats", ceilingPerMin: 12, currentPerMin: 5, intervalMs: 12_000, lastSendAt: null, opensAt: null });
     expect(routeStatusView(null, "route_state_routes", NOW)).toEqual({ policyHash: ROUTE_POLICY_HASH, stateError: "route_state_routes", routes: [] });
   });
 });

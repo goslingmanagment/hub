@@ -47,11 +47,25 @@ family_member (route, family) as (values
   ('earnings.stats_accounts', 'earnings'),
   ('earnings.monthly_accounts', 'earnings'),
   ('earnings.stats_window', 'earnings'),
-  ('earnings.monthly', 'earnings')
+  ('earnings.monthly', 'earnings'),
+  ('earnings.transactions_account', 'earnings'),
+  ('stats.summary', 'creator_stats'),
+  ('stats.series', 'creator_stats'),
+  ('stats.media_top', 'creator_stats'),
+  ('stats.media', 'creator_stats'),
+  ('stats.media_benchmarks', 'creator_stats'),
+  ('stats.media_shown', 'creator_stats'),
+  ('stats.geo', 'creator_stats'),
+  ('stats.active_hours', 'creator_stats'),
+  ('stats.tags', 'creator_stats'),
+  ('stats.posts', 'creator_stats'),
+  ('stats.fans_top', 'creator_stats'),
+  ('stats.fan', 'creator_stats')
 ),
 family_budget (family, ceiling_per_min, current_per_min) as (values
   ('messaging', 15, 15),
-  ('earnings', 17, 17)
+  ('earnings', 17, 17),
+  ('creator_stats', 12, 5)
 ),
 evidence as (
   select :since::timestamptz as since, clock_timestamp() as now
