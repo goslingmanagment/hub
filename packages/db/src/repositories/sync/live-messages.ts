@@ -461,8 +461,18 @@ export async function listPendingFanslyWsLiveReceipts(
 // Passive parity (plan §15 step 1): no HTTP, no work. Each visible overlay row
 // is compared with the legacy engine's REST copy once it appears —
 // page_dm_messages first (raw content, exact sender id), else message_archive
-// — field by field. Without a copy inside the window it is `not_found`, or
-// `excluded` when its chat is excluded from message sync (reported apart).
+// — field by field. A row of a chat excluded from message sync is `excluded`
+// once the window has passed (reported apart).
+//
+// A row without a REST copy when the window passes gets no verdict: the
+// window is not evidence that the message is gone (a chat Fansly stopped
+// serving to the page answers every read with an error, so no copy ever
+// comes). The pass defers it instead: `confirm_wait_reason =
+// 'age_without_rest'`, no next look (`confirm_due_at` null, so it leaves the
+// partial index), still unconfirmed, still shown by the readers. Only a REST
+// read settles it later: a read that returns it confirms it, a read that
+// covers its place without it writes `not_found` (the DM apply, below). That
+// apply is the one writer of `not_found`.
 
 /** Socket createdAt is fractional seconds; REST normalizes to whole seconds. */
 const CONFIRM_TIME_TOLERANCE_MS = 1_000;
@@ -471,12 +481,26 @@ export const DM_LIVE_CONFIRM_WINDOW_MS = 24 * 60 * 60_000;
 export type DmLiveConfirmOutcome = "match" | "mismatch" | "not_found" | "excluded";
 export type DmLiveMismatchField = "text" | "sender" | "time" | "group" | "reply";
 
+/**
+ * Why an unconfirmed overlay row is no longer awaited (`confirm_wait_reason`,
+ * migration `*_dm_live_confirm_wait_reason.sql`): `age_without_rest` — the
+ * parity window passed without a REST copy; `chat_unavailable` — Fansly does
+ * not serve the chat to the page (written by the chat-unavailability episode,
+ * a later release). A deferred row is still unconfirmed and still shown; a
+ * REST read that reaches it settles it and clears the reason. The reason means
+ * nothing on a row with `confirmed_at` (the image before this column confirms
+ * without clearing it).
+ */
+export const DM_LIVE_CONFIRM_WAIT_REASONS = ["age_without_rest", "chat_unavailable"] as const;
+export type DmLiveConfirmWaitReason = (typeof DM_LIVE_CONFIRM_WAIT_REASONS)[number];
+
 export interface DmLiveConfirmCounts {
   checked: number;
   match: number;
   mismatch: number;
-  notFound: number;
   excluded: number;
+  /** Rows whose window passed without a REST copy: deferred, no verdict. */
+  deferred: number;
   rescheduled: number;
 }
 
@@ -516,11 +540,14 @@ function timeDiffers(a: Date | string | null, b: Date | string | null) {
 }
 
 /** The parity verdict for one row; exported for unit tests. Only fields the
- * socket carried (field mask) and the store holds are compared. */
+ * socket carried (field mask) and the store holds are compared. Past the
+ * window a row without a copy gets no verdict but a wait reason (deferred),
+ * unless its chat is excluded from message sync. */
 export function judgeDmLiveParity(row: DmLiveParityRow, windowMs: number): {
   outcome: DmLiveConfirmOutcome | null;
   source: "page_dm_messages" | "message_archive" | null;
   fields: DmLiveMismatchField[];
+  waitReason: DmLiveConfirmWaitReason | null;
 } {
   const fields: DmLiveMismatchField[] = [];
   const hasContent = (row.field_mask & FANSLY_WS_LIVE_FIELD.content) !== 0;
@@ -531,7 +558,7 @@ export function judgeDmLiveParity(row: DmLiveParityRow, windowMs: number): {
     if (timeDiffers(row.created_at, row.hot_created_at)) fields.push("time");
     if (row.hot_group !== null && row.platform_conversation_id !== row.hot_group) fields.push("group");
     if (hasReply && (row.in_reply_to_message_id ?? null) !== (row.hot_reply ?? null)) fields.push("reply");
-    return { outcome: fields.length ? "mismatch" : "match", source: "page_dm_messages", fields };
+    return { outcome: fields.length ? "mismatch" : "match", source: "page_dm_messages", fields, waitReason: null };
   }
   if (row.arc_found) {
     if (hasContent && row.arc_content_pending !== true
@@ -541,12 +568,14 @@ export function judgeDmLiveParity(row: DmLiveParityRow, windowMs: number): {
     if (timeDiffers(row.created_at, row.arc_occurred_at)) fields.push("time");
     if (row.arc_group !== null && row.platform_conversation_id !== row.arc_group) fields.push("group");
     if (hasReply && row.arc_reply !== null && row.in_reply_to_message_id !== row.arc_reply) fields.push("reply");
-    return { outcome: fields.length ? "mismatch" : "match", source: "message_archive", fields };
+    return { outcome: fields.length ? "mismatch" : "match", source: "message_archive", fields, waitReason: null };
   }
   if (Number(row.age_ms) >= windowMs) {
-    return { outcome: row.excluded ? "excluded" : "not_found", source: null, fields };
+    return row.excluded
+      ? { outcome: "excluded", source: null, fields, waitReason: null }
+      : { outcome: null, source: null, fields, waitReason: "age_without_rest" };
   }
-  return { outcome: null, source: null, fields };
+  return { outcome: null, source: null, fields, waitReason: null };
 }
 
 /** Next look for a row without a REST copy yet: often while fresh, then rarely. */
@@ -561,14 +590,16 @@ function retrySeconds(ageMs: number) {
  * so concurrent passes split the work). Reads only Hub's own stores: the hot
  * copy decides where the page's readers read `page_dm_messages`, the archive
  * copy otherwise — and only the archive copy on a page whose readers read the
- * archive (`dmReaderStoreOf`: the engine's live pages, step 4 S4-08).
+ * archive (`dmReaderStoreOf`: the engine's live pages, step 4 S4-08). It never
+ * writes `not_found`: a row whose window passes without a copy is deferred
+ * (see the section header).
  */
 export async function confirmDmLiveMessages(
   db: Database,
   input: { limit: number; windowMs?: number },
 ): Promise<DmLiveConfirmCounts> {
   const windowMs = input.windowMs ?? DM_LIVE_CONFIRM_WINDOW_MS;
-  const counts: DmLiveConfirmCounts = { checked: 0, match: 0, mismatch: 0, notFound: 0, excluded: 0, rescheduled: 0 };
+  const counts: DmLiveConfirmCounts = { checked: 0, match: 0, mismatch: 0, excluded: 0, deferred: 0, rescheduled: 0 };
   return db.transaction(async (tx) => {
     const database = tx as unknown as Database;
     await database.execute(sql`select set_config('statement_timeout', '15s', true)`);
@@ -617,8 +648,8 @@ export async function confirmDmLiveMessages(
       counts.checked += 1;
       if (verdict.outcome === "match") counts.match += 1;
       else if (verdict.outcome === "mismatch") counts.mismatch += 1;
-      else if (verdict.outcome === "not_found") counts.notFound += 1;
       else if (verdict.outcome === "excluded") counts.excluded += 1;
+      else if (verdict.waitReason !== null) counts.deferred += 1;
       else counts.rescheduled += 1;
       return {
         page_id: Number(row.page_id),
@@ -626,20 +657,25 @@ export async function confirmDmLiveMessages(
         outcome: verdict.outcome,
         source: verdict.source,
         fields: verdict.fields.join(","),
+        wait_reason: verdict.waitReason,
         retry_s: retrySeconds(Number(row.age_ms)),
       };
     });
+    // A verdict settles the row; a wait reason defers it (no next look); a
+    // row with neither is looked at again later.
     await database.execute(sql`
       update dm_live_messages m set
         confirmed_at = case when v.outcome is null then null else clock_timestamp() end,
         confirm_source = v.source,
         confirm_outcome = v.outcome,
         mismatch_fields = case when v.fields = '' then null else string_to_array(v.fields, ',') end,
-        confirm_due_at = case when v.outcome is null
-          then clock_timestamp() + make_interval(secs => v.retry_s) else m.confirm_due_at end,
+        confirm_wait_reason = case when v.outcome is null then v.wait_reason end,
+        confirm_due_at = case when v.outcome is not null then m.confirm_due_at
+          when v.wait_reason is not null then null
+          else clock_timestamp() + make_interval(secs => v.retry_s) end,
         updated_at = clock_timestamp()
       from jsonb_to_recordset(${JSON.stringify(verdicts)}::jsonb)
-        as v(page_id bigint, message_id text, outcome text, source text, fields text, retry_s integer)
+        as v(page_id bigint, message_id text, outcome text, source text, fields text, wait_reason text, retry_s integer)
       where m.page_id = v.page_id and m.platform_message_id = v.message_id
     `);
     return counts;
@@ -675,6 +711,8 @@ export interface DmLiveConfirmClaim {
  *
  * `messageIds`: ids the read returned. `notFoundMessageIds`: ids the reads
  * covered without returning them (a deleted message, or one never shown).
+ * A deferred row (`confirm_wait_reason`) is still unconfirmed: it is claimed
+ * like any other.
  */
 export async function claimDmLiveMessagesForConfirm(
   tx: Database,
@@ -702,9 +740,10 @@ export async function claimDmLiveMessagesForConfirm(
  * rows (`confirm_source = 'message_archive'`). Only the claimed rows are
  * touched — their locks are this transaction's — so the passive pass
  * (`skip locked`, same rule) and this writer never both settle a row. A
- * covered id without an archive copy is settled `not_found`; a returned id
- * without one (its draft fenced, its canonicalization refused) stays for the
- * passive pass.
+ * covered id without an archive copy is settled `not_found` — the only writer
+ * of that verdict (`notFound` is its counter); a returned id without one (its
+ * draft fenced, its canonicalization refused) stays for the passive pass, or
+ * stays deferred. A verdict clears the row's wait reason.
  */
 export async function confirmDmLiveMessagesInTransaction(
   tx: Database,
@@ -756,6 +795,7 @@ export async function confirmDmLiveMessagesInTransaction(
       confirm_source = v.source,
       confirm_outcome = v.outcome,
       mismatch_fields = case when v.fields = '' then null else string_to_array(v.fields, ',') end,
+      confirm_wait_reason = null,
       updated_at = clock_timestamp()
     from jsonb_to_recordset(${JSON.stringify(verdicts)}::jsonb)
       as v(message_id text, outcome text, source text, fields text)
@@ -859,8 +899,11 @@ export async function readFanslyWsLiveGauges(
 // store does not hide the row, or a message would blink out between the two
 // stores' arrivals (the archive trails page_dm_messages by its projection
 // minute). A
-// `not_found` verdict hides it: REST had no copy for the whole parity window,
-// and REST wins (plan §7.4). Chats excluded from REST message sync never get a
+// `not_found` verdict hides it: a REST read covered its place without it, and
+// REST wins (plan §7.4). A row the parity window passed without a REST copy
+// (`confirm_wait_reason`) stays visible: no read has shown it gone, and a chat
+// Fansly stopped serving would otherwise lose every socket message after a
+// day. Chats excluded from REST message sync never get a
 // copy; their socket rows stay visible, marked `apiUnavailable` (plan §7.9a).
 // A chat Hub has no thread row for stays invisible (plan §7.6). A socket
 // deletion hides the store's copy of that message as well (tombstone

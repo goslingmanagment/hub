@@ -695,6 +695,21 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # previous image has no claim route at all, never names the index, and runs
   # unchanged after a rollback (an extra index on a table it does not read).
   "0246_client_send_custody_fan_index.sql"
+  # A socket message no longer vanishes after a day (arena "vanished chat",
+  # R1): one nullable column on dm_live_messages without a default
+  # (confirm_wait_reason, catalog-only), its CHECK added NOT VALID and
+  # validated, comments, and one data update that turns the parity timer's
+  # past `not_found` verdicts (no applied read of the chat in between) into
+  # deferred rows: confirmed_at, confirm_outcome and confirm_due_at null. The
+  # previous image never names the column. Its parity pass selects
+  # `confirm_due_at <= now()` and its alert 3 needs `confirm_due_at is not
+  # null`, so it never looks at a deferred row nor counts it; its readers hide
+  # `not_found` only, so they show it; its DM apply still confirms one (by
+  # `confirmed_at is null`) and leaves the reason, which means nothing once
+  # `confirmed_at` is set. So it runs unchanged after a rollback. Known cost:
+  # for new messages it gives its own 24-hour `not_found` again, and those
+  # stay hidden after the forward deploy (docs/runbooks/sync.md).
+  "0247_dm_live_confirm_wait_reason.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

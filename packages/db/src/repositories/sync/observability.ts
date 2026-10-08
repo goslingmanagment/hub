@@ -1,4 +1,4 @@
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 import { FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY } from "@agency_hub_core/shared";
 
 import type { Database } from "../../client.ts";
@@ -137,6 +137,38 @@ export async function readSyncJournalAlertFacts(
   };
 }
 
+/**
+ * The one definition of a socket message still awaiting its REST
+ * confirmation, for every reader that counts "unconfirmed" (alert 3's
+ * `message_unconfirmed`, `sync check live-hour`). `message` is the qualified
+ * alias of a `dm_live_messages` row. Awaiting means:
+ * - no verdict (`confirmed_at` null) and not deferred (`confirm_wait_reason`
+ *   null): a row the parity window passed without a REST copy, or of a chat
+ *   Fansly does not serve to the page, is no longer awaited — a later REST
+ *   read still settles it, nothing pages for it;
+ * - a next look of the parity pass (`confirm_due_at`): every awaited row has
+ *   one, a deferred row and a deletion stub have none (it also keeps the
+ *   partial index `dm_live_messages_confirm_due` usable);
+ * - not deleted on the socket;
+ * - not in a chat excluded from message sync or hidden (a message of a chat
+ *   Hub has no thread row for counts).
+ * The previous image (before `confirm_wait_reason`) leaves a deferred row
+ * alone: its parity pass and alert 3 need `confirm_due_at`, which a deferred
+ * row does not have; its readers show it.
+ */
+export function dmLiveAwaitingConfirmSql(message: SQL): SQL {
+  return sql`(${message}.confirmed_at is null
+    and ${message}.confirm_wait_reason is null
+    and ${message}.confirm_due_at is not null
+    and ${message}.deleted_at is null
+    and not exists (
+      select 1 from page_dm_threads awaiting_chat
+       where awaiting_chat.platform_account_id = ${message}.page_id
+         and awaiting_chat.platform_conversation_id = ${message}.platform_conversation_id
+         and (not awaiting_chat.is_visible
+              or coalesce(awaiting_chat.metadata ->> ${FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY}::text, '') <> '')))`;
+}
+
 export interface SyncLivePathFacts {
   /** The page's socket: up = a connection row renewed within the stale bound;
    *  else when it was last seen alive (null: the page never had one). */
@@ -145,8 +177,9 @@ export interface SyncLivePathFacts {
    *  acked as decode debt. */
   decode: { receipts: number; debt: number };
   /** Fan messages the socket showed that no REST read confirmed for longer
-   *  than `unconfirmedAfterMs` (excluded and hidden chats left out), whenever
-   *  the parity pass looks next. */
+   *  than `unconfirmedAfterMs` and that are still awaited
+   *  (`dmLiveAwaitingConfirmSql`: deferred rows, excluded and hidden chats
+   *  left out), whenever the parity pass looks next. */
   unconfirmed: { count: number; oldestVisibleAt: Date | null };
 }
 
@@ -177,21 +210,16 @@ export async function readSyncLivePathFacts(
   // `confirm_due_at` is not a deadline but the parity pass's next look: every
   // look that finds no REST copy moves it 30 s … 10 min ahead, so a message
   // that stays unconfirmed is almost never past it. Its age is
-  // `first_visible_at`; `confirm_due_at is not null` only leaves out deletion
-  // stubs (and keeps the partial index `dm_live_messages_confirm_due`).
+  // `first_visible_at`. A message the parity window passed without a REST
+  // copy is deferred (`confirm_wait_reason`, no next look) and no longer
+  // counts; deletion stubs have no next look either.
   const unconfirmed = await db.execute<{ n: number; oldest: Date | string | null }>(sql`
     select count(*)::int as n, min(m.first_visible_at) as oldest
       from dm_live_messages m
-      left join page_dm_threads t
-        on t.platform_account_id = m.page_id and t.platform_conversation_id = m.platform_conversation_id
      where m.page_id = ${input.pageId}
-       and m.confirmed_at is null
-       and m.confirm_due_at is not null
-       and m.deleted_at is null
        and m.is_sent_by_page is false
        and m.first_visible_at < statement_timestamp() - ${input.unconfirmedAfterMs}::double precision * interval '1 millisecond'
-       and coalesce(t.is_visible, true)
-       and coalesce(t.metadata ->> ${FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY}::text, '') = ''
+       and ${dmLiveAwaitingConfirmSql(sql`m`)}
   `);
   const socketRow = socket.rows[0];
   return {
@@ -418,6 +446,11 @@ export interface SyncOverlayMetrics {
   confirmLagP95Ms: number | null;
   /** Mismatch verdicts of the window by field (`ws_rest_mismatch{field}`). */
   mismatchByField: Record<string, number>;
+  /** `not_found` verdicts of the window (`dm_live_not_found`). The DM apply is
+   *  their one writer: a REST read covered the message's place without it.
+   *  (During a rollback the image before `confirm_wait_reason` writes them on
+   *  its 24-hour timer too.) */
+  notFound: number;
 }
 
 export async function readSyncOverlayMetrics(db: Database, input: { since: Date }): Promise<SyncOverlayMetrics> {
@@ -433,11 +466,17 @@ export async function readSyncOverlayMetrics(db: Database, input: { since: Date 
      where m.confirmed_at > ${input.since}::timestamptz and m.confirm_outcome = 'mismatch'
      group by f.field
   `);
+  const notFound = await db.execute<{ n: number }>(sql`
+    select count(*)::int as n
+      from dm_live_messages
+     where confirmed_at > ${input.since}::timestamptz and confirm_outcome = 'not_found'
+  `);
   const number = (value: number | string | null | undefined) => value === null || value === undefined ? null : Number(value);
   return {
     confirmLagP50Ms: number(lag.rows[0]?.p50),
     confirmLagP95Ms: number(lag.rows[0]?.p95),
     mismatchByField: Object.fromEntries(mismatch.rows.map((row) => [row.field, Number(row.n)])),
+    notFound: Number(notFound.rows[0]?.n ?? 0),
   };
 }
 

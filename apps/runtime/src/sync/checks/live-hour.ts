@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 
 import {
+  dmLiveAwaitingConfirmSql,
   getFanslySendGuard,
   getSyncPage,
   readFanslySendAudit,
@@ -269,25 +270,22 @@ async function stuckCheck(db: Database, pageId: number, window: AcceptanceWindow
   return { name: "nothing_stuck", verdict: Object.values(counts).every((value) => value === 0) ? "pass" : "fail", detail: counts };
 }
 
-/** The latency SLOs. A fan message still unconfirmed (not deleted, not in an
- *  excluded chat) and a work still open count at their age now. */
+/** The latency SLOs. A fan message still awaiting its REST confirmation
+ *  (alert 3's predicate, `dmLiveAwaitingConfirmSql`: not deleted, not
+ *  deferred, not in an excluded or hidden chat) and a work still open count at
+ *  their age now. */
 async function sloChecks(db: Database, pageId: number, window: AcceptanceWindow): Promise<AcceptanceCheck[]> {
   const now = sql`${window.now}::timestamptz`;
   const messages = await db.execute<{ visibleS: unknown; confirmS: unknown; fast: boolean; confirmed: boolean; mismatch: boolean; over15: boolean }>(sql`
     select extract(epoch from m.first_visible_at - m.created_at) as "visibleS",
            case when m.confirm_outcome in ('match', 'mismatch') then extract(epoch from m.confirmed_at - m.first_visible_at)
-                when m.confirmed_at is null and m.deleted_at is null and not ex.excluded
-                  then extract(epoch from ${now} - m.first_visible_at) end as "confirmS",
+                when aw.awaiting then extract(epoch from ${now} - m.first_visible_at) end as "confirmS",
            m.attachments <> '[]'::jsonb as fast,
            coalesce(m.confirm_outcome in ('match', 'mismatch'), false) as confirmed,
            coalesce(m.confirm_outcome = 'mismatch', false) as mismatch,
-           (m.confirmed_at is null and m.deleted_at is null and not ex.excluded
-              and m.first_visible_at < ${now} - ${ms(ACCEPTANCE_RULES.unconfirmedAfterMs)}) as over15
+           (aw.awaiting and m.first_visible_at < ${now} - ${ms(ACCEPTANCE_RULES.unconfirmedAfterMs)}) as over15
       from dm_live_messages m
-     cross join lateral (
-       select exists (select 1 from page_dm_threads t
-                       where t.platform_account_id = m.page_id and t.platform_conversation_id = m.platform_conversation_id
-                         and t.metadata ? 'messageSyncExcludedReason') as excluded) ex
+     cross join lateral (select ${dmLiveAwaitingConfirmSql(sql`m`)} as awaiting) aw
      where m.page_id = ${pageId} and m.first_visible_at >= ${window.start}::timestamptz
        and m.first_visible_at < ${window.observedUntil}::timestamptz
        and m.sender_platform_user_id is not null and m.is_sent_by_page is false

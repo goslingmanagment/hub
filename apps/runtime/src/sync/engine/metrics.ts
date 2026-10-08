@@ -20,10 +20,10 @@ import type { EngineRegistry } from "./resource.ts";
 // The Fansly Sync Engine's golden signals (plan §10, design §9.5), computed
 // from the database: the pace (smallest gap between two actual sends vs the
 // setting, violations), sends by class and resource, holds, breakers,
-// quarantine, the overlay's confirmation lag and REST mismatches, the money
-// lag from a socket frame to the ledger, history requests and the ETA's fact
-// over forecast. The per-page families cover the pages the engine owns
-// (`handover`/`live`).
+// quarantine, the overlay's confirmation lag, REST mismatches and the DM
+// apply's `not_found` verdicts, the money lag from a socket frame to the
+// ledger, history requests and the ETA's fact over forecast. The per-page
+// families cover the pages the engine owns (`handover`/`live`).
 //
 // `computeSyncMetrics` serves one page (status);
 // `sampleSyncEngineMetrics` is the ops sampler's compact set (aggregates over
@@ -101,6 +101,10 @@ export interface SyncGlobalMetrics {
   dmConfirmLag: { p50Ms: number | null; p95Ms: number | null };
   /** `ws_rest_mismatch{field}`. */
   wsRestMismatch: Record<string, number>;
+  /** `dm_live_not_found`: `not_found` verdicts of the window, all the DM
+   *  apply's (a REST read covered the message's place without it); the parity
+   *  window defers a message instead. */
+  dmLiveNotFound: number;
   /** `money_lag`: a socket frame of a new ledger row (not a settlement, not a
    *  payout) → the ledger row; frames still missing after 5 min counted apart. */
   moneyLag: { p50Ms: number | null; p95Ms: number | null; frames: number; missing: number };
@@ -138,6 +142,7 @@ export async function computeSyncGlobalMetrics(
   return {
     dmConfirmLag: { p50Ms: overlay.confirmLagP50Ms, p95Ms: overlay.confirmLagP95Ms },
     wsRestMismatch: overlay.mismatchByField,
+    dmLiveNotFound: overlay.notFound,
     moneyLag: { p50Ms: quantileOf(lags, 0.5), p95Ms: quantileOf(lags, 0.95), frames: frames.length, missing },
     history: {
       requestsOpen: history.requestsOpen,
@@ -236,6 +241,7 @@ export async function sampleSyncEngineMetrics(
     ...pair("money_lag", global.moneyLag.p50Ms, global.moneyLag.p95Ms),
     ...gauge("money_frames_missing", global.moneyLag.missing),
     ...gauge("ws_rest_mismatch", Object.values(global.wsRestMismatch).reduce((total, n) => total + n, 0)),
+    ...gauge("dm_live_not_found", global.dmLiveNotFound),
     ...gauge("history_requests_open", global.history.requestsOpen),
     ...gauge("history_reads_done", global.history.readsDone),
     ...gauge("history_reads_remaining", global.history.readsRemaining),

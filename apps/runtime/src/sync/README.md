@@ -646,7 +646,13 @@ branch. On a live page:
 - the DM apply confirms the overlay against the archive rows it just fed (`confirm_source = 'message_archive'`): it
   locks the overlay rows before its event appends (`claimDmLiveMessagesForConfirm`, lock order) and judges them after
   the archive feed (`confirmDmLiveMessagesInTransaction`); the passive pass judges a live page's rows by the archive
-  too;
+  too. The DM apply is the one writer of `not_found` (a read covered the message's place without it). A row the
+  passive pass's 24-hour window passes without a copy gets no verdict: it is deferred (`confirm_wait_reason =
+  'age_without_rest'`, `confirm_due_at` null), stays visible and is no longer awaited — alert 3 and `sync check
+  live-hour` share that predicate (`dmLiveAwaitingConfirmSql`, `repositories/sync/observability.ts`) — and a later
+  read still claims it by `confirmed_at is null`, settles it and clears the reason. A chat Fansly stopped serving to
+  the page keeps its socket messages so. The image before the column leaves a deferred row alone (no next look, no
+  alert, shown) but closes new rows `not_found` on its timer while it runs (docs/runbooks/sync.md);
 - the thread summary columns (`stored_message_count`, newest/oldest stored ids, last fan/model times) count the
   thread's archive messages [E4]: `writeThreadSummary` adds the messages the apply's archive feed stored (the thread
   is locked and the archive's copies of the page noted before the feed, `openThreadSummary`), and
@@ -877,8 +883,8 @@ restart. `pnpm cli sync alerts status` shows what holds per page.
 
 The golden signals (`engine/metrics.ts`) come from the database: `computeSyncMetrics` per page (smallest send gap
 vs the setting, violations, sends by class and resource, holds, breakers, quarantine) and the global families
-(confirmation lag, REST mismatches by field, money lag from a socket frame to the ledger, history requests and the
-ETA's fact over forecast). The ops sampler records a compact set every 5 minutes: aggregates over the pages the
+(confirmation lag, REST mismatches by field, the DM apply's `not_found` verdicts, money lag from a socket frame to the
+ledger, history requests and the ETA's fact over forecast). The ops sampler records a compact set every 5 minutes: aggregates over the pages the
 engine owns (`sync_*`) — per-page series would double the sample table for figures the page status already shows.
 
 The shadow acceptance report (`sync shadow report`, design §3.12) judged the switch candidates of step 3 against the

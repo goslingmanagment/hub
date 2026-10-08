@@ -133,32 +133,37 @@ describe("passive parity verdict", () => {
 
   it("matches the REST hot row field by field, within one second of time", () => {
     expect(judgeDmLiveParity({ ...base, ...hot }, 3_600_000))
-      .toEqual({ outcome: "match", source: "page_dm_messages", fields: [] });
+      .toEqual({ outcome: "match", source: "page_dm_messages", fields: [], waitReason: null });
   });
 
   it("names every mismatched field", () => {
     expect(judgeDmLiveParity({ ...base, ...hot, hot_content: "other", hot_sender: "6",
       hot_created_at: new Date("2026-10-01T10:00:02.000Z"), hot_reply: null, hot_group: "23" }, 3_600_000))
-      .toEqual({ outcome: "mismatch", source: "page_dm_messages", fields: ["text", "sender", "time", "group", "reply"] });
+      .toEqual({ outcome: "mismatch", source: "page_dm_messages", fields: ["text", "sender", "time", "group", "reply"], waitReason: null });
   });
 
   it("compares the archive through its own text normalization and skips what it never observed", () => {
     expect(judgeDmLiveParity({ ...base, arc_found: true, arc_text: "hi there", arc_sent_by_me: false,
       arc_occurred_at: new Date("2026-10-01T10:00:00.000Z"), arc_reply: null, arc_group: "22",
-      arc_content_pending: false }, 3_600_000)).toEqual({ outcome: "match", source: "message_archive", fields: [] });
+      arc_content_pending: false }, 3_600_000)).toEqual({ outcome: "match", source: "message_archive", fields: [], waitReason: null });
     expect(judgeDmLiveParity({ ...base, arc_found: true, arc_text: "", arc_sent_by_me: true,
       arc_occurred_at: null, arc_reply: null, arc_group: null, arc_content_pending: true }, 3_600_000))
-      .toEqual({ outcome: "mismatch", source: "message_archive", fields: ["sender"] });
+      .toEqual({ outcome: "mismatch", source: "message_archive", fields: ["sender"], waitReason: null });
   });
 
   it("never scores a field the socket did not carry", () => {
     expect(judgeDmLiveParity({ ...base, ...hot, field_mask: 0, hot_content: "other", hot_reply: "1" }, 3_600_000))
-      .toEqual({ outcome: "match", source: "page_dm_messages", fields: [] });
+      .toEqual({ outcome: "match", source: "page_dm_messages", fields: [], waitReason: null });
   });
 
-  it("waits inside the window, then reports not_found or excluded chats apart", () => {
-    expect(judgeDmLiveParity(base, 3_600_000)).toEqual({ outcome: null, source: null, fields: [] });
-    expect(judgeDmLiveParity({ ...base, age_ms: "3600000" }, 3_600_000).outcome).toBe("not_found");
-    expect(judgeDmLiveParity({ ...base, age_ms: "3600000", excluded: true }, 3_600_000).outcome).toBe("excluded");
+  it("waits inside the window, then defers the row without a verdict (never not_found), or reports excluded chats apart", () => {
+    expect(judgeDmLiveParity(base, 3_600_000)).toEqual({ outcome: null, source: null, fields: [], waitReason: null });
+    expect(judgeDmLiveParity({ ...base, age_ms: "3600000" }, 3_600_000))
+      .toEqual({ outcome: null, source: null, fields: [], waitReason: "age_without_rest" });
+    expect(judgeDmLiveParity({ ...base, age_ms: "3600000", excluded: true }, 3_600_000))
+      .toEqual({ outcome: "excluded", source: null, fields: [], waitReason: null });
+    // A copy that arrives after the window still settles the row.
+    expect(judgeDmLiveParity({ ...base, ...hot, age_ms: "7200000" }, 3_600_000))
+      .toEqual({ outcome: "match", source: "page_dm_messages", fields: [], waitReason: null });
   });
 });
