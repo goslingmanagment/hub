@@ -713,6 +713,133 @@ describe("after establishment (owner decision Р5: no background reads)", () => 
   });
 });
 
+describe("the review of PR #490", () => {
+  it("after the boundary a read that does not end the episode — a timeout, a proxy's 502 — is the boundary's one read: the next waits for the next boundary", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage();
+    const threadId = await seedThread(pageId);
+    const registry = await registryFor(pageId);
+    const episodeId = await seedEpisode(threadId, { state: "established", refusals: 5, retryInMs: -1_000, handledListHeadId: msg(7) });
+    await liveOverlay(pageId, 9);
+    await demand(pageId, HEAD_KEY, [msg(9)]);
+    const timeout = (): FanslyWireOutcome => ({ kind: "timeout", sent: true, message: "timeout" });
+    for (const [answer, respond] of [["timeout", timeout], ["proxy 502", () => proxyPage(502)]] as const) {
+      const { requests } = await runFor(pageId, registry, respond, 2_000);
+      expect(requests, answer).toHaveLength(1);
+      expect(beforeOf(requests[0]!)).toBeNull();
+      const [episode] = await episodes(threadId);
+      // No refusal counted (only Fansly's own answer counts), the boundary moved.
+      expect(episode, answer).toMatchObject({ state: "established", refusals: 5, ended_at: null });
+      expect(episode!.retry_not_before!.getTime(), answer).toBeGreaterThan(Date.now() + BLOCKED_PROBE_EVERY_MS - 60_000);
+      // Its own breaker (if any) passes: the message's work still waits for the boundary.
+      await rewind(pageId);
+      expect((await runFor(pageId, registry, respond, 1_500)).requests, answer).toHaveLength(0);
+      const parked = await workRow(pageId, HEAD_KEY);
+      expect(parked, answer).toMatchObject({ state: "open", waiting_reason: "not_due" });
+      expect(parked!.due_at.getTime(), answer).toBe(episode!.retry_not_before!.getTime());
+      // The next boundary passes.
+      await testDb.pool.query(
+        "update page_dm_thread_unavailability set retry_not_before = now() - interval '1 second' where id = $1",
+        [episodeId],
+      );
+      await rewind(pageId);
+    }
+  });
+
+  it("a refused head read of a history walk refuses the fan that needs the head and keeps the walk for the anchored fan, which reads below the chain", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage();
+    const threadId = await seedThread(pageId);
+    const registry = await registryFor(pageId);
+    const service = { db: db(), rawConfig: testConfig(testDb.connectionString) };
+    const file = () => submitHistoryRequest(service, {
+      pageId,
+      fans: [{ kind: "conversation", conversationRef: groupOf(1) }],
+      depth: { kind: "all" },
+      reason: "test",
+      idempotencyKey: randomUUID(),
+      requester: { kind: "owner_cli", userId: null },
+    });
+    // The old request: anchored at intake (the socket verified before the
+    // head was confirmed); the new one: not (verified since).
+    await testDb.pool.query(
+      `insert into fansly_ws_connections (id, page_id, generation, started_at, last_guard_at, verified_at)
+       values (gen_random_uuid(), $1, repeat('a', 64), now() - interval '1 day', now(), now() - interval '2 hours')`,
+      [pageId],
+    );
+    const anchored = await file();
+    await testDb.pool.query("update fansly_ws_connections set verified_at = now() where page_id = $1", [pageId]);
+    const unanchored = await file();
+    expect(anchored.items[0]).toMatchObject({ state: "queued", anchorMessageRef: msg(5) });
+    expect(unanchored.items[0]).toMatchObject({ state: "queued", anchorMessageRef: null });
+    await seedEpisode(threadId, { state: "refusing", refusals: 4 });
+    const respond: Responder = (req) => (beforeOf(req) === null ? refused() : serve(groupOf(1), [1, 2, 3, 4, 5])(req));
+    const itemState = async (ref: string) => (await getHistoryRequest(service, ref)).items[0]!;
+
+    // The walk reads the head for the new fan: the 5th refusal.
+    const first = await runLive(pageId, registry, respond, async () => (await itemState(unanchored.request.ref)).state === "refused");
+    expect(first.requests.map(beforeOf)).toEqual([null]);
+    expect((await episodes(threadId))[0]).toMatchObject({ state: "established", refusals: 5 });
+    expect(await itemState(unanchored.request.ref)).toMatchObject({ refusal: "excluded", excludedReason: "chat_unavailable" });
+    // The anchored fan rides on (its turn was served: loading).
+    expect(await itemState(anchored.request.ref)).toMatchObject({ state: "loading", refusal: null });
+    const walk = await workRow(pageId, HISTORY_KEY);
+    expect(walk).toMatchObject({ state: "open", failure_count: 1 });
+
+    // Its breaker passes: the anchored fan's walk reads below the chain, to
+    // the empty page that proves the start.
+    await testDb.pool.query(
+      "update sync_work set due_at = now() - interval '1 second', breaker_until = now() - interval '1 second' where id = $1",
+      [Number(walk!.id)],
+    );
+    const second = await runLive(pageId, registry, respond, async () => (await workRow(pageId, HISTORY_KEY))?.state === "done");
+    expect(second.requests.map(beforeOf)).toEqual([msg(1)]);
+    expect(await itemState(anchored.request.ref)).toMatchObject({ state: "ready" });
+    expect((await episodes(threadId))[0]).toMatchObject({ state: "established", ended_at: null });
+  });
+
+  it("a neighbour row that took new demand while the refusal was captured stays open with it", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage();
+    const threadId = await seedThread(pageId);
+    const registry = await registryFor(pageId);
+    await seedEpisode(threadId, { state: "refusing", refusals: 4 });
+    await liveOverlay(pageId, 7);
+    const head = await demand(pageId, HEAD_KEY, [msg(7)], { dueAt: new Date(Date.now() + HOUR) });
+    await demand(pageId, CATCHUP_KEY, [msg(7)]);
+    // While the catch-up's read is out, the socket's next message bumps the
+    // head row — under a lock the capture meets, committed only after the
+    // capture read the row.
+    const router = await testDb.pool.connect();
+    let committed: Promise<void> | null = null;
+    try {
+      const { requests } = await runLive(pageId, registry, refused, async () => (await workRow(pageId, CATCHUP_KEY))?.state === "done", {
+        onHit: async () => {
+          await router.query("begin");
+          await router.query(
+            `update sync_work set demand_revision = demand_revision + 1,
+                    demand = sync_work_merge_demand(demand, $2::jsonb), updated_at = clock_timestamp()
+              where id = $1`,
+            [head.id, JSON.stringify({ messageIds: [msg(9)], txIds: [], reasons: ["ws:message_created"], overflow: false })],
+          );
+          committed = new Promise((resolve) => setTimeout(resolve, 500)).then(async () => {
+            await router.query("commit");
+          });
+        },
+      });
+      expect(requests).toHaveLength(1);
+    } finally {
+      await committed;
+      router.release();
+    }
+    expect((await episodes(threadId))[0]).toMatchObject({ state: "established", refusals: 5 });
+    expect(await workRow(pageId, CATCHUP_KEY)).toMatchObject({ state: "done", close_reason: "chat_unavailable" });
+    const bumped = await workRow(pageId, HEAD_KEY);
+    expect(bumped).toMatchObject({ state: "open", demand_revision: String(head.demandRevision + 1) });
+    expect(bumped!.demand.messageIds).toEqual([msg(7), msg(9)]);
+  });
+});
+
 describe("a refusal under an erasure", () => {
   it("a thread erased while its refusal is captured: the capture is kept, no episode is written", async (context) => {
     if (!testDb) return context.skip();

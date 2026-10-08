@@ -18,6 +18,7 @@ import {
   listUnrecordedMediaOrders,
   lockWorkRows,
   openThreadSummary,
+  postponeChatUnavailabilityRetry,
   readOpenChatUnavailability,
   readThreadChain,
   readThreadStoredFacts,
@@ -135,15 +136,19 @@ import { purchaseTargetFollowups, purchaseTargetSubject, type PurchaseTarget } f
 // and `fanslyErrorEnvelope`; never a proxy's HTML, an empty 5xx, a 429, a
 // 401/403 or the wire) opens or advances the chat's episode in the capture
 // transaction (`outcomeInCapture`); the episode's own 5th refusal establishes
-// it. Every refusal that leaves it established closes the refused work and
-// the chat's other open head and catch-up rows `chat_unavailable` with their
-// demand unserved, defers the chat's unconfirmed socket messages
+// it. Every refusal that leaves it established closes the refused head or
+// catch-up work and the chat's other open head and catch-up rows (at the
+// revision they were read at) `chat_unavailable` with their demand unserved,
+// defers the chat's unconfirmed socket messages
 // (`chat_unavailable`, still shown), sets the retry boundary (the later of
 // the refused attempt's breaker and the daily step) and the answered list
 // head, and has the history requests refuse the chat's fans that need its
-// head. No key reads the head of an established chat before the boundary
-// (the plan waits: no background probe, owner decision Р5) — a new socket
-// message or list head opens work that reads once after it. An applied head
+// head (a history walk closes only when no fan is left: an anchored fan keeps
+// reading below the chain). No key reads the head of an established chat
+// before the boundary (the plan waits: no background probe, owner decision
+// Р5) — a new socket message or list head opens work that reads once after
+// it; any head read of an established chat that does not end the episode (a
+// refusal, a timeout, the wire, another 5xx, a 429) moves the boundary. An applied head
 // read ends the episode (`read_served`, in the apply's transaction); a plan
 // that closes the work of a chat excluded or unbound since ends it too (a
 // `local` step, `thread_excluded` / `thread_unbound`). A `before` read neither
@@ -1104,27 +1109,39 @@ export function chatRetryNotBefore(decision: Pick<OutcomeDecision, "subjectBreak
 }
 
 /**
- * The capture transaction's hook of the three keys (`outcomeInCapture`): a
- * qualifying refusal opens or advances the chat's episode; one that leaves it
- * established (its own 5th refusal, or any later one) defers the chat's
- * unconfirmed socket messages, closes its other open head and catch-up rows
- * and — through the decision — the refused work itself, `chat_unavailable`
- * with the demand unserved (I11: only when no newer demand arrived during the
- * step; otherwise the row stays open under its breaker and the planner's
- * boundary), and asks the history requests to refuse the chat's fans that
- * need its head. Lock order: the episode → the overlay rows → the work rows
- * (id order); the history rows follow the commit's settle. The erasure fence
- * is not taken: nothing here writes archive material (the episode has no fan
- * identity; the rest updates rows an erasure would delete).
+ * The capture transaction's hook of the three keys (`outcomeInCapture`), for
+ * a head read (no `before`) that did not succeed. A qualifying refusal opens
+ * or advances the chat's episode; one that leaves it established (its own 5th
+ * refusal, or any later one) defers the chat's unconfirmed socket messages,
+ * closes its open head and catch-up rows `chat_unavailable` with the demand
+ * unserved — the refused one through the decision (I11: only when no newer
+ * demand arrived during the step), the others only at the revision they were
+ * read at (a demand that came since keeps a row open, under the episode's
+ * boundary) — and asks the history requests to refuse the chat's fans that
+ * need its head: a history walk is never closed here (an anchored fan of its
+ * keeps reading below the chain under the key's own breaker; the history
+ * hook closes the work when no fan is left). Any other failed head read of an
+ * established chat — the wire, a timeout, a proxy's page, a 5xx without the
+ * envelope, a 429, a 401 — counts no refusal and changes no hold, but moves
+ * the episode's boundary all the same: the read went out, only an applied one
+ * ends the episode, so the next read waits for the next boundary. Lock order:
+ * the episode → the overlay rows → the work rows (id order); the history rows
+ * follow the commit's settle. The erasure fence is not taken: nothing here
+ * writes archive material (the episode has no fan identity; the rest updates
+ * rows an erasure would delete).
  */
 async function chatRefusalInCapture(tx: Database, decision: OutcomeDecision, input: CaptureOutcomeInput): Promise<CaptureOutcomeResult> {
   const unchanged: CaptureOutcomeResult = { decision };
-  if (!isQualifyingChatRefusal(decision, input) || input.observation === null) return unchanged;
   const groupId = input.work.subject;
-  if (!DECIMAL_ID.test(groupId)) return unchanged;
+  if (decision.errorClass === "ok" || input.step.request.spec !== "messages.page"
+    || requestedParams(input.step.request).before !== null || !DECIMAL_ID.test(groupId)) return unchanged;
+  const retryNotBefore = chatRetryNotBefore(decision, input.now);
+  if (!isQualifyingChatRefusal(decision, input) || input.observation === null) {
+    await postponeChatUnavailabilityRetry(tx, { pageId: input.pageId, groupId, generation: input.generation, retryNotBefore });
+    return unchanged;
+  }
   const thread = await readThread(tx, input.pageId, groupId);
   if (thread === null) return unchanged;
-  const retryNotBefore = chatRetryNotBefore(decision, input.now);
   const recorded = await recordChatHeadRefusal(tx, {
     pageId: input.pageId,
     groupId,
@@ -1157,16 +1174,29 @@ async function chatRefusalInCapture(tx: Database, decision: OutcomeDecision, inp
       retryNotBefore: episode.retryNotBefore?.toISOString() ?? null,
     },
   };
-  await lockWorkRows(tx, [input.work.id, ...others.map((work) => work.id), ...(history === null ? [] : [history.id])]);
-  for (const work of others) {
+  const locked = new Map((await lockWorkRows(tx, [
+    input.work.id, ...others.map((work) => work.id), ...(history === null ? [] : [history.id]),
+  ])).map((work) => [work.id, work]));
+  for (const seen of others) {
+    // Under its lock, at the revision it was read at: a demand that came
+    // since (a socket message) is newer than this refusal answered — the row
+    // stays open, and its plan waits for the episode's boundary.
+    const now = locked.get(seen.id);
+    if (now === undefined || now.state !== "open" || now.demandRevision !== seen.demandRevision) continue;
     await closeOpenWork(tx, {
-      workId: work.id,
+      workId: now.id,
       generation: input.generation,
       closeReason: CHAT_UNAVAILABLE_REASON,
       satisfies: false,
-      result: { ...account, unservedMessageIds: work.demand.messageIds },
+      expectedRevision: seen.demandRevision,
+      result: { ...account, unservedMessageIds: now.demand.messageIds },
     });
   }
+  const chatUnavailable = { threadId: thread.state.id };
+  // A history walk is the history requests' to end: only its fans that need
+  // the head are refused, and it closes when none is left.
+  if (input.work.resource === HISTORY_KEY) return { decision, chatUnavailable };
+  const own = locked.get(input.work.id) ?? input.work;
   const reopen = decision.work.action === "reopen" ? decision.work : null;
   return {
     decision: {
@@ -1175,11 +1205,11 @@ async function chatRefusalInCapture(tx: Database, decision: OutcomeDecision, inp
         action: "close",
         closeReason: CHAT_UNAVAILABLE_REASON,
         satisfiesRevision: false,
-        result: { ...account, unservedMessageIds: input.work.demand.messageIds },
+        result: { ...account, unservedMessageIds: own.demand.messageIds },
         ...(reopen === null ? {} : { dueAt: reopen.dueAt, waitingReason: reopen.waitingReason, waitingUntil: reopen.waitingUntil }),
       },
     },
-    chatUnavailable: { threadId: thread.state.id },
+    chatUnavailable,
   };
 }
 

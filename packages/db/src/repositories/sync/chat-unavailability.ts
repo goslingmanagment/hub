@@ -257,6 +257,34 @@ export async function recordChatHeadRefusal(tx: Database, input: ChatHeadRefusal
 }
 
 /**
+ * A head read of a chat whose episode is established went out and did not
+ * end it — the wire failed, it timed out, a proxy or a 5xx without Fansly's
+ * envelope answered, the route was limited: no refusal is counted (only
+ * Fansly's own answer counts), but the episode's retry boundary moves to
+ * `retryNotBefore` (only ever later), so the read is the boundary's one read
+ * and the next one waits for the next boundary. Only an applied read ends the
+ * episode. Fenced by the owner generation. False: no established episode.
+ */
+export async function postponeChatUnavailabilityRetry(
+  tx: Database,
+  input: { pageId: number; groupId: string; generation: bigint; retryNotBefore: Date },
+): Promise<boolean> {
+  const result = await tx.execute(sql`
+    update page_dm_thread_unavailability e
+       set retry_not_before = greatest(e.retry_not_before, ${timestampParam(input.retryNotBefore)}),
+           updated_at = clock_timestamp()
+      from page_dm_threads t
+      join sync_pages sp on sp.page_id = t.platform_account_id and sp.owner_generation = ${generationParam(input.generation)}
+     where e.thread_id = t.id
+       and e.ended_at is null
+       and e.state = 'established'
+       and t.platform_account_id = ${input.pageId}
+       and t.platform_conversation_id = ${input.groupId}
+  `);
+  return (result.rowCount ?? 0) > 0;
+}
+
+/**
  * End the chat's open episode (plan §2.2): an applied head read of the chat
  * (`read_served`, in the DM apply's transaction, which holds the erasure
  * fence), or the chat excluded or unbound when a plan closes its work. The
