@@ -574,11 +574,12 @@ partner is the page's own evidence (the fan blocked that page, or a transient mi
 no chat and the conversation list neither assigns the reason nor keeps it on a chat it writes. The migration
 `*_retire_dm_unresolvable_exclusion.sql` lifted it on every page (`lifted_dm_exclusions`, so an older image — still
 running while the api migrates, or rolled back to — keeps it on no bound chat and assigns it from no probe) and took it
-off every thread (production: 17), under the page locks the actor's own transactions take. Those chats are read by
-ordinary demand only (a newer list head when the list next lists the chat, a socket message, a history request). A
-chat Fansly stops serving is the next section's. The levers above still accept the reason, for rows and recorded
-probes written before; `lift` of it is a no-op, and `unlift` changes nothing in this release but leaves an older
-image free to apply the old rule on that page again — keep the lift. To check (read-only; both 0):
+off every thread (production: 17), under the erasure execution lock and the page locks the actor's own transactions
+take. Those chats are read by ordinary demand only (a newer list head when the list next lists the chat, a socket
+message, a history request). A chat Fansly stops serving is the next section's. The levers above still accept the
+reason, for rows and recorded probes written before; `lift` of it is a no-op, and `unlift` changes nothing in this
+release but leaves an older image free to apply the old rule on that page again — keep the lift. To check (read-only;
+both 0):
 
 ```sql
 select (select count(*) from page_dm_threads

@@ -740,13 +740,15 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # episodes go with them through the cascade.
   "0251_page_dm_thread_unavailability.sql"
   # A lookup miss no longer excludes a chat (arena "vanished chat", M3b): data
-  # only, no DDL, no work, in one transaction — every sync_pages row locked in
-  # page order (the previous image's sync keeps running while the api
-  # migrates, and each of its actor transactions starts by locking its page
-  # row, so none writes back a reason it read before), then
+  # only, no DDL, no work, in one transaction — the erasure execution lock
+  # (key 8154030001, which every image's erasure takes before any row lock),
+  # every sync_pages row locked in page order (the previous image's sync keeps
+  # running while the api migrates, and each of its actor transactions starts
+  # by locking its page row, so none writes back a reason it read before), then
   # `partner_unresolvable_from_account_lookup` added to every page's
-  # lifted_dm_exclusions (owner decision №8, 0235), then the reason taken off
-  # the threads that carry it (production: 17). The previous image honours
+  # lifted_dm_exclusions (owner decision №8, 0235), then the threads that
+  # carry the reason locked in id order and the reason taken off them
+  # (production: 17). The previous image honours
   # the lift: its conversation list keeps no lifted reason on a bound chat
   # and its account probe assigns none; no chat carries the reason after
   # this, and it reads the re-included chats like any other. This image reads

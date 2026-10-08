@@ -21,6 +21,11 @@
 -- no lifted reason on a bound chat, and its probe assigns no lifted reason.
 -- So, in this one transaction:
 --
+-- 0. The erasure execution lock first (`withErasureExecutionLock`, key
+--    8154030001; this image and the previous one take it before any row
+--    lock of an erasure, which locks a fan's threads `order by t.id for
+--    update`): an erasure in flight finishes first, a later one waits for
+--    this commit — no deadlock over two threads of one fan.
 -- 1. Every Fansly page row is locked, in page order, as the actor's own
 --    transactions lock it (each starts with the generation fence on its page
 --    row): an apply in flight finishes first, and a later one waits for this
@@ -33,7 +38,10 @@
 --    lift for nothing (its list writes only the aggregation-missing reason,
 --    its probe excludes nothing); `sync excluded unlift` can take it off a
 --    page, which changes nothing in this release.
--- 3. The reason comes off the threads that carry it, bound or not (the
+-- 3. The threads that carry the reason are locked in id order (the order
+--    erasure and the actor's chat writers take threads; `no key update`, the
+--    update's own strength, so a history intake's `key share` is not
+--    blocked), then the reason comes off them, bound or not (the
 --    previous list ignores a lift on an unbound chat and would keep the
 --    reason there; with none left it has nothing to keep), and nothing
 --    else: no other key of their metadata, no other reason
@@ -43,6 +51,12 @@
 --    message reads reached, one `dm-messages.catchup`; a socket message in it,
 --    one `dm-messages.head`; a history request, its own read. A chat whose
 --    head was read asks for nothing.
+--
+-- Lock order: the erasure lock, page rows (page order), threads (id order).
+-- Every other locker of these rows takes them in the same order or holds
+-- nothing this waits for: an erasure takes its lock before any row; an actor
+-- transaction its own page row, then that page's threads; a history intake
+-- only `key share` on threads, which neither blocks nor waits for this.
 --
 -- (Production, 2026-10-09: 17 threads on all six Fansly pages, all live, all
 -- bound, 11 visible; 7 of them have a list head newer than what the reads
@@ -61,6 +75,8 @@
 -- Rollback-compatible: the previous image keeps no lifted reason on a bound
 -- chat and assigns none from its probe, and no chat carries the reason after
 -- this; it reads the re-included chats like any other.
+select pg_advisory_xact_lock(8154030001::bigint);
+
 select sp.page_id
   from sync_pages sp
  order by sp.page_id
@@ -70,6 +86,12 @@ update sync_pages sp
    set lifted_dm_exclusions = array_append(sp.lifted_dm_exclusions, 'partner_unresolvable_from_account_lookup'),
        updated_at = clock_timestamp()
  where not ('partner_unresolvable_from_account_lookup' = any(sp.lifted_dm_exclusions));
+
+select t.id
+  from page_dm_threads t
+ where t.metadata ->> 'messageSyncExcludedReason' = 'partner_unresolvable_from_account_lookup'
+ order by t.id
+   for no key update;
 
 update page_dm_threads t
    set metadata = t.metadata - 'messageSyncExcludedReason',

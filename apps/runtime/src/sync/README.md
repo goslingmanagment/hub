@@ -409,11 +409,12 @@ after its own acceptance, naming the first page's recorded probe as evidence.
 `partner_unresolvable_from_account_lookup` is retired (arena "vanished chat", R4): a lookup that resolves no partner
 is the page's own evidence (the fan blocked the page, or a transient miss), so `fan-profiles.probe` excludes nothing
 (no apply asks for it any more), the conversation list neither assigns nor keeps the reason (its next write of a
-chat, a group detail's too, takes it off). `*_retire_dm_unresolvable_exclusion.sql`, in one transaction, locks every
-`sync_pages` row in page order (each actor transaction starts with the generation fence on its page row, so an apply
-of the previous image — whose `sync` runs on while the api migrates — never writes back a reason it read before),
-lifts the reason on every page (that image's list keeps no lifted reason on a bound chat and its probe assigns none;
-this one reads the lift for nothing), and takes it off every thread, without asking for any work. A chat Fansly stops
+chat, a group detail's too, takes it off). `*_retire_dm_unresolvable_exclusion.sql`, in one transaction, takes the
+erasure execution lock (an erasure locks a fan's threads only under it), locks every `sync_pages` row in page order
+(each actor transaction starts with the generation fence on its page row, so an apply of the previous image — whose
+`sync` runs on while the api migrates — never writes back a reason it read before), lifts the reason on every page
+(that image's list keeps no lifted reason on a bound chat and its probe assigns none; this one reads the lift for
+nothing), and locks the carrying threads in id order and takes the reason off them, without asking for any work. A chat Fansly stops
 serving is the chat-unavailability episode's (next section). The owner's levers still accept the reason, for rows and
 recorded probes written before.
 

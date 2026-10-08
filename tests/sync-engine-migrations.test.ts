@@ -1178,10 +1178,15 @@ describe("retire_dm_unresolvable_exclusion.sql (arena \"vanished chat\", R4: a l
   it("locks every page row, lifts the reason on every page, then takes it off the threads — data only, one transaction", () => {
     // Transactional (the runner's own transaction): the lock holds to the end.
     expect(text.startsWith("-- agency-hub:no-transaction")).toBe(false);
+    // Lock order: the erasure execution lock, page rows (page order), the
+    // carrying threads (id order) — then the writes.
     expect(statements).toEqual([
+      "select pg_advisory_xact_lock(8154030001::bigint)",
       "select sp.page_id from sync_pages sp order by sp.page_id for no key update",
       "update sync_pages sp set lifted_dm_exclusions = array_append(sp.lifted_dm_exclusions, 'partner_unresolvable_from_account_lookup'), "
         + "updated_at = clock_timestamp() where not ('partner_unresolvable_from_account_lookup' = any(sp.lifted_dm_exclusions))",
+      "select t.id from page_dm_threads t where t.metadata ->> 'messageSyncExcludedReason' = 'partner_unresolvable_from_account_lookup' "
+        + "order by t.id for no key update",
       "update page_dm_threads t set metadata = t.metadata - 'messageSyncExcludedReason', updated_at = clock_timestamp() "
         + "where t.metadata ->> 'messageSyncExcludedReason' = 'partner_unresolvable_from_account_lookup'",
     ]);
@@ -1191,6 +1196,18 @@ describe("retire_dm_unresolvable_exclusion.sql (arena \"vanished chat\", R4: a l
     expect(sql).not.toMatch(/sync_work|sync_attempts|history_request/);
     // The 0235 CHECK admits the lifted reason.
     expect(SYNC_LIFTABLE_DM_EXCLUSIONS).toContain(FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP);
+  });
+
+  it("serializes with erasure: the erasure execution lock's key, taken by every erasure before any row lock", () => {
+    const erasure = readFileSync("apps/runtime/src/services/erasure/index.ts", "utf8");
+    expect(erasure).toContain("const ERASURE_EXECUTION_LOCK_KEY = 8_154_030_001;");
+    // A session lock on its own connection (same bigint key space as the
+    // migration's transaction lock), around the whole execution …
+    expect(erasure).toContain('"select pg_advisory_lock($1::bigint)",');
+    expect(erasure).toContain("return withErasureExecutionLock(app, () => app.db.transaction(async tx => {");
+    // … whose fan threads it locks in id order, under it.
+    expect(erasure).toContain("select t.id from page_dm_threads t where ${threadPred} order by t.id for update of t");
+    expect(statements[0]).toBe("select pg_advisory_xact_lock(8154030001::bigint)");
   });
 
   it("serializes with the actor: its page lock conflicts with the fence every actor transaction starts with", () => {

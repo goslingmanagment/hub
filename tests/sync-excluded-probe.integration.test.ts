@@ -20,6 +20,7 @@ import {
 
 import { familyForObservation } from "../apps/runtime/src/services/canonicalize/index.ts";
 import { runCanonicalization } from "../apps/runtime/src/services/canonicalize-driver.ts";
+import { withErasureExecutionLock } from "../apps/runtime/src/services/erasure/index.ts";
 import { RESOURCE_BREAKER_SUBJECTS } from "../apps/runtime/src/sync/engine/errors.ts";
 import { createEngineRegistry } from "../apps/runtime/src/sync/engine/resource.ts";
 import {
@@ -827,6 +828,44 @@ describe("the migration that takes the unresolvable exclusion off (arena \"vanis
     } finally {
       actor.release();
       runner.release();
+    }
+  });
+
+  it("waits for an erasure in flight (its execution lock) while holding no row, so the erasure's own row locks never wait on it", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage("migrate-erasure");
+    const first = await seedThread(pageId, 1, { reason: UNRESOLVABLE });
+    const second = await seedThread(pageId, 2, { reason: UNRESOLVABLE });
+    const runner = await testDb.pool.connect();
+    const erasing = await testDb.pool.connect();
+    try {
+      let migrated = false;
+      let migration: Promise<void> = Promise.resolve();
+      await withErasureExecutionLock({ pool: testDb.pool } as never, async () => {
+        migration = (async () => {
+          await runner.query("begin");
+          await runner.query(migrationSql);
+          await runner.query("commit");
+          migrated = true;
+        })();
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        expect(migrated).toBe(false);
+        // The erasure's own locks meanwhile — a fan's threads in id order, the
+        // page row — are free: the migration waits before taking any row.
+        await erasing.query("begin");
+        await erasing.query("set local lock_timeout = '2s'");
+        await erasing.query("select t.id from page_dm_threads t where t.id = any($1::bigint[]) order by t.id for update of t", [[first, second]]);
+        await erasing.query("select sp.page_id from sync_pages sp where sp.page_id = $1 for update", [pageId]);
+        await erasing.query("commit");
+        expect(migrated).toBe(false);
+      });
+      await migration;
+      expect(migrated).toBe(true);
+      expect(await reasonOf(first)).toBeNull();
+      expect(await reasonOf(second)).toBeNull();
+    } finally {
+      runner.release();
+      erasing.release();
     }
   });
 
