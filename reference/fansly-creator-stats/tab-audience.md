@@ -96,6 +96,10 @@ Description depends on `geoMetric` (`729:233`):
 | `watch` | "How long viewers in each country watch on this surface." | `fansly_creator_stats_audience_geo_watch_desc` |
 | `visits` | "Where your profile visitors are, from every surface." | `fansly_creator_stats_audience_geo_visits_desc` |
 
+Live (2026-10-08 capture): after switching the metric to "Watched" the page still showed the `views`
+description while the table already had the watch columns, so the description is not refreshed on a
+metric switch even though the binding above changes.
+
 Controls (in the card header, `cardActions` slot):
 - `app-stats-segmented` `options = geoOptions`, `value = geoMetric`, `(valueChange) → setGeoMetric`:
   `views` "Views" (`fansly_creator_stats_geo_metric_views`), `watch` "Watched" (`fansly_creator_stats_geo_metric_watch`),

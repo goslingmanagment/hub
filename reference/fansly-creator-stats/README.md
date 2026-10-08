@@ -41,7 +41,12 @@ response; the capture was made independently, and its own manifest and checks ar
   `aggregationData.stories[].{id, content}`: the sampled supporters bought no locked text);
 - 45 of the 46 FBuddy-only fields occur (`offers[].media[].likes` does not: the server sends likes
   per offer only);
-- the bodies carry 304 more leaf fields that neither client reads; they are listed per route as `L:`.
+- the bodies carry 304 more leaf fields that neither client reads; they are listed per route as `L:`;
+- of the 177 widget labels the tab annexes list for the screens the capture dumped as text (four
+  tabs, media modal, supporter modal), 175 are on the live pages. The other two are explained: the
+  media modal's "Last 48 hours" block is conditional on recent hourly views, and on Audience the
+  "Top countries" description kept the Views wording after switching to Watched, although the code
+  binds a different string, so the card does not refresh its description.
 
 **Limits of the live layer.** One account, one day, a browser session. It does not show how the
 routes answer the hub's own header plan or what their quotas are. It has no refund, no locked-text
@@ -704,7 +709,7 @@ Settled by the live capture (L), details in sections 4 and 5:
 Still open:
 
 1. Whether the hub's header plan (no `fansly-client-check` on `/account/stats/*`) gets a `200`. The capture was a browser session, which always sends the check. The owner's assessment (2026-10-09) is that it will be accepted, in line with every other route the hub reads without a check; it is unobserved until the hub's first request.
-2. Quotas of the family and whether its routes share a bucket. Unknown.
+2. Quotas of the family and whether its routes share a bucket. Unknown. What the capture shows is a floor only: 174 requests to the family in 27 minutes, all `200`; up to 30 of them recorded within one minute, and within ten seconds up to 9 on `series` and 7 on `media/top` (record times of a browser session, not send times). The official page itself fires 5 to 7 family requests at once on every tab open and 2 more a minute on Overview.
 3. Refunds. The live bodies carry the refund fields (`refunds`, `refundedNetMills`, `refundedGrossMills`) with zero values, and no page of the agency has a refund in the hub's archive, so non-zero refunds, `productType 6101` rows, the date a refund is booked on, and `status` 5 / 6 or `destination 1` rows are known from client code only. They cannot be observed until a refund happens on one of the pages.
 4. Locked text, for the same reason: no page has such a sale, so the `stories` join of route 13 and product types 32001 / 32101 in the stats rows are known from client code only.
 5. A non-empty `tags` answer for `kind=2`.
