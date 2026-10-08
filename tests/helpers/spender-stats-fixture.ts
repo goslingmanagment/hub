@@ -1,6 +1,6 @@
 import {
   createModel,
-  createOnlyFansPage,
+  createPlatformPage,
   rebuildRevenueRollups,
   rebuildSpenderProjections,
   upsertFanPages,
@@ -26,10 +26,10 @@ export function spenderStatsFixture(db: () => StartedTestDatabase) {
   let transactionSeq = 0;
   let messageSeq = 0;
 
-  async function seedPage(label: string) {
+  async function seedPage(label: string, platform: "onlyfans" | "fansly" = "onlyfans") {
     const model = await createModel(db().db, { slug: `model-${label}`, name: `Model ${label}` });
     if (!model) throw new Error(`model for ${label} was not created`);
-    const page = await createOnlyFansPage(db().db, { modelId: model.id, label });
+    const page = await createPlatformPage(db().db, { modelId: model.id, platform, label });
     if (!page) throw new Error(`page ${label} was not created`);
     return page;
   }
@@ -110,6 +110,8 @@ export function spenderStatsFixture(db: () => StartedTestDatabase) {
     /** REST material clocks (the AI union's choice between two copies of one message). */
     materialObservedAt?: string;
     vendorChangedAt?: string;
+    /** The page's own platform, as every archive writer files it. */
+    platform?: "onlyfans" | "fansly";
   }): Promise<string> {
     messageSeq += 1;
     const ref = input.ref ?? String(900_000 + messageSeq);
@@ -118,7 +120,7 @@ export function spenderStatsFixture(db: () => StartedTestDatabase) {
          account_id, platform, conversation_ref, message_ref, fan_native_id,
          sender_role, is_sent_by_me, occurred_at, text_plain, deleted_at, content_pending,
          material_observed_at, vendor_changed_at
-       ) values ($1, 'onlyfans', $2, $3, $2, $4, $5, $6, $7, $8, $9, $10, $11)`,
+       ) values ($1, $12, $2, $3, $2, $4, $5, $6, $7, $8, $9, $10, $11)`,
       [
         pageId,
         input.conversationRef,
@@ -131,6 +133,7 @@ export function spenderStatsFixture(db: () => StartedTestDatabase) {
         input.contentPending ?? false,
         input.materialObservedAt ?? null,
         input.vendorChangedAt ?? null,
+        input.platform ?? "onlyfans",
       ],
     );
     return ref;
