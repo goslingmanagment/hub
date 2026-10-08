@@ -129,12 +129,17 @@ async function upsertLinkUsers(
   if (fanInputs.length === 0) {
     return 0;
   }
-  const fans = await upsertFans(app.db, fanInputs);
+  // A fan in a link's list was not seen on the page: the walk re-reads every
+  // list on every pass, and refreshing `last_seen_at` here made it the time of
+  // the last walk for every fan a link ever brought. New fans, usernames and
+  // display names are written as before.
+  const seen = { touchLastSeen: false };
+  const fans = await upsertFans(app.db, fanInputs, seen);
   if (fans.length > 0) {
     await upsertFanPages(app.db, fans.map((fan) => ({
       fanId: fan.id,
       platformAccountId: pageId,
-    })));
+    })), seen);
   }
   return fans.length;
 }

@@ -80,6 +80,17 @@ function lastSeenIsStale(column: unknown) {
   return sql`${column} < now() - ${LAST_SEEN_REFRESH_WINDOW}`;
 }
 
+export interface FanSeenOptions {
+  /**
+   * `false`: a row that already exists keeps its `last_seen_at`. Its changed
+   * fields are still written; neither the change nor the refresh window moves
+   * the timestamp. A new row gets `last_seen_at` as always. For a writer that
+   * read the fan off a list, not one that saw the fan on the page: the link
+   * walk re-reads every fan of every link on every pass. Default `true`.
+   */
+  touchLastSeen?: boolean;
+}
+
 function fanUpsertPresenceKey(item: UpsertFanInput) {
   return [
     item.username !== undefined ? "username" : "",
@@ -95,10 +106,11 @@ function hasPresentIdentity(input: UpsertFanInput) {
     (input.displayName?.trim().length ?? 0) > 0;
 }
 
-export async function upsertFans(db: Database, items: UpsertFanInput[]) {
+export async function upsertFans(db: Database, items: UpsertFanInput[], options?: FanSeenOptions) {
   if (items.length === 0) {
     return [] as Array<typeof fans.$inferSelect>;
   }
+  const touchLastSeen = options?.touchLastSeen !== false;
 
   const deduped = dedupeByKey(
     items,
@@ -111,9 +123,7 @@ export async function upsertFans(db: Database, items: UpsertFanInput[]) {
   for (const group of groups.values()) {
     const template = group[0]!;
     const lastSeenAt = new Date();
-    const updateSet: Record<string, unknown> = {
-      lastSeenAt,
-    };
+    const updateSet: Record<string, unknown> = touchLastSeen ? { lastSeenAt } : {};
 
     if (template.username !== undefined) {
       updateSet.username = sql`excluded.username`;
@@ -127,7 +137,7 @@ export async function upsertFans(db: Database, items: UpsertFanInput[]) {
     if (template.metadata !== undefined) {
       updateSet.metadata = sql`excluded.metadata`;
     }
-    const changed: ReturnType<typeof sql>[] = [lastSeenIsStale(fans.lastSeenAt)];
+    const changed: ReturnType<typeof sql>[] = touchLastSeen ? [lastSeenIsStale(fans.lastSeenAt)] : [];
     if (template.username !== undefined) {
       changed.push(sql`${fans.username} is distinct from excluded.username`);
     }
@@ -167,7 +177,7 @@ export async function upsertFans(db: Database, items: UpsertFanInput[]) {
       changed.push(sql`(${nextDeletedLastDetectedAt}) is distinct from ${fans.deletedLastDetectedAt}`);
     }
 
-    const rows = await db
+    const insert = db
       .insert(fans)
       .values(group.map((item) => ({
         platform: item.platform,
@@ -178,13 +188,21 @@ export async function upsertFans(db: Database, items: UpsertFanInput[]) {
         metadata: item.metadata ?? {},
         deletedDetectedAt: hasPresentIdentity(item) ? null : item.deletedDetectedAt ?? null,
         deletedLastDetectedAt: hasPresentIdentity(item) ? null : item.deletedDetectedAt ?? null,
-      })))
-      .onConflictDoUpdate({
-        target: [fans.platform, fans.platformUserId],
-        set: updateSet,
-        setWhere: sql.join(changed, sql` or `),
-      })
-      .returning();
+      })));
+    // Every field in `updateSet` has its comparison in `changed`, so the two
+    // are empty together — only without `touchLastSeen`, for a group that
+    // carries nothing but the fan's id.
+    const rows = Object.keys(updateSet).length > 0
+      ? await insert
+        .onConflictDoUpdate({
+          target: [fans.platform, fans.platformUserId],
+          set: updateSet,
+          setWhere: sql.join(changed, sql` or `),
+        })
+        .returning()
+      : await insert
+        .onConflictDoNothing({ target: [fans.platform, fans.platformUserId] })
+        .returning();
     // Rows the conditional update skipped are not RETURNED; callers still
     // need every fan row, so read the untouched ones back.
     const returnedKeys = new Set(rows.map((row) => `${row.platform}:${row.platformUserId}`));
@@ -200,13 +218,21 @@ export async function upsertFans(db: Database, items: UpsertFanInput[]) {
       rows.push(...existing);
     }
 
+    // A username's alias is seen when the fan row is: `fan.lastSeenAt`. A row
+    // written without `touchLastSeen` kept an older `last_seen_at`, so the
+    // username it was just given would tie with the one it replaced and
+    // "latest username" could not tell them apart — that alias takes the time
+    // of this write instead.
     const aliasValues = rows.flatMap((fan) => (
       fan.username && fan.username.trim().length > 0
         ? [{
           fanId: fan.id,
           username: fan.username,
           firstSeenAt: fan.firstSeenAt,
-          lastSeenAt: fan.lastSeenAt,
+          lastSeenAt: !touchLastSeen && returnedKeys.has(`${fan.platform}:${fan.platformUserId}`) &&
+              fan.lastSeenAt < lastSeenAt
+            ? lastSeenAt
+            : fan.lastSeenAt,
         }]
         : []
     ));
@@ -306,10 +332,15 @@ function fanPagePresenceKey(input: UpsertFanPageInput) {
   ].join("|");
 }
 
-export async function upsertFanPages(db: Database, inputs: UpsertFanPageInput[]) {
+export async function upsertFanPages(
+  db: Database,
+  inputs: UpsertFanPageInput[],
+  options?: FanSeenOptions,
+) {
   if (inputs.length === 0) {
     return;
   }
+  const touchLastSeen = options?.touchLastSeen !== false;
 
   const deduped = dedupeByKey(
     inputs,
@@ -321,9 +352,7 @@ export async function upsertFanPages(db: Database, inputs: UpsertFanPageInput[])
   for (const group of groups.values()) {
     const template = group[0]!;
     const lastSeenAt = new Date();
-    const updateSet: Record<string, unknown> = {
-      lastSeenAt,
-    };
+    const updateSet: Record<string, unknown> = touchLastSeen ? { lastSeenAt } : {};
 
     if (template.isFollower !== undefined) {
       updateSet.isFollower = sql`excluded.is_follower`;
@@ -343,7 +372,7 @@ export async function upsertFanPages(db: Database, inputs: UpsertFanPageInput[])
     if (template.autoRenew !== undefined) {
       updateSet.autoRenew = sql`excluded.auto_renew`;
     }
-    const changed: ReturnType<typeof sql>[] = [lastSeenIsStale(fanPages.lastSeenAt)];
+    const changed: ReturnType<typeof sql>[] = touchLastSeen ? [lastSeenIsStale(fanPages.lastSeenAt)] : [];
     const compare = (column: unknown, excludedColumn: string) => {
       changed.push(sql`${column} is distinct from ${sql.raw(`excluded.${excludedColumn}`)}`);
     };
@@ -388,7 +417,7 @@ export async function upsertFanPages(db: Database, inputs: UpsertFanPageInput[])
       compare(fanPages.pageAliasSyncedAt, "page_alias_synced_at");
     }
 
-    await db
+    const insert = db
       .insert(fanPages)
       .values(group.map((input) => ({
         fanId: input.fanId,
@@ -407,12 +436,18 @@ export async function upsertFanPages(db: Database, inputs: UpsertFanPageInput[])
         pageAliasSourceNoteId: input.pageAliasSourceNoteId ?? null,
         pageAliasSyncedAt: input.pageAliasSyncedAt ?? null,
         lastSeenAt,
-      })))
-      .onConflictDoUpdate({
+      })));
+    // As in upsertFans: `updateSet` and `changed` are empty together, only
+    // without `touchLastSeen` and for a group that names just the pair.
+    if (Object.keys(updateSet).length > 0) {
+      await insert.onConflictDoUpdate({
         target: [fanPages.fanId, fanPages.platformAccountId],
         set: updateSet,
         setWhere: sql.join(changed, sql` or `),
       });
+    } else {
+      await insert.onConflictDoNothing({ target: [fanPages.fanId, fanPages.platformAccountId] });
+    }
   }
 }
 
