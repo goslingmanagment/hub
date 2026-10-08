@@ -425,7 +425,8 @@ The page's actor is its one writer:
 - **Established** at the episode's own 5th refusal — never the work row's `blocked_by_vendor`, which counts the
   wire's answers too. It takes `retry_not_before` — the later of the refused attempt's breaker and the daily step
   (24 h), only ever later — and `handled_list_head_id`, the answered head: the newest of the chat's list head and the
-  read's demanded ids **created before the read was sent** (a message created during the flight is a new demand).
+  ids of the demand the read was **admitted** with (read under the admission's row lock — the pick's snapshot may be
+  older) that was **created before the read was sent** (a message created during the flight is a new demand).
 - **Only a work row settles itself.** A failed head read of an established chat settles its own work, in its
   capture transaction (lock order: the episode → the overlay rows → the work row → the history rows after the
   settle): the chat's unconfirmed socket messages are deferred `chat_unavailable` (still shown); a `.head` or
@@ -436,8 +437,10 @@ The page's actor is its one writer:
   `excludedReason: chat_unavailable`), an anchored fan of a partial chain keeps reading below the chain under the
   key's own breaker, and the walk closes when no fan is left. No other row of the chat is touched by that capture:
   each `.head` / `.catchup` row decides in its own plan. A row whose next read is the head and whose demand the
-  episode answered (every id at or below `handled_list_head_id`, no overflow; a demand without ids names no new
-  message) closes itself without a request — a `local` step, re-judged under the commit's transaction and settled
+  episode answered (`demandAnswered`: every id at or below `handled_list_head_id`, no overflow, and every reason one
+  that names its messages by id — `ws:message_created`, `ws:message_created:own`, `list_head:*`,
+  `takeover_unconfirmed`; a broken frame's `ws:message_invalid_known_chat` names none, so it is never answered)
+  closes itself without a request — a `local` step, re-judged under the commit's transaction and settled
   at the revision its plan read, deferring the socket messages too; a row with a newer demand waits for
   `retry_not_before` (the plan's `not_due`, no second timer) and then reads once. A row that continues a staged walk
   below its head read (`before`) finishes it under its own breaker. A `.history` walk whose next read is the head of

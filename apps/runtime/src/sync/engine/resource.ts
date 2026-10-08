@@ -279,6 +279,10 @@ export interface CaptureOutcomeInput {
   attemptId: number;
   /** The work's demand revision at admission (I11). */
   demandRevision: number;
+  /** The work's demand at that revision, read under the admission's row lock
+   *  (`work` is the pick's snapshot: a signal between the pick and the
+   *  admission is only here). */
+  demand: SyncWorkRow["demand"];
   step: OutcomeStep;
   /** The request reached the wire: an answer came back, or the transport
    *  says a byte may have left (`sent` of a timeout or transport error). A

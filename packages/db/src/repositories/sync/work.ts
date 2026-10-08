@@ -783,13 +783,15 @@ export async function pickRequests(db: Database, filter: SyncWorkPickFilter): Pr
 /**
  * Admission, step 1 (tx 1 after `lockOwnedPage`): the open row becomes
  * `running`. Null when the row is no longer open (re-pick). Returns the demand
- * revision the attempt is admitted at.
+ * revision the attempt is admitted at and the demand at that revision (read
+ * under the row lock this update takes: the pick's snapshot may be older — a
+ * signal that came between the pick and the admission is in it).
  */
 export async function markWorkRunning(
   db: Database,
   input: { workId: number; generation: bigint },
-): Promise<{ demandRevision: number } | null> {
-  const result = await db.execute<{ demandRevision: string }>(sql`
+): Promise<{ demandRevision: number; demand: SyncWorkDemand } | null> {
+  const result = await db.execute<{ demandRevision: string; demand: Partial<SyncWorkDemand> | null }>(sql`
     update sync_work
        set state = 'running',
            waiting_reason = 'running',
@@ -800,10 +802,20 @@ export async function markWorkRunning(
            updated_at = clock_timestamp()
      where id = ${input.workId}
        and state = 'open'
-    returning demand_revision::text as "demandRevision"
+    returning demand_revision::text as "demandRevision", demand
   `);
   const row = result.rows[0];
-  return row ? { demandRevision: Number(row.demandRevision) } : null;
+  if (!row) return null;
+  const demand = row.demand ?? {};
+  return {
+    demandRevision: Number(row.demandRevision),
+    demand: {
+      messageIds: stringList(demand.messageIds),
+      txIds: stringList(demand.txIds),
+      reasons: stringList(demand.reasons),
+      overflow: demand.overflow === true,
+    },
+  };
 }
 
 export interface SettleWorkInput {

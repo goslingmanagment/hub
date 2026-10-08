@@ -238,9 +238,16 @@ async function registryFor(pageId: number): Promise<EngineRegistry> {
   return registry;
 }
 
-/** A demand as its producer raises it (the socket router, the list). */
-async function demand(pageId: number, resource: string, messageIds: readonly string[], options: { n?: number; dueAt?: Date } = {}) {
+/** A demand as its producer raises it: the socket router a head's
+ *  (`ws:message_created`), the list a catch-up's (`list_head:…`). */
+async function demand(
+  pageId: number,
+  resource: string,
+  messageIds: readonly string[],
+  options: { n?: number; dueAt?: Date; reason?: string } = {},
+) {
   const spec = fanslyResourceSpec(resource)!;
+  const reason = options.reason ?? (resource === CATCHUP_KEY ? "list_head:dm-conversations.head" : "ws:message_created");
   return upsertDemand(db(), {
     pageId,
     resource,
@@ -248,7 +255,7 @@ async function demand(pageId: number, resource: string, messageIds: readonly str
     kind: spec.kind,
     class: spec.class,
     dueAt: options.dueAt ?? new Date(Date.now() - 1_000),
-    demand: { messageIds: [...messageIds], txIds: [], reasons: ["test"] },
+    demand: { messageIds: [...messageIds], txIds: [], reasons: [reason] },
   });
 }
 
@@ -357,10 +364,23 @@ async function runLive(
   registry: EngineRegistry,
   respond: Responder,
   until: () => Promise<boolean>,
-  options: { onHit?: (req: FanslyWireRequest) => Promise<void>; metrics?: RecordingMetrics } = {},
+  options: {
+    onHit?: (req: FanslyWireRequest) => Promise<void>;
+    /** Runs when the actor prepares a request: after the pick, before the admission. */
+    onPrepare?: () => Promise<void>;
+    metrics?: RecordingMetrics;
+  } = {},
 ) {
   const transport = new ScriptedLiveTransport();
   const requests: FanslyWireRequest[] = [];
+  if (options.onPrepare !== undefined) {
+    const onPrepare = options.onPrepare;
+    const prepare = transport.prepare.bind(transport);
+    transport.prepare = async (...args: Parameters<ScriptedLiveTransport["prepare"]>) => {
+      await onPrepare();
+      return prepare(...args);
+    };
+  }
   transport.respond = (req, index) => respond(req, index);
   transport.onHit = async (req) => {
     requests.push(req);
@@ -1064,6 +1084,61 @@ describe("the fifth review of PR #490", () => {
     expect(walk).toMatchObject({ state: "done", close_reason: "chat_unavailable" });
     expect(Number(walk!.applied_revision)).toBeLessThan(Number(walk!.demand_revision));
     expect((await runFor(pageId, registry, refused, 1_500)).requests).toHaveLength(0);
+  });
+});
+
+describe("the sixth review of PR #490", () => {
+  it("a broken socket frame of an established chat (a signal without an id) is not answered: it reads once after the boundary, and a served read shows the chat again", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage();
+    const threadId = await seedThread(pageId);
+    const registry = await registryFor(pageId);
+    const episodeId = await seedEpisode(threadId, { state: "established", refusals: 5, retryInMs: HOUR, handledListHeadId: msg(7) });
+    // The router's signal for a frame it could not read: no message id.
+    await demand(pageId, HEAD_KEY, [], { reason: "ws:message_invalid_known_chat" });
+    const waiting = await runFor(pageId, registry, refused, 1_500);
+    expect(waiting.requests).toHaveLength(0);
+    const parked = await workRow(pageId, HEAD_KEY);
+    expect(parked).toMatchObject({ state: "open", waiting_reason: "not_due" });
+    expect(parked!.due_at.getTime()).toBe((await episodes(threadId))[0]!.retry_not_before!.getTime());
+    // The boundary passes and Fansly serves the chat again: one read, and the
+    // fan's message the frame carried is there.
+    await testDb.pool.query(
+      "update page_dm_thread_unavailability set retry_not_before = now() - interval '1 second' where id = $1",
+      [episodeId],
+    );
+    await rewind(pageId);
+    const { requests } = await runLive(pageId, registry, serve(groupOf(1), [1, 2, 3, 4, 5, 6, 7, 8, 9]),
+      async () => (await workRow(pageId, HEAD_KEY))?.state === "done");
+    expect(requests).toHaveLength(1);
+    expect((await episodes(threadId))[0]).toMatchObject({ end_reason: "read_served" });
+    expect(await rows("select message_ref from message_archive where account_id = $1 and message_ref = $2", [pageId, msg(9)]))
+      .toHaveLength(1);
+  });
+
+  it("the answered head counts the demand the read was admitted with, not the pick's older snapshot: a list head that arrived before the send asks for nothing", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage();
+    const threadId = await seedThread(pageId);
+    const registry = await registryFor(pageId);
+    await seedEpisode(threadId, { state: "established", refusals: 5, retryInMs: -1_000, handledListHeadId: msg(7) });
+    await liveOverlay(pageId, 9);
+    await demand(pageId, HEAD_KEY, [msg(9)]);
+    // Between the pick (demand 9) and the admission, the socket names 11.
+    let signalled = false;
+    const { requests } = await runLive(pageId, registry, refused, async () => (await workRow(pageId, HEAD_KEY))?.state === "done", {
+      onPrepare: async () => {
+        if (signalled) return;
+        signalled = true;
+        await demand(pageId, HEAD_KEY, [msg(11)]);
+      },
+    });
+    expect(requests).toHaveLength(1);
+    const closed = await workRow(pageId, HEAD_KEY);
+    expect(closed).toMatchObject({ close_reason: "chat_unavailable", result: { unservedMessageIds: [msg(9), msg(11)] } });
+    expect((await episodes(threadId))[0]).toMatchObject({ refusals: 6, handled_list_head_id: msg(11) });
+    // The list shows 11 as the chat's head: answered, no new work.
+    expect((await listPass(pageId, 11)).followups.filter((followup) => followup.subject === groupOf(1))).toEqual([]);
   });
 });
 

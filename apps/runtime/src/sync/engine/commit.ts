@@ -283,6 +283,9 @@ export interface AdmissionRecord {
   admittedAt: Date;
   /** The work's demand revision at admission (I11). */
   demandRevision: number;
+  /** The work's demand at that revision, read under the admission's row lock
+   *  (`work` is the pick's snapshot, which may be older). */
+  demand: SyncWorkRow["demand"];
   work: SyncWorkRow;
   workClass: WorkClass;
   spec: EngineResourceSpec;
@@ -543,6 +546,7 @@ export async function admit(
       attemptId: admitted.attemptId,
       admittedAt: admitted.admittedAt,
       demandRevision: running.demandRevision,
+      demand: running.demand,
       work: picked.work,
       workClass: picked.workClass,
       spec,
@@ -1079,6 +1083,7 @@ export async function capture(
         work: admission.work,
         attemptId: admission.attemptId,
         demandRevision: admission.demandRevision,
+        demand: admission.demand,
         step,
         sent: outcome.kind === "response" || outcome.sent,
         sentAt: armed.sentWall ?? admission.admittedAt,

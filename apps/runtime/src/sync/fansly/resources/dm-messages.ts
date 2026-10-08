@@ -438,16 +438,34 @@ async function planStep(variant: DmMessagesVariant, work: SyncWorkRow, ctx: {
 }
 
 /**
- * A demand an established episode already answered: every message id it
- * carries is at or below the episode's answered head (`handled_list_head_id`
- * — the newest id a failed head read of the chat covered: the list's head or
- * a demanded id, created before that read was sent), and its id list did not
- * overflow. A demand without ids names no new message: answered. A newer id
- * (a message created after the last read went out) is a new demand: one read
- * after the boundary.
+ * The demand reasons whose messages the demand names by id: the socket's
+ * message frames (`ws:message_created`, `ws:message_created:own`), the list's
+ * heads (`list_head:<key>`: the lists, `.ws-down`, the repair, `.find`) and
+ * the takeover's carried confirmations (`takeover_unconfirmed`). Any other
+ * reason — `ws:message_invalid_known_chat` (a broken frame of a known chat:
+ * a message the socket could not name), or one this rule does not know — may
+ * stand for a message no id names.
+ */
+const ID_NAMED_DEMAND_REASONS: ReadonlySet<string> = new Set(["ws:message_created", "ws:message_created:own", "takeover_unconfirmed"]);
+
+function idNamedReason(reason: string): boolean {
+  return ID_NAMED_DEMAND_REASONS.has(reason) || reason.startsWith("list_head:");
+}
+
+/**
+ * A demand an established episode already answered — its row closes itself
+ * without a request: every message id it carries is at or below the
+ * episode's answered head (`handled_list_head_id` — the newest id a failed
+ * head read of the chat covered: the list's head or an id of the demand it
+ * was admitted with, created before that read was sent), its id list did not
+ * overflow, and every reason of it names its messages by those ids
+ * (`ID_NAMED_DEMAND_REASONS`). A newer id, an overflow, or a reason that may
+ * stand for an unnamed message (a broken socket frame) is a new demand: one
+ * read after the boundary, after which the row closes by its revision.
  */
 export function demandAnswered(demand: SyncWorkRow["demand"], handledListHeadId: string | null): boolean {
   if (demand.overflow) return false;
+  if (!demand.reasons.every(idNamedReason)) return false;
   return demand.messageIds.every((id) => handledListHeadId !== null && atMost(id, handledListHeadId));
 }
 
@@ -1204,7 +1222,8 @@ export function chatRetryNotBefore(decision: Pick<OutcomeDecision, "subjectBreak
  * — counts no refusal and changes no page or route hold, but on an
  * established episode it moves the retry boundary and the answered head all
  * the same: only an applied read ends the episode. The answered head is the
- * newest of the chat's list head and this read's demanded ids that was
+ * newest of the chat's list head and the ids of the demand this read was
+ * admitted with (`input.demand`, read under the admission's lock) that was
  * created before the read was sent (`sentAt`, never later than the send) — a
  * message created during the flight is a new demand.
  *
@@ -1222,9 +1241,11 @@ async function chatRefusalInCapture(tx: Database, decision: OutcomeDecision, inp
   if (thread === null) return unchanged;
   const retryNotBefore = chatRetryNotBefore(decision, input.now);
   const sentAtMs = input.sentAt.getTime();
+  // The demand this read was admitted with (read under the admission's lock:
+  // a signal between the pick and the admission is in it).
   const handledListHeadId = maxId([
     ...(thread.state.lastMessageId === null ? [] : [thread.state.lastMessageId]),
-    ...input.work.demand.messageIds,
+    ...input.demand.messageIds,
   ].filter((id) => {
     const createdMs = snowflakeMs(id);
     return createdMs !== null && createdMs <= sentAtMs;
