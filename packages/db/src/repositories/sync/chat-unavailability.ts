@@ -405,9 +405,11 @@ export async function deferChatUnavailableLiveMessages(tx: Database, input: { pa
 /**
  * The SQL test "this page × chat has an open chat-unavailability episode"
  * (`established`: only an established one) — the one definition every
- * reader shares (the passive parity pass now; alert 3's `message_unconfirmed`,
- * the page summary and the conversation readers next). `pageId` and
- * `groupId` are SQL expressions of the outer row.
+ * reader shares: the passive parity pass, alert 3's `message_unconfirmed` and
+ * `sync check live-hour` (`dmLiveChatUnavailableSql`, any open episode), the
+ * page summary, the Settings blocks, `sync page status` and the metrics
+ * (`syncWorkOfUnavailableChatSql`, established). `pageId` and `groupId` are
+ * SQL expressions of the outer row.
  */
 export function openChatUnavailabilitySql(input: { pageId: SQL; groupId: SQL; established?: boolean }): SQL {
   return sql`exists (
@@ -419,4 +421,136 @@ export function openChatUnavailabilitySql(input: { pageId: SQL; groupId: SQL; es
        ${input.established === true ? sql`and unavailable_episode.state = 'established'` : sql``}
      where unavailable_chat.platform_account_id = ${input.pageId}
        and unavailable_chat.platform_conversation_id = ${input.groupId})`;
+}
+
+// ── what the surfaces read (arena "vanished chat", plan §4, R2 PR5) ─────────
+
+/**
+ * A work row of `sync_work` (`work`: its qualified alias) that reads a chat
+ * Fansly does not serve to the page: a `dm-messages.*` row whose chat has an
+ * established episode. Such a row is explained by the chat's episode, not by
+ * the vendor's block of a subject: a row the next socket message opens
+ * inherits the closed row's `blocked_by_vendor_at` (`upsertDemand`), and it
+ * must not make the page "need attention" again. The page summary, the
+ * Settings blocks, `sync page status` and the golden signals count it as an
+ * unavailable chat instead (`countUnavailableChats`).
+ */
+export function syncWorkOfUnavailableChatSql(work: SQL): SQL {
+  return sql`(${work}.resource like 'dm-messages.%'
+    and ${openChatUnavailabilitySql({ pageId: sql`${work}.page_id`, groupId: sql`${work}.subject`, established: true })})`;
+}
+
+/** Per page: how many of its chats Fansly does not serve to it — open
+ *  episodes that are established. A page without one is absent. */
+export async function countUnavailableChats(db: Database, input: { pageIds: readonly number[] }): Promise<Map<number, number>> {
+  const pageIds = [...new Set(input.pageIds)];
+  if (pageIds.length === 0) return new Map();
+  const result = await db.execute<{ pageId: string; chats: number }>(sql`
+    select t.platform_account_id::text as "pageId", count(*)::int as chats
+      from page_dm_thread_unavailability e
+      join page_dm_threads t on t.id = e.thread_id
+     where e.ended_at is null
+       and e.state = 'established'
+       and t.platform_account_id = any(${sql.param(pageIds.map(String))}::bigint[])
+     group by t.platform_account_id
+  `);
+  return new Map(result.rows.map((row) => [Number(row.pageId), Number(row.chats)]));
+}
+
+/** The groups of a page's chats Fansly does not serve to it (established
+ *  open episodes): what `sync page status` leaves out of its vendor blocks. */
+export async function listUnavailableChatGroups(db: Database, input: { pageId: number }): Promise<Set<string>> {
+  const result = await db.execute<{ groupId: string }>(sql`
+    select t.platform_conversation_id as "groupId"
+      from page_dm_thread_unavailability e
+      join page_dm_threads t on t.id = e.thread_id
+     where e.ended_at is null
+       and e.state = 'established'
+       and t.platform_account_id = ${input.pageId}
+  `);
+  return new Set(result.rows.map((row) => row.groupId));
+}
+
+/** One episode as `sync chats unavailable` lists it: the episode, and who the
+ *  chat is with as the thread names it (the episode keeps no fan identity). */
+export interface PageChatUnavailability extends ChatUnavailabilityEpisode {
+  partner: { platformUserId: string | null; username: string | null };
+}
+
+/**
+ * The chat-unavailability episodes of a page (`sync chats unavailable`), the
+ * open ones by default (refusing and established), with `ended` every episode
+ * of the page — or of one chat (`groupId`); open ones first, then the newest.
+ * Plain read.
+ */
+export async function listPageChatUnavailability(
+  db: Database,
+  input: { pageId: number; groupId?: string; ended?: boolean; limit?: number },
+): Promise<PageChatUnavailability[]> {
+  const limit = input.limit ?? 500;
+  if (!Number.isSafeInteger(limit) || limit < 1) throw new Error(`limit must be a positive integer (${limit})`);
+  const result = await db.execute<EpisodeSqlRow & { partnerPlatformUserId: string | null; partnerUsername: string | null }>(sql`
+    select ${episodeColumns},
+           t.partner_platform_user_id as "partnerPlatformUserId",
+           t.partner_username as "partnerUsername"
+      from page_dm_thread_unavailability e
+      join page_dm_threads t on t.id = e.thread_id
+     where t.platform_account_id = ${input.pageId}
+       ${input.groupId === undefined ? sql`` : sql`and t.platform_conversation_id = ${input.groupId}`}
+       ${input.ended === true ? sql`` : sql`and e.ended_at is null`}
+     order by (e.ended_at is null) desc, e.opened_at desc, e.id desc
+     limit ${limit}
+  `);
+  return result.rows.map((row) => ({
+    ...normalizeEpisode(row),
+    partner: { platformUserId: row.partnerPlatformUserId, username: row.partnerUsername },
+  }));
+}
+
+/** The longest owner's note an episode keeps (the table's CHECK). */
+export const CHAT_UNAVAILABILITY_OWNER_NOTE_MAX = 2000;
+
+export interface ChatUnavailabilityOwnerNoteResult {
+  /** The episode as it stands after the note. */
+  episode: ChatUnavailabilityEpisode;
+  /** The note it carried before (null: none). */
+  previousNote: string | null;
+}
+
+/**
+ * The owner's note on a chat's episode (`sync chats note`): its open episode,
+ * else its newest one. Writes `owner_note` and `owner_note_at` and nothing
+ * else — the actor never writes them, and the owner's lever never writes what
+ * the actor does (not even `updated_at`). Null: the chat has no thread or no
+ * episode. The caller audits it in the same transaction.
+ */
+export async function writeChatUnavailabilityOwnerNote(
+  tx: Database,
+  input: { pageId: number; groupId: string; note: string; at?: Date | null },
+): Promise<ChatUnavailabilityOwnerNoteResult | null> {
+  const note = input.note.trim();
+  if (note.length === 0 || note.length > CHAT_UNAVAILABILITY_OWNER_NOTE_MAX) {
+    throw new Error(`An owner's note is 1–${CHAT_UNAVAILABILITY_OWNER_NOTE_MAX} characters (${note.length})`);
+  }
+  const target = await tx.execute<{ id: string; previousNote: string | null }>(sql`
+    select e.id::text as id, e.owner_note as "previousNote"
+      from page_dm_thread_unavailability e
+      join page_dm_threads t on t.id = e.thread_id
+     where t.platform_account_id = ${input.pageId}
+       and t.platform_conversation_id = ${input.groupId}
+     order by (e.ended_at is null) desc, e.id desc
+     limit 1
+       for update of e
+  `);
+  const row = target.rows[0];
+  if (!row) return null;
+  await tx.execute(sql`
+    update page_dm_thread_unavailability
+       set owner_note = ${note}::text,
+           owner_note_at = coalesce(${timestampParam(input.at)}, clock_timestamp())
+     where id = ${Number(row.id)}
+  `);
+  const [episode] = await readEpisodes(tx, sql`e.id = ${Number(row.id)}`);
+  if (episode === undefined) return null;
+  return { episode, previousNote: row.previousNote };
 }

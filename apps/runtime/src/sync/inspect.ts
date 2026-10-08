@@ -8,6 +8,7 @@ import {
   insertAuditEvent,
   latestClosedWorkForKey,
   listSendsForPaceAudit,
+  listUnavailableChatGroups,
   listSyncPages,
   readRouteJournal,
   readSyncPageWsStatus,
@@ -173,6 +174,7 @@ export async function readSyncPageStatus(
   const requests = owned ? await pageRequestProgress({ db, rawConfig }, page.pageId) : [];
   const ws = owned ? await readSyncPageWsStatus(db, { pageId: page.pageId, decodeWindowMs: SYNC_DECODE_DEBT_WINDOW_MS }) : null;
   const routes = await readPageRoutes(db, page, now);
+  const unavailableChats = await listUnavailableChatGroups(db, { pageId: page.pageId });
   return buildPageStatus({
     pageLabel: page.pageLabel,
     page: { ...statusPage(page), lastSendAt: page.lastSendAt },
@@ -190,6 +192,7 @@ export async function readSyncPageStatus(
       violationsLastDay: daySends.filter((send) => send.gapMs !== null && send.gapMs < send.settingMs).length,
     },
     requests,
+    unavailableChats,
     ws: ws === null
       ? null
       : {

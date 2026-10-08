@@ -16,11 +16,11 @@ This file replaces the seventeen Fansly runbooks of this directory (`fansly-*.md
   node apps/runtime/dist/cli.js sync page status`. Every `pnpm cli` line in a code block of this file is parsed
   against the real CLI by `tests/sync-runbook.test.ts`.
 - **Reading is free.** `sync page status`, `sync why`, `sync work list`, `sync alerts status`, `sync ownership
-  status`, `sync history status | list`, `sync check live-hour` and `sync excluded report` (without `--record`)
-  change nothing.
+  status`, `sync history status | list`, `sync check live-hour`, `sync excluded report` (without `--record`) and
+  `sync chats unavailable` change nothing.
 - **A lever is the owner's decision.** Pause and resume, an override, a requeue, owner work, a route raise, an
-  exclusion lift, an alert acknowledgement, a history request, a probe. Say why with `--note` (or `--reason`,
-  `--evidence`) where the command takes one. `sync probe`, `sync excluded probe`, `sync work enqueue`, `sync history
+  exclusion lift, an alert acknowledgement, a history request, a probe, a note on a chat Fansly does not serve. Say
+  why with `--note` (or `--reason`, `--evidence`) where the command takes one. `sync probe`, `sync excluded probe`, `sync work enqueue`, `sync history
   request`, "sync now" and `page verify` make the engine send requests; the actor sends them in the page's own pace,
   never the command.
 - **Never by hand.** No `update` of `sync_pages`, `sync_work`, the guard row, a hold or a route's state, and no
@@ -53,7 +53,8 @@ pnpm cli sync ownership status
 | `sendsLastHour` | sends by class (`urgent`, `requests`, `planned`) and by resource |
 | `queue` | per class: `runnable`, and the open work by waiting reason |
 | `holds` | the page hold (`until` is `"infinity"` for a credentials hold) and the resource-file breakers |
-| `breakers`, `quarantined` | subject breakers open, subjects blocked by the vendor, quarantined rows |
+| `breakers`, `quarantined` | subject breakers open, subjects blocked by the vendor, quarantined rows. The work of a chat Fansly does not serve to the page is in neither breaker count: it is the chat's, counted in `chatsUnavailable` |
+| `chatsUnavailable` | chats Fansly does not serve to the page: established unavailability episodes ([A chat Fansly does not serve](#a-chat-fansly-does-not-serve)). Informational: no attention, no lever |
 | `requests` | open history requests: fans ready of total, reads done, the reads left at least, the ETA |
 | `ws` | the socket: `connected`, `since`, `gapSince`, `decodeDebt` |
 | `routes` | each route the page used recently and each family: ceiling, current, effective rate, interval, newest send, hold, ladder step, newest 429, revision, when it opens; the budget table's hash |
@@ -72,7 +73,9 @@ detail there adds its history requests and its five blocks), the owner routes `G
 `GET /api/v1/sync/pages/:pageLabel/work`, agents through `hub sync-status` and `hub sync-why`
 (`docs/agent-read-skill.md`), and `GET /api/v1/health/sync`. Health gives a Fansly page an `engine` block and calls it
 unhealthy on `engine:owner_stale` (no heartbeat for 90 s), `engine:auth_hold`, `engine:identity_mismatch_hold` or
-`engine:handover_stuck`; a Fansly page no engine runs is `engine:not_live`. `pnpm cli sync status` (no `page` in it)
+`engine:handover_stuck`; a Fansly page no engine runs is `engine:not_live`. Health does not reflect a chat Fansly
+does not serve to a page: such a chat is no issue of the page, and the `engine` block has no field for it
+([A chat Fansly does not serve](#a-chat-fansly-does-not-serve)). `pnpm cli sync status` (no `page` in it)
 is the legacy monitor, and «Синхронизация» the legacy executor's Settings tab: both list OnlyFans pages only.
 
 ### Why is this work waiting
@@ -97,11 +100,11 @@ id, a fan's account id or a media id for the keys that run per subject. `sync wh
 | `paused` | the owner paused the page, its history requests or this resource (`detail.scope`) | `sync page resume`, when the reason for the pause is gone |
 | `page_hold` | a credentials hold (`auth`, `identity_mismatch`), a network hold, or rows of the page's hold set this build cannot read (`detail.holdSet`) | [Holds](#holds-breakers-and-quarantine) |
 | `quarantined` | the answer broke its contract or the cursor stuck; the raw answer is kept | fix the cause, then requeue ([Quarantine](#quarantine)) |
-| `blocked_by_vendor` | the subject failed 5 times; probed once a day while demand exists | nothing: a successful probe lifts it |
+| `blocked_by_vendor` | the subject failed 5 times; probed once a day while demand exists. A chat Fansly refuses with its own error envelope is not probed so: its work closes `chat_unavailable` ([A chat Fansly does not serve](#a-chat-fansly-does-not-serve)) | nothing: a successful probe lifts it |
 | `subject_breaker` | the subject failed: 1 min → 10 min → 1 h → 6 h → 24 h | wait; read `lastAttempt` for the answer that failed |
 | `resource_hold` | 5 or more subjects of the resource's file failed within 10 minutes: 30 min → 2 h → 6 h (never `dm-messages.head`) | wait; the cause is in the failing subjects' last attempts |
 | `dependency` | the work waits for other work or data | look at the work it waits for (a chat's `dm-conversations.find` before its head read) |
-| `not_due` | its time has not come: a poll's period, a coalescing window | nothing; "sync now" makes the page's polls due |
+| `not_due` | its time has not come: a poll's period, a coalescing window; a head read of a chat Fansly does not serve waits for its episode's `retry_not_before` | nothing; "sync now" makes the page's polls due |
 | `route_hold` | a 429 (or a 5xx naming its `Retry-After`) holds a route among those that keep the row closed: every route of its key, or the route its planned request was put off for (`detail.routes`; `detail.held` names the held ones); `until` is the hold's end | [Route holds](#route-holds-and-sync-route-raise) |
 | `route_budget` | runnable; every route of the key is closed by its budget's interval only, or its planned route put the request off for it (`detail.routes`) | nothing: the route's own pace |
 | `pacer` | runnable; the page's next slot has not opened | nothing |
@@ -222,7 +225,8 @@ release on".
 
 - a subject (a chat, a fan, a post) that fails climbs 1 min → 10 min → 1 h → 6 h → 24 h; after 5 failures it is
   `blocked_by_vendor` and probed once a day while demand exists. A success resets it. A history request's fan on such
-  a chat reads `blocked`.
+  a chat reads `blocked`. A chat Fansly itself refuses (its own error envelope) is not probed daily: it gets an
+  unavailability episode ([A chat Fansly does not serve](#a-chat-fansly-does-not-serve)).
 - 5 or more failing subjects of one resource file within 10 minutes hold the file: 30 min → 2 h → 6 h.
   `dm-messages.head` is exempt. Failures of the owner's probes (`probe.manual`, `probe.excluded-chat`) never start
   the hold; a hold already in force still stops them until it ends.
@@ -358,7 +362,8 @@ their clean window (`routes`) and the open latches (`openLatches`), and the glob
 | | `ws_auth_refused` | the socket's auth frame was refused | new credentials; the socket reconnects when they change |
 | | `protocol_changed` | decode debt above 1 % of the last 10 minutes' receipts | the decoder needs a code change; the raw frames are kept |
 | | `quarantined` | any quarantined work | [Quarantine](#quarantine) |
-| 3 `freshness` | `message_unconfirmed` | a fan message the socket showed, not confirmed by REST for 15 minutes and not deferred ([The live overlay](#the-socket-and-its-repair)) | `sync why --resource dm-messages.head --subject <group id>` |
+| 3 `freshness` | `message_unconfirmed` | a fan message the socket showed, not confirmed by REST for 15 minutes and not deferred ([The live overlay](#the-socket-and-its-repair)), in a chat Hub has a thread for that has no unavailability episode | `sync why --resource dm-messages.head --subject <group id>` |
+| | `chats_refused` | 5 or more chats of the page opened an unavailability episode within 10 minutes: Fansly refusing the page's chats, not one chat refusing the page ([A chat Fansly does not serve](#a-chat-fansly-does-not-serve)) | `sync chats unavailable --page <label>` |
 | | `money_not_in_ledger` | a money frame not in the ledger for 5 minutes | `sync why --resource transactions.head` |
 | | `urgent_waiting` | urgent work waiting 2 minutes past its due time, or past the end of its own subject breaker when that is later, with no pause, hold, file breaker or route hold to explain it | `sync work list`, `sync why` |
 | 4 `stuck` | `request_stalled` | a history request with runnable work and no read for 30 minutes | [History requests](#history-requests) |
@@ -368,7 +373,10 @@ their clean window (`routes`) and the open latches (`openLatches`), and the glob
 
 Alert 1 stays 10 minutes after its hold ends ("hold cleared and 10 minutes clean"). A pause of the whole page and a
 page hold explain waiting work: no `urgent_waiting` and no `planned_stale` for it, and no `request_stalled` under a
-pause of the page or of its requests. `message_unconfirmed` and `money_not_in_ledger` open regardless. A work row
+pause of the page or of its requests. `message_unconfirmed`, `chats_refused` and `money_not_in_ledger` open
+regardless. A lone chat Fansly does not serve never pages: alert 3 leaves its messages out, and a fan message of a
+chat Hub has no thread for is counted in `sync alerts status` (`chats.unconfirmedWithoutThread`), not paged — a
+broken chat find pages through its quarantine (alert 2) or its wait (`urgent_waiting`). A work row
 under its own subject breaker — `subject_breaker` or `blocked_by_vendor` in `sync why` — is no `urgent_waiting`
 until 2 minutes after the breaker ends, and its `since` is that end; `sync check live-hour` counts `urgentWaiting` by
 the same rule. A new signal never makes such a row due before its breaker ends.
@@ -478,7 +486,9 @@ stay null, `confirm_due_at` becomes null (no next look). A deferred row stays vi
 context, alert 3 does not count it, and a later REST read of the chat still settles it (a copy confirms it, a read
 that covers its place without it gives `not_found`) and clears the reason. A chat Fansly stopped serving to the page
 (every read an error) keeps its socket messages this way. `chat_unavailable` is the same deferral for a chat whose
-unavailability the engine has established (a later release). A reason on a row with `confirmed_at` means nothing.
+unavailability the engine has established ([A chat Fansly does not serve](#a-chat-fansly-does-not-serve)); while a
+chat has an open episode, alert 3 does not count its new socket messages either. A reason on a row with
+`confirmed_at` means nothing.
 
 ```sql
 select page_id, confirm_wait_reason, count(*), min(first_visible_at)
@@ -559,6 +569,107 @@ pnpm cli sync excluded unlift --page lora-1 --reason partner_missing_from_aggreg
   chats, 80 % or more served and no page-level error. The page's bound chats lose the reason and sync like any chat:
   new heads are read, history only by request. The lift is per page.
 - `unlift` applies the reason again; the next conversation-list pass marks the chats.
+
+## A chat Fansly does not serve
+
+Fansly can stop serving one chat to one page: every read of its messages answers with Fansly's own error envelope
+(lora-1, 04.10: `500 {"success":false,"error":{"code":500,"details":"error getting group messages"}}` — the fan
+blocked the page). Hub keeps a **chat-unavailability episode** of the page × chat (`page_dm_thread_unavailability`),
+written by the page's actor alone:
+
+- `refusing` from the first refusal of the chat's head (a read without `before` by `dm-messages.head`, `.catchup`
+  or `.history`) that carries Fansly's envelope. A proxy's page, an empty 5xx, a 429, a 401/403 or a network failure
+  is not the chat's answer and never counts.
+- `established` at the episode's own fifth refusal (≈ 7 hours on the breaker ladder). The refused work closes
+  `chat_unavailable` with its demand unserved (`sync why … --subject <group id>`: `closeReason`,
+  `result.unservedMessageIds`); each other head or catch-up row of the chat closes the same way in its own next step
+  once the episode has answered its demand (no request). Its socket messages stay shown to the chatters and the AI
+  context, deferred `chat_unavailable`; a history request refuses its fan (`excluded`, `excludedReason:
+  chat_unavailable`); no key reads its head before `retry_not_before` (the refused attempt's breaker or a day,
+  whichever is later). Nothing reads the chat in the background: a new socket message, or a list head newer than the
+  one the episode answered, reads it once after that boundary, and any such read that does not end the episode (a
+  refusal, a timeout, another failure) moves the boundary and finishes its work.
+- Ended by the first applied head read (`read_served`: the messages are confirmed then), or when the chat is
+  excluded or unbound since (`thread_excluded`, `thread_unbound`).
+
+**It never pages alone.** Alert 3's `message_unconfirmed` leaves out the messages of a chat with an open episode,
+and the page summary says `Chats Fansly does not serve: N` beside its state instead of "Needs attention · N blocked by
+Fansly": the chat's work is out of every vendor-block count (the summary, the Settings blocks, `sync page status`,
+`sync_blocked_by_vendor`); the blocks and work of other resources are counted as before. Many chats at once still
+page: `chats_refused` (alert 3) opens when 5 or more chats of a page open an episode within 10 minutes, the resource
+hold's threshold — `dm-messages.head` is out of the resource hold, so nothing else would. `/health/sync` does not
+reflect unavailable chats.
+
+Where it is counted: `sync page status` (`chatsUnavailable`), `sync alerts status` (per page `chats`: `unavailable`,
+`refusedRecently` — the chats that opened an episode within the `chats_refused` window — and
+`unconfirmedWithoutThread`), the «Синк» tab (the «Сообщения чатов» block: «Чатов, которые Fansly не отдаёт: N»), the
+golden signal `sync_chats_unavailable`.
+
+```sh
+pnpm cli sync chats unavailable --page lora-1
+pnpm cli sync chats unavailable --page lora-1 --ended --json
+pnpm cli sync chats note --page lora-1 --chat 810272281019305984 --note 'profile does not open from lora-1: the fan blocked the page' --at 2026-10-06T22:14:00Z
+```
+
+- `unavailable` lists the page's open episodes (refusing and established; `--ended` adds the ended ones) with the
+  chat, its partner, the refusals, the last answer's status, the retry boundary, the first and latest attempt and raw
+  answer (`sync_attempts` is kept 30 days; the observations stay) and the owner's note. Read-only.
+- `note` is the owner's observation on the chat's episode (its open one, else its newest), with the instant it was
+  made (`--at`, default now). It writes the episode's `owner_note` and `owner_note_at` only, with an audit row
+  (`admin.sync_chat_unavailability_note`: the note's digest and length — the note itself is erased with the chat).
+- Neither sends a request to Fansly, and there is no lever to end an episode: it ends with a served read.
+
+When `chats_refused` pages: `sync chats unavailable` shows the chats `refusing` since minutes. Read their raw
+answers below. Fansly's general failure ends by itself, each episode with the chat's next served read; the latch
+resolves 10 clean minutes after the last opening.
+
+The episodes of a page, the open ones and those ended within a week (owner's session):
+
+```sql
+select t.platform_conversation_id as chat, t.partner_username, e.state, e.refusals, e.opened_at, e.established_at,
+       e.last_refusal_at, e.last_http_status, e.retry_not_before, e.ended_at, e.end_reason, e.owner_note
+  from page_dm_thread_unavailability e
+  join page_dm_threads t on t.id = e.thread_id
+  join pages p on p.id = t.platform_account_id
+ where p.label = :'page_label'
+   and (e.ended_at is null or e.ended_at > now() - interval '7 days')
+ order by e.ended_at is not null, e.opened_at desc;
+```
+
+The raw answers of one chat's episodes, the first refusal and the latest (`\set group_id '…'`; `answer` is null when
+the body lives only in the payload catalog; owner's session):
+
+```sql
+select e.id as episode, o.id as observation, o.received_at, o.kind, a.id as attempt, a.resource, a.http_status,
+       a.error_class, left(o.payload::text, 300) as answer
+  from page_dm_thread_unavailability e
+  join page_dm_threads t on t.id = e.thread_id
+  join pages p on p.id = t.platform_account_id
+  join observations o
+    on (o.id, o.received_at) in ((e.first_observation_id, e.first_observation_received_at),
+                                 (e.last_observation_id, e.last_observation_received_at))
+  left join sync_attempts a on a.id in (e.first_attempt_id, e.last_attempt_id) and a.observation_id = o.id
+ where p.label = :'page_label' and t.platform_conversation_id = :'group_id'
+ order by e.id, o.id;
+```
+
+The chats that opened an episode in the last hour, by page (what `chats_refused` counts in its 10 minutes; owner's
+session):
+
+```sql
+select p.label, count(distinct e.thread_id) as chats, min(e.opened_at) as first_opened, max(e.opened_at) as last_opened
+  from page_dm_thread_unavailability e
+  join page_dm_threads t on t.id = e.thread_id
+  join pages p on p.id = t.platform_account_id
+ where e.opened_at > now() - interval '1 hour'
+ group by p.label
+ order by p.label;
+```
+
+**Rollback across this release.** The image before it keeps the episodes but reads none of them in its alerts and
+summaries: a new socket message of an established chat opens `message_unconfirmed` after 15 minutes (until the
+parity window defers it), the head row the message opens inherits the vendor's block and shows "Needs attention · 1
+blocked by Fansly" again, and there is no `chats_refused`. No data changes either way.
 
 ## Onboarding a page
 

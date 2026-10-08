@@ -79,6 +79,7 @@ function facts(input: {
   counts?: SyncWorkResourceCounts[];
   rows?: SyncWorkRow[];
   appliedAt?: Record<string, Date>;
+  chatsUnavailable?: number;
 } = {}): EngineStatusFacts {
   return {
     page: page(input.page),
@@ -86,6 +87,7 @@ function facts(input: {
     pageRows: input.rows ?? [],
     appliedAt: new Map(Object.entries(input.appliedAt ?? {})),
     settingMs: 2500,
+    ...(input.chatsUnavailable === undefined ? {} : { chatsUnavailable: input.chatsUnavailable }),
   };
 }
 
@@ -121,6 +123,18 @@ describe("a lever stream of an engine page", () => {
       waiting: null,
       statusReason: null,
     });
+  });
+
+  it("the messages block counts the chats Fansly does not serve, beside its state and never as attention", () => {
+    // The chat's head row is out of the vendor's block count already
+    // (`countActiveLiveWorkByResource`): what is left is the chat, counted.
+    const chats = facts({ counts: [counts("dm-messages.head", { active: 1 })], chatsUnavailable: 2 });
+    const messages = buildEngineDomainBlock("messages_history", chats);
+    expect(messages).toMatchObject({ needsAttention: false, engine: { chatsUnavailable: 2, blockedByVendor: { count: 0, resources: [] } } });
+    expect(messages.substreams.every((substream) => !substream.needsAttention)).toBe(true);
+    // Only the block that reads the chats' messages counts them.
+    expect(buildEngineDomainBlock("financials", chats).engine).not.toHaveProperty("chatsUnavailable");
+    expect(buildEngineDomainBlock("messages_history", facts()).engine).toMatchObject({ chatsUnavailable: 0 });
   });
 
   it("a stream nothing asked for has no work and no read", () => {

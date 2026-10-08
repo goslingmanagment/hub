@@ -2,6 +2,7 @@ import { sql, type SQL } from "drizzle-orm";
 
 import type { Database } from "../../client.ts";
 import { SYNC_APPLY_ERROR_PAYLOAD_UNAVAILABLE } from "./attempts.ts";
+import { syncWorkOfUnavailableChatSql } from "./chat-unavailability.ts";
 import { SYNC_RESOURCE_KEY_PATTERN, SYNC_RESOURCE_FILE_PATTERN } from "./pages.ts";
 import {
   generationParam,
@@ -1451,6 +1452,10 @@ export interface SyncWorkResourceCounts {
   active: number;
   running: number;
   quarantined: number;
+  /** Of those, the rows the vendor blocks — but a `dm-messages.*` row of a
+   *  chat Fansly does not serve to the page (an established unavailability
+   *  episode, `syncWorkOfUnavailableChatSql`): the episode explains it, and
+   *  the summaries count the chat instead (arena "vanished chat" plan §4). */
   blockedByVendor: number;
   /** The largest subject-breaker failure count among those rows. */
   maxFailureCount: number;
@@ -1481,7 +1486,8 @@ export async function countActiveLiveWorkByResource(
            count(*)::int as active,
            (count(*) filter (where w.state = 'running'))::int as running,
            (count(*) filter (where w.state = 'quarantined'))::int as quarantined,
-           (count(*) filter (where w.blocked_by_vendor_at is not null))::int as "blockedByVendor",
+           (count(*) filter (where w.blocked_by_vendor_at is not null
+                               and not ${syncWorkOfUnavailableChatSql(sql`w`)}))::int as "blockedByVendor",
            max(w.failure_count)::int as "maxFailureCount",
            min(w.due_at) filter (where w.state = 'open') as "nextDueAt"
       from sync_work w

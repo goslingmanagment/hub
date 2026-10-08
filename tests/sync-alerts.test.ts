@@ -14,13 +14,19 @@ import {
   evaluatePageAlerts,
   evaluateRouteAlerts,
   SYNC_ALERT_CLEAN_MS,
+  SYNC_CHATS_REFUSED_CHATS,
+  SYNC_CHATS_REFUSED_WINDOW_MS,
   SYNC_HANDOVER_STUCK_MS,
   SYNC_OWNERSHIP_UNCONFIRMED_MS,
   SYNC_SOCKET_DOWN_MS,
   syncAlertResolveAfterMs,
   type PageAlertFacts,
 } from "../apps/runtime/src/sync/engine/alerts.ts";
-import { NETWORK_ALERT_AFTER_MS } from "../apps/runtime/src/sync/engine/errors.ts";
+import {
+  NETWORK_ALERT_AFTER_MS,
+  RESOURCE_BREAKER_SUBJECTS,
+  RESOURCE_BREAKER_WINDOW_MS,
+} from "../apps/runtime/src/sync/engine/errors.ts";
 import { OWNERSHIP_ALERT_AFTER_MS } from "../apps/runtime/src/sync/engine/host.ts";
 import { quantileOf, syncMetricsDue } from "../apps/runtime/src/sync/engine/metrics.ts";
 import { createFanslyRegistry } from "../apps/runtime/src/sync/fansly/registry.ts";
@@ -40,6 +46,7 @@ function facts(overrides: {
   page?: Partial<PageAlertFacts["page"]>;
   journal?: Partial<PageAlertFacts["journal"]>;
   live?: Partial<PageAlertFacts["live"]>;
+  chats?: Partial<PageAlertFacts["chats"]>;
   money?: PageAlertFacts["money"];
 } = {}): PageAlertFacts {
   return {
@@ -83,7 +90,13 @@ function facts(overrides: {
       socket: { up: true, lastAliveAt: at(-1_000) },
       decode: { receipts: 200, debt: 0 },
       unconfirmed: { count: 0, oldestVisibleAt: null },
+      unconfirmedWithoutThread: { count: 0, oldestVisibleAt: null },
       ...overrides.live,
+    },
+    chats: {
+      unavailable: 0,
+      refused: { chats: 0, firstOpenedAt: null },
+      ...overrides.chats,
     },
     money: overrides.money ?? null,
   };
@@ -314,6 +327,35 @@ describe("alert rules (design §9.6)", () => {
     expect(evaluate({ ...off, page: { ...off.page, registryOverrides: { "notifications.forward": { enabled: false } } } })).toEqual({});
     expect(evaluate(facts({ journal: { ledgerIncomplete: { missing: 3, at: at(-MINUTE) } } })))
       .toEqual({ stuck: "transactions_ledger_incomplete" });
+  });
+
+  it("alert 3: a lone chat Fansly refuses never pages; five chats refused within ten minutes do (chats_refused)", () => {
+    // The thresholds are the resource hold's.
+    expect(SYNC_CHATS_REFUSED_CHATS).toBe(RESOURCE_BREAKER_SUBJECTS);
+    expect(SYNC_CHATS_REFUSED_WINDOW_MS).toBe(RESOURCE_BREAKER_WINDOW_MS);
+    // Established chats and messages of chats Hub has no thread for are counted, not paged.
+    expect(evaluate(facts({
+      chats: { unavailable: 3, refused: { chats: 1, firstOpenedAt: at(-MINUTE) } },
+      live: { unconfirmedWithoutThread: { count: 4, oldestVisibleAt: at(-60 * MINUTE) } },
+    }))).toEqual({});
+    expect(evaluate(facts({ chats: { refused: { chats: SYNC_CHATS_REFUSED_CHATS - 1, firstOpenedAt: at(-9 * MINUTE) } } }))).toEqual({});
+    const refused = evaluatePageAlerts(facts({ chats: { refused: { chats: SYNC_CHATS_REFUSED_CHATS, firstOpenedAt: at(-9 * MINUTE) } } }), registry);
+    expect(refused).toEqual([expect.objectContaining({
+      subKey: "freshness",
+      detail: "chats_refused",
+      since: at(-9 * MINUTE),
+      reasons: [{ detail: "chats_refused", since: at(-9 * MINUTE), context: { chats: SYNC_CHATS_REFUSED_CHATS } }],
+    })]);
+    // Beside an unconfirmed message it is listed too; the message is the detail.
+    expect(evaluatePageAlerts(facts({
+      live: { unconfirmed: { count: 1, oldestVisibleAt: at(-16 * MINUTE) } },
+      chats: { refused: { chats: 6, firstOpenedAt: at(-2 * MINUTE) } },
+    }), registry)[0]!.reasons.map((reason) => reason.detail)).toEqual(["message_unconfirmed", "chats_refused"]);
+    // Neither a pause of the page nor a page hold explains it.
+    expect(evaluate(facts({
+      page: { pausedAll: true },
+      chats: { refused: { chats: 5, firstOpenedAt: at(-MINUTE) } },
+    }))).toEqual({ freshness: "chats_refused" });
   });
 
   it("several alerts at once, one condition each", () => {

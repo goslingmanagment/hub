@@ -22,6 +22,7 @@ import {
   engineBlockStopText,
   engineBlockSummary,
   engineCadenceText,
+  engineChatsUnavailableLine,
   engineDueText,
   engineLeverNotice,
   engineRequeueConfirmText,
@@ -323,6 +324,7 @@ export function EngineBlockCard({
   const state = engineBlockState(block);
   const { engine } = block;
   const attention = engineAttentionLines(block, pageLabel);
+  const chatsUnavailable = engineChatsUnavailableLine(block, pageLabel);
   const nothingDue = NOTHING_DUE.has(state);
   // The owner's pause is the owner's own doing: it is said, not sounded.
   const stopsTone = engine.stops.every((stop) => stop.reason === "paused")
@@ -389,6 +391,12 @@ export function EngineBlockCard({
           </>
         )}
       </div>
+
+      {chatsUnavailable !== null && (
+        <p className="mt-2 break-words text-xs text-text-secondary" data-engine-chats-unavailable>
+          {chatsUnavailable}
+        </p>
+      )}
 
       {block.substreams.length > 1 && <EngineStreams block={block} now={now} />}
 

@@ -4,7 +4,7 @@ import { FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY } from "@agency_hub_core/sha
 import type { Database } from "../../client.ts";
 import { capturePayloadRefFromColumns, type CapturePayloadRef } from "../capture-payloads.ts";
 import { SYNC_PACE_AUDIT_LOOKBACK_MS } from "./attempts.ts";
-import { openChatUnavailabilitySql } from "./chat-unavailability.ts";
+import { countUnavailableChats, openChatUnavailabilitySql, syncWorkOfUnavailableChatSql } from "./chat-unavailability.ts";
 import { textArrayParam, toDate, toRequiredDate } from "./values.ts";
 
 // Fansly Sync Engine: the reads behind its alerts and its golden signals
@@ -191,8 +191,9 @@ export async function readSyncJournalAlertFacts(
 /**
  * The one definition of a socket message still awaiting its REST
  * confirmation, for every reader that counts "unconfirmed" (alert 3's
- * `message_unconfirmed`, `sync check live-hour`). `message` is the qualified
- * alias of a `dm_live_messages` row. Awaiting means:
+ * `message_unconfirmed` and `sync check live-hour`, through
+ * `dmLiveUnconfirmedSql`, which narrows it to the chats that page). `message`
+ * is the qualified alias of a `dm_live_messages` row. Awaiting means:
  * - no verdict (`confirmed_at` null) and not deferred (`confirm_wait_reason`
  *   null): a row the parity window passed without a REST copy, or of a chat
  *   Fansly does not serve to the page, is no longer awaited — a later REST
@@ -202,7 +203,7 @@ export async function readSyncJournalAlertFacts(
  *   partial index `dm_live_messages_confirm_due` usable);
  * - not deleted on the socket;
  * - not in a chat excluded from message sync or hidden (a message of a chat
- *   Hub has no thread row for counts).
+ *   Hub has no thread row for is awaited; it pages nobody).
  * The previous image (before `confirm_wait_reason`) leaves a deferred row
  * alone: its parity pass and alert 3 need `confirm_due_at`, which a deferred
  * row does not have; its readers show it.
@@ -226,9 +227,8 @@ export function dmLiveAwaitingConfirmSql(message: SQL): SQL {
  * message's page × chat (`page_dm_thread_unavailability`; `established`: only
  * an established one). `message` is the qualified alias of a
  * `dm_live_messages` row. The passive parity pass defers by the same test
- * (`openChatUnavailabilitySql`); the alerts do not read it yet — alert 3's
- * `message_unconfirmed`, the page summary and `sync check live-hour` take it
- * in the release after the episode (arena "vanished chat" plan §4).
+ * (`openChatUnavailabilitySql`), and alert 3's `message_unconfirmed` and `sync
+ * check live-hour` leave such a chat out (`dmLiveUnconfirmedSql`).
  */
 export function dmLiveChatUnavailableSql(message: SQL, options: { established?: boolean } = {}): SQL {
   return openChatUnavailabilitySql({
@@ -236,6 +236,34 @@ export function dmLiveChatUnavailableSql(message: SQL, options: { established?: 
     groupId: sql`${message}.platform_conversation_id`,
     ...(options.established === undefined ? {} : { established: options.established }),
   });
+}
+
+/** Hub knows the chat of this socket message: the page has a thread row for
+ *  it. `message` is the qualified alias of a `dm_live_messages` row. */
+export function dmLiveChatKnownSql(message: SQL): SQL {
+  return sql`exists (
+    select 1 from page_dm_threads known_chat
+     where known_chat.platform_account_id = ${message}.page_id
+       and known_chat.platform_conversation_id = ${message}.platform_conversation_id)`;
+}
+
+/**
+ * The one definition of a socket message that pages the owner for its missing
+ * REST confirmation — alert 3's `message_unconfirmed` and `sync check
+ * live-hour`'s `unconfirmed_over_15m` and confirmation SLO (arena "vanished
+ * chat" plan §4): a message still awaited (`dmLiveAwaitingConfirmSql`) of a
+ * chat Hub knows (`dmLiveChatKnownSql`) that has no open unavailability
+ * episode (`dmLiveChatUnavailableSql`, refusing or established). A chat Fansly
+ * refuses to the page was answered — Hub did its part, and only a refusal of
+ * five chats within ten minutes pages (`chats_refused`). A message of a chat
+ * Hub has no thread for is counted apart, never paged (`dmLiveChatKnownSql`
+ * false): the chat's find work pages when it is quarantined (alert 2) or
+ * waits (`urgent_waiting`). The caller adds its window and the sender.
+ */
+export function dmLiveUnconfirmedSql(message: SQL): SQL {
+  return sql`(${dmLiveAwaitingConfirmSql(message)}
+    and ${dmLiveChatKnownSql(message)}
+    and not ${dmLiveChatUnavailableSql(message)})`;
 }
 
 export interface SyncLivePathFacts {
@@ -246,10 +274,14 @@ export interface SyncLivePathFacts {
    *  acked as decode debt. */
   decode: { receipts: number; debt: number };
   /** Fan messages the socket showed that no REST read confirmed for longer
-   *  than `unconfirmedAfterMs` and that are still awaited
-   *  (`dmLiveAwaitingConfirmSql`: deferred rows, excluded and hidden chats
-   *  left out), whenever the parity pass looks next. */
+   *  than `unconfirmedAfterMs` and that page the owner (`dmLiveUnconfirmedSql`:
+   *  still awaited — deferred rows, excluded and hidden chats left out — in a
+   *  chat Hub knows that Fansly does not refuse), whenever the parity pass
+   *  looks next. */
   unconfirmed: { count: number; oldestVisibleAt: Date | null };
+  /** The same age of fan messages still awaited in chats Hub has no thread
+   *  for: counted for the status, never paged. */
+  unconfirmedWithoutThread: { count: number; oldestVisibleAt: Date | null };
 }
 
 /**
@@ -281,20 +313,77 @@ export async function readSyncLivePathFacts(
   // that stays unconfirmed is almost never past it. Its age is
   // `first_visible_at`. A message the parity window passed without a REST
   // copy is deferred (`confirm_wait_reason`, no next look) and no longer
-  // counts; deletion stubs have no next look either.
-  const unconfirmed = await db.execute<{ n: number; oldest: Date | string | null }>(sql`
-    select count(*)::int as n, min(m.first_visible_at) as oldest
+  // counts; deletion stubs have no next look either. Of the awaited ones, a
+  // message of a chat Hub has no thread for is counted apart, and one of a
+  // chat Fansly refuses to the page not at all (`dmLiveUnconfirmedSql`).
+  const unconfirmed = await db.execute<{
+    n: number;
+    oldest: Date | string | null;
+    withoutThread: number;
+    withoutThreadOldest: Date | string | null;
+  }>(sql`
+    select count(*) filter (where c.pages)::int as n,
+           min(m.first_visible_at) filter (where c.pages) as oldest,
+           count(*) filter (where not c.known)::int as "withoutThread",
+           min(m.first_visible_at) filter (where not c.known) as "withoutThreadOldest"
       from dm_live_messages m
+     cross join lateral (select ${dmLiveUnconfirmedSql(sql`m`)} as pages, ${dmLiveChatKnownSql(sql`m`)} as known) c
      where m.page_id = ${input.pageId}
        and m.is_sent_by_page is false
        and m.first_visible_at < statement_timestamp() - ${input.unconfirmedAfterMs}::double precision * interval '1 millisecond'
        and ${dmLiveAwaitingConfirmSql(sql`m`)}
   `);
   const socketRow = socket.rows[0];
+  const unconfirmedRow = unconfirmed.rows[0];
   return {
     socket: { up: socketRow?.up === true, lastAliveAt: toDate(socketRow?.lastAliveAt) },
     decode: { receipts: Number(decode.rows[0]?.receipts ?? 0), debt: Number(decode.rows[0]?.debt ?? 0) },
-    unconfirmed: { count: Number(unconfirmed.rows[0]?.n ?? 0), oldestVisibleAt: toDate(unconfirmed.rows[0]?.oldest) },
+    unconfirmed: { count: Number(unconfirmedRow?.n ?? 0), oldestVisibleAt: toDate(unconfirmedRow?.oldest) },
+    unconfirmedWithoutThread: {
+      count: Number(unconfirmedRow?.withoutThread ?? 0),
+      oldestVisibleAt: toDate(unconfirmedRow?.withoutThreadOldest),
+    },
+  };
+}
+
+/** What alert 3 reads of the page's chat-unavailability episodes (arena
+ *  "vanished chat" plan §4). */
+export interface SyncChatAlertFacts {
+  /** Chats Fansly does not serve to the page: open, established episodes.
+   *  Counted for the status; never paged. */
+  unavailable: number;
+  /** Distinct chats of the page that opened an episode within the window,
+   *  and the first of those openings: `chats_refused` at the threshold. */
+  refused: { chats: number; firstOpenedAt: Date | null };
+}
+
+/**
+ * The chat-unavailability facts of one page's alert 3: its established
+ * chats, and the distinct chats that opened an episode within
+ * `refusedWindowMs` — an episode opens only on a refusal Fansly itself made
+ * (its error envelope), so several chats at once is Fansly refusing the page's
+ * chats, not a chat refusing the page: `dm-messages.head` is out of the
+ * resource hold, and nothing else would page for it. An episode counts by its
+ * opening, ended since or not.
+ */
+export async function readSyncChatAlertFacts(
+  db: Database,
+  input: { pageId: number; refusedWindowMs: number },
+): Promise<SyncChatAlertFacts> {
+  const windowStart = sql`statement_timestamp() - ${input.refusedWindowMs}::double precision * interval '1 millisecond'`;
+  const result = await db.execute<{ unavailable: number; refused: number; firstOpenedAt: Date | string | null }>(sql`
+    select count(*) filter (where e.ended_at is null and e.state = 'established')::int as unavailable,
+           count(distinct e.thread_id) filter (where e.opened_at > ${windowStart})::int as refused,
+           min(e.opened_at) filter (where e.opened_at > ${windowStart}) as "firstOpenedAt"
+      from page_dm_thread_unavailability e
+      join page_dm_threads t on t.id = e.thread_id
+     where t.platform_account_id = ${input.pageId}
+       and (e.ended_at is null or e.opened_at > ${windowStart})
+  `);
+  const row = result.rows[0];
+  return {
+    unavailable: Number(row?.unavailable ?? 0),
+    refused: { chats: Number(row?.refused ?? 0), firstOpenedAt: toDate(row?.firstOpenedAt) },
   };
 }
 
@@ -438,8 +527,13 @@ export interface SyncJournalMetrics {
   /** Pairs closer than the setting in force for the later send. */
   paceViolations: number;
   breakersOpen: number;
+  /** Open work the vendor blocks, a chat Fansly does not serve to the page
+   *  left out (`syncWorkOfUnavailableChatSql`: counted in `chatsUnavailable`). */
   blockedByVendor: number;
   quarantined: number;
+  /** Chats Fansly does not serve to the page (`sync_chats_unavailable`):
+   *  open, established unavailability episodes. */
+  chatsUnavailable: number;
 }
 
 /**
@@ -484,7 +578,8 @@ export async function readSyncJournalMetrics(
   const queue = await db.execute<{ pageId: string; breakers: number; blocked: number; quarantined: number }>(sql`
     select w.page_id::text as "pageId",
            count(*) filter (where w.breaker_until > statement_timestamp())::int as breakers,
-           count(*) filter (where w.blocked_by_vendor_at is not null)::int as blocked,
+           count(*) filter (where w.blocked_by_vendor_at is not null
+                              and not ${syncWorkOfUnavailableChatSql(sql`w`)})::int as blocked,
            count(*) filter (where w.state = 'quarantined')::int as quarantined
       from sync_work w
      where w.page_id = any(${pages})
@@ -492,6 +587,7 @@ export async function readSyncJournalMetrics(
        and w.state in ('open', 'running', 'quarantined')
      group by w.page_id
   `);
+  const chats = await countUnavailableChats(db, { pageIds: input.pageIds });
   const sendsByPage = new Map(sends.rows.map((row) => [Number(row.pageId), row]));
   const queueByPage = new Map(queue.rows.map((row) => [Number(row.pageId), row]));
   return input.pageIds.map((pageId) => {
@@ -505,6 +601,7 @@ export async function readSyncJournalMetrics(
       breakersOpen: Number(work?.breakers ?? 0),
       blockedByVendor: Number(work?.blocked ?? 0),
       quarantined: Number(work?.quarantined ?? 0),
+      chatsUnavailable: chats.get(pageId) ?? 0,
     };
   });
 }

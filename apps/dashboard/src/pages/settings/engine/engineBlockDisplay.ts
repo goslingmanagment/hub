@@ -160,6 +160,22 @@ function readText(succeededAt: string | null, now: number): string {
   return age === null ? "ещё не читалось" : `последнее чтение ${age} назад`;
 }
 
+/** The chats Fansly does not serve to the page, as the block that reads the
+ *  chats' messages counts them (`engine.chatsUnavailable`): "чатов, которые
+ *  Fansly не отдаёт: 1". Informational — a chat's unavailability episode is no
+ *  work for the owner, so it is said beside the block's state, never as
+ *  attention. Null: none (or a block that does not count them). */
+export function engineChatsUnavailableText(info: Pick<EngineBlockInfo, "chatsUnavailable">): string | null {
+  const chats = info.chatsUnavailable ?? 0;
+  return chats > 0 ? `чатов, которые Fansly не отдаёт: ${engineCount(chats)}` : null;
+}
+
+/** The block card's line of those chats, with the command that lists them. */
+export function engineChatsUnavailableLine(block: EngineBlock, pageLabel: string): string | null {
+  const text = engineChatsUnavailableText(block.engine);
+  return text === null ? null : `${text.charAt(0).toUpperCase()}${text.slice(1)} · pnpm cli sync chats unavailable --page ${pageLabel}`;
+}
+
 /** A block's quarantined and refused work: "в карантине 1, Fansly отказывает 2". */
 export function engineAttentionText(info: Pick<EngineBlockInfo, "quarantined" | "blockedByVendor">): string {
   return [
@@ -202,6 +218,8 @@ export function engineBlockSummary(block: EngineBlock, now: number = Date.now())
       break;
   }
   if (attention !== "") parts.push(attention);
+  const chats = engineChatsUnavailableText(block.engine);
+  if (chats !== null) parts.push(chats);
   parts.push(readText(block.succeededAt, now));
   return parts.join(" · ");
 }

@@ -4,6 +4,7 @@ import type * as DbModule from "@agency_hub_core/db";
 
 const dbMocks = vi.hoisted(() => ({
   countActiveLiveWorkByResource: vi.fn(),
+  countUnavailableChats: vi.fn(),
   ensurePageSyncStates: vi.fn(),
   getConfigOverrides: vi.fn(),
   listPageSyncStates: vi.fn(),
@@ -18,6 +19,7 @@ vi.mock("@agency_hub_core/db", async () => {
   return {
     ...actual,
     countActiveLiveWorkByResource: dbMocks.countActiveLiveWorkByResource,
+    countUnavailableChats: dbMocks.countUnavailableChats,
     listSyncPages: dbMocks.listSyncPages,
     ensurePageSyncStates: dbMocks.ensurePageSyncStates,
     getConfigOverrides: dbMocks.getConfigOverrides,
@@ -150,6 +152,7 @@ describe("sync summary service", () => {
     dbMocks.getConfigOverrides.mockResolvedValue(new Map());
     dbMocks.listSyncPages.mockResolvedValue([]);
     dbMocks.countActiveLiveWorkByResource.mockResolvedValue([]);
+    dbMocks.countUnavailableChats.mockResolvedValue(new Map());
     // Read paths never seed: this snapshot serves GET /overview and (through
     // listConnectionStatuses) the Sidebar's /admin/connections on every page.
     // Any call into the seeding/repair writer is a regression.
@@ -236,6 +239,31 @@ describe("sync summary service", () => {
     dbMocks.countActiveLiveWorkByResource.mockResolvedValue([workCounts("stats.daily", { quarantined: 1 })]);
     const elsewhere = await getSyncStatusSummarySnapshot({ db: {}, config: {} } as never, { pageIds: [7], now: NOW });
     expect(elsewhere.pages[0]?.syncUx).toMatchObject({ state: "healthy", headline: "Managed by the Fansly Sync Engine" });
+  });
+
+  it("counts the chats Fansly does not serve to the page beside its state, never as attention (arena \"vanished chat\" §4)", async () => {
+    dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage()]);
+    dbMocks.listSyncPages.mockResolvedValue([buildEnginePage()]);
+    // The chat's head row is out of the vendor's block count (the repository's
+    // filter): what reaches the summary is the chat, counted.
+    dbMocks.countActiveLiveWorkByResource.mockResolvedValue([workCounts("dm-messages.head", { active: 1, blockedByVendor: 0 })]);
+    dbMocks.countUnavailableChats.mockResolvedValue(new Map([[7, 1]]));
+    const healthy = await getSyncStatusSummarySnapshot({ db: {}, config: {} } as never, { pageIds: [7], now: NOW });
+    expect(dbMocks.countUnavailableChats).toHaveBeenCalledWith({}, { pageIds: [7] });
+    expect(healthy.pages[0]?.syncUx).toMatchObject({
+      state: "healthy",
+      label: "Fansly Sync Engine",
+      headline: "Managed by the Fansly Sync Engine",
+      detail: "Managed by the Fansly Sync Engine · Chats Fansly does not serve: 1",
+      requiresAction: false,
+    });
+    // Beside work that does need the owner, both are said.
+    dbMocks.countActiveLiveWorkByResource.mockResolvedValue([workCounts("transactions.head", { quarantined: 1 })]);
+    const attention = await getSyncStatusSummarySnapshot({ db: {}, config: {} } as never, { pageIds: [7], now: NOW });
+    expect(attention.pages[0]?.syncUx).toMatchObject({
+      state: "attention",
+      detail: "1 quarantined · Chats Fansly does not serve: 1",
+    });
   });
 
   it("reads a page in handover as switching", async () => {
