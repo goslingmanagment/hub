@@ -782,6 +782,17 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # trial length and tags, which is "unknown". traffic-control's SQL reads
   # revenue_gross_mills and none of the new columns.
   "0256_page_link_stat_snapshots_net_revenue.sql"
+  # Traffic sources, "link → channel → contractor" with dates (plan
+  # 2026-10-08, PR 11, migration D): four new tables (traffic_contractors,
+  # traffic_channels, traffic_channel_contractors, traffic_link_bindings;
+  # IF NOT EXISTS), their checks and indexes, no data. No existing table,
+  # column or row changes. The previous image never names the tables: it
+  # runs unchanged after a rollback, and the bindings stay as they were
+  # (only the owner's CLI writes them). Its page erasure does not know
+  # traffic_link_bindings, whose RESTRICT FK to pages never fires (erasure
+  # keeps the pages row), so a page erased by the previous image keeps its
+  # bindings — link ids and channel keys, no fan data — until the next one.
+  "0254_traffic_link_bindings.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

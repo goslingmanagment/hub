@@ -1158,7 +1158,7 @@ describe("erasure drill (Stage 28 Task 4)", () => {
     expect(await count(`page_voice_profiles where platform_account_id = ${page.id}`)).toBe(0);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("page-scope erasure purges the page's link-stat runs and snapshots (0111)", async (context) => {
+  it("page-scope erasure purges the page's link-stat runs and snapshots (0111) and its traffic link bindings (0254)", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -1193,6 +1193,16 @@ describe("erasure drill (Stage 28 Task 4)", () => {
     );
     expect(await count(`page_link_stat_snapshots where platform_account_id = ${page.id}`)).toBe(1);
     expect(await count(`page_link_stat_runs where platform_account_id = ${page.id}`)).toBe(1);
+    // Traffic sources (0254): the page's link → channel binding goes; the
+    // channel, its contractor and their term are agency configuration and stay.
+    await testDb.pool.query(`
+      with k as (insert into traffic_contractors (key, title) values ('erasure-vendor', 'Erasure vendor') returning id),
+           c as (insert into traffic_channels (key, title) values ('erasure.channel', 'Erasure channel') returning id),
+           t as (insert into traffic_channel_contractors (channel_id, contractor_id, valid_from, valid_from_basis)
+                 select c.id, k.id, now() - interval '1 day', 'confirmed' from c, k returning channel_id)
+      insert into traffic_link_bindings (platform_account_id, link_kind, platform_link_id, channel_id, valid_from, valid_from_basis)
+      select $1, 'tracking', '42', t.channel_id, now() - interval '1 day', 'assumed_link_created' from t`, [page.id]);
+    expect(await count(`traffic_link_bindings where platform_account_id = ${page.id}`)).toBe(1);
 
     // R4 financial receipts have JSON attribution, so FK inventory alone
     // cannot find them. Erase this page and retain the global diagnostic.
@@ -1217,6 +1227,10 @@ describe("erasure drill (Stage 28 Task 4)", () => {
     ).toBe(1);
     expect(await count(`page_link_stat_snapshots where platform_account_id = ${page.id}`)).toBe(0);
     expect(await count(`page_link_stat_runs where platform_account_id = ${page.id}`)).toBe(0);
+    expect(result.executedCounts["hot:traffic_link_bindings:delete"], "traffic_link_bindings target").toBe(1);
+    expect(await count(`traffic_link_bindings where platform_account_id = ${page.id}`)).toBe(0);
+    expect(await count("traffic_channels where key = 'erasure.channel'")).toBe(1);
+    expect(await count("traffic_channel_contractors")).toBe(1);
     expect(result.executedCounts["hot:ofapi_credit_receipts:delete"]).toBe(1);
     expect(await count("ofapi_credit_receipts where request_id = 'erasure-page-receipt'")).toBe(0);
     expect(await count("ofapi_credit_receipts where request_id = 'erasure-global-receipt'")).toBe(1);

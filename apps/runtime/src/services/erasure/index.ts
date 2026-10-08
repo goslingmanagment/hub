@@ -1922,6 +1922,10 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     // (they reference runs).
     ["page_link_stat_snapshots", "platform_account_id"],
     ["page_link_stat_runs", "platform_account_id"],
+    // Traffic sources (0254): the page's link → channel bindings name its
+    // links; RESTRICT FK on pages. Channels, contractors and their terms are
+    // agency configuration, not the page's, and stay.
+    ["traffic_link_bindings", "platform_account_id"],
     ["fan_spend_daily", "platform_account_id"],
     ["fan_spend_lifetime", "platform_account_id"],
     ["fan_notes", "platform_account_id"],
