@@ -1276,6 +1276,46 @@ export async function queueOfapiLinkStatsRunsAfterRebind(
   return queued;
 }
 
+/** The slice of pg-boss an operator command needs to queue the run after a
+ * rebind from outside the worker. */
+export type OfapiLinkStatsStandaloneBoss = Omit<SyncQueueLifecycleClient, "send"> & OfapiLinkStatsSender & {
+  start(): Promise<unknown>;
+  stop(options?: { graceful?: boolean }): Promise<unknown>;
+};
+
+/** The run after a rebind, for a rebind applied OUTSIDE the worker — the
+ * operator's `ofapi:bindings:reconcile --execute`. Later reconciler passes do
+ * not report that rebind again, and the window's retries skip a page whose
+ * row says `page_auth_dead` / `page_unmapped`, so without this the page
+ * would wait for the next window. Opens its own pg-boss connection only when
+ * a rebind was applied and the series is on. Throws when the job cannot be
+ * queued: the rebind itself is already applied, and the caller says so. */
+export async function queueOfapiLinkStatsRunsAfterOperatorRebind(
+  app: Pick<AppContext, "config" | "logger">,
+  actions: ReadonlyArray<{ action: string; applied: boolean; pageId: number }>,
+  createBoss: () => OfapiLinkStatsStandaloneBoss,
+): Promise<number[]> {
+  if (!isOfapiLinkStatsReconcileEnabled(app.config) ||
+    !actions.some((action) => action.action === "rebind" && action.applied)) {
+    return [];
+  }
+  const boss = createBoss();
+  await boss.start();
+  try {
+    await ensureOfapiLinkStatsQueue(boss);
+    const pending = actions.filter((action) => action.action === "rebind" && action.applied);
+    const queued = await queueOfapiLinkStatsRunsAfterRebind(app, boss, pending);
+    if (queued.length !== new Set(pending.map((action) => action.pageId)).size) {
+      throw new Error(
+        `link-series run after rebind queued for ${queued.length} of ${pending.length} rebound page(s)`,
+      );
+    }
+    return queued;
+  } finally {
+    await boss.stop({ graceful: false }).catch(() => undefined);
+  }
+}
+
 export async function startOfapiLinkStatsWorker(
   app: AppContext,
   boss: OfapiLinkStatsSender & {

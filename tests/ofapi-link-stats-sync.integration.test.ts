@@ -23,6 +23,8 @@ import {
   ensureOfapiLinkStatsQueue,
   OFAPI_LINK_STATS_RECONCILE_QUEUE,
   OFAPI_LINK_STATS_RETRY_QUEUE,
+  parseOfapiLinkStatsTargetedJob,
+  queueOfapiLinkStatsRunsAfterOperatorRebind,
   queueOfapiLinkStatsRunsAfterRebind,
   runOfapiLinkStatsReconcile,
   startOfapiLinkStatsWorker,
@@ -125,6 +127,12 @@ function snapshot(pageId: number, linkKind: LinkStatKind, platformLinkId: string
 async function seriesOf(pageId: number, linkKind: LinkStatKind) {
   const runs = await listLinkStatRuns(appContext.db, { platformAccountId: pageId, linkKind });
   return runs.reverse();
+}
+
+function parseJob(data: unknown) {
+  const target = parseOfapiLinkStatsTargetedJob(data);
+  if (target === null) throw new Error("unreadable link-stats job payload");
+  return target;
 }
 
 /** Today's OFAPI day counters; 0 where nothing was ever written. */
@@ -2135,6 +2143,70 @@ describe("OFAPI link-stats series: the run after a rebind", () => {
       { action: "rebind", applied: true, pageId: 9 },
     ])).toEqual([]);
     expect(boss.sent).toHaveLength(1);
+  });
+
+  it("a rebind the operator applies through the CLI queues the same run — an auth-dead window is not left to the next one", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    // 09:45-like: the window's pass finds the session dead and skips the page
+    // (and the window's retries leave page_auth_dead alone).
+    const page = await seedOfapiPage("rebind-cli-of", "acct_rebind_cli_old");
+    await testDb.pool.query(`update pages set ofapi_auth_status = 'authentication_failed' where id = $1`, [page.id]);
+    appContext = {
+      ...appContext,
+      ofapi: linksClient({
+        trackingByAccount: new Map([["acct_rebind_cli_new", [trackingItem()]]]),
+        trialByAccount: new Map([["acct_rebind_cli_new", [trialItem()]]]),
+      }),
+    };
+    const fake = fakeBoss();
+    const skipped = await runOfapiLinkStatsReconcile(appContext, { now: at(0.5), boss: fake });
+    expect(skipped.pages[0]).toMatchObject({ status: "skipped", reason: "page_auth_dead" });
+    expect(skipped.queuedRetry).toBeNull();
+
+    // A dry run, or nothing applied: no connection is even opened.
+    let opened = 0;
+    const createBoss = () => {
+      opened += 1;
+      return new PgBoss({ connectionString: testDb!.connectionString, schedule: false });
+    };
+    expect(await queueOfapiLinkStatsRunsAfterOperatorRebind(appContext, [
+      { action: "rebind", applied: false, pageId: page.id },
+    ], createBoss)).toEqual([]);
+    expect(opened).toBe(0);
+
+    // 09:50-like: `ofapi:bindings:reconcile --execute` applies the rebind.
+    await rebindPage(page.id, "acct_rebind_cli_new");
+    await testDb.pool.query(`update pages set ofapi_auth_status = null where id = $1`, [page.id]);
+    expect(await queueOfapiLinkStatsRunsAfterOperatorRebind(appContext, [
+      { action: "seed_identity", applied: true, pageId: page.id },
+      { action: "rebind", applied: true, pageId: page.id },
+    ], createBoss)).toEqual([page.id]);
+    expect(opened).toBe(1);
+    const jobs = (await testDb.pool.query<{ name: string; singleton_key: string; data: unknown; minutes: number }>(
+      `select name, singleton_key, data, round(extract(epoch from start_after - created_on) / 60)::int as minutes
+         from pgboss.job where name = $1`,
+      [OFAPI_LINK_STATS_RETRY_QUEUE],
+    )).rows;
+    expect(jobs).toEqual([{
+      name: OFAPI_LINK_STATS_RETRY_QUEUE,
+      singleton_key: `rebind:${page.id}`,
+      data: { trigger: "rebind", pageId: page.id },
+      minutes: 20,
+    }]);
+
+    // What the worker then does with it: the window gets its point.
+    const run = await runOfapiLinkStatsReconcile(appContext, {
+      now: at(25), boss: fake, target: parseJob(jobs[0]!.data),
+    });
+    expect(run.pages).toEqual([expect.objectContaining({ pageLabel: page.label, status: "written" })]);
+    expect((await seriesOf(page.id, "tracking")).map((entry) => [entry.attempt, entry.status, entry.reason])).toEqual([
+      [1, "skipped", "page_auth_dead"],
+      [2, "complete", null],
+    ]);
   });
 
   it("reads the rebound page's missing pairs in the open window and nothing else", async (context) => {
