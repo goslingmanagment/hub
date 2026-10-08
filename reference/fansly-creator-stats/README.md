@@ -24,15 +24,29 @@ Every claim below carries one or more of these tags.
 | **S** | Unauthenticated `GET` to each path on `apiv3.fansly.com`, 2026-10-08 | The route exists server-side (it answers the auth gate, not `404`) |
 | **F** | FBuddy 2026.927.830 snapshot, read statically | An independent client: requests it sends to 7 of the routes, the response schema its authors declared for all 12 |
 | **H** | Six HAR captures of real sessions, 2026-08-19 … 08-21 (`artifacts/`) | The `fansly-client-check` recipe, recomputed offline over 408 recorded requests |
+| **L** | 196 saved responses of one authenticated creator session on the same build, 2026-10-08: the native traffic of all four tabs and both modals plus direct GET probes, recorded in the owner's Chrome by the parallel capture session (private pack `~/Documents/Codex/fansly-new-stats-2026-10-08/network/`, not in Git) | Real requests and bodies for all 13 routes |
 
-**Not done in this pass: no authenticated response of the new routes was captured by us.** Request
-shapes are proven (B). Response shapes are what two independent clients read or declare (B, F), not
-bodies we observed. Units marked *inferred* follow from client arithmetic only. Section 9 lists what a
-live capture has to settle, and section 8 how the hub can make one.
+**How the map and the live capture relate.** The map was derived from client code without seeing a
+response; the capture was made independently. Run over the raw bodies
+(`analysis/verify-live-pack.mjs`, `analysis/compare-live-shapes.mjs`):
+
+- of the 196 captures, 127 are requests the official UI can produce and all of them match the
+  mapped wire order, parameter names and values; the other 69 are the capture session's own probes
+  (values or ranges the UI never sends), which is where the server-behaviour facts below come from;
+- 257 of the 259 fields the official client reads occur in the bodies (the two missing are
+  `aggregationData.stories[].{id, content}`: the sampled supporters bought no locked text);
+- 45 of the 46 FBuddy-only fields occur (`offers[].media[].likes` does not: the server sends likes
+  per offer only);
+- the bodies carry 304 more leaf fields that neither client reads; they are listed per route as `L:`.
+
+**Limits of the live layer.** One account, one day, a browser session. It does not show how the
+routes answer the hub's own header plan, their quotas, or cases the sampled account lacks (refunds,
+non-empty `kind=2` tags, locked-text purchases). Section 9 lists what is settled and what is open.
 
 The bundle is the same build the 2026-10-06 quota research recorded (main SHA-256 `5e59696b…ca99ab`).
 Notation in section 5: a field listed plainly is read by the official client; a line starting with
-`F:` lists fields that only FBuddy's schema declares and the official client never reads.
+`F:` lists fields that only FBuddy's schema declares and the official client never reads; a line
+starting with `L:` lists fields seen only in the live bodies.
 
 Line references in the annexes (`main:N`, `729:N`, `381:N`) point into the pretty-printed files of
 the local, git-ignored artifact `artifacts/fansly-app-bundle-2026-10-08/` (`raw/` with `SHA256SUMS`,
@@ -151,15 +165,26 @@ and the tracking-link routes concatenate their own strings (order given below).
   Presets are 7 / 30 / 90 days (default 30); a custom range maps the picked local calendar dates to
   UTC midnights and clamps the end to today. Example for 2026-10-08, 30 days:
   `after=1788912000000&before=1791417600000`.
-- The client treats `before` as an inclusive day: it asks hourly rows with `before` = today 00:00 UTC
-  and uses rows up to the current hour. FBuddy instead sends local midnight … local end-of-day − 1 ms,
-  and `end + 1 ms` on `/account/stats/fans` (F), so the server evidently accepts bounds that are not
-  UTC midnights; the exact rule is open (section 9).
-- The comparison period is never sent. The server returns `{ value, previous }` pairs; the UI caption
-  describes `previous` as the equally long window immediately before.
+- `before` is an inclusive UTC day (L): a request for 2026-09-09 … 2026-10-08 returns 30 daily
+  points, the first on `after` and the last on `before`. The server rounds both bounds to whole UTC
+  days even at hour granularity: `after` 12:00, `before` 13:00 of one day returned that whole day.
+  FBuddy sends local midnight … local end-of-day − 1 ms (F), which the same rounding absorbs.
+- The comparison period is never sent. The server returns `{ value, previous }` pairs and
+  `/account/stats/summary` echoes both windows (`afterBucket`, `beforeBucket`, `previousAfterBucket`,
+  `previousBeforeBucket`): the previous window is the equally long one immediately before (L).
+- **The server shortens long windows without an error (L).** A request for 2019-06-01 … 2026-10-08
+  came back `200` with the echoed `afterBucket` moved to: 400 days before the end on `summary`,
+  `series` (views), `media`, `geo`, `tags`, `fans/top`; 120 days on `media/top` and
+  `media/benchmarks`; 90 days on `activehours`. `series` `revenue`/`month` and `fans` `month` reach
+  back to 2019-06-25. This is a cap on span, not on age: May 2024 asked as its own 31-day window was
+  served as asked, with revenue. Always compare the echoed bounds with the requested ones.
 - Response series points are `{ bucket, value }` with `bucket` = epoch ms of the UTC day (or month);
-  hourly rows use `hourBucket`. Both clients coerce with `Number()`; FBuddy's authors note that tag
-  series buckets "currently" arrive as decimal strings (F).
+  hourly rows use `hourBucket`. Wire types (L): echoed bounds, `dataSince` and the points and
+  `levels[]` of `summary` are numbers; `bucket`, `hourBucket`, `firstBucket`, `lastBucket` in the
+  rows of `series`, `media`, `tags`, `fans` and `fans/top` are decimal strings; ids are strings;
+  mills, counts, `source` and `productType` are numbers.
+- Every `{ value, previous }` pair also carries `delta` and `deltaPercent` (`null` without a previous
+  value) (L); the client recomputes both.
 
 **Money.** `*Mills` fields are thousandths of a dollar. The UI shows `floor(mills / 10) / 100`.
 
@@ -185,13 +210,13 @@ same signed-CDN material the hub already treats as journal-only.
 
 | Name | Values |
 |---|---|
-| `source` (surface) | `0` For You, `1` Timeline (labelled "Direct" for profile visits), `2` Suggestions, `3` Search, `4` Other; `-1` = all sources (route 4 only). The UI only ever **requests** `0`, `1`, `4`; both clients carry labels for `2` and `3`, so those are expected in responses |
+| `source` (surface) | `0` For You, `1` Timeline (labelled "Direct" for profile visits), `2` Suggestions, `3` Search, `4` Other; `-1` = all sources (route 4 only). The UI only ever **requests** `0`, `1`, `4`. Live: `views[]`, `media/shown` and media rows come for `0`, `1`, `4`; `profile.bySource[]` for `0`–`4`; `media/top` asked with `2` or `3` is answered as source `0` (see the echoed `source`) |
 | `mediaType` | `1` image, `2` video; omitted = all |
-| series `family` | `views`, `profile`, `follows`, `subscriptions`, `revenue`. Only `views` and `revenue` are requested by any code; FBuddy declares only those two |
+| series `family` | `views`, `profile`, `follows`, `subscriptions`, `revenue`. Only `views` and `revenue` are requested by any code; all five are served (L) |
 | `granularity` | `hour`, `day`, `month` |
-| media `orderBy` | `views`, `uniqueViewers`, `watchMs`, `completedViews`, `watchLift` (the last is defined, never sent) |
+| media `orderBy` | `views`, `uniqueViewers`, `watchMs`, `completedViews`, `watchLift` (the last is defined, never sent by the UI; the server accepts it, L) |
 | fans `orderBy` | `netMills`, `grossMills`, `transactions` |
-| tags `kind` | `1` VIEWER_FILTER (the only value sent), `2` POST_TAG |
+| tags `kind` | `1` VIEWER_FILTER (the only value sent), `2` POST_TAG (accepted, empty in the sampled account, L) |
 | `productType` | 2010 Media (Legacy), 2110 Media, 2016 Media Sets (Legacy), 2116 Media Sets, 7001 Tips (Legacy), 7101 Tips, 15001 Subscriptions, 18001 / 18002 Referrals, 32001 / 32101 Locked Text, 45001 / 45101 Stream Tickets, 24101 Leaderboard Prize Money, 6101 Refunds; anything else "Other" |
 
 ## 5. Route reference
@@ -246,6 +271,14 @@ revenue
                                 F: refunds {value, previous}
   series { grossMills[], netMills[], refundedNetMills[] }
 F: uniqueVisitors.previous in bySource[]
+L: afterBucket, beforeBucket, previousAfterBucket, previousBeforeBucket
+L: views[]        impressions, watchMs, imageImpressions, imageWatchMs {value, previous};
+                  uniquesApproximate, uniquesPreviousApproximate, imageUniquesApproximate, imageUniquesPreviousApproximate (boolean)
+L: engagement     mediaUnlikes, postUnlikes {value, previous}
+L: profile        profileWatchMs {value, previous} (also per bySource[] row); uniquesApproximate, uniquesPreviousApproximate
+L: subscriptions  subscriptionsMoved {value, previous}; byTier[]: subscriptionsRenewed, subscriptionsExpired,
+                  subscriptionsCancelled {value, previous}, levels[] {bucket, subscriberCount}
+L: revenue        refundedGrossMills {value, previous}; byProductType[]: refundedNetMills, refundedGrossMills {value, previous}
 ```
 
 The client dereferences without guards the sections `revenue`, `profile`, `follows`, `subscriptions`
@@ -285,6 +318,17 @@ rows[]  family=views     {source, hourBucket, views}       (hour granularity is 
 Revenue rows are one per bucket and product type. The client skips `productType 6101` for
 per-product figures but sums every row for totals.
 
+Live: the answer also echoes `family` and `bucketField` (`bucket` or `hourBucket`). Row shapes by
+family: `views` hourly `{source, hourBucket, views, impressions, watchMs, videoViews, completedViews,
+watchPctSum, replays, imageImpressions, imageViews, imageWatchMs}`, daily the same on `bucket` plus
+`uniqueViewers`, `uniqueImageViewers`; `revenue` adds `refundedGrossMills`; `profile`
+`{source, bucket, profileVisits, profileWatchMs, uniqueVisitors}`; `follows` `{bucket, follows,
+unfollows}`; `subscriptions` `{tierId, bucket, subscriptionsNew, subscriptionsRenewed,
+subscriptionsExpired, subscriptionsCancelled, subscriptionsMovedIn, subscriptionsMovedOut}`.
+`views` asked at `month` is answered at `day` (echoed `granularity=day`). Hourly views were served
+for a 400-day span. Hourly revenue has rows only for hours with a sale, so the three-day call is
+often empty. Rows exist only for buckets with activity.
+
 ### 5.3 `GET /account/stats/media/top`
 
 | Param | Type | UI sends |
@@ -312,7 +356,12 @@ offers[]                        server-ordered; rank = index + 1
 aggregationData
   creatorMediaOfferLocations[]  {mediaOfferId, correlationId (= post id), createdAt}
   accountMedia[], …             generic join
+L: source, mediaType, afterBucket, beforeBucket (echo); offers[].unlikes; media[]: impressions, replays, mediaOfferId
 ```
+
+Live: `aggregationData` holds `accountMedia`, `accountMediaBundles` and `creatorMediaOfferLocations`
+(the full location shape of 5.4). The list is capped at 100 offers: `limit=200` and `limit=1000`
+returned the same 100. An empty surface answers `offers: []`.
 
 ### 5.4 `GET /account/stats/media`
 
@@ -345,6 +394,12 @@ aggregationData
 F: top-level mediaOfferId, source, afterBucket, beforeBucket
 ```
 
+Live: `totals` is a full row (the `daily[]` fields without `bucket`, plus `mediaOfferId`) and does
+not change with the window; `hours[]` rows carry the full metric set and spanned about 45 hours;
+`retention[]` has 20 points for a video, none for an image; `tags[]` and `tagSeries[]` rows carry
+`kind`. With `source=-1` the answer has `daily[]` per surface but `totals: null` and empty
+`retention`, `tags` and `hours`, so it does not replace the per-surface calls.
+
 `daily[].uniqueViewers` is per day; both clients sum it, which double-counts across days.
 In the `source=-1` answer the official client groups `daily[]` by `source` and renders only
 surfaces 0, 1 and 4; rows of 2 or 3 are dropped.
@@ -374,6 +429,9 @@ buckets[]
 F: top-level source, afterBucket, beforeBucket
 ```
 
+Live: six buckets, `lengthBucket` 0–5 = up to 6 s, 6–10 s, 10–20 s, 20–40 s, 40–90 s, over 90 s
+(`maxMs: 0` on the last).
+
 The "benchmark" is the creator's own average for videos of similar length, not a platform percentile.
 A list row gets a verdict only when the video has ≥ 50 video views, a known duration that falls into
 a bucket, and that bucket has ≥ 3 videos and non-zero `videoViews`. The modal's comparison table
@@ -393,6 +451,9 @@ rows[]   {source, mediaShown, previousMediaShown}
 
 UI text: the number of different videos the surface put in front of someone in the last 24 hours.
 
+Live: the answer echoes `endHour` and `hours`. With `end=0` the server resolves `endHour` to the
+current hour; an explicit `end` and `hours=48` were honoured. Rows came for surfaces 0, 1 and 4.
+
 ### 5.7 `GET /account/stats/geo`
 
 | Param | Type | UI sends |
@@ -407,8 +468,12 @@ rows[]          {country, views, imageViews, avgWatchPercent (0–100), avgWatch
 profileRows[]   {country, profileVisits}
 ```
 
-Rendered in server order. `country` goes through `Intl.DisplayNames(…, {type: "region"})` upper-cased,
-so ISO 3166-1 alpha-2 is expected; empty means "Unknown". No subdivisions.
+Rendered in server order. `country` goes through `Intl.DisplayNames(…, {type: "region"})` upper-cased;
+empty means "Unknown". No subdivisions.
+
+Live: `country` is an upper-case two-letter code. `limit` applies to both arrays (10 and 10); with
+`limit=200` the answer had 198 `rows` and 47 `profileRows`. Rows also carry `videoViews`, `watchMs`,
+`watchPctSum`; the answer echoes `source` and the bounds.
 
 ### 5.8 `GET /account/stats/activehours`
 
@@ -425,8 +490,9 @@ views[7][24], imageViews[7][24]     counts; first index weekday with 0 = Sunday,
 
 The official client reads `[day][hour]` and does no time-zone arithmetic of its own, while the card
 says "by weekday and hour in your time zone", so the UI relies on the server applying the offset.
-FBuddy labels the same indices Sun–Sat but its reader tolerates a 24×7 layout as well, so the
-orientation is a live question.
+
+Live: both matrices are 7 × 24 on every surface, and the answer echoes `timezoneOffsetMinutes`,
+`source` and the bounds.
 
 ### 5.9 `GET /account/stats/tags`
 
@@ -449,10 +515,23 @@ F: top-level source, kind, afterBucket, beforeBucket, liftAvailable
 
 `liftPoints` is in percentage points and may be `null` ("no other viewers to compare").
 
+Live: lift exists only for windows of at most 120 days. At 120 days `liftAvailable` is `true` and
+rows carry `liftPoints` and `liftVideoViews`; at 121 days it is `false` and both fields are absent,
+not zero. `limit=200` returned up to 112 rows. `series[].bucket` is a decimal string.
+`aggregationData` holds `tags` only, with the full tag shape of 5.4.
+
 ### 5.10 `GET /account/stats/posts`
 
-Params `postIds` (comma-joined), `after`, `before`, `overwriteAccountId`. The route exists (S) but
-nothing in the web app calls it and FBuddy leaves its payload schema open. Response unknown.
+Params `postIds` (comma-joined), `after`, `before`, `overwriteAccountId`. Nothing in the web app
+calls it and FBuddy leaves its payload schema open.
+
+```
+L: afterBucket, beforeBucket
+L: rows[]   {postId, likes, unlikes, comments}
+```
+
+Live: totals for the window, no per-day series. The answer is sparse: 72 known post ids over 400
+days gave one row, two ids over 30 days none. Whether a missing id means zero is not established.
 
 ### 5.11 `GET /account/stats/fans/top`
 
@@ -470,6 +549,9 @@ aggregationData   accounts[] for the fan ids
 ```
 
 No paging in the client.
+
+Live: rows also carry `refundedGrossMills`; `aggregationData` holds `accounts` only; the answer
+echoes the bounds. `limit=200` over the 400-day cap returned 89 rows.
 
 ### 5.12 `GET /account/stats/fans`
 
@@ -490,6 +572,8 @@ aggregationData
 ```
 
 The modal opens from the fan lists and from messaging, the profile page and the subscriber dashboard.
+
+Live: the answer echoes `fanId`, `granularity` and the bounds; `aggregationData` holds `accounts`.
 
 ### 5.13 `GET /account/wallets/earnings/transactions/accounts`
 
@@ -524,6 +608,13 @@ aggregationData
 4 cancelled, 5 refunded, 6 refund pending; the client also treats a bare `8` as cancelled.
 `correlationId` joins a row to `subscriptionHistory`, `tips` or `stories`; for media types it is the
 media or bundle id.
+
+Live: `nextCursor` equalled the last `transactionId` on every page, and two consecutive pages of 30
+did not overlap. Rows also carry `accountId`, `correlationAccountId`, `walletId`, `transactionType`,
+`transactionCorrelationId`, `destinationTax`. `subscriptionHistory[]` entries also carry `accountId`,
+`subscriberId`, `subscriptionTierId`, `planId`, `promoId`, `giftCodeId`, `price`, `renewPrice`,
+`duration`, `createdAt`, `endsAt`; `tips[]` entries `amount`, `createdAt`, `senderId`, `receiverId`,
+`targets[] {targetId, targetType}`. The sample had only `status 2`, `destination 2` rows.
 
 ## 6. Existing routes the new pages reuse
 
@@ -587,17 +678,26 @@ Nothing in the hub requests these routes yet.
   backfilled and "earnings are complete"; `dataSince` reports where collection starts.
 - **Units.** Revenue here is mills, the platform-ledger unit, so no conversion is needed.
 
-## 9. Open questions for a live capture
+## 9. Settled and open
 
-1. Does the hub's header plan (no `fansly-client-check` on these paths) get a `200`, or is the check required?
-2. Inclusivity of `before`, and the rule for `previous`.
-3. JSON types of `bucket`, `hourBucket`, `firstBucket`, `lastBucket` and the mills fields (number or decimal string).
-4. Fields neither client reads; which `aggregationData` keys each route returns.
-5. `/account/stats/series` with `family` = `profile`, `follows`, `subscriptions`, and `views` at `day` / `month`.
-6. Limits: maximum `limit` on routes 3, 7, 9, 11, 13; maximum range for `hour` granularity and whether the server downgrades it; summary bucket size for very long windows.
-7. `source` = `2` or `3` as a request filter; `orderBy=watchLift`; tags `kind=2`.
-8. Orientation of the `activehours` matrices and whether the offset is applied server-side.
-9. `end` on `/account/stats/media/shown`.
-10. Whether `/account/stats/series` and `byProductType` emit `productType 6101` rows (totals would double-count refunds), and which date a refund is booked on.
-11. Response of `/account/stats/posts`.
-12. Rate limits of the family.
+Settled by the live capture (L), details in sections 4 and 5:
+
+- `before` is an inclusive UTC day, bounds are rounded to days, `previous` is the preceding window of equal length.
+- Wire types of time, id and money fields.
+- The fields neither client reads, and the `aggregationData` keys of each route.
+- `/account/stats/series` serves all five families; `views` has no monthly form.
+- Span caps of 400, 120 and 90 days; the 100-offer cap of `media/top`.
+- `source` 2 and 3 are not filters of `media/top`; `orderBy=watchLift` works.
+- `activehours` is 7 × 24 with the offset applied by the server.
+- `end=0` on `media/shown` means the current hour.
+- The response of `/account/stats/posts`.
+
+Still open:
+
+1. Whether the hub's header plan (no `fansly-client-check` on `/account/stats/*`) gets a `200`. The capture was a browser session, which always sends the check.
+2. Quotas of the family and whether its routes share a bucket.
+3. Refunds: the sampled account had none, so `productType 6101` rows, the date a refund is booked on, `status` 5 / 6 and `destination 1` rows are known from client code only.
+4. A non-empty `tags` answer for `kind=2`, and the `stories` join of route 13.
+5. Maximum `limit` on `geo`, `tags`, `fans/top` and route 13 (the observed answers were below the limit asked).
+6. `overwriteAccountId`.
+7. Whether a post id missing from `/account/stats/posts` means zero engagement.
