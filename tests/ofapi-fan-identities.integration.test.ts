@@ -6,15 +6,20 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import {
   createModel,
   createOnlyFansPage,
+  ensurePageSyncStates,
   findPageById,
   getCheckpoint,
+  requestPageSync,
   setPageOfapiAccountId,
+  startSyncRun,
   upsertCheckpointProgress,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import type { OfapiClient, OfapiListPage } from "../apps/runtime/src/services/ofapi.ts";
 import { SyncChunkBudget } from "../apps/runtime/src/services/sync/chunk-budget.ts";
+import { SyncPayloadPersistenceError } from "../apps/runtime/src/services/sync/errors.ts";
+import { executeNextSyncPageChunk } from "../apps/runtime/src/services/sync/executor.ts";
 import { syncOfapiFanIdentities } from "../apps/runtime/src/services/sync/ofapi-fan-identities.ts";
 import {
   resetIntegrationDatabase,
@@ -120,12 +125,19 @@ async function seedMappedPage(label = "links-of") {
   return page;
 }
 
-async function buildInput(page: { id: number }) {
+async function buildInput(page: { id: number }, options?: { syncRunId?: number }) {
   const stored = await findPageById(appContext.db, page.id);
   if (!stored) {
     throw new Error(`page ${page.id} missing`);
   }
+  // Each chunk has its own run, as in the executor: the journal rows point at it.
+  const syncRunId = options?.syncRunId ?? (await startSyncRun(appContext.db, {
+    platformAccountId: page.id,
+    stream: "fan_identities",
+    trigger: "manual",
+  }))!.id;
   return {
+    syncRunId,
     pageContext: {
       page: stored.page,
       platform: "onlyfans" as const,
@@ -567,5 +579,197 @@ describe("OFAPI fan identities (tracking/trial links)", () => {
       "tracking:10:subscribers:0",
       "tracking:10:spenders:0",
     ]);
+  });
+
+  it("journals every list page with its link and request, untrimmed", async () => {
+    const page = await seedMappedPage("links-journal-of");
+    const trackingLinks = [{ id: 42, campaignName: "IG Bio", subscribersCount: 101 }];
+    const trialLinks = [{ id: 7, trialLinkName: "Trial A", isFinished: true }];
+    const firstSubscribers = Array.from({ length: 100 }, (_, index) =>
+      linkUser(400000 + index, `journal${index}`, `Journal ${index}`)
+    );
+    const lastSubscribers = [
+      { ...linkUser(400100, "journal100", "Journal 100"), subscribedOnData: { subscribeAt: "2026-10-01T00:00:00+00:00" } },
+      // The parser drops a record without an id; the journal keeps it.
+      { username: "no-id", name: "No Id" },
+    ];
+    const spenders = [{
+      onlyfans_id: "400100",
+      username: "journal100",
+      name: "Journal 100",
+      revenue: { total: 12.5, chargebacks: 0, calculated_at: "2026-10-08T00:00:00+00:00" },
+    }];
+    const trialSubscribers = [linkUser(400200, "trial1", "Trial One")];
+    const nextPageUrl = `/api/${OFAPI_ACCOUNT}/tracking-links/42/subscribers?offset=100&limit=100`;
+    appContext = {
+      ...appContext,
+      ofapi: {
+        listTrackingLinks: async () => listPage(trackingLinks),
+        listTrialLinks: async () => listPage(trialLinks),
+        listTrackingLinkUsers: async (
+          _context: unknown,
+          _accountId: string,
+          _linkId: string,
+          kind: string,
+          options: { offset?: number },
+        ) => {
+          if (kind === "spenders") return listPage(spenders);
+          return (options.offset ?? 0) === 0
+            ? { ...listPage(firstSubscribers, true), nextPageUrl }
+            : listPage(lastSubscribers);
+        },
+        listTrialLinkSubscribers: async () => listPage(trialSubscribers),
+      } as unknown as OfapiClient,
+    };
+
+    const input = await buildInput(page);
+    const result = await syncOfapiFanIdentities(appContext, input);
+    expect(result.satisfied).toBe(true);
+
+    const journal = await testDb!.pool.query(
+      `select endpoint, sync_run_id::int as sync_run_id, payload_kind, request_params, response_payload
+       from sync_raw_payloads where page_id = $1 order by id`,
+      [page.id],
+    );
+    expect(journal.rows.every((row) =>
+      row.sync_run_id === input.syncRunId && row.payload_kind === "mapping_critical"
+    )).toBe(true);
+    const context = { limit: 100, requestSeq: 1, ofapiAccountId: OFAPI_ACCOUNT, hasNextPage: false, nextPageUrl: null };
+    const link42 = { kind: "tracking", id: "42" };
+    expect(journal.rows.map((row) => [row.endpoint, row.response_payload])).toEqual([
+      ["link_lists_tracking_live", { ...context, linkKind: "tracking", offset: 0, items: trackingLinks }],
+      ["link_lists_trial_live", { ...context, linkKind: "trial", offset: 0, items: trialLinks }],
+      ["link_fans_tracking_subscribers", {
+        ...context, link: link42, list: "subscribers", offset: 0, items: firstSubscribers,
+        hasNextPage: true, nextPageUrl,
+      }],
+      ["link_fans_tracking_subscribers", {
+        ...context, link: link42, list: "subscribers", offset: 100, items: lastSubscribers,
+      }],
+      ["link_fans_tracking_spenders", { ...context, link: link42, list: "spenders", offset: 0, items: spenders }],
+      ["link_fans_trial_subscribers", {
+        ...context, link: { kind: "trial", id: "7" }, list: "subscribers", offset: 0, items: trialSubscribers,
+      }],
+    ]);
+    expect(journal.rows.map((row) => row.request_params)).toEqual([
+      { limit: 100, offset: 0, path: "/:accountId/tracking-links" },
+      { limit: 100, offset: 0, path: "/:accountId/trial-links" },
+      { limit: 100, offset: 0, path: "/:accountId/tracking-links/:trackingLinkId/subscribers" },
+      { limit: 100, offset: 100, path: "/:accountId/tracking-links/:trackingLinkId/subscribers" },
+      { limit: 100, offset: 0, path: "/:accountId/tracking-links/:trackingLinkId/spenders" },
+      { limit: 100, offset: 0, path: "/:accountId/trial-links/:trialLinkId/subscribers" },
+    ]);
+
+    // The observation half of the same dual-write carries the same body.
+    const observations = await testDb!.pool.query(
+      `select kind, source, platform, payload from observations where account_id = $1 order by id`,
+      [page.id],
+    );
+    expect(observations.rows).toEqual(journal.rows.map((row) => ({
+      kind: row.endpoint,
+      source: "pull",
+      platform: "onlyfans",
+      payload: row.response_payload,
+    })));
+  });
+
+  // A run id no sync_runs row has makes the raw insert fail on its foreign
+  // key: the journal write is the first thing that can fail after the fetch.
+  it.each([
+    ["a link list", "links"],
+    ["a link's users", "users"],
+  ] as const)("fails the chunk when the journal write for %s fails, before the page is read", async (_label, phase) => {
+    const page = await seedMappedPage(`links-journal-fail-${phase}-of`);
+    const cursor = {
+      version: 2,
+      revision: 1,
+      phase,
+      linkType: phase === "links" ? "tracking" : null,
+      linkOffset: 0,
+      trackingLinkIds: phase === "links" ? [] : ["42"],
+      trialLinkIds: [],
+      completedTargetKeys: [],
+      activeTargetKey: null,
+      activeOffset: 0,
+    };
+    await upsertCheckpointProgress(appContext.db, {
+      platformAccountId: page.id,
+      stream: "fan_identities",
+      state: cursor,
+    });
+    const { client, calls } = fakeLinksClient({
+      trackingLinks: [{ id: 42 }],
+      trialLinks: [],
+      trackingUsers: new Map([["42:subscribers", [linkUser(500001, "lost", "Lost")]]]),
+      trialSubscribers: new Map(),
+    });
+    appContext = { ...appContext, ofapi: client };
+
+    const failure = await syncOfapiFanIdentities(appContext, await buildInput(page, { syncRunId: 2_000_000_000 }))
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(SyncPayloadPersistenceError);
+    expect((failure as SyncPayloadPersistenceError).endpoint)
+      .toBe(phase === "links" ? "link_lists_tracking_live" : "link_fans_tracking_subscribers");
+    // One page was bought and nothing read it: no fan, no discovered link, and
+    // the cursor still points at the page the retry has to ask for again.
+    expect(calls).toEqual([phase === "links" ? "tracking-links" : "tracking:42:subscribers"]);
+    expect((await testDb!.pool.query("select count(*)::int as n from fans")).rows).toEqual([{ n: 0 }]);
+    expect((await getCheckpoint(appContext.db, page.id, "fan_identities"))?.state).toEqual(cursor);
+  });
+
+  it("journals the pages of every executor chunk of one request", async () => {
+    appContext = createTestAppContext(testDb!, {
+      ofapiFanIdentitiesSyncEnabled: true,
+      ofapiCreditLedgerEnabled: true,
+      ofapiAudienceMaxRequestsPerRun: 3,
+    });
+    const page = await seedMappedPage("links-journal-chunks-of");
+    const { client, calls } = fakeLinksClient({
+      trackingLinks: [{ id: 42 }],
+      trialLinks: [{ id: 7 }],
+      trackingUsers: new Map([
+        ["42:subscribers", [linkUser(600001, "chunk1", "Chunk One")]],
+        ["42:spenders", [{ onlyfans_id: "600002", username: "chunk2", name: "Chunk Two" }]],
+      ]),
+      trialSubscribers: new Map([["7", [linkUser(600003, "chunk3", "Chunk Three")]]]),
+    });
+    appContext = { ...appContext, ofapi: client };
+    await ensurePageSyncStates(appContext.db, { pageId: page.id });
+    await testDb!.pool.query(
+      "update page_sync_states set applied_seq = request_seq, status = 'idle' where page_id = $1",
+      [page.id],
+    );
+    await requestPageSync(appContext.db, { pageId: page.id, streams: ["fan_identities"], source: "manual" });
+
+    const first = await executeNextSyncPageChunk(appContext, page.id);
+    expect(first).toMatchObject({ kind: "yielded", stream: "fan_identities" });
+    const second = await executeNextSyncPageChunk(appContext, page.id);
+    expect(second).toMatchObject({ kind: "success", stream: "fan_identities" });
+    expect(calls).toHaveLength(5);
+
+    // Both chunks restart the per-chunk fetch counter under one request
+    // revision, so only the run id keeps the second chunk's observations from
+    // repeating the first chunk's idempotency keys and being dropped.
+    const kinds = [
+      "link_lists_tracking_live",
+      "link_lists_trial_live",
+      "link_fans_tracking_subscribers",
+      "link_fans_tracking_spenders",
+      "link_fans_trial_subscribers",
+    ];
+    const journal = await testDb!.pool.query(
+      `select endpoint, sync_run_id::int as sync_run_id from sync_raw_payloads where page_id = $1 order by id`,
+      [page.id],
+    );
+    expect(journal.rows).toEqual([
+      ...kinds.slice(0, 3).map((endpoint) => ({ endpoint, sync_run_id: first.runId })),
+      ...kinds.slice(3).map((endpoint) => ({ endpoint, sync_run_id: second.runId })),
+    ]);
+    const observations = await testDb!.pool.query(
+      `select kind, producer from observations where account_id = $1 order by id`,
+      [page.id],
+    );
+    expect(observations.rows).toEqual(kinds.map((kind) => ({ kind, producer: "sync:onlyfans:fan_identities" })));
   });
 });
