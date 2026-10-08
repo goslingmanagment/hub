@@ -54,6 +54,7 @@ import {
   buildFanslyWireTarget,
   FANSLY_WIRE_IDS,
   fanslyWireSpec,
+  isFanslyErrorEnvelope,
   type FanslyWireId,
   type FanslyWireOutcome,
   type FanslyWireRead,
@@ -73,8 +74,8 @@ import {
   IDENTITY_CHECK_KEY,
   identityCandidateOf,
   onOutcome,
+  RESOURCE_BREAKER_UNCOUNTED_KEYS,
   RESOURCE_BREAKER_WINDOW_MS,
-  RESOURCE_HOLD_EXEMPT_KEYS,
   resourceFileOf,
   type AlertDecision,
   type OutcomeDecision,
@@ -1038,17 +1039,23 @@ export async function capture(
           pageId: d.pageId,
           file,
           windowMs: RESOURCE_BREAKER_WINDOW_MS,
-          exemptKeys: [...RESOURCE_HOLD_EXEMPT_KEYS],
+          exemptKeys: [...RESOURCE_BREAKER_UNCOUNTED_KEYS],
         })
         : 0,
       requestCredentialsGeneration: admission.credentialsGeneration ?? null,
       attempt: { id: admission.attemptId, sentAt: armed.sentWall },
     });
     // The resource's own word on what this outcome means for it (a failed
-    // WebSocket handshake belongs to the socket's reconnect ladder).
+    // WebSocket handshake belongs to the socket's reconnect ladder; Fansly's
+    // own error envelope is an excluded chat's answer).
     const decision = module.outcome === undefined
       ? decided
-      : module.outcome(decided, { request: admission.request, httpStatus: classified.httpStatus, outcome: outcome.kind });
+      : module.outcome(decided, {
+        request: admission.request,
+        httpStatus: classified.httpStatus,
+        outcome: outcome.kind,
+        fanslyErrorEnvelope: read?.kind === "http_error" && isFanslyErrorEnvelope(read.envelope),
+      });
     await writeOutcomeDecision(tx, d, {
       attemptId: admission.attemptId,
       work: admission.work,

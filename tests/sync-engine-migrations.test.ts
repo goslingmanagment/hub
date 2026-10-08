@@ -1010,3 +1010,52 @@ describe("dm_live_confirm_wait_reason.sql (arena \"vanished chat\", R1: a socket
     expect(live).toContain("and m.confirm_outcome is distinct from 'not_found'");
   });
 });
+
+describe("sync_excluded_probe_not_served.sql (arena D1: excluded-chat probes Fansly answered with its error envelope)", () => {
+  // Found by its name, not its number: the number is the next free one at merge.
+  const found = readdirSync("packages/db/migrations").filter((file) => file.endsWith("_sync_excluded_probe_not_served.sql"));
+  const migration = found[0] ?? "";
+  const text = found.length === 1 ? readFileSync(`packages/db/migrations/${migration}`, "utf8") : "";
+  const sql = stripComments(text);
+  const statements = topLevelStatements(sql);
+
+  it("exists once, after the migration that made the sync work (0228)", () => {
+    expect(found).toHaveLength(1);
+    expect(migration > "0228_sync_engine_core.sql").toBe(true);
+  });
+
+  it("is one data update of open excluded-chat probes, and no DDL", () => {
+    expect(statements).toHaveLength(1);
+    const [update] = statements;
+    expect(update).toMatch(/^with answered as \( select distinct on \(a\.work_id\) /);
+    expect(update).toContain("where w.resource = 'probe.excluded-chat' and w.state = 'open' and not w.shadow and a.outcome = 'response' order by a.work_id, a.id desc");
+    expect(update).toMatch(/\) update sync_work w set state = 'done', closed_at = clock_timestamp\(\), close_reason = 'not_served:' \|\| r\.http_status, /);
+    expect(update).toMatch(/ from refused r where w\.id = r\.work_id and w\.state = 'open' and w\.demand_revision <= r\.demand_revision$/);
+    expect(sql).not.toMatch(/\b(alter|create|drop|rename|truncate|delete|insert|grant|trigger)\b/i);
+    // The probe file's resource hold is left to end by itself.
+    expect(sql).not.toMatch(/sync_holds|sync_pages/);
+  });
+
+  it("reads the chat's answer as the engine does: a subject_failure whose journaled body is Fansly's error envelope", () => {
+    const flat = sql.replace(/\s+/g, " ");
+    expect(flat).toContain("where x.error_class = 'subject_failure' and x.http_status is not null and o.kind = 'dm_messages:failed'");
+    // isFanslyErrorEnvelope: success false, a numeric code, non-empty details;
+    // a body that is no JSON (a proxy's HTML) is never cast.
+    expect(flat).toContain("case when pg_input_is_valid(o.payload ->> 'bodyText', 'jsonb') then (o.payload ->> 'bodyText')::jsonb end as body");
+    expect(flat).toContain("and b.body -> 'success' = 'false'::jsonb");
+    expect(flat).toContain("and jsonb_typeof(b.body -> 'error' -> 'code') = 'number'");
+    expect(flat).toContain("and (b.body -> 'error' ->> 'details') ~ '[^[:space:]]'");
+  });
+
+  it("closes as the outcome hook closes, with the evidence in the result", () => {
+    const flat = sql.replace(/\s+/g, " ");
+    for (const cleared of ["failure_count = 0", "breaker_until = null", "blocked_by_vendor_at = null", "waiting_reason = null", "waiting_until = null"]) {
+      expect(flat, cleared).toContain(cleared);
+    }
+    expect(flat).toContain("'served', false, 'httpStatus', r.http_status, 'errorClass', 'subject_failure', 'attemptId', r.attempt_id, 'observationId', r.observation_id, 'attemptIds', ");
+  });
+
+  it("allows application rollback after the data-only migration", () => {
+    expect(rollbackCompatible()).toContain(`"${migration}"`);
+  });
+});

@@ -124,13 +124,14 @@ describe("media-download.fetch", () => {
       request: { spec: "cdn.media", params: { hop: 0 } },
       httpStatus: 403,
       outcome: "response",
+      fanslyErrorEnvelope: false,
     });
     expect(decided.work).toEqual({ action: "close", closeReason: "subject_terminal:403", result: { failure: "http_status", httpStatus: 403 } });
     expect(decided.pageHold).toEqual({ action: "keep" });
   });
 
   it("ends the download on a transport failure without feeding the page's network streak", () => {
-    const step = { request: { spec: "cdn.media" as const, params: { hop: 1 } }, httpStatus: null };
+    const step = { request: { spec: "cdn.media" as const, params: { hop: 1 } }, httpStatus: null, fanslyErrorEnvelope: false };
     const timedOut = mediaDownloadOutcome(decide("network", "media-download.fetch"), { ...step, outcome: "timeout" });
     expect(timedOut.work).toEqual({ action: "close", closeReason: "download_failed", result: { failure: "timeout", httpStatus: null } });
     expect(timedOut.networkFailureStreak).toBeNull();

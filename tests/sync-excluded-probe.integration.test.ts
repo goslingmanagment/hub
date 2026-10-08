@@ -1,6 +1,16 @@
+import { createHash } from "node:crypto";
+import { readdirSync, readFileSync } from "node:fs";
+
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { getSyncPage, insertAuditEvent, NEVER_CANONICALIZED_PARSE_VERSION, upsertFans, type Database } from "@agency_hub_core/db";
+import {
+  getSyncPage,
+  insertAuditEvent,
+  insertObservation,
+  NEVER_CANONICALIZED_PARSE_VERSION,
+  upsertFans,
+  type Database,
+} from "@agency_hub_core/db";
 import type { FanslyMessagingGroupsPage, FanslyWireOutcome, FanslyWireRequest } from "@agency_hub_core/fansly";
 import {
   FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS,
@@ -10,6 +20,7 @@ import {
 
 import { familyForObservation } from "../apps/runtime/src/services/canonicalize/index.ts";
 import { runCanonicalization } from "../apps/runtime/src/services/canonicalize-driver.ts";
+import { RESOURCE_BREAKER_SUBJECTS } from "../apps/runtime/src/sync/engine/errors.ts";
 import { createEngineRegistry } from "../apps/runtime/src/sync/engine/resource.ts";
 import {
   liftExcludedChats,
@@ -23,8 +34,10 @@ import { createFanslyRegistry, FANSLY_RESOURCE_SPECS } from "../apps/runtime/src
 import { applyListPage } from "../apps/runtime/src/sync/fansly/resources/dm-conversations.ts";
 import { fanProfilesProbeModule } from "../apps/runtime/src/sync/fansly/resources/fan-profiles.ts";
 import { EXCLUDED_CHAT_PROBE_KEY } from "../apps/runtime/src/sync/fansly/resources/probe.ts";
+import { requestSyncProbe } from "../apps/runtime/src/sync/inspect.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import {
+  countRows,
   makeTestActor,
   okResponse,
   RecordingAlerts,
@@ -42,7 +55,11 @@ import {
 // driver pass turns it into nothing (no events, no messages, no archive rows),
 // nor does a version bump of the DM family that replays DM history; a 403 closes the
 // probe `served: false` without holding the page, and the next probe goes
-// out; a 401 holds the page; the report and its record; the lift — live
+// out; a 500 carrying Fansly's own error envelope closes it `served: false`
+// too, while a proxy's 502 stays on the subject's ladder, and failing probes
+// (excluded chats and `probe.manual`) never hold the `probe` file; the
+// migration that closes the probes the old rule left open; a 401 holds the
+// page; the report and its record; the lift — live
 // only, on a recorded verdict of ≥ 10 chats, ≥ 80 % served, no page-level
 // error — clears the reason from bound threads of that reason only; the next
 // list pass keeps them lifted on that page and excludes them on a page
@@ -151,6 +168,20 @@ function chatOf(req: FanslyWireRequest): number {
   expect(url.pathname.endsWith("/message")).toBe(true);
   expect(url.searchParams.get("before")).toBeNull();
   return Number(url.searchParams.get("groupId")!.slice(-5));
+}
+
+/** What lilly-1's excluded chats answer, every time (2026-10-02 → 10-08). */
+const GROUP_MESSAGES_500 = { success: false, error: { code: 500, details: "error getting group messages" } };
+
+/** A proxy's or a gateway's own page: no Fansly envelope. */
+function proxyPage(status: number): FanslyWireOutcome {
+  const bodyText = `<html><head><title>${status} Bad Gateway</title></head><body><center>nginx</center></body></html>`;
+  return { kind: "response", status, headers: { "content-type": "text/html" }, bodyText, bodyBytes: bodyText.length, sendMark: "request_start" };
+}
+
+/** An empty 5xx. */
+function emptyStatus(status: number): FanslyWireOutcome {
+  return { kind: "response", status, headers: {}, bodyText: "", bodyBytes: 0, sendMark: "request_start" };
 }
 
 /** Fansly's head page of chat n: messages 3, 2, 1 (newest first). */
@@ -332,6 +363,114 @@ describe("probe.excluded-chat", () => {
     const report = await readExcludedProbeReport(db(), { pageLabel: "probe-forbidden" });
     expect(report.summary).toMatchObject({ reason: MISSING, probed: 2, served: 1, notServed: 1, pending: 0, pageErrors: 0 });
     expect(report.liftRefusal).toMatch(/at least 10/);
+  });
+
+  it("a 500 with Fansly's error envelope closes the probe `not_served:500` in one request; a proxy's 502 stays on the subject's ladder", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage("probe-500");
+    await seedThread(pageId, 1, { reason: MISSING, ageMs: HOUR });
+    await seedThread(pageId, 2, { reason: MISSING, ageMs: 2 * HOUR });
+    await probe("probe-500");
+
+    const { requests } = await runLive(
+      pageId,
+      (req) => (chatOf(req) === 1 ? statusResponse(500, GROUP_MESSAGES_500) : proxyPage(502)),
+      async () => (await closedProbes(pageId)) === 1 && (await probeWork(pageId, 2))?.failure_count === 1,
+    );
+    expect(requests.map(chatOf).sort()).toEqual([1, 2]);
+    expect(await probeWork(pageId, 1)).toMatchObject({
+      state: "done",
+      close_reason: "not_served:500",
+      result: { served: false, httpStatus: 500, errorClass: "subject_failure" },
+      waiting_reason: null,
+      failure_count: 0,
+      breaker_until: null,
+    });
+    expect(await probeWork(pageId, 2)).toMatchObject({ state: "open", waiting_reason: "subject_breaker", failure_count: 1 });
+    expect(await holds(pageId)).toEqual([]);
+    // Both answers journaled before anything else (capture before parse).
+    const journal = await testDb.pool.query<{ kind: string; body: string }>(
+      "select kind, payload ->> 'bodyText' as body from observations where account_id = $1 order by id",
+      [pageId],
+    );
+    expect(journal.rows.map((row) => row.kind)).toEqual(["dm_messages:failed", "dm_messages:failed"]);
+    expect(journal.rows.map((row) => row.body)).toContain(JSON.stringify(GROUP_MESSAGES_500));
+
+    const report = await readExcludedProbeReport(db(), { pageLabel: "probe-500" });
+    expect(report.summary).toMatchObject({ probed: 2, served: 0, notServed: 1, pending: 1, pageErrors: 0 });
+    expect(report.chats.find((chat) => chat.chat === groupOf(1))).toMatchObject({
+      verdict: "not_served",
+      closeReason: "not_served:500",
+      httpStatus: 500,
+      errorClass: "subject_failure",
+      attemptIds: [expect.any(Number)],
+    });
+  });
+
+  it("failing probes never hold the probe file: after five failing chats, probe.manual goes out, and its own failure holds nothing", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage("probe-mixed");
+    for (const n of [1, 2, 3, 4, 5]) await seedThread(pageId, n, { reason: MISSING, ageMs: n * HOUR });
+    await probe("probe-mixed", 5);
+    const failingSubjects = () => countRows(
+      testDb!.pool,
+      `select count(distinct subject)::int as n from sync_attempts
+        where page_id = $1 and split_part(resource, '.', 1) = 'probe' and error_class in ('subject_failure', 'envelope_unsuccessful')
+          and admitted_at > now() - interval '10 minutes'`,
+      [pageId],
+    );
+    const answered = (resource: string) => countRows(
+      testDb!.pool,
+      "select count(*)::int as n from sync_attempts where page_id = $1 and resource = $2 and outcome = 'response'",
+      [pageId, resource],
+    );
+    const manualWork = async () => (await testDb!.pool.query<{ state: string; failure_count: number }>(
+      "select state, failure_count from sync_work where page_id = $1 and resource = 'probe.manual' order by id desc limit 1",
+      [pageId],
+    )).rows[0] ?? null;
+
+    // One chat answered by Fansly with its envelope (the most recent: probed first), four behind a
+    // proxy's page or an empty 5xx — the fifth failing subject is one of theirs.
+    const chatAnswers: Record<number, () => FanslyWireOutcome> = {
+      1: () => statusResponse(500, GROUP_MESSAGES_500),
+      2: () => proxyPage(502),
+      3: () => emptyStatus(503),
+      4: () => emptyStatus(504),
+      5: () => proxyPage(502),
+    };
+    await runLive(pageId, (req) => chatAnswers[chatOf(req)]!(), async () => (await answered(EXCLUDED_CHAT_PROBE_KEY)) >= 5);
+    expect(await answered(EXCLUDED_CHAT_PROBE_KEY)).toBe(5);
+    // Enough distinct failing subjects of the file to hold it, by the attempts' classes …
+    expect(await failingSubjects()).toBeGreaterThanOrEqual(RESOURCE_BREAKER_SUBJECTS);
+    // … and nothing holds it: the probes' failures are not counted.
+    expect(await holds(pageId)).toEqual([]);
+    expect(await probeWork(pageId, 1)).toMatchObject({ state: "done", close_reason: "not_served:500" });
+    for (const n of [2, 3, 4, 5]) {
+      expect(await probeWork(pageId, n), String(n)).toMatchObject({ state: "open", waiting_reason: "subject_breaker", failure_count: 1 });
+    }
+
+    // The owner's manual probe goes out.
+    const registry = createFanslyRegistry();
+    await requestSyncProbe(db(), registry, { pageLabel: "probe-mixed", operation: "polls", params: {}, requestedBy: ACTOR });
+    const manual = await runLive(
+      pageId,
+      (req) => (req.spec === "polls" ? okResponse({ polls: [] }) : statusResponse(599)),
+      async () => (await manualWork())?.state === "done",
+    );
+    expect(manual.requests.map((req) => req.spec)).toEqual(["polls"]);
+    expect(await holds(pageId)).toEqual([]);
+
+    // A failing manual probe is one more failing subject of the file: still no hold.
+    await requestSyncProbe(db(), registry, { pageLabel: "probe-mixed", operation: "polls", params: {}, requestedBy: ACTOR });
+    const failed = await runLive(
+      pageId,
+      (req) => (req.spec === "polls" ? proxyPage(502) : statusResponse(599)),
+      async () => (await manualWork())?.failure_count === 1,
+    );
+    expect(failed.requests.map((req) => req.spec)).toEqual(["polls"]);
+    expect(await failingSubjects()).toBeGreaterThanOrEqual(RESOURCE_BREAKER_SUBJECTS + 1);
+    expect(await holds(pageId)).toEqual([]);
+    expect(await manualWork()).toMatchObject({ state: "open", failure_count: 1 });
   });
 
   it("a 401 holds the page (the session's answer, not the chat's)", async (context) => {
@@ -548,4 +687,178 @@ describe("the conversation list after a lift", () => {
     expect((await apply()).work.result).toEqual({ resolution: "unresolved", excluded: true });
     expect(await reasonOf(threadId)).toBe(UNRESOLVABLE);
   });
+});
+
+describe("the migration that closes the probes Fansly answered with its error envelope", () => {
+  // Found by its name, not its number: the number is the next free one at merge.
+  const found = readdirSync("packages/db/migrations").filter((file) => file.endsWith("_sync_excluded_probe_not_served.sql"));
+  const migrationSql = found.length === 1 ? readFileSync(`packages/db/migrations/${found[0]}`, "utf8") : "";
+
+  interface RecordedAnswer {
+    status: number;
+    body: string;
+    /** The demand revision the attempt served (default 1). */
+    demandRevision?: number;
+    /** No HTTP answer at all (a transport error): nothing journaled. */
+    transport?: boolean;
+  }
+
+  /** One recorded attempt of a work, as the capture writes it: the raw answer
+   *  journaled under `dm_messages:failed`, the attempt pointing at it. */
+  async function recordAttempt(pageId: number, workId: number, resource: string, subject: string, k: number, recorded: RecordedAnswer) {
+    let observation: { observationId: number; receivedAt: Date } | null = null;
+    if (recorded.transport !== true) {
+      const payload = { status: recorded.status, contentType: "application/json; charset=utf-8", retryAfter: null, bodyText: recorded.body, truncated: false };
+      observation = await insertObservation(db(), {
+        source: "pull",
+        producer: `fansly-sync:${resource}`,
+        platform: "fansly",
+        accountId: pageId,
+        nativeAccountRef: OWN,
+        kind: "dm_messages:failed",
+        payload,
+        payloadHash: createHash("sha256").update(JSON.stringify(payload)).digest(),
+        idempotencyKey: `test:${workId}:${k}`,
+      });
+    }
+    const inserted = await testDb!.pool.query<{ id: string }>(
+      `insert into sync_attempts (page_id, shadow, work_id, resource, subject, class, owner_generation, demand_revision,
+              setting_ms, jitter_u, pause_ms, operation, request, outcome, send_mark, sent_at, completed_at, http_status,
+              error_class, observation_id, observation_received_at, apply_state)
+       values ($1, false, $2, $3, $4, 'planned', 1, $5, 2500, 0.1, 2750, 'messages.page', '{}'::jsonb, $6, 'request_start',
+               clock_timestamp(), clock_timestamp(), $7, $8, $9, $10, 'none')
+       returning id::text as id`,
+      [
+        pageId, workId, resource, subject, recorded.demandRevision ?? 1,
+        recorded.transport === true ? "transport_error" : "response",
+        recorded.transport === true ? null : recorded.status,
+        recorded.transport === true ? "network" : recorded.status === 403 ? "subject_terminal" : "subject_failure",
+        observation?.observationId ?? null, observation?.receivedAt ?? null,
+      ],
+    );
+    return Number(inserted.rows[0]!.id);
+  }
+
+  interface WorkSnapshot {
+    id: string; state: string; close_reason: string | null; result: Record<string, unknown> | null; failure_count: number;
+    breaker_until: Date | null; blocked_by_vendor_at: Date | null; waiting_reason: string | null; applied_revision: string;
+    updated_at: Date;
+  }
+
+  async function workById(workId: number): Promise<WorkSnapshot> {
+    return (await testDb!.pool.query<WorkSnapshot>(
+      `select id::text, state, close_reason, result, failure_count, breaker_until, blocked_by_vendor_at, waiting_reason,
+              applied_revision::text, updated_at
+         from sync_work where id = $1`,
+      [workId],
+    )).rows[0]!;
+  }
+
+  it("closes an open probe whose latest answer is Fansly's error envelope, with its evidence; leaves every other probe", async (context) => {
+    if (!testDb) return context.skip();
+    expect(found).toHaveLength(1);
+    const pageId = await seedPage("migrate");
+    for (const n of [1, 2, 3, 4, 5, 6, 7]) await seedThread(pageId, n, { reason: MISSING, ageMs: n * HOUR });
+    const request = await probe("migrate", 7);
+    const workOf = new Map(request.chats.map((chat) => [Number(chat.chat.slice(-5)), chat.workId]));
+    const envelope = JSON.stringify(GROUP_MESSAGES_500);
+    const html = "<html><body>502 Bad Gateway</body></html>";
+    const record = async (n: number, answers: RecordedAnswer[]) => {
+      const ids: number[] = [];
+      for (const [k, recorded] of answers.entries()) ids.push(await recordAttempt(pageId, workOf.get(n)!, EXCLUDED_CHAT_PROBE_KEY, groupOf(n), k, recorded));
+      return ids;
+    };
+    // The old rule's state of a probe that failed on the subject's ladder.
+    const blocked = async (n: number, failures: number) => testDb!.pool.query(
+      `update sync_work set failure_count = $2, breaker_until = now() + interval '1 day', blocked_by_vendor_at = now() - interval '1 day',
+              waiting_reason = 'blocked_by_vendor', waiting_until = now() + interval '1 day', last_error_class = 'subject_failure',
+              updated_at = '2026-01-01T00:00:00Z'
+        where id = $1`,
+      [workOf.get(n)!, failures],
+    );
+
+    // 1: lilly-1's case — every answer the 500 with the envelope (a transport error between).
+    const lilly = await record(1, [
+      { status: 500, body: envelope }, { status: 0, body: "", transport: true }, { status: 500, body: envelope }, { status: 500, body: envelope },
+    ]);
+    await blocked(1, 4);
+    // 2: the envelope, then a proxy's page: its latest answer is no chat's answer — left to the engine.
+    await record(2, [{ status: 500, body: envelope }, { status: 502, body: html }]);
+    await blocked(2, 2);
+    // 3: closed meanwhile by a 403 (the old rule's own close): not open, untouched.
+    await record(3, [{ status: 500, body: envelope }, { status: 403, body: JSON.stringify({ success: false }) }]);
+    await testDb.pool.query(
+      `update sync_work set state = 'done', closed_at = now(), close_reason = 'not_served:403', applied_revision = 1,
+              result = '{"served": false, "httpStatus": 403, "errorClass": "subject_terminal"}'::jsonb, updated_at = '2026-01-01T00:00:00Z'
+        where id = $1`,
+      [workOf.get(3)!],
+    );
+    // 4: a bare `success: false` and 5: an envelope without details — not Fansly's error envelope.
+    await record(4, [{ status: 500, body: JSON.stringify({ success: false }) }]);
+    await blocked(4, 1);
+    await record(5, [{ status: 500, body: JSON.stringify({ success: false, error: { code: 500 } }) }]);
+    await blocked(5, 1);
+    // 6: the envelope answered an older demand; the owner asked again since.
+    await record(6, [{ status: 500, body: envelope, demandRevision: 1 }]);
+    await blocked(6, 1);
+    await testDb.pool.query("update sync_work set demand_revision = 2 where id = $1", [workOf.get(6)!]);
+    // 7: never answered (no attempt yet).
+    await testDb.pool.query("update sync_work set updated_at = '2026-01-01T00:00:00Z' where id = $1", [workOf.get(7)!]);
+    // A manual probe answered the same 500 is no excluded-chat probe.
+    await upsertManualProbe(pageId);
+    const manualId = Number((await testDb.pool.query<{ id: string }>(
+      "select id::text from sync_work where page_id = $1 and resource = 'probe.manual'",
+      [pageId],
+    )).rows[0]!.id);
+    await recordAttempt(pageId, manualId, "probe.manual", "", 0, { status: 500, body: envelope });
+    await testDb.pool.query("update sync_work set updated_at = '2026-01-01T00:00:00Z' where id = $1", [manualId]);
+    const before = new Map(await Promise.all([2, 3, 4, 5, 6, 7].map(async (n) => [n, await workById(workOf.get(n)!)] as const)));
+
+    await testDb.pool.query(migrationSql);
+
+    expect(await workById(workOf.get(1)!)).toMatchObject({
+      state: "done",
+      close_reason: "not_served:500",
+      result: {
+        served: false,
+        httpStatus: 500,
+        errorClass: "subject_failure",
+        attemptId: lilly[3],
+        observationId: expect.any(Number),
+        attemptIds: lilly,
+        closedBy: "migration sync_excluded_probe_not_served",
+      },
+      failure_count: 0,
+      breaker_until: null,
+      blocked_by_vendor_at: null,
+      waiting_reason: null,
+      applied_revision: "1",
+    });
+    const observationId = Number((await workById(workOf.get(1)!)).result!.observationId);
+    expect(await countRows(testDb.pool, "select count(*)::int as n from sync_attempts where id = $1 and observation_id = $2", [lilly[3], observationId])).toBe(1);
+    for (const [n, row] of before) expect(await workById(workOf.get(n)!), String(n)).toEqual(row);
+    expect((await workById(manualId)).state).toBe("open");
+    expect(await holds(pageId)).toEqual([]);
+
+    // Once is all: a second run changes nothing.
+    const closed = await workById(workOf.get(1)!);
+    await testDb.pool.query(migrationSql);
+    expect(await workById(workOf.get(1)!)).toEqual(closed);
+
+    // The report reads it finished, and keeps its evidence once the journal of attempts is trimmed (30 days).
+    const report = await readExcludedProbeReport(db(), { pageLabel: "migrate" });
+    expect(report.chats.find((chat) => chat.chat === groupOf(1))).toMatchObject({ verdict: "not_served", httpStatus: 500, attemptIds: lilly, observationId });
+    expect(report.summary).toMatchObject({ probed: 7, served: 0, notServed: 2, pending: 5 });
+    await testDb.pool.query("delete from sync_attempts where work_id = $1", [workOf.get(1)!]);
+    const trimmed = await readExcludedProbeReport(db(), { pageLabel: "migrate" });
+    expect(trimmed.chats.find((chat) => chat.chat === groupOf(1))).toMatchObject({ verdict: "not_served", attemptIds: lilly, observationId });
+  });
+
+  async function upsertManualProbe(pageId: number) {
+    await testDb!.pool.query(
+      `insert into sync_work (page_id, resource, subject, kind, class, params)
+       values ($1, 'probe.manual', '', 'trigger', 'planned', '{"operation": "messages.page", "params": {}}'::jsonb)`,
+      [pageId],
+    );
+  }
 });

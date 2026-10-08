@@ -956,7 +956,8 @@ export async function readRouteJournal(
 /**
  * Distinct subjects of one resource file whose request failed as a subject
  * failure within the last `windowMs` (the §9 resource breaker counts them).
- * Keys a resource hold never stops are left out. Bounded by the stable
+ * The `exemptKeys` (those whose failures never count: the keys a resource
+ * hold never stops, the owner's probes) are left out. Bounded by the stable
  * `statement_timestamp()` so the window is an index range, not the page's
  * whole journal.
  */
