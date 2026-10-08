@@ -137,6 +137,12 @@ const monitor = (now: Date, state: OfapiLinkStatsSeriesMonitorState = { seenEnab
     state,
   });
 
+/** The first window that opens at or after `at`. */
+function firstOfWindowAtOrAfter(at: Date): Date {
+  const windowAt = ofapiLinkStatsWindowAt(at);
+  return windowAt.getTime() === at.getTime() ? windowAt : nextOfapiLinkStatsWindowAt(windowAt);
+}
+
 /** `count` windows back from `windowAt`. */
 function windowsBack(windowAt: Date, count: number): Date {
   let back = windowAt;
@@ -383,6 +389,55 @@ describe("the link series monitor", () => {
     const [incident] = await openIncidents();
     expect(incident!.summary).toMatch(/^tracking: no usable result since .+; last attempt .+ partial: empty unverified$/);
     expect(incident!.summary).not.toContain("trial");
+  });
+
+  it("a newly connected page that reads empty ages toward series_stale; once the emptiness has lasted a day it counts and the latch resolves", async (context) => {
+    if (!testDb) return context.skip();
+
+    // Connected for the first time: tracking reads fine, trial reads empty —
+    // a cold cache or a page with no trial links; for a day nothing tells.
+    const page = await seedPage("monitor-new-empty-of", "acct_monitor");
+    const DAY = 24 * HOUR;
+    const firstDay = windowsFrom(W0, 8).filter((windowAt) => windowAt.getTime() + 20_000 < W0.getTime() + 20_000 + DAY);
+    for (const windowAt of firstDay) {
+      await attempt(page.id, "tracking", windowAt, "complete");
+      await attempt(page.id, "trial", windowAt, "partial", "empty_unverified");
+    }
+    const firstEmpty = after(W0, 20_000);
+    const staleAt = after(firstEmpty, OFAPI_LINK_STATS_SERIES_STALE_AFTER_MS + MINUTE);
+    const health = await listLinkStatSeriesHealth(appContext.db);
+    expect(health.find((entry) => entry.linkKind === "trial")!.lastUsableAt).toBeNull();
+
+    const stale = await monitor(staleAt);
+    expect(stale.stalePages).toEqual([page.id]);
+    const [incident] = await openIncidents();
+    expect(incident!.summary).toMatch(/^trial: no usable result since the first attempt at .+ partial: empty unverified$/);
+
+    // The emptiness has lasted a day: the page genuinely has no trial links,
+    // the empty read counts, and the latch resolves.
+    const dayLater = firstOfWindowAtOrAfter(after(W0, DAY));
+    await attempt(page.id, "tracking", dayLater, "complete");
+    await attempt(page.id, "trial", dayLater, "partial", "empty_unverified");
+    await monitor(new Date(Math.max(after(dayLater, 5 * MINUTE).getTime(), after(staleAt, MINUTE).getTime())));
+    expect(await openIncidents()).toEqual([]);
+    expect((await listLinkStatSeriesHealth(appContext.db)).find((entry) => entry.linkKind === "trial")!.lastUsableAt)
+      .toEqual(after(dayLater, 20_000));
+  });
+
+  it("a kind that has read empty for days (lora-of's trial links) stays a quiet result", async (context) => {
+    if (!testDb) return context.skip();
+
+    const page = await seedPage("monitor-long-empty-of", "acct_monitor");
+    const history = windowsFrom(windowsBack(W0, 11), 12);
+    for (const windowAt of history) {
+      await attempt(page.id, "tracking", windowAt, "complete");
+      await attempt(page.id, "trial", windowAt, "partial", "empty_unverified");
+    }
+    const result = await monitor(after(W0, 10 * MINUTE));
+    expect(result).toEqual({ stalePages: [], unmappedPages: [], windowMissedRows: 0 });
+    expect((await listLinkStatSeriesHealth(appContext.db)).find((entry) => entry.linkKind === "trial")!.lastUsableAt)
+      .toEqual(after(W0, 20_000));
+    expect(await openIncidents()).toEqual([]);
   });
 
   it("an unmapped page opens page_unmapped at once and resolves when it is mapped; it gets no second, stale latch for the same cause", async (context) => {
