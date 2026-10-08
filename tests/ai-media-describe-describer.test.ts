@@ -129,6 +129,37 @@ describe("media describer response classification", () => {
       expect(classifyMediaDescribeResponse(MODEL, message({ content: [{ type: "text", text }] }))).toMatchObject({ kind: "described" });
     }
   });
+
+  it.each([
+    ["UNAVAILABLE: unclear_image", "unclear_image"],
+    ["Unavailable: CONTENT_RESTRICTED.", "content_restricted"],
+    ["UNAVAILABLE", "unspecified"],
+    ["UNAVAILABLE: unknown_code", "unspecified"],
+    ["UNAVAILABLE: unclear_image https://example.test/private?Signature=secret", "unspecified"],
+  ])("keeps the bounded reason for %s without treating it as a description", (text, detail) => {
+    const outcome = classifyMediaDescribeResponse(MODEL, message({ content: [{ type: "text", text }] }));
+    expect(outcome).toMatchObject({ kind: "refused", reason: "unavailable_sentinel", detail, providerCategory: null });
+    expect(outcome).not.toHaveProperty("description");
+    expect(JSON.stringify(outcome)).not.toContain("Signature");
+  });
+
+  it("keeps only known provider refusal categories, with the provider refusal taking precedence", () => {
+    const response = message({
+      stop_reason: "refusal",
+      stop_details: { category: "general_harms" },
+      content: [{ type: "text", text: "UNAVAILABLE: unclear_image" }],
+    });
+    expect(classifyMediaDescribeResponse(MODEL, response)).toMatchObject({
+      kind: "refused", reason: "provider_refusal", detail: "unspecified", providerCategory: "general_harms",
+    });
+    for (const category of [null, "future_category", "https://example.test/private?Signature=secret"]) {
+      const outcome = classifyMediaDescribeResponse(MODEL, { ...response, stop_details: { category } });
+      expect(outcome).toMatchObject({ providerCategory: null });
+      expect(JSON.stringify(outcome)).not.toContain("Signature");
+    }
+    expect(classifyMediaDescribeResponse(MODEL, { ...response, stop_reason: "end_turn" }))
+      .toMatchObject({ detail: "unclear_image", providerCategory: null });
+  });
 });
 
 describe("media describer failure classification", () => {
@@ -177,7 +208,12 @@ describe("describeMedia retry policy", () => {
   });
 
   it("sends exactly once on a refusal or a timeout", async () => {
-    for (const step of [message({ stop_reason: "refusal", content: [] }), new Anthropic.APIConnectionTimeoutError()]) {
+    for (const step of [
+      message({ stop_reason: "refusal", content: [] }),
+      message({ content: [{ type: "text", text: "UNAVAILABLE: unclear_image" }] }),
+      message({ content: [{ type: "text", text: "UNAVAILABLE: content_restricted" }] }),
+      new Anthropic.APIConnectionTimeoutError(),
+    ]) {
       const { client, requests } = scriptedClient([step]);
       await describeMedia({ model: MODEL, jpegBase64: "QUJD", proxy: PROXY, clientFactory: () => client, sleep: async () => undefined });
       expect(requests).toHaveLength(1);
