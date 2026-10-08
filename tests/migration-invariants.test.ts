@@ -265,6 +265,30 @@ describe("database migration invariants", () => {
     );
   });
 
+  it("keeps the money-stamp index predicate equal to the constant its probe spells", async () => {
+    const migration = await readFile(
+      "packages/db/migrations/0250_ofapi_webhook_events_transactions_page_received_idx.sql",
+      "utf8",
+    );
+    const repository = await readFile("packages/db/src/repositories/ofapi.ts", "utf8");
+
+    // The probe in getOfapiMoneyStreamStates must imply the predicate, so both
+    // spell the same constant; a bound parameter or another type silently
+    // sends the probe back to walking every delivery of the page.
+    expect(migration).toContain("on ofapi_webhook_events (platform_account_id, received_at)");
+    expect(migration).toContain("where event_type = 'transactions.new';");
+    expect(repository).toContain("where ${ofapiWebhookEvents.eventType} = 'transactions.new'");
+
+    // Capture-first (DP 7): never lock out the webhook receiver.
+    expect(migration.startsWith("-- agency-hub:no-transaction")).toBe(true);
+    expect(migration).toContain(
+      "create index concurrently if not exists ofapi_webhook_events_transactions_page_received_idx",
+    );
+    expect(migration).toContain("drop index concurrently if exists %I.%I");
+    expect(migration).toContain("where i.relname = 'ofapi_webhook_events_transactions_page_received_idx'");
+    expect(migration.split("-- agency-hub:statement").length - 1).toBe(2);
+  });
+
   it("builds the webhook lifecycle lookup index concurrently, outside 0157's transaction", async () => {
     const lifecycle = await readFile(
       "packages/db/migrations/0157_ofapi_webhook_lifecycle.sql",

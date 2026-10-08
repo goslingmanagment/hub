@@ -36,6 +36,7 @@ import {
   pageAliasMatchSql,
   pageAliasMatchedValueSql,
 } from "./search.ts";
+import { getOfapiMoneyStreamStates } from "./ofapi.ts";
 
 function qualifiedSubqueryColumn<T>(subqueryAlias: string, columnName: string) {
   return sql<T>`${sql.raw(`"${subqueryAlias}"."${columnName}"`)}`;
@@ -275,6 +276,13 @@ export async function getScopedLifetimeTotalsForFan(
   };
 }
 
+/**
+ * The oldest spender-projection rebuild among the pages: when the projection
+ * last CHANGED, not how current it is. A quiet page keeps an old watermark
+ * while the hub keeps hearing from it — use getSpenderMoneyAsOf for the
+ * stamp a reader sees. This stays the key of caches that must turn over
+ * exactly when the numbers can have changed (client spender stats).
+ */
 export async function getSpenderProjectionAsOf(
   db: Database,
   input: {
@@ -307,6 +315,92 @@ export async function getSpenderProjectionAsOf(
   }
 
   return asOfDate;
+}
+
+function laterOf(a: Date, b: Date | null) {
+  return b !== null && b.getTime() > a.getTime() ? b : a;
+}
+
+/**
+ * "Money complete as of": the latest instant up to which the hub had heard
+ * from the platform for every page in scope AND had every money event it
+ * received by then in the spender numbers. The minimum over the scope's
+ * pages; null when no page has a watermark row or any page was never rebuilt
+ * (the epoch placeholder), exactly as getSpenderProjectionAsOf.
+ *
+ * Per page, starting from its last rebuild W (never earlier than W):
+ * - An OnlyFans page whose transaction truth is written from its OFAPI
+ *   webhooks (active, writer 'ofapi', an account claimed, and
+ *   `ofapiWebhookMoney` — both the spend projection and the truth ingest on):
+ *   if a transactions.new delivery received after W is not in the numbers
+ *   yet, the stamp is that delivery's arrival (everything received before it
+ *   is in); otherwise it is the newest delivery of ANY type for the page
+ *   within the last day, since a stream that keeps talking without money is
+ *   proof that no money came (a page silent for a day vouches for nothing
+ *   past W). Deliveries received up to W are taken as in, as before.
+ * - Every other page (Fansly, an unassigned or non-OFAPI writer, the ingest
+ *   off): W itself. Fansly rebuilds after every transactions poll that reads
+ *   rows, so its watermark already follows the polls.
+ */
+export async function getSpenderMoneyAsOf(
+  db: Database,
+  input: {
+    pageIds: number[];
+    platform?: Platform;
+    ofapiWebhookMoney: boolean;
+  },
+) {
+  if (input.pageIds.length === 0) {
+    return null;
+  }
+
+  const clauses = [inArray(spenderProjectionWatermarks.platformAccountId, input.pageIds)];
+  if (input.platform) {
+    clauses.push(eq(pages.platform, input.platform));
+  }
+
+  const rows = await db.select({
+    pageId: spenderProjectionWatermarks.platformAccountId,
+    lastRebuiltAt: spenderProjectionWatermarks.lastRebuiltAt,
+    status: pages.status,
+    transactionsWriter: pages.transactionsWriter,
+    ofapiAccountId: pages.ofapiAccountId,
+  }).from(spenderProjectionWatermarks)
+    .innerJoin(pages, eq(pages.id, spenderProjectionWatermarks.platformAccountId))
+    .where(and(...clauses));
+
+  if (rows.length === 0) {
+    return null;
+  }
+
+  // Writer 'ofapi' with a claimed account is an OnlyFans page by construction.
+  const webhookFed = input.ofapiWebhookMoney
+    ? rows.flatMap((row) =>
+      row.status === "active" &&
+        row.transactionsWriter === "ofapi" &&
+        row.ofapiAccountId !== null &&
+        row.lastRebuiltAt.getTime() > 0
+        ? [{ pageId: row.pageId, ofapiAccountId: row.ofapiAccountId, after: row.lastRebuiltAt }]
+        : []
+    )
+    : [];
+  const streams = await getOfapiMoneyStreamStates(db, webhookFed);
+
+  let asOf: Date | null = null;
+  for (const row of rows) {
+    const stream = streams.get(row.pageId);
+    const pageAsOf = stream === undefined
+      ? row.lastRebuiltAt
+      : laterOf(row.lastRebuiltAt, stream.unappliedSince ?? stream.lastHeardAt);
+    if (asOf === null || pageAsOf.getTime() < asOf.getTime()) {
+      asOf = pageAsOf;
+    }
+  }
+
+  if (asOf === null || Number.isNaN(asOf.getTime()) || asOf.getTime() <= 0) {
+    return null;
+  }
+  return asOf;
 }
 
 export async function listVisibleScopePages(

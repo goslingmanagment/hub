@@ -1,5 +1,5 @@
-import { OfapiAccountCustodyConflictError } from "./ofapi-bindings.ts";
-import { and, asc, desc, eq, gt, gte, inArray, isNotNull, lt, lte, ne, sql } from "drizzle-orm";
+import { OfapiAccountCustodyConflictError, ofapiAccountBelongsToPageSql } from "./ofapi-bindings.ts";
+import { and, asc, desc, eq, gt, gte, inArray, isNotNull, lt, lte, ne, sql, type SQL } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 import {
@@ -596,6 +596,28 @@ const OFAPI_SPEND_PROJECTION_EVENT_TYPES_SQL = sql.raw(
     .join(", "),
 );
 
+/**
+ * A settled spend delivery the projection has not written yet: no
+ * ofapi_spend_projection_events row carries its journal id. Correlated to the
+ * UNALIASED ofapi_webhook_events of the enclosing query. Shared by the
+ * projection sweep (which re-offers these rows) and the Spenders money stamp
+ * (which must not vouch past one of them).
+ */
+function ofapiWebhookEventAwaitsSpendProjectionSql() {
+  // The literal below must stay equal to OFAPI_TIPS_RECEIVED_BLOCKED_REASON
+  // (runtime's ofapi-spend-projection-contract.ts) — it can't be imported
+  // across the package boundary, and a drift silently stops the legacy
+  // blocked-tips rows from self-healing.
+  return sql`not exists (
+    select 1 from ${ofapiSpendProjectionEvents}
+    where ${ofapiSpendProjectionEvents.journalId} = ${ofapiWebhookEvents.id}
+      and not (
+        ${ofapiSpendProjectionEvents.projectionStatus} = 'blocked'
+        and ${ofapiSpendProjectionEvents.blockedReason} = 'tips_received_live_fixture_required'
+      )
+  )`;
+}
+
 export async function listOfapiWebhookEventsForSpendProjection(
   db: Database,
   input: {
@@ -609,18 +631,7 @@ export async function listOfapiWebhookEventsForSpendProjection(
       sql`${ofapiWebhookEvents.eventType} in (${OFAPI_SPEND_PROJECTION_EVENT_TYPES_SQL})`,
       sql`${ofapiWebhookEvents.status} <> 'pending'`,
       isNotNull(ofapiWebhookEvents.platformAccountId),
-      // The literal below must stay equal to OFAPI_TIPS_RECEIVED_BLOCKED_REASON
-      // (runtime's ofapi-spend-projection-contract.ts) — it can't be imported
-      // across the package boundary, and a drift silently stops the legacy
-      // blocked-tips rows from self-healing.
-      sql`not exists (
-        select 1 from ${ofapiSpendProjectionEvents}
-        where ${ofapiSpendProjectionEvents.journalId} = ${ofapiWebhookEvents.id}
-          and not (
-            ${ofapiSpendProjectionEvents.projectionStatus} = 'blocked'
-            and ${ofapiSpendProjectionEvents.blockedReason} = 'tips_received_live_fixture_required'
-          )
-      )`,
+      ofapiWebhookEventAwaitsSpendProjectionSql(),
     ))
     .orderBy(asc(ofapiWebhookEvents.id))
     .limit(input.limit);
@@ -643,6 +654,97 @@ export interface OfapiSpendProjectionTransactionIngestRow {
   journalId: number;
   /** The webhook delivery key — also the Stage 7 observation key (source='webhook'). */
   sourceIdempotencyKey: string;
+}
+
+/**
+ * A projected transactions.new row the truth ingest still has to apply: the
+ * row's own clauses plus "no transactions row already says the same thing".
+ * Correlated to the UNALIASED ofapi_spend_projection_events of the enclosing
+ * query. The ingest's candidate list and the Spenders money stamp share it, so
+ * "waiting to be applied" means the same thing to both.
+ */
+function ofapiSpendProjectionAwaitsTruthIngestSql(): SQL {
+  return and(
+    eq(ofapiSpendProjectionEvents.sourceEventType, "transactions.new"),
+    eq(ofapiSpendProjectionEvents.projectionStatus, "projected"),
+    isNotNull(ofapiSpendProjectionEvents.pageId),
+    isNotNull(ofapiSpendProjectionEvents.fanPlatformUserId),
+    isNotNull(ofapiSpendProjectionEvents.transactionId),
+    isNotNull(ofapiSpendProjectionEvents.grossAmountMills),
+    isNotNull(ofapiSpendProjectionEvents.creatorNetAmountMills),
+    inArray(ofapiSpendProjectionEvents.category, [
+      "message",
+      "tip",
+      "subscription",
+      "post",
+      "stream",
+      "other",
+    ]),
+    inArray(ofapiSpendProjectionEvents.eventStatus, ["pending", "settled", "reversed"]),
+    // W7.4 follow-up (2026-07-11, resurrection loop): a 'pending' event
+    // whose transaction has since SETTLED (state posted, any raw_status)
+    // must count as PRESENT — the old exact-shape match treated the
+    // settled row as missing and the minutely ingest re-applied the stale
+    // pending event, flipping REST-settled rows back to pending forever
+    // (the A47 rescan could never stick).
+    sql`not exists (
+      select 1 from ${transactions} tx
+      where tx.platform_account_id = ${ofapiSpendProjectionEvents.pageId}
+        and tx.transaction_id = ${ofapiSpendProjectionEvents.transactionId}
+        and tx.sender_id is not distinct from ${ofapiSpendProjectionEvents.fanPlatformUserId}
+        and ${ofapiSpendProjectionEvents.eventStatus} = 'pending'
+        and tx.transaction_state::text = 'posted'
+    )`,
+    sql`not exists (
+      select 1 from ${transactions} tx
+      where tx.platform_account_id = ${ofapiSpendProjectionEvents.pageId}
+        and tx.transaction_id = ${ofapiSpendProjectionEvents.transactionId}
+        and tx.sender_id is not distinct from ${ofapiSpendProjectionEvents.fanPlatformUserId}
+        and tx.transaction_state::text = (
+          case ${ofapiSpendProjectionEvents.eventStatus}
+            when 'settled' then 'posted'
+            when 'reversed' then 'posted'
+            else ${ofapiSpendProjectionEvents.eventStatus}
+          end
+        )
+        and tx.raw_status = ${ofapiSpendProjectionEvents.eventStatus}
+        and tx.canonical_type::text = (
+          case
+            when ${ofapiSpendProjectionEvents.eventStatus} = 'reversed' then 'refund'
+            when ${ofapiSpendProjectionEvents.category} = 'message' then 'message_purchase'
+            when ${ofapiSpendProjectionEvents.category} = 'tip' then 'tip'
+            when ${ofapiSpendProjectionEvents.category} = 'subscription' then 'subscription'
+            when ${ofapiSpendProjectionEvents.category} = 'post' then 'post_purchase'
+            when ${ofapiSpendProjectionEvents.category} = 'stream' then 'stream_tip'
+            else 'other'
+          end
+        )
+        and tx.gross_amount_mills = (
+          case
+            when ${ofapiSpendProjectionEvents.eventStatus} = 'reversed'
+              and ${ofapiSpendProjectionEvents.grossAmountMills} > 0
+              then -${ofapiSpendProjectionEvents.grossAmountMills}
+            else ${ofapiSpendProjectionEvents.grossAmountMills}
+          end
+        )
+        and tx.source_destination_amount_mills = (
+          case
+            when ${ofapiSpendProjectionEvents.eventStatus} = 'reversed'
+              and ${ofapiSpendProjectionEvents.grossAmountMills} > 0
+              then -${ofapiSpendProjectionEvents.grossAmountMills}
+            else ${ofapiSpendProjectionEvents.grossAmountMills}
+          end
+        )
+        and tx.creator_net_amount_mills = (
+          case
+            when ${ofapiSpendProjectionEvents.eventStatus} = 'reversed'
+              and ${ofapiSpendProjectionEvents.creatorNetAmountMills} > 0
+              then -${ofapiSpendProjectionEvents.creatorNetAmountMills}
+            else ${ofapiSpendProjectionEvents.creatorNetAmountMills}
+          end
+        )
+    )`,
+  )!;
 }
 
 /**
@@ -684,87 +786,7 @@ export async function listMissingOfapiSpendProjectionTransactionsForTruthIngest(
       eq(pages.id, ofapiSpendProjectionEvents.pageId),
       eq(pages.status, "active"),
     ))
-    .where(and(
-      eq(ofapiSpendProjectionEvents.sourceEventType, "transactions.new"),
-      eq(ofapiSpendProjectionEvents.projectionStatus, "projected"),
-      isNotNull(ofapiSpendProjectionEvents.pageId),
-      isNotNull(ofapiSpendProjectionEvents.fanPlatformUserId),
-      isNotNull(ofapiSpendProjectionEvents.transactionId),
-      isNotNull(ofapiSpendProjectionEvents.grossAmountMills),
-      isNotNull(ofapiSpendProjectionEvents.creatorNetAmountMills),
-      inArray(ofapiSpendProjectionEvents.category, [
-        "message",
-        "tip",
-        "subscription",
-        "post",
-        "stream",
-        "other",
-      ]),
-      inArray(ofapiSpendProjectionEvents.eventStatus, ["pending", "settled", "reversed"]),
-      // W7.4 follow-up (2026-07-11, resurrection loop): a 'pending' event
-      // whose transaction has since SETTLED (state posted, any raw_status)
-      // must count as PRESENT — the old exact-shape match treated the
-      // settled row as missing and the minutely ingest re-applied the stale
-      // pending event, flipping REST-settled rows back to pending forever
-      // (the A47 rescan could never stick).
-      sql`not exists (
-        select 1 from ${transactions} tx
-        where tx.platform_account_id = ${ofapiSpendProjectionEvents.pageId}
-          and tx.transaction_id = ${ofapiSpendProjectionEvents.transactionId}
-          and tx.sender_id is not distinct from ${ofapiSpendProjectionEvents.fanPlatformUserId}
-          and ${ofapiSpendProjectionEvents.eventStatus} = 'pending'
-          and tx.transaction_state::text = 'posted'
-      )`,
-      sql`not exists (
-        select 1 from ${transactions} tx
-        where tx.platform_account_id = ${ofapiSpendProjectionEvents.pageId}
-          and tx.transaction_id = ${ofapiSpendProjectionEvents.transactionId}
-          and tx.sender_id is not distinct from ${ofapiSpendProjectionEvents.fanPlatformUserId}
-          and tx.transaction_state::text = (
-            case ${ofapiSpendProjectionEvents.eventStatus}
-              when 'settled' then 'posted'
-              when 'reversed' then 'posted'
-              else ${ofapiSpendProjectionEvents.eventStatus}
-            end
-          )
-          and tx.raw_status = ${ofapiSpendProjectionEvents.eventStatus}
-          and tx.canonical_type::text = (
-            case
-              when ${ofapiSpendProjectionEvents.eventStatus} = 'reversed' then 'refund'
-              when ${ofapiSpendProjectionEvents.category} = 'message' then 'message_purchase'
-              when ${ofapiSpendProjectionEvents.category} = 'tip' then 'tip'
-              when ${ofapiSpendProjectionEvents.category} = 'subscription' then 'subscription'
-              when ${ofapiSpendProjectionEvents.category} = 'post' then 'post_purchase'
-              when ${ofapiSpendProjectionEvents.category} = 'stream' then 'stream_tip'
-              else 'other'
-            end
-          )
-          and tx.gross_amount_mills = (
-            case
-              when ${ofapiSpendProjectionEvents.eventStatus} = 'reversed'
-                and ${ofapiSpendProjectionEvents.grossAmountMills} > 0
-                then -${ofapiSpendProjectionEvents.grossAmountMills}
-              else ${ofapiSpendProjectionEvents.grossAmountMills}
-            end
-          )
-          and tx.source_destination_amount_mills = (
-            case
-              when ${ofapiSpendProjectionEvents.eventStatus} = 'reversed'
-                and ${ofapiSpendProjectionEvents.grossAmountMills} > 0
-                then -${ofapiSpendProjectionEvents.grossAmountMills}
-              else ${ofapiSpendProjectionEvents.grossAmountMills}
-            end
-          )
-          and tx.creator_net_amount_mills = (
-            case
-              when ${ofapiSpendProjectionEvents.eventStatus} = 'reversed'
-                and ${ofapiSpendProjectionEvents.creatorNetAmountMills} > 0
-                then -${ofapiSpendProjectionEvents.creatorNetAmountMills}
-              else ${ofapiSpendProjectionEvents.creatorNetAmountMills}
-            end
-          )
-      )`,
-    ))
+    .where(ofapiSpendProjectionAwaitsTruthIngestSql())
     .orderBy(asc(ofapiSpendProjectionEvents.occurredAt), asc(ofapiSpendProjectionEvents.id))
     .limit(input.limit);
 
@@ -2990,6 +3012,136 @@ export async function getLatestOfapiEventTimesForPages(
   }
 
   return result;
+}
+
+export interface OfapiMoneyStreamPageInput {
+  pageId: number;
+  /** The page's current claim (pages.ofapi_account_id); custody history counts too. */
+  ofapiAccountId: string;
+  /** Only deliveries received after this instant are asked about. */
+  after: Date;
+}
+
+/**
+ * How far back a page's stream still vouches for it. A page the hub has not
+ * heard from for a day has a broken stream, not a quiet one (prod pages get
+ * 1 300-2 000 deliveries a day), and the bound also caps the probe if the
+ * planner walks the journal-wide received_at index instead of the page's.
+ */
+export const OFAPI_MONEY_STREAM_HEARD_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+export interface OfapiMoneyStreamPageState {
+  /**
+   * received_at of the newest delivery of any type settled to the page after
+   * `after` and within OFAPI_MONEY_STREAM_HEARD_WINDOW_MS of now; null if none.
+   */
+  lastHeardAt: Date | null;
+  /**
+   * received_at of the earliest transactions.new delivery received after
+   * `after` that is not in the page's transaction truth yet: not settled
+   * (or still raw, so of unknown page), settled but not projected, or
+   * projected but not yet applied by the truth ingest. Null when every such
+   * delivery is in.
+   */
+  unappliedSince: Date | null;
+}
+
+function toDateOrNull(value: Date | string | null | undefined): Date | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  const parsed = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+/**
+ * Where the OFAPI money stream of each page stands, for the Spenders money
+ * stamp: when the hub last heard anything for the page, and whether a
+ * transactions.new delivery received since `after` is still on its way into
+ * the numbers. Only transactions.new feeds transaction truth (the ingest's
+ * candidates); tips.received and messages.ppv.unlocked are comparison rows.
+ *
+ * Every probe is bounded by an index, never by the journal's size:
+ * - lastHeardAt: one backward step on ofapi_webhook_events_page_received_idx
+ *   (0184). platform_account_id is written only by the settle, so the probe
+ *   needs no status filter. Bounded below by `after` and the heard window: a
+ *   planner that prefers the journal-wide received_at index walks at most
+ *   that window.
+ * - unsettled deliveries: the handful of status = 'pending' rows
+ *   (ofapi_webhook_events_status_idx).
+ * - settled ones not yet in truth: the page's transactions.new rows since
+ *   `after` (ofapi_webhook_events_transactions_page_received_idx, 0250),
+ *   each checked against the projection and the ingest's own candidate rule.
+ * Page ids and bounds go in per page, not as a VALUES list, so the planner
+ * sees the actual page when it picks the index.
+ */
+export async function getOfapiMoneyStreamStates(
+  db: Database,
+  pages: readonly OfapiMoneyStreamPageInput[],
+): Promise<Map<number, OfapiMoneyStreamPageState>> {
+  if (pages.length === 0) {
+    return new Map();
+  }
+
+  const heardWindowStart = new Date(Date.now() - OFAPI_MONEY_STREAM_HEARD_WINDOW_MS);
+  const statements = pages.map((page) => sql`
+    select ${page.pageId}::bigint as "pageId",
+      (
+        select max(e.received_at)
+        from ofapi_webhook_events e
+        where e.platform_account_id = ${page.pageId}
+          and e.received_at > ${page.after.getTime() > heardWindowStart.getTime() ? page.after : heardWindowStart}
+      ) as "lastHeardAt",
+      least(
+        (
+          select min(e.received_at)
+          from ofapi_webhook_events e
+          where e.status = 'pending'
+            and e.received_at > ${page.after}
+            and (
+              e.event_type = '__raw__'
+              or (
+                e.event_type = 'transactions.new'
+                and ${ofapiAccountBelongsToPageSql({
+                  accountId: sql`e.ofapi_account_id`,
+                  pageId: page.pageId,
+                  pageAccountId: page.ofapiAccountId,
+                })}
+              )
+            )
+        ),
+        (
+          select min(${ofapiWebhookEvents.receivedAt})
+          from ${ofapiWebhookEvents}
+          where ${ofapiWebhookEvents.eventType} = 'transactions.new'
+            and ${ofapiWebhookEvents.platformAccountId} = ${page.pageId}
+            and ${ofapiWebhookEvents.receivedAt} > ${page.after}
+            and (
+              ${ofapiWebhookEventAwaitsSpendProjectionSql()}
+              or exists (
+                select 1 from ${ofapiSpendProjectionEvents}
+                where ${ofapiSpendProjectionEvents.journalId} = ${ofapiWebhookEvents.id}
+                  and ${ofapiSpendProjectionAwaitsTruthIngestSql()}
+              )
+            )
+        )
+      ) as "unappliedSince"
+  `);
+
+  const result = await db.execute<{
+    pageId: number | string;
+    lastHeardAt: Date | string | null;
+    unappliedSince: Date | string | null;
+  }>(sql.join(statements, sql` union all `));
+
+  const states = new Map<number, OfapiMoneyStreamPageState>();
+  for (const row of result.rows) {
+    states.set(Number(row.pageId), {
+      lastHeardAt: toDateOrNull(row.lastHeardAt),
+      unappliedSince: toDateOrNull(row.unappliedSince),
+    });
+  }
+  return states;
 }
 
 export type LinkStatKind = "tracking" | "trial";

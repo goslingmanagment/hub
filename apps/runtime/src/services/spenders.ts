@@ -22,7 +22,7 @@ import {
   getScopedLifetimeTotalsForFan,
   getSpenderDailySeriesRows,
   getSpenderLifetimeMetrics,
-  getSpenderProjectionAsOf,
+  getSpenderMoneyAsOf,
   getSpenderRevenueDiagnosticsForScope,
   getSpenderTypeBreakdown,
   getSpenderTypeBreakdownBatch,
@@ -63,6 +63,8 @@ import {
   type AuthPrincipal,
 } from "./auth.ts";
 import { BadRequestError, ForbiddenError, NotFoundError } from "./errors.ts";
+import { isOfapiSpendProjectionShadowEnabled } from "./ofapi-spend-projection.ts";
+import { isOfapiSpendTransactionIngestEnabled } from "./ofapi-spend-transaction-ingest.ts";
 
 type ScopeFields = {
   scope: "page" | "model" | "agency";
@@ -444,8 +446,23 @@ async function resolveSpenderScope(
   } satisfies ResolvedScope;
 }
 
+/**
+ * The stamp every Spenders read reports as `asOf`: money data complete as of
+ * (getSpenderMoneyAsOf). OFAPI webhooks vouch for an OnlyFans page only while
+ * they actually feed its transaction truth — the spend projection and the
+ * truth ingest both on; otherwise the page keeps its rebuild watermark.
+ */
+function resolveMoneyAsOf(app: AppContext, input: { pageIds: number[]; platform: Platform }) {
+  return getSpenderMoneyAsOf(app.db, {
+    pageIds: input.pageIds,
+    platform: input.platform,
+    ofapiWebhookMoney: isOfapiSpendProjectionShadowEnabled(app.config) &&
+      isOfapiSpendTransactionIngestEnabled(app.config),
+  });
+}
+
 async function resolveAsOf(app: AppContext, scope: ResolvedScope) {
-  return getSpenderProjectionAsOf(app.db, {
+  return resolveMoneyAsOf(app, {
     pageIds: scope.pageIds,
     platform: scope.platform,
   });
@@ -500,7 +517,7 @@ export async function getPageSpenderAutoLists(
         toBusinessDateExclusive: nextBusinessDate(toBusinessDateInclusive!),
         buckets: SPENDER_AUTO_LIST_BUCKETS,
       }),
-    getSpenderProjectionAsOf(app.db, {
+    resolveMoneyAsOf(app, {
       pageIds: [page.id],
       platform: page.platform,
     }),
@@ -584,7 +601,7 @@ export async function getPageSpenderAutoListDetail(
         limit: query.limit,
         offset: query.offset,
       }),
-    getSpenderProjectionAsOf(app.db, {
+    resolveMoneyAsOf(app, {
       pageIds: [page.id],
       platform: page.platform,
     }),
