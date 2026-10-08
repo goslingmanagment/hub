@@ -2532,9 +2532,11 @@ export const pageFanIdentities = pgTable("page_fan_identities",
   }),
 );
 
-// OFAPI trial/tracking link statistics (2026-07-22): one run row per
-// completed (page, link_kind) list walk; append-only per-link snapshots.
-// Cumulative vendor counters stored as observed; deltas are query-time.
+// OFAPI trial/tracking link statistics (2026-07-22): one run row per ATTEMPT
+// to read a (page, link_kind) list — finished walks, and since migration 0252
+// the failed and the skipped ones too; append-only per-link snapshots under
+// the finished walks. Cumulative vendor counters stored as observed; deltas
+// are query-time.
 export const pageLinkStatRuns = pgTable(
   "page_link_stat_runs",
   {
@@ -2543,11 +2545,21 @@ export const pageLinkStatRuns = pgTable(
       .references(() => pages.id, { onDelete: "restrict" })
       .notNull(),
     linkKind: text("link_kind").notNull(),
+    // complete | partial | truncated | failed | skipped (CHECK in 0252).
     status: text("status").notNull(),
     pulledAt: timestamp("pulled_at", { withTimezone: true }).notNull(),
     apiPages: integer("api_pages").default(0).notNull(),
     rawItems: integer("raw_items").default(0).notNull(),
     writtenRows: integer("written_rows").default(0).notNull(),
+    // Why the row is not a clean 'complete'; see the column comment in 0252.
+    reason: text("reason"),
+    // The scheduled window the attempt belongs to; null on rows older than
+    // 0252 and on rows written by an image that predates it.
+    windowAt: timestamp("window_at", { withTimezone: true }),
+    // Ordinal of the row within its (page, link_kind, window).
+    attempt: smallint("attempt").default(1).notNull(),
+    // The OFAPI account the page was bound to when the attempt was made.
+    ofapiAccountId: text("ofapi_account_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
