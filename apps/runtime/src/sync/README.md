@@ -409,7 +409,7 @@ first page's recorded probe as evidence.
 A chat whose every read Fansly answers `500 {"success":false,"error":{"code":500,"details":"error getting group
 messages"}}` (lora-1, 04.10: the fan blocked the page) is not an excluded chat: the engine keeps reading what the
 socket shows, but it keeps a **chat-unavailability episode** of the page × chat
-(`page_dm_thread_unavailability`, 0249; `repositories/sync/chat-unavailability.ts`) — "Fansly does not serve this
+(`page_dm_thread_unavailability`, 0251; `repositories/sync/chat-unavailability.ts`) — "Fansly does not serve this
 chat's history to this page since T", with the attempt and observation ids that prove it and, apart, the owner's note.
 The page's actor is its one writer:
 

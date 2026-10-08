@@ -738,7 +738,7 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # looks at a deferred row (no confirm_due_at), its alert 3 never counts one,
   # its readers show it; its page and fan erasure delete the threads and the
   # episodes go with them through the cascade.
-  "0249_page_dm_thread_unavailability.sql"
+  "0251_page_dm_thread_unavailability.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

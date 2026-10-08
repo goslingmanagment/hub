@@ -23,7 +23,7 @@ const REQUIRED_TABLE_NAMES = [
   "history_request_items",
   // Fansly Sync Engine hold set (0240): the engine's hold evaluator reads it.
   "sync_holds",
-  // Fansly Sync Engine chat-unavailability episodes (0249): the refusal path,
+  // Fansly Sync Engine chat-unavailability episodes (0251): the refusal path,
   // the DM planner and the history intake read and write it.
   "page_dm_thread_unavailability",
 ] as const;

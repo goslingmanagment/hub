@@ -1878,7 +1878,7 @@ export const pageDmThreads = pgTable(
   }),
 );
 
-// Fansly Sync Engine chat-unavailability episodes (0249; arena "vanished
+// Fansly Sync Engine chat-unavailability episodes (0251; arena "vanished
 // chat", plan §2): Fansly does not serve a chat's history to its page. One
 // open episode per chat; written only by the page's actor
 // (repositories/sync/chat-unavailability.ts), except the owner's note. No fan

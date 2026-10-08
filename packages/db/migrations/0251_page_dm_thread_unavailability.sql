@@ -1,4 +1,4 @@
--- 0249_page_dm_thread_unavailability.sql
+-- 0251_page_dm_thread_unavailability.sql
 --
 -- Fansly Sync Engine, the chat Fansly stopped serving (arena "vanished chat",
 -- plan §2, R2): the chat-unavailability episode of a page × chat — "Fansly
