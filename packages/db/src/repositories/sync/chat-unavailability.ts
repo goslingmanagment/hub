@@ -261,17 +261,23 @@ export async function recordChatHeadRefusal(tx: Database, input: ChatHeadRefusal
  * end it — the wire failed, it timed out, a proxy or a 5xx without Fansly's
  * envelope answered, the route was limited: no refusal is counted (only
  * Fansly's own answer counts), but the episode's retry boundary moves to
- * `retryNotBefore` (only ever later), so the read is the boundary's one read
- * and the next one waits for the next boundary. Only an applied read ends the
- * episode. Fenced by the owner generation. False: no established episode.
+ * `retryNotBefore` and its answered list head to `handledListHeadId` (both
+ * only ever later), so the read is the boundary's one read, its list head
+ * asks for none again, and the next read waits for the next boundary and a
+ * new demand. Only an applied read ends the episode. Fenced by the owner
+ * generation. False: no established episode.
  */
 export async function postponeChatUnavailabilityRetry(
   tx: Database,
-  input: { pageId: number; groupId: string; generation: bigint; retryNotBefore: Date },
+  input: { pageId: number; groupId: string; generation: bigint; retryNotBefore: Date; handledListHeadId?: string | null },
 ): Promise<boolean> {
+  const handled = input.handledListHeadId !== undefined && input.handledListHeadId !== null && DECIMAL_ID.test(input.handledListHeadId)
+    ? input.handledListHeadId
+    : null;
   const result = await tx.execute(sql`
     update page_dm_thread_unavailability e
        set retry_not_before = greatest(e.retry_not_before, ${timestampParam(input.retryNotBefore)}),
+           handled_list_head_id = ${laterIdSql(sql`e.handled_list_head_id`, sql`${handled}::text`)},
            updated_at = clock_timestamp()
       from page_dm_threads t
       join sync_pages sp on sp.page_id = t.platform_account_id and sp.owner_generation = ${generationParam(input.generation)}

@@ -150,7 +150,9 @@ import { purchaseTargetFollowups, purchaseTargetSubject, type PurchaseTarget } f
 // before the boundary (the plan waits: no background probe, owner decision
 // Р5) — a new socket message or list head opens work that reads once after
 // it; any head read of an established chat that does not end the episode (a
-// refusal, a timeout, the wire, another 5xx, a 429) moves the boundary. An applied head
+// refusal, a timeout, the wire, another 5xx, a 429, a 401) moves the boundary
+// and the answered list head and finishes its work as a refusal does — one
+// demand, one read (a timeout counts no refusal). An applied head
 // read ends the episode (`read_served`, in the apply's transaction); a plan
 // that closes the work of a chat excluded or unbound since ends it too (a
 // `local` step, `thread_excluded` / `thread_unbound`). A `before` read neither
@@ -1120,53 +1122,82 @@ export function chatRetryNotBefore(decision: Pick<OutcomeDecision, "subjectBreak
 /**
  * The capture transaction's hook of the three keys (`outcomeInCapture`), for
  * a head read (no `before`) that did not succeed. A qualifying refusal opens
- * or advances the chat's episode; one that leaves it established (its own 5th
- * refusal, or any later one) defers the chat's unconfirmed socket messages,
- * closes its open head and catch-up rows `chat_unavailable` with the demand
- * unserved — the refused one through the decision (I11: only when no newer
- * demand arrived during the step), the others only at the revision they were
- * read at (a demand that came since keeps a row open, under the episode's
- * boundary) and only when their next read is the head (a staged walk below
- * its head read finishes under its own breaker; a row the chain covers closes
- * by its own plan) — and asks the history requests to refuse the chat's fans that
- * need its head: a history walk is never closed here (an anchored fan of its
- * keeps reading below the chain under the key's own breaker; the history
- * hook closes the work when no fan is left). Any other failed head read of an
- * established chat — the wire, a timeout, a proxy's page, a 5xx without the
- * envelope, a 429, a 401 — counts no refusal and changes no hold, but moves
- * the episode's boundary all the same: the read went out, only an applied one
- * ends the episode, so the next read waits for the next boundary. Lock order:
- * the episode → the overlay rows → the work rows (id order); the history rows
- * follow the commit's settle. The erasure fence is not taken: nothing here
- * writes archive material (the episode has no fan identity; the rest updates
- * rows an erasure would delete).
+ * or advances the chat's episode (its own count: refusals, the latest attempt
+ * and answer). Any other failed head read — the wire, a timeout, a proxy's
+ * page, a 5xx without the envelope, a 429 or a 401 that reached the send —
+ * counts no refusal and changes no page or route hold, but on an established
+ * episode it moves the boundary and the answered list head all the same: the
+ * read went out, and only an applied one ends the episode.
+ *
+ * Every failed head read that leaves the episode established (its own 5th
+ * refusal, any later one, any failure after) then finishes like an
+ * establishment (`settleEstablishedChat`) — so one demand is one read: the
+ * refused work closes and nothing reads the chat again without a new message
+ * or a new list head (owner decision Р5 (а), no background reads).
  */
 async function chatRefusalInCapture(tx: Database, decision: OutcomeDecision, input: CaptureOutcomeInput): Promise<CaptureOutcomeResult> {
   const unchanged: CaptureOutcomeResult = { decision };
   const groupId = input.work.subject;
   if (decision.errorClass === "ok" || input.step.request.spec !== "messages.page"
     || requestedParams(input.step.request).before !== null || !DECIMAL_ID.test(groupId)) return unchanged;
-  const retryNotBefore = chatRetryNotBefore(decision, input.now);
-  if (!isQualifyingChatRefusal(decision, input) || input.observation === null) {
-    await postponeChatUnavailabilityRetry(tx, { pageId: input.pageId, groupId, generation: input.generation, retryNotBefore });
-    return unchanged;
-  }
   const thread = await readThread(tx, input.pageId, groupId);
   if (thread === null) return unchanged;
-  const recorded = await recordChatHeadRefusal(tx, {
-    pageId: input.pageId,
-    groupId,
-    generation: input.generation,
-    attemptId: input.attemptId,
-    httpStatus: input.step.httpStatus,
-    observation: input.observation,
-    at: input.now,
-    retryNotBefore,
-    // The newest head this read answered: the list's, or a demanded id.
-    handledListHeadId: maxId([...(thread.state.lastMessageId === null ? [] : [thread.state.lastMessageId]), ...input.work.demand.messageIds]),
-  });
-  if (recorded === null || recorded.episode.state !== "established") return unchanged;
-  const episode = recorded.episode;
+  const retryNotBefore = chatRetryNotBefore(decision, input.now);
+  // The newest head this read answered: the list's, or a demanded id.
+  const handledListHeadId = maxId([...(thread.state.lastMessageId === null ? [] : [thread.state.lastMessageId]), ...input.work.demand.messageIds]);
+  let episode: ChatUnavailabilityEpisode | null;
+  if (isQualifyingChatRefusal(decision, input) && input.observation !== null) {
+    const recorded = await recordChatHeadRefusal(tx, {
+      pageId: input.pageId,
+      groupId,
+      generation: input.generation,
+      attemptId: input.attemptId,
+      httpStatus: input.step.httpStatus,
+      observation: input.observation,
+      at: input.now,
+      retryNotBefore,
+      handledListHeadId,
+    });
+    episode = recorded?.episode ?? null;
+  } else {
+    const postponed = await postponeChatUnavailabilityRetry(tx, {
+      pageId: input.pageId, groupId, generation: input.generation, retryNotBefore, handledListHeadId,
+    });
+    if (!postponed) return unchanged;
+    episode = await openEpisodeOf(tx, input.pageId, groupId);
+  }
+  if (episode === null || episode.state !== "established") return unchanged;
+  return settleEstablishedChat(tx, decision, input, thread, episode);
+}
+
+/**
+ * A failed head read of an established chat, in its capture transaction: the
+ * chat's unconfirmed socket messages are deferred (`chat_unavailable`, still
+ * shown); its open head and catch-up rows close `chat_unavailable` with the
+ * demand unserved — the read's own one through the decision (I11: only when
+ * no newer demand arrived during the step; else it stays open, and that
+ * demand gets one read after the boundary), the others only at the revision
+ * they were read at (a demand that came since keeps a row open, under the
+ * boundary) and only when their next read is the head (a staged walk below
+ * its head read finishes under its own breaker; a row the chain covers closes
+ * by its own plan); the history requests refuse the chat's fans that need its
+ * head — a history walk is never closed here (an anchored fan keeps reading
+ * below the chain under the key's own breaker; the history hook closes the
+ * work when no fan is left). A decision that does not reopen the work (a
+ * quarantine) is left as it is. Lock order: the episode → the overlay rows →
+ * the work rows (id order); the history rows follow the commit's settle. The
+ * erasure fence is not taken: nothing here writes archive material (the
+ * episode has no fan identity; the rest updates rows an erasure would
+ * delete).
+ */
+async function settleEstablishedChat(
+  tx: Database,
+  decision: OutcomeDecision,
+  input: CaptureOutcomeInput,
+  thread: DmThread,
+  episode: ChatUnavailabilityEpisode,
+): Promise<CaptureOutcomeResult> {
+  const groupId = input.work.subject;
   await deferChatUnavailableLiveMessages(tx, { pageId: input.pageId, groupId });
   // The chat's other work that reads its head: its head and catch-up rows
   // close now; its history row (held here, in id order with the rest) is the
@@ -1190,7 +1221,7 @@ async function chatRefusalInCapture(tx: Database, decision: OutcomeDecision, inp
   ])).map((work) => [work.id, work]));
   for (const seen of others) {
     // Under its lock, at the revision it was read at: a demand that came
-    // since (a socket message) is newer than this refusal answered — the row
+    // since (a socket message) is newer than this read answered — the row
     // stays open, and its plan waits for the episode's boundary.
     const now = locked.get(seen.id);
     if (now === undefined || now.state !== "open" || now.demandRevision !== seen.demandRevision) continue;
@@ -1210,9 +1241,9 @@ async function chatRefusalInCapture(tx: Database, decision: OutcomeDecision, inp
   const chatUnavailable = { threadId: thread.state.id };
   // A history walk is the history requests' to end: only its fans that need
   // the head are refused, and it closes when none is left.
-  if (input.work.resource === HISTORY_KEY) return { decision, chatUnavailable };
+  if (input.work.resource === HISTORY_KEY || decision.work.action !== "reopen") return { decision, chatUnavailable };
   const own = locked.get(input.work.id) ?? input.work;
-  const reopen = decision.work.action === "reopen" ? decision.work : null;
+  const reopen = decision.work;
   return {
     decision: {
       ...decision,
@@ -1221,7 +1252,9 @@ async function chatRefusalInCapture(tx: Database, decision: OutcomeDecision, inp
         closeReason: CHAT_UNAVAILABLE_REASON,
         satisfiesRevision: false,
         result: { ...account, unservedMessageIds: own.demand.messageIds },
-        ...(reopen === null ? {} : { dueAt: reopen.dueAt, waitingReason: reopen.waitingReason, waitingUntil: reopen.waitingUntil }),
+        dueAt: reopen.dueAt,
+        waitingReason: reopen.waitingReason,
+        waitingUntil: reopen.waitingUntil,
       },
     },
     chatUnavailable,

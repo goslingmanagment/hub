@@ -715,36 +715,76 @@ describe("after establishment (owner decision Р5: no background reads)", () => 
 });
 
 describe("the review of PR #490", () => {
-  it("after the boundary a read that does not end the episode — a timeout, a proxy's 502 — is the boundary's one read: the next waits for the next boundary", async (context) => {
+  it("one demand is one read: a read that times out or that a proxy answers finishes its work like a refusal, no later boundary reads again, and only a new message reads once more", async (context) => {
     if (!testDb) return context.skip();
     const pageId = await seedPage();
     const threadId = await seedThread(pageId);
     const registry = await registryFor(pageId);
     const episodeId = await seedEpisode(threadId, { state: "established", refusals: 5, retryInMs: -1_000, handledListHeadId: msg(7) });
-    await liveOverlay(pageId, 9);
-    await demand(pageId, HEAD_KEY, [msg(9)]);
     const timeout = (): FanslyWireOutcome => ({ kind: "timeout", sent: true, message: "timeout" });
-    for (const [answer, respond] of [["timeout", timeout], ["proxy 502", () => proxyPage(502)]] as const) {
-      const { requests } = await runFor(pageId, registry, respond, 2_000);
-      expect(requests, answer).toHaveLength(1);
-      expect(beforeOf(requests[0]!)).toBeNull();
-      const [episode] = await episodes(threadId);
-      // No refusal counted (only Fansly's own answer counts), the boundary moved.
-      expect(episode, answer).toMatchObject({ state: "established", refusals: 5, ended_at: null });
-      expect(episode!.retry_not_before!.getTime(), answer).toBeGreaterThan(Date.now() + BLOCKED_PROBE_EVERY_MS - 60_000);
-      // Its own breaker (if any) passes: the message's work still waits for the boundary.
-      await rewind(pageId);
-      expect((await runFor(pageId, registry, respond, 1_500)).requests, answer).toHaveLength(0);
-      const parked = await workRow(pageId, HEAD_KEY);
-      expect(parked, answer).toMatchObject({ state: "open", waiting_reason: "not_due" });
-      expect(parked!.due_at.getTime(), answer).toBe(episode!.retry_not_before!.getTime());
-      // The next boundary passes.
-      await testDb.pool.query(
+    const boundaryPasses = async () => {
+      await testDb!.pool.query(
         "update page_dm_thread_unavailability set retry_not_before = now() - interval '1 second' where id = $1",
         [episodeId],
       );
       await rewind(pageId);
+    };
+    const readOnce = async (respond: Responder, onHit?: () => Promise<void>) => {
+      const before = (await capturedAttempts(pageId)).length;
+      const { requests } = await runLive(pageId, registry, respond, async () => (await capturedAttempts(pageId)).length > before, {
+        ...(onHit === undefined ? {} : { onHit }),
+      });
+      expect(requests).toHaveLength(1);
+      expect(beforeOf(requests[0]!)).toBeNull();
+    };
+    const boundaryOfEpisode = async () => (await episodes(threadId))[0]!.retry_not_before!.getTime();
+
+    // The fan writes after the boundary: one read, and it times out.
+    await liveOverlay(pageId, 9);
+    await demand(pageId, HEAD_KEY, [msg(9)]);
+    await readOnce(timeout);
+    const [afterTimeout] = await episodes(threadId);
+    // No refusal counted (only Fansly's own answer counts); the boundary and the answered head moved.
+    expect(afterTimeout).toMatchObject({ state: "established", refusals: 5, ended_at: null, handled_list_head_id: msg(9) });
+    expect(afterTimeout!.retry_not_before!.getTime()).toBeGreaterThan(Date.now() + BLOCKED_PROBE_EVERY_MS - 60_000);
+    // Its work finished as a refusal's does; the message deferred.
+    const closed = await workRow(pageId, HEAD_KEY);
+    expect(closed).toMatchObject({ state: "done", close_reason: "chat_unavailable" });
+    expect(Number(closed!.applied_revision)).toBeLessThan(Number(closed!.demand_revision));
+    expect(closed!.result).toMatchObject({ unservedMessageIds: [msg(9)] });
+    expect(await liveRow(pageId, 9)).toMatchObject({ confirm_wait_reason: "chat_unavailable", confirm_due_at: null, confirmed_at: null });
+    // Later boundaries pass without a new message: nothing is read, and the
+    // list's same head asks for nothing.
+    for (let boundary = 0; boundary < 2; boundary += 1) {
+      await boundaryPasses();
+      expect((await runFor(pageId, registry, timeout, 1_500)).requests).toHaveLength(0);
     }
+    expect((await listPass(pageId, 9)).followups.filter((followup) => followup.subject === groupOf(1))).toEqual([]);
+
+    // A new message: exactly one more read — a proxy's 502 — while the next
+    // message's signal lands during it: that newer demand keeps the row open.
+    await liveOverlay(pageId, 11);
+    await demand(pageId, HEAD_KEY, [msg(11)]);
+    await readOnce(() => proxyPage(502), async () => {
+      await demand(pageId, HEAD_KEY, [msg(13)]);
+    });
+    expect((await episodes(threadId))[0]).toMatchObject({ refusals: 5, handled_list_head_id: msg(11) });
+    expect(await workRow(pageId, HEAD_KEY)).toMatchObject({ state: "open" });
+    expect(await liveRow(pageId, 11)).toMatchObject({ confirm_wait_reason: "chat_unavailable" });
+    // Its own breaker passes: it waits for the boundary …
+    await rewind(pageId);
+    expect((await runFor(pageId, registry, timeout, 1_500)).requests).toHaveLength(0);
+    const parked = await workRow(pageId, HEAD_KEY);
+    expect(parked).toMatchObject({ state: "open", waiting_reason: "not_due" });
+    expect(parked!.due_at.getTime()).toBe(await boundaryOfEpisode());
+    // … and then the newer demand gets its one read, which finishes the work.
+    await boundaryPasses();
+    await readOnce(timeout);
+    const finished = await workRow(pageId, HEAD_KEY);
+    expect(finished).toMatchObject({ state: "done", close_reason: "chat_unavailable" });
+    expect(finished!.result).toMatchObject({ unservedMessageIds: [msg(11), msg(13)] });
+    await boundaryPasses();
+    expect((await runFor(pageId, registry, timeout, 1_500)).requests).toHaveLength(0);
   });
 
   it("a refused head read of a history walk refuses the fan that needs the head and keeps the walk for the anchored fan, which reads below the chain", async (context) => {
