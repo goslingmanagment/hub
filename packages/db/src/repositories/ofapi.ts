@@ -3610,6 +3610,23 @@ export async function listLinkStatSeriesHealth(db: Database): Promise<LinkStatSe
   }));
 }
 
+/** The earliest window the series ever stamped at each time of day (UTC
+ * hour and minute) — at most one row per schedule slot ever used, from the
+ * whole history, not a bounded range. The caller keeps the stamps that lie on
+ * its current schedule; the earliest of those is where the schedule began. */
+export async function listFirstLinkStatWindowStamps(db: Database): Promise<Date[]> {
+  const result = await db.execute<{ first: Date | string }>(sql`
+    select min(r.window_at) as first
+    from page_link_stat_runs r
+    where r.window_at is not null
+    group by extract(hour from r.window_at at time zone 'UTC'),
+             extract(minute from r.window_at at time zone 'UTC')
+  `);
+  return result.rows
+    .map((row) => toDateOrNull(row.first))
+    .filter((first): first is Date => first !== null);
+}
+
 /** Which (page, kind, window) have a row of any status, for windows from
  * `since` on. */
 export async function listLinkStatAttemptWindows(

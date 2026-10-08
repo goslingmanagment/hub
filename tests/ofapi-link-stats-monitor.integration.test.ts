@@ -18,6 +18,7 @@ import { runOfapiAccountHealthMonitor } from "../apps/runtime/src/services/ofapi
 import {
   OFAPI_LINK_STATS_SERIES_STALE_AFTER_MS,
   runOfapiLinkStatsSeriesMonitor,
+  type OfapiLinkStatsSeriesMonitorState,
 } from "../apps/runtime/src/services/ofapi-link-stats-monitor.ts";
 import {
   nextOfapiLinkStatsWindowAt,
@@ -92,6 +93,7 @@ async function attempt(
   windowAt: Date,
   status: LinkStatRunStatus,
   reason: string | null = null,
+  ofapiAccountId = "acct_monitor",
 ) {
   const run = {
     platformAccountId: pageId,
@@ -103,7 +105,7 @@ async function attempt(
     writtenRows: status === "complete" ? 1 : 0,
     reason,
     windowAt,
-    ofapiAccountId: "acct_monitor",
+    ofapiAccountId,
   };
   if (status === "complete" || status === "partial") {
     await insertLinkStatRunWithSnapshots(appContext.db, run, status === "complete"
@@ -126,10 +128,28 @@ async function openIncidents() {
     .sort((left, right) => left.key.localeCompare(right.key));
 }
 
-const monitor = (now: Date) => runOfapiLinkStatsSeriesMonitor(appContext, {
-  now,
-  authNeedsAction: (status) => status === "authentication_failed",
-});
+/** One monitor run. Each gets a fresh process state unless one is passed:
+ * the state only matters for a series that never stamped a window. */
+const monitor = (now: Date, state: OfapiLinkStatsSeriesMonitorState = { seenEnabledAt: null }) =>
+  runOfapiLinkStatsSeriesMonitor(appContext, {
+    now,
+    authNeedsAction: (status) => status === "authentication_failed",
+    state,
+  });
+
+/** `count` windows back from `windowAt`. */
+function windowsBack(windowAt: Date, count: number): Date {
+  let back = windowAt;
+  for (let step = 0; step < count; step += 1) back = previousOfapiLinkStatsWindowAt(back);
+  return back;
+}
+
+async function windowMissedOf(pageId: number) {
+  return (await listLinkStatRuns(appContext.db, { platformAccountId: pageId }))
+    .filter((run) => run.reason === "window_missed")
+    .map((run) => `${run.linkKind}@${run.windowAt?.toISOString()}`)
+    .sort();
+}
 
 describe("the link series monitor", () => {
   it("one kind keeps failing while the other works: the failing one goes stale, its rows and the window_missed rows do not keep it fresh", async (context) => {
@@ -243,6 +263,126 @@ describe("the link series monitor", () => {
     expect(await windowOf(old.id)).toEqual([third!.toISOString(), third!.toISOString()]);
     expect(await windowOf(late.id)).toEqual([third!.toISOString(), third!.toISOString()]);
     expect(previousOfapiLinkStatsWindowAt(third!)).toEqual(second);
+  });
+
+  it("a series whose job never fires is reported: from the first window after it was seen enabled, durably once a window is marked", async (context) => {
+    if (!testDb) return context.skip();
+
+    // A mapped page; the series is enabled; not one row was ever written.
+    const page = await seedPage("monitor-never-of", "acct_monitor");
+    const state: OfapiLinkStatsSeriesMonitorState = { seenEnabledAt: null };
+    const seen = after(W0, 5 * MINUTE);
+    const firstExpected = nextOfapiLinkStatsWindowAt(W0);
+
+    expect(await monitor(seen, state)).toEqual({ stalePages: [], unmappedPages: [], windowMissedRows: 0 });
+    expect(state.seenEnabledAt).toEqual(seen);
+    // The first expected window closes: its hole is marked — a stamp, so the
+    // anchor no longer depends on this process.
+    const marked = await monitor(after(nextOfapiLinkStatsWindowAt(firstExpected), MINUTE), state);
+    expect(marked.windowMissedRows).toBe(2);
+    expect(await windowMissedOf(page.id)).toEqual([
+      `tracking@${firstExpected.toISOString()}`,
+      `trial@${firstExpected.toISOString()}`,
+    ]);
+
+    // A restart (fresh state) past the threshold: the stale latch opens.
+    const staleAt = after(firstExpected, OFAPI_LINK_STATS_SERIES_STALE_AFTER_MS + MINUTE);
+    const stale = await monitor(staleAt);
+    expect(stale.stalePages).toEqual([page.id]);
+    const [incident] = await openIncidents();
+    expect(incident!.key).toBe(`ofapi_link_stats_reconcile_failed:${page.id}:series_stale`);
+    expect(incident!.summary).toContain(`tracking: no usable result since the first attempt at ${firstExpected.toISOString()}`);
+    expect(incident!.summary).toContain("skipped: window missed");
+  });
+
+  it("a pair with no row at all is stale from the first window it was expected in", async (context) => {
+    if (!testDb) return context.skip();
+
+    // Another page anchors the series; this one was created later and the
+    // job never wrote a row for it. The monitor would mark its closed
+    // windows first (and the pair would count from that mark); a trigger
+    // refuses those marks here, so the run exercises the pair that has no
+    // row at all — the safety net when marking cannot happen.
+    const anchorPage = await seedPage("monitor-anchor-of", "acct_monitor");
+    await attempt(anchorPage.id, "tracking", W0, "complete");
+    await attempt(anchorPage.id, "trial", W0, "complete");
+    const lonely = await seedPage("monitor-lonely-of", "acct_monitor_lonely");
+    const createdAt = after(W0, HOUR);
+    await testDb.pool.query(`update pages set created_at = $2 where id = $1`, [lonely.id, createdAt]);
+    const firstExpected = nextOfapiLinkStatsWindowAt(W0);
+    const staleAt = after(firstExpected, OFAPI_LINK_STATS_SERIES_STALE_AFTER_MS + MINUTE);
+    const client = await testDb.pool.connect();
+    try {
+      await client.query(
+        `create or replace function no_window_missed() returns trigger language plpgsql as $$
+           begin if new.reason = 'window_missed' and new.platform_account_id = ${lonely.id} then return null; end if; return new; end $$`,
+      );
+      await client.query(
+        `create trigger no_window_missed before insert on page_link_stat_runs
+           for each row execute function no_window_missed()`,
+      );
+    } finally {
+      client.release();
+    }
+    try {
+      const result = await monitor(staleAt);
+      expect(result.stalePages).toContain(lonely.id);
+      const summary = (await openIncidents())
+        .find((incident) => incident.key === `ofapi_link_stats_reconcile_failed:${lonely.id}:series_stale`)!.summary;
+      expect(summary).toBe([
+        `tracking: no attempt at all since the first window it was expected in, ${firstExpected.toISOString()} — is the job running?`,
+        `trial: no attempt at all since the first window it was expected in, ${firstExpected.toISOString()} — is the job running?`,
+      ].join(" | "));
+    } finally {
+      await testDb.pool.query(`drop trigger if exists no_window_missed on page_link_stat_runs`);
+      await testDb.pool.query(`drop function if exists no_window_missed()`);
+    }
+  });
+
+  it("after an outage longer than the look-back the last twelve windows are still marked, even once collection resumed", async (context) => {
+    if (!testDb) return context.skip();
+
+    const page = await seedPage("monitor-outage-of", "acct_monitor");
+    const open = W0;
+    const lastBefore = windowsBack(open, 20);
+    await attempt(page.id, "tracking", lastBefore, "complete");
+    await attempt(page.id, "trial", lastBefore, "complete");
+    // Twenty windows of nothing — collector and monitor both down — then the
+    // collector is back first: the open window has its rows.
+    await attempt(page.id, "tracking", open, "complete");
+    await attempt(page.id, "trial", open, "complete");
+
+    const result = await monitor(after(open, 10 * MINUTE));
+    expect(result.windowMissedRows).toBe(24);
+    const marked = await windowMissedOf(page.id);
+    const expected = Array.from({ length: 12 }, (_, index) => windowsBack(open, index + 1).toISOString())
+      .flatMap((windowAt) => [`tracking@${windowAt}`, `trial@${windowAt}`])
+      .sort();
+    expect(marked).toEqual(expected);
+    // Windows older than the look-back stay unmarked; a second run adds nothing.
+    expect(marked.some((entry) => entry.endsWith(windowsBack(open, 13).toISOString()))).toBe(false);
+    expect((await monitor(after(open, 11 * MINUTE))).windowMissedRows).toBe(0);
+  });
+
+  it("a cold cache after a rebind that persists goes stale; a kind that never had a link stays quiet", async (context) => {
+    if (!testDb) return context.skip();
+
+    const page = await seedPage("monitor-cold-of", "acct_monitor_cold_after");
+    const windows = windowsFrom(W0, 6);
+    // Before the rebind: tracking had links, trial never had one (lora-of).
+    await attempt(page.id, "tracking", windows[0]!, "complete", null, "acct_monitor_cold_before");
+    await attempt(page.id, "trial", windows[0]!, "partial", "empty_unverified", "acct_monitor_cold_before");
+    // After it: the new account's cache stays cold for both kinds.
+    for (const windowAt of windows.slice(1)) {
+      await attempt(page.id, "tracking", windowAt, "partial", "empty_unverified");
+      await attempt(page.id, "trial", windowAt, "partial", "empty_unverified");
+    }
+    const lastUsableTracking = after(windows[0]!, 20_000);
+    const result = await monitor(after(lastUsableTracking, OFAPI_LINK_STATS_SERIES_STALE_AFTER_MS + MINUTE));
+    expect(result.stalePages).toEqual([page.id]);
+    const [incident] = await openIncidents();
+    expect(incident!.summary).toMatch(/^tracking: no usable result since .+; last attempt .+ partial: empty unverified$/);
+    expect(incident!.summary).not.toContain("trial");
   });
 
   it("an unmapped page opens page_unmapped at once and resolves when it is mapped; it gets no second, stale latch for the same cause", async (context) => {

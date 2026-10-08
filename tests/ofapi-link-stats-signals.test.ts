@@ -18,6 +18,8 @@ import {
   closedLinkStatWindowsToCheck,
   describeStaleLinkStatPairs,
   findStaleLinkStatPairs,
+  firstOfapiLinkStatsWindowAtOrAfter,
+  linkStatSeriesAnchor,
   OFAPI_LINK_STATS_SERIES_STALE_AFTER_MS,
 } from "../apps/runtime/src/services/ofapi-link-stats-monitor.ts";
 import {
@@ -162,11 +164,12 @@ describe("when the series counts as not written", () => {
         linkKind: "trial", lastUsableAt: T0, firstAttemptAt: at(-limit),
         lastAttemptAt: at(limit), lastAttemptStatus: "failed", lastAttemptReason: "trial endpoint down",
       }),
-    ], now);
+    ], now, () => null);
     expect(stale).toEqual([{
       linkKind: "trial",
       since: T0,
       neverHadResult: false,
+      neverAttempted: false,
       lastAttemptAt: at(limit),
       lastAttemptStatus: "failed",
       lastAttemptReason: "trial endpoint down",
@@ -175,15 +178,16 @@ describe("when the series counts as not written", () => {
       `trial: no usable result since ${T0.toISOString()}; last attempt ${at(limit).toISOString()} failed: trial endpoint down`,
     );
     // Exactly at the limit it is not stale yet.
-    expect(findStaleLinkStatPairs([row({ lastUsableAt: T0, firstAttemptAt: T0 })], at(limit))).toEqual([]);
+    expect(findStaleLinkStatPairs([row({ lastUsableAt: T0, firstAttemptAt: T0 })], at(limit), () => null)).toEqual([]);
   });
 
-  it("a pair that never had a result counts from its first attempt; one never attempted stays quiet", () => {
+  it("a pair that never had a result counts from its first attempt", () => {
     const limit = OFAPI_LINK_STATS_SERIES_STALE_AFTER_MS;
     const stale = findStaleLinkStatPairs([
       row({ linkKind: "trial", firstAttemptAt: T0, lastAttemptAt: at(limit), lastAttemptStatus: "skipped", lastAttemptReason: "ofapi_mapping_changed" }),
+      // Never attempted, and the series has no anchor: nothing is expected.
       row({ linkKind: "tracking" }),
-    ], at(limit + MINUTE));
+    ], at(limit + MINUTE), () => null);
     expect(stale).toEqual([expect.objectContaining({ linkKind: "trial", since: T0, neverHadResult: true })]);
     // The incident text cannot quote an `ofapi_…` code: the sanitizer would
     // redact it.
@@ -194,6 +198,41 @@ describe("when the series counts as not written", () => {
     expect(describeStaleLinkStatPairs([{ ...stale[0]!, lastAttemptAt: T0 }])).toBe(
       `trial: no usable result since the first attempt at ${T0.toISOString()}; no attempt since`,
     );
+  });
+
+  it("a pair never attempted counts from the first window it was expected in — a job that never fires is reported", () => {
+    const limit = OFAPI_LINK_STATS_SERIES_STALE_AFTER_MS;
+    const expected = firstOfapiLinkStatsWindowAtOrAfter(T0);
+    const pairs = [row({ linkKind: "tracking" }), row({ linkKind: "trial" })];
+    expect(findStaleLinkStatPairs(pairs, new Date(expected.getTime() + limit), () => expected)).toEqual([]);
+    const stale = findStaleLinkStatPairs(pairs, new Date(expected.getTime() + limit + MINUTE), () => expected);
+    expect(stale).toEqual([
+      expect.objectContaining({ linkKind: "tracking", since: expected, neverHadResult: true, neverAttempted: true }),
+      expect.objectContaining({ linkKind: "trial", since: expected, neverHadResult: true, neverAttempted: true }),
+    ]);
+    expect(describeStaleLinkStatPairs(stale.slice(0, 1))).toBe(
+      `tracking: no attempt at all since the first window it was expected in, ${expected.toISOString()} — is the job running?`,
+    );
+  });
+});
+
+describe("since when the series is expected", () => {
+  const windowAt = ofapiLinkStatsWindowAt(new Date("2026-10-08T12:00:00Z"));
+
+  it("from the earliest stamp on the current schedule, wherever in history it lies", () => {
+    const old = previousOfapiLinkStatsWindowAt(previousOfapiLinkStatsWindowAt(windowAt));
+    expect(linkStatSeriesAnchor([windowAt, old], new Date("2026-10-08T23:00:00Z"))).toEqual(old);
+    // A stamp off today's grid is another schedule's.
+    const offGrid = new Date(old.getTime() - 30 * MINUTE);
+    expect(linkStatSeriesAnchor([offGrid, windowAt], null)).toEqual(windowAt);
+  });
+
+  it("for a series that never stamped a window, from the first window after it was seen enabled", () => {
+    const seen = new Date(windowAt.getTime() + 5 * MINUTE);
+    expect(linkStatSeriesAnchor([], seen)).toEqual(nextOfapiLinkStatsWindowAt(windowAt));
+    expect(linkStatSeriesAnchor([], windowAt)).toEqual(windowAt);
+    expect(linkStatSeriesAnchor([], null)).toBeNull();
+    expect(firstOfapiLinkStatsWindowAtOrAfter(seen)).toEqual(nextOfapiLinkStatsWindowAt(windowAt));
   });
 });
 
@@ -206,21 +245,21 @@ describe("which closed windows the monitor answers for", () => {
     return windowAt;
   };
 
-  it("nothing before the series ever stamped a window", () => {
-    expect(closedLinkStatWindowsToCheck(now, [])).toEqual([]);
-    // Stamps that are not on the current grid (another schedule) start nothing.
-    expect(closedLinkStatWindowsToCheck(now, [new Date(back(1).getTime() + 30 * MINUTE)])).toEqual([]);
+  it("nothing while the series has no anchor", () => {
+    expect(closedLinkStatWindowsToCheck(now, null)).toEqual([]);
   });
 
-  it("the closed windows from the first stamped one on, never the open one", () => {
-    expect(closedLinkStatWindowsToCheck(now, [back(3)])).toEqual([back(3), back(2), back(1)]);
-    // Stamping the open window alone means nothing has closed since.
-    expect(closedLinkStatWindowsToCheck(now, [open])).toEqual([]);
+  it("the closed windows from the anchor on, never the open one", () => {
+    expect(closedLinkStatWindowsToCheck(now, back(3))).toEqual([back(3), back(2), back(1)]);
+    // An anchor between windows starts at the next one.
+    expect(closedLinkStatWindowsToCheck(now, new Date(back(3).getTime() + MINUTE))).toEqual([back(2), back(1)]);
+    // Anchored in the open window: nothing has closed since.
+    expect(closedLinkStatWindowsToCheck(now, open)).toEqual([]);
     expect(nextOfapiLinkStatsWindowAt(back(1))).toEqual(open);
   });
 
-  it("no further back than twelve windows", () => {
-    const windows = closedLinkStatWindowsToCheck(now, [back(30)]);
+  it("checks no further back than twelve windows, however old the anchor", () => {
+    const windows = closedLinkStatWindowsToCheck(now, back(30));
     expect(windows).toHaveLength(12);
     expect(windows[0]).toEqual(back(12));
     expect(windows[11]).toEqual(back(1));

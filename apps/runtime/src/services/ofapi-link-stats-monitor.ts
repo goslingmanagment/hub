@@ -24,10 +24,20 @@
 //                  row, so that whoever reads the series — a dataset, a
 //                  report — sees the hole where it is.
 //
+// Both rest on one anchor: since when the series is expected on today's
+// schedule. That is the earliest window it ever stamped on this schedule,
+// read from the whole history (an outage longer than the look-back must not
+// move it); for a series that never stamped a window, the moment this
+// process first saw it enabled — its first `window_missed` row then makes
+// the anchor durable. A pair with no attempt at all is expected from the
+// first window after the anchor and after its page was created, so a series
+// whose job never fires is still reported.
+//
 // The latches are page-scoped sub-keys of the kind a failed pass already has
 // (no new incident kind: an image rolled back to could not show one).
 
 import {
+  listFirstLinkStatWindowStamps,
   listLinkStatAttemptWindows,
   listLinkStatSeriesHealth,
   listNotificationIncidents,
@@ -71,27 +81,31 @@ const WINDOW_MISSED_LOOKBACK_WINDOWS = 12;
 
 export interface LinkStatsStalePair {
   linkKind: LinkStatKind;
-  /** The latest usable result, or — for a pair that never had one — the
-   * first attempt: the moment since which the series has had nothing. */
+  /** The latest usable result; for a pair that never had one, its first
+   * attempt; for a pair never attempted, the first window it was expected
+   * in — the moment since which the series has had nothing. */
   since: Date;
   neverHadResult: boolean;
+  /** Not a single row, of any status, was ever written for the pair. */
+  neverAttempted: boolean;
   lastAttemptAt: Date | null;
   lastAttemptStatus: string | null;
   lastAttemptReason: string | null;
 }
 
-/** Which of a page's kinds are stale at `now`. Pure. A pair nothing was ever
- * attempted for has no baseline to measure from and stays quiet (a page that
- * was just added); one with attempts and no result is measured from its first
- * attempt. */
+/** Which of a page's kinds are stale at `now`. Pure. A pair with attempts and
+ * no result is measured from its first attempt; a pair nothing was ever
+ * attempted for, from the first window it was expected in (`expectedSince`,
+ * null = the series has no anchor yet, so nothing is expected). */
 export function findStaleLinkStatPairs(
   rows: readonly LinkStatSeriesHealthRow[],
   now: Date,
+  expectedSince: (row: LinkStatSeriesHealthRow) => Date | null,
   staleAfterMs = OFAPI_LINK_STATS_SERIES_STALE_AFTER_MS,
 ): LinkStatsStalePair[] {
   const stale: LinkStatsStalePair[] = [];
   for (const row of rows) {
-    const since = row.lastUsableAt ?? row.firstAttemptAt;
+    const since = row.lastUsableAt ?? row.firstAttemptAt ?? expectedSince(row);
     if (since === null || now.getTime() - since.getTime() <= staleAfterMs) {
       continue;
     }
@@ -99,6 +113,7 @@ export function findStaleLinkStatPairs(
       linkKind: row.linkKind,
       since,
       neverHadResult: row.lastUsableAt === null,
+      neverAttempted: row.firstAttemptAt === null,
       lastAttemptAt: row.lastAttemptAt,
       lastAttemptStatus: row.lastAttemptStatus,
       lastAttemptReason: row.lastAttemptReason,
@@ -112,6 +127,10 @@ export function findStaleLinkStatPairs(
  * and codes such as `ofapi_mapping_changed` are. */
 export function describeStaleLinkStatPairs(pairs: readonly LinkStatsStalePair[]): string {
   return pairs.map((pair) => {
+    if (pair.neverAttempted) {
+      return `${pair.linkKind}: no attempt at all since the first window it was expected in, `
+        + `${pair.since.toISOString()} — is the job running?`;
+    }
     const since = pair.neverHadResult
       ? `no usable result since the first attempt at ${pair.since.toISOString()}`
       : `no usable result since ${pair.since.toISOString()}`;
@@ -126,47 +145,50 @@ export function describeStaleLinkStatPairs(pairs: readonly LinkStatsStalePair[])
   }).join(" | ");
 }
 
-/** The closed windows the monitor answers for at `now`, oldest first: the
- * last WINDOW_MISSED_LOOKBACK_WINDOWS that have closed, from the first one
- * the series ever stamped. `stampedWindows` are the window_at values present
- * in the lookback. Pure.
- *
- * "From the first stamped window" keeps the monitor from marking windows
- * that predate the release which introduced `window_at`, or a change of the
- * schedule: a stamp that is not on today's grid is not a window of it. The
- * monitor's own rows are stamps too, so once it has marked a window the
- * chain continues through any outage of the reconcile. */
-export function closedLinkStatWindowsToCheck(
-  now: Date,
-  stampedWindows: readonly Date[],
-): Date[] {
-  const onGrid = stampedWindows
+/** The first window of the current schedule that opens at or after `at`. */
+export function firstOfapiLinkStatsWindowAtOrAfter(at: Date): Date {
+  const windowAt = ofapiLinkStatsWindowAt(at);
+  return windowAt.getTime() === at.getTime() ? windowAt : nextOfapiLinkStatsWindowAt(windowAt);
+}
+
+/** Since when the series is expected on the current schedule: the earliest
+ * stamp that lies on it (`stamps` come from the whole history, one per
+ * schedule slot ever used — a stamp off today's grid belongs to another
+ * schedule), else `seenEnabledAt`, the fallback for a series that never
+ * stamped a window. Null = nothing is expected yet. Pure. */
+export function linkStatSeriesAnchor(
+  stamps: readonly Date[],
+  seenEnabledAt: Date | null,
+): Date | null {
+  const onGrid = stamps
     .map((stamp) => stamp.getTime())
     .filter((stampMs) => ofapiLinkStatsWindowAt(new Date(stampMs)).getTime() === stampMs);
-  if (onGrid.length === 0) {
+  if (onGrid.length > 0) {
+    return new Date(Math.min(...onGrid));
+  }
+  return seenEnabledAt === null ? null : firstOfapiLinkStatsWindowAtOrAfter(seenEnabledAt);
+}
+
+/** The closed windows the monitor answers for at `now`, oldest first: the
+ * last WINDOW_MISSED_LOOKBACK_WINDOWS that have closed, none before the
+ * series' anchor. Only the check is bounded, never the anchor: after an
+ * outage longer than the look-back the last windows are still marked. Pure. */
+export function closedLinkStatWindowsToCheck(now: Date, anchor: Date | null): Date[] {
+  if (anchor === null) {
     return [];
   }
-  const firstStampedMs = Math.min(...onGrid);
+  const firstMs = firstOfapiLinkStatsWindowAtOrAfter(anchor).getTime();
   const closed: Date[] = [];
   // The open window is the one `now` belongs to; everything before it closed.
   let windowAt = previousOfapiLinkStatsWindowAt(ofapiLinkStatsWindowAt(now));
   for (let step = 0; step < WINDOW_MISSED_LOOKBACK_WINDOWS; step += 1) {
-    if (windowAt.getTime() < firstStampedMs) {
+    if (windowAt.getTime() < firstMs) {
       break;
     }
     closed.push(windowAt);
     windowAt = previousOfapiLinkStatsWindowAt(windowAt);
   }
   return closed.reverse();
-}
-
-/** The oldest window the lookback can reach at `now`. */
-function lookbackStart(now: Date): Date {
-  let windowAt = ofapiLinkStatsWindowAt(now);
-  for (let step = 0; step < WINDOW_MISSED_LOOKBACK_WINDOWS; step += 1) {
-    windowAt = previousOfapiLinkStatsWindowAt(windowAt);
-  }
-  return windowAt;
 }
 
 function groupByPage(rows: readonly LinkStatSeriesHealthRow[]) {
@@ -184,12 +206,13 @@ async function markMissedWindows(
   app: Pick<AppContext, "db" | "logger">,
   rows: readonly LinkStatSeriesHealthRow[],
   now: Date,
+  anchor: Date | null,
 ): Promise<number> {
-  const attempts = await listLinkStatAttemptWindows(app.db, { since: lookbackStart(now) });
-  const closed = closedLinkStatWindowsToCheck(now, attempts.map((attempt) => attempt.windowAt));
+  const closed = closedLinkStatWindowsToCheck(now, anchor);
   if (closed.length === 0) {
     return 0;
   }
+  const attempts = await listLinkStatAttemptWindows(app.db, { since: closed[0]! });
   const attempted = new Set(attempts.map((attempt) =>
     `${attempt.platformAccountId}:${attempt.linkKind}:${attempt.windowAt.getTime()}`));
   let written = 0;
@@ -223,6 +246,16 @@ async function markMissedWindows(
   return written;
 }
 
+/** What the monitor remembers between runs in one process: the moment it
+ * first saw the series enabled, the anchor of a series that never stamped a
+ * window. Lost on restart — harmless once the first `window_missed` row (a
+ * stamp) exists. */
+export interface OfapiLinkStatsSeriesMonitorState {
+  seenEnabledAt: Date | null;
+}
+
+const processMonitorState: OfapiLinkStatsSeriesMonitorState = { seenEnabledAt: null };
+
 export interface OfapiLinkStatsSeriesMonitorResult {
   /** Pages whose `series_stale` latch the run opened or refreshed. */
   stalePages: number[];
@@ -242,9 +275,12 @@ export async function runOfapiLinkStatsSeriesMonitor(
     /** Whether a page's OFAPI auth status is a dead session — the account
      * health module's own rule, passed in so the two cannot drift. */
     authNeedsAction: (status: string | null) => boolean;
+    /** Default: this process's state. */
+    state?: OfapiLinkStatsSeriesMonitorState;
   },
 ): Promise<OfapiLinkStatsSeriesMonitorResult> {
   const now = input.now;
+  const state = input.state ?? processMonitorState;
   const result: OfapiLinkStatsSeriesMonitorResult = {
     stalePages: [],
     unmappedPages: [],
@@ -257,10 +293,23 @@ export async function runOfapiLinkStatsSeriesMonitor(
   }
 
   try {
+    state.seenEnabledAt ??= now;
+    const anchor = linkStatSeriesAnchor(
+      await listFirstLinkStatWindowStamps(app.db),
+      state.seenEnabledAt,
+    );
+    // A pair with no attempt at all is expected from the first window after
+    // the anchor and after its page was created.
+    const expectedSince = (row: LinkStatSeriesHealthRow) => anchor === null
+      ? null
+      : firstOfapiLinkStatsWindowAtOrAfter(
+        new Date(Math.max(anchor.getTime(), row.pageCreatedAt.getTime())),
+      );
+
     // First the rows, then the freshness: a window this run marks as missed
     // must not read as an attempt-free pair in the same run's message.
     const population = await listLinkStatSeriesHealth(app.db);
-    result.windowMissedRows = await markMissedWindows(app, population, now);
+    result.windowMissedRows = await markMissedWindows(app, population, now, anchor);
     const health = result.windowMissedRows > 0
       ? await listLinkStatSeriesHealth(app.db)
       : population;
@@ -305,7 +354,7 @@ export async function runOfapiLinkStatsSeriesMonitor(
         result.unmappedPages.push(pageId);
       }
 
-      const stale = findStaleLinkStatPairs(kinds, now);
+      const stale = findStaleLinkStatPairs(kinds, now, expectedSince);
       const causeOwnedElsewhere = unmapped || input.authNeedsAction(kinds[0]!.ofapiAuthStatus);
       if (stale.length > 0 && causeOwnedElsewhere) {
         continue;
