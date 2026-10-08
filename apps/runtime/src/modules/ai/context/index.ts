@@ -13,6 +13,7 @@ import {
 import { millsToDollarsNumber, normalizeDmMessageText } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../../bootstrap.ts";
+import { UNCONFIRMED_SOCKET_MESSAGE_LABEL } from "./chat-access.ts";
 import {
   formatFanSpendingData,
   formatFanSubscriptionData,
@@ -32,6 +33,7 @@ import {
 } from "./context-frame.ts";
 import type { OnlyFansMessageMedia } from "./media-notes.ts";
 
+export * from "./chat-access.ts";
 export * from "./context-frame.ts";
 export * from "./live-text.ts";
 export * from "./media-notes.ts";
@@ -133,6 +135,9 @@ export interface TranscriptContext {
    * Beside the manifest, never inside it: the manifest is recorded with the
    * generation and echoed to debug clients, and neither may change. */
   served: TranscriptServedSnapshot;
+  /** Arena "vanished chat" (plan §5): the served socket messages labelled
+   *  `UNCONFIRMED_SOCKET_MESSAGE_LABEL` (0 unless `chatUnavailable`). */
+  unconfirmedSocketMessages: number;
 }
 
 export async function loadTranscriptContext(
@@ -148,6 +153,10 @@ export async function loadTranscriptContext(
      * for this load (the full Recap's deeper read, ai-transcript-depth.ts).
      * The Fansly live overlay union never reads it and stays at its own cap. */
     maxRows?: number;
+    /** Arena "vanished chat" (plan §5): the chat has an established
+     * unavailability episode (`readAiChatAccess`, read by the caller): its
+     * served socket messages are labelled `UNCONFIRMED_SOCKET_MESSAGE_LABEL`. */
+    chatUnavailable?: boolean;
   },
 ): Promise<TranscriptContext> {
   const limit = input.limit ?? 100;
@@ -223,7 +232,20 @@ export async function loadTranscriptContext(
   const shaped = servedRows
     .map((row) => archiveRowToOfapiShape(row as never))
     .filter((row): row is OfapiChatMessage => row !== null);
-  const messages = normalizeTranscriptMessages(shaped).slice(-limit);
+
+  // Arena "vanished chat" (plan §5): a chat Fansly no longer serves to the
+  // page keeps its socket messages in the transcript, labelled: no REST read
+  // will confirm them while the episode lasts. The transcript keys a message
+  // by Number(ref), so the labels do too.
+  const unconfirmedIds = new Set(input.chatUnavailable === true && liveUnion !== null
+    ? liveUnion.flatMap((item) => item.source === "live" ? [Number(item.message.platformMessageId)] : [])
+    : []);
+  const messages = normalizeTranscriptMessages(shaped).slice(-limit).map((message) => (
+    unconfirmedIds.has(message.id)
+      ? { ...message, labels: [...message.labels, UNCONFIRMED_SOCKET_MESSAGE_LABEL] }
+      : message
+  ));
+  const unconfirmedSocketMessages = messages.filter((message) => unconfirmedIds.has(message.id)).length;
 
   // Both readers return newest-first, so index 0 is the head.
   const archiveHead = archiveRows[0] ?? null;
@@ -291,7 +313,14 @@ export async function loadTranscriptContext(
       },
   };
 
-  return { transcript: formatTranscript(messages), messages, mediaByMessage, contextManifest, served };
+  return {
+    transcript: formatTranscript(messages),
+    messages,
+    mediaByMessage,
+    contextManifest,
+    served,
+    unconfirmedSocketMessages,
+  };
 }
 
 const SPENDING_TYPE_BY_CANONICAL: Record<string, string> = {

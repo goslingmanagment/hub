@@ -15,7 +15,8 @@ import { generationParam, timestampParam, toDate, toRequiredDate } from "./value
 // closes the chat's work because the chat was excluded or unbound, ends it
 // (`endChatUnavailability`). Readers: the DM planner (no head read before
 // `retry_not_before`), the list's follow-ups (`handled_list_head_id`), the
-// history intake, the passive parity pass (`openChatUnavailabilitySql`).
+// history intake, the passive parity pass (`openChatUnavailabilitySql`); the
+// chatters' conversation routes and the AI context (plan §5).
 //
 // The row names its chat by `thread_id` only — no fan identity, no page key:
 // an erasure deletes the thread and the episodes go with it (cascade).
@@ -336,6 +337,36 @@ export async function readOpenChatUnavailability(
     and t.platform_account_id = ${input.pageId}
     ${groups === null ? sql`` : sql`and t.platform_conversation_id = any(${sql.param(groups)}::text[])`}`);
   return new Map(episodes.map((episode) => [episode.groupId, episode]));
+}
+
+/**
+ * The open episode of the chat a request names on a page (an AI request,
+ * arena "vanished chat" plan §5). A ref that is one of the page's group ids
+ * names that chat (the first such ref wins); otherwise — an older client
+ * whose ref is the fan's account id — the fan's chat with the page, its
+ * newest by last message (the page's primary conversation rule). Null: no
+ * thread resolves, or its chat has no open episode. Plain read.
+ */
+export async function readOpenChatUnavailabilityForRequest(
+  db: Database,
+  input: { pageId: number; groupIds: readonly string[]; partnerIds: readonly string[] },
+): Promise<ChatUnavailabilityEpisode | null> {
+  const groups = [...new Set(input.groupIds)];
+  const partners = [...new Set(input.partnerIds)];
+  if (groups.length === 0 && partners.length === 0) return null;
+  const groupParam = sql`${sql.param(groups)}::text[]`;
+  const [episode] = await readEpisodes(db, sql`e.ended_at is null and e.thread_id = coalesce(
+    (select g.id from page_dm_threads g
+      where g.platform_account_id = ${input.pageId}
+        and g.platform_conversation_id = any(${groupParam})
+      order by array_position(${groupParam}, g.platform_conversation_id)
+      limit 1),
+    (select f.id from page_dm_threads f
+      where f.platform_account_id = ${input.pageId}
+        and f.partner_platform_user_id = any(${sql.param(partners)}::text[])
+      order by f.last_message_at desc nulls last, f.platform_conversation_id desc
+      limit 1))`);
+  return episode ?? null;
 }
 
 /**
