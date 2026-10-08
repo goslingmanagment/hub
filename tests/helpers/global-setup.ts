@@ -41,6 +41,25 @@ export default async function setup({ provide }: {
   let container: StartedTestContainer | null = null;
   provide("testDbContainerId", null);
 
+  // One reaper (Ryuk) per test process. Testcontainers otherwise shares one
+  // between every process on a Docker daemon, behind a lock file in
+  // os.tmpdir(). The PC's runners share the daemon but each has its own
+  // TMPDIR, so the jobs of one CI run raced for it: a job could take a
+  // sibling's reaper while that container was running but not yet listening.
+  // Docker's port proxy accepts such a connection and drops it, and
+  // Testcontainers never waits for the reaper's ACK, so the job labelled its
+  // cluster with a session whose reaper had never counted it. 10 s after that
+  // reaper's real clients finished, it removed the cluster under the running
+  // shard: "Connection terminated unexpectedly", then ECONNREFUSED for every
+  // later file (8 of 89 full PC runs, 03-08.10). A reaper started under this
+  // variable carries a label, and Testcontainers never offers a labelled
+  // reaper to another process, so this one and each worker that starts a
+  // container itself start their own, as a hosted runner's job does. A
+  // running reaper of a process without the variable is still taken. The
+  // variable is undocumented: tests/testcontainers-reaper.integration.test.ts
+  // fails if an upgrade drops either half.
+  process.env.TESTCONTAINERS_RYUK_TEST_LABEL ??= "true";
+
   try {
     // HUB_TEST_PG_TMPFS=1 (ci.yml sets it on the PC's shard steps): PGDATA, pg_wal
     // included, lives in a tmpfs instead of the image's volume on disk. Same
@@ -87,6 +106,11 @@ export default async function setup({ provide }: {
       postgres.withTmpFs({ "/var/lib/postgresql/data": "rw,size=1024m" });
     }
     container = await postgres.start();
+    // Docker's events carry the same id and session label: a cluster that
+    // disappears mid-run can be traced from the job log to what ended it.
+    console.log(
+      `[global-setup] test Postgres ${container.getId().slice(0, 12)}, Testcontainers session ${container.getLabels()["org.testcontainers.session-id"] ?? "unknown"}`,
+    );
   } catch (error) {
     // Not fatal: helpers/prerequisites.ts turns a missing cluster into the same
     // skip-or-throw it always did. Logged so a real Docker fault is visible
