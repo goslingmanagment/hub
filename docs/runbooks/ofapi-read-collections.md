@@ -89,7 +89,12 @@ from the first step under the category's own limits. The failed run keeps its
 raw response, cursor, caps, consumed calls/credits and response bytes. The
 minutely sweep closes scheduled runs that an older runtime parked as paused for
 either outcome (2026-09-08..10-06: ten runs on both OF pages, the oldest held
-its category for a month); it changes only the outer run's state. One-off jobs
+its category for a month); it changes only the outer run's state. The same
+sweep then settles as billed every lost read whose run has ended, closed by it
+or finished by the owner, that an older runtime left unresolved: the reserve
+leaves the unsettled pool once, the charge stays in every budget, and the
+step's capture job still has no call left. Reads of other lanes and of runs
+still parked for the owner are not touched. One-off jobs
 remain paused on these outcomes; a fresh probe requires a separate bounded job.
 `401`/`403`, a status outside `4xx`/`5xx`, a policy refusal, a rejected
 contract, a cursor cycle and local failures still park the run for the owner

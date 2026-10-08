@@ -15,6 +15,7 @@ import {
   hashOfapiCaptureValue,
   listPendingOfapiCollectionJobs,
   OfapiCollectionPolicyError,
+  settleEndedOfapiCollectionSafeReads,
 } from "@agency_hub_core/db";
 import {
   OFAPI_READ_CATALOG,
@@ -446,6 +447,12 @@ export async function sweepOfapiCollections(
     app.logger.warn(
       { runs: ended },
       "Closed scheduled collection runs parked by a failed safe read",
+    );
+  const settled = await settleEndedOfapiCollectionSafeReads(app.db);
+  if (settled.length > 0)
+    app.logger.warn(
+      { attempts: settled },
+      "Settled lost safe reads of ended collection runs as billed",
     );
   await enqueueDueOfapiCollectionSchedules(app.db, [
     ...new Set([

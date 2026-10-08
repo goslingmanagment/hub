@@ -41,6 +41,7 @@ import {
   revokeOfapiMessageCoverage,
   setPageOfapiAccountId,
   setOfapiCaptureControl,
+  settleLostOfapiCollectionReadAsBilled,
   settleOfapiCaptureParse,
   storeProxyConfig,
 } from "@agency_hub_core/db";
@@ -4278,5 +4279,168 @@ describe("OFAPI capture correctness repository", () => {
         creditCost: 3,
       },
     });
+  });
+
+  // The collection sweep settles the lost reads of ended runs as billed. The
+  // same call must leave every other uncertain attempt to its owner.
+  it.each([
+    ["a lost collection read", "collection_read", "safe_read", true],
+    ["a lost read of another lane", "chat_paginate", "safe_read", false],
+    ["a stateful attempt", "chat_paginate", "stateful", false],
+  ] as const)("settles %s after the fact as billed: %s", async (_case, kind, requestSemantics, settles) => {
+    if (!testDb) return;
+    const seeded = await seed();
+    const created = await createOrGetOfapiCaptureJob(testDb.db, {
+      pageId: seeded.page.id,
+      ofapiAccountId: seeded.accountId,
+      kind,
+      ...(kind === "chat_paginate" ? { goal: "history_to_exhaustion" as const } : {}),
+      activeSlotKey: `page:${seeded.page.id}:lost:${kind}:${requestSemantics}`,
+      target: { collectionJobId: randomUUID(), pathname: "/lost" },
+      budgetScope: "bulk",
+      createdBy: "owner",
+      maxCalls: 1,
+      maxCredits: 1,
+      now: NOW,
+    });
+    const leased = await leaseNextOfapiCaptureJob(testDb.db, {
+      pageId: seeded.page.id,
+      jobId: created.job.id,
+      leaseOwner: "lost-read",
+      leaseTtlMs: 60_000,
+      now: NOW,
+    });
+    if (!leased?.leaseToken) throw new Error("lease missing");
+    const reservation = await reserveOfapiRequestAttempt(testDb.db, {
+      ownerKind: "capture_job",
+      ownerId: created.job.id,
+      pageId: seeded.page.id,
+      ofapiAccountId: seeded.accountId,
+      budgetScope: "bulk",
+      operation: "list_messages",
+      endpointClass: "messages",
+      egressKey: `page:${seeded.page.id}`,
+      method: "GET",
+      requestSemantics,
+      requestShape: { pathname: "/lost" },
+      reservedCredits: 1,
+      globalDailyCap: 100,
+      scopeDailyCap: 100,
+      creditFloor: 10,
+      balanceMaxAgeMs: 60 * 60 * 1000,
+      jobLeaseToken: leased.leaseToken,
+      deadlineAt: new Date(NOW.getTime() + 30_000),
+      now: NOW,
+    });
+    if (!reservation.admitted) throw new Error("attempt was not admitted");
+    expect(await markOfapiAttemptDispatching(testDb.db, {
+      attemptId: reservation.attemptId,
+      fenceToken: reservation.fenceToken,
+      jobLeaseToken: leased.leaseToken,
+      now: new Date(NOW.getTime() + 500),
+    })).toBe(true);
+    // What a runtime without the failure-time settlement left behind.
+    expect(await markOfapiAttemptIndeterminate(testDb.db, {
+      attemptId: reservation.attemptId,
+      fenceToken: reservation.fenceToken,
+      outcome: "transport",
+      now: new Date(NOW.getTime() + 1_000),
+    })).toBe(true);
+    const accounting = async () => ({
+      attempt: (await testDb!.pool.query(`
+        select state, credit_state, settled_credits, credit_estimated, certainty_resolution
+        from ofapi_request_attempts where id = $1
+      `, [reservation.attemptId])).rows[0],
+      job: (await testDb!.pool.query(`
+        select state, reason_code, attempt_count, dispatch_count, spent_credits
+        from ofapi_capture_jobs where id = $1
+      `, [created.job.id])).rows[0],
+      credit: (await testDb!.pool.query(`
+        select spent_credits, bulk_spent_credits, governed_unsettled_credits from ofapi_credit_state
+      `)).rows[0],
+      ledger: (await testDb!.pool.query(`
+        select source, credits, estimated, attempt_entry_phase from ofapi_credit_ledger order by id
+      `)).rows,
+    });
+    const parked = await accounting();
+    expect(parked).toEqual({
+      attempt: { state: "indeterminate", credit_state: "indeterminate", settled_credits: null, credit_estimated: false, certainty_resolution: null },
+      job: { state: "blocked", reason_code: "indeterminate", attempt_count: 1, dispatch_count: 1, spent_credits: 1 },
+      credit: { spent_credits: 1, bulk_spent_credits: 1, governed_unsettled_credits: 1 },
+      ledger: [{ source: "rest", credits: 1, estimated: true, attempt_entry_phase: "settlement" }],
+    });
+
+    const settledAt = new Date(NOW.getTime() + 5_000);
+    expect(await settleLostOfapiCollectionReadAsBilled(testDb.db, { attemptId: reservation.attemptId, now: settledAt })).toBe(settles);
+    if (!settles) {
+      expect(await accounting()).toEqual(parked);
+      return;
+    }
+    // The reserve leaves the unsettled pool; the spend counters and the ledger keep the charge.
+    const settled = {
+      attempt: { state: "indeterminate", credit_state: "settled", settled_credits: 1, credit_estimated: true, certainty_resolution: "safe_read_retry_assumed_billed" },
+      job: { state: "retry_wait", reason_code: "indeterminate_safe_read_retry", attempt_count: 1, dispatch_count: 1, spent_credits: 1 },
+      credit: { spent_credits: 1, bulk_spent_credits: 1, governed_unsettled_credits: 0 },
+      ledger: parked.ledger,
+    };
+    expect(await accounting()).toEqual(settled);
+    // Once: a repeat changes nothing, and the released reserve is not released again.
+    await testDb.pool.query("update ofapi_credit_state set governed_unsettled_credits = 3");
+    expect(await settleLostOfapiCollectionReadAsBilled(testDb.db, { attemptId: reservation.attemptId })).toBe(false);
+    expect(await accounting()).toEqual({ ...settled, credit: { ...settled.credit, governed_unsettled_credits: 3 } });
+    // The job's one call is spent: leasing it again is refused at admission, before any request.
+    const again = await leaseNextOfapiCaptureJob(testDb.db, {
+      pageId: seeded.page.id,
+      jobId: created.job.id,
+      leaseOwner: "lost-read",
+      leaseTtlMs: 60_000,
+      now: new Date(NOW.getTime() + 10_000),
+    });
+    if (!again?.leaseToken) throw new Error("lease missing");
+    expect(await reserveOfapiRequestAttempt(testDb.db, {
+      ownerKind: "capture_job",
+      ownerId: created.job.id,
+      pageId: seeded.page.id,
+      ofapiAccountId: seeded.accountId,
+      budgetScope: "bulk",
+      operation: "list_messages",
+      endpointClass: "messages",
+      egressKey: `page:${seeded.page.id}`,
+      method: "GET",
+      requestSemantics,
+      requestShape: { pathname: "/lost" },
+      reservedCredits: 1,
+      globalDailyCap: 100,
+      scopeDailyCap: 100,
+      creditFloor: 10,
+      balanceMaxAgeMs: 60 * 60 * 1000,
+      jobLeaseToken: again.leaseToken,
+      deadlineAt: new Date(NOW.getTime() + 40_000),
+      now: new Date(NOW.getTime() + 10_000),
+    })).toMatchObject({ admitted: false, reason: "job_cap" });
+  });
+
+  it("leaves an interactive request's uncertain attempt and its reserve alone", async () => {
+    if (!testDb) return;
+    const seeded = await createAndReserveInteractive();
+    if (!seeded.reservation.admitted) throw new Error("attempt was not admitted");
+    expect(await markOfapiAttemptDispatching(testDb.db, {
+      attemptId: seeded.reservation.attemptId,
+      fenceToken: seeded.reservation.fenceToken,
+      now: new Date(NOW.getTime() + 1_000),
+    })).toBe(true);
+    expect(await markOfapiAttemptIndeterminate(testDb.db, {
+      attemptId: seeded.reservation.attemptId,
+      fenceToken: seeded.reservation.fenceToken,
+      outcome: "transport",
+      now: new Date(NOW.getTime() + 2_000),
+    })).toBe(true);
+    expect(await settleLostOfapiCollectionReadAsBilled(testDb.db, { attemptId: seeded.reservation.attemptId })).toBe(false);
+    expect(await getOfapiRequestAttempt(testDb.db, seeded.reservation.attemptId)).toMatchObject({
+      state: "indeterminate",
+      credit_state: "indeterminate",
+      certainty_resolution: null,
+    });
+    expect((await testDb.pool.query("select governed_unsettled_credits from ofapi_credit_state")).rows[0].governed_unsettled_credits).toBe(5);
   });
 });
