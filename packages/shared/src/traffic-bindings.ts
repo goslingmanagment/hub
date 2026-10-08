@@ -24,7 +24,8 @@ export const TRAFFIC_CHANNEL_KEY_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}\.[a-z0-9][
 /** An OnlyFans link id (mirrors traffic_link_bindings_link_id_check). */
 export const TRAFFIC_LINK_ID_PATTERN = /^[0-9]{1,20}$/;
 
-const ISO_INSTANT_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?(Z|[+-]\d{2}:\d{2})$/;
+// date, hour, minute, second?, offset hour?, offset minute? (`Z`: no offset groups).
+const ISO_INSTANT_PATTERN = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,6})?)?(?:Z|[+-](\d{2}):(\d{2}))$/;
 
 export function isTrafficLinkKind(value: string): value is TrafficLinkKind {
   return (trafficLinkKinds as readonly string[]).includes(value);
@@ -45,10 +46,24 @@ export function parseTrafficInstant(value: string): Date {
   if (isValidBusinessDateString(text)) {
     return businessDateToUtcStart(text, MOSCOW_TIME_ZONE);
   }
-  if (!ISO_INSTANT_PATTERN.test(text)) {
+  const match = ISO_INSTANT_PATTERN.exec(text);
+  if (!match) {
     throw new Error(
       `Invalid instant "${value}": expected YYYY-MM-DD (00:00 Moscow) or an ISO instant with Z or an offset`,
     );
+  }
+  // `new Date` rolls impossible fields over (2026-02-30 → 03-02, T24:00 →
+  // the next day): the calendar date and every time field are checked first.
+  const [, date, hour, minute, second, offsetHour, offsetMinute] = match;
+  if (
+    !isValidBusinessDateString(date!)
+    || Number(hour) > 23
+    || Number(minute) > 59
+    || (second !== undefined && Number(second) > 59)
+    || (offsetHour !== undefined && Number(offsetHour) > 23)
+    || (offsetMinute !== undefined && Number(offsetMinute) > 59)
+  ) {
+    throw new Error(`Invalid instant "${value}": no such date or time`);
   }
   const parsed = new Date(text);
   if (Number.isNaN(parsed.getTime())) {

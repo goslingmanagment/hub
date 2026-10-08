@@ -25,6 +25,24 @@ describe("parseTrafficInstant", () => {
     expect(() => parseTrafficInstant("2026-02-30")).toThrow();
     expect(() => parseTrafficInstant("yesterday")).toThrow();
   });
+
+  it("refuses an impossible ISO instant instead of rolling it over (with Z and with an offset)", () => {
+    // `new Date` alone reads 2026-02-30T00:00:00Z as 2026-03-02 and T24:00 as the next day.
+    for (const value of [
+      "2026-02-30T00:00:00Z",
+      "2026-02-30T10:00:00+03:00",
+      "2026-02-29T10:00:00Z", // 2026 is not a leap year
+      "2026-04-31T00:00:00-05:00",
+      "2026-13-01T00:00:00Z",
+      "2026-01-01T24:00:00Z",
+      "2026-01-01T23:60:00Z",
+      "2026-01-01T23:59:60+03:00",
+      "2026-01-01T10:00:00+24:00",
+    ]) {
+      expect(() => parseTrafficInstant(value), value).toThrow(/no such date or time/);
+    }
+    expect(parseTrafficInstant("2028-02-29T23:59:59.5-01:30").toISOString()).toBe("2028-03-01T01:29:59.500Z");
+  });
 });
 
 describe("parseTrafficBindingsFile", () => {

@@ -348,6 +348,43 @@ describe("traffic:bindings:set", () => {
     expect(await trafficAuditCount()).toBe(audits + 2);
   });
 
+  it("refuses an earlier --from on a link the channel already has, instead of a silent no-op (review #512)", async () => {
+    // The link is A's until Feb 1, then B's. `set B --from Jan 15` must not
+    // succeed unchanged: Jan 15–31 would silently stay with A.
+    await runCli(["traffic:bindings:import", "--file", await bindingsFile({
+      channels: [{ key: "lora.a", title: "A" }, { key: "lora.b", title: "B" }],
+      bindings: [
+        { page: "lora-vip-of", kind: "trial", link: "777", channel: "lora.a", validFrom: "2026-01-01", validTo: "2026-02-01", validFromBasis: "confirmed" },
+        { page: "lora-vip-of", kind: "trial", link: "777", channel: "lora.b", validFrom: "2026-02-01", validFromBasis: "confirmed" },
+      ],
+    }), "--write"]);
+    const audits = await trafficAuditCount();
+    const set = (from: string) => runCli([
+      "traffic:bindings:set", "--page", "lora-vip-of", "--kind", "trial", "--link", "777", "--channel", "lora.b", "--from", from,
+    ]);
+
+    const earlier = await set("2026-01-15");
+    expect(earlier.exitCode).toBe(1);
+    expect(earlier.json()).toEqual({
+      written: false,
+      conflicts: [
+        "link lora-vip-of trial 777: already lora.b only since 2026-01-31T21:00:00.000Z; "
+          + "--from 2026-01-14T21:00:00.000Z is earlier — set does not move a stored start",
+      ],
+    });
+    // The same start and a later one already hold: no-ops.
+    expect((await set("2026-02-01")).json().counts.linkBindings).toEqual({ unchanged: 1 });
+    expect((await set("2026-03-01")).json().counts.linkBindings).toEqual({ unchanged: 1 });
+    expect(await trafficAuditCount()).toBe(audits);
+    const rows = await testDb!.pool.query(`
+      select c.key, b.valid_from, b.valid_to from traffic_link_bindings b
+        join traffic_channels c on c.id = b.channel_id where b.platform_link_id = '777' order by b.valid_from`);
+    expect(rows.rows).toEqual([
+      { key: "lora.a", valid_from: new Date("2025-12-31T21:00:00Z"), valid_to: new Date("2026-01-31T21:00:00Z") },
+      { key: "lora.b", valid_from: new Date("2026-01-31T21:00:00Z"), valid_to: null },
+    ]);
+  });
+
   it("refuses a --from that is not after the open binding's start, and a channel that does not exist", async () => {
     await runCli(["traffic:bindings:import", "--file", await bindingsFile(seed), "--write"]);
     await runCli(["traffic:bindings:import", "--file", await bindingsFile({ channels: [{ key: "lora.erome", title: "Erome" }] }), "--write"]);

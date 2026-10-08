@@ -697,24 +697,36 @@ async function writePlan(
  * of those keys — all read under the locks — and throws
  * TrafficBindingsConflictError before the first write if anything conflicts.
  */
+interface DerivedTrafficChange {
+  change: TrafficBindingsChangeSet;
+  /** Conflicts the derivation itself found (e.g. a `set` that would move a stored start). */
+  conflicts: string[];
+}
+
+async function planDerived(database: Database, derived: DerivedTrafficChange) {
+  const built = await buildPlan(database, derived.change);
+  built.plan.conflicts.unshift(...derived.conflicts);
+  return built;
+}
+
 async function runTrafficChange(
   db: Database,
   options: TrafficBindingsApplyOptions,
   keysOf: (tx: Database) => Promise<string[]>,
-  changeOf: (tx: Database) => Promise<TrafficBindingsChangeSet>,
+  changeOf: (tx: Database) => Promise<DerivedTrafficChange>,
 ): Promise<TrafficBindingsApplyResult> {
   const batchId = randomUUID();
   if (!options.write) {
     return db.transaction(async (tx) => {
       const database = tx as unknown as Database;
-      const { plan } = await buildPlan(database, await changeOf(database));
+      const { plan } = await planDerived(database, await changeOf(database));
       return { written: false, batchId, plan, auditEventIds: [] };
     }, { accessMode: "read only" });
   }
   return db.transaction(async (tx) => {
     const database = tx as unknown as Database;
     await lockTrafficKeys(database, await keysOf(database));
-    const built = await buildPlan(database, await changeOf(database));
+    const built = await planDerived(database, await changeOf(database));
     if (built.plan.conflicts.length > 0) throw new TrafficBindingsConflictError(built.plan.conflicts);
     await options.afterPlan?.();
     const auditEventIds = await writePlan(database, built.plan, built.pages, options, batchId);
@@ -733,7 +745,7 @@ export async function applyTrafficBindingsChange(
     options,
     // Page ids are needed for the link keys; a page row is not what is locked.
     async (tx) => lockKeysOf(change, await resolvePages(tx, change.bindings.map((b) => b.pageLabel))),
-    async () => change,
+    async () => ({ change, conflicts: [] }),
   );
 }
 
@@ -749,16 +761,19 @@ export interface TrafficLinkRehangInput {
 
 /**
  * `traffic:bindings:set`: from `validFrom` the link is the channel's. The
- * link's open binding to another channel is closed at `validFrom`; an open
- * binding to the same channel is left as it is. Same lock, plan and audit as
- * an import (the open row is read under the link's lock).
+ * link's open binding to another channel is closed at `validFrom`. An open
+ * binding to the same channel that started at or before `validFrom` already
+ * says so (a no-op); one that started later is a conflict — the earlier
+ * stretch would silently stay with whoever had it before, and moving a stored
+ * start is not what `set` does. Same lock, plan and audit as an import (the
+ * open row is read under the link's lock).
  */
 export async function rehangTrafficLink(
   db: Database,
   input: TrafficLinkRehangInput,
   options: Omit<TrafficBindingsApplyOptions, "command">,
 ): Promise<TrafficBindingsApplyResult> {
-  const derive = async (database: Database): Promise<TrafficBindingsChangeSet> => {
+  const derive = async (database: Database): Promise<DerivedTrafficChange> => {
     const pages = await resolvePages(database, [input.pageLabel]);
     const page = pages.get(input.pageLabel);
     const existing = page
@@ -767,11 +782,22 @@ export async function rehangTrafficLink(
     const open = existing.find((row) => row.validTo === null);
     const common = { pageLabel: input.pageLabel, linkKind: input.linkKind, linkId: input.linkId };
     if (open && open.target === input.channelKey) {
-      // Already the channel's: name the open row as it is (a no-op).
-      return {
+      // Already the channel's: name the open row as it is (a no-op) — or
+      // refuse, when the requested start lies before the stored one.
+      const unchanged: TrafficBindingsChangeSet = {
         contractors: [], channels: [], terms: [],
         bindings: [{ ...common, channelKey: open.target, validFrom: open.validFrom, validTo: null, validFromBasis: open.validFromBasis }],
       };
+      if (input.validFrom.getTime() < open.validFrom.getTime()) {
+        return {
+          change: unchanged,
+          conflicts: [
+            `link ${linkKeyLabel(common)}: already ${open.target} only since ${open.validFrom.toISOString()}; `
+              + `--from ${input.validFrom.toISOString()} is earlier — set does not move a stored start`,
+          ],
+        };
+      }
+      return { change: unchanged, conflicts: [] };
     }
     const bindings: TrafficLinkBindingInput[] = [];
     if (open) {
@@ -791,7 +817,7 @@ export async function rehangTrafficLink(
       validFromBasis: input.validFromBasis,
       ...(input.note === undefined ? {} : { note: input.note }),
     });
-    return { contractors: [], channels: [], terms: [], bindings };
+    return { change: { contractors: [], channels: [], terms: [], bindings }, conflicts: [] };
   };
 
   return runTrafficChange(
