@@ -720,6 +720,14 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # served: false as not served; it ignores the result's extra keys, so it
   # runs unchanged after a rollback.
   "0248_sync_excluded_probe_not_served.sql"
+  # The Spenders money stamp (asOf = money data complete as of): one partial
+  # index on ofapi_webhook_events (platform_account_id, received_at) where
+  # event_type = 'transactions.new', built CONCURRENTLY outside a transaction
+  # (~1 000 of ~790 000 rows on production). No table, column or row changes.
+  # The previous image never names the index; the planner may use it for the
+  # previous image's own queries only where it would have read those rows
+  # anyway, so it runs unchanged after a rollback (an extra index it ignores).
+  "0250_ofapi_webhook_events_transactions_page_received_idx.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

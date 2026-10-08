@@ -3654,6 +3654,11 @@ export const ofapiWebhookEvents = pgTable(
     // 0184: max(received_at) per page (admin status, event-type freshness).
     pageReceivedIdx: index("ofapi_webhook_events_page_received_idx")
       .on(table.platformAccountId, table.receivedAt),
+    // 0250: one page's transactions.new deliveries since an instant (the
+    // Spenders money stamp, getOfapiMoneyStreamStates).
+    transactionsPageReceivedIdx: index("ofapi_webhook_events_transactions_page_received_idx")
+      .on(table.platformAccountId, table.receivedAt)
+      .where(sql`${table.eventType} = 'transactions.new'`),
     statusIdx: index("ofapi_webhook_events_status_idx").on(table.status, table.id),
     projectionIdx: index("ofapi_webhook_events_projection_idx")
       .on(table.projectionStatus, table.id)

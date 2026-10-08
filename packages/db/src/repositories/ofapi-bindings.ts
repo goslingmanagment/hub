@@ -1,4 +1,4 @@
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 import type { Database } from "../client.ts";
 import { lockPageSyncStatesForPage } from "./page-sync.ts";
 
@@ -28,6 +28,21 @@ export class OfapiAccountCustodyConflictError extends Error {
   }
 }
 
+/** The ownership rule of findHistoricalPageByOfapiAccountId as a predicate: `accountId` is the page's
+ * current claim (`pageAccountId`, its pages.ofapi_account_id) or an account in the page's custody. SQL
+ * that has to ask "is this delivery's account one of this page's" uses this instead of restating it. */
+export function ofapiAccountBelongsToPageSql(input: {
+  accountId: SQL | string;
+  pageId: SQL | number;
+  pageAccountId: SQL | string | null;
+}) {
+  return sql`(
+    ${input.pageAccountId} = ${input.accountId} or exists (
+      select 1 from ofapi_account_bindings b where b.account_id = ${input.accountId} and b.page_id = ${input.pageId}
+    )
+  )`;
+}
+
 /** Who owns an account — current claim in pages OR custody in ofapi_account_bindings — REGARDLESS of page
  * status. Two owners = an illegal second claim (custody is one page per account for good, PK on account_id):
  * refuse rather than pick a side; a tombstone must never hide the conflict (PLAN AUDIT 04). Historical
@@ -35,11 +50,11 @@ export class OfapiAccountCustodyConflictError extends Error {
 export async function findHistoricalPageByOfapiAccountId(db: Database, accountId: string) {
   const result = await db.execute<{ id: number; label: string; platform: "onlyfans"; status: string }>(sql`
     select p.id, p.label, p.platform, p.status from pages p
-    where p.platform = 'onlyfans' and (
-      p.ofapi_account_id = ${accountId} or exists (
-        select 1 from ofapi_account_bindings b where b.account_id = ${accountId} and b.page_id = p.id
-      )
-    ) limit 2
+    where p.platform = 'onlyfans' and ${ofapiAccountBelongsToPageSql({
+      accountId,
+      pageId: sql`p.id`,
+      pageAccountId: sql`p.ofapi_account_id`,
+    })} limit 2
   `);
   return result.rows.length === 1 ? { ...result.rows[0]!, id: Number(result.rows[0]!.id) } : null;
 }

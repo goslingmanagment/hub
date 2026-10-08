@@ -1160,6 +1160,13 @@ const spenderPeriodMetadataSchema = z.object({
   timeZone: z.string(),
   fromBusinessDate: businessDate.nullable(),
   toBusinessDateInclusive: businessDate.nullable(),
+  // Money data complete as of: the latest instant up to which the hub had
+  // heard from the platform for every page in scope and had every money event
+  // received by then in these numbers (the minimum over the scope's pages).
+  // For an OnlyFans page fed by OFAPI webhooks it follows the page's webhook
+  // stream even when no money moves; for other pages it is the last spender
+  // rebuild. Not "when the numbers last changed". Null when a page in scope
+  // was never rebuilt. (getSpenderMoneyAsOf in packages/db.)
   asOf: isoTimestamp.nullable(),
 });
 
@@ -1272,6 +1279,7 @@ export const pageSpenderAutoListsResponseSchema = z.object({
   currency: z.literal("USD"),
   metric: z.enum(["grossAmountMills", "lifetimeGrossAmountMills"]),
   period: spenderPeriodMetadataSchema,
+  // Same value as period.asOf: money data complete as of.
   asOf: isoTimestamp.nullable(),
   totalEntries: z.number().int().nonnegative(),
   lists: z.array(pageSpenderAutoListItemSchema),
