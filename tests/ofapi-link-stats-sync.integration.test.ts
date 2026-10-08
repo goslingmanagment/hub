@@ -1740,9 +1740,22 @@ describe("OFAPI link-stats series: a window is read again until it has a result"
     }
 
     const page = await seedOfapiPage("retry-cold-of", "acct_retry_cold_before");
+    // Never a trial link under any account, and empty for days already
+    // (lora-of's trial links).
+    await insertLinkStatRunWithSnapshots(appContext.db, {
+      platformAccountId: page.id,
+      linkKind: "trial",
+      status: "partial",
+      pulledAt: new Date(WINDOW.getTime() - 3 * 24 * 60 * 60_000),
+      apiPages: 1,
+      rawItems: 0,
+      writtenRows: 0,
+      reason: "empty_unverified",
+      windowAt: new Date(WINDOW.getTime() - 3 * 24 * 60 * 60_000),
+      ofapiAccountId: "acct_retry_cold_before",
+    }, []);
     const inventory = {
       trackingByAccount: new Map<string, Record<string, unknown>[]>([["acct_retry_cold_before", [trackingItem()]]]),
-      // Never a trial link under any account (lora-of's trial links).
       trialByAccount: new Map<string, Record<string, unknown>[]>(),
     };
     const calls: string[] = [];
@@ -1792,6 +1805,47 @@ describe("OFAPI link-stats series: a window is read again until it has a result"
       [1, "partial", "empty_unverified"],
       [2, "partial", "empty_unverified"],
       [3, "partial", "binding_changed"],
+    ]);
+  });
+
+  it("a newly connected page that reads empty is read again — its first day of empty reads is no result", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    // Connected for the first time: Hub has never seen its links, and the
+    // vendor's stored cache answers empty for both kinds — cold, or truly
+    // empty; nothing tells which yet.
+    const page = await seedOfapiPage("retry-new-cold-of", "acct_retry_new_cold");
+    const inventory = {
+      trackingByAccount: new Map<string, Record<string, unknown>[]>(),
+      trialByAccount: new Map<string, Record<string, unknown>[]>(),
+    };
+    appContext = { ...appContext, ofapi: linksClient(inventory) };
+    const boss = fakeBoss();
+
+    const scheduled = await runOfapiLinkStatsReconcile(appContext, { now: at(0.5), boss });
+    expect(scheduled.pages[0]!.kinds.map((kind) => [kind.linkKind, kind.reason])).toEqual([
+      ["tracking", "empty_unverified"],
+      ["trial", "empty_unverified"],
+    ]);
+    expect(scheduled.queuedRetry).toMatchObject({ windowAt: WINDOW, retry: 1 });
+
+    // The cache warms up for tracking by the first retry; trial stays empty.
+    inventory.trackingByAccount.set("acct_retry_new_cold", [trackingItem()]);
+    const retried = await runOfapiLinkStatsReconcile(appContext, {
+      now: at(15.5), boss, target: { trigger: "retry", windowAt: WINDOW, retry: 1 },
+    });
+    expect(retried.pages[0]!.kinds.map((kind) => [kind.linkKind, kind.status])).toEqual([
+      ["tracking", "written"],
+      ["trial", "partial"],
+    ]);
+    // Trial is still within its first day of empty reads: read again.
+    expect(retried.queuedRetry).toMatchObject({ retry: 2 });
+    expect((await seriesOf(page.id, "tracking")).map((run) => [run.attempt, run.status])).toEqual([
+      [1, "partial"],
+      [2, "complete"],
     ]);
   });
 
