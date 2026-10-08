@@ -1,5 +1,6 @@
 import {
   markFanPageAccountLookups,
+  recordFanPageAccountLookupAnswers,
   reconcileFanslyFanPageIdentity,
   upsertFanPages,
   upsertFans,
@@ -11,10 +12,10 @@ import { sanitizeLoneSurrogatesDeep } from "@agency_hub_core/shared";
 
 // The fan-hydration writers of the Sync Engine's resources (fan-profiles,
 // dm-conversations, subscribers, followers, transactions): a page's Fansly
-// fans, their page links, the account-lookup stamp and the creator's notes on
-// each fan. The legacy transactions and DM walks (with their account lookup
-// and partner probe) and the alias backfill import them from here until
-// step 4 deletes them.
+// fans, their page links, the account-lookup stamp and answer, and the
+// creator's notes on each fan. The legacy transactions and DM walks (with
+// their account lookup and partner probe) and the alias backfill import them
+// from here until step 4 deletes them.
 
 /**
  * Owner decision 2026-09-30: a fan's Fansly profile (username, display name,
@@ -66,16 +67,20 @@ function normalizeFanslyNote(served: FanslyAccountNote) {
 type HydratedFansForPageInput = {
   platformAccountId: number;
   accounts: FanslyAccount[];
-  /** Ids an account lookup asked for and did not get back: marked deleted. */
-  fallbackIds?: string[];
   /** Ids seen without an account snapshot and never looked up: the fan row is
    * ensured and linked, but nothing about the account is inferred. */
   unverifiedIds?: string[];
   /** Ids a lookup did not send because their lookup through this page ran
    * within the day: linked like unverifiedIds, row kept as it is. */
   reusedIds?: string[];
-  /** The lookup that produced `accounts` and `fallbackIds`: its ids are
-   * stamped with the result, so a rolled-back write leaves no stamp. */
+  /** The lookup that produced `accounts`. Every id it asked for is ensured and
+   * linked, stamped as looked up and given the page's own answer
+   * (`page_fans.account_probe_*`): resolved when its account came back,
+   * unresolved when it did not. An id the answer omits is ensured like an
+   * unverified one and marks nothing on the shared fan row: a fan who blocked
+   * the page is omitted too, so a page's miss is no evidence the account is
+   * gone (arena "vanished chat" D2). Written with the result, so a rolled-back
+   * write leaves no stamp. */
   lookup?: FanslyAccountLookupStamp | null;
 };
 
@@ -91,21 +96,17 @@ export async function upsertHydratedFansForPageDetailed(
   db: Database,
   input: HydratedFansForPageInput,
 ) {
-  const deletedDetectedAt = new Date();
+  const returnedIds = new Set(input.accounts.map((account) => account.id));
+  const missedIds = (input.lookup?.platformUserIds ?? []).filter((id) => !returnedIds.has(id));
   const fans = await upsertFans(db, [
     ...input.accounts.map(normalizeHydratedFan),
-    ...(input.fallbackIds ?? []).map((platformUserId) => ({
-      platform: "fansly" as const,
-      platformUserId,
-      metadata: {},
-      deletedDetectedAt,
-    })),
-    ...[...(input.unverifiedIds ?? []), ...(input.reusedIds ?? [])].map((platformUserId) => ({
+    ...[...missedIds, ...(input.unverifiedIds ?? []), ...(input.reusedIds ?? [])].map((platformUserId) => ({
       platform: "fansly" as const,
       platformUserId,
     })),
   ]);
   const fanMap = new Map(fans.map((fan) => [fan.platformUserId, fan.id] as const));
+  const fanIdsOf = (ids: readonly string[]) => ids.flatMap((id) => fanMap.get(id) ?? []);
 
   if (fans.length > 0) {
     await upsertFanPages(db, fans.map((fan) => ({
@@ -116,8 +117,14 @@ export async function upsertHydratedFansForPageDetailed(
   if (input.lookup) {
     await markFanPageAccountLookups(db, {
       platformAccountId: input.platformAccountId,
-      fanIds: input.lookup.platformUserIds.flatMap((id) => fanMap.get(id) ?? []),
+      fanIds: fanIdsOf(input.lookup.platformUserIds),
       lookedUpAt: input.lookup.lookedUpAt,
+    });
+    await recordFanPageAccountLookupAnswers(db, {
+      platformAccountId: input.platformAccountId,
+      answeredAt: input.lookup.lookedUpAt,
+      resolvedFanIds: fanIdsOf(input.lookup.platformUserIds.filter((id) => returnedIds.has(id))),
+      unresolvedFanIds: fanIdsOf(missedIds),
     });
   }
 
@@ -150,7 +157,7 @@ export async function upsertHydratedFansForPageDetailed(
   return {
     fanMap,
     accountCount: input.accounts.length,
-    fallbackCount: (input.fallbackIds ?? []).length,
+    missedCount: missedIds.length,
     reconciledAccountCount,
     noteCount,
     upsertedNoteCount,

@@ -611,13 +611,37 @@ export async function markFanPageAccountLookups(
     ));
 }
 
+/** Records, on the page links of the fans one account lookup through the page
+ * asked about, that lookup's answer in the pair the DM partner probe keeps:
+ * resolved when Fansly returned the account, unresolved when it did not. The
+ * answer is the page's own fact — a fan who blocked the page is not returned
+ * to it either — so the shared fan row is not touched (arena "vanished chat"
+ * D2). A fan not linked to the page keeps no answer. */
+export async function recordFanPageAccountLookupAnswers(
+  db: Database,
+  input: { platformAccountId: number; answeredAt: Date; resolvedFanIds: number[]; unresolvedFanIds: number[] },
+) {
+  const answers = [[input.resolvedFanIds, true], [input.unresolvedFanIds, false]] as const;
+  for (const [fanIds, resolved] of answers) {
+    if (fanIds.length === 0) continue;
+    await db
+      .update(fanPages)
+      .set({ accountProbeAt: input.answeredAt, accountProbeResolved: resolved })
+      .where(and(
+        eq(fanPages.platformAccountId, input.platformAccountId),
+        inArray(fanPages.fanId, fanIds),
+      ));
+  }
+}
+
 export interface FanslyAccountProbeAnswer {
   probedAt: Date;
   resolved: boolean;
 }
 
-/** The DM partner probe's last answer through this page, or null when the
- * partner is not linked to the page or was never probed there. */
+/** The last account answer through this page — the DM partner probe's, or an
+ * account lookup's (`recordFanPageAccountLookupAnswers`) — or null when the
+ * partner is not linked to the page or was never asked about there. */
 export async function readFanslyAccountProbe(
   db: Database,
   input: { platformAccountId: number; platformUserId: string },

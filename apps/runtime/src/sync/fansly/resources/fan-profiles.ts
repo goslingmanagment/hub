@@ -32,8 +32,11 @@ import type {
 //   merges the fan ids into the walk row's `params.ids` (`DemandSignal.ids`);
 //   each step reads the ids not looked up through this page within the day
 //   (owner decision 2026-09-30, `page_fans.account_lookup_at`), ≤ 100 at a
-//   time. The answer is stored with its lookup stamp in one transaction; an
-//   id the answer omits is marked deleted (only for an answer the contract
+//   time. The answer is stored with its lookup stamp in one transaction, and
+//   every asked id gets the page's own answer, returned or omitted
+//   (`page_fans.account_probe_*`, which the probe reuses for a day). An
+//   omitted id marks nothing on the shared fan row: a fan who blocked the
+//   page is omitted too (arena "vanished chat" D2; all of it only for an answer the contract
 //   accepted: a non-array is quarantined and marks nothing).
 // - probe (planned trigger, subject = the DM partner id): "does this partner
 //   still resolve?", answer reused for a day; `unresolved` excludes the
@@ -92,24 +95,22 @@ function requestedIds(request: RequestPlan): string[] {
 }
 
 /** Store one accepted `/account?ids=` answer: profiles, notes and aliases of
- *  the returned accounts, the omitted ids marked deleted, every asked id
- *  stamped as looked up — one transaction. */
+ *  the returned accounts, every asked id stamped as looked up with the page's
+ *  own answer (returned or omitted) — one transaction. An omitted id marks
+ *  nothing on the shared fan row (arena "vanished chat" D2). */
 async function storeLookupAnswer(
   tx: Database,
   input: { pageId: number; requested: readonly string[]; accounts: readonly FanslyAccount[]; now: Date },
 ) {
-  const returned = new Set(input.accounts.map((account) => account.id));
-  const fallbackIds = input.requested.filter((id) => !returned.has(id));
   const stored = await upsertHydratedFansForPageDetailed(tx, {
     platformAccountId: input.pageId,
     accounts: [...input.accounts],
-    fallbackIds,
     lookup: { lookedUpAt: input.now, platformUserIds: [...input.requested] },
   });
   return {
     requested: input.requested.length,
     returned: input.accounts.length,
-    fallback: fallbackIds.length,
+    fallback: stored.missedCount,
     notesUpserted: stored.upsertedNoteCount,
     aliasesSet: stored.aliasesSet,
     aliasesCleared: stored.aliasesCleared,
