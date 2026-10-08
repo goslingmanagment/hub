@@ -53,15 +53,19 @@
 -- after its last applied head read, counted from the first such refusal; an
 -- episode of 5 or more is established at its 5th, its retry boundary the
 -- later of the last refused work's breaker and the last refusal + 24 h, and
--- its list head the thread's head now. The owner's note goes on lora-1's.
+-- its answered head the newest of the thread's list head and the refused
+-- work's demanded ids created before the last refused read was sent (the
+-- capture hook's rule: a message created after it is a new demand, read once
+-- after the boundary). The owner's note goes on lora-1's.
 -- The unconfirmed, undeleted socket messages of the established chats are
 -- deferred `chat_unavailable`. (Production, 2026-10-08: lora-1 chat
 -- 959503986971394048 — 8 refusals, attempts 115884…158261, established at
--- 126171; lora-2 chat 962771411582074883 — 9 refusals, attempts
--- 82887…158938, established at 98386; their live rows 963176936203370497 and
+-- 126171, answered head 963176936203370497; lora-2 chat 962771411582074883
+-- — 9 refusals, attempts 82887…158938, established at 98386, answered head
+-- 962774700725903361; their live rows 963176936203370497 and
 -- 962774700725903361 go from `age_without_rest` to `chat_unavailable`. The
--- work rows 362195 and 218893 stay open: their next daily probe closes them,
--- or ends the episode.)
+-- work rows 362195 and 218893 are the engine's: their demand is the answered
+-- head, so their next plan closes them `chat_unavailable` without a request.)
 --
 -- Rollback-compatible: a new table the previous image never names, created
 -- with IF NOT EXISTS; the live rows take a wait reason the 0247 CHECK already
@@ -165,7 +169,7 @@ end $$;
 
 with head_reads as (
   select a.id, a.page_id, a.subject, a.work_id, a.apply_state, a.error_class, a.http_status, a.completed_at,
-         a.observation_id, a.observation_received_at
+         coalesce(a.sent_at, a.admitted_at) as sent_at, a.observation_id, a.observation_received_at
     from sync_attempts a
    where not a.shadow
      and a.operation = 'messages.page'
@@ -203,7 +207,7 @@ with head_reads as (
     from refused r
    group by r.page_id, r.subject
 ), episodes as (
-  select t.id as thread_id, t.last_message_id, c.refusals, c.established_at,
+  select t.id as thread_id, h.id as handled_list_head_id, c.refusals, c.established_at,
          f.id as first_attempt_id, f.completed_at as opened_at,
          f.observation_id as first_observation_id, f.observation_received_at as first_observation_received_at,
          l.id as last_attempt_id, l.completed_at as last_refusal_at, l.http_status as last_http_status,
@@ -214,6 +218,21 @@ with head_reads as (
     join refused l on l.id = c.last_id
     left join sync_work w on w.id = l.work_id
     join page_dm_threads t on t.platform_account_id = c.page_id and t.platform_conversation_id = c.subject
+    -- The answered head, as the capture hook takes it: the newest of the
+    -- chat's list head and the refused work's demanded ids that was created
+    -- (snowflake time) before the last refused read was sent. A message
+    -- created after that read is a new demand, never an answered one.
+    left join lateral (
+      select x.id
+        from (select t.last_message_id as id
+              union all
+              select jsonb_array_elements_text(case when jsonb_typeof(w.demand -> 'messageIds') = 'array'
+                                                    then w.demand -> 'messageIds' else '[]'::jsonb end)) x
+       where x.id ~ '^[0-9]{1,30}$'
+         and floor(x.id::numeric / 4194304) + 1561494359900 <= extract(epoch from l.sent_at) * 1000
+       order by length(x.id) desc, x.id collate "C" desc
+       limit 1
+    ) h on true
    where t.fan_id is not null
      and coalesce(t.metadata ->> 'messageSyncExcludedReason', '') = ''
 )
@@ -228,7 +247,7 @@ select e.thread_id,
        case when e.established_at is null then null else e.retry_not_before end,
        e.first_attempt_id, e.last_attempt_id, e.first_observation_id, e.first_observation_received_at,
        e.last_observation_id, e.last_observation_received_at,
-       case when e.established_at is not null and e.last_message_id ~ '^[0-9]{1,30}$' then e.last_message_id end
+       case when e.established_at is not null then e.handled_list_head_id end
   from episodes e
  order by e.thread_id
 on conflict (thread_id) where ended_at is null do nothing;

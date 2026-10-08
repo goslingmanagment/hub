@@ -1036,6 +1036,37 @@ describe("the second review of PR #490", () => {
   });
 });
 
+describe("the fifth review of PR #490", () => {
+  it("a history walk filed before the episode was established (as the migration builds it) reads no head: its fan that needs the head is refused, no request", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage();
+    const threadId = await seedThread(pageId);
+    const registry = await registryFor(pageId);
+    const service = { db: db(), rawConfig: testConfig(testDb.connectionString) };
+    // Filed under the previous image: queued, unanchored (needs the head).
+    const filed = await submitHistoryRequest(service, {
+      pageId,
+      fans: [{ kind: "conversation", conversationRef: groupOf(1) }],
+      depth: { kind: "all" },
+      reason: "test",
+      idempotencyKey: randomUUID(),
+      requester: { kind: "owner_cli", userId: null },
+    });
+    expect(filed.items[0]).toMatchObject({ state: "queued", anchorMessageRef: null });
+    // The migration established the chat's episode (its boundary already past).
+    await seedEpisode(threadId, { state: "established", refusals: 8, retryInMs: -1_000, handledListHeadId: msg(5) });
+    const { requests } = await runLive(pageId, registry, refused, async () => (await workRow(pageId, HISTORY_KEY))?.state === "done");
+    expect(requests).toHaveLength(0);
+    const after = await getHistoryRequest(service, filed.request.ref);
+    expect(after.items[0]).toMatchObject({ state: "refused", refusal: "excluded", excludedReason: "chat_unavailable" });
+    expect(after.request.state).toBe("done");
+    const walk = await workRow(pageId, HISTORY_KEY);
+    expect(walk).toMatchObject({ state: "done", close_reason: "chat_unavailable" });
+    expect(Number(walk!.applied_revision)).toBeLessThan(Number(walk!.demand_revision));
+    expect((await runFor(pageId, registry, refused, 1_500)).requests).toHaveLength(0);
+  });
+});
+
 describe("a refusal under an erasure", () => {
   it("a thread erased while its refusal is captured: the capture is kept, no episode is written", async (context) => {
     if (!testDb) return context.skip();
@@ -1167,6 +1198,14 @@ describe("the migration's episodes (page_dm_thread_unavailability.sql)", () => {
        values ($1, $2, $3, 1, now())`,
       [pageId, msg(6), LORA_1_CHAT],
     );
+    // After the last refused read the fan wrote again: the list's head and the
+    // work's demand name a message created after that read was sent.
+    const later = snowflake(Date.now() + 60_000);
+    await testDb.pool.query(
+      `update sync_work set demand = sync_work_merge_demand(demand, $2::jsonb), demand_revision = demand_revision + 1 where id = $1`,
+      [work.id, JSON.stringify({ messageIds: [later], txIds: [], reasons: ["ws:message_created"], overflow: false })],
+    );
+    await testDb.pool.query("update page_dm_threads set last_message_id = $2 where id = $1", [refusedChat, later]);
 
     const client = await testDb.pool.connect();
     try {
@@ -1188,7 +1227,9 @@ describe("the migration's episodes (page_dm_thread_unavailability.sql)", () => {
       last_attempt_id: String(counted[5]!.attemptId),
       first_observation_id: String(counted[0]!.observationId),
       last_observation_id: String(counted[5]!.observationId),
-      handled_list_head_id: msg(5),
+      // The newest id created before the last refused read was sent (the
+      // work's 7, above the list's old head 5); the later message is not one.
+      handled_list_head_id: msg(7),
       owner_note: "06.10: профиль не открывается из-под lora-1 — ЧС со стороны фана, по наблюдению владельца",
     });
     const fifth = await rows<{ completed_at: Date }>("select completed_at from sync_attempts where id = $1", [counted[4]!.attemptId]);
@@ -1199,7 +1240,16 @@ describe("the migration's episodes (page_dm_thread_unavailability.sql)", () => {
     expect(await episodes(excludedChat)).toEqual([]);
     expect(await liveRow(pageId, 7)).toMatchObject({ confirm_wait_reason: "chat_unavailable", confirm_due_at: null, confirmed_at: null });
     expect((await liveRow(pageId, 6)).confirm_wait_reason).toBeNull();
-    // The work rows are the engine's: its next probe closes them.
+    // The work rows are the engine's. This one carries the later message:
+    // its plan does not take it for answered — it waits for the boundary, to
+    // read once — and closes nothing.
     expect(await scalar("select count(*)::int as n from sync_work where id = $1 and state = 'open'", [work.id])).toBe(1);
+    const registry = await registryFor(pageId);
+    await testDb.pool.query("update sync_work set due_at = now() - interval '1 second', breaker_until = null where id = $1", [work.id]);
+    expect((await runFor(pageId, registry, refused, 1_500)).requests).toHaveLength(0);
+    const waiting = await rows<{ state: string; waiting_reason: string | null; due_at: Date }>(
+      "select state, waiting_reason, due_at from sync_work where id = $1", [work.id]);
+    expect(waiting[0]).toMatchObject({ state: "open", waiting_reason: "not_due" });
+    expect(waiting[0]!.due_at.getTime()).toBe(episode!.retry_not_before!.getTime());
   });
 });

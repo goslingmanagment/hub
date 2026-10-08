@@ -314,6 +314,11 @@ export interface ApplyResult<C = unknown> {
   /** Outcomes worth counting that are not work (a refused empty snapshot, a
    *  restarted walk, …): `sync_apply_effect{resource, effect}` after commit. */
   counters?: Readonly<Record<string, number>>;
+  /** A `local` step of a chat whose unavailability episode is established
+   *  (arena "vanished chat" §2.4): after the work row is settled, the history
+   *  requests refuse the chat's fans that need its head
+   *  (`CommitDeps.onChatUnavailable`, `history_*` last in the lock order). */
+  chatUnavailable?: { threadId: number };
   /** The account the page's credentials answered for (`/account/me` only,
    *  `IDENTITY_PROOF_OPERATIONS`): the engine writes the identity proof —
    *  `sync_pages.identity_account_id` and the trusted digest — and clears a

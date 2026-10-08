@@ -440,8 +440,11 @@ The page's actor is its one writer:
   message) closes itself without a request — a `local` step, re-judged under the commit's transaction and settled
   at the revision its plan read, deferring the socket messages too; a row with a newer demand waits for
   `retry_not_before` (the plan's `not_due`, no second timer) and then reads once. A row that continues a staged walk
-  below its head read (`before`) finishes it under its own breaker. So no demand that lands during a read is lost,
-  by construction.
+  below its head read (`before`) finishes it under its own breaker. A `.history` walk whose next read is the head of
+  an established chat never reads it either: its own `local` step has the history requests refuse its fans that need
+  the head (`ApplyResult.chatUnavailable` → `CommitDeps.onChatUnavailable`, after the settle), the walk closes when no
+  fan is left, and a fan anchored below the chain keeps reading `before` — so a request filed before the episode was
+  established (by the migration, say) costs no read. So no demand that lands during a read is lost, by construction.
 - **No background read** (owner decision Р5): one demand is one read. Any head read of an established chat that
   went out and does not end the episode — a refusal, a timeout, the wire, a 5xx without the envelope, a 429 or a 401
   that reached the send — moves the boundary by the same rule and the answered head (`postponeChatUnavailabilityRetry`

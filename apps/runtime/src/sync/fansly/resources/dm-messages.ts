@@ -46,17 +46,18 @@ import type { CanonicalEventDraft } from "../../../services/canonicalize/types.t
 import { canonicalizeObservationInTransaction } from "../../engine/canonicalize.ts";
 import { ApplyDeferred, ApplyQuarantine, FanslyContractViolationError } from "../../engine/commit.ts";
 import { BLOCKED_PROBE_EVERY_MS, type OutcomeDecision } from "../../engine/errors.ts";
-import type {
-  ApplyInput,
-  ApplyResult,
-  CaptureOutcomeInput,
-  CaptureOutcomeResult,
-  DemandSignal,
-  LocalApplyInput,
-  RequestPlan,
-  ResourceModule,
-  StepPlan,
-  WorkOutcome,
+import {
+  WAIT_RECHECK_MS,
+  type ApplyInput,
+  type ApplyResult,
+  type CaptureOutcomeInput,
+  type CaptureOutcomeResult,
+  type DemandSignal,
+  type LocalApplyInput,
+  type RequestPlan,
+  type ResourceModule,
+  type StepPlan,
+  type WorkOutcome,
 } from "../../engine/resource.ts";
 import {
   chainPageNeedsStoredFacts,
@@ -418,14 +419,16 @@ async function planStep(variant: DmMessagesVariant, work: SyncWorkRow, ctx: {
   const plan = await planThreadRead(variant, work, thread, ctx);
   // A head read of a chat Fansly refuses to the page (an established episode,
   // plan §2.3, owner decision Р5): each row decides for itself, no other
-  // row's capture closes it. A head or catch-up row whose demand the episode
-  // already answered closes itself without a request (a local step); one
-  // with a newer demand — any key's — waits for the episode's retry boundary
-  // (no second timer) and then reads once.
+  // row's capture closes it. A history walk never reads the head of such a
+  // chat: a local step refuses its fans that need the head (its continuation
+  // below the chain reads on). A head or catch-up row whose demand the
+  // episode already answered closes itself without a request (a local step);
+  // one with a newer demand waits for the episode's retry boundary (no second
+  // timer) and then reads once.
   if (plan.kind !== "request" || requestedParams(plan.request).before !== null) return plan;
   const episode = await openEpisodeOf(ctx.db, ctx.pageId, groupId);
   if (episode?.state !== "established") return plan;
-  if (variant !== "history" && demandAnswered(work.demand, episode.handledListHeadId)) {
+  if (variant === "history" || demandAnswered(work.demand, episode.handledListHeadId)) {
     return { kind: "local", reason: CHAT_UNAVAILABLE_REASON };
   }
   if (episode.retryNotBefore !== null && episode.retryNotBefore.getTime() > ctx.now.getTime()) {
@@ -1098,7 +1101,13 @@ function episodeEndOf(skip: ThreadSkip): ChatUnavailabilityEndReason | null {
  * - a head or catch-up row of a chat whose episode is established, whose
  *   next read is the head and whose demand the episode already answered: it
  *   closes itself `chat_unavailable` with its demand unserved, and the chat's
- *   unconfirmed socket messages are deferred — no request.
+ *   unconfirmed socket messages are deferred — no request;
+ * - a history walk of such a chat whose next read is the head: no request —
+ *   the history requests refuse its fans that need the head after the settle
+ *   (`chatUnavailable`, the capture's rule), closing the walk when no fan is
+ *   left; a fan anchored below the chain keeps the walk, which reads `before`
+ *   at its next plan (a minute on: no tight loop on a host without the
+ *   history hook).
  * Anything else (the exclusion lifted, a new demand, the episode ended) is
  * planned anew.
  */
@@ -1116,11 +1125,21 @@ async function applyLocalStep(variant: DmMessagesVariant, tx: Database, input: L
     }
     return { work: { satisfiesRevision: true, close: "done", closeReason: skip }, followups: [], counters };
   }
-  if (thread === null || variant === "history") return replan;
+  if (thread === null) return replan;
   const episode = await openEpisodeOf(tx, input.pageId, groupId);
-  if (episode?.state !== "established" || !demandAnswered(input.work.demand, episode.handledListHeadId)) return replan;
+  if (episode?.state !== "established") return replan;
+  if (variant !== "history" && !demandAnswered(input.work.demand, episode.handledListHeadId)) return replan;
   const next = await planThreadRead(variant, input.work, thread, { db: tx, pageId: input.pageId, now: input.now });
   if (next.kind !== "request" || requestedParams(next.request).before !== null) return replan;
+  if (variant === "history") {
+    bump(counters, "chat_unavailable_history_refused");
+    return {
+      work: { satisfiesRevision: false, nextDueAt: new Date(input.now.getTime() + WAIT_RECHECK_MS), waitingReason: "dependency" },
+      followups: [],
+      counters,
+      chatUnavailable: { threadId: thread.state.id },
+    };
+  }
   await deferChatUnavailableLiveMessages(tx, { pageId: input.pageId, groupId });
   bump(counters, "chat_unavailable_closed");
   return {

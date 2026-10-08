@@ -1124,6 +1124,11 @@ describe("page_dm_thread_unavailability.sql (arena \"vanished chat\", R2: the ch
     // Established at the episode's own 5th refusal; the boundary as the hook sets it.
     expect(flat).toContain(`min(r.completed_at) filter (where r.n = ${CHAT_UNAVAILABILITY_ESTABLISH_AFTER}) as established_at`);
     expect(flat).toContain("greatest(w.breaker_until, l.completed_at + interval '24 hours') as retry_not_before");
+    // The answered head as the capture hook takes it: only ids (the list's
+    // head, the refused work's demand) created before the last refused read
+    // was sent — a later message is a new demand.
+    expect(flat).toContain("coalesce(a.sent_at, a.admitted_at) as sent_at");
+    expect(flat).toContain("where x.id ~ '^[0-9]{1,30}$' and floor(x.id::numeric / 4194304) + 1561494359900 <= extract(epoch from l.sent_at) * 1000");
     // Chats the engine reads only: bound, not excluded.
     expect(flat).toContain("where t.fan_id is not null and coalesce(t.metadata ->> 'messageSyncExcludedReason', '') = ''");
     expect(flat).toContain("on conflict (thread_id) where ended_at is null do nothing");

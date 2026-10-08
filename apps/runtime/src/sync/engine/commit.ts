@@ -728,6 +728,9 @@ export async function applyLocal(d: CommitDeps, work: SyncWorkRow, module: Resou
         await d.onThreadChainChanged(tx, { pageId: d.pageId, threadId: result.threadChainChanged.threadId });
       }
       await afterSettle(tx, d, work, done, result.work.closeReason ?? null);
+      if (result.chatUnavailable !== undefined && d.onChatUnavailable !== undefined) {
+        await d.onChatUnavailable(tx, { pageId: d.pageId, threadId: result.chatUnavailable.threadId });
+      }
       for (const [name, by] of Object.entries(result.counters ?? {})) {
         d.metrics.increment("sync_apply_effect", { resource: work.resource, effect: name }, by);
       }
