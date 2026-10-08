@@ -58,7 +58,11 @@ import { fanslyResourceSpec } from "../../apps/runtime/src/sync/fansly/registry.
 import { createMediaDownloadModule, mediaDownloadSubject } from "../../apps/runtime/src/sync/fansly/resources/media-download.ts";
 import { createPageTransport } from "../../apps/runtime/src/sync/fansly/transport.ts";
 import { encryptSyncWorkSecret } from "../../apps/runtime/src/sync/requests/secret-params.ts";
-import { onHistoryThreadChainChanged, onHistoryWorkClosed } from "../../apps/runtime/src/sync/requests/history.ts";
+import {
+  onHistoryChatUnavailable,
+  onHistoryThreadChainChanged,
+  onHistoryWorkClosed,
+} from "../../apps/runtime/src/sync/requests/history.ts";
 import { seededRandom } from "./sync-fakes.ts";
 import { quietLogger, setModeDirect, testSpec } from "./sync-engine-host.ts";
 
@@ -1105,6 +1109,7 @@ export function harnessHostOptions(input: {
     capture: fanslyCaptureCodec,
     onThreadChainChanged: onHistoryThreadChainChanged,
     onWorkClosed: onHistoryWorkClosed,
+    onChatUnavailable: onHistoryChatUnavailable,
     rng: input.rng,
     ...(input.clock === undefined ? {} : { clock: input.clock }),
     ...(input.probe === undefined ? {} : { probe: input.probe }),

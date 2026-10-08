@@ -14,6 +14,7 @@ import {
   setPageHold,
   setResourceHold,
   storeSyncMediaHandoff,
+  upsertFans,
   type Database,
 } from "@agency_hub_core/db";
 
@@ -466,6 +467,53 @@ describe("erasure of the engine's state (design §2.9)", () => {
     });
     const left = await query<{ description_id: string }>("select description_id::text from sync_media_handoff order by description_id");
     expect(left.map((row) => Number(row.description_id))).toEqual([others, creators]);
+  });
+
+  it("the chat-unavailability episodes go with their threads: a fan erasure and a page erasure remove them by the cascade, no other's", async (context) => {
+    if (!testDb) return context.skip();
+    // The erasure of this release is the previous image's (no target names
+    // the episodes): the rollback image erases them the same way.
+    const pageId = await seedPage("erase-episodes");
+    const other = await seedPage("erase-episodes-other");
+    const fans = await upsertFans(db(), [
+      { platform: "fansly" as const, platformUserId: FAN },
+      { platform: "fansly" as const, platformUserId: OTHER_FAN },
+    ]);
+    const fanIdOf = (partner: string) => fans.find((row) => row.platformUserId === partner)!.id;
+    const episodeOn = async (page: number, group: string, partner: string): Promise<number> => {
+      const thread = await query<{ id: string }>(
+        `insert into page_dm_threads (platform_account_id, platform_conversation_id, partner_platform_user_id, fan_id)
+         values ($1, $2, $3, $4) returning id::text`,
+        [page, group, partner, fanIdOf(partner)],
+      );
+      // An ended episode (its history) and the open one.
+      await query(
+        `insert into page_dm_thread_unavailability (thread_id, state, opened_at, established_at, ended_at, end_reason, refusals,
+                last_refusal_at, retry_not_before, first_attempt_id, last_attempt_id, first_observation_id,
+                first_observation_received_at, last_observation_id, last_observation_received_at, owner_note, owner_note_at)
+         values ($1, 'refusing', now() - interval '2 days', null, now() - interval '1 day', 'read_served', 2,
+                 now() - interval '2 days', null, 1, 2, 1, now(), 2, now(), null, null),
+                ($1, 'established', now(), now(), null, null, 5, now(), now() + interval '1 day', 1, 5, 1, now(), 5, now(), 'note', now())`,
+        [Number(thread[0]!.id)],
+      );
+      return Number(thread[0]!.id);
+    };
+    const fansChat = await episodeOn(pageId, "group-fan", FAN);
+    const othersChat = await episodeOn(pageId, "group-other", OTHER_FAN);
+    const otherPagesChat = await episodeOn(other, "group-fan", FAN);
+    const episodesOf = async (threadId: number) => (await query<{ n: number }>(
+      "select count(*)::int as n from page_dm_thread_unavailability where thread_id = $1", [threadId]))[0]!.n;
+
+    await withEraser(async (app, operatorId) => {
+      await executeErasure(app, { scopeType: "fan", platform: "fansly", fanRef: FAN }, { initiatedBy: operatorId });
+      expect(await episodesOf(fansChat)).toBe(0);
+      expect(await episodesOf(otherPagesChat)).toBe(0);
+      expect(await episodesOf(othersChat)).toBe(2);
+
+      await executeErasure(app, { scopeType: "page", pageLabel: "erase-episodes" }, { initiatedBy: operatorId });
+      expect(await episodesOf(othersChat)).toBe(0);
+    });
+    expect((await query<{ n: number }>("select count(*)::int as n from page_dm_thread_unavailability"))[0]!.n).toBe(0);
   });
 
   it("a page erasure removes the page's engine row, work and attempts, and only that page's", async (context) => {

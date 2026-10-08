@@ -9,6 +9,7 @@ import {
   maxPageDmThreadGeneration,
   readDmFindSharedRead,
   readFanslyAccountProbe,
+  readOpenChatUnavailability,
   upsertPageDmConversationListFields,
   type Database,
   type DmFindSharedRead,
@@ -212,6 +213,17 @@ async function freshProbeAnswers(
 
 // ── follow-ups ──────────────────────────────────────────────────────────────
 
+/** The list heads the established chat-unavailability episodes of these
+ *  chats already answered (`handled_list_head_id`), by group id. */
+async function unavailableHandledHeads(db: Database, pageId: number, groupIds: readonly string[]): Promise<Map<string, string>> {
+  const episodes = await readOpenChatUnavailability(db, { pageId, groupIds });
+  const handled = new Map<string, string>();
+  for (const [groupId, episode] of episodes) {
+    if (episode.state === "established" && episode.handledListHeadId !== null) handled.set(groupId, episode.handledListHeadId);
+  }
+  return handled;
+}
+
 interface FollowupThread {
   state: ListHeadFollowupState;
   threadId: number;
@@ -233,7 +245,15 @@ async function threadFollowups(
   db: Database,
   input: { pageId: number; key: string; engineStartAt: Date | null; threads: readonly FollowupThread[] },
 ): Promise<{ followups: DemandSignal[]; counters: Record<string, number> }> {
-  const needRead = input.threads.filter((thread) => listHeadNeedsRead(thread.state, input.engineStartAt));
+  // A chat Fansly refuses to the page asks for no read of a list head its
+  // established episode already answered (arena "vanished chat" §2.3).
+  const handled = await unavailableHandledHeads(db, input.pageId, input.threads.map((thread) => thread.state.groupId));
+  const needRead = input.threads.filter((thread) => listHeadNeedsRead(
+    { ...thread.state, unavailableHandledHeadId: handled.get(thread.state.groupId) ?? null },
+    input.engineStartAt,
+  ));
+  const answered = input.threads.filter((thread) => handled.has(thread.state.groupId)
+    && listHeadNeedsRead(thread.state, input.engineStartAt) && !needRead.includes(thread)).length;
   const openFinds = await listOpenWorkSubjects(db, {
     pageId: input.pageId,
     resource: FIND_KEY,
@@ -251,6 +271,7 @@ async function threadFollowups(
   const bump = (name: string) => {
     counters[name] = (counters[name] ?? 0) + 1;
   };
+  if (answered > 0) counters.followup_skipped_chat_unavailable = answered;
   for (const thread of needRead) {
     const groupId = thread.state.groupId;
     const followupClass = classOf(thread);
@@ -861,6 +882,7 @@ const findModule: ResourceModule = {
     const openHead = await listOpenWorkSubjects(tx, { pageId: input.pageId, resource: MESSAGES_HEAD_KEY, subjects: [groupId] });
     const page = await getSyncPage(tx, input.pageId);
     const listHeadId = state?.lastMessageId ?? null;
+    const handled = await unavailableHandledHeads(tx, input.pageId, [groupId]);
     const needsRead = state !== undefined && !openHead.has(groupId) && listHeadNeedsRead({
       groupId,
       fanId: state.fanId,
@@ -869,6 +891,7 @@ const findModule: ResourceModule = {
       newestStoredMessageId: state.newestStoredMessageId,
       listHeadId,
       listHeadAt: listHeadInstant(listHeadId, state.lastMessageAt),
+      unavailableHandledHeadId: handled.get(groupId) ?? null,
     }, engineStartAt(page));
     const followups: DemandSignal[] = needsRead
       ? [{ resource: MESSAGES_HEAD_KEY, subject: groupId, demand: { messageIds: [listHeadId!], reason: `list_head:${FIND_KEY}` } }]

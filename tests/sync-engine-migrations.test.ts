@@ -3,6 +3,9 @@ import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import {
+  CHAT_UNAVAILABILITY_END_REASONS,
+  CHAT_UNAVAILABILITY_ESTABLISH_AFTER,
+  CHAT_UNAVAILABILITY_STATES,
   DM_LIVE_CONFIRM_WAIT_REASONS,
   dmLiveMessages,
   FANSLY_SEND_GUARD_OWNER_ENGINES,
@@ -17,6 +20,7 @@ import {
   historyRequestItems,
   historyRequests,
   pageDmThreads,
+  pageDmThreadUnavailability,
   THREAD_CHAIN_SOURCES,
   THREAD_HISTORY_PROOFS,
   THREAD_HISTORY_STATES,
@@ -1057,5 +1061,91 @@ describe("sync_excluded_probe_not_served.sql (arena D1: excluded-chat probes Fan
 
   it("allows application rollback after the data-only migration", () => {
     expect(rollbackCompatible()).toContain(`"${migration}"`);
+  });
+});
+
+describe("page_dm_thread_unavailability.sql (arena \"vanished chat\", R2: the chat-unavailability episode)", () => {
+  // Found by its name, not its number: the number is the next free one at merge.
+  const found = readdirSync("packages/db/migrations").filter((file) => file.endsWith("_page_dm_thread_unavailability.sql"));
+  const migration = found[0] ?? "";
+  const text = found.length === 1 ? readFileSync(`packages/db/migrations/${migration}`, "utf8") : "";
+  const sql = stripComments(text);
+  const flat = sql.replace(/\s+/g, " ");
+  const statements = topLevelStatements(sql);
+
+  it("exists once, after the wait reason it writes (0247) and the excluded-probe closure (0248)", () => {
+    expect(found).toHaveLength(1);
+    expect(migration > "0248_sync_excluded_probe_not_served.sql").toBe(true);
+    // Transactional (the runner's own transaction): `set local` needs one.
+    expect(text.startsWith("-- agency-hub:no-transaction")).toBe(false);
+  });
+
+  it("adds one table and its indexes, comments, the read grant, the proven episodes, the owner's note and the deferred live rows", () => {
+    expect(statements[0]).toBe("set local lock_timeout = '5s'");
+    expect(statements[1]).toMatch(/^create table if not exists page_dm_thread_unavailability \( id bigserial primary key, thread_id bigint not null references page_dm_threads\(id\) on delete cascade, /);
+    expect(statements[2]).toBe("create unique index if not exists page_dm_thread_unavailability_open on page_dm_thread_unavailability (thread_id) where ended_at is null");
+    expect(statements[3]).toBe("create index if not exists page_dm_thread_unavailability_thread on page_dm_thread_unavailability (thread_id, id)");
+    const tail = statements.slice(4).filter((statement) => !statement.startsWith("comment on "));
+    expect(tail).toEqual([
+      "do $$…$$",
+      expect.stringMatching(/^with head_reads as \( /),
+      expect.stringMatching(/^update page_dm_thread_unavailability e set owner_note = /),
+      expect.stringMatching(/^update dm_live_messages m set confirm_wait_reason = 'chat_unavailable', confirm_due_at = null, /),
+    ]);
+    expect(text).toContain("grant select on page_dm_thread_unavailability to read_only;");
+    // Additive only: nothing of the previous schema changes.
+    expect(sql.replace("on delete cascade", "")).not.toMatch(/\b(alter|drop|rename|truncate|delete)\b/i);
+    // No fan identity, no page key: erased with its thread only.
+    const table = statements[1]!;
+    expect(table).not.toMatch(/\bpages\b|\bfans\b|page_id|fan_id|platform_user_id/);
+    expect(table.match(/references /g)).toHaveLength(1);
+  });
+
+  it("checks the state, the end reasons, the life cycle and the owner's note", () => {
+    const table = statements[1]!;
+    expect(checkList(table, "page_dm_thread_unavailability_state_check")).toEqual([...CHAT_UNAVAILABILITY_STATES]);
+    expect(checkList(table, "page_dm_thread_unavailability_end_reason_check")).toEqual([...CHAT_UNAVAILABILITY_END_REASONS]);
+    expect(table).toContain("check ((ended_at is null) = (end_reason is null))");
+    expect(table).toContain("check ((state = 'established') = (established_at is not null))");
+    expect(table).toContain("check (retry_not_before is null or state = 'established')");
+    expect(table).toContain("check (refusals >= 1)");
+    expect(table).toContain("check ( (owner_note is null) = (owner_note_at is null) and (owner_note is null or length(owner_note) between 1 and 2000) )");
+  });
+
+  it("builds the episodes by the rule the capture hook counts by: head reads of the three keys Fansly refused with its envelope, after the last applied one", () => {
+    expect(flat).toContain("and a.operation = 'messages.page' and a.resource in ('dm-messages.head', 'dm-messages.catchup', 'dm-messages.history') and a.outcome = 'response' and a.request -> 'params' ->> 'before' is null");
+    expect(flat).toContain("where r.apply_state = 'applied' group by r.page_id, r.subject");
+    expect(flat).toContain("where r.id > coalesce(s.attempt_id, 0) and r.error_class in ('subject_failure', 'envelope_unsuccessful')");
+    // isFanslyErrorEnvelope over the journaled failed body; an HTML body is never cast.
+    expect(flat).toContain("case when pg_input_is_valid(o.payload ->> 'bodyText', 'jsonb') then (o.payload ->> 'bodyText')::jsonb end as body");
+    expect(flat).toContain("and o.kind = 'dm_messages:failed' and jsonb_typeof(b.body) = 'object' and b.body -> 'success' = 'false'::jsonb");
+    expect(flat).toContain("and jsonb_typeof(b.body -> 'error' -> 'code') = 'number'");
+    expect(flat).toContain("and (b.body -> 'error' ->> 'details') ~ '[^[:space:]]'");
+    // Established at the episode's own 5th refusal; the boundary as the hook sets it.
+    expect(flat).toContain(`min(r.completed_at) filter (where r.n = ${CHAT_UNAVAILABILITY_ESTABLISH_AFTER}) as established_at`);
+    expect(flat).toContain("greatest(w.breaker_until, l.completed_at + interval '24 hours') as retry_not_before");
+    // Chats the engine reads only: bound, not excluded.
+    expect(flat).toContain("where t.fan_id is not null and coalesce(t.metadata ->> 'messageSyncExcludedReason', '') = ''");
+    expect(flat).toContain("on conflict (thread_id) where ended_at is null do nothing");
+    // The deferral of the established chats' socket messages, as the hook defers them.
+    expect(flat).toContain("where e.ended_at is null and e.state = 'established' and m.page_id = t.platform_account_id and m.platform_conversation_id = t.platform_conversation_id and m.confirmed_at is null and m.deleted_at is null");
+  });
+
+  it("is mirrored in drizzle and required by the schema guard", () => {
+    const columns = pageDmThreadUnavailability as unknown as Record<string, { name?: unknown }>;
+    for (const [field, column] of [
+      ["threadId", "thread_id"], ["state", "state"], ["retryNotBefore", "retry_not_before"],
+      ["handledListHeadId", "handled_list_head_id"], ["ownerNote", "owner_note"], ["ownerNoteAt", "owner_note_at"],
+    ] as const) {
+      expect(columns[field]?.name, field).toBe(column);
+    }
+    expect(readFileSync("packages/db/src/schema-guard.ts", "utf8")).toContain('"page_dm_thread_unavailability",');
+  });
+
+  it("allows application rollback: the previous image never names the table, and its erasure removes the episodes through the thread cascade", () => {
+    expect(rollbackCompatible()).toContain(`"${migration}"`);
+    // tests/sync-engine-retention-erasure.integration.test.ts runs the page
+    // and fan erasure (unchanged by this release) on the new schema.
+    expect(flat).toContain("references page_dm_threads(id) on delete cascade");
   });
 });

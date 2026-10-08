@@ -45,6 +45,7 @@ import type { Database } from "../../client.ts";
 import { capturePayloadRefFromColumns, type CapturePayloadRef } from "../capture-payloads.ts";
 import { appendDomainEventsInTransaction, type DomainEventInput } from "../domain-events.ts";
 import { isDmArchiveScopeFenced, tryAcquireDmArchiveWriterFenceLock } from "../erasure-fence.ts";
+import { openChatUnavailabilitySql } from "./chat-unavailability.ts";
 import type { SyncPageMode } from "./pages.ts";
 
 /** Deliverable (SSE v2), never projection-only, never an archive input. */
@@ -472,7 +473,10 @@ export async function listPendingFanslyWsLiveReceipts(
 // partial index), still unconfirmed, still shown by the readers. Only a REST
 // read settles it later: a read that returns it confirms it, a read that
 // covers its place without it writes `not_found` (the DM apply, below). That
-// apply is the one writer of `not_found`.
+// apply is the one writer of `not_found`. The reason is `chat_unavailable`
+// when the chat has an open chat-unavailability episode (Fansly refuses the
+// chat's head to the page, `chat-unavailability.ts`), else
+// `age_without_rest`.
 
 /** Socket createdAt is fractional seconds; REST normalizes to whole seconds. */
 const CONFIRM_TIME_TOLERANCE_MS = 1_000;
@@ -485,8 +489,9 @@ export type DmLiveMismatchField = "text" | "sender" | "time" | "group" | "reply"
  * Why an unconfirmed overlay row is no longer awaited (`confirm_wait_reason`,
  * migration `*_dm_live_confirm_wait_reason.sql`): `age_without_rest` — the
  * parity window passed without a REST copy; `chat_unavailable` — Fansly does
- * not serve the chat to the page (written by the chat-unavailability episode,
- * a later release). A deferred row is still unconfirmed and still shown; a
+ * not serve the chat to the page (the chat has an open chat-unavailability
+ * episode when the window passes, or its episode is established:
+ * `deferChatUnavailableLiveMessages`). A deferred row is still unconfirmed and still shown; a
  * REST read that reaches it settles it and clears the reason. The reason means
  * nothing on a row with `confirmed_at` (the image before this column confirms
  * without clearing it).
@@ -529,6 +534,8 @@ export type DmLiveParityRow = {
   arc_group: string | null;
   arc_content_pending: boolean | null;
   excluded: boolean;
+  /** The chat has an open chat-unavailability episode (absent: no). */
+  chat_unavailable?: boolean;
 };
 
 const instant = (value: Date | string | null) => value === null ? null : new Date(value).getTime();
@@ -541,8 +548,9 @@ function timeDiffers(a: Date | string | null, b: Date | string | null) {
 
 /** The parity verdict for one row; exported for unit tests. Only fields the
  * socket carried (field mask) and the store holds are compared. Past the
- * window a row without a copy gets no verdict but a wait reason (deferred),
- * unless its chat is excluded from message sync. */
+ * window a row without a copy gets no verdict but a wait reason (deferred):
+ * `chat_unavailable` while its chat has an open chat-unavailability episode,
+ * else `age_without_rest` — unless its chat is excluded from message sync. */
 export function judgeDmLiveParity(row: DmLiveParityRow, windowMs: number): {
   outcome: DmLiveConfirmOutcome | null;
   source: "page_dm_messages" | "message_archive" | null;
@@ -571,9 +579,8 @@ export function judgeDmLiveParity(row: DmLiveParityRow, windowMs: number): {
     return { outcome: fields.length ? "mismatch" : "match", source: "message_archive", fields, waitReason: null };
   }
   if (Number(row.age_ms) >= windowMs) {
-    return row.excluded
-      ? { outcome: "excluded", source: null, fields, waitReason: null }
-      : { outcome: null, source: null, fields, waitReason: "age_without_rest" };
+    if (row.excluded) return { outcome: "excluded", source: null, fields, waitReason: null };
+    return { outcome: null, source: null, fields, waitReason: row.chat_unavailable === true ? "chat_unavailable" : "age_without_rest" };
   }
   return { outcome: null, source: null, fields, waitReason: null };
 }
@@ -612,7 +619,8 @@ export async function confirmDmLiveMessages(
         arc.id is not null as arc_found, arc.text_plain as arc_text, arc.is_sent_by_me as arc_sent_by_me,
         arc.occurred_at as arc_occurred_at, arc.in_reply_to_ref as arc_reply, arc.conversation_ref as arc_group,
         arc.content_pending as arc_content_pending,
-        coalesce(th.excluded, false) as excluded
+        coalesce(th.excluded, false) as excluded,
+        ${openChatUnavailabilitySql({ pageId: sql`m.page_id`, groupId: sql`m.platform_conversation_id` })} as chat_unavailable
       from dm_live_messages m
       left join sync_pages reader on reader.page_id = m.page_id
       left join lateral (

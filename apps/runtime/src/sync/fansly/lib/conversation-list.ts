@@ -375,6 +375,10 @@ export interface ListHeadFollowupState {
   listHeadId: string | null;
   /** Its creation time (embedded), else the instant in its snowflake. */
   listHeadAt: Date | null;
+  /** The newest list head an established chat-unavailability episode of the
+   *  chat already answered with a read (`handled_list_head_id`; absent or
+   *  null: none). */
+  unavailableHandledHeadId?: string | null;
 }
 
 /** The creation instant of a list head: the time served with it, else the
@@ -393,11 +397,16 @@ export function listHeadInstant(listHeadId: string | null, servedAt: Date | null
  * never confirmed) only when its head is later than the engine's start on the
  * page (`engineStartAt`): a chat that began under the engine and was missed
  * live. An older never-read chat is history — read by request only (owner
- * decision №2).
+ * decision №2). A chat Fansly refuses to the page (an established
+ * chat-unavailability episode, arena "vanished chat" §2.3) asks for no read
+ * of a list head its episode already answered: only a newer head gives one
+ * read (after the episode's retry boundary, which the read's plan waits for).
  */
 export function listHeadNeedsRead(state: ListHeadFollowupState, engineStartAt: Date | null): boolean {
   if (state.fanId === null || state.listHeadId === null) return false;
   if (getFanslyDmMessageSyncExcludedReason(state.metadata) !== null) return false;
+  const handled = state.unavailableHandledHeadId ?? null;
+  if (handled !== null && compareFanslySnowflakeIds(state.listHeadId, handled) !== 1) return false;
   const known = state.headConfirmedId ?? state.newestStoredMessageId;
   if (known !== null) return compareFanslySnowflakeIds(state.listHeadId, known) === 1;
   return state.listHeadAt !== null && engineStartAt !== null && state.listHeadAt.getTime() > engineStartAt.getTime();

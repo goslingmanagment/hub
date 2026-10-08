@@ -1251,20 +1251,25 @@ export async function resolveWorkDemandMessageIds(
 
 /**
  * Close an OPEN row whose goal another step reached (a `dm-messages.head`
- * that confirmed past a `.catchup` target, design §5.4 step 10). Never a
- * running row (its step is in flight or its apply deferred) nor a
- * quarantined one. The caller holds the row (`lockWorkRows`). False: not open.
+ * that confirmed past a `.catchup` target, design §5.4 step 10), or that no
+ * step can serve (`satisfies: false`: the chat Fansly stopped serving to the
+ * page, arena "vanished chat" §2.3 — its demand stays unserved, so a waiter
+ * reads it closed unsatisfied). Never a running row (its step is in flight or
+ * its apply deferred) nor a quarantined one. The caller holds the row
+ * (`lockWorkRows`). False: not open.
  */
 export async function closeOpenWork(
   db: Database,
-  input: { workId: number; generation: bigint; closeReason: string },
+  input: { workId: number; generation: bigint; closeReason: string; satisfies?: boolean; result?: unknown },
 ): Promise<boolean> {
+  const satisfies = input.satisfies !== false;
   const result = await db.execute(sql`
     update sync_work
        set state = 'done',
            closed_at = clock_timestamp(),
            close_reason = ${input.closeReason},
-           applied_revision = demand_revision,
+           applied_revision = case when ${satisfies} then demand_revision else applied_revision end,
+           result = case when ${input.result !== undefined} then ${nullableJsonParam(input.result)} else result end,
            secret_params = null,
            waiting_reason = null,
            waiting_until = null,
@@ -1282,22 +1287,25 @@ export async function closeOpenWork(
  * running one is closed by its own apply, whose hook sees the same), or
  * `cancelled` when the requests that asked for it were cancelled (open or
  * running: a read already in flight still applies, its settle finds the row
- * closed and leaves it). The caller holds the rows (`lockWorkRows`). Returns
- * the ids it closed.
+ * closed and leaves it). `satisfies: false` closes `done` rows with their
+ * demand unserved (no fan left after a chat Fansly stopped serving refused
+ * them, arena "vanished chat" §2.4). The caller holds the rows
+ * (`lockWorkRows`). Returns the ids it closed.
  */
 export async function closeWorkRows(
   db: Database,
-  input: { workIds: readonly number[]; to: "done" | "cancelled"; closeReason: string },
+  input: { workIds: readonly number[]; to: "done" | "cancelled"; closeReason: string; satisfies?: boolean },
 ): Promise<number[]> {
   const ids = [...new Set(input.workIds)].sort((a, b) => a - b);
   if (ids.length === 0) return [];
   const done = input.to === "done";
+  const served = done && input.satisfies !== false;
   const result = await db.execute<{ id: string }>(sql`
     update sync_work
        set state = ${input.to}::text,
            closed_at = clock_timestamp(),
            close_reason = ${input.closeReason},
-           applied_revision = case when ${done} then demand_revision else applied_revision end,
+           applied_revision = case when ${served} then demand_revision else applied_revision end,
            secret_params = null,
            waiting_reason = null,
            waiting_until = null,

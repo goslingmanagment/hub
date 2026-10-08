@@ -22,7 +22,7 @@ import {
 } from "./engine/watchdog.ts";
 import { fanslyCaptureCodec } from "./fansly/capture.ts";
 import { createFanslyRegistry } from "./fansly/registry.ts";
-import { onHistoryThreadChainChanged, onHistoryWorkClosed } from "./requests/history.ts";
+import { onHistoryChatUnavailable, onHistoryThreadChainChanged, onHistoryWorkClosed } from "./requests/history.ts";
 
 // The `sync` role: the long-running process of the Fansly Sync Engine (plan
 // §8, §12; design §3.6, §9.1). It hosts one actor per `live` Fansly page:
@@ -78,9 +78,11 @@ export function createSyncRuntimeHost(context: SyncContext, watchdog: StallTrack
     capture: fanslyCaptureCodec,
     // History requests (design §7.1.6): every history read and every DM read
     // that moved a chain settles the fans riding on it; a history work that
-    // closes for a reason of its own ends its fans.
+    // closes for a reason of its own ends its fans; a chat whose refusal is
+    // established refuses the fans that need its head (arena §2.4).
     onThreadChainChanged: onHistoryThreadChainChanged,
     onWorkClosed: onHistoryWorkClosed,
+    onChatUnavailable: onHistoryChatUnavailable,
     ...(watchdog === null ? {} : { watchdog }),
   });
 }

@@ -231,6 +231,12 @@ export type WorkClosedHook = (
   input: { pageId: number; workId: number; resource: string; subject: string; closeReason: string | null },
 ) => Promise<void>;
 
+/** Runs in the capture transaction of a refusal that leaves a chat's
+ *  unavailability episode established (arena "vanished chat" §2.4), after the
+ *  work row is settled: the history requests refuse the chat's open fans that
+ *  need its head (`history_*` last in the lock order). Under a savepoint. */
+export type ChatUnavailableHook = (tx: Database, input: { pageId: number; threadId: number }) => Promise<void>;
+
 export interface CommitDeps {
   db: Database;
   pageId: number;
@@ -247,6 +253,7 @@ export interface CommitDeps {
   canonicalize?: ObservationCanonicalizer;
   onThreadChainChanged?: ThreadChainChangedHook;
   onWorkClosed?: WorkClosedHook;
+  onChatUnavailable?: ChatUnavailableHook;
   /** The live settings resources read (absent: the registry defaults). */
   settings?: SettingsSource;
   /** The box of the works' secret parameters (the host's; absent where a
@@ -1048,14 +1055,35 @@ export async function capture(
     // The resource's own word on what this outcome means for it (a failed
     // WebSocket handshake belongs to the socket's reconnect ladder; Fansly's
     // own error envelope is an excluded chat's answer).
-    const decision = module.outcome === undefined
-      ? decided
-      : module.outcome(decided, {
-        request: admission.request,
-        httpStatus: classified.httpStatus,
-        outcome: outcome.kind,
-        fanslyErrorEnvelope: read?.kind === "http_error" && isFanslyErrorEnvelope(read.envelope),
-      });
+    const step = {
+      request: admission.request,
+      httpStatus: classified.httpStatus,
+      outcome: outcome.kind,
+      fanslyErrorEnvelope: (read?.kind === "http_error" || read?.kind === "envelope_unsuccessful") &&
+        isFanslyErrorEnvelope(read.envelope),
+    };
+    let decision = module.outcome === undefined ? decided : module.outcome(decided, step);
+    // Its transactional word (a chat's refusal → the chat-unavailability
+    // episode), under a savepoint: what it cannot write is left out, the
+    // capture never.
+    let chatUnavailable: { threadId: number } | null = null;
+    if (module.outcomeInCapture !== undefined) {
+      const hook = module.outcomeInCapture;
+      const hooked = await inSavepoint(tx, d, "outcome_in_capture", admission, (savepoint) => hook(savepoint, decision, {
+        pageId: d.pageId,
+        generation: d.generation,
+        now,
+        work: admission.work,
+        attemptId: admission.attemptId,
+        demandRevision: admission.demandRevision,
+        step,
+        observation,
+      }));
+      if (hooked !== null) {
+        decision = hooked.decision;
+        chatUnavailable = hooked.chatUnavailable ?? null;
+      }
+    }
     await writeOutcomeDecision(tx, d, {
       attemptId: admission.attemptId,
       work: admission.work,
@@ -1066,6 +1094,13 @@ export async function capture(
         ? { quarantineDetail: { field: read.violation.field, detail: read.violation.detail } }
         : {}),
     }, decision, module);
+    // history_* last (lock order): the chat's open fans that need its head.
+    const onChatUnavailable = d.onChatUnavailable;
+    if (chatUnavailable !== null && onChatUnavailable !== undefined) {
+      const threadId = chatUnavailable.threadId;
+      await inSavepoint(tx, d, "chat_unavailable", admission, (savepoint) =>
+        onChatUnavailable(savepoint, { pageId: d.pageId, threadId }));
+    }
     return { decision, paceGapMs: captured.paceGapMs };
   });
 
@@ -1113,6 +1148,36 @@ export async function capture(
     applyNow,
     inMemory: applyNow && read !== null && read.kind === "accepted" ? { response: read.response, parsed: read.value } : null,
   };
+}
+
+/**
+ * Run a hook of the capture transaction under a savepoint: its writes commit
+ * with the capture, or — when it throws (a thread an erasure deletes under it,
+ * a lock it loses) — roll back alone, the capture goes on, and the failure is
+ * counted and logged. Null: it failed. A test's crash fault and an ownership
+ * loss are never swallowed.
+ */
+async function inSavepoint<T>(
+  tx: Database,
+  d: CommitDeps,
+  hook: string,
+  admission: Pick<AdmissionRecord, "attemptId" | "work">,
+  body: (savepoint: Database) => Promise<T>,
+): Promise<T | null> {
+  try {
+    return await tx.transaction((savepoint) => body(savepoint as unknown as Database));
+  } catch (error) {
+    if (error instanceof SyncCrashFault || error instanceof OwnershipLostError) throw error;
+    d.metrics.increment("sync_capture_hook_failed", { resource: admission.work.resource, hook });
+    d.logger.warn({
+      pageId: d.pageId,
+      attemptId: admission.attemptId,
+      resource: admission.work.resource,
+      hook,
+      err: errorName(error),
+    }, "Fansly sync: a capture hook failed; its writes rolled back, the capture is kept");
+    return null;
+  }
 }
 
 /** What an outcome decision is written against: the attempt and its work. */
@@ -1226,16 +1291,21 @@ async function writeOutcomeDecision(
       return;
     case "close": {
       // A close may carry the resource's own result (a CDN 403 is the
-      // describer's `http_status` failure).
+      // describer's `http_status` failure), close with its demand unserved
+      // (a chat Fansly stopped serving), and say how the row waits while a
+      // newer demand keeps it open.
       const terminal = next.result === undefined ? {} : { result: next.result };
       const settled = await settleWork(tx, {
         workId: work.id,
         generation: d.generation,
         servedRevision: target.demandRevision,
-        satisfiesRevision: true,
+        satisfiesRevision: next.satisfiesRevision !== false,
         close: "done",
         closeReason: next.closeReason,
         lastErrorClass: decision.attemptErrorClass,
+        ...(next.dueAt === undefined ? {} : { nextDueAt: next.dueAt }),
+        ...(next.waitingReason === undefined ? {} : { waitingReason: next.waitingReason }),
+        ...(next.waitingUntil === undefined ? {} : { waitingUntil: next.waitingUntil }),
         ...terminal,
         ...(breaker === undefined ? {} : { breaker }),
       });

@@ -1878,6 +1878,67 @@ export const pageDmThreads = pgTable(
   }),
 );
 
+// Fansly Sync Engine chat-unavailability episodes (0249; arena "vanished
+// chat", plan §2): Fansly does not serve a chat's history to its page. One
+// open episode per chat; written only by the page's actor
+// (repositories/sync/chat-unavailability.ts), except the owner's note. No fan
+// identity and no page key: erased with its thread (cascade).
+export const pageDmThreadUnavailability = pgTable(
+  "page_dm_thread_unavailability",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    threadId: bigint("thread_id", { mode: "number" })
+      .references(() => pageDmThreads.id, { onDelete: "cascade" })
+      .notNull(),
+    state: text("state").$type<"refusing" | "established">().notNull(),
+    openedAt: timestamp("opened_at", { withTimezone: true }).notNull(),
+    establishedAt: timestamp("established_at", { withTimezone: true }),
+    endedAt: timestamp("ended_at", { withTimezone: true }),
+    endReason: text("end_reason").$type<"read_served" | "thread_excluded" | "thread_unbound">(),
+    refusals: integer("refusals").notNull(),
+    lastRefusalAt: timestamp("last_refusal_at", { withTimezone: true }).notNull(),
+    lastHttpStatus: integer("last_http_status"),
+    retryNotBefore: timestamp("retry_not_before", { withTimezone: true }),
+    firstAttemptId: bigint("first_attempt_id", { mode: "number" }).notNull(),
+    lastAttemptId: bigint("last_attempt_id", { mode: "number" }).notNull(),
+    firstObservationId: bigint("first_observation_id", { mode: "number" }).notNull(),
+    firstObservationReceivedAt: timestamp("first_observation_received_at", { withTimezone: true }).notNull(),
+    lastObservationId: bigint("last_observation_id", { mode: "number" }).notNull(),
+    lastObservationReceivedAt: timestamp("last_observation_received_at", { withTimezone: true }).notNull(),
+    handledListHeadId: text("handled_list_head_id"),
+    ownerNote: text("owner_note"),
+    ownerNoteAt: timestamp("owner_note_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+  },
+  (table) => ({
+    stateCheck: check("page_dm_thread_unavailability_state_check", sql`${table.state} in ('refusing', 'established')`),
+    endReasonCheck: check(
+      "page_dm_thread_unavailability_end_reason_check",
+      sql`${table.endReason} in ('read_served', 'thread_excluded', 'thread_unbound')`,
+    ),
+    endedCheck: check("page_dm_thread_unavailability_ended_check", sql`(${table.endedAt} is null) = (${table.endReason} is null)`),
+    establishedCheck: check(
+      "page_dm_thread_unavailability_established_check",
+      sql`(${table.state} = 'established') = (${table.establishedAt} is not null)`,
+    ),
+    retryCheck: check(
+      "page_dm_thread_unavailability_retry_check",
+      sql`${table.retryNotBefore} is null or ${table.state} = 'established'`,
+    ),
+    refusalsCheck: check("page_dm_thread_unavailability_refusals_check", sql`${table.refusals} >= 1`),
+    attemptsCheck: check("page_dm_thread_unavailability_attempts_check", sql`${table.firstAttemptId} <= ${table.lastAttemptId}`),
+    listHeadCheck: check("page_dm_thread_unavailability_list_head_check", sql`${table.handledListHeadId} ~ '^[0-9]{1,30}$'`),
+    ownerNoteCheck: check(
+      "page_dm_thread_unavailability_owner_note_check",
+      sql`(${table.ownerNote} is null) = (${table.ownerNoteAt} is null)
+        and (${table.ownerNote} is null or length(${table.ownerNote}) between 1 and 2000)`,
+    ),
+    openUidx: uniqueIndex("page_dm_thread_unavailability_open").on(table.threadId).where(sql`${table.endedAt} is null`),
+    threadIdx: index("page_dm_thread_unavailability_thread").on(table.threadId, table.id),
+  }),
+);
+
 export const pageDmMessages = pgTable(
   "page_dm_messages",
   {

@@ -4,6 +4,7 @@ import { FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY } from "@agency_hub_core/sha
 import type { Database } from "../../client.ts";
 import { capturePayloadRefFromColumns, type CapturePayloadRef } from "../capture-payloads.ts";
 import { SYNC_PACE_AUDIT_LOOKBACK_MS } from "./attempts.ts";
+import { openChatUnavailabilitySql } from "./chat-unavailability.ts";
 import { textArrayParam, toDate, toRequiredDate } from "./values.ts";
 
 // Fansly Sync Engine: the reads behind its alerts and its golden signals
@@ -217,6 +218,24 @@ export function dmLiveAwaitingConfirmSql(message: SQL): SQL {
          and awaiting_chat.platform_conversation_id = ${message}.platform_conversation_id
          and (not awaiting_chat.is_visible
               or coalesce(awaiting_chat.metadata ->> ${FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY}::text, '') <> '')))`;
+}
+
+/**
+ * The one definition of "the chat of this socket message is one Fansly does
+ * not serve to its page": an open chat-unavailability episode of the
+ * message's page × chat (`page_dm_thread_unavailability`; `established`: only
+ * an established one). `message` is the qualified alias of a
+ * `dm_live_messages` row. The passive parity pass defers by the same test
+ * (`openChatUnavailabilitySql`); the alerts do not read it yet — alert 3's
+ * `message_unconfirmed`, the page summary and `sync check live-hour` take it
+ * in the release after the episode (arena "vanished chat" plan §4).
+ */
+export function dmLiveChatUnavailableSql(message: SQL, options: { established?: boolean } = {}): SQL {
+  return openChatUnavailabilitySql({
+    pageId: sql`${message}.page_id`,
+    groupId: sql`${message}.platform_conversation_id`,
+    ...(options.established === undefined ? {} : { established: options.established }),
+  });
 }
 
 export interface SyncLivePathFacts {

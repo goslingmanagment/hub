@@ -33,6 +33,7 @@ import { SYNC_OWNERSHIP_UNCONFIRMED_MS } from "./alerts.ts";
 import {
   errorName,
   type CaptureCodec,
+  type ChatUnavailableHook,
   type ObservationCanonicalizer,
   type SyncFaultHook,
   type SyncLogger,
@@ -147,6 +148,7 @@ export interface SyncHostOptions {
   canonicalize?: ObservationCanonicalizer;
   onThreadChainChanged?: ThreadChainChangedHook;
   onWorkClosed?: WorkClosedHook;
+  onChatUnavailable?: ChatUnavailableHook;
   /** The process's stall watchdog (`engine/watchdog.ts`): it watches the
    *  host's start, every pass of the mode loop, and every actor from its
    *  start to the end of its exit. */
@@ -553,6 +555,7 @@ export class SyncEngineHost {
       ...(this.#o.canonicalize === undefined ? {} : { canonicalize: this.#o.canonicalize }),
       ...(this.#o.onThreadChainChanged === undefined ? {} : { onThreadChainChanged: this.#o.onThreadChainChanged }),
       ...(this.#o.onWorkClosed === undefined ? {} : { onWorkClosed: this.#o.onWorkClosed }),
+      ...(this.#o.onChatUnavailable === undefined ? {} : { onChatUnavailable: this.#o.onChatUnavailable }),
       ...(this.#o.faults === undefined ? {} : { faults: this.#o.faults }),
       ...(this.#o.routeTimeScale === undefined ? {} : { routeTimeScale: this.#o.routeTimeScale }),
       socket: socketRef,

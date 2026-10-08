@@ -1,10 +1,13 @@
 import {
   applyMessageEventsToArchive,
+  CHAT_UNAVAILABLE_REASON,
   claimDmLiveMessagesForConfirm,
   clearConversationSyncHealth,
   closeOpenWork,
   confirmDmLiveMessagesInTransaction,
+  deferChatUnavailableLiveMessages,
   dmReaderStoreOf,
+  endChatUnavailability,
   getOpenWorkForKey,
   hasUnconfirmedDmLiveChatMessage,
   isDmArchiveScopeFenced,
@@ -15,12 +18,16 @@ import {
   listUnrecordedMediaOrders,
   lockWorkRows,
   openThreadSummary,
+  readOpenChatUnavailability,
   readThreadChain,
   readThreadStoredFacts,
+  recordChatHeadRefusal,
   resolveWorkDemandMessageIds,
   tryAcquireDmArchiveWriterFenceLock,
   writeThreadChain,
   writeThreadSummary,
+  type ChatUnavailabilityEndReason,
+  type ChatUnavailabilityEpisode,
   type Database,
   type PageDmThreadListState,
   type SidecarOrderKey,
@@ -37,10 +44,14 @@ import { familyForObservation } from "../../../services/canonicalize/index.ts";
 import type { CanonicalEventDraft } from "../../../services/canonicalize/types.ts";
 import { canonicalizeObservationInTransaction } from "../../engine/canonicalize.ts";
 import { ApplyDeferred, ApplyQuarantine, FanslyContractViolationError } from "../../engine/commit.ts";
+import { BLOCKED_PROBE_EVERY_MS, type OutcomeDecision } from "../../engine/errors.ts";
 import type {
   ApplyInput,
   ApplyResult,
+  CaptureOutcomeInput,
+  CaptureOutcomeResult,
   DemandSignal,
+  LocalApplyInput,
   RequestPlan,
   ResourceModule,
   StepPlan,
@@ -116,6 +127,27 @@ import { purchaseTargetFollowups, purchaseTargetSubject, type PurchaseTarget } f
 // per head row and for at most `DM_HEAD_FIND_WAIT_MAX_MS`: the find creates
 // the thread (list, else group detail, D5) and the head then reads it as any
 // other — or, if it finds no direct chat, the head closes `thread_missing`.
+//
+// A chat Fansly stopped serving to the page (arena "vanished chat", plan §2:
+// the chat-unavailability episode, `repositories/sync/chat-unavailability.ts`).
+// A head read (no `before`) of any of the three keys that Fansly refuses
+// with its own error envelope (`subject_failure` or `envelope_unsuccessful`
+// and `fanslyErrorEnvelope`; never a proxy's HTML, an empty 5xx, a 429, a
+// 401/403 or the wire) opens or advances the chat's episode in the capture
+// transaction (`outcomeInCapture`); the episode's own 5th refusal establishes
+// it. Every refusal that leaves it established closes the refused work and
+// the chat's other open head and catch-up rows `chat_unavailable` with their
+// demand unserved, defers the chat's unconfirmed socket messages
+// (`chat_unavailable`, still shown), sets the retry boundary (the later of
+// the refused attempt's breaker and the daily step) and the answered list
+// head, and has the history requests refuse the chat's fans that need its
+// head. No key reads the head of an established chat before the boundary
+// (the plan waits: no background probe, owner decision Р5) — a new socket
+// message or list head opens work that reads once after it. An applied head
+// read ends the episode (`read_served`, in the apply's transaction); a plan
+// that closes the work of a chat excluded or unbound since ends it too (a
+// `local` step, `thread_excluded` / `thread_unbound`). A `before` read neither
+// counts nor ends.
 
 export type DmMessagesVariant = "head" | "catchup" | "history";
 
@@ -350,6 +382,11 @@ async function planChatFind(work: SyncWorkRow, ctx: { db: Database; pageId: numb
   };
 }
 
+/** The chat's open unavailability episode, or null (plain read). */
+async function openEpisodeOf(db: Database, pageId: number, groupId: string): Promise<ChatUnavailabilityEpisode | null> {
+  return (await readOpenChatUnavailability(db, { pageId, groupIds: [groupId] })).get(groupId) ?? null;
+}
+
 async function planStep(variant: DmMessagesVariant, work: SyncWorkRow, ctx: {
   db: Database; pageId: number; now: Date;
 }): Promise<StepPlan> {
@@ -361,7 +398,30 @@ async function planStep(variant: DmMessagesVariant, work: SyncWorkRow, ctx: {
   const thread = await readThread(ctx.db, ctx.pageId, groupId);
   if (thread === null && variant === "head") return planChatFind(work, ctx);
   const skip = threadSkip(thread);
-  if (skip !== null || thread === null) return { kind: "done", reason: skip ?? "thread_missing" };
+  if (skip !== null || thread === null) {
+    // The chat is no longer read: its open unavailability episode ends with
+    // the work (a local step — the actor writes the episode, never a plan).
+    if (thread !== null && skip !== null && (await openEpisodeOf(ctx.db, ctx.pageId, groupId)) !== null) {
+      return { kind: "local", reason: skip };
+    }
+    return { kind: "done", reason: skip ?? "thread_missing" };
+  }
+  const plan = await planThreadRead(variant, work, thread, ctx);
+  // An established episode: no head read before its retry boundary, whichever
+  // key asks (plan §2.3, owner decision Р5) — the plan waits, no second timer.
+  if (plan.kind !== "request" || requestedParams(plan.request).before !== null) return plan;
+  const episode = await openEpisodeOf(ctx.db, ctx.pageId, groupId);
+  if (episode?.state === "established" && episode.retryNotBefore !== null
+    && episode.retryNotBefore.getTime() > ctx.now.getTime()) {
+    return { kind: "wait", reason: "not_due", until: episode.retryNotBefore };
+  }
+  return plan;
+}
+
+async function planThreadRead(variant: DmMessagesVariant, work: SyncWorkRow, thread: DmThread, ctx: {
+  db: Database; pageId: number; now: Date;
+}): Promise<StepPlan> {
+  const groupId = work.subject;
   const cursor = parseDmMessagesCursor(work.cursor);
   const segment = liveSegment(cursor.segment, thread.chain);
   switch (variant) {
@@ -645,6 +705,7 @@ async function applyMessagesPage(variant: DmMessagesVariant, tx: Database, input
       partnerId: thread?.state.partnerPlatformUserId ?? null,
       ownRef: facts.externalId,
       messages,
+      threadId: thread?.state.id ?? null,
     });
   }
 
@@ -716,6 +777,12 @@ async function applyMessagesPage(variant: DmMessagesVariant, tx: Database, input
   if (chainMoved) await writeThreadChain(tx, thread.state.id, { chain: fold.chain, source: "engine" });
   const summary = await openThreadSummary(tx, thread.state.id, chainPage.ids);
   await clearConversationSyncHealth(tx, thread.state.id);
+  // A head the page was served ends the chat's unavailability episode (plan
+  // §2.2), whichever key read it; a deeper page does not (the episode is
+  // about the head). Before the overlay rows (lock order: episode → overlay).
+  if (before === null && await endChatUnavailability(tx, { threadId: thread.state.id, reason: "read_served", at: input.now }) !== null) {
+    bump(counters, "chat_unavailability_ended");
+  }
 
   // 5. The demanded ids and the overlay (before the event appends, §3.7).
   const done = !walkContinues(variant, fold.verdict, fold.segment, fold.chain);
@@ -842,8 +909,15 @@ async function applySkippedThread(tx: Database, input: ApplyInput, skipped: {
   partnerId: string | null;
   ownRef: string;
   messages: readonly FanslyMessage[];
+  threadId: number | null;
 }): Promise<ApplyResult> {
   const counters: Record<string, number> = { [`skipped_${skipped.skip}`]: 1 };
+  // The chat is no longer read: its unavailability episode ends here.
+  const endReason = episodeEndOf(skipped.skip);
+  if (skipped.threadId !== null && endReason !== null
+    && await endChatUnavailability(tx, { threadId: skipped.threadId, reason: endReason, at: input.now }) !== null) {
+    bump(counters, "chat_unavailability_ended");
+  }
   const fence = await checkFence(tx, {
     pageId: input.pageId,
     groupId: skipped.groupId,
@@ -969,12 +1043,154 @@ async function canonicalizeAndFeedArchive(tx: Database, input: {
   bump(input.counters, "archive_inserted", archived.inserted);
 }
 
+// ── the chat Fansly stopped serving (arena "vanished chat", plan §2) ────────
+
+/** How a skip ends the chat's unavailability episode (null: it does not —
+ *  a deleted thread took its episodes with it). */
+function episodeEndOf(skip: ThreadSkip): ChatUnavailabilityEndReason | null {
+  switch (skip) {
+    case "excluded":
+      return "thread_excluded";
+    case "unbound":
+      return "thread_unbound";
+    case "thread_missing":
+      return null;
+  }
+}
+
+/**
+ * The `local` step a plan asks for when a chat with an open unavailability
+ * episode is no longer read (excluded or unbound since): the episode ends and
+ * the work closes as the plan's `done` would have closed it. A chat read again
+ * meanwhile (the exclusion lifted) is planned anew.
+ */
+async function applyChatSkipLocal(tx: Database, input: LocalApplyInput): Promise<ApplyResult> {
+  const thread = await readThread(tx, input.pageId, input.work.subject);
+  const skip = threadSkip(thread);
+  if (skip === null) return { work: { satisfiesRevision: false }, followups: [] };
+  const counters: Record<string, number> = {};
+  const endReason = episodeEndOf(skip);
+  if (thread !== null && endReason !== null
+    && await endChatUnavailability(tx, { threadId: thread.state.id, reason: endReason, at: input.now }) !== null) {
+    bump(counters, "chat_unavailability_ended");
+  }
+  return { work: { satisfiesRevision: true, close: "done", closeReason: skip }, followups: [], counters };
+}
+
+/**
+ * A qualifying refusal (plan §2.2): a `messages.page` read of the chat's head
+ * (no `before`) that Fansly itself refused — `subject_failure` or
+ * `envelope_unsuccessful` carrying its own error envelope. A proxy's HTML
+ * page, an empty 5xx, a 429, a 401/403 and a wire failure are not the chat's
+ * answer.
+ */
+export function isQualifyingChatRefusal(decision: Pick<OutcomeDecision, "errorClass">, input: Pick<CaptureOutcomeInput, "step">): boolean {
+  const { step } = input;
+  return step.outcome === "response"
+    && step.request.spec === "messages.page"
+    && requestedParams(step.request).before === null
+    && (decision.errorClass === "subject_failure" || decision.errorClass === "envelope_unsuccessful")
+    && step.fanslyErrorEnvelope;
+}
+
+/** The retry boundary an established refusal sets: the later of the refused
+ *  attempt's breaker and the daily step (the blocked step of the ladder, which
+ *  a key reading the chat's head for the first time in the episode does not
+ *  reach by its own count). */
+export function chatRetryNotBefore(decision: Pick<OutcomeDecision, "subjectBreaker">, now: Date): Date {
+  const daily = new Date(now.getTime() + BLOCKED_PROBE_EVERY_MS);
+  const breaker = decision.subjectBreaker?.breakerUntil ?? null;
+  return breaker !== null && breaker.getTime() > daily.getTime() ? breaker : daily;
+}
+
+/**
+ * The capture transaction's hook of the three keys (`outcomeInCapture`): a
+ * qualifying refusal opens or advances the chat's episode; one that leaves it
+ * established (its own 5th refusal, or any later one) defers the chat's
+ * unconfirmed socket messages, closes its other open head and catch-up rows
+ * and — through the decision — the refused work itself, `chat_unavailable`
+ * with the demand unserved (I11: only when no newer demand arrived during the
+ * step; otherwise the row stays open under its breaker and the planner's
+ * boundary), and asks the history requests to refuse the chat's fans that
+ * need its head. Lock order: the episode → the overlay rows → the work rows
+ * (id order); the history rows follow the commit's settle. The erasure fence
+ * is not taken: nothing here writes archive material (the episode has no fan
+ * identity; the rest updates rows an erasure would delete).
+ */
+async function chatRefusalInCapture(tx: Database, decision: OutcomeDecision, input: CaptureOutcomeInput): Promise<CaptureOutcomeResult> {
+  const unchanged: CaptureOutcomeResult = { decision };
+  if (!isQualifyingChatRefusal(decision, input) || input.observation === null) return unchanged;
+  const groupId = input.work.subject;
+  if (!DECIMAL_ID.test(groupId)) return unchanged;
+  const thread = await readThread(tx, input.pageId, groupId);
+  if (thread === null) return unchanged;
+  const retryNotBefore = chatRetryNotBefore(decision, input.now);
+  const recorded = await recordChatHeadRefusal(tx, {
+    pageId: input.pageId,
+    groupId,
+    generation: input.generation,
+    attemptId: input.attemptId,
+    httpStatus: input.step.httpStatus,
+    observation: input.observation,
+    at: input.now,
+    retryNotBefore,
+    // The newest head this read answered: the list's, or a demanded id.
+    handledListHeadId: maxId([...(thread.state.lastMessageId === null ? [] : [thread.state.lastMessageId]), ...input.work.demand.messageIds]),
+  });
+  if (recorded === null || recorded.episode.state !== "established") return unchanged;
+  const episode = recorded.episode;
+  await deferChatUnavailableLiveMessages(tx, { pageId: input.pageId, groupId });
+  // The chat's other work that reads its head: its head and catch-up rows
+  // close now; its history row (held here, in id order with the rest) is the
+  // history requests' to settle after the commit's settle.
+  const others: SyncWorkRow[] = [];
+  for (const key of [HEAD_KEY, CATCHUP_KEY]) {
+    const open = await getOpenWorkForKey(tx, { pageId: input.pageId, resource: key, subject: groupId });
+    if (open !== null && open.id !== input.work.id && open.state === "open") others.push(open);
+  }
+  const history = await getOpenWorkForKey(tx, { pageId: input.pageId, resource: HISTORY_KEY, subject: groupId });
+  const account = {
+    chatUnavailable: {
+      episodeId: episode.id,
+      refusals: episode.refusals,
+      establishedAt: episode.establishedAt?.toISOString() ?? null,
+      retryNotBefore: episode.retryNotBefore?.toISOString() ?? null,
+    },
+  };
+  await lockWorkRows(tx, [input.work.id, ...others.map((work) => work.id), ...(history === null ? [] : [history.id])]);
+  for (const work of others) {
+    await closeOpenWork(tx, {
+      workId: work.id,
+      generation: input.generation,
+      closeReason: CHAT_UNAVAILABLE_REASON,
+      satisfies: false,
+      result: { ...account, unservedMessageIds: work.demand.messageIds },
+    });
+  }
+  const reopen = decision.work.action === "reopen" ? decision.work : null;
+  return {
+    decision: {
+      ...decision,
+      work: {
+        action: "close",
+        closeReason: CHAT_UNAVAILABLE_REASON,
+        satisfiesRevision: false,
+        result: { ...account, unservedMessageIds: input.work.demand.messageIds },
+        ...(reopen === null ? {} : { dueAt: reopen.dueAt, waitingReason: reopen.waitingReason, waitingUntil: reopen.waitingUntil }),
+      },
+    },
+    chatUnavailable: { threadId: thread.state.id },
+  };
+}
+
 // ── modules ─────────────────────────────────────────────────────────────────
 
 function variantModule(variant: DmMessagesVariant): ResourceModule {
   return {
     plan: (work, ctx) => planStep(variant, work, ctx),
     apply: (tx, input) => applyMessagesPage(variant, tx, input),
+    applyLocal: (tx, input) => applyChatSkipLocal(tx, input),
+    outcomeInCapture: (tx, decision, input) => chatRefusalInCapture(tx, decision, input),
   };
 }
 
