@@ -18,6 +18,8 @@ import {
   sortDirEnum,
   type AgentHistoryDepth,
   type AgentHistoryFanRef,
+  type AgentThreadAvailabilityCause,
+  type AgentThreadAvailabilityResponse,
 } from "@agency_hub_core/contracts";
 import { KernelApiError, type KernelClient } from "@kernel/sdk";
 
@@ -38,6 +40,11 @@ import { KernelApiError, type KernelClient } from "@kernel/sdk";
  * until it ends. Each makes several calls of ONE documented operation and
  * nothing else, so the evidence envelope of every call is still the
  * operation's own.
+ *
+ * A NOTED ANSWER: `thread-availability` returns its validated response with a
+ * one-line `note` beside it ({@link HubNotedResult}), because its null episode
+ * reads too easily as "the chat is served"; on a hub without the route it
+ * answers `data: null` and a note saying the state is unknown.
  *
  * WHAT IS NOT HERE, and why it never will be: operation 9b (observation payloads)
  * and #13 (hydration decisions) are OWNER-SESSION. An agent key cannot call them
@@ -354,6 +361,19 @@ export class HubCompositeResult {
   ) {}
 }
 
+/**
+ * An answer with one line for whoever reads it, printed as the document's
+ * `note`: for a command whose bare `data` is easy to misread (`thread-
+ * availability`'s null episode is not "the chat is served"), or whose `data`
+ * is null because the hub could not answer and the command knows why.
+ */
+export class HubNotedResult {
+  constructor(
+    readonly data: unknown,
+    readonly note: string,
+  ) {}
+}
+
 export interface HubCommand {
   name: string;
   operation: string;
@@ -563,6 +583,65 @@ async function fileHistoryRequests(
   });
 }
 
+// --- thread availability (arena "vanished chat", plan §5) -------------------
+
+/** The code of every 404 the plane itself produces (`staticNotFound`, the
+ *  page-scope middleware): a page outside the grant or none at all, a thread
+ *  the page does not hold. */
+const HUB_PLANE_NOT_FOUND_CODE = "not_found";
+
+/** `thread-availability` against a hub built before its route. */
+export const HUB_THREAD_AVAILABILITY_UNKNOWN = "state unknown: the server has no availability route";
+
+/** What a null episode means, word for word. */
+export const HUB_THREAD_AVAILABILITY_NONE =
+  "no open episode recorded: not proof that Fansly serves the chat (an episode opens only when Fansly refuses a read"
+  + " of the chat's messages)";
+
+/** The cause as a reader takes it (plan §8): a likelihood, never a proof. */
+const HUB_THREAD_AVAILABILITY_CAUSES: Record<AgentThreadAvailabilityCause, string> = {
+  unchecked: "cause not checked: the fan deleted the account or blocked the page",
+  probably_blocked: "the account exists (checked without a login): the fan probably blocked the page",
+  probably_deleted: "the account was not found on Fansly (checked without a login): probably deleted",
+};
+
+/**
+ * A 404 that is not the plane's: a hub older than a route answers a path it
+ * has no route for from its router (`Not Found`, or a proxy's page with no
+ * code at all), while every 404 the plane produces carries `not_found`.
+ */
+export function hubRouteMissing(error: unknown): boolean {
+  return error instanceof KernelApiError && error.status === 404 && error.code !== HUB_PLANE_NOT_FOUND_CODE;
+}
+
+/** The episode in one line: the `note` of a `thread-availability` answer. */
+export function hubThreadAvailabilityNote(data: AgentThreadAvailabilityResponse): string {
+  const episode = data.episode;
+  if (!episode) {
+    return HUB_THREAD_AVAILABILITY_NONE;
+  }
+  const refusals = `${episode.refusals} ${episode.refusals === 1 ? "refusal" : "refusals"}`;
+  const parts = episode.state === "established"
+    ? [
+      `established: Fansly does not serve this chat to the page since ${episode.openedAt} (${refusals}`
+        + `${episode.establishedAt === null ? "" : `, established ${episode.establishedAt}`},`
+        + ` the last ${episode.lastRefusalAt})`,
+      ...(episode.retryNotBefore === null
+        ? []
+        : [`nothing reads it before ${episode.retryNotBefore}, then only a new message in the chat asks for one read`]),
+    ]
+    : [
+      `refusing: Fansly has refused this chat to the page since ${episode.openedAt} (${refusals},`
+        + ` the last ${episode.lastRefusalAt})`,
+      "not established yet",
+    ];
+  parts.push(HUB_THREAD_AVAILABILITY_CAUSES[episode.cause]);
+  if (episode.ownerNote !== null) {
+    parts.push(`the owner's note (${episode.ownerNote.at}): ${episode.ownerNote.text}`);
+  }
+  return parts.join("; ");
+}
+
 const HISTORY_DEPTH_OPTIONS: Record<string, HubOption> = {
   all: { kind: "boolean", describe: "Read each chat to its first message (proven by an empty page)" },
   latest: { kind: "number", describe: "Read the latest N messages of each chat (fan's and model's)" },
@@ -752,6 +831,38 @@ export const HUB_COMMANDS: readonly HubCommand[] = [
         ...claimQuery(values),
       },
     }),
+  },
+  {
+    name: "thread-availability",
+    operation: "agentThreadAvailability",
+    summary:
+      "Whether Fansly stopped serving ONE chat to its page: the chat's open unavailability episode, or null (no open"
+      + " episode recorded, not proof that Fansly serves the chat); `note` says it in one line. No message text;"
+      + " needs read:messages. On a hub without the route: state unknown, exit 0.",
+    options: {
+      "page-label": { kind: "string", describe: "Page holding the thread (required)" },
+      conversation: { kind: "string", describe: "Native conversation ref (required)" },
+    },
+    run: async (client, values) => {
+      const input = {
+        params: {
+          pageLabel: requireString(values, "page-label"),
+          conversationRef: requireString(values, "conversation"),
+        },
+      };
+      try {
+        const data = await client.agentThreadAvailability(input);
+        return new HubNotedResult(data, hubThreadAvailabilityNote(data));
+      } catch (error) {
+        // A hub older than the route cannot say (plan §5): no error of this
+        // call, an unknown state — said so, exit 0. A page or a thread out of
+        // reach is the plane's own 404 and stays an error.
+        if (hubRouteMissing(error)) {
+          return new HubNotedResult(null, HUB_THREAD_AVAILABILITY_UNKNOWN);
+        }
+        throw error;
+      }
+    },
   },
   {
     name: "search",

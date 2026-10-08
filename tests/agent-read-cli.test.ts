@@ -84,6 +84,7 @@ describe("hub CLI: the command surface", () => {
       "agentSearchMessages",
       "agentSyncStatus",
       "agentSyncWhy",
+      "agentThreadAvailability",
       "agentThreadMessages",
       "agentThreads",
     ]);

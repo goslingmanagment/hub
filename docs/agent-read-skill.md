@@ -433,6 +433,45 @@ hub sync-why --page-label lora-1 --resource transactions.head
 hub sync-why --page-label lora-1 --resource dm-messages.head --subject 810272281019305984
 ```
 
+## A chat Fansly stopped serving (`hub thread-availability`)
+
+Fansly can stop serving one chat to one page: the fan blocked the page, or
+deleted the account. Every read of that chat then gets Fansly's own error, and
+the Fansly Sync Engine keeps an **unavailability episode** of the page and the
+chat: `refusing` from the first refusal, `established` at the fifth, after
+which the engine stops reading the chat in the background (only a new message
+in it asks for one read, not before `retryNotBefore`). Chatters still see the
+messages the socket showed, but `hub transcript` (confirmed messages only) stops
+growing, and a history request for the chat is refused (`excluded`,
+`chat_unavailable`).
+
+`hub thread-availability --page-label <page> --conversation <ref>` reads that
+episode for ONE chat. It needs `read:messages`, reads the database only (no
+message text, no request to Fansly) and answers the operation's own document
+plus a one-line `note` that says what the answer means:
+
+- `data.episode` is the chat's OPEN episode: `state`, `openedAt`,
+  `establishedAt`, `lastRefusalAt`, `refusals`, `retryNotBefore`, `ownerNote`
+  (`text` and `at`, the owner's own observation) and `cause`.
+- **`episode: null` means no open episode is recorded. It is NOT proof that
+  Fansly serves the chat**: an episode opens only when a read of the chat is
+  refused, so a chat nobody has read since, a chat whose episode ended, and
+  every chat of a page the engine does not run (OnlyFans included) all answer
+  null.
+- `cause` is a likelihood, never a proof: `unchecked` (deleted or blocked,
+  nobody checked), `probably_blocked` (the account exists when looked up
+  without a login), `probably_deleted` (it does not). Hub has no such check
+  yet, so today every episode says `unchecked`.
+- A page outside your grant and a conversation ref the page holds no thread
+  for are the plane's one static 404 (`code: "not_found"`, exit 4).
+- On a hub older than this route the CLI prints `data: null`, the note
+  `state unknown: the server has no availability route`, and exits 0: the
+  state is unknown, not "served".
+
+```
+hub thread-availability --page-label lora-1 --conversation 810272281019305984 --pretty
+```
+
 ## The CLI
 
 ```
@@ -495,7 +534,8 @@ Output is exactly one JSON document on stdout, every time, success or failure:
 `blockers` is lifted out of the body on purpose: it is the exit code contract,
 and an agent that reads nothing else must still see it. Note that this example
 is an ordinary successful call, and `exitCode: 0` next to a non empty `blockers`
-is the normal case, not an anomaly.
+is the normal case, not an anomaly. `hub thread-availability` adds a `note`
+beside `data`: one line saying what its answer means.
 
 Exit codes. **`0` means the call succeeded, NOT that the answer is complete**:
 
@@ -529,6 +569,7 @@ Global flags: `--base-url`, `--fail-on-partial`, `--pretty`, `--help`.
 | `hub timeline` | One fan's merged timeline across lanes (money, separate post-tip attribution, subscriptions, follows, message refs). |
 | `hub threads` | Cross page DM thread inventory with per thread capture bounds. |
 | `hub transcript` | The full transcript of ONE thread. Needs `read:messages`; every call is audited. |
+| `hub thread-availability` | Whether Fansly stopped serving ONE chat to its page: its open unavailability episode, or null (no open episode recorded, not proof that the chat is served). Needs `read:messages`. |
 | `hub search` | Bounded full text search over the message archive. It does not paginate, by design. |
 | `hub coverage` | The capture axis on its own: what was ever captured for a scope and window. |
 | `hub observations` | Capture journal ENVELOPES (kind, source, timing, sizes). Never payload bodies. |

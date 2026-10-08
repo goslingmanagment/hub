@@ -47,6 +47,9 @@ const AGENT_OPERATIONS = [
   "agentPersonTimeline",
   "agentThreads",
   "agentThreadMessages",
+  // Whether Fansly stopped serving one chat to its page (arena "vanished
+  // chat", plan §5): page-scoped like #6, database only.
+  "agentThreadAvailability",
   "agentSearchMessages",
   "agentCoverage",
   "agentObservations",
@@ -109,6 +112,7 @@ describe("agent read plane: the operation surface", () => {
       "agentHistoryRequestCreate",
       "agentHydrationRequestCreate",
       "agentSyncWhy",
+      "agentThreadAvailability",
       "agentThreadMessages",
     ]);
   });
@@ -151,6 +155,7 @@ describe("agent read plane: the operation surface", () => {
     // The path-addressed ones DO declare it.
     for (const key of [
       "agentThreadMessages",
+      "agentThreadAvailability",
       "agentDatasetQuery",
       "agentHistoryRequestCreate",
       "agentHistoryRequestGet",

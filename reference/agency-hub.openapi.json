@@ -92372,6 +92372,1417 @@
         }
       }
     },
+    "/api/v1/agent/pages/{pageLabel}/threads/{conversationRef}/availability": {
+      "get": {
+        "summary": "Whether Fansly stopped serving ONE chat to its page: the chat's open unavailability episode the Fansly Sync Engine keeps, or null. A null episode means no open episode is recorded, not proof that Fansly serves the chat. Database only: no message text, no request to Fansly. Needs read:messages; a thread this page does not hold is the plane's static 404",
+        "tags": [
+          "agent"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "pageLabel",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500
+            },
+            "in": "path",
+            "name": "conversationRef",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "agentKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "scope": {
+                      "type": "object",
+                      "properties": {
+                        "pageLabel": {
+                          "type": "string"
+                        },
+                        "platform": {
+                          "type": "string",
+                          "enum": [
+                            "fansly",
+                            "onlyfans"
+                          ]
+                        },
+                        "conversationRef": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "pageLabel",
+                        "platform",
+                        "conversationRef"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "episode": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "state": {
+                              "type": "string",
+                              "enum": [
+                                "refusing",
+                                "established"
+                              ]
+                            },
+                            "openedAt": {
+                              "type": "string",
+                              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                            },
+                            "establishedAt": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "lastRefusalAt": {
+                              "type": "string",
+                              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                            },
+                            "refusals": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "retryNotBefore": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "ownerNote": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "text": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "at": {
+                                      "type": "string",
+                                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                    }
+                                  },
+                                  "required": [
+                                    "text",
+                                    "at"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "cause": {
+                              "type": "string",
+                              "enum": [
+                                "unchecked",
+                                "probably_blocked",
+                                "probably_deleted"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "state",
+                            "openedAt",
+                            "establishedAt",
+                            "lastRefusalAt",
+                            "refusals",
+                            "retryNotBefore",
+                            "ownerNote",
+                            "cause"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "delivery": {
+                      "type": "object",
+                      "properties": {
+                        "returned": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "matchedInScope": {
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "exact": {
+                              "type": "boolean"
+                            },
+                            "countBasis": {
+                              "type": "string",
+                              "enum": [
+                                "post_dedup"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "exact",
+                            "countBasis"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "cappedBy": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "limit",
+                                "snapshot",
+                                "budget"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "nextCursor": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 2048,
+                              "pattern": "^[A-Za-z0-9_-]+$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "snapshotExhausted": {
+                          "type": "boolean"
+                        },
+                        "caveats": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "enum": [
+                              "mutable_sort_key",
+                              "no_frozen_snapshot"
+                            ]
+                          }
+                        }
+                      },
+                      "required": [
+                        "returned",
+                        "matchedInScope",
+                        "cappedBy",
+                        "nextCursor",
+                        "snapshotExhausted",
+                        "caveats"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "capture": {
+                      "type": "object",
+                      "properties": {
+                        "planes": {
+                          "minItems": 46,
+                          "maxItems": 46,
+                          "type": "array",
+                          "items": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "plane": {
+                                    "type": "string",
+                                    "enum": [
+                                      "message_archive",
+                                      "dm_message_archive",
+                                      "transactions",
+                                      "transaction_tip_contexts",
+                                      "message_media_offers",
+                                      "page_dm_messages",
+                                      "page_dm_threads",
+                                      "observations",
+                                      "sync_raw_payloads",
+                                      "fan_spend_lifetime",
+                                      "revenue_mix_daily",
+                                      "page_payout_requests",
+                                      "ofapi_read_snapshots",
+                                      "page_payout_methods",
+                                      "fan_spend_daily",
+                                      "fans",
+                                      "page_fans",
+                                      "page_fan_aliases",
+                                      "fan_username_aliases",
+                                      "page_subscriptions",
+                                      "domain_events",
+                                      "page_follows",
+                                      "daily_followers",
+                                      "fan_notes",
+                                      "fan_summaries",
+                                      "fan_profiles",
+                                      "fan_flags",
+                                      "creator_posts",
+                                      "creator_raw_media",
+                                      "creator_vault_album_members",
+                                      "creator_vault_album_scans",
+                                      "creator_media",
+                                      "creator_media_bundles",
+                                      "creator_post_tips",
+                                      "stats_traffic_buckets",
+                                      "stats_top_media",
+                                      "stats_top_tags",
+                                      "fansly_media_tag_stats",
+                                      "platform_tag_daily",
+                                      "creator_vault_albums",
+                                      "page_subscription_tiers",
+                                      "page_subscription_tier_plans",
+                                      "post_comments",
+                                      "post_likes",
+                                      "platform_notifications",
+                                      "capture_coverage"
+                                    ]
+                                  },
+                                  "state": {
+                                    "type": "string",
+                                    "enum": [
+                                      "read"
+                                    ]
+                                  },
+                                  "captureFloor": {
+                                    "type": "object",
+                                    "properties": {
+                                      "at": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string",
+                                            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "kind": {
+                                        "type": "string",
+                                        "enum": [
+                                          "oldest_stored_row",
+                                          "unknown"
+                                        ]
+                                      }
+                                    },
+                                    "required": [
+                                      "at",
+                                      "kind"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                },
+                                "required": [
+                                  "plane",
+                                  "state",
+                                  "captureFloor"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "plane": {
+                                    "type": "string",
+                                    "enum": [
+                                      "message_archive",
+                                      "dm_message_archive",
+                                      "transactions",
+                                      "transaction_tip_contexts",
+                                      "message_media_offers",
+                                      "page_dm_messages",
+                                      "page_dm_threads",
+                                      "observations",
+                                      "sync_raw_payloads",
+                                      "fan_spend_lifetime",
+                                      "revenue_mix_daily",
+                                      "page_payout_requests",
+                                      "ofapi_read_snapshots",
+                                      "page_payout_methods",
+                                      "fan_spend_daily",
+                                      "fans",
+                                      "page_fans",
+                                      "page_fan_aliases",
+                                      "fan_username_aliases",
+                                      "page_subscriptions",
+                                      "domain_events",
+                                      "page_follows",
+                                      "daily_followers",
+                                      "fan_notes",
+                                      "fan_summaries",
+                                      "fan_profiles",
+                                      "fan_flags",
+                                      "creator_posts",
+                                      "creator_raw_media",
+                                      "creator_vault_album_members",
+                                      "creator_vault_album_scans",
+                                      "creator_media",
+                                      "creator_media_bundles",
+                                      "creator_post_tips",
+                                      "stats_traffic_buckets",
+                                      "stats_top_media",
+                                      "stats_top_tags",
+                                      "fansly_media_tag_stats",
+                                      "platform_tag_daily",
+                                      "creator_vault_albums",
+                                      "page_subscription_tiers",
+                                      "page_subscription_tier_plans",
+                                      "post_comments",
+                                      "post_likes",
+                                      "platform_notifications",
+                                      "capture_coverage"
+                                    ]
+                                  },
+                                  "state": {
+                                    "type": "string",
+                                    "enum": [
+                                      "not_applicable",
+                                      "not_read",
+                                      "not_indexed"
+                                    ]
+                                  },
+                                  "reason": {
+                                    "type": "string",
+                                    "enum": [
+                                      "not_a_source_for_this_claim",
+                                      "not_queried_by_this_operation",
+                                      "onlyfans_only",
+                                      "fansly_only",
+                                      "capability_not_granted",
+                                      "plane_disabled_by_config",
+                                      "not_indexed_for_text_search",
+                                      "journal_starts_after_window",
+                                      "partition_detached",
+                                      "outside_sql_retention",
+                                      "source_timeout"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "plane",
+                                  "state",
+                                  "reason"
+                                ],
+                                "additionalProperties": false
+                              }
+                            ]
+                          }
+                        },
+                        "observedRowFloor": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "gaps": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "before_capture_floor",
+                                  "after_capture_ceiling",
+                                  "internal_capture_gap",
+                                  "proof_open_debt",
+                                  "parse_debt",
+                                  "rejected_rows",
+                                  "partition_detached",
+                                  "source_error"
+                                ]
+                              },
+                              "from": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "to": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "plane": {
+                                "type": "string",
+                                "enum": [
+                                  "message_archive",
+                                  "dm_message_archive",
+                                  "transactions",
+                                  "transaction_tip_contexts",
+                                  "message_media_offers",
+                                  "page_dm_messages",
+                                  "page_dm_threads",
+                                  "observations",
+                                  "sync_raw_payloads",
+                                  "fan_spend_lifetime",
+                                  "revenue_mix_daily",
+                                  "page_payout_requests",
+                                  "ofapi_read_snapshots",
+                                  "page_payout_methods",
+                                  "fan_spend_daily",
+                                  "fans",
+                                  "page_fans",
+                                  "page_fan_aliases",
+                                  "fan_username_aliases",
+                                  "page_subscriptions",
+                                  "domain_events",
+                                  "page_follows",
+                                  "daily_followers",
+                                  "fan_notes",
+                                  "fan_summaries",
+                                  "fan_profiles",
+                                  "fan_flags",
+                                  "creator_posts",
+                                  "creator_raw_media",
+                                  "creator_vault_album_members",
+                                  "creator_vault_album_scans",
+                                  "creator_media",
+                                  "creator_media_bundles",
+                                  "creator_post_tips",
+                                  "stats_traffic_buckets",
+                                  "stats_top_media",
+                                  "stats_top_tags",
+                                  "fansly_media_tag_stats",
+                                  "platform_tag_daily",
+                                  "creator_vault_albums",
+                                  "page_subscription_tiers",
+                                  "page_subscription_tier_plans",
+                                  "post_comments",
+                                  "post_likes",
+                                  "platform_notifications",
+                                  "capture_coverage"
+                                ]
+                              },
+                              "remedy": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "enum": [
+                                          "none"
+                                        ]
+                                      },
+                                      "reason": {
+                                        "type": "string",
+                                        "enum": [
+                                          "no_remedy_exists",
+                                          "capture_lane_unimplemented",
+                                          "journal_before_capture_start",
+                                          "partition_detached",
+                                          "hydration_mode_off",
+                                          "capability_not_granted",
+                                          "discarded_at_capture",
+                                          "projection_missing"
+                                        ]
+                                      }
+                                    },
+                                    "required": [
+                                      "kind",
+                                      "reason"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "enum": [
+                                          "local_replay"
+                                        ]
+                                      },
+                                      "costClass": {
+                                        "type": "string",
+                                        "enum": [
+                                          "free"
+                                        ]
+                                      },
+                                      "admissible": {
+                                        "type": "boolean"
+                                      },
+                                      "reason": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string",
+                                            "enum": [
+                                              "no_remedy_exists",
+                                              "capture_lane_unimplemented",
+                                              "journal_before_capture_start",
+                                              "partition_detached",
+                                              "hydration_mode_off",
+                                              "capability_not_granted",
+                                              "discarded_at_capture",
+                                              "projection_missing"
+                                            ]
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      }
+                                    },
+                                    "required": [
+                                      "kind",
+                                      "costClass",
+                                      "admissible",
+                                      "reason"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "enum": [
+                                          "hydration_request"
+                                        ]
+                                      },
+                                      "costClass": {
+                                        "type": "string",
+                                        "enum": [
+                                          "vendor_paid_low",
+                                          "vendor_paid_high"
+                                        ]
+                                      },
+                                      "admissible": {
+                                        "type": "boolean"
+                                      },
+                                      "reason": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string",
+                                            "enum": [
+                                              "no_remedy_exists",
+                                              "capture_lane_unimplemented",
+                                              "journal_before_capture_start",
+                                              "partition_detached",
+                                              "hydration_mode_off",
+                                              "capability_not_granted",
+                                              "discarded_at_capture",
+                                              "projection_missing"
+                                            ]
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      }
+                                    },
+                                    "required": [
+                                      "kind",
+                                      "costClass",
+                                      "admissible",
+                                      "reason"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "enum": [
+                                          "recapture"
+                                        ]
+                                      },
+                                      "costClass": {
+                                        "type": "string",
+                                        "enum": [
+                                          "free",
+                                          "vendor_paid_low",
+                                          "vendor_paid_high"
+                                        ]
+                                      },
+                                      "admissible": {
+                                        "type": "boolean"
+                                      },
+                                      "reason": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string",
+                                            "enum": [
+                                              "no_remedy_exists",
+                                              "capture_lane_unimplemented",
+                                              "journal_before_capture_start",
+                                              "partition_detached",
+                                              "hydration_mode_off",
+                                              "capability_not_granted",
+                                              "discarded_at_capture",
+                                              "projection_missing"
+                                            ]
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      }
+                                    },
+                                    "required": [
+                                      "kind",
+                                      "costClass",
+                                      "admissible",
+                                      "reason"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "from",
+                              "to",
+                              "plane",
+                              "remedy"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "sourceErrors": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "source": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "message_archive",
+                                      "dm_message_archive",
+                                      "transactions",
+                                      "transaction_tip_contexts",
+                                      "message_media_offers",
+                                      "page_dm_messages",
+                                      "page_dm_threads",
+                                      "observations",
+                                      "sync_raw_payloads",
+                                      "fan_spend_lifetime",
+                                      "revenue_mix_daily",
+                                      "page_payout_requests",
+                                      "ofapi_read_snapshots",
+                                      "page_payout_methods",
+                                      "fan_spend_daily",
+                                      "fans",
+                                      "page_fans",
+                                      "page_fan_aliases",
+                                      "fan_username_aliases",
+                                      "page_subscriptions",
+                                      "domain_events",
+                                      "page_follows",
+                                      "daily_followers",
+                                      "fan_notes",
+                                      "fan_summaries",
+                                      "fan_profiles",
+                                      "fan_flags",
+                                      "creator_posts",
+                                      "creator_raw_media",
+                                      "creator_vault_album_members",
+                                      "creator_vault_album_scans",
+                                      "creator_media",
+                                      "creator_media_bundles",
+                                      "creator_post_tips",
+                                      "stats_traffic_buckets",
+                                      "stats_top_media",
+                                      "stats_top_tags",
+                                      "fansly_media_tag_stats",
+                                      "platform_tag_daily",
+                                      "creator_vault_albums",
+                                      "page_subscription_tiers",
+                                      "page_subscription_tier_plans",
+                                      "post_comments",
+                                      "post_likes",
+                                      "platform_notifications",
+                                      "capture_coverage"
+                                    ]
+                                  },
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "ofapi_certified_history",
+                                      "ofapi_message_coverage"
+                                    ]
+                                  }
+                                ]
+                              },
+                              "code": {
+                                "type": "string",
+                                "enum": [
+                                  "statement_timeout",
+                                  "archive_rebuilding",
+                                  "plane_disabled",
+                                  "partition_detached",
+                                  "row_budget_exhausted",
+                                  "certified_history_miss"
+                                ]
+                              },
+                              "excludedFromCounts": {
+                                "type": "boolean",
+                                "enum": [
+                                  true
+                                ]
+                              }
+                            },
+                            "required": [
+                              "source",
+                              "code",
+                              "excludedFromCounts"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "scopeNarrowing": {
+                          "type": "object",
+                          "properties": {
+                            "keyGrantExcludedPages": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "totalPagesForQuery": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "keyGrantExcludedPages",
+                            "totalPagesForQuery"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "scopeFieldStates": {
+                          "type": "object",
+                          "propertyNames": {
+                            "type": "string",
+                            "enum": [
+                              "textPlain",
+                              "textHtml",
+                              "priceMills",
+                              "isOpened",
+                              "isNew",
+                              "isTip",
+                              "tipAmountMills",
+                              "tipTextPlain",
+                              "inReplyToRef",
+                              "replyMetadata",
+                              "mediaMetadata",
+                              "deletedAt",
+                              "conversationRef",
+                              "messageCount",
+                              "coverageStatus",
+                              "purchaseState",
+                              "contextState",
+                              "capturedConversationRef",
+                              "tipMessageText",
+                              "messageMediaOffer",
+                              "grossMills",
+                              "netMills",
+                              "feeMills",
+                              "amountMills",
+                              "currency",
+                              "transactionState",
+                              "correlationRef",
+                              "refundState",
+                              "fanEarning",
+                              "lifetimeSpendMills",
+                              "revenueMixDay",
+                              "payoutRequest",
+                              "ofapiFinancialMetric",
+                              "ofapiPayoutRequest",
+                              "payoutMethod",
+                              "platformUserId",
+                              "username",
+                              "displayName",
+                              "membershipState",
+                              "pageAlias",
+                              "subscriptionState",
+                              "subscriptionPriceMills",
+                              "subscriptionExpiresAt",
+                              "followed",
+                              "presenceAt",
+                              "noteText",
+                              "summaryText",
+                              "profileBody",
+                              "fanFlag",
+                              "postRef",
+                              "postText",
+                              "publishedAt",
+                              "firstObservedAt",
+                              "lastObservedAt",
+                              "attachmentCount",
+                              "fypFlags",
+                              "wallRefs",
+                              "rawMedia",
+                              "vaultInventory",
+                              "postAttachment",
+                              "postTargetTipAmountMills",
+                              "attachmentTipAmountMills",
+                              "postTipTotalMills",
+                              "tipGoalLinked",
+                              "tipGoalRef",
+                              "tipGoalLabelText",
+                              "tipGoalTargetMills",
+                              "tipGoalCurrentMills",
+                              "tipGoalAmountsHidden",
+                              "postTipPostRef",
+                              "postTipRef",
+                              "tipSenderPlatformUserId",
+                              "postTipOccurredAt",
+                              "postTipAmountMills",
+                              "receiverTransactionRef",
+                              "postTipGoalRef",
+                              "postTipMessageText",
+                              "linkedPostCount",
+                              "trafficBucket",
+                              "topMediaWindow",
+                              "topTagWindow",
+                              "mediaTagWindow",
+                              "platformTagCounter",
+                              "mediaOffer",
+                              "vaultAlbum",
+                              "vaultAlbumMember",
+                              "subscriptionTier",
+                              "subscriptionTierPlan",
+                              "postComment",
+                              "postLike",
+                              "platformNotification",
+                              "captureCoverageRow"
+                            ]
+                          },
+                          "additionalProperties": {
+                            "type": "object",
+                            "properties": {
+                              "state": {
+                                "type": "string",
+                                "enum": [
+                                  "present",
+                                  "observed_empty",
+                                  "captured_unparsed",
+                                  "not_captured",
+                                  "source_did_not_provide",
+                                  "discarded_at_capture",
+                                  "unknown"
+                                ]
+                              },
+                              "remedy": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "enum": [
+                                          "none"
+                                        ]
+                                      },
+                                      "reason": {
+                                        "type": "string",
+                                        "enum": [
+                                          "no_remedy_exists",
+                                          "capture_lane_unimplemented",
+                                          "journal_before_capture_start",
+                                          "partition_detached",
+                                          "hydration_mode_off",
+                                          "capability_not_granted",
+                                          "discarded_at_capture",
+                                          "projection_missing"
+                                        ]
+                                      }
+                                    },
+                                    "required": [
+                                      "kind",
+                                      "reason"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "enum": [
+                                          "local_replay"
+                                        ]
+                                      },
+                                      "costClass": {
+                                        "type": "string",
+                                        "enum": [
+                                          "free"
+                                        ]
+                                      },
+                                      "admissible": {
+                                        "type": "boolean"
+                                      },
+                                      "reason": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string",
+                                            "enum": [
+                                              "no_remedy_exists",
+                                              "capture_lane_unimplemented",
+                                              "journal_before_capture_start",
+                                              "partition_detached",
+                                              "hydration_mode_off",
+                                              "capability_not_granted",
+                                              "discarded_at_capture",
+                                              "projection_missing"
+                                            ]
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      }
+                                    },
+                                    "required": [
+                                      "kind",
+                                      "costClass",
+                                      "admissible",
+                                      "reason"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "enum": [
+                                          "hydration_request"
+                                        ]
+                                      },
+                                      "costClass": {
+                                        "type": "string",
+                                        "enum": [
+                                          "vendor_paid_low",
+                                          "vendor_paid_high"
+                                        ]
+                                      },
+                                      "admissible": {
+                                        "type": "boolean"
+                                      },
+                                      "reason": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string",
+                                            "enum": [
+                                              "no_remedy_exists",
+                                              "capture_lane_unimplemented",
+                                              "journal_before_capture_start",
+                                              "partition_detached",
+                                              "hydration_mode_off",
+                                              "capability_not_granted",
+                                              "discarded_at_capture",
+                                              "projection_missing"
+                                            ]
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      }
+                                    },
+                                    "required": [
+                                      "kind",
+                                      "costClass",
+                                      "admissible",
+                                      "reason"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "enum": [
+                                          "recapture"
+                                        ]
+                                      },
+                                      "costClass": {
+                                        "type": "string",
+                                        "enum": [
+                                          "free",
+                                          "vendor_paid_low",
+                                          "vendor_paid_high"
+                                        ]
+                                      },
+                                      "admissible": {
+                                        "type": "boolean"
+                                      },
+                                      "reason": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string",
+                                            "enum": [
+                                              "no_remedy_exists",
+                                              "capture_lane_unimplemented",
+                                              "journal_before_capture_start",
+                                              "partition_detached",
+                                              "hydration_mode_off",
+                                              "capability_not_granted",
+                                              "discarded_at_capture",
+                                              "projection_missing"
+                                            ]
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      }
+                                    },
+                                    "required": [
+                                      "kind",
+                                      "costClass",
+                                      "admissible",
+                                      "reason"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "state",
+                              "remedy"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "planes",
+                        "observedRowFloor",
+                        "gaps",
+                        "sourceErrors",
+                        "scopeNarrowing",
+                        "scopeFieldStates"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "conclusion": {
+                      "type": "object",
+                      "properties": {
+                        "blockers": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "enum": [
+                              "claim_not_declared",
+                              "claim_field_unobservable",
+                              "read_only_mode",
+                              "delivery_not_exhausted",
+                              "capture_floor_unknown",
+                              "window_before_capture_floor",
+                              "gaps_present",
+                              "source_errors_present",
+                              "key_grant_narrowed_scope",
+                              "plane_not_read",
+                              "plane_not_indexed",
+                              "field_state_insufficient",
+                              "mutable_sort_key_traversal",
+                              "vault_inventory_unproven"
+                            ]
+                          }
+                        }
+                      },
+                      "required": [
+                        "blockers"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "scope",
+                    "episode",
+                    "delivery",
+                    "capture",
+                    "conclusion"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/agent/pages/{pageLabel}/threads/{conversationRef}/hydration-requests": {
       "post": {
         "summary": "Record an intent to deepen capture for one thread (ZERO vendor calls). 200, not 202: this stores an intent, it does not queue work — only an owner decision can do that",

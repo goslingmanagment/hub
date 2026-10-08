@@ -603,7 +603,9 @@ reflect unavailable chats.
 Where it is counted: `sync page status` (`chatsUnavailable`), `sync alerts status` (per page `chats`: `unavailable`,
 `refusedRecently` — the chats that opened an episode within the `chats_refused` window — and
 `unconfirmedWithoutThread`), the «Синк» tab (the «Сообщения чатов» block: «Чатов, которые Fansly не отдаёт: N»), the
-golden signal `sync_chats_unavailable`.
+golden signal `sync_chats_unavailable`. An agent reads one chat's open episode with `hub thread-availability`
+(`agentThreadAvailability`, `read:messages`; no evidence ids, `cause: unchecked`): null there means no open episode is
+recorded, not that Fansly serves the chat.
 
 ```sh
 pnpm cli sync chats unavailable --page lora-1

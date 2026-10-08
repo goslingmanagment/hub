@@ -7,6 +7,7 @@ import { KernelApiError, createClient, type KernelClient } from "@kernel/sdk";
 import {
   HUB_COMMANDS,
   HubCompositeResult,
+  HubNotedResult,
   HubUsageError,
   findHubCommand,
   type HubCommand,
@@ -349,7 +350,12 @@ export async function runHubCli(deps: HubCliDeps): Promise<HubCliResult> {
     };
   }
 
-  const blockers = blockersOf(data);
+  // A noted answer: the line goes beside the body, which is still the SDK's
+  // validated response — or null, when the command knows the hub could not
+  // answer and why (`thread-availability` on a hub without its route).
+  const note = data instanceof HubNotedResult ? data.note : null;
+  const body = data instanceof HubNotedResult ? data.data : data;
+  const blockers = blockersOf(body);
   const exitCode = failOnPartial && blockers.length > 0 ? HUB_EXIT_PARTIAL : HUB_EXIT_OK;
   return {
     exitCode,
@@ -360,7 +366,8 @@ export async function runHubCli(deps: HubCliDeps): Promise<HubCliResult> {
       // Lifted out of the body on purpose: this list IS the exit-code contract,
       // and an agent that reads nothing else must still see it.
       blockers,
-      data,
+      ...(note === null ? {} : { note }),
+      data: body,
     },
   };
 }

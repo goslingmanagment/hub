@@ -495,6 +495,14 @@ live-hour`:
   the episodes with their evidence, read-only; `sync chats note --page P --chat G --note … [--at]` writes the
   episode's `owner_note` / `owner_note_at` only (nothing the actor writes, not even `updated_at`) and an audit row in
   the same transaction. Neither sends a request to Fansly.
+- **The agent plane** (R3 PR7; plan §5): the agent answers are strict and a released `hub` validates every one, so
+  no existing answer carries the episode. Its own read-only route does — `agentThreadAvailability`
+  (`GET /api/v1/agent/pages/:pageLabel/threads/:conversationRef/availability`,
+  `modules/agent-read/handlers-thread-availability.ts`, `hub thread-availability`; `read:messages`): the chat's open
+  episode (`readOpenChatUnavailability`) without its evidence ids, `cause: unchecked` until the public account check
+  (plan §7) exists, or null — no open episode recorded, never proof that Fansly serves the chat. A page outside the
+  grant or a ref the page holds no thread for is the plane's static 404; on a hub without the route `hub` says the
+  state is unknown.
 
 ## Ownership
 
