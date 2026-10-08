@@ -24,6 +24,7 @@ import {
   OFAPI_LINK_STATS_RECONCILE_QUEUE,
   OFAPI_LINK_STATS_RETRY_QUEUE,
   parseOfapiLinkStatsTargetedJob,
+  queueOfapiLinkStatsRunAfterBindingReplaced,
   queueOfapiLinkStatsRunsAfterOperatorRebind,
   queueOfapiLinkStatsRunsAfterRebind,
   runOfapiLinkStatsReconcile,
@@ -2246,6 +2247,26 @@ describe("OFAPI link-stats series: the run after a rebind", () => {
       { action: "rebind", applied: true, pageId: 9 },
     ])).toEqual([]);
     expect(boss.sent).toHaveLength(1);
+  });
+
+  it("one hook for every path that replaces a binding: best-effort, never throws", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const boss = fakeBoss();
+    expect(await queueOfapiLinkStatsRunAfterBindingReplaced(appContext, boss, { pageId: 7, source: "owner_api" })).toBe(true);
+    expect(boss.sent).toEqual([{
+      queue: OFAPI_LINK_STATS_RETRY_QUEUE,
+      data: { trigger: "rebind", pageId: 7 },
+      options: { startAfter: 20 * 60, singletonKey: "rebind:7", retryLimit: 0 },
+    }]);
+    // No queue in the process, or one that refuses: logged, not thrown.
+    expect(await queueOfapiLinkStatsRunAfterBindingReplaced(appContext, null, { pageId: 7, source: "owner_api" })).toBe(false);
+    expect(await queueOfapiLinkStatsRunAfterBindingReplaced(appContext, {
+      async send() { throw new Error("queue unavailable"); },
+    }, { pageId: 7, source: "binding_reconciler" })).toBe(false);
   });
 
   it("a rebind the operator applies through the CLI queues the same run — an auth-dead window is not left to the next one", async (context) => {

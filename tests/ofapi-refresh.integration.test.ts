@@ -119,6 +119,38 @@ describe("OFAPI binding custody and recovery", () => {
   });
 });
 
+describe("the link series after an owner rebind", () => {
+  it("queues the read 20 minutes after an applied replacement, nothing for a preview, and never fails the request over it", async () => {
+    app.config.ofapiLinkStatsReconcileEnabled = true;
+    const sent: Array<{ queue: string; data: unknown; options: unknown }> = [];
+    const boss = {
+      async send(queue: string, data: unknown, options: unknown) {
+        sent.push({ queue, data, options });
+        return "job";
+      },
+    };
+    const preview = await refreshOfapiBinding(app, bindingInput(), 1, boss as never);
+    expect(sent).toEqual([]);
+    await refreshOfapiBinding(app, { ...bindingInput(), dryRun: false, previewToken: preview.previewToken }, 1, boss as never);
+    expect(sent).toEqual([{
+      queue: "ofapi.link-stats.retry",
+      data: { trigger: "rebind", pageId },
+      options: { startAfter: 20 * 60, singletonKey: `rebind:${pageId}`, retryLimit: 0 },
+    }]);
+
+    // A queue that refuses the job: the replacement is done and reported as done.
+    roster = [{ id: "acct_new", onlyfans_id: 123, is_authenticated: true }, { id: "acct_third", onlyfans_id: 123, is_authenticated: true }];
+    const current = (await getOfapiBindingPage(app.db, pageId))!;
+    const next = { pageId, expectedAccountId: "acct_new", expectedGeneration: current.generation,
+      accountId: "acct_third", identityEvidence: null, historicalEvidence: [], dryRun: true };
+    const secondPreview = await refreshOfapiBinding(app, next, 1);
+    const failing = { async send() { throw new Error("queue unavailable"); } };
+    await expect(refreshOfapiBinding(app, { ...next, dryRun: false, previewToken: secondPreview.previewToken }, 1, failing as never))
+      .resolves.toMatchObject({ applied: true, accountId: "acct_third" });
+    expect((await getOfapiBindingPage(app.db, pageId))!.account_id).toBe("acct_third");
+  });
+});
+
 describe("missing binding read boundary", () => {
   it("captures account_not_found, parks only its generation and prevents further vendor reads", async () => {
     await ensurePageSyncStates(app.db, { pageId });

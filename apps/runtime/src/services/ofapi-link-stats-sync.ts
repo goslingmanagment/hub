@@ -1211,49 +1211,72 @@ export async function ensureOfapiLinkStatsSchedule(boss: QueueCreationClient) {
   await boss.schedule(OFAPI_LINK_STATS_RECONCILE_QUEUE, OFAPI_LINK_STATS_CRON, null, { tz: "UTC" });
 }
 
-/** The binding reconciler moved pages to another OFAPI account: each of them
- * is read once, 20 minutes later, without waiting for the next window. The
- * run is a targeted pass of whatever window is open by then — it reads the
- * page's pairs that have no usable result there (a window whose scheduled
- * pass found the page unmapped or its session dead, or has not run yet) and
- * does nothing when the window already has them. Returns the pages queued. */
+/** Who replaced the binding — for the log line only. */
+export type OfapiBindingReplacementSource = "binding_reconciler" | "operator_cli" | "owner_api";
+
+/**
+ * THE hook of every path that replaces a page's OFAPI binding (a new
+ * `acct_*` through `applyVerifiedOfapiBinding`): the binding reconciler in the
+ * worker, the operator's `ofapi:bindings:reconcile --execute`, and the owner
+ * API `POST /api/v1/admin/ofapi/webhook/bindings`. Called after the
+ * replacement committed. The page is read once, 20 minutes later, without
+ * waiting for the next window: a targeted pass of whatever window is open by
+ * then, reading the page's pairs that have no usable result there (a window
+ * whose pass and retries found the session dead, say) and nothing when the
+ * window already has them.
+ *
+ * Best-effort: never throws, because the replacement is done and must not be
+ * reported as failed; a send that fails is logged, and the next window reads
+ * the page in any case. Returns whether the run was queued.
+ */
+export async function queueOfapiLinkStatsRunAfterBindingReplaced(
+  app: Pick<AppContext, "config" | "logger">,
+  boss: OfapiLinkStatsSender | null | undefined,
+  input: { pageId: number; source: OfapiBindingReplacementSource },
+): Promise<boolean> {
+  if (!isOfapiLinkStatsReconcileEnabled(app.config)) {
+    return false;
+  }
+  if (!boss) {
+    app.logger.warn(input, "OFAPI link-stats run after a binding replacement not queued: no job queue in this process");
+    return false;
+  }
+  try {
+    await boss.send(
+      OFAPI_LINK_STATS_RETRY_QUEUE,
+      { trigger: "rebind", pageId: input.pageId },
+      {
+        startAfter: OFAPI_LINK_STATS_REBIND_RUN_DELAY_MS / SECOND_MS,
+        // One queued run per page: a second replacement inside the delay is
+        // served by the run already waiting.
+        singletonKey: `rebind:${input.pageId}`,
+        retryLimit: 0,
+      },
+    );
+    app.logger.info(input, "OFAPI link-stats run queued after a binding replacement");
+    return true;
+  } catch (error) {
+    app.logger.error({
+      err: error,
+      ...input,
+    }, "OFAPI link-stats run after a binding replacement could not be queued; the next window reads the page");
+    return false;
+  }
+}
+
+/** The binding reconciler's adapter: one run per applied `rebind` action. */
 export async function queueOfapiLinkStatsRunsAfterRebind(
   app: Pick<AppContext, "config" | "logger">,
   boss: OfapiLinkStatsSender,
   actions: ReadonlyArray<{ action: string; applied: boolean; pageId: number; label?: string }>,
+  source: OfapiBindingReplacementSource = "binding_reconciler",
 ): Promise<number[]> {
-  if (!isOfapiLinkStatsReconcileEnabled(app.config)) {
-    return [];
-  }
   const queued: number[] = [];
   for (const action of actions) {
-    if (action.action !== "rebind" || !action.applied) {
-      continue;
-    }
-    try {
-      await boss.send(
-        OFAPI_LINK_STATS_RETRY_QUEUE,
-        { trigger: "rebind", pageId: action.pageId },
-        {
-          startAfter: OFAPI_LINK_STATS_REBIND_RUN_DELAY_MS / SECOND_MS,
-          // One queued run per page: a second rebind inside the delay is
-          // served by the run already waiting.
-          singletonKey: `rebind:${action.pageId}`,
-          retryLimit: 0,
-        },
-      );
+    if (action.action === "rebind" && action.applied &&
+      await queueOfapiLinkStatsRunAfterBindingReplaced(app, boss, { pageId: action.pageId, source })) {
       queued.push(action.pageId);
-    } catch (error) {
-      // The rebind itself is done and must not be reported as failed; the
-      // next window reads the page in any case.
-      app.logger.error({
-        err: error,
-        pageId: action.pageId,
-      }, "OFAPI link-stats run after rebind could not be queued; the next window reads the page");
     }
-  }
-  if (queued.length > 0) {
-    app.logger.info({ pageIds: queued }, "OFAPI link-stats run queued after rebind");
   }
   return queued;
 }
@@ -1286,7 +1309,7 @@ export async function queueOfapiLinkStatsRunsAfterOperatorRebind(
   try {
     await ensureOfapiLinkStatsQueue(boss);
     const pending = actions.filter((action) => action.action === "rebind" && action.applied);
-    const queued = await queueOfapiLinkStatsRunsAfterRebind(app, boss, pending);
+    const queued = await queueOfapiLinkStatsRunsAfterRebind(app, boss, pending, "operator_cli");
     if (queued.length !== new Set(pending.map((action) => action.pageId)).size) {
       throw new Error(
         `link-series run after rebind queued for ${queued.length} of ${pending.length} rebound page(s)`,
