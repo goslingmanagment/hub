@@ -3347,6 +3347,47 @@ describe("Fansly live overlay in the kernel context (plan §7.11)", () => {
     expect(killed.promptText).not.toContain("LIVE_SOCKET_LINE");
     expect(killed.manifest).toMatchObject({ source: "archive", liveOverlay: "off" });
   }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("tells the model a chat Fansly no longer serves to the page, and labels its socket messages (arena vanished chat)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    await seedLiveChat();
+    appContext.config.fanslyLiveOverlayReadPages = "svc-fs";
+    const NOTE = "Chat status: Fansly no longer serves this chat's history to the page";
+
+    const before = await runKernelFastReply();
+    expect(before.promptText).not.toContain(NOTE);
+    expect(before.promptText).not.toContain("[Unconfirmed]");
+    expect(before.manifest).not.toHaveProperty("chatAccess");
+
+    const episode = async (state: "refusing" | "established") => {
+      await testDb!.pool.query("delete from page_dm_thread_unavailability");
+      await testDb!.pool.query(
+        `insert into page_dm_thread_unavailability (thread_id, state, opened_at, established_at, refusals, last_refusal_at,
+                last_http_status, retry_not_before, first_attempt_id, last_attempt_id, first_observation_id,
+                first_observation_received_at, last_observation_id, last_observation_received_at)
+         select id, $2::text, now() - interval '7 hours', case when $2::text = 'established' then now() end,
+                case when $2::text = 'established' then 5 else 2 end, now(), 500,
+                case when $2::text = 'established' then now() + interval '1 day' end, 0, 0, 0, now(), 0, now()
+           from page_dm_threads where platform_account_id = $1 and platform_conversation_id = $3`,
+        [fanslyPageId, state, group],
+      );
+    };
+
+    await episode("refusing");
+    const refusing = await runKernelFastReply();
+    expect(refusing.promptText).not.toContain(NOTE);
+    expect(refusing.promptText).not.toContain("[Unconfirmed]");
+
+    await episode("established");
+    const unavailable = await runKernelFastReply();
+    expect(unavailable.promptText).toContain(NOTE);
+    expect(unavailable.promptText).toContain("Fan: [Unconfirmed] LIVE_SOCKET_LINE");
+    expect(unavailable.promptText).toContain("Fan: archived hello");
+    expect(unavailable.manifest).toMatchObject({ source: "live_union", chatAccess: { state: "established", unconfirmed: 1 } });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
 });
 
 describe("context_v1 frame (chat-extension H-4b)", () => {

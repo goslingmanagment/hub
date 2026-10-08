@@ -3,7 +3,7 @@ import { Link } from "react-router";
 import type { PageConversationPreviewResponse } from "@agency_hub_core/contracts";
 import { normalizeDmMessageText } from "@agency_hub_core/shared";
 import { usePageConversationPreview } from "@/api/queries";
-import { formatRelativeTime, formatUsdFromCents } from "@/lib/format";
+import { formatDateTime, formatRelativeTime, formatUsdFromCents } from "@/lib/format";
 
 interface ChatPreviewPanelProps {
   pageLabel: string;
@@ -12,7 +12,63 @@ interface ChatPreviewPanelProps {
   limit?: number;
 }
 
+type PreviewMessage = PageConversationPreviewResponse["messages"][number];
+type ChatAccess = NonNullable<PageConversationPreviewResponse["conversation"]["chatAccess"]>;
+
 const PREVIEW_LOADING_STATES = new Set(["syncing", "catching_up", "retrying", "setup"]);
+
+/** Why the chat is gone, as far as Hub can tell (owner's choice, arena
+ *  "vanished chat" plan §8 (a)): a guess says "probably". */
+const CHAT_ACCESS_CAUSE_COPY: Record<ChatAccess["cause"], string> = {
+  unchecked: "The fan deleted their account or blocked the page.",
+  probably_blocked: "The fan's account still exists — they have probably blocked this page.",
+  probably_deleted: "The fan's account was not found on Fansly — it was probably deleted.",
+};
+
+/** The chat's banner: only an established episode has one — a chat that is
+ *  still being refused may well answer on the next read. */
+function ChatAccessNotice({ chatAccess, showsSocketMessages }: { chatAccess: ChatAccess | undefined; showsSocketMessages: boolean }) {
+  if (chatAccess?.state !== "established") {
+    return null;
+  }
+
+  return (
+    <div role="note" className="rounded-lg border border-warning/25 bg-warning/10 px-3 py-2 text-[12px]">
+      <div className="font-semibold text-warning-dark">Fansly no longer serves this chat to the page.</div>
+      <div className="mt-0.5 text-text-secondary">
+        {CHAT_ACCESS_CAUSE_COPY[chatAccess.cause]}
+        {showsSocketMessages && " New messages still arrive over the socket, but they can't be confirmed."}
+      </div>
+      <div className="mt-1 text-[11px] text-text-muted">
+        Since {formatDateTime(chatAccess.openedAt, { yearUnlessCurrent: true })}
+      </div>
+      {chatAccess.ownerNote && (
+        <div className="mt-1 whitespace-pre-wrap break-words text-[11px] text-text-secondary">
+          <span className="font-medium">Owner's note:</span> {chatAccess.ownerNote}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A message only the page's socket delivered: Hub has no copy from Fansly's
+ *  API, so its text, sender and time are provisional. */
+function SocketMessageMark({ message }: { message: PreviewMessage }) {
+  if (message.source !== "live") {
+    return null;
+  }
+
+  return (
+    <span
+      className="text-[11px] text-warning-dark"
+      title={message.apiUnavailable
+        ? "This chat is excluded from message sync, so Fansly's API will never confirm this message."
+        : "Arrived over the socket; Fansly's API has not confirmed it."}
+    >
+      {message.apiUnavailable ? "From socket · API unavailable" : "From socket · not confirmed"}
+    </span>
+  );
+}
 
 function getEmptyPreviewCopy(data: PageConversationPreviewResponse) {
   const previewLoading = data.conversation.messageCoverageStatus === "pending_backfill" ||
@@ -158,9 +214,12 @@ export function ChatPreviewPanel({ pageLabel, platformConversationId, profileHre
     const emptyState = data ? getEmptyPreviewCopy(data) : { headline: "No messages to show.", detail: null };
 
     return (
-      <div className="bg-hover/50 px-6 py-4">
-        <div className="text-sm text-text-secondary">{emptyState.headline}</div>
-        {emptyState.detail && <div className="mt-1 text-sm text-text-muted">{emptyState.detail}</div>}
+      <div className="bg-hover/50 px-6 py-4 space-y-2">
+        <ChatAccessNotice chatAccess={data?.conversation.chatAccess} showsSocketMessages={false} />
+        <div>
+          <div className="text-sm text-text-secondary">{emptyState.headline}</div>
+          {emptyState.detail && <div className="mt-1 text-sm text-text-muted">{emptyState.detail}</div>}
+        </div>
       </div>
     );
   }
@@ -169,8 +228,12 @@ export function ChatPreviewPanel({ pageLabel, platformConversationId, profileHre
 
   return (
     <div className="bg-hover/50 px-6 py-4 space-y-2">
+      <ChatAccessNotice
+        chatAccess={data.conversation.chatAccess}
+        showsSocketMessages={data.messages.some((msg) => msg.source === "live")}
+      />
       <div ref={messagesContainerRef} className="flex flex-col gap-1.5 max-h-[320px] overflow-y-auto">
-        {data.messages.map((msg: PageConversationPreviewResponse["messages"][number]) => {
+        {data.messages.map((msg: PreviewMessage) => {
           const isModel = msg.senderRole === "model";
           return (
             <div
@@ -185,7 +248,7 @@ export function ChatPreviewPanel({ pageLabel, platformConversationId, profileHre
                 }`}
               >
                 <p className="whitespace-pre-wrap break-words">{normalizeDmMessageText(msg.content)}</p>
-                <div className="mt-1 flex items-center gap-2">
+                <div className="mt-1 flex flex-wrap items-center gap-x-2">
                   <span className="text-[11px] text-text-muted">
                     {formatRelativeTime(msg.createdAt)}
                   </span>
@@ -194,6 +257,7 @@ export function ChatPreviewPanel({ pageLabel, platformConversationId, profileHre
                       Tip {formatUsdFromCents(msg.totalTipAmountCents)}
                     </span>
                   )}
+                  <SocketMessageMark message={msg} />
                 </div>
               </div>
             </div>

@@ -5,6 +5,7 @@ import {
   listAiTranscriptUnionMessages,
   listArchiveConversationMessagesForAi,
   readDmLiveUnion,
+  readOpenChatUnavailability,
   type AiTranscriptUnionRow,
   type ArchiveMessageRow,
   type DmLiveReaderMessage,
@@ -120,6 +121,35 @@ export type AiTranscriptLiveOverlay = "off" | "serve" | "unknown";
 
 export const TRANSCRIPT_LOADER_VERSION = "transcript-union-v1";
 
+/** The label of a socket message of a chat Fansly no longer serves to its
+ *  page (arena "vanished chat", plan §5): no REST read can confirm it. */
+export const UNCONFIRMED_SOCKET_MESSAGE_LABEL = "[Unconfirmed]";
+
+/**
+ * The line after the transcript of a chat Fansly no longer serves to its page
+ * (an established unavailability episode, plan §5): Fansly serves the page no
+ * more of it, and the socket messages the transcript holds are labelled.
+ * Separated like the image-notes guide; the features append it after whatever
+ * rendered the transcript last (the fresh-text merge re-renders it).
+ */
+export function chatUnavailableTranscriptNote(input: { unconfirmed: number }): string {
+  const marked = input.unconfirmed > 0
+    ? ` Messages marked ${UNCONFIRMED_SOCKET_MESSAGE_LABEL} arrived over the live socket and are not confirmed.`
+    : "";
+  return "\n\nChat status: Fansly no longer serves this chat's history to the page — the fan probably blocked the page "
+    + `or deleted their account.${marked}`;
+}
+
+/** The chat's access as the transcript tells the model: set only while the
+ *  chat has an established unavailability episode. */
+export interface TranscriptChatAccess {
+  state: "established";
+  /** The served socket messages labelled `UNCONFIRMED_SOCKET_MESSAGE_LABEL`. */
+  unconfirmed: number;
+  /** `chatUnavailableTranscriptNote` of this transcript. */
+  note: string;
+}
+
 export interface TranscriptContext {
   transcript: string;
   messages: TranscriptMessage[];
@@ -133,6 +163,9 @@ export interface TranscriptContext {
    * Beside the manifest, never inside it: the manifest is recorded with the
    * generation and echoed to debug clients, and neither may change. */
   served: TranscriptServedSnapshot;
+  /** Arena "vanished chat" (plan §5): null unless the loader was asked to read
+   *  the chat's access and the chat has an established episode. */
+  chatAccess: TranscriptChatAccess | null;
 }
 
 export async function loadTranscriptContext(
@@ -148,6 +181,11 @@ export async function loadTranscriptContext(
      * for this load (the full Recap's deeper read, ai-transcript-depth.ts).
      * The Fansly live overlay union never reads it and stays at its own cap. */
     maxRows?: number;
+    /** Read the chat's open unavailability episode (only the Fansly engine
+     * writes them), so an established one labels the served socket messages
+     * and yields `chatAccess`. Off by default: the conversation feed reads
+     * this loader inside its snapshot and never needs it. */
+    readChatAccess?: boolean;
   },
 ): Promise<TranscriptContext> {
   const limit = input.limit ?? 100;
@@ -223,7 +261,38 @@ export async function loadTranscriptContext(
   const shaped = servedRows
     .map((row) => archiveRowToOfapiShape(row as never))
     .filter((row): row is OfapiChatMessage => row !== null);
-  const messages = normalizeTranscriptMessages(shaped).slice(-limit);
+
+  // Arena "vanished chat" (plan §5): a chat Fansly no longer serves to the
+  // page. Its socket messages stay in the transcript, labelled: no REST read
+  // will confirm them while the episode lasts. A refusing episode may still
+  // be answered on the next read and changes nothing. Enrichment only: a
+  // failed read serves the transcript as it is and says so in the manifest.
+  let chatUnavailable = false;
+  let chatAccessError = false;
+  if (input.readChatAccess === true) {
+    try {
+      const episodes = await readOpenChatUnavailability(app.db, {
+        pageId: input.pageId,
+        groupIds: [input.conversationRef],
+      });
+      chatUnavailable = episodes.get(input.conversationRef)?.state === "established";
+    } catch {
+      chatAccessError = true;
+    }
+  }
+  // The transcript keys a message by Number(ref), so the labels do too.
+  const unconfirmedIds = new Set(chatUnavailable && liveUnion !== null
+    ? liveUnion.flatMap((item) => item.source === "live" ? [Number(item.message.platformMessageId)] : [])
+    : []);
+  const messages = normalizeTranscriptMessages(shaped).slice(-limit).map((message) => (
+    unconfirmedIds.has(message.id)
+      ? { ...message, labels: [...message.labels, UNCONFIRMED_SOCKET_MESSAGE_LABEL] }
+      : message
+  ));
+  const unconfirmed = messages.filter((message) => unconfirmedIds.has(message.id)).length;
+  const chatAccess: TranscriptChatAccess | null = chatUnavailable
+    ? { state: "established", unconfirmed, note: chatUnavailableTranscriptNote({ unconfirmed }) }
+    : null;
 
   // Both readers return newest-first, so index 0 is the head.
   const archiveHead = archiveRows[0] ?? null;
@@ -262,6 +331,10 @@ export async function loadTranscriptContext(
     liveOverlay,
     liveCount: liveUnion === null ? null : liveUnion.filter((item) => item.source === "live").length,
     liveError,
+    // Arena "vanished chat": keys only when the chat's access shaped the
+    // transcript (or its read failed), so every other manifest is unchanged.
+    ...(chatAccess === null ? {} : { chatAccess: { state: chatAccess.state, unconfirmed: chatAccess.unconfirmed } }),
+    ...(chatAccessError ? { chatAccessError: true } : {}),
   };
 
   const mediaByMessage = new Map<number, OnlyFansMessageMedia>();
@@ -291,7 +364,7 @@ export async function loadTranscriptContext(
       },
   };
 
-  return { transcript: formatTranscript(messages), messages, mediaByMessage, contextManifest, served };
+  return { transcript: formatTranscript(messages), messages, mediaByMessage, contextManifest, served, chatAccess };
 }
 
 const SPENDING_TYPE_BY_CANONICAL: Record<string, string> = {

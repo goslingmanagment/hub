@@ -135810,6 +135810,67 @@
                               "type": "null"
                             }
                           ]
+                        },
+                        "chatAccess": {
+                          "type": "object",
+                          "properties": {
+                            "state": {
+                              "type": "string",
+                              "enum": [
+                                "refusing",
+                                "established"
+                              ]
+                            },
+                            "openedAt": {
+                              "type": "string"
+                            },
+                            "establishedAt": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "lastRefusalAt": {
+                              "type": "string"
+                            },
+                            "refusals": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "ownerNote": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "cause": {
+                              "type": "string",
+                              "enum": [
+                                "unchecked",
+                                "probably_blocked",
+                                "probably_deleted"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "state",
+                            "openedAt",
+                            "establishedAt",
+                            "lastRefusalAt",
+                            "refusals",
+                            "ownerNote",
+                            "cause"
+                          ],
+                          "additionalProperties": false
                         }
                       },
                       "required": [
@@ -136634,6 +136695,67 @@
                               "type": "null"
                             }
                           ]
+                        },
+                        "chatAccess": {
+                          "type": "object",
+                          "properties": {
+                            "state": {
+                              "type": "string",
+                              "enum": [
+                                "refusing",
+                                "established"
+                              ]
+                            },
+                            "openedAt": {
+                              "type": "string"
+                            },
+                            "establishedAt": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "lastRefusalAt": {
+                              "type": "string"
+                            },
+                            "refusals": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "ownerNote": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "cause": {
+                              "type": "string",
+                              "enum": [
+                                "unchecked",
+                                "probably_blocked",
+                                "probably_deleted"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "state",
+                            "openedAt",
+                            "establishedAt",
+                            "lastRefusalAt",
+                            "refusals",
+                            "ownerNote",
+                            "cause"
+                          ],
+                          "additionalProperties": false
                         }
                       },
                       "required": [

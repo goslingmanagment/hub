@@ -176,6 +176,22 @@ describe("conversation message contract (additive provenance)", () => {
     expect(preview.success, JSON.stringify(preview.error?.issues)).toBe(true);
   });
 
+  it("takes an optional chatAccess on the conversation; its cause is one of three, unchecked for now", () => {
+    const chatAccess = {
+      state: "established", openedAt: "2026-10-06T22:14:00.000Z", establishedAt: "2026-10-07T05:25:00.000Z",
+      lastRefusalAt: "2026-10-08T05:30:00.000Z", refusals: 8, ownerNote: null, cause: "unchecked",
+    };
+    const parse = (access: unknown) => pageConversationMessagesResponseSchema.safeParse({
+      page, conversationId: "800", conversation: { ...conversation, chatAccess: access }, messages: [item],
+    });
+    expect(parse(undefined).success).toBe(true);
+    expect(parse(chatAccess).success).toBe(true);
+    expect(parse({ ...chatAccess, state: "refusing", establishedAt: null, refusals: 2 }).success).toBe(true);
+    for (const cause of ["probably_blocked", "probably_deleted"]) expect(parse({ ...chatAccess, cause }).success).toBe(true);
+    expect(parse({ ...chatAccess, cause: "blocked" }).success).toBe(false);
+    expect(parse({ ...chatAccess, state: "ended" }).success).toBe(false);
+  });
+
   it("is regenerated: the OpenAPI document carries both fields as optional on both routes", () => {
     const document = JSON.parse(readFileSync(new URL("../reference/agency-hub.openapi.json", import.meta.url), "utf8")) as {
       paths: Record<string, { get?: { responses: Record<string, { content: Record<string, { schema: unknown }> }> } }>;
@@ -192,6 +208,12 @@ describe("conversation message contract (additive provenance)", () => {
       expect(messageItem.properties.apiUnavailable, path).toEqual({ type: "boolean" });
       expect(messageItem.required, path).not.toContain("source");
       expect(messageItem.required, path).not.toContain("apiUnavailable");
+      const state = (schema as unknown as {
+        properties: { conversation: { properties: Record<string, { properties: Record<string, unknown> }>; required: string[] } };
+      }).properties.conversation;
+      expect(state.required, path).not.toContain("chatAccess");
+      expect(state.properties.chatAccess?.properties.cause, path)
+        .toEqual({ type: "string", enum: ["unchecked", "probably_blocked", "probably_deleted"] });
     }
   });
 });

@@ -160,6 +160,92 @@ describe("ChatPreviewPanel", () => {
     expect(html).not.toContain("&lt;p&gt;");
   });
 
+  describe("a chat Fansly no longer serves to the page (arena vanished chat, plan §5)", () => {
+    const established = {
+      state: "established" as const,
+      openedAt: "2026-10-06T12:14:00.000Z",
+      establishedAt: "2026-10-07T05:25:00.000Z",
+      lastRefusalAt: "2026-10-08T05:30:00.000Z",
+      refusals: 8,
+      ownerNote: null as string | null,
+      cause: "unchecked" as "unchecked" | "probably_blocked" | "probably_deleted",
+    };
+    const socketMessage = {
+      platformMessageId: "msg-live",
+      senderRole: "fan",
+      createdAt: "2026-10-08T11:55:00.000Z",
+      content: "enjoy baby",
+      totalTipAmountCents: 0,
+      source: "live",
+      apiUnavailable: false,
+    };
+    const restMessage = {
+      platformMessageId: "msg-rest",
+      senderRole: "model",
+      createdAt: "2026-10-06T11:55:00.000Z",
+      content: "hi there",
+      totalTipAmountCents: 0,
+      source: "rest",
+    };
+
+    function mockPreview(chatAccess: unknown, messages: unknown[]) {
+      queryMocks.usePageConversationPreview.mockReturnValue({
+        data: {
+          messageSyncUx: buildSyncUx(),
+          conversation: { messageBackfillComplete: true, ...(chatAccess === undefined ? {} : { chatAccess }) },
+          messages,
+        },
+        isError: false,
+        isLoading: false,
+      });
+    }
+
+    it("shows an established episode's banner, keyed by its cause, with since when and the owner's note", () => {
+      mockPreview({ ...established, ownerNote: "06.10: the profile does not open from lora-1" }, [restMessage, socketMessage]);
+      const html = renderPanel();
+      expect(html).toContain('role="note"');
+      expect(html).toContain("Fansly no longer serves this chat to the page.");
+      expect(html).toContain("The fan deleted their account or blocked the page.");
+      expect(html).toContain("New messages still arrive over the socket, but they can&#x27;t be confirmed.");
+      expect(html).toContain("Since Oct 6");
+      expect(html).toContain("Owner&#x27;s note:</span> 06.10: the profile does not open from lora-1");
+
+      mockPreview({ ...established, cause: "probably_blocked" }, [restMessage]);
+      const blocked = renderPanel();
+      expect(blocked).toContain("The fan&#x27;s account still exists — they have probably blocked this page.");
+      expect(blocked).not.toContain("Owner&#x27;s note");
+      expect(blocked).not.toContain("over the socket");
+
+      mockPreview({ ...established, cause: "probably_deleted" }, [restMessage]);
+      expect(renderPanel()).toContain("The fan&#x27;s account was not found on Fansly — it was probably deleted.");
+    });
+
+    it("shows the banner over an empty preview too", () => {
+      mockPreview(established, []);
+      const html = renderPanel();
+      expect(html).toContain("Fansly no longer serves this chat to the page.");
+      expect(html).toContain("No messages to show.");
+    });
+
+    it("has no banner while the chat is only being refused, nor without an episode", () => {
+      mockPreview({ ...established, state: "refusing", establishedAt: null, refusals: 2 }, [restMessage, socketMessage]);
+      expect(renderPanel()).not.toContain("Fansly no longer serves this chat");
+      mockPreview(undefined, [restMessage, socketMessage]);
+      expect(renderPanel()).not.toContain("Fansly no longer serves this chat");
+    });
+
+    it("marks every socket-only message as not confirmed, and a chat excluded from sync as API unavailable", () => {
+      mockPreview(undefined, [restMessage, socketMessage, { ...socketMessage, platformMessageId: "msg-excluded", apiUnavailable: true }]);
+      const html = renderPanel();
+      expect(html.match(/From socket · not confirmed/g)).toHaveLength(1);
+      expect(html.match(/From socket · API unavailable/g)).toHaveLength(1);
+      expect(html).toContain("Fansly&#x27;s API will never confirm this message");
+
+      mockPreview(undefined, [restMessage, { ...socketMessage, source: undefined }]);
+      expect(renderPanel()).not.toContain("From socket");
+    });
+  });
+
   it("uses data-loading language for transient empty previews", () => {
     queryMocks.usePageConversationPreview.mockReturnValue({
       data: {

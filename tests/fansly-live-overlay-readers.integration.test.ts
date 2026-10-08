@@ -390,6 +390,155 @@ describe("live overlay readers: the per-page switch through the API", () => {
   });
 });
 
+/** An open (or ended) unavailability episode of a chat, as the actor and M2 write it. */
+async function seedEpisode(threadId: number, input: {
+  state: "refusing" | "established"; refusals: number; note?: string; ended?: boolean;
+}) {
+  await testDb.pool.query(`
+    insert into page_dm_thread_unavailability (thread_id, state, opened_at, established_at, ended_at, end_reason,
+      refusals, last_refusal_at, last_http_status, retry_not_before, first_attempt_id, last_attempt_id,
+      first_observation_id, first_observation_received_at, last_observation_id, last_observation_received_at,
+      owner_note, owner_note_at)
+    values ($1, $2::text, $3::timestamptz, case when $2::text = 'established' then $4::timestamptz end,
+      case when $7::boolean then $5::timestamptz end, case when $7::boolean then 'read_served' end,
+      $6::int, $5::timestamptz, 500, case when $2::text = 'established' then now() + interval '1 day' end, 11, 15,
+      901, $3::timestamptz, 905, $5::timestamptz, $8::text, case when $8::text is not null then $3::timestamptz end)`, [
+    threadId, input.state, at(-3600), at(-1800), at(-600), input.refusals, input.ended === true, input.note ?? null,
+  ]);
+}
+
+describe("chat access: a chat Fansly no longer serves to the page (arena vanished chat, plan §5)", () => {
+  async function routes(f: Fixture) {
+    await createUserAccount(f.app, { username: "dima", role: "owner", password: "owner-secret" }, { source: "cli" });
+    const api = await buildApiServer(f.app);
+    servers.push(api);
+    await api.ready();
+    const login = await api.inject({ method: "POST", url: "/api/v1/auth/login",
+      payload: { username: "dima", password: "owner-secret" } });
+    const cookie = String(login.headers["set-cookie"]).split(";")[0]!;
+    return async (group: string) => {
+      const answers = await Promise.all(["messages", "preview?limit=25"].map(async (path) => {
+        const response = await api.inject({ method: "GET", url: `/api/v1/pages/ari-1/conversations/${group}/${path}`,
+          headers: { cookie } });
+        expect(response.statusCode, response.body).toBe(200);
+        return (response.json() as { conversation: Record<string, unknown> }).conversation;
+      }));
+      return answers as [Record<string, unknown>, Record<string, unknown>];
+    };
+  }
+
+  it("both chatter routes carry the open episode as chatAccess, cause unchecked; other chats and ended episodes none", async () => {
+    const f = await fixture();
+    await seedChat(f);
+    const read = await routes(f);
+    const [baselineMessages, baselinePreview] = await read(GROUP);
+    expect(baselineMessages).not.toHaveProperty("chatAccess");
+    expect(baselinePreview).not.toHaveProperty("chatAccess");
+
+    await seedEpisode(f.main.id, { state: "established", refusals: 8, note: "06.10: the profile does not open from ari-1" });
+    const expected = {
+      state: "established", openedAt: at(-3600).toISOString(), establishedAt: at(-1800).toISOString(),
+      lastRefusalAt: at(-600).toISOString(), refusals: 8, ownerNote: "06.10: the profile does not open from ari-1",
+      cause: "unchecked",
+    };
+    for (const conversation of await read(GROUP)) {
+      expect(conversation.chatAccess).toEqual(expected);
+    }
+    // Everything else about the chat answers as before.
+    const [withMessages, withPreview] = await read(GROUP);
+    const { chatAccess: _messagesAccess, ...messagesRest } = withMessages;
+    const { chatAccess: _previewAccess, ...previewRest } = withPreview;
+    expect(messagesRest).toEqual(baselineMessages);
+    expect(previewRest).toEqual(baselinePreview);
+    for (const conversation of await read(OTHER_GROUP)) expect(conversation).not.toHaveProperty("chatAccess");
+
+    // A refusing episode is sent too (the dashboard shows no banner for it).
+    await testDb.pool.query("delete from page_dm_thread_unavailability");
+    await seedEpisode(f.main.id, { state: "refusing", refusals: 2 });
+    for (const conversation of await read(GROUP)) {
+      expect(conversation.chatAccess).toEqual({ ...expected, state: "refusing", establishedAt: null, refusals: 2, ownerNote: null });
+    }
+
+    // An ended episode is history: the chat answers as if it never had one.
+    await testDb.pool.query("delete from page_dm_thread_unavailability");
+    await seedEpisode(f.main.id, { state: "established", refusals: 5, ended: true });
+    const [endedMessages, endedPreview] = await read(GROUP);
+    expect(endedMessages).toEqual(baselineMessages);
+    expect(endedPreview).toEqual(baselinePreview);
+  });
+
+  it("the AI transcript labels the chat's socket messages and says the chat is unavailable, only while established", async () => {
+    const f = await fixture();
+    await f.archive("7801", 0, "hey babe");
+    await f.archive("7802", 60, "hey you", { mine: true });
+    await f.live("7803", { seconds: 120, content: "enjoy baby" });
+    await f.live("7804", { seconds: 150, sender: PAGE_REF, content: "live reply" });
+    const load = (readChatAccess?: boolean) => loadTranscriptContext(f.app, {
+      pageId: f.page.id, conversationRef: GROUP, liveOverlay: "serve", ...(readChatAccess === undefined ? {} : { readChatAccess }),
+    });
+
+    const plain = await load(true);
+    expect(plain.chatAccess).toBeNull();
+    expect(plain.contextManifest).not.toHaveProperty("chatAccess");
+
+    await seedEpisode(f.main.id, { state: "refusing", refusals: 3 });
+    expect(await load(true)).toEqual(plain);
+
+    await testDb.pool.query("delete from page_dm_thread_unavailability");
+    await seedEpisode(f.main.id, { state: "established", refusals: 5 });
+    const unavailable = await load(true);
+    expect(unavailable.messages.map((message) => [String(message.id), message.sender, message.text, message.labels])).toEqual([
+      ["7801", "Fan", "hey babe", []],
+      ["7802", "Model", "hey you", []],
+      ["7803", "Fan", "enjoy baby", ["[Unconfirmed]"]],
+      ["7804", "Model", "live reply", ["[Unconfirmed]"]],
+    ]);
+    expect(unavailable.transcript.split("\n").slice(-2)).toEqual([
+      expect.stringMatching(/^\[\d\d:\d\d\] Fan: \[Unconfirmed\] enjoy baby$/),
+      expect.stringMatching(/^\[\d\d:\d\d\] Model: \[Unconfirmed\] live reply$/),
+    ]);
+    expect(unavailable.chatAccess).toEqual({
+      state: "established",
+      unconfirmed: 2,
+      note: "\n\nChat status: Fansly no longer serves this chat's history to the page — the fan probably blocked the page "
+        + "or deleted their account. Messages marked [Unconfirmed] arrived over the live socket and are not confirmed.",
+    });
+    expect(unavailable.contextManifest).toMatchObject({ chatAccess: { state: "established", unconfirmed: 2 } });
+    expect(unavailable.contextManifest).not.toHaveProperty("chatAccessError");
+    // The same rows, only labelled: the window and its refs do not move.
+    expect(unavailable.served).toEqual(plain.served);
+
+    // Without the overlay there is nothing to label, and the chat is still unavailable.
+    const archiveOnly = await loadTranscriptContext(f.app, { pageId: f.page.id, conversationRef: GROUP, readChatAccess: true });
+    expect(archiveOnly.messages.every((message) => message.labels.length === 0)).toBe(true);
+    expect(archiveOnly.chatAccess).toMatchObject({ state: "established", unconfirmed: 0 });
+    expect(archiveOnly.chatAccess!.note).not.toContain("[Unconfirmed]");
+
+    // Not asked (another platform's caller): the episode is not read.
+    expect(await load()).toEqual(plain);
+    expect(await load(false)).toEqual(plain);
+  });
+
+  it("serves the transcript without its access and says so when the episode read fails", async () => {
+    const f = await fixture();
+    await f.archive("7901", 0, "hey babe");
+    await f.live("7902", { seconds: 10 });
+    await seedEpisode(f.main.id, { state: "established", refusals: 5 });
+    await testDb.pool.query("alter table page_dm_thread_unavailability rename column state to state_moved");
+    try {
+      const served = await loadTranscriptContext(f.app, {
+        pageId: f.page.id, conversationRef: GROUP, liveOverlay: "serve", readChatAccess: true,
+      });
+      expect(served.messages.map((message) => [String(message.id), message.labels])).toEqual([["7901", []], ["7902", []]]);
+      expect(served.chatAccess).toBeNull();
+      expect(served.contextManifest).toMatchObject({ source: "live_union", chatAccessError: true });
+      expect(served.contextManifest).not.toHaveProperty("chatAccess");
+    } finally {
+      await testDb.pool.query("alter table page_dm_thread_unavailability rename column state_moved to state");
+    }
+  });
+});
+
 describe("live overlay readers: a real socket frame end to end", () => {
   it("a captured and applied frame is visible to the chatter route; a deletion frame hides the REST copy", async () => {
     const f = await fixture();

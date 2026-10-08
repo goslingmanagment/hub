@@ -631,6 +631,8 @@ export async function prepareAiFeatureStream(
       unionMode,
       liveOverlay,
       ...(maxRows !== undefined ? { maxRows } : {}),
+      // Only the Fansly engine writes episodes; another platform's chat reads none.
+      readChatAccess: true,
     });
     // chat-extension H-4c: the request's fresh text joins AFTER the loader
     // returns, never inside it. Without fresh text (or with the owner's switch
@@ -702,6 +704,11 @@ export async function prepareAiFeatureStream(
           manifest: applied.manifest,
         };
       }
+    }
+    // Arena "vanished chat" (plan §5): a chat Fansly no longer serves to the
+    // page says so after its transcript, whichever step rendered it last.
+    if (transcript.chatAccess !== null) {
+      contextValues.transcript += transcript.chatAccess.note;
     }
   }
   if (mediaNotes) {
