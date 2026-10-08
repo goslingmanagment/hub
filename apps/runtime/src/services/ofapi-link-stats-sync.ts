@@ -91,11 +91,14 @@ const MAX_ATTEMPTS_PER_WINDOW = 1 + OFAPI_LINK_STATS_RETRY_DELAYS_MS.length;
 
 /** A pair whose last row of the window says the pass could make no request
  * for a standing reason is not retried: nothing changes in 15 minutes, and
- * the retries would only stack `skipped` rows. A page without a mapping or
- * with a dead session is read again by the run that follows its rebind. */
+ * the retries would only stack `skipped` rows. A page without a mapping is
+ * read again by the run that follows its rebind. A dead session is NOT such
+ * a reason: OFAPI restores a session on the same account (accounts.
+ * reconnected) without any rebind and without a link run, so a retry reads
+ * it again — reconcilePage checks the current auth status and skips the page
+ * once more if it is still dead. */
 const NOT_RETRIED_SKIP_REASONS = new Set([
   "page_unmapped",
-  "page_auth_dead",
   "ofapi_client_not_configured",
 ]);
 
@@ -819,18 +822,21 @@ async function windowHasEveryResult(
     LINK_STAT_KINDS.every((kind) => usable.has(pairKey(page.id, kind))));
 }
 
-/** Queues the next retry of the window if some pair still needs one. The
- * rule is the shared one (linkStatRunUsableResultSql): a pair is retried
- * while it has NO USABLE RESULT in the window — a failed, skipped or
- * truncated row, or a partial that gave the series nothing, does not cancel
- * the retry just by existing. */
+/** Queues the window's next retry. It is persisted BEFORE the pass reads
+ * anything — a pass that dies halfway (a crashed worker, a database error
+ * while listing the fleet) must not take the rest of the window's retries
+ * with it, and neither queue retries a job. Which pairs the retry reads is
+ * decided when it runs: those with NO USABLE RESULT in the window then (the
+ * shared rule, linkStatRunUsableResultSql) — a failed, skipped or truncated
+ * row, or a partial that gave the series nothing, does not cancel it by
+ * existing. A retry that finds every pair with a result reads nothing; it
+ * costs a few selects. */
 async function queueNextRetry(
   app: AppContext,
   input: {
     boss: OfapiLinkStatsSender | undefined;
-    fleet: readonly LinkStatsFleetPage[];
     windowAt: Date;
-    /** 0 after the scheduled pass and after a rebind run, n after retry n. */
+    /** 0 for the scheduled pass and a rebind run, n for retry n. */
     retriesDone: number;
     now: Date;
   },
@@ -843,26 +849,6 @@ async function queueNextRetry(
   // A retry that would start after the window closed has nothing to fill:
   // the next window's own pass is the series' next point.
   if (input.now.getTime() + delayMs >= nextOfapiLinkStatsWindowAt(input.windowAt).getTime()) {
-    return null;
-  }
-  const states = new Map(
-    (await listLinkStatWindowPairStates(app.db, { windowAt: input.windowAt }))
-      .map((state) => [pairKey(state.platformAccountId, state.linkKind), state] as const),
-  );
-  const pending = input.fleet.flatMap((page) => LINK_STAT_KINDS.map((kind) => ({
-    pageId: page.id,
-    kind,
-    state: states.get(pairKey(page.id, kind)) ?? null,
-  }))).filter(({ state }) =>
-    // No row at all in the window (the pass died before reaching the page)
-    // is as much a missing result as a failed one.
-    state === null || (
-      !state.hasUsableResult &&
-      state.attempts < MAX_ATTEMPTS_PER_WINDOW &&
-      !(state.lastStatus === "skipped" && state.lastReason !== null &&
-        NOT_RETRIED_SKIP_REASONS.has(state.lastReason))
-    ));
-  if (pending.length === 0) {
     return null;
   }
   // The delays are whole minutes, so the division is exact.
@@ -878,14 +864,6 @@ async function queueNextRetry(
       retryLimit: 0,
     },
   );
-  app.logger.info({
-    windowAt: input.windowAt.toISOString(),
-    retry,
-    startAfterSeconds,
-    pending: pending.map(({ pageId, kind, state }) => ({
-      pageId, kind, lastStatus: state?.lastStatus ?? null, lastReason: state?.lastReason ?? null,
-    })),
-  }, "OFAPI link-stats retry queued for pairs without a usable result");
   return { windowAt: input.windowAt, retry, startAfterSeconds };
 }
 
@@ -912,6 +890,23 @@ export async function runOfapiLinkStatsReconcile(
     return { pages: [], queuedRetry: null };
   }
   const stamp: LinkStatsAttemptStamp = { pulledAt, windowAt };
+
+  // The window's next retry is persisted before anything is read (see
+  // queueNextRetry). If even that fails, it is tried once more after the walk.
+  const retriesDone = target?.trigger === "retry" ? target.retry : 0;
+  const queueRetry = async () => {
+    try {
+      return { queued: await queueNextRetry(app, { boss: options.boss, windowAt, retriesDone, now: pulledAt }), failed: false };
+    } catch (error) {
+      app.logger.error({
+        err: error,
+        windowAt: windowAt.toISOString(),
+        retry: retriesDone + 1,
+      }, "OFAPI link-stats retry could not be queued");
+      return { queued: null, failed: true };
+    }
+  };
+  let retryQueueing = await queueRetry();
 
   // The population is every active OnlyFans page, mapped or not: a page the
   // pass cannot read still owes the series a row saying so.
@@ -958,7 +953,7 @@ export async function runOfapiLinkStatsReconcile(
         windowAt: windowAt.toISOString(),
         target,
       }, "OFAPI link-stats targeted pass found every pair with a usable result; nothing read");
-      return { pages: [], queuedRetry: null };
+      return { pages: [], queuedRetry: retryQueueing.queued };
     }
   }
 
@@ -1017,23 +1012,10 @@ export async function runOfapiLinkStatsReconcile(
     }
   }
 
-  // The retry is queued before the verdict: an incident write that fails must
-  // not cost the window its second chance.
-  let queuedRetry: OfapiLinkStatsReconcileResult["queuedRetry"] = null;
-  try {
-    queuedRetry = await queueNextRetry(app, {
-      boss: options.boss,
-      fleet,
-      windowAt,
-      retriesDone: target?.trigger === "retry" ? target.retry : 0,
-      now: pulledAt,
-    });
-  } catch (error) {
-    app.logger.error({
-      err: error,
-      windowAt: windowAt.toISOString(),
-    }, "OFAPI link-stats retry could not be queued; the window waits for the next pass");
+  if (retryQueueing.failed) {
+    retryQueueing = await queueRetry();
   }
+  const queuedRetry = retryQueueing.queued;
 
   // The fleet verdict is drawn over the pages the pass was to read. On a
   // targeted pass that is the pairs it read: "every" below means every one of

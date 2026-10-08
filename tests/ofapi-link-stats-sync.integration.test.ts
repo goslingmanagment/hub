@@ -1784,7 +1784,11 @@ describe("OFAPI link-stats series: a window is read again until it has a result"
     const boss = fakeBoss();
     const previous = ofapiLinkStatsWindowAt(new Date(WINDOW.getTime() - 1));
     await runOfapiLinkStatsReconcile(appContext, { now: new Date(previous.getTime() + 30_000), boss });
-    expect(boss.sent).toEqual([]);
+    // Both kinds have their result in that window: its retry reads nothing.
+    expect((await runOfapiLinkStatsReconcile(appContext, {
+      now: new Date(previous.getTime() + 15.5 * 60_000), boss,
+      target: { trigger: "retry", windowAt: previous, retry: 1 },
+    })).pages).toEqual([]);
 
     // Rebound; the new account's cache is cold for both kinds.
     await rebindPage(page.id, "acct_retry_cold_after");
@@ -1807,7 +1811,10 @@ describe("OFAPI link-stats series: a window is read again until it has a result"
     const warmed = await runOfapiLinkStatsReconcile(appContext, {
       now: at(60.5), boss, target: { trigger: "retry", windowAt: WINDOW, retry: 2 },
     });
-    expect(warmed.queuedRetry).toBeNull();
+    expect(warmed.pages[0]!.kinds.map((kind) => [kind.linkKind, kind.status])).toEqual([["tracking", "partial"]]);
+    expect((await runOfapiLinkStatsReconcile(appContext, {
+      now: at(180.5), boss, target: { trigger: "retry", windowAt: WINDOW, retry: 3 },
+    })).pages).toEqual([]);
     expect((await seriesOf(page.id, "tracking")).map((run) => [run.attempt, run.status, run.reason])).toEqual([
       [1, "complete", null],
       [1, "partial", "empty_unverified"],
@@ -1876,16 +1883,20 @@ describe("OFAPI link-stats series: a window is read again until it has a result"
       now: at(15.5), boss, target: { trigger: "retry", windowAt: WINDOW, retry: 1 },
     });
     expect(retried.pages).toEqual([expect.objectContaining({ pageLabel: page.label, status: "written" })]);
-    expect(retried.queuedRetry).toBeNull();
-    expect(boss.sent).toHaveLength(1);
     expect((await seriesOf(page.id, "trial")).map((run) => [run.attempt, run.status])).toEqual([
       [1, "failed"],
       [2, "complete"],
     ]);
+    // The next retry was persisted before this one read; it finds nothing left.
+    expect(retried.queuedRetry).toMatchObject({ retry: 2 });
+    const idle = await runOfapiLinkStatsReconcile(appContext, {
+      now: at(60.5), boss, target: { trigger: "retry", windowAt: WINDOW, retry: 2 },
+    });
+    expect(idle.pages).toEqual([]);
     expect((await listNotificationIncidents(appContext.db)).map((incident) => incident.status)).toEqual(["resolved"]);
   });
 
-  it("a clean pass queues no retry, and a targeted pass with nothing to do reads nothing", async (context) => {
+  it("a clean pass still persists its retry, and a retry with nothing to do reads nothing", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -1896,16 +1907,16 @@ describe("OFAPI link-stats series: a window is read again until it has a result"
     appContext = { ...appContext, ofapi: lists.client };
     const boss = fakeBoss();
 
+    // The retry is persisted before the pass reads anything, so it exists
+    // whatever the pass then finds.
     const scheduled = await runOfapiLinkStatsReconcile(appContext, { now: at(0.5), boss });
-    expect(scheduled.queuedRetry).toBeNull();
-    expect(boss.sent).toEqual([]);
+    expect(scheduled.queuedRetry).toMatchObject({ retry: 1 });
 
-    // A retry that was queued by an earlier, failed pass of the window and
-    // arrives after the window got its results.
-    const stale = await runOfapiLinkStatsReconcile(appContext, {
+    // It runs, finds every pair with a result, and reads nothing.
+    const idle = await runOfapiLinkStatsReconcile(appContext, {
       now: at(15.5), boss, target: { trigger: "retry", windowAt: WINDOW, retry: 1 },
     });
-    expect(stale).toEqual({ pages: [], queuedRetry: null });
+    expect(idle.pages).toEqual([]);
     expect(lists.listStoredTrackingLinks).toHaveBeenCalledTimes(1);
     expect(await listLinkStatRuns(appContext.db, { platformAccountId: page.id })).toHaveLength(2);
   });
@@ -1949,7 +1960,7 @@ describe("OFAPI link-stats series: a window is read again until it has a result"
     expect(boss.sent).toEqual([]);
   });
 
-  it("a page without a mapping or with a dead session is not retried; a pair with no row at all is", async (context) => {
+  it("a page without a mapping is not retried; a dead session and a pair with no row at all are", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -1965,10 +1976,9 @@ describe("OFAPI link-stats series: a window is read again until it has a result"
     appContext = { ...appContext, ofapi: lists.client };
     const boss = fakeBoss();
 
-    // Only pages the pass cannot read: their skipped rows start no retries.
+    // Only pages the pass cannot read.
     const alone = await runOfapiLinkStatsReconcile(appContext, { now: at(0.5), boss });
     expect(alone.pages.map((entry) => entry.reason).sort()).toEqual(["page_auth_dead", "page_unmapped"]);
-    expect(alone.queuedRetry).toBeNull();
 
     // A readable page with a failing kind joins the fleet; its first pass in
     // the window queues the retry.
@@ -1984,23 +1994,116 @@ describe("OFAPI link-stats series: a window is read again until it has a result"
     expect(Object.fromEntries(retried.pages.map((entry) => [
       entry.pageLabel, entry.kinds.map((kind) => kind.linkKind),
     ]))).toEqual({
+      // Still dead: looked at again, skipped again, no request.
+      [authDead.label]: [],
       [failing.label]: ["trial"],
       [newcomer.label]: ["tracking", "trial"],
     });
+    expect(retried.pages.find((entry) => entry.pageLabel === authDead.label))
+      .toMatchObject({ status: "skipped", reason: "page_auth_dead" });
     expect((await seriesOf(newcomer.id, "tracking")).map((run) => [run.attempt, run.status])).toEqual([
       [1, "complete"],
     ]);
     expect((await seriesOf(newcomer.id, "trial")).map((run) => [run.attempt, run.status])).toEqual([
       [1, "failed"],
     ]);
-    // The two pages the pass cannot read got nothing new: two scheduled
-    // passes, two skipped rows per kind, no third from the retry.
-    for (const skipped of [unmapped, authDead]) {
-      expect((await seriesOf(skipped.id, "trial")).map((run) => [run.attempt, run.status])).toEqual([
-        [1, "skipped"],
-        [2, "skipped"],
+    // The unmapped page got nothing from the retry; the dead session got
+    // its third look.
+    expect((await seriesOf(unmapped.id, "trial")).map((run) => [run.attempt, run.status])).toEqual([
+      [1, "skipped"],
+      [2, "skipped"],
+    ]);
+    expect((await seriesOf(authDead.id, "trial")).map((run) => [run.attempt, run.status, run.reason])).toEqual([
+      [1, "skipped", "page_auth_dead"],
+      [2, "skipped", "page_auth_dead"],
+      [3, "skipped", "page_auth_dead"],
+    ]);
+    expect((lists.listStoredTrialLinks.mock.calls as unknown as Array<[unknown, string]>)
+      .some(([, accountId]) => accountId === "acct_retry_authdead")).toBe(false);
+  });
+
+  it("a session restored on the same account after the window's pass is read by the window's retry", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    // 09:45-like: the session is dead, the pass skips the page.
+    const page = await seedOfapiPage("retry-restored-of", "acct_retry_restored");
+    await testDb.pool.query(`update pages set ofapi_auth_status = 'authentication_failed' where id = $1`, [page.id]);
+    appContext = {
+      ...appContext,
+      ofapi: linksClient({
+        trackingByAccount: new Map([["acct_retry_restored", [trackingItem()]]]),
+        trialByAccount: new Map([["acct_retry_restored", [trialItem()]]]),
+      }),
+    };
+    const boss = fakeBoss();
+    const skipped = await runOfapiLinkStatsReconcile(appContext, { now: at(0.5), boss });
+    expect(skipped.pages[0]).toMatchObject({ status: "skipped", reason: "page_auth_dead" });
+    expect(skipped.queuedRetry).toMatchObject({ retry: 1 });
+
+    // 09:50-like: accounts.reconnected on the same acct_* — no rebind, no
+    // link run of its own. The window's retry picks the page up.
+    await testDb.pool.query(`update pages set ofapi_auth_status = 'reconnected' where id = $1`, [page.id]);
+    const retried = await runOfapiLinkStatsReconcile(appContext, {
+      now: at(15.5), boss, target: { trigger: "retry", windowAt: WINDOW, retry: 1 },
+    });
+    expect(retried.pages).toEqual([expect.objectContaining({ pageLabel: page.label, status: "written" })]);
+    for (const kind of ["tracking", "trial"] as const) {
+      expect((await seriesOf(page.id, kind)).map((run) => [run.attempt, run.status, run.reason])).toEqual([
+        [1, "skipped", "page_auth_dead"],
+        [2, "complete", null],
       ]);
     }
+  });
+
+  it("a pass that dies before it reads anything has already persisted the window's retry", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    await seedOfapiPage("retry-crash-of", "acct_retry_crash");
+    const boss = fakeBoss();
+    // The first database call of the pass — listing the fleet — fails, as a
+    // transient error or a crash would end it.
+    const db = appContext.db;
+    let calls = 0;
+    const failingDb = new Proxy(db, {
+      get(target, property, receiver) {
+        if (property === "execute") {
+          return (...args: unknown[]) => {
+            calls += 1;
+            if (calls === 1) {
+              return Promise.reject(new Error("connection terminated unexpectedly"));
+            }
+            return (target.execute as (...inner: unknown[]) => unknown).apply(target, args);
+          };
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    await expect(runOfapiLinkStatsReconcile({ ...appContext, db: failingDb }, { now: at(0.5), boss }))
+      .rejects.toThrow("connection terminated unexpectedly");
+    expect(boss.sent).toEqual([{
+      queue: OFAPI_LINK_STATS_RETRY_QUEUE,
+      data: { trigger: "retry", windowAt: WINDOW.toISOString(), retry: 1 },
+      options: { startAfter: 15 * 60, singletonKey: `retry:${WINDOW.toISOString()}:1`, retryLimit: 0 },
+    }]);
+
+    // The retry then reads the window, which has nothing yet.
+    appContext = {
+      ...appContext,
+      ofapi: linksClient({
+        trackingByAccount: new Map([["acct_retry_crash", [trackingItem()]]]),
+        trialByAccount: new Map([["acct_retry_crash", [trialItem()]]]),
+      }),
+    };
+    const retried = await runOfapiLinkStatsReconcile(appContext, {
+      now: at(15.5), boss, target: { trigger: "retry", windowAt: WINDOW, retry: 1 },
+    });
+    expect(retried.pages).toEqual([expect.objectContaining({ status: "written" })]);
   });
 
   it("a targeted pass that succeeds does not resolve the incident while another readable pair still has no result", async (context) => {
@@ -2151,8 +2254,9 @@ describe("OFAPI link-stats series: the run after a rebind", () => {
       return;
     }
 
-    // 09:45-like: the window's pass finds the session dead and skips the page
-    // (and the window's retries leave page_auth_dead alone).
+    // 09:45-like: the window's pass finds the session dead and skips the page.
+    // The window's retries look at it again, but a rebind applied through the
+    // CLI must not depend on them (they may be used up, or the window late).
     const page = await seedOfapiPage("rebind-cli-of", "acct_rebind_cli_old");
     await testDb.pool.query(`update pages set ofapi_auth_status = 'authentication_failed' where id = $1`, [page.id]);
     appContext = {
@@ -2165,7 +2269,6 @@ describe("OFAPI link-stats series: the run after a rebind", () => {
     const fake = fakeBoss();
     const skipped = await runOfapiLinkStatsReconcile(appContext, { now: at(0.5), boss: fake });
     expect(skipped.pages[0]).toMatchObject({ status: "skipped", reason: "page_auth_dead" });
-    expect(skipped.queuedRetry).toBeNull();
 
     // A dry run, or nothing applied: no connection is even opened.
     let opened = 0;
@@ -2267,9 +2370,9 @@ describe("OFAPI link-stats series: the run after a rebind", () => {
 
     // The window has the page's results now: a second run reads nothing.
     calls.length = 0;
-    expect(await runOfapiLinkStatsReconcile(appContext, {
+    expect((await runOfapiLinkStatsReconcile(appContext, {
       now: at(30), boss, target: { trigger: "rebind", pageId: rebound.id },
-    })).toEqual({ pages: [], queuedRetry: null });
+    })).pages).toEqual([]);
     expect(calls).toEqual([]);
   });
 
