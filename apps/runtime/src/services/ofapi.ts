@@ -334,6 +334,14 @@ export class OfapiCreditAccountingUnavailableError extends OfapiApiError {
  * _meta get no row — reconciliation absorbs any hidden charge and empirically
  * answers whether errors are billed (plan recommendation 1).
  */
+/** The stored tracking/trial link lists are free at the vendor ("Free
+ * endpoint", `_credits.used: 0` on every production answer). A 2xx answer
+ * that states no charge is booked at 0, not at the 1-credit estimate of an
+ * ordinary read: the link series' quota counts what the lane was charged,
+ * and fifty unstated answers must not stop a free series until midnight. A
+ * charge the vendor does state is still booked as stated. */
+export const OFAPI_STORED_LINK_LIST_FALLBACK_CREDITS = 0;
+
 export function resolveOfapiCreditSpend(input: {
   httpStatus: number;
   meta: OfapiResponseMeta | null;
@@ -1041,6 +1049,11 @@ export function createOfapiClient(input: {
     timeoutMs?: number;
     // Caller override of the transport/HTTP retry budget (0 = single attempt).
     retries?: number;
+    /** What a 2xx answer that states no charge (`_meta` missing or without
+     * `_credits.used`, a body that is not JSON) is booked at. Default: the
+     * 1-credit estimate of an ordinary read. A charge the vendor states is
+     * always booked as stated. */
+    fallbackCredits?: number;
   }): Promise<OfapiListPage> {
     const query = new URLSearchParams();
     for (const [key, value] of Object.entries(options.query)) {
@@ -1158,6 +1171,7 @@ export function createOfapiClient(input: {
           pageId: options.context.pageId ?? null,
           attemptNumber: executionContext.attemptNumber,
           budgetScope: options.context.creditBudgetScope ?? null,
+          ...(options.fallbackCredits === undefined ? {} : { fallbackCredits: options.fallbackCredits }),
         });
 
         if (creditSpendRecorded === false) {
@@ -2341,6 +2355,7 @@ export function createOfapiClient(input: {
       const limit = Math.min(params.limit ?? 1000, 1000);
       return observedListRequest({
         context,
+        fallbackCredits: OFAPI_STORED_LINK_LIST_FALLBACK_CREDITS,
         operation: "ofapi_stored_tracking_links",
         endpointTemplate: "/:accountId/stored/tracking-links",
         pathname: `/${encodeURIComponent(accountId)}/stored/tracking-links`,
@@ -2357,6 +2372,7 @@ export function createOfapiClient(input: {
       const limit = Math.min(params.limit ?? 1000, 1000);
       return observedListRequest({
         context,
+        fallbackCredits: OFAPI_STORED_LINK_LIST_FALLBACK_CREDITS,
         operation: "ofapi_stored_trial_links",
         endpointTemplate: "/:accountId/stored/trial-links",
         pathname: `/${encodeURIComponent(accountId)}/stored/trial-links`,

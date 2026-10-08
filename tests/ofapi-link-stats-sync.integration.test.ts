@@ -1,4 +1,5 @@
 import { readdirSync, readFileSync } from "node:fs";
+import { createServer, type Server } from "node:http";
 
 import { PgBoss } from "pg-boss";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -31,12 +32,18 @@ import {
   nextOfapiLinkStatsWindowAt,
   ofapiLinkStatsWindowAt,
 } from "../apps/runtime/src/services/ofapi-link-stats-windows.ts";
-import type { OfapiClient, OfapiListPage } from "../apps/runtime/src/services/ofapi.ts";
+import { createOfapiCreditSpendSink } from "../apps/runtime/src/services/ofapi-credits.ts";
+import {
+  createOfapiClient,
+  type OfapiClient,
+  type OfapiListPage,
+} from "../apps/runtime/src/services/ofapi.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
   type StartedTestDatabase,
 } from "./helpers/db.ts";
+import { listenOnLoopback } from "./helpers/network.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 
 let testDb: StartedTestDatabase | null = null;
@@ -1726,6 +1733,68 @@ describe("OFAPI link-stats series: a window is read again until it has a result"
     expect(lists.listStoredTrialLinks).toHaveBeenCalledTimes(4);
   });
 
+  it("after a rebind a cold cache is read again; a kind that never had a link is not", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedOfapiPage("retry-cold-of", "acct_retry_cold_before");
+    const inventory = {
+      trackingByAccount: new Map<string, Record<string, unknown>[]>([["acct_retry_cold_before", [trackingItem()]]]),
+      // Never a trial link under any account (lora-of's trial links).
+      trialByAccount: new Map<string, Record<string, unknown>[]>(),
+    };
+    const calls: string[] = [];
+    const client = linksClient(inventory);
+    appContext = {
+      ...appContext,
+      ofapi: {
+        async listStoredTrackingLinks(context_: unknown, accountId: string, params: { offset?: number }) {
+          calls.push(`tracking:${accountId}`);
+          return client.listStoredTrackingLinks!(context_ as never, accountId, params);
+        },
+        async listStoredTrialLinks(context_: unknown, accountId: string, params: { offset?: number }) {
+          calls.push(`trial:${accountId}`);
+          return client.listStoredTrialLinks!(context_ as never, accountId, params);
+        },
+      } as unknown as OfapiClient,
+    };
+    const boss = fakeBoss();
+    const previous = ofapiLinkStatsWindowAt(new Date(WINDOW.getTime() - 1));
+    await runOfapiLinkStatsReconcile(appContext, { now: new Date(previous.getTime() + 30_000), boss });
+    expect(boss.sent).toEqual([]);
+
+    // Rebound; the new account's cache is cold for both kinds.
+    await rebindPage(page.id, "acct_retry_cold_after");
+    calls.length = 0;
+    const scheduled = await runOfapiLinkStatsReconcile(appContext, { now: at(0.5), boss });
+    expect(scheduled.queuedRetry).toMatchObject({ windowAt: WINDOW, retry: 1 });
+    const retried = await runOfapiLinkStatsReconcile(appContext, {
+      now: at(15.5), boss, target: { trigger: "retry", windowAt: WINDOW, retry: 1 },
+    });
+    // Only tracking — it had links before, so its empty read is no result.
+    expect(retried.pages[0]!.kinds.map((kind) => kind.linkKind)).toEqual(["tracking"]);
+    expect(calls).toEqual([
+      "tracking:acct_retry_cold_after",
+      "trial:acct_retry_cold_after",
+      "tracking:acct_retry_cold_after",
+    ]);
+
+    // The cache warms up on the next retry: the window gets its point.
+    inventory.trackingByAccount.set("acct_retry_cold_after", [trackingItem()]);
+    const warmed = await runOfapiLinkStatsReconcile(appContext, {
+      now: at(60.5), boss, target: { trigger: "retry", windowAt: WINDOW, retry: 2 },
+    });
+    expect(warmed.queuedRetry).toBeNull();
+    expect((await seriesOf(page.id, "tracking")).map((run) => [run.attempt, run.status, run.reason])).toEqual([
+      [1, "complete", null],
+      [1, "partial", "empty_unverified"],
+      [2, "partial", "empty_unverified"],
+      [3, "partial", "binding_changed"],
+    ]);
+  });
+
   it("a retry that lands the result ends the retries and resolves the incident", async (context) => {
     if (!testDb) {
       context.skip();
@@ -2204,6 +2273,93 @@ describe("OFAPI link-stats series: free reads stand outside the money guards", (
       now: new Date(nextOfapiLinkStatsWindowAt(windowAt).getTime() + 30_000),
     });
     expect(healthy.pages).toEqual([expect.objectContaining({ pageLabel: seeded.label, status: "written" })]);
+  });
+
+  it("through the real client and credit sink, an answer that states no charge costs nothing; a stated charge is booked and stops the lane", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    appContext = createTestAppContext(testDb, {
+      ofapiLinkStatsReconcileEnabled: true,
+      ofapiCreditLedgerEnabled: true,
+      ofapiLinkStatsDailyCreditBudget: 2,
+    });
+    const seeded = await seedOfapiPage("free-real-client-of", "acct_free_real");
+    // What the vendor answers, per request: a list without any `_meta`, a
+    // body that is not JSON, or a list whose `_meta` states a charge.
+    let mode: "unstated" | "not_json" | "charged" = "unstated";
+    let requests = 0;
+    const server: Server = createServer((request, response) => {
+      requests += 1;
+      const tracking = (request.url ?? "").includes("/stored/tracking-links");
+      response.writeHead(200, { "content-type": "application/json" });
+      if (mode === "not_json") {
+        response.end("<html>upstream hiccup</html>");
+        return;
+      }
+      response.end(JSON.stringify({
+        data: { list: [tracking ? trackingItem() : trialItem()], hasMore: false },
+        ...(mode === "charged" ? { _meta: { _credits: { used: 1, balance: 900 } } } : {}),
+      }));
+    });
+    const address = await listenOnLoopback(server, "OFAPI stored link lists");
+    if (!address) {
+      server.close();
+      context.skip();
+      return;
+    }
+    try {
+      appContext = {
+        ...appContext,
+        ofapi: createOfapiClient({
+          baseUrl: `http://${address.host}:${address.port}`,
+          apiKey: "test-key",
+          restDelayMs: 0,
+          onCreditSpend: createOfapiCreditSpendSink(appContext),
+        }),
+      };
+      const ledger = async () => (await testDb!.pool.query<{ operation: string; credits: number; estimated: boolean }>(
+        `select operation, credits, estimated from ofapi_credit_ledger order by id`,
+      )).rows;
+
+      // Five passes of unstated answers and one of non-JSON bodies, against
+      // a quota of 2: at the ordinary 1-credit estimate the lane would have
+      // stopped after the first pass.
+      for (let pass = 0; pass < 5; pass += 1) {
+        const result = await runOfapiLinkStatsReconcile(appContext);
+        expect(result.pages[0]).toMatchObject({ pageLabel: seeded.label, status: "written" });
+      }
+      mode = "not_json";
+      const garbled = await runOfapiLinkStatsReconcile(appContext);
+      expect(garbled.pages[0]).toMatchObject({ status: "failed" });
+      expect(requests).toBe(12);
+      expect(await dayCounters()).toEqual({ link_stats: 0, backfill: 0, global: 0 });
+      const booked = await ledger();
+      expect(booked).toHaveLength(12);
+      // Booked, at zero: an estimate of a free read, not a charge.
+      expect(booked.every((row) => row.credits === 0 && row.estimated)).toBe(true);
+      expect(new Set(booked.map((row) => row.operation))).toEqual(
+        new Set(["ofapi_stored_tracking_links", "ofapi_stored_trial_links"]),
+      );
+
+      // The vendor starts charging and says so: 1 + 1 credits reach the
+      // quota of 2, and the next pass stops before its first request.
+      mode = "charged";
+      const charged = await runOfapiLinkStatsReconcile(appContext);
+      expect(charged.pages[0]).toMatchObject({ status: "written" });
+      expect(await dayCounters()).toEqual({ link_stats: 2, backfill: 0, global: 2 });
+      expect((await ledger()).slice(-2)).toEqual([
+        { operation: "ofapi_stored_tracking_links", credits: 1, estimated: false },
+        { operation: "ofapi_stored_trial_links", credits: 1, estimated: false },
+      ]);
+      const stopped = await runOfapiLinkStatsReconcile(appContext);
+      expect(stopped.pages[0]).toMatchObject({ status: "truncated", reason: "ofapi_daily_credit_budget" });
+      expect(requests).toBe(14);
+    } finally {
+      server.close();
+    }
   });
 
   it("a charge the vendor reports is counted, and the lane stops at its quota", async (context) => {
