@@ -357,7 +357,7 @@ their clean window (`routes`) and the open latches (`openLatches`), and the glob
 | | `ws_auth_refused` | the socket's auth frame was refused | new credentials; the socket reconnects when they change |
 | | `protocol_changed` | decode debt above 1 % of the last 10 minutes' receipts | the decoder needs a code change; the raw frames are kept |
 | | `quarantined` | any quarantined work | [Quarantine](#quarantine) |
-| 3 `freshness` | `message_unconfirmed` | a fan message the socket showed, not confirmed by REST for 15 minutes | `sync why --resource dm-messages.head --subject <group id>` |
+| 3 `freshness` | `message_unconfirmed` | a fan message the socket showed, not confirmed by REST for 15 minutes and not deferred ([The live overlay](#the-socket-and-its-repair)) | `sync why --resource dm-messages.head --subject <group id>` |
 | | `money_not_in_ledger` | a money frame not in the ledger for 5 minutes | `sync why --resource transactions.head` |
 | | `urgent_waiting` | urgent work waiting 2 minutes past its due time, or past the end of its own subject breaker when that is later, with no pause, hold, file breaker or route hold to explain it | `sync work list`, `sync why` |
 | 4 `stuck` | `request_stalled` | a history request with runnable work and no read for 30 minutes | [History requests](#history-requests) |
@@ -470,10 +470,43 @@ select page_id, mismatch_fields, count(*)
 ```
 
 `confirm_outcome`: `match`, `mismatch` (with `mismatch_fields`: `text`, `sender`, `time`, `group`, `reply`),
-`not_found` (a REST read covered the message's place without it, or no REST copy came within 24 hours: REST wins
-and the row is hidden), `excluded` (the chat is excluded from message sync). The golden signals of
-`GET /api/v1/ops/metrics`: `dm_visible_lag` (acceptance p95 at most 5 s), `ws_live_pending_age`, `dm_live_parity_bp`
-(acceptance 9 900 or more), `ws_decode_debt`.
+`not_found` (a REST read covered the message's place without it: REST wins and the row is hidden; only the DM apply
+writes it), `excluded` (the chat is excluded from message sync). **24 hours without a REST copy is no verdict.** The
+parity pass defers the row instead: `confirm_wait_reason = 'age_without_rest'`, `confirmed_at` and `confirm_outcome`
+stay null, `confirm_due_at` becomes null (no next look). A deferred row stays visible to the chatters and the AI
+context, alert 3 does not count it, and a later REST read of the chat still settles it (a copy confirms it, a read
+that covers its place without it gives `not_found`) and clears the reason. A chat Fansly stopped serving to the page
+(every read an error) keeps its socket messages this way. `chat_unavailable` is the same deferral for a chat whose
+unavailability the engine has established (a later release). A reason on a row with `confirmed_at` means nothing.
+
+```sql
+select page_id, confirm_wait_reason, count(*), min(first_visible_at)
+  from dm_live_messages
+ where confirmed_at is null and confirm_wait_reason is not null and deleted_at is null
+ group by 1, 2
+ order by 1, 2;
+```
+
+The golden signals of `GET /api/v1/ops/metrics`: `dm_visible_lag` (acceptance p95 at most 5 s), `ws_live_pending_age`,
+`dm_live_parity_bp` (acceptance 9 900 or more), `ws_decode_debt`, and the engine's `dm_live_not_found` (the DM apply's
+`not_found` verdicts of the hour).
+
+**Rollback across the deferral** (migration `*_dm_live_confirm_wait_reason.sql`). The image before it never names
+`confirm_wait_reason`: its parity pass takes only rows with a next look and its alert 3 needs one, so it never looks
+at a deferred row nor counts it, and its readers show it (they hide `not_found` only). Its DM apply still confirms a
+deferred row and leaves the reason behind, which is harmless. But it gives its own 24-hour `not_found` to the
+messages that arrive while it runs, and those rows stay hidden after the forward deploy: the migration's backfill ran
+once. To list them after a rollback window (`\set from '…'` and `\set to '…'`: when the previous image ran):
+
+```sql
+select page_id, platform_message_id, platform_conversation_id, first_visible_at, confirmed_at
+  from dm_live_messages
+ where confirm_outcome = 'not_found' and confirm_source is null
+   and confirmed_at >= first_visible_at + interval '24 hours'
+   and confirmed_at between :'from' and :'to';
+```
+
+Deferring them again is a write: the owner's decision.
 
 **Deletions.** A Fansly deletion frame marks the copies Hub already holds (`deleted_at` on `message_archive` and on
 the page's hot rows); text, attachments and tips stay, nothing is inserted, and no later REST read clears a mark.

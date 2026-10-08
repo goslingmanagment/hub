@@ -313,6 +313,13 @@ describe("the alert evaluator (design §9.6)", () => {
     await seedWsThread({ db: db(), pool: testDb.pool }, { pageId: page.pageId, groupId: "300000000000000002", fanRef: "200000000000000002", excluded: true });
     await liveMessage("910000000000000101", "300000000000000002");
     expect((await pass()).opened).toEqual([]);
+    // Deferred (the parity window passed without a REST copy): no longer awaited.
+    await liveMessage("910000000000000103", GROUP, 25 * 60);
+    await testDb.pool.query(
+      `update dm_live_messages set confirm_due_at = null, confirm_wait_reason = 'age_without_rest'
+        where platform_message_id = '910000000000000103'`,
+    );
+    expect((await pass()).opened).toEqual([]);
     await liveMessage("910000000000000102", GROUP);
     expect((await pass()).opened).toEqual([{ pageId: page.pageId, subKey: "freshness", detail: "message_unconfirmed" }]);
   });

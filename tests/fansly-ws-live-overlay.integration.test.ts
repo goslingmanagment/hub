@@ -397,7 +397,7 @@ describe("Fansly live overlay apply (plan §7.2)", () => {
 });
 
 describe("passive parity and golden signals", () => {
-  it("confirms against the legacy stores, field by field, and reports not_found and excluded chats apart", async () => {
+  it("confirms against the legacy stores, field by field, defers a row the window passed without a copy, and reports excluded chats apart", async () => {
     const f = await fixture();
     const fans = await upsertFans(f.app.db, [FAN, OTHER_FAN].map((platformUserId) => ({ platform: "fansly" as const, platformUserId })));
     const fanId = (ref: string) => fans.find((fan) => fan.platformUserId === ref)!.id;
@@ -423,17 +423,24 @@ describe("passive parity and golden signals", () => {
       where platform_message_id in ($1, $2)`, [missing.id, excluded.id]);
 
     expect(await confirmDmLiveMessages(f.app.db, { limit: 10 }))
-      .toEqual({ checked: 5, match: 1, mismatch: 1, notFound: 1, excluded: 1, rescheduled: 1 });
+      .toEqual({ checked: 5, match: 1, mismatch: 1, excluded: 1, deferred: 1, rescheduled: 1 });
     const verdicts = await query(`select platform_message_id as id, confirm_outcome, confirm_source, mismatch_fields,
-      confirmed_at is not null as confirmed, confirm_due_at > now() as later from dm_live_messages`);
+      confirm_wait_reason, confirmed_at is not null as confirmed, confirm_due_at > now() as later,
+      confirm_due_at is null as no_look from dm_live_messages`);
     const byId = new Map(verdicts.map((row) => [row.id, row]));
-    expect(byId.get(hot.id)).toMatchObject({ confirm_outcome: "match", confirm_source: "page_dm_messages", confirmed: true });
+    expect(byId.get(hot.id)).toMatchObject({ confirm_outcome: "match", confirm_source: "page_dm_messages", confirmed: true,
+      confirm_wait_reason: null });
     expect(byId.get(archived.id)).toMatchObject({ confirm_outcome: "mismatch", confirm_source: "message_archive",
       mismatch_fields: ["text"] });
-    expect(byId.get(missing.id)).toMatchObject({ confirm_outcome: "not_found", confirm_source: null, confirmed: true });
-    expect(byId.get(excluded.id)).toMatchObject({ confirm_outcome: "excluded", confirmed: true });
-    expect(byId.get(young.id)).toMatchObject({ confirm_outcome: null, confirmed: false, later: true });
+    // The window is no evidence the message is gone: no verdict, no next
+    // look, a wait reason. Only a REST read settles it now.
+    expect(byId.get(missing.id)).toMatchObject({ confirm_outcome: null, confirm_source: null, confirmed: false,
+      no_look: true, confirm_wait_reason: "age_without_rest" });
+    expect(byId.get(excluded.id)).toMatchObject({ confirm_outcome: "excluded", confirmed: true, confirm_wait_reason: null });
+    expect(byId.get(young.id)).toMatchObject({ confirm_outcome: null, confirmed: false, later: true, confirm_wait_reason: null });
+    // The deferred row is never looked at again; nothing here wrote `not_found`.
     expect((await confirmDmLiveMessages(f.app.db, { limit: 10 })).checked).toBe(0);
+    expect(await count("dm_live_messages", "confirm_outcome = 'not_found'")).toBe(0);
 
     // One debt receipt and one receipt nobody applied for a minute.
     const { senderId: _drop, ...noSender } = message();

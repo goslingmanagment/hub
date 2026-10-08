@@ -1960,6 +1960,10 @@ export const dmLiveMessages = pgTable(
     confirmedAt: timestamp("confirmed_at", { withTimezone: true }),
     confirmSource: text("confirm_source").$type<"page_dm_messages" | "message_archive">(),
     confirmOutcome: text("confirm_outcome").$type<"match" | "mismatch" | "not_found" | "excluded">(),
+    // Why an unconfirmed row is no longer awaited (no next look): the parity
+    // window passed without a REST copy, or the chat is unavailable to the
+    // page. Meaningless once confirmed_at is set.
+    confirmWaitReason: text("confirm_wait_reason").$type<"age_without_rest" | "chat_unavailable">(),
     mismatchFields: text("mismatch_fields").array(),
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
     deleteObservationId: bigint("delete_observation_id", { mode: "number" }),

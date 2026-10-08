@@ -3,6 +3,8 @@ import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import {
+  DM_LIVE_CONFIRM_WAIT_REASONS,
+  dmLiveMessages,
   FANSLY_SEND_GUARD_OWNER_ENGINES,
   notificationIncidentKindEnum,
   HISTORY_DEPTH_KINDS,
@@ -938,5 +940,73 @@ describe("sync_pages_drop_old_hold_columns.sql (step 4, S4-33: the old hold colu
     expect(header).toContain("`verify_running_images_run_without_old_hold_columns`");
     const deploy = readFileSync("scripts/deploy-production.sh", "utf8");
     expect(deploy).toMatch(/^verify_running_images_run_without_old_hold_columns\(\) \{$/m);
+  });
+});
+
+describe("dm_live_confirm_wait_reason.sql (arena \"vanished chat\", R1: a socket message no longer vanishes after a day)", () => {
+  // Found by its name, not its number: the number is the next free one at merge.
+  const found = readdirSync("packages/db/migrations").filter((file) => file.endsWith("_dm_live_confirm_wait_reason.sql"));
+  const migration = found[0] ?? "";
+  const text = found.length === 1 ? readFileSync(`packages/db/migrations/${migration}`, "utf8") : "";
+  const sql = stripComments(text);
+  const statements = topLevelStatements(sql);
+
+  it("exists once, after the overlay (0226) and the attempt journal (0228) it reads", () => {
+    expect(found).toHaveLength(1);
+    expect(migration > "0228_sync_engine_core.sql").toBe(true);
+    // Transactional (the runner's own transaction): `set local` needs one.
+    expect(text.startsWith("-- agency-hub:no-transaction")).toBe(false);
+  });
+
+  it("adds one nullable column without a default, its CHECK (not valid, then validated), comments and one data update", () => {
+    expect(statements).toEqual([
+      "set local lock_timeout = '5s'",
+      "alter table dm_live_messages add column if not exists confirm_wait_reason text",
+      "do $$…$$",
+      "alter table dm_live_messages validate constraint dm_live_messages_confirm_wait_reason_check",
+      expect.stringMatching(/^comment on column dm_live_messages\.confirm_wait_reason is 'Why an unconfirmed row is no longer awaited /),
+      expect.stringMatching(/^comment on column dm_live_messages\.confirm_due_at is '/),
+      expect.stringMatching(/^comment on column dm_live_messages\.confirm_outcome is '/),
+      expect.stringMatching(/^update dm_live_messages m set /),
+    ]);
+    expect(sql).toContain("check (confirm_wait_reason in ('age_without_rest', 'chat_unavailable')) not valid;");
+    expect(sql).not.toMatch(/\b(drop|rename|truncate|delete|insert|grant|default)\b/i);
+    // No pair CHECK with confirmed_at: the previous image confirms a row
+    // without naming the column, which such a CHECK would refuse.
+    expect(sql).not.toMatch(/check \([^)]*confirmed_at/);
+  });
+
+  it("admits exactly the wait reasons the repository has", () => {
+    expect(checkList(sql.replace(/\s+/g, " "), "dm_live_messages_confirm_wait_reason_check")).toEqual([...DM_LIVE_CONFIRM_WAIT_REASONS]);
+  });
+
+  it("defers the timer's past not_found verdicts only: no source, the 24-hour window, no applied read of the chat in between", () => {
+    const update = statements.at(-1)!;
+    expect(update).toBe([
+      "update dm_live_messages m set confirmed_at = null, confirm_outcome = null, confirm_due_at = null,",
+      "confirm_wait_reason = 'age_without_rest', updated_at = clock_timestamp()",
+      "where m.confirm_outcome = 'not_found' and m.confirm_source is null",
+      "and m.confirmed_at >= m.first_visible_at + interval '24 hours'",
+      "and not exists ( select 1 from sync_attempts a where a.page_id = m.page_id and not a.shadow",
+      "and a.operation = 'messages.page' and a.subject = m.platform_conversation_id and a.apply_state = 'applied'",
+      "and a.sent_at between m.first_visible_at and m.confirmed_at )",
+    ].join(" "));
+  });
+
+  it("is mirrored in drizzle", () => {
+    const columns = dmLiveMessages as unknown as Record<string, { name?: unknown }>;
+    expect(columns.confirmWaitReason?.name).toBe("confirm_wait_reason");
+  });
+
+  it("allows application rollback: the previous image never looks at, counts or hides a deferred row", () => {
+    expect(rollbackCompatible()).toContain(`"${migration}"`);
+    // What the entry rests on, in the readers of this build that the previous
+    // image shares: the parity pass takes due rows only, alert 3 needs a next
+    // look, and the readers hide `not_found` only.
+    // tests/sync-live-verdict-deferred.integration.test.ts runs those
+    // statements of the previous image on a deferred row.
+    const live = readFileSync("packages/db/src/repositories/sync/live-messages.ts", "utf8");
+    expect(live).toContain("where m.confirmed_at is null and m.confirm_due_at <= clock_timestamp()");
+    expect(live).toContain("and m.confirm_outcome is distinct from 'not_found'");
   });
 });

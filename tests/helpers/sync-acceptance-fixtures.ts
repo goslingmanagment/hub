@@ -413,6 +413,16 @@ async function seedHealthyPage(db: Database, pool: Pool, label: string, liveAt: 
        from generate_series(1, 12) as n`,
     [pageId, liveAt],
   );
+  // A fan message deferred without a REST copy (`confirm_wait_reason`, no
+  // next look): no longer awaited, so neither the confirmation SLO nor
+  // `unconfirmed_over_15m` counts it.
+  await pool.query(
+    `insert into dm_live_messages (page_id, platform_message_id, platform_conversation_id, sender_platform_user_id, is_sent_by_page,
+                                   created_at, first_visible_at, confirm_wait_reason, decoder_version)
+     values ($1, '100', '1001', '2002', false,
+             $2::timestamptz + interval '13 minutes' - interval '1 second', $2::timestamptz + interval '13 minutes', 'age_without_rest', 1)`,
+    [pageId, liveAt],
+  );
   // Served works: 12 finds (3 s), 12 money heads (2 s), 2 deletions (1 s), a repair (20 s).
   await pool.query(
     `insert into sync_work (page_id, shadow, resource, subject, kind, class, state, first_demand_at, due_at, closed_at, close_reason)
