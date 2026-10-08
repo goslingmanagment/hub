@@ -1158,7 +1158,7 @@ describe("erasure drill (Stage 28 Task 4)", () => {
     expect(await count(`page_voice_profiles where platform_account_id = ${page.id}`)).toBe(0);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("page-scope erasure purges the page's link-stat runs and snapshots (0111) and its traffic link bindings (0254)", async (context) => {
+  it("page-scope erasure purges the page's link-stat runs and snapshots (0111) and its traffic link bindings (0255)", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -1193,7 +1193,7 @@ describe("erasure drill (Stage 28 Task 4)", () => {
     );
     expect(await count(`page_link_stat_snapshots where platform_account_id = ${page.id}`)).toBe(1);
     expect(await count(`page_link_stat_runs where platform_account_id = ${page.id}`)).toBe(1);
-    // Traffic sources (0254): the page's link → channel binding goes; the
+    // Traffic sources (0255): the page's link → channel binding goes; the
     // channel, its contractor and their term are agency configuration and stay.
     await testDb.pool.query(`
       with k as (insert into traffic_contractors (key, title) values ('erasure-vendor', 'Erasure vendor') returning id),

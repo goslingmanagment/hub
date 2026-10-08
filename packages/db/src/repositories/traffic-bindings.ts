@@ -7,7 +7,7 @@ import type { TrafficLinkKind, TrafficValidFromBasis } from "@agency_hub_core/sh
 import type { Database } from "../client.ts";
 import { insertAuditEvent } from "./auth.ts";
 
-// OnlyFans traffic sources (plan 2026-10-08, PR 11; tables 0254): "link →
+// OnlyFans traffic sources (plan 2026-10-08, PR 11; tables 0255): "link →
 // channel → contractor" with dates, written only by the owner's CLI.
 //
 // The invariant: at any instant a link has at most one channel and a channel

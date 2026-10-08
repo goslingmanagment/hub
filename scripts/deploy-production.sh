@@ -792,7 +792,7 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # traffic_link_bindings, whose RESTRICT FK to pages never fires (erasure
   # keeps the pages row), so a page erased by the previous image keeps its
   # bindings — link ids and channel keys, no fan data — until the next one.
-  "0254_traffic_link_bindings.sql"
+  "0255_traffic_link_bindings.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"
