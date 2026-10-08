@@ -1251,37 +1251,20 @@ export async function resolveWorkDemandMessageIds(
 
 /**
  * Close an OPEN row whose goal another step reached (a `dm-messages.head`
- * that confirmed past a `.catchup` target, design §5.4 step 10), or that no
- * step can serve (`satisfies: false`: the chat Fansly stopped serving to the
- * page, arena "vanished chat" §2.3 — its demand stays unserved, so a waiter
- * reads it closed unsatisfied). Never a running row (its step is in flight or
- * its apply deferred) nor a quarantined one; with `expectedRevision`, only a
- * row whose demand is still that revision (the compare-and-set of
- * `settleWork`: a demand that arrived since the caller read the row keeps it
- * open). The caller holds the row (`lockWorkRows`). False: not closed.
+ * that confirmed past a `.catchup` target, design §5.4 step 10). Never a
+ * running row (its step is in flight or its apply deferred) nor a
+ * quarantined one. The caller holds the row (`lockWorkRows`). False: not open.
  */
 export async function closeOpenWork(
   db: Database,
-  input: {
-    workId: number;
-    generation: bigint;
-    closeReason: string;
-    satisfies?: boolean;
-    result?: unknown;
-    expectedRevision?: number;
-  },
+  input: { workId: number; generation: bigint; closeReason: string },
 ): Promise<boolean> {
-  const satisfies = input.satisfies !== false;
-  const revision = input.expectedRevision === undefined
-    ? sql``
-    : sql`and demand_revision = ${input.expectedRevision}::bigint`;
   const result = await db.execute(sql`
     update sync_work
        set state = 'done',
            closed_at = clock_timestamp(),
            close_reason = ${input.closeReason},
-           applied_revision = case when ${satisfies} then demand_revision else applied_revision end,
-           result = case when ${input.result !== undefined} then ${nullableJsonParam(input.result)} else result end,
+           applied_revision = demand_revision,
            secret_params = null,
            waiting_reason = null,
            waiting_until = null,
@@ -1289,7 +1272,6 @@ export async function closeOpenWork(
            updated_at = clock_timestamp()
      where id = ${input.workId}
        and state = 'open'
-       ${revision}
   `);
   return (result.rowCount ?? 0) > 0;
 }

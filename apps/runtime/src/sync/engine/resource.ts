@@ -280,6 +280,13 @@ export interface CaptureOutcomeInput {
   /** The work's demand revision at admission (I11). */
   demandRevision: number;
   step: OutcomeStep;
+  /** The request reached the wire: an answer came back, or the transport
+   *  says a byte may have left (`sent` of a timeout or transport error). A
+   *  request that never left (a proxy tunnel that never came up) is no read. */
+  sent: boolean;
+  /** When the request was sent — the admission's instant when no send mark
+   *  was taken: never later than the actual send. */
+  sentAt: Date;
   /** The answer as this capture journaled it (null: nothing was journaled). */
   observation: { id: number; receivedAt: Date } | null;
 }

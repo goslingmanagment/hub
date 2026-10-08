@@ -1077,6 +1077,8 @@ export async function capture(
         attemptId: admission.attemptId,
         demandRevision: admission.demandRevision,
         step,
+        sent: outcome.kind === "response" || outcome.sent,
+        sentAt: armed.sentWall ?? admission.admittedAt,
         observation,
       }));
       if (hooked !== null) {

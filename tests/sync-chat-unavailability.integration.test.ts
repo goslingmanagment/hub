@@ -473,8 +473,9 @@ describe("five refusals of the chat's head establish the episode", () => {
       chatUnavailable: { episodeId: Number(episode!.id), refusals: 5 },
       unservedMessageIds: [msg(7)],
     });
-    // The chat's other rows that read its head.
-    expect(await workRow(pageId, CATCHUP_KEY)).toMatchObject({ state: "done", close_reason: "chat_unavailable" });
+    // The refused read settled only its own work: the catch-up decides by its
+    // own plan. The history walk closed when the hook refused its last fan.
+    expect(await workRow(pageId, CATCHUP_KEY)).toMatchObject({ state: "open" });
     const history = await workRow(pageId, HISTORY_KEY);
     expect(history).toMatchObject({ state: "done", close_reason: "chat_unavailable" });
     expect(Number(history!.applied_revision)).toBeLessThan(Number(history!.demand_revision));
@@ -486,6 +487,18 @@ describe("five refusals of the chat's head establish the episode", () => {
     const after = await getHistoryRequest({ db: db(), rawConfig: testConfig(testDb.connectionString) }, request.request.ref);
     expect(after.items[0]).toMatchObject({ state: "refused", refusal: "excluded", excludedReason: "chat_unavailable" });
     expect(after.request.state).toBe("done");
+
+    // The catch-up's time comes: its demand (7) is the one the episode
+    // answered, so it closes itself without a request.
+    await testDb.pool.query(
+      "update sync_work set due_at = now() - interval '1 second' where page_id = $1 and resource = $2",
+      [pageId, CATCHUP_KEY],
+    );
+    const own = await runLive(pageId, registry, refused, async () => (await workRow(pageId, CATCHUP_KEY))?.state === "done");
+    expect(own.requests).toHaveLength(0);
+    const catchup = await workRow(pageId, CATCHUP_KEY);
+    expect(catchup).toMatchObject({ close_reason: "chat_unavailable", result: { unservedMessageIds: [msg(7)] } });
+    expect(Number(catchup!.applied_revision)).toBeLessThan(Number(catchup!.demand_revision));
 
     // No background read (owner decision Р5): nothing is asked of the chat.
     const quiet = await runFor(pageId, registry, refused, 1_500);
@@ -523,7 +536,9 @@ describe("the end of an episode", () => {
     const pageId = await seedPage();
     const threadId = await seedThread(pageId);
     const registry = await registryFor(pageId);
-    await seedEpisode(threadId, { state: "established", refusals: 6, retryInMs: -1_000, handledListHeadId: msg(7) });
+    // The episode answered the head up to 6; the fan's message 7 (deferred)
+    // came after: its read, once the boundary passed, is served.
+    await seedEpisode(threadId, { state: "established", refusals: 6, retryInMs: -1_000, handledListHeadId: msg(6) });
     await liveOverlay(pageId, 7);
     await testDb.pool.query(
       "update dm_live_messages set confirm_wait_reason = 'chat_unavailable', confirm_due_at = null where page_id = $1",
@@ -683,7 +698,7 @@ describe("after establishment (owner decision Р5: no background reads)", () => 
     expect(quiet.requests).toHaveLength(0);
   });
 
-  it("a refusal of the catch-up read counts as the head's: it establishes the episode, closes the waiting head row, and the boundary is the daily step", async (context) => {
+  it("a refusal of the catch-up read counts as the head's: it establishes the episode, the boundary is the daily step, and the waiting head row closes itself", async (context) => {
     if (!testDb) return context.skip();
     const pageId = await seedPage();
     const threadId = await seedThread(pageId);
@@ -701,8 +716,17 @@ describe("after establishment (owner decision Р5: no background reads)", () => 
     // The catch-up's own breaker is one minute; the episode waits a day.
     expect(await workRow(pageId, CATCHUP_KEY)).toMatchObject({ state: "done", close_reason: "chat_unavailable", failure_count: 1 });
     expect(episode!.retry_not_before!.getTime()).toBeGreaterThan(Date.now() + BLOCKED_PROBE_EVERY_MS - 60_000);
-    expect(await workRow(pageId, HEAD_KEY)).toMatchObject({ state: "done", close_reason: "chat_unavailable" });
     expect((await liveRow(pageId, 7)).confirm_wait_reason).toBe("chat_unavailable");
+    // The head row is not the catch-up's to settle: it waits for its window,
+    // then its demand (7, answered) closes it without a request.
+    expect(await workRow(pageId, HEAD_KEY)).toMatchObject({ state: "open" });
+    await testDb.pool.query(
+      "update sync_work set due_at = now() - interval '1 second' where page_id = $1 and resource = $2",
+      [pageId, HEAD_KEY],
+    );
+    const own = await runLive(pageId, registry, refused, async () => (await workRow(pageId, HEAD_KEY))?.state === "done");
+    expect(own.requests).toHaveLength(0);
+    expect(await workRow(pageId, HEAD_KEY)).toMatchObject({ close_reason: "chat_unavailable", result: { unservedMessageIds: [msg(7)] } });
 
     // A new socket message: its head waits for the episode's boundary, not
     // for the head's own (none).
@@ -839,50 +863,87 @@ describe("the review of PR #490", () => {
     expect((await episodes(threadId))[0]).toMatchObject({ state: "established", ended_at: null });
   });
 
-  it("a neighbour row that took new demand while the refusal was captured stays open with it", async (context) => {
+  it("only a work row settles itself: a socket message landing while a catch-up's head read is in flight keeps the head row with its new demand, which reads once after the boundary", async (context) => {
     if (!testDb) return context.skip();
     const pageId = await seedPage();
     const threadId = await seedThread(pageId);
     const registry = await registryFor(pageId);
-    await seedEpisode(threadId, { state: "refusing", refusals: 4 });
+    const episodeId = await seedEpisode(threadId, { state: "refusing", refusals: 4 });
     await liveOverlay(pageId, 7);
     const head = await demand(pageId, HEAD_KEY, [msg(7)], { dueAt: new Date(Date.now() + HOUR) });
     await demand(pageId, CATCHUP_KEY, [msg(7)]);
-    // While the catch-up's read is out, the socket's next message bumps the
-    // head row — under a lock the capture meets, committed only after the
-    // capture read the row.
-    const router = await testDb.pool.connect();
-    let committed: Promise<void> | null = null;
-    try {
-      const { requests } = await runLive(pageId, registry, refused, async () => (await workRow(pageId, CATCHUP_KEY))?.state === "done", {
-        onHit: async () => {
-          await router.query("begin");
-          await router.query(
-            `update sync_work set demand_revision = demand_revision + 1,
-                    demand = sync_work_merge_demand(demand, $2::jsonb), updated_at = clock_timestamp()
-              where id = $1`,
-            [head.id, JSON.stringify({ messageIds: [msg(9)], txIds: [], reasons: ["ws:message_created"], overflow: false })],
-          );
-          committed = new Promise((resolve) => setTimeout(resolve, 500)).then(async () => {
-            await router.query("commit");
-          });
-        },
-      });
-      expect(requests).toHaveLength(1);
-    } finally {
-      await committed;
-      router.release();
-    }
-    expect((await episodes(threadId))[0]).toMatchObject({ state: "established", refusals: 5 });
+    // The fan writes while the catch-up's read is out: a message created after
+    // the read was sent, and the router's signal on the head row (committed).
+    const fresh = snowflake(Date.now() + 1_000);
+    const { requests } = await runLive(pageId, registry, refused, async () => (await workRow(pageId, CATCHUP_KEY))?.state === "done", {
+      onHit: async () => {
+        await testDb!.pool.query(
+          `insert into dm_live_messages (page_id, platform_message_id, platform_conversation_id, sender_platform_user_id,
+                  is_sent_by_page, created_at, content, field_mask, decoder_version, first_visible_at, confirm_due_at)
+           values ($1, $2, $3, $4, false, now(), 'fresh', $5, 1, now(), now() + interval '1 hour')`,
+          [pageId, fresh, groupOf(1), FAN, FANSLY_WS_LIVE_FIELD.content],
+        );
+        await demand(pageId, HEAD_KEY, [fresh]);
+      },
+    });
+    expect(requests).toHaveLength(1);
+    // The catch-up's 5th refusal established the episode and closed the catch-up only.
+    const [episode] = await episodes(threadId);
+    expect(episode).toMatchObject({ state: "established", refusals: 5, handled_list_head_id: msg(7) });
     expect(await workRow(pageId, CATCHUP_KEY)).toMatchObject({ state: "done", close_reason: "chat_unavailable" });
-    const bumped = await workRow(pageId, HEAD_KEY);
-    expect(bumped).toMatchObject({ state: "open", demand_revision: String(head.demandRevision + 1) });
-    expect(bumped!.demand.messageIds).toEqual([msg(7), msg(9)]);
+    const kept = await workRow(pageId, HEAD_KEY);
+    expect(kept).toMatchObject({ state: "open", demand_revision: String(head.demandRevision + 1) });
+    expect(kept!.demand.messageIds).toEqual([msg(7), fresh]);
+
+    // Its plan: a demand newer than the episode answered — it waits for the boundary …
+    const waiting = await runFor(pageId, registry, refused, 1_500);
+    expect(waiting.requests).toHaveLength(0);
+    const parked = await workRow(pageId, HEAD_KEY);
+    expect(parked).toMatchObject({ state: "open", waiting_reason: "not_due" });
+    expect(parked!.due_at.getTime()).toBe(episode!.retry_not_before!.getTime());
+    // … and then reads once, which settles it.
+    await testDb.pool.query(
+      "update page_dm_thread_unavailability set retry_not_before = now() - interval '1 second' where id = $1",
+      [episodeId],
+    );
+    await rewind(pageId);
+    const once = await runLive(pageId, registry, refused, async () => (await workRow(pageId, HEAD_KEY))?.state === "done");
+    expect(once.requests).toHaveLength(1);
+    expect(await workRow(pageId, HEAD_KEY)).toMatchObject({
+      close_reason: "chat_unavailable", result: { unservedMessageIds: [msg(7), fresh] },
+    });
+    expect((await episodes(threadId))[0]).toMatchObject({ refusals: 6, handled_list_head_id: fresh });
+    expect((await runFor(pageId, registry, refused, 1_500)).requests).toHaveLength(0);
+  });
+
+  it("a request that never left (a tunnel that never came up) is no read: the episode and the demand are untouched, and the read goes out after recovery", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage();
+    const threadId = await seedThread(pageId);
+    const registry = await registryFor(pageId);
+    await seedEpisode(threadId, { state: "established", refusals: 5, retryInMs: -1_000, handledListHeadId: msg(7) });
+    const [before] = await episodes(threadId);
+    await liveOverlay(pageId, 9);
+    await demand(pageId, HEAD_KEY, [msg(9)]);
+    const notSent = (): FanslyWireOutcome => ({ kind: "timeout", sent: false, message: "the transport was not ready" });
+    const first = await runLive(pageId, registry, notSent, async () => (await capturedAttempts(pageId)).length >= 1);
+    expect(first.requests.length).toBeGreaterThanOrEqual(1);
+    const [untouched] = await episodes(threadId);
+    expect(untouched).toMatchObject({ refusals: 5, handled_list_head_id: msg(7) });
+    expect(untouched!.retry_not_before!.getTime()).toBe(before!.retry_not_before!.getTime());
+    expect(await workRow(pageId, HEAD_KEY)).toMatchObject({ state: "open", demand: { messageIds: [msg(9)] } });
+    expect((await liveRow(pageId, 9)).confirm_wait_reason).toBeNull();
+    // The proxy is back: the one read goes out (and Fansly refuses it).
+    await testDb.pool.query("delete from sync_holds where page_id = $1 and scope = 'page'", [pageId]);
+    await rewind(pageId);
+    const after = await runLive(pageId, registry, refused, async () => (await workRow(pageId, HEAD_KEY))?.state === "done");
+    expect(after.requests).toHaveLength(1);
+    expect((await episodes(threadId))[0]).toMatchObject({ refusals: 6, handled_list_head_id: msg(9) });
   });
 });
 
 describe("the second review of PR #490", () => {
-  it("establishment closes a neighbour catch-up that would read the head, and keeps one walking a staged segment below its head read, which finishes it", async (context) => {
+  it("after establishment a catch-up that would read the head closes itself, and one walking a staged segment below its head read finishes it", async (context) => {
     if (!testDb) return context.skip();
     const pageId = await seedPage();
     const walking = await seedThread(pageId, { n: 1 });
@@ -915,17 +976,21 @@ describe("the second review of PR #490", () => {
     expect(first.requests.map(beforeOf)).toEqual([null, null]);
     expect((await episodes(walking))[0]).toMatchObject({ state: "established" });
     expect((await episodes(idle))[0]).toMatchObject({ state: "established" });
-    // The idle catch-up would read the head: closed. The walking one goes on.
-    expect(await workRow(pageId, CATCHUP_KEY, 2)).toMatchObject({ state: "done", close_reason: "chat_unavailable" });
+    // The heads' captures settled their own rows only.
     expect(await workRow(pageId, CATCHUP_KEY, 1)).toMatchObject({ state: "open" });
+    expect(await workRow(pageId, CATCHUP_KEY, 2)).toMatchObject({ state: "open" });
 
-    // Its time comes: it reads below its segment, meets the chain and closes.
+    // Their time comes: the idle one would read the head for a demand the
+    // episode answered — it closes itself, unread; the walking one reads below
+    // its segment, meets the chain and closes.
     await testDb.pool.query(
-      "update sync_work set due_at = now() - interval '1 second' where page_id = $1 and resource = $2 and subject = $3",
-      [pageId, CATCHUP_KEY, groupOf(1)],
+      "update sync_work set due_at = now() - interval '1 second' where page_id = $1 and resource = $2",
+      [pageId, CATCHUP_KEY],
     );
-    const second = await runLive(pageId, registry, respond, async () => (await workRow(pageId, CATCHUP_KEY, 1))?.state === "done");
+    const second = await runLive(pageId, registry, respond, async () =>
+      (await workRow(pageId, CATCHUP_KEY, 1))?.state === "done" && (await workRow(pageId, CATCHUP_KEY, 2))?.state === "done");
     expect(second.requests.map(beforeOf)).toEqual([msg(16)]);
+    expect(await workRow(pageId, CATCHUP_KEY, 2)).toMatchObject({ close_reason: "chat_unavailable" });
     expect(await workRow(pageId, CATCHUP_KEY, 1)).toMatchObject({ close_reason: "caught_up" });
     const chain = await rows<{ head_confirmed_id: string }>("select head_confirmed_id from page_dm_threads where id = $1", [walking]);
     expect(chain[0]!.head_confirmed_id).toBe(msg(40));
