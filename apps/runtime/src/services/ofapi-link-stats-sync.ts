@@ -1,9 +1,9 @@
-// OFAPI trial/tracking link statistics reconcile (2026-07-22 plan). Twice a
-// day, for every active OnlyFans page, walk the two link-list endpoints and
-// append run + per-link snapshot rows. Counters are cumulative vendor values
-// stored as observed; regressions are NOT clamped (chargebacks and deletions
-// legitimately lower them) — the reporting layer owns delta semantics. List
-// endpoints only: cost stays O(pages).
+// OFAPI trial/tracking link statistics reconcile (2026-07-22 plan). Four
+// times a day, for every active OnlyFans page, walk the two link-list
+// endpoints and append run + per-link snapshot rows. Counters are cumulative
+// vendor values stored as observed; regressions are NOT clamped (chargebacks
+// and deletions legitimately lower them) — the reporting layer owns delta
+// semantics. List endpoints only: cost stays O(pages).
 //
 // Every attempt is a row (2026-10-08 plan, PR 2): a pass leaves exactly one
 // page_link_stat_runs row per (page, link kind) it was responsible for —
@@ -12,6 +12,13 @@
 // pass, no client) — stamped with the scheduled window it belongs to and the
 // OFAPI account the page was bound to. A hole in the series is then a fact a
 // query reads, not something found by counting windows.
+//
+// A window is not lost to one failure (PR 3): a (page, kind) without a usable
+// result is read again inside its window — 15 min, 45 min and 2 h later — and
+// a page the binding reconciler moved to another OFAPI account is read 20 min
+// after the move. Both are targeted passes on their own queue; they read only
+// the pairs that still lack a result. The reads are free at the vendor, so
+// the lane neither reserves credits nor stops at the credit floor.
 
 import {
   findLatestFinishedLinkStatRun,
@@ -20,6 +27,7 @@ import {
   hasNonEmptyLinkStatRunUnderAnotherAccount,
   insertLinkStatRun,
   insertLinkStatRunWithSnapshots,
+  listLinkStatWindowPairStates,
   listOfapiBindingPages,
   type Database,
   type InsertLinkStatSnapshotInput,
@@ -42,11 +50,19 @@ import {
   type SyncQueueLifecycleClient,
 } from "./sync-queue.ts";
 import { createOfapiRestGuard } from "./sync/ofapi-dm-sync.ts";
-import { OFAPI_LINK_STATS_CRON, ofapiLinkStatsWindowAt } from "./ofapi-link-stats-windows.ts";
+import {
+  nextOfapiLinkStatsWindowAt,
+  OFAPI_LINK_STATS_CRON,
+  OFAPI_LINK_STATS_REBIND_RUN_DELAY_MS,
+  OFAPI_LINK_STATS_RETRY_DELAYS_MS,
+  ofapiLinkStatsWindowAt,
+} from "./ofapi-link-stats-windows.ts";
 
 export const OFAPI_LINK_STATS_RECONCILE_QUEUE = "ofapi.link-stats.reconcile";
+export const OFAPI_LINK_STATS_RETRY_QUEUE = "ofapi.link-stats.retry";
 
 const LINK_STAT_KINDS = ["tracking", "trial"] as const satisfies readonly LinkStatKind[];
+const SECOND_MS = 1_000;
 
 // A failed fleet pass is durable and operator-visible through the global
 // incident; retrying the pg-boss job would repeat every healthy page's walk.
@@ -54,6 +70,72 @@ const OFAPI_LINK_STATS_QUEUE_OPTIONS = {
   policy: "exclusive",
   retryLimit: 0,
 } as const;
+
+// The targeted passes — a window's retries, the run after a rebind — have a
+// queue of their own. They cannot ride the scheduled one: `exclusive` there
+// means at most one job queued OR active, so a second retry (or a rebind run)
+// sent while the first waits would silently not be created, and a retry still
+// waiting when the next window opens would keep the cron from creating that
+// window's job. `short` keeps at most one QUEUED job per singleton key: the
+// same retry is never queued twice, different ones wait side by side, and a
+// running pass blocks nothing. pg-boss never retries a job here either — the
+// retries are the passes themselves, each one a row of the series.
+const OFAPI_LINK_STATS_RETRY_QUEUE_OPTIONS = {
+  policy: "short",
+  retryLimit: 0,
+} as const;
+
+/** Rows a (page, kind) can get in one window from the scheduled pass and its
+ * retries. A pair that used them all waits for the next window. */
+const MAX_ATTEMPTS_PER_WINDOW = 1 + OFAPI_LINK_STATS_RETRY_DELAYS_MS.length;
+
+/** A pair whose last row of the window says the pass could make no request
+ * for a standing reason is not retried: nothing changes in 15 minutes, and
+ * the retries would only stack `skipped` rows. A page without a mapping or
+ * with a dead session is read again by the run that follows its rebind. */
+const NOT_RETRIED_SKIP_REASONS = new Set([
+  "page_unmapped",
+  "page_auth_dead",
+  "ofapi_client_not_configured",
+]);
+
+/** The payload of a job on the retry queue. */
+export type OfapiLinkStatsTargetedJob =
+  | { trigger: "retry"; windowAt: string; retry: number }
+  | { trigger: "rebind"; pageId: number };
+
+/** What a targeted pass was asked to do, parsed. */
+export type OfapiLinkStatsTarget =
+  | { trigger: "retry"; windowAt: Date; retry: number }
+  | { trigger: "rebind"; pageId: number };
+
+/** The slice of pg-boss a pass needs to queue what follows it. */
+export interface OfapiLinkStatsSender {
+  send(
+    name: string,
+    data: OfapiLinkStatsTargetedJob,
+    options: { startAfter: number; singletonKey: string; retryLimit: number },
+  ): Promise<unknown>;
+}
+
+export function parseOfapiLinkStatsTargetedJob(data: unknown): OfapiLinkStatsTarget | null {
+  const job = asRecord(data);
+  if (job?.trigger === "retry") {
+    const windowAt = parseDate(job.windowAt);
+    const retry = job.retry;
+    return windowAt !== null && typeof retry === "number" && Number.isInteger(retry) &&
+      retry >= 1 && retry <= OFAPI_LINK_STATS_RETRY_DELAYS_MS.length
+      ? { trigger: "retry", windowAt, retry }
+      : null;
+  }
+  if (job?.trigger === "rebind") {
+    const pageId = job.pageId;
+    return typeof pageId === "number" && Number.isInteger(pageId) && pageId > 0
+      ? { trigger: "rebind", pageId }
+      : null;
+  }
+  return null;
+}
 
 // Stored-cache page size (the free endpoints accept up to 1000, so a real
 // inventory is virtually always a single page => an atomic, absence-proving
@@ -503,6 +585,9 @@ async function reconcilePage(
     ofapiAccountId: string | null;
     stamp: LinkStatsAttemptStamp;
     guard: ReturnType<typeof createOfapiRestGuard>;
+    /** The kinds this pass reads for the page: both on a scheduled pass, the
+     * ones still without a usable result on a targeted one. */
+    kinds: readonly LinkStatKind[];
     /** Kinds that already have their row of this pass; the caller writes a
      * `failed` row for the rest when this function throws. */
     recorded: Set<LinkStatKind>;
@@ -532,7 +617,7 @@ async function reconcilePage(
     reason: string,
     ofapiAccountId: string | null,
   ): Promise<OfapiLinkStatsPageResult> => {
-    for (const kind of LINK_STAT_KINDS) {
+    for (const kind of input.kinds) {
       await insertLinkStatRun(app.db, {
         platformAccountId: input.pageId,
         linkKind: kind,
@@ -566,8 +651,8 @@ async function reconcilePage(
 
   // The STORED variants: identical item shape, `_credits.used: 0`, limit
   // 1000, and the cache includes finished links the live list hides
-  // (live-verified 2026-07-22). The credit guard stays as a safety belt —
-  // reservations settle to the server-reported 0.
+  // (live-verified 2026-07-22). The guard reserves nothing for them; the
+  // lane's quota counts only what the vendor actually charged.
   // Freshness contract: stored is the vendor's Computed cache — counters are
   // as fresh as the vendor's own sync, revenue freshness is queryable per
   // row via revenue_calculated_at, and pulled_at stamps OUR read, not the
@@ -601,10 +686,11 @@ async function reconcilePage(
   // Kind isolation must hold in BOTH directions: a throwing tracking endpoint
   // must not prevent the trial walk (and vice versa). Each kind gets its own
   // catch; the page is reported failed afterwards so the incident still fires.
-  for (const [kind, list] of [
+  for (const [kind, list] of ([
     ["tracking", listTrackingLinks],
     ["trial", listTrialLinks],
-  ] as const satisfies ReadonlyArray<readonly [LinkStatKind, LinkLister]>) {
+  ] as const satisfies ReadonlyArray<readonly [LinkStatKind, LinkLister]>)
+    .filter(([kind]) => input.kinds.includes(kind))) {
     const progress = { apiPages: 0, rawItems: 0 };
     try {
       kinds.push(await reconcileKind({
@@ -620,8 +706,8 @@ async function reconcilePage(
       }));
       input.recorded.add(kind);
     } catch (error) {
-      // A failed request never settled its credit reservation — release the
-      // in-memory token so the other kind (and other pages) can proceed.
+      // Nothing is reserved for a free read, so there is no token to release;
+      // the call stays for a guard that does reserve.
       input.guard.abandonPendingReservation();
       const reason = errorText(error);
       kinds.push({
@@ -673,6 +759,20 @@ async function reconcilePage(
   };
 }
 
+/** What stopped a walk, in the words of the incident. The guard's own codes
+ * cannot be quoted there: the incident sanitizer redacts anything shaped like
+ * an OFAPI key, and `ofapi_…` is. */
+function describeTruncation(reason: string): string {
+  switch (reason) {
+    case "ofapi_daily_credit_budget":
+      return "the vendor charged the lane's whole daily quota for stored reads (they are meant to be free)";
+    case "ofapi_request_budget":
+      return "the pass reached its request cap";
+    default:
+      return reason;
+  }
+}
+
 /** Skips the pass decided before making any request, for a reason another
  * signal owns: a dead session has its ofapi_auth incident, a page without a
  * mapping is the binding reconciler's to repair. Before every attempt became
@@ -683,38 +783,201 @@ const NOT_ATTEMPTED_REASONS = new Set(["page_unmapped", "page_auth_dead"]);
 export interface OfapiLinkStatsReconcileOptions {
   /** The pass's clock: `pulled_at` of its rows and, through it, their window. */
   now?: Date;
+  /** A targeted pass: a window's retry or the run after a rebind. It reads
+   * only the pairs that have no usable result in the window. Without it the
+   * pass is the scheduled one and reads every page. */
+  target?: OfapiLinkStatsTarget;
+  /** Where the pass queues the retry that follows it. Without a sender it
+   * queues none (the CLI, tests that drive the retries themselves). */
+  boss?: OfapiLinkStatsSender;
+}
+
+export interface OfapiLinkStatsReconcileResult {
+  pages: OfapiLinkStatsPageResult[];
+  /** The retry this pass queued for its window, if any. */
+  queuedRetry: { windowAt: Date; retry: number; startAfterSeconds: number } | null;
+}
+
+type LinkStatsFleetPage = Awaited<ReturnType<typeof listOfapiBindingPages>>[number];
+
+function pairKey(pageId: number, kind: LinkStatKind) {
+  return `${pageId}:${kind}`;
+}
+
+/** Does every page the pass can read have a usable result for both kinds in
+ * the window? */
+async function windowHasEveryResult(
+  app: AppContext,
+  input: { walkable: readonly LinkStatsFleetPage[]; windowAt: Date },
+): Promise<boolean> {
+  const usable = new Set(
+    (await listLinkStatWindowPairStates(app.db, { windowAt: input.windowAt }))
+      .filter((state) => state.hasUsableResult)
+      .map((state) => pairKey(state.platformAccountId, state.linkKind)),
+  );
+  return input.walkable.every((page) =>
+    LINK_STAT_KINDS.every((kind) => usable.has(pairKey(page.id, kind))));
+}
+
+/** Queues the next retry of the window if some pair still needs one. The
+ * rule is the shared one (linkStatRunUsableResultSql): a pair is retried
+ * while it has NO USABLE RESULT in the window — a failed, skipped or
+ * truncated row, or a partial that gave the series nothing, does not cancel
+ * the retry just by existing. */
+async function queueNextRetry(
+  app: AppContext,
+  input: {
+    boss: OfapiLinkStatsSender | undefined;
+    fleet: readonly LinkStatsFleetPage[];
+    windowAt: Date;
+    /** 0 after the scheduled pass and after a rebind run, n after retry n. */
+    retriesDone: number;
+    now: Date;
+  },
+): Promise<OfapiLinkStatsReconcileResult["queuedRetry"]> {
+  const retry = input.retriesDone + 1;
+  const delayMs = OFAPI_LINK_STATS_RETRY_DELAYS_MS[retry - 1];
+  if (!input.boss || delayMs === undefined) {
+    return null;
+  }
+  // A retry that would start after the window closed has nothing to fill:
+  // the next window's own pass is the series' next point.
+  if (input.now.getTime() + delayMs >= nextOfapiLinkStatsWindowAt(input.windowAt).getTime()) {
+    return null;
+  }
+  const states = new Map(
+    (await listLinkStatWindowPairStates(app.db, { windowAt: input.windowAt }))
+      .map((state) => [pairKey(state.platformAccountId, state.linkKind), state] as const),
+  );
+  const pending = input.fleet.flatMap((page) => LINK_STAT_KINDS.map((kind) => ({
+    pageId: page.id,
+    kind,
+    state: states.get(pairKey(page.id, kind)) ?? null,
+  }))).filter(({ state }) =>
+    // No row at all in the window (the pass died before reaching the page)
+    // is as much a missing result as a failed one.
+    state === null || (
+      !state.hasUsableResult &&
+      state.attempts < MAX_ATTEMPTS_PER_WINDOW &&
+      !(state.lastStatus === "skipped" && state.lastReason !== null &&
+        NOT_RETRIED_SKIP_REASONS.has(state.lastReason))
+    ));
+  if (pending.length === 0) {
+    return null;
+  }
+  // The delays are whole minutes, so the division is exact.
+  const startAfterSeconds = delayMs / SECOND_MS;
+  await input.boss.send(
+    OFAPI_LINK_STATS_RETRY_QUEUE,
+    { trigger: "retry", windowAt: input.windowAt.toISOString(), retry },
+    {
+      startAfter: startAfterSeconds,
+      // One queued job per (window, retry): a pass that runs twice does not
+      // start a second chain of retries.
+      singletonKey: `retry:${input.windowAt.toISOString()}:${retry}`,
+      retryLimit: 0,
+    },
+  );
+  app.logger.info({
+    windowAt: input.windowAt.toISOString(),
+    retry,
+    startAfterSeconds,
+    pending: pending.map(({ pageId, kind, state }) => ({
+      pageId, kind, lastStatus: state?.lastStatus ?? null, lastReason: state?.lastReason ?? null,
+    })),
+  }, "OFAPI link-stats retry queued for pairs without a usable result");
+  return { windowAt: input.windowAt, retry, startAfterSeconds };
 }
 
 export async function runOfapiLinkStatsReconcile(
   app: AppContext,
   options: OfapiLinkStatsReconcileOptions = {},
-) {
+): Promise<OfapiLinkStatsReconcileResult> {
   if (!isOfapiLinkStatsReconcileEnabled(app.config)) {
-    return { pages: [] as OfapiLinkStatsPageResult[] };
+    return { pages: [], queuedRetry: null };
   }
+
+  const target = options.target ?? null;
+  const pulledAt = options.now ?? new Date();
+  const windowAt = ofapiLinkStatsWindowAt(pulledAt);
+  if (target?.trigger === "retry" && target.windowAt.getTime() !== windowAt.getTime()) {
+    // The retry reached the worker after its window closed (a stopped worker,
+    // a long queue). The window's point cannot be read any more — the vendor
+    // keeps only current totals — and the open window has its own pass.
+    app.logger.warn({
+      windowAt: target.windowAt.toISOString(),
+      openWindowAt: windowAt.toISOString(),
+      retry: target.retry,
+    }, "OFAPI link-stats retry arrived after its window closed; nothing read");
+    return { pages: [], queuedRetry: null };
+  }
+  const stamp: LinkStatsAttemptStamp = { pulledAt, windowAt };
 
   // The population is every active OnlyFans page, mapped or not: a page the
   // pass cannot read still owes the series a row saying so.
   const fleet = await listOfapiBindingPages(app.db);
   const walkable = fleet.filter((page) =>
     page.account_id !== null && !ofapiAuthStatusNeedsAction(page.auth_status));
+
+  // What the pass reads. The scheduled pass: every page, both kinds. A
+  // targeted pass: the pairs without a usable result in the window — for a
+  // retry those that may still be retried, for a rebind run every such pair
+  // of the rebound page (its `skipped` rows are exactly what it is there to
+  // replace).
+  let plan: Array<{ page: LinkStatsFleetPage; kinds: LinkStatKind[] }>;
+  if (target === null) {
+    plan = fleet.map((page) => ({ page, kinds: [...LINK_STAT_KINDS] }));
+  } else {
+    const states = new Map(
+      (await listLinkStatWindowPairStates(app.db, { windowAt }))
+        .map((state) => [pairKey(state.platformAccountId, state.linkKind), state] as const),
+    );
+    plan = fleet
+      .filter((page) => target.trigger === "retry" || page.id === target.pageId)
+      .map((page) => ({
+        page,
+        kinds: LINK_STAT_KINDS.filter((kind) => {
+          const state = states.get(pairKey(page.id, kind));
+          if (state === undefined) {
+            return true;
+          }
+          if (state.hasUsableResult) {
+            return false;
+          }
+          if (target.trigger === "rebind") {
+            return true;
+          }
+          return state.attempts < MAX_ATTEMPTS_PER_WINDOW &&
+            !(state.lastStatus === "skipped" && state.lastReason !== null &&
+              NOT_RETRIED_SKIP_REASONS.has(state.lastReason));
+        }),
+      }))
+      .filter((entry) => entry.kinds.length > 0);
+    if (plan.length === 0) {
+      app.logger.info({
+        windowAt: windowAt.toISOString(),
+        target,
+      }, "OFAPI link-stats targeted pass found every pair with a usable result; nothing read");
+      return { pages: [], queuedRetry: null };
+    }
+  }
+
   const guard = createOfapiRestGuard(app, {
     maxRequestsPerRun: LINK_STATS_MAX_PAGES_PER_RUN * 2 * Math.max(1, walkable.length),
-    // Dedicated link_stats day counter (migration 0113): the quota is
-    // isolated from the chargebacks backfill lane in BOTH directions —
-    // chargebacks spend cannot block link-stats, and link-stats cannot eat
-    // the lane the chargebacks first-walk depends on. Requires the credit
-    // ledger ON; with it off the guard falls back to the global counter
-    // (see the config-registry note on the flag).
+    // Dedicated link_stats day counter (migration 0113), isolated from the
+    // chargebacks backfill lane in BOTH directions. The stored reads are free
+    // at the vendor, so the guard reserves nothing and checks no credit
+    // floor: the quota is held against what the vendor actually charged
+    // today — an insurance against the day stored reads stop being free, not
+    // a toll on attempts.
     dailyCreditBudget:
       app.config.ofapiLinkStatsDailyCreditBudget ?? DEFAULT_LINK_STATS_DAILY_CREDIT_BUDGET,
     budgetScope: "link_stats",
+    freeReads: true,
   });
-  const pulledAt = options.now ?? new Date();
-  const stamp: LinkStatsAttemptStamp = { pulledAt, windowAt: ofapiLinkStatsWindowAt(pulledAt) };
 
   const allPages: OfapiLinkStatsPageResult[] = [];
-  for (const page of fleet) {
+  for (const { page, kinds } of plan) {
     const recorded = new Set<LinkStatKind>();
     try {
       allPages.push(await reconcilePage(app, {
@@ -723,6 +986,7 @@ export async function runOfapiLinkStatsReconcile(
         ofapiAccountId: page.account_id,
         stamp,
         guard,
+        kinds,
         recorded,
       }));
     } catch (error) {
@@ -734,7 +998,7 @@ export async function runOfapiLinkStatsReconcile(
         reason,
         kinds: [],
       });
-      for (const kind of LINK_STAT_KINDS) {
+      for (const kind of kinds) {
         if (!recorded.has(kind)) {
           await recordFailedAttempt(app, {
             pageId: page.id,
@@ -753,33 +1017,44 @@ export async function runOfapiLinkStatsReconcile(
     }
   }
 
-  // The fleet verdict is drawn over the pages the pass was to read.
+  // The retry is queued before the verdict: an incident write that fails must
+  // not cost the window its second chance.
+  let queuedRetry: OfapiLinkStatsReconcileResult["queuedRetry"] = null;
+  try {
+    queuedRetry = await queueNextRetry(app, {
+      boss: options.boss,
+      fleet,
+      windowAt,
+      retriesDone: target?.trigger === "retry" ? target.retry : 0,
+      now: pulledAt,
+    });
+  } catch (error) {
+    app.logger.error({
+      err: error,
+      windowAt: windowAt.toISOString(),
+    }, "OFAPI link-stats retry could not be queued; the window waits for the next pass");
+  }
+
+  // The fleet verdict is drawn over the pages the pass was to read. On a
+  // targeted pass that is the pairs it read: "every" below means every one of
+  // them.
   const pages = allPages.filter((page) =>
     !(page.status === "skipped" && page.reason !== null && NOT_ATTEMPTED_REASONS.has(page.reason)));
   const failed = pages.filter((page) => page.status === "failed");
-  // Truncation blocks caused by the MONEY guards never page: the stored
-  // endpoints are free, so a credit-floor/day-budget block is a symptom of
-  // the account-wide credit state, which the ofapi_low_credit incident
-  // already covers — a second alert adds nothing (chargebacks precedent:
-  // warn only). Non-monetary fleet-wide truncation (pagination
-  // contradictions, request caps) still pages.
-  const MONEY_BLOCK_REASONS = new Set(["ofapi_credit_floor", "ofapi_daily_credit_budget"]);
-  const isMoneyReason = (reason: string | null) =>
-    reason !== null && MONEY_BLOCK_REASONS.has(reason);
   // A fleet pass where EVERY page truncated writes zero snapshots while the
-  // job stays green — that silence must be an incident, not a warn line.
+  // job stays green — that silence must be an incident, not a warn line. The
+  // lane's own quota is no exception any more: nothing is reserved for a free
+  // read, so `ofapi_daily_credit_budget` now means the vendor really charged
+  // the whole quota for stored reads today — the end of the premise the lane
+  // runs on, which no other incident reports.
   const allTruncated = pages.length > 0 && pages.every((page) => page.status === "truncated");
-  const allTruncatedLoud = allTruncated &&
-    pages.some((page) => !isMoneyReason(page.reason));
   // One link kind fully stopped across the fleet (every walk of the kind
   // truncated) is the same silence per kind — a healthy other kind must not
   // mask it.
   const walkedKinds = pages.flatMap((page) => page.kinds);
   const truncatedKinds = (["tracking", "trial"] as const).filter((kindName) => {
     const ofKind = walkedKinds.filter((kind) => kind.linkKind === kindName);
-    return ofKind.length > 0 &&
-      ofKind.every((kind) => kind.status === "truncated") &&
-      ofKind.some((kind) => !isMoneyReason(kind.reason));
+    return ofKind.length > 0 && ofKind.every((kind) => kind.status === "truncated");
   });
   // Fleet-wide mapping collapse below the per-kind threshold: small pages
   // (1-2 links) never trip the absolute per-kind alarm, but when every FULL
@@ -807,13 +1082,14 @@ export async function runOfapiLinkStatsReconcile(
       kind: "ofapi_link_stats_reconcile_failed",
       errorSummary: `${failed.length} page(s) failed: ${shown}${remainder}`,
     });
-  } else if (allTruncatedLoud || truncatedKinds.length > 0) {
-    const scope = allTruncatedLoud
+  } else if (allTruncated || truncatedKinds.length > 0) {
+    const scope = allTruncated
       ? `fleet fully truncated (${pages.length} page(s))`
       : `link kind(s) fully truncated fleet-wide: ${truncatedKinds.join(", ")}`;
     const reasons = [...new Set(
-      walkedKinds.map((kind) => kind.reason)
-        .filter((reason): reason is string => reason !== null && !isMoneyReason(reason)),
+      walkedKinds.filter((kind) => kind.status === "truncated").map((kind) => kind.reason)
+        .filter((reason): reason is string => reason !== null)
+        .map(describeTruncation),
     )];
     await notifyOfapiGlobalIncident(app, {
       kind: "ofapi_link_stats_reconcile_failed",
@@ -835,14 +1111,20 @@ export async function runOfapiLinkStatsReconcile(
       page.kinds.every((kind) => kind.status === "written" || kind.status === "partial")) &&
     pages.some((page) => page.kinds.some(
       (kind) => kind.status === "written" || kind.writtenRows > 0,
-    ))
+    )) &&
+    (target === null || await windowHasEveryResult(app, { walkable, windowAt }))
   ) {
-    // Recovery = every processed page finished BOTH walks (written/partial)
+    // Recovery = every processed page finished its walks (written/partial)
     // AND the fleet demonstrably landed real data somewhere: a pass made of
     // nothing but unverified-empty walks proves nothing and must not close
     // the latch. A skipped page or any truncated kind keeps it open too; a
     // page stuck at 'partial' (one permanently unparseable vendor item) must
     // not pin it open either.
+    //
+    // A targeted pass read only part of the fleet, so its own success is not
+    // the fleet's: it closes the latch only when no readable page is left
+    // without a usable result in the window (a pair that used up its retries
+    // was not read by this pass and is still broken).
     await resolveOfapiGlobalIncident(app, {
       kind: "ofapi_link_stats_reconcile_failed",
     });
@@ -862,6 +1144,9 @@ export async function runOfapiLinkStatsReconcile(
   }
   app.logger.info({
     windowAt: stamp.windowAt.toISOString(),
+    trigger: target?.trigger ?? "scheduled",
+    ...(target?.trigger === "retry" ? { retry: target.retry } : {}),
+    queuedRetry: queuedRetry?.retry ?? null,
     pages: allPages.map((page) => ({
       label: page.pageLabel,
       status: page.status,
@@ -877,7 +1162,7 @@ export async function runOfapiLinkStatsReconcile(
     })),
   }, "OFAPI link-stats reconcile complete");
 
-  return { pages: allPages };
+  return { pages: allPages, queuedRetry };
 }
 
 export async function ensureOfapiLinkStatsQueue(
@@ -907,36 +1192,119 @@ export async function ensureOfapiLinkStatsQueue(
       `retryLimit=${OFAPI_LINK_STATS_QUEUE_OPTIONS.retryLimit}`,
     );
   }
+
+  // New with the queue itself, so its options are the ones it is created
+  // with; the read-back still refuses a queue that exists under another
+  // policy (pg-boss cannot change one in place).
+  await ensureQueueCreated(
+    boss,
+    OFAPI_LINK_STATS_RETRY_QUEUE,
+    OFAPI_LINK_STATS_RETRY_QUEUE_OPTIONS,
+    createdQueues,
+  );
+  const retryQueue = await boss.getQueue(OFAPI_LINK_STATS_RETRY_QUEUE);
+  if (
+    !retryQueue ||
+    retryQueue.policy !== OFAPI_LINK_STATS_RETRY_QUEUE_OPTIONS.policy ||
+    retryQueue.retryLimit !== OFAPI_LINK_STATS_RETRY_QUEUE_OPTIONS.retryLimit
+  ) {
+    throw new Error(
+      `Queue ${OFAPI_LINK_STATS_RETRY_QUEUE} configuration drift: expected ` +
+      `policy=${OFAPI_LINK_STATS_RETRY_QUEUE_OPTIONS.policy}, ` +
+      `retryLimit=${OFAPI_LINK_STATS_RETRY_QUEUE_OPTIONS.retryLimit}`,
+    );
+  }
 }
 
 export async function ensureOfapiLinkStatsSchedule(boss: QueueCreationClient) {
   if (!boss.schedule) {
     return;
   }
-  // Twice daily at 04:45/16:45 UTC — two observations per day (one failed
-  // window still leaves a daily point). The stored endpoints are free and the
-  // credit lane is dedicated (0113), so the placement after chargebacks'
-  // 03:10 window is just polite scheduling, not a budget dependency. The
+  // Four times a day at 03:45/09:45/15:45/21:45 UTC (owner decision, plan
+  // П1.1). The stored endpoints are free, so the frequency costs nothing; the
+  // placement after chargebacks' 03:10 window is just polite scheduling. The
   // windows live in ofapi-link-stats-windows.ts: the cron and the `window_at`
-  // stamped on every attempt row come from the same list.
+  // stamped on every attempt row come from the same list. Registering the
+  // schedule again replaces the previous cron of the queue.
   await boss.schedule(OFAPI_LINK_STATS_RECONCILE_QUEUE, OFAPI_LINK_STATS_CRON, null, { tz: "UTC" });
+}
+
+/** The binding reconciler moved pages to another OFAPI account: each of them
+ * is read once, 20 minutes later, without waiting for the next window. The
+ * run is a targeted pass of whatever window is open by then — it reads the
+ * page's pairs that have no usable result there (a window whose scheduled
+ * pass found the page unmapped or its session dead, or has not run yet) and
+ * does nothing when the window already has them. Returns the pages queued. */
+export async function queueOfapiLinkStatsRunsAfterRebind(
+  app: Pick<AppContext, "config" | "logger">,
+  boss: OfapiLinkStatsSender,
+  actions: ReadonlyArray<{ action: string; applied: boolean; pageId: number; label?: string }>,
+): Promise<number[]> {
+  if (!isOfapiLinkStatsReconcileEnabled(app.config)) {
+    return [];
+  }
+  const queued: number[] = [];
+  for (const action of actions) {
+    if (action.action !== "rebind" || !action.applied) {
+      continue;
+    }
+    try {
+      await boss.send(
+        OFAPI_LINK_STATS_RETRY_QUEUE,
+        { trigger: "rebind", pageId: action.pageId },
+        {
+          startAfter: OFAPI_LINK_STATS_REBIND_RUN_DELAY_MS / SECOND_MS,
+          // One queued run per page: a second rebind inside the delay is
+          // served by the run already waiting.
+          singletonKey: `rebind:${action.pageId}`,
+          retryLimit: 0,
+        },
+      );
+      queued.push(action.pageId);
+    } catch (error) {
+      // The rebind itself is done and must not be reported as failed; the
+      // next window reads the page in any case.
+      app.logger.error({
+        err: error,
+        pageId: action.pageId,
+      }, "OFAPI link-stats run after rebind could not be queued; the next window reads the page");
+    }
+  }
+  if (queued.length > 0) {
+    app.logger.info({ pageIds: queued }, "OFAPI link-stats run queued after rebind");
+  }
+  return queued;
 }
 
 export async function startOfapiLinkStatsWorker(
   app: AppContext,
-  boss: {
+  boss: OfapiLinkStatsSender & {
     work: (
       queue: string,
       options: { batchSize: number },
-      handler: () => Promise<void>,
+      handler: (jobs: Array<{ data: unknown }>) => Promise<void>,
     ) => Promise<unknown>;
   },
 ) {
-  await boss.work(OFAPI_LINK_STATS_RECONCILE_QUEUE, { batchSize: 1 }, async () => {
-    const result = await runOfapiLinkStatsReconcile(app);
+  const failOnFailedPages = (result: OfapiLinkStatsReconcileResult) => {
     const failed = result.pages.filter((page) => page.status === "failed");
     if (failed.length > 0) {
       throw new Error(`OFAPI link-stats reconcile failed for ${failed.length} page(s)`);
+    }
+  };
+  await boss.work(OFAPI_LINK_STATS_RECONCILE_QUEUE, { batchSize: 1 }, async () => {
+    failOnFailedPages(await runOfapiLinkStatsReconcile(app, { boss }));
+  });
+  await boss.work(OFAPI_LINK_STATS_RETRY_QUEUE, { batchSize: 1 }, async (jobs) => {
+    for (const job of jobs) {
+      const target = parseOfapiLinkStatsTargetedJob(job.data);
+      if (target === null) {
+        // A payload this build cannot read is not retried into a loop: it is
+        // dropped loudly and the window's next pass covers what it meant.
+        app.logger.error({ data: job.data }, "OFAPI link-stats targeted job has an unreadable payload; dropped");
+        continue;
+      }
+      failOnFailedPages(await runOfapiLinkStatsReconcile(app, { boss, target }));
     }
   });
 }

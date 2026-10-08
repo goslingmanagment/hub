@@ -1643,6 +1643,32 @@ export async function recordOfapiPhysicalCreditUsage(
   await db.transaction((tx) => applyOfapiPhysicalCreditUsage(tx, input));
 }
 
+/** What a scope's UTC-day counter holds today: 0 when the counter belongs to
+ * an earlier day or there is no state row yet. A read, never a reservation —
+ * for a lane whose requests are free at the vendor and whose quota therefore
+ * counts only what the vendor actually charged. */
+export async function getOfapiDayCreditsSpent(
+  db: Database,
+  scope: OfapiDayBudgetScope,
+  now = new Date(),
+): Promise<number> {
+  const columns = OFAPI_DAY_COUNTER_COLUMNS[scope];
+  const result = await db.execute<{ day: string | Date | null; credits: unknown }>(sql`
+    select ${sql.raw(columns.day)} as day, ${sql.raw(columns.credits)} as credits
+    from ofapi_credit_state
+    where id = 1
+  `);
+  const row = result.rows[0];
+  if (!row || row.day === null) {
+    return 0;
+  }
+  const day = utcDayOf(row.day instanceof Date ? row.day : new Date(row.day));
+  const credits = Number(row.credits);
+  // A counter dated ahead of `now` (clock skew) still counts: the cautious
+  // reading, as in reserveOfapiDayCredits.
+  return day >= utcDayOf(now) && Number.isFinite(credits) ? credits : 0;
+}
+
 export interface OfapiCreditState {
   spentToday: number;
   // The audience sweep's reservation counter (audit F9) — what its budget

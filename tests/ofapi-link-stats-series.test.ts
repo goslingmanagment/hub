@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 import {
   nextOfapiLinkStatsWindowAt,
   OFAPI_LINK_STATS_CRON,
+  OFAPI_LINK_STATS_REBIND_RUN_DELAY_MS,
+  OFAPI_LINK_STATS_RETRY_DELAYS_MS,
   OFAPI_LINK_STATS_WINDOW_HOURS_UTC,
   OFAPI_LINK_STATS_WINDOW_INTERVAL_MS,
   OFAPI_LINK_STATS_WINDOW_MINUTE,
@@ -24,7 +26,8 @@ describe("the link-series windows", () => {
   const last = hours[hours.length - 1]!;
 
   it("are the cron the schedule runs on", () => {
-    expect(OFAPI_LINK_STATS_CRON).toBe("45 4,16 * * *");
+    // Four windows a day (owner decision, plan П1.1).
+    expect(OFAPI_LINK_STATS_CRON).toBe("45 3,9,15,21 * * *");
     expect(OFAPI_LINK_STATS_CRON).toBe(`${OFAPI_LINK_STATS_WINDOW_MINUTE} ${hours.join(",")} * * *`);
   });
 
@@ -66,7 +69,19 @@ describe("the link-series windows", () => {
     const gaps = hours.map((hour, index) =>
       ((hours[index + 1] ?? first + 24) - hour) * HOUR_MS);
     expect(OFAPI_LINK_STATS_WINDOW_INTERVAL_MS).toBe(Math.max(...gaps));
-    expect(OFAPI_LINK_STATS_WINDOW_INTERVAL_MS).toBe(12 * HOUR_MS);
+    expect(OFAPI_LINK_STATS_WINDOW_INTERVAL_MS).toBe(6 * HOUR_MS);
+  });
+
+  it("the retries of a window fit inside it, and so does the run after a rebind", () => {
+    expect(OFAPI_LINK_STATS_RETRY_DELAYS_MS).toEqual([15 * 60_000, 45 * 60_000, 120 * 60_000]);
+    // 15 min, 45 min and 2 h after one another: the last retry starts three
+    // hours into the window.
+    const lastRetryAt = OFAPI_LINK_STATS_RETRY_DELAYS_MS.reduce((sum, delay) => sum + delay, 0);
+    expect(lastRetryAt).toBe(3 * HOUR_MS);
+    const shortestGap = Math.min(...hours.map((hour, index) =>
+      ((hours[index + 1] ?? first + 24) - hour) * HOUR_MS));
+    expect(lastRetryAt).toBeLessThan(shortestGap);
+    expect(OFAPI_LINK_STATS_REBIND_RUN_DELAY_MS).toBe(20 * 60_000);
   });
 });
 
