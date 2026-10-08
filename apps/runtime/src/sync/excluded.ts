@@ -245,7 +245,9 @@ export function judgeExcludedProbe(work: SyncWorkRow, attempts: readonly SyncAtt
     newestCreatedAt: typeof result.newestCreatedAt === "string" ? result.newestCreatedAt : null,
     liveIdsSeen: numberOrNull(result.liveIdsSeen),
     observationId: numberOrNull(result.observationId) ?? last?.observationId ?? null,
-    attemptIds: attempts.map((attempt) => attempt.id),
+    // The journal of attempts lives 30 days; a probe closed by the migration
+    // keeps its attempt ids in its result.
+    attemptIds: attempts.length > 0 ? attempts.map((attempt) => attempt.id) : idList(result.attemptIds),
     pageErrors: attempts.filter((attempt) => attempt.errorClass !== null && PAGE_LEVEL_ERROR_CLASSES.has(attempt.errorClass)).length,
   };
 }

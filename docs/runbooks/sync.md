@@ -224,7 +224,8 @@ release on".
   `blocked_by_vendor` and probed once a day while demand exists. A success resets it. A history request's fan on such
   a chat reads `blocked`.
 - 5 or more failing subjects of one resource file within 10 minutes hold the file: 30 min → 2 h → 6 h.
-  `dm-messages.head` is exempt.
+  `dm-messages.head` is exempt. Failures of the owner's probes (`probe.manual`, `probe.excluded-chat`) never start
+  the hold; a hold already in force still stops them until it ends.
 
 Neither has a lever: they end by time or by a success. The answer that failed is in `sync why` (`lastAttempt`,
 `lastErrorClass`).
@@ -546,9 +547,14 @@ pnpm cli sync excluded unlift --page lora-1 --reason partner_missing_from_aggreg
 
 - `probe` asks for one head read per sampled chat (bound, visible, most recently active first): ordinary planned
   requests of the page. A probe's answer is journaled and never canonicalized, so an excluded chat gets no messages
-  from it. A 403, a declared 400/404/410/422 or an unsuccessful envelope is the chat's answer (`served: false`),
-  nothing is held.
-- `report` prints the newest probe's verdicts; `--record` keeps the summary as evidence.
+  from it. A 403, a declared 400/404/410/422, an unsuccessful envelope, or any other error Fansly answers with its
+  own error envelope (`{"success":false,"error":{"code":…,"details":"…"}}`, e.g. a 500 `error getting group
+  messages`) is the chat's answer (`served: false`, close reason `not_served:<status>`), nothing is held. A 5xx
+  without that envelope (a proxy's page, an empty 502/503/504) or a network failure is retried on the chat's
+  breaker. Failing probes never hold the `probe` file, so `sync probe` keeps working.
+- `report` prints the newest probe's verdicts (`served`, `not_served`, `pending`, `no_answer`) with the attempt and
+  observation ids; `--record` keeps the summary as evidence. A probe that keeps `pending` for hours is on its
+  breaker: `sync why --page P --resource probe.excluded-chat --subject <chat>` names the answer that failed.
 - `lift` needs a live page and the evidence page's newest recorded probe of that reason with 10 or more probed
   chats, 80 % or more served and no page-level error. The page's bound chats lose the reason and sync like any chat:
   new heads are read, history only by request. The lift is per page.

@@ -710,6 +710,16 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # for new messages it gives its own 24-hour `not_found` again, and those
   # stay hidden after the forward deploy (docs/runbooks/sync.md).
   "0247_dm_live_confirm_wait_reason.sql"
+  # Excluded-chat probes Fansly already answered (owner decision №8, arena
+  # "vanished chat" D1): one data update that closes the open
+  # probe.excluded-chat works whose latest answer was a subject_failure
+  # carrying Fansly's own error envelope (production: lilly-1's 20, every one
+  # a 500 "error getting group messages") — done, not_served:<status>, the
+  # breaker cleared, the evidence in the result. No DDL, no hold touched. The
+  # previous image picks no done work and reads a done probe with
+  # served: false as not served; it ignores the result's extra keys, so it
+  # runs unchanged after a rollback.
+  "0248_sync_excluded_probe_not_served.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

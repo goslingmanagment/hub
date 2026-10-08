@@ -88,9 +88,17 @@ export const probeManualModule: ResourceModule = {
 //   showed (`served: true`).
 // - 403 (`subjectScopedAuthStatuses`: the chat may be forbidden while the
 //   session is fine) and the client statuses the entry declares terminal, a
-//   `success: false` envelope or a body the contract refuses: the chat's own
-//   answer — the work closes `served: false`, with no breaker, no resource
-//   hold, no quarantine, no alert. 401 and 429 stay page-wide (plan §9).
+//   `success: false` envelope, a body the contract refuses, and any other
+//   non-2xx that carries Fansly's own error envelope (`subject_failure` with
+//   `step.fanslyErrorEnvelope`: lilly-1's chats answer
+//   `500 {"success":false,"error":{"code":500,"details":"error getting group
+//   messages"}}` every time): the chat's own answer — the work closes
+//   `served: false`, `not_served:<status>`, with no breaker, no resource hold,
+//   no quarantine, no alert. A 5xx without the envelope (a proxy's HTML page,
+//   an empty 502/503/504) and a transport error are the wire's, not the
+//   chat's: they stay on the subject's ladder. 401 and 429 stay page-wide
+//   (plan §9). Failures of either probe key never start a hold of the `probe`
+//   file (`RESOURCE_BREAKER_UNCOUNTED_KEYS`).
 
 /** The registry key of the decision-№8 probe. */
 export const EXCLUDED_CHAT_PROBE_KEY = "probe.excluded-chat";
@@ -118,8 +126,34 @@ export type ExcludedChatProbeResult =
   | {
     served: false;
     httpStatus: number | null;
-    errorClass: "subject_terminal" | "envelope_unsuccessful" | "contract";
+    errorClass: ExcludedChatProbeRefusalClass;
+    /** Set only by the migration that closed the probes left open before the
+     *  envelope rule (`*_sync_excluded_probe_not_served.sql`): the attempt it
+     *  read the answer from, its raw answer, and every attempt of the work. */
+    attemptId?: number;
+    observationId?: number;
+    attemptIds?: number[];
+    closedBy?: string;
   };
+
+/** The error classes that are the chat's answer (`served: false`). */
+export type ExcludedChatProbeRefusalClass = "subject_terminal" | "envelope_unsuccessful" | "contract" | "subject_failure";
+
+/** The class of `decision` when it is the chat's own answer, else null. A
+ *  `subject_failure` is the chat's only when Fansly itself answered it, with
+ *  its error envelope. */
+function chatAnswerClass(decision: OutcomeDecision, step: OutcomeStep): ExcludedChatProbeRefusalClass | null {
+  switch (decision.errorClass) {
+    case "subject_terminal":
+    case "envelope_unsuccessful":
+    case "contract":
+      return decision.errorClass;
+    case "subject_failure":
+      return step.fanslyErrorEnvelope ? "subject_failure" : null;
+    default:
+      return null;
+  }
+}
 
 function headRead(groupId: string): RequestPlan<"messages.page"> {
   return { spec: "messages.page", params: { groupId, before: null } };
@@ -133,23 +167,17 @@ function createdAtIso(raw: unknown): string | null {
 
 /** The probe's own account of the outcomes that are the chat's answer. */
 export function excludedChatProbeOutcome(decision: OutcomeDecision, step: OutcomeStep): OutcomeDecision {
-  switch (decision.errorClass) {
-    case "subject_terminal":
-    case "envelope_unsuccessful":
-    case "contract": {
-      const result: ExcludedChatProbeResult = { served: false, httpStatus: step.httpStatus, errorClass: decision.errorClass };
-      return {
-        ...decision,
-        subjectBreaker: { failureCount: 0, breakerUntil: null, blockedByVendorAt: null, terminal: true },
-        resourceHold: { action: "keep" },
-        quarantineAttempt: false,
-        alerts: [],
-        work: { action: "close", closeReason: `not_served:${step.httpStatus ?? decision.errorClass}`, result },
-      };
-    }
-    default:
-      return decision;
-  }
+  const errorClass = chatAnswerClass(decision, step);
+  if (errorClass === null) return decision;
+  const result: ExcludedChatProbeResult = { served: false, httpStatus: step.httpStatus, errorClass };
+  return {
+    ...decision,
+    subjectBreaker: { failureCount: 0, breakerUntil: null, blockedByVendorAt: null, terminal: true },
+    resourceHold: { action: "keep" },
+    quarantineAttempt: false,
+    alerts: [],
+    work: { action: "close", closeReason: `not_served:${step.httpStatus ?? errorClass}`, result },
+  };
 }
 
 export const probeExcludedChatModule: ResourceModule = {

@@ -647,7 +647,10 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     // Owner decision №8 (step 3, S3-06): one head read of a chat the legacy
     // engine excluded from message sync, asked for by `sync excluded probe`.
     // A 403 is the chat's answer, never the session's (G8, E8): it closes the
-    // probe `served: false` and holds nothing; a 401 and a 429 stay page-wide.
+    // probe `served: false` and holds nothing; so does any other non-2xx that
+    // carries Fansly's own error envelope (a 500 "error getting group
+    // messages"). A 5xx without it stays on the subject's ladder; a 401 and a
+    // 429 stay page-wide. Its failures never start a hold of the `probe` file.
     // Journaled, never canonicalized (no DM state for an excluded chat).
     key: "probe.excluded-chat", file: "probe", subject: "thread", kind: "trigger", class: "planned",
     triggers: ["owner"], slo: {},

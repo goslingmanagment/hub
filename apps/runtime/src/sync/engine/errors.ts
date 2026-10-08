@@ -53,6 +53,18 @@ export const RESOURCE_HOLD_LADDER_MS = [30 * 60_000, 2 * 3_600_000, 6 * 3_600_00
  *  while the rest of their file is held (plan §9 "живые сообщения не
  *  останавливаются"). Their failures never start a resource hold either. */
 export const RESOURCE_HOLD_EXEMPT_KEYS: ReadonlySet<string> = new Set(["dm-messages.head"]);
+/** Resource keys whose failures never count toward their file's resource
+ *  breaker, so they never START a hold: the hold-exempt keys, and the owner's
+ *  probes. A probe asks about the one subject it names on purpose (a chat the
+ *  legacy engine excluded, a route the owner picked): its failures are the
+ *  answers the owner asked for, not a sign the file is broken, and must never
+ *  hold `probe.manual` with them. Unlike the exempt keys, a hold already in
+ *  force still stops them until it ends. */
+export const RESOURCE_BREAKER_UNCOUNTED_KEYS: ReadonlySet<string> = new Set([
+  ...RESOURCE_HOLD_EXEMPT_KEYS,
+  "probe.manual",
+  "probe.excluded-chat",
+]);
 /** Consecutive network failures that pause the page … */
 export const NETWORK_FAILURES_TO_PAUSE = 3;
 /** … for 10 s → 30 s → 1 min → 2 min → 5 min ([A7]; the plan gives only the ends). */
@@ -271,9 +283,10 @@ export interface OutcomeInput {
   /** The work is a subject-queue walk: the breaker belongs to the queue
    *  subject and the walk row goes on with the next subject. */
   subjectQueue: boolean;
-  /** Distinct subjects of this resource file (exempt keys excluded) whose
-   *  request failed with `subject_failure` within RESOURCE_BREAKER_WINDOW_MS,
-   *  this one included. Read only for `subject_failure`. */
+  /** Distinct subjects of this resource file (RESOURCE_BREAKER_UNCOUNTED_KEYS
+   *  excluded) whose request failed with `subject_failure` within
+   *  RESOURCE_BREAKER_WINDOW_MS, this one included. Read only for
+   *  `subject_failure`. */
   recentFailedSubjects: number;
   /** The digest of the credentials the request carried
    *  (`sync_attempts.request.credentialsGeneration`): an auth/identity hold

@@ -257,6 +257,12 @@ export interface OutcomeStep {
   httpStatus: number | null;
   /** How the send ended (a response, or the wire failing). */
   outcome: "response" | "transport_error" | "timeout";
+  /** The answer is a non-2xx that carries Fansly's own well-formed error
+   *  envelope (`isFanslyErrorEnvelope`: `success: false`, a numeric
+   *  `error.code`, a non-empty `error.details`): the application answered,
+   *  not a proxy or a gateway. False for a 2xx, an HTML or empty body and a
+   *  wire failure. */
+  fanslyErrorEnvelope: boolean;
 }
 
 export interface ApplyResult<C = unknown> {

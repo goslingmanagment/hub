@@ -382,8 +382,16 @@ admission. Its answer is journaled and stamped `NEVER_CANONICALIZED_PARSE_VERSIO
 family version — a stamp at the DM family's own version would be replayed by its next bump), so no sweep ever
 canonicalizes it and an excluded chat gets no events, messages or archive rows from a probe. A served page closes the
 probe `served: true` (messages, newest/oldest time, ids the socket showed first); a 403 (`subjectScopedAuthStatuses`),
-a declared 400/404/410/422, a `success: false` envelope or a refused body is the chat's answer: `served: false`,
-nothing held, no breaker. A 401 stays the page's (plan §9); a 429 holds the probe's route.
+a declared 400/404/410/422, a `success: false` envelope, a refused body, and any other non-2xx that carries Fansly's own
+error envelope (`isFanslyErrorEnvelope`: `success: false`, a numeric `error.code`, a non-empty `error.details` — e.g.
+lilly-1's `500 error getting group messages`; the commit passes the outcome hook `OutcomeStep.fanslyErrorEnvelope`) is
+the chat's answer: `served: false`, `not_served:<status>`, nothing held, no breaker. A 5xx without that envelope (a
+proxy's HTML page, an empty 502/503/504) and a transport error are the wire's: the probe stays on the subject's ladder.
+A 401 stays the page's (plan §9); a 429 holds the probe's route. Failures of `probe.excluded-chat` and `probe.manual`
+never count toward the `probe` file's resource breaker (`RESOURCE_BREAKER_UNCOUNTED_KEYS`), so failing probes never
+hold `probe.manual`; a hold already in force still stops both until it ends. The probes the old rule left open (a 500
+with the envelope was a `subject_failure`) were closed by the migration `*_sync_excluded_probe_not_served.sql` from
+their recorded answers, the attempt ids kept in the result.
 
 `sync excluded report --page P [--reason R] [--record]` prints the newest probe's verdicts (served / not served /
 pending) with the evidence ids; `--record` keeps the summary as `admin.sync_dm_exclusion_probe`. `sync excluded lift
@@ -774,7 +782,7 @@ A retry after an error is always a new attempt through the same admission.
 | a 5xx naming its own `Retry-After` | `rate_limit` | a hold of that route until `Retry-After`, no slowdown, no ladder step; the route's incident |
 | 401 / 403 the resource declares about its subject (`subjectScopedAuthStatuses`: a CDN hop's signed URL) | `subject_terminal` | the subject closes with its receipt, no hold |
 | 401 / 403 | `auth` | page hold until an identity proof sent after this refusal (recorded as the latest), alert 1 |
-| any other non-2xx | `subject_failure` | subject breaker; ≥ 5 subjects of a file in 10 min ⇒ resource hold |
+| any other non-2xx | `subject_failure` | subject breaker; ≥ 5 subjects of a file in 10 min ⇒ resource hold (failures of `dm-messages.head` and of the owner's probes `probe.*` are not counted) |
 | a status the resource declares terminal | `subject_terminal` | the subject closes with a receipt, no breaker |
 | transport error, timeout, 408 | `network` | streak; at 3 ⇒ page hold; alert 1 after 10 min |
 | refused before sending | `not_sent` | nothing learned: the work is admitted again |
