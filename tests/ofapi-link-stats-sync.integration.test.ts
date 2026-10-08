@@ -1594,6 +1594,7 @@ describe("OFAPI link-stats series: the empty-cache guard is per OFAPI account", 
 describe("OFAPI link-stats series: a window's usable result", () => {
   const WINDOW = new Date("2026-10-08T04:45:00Z");
   const EARLIER = new Date("2026-10-07T16:45:00Z");
+  const A_DAY_EARLIER = new Date("2026-10-07T04:45:00Z");
 
   async function attempt(
     pageId: number,
@@ -1662,9 +1663,11 @@ describe("OFAPI link-stats series: a window's usable result", () => {
 
     const never = await seedOfapiPage("usable-never-of", "acct_usable_never");
     const had = await seedOfapiPage("usable-had-of", "acct_usable_had");
-    // `never` × trial has no links at all — its steady state is an unverified
-    // empty read. `had` × trial showed a link in an earlier window, so an
-    // empty read now is a cold cache or an unconfirmed wipe: no result yet.
+    // `never` × trial has no links at all and has read empty for a day — its
+    // steady state is an unverified empty read. `had` × trial showed a link
+    // in an earlier window, so an empty read now is a cold cache or an
+    // unconfirmed wipe: no result yet.
+    await attempt(never.id, "trial", "partial", { reason: "empty_unverified", windowAt: A_DAY_EARLIER });
     await attempt(had.id, "trial", "complete", { links: ["7"], windowAt: EARLIER });
     await attempt(never.id, "trial", "partial", { reason: "empty_unverified" });
     await attempt(had.id, "trial", "partial", { reason: "inventory_vanished" });
@@ -1686,6 +1689,47 @@ describe("OFAPI link-stats series: a window's usable result", () => {
     });
   });
 
+  it("a never-linked pair's empty reads count only once the emptiness has lasted 24 hours", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    // A page connected for the first time: Hub has never seen a trial link
+    // for it, and the vendor's stored cache may still be cold — or the page
+    // may genuinely have none. Only time tells the two apart.
+    const page = await seedOfapiPage("usable-persist-of", "acct_usable_persist");
+    const first = new Date("2026-10-06T03:45:00Z");
+    const hours = (count: number) => new Date(first.getTime() + count * 60 * 60_000);
+    const usableAt = async (windowAt: Date) =>
+      (await listLinkStatWindowPairStates(appContext.db, { windowAt }))[0]!.hasUsableResult;
+
+    await attempt(page.id, "trial", "partial", { reason: "empty_unverified", windowAt: first });
+    expect(await usableAt(first)).toBe(false);
+    for (const offset of [6, 12, 18]) {
+      await attempt(page.id, "trial", "partial", { reason: "empty_unverified", windowAt: hours(offset) });
+      expect(await usableAt(hours(offset)), `+${offset} h`).toBe(false);
+    }
+    // A day of empty reads: the page genuinely shows none.
+    for (const offset of [24, 30]) {
+      await attempt(page.id, "trial", "partial", { reason: "empty_unverified", windowAt: hours(offset) });
+      expect(await usableAt(hours(offset)), `+${offset} h`).toBe(true);
+    }
+    // The rule reads only rows before each row: the first day stays what it was.
+    expect(await usableAt(first)).toBe(false);
+
+    // A second page whose cache warms up within the day: the links appear,
+    // and from then on an empty read is never a result by persistence.
+    const warm = await seedOfapiPage("usable-warm-of", "acct_usable_warm");
+    await attempt(warm.id, "trial", "partial", { reason: "empty_unverified", windowAt: first });
+    await attempt(warm.id, "trial", "complete", { links: ["5"], windowAt: hours(6) });
+    await attempt(warm.id, "trial", "partial", { reason: "inventory_vanished", windowAt: hours(30) });
+    const warmStates = async (windowAt: Date) => (await listLinkStatWindowPairStates(appContext.db, { windowAt }))
+      .find((state) => state.platformAccountId === warm.id)!.hasUsableResult;
+    expect(await warmStates(hours(6))).toBe(true);
+    expect(await warmStates(hours(30))).toBe(false);
+  });
+
   it("after a rebind a cold cache's empty reads are no result, while a kind that never had a link stays a result across the rebind", async (context) => {
     if (!testDb) {
       context.skip();
@@ -1693,8 +1737,21 @@ describe("OFAPI link-stats series: a window's usable result", () => {
     }
 
     // tracking has links under the first account; trial never had one under
-    // any account (lora-of's trial links on production).
+    // any account and has read empty for days (lora-of's trial links on
+    // production).
     const page = await seedOfapiPage("usable-rebind-of", "acct_usable_before");
+    await insertLinkStatRunWithSnapshots(appContext.db, {
+      platformAccountId: page.id,
+      linkKind: "trial",
+      status: "partial",
+      pulledAt: new Date("2026-10-01T04:45:20Z"),
+      apiPages: 1,
+      rawItems: 0,
+      writtenRows: 0,
+      reason: "empty_unverified",
+      windowAt: new Date("2026-10-01T04:45:00Z"),
+      ofapiAccountId: "acct_usable_before",
+    }, []);
     appContext = {
       ...appContext,
       ofapi: linksClient({

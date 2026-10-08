@@ -3409,12 +3409,18 @@ export async function hasNonEmptyLinkStatRunUnderAnotherAccount(
  *     — under a new account its empty reads stay `partial`;
  *   - `partial` that wrote snapshots;
  *   - an empty `partial` on a pair that had NEVER shown a link, under any
- *     OFAPI account (rows of unknown account included), before this row.
- *     Nothing can be lost there: the page genuinely shows none. Such a pair
- *     stays `partial` (empty_unverified) for good — lora-of's trial links,
- *     154 runs on production, none ever non-empty — and that is its steady
- *     state, not a missing point that would retry every window and page as
- *     stale forever.
+ *     OFAPI account (rows of unknown account included), before this row,
+ *     AND whose emptiness has lasted: an earlier empty read of the pair at
+ *     least 24 hours before this one. Such a pair stays `partial`
+ *     (empty_unverified) for good — lora-of's trial links, 154 runs on
+ *     production since 2026-07-22, none ever non-empty — and that is its
+ *     steady state, not a missing point that would retry every window and
+ *     page as stale forever. The first empty read of a pair, and every empty
+ *     read in the 24 hours after it, is not a result: a page connected for
+ *     the first time may well have links while the vendor's stored cache is
+ *     still cold, and "0 links" must not pass for a reading until the
+ *     emptiness has persisted. Until then the pair is retried and ages
+ *     toward series_stale like any pair without a result.
  *
  * Everything else is an attempt without a result: `failed`, `skipped`,
  * `truncated`, a `partial` that wrote nothing (every item dropped), and an
@@ -3424,18 +3430,32 @@ export async function hasNonEmptyLinkStatRunUnderAnotherAccount(
  * The presence of such a row neither cancels a retry of its window nor
  * advances the freshness of the series.
  */
+/** How long a never-linked pair must keep reading empty before its empty
+ * reads count as results (linkStatRunUsableResultSql). */
+export const LINK_STAT_EMPTY_PERSISTENCE_HOURS = 24;
+
 export function linkStatRunUsableResultSql(run: SQL): SQL {
   return sql`(
     ${run}.status = 'complete'
     or (${run}.status = 'partial' and ${run}.written_rows > 0)
-    or (${run}.status = 'partial' and ${run}.raw_items = 0 and not exists (
-      select 1 from page_link_stat_runs seen
-      where seen.platform_account_id = ${run}.platform_account_id
-        and seen.link_kind = ${run}.link_kind
-        and seen.status in ('complete', 'partial')
-        and seen.raw_items > 0
-        and seen.id < ${run}.id
-    ))
+    or (${run}.status = 'partial' and ${run}.raw_items = 0
+      and not exists (
+        select 1 from page_link_stat_runs seen
+        where seen.platform_account_id = ${run}.platform_account_id
+          and seen.link_kind = ${run}.link_kind
+          and seen.status in ('complete', 'partial')
+          and seen.raw_items > 0
+          and seen.id < ${run}.id
+      )
+      and exists (
+        select 1 from page_link_stat_runs earlier
+        where earlier.platform_account_id = ${run}.platform_account_id
+          and earlier.link_kind = ${run}.link_kind
+          and earlier.status in ('complete', 'partial')
+          and earlier.raw_items = 0
+          and earlier.id < ${run}.id
+          and earlier.pulled_at <= ${run}.pulled_at - interval '${sql.raw(String(LINK_STAT_EMPTY_PERSISTENCE_HOURS))} hours'
+      ))
   )`;
 }
 
