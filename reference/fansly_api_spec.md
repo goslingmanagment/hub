@@ -974,6 +974,10 @@ Update a setting value.
 
 ### 2.10 Statistics & Analytics
 
+> The creator statistics pages shipped in 2026-10 (`/creator/stats/*`) use a separate family,
+> `GET /account/stats/*`, mapped in [fansly-creator-stats/README.md](fansly-creator-stats/README.md).
+> The routes below still exist but only the legacy pages call them.
+
 #### GET /it/amoie/stats
 Get comprehensive profile and media statistics.
 
