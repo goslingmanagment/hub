@@ -138,7 +138,9 @@ import { purchaseTargetFollowups, purchaseTargetSubject, type PurchaseTarget } f
 // transaction (`outcomeInCapture`); the episode's own 5th refusal establishes
 // it. Every refusal that leaves it established closes the refused head or
 // catch-up work and the chat's other open head and catch-up rows (at the
-// revision they were read at) `chat_unavailable` with their demand unserved,
+// revision they were read at, and only those whose next read is the head — a
+// staged walk below a head read finishes) `chat_unavailable` with their demand
+// unserved,
 // defers the chat's unconfirmed socket messages
 // (`chat_unavailable`, still shown), sets the retry boundary (the later of
 // the refused attempt's breaker and the daily step) and the answered list
@@ -1098,6 +1100,13 @@ export function isQualifyingChatRefusal(decision: Pick<OutcomeDecision, "errorCl
     && step.fanslyErrorEnvelope;
 }
 
+/** A `.head` / `.catchup` row's next read is the chat's head (its plan, as
+ *  `planThreadRead` makes it): no staged walk continues below the chain's
+ *  head, and the chain does not cover its demand yet. */
+function readsHeadNext(work: Pick<SyncWorkRow, "cursor" | "demand">, chain: ThreadChain): boolean {
+  return liveSegment(parseDmMessagesCursor(work.cursor).segment, chain) === null && !demandWithinChain(work.demand, chain);
+}
+
 /** The retry boundary an established refusal sets: the later of the refused
  *  attempt's breaker and the daily step (the blocked step of the ladder, which
  *  a key reading the chat's head for the first time in the episode does not
@@ -1117,7 +1126,9 @@ export function chatRetryNotBefore(decision: Pick<OutcomeDecision, "subjectBreak
  * unserved — the refused one through the decision (I11: only when no newer
  * demand arrived during the step), the others only at the revision they were
  * read at (a demand that came since keeps a row open, under the episode's
- * boundary) — and asks the history requests to refuse the chat's fans that
+ * boundary) and only when their next read is the head (a staged walk below
+ * its head read finishes under its own breaker; a row the chain covers closes
+ * by its own plan) — and asks the history requests to refuse the chat's fans that
  * need its head: a history walk is never closed here (an anchored fan of its
  * keeps reading below the chain under the key's own breaker; the history
  * hook closes the work when no fan is left). Any other failed head read of an
@@ -1183,6 +1194,10 @@ async function chatRefusalInCapture(tx: Database, decision: OutcomeDecision, inp
     // stays open, and its plan waits for the episode's boundary.
     const now = locked.get(seen.id);
     if (now === undefined || now.state !== "open" || now.demandRevision !== seen.demandRevision) continue;
+    // Only a row whose next read is the head: one that continues a staged
+    // walk below its head read (`before`, under its own breaker) finishes it,
+    // and one the chain already covers closes by its own plan, unread.
+    if (!readsHeadNext(now, thread.chain)) continue;
     await closeOpenWork(tx, {
       workId: now.id,
       generation: input.generation,

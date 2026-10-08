@@ -428,7 +428,9 @@ The page's actor is its one writer:
   `chat_unavailable` with its demand unserved (`satisfiesRevision: false`, the breaker kept on the closed row; only
   when no newer demand arrived during the step — else it stays open under its breaker), the chat's other open
   `.head` and `.catchup` rows close the same way at the revision they were read at (a demand that came since keeps a
-  row open, under the boundary), its unconfirmed socket messages are deferred `chat_unavailable` (still shown), the
+  row open, under the boundary) and only when their next read is the head (a row that continues a staged walk below
+  its head read through `before` finishes it under its own breaker; one the chain covers closes by its own plan),
+  its unconfirmed socket messages are deferred `chat_unavailable` (still shown), the
   history requests refuse its open fans that need its head (`CommitDeps.onChatUnavailable`; `refusal: excluded`,
   `excludedReason: chat_unavailable`; an anchored fan of a partial chain keeps its walk below the chain under the
   key's own breaker — a refused history read never closes the walk itself; a history work no fan rides on any more
@@ -449,7 +451,9 @@ The page's actor is its one writer:
 
 The history intake decides by the episode, never by the latest work of a DM read (a deeper page's refusal says
 nothing of the head a new fan needs first): a chat with an established episode is refused at intake (`excluded`,
-`chat_unavailable`); any other chat is queued. The passive parity pass defers a message the 24-hour window passed
+`chat_unavailable`); any other chat is queued. The intake reads the episodes again in its transaction, `for share`
+after the threads and before any work row (`lockOpenChatUnavailability`): an establishment in flight is waited for
+and its fans are refused with no work; one that comes after the intake finds the fans it filed. The passive parity pass defers a message the 24-hour window passed
 `chat_unavailable` while its chat has an open episode (`openChatUnavailabilitySql`), else `age_without_rest`.
 Alerts, the page summary's counter, the CLI and the metric take the episode in the next release; the shared test is
 `dmLiveChatUnavailableSql` (`repositories/sync/observability.ts`). The episodes are erased with their threads (the

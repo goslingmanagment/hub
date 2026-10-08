@@ -98,6 +98,7 @@ const snowflake = (ms: number, seq = 0) => ((BigInt(ms - EPOCH_MS) << 22n) | Big
 const msg = (k: number) => snowflake(BASE_MS + k * 1000);
 const groupOf = (n: number) => `7100000000000${String(n).padStart(5, "0")}`;
 const senderOf = (k: number) => (k % 2 === 0 ? OWN : FAN);
+const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, index) => from + index);
 
 /** What lora-1's refused chat answers, every time (04.10 → 08.10). */
 const GROUP_MESSAGES_500 = { success: false, error: { code: 500, details: "error getting group messages" } };
@@ -837,6 +838,96 @@ describe("the review of PR #490", () => {
     const bumped = await workRow(pageId, HEAD_KEY);
     expect(bumped).toMatchObject({ state: "open", demand_revision: String(head.demandRevision + 1) });
     expect(bumped!.demand.messageIds).toEqual([msg(7), msg(9)]);
+  });
+});
+
+describe("the second review of PR #490", () => {
+  it("establishment closes a neighbour catch-up that would read the head, and keeps one walking a staged segment below its head read, which finishes it", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage();
+    const walking = await seedThread(pageId, { n: 1 });
+    const idle = await seedThread(pageId, { n: 2 });
+    const registry = await registryFor(pageId);
+    for (const [threadId, n] of [[walking, 1], [idle, 2]] as const) {
+      await seedEpisode(threadId, { state: "refusing", refusals: 4 });
+      await demand(pageId, HEAD_KEY, [msg(41)], { n });
+      await demand(pageId, CATCHUP_KEY, [msg(40)], { n, dueAt: new Date(Date.now() + HOUR) });
+    }
+    // Chat 1's catch-up read the head (40…16, above the chain's head 5) and
+    // reads `before` 16 next.
+    const segment = {
+      baseHeadId: msg(5),
+      headId: msg(40),
+      headAt: new Date(Date.now() - 60_000).toISOString(),
+      oldestId: msg(16),
+      oldestCreatedAtMs: Math.floor((BASE_MS + 16_000) / 1000) * 1000,
+      count: 25,
+    };
+    await testDb.pool.query(
+      "update sync_work set cursor = $3::jsonb where page_id = $1 and resource = $2 and subject = $4",
+      [pageId, CATCHUP_KEY, JSON.stringify({ segment, walkPages: 1, misses: {}, last: null, historyHeadAt: null }), groupOf(1)],
+    );
+    const respond: Responder = (req) => (beforeOf(req) === null ? refused() : serve(groupOf(1), range(1, 40))(req));
+
+    // Both heads are refused a 5th time: both chats established.
+    const first = await runLive(pageId, registry, respond, async () =>
+      (await workRow(pageId, HEAD_KEY, 1))?.state === "done" && (await workRow(pageId, HEAD_KEY, 2))?.state === "done");
+    expect(first.requests.map(beforeOf)).toEqual([null, null]);
+    expect((await episodes(walking))[0]).toMatchObject({ state: "established" });
+    expect((await episodes(idle))[0]).toMatchObject({ state: "established" });
+    // The idle catch-up would read the head: closed. The walking one goes on.
+    expect(await workRow(pageId, CATCHUP_KEY, 2)).toMatchObject({ state: "done", close_reason: "chat_unavailable" });
+    expect(await workRow(pageId, CATCHUP_KEY, 1)).toMatchObject({ state: "open" });
+
+    // Its time comes: it reads below its segment, meets the chain and closes.
+    await testDb.pool.query(
+      "update sync_work set due_at = now() - interval '1 second' where page_id = $1 and resource = $2 and subject = $3",
+      [pageId, CATCHUP_KEY, groupOf(1)],
+    );
+    const second = await runLive(pageId, registry, respond, async () => (await workRow(pageId, CATCHUP_KEY, 1))?.state === "done");
+    expect(second.requests.map(beforeOf)).toEqual([msg(16)]);
+    expect(await workRow(pageId, CATCHUP_KEY, 1)).toMatchObject({ close_reason: "caught_up" });
+    const chain = await rows<{ head_confirmed_id: string }>("select head_confirmed_id from page_dm_threads where id = $1", [walking]);
+    expect(chain[0]!.head_confirmed_id).toBe(msg(40));
+    // A deeper page's read does not end the episode.
+    expect((await episodes(walking))[0]).toMatchObject({ state: "established", ended_at: null });
+  });
+
+  it("a history intake racing an establishment waits for it under the episode row and refuses the fan, with no work", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage();
+    const threadId = await seedThread(pageId);
+    const episodeId = await seedEpisode(threadId, { state: "refusing", refusals: 4 });
+    // The actor's 5th refusal: the episode row updated, not committed yet.
+    const actor = await testDb.pool.connect();
+    try {
+      await actor.query("begin");
+      await actor.query(
+        `update page_dm_thread_unavailability
+            set state = 'established', refusals = 5, established_at = now(), retry_not_before = now() + interval '1 day'
+          where id = $1`,
+        [episodeId],
+      );
+      // The intake read the episode as refusing; its transaction meets the row.
+      const intake = submitHistoryRequest({ db: db(), rawConfig: testConfig(testDb.connectionString) }, {
+        pageId,
+        fans: [{ kind: "conversation", conversationRef: groupOf(1) }],
+        depth: { kind: "all" },
+        reason: "test",
+        idempotencyKey: randomUUID(),
+        requester: { kind: "owner_cli", userId: null },
+      });
+      await waitFor(async () => (await scalar(
+        "select count(*)::int as n from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'",
+      )) >= 1 ? true : null, 10_000, "the intake to wait for the episode row");
+      await actor.query("commit");
+      const filed = await intake;
+      expect(filed.items[0]).toMatchObject({ state: "refused", refusal: "excluded", excludedReason: "chat_unavailable" });
+      expect(filed.request.state).toBe("done");
+    } finally {
+      actor.release();
+    }
+    expect(await workRow(pageId, HISTORY_KEY)).toBeNull();
   });
 });
 

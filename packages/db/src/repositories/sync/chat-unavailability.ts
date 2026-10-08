@@ -332,6 +332,33 @@ export async function readOpenChatUnavailability(
   return new Map(episodes.map((episode) => [episode.groupId, episode]));
 }
 
+/**
+ * The open episodes of these chats, read `for share` (thread id order) in the
+ * caller's transaction: the history intake's re-check, synchronised with an
+ * establishment — the actor's refusal updates the episode row, so an
+ * establishment in flight is waited for and then read, and one that comes
+ * later waits for the intake and finds its fans. Taken after the threads
+ * (`lockThreadsForHistoryItems`) and before any work row, the order of both.
+ */
+export async function lockOpenChatUnavailability(
+  tx: Database,
+  input: { threadIds: readonly number[] },
+): Promise<Map<number, ChatUnavailabilityEpisode>> {
+  const ids = [...new Set(input.threadIds)].sort((a, b) => a - b);
+  if (ids.length === 0) return new Map();
+  const locked = await tx.execute<{ id: string }>(sql`
+    select e.id::text as id
+      from page_dm_thread_unavailability e
+     where e.thread_id = any(${sql.param(ids.map(String))}::bigint[])
+       and e.ended_at is null
+     order by e.thread_id
+       for share of e
+  `);
+  if (locked.rows.length === 0) return new Map();
+  const episodes = await readEpisodes(tx, sql`e.id = any(${sql.param(locked.rows.map((row) => row.id))}::bigint[]) and e.ended_at is null`);
+  return new Map(episodes.map((episode) => [episode.threadId, episode]));
+}
+
 /** Every episode of one chat, oldest first (the open one last, if any). */
 export async function listChatUnavailabilityEpisodes(db: Database, input: { threadId: number }): Promise<ChatUnavailabilityEpisode[]> {
   return readEpisodes(db, sql`e.thread_id = ${input.threadId}`);

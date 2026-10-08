@@ -20,6 +20,7 @@ import {
   listHistoryRequests,
   listOpenHistoryItems,
   listOpenRequestsForPage,
+  lockOpenChatUnavailability,
   lockRequestsOfOpenItems,
   lockThreadsForHistoryItems,
   lockWorkRows,
@@ -568,22 +569,8 @@ export async function submitHistoryRequest(
       threadId: entry.thread?.threadId ?? null,
       conversationRef: entry.thread?.groupId ?? entry.input.groupId,
     };
-    const refusedAtIntake = (refusal: HistoryItemRefusal, excludedReason: string | null): NewHistoryItem => ({
-      ...base,
-      state: "refused",
-      refusal,
-      excludedReason,
-      workId: null,
-      anchor: null,
-      estimateReadsMin: null,
-      estimateReads: null,
-      satisfiedBy: null,
-      satisfiedOldestId: null,
-      satisfiedCount: null,
-      final: { readsSpent: 0, refusedAtIntake: true },
-    });
     if (entry.kind === "refused") {
-      items.push(refusedAtIntake(entry.refusal, entry.excludedReason));
+      items.push(refusedAtIntake(base, entry.refusal, entry.excludedReason));
       continue;
     }
     const thread = entry.thread;
@@ -591,7 +578,7 @@ export async function submitHistoryRequest(
     // like an excluded one: its head is not read before the episode's retry
     // boundary, so no fan of it can be served.
     if (unavailable.get(thread.groupId)?.state === "established") {
-      items.push(refusedAtIntake("excluded", CHAT_UNAVAILABLE_REASON));
+      items.push(refusedAtIntake(base, "excluded", CHAT_UNAVAILABLE_REASON));
       continue;
     }
     const anchor = anchorAtIntake(thread, socket);
@@ -671,7 +658,25 @@ export async function submitHistoryRequest(
       //     locked in id order, then the demand upserted by group id (new
       //     rows in key order).
       await lockThreadsForHistoryItems(tx, items.flatMap((item) => (item.threadId === null ? [] : [item.threadId])));
-      const groups = [...needWork.keys()].sort();
+      // (2a) Whether Fansly serves the chats, again, under their episode rows
+      //      (before any work row, as the actor's refusal takes them): an
+      //      establishment since the read above is waited for and seen — its
+      //      fans are refused now, with no work and no read — and one that
+      //      comes after this transaction finds the fans it filed.
+      const episodes = await lockOpenChatUnavailability(tx, {
+        threadIds: [...needWork.values()].map((entry) => entry.thread.threadId),
+      });
+      const refusedNow = new Set<string>();
+      for (const [groupId, entry] of needWork) {
+        if (episodes.get(entry.thread.threadId)?.state !== "established") continue;
+        refusedNow.add(groupId);
+        for (const [index, item] of items.entries()) {
+          if (item.state === "queued" && item.threadId === entry.thread.threadId) {
+            items[index] = refusedAtIntake(item, "excluded", CHAT_UNAVAILABLE_REASON);
+          }
+        }
+      }
+      const groups = [...needWork.keys()].filter((groupId) => !refusedNow.has(groupId)).sort();
       const existing = await openWorkIdsForSubjects(tx, {
         pageId: input.pageId, resource: HISTORY_WORK_RESOURCE, subjects: groups,
       });
@@ -716,7 +721,7 @@ export async function submitHistoryRequest(
       //     ones') against the chain as it stands.
       await settleOpenItemsOfThreads(tx, {
         pageId: input.pageId,
-        threadIds: [...needWork.values()].map((entry) => entry.thread.threadId),
+        threadIds: groups.map((groupId) => needWork.get(groupId)!.thread.threadId),
       });
       await refreshHistoryRequestCompletion(tx, [request.id]);
       if (options.audit !== undefined) {
@@ -749,6 +754,34 @@ export async function submitHistoryRequest(
     limit: HISTORY_ITEMS_PAGE,
   });
   return { disposition: "created", ...document };
+}
+
+/** A fan refused at intake: no work, no read. */
+function refusedAtIntake(
+  base: Pick<NewHistoryItem, "ordinal" | "inputKind" | "inputRef" | "fanPlatformUserId" | "fanId" | "threadId" | "conversationRef">,
+  refusal: HistoryItemRefusal,
+  excludedReason: string | null,
+): NewHistoryItem {
+  return {
+    ordinal: base.ordinal,
+    inputKind: base.inputKind,
+    inputRef: base.inputRef,
+    fanPlatformUserId: base.fanPlatformUserId,
+    fanId: base.fanId,
+    threadId: base.threadId,
+    conversationRef: base.conversationRef,
+    state: "refused",
+    refusal,
+    excludedReason,
+    workId: null,
+    anchor: null,
+    estimateReadsMin: null,
+    estimateReads: null,
+    satisfiedBy: null,
+    satisfiedOldestId: null,
+    satisfiedCount: null,
+    final: { readsSpent: 0, refusedAtIntake: true },
+  };
 }
 
 // ── satisfaction (design §7.1.6) ──────────────────────────────────────────────
