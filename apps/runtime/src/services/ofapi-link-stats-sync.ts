@@ -19,6 +19,11 @@
 // after the move. Both are targeted passes on their own queue; they read only
 // the pairs that still lack a result. The reads are free at the vendor, so
 // the lane neither reserves credits nor stops at the credit floor.
+//
+// A snapshot's money is the vendor's revenue.total — the creator's NET after
+// the OnlyFans fee, refunds and chargebacks (PR 6): revenue_net_mills, with
+// the same value kept in the deprecated revenue_gross_mills for the readers
+// that still name it.
 
 import {
   findLatestFinishedLinkStatRun,
@@ -160,6 +165,8 @@ const DEFAULT_LINK_STATS_DAILY_CREDIT_BUDGET = 50;
 // meaningful with enough evidence: a single bad vendor item on a one-link
 // page must not page the operator as a fleet outage.
 const MAPPING_COLLAPSE_MIN_ITEMS = 3;
+/** Which normalizer read the journaled pages into snapshots. */
+const LINK_STATS_MAPPER_VERSION = "link-stats-v2";
 
 export function isOfapiLinkStatsReconcileEnabled(
   config?: Pick<AppContext["config"], "ofapiLinkStatsReconcileEnabled">,
@@ -205,6 +212,15 @@ function parseOptionalString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
+/** The link's tags as the vendor sent them. Anything but a list of strings is
+ * an unknown shape, kept as null rather than as "no tags": an empty list is
+ * the vendor's own statement. The raw list stays in the journal either way. */
+function parseTags(value: unknown): string[] | null {
+  return Array.isArray(value) && value.every((tag): tag is string => typeof tag === "string")
+    ? value
+    : null;
+}
+
 function normalizeLinkItem(
   kind: LinkStatKind,
   pageId: number,
@@ -242,6 +258,7 @@ function normalizeLinkItem(
   // still-computing vendor value (isLoading), or an unparseable total must be
   // distinguishable from a link that genuinely earned $0.
   const revenueKnown = revenue !== null && revenueIsLoading !== true;
+  // Descriptive fields never drop a link: an absent or malformed one is null.
   return {
     status: "ok",
     row: {
@@ -259,9 +276,19 @@ function normalizeLinkItem(
       claimsCount,
       subscribersCount,
       spendersCount: revenueKnown ? parseCounter(revenue.spendersCount) : null,
-      revenueGrossMills: revenueKnown ? parseDollarMills(revenue.total) : null,
+      // revenue.total is the creator's NET: after the 20 % OnlyFans fee and
+      // after refunds and chargebacks (proved to the cent against the ledger;
+      // the vendor documents the same). Stored as is — no fee is taken off.
+      revenueNetMills: revenueKnown ? parseDollarMills(revenue.total) : null,
+      // The positive amount the vendor ALREADY took out of revenue.total:
+      // informational, never to be subtracted again. A block without the
+      // field leaves it unknown, not zero.
+      revenueChargebacksMills: revenueKnown ? parseDollarMills(revenue.chargebacks) : null,
       revenueIsLoading,
       revenueCalculatedAt: parseDate(revenue?.calculatedAt),
+      // The free period a trial link grants; tracking links have none.
+      trialDays: kind === "trial" ? parseCounter(item.subscribeDays) : null,
+      tags: parseTags(item.tags),
     },
   };
 }
@@ -372,7 +399,9 @@ async function reconcileKind(
       // with isRecord(payload) — a top-level array would be unparseable by
       // the very "capture now, parse later" machinery this write feeds.
       responsePayload: { items: page.items, hasNextPage: page.hasNextPage },
-      mapperVersion: "link-stats-v1",
+      // v2 (0253): the snapshot also keeps the net money under its true name,
+      // chargebacks, the trial length and tags.
+      mapperVersion: LINK_STATS_MAPPER_VERSION,
       payloadKind: "mapping_critical",
       // Stage 1 retention stand-down: captured facts are stamped far-future
       // (the cleanup job is a deliberate no-op) — never a real deletion date.

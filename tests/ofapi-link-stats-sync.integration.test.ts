@@ -118,9 +118,12 @@ function snapshot(pageId: number, linkKind: LinkStatKind, platformLinkId: string
     claimsCount: linkKind === "trial" ? 1 : null,
     subscribersCount: 0,
     spendersCount: null,
-    revenueGrossMills: null,
+    revenueNetMills: null,
+    revenueChargebacksMills: null,
     revenueIsLoading: null,
     revenueCalculatedAt: null,
+    trialDays: null,
+    tags: null,
   };
 }
 
@@ -194,6 +197,7 @@ function trackingItem(): Record<string, unknown> {
       spendersCount: 0,
       calculatedAt: "2026-07-21T00:18:23.000000Z",
       isLoading: false,
+      chargebacks: 0,
     },
   };
 }
@@ -210,12 +214,14 @@ function trialItem(): Record<string, unknown> {
     expiredAt: null,
     createdAt: "2026-06-17T00:00:00+00:00",
     isFinished: false,
+    tags: ["reddit"],
     revenue: {
       total: 144.8,
       revenuePerSubscriber: 0.4482972136222911,
       spendersCount: 7,
       calculatedAt: "2026-07-21T21:05:40.000000Z",
       isLoading: false,
+      chargebacks: 12.5,
     },
   };
 }
@@ -318,8 +324,13 @@ describe("OFAPI link-stats reconcile", () => {
       // A computed vendor zero stays a REAL zero (isLoading=false) — nullable
       // money is only for unknown values.
       spendersCount: 0,
+      revenueNetMills: 0n,
       revenueGrossMills: 0n,
+      revenueChargebacksMills: 0n,
       revenueIsLoading: false,
+      // A tracking link grants no free period; an empty list is "no tags".
+      trialDays: null,
+      tags: [],
     });
     expect(trialSnapshot).toMatchObject({
       runId: trialRun.id,
@@ -329,7 +340,14 @@ describe("OFAPI link-stats reconcile", () => {
       subscribersCount: 0,
       claimsCount: 323,
       spendersCount: 7,
+      // revenue.total is already the creator's net: stored as is, under its
+      // true name and, with the same value, under the deprecated one.
+      revenueNetMills: 144800n,
       revenueGrossMills: 144800n,
+      // Already excluded from the total by the vendor — kept, not subtracted.
+      revenueChargebacksMills: 12500n,
+      trialDays: 360,
+      tags: ["reddit"],
     });
     expect(trialSnapshot?.revenueCalculatedAt).toBeInstanceOf(Date);
 
@@ -340,11 +358,12 @@ describe("OFAPI link-stats reconcile", () => {
     // Stage-7 journaling is load-bearing: one raw-payload row per fetched API
     // page, record-shaped (the sync-pull canonicalizer gates on isRecord).
     const journal = await testDb!.pool.query(
-      `select endpoint, payload_kind, response_payload
+      `select endpoint, payload_kind, mapper_version, response_payload
        from sync_raw_payloads where page_id = $1 order by endpoint`,
       [page.id],
     );
     expect(journal.rows).toHaveLength(2);
+    expect(journal.rows.map((row) => row.mapper_version)).toEqual(["link-stats-v2", "link-stats-v2"]);
     expect(journal.rows.map((row) => row.endpoint)).toEqual([
       "link_stats_tracking",
       "link_stats_trial",
@@ -395,6 +414,7 @@ describe("OFAPI link-stats reconcile", () => {
       clicksCount: snapshot?.clicksCount,
       subscribersCount: snapshot?.subscribersCount,
       claimsCount: snapshot?.claimsCount,
+      revenueNetMills: snapshot?.revenueNetMills,
       revenueGrossMills: snapshot?.revenueGrossMills,
     }))).toEqual([
       {
@@ -404,6 +424,7 @@ describe("OFAPI link-stats reconcile", () => {
         clicksCount: 82,
         subscribersCount: 19,
         claimsCount: null,
+        revenueNetMills: 0n,
         revenueGrossMills: 0n,
       },
       {
@@ -413,6 +434,7 @@ describe("OFAPI link-stats reconcile", () => {
         clicksCount: 82,
         subscribersCount: 19,
         claimsCount: null,
+        revenueNetMills: 0n,
         revenueGrossMills: 0n,
       },
     ]);
@@ -586,6 +608,7 @@ describe("OFAPI link-stats reconcile", () => {
         spendersCount: 0,
         calculatedAt: null,
         isLoading: true,
+        chargebacks: 0,
       },
     };
     const noRevenueTrial = { ...trialItem(), id: 222, revenue: undefined };
@@ -614,16 +637,117 @@ describe("OFAPI link-stats reconcile", () => {
     expect(loadingSnapshot).toMatchObject({
       platformLinkId: "111",
       spendersCount: null,
+      revenueNetMills: null,
       revenueGrossMills: null,
+      // The placeholder chargebacks of a block still computing are unknown too.
+      revenueChargebacksMills: null,
       revenueIsLoading: true,
     });
     // Missing revenue block entirely: unknown, not zero.
     expect(absentSnapshot).toMatchObject({
       platformLinkId: "222",
       spendersCount: null,
+      revenueNetMills: null,
       revenueGrossMills: null,
+      revenueChargebacksMills: null,
       revenueIsLoading: null,
+      // Not money: the trial length does not depend on the revenue block.
+      trialDays: 360,
     });
+  });
+
+  it("keeps chargebacks, the trial length and tags; one the vendor did not send or sent malformed stays null and drops no link", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedOfapiPage("links-fields-of", "acct_fields");
+    const full = {
+      ...trialItem(),
+      id: 301,
+      subscribeDays: 7,
+      tags: ["Instagram", "Twitter"],
+      revenue: { ...(trialItem().revenue as Record<string, unknown>), total: 26.8, chargebacks: 6.4 },
+    };
+    const bare: Record<string, unknown> = { ...trialItem(), id: 302 };
+    delete bare.subscribeDays;
+    delete bare.tags;
+    const bareRevenue = { ...(trialItem().revenue as Record<string, unknown>) };
+    delete bareRevenue.chargebacks;
+    bare.revenue = bareRevenue;
+    const malformed = {
+      ...trialItem(),
+      id: 303,
+      subscribeDays: "30",
+      tags: ["ok", 5],
+      revenue: { ...(trialItem().revenue as Record<string, unknown>), chargebacks: "n/a" },
+    };
+    // A tracking link has no free period, whatever the item says; tags that
+    // are not a list are unknown, not "none".
+    const tracking = { ...trackingItem(), subscribeDays: 30, tags: "Instagram" };
+    appContext = {
+      ...appContext,
+      ofapi: linksClient({
+        trackingByAccount: new Map([["acct_fields", [tracking]]]),
+        trialByAccount: new Map([["acct_fields", [full, bare, malformed]]]),
+      }),
+    };
+
+    const result = await runOfapiLinkStatsReconcile(appContext);
+    expect(result.pages[0]).toMatchObject({ status: "written" });
+
+    const runs = await listLinkStatRuns(appContext.db, { platformAccountId: page.id });
+    const trackingRun = runs.find((run) => run.linkKind === "tracking")!;
+    const trialRun = runs.find((run) => run.linkKind === "trial")!;
+    // Descriptive fields never demote the walk or drop a link.
+    expect(trialRun).toMatchObject({ status: "complete", rawItems: 3, writtenRows: 3, reason: null });
+    expect(trackingRun).toMatchObject({ status: "complete", writtenRows: 1 });
+
+    const pick = (snapshot: Awaited<ReturnType<typeof listLinkStatSnapshots>>[number] | undefined) => ({
+      platformLinkId: snapshot?.platformLinkId,
+      revenueNetMills: snapshot?.revenueNetMills,
+      revenueGrossMills: snapshot?.revenueGrossMills,
+      revenueChargebacksMills: snapshot?.revenueChargebacksMills,
+      trialDays: snapshot?.trialDays,
+      tags: snapshot?.tags,
+    });
+    expect((await listLinkStatSnapshots(appContext.db, { runId: trialRun.id })).map(pick)).toEqual([
+      {
+        platformLinkId: "301",
+        revenueNetMills: 26800n,
+        revenueGrossMills: 26800n,
+        revenueChargebacksMills: 6400n,
+        trialDays: 7,
+        tags: ["Instagram", "Twitter"],
+      },
+      {
+        platformLinkId: "302",
+        revenueNetMills: 144800n,
+        revenueGrossMills: 144800n,
+        revenueChargebacksMills: null,
+        trialDays: null,
+        tags: null,
+      },
+      {
+        platformLinkId: "303",
+        revenueNetMills: 144800n,
+        revenueGrossMills: 144800n,
+        revenueChargebacksMills: null,
+        trialDays: null,
+        tags: null,
+      },
+    ]);
+    expect((await listLinkStatSnapshots(appContext.db, { runId: trackingRun.id })).map(pick)).toEqual([
+      {
+        platformLinkId: "2117449",
+        revenueNetMills: 0n,
+        revenueGrossMills: 0n,
+        revenueChargebacksMills: 0n,
+        trialDays: null,
+        tags: null,
+      },
+    ]);
   });
 
   it("keeps walking past a short page while hasNextPage is true", async (context) => {
@@ -772,7 +896,7 @@ describe("OFAPI link-stats reconcile", () => {
     }
 
     const page = await seedOfapiPage("links-bulk-of", "acct_bulk");
-    // 16 bind params per row × 4096 rows would exceed the 65535 protocol cap
+    // 20 bind params per row × 3277 rows would exceed the 65535 protocol cap
     // in a single VALUES insert — the repository must chunk.
     const rows: InsertLinkStatSnapshotInput[] = Array.from({ length: 4200 }, (_, index) => ({
       platformAccountId: page.id,
@@ -787,9 +911,12 @@ describe("OFAPI link-stats reconcile", () => {
       claimsCount: null,
       subscribersCount: 0,
       spendersCount: null,
-      revenueGrossMills: null,
+      revenueNetMills: null,
+      revenueChargebacksMills: null,
       revenueIsLoading: null,
       revenueCalculatedAt: null,
+      trialDays: null,
+      tags: null,
     }));
 
     const { runId, writtenRows } = await insertLinkStatRunWithSnapshots(
@@ -1152,9 +1279,12 @@ describe("OFAPI link-stats reconcile", () => {
       claimsCount: null,
       subscribersCount: 0,
       spendersCount: null,
-      revenueGrossMills: null,
+      revenueNetMills: null,
+      revenueChargebacksMills: null,
       revenueIsLoading: null,
       revenueCalculatedAt: null,
+      trialDays: null,
+      tags: null,
     });
 
     // Duplicate platform_link_id violates the (run_id, platform_link_id)
@@ -3059,5 +3189,117 @@ describe("the migration that makes every attempt a row (page_link_stat_runs_atte
       await insert(status);
     }
     await expect(insert("window_missed")).rejects.toThrow(/page_link_stat_runs_status_check/);
+  });
+});
+
+describe("the migration that names the link money net (page_link_stat_snapshots_net_revenue)", () => {
+  const found = readdirSync("packages/db/migrations")
+    .filter((file) => file.endsWith("_page_link_stat_snapshots_net_revenue.sql"));
+  const migrationSql = found.length === 1
+    ? readFileSync(`packages/db/migrations/${found[0]}`, "utf8")
+    : "";
+
+  async function rerunMigration() {
+    const client = await testDb!.pool.connect();
+    try {
+      await client.query("begin");
+      await client.query(migrationSql);
+      await client.query("commit");
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async function legacyRun(pageId: number) {
+    const inserted = await testDb!.pool.query<{ id: string }>(
+      `insert into page_link_stat_runs
+         (platform_account_id, link_kind, status, pulled_at, api_pages, raw_items, written_rows)
+       values ($1, 'trial', 'complete', now(), 1, 3, 3)
+       returning id::text as id`,
+      [pageId],
+    );
+    return Number(inserted.rows[0]!.id);
+  }
+
+  async function legacySnapshot(runId: number, pageId: number, linkId: string, grossMills: bigint | null) {
+    // The previous image's insert, column for column: none of the new columns.
+    // Unknown money comes with unknown spenders and a block still computing.
+    const known = grossMills !== null;
+    await testDb!.pool.query(
+      `insert into page_link_stat_snapshots
+         (run_id, platform_account_id, link_kind, platform_link_id, name, url, link_created_at,
+          link_ends_at, is_finished, clicks_count, claims_count, subscribers_count, spenders_count,
+          revenue_gross_mills, revenue_is_loading, revenue_calculated_at)
+       values ($1, $2, 'trial', $3, null, null, null, null, false, 10, 5, 0, $4, $5, $6, null)`,
+      [runId, pageId, linkId, known ? 1 : null, known ? grossMills.toString() : null, !known],
+    );
+  }
+
+  async function columnsOf(runId: number) {
+    const result = await testDb!.pool.query<{
+      platform_link_id: string;
+      revenue_gross_mills: string | null;
+      revenue_net_mills: string | null;
+      revenue_chargebacks_mills: string | null;
+      trial_days: number | null;
+      tags: string[] | null;
+    }>(
+      `select platform_link_id, revenue_gross_mills::text, revenue_net_mills::text,
+              revenue_chargebacks_mills::text, trial_days, tags
+         from page_link_stat_snapshots where run_id = $1 order by platform_link_id`,
+      [runId],
+    );
+    return result.rows;
+  }
+
+  it("copies the money to its true name, leaves unknown money and the new vendor fields null", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    expect(found).toHaveLength(1);
+
+    const page = await seedUnmappedPage("net-revenue-of");
+    const runId = await legacyRun(page.id);
+    await legacySnapshot(runId, page.id, "1", 144800n);
+    await legacySnapshot(runId, page.id, "2", 0n);
+    // Unknown money (a block still computing): stays unknown.
+    await legacySnapshot(runId, page.id, "3", null);
+
+    // Before the backfill — as for a row the previous image writes after a
+    // rollback — Hub's reader already sees the net through the old column.
+    expect((await listLinkStatSnapshots(appContext.db, { runId })).map((row) => row.revenueNetMills))
+      .toEqual([144800n, 0n, null]);
+
+    await rerunMigration();
+
+    expect(await columnsOf(runId)).toEqual([
+      { platform_link_id: "1", revenue_gross_mills: "144800", revenue_net_mills: "144800",
+        revenue_chargebacks_mills: null, trial_days: null, tags: null },
+      { platform_link_id: "2", revenue_gross_mills: "0", revenue_net_mills: "0",
+        revenue_chargebacks_mills: null, trial_days: null, tags: null },
+      { platform_link_id: "3", revenue_gross_mills: null, revenue_net_mills: null,
+        revenue_chargebacks_mills: null, trial_days: null, tags: null },
+    ]);
+
+    // It only fills rows that have no net yet; a value already there stays.
+    await testDb.pool.query(
+      `update page_link_stat_snapshots set revenue_net_mills = 1 where run_id = $1 and platform_link_id = '1'`,
+      [runId],
+    );
+    await rerunMigration();
+    expect((await columnsOf(runId))[0]).toMatchObject({ revenue_gross_mills: "144800", revenue_net_mills: "1" });
+
+    // The old column is documented as what it is.
+    const comment = await testDb.pool.query<{ description: string | null }>(
+      `select col_description('page_link_stat_snapshots'::regclass, attnum) as description
+         from pg_attribute
+        where attrelid = 'page_link_stat_snapshots'::regclass and attname = 'revenue_gross_mills'`,
+    );
+    expect(comment.rows[0]!.description)
+      .toBe("Deprecated name: creator net after the OnlyFans fee. Read revenue_net_mills.");
   });
 });

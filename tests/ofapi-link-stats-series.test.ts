@@ -136,3 +136,57 @@ describe("page_link_stat_runs_attempts.sql (every attempt of the link series is 
     expect(deploy.match(/ROLLBACK_COMPATIBLE_MIGRATIONS=\([\s\S]*?\n\)/)?.[0]).toContain(`"${migration}"`);
   });
 });
+
+describe("page_link_stat_snapshots_net_revenue.sql (the link money named net; chargebacks, trial length, tags)", () => {
+  // Found by its name, not its number: the number is the next free one at merge.
+  const found = readdirSync("packages/db/migrations")
+    .filter((file) => file.endsWith("_page_link_stat_snapshots_net_revenue.sql"));
+  const migration = found[0] ?? "";
+  const text = found.length === 1 ? readFileSync(`packages/db/migrations/${migration}`, "utf8") : "";
+  const sql = text
+    .split("\n")
+    .filter((line) => !line.trimStart().startsWith("--"))
+    .join("\n")
+    .replace(/\s+/g, " ");
+
+  it("exists once, after the attempts migration it builds on, inside the runner's transaction", () => {
+    expect(found).toHaveLength(1);
+    const attempts = readdirSync("packages/db/migrations")
+      .find((file) => file.endsWith("_page_link_stat_runs_attempts.sql"));
+    expect(attempts).toBeDefined();
+    expect(migration > attempts!).toBe(true);
+    expect(text.startsWith("-- agency-hub:no-transaction")).toBe(false);
+    expect(sql.trimStart().startsWith("set local lock_timeout = '5s';")).toBe(true);
+  });
+
+  it("only widens: four nullable columns the previous image never names", () => {
+    expect(sql).toContain(
+      "alter table page_link_stat_snapshots add column if not exists revenue_net_mills bigint, "
+        + "add column if not exists revenue_chargebacks_mills bigint, "
+        + "add column if not exists trial_days integer, "
+        + "add column if not exists tags text[];",
+    );
+    // The old money column is neither renamed nor dropped: the previous image
+    // writes it and traffic-control reads it.
+    expect(sql).not.toMatch(/\b(drop|rename|truncate|delete)\b/);
+    expect(sql).not.toContain("page_link_stat_runs");
+  });
+
+  it("copies the money as is — no fee taken off — and only where it is known", () => {
+    expect(sql.match(/\bupdate\b/g)).toHaveLength(1);
+    expect(sql).toContain(
+      "update page_link_stat_snapshots set revenue_net_mills = revenue_gross_mills "
+        + "where revenue_net_mills is null and revenue_gross_mills is not null;",
+    );
+    expect(sql).not.toMatch(/\*\s*0?\.8\b/);
+    expect(sql).toContain(
+      "comment on column page_link_stat_snapshots.revenue_gross_mills is "
+        + "'Deprecated name: creator net after the OnlyFans fee. Read revenue_net_mills.';",
+    );
+  });
+
+  it("allows application rollback: the previous image runs unchanged on the wider table", () => {
+    const deploy = readFileSync("scripts/deploy-production.sh", "utf8");
+    expect(deploy.match(/ROLLBACK_COMPATIBLE_MIGRATIONS=\([\s\S]*?\n\)/)?.[0]).toContain(`"${migration}"`);
+  });
+});

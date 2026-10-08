@@ -2594,10 +2594,23 @@ export const pageLinkStatSnapshots = pgTable(
     // NULL money/spenders = vendor value unknown (revenue block missing, still
     // computing, or unparseable) — deliberately distinct from a real zero.
     spendersCount: integer("spenders_count"),
+    // Deprecated name (0253): the value is the creator's NET after the
+    // OnlyFans fee, refunds and chargebacks. Still written with the same value
+    // as revenueNetMills — the previous image and traffic-control read it.
     revenueGrossMills: bigint("revenue_gross_mills", { mode: "bigint" }),
     revenueIsLoading: boolean("revenue_is_loading"),
     revenueCalculatedAt: timestamp("revenue_calculated_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    // Vendor revenue.total: creator net after the OnlyFans fee and after
+    // refunds and chargebacks. Null on rows an image older than 0253 wrote —
+    // read coalesce(revenue_net_mills, revenue_gross_mills).
+    revenueNetMills: bigint("revenue_net_mills", { mode: "bigint" }),
+    // Vendor revenue.chargebacks: already excluded from revenueNetMills.
+    revenueChargebacksMills: bigint("revenue_chargebacks_mills", { mode: "bigint" }),
+    // Vendor subscribeDays of a trial link; null on tracking links.
+    trialDays: integer("trial_days"),
+    // Vendor tags as sent; [] = none, null = unknown.
+    tags: text("tags").array(),
   },
   (table) => ({
     runLinkUniq: uniqueIndex("page_link_stat_snapshots_run_link_uniq").on(

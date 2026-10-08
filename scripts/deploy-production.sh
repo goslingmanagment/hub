@@ -769,6 +769,19 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # treats an unknown account as "not this account" (no absence proof from
   # it), which is the cautious reading.
   "0255_page_link_stat_runs_attempts.sql"
+  # The OnlyFans link money named for what it is (traffic sources plan
+  # 2026-10-08, PR 6): page_link_stat_snapshots gains four nullable columns
+  # the previous image never names (revenue_net_mills,
+  # revenue_chargebacks_mills, trial_days, tags), revenue_net_mills is copied
+  # from revenue_gross_mills where that is known, and revenue_gross_mills only
+  # gets a comment — it is not renamed or dropped, and the new image keeps
+  # writing the same value into it. The previous image inserts snapshots by
+  # column name and keeps writing revenue_gross_mills; its rows after a
+  # rollback have a null revenue_net_mills, which Hub's readers read through
+  # coalesce(revenue_net_mills, revenue_gross_mills), and null chargebacks,
+  # trial length and tags, which is "unknown". traffic-control's SQL reads
+  # revenue_gross_mills and none of the new columns.
+  "0253_page_link_stat_snapshots_net_revenue.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

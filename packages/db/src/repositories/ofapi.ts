@@ -1,5 +1,5 @@
 import { OfapiAccountCustodyConflictError, ofapiAccountBelongsToPageSql } from "./ofapi-bindings.ts";
-import { and, asc, desc, eq, gt, gte, inArray, isNotNull, lt, lte, ne, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, getTableColumns, gt, gte, inArray, isNotNull, lt, lte, ne, sql, type SQL } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 import {
@@ -3212,9 +3212,18 @@ export interface InsertLinkStatSnapshotInput {
   // null = vendor value unknown (revenue block missing, still computing, or
   // unparseable) — deliberately distinct from a real zero.
   spendersCount: number | null;
-  revenueGrossMills: bigint | null;
+  /** Vendor revenue.total: the creator's net after the OnlyFans fee and after
+   * refunds and chargebacks. Written to revenue_net_mills AND, with the same
+   * value, to the deprecated revenue_gross_mills. */
+  revenueNetMills: bigint | null;
+  /** Vendor revenue.chargebacks: already excluded from revenueNetMills. */
+  revenueChargebacksMills: bigint | null;
   revenueIsLoading: boolean | null;
   revenueCalculatedAt: Date | null;
+  /** Vendor subscribeDays of a trial link; null on tracking links. */
+  trialDays: number | null;
+  /** Vendor tags as sent; [] = none, null = unknown. */
+  tags: string[] | null;
 }
 
 /** `reason` is operator-facing text and, on a failure, a vendor or driver
@@ -3263,8 +3272,8 @@ export async function insertLinkStatRun(
   return row;
 }
 
-// node-postgres extended protocol caps bind parameters at 65535; with 16
-// columns per row a single VALUES insert breaks past 4095 rows. Chunk well
+// node-postgres extended protocol caps bind parameters at 65535; with 20
+// columns per row a single VALUES insert breaks past 3276 rows. Chunk well
 // below that; callers wrap this in a transaction when atomicity matters.
 const LINK_STAT_SNAPSHOT_INSERT_CHUNK = 1000;
 
@@ -3295,9 +3304,15 @@ async function insertLinkStatSnapshots(
         claimsCount: row.claimsCount,
         subscribersCount: row.subscribersCount,
         spendersCount: row.spendersCount,
-        revenueGrossMills: row.revenueGrossMills,
+        revenueNetMills: row.revenueNetMills,
+        // The deprecated name keeps the same value for as long as anything
+        // reads it: the previous image after a rollback, traffic-control's SQL.
+        revenueGrossMills: row.revenueNetMills,
+        revenueChargebacksMills: row.revenueChargebacksMills,
         revenueIsLoading: row.revenueIsLoading,
         revenueCalculatedAt: row.revenueCalculatedAt,
+        trialDays: row.trialDays,
+        tags: row.tags,
       })))
       .returning({ id: pageLinkStatSnapshots.id });
     insertedTotal += inserted.length;
@@ -3542,9 +3557,15 @@ export async function listLinkStatWindowPairStates(
   }));
 }
 
+/** A run's snapshots as Hub reads them. `revenueNetMills` falls back to the
+ * deprecated revenue_gross_mills: rows written before migration 0253, or by
+ * the previous image after a rollback, carry the value only there. */
 export async function listLinkStatSnapshots(db: Database, input: { runId: number }) {
   return db
-    .select()
+    .select({
+      ...getTableColumns(pageLinkStatSnapshots),
+      revenueNetMills: sql<bigint | null>`coalesce(${pageLinkStatSnapshots.revenueNetMills}, ${pageLinkStatSnapshots.revenueGrossMills})`,
+    })
     .from(pageLinkStatSnapshots)
     .where(eq(pageLinkStatSnapshots.runId, input.runId))
     .orderBy(pageLinkStatSnapshots.platformLinkId);
