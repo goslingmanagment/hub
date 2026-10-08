@@ -3,7 +3,8 @@
 // message_archive and the post-settle dm_message_archive — so a generation
 // sees webhook facts seconds after settle instead of waiting out two
 // independent minutely crons. OnlyFans only (the caller gates platform; the
-// SQL pins the literal defensively).
+// SQL pins the literal defensively, except in the archive tail of the
+// last-fan-text probe below, which says why).
 //
 // Order of operations (build spec, PR3):
 //   1. candidates from BOTH stores, scoped (account, conversationRef);
@@ -232,6 +233,19 @@ export function aiTranscriptUnionCtes(
  * sender and creation time, so the answer moves only if such a copy was
  * deleted and the archive never heard.
  *
+ * The archive tail does not name the platform, as the archive-only probe
+ * does not: the page id already pins it. Every writer files a page's archive
+ * rows under the page's own platform, and only OnlyFans pages are asked (the
+ * Spenders stats exist on OnlyFans alone). Naming it lets the planner take
+ * message_archive_ofapi_native_order_idx, partial on the platform and ordered
+ * by message id, not time: not knowing that the page implies the platform, it
+ * expects a backward walk to skip most rows as another platform's, so it
+ * reads and sorts every fan text of the chat and looks each one up in the
+ * other stores. On production's largest page that was 5.6 s against 0.24 s
+ * (2026-10-08). The lookups by message id keep the literal: it is a column
+ * of the unique keys they search. So does the webhook tail: no index of that
+ * store is partial on the platform.
+ *
  * `tests/client-spender-stats-union.integration.test.ts` holds the two
  * together: for every conversation of its fixture this answer equals the
  * newest fan text among the rows `listAiTranscriptUnionMessages` returns.
@@ -277,7 +291,6 @@ export function aiTranscriptUnionLastFanTextAtSql(input: { pageId: number; conve
         select ma.occurred_at as event_time
         from message_archive ma
         where ma.account_id = ${pageId}
-          and ma.platform = 'onlyfans'
           and ma.conversation_ref = ${conversationRef}
           and ma.occurred_at is not null
           and ma.is_sent_by_me = false

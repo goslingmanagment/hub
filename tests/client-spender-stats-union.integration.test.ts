@@ -13,9 +13,11 @@ import {
   getPageSpenderStats,
   listAiTranscriptUnionMessages,
   setPageOfapiAccountId,
+  type Database,
 } from "@agency_hub_core/db";
 
-import { sql } from "../packages/db/node_modules/drizzle-orm/index.js";
+import { sql, type SQL } from "../packages/db/node_modules/drizzle-orm/index.js";
+import { PgDialect } from "../packages/db/node_modules/drizzle-orm/pg-core/index.js";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -71,12 +73,46 @@ async function addHotTombstone(pageId: number, conversationRef: string, ref: str
 }
 
 /** The probe's answer for one conversation. */
-async function probe(pageId: number, conversationRef: string): Promise<string | null> {
-  const result = await db().db.execute<{ at: Date | string | null }>(
+async function probe(pageId: number, conversationRef: string, database: Database = db().db): Promise<string | null> {
+  const result = await database.execute<{ at: Date | string | null }>(
     sql`select ${aiTranscriptUnionLastFanTextAtSql({ pageId, conversationRef: sql`${conversationRef}` })} as at`,
   );
   const at = result.rows[0]?.at ?? null;
   return at === null ? null : new Date(at).toISOString();
+}
+
+const DIALECT = new PgDialect();
+const ARCHIVE_TAIL = /(from message_archive ma\s+where ma\.account_id = \$\d+)(\s+and ma\.conversation_ref = )/g;
+
+/**
+ * The database with the probe as it was until 2026-10-08: every statement
+ * runs as rendered, except that the archive tail names the platform again
+ * (`ma.platform = 'onlyfans'`). `pinned()` counts the tails it changed, so a
+ * test can tell that the statement it compares is the probe's.
+ */
+function withPlatformLiteral() {
+  let pinned = 0;
+  const database = {
+    execute: async (query: SQL) => {
+      const rendered = DIALECT.sqlToQuery(query);
+      const text = rendered.sql.replace(ARCHIVE_TAIL, (_match, head: string, rest: string) => {
+        pinned += 1;
+        return `${head}\n          and ma.platform = 'onlyfans'${rest}`;
+      });
+      return db().pool.query(text, rendered.params as unknown[]);
+    },
+    transaction: async <T>(run: (tx: unknown) => Promise<T>) => run(database),
+  };
+  return { db: database as unknown as Database, pinned: () => pinned };
+}
+
+/** Rows one index scan of an EXPLAIN ANALYZE read: returned plus filtered out, per loop, times the loops. */
+function rowsRead(plan: string, scan: string) {
+  const match = plan.match(new RegExp(
+    `${scan}[^\\n]*actual time=[\\d.]+\\.\\.[\\d.]+ rows=([\\d.]+) loops=(\\d+)\\)[\\s\\S]*?Rows Removed by Filter: (\\d+)`,
+  ));
+  expect(match, scan).not.toBeNull();
+  return { loops: Number(match![2]), read: Math.round((Number(match![1]) + Number(match![3])) * Number(match![2])) };
 }
 
 /** The same question asked of the rows a generation reads: the union's own reader, whole chat. */
@@ -374,6 +410,80 @@ describe("aiTranscriptUnionLastFanTextAtSql", () => {
   });
 });
 
+// The archive tail used to name the platform (`ma.platform = 'onlyfans'`) and
+// no longer does: the page id pins it, since every writer files a page's
+// archive rows under the page's own platform. These hold the two together
+// beside a Fansly page whose chats carry the very ids of the OnlyFans page's,
+// its rows written in between, each chat with a fan text newer than any of
+// the OnlyFans page's: were they read, every chat would answer its time.
+describe("the probe without the platform literal", () => {
+  beforeEach(async () => {
+    await resetIntegrationDatabase(db().pool);
+  });
+
+  const FANSLY_TEXT_AT = "2026-10-03T11:30:00.000Z";
+
+  async function addFanslyChat(pageId: number, conversationRef: string) {
+    await addThread(pageId, { fanId: null, conversationRef, lastFanMessageAt: FANSLY_TEXT_AT });
+    await addMessage(pageId, { platform: "fansly", conversationRef, fromFan: true, at: FANSLY_TEXT_AT, text: "fansly fan" });
+  }
+
+  it("answers chat by chat what it answered with the literal", async () => {
+    const page = await seedBoundPage("stats-union-of");
+    const fansly = await seedPage("stats-union-fansly", "fansly");
+    const refs = CASES.map((_, index) => String(40_000 + index));
+    for (const [index, testCase] of CASES.entries()) {
+      await addFanslyChat(fansly.id, refs[index]!);
+      await testCase.seed(page.id, refs[index]!);
+      await addMessage(fansly.id, { platform: "fansly", conversationRef: refs[index]!, fromFan: false, at: T.oct3, text: "fansly ours" });
+    }
+
+    const literal = withPlatformLiteral();
+    for (const [index, testCase] of CASES.entries()) {
+      const conversationRef = refs[index]!;
+      const answer = await probe(page.id, conversationRef);
+      expect(answer, testCase.name).toBe(testCase.expected);
+      expect(answer, `${testCase.name}: with the literal`).toBe(await probe(page.id, conversationRef, literal.db));
+      expect(answer, `${testCase.name}: the union reader`).toBe(await fromUnionReader(page.id, conversationRef));
+    }
+    expect(literal.pinned()).toBe(CASES.length);
+
+    // Only the page id keeps the Fansly rows out: asked of the Fansly page
+    // (the stats never are), the tail reads them.
+    expect(await probe(fansly.id, refs[0]!)).toBe(FANSLY_TEXT_AT);
+  });
+
+  it("gives the stats they gave with the literal", async () => {
+    const { page, fans } = await seedMainPage();
+    await setPageOfapiAccountId(db().db, { pageId: page.id, ofapiAccountId: SPENDER_STATS_FIXTURE_OFAPI_ACCOUNT });
+    await rebuildAll(page.id);
+    const fansly = await seedPage("stats-union-fansly", "fansly");
+    // B wrote again an hour ago and so far only the webhook store has it; D's
+    // only text is in the webhook store, in a chat the archive has no row of.
+    await addDmMessage(page.id, { conversationRef: "1002", fromFan: true, at: T.oct3, text: "are you there?" });
+    await addThread(page.id, { fanId: fans.d, conversationRef: "1004", headRole: "model" });
+    await addDmMessage(page.id, { conversationRef: "1004", fromFan: true, at: "2026-09-03T12:00:00Z", text: "hi" });
+    for (const conversationRef of ["1001", "1002", "1003", "1004", "1005", "1006", "b-old"]) {
+      await addFanslyChat(fansly.id, conversationRef);
+      await addMessage(page.id, { conversationRef, fromFan: false, at: "2026-10-03T11:40:00Z", text: "ours" });
+    }
+
+    const input = { pageId: page.id, timeZone: "UTC", asOf: AS_OF, messageSource: "union" as const };
+    const literal = withPlatformLiteral();
+    const before = await getPageSpenderStats(literal.db, input);
+    expect(literal.pinned()).toBe(1);
+    const after = await getPageSpenderStats(db().db, input);
+    expect(after).toEqual(before);
+    expect(after.silence).toEqual({
+      // F.
+      d8to21: { fans: 1, lifetimeGrossMills: 700_000n },
+      // C (August) and D (the webhook store's text of 30 days ago).
+      over21: { fans: 2, lifetimeGrossMills: 198_000n },
+      unknown: { fans: 0, lifetimeGrossMills: 0n },
+    });
+  });
+});
+
 describe("getPageSpenderStats over the union", () => {
   beforeEach(async () => {
     await resetIntegrationDatabase(db().pool);
@@ -559,17 +669,11 @@ describe("spender stats perf gate, union", () => {
     expect(plan.match(/dm_message_archive_page_conversation_idx/g)).toHaveLength(1);
     expect(plan.match(/message_archive_account_conv_idx/g)).toHaveLength(1);
     expect(plan).not.toMatch(/Seq Scan on page_dm_messages/);
+    expect(plan).not.toMatch(/message_archive_ofapi_native_order_idx/);
 
-    // Rows each tail read: returned plus filtered out, per loop, times the loops.
-    const rowsRead = (index: string) => {
-      const match = plan.match(new RegExp(
-        `${index}[^\\n]*actual time=[\\d.]+\\.\\.[\\d.]+ rows=([\\d.]+) loops=(\\d+)\\)[\\s\\S]*?Rows Removed by Filter: (\\d+)`,
-      ));
-      expect(match, index).not.toBeNull();
-      return { loops: Number(match![2]), read: Math.round((Number(match![1]) + Number(match![3])) * Number(match![2])) };
-    };
-    const archiveTail = rowsRead("Index Scan Backward using message_archive_account_conv_idx on message_archive ma");
-    const dmTail = rowsRead("Index Scan using dm_message_archive_page_conversation_idx on dm_message_archive d");
+    // Rows each tail read.
+    const archiveTail = rowsRead(plan, "Index Scan Backward using message_archive_account_conv_idx on message_archive ma");
+    const dmTail = rowsRead(plan, "Index Scan using dm_message_archive_page_conversation_idx on dm_message_archive d");
     expect(archiveTail.loops).toBe(chats);
     expect(dmTail.loops).toBe(chats);
     // At most the chat's own rows of the store, on this page.
@@ -581,5 +685,105 @@ describe("spender stats perf gate, union", () => {
     expect(stats.silence.over21.fans).toBe(chats / 2);
     expect(stats.silence.d8to21.fans).toBe(chats / 2);
     expect(stats.silence.unknown.fans).toBe(0);
+  }, 120_000);
+
+  // Production's shape (2026-10-08): Fansly pages hold 88% of message_archive,
+  // and the fans of an OnlyFans page write often, so a chat's last fan text is
+  // near its newest row. Told `platform = 'onlyfans'`, the planner did not
+  // know the page implies it and expected a backward walk to skip most rows
+  // as another platform's; it took the partial
+  // message_archive_ofapi_native_order_idx instead, ordered by message id,
+  // and read, sorted and looked up every fan text of every chat: 5.6 s on the
+  // largest page. The walk stops at the chat's newest fan text.
+  it("walks the archive back to the chat's newest fan text, among another platform's rows", async () => {
+    const page = await seedBoundPage("stats-union-shape-of");
+    const fansly = await seedPage("stats-union-shape-fansly", "fansly");
+    const chats = 30;
+    const rowsPerChat = 100;
+    const fanslyChats = 7 * chats;
+    for (let index = 0; index < chats; index += 1) {
+      const ref = String(8000 + index);
+      const fanId = await seedFan(page.id, ref);
+      await addThread(page.id, { fanId, conversationRef: ref, lastFanMessageAt: "2026-10-02T09:58:00Z" });
+    }
+    for (let index = 0; index < fanslyChats; index += 1) {
+      await addThread(fansly.id, { fanId: null, conversationRef: String(8000 + index), lastFanMessageAt: "2026-10-02T09:58:00Z" });
+    }
+    await db().pool.query(
+      `insert into fan_spend_lifetime (platform_account_id, fan_id, gross_amount_mills, creator_net_amount_mills)
+       select $1, fp.fan_id, 50000, 40000 from page_fans fp where fp.platform_account_id = $1`,
+      [page.id],
+    );
+    // Each chat, newest first: our message, the fan's text, ours, the fan's…
+    // The Fansly page's chats carry the same ids, and there are seven times as many.
+    for (const [pageId, platform, chatCount] of [[page.id, "onlyfans", chats], [fansly.id, "fansly", fanslyChats]] as const) {
+      await db().pool.query(
+        `insert into message_archive (
+           account_id, platform, conversation_ref, message_ref, native_message_id, sender_role, is_sent_by_me,
+           occurred_at, text_plain
+         )
+         select $1, $2, (8000 + c)::text, ($1::bigint * 10000000 + c * 10000 + g)::text,
+                $1::bigint * 10000000 + c * 10000 + g, case when g % 2 = 1 then 'model' else 'fan' end, g % 2 = 1,
+                timestamptz '2026-10-02 10:00' - (g || ' minutes')::interval, 'text ' || g
+         from generate_series(0, $3::int - 1) c, generate_series(1, $4::int) g`,
+        [pageId, platform, chatCount, rowsPerChat],
+      );
+    }
+    // The webhook store holds newer rows of each chat (rows of its own: a copy
+    // the webhook store holds of an archived message would win the tie and
+    // keep the archive's from serving); the hot table holds copies.
+    await db().pool.query(
+      `insert into dm_message_archive (
+         platform, platform_account_id, ofapi_account_id, platform_conversation_id, fan_platform_user_id,
+         platform_message_id, sender_role, is_sent_by_me, message_created_at, text_plain, source,
+         source_event_type, source_idempotency_key, source_journal_id, source_received_at, retain_until
+       )
+       select 'onlyfans', $1, $4, (8000 + c)::text, (8000 + c)::text,
+              ($1::bigint * 10000000 + 5000000 + c * 10000 + g)::text,
+              (case when g % 2 = 1 then 'model' else 'fan' end)::dm_sender_role, g % 2 = 1,
+              timestamptz '2026-10-02 10:00' + (g || ' seconds')::interval, 'text ' || g, 'webhook',
+              case when g % 2 = 1 then 'messages.sent' else 'messages.received' end,
+              'shape-' || c || '-' || g, 1, now(), now() + interval '100 years'
+       from generate_series(0, $2::int - 1) c, generate_series(1, $3::int) g`,
+      [page.id, chats, rowsPerChat / 4, SPENDER_STATS_FIXTURE_OFAPI_ACCOUNT],
+    );
+    await db().pool.query(
+      `insert into page_dm_messages (
+         conversation_id, platform_account_id, platform_message_id, sender_role, created_at, content
+       )
+       select th.id, th.platform_account_id, (th.platform_account_id * 10000000 + (th.platform_conversation_id::int - 8000) * 10000 + g)::text,
+              (case when g % 2 = 1 then 'model' else 'fan' end)::dm_sender_role,
+              timestamptz '2026-10-02 10:00' - (g || ' minutes')::interval, 'text ' || g
+       from page_dm_threads th, generate_series(1, $1::int) g
+       where th.platform_account_id = $2`,
+      [rowsPerChat / 2, page.id],
+    );
+    await db().pool.query(
+      "analyze message_archive, dm_message_archive, page_dm_threads, page_dm_messages, fan_spend_lifetime, page_fans, fans, pages",
+    );
+
+    const plan = await explainPageSpenderSilenceQuery(
+      db().db,
+      { pageId: page.id, asOf: AS_OF, messageSource: "union" },
+      { analyze: true },
+    );
+    expect(plan).not.toMatch(/message_archive_ofapi_native_order_idx/);
+    expect(plan).not.toMatch(/Sort Key: ma\.occurred_at/);
+    // The tail's Limit stops the walk itself: no Sort between them.
+    expect(plan).toMatch(
+      /Limit[^\n]*\n(?:\s+Buffers:[^\n]*\n)?\s+->\s+Index Scan Backward using message_archive_account_conv_idx on message_archive ma/,
+    );
+    // Our newest message, then the fan's text: two rows a chat.
+    const archiveTail = rowsRead(plan, "Index Scan Backward using message_archive_account_conv_idx on message_archive ma");
+    expect(archiveTail.loops).toBe(chats);
+    expect(archiveTail.read).toBeLessThanOrEqual(2 * chats);
+
+    // Every fan wrote yesterday: nobody is silent.
+    const stats = await getPageSpenderStats(db().db, { pageId: page.id, timeZone: "UTC", asOf: AS_OF, messageSource: "union" });
+    expect(stats.silence).toEqual({
+      d8to21: { fans: 0, lifetimeGrossMills: 0n },
+      over21: { fans: 0, lifetimeGrossMills: 0n },
+      unknown: { fans: 0, lifetimeGrossMills: 0n },
+    });
   }, 120_000);
 });
