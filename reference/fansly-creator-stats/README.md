@@ -726,6 +726,13 @@ and names the nearest existing source for each.
   separately (`0`, `1`, `4`): only a call that names a surface returns `totals`, `hours`, `tags`,
   `tagSeries` and `retention`. `source=-1` returns the daily rows of all surfaces and `likes[]`,
   nothing else, so it replaces the per-surface calls only where daily rows are all that is wanted.
+- **For You rows end 90 days after posting.** Fansly stops serving a video on For You on its 91st
+  day. On the six pages `/it/moie/statsnew` shows no For You view of any video older than 90 days
+  between 2026-08-25 and 2026-10-06 (about 100 000 video-days, against views on 71 % of days at
+  ages 75–89), while Timeline views of the same videos go on and the account-level For You counter
+  equals the per-media sum within 3 %. The capture agrees: one video's `daily[]` on source `0` ends
+  on its 90th day after four weeks of 110 to 147 views. A per-offer walk therefore needs source `0`
+  only for media up to about three months old.
 - **Overlap with existing lanes.** `summary` and `series` cover what `account.stats`
   (`/it/amoie/stats`) and the earnings snapshot routes give, with server-side comparison values;
   `media` covers `media.offer_stats` (`/it/moie/statsnew`) and adds retention, unique viewers,
