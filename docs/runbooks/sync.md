@@ -572,18 +572,19 @@ pnpm cli sync excluded unlift --page lora-1 --reason partner_missing_from_aggreg
 `partner_unresolvable_from_account_lookup` is retired (arena "vanished chat", R4): an account lookup that resolves no
 partner is the page's own evidence (the fan blocked that page, or a transient miss), so `fan-profiles.probe` excludes
 no chat and the conversation list neither assigns the reason nor keeps it on a chat it writes. The migration
-`*_retire_dm_unresolvable_exclusion.sql` took it off every thread (production: 17); those chats are read by ordinary
-demand only (a newer list head when the list next lists the chat, a socket message, a history request). A chat
-Fansly stops serving is the next section's. The levers above still accept the reason, for rows written before. After
-a rollback the previous image excludes no chat again but through a `fan-profiles.probe` row it asked for and nothing
-answered; such a chat stays excluded until a list pass of the later release lists it:
+`*_retire_dm_unresolvable_exclusion.sql` lifted it on every page (`lifted_dm_exclusions`, so an older image — still
+running while the api migrates, or rolled back to — keeps it on no bound chat and assigns it from no probe) and took it
+off every thread (production: 17), under the page locks the actor's own transactions take. Those chats are read by
+ordinary demand only (a newer list head when the list next lists the chat, a socket message, a history request). A
+chat Fansly stops serving is the next section's. The levers above still accept the reason, for rows and recorded
+probes written before; `lift` of it is a no-op, and `unlift` changes nothing in this release but leaves an older
+image free to apply the old rule on that page again — keep the lift. To check (read-only; both 0):
 
 ```sql
-select p.label, count(*) as chats
-  from page_dm_threads t
-  join pages p on p.id = t.platform_account_id
- where t.metadata ->> 'messageSyncExcludedReason' = 'partner_unresolvable_from_account_lookup'
- group by p.label;
+select (select count(*) from page_dm_threads
+         where metadata ->> 'messageSyncExcludedReason' = 'partner_unresolvable_from_account_lookup') as chats,
+       (select count(*) from sync_pages
+         where not ('partner_unresolvable_from_account_lookup' = any(lifted_dm_exclusions))) as pages_not_lifted;
 ```
 
 ## A chat Fansly does not serve

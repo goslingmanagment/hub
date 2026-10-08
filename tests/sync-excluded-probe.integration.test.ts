@@ -700,11 +700,18 @@ describe("the migration that takes the unresolvable exclusion off (arena \"vanis
     )).rows;
   }
 
-  it("takes the reason off every thread that carries it, keeps the rest of its metadata, and touches nothing else", async (context) => {
+  async function pageRows(): Promise<Array<{ page_id: number; lifted_dm_exclusions: string[]; updated_at: Date }>> {
+    return (await testDb!.pool.query<{ page_id: number; lifted_dm_exclusions: string[]; updated_at: Date }>(
+      "select page_id::int as page_id, lifted_dm_exclusions, updated_at from sync_pages order by page_id",
+    )).rows;
+  }
+
+  it("lifts the reason on every page, takes it off every thread that carries it, keeps the rest, and asks for no work", async (context) => {
     if (!testDb) return context.skip();
     expect(found).toHaveLength(1);
     const first = await seedPage("migrate-a");
     const second = await seedPage("migrate-b", "live", OWN_2);
+    const third = await seedPage("migrate-c", "off", "300000000000000003");
     const bound = await seedThread(first, 1, { reason: UNRESOLVABLE, storedHead: 3 });
     const hidden = await seedThread(first, 2, { reason: UNRESOLVABLE, visible: false });
     const unbound = await seedThread(first, 3, { reason: UNRESOLVABLE, bound: false });
@@ -715,9 +722,12 @@ describe("the migration that takes the unresolvable exclusion off (arena \"vanis
       "update page_dm_threads set metadata = metadata || '{\"unresolvedIdentity\": true, \"keep\": \"me\"}'::jsonb where id = $1",
       [bound],
     );
+    // The owner lifted the other reason on one page, this one on another.
+    await testDb.pool.query("update sync_pages set lifted_dm_exclusions = array[$2]::text[] where page_id = $1", [first, MISSING]);
     await testDb.pool.query("update sync_pages set lifted_dm_exclusions = array[$2]::text[] where page_id = $1", [second, UNRESOLVABLE]);
-    await testDb.pool.query("update page_dm_threads set updated_at = '2026-01-01T00:00:00Z'");
-    const pagesBefore = (await testDb.pool.query("select page_id, lifted_dm_exclusions, updated_at from sync_pages order by page_id")).rows;
+    const epoch = "2026-01-01T00:00:00Z";
+    await testDb.pool.query("update page_dm_threads set updated_at = $1", [epoch]);
+    await testDb.pool.query("update sync_pages set updated_at = $1", [epoch]);
     const work = "select count(*)::int as n from sync_work";
     const workBefore = await scalar(work, []);
 
@@ -731,16 +741,126 @@ describe("the migration that takes the unresolvable exclusion off (arena \"vanis
       [plain, {}],
       [elsewhere, {}],
     ]);
-    const touched = (await threadRows()).filter((row) => row.updated_at.getTime() !== Date.parse("2026-01-01T00:00:00Z")).map((row) => Number(row.id));
+    const touched = (await threadRows()).filter((row) => row.updated_at.getTime() !== Date.parse(epoch)).map((row) => Number(row.id));
     expect(touched).toEqual([bound, hidden, unbound, elsewhere]);
-    // No work, no demand, and the pages' lift lists as they were.
+    // Every page lifts it — any mode, appended once, the owner's own lifts kept.
+    expect((await pageRows()).map((row) => [row.page_id, row.lifted_dm_exclusions, row.updated_at.getTime() !== Date.parse(epoch)])).toEqual([
+      [first, [MISSING, UNRESOLVABLE], true],
+      [second, [UNRESOLVABLE], false],
+      [third, [UNRESOLVABLE], true],
+    ]);
+    // No work, no demand.
     expect(await scalar(work, [])).toBe(workBefore);
-    expect((await testDb.pool.query("select page_id, lifted_dm_exclusions, updated_at from sync_pages order by page_id")).rows).toEqual(pagesBefore);
 
     // Once is all: a second run changes nothing.
-    const after = await threadRows();
+    const after = { threads: await threadRows(), pages: await pageRows() };
     await testDb.pool.query(migrationSql);
-    expect(await threadRows()).toEqual(after);
+    expect({ threads: await threadRows(), pages: await pageRows() }).toEqual(after);
+
+    // This release reads the lift for nothing: a list pass over a lifted page
+    // assigns the aggregation miss as before and asks for no probe; the owner
+    // may take the retired reason off, and still nothing assigns it.
+    const pass = () => db().transaction(async (tx) => applyListPage(tx as unknown as Database, {
+      pageId: first,
+      now: new Date(),
+      key: "dm-conversations.head",
+      page: listPageMissingPartners([1, 4, 5], OWN),
+      generation: null,
+      classOf: () => "planned",
+    }));
+    await unliftExcludedChats(db(), { pageLabel: "migrate-a", reason: UNRESOLVABLE, actor: ACTOR });
+    const listed = await pass();
+    expect(listed.followups.filter((followup) => followup.resource === "fan-profiles.probe")).toEqual([]);
+    for (const threadId of [bound, missing, plain]) expect(await reasonOf(threadId)).not.toBe(UNRESOLVABLE);
+  });
+
+  it("waits for an actor transaction in flight, so a reason it read before is never written back", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage("migrate-race");
+    const threadId = await seedThread(pageId, 1, { reason: UNRESOLVABLE });
+    const actor = await testDb.pool.connect();
+    const runner = await testDb.pool.connect();
+    try {
+      // The previous image's list apply: the generation fence on its page row
+      // (lockOwnedPage, `for share` for an apply), then the chat as it is.
+      await actor.query("begin");
+      await actor.query("select sp.page_id from sync_pages sp where sp.page_id = $1 for share of sp", [pageId]);
+      const read = await actor.query<{ metadata: Record<string, unknown> }>("select metadata from page_dm_threads where id = $1", [threadId]);
+      expect(read.rows[0]!.metadata).toEqual({ messageSyncExcludedReason: UNRESOLVABLE });
+
+      let migrated = false;
+      const migration = (async () => {
+        await runner.query("begin");
+        await runner.query(migrationSql);
+        await runner.query("commit");
+        migrated = true;
+      })();
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      expect(migrated).toBe(false);
+
+      // Its list writer writes back the reason it read (the old keep rule).
+      await actor.query(
+        `update page_dm_threads set metadata = (metadata - 'messageSyncExcludedReason') || $2::jsonb, updated_at = clock_timestamp()
+          where id = $1`,
+        [threadId, JSON.stringify(read.rows[0]!.metadata)],
+      );
+      await actor.query("commit");
+      await migration;
+      expect(migrated).toBe(true);
+      expect(await reasonOf(threadId)).toBeNull();
+
+      // The next apply starts after the commit and reads the lift with the
+      // chat cleared: the previous image's list keeps no lifted reason on a
+      // bound chat, and its probe assigns none.
+      await actor.query("begin");
+      const page = await actor.query<{ lifted: string[] }>(
+        "select sp.lifted_dm_exclusions as lifted from sync_pages sp where sp.page_id = $1 for share of sp",
+        [pageId],
+      );
+      expect(page.rows[0]!.lifted).toEqual([UNRESOLVABLE]);
+      const thread = await actor.query<{ metadata: Record<string, unknown>; bound: boolean }>(
+        "select metadata, fan_id is not null as bound from page_dm_threads where id = $1",
+        [threadId],
+      );
+      expect(thread.rows[0]).toEqual({ metadata: {}, bound: true });
+      await actor.query("commit");
+    } finally {
+      actor.release();
+      runner.release();
+    }
+  });
+
+  it("holds the actor back until it commits: an apply that starts meanwhile reads the lift and the cleared chat", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage("migrate-race-2");
+    const threadId = await seedThread(pageId, 1, { reason: UNRESOLVABLE });
+    const actor = await testDb.pool.connect();
+    const runner = await testDb.pool.connect();
+    try {
+      await runner.query("begin");
+      await runner.query(migrationSql);
+      let fenced = false;
+      const apply = (async () => {
+        await actor.query("begin");
+        await actor.query("select sp.page_id from sync_pages sp where sp.page_id = $1 for share of sp", [pageId]);
+        fenced = true;
+        const seen = await actor.query<{ lifted: string[]; metadata: Record<string, unknown> }>(
+          `select sp.lifted_dm_exclusions as lifted, t.metadata
+             from sync_pages sp join page_dm_threads t on t.platform_account_id = sp.page_id
+            where sp.page_id = $1 and t.id = $2`,
+          [pageId, threadId],
+        );
+        await actor.query("commit");
+        return seen.rows[0]!;
+      })();
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      expect(fenced).toBe(false);
+      await runner.query("commit");
+      expect(await apply).toEqual({ lifted: [UNRESOLVABLE], metadata: {} });
+    } finally {
+      actor.release();
+      runner.release();
+    }
   });
 });
 

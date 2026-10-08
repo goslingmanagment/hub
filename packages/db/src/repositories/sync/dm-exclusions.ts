@@ -24,7 +24,9 @@ import { textArrayParam, toDate } from "./values.ts";
 
 /** The reasons a page can lift (the 0235 CHECK). Nothing assigns the
  *  unresolvable one any more (arena "vanished chat", R4: a lookup miss excludes
- *  no chat); it stays for the rows and recorded probes written before. */
+ *  no chat) and `*_retire_dm_unresolvable_exclusion.sql` lifted it on every
+ *  page, so an older image honours its retirement; it stays here for that
+ *  lift and for the rows and recorded probes written before. */
 export const SYNC_LIFTABLE_DM_EXCLUSIONS = [
   FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS,
   FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,

@@ -1175,15 +1175,31 @@ describe("retire_dm_unresolvable_exclusion.sql (arena \"vanished chat\", R4: a l
     expect(migration > "0251_page_dm_thread_unavailability.sql").toBe(true);
   });
 
-  it("is one data update that takes that one reason off the threads carrying it, and no DDL", () => {
+  it("locks every page row, lifts the reason on every page, then takes it off the threads — data only, one transaction", () => {
+    // Transactional (the runner's own transaction): the lock holds to the end.
+    expect(text.startsWith("-- agency-hub:no-transaction")).toBe(false);
     expect(statements).toEqual([
+      "select sp.page_id from sync_pages sp order by sp.page_id for no key update",
+      "update sync_pages sp set lifted_dm_exclusions = array_append(sp.lifted_dm_exclusions, 'partner_unresolvable_from_account_lookup'), "
+        + "updated_at = clock_timestamp() where not ('partner_unresolvable_from_account_lookup' = any(sp.lifted_dm_exclusions))",
       "update page_dm_threads t set metadata = t.metadata - 'messageSyncExcludedReason', updated_at = clock_timestamp() "
         + "where t.metadata ->> 'messageSyncExcludedReason' = 'partner_unresolvable_from_account_lookup'",
     ]);
     expect(sql).not.toMatch(/\b(alter|create|drop|rename|truncate|delete|insert|grant|trigger)\b/i);
-    // Nothing else: no other reason, no lift list, no work.
+    // Nothing else: no other reason, no work, no demand.
     expect(sql).not.toContain(FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS);
-    expect(sql).not.toMatch(/sync_pages|sync_work|lifted_dm_exclusions/);
+    expect(sql).not.toMatch(/sync_work|sync_attempts|history_request/);
+    // The 0235 CHECK admits the lifted reason.
+    expect(SYNC_LIFTABLE_DM_EXCLUSIONS).toContain(FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP);
+  });
+
+  it("serializes with the actor: its page lock conflicts with the fence every actor transaction starts with", () => {
+    // `for no key update` waits for an apply's `for share` and an admission's
+    // `for no key update` of the page row, and blocks both until it commits.
+    const pages = readFileSync("packages/db/src/repositories/sync/pages.ts", "utf8");
+    expect(pages).toContain('const lockClause = input.lock === "share" ? sql`for share of sp` : sql`for no key update of sp`;');
+    const commit = readFileSync("apps/runtime/src/sync/engine/commit.ts", "utf8");
+    expect(commit).toContain("await lockOwnedPage(tx, { pageId: d.pageId, generation: d.generation, lock });");
   });
 
   it("names the metadata key and the reason the shared vocabulary has", () => {
