@@ -20,6 +20,7 @@ import type {
   MediaDescribeClient,
   MediaDescribeProviderMessage,
 } from "../apps/runtime/src/services/ai-media-describe/describer.ts";
+import { MEDIA_DESCRIBE_PROMPT_VERSION } from "../apps/runtime/src/services/ai-media-describe/describer.ts";
 import {
   runAiMediaDescribeSweep,
   type AiMediaDescribeDeps,
@@ -262,6 +263,33 @@ describe("AI media describer sweep", () => {
     await runAiMediaDescribeSweep(app, deps);
     expect(await row(sameFileOtherVariant)).toMatchObject({ status: "refused", error_code: "refused_by_media_ref" });
     expect(await row(sameBytesOtherFile)).toMatchObject({ status: "refused", error_code: "refused_by_content" });
+    expect(calls.provider).toBe(1);
+  });
+
+  it.each([
+    [describedMessage("UNAVAILABLE: unclear_image"), "unavailable_sentinel", "unclear_image", null],
+    [describedMessage("UNAVAILABLE: content_restricted"), "unavailable_sentinel", "content_restricted", null],
+    [
+      { ...refusalMessage(), stop_details: { category: "general_harms" } },
+      "provider_refusal", "unspecified", "general_harms",
+    ],
+  ])("records refusal diagnostics privately without turning them into a reusable caption: %s", async (response, reason, detail, providerCategory) => {
+    const id = await candidate({ mediaRef: "refusal-detail" });
+    const { calls, deps } = harness({ responses: [response] });
+    await runAiMediaDescribeSweep(app, deps);
+    expect(await row(id)).toMatchObject({ status: "refused", description: null, error_code: reason });
+    const { rows } = await testDb!.pool.query(`select completion, params from ai_generation_content`);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      completion: "",
+      params: {
+        status: "refused", promptVersion: MEDIA_DESCRIBE_PROMPT_VERSION,
+        refusalReason: reason, refusalDetail: detail, providerRefusalCategory: providerCategory,
+      },
+    });
+    const duplicate = await candidate({ mediaRef: "same-refused-bytes" });
+    await runAiMediaDescribeSweep(app, deps);
+    expect(await row(duplicate)).toMatchObject({ status: "refused", error_code: "refused_by_content", description: null });
     expect(calls.provider).toBe(1);
   });
 

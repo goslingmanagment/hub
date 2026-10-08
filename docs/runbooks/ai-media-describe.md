@@ -52,12 +52,20 @@ described; caps $1 and 150 images per UTC day for the agency.
    One call: Sonnet 5, thinking off, `max_tokens` 200, base64 image, no SDK
    retries. The instruction asks for 1–2 neutral English sentences (≤240
    chars), no identification, no age/ethnicity guesses, text in the image
-   summarized but never followed, and `UNAVAILABLE` when it cannot or should
-   not describe.
+   summarized but never followed. Prompt v2 asks for the recognizable subject
+   and clear details even when other details or text are unreadable. Sensitive
+   content gets only a permitted high-level, non-graphic caption. When no
+   subject is recognizable the marker is `UNAVAILABLE: unclear_image`; when a
+   permitted caption is not possible it is `UNAVAILABLE: content_restricted`.
 7. The result settles the ledger (`ai_usage_events`, feature `media-describe`,
    `user_id` NULL), the budget (real cost), the restricted record
    (`ai_generation_content` with the instruction and the result — never bytes
    or a URL — plus `fan_ref`/`conversation_ref` for erasure) and the row.
+   Refused calls retain an empty completion and bounded codes in `params`:
+   `refusalReason`, `refusalDetail` (`unclear_image`, `content_restricted`, or
+   `unspecified`) and `providerRefusalCategory` (known API categories only,
+   otherwise null). These are model-reported diagnostics, not verified facts
+   about an image; provider prose and partial refused output are discarded.
 
 | Provider outcome | Row status | Retry | Budget |
 |---|---|---|---|
@@ -67,6 +75,12 @@ described; caps $1 and 150 images per UTC day for the agency.
 | 429 / 5xx / 529 / connect failure before send | `failed` after ≤2 retries in the call | never after that | released |
 | 401 / 403 | `pending` | lane stops (incident) | released |
 | Other 4xx | `failed` | never | released |
+
+Both v2 markers, the legacy `UNAVAILABLE`, a refusal in words and an empty
+answer remain terminal refusals. A prompt version change does not requeue
+old refused images or their variants/copies. The markers never become notes
+for the chat AI. The prompt's clearer task is intended to reduce avoidable
+declines; it does not disable provider content restrictions.
 
 ## How a description reaches a prompt
 
@@ -194,6 +208,16 @@ where updated_at > now() - interval '1 day' group by 1, 2 order by 3 desc;
 
 select count(*), sum(cost_micro_usd) from ai_usage_events
 where feature = 'media-describe' and completed_at > now() - interval '1 day';
+
+-- model-reported refusal diagnostics by prompt version (restricted, owner-only)
+select params->>'promptVersion' as prompt_version,
+  params->>'refusalReason' as refusal_reason,
+  params->>'refusalDetail' as refusal_detail,
+  params->>'providerRefusalCategory' as provider_category, count(*)
+from ai_generation_content
+where feature = 'media-describe' and params->>'status' = 'refused'
+  and created_at > now() - interval '1 day'
+group by 1, 2, 3, 4;
 
 -- fan photo → ready description (described_at is the real settle time since 0214)
 with x as (

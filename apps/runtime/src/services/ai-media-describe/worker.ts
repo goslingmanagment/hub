@@ -629,7 +629,13 @@ async function processRow(
     },
   });
 
-  const recordContent = async (usageEventId: number | null, completion: string, status: string, stopReason: string | null) => {
+  const recordContent = async (
+    usageEventId: number | null,
+    completion: string,
+    status: string,
+    stopReason: string | null,
+    refusal?: Extract<MediaDescribeOutcome, { kind: "refused" }>,
+  ) => {
     // Restricted record of the call: the instruction and the result, never
     // the bytes or a URL. fan_ref / conversation_ref make fan erasure reach it.
     await insertAiGenerationContent(app.db, {
@@ -651,7 +657,14 @@ async function processRow(
         },
       ],
       completion,
-      params: { status, stopReason, promptVersion: MEDIA_DESCRIBE_PROMPT_VERSION, source: resolution.source },
+      params: {
+        status, stopReason, promptVersion: MEDIA_DESCRIBE_PROMPT_VERSION, source: resolution.source,
+        ...(refusal ? {
+          refusalReason: refusal.reason,
+          refusalDetail: refusal.detail,
+          providerRefusalCategory: refusal.providerCategory,
+        } : {}),
+      },
     });
   };
 
@@ -677,6 +690,7 @@ async function processRow(
         outcome.kind === "described" ? outcome.description : "",
         outcome.kind,
         outcome.stopReason,
+        outcome.kind === "refused" ? outcome : undefined,
       );
       if (outcome.kind === "described") {
         await finish("described", {
