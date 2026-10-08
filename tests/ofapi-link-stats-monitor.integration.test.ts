@@ -8,6 +8,7 @@ import {
   listLinkStatRuns,
   listLinkStatSeriesHealth,
   listNotificationIncidents,
+  recordLinkStatWindowMissed,
   setPageOfapiAccountId,
   type LinkStatKind,
   type LinkStatRunStatus,
@@ -306,9 +307,10 @@ describe("the link series monitor", () => {
 
     // Another page anchors the series; this one was created later and the
     // job never wrote a row for it. The monitor would mark its closed
-    // windows first (and the pair would count from that mark); a trigger
-    // refuses those marks here, so the run exercises the pair that has no
-    // row at all — the safety net when marking cannot happen.
+    // windows first (and the pair would count from that mark); here the
+    // insert of those marks fails with a real error, so the run exercises
+    // the pair that has no row at all — the safety net when marking cannot
+    // happen — and the failed back-fill does not stop the judgement.
     const anchorPage = await seedPage("monitor-anchor-of", "acct_monitor");
     await attempt(anchorPage.id, "tracking", W0, "complete");
     await attempt(anchorPage.id, "trial", W0, "complete");
@@ -321,7 +323,12 @@ describe("the link series monitor", () => {
     try {
       await client.query(
         `create or replace function no_window_missed() returns trigger language plpgsql as $$
-           begin if new.reason = 'window_missed' and new.platform_account_id = ${lonely.id} then return null; end if; return new; end $$`,
+           begin
+             if new.reason = 'window_missed' and new.platform_account_id = ${lonely.id} then
+               raise exception 'canceling statement due to lock timeout' using errcode = '55P03';
+             end if;
+             return new;
+           end $$`,
       );
       await client.query(
         `create trigger no_window_missed before insert on page_link_stat_runs
@@ -343,6 +350,67 @@ describe("the link series monitor", () => {
       await testDb.pool.query(`drop trigger if exists no_window_missed on page_link_stat_runs`);
       await testDb.pool.query(`drop function if exists no_window_missed()`);
     }
+  });
+
+  it("a back-fill that throws does not silence the signals: the stopped series and the unmapped page are still judged", async (context) => {
+    if (!testDb) return context.skip();
+
+    const stopped = await seedPage("monitor-throw-stopped-of", "acct_monitor");
+    await attempt(stopped.id, "tracking", W0, "complete");
+    await attempt(stopped.id, "trial", W0, "complete");
+    const unmapped = await seedPage("monitor-throw-unmapped-of", null);
+    await testDb.pool.query(
+      `create or replace function window_missed_lock_timeout() returns trigger language plpgsql as $$
+         begin
+           if new.reason = 'window_missed' then
+             raise exception 'canceling statement due to lock timeout' using errcode = '55P03';
+           end if;
+           return new;
+         end $$`,
+    );
+    await testDb.pool.query(
+      `create trigger window_missed_lock_timeout before insert on page_link_stat_runs
+         for each row execute function window_missed_lock_timeout()`,
+    );
+    try {
+      const result = await monitor(after(W0, OFAPI_LINK_STATS_SERIES_STALE_AFTER_MS + HOUR));
+      expect(result).toEqual({ stalePages: [stopped.id], unmappedPages: [unmapped.id], windowMissedRows: 0 });
+      expect((await openIncidents()).map((incident) => incident.key)).toEqual([
+        `ofapi_link_stats_reconcile_failed:${stopped.id}:series_stale`,
+        `ofapi_link_stats_reconcile_failed:${unmapped.id}:page_unmapped`,
+      ]);
+      expect(await windowMissedOf(stopped.id)).toEqual([]);
+    } finally {
+      await testDb.pool.query(`drop trigger if exists window_missed_lock_timeout on page_link_stat_runs`);
+      await testDb.pool.query(`drop function if exists window_missed_lock_timeout()`);
+    }
+  });
+
+  it("after a rollback and redeploy, rows the previous image wrote without a window count for the window they were read in", async (context) => {
+    if (!testDb) return context.skip();
+
+    const page = await seedPage("monitor-rollback-of", "acct_monitor");
+    const [first, rolledBack, quiet, open] = windowsFrom(W0, 4);
+    await attempt(page.id, "tracking", first!, "complete");
+    await attempt(page.id, "trial", first!, "complete");
+    // Rolled back: the previous image keeps collecting, without a window.
+    for (const linkKind of ["tracking", "trial"] as const) {
+      await insertLinkStatRun(appContext.db, {
+        platformAccountId: page.id, linkKind, status: "truncated", pulledAt: after(rolledBack!, 20_000),
+        apiPages: 0, rawItems: 0, writtenRows: 0,
+      });
+    }
+    // Redeployed only now: `quiet` really passed without any attempt.
+    const result = await monitor(after(open!, 10 * MINUTE));
+    expect(result.windowMissedRows).toBe(2);
+    expect(await windowMissedOf(page.id)).toEqual([
+      `tracking@${quiet!.toISOString()}`,
+      `trial@${quiet!.toISOString()}`,
+    ]);
+    // The insert itself refuses a window an old-image row already covers.
+    expect(await recordLinkStatWindowMissed(appContext.db, {
+      platformAccountId: page.id, linkKind: "trial", windowAt: rolledBack!, windowEnd: quiet!,
+    })).toBe(false);
   });
 
   it("after an outage longer than the look-back the last twelve windows are still marked, even once collection resumed", async (context) => {

@@ -3627,27 +3627,34 @@ export async function listFirstLinkStatWindowStamps(db: Database): Promise<Date[
     .filter((first): first is Date => first !== null);
 }
 
-/** Which (page, kind, window) have a row of any status, for windows from
- * `since` on. */
+/** The rows of any status that tell which (page, kind) was attempted when,
+ * from `since` on. A row with a window names it (`windowAt`). A row without
+ * one — written by an image older than migration 0252, e.g. after a rollback
+ * — names only its read time (`pulledAt`), and the caller places it in the
+ * window that read time falls in. */
 export async function listLinkStatAttemptWindows(
   db: Database,
   input: { since: Date },
-): Promise<Array<{ platformAccountId: number; linkKind: LinkStatKind; windowAt: Date }>> {
+): Promise<Array<{ platformAccountId: number; linkKind: LinkStatKind; windowAt: Date | null; pulledAt: Date | null }>> {
   const result = await db.execute<{
     platformAccountId: number | string;
     linkKind: LinkStatKind;
-    windowAt: Date | string;
+    windowAt: Date | string | null;
+    pulledAt: Date | string | null;
   }>(sql`
     select distinct r.platform_account_id as "platformAccountId",
            r.link_kind as "linkKind",
-           r.window_at as "windowAt"
+           r.window_at as "windowAt",
+           case when r.window_at is null then r.pulled_at end as "pulledAt"
     from page_link_stat_runs r
     where r.window_at >= ${input.since.toISOString()}::timestamptz
+       or (r.window_at is null and r.pulled_at >= ${input.since.toISOString()}::timestamptz)
   `);
   return result.rows.map((row) => ({
     platformAccountId: Number(row.platformAccountId),
     linkKind: row.linkKind,
-    windowAt: new Date(row.windowAt),
+    windowAt: toDateOrNull(row.windowAt),
+    pulledAt: toDateOrNull(row.pulledAt),
   }));
 }
 
@@ -3655,13 +3662,15 @@ export async function listLinkStatAttemptWindows(
  * `skipped` / `window_missed` row, stamped with the window itself. Written
  * only while the pair still has NO row in the window, in the same statement —
  * a late pass or a second monitor that got there first leaves nothing to add.
- * The account is not known for an attempt that never happened. Returns
- * whether the row was written. */
+ * A row without a window (an image older than 0252) counts for the window
+ * its read time falls in, [windowAt, windowEnd). The account is not known for
+ * an attempt that never happened. Returns whether the row was written. */
 export async function recordLinkStatWindowMissed(
   db: Database,
-  input: { platformAccountId: number; linkKind: LinkStatKind; windowAt: Date },
+  input: { platformAccountId: number; linkKind: LinkStatKind; windowAt: Date; windowEnd: Date },
 ): Promise<boolean> {
   const windowAt = input.windowAt.toISOString();
+  const windowEnd = input.windowEnd.toISOString();
   const result = await db.execute<{ id: number | string }>(sql`
     insert into page_link_stat_runs
       (platform_account_id, link_kind, status, pulled_at, api_pages, raw_items, written_rows,
@@ -3672,7 +3681,12 @@ export async function recordLinkStatWindowMissed(
       select 1 from page_link_stat_runs prior
       where prior.platform_account_id = ${input.platformAccountId}
         and prior.link_kind = ${input.linkKind}
-        and prior.window_at = ${windowAt}::timestamptz
+        and (
+          prior.window_at = ${windowAt}::timestamptz
+          or (prior.window_at is null
+            and prior.pulled_at >= ${windowAt}::timestamptz
+            and prior.pulled_at < ${windowEnd}::timestamptz)
+        )
     )
     returning id
   `);

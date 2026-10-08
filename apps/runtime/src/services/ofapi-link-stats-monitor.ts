@@ -201,47 +201,60 @@ function groupByPage(rows: readonly LinkStatSeriesHealthRow[]) {
   return pages;
 }
 
-/** Writes the `window_missed` rows. Returns how many it wrote. */
+/** Writes the `window_missed` rows. Returns how many it wrote. Never throws:
+ * a back-fill that fails (a lock timeout on the insert, say) is logged and
+ * the run goes on to judge the series from what it read — a broken write
+ * path must not silence the signals that report a stopped series. */
 async function markMissedWindows(
   app: Pick<AppContext, "db" | "logger">,
   rows: readonly LinkStatSeriesHealthRow[],
   now: Date,
   anchor: Date | null,
 ): Promise<number> {
-  const closed = closedLinkStatWindowsToCheck(now, anchor);
-  if (closed.length === 0) {
-    return 0;
-  }
-  const attempts = await listLinkStatAttemptWindows(app.db, { since: closed[0]! });
-  const attempted = new Set(attempts.map((attempt) =>
-    `${attempt.platformAccountId}:${attempt.linkKind}:${attempt.windowAt.getTime()}`));
   let written = 0;
-  for (const windowAt of closed) {
-    for (const row of rows) {
-      // A page added while the window was open was not there to be read at
-      // its opening; its first window is the next one.
-      if (row.pageCreatedAt.getTime() > windowAt.getTime()) {
-        continue;
-      }
-      if (attempted.has(`${row.platformAccountId}:${row.linkKind}:${windowAt.getTime()}`)) {
-        continue;
-      }
-      const recorded = await recordLinkStatWindowMissed(app.db, {
-        platformAccountId: row.platformAccountId,
-        linkKind: row.linkKind,
-        windowAt,
-      });
-      if (recorded) {
-        written += 1;
-        app.logger.warn({
-          pageId: row.platformAccountId,
-          pageLabel: row.pageLabel,
+  try {
+    const closed = closedLinkStatWindowsToCheck(now, anchor);
+    if (closed.length === 0) {
+      return 0;
+    }
+    const attempts = await listLinkStatAttemptWindows(app.db, { since: closed[0]! });
+    // A row without a window (an image older than 0252, after a rollback)
+    // counts for the window its read time falls in.
+    const attempted = new Set(attempts.map((attempt) => {
+      const windowAt = attempt.windowAt ?? ofapiLinkStatsWindowAt(attempt.pulledAt!);
+      return `${attempt.platformAccountId}:${attempt.linkKind}:${windowAt.getTime()}`;
+    }));
+    for (const windowAt of closed) {
+      const windowEnd = nextOfapiLinkStatsWindowAt(windowAt);
+      for (const row of rows) {
+        // A page added while the window was open was not there to be read at
+        // its opening; its first window is the next one.
+        if (row.pageCreatedAt.getTime() > windowAt.getTime()) {
+          continue;
+        }
+        if (attempted.has(`${row.platformAccountId}:${row.linkKind}:${windowAt.getTime()}`)) {
+          continue;
+        }
+        const recorded = await recordLinkStatWindowMissed(app.db, {
+          platformAccountId: row.platformAccountId,
           linkKind: row.linkKind,
-          windowAt: windowAt.toISOString(),
-          closedAt: nextOfapiLinkStatsWindowAt(windowAt).toISOString(),
-        }, "OFAPI link-stats window passed without an attempt; marked window_missed");
+          windowAt,
+          windowEnd,
+        });
+        if (recorded) {
+          written += 1;
+          app.logger.warn({
+            pageId: row.platformAccountId,
+            pageLabel: row.pageLabel,
+            linkKind: row.linkKind,
+            windowAt: windowAt.toISOString(),
+            closedAt: windowEnd.toISOString(),
+          }, "OFAPI link-stats window passed without an attempt; marked window_missed");
+        }
       }
     }
+  } catch (error) {
+    app.logger.warn({ err: error, written }, "OFAPI link-stats window_missed back-fill failed; judging the series without it");
   }
   return written;
 }
