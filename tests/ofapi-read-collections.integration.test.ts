@@ -704,6 +704,37 @@ describe("resumable OFAPI collection reads", () => {
     });
     expect(fetch).not.toHaveBeenCalled();
   });
+  // OnlyFans answers `posts/labels` with its own 404 "Route not found."; as a
+  // scheduled step it ended every posts_comments run after the posts were read.
+  it("reads every page of posts on a scheduled posts_comments run and completes without asking for labels", async () => {
+    await applyOfapiCollectionPolicy(app.db, { expectedRevision: 0, changes: [{ pageId,
+      category: "posts_comments", mode: "scheduled", intervalMinutes: 1440,
+      dailyCreditLimit: 7000, maxCallsPerRun: 250, includeDetails: true }] }, actor);
+    const [id] = await enqueueDueOfapiCollectionSchedules(app.db, ["posts_comments"]);
+    const fetch = vi.fn(async (url: unknown) => {
+      const { pathname, searchParams } = new URL(String(url));
+      if (pathname !== "/api/acct_test/posts")
+        return new Response(JSON.stringify({ error: "ONLYFANS_COM_ERROR", onlyfans_response: { status: 404 } }), { status: 404 });
+      return searchParams.get("offset") === "0"
+        ? response({ list: [{ id: 101 }, { id: 102 }], hasMore: true }, "https://app.onlyfansapi.com/api/acct_test/posts?limit=50&offset=50")
+        : response({ list: [{ id: 103 }], hasMore: false }, null);
+    });
+    vi.stubGlobal("fetch", fetch);
+    expect(await runOfapiCollectionJob(app, id!)).toEqual({ state: "completed" });
+    expect(fetch.mock.calls.map(call => { const url = new URL(String(call[0])); return `${url.pathname}${url.search}`; }))
+      .toEqual(["/api/acct_test/posts?limit=50&offset=0", "/api/acct_test/posts?limit=50&offset=50"]);
+    const completed = (await getOfapiCollectionJob(app.db, id!))!;
+    expect(completed).toMatchObject({ state: "completed", used_calls: 2 });
+    expect(Number(completed.used_credits)).toBe(2);
+    expect(completed.checkpoint.plan).toEqual([expect.objectContaining({ operation: "ofapi_read_posts" })]);
+    expect((await readOfapiStoredSnapshots(app.db, { pageId })).map(row => row.operation)).toEqual(["ofapi_read_posts", "ofapi_read_posts"]);
+    // The owner can still ask for labels explicitly; that request is the only one it makes.
+    const oneOff = await createOfapiCollectionJob(app.db, { pageId, category: "posts_comments", expectedRevision: 1,
+      maxCalls: 1, maxCredits: 1, maxBytes: 100000, from: null, to: null, selection: ["post_labels"] }, actor);
+    expect(await runOfapiCollectionJob(app, oneOff.id)).toEqual({ state: "paused", reason: "Vendor HTTP 404; response captured" });
+    expect(new URL(String(fetch.mock.calls[2]![0])).pathname).toBe("/api/acct_test/posts/labels");
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
   it("retains an exhausted scheduled cursor as incomplete and admits the next bounded interval", async () => {
     const settings = { pageId, category: "profile_notifications" as const, mode: "scheduled" as const,
       intervalMinutes: 15, dailyCreditLimit: 10, maxCallsPerRun: 1, includeDetails: false };

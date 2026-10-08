@@ -319,6 +319,16 @@ describe("closed OFAPI read coverage catalog", () => {
     expect(ofapiReadCoverage(def("payout_requests"), body, "/acct_test/payouts/payout-requests",
       { limit: "50", offset: "0" })).toMatchObject({ nextQuery: null });
   });
+  it("schedules only the posts list for posts_comments and keeps labels as an explicit selector", () => {
+    const job = { category: "posts_comments", target: { from: null, to: null, selection: [] } } as unknown as OfapiCollectionJob;
+    expect(planOfapiReadCollection(job, "acct_test")).toEqual([
+      { operation: "ofapi_read_posts", pathname: "/acct_test/posts", query: { limit: "50", offset: "0" }, detail: false },
+    ]);
+    expect(def("post_labels")).toMatchObject({ category: "posts_comments", defaultCollect: false, detail: false });
+    expect(planOfapiReadCollection({ ...job, target: { ...job.target, selection: ["post_labels"] } }, "acct_test")).toEqual([
+      { operation: "ofapi_read_post_labels", pathname: "/acct_test/posts/labels", query: { limit: "50", offset: "0" }, detail: false },
+    ]);
+  });
   it("bounds default plans and requires explicit IDs for details", () => {
     const job = {
       category: "balances",
