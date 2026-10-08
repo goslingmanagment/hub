@@ -359,7 +359,7 @@ their clean window (`routes`) and the open latches (`openLatches`), and the glob
 | | `quarantined` | any quarantined work | [Quarantine](#quarantine) |
 | 3 `freshness` | `message_unconfirmed` | a fan message the socket showed, not confirmed by REST for 15 minutes | `sync why --resource dm-messages.head --subject <group id>` |
 | | `money_not_in_ledger` | a money frame not in the ledger for 5 minutes | `sync why --resource transactions.head` |
-| | `urgent_waiting` | urgent work waiting 2 minutes with no pause, hold, breaker or route hold to explain it | `sync work list`, `sync why` |
+| | `urgent_waiting` | urgent work waiting 2 minutes past its due time, or past the end of its own subject breaker when that is later, with no pause, hold, file breaker or route hold to explain it | `sync work list`, `sync why` |
 | 4 `stuck` | `request_stalled` | a history request with runnable work and no read for 30 minutes | [History requests](#history-requests) |
 | | `planned_stale` | a poll not served within its SLO (else 3 periods) | `sync why` on the key |
 | | `transactions_ledger_incomplete` | the newest finished rescan proved the ledger short of Fansly's lifetime total | the owner's backfill: `sync work enqueue --resource transactions.backfill` |
@@ -367,7 +367,10 @@ their clean window (`routes`) and the open latches (`openLatches`), and the glob
 
 Alert 1 stays 10 minutes after its hold ends ("hold cleared and 10 minutes clean"). A pause of the whole page and a
 page hold explain waiting work: no `urgent_waiting` and no `planned_stale` for it, and no `request_stalled` under a
-pause of the page or of its requests. `message_unconfirmed` and `money_not_in_ledger` open regardless.
+pause of the page or of its requests. `message_unconfirmed` and `money_not_in_ledger` open regardless. A work row
+under its own subject breaker — `subject_breaker` or `blocked_by_vendor` in `sync why` — is no `urgent_waiting`
+until 2 minutes after the breaker ends, and its `since` is that end; `sync check live-hour` counts `urgentWaiting` by
+the same rule. A new signal never makes such a row due before its breaker ends.
 
 **A pace violation must never happen**: it means two requests of a page left closer than the owner's rule. Its
 latch does not resolve by itself. Read its summary in `sync alerts status`, find the two sends in the journal (the

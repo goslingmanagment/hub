@@ -1,4 +1,4 @@
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 import { FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY } from "@agency_hub_core/shared";
 
 import type { Database } from "../../client.ts";
@@ -21,13 +21,58 @@ export const SYNC_PAGE_STOP_ERROR_CLASSES = ["auth", "identity_mismatch"] as con
  *  is down (the receiver renews it every few seconds). */
 export const SYNC_WS_CONNECTION_STALE_MS = 60_000;
 
+/** An open urgent work row as the urgent-wait rule reads it. */
+export interface SyncUrgentWaitRow {
+  dueAt: Date;
+  /** The row's own subject breaker (the vendor's block probes on it too). */
+  breakerUntil: Date | null;
+}
+
+/**
+ * When open urgent work began to wait: its due time, or the end of its own
+ * subject breaker when that is later. A row its breaker holds — the vendor's
+ * block included, whose probe is the breaker's end — is explained, not
+ * waiting; once the breaker has ended, a row no pick took waits like any
+ * other. Alert 3's `urgent_waiting` and `sync check live-hour`'s
+ * `urgentWaiting` are this one rule (`syncUrgentWaitingSql` is its SQL).
+ */
+export function syncUrgentWaitingSince(row: SyncUrgentWaitRow): Date {
+  return row.breakerUntil !== null && row.breakerUntil.getTime() > row.dueAt.getTime() ? row.breakerUntil : row.dueAt;
+}
+
+/** Whether open urgent work has waited longer than `afterMs` at `now`. */
+export function isSyncUrgentWorkWaiting(row: SyncUrgentWaitRow, now: Date, afterMs: number): boolean {
+  return now.getTime() - syncUrgentWaitingSince(row).getTime() > afterMs;
+}
+
+/** `syncUrgentWaitingSince` of `sync_work w`. */
+const urgentWaitingSinceSql = sql`greatest(w.due_at, coalesce(w.breaker_until, w.due_at))`;
+
+/** The rows of `sync_work w` that `isSyncUrgentWorkWaiting` at `now`: open
+ *  urgent work whose due time and own breaker both lie more than `afterMs`
+ *  before it (`due_at` stays a range of `sync_work_runnable`). */
+export function syncUrgentWaitingSql(input: { now: SQL; afterMs: number }): SQL {
+  const bound = sql`${input.now} - ${input.afterMs}::double precision * interval '1 millisecond'`;
+  return sql`w.class = 'urgent'
+    and w.state = 'open'
+    and w.due_at < ${bound}
+    and (w.breaker_until is null or w.breaker_until < ${bound})`;
+}
+
 export interface SyncJournalAlertFacts {
   /** The newest attempt within the look-back whose class stops the page. */
   lastStopAttempt: { errorClass: string; at: Date } | null;
   /** Quarantined work by resource. */
   quarantined: Record<string, number>;
-  /** Open urgent work due longer than `urgentAfterMs` ago (at most 200 rows). */
-  urgentWaiting: Array<{ resource: string; subject: string; dueAt: Date; waitingReason: string | null }>;
+  /** Open urgent work waiting longer than `urgentAfterMs` (`syncUrgentWaitingSql`),
+   *  the longest wait first (at most 200 rows). */
+  urgentWaiting: Array<{
+    resource: string;
+    subject: string;
+    dueAt: Date;
+    breakerUntil: Date | null;
+    waitingReason: string | null;
+  }>;
   /** The page's poll rows (one per poll key). */
   polls: Array<{ resource: string; lastServedAt: Date | null; createdAt: Date }>;
   /** The newest finished `transactions.rescan` proved the ledger short of the
@@ -61,15 +106,19 @@ export async function readSyncJournalAlertFacts(
      where w.page_id = ${input.pageId} and not w.shadow and w.state = 'quarantined'
      group by w.resource
   `);
-  const urgent = await db.execute<{ resource: string; subject: string; dueAt: Date | string; waitingReason: string | null }>(sql`
-    select w.resource, w.subject, w.due_at as "dueAt", w.waiting_reason as "waitingReason"
+  const urgent = await db.execute<{
+    resource: string;
+    subject: string;
+    dueAt: Date | string;
+    breakerUntil: Date | string | null;
+    waitingReason: string | null;
+  }>(sql`
+    select w.resource, w.subject, w.due_at as "dueAt", w.breaker_until as "breakerUntil", w.waiting_reason as "waitingReason"
       from sync_work w
      where w.page_id = ${input.pageId}
        and not w.shadow
-       and w.class = 'urgent'
-       and w.state = 'open'
-       and w.due_at < statement_timestamp() - ${input.urgentAfterMs}::double precision * interval '1 millisecond'
-     order by w.due_at
+       and ${syncUrgentWaitingSql({ now: sql`statement_timestamp()`, afterMs: input.urgentAfterMs })}
+     order by ${urgentWaitingSinceSql}, w.id
      limit 200
   `);
   const polls = await db.execute<{ resource: string; lastServedAt: Date | string | null; createdAt: Date | string }>(sql`
@@ -121,6 +170,7 @@ export async function readSyncJournalAlertFacts(
       resource: row.resource,
       subject: row.subject,
       dueAt: toRequiredDate(row.dueAt),
+      breakerUntil: toDate(row.breakerUntil),
       waitingReason: row.waitingReason,
     })),
     polls: polls.rows.map((row) => ({

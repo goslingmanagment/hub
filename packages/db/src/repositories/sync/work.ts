@@ -78,6 +78,13 @@ export const SYNC_WORK_DONE_NOTIFY_CHANNEL = "fansly_sync_work_done";
 /** Candidates a class pick reads at once (design §3.4). */
 export const SYNC_WORK_PICK_LIMIT = 20;
 
+/** The credentials checks a credentials page hold lets through
+ *  (`pickCredentialsCheck`): they run as soon as they are due, whatever
+ *  their subject breaker — that is how the hold is lifted — so neither a
+ *  demand nor a settle holds their due time back to `breaker_until`. */
+export const SYNC_CREDENTIALS_CHECK_KEYS = { identity: "account.identity", verify: "account.verify" } as const;
+const CREDENTIALS_CHECK_RESOURCES: readonly string[] = Object.values(SYNC_CREDENTIALS_CHECK_KEYS);
+
 export interface SyncWorkDemand {
   messageIds: string[];
   txIds: string[];
@@ -310,7 +317,13 @@ export interface UpsertDemandResult {
  * newest closed row of its key, so closing a row never resets a breaker. An
  * open row of the key takes the demand: revision + 1, merged bounded id lists
  * (overflow flag past 200), the due time per the coalescing rule, the earlier
- * deadline and coalescing cap. Wakes the page's actor (NOTIFY at commit).
+ * deadline and coalescing cap. A coalescing window whose cap has passed is
+ * closed: the signal never delays a row that is runnable by then, and opens
+ * its own window on a row that still waits (a step's due time, its breaker).
+ * No signal makes a row due before its own breaker ends (`breaker_until`): the
+ * pick waits for it anyway, and a due time before it would read as urgent
+ * work waiting — except a credentials check, whose pick does not wait
+ * (`SYNC_CREDENTIALS_CHECK_KEYS`). Wakes the page's actor (NOTIFY at commit).
  */
 export async function upsertDemand(db: Database, input: UpsertDemandInput): Promise<UpsertDemandResult> {
   const subject = input.subject ?? "";
@@ -337,6 +350,14 @@ export async function upsertDemand(db: Database, input: UpsertDemandInput): Prom
                 group by e.v
                 order by min(e.ord)
                 limit ${merge.cap}) ids))`;
+  // The breaker a row of this key waits for: its own, except a credentials
+  // check's, which its pick runs regardless (`SYNC_CREDENTIALS_CHECK_KEYS`).
+  const breakerHolds = !CREDENTIALS_CHECK_RESOURCES.includes(input.resource);
+  const breakerOf = (column: SQL): SQL => breakerHolds ? column : sql`null::timestamptz`;
+  // The open row's coalescing window has closed (its cap has passed); the
+  // row is runnable by time (due, and its breaker ended).
+  const windowClosed = sql`(sync_work.coalesce_until is not null and sync_work.coalesce_until < clock_timestamp())`;
+  const runnable = sql`(greatest(sync_work.due_at, coalesce(${breakerOf(sql`sync_work.breaker_until`)}, sync_work.due_at)) <= clock_timestamp())`;
   const result = await db.execute<{ id: string; demandRevision: string; created: boolean }>(sql`
     insert into sync_work (
       page_id, shadow, resource, subject, kind, class, due_at, coalesce_until, deadline_at, demand, params,
@@ -344,7 +365,7 @@ export async function upsertDemand(db: Database, input: UpsertDemandInput): Prom
     )
     select ${input.pageId}::bigint, false, ${input.resource}::text, ${subject}::text,
            ${input.kind}::text, ${input.class}::text,
-           coalesce(${timestampParam(input.dueAt)}, clock_timestamp()),
+           greatest(coalesce(${timestampParam(input.dueAt)}, clock_timestamp()), ${breakerOf(sql`prev.breaker_until`)}),
            ${timestampParam(input.coalesceUntil)},
            ${timestampParam(input.deadlineAt)},
            sync_work_merge_demand('{}'::jsonb, ${jsonParam(demand)}),
@@ -371,13 +392,24 @@ export async function upsertDemand(db: Database, input: UpsertDemandInput): Prom
       demand_revision = sync_work.demand_revision + 1,
       demand = sync_work_merge_demand(sync_work.demand, excluded.demand),
       params = ${mergedIds(sql`sync_work.params`)},
-      due_at = case
-        when ${input.extendOnSignal === true}
+      -- An open row: never before its own breaker ends. A running row's next
+      -- due time is its step's to settle, under the breaker the step leaves.
+      due_at = greatest(case
+        when not ${input.extendOnSignal === true}::boolean
+          then least(sync_work.due_at, excluded.due_at)
+        -- An open window: the quiet window moves later, never past its cap.
+        when not ${windowClosed}
           then least(sync_work.coalesce_until, greatest(sync_work.due_at, excluded.due_at))
-        else least(sync_work.due_at, excluded.due_at)
-      end,
+        -- A closed one: a runnable row is not delayed; a waiting one takes the signal's window.
+        when ${runnable}
+          then sync_work.due_at
+        else least(excluded.coalesce_until, greatest(sync_work.due_at, excluded.due_at))
+      end, case when sync_work.state = 'open' then ${breakerOf(sql`sync_work.breaker_until`)} end),
       deadline_at = least(sync_work.deadline_at, excluded.deadline_at),
-      coalesce_until = least(sync_work.coalesce_until, excluded.coalesce_until),
+      coalesce_until = case
+        when ${windowClosed} and not ${runnable} then excluded.coalesce_until
+        else least(sync_work.coalesce_until, excluded.coalesce_until)
+      end,
       updated_at = clock_timestamp()`}
     returning id::text as id, demand_revision::text as "demandRevision", (xmax = 0) as created
   `);
@@ -589,8 +621,8 @@ export async function pickCredentialsCheck(
        and not w.shadow
        and w.state = 'open'
        and w.due_at <= clock_timestamp()
-       and ((w.resource = 'account.identity' and w.secret_params is not null)
-            or (${input.verify}::boolean and w.resource = 'account.verify'))
+       and ((w.resource = ${SYNC_CREDENTIALS_CHECK_KEYS.identity} and w.secret_params is not null)
+            or (${input.verify}::boolean and w.resource = ${SYNC_CREDENTIALS_CHECK_KEYS.verify}))
      order by w.first_demand_at, w.id
      limit 1
   `);
@@ -786,7 +818,9 @@ export interface SettleWorkInput {
   close?: "done" | "cancelled";
   closeReason?: string | null;
   /** Next run while the row stays open; default: now. A newer demand that
-   *  arrived during the step can only make it earlier. */
+   *  arrived during the step can only make it earlier — never earlier than
+   *  the row's breaker after the step (a credentials check's excepted,
+   *  `SYNC_CREDENTIALS_CHECK_KEYS`). */
   nextDueAt?: Date | null;
   waitingReason?: SyncWaitingReason | null;
   waitingUntil?: Date | null;
@@ -820,6 +854,10 @@ export async function settleWork(db: Database, input: SettleWorkInput): Promise<
   // statement waits for the row lock is seen (the re-checked row version).
   const closing = sql`(${close}::text is not null and w.demand_revision <= ${input.servedRevision}::bigint)`;
   const newerDemand = sql`(w.demand_revision > ${input.servedRevision}::bigint)`;
+  // The subject breaker this step leaves on the row, and the floor it puts
+  // under the row's next due time (none for a credentials check).
+  const breakerUntil = sql`case when ${breaker !== undefined} then ${timestampParam(breaker?.breakerUntil)} else w.breaker_until end`;
+  const dueFloor = sql`case when w.resource = any(${textArrayParam(CREDENTIALS_CHECK_RESOURCES)}) then null else ${breakerUntil} end`;
   const result = await db.execute<{ state: SyncWorkState; demandRevision: string; appliedRevision: string }>(sql`
     update sync_work w
        set applied_revision = greatest(w.applied_revision,
@@ -830,8 +868,9 @@ export async function settleWork(db: Database, input: SettleWorkInput): Promise<
            secret_params = case when ${closing} then null else w.secret_params end,
            due_at = case
              when ${closing} then w.due_at
-             when ${newerDemand} then least(w.due_at, coalesce(${timestampParam(input.nextDueAt)}, w.due_at))
-             else coalesce(${timestampParam(input.nextDueAt)}, clock_timestamp())
+             -- A row that stays open is never due before its breaker (as set by this step) ends.
+             when ${newerDemand} then greatest(least(w.due_at, coalesce(${timestampParam(input.nextDueAt)}, w.due_at)), ${dueFloor})
+             else greatest(coalesce(${timestampParam(input.nextDueAt)}, clock_timestamp()), ${dueFloor})
            end,
            waiting_reason = case when ${closing} then null else ${input.waitingReason ?? null}::text end,
            waiting_until = case when ${closing} then null else ${timestampParam(input.waitingUntil)} end,
@@ -839,8 +878,7 @@ export async function settleWork(db: Database, input: SettleWorkInput): Promise<
            proof = case when ${input.proof !== undefined} then ${nullableJsonParam(input.proof)} else w.proof end,
            result = case when ${input.result !== undefined} then ${nullableJsonParam(input.result)} else w.result end,
            failure_count = coalesce(${breaker === undefined ? null : breaker.failureCount}::smallint, w.failure_count),
-           breaker_until = case when ${breaker !== undefined}
-             then ${timestampParam(breaker?.breakerUntil)} else w.breaker_until end,
+           breaker_until = ${breakerUntil},
            blocked_by_vendor_at = case when ${breaker !== undefined}
              then ${timestampParam(breaker?.blockedByVendorAt)} else w.blocked_by_vendor_at end,
            last_error_class = case when ${input.lastErrorClass !== undefined}

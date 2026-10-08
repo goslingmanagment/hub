@@ -3,12 +3,14 @@ import { sql } from "drizzle-orm";
 import {
   getNotificationIncidentByKey,
   insertAuditEvent,
+  isSyncUrgentWorkWaiting,
   listNotificationIncidents,
   listSyncPages,
   readFanslySendAudit,
   readSyncJournalAlertFacts,
   readSyncLivePathFacts,
   SYNC_ALERTS_ACK_AUDIT_EVENT,
+  syncUrgentWaitingSince,
   type Database,
   type FanslyWsLivePayloadResolver,
   type SyncJournalAlertFacts,
@@ -90,7 +92,9 @@ export const SYNC_UNCONFIRMED_MESSAGE_MS = 15 * 60_000;
 export const SYNC_MONEY_FRAME_MS = 5 * 60_000;
 /** … looked for within this window (an older frame no longer counts). */
 export const SYNC_MONEY_LOOKBACK_MS = 60 * 60_000;
-/** Alert 3: urgent work waiting longer than this. */
+/** Alert 3: urgent work waiting longer than this, from its due time or its
+ *  own breaker's end, whichever is later (`syncUrgentWaitingSince`); the
+ *  live-hour check's `urgentWaiting` is the same rule. */
 export const SYNC_URGENT_WAIT_MS = 2 * 60_000;
 /** Alert 4: a request with runnable work and no read for this long. */
 export const SYNC_REQUEST_STALL_MS = 30 * 60_000;
@@ -253,13 +257,16 @@ export function evaluatePageAlerts(facts: PageAlertFacts, registry: Pick<EngineR
     late.push({ detail: "money_not_in_ledger", since: facts.money.oldestReceivedAt, context: { frames: facts.money.count } });
   }
   if (!page.pausedAll && !holdInForce) {
+    // A row its own subject breaker holds (the vendor's block too) is
+    // explained until the breaker ends; it waits from then on.
     const waiting = journal.urgentWaiting.filter((row) =>
+      isSyncUrgentWorkWaiting(row, now, SYNC_URGENT_WAIT_MS) &&
       row.waitingReason !== "dependency" && !resourceExplained(page, holds, row.resource, now, registry));
-    const oldest = waiting[0];
-    if (oldest !== undefined) {
+    const since = waiting.map(syncUrgentWaitingSince).sort((a, b) => a.getTime() - b.getTime())[0];
+    if (since !== undefined) {
       late.push({
         detail: "urgent_waiting",
-        since: oldest.dueAt,
+        since,
         context: { works: waiting.length, resources: [...new Set(waiting.map((row) => row.resource))] },
       });
     }
