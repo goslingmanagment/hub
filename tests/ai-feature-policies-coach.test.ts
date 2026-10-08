@@ -5,7 +5,14 @@ import {
   FEATURE_POLICIES,
   DEFAULT_FEATURE_MODELS,
   DEFAULT_FEATURE_REASONING,
+  OPERATION_FEATURES,
 } from "../apps/runtime/src/modules/ai/index.ts";
+
+describe("text feature model defaults", () => {
+  it.each(OPERATION_FEATURES)("routes %s to Opus 5.5 through its model delegation", (feature) => {
+    expect(DEFAULT_FEATURE_MODELS[FEATURE_POLICIES[feature].modelFeature]).toBe("anthropic:claude-opus-5-5");
+  });
+});
 
 describe("coach-chat feature policy", () => {
   it("registers coach-chat with the agreed policy", () => {
@@ -24,7 +31,7 @@ describe("coach-chat feature policy", () => {
       requiresDraft: false,
       usesPingSegment: false,
     });
-    expect(DEFAULT_FEATURE_MODELS["coach-chat"]).toBe("anthropic:claude-sonnet-5");
+    expect(DEFAULT_FEATURE_MODELS["coach-chat"]).toBe("anthropic:claude-opus-5-5");
     expect(DEFAULT_FEATURE_REASONING["coach-chat"]).toBe("low");
   });
 

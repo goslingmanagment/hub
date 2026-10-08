@@ -448,8 +448,8 @@ describe("AI feature service pilot (Stage 30)", () => {
     // the user blocks.
     const body = capture.input!.body;
     expect(body.feature).toBe("fast-reply");
-    // Reply features default to Sonnet 5 at low effort (owner, 2026-09-30).
-    expect(body.model).toBe("anthropic:claude-sonnet-5");
+    // Reply features share the Opus 5.5 default at low effort.
+    expect(body.model).toBe("anthropic:claude-opus-5-5");
     expect(body.reasoningEffort).toBe("low");
     const lora = createBundledPersonalities()[0]!;
     expect(body.prompt.systemBlocks[1]).toMatchObject({ text: lora.content, cache: "1h" });
@@ -1191,7 +1191,7 @@ describe("AI feature registry gates (Stage 30 Task 4)", () => {
     expect(helpMe.statusCode, helpMe.body).toBe(200);
     expect(capture.input!.body).toMatchObject({
       feature: "help-me",
-      model: "anthropic:claude-sonnet-5",
+      model: "anthropic:claude-opus-5-5",
       reasoningEffort: "low",
     });
 
@@ -1287,8 +1287,8 @@ describe("voice-script feature (voice notes lane)", () => {
     expect(scripted.statusCode, scripted.body).toBe(200);
     expect(scripted.body).toContain("sure thing");
     expect(capture.input!.body.feature).toBe("voice-script");
-    // Delegates model + reasoning selection to fast-reply (Sonnet 5, low).
-    expect(capture.input!.body.model).toBe("anthropic:claude-sonnet-5");
+    // Delegates model + reasoning selection to fast-reply (Opus 5.5, low).
+    expect(capture.input!.body.model).toBe("anthropic:claude-opus-5-5");
     const userText = capture.input!.body.prompt.userBlocks.map((block) => block.text).join("\n");
     expect(userText).toContain("## Current Draft");
     expect(userText).toContain("omg u looked so good today");
@@ -1877,7 +1877,7 @@ describe("coach-chat gates", () => {
     expect(meta).not.toHaveProperty("presetQuestion");
     expect(capture.input!.body).toMatchObject({
       feature: "coach-chat",
-      model: "anthropic:claude-sonnet-5",
+      model: "anthropic:claude-opus-5-5",
       reasoningEffort: "low",
     });
     expect(aiFeatureStreamFrameSchema.safeParse(meta).success).toBe(true);
@@ -2046,7 +2046,7 @@ describe("fan-summary short variant cap (Task 8)", () => {
     return { res, capture };
   }
 
-  it("caps output at 2048 tokens and selects the compact template", async (context) => {
+  it("gives the short Opus recap thinking headroom and selects the compact template", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -2054,13 +2054,10 @@ describe("fan-summary short variant cap (Task 8)", () => {
     // P1-1: a short fansly recap now REQUIRES fanRef, so supply it here.
     const { res, capture } = await postFanSummary({ summaryMode: "short", fanRef: "fan-42" });
     expect(res.statusCode, res.body).toBe(200);
-    // The 2048 cap reaches the provider on the gateway body (honored by both
-    // providers as input.maxTokens ?? tuning.maxTokens).
-    expect(capture.input!.body.maxTokens).toBe(2048);
-    // ...and adaptive summarized thinking is disabled so 2048 is a PURE output
-    // budget (the default fan-summary model is adaptive; Anthropic counts
-    // thinking inside max_tokens). The provider input carries the off-switch;
-    // that it drops the `thinking` block is proven in ai-gateway-anthropic.test.
+    expect(capture.input!.body.model).toBe("anthropic:claude-opus-5-5");
+    // Opus 5.5 maps this off-switch to low effort and needs room for thinking
+    // plus the compact answer. The same cap reaches the cost estimator.
+    expect(capture.input!.body.maxTokens).toBe(4096);
     expect(capture.input!.disableAdaptiveThinking).toBe(true);
     const promptText = capture.input!.body.prompt.userBlocks
       .map((block) => block.text)
@@ -2074,6 +2071,16 @@ describe("fan-summary short variant cap (Task 8)", () => {
     expect(rows[0]?.params["personaDefinitionId"]).toBe(
       await defaultPersonaDefinitionId(),
     );
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("retains the smaller short-recap cap for an explicit legacy model", async (context) => {
+    if (!testDb) { context.skip(); return; }
+    const { res, capture } = await postFanSummary({
+      summaryMode: "short", fanRef: "fan-42", model: "anthropic:claude-opus-4-6",
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(capture.input!.body).toMatchObject({ model: "anthropic:claude-opus-4-6", maxTokens: 2048 });
+    expect(capture.input!.disableAdaptiveThinking).toBe(true);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("leaves maxTokens unset and keeps adaptive thinking without summaryMode", async (context) => {

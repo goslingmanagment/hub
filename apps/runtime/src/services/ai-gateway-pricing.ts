@@ -25,8 +25,16 @@ interface AnthropicGatewayPricing {
 }
 
 const ANTHROPIC_PRICING: Record<string, AnthropicGatewayPricing> = {
-  // Reply-feature default since 2026-09-28 (adaptive-only surface, handled
-  // generically by ai-gateway-anthropic.ts). Same list price as Sonnet 5.
+  // https://platform.claude.com/docs/en/models/opus-5-5/overview
+  "anthropic:claude-opus-5-5": {
+    providerModelId: "claude-opus-5-5",
+    inputUsdPerMillion: 4,
+    cacheWrite5mUsdPerMillion: 5,
+    cacheWrite1hUsdPerMillion: 8,
+    cacheReadUsdPerMillion: 0.2,
+    outputUsdPerMillion: 20,
+  },
+  // Retained for explicit model choices. Same list price as Sonnet 5.
   "anthropic:claude-sonnet-5-5": {
     providerModelId: "claude-sonnet-5-5",
     inputUsdPerMillion: 2,
