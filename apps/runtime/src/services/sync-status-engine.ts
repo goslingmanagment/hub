@@ -1,5 +1,6 @@
 import {
   countActiveLiveWorkByResource,
+  countUnavailableChats,
   getWorkForStatus,
   lastLiveAppliedAtByResource,
   lastLiveAppliedAtOverSubjects,
@@ -55,6 +56,12 @@ import type {
 // rows by the open-row index, each key's newest attempts along
 // `sync_attempts_work`, a few rows a key): the Settings overview polls it
 // every 10 s.
+//
+// A chat Fansly does not serve to the page (an established chat-unavailability
+// episode, arena "vanished chat" plan §4) is no work that needs the owner:
+// its `dm-messages.*` rows are out of the vendor's block count
+// (`countActiveLiveWorkByResource`), and the chat is counted instead — the
+// messages block's `chatsUnavailable` and a line of the page summary.
 
 export type EngineMode = "handover" | "live";
 
@@ -70,6 +77,9 @@ export interface EngineStatusFacts {
   appliedAt: ReadonlyMap<string, Date>;
   /** S, for when the page's next slot opens. */
   settingMs: number;
+  /** Chats Fansly does not serve to the page (established unavailability
+   *  episodes); absent: none. */
+  chatsUnavailable?: number;
 }
 
 export function isEngineOwnedMode(mode: SyncPageRow["mode"]): mode is EngineMode {
@@ -132,6 +142,7 @@ export async function readEngineStatusFacts(
   const facts = new Map<number, EngineStatusFacts>();
   if (pages.length === 0) return facts;
   const counts = await countActiveLiveWorkByResource(db, { pageIds: pages.map((page) => page.pageId) });
+  const chats = await countUnavailableChats(db, { pageIds: pages.map((page) => page.pageId) });
   for (const page of pages) {
     const pageRows = await getWorkForStatus(db, {
       pageId: page.pageId,
@@ -148,6 +159,7 @@ export async function readEngineStatusFacts(
       pageRows,
       appliedAt,
       settingMs: input.settingMs,
+      chatsUnavailable: chats.get(page.pageId) ?? 0,
     });
   }
   return facts;
@@ -540,8 +552,13 @@ export interface EngineBlockInfo {
   activeWork: number;
   /** The keys' quarantined rows: what the block's requeue takes. */
   quarantined: EngineWorkCount;
-  /** The keys' rows Fansly refuses. */
+  /** The keys' rows Fansly refuses — the rows of a chat Fansly does not serve
+   *  to the page left out (they are `chatsUnavailable`). */
   blockedByVendor: EngineWorkCount;
+  /** The block that reads the chats' messages (`messages_history`) only:
+   *  how many chats Fansly does not serve to the page. Informational — no
+   *  attention, no lever (`pnpm cli sync chats unavailable` lists them). */
+  chatsUnavailable?: number;
 }
 
 /** A stream of a block: how many of its keys are stopped and by what, and
@@ -603,6 +620,10 @@ function countWork(
   return { count: found.reduce((sum, counts) => sum + rows(counts), 0), resources: found.map((counts) => counts.resource) };
 }
 
+/** The Settings block whose keys read the chats' messages (`dm-messages.*`):
+ *  the one that counts the chats Fansly does not serve to the page. */
+const CHATS_BLOCK: SyncDomainBlockKey = "messages_history";
+
 /** A Settings block of an engine-owned page (`ENGINE_BLOCK_STREAMS`). */
 export function buildEngineDomainBlock(
   block: SyncDomainBlockKey,
@@ -660,6 +681,7 @@ export function buildEngineDomainBlock(
       activeWork: countWork(blockKeys, facts, (counts) => counts.active).count,
       quarantined: countWork(blockKeys, facts, (counts) => counts.quarantined),
       blockedByVendor: countWork(blockKeys, facts, (counts) => counts.blockedByVendor),
+      ...(block === CHATS_BLOCK ? { chatsUnavailable: facts.chatsUnavailable ?? 0 } : {}),
     },
     connectionStatus: block === "connection" ? (credentialsRefused ? "error" : "connected") : null,
     substreams,
@@ -704,6 +726,8 @@ export interface EngineSummaryFacts {
   page: SyncPageRow & { mode: EngineMode };
   /** Active live work per key (any subject). */
   counts: readonly SyncWorkResourceCounts[];
+  /** Chats Fansly does not serve to the page; absent: none. */
+  chatsUnavailable?: number;
 }
 
 /** The summary facts of every engine-owned page among `pageIds`, by page id.
@@ -719,8 +743,13 @@ export async function readEngineSummaryFacts(
     .filter((page): page is SyncPageRow & { mode: EngineMode } => isEngineOwnedMode(page.mode) && wanted.has(page.pageId));
   if (pages.length === 0) return facts;
   const counts = await countActiveLiveWorkByResource(db, { pageIds: pages.map((page) => page.pageId) });
+  const chats = await countUnavailableChats(db, { pageIds: pages.map((page) => page.pageId) });
   for (const page of pages) {
-    facts.set(page.pageId, { page, counts: counts.filter((row) => row.pageId === page.pageId) });
+    facts.set(page.pageId, {
+      page,
+      counts: counts.filter((row) => row.pageId === page.pageId),
+      chatsUnavailable: chats.get(page.pageId) ?? 0,
+    });
   }
   return facts;
 }
@@ -730,9 +759,16 @@ const BLOCK_KEYS: ReadonlySet<string> = new Set(
   fanslyKeysForStreams(Object.values(ENGINE_BLOCK_STREAMS).flatMap((streams) => streams.map(({ stream }) => stream))),
 );
 
+/** The summary's informational line of the chats Fansly does not serve to
+ *  the page; null: none. Never a reason for attention. */
+export function engineChatsUnavailableText(chats: number | undefined): string | null {
+  return chats === undefined || chats <= 0 ? null : `Chats Fansly does not serve: ${chats}`;
+}
+
 /** The sync summary of an engine page: new credentials needed, work of a
  *  Settings block quarantined or refused by Fansly, a switch in progress, or
- *  managed by the engine. */
+ *  managed by the engine — with, beside any of the last three, how many chats
+ *  Fansly does not serve to the page (a counter, never "Needs attention"). */
 export function buildEnginePageSyncUx(facts: EngineSummaryFacts, now: Date = facts.page.dbNow): SyncUxSummary {
   const updatedAt = iso(facts.page.lastCompletedAt);
   const base = { progressLabel: null, nextRetryAt: null, updatedAt };
@@ -749,17 +785,20 @@ export function buildEnginePageSyncUx(facts: EngineSummaryFacts, now: Date = fac
   }
   const blockCounts = facts.counts.filter((row) => BLOCK_KEYS.has(row.resource));
   const quarantined = blockCounts.reduce((sum, row) => sum + row.quarantined, 0);
+  // A chat Fansly does not serve is not among them (`countActiveLiveWorkByResource`).
   const blocked = blockCounts.reduce((sum, row) => sum + row.blockedByVendor, 0);
+  const chats = engineChatsUnavailableText(facts.chatsUnavailable);
+  const withChats = (detail: string) => (chats === null ? detail : `${detail} · ${chats}`);
   if (quarantined > 0 || blocked > 0) {
     return {
       ...base,
       state: "attention",
       label: "Needs attention",
       headline: "The Fansly Sync Engine needs attention",
-      detail: [
+      detail: withChats([
         quarantined > 0 ? `${quarantined} quarantined` : null,
         blocked > 0 ? `${blocked} blocked by Fansly` : null,
-      ].filter(Boolean).join(", "),
+      ].filter(Boolean).join(", ")),
       requiresAction: false,
     };
   }
@@ -769,7 +808,7 @@ export function buildEnginePageSyncUx(facts: EngineSummaryFacts, now: Date = fac
     state: handover ? "catching_up" : "healthy",
     label: handover ? "Switching" : "Fansly Sync Engine",
     headline: handover ? "Switching to the Fansly Sync Engine" : "Managed by the Fansly Sync Engine",
-    detail: engineModeSummary(facts.page.mode),
+    detail: withChats(engineModeSummary(facts.page.mode)),
     requiresAction: false,
   };
 }

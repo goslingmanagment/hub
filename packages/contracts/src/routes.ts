@@ -2912,8 +2912,13 @@ export const syncBlockStatusSchema = z.object({
     activeWork: z.number().int().nonnegative(),
     /** The keys' quarantined rows: what the block's reset requeues. */
     quarantined: syncEngineWorkCountSchema,
-    /** The keys' rows Fansly refuses. */
+    /** The keys' rows Fansly refuses; the rows of a chat Fansly does not serve
+     *  to the page are not among them (`chatsUnavailable`). */
     blockedByVendor: syncEngineWorkCountSchema,
+    /** The block that reads the chats' messages (`messages_history`) only:
+     *  how many chats Fansly does not serve to the page (established
+     *  unavailability episodes). Informational: never needs attention. */
+    chatsUnavailable: z.number().int().nonnegative().optional(),
   }).optional(),
   succeededAt: isoTimestamp.nullable(),
   progress: syncBlockProgressSchema.nullable(),

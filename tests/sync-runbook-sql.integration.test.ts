@@ -40,6 +40,7 @@ function sqlBlocks(markdown: string): Array<{ heading: string; sql: string }> {
 const VARIABLES: Readonly<Record<string, string>> = {
   page_label: "lora-1",
   fan_ref: "438766025723355136",
+  group_id: "810272281019305984",
   from: "2026-10-01T00:00:00Z",
   to: "2026-10-02T00:00:00Z",
 };

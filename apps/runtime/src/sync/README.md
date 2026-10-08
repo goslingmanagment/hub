@@ -88,6 +88,7 @@ sync/
   checks/                    read-only checks of live pages: `sync check live-hour` (`cli/checks.ts`) — a page's
                              first hour on the engine and the combined pace audit of both journals
   excluded.ts                step 3, owner decision №8: `sync excluded probe | report | lift | unlift` (`cli/excluded.ts`)
+  chats.ts                   the chats Fansly does not serve: `sync chats unavailable | note` (`cli/chats.ts`), no request
   parity/                    step 4, owner decision №11: `sync dm-reader-parity` (`cli/dm-reader-parity.ts`), the
                              read-only DM reader parity of page_dm_messages and message_archive (the readers
                              serve live pages from the archive: "DM readers on the archive")
@@ -239,10 +240,10 @@ a host runs and nothing stops.
 
 | Surface | A Fansly page the engine owns (`handover`/`live`) |
 |---|---|
-| `/api/v1/health/sync` | an `engine` block (mode, owner heartbeat age, hold, oldest due urgent work, socket, quarantine, open alerts); unhealthy on an owner silent > 90 s, an `auth`/`identity_mismatch` hold, or `handover` > 10 min. No legacy stream is judged |
+| `/api/v1/health/sync` | an `engine` block (mode, owner heartbeat age, hold, oldest due urgent work, socket, quarantine, open alerts); unhealthy on an owner silent > 90 s, an `auth`/`identity_mismatch` hold, or `handover` > 10 min. No legacy stream is judged, and a chat Fansly does not serve to the page is not reflected |
 | Settings blocks (`syncOverview`, `pageSyncBlocks`) | every block `state: "engine"` + `engineMode` + `engine`: whether a host runs the page (`ownerRunning`), the block's own keys (`keys`), its polls (`pollKeys`: what "sync now" makes due — a block without one has nothing to move), the keys the owner paused (`pausedKeys`, `pausedAll`), what stops its keys (`stopped`, `stops`, `paused`), its quarantined rows and the rows Fansly refuses, by key; each lever stream of the block from its keys' live work (last applied, next due, why the earliest waits, quarantine / vendor block, what stops it); a refused credential reads `credentials_invalid` on the connection block. Last applied of a key that works per subject (`dm-messages.head` per chat, `purchases.targets` per target) is its newest applied attempt over all its subjects (`lastLiveAppliedAtOverSubjects`: a bounded number of the key's rows, never a read per subject). Work that needs the owner names the command that lists it: `sync work list --state quarantined` for quarantined rows, `--state open --resource <key>` for rows Fansly refuses (they stay open, waiting `blocked_by_vendor`) |
 | Block buttons, `/admin/sync/trigger(-all)` | trigger ⇒ the keys' polls due now (`refreshSyncPage`); pause / resume ⇒ the keys in / out of `paused_resources` (the rest kept); reset ⇒ the keys' quarantined work requeued — `page_sync_states` never touched; `handover` ⇒ 409 `fansly_page_switching` for a lever that would read. The answer's `engine.affected` is what moved (polls made due, keys paused or resumed, rows requeued): 0 is a lever that did nothing, and the dashboard says so instead of "done" |
-| Page summary (`syncUx` of the overview, the sidebar's connections, the credentials tab) | `buildEnginePageSyncUx`, from the page's row and the counts of its active work: new credentials needed (an `auth`/`identity_mismatch` hold), work of a Settings block quarantined or refused by Fansly, a switch in progress, or managed by the engine |
+| Page summary (`syncUx` of the overview, the sidebar's connections, the credentials tab) | `buildEnginePageSyncUx`, from the page's row and the counts of its active work: new credentials needed (an `auth`/`identity_mismatch` hold), work of a Settings block quarantined or refused by Fansly, a switch in progress, or managed by the engine — and, beside the last three, `Chats Fansly does not serve: N` (a chat's unavailability episode is no attention: its work is out of the vendor-block count) |
 | Connection status (`/admin/connections`, the health page item) | `expired` while the engine holds the page for its credentials, else by the age of the account read the engine stamps on the page (`account.poll`); no legacy run is consulted |
 | Follower reconcile reset / blast-radius override | the quarantined `followers.reconcile` row: reset cancels it and files owner demand (a fresh walk); the override reads the walk from the row's cursor and `result.quarantine`, deactivates exactly the previewed set and closes the row done |
 | Insights coverage (`/api/v1/pages/:pageLabel/stats/coverage`) | an `engine` block: mode, whether a host runs the page (`ownerRunning`), and per lever stream its keys, last applied, next due, its open work (`activeWork`), paused, what stops its keys (`stopped`, `stops`), why the earliest waits (`waiting`: key, reason, until — as data; `reason`: one line), quarantine / vendor block, largest failure count |
@@ -466,9 +467,34 @@ nothing of the head a new fan needs first): a chat with an established episode i
 after the threads and before any work row (`lockOpenChatUnavailability`): an establishment in flight is waited for
 and its fans are refused with no work; one that comes after the intake finds the fans it filed. The passive parity pass defers a message the 24-hour window passed
 `chat_unavailable` while its chat has an open episode (`openChatUnavailabilitySql`), else `age_without_rest`.
-Alerts, the page summary's counter, the CLI and the metric take the episode in the next release; the shared test is
-`dmLiveChatUnavailableSql` (`repositories/sync/observability.ts`). The episodes are erased with their threads (the
-foreign key cascades): a fan or page erasure needs no target of its own.
+The episodes are erased with their threads (the foreign key cascades): a fan or page erasure needs no target of its
+own.
+
+What reads the episode beside the actor (R2 PR5; plan §4) — one module of predicates in
+`repositories/sync/observability.ts` and `chat-unavailability.ts`, shared by the online alert and `sync check
+live-hour`:
+
+- **Alert 3** `message_unconfirmed` counts a socket message only by `dmLiveUnconfirmedSql`: still awaited
+  (`dmLiveAwaitingConfirmSql`), of a chat the page has a thread for (`dmLiveChatKnownSql`), with no open episode,
+  refusing or established (`dmLiveChatUnavailableSql`). A message of a chat with no thread is counted apart
+  (`SyncLivePathFacts.unconfirmedWithoutThread`, shown by `sync alerts status`), never paged: a broken find pages
+  through its quarantine or its wait. `chats_refused` (alert 3, `readSyncChatAlertFacts`) opens when 5 or more chats
+  of the page opened an episode within 10 minutes — the resource hold's threshold (`RESOURCE_BREAKER_SUBJECTS`,
+  `RESOURCE_BREAKER_WINDOW_MS`): `dm-messages.head` is out of the resource hold, so a lone chat never pages and Fansly
+  refusing the page's chats still does. `sync check live-hour` takes `dmLiveUnconfirmedSql` for
+  `unconfirmed_over_15m` and the confirmation SLO (a message with no thread shown as `withoutThread`), and does not
+  count a chat with an open episode among `fanThreadsBehind`.
+- **The counts**: a `dm-messages.*` work row of a chat with an established episode is the chat's, not the vendor's
+  block (`syncWorkOfUnavailableChatSql`) — a new row inherits the closed one's `blocked_by_vendor_at`, and it must not
+  make the page need attention again. `countActiveLiveWorkByResource` (the page summary, the Settings blocks),
+  `buildPageStatus` (`sync page status`) and `readSyncJournalMetrics` (`sync_blocked_by_vendor`) leave it out, and
+  count the established chats instead (`countUnavailableChats`): the summary's `Chats Fansly does not serve: N`, the
+  `messages_history` block's `engine.chatsUnavailable` (the «Синк» tab), `PageStatus.chatsUnavailable` (owner CLI
+  only: the agent wire is strict) and the gauge `sync_chats_unavailable`. `/health/sync` does not reflect them.
+- **The owner's CLI** (`sync/chats.ts`, `cli/chats.ts`): `sync chats unavailable --page P [--ended] [--json]` lists
+  the episodes with their evidence, read-only; `sync chats note --page P --chat G --note … [--at]` writes the
+  episode's `owner_note` / `owner_note_at` only (nothing the actor writes, not even `updated_at`) and an audit row in
+  the same transaction. Neither sends a request to Fansly.
 
 ## Ownership
 
@@ -723,7 +749,8 @@ branch. On a live page:
   too. The DM apply is the one writer of `not_found` (a read covered the message's place without it). A row the
   passive pass's 24-hour window passes without a copy gets no verdict: it is deferred (`confirm_wait_reason =
   'age_without_rest'`, `confirm_due_at` null), stays visible and is no longer awaited — alert 3 and `sync check
-  live-hour` share that predicate (`dmLiveAwaitingConfirmSql`, `repositories/sync/observability.ts`) — and a later
+  live-hour` share that predicate (`dmLiveAwaitingConfirmSql`, `repositories/sync/observability.ts`, narrowed by
+  `dmLiveUnconfirmedSql` to the chats that page) — and a later
   read still claims it by `confirmed_at is null`, settles it and clears the reason. A chat Fansly stopped serving to
   the page keeps its socket messages so: while its chat-unavailability episode is open the window defers them
   `chat_unavailable`, and an established episode defers them at once (above). The image before the column leaves a deferred row alone (no next look, no
@@ -924,7 +951,9 @@ the pause S every route of a page has a strict budget of its own (owner decision
 ## Alerts and metrics
 
 Plan §10's five alerts are one incident kind, `fansly_sync_engine`, one latch per page and alert (`page_stopped`,
-`live_degraded`, `freshness`, `stuck`) plus the global `process`. The actor opens alert 1 at once from its capture
+`live_degraded`, `freshness`, `stuck`) plus the global `process`. Alert 3 (`freshness`) never pages for a lone chat
+Fansly does not serve (`message_unconfirmed` leaves it out); `chats_refused` pages five chats refused within ten
+minutes (above, "A chat Fansly stopped serving"). The actor opens alert 1 at once from its capture
 transaction (a refused credential, another identity, a pace violation; a 429 opens its route's own latch,
 `route_limited:<route>`); `engine/alerts.ts` re-derives every
 condition from the database every 30 s and is the only path that resolves one, so a latch never flips on a partial
@@ -960,7 +989,8 @@ restart. `pnpm cli sync alerts status` shows what holds per page.
 The golden signals (`engine/metrics.ts`) come from the database: `computeSyncMetrics` per page (smallest send gap
 vs the setting, violations, sends by class and resource, holds, breakers, quarantine) and the global families
 (confirmation lag, REST mismatches by field, the DM apply's `not_found` verdicts, money lag from a socket frame to the
-ledger, history requests and the ETA's fact over forecast). The ops sampler records a compact set every 5 minutes: aggregates over the pages the
+ledger, history requests and the ETA's fact over forecast), and the chats Fansly does not serve to a page
+(`sync_chats_unavailable`; their work is not in `sync_blocked_by_vendor`). The ops sampler records a compact set every 5 minutes: aggregates over the pages the
 engine owns (`sync_*`) — per-page series would double the sample table for figures the page status already shows.
 
 The shadow acceptance report (`sync shadow report`, design §3.12) judged the switch candidates of step 3 against the

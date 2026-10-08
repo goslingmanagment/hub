@@ -60,6 +60,7 @@ import {
 import { buildFanslySendGuardReport } from "./services/fansly-send-guard/report.ts";
 import { registerSyncAlertsCommands } from "./sync/cli/alerts.ts";
 import { registerSyncChainCommands } from "./sync/cli/chain.ts";
+import { registerSyncChatsCommands } from "./sync/cli/chats.ts";
 import { registerSyncCheckCommands } from "./sync/cli/checks.ts";
 import { registerSyncDmReaderParityCommands } from "./sync/cli/dm-reader-parity.ts";
 import { registerSyncExcludedCommands } from "./sync/cli/excluded.ts";
@@ -2952,6 +2953,9 @@ export function buildProgram() {
   registerSyncExcludedCommands(sync);
   // Step 4 S4-06, owner decision №11: `sync dm-reader-parity` (read-only).
   registerSyncDmReaderParityCommands(sync);
+  // The chats Fansly does not serve to a page (arena "vanished chat" §4):
+  // `sync chats unavailable | note` — no request to Fansly.
+  registerSyncChatsCommands(sync);
 
   queue
     .command("planner-recover")

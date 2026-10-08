@@ -322,8 +322,14 @@ export interface PageStatus {
     /** `kind`: the file's breaker (a 429 holds a route: `routes`). */
     resources: Array<{ file: string; until: string; step: number; kind: ResourceHoldKind }>;
   };
+  /** Subject breakers open, and the work the vendor blocks — but the work of
+   *  a chat Fansly does not serve to the page (`chatsUnavailable`). */
   breakers: { open: number; blockedByVendor: number };
   quarantined: number;
+  /** Chats Fansly does not serve to the page: established unavailability
+   *  episodes (owner CLI; not on the agent wire). Their `dm-messages.*` work
+   *  is in neither breaker count — the episode explains it. */
+  chatsUnavailable: number;
   requests: RequestProgressView[];
   ws: WsStatusView | null;
   /** The route budgets (owner CLI; not on the agent wire). */
@@ -347,6 +353,9 @@ export interface PageStatusInput {
   requests?: readonly RequestProgressView[];
   ws?: WsStatusView | null;
   routes?: RouteStatusView | null;
+  /** The groups of the page's chats Fansly does not serve to it (established
+   *  unavailability episodes); absent: none. */
+  unavailableChats?: ReadonlySet<string>;
 }
 
 /** Assemble the page status from the page row, its open work and the
@@ -364,9 +373,13 @@ export function buildPageStatus(input: PageStatusInput): PageStatus {
   let breakersOpen = 0;
   let blockedByVendor = 0;
   let quarantined = 0;
+  const unavailable = input.unavailableChats ?? new Set<string>();
   for (const work of input.works) {
     if (work.state === "quarantined") quarantined += 1;
     if (work.state === "done" || work.state === "cancelled" || work.state === "superseded") continue;
+    // A chat Fansly does not serve: its episode explains the row (a new row
+    // inherits the vendor's block of the closed one), counted as the chat.
+    if (work.resource.startsWith("dm-messages.") && unavailable.has(work.subject)) continue;
     if (work.blockedByVendorAt !== null) blockedByVendor += 1;
     else if (work.breakerUntil !== null && work.breakerUntil.getTime() > at) breakersOpen += 1;
   }
@@ -400,6 +413,7 @@ export function buildPageStatus(input: PageStatusInput): PageStatus {
     },
     breakers: { open: breakersOpen, blockedByVendor },
     quarantined,
+    chatsUnavailable: unavailable.size,
     requests: [...(input.requests ?? [])],
     ws: input.ws ?? null,
     routes: input.routes ?? null,

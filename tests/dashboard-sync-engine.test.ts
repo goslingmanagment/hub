@@ -1105,6 +1105,36 @@ describe("the engine's blocks say what is true of them", () => {
     expect(renderRouted(createElement(EnginePageList, { onSelectPage: vi.fn() }))).toContain("В карантине: 1 (transactions.rescan)");
   });
 
+  it("the chats Fansly does not serve are counted on the messages block, never as attention (arena \"vanished chat\" §4)", () => {
+    const chats = engineBlock("messages_history", {
+      intervals: [],
+      substreams: [{ ...engineBlock("messages_history").substreams[0]!, stream: "dm_messages", cadenceSeconds: 0 }],
+    }, { chatsUnavailable: 2 });
+    // The block stays read; the count sits beside its state on the list.
+    expect(engineBlockState(chats)).toBe("reading");
+    expect(engineBlockSummary(chats, NOW_MS)).toBe("читается · чатов, которые Fansly не отдаёт: 2 · последнее чтение 2 мин назад");
+    // In detail: the count with the command that lists them, in the card's own
+    // words — no attention box, no button for it.
+    const card = renderRouted(createElement(EngineBlockCard, { block: chats, pageLabel: "lora-1", now: NOW_MS }));
+    expect(card).toContain("data-engine-chats-unavailable");
+    expect(card).toContain("Чатов, которые Fansly не отдаёт: 2 · pnpm cli sync chats unavailable --page lora-1");
+    expect(card).not.toContain('data-engine-attention="work"');
+    // The page's notice is about work that needs the owner: none here.
+    expect(renderRouted(createElement(EnginePageAttention, {
+      page: { ...page(), blocks: { ...page().blocks, messages_history: chats } }, now: NOW_MS,
+    }))).toBe("");
+    // None: nothing is said.
+    const none = engineBlock("messages_history", {}, { chatsUnavailable: 0 });
+    expect(engineBlockSummary(none, NOW_MS)).not.toContain("не отдаёт");
+    expect(renderRouted(createElement(EngineBlockCard, { block: none, pageLabel: "lora-1", now: NOW_MS })))
+      .not.toContain("data-engine-chats-unavailable");
+    // The page's card of the list carries it.
+    queries.useSyncOverview.mockReturnValue(loaded({
+      generatedAt: NOW, diagnosis: null, pages: [{ ...page(), blocks: { ...page().blocks, messages_history: chats } }],
+    }));
+    expect(renderRouted(createElement(EnginePageList, { onSelectPage: vi.fn() }))).toContain("чатов, которые Fansly не отдаёт: 2");
+  });
+
   it("«готово N из M фанов» follows the count", () => {
     const fans = (total: number) => historyFansText(historyRequest({
       counts: { total, ready: 0, queued: 0, loading: 0, blocked: 0, refused: 0, cancelled: 0 },

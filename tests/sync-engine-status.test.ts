@@ -18,6 +18,7 @@ import {
   type StatusPage,
   type StatusWork,
 } from "../apps/runtime/src/sync/engine/status.ts";
+import { toSyncPageStatusWire } from "../apps/runtime/src/sync/requests/wire.ts";
 import { pageHoldRow, resourceBreakerRow, routeHoldRows } from "./helpers/sync-holds.ts";
 
 // "Почему ждёт" (plan §10, design §3.9): the closed dictionary, its
@@ -340,6 +341,33 @@ describe("sync status: estimates and summaries", () => {
       ws: null,
     });
     expect(status.queue.planned.waitingByReason).toEqual({ page_hold: 3 });
+    expect(status.chatsUnavailable).toBe(0);
     expect(JSON.parse(JSON.stringify(status))).toEqual(status);
+  });
+
+  it("counts a chat Fansly does not serve as the chat, not as the vendor's block of its work (arena \"vanished chat\" §4)", () => {
+    const blocked = { blockedByVendorAt: at(-1), breakerUntil: at(86_000_000), class: "urgent" as const };
+    const status = buildPageStatus({
+      pageLabel: "lora-1",
+      page: { ...page(), lastSendAt: at(-10_000) },
+      settingMs: 2_000,
+      now: NOW,
+      runtime: OPEN_SLOT,
+      works: [
+        // The new head row of an established chat inherited the closed row's block.
+        work({ ...blocked, resource: "dm-messages.head", subject: "362195" }),
+        // Another chat the vendor blocks, with no episode: as before.
+        work({ ...blocked, resource: "dm-messages.head", subject: "999" }),
+        // Another resource whose subject happens to share the id: as before.
+        work({ ...blocked, resource: "fan-earnings.fan", subject: "362195" }),
+        // Quarantined work of the chat still needs the owner.
+        work({ resource: "dm-messages.catchup", subject: "362195", state: "quarantined" }),
+      ],
+      sends: { lastHour: { urgent: 0, requests: 0, planned: 0, byResource: {} }, minGapLastHourMs: null, violationsLastDay: 0 },
+      unavailableChats: new Set(["362195", "218893"]),
+    });
+    expect(status).toMatchObject({ breakers: { open: 0, blockedByVendor: 2 }, quarantined: 1, chatsUnavailable: 2 });
+    // Not on the agent wire (its schema is strict): the owner CLI's alone.
+    expect(toSyncPageStatusWire(status)).not.toHaveProperty("chatsUnavailable");
   });
 });

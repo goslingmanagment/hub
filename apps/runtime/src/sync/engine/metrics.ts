@@ -22,8 +22,10 @@ import type { EngineRegistry } from "./resource.ts";
 // setting, violations), sends by class and resource, holds, breakers,
 // quarantine, the overlay's confirmation lag, REST mismatches and the DM
 // apply's `not_found` verdicts, the money lag from a socket frame to the
-// ledger, history requests and the ETA's fact over forecast. The per-page
-// families cover the pages the engine owns (`handover`/`live`).
+// ledger, history requests and the ETA's fact over forecast, and the chats
+// Fansly does not serve to a page (`sync_chats_unavailable`: established
+// unavailability episodes — their work is not in `sync_blocked_by_vendor`).
+// The per-page families cover the pages the engine owns (`handover`/`live`).
 //
 // `computeSyncMetrics` serves one page (status);
 // `sampleSyncEngineMetrics` is the ops sampler's compact set (aggregates over
@@ -45,8 +47,12 @@ export interface SyncPageMetrics {
    *  force at `until`, by the hold evaluator. */
   holds: { page: FanslyPageHoldKind[]; resources: string[] };
   breakersOpen: number;
+  /** Open work the vendor blocks; a chat Fansly does not serve to the page is
+   *  counted in `chatsUnavailable` instead. */
   blockedByVendor: number;
   quarantined: number;
+  /** `sync_chats_unavailable{page}`: chats Fansly does not serve to the page. */
+  chatsUnavailable: number;
 }
 
 /** The holds of a page in force at `now` (`engine/admission.ts`). */
@@ -86,6 +92,7 @@ export async function computeSyncMetrics(
     breakersOpen: row?.breakersOpen ?? 0,
     blockedByVendor: row?.blockedByVendor ?? 0,
     quarantined: row?.quarantined ?? 0,
+    chatsUnavailable: row?.chatsUnavailable ?? 0,
   };
 }
 
@@ -181,8 +188,8 @@ function basisPoints(value: number | null): number | null {
  * The ops sampler's set (every `SYNC_METRICS_SAMPLE_EVERY_MINUTES`): over the
  * pages the engine owns (`sync_*`, none without one) the smallest send gap of
  * the hour, pace violations, sends, holds, open breakers, vendor-blocked
- * subjects, quarantined work and the alert conditions that hold; and the
- * global families. Threshold-free: the engine's alerts page, not the sample
+ * subjects, quarantined work, the chats Fansly does not serve and the alert
+ * conditions that hold; and the global families. Threshold-free: the engine's alerts page, not the sample
  * latch.
  */
 export async function sampleSyncEngineMetrics(
@@ -226,6 +233,7 @@ export async function sampleSyncEngineMetrics(
       ...gauge("sync_breakers_open", sum((row) => row.breakersOpen)),
       ...gauge("sync_blocked_by_vendor", sum((row) => row.blockedByVendor)),
       ...gauge("sync_quarantined", sum((row) => row.quarantined)),
+      ...gauge("sync_chats_unavailable", sum((row) => row.chatsUnavailable)),
       ...gauge("sync_alerts", conditions),
     );
   }

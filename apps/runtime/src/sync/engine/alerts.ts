@@ -7,12 +7,14 @@ import {
   listNotificationIncidents,
   listSyncPages,
   readFanslySendAudit,
+  readSyncChatAlertFacts,
   readSyncJournalAlertFacts,
   readSyncLivePathFacts,
   SYNC_ALERTS_ACK_AUDIT_EVENT,
   syncUrgentWaitingSince,
   type Database,
   type FanslyWsLivePayloadResolver,
+  type SyncChatAlertFacts,
   type SyncJournalAlertFacts,
   type SyncLivePathFacts,
   type SyncPageRow,
@@ -32,7 +34,7 @@ import { FANSLY_ROUTES, routeBudget, type FanslyRoute } from "../fansly/routes.t
 import { moneyFramesMissing, readMoneyFrames } from "../fansly/ws/money-frames.ts";
 import { heldByScope, holdSetOf, pageHoldsInForce, type HoldSet } from "./admission.ts";
 import type { SyncLogger } from "./commit.ts";
-import { NETWORK_ALERT_AFTER_MS } from "./errors.ts";
+import { NETWORK_ALERT_AFTER_MS, RESOURCE_BREAKER_SUBJECTS, RESOURCE_BREAKER_WINDOW_MS } from "./errors.ts";
 import type { AlertSink, SyncAlertInput } from "./ports.ts";
 import { effectivePeriodMs, resourceDisabled, type EngineRegistry } from "./resource.ts";
 import { routeHoldUntil } from "./route-holds.ts";
@@ -86,8 +88,16 @@ export const SYNC_SOCKET_DOWN_MS = 5 * 60_000;
 /** Alert 2: decode debt above this share of the window's receipts. */
 export const SYNC_DECODE_DEBT_SHARE = 0.01;
 export const SYNC_DECODE_DEBT_WINDOW_MS = 10 * 60_000;
-/** Alert 3: a fan message the socket showed, unconfirmed for longer than this. */
+/** Alert 3: a fan message the socket showed, unconfirmed for longer than this
+ *  (in a chat Hub knows and Fansly does not refuse, `dmLiveUnconfirmedSql`). */
 export const SYNC_UNCONFIRMED_MESSAGE_MS = 15 * 60_000;
+/** Alert 3 (`chats_refused`): this many distinct chats of a page that opened
+ *  a chat-unavailability episode … */
+export const SYNC_CHATS_REFUSED_CHATS = RESOURCE_BREAKER_SUBJECTS;
+/** … within this window: the resource hold's threshold (arena "vanished
+ *  chat" plan §4). A lone chat Fansly refuses never pages; Fansly refusing
+ *  the page's chats does — `dm-messages.head` is out of the resource hold. */
+export const SYNC_CHATS_REFUSED_WINDOW_MS = RESOURCE_BREAKER_WINDOW_MS;
 /** Alert 3: a money frame not in the ledger for longer than this … */
 export const SYNC_MONEY_FRAME_MS = 5 * 60_000;
 /** … looked for within this window (an older frame no longer counts). */
@@ -138,6 +148,8 @@ export interface PageAlertFacts {
     | "pausedResources" | "registryOverrides" | "owner">;
   journal: SyncJournalAlertFacts;
   live: SyncLivePathFacts;
+  /** The page's chat-unavailability episodes (`chats_refused`). */
+  chats: SyncChatAlertFacts;
   money: { count: number; oldestReceivedAt: Date } | null;
   now: Date;
 }
@@ -248,10 +260,16 @@ export function evaluatePageAlerts(facts: PageAlertFacts, registry: Pick<EngineR
   conditions.push(condition("live_degraded", degraded, now));
 
   // 3. Freshness. The owner's pause and a page hold explain a wait (alert 1
-  // or the owner's own lever), so they do not page twice.
+  // or the owner's own lever), so they do not page twice. A message of a chat
+  // Fansly refuses to the page is not late (the chat's episode answers for
+  // it), and one of a chat Hub has no thread for is counted, not paged
+  // (`dmLiveUnconfirmedSql`); several chats refused at once page.
   const late: SyncAlertCondition["reasons"] = [];
   if (live.unconfirmed.count > 0) {
     late.push({ detail: "message_unconfirmed", since: live.unconfirmed.oldestVisibleAt, context: { messages: live.unconfirmed.count } });
+  }
+  if (facts.chats.refused.chats >= SYNC_CHATS_REFUSED_CHATS) {
+    late.push({ detail: "chats_refused", since: facts.chats.refused.firstOpenedAt, context: { chats: facts.chats.refused.chats } });
   }
   if (facts.money !== null) {
     late.push({ detail: "money_not_in_ledger", since: facts.money.oldestReceivedAt, context: { frames: facts.money.count } });
@@ -363,16 +381,12 @@ function routeAlertContext(condition: SyncRouteAlertCondition): Record<string, u
   };
 }
 
-/** Read a page's facts and evaluate it. `money` comes from one window read
- *  over many pages (`readMoneyFrames`); without it the money rule is skipped. */
-export async function collectPageAlerts(
+/** Read a page's alert facts. `money` comes from one window read over many
+ *  pages (`readMoneyFrames`); without it the money rule is skipped. */
+export async function readPageAlertFacts(
   db: Database,
-  input: {
-    page: SyncPageRow;
-    registry: Pick<EngineRegistry, "spec">;
-    money?: Map<number, { count: number; oldestReceivedAt: Date }>;
-  },
-): Promise<SyncAlertCondition[]> {
+  input: { page: SyncPageRow; money?: Map<number, { count: number; oldestReceivedAt: Date }> },
+): Promise<PageAlertFacts> {
   const journal = await readSyncJournalAlertFacts(db, {
     pageId: input.page.pageId,
     stopLookbackMs: SYNC_ALERT_CLEAN_MS,
@@ -384,13 +398,27 @@ export async function collectPageAlerts(
     decodeWindowMs: SYNC_DECODE_DEBT_WINDOW_MS,
     unconfirmedAfterMs: SYNC_UNCONFIRMED_MESSAGE_MS,
   });
-  return evaluatePageAlerts({
+  const chats = await readSyncChatAlertFacts(db, { pageId: input.page.pageId, refusedWindowMs: SYNC_CHATS_REFUSED_WINDOW_MS });
+  return {
     page: input.page,
     journal,
     live,
+    chats,
     money: input.money?.get(input.page.pageId) ?? null,
     now: input.page.dbNow,
-  }, input.registry);
+  };
+}
+
+/** Read a page's facts and evaluate it (`readPageAlertFacts`). */
+export async function collectPageAlerts(
+  db: Database,
+  input: {
+    page: SyncPageRow;
+    registry: Pick<EngineRegistry, "spec">;
+    money?: Map<number, { count: number; oldestReceivedAt: Date }>;
+  },
+): Promise<SyncAlertCondition[]> {
+  return evaluatePageAlerts(await readPageAlertFacts(db, input), input.registry);
 }
 
 /** The money frames of the pages in the trailing window, missing per page. */
@@ -748,11 +776,23 @@ export async function readSyncAlertStatus(
   for (const page of input.pages) {
     // Only handover/live page the owner: no other page has a condition.
     const pagesOwner = pagesOwnerAlerts(page);
+    const facts = pagesOwner ? await readPageAlertFacts(db, { page, money }) : null;
     statuses.push({
       page: page.pageLabel ?? String(page.pageId),
       mode: page.mode,
       pages: pagesOwner,
-      conditions: pagesOwner ? await collectPageAlerts(db, { page, registry: input.registry, money }) : [],
+      conditions: facts === null ? [] : evaluatePageAlerts(facts, input.registry),
+      // What alert 3 counts and never pages (arena "vanished chat" plan §4):
+      // chats Fansly does not serve to the page (`sync chats unavailable`),
+      // the chats that opened an episode within the `chats_refused` window,
+      // and fan messages awaited in chats Hub has no thread for.
+      chats: facts === null
+        ? null
+        : {
+          unavailable: facts.chats.unavailable,
+          refusedRecently: facts.chats.refused.chats,
+          unconfirmedWithoutThread: facts.live.unconfirmedWithoutThread,
+        },
       // The routes held now or within their clean window (D5).
       routes: pagesOwner ? evaluateRouteAlerts(page, page.dbNow) : [],
       // A latch whose condition no longer holds resolves 10 clean minutes

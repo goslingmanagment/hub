@@ -2,8 +2,11 @@ import { sql } from "drizzle-orm";
 
 import {
   dmLiveAwaitingConfirmSql,
+  dmLiveChatKnownSql,
+  dmLiveUnconfirmedSql,
   getFanslySendGuard,
   getSyncPage,
+  openChatUnavailabilitySql,
   readFanslySendAudit,
   syncUrgentWaitingSql,
   type Database,
@@ -236,7 +239,10 @@ async function boundaryCheck(db: Database, pageId: number): Promise<AcceptanceCh
 /** Nothing stuck, nothing lost — the page as it stands now. Urgent work
  *  waits by alert 3's rule (`syncUrgentWaitingSql`): from its due time or the
  *  end of its own subject breaker (the vendor's block included), whichever
- *  is later — judged by `breaker_until`, not by a stored waiting reason. */
+ *  is later — judged by `breaker_until`, not by a stored waiting reason. A
+ *  fan's chat Fansly refuses to the page (an open unavailability episode) is
+ *  not behind: its head is read again only on new demand, after the episode's
+ *  retry boundary (arena "vanished chat" plan §2.3, §4). */
 async function stuckCheck(db: Database, pageId: number, window: AcceptanceWindow): Promise<AcceptanceCheck> {
   const now = sql`${window.now}::timestamptz`;
   const result = await db.execute<Record<string, number>>(sql`
@@ -264,28 +270,36 @@ async function stuckCheck(db: Database, pageId: number, window: AcceptanceWindow
          and not exists (select 1 from sync_work w where w.page_id = ${pageId} and not w.shadow
                            and w.subject = t.platform_conversation_id
                            and w.resource in ('dm-messages.head', 'dm-messages.catchup')
-                           and w.state in ('open', 'running'))) as "fanThreadsBehind"
+                           and w.state in ('open', 'running'))
+         and not ${openChatUnavailabilitySql({ pageId: sql`t.platform_account_id`, groupId: sql`t.platform_conversation_id` })}) as "fanThreadsBehind"
   `);
   const counts = Object.fromEntries(Object.entries(result.rows[0] ?? {}).map(([key, value]) => [key, Number(value)]));
   return { name: "nothing_stuck", verdict: Object.values(counts).every((value) => value === 0) ? "pass" : "fail", detail: counts };
 }
 
-/** The latency SLOs. A fan message still awaiting its REST confirmation
- *  (alert 3's predicate, `dmLiveAwaitingConfirmSql`: not deleted, not
- *  deferred, not in an excluded or hidden chat) and a work still open count at
- *  their age now. */
+/** The latency SLOs. A fan message still awaiting its REST confirmation by
+ *  alert 3's predicate (`dmLiveUnconfirmedSql`: not deleted, not deferred, not
+ *  in an excluded or hidden chat, nor in a chat Fansly refuses to the page,
+ *  in a chat Hub knows) and a work still open count at their age now. An
+ *  awaited message of a chat Hub has no thread for is shown beside
+ *  `unconfirmed_over_15m` (`withoutThread`), as `sync alerts status` shows
+ *  it, and judged by nothing. */
 async function sloChecks(db: Database, pageId: number, window: AcceptanceWindow): Promise<AcceptanceCheck[]> {
   const now = sql`${window.now}::timestamptz`;
-  const messages = await db.execute<{ visibleS: unknown; confirmS: unknown; fast: boolean; confirmed: boolean; mismatch: boolean; over15: boolean }>(sql`
+  const messages = await db.execute<{
+    visibleS: unknown; confirmS: unknown; fast: boolean; confirmed: boolean; mismatch: boolean; over15: boolean; over15WithoutThread: boolean;
+  }>(sql`
     select extract(epoch from m.first_visible_at - m.created_at) as "visibleS",
            case when m.confirm_outcome in ('match', 'mismatch') then extract(epoch from m.confirmed_at - m.first_visible_at)
                 when aw.awaiting then extract(epoch from ${now} - m.first_visible_at) end as "confirmS",
            m.attachments <> '[]'::jsonb as fast,
            coalesce(m.confirm_outcome in ('match', 'mismatch'), false) as confirmed,
            coalesce(m.confirm_outcome = 'mismatch', false) as mismatch,
-           (aw.awaiting and m.first_visible_at < ${now} - ${ms(ACCEPTANCE_RULES.unconfirmedAfterMs)}) as over15
+           (aw.awaiting and m.first_visible_at < ${now} - ${ms(ACCEPTANCE_RULES.unconfirmedAfterMs)}) as over15,
+           (aw.orphan and m.first_visible_at < ${now} - ${ms(ACCEPTANCE_RULES.unconfirmedAfterMs)}) as "over15WithoutThread"
       from dm_live_messages m
-     cross join lateral (select ${dmLiveAwaitingConfirmSql(sql`m`)} as awaiting) aw
+     cross join lateral (select ${dmLiveUnconfirmedSql(sql`m`)} as awaiting,
+                                (${dmLiveAwaitingConfirmSql(sql`m`)} and not ${dmLiveChatKnownSql(sql`m`)}) as orphan) aw
      where m.page_id = ${pageId} and m.first_visible_at >= ${window.start}::timestamptz
        and m.first_visible_at < ${window.observedUntil}::timestamptz
        and m.sender_platform_user_id is not null and m.is_sent_by_page is false
@@ -305,12 +319,13 @@ async function sloChecks(db: Database, pageId: number, window: AcceptanceWindow)
     return row.resource !== resource || s === null ? [] : [s];
   });
   const unconfirmed = messages.rows.filter((row) => row.over15).length;
+  const withoutThread = messages.rows.filter((row) => row.over15WithoutThread).length;
   return [
     latencyCheck("slo_visible", visible),
     latencyCheck("slo_confirm", confirm),
     latencyCheck("slo_confirm_fast", confirmFast),
     mismatchCheck(messages.rows.filter((row) => row.confirmed).length, messages.rows.filter((row) => row.mismatch).length),
-    { name: "unconfirmed_over_15m", verdict: unconfirmed === 0 ? "pass" : "fail", detail: { messages: unconfirmed } },
+    { name: "unconfirmed_over_15m", verdict: unconfirmed === 0 ? "pass" : "fail", detail: { messages: unconfirmed, withoutThread } },
     latencyCheck("slo_find", latency("dm-conversations.find")),
     latencyCheck("slo_money_head", latency("transactions.head")),
     latencyCheck("slo_deletions", latency("dm-live.deletions")),
