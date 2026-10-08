@@ -13,6 +13,7 @@ computed from.
 | [tab-audience.md](tab-audience.md) | Audience tab, discovery card (tracking links), heatmap and hour-bar widgets |
 | [tab-earnings.md](tab-earnings.md) | Earnings tab, statements, CSV exports, supporter (fan) modal |
 | [fbuddy-cross-evidence.md](fbuddy-cross-evidence.md) | What the FBuddy extension sends to and expects from the same routes |
+| [response-fields.json](response-fields.json) | Every field path and JSON type observed in live responses, per route, with the client that reads it |
 
 ## 1. Evidence and its limits
 
@@ -40,8 +41,11 @@ response; the capture was made independently. Run over the raw bodies
 - the bodies carry 304 more leaf fields that neither client reads; they are listed per route as `L:`.
 
 **Limits of the live layer.** One account, one day, a browser session. It does not show how the
-routes answer the hub's own header plan, their quotas, or cases the sampled account lacks (refunds,
-non-empty `kind=2` tags, locked-text purchases). Section 9 lists what is settled and what is open.
+routes answer the hub's own header plan or what their quotas are. It has no refund, no locked-text
+purchase and no non-empty `kind=2` tag answer, and for the first two no page of the agency can supply
+one: the hub's archive holds no `refund` and no `locked_text` transaction for any of its six Fansly
+pages since their capture floors (2024-05 … 2025-03; `ari-1` from 2026-08-22; read through the Agent
+Read Plane on 2026-10-09). Section 9 lists what is settled and what is open.
 
 The bundle is the same build the 2026-10-06 quota research recorded (main SHA-256 `5e59696b…ca99ab`).
 Notation in section 5: a field listed plainly is read by the official client; a line starting with
@@ -688,7 +692,7 @@ Settled by the live capture (L), details in sections 4 and 5:
 - `/account/stats/series` serves all five families; `views` has no monthly form.
 - Span caps of 400, 120 and 90 days; the 100-offer cap of `media/top`.
 - `source` 2 and 3 are not filters of `media/top`; `orderBy=watchLift` works.
-- `activehours` is 7 × 24 with the offset applied by the server.
+- `activehours` is 7 × 24 and echoes the offset it was given.
 - `end=0` on `media/shown` means the current hour.
 - The response of `/account/stats/posts`.
 
@@ -696,8 +700,9 @@ Still open:
 
 1. Whether the hub's header plan (no `fansly-client-check` on `/account/stats/*`) gets a `200`. The capture was a browser session, which always sends the check.
 2. Quotas of the family and whether its routes share a bucket.
-3. Refunds: the sampled account had none, so `productType 6101` rows, the date a refund is booked on, `status` 5 / 6 and `destination 1` rows are known from client code only.
-4. A non-empty `tags` answer for `kind=2`, and the `stories` join of route 13.
-5. Maximum `limit` on `geo`, `tags`, `fans/top` and route 13 (the observed answers were below the limit asked).
-6. `overwriteAccountId`.
-7. Whether a post id missing from `/account/stats/posts` means zero engagement.
+3. Refunds. The live bodies carry the refund fields (`refunds`, `refundedNetMills`, `refundedGrossMills`) with zero values, and no page of the agency has a refund in the hub's archive, so non-zero refunds, `productType 6101` rows, the date a refund is booked on, and `status` 5 / 6 or `destination 1` rows are known from client code only. They cannot be observed until a refund happens on one of the pages.
+4. Locked text, for the same reason: no page has such a sale, so the `stories` join of route 13 and product types 32001 / 32101 in the stats rows are known from client code only.
+5. A non-empty `tags` answer for `kind=2`.
+6. Maximum `limit` on `geo`, `tags`, `fans/top` and route 13 (the observed answers were below the limit asked).
+7. `overwriteAccountId`.
+8. Whether a post id missing from `/account/stats/posts` means zero engagement.
