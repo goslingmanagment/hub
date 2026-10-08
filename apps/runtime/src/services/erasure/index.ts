@@ -354,8 +354,9 @@ export const ACCOUNT_LOOKUP_PUBLIC_OBSERVATION_KIND = "account_lookup_public";
  * "shared" by lineage and is erased WHOLE — a batch that also named other fans
  * included, exactly like an unprojected batch receipt (the `ofapi_action_intents`
  * target below says the same of a mixed command). A body is never rewritten
- * under one fan's subject. The lake's fan predicate was never page-scoped, so a
- * tiered copy of such a row is reached already.
+ * under one fan's subject. The same reach holds in every plane: attached and
+ * parked partitions, the Parquet lake (`duckdbFanObservationReach`), and the
+ * catalog join that finds a pointer-only row in each of them.
  *
  * THE CONTRACT A WRITER OF A KIND ON THIS LIST FOLLOWS:
  *   1. `account_id` and `native_account_ref` null, `platform` set to the
@@ -497,10 +498,89 @@ function duckdbObservationPred(scope: ResolvedScope, eraseObsIds: number[]): str
   if (/^\d+$/.test(scope.fanRef!)) {
     parts.push(`regexp_matches(CAST(payload AS VARCHAR), '[:\\[,\\s]${ref}[,}\\]]')`);
   }
-  if (eraseObsIds.length > 0) {
-    parts.push(`id IN (${eraseObsIds.join(", ")})`);
+  // The payload match reaches the rows PostgreSQL's arms reach — the
+  // platform's pages and the listed page-less kinds — and nothing else, so a
+  // lake copy is never erased where its hot or parked twin would be kept.
+  // Confirmed lineage ids stay a separate arm.
+  const matched = `(${duckdbFanObservationReach(scope)} AND (${parts.join(" OR ")}))`;
+  return eraseObsIds.length > 0 ? `(${matched} OR id IN (${eraseObsIds.join(", ")}))` : matched;
+}
+
+/** DuckDB twin of the fan scope's observation reach: `account_id in` the
+ *  platform's pages, or `pagelessFanObservationPredSql`. */
+function duckdbFanObservationReach(scope: ResolvedScope): string {
+  const ids = scope.pageIds.join(", ") || "-1";
+  if (scope.input.scopeType !== "fan") {
+    return `account_id IN (${ids})`;
   }
-  return `(${parts.join(" OR ")})`;
+  const platform = scope.input.platform;
+  const kinds = PAGELESS_FAN_OBSERVATION_KINDS[platform].map((entry) => `'${duckdbEscape(entry.kind)}'`);
+  return kinds.length === 0
+    ? `account_id IN (${ids})`
+    : `(account_id IN (${ids}) OR (account_id IS NULL AND platform = '${duckdbEscape(platform)}' `
+      + `AND kind IN (${kinds.join(", ")})))`;
+}
+
+/** The observation Parquet files of one lake manifest: the file itself and
+ *  its restricted twin when it holds rows. */
+function lakeObservationParquets(file: LakeManifestFile): string[] {
+  return file.manifest.restrictedRowCount > 0
+    ? [file.parquetPath, file.restrictedParquetPath]
+    : [file.parquetPath];
+}
+
+/** A file exported before G5 slice 1 (0124) has no catalog reference columns,
+ *  so nothing in it can point at a catalog body. */
+async function parquetHasCatalogRefs(run: DuckRunner, parquet: string): Promise<boolean> {
+  const columns = await run(`DESCRIBE SELECT * FROM read_parquet('${duckdbEscape(parquet)}')`);
+  const names = new Set(columns.map((column) => String(column.column_name)));
+  return names.has("payload_bucket_month") && names.has("payload_object_id");
+}
+
+function duckdbCatalogRefValues(refs: readonly { bucketMonth: string; objectId: number }[]): string {
+  return refs
+    .map((ref) => `(DATE '${duckdbEscape(ref.bucketMonth)}', ${Number(ref.objectId)}::BIGINT)`)
+    .join(", ");
+}
+
+/**
+ * Which of `refs` a lake observation row still points at. Read AFTER the
+ * erasure's lake rewrite, so these are references of rows that survived it:
+ * the catalog sweep keeps their bodies, as it keeps a body an attached or
+ * parked envelope still needs.
+ */
+async function lakeCatalogReferences(
+  lakeFiles: LakeManifestFile[],
+  refs: readonly { bucketMonth: string; objectId: number }[],
+): Promise<Array<{ bucketMonth: string; objectId: number }>> {
+  const obsFiles = lakeFiles.filter((file) => file.table === "observations");
+  if (obsFiles.length === 0 || refs.length === 0) {
+    return [];
+  }
+  const found = new Map<string, { bucketMonth: string; objectId: number }>();
+  await withDuckDb(async (run) => {
+    for (const file of obsFiles) {
+      for (const parquet of lakeObservationParquets(file)) {
+        if (!(await parquetHasCatalogRefs(run, parquet))) {
+          continue;
+        }
+        for (let offset = 0; offset < refs.length; offset += CATALOG_LINEAGE_BATCH) {
+          const batch = refs.slice(offset, offset + CATALOG_LINEAGE_BATCH);
+          const referenced = await run(
+            `SELECT DISTINCT CAST(t.b AS VARCHAR) AS b, t.o AS o `
+            + `FROM read_parquet('${duckdbEscape(parquet)}') p `
+            + `JOIN (VALUES ${duckdbCatalogRefValues(batch)}) AS t(b, o) `
+            + `ON p.payload_bucket_month = t.b AND p.payload_object_id = t.o`,
+          );
+          for (const row of referenced) {
+            const ref = { bucketMonth: String(row.b), objectId: Number(row.o) };
+            found.set(`${ref.bucketMonth}:${ref.objectId}`, ref);
+          }
+        }
+      }
+    }
+  });
+  return [...found.values()];
 }
 
 // ---------------------------------------------------------------------------
@@ -745,18 +825,23 @@ async function collectFanLineage(
       ),
       sql`, `,
     );
-    const referencing = await rows<{ id: string; kind: string }>(app, sql`
-      with target (bucket_month, object_id) as (values ${refs})
-      select distinct o.id::text as id,o.kind
-      from target t
-      join observations o
-        on o.payload_bucket_month = t.bucket_month
-       and o.payload_object_id = t.object_id
-      where ${envelopeReach}
-    `);
-    for (const row of referencing) {
-      candidates.add(Number(row.id));
-      if (row.kind === "fansly.ws.frame.v1") shared.add(Number(row.id));
+    // Attached and parked partitions alike: a tiered pointer-only envelope has
+    // no inline body for the payload arm to match, so this join is the only
+    // way to find it (the lake's copies are joined in the lake block below).
+    for (const source of obsSources) {
+      const referencing = await rows<{ id: string; kind: string }>(app, sql`
+        with target (bucket_month, object_id) as (values ${refs})
+        select distinct o.id::text as id,o.kind
+        from target t
+        join ${sql.raw(source)} o
+          on o.payload_bucket_month = t.bucket_month
+         and o.payload_object_id = t.object_id
+        where ${envelopeReach}
+      `);
+      for (const row of referencing) {
+        candidates.add(Number(row.id));
+        if (row.kind === "fansly.ws.frame.v1") shared.add(Number(row.id));
+      }
     }
     const rawReferencing = await rows<{ id: string }>(app, sql`
       with target (bucket_month, object_id) as (values ${refs})
@@ -805,17 +890,30 @@ async function collectFanLineage(
         }
       }
       for (const file of obsFiles) {
-        const paths = [file.parquetPath];
-        if (file.manifest.restrictedRowCount > 0) {
-          paths.push(file.restrictedParquetPath);
-        }
-        for (const parquet of paths) {
+        for (const parquet of lakeObservationParquets(file)) {
           const matched = await run(
             `SELECT id FROM read_parquet('${duckdbEscape(parquet)}') `
             + `WHERE ${duckdbObservationPred(scope, [])}`,
           );
           for (const row of matched) {
             candidates.add(Number(row.id));
+          }
+          // The catalog arm, lake side: a tiered pointer-only row carries no
+          // payload here, only its catalog reference.
+          if (catalog.matches.length > 0 && await parquetHasCatalogRefs(run, parquet)) {
+            for (let offset = 0; offset < catalog.matches.length; offset += CATALOG_LINEAGE_BATCH) {
+              const batch = catalog.matches.slice(offset, offset + CATALOG_LINEAGE_BATCH);
+              const referencing = await run(
+                `SELECT DISTINCT p.id, p.kind FROM read_parquet('${duckdbEscape(parquet)}') p `
+                + `JOIN (VALUES ${duckdbCatalogRefValues(batch)}) AS t(b, o) `
+                + `ON p.payload_bucket_month = t.b AND p.payload_object_id = t.o `
+                + `WHERE ${duckdbFanObservationReach(scope)}`,
+              );
+              for (const row of referencing) {
+                candidates.add(Number(row.id));
+                if (row.kind === "fansly.ws.frame.v1") shared.add(Number(row.id));
+              }
+            }
           }
           let cursor = 0;
           for (;;) {
@@ -2054,7 +2152,11 @@ async function rewriteLakeTarget(scopeRef: string, target: LakeTarget): Promise<
       (await run(`SELECT count(*)::bigint AS n FROM read_parquet('${source}')`))[0]?.n ?? 0,
     );
     await run(
-      `COPY (SELECT * FROM read_parquet('${source}') WHERE NOT (${target.pred})) `
+      // NULL-safe: a row the predicate cannot decide (a page-less row under a
+      // page scope, a pointer-only row's NULL payload, an event with no fan
+      // ref) is KEPT, as the plan's `WHERE pred` count left it out. A bare
+      // `NOT (pred)` dropped every such row together with the targets.
+      `COPY (SELECT * FROM read_parquet('${source}') WHERE NOT COALESCE((${target.pred}), FALSE)) `
       + `TO '${duckdbEscape(tmp)}' (FORMAT parquet)`,
     );
     const after = Number(
@@ -2101,6 +2203,7 @@ interface ErasureWork {
   lake: LakeTarget[];
   lineage: LedgerLineage | null;
   catalog: CapturePayloadCatalogWork;
+  lakeFiles: LakeManifestFile[];
 }
 
 async function buildWork(app: Db, input: ErasureScopeInput): Promise<ErasureWork> {
@@ -2165,6 +2268,7 @@ async function buildWork(app: Db, input: ErasureScopeInput): Promise<ErasureWork
     lake: await lakeTargets(app, scope, lakeFiles, lineage),
     lineage,
     catalog,
+    lakeFiles,
   };
 }
 
@@ -2275,20 +2379,23 @@ async function executeErasureLocked(
     }
   });
 
+  for (const target of work.lake) {
+    record(target, await rewriteLakeTarget(plan.scopeRef, target));
+  }
+
   // G5 slice 3b — the catalog plane, in the SAME run and deliberately AFTER
-  // the delete transaction: "no surviving envelope reference" is only true
-  // once those deletes are visible. Bounded batches, each its own transaction
-  // under the erasure fence, each independently resumable.
+  // the delete transaction AND the lake rewrite: "no surviving envelope
+  // reference" is only true once those deletes are visible, and a tiered row
+  // the lake still holds after its rewrite is a surviving reference too.
+  // Bounded batches, each its own transaction under the erasure fence, each
+  // independently resumable.
   const catalogOutcome = await sweepCapturePayloadCatalog(app, {
     scopeRef: plan.scopeRef,
     pageIds: work.scope.pageIds,
     matches: work.catalog.matches,
+    lakeReferenced: await lakeCatalogReferences(work.lakeFiles, work.catalog.matches),
   });
   record({ ...CATALOG_TARGET, rows: work.catalog.matches.length }, catalogOutcome.deleted.length);
-
-  for (const target of work.lake) {
-    record(target, await rewriteLakeTarget(plan.scopeRef, target));
-  }
 
   const catalogJournal = capturePayloadCatalogJournal(catalogOutcome);
   const resolution = await completeErasureLogAndSupersedeScope(app.db, {

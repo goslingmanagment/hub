@@ -44,6 +44,12 @@
 // fence. Migration 0127 gives that probe its index; without it the check would
 // be a sequential scan of the largest table in the system per object.
 //
+// An envelope that left the attached table still needs its body: a tiered or
+// superseded observations partition parked in `tiered_pending_drop` /
+// `capture_pending_drop` is probed in the same statement (a detached partition
+// keeps its 0127 index), and a reference only the Parquet lake still holds is
+// handed in by the caller, which alone can read the lake (arena R4 review).
+//
 // IDEMPOTENT BY CONSTRUCTION. Every statement here is set-based over a
 // caller-supplied candidate list and joins the catalog, so an object a previous
 // run already deleted simply is not in any result. A re-run after a crash finds
@@ -350,14 +356,40 @@ function candidateValues(refs: readonly CapturePayloadRef[]) {
  * one statement the verdict would be computed from the snapshot the statement
  * started with — i.e. from before the lock wait — which is exactly the stale
  * proof the fix exists to remove.
+ *
+ * `options.lakeReferenced` names the candidates a surviving Parquet-lake row
+ * still references (the caller reads the lake after its own rewrite); they are
+ * retained like any other referenced object. Parked observations partitions are
+ * probed here, in the verdict statement.
  */
 export async function deleteUnreferencedCapturePayloadObjects(
   db: Database,
   refs: readonly CapturePayloadRef[],
+  options?: { lakeReferenced?: readonly CapturePayloadRef[] },
 ): Promise<CapturePayloadErasureSweepResult> {
   if (refs.length === 0) {
     return { deleted: [], retained: [], alreadyGone: [] };
   }
+
+  const lakeReferenced = new Set(
+    (options?.lakeReferenced ?? []).map((ref) => `${ref.bucketMonth}:${ref.objectId}`),
+  );
+  // Tiered (`tiered_pending_drop`) and superseded (`capture_pending_drop`)
+  // observations partitions: their rows are envelopes until the owner drops
+  // the table, and a pointer-only row there has no body but the catalog's.
+  const parked = await db.execute<{ ref: string }>(sql`
+    select format('%I.%I', n.nspname, c.relname) as ref
+    from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname in ('tiered_pending_drop', 'capture_pending_drop')
+      and c.relkind = 'r'
+      and c.relname like 'observations\\_%'
+    order by n.nspname, c.relname
+  `);
+  const parkedReferenced = parked.rows.map((row) => sql`
+             or exists (select 1 from ${sql.raw(row.ref)} e
+                        where e.payload_bucket_month = c.bucket_month
+                          and e.payload_object_id = c.object_id)`);
 
   const candidates = candidateValues(refs);
   // STEP 1 (#222). Sorted by the catalog's own primary key, the same stable
@@ -389,6 +421,7 @@ export async function deleteUnreferencedCapturePayloadObjects(
              or exists (select 1 from sync_raw_payloads e
                         where e.payload_bucket_month = c.bucket_month
                           and e.payload_object_id = c.object_id)
+             ${sql.join(parkedReferenced, sql``)}
            ) as referenced,
            encode(o.content_sha256, 'hex') as content_sha256,
            o.logical_bytes::text as logical_bytes
@@ -406,7 +439,7 @@ export async function deleteUnreferencedCapturePayloadObjects(
       alreadyGone.push(ref);
       continue;
     }
-    if (row.referenced) {
+    if (row.referenced || lakeReferenced.has(`${ref.bucketMonth}:${ref.objectId}`)) {
       retained.push(ref);
       continue;
     }
