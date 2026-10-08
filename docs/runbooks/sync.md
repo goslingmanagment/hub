@@ -493,14 +493,14 @@ The golden signals of `GET /api/v1/ops/metrics`: `dm_visible_lag` (acceptance p9
 at a deferred row nor counts it, and its readers show it (they hide `not_found` only). Its DM apply still confirms a
 deferred row and leaves the reason behind, which is harmless. But it gives its own 24-hour `not_found` to the
 messages that arrive while it runs, and those rows stay hidden after the forward deploy: the migration's backfill ran
-once. To list them after a rollback window (`<from>`, `<to>`: when the previous image ran):
+once. To list them after a rollback window (`\set from '…'` and `\set to '…'`: when the previous image ran):
 
 ```sql
 select page_id, platform_message_id, platform_conversation_id, first_visible_at, confirmed_at
   from dm_live_messages
  where confirm_outcome = 'not_found' and confirm_source is null
    and confirmed_at >= first_visible_at + interval '24 hours'
-   and confirmed_at between '<from>' and '<to>';
+   and confirmed_at between :'from' and :'to';
 ```
 
 Deferring them again is a write: the owner's decision.
