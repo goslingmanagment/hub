@@ -208,6 +208,7 @@ export * from "./repositories/voice-profiles.ts";
 
 export * from "./repositories/ofapi-bindings.ts";
 export * from "./repositories/traffic-bindings.ts";
+export * from "./repositories/link-fans.ts";
 
 export * from "./repositories/ofapi-vendor-usage.ts";
 export * from "./repositories/ofapi-collection.ts";

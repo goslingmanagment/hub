@@ -1158,7 +1158,7 @@ describe("erasure drill (Stage 28 Task 4)", () => {
     expect(await count(`page_voice_profiles where platform_account_id = ${page.id}`)).toBe(0);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("page-scope erasure purges the page's link-stat runs and snapshots (0111) and its traffic link bindings (0257)", async (context) => {
+  it("page-scope erasure purges the page's link-stat runs and snapshots (0111), its traffic link bindings (0257) and its link ↔ fan projection (0260)", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -1203,6 +1203,26 @@ describe("erasure drill (Stage 28 Task 4)", () => {
       insert into traffic_link_bindings (platform_account_id, link_kind, platform_link_id, channel_id, valid_from, valid_from_basis)
       select $1, 'tracking', '42', t.channel_id, now() - interval '1 day', 'assumed_link_created' from t`, [page.id]);
     expect(await count(`traffic_link_bindings where platform_account_id = ${page.id}`)).toBe(1);
+    // Link ↔ fan (0260): a walk, a fan in it, his period and the cursor; the
+    // fans row is the fan's, not the page's (fan erasure takes it).
+    await testDb.pool.query(`
+      with fan as (insert into fans (platform, platform_user_id) values ('onlyfans', 'erasure-link-fan') returning id),
+           page_fan as (insert into page_fans (fan_id, platform_account_id) select fan.id, $1 from fan returning fan_id),
+           walk as (insert into page_link_fan_walks (platform_account_id, link_kind, platform_link_id, list_kind,
+                      request_seq, started_at, finished_at, last_offset, last_page_items, evidential,
+                      first_raw_payload_id, last_raw_payload_id)
+                    values ($1, 'trial', '7', 'subscribers', 1, now(), now(), 0, 1, true, 1, 1) returning id),
+           lf as (insert into page_link_fans (platform_account_id, link_kind, platform_link_id, fan_id,
+                    in_subscriber_list, first_seen_at, last_seen_at, last_seen_walk_id, last_seen_active,
+                    first_raw_payload_id, last_raw_payload_id)
+                  select $1, 'trial', '7', page_fan.fan_id, true, now(), now(), walk.id, true, 1, 1 from page_fan, walk
+                  returning id, fan_id, last_seen_walk_id)
+      insert into page_link_fan_periods (platform_account_id, link_kind, platform_link_id, fan_id, link_fan_id,
+        period_start_source, opened_at, opened_walk_id)
+      select $1, 'trial', '7', lf.fan_id, lf.id, 'before_floor', now(), lf.last_seen_walk_id from lf`, [page.id]);
+    await testDb.pool.query(
+      `insert into page_link_fan_journal_cursors (platform_account_id, last_raw_payload_id, rule)
+       values ($1, 1, 'ofapi_subscription_period_equal_split.v1')`, [page.id]);
 
     // R4 financial receipts have JSON attribution, so FK inventory alone
     // cannot find them. Erase this page and retain the global diagnostic.
@@ -1231,6 +1251,10 @@ describe("erasure drill (Stage 28 Task 4)", () => {
     expect(await count(`traffic_link_bindings where platform_account_id = ${page.id}`)).toBe(0);
     expect(await count("traffic_channels where key = 'erasure.channel'")).toBe(1);
     expect(await count("traffic_channel_contractors")).toBe(1);
+    for (const table of ["page_link_fan_periods", "page_link_fans", "page_link_fan_walks", "page_link_fan_journal_cursors"]) {
+      expect(result.executedCounts[`hot:${table}:delete`], `${table} target`).toBe(1);
+      expect(await count(`${table} where platform_account_id = ${page.id}`)).toBe(0);
+    }
     expect(result.executedCounts["hot:ofapi_credit_receipts:delete"]).toBe(1);
     expect(await count("ofapi_credit_receipts where request_id = 'erasure-page-receipt'")).toBe(0);
     expect(await count("ofapi_credit_receipts where request_id = 'erasure-global-receipt'")).toBe(1);

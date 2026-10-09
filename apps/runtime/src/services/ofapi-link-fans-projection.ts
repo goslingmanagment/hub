@@ -1,0 +1,354 @@
+// OnlyFans link ↔ fan (plan 2026-10-08, PR 8): the projection of the paid fan
+// sweep's journal into page_link_fan_walks / page_link_fans /
+// page_link_fan_periods (migration 0260).
+//
+// The journal is the only input. The sweep journals every page it buys
+// (ofapi-fan-identities.ts) and then calls `projectLinkFanJournal`, which
+// applies the page's journal rows after the page's cursor — normally just the
+// page it bought — each in its own transaction that also moves the cursor. So
+// the projection is always a prefix of the journal in journal order: a page
+// whose projection failed, or every page journaled while an older image ran,
+// is applied by the next call, and the rebuild command (link-fans:reproject)
+// replays the same rows through the same functions from the start.
+//
+// The period rule, ofapi_subscription_period_equal_split.v1, is documented on
+// LINK_ATTRIBUTION_RULE (packages/shared/src/link-fans.ts) and in 0260.
+
+import {
+  advanceLinkFanJournalCursor,
+  applyLinkFansPage,
+  type Database,
+  isDmArchiveScopeFenced,
+  type LinkFanJournalRow,
+  type LinkFansPageInput,
+  type LinkFansPageNext,
+  type LinkFanSpenderItem,
+  type LinkFanSubscriberItem,
+  listLinkFanJournalRowsAfter,
+  lockLinkFanJournalCursor,
+  readLinkFanJournalCursor,
+  tryAcquireDmArchiveWriterFenceLock,
+  tryLockLinkFanProjection,
+} from "@agency_hub_core/db";
+import {
+  dollarsToMills,
+  LINK_ATTRIBUTION_RULE,
+  linkFanJournalEndpointShape,
+} from "@agency_hub_core/shared";
+
+import type { AppContext } from "../bootstrap.ts";
+import { idToString } from "./ofapi-payloads.ts";
+import { resolveCapturePayloadRow } from "./payload-reader.ts";
+
+type ProjectionContext = Pick<AppContext, "db" | "logger">;
+
+export type ParsedLinkFansPage = Omit<LinkFansPageInput, "pageId" | "rawPayloadId" | "capturedAt">;
+
+export type LinkFansPageParse =
+  | { ok: true; page: ParsedLinkFansPage }
+  | { ok: false; reason: string };
+
+const LINK_ID_PATTERN = /^[0-9]{1,20}$/;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function nonNegativeInteger(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+function parseInstant(value: unknown): Date | null {
+  if (typeof value !== "string" || value.trim().length === 0) return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function parseDollarMills(value: unknown): bigint | null {
+  if (typeof value !== "number" && typeof value !== "string") return null;
+  const normalized = typeof value === "string" ? value.trim().replace(/^\$/, "").replace(/,/g, "") : value;
+  try {
+    return dollarsToMills(normalized);
+  } catch {
+    return null;
+  }
+}
+
+/** The page after this one, as the walk itself decides it
+ *  (resolveOfapiListNextOffset): a next-page link names its offset, else
+ *  `hasNextPage` means offset + limit, else this is the last page. Only the
+ *  offset is read from the link — the walk validated the rest when it
+ *  followed it, and a link it refused leaves the walk unfinished anyway. */
+function parseNext(body: Record<string, unknown>, offset: number, limit: number): LinkFansPageNext {
+  const url = body.nextPageUrl;
+  if (typeof url === "string" && url.length > 0) {
+    let next: URL;
+    try {
+      next = new URL(url, "https://journal.invalid/");
+    } catch {
+      return { kind: "invalid" };
+    }
+    const offsets = next.searchParams.getAll("offset");
+    if (offsets.length !== 1 || !/^\d+$/.test(offsets[0]!)) return { kind: "invalid" };
+    const value = Number(offsets[0]);
+    return Number.isSafeInteger(value) ? { kind: "offset", offset: value } : { kind: "invalid" };
+  }
+  return body.hasNextPage === true ? { kind: "offset", offset: offset + limit } : { kind: "last" };
+}
+
+function parseSubscriber(item: unknown): LinkFanSubscriberItem | null {
+  if (!isRecord(item)) return null;
+  const platformUserId = idToString(item.id);
+  if (!platformUserId) return null;
+  const flag = item.subscribedOnExpiredNow;
+  const relation = isRecord(item.subscribedOnData) ? item.subscribedOnData : null;
+  return {
+    platformUserId,
+    // Only an explicit "not expired" is active. A missing flag comes with no
+    // subscription at all (subscribedOn null on the free page's lists).
+    active: flag === false,
+    vendorStatus: flag === false ? "active" : flag === true ? "expired" : null,
+    vendorSubscribedAt: parseInstant(relation?.subscribeAt),
+    vendorExpiresAt: parseInstant(relation?.expiredAt),
+  };
+}
+
+function parseSpender(item: unknown): LinkFanSpenderItem | null {
+  if (!isRecord(item)) return null;
+  const platformUserId = idToString(item.onlyfans_id);
+  if (!platformUserId) return null;
+  const revenue = isRecord(item.revenue) ? item.revenue : null;
+  return {
+    platformUserId,
+    revenueNetMills: parseDollarMills(revenue?.total),
+    chargebacksMills: parseDollarMills(revenue?.chargebacks),
+    calculatedAt: parseInstant(revenue?.calculated_at),
+  };
+}
+
+/** One journaled page of the sweep (the body ofapi-fan-identities.ts writes:
+ *  `{ link: {kind, id}, list, offset, limit, requestSeq, ofapiAccountId,
+ *  items, hasNextPage, nextPageUrl }`). A body that does not hold together is
+ *  refused with a reason; the projector skips it and says so. */
+export function parseLinkFansJournalPage(endpoint: string, body: unknown): LinkFansPageParse {
+  const shape = linkFanJournalEndpointShape(endpoint);
+  if (!shape) return { ok: false, reason: `not a link-fans journal kind: ${endpoint}` };
+  if (!isRecord(body)) return { ok: false, reason: "body is not an object" };
+  const link = isRecord(body.link) ? body.link : null;
+  const linkId = idToString(link?.id);
+  if (!link || link.kind !== shape.linkKind || !linkId || !LINK_ID_PATTERN.test(linkId)) {
+    return { ok: false, reason: "link does not match the journal kind" };
+  }
+  if (body.list !== shape.listKind) return { ok: false, reason: "list does not match the journal kind" };
+  const offset = nonNegativeInteger(body.offset);
+  const limit = nonNegativeInteger(body.limit);
+  const requestSeq = nonNegativeInteger(body.requestSeq);
+  if (offset === null || limit === null || limit === 0 || requestSeq === null) {
+    return { ok: false, reason: "offset, limit or requestSeq missing" };
+  }
+  if (!Array.isArray(body.items)) return { ok: false, reason: "items is not a list" };
+  const ofapiAccountId = typeof body.ofapiAccountId === "string" && body.ofapiAccountId.length > 0
+    ? body.ofapiAccountId
+    : null;
+  const subscribers = shape.listKind === "subscribers"
+    ? body.items.map(parseSubscriber).filter((item): item is LinkFanSubscriberItem => item !== null)
+    : [];
+  const spenders = shape.listKind === "spenders"
+    ? body.items.map(parseSpender).filter((item): item is LinkFanSpenderItem => item !== null)
+    : [];
+  return {
+    ok: true,
+    page: {
+      linkKind: shape.linkKind,
+      linkId,
+      listKind: shape.listKind,
+      requestSeq,
+      ofapiAccountId,
+      offset,
+      itemCount: body.items.length,
+      next: parseNext(body, offset, limit),
+      subscribers,
+      spenders,
+    },
+  };
+}
+
+/** A journal row's body through the payload seam. A body the seam cannot
+ *  read now throws (CapturePayloadUnavailableError is also what a transient
+ *  catalog failure looks like): the row stays after the cursor and the next
+ *  call reads it again — a journal page is never skipped for being
+ *  unreachable. */
+export async function readLinkFanJournalBody(
+  ctx: ProjectionContext,
+  db: Database,
+  row: LinkFanJournalRow,
+): Promise<unknown> {
+  const resolved = await resolveCapturePayloadRow({ db, logger: ctx.logger }, "raw_payload", row.id, row);
+  return resolved.payload;
+}
+
+/**
+ * What an executed erasure covers of this journal page (the fence every
+ * projection of retained material uses, repositories/erasure-fence.ts), as of
+ * the page's capture: `page` — a page (or model) erasure of the page, started
+ * at or after it: nothing of the page may be written; else `fans` — the fans
+ * the page names whom a fan erasure started at or after it covers: their items
+ * are left out and the rest of the page applies. Call holding the fence's
+ * shared lock.
+ */
+async function linkFanJournalRowFence(
+  tx: Database,
+  pageId: number,
+  row: LinkFanJournalRow,
+  parsed: LinkFansPageParse,
+): Promise<{ page: boolean; fans: Set<string> }> {
+  const fence = { pageId, platform: "onlyfans" as const, materialAt: row.capturedAt };
+  if (await isDmArchiveScopeFenced(tx, { ...fence, refs: [] })) return { page: true, fans: new Set() };
+  const refs = parsed.ok
+    ? [...new Set([...parsed.page.subscribers, ...parsed.page.spenders].map((item) => item.platformUserId))]
+    : [];
+  const fans = new Set<string>();
+  // One question for the page; one per fan only when it says someone is covered.
+  if (refs.length > 0 && await isDmArchiveScopeFenced(tx, { ...fence, refs })) {
+    for (const ref of refs) {
+      if (await isDmArchiveScopeFenced(tx, { ...fence, refs: [ref] })) fans.add(ref);
+    }
+  }
+  return { page: false, fans };
+}
+
+/** The page without the items of the fans an erasure covers. */
+function withoutFencedFans(parsed: LinkFansPageParse, fans: ReadonlySet<string>): LinkFansPageParse {
+  if (!parsed.ok || fans.size === 0) return parsed;
+  const subscribers = parsed.page.subscribers.filter((item) => !fans.has(item.platformUserId));
+  const spenders = parsed.page.spenders.filter((item) => !fans.has(item.platformUserId));
+  const dropped = parsed.page.subscribers.length - subscribers.length + parsed.page.spenders.length - spenders.length;
+  return { ok: true, page: { ...parsed.page, subscribers, spenders, itemCount: Math.max(0, parsed.page.itemCount - dropped) } };
+}
+
+export type LinkFanJournalRowOutcome = "applied" | "skipped" | "fenced";
+
+/**
+ * Apply one journal row and move the cursor past it: a page a page (or
+ * model) erasure covers is not applied (and no cursor is created for it — an
+ * erased page keeps none); the items of fans a fan erasure covers are left
+ * out and the rest applies; a body that does not hold together is skipped
+ * with a warning. Call in a transaction holding the page's projection lock
+ * and the erasure fence's shared lock, with the cursor right before the row.
+ */
+export async function applyLinkFanJournalRow(
+  ctx: ProjectionContext,
+  tx: Database,
+  pageId: number,
+  row: LinkFanJournalRow,
+  body: unknown,
+): Promise<LinkFanJournalRowOutcome> {
+  const parsed = parseLinkFansJournalPage(row.endpoint, body);
+  const fence = await linkFanJournalRowFence(tx, pageId, row, parsed);
+  if (fence.page) {
+    await advanceLinkFanJournalCursor(tx, { pageId, rawPayloadId: row.id, applied: false });
+    return "fenced";
+  }
+  return applyUnfencedLinkFanJournalRow(ctx, tx, pageId, row, withoutFencedFans(parsed, fence.fans));
+}
+
+/** The part after the fence check: apply (or skip as unreadable) and move
+ *  the cursor. */
+async function applyUnfencedLinkFanJournalRow(
+  ctx: ProjectionContext,
+  tx: Database,
+  pageId: number,
+  row: LinkFanJournalRow,
+  parsed: LinkFansPageParse,
+): Promise<"applied" | "skipped"> {
+  if (parsed.ok) {
+    await applyLinkFansPage(tx, { ...parsed.page, pageId, rawPayloadId: row.id, capturedAt: row.capturedAt });
+  } else {
+    ctx.logger.warn({ pageId, rawPayloadId: row.id, endpoint: row.endpoint, reason: parsed.reason },
+      "link-fans projection skipped an unreadable journal page");
+  }
+  await advanceLinkFanJournalCursor(tx, { pageId, rawPayloadId: row.id, applied: parsed.ok });
+  return parsed.ok ? "applied" : "skipped";
+}
+
+export interface LinkFanProjectionStats {
+  applied: number;
+  skipped: number;
+  /** Journal pages a page (or model) erasure covers, passed over unapplied. */
+  fenced: number;
+  /** Journal rows were left for a later call (the page cap, or the lock was
+   *  held by a rebuild). */
+  pending: boolean;
+  /** The page's projection was built under another rule; nothing applied
+   *  until link-fans:reproject rebuilds it. */
+  ruleMismatch: boolean;
+}
+
+/**
+ * Apply the page's journal rows after its cursor, oldest first, up to
+ * `maxPages`, each in its own transaction under the page's projection lock
+ * and the erasure fence's shared lock. Never waits for either: while a
+ * rebuild or an erasure holds one, the call returns at once and the rows wait
+ * for the next call. A body that cannot be read now throws, leaving its row
+ * for the next call.
+ */
+export async function projectLinkFanJournal(
+  ctx: ProjectionContext,
+  input: { pageId: number; maxPages: number },
+): Promise<LinkFanProjectionStats> {
+  const stats: LinkFanProjectionStats = { applied: 0, skipped: 0, fenced: 0, pending: false, ruleMismatch: false };
+  for (let step = 0; step < input.maxPages; step += 1) {
+    const cursor = await readLinkFanJournalCursor(ctx.db, input.pageId);
+    if (cursor !== null && cursor.rule !== LINK_ATTRIBUTION_RULE) {
+      stats.ruleMismatch = true;
+      return stats;
+    }
+    const afterId = cursor?.lastRawPayloadId ?? 0;
+    const [row] = await listLinkFanJournalRowsAfter(ctx.db, { pageId: input.pageId, afterId, limit: 1 });
+    if (!row) return stats;
+    const body = await readLinkFanJournalBody(ctx, ctx.db, row);
+    const outcome = await ctx.db.transaction(async (tx) => {
+      // A rebuild, or an erasure of the page, is running: come back later.
+      if (!(await tryLockLinkFanProjection(tx, input.pageId))) return "busy" as const;
+      if (!(await tryAcquireDmArchiveWriterFenceLock(tx, input.pageId))) return "busy" as const;
+      // An erasure of the page that ran since the body was read: nothing of
+      // it is written, not even a cursor. A fan erasure only takes that fan's
+      // items out of the page; the page goes on.
+      const parsed = parseLinkFansJournalPage(row.endpoint, body);
+      const fence = await linkFanJournalRowFence(tx, input.pageId, row, parsed);
+      if (fence.page) {
+        return (await advanceLinkFanJournalCursor(tx, { pageId: input.pageId, rawPayloadId: row.id, applied: false }))
+          ? "fenced" as const
+          : "fenced_no_cursor" as const;
+      }
+      const locked = await lockLinkFanJournalCursor(tx, input.pageId, LINK_ATTRIBUTION_RULE);
+      if (locked.rule !== LINK_ATTRIBUTION_RULE) return "rule" as const;
+      // Another writer moved the cursor since it was read: read it again.
+      if (locked.lastRawPayloadId !== afterId) return "moved" as const;
+      return applyUnfencedLinkFanJournalRow(ctx, tx, input.pageId, row, withoutFencedFans(parsed, fence.fans));
+    });
+    if (outcome === "busy") {
+      stats.pending = true;
+      return stats;
+    }
+    if (outcome === "rule") {
+      stats.ruleMismatch = true;
+      return stats;
+    }
+    // The page's material is erased and it has no cursor to move: stop here
+    // (the erasure's leftovers, if any, are met again next call, unapplied).
+    if (outcome === "fenced_no_cursor") {
+      stats.fenced += 1;
+      return stats;
+    }
+    if (outcome === "applied") stats.applied += 1;
+    if (outcome === "skipped") stats.skipped += 1;
+    if (outcome === "fenced") stats.fenced += 1;
+  }
+  const cursor = await readLinkFanJournalCursor(ctx.db, input.pageId);
+  const rest = await listLinkFanJournalRowsAfter(ctx.db, {
+    pageId: input.pageId, afterId: cursor?.lastRawPayloadId ?? 0, limit: 1,
+  });
+  stats.pending = rest.length > 0;
+  return stats;
+}

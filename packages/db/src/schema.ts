@@ -2628,6 +2628,154 @@ export const pageLinkStatSnapshots = pgTable(
   }),
 );
 
+// OnlyFans link ↔ fan (0260; plan 2026-10-08, PR 8): a projection of the paid
+// fan sweep's journal (sync_raw_payloads link_fans_*), written only by
+// repositories/link-fans.ts in journal order under a per-page lock and rebuilt
+// from the journal by link-fans:reproject. The period rule
+// (ofapi_subscription_period_equal_split.v1) is spelled out in 0260.
+export const pageLinkFanWalks = pgTable(
+  "page_link_fan_walks",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    platformAccountId: bigint("platform_account_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    linkKind: text("link_kind").$type<TrafficLinkKind>().notNull(),
+    platformLinkId: text("platform_link_id").notNull(),
+    listKind: text("list_kind").$type<"subscribers" | "spenders">().notNull(),
+    requestSeq: bigint("request_seq", { mode: "number" }).notNull(),
+    ofapiAccountId: text("ofapi_account_id"),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+    // Read from offset 0 to the end without a gap; null while read or broken.
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+    apiPages: integer("api_pages").default(0).notNull(),
+    items: integer("items").default(0).notNull(),
+    nextOffset: integer("next_offset"),
+    lastOffset: integer("last_offset").notNull(),
+    lastPageItems: integer("last_page_items").notNull(),
+    brokenReason: text("broken_reason").$type<"offset_gap" | "pagination_invalid" | "account_changed">(),
+    // Set at finish (П9.10): may this walk count a fan absent.
+    evidential: boolean("evidential"),
+    firstRawPayloadId: bigint("first_raw_payload_id", { mode: "number" }).notNull(),
+    lastRawPayloadId: bigint("last_raw_payload_id", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    keyUniq: unique("page_link_fan_walks_key_uniq").on(
+      table.platformAccountId,
+      table.linkKind,
+      table.platformLinkId,
+      table.listKind,
+      table.requestSeq,
+    ),
+  }),
+);
+
+export const pageLinkFans = pgTable(
+  "page_link_fans",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    platformAccountId: bigint("platform_account_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    linkKind: text("link_kind").$type<TrafficLinkKind>().notNull(),
+    platformLinkId: text("platform_link_id").notNull(),
+    fanId: bigint("fan_id", { mode: "number" })
+      .references(() => fans.id, { onDelete: "cascade" })
+      .notNull(),
+    inSubscriberList: boolean("in_subscriber_list").notNull(),
+    firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).notNull(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull(),
+    lastSeenWalkId: bigint("last_seen_walk_id", { mode: "number" })
+      .references(() => pageLinkFanWalks.id, { onDelete: "restrict" }),
+    lastSeenActive: boolean("last_seen_active"),
+    absentSince: timestamp("absent_since", { withTimezone: true }),
+    absentWalks: integer("absent_walks").default(0).notNull(),
+    // The fan ↔ creator relation, NOT the link (verified 2026-10-09): reference.
+    vendorSubscribedAt: timestamp("vendor_subscribed_at", { withTimezone: true }),
+    vendorExpiresAt: timestamp("vendor_expires_at", { withTimezone: true }),
+    vendorStatus: text("vendor_status").$type<"active" | "expired">(),
+    vendorRevenueNetMills: bigint("vendor_revenue_net_mills", { mode: "bigint" }),
+    vendorChargebacksMills: bigint("vendor_chargebacks_mills", { mode: "bigint" }),
+    vendorRevenueCalculatedAt: timestamp("vendor_revenue_calculated_at", { withTimezone: true }),
+    vendorRevenueSeenAt: timestamp("vendor_revenue_seen_at", { withTimezone: true }),
+    firstRawPayloadId: bigint("first_raw_payload_id", { mode: "number" }).notNull(),
+    lastRawPayloadId: bigint("last_raw_payload_id", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    keyUniq: unique("page_link_fans_key_uniq").on(
+      table.platformAccountId,
+      table.linkKind,
+      table.platformLinkId,
+      table.fanId,
+    ),
+    fanIdx: index("page_link_fans_fan_idx").on(table.fanId, table.platformAccountId),
+    // Whatever removes the fan from the page removes this row (erasure).
+    pageFanFk: foreignKey({
+      name: "page_link_fans_page_fan_fk",
+      columns: [table.fanId, table.platformAccountId],
+      foreignColumns: [pageFans.fanId, pageFans.platformAccountId],
+    }).onDelete("cascade"),
+  }),
+);
+
+export const pageLinkFanPeriods = pgTable(
+  "page_link_fan_periods",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    platformAccountId: bigint("platform_account_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    linkKind: text("link_kind").$type<TrafficLinkKind>().notNull(),
+    platformLinkId: text("platform_link_id").notNull(),
+    fanId: bigint("fan_id", { mode: "number" })
+      .references(() => fans.id, { onDelete: "cascade" })
+      .notNull(),
+    linkFanId: bigint("link_fan_id", { mode: "number" })
+      .references(() => pageLinkFans.id, { onDelete: "cascade" })
+      .notNull(),
+    // null = before the link's floor: counted from the floor.
+    periodStartAt: timestamp("period_start_at", { withTimezone: true }),
+    periodStartSource: text("period_start_source")
+      .$type<"before_floor" | "hub_subscription_event" | "first_seen">()
+      .notNull(),
+    openedAt: timestamp("opened_at", { withTimezone: true }).notNull(),
+    openedWalkId: bigint("opened_walk_id", { mode: "number" })
+      .references(() => pageLinkFanWalks.id, { onDelete: "restrict" })
+      .notNull(),
+    closedAt: timestamp("closed_at", { withTimezone: true }),
+    closeReason: text("close_reason").$type<"not_active" | "absent">(),
+    closedWalkId: bigint("closed_walk_id", { mode: "number" })
+      .references(() => pageLinkFanWalks.id, { onDelete: "restrict" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    openUniq: uniqueIndex("page_link_fan_periods_open_uniq")
+      .on(table.platformAccountId, table.linkKind, table.platformLinkId, table.fanId)
+      .where(sql`${table.closedAt} is null`),
+    fanIdx: index("page_link_fan_periods_fan_idx").on(table.fanId, table.platformAccountId),
+    linkFanIdx: index("page_link_fan_periods_link_fan_idx").on(table.linkFanId),
+  }),
+);
+
+export const pageLinkFanJournalCursors = pgTable(
+  "page_link_fan_journal_cursors",
+  {
+    platformAccountId: bigint("platform_account_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .primaryKey(),
+    lastRawPayloadId: bigint("last_raw_payload_id", { mode: "number" }).default(0).notNull(),
+    rule: text("rule").notNull(),
+    pagesApplied: bigint("pages_applied", { mode: "number" }).default(0).notNull(),
+    pagesSkipped: bigint("pages_skipped", { mode: "number" }).default(0).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+);
+
 // OnlyFans traffic sources (0257; plan 2026-10-08, PR 11): "link → channel →
 // contractor" with dates. Written only by the owner's CLI through
 // repositories/traffic-bindings.ts, which holds the "one channel per link,

@@ -812,6 +812,29 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # a reader: what the reader wrote stays, every cause reads `unchecked`, and
   # its fan erasure deletes the fans row and the queue row with it.
   "0259_fans_public_lookup.sql"
+  # OnlyFans "link ↔ fan" (traffic sources plan 2026-10-08, PR 8, migration
+  # C): four new tables (page_link_fan_walks, page_link_fans,
+  # page_link_fan_periods, page_link_fan_journal_cursors; IF NOT EXISTS),
+  # their checks and indexes, no data; lock_timeout 5 s for the FKs to pages,
+  # fans and page_fans. No existing table, column or row changes. The
+  # previous image never names the tables: after a rollback it keeps
+  # journaling the fan sweep (PR 1 is in it) and the tables simply stop
+  # moving — the cursor stays where it was and the next image applies the
+  # pages journaled in between. ERASURE UNDER THE PREVIOUS IMAGE: every row
+  # that names a fan (page_link_fans, and page_link_fan_periods through it)
+  # hangs off the fan's page_fans row of the same page ON DELETE CASCADE, and
+  # the previous image's page erasure deletes the page's page_fans (its fan
+  # erasure the fan, and page_fans with him) — so no fan data outlives an
+  # erasure it runs. What its page erasure leaves are the page's walks and
+  # cursor (link ids, counts, an OFAPI account id; no fan), as with
+  # traffic_link_bindings (0257), until the next image's erasure; the next
+  # image's projection writes nothing an erasure tombstone covers.
+  "0260_page_link_fans.sql"
+  # The link ↔ fan projection's journal read (PR 8): one partial index on
+  # sync_raw_payloads (page_id, id) over the three link_fans_* endpoints,
+  # built CONCURRENTLY outside a transaction (after dropping an INVALID
+  # leftover). Index-only; the previous image never reads it.
+  "0261_sync_raw_payloads_link_fans_idx.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

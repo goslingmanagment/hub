@@ -2,8 +2,8 @@ import { readFile } from "node:fs/promises";
 
 import { describe, expect, it } from "vitest";
 
-import { OFAPI_SPEND_PROJECTION_EVENT_TYPES } from "@agency_hub_core/db";
-import { ofapiCaptureJobStates } from "@agency_hub_core/shared";
+import { LINK_FAN_JOURNAL_ENDPOINTS_SQL, OFAPI_SPEND_PROJECTION_EVENT_TYPES } from "@agency_hub_core/db";
+import { LINK_FAN_JOURNAL_ENDPOINTS, ofapiCaptureJobStates } from "@agency_hub_core/shared";
 
 describe("database migration invariants", () => {
   it("ties sync observability rows to their run page and stream", async () => {
@@ -403,5 +403,31 @@ describe("database migration invariants", () => {
     const deploy = await readFile("scripts/deploy-production.sh", "utf8");
     expect(deploy.match(/ROLLBACK_COMPATIBLE_MIGRATIONS=\([\s\S]*?\n\)/)?.[0])
       .toContain('"0223_raw_payload_and_attempt_lookup_indexes.sql"');
+  });
+
+  it("builds the link ↔ fan journal index concurrently, on exactly the projection's endpoint list", async () => {
+    const index = await readFile("packages/db/migrations/0261_sync_raw_payloads_link_fans_idx.sql", "utf8");
+    const reader = await readFile("packages/db/src/repositories/link-fans.ts", "utf8");
+
+    // Every lane writes sync_raw_payloads; a plain build would block them.
+    expect(index.startsWith("-- agency-hub:no-transaction")).toBe(true);
+    expect(index).toContain("drop index concurrently if exists %I.%I");
+    expect(index).toContain("where i.relname = 'sync_raw_payloads_link_fans_idx'");
+    expect(index).toContain("create index concurrently if not exists sync_raw_payloads_link_fans_idx");
+    expect(index).toContain("on sync_raw_payloads (page_id, id)");
+    expect(index.split("-- agency-hub:statement").length - 1).toBe(2);
+
+    // The partial predicate is a contract with the reader: it spells the same
+    // list as SQL constants (a bound parameter would not imply the predicate).
+    const predicate = /where endpoint in \(([^)]*)\)/.exec(index)?.[1];
+    expect(predicate!.split(",").map((value) => value.trim().replace(/^'|'$/g, "")))
+      .toEqual([...LINK_FAN_JOURNAL_ENDPOINTS]);
+    expect(LINK_FAN_JOURNAL_ENDPOINTS_SQL).toBe(`(${predicate})`);
+    expect(reader).toContain("rp.endpoint in ${sql.raw(LINK_FAN_JOURNAL_ENDPOINTS_SQL)}");
+
+    const deploy = await readFile("scripts/deploy-production.sh", "utf8");
+    const compatible = deploy.match(/ROLLBACK_COMPATIBLE_MIGRATIONS=\([\s\S]*?\n\)/)?.[0];
+    expect(compatible).toContain('"0260_page_link_fans.sql"');
+    expect(compatible).toContain('"0261_sync_raw_payloads_link_fans_idx.sql"');
   });
 });
