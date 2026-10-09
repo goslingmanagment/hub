@@ -726,6 +726,58 @@ describe("OFAPI chargebacks reconcile", () => {
     }
   });
 
+  it("keeps the delivered body when the credit settlement fails, and still stops the reconcile", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedOfapiPage("cb-settle-fail", "acct_settle_fail");
+    const body = vendorChargebacksBody([chargebackItem("pay-settle", "555040")]);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    })));
+    // The reservation before the call goes through; the settlement after it
+    // (the only insert that names a backfill day) fails like a lock timeout.
+    await testDb.pool.query(`
+      create or replace function test_fail_chargebacks_settlement() returns trigger
+      language plpgsql as $$
+      begin
+        raise exception 'canceling statement due to lock timeout' using errcode = '55P03';
+      end $$
+    `);
+    await testDb.pool.query(`
+      create trigger test_fail_chargebacks_settlement before insert on ofapi_credit_state
+      for each row when (new.backfill_spend_day is not null)
+      execute function test_fail_chargebacks_settlement()
+    `);
+    try {
+      appContext = { ...appContext, ofapi: createOfapiClient({ apiKey: "test", restDelayMs: 0 }) };
+      const result = await runOfapiChargebacksReconcile(appContext);
+      expect(result.pages[0]).toMatchObject({ status: "failed", writtenRows: 0 });
+      // The settlement's own error stops the page, and it carries no body.
+      expect(result.pages[0]!.reason).toContain("insert into ofapi_credit_state");
+      expect(result.pages[0]!.reason).not.toContain("pay-settle");
+
+      const { rows: journal } = await testDb.pool.query<{ payload: Record<string, unknown> }>(
+        "select payload from observations where kind = 'ofapi_chargebacks' and account_id = $1",
+        [page.id],
+      );
+      expect(journal).toEqual([{
+        payload: { ofapiAccountId: "acct_settle_fail", limit: 100, offset: 0, startDate: null, endDate: null, body },
+      }]);
+      const { rows: money } = await testDb.pool.query<{ n: number }>(
+        "select count(*)::int as n from transactions where platform_account_id = $1",
+        [page.id],
+      );
+      expect(money).toEqual([{ n: 0 }]);
+      expect((await listNotificationIncidents(appContext.db))[0]?.status).toBe("open");
+    } finally {
+      await testDb.pool.query("drop trigger if exists test_fail_chargebacks_settlement on ofapi_credit_state");
+      await testDb.pool.query("drop function if exists test_fail_chargebacks_settlement()");
+    }
+  });
+
   // ——— W7.3 (A21+B4, decision #132): negation guards ———
 
   function settledOriginal(pageId: number, transactionId: string) {

@@ -367,17 +367,24 @@ async function reconcilePage(
         }
         throw error;
       }
-      await input.guard.recordResponse(page);
-      if (page.rawBody === undefined) {
-        throw new Error("OFAPI chargebacks page arrived without its vendor body to journal");
-      }
-      // Loud: a page that cannot be journaled fails the page's reconcile —
-      // with a fresh error that holds only the sanitized summary (no cause).
+      // Journal first, settle the credits in `finally`: a body the vendor
+      // delivered is kept even when the settlement then fails (which still
+      // stops the reconcile), and a page that cannot be journaled still
+      // settles what it cost before it fails the reconcile.
       try {
-        await journalChargebacksPage(app, { ...journalScope, request, body: page.rawBody });
-      } catch (journalError) {
-        // eslint-disable-next-line preserve-caught-error -- the cause holds the INSERT's bound values (the vendor body); only the sanitized summary may travel
-        throw new Error(`OFAPI chargebacks page not journaled: ${chargebacksJournalFailure(journalError).summary}`);
+        if (page.rawBody === undefined) {
+          throw new Error("OFAPI chargebacks page arrived without its vendor body to journal");
+        }
+        // Loud: a page that cannot be journaled fails the page's reconcile —
+        // with a fresh error that holds only the sanitized summary (no cause).
+        try {
+          await journalChargebacksPage(app, { ...journalScope, request, body: page.rawBody });
+        } catch (journalError) {
+          // eslint-disable-next-line preserve-caught-error -- the cause holds the INSERT's bound values (the vendor body); only the sanitized summary may travel
+          throw new Error(`OFAPI chargebacks page not journaled: ${chargebacksJournalFailure(journalError).summary}`);
+        }
+      } finally {
+        await input.guard.recordResponse(page);
       }
       apiPages += 1;
       rawRows += page.items.length;
