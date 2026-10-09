@@ -545,7 +545,11 @@ who blocked a page is still returned; a deleted account is not.
   answer, or the stop — clears it (only if it is still the pending one). While one is pending no reader sends: every
   pass first settles it from its journals alone (the raw answer, else the send-log row), without a request — after a
   failed write, a restart or a lost lock alike. One with no recorded outcome past its bound may have been sent: the
-  reader stops (`indeterminate`) instead of sending again.
+  reader stops (`indeterminate`) instead of sending again. The outcome — the answer applied, or the stop and its
+  incident — is written before the transport is cleaned up, and that cleanup is bounded (a proxy that never answered
+  CONNECT keeps undici's close waiting for minutes; the public egress destroys its dispatcher after 2 s, the pass
+  waits 5 s at most). An answer is dated when it arrived (its journal instant), however late it is applied: it is
+  never fresher than it is, closes only the owner's requests queued before it, and never replaces a newer check.
 - **Whom** (`pickFanslyPublicLookupBatch`): the owner's queue first (`sync public-lookup recheck-marks`, owner decision
   Р2 (а): the fans carrying the legacy deleted mark), then the partners of established unavailability episodes, then
   the fans a page's lookup missed (`page_fans.account_probe_resolved = false`) — those two only when never checked or

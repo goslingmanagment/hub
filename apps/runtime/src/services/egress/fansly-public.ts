@@ -267,7 +267,37 @@ export async function resolveFanslyPublicEgress(app: EgressApp): Promise<EgressC
     dispatcher: restrictToFanslyPublicHost(base),
     pace: async () => 0,
     close: async () => {
-      await base.close();
+      await closeDispatcherWithin(base, FANSLY_PUBLIC_EGRESS_CLOSE_GRACE_MS);
     },
   };
+}
+
+/** How long the public egress lets its dispatcher close gracefully before it
+ *  destroys it. */
+export const FANSLY_PUBLIC_EGRESS_CLOSE_GRACE_MS = 2_000;
+
+/**
+ * Close `dispatcher`, gracefully for at most `graceMs`, then destroy it. A
+ * proxy that accepted the TCP connection and never answered CONNECT keeps a
+ * graceful close waiting long after the request itself timed out (undici
+ * waits for the pending tunnel); the request is already settled by then, so
+ * nothing is lost by tearing the connection down.
+ */
+export async function closeDispatcherWithin(
+  dispatcher: Pick<Dispatcher, "close" | "destroy">,
+  graceMs: number,
+): Promise<"closed" | "destroyed"> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const closed = dispatcher.close().then(() => true, () => true);
+  const finished = await Promise.race([
+    closed,
+    new Promise<false>((resolve) => {
+      timer = setTimeout(() => resolve(false), graceMs);
+      timer.unref?.();
+    }),
+  ]);
+  clearTimeout(timer);
+  if (finished) return "closed";
+  await dispatcher.destroy().catch(() => undefined);
+  return "destroyed";
 }

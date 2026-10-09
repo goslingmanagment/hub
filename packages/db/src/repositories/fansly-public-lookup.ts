@@ -491,11 +491,14 @@ export interface FanslyPublicLookupApplyResult {
  * Settle the pending attempt `token` with its accepted answer (in the
  * caller's transaction): the state row is locked first and must still name
  * the attempt — null, nothing written, when another settlement got there
- * first. Every asked fan (`requestedPlatformUserIds`, the journal's
- * `requestedIds`) gets `public_checked_at = answeredAt` and `public_found` =
+ * first. `answeredAt` is when the answer ARRIVED (its journal instant), however
+ * late it is applied. Every asked fan (`requestedPlatformUserIds`, the
+ * journal's `requestedIds`) whose latest check is not newer gets
+ * `public_checked_at = answeredAt` and `public_found` =
  * whether the answer returned its id; a found fan carrying the legacy deleted
  * mark loses it (Р2 (а): found → the mark goes; not found → it stays, and
- * none is ever set here); the owner's queue rows of these fans are done; the
+ * none is ever set here); the owner's queue rows of these fans requested no
+ * later than the answer are done (a request made after it stays); the
  * state records the answer and clears the attempt. A fan erased since has no
  * row and gets nothing. Page facts (`page_fans`), notes and aliases are not
  * touched.
@@ -525,6 +528,8 @@ export async function applyFanslyPublicLookupAnswer(
              deleted_last_detected_at = case when t.found then null else f.deleted_last_detected_at end
         from target t
        where f.id = t.id
+         -- An answer never replaces a newer one.
+         and (f.public_checked_at is null or f.public_checked_at <= ${input.answeredAt})
       returning f.id, t.found, t.marked
     ), queued as (
       update fansly_public_lookup_queue q
@@ -538,8 +543,8 @@ export async function applyFanslyPublicLookupAnswer(
       returning q.fan_id
     ), answered as (
       update fansly_public_lookup_state
-         set first_answer_at = coalesce(first_answer_at, ${input.answeredAt}),
-             last_answer_at = ${input.answeredAt},
+         set first_answer_at = least(coalesce(first_answer_at, ${input.answeredAt}), ${input.answeredAt}),
+             last_answer_at = greatest(coalesce(last_answer_at, ${input.answeredAt}), ${input.answeredAt}),
              pending_token = null,
              pending_since = null,
              updated_at = clock_timestamp()

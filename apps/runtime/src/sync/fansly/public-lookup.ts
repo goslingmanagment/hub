@@ -124,6 +124,9 @@ export const PUBLIC_LOOKUP_JITTER_MAX = 0.2;
 export const PUBLIC_LOOKUP_IN_FLIGHT_BOUND_MS = REQUEST_TIMEOUT_MS + 10_000;
 /** How often an idle, disabled or stopped reader looks again. */
 export const PUBLIC_LOOKUP_POLL_MS = 30_000;
+/** How long a pass waits for its egress to close, after its attempt is
+ *  settled. */
+export const PUBLIC_LOOKUP_EGRESS_CLOSE_MS = 5_000;
 /** A failed answer's body is journaled up to this many characters. */
 const FAILED_BODY_MAX_CHARS = 64 * 1024;
 const DETAIL_MAX_CHARS = 300;
@@ -420,6 +423,8 @@ export interface PublicLookupReaderDeps {
   incidents?: PublicLookupIncidents;
   holder?: FanslySendHolderIdentity;
   pollMs?: number;
+  /** The bound of the wait for the egress to close (default 5 s). */
+  egressCloseMs?: number;
 }
 
 /** The reader. `runOnce` is one pass (tests drive it); `start`/`stop` run it
@@ -587,9 +592,15 @@ export class FanslyPublicLookupReader {
       offsetMs: null,
       marking: Promise.resolve(),
     };
+    // The transport is cleaned up only after the attempt is settled, and the
+    // wait for it is bounded: a proxy that took the TCP connection and never
+    // answered CONNECT keeps undici's close waiting for minutes after the
+    // request itself timed out (`#closeEgress`).
+    const closeEgress = () => this.#closeEgress(egress);
     let outcome: FanslyWireOutcome;
     try {
       if (egress.dispatcher === null) {
+        await closeEgress();
         return { kind: "no_egress", reason: "no_dispatcher" };
       }
       // The admission, in one transaction on the lock's own connection: the
@@ -625,7 +636,10 @@ export class FanslyPublicLookupReader {
         }
         return null;
       });
-      if (refused !== null) return refused;
+      if (refused !== null) {
+        await closeEgress();
+        return refused;
+      }
       const issuedAt = performance.now();
       outcome = await this.#send(egress.dispatcher, request, {
         check: () => {
@@ -643,8 +657,9 @@ export class FanslyPublicLookupReader {
           return null;
         },
       }, hold.signal);
-    } finally {
-      await egress.close().catch(() => undefined);
+    } catch (error) {
+      await closeEgress();
+      throw error;
     }
     this.#u = this.#drawU();
 
@@ -674,7 +689,40 @@ export class FanslyPublicLookupReader {
       this.#d.logger.warn({ component: "fansly_public_lookup", err: sanitizeError(error) },
         "Public lookup could not complete its journal row; it counts in flight until its upper bound");
     });
-    return this.#settle(token);
+    // The outcome is written — the answer applied or the stop and its
+    // incident — before the transport is cleaned up.
+    try {
+      return await this.#settle(token);
+    } finally {
+      await closeEgress();
+    }
+  }
+
+  /**
+   * Close the egress after the attempt is settled, waiting at most
+   * `egressCloseMs` (default 5 s): the attempt's outcome never waits on its
+   * transport. A close still running then goes on in the background (the
+   * public egress destroys its dispatcher when a graceful close stalls); the
+   * pass, the lock and a shutdown are not held by it.
+   */
+  async #closeEgress(egress: EgressContext<Dispatcher>): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const closed = egress.close().then(() => true, (error: unknown) => {
+      this.#d.logger.warn({ component: "fansly_public_lookup", err: sanitizeError(error) }, "Public lookup egress close failed");
+      return true;
+    });
+    const finished = await Promise.race([
+      closed,
+      new Promise<false>((resolve) => {
+        timer = setTimeout(() => resolve(false), this.#d.egressCloseMs ?? PUBLIC_LOOKUP_EGRESS_CLOSE_MS);
+        timer.unref?.();
+      }),
+    ]);
+    clearTimeout(timer);
+    if (!finished) {
+      this.#d.logger.warn({ component: "fansly_public_lookup" },
+        "Public lookup egress still closing after its bound; it finishes in the background");
+    }
   }
 
   /**
@@ -704,16 +752,20 @@ export class FanslyPublicLookupReader {
           0, record.observation.id);
       }
       const { requestedIds, outcome } = journaled;
+      const answeredAt = record.observation.receivedAt;
       const read = readFanslyWireResponse(this.#spec, { ids: requestedIds }, outcome) as FanslyWireRead<FanslyAccount[]>;
       // A Retry-After counts from when the answer arrived.
-      const verdict = publicLookupVerdict(outcome, read, requestedIds, record.observation.receivedAt);
+      const verdict = publicLookupVerdict(outcome, read, requestedIds, answeredAt);
       if (verdict.kind === "failure") return stop(verdict.failure, requestedIds.length, record.observation.id);
       if (verdict.kind === "unsent") return this.#clear(token, requestedIds.length);
+      // Dated when Fansly's answer arrived (its journal instant), not when it
+      // is applied: an answer settled days later is that old, and closes only
+      // the owner's requests made before it.
       const applied = await db.transaction(async (tx) => applyFanslyPublicLookupAnswer(tx as unknown as Database, {
         token,
         requestedPlatformUserIds: requestedIds,
         foundPlatformUserIds: verdict.foundIds,
-        answeredAt: this.#now(),
+        answeredAt,
       }));
       if (applied === null) return { kind: "busy" };
       this.#d.logger.info({

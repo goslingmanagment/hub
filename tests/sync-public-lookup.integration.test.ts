@@ -7,13 +7,15 @@
 // The egress is the real resolver's `fansly_public` scope over a stored fake
 // proxy (`*.example.internal`): its dispatcher is built and never used.
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
   createFanslyPage,
   createModel,
+  fanslyPublicLookupObservationKey,
+  insertObservation,
   setConfigOverride,
   upsertFans,
   type Database,
@@ -702,6 +704,104 @@ describe("an attempt is settled from its journal before any new request — acro
       await testDb!.pool.query("drop function if exists test_public_lookup_no_journal()");
     }
     await fansUntouchedAll();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+});
+
+describe("the outcome is written before the transport is cleaned up, and dated when the answer arrived", () => {
+  beforeEach(async () => {
+    await enable();
+    await withProxy();
+    await recheckMarks();
+  });
+
+  /** An egress whose close never finishes (a proxy that never answered
+   *  CONNECT), which records the state at the moment it is asked to close. */
+  function hangingEgress(seen: Array<{ pending_token: string | null; stopped_at: Date | null; stop_incident_at: Date | null }>) {
+    return {
+      egressKey: "test",
+      dispatcher: {} as never,
+      pace: async () => 0,
+      close: async () => {
+        seen.push(...await rows<{ pending_token: string | null; stopped_at: Date | null; stop_incident_at: Date | null }>(
+          "select pending_token, stopped_at, stop_incident_at from fansly_public_lookup_state",
+        ));
+        await new Promise(() => undefined);
+      },
+    };
+  }
+
+  it("a request timed out through a proxy that never answers CONNECT: the stop and its incident are written first, the close wait is bounded", async () => {
+    const seen: Array<{ pending_token: string | null; stopped_at: Date | null; stop_incident_at: Date | null }> = [];
+    const started = performance.now();
+    const pass = await reader(scripted({ kind: "timeout", sent: false, message: "TimeoutError: transport never ready" }), {
+      openEgress: async () => hangingEgress(seen),
+      egressCloseMs: 300,
+    }).runOnce();
+    expect(pass).toMatchObject({ kind: "failed", failure: { reason: "network" } });
+    expect(performance.now() - started).toBeLessThan(5_000);
+    // When the close was asked for, the attempt was already settled: stopped,
+    // its incident confirmed, nothing pending.
+    expect(seen).toEqual([{ pending_token: null, stopped_at: expect.any(Date), stop_incident_at: expect.any(Date) }]);
+    expect(await rows("select status from notification_incidents where incident_key like '%public_lookup%'")).toEqual([{ status: "open" }]);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("an answer is applied before the close too", async () => {
+    const seen: Array<{ pending_token: string | null; stopped_at: Date | null; stop_incident_at: Date | null }> = [];
+    const pass = await reader(scripted(found(FOUND_MARKED)), { openEgress: async () => hangingEgress(seen), egressCloseMs: 300 }).runOnce();
+    expect(pass.kind).toBe("answered");
+    expect(seen).toEqual([{ pending_token: null, stopped_at: null, stop_incident_at: null }]);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("an attempt settled days late is dated when Fansly answered: never fresh, never closing a later request, never over a newer check", async () => {
+    // Its answer arrived 8 days ago; the owner's re-check was queued today
+    // (beforeEach); a newer check of MISSED_TWICE exists from yesterday.
+    const answeredAt = new Date(Date.now() - 8 * 24 * 3_600_000);
+    const yesterday = new Date(Date.now() - 24 * 3_600_000);
+    await testDb!.pool.query(
+      "update fans set public_checked_at = $1, public_found = true where platform = 'fansly' and platform_user_id = $2",
+      [yesterday, MISSED_TWICE],
+    );
+    const token = randomUUID();
+    await testDb!.pool.query(
+      `insert into fansly_send_log (page_id, guard_token, source, operation, holder_host, holder_pid, holder_role, holder_instance,
+              captured_at, sent_at, completed_at, outcome, http_status)
+       values (null, $1::uuid, 'public_lookup', 'account_lookup_public', 'a', 1, 'sync', $2::uuid, $3, $3, $3, 'response', 200)`,
+      [token, randomUUID(), answeredAt],
+    );
+    const payload = {
+      requestedIds: [FOUND_MARKED, PARTNER, MISSED_TWICE],
+      status: 200,
+      answer: { success: true, response: [{ id: FOUND_MARKED }] },
+    };
+    await insertObservation(db(), {
+      source: "pull",
+      producer: "fansly-public-lookup",
+      platform: "fansly",
+      accountId: null,
+      nativeAccountRef: null,
+      kind: ACCOUNT_LOOKUP_PUBLIC_OBSERVATION_KIND,
+      payload,
+      payloadHash: createHash("sha256").update(JSON.stringify(payload)).digest(),
+      idempotencyKey: fanslyPublicLookupObservationKey(token),
+      receivedAt: answeredAt,
+    });
+    await testDb!.pool.query("update fansly_public_lookup_state set pending_token = $1::uuid, pending_since = $2", [token, answeredAt]);
+
+    const pass = await reader(scripted()).runOnce();
+    expect(pass).toMatchObject({ kind: "answered", applied: { written: 2, found: 1, notFound: 1, queueDone: 0 } });
+    expect(sends).toEqual([]);
+    expect((await fanRow(FOUND_MARKED)).public_checked_at).toEqual(answeredAt);
+    expect(await fanRow(PARTNER)).toMatchObject({ public_checked_at: answeredAt, public_found: false });
+    // The newer check stays.
+    expect(await fanRow(MISSED_TWICE)).toMatchObject({ public_checked_at: yesterday, public_found: true });
+    // Today's re-check requests are not closed by an answer older than them.
+    expect(await rows("select count(*)::int as n from fansly_public_lookup_queue where done_at is null")).toEqual([{ n: 2 }]);
+    expect((await rows<{ last_answer_at: Date }>("select last_answer_at from fansly_public_lookup_state"))[0]!.last_answer_at)
+      .toEqual(answeredAt);
+    // So the next request asks them again — and the partner, whose answer is
+    // 8 days old, with them.
+    await reader(scripted(found())).runOnce();
+    expect(askedIds().sort()).toEqual([FOUND_MARKED, GONE_MARKED, PARTNER].sort());
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
 
