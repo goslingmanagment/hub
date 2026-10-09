@@ -49,9 +49,11 @@ export const ofLinkValidFromBasisSchema = z.enum(["confirmed", "assumed_link_cre
  *                            not a loss;
  *   binding_changed          the page's OFAPI account changed between two
  *                            snapshots inside the delta;
- *   money_unknown            no known vendor money at the end (still
- *                            computing or never reported): the money figure
- *                            is null or leaves the link out;
+ *   money_unknown            a snapshot the delta rests on does not know the
+ *                            vendor money (still computing or never
+ *                            reported): the money figure is null, or a total
+ *                            leaves that stretch out — an earlier value never
+ *                            stands in for it;
  *   assumed_binding_start    the link's channel binding starts on an assumed
  *                            date (its creation), nobody confirmed it (П9.7);
  *   assumed_contractor_start the channel's contractor term starts on an
@@ -362,8 +364,11 @@ export const ofLinkTotalsSchema = z.object({
   hubMoney: ofLinkHubMoneyTotalSchema,
 });
 
-/** One link over one stretch of time with one channel and one contractor
- * (either may be null): the value at the end minus the value at the start. */
+/** One link over one stretch of time: the value at the end minus the value
+ * at the start. A channel's segments are cut by the link's bindings only
+ * (`contractorKey` null); a contractor's segments are cut by the bindings and
+ * the channel's contractor terms. So a channel's total never moves when a
+ * contractor term is added or moved. */
 export const ofLinkSegmentSchema = z.object({
   pageId: z.number().int().positive(),
   pageLabel: z.string(),
@@ -392,7 +397,7 @@ export const ofLinkChannelSchema = z.object({
   /** The channel's contractor terms that overlap the range. */
   contractors: z.array(ofLinkContractorTermSchema),
   totals: ofLinkTotalsSchema,
-  /** Union of the segments' flags, assumed_contractor_start excluded. */
+  /** Union of the segments' flags. */
   flags: z.array(ofLinkDeltaFlagSchema),
   segments: z.array(ofLinkSegmentSchema),
 });
@@ -404,6 +409,7 @@ export const ofLinkContractorSchema = z.object({
   channelKeys: z.array(z.string()),
   totals: ofLinkTotalsSchema,
   flags: z.array(ofLinkDeltaFlagSchema),
+  segments: z.array(ofLinkSegmentSchema),
 });
 
 export const ofLinkChannelsResponseSchema = z.object({

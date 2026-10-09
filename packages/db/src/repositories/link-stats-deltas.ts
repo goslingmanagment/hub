@@ -11,15 +11,17 @@
 //                    zero — exact for a link born under the series, and
 //                    flagged starts_before_series for a link older than its
 //                    list's first read (the whole accumulated value).
-//   money            the last snapshot with KNOWN money before the instant
-//                    (a computing vendor value is unknown, not zero). No
-//                    known money at the end, or a start that has snapshots
-//                    but no known money: the money delta is unknown.
-//   channel segment  one link over one stretch with one channel and one
-//                    contractor: bindings and contractor terms cut the
-//                    range, and each piece is a delta. The pieces of a link
-//                    chain end to start, so they add up to the link's delta
-//                    over the range.
+//   money            read from the same two snapshots. Either of them not
+//                    knowing it (a computing vendor value is unknown, not
+//                    zero) makes the money delta unknown (money_unknown);
+//                    an earlier known value never stands in for it.
+//   segment          one link over one stretch of the range: a channel's
+//                    segments are cut by the link's bindings only, a
+//                    contractor's by the bindings and the channel's
+//                    contractor terms. Each piece is a delta; the pieces of a
+//                    link chain end to start, so they add up to the link's
+//                    delta over the range. A channel's total never depends on
+//                    where its contractor terms begin.
 
 import type { TrafficValidFromBasis } from "@agency_hub_core/shared";
 
@@ -173,15 +175,18 @@ export function linkDeltaBetween(series: LinkSeries, startAt: Date, endAt: Date)
       flags.add("binding_changed");
     }
   }
-  const endMoney = lastKnownMoneyAtOrBefore(points, endIndex);
+  // Money is read from the very snapshots the delta rests on. One of them
+  // not knowing it (the vendor still computing, or no revenue block) makes
+  // the money delta unknown: an earlier value is never put in its place —
+  // that would show "no change" for a day whose money nobody knows.
+  const endMoney = endPoint.netMills;
   let netMills: bigint | null;
   if (endMoney === null) {
     netMills = null;
   } else if (startPoint === null) {
     netMills = endMoney;
   } else {
-    const startMoney = lastKnownMoneyAtOrBefore(points, startIndex);
-    netMills = startMoney === null ? null : endMoney - startMoney;
+    netMills = startPoint.netMills === null ? null : endMoney - startPoint.netMills;
   }
   if (netMills === null) {
     flags.add("money_unknown");
@@ -267,13 +272,15 @@ export function splitByIntervals<T extends TrafficIntervalLike>(
   return pieces;
 }
 
-/** Every segment of one link over [from, to): cut by its bindings, each bound
- * piece cut again by its channel's contractor terms. Pieces before the
+/** Every segment of one link over [from, to): cut by its bindings and, when
+ * `termsByChannel` is given, each bound piece cut again by its channel's
+ * contractor terms (a contractor's segments); without it, the pieces of the
+ * bindings alone (a channel's segments, contractor null). Pieces before the
  * link's first snapshot carry nothing and are left out. Pure. */
 export function linkSegments(
   series: LinkSeries,
   bindings: readonly LinkBindingInterval[],
-  termsByChannel: ReadonlyMap<string, readonly ChannelTermInterval[]>,
+  termsByChannel: ReadonlyMap<string, readonly ChannelTermInterval[]> | null,
   from: Date,
   to: Date,
 ): LinkSegment[] {
@@ -311,6 +318,10 @@ export function linkSegments(
       push(piece.startMs, piece.endMs, null, null);
       continue;
     }
+    if (termsByChannel === null) {
+      push(piece.startMs, piece.endMs, piece.interval, null);
+      continue;
+    }
     const terms = termsByChannel.get(piece.interval.channelKey) ?? [];
     for (const termPiece of splitByIntervals(terms, piece.startMs, piece.endMs)) {
       push(termPiece.startMs, termPiece.endMs, piece.interval, termPiece.interval);
@@ -330,13 +341,8 @@ export interface SegmentTotals {
 }
 
 /** Sums segments; money over the segments that know it (the others carry
- * money_unknown, which the union of flags keeps). `exclude` drops flags that
- * do not concern the group (a channel's total does not rest on its
- * contractor's start). */
-export function totalSegments(
-  segments: readonly LinkSegment[],
-  exclude: readonly OfLinkDeltaFlag[] = [],
-): SegmentTotals {
+ * money_unknown, which the union of flags keeps). */
+export function totalSegments(segments: readonly LinkSegment[]): SegmentTotals {
   const links = new Set<string>();
   const flags = new Set<OfLinkDeltaFlag>();
   let clicks = 0;
@@ -352,9 +358,7 @@ export function totalSegments(
     fans += segment.delta.fans ?? 0;
     netMills += segment.delta.netMills ?? 0n;
     for (const flag of segment.delta.flags) {
-      if (!exclude.includes(flag)) {
-        flags.add(flag);
-      }
+      flags.add(flag);
     }
   }
   return { linkCount: links.size, clicks, claims, subscribers, fans, netMills, flags: sortDeltaFlags(flags) };

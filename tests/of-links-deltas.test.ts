@@ -66,12 +66,13 @@ describe("linkDeltaBetween", () => {
     expect(delta.endPoint.observedAt).toEqual(at("2026-08-01T16:45:00Z"));
   });
 
-  it("takes money from the last snapshot that knows it", () => {
+  it("knows no money when the end snapshot does not, never putting an earlier value in its place", () => {
+    // Yesterday $2.50 known, today's snapshot still computing: not "no change".
     const delta = linkDeltaBetween(series, at("2026-08-02T10:00:00Z"), at("2026-08-03T00:00:00Z"))!;
     expect(delta.endPoint.observedAt).toEqual(at("2026-08-02T16:45:00Z"));
     expect(delta.clicks).toBe(2);
-    expect(delta.netMills).toBe(0n);
-    expect(delta.flags).toEqual([]);
+    expect(delta.netMills).toBeNull();
+    expect(delta.flags).toEqual(["money_unknown"]);
   });
 
   it("has no delta before the link's first snapshot", () => {
@@ -174,6 +175,14 @@ describe("linkSegments and totals", () => {
     const from = at("2026-08-05T00:00:00Z");
     const to = at("2026-08-31T12:00:00Z");
     const segments = linkSegments(series, bindings, terms, from, to);
+    // A channel's segments: the bindings alone.
+    expect(linkSegments(series, bindings, null, from, to).map((segment) => [
+      segment.channelKey, segment.contractorKey, segment.startAt.toISOString().slice(0, 10), segment.delta.clicks, segment.delta.flags,
+    ])).toEqual([
+      ["lora.reddit", null, "2026-08-05", 60, ["assumed_binding_start"]],
+      [null, null, "2026-08-11", 100, []],
+      ["lora.porntoki", null, "2026-08-21", 110, []],
+    ]);
     expect(segments.map((segment) => [
       segment.channelKey, segment.contractorKey, segment.startAt.toISOString().slice(0, 10),
       segment.endAt.toISOString().slice(0, 10), segment.delta.clicks, segment.delta.flags,
@@ -186,10 +195,30 @@ describe("linkSegments and totals", () => {
     ]);
     const whole = linkDeltaBetween(series, from, to)!;
     expect(totalSegments(segments)).toMatchObject({ linkCount: 1, clicks: whole.clicks, claims: whole.claims, netMills: whole.netMills });
-    // A channel total leaves its contractor's assumed start out of its flags.
-    const porntoki = segments.filter((segment) => segment.channelKey === "lora.porntoki");
-    expect(totalSegments(porntoki, ["assumed_contractor_start"]).flags).toEqual([]);
-    expect(totalSegments(porntoki).flags).toEqual(["assumed_contractor_start"]);
+  });
+
+  it("keeps a channel's total when a contractor term starts between snapshots whose money is unknown", () => {
+    // 08-15's money is still computing; a contractor starts on 08-15 12:00.
+    const computing = trial(points.map((item) => item.observedAt.getTime() === at("2026-08-15T00:00:00Z").getTime()
+      ? { ...item, netMills: null }
+      : item), { linkCreatedAt: at("2026-07-31T12:00:00Z") });
+    const bound: LinkBindingInterval[] = [
+      { channelKey: "lora.porntoki", validFrom: at("2026-07-31T12:00:00Z"), validTo: null, validFromBasis: "confirmed" },
+    ];
+    const lateContractor = new Map<string, ChannelTermInterval[]>([
+      ["lora.porntoki", [{ contractorKey: "coraline-red", validFrom: at("2026-08-15T12:00:00Z"), validTo: null, validFromBasis: "confirmed" }]],
+    ]);
+    const from = at("2026-08-10T12:00:00Z");
+    const to = at("2026-08-20T12:00:00Z");
+    const channel = totalSegments(linkSegments(computing, bound, null, from, to));
+    expect(channel).toMatchObject({ netMills: 10_000n, flags: [] });
+    // Who brought it is not known around the unknown snapshot; the channel's total does not move.
+    const byContractor = linkSegments(computing, bound, lateContractor, from, to);
+    expect(byContractor.map((segment) => [segment.contractorKey, segment.delta.netMills, segment.delta.flags])).toEqual([
+      [null, null, ["money_unknown"]],
+      ["coraline-red", null, ["money_unknown"]],
+    ]);
+    expect(totalSegments(linkSegments(computing, bound, new Map(), from, to))).toMatchObject({ netMills: 10_000n });
   });
 
   it("leaves out stretches before the link's first snapshot", () => {
@@ -200,8 +229,8 @@ describe("linkSegments and totals", () => {
   it("sums known money only and keeps money_unknown", () => {
     const unknown = trial([point("2026-08-01T00:00:00Z", { clicks: 5, netMills: null })], { linkRef: "11687581" });
     const segments = [
-      ...linkSegments(series, [], new Map(), at("2026-08-01T12:00:00Z"), at("2026-08-02T12:00:00Z")),
-      ...linkSegments(unknown, [], new Map(), at("2026-07-31T00:00:00Z"), at("2026-08-02T12:00:00Z")),
+      ...linkSegments(series, [], null, at("2026-08-01T12:00:00Z"), at("2026-08-02T12:00:00Z")),
+      ...linkSegments(unknown, [], null, at("2026-07-31T00:00:00Z"), at("2026-08-02T12:00:00Z")),
     ];
     expect(totalSegments(segments)).toMatchObject({ linkCount: 2, clicks: 15, netMills: 1_000n, flags: ["money_unknown"] });
   });
