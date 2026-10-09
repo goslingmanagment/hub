@@ -34326,7 +34326,7 @@
         "tags": [
           "ops"
         ],
-        "description": "Jobs list paused runs first, then newest, at most 100; `jobState` narrows the list (`unfinished` = queued, running or paused).",
+        "description": "Jobs list paused runs first, then newest, at most 100; `jobState` narrows the list (`unfinished` = queued, running or paused) and an unfinished-state filter returns every match. `jobsTotal` counts all matches.",
         "parameters": [
           {
             "schema": {
@@ -34687,6 +34687,21 @@
                                           }
                                         ]
                                       },
+                                      "exhaustedCap": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string",
+                                            "enum": [
+                                              "calls",
+                                              "credits",
+                                              "bytes"
+                                            ]
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
                                       "usedCalls": {
                                         "type": "number"
                                       },
@@ -34697,6 +34712,12 @@
                                         "type": "number"
                                       },
                                       "maxCredits": {
+                                        "type": "number"
+                                      },
+                                      "usedBytes": {
+                                        "type": "number"
+                                      },
+                                      "maxBytes": {
                                         "type": "number"
                                       },
                                       "stepsDone": {
@@ -34731,10 +34752,13 @@
                                       "state",
                                       "reason",
                                       "exhaustedLimit",
+                                      "exhaustedCap",
                                       "usedCalls",
                                       "maxCalls",
                                       "usedCredits",
                                       "maxCredits",
+                                      "usedBytes",
+                                      "maxBytes",
                                       "stepsDone",
                                       "stepsTotal",
                                       "createdAt",
@@ -34845,6 +34869,21 @@
                           "canFinishIncomplete": {
                             "type": "boolean"
                           },
+                          "exhaustedCap": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "calls",
+                                  "credits",
+                                  "bytes"
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "stepsDone": {
                             "anyOf": [
                               {
@@ -34880,11 +34919,17 @@
                           "createdAt",
                           "reason",
                           "canFinishIncomplete",
+                          "exhaustedCap",
                           "stepsDone",
                           "stepsTotal"
                         ],
                         "additionalProperties": false
                       }
+                    },
+                    "jobsTotal": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
                     },
                     "audit": {
                       "type": "array",
@@ -34922,6 +34967,7 @@
                     "pages",
                     "policies",
                     "jobs",
+                    "jobsTotal",
                     "audit",
                     "limitDescription"
                   ],

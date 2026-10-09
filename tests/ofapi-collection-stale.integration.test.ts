@@ -13,7 +13,7 @@ import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
 import { ofapiCollectionPolicyHooks } from "../apps/runtime/src/services/ofapi-collection-policy.ts";
 import { runOfapiCollectionJob, sweepOfapiCollections } from "../apps/runtime/src/services/ofapi-collection-runner.ts";
-import { checkOfapiCollectionStaleness } from "../apps/runtime/src/services/ofapi-collection-stale.ts";
+import { checkOfapiCollectionStaleness, describeStaleCollectionCause } from "../apps/runtime/src/services/ofapi-collection-stale.ts";
 import { createOfapiClient } from "../apps/runtime/src/services/ofapi.ts";
 import { startIntegrationTestDatabase, resetIntegrationDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
@@ -61,11 +61,13 @@ async function apply(changes: OfapiCollectionSettings[], backgroundPaused?: bool
   return applyOfapiCollectionPolicy(app.db, { expectedRevision: revision, changes, ...(backgroundPaused === undefined ? {} : { backgroundPaused }) }, actor);
 }
 /** A background run row as the runner leaves it, without a vendor call. */
-async function backgroundRun(input: { page: number; state: string; reason?: string | null; minutesAgo: number; usedCalls?: number; maxCalls?: number; plan?: number; index?: number }) {
+async function backgroundRun(input: { page: number; state: string; reason?: string | null; minutesAgo: number; usedCalls?: number; maxCalls?: number;
+  usedCredits?: number; maxCredits?: number; usedBytes?: number; maxBytes?: number; plan?: number; index?: number; category?: string }) {
   const checkpoint = input.plan === undefined ? {} : { plan: Array.from({ length: input.plan }, (_, i) => ({ operation: "ofapi_read_notifications", pathname: `/acct/${i}`, query: {} })), index: input.index ?? 0 };
-  const row = await testDb.pool.query(`insert into ofapi_collection_jobs(id,page_id,category,policy_revision,actor_user_id,max_credits,max_calls,max_bytes,target,purpose,state,reason,used_calls,checkpoint,created_at,updated_at)
-    values(gen_random_uuid(),$1,'profile_notifications',1,$2,10,$3,1000,'{"from":null,"to":null,"selection":[]}','background',$4,$5,$6,$7::jsonb,now()-make_interval(mins=>$8+5),now()-make_interval(mins=>$8)) returning id`,
-  [input.page, actor, input.maxCalls ?? 1, input.state, input.reason ?? null, input.usedCalls ?? 0, JSON.stringify(checkpoint), input.minutesAgo]);
+  const row = await testDb.pool.query(`insert into ofapi_collection_jobs(id,page_id,category,policy_revision,actor_user_id,max_credits,max_calls,max_bytes,target,purpose,state,reason,used_calls,used_credits,used_bytes,checkpoint,created_at,updated_at)
+    values(gen_random_uuid(),$1,$12,1,$2,$9,$3,$11,'{"from":null,"to":null,"selection":[]}','background',$4,$5,$6,$13,$10,$7::jsonb,now()-make_interval(mins=>$8+5),now()-make_interval(mins=>$8)) returning id`,
+  [input.page, actor, input.maxCalls ?? 1, input.state, input.reason ?? null, input.usedCalls ?? 0, JSON.stringify(checkpoint), input.minutesAgo,
+    input.maxCredits ?? 10, input.usedBytes ?? 0, input.maxBytes ?? 1000, input.category ?? "profile_notifications", input.usedCredits ?? 0]);
   return String(row.rows[0].id);
 }
 const backdatePolicies = (minutes: number) => testDb.pool.query(`update ofapi_collection_policies set updated_at=now()-make_interval(mins=>$1)`, [minutes]);
@@ -92,7 +94,7 @@ describe("stale scheduled collection categories", () => {
     const stale = await healthOf(pageId, new Date(appliedAt.getTime() + 31 * 60_000));
     expect(stale).toMatchObject({ expected: true, stale: true, lastCompletedAt: null });
     expect(stale.lastRun).toMatchObject({ id: runId, state: "failed", reason: "scheduled_run_exhausted:job_limit", exhaustedLimit: "job_limit",
-      usedCalls: 1, maxCalls: 1, stepsDone: 0, stepsTotal: 2 });
+      exhaustedCap: "calls", usedCalls: 1, maxCalls: 1, usedCredits: 1, maxCredits: 10, stepsDone: 0, stepsTotal: 2 });
     // The page that never had the category scheduled is not expected to run it.
     expect(await healthOf(otherPageId, new Date(appliedAt.getTime() + 31 * 60_000))).toMatchObject({ expected: false, stale: false, staleAt: null });
   });
@@ -150,6 +152,31 @@ describe("stale scheduled collection categories", () => {
     expect(await checkOfapiCollectionStaleness(app)).toEqual({ stalePages: [], resolvedPages: [] });
   });
 
+  it("names the spent run ceiling from the run's own counters, and none when they do not single one out", async () => {
+    await apply([scheduled(pageId)]);
+    const cap = "scheduled_run_exhausted:job_limit";
+    const runs = {
+      calls: await backgroundRun({ page: pageId, state: "failed", reason: cap, minutesAgo: 50, usedCalls: 25, maxCalls: 25, usedCredits: 25, maxCredits: 200 }),
+      credits: await backgroundRun({ page: pageId, state: "failed", reason: cap, minutesAgo: 40, usedCalls: 1, maxCalls: 25, usedCredits: 1, maxCredits: 1 }),
+      bytes: await backgroundRun({ page: pageId, state: "failed", reason: cap, minutesAgo: 30, usedCalls: 3, maxCalls: 25, usedCredits: 3, maxCredits: 200, usedBytes: 1000, maxBytes: 1000 }),
+      both: await backgroundRun({ page: pageId, state: "failed", reason: cap, minutesAgo: 20, usedCalls: 5, maxCalls: 5, usedCredits: 5, maxCredits: 5 }),
+      // A multi-credit read refused short of the credit ceiling: no counter is spent.
+      none: await backgroundRun({ page: pageId, state: "failed", reason: cap, minutesAgo: 10, usedCalls: 2, maxCalls: 25, usedCredits: 9, maxCredits: 10 }),
+      daily: await backgroundRun({ page: pageId, state: "failed", reason: "scheduled_run_exhausted:daily_limit", minutesAgo: 5, usedCalls: 1, maxCalls: 1, usedCredits: 1, maxCredits: 1 }),
+    };
+    const jobs = new Map((await getOfapiCollectionSnapshot(app.db, null, undefined, { jobState: "failed" })).jobs.map(job => [job.id, job.exhaustedCap]));
+    expect(Object.fromEntries(Object.entries(runs).map(([name, id]) => [name, jobs.get(id)])))
+      .toEqual({ calls: "calls", credits: "credits", bytes: "bytes", both: null, none: null, daily: null });
+    // The newest settled run is the cause; the incident names its ceiling only when known.
+    expect((await healthOf(pageId)).lastRun).toMatchObject({ id: runs.daily, exhaustedLimit: "daily_limit", exhaustedCap: null });
+    const summary = (await listOfapiCollectionScheduleHealth(app.db)).find(row => row.pageId === pageId)!.health.lastRun!;
+    const as = (over: Partial<typeof summary>) => describeStaleCollectionCause({ ...summary, exhaustedLimit: "job_limit", stepsDone: 0, stepsTotal: 4, ...over });
+    expect(as({ exhaustedCap: "credits", usedCredits: 1, maxCredits: 1 })).toBe("run hits its credit cap 1/1, step 1/4");
+    expect(as({ exhaustedCap: "calls", usedCalls: 25, maxCalls: 25 })).toBe("run hits its call cap 25/25, step 1/4");
+    expect(as({ exhaustedCap: "bytes" })).toBe("run hits its byte cap, step 1/4");
+    expect(as({ exhaustedCap: null, usedCalls: 5, maxCalls: 5, usedCredits: 5, maxCredits: 5 })).toBe("run hits a job limit (calls 5/5, credits 5/5), step 1/4");
+  });
+
   it("the stale check's input holds only the (page, category) pairs a schedule promises", async () => {
     await apply([scheduled(pageId)]);
     const rows = await listOfapiCollectionScheduleHealth(app.db);
@@ -158,6 +185,28 @@ describe("stale scheduled collection categories", () => {
 });
 
 describe("collection job list", () => {
+  it("an unfinished-state filter returns every match, even past a hundred paused jobs, and a page is filtered on the server", async () => {
+    await testDb.pool.query(`insert into ofapi_collection_jobs(id,page_id,category,policy_revision,actor_user_id,max_credits,max_calls,max_bytes,target,purpose,state,reason,created_at,updated_at)
+      select gen_random_uuid(),$1,'posts_comments',1,$2,4,4,1000,'{"from":null,"to":null,"selection":[]}','background','paused','parked',now()-make_interval(mins=>g),now()-make_interval(mins=>g)
+      from generate_series(1,101) g`, [pageId, actor]);
+    const oldest = String((await testDb.pool.query("select id from ofapi_collection_jobs where state='paused' order by created_at limit 1")).rows[0].id);
+    const otherPaused = await backgroundRun({ page: otherPageId, state: "paused", reason: "parked", minutesAgo: 60 * 24 * 60 });
+    const all = await getOfapiCollectionSnapshot(app.db, null);
+    expect(all.jobs).toHaveLength(100);
+    expect(all.jobsTotal).toBe(102);
+    expect(all.jobs.map(job => job.id)).not.toContain(oldest);
+    for (const jobState of ["paused", "unfinished"] as const) {
+      const listed = await getOfapiCollectionSnapshot(app.db, null, undefined, { jobState });
+      expect(listed.jobs).toHaveLength(102);
+      expect(listed.jobsTotal).toBe(102);
+      expect(listed.jobs.map(job => job.id)).toEqual(expect.arrayContaining([oldest, otherPaused]));
+    }
+    // The page is the server's filter: the other page's job is not cut by the first page's hundred.
+    const otherPage = await getOfapiCollectionSnapshot(app.db, null, otherPageId);
+    expect(otherPage.jobs.map(job => job.id)).toEqual([otherPaused]);
+    expect(otherPage.jobsTotal).toBe(1);
+  });
+
   it("lists paused jobs first and a state filter reaches an unfinished job past the first hundred", async () => {
     const parked = await backgroundRun({ page: pageId, state: "paused", reason: "OFAPI collection policy refused dispatch", minutesAgo: 30 * 24 * 60 });
     await testDb.pool.query(`insert into ofapi_collection_jobs(id,page_id,category,policy_revision,actor_user_id,max_credits,max_calls,max_bytes,target,purpose,state,created_at,updated_at)
@@ -179,9 +228,10 @@ describe("collection job list", () => {
     server = await buildApiServer(app);
     const login = await server.inject({ method: "POST", url: "/api/v1/auth/login", payload: { username: "owner", password: "synthetic-password" } });
     const cookie = String(([] as string[]).concat(login.headers["set-cookie"] ?? [])[0]).split(";")[0]!;
-    const filtered = await server.inject({ method: "GET", url: "/api/v1/admin/ofapi/collection?jobState=paused", headers: { cookie } });
+    const filtered = await server.inject({ method: "GET", url: `/api/v1/admin/ofapi/collection?jobState=paused&pageId=${pageId}`, headers: { cookie } });
     expect(filtered.statusCode).toBe(200);
     expect(filtered.json().jobs.map((job: { id: string }) => job.id)).toEqual([parked]);
+    expect(filtered.json().jobsTotal).toBe(1);
     expect(filtered.json().policies[0].scheduleHealth).toMatchObject({ expected: expect.any(Boolean), stale: expect.any(Boolean) });
     expect((await server.inject({ method: "GET", url: "/api/v1/admin/ofapi/collection?jobState=blocked", headers: { cookie } })).statusCode).toBe(400);
   });

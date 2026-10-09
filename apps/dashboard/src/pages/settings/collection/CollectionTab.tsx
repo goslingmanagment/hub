@@ -92,6 +92,7 @@ import {
   type DraftEntry,
   type RowTone,
   type StaleEntry,
+  CAP_LEVER_FIELD_RU,
 } from "./collectionModel.js";
 
 // Settings › Collection (S-UI, decisions #250/#251). One screen: what the
@@ -715,7 +716,8 @@ function PausedBanner(props: {
  *  intervals. Same rule as the digest incident `collection_stale`. */
 export function StaleBanner(props: { entries: StaleEntry[] }) {
   const n = props.entries.length;
-  const callCap = props.entries.some((entry) => entry.callCap);
+  const outgrows = props.entries.some((entry) => entry.outgrowsRun);
+  const levers = (["calls", "credits"] as const).filter((lever) => props.entries.some((entry) => entry.lever === lever));
   return (
     <div role="status" data-testid="collection-stale-banner" className="rounded-xl border border-warning/30 bg-warning/[0.06] px-4 py-3">
       <p className="text-[13.5px] font-semibold text-amber-700">
@@ -736,10 +738,13 @@ export function StaleBanner(props: { entries: StaleEntry[] }) {
           </li>
         ))}
       </ul>
-      {callCap && (
+      {outgrows && (
         <p className="mt-1.5 text-[12px] leading-relaxed text-text-secondary">
-          Проход начинается каждый интервал и тратит запросы до потолка, но до конца списка не доходит. Поднять потолок:
-          раскройте категорию и увеличьте «Запросов за запуск, не более». Сохранённые настройки сами не меняются.
+          Проход начинается каждый интервал и тратит потолок задачи, но до конца списка не доходит.
+          {levers.length > 0 && <>
+            {" "}Поднять потолок: раскройте категорию и увеличьте {levers.map((lever) => CAP_LEVER_FIELD_RU[lever]).join(" или ")}.
+          </>}
+          {" "}Сохранённые настройки сами не меняются.
         </p>
       )}
     </div>
@@ -1257,12 +1262,16 @@ export function JobsCard(props: { snapshot: OfapiCollectionSnapshot; scope: Coll
   const finish = useOfapiCollectionJobFinishIncomplete();
   const [finishPreview, setFinishPreview] = useState<{ job: OfapiCollectionJob; revision: number } | null>(null);
   const [stateFilter, setStateFilter] = useState<NonNullable<OfapiCollectionJobStateFilter> | null>(null);
-  // The snapshot lists paused jobs first, then the newest, at most 100; the
-  // filter asks the server for that state only, so an older unfinished job
-  // stays reachable for «Продолжить» / «Завершить неполный проход».
-  const filtered = useAdminOfapiCollectionJobs(stateFilter);
-  const source = stateFilter === null ? props.snapshot : filtered.data;
+  // The snapshot lists every page's jobs, paused first, then the newest, at
+  // most 100. A selected page or state is asked of the server, never cut out
+  // of that list here: an unfinished-state filter returns every match, so any
+  // unfinished job stays reachable for «Продолжить» / «Завершить неполный проход».
+  const pageId = scopePageId(props.scope);
+  const own = stateFilter !== null || pageId !== null;
+  const filtered = useAdminOfapiCollectionJobs(own ? { jobState: stateFilter, pageId } : null);
+  const source = own ? filtered.data : props.snapshot;
   const jobs = source ? jobsFor(source, props.scope) : [];
+  const total = source?.jobsTotal ?? jobs.length;
   if (stateFilter === null && jobs.length === 0) return null;
   return (
     <section className={cardClass} aria-labelledby="collection-jobs-heading">
@@ -1282,12 +1291,12 @@ export function JobsCard(props: { snapshot: OfapiCollectionSnapshot; scope: Coll
             </select>
           </label>
           <span className="text-[12px] text-text-secondary">
-            {stateFilter !== null && filtered.isPending ? "загрузка…" : `${jobs.length} ${ruPlural(jobs.length, "задача", "задачи", "задач")}${jobs.length >= 100 ? " (первые 100)" : ""} · потолки на каждую`}
+            {own && filtered.isPending ? "загрузка…" : `${total > jobs.length ? `показаны ${jobs.length} из ${total}` : `${jobs.length} ${ruPlural(jobs.length, "задача", "задачи", "задач")}`} · потолки на каждую`}
           </span>
         </div>
       </div>
-      {stateFilter !== null && filtered.isError && <p role="alert" className="px-4 pt-2 text-[12px] text-red-700">{errorMessage(filtered.error, "Не удалось загрузить задачи")}</p>}
-      {stateFilter !== null && !filtered.isPending && jobs.length === 0 && <p className="px-4 py-4 text-[13px] text-text-secondary">Задач в этом состоянии нет.</p>}
+      {own && filtered.isError && <p role="alert" className="px-4 pt-2 text-[12px] text-red-700">{errorMessage(filtered.error, "Не удалось загрузить задачи")}</p>}
+      {own && !filtered.isPending && jobs.length === 0 && <p className="px-4 py-4 text-[13px] text-text-secondary">Задач в этом состоянии нет.</p>}
       {jobs.length > 0 && <div className="mt-3 overflow-x-auto">
         <table className="w-full min-w-[760px] border-collapse">
           <thead>

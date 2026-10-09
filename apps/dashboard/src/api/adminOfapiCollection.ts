@@ -34,16 +34,21 @@ export function useAdminOfapiCollection() {
   });
 }
 
-/** The job list narrowed to one state (or every unfinished job), so a run
- *  past the snapshot's hundred rows stays reachable. Shares the collection
- *  key prefix: every mutation's invalidation refreshes it too. */
-export function useAdminOfapiCollectionJobs(jobState: Exclude<OfapiCollectionJobStateFilter, undefined> | null) {
+/** The job list asked of the server for one page and/or state, so a job past
+ *  the snapshot's hundred rows stays reachable (an unfinished-state filter
+ *  returns every match). Shares the collection key prefix: every mutation's
+ *  invalidation refreshes it too. */
+export function useAdminOfapiCollectionJobs(input: { jobState: Exclude<OfapiCollectionJobStateFilter, undefined> | null; pageId: number | null } | null) {
   return useQuery({
-    queryKey: [...OFAPI_COLLECTION_QUERY_KEY, "jobs", jobState],
-    queryFn: () => kernel.ofapiCollectionGet({ query: { jobState: jobState! } }),
-    enabled: jobState !== null,
+    queryKey: [...OFAPI_COLLECTION_QUERY_KEY, "jobs", input?.jobState ?? null, input?.pageId ?? null],
+    queryFn: () => kernel.ofapiCollectionGet({ query: {
+      ...(input?.jobState ? { jobState: input.jobState } : {}),
+      ...(input?.pageId ? { pageId: input.pageId } : {}),
+    } }),
+    enabled: input !== null,
+    // No placeholder: another page's or state's rows must not stand in while
+    // the selected ones load.
     refetchInterval: 15_000,
-    placeholderData: (previous) => previous,
     meta: { suppressGlobalError: true },
   });
 }

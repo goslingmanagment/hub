@@ -28,7 +28,13 @@ export function describeStaleCollectionCause(run: OfapiCollectionRunSummary | nu
     const step = run.stepsDone !== null && run.stepsTotal !== null && run.stepsDone < run.stepsTotal
       ? `, step ${run.stepsDone + 1}/${run.stepsTotal}`
       : "";
-    return `run hits its call cap ${run.usedCalls}/${run.maxCalls}${step}`;
+    switch (run.exhaustedCap) {
+      case "calls": return `run hits its call cap ${run.usedCalls}/${run.maxCalls}${step}`;
+      case "credits": return `run hits its credit cap ${run.usedCredits}/${run.maxCredits}${step}`;
+      case "bytes": return `run hits its byte cap${step}`;
+      // Admission does not say which ceiling refused; the counters single none out.
+      default: return `run hits a job limit (calls ${run.usedCalls}/${run.maxCalls}, credits ${run.usedCredits}/${run.maxCredits})${step}`;
+    }
   }
   if (run.exhaustedLimit === "daily_limit") return "run stops at the daily credit limit";
   if (run.exhaustedLimit !== null) return `run stops at ${run.exhaustedLimit}`;

@@ -371,17 +371,40 @@ export async function listPendingOfapiCollectionJobs(db: Database) {
 
 /** The runner's reason when a cap ends a scheduled run (`scheduled_run_exhausted:job_limit`, …). */
 const SCHEDULED_RUN_EXHAUSTED_PREFIX = "scheduled_run_exhausted:";
+/** Which of a run's own ceilings ended it. */
+export type OfapiCollectionExhaustedCap = "calls" | "credits" | "bytes";
+/**
+ * Admission refuses a run's next request as `job_limit` when its credits,
+ * calls or bytes would pass the run's ceiling, without saying which. The
+ * run's counters tell them apart when exactly one is spent; otherwise (two at
+ * once, or a multi-credit read refused short of its ceiling) the cap is not
+ * named and the screen recommends none.
+ */
+export function ofapiCollectionExhaustedCap(run: {
+  reason: string | null; usedCalls: number; maxCalls: number; usedCredits: number; maxCredits: number; usedBytes: number; maxBytes: number;
+}): OfapiCollectionExhaustedCap | null {
+  if (run.reason !== `${SCHEDULED_RUN_EXHAUSTED_PREFIX}job_limit`) return null;
+  const spent: OfapiCollectionExhaustedCap[] = [];
+  if (run.usedCalls >= run.maxCalls) spent.push("calls");
+  if (run.usedCredits >= run.maxCredits) spent.push("credits");
+  if (run.usedBytes >= run.maxBytes) spent.push("bytes");
+  return spent.length === 1 ? spent[0]! : null;
+}
 /** A background run as the collection screen and the stale check describe it. */
 export interface OfapiCollectionRunSummary {
   id: string;
   state: string;
   reason: string | null;
-  /** The cap that ended a scheduled run: `job_limit` (calls per run), `daily_limit`, `interval_limit`. */
+  /** The limit that ended a scheduled run: `job_limit` (the run's own ceilings), `daily_limit`, `interval_limit`. */
   exhaustedLimit: string | null;
+  /** For `job_limit`: the one ceiling of the run that is spent; null when the counters do not single one out. */
+  exhaustedCap: OfapiCollectionExhaustedCap | null;
   usedCalls: number;
   maxCalls: number;
   usedCredits: number;
   maxCredits: number;
+  usedBytes: number;
+  maxBytes: number;
   /** Steps of the frozen plan read to the end, and the plan's length; null before a plan was frozen. */
   stepsDone: number | null;
   stepsTotal: number | null;
@@ -439,17 +462,21 @@ export function judgeOfapiCollectionSchedule(input: {
 }
 interface RunRow extends Record<string, unknown> {
   id: string; page_id: string; category: OfapiCollectionCategory; state: string; reason: string | null;
-  used_calls: number; max_calls: number; used_credits: string; max_credits: string;
+  used_calls: number; max_calls: number; used_credits: string; max_credits: string; used_bytes: string; max_bytes: string;
   steps_done: number | null; steps_total: number | null; created_at: Date; updated_at: Date;
 }
 /** The frozen plan's progress, read from the checkpoint the runner keeps (`plan`, `index`). */
 const RUN_PROGRESS_COLUMNS = sql`case when jsonb_typeof(job.checkpoint->'plan')='array' then jsonb_array_length(job.checkpoint->'plan') end as steps_total,
   case when jsonb_typeof(job.checkpoint->'plan')='array' then case when jsonb_typeof(job.checkpoint->'index')='number' then (job.checkpoint->>'index')::numeric::int else 0 end end as steps_done`;
 function runSummary(row: RunRow): OfapiCollectionRunSummary {
+  const counters = { reason: row.reason, usedCalls: row.used_calls, maxCalls: row.max_calls, usedCredits: Number(row.used_credits), maxCredits: Number(row.max_credits),
+    usedBytes: Number(row.used_bytes), maxBytes: Number(row.max_bytes) };
   return {
     id: row.id, state: row.state, reason: row.reason,
     exhaustedLimit: row.reason?.startsWith(SCHEDULED_RUN_EXHAUSTED_PREFIX) ? row.reason.slice(SCHEDULED_RUN_EXHAUSTED_PREFIX.length) : null,
-    usedCalls: row.used_calls, maxCalls: row.max_calls, usedCredits: Number(row.used_credits), maxCredits: Number(row.max_credits),
+    exhaustedCap: ofapiCollectionExhaustedCap(counters),
+    usedCalls: counters.usedCalls, maxCalls: counters.maxCalls, usedCredits: counters.usedCredits, maxCredits: counters.maxCredits,
+    usedBytes: counters.usedBytes, maxBytes: counters.maxBytes,
     stepsDone: row.steps_done === null ? null : Number(row.steps_done), stepsTotal: row.steps_total === null ? null : Number(row.steps_total),
     createdAt: new Date(row.created_at).toISOString(), updatedAt: new Date(row.updated_at).toISOString(),
   };
@@ -469,7 +496,7 @@ async function loadScheduleFacts(db: Database, pageIds: number[]) {
   for (const row of completed.rows) lastCompleted.set(key(row.page_id, row.category), new Date(row.last_completed_at));
   const runs = await db.execute<RunRow>(sql`
     select distinct on (job.page_id,job.category) job.id,job.page_id,job.category,job.state,job.reason,job.used_calls,job.max_calls,
-      job.used_credits::text used_credits,job.max_credits::text max_credits,job.created_at,job.updated_at,${RUN_PROGRESS_COLUMNS}
+      job.used_credits::text used_credits,job.max_credits::text max_credits,job.used_bytes::text used_bytes,job.max_bytes::text max_bytes,job.created_at,job.updated_at,${RUN_PROGRESS_COLUMNS}
     from ofapi_collection_jobs job where job.purpose='background' and job.page_id in (${ids})
     order by job.page_id,job.category,(job.state in ('queued','running')),job.created_at desc,job.id`);
   for (const row of runs.rows) lastRun.set(key(row.page_id, row.category), runSummary(row));
@@ -500,9 +527,13 @@ export async function listOfapiCollectionScheduleHealth(db: Database, now = new 
   return result;
 }
 
+/** Job list filters that return every matching job: unfinished jobs are few by
+ * nature, and each must stay reachable for Resume / Finish. */
+const UNBOUNDED_JOB_FILTERS: ReadonlySet<OfapiCollectionJobStateFilter> = new Set(["unfinished", "queued", "running", "paused"]);
+
 /** Read all diagnostics from retained local rows. Page filtering is mandatory for team leads.
- * Paused jobs come first so a parked run never falls past the hundred-row list;
- * `jobState` narrows the list so any unfinished job stays reachable. */
+ * Jobs: paused first, then newest; at most 100, except under an unfinished-state
+ * filter, which returns them all. `jobsTotal` counts every match. */
 export async function getOfapiCollectionSnapshot(db: Database, allowedPageIds: number[] | null, selectedPageId?: number, options: { jobState?: OfapiCollectionJobStateFilter; now?: Date } = {}) {
   const now = options.now ?? new Date();
   const current = await state(db);
@@ -531,15 +562,20 @@ export async function getOfapiCollectionSnapshot(db: Database, allowedPageIds: n
   const ids = pages.map(page => page.id);
   const jobState = options.jobState === undefined ? sql``
     : options.jobState === "unfinished" ? sql`and job.state in ('queued','running','paused')` : sql`and job.state=${options.jobState}`;
+  const jobScope = sql`${ids.length ? sql`job.page_id in (${sql.join(ids.map(id => sql`${id}`), sql`,`)})` : sql`false`} ${jobState}`;
+  const jobLimit = options.jobState !== undefined && UNBOUNDED_JOB_FILTERS.has(options.jobState) ? sql`` : sql`limit 100`;
+  const jobsTotal = Number((await db.execute<{ n: string }>(sql`select count(*)::text n from ofapi_collection_jobs job where ${jobScope}`)).rows[0]?.n ?? 0);
   const jobs = await db.execute<{ id: string; page_id: string; category: OfapiCollectionCategory; state: string; max_credits: string; max_calls: number; max_bytes: string; used_credits: string; used_calls: number; used_bytes: string; created_at: Date; reason: string | null; can_finish_incomplete: boolean; steps_done: number | null; steps_total: number | null }>(sql`
     select job.*,(${allowedPageIds === null} and ${finishableReadJob()}) as can_finish_incomplete,${RUN_PROGRESS_COLUMNS} from ofapi_collection_jobs job
-    where ${ids.length ? sql`job.page_id in (${sql.join(ids.map(id => sql`${id}`), sql`,`)})` : sql`false`} ${jobState}
-    order by (job.state='paused') desc,job.created_at desc,job.id limit 100`);
+    where ${jobScope}
+    order by (job.state='paused') desc,job.created_at desc,job.id ${jobLimit}`);
   // Global mutation history reveals page names/IDs; only the owner sees it.
   const audit = allowedPageIds === null ? await db.execute<{ revision: number; actor_user_id: string; changes: unknown; created_at: Date }>(sql`select * from ofapi_collection_audit order by revision desc limit 50`) : { rows: [] };
   return { revision: current.revision, backgroundPaused: current.background_paused, catalog: OFAPI_COLLECTION_REGISTRY.map(row => ({ ...row, modes: [...row.modes] })), pages, policies,
     jobs: jobs.rows.map(row => ({ id: row.id, pageId: Number(row.page_id), category: row.category, state: row.state, maxCredits: Number(row.max_credits), maxCalls: row.max_calls, maxBytes: Number(row.max_bytes), usedCredits: Number(row.used_credits), usedCalls: row.used_calls, usedBytes: Number(row.used_bytes), createdAt: new Date(row.created_at).toISOString(), reason: row.reason, canFinishIncomplete: row.can_finish_incomplete,
+      exhaustedCap: ofapiCollectionExhaustedCap({ reason: row.reason, usedCalls: row.used_calls, maxCalls: row.max_calls, usedCredits: Number(row.used_credits), maxCredits: Number(row.max_credits), usedBytes: Number(row.used_bytes), maxBytes: Number(row.max_bytes) }),
       stepsDone: row.steps_done === null ? null : Number(row.steps_done), stepsTotal: row.steps_total === null ? null : Number(row.steps_total) })),
+    jobsTotal,
     audit: audit.rows.map(row => ({ revision: row.revision, actorUserId: Number(row.actor_user_id), createdAt: new Date(row.created_at).toISOString(), changes: row.changes })),
     limitDescription: "Limits apply to new managed physical requests. Vendor events, external clients, accepted operations and variable prices can charge separately. Legacy operations retain existing configuration until a category policy is applied." };
 }

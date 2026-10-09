@@ -564,12 +564,23 @@ export function parseSelection(raw: string): string[] {
 // ---------------------------------------------------------------------------
 // Scheduled runs that do not complete (traffic plan §2.8 п. 3)
 
-type RunFacts = Pick<OfapiCollectionRun, "reason" | "usedCalls" | "maxCalls" | "stepsDone" | "stepsTotal">;
+type RunFacts = Pick<OfapiCollectionRun, "reason" | "exhaustedCap" | "usedCalls" | "maxCalls" | "usedCredits" | "maxCredits" | "usedBytes" | "maxBytes" | "stepsDone" | "stepsTotal">;
 
 const SCHEDULED_RUN_EXHAUSTED_PREFIX = "scheduled_run_exhausted:";
 
+/** The policy field that raises a spent run ceiling: a scheduled run's call
+ *  ceiling is «Запросов за запуск», its credit ceiling the category's daily
+ *  limit. Its byte ceiling is fixed, so it has none. */
+export type CapLever = "calls" | "credits";
+export const CAP_LEVER_FIELD_RU: Record<CapLever, string> = {
+  calls: "«Запросов за запуск, не более»",
+  credits: "«Дневной лимит категории, кр»",
+};
+
 /** The runner's reason in the owner's words when a cap ended a scheduled run;
- *  null for any other reason (shown as the server wrote it). */
+ *  null for any other reason (shown as the server wrote it). Admission says
+ *  only `job_limit`; the server names the spent ceiling from the run's own
+ *  counters, and when they single none out the text names no ceiling. */
 export function exhaustedRunText(run: RunFacts): string | null {
   if (!run.reason?.startsWith(SCHEDULED_RUN_EXHAUSTED_PREFIX)) return null;
   const limit = run.reason.slice(SCHEDULED_RUN_EXHAUSTED_PREFIX.length);
@@ -577,7 +588,12 @@ export function exhaustedRunText(run: RunFacts): string | null {
     const step = run.stepsDone !== null && run.stepsTotal !== null && run.stepsDone < run.stepsTotal
       ? ` · остановился на шаге ${run.stepsDone + 1} из ${run.stepsTotal}`
       : "";
-    return `проход не успевает за лимит вызовов: ${run.usedCalls} из ${run.maxCalls}${step}`;
+    switch (run.exhaustedCap) {
+      case "calls": return `проход не успевает за лимит вызовов: ${run.usedCalls} из ${run.maxCalls}${step}`;
+      case "credits": return `проход не успевает за лимит кредитов: ${fmtCredits(run.usedCredits)} из ${fmtCredits(run.maxCredits)} кр${step}`;
+      case "bytes": return `проход не успевает за лимит объёма: ${formatBytes(run.usedBytes)} из ${formatBytes(run.maxBytes)}${step}`;
+      default: return `проход упирается в лимит задачи: вызовы ${run.usedCalls} из ${run.maxCalls} · ${fmtCredits(run.usedCredits)} из ${fmtCredits(run.maxCredits)} кр · ${formatBytes(run.usedBytes)} из ${formatBytes(run.maxBytes)}${step}`;
+    }
   }
   if (limit === "daily_limit") return "проход упирается в дневной лимит кредитов";
   if (limit === "interval_limit") return "проход упирается в лимит интервала";
@@ -608,8 +624,11 @@ export interface StaleEntry {
   category: OfapiCollectionCategory;
   policy: OfapiCollectionPolicy;
   cause: string;
-  /** The run hit its calls-per-run cap: raising «вызовов за запуск» is the owner's lever. */
-  callCap: boolean;
+  /** The run spent one ceiling of its own every pass. */
+  outgrowsRun: boolean;
+  /** The policy field that raises that ceiling; null when the ceiling is not
+   *  named (counters ambiguous) or not the owner's (bytes). */
+  lever: CapLever | null;
 }
 
 /** Every stale (page, category) of the snapshot, by page then registry order. */
@@ -617,14 +636,19 @@ export function staleEntries(snapshot: OfapiCollectionSnapshot): StaleEntry[] {
   const order = new Map(snapshot.catalog.map((entry, index) => [entry.id, index]));
   return snapshot.policies
     .filter((policy) => policy.pageId !== null && policy.scheduleHealth.stale)
-    .map((policy) => ({
-      pageId: policy.pageId!,
-      pageLabel: scopeLabel(policy.pageId, snapshot.pages),
-      category: policy.category,
-      policy,
-      cause: staleCauseText(policy.scheduleHealth.lastRun),
-      callCap: policy.scheduleHealth.lastRun?.exhaustedLimit === "job_limit",
-    }))
+    .map((policy) => {
+      const run = policy.scheduleHealth.lastRun;
+      const cap = run?.exhaustedLimit === "job_limit" ? run.exhaustedCap : null;
+      return {
+        pageId: policy.pageId!,
+        pageLabel: scopeLabel(policy.pageId, snapshot.pages),
+        category: policy.category,
+        policy,
+        cause: staleCauseText(run),
+        outgrowsRun: run?.exhaustedLimit === "job_limit",
+        lever: cap === "calls" || cap === "credits" ? cap : null,
+      };
+    })
     .sort((a, b) => a.pageLabel.localeCompare(b.pageLabel) || (order.get(a.category) ?? 0) - (order.get(b.category) ?? 0));
 }
 
