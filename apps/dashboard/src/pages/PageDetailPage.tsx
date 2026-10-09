@@ -15,6 +15,7 @@ import { ReadSection } from "./daily/ReadSection.js";
 import { QueryNotice } from "@/components/shared/QueryNotice";
 import { Badge } from "@/components/shared/Badge";
 import { DeltaIndicator } from "@/components/shared/DeltaIndicator";
+import { FanNotVisibleMark } from "@/components/shared/FanNotVisibleMark";
 import { FilterButtons } from "@/components/shared/FilterButtons";
 import { Pagination } from "@/components/shared/Pagination";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
@@ -736,9 +737,12 @@ export function PageSpendersSection({
                   {spendersOffset + index + 1}
                 </td>
                 <td className="px-4 py-3">
-                  <button type="button" onClick={(event) => { event.stopPropagation(); onOpenFanProfile(item.fan.platformUserId, fanLabel.label); }} className="text-left text-[15px] font-semibold text-text-primary hover:text-accent">
-                    {fanLabel.label}
-                  </button>
+                  <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+                    <button type="button" onClick={(event) => { event.stopPropagation(); onOpenFanProfile(item.fan.platformUserId, fanLabel.label); }} className="text-left text-[15px] font-semibold text-text-primary hover:text-accent">
+                      {fanLabel.label}
+                    </button>
+                    <FanNotVisibleMark missAt={item.accountLookupMissAt} />
+                  </div>
                   {fanLabel.secondaryPlatformHandle && (
                     <div className="text-xs text-text-muted">@{fanLabel.secondaryPlatformHandle}</div>
                   )}

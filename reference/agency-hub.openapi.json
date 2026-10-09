@@ -145180,6 +145180,16 @@
                                 "type": "null"
                               }
                             ]
+                          },
+                          "accountLookupMissAt": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [
@@ -168867,6 +168877,16 @@
                               "cooling",
                               "inactive",
                               "needs_reactivation"
+                            ]
+                          },
+                          "accountLookupMissAt": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
                             ]
                           }
                         },

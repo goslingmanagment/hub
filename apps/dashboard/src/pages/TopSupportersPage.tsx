@@ -29,6 +29,7 @@ import { ModalShell } from "@/components/shared/ModalShell";
 import { ChatPreviewPanel } from "@/components/shared/ChatPreviewPanel";
 import { TransactionsPreviewPanel } from "@/components/shared/TransactionsPreviewPanel";
 import { SpenderTrendPanel } from "@/components/shared/SpenderTrendPanel";
+import { FanNotVisibleMark } from "@/components/shared/FanNotVisibleMark";
 import type { SpenderBatchBody, SpenderListResponse } from "@agency_hub_core/contracts";
 
 const LIMIT = 50;
@@ -749,6 +750,7 @@ export function TopSupportersPage() {
                         {fanLabel.label}
                       </Link>
                       {whaleBadge(lifetimeNet)}
+                      <FanNotVisibleMark missAt={item.accountLookupMissAt} className="ml-1.5" />
                       {fanLabel.secondaryPlatformHandle && (
                         <span className="ml-2 text-xs text-text-muted">@{fanLabel.secondaryPlatformHandle}</span>
                       )}

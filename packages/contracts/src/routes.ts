@@ -1246,6 +1246,15 @@ const spenderLastTransactionSchema = z.object({
   occurredAt: isoTimestamp,
 }).nullable();
 
+// The page's own "can't see this fan" mark: when the latest Fansly account
+// answer through THIS page — an account lookup or the DM partner probe — did
+// not return the fan (page_fans.account_probe_resolved = false), the time of
+// that answer. The fan probably blocked the page or deleted the account; other
+// pages keep their own answer, so the fan shows normally there. Null when the
+// latest answer returned the fan, the page never asked, or the list spans more
+// than one page. Optional: a server before it omits the key.
+const accountLookupMissAtSchema = isoTimestamp.nullable().optional();
+
 const spenderListItemSchema = z.object({
   fan: spenderFanSchema,
   metrics: spenderMetricsSchema,
@@ -1254,6 +1263,7 @@ const spenderListItemSchema = z.object({
   conversation: spenderConversationSchema,
   lastTransaction: spenderLastTransactionSchema,
   retentionStatus: spenderRetentionStatusEnum.exclude(["all"]),
+  accountLookupMissAt: accountLookupMissAtSchema,
 });
 
 export const spenderListResponseSchema = z.object({
@@ -1297,6 +1307,7 @@ const pageSpenderAutoListFanSchema = z.object({
   lifetimeGrossAmountMills: mills,
   lifetimeCreatorNetAmountMills: mills,
   lastTransactionAt: isoTimestamp.nullable(),
+  accountLookupMissAt: accountLookupMissAtSchema,
 });
 
 export const pageSpenderAutoListDetailResponseSchema = z.object({
