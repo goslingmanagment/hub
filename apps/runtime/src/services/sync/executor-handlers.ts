@@ -386,6 +386,7 @@ export async function executeFanIdentitiesChunk(
       budget: input.budget,
       telemetry: input.telemetry,
       requestSeq: input.streamState.leasedSeq ?? input.streamState.requestSeq,
+      syncRunId: input.syncRunId,
     });
     return {
       satisfied: ofapiResult.satisfied,
