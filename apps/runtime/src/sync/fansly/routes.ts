@@ -70,6 +70,24 @@ export const FANSLY_ROUTE_FAMILIES = {
     "earnings.monthly_accounts",
     "earnings.stats_window",
     "earnings.monthly",
+    "earnings.transactions_account",
+  ],
+  /** The statistics pages of 2026-10 (`/account/stats/*`). Whether Fansly
+   *  counts them together is unmeasured, so they share one budget until a
+   *  measurement says otherwise. */
+  creator_stats: [
+    "stats.summary",
+    "stats.series",
+    "stats.media_top",
+    "stats.media",
+    "stats.media_benchmarks",
+    "stats.media_shown",
+    "stats.geo",
+    "stats.active_hours",
+    "stats.tags",
+    "stats.posts",
+    "stats.fans_top",
+    "stats.fan",
   ],
 } as const satisfies Record<string, readonly FanslyRoute[]>;
 
@@ -104,6 +122,10 @@ export const ROUTE_BUDGETS: Readonly<Partial<Record<FanslyRoute, RouteBudget>>> 
 export const FAMILY_BUDGETS: Readonly<Record<FanslyRouteFamily, RouteBudget>> = {
   messaging: { ceilingPerMin: 15, currentPerMin: 15 },
   earnings: { ceilingPerMin: 17, currentPerMin: 17 },
+  // Starts where the media statistics started (5/min under a 12 ceiling): no
+  // quota of these routes is measured, and the capture of 2026-10-08 shows
+  // only that the web app's own bursts pass.
+  creator_stats: { ceilingPerMin: 12, currentPerMin: 5 },
 };
 
 /**

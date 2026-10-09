@@ -1108,4 +1108,23 @@ describe("probe.manual", () => {
     expect(await countRows(testDb.pool, "select count(*)::int as n from sync_work where page_id = any($1::int[])", [[off.pageId, left.pageId]]))
       .toBe(0);
   });
+
+  it("reads a route of the 2026-10 statistics pages and journals it under its own kind; a reversed window is refused up front", async (context) => {
+    if (!testDb) return context.skip();
+    const { pageId, label } = await seedPage("live");
+    const registry = await quietRegistry(pageId);
+    const afterMs = Date.UTC(2026, 8, 9);
+    const beforeMs = Date.UTC(2026, 9, 8);
+    await expect(requestSyncProbe(db(), registry, {
+      pageLabel: label, operation: "stats.summary", params: { afterMs: beforeMs, beforeMs: afterMs }, requestedBy: "test",
+    })).rejects.toBeInstanceOf(SyncOwnerLeverError);
+    await requestSyncProbe(db(), registry, { pageLabel: label, operation: "stats.summary", params: { afterMs, beforeMs }, requestedBy: "test" });
+    const { hits } = await drive(pageId, registry, () => okResponse({ afterBucket: afterMs, beforeBucket: beforeMs, views: [] }),
+      async () => (await workRow(pageId, "probe.manual"))?.state === "done");
+    expect(hits).toEqual(["stats.summary"]);
+    const journal = await observations(pageId);
+    expect(journal.map((row) => [row.kind, row.producer])).toEqual([["creator_stats_summary", "fansly-sync:probe.manual"]]);
+    expect((await workRow(pageId, "probe.manual"))!.result)
+      .toMatchObject({ operation: "stats.summary", kind: "creator_stats_summary", observationId: journal[0]!.id });
+  });
 });

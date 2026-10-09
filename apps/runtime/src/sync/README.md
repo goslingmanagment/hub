@@ -970,10 +970,13 @@ the pause S every route of a page has a strict budget of its own (owner decision
 - **Routes** (`fansly/routes.ts`): one canonical route per GET endpoint — every wire spec (the socket's Upgrade
   `ws.upgrade` and the media CDN `cdn.media` included) under its wire id, plus the endpoints only the legacy engine
   reads. Parameters never make another route. `FANSLY_LEGACY_OPERATION_ROUTES` maps every
-  `fansly_send_log.operation` onto them (pinned complete by `tests/sync-route-policy.test.ts`).
+  `fansly_send_log.operation` onto them (pinned complete by `tests/sync-route-policy.test.ts`). A route no
+  legacy sender ever read has `legacyOperation: null`: the statistics pages of 2026-10 (`stats.*` and
+  `earnings.transactions_account`, `reference/fansly-creator-stats`), which only the owner's probe sends so far.
 - **Budgets**: `ceiling` (the code maximum) and `current` (what every page runs at) per route — 15/min by
   default, the list 12, the media statistics 5 under a 12 ceiling — and per family on top: messaging (the list, a
-  group's detail, `/message`) 15/min, earnings (`/account/wallets/earnings/*`) 17/min. `current` moves only by a
+  group's detail, `/message`) 15/min, earnings (`/account/wallets/earnings/*`) 17/min, the 2026-10 statistics
+  (`/account/stats/*`) 5/min under a 12 ceiling until their quota is measured. `current` moves only by a
   calibration PR, +1/min a step, on evidence. `ROUTE_POLICY_HASH` names the table.
 - **Strict admission** (`engine/route-policy.ts`): a route (and its family) admits its next send no sooner than one
   interval of its effective rate after its previous ACTUAL send — no burst, an idle hour earns nothing. The admission

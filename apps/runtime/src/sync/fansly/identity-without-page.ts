@@ -98,6 +98,7 @@ export async function checkFanslyIdentityWithoutPage(
       throw new Error("The Fansly candidate egress has no proxy dispatcher; nothing is sent");
     }
     const spec = fanslyWireSpec("account.me");
+    if (spec.legacyOperation === null) throw new Error("account.me is journaled under its legacy operation");
     const request = buildFanslyWireRequest(spec.id, {}, {
       baseUrl: app.config.fanslyBaseUrl,
       session: input.session,

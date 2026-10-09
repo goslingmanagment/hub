@@ -109,6 +109,22 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
   { kind: "broadcast_scheduled", source: "pull", writer: "sync/fansly/resources/stats.ts" },
   { kind: "polls", source: "pull", writer: "sync/fansly/resources/stats.ts" },
   { kind: "recapstats", source: "pull", writer: "sync/fansly/resources/stats.ts" },
+  // ── the statistics pages of 2026-10 (reference/fansly-creator-stats) ───────
+  // Written only by the owner's probe (`sync probe`): no resource collects
+  // these routes yet. Raw-only below until a family claims them.
+  { kind: "creator_stats_summary", source: "pull", writer: "sync/fansly/resources/probe.ts (wire spec stats.summary)" },
+  { kind: "creator_stats_series", source: "pull", writer: "sync/fansly/resources/probe.ts (wire spec stats.series)" },
+  { kind: "creator_stats_media_top", source: "pull", writer: "sync/fansly/resources/probe.ts (wire spec stats.media_top)" },
+  { kind: "creator_stats_media", source: "pull", writer: "sync/fansly/resources/probe.ts (wire spec stats.media)" },
+  { kind: "creator_stats_media_benchmarks", source: "pull", writer: "sync/fansly/resources/probe.ts (wire spec stats.media_benchmarks)" },
+  { kind: "creator_stats_media_shown", source: "pull", writer: "sync/fansly/resources/probe.ts (wire spec stats.media_shown)" },
+  { kind: "creator_stats_geo", source: "pull", writer: "sync/fansly/resources/probe.ts (wire spec stats.geo)" },
+  { kind: "creator_stats_active_hours", source: "pull", writer: "sync/fansly/resources/probe.ts (wire spec stats.active_hours)" },
+  { kind: "creator_stats_tags", source: "pull", writer: "sync/fansly/resources/probe.ts (wire spec stats.tags)" },
+  { kind: "creator_stats_posts", source: "pull", writer: "sync/fansly/resources/probe.ts (wire spec stats.posts)" },
+  { kind: "creator_stats_fans_top", source: "pull", writer: "sync/fansly/resources/probe.ts (wire spec stats.fans_top)" },
+  { kind: "creator_stats_fan", source: "pull", writer: "sync/fansly/resources/probe.ts (wire spec stats.fan)" },
+  { kind: "fan_earnings_transactions", source: "pull", writer: "sync/fansly/resources/probe.ts (wire spec earnings.transactions_account)" },
   // ── WP-F2: the `notifications` lane (sync/fansly/resources/notifications.ts) ──
   // ONE kind for the whole lane: the head poll, the deep backfill and the
   // type-filter probe all journal the same envelope shape, and the request
@@ -468,6 +484,19 @@ export interface RawOnlyObservationKind {
 }
 
 export const RAW_ONLY_OBSERVATION_KINDS: readonly RawOnlyObservationKind[] = [
+  { kind: "creator_stats_summary", justification: "A route of the 2026-10 statistics pages, journaled by the owner's probe only. No resource collects it and no family parses it yet; the body is kept verbatim for the family that will (reference/fansly-creator-stats)." },
+  { kind: "creator_stats_series", justification: "A route of the 2026-10 statistics pages, journaled by the owner's probe only. No resource collects it and no family parses it yet; the body is kept verbatim for the family that will (reference/fansly-creator-stats)." },
+  { kind: "creator_stats_media_top", justification: "A route of the 2026-10 statistics pages, journaled by the owner's probe only. No resource collects it and no family parses it yet; the body is kept verbatim for the family that will (reference/fansly-creator-stats)." },
+  { kind: "creator_stats_media", justification: "A route of the 2026-10 statistics pages, journaled by the owner's probe only. No resource collects it and no family parses it yet; the body is kept verbatim for the family that will (reference/fansly-creator-stats)." },
+  { kind: "creator_stats_media_benchmarks", justification: "A route of the 2026-10 statistics pages, journaled by the owner's probe only. No resource collects it and no family parses it yet; the body is kept verbatim for the family that will (reference/fansly-creator-stats)." },
+  { kind: "creator_stats_media_shown", justification: "A route of the 2026-10 statistics pages, journaled by the owner's probe only. No resource collects it and no family parses it yet; the body is kept verbatim for the family that will (reference/fansly-creator-stats)." },
+  { kind: "creator_stats_geo", justification: "A route of the 2026-10 statistics pages, journaled by the owner's probe only. No resource collects it and no family parses it yet; the body is kept verbatim for the family that will (reference/fansly-creator-stats)." },
+  { kind: "creator_stats_active_hours", justification: "A route of the 2026-10 statistics pages, journaled by the owner's probe only. No resource collects it and no family parses it yet; the body is kept verbatim for the family that will (reference/fansly-creator-stats)." },
+  { kind: "creator_stats_tags", justification: "A route of the 2026-10 statistics pages, journaled by the owner's probe only. No resource collects it and no family parses it yet; the body is kept verbatim for the family that will (reference/fansly-creator-stats)." },
+  { kind: "creator_stats_posts", justification: "A route of the 2026-10 statistics pages, journaled by the owner's probe only. No resource collects it and no family parses it yet; the body is kept verbatim for the family that will (reference/fansly-creator-stats)." },
+  { kind: "creator_stats_fans_top", justification: "A route of the 2026-10 statistics pages, journaled by the owner's probe only. No resource collects it and no family parses it yet; the body is kept verbatim for the family that will (reference/fansly-creator-stats)." },
+  { kind: "creator_stats_fan", justification: "A route of the 2026-10 statistics pages, journaled by the owner's probe only. No resource collects it and no family parses it yet; the body is kept verbatim for the family that will (reference/fansly-creator-stats)." },
+  { kind: "fan_earnings_transactions", justification: "A route of the 2026-10 statistics pages, journaled by the owner's probe only. No resource collects it and no family parses it yet; the body is kept verbatim for the family that will (reference/fansly-creator-stats)." },
   { kind: "purchase_history_contract_storm", justification: "Decision 358: the purchase-history lane's own verdict that a rejection storm was raised, journaled before the stream is blocked so the next run can tell an owner unblock from an executor retry. A lane fact, not a provider fact; nothing to canonicalize." },
   { kind: "ofapi.collection_read_materialized.v1", justification:"Completion evidence for one bounded GET capture step. Its normalized facts are independently replayed from the retained response and projection-only snapshot event." },
   { kind: "ofapi_gateway_chat_search", justification: "A query-scoped list of message IDs; retained as read evidence, never a message body or full-history coverage assertion." },
