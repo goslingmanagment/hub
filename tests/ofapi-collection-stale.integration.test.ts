@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyOfapiCollectionPolicy,
+  assertOfapiCollectionAllowed,
   createModel,
   createOnlyFansPage,
   enqueueDueOfapiCollectionSchedules,
@@ -234,5 +235,49 @@ describe("collection job list", () => {
     expect(filtered.json().jobsTotal).toBe(1);
     expect(filtered.json().policies[0].scheduleHealth).toMatchObject({ expected: expect.any(Boolean), stale: expect.any(Boolean) });
     expect((await server.inject({ method: "GET", url: "/api/v1/admin/ofapi/collection?jobState=blocked", headers: { cookie } })).statusCode).toBe(400);
+  });
+});
+
+// Traffic plan §2.9 (PR 18): Smart Links and the stored link lists are no
+// longer scheduled. A category whose schedule has nothing to read gets no run
+// whatever its policy says, the owner's policy stays as stored, and the
+// tracking-links policy keeps admitting the paid fan sweep (amendment П9.4).
+describe("categories without scheduled reads", () => {
+  it("get no scheduled run, keep the owner's policy, are flagged and never expected, and tracking links still admit the fan sweep", async () => {
+    for (const category of ["smart_links", "tracking_links", "profile_notifications"] as const)
+      await apply([scheduled(pageId, { category, intervalMinutes: 720, maxCallsPerRun: 10, dailyCreditLimit: 200 })]);
+    const created = await enqueueDueOfapiCollectionSchedules(app.db, ["smart_links", "tracking_links", "profile_notifications"]);
+    expect(created).toHaveLength(1);
+    expect((await testDb.pool.query("select category from ofapi_collection_jobs")).rows).toEqual([{ category: "profile_notifications" }]);
+    expect((await testDb.pool.query("select category from ofapi_collection_schedules")).rows).toEqual([{ category: "profile_notifications" }]);
+
+    const snapshot = await getOfapiCollectionSnapshot(app.db, null, pageId);
+    expect(snapshot.catalog.filter(entry => entry.noScheduledReads).map(entry => entry.id)).toEqual(["tracking_links", "smart_links"]);
+    for (const category of ["smart_links", "tracking_links"] as const)
+      expect(snapshot.policies.find(row => row.category === category)).toMatchObject({ mode: "scheduled", source: "page", scheduleHealth: { expected: false, stale: false } });
+    expect((await listOfapiCollectionScheduleHealth(app.db)).map(row => row.category)).toEqual(["profile_notifications"]);
+
+    // The fan sweep's background reads are admitted only while the policy is scheduled.
+    const sweep = { pageId, operation: "ofapi_trial_link_subscribers", purpose: "background" as const };
+    await expect(assertOfapiCollectionAllowed(app.db, sweep)).resolves.toBeUndefined();
+    await apply([scheduled(pageId, { category: "tracking_links", mode: "on_demand" })]);
+    await expect(assertOfapiCollectionAllowed(app.db, sweep)).rejects.toMatchObject({ reason: "on_demand_only" });
+  });
+
+  it("a one-off job of such a category names its reads; with a selection it is queued", async () => {
+    server = await buildApiServer(app);
+    const login = await server.inject({ method: "POST", url: "/api/v1/auth/login", payload: { username: "owner", password: "synthetic-password" } });
+    const cookie = String(([] as string[]).concat(login.headers["set-cookie"] ?? [])[0]).split(";")[0]!;
+    const job = (category: string, selection: string[], expectedRevision: number) => server!.inject({ method: "POST", url: "/api/v1/admin/ofapi/collection/jobs", headers: { cookie },
+      payload: { pageId, category, expectedRevision, maxCalls: 1, maxCredits: 1, maxBytes: 1024, from: null, to: null, selection } });
+    for (const category of ["smart_links", "tracking_links"]) {
+      const refused = await job(category, [], 0);
+      expect(refused.statusCode).toBe(400);
+      expect(refused.json().message ?? refused.body).toContain("no scheduled reads");
+    }
+    expect((await job("tracking_links", ["stored_trial_links"], 0)).statusCode).toBe(200);
+    expect((await job("smart_links", ["smart_links"], 0)).statusCode).toBe(200);
+    // A category with scheduled reads still plans them from an empty selection.
+    expect((await job("profile_notifications", [], 0)).statusCode).toBe(200);
   });
 });

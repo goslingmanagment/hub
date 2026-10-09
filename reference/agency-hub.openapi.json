@@ -37277,6 +37277,9 @@
                             "items": {
                               "type": "string"
                             }
+                          },
+                          "noScheduledReads": {
+                            "type": "boolean"
                           }
                         },
                         "required": [
@@ -37289,7 +37292,8 @@
                           "priceUnit",
                           "prerequisites",
                           "scope",
-                          "legacyOperations"
+                          "legacyOperations",
+                          "noScheduledReads"
                         ],
                         "additionalProperties": false
                       }

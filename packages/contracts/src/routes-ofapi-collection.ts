@@ -58,7 +58,9 @@ const policySchema = ofapiCollectionSettingsSchema.extend({
 export const ofapiCollectionJobStateFilterSchema = z.enum(OFAPI_COLLECTION_JOB_STATE_FILTERS);
 export const ofapiCollectionSnapshotSchema = z.object({
   revision: z.number().int(), backgroundPaused: z.boolean(),
-  catalog: z.array(z.object({ id: ofapiCollectionCategorySchema, label: z.string(), modes: z.array(z.enum(["off", "on_demand", "scheduled"])), baseline: z.boolean(), consumers: z.array(z.string()), supportsOneOff: z.boolean(), priceUnit: z.enum(["calls_and_bytes", "physical_calls"]), prerequisites: z.array(z.string()), scope: z.literal("page"), legacyOperations: z.array(z.string()) })),
+  catalog: z.array(z.object({ id: ofapiCollectionCategorySchema, label: z.string(), modes: z.array(z.enum(["off", "on_demand", "scheduled"])), baseline: z.boolean(), consumers: z.array(z.string()), supportsOneOff: z.boolean(), priceUnit: z.enum(["calls_and_bytes", "physical_calls"]), prerequisites: z.array(z.string()), scope: z.literal("page"), legacyOperations: z.array(z.string()),
+    /** A periodic read category whose schedule has nothing to read (Smart Links and the stored link lists since their freeze, traffic plan §2.9): no scheduled run is created and it is never stale; reads are explicit one-off jobs with a selection. Its policy may still admit another background lane — the paid fan sweep runs under `tracking_links`. */
+    noScheduledReads: z.boolean() })),
   pages: z.array(z.object({ id: z.number(), label: z.string(), accountId: z.string().nullable() })),
   policies: z.array(policySchema),
   jobs: z.array(z.object({ id: z.string(), pageId: z.number(), category: ofapiCollectionCategorySchema, state: z.string(), maxCredits: z.number(), maxCalls: z.number(), maxBytes: z.number(), usedCredits: z.number(), usedCalls: z.number(), usedBytes: z.number(), createdAt: z.string(), reason: z.string().nullable(), canFinishIncomplete: z.boolean(), exhaustedCap: ofapiCollectionExhaustedCapSchema.nullable(), stepsDone: z.number().nullable(), stepsTotal: z.number().nullable() })),

@@ -423,21 +423,32 @@ export interface OfapiCollectionScheduleHealth {
 }
 
 /**
- * A category is expected to complete on schedule only where the read scheduler
- * creates its runs: a non-baseline scheduled read category whose run has
- * something to read. Visitors plan their own daily window; every other read
- * category plans the catalog reads marked for scheduled collection, so a
- * category whose catalog has none (Smart Links after their freeze, §2.9) is
- * never called stale.
+ * A scheduled run of the category has something to read. Visitors plan their
+ * own daily window; every other read category plans the catalog reads marked
+ * for scheduled collection (`defaultCollect`), so a category whose catalog has
+ * none — Smart Links and the stored link lists since their freeze (traffic
+ * plan §2.9) — gets no scheduled run and is never called stale.
  */
-function hasScheduledReads(category: OfapiCollectionCategory) {
+export function ofapiCollectionHasScheduledReads(category: OfapiCollectionCategory) {
   return category === "visitors" || OFAPI_READ_CATALOG.some(row => row.category === category && row.defaultCollect);
 }
+/** A periodic read category whose schedule has nothing to read: its policy
+ * creates no run, though it may still admit another background lane (the paid
+ * fan sweep runs under `tracking_links`). A read job of it without a selection
+ * would read nothing. */
+export function isOfapiCollectionScheduleWithoutReads(category: OfapiCollectionCategory) {
+  return OFAPI_SCHEDULED_READ_COLLECTION_CATEGORIES.includes(category)
+    && !OFAPI_COLLECTION_REGISTRY.find(row => row.id === category)?.baseline
+    && !ofapiCollectionHasScheduledReads(category);
+}
+/** A category is expected to complete on schedule only where the read
+ * scheduler creates its runs: a non-baseline scheduled read category whose run
+ * has something to read. */
 export function isOfapiCollectionScheduleExpected(input: { category: OfapiCollectionCategory; mode: OfapiCollectionMode; backgroundPaused: boolean }) {
   return input.mode === "scheduled" && !input.backgroundPaused
     && OFAPI_SCHEDULED_READ_COLLECTION_CATEGORIES.includes(input.category)
     && !OFAPI_COLLECTION_REGISTRY.find(row => row.id === input.category)?.baseline
-    && hasScheduledReads(input.category);
+    && ofapiCollectionHasScheduledReads(input.category);
 }
 /**
  * Stale: no scheduled run of the page and category completed for more than two
@@ -571,7 +582,7 @@ export async function getOfapiCollectionSnapshot(db: Database, allowedPageIds: n
     order by (job.state='paused') desc,job.created_at desc,job.id ${jobLimit}`);
   // Global mutation history reveals page names/IDs; only the owner sees it.
   const audit = allowedPageIds === null ? await db.execute<{ revision: number; actor_user_id: string; changes: unknown; created_at: Date }>(sql`select * from ofapi_collection_audit order by revision desc limit 50`) : { rows: [] };
-  return { revision: current.revision, backgroundPaused: current.background_paused, catalog: OFAPI_COLLECTION_REGISTRY.map(row => ({ ...row, modes: [...row.modes] })), pages, policies,
+  return { revision: current.revision, backgroundPaused: current.background_paused, catalog: OFAPI_COLLECTION_REGISTRY.map(row => ({ ...row, modes: [...row.modes], noScheduledReads: isOfapiCollectionScheduleWithoutReads(row.id) })), pages, policies,
     jobs: jobs.rows.map(row => ({ id: row.id, pageId: Number(row.page_id), category: row.category, state: row.state, maxCredits: Number(row.max_credits), maxCalls: row.max_calls, maxBytes: Number(row.max_bytes), usedCredits: Number(row.used_credits), usedCalls: row.used_calls, usedBytes: Number(row.used_bytes), createdAt: new Date(row.created_at).toISOString(), reason: row.reason, canFinishIncomplete: row.can_finish_incomplete,
       exhaustedCap: ofapiCollectionExhaustedCap({ reason: row.reason, usedCalls: row.used_calls, maxCalls: row.max_calls, usedCredits: Number(row.used_credits), maxCredits: Number(row.max_credits), usedBytes: Number(row.used_bytes), maxBytes: Number(row.max_bytes) }),
       stepsDone: row.steps_done === null ? null : Number(row.steps_done), stepsTotal: row.steps_total === null ? null : Number(row.steps_total) })),
