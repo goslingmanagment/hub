@@ -3146,17 +3146,29 @@ export async function getOfapiMoneyStreamStates(
 
 export type LinkStatKind = "tracking" | "trial";
 
+/** One row of page_link_stat_runs is one ATTEMPT to read a (page, kind) list.
+ * 'complete' = the list was read whole in one response with nothing dropped
+ * (the only absence-proving status); 'partial' = read whole, with a caveat in
+ * `reason`; 'truncated' = the walk was stopped; 'failed' = the request or the
+ * write failed; 'skipped' = no attempt was made. Only the first two carry
+ * snapshots. */
+export type LinkStatRunStatus = "complete" | "partial" | "truncated" | "failed" | "skipped";
+
 export interface InsertLinkStatRunInput {
   platformAccountId: number;
   linkKind: LinkStatKind;
-  // 'complete' = full walk, zero dropped items (the only absence-proving
-  // status); 'partial' = full walk with normalization drops; 'truncated' =
-  // walk did not finish.
-  status: "complete" | "partial" | "truncated";
+  status: LinkStatRunStatus;
   pulledAt: Date;
   apiPages: number;
   rawItems: number;
   writtenRows: number;
+  /** Why the row is not a clean 'complete' (caveats, block, error, skip). */
+  reason?: string | null;
+  /** The scheduled window the attempt belongs to. `attempt` is numbered
+   * within it; without a window the row is attempt 1. */
+  windowAt?: Date | null;
+  /** The OFAPI account the page was bound to when the attempt was made. */
+  ofapiAccountId?: string | null;
 }
 
 export interface InsertLinkStatSnapshotInput {
@@ -3179,10 +3191,22 @@ export interface InsertLinkStatSnapshotInput {
   revenueCalculatedAt: Date | null;
 }
 
-async function insertLinkStatRun(
+/** `reason` is operator-facing text and, on a failure, a vendor or driver
+ * error message: bound it so one pathological error cannot bloat the series. */
+const LINK_STAT_RUN_REASON_MAX_LENGTH = 500;
+
+/** Writes one attempt row. `attempt` is the row's ordinal within its
+ * (page, kind, window), taken from the rows already there — so a scheduled
+ * run, a retry, a post-rebind run and the monitor's `window_missed` row number
+ * themselves without telling each other. Two writers racing on one pair can
+ * tie; nothing keys on the number. Snapshot-carrying statuses go through
+ * insertLinkStatRunWithSnapshots. */
+export async function insertLinkStatRun(
   db: Database,
   input: InsertLinkStatRunInput,
-): Promise<{ id: number }> {
+): Promise<{ id: number; attempt: number }> {
+  const windowAt = input.windowAt ?? null;
+  const reason = input.reason ?? null;
   const [row] = await db
     .insert(pageLinkStatRuns)
     .values({
@@ -3193,8 +3217,20 @@ async function insertLinkStatRun(
       apiPages: input.apiPages,
       rawItems: input.rawItems,
       writtenRows: input.writtenRows,
+      reason: reason === null ? null : reason.slice(0, LINK_STAT_RUN_REASON_MAX_LENGTH),
+      windowAt,
+      attempt: windowAt === null
+        ? 1
+        : sql<number>`(
+            select least(coalesce(max(prior.attempt), 0) + 1, 32767)::smallint
+            from page_link_stat_runs prior
+            where prior.platform_account_id = ${input.platformAccountId}
+              and prior.link_kind = ${input.linkKind}
+              and prior.window_at = ${windowAt.toISOString()}::timestamptz
+          )`,
+      ofapiAccountId: input.ofapiAccountId ?? null,
     })
-    .returning({ id: pageLinkStatRuns.id });
+    .returning({ id: pageLinkStatRuns.id, attempt: pageLinkStatRuns.attempt });
   if (!row) {
     throw new Error("insertLinkStatRun returned no row");
   }
@@ -3251,6 +3287,9 @@ export async function insertLinkStatRunWithSnapshots(
   run: InsertLinkStatRunInput,
   rows: InsertLinkStatSnapshotInput[],
 ): Promise<{ runId: number; writtenRows: number }> {
+  if (rows.length > 0 && run.status !== "complete" && run.status !== "partial") {
+    throw new Error(`link-stat run status ${run.status} cannot carry snapshots`);
+  }
   return db.transaction(async (tx) => {
     const dbTx = tx as Database;
     const inserted = await insertLinkStatRun(dbTx, run);
@@ -3279,15 +3318,20 @@ export async function listLinkStatRuns(
     .orderBy(desc(pageLinkStatRuns.pulledAt), desc(pageLinkStatRuns.id));
 }
 
-/** Latest FINISHED walk (complete or partial, never truncated) for
- * (page, kind) — the baseline the inventory-vanished guard compares a new
- * empty walk against. Including partial runs makes the guard converge (the
- * second consecutive empty walk sees an empty baseline and proves absence)
- * and closes the reverse hole (a non-empty partial baseline still flags a
- * sudden wipe as suspicious). */
+/** Latest FINISHED walk (complete or partial, never truncated, failed or
+ * skipped) for (page, kind) — the baseline the inventory-vanished guard
+ * compares a new empty walk against. Including partial runs makes the guard
+ * converge (the second consecutive empty walk sees an empty baseline and
+ * proves absence) and closes the reverse hole (a non-empty partial baseline
+ * still flags a sudden wipe as suspicious).
+ *
+ * With `ofapiAccountId` the baseline is the latest finished walk made UNDER
+ * THAT ACCOUNT: the stored lists are the vendor's cache of one connection, so
+ * what another account showed says nothing about this one's emptiness. Rows
+ * whose account is unknown (null) never match an account. */
 export async function findLatestFinishedLinkStatRun(
   db: Database,
-  input: { platformAccountId: number; linkKind: LinkStatKind },
+  input: { platformAccountId: number; linkKind: LinkStatKind; ofapiAccountId?: string },
 ) {
   const [row] = await db
     .select()
@@ -3296,6 +3340,9 @@ export async function findLatestFinishedLinkStatRun(
       eq(pageLinkStatRuns.platformAccountId, input.platformAccountId),
       eq(pageLinkStatRuns.linkKind, input.linkKind),
       inArray(pageLinkStatRuns.status, ["complete", "partial"]),
+      ...(input.ofapiAccountId === undefined
+        ? []
+        : [eq(pageLinkStatRuns.ofapiAccountId, input.ofapiAccountId)]),
     ))
     .orderBy(desc(pageLinkStatRuns.pulledAt), desc(pageLinkStatRuns.id))
     .limit(1);
@@ -3305,10 +3352,11 @@ export async function findLatestFinishedLinkStatRun(
 /** Latest finished walk that actually SAW links (rawItems > 0). A page with
  * no such run has never demonstrated a non-empty inventory — an empty walk
  * there is unverifiable (cold vendor cache?) and must never mint an
- * absence-proving 'complete'. */
+ * absence-proving 'complete'. With `ofapiAccountId` the question is asked of
+ * that account alone (see findLatestFinishedLinkStatRun). */
 export async function findLatestNonEmptyFinishedLinkStatRun(
   db: Database,
-  input: { platformAccountId: number; linkKind: LinkStatKind },
+  input: { platformAccountId: number; linkKind: LinkStatKind; ofapiAccountId?: string },
 ) {
   const [row] = await db
     .select()
@@ -3318,10 +3366,145 @@ export async function findLatestNonEmptyFinishedLinkStatRun(
       eq(pageLinkStatRuns.linkKind, input.linkKind),
       inArray(pageLinkStatRuns.status, ["complete", "partial"]),
       gt(pageLinkStatRuns.rawItems, 0),
+      ...(input.ofapiAccountId === undefined
+        ? []
+        : [eq(pageLinkStatRuns.ofapiAccountId, input.ofapiAccountId)]),
     ))
     .orderBy(desc(pageLinkStatRuns.pulledAt), desc(pageLinkStatRuns.id))
     .limit(1);
   return row ?? null;
+}
+
+/** Has (page, kind) shown links under an account OTHER than this one — a
+ * finished non-empty walk whose account differs or is unknown? That is what
+ * makes the first non-empty walk under an account a binding change rather
+ * than a page's first inventory. */
+export async function hasNonEmptyLinkStatRunUnderAnotherAccount(
+  db: Database,
+  input: { platformAccountId: number; linkKind: LinkStatKind; ofapiAccountId: string },
+): Promise<boolean> {
+  const [row] = await db
+    .select({ id: pageLinkStatRuns.id })
+    .from(pageLinkStatRuns)
+    .where(and(
+      eq(pageLinkStatRuns.platformAccountId, input.platformAccountId),
+      eq(pageLinkStatRuns.linkKind, input.linkKind),
+      inArray(pageLinkStatRuns.status, ["complete", "partial"]),
+      gt(pageLinkStatRuns.rawItems, 0),
+      sql`${pageLinkStatRuns.ofapiAccountId} is distinct from ${input.ofapiAccountId}`,
+    ))
+    .limit(1);
+  return row !== undefined;
+}
+
+/**
+ * The ONE definition of a window's usable result for a (page, kind): the row
+ * gives the series a point a reader can use. `run` is the SQL alias of a
+ * page_link_stat_runs row.
+ *
+ *   - `complete` — a whole read. An empty one is the confirmed absence the
+ *     reconcile mints only after THE SAME OFAPI account showed links and then
+ *     read empty twice (the per-account guard): "every link was deleted" is a
+ *     point of the series, not a missing one. A cold cache can never get here
+ *     — under a new account its empty reads stay `partial`;
+ *   - `partial` that wrote snapshots;
+ *   - an empty `partial` on a pair that had NEVER shown a link, under any
+ *     OFAPI account (rows of unknown account included), before this row,
+ *     AND whose emptiness has lasted: an earlier empty read of the pair at
+ *     least 24 hours before this one. Such a pair stays `partial`
+ *     (empty_unverified) for good — lora-of's trial links, 154 runs on
+ *     production since 2026-07-22, none ever non-empty — and that is its
+ *     steady state, not a missing point that would retry every window and
+ *     page as stale forever. The first empty read of a pair, and every empty
+ *     read in the 24 hours after it, is not a result: a page connected for
+ *     the first time may well have links while the vendor's stored cache is
+ *     still cold, and "0 links" must not pass for a reading until the
+ *     emptiness has persisted. Until then the pair is retried and ages
+ *     toward series_stale like any pair without a result.
+ *
+ * Everything else is an attempt without a result: `failed`, `skipped`,
+ * `truncated`, a `partial` that wrote nothing (every item dropped), and an
+ * empty `partial` on a pair that has had links under some account — a cold
+ * cache after a rebind (`empty_unverified` under the new account), an
+ * inventory that vanished and is not confirmed yet (`inventory_vanished`).
+ * The presence of such a row neither cancels a retry of its window nor
+ * advances the freshness of the series.
+ */
+/** How long a never-linked pair must keep reading empty before its empty
+ * reads count as results (linkStatRunUsableResultSql). */
+export const LINK_STAT_EMPTY_PERSISTENCE_HOURS = 24;
+
+export function linkStatRunUsableResultSql(run: SQL): SQL {
+  return sql`(
+    ${run}.status = 'complete'
+    or (${run}.status = 'partial' and ${run}.written_rows > 0)
+    or (${run}.status = 'partial' and ${run}.raw_items = 0
+      and not exists (
+        select 1 from page_link_stat_runs seen
+        where seen.platform_account_id = ${run}.platform_account_id
+          and seen.link_kind = ${run}.link_kind
+          and seen.status in ('complete', 'partial')
+          and seen.raw_items > 0
+          and seen.id < ${run}.id
+      )
+      and exists (
+        select 1 from page_link_stat_runs earlier
+        where earlier.platform_account_id = ${run}.platform_account_id
+          and earlier.link_kind = ${run}.link_kind
+          and earlier.status in ('complete', 'partial')
+          and earlier.raw_items = 0
+          and earlier.id < ${run}.id
+          and earlier.pulled_at <= ${run}.pulled_at - interval '${sql.raw(String(LINK_STAT_EMPTY_PERSISTENCE_HOURS))} hours'
+      ))
+  )`;
+}
+
+export interface LinkStatWindowPairState {
+  platformAccountId: number;
+  linkKind: LinkStatKind;
+  /** Rows the pair has in the window, of any status. */
+  attempts: number;
+  /** At least one of them is a usable result (linkStatRunUsableResultSql). */
+  hasUsableResult: boolean;
+  lastStatus: LinkStatRunStatus;
+  lastReason: string | null;
+}
+
+/** What each (page, kind) has in one scheduled window. A pair with no row in
+ * the window is absent from the result: the caller holds the list of pairs it
+ * expects. */
+export async function listLinkStatWindowPairStates(
+  db: Database,
+  input: { windowAt: Date },
+): Promise<LinkStatWindowPairState[]> {
+  const run = sql.raw("r");
+  const result = await db.execute<{
+    platformAccountId: number | string;
+    linkKind: LinkStatKind;
+    attempts: number | string;
+    hasUsableResult: boolean;
+    lastStatus: LinkStatRunStatus;
+    lastReason: string | null;
+  }>(sql`
+    select r.platform_account_id as "platformAccountId",
+           r.link_kind as "linkKind",
+           count(*)::int as "attempts",
+           bool_or(${linkStatRunUsableResultSql(run)}) as "hasUsableResult",
+           (array_agg(r.status order by r.attempt desc, r.id desc))[1] as "lastStatus",
+           (array_agg(r.reason order by r.attempt desc, r.id desc))[1] as "lastReason"
+    from page_link_stat_runs r
+    where r.window_at = ${input.windowAt.toISOString()}::timestamptz
+    group by r.platform_account_id, r.link_kind
+    order by r.platform_account_id, r.link_kind
+  `);
+  return result.rows.map((row) => ({
+    platformAccountId: Number(row.platformAccountId),
+    linkKind: row.linkKind,
+    attempts: Number(row.attempts),
+    hasUsableResult: row.hasUsableResult === true,
+    lastStatus: row.lastStatus,
+    lastReason: row.lastReason,
+  }));
 }
 
 export async function listLinkStatSnapshots(db: Database, input: { runId: number }) {

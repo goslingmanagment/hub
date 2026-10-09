@@ -755,6 +755,20 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # the lift for nothing. So the previous image runs unchanged after a
   # rollback.
   "0254_retire_dm_unresolvable_exclusion.sql"
+  # Every attempt of the OnlyFans link series is a row (traffic sources plan
+  # 2026-10-08, PR 2): page_link_stat_runs gains four columns the previous
+  # image never names (reason, window_at, attempt smallint NOT NULL DEFAULT 1,
+  # ofapi_account_id), its status CHECK is swapped for one that also admits
+  # 'failed' and 'skipped', and ofapi_account_id is filled on existing rows
+  # from ofapi_account_bindings. The previous image inserts runs by column
+  # name with the three old statuses (attempt takes its default, the rest stay
+  # null) and reads runs only through status in ('complete', 'partial'), so it
+  # never meets a failed or skipped row; traffic-control's SQL selects the
+  # same two statuses and none of the new columns. Rows the previous image
+  # writes after a rollback have no window and no account: the new image
+  # treats an unknown account as "not this account" (no absence proof from
+  # it), which is the cautious reading.
+  "0255_page_link_stat_runs_attempts.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

@@ -1,21 +1,31 @@
 // OFAPI trial/tracking link statistics reconcile (2026-07-22 plan). Twice a
-// day, for every OFAPI-mapped OnlyFans page, walk the two link-list endpoints
-// and append run + per-link snapshot rows. Counters are cumulative vendor
-// values stored as observed; regressions are NOT clamped (chargebacks and
-// deletions legitimately lower them) — the reporting layer owns delta
-// semantics. List endpoints only: cost stays O(pages).
+// day, for every active OnlyFans page, walk the two link-list endpoints and
+// append run + per-link snapshot rows. Counters are cumulative vendor values
+// stored as observed; regressions are NOT clamped (chargebacks and deletions
+// legitimately lower them) — the reporting layer owns delta semantics. List
+// endpoints only: cost stays O(pages).
+//
+// Every attempt is a row (2026-10-08 plan, PR 2): a pass leaves exactly one
+// page_link_stat_runs row per (page, link kind) it was responsible for —
+// a finished walk, a truncated one, a `failed` request or write, or a
+// `skipped` page (no OFAPI mapping, dead session, mapping changed under the
+// pass, no client) — stamped with the scheduled window it belongs to and the
+// OFAPI account the page was bound to. A hole in the series is then a fact a
+// query reads, not something found by counting windows.
 
 import {
   findLatestFinishedLinkStatRun,
   findLatestNonEmptyFinishedLinkStatRun,
   findPageByLabel,
+  hasNonEmptyLinkStatRunUnderAnotherAccount,
+  insertLinkStatRun,
   insertLinkStatRunWithSnapshots,
-  listOfapiMappedPages,
+  listOfapiBindingPages,
   type Database,
   type InsertLinkStatSnapshotInput,
   type LinkStatKind,
 } from "@agency_hub_core/db";
-import { dollarsToMills } from "@agency_hub_core/shared";
+import { dollarsToMills, sanitizeError } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { asRecord, idToString } from "./ofapi-payloads.ts";
@@ -32,8 +42,11 @@ import {
   type SyncQueueLifecycleClient,
 } from "./sync-queue.ts";
 import { createOfapiRestGuard } from "./sync/ofapi-dm-sync.ts";
+import { OFAPI_LINK_STATS_CRON, ofapiLinkStatsWindowAt } from "./ofapi-link-stats-windows.ts";
 
 export const OFAPI_LINK_STATS_RECONCILE_QUEUE = "ofapi.link-stats.reconcile";
+
+const LINK_STAT_KINDS = ["tracking", "trial"] as const satisfies readonly LinkStatKind[];
 
 // A failed fleet pass is durable and operator-visible through the global
 // incident; retrying the pg-boss job would repeat every healthy page's walk.
@@ -188,6 +201,31 @@ export interface OfapiLinkStatsPageResult {
   kinds: OfapiLinkStatsKindResult[];
 }
 
+/** What one fleet pass stamps on every row it writes. */
+interface LinkStatsAttemptStamp {
+  /** When the pass read (or would have read) the vendor cache. */
+  pulledAt: Date;
+  /** The scheduled window the pass belongs to. */
+  windowAt: Date;
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** The error as a `failed` row keeps it. The series is read by people and by
+ * agents, so the text goes through the shared projection: secrets redacted,
+ * a driver error's SQL and bound values replaced by its type and code. */
+function failedAttemptReason(error: unknown): string {
+  return sanitizeError(error, {
+    maxChars: 500,
+    truncation: "ellipsis",
+    trim: true,
+    queryStyleMessage: ({ name, code }) => `database query failed (${code ?? name})`,
+    fallbackMessage: "unknown error",
+  }).message;
+}
+
 type LinkLister = (
   context: OfapiRequestContext,
   accountId: string,
@@ -202,8 +240,10 @@ async function reconcileKind(
     requestContext: OfapiRequestContext;
     pageId: number;
     ofapiAccountId: string;
-    pulledAt: Date;
+    stamp: LinkStatsAttemptStamp;
     guard: ReturnType<typeof createOfapiRestGuard>;
+    /** How far the walk got, for the `failed` row when it throws. */
+    progress: { apiPages: number; rawItems: number };
   },
 ): Promise<OfapiLinkStatsKindResult> {
   const normalized: InsertLinkStatSnapshotInput[] = [];
@@ -248,10 +288,12 @@ async function reconcileKind(
       payloadKind: "mapping_critical",
       // Stage 1 retention stand-down: captured facts are stamped far-future
       // (the cleanup job is a deliberate no-op) — never a real deletion date.
-      retainUntil: retentionDate(input.pulledAt),
+      retainUntil: retentionDate(input.stamp.pulledAt),
     }, { action: "journal link-stats page", platform: "onlyfans" });
     apiPages += 1;
     rawItems += page.items.length;
+    input.progress.apiPages = apiPages;
+    input.progress.rawItems = rawItems;
     for (const item of page.items) {
       const result = normalizeLinkItem(input.kind, input.pageId, item);
       if (result.status === "ok") {
@@ -291,47 +333,76 @@ async function reconcileKind(
   // empty page with hasNextPage=false, which is indistinguishable from a
   // genuinely emptied inventory. Withhold the absence proof ('partial'); a
   // real wipe re-proves itself on the next run against the new baseline.
+  //
+  // Both questions are asked of THIS OFAPI ACCOUNT, not of the page: the
+  // stored lists are the vendor's cache of one connection, and a freshly
+  // connected account starts cold. Judged per page, the second empty read
+  // after an account change saw "an empty baseline" and minted 'complete' —
+  // to a reader, every link deleted.
   let inventoryVanished = false;
   let emptyUnverified = false;
-  if (walkComplete && rawItems === 0) {
-    // A page that has NEVER shown a non-empty inventory can never prove
-    // absence: an empty stored read there is indistinguishable from an
-    // unpopulated vendor cache (Computed endpoint) or a malformed-200
-    // normalized to []. Such pages stay 'partial' (empty_unverified) forever
-    // until a non-empty walk is ever observed — absence proofs are reserved
-    // for inventories we have actually seen.
-    const everNonEmpty = await findLatestNonEmptyFinishedLinkStatRun(input.db, {
+  let bindingChanged = false;
+  if (walkComplete) {
+    const seenUnderAccount = await findLatestNonEmptyFinishedLinkStatRun(input.db, {
       platformAccountId: input.pageId,
       linkKind: input.kind,
+      ofapiAccountId: input.ofapiAccountId,
     });
-    if (everNonEmpty === null) {
-      emptyUnverified = true;
-    } else {
-      const baseline = await findLatestFinishedLinkStatRun(input.db, {
+    if (rawItems === 0) {
+      // An account that has NEVER shown a non-empty inventory can never prove
+      // absence: an empty stored read there is indistinguishable from an
+      // unpopulated vendor cache (Computed endpoint) or a malformed-200
+      // normalized to []. Such walks stay 'partial' (empty_unverified) until
+      // a non-empty walk is observed under the account — absence proofs are
+      // reserved for inventories we have actually seen.
+      if (seenUnderAccount === null) {
+        emptyUnverified = true;
+      } else {
+        const baseline = await findLatestFinishedLinkStatRun(input.db, {
+          platformAccountId: input.pageId,
+          linkKind: input.kind,
+          ofapiAccountId: input.ofapiAccountId,
+        });
+        // Baseline emptiness is judged by rawItems (what the vendor SHOWED),
+        // not writtenRows: a mapping-collapse run (items seen, all dropped) is
+        // a NON-empty baseline — its links did not stop existing. Post-wipe
+        // convergence is two-step by documented design: the first empty walk
+        // is 'partial' (inventory_vanished), the second proves the emptiness.
+        inventoryVanished = baseline !== null && baseline.rawItems > 0;
+      }
+    } else if (seenUnderAccount === null) {
+      // The first non-empty walk under this account. If the pair showed links
+      // under another account before, the page was rebound: the new cache may
+      // be only partly warm, so the walk is not an absence proof, and a reader
+      // comparing it with the previous point must know the account changed
+      // (the vendor recalculates revenue after a reconnection). A page's very
+      // first inventory is not a binding change.
+      bindingChanged = await hasNonEmptyLinkStatRunUnderAnotherAccount(input.db, {
         platformAccountId: input.pageId,
         linkKind: input.kind,
+        ofapiAccountId: input.ofapiAccountId,
       });
-      // Baseline emptiness is judged by rawItems (what the vendor SHOWED),
-      // not writtenRows: a mapping-collapse run (items seen, all dropped) is
-      // a NON-empty baseline — its links did not stop existing. Post-wipe
-      // convergence is two-step by documented design: the first empty walk is
-      // 'partial' (inventory_vanished), the second proves the emptiness.
-      inventoryVanished = baseline !== null && baseline.rawItems > 0;
     }
   }
   // 'complete' (single atomic vendor read, zero drops) is the ONLY
-  // absence-proving status. Demotions to 'partial': (a) normalization drops —
-  // a skipped-yet-existing link must not read as deleted; (b) a MULTI-PAGE
-  // offset walk — the vendor list can shift between pages and silently omit
-  // a boundary item, so only a single-page walk is an atomic read (upgrade
-  // path: stable cursor or vendor-total verification); (c) the vanished-
-  // inventory guard above. A truncated walk records the attempt and writes NO
+  // absence-proving status. Demotions to 'partial', each named in `reason`:
+  // (a) normalization drops — a skipped-yet-existing link must not read as
+  // deleted; (b) a MULTI-PAGE offset walk — the vendor list can shift between
+  // pages and silently omit a boundary item, so only a single-page walk is an
+  // atomic read (upgrade path: stable cursor or vendor-total verification);
+  // (c) the empty-inventory guards above; (d) the first non-empty walk after
+  // a binding change. A truncated walk records the attempt and writes NO
   // snapshots. Run row + snapshots commit atomically — a 'complete' run
   // without its rows is a lie.
+  const caveats = [
+    bindingChanged ? "binding_changed" : null,
+    inventoryVanished ? "inventory_vanished" : null,
+    emptyUnverified ? "empty_unverified" : null,
+    skippedTotal > 0 ? (rows.length === 0 ? "all_items_skipped" : "items_skipped") : null,
+    apiPages > 1 ? "multi_page" : null,
+  ].filter((caveat): caveat is string => caveat !== null);
   const runStatus = walkComplete
-    ? (skippedTotal > 0 || apiPages > 1 || inventoryVanished || emptyUnverified
-      ? "partial" as const
-      : "complete" as const)
+    ? (caveats.length > 0 ? "partial" as const : "complete" as const)
     : "truncated" as const;
   const { writtenRows } = await insertLinkStatRunWithSnapshots(
     input.db,
@@ -339,10 +410,15 @@ async function reconcileKind(
       platformAccountId: input.pageId,
       linkKind: input.kind,
       status: runStatus,
-      pulledAt: input.pulledAt,
+      pulledAt: input.stamp.pulledAt,
       apiPages,
       rawItems,
       writtenRows: walkComplete ? rows.length : 0,
+      reason: walkComplete
+        ? (caveats.length > 0 ? caveats.join(",") : null)
+        : blockedReason ?? "walk_truncated",
+      windowAt: input.stamp.windowAt,
+      ofapiAccountId: input.ofapiAccountId,
     },
     walkComplete ? rows : [],
   );
@@ -356,7 +432,7 @@ async function reconcileKind(
     ? "truncated"
     : rawItems >= MAPPING_COLLAPSE_MIN_ITEMS && writtenRows === 0
       ? "failed"
-      : skippedTotal > 0 || inventoryVanished || emptyUnverified
+      : skippedTotal > 0 || inventoryVanished || emptyUnverified || bindingChanged
         ? "partial"
         : "written";
   return {
@@ -368,7 +444,9 @@ async function reconcileKind(
         ? "inventory_vanished"
         : emptyUnverified
           ? "empty_unverified"
-          : walkComplete ? null : blockedReason ?? "walk_truncated",
+          : bindingChanged
+            ? "binding_changed"
+            : walkComplete ? null : blockedReason ?? "walk_truncated",
     apiPages,
     rawItems,
     writtenRows,
@@ -376,44 +454,67 @@ async function reconcileKind(
   };
 }
 
+/** Records an attempt that ended without a walk row of its own — a request
+ * or write that threw. Never throws: the caller is already reporting the
+ * failure, and a series write that fails too (the database is the likeliest
+ * cause of both) must not replace the original error with its own. */
+async function recordFailedAttempt(
+  app: AppContext,
+  input: {
+    pageId: number;
+    kind: LinkStatKind;
+    ofapiAccountId: string | null;
+    stamp: LinkStatsAttemptStamp;
+    /** What was thrown; the row keeps its sanitized text. */
+    error: unknown;
+    progress?: { apiPages: number; rawItems: number };
+  },
+) {
+  const reason = failedAttemptReason(input.error);
+  try {
+    await insertLinkStatRun(app.db, {
+      platformAccountId: input.pageId,
+      linkKind: input.kind,
+      status: "failed",
+      pulledAt: input.stamp.pulledAt,
+      apiPages: input.progress?.apiPages ?? 0,
+      rawItems: input.progress?.rawItems ?? 0,
+      writtenRows: 0,
+      reason,
+      windowAt: input.stamp.windowAt,
+      ofapiAccountId: input.ofapiAccountId,
+    });
+  } catch (error) {
+    app.logger.error({
+      err: error,
+      pageId: input.pageId,
+      linkKind: input.kind,
+      reason,
+    }, "OFAPI link-stats failed attempt could not be recorded in the series");
+  }
+}
+
 async function reconcilePage(
   app: AppContext,
   input: {
     pageId: number;
     pageLabel: string;
-    ofapiAccountId: string;
-    pulledAt: Date;
+    /** The mapping the fleet snapshot saw; null = the page has none. */
+    ofapiAccountId: string | null;
+    stamp: LinkStatsAttemptStamp;
     guard: ReturnType<typeof createOfapiRestGuard>;
+    /** Kinds that already have their row of this pass; the caller writes a
+     * `failed` row for the rest when this function throws. */
+    recorded: Set<LinkStatKind>;
   },
 ): Promise<OfapiLinkStatsPageResult> {
-  // The STORED variants: identical item shape, `_credits.used: 0`, limit
-  // 1000, and the cache includes finished links the live list hides
-  // (live-verified 2026-07-22). The credit guard stays as a safety belt —
-  // reservations settle to the server-reported 0.
-  // Freshness contract: stored is the vendor's Computed cache — counters are
-  // as fresh as the vendor's own sync, revenue freshness is queryable per
-  // row via revenue_calculated_at, and pulled_at stamps OUR read, not the
-  // vendor's refresh. Two identical consecutive snapshots therefore mean
-  // "no vendor refresh in between", which daily-delta reports must treat as
-  // zero-change, not data loss. The cold-cache guard below keeps an
-  // unpopulated cache from minting a false absence proof.
-  const listTrackingLinks = app.ofapi?.listStoredTrackingLinks?.bind(app.ofapi);
-  const listTrialLinks = app.ofapi?.listStoredTrialLinks?.bind(app.ofapi);
-  if (!listTrackingLinks || !listTrialLinks) {
-    return {
-      pageLabel: input.pageLabel,
-      status: "skipped",
-      reason: "ofapi_client_not_configured",
-      kinds: [],
-    };
-  }
-
   // Tombstone re-check: the fleet list is snapshotted once at run start, but
   // an admin can soft-delete or remap a page while earlier pages walk.
-  // Re-verifying right before this page's walk narrows the race to one page;
+  // Re-verifying right before this page's turn narrows the race to one page;
   // rows written in the residual window are page-scoped facts that the
   // erasure hot targets purge (the tombstone->erasure path), so no fact
-  // outlives the contract.
+  // outlives the contract. A page that is no longer active has left the
+  // series' population: it gets no row at all, not even a `skipped` one.
   const stored = await findPageByLabel(app.db, input.pageLabel);
   if (!stored) {
     return {
@@ -423,21 +524,61 @@ async function reconcilePage(
       kinds: [],
     };
   }
+
+  // No attempt is made, and the series says so: one `skipped` row per kind
+  // with the reason. A failing write is NOT swallowed here — it escapes to
+  // the pass, which reports the page failed.
+  const skip = async (
+    reason: string,
+    ofapiAccountId: string | null,
+  ): Promise<OfapiLinkStatsPageResult> => {
+    for (const kind of LINK_STAT_KINDS) {
+      await insertLinkStatRun(app.db, {
+        platformAccountId: input.pageId,
+        linkKind: kind,
+        status: "skipped",
+        pulledAt: input.stamp.pulledAt,
+        apiPages: 0,
+        rawItems: 0,
+        writtenRows: 0,
+        reason,
+        windowAt: input.stamp.windowAt,
+        ofapiAccountId,
+      });
+      input.recorded.add(kind);
+    }
+    return { pageLabel: input.pageLabel, status: "skipped", reason, kinds: [] };
+  };
+
   if (stored.page.ofapiAccountId !== input.ofapiAccountId) {
-    return {
-      pageLabel: input.pageLabel,
-      status: "skipped",
-      reason: "ofapi_mapping_changed",
-      kinds: [],
-    };
+    return skip("ofapi_mapping_changed", stored.page.ofapiAccountId);
   }
+  const ofapiAccountId = input.ofapiAccountId;
+  if (ofapiAccountId === null) {
+    return skip("page_unmapped", null);
+  }
+  // Stage-26 auth-dead pause: a page whose OFAPI session needs owner action
+  // (authentication_failed / otp / face-otp) gets no scheduled request — the
+  // account-health incident already covers it.
   if (ofapiAuthStatusNeedsAction(stored.page.ofapiAuthStatus)) {
-    return {
-      pageLabel: input.pageLabel,
-      status: "skipped",
-      reason: "page_auth_dead",
-      kinds: [],
-    };
+    return skip("page_auth_dead", ofapiAccountId);
+  }
+
+  // The STORED variants: identical item shape, `_credits.used: 0`, limit
+  // 1000, and the cache includes finished links the live list hides
+  // (live-verified 2026-07-22). The credit guard stays as a safety belt —
+  // reservations settle to the server-reported 0.
+  // Freshness contract: stored is the vendor's Computed cache — counters are
+  // as fresh as the vendor's own sync, revenue freshness is queryable per
+  // row via revenue_calculated_at, and pulled_at stamps OUR read, not the
+  // vendor's refresh. Two identical consecutive snapshots therefore mean
+  // "no vendor refresh in between", which daily-delta reports must treat as
+  // zero-change, not data loss. The cold-cache guard in reconcileKind keeps
+  // an unpopulated cache from minting a false absence proof.
+  const listTrackingLinks = app.ofapi?.listStoredTrackingLinks?.bind(app.ofapi);
+  const listTrialLinks = app.ofapi?.listStoredTrialLinks?.bind(app.ofapi);
+  if (!listTrackingLinks || !listTrialLinks) {
+    return skip("ofapi_client_not_configured", ofapiAccountId);
   }
 
   // No proxy/dispatcher resolution here on purpose: the OFAPI list transport
@@ -464,6 +605,7 @@ async function reconcilePage(
     ["tracking", listTrackingLinks],
     ["trial", listTrialLinks],
   ] as const satisfies ReadonlyArray<readonly [LinkStatKind, LinkLister]>) {
+    const progress = { apiPages: 0, rawItems: 0 };
     try {
       kinds.push(await reconcileKind({
         db: app.db,
@@ -471,23 +613,37 @@ async function reconcilePage(
         list,
         requestContext,
         pageId: input.pageId,
-        ofapiAccountId: input.ofapiAccountId,
-        pulledAt: input.pulledAt,
+        ofapiAccountId,
+        stamp: input.stamp,
         guard: input.guard,
+        progress,
       }));
+      input.recorded.add(kind);
     } catch (error) {
       // A failed request never settled its credit reservation — release the
       // in-memory token so the other kind (and other pages) can proceed.
       input.guard.abandonPendingReservation();
+      const reason = errorText(error);
       kinds.push({
         linkKind: kind,
         status: "failed",
-        reason: error instanceof Error ? error.message : String(error),
+        reason,
         apiPages: 0,
         rawItems: 0,
         writtenRows: 0,
         skippedReasons: {},
       });
+      // The failure is a row of the series too: reconcileKind writes its run
+      // row last, so a throw means the kind has none yet.
+      await recordFailedAttempt(app, {
+        pageId: input.pageId,
+        kind,
+        ofapiAccountId,
+        stamp: input.stamp,
+        error,
+        progress,
+      });
+      input.recorded.add(kind);
       app.logger.error({
         err: error,
         pageId: input.pageId,
@@ -517,19 +673,33 @@ async function reconcilePage(
   };
 }
 
-export async function runOfapiLinkStatsReconcile(app: AppContext) {
+/** Skips the pass decided before making any request, for a reason another
+ * signal owns: a dead session has its ofapi_auth incident, a page without a
+ * mapping is the binding reconciler's to repair. Before every attempt became
+ * a row these pages were not part of the pass at all, so they stay out of its
+ * fleet verdict (the global incident's open/resolve rules below). */
+const NOT_ATTEMPTED_REASONS = new Set(["page_unmapped", "page_auth_dead"]);
+
+export interface OfapiLinkStatsReconcileOptions {
+  /** The pass's clock: `pulled_at` of its rows and, through it, their window. */
+  now?: Date;
+}
+
+export async function runOfapiLinkStatsReconcile(
+  app: AppContext,
+  options: OfapiLinkStatsReconcileOptions = {},
+) {
   if (!isOfapiLinkStatsReconcileEnabled(app.config)) {
     return { pages: [] as OfapiLinkStatsPageResult[] };
   }
 
-  // Stage-26 auth-dead pause: a page whose OFAPI session needs owner action
-  // (authentication_failed / otp / face-otp) gets no scheduled spend — the
-  // account-health incident already covers it.
-  const mapped = (await listOfapiMappedPages(app.db))
-    .filter((page) => page.platform === "onlyfans")
-    .filter((page) => !ofapiAuthStatusNeedsAction(page.ofapiAuthStatus));
+  // The population is every active OnlyFans page, mapped or not: a page the
+  // pass cannot read still owes the series a row saying so.
+  const fleet = await listOfapiBindingPages(app.db);
+  const walkable = fleet.filter((page) =>
+    page.account_id !== null && !ofapiAuthStatusNeedsAction(page.auth_status));
   const guard = createOfapiRestGuard(app, {
-    maxRequestsPerRun: LINK_STATS_MAX_PAGES_PER_RUN * 2 * Math.max(1, mapped.length),
+    maxRequestsPerRun: LINK_STATS_MAX_PAGES_PER_RUN * 2 * Math.max(1, walkable.length),
     // Dedicated link_stats day counter (migration 0113): the quota is
     // isolated from the chargebacks backfill lane in BOTH directions —
     // chargebacks spend cannot block link-stats, and link-stats cannot eat
@@ -540,27 +710,41 @@ export async function runOfapiLinkStatsReconcile(app: AppContext) {
       app.config.ofapiLinkStatsDailyCreditBudget ?? DEFAULT_LINK_STATS_DAILY_CREDIT_BUDGET,
     budgetScope: "link_stats",
   });
-  const pulledAt = new Date();
+  const pulledAt = options.now ?? new Date();
+  const stamp: LinkStatsAttemptStamp = { pulledAt, windowAt: ofapiLinkStatsWindowAt(pulledAt) };
 
-  const pages: OfapiLinkStatsPageResult[] = [];
-  for (const page of mapped) {
+  const allPages: OfapiLinkStatsPageResult[] = [];
+  for (const page of fleet) {
+    const recorded = new Set<LinkStatKind>();
     try {
-      pages.push(await reconcilePage(app, {
+      allPages.push(await reconcilePage(app, {
         pageId: page.id,
         pageLabel: page.label,
-        ofapiAccountId: page.ofapiAccountId,
-        pulledAt,
+        ofapiAccountId: page.account_id,
+        stamp,
         guard,
+        recorded,
       }));
     } catch (error) {
       guard.abandonPendingReservation();
-      const reason = error instanceof Error ? error.message : String(error);
-      pages.push({
+      const reason = errorText(error);
+      allPages.push({
         pageLabel: page.label,
         status: "failed",
         reason,
         kinds: [],
       });
+      for (const kind of LINK_STAT_KINDS) {
+        if (!recorded.has(kind)) {
+          await recordFailedAttempt(app, {
+            pageId: page.id,
+            kind,
+            ofapiAccountId: page.account_id,
+            stamp,
+            error,
+          });
+        }
+      }
       app.logger.error({
         err: error,
         pageId: page.id,
@@ -569,6 +753,9 @@ export async function runOfapiLinkStatsReconcile(app: AppContext) {
     }
   }
 
+  // The fleet verdict is drawn over the pages the pass was to read.
+  const pages = allPages.filter((page) =>
+    !(page.status === "skipped" && page.reason !== null && NOT_ATTEMPTED_REASONS.has(page.reason)));
   const failed = pages.filter((page) => page.status === "failed");
   // Truncation blocks caused by the MONEY guards never page: the stored
   // endpoints are free, so a credit-floor/day-budget block is a symptom of
@@ -661,7 +848,7 @@ export async function runOfapiLinkStatsReconcile(app: AppContext) {
     });
   }
 
-  const degraded = pages.filter((page) =>
+  const degraded = allPages.filter((page) =>
     page.status === "partial" || page.status === "truncated" || page.status === "skipped",
   );
   if (degraded.length > 0) {
@@ -674,7 +861,8 @@ export async function runOfapiLinkStatsReconcile(app: AppContext) {
     }, "OFAPI link-stats reconcile incomplete for some pages");
   }
   app.logger.info({
-    pages: pages.map((page) => ({
+    windowAt: stamp.windowAt.toISOString(),
+    pages: allPages.map((page) => ({
       label: page.pageLabel,
       status: page.status,
       reason: page.reason,
@@ -689,7 +877,7 @@ export async function runOfapiLinkStatsReconcile(app: AppContext) {
     })),
   }, "OFAPI link-stats reconcile complete");
 
-  return { pages };
+  return { pages: allPages };
 }
 
 export async function ensureOfapiLinkStatsQueue(
@@ -728,8 +916,10 @@ export async function ensureOfapiLinkStatsSchedule(boss: QueueCreationClient) {
   // Twice daily at 04:45/16:45 UTC — two observations per day (one failed
   // window still leaves a daily point). The stored endpoints are free and the
   // credit lane is dedicated (0113), so the placement after chargebacks'
-  // 03:10 window is just polite scheduling, not a budget dependency.
-  await boss.schedule(OFAPI_LINK_STATS_RECONCILE_QUEUE, "45 4,16 * * *", null, { tz: "UTC" });
+  // 03:10 window is just polite scheduling, not a budget dependency. The
+  // windows live in ofapi-link-stats-windows.ts: the cron and the `window_at`
+  // stamped on every attempt row come from the same list.
+  await boss.schedule(OFAPI_LINK_STATS_RECONCILE_QUEUE, OFAPI_LINK_STATS_CRON, null, { tz: "UTC" });
 }
 
 export async function startOfapiLinkStatsWorker(
