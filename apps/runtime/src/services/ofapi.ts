@@ -73,6 +73,10 @@ export function isOfapiProviderLinkOrigin(link: URL, base: URL): boolean {
 
 export class OfapiApiError extends Error {
   declare readonly validationResponse?: string;
+  /** The parsed 200 body of a list response the client refused to map, on
+   * routes whose caller journals every page (`keepRawBody`). Non-enumerable
+   * like `validationResponse`: error logging never prints a vendor body. */
+  declare readonly refusedListBody?: unknown;
   constructor(
     message: string,
     readonly status: number | null,
@@ -159,6 +163,9 @@ export interface OfapiListPage {
   /** Internal acknowledgement that the physical-attempt sink accounted this
    * logical request. Test/custom clients omit it and use guard settlement. */
   creditSpendAccounted?: true;
+  /** The parsed vendor body this page was mapped from, on routes whose caller
+   * journals every page (`keepRawBody`); absent everywhere else. */
+  rawBody?: unknown;
 }
 
 export interface OfapiRawResponse {
@@ -1058,6 +1065,9 @@ export function createOfapiClient(input: {
     cursorPresent: boolean;
     requestMetadata: Record<string, unknown>;
     mapResponse?: (body: unknown) => OfapiListPage;
+    /** Hand the parsed 200 body back with the page, and on a refused body
+     * attach it to the thrown OfapiApiError, so the caller can journal it. */
+    keepRawBody?: boolean;
     timeoutMs?: number;
     // Caller override of the transport/HTTP retry budget (0 = single attempt).
     retries?: number;
@@ -1245,7 +1255,18 @@ export function createOfapiClient(input: {
           };
         }
 
-        const page = (options.mapResponse ?? toListPage)(body);
+        let page: OfapiListPage;
+        try {
+          page = (options.mapResponse ?? toListPage)(body);
+        } catch (error) {
+          if (options.keepRawBody && error instanceof OfapiApiError) {
+            Object.defineProperty(error, "refusedListBody", { value: body, enumerable: false });
+          }
+          throw error;
+        }
+        if (options.keepRawBody) {
+          page = { ...page, rawBody: body };
+        }
         return {
           kind: "success",
           value: creditSpendRecorded === true
@@ -2299,6 +2320,8 @@ export function createOfapiClient(input: {
         // pre-2026-09-07 parser accepted both and no body was ever journaled
         // to say which one the vendor sends.
         mapResponse: (body: unknown) => toListPage(body, { limit, envelopes: ["data.list", "data"] }),
+        // The reconcile journals every page, refused ones included.
+        keepRawBody: true,
       });
     },
     async listTrackingLinks(context, accountId, params) {

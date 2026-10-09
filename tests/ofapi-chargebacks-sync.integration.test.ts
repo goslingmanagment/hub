@@ -103,6 +103,19 @@ function chargebackItem(paymentId: string, fanId: string) {
   };
 }
 
+// A test double hands back the body it "received", as the real client does on
+// this route (keepRawBody): the reconcile journals that body before reading it.
+function chargebacksPage(items: Record<string, unknown>[], hasNextPage: boolean): OfapiListPage {
+  return {
+    items,
+    hasNextPage,
+    nextMarker: null,
+    nextPageUrl: null,
+    meta: null,
+    rawBody: { data: { list: items } },
+  };
+}
+
 type ChargebacksCall = {
   accountId: string;
   offset: number;
@@ -126,13 +139,7 @@ function chargebacksClient(input: {
         startDate: params.startDate,
         endDate: params.endDate,
       });
-      return {
-        items: input.itemsByAccount.get(accountId) ?? [],
-        hasNextPage: false,
-        nextMarker: null,
-        nextPageUrl: null,
-        meta: null,
-      };
+      return chargebacksPage(input.itemsByAccount.get(accountId) ?? [], false);
     },
   } as unknown as OfapiClient;
 }
@@ -259,13 +266,7 @@ describe("OFAPI chargebacks reconcile", () => {
           endDate: params.endDate,
         });
         const slice = items.slice(offset, offset + (params.limit ?? 100));
-        return {
-          items: slice,
-          hasNextPage: offset + slice.length < items.length,
-          nextMarker: null,
-          nextPageUrl: null,
-          meta: null,
-        };
+        return chargebacksPage(slice, offset + slice.length < items.length);
       },
     } as unknown as OfapiClient;
 
@@ -343,15 +344,10 @@ describe("OFAPI chargebacks reconcile", () => {
           if (accountId === "acct_cb_fail" && vendorFailure) {
             throw new Error("scripted OFAPI validation failure");
           }
-          return {
-            items: accountId === "acct_cb_healthy"
-              ? [chargebackItem("pay-healthy", "555010")]
-              : [],
-            hasNextPage: false,
-            nextMarker: null,
-            nextPageUrl: null,
-            meta: null,
-          };
+          return chargebacksPage(
+            accountId === "acct_cb_healthy" ? [chargebackItem("pay-healthy", "555010")] : [],
+            false,
+          );
         },
       } as unknown as OfapiClient,
     };
@@ -461,13 +457,7 @@ describe("OFAPI chargebacks reconcile", () => {
       }),
       ofapi: {
         async listChargebacks(): Promise<OfapiListPage> {
-          return {
-            items: partialItems,
-            hasNextPage: true,
-            nextMarker: null,
-            nextPageUrl: null,
-            meta: null,
-          };
+          return chargebacksPage(partialItems, true);
         },
       } as unknown as OfapiClient,
     };
@@ -587,10 +577,75 @@ describe("OFAPI chargebacks reconcile", () => {
     )).rows[0]!.n;
     expect(await countRows()).toBe(103);
 
+    // Each page the vendor answered is journaled verbatim, with its request.
+    const { rows: journal } = await testDb.pool.query<{ payload: Record<string, unknown> }>(`
+      select payload from observations
+      where kind = 'ofapi_chargebacks' and account_id = $1 and source = 'pull' and platform = 'onlyfans'
+      order by id
+    `, [page.id]);
+    expect(journal.map((row) => row.payload)).toEqual([0, 100].map((offset) => ({
+      ofapiAccountId: "acct_real",
+      limit: 100,
+      offset,
+      startDate: requests[0]!.searchParams.get("start_date"),
+      endDate: requests[0]!.searchParams.get("end_date"),
+      body: vendorChargebacksBody(vendorList.slice(offset, offset + 100)),
+    })));
+    const { rows: rawRows } = await testDb.pool.query<{ n: number }>(
+      "select count(*)::int as n from sync_raw_payloads where endpoint = 'ofapi_chargebacks' and page_id = $1",
+      [page.id],
+    );
+    expect(rawRows).toEqual([{ n: 2 }]);
+
     // The next day's run re-reads the same window and adds nothing.
     const again = await runOfapiChargebacksReconcile(appContext);
     expect(again.pages[0]).toMatchObject({ status: "written", apiPages: 2, writtenRows: 102 });
     expect(await countRows()).toBe(103);
+  });
+
+  it("journals a page the client refuses, then fails the page as before and writes no money", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedOfapiPage("cb-refused", "acct_refused");
+    // A body without a list envelope (say, a renamed field): the client
+    // refuses it, as it refused every page from 2026-09-08.
+    const refused = {
+      data: { items: [chargebackItem("pay-refused", "555020")], marker: 1_757_300_000 },
+      _meta: { _credits: { used: 1, balance: 90_000 } },
+    };
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(refused), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    })));
+    appContext = { ...appContext, ofapi: createOfapiClient({ apiKey: "test", restDelayMs: 0 }) };
+
+    const result = await runOfapiChargebacksReconcile(appContext);
+    expect(result.pages[0]).toMatchObject({
+      status: "failed",
+      reason: "OFAPI list page shape unavailable",
+    });
+    const { rows: journal } = await testDb.pool.query<{ payload: Record<string, unknown> }>(
+      "select payload from observations where kind = 'ofapi_chargebacks' and account_id = $1",
+      [page.id],
+    );
+    expect(journal).toEqual([{
+      payload: {
+        ofapiAccountId: "acct_refused",
+        limit: 100,
+        offset: 0,
+        startDate: null,
+        endDate: null,
+        body: refused,
+      },
+    }]);
+    const { rows: money } = await testDb.pool.query<{ n: number }>(
+      "select count(*)::int as n from transactions where platform_account_id = $1",
+      [page.id],
+    );
+    expect(money).toEqual([{ n: 0 }]);
+    expect((await listNotificationIncidents(appContext.db))[0]?.status).toBe("open");
   });
 
   // ——— W7.3 (A21+B4, decision #132): negation guards ———

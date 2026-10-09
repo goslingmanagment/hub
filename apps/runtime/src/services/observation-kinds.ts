@@ -163,6 +163,9 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
   { kind: "link_fans_tracking_subscribers", source: "pull", writer: "services/sync/ofapi-fan-identities.ts" },
   { kind: "link_fans_tracking_spenders", source: "pull", writer: "services/sync/ofapi-fan-identities.ts" },
   { kind: "link_fans_trial_subscribers", source: "pull", writer: "services/sync/ofapi-fan-identities.ts" },
+  // The daily chargebacks reconcile: one page of GET /{account}/chargebacks,
+  // the vendor body verbatim (refused ones too) with the request window.
+  { kind: "ofapi_chargebacks", source: "pull", writer: "services/ofapi-chargebacks-sync.ts" },
 
   // ── the OFAPI webhook plane (vendor-named events) ────────────────────────
   { kind: "posts.liked", source: "webhook", writer: "services/ofapi-webhook-capture.ts" },
@@ -549,6 +552,14 @@ export const RAW_ONLY_OBSERVATION_KINDS: readonly RawOnlyObservationKind[] = [
     justification:
       "One page of one trial link's subscribers — same lane and same reasoning as "
       + "link_fans_tracking_subscribers.",
+  },
+  {
+    kind: "ofapi_chargebacks",
+    justification:
+      "One page of the OFAPI chargebacks list, the vendor body verbatim with the request "
+      + "window and offset, journaled even when the client refuses it. The reconcile writes "
+      + "the chargeback transactions directly from the same page; this body is kept to "
+      + "diagnose and replay a page, and no family parses it.",
   },
   {
     kind: "users.typing",

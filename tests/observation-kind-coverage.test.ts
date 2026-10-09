@@ -238,6 +238,7 @@ describe("(2) census — the registry is compared against what the tree writes",
     const census = seamLiterals("endpoint", [
       "apps/runtime/src/services/sync",
       "apps/runtime/src/services/ofapi-link-stats-sync.ts",
+      "apps/runtime/src/services/ofapi-chargebacks-sync.ts",
     ]);
     const unregistered = [...census]
       .filter((kind) => !registered.has(kind) && !CENSUS_NON_KIND_LITERALS.has(kind));
@@ -248,6 +249,7 @@ describe("(2) census — the registry is compared against what the tree writes",
     // still journals its list here).
     expect(census.has("dm_conversations")).toBe(true);
     expect(census.has("link_stats_tracking")).toBe(true);
+    expect(census.has("ofapi_chargebacks")).toBe(true);
   });
 
   it("knows every OF capture-plane observationKind literal", () => {
