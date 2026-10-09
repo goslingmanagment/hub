@@ -118,6 +118,9 @@ const DIRECT_WRITERS = [
   // The engine's catalog walk: the synthetic `vault_album_walk_completed`
   // proof record the legacy catalog lane journals (design §5.17, D16).
   "apps/runtime/src/sync/fansly/resources/catalog.ts",
+  // Arena "vanished chat" R5: the session-less public account reader's raw
+  // answer, page-less — `account_lookup_public` or its `:failed` body.
+  "apps/runtime/src/sync/fansly/public-lookup.ts",
 ];
 
 describe("(1) coverage — every written kind is owned by something", () => {

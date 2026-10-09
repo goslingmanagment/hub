@@ -125,6 +125,10 @@ const envSchema = z.object({
   OFAPI_DM_SYNC_ENABLED: booleanSchema.default(false),
   OFAPI_DM_COLD_ARCHIVE_ENABLED: booleanSchema.default(false),
   FANSLY_REPLIES_REWALK_CYCLE_DAYS: z.coerce.number().int().min(1).max(365).default(14),
+  // Arena "vanished chat" R5: the session-less public account reader (off at
+  // rest) and the ids it asks for per request.
+  FANSLY_PUBLIC_LOOKUP_ENABLED: booleanSchema.default(false),
+  FANSLY_PUBLIC_LOOKUP_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(100),
   OFAPI_DM_COLD_ARCHIVE_RETENTION_DAYS: z.coerce.number().int().positive().default(36500),
   OFAPI_REST_DELAY_MS: z.coerce.number().int().min(0).default(500),
   OFAPI_DM_BOOTSTRAP_MAX_REQUESTS_PER_RUN: z.coerce.number().int().min(1).default(25),
@@ -418,6 +422,10 @@ export interface AppConfig {
   ofapiDmColdArchiveEnabled?: boolean;
   /** How stale a post's last walk must be before the round-robin re-reads it. */
   fanslyRepliesRewalkCycleDays?: number;
+  /** Arena R5: the session-less public account reader runs (off by default). */
+  fanslyPublicLookupEnabled?: boolean;
+  /** Arena R5: ids per session-less lookup, 1–100. */
+  fanslyPublicLookupBatchSize?: number;
   ofapiDmColdArchiveRetentionDays?: number;
   ofapiRestDelayMs?: number;
   ofapiQueuedCommandTtlMs?: number;
@@ -796,6 +804,8 @@ export function loadConfig(
     ofapiDmSyncEnabled: parsed.OFAPI_DM_SYNC_ENABLED,
     ofapiDmColdArchiveEnabled: parsed.OFAPI_DM_COLD_ARCHIVE_ENABLED,
     fanslyRepliesRewalkCycleDays: parsed.FANSLY_REPLIES_REWALK_CYCLE_DAYS,
+    fanslyPublicLookupEnabled: parsed.FANSLY_PUBLIC_LOOKUP_ENABLED,
+    fanslyPublicLookupBatchSize: parsed.FANSLY_PUBLIC_LOOKUP_BATCH_SIZE,
     ofapiDmColdArchiveRetentionDays: parsed.OFAPI_DM_COLD_ARCHIVE_RETENTION_DAYS,
     ofapiRestDelayMs: parsed.OFAPI_REST_DELAY_MS,
     ofapiQueuedCommandTtlMs: parsed.OFAPI_QUEUED_COMMAND_TTL_MS,

@@ -72,13 +72,13 @@ describe("the Fansly send boundary (plan §2.4)", () => {
     const send = read("packages/fansly/src/wire/send.ts");
     expect(send.match(/\.request\(/g)).toHaveLength(1);
     expect(send).toContain("const response = await composeFanslySendCheck(dispatcher, gate.check).request({");
-    // Its callers: the engine's page transport (the pacer's admission) and the
-    // identity check of a session without a page (journaled, owner decision №4).
-    // The third sanctioned sender, the session-less public account reader
-    // (arena R5, `sync/fansly/public-lookup.ts`), lands with the next release;
-    // until then nothing sends a session-less request.
+    // Its callers: the engine's page transport (the pacer's admission), the
+    // identity check of a session without a page (journaled, owner decision
+    // №4) and the session-less public account reader (arena R5: journaled,
+    // its own egress and budget, I13).
     expect(matching(/\b(sendFanslyWireRequest|sendFanslyCdnRequest)\(/)).toEqual([
       "apps/runtime/src/sync/fansly/identity-without-page.ts",
+      "apps/runtime/src/sync/fansly/public-lookup.ts",
       "apps/runtime/src/sync/fansly/transport.ts",
       "packages/fansly/src/wire/send.ts",
     ]);
@@ -121,21 +121,29 @@ describe("the Fansly send boundary (plan §2.4)", () => {
     expect(read("apps/runtime/src/sync/main.ts")).not.toContain("wsSourceOverrides");
   });
 
-  it("builds a session-less request in the wire layer alone, and hands the public egress to nobody yet", () => {
+  it("builds a session-less request in the wire layer alone, for the public reader alone, over the public egress alone", () => {
     // Arena R5 (plan §7): a request without any session is built only by
     // `buildFanslyPublicWireRequest` (wire/public.ts), which refuses a
     // session-bearing spec and an input with a session or cookies; the page's
-    // builder refuses a session-less spec. Its one sanctioned caller, the
-    // public reader, lands with the next release.
-    expect(matching(/\bbuildFanslyPublicWireRequest\(/)).toEqual([]);
+    // builder refuses a session-less spec. Its one caller is the public reader.
+    expect(matching(/\bbuildFanslyPublicWireRequest\(/)).toEqual([
+      "apps/runtime/src/sync/fansly/public-lookup.ts",
+    ]);
+    const reader = read("apps/runtime/src/sync/fansly/public-lookup.ts");
+    // The reader never touches a page's session, guard or egress.
+    expect(reader).not.toMatch(/FanslySessionBundle|buildFanslyWireRequest\(|kind: "page"|resolveFanslyProbeContext|forPage\(/);
+    expect(reader).toContain('egress = await (this.#d.openEgress ?? (() => resolveEgress(this.#d, { kind: "fansly_public" })))();');
+    expect(reader).toContain("source: FANSLY_PUBLIC_LOOKUP_SEND_SOURCE,");
     const publicWire = read("packages/fansly/src/wire/public.ts");
     expect(publicWire).toContain('if (candidate.credentials !== "none") {');
     expect(publicWire).toContain("headers: buildFanslyAnonymousRequestHeaders(),");
     expect(publicWire).not.toMatch(/buildFanslyRequestHeaders\(|FanslySessionBundle/);
     expect(read("packages/fansly/src/wire/specs.ts")).toContain('if (spec?.credentials !== "session") {');
-    // The `fansly_public` scope: resolved only by the resolver, used by no
-    // caller in this release; it lets Fansly's API host through and nothing else.
-    expect(matching(/resolveEgress\([^)]*kind: "fansly_public"/)).toEqual([]);
+    // The `fansly_public` scope: resolved only by the resolver, used by the
+    // reader alone; it lets Fansly's API host through and nothing else.
+    expect(matching(/resolveEgress\([^)]*kind: "fansly_public"/)).toEqual([
+      "apps/runtime/src/sync/fansly/public-lookup.ts",
+    ]);
     expect(matching(/\bresolveFanslyPublicEgress\(/)).toEqual([
       "apps/runtime/src/services/egress/fansly-public.ts",
       "apps/runtime/src/services/egress/resolver.ts",

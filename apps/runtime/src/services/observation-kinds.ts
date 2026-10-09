@@ -61,11 +61,12 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
   { kind: "account_lookup", source: "pull", writer: "sync/fansly/capture.ts" },
   // Arena plan §7 (owner decision Р1): the session-less public reader's raw
   // answer for a batch of fan ids, journaled before parsing with NO page
-  // (account_id null). Registered AHEAD of its writer, as media_offer_stats
-  // was ahead of WP-F4: the fan erasure that must reach a page-less row ships
-  // a release earlier (R4), and the writer's contract lives with it —
-  // services/erasure/index.ts PAGELESS_FAN_OBSERVATION_KINDS.
-  { kind: "account_lookup_public", source: "pull", writer: "sync/fansly/public-lookup.ts (arena R5, PR12; not written yet)" },
+  // (account_id null). Registered a release AHEAD of its writer (R4, as
+  // media_offer_stats was ahead of WP-F4) with the fan erasure that reaches a
+  // page-less row; the writer follows the contract that lives there —
+  // services/erasure/index.ts PAGELESS_FAN_OBSERVATION_KINDS. Its failed
+  // bodies go under `account_lookup_public:failed`.
+  { kind: "account_lookup_public", source: "pull", writer: "sync/fansly/public-lookup.ts (arena R5)" },
   { kind: "account_me", source: "pull", writer: "services/sync/executor-handlers.ts" },
   { kind: "dm_conversations", source: "pull", writer: "sync/fansly/capture.ts" },
   { kind: "dm_messages", source: "pull", writer: "sync/fansly/capture.ts" },

@@ -205,6 +205,27 @@ describe("agentThreadAvailability over HTTP", () => {
     expect(response.body).not.toContain("200000000000000002");
   });
 
+  it("the cause is the partner's session-less public check: found → probably blocked, not found → probably deleted", async (context) => {
+    if (!testDb) return context.skip();
+    await boot();
+    const cause = async () => agentThreadAvailabilityResponseSchema.parse((await availability("lora-1", GROUP.established)).json())
+      .episode?.cause;
+    await testDb.pool.query(
+      "update fans set public_checked_at = now(), public_found = true where platform = 'fansly' and platform_user_id = '200000000000000002'",
+    );
+    expect(await cause()).toBe("probably_blocked");
+    await testDb.pool.query("update fans set public_found = false where platform = 'fansly' and platform_user_id = '200000000000000002'");
+    expect(await cause()).toBe("probably_deleted");
+    // Another fan's check says nothing about this chat.
+    await testDb.pool.query(
+      "update fans set public_checked_at = null, public_found = null where platform = 'fansly' and platform_user_id = '200000000000000002'",
+    );
+    await testDb.pool.query(
+      "update fans set public_checked_at = now(), public_found = true where platform = 'fansly' and platform_user_id = '200000000000000003'",
+    );
+    expect(await cause()).toBe("unchecked");
+  });
+
   it("a refusing episode: not established, no retry boundary, no note", async (context) => {
     if (!testDb) return context.skip();
     await boot();

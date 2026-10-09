@@ -802,6 +802,16 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # so it runs unchanged after a rollback. Nothing sends through the egress in
   # this release.
   "0258_fansly_public_lookup_egress.sql"
+  # The session-less public account reader (arena "vanished chat", R5 M4):
+  # two nullable columns on fans without a default (public_checked_at,
+  # public_found; catalog-only) with their pair CHECK added NOT VALID and
+  # validated (lock_timeout 5 s), and two new tables — the owner's re-check
+  # queue (fan_id → fans ON DELETE CASCADE) and the reader's one-row state
+  # (seeded). The previous image never names any of them and reads and writes
+  # fans by named columns only, so it runs unchanged after a rollback, without
+  # a reader: what the reader wrote stays, every cause reads `unchecked`, and
+  # its fan erasure deletes the fans row and the queue row with it.
+  "0259_fans_public_lookup.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

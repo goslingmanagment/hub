@@ -460,8 +460,9 @@ plus a one-line `note` that says what the answer means:
   null.
 - `cause` is a likelihood, never a proof: `unchecked` (deleted or blocked,
   nobody checked), `probably_blocked` (the account exists when looked up
-  without a login), `probably_deleted` (it does not). Hub has no such check
-  yet, so today every episode says `unchecked`.
+  without a login), `probably_deleted` (it does not). The check is Hub's
+  public account reader, which runs only while the owner keeps it on: a
+  partner it has not checked yet says `unchecked`.
 - A page outside your grant and a conversation ref the page holds no thread
   for are the plane's one static 404 (`code: "not_found"`, exit 4).
 - On a hub older than this route the CLI prints `data: null`, the note

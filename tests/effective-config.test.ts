@@ -218,6 +218,8 @@ describe("LIVE_CONFIG_KEYS", () => {
     expect(LIVE_CONFIG_KEYS.has("fanslyLiveOverlayReadPages")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("agentHydrationMode")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("healthSyncLightMaxAgeMinutes")).toBe(true);
-    expect(LIVE_CONFIG_KEYS.size).toBe(48);
+    expect(LIVE_CONFIG_KEYS.has("fanslyPublicLookupEnabled")).toBe(true);
+    expect(LIVE_CONFIG_KEYS.has("fanslyPublicLookupBatchSize")).toBe(true);
+    expect(LIVE_CONFIG_KEYS.size).toBe(50);
   });
 });

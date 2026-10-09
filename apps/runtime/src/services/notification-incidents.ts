@@ -67,7 +67,16 @@ export const SYNC_ENGINE_PACE_VIOLATION_SUBKEY = "page_stopped:pace_violation";
  * the owner raises it). */
 export const SYNC_ENGINE_ROUTE_SUBKEY_PREFIX = "route_limited:";
 export type SyncEngineRouteSubKey = `${typeof SYNC_ENGINE_ROUTE_SUBKEY_PREFIX}${string}`;
-export type SyncEngineIncidentSubKey = SyncEngineAlertSubKey | typeof SYNC_ENGINE_PACE_VIOLATION_SUBKEY | SyncEngineRouteSubKey;
+/** Arena "vanished chat" R5: the session-less public account reader stopped
+ * (its first 429, 401/403, network failure or answer off the contract). A
+ * global latch (no page), resolved only by the owner's resume (`pnpm cli sync
+ * public-lookup resume`). */
+export const SYNC_ENGINE_PUBLIC_LOOKUP_SUBKEY = "public_lookup";
+export type SyncEngineIncidentSubKey =
+  | SyncEngineAlertSubKey
+  | typeof SYNC_ENGINE_PACE_VIOLATION_SUBKEY
+  | typeof SYNC_ENGINE_PUBLIC_LOOKUP_SUBKEY
+  | SyncEngineRouteSubKey;
 
 /** The latch subKey of one route's incident. */
 export function syncEngineRouteSubKey(route: string): SyncEngineRouteSubKey {
@@ -78,8 +87,14 @@ const SYNC_ENGINE_ROUTE_OPEN_TITLE = "🚨 Fansly Sync Engine route held: a 429 
   + "(the rest runs; the endpoint then runs at half rate until raised)";
 const SYNC_ENGINE_ROUTE_RESOLVE_DETAIL = "Fansly Sync Engine route open again (10 min clean; its slowdown stays until raised)";
 
-const SYNC_ENGINE_OPEN_TITLES: Record<SyncEngineAlertSubKey | typeof SYNC_ENGINE_PACE_VIOLATION_SUBKEY, string> = {
+type SyncEngineTitledSubKey =
+  | SyncEngineAlertSubKey
+  | typeof SYNC_ENGINE_PACE_VIOLATION_SUBKEY
+  | typeof SYNC_ENGINE_PUBLIC_LOOKUP_SUBKEY;
+
+const SYNC_ENGINE_OPEN_TITLES: Record<SyncEngineTitledSubKey, string> = {
   page_stopped: "🚨 Fansly Sync Engine stopped a page (429, auth, identity, network or ownership)",
+  [SYNC_ENGINE_PUBLIC_LOOKUP_SUBKEY]: "🚨 Fansly public account reader stopped (429, 401/403, network or an unexpected answer) — nothing sends until the owner resumes it",
   [SYNC_ENGINE_PACE_VIOLATION_SUBKEY]: "🚨 Fansly Sync Engine pace violated: two sends of a page closer than their pause, or of a route closer than its interval",
   live_degraded: "🚨 Fansly Sync Engine live path degraded (socket, decode debt or quarantined work)",
   freshness: "🚨 Fansly Sync Engine freshness broken (messages, money or urgent work late)",
@@ -87,8 +102,9 @@ const SYNC_ENGINE_OPEN_TITLES: Record<SyncEngineAlertSubKey | typeof SYNC_ENGINE
   process: "🚨 Fansly Sync Engine process silent — no sync heartbeat for 2 min while a page is in the engine",
 };
 
-const SYNC_ENGINE_RESOLVE_DETAILS: Record<SyncEngineAlertSubKey | typeof SYNC_ENGINE_PACE_VIOLATION_SUBKEY, string> = {
+const SYNC_ENGINE_RESOLVE_DETAILS: Record<SyncEngineTitledSubKey, string> = {
   page_stopped: "Fansly Sync Engine page running again (10 min clean)",
+  [SYNC_ENGINE_PUBLIC_LOOKUP_SUBKEY]: "Fansly public account reader resumed by the owner",
   [SYNC_ENGINE_PACE_VIOLATION_SUBKEY]: "Fansly Sync Engine pace violation acknowledged by the owner",
   live_degraded: "Fansly Sync Engine live path healthy again",
   freshness: "Fansly Sync Engine freshness back within bounds",

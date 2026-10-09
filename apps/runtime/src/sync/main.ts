@@ -21,6 +21,7 @@ import {
   type SyncStall,
 } from "./engine/watchdog.ts";
 import { fanslyCaptureCodec } from "./fansly/capture.ts";
+import { createFanslyPublicLookupReader } from "./fansly/public-lookup.ts";
 import { createFanslyRegistry } from "./fansly/registry.ts";
 import { onHistoryChatUnavailable, onHistoryThreadChainChanged, onHistoryWorkClosed } from "./requests/history.ts";
 
@@ -106,6 +107,20 @@ export function createSyncAlertEvaluator(context: SyncContext, watchdog: StallTr
   };
 }
 
+/** The session-less public account reader (arena "vanished chat" R5): one
+ *  per process, under its own advisory lock across processes; it sends
+ *  nothing while `fanslyPublicLookupEnabled` is off (the default) or it has no
+ *  proxy of its own. */
+export function createSyncPublicLookupTask(context: SyncContext): SyncRuntimeTask {
+  const reader = createFanslyPublicLookupReader(context);
+  return {
+    async start() {
+      reader.start();
+    },
+    stop: () => reader.stop(),
+  };
+}
+
 export interface SyncRuntime {
   readonly instanceId: string;
   /** Stops the stall watchdog, then the engine host (the step in flight
@@ -126,6 +141,9 @@ export interface StartSyncRuntimeOptions {
   /** The alert evaluator; default `createSyncAlertEvaluator(context)` with the
    *  default host, none otherwise. */
   alerts?: SyncRuntimeTask | null;
+  /** The public account reader; default `createSyncPublicLookupTask(context)`
+   *  with the default host, none otherwise. */
+  publicLookup?: SyncRuntimeTask | null;
   /** The stall watchdog (`engine/watchdog.ts`); default: 120 s, its incident
    *  through `createStallIncidentReport`, `process.exit(70)`; null: none. It
    *  watches every heartbeat beat and the default host and evaluator (a host
@@ -160,11 +178,16 @@ export async function startSyncRuntime(
   const alerts = options.alerts !== undefined
     ? options.alerts
     : options.host === undefined ? createSyncAlertEvaluator(context, watchdog) : null;
+  const publicLookup = options.publicLookup !== undefined
+    ? options.publicLookup
+    : options.host === undefined ? createSyncPublicLookupTask(context) : null;
   try {
     await host?.start();
     await alerts?.start();
+    await publicLookup?.start();
   } catch (error) {
     watchdog?.stop();
+    await publicLookup?.stop().catch(() => undefined);
     await alerts?.stop().catch(() => undefined);
     await host?.stop().catch(() => undefined);
     clearInterval(keepAlive);
@@ -180,9 +203,10 @@ export async function startSyncRuntime(
         // A stop is not a stall: the watchdog lets the steps in flight finish.
         watchdog?.stop();
         // The pages first: the request in flight finishes and every page is
-        // released while the process still heartbeats.
+        // released while the process still heartbeats. The public reader's
+        // request in flight (≤ its 20 s budget) finishes beside them.
         await alerts?.stop();
-        await host?.stop();
+        await Promise.all([publicLookup?.stop(), host?.stop()]);
         clearInterval(keepAlive);
         await heartbeat.stop();
       })();

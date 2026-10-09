@@ -110,6 +110,9 @@ describe("config registry", () => {
     "ofapiDmReconcileIntervalMinutes",
     // The engine's post-replies walk: the cycle decides WHICH posts it reads.
     "fanslyRepliesRewalkCycleDays",
+    // Arena "vanished chat" R5: the public account reader's switch and batch, read on every pass.
+    "fanslyPublicLookupEnabled",
+    "fanslyPublicLookupBatchSize",
     // Fast-reply freshness PR3: union-read mode, read per generation.
     "aiTranscriptFreshUnionMode",
     // Decision #136: fan-dossier context, read per generation.
@@ -234,9 +237,11 @@ describe("config registry", () => {
     expect(descriptor.belowMinError).toContain("2000 мс");
     expect(descriptor.aboveMaxError).toContain("60000 мс");
     expect(descriptor.costWarning).toBeTruthy();
-    // Every other key keeps the historical clamp behaviour unless it opts in explicitly.
+    // Every other key keeps the historical clamp behaviour unless it opts in
+    // explicitly: the public reader's batch (1–100: a silently clamped batch
+    // would hide the owner's typo).
     expect(CONFIG_DESCRIPTORS.filter((d) => d.outOfRange === "reject").map((d) => d.key))
-      .toEqual(["fanslyDefaultDelayMs"]);
+      .toEqual(["fanslyDefaultDelayMs", "fanslyPublicLookupBatchSize"]);
     for (const d of CONFIG_DESCRIPTORS) {
       if (d.belowMinError || d.aboveMaxError) {
         expect(d.outOfRange, `${d.key} carries rejection text without reject mode`).toBe("reject");
