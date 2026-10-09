@@ -328,20 +328,23 @@ describe("subscribers.poll", () => {
     const poll = await workRow(pageId, "subscribers.poll");
     expect(poll!.state).toBe("open");
     expect(poll!.cursor).toMatchObject({ generation: 1, walk: null, last: { destructiveFinalization: true, pageCount: 1 } });
-    // The lookup: one request for both ids; the returned one gets its profile,
-    // the omitted one is marked deleted; both are stamped with the result.
+    // The lookup: one request for both ids; the returned one gets its profile;
+    // the omitted one is only the page's answer, never a shared deleted mark
+    // (arena "vanished chat" D2); both are stamped with the result.
     const lookup = await workRow(pageId, "fan-profiles.lookup");
     expect(lookup!.params).toEqual({ ids: ["500000000000000001", "500000000000000002"] });
     const fans = await testDb.pool.query(
-      `select f.platform_user_id as id, f.username, f.deleted_detected_at is not null as deleted, fp.account_lookup_at is not null as stamped
+      `select f.platform_user_id as id, f.username, f.deleted_detected_at is not null as deleted, fp.account_lookup_at is not null as stamped,
+              fp.account_probe_resolved as resolved, fp.account_probe_at = fp.account_lookup_at as answered_with_stamp
          from fans f join page_fans fp on fp.fan_id = f.id and fp.platform_account_id = $1
         where f.platform_user_id in ('500000000000000001', '500000000000000002') order by 1`,
       [pageId],
     );
     expect(fans.rows).toEqual([
-      { id: "500000000000000001", username: "fan0001", deleted: false, stamped: true },
-      { id: "500000000000000002", username: null, deleted: true, stamped: true },
+      { id: "500000000000000001", username: "fan0001", deleted: false, stamped: true, resolved: true, answered_with_stamp: true },
+      { id: "500000000000000002", username: null, deleted: false, stamped: true, resolved: false, answered_with_stamp: true },
     ]);
+    expect(lookup!.result).toMatchObject({ requested: 2, returned: 1, fallback: 1 });
     const kinds = await testDb.pool.query("select kind from observations where account_id = $1 order by id", [pageId]);
     expect(kinds.rows.map((row) => row.kind)).toEqual(["subscribers", "account_lookup"]);
   });

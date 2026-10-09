@@ -14,7 +14,14 @@
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { ensurePollRows, getSyncPage, upsertDemand, type Database } from "@agency_hub_core/db";
+import {
+  ensurePollRows,
+  getSyncPage,
+  recordFanPageAccountLookupAnswers,
+  upsertDemand,
+  upsertFans,
+  type Database,
+} from "@agency_hub_core/db";
 import type { FanslyAccount, FanslyWireOutcome, FanslyWireRequest } from "@agency_hub_core/fansly";
 
 import { SyncCrashFault } from "../apps/runtime/src/sync/engine/commit.ts";
@@ -257,6 +264,23 @@ async function fan(page: LivePage, platformUserId: string) {
   return rows.rows[0] ?? null;
 }
 
+/** The page's own answer for a fan (`page_fans.account_probe_*`): null when
+ *  no lookup or probe through the page answered for it. */
+async function pageAnswer(page: LivePage, platformUserId: string) {
+  const rows = await testDb!.pool.query<{ resolved: boolean | null; at: Date | null; looked_up_at: Date | null }>(
+    `select pf.account_probe_resolved as resolved, pf.account_probe_at as at, pf.account_lookup_at as looked_up_at
+       from fans f
+       join page_fans pf on pf.fan_id = f.id and pf.platform_account_id = $2
+      where f.platform = 'fansly' and f.platform_user_id = $1`,
+    [platformUserId, page.pageId],
+  );
+  const row = rows.rows[0];
+  if (row === undefined || row.at === null) return null;
+  // A lookup answers with the stamp of the lookup that asked.
+  expect(row.at.getTime()).toBe(row.looked_up_at?.getTime());
+  return row.resolved;
+}
+
 async function currentSubscribers(page: LivePage): Promise<string[]> {
   const rows = await testDb!.pool.query<{ id: string }>(
     `select f.platform_user_id as id
@@ -286,8 +310,11 @@ describe("a fan's Fansly profile is looked up at most once a day per page", () =
     await readSubscribers(page, [FAN_1, FAN_2, FAN_GONE]);
     expect(page.lookups).toEqual([[FAN_1, FAN_2, FAN_GONE]]);
     expect(await fan(page, FAN_1)).toEqual({ username: "fan_01", deleted: false, page_alias: "Big Tipper", looked_up: true });
-    // No account came back: deletion evidence, and a lookup like any other.
-    expect(await fan(page, FAN_GONE)).toEqual({ username: null, deleted: true, page_alias: null, looked_up: true });
+    expect(await pageAnswer(page, FAN_1)).toBe(true);
+    // No account came back: the page's own answer, not a deleted mark on the
+    // shared fan row (arena "vanished chat" D2), and a lookup like any other.
+    expect(await fan(page, FAN_GONE)).toEqual({ username: null, deleted: false, page_alias: null, looked_up: true });
+    expect(await pageAnswer(page, FAN_GONE)).toBe(false);
 
     // Another apply linked FAN_3 to the page without a lookup (a DM partner
     // the conversation list served without its account): never looked up here.
@@ -301,10 +328,11 @@ describe("a fan's Fansly profile is looked up at most once a day per page", () =
     await readSubscribers(page, [FAN_1, FAN_GONE, FAN_3, FAN_NEW]);
     expect(page.lookups).toEqual([[FAN_1, FAN_2, FAN_GONE], [FAN_3, FAN_NEW]]);
     // A reused fan still maps to its stored row (its subscription is stored),
-    // and nothing about it is inferred: same name, same alias, still deleted.
+    // and nothing about it is inferred: same name, same alias, same answer.
     expect(await currentSubscribers(page)).toEqual([FAN_1, FAN_3, FAN_GONE, FAN_NEW]);
     expect(await fan(page, FAN_1)).toMatchObject({ username: "fan_01", page_alias: "Big Tipper" });
-    expect(await fan(page, FAN_GONE)).toMatchObject({ username: null, deleted: true });
+    expect(await fan(page, FAN_GONE)).toMatchObject({ username: null, deleted: false });
+    expect(await pageAnswer(page, FAN_GONE)).toBe(false);
     expect(await fan(page, FAN_3)).toMatchObject({ username: "fan_03", looked_up: true });
     expect(await fan(page, FAN_NEW)).toMatchObject({ username: "fan_05", looked_up: true });
 
@@ -325,6 +353,7 @@ describe("a fan's Fansly profile is looked up at most once a day per page", () =
     expect(page.lookups).toEqual([[FAN_1, FAN_2, FAN_GONE], [FAN_3, FAN_NEW], [FAN_1, FAN_GONE]]);
     expect(await fan(page, FAN_1)).toMatchObject({ username: "renamed", page_alias: "Whale" });
     expect(await fan(page, FAN_GONE)).toMatchObject({ username: "fan_04", deleted: false });
+    expect(await pageAnswer(page, FAN_GONE)).toBe(true);
 
     // Every request sent is journaled; a reused fan sends nothing.
     expect(await journaledLookups(page.pageId)).toBe(3);
@@ -434,5 +463,107 @@ describe("a fan's Fansly profile is looked up at most once a day per page", () =
       .toEqual({ fresh: [FAN_1], due: [FAN_3] });
     expect(await partitionLookupIds(db(), { pageId: page.pageId, ids: [FAN_1, FAN_3], now: new Date(lookedUpAt + DAY_MS + 1) }))
       .toEqual({ fresh: [], due: [FAN_1, FAN_3] });
+  });
+});
+
+// Arena "vanished chat" D2: `/account?ids=` omits a fan from a page that fan
+// blocked, while other pages still get the account (`festerpenis`: omitted on
+// lora-1/2/3, alive on lilly-2). A page's omission is therefore the page's own
+// answer, kept on its page link, and never a mark on the shared fan row that
+// spender lists and reports of every page read.
+describe("a page's lookup omission is that page's answer only", () => {
+  it("writes no shared mark, keeps an old one as it is, creates a new fan's rows first, and the probe reuses the answer", async (context) => {
+    if (!testDb) return context.skip();
+    const blocked = await seedLivePage();
+    const other = await seedLivePage();
+    other.accounts.set(FAN_1, account(FAN_1));
+    // A mark an earlier engine left: the session-less public reader re-checks
+    // it later (owner decision Р2), this lookup neither clears nor refreshes it.
+    const markedAt = new Date("2026-09-01T00:00:00.000Z");
+    await upsertFans(db(), [{ platform: "fansly", platformUserId: FAN_GONE, deletedDetectedAt: markedAt }]);
+
+    // FAN_NEW has no fan row and no page link anywhere yet.
+    await askLookupWalk(blocked, [FAN_1, FAN_GONE, FAN_NEW]);
+    await askLookupWalk(other, [FAN_1, FAN_GONE]);
+    expect(blocked.lookups).toEqual([[FAN_1, FAN_GONE, FAN_NEW]]);
+    expect(other.lookups).toEqual([[FAN_1, FAN_GONE]]);
+
+    // Each page keeps its own answer; the account other got is the fan's.
+    expect(await pageAnswer(blocked, FAN_1)).toBe(false);
+    expect(await pageAnswer(other, FAN_1)).toBe(true);
+    expect(await fan(blocked, FAN_1)).toEqual({ username: "fan_01", deleted: false, page_alias: null, looked_up: true });
+    // A fan first met in an omission: its identity row and page link are
+    // ensured as for an unverified id, then the page's answer is written.
+    expect(await fan(blocked, FAN_NEW)).toEqual({ username: null, deleted: false, page_alias: null, looked_up: true });
+    expect(await pageAnswer(blocked, FAN_NEW)).toBe(false);
+    expect(await pageAnswer(blocked, FAN_GONE)).toBe(false);
+    expect(await pageAnswer(other, FAN_GONE)).toBe(false);
+    const marks = await testDb.pool.query(
+      `select platform_user_id as id, deleted_detected_at as first, deleted_last_detected_at as last
+         from fans where deleted_detected_at is not null or deleted_last_detected_at is not null`,
+    );
+    expect(marks.rows).toEqual([{ id: FAN_GONE, first: markedAt, last: markedAt }]);
+
+    // The DM partner probe through the page reuses the answer within the day:
+    // nothing is sent.
+    const probe = blocked.registry.spec("fan-profiles.probe")!;
+    await upsertDemand(db(), { pageId: blocked.pageId, resource: probe.key, kind: probe.kind, class: probe.class, subject: FAN_1 });
+    const probeWork = async () => (await testDb!.pool.query<{ state: string; close_reason: string | null; result: unknown }>(
+      "select state, close_reason, result from sync_work where page_id = $1 and resource = $2",
+      [blocked.pageId, probe.key],
+    )).rows;
+    await runUntil(blocked, async () => (await probeWork())[0]?.state === "done");
+    expect(blocked.lookups).toHaveLength(1);
+    expect(await probeWork()).toEqual([
+      { state: "done", close_reason: "probe_reused", result: expect.objectContaining({ resolution: "unresolved" }) },
+    ]);
+  });
+
+  it("the repository writes the answer on this page's links only, the latest answer kept", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await seedLivePage();
+    const otherPage = await seedLivePage();
+    const [returned, omitted, unlinked] = await upsertFans(db(), [FAN_1, FAN_2, FAN_3].map((platformUserId) => ({
+      platform: "fansly" as const,
+      platformUserId,
+    })));
+    await testDb.pool.query(
+      "insert into page_fans (fan_id, platform_account_id) values ($1, $3), ($2, $3), ($1, $4), ($2, $4)",
+      [returned!.id, omitted!.id, page.pageId, otherPage.pageId],
+    );
+    const answers = async () => (await testDb!.pool.query<{ page: number; fan: string; at: Date | null; resolved: boolean | null }>(
+      `select pf.platform_account_id::int as page, f.platform_user_id as fan, pf.account_probe_at as at, pf.account_probe_resolved as resolved
+         from page_fans pf join fans f on f.id = pf.fan_id
+        order by 1, 2`,
+    )).rows;
+
+    const first = new Date("2026-10-09T10:00:00.000Z");
+    await recordFanPageAccountLookupAnswers(db(), {
+      platformAccountId: page.pageId,
+      answeredAt: first,
+      resolvedFanIds: [returned!.id],
+      unresolvedFanIds: [omitted!.id, unlinked!.id],
+    });
+    expect(await answers()).toEqual([
+      { page: page.pageId, fan: FAN_1, at: first, resolved: true },
+      { page: page.pageId, fan: FAN_2, at: first, resolved: false },
+      { page: otherPage.pageId, fan: FAN_1, at: null, resolved: null },
+      { page: otherPage.pageId, fan: FAN_2, at: null, resolved: null },
+    ]);
+
+    // A later answer replaces the earlier one; an empty side writes nothing.
+    const later = new Date("2026-10-10T10:00:00.000Z");
+    await recordFanPageAccountLookupAnswers(db(), {
+      platformAccountId: page.pageId,
+      answeredAt: later,
+      resolvedFanIds: [omitted!.id],
+      unresolvedFanIds: [],
+    });
+    expect(await answers()).toEqual([
+      { page: page.pageId, fan: FAN_1, at: first, resolved: true },
+      { page: page.pageId, fan: FAN_2, at: later, resolved: true },
+      { page: otherPage.pageId, fan: FAN_1, at: null, resolved: null },
+      { page: otherPage.pageId, fan: FAN_2, at: null, resolved: null },
+    ]);
   });
 });

@@ -1595,7 +1595,8 @@ export const pageFans = pgTable(
     externalPresenceSource: text("external_presence_source"),
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).defaultNow().notNull(),
     // 0224: the Fansly account lookup through this page whose result Hub
-    // stored, and the DM partner probe's own answer (fan-hydration.ts,
+    // stored, and the page's last answer for the fan — the DM partner probe's
+    // or a lookup's, returned or omitted (fan-hydration.ts,
     // sync/fansly/resources/fan-profiles.ts). Neither is asked again within a day.
     accountLookupAt: timestamp("account_lookup_at", { withTimezone: true }),
     accountProbeAt: timestamp("account_probe_at", { withTimezone: true }),

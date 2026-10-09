@@ -104,7 +104,9 @@ A resource never sends a second request inside its apply. When an apply learns i
 subscribers, a fresh `/account/me` counter, a follower reconcile), it returns that as demand: a follow-up work row,
 or a plan that waits on `dependency` and makes the other work due. Fan profiles are one batch walk per page
 (`fan-profiles.lookup`): the asking apply merges the fan ids into the walk row's `params.ids`, and each step reads up
-to 100 of them not looked up through the page within the day.
+to 100 of them not looked up through the page within the day. Every asked id gets the page's own answer
+(`page_fans.account_probe_*`); an id the answer omits marks nothing on the shared fan row, since a fan who blocked the
+page is omitted too.
 
 A DM thread has three writers, each with its own columns: the conversation list (`dm-conversations.*`, through
 `upsertPageDmConversationListFields`: partner and fan, flags, unread count, the `last_message_*` head, visibility, the
