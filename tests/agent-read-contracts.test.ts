@@ -32,7 +32,7 @@ import {
   agentThreadMessagesQuerySchema,
   routeSchemas,
 } from "@agency_hub_core/contracts";
-import { AGENT_DATASET_SQL } from "@agency_hub_core/db";
+import { AGENT_DATASET_SQL, CLIENT_AUDIENCE_NEW_IGNORED_SUB_TYPES } from "@agency_hub_core/db";
 
 // Agent Read Plane slice A, contract gates. Every assertion here corresponds to a
 // property the design pays for elsewhere: the vocabulary is DERIVED (so a drift
@@ -470,6 +470,20 @@ describe("agent read plane: dataset registry <-> SQL mapping, both directions", 
     ]));
     expect(fields.get("publishedAt")?.filterable).toBe(true);
     expect(fields.get("lastObservedAt")?.filterable).toBe(true);
+  });
+
+  it("subscription events leave out what is no subscription, by the hub's one list of such subTypes", () => {
+    // The client's "new subscribers" list and this dataset must not disagree on
+    // whether a top-fan award is a subscription, so the dataset's SQL is built
+    // from the list the client list reads. Eligibility keeps the award out of
+    // rows without taking it out of the capture floor.
+    const mapping = AGENT_DATASET_SQL.subscription_events!;
+    expect(mapping.eligibilityColumn).toBe("k_eligible");
+    expect(mapping.source).toContain("as k_eligible");
+    expect(CLIENT_AUDIENCE_NEW_IGNORED_SUB_TYPES).toContain("customer_award_for_model_top");
+    for (const subType of CLIENT_AUDIENCE_NEW_IGNORED_SUB_TYPES) {
+      expect(mapping.source, subType).toContain(`'${subType}'`);
+    }
   });
 
   it("every mapped column is exposed by its own source projection", () => {

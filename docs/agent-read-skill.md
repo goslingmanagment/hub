@@ -672,6 +672,10 @@ rewrite the stored phase. `fanId` is returned only when the stored event identit
 still resolves to a fan of that page. Legacy v3 events that accidentally stored
 the creator id, and identities removed by erasure, keep their event row but expose
 `fanId=null`; the read path never rehydrates identity from raw capture payloads.
+OnlyFans also sends the top-fan award under the subscription notification
+(`subType=customer_award_for_model_top`). It is no subscription and is never a
+row here, under either phase or any filter; the stored event still counts toward
+the plane floor.
 Read the `domain_events` plane floor and blockers before reporting an absence or
 a total.
 
