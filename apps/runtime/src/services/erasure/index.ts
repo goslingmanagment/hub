@@ -50,6 +50,10 @@ import {
 // - Undeclared kinds (parse_version 0, no events) are reached by a payload
 //   text match on the fan ref (quoted-JSON form always; bare-numeric form
 //   with boundaries when the ref is numeric).
+// - Page-less kinds: a fan's platform material journaled with NO page
+//   (account_id null) is reached by the same payload match, but only under a
+//   kind named in PAGELESS_FAN_OBSERVATION_KINDS (below) — never every
+//   page-less row, because the erasure's own audit trail is page-less too.
 // - G5 slice 3b: execution reaches the CONTENT-ADDRESSED CATALOG too, in the
 //   same run. A capture body now lives twice — inline (still the authority)
 //   and once in capture_payload_objects — and slice 3c is about to remove the
@@ -324,6 +328,90 @@ function eventPredSql(scope: ResolvedScope, alias = ""): SQL {
   return sql`${a}account_id in ${scope.pageIds}`;
 }
 
+/** One observation kind a writer journals with no page. */
+export interface PagelessFanObservationKind {
+  kind: string;
+  /** The writer, as observation-kinds.ts names it. */
+  writer: string;
+}
+
+/** The session-less public Fansly account reader's journal kind (arena plan
+ *  §7, owner decision Р1). Its writer imports this constant. */
+export const ACCOUNT_LOOKUP_PUBLIC_OBSERVATION_KIND = "account_lookup_public";
+
+/**
+ * Arena plan §7 «Стирание» (R4, PR10): the observation kinds journaled with NO
+ * page that can name a fan, by platform, which the fan-scope plan therefore
+ * reaches by kind instead of by `account_id in` the platform's pages.
+ *
+ * Shipped one release BEFORE the writer, so the image a failed deploy rolls
+ * back to already erases what the writer journals. The reach is a payload
+ * match over this kind's rows only (the `(kind, received_at)` index of every
+ * partition keeps it an index scan), with the same subject literals as every
+ * other observation arm, and the same verdict as any other payload-matched
+ * capture: no domain event can reference a page-less observation
+ * (`domain_events.account_id` is NOT NULL), so a matching envelope is never
+ * "shared" by lineage and is erased WHOLE — a batch that also named other fans
+ * included, exactly like an unprojected batch receipt (the `ofapi_action_intents`
+ * target below says the same of a mixed command). A body is never rewritten
+ * under one fan's subject. The same reach holds in every plane: attached and
+ * parked partitions, the Parquet lake (`duckdbFanObservationReach`), and the
+ * catalog join that finds a pointer-only row in each of them.
+ *
+ * THE CONTRACT A WRITER OF A KIND ON THIS LIST FOLLOWS:
+ *   1. `account_id` and `native_account_ref` null, `platform` set to the
+ *      platform the kind is listed under, `kind` exactly the listed kind. A row
+ *      of another platform or with a page is not reached by this arm.
+ *   2. Every fan the payload covers is named by its platform id as a JSON
+ *      string (`"123"`, Fansly's own id form) or a bare JSON number — never only
+ *      inside a URL or query string (`ids=1,2,3`), which the subject match
+ *      cannot see. A requested-id list, if journaled, is a JSON array of ids.
+ *   3. A body stored in the capture catalog uses the `platform_capture` lane
+ *      (erasure domain `fan_subject`, platform account null): the fan scope's
+ *      catalog scan reaches unmapped fan-subject bodies, and the lineage step
+ *      translates them back to the page-less envelopes below.
+ *   4. Nothing relies on the envelope surviving: a later erasure of ANY fan in
+ *      a batch deletes it whole. A bystander's verdict written from it (e.g.
+ *      `fans.public_checked_at`) stays; its evidence row may not.
+ *   5. Not fenced. Like every capture, a page-less journal is not behind the
+ *      erasure fence (it guards archive material only): a writer selects its
+ *      fans from live rows at send time — an erased fan has no `fans` row —
+ *      and a re-run of the erasure takes whatever a racing answer journaled.
+ */
+export const PAGELESS_FAN_OBSERVATION_KINDS: Readonly<
+  Record<"onlyfans" | "fansly", readonly PagelessFanObservationKind[]>
+> = {
+  onlyfans: [],
+  fansly: [
+    {
+      kind: ACCOUNT_LOOKUP_PUBLIC_OBSERVATION_KIND,
+      writer: "sync/fansly/public-lookup.ts (arena R5, PR12)",
+    },
+    // The sync plane journals a failed answer's body under `<kind>:failed`
+    // (sync/engine/commit.ts failedBody); the reader may do the same.
+    {
+      kind: `${ACCOUNT_LOOKUP_PUBLIC_OBSERVATION_KIND}:failed`,
+      writer: "sync/fansly/public-lookup.ts (arena R5, PR12)",
+    },
+  ],
+};
+
+/** The page-less arm of a fan scope's observation reach: rows of the fan's
+ *  platform with no page, under a kind on PAGELESS_FAN_OBSERVATION_KINDS.
+ *  Null for a page/model scope and for a platform without such kinds. */
+function pagelessFanObservationPredSql(scope: ResolvedScope, alias = ""): SQL | null {
+  if (scope.input.scopeType !== "fan") {
+    return null;
+  }
+  const platform = scope.input.platform;
+  const kinds = PAGELESS_FAN_OBSERVATION_KINDS[platform].map((entry) => entry.kind);
+  if (kinds.length === 0) {
+    return null;
+  }
+  const a = alias ? sql.raw(`${alias}.`) : sql.raw("");
+  return sql`(${a}account_id is null and ${a}platform = ${platform} and ${a}kind in ${kinds})`;
+}
+
 function observationPagePredSql(scope: ResolvedScope): SQL {
   const extra = scope.ofapiExclusiveObservationIds?.length
     ? sql`or id in ${scope.ofapiExclusiveObservationIds}` : sql``;
@@ -410,10 +498,89 @@ function duckdbObservationPred(scope: ResolvedScope, eraseObsIds: number[]): str
   if (/^\d+$/.test(scope.fanRef!)) {
     parts.push(`regexp_matches(CAST(payload AS VARCHAR), '[:\\[,\\s]${ref}[,}\\]]')`);
   }
-  if (eraseObsIds.length > 0) {
-    parts.push(`id IN (${eraseObsIds.join(", ")})`);
+  // The payload match reaches the rows PostgreSQL's arms reach — the
+  // platform's pages and the listed page-less kinds — and nothing else, so a
+  // lake copy is never erased where its hot or parked twin would be kept.
+  // Confirmed lineage ids stay a separate arm.
+  const matched = `(${duckdbFanObservationReach(scope)} AND (${parts.join(" OR ")}))`;
+  return eraseObsIds.length > 0 ? `(${matched} OR id IN (${eraseObsIds.join(", ")}))` : matched;
+}
+
+/** DuckDB twin of the fan scope's observation reach: `account_id in` the
+ *  platform's pages, or `pagelessFanObservationPredSql`. */
+function duckdbFanObservationReach(scope: ResolvedScope): string {
+  const ids = scope.pageIds.join(", ") || "-1";
+  if (scope.input.scopeType !== "fan") {
+    return `account_id IN (${ids})`;
   }
-  return `(${parts.join(" OR ")})`;
+  const platform = scope.input.platform;
+  const kinds = PAGELESS_FAN_OBSERVATION_KINDS[platform].map((entry) => `'${duckdbEscape(entry.kind)}'`);
+  return kinds.length === 0
+    ? `account_id IN (${ids})`
+    : `(account_id IN (${ids}) OR (account_id IS NULL AND platform = '${duckdbEscape(platform)}' `
+      + `AND kind IN (${kinds.join(", ")})))`;
+}
+
+/** The observation Parquet files of one lake manifest: the file itself and
+ *  its restricted twin when it holds rows. */
+function lakeObservationParquets(file: LakeManifestFile): string[] {
+  return file.manifest.restrictedRowCount > 0
+    ? [file.parquetPath, file.restrictedParquetPath]
+    : [file.parquetPath];
+}
+
+/** A file exported before G5 slice 1 (0124) has no catalog reference columns,
+ *  so nothing in it can point at a catalog body. */
+async function parquetHasCatalogRefs(run: DuckRunner, parquet: string): Promise<boolean> {
+  const columns = await run(`DESCRIBE SELECT * FROM read_parquet('${duckdbEscape(parquet)}')`);
+  const names = new Set(columns.map((column) => String(column.column_name)));
+  return names.has("payload_bucket_month") && names.has("payload_object_id");
+}
+
+function duckdbCatalogRefValues(refs: readonly { bucketMonth: string; objectId: number }[]): string {
+  return refs
+    .map((ref) => `(DATE '${duckdbEscape(ref.bucketMonth)}', ${Number(ref.objectId)}::BIGINT)`)
+    .join(", ");
+}
+
+/**
+ * Which of `refs` a lake observation row still points at. Read AFTER the
+ * erasure's lake rewrite, so these are references of rows that survived it:
+ * the catalog sweep keeps their bodies, as it keeps a body an attached or
+ * parked envelope still needs.
+ */
+async function lakeCatalogReferences(
+  lakeFiles: LakeManifestFile[],
+  refs: readonly { bucketMonth: string; objectId: number }[],
+): Promise<Array<{ bucketMonth: string; objectId: number }>> {
+  const obsFiles = lakeFiles.filter((file) => file.table === "observations");
+  if (obsFiles.length === 0 || refs.length === 0) {
+    return [];
+  }
+  const found = new Map<string, { bucketMonth: string; objectId: number }>();
+  await withDuckDb(async (run) => {
+    for (const file of obsFiles) {
+      for (const parquet of lakeObservationParquets(file)) {
+        if (!(await parquetHasCatalogRefs(run, parquet))) {
+          continue;
+        }
+        for (let offset = 0; offset < refs.length; offset += CATALOG_LINEAGE_BATCH) {
+          const batch = refs.slice(offset, offset + CATALOG_LINEAGE_BATCH);
+          const referenced = await run(
+            `SELECT DISTINCT CAST(t.b AS VARCHAR) AS b, t.o AS o `
+            + `FROM read_parquet('${duckdbEscape(parquet)}') p `
+            + `JOIN (VALUES ${duckdbCatalogRefValues(batch)}) AS t(b, o) `
+            + `ON p.payload_bucket_month = t.b AND p.payload_object_id = t.o`,
+          );
+          for (const row of referenced) {
+            const ref = { bucketMonth: String(row.b), objectId: Number(row.o) };
+            found.set(`${ref.bucketMonth}:${ref.objectId}`, ref);
+          }
+        }
+      }
+    }
+  });
+  return [...found.values()];
 }
 
 // ---------------------------------------------------------------------------
@@ -587,18 +754,23 @@ async function collectFanLineage(
   }
 
   // Payload-matched observations (undeclared kinds carry the fan ref only
-  // inside the payload), hot + parked.
+  // inside the payload), hot + parked: the platform's pages, then the
+  // page-less kinds (one statement each, so each stays on its own index).
   const obsSources = ["observations", ...parked.observations];
+  const pagelessPred = pagelessFanObservationPredSql(scope);
+  const obsReaches = [sql`account_id in ${scope.pageIds}`, ...(pagelessPred === null ? [] : [pagelessPred])];
   for (const source of obsSources) {
-    const matched = await rows<{ id: string; kind: string }>(app, sql`
-      select id::text as id,kind from ${sql.raw(source)}
-      where account_id in ${scope.pageIds} and ${payloadMatchPredSql(scope.fanRef!, sql.raw("payload"), [scope.fanRef!, ...scope.fanGroupIds])}
-    `);
-    for (const row of matched) {
-      candidates.add(Number(row.id));
-      // B0 preserves whole envelopes; native fan exclusivity is not certified.
-      // Apply the existing unknown/shared residual law, never erase bystanders.
-      if (row.kind === "fansly.ws.frame.v1") shared.add(Number(row.id));
+    for (const reach of obsReaches) {
+      const matched = await rows<{ id: string; kind: string }>(app, sql`
+        select id::text as id,kind from ${sql.raw(source)}
+        where ${reach} and ${payloadMatchPredSql(scope.fanRef!, sql.raw("payload"), [scope.fanRef!, ...scope.fanGroupIds])}
+      `);
+      for (const row of matched) {
+        candidates.add(Number(row.id));
+        // B0 preserves whole envelopes; native fan exclusivity is not certified.
+        // Apply the existing unknown/shared residual law, never erase bystanders.
+        if (row.kind === "fansly.ws.frame.v1") shared.add(Number(row.id));
+      }
     }
     // Capture precedes response indexing. A crash between those writes must
     // not hide returned fan data, and a retry after hot deletion must still
@@ -636,8 +808,13 @@ async function collectFanLineage(
   // that is the point of landing it now: after slice 3c nulls the inline
   // column it becomes the ONLY arm that can find these rows, and the erasure
   // will not have to change on the day the heap is rewritten. Scoped to
-  // `account_id in pageIds` like the inline arm, so the two planes reach the
-  // same envelopes and neither can quietly out-erase the other.
+  // `account_id in pageIds` plus the page-less kinds, like the inline arm, so
+  // the two planes reach the same envelopes and neither can quietly out-erase
+  // the other.
+  const pagelessEnvelopePred = pagelessFanObservationPredSql(scope, "o");
+  const envelopeReach = pagelessEnvelopePred === null
+    ? sql`o.account_id in ${scope.pageIds}`
+    : sql`(o.account_id in ${scope.pageIds} or ${pagelessEnvelopePred})`;
   for (let offset = 0; offset < catalog.matches.length; offset += CATALOG_LINEAGE_BATCH) {
     const batch = catalog.matches.slice(offset, offset + CATALOG_LINEAGE_BATCH);
     const refs = sql.join(
@@ -648,18 +825,23 @@ async function collectFanLineage(
       ),
       sql`, `,
     );
-    const referencing = await rows<{ id: string; kind: string }>(app, sql`
-      with target (bucket_month, object_id) as (values ${refs})
-      select distinct o.id::text as id,o.kind
-      from target t
-      join observations o
-        on o.payload_bucket_month = t.bucket_month
-       and o.payload_object_id = t.object_id
-      where o.account_id in ${scope.pageIds}
-    `);
-    for (const row of referencing) {
-      candidates.add(Number(row.id));
-      if (row.kind === "fansly.ws.frame.v1") shared.add(Number(row.id));
+    // Attached and parked partitions alike: a tiered pointer-only envelope has
+    // no inline body for the payload arm to match, so this join is the only
+    // way to find it (the lake's copies are joined in the lake block below).
+    for (const source of obsSources) {
+      const referencing = await rows<{ id: string; kind: string }>(app, sql`
+        with target (bucket_month, object_id) as (values ${refs})
+        select distinct o.id::text as id,o.kind
+        from target t
+        join ${sql.raw(source)} o
+          on o.payload_bucket_month = t.bucket_month
+         and o.payload_object_id = t.object_id
+        where ${envelopeReach}
+      `);
+      for (const row of referencing) {
+        candidates.add(Number(row.id));
+        if (row.kind === "fansly.ws.frame.v1") shared.add(Number(row.id));
+      }
     }
     const rawReferencing = await rows<{ id: string }>(app, sql`
       with target (bucket_month, object_id) as (values ${refs})
@@ -708,17 +890,30 @@ async function collectFanLineage(
         }
       }
       for (const file of obsFiles) {
-        const paths = [file.parquetPath];
-        if (file.manifest.restrictedRowCount > 0) {
-          paths.push(file.restrictedParquetPath);
-        }
-        for (const parquet of paths) {
+        for (const parquet of lakeObservationParquets(file)) {
           const matched = await run(
             `SELECT id FROM read_parquet('${duckdbEscape(parquet)}') `
             + `WHERE ${duckdbObservationPred(scope, [])}`,
           );
           for (const row of matched) {
             candidates.add(Number(row.id));
+          }
+          // The catalog arm, lake side: a tiered pointer-only row carries no
+          // payload here, only its catalog reference.
+          if (catalog.matches.length > 0 && await parquetHasCatalogRefs(run, parquet)) {
+            for (let offset = 0; offset < catalog.matches.length; offset += CATALOG_LINEAGE_BATCH) {
+              const batch = catalog.matches.slice(offset, offset + CATALOG_LINEAGE_BATCH);
+              const referencing = await run(
+                `SELECT DISTINCT p.id, p.kind FROM read_parquet('${duckdbEscape(parquet)}') p `
+                + `JOIN (VALUES ${duckdbCatalogRefValues(batch)}) AS t(b, o) `
+                + `ON p.payload_bucket_month = t.b AND p.payload_object_id = t.o `
+                + `WHERE ${duckdbFanObservationReach(scope)}`,
+              );
+              for (const row of referencing) {
+                candidates.add(Number(row.id));
+                if (row.kind === "fansly.ws.frame.v1") shared.add(Number(row.id));
+              }
+            }
           }
           let cursor = 0;
           for (;;) {
@@ -1957,7 +2152,11 @@ async function rewriteLakeTarget(scopeRef: string, target: LakeTarget): Promise<
       (await run(`SELECT count(*)::bigint AS n FROM read_parquet('${source}')`))[0]?.n ?? 0,
     );
     await run(
-      `COPY (SELECT * FROM read_parquet('${source}') WHERE NOT (${target.pred})) `
+      // NULL-safe: a row the predicate cannot decide (a page-less row under a
+      // page scope, a pointer-only row's NULL payload, an event with no fan
+      // ref) is KEPT, as the plan's `WHERE pred` count left it out. A bare
+      // `NOT (pred)` dropped every such row together with the targets.
+      `COPY (SELECT * FROM read_parquet('${source}') WHERE NOT COALESCE((${target.pred}), FALSE)) `
       + `TO '${duckdbEscape(tmp)}' (FORMAT parquet)`,
     );
     const after = Number(
@@ -2004,6 +2203,7 @@ interface ErasureWork {
   lake: LakeTarget[];
   lineage: LedgerLineage | null;
   catalog: CapturePayloadCatalogWork;
+  lakeFiles: LakeManifestFile[];
 }
 
 async function buildWork(app: Db, input: ErasureScopeInput): Promise<ErasureWork> {
@@ -2068,6 +2268,7 @@ async function buildWork(app: Db, input: ErasureScopeInput): Promise<ErasureWork
     lake: await lakeTargets(app, scope, lakeFiles, lineage),
     lineage,
     catalog,
+    lakeFiles,
   };
 }
 
@@ -2178,20 +2379,23 @@ async function executeErasureLocked(
     }
   });
 
+  for (const target of work.lake) {
+    record(target, await rewriteLakeTarget(plan.scopeRef, target));
+  }
+
   // G5 slice 3b — the catalog plane, in the SAME run and deliberately AFTER
-  // the delete transaction: "no surviving envelope reference" is only true
-  // once those deletes are visible. Bounded batches, each its own transaction
-  // under the erasure fence, each independently resumable.
+  // the delete transaction AND the lake rewrite: "no surviving envelope
+  // reference" is only true once those deletes are visible, and a tiered row
+  // the lake still holds after its rewrite is a surviving reference too.
+  // Bounded batches, each its own transaction under the erasure fence, each
+  // independently resumable.
   const catalogOutcome = await sweepCapturePayloadCatalog(app, {
     scopeRef: plan.scopeRef,
     pageIds: work.scope.pageIds,
     matches: work.catalog.matches,
+    lakeReferenced: await lakeCatalogReferences(work.lakeFiles, work.catalog.matches),
   });
   record({ ...CATALOG_TARGET, rows: work.catalog.matches.length }, catalogOutcome.deleted.length);
-
-  for (const target of work.lake) {
-    record(target, await rewriteLakeTarget(plan.scopeRef, target));
-  }
 
   const catalogJournal = capturePayloadCatalogJournal(catalogOutcome);
   const resolution = await completeErasureLogAndSupersedeScope(app.db, {

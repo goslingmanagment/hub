@@ -59,6 +59,13 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
   // through, and the seam ~27–30 of this initiative's new Fansly kinds will
   // arrive on.
   { kind: "account_lookup", source: "pull", writer: "sync/fansly/capture.ts" },
+  // Arena plan §7 (owner decision Р1): the session-less public reader's raw
+  // answer for a batch of fan ids, journaled before parsing with NO page
+  // (account_id null). Registered AHEAD of its writer, as media_offer_stats
+  // was ahead of WP-F4: the fan erasure that must reach a page-less row ships
+  // a release earlier (R4), and the writer's contract lives with it —
+  // services/erasure/index.ts PAGELESS_FAN_OBSERVATION_KINDS.
+  { kind: "account_lookup_public", source: "pull", writer: "sync/fansly/public-lookup.ts (arena R5, PR12; not written yet)" },
   { kind: "account_me", source: "pull", writer: "services/sync/executor-handlers.ts" },
   { kind: "dm_conversations", source: "pull", writer: "sync/fansly/capture.ts" },
   { kind: "dm_messages", source: "pull", writer: "sync/fansly/capture.ts" },
@@ -465,6 +472,13 @@ export const RAW_ONLY_OBSERVATION_KINDS: readonly RawOnlyObservationKind[] = [
     justification:
       "Identity resolution for a single ref, used inline by the capture that asked for it; "
       + "no durable fact of its own beyond the identity the replay family already mints.",
+  },
+  {
+    kind: "account_lookup_public",
+    justification:
+      "Whether a fan's account answers a session-less lookup; the reader that asked writes "
+      + "its verdict itself (arena plan §7). Page-less, so no family can mint events from it: "
+      + "domain_events require an account.",
   },
   {
     kind: "earnings_accounts",

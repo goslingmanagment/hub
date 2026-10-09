@@ -39,11 +39,13 @@
 // its own, and 0123's note — "a body may die only when the last surviving
 // envelope reference is gone" — becomes executable here.
 //
-// ORDERING. The sweep runs in the SAME erasure run as the inline deletes, right
-// after the delete transaction commits, so one erasure decision covers both
-// planes from the operator's view and the reference counts it reads are the
-// POST-delete truth. It cannot run inside that transaction: the deletes must be
-// visible for "no surviving reference" to mean anything.
+// ORDERING. The sweep runs in the SAME erasure run as the inline deletes, after
+// the delete transaction commits and after the lake rewrite, so one erasure
+// decision covers every plane from the operator's view and the reference counts
+// it reads are the POST-delete truth — attached and parked envelopes probed in
+// SQL, surviving lake rows handed in by the caller. It cannot run inside that
+// transaction: the deletes must be visible for "no surviving reference" to mean
+// anything.
 //
 // RESUMABILITY. Every batch is its own transaction and every statement is
 // set-based over the batch's candidate list. A crash mid-sweep leaves earlier
@@ -188,6 +190,9 @@ export async function sweepCapturePayloadCatalog(
     pageIds: readonly number[];
     matches: readonly CapturePayloadErasureMatch[];
     batchSize?: number;
+    /** Candidates a surviving Parquet-lake row still references, read by the
+     *  caller after its lake rewrite: kept like any other referenced body. */
+    lakeReferenced?: readonly CapturePayloadRef[];
   },
 ): Promise<CapturePayloadCatalogSweepOutcome> {
   const batchSize = Math.max(1, input.batchSize ?? CAPTURE_CATALOG_ERASURE_BATCH);
@@ -206,7 +211,9 @@ export async function sweepCapturePayloadCatalog(
 
     const result = await app.db.transaction(async (tx) => {
       await acquireErasureFenceExclusiveLocks(tx as unknown as Db["db"], input.pageIds);
-      return deleteUnreferencedCapturePayloadObjects(tx as unknown as Db["db"], batch);
+      return deleteUnreferencedCapturePayloadObjects(tx as unknown as Db["db"], batch, {
+        lakeReferenced: input.lakeReferenced ?? [],
+      });
     });
 
     outcome.deleted.push(...result.deleted);
