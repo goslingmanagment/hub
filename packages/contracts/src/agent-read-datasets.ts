@@ -414,8 +414,17 @@ export const AGENT_DATASETS = {
     disclosesPurchase: false,
     fields: {
       platform: "string",
+      /** The UTC day the follows fell on (the rollup buckets `followed_at`
+       *  by UTC date) — not a Europe/Moscow business day. */
       businessDate: "date",
+      /** The page's total follower count Hub knew for that day; null = not
+       *  known (only today's value comes from the live sync). */
       followersCount: "int",
+      /** Follow relationships whose `followed_at` falls on that day, counted
+       *  over what Hub stores (a later unfollow still counts). Derived: the
+       *  rollup is rebuilt from `page_follows`, so a past day can still move.
+       *  A day with no row has no stored follow. */
+      newFollowers: "int",
     },
     defaultSort: { field: "businessDate", dir: "desc", nullsLast: false },
     stableKey: ["pageId"],

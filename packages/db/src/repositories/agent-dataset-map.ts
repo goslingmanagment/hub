@@ -352,7 +352,8 @@ const FOLLOWERS_DAILY = `
          null::text             as k_fan,
          p.platform::text       as f_platform,
          df.business_date::text as f_business_date,
-         df.known_total_followers as f_followers_count
+         df.known_total_followers as f_followers_count,
+         df.new_followers       as f_new_followers
   from daily_followers df
   join pages p on p.id = df.platform_account_id
 `;
@@ -1523,6 +1524,7 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
       platform: "f_platform",
       businessDate: "f_business_date",
       followersCount: "f_followers_count",
+      newFollowers: "f_new_followers",
     },
     windowColumn: "k_occurred_at",
     readPlanes: ["daily_followers"],

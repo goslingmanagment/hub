@@ -162,6 +162,18 @@ describe("agent read dataset vocabulary", () => {
       .toEqual(["read:datasets", "read:money", "read:messages"]);
   });
 
+  it("serves a page's daily new followers beside its known total", () => {
+    // traffic-control's Fansly follower metric is the day's NEW follows
+    // (daily_followers.new_followers); the total alone cannot replace it.
+    expect(AGENT_DATASETS.followers_daily.fields).toEqual({
+      platform: "string",
+      businessDate: "date",
+      followersCount: "int",
+      newFollowers: "int",
+    });
+    expect(agentDatasetRequiredCapabilities("followers_daily")).toEqual(["read:datasets"]);
+  });
+
   it("exposes stored subscription events without adding money or text access", () => {
     expect(AGENT_DATASETS.subscription_events.fields).toEqual({
       occurredAt: "timestamp",
