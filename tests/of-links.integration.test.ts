@@ -241,12 +241,12 @@ describe("GET /of-links/history", () => {
     expect(history.hubMoney).toMatchObject({ state: "no_data", reason: "not_computed" });
   });
 
-  it("counts a link older than the series from zero with a flag, and reads money from the deprecated column", async () => {
+  it("counts a link older than the series from zero with no_baseline, and reads money from the deprecated column", async () => {
     const history = await getOfLinkHistory(app.db, {
       pageId: vipPage, linkKind: "trial", linkRef: "10802699", from: "2026-07-22", to: "2026-07-22", now: NOW,
     });
     expect(history.days).toEqual([expect.objectContaining({
-      startObservedAt: null, clicks: 5000, claims: 1000, vendorNetMills: 5_000_000, flags: ["starts_before_series"],
+      startObservedAt: null, clicks: 5000, claims: 1000, vendorNetMills: 5_000_000, flags: ["no_baseline"],
     })]);
     expect(history.snapshots[0]).toMatchObject({ vendorNetMills: 5_000_000, fans: 1000 });
   });
@@ -260,7 +260,8 @@ describe("GET /of-links/history", () => {
       ["failed", false, "2026-10-09T09:45:00.000Z"],
     ]);
     expect(midday.days).toEqual([expect.objectContaining({
-      businessDate: "2026-10-09", missedWindows: 0, startObservedAt: null, clicks: 0, vendorNetMills: null, flags: ["money_unknown"],
+      // Created 10-08 19:55 MSK, first read 10-09: what it gathered before the day is not known apart.
+      businessDate: "2026-10-09", missedWindows: 0, startObservedAt: null, clicks: 0, vendorNetMills: null, flags: ["no_baseline", "money_unknown"],
     })]);
     const evening = await getOfLinkHistory(app.db, {
       pageId: vipPage, linkKind: "trial", linkRef: "11687581", from: "2026-10-09", to: "2026-10-09", now: at("2026-10-09T16:00:00Z"),
@@ -288,7 +289,7 @@ describe("GET /of-links/channels", () => {
         ["lora.reddit", 1, 6674, 1939, 8_483_440, ["binding_changed", "assumed_binding_start"]],
         // rsr_3 after its binding closed, the unbound new link (money unknown), and the
         // tracking link the series first read on 10-09 (older: counted whole, flagged).
-        [null, 3, 0, 0, 0, ["starts_before_series", "money_unknown"]],
+        [null, 3, 0, 0, 0, ["no_baseline", "money_unknown"]],
       ]);
     const porntoki = result.channels[0]!;
     expect(porntoki.contractors).toEqual([expect.objectContaining({ contractorKey: "coraline-red", validFromBasis: "confirmed" })]);
@@ -330,12 +331,26 @@ describe("GET /of-links/channels", () => {
     }
   });
 
+  it("keeps a deleted page's links in historical totals, and out of the current collection state", async () => {
+    const before = await getOfLinkChannels(app.db, { from: "2026-10-09", to: "2026-10-09", now: NOW });
+    const freeSegments = (result: typeof before) =>
+      result.channels.flatMap((channel) => channel.segments).filter((segment) => segment.pageId === freePage);
+    expect(freeSegments(before).map((segment) => segment.linkRef)).toEqual(["2099377", "2099526"]);
+    await testDb.pool.query("update pages set status = 'deleted', deleted_at = now() where id = $1", [freePage]);
+    const after = await getOfLinkChannels(app.db, { from: "2026-10-09", to: "2026-10-09", now: NOW });
+    expect(freeSegments(after)).toEqual(freeSegments(before));
+    expect(after.channels.at(-1)!.totals).toEqual(before.channels.at(-1)!.totals);
+    const current = await getOfLinks(app.db, { now: NOW });
+    expect(current.pages.map((page) => page.pageLabel)).toEqual(["lora-vip-of", "ari-of"]);
+    expect(current.links.some((link) => link.pageId === freePage)).toBe(false);
+  });
+
   it("over all time counts accumulated values from zero and flags the links older than the series", async () => {
     const result = await getOfLinkChannels(app.db, { now: NOW });
     expect(result.range.from).toBe("2026-07-22");
     const reddit = result.channels.find((channel) => channel.channelKey === "lora.reddit")!;
     expect(reddit.totals).toMatchObject({ clicks: 11674, claims: 2939, vendorNetMills: 13_483_440 });
-    expect(reddit.flags).toContain("starts_before_series");
+    expect(reddit.flags).toContain("no_baseline");
     const unbound = result.channels.at(-1)!;
     expect(unbound.channelKey).toBeNull();
     expect(unbound.segments.map((segment) => segment.pageLabel)).toContain("lora-of");

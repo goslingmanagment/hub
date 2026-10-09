@@ -7977,7 +7977,7 @@
                             "items": {
                               "type": "string",
                               "enum": [
-                                "starts_before_series",
+                                "no_baseline",
                                 "vendor_recalculated",
                                 "binding_changed",
                                 "money_unknown",
@@ -8109,7 +8109,7 @@
                                   "items": {
                                     "type": "string",
                                     "enum": [
-                                      "starts_before_series",
+                                      "no_baseline",
                                       "vendor_recalculated",
                                       "binding_changed",
                                       "money_unknown",
@@ -8306,7 +8306,7 @@
                             "items": {
                               "type": "string",
                               "enum": [
-                                "starts_before_series",
+                                "no_baseline",
                                 "vendor_recalculated",
                                 "binding_changed",
                                 "money_unknown",
@@ -8438,7 +8438,7 @@
                                   "items": {
                                     "type": "string",
                                     "enum": [
-                                      "starts_before_series",
+                                      "no_baseline",
                                       "vendor_recalculated",
                                       "binding_changed",
                                       "money_unknown",
@@ -9171,7 +9171,7 @@
                             "items": {
                               "type": "string",
                               "enum": [
-                                "starts_before_series",
+                                "no_baseline",
                                 "vendor_recalculated",
                                 "binding_changed",
                                 "money_unknown",

@@ -44,9 +44,14 @@ export interface OfLinkPageRow {
   ofapiAuthStatus: string | null;
 }
 
-/** Every active OnlyFans page (the series' population), or the one asked
- * for (whatever its state). */
-export async function listOfLinkPages(db: Database, input: { pageId?: number } = {}): Promise<OfLinkPageRow[]> {
+/** Every active OnlyFans page (the series' population, whose collection
+ * state is current), or the one asked for (whatever its state). With
+ * `withStoredSeries`, also every deleted page the series holds snapshots of:
+ * history does not shrink when a page is deleted. */
+export async function listOfLinkPages(
+  db: Database,
+  input: { pageId?: number; withStoredSeries?: boolean } = {},
+): Promise<OfLinkPageRow[]> {
   const result = await db.execute<{
     pageId: number | string;
     pageLabel: string;
@@ -58,7 +63,12 @@ export async function listOfLinkPages(db: Database, input: { pageId?: number } =
            p.ofapi_account_id as "ofapiAccountId", p.ofapi_auth_status as "ofapiAuthStatus"
     from pages p
     where p.platform = 'onlyfans'
-      and ${input.pageId === undefined ? sql`p.status = 'active'` : sql`p.id = ${input.pageId}`}
+      and ${input.pageId !== undefined
+        ? sql`p.id = ${input.pageId}`
+        : input.withStoredSeries === true
+          ? sql`(p.status = 'active'
+                 or exists (select 1 from page_link_stat_snapshots s where s.platform_account_id = p.id))`
+          : sql`p.status = 'active'`}
     order by p.id
   `);
   return result.rows.map((row) => ({
@@ -514,30 +524,6 @@ export async function listLinkSeriesAccountChanges(
   }));
 }
 
-/** The first finished read (complete or partial, empty or not) of each
- * (page, kind): from then on every link of the list is seen within a window
- * of its creation. Keyed `${pageId}:${kind}`. */
-export async function listLinkSeriesListFloors(
-  db: Database,
-  input: { pageIds: readonly number[] },
-): Promise<Map<string, Date>> {
-  const floors = new Map<string, Date>();
-  if (input.pageIds.length === 0) {
-    return floors;
-  }
-  const result = await db.execute<{ platformAccountId: number | string; linkKind: LinkStatKind; floor: Date | string }>(sql`
-    select r.platform_account_id as "platformAccountId", r.link_kind as "linkKind", min(r.pulled_at) as floor
-    from page_link_stat_runs r
-    where ${pageFilter("r.platform_account_id", input.pageIds)}
-      and r.status in ('complete', 'partial')
-    group by r.platform_account_id, r.link_kind
-  `);
-  for (const row of result.rows) {
-    floors.set(`${Number(row.platformAccountId)}:${row.linkKind}`, toDate(row.floor));
-  }
-  return floors;
-}
-
 export interface LinkSeriesWithMeta extends LinkSeries {
   name: string | null;
 }
@@ -556,7 +542,6 @@ export async function listLinkSeries(
   if (input.pageIds.length === 0) {
     return [];
   }
-  const floors = await listLinkSeriesListFloors(db, { pageIds: input.pageIds });
   const result = await db.execute<{
     platformAccountId: number | string;
     linkKind: LinkStatKind;
@@ -608,7 +593,6 @@ export async function listLinkSeries(
         linkRef: row.platformLinkId,
         name: row.name,
         linkCreatedAt: toDateOrNull(row.linkCreatedAt),
-        listFloorAt: floors.get(`${pageId}:${row.linkKind}`) ?? null,
         points: [],
       };
       series.set(key, entry);

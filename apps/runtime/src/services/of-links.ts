@@ -27,7 +27,6 @@ import {
   listLinkSeries,
   listLinkSeriesAccountChanges,
   listLinkSeriesAttempts,
-  listLinkSeriesListFloors,
   listLinkSeriesPairStates,
   listLinkSeriesWindowResults,
   listLinkSnapshotHistory,
@@ -413,9 +412,8 @@ export async function getOfLinkHistory(db: Database, input: {
   if (history.length === 0) {
     throw new OfLinksRequestError("not_found", "The series has never seen this link");
   }
-  const [seriesFloorAt, listFloors, attempts, windows, meta] = await Promise.all([
+  const [seriesFloorAt, attempts, windows, meta] = await Promise.all([
     readLinkSeriesFloor(db),
-    listLinkSeriesListFloors(db, { pageIds: [input.pageId] }),
     listLinkSeriesAttempts(db, { pageId: input.pageId, linkKind: input.linkKind, from: range.fromAt, to: range.toAt }),
     listLinkSeriesWindowResults(db, { pageId: input.pageId, linkKind: input.linkKind, from: range.fromAt, to: range.toAt }),
     listLatestLinkSnapshots(db, { pageIds: [input.pageId] }),
@@ -437,7 +435,6 @@ export async function getOfLinkHistory(db: Database, input: {
     linkKind: input.linkKind,
     linkRef: input.linkRef,
     linkCreatedAt: latest?.linkCreatedAt ?? null,
-    listFloorAt: listFloors.get(`${input.pageId}:${input.linkKind}`) ?? null,
     points: points.filter((point) => point.observedAt.getTime() < range.toAt.getTime()),
   };
 
@@ -556,7 +553,8 @@ export async function getOfLinkChannels(db: Database, input: {
     input.to ?? today,
     now,
   );
-  let pages = await listOfLinkPages(db);
+  // History: a deleted page's links still count for the time they ran.
+  let pages = await listOfLinkPages(db, { withStoredSeries: true });
   if (input.pageId !== undefined) {
     const page = await requirePage(db, input.pageId);
     pages = [page];

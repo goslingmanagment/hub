@@ -40,10 +40,11 @@ export const ofLinkRunStatusSchema = z.enum(["complete", "partial", "truncated",
 export const ofLinkValidFromBasisSchema = z.enum(["confirmed", "assumed_link_created"]);
 
 /** Flags on a delta (a day of a link, a channel segment, a channel total):
- *   starts_before_series     the start lies before the link's first snapshot
- *                            and the link is older than the series
- *                            (2026-07-22): the whole accumulated value is
- *                            counted from zero;
+ *   no_baseline              nothing was read before the start and the link
+ *                            is not one created inside the stretch (older
+ *                            than the series, missed by it, or of unknown
+ *                            creation): the whole value it had accumulated
+ *                            by the end is counted;
  *   vendor_recalculated      OFAPI lowered the link's net money between two
  *                            snapshots inside the delta — a recalculation,
  *                            not a loss;
@@ -59,7 +60,7 @@ export const ofLinkValidFromBasisSchema = z.enum(["confirmed", "assumed_link_cre
  *   assumed_contractor_start the channel's contractor term starts on an
  *                            assumed date (П9.7). */
 export const ofLinkDeltaFlagSchema = z.enum([
-  "starts_before_series",
+  "no_baseline",
   "vendor_recalculated",
   "binding_changed",
   "money_unknown",
@@ -313,8 +314,9 @@ export const ofLinkDaySchema = z.object({
   dayStartAt: isoTimestamp,
   dayEndAt: isoTimestamp,
   /** The last snapshots before the day's start and end; the delta is their
-   * difference. Null start: nothing before the day (see the flags); null
-   * end: nothing by the day's end, so no delta. */
+   * difference. Null start: nothing before the day — zero for a link created
+   * that day, else flag no_baseline; null end: nothing by the day's end, so
+   * no delta. */
   startObservedAt: isoTimestamp.nullable(),
   endObservedAt: isoTimestamp.nullable(),
   clicks: z.number().int().nullable(),

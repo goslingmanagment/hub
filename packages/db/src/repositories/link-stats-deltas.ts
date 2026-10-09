@@ -8,9 +8,11 @@
 //                    boundary instant belongs to what follows it.
 //   delta [a, b)     value before b minus value before a. No snapshot
 //                    before b: no delta. No snapshot before a: counted from
-//                    zero — exact for a link born under the series, and
-//                    flagged starts_before_series for a link older than its
-//                    list's first read (the whole accumulated value).
+//                    zero. That zero is a fact only for a link created at
+//                    or after a — it had nothing before. Any other link (one
+//                    older than the series, one the series missed reading,
+//                    one of unknown creation) gets the whole value it had
+//                    accumulated by b, flagged no_baseline: never silent.
 //   money            read from the same two snapshots. Either of them not
 //                    knowing it (a computing vendor value is unknown, not
 //                    zero) makes the money delta unknown (money_unknown);
@@ -28,7 +30,7 @@ import type { TrafficValidFromBasis } from "@agency_hub_core/shared";
 import type { LinkStatKind } from "./ofapi.ts";
 
 export type OfLinkDeltaFlag =
-  | "starts_before_series"
+  | "no_baseline"
   | "vendor_recalculated"
   | "binding_changed"
   | "money_unknown"
@@ -37,7 +39,7 @@ export type OfLinkDeltaFlag =
 
 /** Flag order on the wire: fixed, whatever order they were found in. */
 const FLAG_ORDER: readonly OfLinkDeltaFlag[] = [
-  "starts_before_series",
+  "no_baseline",
   "vendor_recalculated",
   "binding_changed",
   "money_unknown",
@@ -72,9 +74,6 @@ export interface LinkSeries {
   linkKind: LinkStatKind;
   linkRef: string;
   linkCreatedAt: Date | null;
-  /** The first finished read of the link's list (page × kind): where the
-   * series begins to see this list. */
-  listFloorAt: Date | null;
   points: readonly LinkSeriesPoint[];
 }
 
@@ -140,13 +139,10 @@ export function pointRecalculatedMoney(points: readonly LinkSeriesPoint[], index
   return previous !== null && money < previous;
 }
 
-/** The link existed before its list's first read: a missing start counts the
- * whole accumulated value. Unknown creation is treated as old. */
-function predatesList(series: LinkSeries): boolean {
-  if (series.linkCreatedAt === null) {
-    return true;
-  }
-  return series.listFloorAt === null || series.linkCreatedAt.getTime() < series.listFloorAt.getTime();
+/** Without a snapshot before `startAt`, zero is the link's value there only
+ * if the link did not exist yet: created at or after `startAt`. */
+function bornWithin(series: LinkSeries, startAt: Date): boolean {
+  return series.linkCreatedAt !== null && series.linkCreatedAt.getTime() >= startAt.getTime();
 }
 
 /** The delta of a link over [startAt, endAt). Null when the link has no
@@ -161,8 +157,8 @@ export function linkDeltaBetween(series: LinkSeries, startAt: Date, endAt: Date)
   const endPoint = points[endIndex]!;
   const startPoint = startIndex >= 0 ? points[startIndex]! : null;
   const flags = new Set<OfLinkDeltaFlag>();
-  if (startPoint === null && predatesList(series)) {
-    flags.add("starts_before_series");
+  if (startPoint === null && !bornWithin(series, startAt)) {
+    flags.add("no_baseline");
   }
   // Transitions inside the delta: into every point after the start, up to
   // and including the end (without a start, from the link's first point).
