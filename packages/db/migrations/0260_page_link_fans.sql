@@ -53,15 +53,24 @@
 --   * an unfinished walk closes nothing; a later sighting as active opens a
 --     new period; a fan first seen not active opens none.
 --
--- Fans erased by the owner go with their rows (fan_id ON DELETE CASCADE);
--- page erasure deletes all four tables' rows of the page.
+-- ERASURE. Page erasure deletes all four tables' rows of the page. Every row
+-- that names a fan (page_link_fans, and page_link_fan_periods through it)
+-- also hangs off the fan's page_fans row of the same page with ON DELETE
+-- CASCADE, so ANY erasure that removes the fan from the page removes them —
+-- including the page erasure of an image that does not know these tables
+-- (after a rollback), and a fan erasure (fans → page_fans → here). What an
+-- older image's page erasure would leave are walks and cursors: link ids,
+-- counts and an OFAPI account id, no fan. The projection writes a fan only
+-- while his page_fans row exists, and applies a journal page only under the
+-- erasure fence (the shared lock and tombstone check every projection uses),
+-- so an erased page's or fan's material is never written back.
 --
 -- Rollback-compatible: four new tables the previous image never names. After
 -- a rollback the journal keeps being written (PR 1 is in that image) and the
 -- cursor stays where it was; the next image's sweep applies the missed pages.
 --
--- LOCKING: the foreign keys to pages and fans take SHARE ROW EXCLUSIVE on
--- them for the instant of the CREATE (their writers wait behind it);
+-- LOCKING: the foreign keys to pages, fans and page_fans take SHARE ROW
+-- EXCLUSIVE on them for the instant of the CREATE (their writers wait behind it);
 -- lock_timeout keeps the wait brief — if the locks are not had in 5 s this
 -- aborts and the deploy rolls back.
 
@@ -99,7 +108,7 @@ create table if not exists page_link_fan_walks (
     api_pages >= 0 and items >= 0 and last_offset >= 0 and last_page_items >= 0
   ),
   constraint page_link_fan_walks_broken_check check (
-    broken_reason is null or broken_reason in ('offset_gap', 'pagination_invalid')
+    broken_reason is null or broken_reason in ('offset_gap', 'pagination_invalid', 'account_changed')
   ),
   -- A walk is finished, broken or still being read — never two of them.
   constraint page_link_fan_walks_state_check check (
@@ -134,6 +143,9 @@ create table if not exists page_link_fans (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   constraint page_link_fans_key_uniq unique (platform_account_id, link_kind, platform_link_id, fan_id),
+  -- The fan on this page: whatever removes him from the page removes this.
+  constraint page_link_fans_page_fan_fk foreign key (fan_id, platform_account_id)
+    references page_fans (fan_id, platform_account_id) on delete cascade,
   constraint page_link_fans_link_kind_check check (link_kind in ('tracking', 'trial')),
   constraint page_link_fans_link_id_check check (platform_link_id ~ '^[0-9]{1,20}$'),
   constraint page_link_fans_vendor_status_check check (vendor_status is null or vendor_status in ('active', 'expired')),
@@ -203,7 +215,7 @@ comment on column page_link_fan_walks.finished_at is
 comment on column page_link_fan_walks.next_offset is
   'The offset the next page of the walk must have; null once finished or broken.';
 comment on column page_link_fan_walks.broken_reason is
-  'offset_gap: a page did not continue the previous one (e.g. erased journal pages); pagination_invalid: the vendor''s next-page link named no usable offset. A broken walk never finishes and is evidence of nothing.';
+  'offset_gap: a page did not continue the previous one (e.g. erased journal pages); pagination_invalid: the vendor''s next-page link named no usable offset; account_changed: a page came under another OFAPI account than the walk''s first (a rebind mid-walk). A broken walk never finishes and is evidence of nothing.';
 comment on column page_link_fan_walks.evidential is
   'Set at finish: true when some subscriber list of the page under this walk''s OFAPI account had returned a fan by then. Only an evidential walk can count a fan absent (П9.10).';
 comment on table page_link_fans is

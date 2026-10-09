@@ -2653,7 +2653,7 @@ export const pageLinkFanWalks = pgTable(
     nextOffset: integer("next_offset"),
     lastOffset: integer("last_offset").notNull(),
     lastPageItems: integer("last_page_items").notNull(),
-    brokenReason: text("broken_reason").$type<"offset_gap" | "pagination_invalid">(),
+    brokenReason: text("broken_reason").$type<"offset_gap" | "pagination_invalid" | "account_changed">(),
     // Set at finish (П9.10): may this walk count a fan absent.
     evidential: boolean("evidential"),
     firstRawPayloadId: bigint("first_raw_payload_id", { mode: "number" }).notNull(),
@@ -2713,6 +2713,12 @@ export const pageLinkFans = pgTable(
       table.fanId,
     ),
     fanIdx: index("page_link_fans_fan_idx").on(table.fanId, table.platformAccountId),
+    // Whatever removes the fan from the page removes this row (erasure).
+    pageFanFk: foreignKey({
+      name: "page_link_fans_page_fan_fk",
+      columns: [table.fanId, table.platformAccountId],
+      foreignColumns: [pageFans.fanId, pageFans.platformAccountId],
+    }).onDelete("cascade"),
   }),
 );
 

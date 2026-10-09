@@ -82,12 +82,13 @@ export async function lockLinkFanJournalCursor(
   return { lastRawPayloadId: Number(row.last_raw_payload_id), rule: row.rule };
 }
 
-/** Move the cursor past one journal page, applied or skipped as unreadable. */
+/** Move an existing cursor past one journal page, applied or not; false when
+ *  the page has no cursor (it is never created here). */
 export async function advanceLinkFanJournalCursor(
   tx: Database,
   input: { pageId: number; rawPayloadId: number; applied: boolean },
-): Promise<void> {
-  await tx.execute(sql`
+): Promise<boolean> {
+  const result = await tx.execute(sql`
     update page_link_fan_journal_cursors
        set last_raw_payload_id = ${input.rawPayloadId},
            pages_applied = pages_applied + ${input.applied ? 1 : 0},
@@ -96,6 +97,7 @@ export async function advanceLinkFanJournalCursor(
      where platform_account_id = ${input.pageId}
        and last_raw_payload_id < ${input.rawPayloadId}
   `);
+  return Number((result as { rowCount?: number | null }).rowCount ?? 0) > 0;
 }
 
 export interface LinkFanJournalRow {
@@ -193,6 +195,7 @@ export interface LinkFansPageResult {
 
 interface WalkRow {
   id: number;
+  ofapiAccountId: string | null;
   startedAt: Date;
   finishedAt: Date | null;
   brokenReason: string | null;
@@ -205,6 +208,7 @@ interface WalkRow {
 
 type WalkSqlRow = {
   id: string;
+  ofapi_account_id: string | null;
   started_at: Date | string;
   finished_at: Date | string | null;
   broken_reason: string | null;
@@ -216,12 +220,13 @@ type WalkSqlRow = {
 };
 
 const WALK_COLUMNS = sql.raw(
-  "id::text, started_at, finished_at, broken_reason, next_offset, last_offset, last_page_items, items, evidential",
+  "id::text, ofapi_account_id, started_at, finished_at, broken_reason, next_offset, last_offset, last_page_items, items, evidential",
 );
 
 function toWalk(row: WalkSqlRow): WalkRow {
   return {
     id: Number(row.id),
+    ofapiAccountId: row.ofapi_account_id,
     startedAt: new Date(row.started_at),
     finishedAt: row.finished_at === null ? null : new Date(row.finished_at),
     brokenReason: row.broken_reason,
@@ -302,11 +307,17 @@ async function applyWalkPage(tx: Database, page: LinkFansPageInput): Promise<{
     return { walk, state: "ignored", finishedNow: false };
   }
 
+  // A walk is one account's answer. After a rebind mid-walk the sweep goes on
+  // under the same revision with the new account; a walk glued from two
+  // accounts' pages proves nothing (the new one's cold list is no absence).
   const reread = page.offset === walk.lastOffset && page.offset !== walk.nextOffset;
-  if (page.offset !== walk.nextOffset && !reread) {
+  const breaking = page.ofapiAccountId !== walk.ofapiAccountId
+    ? "account_changed"
+    : page.offset !== walk.nextOffset && !reread ? "offset_gap" : null;
+  if (breaking !== null) {
     const broken = await tx.execute<WalkSqlRow>(sql`
       update page_link_fan_walks
-         set broken_reason = 'offset_gap', next_offset = null,
+         set broken_reason = ${breaking}, next_offset = null,
              last_raw_payload_id = ${page.rawPayloadId}, updated_at = now()
        where id = ${walk.id}
       returning ${WALK_COLUMNS}
@@ -339,13 +350,16 @@ async function applyWalkPage(tx: Database, page: LinkFansPageInput): Promise<{
   };
 }
 
-async function resolveFanIds(tx: Database, platformUserIds: string[]): Promise<Map<string, number>> {
+/** The page's fans among the platform ids: a fan without his page_fans row
+ *  on this page (erased from it, or never upserted) is not written. */
+async function resolveFanIds(tx: Database, pageId: number, platformUserIds: string[]): Promise<Map<string, number>> {
   if (platformUserIds.length === 0) return new Map();
   const result = await tx.execute<{ id: string; platform_user_id: string }>(sql`
-    select id::text, platform_user_id
-      from fans
-     where platform = 'onlyfans'
-       and platform_user_id = any(${sql.param(platformUserIds)}::text[])
+    select f.id::text, f.platform_user_id
+      from fans f
+      join page_fans pf on pf.fan_id = f.id and pf.platform_account_id = ${pageId}
+     where f.platform = 'onlyfans'
+       and f.platform_user_id = any(${sql.param(platformUserIds)}::text[])
   `);
   return new Map(result.rows.map((row) => [row.platform_user_id, Number(row.id)]));
 }
@@ -361,9 +375,10 @@ const isoOrNull = (value: Date | null) => (value === null ? null : value.toISOSt
 
 /**
  * Apply one journaled page of a link's subscribers or spenders list. Call in a
- * transaction holding the page's projection lock, in journal order; the fans
- * the page names must already exist (the sweep upserts them before it
- * projects; a fan the owner erased since is skipped, never recreated).
+ * transaction holding the page's projection lock and the erasure fence, in
+ * journal order; the fans the page names must already be the page's (the
+ * sweep upserts fans and page_fans before it projects; a fan erased since is
+ * skipped, never recreated).
  */
 export async function applyLinkFansPage(tx: Database, page: LinkFansPageInput): Promise<LinkFansPageResult> {
   const { walk, state, finishedNow } = await applyWalkPage(tx, page);
@@ -381,7 +396,7 @@ export async function applyLinkFansPage(tx: Database, page: LinkFansPageInput): 
 
   if (page.listKind === "spenders") {
     const spenders = lastPerFan(page.spenders);
-    const fanIds = await resolveFanIds(tx, spenders.map((item) => item.platformUserId));
+    const fanIds = await resolveFanIds(tx, page.pageId, spenders.map((item) => item.platformUserId));
     const known = spenders.filter((item) => fanIds.has(item.platformUserId));
     result.unknownFans = spenders.length - known.length;
     result.fansSeen = known.length;
@@ -415,7 +430,7 @@ export async function applyLinkFansPage(tx: Database, page: LinkFansPageInput): 
   }
 
   const subscribers = lastPerFan(page.subscribers);
-  const fanIds = await resolveFanIds(tx, subscribers.map((item) => item.platformUserId));
+  const fanIds = await resolveFanIds(tx, page.pageId, subscribers.map((item) => item.platformUserId));
   const known = subscribers.filter((item) => fanIds.has(item.platformUserId));
   result.unknownFans = subscribers.length - known.length;
   result.fansSeen = known.length;

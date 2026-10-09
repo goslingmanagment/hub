@@ -62,11 +62,18 @@ async function seedPage(label = "lf-vip") {
   return page!;
 }
 
-async function seedFans(ids: number[]) {
+/** Fans of the page, as the sweep leaves them before it projects: a fans row
+ *  and the page's page_fans row. */
+async function seedFans(pageId: number, ids: number[]) {
   await testDb!.pool.query(
-    `insert into fans (platform, platform_user_id)
-     select 'onlyfans', unnest($1::text[]) on conflict do nothing`,
-    [ids.map(String)],
+    `with f as (
+       insert into fans (platform, platform_user_id)
+       select 'onlyfans', unnest($1::text[])
+       on conflict (platform, platform_user_id) do update set platform_user_id = excluded.platform_user_id
+       returning id)
+     insert into page_fans (fan_id, platform_account_id) select f.id, $2 from f
+     on conflict do nothing`,
+    [ids.map(String), pageId],
   );
 }
 
@@ -139,7 +146,7 @@ async function walks(pageId: number) {
 describe("link ↔ fan projection (ofapi_subscription_period_equal_split.v1)", () => {
   it("opens periods only for active fans, closes on 'not active' at once and on absence after two finished walks, and reopens as a new period", async () => {
     const page = await seedPage();
-    await seedFans([1, 2, 3]);
+    await seedFans(page.id, [1, 2, 3]);
 
     // Walk 1 is the floor: fan 1 active, fan 2 expired, fan 3 never flagged.
     await trialWalk(page.id, { linkId: "11170786", requestSeq: 1, start: at(0),
@@ -211,7 +218,7 @@ describe("link ↔ fan projection (ofapi_subscription_period_equal_split.v1)", (
 
   it("an unfinished walk, a broken one and a cold new account close nothing", async () => {
     const page = await seedPage();
-    await seedFans([1, 2]);
+    await seedFans(page.id, [1, 2]);
     await trialWalk(page.id, { linkId: "7", requestSeq: 1, start: at(0), pages: [[subscriber(1, true), subscriber(2, true)]] });
     // Unfinished twice: first page only, the second page never journaled.
     await trialWalk(page.id, { linkId: "7", requestSeq: 2, start: at(6), pages: [[], [subscriber(1, true)]], stopAfter: 1 });
@@ -242,7 +249,7 @@ describe("link ↔ fan projection (ofapi_subscription_period_equal_split.v1)", (
     expect(rows).toEqual([{ absent_walks: 0 }, { absent_walks: 0 }]);
 
     // Once the new account's lists return anyone, its finished walks count.
-    await seedFans([9]);
+    await seedFans(page.id, [9]);
     await trialWalk(page.id, { linkId: "8", requestSeq: 7, start: at(36), pages: [[subscriber(9, true)]], account: "acct_b" });
     await trialWalk(page.id, { linkId: "7", requestSeq: 7, start: at(36, 30), pages: [[]], account: "acct_b" });
     await trialWalk(page.id, { linkId: "7", requestSeq: 8, start: at(42), pages: [[]], account: "acct_b" });
@@ -253,12 +260,12 @@ describe("link ↔ fan projection (ofapi_subscription_period_equal_split.v1)", (
 
   it("a re-read page replaces its items; spenders feed the vendor's money and open no period; unknown fans and unreadable pages are skipped", async () => {
     const page = await seedPage("lf-free");
-    await seedFans([5, 6]);
+    await seedFans(page.id, [5, 6]);
     const body = (offset: number, items: Item[], hasNextPage: boolean): Item => ({
       link: { kind: "tracking", id: 42 }, list: "subscribers", offset, limit: 100, requestSeq: 1,
       ofapiAccountId: "acct_a", items, hasNextPage, nextPageUrl: null,
     });
-    await seedFans([7]);
+    await seedFans(page.id, [7]);
     // The chunk failed after journaling offset 0; the retry bought it again.
     await journal(page.id, "link_fans_tracking_subscribers", body(0, [subscriber(404, true)], true), at(0));
     await journal(page.id, "link_fans_tracking_subscribers", body(0, [subscriber(404, true), subscriber(5, true)], true), at(0, 1));
@@ -298,9 +305,132 @@ describe("link ↔ fan projection (ofapi_subscription_period_equal_split.v1)", (
     expect(cursor).toEqual([{ rule: LINK_ATTRIBUTION_RULE, pages_applied: 4, pages_skipped: 1 }]);
   });
 
+  it("a walk continued under another OFAPI account (a rebind mid-walk) is broken and closes nothing", async () => {
+    const page = await seedPage();
+    await seedFans(page.id, [1, 2]);
+    await trialWalk(page.id, { linkId: "7", requestSeq: 1, start: at(0), pages: [[subscriber(1, true), subscriber(2, true)]] });
+    // Fan 1 missed once by a finished walk under account A.
+    await trialWalk(page.id, { linkId: "7", requestSeq: 2, start: at(6), pages: [[subscriber(2, true)]] });
+    // Account A reads the first page, the sweep pauses, the page is rebound,
+    // account B answers the rest of the same revision with an empty last page.
+    const page3 = (offset: number, account: string, items: Item[], hasNextPage: boolean): Item => ({
+      link: { kind: "trial", id: 7 }, list: "subscribers", offset, limit: 100, requestSeq: 3,
+      ofapiAccountId: account, items, hasNextPage, nextPageUrl: null,
+    });
+    await journal(page.id, "link_fans_trial_subscribers", page3(0, "acct_a", [subscriber(2, true)], true), at(12));
+    await journal(page.id, "link_fans_trial_subscribers", page3(100, "acct_b", [], false), at(12, 30));
+    await project(page.id);
+
+    expect((await walks(page.id)).map(({ seq, finished, broken_reason }) => ({ seq, finished, broken_reason })))
+      .toEqual([
+        { seq: 1, finished: true, broken_reason: null },
+        { seq: 2, finished: true, broken_reason: null },
+        { seq: 3, finished: false, broken_reason: "account_changed" },
+      ]);
+    expect((await periods(page.id)).map((row) => [row.fan, row.closed_at])).toEqual([["1", null], ["2", null]]);
+    const { rows } = await testDb!.pool.query(
+      "select f.platform_user_id as fan, lf.absent_walks from page_link_fans lf join fans f on f.id = lf.fan_id order by 1");
+    expect(rows).toEqual([{ fan: "1", absent_walks: 1 }, { fan: "2", absent_walks: 0 }]);
+  });
+
+  it("a body that cannot be read now is not skipped: the call fails, the cursor stays, the next call applies it", async () => {
+    const page = await seedPage();
+    await seedFans(page.id, [1]);
+    // Pointer-only row whose catalog object cannot be read (a lost or
+    // momentarily unreachable copy).
+    const { rows } = await testDb!.pool.query<{ id: string }>(
+      `insert into sync_raw_payloads (page_id, endpoint, request_params, response_payload, mapper_version,
+         payload_kind, captured_at, retain_until, payload_bucket_month, payload_object_id)
+       values ($1, 'link_fans_trial_subscribers', '{}'::jsonb, null, 'ofapi-link-fans-v1', 'mapping_critical',
+         $2, now() + interval '100 years', '2026-10-01', 987654321)
+       returning id::text`,
+      [page.id, at(0)],
+    );
+    await expect(project(page.id)).rejects.toThrow();
+    const cursor = async () => (await testDb!.pool.query(
+      "select last_raw_payload_id::int as at, pages_skipped::int as skipped from page_link_fan_journal_cursors")).rows;
+    expect(await cursor()).toEqual([]);
+
+    // The copy is readable again.
+    await testDb!.pool.query(
+      `update sync_raw_payloads set response_payload = $2::jsonb, payload_bucket_month = null, payload_object_id = null
+        where id = $1`,
+      [rows[0]!.id, JSON.stringify({
+        link: { kind: "trial", id: 7 }, list: "subscribers", offset: 0, limit: 100, requestSeq: 1,
+        ofapiAccountId: "acct_a", items: [subscriber(1, true)], hasNextPage: false, nextPageUrl: null,
+      })],
+    );
+    expect(await project(page.id)).toMatchObject({ applied: 1, skipped: 0 });
+    expect(await cursor()).toEqual([{ at: Number(rows[0]!.id), skipped: 0 }]);
+  });
+
+  it("never writes back what an erasure took: the page's erased material, or a page naming an erased fan", async () => {
+    const page = await seedPage();
+    await seedFans(page.id, [1, 2]);
+    const owner = (await testDb!.pool.query<{ id: string }>(
+      "insert into users (username, role) values ('lf-owner', 'owner') returning id::text")).rows[0]!.id;
+
+    // A fan erasure of fan 2 that started after walk 2 was captured: walk 1
+    // (fan 1 alone) is applied, walk 2's page naming fan 2 is passed over.
+    await trialWalk(page.id, { linkId: "7", requestSeq: 1, start: at(0), pages: [[subscriber(1, true)]] });
+    await trialWalk(page.id, { linkId: "7", requestSeq: 2, start: at(6), pages: [[subscriber(1, true), subscriber(2, true)]] });
+    await testDb!.pool.query(
+      `insert into erasure_log (scope_type, scope_ref, initiated_by, dry_run, plan, started_at)
+       values ('fan', 'fan:onlyfans:2', $1, false, '{}'::jsonb, $2)`, [owner, at(7)]);
+    expect(await project(page.id)).toMatchObject({ applied: 1, fenced: 1 });
+    expect((await walks(page.id)).map((row) => row.seq)).toEqual([1]);
+    expect((await periods(page.id)).map((row) => row.fan)).toEqual(["1"]);
+
+    // An erasure of the whole page (its rows gone, its tombstone in place) and
+    // a journal page captured before it that a run had already read: nothing
+    // is written back, not even the cursor.
+    await testDb!.pool.query(
+      `insert into erasure_log (scope_type, scope_ref, initiated_by, dry_run, plan, started_at)
+       values ('page', 'page:lf-vip', $1, false, $2::jsonb, $3)`,
+      [owner, JSON.stringify({ resolvedPageIds: [page.id] }), at(13)]);
+    for (const table of ["page_link_fan_periods", "page_link_fans", "page_link_fan_walks", "page_link_fan_journal_cursors"]) {
+      await testDb!.pool.query(`delete from ${table} where platform_account_id = $1`, [page.id]);
+    }
+    await trialWalk(page.id, { linkId: "7", requestSeq: 3, start: at(12), pages: [[subscriber(1, true)]] });
+    expect(await project(page.id)).toMatchObject({ applied: 0, fenced: 1 });
+    for (const table of ["page_link_fan_periods", "page_link_fans", "page_link_fan_walks", "page_link_fan_journal_cursors"]) {
+      expect((await testDb!.pool.query(`select 1 from ${table} where platform_account_id = $1`, [page.id])).rowCount)
+        .toBe(0);
+    }
+
+    // While an erasure of the page runs (its exclusive fence lock held), the
+    // projection writes nothing and comes back later.
+    const eraser = await testDb!.pool.connect();
+    try {
+      await eraser.query("begin");
+      await eraser.query("select pg_advisory_xact_lock(815402, $1::integer)", [page.id]);
+      expect(await project(page.id)).toMatchObject({ applied: 0, fenced: 0, pending: true });
+      await eraser.query("rollback");
+    } finally {
+      eraser.release();
+    }
+  });
+
+  it("rows naming a fan go with the fan's page_fans row (an older image's page erasure), and a fan not on the page is not written", async () => {
+    const page = await seedPage();
+    await seedFans(page.id, [1, 2]);
+    // Fan 3 exists, but not on this page.
+    await testDb!.pool.query("insert into fans (platform, platform_user_id) values ('onlyfans', '3')");
+    await trialWalk(page.id, { linkId: "7", requestSeq: 1, start: at(0),
+      pages: [[subscriber(1, true), subscriber(2, true), subscriber(3, true)]] });
+    await project(page.id);
+    expect((await periods(page.id)).map((row) => row.fan)).toEqual(["1", "2"]);
+
+    await testDb!.pool.query("delete from page_fans where platform_account_id = $1", [page.id]);
+    for (const table of ["page_link_fan_periods", "page_link_fans"]) {
+      expect((await testDb!.pool.query(`select 1 from ${table} where platform_account_id = $1`, [page.id])).rowCount)
+        .toBe(0);
+    }
+  });
+
   it("waits for nobody: a held lock leaves the pages for the next call, which applies them in order", async () => {
     const page = await seedPage();
-    await seedFans([1]);
+    await seedFans(page.id, [1]);
     await trialWalk(page.id, { linkId: "7", requestSeq: 1, start: at(0), pages: [[subscriber(1, true)]] });
     const holder = await testDb!.pool.connect();
     try {

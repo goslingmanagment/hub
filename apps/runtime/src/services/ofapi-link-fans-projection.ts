@@ -18,6 +18,7 @@ import {
   advanceLinkFanJournalCursor,
   applyLinkFansPage,
   type Database,
+  isDmArchiveScopeFenced,
   type LinkFanJournalRow,
   type LinkFansPageInput,
   type LinkFansPageNext,
@@ -26,6 +27,7 @@ import {
   listLinkFanJournalRowsAfter,
   lockLinkFanJournalCursor,
   readLinkFanJournalCursor,
+  tryAcquireDmArchiveWriterFenceLock,
   tryLockLinkFanProjection,
 } from "@agency_hub_core/db";
 import {
@@ -36,7 +38,7 @@ import {
 
 import type { AppContext } from "../bootstrap.ts";
 import { idToString } from "./ofapi-payloads.ts";
-import { isCapturePayloadUnavailable, resolveCapturePayloadRow } from "./payload-reader.ts";
+import { resolveCapturePayloadRow } from "./payload-reader.ts";
 
 type ProjectionContext = Pick<AppContext, "db" | "logger">;
 
@@ -171,33 +173,72 @@ export function parseLinkFansJournalPage(endpoint: string, body: unknown): LinkF
   };
 }
 
-/** A journal row's body through the payload seam; a pointer-only row whose
- *  single copy is gone reads as unavailable (the row is skipped, not stuck). */
+/** A journal row's body through the payload seam. A body the seam cannot
+ *  read now throws (CapturePayloadUnavailableError is also what a transient
+ *  catalog failure looks like): the row stays after the cursor and the next
+ *  call reads it again — a journal page is never skipped for being
+ *  unreachable. */
 export async function readLinkFanJournalBody(
   ctx: ProjectionContext,
   db: Database,
   row: LinkFanJournalRow,
-): Promise<{ ok: true; body: unknown } | { ok: false; reason: string }> {
-  try {
-    const resolved = await resolveCapturePayloadRow({ db, logger: ctx.logger }, "raw_payload", row.id, row);
-    return { ok: true, body: resolved.payload };
-  } catch (error) {
-    if (isCapturePayloadUnavailable(error)) return { ok: false, reason: "journal body unavailable" };
-    throw error;
-  }
+): Promise<unknown> {
+  const resolved = await resolveCapturePayloadRow({ db, logger: ctx.logger }, "raw_payload", row.id, row);
+  return resolved.payload;
 }
 
-/** Apply one journal row (or skip it as unreadable) and move the cursor past
- *  it. Call in a transaction holding the page's projection lock, with the
- *  cursor right before the row. */
+/**
+ * Whether an executed erasure covers this journal page: a page (or model)
+ * erasure of the page, or a fan erasure of a fan the page names, started at
+ * or after the page's capture (the fence every projection of retained
+ * material uses, repositories/erasure-fence.ts). Call holding the fence's
+ * shared lock.
+ */
+async function isLinkFanJournalRowFenced(
+  tx: Database,
+  pageId: number,
+  row: LinkFanJournalRow,
+  parsed: LinkFansPageParse,
+): Promise<boolean> {
+  const refs = parsed.ok
+    ? [...parsed.page.subscribers, ...parsed.page.spenders].map((item) => item.platformUserId)
+    : [];
+  return isDmArchiveScopeFenced(tx, { pageId, platform: "onlyfans", refs, materialAt: row.capturedAt });
+}
+
+export type LinkFanJournalRowOutcome = "applied" | "skipped" | "fenced";
+
+/**
+ * Apply one journal row and move the cursor past it: a page an erasure covers
+ * is not applied (and no cursor is created for it — an erased page keeps
+ * none); a body that does not hold together is skipped with a warning. Call
+ * in a transaction holding the page's projection lock and the erasure
+ * fence's shared lock, with the cursor right before the row.
+ */
 export async function applyLinkFanJournalRow(
   ctx: ProjectionContext,
   tx: Database,
   pageId: number,
   row: LinkFanJournalRow,
-  body: { ok: true; body: unknown } | { ok: false; reason: string },
-): Promise<boolean> {
-  const parsed = body.ok ? parseLinkFansJournalPage(row.endpoint, body.body) : body;
+  body: unknown,
+): Promise<LinkFanJournalRowOutcome> {
+  const parsed = parseLinkFansJournalPage(row.endpoint, body);
+  if (await isLinkFanJournalRowFenced(tx, pageId, row, parsed)) {
+    await advanceLinkFanJournalCursor(tx, { pageId, rawPayloadId: row.id, applied: false });
+    return "fenced";
+  }
+  return applyUnfencedLinkFanJournalRow(ctx, tx, pageId, row, parsed);
+}
+
+/** The part after the fence check: apply (or skip as unreadable) and move
+ *  the cursor. */
+async function applyUnfencedLinkFanJournalRow(
+  ctx: ProjectionContext,
+  tx: Database,
+  pageId: number,
+  row: LinkFanJournalRow,
+  parsed: LinkFansPageParse,
+): Promise<"applied" | "skipped"> {
   if (parsed.ok) {
     await applyLinkFansPage(tx, { ...parsed.page, pageId, rawPayloadId: row.id, capturedAt: row.capturedAt });
   } else {
@@ -205,12 +246,14 @@ export async function applyLinkFanJournalRow(
       "link-fans projection skipped an unreadable journal page");
   }
   await advanceLinkFanJournalCursor(tx, { pageId, rawPayloadId: row.id, applied: parsed.ok });
-  return parsed.ok;
+  return parsed.ok ? "applied" : "skipped";
 }
 
 export interface LinkFanProjectionStats {
   applied: number;
   skipped: number;
+  /** Journal pages an erasure covers, passed over unapplied. */
+  fenced: number;
   /** Journal rows were left for a later call (the page cap, or the lock was
    *  held by a rebuild). */
   pending: boolean;
@@ -221,15 +264,17 @@ export interface LinkFanProjectionStats {
 
 /**
  * Apply the page's journal rows after its cursor, oldest first, up to
- * `maxPages`, each in its own transaction. Never waits for the lock: while a
- * rebuild holds it the call returns at once and the rows wait for the next
- * call.
+ * `maxPages`, each in its own transaction under the page's projection lock
+ * and the erasure fence's shared lock. Never waits for either: while a
+ * rebuild or an erasure holds one, the call returns at once and the rows wait
+ * for the next call. A body that cannot be read now throws, leaving its row
+ * for the next call.
  */
 export async function projectLinkFanJournal(
   ctx: ProjectionContext,
   input: { pageId: number; maxPages: number },
 ): Promise<LinkFanProjectionStats> {
-  const stats: LinkFanProjectionStats = { applied: 0, skipped: 0, pending: false, ruleMismatch: false };
+  const stats: LinkFanProjectionStats = { applied: 0, skipped: 0, fenced: 0, pending: false, ruleMismatch: false };
   for (let step = 0; step < input.maxPages; step += 1) {
     const cursor = await readLinkFanJournalCursor(ctx.db, input.pageId);
     if (cursor !== null && cursor.rule !== LINK_ATTRIBUTION_RULE) {
@@ -241,12 +286,22 @@ export async function projectLinkFanJournal(
     if (!row) return stats;
     const body = await readLinkFanJournalBody(ctx, ctx.db, row);
     const outcome = await ctx.db.transaction(async (tx) => {
+      // A rebuild, or an erasure of the page, is running: come back later.
       if (!(await tryLockLinkFanProjection(tx, input.pageId))) return "busy" as const;
+      if (!(await tryAcquireDmArchiveWriterFenceLock(tx, input.pageId))) return "busy" as const;
+      // An erasure that ran since the body was read: nothing of it is
+      // written, not even a cursor.
+      const parsed = parseLinkFansJournalPage(row.endpoint, body);
+      if (await isLinkFanJournalRowFenced(tx, input.pageId, row, parsed)) {
+        return (await advanceLinkFanJournalCursor(tx, { pageId: input.pageId, rawPayloadId: row.id, applied: false }))
+          ? "fenced" as const
+          : "fenced_no_cursor" as const;
+      }
       const locked = await lockLinkFanJournalCursor(tx, input.pageId, LINK_ATTRIBUTION_RULE);
       if (locked.rule !== LINK_ATTRIBUTION_RULE) return "rule" as const;
       // Another writer moved the cursor since it was read: read it again.
       if (locked.lastRawPayloadId !== afterId) return "moved" as const;
-      return (await applyLinkFanJournalRow(ctx, tx, input.pageId, row, body)) ? "applied" as const : "skipped" as const;
+      return applyUnfencedLinkFanJournalRow(ctx, tx, input.pageId, row, parsed);
     });
     if (outcome === "busy") {
       stats.pending = true;
@@ -256,8 +311,15 @@ export async function projectLinkFanJournal(
       stats.ruleMismatch = true;
       return stats;
     }
+    // The page's material is erased and it has no cursor to move: stop here
+    // (the erasure's leftovers, if any, are met again next call, unapplied).
+    if (outcome === "fenced_no_cursor") {
+      stats.fenced += 1;
+      return stats;
+    }
     if (outcome === "applied") stats.applied += 1;
     if (outcome === "skipped") stats.skipped += 1;
+    if (outcome === "fenced") stats.fenced += 1;
   }
   const cursor = await readLinkFanJournalCursor(ctx.db, input.pageId);
   const rest = await listLinkFanJournalRowsAfter(ctx.db, {

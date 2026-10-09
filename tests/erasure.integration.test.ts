@@ -1207,6 +1207,7 @@ describe("erasure drill (Stage 28 Task 4)", () => {
     // fans row is the fan's, not the page's (fan erasure takes it).
     await testDb.pool.query(`
       with fan as (insert into fans (platform, platform_user_id) values ('onlyfans', 'erasure-link-fan') returning id),
+           page_fan as (insert into page_fans (fan_id, platform_account_id) select fan.id, $1 from fan returning fan_id),
            walk as (insert into page_link_fan_walks (platform_account_id, link_kind, platform_link_id, list_kind,
                       request_seq, started_at, finished_at, last_offset, last_page_items, evidential,
                       first_raw_payload_id, last_raw_payload_id)
@@ -1214,7 +1215,7 @@ describe("erasure drill (Stage 28 Task 4)", () => {
            lf as (insert into page_link_fans (platform_account_id, link_kind, platform_link_id, fan_id,
                     in_subscriber_list, first_seen_at, last_seen_at, last_seen_walk_id, last_seen_active,
                     first_raw_payload_id, last_raw_payload_id)
-                  select $1, 'trial', '7', fan.id, true, now(), now(), walk.id, true, 1, 1 from fan, walk
+                  select $1, 'trial', '7', page_fan.fan_id, true, now(), now(), walk.id, true, 1, 1 from page_fan, walk
                   returning id, fan_id, last_seen_walk_id)
       insert into page_link_fan_periods (platform_account_id, link_kind, platform_link_id, fan_id, link_fan_id,
         period_start_source, opened_at, opened_walk_id)
