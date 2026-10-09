@@ -38,6 +38,7 @@ import {
   ofapiReadCoverage,
 } from "./ofapi-read-normalization.ts";
 import { OfapiGovernedRequestError } from "./ofapi.ts";
+import { checkOfapiCollectionStaleness } from "./ofapi-collection-stale.ts";
 import { sweepOfapiMarketingIntents } from "./ofapi-smart-links.ts";
 export type OfapiCollectionJob = NonNullable<
   Awaited<ReturnType<typeof getOfapiCollectionJob>>
@@ -461,6 +462,9 @@ export async function sweepOfapiCollections(
       ...(Object.keys(handlers) as OfapiCollectionCategory[]),
     ]),
   ]);
+  // A category no scheduled run completed for two intervals: one digest-only
+  // incident per page (plan §2.8 п. 3). Never throws.
+  await checkOfapiCollectionStaleness(app);
   for (const row of await listPendingOfapiCollectionJobs(app.db))
     await boss.send(
       OFAPI_COLLECTION_RUN_QUEUE,

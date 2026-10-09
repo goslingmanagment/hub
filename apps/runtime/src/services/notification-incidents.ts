@@ -51,6 +51,11 @@ export const OFAPI_LINK_STATS_PAGE_UNMAPPED_SUBKEY = "page_unmapped";
 export type OfapiLinkStatsPageSubKey =
   | typeof OFAPI_LINK_STATS_SERIES_STALE_SUBKEY
   | typeof OFAPI_LINK_STATS_PAGE_UNMAPPED_SUBKEY;
+/** Traffic sources plan §2.8 п. 3 / §2.10: a page whose scheduled OFAPI
+ * collection has a category no run completed for more than two intervals.
+ * Under `read_gateway_capture` (the collection's capture plane; a new kind is
+ * a contract change), page-scoped; digest only, never a page. */
+export const OFAPI_COLLECTION_STALE_SUBKEY = "collection_stale";
 /** Plan §10, design §9.6: the Fansly Sync Engine's five alerts, one subKey
  * each under the kind `fansly_sync_engine` (0233). 1–4 are page-scoped, 5
  * (`process`) is global. */
@@ -224,6 +229,9 @@ function openTitleForIncident(
   if (input.kind === "ofapi_link_stats_reconcile_failed" && input.subKey === OFAPI_LINK_STATS_PAGE_UNMAPPED_SUBKEY) {
     return "🚨 OnlyFans page has no OFAPI account mapping";
   }
+  if (input.kind === "read_gateway_capture" && input.subKey === OFAPI_COLLECTION_STALE_SUBKEY) {
+    return "🚨 OnlyFans scheduled collection is stale";
+  }
   // The engine's alerts: one kind, a title per alert — the owner acts on the
   // first line.
   if (input.kind === "fansly_sync_engine") {
@@ -377,6 +385,9 @@ function resolveDetailForIncident(
     case "wrong_transactions_writer":
       return "Transactions writer conflict cleared";
     case "read_gateway_capture":
+      if (input.subKey === OFAPI_COLLECTION_STALE_SUBKEY) {
+        return "OnlyFans scheduled collection completing on schedule again";
+      }
       return "Read-gateway capture tee healthy again";
     case "golden_signal_lag":
       return "Golden-signal lag back under threshold";
@@ -1137,6 +1148,43 @@ export function ofapiLinkStatsPageIncidentKey(input: { subKey: OfapiLinkStatsPag
     platformAccountId: input.pageId,
     subKey: input.subKey,
   });
+}
+
+/** Open (or refresh) a page's stale-collection latch; the minutely collection
+ * sweep is the one caller. Digest only: the paging policy never pages it. */
+export async function notifyOfapiCollectionStaleIncident(
+  app: IncidentApp,
+  input: { pageId: number; pageLabel: string; errorSummary: string; occurredAt: Date },
+): Promise<boolean> {
+  return openIncidentAndNotify(app, {
+    kind: "read_gateway_capture",
+    platformAccountId: input.pageId,
+    pageLabel: input.pageLabel,
+    platform: "onlyfans",
+    subKey: OFAPI_COLLECTION_STALE_SUBKEY,
+    errorCode: OFAPI_COLLECTION_STALE_SUBKEY,
+    errorSummary: input.errorSummary,
+    occurredAt: input.occurredAt,
+  });
+}
+
+export async function resolveOfapiCollectionStaleIncident(
+  app: IncidentApp,
+  input: { pageId: number; pageLabel: string | null; recoveredAt: Date },
+): Promise<boolean> {
+  return resolveIncidentAndNotify(app, {
+    kind: "read_gateway_capture",
+    platformAccountId: input.pageId,
+    pageLabel: input.pageLabel,
+    platform: "onlyfans",
+    subKey: OFAPI_COLLECTION_STALE_SUBKEY,
+    recoveredAt: input.recoveredAt,
+  });
+}
+
+/** The latch key of one page's stale-collection incident. */
+export function ofapiCollectionStaleIncidentKey(pageId: number): string {
+  return incidentKey({ kind: "read_gateway_capture", platformAccountId: pageId, subKey: OFAPI_COLLECTION_STALE_SUBKEY });
 }
 
 /**

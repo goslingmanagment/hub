@@ -19,6 +19,7 @@ const collectionMocks = vi.hoisted(() => ({
   useOfapiCollectionJobCreate: vi.fn(),
   useOfapiCollectionJobResume: vi.fn(() => ({ isPending: false, isError: false, mutate: vi.fn() })),
   useOfapiCollectionJobFinishIncomplete: vi.fn(),
+  useAdminOfapiCollectionJobs: vi.fn(),
   OFAPI_COLLECTION_QUERY_KEY: ["admin", "ofapi-collection"],
 }));
 
@@ -165,6 +166,7 @@ function policy(
     usage: { callsToday: 0, reservedCreditsToday: 0, credits30d: 0, actualCreditsToday: null },
     lastCapturedAt: null,
     inFlight: 0,
+    scheduleHealth: { expected: false, stale: false, staleAt: null, lastCompletedAt: null, lastRun: null },
     ...overrides,
   };
 }
@@ -249,6 +251,7 @@ beforeEach(() => {
   collectionMocks.useOfapiCollectionJobCreate.mockImplementation(idleMutation);
   collectionMocks.useOfapiCollectionJobResume.mockImplementation(idleMutation);
   collectionMocks.useOfapiCollectionJobFinishIncomplete.mockImplementation(idleMutation);
+  collectionMocks.useAdminOfapiCollectionJobs.mockReturnValue({ data: undefined, isPending: false, isError: false, error: null });
   collectionMocks.useAdminOfapiWebhookStatus.mockReturnValue({
     data: {
       configured: true,
@@ -275,7 +278,7 @@ describe("CollectionTab (static render)", () => {
     const fixture = snapshotFixture();
     fixture.jobs = [{ id: "scheduled-read", pageId: 7, category: "posts_comments", state: "paused",
       maxCredits: 10, maxCalls: 10, maxBytes: 1000, usedCredits: 2, usedCalls: 2, usedBytes: 200,
-      createdAt: "2026-09-07T05:00:00Z", reason: "Vendor HTTP 404; response captured", canFinishIncomplete: true }];
+      createdAt: "2026-09-07T05:00:00Z", reason: "Vendor HTTP 404; response captured", canFinishIncomplete: true, stepsDone: 0, stepsTotal: 1 }];
     const markup = withRouter(createElement(JobsCard, { snapshot: fixture, scope: { kind: "all" } }));
     expect(markup).toContain("Завершить неполный проход");
     expect(markup).toContain("Vendor HTTP 404; response captured");
@@ -283,10 +286,58 @@ describe("CollectionTab (static render)", () => {
     fixture.jobs[0]!.canFinishIncomplete = false;
     expect(withRouter(createElement(JobsCard, { snapshot: fixture, scope: { kind: "all" } }))).not.toContain("Завершить неполный проход");
   });
+  it("names a scheduled run that outgrows its call cap and lists paused jobs with a state filter", () => {
+    const fixture = snapshotFixture();
+    fixture.jobs = [{ id: "capped", pageId: 7, category: "profile_notifications", state: "failed",
+      maxCredits: 200, maxCalls: 25, maxBytes: 1000, usedCredits: 25, usedCalls: 25, usedBytes: 200,
+      createdAt: "2026-10-09T02:29:49Z", reason: "scheduled_run_exhausted:job_limit", canFinishIncomplete: false, stepsDone: 1, stepsTotal: 4 }];
+    const markup = withRouter(createElement(JobsCard, { snapshot: fixture, scope: { kind: "all" } }));
+    expect(markup).toContain("проход не успевает за лимит вызовов: 25 из 25 · остановился на шаге 2 из 4");
+    expect(markup).not.toContain("scheduled_run_exhausted:job_limit");
+    expect(markup).toContain('aria-label="Фильтр задач по состоянию"');
+    expect(markup).toContain("Незавершённые");
+    // The unfiltered list is the snapshot's own; the filtered query stays idle.
+    expect(collectionMocks.useAdminOfapiCollectionJobs).toHaveBeenCalledWith(null);
+  });
+  it("shows the stale banner and row state from the server's schedule health, never on its own", () => {
+    const fixture = snapshotFixture();
+    const capped = fixture.policies.find((row) => row.pageId === 7 && row.category === "profile_notifications")!;
+    Object.assign(capped, { mode: "scheduled", source: "page", state: "applied", maxCallsPerRun: 25,
+      scheduleHealth: { expected: true, stale: true, staleAt: "2026-09-09T05:14:22.000Z", lastCompletedAt: null,
+        lastRun: { id: "capped", state: "failed", reason: "scheduled_run_exhausted:job_limit", exhaustedLimit: "job_limit",
+          usedCalls: 25, maxCalls: 25, usedCredits: 25, maxCredits: 200, stepsDone: 1, stepsTotal: 4,
+          createdAt: "2026-10-09T02:29:49.000Z", updatedAt: "2026-10-09T02:35:21.000Z" } } });
+    const paused = fixture.policies.find((row) => row.pageId === 9 && row.category === "vault_catalog")!;
+    Object.assign(paused, { mode: "scheduled", source: "page", state: "applied",
+      scheduleHealth: { expected: true, stale: true, staleAt: "2026-10-01T00:00:00.000Z", lastCompletedAt: "2026-09-29T00:00:00.000Z",
+        lastRun: { id: "parked", state: "paused", reason: "OFAPI collection policy refused dispatch", exhaustedLimit: null,
+          usedCalls: 1, maxCalls: 5, usedCredits: 1, maxCredits: 7000, stepsDone: 0, stepsTotal: 2,
+          createdAt: "2026-09-30T00:00:00.000Z", updatedAt: "2026-09-30T00:01:00.000Z" } } });
+    collectionMocks.useAdminOfapiCollection.mockReturnValue({
+      data: fixture, isLoading: false, isFetching: false, error: null, refetch: vi.fn(),
+    });
+    const markup = renderTab();
+    expect(markup).toContain('data-testid="collection-stale-banner"');
+    expect(markup).toContain("Сбор по расписанию отстаёт: 2 категории не завершались успешно");
+    expect(markup).toContain("Профиль и уведомления</span> · lora-of — проход не успевает за лимит вызовов: 25 из 25 · остановился на шаге 2 из 4");
+    expect(markup).toContain("успешных проходов не было");
+    expect(markup).toContain("проход на паузе — нужен человек");
+    expect(markup).toContain("последний успешный проход 2026-09-29 00:00 UTC");
+    expect(markup).toContain("увеличьте «Запросов за запуск, не более»");
+    expect(markup).toContain("устарело");
+
+    // A healthy snapshot has no banner; a stale flag only comes from the server.
+    collectionMocks.useAdminOfapiCollection.mockReturnValue({
+      data: snapshotFixture(), isLoading: false, isFetching: false, error: null, refetch: vi.fn(),
+    });
+    const healthy = renderTab();
+    expect(healthy).not.toContain("collection-stale-banner");
+    expect(healthy).not.toContain("устарело");
+  });
   it("explains preserved uncertain charges and the next scheduled run before confirmation", () => {
     const job = { id: "scheduled-read", pageId: 7, category: "posts_comments" as const, state: "paused",
       maxCredits: 10, maxCalls: 10, maxBytes: 1000, usedCredits: 2, usedCalls: 2, usedBytes: 200,
-      createdAt: "2026-09-07T05:00:00Z", reason: "response body read failed", canFinishIncomplete: true };
+      createdAt: "2026-09-07T05:00:00Z", reason: "response body read failed", canFinishIncomplete: true, stepsDone: 0, stepsTotal: 1 };
     const props = { job, pageLabel: "lora-of", pending: false, error: null, onClose: vi.fn(), onConfirm: vi.fn() };
     const markup = renderToStaticMarkup(createElement(FinishIncompleteRunModal, props));
     expect(markup).toContain('role="dialog"');

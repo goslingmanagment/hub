@@ -18,6 +18,9 @@ export type OfapiCollectionPolicyState = OfapiCollectionPolicy["state"];
 export type OfapiCollectionCatalogEntry = OfapiCollectionSnapshot["catalog"][number];
 export type OfapiCollectionPage = OfapiCollectionSnapshot["pages"][number];
 export type OfapiCollectionJob = OfapiCollectionSnapshot["jobs"][number];
+export type OfapiCollectionScheduleHealth = OfapiCollectionPolicy["scheduleHealth"];
+export type OfapiCollectionRun = NonNullable<OfapiCollectionScheduleHealth["lastRun"]>;
+export type OfapiCollectionJobStateFilter = NonNullable<NonNullable<Parameters<typeof kernel.ofapiCollectionGet>[0]>["query"]>["jobState"];
 export type OfapiCollectionAuditRow = OfapiCollectionSnapshot["audit"][number];
 export type OfapiCollectionApplyResult = Awaited<ReturnType<typeof kernel.ofapiCollectionApply>>;
 export type OfapiCollectionJobCreateResult = Awaited<ReturnType<typeof kernel.ofapiCollectionJobCreate>>;
@@ -28,6 +31,20 @@ export function useAdminOfapiCollection() {
     ...ofapiCollectionQueryOptions(),
     refetchInterval: 15_000,
     placeholderData: (previous) => previous,
+  });
+}
+
+/** The job list narrowed to one state (or every unfinished job), so a run
+ *  past the snapshot's hundred rows stays reachable. Shares the collection
+ *  key prefix: every mutation's invalidation refreshes it too. */
+export function useAdminOfapiCollectionJobs(jobState: Exclude<OfapiCollectionJobStateFilter, undefined> | null) {
+  return useQuery({
+    queryKey: [...OFAPI_COLLECTION_QUERY_KEY, "jobs", jobState],
+    queryFn: () => kernel.ofapiCollectionGet({ query: { jobState: jobState! } }),
+    enabled: jobState !== null,
+    refetchInterval: 15_000,
+    placeholderData: (previous) => previous,
+    meta: { suppressGlobalError: true },
   });
 }
 

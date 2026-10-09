@@ -34326,6 +34326,7 @@
         "tags": [
           "ops"
         ],
+        "description": "Jobs list paused runs first, then newest, at most 100; `jobState` narrows the list (`unfinished` = queued, running or paused).",
         "parameters": [
           {
             "schema": {
@@ -34335,6 +34336,22 @@
             },
             "in": "query",
             "name": "pageId",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "unfinished",
+                "queued",
+                "running",
+                "paused",
+                "completed",
+                "failed"
+              ]
+            },
+            "in": "query",
+            "name": "jobState",
             "required": false
           }
         ],
@@ -34609,6 +34626,136 @@
                           },
                           "inFlight": {
                             "type": "number"
+                          },
+                          "scheduleHealth": {
+                            "type": "object",
+                            "properties": {
+                              "expected": {
+                                "type": "boolean"
+                              },
+                              "stale": {
+                                "type": "boolean"
+                              },
+                              "staleAt": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "lastCompletedAt": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "lastRun": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "id": {
+                                        "type": "string"
+                                      },
+                                      "state": {
+                                        "type": "string"
+                                      },
+                                      "reason": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "exhaustedLimit": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "usedCalls": {
+                                        "type": "number"
+                                      },
+                                      "maxCalls": {
+                                        "type": "number"
+                                      },
+                                      "usedCredits": {
+                                        "type": "number"
+                                      },
+                                      "maxCredits": {
+                                        "type": "number"
+                                      },
+                                      "stepsDone": {
+                                        "anyOf": [
+                                          {
+                                            "type": "number"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "stepsTotal": {
+                                        "anyOf": [
+                                          {
+                                            "type": "number"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "createdAt": {
+                                        "type": "string"
+                                      },
+                                      "updatedAt": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "id",
+                                      "state",
+                                      "reason",
+                                      "exhaustedLimit",
+                                      "usedCalls",
+                                      "maxCalls",
+                                      "usedCredits",
+                                      "maxCredits",
+                                      "stepsDone",
+                                      "stepsTotal",
+                                      "createdAt",
+                                      "updatedAt"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "expected",
+                              "stale",
+                              "staleAt",
+                              "lastCompletedAt",
+                              "lastRun"
+                            ],
+                            "additionalProperties": false
                           }
                         },
                         "required": [
@@ -34625,7 +34772,8 @@
                           "backgroundPaused",
                           "usage",
                           "lastCapturedAt",
-                          "inFlight"
+                          "inFlight",
+                          "scheduleHealth"
                         ],
                         "additionalProperties": false
                       }
@@ -34696,6 +34844,26 @@
                           },
                           "canFinishIncomplete": {
                             "type": "boolean"
+                          },
+                          "stepsDone": {
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "stepsTotal": {
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [
@@ -34711,7 +34879,9 @@
                           "usedBytes",
                           "createdAt",
                           "reason",
-                          "canFinishIncomplete"
+                          "canFinishIncomplete",
+                          "stepsDone",
+                          "stepsTotal"
                         ],
                         "additionalProperties": false
                       }

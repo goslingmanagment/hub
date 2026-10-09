@@ -11,6 +11,9 @@ export const OFAPI_SCHEDULED_READ_COLLECTION_CATEGORIES: readonly OfapiCollectio
   "balances", "profile_notifications", "content_history", "account_settings",
 ];
 export type OfapiCollectionMode = "off" | "on_demand" | "scheduled";
+/** Filters of the collection screen's job list; `unfinished` = queued, running or paused. */
+export const OFAPI_COLLECTION_JOB_STATE_FILTERS = ["unfinished", "queued", "running", "paused", "completed", "failed"] as const;
+export type OfapiCollectionJobStateFilter = typeof OFAPI_COLLECTION_JOB_STATE_FILTERS[number];
 export type OfapiCollectionPurpose = "background" | "interactive" | "one_off";
 export interface OfapiCollectionContext {
   category: OfapiCollectionCategory;

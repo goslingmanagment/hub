@@ -102,6 +102,17 @@ export const JOB_STATE_LABELS_RU: Record<string, string> = {
   failed: "ошибка",
 };
 
+/** The job list's state filter (server `jobState`); "" = no filter. */
+export const JOB_STATE_FILTER_OPTIONS_RU: ReadonlyArray<{ value: "" | "unfinished" | "paused" | "queued" | "running" | "failed" | "completed"; label: string }> = [
+  { value: "", label: "Все задачи" },
+  { value: "unfinished", label: "Незавершённые" },
+  { value: "paused", label: "На паузе" },
+  { value: "queued", label: "В очереди" },
+  { value: "running", label: "Выполняются" },
+  { value: "failed", label: "С ошибкой" },
+  { value: "completed", label: "Завершённые" },
+];
+
 export const PREREQUISITE_LABELS_RU: Record<string, string> = {
   "active OFAPI page binding": "активная привязка страницы к OFAPI",
   "owned source and explicit upload approval": "свой файл и отдельное подтверждение загрузки",

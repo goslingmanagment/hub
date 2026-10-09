@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
-import { findOfapiReadDefinition, OFAPI_COLLECTION_REGISTRY, OFAPI_COLLECTION_LEGACY_OPERATIONS, OFAPI_SCHEDULED_READ_COLLECTION_CATEGORIES, classifyOfapiCollectionOperation, type OfapiCollectionCategory, type OfapiCollectionContext, type OfapiCollectionSettings } from "@agency_hub_core/shared";
+import { findOfapiReadDefinition, OFAPI_COLLECTION_REGISTRY, OFAPI_COLLECTION_LEGACY_OPERATIONS, OFAPI_READ_CATALOG, OFAPI_SCHEDULED_READ_COLLECTION_CATEGORIES, classifyOfapiCollectionOperation, type OfapiCollectionCategory, type OfapiCollectionContext, type OfapiCollectionJobStateFilter, type OfapiCollectionMode, type OfapiCollectionSettings } from "@agency_hub_core/shared";
 import type { Database } from "../client.ts";
 import { insertAuditEvent } from "./auth.ts";
 import { findOfapiCollectionCaptureJob, hashOfapiCaptureValue } from "./ofapi-capture.ts";
@@ -369,8 +369,142 @@ export async function listPendingOfapiCollectionJobs(db: Database) {
   return rows.rows;
 }
 
-/** Read all diagnostics from retained local rows. Page filtering is mandatory for team leads. */
-export async function getOfapiCollectionSnapshot(db: Database, allowedPageIds: number[] | null, selectedPageId?: number) {
+/** The runner's reason when a cap ends a scheduled run (`scheduled_run_exhausted:job_limit`, …). */
+const SCHEDULED_RUN_EXHAUSTED_PREFIX = "scheduled_run_exhausted:";
+/** A background run as the collection screen and the stale check describe it. */
+export interface OfapiCollectionRunSummary {
+  id: string;
+  state: string;
+  reason: string | null;
+  /** The cap that ended a scheduled run: `job_limit` (calls per run), `daily_limit`, `interval_limit`. */
+  exhaustedLimit: string | null;
+  usedCalls: number;
+  maxCalls: number;
+  usedCredits: number;
+  maxCredits: number;
+  /** Steps of the frozen plan read to the end, and the plan's length; null before a plan was frozen. */
+  stepsDone: number | null;
+  stepsTotal: number | null;
+  createdAt: string;
+  updatedAt: string;
+}
+export interface OfapiCollectionScheduleHealth {
+  /** The policy promises completed runs: a scheduled read category with planned reads, background not paused. */
+  expected: boolean;
+  /** No scheduled run completed for more than two intervals (traffic plan §2.8 п. 3). */
+  stale: boolean;
+  /** When the category is, or will be, stale unless a scheduled run completes first. */
+  staleAt: string | null;
+  lastCompletedAt: string | null;
+  lastRun: OfapiCollectionRunSummary | null;
+}
+
+/**
+ * A category is expected to complete on schedule only where the read scheduler
+ * creates its runs: a non-baseline scheduled read category whose run has
+ * something to read. Visitors plan their own daily window; every other read
+ * category plans the catalog reads marked for scheduled collection, so a
+ * category whose catalog has none (Smart Links after their freeze, §2.9) is
+ * never called stale.
+ */
+function hasScheduledReads(category: OfapiCollectionCategory) {
+  return category === "visitors" || OFAPI_READ_CATALOG.some(row => row.category === category && row.defaultCollect);
+}
+export function isOfapiCollectionScheduleExpected(input: { category: OfapiCollectionCategory; mode: OfapiCollectionMode; backgroundPaused: boolean }) {
+  return input.mode === "scheduled" && !input.backgroundPaused
+    && OFAPI_SCHEDULED_READ_COLLECTION_CATEGORIES.includes(input.category)
+    && !OFAPI_COLLECTION_REGISTRY.find(row => row.id === input.category)?.baseline
+    && hasScheduledReads(input.category);
+}
+/**
+ * Stale: no scheduled run of the page and category completed for more than two
+ * intervals, counted from the later of its last completed run and the owner's
+ * last change of its policy (a changed cap or a re-enabled schedule gets two
+ * fresh intervals). Pure; the snapshot and the minutely stale check share it.
+ */
+export function judgeOfapiCollectionSchedule(input: {
+  category: OfapiCollectionCategory; mode: OfapiCollectionMode; intervalMinutes: number; backgroundPaused: boolean;
+  lastCompletedAt: Date | null; policyChangedAt: Date | null; lastRun: OfapiCollectionRunSummary | null; now: Date;
+}): OfapiCollectionScheduleHealth {
+  const expected = isOfapiCollectionScheduleExpected(input);
+  const reference = Math.max(input.lastCompletedAt?.getTime() ?? 0, input.policyChangedAt?.getTime() ?? 0);
+  const staleAt = expected && reference > 0 ? new Date(reference + 2 * input.intervalMinutes * 60_000) : null;
+  return {
+    expected,
+    stale: staleAt !== null && input.now.getTime() > staleAt.getTime(),
+    staleAt: staleAt?.toISOString() ?? null,
+    lastCompletedAt: input.lastCompletedAt?.toISOString() ?? null,
+    lastRun: input.lastRun,
+  };
+}
+interface RunRow extends Record<string, unknown> {
+  id: string; page_id: string; category: OfapiCollectionCategory; state: string; reason: string | null;
+  used_calls: number; max_calls: number; used_credits: string; max_credits: string;
+  steps_done: number | null; steps_total: number | null; created_at: Date; updated_at: Date;
+}
+/** The frozen plan's progress, read from the checkpoint the runner keeps (`plan`, `index`). */
+const RUN_PROGRESS_COLUMNS = sql`case when jsonb_typeof(job.checkpoint->'plan')='array' then jsonb_array_length(job.checkpoint->'plan') end as steps_total,
+  case when jsonb_typeof(job.checkpoint->'plan')='array' then case when jsonb_typeof(job.checkpoint->'index')='number' then (job.checkpoint->>'index')::numeric::int else 0 end end as steps_done`;
+function runSummary(row: RunRow): OfapiCollectionRunSummary {
+  return {
+    id: row.id, state: row.state, reason: row.reason,
+    exhaustedLimit: row.reason?.startsWith(SCHEDULED_RUN_EXHAUSTED_PREFIX) ? row.reason.slice(SCHEDULED_RUN_EXHAUSTED_PREFIX.length) : null,
+    usedCalls: row.used_calls, maxCalls: row.max_calls, usedCredits: Number(row.used_credits), maxCredits: Number(row.max_credits),
+    stepsDone: row.steps_done === null ? null : Number(row.steps_done), stepsTotal: row.steps_total === null ? null : Number(row.steps_total),
+    createdAt: new Date(row.created_at).toISOString(), updatedAt: new Date(row.updated_at).toISOString(),
+  };
+}
+/** Per page and category: the last completed scheduled run, the newest settled
+ * scheduled run (completed, failed or paused; an in-progress one only when
+ * there is none, so the cause stays put while the next run is under way) and
+ * the policy's last change. */
+async function loadScheduleFacts(db: Database, pageIds: number[]) {
+  const key = (pageId: number | string, category: string) => `${Number(pageId)}:${category}`;
+  const lastCompleted = new Map<string, Date>(), lastRun = new Map<string, OfapiCollectionRunSummary>(), policyChanged = new Map<string, Date>();
+  if (pageIds.length === 0) return { key, lastCompleted, lastRun, policyChanged };
+  const ids = sql.join(pageIds.map(id => sql`${id}`), sql`,`);
+  const completed = await db.execute<{ page_id: string; category: string; last_completed_at: Date }>(sql`
+    select page_id,category,max(updated_at) last_completed_at from ofapi_collection_jobs
+    where purpose='background' and state='completed' and page_id in (${ids}) group by page_id,category`);
+  for (const row of completed.rows) lastCompleted.set(key(row.page_id, row.category), new Date(row.last_completed_at));
+  const runs = await db.execute<RunRow>(sql`
+    select distinct on (job.page_id,job.category) job.id,job.page_id,job.category,job.state,job.reason,job.used_calls,job.max_calls,
+      job.used_credits::text used_credits,job.max_credits::text max_credits,job.created_at,job.updated_at,${RUN_PROGRESS_COLUMNS}
+    from ofapi_collection_jobs job where job.purpose='background' and job.page_id in (${ids})
+    order by job.page_id,job.category,(job.state in ('queued','running')),job.created_at desc,job.id`);
+  for (const row of runs.rows) lastRun.set(key(row.page_id, row.category), runSummary(row));
+  const policies = await db.execute<{ page_id: string | null; category: string; updated_at: Date }>(sql`
+    select page_id,category,updated_at from ofapi_collection_policies where page_id is null or page_id in (${ids})`);
+  const defaults = new Map(policies.rows.filter(row => row.page_id === null).map(row => [row.category, new Date(row.updated_at)]));
+  for (const pageId of pageIds) for (const [category, at] of defaults) policyChanged.set(key(pageId, category), at);
+  for (const row of policies.rows) if (row.page_id !== null) policyChanged.set(key(row.page_id, row.category), new Date(row.updated_at));
+  return { key, lastCompleted, lastRun, policyChanged };
+}
+/**
+ * The minutely stale check's input: every expected (page, category) of the
+ * OnlyFans pages, judged by `judgeOfapiCollectionSchedule`.
+ */
+export async function listOfapiCollectionScheduleHealth(db: Database, now = new Date()) {
+  const current = await state(db);
+  const pages = (await db.execute<{ id: string; label: string }>(sql`select id,label from pages where platform='onlyfans' and deleted_at is null order by label`)).rows
+    .map(row => ({ id: Number(row.id), label: row.label }));
+  const facts = await loadScheduleFacts(db, pages.map(page => page.id));
+  const result: Array<{ pageId: number; pageLabel: string; category: OfapiCollectionCategory; health: OfapiCollectionScheduleHealth }> = [];
+  for (const page of pages) for (const category of OFAPI_SCHEDULED_READ_COLLECTION_CATEGORIES) {
+    const policy = await effective(db, category, page.id, current);
+    const k = facts.key(page.id, category);
+    const health = judgeOfapiCollectionSchedule({ ...policy, category, now,
+      lastCompletedAt: facts.lastCompleted.get(k) ?? null, policyChangedAt: facts.policyChanged.get(k) ?? null, lastRun: facts.lastRun.get(k) ?? null });
+    if (health.expected) result.push({ pageId: page.id, pageLabel: page.label, category, health });
+  }
+  return result;
+}
+
+/** Read all diagnostics from retained local rows. Page filtering is mandatory for team leads.
+ * Paused jobs come first so a parked run never falls past the hundred-row list;
+ * `jobState` narrows the list so any unfinished job stays reachable. */
+export async function getOfapiCollectionSnapshot(db: Database, allowedPageIds: number[] | null, selectedPageId?: number, options: { jobState?: OfapiCollectionJobStateFilter; now?: Date } = {}) {
+  const now = options.now ?? new Date();
   const current = await state(db);
   const pageRows = await db.execute<{ id: string; label: string; ofapi_account_id: string | null }>(sql`select id,label,ofapi_account_id from pages
     where platform='onlyfans' and deleted_at is null
@@ -378,8 +512,12 @@ export async function getOfapiCollectionSnapshot(db: Database, allowedPageIds: n
       ${selectedPageId === undefined ? sql`` : sql`and id=${selectedPageId}`} order by label`);
   const pages = pageRows.rows.map(row => ({ id: Number(row.id), label: row.label, accountId: row.ofapi_account_id }));
   const policies = [];
+  const facts = await loadScheduleFacts(db, pages.map(page => page.id));
   for (const page of pages) for (const category of OFAPI_COLLECTION_REGISTRY) {
     const policy = await effective(db, category.id, page.id, current);
+    const k = facts.key(page.id, category.id);
+    const scheduleHealth = judgeOfapiCollectionSchedule({ ...policy, category: category.id, now,
+      lastCompletedAt: facts.lastCompleted.get(k) ?? null, policyChangedAt: facts.policyChanged.get(k) ?? null, lastRun: facts.lastRun.get(k) ?? null });
     const usage = await db.execute<{ calls: string; reserved: string; actual: string | null; month_credits: string; captured: Date | null; inflight: string }>(sql`
       select count(*) filter(where created_at >= date_trunc('day',now() at time zone 'UTC') at time zone 'UTC')::text calls,
       coalesce(sum(reserved_credits) filter(where created_at >= date_trunc('day',now() at time zone 'UTC') at time zone 'UTC'),0)::text reserved,
@@ -388,16 +526,20 @@ export async function getOfapiCollectionSnapshot(db: Database, allowedPageIds: n
       count(*) filter(where state='reserved')::text inflight
       from ofapi_collection_requests where state<>'released' and page_id=${page.id} and category=${category.id} and created_at>now()-interval '30 days'`);
     const row = usage.rows[0]!;
-    policies.push({ ...policy, usage: { callsToday: Number(row.calls), reservedCreditsToday: Number(row.reserved), actualCreditsToday: row.actual === null ? null : Number(row.actual), credits30d: Number(row.month_credits) }, lastCapturedAt: row.captured ? new Date(row.captured).toISOString() : null, inFlight: Number(row.inflight) });
+    policies.push({ ...policy, usage: { callsToday: Number(row.calls), reservedCreditsToday: Number(row.reserved), actualCreditsToday: row.actual === null ? null : Number(row.actual), credits30d: Number(row.month_credits) }, lastCapturedAt: row.captured ? new Date(row.captured).toISOString() : null, inFlight: Number(row.inflight), scheduleHealth });
   }
   const ids = pages.map(page => page.id);
-  const jobs = await db.execute<{ id: string; page_id: string; category: OfapiCollectionCategory; state: string; max_credits: string; max_calls: number; max_bytes: string; used_credits: string; used_calls: number; used_bytes: string; created_at: Date; reason: string | null; can_finish_incomplete: boolean }>(sql`
-    select job.*,(${allowedPageIds === null} and ${finishableReadJob()}) as can_finish_incomplete from ofapi_collection_jobs job
-    where ${ids.length ? sql`job.page_id in (${sql.join(ids.map(id => sql`${id}`), sql`,`)})` : sql`false`} order by job.created_at desc limit 100`);
+  const jobState = options.jobState === undefined ? sql``
+    : options.jobState === "unfinished" ? sql`and job.state in ('queued','running','paused')` : sql`and job.state=${options.jobState}`;
+  const jobs = await db.execute<{ id: string; page_id: string; category: OfapiCollectionCategory; state: string; max_credits: string; max_calls: number; max_bytes: string; used_credits: string; used_calls: number; used_bytes: string; created_at: Date; reason: string | null; can_finish_incomplete: boolean; steps_done: number | null; steps_total: number | null }>(sql`
+    select job.*,(${allowedPageIds === null} and ${finishableReadJob()}) as can_finish_incomplete,${RUN_PROGRESS_COLUMNS} from ofapi_collection_jobs job
+    where ${ids.length ? sql`job.page_id in (${sql.join(ids.map(id => sql`${id}`), sql`,`)})` : sql`false`} ${jobState}
+    order by (job.state='paused') desc,job.created_at desc,job.id limit 100`);
   // Global mutation history reveals page names/IDs; only the owner sees it.
   const audit = allowedPageIds === null ? await db.execute<{ revision: number; actor_user_id: string; changes: unknown; created_at: Date }>(sql`select * from ofapi_collection_audit order by revision desc limit 50`) : { rows: [] };
   return { revision: current.revision, backgroundPaused: current.background_paused, catalog: OFAPI_COLLECTION_REGISTRY.map(row => ({ ...row, modes: [...row.modes] })), pages, policies,
-    jobs: jobs.rows.map(row => ({ id: row.id, pageId: Number(row.page_id), category: row.category, state: row.state, maxCredits: Number(row.max_credits), maxCalls: row.max_calls, maxBytes: Number(row.max_bytes), usedCredits: Number(row.used_credits), usedCalls: row.used_calls, usedBytes: Number(row.used_bytes), createdAt: new Date(row.created_at).toISOString(), reason: row.reason, canFinishIncomplete: row.can_finish_incomplete })),
+    jobs: jobs.rows.map(row => ({ id: row.id, pageId: Number(row.page_id), category: row.category, state: row.state, maxCredits: Number(row.max_credits), maxCalls: row.max_calls, maxBytes: Number(row.max_bytes), usedCredits: Number(row.used_credits), usedCalls: row.used_calls, usedBytes: Number(row.used_bytes), createdAt: new Date(row.created_at).toISOString(), reason: row.reason, canFinishIncomplete: row.can_finish_incomplete,
+      stepsDone: row.steps_done === null ? null : Number(row.steps_done), stepsTotal: row.steps_total === null ? null : Number(row.steps_total) })),
     audit: audit.rows.map(row => ({ revision: row.revision, actorUserId: Number(row.actor_user_id), createdAt: new Date(row.created_at).toISOString(), changes: row.changes })),
     limitDescription: "Limits apply to new managed physical requests. Vendor events, external clients, accepted operations and variable prices can charge separately. Legacy operations retain existing configuration until a category policy is applied." };
 }

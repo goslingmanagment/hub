@@ -32,6 +32,10 @@ describe("resolveMessageForIncident", () => {
     expect(
       resolveMessageForIncident({ kind: "read_gateway_capture", pageLabel: null, platform: null }),
     ).toContain("capture");
+    // The stale-collection latch shares the kind, not the condition.
+    const stale = resolveMessageForIncident({ kind: "read_gateway_capture", subKey: "collection_stale", pageLabel: "lora-of", platform: "onlyfans" });
+    expect(stale).toContain("OnlyFans scheduled collection completing on schedule again: lora-of (onlyfans)");
+    expect(stale).not.toContain("tee");
   });
 
   it("keeps the webhook text for the webhook-silence kind", () => {
