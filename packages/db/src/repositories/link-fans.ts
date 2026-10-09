@@ -637,3 +637,24 @@ async function closeAtFinishedWalk(
   closed += Number((absent as { rowCount?: number | null }).rowCount ?? 0);
   return closed;
 }
+
+/** When each link's subscriber list was last read to the end (its last
+ *  finished walk) — what the sweep's finished-link interval (PR 10) is
+ *  measured from. A link never read to the end is absent from the map. */
+export async function readLinkFanLastFinishedWalks(
+  db: Database,
+  input: { pageId: number; linkKind: TrafficLinkKind; linkIds: readonly string[] },
+): Promise<Map<string, Date>> {
+  if (input.linkIds.length === 0) return new Map();
+  const result = await db.execute<{ platform_link_id: string; finished_at: Date | string }>(sql`
+    select platform_link_id, max(finished_at) as finished_at
+      from page_link_fan_walks
+     where platform_account_id = ${input.pageId}
+       and link_kind = ${input.linkKind}
+       and list_kind = 'subscribers'
+       and platform_link_id = any(${sql.param([...input.linkIds])}::text[])
+       and finished_at is not null
+     group by platform_link_id
+  `);
+  return new Map(result.rows.map((row) => [row.platform_link_id, new Date(row.finished_at)]));
+}

@@ -220,6 +220,9 @@ describe("LIVE_CONFIG_KEYS", () => {
     expect(LIVE_CONFIG_KEYS.has("healthSyncLightMaxAgeMinutes")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyPublicLookupEnabled")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyPublicLookupBatchSize")).toBe(true);
-    expect(LIVE_CONFIG_KEYS.size).toBe(50);
+    // Traffic plan PR 10: the fan sweep reads its finished-link interval per
+    // chunk, so the owner trims the paid sweep without a restart.
+    expect(LIVE_CONFIG_KEYS.has("ofapiFanIdentitiesFinishedLinkIntervalHours")).toBe(true);
+    expect(LIVE_CONFIG_KEYS.size).toBe(51);
   });
 });

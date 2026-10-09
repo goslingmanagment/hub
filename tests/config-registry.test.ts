@@ -113,6 +113,8 @@ describe("config registry", () => {
     // Arena "vanished chat" R5: the public account reader's switch and batch, read on every pass.
     "fanslyPublicLookupEnabled",
     "fanslyPublicLookupBatchSize",
+    // Traffic plan PR 10: the fan sweep's finished-link interval, read per chunk.
+    "ofapiFanIdentitiesFinishedLinkIntervalHours",
     // Fast-reply freshness PR3: union-read mode, read per generation.
     "aiTranscriptFreshUnionMode",
     // Decision #136: fan-dossier context, read per generation.

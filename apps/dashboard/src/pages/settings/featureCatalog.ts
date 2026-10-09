@@ -123,7 +123,7 @@ export const HUB_FEATURES: readonly HubFeature[] = [
     reason: "Оставить для работы со списками фанов. Снизить частоту сбора можно отдельно от отключения всей цепочки.",
     consequence: "Списки и рейтинг перестанут обновляться. Связанные этапы могут потребовать отдельного возобновления.",
     check: "Проверять завершённость обхода аудитории; пустой непроверенный ответ не доказывает исчезновение подписчиков.",
-    keys: ["ofapiAudienceSyncEnabled", "ofapiPresenceProjectionEnabled", "onlyFansTopSpendersEnabled", "ofapiFanIdentitiesSyncEnabled", "ofapiAudienceSweepIntervalMinutes"],
+    keys: ["ofapiAudienceSyncEnabled", "ofapiPresenceProjectionEnabled", "onlyFansTopSpendersEnabled", "ofapiFanIdentitiesSyncEnabled", "ofapiFanIdentitiesFinishedLinkIntervalHours", "ofapiAudienceSweepIntervalMinutes"],
     gates: [gate("ofapiAudienceSyncEnabled"), gate("ofapiPresenceProjectionEnabled"), gate("onlyFansTopSpendersEnabled")], ...sync,
   },
   {

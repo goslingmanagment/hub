@@ -18,6 +18,7 @@
 
 import {
   getCheckpoint,
+  readLinkFanLastFinishedWalks,
   upsertCheckpointProgress,
   upsertFanPages,
   upsertFans,
@@ -26,6 +27,7 @@ import {
 import { sanitizeError } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
+import { loadEffectiveConfig } from "../effective-config.ts";
 import { idToString } from "../ofapi-payloads.ts";
 import { resolveOfapiListNextOffset } from "../ofapi-list-pagination.ts";
 import type { OfapiClient, OfapiListPage, OfapiRequestContext } from "../ofapi.ts";
@@ -174,6 +176,9 @@ export interface OfapiFanIdentitiesStats {
   userPages: number;
   upsertedFans: number;
   requestsUsed: number;
+  /** Finished trial links whose subscriber list this revision did not re-read
+   *  (read to the end within the finished-link interval). */
+  finishedLinksSkipped: number;
   /** Journal pages the link ↔ fan projection applied in this chunk. */
   linkFanPagesProjected: number;
   /** Projection calls that failed; their pages wait in the journal. */
@@ -196,6 +201,10 @@ type OfapiFanIdentitiesCursorState = {
   linkOffset: number;
   trackingLinkIds: string[];
   trialLinkIds: string[];
+  /** Trial links the vendor's list called finished in this revision (PR 10).
+   *  Optional: a cursor written before it has none, and an image that does
+   *  not know it drops it — both mean "re-read every link". */
+  finishedTrialLinkIds?: string[];
   completedTargetKeys: string[];
   activeTargetKey: string | null;
   activeOffset: number;
@@ -254,6 +263,7 @@ function parseCursorState(value: unknown): OfapiFanIdentitiesCursorState | null 
     state.linkOffset < 0 ||
     !isStringArray(state.trackingLinkIds) ||
     !isStringArray(state.trialLinkIds) ||
+    (state.finishedTrialLinkIds !== undefined && !isStringArray(state.finishedTrialLinkIds)) ||
     !isStringArray(state.completedTargetKeys) ||
     (state.activeTargetKey !== null && typeof state.activeTargetKey !== "string") ||
     typeof state.activeOffset !== "number" ||
@@ -270,6 +280,9 @@ function parseCursorState(value: unknown): OfapiFanIdentitiesCursorState | null 
     linkOffset: state.linkOffset,
     trackingLinkIds: [...new Set(state.trackingLinkIds)],
     trialLinkIds: [...new Set(state.trialLinkIds)],
+    ...(state.finishedTrialLinkIds === undefined
+      ? {}
+      : { finishedTrialLinkIds: [...new Set(state.finishedTrialLinkIds as string[])] }),
     completedTargetKeys: [...new Set(state.completedTargetKeys)],
     activeTargetKey: state.activeTargetKey,
     activeOffset: state.activeOffset,
@@ -322,6 +335,7 @@ export async function syncOfapiFanIdentities(
     userPages: 0,
     upsertedFans: 0,
     requestsUsed: 0,
+    finishedLinksSkipped: 0,
     linkFanPagesProjected: 0,
     linkFanProjectionErrors: 0,
   };
@@ -338,6 +352,7 @@ export async function syncOfapiFanIdentities(
       linkOffset: 0,
       trackingLinkIds: [],
       trialLinkIds: [],
+      finishedTrialLinkIds: [],
       completedTargetKeys: [],
       activeTargetKey: null,
       activeOffset: 0,
@@ -345,6 +360,7 @@ export async function syncOfapiFanIdentities(
   const completedTargetKeys = new Set(cursor.completedTargetKeys);
   const trackingLinkIds = new Set(cursor.trackingLinkIds);
   const trialLinkIds = new Set(cursor.trialLinkIds);
+  const finishedTrialLinkIds = new Set(cursor.finishedTrialLinkIds ?? []);
 
   // Journal one fetched list page, untrimmed, before the walk reads it. The
   // OFAPI client exposes no raw response envelope, so the body is the item
@@ -385,6 +401,7 @@ export async function syncOfapiFanIdentities(
       ...cursor,
       trackingLinkIds: [...trackingLinkIds].sort(),
       trialLinkIds: [...trialLinkIds].sort(),
+      finishedTrialLinkIds: [...finishedTrialLinkIds].sort(),
       completedTargetKeys: [...completedTargetKeys].sort(),
     };
     await upsertCheckpointProgress(app.db, {
@@ -430,6 +447,7 @@ export async function syncOfapiFanIdentities(
         const id = idToString(item.id);
         if (id) {
           ids.add(id);
+          if (linkType === "trial" && item.isFinished === true) finishedTrialLinkIds.add(id);
         }
       }
 
@@ -538,11 +556,35 @@ export async function syncOfapiFanIdentities(
     }
   }
 
+  // The finished-link knob (PR 10; live setting, default 0 = every sweep): a
+  // trial link the vendor's list calls finished is not re-read when its
+  // subscriber list was read to the end less than N hours ago. Skipped is
+  // not read: no walk, so no evidence of anything for the link ↔ fan periods.
+  // The link in flight is never skipped — its prefix is already bought.
+  const intervalHours = (await loadEffectiveConfig(app.db, app.config)).ofapiFanIdentitiesFinishedLinkIntervalHours ?? 0;
+  const recentlyRead = new Set<string>();
+  if (intervalHours > 0 && finishedTrialLinkIds.size > 0) {
+    const lastFinished = await readLinkFanLastFinishedWalks(app.db, {
+      pageId: input.pageContext.page.id,
+      linkKind: "trial",
+      linkIds: [...finishedTrialLinkIds],
+    });
+    const notBefore = Date.now() - intervalHours * 3_600_000;
+    for (const [linkId, finishedAt] of lastFinished) {
+      if (finishedAt.getTime() > notBefore) recentlyRead.add(linkId);
+    }
+  }
+
   // A request can span several executor chunks. Persist both completed link
   // targets and the active target's offset so a per-run budget yield resumes
   // after the prefix instead of buying the same prefix forever.
   for (const target of targets) {
     if (completedTargetKeys.has(target.key)) {
+      continue;
+    }
+    if (target.linkKind === "trial" && recentlyRead.has(target.linkId) && cursor.activeTargetKey !== target.key) {
+      completedTargetKeys.add(target.key);
+      stats.finishedLinksSkipped += 1;
       continue;
     }
     let offset = cursor.activeTargetKey === target.key ? cursor.activeOffset : 0;
