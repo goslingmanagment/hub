@@ -103,16 +103,45 @@ export const ofLinkHubMoneyTotalSchema = z.object({
 });
 export type OfLinkHubMoneyTotal = z.infer<typeof ofLinkHubMoneyTotalSchema>;
 
-/** The two money figures side by side (П2). `state`:
- *   comparable         one segment, coverage confirmed;
- *   different_history  OFAPI all-time against Hub since its floor;
- *   provisional        OFAPI's increase since Hub's floor against Hub over
- *                      the same segment — the vendor may have recalculated
- *                      the past;
- *   incomplete         a gap, an unfinished walk, the vendor still computing;
+/** The two money figures side by side (П2), over one stretch [fromAt, toAt):
+ * OFAPI's increase between two of its computations (`revenue.calculatedAt`)
+ * at or after Hub's floor, against Hub's figure over exactly those two
+ * instants; without such a pair, OFAPI's increase from its last snapshot
+ * before the floor against Hub's figure from the floor (flag
+ * window_mismatch). `state`:
+ *   comparable         the same stretch on both sides, Hub's fan walks read to
+ *                      the end past it, nothing pending, no flag, a tracking
+ *                      link (a trial link waits for a per-fan check, П9.3);
+ *   different_history  OFAPI all-time against Hub since its floor (no OFAPI
+ *                      snapshot before the floor to start from);
+ *   provisional        a figure may still move or the stretches differ: a
+ *                      flag, pending money, or a trial link;
+ *   incomplete         OFAPI's figure unknown or still computing, OFAPI has
+ *                      computed nothing since Hub's floor, or Hub's last
+ *                      finished fan walk of the link starts before the
+ *                      stretch's end (a walk still being read may bring
+ *                      fans of it);
  *   null               nothing to compare: Hub's figure is absent. */
 export const ofLinkComparisonStateSchema = z.enum(["comparable", "different_history", "provisional", "incomplete"]);
-export const ofLinkComparisonFlagSchema = z.enum(["vendor_recalculated", "binding_changed", "vendor_lagging", "ledger_gap"]);
+/** Flags on the comparison:
+ *   vendor_recalculated  OFAPI lowered the link's money inside the stretch;
+ *   binding_changed      the page's OFAPI account changed inside it;
+ *   vendor_lagging       OFAPI's latest figure was computed more than a day
+ *                        before Hub read it (the stretch ends at that
+ *                        computation, not at the read);
+ *   window_mismatch      no OFAPI computation at or after Hub's floor to
+ *                        start from: the two figures cover different
+ *                        stretches, the difference includes money outside one
+ *                        of them;
+ *   ledger_gap           the chargebacks reconcile is failing: Hub's ledger
+ *                        may lack chargebacks OFAPI already took out. */
+export const ofLinkComparisonFlagSchema = z.enum([
+  "vendor_recalculated",
+  "binding_changed",
+  "vendor_lagging",
+  "window_mismatch",
+  "ledger_gap",
+]);
 export const ofLinkMoneyComparisonSchema = z.object({
   state: ofLinkComparisonStateSchema.nullable(),
   flags: z.array(ofLinkComparisonFlagSchema),

@@ -21,6 +21,7 @@ import {
 } from "@agency_hub_core/contracts";
 import {
   hubLinkKey,
+  lastIndexBefore,
   linkDeltaBetween,
   linkSegments,
   listLastLinkRecalculations,
@@ -39,6 +40,7 @@ import {
   readLinkSeriesFloor,
   readLinkSnapshotCalculations,
   readTrafficBindingsSnapshot,
+  splitByIntervals,
   sumHubLinkMoney,
   totalSegments,
   type ChannelTermInterval,
@@ -202,79 +204,131 @@ function hubDayOf(
   };
 }
 
-const COMPARISON_FLAG_ORDER = ["vendor_recalculated", "binding_changed", "vendor_lagging", "ledger_gap"] as const;
+const COMPARISON_FLAG_ORDER = [
+  "vendor_recalculated",
+  "binding_changed",
+  "vendor_lagging",
+  "window_mismatch",
+  "ledger_gap",
+] as const;
 type ComparisonFlag = (typeof COMPARISON_FLAG_ORDER)[number];
 
+type SnapshotCalculations = ReadonlyMap<string, { calculatedAt: Date | null; isLoading: boolean | null }>;
+
+/** The snapshots whose vendor computation a comparison may rest on: every
+ *  one read at or after the link's floor, and the last one before it. */
+export function comparisonSnapshotKeys(series: LinkSeries, floor: Date): Array<{ runId: number; linkRef: string }> {
+  const lastBefore = lastIndexBefore(series.points, floor);
+  return series.points
+    .filter((point, index) => index >= lastBefore && (index === lastBefore || point.observedAt.getTime() >= floor.getTime()))
+    .map((point) => ({ runId: point.runId, linkRef: series.linkRef }));
+}
+
 /**
- * The two figures on one stretch (П2): OFAPI's increase from its last
- * snapshot before Hub's floor to its latest one, against Hub's figure from the
- * floor to the instant the vendor last computed (else the latest snapshot).
+ * The two figures on one stretch (П2). OFAPI's money at a snapshot is as of
+ * its own computation (`revenue.calculatedAt`, often days before the read), so
+ * the stretch is taken between two OFAPI computations: the earliest one at or
+ * after Hub's floor and the latest one, and Hub's figure is summed over
+ * exactly those two instants. Without such a pair the comparison falls back
+ * to OFAPI's increase from its last snapshot before the floor against Hub's
+ * figure from the floor — two different stretches (`window_mismatch`).
  *
- *   incomplete         the vendor's increase is unknown (money missing or
- *                      still computing), or it has computed nothing since
- *                      Hub's floor;
- *   different_history  no vendor snapshot before the floor: OFAPI all-time
- *                      against Hub since its floor;
+ *   incomplete         OFAPI's latest figure unknown or still computing, its
+ *                      computation time unknown or not after the floor, or
+ *                      Hub's last finished fan walk of the link starts before
+ *                      the stretch's end (a walk still being read may bring a
+ *                      fan of it);
+ *   different_history  fallback with no OFAPI snapshot before the floor:
+ *                      OFAPI all-time against Hub since its floor;
  *   provisional        a trial link (no per-fan check of the rule there yet,
- *                      П9.3), any flag, or Hub money still pending in the
- *                      stretch;
- *   comparable         otherwise.
- * Flags: vendor_recalculated / binding_changed inside the stretch;
- * vendor_lagging — the vendor's figure at either end was computed more than a
- * day before that end's instant (it then counts other hours than Hub's);
- * ledger_gap — the chargebacks reconcile is failing, so Hub's ledger may lack
- * chargebacks the vendor already took out.
+ *                      П9.3), pending Hub money in the stretch, or a flag
+ *                      that moves a figure: vendor_recalculated,
+ *                      binding_changed, window_mismatch, ledger_gap;
+ *   comparable         otherwise: the same stretch on both sides.
+ * `vendor_lagging` (OFAPI computed more than a day before its read) is said,
+ * but does not by itself move the state: the stretch ends at the computation.
  */
 export function compareLinkMoney(input: {
   attribution: HubLinkAttribution;
   series: LinkSeries | undefined;
-  calculations: ReadonlyMap<string, { calculatedAt: Date | null; isLoading: boolean | null }>;
+  calculations: SnapshotCalculations;
   ledgerGap: boolean;
 }): OfLinkMoneyComparison {
   const series = input.series;
   if (series === undefined) return comparisonWithoutHubMoney();
   const link = { pageId: series.pageId, linkKind: series.linkKind, linkRef: series.linkRef };
-  const floor = input.attribution.floors.get(hubLinkKey(link.pageId, link.linkKind, link.linkRef));
+  const key = hubLinkKey(link.pageId, link.linkKind, link.linkRef);
+  const floor = input.attribution.floors.get(key);
   const end = series.points.at(-1);
   if (floor === undefined || end === undefined) return comparisonWithoutHubMoney();
-
-  const delta = linkDeltaBetween(series, floor, new Date(end.observedAt.getTime() + 1));
-  const endCalculation = input.calculations.get(`${end.runId}:${link.linkRef}`) ?? null;
-  const startPoint = delta?.startPoint ?? null;
-  const startCalculation = startPoint === null ? null : input.calculations.get(`${startPoint.runId}:${link.linkRef}`) ?? null;
-  const calculatedAt = endCalculation?.calculatedAt ?? null;
-  const hubTo = calculatedAt !== null
-    && calculatedAt.getTime() > floor.getTime()
-    && calculatedAt.getTime() <= end.observedAt.getTime()
-    ? calculatedAt
-    : end.observedAt;
-  const hub = hubTo.getTime() > floor.getTime()
-    ? sumHubLinkMoney(input.attribution.allocations, { ...link, fromAt: floor, toAt: hubTo })
-    : { netMills: 0n, pendingMills: 0n, transactionCount: 0, fanCount: 0 };
-
+  const calculation = (point: LinkSeriesPoint) => input.calculations.get(`${point.runId}:${link.linkRef}`) ?? null;
+  const endCalculation = calculation(end);
+  const endCalculatedAt = endCalculation?.calculatedAt ?? null;
   const flags = new Set<ComparisonFlag>();
-  if (delta?.flags.includes("vendor_recalculated")) flags.add("vendor_recalculated");
-  if (delta?.flags.includes("binding_changed")) flags.add("binding_changed");
-  const startCalculatedAt = startCalculation?.calculatedAt ?? null;
-  if (
-    calculatedAt === null
-    || end.observedAt.getTime() - calculatedAt.getTime() > VENDOR_LAG_MS
-    || (startPoint !== null && (startCalculatedAt === null || floor.getTime() - startCalculatedAt.getTime() > VENDOR_LAG_MS))
-  ) {
+
+  // The earliest OFAPI computation at or after the floor, before the latest.
+  let start: LinkSeriesPoint | null = null;
+  if (endCalculatedAt !== null && end.netMills !== null) {
+    for (const point of series.points) {
+      const at = calculation(point)?.calculatedAt ?? null;
+      if (
+        point.netMills !== null && at !== null
+        && at.getTime() >= floor.getTime() && at.getTime() < endCalculatedAt.getTime()
+        && (start === null || at.getTime() < calculation(start)!.calculatedAt!.getTime())
+      ) {
+        start = point;
+      }
+    }
+  }
+
+  let fromAt: Date;
+  let toAt: Date;
+  let vendorDelta: bigint | null;
+  let noBaseline = false;
+  if (start !== null) {
+    fromAt = calculation(start)!.calculatedAt!;
+    toAt = endCalculatedAt!;
+    vendorDelta = end.netMills! - start.netMills!;
+    const between = linkDeltaBetween(series, new Date(start.observedAt.getTime() + 1), new Date(end.observedAt.getTime() + 1));
+    if (between?.flags.includes("vendor_recalculated")) flags.add("vendor_recalculated");
+    if (between?.flags.includes("binding_changed")) flags.add("binding_changed");
+  } else {
+    const delta = linkDeltaBetween(series, floor, new Date(end.observedAt.getTime() + 1));
+    fromAt = floor;
+    toAt = endCalculatedAt !== null
+      && endCalculatedAt.getTime() > floor.getTime()
+      && endCalculatedAt.getTime() <= end.observedAt.getTime()
+      ? endCalculatedAt
+      : end.observedAt;
+    vendorDelta = delta?.netMills ?? null;
+    noBaseline = delta?.flags.includes("no_baseline") ?? false;
+    if (delta?.flags.includes("vendor_recalculated")) flags.add("vendor_recalculated");
+    if (delta?.flags.includes("binding_changed")) flags.add("binding_changed");
+    flags.add("window_mismatch");
+  }
+  if (endCalculatedAt === null || end.observedAt.getTime() - endCalculatedAt.getTime() > VENDOR_LAG_MS) {
     flags.add("vendor_lagging");
   }
   if (input.ledgerGap) flags.add("ledger_gap");
 
-  const vendorDelta = delta?.netMills ?? null;
+  const hub = toAt.getTime() > fromAt.getTime()
+    ? sumHubLinkMoney(input.attribution.allocations, { ...link, fromAt, toAt })
+    : { netMills: 0n, pendingMills: 0n, transactionCount: 0, fanCount: 0 };
+  const lastFinished = input.attribution.lastFinished.get(key) ?? null;
+
   let state: OfLinkMoneyComparison["state"];
   if (
-    delta === null || vendorDelta === null || endCalculation?.isLoading === true
-    || (calculatedAt !== null && calculatedAt.getTime() <= floor.getTime())
+    vendorDelta === null || endCalculation?.isLoading === true
+    || endCalculatedAt === null || endCalculatedAt.getTime() <= floor.getTime()
+    || lastFinished === null || lastFinished.getTime() < toAt.getTime()
   ) {
     state = "incomplete";
-  } else if (delta.flags.includes("no_baseline")) {
+  } else if (start === null && noBaseline) {
     state = "different_history";
-  } else if (link.linkKind === "trial" || flags.size > 0 || hub.pendingMills !== 0n) {
+  } else if (
+    link.linkKind === "trial" || hub.pendingMills !== 0n
+    || [...flags].some((flag) => flag !== "vendor_lagging")
+  ) {
     state = "provisional";
   } else {
     state = "comparable";
@@ -282,36 +336,75 @@ export function compareLinkMoney(input: {
   return {
     state,
     flags: COMPARISON_FLAG_ORDER.filter((flag) => flags.has(flag)),
-    fromAt: iso(floor),
-    toAt: iso(hubTo),
+    fromAt: iso(fromAt),
+    toAt: iso(toAt),
     vendorDeltaMills: millsOrNull(vendorDelta),
     hubNetMills: millsNumber(hub.netMills),
     differenceMills: vendorDelta === null ? null : millsNumber(hub.netMills - vendorDelta),
   };
 }
 
-/** Hub's figure over a group of segments (a channel, a contractor): each
- *  segment's link over its own stretch, clipped at the link's floor.
- *  `available` when Hub covers every segment whole, `partial` when it covers
- *  some of the time, `no_data` when none. */
-function hubMoneyTotalOf(attribution: HubLinkAttribution, segments: readonly LinkSegment[]): OfLinkHubMoneyTotal {
+/** One link over one stretch of a channel (or a contractor): cut by the
+ *  link's bindings (and the channel's contractor terms) alone — never by the
+ *  vendor's snapshots, so Hub's money of a stretch OFAPI never read is kept. */
+interface HubPiece {
+  link: { pageId: number; linkKind: string; linkRef: string };
+  channelKey: string | null;
+  contractorKey: string | null;
+  startAt: Date;
+  endAt: Date;
+}
+
+function hubPieces(
+  links: ReadonlyArray<{ pageId: number; linkKind: string; linkRef: string }>,
+  bindingsByLink: ReadonlyMap<string, LinkBindingInterval[]>,
+  termsByChannel: ReadonlyMap<string, ChannelTermInterval[]> | null,
+  fromAt: Date,
+  toAt: Date,
+): HubPiece[] {
+  const pieces: HubPiece[] = [];
+  for (const link of links) {
+    const bindings = bindingsByLink.get(linkKey(link.pageId, link.linkKind, link.linkRef)) ?? [];
+    for (const piece of splitByIntervals(bindings, fromAt.getTime(), toAt.getTime())) {
+      const channelKey = piece.interval?.channelKey ?? null;
+      if (piece.interval === null || termsByChannel === null) {
+        pieces.push({ link, channelKey, contractorKey: null, startAt: new Date(piece.startMs), endAt: new Date(piece.endMs) });
+        continue;
+      }
+      for (const termPiece of splitByIntervals(termsByChannel.get(piece.interval.channelKey) ?? [], piece.startMs, piece.endMs)) {
+        pieces.push({
+          link,
+          channelKey,
+          contractorKey: termPiece.interval?.contractorKey ?? null,
+          startAt: new Date(termPiece.startMs),
+          endAt: new Date(termPiece.endMs),
+        });
+      }
+    }
+  }
+  return pieces;
+}
+
+/** Hub's figure over a group's pieces, each link over its own stretch clipped
+ *  at its floor. `available` when Hub covers every piece whole, `partial`
+ *  when only part of the time, `no_data` when none. */
+function hubMoneyTotalOf(attribution: HubLinkAttribution, pieces: readonly HubPiece[]): OfLinkHubMoneyTotal {
   let netMills = 0n;
   let pendingMills = 0n;
   let covered = 0;
   let whole = 0;
   let withFloor = 0;
-  for (const segment of segments) {
-    const link = { pageId: segment.series.pageId, linkKind: segment.series.linkKind, linkRef: segment.series.linkRef };
-    const floor = attribution.floors.get(hubLinkKey(link.pageId, link.linkKind, link.linkRef));
+  for (const piece of pieces) {
+    const floor = attribution.floors.get(hubLinkKey(piece.link.pageId, piece.link.linkKind, piece.link.linkRef));
     if (floor === undefined) continue;
     withFloor += 1;
-    if (segment.endAt.getTime() <= floor.getTime()) continue;
+    if (piece.endAt.getTime() <= floor.getTime()) continue;
     covered += 1;
-    if (floor.getTime() <= segment.startAt.getTime()) whole += 1;
+    if (floor.getTime() <= piece.startAt.getTime()) whole += 1;
     const sum = sumHubLinkMoney(attribution.allocations, {
-      ...link,
-      fromAt: segment.startAt.getTime() > floor.getTime() ? segment.startAt : floor,
-      toAt: segment.endAt,
+      ...piece.link,
+      fromAt: piece.startAt.getTime() > floor.getTime() ? piece.startAt : floor,
+      toAt: piece.endAt,
     });
     netMills += sum.netMills;
     pendingMills += sum.pendingMills;
@@ -320,7 +413,7 @@ function hubMoneyTotalOf(attribution: HubLinkAttribution, segments: readonly Lin
     return { ...hubMoneyTotalNotComputed(), reason: withFloor === 0 ? "no_completed_walk" : "before_floor" };
   }
   return {
-    state: whole === segments.length ? "available" : "partial",
+    state: whole === pieces.length ? "available" : "partial",
     reason: null,
     revenueBasis: OF_LINKS_REVENUE_BASIS,
     attributionRule: OF_LINKS_ATTRIBUTION_RULE,
@@ -501,11 +594,7 @@ export async function getOfLinks(
   const seriesByLink = new Map(comparedSeries.map((series) => [hubLinkKey(series.pageId, series.linkKind, series.linkRef), series]));
   const calculationKeys = comparedSeries.flatMap((series) => {
     const floor = attribution.floors.get(hubLinkKey(series.pageId, series.linkKind, series.linkRef));
-    const end = series.points.at(-1);
-    if (floor === undefined || end === undefined) return [];
-    const delta = linkDeltaBetween(series, floor, new Date(end.observedAt.getTime() + 1));
-    return [end, ...(delta?.startPoint ? [delta.startPoint] : [])]
-      .map((point) => ({ runId: point.runId, linkRef: series.linkRef }));
+    return floor === undefined ? [] : comparisonSnapshotKeys(series, floor);
   });
   const calculations = await readLinkSnapshotCalculations(db, calculationKeys);
 
@@ -761,7 +850,7 @@ export async function getOfLinkHistory(db: Database, input: OfLinksSeriesSwitch 
 // ---------------------------------------------------------------------------
 // GET /api/v1/admin/of-links/channels
 
-function totalsOut(segments: readonly LinkSegment[], attribution: HubLinkAttribution) {
+function totalsOut(segments: readonly LinkSegment[], hubMoney: OfLinkHubMoneyTotal) {
   const totals = totalSegments(segments);
   return {
     totals: {
@@ -771,7 +860,7 @@ function totalsOut(segments: readonly LinkSegment[], attribution: HubLinkAttribu
       subscribers: totals.subscribers,
       fans: totals.fans,
       vendorNetMills: millsNumber(totals.netMills),
-      hubMoney: hubMoneyTotalOf(attribution, segments),
+      hubMoney,
     },
     flags: totals.flags,
   };
@@ -822,6 +911,20 @@ export async function getOfLinkChannels(db: Database, input: {
     ));
   const channelSegments = segmentsOf(null);
   const contractorSegments = segmentsOf(index.termsByChannel);
+  // Hub's own money follows the bindings alone: every link the series or the
+  // fan walks know, every stretch of the range, whether OFAPI read it or not.
+  const hubLinks = new Map<string, { pageId: number; linkKind: string; linkRef: string }>();
+  for (const series of allSeries) {
+    hubLinks.set(linkKey(series.pageId, series.linkKind, series.linkRef), {
+      pageId: series.pageId, linkKind: series.linkKind, linkRef: series.linkRef,
+    });
+  }
+  for (const key of attribution.floors.keys()) {
+    const [pageId, linkKind, ...ref] = key.split(":");
+    hubLinks.set(key, { pageId: Number(pageId), linkKind: linkKind!, linkRef: ref.join(":") });
+  }
+  const channelPieces = hubPieces([...hubLinks.values()], index.bindingsByLink, null, range.fromAt, range.toAt);
+  const contractorPieces = hubPieces([...hubLinks.values()], index.bindingsByLink, index.termsByChannel, range.fromAt, range.toAt);
   const names = new Map(allSeries.map((series) => [linkKey(series.pageId, series.linkKind, series.linkRef), series.name]));
 
   const segmentOut = (segment: LinkSegment) => ({
@@ -844,13 +947,13 @@ export async function getOfLinkChannels(db: Database, input: {
     flags: segment.delta.flags,
   });
 
-  const groupBy = (segments: readonly LinkSegment[], keyOf: (segment: LinkSegment) => string | null) => {
-    const groups = new Map<string | null, LinkSegment[]>();
-    for (const segment of segments) {
-      const key = keyOf(segment);
-      groups.set(key, [...(groups.get(key) ?? []), segment]);
+  const groupBy = <T>(items: readonly T[], keyOf: (item: T) => string | null) => {
+    const groups = new Map<string | null, T[]>();
+    for (const item of items) {
+      const key = keyOf(item);
+      groups.set(key, [...(groups.get(key) ?? []), item]);
     }
-    return [...groups.entries()].sort(([left], [right]) => compareKeys(left, right));
+    return groups;
   };
   const segmentOrder = (left: LinkSegment, right: LinkSegment) =>
     left.series.pageId - right.series.pageId
@@ -858,32 +961,49 @@ export async function getOfLinkChannels(db: Database, input: {
     || left.series.linkRef.length - right.series.linkRef.length
     || left.series.linkRef.localeCompare(right.series.linkRef)
     || left.startAt.getTime() - right.startAt.getTime();
+  // A group is listed when OFAPI's segments or Hub's pieces have it: a
+  // channel whose stretch OFAPI never read still shows Hub's money.
+  const groupKeys = (left: Map<string | null, unknown>, right: Map<string | null, unknown>) =>
+    [...new Set([...left.keys(), ...right.keys()])]
+      .filter((key) => left.has(key) || (right.get(key) as HubPiece[] | undefined)?.some((piece) =>
+        attribution.floors.has(hubLinkKey(piece.link.pageId, piece.link.linkKind, piece.link.linkRef))))
+      .sort(compareKeys);
 
-  const channels = groupBy(channelSegments, (segment) => segment.channelKey)
-    .map(([channelKey, segments]) => ({
-      channelKey,
-      channelTitle: channelKey === null ? null : index.channelTitles.get(channelKey) ?? channelKey,
-      contractors: channelKey === null
-        ? []
-        : (index.termsByChannel.get(channelKey) ?? [])
-          .filter((term) =>
-            term.validFrom.getTime() < range.toAt.getTime()
-            && (term.validTo === null || term.validTo.getTime() > range.fromAt.getTime()))
-          .map((term) => contractorTermOut(term, index.contractorTitles)),
-      ...totalsOut(segments, attribution),
-      segments: [...segments].sort(segmentOrder).map(segmentOut),
-    }));
+  const channelGroups = groupBy(channelSegments, (segment) => segment.channelKey);
+  const channelHub = groupBy(channelPieces, (piece) => piece.channelKey);
+  const channels = groupKeys(channelGroups, channelHub)
+    .map((channelKey) => {
+      const segments = channelGroups.get(channelKey) ?? [];
+      return {
+        channelKey,
+        channelTitle: channelKey === null ? null : index.channelTitles.get(channelKey) ?? channelKey,
+        contractors: channelKey === null
+          ? []
+          : (index.termsByChannel.get(channelKey) ?? [])
+            .filter((term) =>
+              term.validFrom.getTime() < range.toAt.getTime()
+              && (term.validTo === null || term.validTo.getTime() > range.fromAt.getTime()))
+            .map((term) => contractorTermOut(term, index.contractorTitles)),
+        ...totalsOut(segments, hubMoneyTotalOf(attribution, channelHub.get(channelKey) ?? [])),
+        segments: [...segments].sort(segmentOrder).map(segmentOut),
+      };
+    });
 
-  const contractors = groupBy(contractorSegments, (segment) => segment.contractorKey)
-    .map(([contractorKey, segments]) => ({
-      contractorKey,
-      contractorTitle: contractorKey === null ? null : index.contractorTitles.get(contractorKey) ?? contractorKey,
-      channelKeys: [...new Set(segments
-        .map((segment) => segment.channelKey)
-        .filter((key): key is string => key !== null))].sort(),
-      ...totalsOut(segments, attribution),
-      segments: [...segments].sort(segmentOrder).map(segmentOut),
-    }));
+  const contractorGroups = groupBy(contractorSegments, (segment) => segment.contractorKey);
+  const contractorHub = groupBy(contractorPieces, (piece) => piece.contractorKey);
+  const contractors = groupKeys(contractorGroups, contractorHub)
+    .map((contractorKey) => {
+      const segments = contractorGroups.get(contractorKey) ?? [];
+      const hub = contractorHub.get(contractorKey) ?? [];
+      return {
+        contractorKey,
+        contractorTitle: contractorKey === null ? null : index.contractorTitles.get(contractorKey) ?? contractorKey,
+        channelKeys: [...new Set([...segments.map((segment) => segment.channelKey), ...hub.map((piece) => piece.channelKey)]
+          .filter((key): key is string => key !== null))].sort(),
+        ...totalsOut(segments, hubMoneyTotalOf(attribution, hub)),
+        segments: [...segments].sort(segmentOrder).map(segmentOut),
+      };
+    });
 
   return {
     ...generated(now, seriesFloorAt),

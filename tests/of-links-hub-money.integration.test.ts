@@ -108,8 +108,23 @@ beforeEach(async () => {
   await walk(vipPage, "trial", "11170787", 1, h(0.01), [subscriber(1, true), subscriber(3, false)]);
   await walk(vipPage, "trial", "11170786", 2, h(6), [subscriber(1, true), subscriber(2, true), subscriber(4, true)]);
   await walk(vipPage, "trial", "11170787", 2, h(6.01), [subscriber(1, true), subscriber(3, false)]);
-  // Free page: tracking link T (2099377), fan 5 active.
+  // C (11213035): fan 8; the link moves from Reddit to Porntoki at h(12).
+  await walk(vipPage, "trial", "11213035", 1, h(0.02), [subscriber(8, true)]);
+  // The walks of h(28): read to the end, past every compared stretch.
+  await walk(vipPage, "trial", "11170786", 3, h(28), [subscriber(1, true), subscriber(2, true), subscriber(4, true)]);
+  await walk(vipPage, "trial", "11170787", 3, h(28.01), [subscriber(1, true), subscriber(3, false)]);
+  await walk(vipPage, "trial", "11213035", 2, h(28.02), [subscriber(8, true)]);
+  // Free page: tracking links T (2099377, fan 5), T2 (2117449, fan 6) and
+  // T3 (2099526, fan 7); T3's walk of h(28) is still being read.
   await walk(freePage, "tracking", "2099377", 1, h(0), [subscriber(5, true)]);
+  await walk(freePage, "tracking", "2117449", 1, h(0.01), [subscriber(6, true)]);
+  await walk(freePage, "tracking", "2099526", 1, h(0.02), [subscriber(7, true)]);
+  await walk(freePage, "tracking", "2099377", 2, h(28), [subscriber(5, true)]);
+  await walk(freePage, "tracking", "2117449", 2, h(28.01), [subscriber(6, true)]);
+  await journal(freePage, "link_fans_tracking_subscribers", {
+    link: { kind: "tracking", id: 2099526 }, list: "subscribers", offset: 0, limit: 100, requestSeq: 2,
+    ofapiAccountId: "acct_x", items: [subscriber(7, true)], hasNextPage: true, nextPageUrl: null,
+  }, h(28.02));
   await projectLinkFanJournal(app, { pageId: vipPage, maxPages: 100 });
   await projectLinkFanJournal(app, { pageId: freePage, maxPages: 100 });
   const { rows } = await testDb.pool.query<{ id: string; ref: string }>("select id::text, platform_user_id as ref from fans");
@@ -124,8 +139,11 @@ beforeEach(async () => {
   await transaction(vipPage, 2, h(8), 300n, { state: "pending" }); // A, pending
   // A chargeback of the split purchase, 19 hours later: the purchase's shares.
   await transaction(vipPage, 1, h(20), -1001n, { transactionId: `${split}:chargeback`, canonicalType: "chargeback" });
+  await transaction(vipPage, 8, h(11), 1000n); // C, while it was Reddit's
   // Free page money.
-  await transaction(freePage, 5, h(1), 1000n);
+  await transaction(freePage, 5, h(1), 1000n); // T
+  await transaction(freePage, 6, h(-1), 1000n); // T2, before Hub's floor
+  await transaction(freePage, 7, h(1), 500n); // T3
 
   // The link series. A: before the floor (computed 1 h before it) and after.
   await run(vipPage, "trial", h(-6), [
@@ -136,21 +154,43 @@ beforeEach(async () => {
     // B was never read before the floor although it is old.
     snapshot(vipPage, "trial", "11170787", { revenueNetMills: 50_000n, revenueCalculatedAt: h(26) }),
   ]);
+  // C: OFAPI first reads it at h(13), after it left Reddit.
+  await run(vipPage, "trial", h(13), [
+    snapshot(vipPage, "trial", "11213035", { revenueNetMills: 1000n, revenueCalculatedAt: h(12.5) }),
+  ]);
+  // T and T3: a computation before the floor, one just after it (h(0.5)) and
+  // the latest (h(3)). T2: none between its baseline (before the floor) and
+  // the latest.
   await run(freePage, "tracking", h(-6), [
     snapshot(freePage, "tracking", "2099377", { revenueNetMills: 0n, revenueCalculatedAt: h(-2) }),
+    snapshot(freePage, "tracking", "2117449", { revenueNetMills: 0n, revenueCalculatedAt: h(-2) }),
+    snapshot(freePage, "tracking", "2099526", { revenueNetMills: 0n, revenueCalculatedAt: h(-2) }),
+  ]);
+  await run(freePage, "tracking", h(0.75), [
+    snapshot(freePage, "tracking", "2099377", { revenueNetMills: 0n, revenueCalculatedAt: h(0.5) }),
+    snapshot(freePage, "tracking", "2117449", { revenueNetMills: 1000n, revenueCalculatedAt: h(-2) }),
+    snapshot(freePage, "tracking", "2099526", { revenueNetMills: 0n, revenueCalculatedAt: h(0.5) }),
   ]);
   await run(freePage, "tracking", h(27), [
     snapshot(freePage, "tracking", "2099377", { revenueNetMills: 1000n, revenueCalculatedAt: h(3) }),
+    snapshot(freePage, "tracking", "2117449", { revenueNetMills: 1000n, revenueCalculatedAt: h(3) }),
+    snapshot(freePage, "tracking", "2099526", { revenueNetMills: 500n, revenueCalculatedAt: h(3) }),
   ]);
 
   await applyTrafficBindingsChange(app.db, {
     contractors: [{ key: "coraline-red", title: "@coraline_red" }],
-    channels: [{ key: "lora.porntoki", title: "Порнтоки" }],
+    channels: [{ key: "lora.porntoki", title: "Порнтоки" }, { key: "lora.reddit", title: "Reddit" }],
     terms: [{ channelKey: "lora.porntoki", contractorKey: "coraline-red", validFrom: new Date("2026-04-01T00:00:00Z"), validTo: null, validFromBasis: "confirmed" }],
-    bindings: ["11170786", "11170787"].map((linkId) => ({
-      pageLabel: "lora-vip-of", linkKind: "trial" as const, linkId, channelKey: "lora.porntoki",
-      validFrom: new Date("2026-04-01T00:00:00Z"), validTo: null, validFromBasis: "confirmed" as const,
-    })),
+    bindings: [
+      ...["11170786", "11170787"].map((linkId) => ({
+        pageLabel: "lora-vip-of", linkKind: "trial" as const, linkId, channelKey: "lora.porntoki",
+        validFrom: new Date("2026-04-01T00:00:00Z"), validTo: null, validFromBasis: "confirmed" as const,
+      })),
+      { pageLabel: "lora-vip-of", linkKind: "trial" as const, linkId: "11213035", channelKey: "lora.reddit",
+        validFrom: new Date("2026-04-01T00:00:00Z"), validTo: h(12), validFromBasis: "confirmed" as const },
+      { pageLabel: "lora-vip-of", linkKind: "trial" as const, linkId: "11213035", channelKey: "lora.porntoki",
+        validFrom: h(12), validTo: null, validFromBasis: "confirmed" as const },
+    ],
   }, { write: true, actor: "test", command: "import" });
 });
 
@@ -168,18 +208,30 @@ describe("Hub's own money per link", () => {
     expect(byRef.get("2099377")!.hubMoney).toMatchObject({ state: "available", netMills: 1000, transactionCount: 1, fanCount: 1 });
   });
 
-  it("puts the two figures side by side with the comparison's state", async () => {
+  it("puts the two figures side by side over the same stretch, and says when it cannot", async () => {
     const result = await getOfLinks(app.db, { seriesEnabled: true, now: NOW });
     const byRef = new Map(result.links.map((link) => [link.linkRef, link]));
-    // Tracking link, one segment, nothing pending, the vendor computed after
-    // the money: comparable, equal. Hub's stretch ends where the vendor computed.
+    // T: OFAPI computed at h(0.5) (after Hub's floor) and at h(3); Hub's
+    // figure over exactly [h(0.5), h(3)); walks read past it; a tracking link;
+    // nothing pending: comparable, equal.
     expect(byRef.get("2099377")!.comparison).toEqual({
-      state: "comparable", flags: [], fromAt: h(0).toISOString(), toAt: h(3).toISOString(),
+      state: "comparable", flags: [], fromAt: h(0.5).toISOString(), toAt: h(3).toISOString(),
       vendorDeltaMills: 1000, hubNetMills: 1000, differenceMills: 0,
     });
-    // A trial link is never `comparable` before a per-fan check (П9.3); A has pending money too.
+    // T2: OFAPI's only baseline was computed before Hub's floor and counts a
+    // payment Hub's figure starts after — never comparable.
+    expect(byRef.get("2117449")!.comparison).toMatchObject({
+      state: "provisional", flags: ["window_mismatch"], fromAt: h(0.01).toISOString(), toAt: h(3).toISOString(),
+      vendorDeltaMills: 1000, hubNetMills: 0, differenceMills: -1000,
+    });
+    // T3: its last finished walk starts before the stretch's end and the next
+    // one is still being read — a payer of it may be on an unread page.
+    expect(byRef.get("2099526")!.comparison).toMatchObject({
+      state: "incomplete", vendorDeltaMills: 500, hubNetMills: 500, differenceMills: 0,
+    });
+    // A: a trial link, and its baseline is before the floor.
     expect(byRef.get("11170786")!.comparison).toMatchObject({
-      state: "provisional", flags: [], vendorDeltaMills: 2700, hubNetMills: 2700, differenceMills: 0,
+      state: "provisional", flags: ["window_mismatch"], vendorDeltaMills: 2700, hubNetMills: 2700, differenceMills: 0,
       toAt: h(26).toISOString(),
     });
     // No vendor snapshot of B before the floor: OFAPI all-time against Hub since the floor.
@@ -215,6 +267,17 @@ describe("Hub's own money per link", () => {
       from: "2026-10-01", to: "2026-10-08", now: NOW,
     });
     expect(before.hubMoney).toMatchObject({ state: "no_data", reason: "before_floor", netMills: null, floorAt: h(0).toISOString() });
+  });
+
+  it("keeps Hub's money of a channel's stretch OFAPI never read (the link moved before its first snapshot)", async () => {
+    const result = await getOfLinkChannels(app.db, { from: "2026-10-09", to: "2026-10-10", now: NOW });
+    const reddit = result.channels.find((channel) => channel.channelKey === "lora.reddit");
+    // OFAPI has no segment for Reddit (no snapshot of C before it left), Hub has C's 1000.
+    expect(reddit).toMatchObject({ segments: [], totals: { hubMoney: { state: "partial", netMills: 1000 } } });
+    const byContractor = new Map(result.contractors.map((row) => [row.contractorKey, row]));
+    // Reddit has no contractor: C's Reddit stretch is in the contractor-less row.
+    expect(byContractor.get(null)!.totals.hubMoney.netMills).toBeGreaterThanOrEqual(1000);
+    expect(byContractor.get(null)!.channelKeys).toContain("lora.reddit");
   });
 
   it("sums a channel over its links' shares, partial while Hub's floor falls inside the range", async () => {

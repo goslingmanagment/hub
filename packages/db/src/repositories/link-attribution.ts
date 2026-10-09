@@ -85,6 +85,10 @@ export interface HubLinkAttribution {
   /** Per link (hubLinkKey): the start of its first finished walk that may
    *  count absence — where Hub's figure for the link begins. */
   floors: Map<string, Date>;
+  /** Per link: the start of its LAST finished walk that may count absence.
+   *  Every fan in the list by then has been seen: Hub's figure is whole only
+   *  up to this instant (a later walk still being read may bring more). */
+  lastFinished: Map<string, Date>;
   allocations: HubLinkAllocation[];
   /** Transactions no period holds: the part of the page's money no link
    *  brought (or none Hub can name). */
@@ -107,7 +111,7 @@ export function attributeHubLinkMoney(input: {
   floors: ReadonlyMap<string, Date>;
   periods: readonly HubLinkPeriod[];
   transactions: readonly HubLinkTransaction[];
-}): Omit<HubLinkAttribution, "floors"> {
+}): Omit<HubLinkAttribution, "floors" | "lastFinished"> {
   const periodsByFan = new Map<string, Array<HubLinkPeriod & { from: number; to: number }>>();
   for (const period of input.periods) {
     const floor = input.floors.get(hubLinkKey(period.pageId, period.linkKind, period.linkRef));
@@ -162,12 +166,18 @@ export function attributeHubLinkMoney(input: {
   return { allocations, unallocated };
 }
 
-/** Each link's floor: the start of its first finished subscriber walk that
- *  may count absence (П9.10). */
-export async function readHubLinkFloors(db: Database, pageIds: readonly number[]): Promise<Map<string, Date>> {
-  if (pageIds.length === 0) return new Map();
-  const result = await db.execute<{ page_id: string; link_kind: string; link_ref: string; floor_at: Date | string }>(sql`
-    select platform_account_id::text as page_id, link_kind, platform_link_id as link_ref, min(started_at) as floor_at
+/** Each link's floor — the start of its first finished subscriber walk that
+ *  may count absence (П9.10) — and the start of its last such walk. */
+export async function readHubLinkWalkBounds(
+  db: Database,
+  pageIds: readonly number[],
+): Promise<{ floors: Map<string, Date>; lastFinished: Map<string, Date> }> {
+  if (pageIds.length === 0) return { floors: new Map(), lastFinished: new Map() };
+  const result = await db.execute<{
+    page_id: string; link_kind: string; link_ref: string; floor_at: Date | string; last_at: Date | string;
+  }>(sql`
+    select platform_account_id::text as page_id, link_kind, platform_link_id as link_ref,
+           min(started_at) as floor_at, max(started_at) as last_at
       from page_link_fan_walks
      where platform_account_id = any(${pageIdsParam(pageIds)}::bigint[])
        and list_kind = 'subscribers'
@@ -175,10 +185,11 @@ export async function readHubLinkFloors(db: Database, pageIds: readonly number[]
        and evidential
      group by 1, 2, 3
   `);
-  return new Map(result.rows.map((row) => [
-    hubLinkKey(Number(row.page_id), row.link_kind, row.link_ref),
-    new Date(row.floor_at),
-  ]));
+  const key = (row: (typeof result.rows)[number]) => hubLinkKey(Number(row.page_id), row.link_kind, row.link_ref);
+  return {
+    floors: new Map(result.rows.map((row) => [key(row), new Date(row.floor_at)])),
+    lastFinished: new Map(result.rows.map((row) => [key(row), new Date(row.last_at)])),
+  };
 }
 
 /**
@@ -191,11 +202,11 @@ export async function readHubLinkAttribution(
   db: Database,
   input: { pageIds: readonly number[]; to: Date; from?: Date },
 ): Promise<HubLinkAttribution> {
-  const floors = await readHubLinkFloors(db, input.pageIds);
-  if (floors.size === 0) return { floors, allocations: [], unallocated: [] };
+  const { floors, lastFinished } = await readHubLinkWalkBounds(db, input.pageIds);
+  if (floors.size === 0) return { floors, lastFinished, allocations: [], unallocated: [] };
   const earliestFloor = new Date(Math.min(...[...floors.values()].map((floor) => floor.getTime())));
   const from = input.from !== undefined && input.from.getTime() > earliestFloor.getTime() ? input.from : earliestFloor;
-  if (from.getTime() >= input.to.getTime()) return { floors, allocations: [], unallocated: [] };
+  if (from.getTime() >= input.to.getTime()) return { floors, lastFinished, allocations: [], unallocated: [] };
 
   const periods = await db.execute<{
     page_id: string; link_kind: TrafficLinkKind; link_ref: string; fan_id: string;
@@ -249,7 +260,7 @@ export async function readHubLinkAttribution(
       negatesTransactionId: row.original_id === null ? null : Number(row.original_id),
     })),
   });
-  return { floors, ...result };
+  return { floors, lastFinished, ...result };
 }
 
 export interface HubLinkMoneySum {
