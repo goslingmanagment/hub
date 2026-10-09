@@ -142,6 +142,7 @@ function buildBreadcrumbs(
   if (parts.length === 0) return [{ label: "Overview" }];
 
   if (parts[0] === "ofapi-actions") return [{ label: "Управление OnlyFans" }];
+  if (parts[0] === "ofapi-marketing") return [{ label: "Ссылки OnlyFans" }];
 
   if (parts[0] === "settings") return [{ label: "Overview", href: "/" }, { label: "Settings" }];
 
