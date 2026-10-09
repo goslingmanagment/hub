@@ -70,8 +70,10 @@ export const ofLinkDeltaFlagSchema = z.enum([
 
 /** Hub's own figure (PR 13). `no_data` with a reason until it can be given:
  * `not_computed` — Hub money is not computed yet (before PR 13);
- * `no_completed_walk` — no completed walk of the link's fan list, so no floor. */
-export const ofLinkHubMoneyReasonSchema = z.enum(["not_computed", "no_completed_walk"]);
+ * `no_completed_walk` — no completed walk of the link's fan list, so no floor;
+ * `before_floor` — the asked time ends before Hub's figure begins (`floorAt`):
+ *   Hub knows nothing of it, which is not zero. */
+export const ofLinkHubMoneyReasonSchema = z.enum(["not_computed", "no_completed_walk", "before_floor"]);
 export const ofLinkHubMoneySchema = z.object({
   state: z.enum(["no_data", "available"]),
   reason: ofLinkHubMoneyReasonSchema.nullable(),

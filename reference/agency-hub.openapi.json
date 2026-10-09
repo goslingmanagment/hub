@@ -7215,7 +7215,8 @@
                                     "type": "string",
                                     "enum": [
                                       "not_computed",
-                                      "no_completed_walk"
+                                      "no_completed_walk",
+                                      "before_floor"
                                     ]
                                   },
                                   {
@@ -7905,7 +7906,8 @@
                                         "type": "string",
                                         "enum": [
                                           "not_computed",
-                                          "no_completed_walk"
+                                          "no_completed_walk",
+                                          "before_floor"
                                         ]
                                       },
                                       {
@@ -8234,7 +8236,8 @@
                                         "type": "string",
                                         "enum": [
                                           "not_computed",
-                                          "no_completed_walk"
+                                          "no_completed_walk",
+                                          "before_floor"
                                         ]
                                       },
                                       {
@@ -9254,7 +9257,8 @@
                               "type": "string",
                               "enum": [
                                 "not_computed",
-                                "no_completed_walk"
+                                "no_completed_walk",
+                                "before_floor"
                               ]
                             },
                             {

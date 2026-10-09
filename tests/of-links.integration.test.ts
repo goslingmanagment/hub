@@ -17,8 +17,9 @@ import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTes
 import { createTestAppContext } from "./helpers/runtime.ts";
 
 // «Ссылки OnlyFans» API (traffic plan §2.6, PR 12): the link series, its
-// bindings and its collection state, read for the owner. Hub money is not
-// computed before PR 13 and says so.
+// bindings and its collection state, read for the owner. Here no link has a
+// finished fan walk, so Hub's own money says it has no floor (PR 13; its own
+// cases are in of-links-hub-money.integration.test.ts).
 
 vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
 
@@ -156,7 +157,7 @@ beforeEach(async () => {
 });
 
 describe("GET /of-links", () => {
-  it("gives every link its latest snapshot, fans by kind, its state, its channel and empty Hub money", async () => {
+  it("gives every link its latest snapshot, fans by kind, its state, its channel, and no Hub money without a fan walk", async () => {
     const result = await getOfLinks(app.db, { seriesEnabled: true, pageId: vipPage, now: NOW });
     expect(result.links.map((link) => `${link.linkKind}:${link.linkRef}`)).toEqual([
       "tracking:2150850", "trial:10802699", "trial:11170787", "trial:11687581",
@@ -168,7 +169,7 @@ describe("GET /of-links", () => {
       observedAt: "2026-10-09T03:45:30.000Z", businessDate: "2026-10-09",
       vendorMoney: { revenueBasis: "creator_net_after_platform_fee", netMills: 13_483_440, lastRecalculation: null },
       binding: { channelKey: "lora.reddit", channelTitle: "Reddit", validTo: "2026-09-30T00:00:00.000Z", validFromBasis: "assumed_link_created", contractor: null },
-      hubMoney: { state: "no_data", reason: "not_computed", netMills: null, floorAt: null, attributionRule: "ofapi_subscription_period_equal_split.v1" },
+      hubMoney: { state: "no_data", reason: "no_completed_walk", netMills: null, floorAt: null, attributionRule: "ofapi_subscription_period_equal_split.v1" },
       comparison: { state: null, vendorDeltaMills: null, hubNetMills: null },
     });
     expect(byRef.get("11170787")).toMatchObject({
@@ -247,7 +248,7 @@ describe("GET /of-links/history", () => {
       ["2026-09-10T04:45:00.000Z", false, true],
     ]);
     expect(history.days.every((day) => day.hub === null)).toBe(true);
-    expect(history.hubMoney).toMatchObject({ state: "no_data", reason: "not_computed" });
+    expect(history.hubMoney).toMatchObject({ state: "no_data", reason: "no_completed_walk" });
   });
 
   it("counts a link older than the series from zero with no_baseline, and reads money from the deprecated column", async () => {
@@ -325,7 +326,7 @@ describe("GET /of-links/channels", () => {
       linkRef: "11170787", contractorKey: null, startAt: "2026-08-31T21:00:00.000Z", endAt: NOW.toISOString(),
       startObservedAt: "2026-07-22T12:17:47.000Z", endObservedAt: "2026-10-09T03:45:30.000Z",
     })]);
-    expect(porntoki.totals.hubMoney).toMatchObject({ state: "no_data", reason: "not_computed", netMills: null });
+    expect(porntoki.totals.hubMoney).toMatchObject({ state: "no_data", reason: "no_completed_walk", netMills: null });
     expect(result.contractors.map((contractor) => [contractor.contractorKey, contractor.channelKeys, contractor.totals.clicks])).toEqual([
       ["coraline-red", ["lora.porntoki"], 74],
       [null, ["lora.reddit"], 6674],
