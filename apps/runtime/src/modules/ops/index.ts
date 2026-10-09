@@ -2,6 +2,7 @@ import { registerOfapiMediaRoutes } from "./ofapi-media.ts";
 import { registerOfapiReadCollectionsRoutes } from "./ofapi-read-collections.ts";
 import { registerOfapiExportRoutes } from "./ofapi-exports.ts";
 import { registerOfapiCollectionRoutes } from "./ofapi-collection.ts";
+import { registerOfLinksRoutes } from "./of-links.ts";
 import { randomUUID } from "node:crypto";
 
 import { routeSchemas } from "@agency_hub_core/contracts";
@@ -185,6 +186,7 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
   registerOfapiExportRoutes(server, ctx);
   registerOfapiMediaRoutes(server, ctx);
   registerOfapiCollectionRoutes(server, ctx);
+  registerOfLinksRoutes(server, ctx);
   const { appContext, boss } = ctx;
   const { requirePrincipal, requireSyncHealthAccess } = ctx.auth;
 

@@ -27,7 +27,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 22 routes marked "yes", and every route marked "no" refuses it with 403 in
 both enforcement modes. A full device token is not affected.
 
-## Routes (285)
+## Routes (288)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -60,6 +60,9 @@ both enforcement modes. A full device token is not affected.
 | GET | `/api/v1/admin/notifications/settings` | `notificationsSettings` | `owner-session` | — | — | no |
 | PATCH | `/api/v1/admin/notifications/settings` | `notificationsSettingsUpdate` | `owner-session` | — | — | no |
 | POST | `/api/v1/admin/notifications/test` | `notificationsTestMessage` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/of-links` | `ofLinksGet` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/of-links/channels` | `ofLinksChannelsGet` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/of-links/history` | `ofLinksHistoryGet` | `owner-session` | — | — | no |
 | GET | `/api/v1/admin/ofapi/actions` | `ofapiActionList` | `owner-session` | — | — | no |
 | POST | `/api/v1/admin/ofapi/actions` | `ofapiActionPrepare` | `owner-session` | — | — | no |
 | GET | `/api/v1/admin/ofapi/actions/:id` | `ofapiActionGet` | `owner-session` | — | — | no |
