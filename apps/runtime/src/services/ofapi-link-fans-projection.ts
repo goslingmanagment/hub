@@ -18,7 +18,13 @@ import {
   advanceLinkFanJournalCursor,
   applyLinkFansPage,
   type Database,
+  diffLinkFanProjectionStates,
   isDmArchiveScopeFenced,
+  lastLinkFanJournalIdBefore,
+  type LinkFanProjectionDiff,
+  lockLinkFanProjection,
+  readLinkFanProjectionState,
+  resetLinkFanProjection,
   type LinkFanJournalRow,
   type LinkFansPageInput,
   type LinkFansPageNext,
@@ -351,4 +357,81 @@ export async function projectLinkFanJournal(
   });
   stats.pending = rest.length > 0;
   return stats;
+}
+
+export interface LinkFanProjectionRebuild {
+  pageId: number;
+  rule: string;
+  written: boolean;
+  /** The rebuild started at this instant as if the journal began there. */
+  from: string | null;
+  /** Journal pages applied, skipped as not holding together, and passed
+   *  over because an erasure covers them. */
+  journalPages: { applied: number; skipped: number; fenced: number };
+  /** The rebuild against the state it replaces. */
+  diff: LinkFanProjectionDiff;
+}
+
+class LinkFanRebuildDryRun extends Error {
+  constructor(readonly result: LinkFanProjectionRebuild) {
+    super("link-fans rebuild dry run");
+  }
+}
+
+/**
+ * link-fans:reproject — rebuild one page's projection from its journal, in
+ * ONE transaction holding the page's projection lock and the erasure fence's
+ * shared lock: read the current state,
+ * empty it, replay every link_fans_* journal row (from `from`, when given)
+ * through the same functions the sweep uses, read the result and compare.
+ * Without `write` the transaction rolls back and only the comparison is
+ * returned. While it runs, the sweep's projection step finds the lock taken
+ * and leaves its pages for its next call. A journal body that cannot be read
+ * fails the whole rebuild (nothing is replaced).
+ *
+ * `from` starts the projection at that instant as if the journal began
+ * there: earlier pages are not applied, so every link's floor moves to its
+ * first finished walk after it.
+ */
+export async function rebuildLinkFanProjection(
+  ctx: ProjectionContext,
+  input: { pageId: number; from?: Date; write: boolean },
+): Promise<LinkFanProjectionRebuild> {
+  try {
+    return await ctx.db.transaction(async (tx) => {
+      await lockLinkFanProjection(tx, input.pageId);
+      // The erasure fence's shared lock for the whole rebuild: an erasure of
+      // the page waits for it, and it never starts under a running erasure.
+      if (!(await tryAcquireDmArchiveWriterFenceLock(tx, input.pageId))) {
+        throw new Error("An erasure of this page is running; run the rebuild again after it");
+      }
+      const before = await readLinkFanProjectionState(tx, input.pageId);
+      const startAfterId = input.from ? await lastLinkFanJournalIdBefore(tx, input.pageId, input.from) : 0;
+      await resetLinkFanProjection(tx, { pageId: input.pageId, rule: LINK_ATTRIBUTION_RULE, startAfterId });
+      const journalPages = { applied: 0, skipped: 0, fenced: 0 };
+      let afterId = startAfterId;
+      for (;;) {
+        const rows = await listLinkFanJournalRowsAfter(tx, { pageId: input.pageId, afterId, limit: 200 });
+        if (rows.length === 0) break;
+        for (const row of rows) {
+          const body = await readLinkFanJournalBody(ctx, tx, row);
+          journalPages[await applyLinkFanJournalRow(ctx, tx, input.pageId, row, body)] += 1;
+          afterId = row.id;
+        }
+      }
+      const result: LinkFanProjectionRebuild = {
+        pageId: input.pageId,
+        rule: LINK_ATTRIBUTION_RULE,
+        written: input.write,
+        from: input.from?.toISOString() ?? null,
+        journalPages,
+        diff: diffLinkFanProjectionStates(before, await readLinkFanProjectionState(tx, input.pageId)),
+      };
+      if (!input.write) throw new LinkFanRebuildDryRun(result);
+      return result;
+    });
+  } catch (error) {
+    if (error instanceof LinkFanRebuildDryRun) return error.result;
+    throw error;
+  }
 }

@@ -32,6 +32,7 @@ import {
   formatMaskedProxyUrl,
   formatUsdFromMills,
   parsePeriod,
+  parseTrafficInstant,
   redactSensitiveText,
   millsFromInteger,
   normalizeProviderStreamFailure,
@@ -84,6 +85,7 @@ import {
 import { runCanonicalization } from "./services/canonicalize-driver.ts";
 import { runOfapiBindingReconcile } from "./services/ofapi-binding-reconcile.ts";
 import { queueOfapiLinkStatsRunsAfterOperatorRebind } from "./services/ofapi-link-stats-sync.ts";
+import { rebuildLinkFanProjection } from "./services/ofapi-link-fans-projection.ts";
 import {
   runTrafficBindingsImport,
   runTrafficBindingsList,
@@ -1906,6 +1908,38 @@ export function buildProgram() {
       const app = await createAppContext();
       try {
         console.log(JSON.stringify(await runTrafficBindingsList(app.db, options), null, 2));
+      } finally {
+        await app.close();
+      }
+    });
+
+  program
+    .command("link-fans:reproject")
+    .description(
+      "rebuild a page's link ↔ fan projection (walks, fans, periods) from the fan sweep's journal "
+        + "in one transaction; prints the difference against the current state, writes only with --write "
+        + "(a dry run that finds a difference exits 1)",
+    )
+    .requiredOption("--page <label>", "the OnlyFans page")
+    .option(
+      "--from <instant>",
+      "start at this instant as if the journal began there (YYYY-MM-DD = 00:00 Moscow, or an ISO instant)",
+    )
+    .option("--write", "replace the projection with the rebuild (default: compare only, write nothing)", false)
+    .action(async (options: { page: string; from?: string; write: boolean }) => {
+      const app = await createAppContext();
+      try {
+        const found = await findPageByLabel(app.db, options.page);
+        if (!found || found.page.platform !== "onlyfans") {
+          throw new Error(`No active OnlyFans page labelled ${options.page}`);
+        }
+        const result = await rebuildLinkFanProjection(app, {
+          pageId: found.page.id,
+          ...(options.from === undefined ? {} : { from: parseTrafficInstant(options.from) }),
+          write: Boolean(options.write),
+        });
+        console.log(JSON.stringify({ page: options.page, ...result }, null, 2));
+        if (!result.written && !result.diff.identical) process.exitCode = 1;
       } finally {
         await app.close();
       }

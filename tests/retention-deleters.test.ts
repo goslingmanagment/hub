@@ -180,6 +180,12 @@ const SANCTIONED_DELETER_FILES = [
   // event, `creator_media` head and collected bucket stays, and the enqueue's
   // origin check keeps the rows from coming back.
   "packages/db/src/repositories/fansly-media-stats-dm-only-queue.ts",
+  // Link ↔ fan (0260): resetLinkFanProjection, called only by the owner's
+  // link-fans:reproject, empties ONE page's projection tables and replays
+  // them from the journal in the same transaction (a dry run rolls back).
+  // They are a projection, not captured facts; the journal pages they are
+  // built from are never touched.
+  "packages/db/src/repositories/link-fans.ts",
   "packages/db/src/repositories/message-archive.ts",
   // observations.ts left this list when the insert protocol became atomic:
   // its only delete was the compensating release of a failed key claim, and
