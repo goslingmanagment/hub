@@ -720,8 +720,18 @@ export interface TrafficBindingsSnapshot {
 }
 
 /** Every channel, contractor, term and link binding, open and closed (four
- * small tables, written by the owner's CLI only). */
+ * small tables, written by the owner's CLI only) — as ONE snapshot: the four
+ * reads run in one read-only REPEATABLE READ transaction, so an import
+ * committing between them can never pair old contractor terms with new link
+ * bindings. */
 export async function readTrafficBindingsSnapshot(db: Database): Promise<TrafficBindingsSnapshot> {
+  return db.transaction(
+    async (tx) => readTrafficBindingsTables(tx as Database),
+    { isolationLevel: "repeatable read", accessMode: "read only" },
+  );
+}
+
+async function readTrafficBindingsTables(db: Database): Promise<TrafficBindingsSnapshot> {
   const channels = await db.execute<{ key: string; title: string }>(sql`
     select key, title from traffic_channels order by key`);
   const contractors = await db.execute<{ key: string; title: string }>(sql`
