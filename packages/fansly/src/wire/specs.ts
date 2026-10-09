@@ -792,6 +792,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   // the web app writes them.
   "stats.summary": {
     id: "stats.summary",
+    credentials: "session",
     kind: "creator_stats_summary",
     host: "api",
     endpointTemplate: "/account/stats/summary",
@@ -802,6 +803,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   },
   "stats.series": {
     id: "stats.series",
+    credentials: "session",
     kind: "creator_stats_series",
     host: "api",
     endpointTemplate: "/account/stats/series",
@@ -816,6 +818,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   },
   "stats.media_top": {
     id: "stats.media_top",
+    credentials: "session",
     kind: "creator_stats_media_top",
     host: "api",
     endpointTemplate: "/account/stats/media/top",
@@ -832,6 +835,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   },
   "stats.media": {
     id: "stats.media",
+    credentials: "session",
     kind: "creator_stats_media",
     host: "api",
     endpointTemplate: "/account/stats/media",
@@ -846,6 +850,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   },
   "stats.media_benchmarks": {
     id: "stats.media_benchmarks",
+    credentials: "session",
     kind: "creator_stats_media_benchmarks",
     host: "api",
     endpointTemplate: "/account/stats/media/benchmarks",
@@ -856,6 +861,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   },
   "stats.media_shown": {
     id: "stats.media_shown",
+    credentials: "session",
     kind: "creator_stats_media_shown",
     host: "api",
     endpointTemplate: "/account/stats/media/shown",
@@ -866,6 +872,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   },
   "stats.geo": {
     id: "stats.geo",
+    credentials: "session",
     kind: "creator_stats_geo",
     host: "api",
     endpointTemplate: "/account/stats/geo",
@@ -880,6 +887,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   },
   "stats.active_hours": {
     id: "stats.active_hours",
+    credentials: "session",
     kind: "creator_stats_active_hours",
     host: "api",
     endpointTemplate: "/account/stats/activehours",
@@ -894,6 +902,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   },
   "stats.tags": {
     id: "stats.tags",
+    credentials: "session",
     kind: "creator_stats_tags",
     host: "api",
     endpointTemplate: "/account/stats/tags",
@@ -911,6 +920,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   },
   "stats.posts": {
     id: "stats.posts",
+    credentials: "session",
     kind: "creator_stats_posts",
     host: "api",
     endpointTemplate: "/account/stats/posts",
@@ -921,6 +931,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   },
   "stats.fans_top": {
     id: "stats.fans_top",
+    credentials: "session",
     kind: "creator_stats_fans_top",
     host: "api",
     endpointTemplate: "/account/stats/fans/top",
@@ -935,6 +946,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   },
   "stats.fan": {
     id: "stats.fan",
+    credentials: "session",
     kind: "creator_stats_fan",
     host: "api",
     endpointTemplate: "/account/stats/fans",
@@ -949,6 +961,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   },
   "earnings.transactions_account": {
     id: "earnings.transactions_account",
+    credentials: "session",
     kind: "fan_earnings_transactions",
     host: "api",
     endpointTemplate: "/account/wallets/earnings/transactions/accounts",
