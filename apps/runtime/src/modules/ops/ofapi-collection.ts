@@ -1,6 +1,6 @@
 import { OFAPI_COLLECTION_REGISTRY } from "@agency_hub_core/shared";
 import { ofapiCollectionRouteSchemas } from "@agency_hub_core/contracts";
-import { applyOfapiCollectionPolicy, createOfapiCollectionJob, finishIncompleteOfapiCollectionJob, getOfapiCollectionSnapshot, OfapiCollectionPolicyError, previewOfapiCollectionPolicy, resumeOfapiCollectionJob } from "@agency_hub_core/db";
+import { applyOfapiCollectionPolicy, createOfapiCollectionJob, finishIncompleteOfapiCollectionJob, getOfapiCollectionSnapshot, listLinkSelectionsOutsideSeries, OfapiCollectionPolicyError, previewOfapiCollectionPolicy, resumeOfapiCollectionJob } from "@agency_hub_core/db";
 import { canAccessPage, requireDashboardUser, requireOwner } from "../../services/auth.ts";
 import { BadRequestError, ConflictError, ForbiddenError } from "../../services/errors.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
@@ -33,6 +33,11 @@ export function registerOfapiCollectionRoutes(server: ApiServer, ctx: ApiModuleC
     const principal = await requirePrincipal(request); requireOwner(principal);
     if (request.body.category === "vault_files") throw new BadRequestError("Use /ofapi-media to upload an owned source with a frozen preview and explicit approval.");
     if (!OFAPI_COLLECTION_REGISTRY.find(entry => entry.id === request.body.category)?.supportsOneOff) throw new BadRequestError("This baseline category uses its existing collector. Configure its collection policy; generic one-off jobs are unavailable.");
+    // A paid per-link read targets a link of THIS page: one its link series has seen.
+    const outside = request.body.category === "tracking_links"
+      ? await listLinkSelectionsOutsideSeries(app.db, { pageId: request.body.pageId, selection: request.body.selection })
+      : [];
+    if (outside.length > 0) throw new BadRequestError(`Not a link of this page in its link series: ${outside.join(", ")}. Reload the screen and pick the link again.`);
     const job = await policyResult(() => createOfapiCollectionJob(app.db, request.body, principal.user.id));
     // Durable queued rows are also swept; a lost pg-boss wakeup never loses approval.
     await boss?.send("ofapi.collection.run", { jobId: job.id }, { singletonKey: job.id, retryLimit: 0 });

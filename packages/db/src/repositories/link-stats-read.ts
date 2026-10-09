@@ -320,6 +320,38 @@ export async function listLinkSeriesWindowRows(
   }));
 }
 
+const LINK_SELECTION_PATTERN = /^(tracking|trial)_link(?:_[a-z_]+)?:([0-9]{1,20})(?:\?.*)?$/;
+
+/** The per-link tracking/trial selections of a one-off read (`trial_link:123`,
+ * `tracking_link_subscribers:456`, with or without a query) whose link the
+ * page's series has never seen — a link of another page, or none at all. A
+ * paid read with such a target is refused before it is queued. Other
+ * selections (lists, Smart Links) are not this check's to judge. */
+export async function listLinkSelectionsOutsideSeries(
+  db: Database,
+  input: { pageId: number; selection: readonly string[] },
+): Promise<string[]> {
+  const outside: string[] = [];
+  for (const entry of input.selection) {
+    const match = LINK_SELECTION_PATTERN.exec(entry);
+    if (match === null) {
+      continue;
+    }
+    const result = await db.execute<{ found: number }>(sql`
+      select 1 as found
+      from page_link_stat_snapshots s
+      where s.platform_account_id = ${input.pageId}
+        and s.link_kind = ${match[1]!}
+        and s.platform_link_id = ${match[2]!}
+      limit 1
+    `);
+    if (result.rows.length === 0) {
+      outside.push(entry);
+    }
+  }
+  return outside;
+}
+
 export interface LatestLinkSnapshotRow {
   platformAccountId: number;
   linkKind: LinkStatKind;

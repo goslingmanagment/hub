@@ -6,6 +6,7 @@ import {
   createOnlyFansPage,
   insertLinkStatRun,
   insertLinkStatRunWithSnapshots,
+  listLinkSelectionsOutsideSeries,
   type InsertLinkStatSnapshotInput,
 } from "@agency_hub_core/db";
 
@@ -415,5 +416,24 @@ describe("routes", () => {
     expect((await get(`/api/v1/admin/of-links/history?pageId=${vipPage}&linkKind=smart&linkRef=42`)).statusCode).toBe(400);
     expect((await get("/api/v1/admin/of-links/channels?from=2026-10-09&to=2026-09-01")).statusCode).toBe(400);
     expect((await get("/api/v1/admin/of-links/channels?from=2026-02-30")).statusCode).toBe(400);
+  });
+
+  it("refuse a paid one-off read of a link that is not in the page's link series", async () => {
+    const owner = await cookie("owner", "owner");
+    expect(await listLinkSelectionsOutsideSeries(app.db, {
+      pageId: freePage,
+      selection: ["trial_link:11170787", "tracking_link_subscribers:2099377?limit=10", "stored_trial_links", "smart_link:01JQZ9MY9QZHBBEMYW0AN9N8EQ"],
+    })).toEqual(["trial_link:11170787"]);
+    const job = (pageId: number, selection: string) => server!.inject({
+      method: "POST", url: "/api/v1/admin/ofapi/collection/jobs", headers: { cookie: owner },
+      payload: { pageId, category: "tracking_links", expectedRevision: 0, maxCalls: 1, maxCredits: 1, maxBytes: 1024, from: null, to: null, selection: [selection] },
+    });
+    // VIP's trial link sent with the free page's id: refused before anything is queued.
+    const foreign = await job(freePage, "trial_link:11170787");
+    expect(foreign.statusCode).toBe(400);
+    expect(foreign.body).toContain("Not a link of this page");
+    expect((await testDb.pool.query("select count(*)::int as n from ofapi_collection_jobs")).rows[0].n).toBe(0);
+    // The page's own link passes this check (whatever the collection policy then says).
+    expect((await job(vipPage, "trial_link:11170787")).body).not.toContain("Not a link of this page");
   });
 });

@@ -1,5 +1,5 @@
 import { NavLink, useLocation, Link } from "react-router";
-import { Activity, BarChart3, Bell, Coins, LineChart, MailQuestion, Settings, Users, Heart, Trophy, Terminal, ListTodo, Database, AlertTriangle, Droplets, Code2, ChevronDown, UserX } from "lucide-react";
+import { Activity, BarChart3, Bell, Coins, LineChart, Link2, MailQuestion, Settings, Users, Heart, Trophy, Terminal, ListTodo, Database, AlertTriangle, Droplets, Code2, ChevronDown, UserX } from "lucide-react";
 import { useState } from "react";
 import { useAdminConnections } from "@/api/queries";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
@@ -78,7 +78,7 @@ export function Sidebar({ user }: SidebarProps) {
           Overview
         </NavLink>
 
-        {user.role === "owner" && <NavLink to="/ofapi-marketing" className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-sm text-text-secondary hover:bg-hover"><Database size={16} /> Smart Links</NavLink>}
+        {user.role === "owner" && <NavLink to="/ofapi-marketing" className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-sm text-text-secondary hover:bg-hover"><Link2 size={16} /> Ссылки OnlyFans</NavLink>}
         {user.role === "owner" && <NavLink to="/ofapi-actions" className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-sm text-text-secondary hover:bg-hover"><Database size={16} /> Управление OnlyFans</NavLink>}
         {(user.role === "owner" || user.role === "team_lead") && <NavLink to="/ofapi-exports" className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-sm text-text-secondary hover:bg-hover"><Database size={16} /> OFAPI exports</NavLink>}
         {(user.role === "owner" || user.role === "team_lead") && <NavLink to="/ofapi-media" className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg text-sm text-text-secondary hover:bg-hover"><Database size={16} /> OnlyFans media</NavLink>}
