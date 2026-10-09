@@ -126,8 +126,10 @@ export interface KernelClientOptions {
   onAuthError?: (error: KernelApiError, operation: KernelOperationKey | null) => void;
 }
 
+// A param is a whole segment (`/:name`); a colon inside a segment is a
+// literal custom method (`/api/v2/spenders:batch`), as the server routes it.
 function buildPath(template: string, params: Record<string, string | number> | undefined) {
-  return template.replace(/:([A-Za-z0-9_]+)/g, (_match, name: string) => {
+  return template.replace(/(?<=\/):([A-Za-z0-9_]+)/g, (_match, name: string) => {
     const value = params?.[name];
     if (value === undefined || value === null) {
       throw new KernelApiError(
