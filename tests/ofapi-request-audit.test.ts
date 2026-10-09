@@ -129,6 +129,28 @@ describe("OFAPI request audit regressions", () => {
     expect(fetch).toHaveBeenCalledTimes(9);
   });
 
+  it("hands the chargebacks body back for the journal, refused bodies on the error, never enumerable", async () => {
+    const accepted = paid({ list: [{ id: 1, payment: { id: "p1" } }], marker: 1_757_300_000 });
+    const refused = paid({ items: [{ id: 2 }] });
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(response(accepted))
+      .mockResolvedValueOnce(response(refused))
+      .mockResolvedValueOnce(response({ data: { list: [], hasMore: false } }))
+      .mockResolvedValueOnce(response({ data: {} }));
+    vi.stubGlobal("fetch", fetch);
+    const client = createOfapiClient({ apiKey: "test", restDelayMs: 0 });
+    await expect(client.listChargebacks!({}, ACCOUNT, { limit: 100 })).resolves.toMatchObject({ rawBody: accepted });
+    const error = await client.listChargebacks!({}, ACCOUNT, { limit: 100 }).catch((caught: unknown) => caught);
+    expect(error).toMatchObject({ message: "OFAPI list page shape unavailable" });
+    expect((error as { refusedListBody?: unknown }).refusedListBody).toEqual(refused);
+    expect(Object.keys(error as object)).not.toContain("refusedListBody");
+    expect(JSON.stringify(error)).not.toContain("items");
+    // Other routes keep neither.
+    expect(await client.listTransactions!({}, ACCOUNT, {})).not.toHaveProperty("rawBody");
+    const other = await client.listTransactions!({}, ACCOUNT, {}).catch((caught: unknown) => caught);
+    expect((other as { refusedListBody?: unknown }).refusedListBody).toBeUndefined();
+  });
+
   it.each(["provider", "persistence"])("R3 refreshes one shared preflight after transient %s failure", async failure => {
     vi.useFakeTimers();
     let release: ((value: Response) => void) | undefined;

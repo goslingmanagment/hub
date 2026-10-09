@@ -27,7 +27,7 @@ import type { AppContext } from "../bootstrap.ts";
 import { resolveOfapiListNextOffset } from "./ofapi-list-pagination.ts";
 import { asRecord, idToString } from "./ofapi-payloads.ts";
 import { upsertTransactionWithNegationGuards } from "./money-negation-guards.ts";
-import type { OfapiRequestContext } from "./ofapi.ts";
+import { OfapiApiError, type OfapiListPage, type OfapiRequestContext } from "./ofapi.ts";
 import { resolveEgress } from "./egress/resolver.ts";
 import {
   notifyOfapiGlobalIncident,
@@ -39,6 +39,8 @@ import {
   type SyncQueueLifecycleClient,
 } from "./sync-queue.ts";
 import { createOfapiRestGuard } from "./sync/ofapi-dm-sync.ts";
+import { buildNormalizedSyncError } from "./sync/errors.ts";
+import { persistRawPayload, retentionDate } from "./sync/shared.ts";
 import {
   assertPageTransactionsWriter,
   WrongTransactionsWriterError,
@@ -72,6 +74,49 @@ const CHARGEBACKS_FIRST_WALK_MAX_PAGES = 200;
 // Backfill-lane default; the ofapiBackfillDailyCreditBudget knob governs both
 // the backfill CLI and this reconcile (one historical/reconcile spend lane).
 const DEFAULT_BACKFILL_DAILY_CREDIT_BUDGET = 200;
+
+// Every page the vendor answered is journaled before the reconcile reads a row
+// from it, refused bodies included: for a month from 2026-09-08 the client
+// refused every page and not one body was kept to show why.
+const CHARGEBACKS_JOURNAL_MAPPER_VERSION = "ofapi-chargebacks-v1";
+
+type ChargebacksRequest = {
+  limit: number;
+  offset: number;
+  startDate: string | null;
+  endDate: string | null;
+};
+
+const CHARGEBACKS_JOURNAL_ACTION = "journal chargebacks page";
+
+/** A failed journal insert, reduced to its sanitized summary. The driver's
+ * error carries the INSERT's bound values — the whole vendor body, fans and
+ * payments — in its message, cause and stack, so it never reaches a log, the
+ * page result or the incident text; only this does. */
+function chargebacksJournalFailure(error: unknown) {
+  return buildNormalizedSyncError(error, {
+    endpoint: "ofapi_chargebacks",
+    action: CHARGEBACKS_JOURNAL_ACTION,
+  });
+}
+
+async function journalChargebacksPage(
+  app: AppContext,
+  input: { pageId: number; ofapiAccountId: string; request: ChargebacksRequest; body: unknown },
+) {
+  await persistRawPayload(app.db, {
+    platformAccountId: input.pageId,
+    endpoint: "ofapi_chargebacks",
+    requestParams: { ...input.request, path: "/:accountId/chargebacks" },
+    // The vendor body as parsed from the wire, before the client mapped it,
+    // with the request that produced it: a page names neither its account,
+    // its window nor its offset.
+    responsePayload: { ofapiAccountId: input.ofapiAccountId, ...input.request, body: input.body },
+    mapperVersion: CHARGEBACKS_JOURNAL_MAPPER_VERSION,
+    payloadKind: "mapping_critical",
+    retainUntil: retentionDate(),
+  }, { action: CHARGEBACKS_JOURNAL_ACTION, platform: "onlyfans" });
+}
 
 export function isOfapiChargebacksReconcileEnabled(
   config?: Pick<AppContext["config"], "ofapiChargebacksReconcileEnabled">,
@@ -287,6 +332,8 @@ async function reconcilePage(
     ? CHARGEBACKS_FIRST_WALK_MAX_PAGES
     : CHARGEBACKS_MAX_PAGES_PER_RUN;
 
+  const journalScope = { pageId: input.pageId, ofapiAccountId: input.ofapiAccountId };
+
   try {
     for (let offset = 0; apiPages < maxPages;) {
       const block = await input.guard.resolveBlock();
@@ -294,12 +341,51 @@ async function reconcilePage(
         blockedReason = block;
         break;
       }
-      const page = await app.ofapi.listChargebacks(requestContext, input.ofapiAccountId, {
+      const request: ChargebacksRequest = {
         limit: CHARGEBACKS_PAGE_LIMIT,
         offset,
-        ...(startDate === undefined ? {} : { startDate, endDate }),
-      });
-      await input.guard.recordResponse(page);
+        startDate: startDate ?? null,
+        endDate: endDate ?? null,
+      };
+      let page: OfapiListPage;
+      try {
+        page = await app.ofapi.listChargebacks(requestContext, input.ofapiAccountId, {
+          limit: CHARGEBACKS_PAGE_LIMIT,
+          offset,
+          ...(startDate === undefined ? {} : { startDate, endDate }),
+        });
+      } catch (error) {
+        if (error instanceof OfapiApiError && error.refusedListBody !== undefined) {
+          // The refusal stays the page's failure; a journal that cannot be
+          // written here is logged, never swapped in for it.
+          try {
+            await journalChargebacksPage(app, { ...journalScope, request, body: error.refusedListBody });
+          } catch (journalError) {
+            app.logger.warn({ pageId: input.pageId, journalFailure: chargebacksJournalFailure(journalError).error },
+              "OFAPI chargebacks: could not journal the refused page");
+          }
+        }
+        throw error;
+      }
+      // Journal first, settle the credits in `finally`: a body the vendor
+      // delivered is kept even when the settlement then fails (which still
+      // stops the reconcile), and a page that cannot be journaled still
+      // settles what it cost before it fails the reconcile.
+      try {
+        if (page.rawBody === undefined) {
+          throw new Error("OFAPI chargebacks page arrived without its vendor body to journal");
+        }
+        // Loud: a page that cannot be journaled fails the page's reconcile —
+        // with a fresh error that holds only the sanitized summary (no cause).
+        try {
+          await journalChargebacksPage(app, { ...journalScope, request, body: page.rawBody });
+        } catch (journalError) {
+          // eslint-disable-next-line preserve-caught-error -- the cause holds the INSERT's bound values (the vendor body); only the sanitized summary may travel
+          throw new Error(`OFAPI chargebacks page not journaled: ${chargebacksJournalFailure(journalError).summary}`);
+        }
+      } finally {
+        await input.guard.recordResponse(page);
+      }
       apiPages += 1;
       rawRows += page.items.length;
       for (const item of page.items) {
