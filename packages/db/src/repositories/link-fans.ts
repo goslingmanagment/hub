@@ -10,6 +10,7 @@ import type { Database } from "../client.ts";
 import { capturePayloadRefFromColumns, type CapturePayloadRef } from "./capture-payloads.ts";
 import { CLIENT_AUDIENCE_NEW_IGNORED_SUB_TYPES } from "./client-audience-new.ts";
 import { domainEventNotSupersededSql } from "./domain-event-supersession.ts";
+import { upsertFanPages, upsertFans } from "./fans.ts";
 
 // OnlyFans link ↔ fan (migration 0260; plan 2026-10-08, PR 8). The store of a
 // projection of the paid fan sweep's journal: every write here applies ONE
@@ -350,18 +351,35 @@ async function applyWalkPage(tx: Database, page: LinkFansPageInput): Promise<{
   };
 }
 
-/** The page's fans among the platform ids: a fan without his page_fans row
- *  on this page (erased from it, or never upserted) is not written. */
+/**
+ * The page's fans for the platform ids the journal page names, as fan ids.
+ * The sweep upserts fans and page_fans before it projects, but a crash between
+ * journaling a page and that upsert leaves the page's new fans without rows
+ * (the retried request may no longer list them on this page): the journal is
+ * the record, so they are restored here — fans and page_fans exactly as the
+ * sweep writes them (no names, `last_seen_at` untouched). Call only for a page
+ * the erasure fence let through: an erased fan's pre-erasure material never
+ * gets this far.
+ */
 async function resolveFanIds(tx: Database, pageId: number, platformUserIds: string[]): Promise<Map<string, number>> {
   if (platformUserIds.length === 0) return new Map();
-  const result = await tx.execute<{ id: string; platform_user_id: string }>(sql`
-    select f.id::text, f.platform_user_id
-      from fans f
-      join page_fans pf on pf.fan_id = f.id and pf.platform_account_id = ${pageId}
-     where f.platform = 'onlyfans'
-       and f.platform_user_id = any(${sql.param(platformUserIds)}::text[])
-  `);
-  return new Map(result.rows.map((row) => [row.platform_user_id, Number(row.id)]));
+  const read = async () => {
+    const result = await tx.execute<{ id: string; platform_user_id: string }>(sql`
+      select f.id::text, f.platform_user_id
+        from fans f
+        join page_fans pf on pf.fan_id = f.id and pf.platform_account_id = ${pageId}
+       where f.platform = 'onlyfans'
+         and f.platform_user_id = any(${sql.param(platformUserIds)}::text[])
+    `);
+    return new Map(result.rows.map((row) => [row.platform_user_id, Number(row.id)]));
+  };
+  const found = await read();
+  const missing = [...new Set(platformUserIds)].filter((id) => !found.has(id));
+  if (missing.length === 0) return found;
+  const seen = { touchLastSeen: false };
+  const restored = await upsertFans(tx, missing.map((platformUserId) => ({ platform: "onlyfans" as const, platformUserId })), seen);
+  await upsertFanPages(tx, restored.map((fan) => ({ fanId: fan.id, platformAccountId: pageId })), seen);
+  return read();
 }
 
 /** The last item of a fan on a page wins (a page should not repeat him). */
@@ -375,10 +393,10 @@ const isoOrNull = (value: Date | null) => (value === null ? null : value.toISOSt
 
 /**
  * Apply one journaled page of a link's subscribers or spenders list. Call in a
- * transaction holding the page's projection lock and the erasure fence, in
- * journal order; the fans the page names must already be the page's (the
- * sweep upserts fans and page_fans before it projects; a fan erased since is
- * skipped, never recreated).
+ * transaction holding the page's projection lock and the erasure fence's
+ * shared lock, in journal order, and only for a page the fence let through:
+ * the fans the page names are restored onto the page when missing (see
+ * resolveFanIds).
  */
 export async function applyLinkFansPage(tx: Database, page: LinkFansPageInput): Promise<LinkFansPageResult> {
   const { walk, state, finishedNow } = await applyWalkPage(tx, page);
@@ -469,7 +487,11 @@ export async function applyLinkFansPage(tx: Database, page: LinkFansPageInput): 
 
     const active = known.filter((item) => item.active).map((item) => fanIds.get(item.platformUserId)!);
     if (active.length > 0) {
-      result.periodsOpened = await openPeriods(tx, page, walk.id, active, fanIds, known);
+      // The walk this page belongs to bounds a new fan's start only once it
+      // was finished before this page: a re-read of an already finished walk
+      // (a lost sweep checkpoint) comes after it, a first read is inside it.
+      const boundaryExcludes = state === "ignored" && walk.finishedAt !== null ? null : walk.id;
+      result.periodsOpened = await openPeriods(tx, page, walk.id, boundaryExcludes, active, fanIds, known);
     }
   }
 
@@ -486,6 +508,7 @@ async function openPeriods(
   tx: Database,
   page: LinkFansPageInput,
   walkId: number,
+  boundaryExcludesWalkId: number | null,
   activeFanIds: number[],
   fanIds: Map<string, number>,
   known: LinkFanSubscriberItem[],
@@ -503,14 +526,15 @@ async function openPeriods(
   // The link's floor is its first finished evidential subscriber walk: before
   // one exists every active fan is "before floor". The last such walk bounds
   // the webhook window from below. The walk this page belongs to is not
-  // "before" its own pages, even when this page finished it.
+  // "before" its own pages, even when this page finished it — unless it was
+  // finished before this page (a re-read after a lost sweep checkpoint).
   const floor = await tx.execute<{ last_finished_at: Date | string | null }>(sql`
     select max(started_at) as last_finished_at
       from page_link_fan_walks
      where platform_account_id = ${page.pageId} and link_kind = ${page.linkKind}
        and platform_link_id = ${page.linkId} and list_kind = 'subscribers'
        and finished_at is not null and evidential
-       and id <> ${walkId}
+       ${boundaryExcludesWalkId === null ? sql`` : sql`and id <> ${boundaryExcludesWalkId}`}
   `);
   const lastFinishedAt = floor.rows[0]?.last_finished_at ?? null;
 

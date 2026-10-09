@@ -258,7 +258,7 @@ describe("link ↔ fan projection (ofapi_subscription_period_equal_split.v1)", (
       .toEqual([[at(36, 30), "absent"], [at(36, 30), "absent"]]);
   });
 
-  it("a re-read page replaces its items; spenders feed the vendor's money and open no period; unknown fans and unreadable pages are skipped", async () => {
+  it("a re-read page replaces its items; spenders feed the vendor's money and open no period; unreadable pages are skipped", async () => {
     const page = await seedPage("lf-free");
     await seedFans(page.id, [5, 6]);
     const body = (offset: number, items: Item[], hasNextPage: boolean): Item => ({
@@ -292,12 +292,15 @@ describe("link ↔ fan projection (ofapi_subscription_period_equal_split.v1)", (
              lf.vendor_chargebacks_mills::text as chargebacks, lf.vendor_revenue_calculated_at
         from page_link_fans lf join fans f on f.id = lf.fan_id order by 1`);
     expect(rows).toEqual([
+      // Fan 404 had no fans row (a crash before the sweep upserted him): the
+      // journal is the record, he is restored onto the page.
+      { fan: "404", in_subscriber_list: true, net: null, chargebacks: null, vendor_revenue_calculated_at: null },
       { fan: "5", in_subscriber_list: true, net: "26800", chargebacks: "6400",
         vendor_revenue_calculated_at: new Date("2026-10-09T01:00:00Z") },
       { fan: "6", in_subscriber_list: false, net: "109880", chargebacks: "0", vendor_revenue_calculated_at: null },
       { fan: "7", in_subscriber_list: true, net: null, chargebacks: null, vendor_revenue_calculated_at: null },
     ]);
-    expect((await periods(page.id)).map((row) => row.fan)).toEqual(["5", "7"]);
+    expect((await periods(page.id)).map((row) => row.fan)).toEqual(["404", "5", "7"]);
     const { rows: cursor } = await testDb!.pool.query(
       "select rule, pages_applied::int, pages_skipped::int from page_link_fan_journal_cursors where platform_account_id = $1",
       [page.id],
@@ -411,13 +414,10 @@ describe("link ↔ fan projection (ofapi_subscription_period_equal_split.v1)", (
     }
   });
 
-  it("rows naming a fan go with the fan's page_fans row (an older image's page erasure), and a fan not on the page is not written", async () => {
+  it("rows naming a fan go with the fan's page_fans row (an older image's page erasure)", async () => {
     const page = await seedPage();
     await seedFans(page.id, [1, 2]);
-    // Fan 3 exists, but not on this page.
-    await testDb!.pool.query("insert into fans (platform, platform_user_id) values ('onlyfans', '3')");
-    await trialWalk(page.id, { linkId: "7", requestSeq: 1, start: at(0),
-      pages: [[subscriber(1, true), subscriber(2, true), subscriber(3, true)]] });
+    await trialWalk(page.id, { linkId: "7", requestSeq: 1, start: at(0), pages: [[subscriber(1, true), subscriber(2, true)]] });
     await project(page.id);
     expect((await periods(page.id)).map((row) => row.fan)).toEqual(["1", "2"]);
 
@@ -426,6 +426,56 @@ describe("link ↔ fan projection (ofapi_subscription_period_equal_split.v1)", (
       expect((await testDb!.pool.query(`select 1 from ${table} where platform_account_id = $1`, [page.id])).rowCount)
         .toBe(0);
     }
+  });
+
+  it("a fan the sweep never upserted (a crash between journaling and the upsert) is restored from the journal and starts at that page", async () => {
+    const page = await seedPage();
+    await seedFans(page.id, [1]);
+    await trialWalk(page.id, { linkId: "7", requestSeq: 1, start: at(0), pages: [[subscriber(1, true)]] });
+    // Walk 2 journals fan 3 on its first page, the chunk dies before the
+    // upsert; the retried request finds him on the next page.
+    await trialWalk(page.id, { linkId: "7", requestSeq: 2, start: at(6),
+      pages: [[subscriber(1, true), subscriber(3, true)], [subscriber(3, true)]] });
+    // Fan 3 exists elsewhere, not on this page (and fan 4 nowhere at all).
+    await testDb!.pool.query("insert into fans (platform, platform_user_id) values ('onlyfans', '3')");
+    await trialWalk(page.id, { linkId: "7", requestSeq: 3, start: at(12), pages: [[subscriber(4, true)]] });
+    await project(page.id);
+
+    const rows = await periods(page.id);
+    expect(rows.map((row) => [row.fan, row.source, row.start_at])).toEqual([
+      ["1", "before_floor", null],
+      ["3", "first_seen", at(6)],
+      ["4", "first_seen", at(12)],
+    ]);
+    const { rows: onPage } = await testDb!.pool.query(
+      `select f.platform_user_id as fan from page_fans pf join fans f on f.id = pf.fan_id
+        where pf.platform_account_id = $1 order by 1`, [page.id]);
+    expect(onPage).toEqual([{ fan: "1" }, { fan: "3" }, { fan: "4" }]);
+  });
+
+  it("a re-read of an already finished walk (a lost sweep checkpoint) bounds a new fan's start by that walk", async () => {
+    const page = await seedPage();
+    await seedFans(page.id, [1, 2]);
+    // The link's first walk: finished, so it is the floor.
+    await trialWalk(page.id, { linkId: "7", requestSeq: 1, start: at(0), pages: [[subscriber(1, true)]] });
+    await project(page.id);
+    // Fan 2 subscribes; the sweep re-reads the walk's last page under the
+    // same revision (its checkpoint was lost) and meets him.
+    await testDb!.pool.query(
+      `insert into domain_events (account_id, account_seq, type, occurred_at, fan_identity_ref, data,
+         schema_version, observation_id, dedup_key)
+       values ($1, 1, 'subscription.started', $2, '2', '{"subType":"new_subscriber_trial"}'::jsonb, 1, 1, 'lf-replay-2')`,
+      [page.id, at(1)],
+    );
+    await journal(page.id, "link_fans_trial_subscribers", {
+      link: { kind: "trial", id: 7 }, list: "subscribers", offset: 0, limit: 100, requestSeq: 1,
+      ofapiAccountId: "acct_a", items: [subscriber(1, true), subscriber(2, true)], hasNextPage: false, nextPageUrl: null,
+    }, at(2));
+    await project(page.id);
+    expect((await periods(page.id)).map((row) => [row.fan, row.source, row.start_at])).toEqual([
+      ["1", "before_floor", null],
+      ["2", "hub_subscription_event", at(1)],
+    ]);
   });
 
   it("waits for nobody: a held lock leaves the pages for the next call, which applies them in order", async () => {
