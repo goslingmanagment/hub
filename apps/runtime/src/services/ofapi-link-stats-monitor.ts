@@ -218,7 +218,7 @@ async function markMissedWindows(
       return 0;
     }
     const attempts = await listLinkStatAttemptWindows(app.db, { since: closed[0]! });
-    // A row without a window (an image older than 0252, after a rollback)
+    // A row without a window (an image older than 0255, after a rollback)
     // counts for the window its read time falls in.
     const attempted = new Set(attempts.map((attempt) => {
       const windowAt = attempt.windowAt ?? ofapiLinkStatsWindowAt(attempt.pulledAt!);

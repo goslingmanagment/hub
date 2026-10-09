@@ -3629,7 +3629,7 @@ export async function listFirstLinkStatWindowStamps(db: Database): Promise<Date[
 
 /** The rows of any status that tell which (page, kind) was attempted when,
  * from `since` on. A row with a window names it (`windowAt`). A row without
- * one — written by an image older than migration 0252, e.g. after a rollback
+ * one — written by an image older than migration 0255, e.g. after a rollback
  * — names only its read time (`pulledAt`), and the caller places it in the
  * window that read time falls in. */
 export async function listLinkStatAttemptWindows(
@@ -3662,7 +3662,7 @@ export async function listLinkStatAttemptWindows(
  * `skipped` / `window_missed` row, stamped with the window itself. Written
  * only while the pair still has NO row in the window, in the same statement —
  * a late pass or a second monitor that got there first leaves nothing to add.
- * A row without a window (an image older than 0252) counts for the window
+ * A row without a window (an image older than 0255) counts for the window
  * its read time falls in, [windowAt, windowEnd). The account is not known for
  * an attempt that never happened. Returns whether the row was written. */
 export async function recordLinkStatWindowMissed(
