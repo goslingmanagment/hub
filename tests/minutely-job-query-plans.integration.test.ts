@@ -20,9 +20,15 @@ import {
 } from "@agency_hub_core/db";
 
 import {
+  CAPTURE_PENDING_AGE_PLANNER_SQL,
+  CAPTURE_PENDING_AGE_SQL,
+  readCapturePendingAgeMs,
+} from "../apps/runtime/src/services/golden-signals.ts";
+import {
   computeHealthFloorBacklogMs,
   type HealthFloorDescriptor,
 } from "../apps/runtime/src/services/health-floors.ts";
+import { sql } from "../packages/db/node_modules/drizzle-orm/index.js";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { INTEGRATION_TEST_TIMEOUT_MS } from "./helpers/timeouts.ts";
 
@@ -281,6 +287,126 @@ describe("minutely job query plans", () => {
       const seqScanned = [...totalPlan.matchAll(/Seq Scan on observations_\w+[^\n]*rows=(\d+)/g)]
         .map((match) => Number(match[1]));
       expect(seqScanned.filter((rows) => rows > 0)).toEqual([]);
+    },
+    INTEGRATION_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "measures the capture wedge from the partial pending index, never the processed_at BRIN",
+    async (context) => {
+      if (!testDb) {
+        context.skip();
+        return;
+      }
+      const pool = testDb.pool;
+
+      // The journal on prod: a large settled history, and rows that arrive
+      // with a null processed_at and are stamped moments later — so the
+      // partial index keeps the pages it grew to while all it holds is a few
+      // waiting rows (prod 2026-10-09: 664 kB, zero rows). Rows an earlier
+      // test left waiting are settled first: nothing else waits.
+      await pool.query(`
+        update ofapi_webhook_events set processed_at = received_at + interval '2 seconds', status = 'processed'
+        where processed_at is null
+      `);
+      await pool.query(`
+        insert into ofapi_webhook_events (idempotency_key, event_type, payload, payload_hash, status, received_at, processed_at)
+        select 'settled_' || lpad(n::text, 20, '0'), 'messages.received', '{}'::jsonb, '\\x00'::bytea, 'processed',
+               now() - interval '3 days' + make_interval(secs => n),
+               now() - interval '3 days' + make_interval(secs => n + 2)
+        from generate_series(1, 100000) as n
+      `);
+      await pool.query(`
+        insert into ofapi_webhook_events (idempotency_key, event_type, payload, payload_hash, received_at)
+        select 'wedge_' || lpad(n::text, 20, '0'), 'messages.received', '{}'::jsonb, '\\x00'::bytea,
+               now() - make_interval(secs => n)
+        from generate_series(1, 20000) as n
+      `);
+      // The oldest of the three still waiting is 40 minutes old.
+      await pool.query(`
+        update ofapi_webhook_events set processed_at = received_at + interval '2 seconds', status = 'processed'
+        where idempotency_key like 'wedge_%'
+          and idempotency_key not in ('wedge_' || lpad('2400', 20, '0'), 'wedge_' || lpad('600', 20, '0'), 'wedge_' || lpad('60', 20, '0'))
+      `);
+      await pool.query("vacuum analyze ofapi_webhook_events");
+
+      // The shipped statement under the shipped setting, the way the sampler
+      // runs it (readCapturePendingAgeMs; tests/golden-signals-plan-guards.test.ts
+      // pins that it does). Which path wins WITHOUT the setting turns on the
+      // partial index's post-vacuum statistics: on prod (83 pages for 2
+      // tuples, the BRIN priced at 24) the BRIN won, so the plan is pinned
+      // rather than left to them.
+      const plan = await testDb.db.transaction(async (tx) => {
+        await tx.execute(CAPTURE_PENDING_AGE_PLANNER_SQL);
+        const explained = await tx.execute<{ "QUERY PLAN": string }>(
+          sql`explain (analyze, buffers) ${CAPTURE_PENDING_AGE_SQL}`,
+        );
+        return explained.rows.map((row) => row["QUERY PLAN"]).join("\n");
+      });
+      expect(plan).toContain("Index Only Scan using ofapi_webhook_events_pending_received_idx");
+      expect(plan).not.toContain("ofapi_webhook_events_processed_at_brin");
+      expect(plan).not.toContain("Seq Scan on ofapi_webhook_events");
+
+      // Same number as before: the oldest waiting row, not a newer one.
+      const ageMs = await readCapturePendingAgeMs(testDb.db);
+      expect(ageMs / 60_000).toBeCloseTo(40, 0);
+
+      // SET LOCAL ended with the gauge's transaction: the pool keeps bitmap scans.
+      const setting = await pool.query<{ enable_bitmapscan: string }>("show enable_bitmapscan");
+      expect(setting.rows[0]?.enable_bitmapscan).toBe("on");
+    },
+    INTEGRATION_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "probes a caught-up kinds:null floor without walking the version's other sources",
+    async (context) => {
+      if (!testDb) {
+        context.skip();
+        return;
+      }
+      const pool = testDb.pool;
+
+      // Prod shape (2026-10-09): the journal holds ~1.7 M version-0 rows of the
+      // OTHER sources; the kinds:null source (command_result) is a small slice
+      // that is fully parsed, so nothing of it waits below its floor. Column
+      // statistics are independent, so the planner still expects a few hundred
+      // pending rows of it at version 0 — and a `min()` rewritten into
+      // `order by received_at limit 1` over (parse_version, received_at) then
+      // looks cheap, while it really walks every version-0 row to the end.
+      await pool.query(`
+        insert into observations (
+          source, producer, platform, kind, payload, payload_hash,
+          idempotency_key, received_at, parse_version
+        )
+        select
+          case when n % 100 = 0 then 'command_result' when n % 2 = 0 then 'fansly_ws' else 'client_capture' end,
+          'plan-test',
+          null,
+          case when n % 100 = 0 then 'command.result' when n % 2 = 0 then 'fansly.ws.frame.v1' else 'desktop.send_audit' end,
+          '{}'::jsonb,
+          '\\x00'::bytea,
+          'walk_' || lpad(n::text, 20, '0'),
+          date_trunc('month', now()) + make_interval(secs => n % 2000000),
+          case when n % 100 = 0 then 1 else 0 end
+        from generate_series(1, 80000) as n
+      `);
+      await pool.query("analyze observations");
+
+      const statement = await captureStatement(() =>
+        computeHealthFloorBacklogMs(testDb!.db, {
+          name: "obs_backlog_command_result_result_v1",
+          source: "command_result",
+          lane: "result",
+          kinds: null,
+          version: 1,
+        })
+      );
+      const plan = await explain(statement);
+      expect(plan).toMatch(/observations_\w+_health_floor_idx/);
+      // The defect, by name: the time-ordered walk of the version's rows.
+      expect(plan).not.toMatch(/observations_\w+_parse_version_received_at_idx/);
+      expect(plan).not.toMatch(/Seq Scan on observations_\w+[^\n]*actual[^\n]*rows=[1-9]/);
     },
     INTEGRATION_TEST_TIMEOUT_MS,
   );

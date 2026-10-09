@@ -131,6 +131,43 @@ async function quantiles(app: Pick<AppContext, "db">, query: ReturnType<typeof s
   };
 }
 
+/** The capture wedge gauge's statement: the oldest unprocessed webhook row. */
+export const CAPTURE_PENDING_AGE_SQL = sql`
+  select coalesce(extract(epoch from (now() - min(received_at))) * 1000, 0) as age_ms
+  from ofapi_webhook_events
+  where processed_at is null
+`;
+
+/** The planner setting the gauge runs under, local to its own transaction. */
+export const CAPTURE_PENDING_AGE_PLANNER_SQL = sql`set local enable_bitmapscan = off`;
+
+/**
+ * Age (ms) of the oldest webhook row not yet processed; 0 when none waits.
+ *
+ * The answer lives in the partial btree `ofapi_webhook_events_pending_received_idx`
+ * (received_at where processed_at is null), and that index is all the probe may
+ * read. Left to itself the planner prices `processed_at is null` through the
+ * BRIN `ofapi_webhook_events_processed_at_brin` at a few pages, but a BRIN
+ * range cannot say which of its rows are null, only whether any are, and every
+ * row is inserted with a null processed_at and set later: nearly every range
+ * carries that flag, so the bitmap scan reads nearly the whole heap. On prod
+ * (2026-10-09, 990 MB heap, zero rows pending) that was 20-80 s a run once the
+ * heap left the page cache, longer than the minute between runs.
+ *
+ * Bitmap scans are off for this one statement, in a transaction of its own
+ * (`SET LOCAL` ends with it, so the pooled connection keeps its defaults): the
+ * planner then has the partial index as its only cheap path and takes it as an
+ * index-only scan. The BRIN stays, and keeps serving the capture-latency
+ * window above (`processed_at > window`).
+ */
+export async function readCapturePendingAgeMs(db: AppContext["db"]): Promise<number> {
+  return db.transaction(async (tx) => {
+    await tx.execute(CAPTURE_PENDING_AGE_PLANNER_SQL);
+    const result = await tx.execute<{ age_ms: string | null }>(CAPTURE_PENDING_AGE_SQL);
+    return Number(result.rows[0]?.age_ms ?? 0);
+  });
+}
+
 export interface GoldenSignalsComputation {
   samples: OpsMetricSampleInput[];
   /** Health-floor probes that THREW (PR3): each must open/retain the
@@ -221,12 +258,7 @@ export async function computeGoldenSignals(
   // W5.1 (B8) always-emit wedge gauges: oldest waiting row per stage, 0 when
   // the queue is empty — "quiet" and "wedged" become distinguishable by
   // construction (quiet reads 0, wedged reads a growing age).
-  const capturePending = await app.db.execute<{ age_ms: string | null }>(sql`
-    select coalesce(extract(epoch from (now() - min(received_at))) * 1000, 0) as age_ms
-    from ofapi_webhook_events
-    where processed_at is null
-  `);
-  const capturePendingAge = Number(capturePending.rows[0]?.age_ms ?? 0);
+  const capturePendingAge = await readCapturePendingAgeMs(app.db);
 
   const queuedCommands = await app.db.execute<{ age_ms: string | null }>(sql`
     select coalesce(extract(epoch from (now() - min(created_at))) * 1000, 0) as age_ms

@@ -132,7 +132,20 @@ export async function computeHealthFloorBacklogMs(
     // was a parallel seq scan of the whole journal (96 605 buffers, 2.9-4.0 s,
     // prod 2026-08-23). With the version pinned by equality the index's first
     // two columns are both bound, so the min is taken over just this source's
-    // pending rows (command_result, the only such family, is ~5.6 k rows).
+    // pending rows (command_result, the only such family, had none on prod
+    // 2026-10-09).
+    //
+    // The min is taken PER KIND, and that grouping is what keeps the probe on
+    // the index. A bare `min(received_at)` lets the planner rewrite it as
+    // `order by received_at limit 1`, and with `kind` unbound only
+    // `observations_parse_idx (parse_version, received_at)` delivers that
+    // order: the rewrite walks EVERY row of the version in time order, testing
+    // `source` on the heap, until a row of the source turns up. A caught-up
+    // source never turns one up, so the walk read all ~1.7 M version-0 rows of
+    // every source on prod (2026-10-09: 814 ms mean, up to 9.7 s, ~290 000
+    // buffers a run). Grouped, the rewrite is off and the only cheap plan is an
+    // index-only range of this source's own pending rows on the health-floor
+    // index; the outer max still reassembles the min over versions and kinds.
     const result = await db.execute<{ backlog_ms: string | null }>(sql`
       select coalesce(max(extract(epoch from (now() - pending.min_received)) * 1000), 0)::float8 as backlog_ms
       from generate_series(${floor.minimumParseVersion ?? 0}::integer, ${floor.version - 1}::integer) as below_floor(parse_version)
@@ -141,6 +154,7 @@ export async function computeHealthFloorBacklogMs(
         from observations o
         where o.parse_version = below_floor.parse_version
           and o.source = ${floor.source}
+        group by o.kind
       ) pending
     `);
     return Number(result.rows[0]?.backlog_ms ?? 0);
