@@ -658,3 +658,137 @@ export async function readLinkFanLastFinishedWalks(
   `);
   return new Map(result.rows.map((row) => [row.platform_link_id, new Date(row.finished_at)]));
 }
+
+// ── Rebuild (link-fans:reproject) ───────────────────────────────────────────
+
+/** Take the page's projection lock for the rest of the transaction, waiting
+ *  for the sweep's projection step to finish. */
+export async function lockLinkFanProjection(tx: Database, pageId: number): Promise<void> {
+  await tx.execute(sql`select pg_advisory_xact_lock(${LINK_FAN_PROJECTION_LOCK_CLASS}::integer, ${pageId}::integer)`);
+}
+
+/** The id of the page's last link_fans_* journal row captured before
+ *  `before`, or 0: where a rebuild that starts at `before` puts the cursor. */
+export async function lastLinkFanJournalIdBefore(db: Database, pageId: number, before: Date): Promise<number> {
+  const result = await db.execute<{ id: string | null }>(sql`
+    select max(rp.id)::text as id
+      from sync_raw_payloads rp
+     where rp.page_id = ${pageId}
+       and rp.endpoint in ${sql.raw(LINK_FAN_JOURNAL_ENDPOINTS_SQL)}
+       and rp.captured_at < ${before}
+  `);
+  return Number(result.rows[0]?.id ?? 0);
+}
+
+/** Empty the page's projection and put its cursor at `startAfterId` under
+ *  `rule`. Only the owner's rebuild calls this, with the lock held, and
+ *  replays the journal right after in the same transaction. The journal
+ *  itself is never touched. */
+export async function resetLinkFanProjection(
+  tx: Database,
+  input: { pageId: number; rule: string; startAfterId: number },
+): Promise<void> {
+  await tx.execute(sql`delete from page_link_fan_periods where platform_account_id = ${input.pageId}`);
+  await tx.execute(sql`delete from page_link_fans where platform_account_id = ${input.pageId}`);
+  await tx.execute(sql`delete from page_link_fan_walks where platform_account_id = ${input.pageId}`);
+  await tx.execute(sql`
+    insert into page_link_fan_journal_cursors (platform_account_id, last_raw_payload_id, rule)
+    values (${input.pageId}, ${input.startAfterId}, ${input.rule})
+    on conflict (platform_account_id) do update set
+      last_raw_payload_id = excluded.last_raw_payload_id, rule = excluded.rule,
+      pages_applied = 0, pages_skipped = 0, updated_at = now()
+  `);
+}
+
+/** A page's projection keyed by natural keys (row ids differ between two
+ *  builds of the same journal): each value is the row's meaningful content as
+ *  canonical text. Walk references are spelled by the walk's natural key. */
+export interface LinkFanProjectionState {
+  walks: Map<string, string>;
+  fans: Map<string, string>;
+  periods: Map<string, string>;
+}
+
+export async function readLinkFanProjectionState(tx: Database, pageId: number): Promise<LinkFanProjectionState> {
+  // Timestamps render as UTC text whatever the session's time zone.
+  const ts = (column: string) => sql.raw(`to_char(${column} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`);
+  const walkKey = (alias: string) => sql.raw(
+    `${alias}.link_kind || ':' || ${alias}.platform_link_id || ':' || ${alias}.list_kind || ':' || ${alias}.request_seq`,
+  );
+  const walks = await tx.execute<{ key: string; value: string }>(sql`
+    select ${walkKey("w")} as key,
+           jsonb_build_array(w.ofapi_account_id, ${ts("w.started_at")}, ${ts("w.finished_at")}, w.api_pages,
+             w.items, w.next_offset, w.last_offset, w.last_page_items, w.broken_reason, w.evidential,
+             w.first_raw_payload_id, w.last_raw_payload_id)::text as value
+      from page_link_fan_walks w
+     where w.platform_account_id = ${pageId}
+  `);
+  const fans = await tx.execute<{ key: string; value: string }>(sql`
+    select f.link_kind || ':' || f.platform_link_id || ':' || f.fan_id as key,
+           jsonb_build_array(f.in_subscriber_list, ${ts("f.first_seen_at")}, ${ts("f.last_seen_at")},
+             ${walkKey("w")}, f.last_seen_active, ${ts("f.absent_since")}, f.absent_walks,
+             ${ts("f.vendor_subscribed_at")}, ${ts("f.vendor_expires_at")}, f.vendor_status,
+             f.vendor_revenue_net_mills::text, f.vendor_chargebacks_mills::text,
+             ${ts("f.vendor_revenue_calculated_at")}, ${ts("f.vendor_revenue_seen_at")},
+             f.first_raw_payload_id, f.last_raw_payload_id)::text as value
+      from page_link_fans f
+      left join page_link_fan_walks w on w.id = f.last_seen_walk_id
+     where f.platform_account_id = ${pageId}
+  `);
+  const periods = await tx.execute<{ key: string; value: string }>(sql`
+    select p.link_kind || ':' || p.platform_link_id || ':' || p.fan_id || ':' || ${ts("p.opened_at")} as key,
+           jsonb_build_array(${ts("p.period_start_at")}, p.period_start_source, ${walkKey("o")},
+             ${ts("p.closed_at")}, p.close_reason, ${walkKey("c")})::text as value
+      from page_link_fan_periods p
+      join page_link_fan_walks o on o.id = p.opened_walk_id
+      left join page_link_fan_walks c on c.id = p.closed_walk_id
+     where p.platform_account_id = ${pageId}
+  `);
+  const toMap = (rows: { key: string; value: string }[]) => new Map(rows.map((row) => [row.key, row.value]));
+  return { walks: toMap(walks.rows), fans: toMap(fans.rows), periods: toMap(periods.rows) };
+}
+
+export interface LinkFanProjectionTableDiff {
+  before: number;
+  after: number;
+  /** In the rebuild only. */
+  added: number;
+  /** In the current state only. */
+  removed: number;
+  /** In both, with different content. */
+  changed: number;
+  /** Up to five natural keys of each kind of difference. */
+  samples: { added: string[]; removed: string[]; changed: string[] };
+}
+
+export interface LinkFanProjectionDiff {
+  identical: boolean;
+  walks: LinkFanProjectionTableDiff;
+  fans: LinkFanProjectionTableDiff;
+  periods: LinkFanProjectionTableDiff;
+}
+
+function diffTable(before: Map<string, string>, after: Map<string, string>): LinkFanProjectionTableDiff {
+  const added = [...after.keys()].filter((key) => !before.has(key)).sort();
+  const removed = [...before.keys()].filter((key) => !after.has(key)).sort();
+  const changed = [...after.keys()].filter((key) => before.has(key) && before.get(key) !== after.get(key)).sort();
+  return {
+    before: before.size,
+    after: after.size,
+    added: added.length,
+    removed: removed.length,
+    changed: changed.length,
+    samples: { added: added.slice(0, 5), removed: removed.slice(0, 5), changed: changed.slice(0, 5) },
+  };
+}
+
+export function diffLinkFanProjectionStates(
+  before: LinkFanProjectionState,
+  after: LinkFanProjectionState,
+): LinkFanProjectionDiff {
+  const walks = diffTable(before.walks, after.walks);
+  const fans = diffTable(before.fans, after.fans);
+  const periods = diffTable(before.periods, after.periods);
+  const same = (table: LinkFanProjectionTableDiff) => table.added + table.removed + table.changed === 0;
+  return { identical: same(walks) && same(fans) && same(periods), walks, fans, periods };
+}
