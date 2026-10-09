@@ -924,6 +924,78 @@ reproduced. This applies to the 30-day view only — the last-24h comparison nee
 no adjustment. If someone asks why a number disagrees with the platform page,
 this is usually the answer, and the answer is an explanation, not a correction.
 
+### OnlyFans links: the series and who brings the traffic
+
+Three OnlyFans-only datasets serve the tracking and trial links Hub reads from
+OFAPI's stored lists four times a day (03:45, 09:45, 15:45, 21:45 UTC), and the
+dated "link → channel → contractor" bindings the owner keeps in Hub.
+
+| dataset | what it answers | capabilities | claim field |
+|---|---|---|---|
+| `campaign_snapshots` | one row per link per usable read: clicks, claims, subscribers, spenders, the vendor's net revenue | `+ read:money` | `linkStatSnapshot` |
+| `campaign_runs` | every attempt to read a page's list, failed and skipped ones included | `read:datasets` | `linkStatRun` |
+| `campaign_bindings` | which channel and contractor a link belonged to, and from when | `read:datasets` | `trafficLinkBinding`, `trafficChannelContractor` |
+
+**Cumulative, as observed.** Every counter and `vendorRevenueNetMills` is the
+vendor's running total at `observedAt`, not a day's increment; a daily delta is
+your subtraction of the last reads before two day boundaries. `businessDate` is
+the Europe/Moscow day of `observedAt`. `claims` exists on trial links only (null
+on tracking links); `subscribers` is what the vendor counts. Money is the
+creator's NET after the OnlyFans fee, refunds and chargebacks — never take the
+fee off again; `vendorChargebacksMills` is already excluded from it. A null
+`spenders` or `vendorRevenueNetMills` means the vendor had not computed it, never
+zero. A falling money figure is the vendor recalculating, not a loss — after an
+OFAPI account change it did so once already (September 2026, −$748.80);
+`bindingChanged: true` marks the first read under a new account, and
+`bindingChanged: null` a read written before that flag existed (2026-10-09).
+
+**Only usable results are points of the series.** `campaign_snapshots` serves
+the reads of runs that count as a result of their window; everything else is an
+attempt and lives in `campaign_runs`, with `status` (`complete`, `partial`,
+`truncated`, `failed`, `skipped`), `reason` and `usableResult` — the same rule
+the snapshots are filtered by. A window with no usable row in `campaign_runs`
+is a hole; its rows say why (a window that passed with no attempt at all is a
+`skipped` / `window_missed` row). Both series datasets window and sort on
+`observedAt`, oldest first, and their `captureFloor` is the page's first read:
+2026-07-22 12:17 UTC on production. Nothing before it was ever read.
+
+Read the series forward from a watermark, one page at a time, and continue
+with the cursor until `delivery.nextCursor` is null:
+
+```
+hub dataset --page-label lora-vip-of --dataset campaign_snapshots \
+  --from 2026-10-01T00:00:00Z --to 2026-10-09T00:00:00Z \
+  --filter linkKind:eq:trial --limit 200 --claim-field linkStatSnapshot
+```
+
+```
+hub dataset --page-label lora-vip-of --dataset campaign_runs \
+  --from 2026-10-01T00:00:00Z --to 2026-10-09T00:00:00Z \
+  --filter usableResult:eq:false --limit 200 --claim-field linkStatRun
+```
+
+**Bindings are stretches.** A link has at most one channel and a channel at
+most one contractor at any instant, each dated on its own. `campaign_bindings`
+returns one row per stretch over which both are constant: `[validFrom,
+validTo)` (null `validTo` = still in force), a contractor change inside a
+binding splits it, and a stretch no contractor covers has a null
+`contractorKey`. The binding's own interval and the contractor term's ride
+along (`bindingValidFrom` / `bindingValidTo`, `contractorValidFrom` /
+`contractorValidTo`). `validFromBasis` says how the binding's start is known:
+`confirmed`, or `assumed_link_created` — nobody knew, and the link's creation
+date stands in; `contractorValidFromBasis` says the same of the contractor's
+term. Never present an assumed start as an established one. The window applies
+to a stretch's start, so ask for the whole list with a wide one; there is no
+capture floor here, because bindings are configuration, not captured history:
+
+```
+hub dataset --page-label lora-vip-of --dataset campaign_bindings \
+  --from 2000-01-01T00:00:00Z --to 2100-01-01T00:00:00Z --limit 200
+```
+
+A link with no row has no channel in Hub — report it as "without a channel",
+not as organic traffic.
+
 ### Files and post attachments
 
 `raw_media` identifies a platform file by `(page, mediaRef)` independently of
