@@ -37,7 +37,6 @@ function trial(points: readonly LinkSeriesPoint[], overrides: Partial<LinkSeries
     linkKind: "trial",
     linkRef: "10802699",
     linkCreatedAt: at("2026-08-01T00:00:00Z"),
-    listFloorAt: at("2026-07-22T12:17:47Z"),
     points,
     ...overrides,
   };
@@ -79,19 +78,27 @@ describe("linkDeltaBetween", () => {
     expect(linkDeltaBetween(series, at("2026-07-30T00:00:00Z"), at("2026-08-01T04:45:00Z"))).toBeNull();
   });
 
-  it("counts a link born under the series from zero, without a flag", () => {
+  it("counts a link created inside the stretch from zero, without a flag", () => {
     const delta = linkDeltaBetween(series, at("2026-07-30T00:00:00Z"), at("2026-08-01T12:00:00Z"))!;
     expect(delta.startPoint).toBeNull();
     expect(delta).toMatchObject({ clicks: 10, claims: 4, netMills: 1_000n, flags: [] });
   });
 
-  it("flags the whole accumulated value of a link older than its list's first read", () => {
+  it("flags the whole accumulated value of a link that existed before the stretch with nothing read", () => {
     const old = trial(series.points, { linkCreatedAt: at("2025-11-26T17:06:21Z") });
     expect(linkDeltaBetween(old, at("2026-07-30T00:00:00Z"), at("2026-08-01T12:00:00Z"))!.flags)
-      .toEqual(["starts_before_series"]);
+      .toEqual(["no_baseline"]);
     const unknownCreation = trial(series.points, { linkCreatedAt: null });
     expect(linkDeltaBetween(unknownCreation, at("2026-07-30T00:00:00Z"), at("2026-08-01T12:00:00Z"))!.flags)
-      .toEqual(["starts_before_series"]);
+      .toEqual(["no_baseline"]);
+    // Created 1 Sept under a running series, first read on 2 Oct after gaps:
+    // 1–2 Oct is not September's money as that day's growth.
+    const missed = trial([point("2026-10-02T03:45:00Z", { clicks: 300, claims: 90, netMills: 120_000n })], {
+      linkCreatedAt: at("2026-09-01T09:00:00Z"),
+    });
+    expect(linkDeltaBetween(missed, at("2026-09-30T21:00:00Z"), at("2026-10-02T21:00:00Z"))).toMatchObject({
+      startPoint: null, clicks: 300, netMills: 120_000n, flags: ["no_baseline"],
+    });
   });
 
   it("knows no money when nothing before the end knows it, or the start has snapshots but no money", () => {
