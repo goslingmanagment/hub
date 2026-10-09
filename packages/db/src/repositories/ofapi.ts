@@ -3549,3 +3549,181 @@ export async function listLinkStatSnapshots(db: Database, input: { runId: number
     .where(eq(pageLinkStatSnapshots.runId, input.runId))
     .orderBy(pageLinkStatSnapshots.platformLinkId);
 }
+
+/** One (active OnlyFans page, link kind) as the series monitor sees it. */
+export interface LinkStatSeriesHealthRow {
+  platformAccountId: number;
+  pageLabel: string;
+  pageCreatedAt: Date;
+  ofapiAccountId: string | null;
+  ofapiAuthStatus: string | null;
+  linkKind: LinkStatKind;
+  /** `pulled_at` of the pair's latest USABLE result
+   * (linkStatRunUsableResultSql); null = it has never had one. Attempt rows
+   * that gave the series nothing — failed, skipped (the monitor's own
+   * `window_missed` among them), truncated, an empty partial on a pair that
+   * has had links — do not move it. */
+  lastUsableAt: Date | null;
+  /** The pair's first row of any status; null = nothing was ever attempted. */
+  firstAttemptAt: Date | null;
+  lastAttemptAt: Date | null;
+  lastAttemptStatus: LinkStatRunStatus | null;
+  lastAttemptReason: string | null;
+}
+
+/** The freshness of the link series, for every active OnlyFans page and both
+ * kinds — mapped or not: a page the reconcile cannot read is part of the
+ * series' population and of its signals. Each pair is answered by index-order
+ * lookups on (page, kind, pulled_at), so the newest usable row is found
+ * without reading the pair's history. */
+export async function listLinkStatSeriesHealth(db: Database): Promise<LinkStatSeriesHealthRow[]> {
+  const run = sql.raw("r");
+  const result = await db.execute<{
+    platformAccountId: number | string;
+    pageLabel: string;
+    pageCreatedAt: Date | string;
+    ofapiAccountId: string | null;
+    ofapiAuthStatus: string | null;
+    linkKind: LinkStatKind;
+    lastUsableAt: Date | string | null;
+    firstAttemptAt: Date | string | null;
+    lastAttemptAt: Date | string | null;
+    lastAttemptStatus: LinkStatRunStatus | null;
+    lastAttemptReason: string | null;
+  }>(sql`
+    select p.id as "platformAccountId",
+           p.label as "pageLabel",
+           p.created_at as "pageCreatedAt",
+           p.ofapi_account_id as "ofapiAccountId",
+           p.ofapi_auth_status as "ofapiAuthStatus",
+           kind.link_kind as "linkKind",
+           usable.pulled_at as "lastUsableAt",
+           first_attempt.pulled_at as "firstAttemptAt",
+           last_attempt.pulled_at as "lastAttemptAt",
+           last_attempt.status as "lastAttemptStatus",
+           last_attempt.reason as "lastAttemptReason"
+    from pages p
+    cross join (values ('tracking'), ('trial')) as kind(link_kind)
+    left join lateral (
+      select r.pulled_at
+      from page_link_stat_runs r
+      where r.platform_account_id = p.id
+        and r.link_kind = kind.link_kind
+        and ${linkStatRunUsableResultSql(run)}
+      order by r.pulled_at desc, r.id desc
+      limit 1
+    ) usable on true
+    left join lateral (
+      select r.pulled_at
+      from page_link_stat_runs r
+      where r.platform_account_id = p.id and r.link_kind = kind.link_kind
+      order by r.pulled_at asc, r.id asc
+      limit 1
+    ) first_attempt on true
+    left join lateral (
+      select r.pulled_at, r.status, r.reason
+      from page_link_stat_runs r
+      where r.platform_account_id = p.id and r.link_kind = kind.link_kind
+      order by r.pulled_at desc, r.id desc
+      limit 1
+    ) last_attempt on true
+    where p.platform = 'onlyfans' and p.status = 'active'
+    order by p.id, kind.link_kind
+  `);
+  return result.rows.map((row) => ({
+    platformAccountId: Number(row.platformAccountId),
+    pageLabel: row.pageLabel,
+    pageCreatedAt: new Date(row.pageCreatedAt),
+    ofapiAccountId: row.ofapiAccountId,
+    ofapiAuthStatus: row.ofapiAuthStatus,
+    linkKind: row.linkKind,
+    lastUsableAt: toDateOrNull(row.lastUsableAt),
+    firstAttemptAt: toDateOrNull(row.firstAttemptAt),
+    lastAttemptAt: toDateOrNull(row.lastAttemptAt),
+    lastAttemptStatus: row.lastAttemptStatus,
+    lastAttemptReason: row.lastAttemptReason,
+  }));
+}
+
+/** The earliest window the series ever stamped at each time of day (UTC
+ * hour and minute) — at most one row per schedule slot ever used, from the
+ * whole history, not a bounded range. The caller keeps the stamps that lie on
+ * its current schedule; the earliest of those is where the schedule began. */
+export async function listFirstLinkStatWindowStamps(db: Database): Promise<Date[]> {
+  const result = await db.execute<{ first: Date | string }>(sql`
+    select min(r.window_at) as first
+    from page_link_stat_runs r
+    where r.window_at is not null
+    group by extract(hour from r.window_at at time zone 'UTC'),
+             extract(minute from r.window_at at time zone 'UTC')
+  `);
+  return result.rows
+    .map((row) => toDateOrNull(row.first))
+    .filter((first): first is Date => first !== null);
+}
+
+/** The rows of any status that tell which (page, kind) was attempted when,
+ * from `since` on. A row with a window names it (`windowAt`). A row without
+ * one — written by an image older than migration 0255, e.g. after a rollback
+ * — names only its read time (`pulledAt`), and the caller places it in the
+ * window that read time falls in. */
+export async function listLinkStatAttemptWindows(
+  db: Database,
+  input: { since: Date },
+): Promise<Array<{ platformAccountId: number; linkKind: LinkStatKind; windowAt: Date | null; pulledAt: Date | null }>> {
+  const result = await db.execute<{
+    platformAccountId: number | string;
+    linkKind: LinkStatKind;
+    windowAt: Date | string | null;
+    pulledAt: Date | string | null;
+  }>(sql`
+    select distinct r.platform_account_id as "platformAccountId",
+           r.link_kind as "linkKind",
+           r.window_at as "windowAt",
+           case when r.window_at is null then r.pulled_at end as "pulledAt"
+    from page_link_stat_runs r
+    where r.window_at >= ${input.since.toISOString()}::timestamptz
+       or (r.window_at is null and r.pulled_at >= ${input.since.toISOString()}::timestamptz)
+  `);
+  return result.rows.map((row) => ({
+    platformAccountId: Number(row.platformAccountId),
+    linkKind: row.linkKind,
+    windowAt: toDateOrNull(row.windowAt),
+    pulledAt: toDateOrNull(row.pulledAt),
+  }));
+}
+
+/** Records that a window passed without any attempt for a (page, kind): one
+ * `skipped` / `window_missed` row, stamped with the window itself. Written
+ * only while the pair still has NO row in the window, in the same statement —
+ * a late pass or a second monitor that got there first leaves nothing to add.
+ * A row without a window (an image older than 0255) counts for the window
+ * its read time falls in, [windowAt, windowEnd). The account is not known for
+ * an attempt that never happened. Returns whether the row was written. */
+export async function recordLinkStatWindowMissed(
+  db: Database,
+  input: { platformAccountId: number; linkKind: LinkStatKind; windowAt: Date; windowEnd: Date },
+): Promise<boolean> {
+  const windowAt = input.windowAt.toISOString();
+  const windowEnd = input.windowEnd.toISOString();
+  const result = await db.execute<{ id: number | string }>(sql`
+    insert into page_link_stat_runs
+      (platform_account_id, link_kind, status, pulled_at, api_pages, raw_items, written_rows,
+       reason, window_at, attempt, ofapi_account_id)
+    select ${input.platformAccountId}, ${input.linkKind}, 'skipped', ${windowAt}::timestamptz, 0, 0, 0,
+           'window_missed', ${windowAt}::timestamptz, 1, null
+    where not exists (
+      select 1 from page_link_stat_runs prior
+      where prior.platform_account_id = ${input.platformAccountId}
+        and prior.link_kind = ${input.linkKind}
+        and (
+          prior.window_at = ${windowAt}::timestamptz
+          or (prior.window_at is null
+            and prior.pulled_at >= ${windowAt}::timestamptz
+            and prior.pulled_at < ${windowEnd}::timestamptz)
+        )
+    )
+    returning id
+  `);
+  return result.rows.length > 0;
+}

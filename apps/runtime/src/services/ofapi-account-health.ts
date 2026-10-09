@@ -31,6 +31,7 @@ import {
   resolveOfapiAuthIncident,
   resolveOfapiGlobalIncident,
 } from "./notification-incidents.ts";
+import { runOfapiLinkStatsSeriesMonitor } from "./ofapi-link-stats-monitor.ts";
 
 export const OFAPI_ACCOUNT_EVENT_PREFIX = "accounts.";
 
@@ -161,8 +162,10 @@ async function applyCurrentOfapiAccountHealthEvent(
 
 /**
  * Minutely health monitor (runs in the OFAPI sweep worker): low credit balance
- * against the last-observed _meta balance, and webhook silence while mapped
- * pages exist. Incident dedupe keeps Telegram quiet between state changes.
+ * against the last-observed _meta balance, webhook silence while mapped
+ * pages exist, and the OnlyFans link series (written, mapped, no window
+ * passed without an attempt). Incident dedupe keeps Telegram quiet between
+ * state changes.
  */
 export async function runOfapiAccountHealthMonitor(app: AppContext, now = new Date()) {
   if (!isOfapiAccountHealthEnabled(app.config)) {
@@ -230,6 +233,10 @@ export async function runOfapiAccountHealthMonitor(app: AppContext, now = new Da
   } catch (error) {
     app.logger.warn({ err: error }, "OFAPI account health monitor failed; continuing");
   }
+
+  // Its own step, after the account checks: it never throws, and a failure
+  // above must not keep the series from being watched.
+  await runOfapiLinkStatsSeriesMonitor(app, { now, authNeedsAction: ofapiAuthStatusNeedsAction });
 }
 
 /** Serialize lifecycle effects with remap; resolving a page before a CAS alone
