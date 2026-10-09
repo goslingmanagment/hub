@@ -2628,7 +2628,7 @@ export const pageLinkStatSnapshots = pgTable(
   }),
 );
 
-// OnlyFans traffic sources (0255; plan 2026-10-08, PR 11): "link → channel →
+// OnlyFans traffic sources (0257; plan 2026-10-08, PR 11): "link → channel →
 // contractor" with dates. Written only by the owner's CLI through
 // repositories/traffic-bindings.ts, which holds the "one channel per link,
 // one contractor per channel at any instant" rule (advisory lock per key,

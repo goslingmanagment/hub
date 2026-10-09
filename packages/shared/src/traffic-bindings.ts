@@ -1,7 +1,7 @@
 import { businessDateToUtcStart, isValidBusinessDateString, MOSCOW_TIME_ZONE } from "./time.ts";
 
 // OnlyFans traffic sources (plan 2026-10-08, PR 11): "link → channel →
-// contractor" with dates. The vocabulary shared by the store (0255), the
+// contractor" with dates. The vocabulary shared by the store (0257), the
 // owner's CLI and, later, the API and the campaign_bindings dataset.
 
 export const trafficLinkKinds = ["tracking", "trial"] as const;
