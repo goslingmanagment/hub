@@ -24,12 +24,23 @@
 --    fans ON DELETE CASCADE: a fan erasure deletes the fans row and its queue
 --    row with it (the erasure counts cascade children by `fan_id`).
 --
--- 3. fansly_public_lookup_state: the reader's own state, one row. A stop — the
---    first 429, 401/403, network failure or answer off the contract — is
---    written here with its reason and stays until the owner resumes the reader
---    (`pnpm cli sync public-lookup resume`); a Retry-After is kept as
---    retry_not_before, which no resume shortens. first_answer_at: the first
---    accepted answer (null: a refusal is the first batch's).
+-- 3. fansly_public_lookup_state: the reader's own state, one row.
+--    - pending_token / pending_since: the attempt admitted and not yet
+--      settled. It is written in the transaction that journals the attempt in
+--      fansly_send_log, on the connection that holds the reader's advisory
+--      lock, and cleared only in the transaction that settles it (its answer
+--      applied, or the stop it causes). While it is set no reader sends: the
+--      next pass settles it from the journal (fansly_send_log and the raw
+--      answer in observations), without a request — across a restart too.
+--    - A stop — the first 429, 401/403, network failure, answer off the
+--      contract, or an attempt whose outcome is unknown (`indeterminate`) — is
+--      written with its reason and stays until the owner resumes the reader
+--      (`pnpm cli sync public-lookup resume`); a Retry-After is kept as
+--      retry_not_before, which no resume shortens. stop_first_batch: no answer
+--      was ever accepted before it. stop_incident_at: when the owner's
+--      incident for this stop was confirmed open; until then every pass tries
+--      to open it again.
+--    - first_answer_at / last_answer_at: the accepted answers.
 --
 -- Rollback-compatible: two nullable columns without a default on fans
 -- (catalog-only), their CHECK added NOT VALID and validated (≈ 56 000 rows,
@@ -97,18 +108,25 @@ create table if not exists fansly_public_lookup_state (
   first_answer_at timestamptz,
   last_answer_at timestamptz,
   resumed_at timestamptz,
+  pending_token uuid,
+  pending_since timestamptz,
+  stop_first_batch boolean,
+  stop_incident_at timestamptz,
   updated_at timestamptz not null default now(),
   constraint fansly_public_lookup_state_singleton_check check (id = 1),
+  constraint fansly_public_lookup_state_pending_check check ((pending_token is null) = (pending_since is null)),
   constraint fansly_public_lookup_state_stop_check check (
-    (stopped_at is null and stop_reason is null and stop_http_status is null and stop_detail is null)
-    or (stopped_at is not null and stop_reason in ('rate_limited', 'auth_refused', 'network', 'off_contract'))
+    (stopped_at is null and stop_reason is null and stop_http_status is null and stop_detail is null
+      and stop_first_batch is null and stop_incident_at is null)
+    or (stopped_at is not null and stop_first_batch is not null
+      and stop_reason in ('rate_limited', 'auth_refused', 'network', 'off_contract', 'indeterminate'))
   )
 );
 
 insert into fansly_public_lookup_state (id) values (1) on conflict (id) do nothing;
 
 comment on table fansly_public_lookup_state is
-  'Arena R5: the session-less public account reader''s state (one row): a stop (reason, status, detail) until the owner resumes it, the Retry-After it honours, its first and latest accepted answers.';
+  'Arena R5: the session-less public account reader''s state (one row): the attempt admitted and not yet settled (no request while it is set), a stop (reason, status, detail, first batch, incident confirmed) until the owner resumes it, the Retry-After it honours, its first and latest accepted answers.';
 
 do $$ begin
   if exists(select 1 from pg_roles where rolname='read_only') then

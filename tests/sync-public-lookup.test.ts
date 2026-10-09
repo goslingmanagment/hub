@@ -60,17 +60,15 @@ describe("publicLookupVerdict", () => {
 describe("the owner's incident line", () => {
   it("names the reason, the status, the first batch and the Retry-After within the incident's 240 characters", () => {
     const line = publicLookupIncidentSummary({
-      failure: { reason: "rate_limited", httpStatus: 429, detail: "HTTP 429", retryNotBefore: new Date("2026-10-09T12:02:00.000Z") },
+      reason: "rate_limited",
+      httpStatus: 429,
       firstBatch: true,
-      ids: 100,
+      retryNotBefore: new Date("2026-10-09T12:02:00.000Z"),
     });
-    expect(line).toBe("Public account reader stopped: rate_limited (HTTP 429) on its FIRST batch (100 ids): decide before resuming; "
+    expect(line).toBe("Public account reader stopped: rate_limited (HTTP 429) on its FIRST batch: decide before resuming; "
       + "Retry-After 2026-10-09T12:02:00.000Z. No fan changed. Resume: sync public-lookup resume.");
     expect(line.length).toBeLessThanOrEqual(240);
-    expect(publicLookupIncidentSummary({
-      failure: { reason: "network", httpStatus: null, detail: "x", retryNotBefore: null },
-      firstBatch: false,
-      ids: 3,
-    })).toBe("Public account reader stopped: network (3 ids). No fan changed. Resume: sync public-lookup resume.");
+    expect(publicLookupIncidentSummary({ reason: "indeterminate", httpStatus: null, firstBatch: false, retryNotBefore: null }))
+      .toBe("Public account reader stopped: indeterminate. No fan changed. Resume: sync public-lookup resume.");
   });
 });

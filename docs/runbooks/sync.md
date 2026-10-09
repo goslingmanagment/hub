@@ -370,7 +370,7 @@ their clean window (`routes`) and the open latches (`openLatches`), and the glob
 | | `planned_stale` | a poll not served within its SLO (else 3 periods) | `sync why` on the key |
 | | `transactions_ledger_incomplete` | the newest finished rescan proved the ledger short of Fansly's lifetime total | the owner's backfill: `sync work enqueue --resource transactions.backfill` |
 | 5 `process` (global) | `heartbeat_silent`, `stalled` | no `sync` heartbeat for 2 minutes while a page is in the engine; or the stall watchdog ended the process | [Watchdog restarts](#watchdog-restarts-shutdown-and-deploys) |
-| `public_lookup` (global) | `rate_limited`, `auth_refused`, `network`, `off_contract` | the session-less public account reader stopped on its first failure; it stays open until the owner resumes the reader | [The public account reader](#the-public-account-reader) |
+| `public_lookup` (global) | `rate_limited`, `auth_refused`, `network`, `off_contract`, `indeterminate` | the session-less public account reader stopped on its first failure (or an attempt whose outcome nobody recorded); it stays open until the owner resumes the reader | [The public account reader](#the-public-account-reader) |
 
 Alert 1 stays 10 minutes after its hold ends ("hold cleared and 10 minutes clean"). A pause of the whole page and a
 page hold explain waiting work: no `urgent_waiting` and no `planned_stale` for it, and no `request_stalled` under a
@@ -742,8 +742,11 @@ pnpm cli sync public-lookup resume --note 'checked the proxy and the stop reason
 - `recheck-marks` only enqueues (audited `admin.fansly_public_lookup_recheck_marks`, counts only); the reader asks in
   its own pace. `enable` / `disable` write the live setting through the console's path (`admin.config_update`).
 - **A stop.** The first 429, 401/403, network failure or unexpected answer stops the reader and opens the incident
-  «Fansly public account reader stopped» (`fansly_sync_engine` / `public_lookup`, no page); on the very first batch
-  it says so — then the public lookup itself is in question, decide before resuming. Nothing about any fan changes on
+  «Fansly public account reader stopped» (`fansly_sync_engine` / `public_lookup`, no page; retried every pass until
+  it is confirmed); on the very first batch it says so — then the public lookup itself is in question, decide before
+  resuming. So does an attempt whose outcome nobody recorded (`indeterminate`: its process died mid-request) — it
+  may have reached Fansly and is never sent again on a guess. An attempt whose answer is journaled but not yet
+  applied (a failed write, a restart) is settled from the journal on the next pass, before any new request. Nothing about any fan changes on
   a failure, and the reader never falls back to a page's session or proxy. Read `status`, the journal below and the
   raw answer, then `resume` (audited `admin.fansly_public_lookup_resume`; it resolves the incident). A Retry-After
   still ahead is waited for after a resume.
@@ -758,11 +761,12 @@ select l.captured_at, l.sent_at, l.completed_at, l.outcome, l.http_status, l.ope
  order by l.captured_at desc;
 ```
 
-Its state (a stop, the Retry-After it honours, its first and latest answers):
+Its state (a stop and whether its incident is confirmed, the Retry-After it honours, an attempt not settled yet, its
+first and latest answers):
 
 ```sql
-select stopped_at, stop_reason, stop_http_status, stop_detail, retry_not_before, first_answer_at, last_answer_at,
-       resumed_at
+select stopped_at, stop_reason, stop_http_status, stop_detail, stop_first_batch, stop_incident_at, retry_not_before,
+       pending_since, first_answer_at, last_answer_at, resumed_at
   from fansly_public_lookup_state;
 ```
 

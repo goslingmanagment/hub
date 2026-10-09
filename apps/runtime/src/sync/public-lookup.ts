@@ -58,7 +58,14 @@ function stateView(state: FanslyPublicLookupState) {
     stopReason: state.stopReason,
     stopHttpStatus: state.stopHttpStatus,
     stopDetail: state.stopDetail,
+    stopFirstBatch: state.stopFirstBatch,
+    /** When the owner's incident for the stop was confirmed open (null while
+     *  the reader still retries it). */
+    stopIncidentAt: iso(state.stopIncidentAt),
     retryNotBefore: iso(state.retryNotBefore),
+    /** An attempt admitted and not settled yet: nothing is sent until the
+     *  reader settles it from its journal. */
+    pendingSince: iso(state.pendingSince),
     firstAnswerAt: iso(state.firstAnswerAt),
     lastAnswerAt: iso(state.lastAnswerAt),
     resumedAt: iso(state.resumedAt),
@@ -109,19 +116,20 @@ export async function readSyncPublicLookupStatus(ctx: OwnerContext, input: { now
   const demand = await countFanslyPublicLookupDemand(ctx.db, { recheckBefore });
   const progress = await readFanslyPublicLookupProgress(ctx.db);
   const enabled = effective.fanslyPublicLookupEnabled === true;
-  const words = !enabled
-    ? "nothing: the reader is off (fanslyPublicLookupEnabled)"
-    : state.stoppedAt !== null
-      ? `nothing: stopped (${state.stopReason ?? "?"}) until the owner resumes it`
-      : !egress.configured
-        ? "nothing: no proxy of its own (sync public-lookup proxy set)"
-        : egress.sharedWithPages.length > 0
-          ? `nothing: its proxy is a page's (${egress.sharedWithPages.join(", ")})`
-          : demand.total === 0
-            ? "nothing: no fan needs a check"
-            : next.why === null
-              ? `one request of up to ${batchSizeOf(effective)} ids, now`
-              : `one request of up to ${batchSizeOf(effective)} ids at ${next.at.toISOString()} (held by ${next.why})`;
+  const batch = batchSizeOf(effective);
+  const words = (() => {
+    if (!enabled) return "nothing: the reader is off (fanslyPublicLookupEnabled)";
+    if (state.stoppedAt !== null) return `nothing: stopped (${state.stopReason ?? "?"}) until the owner resumes it`;
+    if (state.pendingToken !== null) {
+      return `settle the attempt admitted at ${iso(state.pendingSince)} from its journal, without a request`;
+    }
+    if (!egress.configured) return "nothing: no proxy of its own (sync public-lookup proxy set)";
+    if (egress.sharedWithPages.length > 0) return `nothing: its proxy is a page's (${egress.sharedWithPages.join(", ")})`;
+    if (demand.total === 0) return "nothing: no fan needs a check";
+    return next.why === null
+      ? `one request of up to ${batch} ids, now`
+      : `one request of up to ${batch} ids at ${next.at.toISOString()} (held by ${next.why})`;
+  })();
   return {
     enabled,
     batchSize: batchSizeOf(effective),
@@ -130,7 +138,7 @@ export async function readSyncPublicLookupStatus(ctx: OwnerContext, input: { now
     budget: {
       sentLastDay: clocks.sentLastDay,
       dayBudget: PUBLIC_LOOKUP_DAY_BUDGET,
-      lastSentAt: iso(clocks.lastCapturedAt),
+      lastSentAt: iso(clocks.lastSentAt),
       nextSendAt: next.at.toISOString(),
       holdsBy: next.why,
     },

@@ -56,6 +56,8 @@ let app: AppContext;
 let trap: NoOutboundTrap | null = null;
 let pages: { lora1: number; lora2: number };
 let sends: Array<{ url: string; headers: Record<string, string> }>;
+/** Sends the reader's own check refused: nothing was written for them. */
+let refusals: string[];
 
 beforeAll(async () => {
   testDb = await startIntegrationTestDatabase();
@@ -136,7 +138,14 @@ function scripted(...outcomes: FanslyWireOutcome[]): PublicLookupSend {
     sends.push({ url: request.url, headers: request.headers });
     const next = outcomes.shift();
     if (next === undefined) throw new Error("the test sent more requests than it scripted");
-    if (next.kind === "response" || ("sent" in next && next.sent)) hooks.check();
+    if (next.kind === "response" || ("sent" in next && next.sent)) {
+      // The reader's send check, as undici asks it before the headers go.
+      const refusal = hooks.check();
+      if (refusal !== null) {
+        refusals.push(refusal.reason);
+        return { kind: "aborted_before_send", refusal: refusal.reason };
+      }
+    }
     return next;
   };
 }
@@ -154,6 +163,14 @@ function reader(send: PublicLookupSend, extra: Partial<ConstructorParameters<typ
   });
 }
 
+/** No asked fan got an answer or lost a mark. */
+async function fansUntouchedAll() {
+  for (const ref of [FOUND_MARKED, GONE_MARKED, PARTNER, MISSED_TWICE]) {
+    expect(await fanRow(ref), ref).toMatchObject({ public_checked_at: null, public_found: null });
+  }
+  expect((await fanRow(FOUND_MARKED)).deleted_detected_at).toBeInstanceOf(Date);
+}
+
 function askedIds(index = 0): string[] {
   const url = new URL(sends[index]!.url);
   return url.searchParams.get("ids")!.split(",");
@@ -166,6 +183,7 @@ beforeEach(async (context) => {
   }
   await resetIntegrationDatabase(testDb.pool);
   sends = [];
+  refusals = [];
   app = createTestAppContext(testDb, { fanslyBaseUrl: FANSLY_API });
   const model = await createModel(db(), { slug: "lora", name: "Lora" });
   pages = {
@@ -304,7 +322,7 @@ describe("one request: the demand, the journal before the parse, the answer", ()
     // Nothing is due again: the next pass waits a minute (its budget) and,
     // once the minute has passed, has nobody to ask (checked under 7 days).
     expect(await reader(scripted()).runOnce()).toMatchObject({ kind: "wait", why: "minute_budget" });
-    await testDb!.pool.query("update fansly_send_log set captured_at = captured_at - interval '2 minutes', completed_at = completed_at - interval '2 minutes'");
+    await testDb!.pool.query("update fansly_send_log set captured_at = captured_at - interval '2 minutes', sent_at = sent_at - interval '2 minutes', completed_at = completed_at - interval '2 minutes'");
     expect(await reader(scripted()).runOnce()).toEqual({ kind: "idle" });
     // A week later the partner and the miss are asked again; the queue is done.
     await testDb!.pool.query("update fans set public_checked_at = public_checked_at - interval '8 days' where public_checked_at is not null");
@@ -324,17 +342,19 @@ describe("one request: the demand, the journal before the parse, the answer", ()
 });
 
 describe("the budget and the pace, from the reader's own journal", () => {
-  async function journalRow(capturedAgoMs: number, completedAgoMs: number | null) {
+  async function journalRow(capturedAgoMs: number, completedAgoMs: number | null, sentAgoMs: number | null = null) {
     await testDb!.pool.query(
       `insert into fansly_send_log (page_id, guard_token, source, operation, holder_host, holder_pid, holder_role,
-              holder_instance, captured_at, completed_at, outcome, http_status)
+              holder_instance, captured_at, sent_at, completed_at, outcome, http_status)
        values (null, $1::uuid, 'public_lookup', 'account_lookup_public', 'test', 1, 'sync', $2::uuid,
                clock_timestamp() - $3::double precision * interval '1 millisecond',
+               case when $5::double precision is null then null
+                    else clock_timestamp() - $5::double precision * interval '1 millisecond' end,
                case when $4::double precision is null then null
                     else clock_timestamp() - $4::double precision * interval '1 millisecond' end,
                case when $4::double precision is null then null else 'response' end,
                case when $4::double precision is null then null else 200 end)`,
-      [randomUUID(), randomUUID(), capturedAgoMs, completedAgoMs],
+      [randomUUID(), randomUUID(), capturedAgoMs, completedAgoMs, sentAgoMs],
     );
   }
 
@@ -347,6 +367,36 @@ describe("the budget and the pace, from the reader's own journal", () => {
   it("1 a minute", async () => {
     await journalRow(30_000, 29_000);
     expect(await reader(scripted()).runOnce()).toMatchObject({ kind: "wait", why: "minute_budget" });
+    expect(sends).toEqual([]);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("counts the minute from the SEND, not the journal: a request a proxy held 45 s still leaves a full minute to the next", async () => {
+    // Journaled 50 s ago, its headers out 5 s ago (the proxy held it), done 4 s ago.
+    await journalRow(50_000, 4_000, 5_000);
+    const pass = await reader(scripted()).runOnce();
+    expect(pass).toMatchObject({ kind: "wait", why: "minute_budget" });
+    // Counted from the journal it would be due in 10 s; from the send, in 55 s.
+    expect(pass.kind === "wait" && pass.until.getTime() - Date.now()).toBeGreaterThan(50_000);
+    expect(sends).toEqual([]);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("an attempt whose send instant is unknown counts at its upper bound", async () => {
+    // Journaled 70 s ago, neither marked sent nor completed (its process died):
+    // it may have gone out as late as 20 s + its budget after the journal.
+    await journalRow(70_000, null, null);
+    const pass = await reader(scripted()).runOnce();
+    expect(pass).toMatchObject({ kind: "wait", why: "minute_budget" });
+    expect(pass.kind === "wait" && pass.until.getTime() - Date.now()).toBeGreaterThan(15_000);
+    expect(sends).toEqual([]);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("counts the day from the sends too: 50 journaled just over 24 h ago but sent inside it hold the 51st", async () => {
+    for (let index = 0; index < 50; index += 1) {
+      // Journaled 24 h + 10 s ago, sent 25 s later (inside the 24 h), done 1 s after.
+      const captured = 24 * 3_600_000 + 10_000 + index * 100;
+      await journalRow(captured, captured - 26_000, captured - 25_000);
+    }
+    expect(await reader(scripted()).runOnce()).toMatchObject({ kind: "wait", why: "day_budget" });
     expect(sends).toEqual([]);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
@@ -380,7 +430,7 @@ describe("the budget and the pace, from the reader's own journal", () => {
   it("the rule itself: the latest hold wins, none holds when all have passed", () => {
     const now = new Date("2026-10-09T12:00:00.000Z");
     const clocks = {
-      lastCapturedAt: new Date("2026-10-09T11:59:30.000Z"),
+      lastSentAt: new Date("2026-10-09T11:59:30.000Z"),
       lastCompletedAt: new Date("2026-10-09T11:59:31.000Z"),
       inFlightSince: null,
       sentLastDay: 3,
@@ -445,11 +495,15 @@ describe("the stop rules: the first failure stops the reader, raises the owner's
     expect(journaled[0]!.payload.requestedIds).toEqual(askedIds());
     await fansUntouched();
 
-    const state = (await rows<{ stop_reason: string; stop_http_status: number; retry_not_before: Date | null; stop_detail: string }>(
-      "select stop_reason, stop_http_status, retry_not_before, stop_detail from fansly_public_lookup_state",
+    const state = (await rows<{
+      stop_reason: string; stop_http_status: number; retry_not_before: Date | null; stop_first_batch: boolean;
+      stop_incident_at: Date | null; pending_token: string | null;
+    }>(
+      "select stop_reason, stop_http_status, retry_not_before, stop_first_batch, stop_incident_at, pending_token from fansly_public_lookup_state",
     ))[0]!;
-    expect(state).toMatchObject({ stop_reason: reason, stop_http_status: status });
-    expect(state.stop_detail).toMatch(/^first batch: /);
+    // The stop settled the attempt, and its incident is confirmed.
+    expect(state).toMatchObject({ stop_reason: reason, stop_http_status: status, stop_first_batch: true, pending_token: null });
+    expect(state.stop_incident_at).toBeInstanceOf(Date);
     if (status === 429) {
       expect(state.retry_not_before!.getTime() - Date.now()).toBeGreaterThan(100_000);
     }
@@ -458,7 +512,7 @@ describe("the stop rules: the first failure stops the reader, raises the owner's
     expect((await incident())!.error_summary).toContain("FIRST batch");
 
     // Stopped: nothing more is sent, whatever the budget.
-    await testDb!.pool.query("update fansly_send_log set captured_at = captured_at - interval '1 hour', completed_at = completed_at - interval '1 hour'");
+    await testDb!.pool.query("update fansly_send_log set captured_at = captured_at - interval '1 hour', sent_at = sent_at - interval '1 hour', completed_at = completed_at - interval '1 hour'");
     expect(await reader(scripted(found())).runOnce()).toEqual({ kind: "stopped", reason });
     expect(sends).toHaveLength(1);
     await trap!.assertNoOutbound();
@@ -475,7 +529,7 @@ describe("the stop rules: the first failure stops the reader, raises the owner's
 
   it("after an accepted batch a stop is not the first batch's; resume clears it, resolves the incident and still waits for Retry-After", async () => {
     await reader(scripted(found(FOUND_MARKED))).runOnce();
-    await testDb!.pool.query("update fansly_send_log set captured_at = captured_at - interval '2 minutes', completed_at = completed_at - interval '2 minutes'");
+    await testDb!.pool.query("update fansly_send_log set captured_at = captured_at - interval '2 minutes', sent_at = sent_at - interval '2 minutes', completed_at = completed_at - interval '2 minutes'");
     await testDb!.pool.query("update fans set public_checked_at = null, public_found = null where platform_user_id = $1", [PARTNER]);
     const pass = await reader(scripted(answer(429, "", { "retry-after": "600" }))).runOnce();
     expect(pass).toMatchObject({ kind: "failed", firstBatch: false, failure: { reason: "rate_limited" } });
@@ -486,11 +540,221 @@ describe("the stop rules: the first failure stops the reader, raises the owner's
     expect(resumed.retryNotBefore).not.toBeNull();
     expect(await incident()).toMatchObject({ status: "resolved" });
     expect(await rows("select event_type from audit_events where event_type = 'admin.fansly_public_lookup_resume'")).toHaveLength(1);
-    await testDb!.pool.query("update fansly_send_log set captured_at = captured_at - interval '2 minutes', completed_at = completed_at - interval '2 minutes'");
+    await testDb!.pool.query("update fansly_send_log set captured_at = captured_at - interval '2 minutes', sent_at = sent_at - interval '2 minutes', completed_at = completed_at - interval '2 minutes'");
     expect(await reader(scripted()).runOnce()).toMatchObject({ kind: "wait", why: "retry_after" });
     await expect(resumeSyncPublicLookup({ db: db(), logger: app.logger }, { note: "again", actor: "test" }))
       .rejects.toThrow(/not stopped/);
     expect(sends).toHaveLength(2);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+});
+
+describe("the lock: once its connection is gone the pass sends nothing, and no second reader sends over an attempt", () => {
+  beforeEach(async () => {
+    await enable();
+    await withProxy();
+    await recheckMarks();
+  });
+
+  /** End the backend that holds the reader's advisory lock (as a restarted
+   *  database or a dropped connection would), from another connection. */
+  async function killLockHolder(): Promise<void> {
+    const [holder] = await rows<{ pid: number }>(
+      `select pid from pg_locks where locktype = 'advisory' and classid = $1::oid and objid = $2::oid and objsubid = 2 and granted
+          and database = (select oid from pg_database where datname = current_database())`,
+      [PUBLIC_LOOKUP_LOCK_NAMESPACE, PUBLIC_LOOKUP_LOCK_KEY],
+    );
+    expect(holder, "a reader holds the lock").toBeDefined();
+    await testDb!.pool.query("select pg_terminate_backend($1)", [holder!.pid]);
+    // The client hears its connection end on the next turns of the loop.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+
+  async function pending() {
+    return (await rows<{ pending_token: string | null }>("select pending_token from fansly_public_lookup_state"))[0]!.pending_token;
+  }
+
+  it("lost before the admission: the admission fails on the lock's own connection — nothing journaled, nothing sent", async () => {
+    const egress = { egressKey: "test", dispatcher: {} as never, pace: async () => 0, close: async () => undefined };
+    const first = reader(scripted(found(FOUND_MARKED)), {
+      openEgress: async () => {
+        await killLockHolder();
+        return egress;
+      },
+    });
+    await expect(first.runOnce()).rejects.toThrow();
+    expect(sends).toEqual([]);
+    expect(await rows("select 1 from fansly_send_log")).toEqual([]);
+    expect(await pending()).toBeNull();
+    // The next reader takes the lock and sends: one request in all.
+    expect((await reader(scripted(found(FOUND_MARKED)), { openEgress: async () => egress }).runOnce()).kind).toBe("answered");
+    expect(sends).toHaveLength(1);
+    await trap!.assertNoOutbound();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("lost after the admission: the send check refuses, nothing goes out, the attempt settles as unsent", async () => {
+    const egress = { egressKey: "test", dispatcher: {} as never, pace: async () => 0, close: async () => undefined };
+    const script = scripted(found(FOUND_MARKED));
+    const pass = await reader(async (dispatcher, request, hooks, signal) => {
+      await killLockHolder();
+      expect(signal.aborted, "the send's signal aborts with the lock").toBe(true);
+      return script(dispatcher, request, hooks, signal);
+    }, { openEgress: async () => egress }).runOnce();
+    expect(pass).toEqual({ kind: "unsent", ids: 0 });
+    expect(refusals).toEqual(["lease_inactive"]);
+    expect(await rows("select outcome, outcome_detail, sent_at from fansly_send_log")).toEqual([
+      { outcome: "aborted_before_send", outcome_detail: "lease_inactive", sent_at: null },
+    ]);
+    expect(await rows("select 1 from observations where kind like 'account_lookup_public%'")).toEqual([]);
+    expect(await pending()).toBeNull();
+    expect((await fanRow(FOUND_MARKED)).public_checked_at).toBeNull();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("another reader never sends while an attempt is pending: it waits for the attempt's bound, then stops as indeterminate", async () => {
+    // Reader A was admitted and is (or was) on the wire: its journal row and
+    // its pending mark, nothing more.
+    const token = randomUUID();
+    await testDb!.pool.query(
+      `insert into fansly_send_log (page_id, guard_token, source, operation, holder_host, holder_pid, holder_role, holder_instance, captured_at)
+       values (null, $1::uuid, 'public_lookup', 'account_lookup_public', 'a', 1, 'sync', $2::uuid, clock_timestamp())`,
+      [token, randomUUID()],
+    );
+    await testDb!.pool.query("update fansly_public_lookup_state set pending_token = $1::uuid, pending_since = now()", [token]);
+    expect(await reader(scripted(found())).runOnce()).toMatchObject({ kind: "wait", why: "in_flight" });
+    // A died mid-request: past its bound, whether it was sent is unknown.
+    await testDb!.pool.query("update fansly_send_log set captured_at = captured_at - interval '5 minutes'");
+    expect(await reader(scripted(found())).runOnce()).toMatchObject({ kind: "failed", failure: { reason: "indeterminate" } });
+    expect(sends).toEqual([]);
+    expect(await pending()).toBeNull();
+    expect(await rows("select status, error_code from notification_incidents where incident_key like '%public_lookup%'"))
+      .toEqual([{ status: "open", error_code: "indeterminate" }]);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+});
+
+describe("an attempt is settled from its journal before any new request — across failed writes and restarts", () => {
+  beforeEach(async () => {
+    await enable();
+    await withProxy();
+    await recheckMarks();
+  });
+
+  async function withFailingTrigger(table: string, condition: string, body: () => Promise<void>) {
+    await testDb!.pool.query(`create or replace function test_public_lookup_fail() returns trigger language plpgsql as $$
+      begin if ${condition} then raise exception 'injected write failure'; end if; return new; end $$`);
+    await testDb!.pool.query(`create trigger test_public_lookup_fail before update on ${table}
+      for each row execute function test_public_lookup_fail()`);
+    try {
+      await body();
+    } finally {
+      await testDb!.pool.query(`drop trigger if exists test_public_lookup_fail on ${table}`);
+      await testDb!.pool.query("drop function if exists test_public_lookup_fail()");
+    }
+  }
+
+  it("a 429 whose stop write failed: the next reader (a restart) stops from the journal — no request, Retry-After kept", async () => {
+    await withFailingTrigger("fansly_public_lookup_state", "new.stopped_at is not null and old.stopped_at is null", async () => {
+      await expect(reader(scripted(answer(429, "", { "retry-after": "3600" }))).runOnce()).rejects.toThrow();
+    });
+    const [state] = await rows<{ pending_token: string | null; stopped_at: Date | null }>(
+      "select pending_token, stopped_at from fansly_public_lookup_state",
+    );
+    expect(state!.pending_token).not.toBeNull();
+    expect(state!.stopped_at).toBeNull();
+    // A minute later, whatever the budget says, the stored answer is settled
+    // first: no second request.
+    await testDb!.pool.query("update fansly_send_log set captured_at = captured_at - interval '2 minutes', sent_at = sent_at - interval '2 minutes', completed_at = completed_at - interval '2 minutes'");
+    const settled = await reader(scripted()).runOnce();
+    expect(settled).toMatchObject({ kind: "failed", firstBatch: true, failure: { reason: "rate_limited", httpStatus: 429 } });
+    expect(sends).toHaveLength(1);
+    const [stopped] = await rows<{ retry_not_before: Date; pending_token: string | null; stop_incident_at: Date | null }>(
+      "select retry_not_before, pending_token, stop_incident_at from fansly_public_lookup_state",
+    );
+    expect(stopped!.pending_token).toBeNull();
+    expect(stopped!.retry_not_before.getTime() - Date.now()).toBeGreaterThan(3_400_000);
+    expect(stopped!.stop_incident_at).toBeInstanceOf(Date);
+    expect(await reader(scripted()).runOnce()).toEqual({ kind: "stopped", reason: "rate_limited" });
+    expect(sends).toHaveLength(1);
+    await trap!.assertNoOutbound();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("an accepted answer whose apply failed is applied from the journal — the lookup is not repeated", async () => {
+    await withFailingTrigger("fans", "new.public_checked_at is distinct from old.public_checked_at", async () => {
+      await expect(reader(scripted(found(FOUND_MARKED))).runOnce()).rejects.toThrow();
+    });
+    expect((await fanRow(FOUND_MARKED)).public_checked_at).toBeNull();
+    await testDb!.pool.query("update fansly_send_log set captured_at = captured_at - interval '2 minutes', sent_at = sent_at - interval '2 minutes', completed_at = completed_at - interval '2 minutes'");
+    const settled = await reader(scripted()).runOnce();
+    expect(settled).toMatchObject({ kind: "answered", ids: 4, applied: { found: 1, notFound: 3, marksCleared: 1 } });
+    expect(sends).toHaveLength(1);
+    expect(await fanRow(FOUND_MARKED)).toMatchObject({ public_found: true, deleted_detected_at: null });
+    expect(await rows("select pending_token from fansly_public_lookup_state")).toEqual([{ pending_token: null }]);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("an answer that could not be journaled is never read: the reader stops by its status", async () => {
+    // The observation insert fails; the send log keeps the status.
+    await testDb!.pool.query(`create or replace function test_public_lookup_no_journal() returns trigger language plpgsql as $$
+      begin if new.kind like 'account_lookup_public%' then raise exception 'injected journal failure'; end if; return new; end $$`);
+    await testDb!.pool.query("create trigger test_public_lookup_no_journal before insert on observations for each row execute function test_public_lookup_no_journal()");
+    try {
+      const pass = await reader(scripted(answer(401, ""))).runOnce();
+      expect(pass).toMatchObject({ kind: "failed", observationId: null, failure: { reason: "auth_refused", httpStatus: 401 } });
+    } finally {
+      await testDb!.pool.query("drop trigger if exists test_public_lookup_no_journal on observations");
+      await testDb!.pool.query("drop function if exists test_public_lookup_no_journal()");
+    }
+    await fansUntouchedAll();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+});
+
+describe("the owner's incident of a stop is retried until it is confirmed", () => {
+  it("a failed open leaves the stop unconfirmed; the next pass opens it again; once confirmed it is not repeated", async () => {
+    await enable();
+    await withProxy();
+    await recheckMarks();
+    const opens: boolean[] = [];
+    const answers = [false, true];
+    const incidents = {
+      open: async () => {
+        const answer = answers.shift() ?? true;
+        opens.push(answer);
+        if (opens.length === 1) throw new Error("incident store down");
+        return answer;
+      },
+      resolve: async () => undefined,
+    };
+    // First: the open throws.
+    expect(await reader(scripted(answer(401, "")), { incidents }).runOnce()).toMatchObject({ kind: "failed" });
+    const unconfirmed = async () => (await rows<{ stop_incident_at: Date | null }>("select stop_incident_at from fansly_public_lookup_state"))[0]!
+      .stop_incident_at;
+    expect(await unconfirmed()).toBeNull();
+    // Then it answers true: confirmed.
+    expect(await reader(scripted(), { incidents }).runOnce()).toEqual({ kind: "stopped", reason: "auth_refused" });
+    expect(await unconfirmed()).toBeInstanceOf(Date);
+    expect(opens).toHaveLength(2);
+    // Confirmed: not opened again.
+    expect(await reader(scripted(), { incidents }).runOnce()).toEqual({ kind: "stopped", reason: "auth_refused" });
+    expect(opens).toHaveLength(2);
+    expect(sends).toHaveLength(1);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("the real latch: an open the database refused is opened by a later pass", async () => {
+    await enable();
+    await withProxy();
+    await recheckMarks();
+    await testDb!.pool.query(`create or replace function test_public_lookup_no_incident() returns trigger language plpgsql as $$
+      begin raise exception 'injected incident failure'; end $$`);
+    await testDb!.pool.query("create trigger test_public_lookup_no_incident before insert on notification_incidents for each row execute function test_public_lookup_no_incident()");
+    try {
+      expect(await reader(scripted(answer(403, ""))).runOnce()).toMatchObject({ kind: "failed" });
+    } finally {
+      await testDb!.pool.query("drop trigger if exists test_public_lookup_no_incident on notification_incidents");
+      await testDb!.pool.query("drop function if exists test_public_lookup_no_incident()");
+    }
+    expect(await rows("select 1 from notification_incidents where incident_key like '%public_lookup%'")).toEqual([]);
+    expect(await reader(scripted()).runOnce()).toEqual({ kind: "stopped", reason: "auth_refused" });
+    expect(await rows("select status, error_code from notification_incidents where incident_key like '%public_lookup%'"))
+      .toEqual([{ status: "open", error_code: "auth_refused" }]);
+    expect((await rows<{ stop_incident_at: Date | null }>("select stop_incident_at from fansly_public_lookup_state"))[0]!.stop_incident_at)
+      .toBeInstanceOf(Date);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
 

@@ -1,23 +1,33 @@
 import { createHash, randomUUID } from "node:crypto";
 
-import type { Pool } from "pg";
+import type { Client, Pool } from "pg";
 
 import {
   applyFanslyPublicLookupAnswer,
+  clearFanslyPublicLookupPending,
   completeFanslySendAttempt,
+  confirmFanslyPublicLookupStopIncident,
+  createDb,
+  FANSLY_PUBLIC_LOOKUP_LOCK_KEY,
+  FANSLY_PUBLIC_LOOKUP_LOCK_NAMESPACE,
   FANSLY_PUBLIC_LOOKUP_RECHECK_AFTER_MS,
   FANSLY_PUBLIC_LOOKUP_SEND_SOURCE,
+  fanslyPublicLookupObservationKey,
+  holdsFanslyPublicLookupLock,
   insertObservation,
   journalUnpacedFanslySend,
+  markFanslyPublicLookupPending,
   markFanslySendAttemptSent,
   pickFanslyPublicLookupBatch,
   readFanslyPublicEgress,
+  readFanslyPublicLookupAttempt,
   readFanslyPublicLookupClocks,
   readFanslyPublicLookupState,
   stopFanslyPublicLookup,
   type Database,
   type FanslyPublicLookupApplyResult,
   type FanslyPublicLookupClocks,
+  type FanslyPublicLookupState,
   type FanslyPublicLookupStopReason,
   type FanslySendHolderIdentity,
 } from "@agency_hub_core/db";
@@ -26,11 +36,13 @@ import {
   FANSLY_PUBLIC_ACCOUNT_LOOKUP_KIND,
   FANSLY_PUBLIC_ACCOUNT_LOOKUP_MAX_IDS,
   FanslyCredentialsRefusedError,
+  FanslySendRefusedError,
   fanslyPublicWireSpec,
   readFanslyWireResponse,
   sendFanslyWireRequest,
   type FanslyAccount,
   type FanslyPublicWireSpecFor,
+  type FanslySendCheck,
   type FanslyWireOutcome,
   type FanslyWireRead,
 } from "@agency_hub_core/fansly";
@@ -97,8 +109,8 @@ import { replaceJournalLoneSurrogates } from "./lib/journal-lone-surrogates.ts";
 
 /** The reader's advisory lock `(58216, 1)`: one pass — one request — at a
  *  time across every process (58211–58215 are taken). */
-export const PUBLIC_LOOKUP_LOCK_NAMESPACE = 58_216;
-export const PUBLIC_LOOKUP_LOCK_KEY = 1;
+export const PUBLIC_LOOKUP_LOCK_NAMESPACE = FANSLY_PUBLIC_LOOKUP_LOCK_NAMESPACE;
+export const PUBLIC_LOOKUP_LOCK_KEY = FANSLY_PUBLIC_LOOKUP_LOCK_KEY;
 
 /** Its budget: one request a minute, fifty a day (rolling 24 hours). This is
  *  the hub's budget, not a known Fansly limit. */
@@ -120,9 +132,14 @@ export type PublicLookupWaitReason = "in_flight" | "minute_budget" | "pace" | "d
 
 /**
  * When the reader may send next, and what holds it: the latest of — an
- * attempt still in flight, the minute budget (the newest capture + 1 min),
- * the pause (the newest completion + S × (1 + u)), the day budget (the oldest
- * of 50 attempts in 24 h + 24 h) and a Retry-After. `why` null: now.
+ * attempt still in flight, the minute budget (the newest SEND + 1 min), the
+ * pause (the newest completion + S × (1 + u)), the day budget (the oldest of
+ * 50 sends in 24 h + 24 h) and a Retry-After. A send is counted at the instant
+ * its request headers went out (`sent_at`), not when it was journaled: a
+ * proxy that held the request 19 s would otherwise leave 41 s between two
+ * real requests. An attempt never marked sent counts at its completion, and
+ * one with neither at its upper bound (`readFanslyPublicLookupClocks`).
+ * `why` null: now.
  */
 export function publicLookupNextSendAt(input: {
   now: Date;
@@ -136,8 +153,8 @@ export function publicLookupNextSendAt(input: {
   if (clocks.inFlightSince !== null) {
     holds.push({ at: clocks.inFlightSince.getTime() + PUBLIC_LOOKUP_IN_FLIGHT_BOUND_MS, why: "in_flight" });
   }
-  if (clocks.lastCapturedAt !== null) {
-    holds.push({ at: clocks.lastCapturedAt.getTime() + PUBLIC_LOOKUP_MINUTE_MS, why: "minute_budget" });
+  if (clocks.lastSentAt !== null) {
+    holds.push({ at: clocks.lastSentAt.getTime() + PUBLIC_LOOKUP_MINUTE_MS, why: "minute_budget" });
   }
   if (clocks.lastCompletedAt !== null) {
     holds.push({ at: clocks.lastCompletedAt.getTime() + Math.ceil(input.settingMs * (1 + input.u)), why: "pace" });
@@ -265,29 +282,34 @@ export function publicLookupVerdict(
   }
 }
 
-/** The incident the reader opens when it stops (one line, ≤ 240 characters). */
+/** The incident the reader opens when it stops (one line, ≤ 240
+ *  characters), from the stop as the state row keeps it — the same line
+ *  whenever the open is retried. */
 export function publicLookupIncidentSummary(input: {
-  failure: PublicLookupFailure;
+  reason: FanslyPublicLookupStopReason;
+  httpStatus: number | null;
   firstBatch: boolean;
-  ids: number;
+  retryNotBefore: Date | null;
 }): string {
-  const status = input.failure.httpStatus === null ? "" : ` (HTTP ${input.failure.httpStatus})`;
-  const first = input.firstBatch ? ` on its FIRST batch (${input.ids} ids): decide before resuming` : ` (${input.ids} ids)`;
-  const retry = input.failure.retryNotBefore === null ? "" : `; Retry-After ${input.failure.retryNotBefore.toISOString()}`;
-  return `Public account reader stopped: ${input.failure.reason}${status}${first}${retry}. No fan changed. `
+  const status = input.httpStatus === null ? "" : ` (HTTP ${input.httpStatus})`;
+  const first = input.firstBatch ? " on its FIRST batch: decide before resuming" : "";
+  const retry = input.retryNotBefore === null ? "" : `; Retry-After ${input.retryNotBefore.toISOString()}`;
+  return `Public account reader stopped: ${input.reason}${status}${first}${retry}. No fan changed. `
     + "Resume: sync public-lookup resume.";
 }
 
-/** The owner incident port (the global `public_lookup` latch). */
+/** The owner incident port (the global `public_lookup` latch). `open` is
+ *  idempotent and answers whether the latch now reflects the stop: false — it
+ *  could not be written — is retried on every pass until true. */
 export interface PublicLookupIncidents {
-  open(input: { reason: FanslyPublicLookupStopReason; summary: string; at: Date }): Promise<void>;
+  open(input: { reason: FanslyPublicLookupStopReason; summary: string; at: Date }): Promise<boolean>;
   resolve(input: { at: Date }): Promise<void>;
 }
 
 export function publicLookupIncidents(app: { db: Database; logger: SyncLogger }): PublicLookupIncidents {
   return {
     async open(input) {
-      await notifySyncEngineIncident(app, {
+      return notifySyncEngineIncident(app, {
         subKey: SYNC_ENGINE_PUBLIC_LOOKUP_SUBKEY,
         pageId: null,
         pageLabel: null,
@@ -307,6 +329,15 @@ export function publicLookupIncidents(app: { db: Database; logger: SyncLogger })
   };
 }
 
+/** The pass's hold of the reader's advisory lock: the lock's own connection
+ *  (`db`), and whether that connection — and so the lock — is gone. */
+interface PublicLookupLockHold {
+  db: Database;
+  lost(): boolean;
+  /** Aborted the moment the lock's connection ends or fails. */
+  signal: AbortSignal;
+}
+
 /** What one pass did. */
 export type PublicLookupPass =
   | { kind: "disabled" }
@@ -323,12 +354,48 @@ export type PublicLookupPass =
   | { kind: "answered"; ids: number; observationId: number; applied: FanslyPublicLookupApplyResult }
   | { kind: "failed"; ids: number; failure: PublicLookupFailure; observationId: number | null; firstBatch: boolean };
 
+/** The journal of one attempt, read back for its settlement: what was asked,
+ *  and the answer as the wire layer received it. */
+function journaledOutcome(observation: { kind: string; payload: unknown }): {
+  requestedIds: string[];
+  outcome: Extract<FanslyWireOutcome, { kind: "response" }>;
+} | null {
+  const payload = typeof observation.payload === "object" && observation.payload !== null && !Array.isArray(observation.payload)
+    ? observation.payload as Record<string, unknown>
+    : null;
+  if (payload === null) return null;
+  const requestedIds = payload.requestedIds;
+  if (!Array.isArray(requestedIds) || !requestedIds.every((id): id is string => typeof id === "string")) return null;
+  if (typeof payload.status !== "number") return null;
+  const response = (bodyText: string, headers: Record<string, string>) => ({
+    requestedIds,
+    outcome: {
+      kind: "response" as const,
+      status: payload.status as number,
+      headers,
+      bodyText,
+      bodyBytes: Buffer.byteLength(bodyText),
+      sendMark: "request_start" as const,
+    },
+  });
+  if (observation.kind === FANSLY_PUBLIC_ACCOUNT_LOOKUP_KIND) {
+    return payload.answer === undefined ? null : response(JSON.stringify(payload.answer), {});
+  }
+  if (observation.kind === `${FANSLY_PUBLIC_ACCOUNT_LOOKUP_KIND}:failed` && typeof payload.bodyText === "string") {
+    const headers: Record<string, string> = {};
+    if (typeof payload.retryAfter === "string") headers["retry-after"] = payload.retryAfter;
+    if (typeof payload.contentType === "string") headers["content-type"] = payload.contentType;
+    return response(payload.bodyText, headers);
+  }
+  return null;
+}
+
 type PublicSpec = FanslyPublicWireSpecFor<"accounts.public_by_ids">;
 
 export type PublicLookupSend = (
   dispatcher: Dispatcher,
   request: { url: string; headers: Record<string, string>; timeoutMs: number },
-  hooks: { check: () => null },
+  hooks: { check: FanslySendCheck },
   signal: AbortSignal,
 ) => Promise<FanslyWireOutcome>;
 
@@ -391,11 +458,22 @@ export class FanslyPublicLookupReader {
     return this.#holder;
   }
 
-  /** One pass under the reader's lock: at most one request. */
+  /**
+   * One pass under the reader's lock: at most one request. The lock is a
+   * session lock on a connection of its own, watched for its `error` and
+   * `end`: once that connection is gone the pass sends nothing more (the send
+   * check refuses, the send's signal aborts), and the checks that admit a
+   * request and the write that admits it run on that very connection, so a
+   * lost lock fails the admission instead of letting two readers send.
+   */
   async runOnce(): Promise<PublicLookupPass> {
     const effective = await loadEffectiveConfig(this.#d.db, this.#d.rawConfig);
     if (effective.fanslyPublicLookupEnabled !== true) return { kind: "disabled" };
     const client = await this.#d.pool.connect();
+    const lostController = new AbortController();
+    const onLost = () => lostController.abort(new Error("the public reader's lock connection ended"));
+    client.on("error", onLost);
+    client.on("end", onLost);
     // A session lock survives a release back to the pool: whenever the unlock
     // is not certain, the connection is destroyed so Postgres drops it.
     let destroy = false;
@@ -412,32 +490,51 @@ export class FanslyPublicLookupReader {
         throw error;
       }
       if (!locked) return { kind: "busy" };
+      const hold: PublicLookupLockHold = {
+        db: createDb(client as unknown as Client),
+        lost: () => lostController.signal.aborted,
+        signal: lostController.signal,
+      };
       try {
-        return await this.#pass(effective);
+        return await this.#pass(effective, hold);
       } finally {
-        try {
-          const unlocked = await client.query<{ unlocked: boolean }>(
-            "select pg_advisory_unlock($1, $2) as unlocked",
-            [PUBLIC_LOOKUP_LOCK_NAMESPACE, PUBLIC_LOOKUP_LOCK_KEY],
-          );
-          destroy = unlocked.rows[0]?.unlocked !== true;
-        } catch {
+        if (hold.lost()) {
           destroy = true;
+        } else {
+          try {
+            const unlocked = await client.query<{ unlocked: boolean }>(
+              "select pg_advisory_unlock($1, $2) as unlocked",
+              [PUBLIC_LOOKUP_LOCK_NAMESPACE, PUBLIC_LOOKUP_LOCK_KEY],
+            );
+            destroy = unlocked.rows[0]?.unlocked !== true;
+          } catch {
+            destroy = true;
+          }
         }
       }
     } finally {
+      client.removeListener("end", onLost);
+      // A late error of a connection being destroyed must not crash the process.
+      client.removeListener("error", onLost);
+      client.on("error", () => undefined);
       client.release(destroy);
     }
   }
 
-  async #pass(effective: AppConfig): Promise<PublicLookupPass> {
+  async #pass(effective: AppConfig, hold: PublicLookupLockHold): Promise<PublicLookupPass> {
     const db = this.#d.db;
-    const state = await readFanslyPublicLookupState(db);
-    if (state.stoppedAt !== null) return { kind: "stopped", reason: state.stopReason };
+    const state = await readFanslyPublicLookupState(hold.db);
+    if (state.stoppedAt !== null) {
+      await this.#ensureIncident(state);
+      return { kind: "stopped", reason: state.stopReason };
+    }
+    // An attempt admitted and not settled (a failed write, a restart) is
+    // settled from its journal first — no request goes out while it stands.
+    if (state.pendingToken !== null) return this.#settle(state.pendingToken);
     if (await readFanslyPublicEgress(db) === null) return { kind: "no_egress", reason: "not_configured" };
 
     const now = this.#now();
-    const clocks = await readFanslyPublicLookupClocks(db, { now, inFlightBoundMs: PUBLIC_LOOKUP_IN_FLIGHT_BOUND_MS });
+    const clocks = await readFanslyPublicLookupClocks(hold.db, { now, inFlightBoundMs: PUBLIC_LOOKUP_IN_FLIGHT_BOUND_MS });
     const next = publicLookupNextSendAt({
       now,
       clocks,
@@ -495,15 +592,46 @@ export class FanslyPublicLookupReader {
       if (egress.dispatcher === null) {
         return { kind: "no_egress", reason: "no_dispatcher" };
       }
-      await journalUnpacedFanslySend(db, {
-        token,
-        source: FANSLY_PUBLIC_LOOKUP_SEND_SOURCE,
-        operation: this.#spec.legacyOperation,
-        holder: this.#holderIdentity(),
+      // The admission, in one transaction on the lock's own connection: the
+      // lock still held, the reader not stopped and no attempt pending (the
+      // state row locked), the budget and the pace read again, then the
+      // attempt journaled and marked pending. A lost connection fails it
+      // before anything can be sent.
+      const refused = await hold.db.transaction(async (tx) => {
+        const txDb = tx as unknown as Database;
+        if (!(await holdsFanslyPublicLookupLock(txDb))) return { kind: "busy" } as const;
+        const fresh = await readFanslyPublicLookupState(txDb, { forUpdate: true });
+        if (fresh.stoppedAt !== null) return { kind: "stopped", reason: fresh.stopReason } as const;
+        if (fresh.pendingToken !== null) {
+          return { kind: "wait", until: new Date(this.#now().getTime() + 1_000), why: "in_flight" } as const;
+        }
+        const at = this.#now();
+        const admit = publicLookupNextSendAt({
+          now: at,
+          clocks: await readFanslyPublicLookupClocks(txDb, { now: at, inFlightBoundMs: PUBLIC_LOOKUP_IN_FLIGHT_BOUND_MS }),
+          settingMs: effective.fanslyDefaultDelayMs,
+          u: this.#u,
+          retryNotBefore: fresh.retryNotBefore,
+        });
+        if (admit.why !== null) return { kind: "wait", until: admit.at, why: admit.why } as const;
+        await journalUnpacedFanslySend(txDb, {
+          token,
+          source: FANSLY_PUBLIC_LOOKUP_SEND_SOURCE,
+          operation: this.#spec.legacyOperation,
+          holder: this.#holderIdentity(),
+        });
+        if (!(await markFanslyPublicLookupPending(txDb, { token, at }))) {
+          throw new Error("the public reader's attempt could not be marked pending under its own row lock");
+        }
+        return null;
       });
+      if (refused !== null) return refused;
       const issuedAt = performance.now();
       outcome = await this.#send(egress.dispatcher, request, {
         check: () => {
+          // The lock's connection is gone: another reader may hold the lock
+          // now. Nothing is written for this request.
+          if (hold.lost()) return new FanslySendRefusedError("lease_inactive");
           const at = new Date();
           const offsetMs = Math.max(0, Math.ceil(performance.now() - issuedAt));
           sent.at = at;
@@ -514,23 +642,21 @@ export class FanslyPublicLookupReader {
           });
           return null;
         },
-      }, new AbortController().signal);
+      }, hold.signal);
     } finally {
       await egress.close().catch(() => undefined);
     }
     this.#u = this.#drawU();
 
-    // The raw answer is committed before anything reads it (and before the
-    // journal row is completed: the answer is the fact, the completion its
-    // telemetry); the verdict is dated after that commit.
-    let observationId: number | null = null;
-    let unjournaled: unknown = null;
+    // The raw answer is committed before anything reads it, then the journal
+    // row is completed; the settlement reads both back. A write that fails
+    // here leaves the attempt pending: the next pass settles it from whatever
+    // was journaled, without a request.
     if (outcome.kind === "response") {
-      try {
-        observationId = await this.#journal(token, ids, outcome);
-      } catch (error) {
-        unjournaled = error;
-      }
+      await this.#journal(token, ids, outcome).catch((error: unknown) => {
+        this.#d.logger.error({ component: "fansly_public_lookup", err: sanitizeError(error) },
+          "Public lookup could not journal its answer; the attempt stays pending and is never read");
+      });
     }
     await sent.marking;
     await completeFanslySendAttempt(db, {
@@ -538,7 +664,9 @@ export class FanslyPublicLookupReader {
       token,
       nextU: 0,
       outcome: outcome.kind,
-      outcomeDetail: outcome.kind === "aborted_before_send" ? outcome.refusal : null,
+      outcomeDetail: outcome.kind === "aborted_before_send"
+        ? outcome.refusal
+        : outcome.kind === "response" ? null : clip(`${outcome.sent ? "sent" : "not sent"}: ${outcome.message}`),
       httpStatus: outcome.kind === "response" ? outcome.status : null,
       sentAt: sent.at,
       sendOffsetMs: sent.offsetMs,
@@ -546,44 +674,103 @@ export class FanslyPublicLookupReader {
       this.#d.logger.warn({ component: "fansly_public_lookup", err: sanitizeError(error) },
         "Public lookup could not complete its journal row; it counts in flight until its upper bound");
     });
-    const answeredAt = this.#now();
-    if (outcome.kind === "response" && unjournaled !== null) {
-      // An answer that is not journaled is never read: it changes no fan, and
-      // the reader stops as for an answer off the contract (or by its status).
-      const failure: PublicLookupFailure = {
-        reason: outcome.status === 429 ? "rate_limited" : outcome.status === 401 || outcome.status === 403 ? "auth_refused" : "off_contract",
-        httpStatus: outcome.status,
-        detail: clip(`HTTP ${outcome.status}; the answer could not be journaled: ${sanitizeError(unjournaled).message}`),
-        retryNotBefore: parseRetryAfterInstant(outcome.headers["retry-after"] ?? null, answeredAt.getTime()),
-      };
-      const firstBatch = state.firstAnswerAt === null;
-      await this.#stop(failure, { at: answeredAt, firstBatch, ids: ids.length });
-      return { kind: "failed", ids: ids.length, failure, observationId: null, firstBatch };
+    return this.#settle(token);
+  }
+
+  /**
+   * Settle the pending attempt `token` from its journals alone — the raw
+   * answer in `observations` (journaled before it was ever read) and the
+   * `fansly_send_log` row — the same way right after the send and on any
+   * later pass (after a failed write, a restart, a lost lock). An accepted
+   * answer is applied; anything else stops the reader; an attempt that sent
+   * nothing is cleared. Each settlement clears the attempt in the transaction
+   * that writes its result, and only if the attempt is still the pending one.
+   * Never sends.
+   */
+  async #settle(token: string): Promise<PublicLookupPass> {
+    const db = this.#d.db;
+    const now = this.#now();
+    const record = await readFanslyPublicLookupAttempt(db, { token });
+    const state = await readFanslyPublicLookupState(db);
+    if (state.pendingToken !== token) return { kind: "busy" };
+    const firstBatch = state.firstAnswerAt === null;
+    const stop = (failure: PublicLookupFailure, ids: number, observationId: number | null) =>
+      this.#stop(token, failure, { firstBatch, ids, observationId });
+
+    if (record.observation !== null) {
+      const journaled = journaledOutcome(record.observation);
+      if (journaled === null) {
+        return stop({ reason: "off_contract", httpStatus: null, detail: "the journaled answer cannot be read back", retryNotBefore: null },
+          0, record.observation.id);
+      }
+      const { requestedIds, outcome } = journaled;
+      const read = readFanslyWireResponse(this.#spec, { ids: requestedIds }, outcome) as FanslyWireRead<FanslyAccount[]>;
+      // A Retry-After counts from when the answer arrived.
+      const verdict = publicLookupVerdict(outcome, read, requestedIds, record.observation.receivedAt);
+      if (verdict.kind === "failure") return stop(verdict.failure, requestedIds.length, record.observation.id);
+      if (verdict.kind === "unsent") return this.#clear(token, requestedIds.length);
+      const applied = await db.transaction(async (tx) => applyFanslyPublicLookupAnswer(tx as unknown as Database, {
+        token,
+        requestedPlatformUserIds: requestedIds,
+        foundPlatformUserIds: verdict.foundIds,
+        answeredAt: this.#now(),
+      }));
+      if (applied === null) return { kind: "busy" };
+      this.#d.logger.info({
+        component: "fansly_public_lookup",
+        ids: requestedIds.length,
+        found: applied.found,
+        notFound: applied.notFound,
+        marksCleared: applied.marksCleared,
+        observationId: record.observation.id,
+      }, "Public account lookup answered");
+      return { kind: "answered", ids: requestedIds.length, observationId: record.observation.id, applied };
     }
-    const read = outcome.kind === "response"
-      ? readFanslyWireResponse(this.#spec, params, outcome) as FanslyWireRead<FanslyAccount[]>
-      : null;
-    const verdict = publicLookupVerdict(outcome, read, ids, answeredAt);
-    if (verdict.kind === "unsent") return { kind: "unsent", ids: ids.length };
-    if (verdict.kind === "failure") {
-      const firstBatch = state.firstAnswerAt === null;
-      await this.#stop(verdict.failure, { at: answeredAt, firstBatch, ids: ids.length });
-      return { kind: "failed", ids: ids.length, failure: verdict.failure, observationId, firstBatch };
+
+    const log = record.log;
+    if (log === null) {
+      return stop({ reason: "indeterminate", httpStatus: null, detail: "the attempt's journal row is missing", retryNotBefore: null }, 0, null);
     }
-    const applied = await db.transaction(async (tx) => applyFanslyPublicLookupAnswer(tx as unknown as Database, {
-      fanIds: batch.map((candidate) => candidate.fanId),
-      foundPlatformUserIds: verdict.foundIds,
-      answeredAt,
-    }));
-    this.#d.logger.info({
-      component: "fansly_public_lookup",
-      ids: ids.length,
-      found: applied.found,
-      notFound: applied.notFound,
-      marksCleared: applied.marksCleared,
-      observationId,
-    }, "Public account lookup answered");
-    return { kind: "answered", ids: ids.length, observationId: observationId!, applied };
+    if (log.completedAt === null) {
+      // Its sender may still be at it (a lost lock does not stop a request
+      // already on the wire): wait for its upper bound, then stop — whether
+      // it was sent is unknown, and it is never sent again on a guess.
+      const bound = new Date(log.capturedAt.getTime() + PUBLIC_LOOKUP_IN_FLIGHT_BOUND_MS);
+      if (now < bound) return { kind: "wait", until: bound, why: "in_flight" };
+      return stop({
+        reason: "indeterminate",
+        httpStatus: null,
+        detail: `no outcome recorded${log.sentAt === null ? "" : " after the request was sent"}: it may have reached Fansly`,
+        retryNotBefore: null,
+      }, 0, null);
+    }
+    switch (log.outcome) {
+      case "aborted_before_send":
+        return this.#clear(token, 0);
+      case "transport_error":
+      case "timeout":
+        return stop({
+          reason: "network",
+          httpStatus: null,
+          detail: clip(`${log.outcome}${log.outcomeDetail === null ? "" : ` (${log.outcomeDetail})`}`),
+          retryNotBefore: null,
+        }, 0, null);
+      case "response":
+        // An answer that was not journaled is never read.
+        return stop({
+          reason: log.httpStatus === 429 ? "rate_limited" : log.httpStatus === 401 || log.httpStatus === 403 ? "auth_refused" : "off_contract",
+          httpStatus: log.httpStatus,
+          detail: `HTTP ${log.httpStatus ?? "?"}; the answer could not be journaled`,
+          retryNotBefore: null,
+        }, 0, null);
+      default:
+        return stop({ reason: "indeterminate", httpStatus: null, detail: `outcome ${log.outcome ?? "?"}`, retryNotBefore: null }, 0, null);
+    }
+  }
+
+  /** Settle an attempt that sent nothing: cleared, nothing else changes. */
+  async #clear(token: string, ids: number): Promise<PublicLookupPass> {
+    return (await clearFanslyPublicLookupPending(this.#d.db, { token })) ? { kind: "unsent", ids } : { kind: "busy" };
   }
 
   /** The raw answer, page-less (the PAGELESS_FAN_OBSERVATION_KINDS contract):
@@ -623,21 +810,31 @@ export class FanslyPublicLookupReader {
       kind: succeeded ? FANSLY_PUBLIC_ACCOUNT_LOOKUP_KIND : `${FANSLY_PUBLIC_ACCOUNT_LOOKUP_KIND}:failed`,
       payload,
       payloadHash: createHash("sha256").update(JSON.stringify(payload)).digest(),
-      idempotencyKey: `fansly-public-lookup:${token}`,
+      idempotencyKey: fanslyPublicLookupObservationKey(token),
     });
     return inserted.observationId;
   }
 
-  /** Stop the reader and open the owner's incident (only when this call
-   *  stopped it). A failure writes nothing about any fan. */
-  async #stop(failure: PublicLookupFailure, input: { at: Date; firstBatch: boolean; ids: number }): Promise<void> {
-    const stopped = await stopFanslyPublicLookup(this.#d.db, {
-      at: input.at,
+  /**
+   * Stop the reader, settling the pending attempt in the same statement
+   * (`stopFanslyPublicLookup`), then open the owner's incident. A failure
+   * writes nothing about any fan.
+   */
+  async #stop(
+    token: string,
+    failure: PublicLookupFailure,
+    input: { firstBatch: boolean; ids: number; observationId: number | null },
+  ): Promise<PublicLookupPass> {
+    const stoppedAt = await stopFanslyPublicLookup(this.#d.db, {
+      token,
+      at: this.#now(),
       reason: failure.reason,
       httpStatus: failure.httpStatus,
-      detail: input.firstBatch ? `first batch: ${failure.detail}` : failure.detail,
+      detail: failure.detail,
+      firstBatch: input.firstBatch,
       retryNotBefore: failure.retryNotBefore,
     });
+    if (stoppedAt === null) return { kind: "busy" };
     this.#d.logger.warn({
       component: "fansly_public_lookup",
       reason: failure.reason,
@@ -645,15 +842,35 @@ export class FanslyPublicLookupReader {
       firstBatch: input.firstBatch,
       retryNotBefore: failure.retryNotBefore?.toISOString() ?? null,
     }, "Public account reader stopped until the owner resumes it");
-    if (!stopped) return;
-    await this.#incidents.open({
-      reason: failure.reason,
-      summary: publicLookupIncidentSummary({ failure, firstBatch: input.firstBatch, ids: input.ids }),
-      at: input.at,
+    await this.#ensureIncident(await readFanslyPublicLookupState(this.#d.db));
+    return { kind: "failed", ids: input.ids, failure, observationId: input.observationId, firstBatch: input.firstBatch };
+  }
+
+  /**
+   * The owner's incident of a recorded stop, opened until it is confirmed:
+   * the open is idempotent (it opens or refreshes the one latch), and its
+   * confirmation is written on the stop it belongs to. A failed open —
+   * `false`, or a throw — is retried on the next pass, whose first step for a
+   * stopped reader is this.
+   */
+  async #ensureIncident(state: FanslyPublicLookupState): Promise<void> {
+    if (state.stoppedAt === null || state.stopIncidentAt !== null || state.stopReason === null) return;
+    const opened = await this.#incidents.open({
+      reason: state.stopReason,
+      summary: publicLookupIncidentSummary({
+        reason: state.stopReason,
+        httpStatus: state.stopHttpStatus,
+        firstBatch: state.stopFirstBatch === true,
+        retryNotBefore: state.retryNotBefore,
+      }),
+      at: state.stoppedAt,
     }).catch((error: unknown) => {
       this.#d.logger.error({ component: "fansly_public_lookup", err: sanitizeError(error) },
-        "Public account reader could not open its incident");
+        "Public account reader could not open its incident; it tries again on its next pass");
+      return false;
     });
+    if (!opened) return;
+    await confirmFanslyPublicLookupStopIncident(this.#d.db, { stoppedAt: state.stoppedAt, at: this.#now() });
   }
 
   /** How long to wait after a pass before the next. */
@@ -662,7 +879,7 @@ export class FanslyPublicLookupReader {
     if (pass.kind === "wait") {
       return Math.min(Math.max(pass.until.getTime() - this.#now().getTime(), 1_000), PUBLIC_LOOKUP_MINUTE_MS);
     }
-    if (pass.kind === "answered" || pass.kind === "unsent") return 1_000;
+    if (pass.kind === "answered" || pass.kind === "unsent" || pass.kind === "failed") return 1_000;
     return poll;
   }
 

@@ -530,10 +530,22 @@ built) and sent through its own egress (`fansly_public`: its own proxy, never a 
 who blocked a page is still returned; a deleted account is not.
 
 - **When**: the owner's live switch `fanslyPublicLookupEnabled` (off by default) and its proxy (`sync public-lookup
-  proxy set`); one pass at a time across processes (session advisory lock `(58216, 1)`), one request a pass; at least
-  S × (1 + u) after its own previous completion (S the owner's Fansly pause, u ∈ [0, 0.2) drawn after each send), at
-  most 1 request a minute and 50 in 24 hours, counted from its own `fansly_send_log` rows (`page_id` null, source
-  `public_lookup`). No page's budget, clock or hold is touched.
+  proxy set`); one pass at a time across processes (session advisory lock `(58216, 1)` on a connection of its own),
+  one request a pass; at least S × (1 + u) after its own previous completion (S the owner's Fansly pause, u ∈ [0, 0.2)
+  drawn after each send), at most 1 request a minute and 50 in 24 hours, counted from its own `fansly_send_log` rows
+  (`page_id` null, source `public_lookup`) at each request's SEND instant (`sent_at`; an attempt never marked sent at
+  its completion, one with neither at capture + its budget — never at the earlier journal instant). No page's
+  budget, clock or hold is touched.
+- **Admission and the lock**: the lock's connection is watched (`error`, `end`); the checks that admit a request
+  (the lock still held per `pg_locks`, not stopped, no attempt pending, the budget and the pace) and the write that
+  admits it (the `fansly_send_log` row and `fansly_public_lookup_state.pending_token`) are one transaction on that
+  connection, so a lost lock fails the admission; once the connection is gone the send check refuses and the send's
+  signal aborts — nothing goes out.
+- **Settlement**: an admitted attempt stays pending until the transaction that writes its result — the applied
+  answer, or the stop — clears it (only if it is still the pending one). While one is pending no reader sends: every
+  pass first settles it from its journals alone (the raw answer, else the send-log row), without a request — after a
+  failed write, a restart or a lost lock alike. One with no recorded outcome past its bound may have been sent: the
+  reader stops (`indeterminate`) instead of sending again.
 - **Whom** (`pickFanslyPublicLookupBatch`): the owner's queue first (`sync public-lookup recheck-marks`, owner decision
   Р2 (а): the fans carrying the legacy deleted mark), then the partners of established unavailability episodes, then
   the fans a page's lookup missed (`page_fans.account_probe_resolved = false`) — those two only when never checked or
@@ -544,10 +556,11 @@ who blocked a page is still returned; a deleted account is not.
   envelope; every asked id in `requestedIds`: the fan erasure's page-less contract, `PAGELESS_FAN_OBSERVATION_KINDS`)
   before the contract reads it. Then every asked fan gets `fans.public_checked_at` / `public_found`; a found account
   loses the legacy deleted mark; a missing one keeps it, and the reader never sets one.
-- **Stop**: the first 429, 401/403, network failure (sent or not) or answer off the contract (another status, a body
-  without a successful envelope, an account without an id or one not asked for) stops it: the state row keeps the
-  reason and a Retry-After (`fansly_public_lookup_state`), the owner gets a global incident (`fansly_sync_engine` /
-  `public_lookup`; on the very first batch it says so), no fan changes, no session or other egress is tried. Only `sync
+- **Stop**: the first 429, 401/403, network failure (sent or not), answer off the contract (another status, a body
+  without a successful envelope, an account without an id or one not asked for) or attempt of unknown outcome stops
+  it: the state row keeps the reason and a Retry-After (`fansly_public_lookup_state`), the owner gets a global
+  incident (`fansly_sync_engine` / `public_lookup`; on the very first batch it says so) — retried on every pass until
+  its open is confirmed (`stop_incident_at`) — no fan changes, no session or other egress is tried. Only `sync
   public-lookup resume` resumes it, and a Retry-After still ahead is waited for.
 - **Cause**: the chatters' `chatAccess.cause` and `agentThreadAvailability.cause` read the partner's check
   (`readChatPartnerPublicChecks`): found → `probably_blocked`, not found → `probably_deleted`, none → `unchecked`.

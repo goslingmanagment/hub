@@ -1315,13 +1315,16 @@ describe("fans_public_lookup.sql (arena \"vanished chat\", R5 M4: the public rea
     expect(sql.replace("on delete cascade", "")).not.toMatch(/\b(drop|rename|truncate|delete|update)\b/i);
     // The queue's vocabularies and life cycle.
     expect(checkList(body[4]!, "fansly_public_lookup_queue_reason_check")).toEqual(["deleted_mark"]);
-    expect(body[6]).toContain("stop_reason in ('rate_limited', 'auth_refused', 'network', 'off_contract')");
+    expect(body[6]).toContain("stop_reason in ('rate_limited', 'auth_refused', 'network', 'off_contract', 'indeterminate')");
+    // The attempt admitted and not settled, and a stop's incident confirmation.
+    expect(body[6]).toContain("constraint fansly_public_lookup_state_pending_check check ((pending_token is null) = (pending_since is null))");
+    expect(body[6]).toContain("stop_first_batch is null and stop_incident_at is null");
     expect(text).toContain("grant select on fansly_public_lookup_state to read_only;");
   });
 
   it("keeps the vocabularies of the code", async () => {
     const db = await import("@agency_hub_core/db");
-    expect(db.FANSLY_PUBLIC_LOOKUP_STOP_REASONS).toEqual(["rate_limited", "auth_refused", "network", "off_contract"]);
+    expect(db.FANSLY_PUBLIC_LOOKUP_STOP_REASONS).toEqual(["rate_limited", "auth_refused", "network", "off_contract", "indeterminate"]);
     expect(db.FANSLY_PUBLIC_LOOKUP_DEMANDS).toEqual(["deleted_mark", "episode_partner", "page_lookup_miss"]);
   });
 

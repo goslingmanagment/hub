@@ -16,8 +16,10 @@ import type { Database } from "../client.ts";
 /** The source the reader journals under in `fansly_send_log` (page_id null). */
 export const FANSLY_PUBLIC_LOOKUP_SEND_SOURCE = "public_lookup";
 
-/** Why the reader stopped (the state's CHECK). */
-export const FANSLY_PUBLIC_LOOKUP_STOP_REASONS = ["rate_limited", "auth_refused", "network", "off_contract"] as const;
+/** Why the reader stopped (the state's CHECK). `indeterminate`: an attempt
+ *  whose outcome nobody recorded (its process died mid-request) — it may have
+ *  been sent, so it is never sent again on a guess. */
+export const FANSLY_PUBLIC_LOOKUP_STOP_REASONS = ["rate_limited", "auth_refused", "network", "off_contract", "indeterminate"] as const;
 export type FanslyPublicLookupStopReason = (typeof FANSLY_PUBLIC_LOOKUP_STOP_REASONS)[number];
 
 /** Why a fan is asked about. */
@@ -28,6 +30,12 @@ export type FanslyPublicLookupDemand = (typeof FANSLY_PUBLIC_LOOKUP_DEMANDS)[num
  *  only once the fan's latest check is older than this. */
 export const FANSLY_PUBLIC_LOOKUP_RECHECK_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
 
+/** The reader's advisory lock `(58216, 1)` (two-int4 form: classid, objid,
+ *  objsubid 2): one pass at a time across every process. 58211–58215 are
+ *  taken. */
+export const FANSLY_PUBLIC_LOOKUP_LOCK_NAMESPACE = 58_216;
+export const FANSLY_PUBLIC_LOOKUP_LOCK_KEY = 1;
+
 const FANSLY_ID = "^[0-9]{1,30}$";
 
 export interface FanslyPublicLookupState {
@@ -35,10 +43,19 @@ export interface FanslyPublicLookupState {
   stopReason: FanslyPublicLookupStopReason | null;
   stopHttpStatus: number | null;
   stopDetail: string | null;
+  /** No answer was ever accepted before the stop. */
+  stopFirstBatch: boolean | null;
+  /** When the owner's incident for this stop was confirmed open; null while
+   *  the reader still has to open it. */
+  stopIncidentAt: Date | null;
   retryNotBefore: Date | null;
   firstAnswerAt: Date | null;
   lastAnswerAt: Date | null;
   resumedAt: Date | null;
+  /** The attempt admitted and not yet settled: while it is set nothing is
+   *  sent; the next pass settles it from the journal. */
+  pendingToken: string | null;
+  pendingSince: Date | null;
   updatedAt: Date;
 }
 
@@ -51,20 +68,31 @@ type StateSqlRow = {
   stopReason: FanslyPublicLookupStopReason | null;
   stopHttpStatus: number | null;
   stopDetail: string | null;
+  stopFirstBatch: boolean | null;
+  stopIncidentAt: Date | string | null;
   retryNotBefore: Date | string | null;
   firstAnswerAt: Date | string | null;
   lastAnswerAt: Date | string | null;
   resumedAt: Date | string | null;
+  pendingToken: string | null;
+  pendingSince: Date | string | null;
   updatedAt: Date | string;
 };
 
-export async function readFanslyPublicLookupState(db: Database): Promise<FanslyPublicLookupState> {
+/** The reader's state; `forUpdate` locks the row for the caller's transaction. */
+export async function readFanslyPublicLookupState(
+  db: Database,
+  input: { forUpdate?: boolean } = {},
+): Promise<FanslyPublicLookupState> {
   const result = await db.execute<StateSqlRow>(sql`
     select stopped_at as "stoppedAt", stop_reason as "stopReason", stop_http_status as "stopHttpStatus",
-           stop_detail as "stopDetail", retry_not_before as "retryNotBefore", first_answer_at as "firstAnswerAt",
-           last_answer_at as "lastAnswerAt", resumed_at as "resumedAt", updated_at as "updatedAt"
+           stop_detail as "stopDetail", stop_first_batch as "stopFirstBatch", stop_incident_at as "stopIncidentAt",
+           retry_not_before as "retryNotBefore", first_answer_at as "firstAnswerAt",
+           last_answer_at as "lastAnswerAt", resumed_at as "resumedAt", pending_token::text as "pendingToken",
+           pending_since as "pendingSince", updated_at as "updatedAt"
       from fansly_public_lookup_state
      where id = 1
+     ${input.forUpdate === true ? sql`for update` : sql``}
   `);
   const row = result.rows[0];
   if (!row) throw new Error("fansly_public_lookup_state has no row (the migration seeds it)");
@@ -73,51 +101,130 @@ export async function readFanslyPublicLookupState(db: Database): Promise<FanslyP
     stopReason: row.stopReason,
     stopHttpStatus: row.stopHttpStatus === null ? null : Number(row.stopHttpStatus),
     stopDetail: row.stopDetail,
+    stopFirstBatch: row.stopFirstBatch,
+    stopIncidentAt: date(row.stopIncidentAt),
     retryNotBefore: date(row.retryNotBefore),
     firstAnswerAt: date(row.firstAnswerAt),
     lastAnswerAt: date(row.lastAnswerAt),
     resumedAt: date(row.resumedAt),
+    pendingToken: row.pendingToken,
+    pendingSince: date(row.pendingSince),
     updatedAt: new Date(row.updatedAt),
   };
 }
 
-/**
- * Stop the reader (its first failure): the reason, the status and a detail,
- * and the provider's Retry-After as `retry_not_before` (never earlier than one
- * already kept). A reader already stopped keeps its first stop. True when this
- * call stopped it.
- */
-export async function stopFanslyPublicLookup(
-  db: Database,
-  input: {
-    at: Date;
-    reason: FanslyPublicLookupStopReason;
-    httpStatus: number | null;
-    detail: string;
-    retryNotBefore: Date | null;
-  },
-): Promise<boolean> {
-  const result = await db.execute(sql`
+/** Whether THIS session holds the reader's advisory lock. Run on the lock's
+ *  own connection: a dropped connection fails the statement instead. */
+export async function holdsFanslyPublicLookupLock(db: Database): Promise<boolean> {
+  const result = await db.execute<{ held: boolean }>(sql`
+    select exists (
+      select 1 from pg_locks l
+       where l.locktype = 'advisory'
+         and l.classid = ${FANSLY_PUBLIC_LOOKUP_LOCK_NAMESPACE}::oid
+         and l.objid = ${FANSLY_PUBLIC_LOOKUP_LOCK_KEY}::oid
+         and l.objsubid = 2
+         and l.pid = pg_backend_pid()
+         and l.granted
+    ) as held
+  `);
+  return result.rows[0]?.held === true;
+}
+
+/** Mark the attempt `token` admitted (the caller's admission transaction,
+ *  which journals it in `fansly_send_log` too). Refused — false — when an
+ *  attempt is still pending or the reader is stopped. */
+export async function markFanslyPublicLookupPending(tx: Database, input: { token: string; at: Date }): Promise<boolean> {
+  const result = await tx.execute(sql`
     update fansly_public_lookup_state
-       set stopped_at = ${input.at},
-           stop_reason = ${input.reason},
-           stop_http_status = ${input.httpStatus},
-           stop_detail = ${input.detail.slice(0, 2000)},
-           retry_not_before = case
-             when ${input.retryNotBefore}::timestamptz is null then retry_not_before
-             else greatest(retry_not_before, ${input.retryNotBefore}::timestamptz) end,
+       set pending_token = ${input.token}::uuid,
+           pending_since = ${input.at},
            updated_at = clock_timestamp()
      where id = 1
+       and pending_token is null
        and stopped_at is null
   `);
   return (result.rowCount ?? 0) > 0;
 }
 
+/** Settle the pending attempt `token` without an answer or a stop (nothing
+ *  was sent). False when another settlement got there first. */
+export async function clearFanslyPublicLookupPending(db: Database, input: { token: string }): Promise<boolean> {
+  const result = await db.execute(sql`
+    update fansly_public_lookup_state
+       set pending_token = null,
+           pending_since = null,
+           updated_at = clock_timestamp()
+     where id = 1
+       and pending_token = ${input.token}::uuid
+  `);
+  return (result.rowCount ?? 0) > 0;
+}
+
+/**
+ * Stop the reader (its first failure), settling the pending attempt `token`
+ * in the same statement: the reason, the status, a detail, whether it was the
+ * first batch, and the provider's Retry-After as `retry_not_before` (never
+ * earlier than one already kept). The stop's incident is not confirmed yet
+ * (`stop_incident_at` null). Null — nothing written — when the attempt was
+ * settled already (another settlement got there first); else the stop instant
+ * in force (the earlier stop's, when the reader was stopped already).
+ */
+export async function stopFanslyPublicLookup(
+  db: Database,
+  input: {
+    token: string | null;
+    at: Date;
+    reason: FanslyPublicLookupStopReason;
+    httpStatus: number | null;
+    detail: string;
+    firstBatch: boolean;
+    retryNotBefore: Date | null;
+  },
+): Promise<Date | null> {
+  const result = await db.execute<{ stoppedAt: Date | string }>(sql`
+    update fansly_public_lookup_state
+       set stopped_at = coalesce(stopped_at, ${input.at}),
+           stop_reason = coalesce(stop_reason, ${input.reason}),
+           stop_http_status = case when stopped_at is null then ${input.httpStatus}::int else stop_http_status end,
+           stop_detail = coalesce(stop_detail, ${input.detail.slice(0, 2000)}),
+           stop_first_batch = coalesce(stop_first_batch, ${input.firstBatch}),
+           retry_not_before = case
+             when ${input.retryNotBefore}::timestamptz is null then retry_not_before
+             else greatest(retry_not_before, ${input.retryNotBefore}::timestamptz) end,
+           pending_token = null,
+           pending_since = null,
+           updated_at = clock_timestamp()
+     where id = 1
+       and ${input.token === null ? sql`pending_token is null` : sql`pending_token = ${input.token}::uuid`}
+    returning stopped_at as "stoppedAt"
+  `);
+  const row = result.rows[0];
+  return row ? new Date(row.stoppedAt) : null;
+}
+
+/** Record that the owner's incident for the stop of `stoppedAt` is open. A
+ *  later stop (after a resume) is not confirmed by an earlier one. */
+export async function confirmFanslyPublicLookupStopIncident(
+  db: Database,
+  input: { stoppedAt: Date; at: Date },
+): Promise<boolean> {
+  const result = await db.execute(sql`
+    update fansly_public_lookup_state
+       set stop_incident_at = ${input.at},
+           updated_at = clock_timestamp()
+     where id = 1
+       and stopped_at = ${input.stoppedAt}
+       and stop_incident_at is null
+  `);
+  return (result.rowCount ?? 0) > 0;
+}
+
 /** The owner's resume: the stop is cleared; a Retry-After still in the future
- *  is kept (the reader waits for it). The state as it was, or null when the
- *  reader was not stopped. */
+ *  is kept (the reader waits for it), and so is an attempt still pending (the
+ *  reader settles it before anything is sent). The state as it was, or null
+ *  when the reader was not stopped. */
 export async function resumeFanslyPublicLookup(db: Database, input: { at: Date }): Promise<FanslyPublicLookupState | null> {
-  const before = await readFanslyPublicLookupState(db);
+  const before = await readFanslyPublicLookupState(db, { forUpdate: true });
   if (before.stoppedAt === null) return null;
   await db.execute(sql`
     update fansly_public_lookup_state
@@ -125,6 +232,8 @@ export async function resumeFanslyPublicLookup(db: Database, input: { at: Date }
            stop_reason = null,
            stop_http_status = null,
            stop_detail = null,
+           stop_first_batch = null,
+           stop_incident_at = null,
            resumed_at = ${input.at},
            updated_at = clock_timestamp()
      where id = 1
@@ -133,16 +242,22 @@ export async function resumeFanslyPublicLookup(db: Database, input: { at: Date }
   return before;
 }
 
-/** The reader's own journal in `fansly_send_log`, for its budget and pace. */
+/** The reader's own journal in `fansly_send_log`, for its budget and pace.
+ *  An attempt's SEND instant is when its request headers went out
+ *  (`sent_at`); one never marked sent counts at its completion (it was never
+ *  sent — a later instant is the conservative one), and one neither marked nor
+ *  completed at its upper bound (capture + `inFlightBoundMs`), whatever it
+ *  became. */
 export interface FanslyPublicLookupClocks {
-  /** The newest attempt's capture (journal) instant. */
-  lastCapturedAt: Date | null;
+  /** The newest attempt's send instant (as above). */
+  lastSentAt: Date | null;
   /** The newest attempt's completion; an attempt that never completed counts
    *  at its upper bound (capture + `inFlightBoundMs`). */
   lastCompletedAt: Date | null;
   /** An attempt younger than `inFlightBoundMs` that has not completed. */
   inFlightSince: Date | null;
-  /** Attempts journaled within the last 24 hours, and the oldest of them. */
+  /** Attempts whose send instant is within the last 24 hours, and the oldest
+   *  of those instants. */
   sentLastDay: number;
   oldestLastDay: Date | null;
 }
@@ -153,31 +268,98 @@ export async function readFanslyPublicLookupClocks(
 ): Promise<FanslyPublicLookupClocks> {
   const bound = `${Math.max(0, Math.ceil(input.inFlightBoundMs))} milliseconds`;
   const result = await db.execute<{
-    lastCapturedAt: Date | string | null;
+    lastSentAt: Date | string | null;
     lastCompletedAt: Date | string | null;
     inFlightSince: Date | string | null;
     sentLastDay: number;
     oldestLastDay: Date | string | null;
   }>(sql`
-    select max(l.captured_at) as "lastCapturedAt",
-           max(coalesce(l.completed_at, l.captured_at + ${bound}::interval)) as "lastCompletedAt",
-           min(l.captured_at) filter (
-             where l.completed_at is null and l.captured_at > ${input.now}::timestamptz - ${bound}::interval
+    with attempts as (
+      select l.captured_at, l.completed_at,
+             coalesce(l.sent_at, l.completed_at, l.captured_at + ${bound}::interval) as send_at
+        from fansly_send_log l
+       where l.page_id is null
+         and l.source = ${FANSLY_PUBLIC_LOOKUP_SEND_SOURCE}
+         and l.captured_at > ${input.now}::timestamptz - interval '25 hours'
+    )
+    select max(a.send_at) as "lastSentAt",
+           max(coalesce(a.completed_at, a.captured_at + ${bound}::interval)) as "lastCompletedAt",
+           min(a.captured_at) filter (
+             where a.completed_at is null and a.captured_at > ${input.now}::timestamptz - ${bound}::interval
            ) as "inFlightSince",
-           count(*) filter (where l.captured_at > ${input.now}::timestamptz - interval '24 hours')::int as "sentLastDay",
-           min(l.captured_at) filter (where l.captured_at > ${input.now}::timestamptz - interval '24 hours') as "oldestLastDay"
-      from fansly_send_log l
-     where l.page_id is null
-       and l.source = ${FANSLY_PUBLIC_LOOKUP_SEND_SOURCE}
-       and l.captured_at > ${input.now}::timestamptz - interval '25 hours'
+           count(*) filter (where a.send_at > ${input.now}::timestamptz - interval '24 hours')::int as "sentLastDay",
+           min(a.send_at) filter (where a.send_at > ${input.now}::timestamptz - interval '24 hours') as "oldestLastDay"
+      from attempts a
   `);
   const row = result.rows[0];
   return {
-    lastCapturedAt: date(row?.lastCapturedAt ?? null),
+    lastSentAt: date(row?.lastSentAt ?? null),
     lastCompletedAt: date(row?.lastCompletedAt ?? null),
     inFlightSince: date(row?.inFlightSince ?? null),
     sentLastDay: Number(row?.sentLastDay ?? 0),
     oldestLastDay: date(row?.oldestLastDay ?? null),
+  };
+}
+
+/** One attempt as its journals keep it: the send-log row and the raw answer
+ *  (`observations`, by its idempotency key), each null when absent. */
+export interface FanslyPublicLookupAttemptRecord {
+  log: {
+    capturedAt: Date;
+    sentAt: Date | null;
+    completedAt: Date | null;
+    outcome: string | null;
+    outcomeDetail: string | null;
+    httpStatus: number | null;
+  } | null;
+  observation: { id: number; receivedAt: Date; kind: string; payload: unknown } | null;
+}
+
+/** The idempotency key the reader journals an attempt's answer under. */
+export function fanslyPublicLookupObservationKey(token: string): string {
+  return `fansly-public-lookup:${token}`;
+}
+
+export async function readFanslyPublicLookupAttempt(
+  db: Database,
+  input: { token: string },
+): Promise<FanslyPublicLookupAttemptRecord> {
+  const logs = await db.execute<{
+    capturedAt: Date | string;
+    sentAt: Date | string | null;
+    completedAt: Date | string | null;
+    outcome: string | null;
+    outcomeDetail: string | null;
+    httpStatus: number | null;
+  }>(sql`
+    select captured_at as "capturedAt", sent_at as "sentAt", completed_at as "completedAt", outcome,
+           outcome_detail as "outcomeDetail", http_status as "httpStatus"
+      from fansly_send_log
+     where guard_token = ${input.token}::uuid
+  `);
+  const observations = await db.execute<{ id: string; receivedAt: Date | string; kind: string; payload: unknown }>(sql`
+    select o.id::text as id, o.received_at as "receivedAt", o.kind, o.payload
+      from observation_keys k
+      join observations o on o.id = k.observation_id and o.received_at = k.received_at
+     where k.source = 'pull'
+       and k.idempotency_key = ${fanslyPublicLookupObservationKey(input.token)}
+  `);
+  const log = logs.rows[0];
+  const observation = observations.rows[0];
+  return {
+    log: log
+      ? {
+        capturedAt: new Date(log.capturedAt),
+        sentAt: date(log.sentAt),
+        completedAt: date(log.completedAt),
+        outcome: log.outcome,
+        outcomeDetail: log.outcomeDetail,
+        httpStatus: log.httpStatus === null ? null : Number(log.httpStatus),
+      }
+      : null,
+    observation: observation
+      ? { id: Number(observation.id), receivedAt: new Date(observation.receivedAt), kind: observation.kind, payload: observation.payload }
+      : null,
   };
 }
 
@@ -306,27 +488,33 @@ export interface FanslyPublicLookupApplyResult {
 }
 
 /**
- * Write one accepted answer (in the caller's transaction): every asked fan
- * gets `public_checked_at = answeredAt` and `public_found` = whether the
- * answer returned its id; a found fan carrying the legacy deleted mark loses
- * it (Р2 (а): found → the mark goes; not found → it stays, and none is ever
- * set here); the owner's queue rows of these fans are done; the state records
- * the answer. A fan erased since the batch was picked has no row and gets
- * nothing. Page facts (`page_fans`), notes and aliases are not touched.
+ * Settle the pending attempt `token` with its accepted answer (in the
+ * caller's transaction): the state row is locked first and must still name
+ * the attempt — null, nothing written, when another settlement got there
+ * first. Every asked fan (`requestedPlatformUserIds`, the journal's
+ * `requestedIds`) gets `public_checked_at = answeredAt` and `public_found` =
+ * whether the answer returned its id; a found fan carrying the legacy deleted
+ * mark loses it (Р2 (а): found → the mark goes; not found → it stays, and
+ * none is ever set here); the owner's queue rows of these fans are done; the
+ * state records the answer and clears the attempt. A fan erased since has no
+ * row and gets nothing. Page facts (`page_fans`), notes and aliases are not
+ * touched.
  */
 export async function applyFanslyPublicLookupAnswer(
   tx: Database,
-  input: { fanIds: readonly number[]; foundPlatformUserIds: readonly string[]; answeredAt: Date },
-): Promise<FanslyPublicLookupApplyResult> {
-  const fanIds = [...new Set(input.fanIds)].sort((a, b) => a - b).map(String);
+  input: { token: string; requestedPlatformUserIds: readonly string[]; foundPlatformUserIds: readonly string[]; answeredAt: Date },
+): Promise<FanslyPublicLookupApplyResult | null> {
+  const state = await readFanslyPublicLookupState(tx, { forUpdate: true });
+  if (state.pendingToken !== input.token) return null;
+  const requested = [...new Set(input.requestedPlatformUserIds)];
   const found = [...new Set(input.foundPlatformUserIds)];
-  const result = await tx.execute<{ written: number; found: number; notFound: number; marksCleared: number; queueDone: number; answered: number }>(sql`
+  const result = await tx.execute<{ written: number; found: number; notFound: number; marksCleared: number; queueDone: number }>(sql`
     with target as (
       select f.id, f.deleted_detected_at is not null as marked,
              f.platform_user_id = any(${sql.param(found)}::text[]) as found
         from fans f
-       where f.id = any(${sql.param(fanIds)}::bigint[])
-         and f.platform = 'fansly'
+       where f.platform = 'fansly'
+         and f.platform_user_id = any(${sql.param(requested)}::text[])
        order by f.id
          for update of f
     ), written as (
@@ -352,19 +540,20 @@ export async function applyFanslyPublicLookupAnswer(
       update fansly_public_lookup_state
          set first_answer_at = coalesce(first_answer_at, ${input.answeredAt}),
              last_answer_at = ${input.answeredAt},
+             pending_token = null,
+             pending_since = null,
              updated_at = clock_timestamp()
        where id = 1
+         and pending_token = ${input.token}::uuid
       returning id
     )
     select (select count(*) from written)::int as written,
            (select count(*) from written where found)::int as found,
            (select count(*) from written where not found)::int as "notFound",
            (select count(*) from written where found and marked)::int as "marksCleared",
-           (select count(*) from queued)::int as "queueDone",
-           (select count(*) from answered)::int as answered
+           (select count(*) from queued)::int as "queueDone"
   `);
   const row = result.rows[0];
-  if (Number(row?.answered ?? 0) !== 1) throw new Error("fansly_public_lookup_state has no row (the migration seeds it)");
   return {
     written: Number(row?.written ?? 0),
     found: Number(row?.found ?? 0),

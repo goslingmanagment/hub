@@ -134,6 +134,11 @@ describe("the Fansly send boundary (plan §2.4)", () => {
     expect(reader).not.toMatch(/FanslySessionBundle|buildFanslyWireRequest\(|kind: "page"|resolveFanslyProbeContext|forPage\(/);
     expect(reader).toContain('egress = await (this.#d.openEgress ?? (() => resolveEgress(this.#d, { kind: "fansly_public" })))();');
     expect(reader).toContain("source: FANSLY_PUBLIC_LOOKUP_SEND_SOURCE,");
+    // One sender at a time: the admission runs on the lock's own connection,
+    // and a lost lock refuses the send before its headers.
+    expect(reader).toContain("const refused = await hold.db.transaction(async (tx) => {");
+    expect(reader).toContain("if (!(await holdsFanslyPublicLookupLock(txDb))) return { kind: \"busy\" } as const;");
+    expect(reader).toContain('if (hold.lost()) return new FanslySendRefusedError("lease_inactive");');
     const publicWire = read("packages/fansly/src/wire/public.ts");
     expect(publicWire).toContain('if (candidate.credentials !== "none") {');
     expect(publicWire).toContain("headers: buildFanslyAnonymousRequestHeaders(),");

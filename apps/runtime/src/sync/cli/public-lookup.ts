@@ -159,8 +159,13 @@ export function registerSyncPublicLookupCommands(sync: Command, deps: SyncPublic
         for (const line of egressLines(status.egress)) deps.print(line);
         deps.print(status.state.stopped
           ? `STOPPED ${status.state.stoppedAt}: ${status.state.stopReason}${status.state.stopHttpStatus === null ? "" : ` (HTTP ${status.state.stopHttpStatus})`}`
-            + ` — ${status.state.stopDetail ?? ""}; resume with sync public-lookup resume`
+            + ` — ${status.state.stopDetail ?? ""}${status.state.stopFirstBatch === true ? " (its first batch)" : ""}; `
+            + (status.state.stopIncidentAt === null ? "the owner's incident is not confirmed yet (retried every pass); " : "")
+            + "resume with sync public-lookup resume"
           : "not stopped");
+        if (status.state.pendingSince !== null) {
+          deps.print(`an attempt admitted at ${status.state.pendingSince} is not settled yet: nothing is sent until it is`);
+        }
         if (status.state.retryNotBefore !== null) deps.print(`Retry-After honoured until ${status.state.retryNotBefore}`);
         deps.print(`answers: first ${status.state.firstAnswerAt ?? "never"}, latest ${status.state.lastAnswerAt ?? "never"}`);
         deps.print(`budget: ${status.budget.sentLastDay}/${status.budget.dayBudget} requests in 24 h, last ${status.budget.lastSentAt ?? "never"}`);
