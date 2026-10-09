@@ -68393,8 +68393,8 @@
                       }
                     },
                     "planes": {
-                      "minItems": 46,
-                      "maxItems": 46,
+                      "minItems": 50,
+                      "maxItems": 50,
                       "type": "array",
                       "items": {
                         "type": "object",
@@ -68447,7 +68447,11 @@
                               "post_comments",
                               "post_likes",
                               "platform_notifications",
-                              "capture_coverage"
+                              "capture_coverage",
+                              "page_link_stat_runs",
+                              "page_link_stat_snapshots",
+                              "traffic_link_bindings",
+                              "traffic_channel_contractors"
                             ]
                           },
                           "enabled": {
@@ -68477,6 +68481,9 @@
                                 "enum": [
                                   "ofapi_financial_snapshots",
                                   "ofapi_payout_requests",
+                                  "campaign_snapshots",
+                                  "campaign_runs",
+                                  "campaign_bindings",
                                   "fan_memberships",
                                   "dm_threads",
                                   "subscriptions",
@@ -68760,7 +68767,11 @@
                           "postComment",
                           "postLike",
                           "platformNotification",
-                          "captureCoverageRow"
+                          "captureCoverageRow",
+                          "linkStatRun",
+                          "linkStatSnapshot",
+                          "trafficLinkBinding",
+                          "trafficChannelContractor"
                         ]
                       }
                     },
@@ -68853,8 +68864,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 46,
-                          "maxItems": 46,
+                          "minItems": 50,
+                          "maxItems": 50,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -68909,7 +68920,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   "state": {
@@ -69005,7 +69020,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   "state": {
@@ -69142,7 +69161,11 @@
                                   "post_comments",
                                   "post_likes",
                                   "platform_notifications",
-                                  "capture_coverage"
+                                  "capture_coverage",
+                                  "page_link_stat_runs",
+                                  "page_link_stat_snapshots",
+                                  "traffic_link_bindings",
+                                  "traffic_channel_contractors"
                                 ]
                               },
                               "remedy": {
@@ -69388,7 +69411,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   {
@@ -69542,7 +69569,11 @@
                               "postComment",
                               "postLike",
                               "platformNotification",
-                              "captureCoverageRow"
+                              "captureCoverageRow",
+                              "linkStatRun",
+                              "linkStatSnapshot",
+                              "trafficLinkBinding",
+                              "trafficChannelContractor"
                             ]
                           },
                           "additionalProperties": {
@@ -70150,7 +70181,11 @@
                   "postComment",
                   "postLike",
                   "platformNotification",
-                  "captureCoverageRow"
+                  "captureCoverageRow",
+                  "linkStatRun",
+                  "linkStatSnapshot",
+                  "trafficLinkBinding",
+                  "trafficChannelContractor"
                 ]
               }
             },
@@ -70238,8 +70273,8 @@
                             ]
                           },
                           "planes": {
-                            "minItems": 46,
-                            "maxItems": 46,
+                            "minItems": 50,
+                            "maxItems": 50,
                             "type": "array",
                             "items": {
                               "anyOf": [
@@ -70294,7 +70329,11 @@
                                         "post_comments",
                                         "post_likes",
                                         "platform_notifications",
-                                        "capture_coverage"
+                                        "capture_coverage",
+                                        "page_link_stat_runs",
+                                        "page_link_stat_snapshots",
+                                        "traffic_link_bindings",
+                                        "traffic_channel_contractors"
                                       ]
                                     },
                                     "state": {
@@ -70390,7 +70429,11 @@
                                         "post_comments",
                                         "post_likes",
                                         "platform_notifications",
-                                        "capture_coverage"
+                                        "capture_coverage",
+                                        "page_link_stat_runs",
+                                        "page_link_stat_snapshots",
+                                        "traffic_link_bindings",
+                                        "traffic_channel_contractors"
                                       ]
                                     },
                                     "state": {
@@ -70527,7 +70570,11 @@
                                     "post_comments",
                                     "post_likes",
                                     "platform_notifications",
-                                    "capture_coverage"
+                                    "capture_coverage",
+                                    "page_link_stat_runs",
+                                    "page_link_stat_snapshots",
+                                    "traffic_link_bindings",
+                                    "traffic_channel_contractors"
                                   ]
                                 },
                                 "remedy": {
@@ -70814,7 +70861,11 @@
                                 "postComment",
                                 "postLike",
                                 "platformNotification",
-                                "captureCoverageRow"
+                                "captureCoverageRow",
+                                "linkStatRun",
+                                "linkStatSnapshot",
+                                "trafficLinkBinding",
+                                "trafficChannelContractor"
                               ]
                             },
                             "additionalProperties": {
@@ -71172,8 +71223,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 46,
-                          "maxItems": 46,
+                          "minItems": 50,
+                          "maxItems": 50,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -71228,7 +71279,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   "state": {
@@ -71324,7 +71379,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   "state": {
@@ -71461,7 +71520,11 @@
                                   "post_comments",
                                   "post_likes",
                                   "platform_notifications",
-                                  "capture_coverage"
+                                  "capture_coverage",
+                                  "page_link_stat_runs",
+                                  "page_link_stat_snapshots",
+                                  "traffic_link_bindings",
+                                  "traffic_channel_contractors"
                                 ]
                               },
                               "remedy": {
@@ -71707,7 +71770,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   {
@@ -71861,7 +71928,11 @@
                               "postComment",
                               "postLike",
                               "platformNotification",
-                              "captureCoverageRow"
+                              "captureCoverageRow",
+                              "linkStatRun",
+                              "linkStatSnapshot",
+                              "trafficLinkBinding",
+                              "trafficChannelContractor"
                             ]
                           },
                           "additionalProperties": {
@@ -72832,8 +72903,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 46,
-                          "maxItems": 46,
+                          "minItems": 50,
+                          "maxItems": 50,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -72888,7 +72959,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   "state": {
@@ -72984,7 +73059,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   "state": {
@@ -73121,7 +73200,11 @@
                                   "post_comments",
                                   "post_likes",
                                   "platform_notifications",
-                                  "capture_coverage"
+                                  "capture_coverage",
+                                  "page_link_stat_runs",
+                                  "page_link_stat_snapshots",
+                                  "traffic_link_bindings",
+                                  "traffic_channel_contractors"
                                 ]
                               },
                               "remedy": {
@@ -73367,7 +73450,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   {
@@ -73521,7 +73608,11 @@
                               "postComment",
                               "postLike",
                               "platformNotification",
-                              "captureCoverageRow"
+                              "captureCoverageRow",
+                              "linkStatRun",
+                              "linkStatSnapshot",
+                              "trafficLinkBinding",
+                              "trafficChannelContractor"
                             ]
                           },
                           "additionalProperties": {
@@ -74760,8 +74851,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 46,
-                          "maxItems": 46,
+                          "minItems": 50,
+                          "maxItems": 50,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -74816,7 +74907,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   "state": {
@@ -74912,7 +75007,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   "state": {
@@ -75049,7 +75148,11 @@
                                   "post_comments",
                                   "post_likes",
                                   "platform_notifications",
-                                  "capture_coverage"
+                                  "capture_coverage",
+                                  "page_link_stat_runs",
+                                  "page_link_stat_snapshots",
+                                  "traffic_link_bindings",
+                                  "traffic_channel_contractors"
                                 ]
                               },
                               "remedy": {
@@ -75295,7 +75398,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   {
@@ -75449,7 +75556,11 @@
                               "postComment",
                               "postLike",
                               "platformNotification",
-                              "captureCoverageRow"
+                              "captureCoverageRow",
+                              "linkStatRun",
+                              "linkStatSnapshot",
+                              "trafficLinkBinding",
+                              "trafficChannelContractor"
                             ]
                           },
                           "additionalProperties": {
@@ -76442,8 +76553,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 46,
-                          "maxItems": 46,
+                          "minItems": 50,
+                          "maxItems": 50,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -76498,7 +76609,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   "state": {
@@ -76594,7 +76709,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   "state": {
@@ -76731,7 +76850,11 @@
                                   "post_comments",
                                   "post_likes",
                                   "platform_notifications",
-                                  "capture_coverage"
+                                  "capture_coverage",
+                                  "page_link_stat_runs",
+                                  "page_link_stat_snapshots",
+                                  "traffic_link_bindings",
+                                  "traffic_channel_contractors"
                                 ]
                               },
                               "remedy": {
@@ -76977,7 +77100,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   {
@@ -77131,7 +77258,11 @@
                               "postComment",
                               "postLike",
                               "platformNotification",
-                              "captureCoverageRow"
+                              "captureCoverageRow",
+                              "linkStatRun",
+                              "linkStatSnapshot",
+                              "trafficLinkBinding",
+                              "trafficChannelContractor"
                             ]
                           },
                           "additionalProperties": {
@@ -78142,8 +78273,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 46,
-                          "maxItems": 46,
+                          "minItems": 50,
+                          "maxItems": 50,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -78198,7 +78329,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   "state": {
@@ -78294,7 +78429,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   "state": {
@@ -78431,7 +78570,11 @@
                                   "post_comments",
                                   "post_likes",
                                   "platform_notifications",
-                                  "capture_coverage"
+                                  "capture_coverage",
+                                  "page_link_stat_runs",
+                                  "page_link_stat_snapshots",
+                                  "traffic_link_bindings",
+                                  "traffic_channel_contractors"
                                 ]
                               },
                               "remedy": {
@@ -78677,7 +78820,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   {
@@ -78831,7 +78978,11 @@
                               "postComment",
                               "postLike",
                               "platformNotification",
-                              "captureCoverageRow"
+                              "captureCoverageRow",
+                              "linkStatRun",
+                              "linkStatSnapshot",
+                              "trafficLinkBinding",
+                              "trafficChannelContractor"
                             ]
                           },
                           "additionalProperties": {
@@ -79783,8 +79934,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 46,
-                          "maxItems": 46,
+                          "minItems": 50,
+                          "maxItems": 50,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -79839,7 +79990,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   "state": {
@@ -79935,7 +80090,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   "state": {
@@ -80072,7 +80231,11 @@
                                   "post_comments",
                                   "post_likes",
                                   "platform_notifications",
-                                  "capture_coverage"
+                                  "capture_coverage",
+                                  "page_link_stat_runs",
+                                  "page_link_stat_snapshots",
+                                  "traffic_link_bindings",
+                                  "traffic_channel_contractors"
                                 ]
                               },
                               "remedy": {
@@ -80318,7 +80481,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   {
@@ -80472,7 +80639,11 @@
                               "postComment",
                               "postLike",
                               "platformNotification",
-                              "captureCoverageRow"
+                              "captureCoverageRow",
+                              "linkStatRun",
+                              "linkStatSnapshot",
+                              "trafficLinkBinding",
+                              "trafficChannelContractor"
                             ]
                           },
                           "additionalProperties": {
@@ -81541,8 +81712,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 46,
-                          "maxItems": 46,
+                          "minItems": 50,
+                          "maxItems": 50,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -81597,7 +81768,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   "state": {
@@ -81693,7 +81868,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   "state": {
@@ -81830,7 +82009,11 @@
                                   "post_comments",
                                   "post_likes",
                                   "platform_notifications",
-                                  "capture_coverage"
+                                  "capture_coverage",
+                                  "page_link_stat_runs",
+                                  "page_link_stat_snapshots",
+                                  "traffic_link_bindings",
+                                  "traffic_channel_contractors"
                                 ]
                               },
                               "remedy": {
@@ -82076,7 +82259,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   {
@@ -82230,7 +82417,11 @@
                               "postComment",
                               "postLike",
                               "platformNotification",
-                              "captureCoverageRow"
+                              "captureCoverageRow",
+                              "linkStatRun",
+                              "linkStatSnapshot",
+                              "trafficLinkBinding",
+                              "trafficChannelContractor"
                             ]
                           },
                           "additionalProperties": {
@@ -83837,8 +84028,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 46,
-                          "maxItems": 46,
+                          "minItems": 50,
+                          "maxItems": 50,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -83893,7 +84084,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   "state": {
@@ -83989,7 +84184,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   "state": {
@@ -84126,7 +84325,11 @@
                                   "post_comments",
                                   "post_likes",
                                   "platform_notifications",
-                                  "capture_coverage"
+                                  "capture_coverage",
+                                  "page_link_stat_runs",
+                                  "page_link_stat_snapshots",
+                                  "traffic_link_bindings",
+                                  "traffic_channel_contractors"
                                 ]
                               },
                               "remedy": {
@@ -84372,7 +84575,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   {
@@ -84526,7 +84733,11 @@
                               "postComment",
                               "postLike",
                               "platformNotification",
-                              "captureCoverageRow"
+                              "captureCoverageRow",
+                              "linkStatRun",
+                              "linkStatSnapshot",
+                              "trafficLinkBinding",
+                              "trafficChannelContractor"
                             ]
                           },
                           "additionalProperties": {
@@ -85192,8 +85403,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 46,
-                          "maxItems": 46,
+                          "minItems": 50,
+                          "maxItems": 50,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -85248,7 +85459,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   "state": {
@@ -85344,7 +85559,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   "state": {
@@ -85481,7 +85700,11 @@
                                   "post_comments",
                                   "post_likes",
                                   "platform_notifications",
-                                  "capture_coverage"
+                                  "capture_coverage",
+                                  "page_link_stat_runs",
+                                  "page_link_stat_snapshots",
+                                  "traffic_link_bindings",
+                                  "traffic_channel_contractors"
                                 ]
                               },
                               "remedy": {
@@ -85727,7 +85950,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   {
@@ -85881,7 +86108,11 @@
                               "postComment",
                               "postLike",
                               "platformNotification",
-                              "captureCoverageRow"
+                              "captureCoverageRow",
+                              "linkStatRun",
+                              "linkStatSnapshot",
+                              "trafficLinkBinding",
+                              "trafficChannelContractor"
                             ]
                           },
                           "additionalProperties": {
@@ -86582,7 +86813,11 @@
                             "postComment",
                             "postLike",
                             "platformNotification",
-                            "captureCoverageRow"
+                            "captureCoverageRow",
+                            "linkStatRun",
+                            "linkStatSnapshot",
+                            "trafficLinkBinding",
+                            "trafficChannelContractor"
                           ]
                         }
                       },
@@ -86621,6 +86856,9 @@
               "enum": [
                 "ofapi_financial_snapshots",
                 "ofapi_payout_requests",
+                "campaign_snapshots",
+                "campaign_runs",
+                "campaign_bindings",
                 "fan_memberships",
                 "dm_threads",
                 "subscriptions",
@@ -86677,6 +86915,9 @@
                       "enum": [
                         "ofapi_financial_snapshots",
                         "ofapi_payout_requests",
+                        "campaign_snapshots",
+                        "campaign_runs",
+                        "campaign_bindings",
                         "fan_memberships",
                         "dm_threads",
                         "subscriptions",
@@ -86749,6 +86990,9 @@
                             "enum": [
                               "ofapi_financial_snapshots",
                               "ofapi_payout_requests",
+                              "campaign_snapshots",
+                              "campaign_runs",
+                              "campaign_bindings",
                               "fan_memberships",
                               "dm_threads",
                               "subscriptions",
@@ -86935,7 +87179,11 @@
                                 "postComment",
                                 "postLike",
                                 "platformNotification",
-                                "captureCoverageRow"
+                                "captureCoverageRow",
+                                "linkStatRun",
+                                "linkStatSnapshot",
+                                "trafficLinkBinding",
+                                "trafficChannelContractor"
                               ]
                             },
                             "additionalProperties": {
@@ -87405,8 +87653,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 46,
-                          "maxItems": 46,
+                          "minItems": 50,
+                          "maxItems": 50,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -87461,7 +87709,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   "state": {
@@ -87557,7 +87809,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   "state": {
@@ -87694,7 +87950,11 @@
                                   "post_comments",
                                   "post_likes",
                                   "platform_notifications",
-                                  "capture_coverage"
+                                  "capture_coverage",
+                                  "page_link_stat_runs",
+                                  "page_link_stat_snapshots",
+                                  "traffic_link_bindings",
+                                  "traffic_channel_contractors"
                                 ]
                               },
                               "remedy": {
@@ -87940,7 +88200,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   {
@@ -88094,7 +88358,11 @@
                               "postComment",
                               "postLike",
                               "platformNotification",
-                              "captureCoverageRow"
+                              "captureCoverageRow",
+                              "linkStatRun",
+                              "linkStatSnapshot",
+                              "trafficLinkBinding",
+                              "trafficChannelContractor"
                             ]
                           },
                           "additionalProperties": {
@@ -88805,7 +89073,11 @@
                             "postComment",
                             "postLike",
                             "platformNotification",
-                            "captureCoverageRow"
+                            "captureCoverageRow",
+                            "linkStatRun",
+                            "linkStatSnapshot",
+                            "trafficLinkBinding",
+                            "trafficChannelContractor"
                           ]
                         }
                       },
@@ -89600,8 +89872,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 46,
-                          "maxItems": 46,
+                          "minItems": 50,
+                          "maxItems": 50,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -89656,7 +89928,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   "state": {
@@ -89752,7 +90028,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   "state": {
@@ -89889,7 +90169,11 @@
                                   "post_comments",
                                   "post_likes",
                                   "platform_notifications",
-                                  "capture_coverage"
+                                  "capture_coverage",
+                                  "page_link_stat_runs",
+                                  "page_link_stat_snapshots",
+                                  "traffic_link_bindings",
+                                  "traffic_channel_contractors"
                                 ]
                               },
                               "remedy": {
@@ -90135,7 +90419,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   {
@@ -90289,7 +90577,11 @@
                               "postComment",
                               "postLike",
                               "platformNotification",
-                              "captureCoverageRow"
+                              "captureCoverageRow",
+                              "linkStatRun",
+                              "linkStatSnapshot",
+                              "trafficLinkBinding",
+                              "trafficChannelContractor"
                             ]
                           },
                           "additionalProperties": {
@@ -91213,8 +91505,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 46,
-                          "maxItems": 46,
+                          "minItems": 50,
+                          "maxItems": 50,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -91269,7 +91561,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   "state": {
@@ -91365,7 +91661,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   "state": {
@@ -91502,7 +91802,11 @@
                                   "post_comments",
                                   "post_likes",
                                   "platform_notifications",
-                                  "capture_coverage"
+                                  "capture_coverage",
+                                  "page_link_stat_runs",
+                                  "page_link_stat_snapshots",
+                                  "traffic_link_bindings",
+                                  "traffic_channel_contractors"
                                 ]
                               },
                               "remedy": {
@@ -91748,7 +92052,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   {
@@ -91902,7 +92210,11 @@
                               "postComment",
                               "postLike",
                               "platformNotification",
-                              "captureCoverageRow"
+                              "captureCoverageRow",
+                              "linkStatRun",
+                              "linkStatSnapshot",
+                              "trafficLinkBinding",
+                              "trafficChannelContractor"
                             ]
                           },
                           "additionalProperties": {
@@ -92623,8 +92935,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 46,
-                          "maxItems": 46,
+                          "minItems": 50,
+                          "maxItems": 50,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -92679,7 +92991,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   "state": {
@@ -92775,7 +93091,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   "state": {
@@ -92912,7 +93232,11 @@
                                   "post_comments",
                                   "post_likes",
                                   "platform_notifications",
-                                  "capture_coverage"
+                                  "capture_coverage",
+                                  "page_link_stat_runs",
+                                  "page_link_stat_snapshots",
+                                  "traffic_link_bindings",
+                                  "traffic_channel_contractors"
                                 ]
                               },
                               "remedy": {
@@ -93158,7 +93482,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   {
@@ -93312,7 +93640,11 @@
                               "postComment",
                               "postLike",
                               "platformNotification",
-                              "captureCoverageRow"
+                              "captureCoverageRow",
+                              "linkStatRun",
+                              "linkStatSnapshot",
+                              "trafficLinkBinding",
+                              "trafficChannelContractor"
                             ]
                           },
                           "additionalProperties": {
@@ -93936,7 +94268,11 @@
                             "postComment",
                             "postLike",
                             "platformNotification",
-                            "captureCoverageRow"
+                            "captureCoverageRow",
+                            "linkStatRun",
+                            "linkStatSnapshot",
+                            "trafficLinkBinding",
+                            "trafficChannelContractor"
                           ]
                         }
                       },
@@ -94491,8 +94827,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 46,
-                          "maxItems": 46,
+                          "minItems": 50,
+                          "maxItems": 50,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -94547,7 +94883,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   "state": {
@@ -94643,7 +94983,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   "state": {
@@ -94780,7 +95124,11 @@
                                   "post_comments",
                                   "post_likes",
                                   "platform_notifications",
-                                  "capture_coverage"
+                                  "capture_coverage",
+                                  "page_link_stat_runs",
+                                  "page_link_stat_snapshots",
+                                  "traffic_link_bindings",
+                                  "traffic_channel_contractors"
                                 ]
                               },
                               "remedy": {
@@ -95026,7 +95374,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   {
@@ -95180,7 +95532,11 @@
                               "postComment",
                               "postLike",
                               "platformNotification",
-                              "captureCoverageRow"
+                              "captureCoverageRow",
+                              "linkStatRun",
+                              "linkStatSnapshot",
+                              "trafficLinkBinding",
+                              "trafficChannelContractor"
                             ]
                           },
                           "additionalProperties": {
@@ -95904,7 +96260,11 @@
                   "postComment",
                   "postLike",
                   "platformNotification",
-                  "captureCoverageRow"
+                  "captureCoverageRow",
+                  "linkStatRun",
+                  "linkStatSnapshot",
+                  "trafficLinkBinding",
+                  "trafficChannelContractor"
                 ]
               }
             },
@@ -96551,7 +96911,11 @@
                               "post_comments",
                               "post_likes",
                               "platform_notifications",
-                              "capture_coverage"
+                              "capture_coverage",
+                              "page_link_stat_runs",
+                              "page_link_stat_snapshots",
+                              "traffic_link_bindings",
+                              "traffic_channel_contractors"
                             ]
                           },
                           "fieldStates": {
@@ -96650,7 +97014,11 @@
                                 "postComment",
                                 "postLike",
                                 "platformNotification",
-                                "captureCoverageRow"
+                                "captureCoverageRow",
+                                "linkStatRun",
+                                "linkStatSnapshot",
+                                "trafficLinkBinding",
+                                "trafficChannelContractor"
                               ]
                             },
                             "additionalProperties": {
@@ -97072,8 +97440,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 46,
-                          "maxItems": 46,
+                          "minItems": 50,
+                          "maxItems": 50,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -97128,7 +97496,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   "state": {
@@ -97224,7 +97596,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   "state": {
@@ -97361,7 +97737,11 @@
                                   "post_comments",
                                   "post_likes",
                                   "platform_notifications",
-                                  "capture_coverage"
+                                  "capture_coverage",
+                                  "page_link_stat_runs",
+                                  "page_link_stat_snapshots",
+                                  "traffic_link_bindings",
+                                  "traffic_channel_contractors"
                                 ]
                               },
                               "remedy": {
@@ -97607,7 +97987,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   {
@@ -97761,7 +98145,11 @@
                               "postComment",
                               "postLike",
                               "platformNotification",
-                              "captureCoverageRow"
+                              "captureCoverageRow",
+                              "linkStatRun",
+                              "linkStatSnapshot",
+                              "trafficLinkBinding",
+                              "trafficChannelContractor"
                             ]
                           },
                           "additionalProperties": {
@@ -98341,7 +98729,11 @@
                   "postComment",
                   "postLike",
                   "platformNotification",
-                  "captureCoverageRow"
+                  "captureCoverageRow",
+                  "linkStatRun",
+                  "linkStatSnapshot",
+                  "trafficLinkBinding",
+                  "trafficChannelContractor"
                 ]
               }
             },
@@ -99244,7 +99636,11 @@
                                     "postComment",
                                     "postLike",
                                     "platformNotification",
-                                    "captureCoverageRow"
+                                    "captureCoverageRow",
+                                    "linkStatRun",
+                                    "linkStatSnapshot",
+                                    "trafficLinkBinding",
+                                    "trafficChannelContractor"
                                   ]
                                 },
                                 "additionalProperties": {
@@ -99807,7 +100203,11 @@
                                         "postComment",
                                         "postLike",
                                         "platformNotification",
-                                        "captureCoverageRow"
+                                        "captureCoverageRow",
+                                        "linkStatRun",
+                                        "linkStatSnapshot",
+                                        "trafficLinkBinding",
+                                        "trafficChannelContractor"
                                       ]
                                     },
                                     "additionalProperties": {
@@ -100368,7 +100768,11 @@
                           "postComment",
                           "postLike",
                           "platformNotification",
-                          "captureCoverageRow"
+                          "captureCoverageRow",
+                          "linkStatRun",
+                          "linkStatSnapshot",
+                          "trafficLinkBinding",
+                          "trafficChannelContractor"
                         ]
                       },
                       "additionalProperties": {
@@ -100712,8 +101116,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 46,
-                          "maxItems": 46,
+                          "minItems": 50,
+                          "maxItems": 50,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -100768,7 +101172,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   "state": {
@@ -100864,7 +101272,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   "state": {
@@ -101001,7 +101413,11 @@
                                   "post_comments",
                                   "post_likes",
                                   "platform_notifications",
-                                  "capture_coverage"
+                                  "capture_coverage",
+                                  "page_link_stat_runs",
+                                  "page_link_stat_snapshots",
+                                  "traffic_link_bindings",
+                                  "traffic_channel_contractors"
                                 ]
                               },
                               "remedy": {
@@ -101247,7 +101663,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   {
@@ -101401,7 +101821,11 @@
                               "postComment",
                               "postLike",
                               "platformNotification",
-                              "captureCoverageRow"
+                              "captureCoverageRow",
+                              "linkStatRun",
+                              "linkStatSnapshot",
+                              "trafficLinkBinding",
+                              "trafficChannelContractor"
                             ]
                           },
                           "additionalProperties": {
@@ -102033,7 +102457,11 @@
                   "postComment",
                   "postLike",
                   "platformNotification",
-                  "captureCoverageRow"
+                  "captureCoverageRow",
+                  "linkStatRun",
+                  "linkStatSnapshot",
+                  "trafficLinkBinding",
+                  "trafficChannelContractor"
                 ]
               }
             },
@@ -102520,7 +102948,11 @@
                                 "postComment",
                                 "postLike",
                                 "platformNotification",
-                                "captureCoverageRow"
+                                "captureCoverageRow",
+                                "linkStatRun",
+                                "linkStatSnapshot",
+                                "trafficLinkBinding",
+                                "trafficChannelContractor"
                               ]
                             },
                             "additionalProperties": {
@@ -102934,8 +103366,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 46,
-                          "maxItems": 46,
+                          "minItems": 50,
+                          "maxItems": 50,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -102990,7 +103422,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   "state": {
@@ -103086,7 +103522,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   "state": {
@@ -103223,7 +103663,11 @@
                                   "post_comments",
                                   "post_likes",
                                   "platform_notifications",
-                                  "capture_coverage"
+                                  "capture_coverage",
+                                  "page_link_stat_runs",
+                                  "page_link_stat_snapshots",
+                                  "traffic_link_bindings",
+                                  "traffic_channel_contractors"
                                 ]
                               },
                               "remedy": {
@@ -103469,7 +103913,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   {
@@ -103623,7 +104071,11 @@
                               "postComment",
                               "postLike",
                               "platformNotification",
-                              "captureCoverageRow"
+                              "captureCoverageRow",
+                              "linkStatRun",
+                              "linkStatSnapshot",
+                              "trafficLinkBinding",
+                              "trafficChannelContractor"
                             ]
                           },
                           "additionalProperties": {
@@ -104222,7 +104674,11 @@
                             "postComment",
                             "postLike",
                             "platformNotification",
-                            "captureCoverageRow"
+                            "captureCoverageRow",
+                            "linkStatRun",
+                            "linkStatSnapshot",
+                            "trafficLinkBinding",
+                            "trafficChannelContractor"
                           ]
                         }
                       },
@@ -104533,7 +104989,11 @@
                                       "postComment",
                                       "postLike",
                                       "platformNotification",
-                                      "captureCoverageRow"
+                                      "captureCoverageRow",
+                                      "linkStatRun",
+                                      "linkStatSnapshot",
+                                      "trafficLinkBinding",
+                                      "trafficChannelContractor"
                                     ]
                                   },
                                   "additionalProperties": {
@@ -104908,8 +105368,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 46,
-                          "maxItems": 46,
+                          "minItems": 50,
+                          "maxItems": 50,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -104964,7 +105424,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   "state": {
@@ -105060,7 +105524,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   "state": {
@@ -105197,7 +105665,11 @@
                                   "post_comments",
                                   "post_likes",
                                   "platform_notifications",
-                                  "capture_coverage"
+                                  "capture_coverage",
+                                  "page_link_stat_runs",
+                                  "page_link_stat_snapshots",
+                                  "traffic_link_bindings",
+                                  "traffic_channel_contractors"
                                 ]
                               },
                               "remedy": {
@@ -105443,7 +105915,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   {
@@ -105597,7 +106073,11 @@
                               "postComment",
                               "postLike",
                               "platformNotification",
-                              "captureCoverageRow"
+                              "captureCoverageRow",
+                              "linkStatRun",
+                              "linkStatSnapshot",
+                              "trafficLinkBinding",
+                              "trafficChannelContractor"
                             ]
                           },
                           "additionalProperties": {
@@ -106234,7 +106714,11 @@
                             "postComment",
                             "postLike",
                             "platformNotification",
-                            "captureCoverageRow"
+                            "captureCoverageRow",
+                            "linkStatRun",
+                            "linkStatSnapshot",
+                            "trafficLinkBinding",
+                            "trafficChannelContractor"
                           ]
                         }
                       },
@@ -106479,7 +106963,11 @@
                                 "postComment",
                                 "postLike",
                                 "platformNotification",
-                                "captureCoverageRow"
+                                "captureCoverageRow",
+                                "linkStatRun",
+                                "linkStatSnapshot",
+                                "trafficLinkBinding",
+                                "trafficChannelContractor"
                               ]
                             },
                             "additionalProperties": {
@@ -106879,8 +107367,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 46,
-                          "maxItems": 46,
+                          "minItems": 50,
+                          "maxItems": 50,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -106935,7 +107423,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   "state": {
@@ -107031,7 +107523,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   "state": {
@@ -107168,7 +107664,11 @@
                                   "post_comments",
                                   "post_likes",
                                   "platform_notifications",
-                                  "capture_coverage"
+                                  "capture_coverage",
+                                  "page_link_stat_runs",
+                                  "page_link_stat_snapshots",
+                                  "traffic_link_bindings",
+                                  "traffic_channel_contractors"
                                 ]
                               },
                               "remedy": {
@@ -107414,7 +107914,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   {
@@ -107568,7 +108072,11 @@
                               "postComment",
                               "postLike",
                               "platformNotification",
-                              "captureCoverageRow"
+                              "captureCoverageRow",
+                              "linkStatRun",
+                              "linkStatSnapshot",
+                              "trafficLinkBinding",
+                              "trafficChannelContractor"
                             ]
                           },
                           "additionalProperties": {
@@ -108693,8 +109201,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 46,
-                          "maxItems": 46,
+                          "minItems": 50,
+                          "maxItems": 50,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -108749,7 +109257,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   "state": {
@@ -108845,7 +109357,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   "state": {
@@ -108982,7 +109498,11 @@
                                   "post_comments",
                                   "post_likes",
                                   "platform_notifications",
-                                  "capture_coverage"
+                                  "capture_coverage",
+                                  "page_link_stat_runs",
+                                  "page_link_stat_snapshots",
+                                  "traffic_link_bindings",
+                                  "traffic_channel_contractors"
                                 ]
                               },
                               "remedy": {
@@ -109228,7 +109748,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   {
@@ -109382,7 +109906,11 @@
                               "postComment",
                               "postLike",
                               "platformNotification",
-                              "captureCoverageRow"
+                              "captureCoverageRow",
+                              "linkStatRun",
+                              "linkStatSnapshot",
+                              "trafficLinkBinding",
+                              "trafficChannelContractor"
                             ]
                           },
                           "additionalProperties": {
@@ -110055,7 +110583,11 @@
                   "postComment",
                   "postLike",
                   "platformNotification",
-                  "captureCoverageRow"
+                  "captureCoverageRow",
+                  "linkStatRun",
+                  "linkStatSnapshot",
+                  "trafficLinkBinding",
+                  "trafficChannelContractor"
                 ]
               }
             },
@@ -110614,7 +111146,11 @@
                                 "postComment",
                                 "postLike",
                                 "platformNotification",
-                                "captureCoverageRow"
+                                "captureCoverageRow",
+                                "linkStatRun",
+                                "linkStatSnapshot",
+                                "trafficLinkBinding",
+                                "trafficChannelContractor"
                               ]
                             },
                             "additionalProperties": {
@@ -111030,8 +111566,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 46,
-                          "maxItems": 46,
+                          "minItems": 50,
+                          "maxItems": 50,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -111086,7 +111622,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   "state": {
@@ -111182,7 +111722,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   "state": {
@@ -111319,7 +111863,11 @@
                                   "post_comments",
                                   "post_likes",
                                   "platform_notifications",
-                                  "capture_coverage"
+                                  "capture_coverage",
+                                  "page_link_stat_runs",
+                                  "page_link_stat_snapshots",
+                                  "traffic_link_bindings",
+                                  "traffic_channel_contractors"
                                 ]
                               },
                               "remedy": {
@@ -111565,7 +112113,11 @@
                                       "post_comments",
                                       "post_likes",
                                       "platform_notifications",
-                                      "capture_coverage"
+                                      "capture_coverage",
+                                      "page_link_stat_runs",
+                                      "page_link_stat_snapshots",
+                                      "traffic_link_bindings",
+                                      "traffic_channel_contractors"
                                     ]
                                   },
                                   {
@@ -111719,7 +112271,11 @@
                               "postComment",
                               "postLike",
                               "platformNotification",
-                              "captureCoverageRow"
+                              "captureCoverageRow",
+                              "linkStatRun",
+                              "linkStatSnapshot",
+                              "trafficLinkBinding",
+                              "trafficChannelContractor"
                             ]
                           },
                           "additionalProperties": {

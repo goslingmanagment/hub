@@ -148,6 +148,12 @@ const AGENT_DATASET_CATALOG_OVERRIDES: Partial<Record<AgentDataset, {
   payouts: { platforms: ["fansly"], captureState: "unknown" },
   ofapi_financial_snapshots: { platforms: ["onlyfans"], captureState: "unknown" },
   ofapi_payout_requests: { platforms: ["onlyfans"], captureState: "unknown" },
+  // The link series is flag-gated (ofapiLinkStatsReconcileEnabled) and the
+  // bindings exist only where the owner's CLI wrote them: the page-scoped
+  // response carries the real floor and witnesses.
+  campaign_snapshots: { platforms: ["onlyfans"], captureState: "unknown" },
+  campaign_runs: { platforms: ["onlyfans"], captureState: "unknown" },
+  campaign_bindings: { platforms: ["onlyfans"], captureState: "unknown" },
   capture_coverage: { platforms: ["fansly"], captureState: "unknown" },
 };
 

@@ -28,6 +28,11 @@ describe("agent read dataset vocabulary", () => {
     expect([...AGENT_DATASET_NAMES]).toEqual([
       "ofapi_financial_snapshots",
       "ofapi_payout_requests",
+      // OnlyFans traffic sources (plan 2026-10-08, PR 14): the link series
+      // and who brings each link's traffic.
+      "campaign_snapshots",
+      "campaign_runs",
+      "campaign_bindings",
       "fan_memberships",
       "dm_threads",
       "subscriptions",
@@ -168,6 +173,45 @@ describe("agent read dataset vocabulary", () => {
       .toEqual(["read:datasets"]);
   });
 
+  it("serves the OnlyFans link series and its bindings under the plan's contract", () => {
+    // Plan 2026-10-08 §6: the field names traffic-control switches to from
+    // its SQL. Only the snapshots carry money (the vendor's net revenue).
+    expect(Object.keys(AGENT_DATASETS.campaign_snapshots.fields)).toEqual([
+      "linkKind", "linkRef", "name", "observedAt", "businessDate", "windowAt",
+      "runRef", "runStatus", "bindingChanged", "clicks", "claims", "subscribers",
+      "spenders", "vendorRevenueNetMills", "vendorChargebacksMills",
+      "vendorRevenueCalculatedAt", "isFinished", "linkEndsAt",
+    ]);
+    expect(AGENT_DATASETS.campaign_snapshots.fields.vendorRevenueNetMills).toBe("mills");
+    expect(agentDatasetRequiredCapabilities("campaign_snapshots"))
+      .toEqual(["read:datasets", "read:money"]);
+
+    // Every attempt, plus the one shared "usable result" verdict (П9.1).
+    expect(Object.keys(AGENT_DATASETS.campaign_runs.fields)).toEqual([
+      "linkKind", "windowAt", "observedAt", "businessDate", "runRef", "status",
+      "reason", "attempt", "apiPages", "rawItems", "writtenRows",
+      "bindingChanged", "usableResult",
+    ]);
+    expect(agentDatasetRequiredCapabilities("campaign_runs")).toEqual(["read:datasets"]);
+
+    // The binding's start basis is served (П9.7), and so is the contractor
+    // term's: neither assumed start passes for an established one.
+    expect(AGENT_DATASETS.campaign_bindings.fields).toMatchObject({
+      linkKind: "string", linkRef: "string", channelKey: "string", channelTitle: "string",
+      contractorKey: "string", contractorTitle: "string", validFrom: "timestamp",
+      validTo: "timestamp", validFromBasis: "string", contractorValidFromBasis: "string",
+    });
+    expect(agentDatasetRequiredCapabilities("campaign_bindings")).toEqual(["read:datasets"]);
+
+    // A series is read forward from a watermark.
+    for (const dataset of ["campaign_snapshots", "campaign_runs"] as const) {
+      expect(AGENT_DATASETS[dataset].defaultSort).toEqual({
+        field: "observedAt", dir: "asc", nullsLast: false,
+      });
+    }
+    expect(AGENT_DATASETS.campaign_bindings.defaultSort.field).toBe("validFrom");
+  });
+
   it("uses wire field names the query schema will accept", () => {
     // The query body validates `field` against /^[a-z][a-zA-Z0-9]*$/ with a 64-char
     // cap BEFORE any lookup. A registry field that cannot pass that regex would be
@@ -213,6 +257,9 @@ describe("agent read dataset vocabulary", () => {
     expect([...money]).toEqual([
       "ofapi_financial_snapshots",
       "ofapi_payout_requests",
+      // The vendor's revenue per link; the attempts and the bindings carry no
+      // money and stay on read:datasets alone.
+      "campaign_snapshots",
       "fan_memberships",
       "subscriptions",
       "transactions",
