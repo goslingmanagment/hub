@@ -80,7 +80,9 @@ function DifferenceCell({ link }: { link: OfLink }) {
   const difference = differenceView(link);
   return <>
     <span className="block whitespace-nowrap tabular-nums">{difference.amount ?? "—"}</span>
-    {difference.note && <Muted nowrap>{difference.note}</Muted>}
+    {difference.period && <Muted>{difference.period}</Muted>}
+    {difference.figures && <Muted>{difference.figures}</Muted>}
+    {difference.note && <Muted>{difference.note}</Muted>}
   </>;
 }
 
