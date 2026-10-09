@@ -85,10 +85,13 @@ export interface HubLinkAttribution {
   /** Per link (hubLinkKey): the start of its first finished walk that may
    *  count absence — where Hub's figure for the link begins. */
   floors: Map<string, Date>;
-  /** Per link: the start of its LAST finished walk that may count absence.
-   *  Every fan in the list by then has been seen: Hub's figure is whole only
-   *  up to this instant (a later walk still being read may bring more). */
-  lastFinished: Map<string, Date>;
+  /** Per page: the instant up to which the split of its money is final —
+   *  the earliest, over every link of the page the sweep is walking (a
+   *  subscriber walk started within LINK_WALK_ACTIVE_MS of the read), of the
+   *  start of its last finished walk; null when one of them has none. A fan
+   *  any of those links lists by then has been seen by all of them, so no
+   *  share of a transaction before it can still move to a link not yet read. */
+  splitFinalUntil: Map<number, Date | null>;
   allocations: HubLinkAllocation[];
   /** Transactions no period holds: the part of the page's money no link
    *  brought (or none Hub can name). */
@@ -111,7 +114,7 @@ export function attributeHubLinkMoney(input: {
   floors: ReadonlyMap<string, Date>;
   periods: readonly HubLinkPeriod[];
   transactions: readonly HubLinkTransaction[];
-}): Omit<HubLinkAttribution, "floors" | "lastFinished"> {
+}): Omit<HubLinkAttribution, "floors" | "splitFinalUntil"> {
   const periodsByFan = new Map<string, Array<HubLinkPeriod & { from: number; to: number }>>();
   for (const period of input.periods) {
     const floor = input.floors.get(hubLinkKey(period.pageId, period.linkKind, period.linkRef));
@@ -166,30 +169,48 @@ export function attributeHubLinkMoney(input: {
   return { allocations, unallocated };
 }
 
+/** A link whose last subscriber walk started longer ago than this is no
+ *  longer walked (the vendor dropped it): it does not hold a page's split
+ *  open. Four sweeps a day walk every listed link. */
+export const LINK_WALK_ACTIVE_MS = 48 * 3_600_000;
+
 /** Each link's floor — the start of its first finished subscriber walk that
- *  may count absence (П9.10) — and the start of its last such walk. */
+ *  may count absence (П9.10) — and, per page, the instant up to which the
+ *  split is final (see HubLinkAttribution.splitFinalUntil), as of `now`. */
 export async function readHubLinkWalkBounds(
   db: Database,
   pageIds: readonly number[],
-): Promise<{ floors: Map<string, Date>; lastFinished: Map<string, Date> }> {
-  if (pageIds.length === 0) return { floors: new Map(), lastFinished: new Map() };
+  now: Date,
+): Promise<{ floors: Map<string, Date>; splitFinalUntil: Map<number, Date | null> }> {
+  if (pageIds.length === 0) return { floors: new Map(), splitFinalUntil: new Map() };
   const result = await db.execute<{
-    page_id: string; link_kind: string; link_ref: string; floor_at: Date | string; last_at: Date | string;
+    page_id: string; link_kind: string; link_ref: string;
+    floor_at: Date | string | null; last_finished_at: Date | string | null; last_started_at: Date | string;
   }>(sql`
     select platform_account_id::text as page_id, link_kind, platform_link_id as link_ref,
-           min(started_at) as floor_at, max(started_at) as last_at
+           min(started_at) filter (where finished_at is not null and evidential) as floor_at,
+           max(started_at) filter (where finished_at is not null and evidential) as last_finished_at,
+           max(started_at) as last_started_at
       from page_link_fan_walks
      where platform_account_id = any(${pageIdsParam(pageIds)}::bigint[])
        and list_kind = 'subscribers'
-       and finished_at is not null
-       and evidential
      group by 1, 2, 3
   `);
-  const key = (row: (typeof result.rows)[number]) => hubLinkKey(Number(row.page_id), row.link_kind, row.link_ref);
-  return {
-    floors: new Map(result.rows.map((row) => [key(row), new Date(row.floor_at)])),
-    lastFinished: new Map(result.rows.map((row) => [key(row), new Date(row.last_at)])),
-  };
+  const floors = new Map<string, Date>();
+  const splitFinalUntil = new Map<number, Date | null>();
+  for (const row of result.rows) {
+    const pageId = Number(row.page_id);
+    if (row.floor_at !== null) floors.set(hubLinkKey(pageId, row.link_kind, row.link_ref), new Date(row.floor_at));
+    if (now.getTime() - new Date(row.last_started_at).getTime() > LINK_WALK_ACTIVE_MS) continue;
+    const lastFinished = row.last_finished_at === null ? null : new Date(row.last_finished_at);
+    const current = splitFinalUntil.has(pageId) ? splitFinalUntil.get(pageId)! : undefined;
+    splitFinalUntil.set(pageId, current === undefined
+      ? lastFinished
+      : current === null || lastFinished === null
+        ? null
+        : (lastFinished.getTime() < current.getTime() ? lastFinished : current));
+  }
+  return { floors, splitFinalUntil };
 }
 
 /**
@@ -200,13 +221,13 @@ export async function readHubLinkWalkBounds(
  */
 export async function readHubLinkAttribution(
   db: Database,
-  input: { pageIds: readonly number[]; to: Date; from?: Date },
+  input: { pageIds: readonly number[]; to: Date; from?: Date; now?: Date },
 ): Promise<HubLinkAttribution> {
-  const { floors, lastFinished } = await readHubLinkWalkBounds(db, input.pageIds);
-  if (floors.size === 0) return { floors, lastFinished, allocations: [], unallocated: [] };
+  const { floors, splitFinalUntil } = await readHubLinkWalkBounds(db, input.pageIds, input.now ?? input.to);
+  if (floors.size === 0) return { floors, splitFinalUntil, allocations: [], unallocated: [] };
   const earliestFloor = new Date(Math.min(...[...floors.values()].map((floor) => floor.getTime())));
   const from = input.from !== undefined && input.from.getTime() > earliestFloor.getTime() ? input.from : earliestFloor;
-  if (from.getTime() >= input.to.getTime()) return { floors, lastFinished, allocations: [], unallocated: [] };
+  if (from.getTime() >= input.to.getTime()) return { floors, splitFinalUntil, allocations: [], unallocated: [] };
 
   const periods = await db.execute<{
     page_id: string; link_kind: TrafficLinkKind; link_ref: string; fan_id: string;
@@ -260,7 +281,7 @@ export async function readHubLinkAttribution(
       negatesTransactionId: row.original_id === null ? null : Number(row.original_id),
     })),
   });
-  return { floors, lastFinished, ...result };
+  return { floors, splitFinalUntil, ...result };
 }
 
 export interface HubLinkMoneySum {

@@ -117,10 +117,11 @@ export type OfLinkHubMoneyTotal = z.infer<typeof ofLinkHubMoneyTotalSchema>;
  *   provisional        a figure may still move or the stretches differ: a
  *                      flag, pending money, or a trial link;
  *   incomplete         OFAPI's figure unknown or still computing, OFAPI has
- *                      computed nothing since Hub's floor, or Hub's last
- *                      finished fan walk of the link starts before the
- *                      stretch's end (a walk still being read may bring
- *                      fans of it);
+ *                      computed nothing since Hub's floor, or the split is
+ *                      not final over the stretch (some link of the page the
+ *                      sweep walks has no finished fan walk started at or
+ *                      after its end: a fan not read in yet could still take
+ *                      part of a share);
  *   null               nothing to compare: Hub's figure is absent. */
 export const ofLinkComparisonStateSchema = z.enum(["comparable", "different_history", "provisional", "incomplete"]);
 /** Flags on the comparison:

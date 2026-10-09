@@ -40,6 +40,7 @@ import {
   readLinkSeriesFloor,
   readLinkSnapshotCalculations,
   readTrafficBindingsSnapshot,
+  sortDeltaFlags,
   splitByIntervals,
   sumHubLinkMoney,
   totalSegments,
@@ -48,6 +49,7 @@ import {
   type HubLinkAttribution,
   type LinkBindingInterval,
   type LinkSegment,
+  type OfLinkDeltaFlag,
   type LinkSeries,
   type LinkSeriesAttemptRow,
   type LinkSeriesPoint,
@@ -235,9 +237,10 @@ export function comparisonSnapshotKeys(series: LinkSeries, floor: Date): Array<{
  *
  *   incomplete         OFAPI's latest figure unknown or still computing, its
  *                      computation time unknown or not after the floor, or
- *                      Hub's last finished fan walk of the link starts before
- *                      the stretch's end (a walk still being read may bring a
- *                      fan of it);
+ *                      the split is not final over the stretch: some link of
+ *                      the page the sweep walks has no finished walk started
+ *                      at or after its end (a walk still being read may bring
+ *                      a fan whose money this link would then share);
  *   different_history  fallback with no OFAPI snapshot before the floor:
  *                      OFAPI all-time against Hub since its floor;
  *   provisional        a trial link (no per-fan check of the rule there yet,
@@ -314,13 +317,16 @@ export function compareLinkMoney(input: {
   const hub = toAt.getTime() > fromAt.getTime()
     ? sumHubLinkMoney(input.attribution.allocations, { ...link, fromAt, toAt })
     : { netMills: 0n, pendingMills: 0n, transactionCount: 0, fanCount: 0 };
-  const lastFinished = input.attribution.lastFinished.get(key) ?? null;
+  // Final only when every link of the page the sweep walks has a finished
+  // walk past the stretch: a fan one of them has not been read in yet could
+  // still take part of a share this link holds now.
+  const splitFinalUntil = input.attribution.splitFinalUntil.get(link.pageId) ?? null;
 
   let state: OfLinkMoneyComparison["state"];
   if (
     vendorDelta === null || endCalculation?.isLoading === true
     || endCalculatedAt === null || endCalculatedAt.getTime() <= floor.getTime()
-    || lastFinished === null || lastFinished.getTime() < toAt.getTime()
+    || splitFinalUntil === null || splitFinalUntil.getTime() < toAt.getTime()
   ) {
     state = "incomplete";
   } else if (start === null && noBaseline) {
@@ -353,6 +359,9 @@ interface HubPiece {
   contractorKey: string | null;
   startAt: Date;
   endAt: Date;
+  /** The binding's and the contractor term's start bases (П9.7). */
+  bindingBasis: LinkBindingInterval["validFromBasis"] | null;
+  termBasis: ChannelTermInterval["validFromBasis"] | null;
 }
 
 function hubPieces(
@@ -367,8 +376,12 @@ function hubPieces(
     const bindings = bindingsByLink.get(linkKey(link.pageId, link.linkKind, link.linkRef)) ?? [];
     for (const piece of splitByIntervals(bindings, fromAt.getTime(), toAt.getTime())) {
       const channelKey = piece.interval?.channelKey ?? null;
+      const bindingBasis = piece.interval?.validFromBasis ?? null;
       if (piece.interval === null || termsByChannel === null) {
-        pieces.push({ link, channelKey, contractorKey: null, startAt: new Date(piece.startMs), endAt: new Date(piece.endMs) });
+        pieces.push({
+          link, channelKey, contractorKey: null, startAt: new Date(piece.startMs), endAt: new Date(piece.endMs),
+          bindingBasis, termBasis: null,
+        });
         continue;
       }
       for (const termPiece of splitByIntervals(termsByChannel.get(piece.interval.channelKey) ?? [], piece.startMs, piece.endMs)) {
@@ -378,6 +391,8 @@ function hubPieces(
           contractorKey: termPiece.interval?.contractorKey ?? null,
           startAt: new Date(termPiece.startMs),
           endAt: new Date(termPiece.endMs),
+          bindingBasis,
+          termBasis: termPiece.interval?.validFromBasis ?? null,
         });
       }
     }
@@ -850,7 +865,31 @@ export async function getOfLinkHistory(db: Database, input: OfLinksSeriesSwitch 
 // ---------------------------------------------------------------------------
 // GET /api/v1/admin/of-links/channels
 
-function totalsOut(segments: readonly LinkSegment[], hubMoney: OfLinkHubMoneyTotal) {
+/** The flags a group owes beside its segments' own: Hub's pieces of the
+ *  group that OFAPI never read (`money_unknown` — its sum leaves them out,
+ *  never a zero), and assumed starts of the bindings and terms Hub's money
+ *  rests on (П9.7), whether OFAPI read those stretches or not. A piece that
+ *  ends before its link was created needs no vendor reading. */
+function hubPieceFlags(
+  pieces: readonly HubPiece[],
+  segments: readonly LinkSegment[],
+  createdAt: ReadonlyMap<string, Date | null>,
+): OfLinkDeltaFlag[] {
+  const read = new Set(segments.map((segment) =>
+    `${linkKey(segment.series.pageId, segment.series.linkKind, segment.series.linkRef)}:${segment.startAt.getTime()}:${segment.endAt.getTime()}`));
+  const flags = new Set<OfLinkDeltaFlag>();
+  for (const piece of pieces) {
+    const key = linkKey(piece.link.pageId, piece.link.linkKind, piece.link.linkRef);
+    const created = createdAt.get(key) ?? null;
+    const existed = created === null || created.getTime() < piece.endAt.getTime();
+    if (existed && !read.has(`${key}:${piece.startAt.getTime()}:${piece.endAt.getTime()}`)) flags.add("money_unknown");
+    if (piece.bindingBasis === "assumed_link_created") flags.add("assumed_binding_start");
+    if (piece.termBasis === "assumed_link_created") flags.add("assumed_contractor_start");
+  }
+  return [...flags];
+}
+
+function totalsOut(segments: readonly LinkSegment[], hubMoney: OfLinkHubMoneyTotal, extraFlags: readonly OfLinkDeltaFlag[] = []) {
   const totals = totalSegments(segments);
   return {
     totals: {
@@ -862,7 +901,7 @@ function totalsOut(segments: readonly LinkSegment[], hubMoney: OfLinkHubMoneyTot
       vendorNetMills: millsNumber(totals.netMills),
       hubMoney,
     },
-    flags: totals.flags,
+    flags: sortDeltaFlags([...totals.flags, ...extraFlags]),
   };
 }
 
@@ -923,6 +962,8 @@ export async function getOfLinkChannels(db: Database, input: {
     const [pageId, linkKind, ...ref] = key.split(":");
     hubLinks.set(key, { pageId: Number(pageId), linkKind: linkKind!, linkRef: ref.join(":") });
   }
+  const linkCreatedAt = new Map(allSeries.map((series) =>
+    [linkKey(series.pageId, series.linkKind, series.linkRef), series.linkCreatedAt]));
   const channelPieces = hubPieces([...hubLinks.values()], index.bindingsByLink, null, range.fromAt, range.toAt);
   const contractorPieces = hubPieces([...hubLinks.values()], index.bindingsByLink, index.termsByChannel, range.fromAt, range.toAt);
   const names = new Map(allSeries.map((series) => [linkKey(series.pageId, series.linkKind, series.linkRef), series.name]));
@@ -984,7 +1025,11 @@ export async function getOfLinkChannels(db: Database, input: {
               term.validFrom.getTime() < range.toAt.getTime()
               && (term.validTo === null || term.validTo.getTime() > range.fromAt.getTime()))
             .map((term) => contractorTermOut(term, index.contractorTitles)),
-        ...totalsOut(segments, hubMoneyTotalOf(attribution, channelHub.get(channelKey) ?? [])),
+        ...totalsOut(
+          segments,
+          hubMoneyTotalOf(attribution, channelHub.get(channelKey) ?? []),
+          hubPieceFlags(channelHub.get(channelKey) ?? [], segments, linkCreatedAt),
+        ),
         segments: [...segments].sort(segmentOrder).map(segmentOut),
       };
     });
@@ -1000,7 +1045,7 @@ export async function getOfLinkChannels(db: Database, input: {
         contractorTitle: contractorKey === null ? null : index.contractorTitles.get(contractorKey) ?? contractorKey,
         channelKeys: [...new Set([...segments.map((segment) => segment.channelKey), ...hub.map((piece) => piece.channelKey)]
           .filter((key): key is string => key !== null))].sort(),
-        ...totalsOut(segments, hubMoneyTotalOf(attribution, hub)),
+        ...totalsOut(segments, hubMoneyTotalOf(attribution, hub), hubPieceFlags(hub, segments, linkCreatedAt)),
         segments: [...segments].sort(segmentOrder).map(segmentOut),
       };
     });

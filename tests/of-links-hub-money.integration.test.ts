@@ -24,6 +24,7 @@ let testDb: StartedTestDatabase;
 let app: ReturnType<typeof createTestAppContext>;
 let vipPage = 0;
 let freePage = 0;
+let ariPage = 0;
 
 // Hub's floor: the first fan walk, 2026-10-09 03:30 UTC (06:30 Moscow).
 const F = Date.parse("2026-10-09T03:30:00Z");
@@ -99,6 +100,7 @@ beforeEach(async () => {
   const model = await createModel(app.db, { slug: "lora", name: "Lora" });
   vipPage = (await createOnlyFansPage(app.db, { modelId: model!.id, label: "lora-vip-of" }))!.id;
   freePage = (await createOnlyFansPage(app.db, { modelId: model!.id, label: "lora-of" }))!.id;
+  ariPage = (await createOnlyFansPage(app.db, { modelId: model!.id, label: "ari-of" }))!.id;
   await testDb.pool.query("update pages set ofapi_account_id = 'acct_' || id, created_at = '2026-07-01T00:00:00Z'");
 
   // VIP: trial links A (11170786) and B (11170787). Walk 1 is the floor:
@@ -114,19 +116,23 @@ beforeEach(async () => {
   await walk(vipPage, "trial", "11170786", 3, h(28), [subscriber(1, true), subscriber(2, true), subscriber(4, true)]);
   await walk(vipPage, "trial", "11170787", 3, h(28.01), [subscriber(1, true), subscriber(3, false)]);
   await walk(vipPage, "trial", "11213035", 2, h(28.02), [subscriber(8, true)]);
-  // Free page: tracking links T (2099377, fan 5), T2 (2117449, fan 6) and
-  // T3 (2099526, fan 7); T3's walk of h(28) is still being read.
+  // Free page: tracking links T (2099377, fan 5) and T2 (2117449, fan 6).
   await walk(freePage, "tracking", "2099377", 1, h(0), [subscriber(5, true)]);
   await walk(freePage, "tracking", "2117449", 1, h(0.01), [subscriber(6, true)]);
-  await walk(freePage, "tracking", "2099526", 1, h(0.02), [subscriber(7, true)]);
   await walk(freePage, "tracking", "2099377", 2, h(28), [subscriber(5, true)]);
   await walk(freePage, "tracking", "2117449", 2, h(28.01), [subscriber(6, true)]);
-  await journal(freePage, "link_fans_tracking_subscribers", {
+  // Ari: tracking links T3 (2099526, fan 7) and T4 (2103813, fan 9). T4 is
+  // read to the end at h(28); T3's walk of h(28) is still being read.
+  await walk(ariPage, "tracking", "2099526", 1, h(0.02), [subscriber(7, true)]);
+  await walk(ariPage, "tracking", "2103813", 1, h(0.03), [subscriber(9, true)]);
+  await walk(ariPage, "tracking", "2103813", 2, h(28.03), [subscriber(9, true)]);
+  await journal(ariPage, "link_fans_tracking_subscribers", {
     link: { kind: "tracking", id: 2099526 }, list: "subscribers", offset: 0, limit: 100, requestSeq: 2,
     ofapiAccountId: "acct_x", items: [subscriber(7, true)], hasNextPage: true, nextPageUrl: null,
   }, h(28.02));
   await projectLinkFanJournal(app, { pageId: vipPage, maxPages: 100 });
   await projectLinkFanJournal(app, { pageId: freePage, maxPages: 100 });
+  await projectLinkFanJournal(app, { pageId: ariPage, maxPages: 100 });
   const { rows } = await testDb.pool.query<{ id: string; ref: string }>("select id::text, platform_user_id as ref from fans");
   for (const row of rows) fanIds.set(Number(row.ref), Number(row.id));
 
@@ -143,7 +149,8 @@ beforeEach(async () => {
   // Free page money.
   await transaction(freePage, 5, h(1), 1000n); // T
   await transaction(freePage, 6, h(-1), 1000n); // T2, before Hub's floor
-  await transaction(freePage, 7, h(1), 500n); // T3
+  await transaction(ariPage, 7, h(1), 500n); // T3
+  await transaction(ariPage, 9, h(1), 400n); // T4
 
   // The link series. A: before the floor (computed 1 h before it) and after.
   await run(vipPage, "trial", h(-6), [
@@ -164,18 +171,21 @@ beforeEach(async () => {
   await run(freePage, "tracking", h(-6), [
     snapshot(freePage, "tracking", "2099377", { revenueNetMills: 0n, revenueCalculatedAt: h(-2) }),
     snapshot(freePage, "tracking", "2117449", { revenueNetMills: 0n, revenueCalculatedAt: h(-2) }),
-    snapshot(freePage, "tracking", "2099526", { revenueNetMills: 0n, revenueCalculatedAt: h(-2) }),
   ]);
   await run(freePage, "tracking", h(0.75), [
     snapshot(freePage, "tracking", "2099377", { revenueNetMills: 0n, revenueCalculatedAt: h(0.5) }),
     snapshot(freePage, "tracking", "2117449", { revenueNetMills: 1000n, revenueCalculatedAt: h(-2) }),
-    snapshot(freePage, "tracking", "2099526", { revenueNetMills: 0n, revenueCalculatedAt: h(0.5) }),
   ]);
   await run(freePage, "tracking", h(27), [
     snapshot(freePage, "tracking", "2099377", { revenueNetMills: 1000n, revenueCalculatedAt: h(3) }),
     snapshot(freePage, "tracking", "2117449", { revenueNetMills: 1000n, revenueCalculatedAt: h(3) }),
-    snapshot(freePage, "tracking", "2099526", { revenueNetMills: 500n, revenueCalculatedAt: h(3) }),
   ]);
+  for (const [at, calculated, t3, t4] of [[h(0.75), h(0.5), 0n, 0n], [h(27), h(3), 500n, 400n]] as const) {
+    await run(ariPage, "tracking", at, [
+      snapshot(ariPage, "tracking", "2099526", { revenueNetMills: t3, revenueCalculatedAt: calculated }),
+      snapshot(ariPage, "tracking", "2103813", { revenueNetMills: t4, revenueCalculatedAt: calculated }),
+    ]);
+  }
 
   await applyTrafficBindingsChange(app.db, {
     contractors: [{ key: "coraline-red", title: "@coraline_red" }],
@@ -186,8 +196,9 @@ beforeEach(async () => {
         pageLabel: "lora-vip-of", linkKind: "trial" as const, linkId, channelKey: "lora.porntoki",
         validFrom: new Date("2026-04-01T00:00:00Z"), validTo: null, validFromBasis: "confirmed" as const,
       })),
+      // Nobody confirmed when C went to Reddit (П9.7).
       { pageLabel: "lora-vip-of", linkKind: "trial" as const, linkId: "11213035", channelKey: "lora.reddit",
-        validFrom: new Date("2026-04-01T00:00:00Z"), validTo: h(12), validFromBasis: "confirmed" as const },
+        validFrom: new Date("2026-04-01T00:00:00Z"), validTo: h(12), validFromBasis: "assumed_link_created" as const },
       { pageLabel: "lora-vip-of", linkKind: "trial" as const, linkId: "11213035", channelKey: "lora.porntoki",
         validFrom: h(12), validTo: null, validFromBasis: "confirmed" as const },
     ],
@@ -228,6 +239,11 @@ describe("Hub's own money per link", () => {
     // one is still being read — a payer of it may be on an unread page.
     expect(byRef.get("2099526")!.comparison).toMatchObject({
       state: "incomplete", vendorDeltaMills: 500, hubNetMills: 500, differenceMills: 0,
+    });
+    // T4 is read to the end, equal on the same stretch — but T3, of the same
+    // page, is not: a fan of T4 found in T3 would halve T4's share.
+    expect(byRef.get("2103813")!.comparison).toMatchObject({
+      state: "incomplete", flags: [], vendorDeltaMills: 400, hubNetMills: 400, differenceMills: 0,
     });
     // A: a trial link, and its baseline is before the floor.
     expect(byRef.get("11170786")!.comparison).toMatchObject({
@@ -272,8 +288,13 @@ describe("Hub's own money per link", () => {
   it("keeps Hub's money of a channel's stretch OFAPI never read (the link moved before its first snapshot)", async () => {
     const result = await getOfLinkChannels(app.db, { from: "2026-10-09", to: "2026-10-10", now: NOW });
     const reddit = result.channels.find((channel) => channel.channelKey === "lora.reddit");
-    // OFAPI has no segment for Reddit (no snapshot of C before it left), Hub has C's 1000.
-    expect(reddit).toMatchObject({ segments: [], totals: { hubMoney: { state: "partial", netMills: 1000 } } });
+    // OFAPI has no segment for Reddit (no snapshot of C before it left), Hub
+    // has C's 1000: OFAPI's figure there is unknown, not zero, and the
+    // binding's start was assumed.
+    expect(reddit).toMatchObject({
+      segments: [], totals: { vendorNetMills: 0, hubMoney: { state: "partial", netMills: 1000 } },
+      flags: ["money_unknown", "assumed_binding_start"],
+    });
     const byContractor = new Map(result.contractors.map((row) => [row.contractorKey, row]));
     // Reddit has no contractor: C's Reddit stretch is in the contractor-less row.
     expect(byContractor.get(null)!.totals.hubMoney.netMills).toBeGreaterThanOrEqual(1000);
