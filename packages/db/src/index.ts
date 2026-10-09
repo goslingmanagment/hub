@@ -213,6 +213,7 @@ export * from "./repositories/link-fans.ts";
 // the bindings; the delta arithmetic over them is pure.
 export * from "./repositories/link-stats-read.ts";
 export * from "./repositories/link-stats-deltas.ts";
+export * from "./repositories/link-attribution.ts";
 
 export * from "./repositories/ofapi-vendor-usage.ts";
 export * from "./repositories/ofapi-collection.ts";

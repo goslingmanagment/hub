@@ -86,6 +86,7 @@ export function vendorMoneyView(link: Pick<OfLink, "vendorMoney">): { amount: st
 const hubReasons = {
   not_computed: "Hub пока не считает",
   no_completed_walk: "нет полного прохода",
+  before_floor: "до начала счёта Hub",
 } as const;
 
 export function hubMoneyView(link: Pick<OfLink, "hubMoney">): { amount: string | null; note: string } {

@@ -7215,7 +7215,8 @@
                                     "type": "string",
                                     "enum": [
                                       "not_computed",
-                                      "no_completed_walk"
+                                      "no_completed_walk",
+                                      "before_floor"
                                     ]
                                   },
                                   {
@@ -7334,6 +7335,7 @@
                                     "vendor_recalculated",
                                     "binding_changed",
                                     "vendor_lagging",
+                                    "window_mismatch",
                                     "ledger_gap"
                                   ]
                                 }
@@ -7905,7 +7907,8 @@
                                         "type": "string",
                                         "enum": [
                                           "not_computed",
-                                          "no_completed_walk"
+                                          "no_completed_walk",
+                                          "before_floor"
                                         ]
                                       },
                                       {
@@ -8234,7 +8237,8 @@
                                         "type": "string",
                                         "enum": [
                                           "not_computed",
-                                          "no_completed_walk"
+                                          "no_completed_walk",
+                                          "before_floor"
                                         ]
                                       },
                                       {
@@ -9254,7 +9258,8 @@
                               "type": "string",
                               "enum": [
                                 "not_computed",
-                                "no_completed_walk"
+                                "no_completed_walk",
+                                "before_floor"
                               ]
                             },
                             {
