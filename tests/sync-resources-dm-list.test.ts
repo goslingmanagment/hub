@@ -118,7 +118,6 @@ function input(overrides: Partial<ResolveListItemInput> = {}): ResolveListItemIn
     aggregationAccountCount: 1,
     existing: state(),
     pageAccountId: PAGE,
-    probe: null,
     ...overrides,
   };
 }
@@ -135,7 +134,6 @@ describe("resolveConversationListItem", () => {
       requestGroupDetail: false,
       unresolvedIdentity: false,
       messageSyncExcludedReason: null,
-      probeDue: false,
       unchanged: true,
     });
     expect(item.hydrate).toEqual({ account: { id: FAN, username: `u${FAN.slice(-4)}`, displayName: `Fan ${FAN.slice(-4)}` } });
@@ -255,20 +253,23 @@ describe("resolveConversationListItem", () => {
     expect(noAccounts).toMatchObject({ aggregationMissing: false, hydrate: { unverifiedId: FAN } });
   });
 
-  it("an unresolvable exclusion: lifted by a resolved answer of the day, kept otherwise, probed when no answer is fresh", () => {
+  it("a stored unresolvable exclusion (a lookup miss, page-local evidence) is not kept: the write takes it off, nothing is probed", () => {
     const excluded = state({ metadata: { messageSyncExcludedReason: FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP } });
-    expect(resolveConversationListItem(input({ existing: excluded, probe: "resolved" }), NOW)).toMatchObject({
-      messageSyncExcludedReason: null,
-      probeDue: false,
-    });
-    expect(resolveConversationListItem(input({ existing: excluded, probe: "unresolved" }), NOW)).toMatchObject({
-      messageSyncExcludedReason: FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
-      probeDue: false,
-    });
-    expect(resolveConversationListItem(input({ existing: excluded, probe: null }), NOW)).toMatchObject({
-      messageSyncExcludedReason: FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
-      probeDue: true,
-    });
+    const item = resolveConversationListItem(input({ existing: excluded }), NOW);
+    expect(item).toMatchObject({ messageSyncExcludedReason: null, hydrate: { account: expect.objectContaining({ id: FAN }) } });
+    expect(item).not.toHaveProperty("probeDue");
+    // The exclusion leaving is a change: a head walk does not stop on it.
+    expect(item.diffReasons).toEqual(["message_sync_excluded_reason"]);
+    expect(item.unchanged).toBe(false);
+    // Whatever the page lifted, and on an unbound thread too.
+    for (const liftedExclusions of [[], [FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP]]) {
+      expect(resolveConversationListItem(input({ existing: excluded, liftedExclusions }), NOW).messageSyncExcludedReason).toBeNull();
+    }
+    const unbound = state({ fanId: null, metadata: excluded.metadata });
+    expect(resolveConversationListItem(input({ existing: unbound }), NOW).messageSyncExcludedReason).toBeNull();
+    // An aggregation miss of the same chat is excluded for that reason alone.
+    expect(resolveConversationListItem(input({ existing: excluded, accountsById: new Map([[OTHER, account(OTHER)]]) }), NOW)
+      .messageSyncExcludedReason).toBe(FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS);
   });
 
   it("a reason the page lifted (owner decision №8) is never assigned to a bound thread; an unbound one keeps it", () => {
@@ -292,12 +293,6 @@ describe("resolveConversationListItem", () => {
       expect(resolveConversationListItem(input({ ...missingAccounts, liftedExclusions: other }), NOW).messageSyncExcludedReason)
         .toBe(FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS);
     }
-    // A stored unresolvable reason the page lifted is not kept (and not probed).
-    const unresolvable = state({ metadata: { messageSyncExcludedReason: FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP } });
-    expect(resolveConversationListItem(input({
-      existing: unresolvable,
-      liftedExclusions: [FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP],
-    }), NOW)).toMatchObject({ messageSyncExcludedReason: null, probeDue: false });
   });
 
   it("keeps the stored count when a served scalar is not an integer", () => {
@@ -357,6 +352,21 @@ describe("resolveGroupDetail", () => {
       now: NOW,
     });
     expect(older.head).toBeNull();
+  });
+
+  it("keeps a stored aggregation-missing exclusion, never a stored unresolvable one", () => {
+    const keep = (reason: string | undefined) => resolveGroupDetail({
+      detail: detail([PAGE, FAN], {}),
+      existing: state({ metadata: reason === undefined ? {} : { messageSyncExcludedReason: reason, other: 1 } }),
+      pageAccountId: PAGE,
+      now: NOW,
+    }).messageSyncExcludedReason;
+    expect(keep(FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS))
+      .toBe(FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS);
+    expect(keep(FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP)).toBeNull();
+    expect(keep(undefined)).toBeNull();
+    expect(resolveGroupDetail({ detail: detail([PAGE, FAN], {}), existing: null, pageAccountId: PAGE, now: NOW }).messageSyncExcludedReason)
+      .toBeNull();
   });
 
   it("several members name no partner, and the stored one stays", () => {

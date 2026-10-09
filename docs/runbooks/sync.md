@@ -543,10 +543,9 @@ is multi-fan.
 ## Excluded chats
 
 A chat can carry `page_dm_threads.metadata.messageSyncExcludedReason`: `partner_missing_from_aggregation_accounts`
-(the conversation list assigns it) or `partner_unresolvable_from_account_lookup` (`fan-profiles.probe` assigns it
-when the account lookup resolves no partner). The engine reads no messages of an excluded chat; the socket still
-shows its new messages, and a history request for its fan is refused `excluded`. Whether such chats load at all is
-asked on a live page:
+(the conversation list assigns it). The engine reads no messages of an excluded chat; the socket still shows its new
+messages, and a history request for its fan is refused `excluded`. Whether such chats load at all is asked on a live
+page:
 
 ```sh
 pnpm cli sync excluded probe --page lora-1 --sample 20
@@ -569,6 +568,25 @@ pnpm cli sync excluded unlift --page lora-1 --reason partner_missing_from_aggreg
   chats, 80 % or more served and no page-level error. The page's bound chats lose the reason and sync like any chat:
   new heads are read, history only by request. The lift is per page.
 - `unlift` applies the reason again; the next conversation-list pass marks the chats.
+
+`partner_unresolvable_from_account_lookup` is retired (arena "vanished chat", R4): an account lookup that resolves no
+partner is the page's own evidence (the fan blocked that page, or a transient miss), so `fan-profiles.probe` excludes
+no chat and the conversation list neither assigns the reason nor keeps it on a chat it writes. The migration
+`*_retire_dm_unresolvable_exclusion.sql` lifted it on every page (`lifted_dm_exclusions`, so an older image — still
+running while the api migrates, or rolled back to — keeps it on no bound chat and assigns it from no probe) and took it
+off every thread (production: 17), under the erasure execution lock and the page locks the actor's own transactions
+take. Those chats are read by ordinary demand only (a newer list head when the list next lists the chat, a socket
+message, a history request). A chat Fansly stops serving is the next section's. The levers above still accept the
+reason, for rows and recorded probes written before; `lift` of it is a no-op, and `unlift` changes nothing in this
+release but leaves an older image free to apply the old rule on that page again — keep the lift. To check (read-only;
+both 0):
+
+```sql
+select (select count(*) from page_dm_threads
+         where metadata ->> 'messageSyncExcludedReason' = 'partner_unresolvable_from_account_lookup') as chats,
+       (select count(*) from sync_pages
+         where not ('partner_unresolvable_from_account_lookup' = any(lifted_dm_exclusions))) as pages_not_lifted;
+```
 
 ## A chat Fansly does not serve
 

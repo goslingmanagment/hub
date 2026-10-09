@@ -44,7 +44,14 @@ import {
   syncMediaHandoff,
   syncPages,
 } from "@agency_hub_core/db";
-import { CONFIG_DESCRIPTORS, ENV_CONFIG_KEYS, RETIRED_FANSLY_ENV_KEYS } from "@agency_hub_core/shared";
+import {
+  CONFIG_DESCRIPTORS,
+  ENV_CONFIG_KEYS,
+  FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY,
+  FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS,
+  FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
+  RETIRED_FANSLY_ENV_KEYS,
+} from "@agency_hub_core/shared";
 
 // Fansly Sync Engine migrations (design §2.1): forward-only, and additive
 // until step 4, whose last ones drop what the hold set replaced. One block
@@ -1152,5 +1159,83 @@ describe("page_dm_thread_unavailability.sql (arena \"vanished chat\", R2: the ch
     // tests/sync-engine-retention-erasure.integration.test.ts runs the page
     // and fan erasure (unchanged by this release) on the new schema.
     expect(flat).toContain("references page_dm_threads(id) on delete cascade");
+  });
+});
+
+describe("retire_dm_unresolvable_exclusion.sql (arena \"vanished chat\", R4: a lookup miss no longer excludes a chat)", () => {
+  // Found by its name, not its number: the number is the next free one at merge.
+  const found = readdirSync("packages/db/migrations").filter((file) => file.endsWith("_retire_dm_unresolvable_exclusion.sql"));
+  const migration = found[0] ?? "";
+  const text = found.length === 1 ? readFileSync(`packages/db/migrations/${migration}`, "utf8") : "";
+  const sql = stripComments(text);
+  const statements = topLevelStatements(sql);
+
+  it("exists once, after the episodes that took over a chat Fansly stops serving (0251)", () => {
+    expect(found).toHaveLength(1);
+    expect(migration > "0251_page_dm_thread_unavailability.sql").toBe(true);
+  });
+
+  it("locks every page row, lifts the reason on every page, then takes it off the threads — data only, one transaction", () => {
+    // Transactional (the runner's own transaction): the lock holds to the end.
+    expect(text.startsWith("-- agency-hub:no-transaction")).toBe(false);
+    // Lock order: the erasure execution lock, page rows (page order), the
+    // carrying threads (id order) — then the writes.
+    expect(statements).toEqual([
+      "select pg_advisory_xact_lock(8154030001::bigint)",
+      "select sp.page_id from sync_pages sp order by sp.page_id for no key update",
+      "update sync_pages sp set lifted_dm_exclusions = array_append(sp.lifted_dm_exclusions, 'partner_unresolvable_from_account_lookup'), "
+        + "updated_at = clock_timestamp() where not ('partner_unresolvable_from_account_lookup' = any(sp.lifted_dm_exclusions))",
+      "select t.id from page_dm_threads t where t.metadata ->> 'messageSyncExcludedReason' = 'partner_unresolvable_from_account_lookup' "
+        + "order by t.id for no key update",
+      "update page_dm_threads t set metadata = t.metadata - 'messageSyncExcludedReason', updated_at = clock_timestamp() "
+        + "where t.metadata ->> 'messageSyncExcludedReason' = 'partner_unresolvable_from_account_lookup'",
+    ]);
+    expect(sql).not.toMatch(/\b(alter|create|drop|rename|truncate|delete|insert|grant|trigger)\b/i);
+    // Nothing else: no other reason, no work, no demand.
+    expect(sql).not.toContain(FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS);
+    expect(sql).not.toMatch(/sync_work|sync_attempts|history_request/);
+    // The 0235 CHECK admits the lifted reason.
+    expect(SYNC_LIFTABLE_DM_EXCLUSIONS).toContain(FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP);
+  });
+
+  it("serializes with erasure: the erasure execution lock's key, taken by every erasure before any row lock", () => {
+    const erasure = readFileSync("apps/runtime/src/services/erasure/index.ts", "utf8");
+    expect(erasure).toContain("const ERASURE_EXECUTION_LOCK_KEY = 8_154_030_001;");
+    // A session lock on its own connection (same bigint key space as the
+    // migration's transaction lock), around the whole execution …
+    expect(erasure).toContain('"select pg_advisory_lock($1::bigint)",');
+    expect(erasure).toContain("return withErasureExecutionLock(app, () => app.db.transaction(async tx => {");
+    // … whose fan threads it locks in id order, under it.
+    expect(erasure).toContain("select t.id from page_dm_threads t where ${threadPred} order by t.id for update of t");
+    expect(statements[0]).toBe("select pg_advisory_xact_lock(8154030001::bigint)");
+  });
+
+  it("serializes with the actor: its page lock conflicts with the fence every actor transaction starts with", () => {
+    // `for no key update` waits for an apply's `for share` and an admission's
+    // `for no key update` of the page row, and blocks both until it commits.
+    const pages = readFileSync("packages/db/src/repositories/sync/pages.ts", "utf8");
+    expect(pages).toContain('const lockClause = input.lock === "share" ? sql`for share of sp` : sql`for no key update of sp`;');
+    const commit = readFileSync("apps/runtime/src/sync/engine/commit.ts", "utf8");
+    expect(commit).toContain("await lockOwnedPage(tx, { pageId: d.pageId, generation: d.generation, lock });");
+  });
+
+  it("names the metadata key and the reason the shared vocabulary has", () => {
+    expect(sql).toContain(`'${FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY}'`);
+    expect(sql).toContain(`'${FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP}'`);
+  });
+
+  it("allows application rollback: no code of this release writes the reason, and the previous image writes it only on a chat that has it", () => {
+    expect(rollbackCompatible()).toContain(`"${migration}"`);
+    // The runtime names the reason nowhere any more (the account probe and
+    // the conversation list were its writers); only the shared reader and the
+    // owner's levers know it, for rows written before.
+    const runtimeSources = (readdirSync("apps/runtime/src", { recursive: true }) as string[])
+      .filter((file) => file.endsWith(".ts"))
+      .map((file) => [file, readFileSync(`apps/runtime/src/${file}`, "utf8")] as const);
+    expect(runtimeSources.length).toBeGreaterThan(100);
+    for (const [file, source] of runtimeSources) {
+      expect(source, file).not.toContain("PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP");
+      expect(source, file).not.toContain(`"${FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP}"`);
+    }
   });
 });
