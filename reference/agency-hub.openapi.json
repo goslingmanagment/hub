@@ -8314,6 +8314,161 @@
                                 "assumed_contractor_start"
                               ]
                             }
+                          },
+                          "segments": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "pageId": {
+                                  "type": "integer",
+                                  "exclusiveMinimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "pageLabel": {
+                                  "type": "string"
+                                },
+                                "linkKind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "tracking",
+                                    "trial"
+                                  ]
+                                },
+                                "linkRef": {
+                                  "type": "string"
+                                },
+                                "name": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "channelKey": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "contractorKey": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "startAt": {
+                                  "type": "string"
+                                },
+                                "endAt": {
+                                  "type": "string"
+                                },
+                                "startObservedAt": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "endObservedAt": {
+                                  "type": "string"
+                                },
+                                "clicks": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                "claims": {
+                                  "anyOf": [
+                                    {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "subscribers": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                "fans": {
+                                  "anyOf": [
+                                    {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "vendorNetMills": {
+                                  "anyOf": [
+                                    {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "flags": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string",
+                                    "enum": [
+                                      "starts_before_series",
+                                      "vendor_recalculated",
+                                      "binding_changed",
+                                      "money_unknown",
+                                      "assumed_binding_start",
+                                      "assumed_contractor_start"
+                                    ]
+                                  }
+                                }
+                              },
+                              "required": [
+                                "pageId",
+                                "pageLabel",
+                                "linkKind",
+                                "linkRef",
+                                "name",
+                                "channelKey",
+                                "contractorKey",
+                                "startAt",
+                                "endAt",
+                                "startObservedAt",
+                                "endObservedAt",
+                                "clicks",
+                                "claims",
+                                "subscribers",
+                                "fans",
+                                "vendorNetMills",
+                                "flags"
+                              ],
+                              "additionalProperties": false
+                            }
                           }
                         },
                         "required": [
@@ -8321,7 +8476,8 @@
                           "contractorTitle",
                           "channelKeys",
                           "totals",
-                          "flags"
+                          "flags",
+                          "segments"
                         ],
                         "additionalProperties": false
                       }

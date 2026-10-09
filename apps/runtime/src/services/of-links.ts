@@ -44,7 +44,6 @@ import {
   type LinkSeriesAttemptRow,
   type LinkSeriesPoint,
   type LinkStatKind,
-  type OfLinkDeltaFlag,
   type TrafficBindingsSnapshot,
 } from "@agency_hub_core/db";
 import {
@@ -524,8 +523,8 @@ export async function getOfLinkHistory(db: Database, input: {
 // ---------------------------------------------------------------------------
 // GET /api/v1/admin/of-links/channels
 
-function totalsOut(segments: readonly LinkSegment[], exclude: readonly OfLinkDeltaFlag[]) {
-  const totals = totalSegments(segments, exclude);
+function totalsOut(segments: readonly LinkSegment[]) {
+  const totals = totalSegments(segments);
   return {
     totals: {
       linkCount: totals.linkCount,
@@ -569,14 +568,19 @@ export async function getOfLinkChannels(db: Database, input: {
   ]);
   const index = indexBindings(bindingsSnapshot);
 
-  const segments = allSeries.flatMap((series) =>
+  // A channel's segments are cut by bindings alone, a contractor's by the
+  // bindings and the contractor terms: a term added or moved inside a binding
+  // changes who brought what, never the channel's own total.
+  const segmentsOf = (terms: typeof index.termsByChannel | null) => allSeries.flatMap((series) =>
     linkSegments(
       series,
       index.bindingsByLink.get(linkKey(series.pageId, series.linkKind, series.linkRef)) ?? [],
-      index.termsByChannel,
+      terms,
       range.fromAt,
       range.toAt,
     ));
+  const channelSegments = segmentsOf(null);
+  const contractorSegments = segmentsOf(index.termsByChannel);
   const names = new Map(allSeries.map((series) => [linkKey(series.pageId, series.linkKind, series.linkRef), series.name]));
 
   const segmentOut = (segment: LinkSegment) => ({
@@ -599,16 +603,23 @@ export async function getOfLinkChannels(db: Database, input: {
     flags: segment.delta.flags,
   });
 
-  const byChannel = new Map<string | null, LinkSegment[]>();
-  const byContractor = new Map<string | null, LinkSegment[]>();
-  for (const segment of segments) {
-    byChannel.set(segment.channelKey, [...(byChannel.get(segment.channelKey) ?? []), segment]);
-    byContractor.set(segment.contractorKey, [...(byContractor.get(segment.contractorKey) ?? []), segment]);
-  }
+  const groupBy = (segments: readonly LinkSegment[], keyOf: (segment: LinkSegment) => string | null) => {
+    const groups = new Map<string | null, LinkSegment[]>();
+    for (const segment of segments) {
+      const key = keyOf(segment);
+      groups.set(key, [...(groups.get(key) ?? []), segment]);
+    }
+    return [...groups.entries()].sort(([left], [right]) => compareKeys(left, right));
+  };
+  const segmentOrder = (left: LinkSegment, right: LinkSegment) =>
+    left.series.pageId - right.series.pageId
+    || left.series.linkKind.localeCompare(right.series.linkKind)
+    || left.series.linkRef.length - right.series.linkRef.length
+    || left.series.linkRef.localeCompare(right.series.linkRef)
+    || left.startAt.getTime() - right.startAt.getTime();
 
-  const channels = [...byChannel.entries()]
-    .sort(([left], [right]) => compareKeys(left, right))
-    .map(([channelKey, channelSegments]) => ({
+  const channels = groupBy(channelSegments, (segment) => segment.channelKey)
+    .map(([channelKey, segments]) => ({
       channelKey,
       channelTitle: channelKey === null ? null : index.channelTitles.get(channelKey) ?? channelKey,
       contractors: channelKey === null
@@ -618,27 +629,19 @@ export async function getOfLinkChannels(db: Database, input: {
             term.validFrom.getTime() < range.toAt.getTime()
             && (term.validTo === null || term.validTo.getTime() > range.fromAt.getTime()))
           .map((term) => contractorTermOut(term, index.contractorTitles)),
-      // A channel's total does not rest on its contractor's start.
-      ...totalsOut(channelSegments, ["assumed_contractor_start"]),
-      segments: [...channelSegments]
-        .sort((left, right) =>
-          left.series.pageId - right.series.pageId
-          || left.series.linkKind.localeCompare(right.series.linkKind)
-          || left.series.linkRef.length - right.series.linkRef.length
-          || left.series.linkRef.localeCompare(right.series.linkRef)
-          || left.startAt.getTime() - right.startAt.getTime())
-        .map(segmentOut),
+      ...totalsOut(segments),
+      segments: [...segments].sort(segmentOrder).map(segmentOut),
     }));
 
-  const contractors = [...byContractor.entries()]
-    .sort(([left], [right]) => compareKeys(left, right))
-    .map(([contractorKey, contractorSegments]) => ({
+  const contractors = groupBy(contractorSegments, (segment) => segment.contractorKey)
+    .map(([contractorKey, segments]) => ({
       contractorKey,
       contractorTitle: contractorKey === null ? null : index.contractorTitles.get(contractorKey) ?? contractorKey,
-      channelKeys: [...new Set(contractorSegments
+      channelKeys: [...new Set(segments
         .map((segment) => segment.channelKey)
         .filter((key): key is string => key !== null))].sort(),
-      ...totalsOut(contractorSegments, []),
+      ...totalsOut(segments),
+      segments: [...segments].sort(segmentOrder).map(segmentOut),
     }));
 
   return {

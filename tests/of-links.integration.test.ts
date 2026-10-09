@@ -293,7 +293,7 @@ describe("GET /of-links/channels", () => {
     const porntoki = result.channels[0]!;
     expect(porntoki.contractors).toEqual([expect.objectContaining({ contractorKey: "coraline-red", validFromBasis: "confirmed" })]);
     expect(porntoki.segments).toEqual([expect.objectContaining({
-      linkRef: "11170787", contractorKey: "coraline-red", startAt: "2026-08-31T21:00:00.000Z", endAt: NOW.toISOString(),
+      linkRef: "11170787", contractorKey: null, startAt: "2026-08-31T21:00:00.000Z", endAt: NOW.toISOString(),
       startObservedAt: "2026-07-22T12:17:47.000Z", endObservedAt: "2026-10-09T03:45:30.000Z",
     })]);
     expect(porntoki.totals.hubMoney).toMatchObject({ state: "no_data", reason: "not_computed", netMills: null });
@@ -301,6 +301,33 @@ describe("GET /of-links/channels", () => {
       ["coraline-red", ["lora.porntoki"], 74],
       [null, ["lora.reddit"], 6674],
     ]);
+  });
+
+  it("keeps a channel's total when a new contractor starts between snapshots whose money is unknown", async () => {
+    // Erome's 09-09 read did not know its money; on 09-09 12:00 the channel
+    // passes to another contractor.
+    await testDb.pool.query(`
+      update page_link_stat_snapshots set revenue_net_mills = null, revenue_gross_mills = null
+      where platform_link_id = '11170787' and run_id = (select id from page_link_stat_runs where pulled_at = '2026-09-09T04:45:00Z')`);
+    await applyTrafficBindingsChange(app.db, {
+      contractors: [{ key: "coraline-red", title: "@coraline_red" }, { key: "true-helper", title: "True Helper" }],
+      channels: [{ key: "lora.porntoki", title: "Порнтоки" }],
+      terms: [
+        { channelKey: "lora.porntoki", contractorKey: "coraline-red", validFrom: at("2026-03-31T21:00:00Z"), validTo: at("2026-09-09T12:00:00Z"), validFromBasis: "confirmed" },
+        { channelKey: "lora.porntoki", contractorKey: "true-helper", validFrom: at("2026-09-09T12:00:00Z"), validTo: null, validFromBasis: "confirmed" },
+      ],
+      bindings: [],
+    }, { write: true, actor: "test", command: "import" });
+    const result = await getOfLinkChannels(app.db, { from: "2026-09-01", to: "2026-10-09", pageId: vipPage, now: NOW });
+    const porntoki = result.channels.find((channel) => channel.channelKey === "lora.porntoki")!;
+    expect(porntoki.totals.vendorNetMills).toBe(-164_000);
+    expect(porntoki.flags).not.toContain("money_unknown");
+    expect(porntoki.contractors.map((term) => term.contractorKey)).toEqual(["coraline-red", "true-helper"]);
+    const byContractor = new Map(result.contractors.map((contractor) => [contractor.contractorKey, contractor]));
+    for (const key of ["coraline-red", "true-helper"]) {
+      expect(byContractor.get(key)).toMatchObject({ channelKeys: ["lora.porntoki"], totals: { vendorNetMills: 0 }, flags: expect.arrayContaining(["money_unknown"]) });
+      expect(byContractor.get(key)!.segments).toEqual([expect.objectContaining({ contractorKey: key, vendorNetMills: null })]);
+    }
   });
 
   it("over all time counts accumulated values from zero and flags the links older than the series", async () => {
