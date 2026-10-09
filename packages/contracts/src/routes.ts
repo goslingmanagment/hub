@@ -1432,11 +1432,10 @@ const pageConversationFanSchema = z.object({
 });
 
 /** Why Fansly stopped serving a chat to its page, as far as Hub can tell
- * (arena "vanished chat", plan §8). `unchecked`: nobody has looked whether
- * the fan's account still exists — it was deleted or the fan blocked the
- * page. `probably_blocked`: the account is found without a session.
- * `probably_deleted`: it is not. Only `unchecked` is sent until Hub's
- * session-less account check ships. */
+ * (arena "vanished chat", plan §8 (а)): the partner's latest session-less
+ * public account check (Hub's public reader). `unchecked`: no check yet — it
+ * was deleted or the fan blocked the page. `probably_blocked`: the account is
+ * found without a session. `probably_deleted`: it is not. */
 const conversationChatAccessCauseSchema = z.enum(["unchecked", "probably_blocked", "probably_deleted"]);
 
 /** The chat's open unavailability episode (plan §2): Fansly refuses the

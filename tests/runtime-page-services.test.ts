@@ -11,6 +11,10 @@ const repoMocks = vi.hoisted(() => ({
   readDmReaderStore: vi.fn(async () => "page_dm_messages"),
   // Arena "vanished chat": the open unavailability episodes of a page's chats, by group id.
   readOpenChatUnavailability: vi.fn(async (): Promise<Map<string, unknown>> => new Map()),
+  // Arena R5: the partner's session-less public check, by thread id.
+  readChatPartnerPublicChecks: vi.fn(async (): Promise<Map<number, unknown>> => new Map()),
+  chatUnavailabilityCause: (check: { found: boolean } | undefined) =>
+    check === undefined ? "unchecked" : check.found ? "probably_blocked" : "probably_deleted",
   millsToNumber: (value: bigint) => Number(value),
 }));
 
@@ -242,6 +246,7 @@ describe("runtime page services", () => {
       messages: [],
     });
     repoMocks.readOpenChatUnavailability.mockResolvedValueOnce(new Map([["959503986971394048", {
+      threadId: 41,
       state: "established",
       openedAt: new Date("2026-10-04T10:00:00.000Z"),
       establishedAt: new Date("2026-10-04T17:11:00.000Z"),
@@ -270,6 +275,7 @@ describe("runtime page services", () => {
       ownerNote: "06.10: profile does not open from lora-1",
       cause: "unchecked",
     });
+    expect(repoMocks.readChatPartnerPublicChecks).toHaveBeenCalledWith({}, { threadIds: [41] });
   });
 
   it("allows OnlyFans conversation previews", async () => {

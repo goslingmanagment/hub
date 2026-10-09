@@ -77,6 +77,7 @@ sync/
     routes.ts                every route a request can take, its family and budget; the legacy send log's map
     transport.ts             the live page transport over the wire layer (packages/fansly/src/wire)
     identity-without-page.ts the no-page `/account/me` of onboarding and the create-page check (unpaced, journaled)
+    public-lookup.ts         the session-less public account reader (arena R5): its own egress, budget and stop
     resources/               one file per resource family
     ws/                      decode, router, the post-ack routing hook and a live page's socket (`source.ts`)
     lib/                     chain rules, walk helpers; the money, audience, fan-hydration, purchase-history, stats,
@@ -89,6 +90,8 @@ sync/
                              first hour on the engine and the combined pace audit of both journals
   excluded.ts                step 3, owner decision №8: `sync excluded probe | report | lift | unlift` (`cli/excluded.ts`)
   chats.ts                   the chats Fansly does not serve: `sync chats unavailable | note` (`cli/chats.ts`), no request
+  public-lookup.ts           the public account reader's levers: `sync public-lookup status | queue | enable | disable |
+                             resume | recheck-marks | proxy` (`cli/public-lookup.ts`), no request
   parity/                    step 4, owner decision №11: `sync dm-reader-parity` (`cli/dm-reader-parity.ts`), the
                              read-only DM reader parity of page_dm_messages and message_archive (the readers
                              serve live pages from the archive: "DM readers on the archive")
@@ -512,10 +515,59 @@ live-hour`:
   no existing answer carries the episode. Its own read-only route does — `agentThreadAvailability`
   (`GET /api/v1/agent/pages/:pageLabel/threads/:conversationRef/availability`,
   `modules/agent-read/handlers-thread-availability.ts`, `hub thread-availability`; `read:messages`): the chat's open
-  episode (`readOpenChatUnavailability`) without its evidence ids, `cause: unchecked` until the public account check
-  (plan §7) exists, or null — no open episode recorded, never proof that Fansly serves the chat. A page outside the
+  episode (`readOpenChatUnavailability`) without its evidence ids, with the cause the partner's public account check
+  gives (below: found → `probably_blocked`, not found → `probably_deleted`, none → `unchecked`), or null — no open
+  episode recorded, never proof that Fansly serves the chat. A page outside the
   grant or a ref the page holds no thread for is the plane's static 404; on a hub without the route `hub` says the
   state is unknown.
+
+## The public account reader (arena "vanished chat" R5)
+
+`fansly/public-lookup.ts`: one reader per host, in this process beside the actors and never one of them. It asks
+Fansly whether a fan's account exists **without any session** — `GET /account?ids=` built by the session-less builder
+(`buildFanslyPublicWireRequest`, a `credentials: none` spec; a session-bearing spec is refused before anything is
+built) and sent through its own egress (`fansly_public`: its own proxy, never a page's, Fansly's API host only). A fan
+who blocked a page is still returned; a deleted account is not.
+
+- **When**: the owner's live switch `fanslyPublicLookupEnabled` (off by default) and its proxy (`sync public-lookup
+  proxy set`); one pass at a time across processes (session advisory lock `(58216, 1)` on a connection of its own),
+  one request a pass; at least S × (1 + u) after its own previous completion (S the owner's Fansly pause, u ∈ [0, 0.2)
+  drawn after each send), at most 1 request a minute and 50 in 24 hours, counted from its own `fansly_send_log` rows
+  (`page_id` null, source `public_lookup`) at each request's SEND instant (`sent_at`; an attempt never marked sent at
+  its completion, one with neither at capture + its budget — never at the earlier journal instant). No page's
+  budget, clock or hold is touched.
+- **Admission and the lock**: the lock's connection is watched (`error`, `end`); the checks that admit a request
+  (the lock still held per `pg_locks`, not stopped, no attempt pending, the budget and the pace) and the write that
+  admits it (the `fansly_send_log` row and `fansly_public_lookup_state.pending_token`) are one transaction on that
+  connection, so a lost lock fails the admission; once the connection is gone the send check refuses and the send's
+  signal aborts — nothing goes out.
+- **Settlement**: an admitted attempt stays pending until the transaction that writes its result — the applied
+  answer, or the stop — clears it (only if it is still the pending one). While one is pending no reader sends: every
+  pass first settles it from its journals alone (the raw answer, else the send-log row), without a request — after a
+  failed write, a restart or a lost lock alike. One with no recorded outcome past its bound may have been sent: the
+  reader stops (`indeterminate`) instead of sending again. The outcome — the answer applied, or the stop and its
+  incident — is written before the transport is cleaned up, and that cleanup is bounded (a proxy that never answered
+  CONNECT keeps undici's close waiting for minutes; the public egress destroys its dispatcher after 2 s, the pass
+  waits 5 s at most). An answer is dated when it arrived (its journal instant), however late it is applied: it is
+  never fresher than it is, closes only the owner's requests queued before it, and never replaces a newer check.
+- **Whom** (`pickFanslyPublicLookupBatch`): the owner's queue first (`sync public-lookup recheck-marks`, owner decision
+  Р2 (а): the fans carrying the legacy deleted mark), then the partners of established unavailability episodes, then
+  the fans a page's lookup missed (`page_fans.account_probe_resolved = false`) — those two only when never checked or
+  checked over 7 days ago. One id once however many pages and reasons name it, up to `fanslyPublicLookupBatchSize`
+  (≤ 100) ids a request.
+- **Journal before parse**: the `fansly_send_log` row before the send, completed after it; the raw answer committed
+  to `observations` (`account_id` null, kind `account_lookup_public` — `:failed` for a body that is not a successful
+  envelope; every asked id in `requestedIds`: the fan erasure's page-less contract, `PAGELESS_FAN_OBSERVATION_KINDS`)
+  before the contract reads it. Then every asked fan gets `fans.public_checked_at` / `public_found`; a found account
+  loses the legacy deleted mark; a missing one keeps it, and the reader never sets one.
+- **Stop**: the first 429, 401/403, network failure (sent or not), answer off the contract (another status, a body
+  without a successful envelope, an account without an id or one not asked for) or attempt of unknown outcome stops
+  it: the state row keeps the reason and a Retry-After (`fansly_public_lookup_state`), the owner gets a global
+  incident (`fansly_sync_engine` / `public_lookup`; on the very first batch it says so) — retried on every pass until
+  its open is confirmed (`stop_incident_at`) — no fan changes, no session or other egress is tried. Only `sync
+  public-lookup resume` resumes it, and a Retry-After still ahead is waited for.
+- **Cause**: the chatters' `chatAccess.cause` and `agentThreadAvailability.cause` read the partner's check
+  (`readChatPartnerPublicChecks`): found → `probably_blocked`, not found → `probably_deleted`, none → `unchecked`.
 
 ## Ownership
 
@@ -825,7 +877,7 @@ Each is enforced in exactly one place and pinned by a test (design §1). The fir
 | I10 | `history_complete` only by an accepted empty page at `before = contiguous_oldest_id`; a short page is not the end; overlap is not proof. | `fansly/lib/chain.ts` |
 | I11 | A new event during a read raises `demand_revision`; an older answer never closes newer demand. | `engine/commit.ts` |
 | I12 | No history walk without a request. | `fansly/registry.ts` (`dm-messages.history` triggers only on a request) |
-| I13 | A Fansly HTTP request leaves the process only through the wire layer's single-request send, under the caller's send check; its callers are the page transport in `sync/` (the pacer's admission), the identity check of a session without a page (journaled, owner decision №4) and — the third — the session-less public account reader (arena "vanished chat" R5, `fansly/public-lookup.ts`, from the release after the egress): a `credentials: none` spec built by `buildFanslyPublicWireRequest` alone (no session, no cookie; a session-bearing spec is refused before anything is built, and the page's builder refuses a session-less one), sent only through the `fansly_public` egress — its own proxy, never a page's, Fansly's API host only — journaled in `fansly_send_log` with `page_id` null, source `public_lookup`. The legacy adapter and every legacy sender are deleted (step 4 S4-20); nothing in the runtime captures a page's legacy guard. | `packages/fansly/src/wire/send.ts` + `fansly/transport.ts` + `fansly/identity-without-page.ts` + `packages/fansly/src/wire/public.ts` + `services/egress/fansly-public.ts`; lint rule (no undici HTTP import in `packages/fansly`) + tests/fansly-send-guard-boundary.test.ts, tests/fansly-public-wire.test.ts |
+| I13 | A Fansly HTTP request leaves the process only through the wire layer's single-request send, under the caller's send check; its callers are the page transport in `sync/` (the pacer's admission), the identity check of a session without a page (journaled, owner decision №4) and — the third — the session-less public account reader (arena "vanished chat" R5, `fansly/public-lookup.ts`): a `credentials: none` spec built by `buildFanslyPublicWireRequest` alone (no session, no cookie; a session-bearing spec is refused before anything is built, and the page's builder refuses a session-less one), sent only through the `fansly_public` egress — its own proxy, never a page's, Fansly's API host only — journaled in `fansly_send_log` with `page_id` null, source `public_lookup`. The legacy adapter and every legacy sender are deleted (step 4 S4-20); nothing in the runtime captures a page's legacy guard. | `packages/fansly/src/wire/send.ts` + `fansly/transport.ts` + `fansly/identity-without-page.ts` + `fansly/public-lookup.ts` + `packages/fansly/src/wire/public.ts` + `services/egress/fansly-public.ts`; lint rule (no undici HTTP import in `packages/fansly`) + tests/fansly-send-guard-boundary.test.ts, tests/fansly-public-wire.test.ts |
 | I14 | Shadow mode is gone (step 4 S4-23): an actor runs a `live` page only, nothing writes a row with `shadow = true` or the outcome `shadow`, and no reader of a page's queue or journal sees the rows it left. (Until S4-23: shadow never sent and never wrote observations, domain tables, receipts or the overlay.) | `engine/host.ts` (`#runs`) + `engine/actor.ts` (`#ownershipExit`) + `repositories/sync/work.ts`, `attempts.ts` (`not shadow`); tests/sync-registry-coverage.test.ts, tests/sync-engine-core.integration.test.ts |
 | I15 | The erasure fence is taken in every apply that writes fan material. | `engine/commit.ts` |
 | I16 | The command outbox semantics are untouched (Fansly has no sends). | — |

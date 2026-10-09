@@ -370,6 +370,7 @@ their clean window (`routes`) and the open latches (`openLatches`), and the glob
 | | `planned_stale` | a poll not served within its SLO (else 3 periods) | `sync why` on the key |
 | | `transactions_ledger_incomplete` | the newest finished rescan proved the ledger short of Fansly's lifetime total | the owner's backfill: `sync work enqueue --resource transactions.backfill` |
 | 5 `process` (global) | `heartbeat_silent`, `stalled` | no `sync` heartbeat for 2 minutes while a page is in the engine; or the stall watchdog ended the process | [Watchdog restarts](#watchdog-restarts-shutdown-and-deploys) |
+| `public_lookup` (global) | `rate_limited`, `auth_refused`, `network`, `off_contract`, `indeterminate` | the session-less public account reader stopped on its first failure (or an attempt whose outcome nobody recorded); it stays open until the owner resumes the reader | [The public account reader](#the-public-account-reader) |
 
 Alert 1 stays 10 minutes after its hold ends ("hold cleared and 10 minutes clean"). A pause of the whole page and a
 page hold explain waiting work: no `urgent_waiting` and no `planned_stale` for it, and no `request_stalled` under a
@@ -622,8 +623,9 @@ Where it is counted: `sync page status` (`chatsUnavailable`), `sync alerts statu
 `refusedRecently` — the chats that opened an episode within the `chats_refused` window — and
 `unconfirmedWithoutThread`), the «Синк» tab (the «Сообщения чатов» block: «Чатов, которые Fansly не отдаёт: N»), the
 golden signal `sync_chats_unavailable`. An agent reads one chat's open episode with `hub thread-availability`
-(`agentThreadAvailability`, `read:messages`; no evidence ids, `cause: unchecked`): null there means no open episode is
-recorded, not that Fansly serves the chat.
+(`agentThreadAvailability`, `read:messages`; no evidence ids; `cause` from the partner's public check — [The public
+account reader](#the-public-account-reader)): null there means no open episode is recorded, not that Fansly serves the
+chat.
 
 ```sh
 pnpm cli sync chats unavailable --page lora-1
@@ -714,6 +716,59 @@ pnpm cli sync public-lookup proxy remove --note 'proxy rotated'
 `--proxy-password-stdin` reads the password from stdin (`op read 'op://…' | …`); `--proxy-password-env NAME` and
 `--proxy-password-file FILE` are the alternatives. Each change is audited (`admin.fansly_public_egress_set`,
 `admin.fansly_public_egress_remove`: the masked route, never the password).
+
+**The reader** runs in the `sync` process and is **off** until the owner turns it on (`fanslyPublicLookupEnabled`, a
+live setting: no restart). It asks, in this order and each fan once however many pages name it: the owner's one-off
+re-check of the legacy deleted marks (owner decision Р2 (а), queued by `recheck-marks`: 1 207 marks ≈ 13 requests),
+the partners of chats Fansly stopped serving (established episodes) and the fans a page's lookup missed — those two
+when never checked or checked over 7 days ago. Up to `fanslyPublicLookupBatchSize` ids a request (100 by default),
+at most 1 request a minute and 50 a day, and never sooner than the page pause S × (1 + u) after its previous one; no
+page's budget is used. What it writes: `fans.public_checked_at` and `public_found`; a found account loses its
+deleted mark, a missing one keeps it. The chat's banner and `hub thread-availability` then say «вероятно ЧС»
+(`probably_blocked`: found) or «вероятно удалён» (`probably_deleted`: not found); unchecked stays `unchecked`.
+
+```sh
+pnpm cli sync public-lookup status
+pnpm cli sync public-lookup queue --limit 20
+pnpm cli sync public-lookup recheck-marks --note 'owner decision R2 (a): recheck the legacy deleted marks'
+pnpm cli sync public-lookup enable --note 'proxy set, start the public reader'
+pnpm cli sync public-lookup disable --note 'pause the public reader'
+pnpm cli sync public-lookup resume --note 'checked the proxy and the stop reason'
+```
+
+- `status` and `queue` are read-only: the switch, the proxy (masked), a stop and its Retry-After, the requests of the
+  last 24 hours, the demand by reason, the re-check's progress («снято / осталось»: found and taken off, not found
+  and kept, marks remaining) and what the next pass does.
+- `recheck-marks` only enqueues (audited `admin.fansly_public_lookup_recheck_marks`, counts only); the reader asks in
+  its own pace. `enable` / `disable` write the live setting through the console's path (`admin.config_update`).
+- **A stop.** The first 429, 401/403, network failure or unexpected answer stops the reader and opens the incident
+  «Fansly public account reader stopped» (`fansly_sync_engine` / `public_lookup`, no page; retried every pass until
+  it is confirmed); on the very first batch it says so — then the public lookup itself is in question, decide before
+  resuming. So does an attempt whose outcome nobody recorded (`indeterminate`: its process died mid-request) — it
+  may have reached Fansly and is never sent again on a guess. An attempt whose answer is journaled but not yet
+  applied (a failed write, a restart) is settled from the journal on the next pass, before any new request. Nothing about any fan changes on
+  a failure, and the reader never falls back to a page's session or proxy. Read `status`, the journal below and the
+  raw answer, then `resume` (audited `admin.fansly_public_lookup_resume`; it resolves the incident). A Retry-After
+  still ahead is waited for after a resume.
+
+The reader's requests of the last day and their outcomes:
+
+```sql
+select l.captured_at, l.sent_at, l.completed_at, l.outcome, l.http_status, l.operation
+  from fansly_send_log l
+ where l.page_id is null and l.source = 'public_lookup'
+   and l.captured_at > now() - interval '24 hours'
+ order by l.captured_at desc;
+```
+
+Its state (a stop and whether its incident is confirmed, the Retry-After it honours, an attempt not settled yet, its
+first and latest answers):
+
+```sql
+select stopped_at, stop_reason, stop_http_status, stop_detail, stop_first_batch, stop_incident_at, retry_not_before,
+       pending_since, first_answer_at, last_answer_at, resumed_at
+  from fansly_public_lookup_state;
+```
 
 ## Onboarding a page
 

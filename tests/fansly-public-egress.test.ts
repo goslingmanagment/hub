@@ -1,11 +1,14 @@
 import { createRequire } from "node:module";
+import net from "node:net";
 
 import { afterEach, describe, expect, it } from "vitest";
 
 import { sendFanslyWireRequest } from "@agency_hub_core/fansly";
 import { egressScopeKey } from "@agency_hub_core/platform-core";
+import { createProxyRequestDispatcher } from "@agency_hub_core/shared";
 
 import {
+  closeDispatcherWithin,
   FANSLY_PUBLIC_API_HOST,
   FanslyPublicHostRefusedError,
   fanslyPublicEgressKey,
@@ -109,5 +112,40 @@ describe("the public egress's host restriction", () => {
     expect(egressScopeKey({ kind: "fansly_public" })).toBe("fansly-public");
     expect(fanslyPublicEgressKey({ url: "socks5://proxy.example.internal:1080" }))
       .toBe("fansly-public:socks5://proxy.example.internal:1080");
+  });
+});
+
+describe("closing the public egress after its request", () => {
+  it("destroys a dispatcher whose graceful close hangs on a CONNECT the proxy never answered", async () => {
+    // A local "proxy" that takes the TCP connection and never answers
+    // CONNECT. The CONNECT names an .invalid origin: nothing leaves the host.
+    const sockets: net.Socket[] = [];
+    const server = net.createServer((socket) => {
+      sockets.push(socket);
+      socket.on("error", () => undefined);
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const port = (server.address() as net.AddressInfo).port;
+      const dispatcher = createProxyRequestDispatcher({ url: `http://127.0.0.1:${port}` });
+      const outcome = await sendFanslyWireRequest(dispatcher, { url: "https://origin.invalid/x", headers: {}, timeoutMs: 300 },
+        { check: () => null }, new AbortController().signal);
+      expect(outcome).toMatchObject({ kind: "timeout", sent: false });
+      // Undici's graceful close keeps waiting for that tunnel; the bound
+      // destroys it instead.
+      const started = performance.now();
+      expect(await closeDispatcherWithin(dispatcher, 500)).toBe("destroyed");
+      expect(performance.now() - started).toBeLessThan(2_000);
+    } finally {
+      for (const socket of sockets) socket.destroy();
+      await new Promise((resolve) => server.close(resolve));
+    }
+  }, 20_000);
+
+  it("closes gracefully when it can", async () => {
+    let destroyed = false;
+    const dispatcher = { close: async () => undefined, destroy: async () => { destroyed = true; } };
+    expect(await closeDispatcherWithin(dispatcher as never, 500)).toBe("closed");
+    expect(destroyed).toBe(false);
   });
 });

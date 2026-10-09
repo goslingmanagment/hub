@@ -1454,8 +1454,9 @@ export const agentThreadAvailabilityStateEnum = z.enum(["refusing", "established
  *     the account, so the fan probably blocked the page;
  *   - `probably_deleted` — that check did not find the account, so it was
  *     probably deleted.
- * The public check does not run yet (plan §7): until it does, every episode
- * is `unchecked`.
+ * The check is Hub's session-less public account reader (plan §7), which runs
+ * only while the owner keeps it on; a partner it has not checked reads
+ * `unchecked`.
  */
 export const agentThreadAvailabilityCauseEnum = z.enum(["unchecked", "probably_blocked", "probably_deleted"]);
 

@@ -13,7 +13,10 @@ import {
   getPageConversationPreview,
   getPageDmSyncCoverage,
   readDmReaderStore,
+  chatUnavailabilityCause,
+  readChatPartnerPublicChecks,
   readOpenChatUnavailability,
+  type ChatUnavailabilityCause,
   type ChatUnavailabilityEpisode,
   type PageConversationMessageProvenance,
 } from "@agency_hub_core/db";
@@ -44,12 +47,20 @@ function serializeProvenance(provenance: PageConversationMessageProvenance | und
     : { source: "rest" as const };
 }
 
+/** The chat's open unavailability episode and why, as far as Hub can tell. */
+interface ChatAccessRead {
+  episode: ChatUnavailabilityEpisode;
+  cause: ChatUnavailabilityCause;
+}
+
 /** The chat's open unavailability episode (arena "vanished chat", plan §5):
  * additive, so a chat without one answers byte for byte as before. The cause
- * stays `unchecked` until Hub's session-less account check ships (plan §7,
- * §8); the chatters' copy is keyed by it. */
-function serializeChatAccess(episode: ChatUnavailabilityEpisode | undefined) {
-  if (episode === undefined) return {};
+ * is the partner's session-less public check (plan §7, §8 (а)): found →
+ * `probably_blocked`, not found → `probably_deleted`, none → `unchecked`; the
+ * chatters' copy is keyed by it. */
+function serializeChatAccess(access: ChatAccessRead | undefined) {
+  if (access === undefined) return {};
+  const { episode } = access;
   return {
     chatAccess: {
       state: episode.state,
@@ -58,20 +69,24 @@ function serializeChatAccess(episode: ChatUnavailabilityEpisode | undefined) {
       lastRefusalAt: episode.lastRefusalAt.toISOString(),
       refusals: episode.refusals,
       ownerNote: episode.ownerNote,
-      cause: "unchecked" as const,
+      cause: access.cause,
     },
   };
 }
 
-/** The open episode of one chat of the page (one indexed read). Only the
- * Fansly engine writes episodes: another platform's chat never has one. */
+/** The open episode of one chat of the page (one indexed read) and, when it
+ * has one, its partner's public check. Only the Fansly engine writes
+ * episodes: another platform's chat never has one. */
 async function readChatAccessEpisode(
   app: AppContext,
   pageId: number,
   platformConversationId: string,
-): Promise<ChatUnavailabilityEpisode | undefined> {
+): Promise<ChatAccessRead | undefined> {
   const episodes = await readOpenChatUnavailability(app.db, { pageId, groupIds: [platformConversationId] });
-  return episodes.get(platformConversationId);
+  const episode = episodes.get(platformConversationId);
+  if (episode === undefined) return undefined;
+  const checks = await readChatPartnerPublicChecks(app.db, { threadIds: [episode.threadId] });
+  return { episode, cause: chatUnavailabilityCause(checks.get(episode.threadId)) };
 }
 
 function serializePageMetric(value: number | null | undefined) {

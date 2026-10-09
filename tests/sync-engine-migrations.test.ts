@@ -1279,3 +1279,57 @@ describe("fansly_public_lookup_egress.sql (arena \"vanished chat\", R5 M5: the p
     expect(rollbackCompatible()).toContain(`"${migration}"`);
   });
 });
+
+describe("fans_public_lookup.sql (arena \"vanished chat\", R5 M4: the public reader's answers, queue and state)", () => {
+  // Found by its name, not its number: the number is the next free one at merge.
+  const found = readdirSync("packages/db/migrations").filter((file) => file.endsWith("_fans_public_lookup.sql"));
+  const migration = found[0] ?? "";
+  const text = found.length === 1 ? readFileSync(`packages/db/migrations/${migration}`, "utf8") : "";
+  const sql = stripComments(text);
+  const statements = topLevelStatements(sql);
+
+  it("exists once, after the reader's egress (M5)", () => {
+    const egress = readdirSync("packages/db/migrations").filter((file) => file.endsWith("_fansly_public_lookup_egress.sql"));
+    expect(found).toHaveLength(1);
+    expect(egress).toHaveLength(1);
+    expect(migration > egress[0]!).toBe(true);
+    expect(text.startsWith("-- agency-hub:no-transaction")).toBe(false);
+  });
+
+  it("adds two nullable columns to fans with their pair CHECK, the queue, the state and its seed — additive only", () => {
+    const body = statements.filter((statement) => !statement.startsWith("comment on "));
+    expect(body).toEqual([
+      "set local lock_timeout = '5s'",
+      "alter table fans add column if not exists public_checked_at timestamptz, add column if not exists public_found boolean",
+      "do $$…$$",
+      "alter table fans validate constraint fans_public_check_pair_check",
+      expect.stringMatching(/^create table if not exists fansly_public_lookup_queue \( fan_id bigint primary key references fans\(id\) on delete cascade, /),
+      "create index if not exists fansly_public_lookup_queue_pending_idx on fansly_public_lookup_queue (enqueued_at, fan_id) where done_at is null",
+      expect.stringMatching(/^create table if not exists fansly_public_lookup_state \( id smallint primary key default 1, /),
+      "insert into fansly_public_lookup_state (id) values (1) on conflict (id) do nothing",
+      "do $$…$$",
+    ]);
+    expect(text).toContain("check ((public_checked_at is null) = (public_found is null)) not valid;");
+    // No default on the new columns (catalog-only), nothing dropped or rewritten.
+    expect(body[1]).not.toMatch(/default/);
+    expect(sql.replace("on delete cascade", "")).not.toMatch(/\b(drop|rename|truncate|delete|update)\b/i);
+    // The queue's vocabularies and life cycle.
+    expect(checkList(body[4]!, "fansly_public_lookup_queue_reason_check")).toEqual(["deleted_mark"]);
+    expect(body[6]).toContain("stop_reason in ('rate_limited', 'auth_refused', 'network', 'off_contract', 'indeterminate')");
+    // The attempt admitted and not settled, and a stop's incident confirmation.
+    expect(body[6]).toContain("constraint fansly_public_lookup_state_pending_check check ((pending_token is null) = (pending_since is null))");
+    expect(body[6]).toContain("stop_first_batch is null and stop_incident_at is null");
+    expect(text).toContain("grant select on fansly_public_lookup_state to read_only;");
+  });
+
+  it("keeps the vocabularies of the code", async () => {
+    const db = await import("@agency_hub_core/db");
+    expect(db.FANSLY_PUBLIC_LOOKUP_STOP_REASONS).toEqual(["rate_limited", "auth_refused", "network", "off_contract", "indeterminate"]);
+    expect(db.FANSLY_PUBLIC_LOOKUP_DEMANDS).toEqual(["deleted_mark", "episode_partner", "page_lookup_miss"]);
+  });
+
+  it("allows application rollback: the previous image names none of it, and its erasure takes the queue row with the fan", () => {
+    expect(rollbackCompatible()).toContain(`"${migration}"`);
+    expect(sql).toContain("references fans(id) on delete cascade");
+  });
+});

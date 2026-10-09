@@ -3,8 +3,11 @@ import type {
   AgentThreadAvailabilityResponse,
 } from "@agency_hub_core/contracts";
 import {
+  chatUnavailabilityCause,
   readAgentThreadCoverage,
+  readChatPartnerPublicChecks,
   readOpenChatUnavailability,
+  type ChatUnavailabilityCause,
   type ChatUnavailabilityEpisode,
 } from "@agency_hub_core/db";
 import type { Platform } from "@agency_hub_core/shared";
@@ -46,14 +49,12 @@ import {
  */
 
 /**
- * Why Fansly stopped serving the chat (plan §8). The public account check
- * without a session that tells `probably_blocked` from `probably_deleted`
- * (plan §7) does not exist yet and neither do its columns, so every episode
- * is `unchecked` until it lands.
+ * Why Fansly stopped serving the chat (plan §8 (а)): the partner's public
+ * account check without any session (plan §7, `sync/fansly/public-lookup.ts`)
+ * — found → `probably_blocked`, not found → `probably_deleted`, no check →
+ * `unchecked`. A likelihood, never a proof.
  */
-const EPISODE_CAUSE = "unchecked" as const;
-
-function toWireEpisode(episode: ChatUnavailabilityEpisode): AgentThreadAvailabilityEpisode {
+function toWireEpisode(episode: ChatUnavailabilityEpisode, cause: ChatUnavailabilityCause): AgentThreadAvailabilityEpisode {
   return {
     state: episode.state,
     openedAt: episode.openedAt.toISOString(),
@@ -64,7 +65,7 @@ function toWireEpisode(episode: ChatUnavailabilityEpisode): AgentThreadAvailabil
     ownerNote: episode.ownerNote === null || episode.ownerNoteAt === null
       ? null
       : { text: episode.ownerNote, at: episode.ownerNoteAt.toISOString() },
-    cause: EPISODE_CAUSE,
+    cause,
   };
 }
 
@@ -92,7 +93,10 @@ export async function handleAgentThreadAvailability(
         return { thread: false, episode: null };
       }
       const open = await readOpenChatUnavailability(tx, { pageId: page.id, groupIds: [params.conversationRef] });
-      return { thread: true, episode: open.get(params.conversationRef) ?? null };
+      const found = open.get(params.conversationRef) ?? null;
+      if (found === null) return { thread: true, episode: null };
+      const checks = await readChatPartnerPublicChecks(tx, { threadIds: [found.threadId] });
+      return { thread: true, episode: { episode: found, cause: chatUnavailabilityCause(checks.get(found.threadId)) } };
     }, "agent_thread_availability");
     if (!thread) {
       throw staticNotFound();
@@ -126,7 +130,7 @@ export async function handleAgentThreadAvailability(
         platform: page.platform as Platform,
         conversationRef: params.conversationRef,
       },
-      episode: episode === null ? null : toWireEpisode(episode),
+      episode: episode === null ? null : toWireEpisode(episode.episode, episode.cause),
       delivery: singletonDelivery(returned),
       capture: evidence.capture,
       conclusion: evidence.conclusion,

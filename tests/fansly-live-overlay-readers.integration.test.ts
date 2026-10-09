@@ -428,7 +428,7 @@ describe("chat access: a chat Fansly no longer serves to the page (arena vanishe
     };
   }
 
-  it("both chatter routes carry the open episode as chatAccess, cause unchecked; other chats and ended episodes none", async () => {
+  it("both chatter routes carry the open episode as chatAccess, its cause from the public check; other chats and ended episodes none", async () => {
     const f = await fixture();
     await seedChat(f);
     const read = await routes(f);
@@ -452,6 +452,18 @@ describe("chat access: a chat Fansly no longer serves to the page (arena vanishe
     expect(messagesRest).toEqual(baselineMessages);
     expect(previewRest).toEqual(baselinePreview);
     for (const conversation of await read(OTHER_GROUP)) expect(conversation).not.toHaveProperty("chatAccess");
+
+    // The cause is the partner's session-less public check (arena R5, plan
+    // §8 (а)): found → probably blocked, not found → probably deleted.
+    await testDb.pool.query("update fans set public_checked_at = now(), public_found = true where platform_user_id = $1", [FAN]);
+    for (const conversation of await read(GROUP)) {
+      expect(conversation.chatAccess).toEqual({ ...expected, cause: "probably_blocked" });
+    }
+    await testDb.pool.query("update fans set public_found = false where platform_user_id = $1", [FAN]);
+    for (const conversation of await read(GROUP)) {
+      expect(conversation.chatAccess).toEqual({ ...expected, cause: "probably_deleted" });
+    }
+    await testDb.pool.query("update fans set public_checked_at = null, public_found = null where platform_user_id = $1", [FAN]);
 
     // A refusing episode is sent too (the dashboard shows no banner for it).
     await testDb.pool.query("delete from page_dm_thread_unavailability");

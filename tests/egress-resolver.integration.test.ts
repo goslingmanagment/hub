@@ -222,7 +222,13 @@ describe("egress resolver (Stage 26)", () => {
     const trap = await armNoOutboundTrap(testDb);
     try {
       const cli = buildSyncPublicLookupCommandGroup({
-        openContext: async () => ({ db: appContext.db, config: appContext.config, close: async () => undefined }),
+        openContext: async () => ({
+          db: appContext.db,
+          config: appContext.config,
+          rawConfig: appContext.config,
+          logger: appContext.logger,
+          close: async () => undefined,
+        }),
         print: (line) => printed.push(line),
         readStdin: async () => "fake-stdin-password\n",
       });

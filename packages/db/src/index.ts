@@ -169,6 +169,8 @@ export * from "./repositories/fansly-send-guard.ts";
 export * from "./repositories/fansly-send-guard-checks.ts";
 // The session-less public account reader's own proxy (arena "vanished chat" R5).
 export * from "./repositories/fansly-public-egress.ts";
+// Its demand, budget, answers and stop (0259).
+export * from "./repositories/fansly-public-lookup.ts";
 // Fansly Sync Engine core state (0228): pages, the work queue, the attempt
 // journal and its telemetry retention; the DM thread chain (0231); the
 // conversation list's own writer; the DM message reads; the subject-queue
