@@ -5,13 +5,21 @@ import { createFanslyPage, createModel, createOnlyFansPage } from "@agency_hub_c
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { createEgressPacer } from "../apps/runtime/src/services/egress/pacer.ts";
 import { resolveEgress } from "../apps/runtime/src/services/egress/resolver.ts";
+import {
+  FanslyPublicEgressUnavailableError,
+  readFanslyPublicProxy,
+  removeFanslyPublicProxy,
+  saveFanslyPublicProxy,
+} from "../apps/runtime/src/services/egress/fansly-public.ts";
 import { saveProxy } from "../apps/runtime/src/services/page-context.ts";
+import { buildSyncPublicLookupCommandGroup } from "../apps/runtime/src/sync/cli/public-lookup.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
   type StartedTestDatabase,
 } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
+import { armNoOutboundTrap } from "./helpers/no-outbound.ts";
 import { INTEGRATION_TEST_TIMEOUT_MS } from "./helpers/timeouts.ts";
 
 let testDb: StartedTestDatabase | null = null;
@@ -135,6 +143,114 @@ describe("egress resolver (Stage 26)", () => {
       .rejects.toThrow(/Proxy host must not be loopback/);
     await expect(resolveEgress(appContext, { kind: "fansly_candidate", proxy: { url: "http://10.0.0.7:3128" } }))
       .rejects.toThrow(/Proxy host must not be loopback/);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("resolves fansly_public onto the reader's own stored proxy only: none configured, a page's proxy or a private target is refused", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    // Arena R5 (plan §7): no proxy configured — no transport, nothing sent.
+    await expect(resolveEgress(appContext, { kind: "fansly_public" })).rejects.toThrow(FanslyPublicEgressUnavailableError);
+    await expect(resolveEgress(appContext, { kind: "fansly_public" })).rejects.toThrow(/not_configured/);
+
+    // A page's proxy (same address and user) is refused when it is set …
+    await seedFanslyPage("egress-public-page", "socks5://page-proxy.example.internal:1080");
+    await expect(saveFanslyPublicProxy(appContext, {
+      proxy: { url: "socks5://page-proxy.example.internal:1080" },
+      actor: "test",
+      note: "a page's",
+    })).rejects.toThrow(/shares_page_proxy.*egress-public-page/);
+    // … a loopback or private target too …
+    await expect(saveFanslyPublicProxy(appContext, {
+      proxy: { url: "http://10.0.0.7:3128" },
+      actor: "test",
+      note: "private",
+    })).rejects.toThrow(/Proxy host must not be loopback/);
+    expect((await testDb.pool.query("select count(*)::int as n from fansly_public_egress")).rows[0]!.n).toBe(0);
+
+    // … while another user of the same gateway is another exit, and is accepted.
+    const view = await saveFanslyPublicProxy(appContext, {
+      proxy: { url: "socks5://page-proxy.example.internal:1080", username: "public-reader", password: "fake-password" },
+      actor: "test",
+      note: "the reader's own",
+    });
+    expect(view).toMatchObject({ configured: true, route: "socks5://page-proxy.example.internal:1080 (auth)", sharedWithPages: [] });
+    // Stored as a page's proxy is: the URL, the auth encrypted, never in clear.
+    const stored = (await testDb.pool.query<{ url: string; encrypted_auth: string; key_version: number }>(
+      "select url, encrypted_auth, key_version from fansly_public_egress",
+    )).rows[0]!;
+    expect(stored.url).toBe("socks5://page-proxy.example.internal:1080");
+    expect(stored.encrypted_auth).not.toContain("fake-password");
+    expect(stored.key_version).toBe(appContext.config.encryptionKeyVersion);
+    const audit = (await testDb.pool.query<{ metadata: Record<string, unknown> }>(
+      "select metadata from audit_events where event_type = 'admin.fansly_public_egress_set'",
+    )).rows;
+    expect(audit).toHaveLength(1);
+    expect(JSON.stringify(audit[0]!.metadata)).not.toContain("fake-password");
+
+    const resolved = await resolveEgress(appContext, { kind: "fansly_public" });
+    expect(resolved.egressKey).toBe("fansly-public:socks5://page-proxy.example.internal:1080");
+    expect(resolved.dispatcher).not.toBeNull();
+    // The reader paces itself.
+    await expect(resolved.pace("bulk")).resolves.toBe(0);
+    // Fansly's API host only: anything else is refused before a connection.
+    await expect(resolved.dispatcher!.request({ origin: "https://api.ipify.org", path: "/", method: "GET" }))
+      .rejects.toThrow(/only https:\/\/apiv3\.fansly\.com/);
+    await resolved.close();
+
+    // Should a page get the same proxy later, the resolver refuses it again.
+    await saveProxy(appContext, (await seedFanslyPage("egress-public-late", "http://late.example.internal:3128")).id, {
+      url: "socks5://page-proxy.example.internal:1080",
+      username: "public-reader",
+      password: "fake-password",
+    });
+    await expect(resolveEgress(appContext, { kind: "fansly_public" })).rejects.toThrow(/shares_page_proxy.*egress-public-late/);
+
+    expect(await removeFanslyPublicProxy(appContext, { actor: "test", note: "gone" })).toBe(true);
+    expect(await removeFanslyPublicProxy(appContext, { actor: "test", note: "gone again" })).toBe(false);
+    await expect(resolveEgress(appContext, { kind: "fansly_public" })).rejects.toThrow(/not_configured/);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("sets, shows and removes the reader's proxy from the owner's CLI, the password from stdin, nothing echoed or sent", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const printed: string[] = [];
+    const trap = await armNoOutboundTrap(testDb);
+    try {
+      const cli = buildSyncPublicLookupCommandGroup({
+        openContext: async () => ({ db: appContext.db, config: appContext.config, close: async () => undefined }),
+        print: (line) => printed.push(line),
+        readStdin: async () => "fake-stdin-password\n",
+      });
+      await cli.parseAsync(["public-lookup", "proxy", "show"], { from: "user" });
+      expect(printed.at(-1)).toMatch(/not configured — the public account reader sends nothing/);
+      await cli.parseAsync([
+        "public-lookup", "proxy", "set",
+        "--proxy-url", "http://reader.example.internal:3128",
+        "--proxy-username", "reader",
+        "--proxy-password-stdin",
+        "--note", "owner's dedicated proxy",
+      ], { from: "user" });
+      await cli.parseAsync(["public-lookup", "proxy", "show"], { from: "user" });
+      expect(printed.join("\n")).toContain("public egress: http://reader.example.internal:3128 (auth)");
+      expect(printed.join("\n")).not.toContain("fake-stdin-password");
+      const proxy = await readFanslyPublicProxy(appContext);
+      // The trailing newline of `op read` is not part of the password.
+      expect(proxy).toMatchObject({ username: "reader", password: "fake-stdin-password" });
+      await expect(cli.parseAsync([
+        "public-lookup", "proxy", "set", "--proxy-url", "http://reader.example.internal:3128",
+        "--proxy-password-stdin", "--proxy-password-env", "X", "--note", "two sources",
+      ], { from: "user" })).rejects.toThrow(/only one of/);
+      await cli.parseAsync(["public-lookup", "proxy", "remove", "--note", "rotated"], { from: "user" });
+      expect(await readFanslyPublicProxy(appContext)).toBeNull();
+      await trap.assertNoOutbound();
+    } finally {
+      await trap.restore();
+    }
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("records service-vendor identity while preserving OFAPI/Fansly policies", async (context) => {

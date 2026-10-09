@@ -15,6 +15,7 @@ import {
   resolveStoredProxyEgressKey,
 } from "../page-context.ts";
 import { assertAllowedProxyTarget } from "../proxy-validation.ts";
+import { resolveFanslyPublicEgress } from "./fansly-public.ts";
 import { createEgressPacer } from "./pacer.ts";
 import {
   buildServiceEgressContext,
@@ -39,6 +40,14 @@ import {
 //   direct), its target checked here (`assertAllowedProxyTarget`: nothing
 //   else vouches for a proxy no page holds), and unpaced (owner decision №4:
 //   a session whose account is not known yet is paced against no page).
+// - fansly_public    — the session-less public account reader (arena "vanished
+//   chat" R5, owner decision Р1): its OWN proxy, which the owner configures
+//   and no page holds (`fansly_public_egress`; a page's proxy is refused),
+//   letting through Fansly's API host only (`FANSLY_PUBLIC_API_HOST`;
+//   anything else is refused before a connection opens). Never direct and
+//   never a fallback: without that proxy the scope throws and the reader
+//   sends nothing. Unpaced here: the reader paces itself
+//   (egress/fansly-public.ts).
 // - page scope       — the page's assigned proxy is the address identity
 //   (Fansly direct-to-platform MUST ride it). The legacy OnlyFans page-scope
 //   branch below has no runtime callers: OFAPI callers must use vendor scope,
@@ -103,6 +112,10 @@ export async function resolveEgress(
       pace: (priorityClass) => pacer.pace(priorityClass),
       close: async () => {},
     };
+  }
+
+  if (scope.kind === "fansly_public") {
+    return resolveFanslyPublicEgress(app);
   }
 
   if (scope.kind === "fansly_candidate") {

@@ -691,6 +691,30 @@ summaries: a new socket message of an established chat opens `message_unconfirme
 parity window defers it), the head row the message opens inherits the vendor's block and shows "Needs attention · 1
 blocked by Fansly" again, and there is no `chats_refused`. No data changes either way.
 
+## The public account reader
+
+Whether a fan's account still exists is asked **without any session** (arena "vanished chat" R5, owner decision Р1):
+the way a logged-out browser asks, `GET /account?ids=…` with no authorization, no session or client id, no client
+check and no cookie. A fan who blocked a page is still found that way; a deleted account is not. No page's session
+and no page's proxy is ever used for it: the request is built by the session-less builder alone (a spec that carries
+a session is refused before anything is built) and leaves through the reader's **own egress** (`fansly_public`):
+one proxy that the owner configures and no page holds, letting through Fansly's API host only. Without it the
+reader sends nothing.
+
+The proxy's address and secret live in 1Password, never in the repository or this runbook. Set it from there; the
+password is stored encrypted (as a page's proxy is) and never printed; a proxy that a page uses (the same address
+and user) is refused. Setting, showing or removing it sends nothing.
+
+```sh
+pnpm cli sync public-lookup proxy show
+pnpm cli sync public-lookup proxy set --proxy-url http://proxy.example:8080 --proxy-username user --proxy-password-stdin --note 'the public reader proxy from 1Password'
+pnpm cli sync public-lookup proxy remove --note 'proxy rotated'
+```
+
+`--proxy-password-stdin` reads the password from stdin (`op read 'op://…' | …`); `--proxy-password-env NAME` and
+`--proxy-password-file FILE` are the alternatives. Each change is audited (`admin.fansly_public_egress_set`,
+`admin.fansly_public_egress_remove`: the masked route, never the password).
+
 ## Onboarding a page
 
 A new Fansly page is born `live` on the engine; there is no shadow period and no switch.

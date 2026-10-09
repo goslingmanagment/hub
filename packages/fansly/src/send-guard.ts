@@ -20,9 +20,12 @@ import type { Dispatcher } from "undici";
 // The legacy senders are deleted (step 4); their journal rows stay.
 
 /** Who sent. A closed vocabulary, mirrored by the CHECK on
- *  `fansly_send_log.source` (migration 0225): the journal keeps the rows of
- *  the deleted legacy senders. `onboarding` and `credentials_verify` are the
- *  ones still written (the identity check of a session without a page). */
+ *  `fansly_send_log.source` (migration 0225, widened by
+ *  `*_fansly_public_lookup_egress.sql`): the journal keeps the rows of the
+ *  deleted legacy senders. `onboarding` and `credentials_verify` (the identity
+ *  check of a session without a page) and `public_lookup` (the session-less
+ *  public account reader, arena "vanished chat" R5: `page_id` null, no
+ *  session) are the ones still written. */
 export const FANSLY_SEND_SOURCES = [
   "sync_stream",
   "ws_hint",
@@ -40,6 +43,7 @@ export const FANSLY_SEND_SOURCES = [
   "ws_connect",
   "binding_preflight",
   "ws_probe",
+  "public_lookup",
 ] as const;
 export type FanslySendSource = (typeof FANSLY_SEND_SOURCES)[number];
 

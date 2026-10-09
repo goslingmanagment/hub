@@ -1239,3 +1239,43 @@ describe("retire_dm_unresolvable_exclusion.sql (arena \"vanished chat\", R4: a l
     }
   });
 });
+
+describe("fansly_public_lookup_egress.sql (arena \"vanished chat\", R5 M5: the public reader's egress)", () => {
+  // Found by its name, not its number: the number is the next free one at merge.
+  const found = readdirSync("packages/db/migrations").filter((file) => file.endsWith("_fansly_public_lookup_egress.sql"));
+  const migration = found[0] ?? "";
+  const text = found.length === 1 ? readFileSync(`packages/db/migrations/${migration}`, "utf8") : "";
+  const sql = stripComments(text);
+  const statements = topLevelStatements(sql);
+
+  it("exists once, after the erasure of the reader's journal shipped (R4) and the last arena migration", () => {
+    expect(found).toHaveLength(1);
+    expect(migration > "0254_retire_dm_unresolvable_exclusion.sql").toBe(true);
+    // Transactional (the runner's own transaction): `set local` needs one.
+    expect(text.startsWith("-- agency-hub:no-transaction")).toBe(false);
+  });
+
+  it("adds the egress table and replaces the source CHECK with the old list plus public_lookup, not valid then validated", () => {
+    const body = statements.filter((statement) => !statement.startsWith("comment on "));
+    expect(body).toEqual([
+      "set local lock_timeout = '5s'",
+      expect.stringMatching(/^create table if not exists fansly_public_egress \( id smallint primary key default 1, url text not null, encrypted_auth text, key_version integer, /),
+      "alter table fansly_send_log drop constraint if exists fansly_send_log_source_check",
+      expect.stringMatching(/^alter table fansly_send_log add constraint fansly_send_log_source_check check \(source in \(.*'public_lookup' \)\) not valid$/),
+      "alter table fansly_send_log validate constraint fansly_send_log_source_check",
+    ]);
+    const table = body[1]!;
+    // A singleton of no page: no foreign key, no page or fan column.
+    expect(table).toContain("constraint fansly_public_egress_singleton_check check (id = 1)");
+    expect(table).toContain("constraint fansly_public_egress_auth_check check ((encrypted_auth is null) = (key_version is null))");
+    expect(table).not.toMatch(/references|page_id|platform_account_id|fan_id/);
+    // Nothing is granted: the table holds a secret.
+    expect(sql).not.toMatch(/\bgrant\b/i);
+    // No proxy address of any kind is written by the migration.
+    expect(sql).not.toMatch(/insert into fansly_public_egress|:\/\//);
+  });
+
+  it("allows application rollback: the previous image never names the table and never writes the new source", () => {
+    expect(rollbackCompatible()).toContain(`"${migration}"`);
+  });
+});

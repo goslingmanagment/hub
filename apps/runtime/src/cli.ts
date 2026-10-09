@@ -66,6 +66,7 @@ import { registerSyncCheckCommands } from "./sync/cli/checks.ts";
 import { registerSyncDmReaderParityCommands } from "./sync/cli/dm-reader-parity.ts";
 import { registerSyncExcludedCommands } from "./sync/cli/excluded.ts";
 import { registerSyncHistoryCommands } from "./sync/cli/history.ts";
+import { registerSyncPublicLookupCommands } from "./sync/cli/public-lookup.ts";
 import { verifyPageOnEngine } from "./services/sync-engine-account.ts";
 import { resolveHarvestManifest } from "./services/harvest-manifest.ts";
 import {
@@ -3071,6 +3072,9 @@ export function buildProgram() {
   // The chats Fansly does not serve to a page (arena "vanished chat" §4):
   // `sync chats unavailable | note` — no request to Fansly.
   registerSyncChatsCommands(sync);
+  // The session-less public account reader (arena "vanished chat" R5): `sync
+  // public-lookup proxy show | set | remove` — its own egress; sends nothing.
+  registerSyncPublicLookupCommands(sync);
 
   queue
     .command("planner-recover")

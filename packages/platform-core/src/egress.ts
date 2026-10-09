@@ -25,6 +25,10 @@ export type EgressPriorityClass = (typeof EGRESS_PRIORITY_CLASSES)[number];
  * - `fansly_candidate` — ONE identity check of a Fansly session that belongs to
  *   no page yet (onboarding, the create-page credentials check) through the
  *   proxy the page will get: Fansly only, the proxy required, never direct.
+ * - `fansly_public` — the session-less public account reader (arena "vanished
+ *   chat" R5): its own proxy, which no page holds, configured by the owner;
+ *   Fansly's API host only; never direct, never a page's proxy. Without that
+ *   proxy there is no transport and the reader sends nothing.
  * - `vendor` — vendor-gateway egress with a RECORDED address policy (the
  *   resolver documents whether traffic proxies per-page or goes
  *   vendor-direct; it is never an accident of a bare fetch).
@@ -33,6 +37,7 @@ export type EgressScope =
   | { kind: "page"; pageId: number }
   | { kind: "page_candidate"; pageId: number; proxy: ProxyConfig }
   | { kind: "fansly_candidate"; proxy: ProxyConfig }
+  | { kind: "fansly_public" }
   | { kind: "vendor"; vendor: string };
 
 export interface EgressContext<TDispatcher> {
@@ -59,6 +64,8 @@ export function egressScopeKey(scope: EgressScope) {
       return `page-candidate:${scope.pageId}`;
     case "fansly_candidate":
       return "fansly-candidate";
+    case "fansly_public":
+      return "fansly-public";
     case "vendor":
       return `vendor:${scope.vendor}`;
   }

@@ -7,8 +7,10 @@
   deletion of captured facts.
 - Platform command outbox: at most one attempt per command;
   never auto-retry an indeterminate send.
-- Hub platform requests use the egress resolver: Fansly requires the page proxy;
-  OFAPI uses vendor-scoped direct egress.
+- Hub platform requests use the egress resolver. Fansly: requests that carry a
+  page's session go through that page's proxy; a lookup without a session goes
+  only through the public reader and its own egress. OFAPI uses vendor-scoped
+  direct egress.
 - DB migrations are forward-only.
 - After API contract changes, run `pnpm contracts:generate`.
   Clients needing those changes re-vendor via `scripts/vendor-sdk.mjs`.
