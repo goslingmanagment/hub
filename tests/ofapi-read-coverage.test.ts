@@ -329,6 +329,17 @@ describe("closed OFAPI read coverage catalog", () => {
       { operation: "ofapi_read_post_labels", pathname: "/acct_test/posts/labels", query: { limit: "50", offset: "0" }, detail: false },
     ]);
   });
+  it("schedules no Smart Links or stored link-list read; each stays an explicit one-off (traffic PR 18)", () => {
+    for (const id of ["smart_links", "stored_tracking_links", "stored_trial_links"]) expect(def(id)).toMatchObject({ defaultCollect: false });
+    for (const category of ["smart_links", "tracking_links"]) {
+      expect(OFAPI_READ_CATALOG.filter((row) => row.category === category && row.defaultCollect)).toEqual([]);
+      expect(planOfapiReadCollection({ category, target: { from: null, to: null, selection: [] } } as unknown as OfapiCollectionJob, "acct_test")).toEqual([]);
+    }
+    const plan = (category: string, selection: string[]) =>
+      planOfapiReadCollection({ category, target: { from: null, to: null, selection } } as unknown as OfapiCollectionJob, "acct_test").map((step) => step.operation);
+    expect(plan("tracking_links", ["stored_tracking_links", "stored_trial_links"])).toEqual(["ofapi_read_stored_tracking_links", "ofapi_read_stored_trial_links"]);
+    expect(plan("smart_links", ["smart_links"])).toEqual(["ofapi_read_smart_links"]);
+  });
   it("bounds default plans and requires explicit IDs for details", () => {
     const job = {
       category: "balances",

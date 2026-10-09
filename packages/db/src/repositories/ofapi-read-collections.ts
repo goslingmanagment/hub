@@ -6,7 +6,7 @@ import {
 } from "@agency_hub_core/shared";
 import type { Database } from "../client.ts";
 import { settleLostOfapiCollectionReadAsBilled } from "./ofapi-capture.ts";
-import { getEffectiveOfapiCollectionPolicy } from "./ofapi-collection.ts";
+import { getEffectiveOfapiCollectionPolicy, ofapiCollectionHasScheduledReads } from "./ofapi-collection.ts";
 import { isDmArchiveScopeFenced, tryAcquireDmArchiveWriterFenceLock } from "./erasure-fence.ts";
 
 export async function claimOfapiCollectionJob(
@@ -258,7 +258,12 @@ export async function settleEndedOfapiCollectionSafeReads(db: Database, limit = 
     if (await settleLostOfapiCollectionReadAsBilled(db, { attemptId: row.id })) settled.push(row.id);
   return settled;
 }
-/** Schedule only explicitly configured non-baseline categories; never enables a collector. */
+/**
+ * Schedule only explicitly configured non-baseline categories; never enables a
+ * collector. A category whose scheduled run would have nothing to read (Smart
+ * Links and the stored link lists since their freeze, traffic plan §2.9) gets
+ * no run, whatever its policy says; the owner's policy is left as it is.
+ */
 export async function enqueueDueOfapiCollectionSchedules(
   db: Database,
   categories: readonly OfapiCollectionCategory[],
@@ -271,7 +276,8 @@ export async function enqueueDueOfapiCollectionSchedules(
   for (const page of pages.rows)
     for (const category of categories) {
       if (
-        OFAPI_COLLECTION_REGISTRY.find((row) => row.id === category)?.baseline
+        OFAPI_COLLECTION_REGISTRY.find((row) => row.id === category)?.baseline ||
+        !ofapiCollectionHasScheduledReads(category)
       )
         continue;
       const policy = await getEffectiveOfapiCollectionPolicy(

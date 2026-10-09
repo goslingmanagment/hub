@@ -40,6 +40,7 @@ import {
   jobStateLabel,
   modeLabel,
   MODE_DESCRIPTIONS_RU,
+  noScheduledReadsNote,
   PRICE_UNIT_LABELS_RU,
   prerequisiteLabel,
   sourceLabel,
@@ -1140,6 +1141,14 @@ export function CategoryEditor(props: {
               </button>
             </div>
           )}
+        {view.entry.noScheduledReads && (
+          <div className="mt-3 text-[12px] leading-snug">
+            <p className="text-text-secondary">{noScheduledReadsNote(view.entry.id).text}</p>
+            {noScheduledReadsNote(view.entry.id).keep && (
+              <p className="mt-1 text-amber-700">{noScheduledReadsNote(view.entry.id).keep}</p>
+            )}
+          </div>
+        )}
         {legacy && view.supportsToggle && (
           <p className="mt-3 text-[12px] leading-snug text-amber-700">
             Категория работает по прежней конфигурации (baseline). Первое применение переведёт её под новую политику с
@@ -1826,7 +1835,9 @@ export function JobModal(props: {
   const fromIso = localDateTimeToIso(from);
   const toIso = localDateTimeToIso(to);
   const windowInvalid = fromIso !== null && toIso !== null && fromIso >= toIso;
-  const canSubmit = pageId !== null && !windowInvalid && !props.pending;
+  // A category without scheduled reads has no default plan: the job reads only what is named.
+  const selectionRequired = entry?.noScheduledReads === true;
+  const canSubmit = pageId !== null && !windowInvalid && !props.pending && (!selectionRequired || selection.length > 0);
 
   function submit() {
     if (pageId === null) return;
@@ -1894,7 +1905,9 @@ export function JobModal(props: {
         </div>
         <label className="block sm:col-span-2">
           <span className="mb-1 block text-[12px] text-text-secondary">
-            Выбор (необязательно: идентификаторы, по одному в строке)
+            {selectionRequired
+              ? "Выбор (обязательно: плановых чтений нет; идентификаторы чтений, по одному в строке)"
+              : "Выбор (необязательно: идентификаторы, по одному в строке)"}
           </span>
           <textarea
             value={selectionRaw}

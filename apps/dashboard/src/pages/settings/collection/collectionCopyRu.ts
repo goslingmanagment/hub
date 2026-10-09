@@ -69,6 +69,29 @@ export const CATEGORY_COPY_RU: Record<string, CategoryCopy> = {
   },
 };
 
+/** A category whose schedule has nothing to read (server `noScheduledReads`:
+ *  Smart Links and the stored link lists since their freeze, traffic plan
+ *  §2.9). The tracking-links policy still admits the paid fan sweep (plan
+ *  amendment П9.4), so its row says not to switch it off. */
+const NO_SCHEDULED_READS_KEEP_RU: Record<string, string> = {
+  tracking_links: "под этой политикой идёт обход фанов — не выключать",
+};
+/** The row state of a scheduled category without scheduled reads: the state
+ *  line, and under it why the policy stays scheduled when something else runs
+ *  under it. */
+export function noScheduledReadsState(id: string) {
+  return { label: "плановых чтений нет", detail: NO_SCHEDULED_READS_KEEP_RU[id] ?? null };
+}
+/** The same in the category editor, where the owner changes the mode. */
+export function noScheduledReadsNote(id: string) {
+  return {
+    text: "Плановых чтений нет: расписание не создаёт задач этой категории. Разовое чтение — задачей с явным выбором.",
+    keep: id === "tracking_links"
+      ? "Под этой политикой идёт платный обход фанов по ссылкам, и он работает только в режиме «Расписание» — не выключать."
+      : null,
+  };
+}
+
 export const CONSUMER_LABELS_RU: Record<string, string> = {
   chatters: "Чаттеры",
   dashboard: "Дашборд",

@@ -13,7 +13,7 @@ import type {
   OfapiCollectionSnapshot,
 } from "@/api/adminOfapiCollection";
 import { ruPlural } from "@/lib/plural";
-import { categoryLabel, modeLabel } from "./collectionCopyRu.js";
+import { categoryLabel, modeLabel, noScheduledReadsState } from "./collectionCopyRu.js";
 
 // Type-only dependency on the api module: the root tests mock that module's
 // hooks wholesale, so nothing here may need a runtime value from it.
@@ -341,6 +341,11 @@ export function rowState(view: CategoryView, backgroundPaused: boolean): RowStat
       label: "лимит дня достигнут",
       detail: `${fmtCredits(worst.usage.reservedCreditsToday)} из ${fmtCredits(worst.dailyCreditLimit)} кр · продолжит 00:00 UTC`,
     };
+  }
+  // The schedule has nothing to read (traffic plan §2.9): "сбор разрешён"
+  // would promise runs that never come.
+  if (view.mode === "scheduled" && view.entry.noScheduledReads) {
+    return { tone: "muted", ...noScheduledReadsState(view.entry.id) };
   }
   if (view.mode === "mixed") {
     return { tone: "ok", label: "сбор разрешён", detail: "настройки различаются по страницам" };

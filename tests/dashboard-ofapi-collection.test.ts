@@ -67,6 +67,7 @@ import {
   PreviewModal,
   JobsCard,
   FinishIncompleteRunModal,
+  JobModal,
 } from "../apps/dashboard/src/pages/settings/collection/CollectionTab.tsx";
 import {
   buildCategoryView,
@@ -138,6 +139,8 @@ function catalog(): OfapiCollectionCatalogEntry[] {
     prerequisites: id === "vault_files" ? ["owned source and explicit upload approval"] : ["active OFAPI page binding"],
     scope: "page",
     legacyOperations: [],
+    // Frozen since traffic PR 18: their schedule has nothing to read.
+    noScheduledReads: id === "tracking_links" || id === "smart_links",
   }));
 }
 
@@ -523,6 +526,35 @@ describe("CategoryEditor (static render)", () => {
     expect(markup).toContain("Задач не было");
   });
 
+  it("says a category without scheduled reads gets no runs, and that the tracking-links policy carries the fan sweep", () => {
+    const snapshot = snapshotFixture();
+    const editor = (id: OfapiCollectionCategory) => withRouter(createElement(CategoryEditor, {
+      snapshot, scope: { kind: "page", pageId: 7 }, view: buildCategoryView(snapshot, { kind: "page", pageId: 7 }, snapshot.catalog.find((row) => row.id === id)!),
+      draftEntry: null, jobs: [], onChange: vi.fn(), onCreateJob: vi.fn(),
+    }));
+    const tracking = editor("tracking_links");
+    expect(tracking).toContain("Плановых чтений нет: расписание не создаёт задач этой категории");
+    expect(tracking).toContain("Под этой политикой идёт платный обход фанов по ссылкам, и он работает только в режиме «Расписание» — не выключать.");
+    const smart = editor("smart_links");
+    expect(smart).toContain("Плановых чтений нет");
+    expect(smart).not.toContain("обход фанов");
+    expect(editor("posts_comments")).not.toContain("Плановых чтений нет");
+  });
+
+  it("a one-off job of a category without scheduled reads needs a selection", () => {
+    const snapshot = snapshotFixture();
+    const modal = (category: OfapiCollectionCategory) => withRouter(createElement(JobModal, {
+      snapshot, category, initialPageId: 7, pending: false, onClose: vi.fn(), onSubmit: vi.fn(),
+    }));
+    const submit = (markup: string) => markup.match(/<button[^>]*>Поставить задачу в очередь<\/button>/)?.[0] ?? "";
+    const tracking = modal("tracking_links");
+    expect(tracking).toContain("Выбор (обязательно: плановых чтений нет; идентификаторы чтений, по одному в строке)");
+    expect(submit(tracking)).toContain('disabled=""');
+    const posts = modal("posts_comments");
+    expect(posts).toContain("Выбор (необязательно: идентификаторы, по одному в строке)");
+    expect(submit(posts)).not.toContain('disabled=""');
+  });
+
   it("renders no radios for a one-off-only category and shows its prerequisite", () => {
     const snapshot = snapshotFixture();
     const view = buildCategoryView(snapshot, { kind: "page", pageId: 7 }, snapshot.catalog.find((row) => row.id === "vault_files")!);
@@ -746,6 +778,21 @@ describe("collection model helpers", () => {
     expect(rowState(buildCategoryView(legacyHot, { kind: "page", pageId: 7 }, legacyHot.catalog[1]!), false).label).toBe("прежняя конфигурация");
     row.inFlight = 3;
     expect(rowState(buildCategoryView(legacyHot, { kind: "page", pageId: 7 }, legacyHot.catalog[1]!), false)).toMatchObject({ tone: "accent", label: "в работе", detail: "3 запроса в полёте" });
+  });
+
+  it("a scheduled category whose schedule has nothing to read says so instead of promising runs", () => {
+    const snapshot = snapshotFixture();
+    for (const policy of snapshot.policies) {
+      if (["tracking_links", "smart_links", "posts_comments"].includes(policy.category)) Object.assign(policy, { mode: "scheduled", source: "page", state: "applied" });
+    }
+    const view = (id: OfapiCollectionCategory) => buildCategoryView(snapshot, { kind: "all" }, snapshot.catalog.find((row) => row.id === id)!);
+    expect(rowState(view("tracking_links"), false)).toEqual({ tone: "muted", label: "плановых чтений нет", detail: "под этой политикой идёт обход фанов — не выключать" });
+    expect(rowState(view("smart_links"), false)).toEqual({ tone: "muted", label: "плановых чтений нет", detail: null });
+    expect(rowState(view("posts_comments"), false)).toMatchObject({ tone: "ok", label: "сбор разрешён" });
+    // Off and the global pause keep their own wording.
+    expect(rowState(view("tracking_links"), true)).toMatchObject({ tone: "danger", label: "остановлено" });
+    const off = snapshotFixture();
+    expect(rowState(buildCategoryView(off, { kind: "all" }, off.catalog.find((row) => row.id === "smart_links")!), false)).toMatchObject({ label: "выключено" });
   });
 
   it("describes the policy pill from server state, apply phase and conflict", () => {
