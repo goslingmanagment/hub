@@ -246,6 +246,6 @@ export async function rebuildOfapiMarketingProjection(app: AppContext) {
     await tx.execute(sql`delete from ofapi_marketing_projection_receipts`);
     await tx.execute(sql`update ofapi_marketing_intents set projection_state='pending' where response_observation_id is not null`);
   });
-  // Resumable and bounded: subsequent local dashboard reads continue receipts.
+  // Resumable and bounded: the worker's minute pass continues the receipts.
   return runOfapiMarketingProjection(app, { limit: 200 });
 }

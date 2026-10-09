@@ -1,13 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createModel, createOnlyFansPage, createUser, setPageOfapiAccountId, createOfapiCollectionJob, getEffectiveOfapiCollectionPolicy } from "@agency_hub_core/db";
+import { createDb, createModel, createOnlyFansPage, createPool, createUser, setPageOfapiAccountId, createOfapiCollectionJob, getEffectiveOfapiCollectionPolicy } from "@agency_hub_core/db";
 import { decryptJsonWithKeyVersion } from "@agency_hub_core/shared";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { createOfapiClient } from "../apps/runtime/src/services/ofapi.ts";
 import { ofapiCollectionPolicyHooks } from "../apps/runtime/src/services/ofapi-collection-policy.ts";
-import { runOfapiCollectionJob } from "../apps/runtime/src/services/ofapi-collection-runner.ts";
+import { OFAPI_COLLECTION_SWEEP_QUEUE, runOfapiCollectionJob, startOfapiCollectionWorker } from "../apps/runtime/src/services/ofapi-collection-runner.ts";
 import { rebuildOfapiReadSnapshotProjection } from "../apps/runtime/src/services/projections/ofapi-read-snapshots.ts";
-import { getOfapiMarketingDashboard, prepareOfapiMarketingCommand, dispatchOfapiMarketingCommand, refreshOfapiMarketingPostbacks } from "../apps/runtime/src/services/ofapi-smart-links.ts";
+import { getOfapiMarketingDashboard, prepareOfapiMarketingCommand, dispatchOfapiMarketingCommand, refreshOfapiMarketingPostbacks, sweepOfapiMarketingIntents } from "../apps/runtime/src/services/ofapi-smart-links.ts";
 import { rebuildOfapiMarketingProjection, runOfapiMarketingProjection } from "../apps/runtime/src/services/projections/ofapi-marketing.ts";
 import * as creditService from "../apps/runtime/src/services/ofapi-credits.ts";
 import { executeErasure, planErasure } from "../apps/runtime/src/services/erasure/index.ts";
@@ -128,7 +128,37 @@ describe("Smart Links end-to-end capture and owner controls",()=>{
   vi.spyOn(creditService,"createOfapiCreditSpendSink").mockReturnValueOnce(async()=>false);
   await runOfapiMarketingProjection(app);
   expect((await db.pool.query("select state,projection_state,accounting_state from ofapi_marketing_intents where id=$1",[id])).rows[0]).toEqual({state:"succeeded",projection_state:"complete",accounting_state:"pending"});
+  // The dashboard read repairs nothing; the worker's minute pass does.
+  expect((await getOfapiMarketingDashboard(app)).intents[0]).toMatchObject({state:"succeeded",projectionState:"complete",accountingState:"pending"});
+  await sweepOfapiMarketingIntents(app);
   expect((await getOfapiMarketingDashboard(app)).intents[0]).toMatchObject({state:"succeeded",projectionState:"complete",accountingState:"complete"});expect(fetchMock).toHaveBeenCalledTimes(1);
+ });
+ it("the dashboard read writes nothing; the minute pass marks a stranded dispatch indeterminate and never sends it",async()=>{
+  const stranded=randomUUID(),fresh=randomUUID(),settled=randomUUID();
+  for(const id of [stranded,fresh,settled]) await prepareOfapiMarketingCommand(app,{id,command:{action:"smart_link_create",pageId,name:`Lost ${id}`,link_type:"tracking_link"}},actor);
+  // A process lost after the claim: the row says dispatching and nothing was captured.
+  await db.pool.query("update ofapi_marketing_intents set state='dispatching',dispatched_at=now()-interval '3 minutes' where id=$1",[stranded]);
+  await db.pool.query("update ofapi_marketing_intents set state='dispatching',dispatched_at=now() where id=$1",[fresh]);
+  await db.pool.query("update ofapi_marketing_intents set state='succeeded',dispatched_at=now()-interval '3 minutes',settled_at=now() where id=$1",[settled]);
+  // Every statement of the read runs on a session that refuses writes.
+  const url=new URL(db.connectionString);url.searchParams.set("options","-c default_transaction_read_only=on");
+  const readOnlyPool=createPool(url.toString());
+  try {
+   await expect(readOnlyPool.query("update ofapi_marketing_intents set error_code='x'")).rejects.toThrow("read-only");
+   const read=await getOfapiMarketingDashboard({...app,db:createDb(readOnlyPool)});
+   expect(Object.fromEntries(read.intents.map(i=>[i.id,i.state]))).toEqual({[stranded]:"dispatching",[fresh]:"dispatching",[settled]:"succeeded"});
+  } finally { await readOnlyPool.end(); }
+  // The worker's minute pass: the collection sweep queue's handler.
+  const handlers=new Map<string,()=>Promise<void>>();
+  const boss={work:vi.fn(async(queue:string,_options:unknown,handler:()=>Promise<void>)=>{handlers.set(queue,handler);}),send:vi.fn(async()=>null)};
+  await startOfapiCollectionWorker(app,boss as unknown as Parameters<typeof startOfapiCollectionWorker>[1]);
+  await handlers.get(OFAPI_COLLECTION_SWEEP_QUEUE)!();
+  const states=Object.fromEntries((await db.pool.query("select id,state,error_code from ofapi_marketing_intents")).rows.map(r=>[r.id,[r.state,r.error_code]]));
+  expect(states).toEqual({[stranded]:["indeterminate","dispatch_interrupted"],[fresh]:["dispatching",null],[settled]:["succeeded",null]});
+  // An indeterminate command is evidence, never a fresh send.
+  expect(await apply(stranded)).toMatchObject({state:"indeterminate",errorCode:"dispatch_interrupted"});
+  await handlers.get(OFAPI_COLLECTION_SWEEP_QUEUE)!();
+  expect(fetchMock).not.toHaveBeenCalled();
  });
  it("rebuilds secret-safe postbacks and only infers absence from explicit complete inventory",async()=>{
   fetchMock.mockResolvedValueOnce(response([{id:8,url:"https://events.test/PRIVATE?fan={fan_id}",body:"PRIVATE {amount_net}",http_method:"POST",headers:[{name:"Authorization",value:"PRIVATE"}],smart_link_scope:"global",conversion_types:["new_transaction"]}]));
