@@ -38,6 +38,7 @@ import {
   ofapiReadCoverage,
 } from "./ofapi-read-normalization.ts";
 import { OfapiGovernedRequestError } from "./ofapi.ts";
+import { sweepOfapiMarketingIntents } from "./ofapi-smart-links.ts";
 export type OfapiCollectionJob = NonNullable<
   Awaited<ReturnType<typeof getOfapiCollectionJob>>
 >;
@@ -481,6 +482,21 @@ export async function startOfapiCollectionWorker(
     },
   );
   await boss.work(OFAPI_COLLECTION_SWEEP_QUEUE, { batchSize: 1 }, async () => {
+    await sweepOfapiMarketingMinute(app);
     await sweepOfapiCollections(app, boss, handlers);
   });
+}
+/** Smart Links' local repair rides this minute; the dashboard read used to do
+ * it on every poll. A failure is logged and never holds the collection sweep. */
+async function sweepOfapiMarketingMinute(app: AppContext) {
+  try {
+    const result = await sweepOfapiMarketingIntents(app);
+    if (result.interrupted.length > 0)
+      app.logger.warn(
+        { intents: result.interrupted },
+        "Smart Links dispatches that never reached capture are indeterminate",
+      );
+  } catch (err) {
+    app.logger.error({ err }, "Smart Links minute pass failed");
+  }
 }
