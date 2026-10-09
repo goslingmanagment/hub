@@ -399,7 +399,7 @@ async function reconcileKind(
       // with isRecord(payload) — a top-level array would be unparseable by
       // the very "capture now, parse later" machinery this write feeds.
       responsePayload: { items: page.items, hasNextPage: page.hasNextPage },
-      // v2 (0253): the snapshot also keeps the net money under its true name,
+      // v2 (0256): the snapshot also keeps the net money under its true name,
       // chargebacks, the trial length and tags.
       mapperVersion: LINK_STATS_MAPPER_VERSION,
       payloadKind: "mapping_critical",

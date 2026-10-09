@@ -1,4 +1,4 @@
--- 0253_page_link_stat_snapshots_net_revenue.sql
+-- 0256_page_link_stat_snapshots_net_revenue.sql
 --
 -- OnlyFans traffic sources, the link series (plan 2026-10-08, PR 6,
 -- migration B): the money in a link snapshot is named for what it is, and
@@ -61,7 +61,7 @@ update page_link_stat_snapshots
 comment on column page_link_stat_snapshots.revenue_gross_mills is
   'Deprecated name: creator net after the OnlyFans fee. Read revenue_net_mills.';
 comment on column page_link_stat_snapshots.revenue_net_mills is
-  'Vendor revenue.total in mills: the creator''s net after the OnlyFans fee and after refunds and chargebacks. Null = unknown (revenue block missing, still computing, or unparseable). Rows written by an image older than migration 0253 have it only in revenue_gross_mills: read coalesce(revenue_net_mills, revenue_gross_mills).';
+  'Vendor revenue.total in mills: the creator''s net after the OnlyFans fee and after refunds and chargebacks. Null = unknown (revenue block missing, still computing, or unparseable). Rows written by an image older than migration 0256 have it only in revenue_gross_mills: read coalesce(revenue_net_mills, revenue_gross_mills).';
 comment on column page_link_stat_snapshots.revenue_chargebacks_mills is
   'Vendor revenue.chargebacks in mills: the positive amount already excluded from revenue_net_mills (do not subtract it again). Null = unknown.';
 comment on column page_link_stat_snapshots.trial_days is

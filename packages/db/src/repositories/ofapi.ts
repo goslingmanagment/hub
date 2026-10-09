@@ -3558,7 +3558,7 @@ export async function listLinkStatWindowPairStates(
 }
 
 /** A run's snapshots as Hub reads them. `revenueNetMills` falls back to the
- * deprecated revenue_gross_mills: rows written before migration 0253, or by
+ * deprecated revenue_gross_mills: rows written before migration 0256, or by
  * the previous image after a rollback, carry the value only there. */
 export async function listLinkStatSnapshots(db: Database, input: { runId: number }) {
   return db

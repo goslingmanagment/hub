@@ -781,7 +781,7 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # coalesce(revenue_net_mills, revenue_gross_mills), and null chargebacks,
   # trial length and tags, which is "unknown". traffic-control's SQL reads
   # revenue_gross_mills and none of the new columns.
-  "0253_page_link_stat_snapshots_net_revenue.sql"
+  "0256_page_link_stat_snapshots_net_revenue.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

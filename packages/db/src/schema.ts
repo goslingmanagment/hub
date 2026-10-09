@@ -2594,7 +2594,7 @@ export const pageLinkStatSnapshots = pgTable(
     // NULL money/spenders = vendor value unknown (revenue block missing, still
     // computing, or unparseable) — deliberately distinct from a real zero.
     spendersCount: integer("spenders_count"),
-    // Deprecated name (0253): the value is the creator's NET after the
+    // Deprecated name (0256): the value is the creator's NET after the
     // OnlyFans fee, refunds and chargebacks. Still written with the same value
     // as revenueNetMills — the previous image and traffic-control read it.
     revenueGrossMills: bigint("revenue_gross_mills", { mode: "bigint" }),
@@ -2602,7 +2602,7 @@ export const pageLinkStatSnapshots = pgTable(
     revenueCalculatedAt: timestamp("revenue_calculated_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     // Vendor revenue.total: creator net after the OnlyFans fee and after
-    // refunds and chargebacks. Null on rows an image older than 0253 wrote —
+    // refunds and chargebacks. Null on rows an image older than 0256 wrote —
     // read coalesce(revenue_net_mills, revenue_gross_mills).
     revenueNetMills: bigint("revenue_net_mills", { mode: "bigint" }),
     // Vendor revenue.chargebacks: already excluded from revenueNetMills.
