@@ -149,6 +149,22 @@ function serializeFan(input: FanLike) {
   };
 }
 
+/**
+ * The page's own "can't see this fan" mark (arena "vanished chat" R6): the
+ * time of the page's latest Fansly account answer when that answer did not
+ * return the fan (page_fans.account_probe_resolved = false). Only this page's
+ * row is read, so the same fan shows normally on a page that sees him. A
+ * returned account, no answer, or a multi-page list (the row carries no page
+ * answer) gives null. It does not filter or move money: the shared deleted
+ * mark (`fans.deleted_detected_at`) keeps its own handling in the queries.
+ */
+function serializeAccountLookupMiss(row: {
+  accountProbeAt: Date | string | null;
+  accountProbeResolved: boolean | null;
+}): string | null {
+  return row.accountProbeResolved === false ? serializeTimestamp(row.accountProbeAt) : null;
+}
+
 function serializeSpenderConversation(row: RankedSpenderRow): SerializedSpenderConversation {
   return {
     platformConversationId: row.conversationPlatformConversationId,
@@ -631,6 +647,7 @@ export async function getPageSpenderAutoListDetail(
       lifetimeGrossAmountMills: millsToNumber(item.lifetimeGrossAmountMills),
       lifetimeCreatorNetAmountMills: millsToNumber(item.lifetimeCreatorNetAmountMills),
       lastTransactionAt: serializeTimestamp(item.lastTransactionAt),
+      accountLookupMissAt: serializeAccountLookupMiss(item),
     })),
     limit: query.limit,
     offset: query.offset,
@@ -883,6 +900,7 @@ export async function getSpenderList(
         lifetimeCreatorNetAmountMills: millsToNumber(item.lifetimeCreatorNetAmountMills),
         now,
       }),
+      accountLookupMissAt: serializeAccountLookupMiss(item),
     })),
     limit: query.limit,
     offset: query.offset,

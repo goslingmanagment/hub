@@ -576,6 +576,11 @@ export interface RankedSpenderRow {
   lifetimeGrossAmountMills: bigint;
   lifetimeCreatorNetAmountMills: bigint;
   lifetimeLastTransactionAt: Date | null;
+  /** The page's latest Fansly account answer for the fan
+   *  (page_fans.account_probe_at / account_probe_resolved), read only when the
+   *  ranking covers a single page; null on a multi-page ranking. */
+  accountProbeAt: Date | null;
+  accountProbeResolved: boolean | null;
 }
 
 function buildRetentionFilterSql(
@@ -713,6 +718,9 @@ export interface PageSpenderAutoListFanRow {
   lifetimeGrossAmountMills: bigint;
   lifetimeCreatorNetAmountMills: bigint;
   lastTransactionAt: Date | null;
+  /** The page's latest Fansly account answer for the fan (page_fans). */
+  accountProbeAt: Date | null;
+  accountProbeResolved: boolean | null;
 }
 
 function lastSubscriptionEndedAtSql(pageId: number) {
@@ -986,6 +994,8 @@ export async function listPageFansByLifetimeGrossBucket(
     lifetimeGrossAmountMills: amountSql,
     lifetimeCreatorNetAmountMills: creatorNetAmountSql,
     lastTransactionAt: spenderLifetimePage.lastTransactionAt,
+    accountProbeAt: fanPages.accountProbeAt,
+    accountProbeResolved: fanPages.accountProbeResolved,
   }).from(fanPages)
     .innerJoin(fans, eq(fans.id, fanPages.fanId))
     .leftJoin(spenderLifetimePage, and(
@@ -1086,6 +1096,8 @@ export async function listPageFansByWindowGrossBucket(
     lifetimeGrossAmountMills: lifetimeGrossAmountSql,
     lifetimeCreatorNetAmountMills: lifetimeCreatorNetAmountSql,
     lastTransactionAt: lastTransactionAtSql,
+    accountProbeAt: fanPages.accountProbeAt,
+    accountProbeResolved: fanPages.accountProbeResolved,
   }).from(windowMetrics)
     .innerJoin(fanPages, and(
       eq(fanPages.platformAccountId, input.pageId),
@@ -1286,6 +1298,8 @@ export async function listRankedSpenders(
       lifetimeGrossAmountMills: lifetimeMetrics.grossAmountMills,
       lifetimeCreatorNetAmountMills: lifetimeMetrics.creatorNetAmountMills,
       lifetimeLastTransactionAt: lifetimeMetrics.lastTransactionAt,
+      accountProbeAt: singlePageId === null ? sql<Date | null>`null` : fanPages.accountProbeAt,
+      accountProbeResolved: singlePageId === null ? sql<boolean | null>`null` : fanPages.accountProbeResolved,
     }).from(lifetimeMetrics)
       .innerJoin(fans, eq(fans.id, lifetimeMetrics.fanId))
       .leftJoin(primaryConversations, and(
@@ -1428,6 +1442,8 @@ export async function listRankedSpenders(
     lifetimeGrossAmountMills: sql<bigint>`coalesce(${lifetimeMetricFields.grossAmountMills}, 0)::bigint`.as("lifetime_gross_amount_mills"),
     lifetimeCreatorNetAmountMills: sql<bigint>`coalesce(${lifetimeMetricFields.creatorNetAmountMills}, 0)::bigint`.as("lifetime_creator_net_amount_mills"),
     lifetimeLastTransactionAt: lifetimeMetricFields.lastTransactionAt,
+    accountProbeAt: singlePageId === null ? sql<Date | null>`null` : fanPages.accountProbeAt,
+    accountProbeResolved: singlePageId === null ? sql<boolean | null>`null` : fanPages.accountProbeResolved,
   }).from(currentMetrics)
     .innerJoin(fans, eq(fans.id, currentMetrics.fanId))
     .leftJoin(lifetimeMetrics, eq(lifetimeMetrics.fanId, currentMetrics.fanId))
