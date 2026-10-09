@@ -363,6 +363,74 @@ describe("log mode: legacy guards keep answering, statuses identical to enforce"
     expect(principal?.kind).toBe("agent");
   });
 
+  it("keeps the persona and raw-prompt routes owner-session in BOTH modes (persona cutover)", async (context) => {
+    const servers = requireServers(context);
+    if (!servers) return;
+    // The declaration (owner-session) and the handler guard (requireOwner) must
+    // agree: a route moved to owner-session that still called requireApiKeyUser
+    // would 403 the owner too, and a forgotten guard would let log mode admit a
+    // bearer the declaration refuses. Bodies are valid so schema validation
+    // never answers first.
+    const ownerCookie = await loginCookie(servers.enforce, "dima", "owner-secret");
+    const leadCookie = await loginCookie(servers.enforce, "lead", "lead-secret");
+    const chatter = { authorization: `Bearer ${chatterDeviceToken}` };
+    const rawPrompt = {
+      clientRequestId: "00000000-0000-4000-8000-000000000002",
+      feature: "fast-reply",
+      pageLabel: "lana",
+      platform: "fansly",
+      platformUserId: "9000001",
+      conversationId: "9000001",
+      model: "anthropic:claude-sonnet-4-6",
+      reasoningEffort: "low",
+      isRegeneration: false,
+      prompt: {
+        systemBlocks: [{ text: "raw system", cache: "none" }],
+        userBlocks: [{ text: "raw user", cache: "none" }],
+      },
+    };
+    const routes: Array<{
+      method: "GET" | "PUT" | "DELETE" | "POST";
+      url: string;
+      payload?: Record<string, unknown>;
+      owner: number;
+    }> = [
+      { method: "GET", url: "/api/v1/ai/personas", owner: 200 },
+      // Retired: the owner is admitted by the policy and told to use the console.
+      {
+        method: "PUT",
+        url: "/api/v1/ai/personas/custom:probe",
+        payload: { displayName: "Probe", systemBlock: "probe prompt" },
+        owner: 409,
+      },
+      { method: "DELETE", url: "/api/v1/ai/personas/custom:probe", owner: 409 },
+      // Admitted, then the gateway's own flag answers (off in this fixture).
+      { method: "POST", url: "/api/v1/ai/gateway/stream", payload: rawPrompt, owner: 503 },
+    ];
+
+    for (const route of routes) {
+      const cells: Array<[string, Record<string, string>, number]> = [
+        ["anon", {}, 401],
+        ["chatter device token", chatter, 403],
+        ["team_lead cookie", { cookie: leadCookie }, 403],
+        ["owner cookie", { cookie: ownerCookie }, route.owner],
+      ];
+      for (const [who, headers, expected] of cells) {
+        const request = {
+          method: route.method,
+          url: route.url,
+          headers,
+          ...(route.payload ? { payload: route.payload } : {}),
+        };
+        const viaEnforce = await servers.enforce.inject(request);
+        const viaLog = await servers.log.inject(request);
+        const label = `${route.method} ${route.url} as ${who}`;
+        expect(viaEnforce.statusCode, `enforce ${label}: ${viaEnforce.body}`).toBe(expected);
+        expect(viaLog.statusCode, `log ${label}: ${viaLog.body}`).toBe(expected);
+      }
+    }
+  });
+
   it("keeps the webhook's hmac handler answer identical across modes", async (context) => {
     const servers = requireServers(context);
     if (!servers) return;

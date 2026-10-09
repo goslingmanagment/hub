@@ -1,4 +1,6 @@
 import { fixtureUserId } from "./helpers/user-identity.ts";
+import { randomUUID } from "node:crypto";
+
 import argon2 from "argon2";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -6,13 +8,18 @@ import {
   createFanslyPage,
   createModel,
   createOnlyFansPage,
+  seedBundledAiPersona,
   setPageOfapiAccountId,
+  storeProxyConfig,
 } from "@agency_hub_core/db";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
+import { createBundledPersonalities } from "../apps/runtime/src/modules/ai/index.ts";
+import type { AiGatewayProvider } from "../apps/runtime/src/services/ai-gateway.ts";
 import { createInvite, redeemAccountLink } from "../apps/runtime/src/services/account-links.ts";
 import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
+import { issueDeviceTokenForUserId } from "./helpers/device-credentials.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -715,5 +722,333 @@ describe("§7 — roles", () => {
       "select count(*)::text as count from device_tokens",
     );
     expect(Number(minted.rows[0]?.count)).toBe(0);
+  }, 60_000);
+});
+
+// The persona cutover. Persona prompts and the raw prompt lane are owner
+// content: before it, any full device token could read every persona's full
+// system prompt, overwrite or archive it with no audit row, and send an
+// arbitrary raw prompt on the agency's provider keys. Now the four routes are
+// owner-session, the owner edits through the console lane (versioned and
+// audited), and the clients keep exactly what they use: the metadata catalog
+// and the feature lane.
+describe("§7 — AI persona prompts are owner content", () => {
+  const SECRET_PROMPT = "SECRET OWNER PROMPT — never on a device token";
+
+  /** Every device token a person can hold, whatever its role or age: a fresh
+   * client sign-in (it carries a client version), a legacy token with no
+   * client version or harvest capability at all, the chat-extension's narrow
+   * token, a team lead's and the owner's own. */
+  async function everyDeviceToken(activeApp: AppContext, activeServer: NonNullable<typeof server>) {
+    await registerChatter(activeApp, ["lora-fansly"]);
+    const chatter = await signInDevice(activeServer, "grisha", CHATTER_PASSWORD, "Desktop · kevin");
+    const legacy = await issueDeviceTokenForUserId(activeApp, {
+      userId: await fixtureUserId(activeApp, "grisha"),
+      label: "legacy token, no client profile",
+    });
+    const narrow = await activeServer.inject({
+      method: "POST",
+      url: "/api/v1/auth/device-tokens/password",
+      headers: { "x-client-version": "chat-extension/1.0.0" },
+      payload: {
+        username: "grisha",
+        password: CHATTER_PASSWORD,
+        label: "Firefox · macOS · ChatSpace",
+        mode: "active",
+        client: "chat-extension",
+      },
+    });
+    expect(narrow.statusCode, narrow.body).toBe(200);
+    expect(narrow.json<{ client: string | null }>().client).toBe("chat-extension");
+    const lead = await signInDevice(activeServer, "lead", LEAD_PASSWORD, "Desktop · lead-pc");
+    const owner = await signInDevice(activeServer, "dmitriy", OWNER_PASSWORD, "Firefox · macOS");
+    return {
+      "chatter (client sign-in)": chatter.token,
+      "chatter (legacy, no client profile)": legacy.token,
+      "chatter (chat-extension narrow token)": narrow.json<{ token: string }>().token,
+      "team_lead device token": lead.token,
+      "owner device token": owner.token,
+    };
+  }
+
+  function rawGatewayBody() {
+    return {
+      clientRequestId: randomUUID(),
+      feature: "fast-reply",
+      pageLabel: "lora-fansly",
+      platform: "fansly",
+      platformUserId: "900000001",
+      conversationId: "900000001",
+      model: "anthropic:claude-sonnet-4-6",
+      reasoningEffort: "low",
+      isRegeneration: false,
+      prompt: {
+        systemBlocks: [{ text: "arbitrary raw prompt", cache: "none" }],
+        userBlocks: [{ text: "arbitrary raw context", cache: "none" }],
+      },
+    };
+  }
+
+  it("row «persona prompts are owner content»: every device token gets 403 on the four routes, the catalog stays open", async (context) => {
+    const setup = requireSetup(context);
+    if (!setup) return;
+    const ownerCookie = await loginCookie(setup.server, "dmitriy", OWNER_PASSWORD);
+    const created = await setup.server.inject({
+      method: "POST",
+      url: "/api/v1/admin/ai/personas",
+      headers: { cookie: ownerCookie },
+      payload: { key: "custom:owner", displayName: "Owner Persona", systemBlock: SECRET_PROMPT },
+    });
+    expect(created.statusCode, created.body).toBe(200);
+
+    // The gateway is ON with a provider that must never be reached: a 403 here
+    // is the route refusing the principal, not a flag-off 503.
+    setup.app.config.chatMuseAiGatewayEnabled = true;
+    let providerCalls = 0;
+    setup.app.aiGatewayProvider = {
+      provider: "anthropic",
+      async *stream() {
+        providerCalls += 1;
+        yield* [];
+        throw new Error("the raw gateway must not reach the provider for a device token");
+      },
+    };
+    try {
+      const tokens = await everyDeviceToken(setup.app, setup.server);
+      for (const [who, token] of Object.entries(tokens)) {
+        const bearer = { authorization: `Bearer ${token}` };
+        const fullText = await get(setup.server, "/api/v1/ai/personas", bearer);
+        expect(fullText.statusCode, `${who} GET /ai/personas`).toBe(403);
+        expect(fullText.body, who).not.toContain("SECRET");
+
+        const overwrite = await setup.server.inject({
+          method: "PUT",
+          url: "/api/v1/ai/personas/custom:owner",
+          headers: bearer,
+          payload: { displayName: "Hijacked", systemBlock: "hijacked prompt" },
+        });
+        expect(overwrite.statusCode, `${who} PUT /ai/personas/:key`).toBe(403);
+
+        const archive = await setup.server.inject({
+          method: "DELETE",
+          url: "/api/v1/ai/personas/custom:owner",
+          headers: bearer,
+        });
+        expect(archive.statusCode, `${who} DELETE /ai/personas/:key`).toBe(403);
+
+        const rawPrompt = await setup.server.inject({
+          method: "POST",
+          url: "/api/v1/ai/gateway/stream",
+          headers: bearer,
+          payload: rawGatewayBody(),
+        });
+        expect(rawPrompt.statusCode, `${who} POST /ai/gateway/stream`).toBe(403);
+
+        // The owner console's full-text lane was already closed to bearers.
+        expect((await get(setup.server, "/api/v1/admin/ai/personas", bearer)).statusCode, who)
+          .toBe(403);
+
+        // What the clients actually use stays open: metadata, no prompt text.
+        const catalog = await get(setup.server, "/api/v1/ai/persona-catalog", bearer);
+        expect(catalog.statusCode, `${who} GET /ai/persona-catalog`).toBe(200);
+        expect(catalog.json<{ personas: Array<{ key: string }> }>().personas.map((row) => row.key))
+          .toContain("custom:owner");
+        expect(catalog.body, who).not.toContain("SECRET");
+      }
+
+      // A chatter's own cookie session (the cabinet) is not the owner console
+      // either: the same four routes and the console lane answer 403.
+      const chatterCookie = { cookie: await loginCookie(setup.server, "grisha", CHATTER_PASSWORD) };
+      for (const [method, url, payload] of [
+        ["GET", "/api/v1/ai/personas", undefined],
+        ["PUT", "/api/v1/ai/personas/custom:owner", { displayName: "Hijacked", systemBlock: "hijacked prompt" }],
+        ["DELETE", "/api/v1/ai/personas/custom:owner", undefined],
+        ["POST", "/api/v1/ai/gateway/stream", rawGatewayBody()],
+        ["GET", "/api/v1/admin/ai/personas", undefined],
+      ] as const) {
+        const response = await setup.server.inject({
+          method,
+          url,
+          headers: chatterCookie,
+          ...(payload === undefined ? {} : { payload }),
+        });
+        expect(response.statusCode, `chatter cookie ${method} ${url}`).toBe(403);
+        expect(response.body, `chatter cookie ${method} ${url}`).not.toContain("SECRET");
+      }
+    } finally {
+      setup.app.config.chatMuseAiGatewayEnabled = false;
+      setup.app.aiGatewayProvider = undefined;
+    }
+
+    // Nothing moved: the persona is untouched, the provider was never called
+    // and no AI spend was booked by any of the refused attempts.
+    expect(providerCalls).toBe(0);
+    const persona = await setup.testDb.pool.query<{ revision: string; archived: boolean; system_block: string }>(
+      "select revision::text, archived_at is not null as archived, system_block from ai_personas where key = 'custom:owner'",
+    );
+    expect(persona.rows).toEqual([{ revision: "1", archived: false, system_block: SECRET_PROMPT }]);
+    const spend = await setup.testDb.pool.query<{ count: string }>(
+      "select count(*)::text as count from ai_usage_events",
+    );
+    expect(Number(spend.rows[0]?.count)).toBe(0);
+  }, 60_000);
+
+  it("row «persona edited»: only the owner, by cookie, through the console lane — versioned and audited", async (context) => {
+    const setup = requireSetup(context);
+    if (!setup) return;
+    const ownerCookie = await loginCookie(setup.server, "dmitriy", OWNER_PASSWORD);
+    const owner = { cookie: ownerCookie };
+
+    const created = await setup.server.inject({
+      method: "POST",
+      url: "/api/v1/admin/ai/personas",
+      headers: owner,
+      payload: { key: "custom:edited", displayName: "Edited", systemBlock: "version one" },
+    });
+    expect(created.statusCode, created.body).toBe(200);
+    expect(created.json()).toMatchObject({ key: "custom:edited", version: 1, status: "active" });
+
+    const updated = await setup.server.inject({
+      method: "PUT",
+      url: "/api/v1/admin/ai/personas/custom:edited",
+      headers: owner,
+      payload: { displayName: "Edited", systemBlock: "version two", expectedVersion: 1 },
+    });
+    expect(updated.statusCode, updated.body).toBe(200);
+    expect(updated.json()).toMatchObject({ version: 2, systemBlock: "version two" });
+
+    // A stale console tab cannot overwrite the newer version.
+    const stale = await setup.server.inject({
+      method: "PUT",
+      url: "/api/v1/admin/ai/personas/custom:edited",
+      headers: owner,
+      payload: { displayName: "Stale", systemBlock: "stale tab", expectedVersion: 1 },
+    });
+    expect(stale.statusCode, stale.body).toBe(409);
+
+    const archived = await setup.server.inject({
+      method: "DELETE",
+      url: "/api/v1/admin/ai/personas/custom:edited?expectedVersion=2",
+      headers: owner,
+    });
+    expect(archived.statusCode, archived.body).toBe(200);
+    expect(archived.json()).toMatchObject({ version: 3, status: "archived" });
+
+    // The retired legacy write lane answers the owner with a pointer, not a write.
+    const legacyWrite = await setup.server.inject({
+      method: "PUT",
+      url: "/api/v1/ai/personas/custom:edited",
+      headers: owner,
+      payload: { displayName: "Legacy", systemBlock: "legacy last-write-wins" },
+    });
+    expect(legacyWrite.statusCode, legacyWrite.body).toBe(409);
+    expect(legacyWrite.body).toContain("/api/v1/admin/ai/personas");
+
+    // A team lead's dashboard session is not the owner console.
+    const leadCookie = await loginCookie(setup.server, "lead", LEAD_PASSWORD);
+    const leadWrite = await setup.server.inject({
+      method: "POST",
+      url: "/api/v1/admin/ai/personas",
+      headers: { cookie: leadCookie },
+      payload: { key: "custom:lead", displayName: "Lead", systemBlock: "lead prompt" },
+    });
+    expect(leadWrite.statusCode).toBe(403);
+    expect((await get(setup.server, "/api/v1/ai/personas", { cookie: leadCookie })).statusCode)
+      .toBe(403);
+
+    // One audit row per change that happened — none for the refused ones —
+    // attributed to the owner and carrying no prompt text.
+    const audit = await setup.testDb.pool.query<{
+      event_type: string;
+      actor_user_id: string;
+      source: string;
+      metadata: Record<string, unknown>;
+    }>(
+      `select event_type, actor_user_id::text, source, metadata
+         from audit_events where event_type like 'ai_persona.%' order by id`,
+    );
+    const ownerId = String(await fixtureUserId(setup.app, "dmitriy"));
+    expect(audit.rows.map((row) => [row.event_type, row.actor_user_id, row.source])).toEqual([
+      ["ai_persona.created", ownerId, "api"],
+      ["ai_persona.updated", ownerId, "api"],
+      ["ai_persona.archived", ownerId, "api"],
+    ]);
+    expect(audit.rows.map((row) => [row.metadata.previousVersion, row.metadata.version]))
+      .toEqual([[null, 1], [1, 2], [2, 3]]);
+    expect(JSON.stringify(audit.rows)).not.toContain("version one");
+    expect(JSON.stringify(audit.rows)).not.toContain("version two");
+  }, 60_000);
+
+  it("row «client AI keeps working»: the feature lane still streams for a chatter's device token", async (context) => {
+    const setup = requireSetup(context);
+    if (!setup) return;
+    const bundled = createBundledPersonalities()[0]!;
+    await seedBundledAiPersona(setup.app.db, {
+      key: bundled.id,
+      displayName: bundled.name,
+      systemBlock: bundled.content,
+      bundledVersion: bundled.builtinVersion!,
+    });
+    const page = await setup.testDb.pool.query<{ id: number }>(
+      "select id::int as id from pages where label = 'lora-fansly'",
+    );
+    await storeProxyConfig(setup.app.db, page.rows[0]!.id, {
+      url: "socks5://proxy.example:1080",
+      encryptedAuth: null,
+      keyVersion: null,
+      rateLimitScopeKey: "shared-ai-proxy",
+    });
+    await registerChatter(setup.app, ["lora-fansly"]);
+    const legacy = await issueDeviceTokenForUserId(setup.app, {
+      userId: await fixtureUserId(setup.app, "grisha"),
+      label: "legacy token, no client profile",
+    });
+    const provider: AiGatewayProvider = {
+      provider: "anthropic",
+      async *stream() {
+        yield { type: "content_delta", text: "hey you" };
+        yield {
+          type: "usage",
+          providerResponseId: "msg_rights_matrix",
+          cacheHit: false,
+          usage: {
+            inputTokens: 10,
+            outputTokens: 2,
+            cacheWriteTokens: 0,
+            cacheReadTokens: 0,
+            costMicroUsd: 30,
+            costApproximate: false,
+          },
+        };
+        yield { type: "done", stopReason: "end_turn" };
+      },
+    };
+    setup.app.config.chatMuseAiGatewayEnabled = true;
+    setup.app.aiGatewayProvider = provider;
+    try {
+      const response = await setup.server.inject({
+        method: "POST",
+        url: "/api/v1/ai/features/fast-reply",
+        headers: { authorization: `Bearer ${legacy.token}` },
+        payload: {
+          clientRequestId: randomUUID(),
+          pageLabel: "lora-fansly",
+          platform: "fansly",
+          conversationRef: "900000001",
+          clientContext: {
+            transcript: "Fan: hey babe",
+            messageCount: 1,
+            fanDisplayName: "Fan",
+            fanSpendingData: "",
+            fanSubscriptionData: "",
+          },
+        },
+      });
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.body).toContain("hey you");
+    } finally {
+      setup.app.config.chatMuseAiGatewayEnabled = false;
+      setup.app.aiGatewayProvider = undefined;
+    }
   }, 60_000);
 });

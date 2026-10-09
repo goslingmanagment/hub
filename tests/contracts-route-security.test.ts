@@ -24,11 +24,15 @@ describe("route schema security", () => {
     expect(routeSecurityFromAuth(routeSchemas.logout.auth)).toBeUndefined();
   });
 
-  it("marks desktop-facing AI gateway routes as bearer-only", () => {
+  it("marks the client AI feature lane bearer-only and the raw prompt lane cookie-only", () => {
     const bearerOnlySecurity = [{ bearerAuth: [] }];
+    const cookieOnlySecurity = [{ cookieAuth: [] }];
 
-    expect(routeSchemas.aiGatewayStream.auth.kind).toBe("apiKey");
-    expect(routeSecurityFromAuth(routeSchemas.aiGatewayStream.auth)).toEqual(bearerOnlySecurity);
+    expect(routeSchemas.aiFeatureStream.auth.kind).toBe("apiKey");
+    expect(routeSecurityFromAuth(routeSchemas.aiFeatureStream.auth)).toEqual(bearerOnlySecurity);
+    // The persona cutover: a raw prompt is owner content, never a bearer's.
+    expect(routeSchemas.aiGatewayStream.auth.kind).toBe("owner-session");
+    expect(routeSecurityFromAuth(routeSchemas.aiGatewayStream.auth)).toEqual(cookieOnlySecurity);
   });
 
   it("documents pending device-token activation as bearer-only", () => {

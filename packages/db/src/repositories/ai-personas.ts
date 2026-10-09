@@ -12,10 +12,12 @@ export interface UpsertAiPersonaInput {
   systemBlock: string;
   featureOverrides?: Record<string, unknown>;
   /**
-   * Omitted is the shipped-client compatibility form: identical active content
-   * is a no-op; divergent content and archived rows use last-write-wins.
-   * `null` is create-only (including against archived tombstones); a number
-   * updates exactly that active revision.
+   * Omitted is the historical last-write-wins form: identical active content
+   * is a no-op; divergent content and archived rows use last-write-wins. No
+   * HTTP route reaches it any more (the legacy bearer write lane is retired);
+   * the owner admin lane always sends a token. `null` is create-only
+   * (including against archived tombstones); a number updates exactly that
+   * active revision.
    */
   expectedVersion?: number | null;
 }
@@ -96,11 +98,9 @@ export async function upsertAiPersona(db: Database, input: UpsertAiPersonaInput)
     );
   }
 
-  // Transitional compatibility for shipped clients: pre-version Desktop and
-  // Extension builds omit expectedVersion and expect last-write-wins, including
-  // resurrection of a locally cached persona after a prior archive. Keep this
-  // lane open until preservation/read-only releases have reached the fleet.
-  // Owner dashboard writes never use this form; they always send CAS tokens.
+  // Historical last-write-wins form, including resurrection of an archived
+  // key. It served the retired legacy bearer write lane; no HTTP route reaches
+  // it now. Owner dashboard writes never use this form; they send CAS tokens.
   const [legacyRow] = await db.insert(aiPersonas).values(values)
     .onConflictDoUpdate({
       target: aiPersonas.key,
@@ -190,8 +190,8 @@ export async function archiveAiPersona(
   expectedVersion?: number | null,
 ) {
   if (expectedVersion === undefined) {
-    // Transitional legacy lane: shipped clients omit the revision and expect
-    // the original last-write-wins archive behavior.
+    // Historical last-write-wins archive of the retired legacy bearer lane; no
+    // HTTP route reaches it now (the admin lane always sends a revision).
     const [archived] = await db.update(aiPersonas)
       .set({
         archivedAt: new Date(),
