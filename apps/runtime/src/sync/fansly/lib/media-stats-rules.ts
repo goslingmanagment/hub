@@ -81,9 +81,11 @@ const MEDIA_STAT_COUNTER_KEYS = [
   "previewInteractionTime",
 ] as const;
 /**
- * The most 31-day backfill windows ONE media takes in one visit: ten years of
- * them, more than any item has, so a visit walks an item's history to its
- * floor. The bound is there for a walk that nothing else ends.
+ * The most backfill windows ONE media takes in one visit: ten years of 31-day
+ * ones — five where a walk has halved its span — more than any item has, so a
+ * visit walks an item's history to its floor. The bound is there for a walk
+ * that nothing else ends; one that does reach it stays open and goes on at
+ * the item's next visit.
  *
  * It was FOUR, the legacy lane's share of a five-request chunk. The engine
  * paces a visit and budgets nothing, so four windows a visit left the rest of
