@@ -114,7 +114,8 @@ async function attempt(
         platformAccountId: pageId, linkKind, platformLinkId: "1", name: null, url: null,
         linkCreatedAt: null, linkEndsAt: null, isFinished: null, clicksCount: 1,
         claimsCount: linkKind === "trial" ? 1 : null, subscribersCount: 0, spendersCount: null,
-        revenueGrossMills: null, revenueIsLoading: null, revenueCalculatedAt: null,
+        revenueNetMills: null, revenueChargebacksMills: null, revenueIsLoading: null,
+        revenueCalculatedAt: null, trialDays: null, tags: null,
       }]
       : []);
   } else {
