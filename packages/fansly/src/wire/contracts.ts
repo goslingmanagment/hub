@@ -15,7 +15,7 @@ import type {
   FanslyContractViolation,
   FanslyEmptyResponse,
   FanslySubscribersPageContract,
-  FanslyWireSpec,
+  FanslyWireReadSpec,
 } from "./types.ts";
 
 // The response contracts of the Fansly API: the envelope every route answers
@@ -374,7 +374,7 @@ const PAGE_LEVEL_STATUSES: ReadonlySet<number> = new Set([401, 403, 408, 429]);
  * resource reads the bytes of a 2xx, the next hop of a 3xx, and records any
  * other status as the download's failure.
  */
-function readUnjournaledAnswer<P, R>(spec: FanslyWireSpec<P, R>, params: P, answer: FanslyWireAnswer): FanslyWireRead<R> {
+function readUnjournaledAnswer<P, R>(spec: FanslyWireReadSpec<P, R>, params: P, answer: FanslyWireAnswer): FanslyWireRead<R> {
   const { status } = answer;
   const retryAfter = answer.headers["retry-after"] ?? null;
   const httpError = (): FanslyWireRead<R> => ({ kind: "http_error", status, envelope: null, retryAfter, finalServerError: false });
@@ -398,7 +398,7 @@ function readUnjournaledAnswer<P, R>(spec: FanslyWireSpec<P, R>, params: P, answ
 }
 
 export function readFanslyWireResponse<P, R>(
-  spec: FanslyWireSpec<P, R>,
+  spec: FanslyWireReadSpec<P, R>,
   params: P,
   answer: FanslyWireAnswer,
 ): FanslyWireRead<R> {

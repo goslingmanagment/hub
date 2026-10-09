@@ -17,3 +17,21 @@ export class FanslyApiError extends Error {
     this.name = "FanslyApiError";
   }
 }
+
+/**
+ * A request builder refused a spec of the other credentials (arena "vanished
+ * chat" R5, `FanslyWireCredentials`): the page builder a session-less spec,
+ * the public builder a session-bearing one — or the public builder an input
+ * that carries a session or cookies. Thrown before anything is built, so
+ * nothing is journaled and nothing is sent.
+ */
+export class FanslyCredentialsRefusedError extends Error {
+  constructor(
+    readonly builder: "page" | "public",
+    readonly specId: string,
+    detail: string,
+  ) {
+    super(`The Fansly ${builder} request builder refuses ${specId}: ${detail}`);
+    this.name = "FanslyCredentialsRefusedError";
+  }
+}

@@ -1,5 +1,6 @@
 import type { FanslySessionBundle } from "@agency_hub_core/shared";
 
+import { FanslyCredentialsRefusedError } from "../errors.ts";
 import { buildFanslyRequestHeaders } from "../request-headers.ts";
 import type { FanslyEarningsAccount, FanslyPostsPage } from "../types.ts";
 import {
@@ -227,6 +228,7 @@ const noQuery = () => ({});
 export const FANSLY_WIRE_SPECS: SpecTable = {
   "account.me": {
     id: "account.me",
+    credentials: "session",
     kind: "account_me",
     host: "api",
     endpointTemplate: "/account/me",
@@ -237,6 +239,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   },
   "accounts.by_ids": {
     id: "accounts.by_ids",
+    credentials: "session",
     kind: "account_lookup",
     host: "api",
     endpointTemplate: "/account",
@@ -247,6 +250,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   },
   "messaging.groups": {
     id: "messaging.groups",
+    credentials: "session",
     kind: "dm_conversations",
     host: "api",
     endpointTemplate: "/messaging/groups",
@@ -265,6 +269,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   },
   "group.detail": {
     id: "group.detail",
+    credentials: "session",
     kind: "group_detail",
     host: "api",
     endpointTemplate: "/group/:groupId",
@@ -275,6 +280,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   },
   "messages.page": {
     id: "messages.page",
+    credentials: "session",
     kind: "dm_messages",
     host: "api",
     endpointTemplate: "/message",
@@ -289,6 +295,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   },
   "transactions.page": {
     id: "transactions.page",
+    credentials: "session",
     kind: "earnings_transactions",
     host: "api",
     endpointTemplate: "/account/wallets/earnings/transactions",
@@ -301,6 +308,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   },
   "earnings.accounts": {
     id: "earnings.accounts",
+    credentials: "session",
     kind: "earnings_accounts",
     host: "api",
     endpointTemplate: "/account/wallets/earnings/accounts",
@@ -311,6 +319,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   },
   "earnings.stats_accounts": {
     id: "earnings.stats_accounts",
+    credentials: "session",
     kind: "fan_earnings_stats",
     host: "api",
     endpointTemplate: "/account/wallets/earnings/stats/accounts",
@@ -325,6 +334,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   },
   "earnings.monthly_accounts": {
     id: "earnings.monthly_accounts",
+    credentials: "session",
     kind: "fan_earnings_monthly",
     host: "api",
     endpointTemplate: "/account/wallets/earnings/monthlystats/accounts",
@@ -339,6 +349,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   },
   "media.order_history": {
     id: "media.order_history",
+    credentials: "session",
     kind: "purchase_history",
     host: "api",
     endpointTemplate: "/media/orderhistory",
@@ -355,6 +366,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   },
   "payouts.methods": {
     id: "payouts.methods",
+    credentials: "session",
     kind: "payout_methods",
     host: "api",
     endpointTemplate: "/payments/payoutmethods",
@@ -365,6 +377,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   },
   "payouts.requests": {
     id: "payouts.requests",
+    credentials: "session",
     kind: "payout_requests",
     host: "api",
     endpointTemplate: "/payments/payout/requests",
@@ -380,6 +393,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   },
   "subscribers.page": {
     id: "subscribers.page",
+    credentials: "session",
     kind: "subscribers",
     host: "api",
     endpointTemplate: "/subscribers",
@@ -397,6 +411,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   },
   "followers.page": {
     id: "followers.page",
+    credentials: "session",
     kind: "followers",
     host: "api",
     endpointTemplate: "/account/:accountId/followersnew",
@@ -410,6 +425,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   },
   "notifications.page": {
     id: "notifications.page",
+    credentials: "session",
     kind: "notifications",
     host: "api",
     endpointTemplate: "/notifications",
@@ -428,6 +444,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   },
   "posts.timeline": {
     id: "posts.timeline",
+    credentials: "session",
     kind: "posts",
     host: "api",
     endpointTemplate: "/timelinenew/:accountId",
@@ -438,6 +455,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   },
   "posts.tips": {
     id: "posts.tips",
+    credentials: "session",
     kind: "post_tips",
     host: "api",
     endpointTemplate: "/tips",
@@ -451,6 +469,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   },
   "posts.by_ids": {
     id: "posts.by_ids",
+    credentials: "session",
     kind: "posts",
     host: "api",
     endpointTemplate: "/post",
@@ -461,6 +480,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   },
   "post.replies": {
     id: "post.replies",
+    credentials: "session",
     kind: "post_replies",
     host: "api",
     endpointTemplate: "/post/{postId}/replies",
@@ -473,6 +493,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   },
   "vault.albums": {
     id: "vault.albums",
+    credentials: "session",
     kind: "vault_albums",
     host: "api",
     endpointTemplate: "/vault/albumsnew",
@@ -483,6 +504,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   },
   "uservault.albums": {
     id: "uservault.albums",
+    credentials: "session",
     kind: "uservault_albums",
     host: "api",
     endpointTemplate: "/uservault/albumsnew",
@@ -493,6 +515,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   },
   "subscriptions.tiers": {
     id: "subscriptions.tiers",
+    credentials: "session",
     kind: "subscription_tiers",
     host: "api",
     endpointTemplate: "/subscriptions/tiers",
@@ -503,6 +526,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   },
   "subscriptions.giftcodes": {
     id: "subscriptions.giftcodes",
+    credentials: "session",
     kind: "gift_codes",
     host: "api",
     endpointTemplate: "/subscriptions/giftcodes",
@@ -513,6 +537,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   },
   "message.automated": {
     id: "message.automated",
+    credentials: "session",
     kind: "automated_messages",
     host: "api",
     endpointTemplate: "/message/automated",
@@ -523,6 +548,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   },
   "account.walls": {
     id: "account.walls",
+    credentials: "session",
     kind: "account_walls",
     host: "api",
     endpointTemplate: "/account/walls",
@@ -534,6 +560,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   },
   "vault.media": {
     id: "vault.media",
+    credentials: "session",
     kind: "vault_media",
     host: "api",
     endpointTemplate: "/media/vaultnew",
@@ -552,6 +579,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   },
   "account.media_by_ids": {
     id: "account.media_by_ids",
+    credentials: "session",
     kind: "account_media_batch",
     host: "api",
     endpointTemplate: "/account/media",
@@ -562,6 +590,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   },
   "account.bundles_by_ids": {
     id: "account.bundles_by_ids",
+    credentials: "session",
     kind: "account_media_bundle_batch",
     host: "api",
     endpointTemplate: "/account/media/bundle",
@@ -572,6 +601,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   },
   "media.offer_stats": {
     id: "media.offer_stats",
+    credentials: "session",
     kind: "media_offer_stats",
     host: "api",
     endpointTemplate: "/it/moie/statsnew",
@@ -590,6 +620,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   },
   "account.stats": {
     id: "account.stats",
+    credentials: "session",
     kind: "account_stats",
     host: "api",
     endpointTemplate: "/it/amoie/stats",
@@ -606,6 +637,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   },
   "earnings.stats_window": {
     id: "earnings.stats_window",
+    credentials: "session",
     kind: "earnings_stats_snapshot",
     host: "api",
     endpointTemplate: "/account/wallets/earnings/stats",
@@ -620,6 +652,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   },
   "earnings.monthly": {
     id: "earnings.monthly",
+    credentials: "session",
     kind: "earnings_monthlystats_snapshot",
     host: "api",
     endpointTemplate: "/account/wallets/earnings/monthlystats",
@@ -633,6 +666,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   },
   "trackinglinks": {
     id: "trackinglinks",
+    credentials: "session",
     kind: "tracking_links",
     host: "api",
     endpointTemplate: "/trackinglinks",
@@ -643,6 +677,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   },
   "discovery.suggestions": {
     id: "discovery.suggestions",
+    credentials: "session",
     kind: "discovery_feed",
     host: "api",
     endpointTemplate: "/contentdiscovery/media/suggestionsnew",
@@ -659,6 +694,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   },
   "broadcast.stats": {
     id: "broadcast.stats",
+    credentials: "session",
     kind: "broadcast_stats",
     host: "api",
     endpointTemplate: "/message/broadcast/stats",
@@ -669,6 +705,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   },
   "broadcast.stats_deleted": {
     id: "broadcast.stats_deleted",
+    credentials: "session",
     kind: "broadcast_stats_deleted",
     host: "api",
     endpointTemplate: "/message/broadcast/stats/deleted",
@@ -679,6 +716,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   },
   "broadcast.scheduled": {
     id: "broadcast.scheduled",
+    credentials: "session",
     kind: "broadcast_scheduled",
     host: "api",
     endpointTemplate: "/message/broadcast/scheduled",
@@ -689,6 +727,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   },
   "polls": {
     id: "polls",
+    credentials: "session",
     kind: "polls",
     host: "api",
     endpointTemplate: "/polls",
@@ -699,6 +738,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   },
   "recapstats": {
     id: "recapstats",
+    credentials: "session",
     kind: "recapstats",
     host: "api",
     endpointTemplate: "/recapstats",
@@ -712,6 +752,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   // describer in memory and through the transient handoff buffer.
   "ws.upgrade": {
     id: "ws.upgrade",
+    credentials: "session",
     kind: null,
     host: "ws",
     capture: "none",
@@ -724,6 +765,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   },
   "cdn.media": {
     id: "cdn.media",
+    credentials: "session",
     kind: null,
     host: "cdn",
     capture: "bytes",
@@ -777,12 +819,19 @@ export function buildFanslyWireUrl<I extends FanslyWireId>(
 
 /** One request, built at send time: the browser headers of the captured HAR
  *  with this request's client timestamp, through `buildFanslyRequestHeaders`
- *  — the headers the legacy adapter sent for the same route. */
+ *  — the headers the legacy adapter sent for the same route. A page's route
+ *  only (`credentials: "session"`): a session-less spec is the public
+ *  builder's (`buildFanslyPublicWireRequest`) and is refused here before
+ *  anything is built. */
 export function buildFanslyWireRequest<I extends FanslyWireId>(
   id: I,
   params: FanslyWireParams<I>,
   input: { baseUrl: string; session: FanslySessionBundle; timeoutMs: number; nowMs?: number },
 ): FanslyWireRequest {
+  const spec: { credentials?: unknown } | undefined = isFanslyWireId(id) ? fanslyWireSpec(id) : undefined;
+  if (spec?.credentials !== "session") {
+    throw new FanslyCredentialsRefusedError("page", String(id), "not a page route that carries the page's session");
+  }
   if (!Number.isSafeInteger(input.timeoutMs) || input.timeoutMs <= 0) {
     throw new RangeError(`Fansly wire request timeout must be a positive integer (got ${input.timeoutMs})`);
   }

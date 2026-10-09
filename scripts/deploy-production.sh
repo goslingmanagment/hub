@@ -793,6 +793,15 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # keeps the pages row), so a page erased by the previous image keeps its
   # bindings — link ids and channel keys, no fan data — until the next one.
   "0257_traffic_link_bindings.sql"
+  # The session-less public account reader's egress (arena "vanished chat",
+  # R5 M5): a new singleton table fansly_public_egress (the reader's own
+  # proxy, no page key, no foreign key, nothing granted) and the source CHECK
+  # of fansly_send_log replaced by the old list plus 'public_lookup' (added NOT
+  # VALID, validated; lock_timeout 5 s). The previous image never names the
+  # table, writes only sources the old list has and reads the column as text,
+  # so it runs unchanged after a rollback. Nothing sends through the egress in
+  # this release.
+  "0258_fansly_public_lookup_egress.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"
