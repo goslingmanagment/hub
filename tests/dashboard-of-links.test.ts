@@ -20,7 +20,7 @@ vi.mock("../apps/dashboard/src/api/ofapiCollection.ts", () => ({
   ofapiCollectionQueryOptions: () => ({ queryKey: ["admin", "ofapi-collection"], queryFn: () => new Promise(() => {}) }),
 }));
 
-import { OfapiMarketing, smartLinksHaveData } from "../apps/dashboard/src/pages/OfapiMarketing.tsx";
+import { effectivePickedLink, OfapiMarketing, smartLinksHaveData } from "../apps/dashboard/src/pages/OfapiMarketing.tsx";
 import { marketingActionInFlight, marketingRefetchInterval, MARKETING_POLL_MS, type MarketingDashboard } from "../apps/dashboard/src/api/ofapiMarketing.ts";
 import {
   filterLinks,
@@ -162,6 +162,17 @@ describe("the screen's rules", () => {
     expect(marketingRefetchInterval(open)({ state: { data: settled } })).toBe(false);
     expect(marketingRefetchInterval(() => false)({ state: { data: dispatching } })).toBe(false);
     expect(marketingRefetchInterval(undefined)({ state: { data: dispatching } })).toBe(false);
+  });
+
+  it("lets a one-off read target only a link picked on the current page, for the current read, still offered", () => {
+    const picked = { pageId: 9, selection: "trial_link", id: "11170787" };
+    const vipLinks = [{ id: "11170787" }, { id: "10802699" }];
+    expect(effectivePickedLink(picked, { pageId: 9, selection: "trial_link", links: vipLinks })).toBe("11170787");
+    // The selected page left the active list on refresh: the form moved to page 8.
+    expect(effectivePickedLink(picked, { pageId: 8, selection: "trial_link", links: [{ id: "2099377" }] })).toBe("");
+    expect(effectivePickedLink(picked, { pageId: 9, selection: "trial_link_subscribers", links: vipLinks })).toBe("");
+    expect(effectivePickedLink(picked, { pageId: 9, selection: "trial_link", links: [{ id: "10802699" }] })).toBe("");
+    expect(effectivePickedLink(null, { pageId: 9, selection: "trial_link", links: vipLinks })).toBe("");
   });
 
   it("treats Smart Links as used when a link, a pixel, a postback or an action exists", () => {

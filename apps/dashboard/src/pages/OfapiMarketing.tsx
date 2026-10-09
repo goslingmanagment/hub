@@ -114,6 +114,21 @@ export function smartLinksHaveData(data: MarketingDashboard | undefined): boolea
     || data.resources.some(row => row.kind === "smart_link" || row.kind === "pixel" || row.kind === "postback");
 }
 
+/** The link picked in the one-off collection form, with the page and the
+ * read it was picked for. */
+export interface PickedLink { pageId: number; selection: string; id: string }
+
+/** The pick that still holds: same page, same read, and still offered —
+ * else "" (nothing picked). A page that drops out on refresh moves the form
+ * to another page; the old page's link must not travel with it. */
+export function effectivePickedLink(
+  picked: PickedLink | null,
+  current: { pageId: number; selection: string; links: ReadonlyArray<{ id: string }> },
+): string {
+  if (picked === null || picked.pageId !== current.pageId || picked.selection !== current.selection) return "";
+  return current.links.some(link => link.id === picked.id) ? picked.id : "";
+}
+
 const linkFilters: Array<[LinkFilter, string]> = [["all", "Все"], ["active", "Активные"], ["closed", "Завершённые и истёкшие"]];
 
 export function OfapiMarketing() {
@@ -131,7 +146,7 @@ export function OfapiMarketing() {
   const [tab, setTab] = useState<"links" | "postbacks" | "analytics" | "history">("links");
   const [form, setForm] = useState<MarketingForm | null>(null); const [review, setReview] = useState<MarketingIntent | null>(null);
   const [busy, setBusy] = useState(false); const [notice, setNotice] = useState(""); const [error, setError] = useState("");
-  const [selection, setSelection] = useState("smart_links"); const [selectedLink, setSelectedLink] = useState("");
+  const [selection, setSelection] = useState("smart_links"); const [pickedLink, setPickedLink] = useState<PickedLink | null>(null);
   const [calls, setCalls] = useState(5); const [credits, setCredits] = useState(10);
   const [from, setFrom] = useState(() => new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10));
   const [to, setTo] = useState(() => new Date().toISOString().slice(0, 10));
@@ -169,8 +184,11 @@ export function OfapiMarketing() {
   const selectableLinks = selection.startsWith("smart_")
     ? smartLinks.map(link => ({ id: link.id, name: link.name }))
     : pageLinks.filter(link => link.linkKind === (selection.startsWith("trial_") ? "trial" : "tracking")).map(link => ({ id: link.linkRef, name: link.name }));
+  // A paid read goes to the effective page: a link picked on another page, or
+  // for another read, or no longer offered, is no pick at all.
+  const selectedLink = effectivePickedLink(pickedLink, { pageId, selection, links: selectableLinks });
   const selectPage = (label: string) => {
-    setSelectedLink("");
+    setPickedLink(null);
     setSearchParams(previous => { const next = new URLSearchParams(previous); next.set("page", label); return next; }, { replace: true });
   };
   return <div className="max-w-7xl space-y-5 px-4 pb-12 pt-4 md:px-0 md:pt-0">
@@ -326,11 +344,11 @@ export function OfapiMarketing() {
       </>}
     </section>
     <details className={card}><summary className="cursor-pointer font-semibold">Собрать данные по выбранной странице</summary><p className="mt-3 text-sm text-text-secondary">Разовый сбор у провайдера: сохранённые и общие списки ссылок, сведения и списки по одной ссылке, Smart Links. Он не меняет расписание, сохраняет шаги и останавливается на указанных лимитах. Общая пауза фонового сбора действует и здесь.</p><div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-      <Field label="Что собрать"><select className={field} value={selection} onChange={e => { setSelection(e.target.value); setSelectedLink(""); }}>{readSelections.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></Field>
-      {perLink && <Field label="Ссылка"><select required className={field} value={selectedLink} onChange={e => setSelectedLink(e.target.value)}><option value="">Выберите ссылку</option>{selectableLinks.map(link => <option key={link.id} value={link.id}>{link.name ?? link.id}{link.name ? ` · ${link.id}` : ""}</option>)}</select></Field>}
+      <Field label="Что собрать"><select className={field} value={selection} onChange={e => { setSelection(e.target.value); setPickedLink(null); }}>{readSelections.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></Field>
+      {perLink && <Field label="Ссылка"><select required className={field} value={selectedLink} onChange={e => setPickedLink({ pageId, selection, id: e.target.value })}><option value="">Выберите ссылку</option>{selectableLinks.map(link => <option key={link.id} value={link.id}>{link.name ?? link.id}{link.name ? ` · ${link.id}` : ""}</option>)}</select></Field>}
       <Field label="С даты (UTC)"><input className={field} type="date" value={from} onChange={e => setFrom(e.target.value)} /></Field><Field label="По дату включительно (UTC)"><input className={field} type="date" value={to} onChange={e => setTo(e.target.value)} /></Field>
       <Field label="Не более запросов"><input className={field} type="number" min={1} max={100} value={calls} onChange={e => setCalls(Number(e.target.value))} /></Field><Field label="Не более кредитов"><input className={field} type="number" min={1} max={100} value={credits} onChange={e => setCredits(Number(e.target.value))} /></Field>
-    </div><div className="mt-4 flex flex-wrap items-center gap-3"><button className={button} disabled={busy || !pageId || !collection.data || (perLink && !selectedLink) || !Number.isInteger(calls) || calls < 1 || calls > 100 || !Number.isInteger(credits) || credits < 1 || credits > 100 || !from || !to || from > to} onClick={() => void run(async () => { await marketingActions.collect({ pageId, category: selection.startsWith("smart_") ? "smart_links" : "tracking_links", expectedRevision: collection.data!.revision, maxCalls: calls, maxCredits: credits, maxBytes: 4 * 1024 * 1024, from: `${from}T00:00:00.000Z`, to: `${to}T23:59:59.999Z`, selection: [`${selection}${perLink ? `:${selectedLink}` : ""}`] }); setNotice("Ограниченный сбор поставлен в очередь. Состояние и возобновление — на экране управления сбором."); })}>Запустить один сбор</button><span className="text-xs text-text-muted">До 4 МиБ ответа; общие ограничения расхода продолжают действовать.</span></div></details>
+    </div><div className="mt-4 flex flex-wrap items-center gap-3"><button className={button} disabled={busy || !pageId || !collection.data || (perLink && !selectedLink) || !Number.isInteger(calls) || calls < 1 || calls > 100 || !Number.isInteger(credits) || credits < 1 || credits > 100 || !from || !to || from > to} onClick={() => void run(async () => { if (perLink && effectivePickedLink(pickedLink, { pageId, selection, links: selectableLinks }) === "") throw new Error("Выберите ссылку этой страницы."); await marketingActions.collect({ pageId, category: selection.startsWith("smart_") ? "smart_links" : "tracking_links", expectedRevision: collection.data!.revision, maxCalls: calls, maxCredits: credits, maxBytes: 4 * 1024 * 1024, from: `${from}T00:00:00.000Z`, to: `${to}T23:59:59.999Z`, selection: [`${selection}${perLink ? `:${selectedLink}` : ""}`] }); setNotice("Ограниченный сбор поставлен в очередь. Состояние и возобновление — на экране управления сбором."); })}>Запустить один сбор</button><span className="text-xs text-text-muted">До 4 МиБ ответа; общие ограничения расхода продолжают действовать.</span></div></details>
     {form && <MarketingEditor form={form} setForm={setForm} links={allLinks} busy={busy} error={error} onClose={() => { if (!busy) setForm(null); }} onPrepare={() => void run(prepare)} />}
     {review && <MarketingIntentReview key={review.id} intent={review} busy={busy} error={error} onClose={() => { if (!busy) setReview(null); }} onDispatch={(shared, external) => void run(async () => { const result = await marketingActions.dispatch(review.id, { acknowledgeSharedImpact: shared, acknowledgeExternalTest: external }); setReview(null); setSmartToggle(true); setTab("history"); setNotice(stateLabels[result.state] ?? result.state); })} />}
   </div>;
