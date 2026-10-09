@@ -7,7 +7,7 @@ Apply forward migration `0154_ofapi_credit_receipts.sql` before the new runtime.
 | Finding | Behavior after this batch | Regression evidence |
 |---|---|---|
 | R1 | Link discovery and subscriber walks follow explicit continuation, retain the next offset across budget yields, and stop on an explicit terminal full page. Provider URLs are validated against account/resource/origin and only their offset is used. | Short-page resume and terminal full-page integration cases in `ofapi-fan-identities.integration.test.ts`; URL rejection tests in `ofapi-request-audit.test.ts`. |
-| R2 | Missing list envelopes, malformed items and missing continuation evidence fail without certifying empty coverage. Empty documented lists remain valid. Spenders alone retain the documented array-only length fallback. | List contract tests; existing client and ledger fixtures now include real terminal evidence. |
+| R2 | Missing list envelopes, malformed items and missing continuation evidence fail without certifying empty coverage. Empty documented lists remain valid. Spenders (bare `data` array) and chargebacks (`data.list` + `data.marker`) keep the documented length fallback: a short page ends the list. Chargebacks were missed here and failed every daily run from 2026-09-08 until restored. | List contract tests; existing client and ledger fixtures now include real terminal evidence. |
 | R3 | Unknown/denied and persistence failures refresh on the next access after 30 seconds. All callers share one in-flight verification. Verified/mismatched credentials stay pinned; changing configured key/team requires runtime recreation. | Concurrent same-client provider/persistence recovery tests; existing wrong-team and key-isolation tests. |
 | R4 | Financial metadata is captured before ledger/counter settlement. An acknowledged send remains confirmed with `creditAccounting: pending` in its verifier evidence. New paid dispatch waits for DB-only receipt recovery; no original command is reissued. | Both-projection outage, new-client recovery, concurrent settlement, one-attempt outbox and all command/legacy gateway tests. |
 | R5 | Numeric media identifiers beyond JavaScript's safe integer range are emitted as exact strings. Both media and preview identifiers use the same codec. | Boundary and 30-digit accepted-identifier wire assertions. |
@@ -65,6 +65,10 @@ No authenticated vendor call was made; fixtures prove local behavior only.
 - [Tracking link spenders](https://docs.onlyfansapi.com/api-reference/tracking-links/list-tracking-link-spenders)
   documents a `data` array. The old client comment generalized `data.list` across
   the whole family; that assumption was wrong and is now explicitly narrowed.
+- [Chargebacks](https://docs.onlyfansapi.com/api-reference/chargebacks/list-chargebacks)
+  documents `data.list` plus an informational integer `data.marker` and plain
+  limit/offset paging, with no `hasMore` and no `_pagination` (pinned 2026-09-05
+  spec and live docs agree). A full page may continue; a short page is the end.
 - [Send message](https://docs.onlyfansapi.com/api-reference/chat-messages/send-message)
   permits string identifiers in `mediaFiles`/`previews`; the live generated item
   schema is imprecise (`file[]|string`). Preserve supported strings exactly rather

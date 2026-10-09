@@ -138,6 +138,19 @@ describe("notification paging policy table", () => {
       .toBe("pace_violation");
   });
 
+  it("keeps a stale collection category in the digest and never pages it; the capture tee still pages", () => {
+    const stale = notificationPagingPolicyFor("read_gateway_capture", "collection_stale");
+    expect(stale).toMatchObject({ openHoldMs: Number.POSITIVE_INFINITY, flap: null });
+    // Open for a month: still a digest line only.
+    expect(decideNotificationPaging(observation(), stale, at(30 * 24 * HOUR))).toEqual({ action: "none" });
+    // Its recovery is recorded without a message (nothing was paged).
+    expect(decideNotificationPaging(observation({ status: "resolved", resolvedAt: at(2 * HOUR) }), stale, at(3 * HOUR)))
+      .toEqual({ action: "none" });
+    expect(notificationPagingPolicyFor("read_gateway_capture", null).openHoldMs).toBe(0);
+    expect(incidentTitleForKind({ kind: "read_gateway_capture", subKey: "collection_stale" }))
+      .toBe("OnlyFans scheduled collection is stale");
+  });
+
   it("gives the disk runway warning its own long holds without touching the critical latch", () => {
     expect(notificationPagingPolicyFor("db_disk_usage", "runway_warning").openHoldMs).toBe(6 * HOUR);
     expect(notificationPagingPolicyFor("db_disk_usage", "runway_critical").openHoldMs).toBe(0);

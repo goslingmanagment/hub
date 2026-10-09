@@ -619,6 +619,60 @@ describe("media-stats.walk", () => {
     expect(steps.rows).toEqual([{ subject: ITEM_FRESH, outcomes: 0 }, { subject: ITEM_FRESH, outcomes: 1 }, { subject: ITEM_MID, outcomes: 0 }]);
   });
 
+  it("a walk an earlier visit left open ends in the item's next visit: every window down to the probe, then the refresh", async (context) => {
+    if (!testDb) return context.skip();
+    const { pageId } = await seedPage("live");
+    // An old item as four windows a visit left it (production 2026-10-09): two
+    // empty months, the first month found, one window of the gap read — and
+    // due again by its tier, a month on.
+    const visitedMs = Date.now() - 31 * DAY_MS;
+    const openAtMs = visitedMs - 93 * DAY_MS;
+    await seedQueueItem(pageId, ITEM_LONG, {
+      ageDays: 400,
+      lastVisitedDaysAgo: 31,
+      backfillCursor: {
+        version: 1, nextBeforeMs: openAtMs, emptyStreak: 1, done: false, floorAt: null, stopReason: null, floorBasis: null,
+        probeSpent: true, probeResumeBeforeMs: null, probeHitBeforeMs: Date.now() - 370 * DAY_MS, refreshedThroughMs: visitedMs,
+        guard: { spanDays: 31, narrowed: false, lastAfterMs: openAtMs, lastBeforeMs: openAtMs + 31 * DAY_MS, lastObservationId: null },
+      },
+    });
+    const registry = await quietRegistry(pageId);
+    await makeDue(pageId, "media-stats.walk");
+    // The months between are as idle as the two that bought the probe.
+    const idle: Responder = (req) => okResponse(allZeroBody({
+      mediaOfferRef: query(req, "mediaOfferId")!,
+      afterMs: Number(query(req, "afterDate")),
+      beforeMs: Number(query(req, "beforeDate")),
+      periodMs: Number(query(req, "period")),
+    }));
+    const { requests } = await drive(pageId, registry, idle,
+      async () => (await workRow(pageId, "media-stats.walk"))?.waiting_reason === "not_due");
+
+    // Eight 31-day windows from where the walk stood down to the probe — an
+    // empty one ends nothing above a probe that found traffic — then the
+    // long tail's 90-day refresh, all in the one visit.
+    const windows = windowsOf(requests, ITEM_LONG);
+    expect(windows.slice(0, 8)).toEqual(Array.from({ length: 8 }, (_unused, index) => ({
+      beforeMs: openAtMs - index * 31 * DAY_MS,
+      afterMs: openAtMs - (index + 1) * 31 * DAY_MS,
+      periodMs: DAY_MS,
+    })));
+    expect(windows).toHaveLength(9);
+    expect(windows[8]!.beforeMs - windows[8]!.afterMs).toBe(90 * DAY_MS);
+
+    const item = (await mediaRow(pageId, ITEM_LONG))!;
+    expect(item).toMatchObject({ known_count: 9, consecutive_failures: 0, refresh_class: "long_tail", dirty_reason: null });
+    expect(item.backfill_cursor).toMatchObject({
+      done: true, stopReason: "created_at_floor", floorBasis: "created_at", probeSpent: true, probeHitBeforeMs: null, refreshedThroughMs: windows[8]!.beforeMs,
+    });
+    // Owner decision №6 stands: the item is due again a month on.
+    expect(item.next_due_at!.getTime() - item.last_visited_at!.getTime()).toBe(30 * DAY_MS);
+    expect((await workRow(pageId, "media-stats.walk"))!.cursor).toMatchObject({
+      visit: null, longTailWindowMode: "ninety", last: { subjectRef: ITEM_LONG, outcome: "visited", tier: "long_tail", windows: 9 },
+    });
+    expect(await coverage(pageId, "media_stats", String(pageId))).toMatchObject({ status: "window_captured", expected_count: 1, observed_unique_count: 1 });
+  });
+
   it("today's top 50 jump the queue once a UTC day, marked before the pick — also on a day nothing else is due", async (context) => {
     if (!testDb) return context.skip();
     const { pageId } = await seedPage("live");

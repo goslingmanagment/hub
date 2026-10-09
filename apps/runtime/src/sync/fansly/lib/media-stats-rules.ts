@@ -80,10 +80,23 @@ const MEDIA_STAT_COUNTER_KEYS = [
   "interactionTime",
   "previewInteractionTime",
 ] as const;
-/** How many 31-day backfill windows ONE media may take in one visit. Bounded so
- *  a single item with years of history cannot spend a whole chunk, while a
- *  newest-first depth-first walk still finishes an item in a few dispatches. */
-export const BACKFILL_WINDOWS_PER_VISIT = 4;
+/**
+ * The most backfill windows ONE media takes in one visit: ten years of 31-day
+ * ones — five where a walk has halved its span — more than any item has, so a
+ * visit walks an item's history to its floor. The bound is there for a walk
+ * that nothing else ends; one that does reach it stays open and goes on at
+ * the item's next visit.
+ *
+ * It was FOUR, the legacy lane's share of a five-request chunk. The engine
+ * paces a visit and budgets nothing, so four windows a visit left the rest of
+ * the walk to the item's cadence — and an item older than 90 days is due once
+ * a month. A year of history took three months, newest first: the first three
+ * months of the item's life, the ones For You serves a video in, came last
+ * (production 2026-10-09: 7 285 items on five pages still short of them, up
+ * to 64 300 windows owed, the last of them due in April 2027). The windows are
+ * the same ones; a walk left open ends at the item's next visit.
+ */
+export const BACKFILL_WINDOWS_PER_VISIT = 120;
 /** The three 31-day windows a long-tail refresh falls back to when the provider
  *  refuses the 90-day span. 3 × 31 = 93 ≥ 90. */
 export const LONG_TAIL_SPLIT_WINDOWS = 3;

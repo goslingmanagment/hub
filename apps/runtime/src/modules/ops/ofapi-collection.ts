@@ -18,7 +18,8 @@ export function registerOfapiCollectionRoutes(server: ApiServer, ctx: ApiModuleC
   server.get("/api/v1/admin/ofapi/collection", { schema: ofapiCollectionRouteSchemas.ofapiCollectionGet }, async request => {
     const principal = await requirePrincipal(request); requireDashboardUser(principal);
     if (request.query.pageId !== undefined && !canAccessPage(principal, request.query.pageId)) throw new ForbiddenError();
-    return getOfapiCollectionSnapshot(app.db, principal.user.role === "owner" ? null : principal.assignedPageIds, request.query.pageId);
+    return getOfapiCollectionSnapshot(app.db, principal.user.role === "owner" ? null : principal.assignedPageIds, request.query.pageId,
+      request.query.jobState === undefined ? {} : { jobState: request.query.jobState });
   });
   server.post("/api/v1/admin/ofapi/collection/preview", { schema: ofapiCollectionRouteSchemas.ofapiCollectionPreview }, async request => {
     const principal = await requirePrincipal(request); requireOwner(principal);

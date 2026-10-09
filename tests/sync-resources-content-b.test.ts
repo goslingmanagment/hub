@@ -174,6 +174,62 @@ describe("media-stats: one visit, one window a step", () => {
     expect(run.visited!.backfillCursor).toMatchObject({ done: true, floorBasis: "created_at", refreshedThroughMs: NOW.getTime() });
   });
 
+  it("a first visit walks an old item to its floor, however many windows that takes", () => {
+    // Still watched: every window carries traffic, down to the one that holds
+    // the item's creation.
+    const watched = drive(startMediaVisit(candidate({ ageDays: 200 }), UNPROVEN, NOW), (window) => served(window));
+    expect(watched.windows.map(span)).toEqual([[31, 0], [61, 30], [91, 60], [121, 90], [151, 120], [181, 150], [211, 180], [241, 210]]);
+    expect(watched.run).toMatchObject({ kind: "finished", visited: { backfillCursor: { done: true, floorBasis: "created_at", probeSpent: false } } });
+
+    // Idle for two months: the probe finds the first month, and the walk
+    // resumes below the second empty window and reads on down to the probe —
+    // the item's second and third month are its last two windows.
+    const idle = drive(startMediaVisit(candidate({ ageDays: 400 }), UNPROVEN, NOW), (window) => (span(window)[0]! >= 341 ? served(window) : zeros(window)));
+    expect(idle.windows.map(span)).toEqual([
+      [31, 0], [62, 31],
+      [401, 370],
+      [93, 62], [124, 93], [155, 124], [186, 155], [217, 186], [248, 217], [279, 248], [310, 279], [341, 310], [371, 340],
+    ]);
+    expect(idle.windows.every((window) => window.mode === "backfill")).toBe(true);
+    expect(idle.run).toMatchObject({
+      kind: "finished",
+      visited: {
+        knownCount: 16,
+        clearDirty: true,
+        backfillCursor: { done: true, floorBasis: "created_at", probeSpent: true, probeHitBeforeMs: null, refreshedThroughMs: NOW.getTime() },
+      },
+    });
+  });
+
+  it("a walk an earlier visit left open ends in the item's next one: on down to the probe, then the refresh", () => {
+    // An old item as four windows a visit left it (production 2026-10-09): two
+    // empty months, the first month found, one window of the gap read.
+    const visitedMs = NOW.getTime() - 30 * DAY;
+    const open = {
+      version: 1,
+      nextBeforeMs: visitedMs - 93 * DAY,
+      emptyStreak: 1,
+      done: false,
+      probeSpent: true,
+      probeResumeBeforeMs: null,
+      probeHitBeforeMs: NOW.getTime() - 370 * DAY,
+      refreshedThroughMs: visitedMs,
+      guard: { spanDays: 31, narrowed: false, lastAfterMs: visitedMs - 93 * DAY, lastBeforeMs: visitedMs - 62 * DAY, lastObservationId: 7 },
+    };
+    const split: MediaStatsPageState = { longTailWindowMode: "split_31", longTailWindowAnnounced: true, longTailProbeFailedDay: null };
+    const visit = startMediaVisit(candidate({ ageDays: 400, lastVisitedAt: new Date(visitedMs), backfillCursor: open, priorityBand: 2 }), split, NOW);
+    const { run, windows } = drive(visit, (window) => (span(window)[0]! > 340 ? served(window) : zeros(window)));
+    expect(windows.map((window) => [...span(window), window.mode])).toEqual([
+      [154, 123, "backfill"], [185, 154, "backfill"], [216, 185, "backfill"], [247, 216, "backfill"],
+      [278, 247, "backfill"], [309, 278, "backfill"], [340, 309, "backfill"], [371, 340, "backfill"],
+      [31, 0, "steady"], [62, 31, "steady"], [93, 62, "steady"],
+    ]);
+    expect(run).toMatchObject({
+      kind: "finished",
+      visited: { knownCount: 12, clearDirty: true, backfillCursor: { done: true, floorBasis: "created_at", probeHitBeforeMs: null, refreshedThroughMs: NOW.getTime() } },
+    });
+  });
+
   it("is deterministic: the same visit asks for the same windows, and a different recorded answer is refused", () => {
     const visit = startMediaVisit(candidate({ ageDays: 10 }), UNPROVEN, NOW);
     const first = runMediaVisit(visit);

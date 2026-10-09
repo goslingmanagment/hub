@@ -98,6 +98,59 @@ describe("OFAPI request audit regressions", () => {
     await expect(client.listTrackingLinkUsers!({}, ACCOUNT, "1", "subscribers", {})).rejects.toThrow("continuation");
   });
 
+  it("R2 ends the documented chargebacks list on a short page; the fallback stays with that route", async () => {
+    // Pinned and live spec: `data.list` + informational `data.marker`, plain
+    // limit/offset, no continuation field (production body since 2026-09-08).
+    const items = (count: number) => Array.from({ length: count }, (_, index) => ({ id: index, payment: { id: `p${index}` } }));
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(response(paid({ list: items(2), marker: 1_757_300_000 })))
+      .mockResolvedValueOnce(response(paid({ list: items(1), marker: 1_757_300_000 })))
+      .mockResolvedValueOnce(response({ data: { list: [] } }))
+      .mockResolvedValueOnce(response({ data: items(1) }))
+      .mockResolvedValueOnce(response({ data: { list: items(1), marker: 1, hasMore: true } }))
+      .mockResolvedValueOnce(response({ data: {} }))
+      .mockResolvedValueOnce(response({ data: { list: [null], marker: 1 } }))
+      .mockResolvedValueOnce(response({ data: { list: [], hasMore: "false" } }))
+      .mockResolvedValueOnce(response({ data: { list: [], marker: 1 } }));
+    vi.stubGlobal("fetch", fetch);
+    const client = createOfapiClient({ apiKey: "test", restDelayMs: 0 });
+    const list = () => client.listChargebacks!({}, ACCOUNT, { limit: 2, offset: 0 });
+    await expect(list()).resolves.toMatchObject({ items: items(2), hasNextPage: true, nextMarker: null });
+    await expect(list()).resolves.toMatchObject({ items: items(1), hasNextPage: false });
+    await expect(list()).resolves.toMatchObject({ items: [], hasNextPage: false });
+    await expect(list()).resolves.toMatchObject({ items: items(1), hasNextPage: false });
+    // Explicit continuation evidence still wins over the page length.
+    await expect(list()).resolves.toMatchObject({ items: items(1), hasNextPage: true });
+    await expect(list()).rejects.toThrow("OFAPI list page shape unavailable");
+    await expect(list()).rejects.toThrow("OFAPI list item shape unavailable");
+    await expect(list()).rejects.toThrow("OFAPI list page continuation invalid");
+    // The same body is not enough for a route that documents continuation.
+    await expect(client.listTransactions!({}, ACCOUNT, {})).rejects.toThrow("OFAPI list page continuation unavailable");
+    expect(fetch).toHaveBeenCalledTimes(9);
+  });
+
+  it("hands the chargebacks body back for the journal, refused bodies on the error, never enumerable", async () => {
+    const accepted = paid({ list: [{ id: 1, payment: { id: "p1" } }], marker: 1_757_300_000 });
+    const refused = paid({ items: [{ id: 2 }] });
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(response(accepted))
+      .mockResolvedValueOnce(response(refused))
+      .mockResolvedValueOnce(response({ data: { list: [], hasMore: false } }))
+      .mockResolvedValueOnce(response({ data: {} }));
+    vi.stubGlobal("fetch", fetch);
+    const client = createOfapiClient({ apiKey: "test", restDelayMs: 0 });
+    await expect(client.listChargebacks!({}, ACCOUNT, { limit: 100 })).resolves.toMatchObject({ rawBody: accepted });
+    const error = await client.listChargebacks!({}, ACCOUNT, { limit: 100 }).catch((caught: unknown) => caught);
+    expect(error).toMatchObject({ message: "OFAPI list page shape unavailable" });
+    expect((error as { refusedListBody?: unknown }).refusedListBody).toEqual(refused);
+    expect(Object.keys(error as object)).not.toContain("refusedListBody");
+    expect(JSON.stringify(error)).not.toContain("items");
+    // Other routes keep neither.
+    expect(await client.listTransactions!({}, ACCOUNT, {})).not.toHaveProperty("rawBody");
+    const other = await client.listTransactions!({}, ACCOUNT, {}).catch((caught: unknown) => caught);
+    expect((other as { refusedListBody?: unknown }).refusedListBody).toBeUndefined();
+  });
+
   it.each(["provider", "persistence"])("R3 refreshes one shared preflight after transient %s failure", async failure => {
     vi.useFakeTimers();
     let release: ((value: Response) => void) | undefined;

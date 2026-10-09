@@ -8,6 +8,7 @@ import type {
   OfapiCollectionMode,
   OfapiCollectionPolicy,
   OfapiCollectionPolicySource,
+  OfapiCollectionRun,
   OfapiCollectionSettings,
   OfapiCollectionSnapshot,
 } from "@/api/adminOfapiCollection";
@@ -312,6 +313,16 @@ export function rowState(view: CategoryView, backgroundPaused: boolean): RowStat
   if (backgroundPaused) {
     return { tone: "danger", label: "остановлено", detail: "глобальная пауза · режим сохранён" };
   }
+  const stale = view.policies.filter((policy) => policy.scheduleHealth.stale);
+  if (stale.length > 0) {
+    const causes = new Set(stale.map((policy) => staleCauseText(policy.scheduleHealth.lastRun)));
+    const cause = causes.size === 1 ? [...causes][0]! : "причины различаются";
+    // In the all-pages scope, say how many of the pages it is; the banner names them.
+    const share = stale.length < view.policies.length
+      ? `${stale.length} из ${view.policies.length} ${ruPlural(view.policies.length, "страницы", "страниц", "страниц")} · `
+      : causes.size > 1 ? `${stale.length} ${ruPlural(stale.length, "страница", "страницы", "страниц")} · ` : "";
+    return { tone: "warning", label: "устарело", detail: `${share}${cause}` };
+  }
   if (view.usage.inFlight > 0) {
     return {
       tone: "accent",
@@ -548,6 +559,97 @@ export function parseSelection(raw: string): string[] {
     .map((line) => line.trim())
     .filter((line) => line.length > 0)
     .slice(0, 100);
+}
+
+// ---------------------------------------------------------------------------
+// Scheduled runs that do not complete (traffic plan §2.8 п. 3)
+
+type RunFacts = Pick<OfapiCollectionRun, "reason" | "exhaustedCap" | "usedCalls" | "maxCalls" | "usedCredits" | "maxCredits" | "usedBytes" | "maxBytes" | "stepsDone" | "stepsTotal">;
+
+const SCHEDULED_RUN_EXHAUSTED_PREFIX = "scheduled_run_exhausted:";
+
+/** The policy field that raises a spent run ceiling: a scheduled run's call
+ *  ceiling is «Запросов за запуск», its credit ceiling the category's daily
+ *  limit. Its byte ceiling is fixed, so it has none. */
+export type CapLever = "calls" | "credits";
+export const CAP_LEVER_FIELD_RU: Record<CapLever, string> = {
+  calls: "«Запросов за запуск, не более»",
+  credits: "«Дневной лимит категории, кр»",
+};
+
+/** The runner's reason in the owner's words when a cap ended a scheduled run;
+ *  null for any other reason (shown as the server wrote it). Admission says
+ *  only `job_limit`; the server names the spent ceiling from the run's own
+ *  counters, and when they single none out the text names no ceiling. */
+export function exhaustedRunText(run: RunFacts): string | null {
+  if (!run.reason?.startsWith(SCHEDULED_RUN_EXHAUSTED_PREFIX)) return null;
+  const limit = run.reason.slice(SCHEDULED_RUN_EXHAUSTED_PREFIX.length);
+  if (limit === "job_limit") {
+    const step = run.stepsDone !== null && run.stepsTotal !== null && run.stepsDone < run.stepsTotal
+      ? ` · остановился на шаге ${run.stepsDone + 1} из ${run.stepsTotal}`
+      : "";
+    switch (run.exhaustedCap) {
+      case "calls": return `проход не успевает за лимит вызовов: ${run.usedCalls} из ${run.maxCalls}${step}`;
+      case "credits": return `проход не успевает за лимит кредитов: ${fmtCredits(run.usedCredits)} из ${fmtCredits(run.maxCredits)} кр${step}`;
+      case "bytes": return `проход не успевает за лимит объёма: ${formatBytes(run.usedBytes)} из ${formatBytes(run.maxBytes)}${step}`;
+      default: return `проход упирается в лимит задачи: вызовы ${run.usedCalls} из ${run.maxCalls} · ${fmtCredits(run.usedCredits)} из ${fmtCredits(run.maxCredits)} кр · ${formatBytes(run.usedBytes)} из ${formatBytes(run.maxBytes)}${step}`;
+    }
+  }
+  if (limit === "daily_limit") return "проход упирается в дневной лимит кредитов";
+  if (limit === "interval_limit") return "проход упирается в лимит интервала";
+  return `проход упирается в лимит: ${limit}`;
+}
+
+export function jobReasonText(job: RunFacts): string | null {
+  return exhaustedRunText(job) ?? job.reason;
+}
+
+/** Why a stale category's newest scheduled run did not complete. */
+export function staleCauseText(run: OfapiCollectionRun | null): string {
+  if (run === null) return "проходов по расписанию ещё не было";
+  const exhausted = exhaustedRunText(run);
+  if (exhausted) return exhausted;
+  switch (run.state) {
+    case "paused": return "проход на паузе — нужен человек";
+    case "queued":
+    case "running": return "проход идёт";
+    case "completed": return "после последнего успешного прохода новых не было";
+    default: return run.reason ? `последний проход завершился ошибкой: ${run.reason}` : "последний проход завершился ошибкой";
+  }
+}
+
+export interface StaleEntry {
+  pageId: number;
+  pageLabel: string;
+  category: OfapiCollectionCategory;
+  policy: OfapiCollectionPolicy;
+  cause: string;
+  /** The run spent one ceiling of its own every pass. */
+  outgrowsRun: boolean;
+  /** The policy field that raises that ceiling; null when the ceiling is not
+   *  named (counters ambiguous) or not the owner's (bytes). */
+  lever: CapLever | null;
+}
+
+/** Every stale (page, category) of the snapshot, by page then registry order. */
+export function staleEntries(snapshot: OfapiCollectionSnapshot): StaleEntry[] {
+  const order = new Map(snapshot.catalog.map((entry, index) => [entry.id, index]));
+  return snapshot.policies
+    .filter((policy) => policy.pageId !== null && policy.scheduleHealth.stale)
+    .map((policy) => {
+      const run = policy.scheduleHealth.lastRun;
+      const cap = run?.exhaustedLimit === "job_limit" ? run.exhaustedCap : null;
+      return {
+        pageId: policy.pageId!,
+        pageLabel: scopeLabel(policy.pageId, snapshot.pages),
+        category: policy.category,
+        policy,
+        cause: staleCauseText(run),
+        outgrowsRun: run?.exhaustedLimit === "job_limit",
+        lever: cap === "calls" || cap === "credits" ? cap : null,
+      };
+    })
+    .sort((a, b) => a.pageLabel.localeCompare(b.pageLabel) || (order.get(a.category) ?? 0) - (order.get(b.category) ?? 0));
 }
 
 export function jobProgress(job: OfapiCollectionJob) {
