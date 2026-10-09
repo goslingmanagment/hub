@@ -1,0 +1,3686 @@
+{
+  "formatVersion": 1,
+  "scope": "Saved-response consistency; observations do not establish retention or global endpoint maxima.",
+  "inputCounts": {
+    "jsonCaptures": 196,
+    "csvCaptures": 2
+  },
+  "summary": {
+    "groups": 18,
+    "checks": 898,
+    "passed": 898,
+    "failed": 0
+  },
+  "groups": [
+    {
+      "name": "summary_internal_series_30_days",
+      "captures": [
+        "earnings-initial-23938.1434.json"
+      ],
+      "checks": 22,
+      "passed": 22,
+      "failed": 0,
+      "failedChecks": []
+    },
+    {
+      "name": "summary_internal_series_400_days",
+      "captures": [
+        "probe-summary-history-window.json"
+      ],
+      "checks": 22,
+      "passed": 22,
+      "failed": 0,
+      "failedChecks": []
+    },
+    {
+      "name": "summary_vs_standalone_series",
+      "captures": [
+        "earnings-initial-23938.1434.json",
+        "probe-summary-history-window.json",
+        "probe-series-views-day-history-window.json",
+        "probe-series-profile-day.json",
+        "probe-series-follows-day.json",
+        "probe-series-subscriptions-day.json",
+        "earnings-initial-23938.1436.json"
+      ],
+      "checks": 68,
+      "passed": 68,
+      "failed": 0,
+      "failedChecks": []
+    },
+    {
+      "name": "summary_internal_series_shifted_may_2024",
+      "captures": [
+        "probe-summary-shifted-may2024.json"
+      ],
+      "checks": 22,
+      "passed": 22,
+      "failed": 0,
+      "failedChecks": []
+    },
+    {
+      "name": "shifted_old_revenue_reconciliation",
+      "captures": [
+        "probe-summary-shifted-may2024.json",
+        "probe-series-revenue-shifted-may2024.json",
+        "earnings-initial-23938.1437.json"
+      ],
+      "checks": 14,
+      "passed": 14,
+      "failed": 0,
+      "failedChecks": []
+    },
+    {
+      "name": "hourly_revenue_inclusive_day",
+      "captures": [
+        "probe-series-revenue-hour-sep17.json",
+        "earnings-initial-23938.1436.json"
+      ],
+      "checks": 9,
+      "passed": 9,
+      "failed": 0,
+      "failedChecks": []
+    },
+    {
+      "name": "hourly_intraday_query_day_normalization",
+      "captures": [
+        "probe-series-views-hour-intraday-bounds.json"
+      ],
+      "checks": 7,
+      "passed": 7,
+      "failed": 0,
+      "failedChecks": []
+    },
+    {
+      "name": "views_month_request_reports_day_response",
+      "captures": [
+        "probe-series-views-month.json"
+      ],
+      "checks": 4,
+      "passed": 4,
+      "failed": 0,
+      "failedChecks": []
+    },
+    {
+      "name": "media_sources_two_three_coerced_to_zero",
+      "captures": [
+        "probe-media-top-source2.json",
+        "probe-media-top-source3.json"
+      ],
+      "checks": 5,
+      "passed": 5,
+      "failed": 0,
+      "failedChecks": []
+    },
+    {
+      "name": "period_csv_reconciliation",
+      "captures": [
+        "earnings-export.csv",
+        "earnings-initial-23938.1436.json"
+      ],
+      "checks": 272,
+      "passed": 272,
+      "failed": 0,
+      "failedChecks": []
+    },
+    {
+      "name": "statements_csv_reconciliation",
+      "captures": [
+        "statements-export.csv",
+        "earnings-initial-23938.1437.json"
+      ],
+      "checks": 362,
+      "passed": 362,
+      "failed": 0,
+      "failedChecks": []
+    },
+    {
+      "name": "media_selected_range_and_cumulative_fields",
+      "captures": [
+        "011-overview-media-detail.json",
+        "014-media-lifetime.json",
+        "probe-media-detail-history-window.json"
+      ],
+      "checks": 10,
+      "passed": 10,
+      "failed": 0,
+      "failedChecks": []
+    },
+    {
+      "name": "media_all_sources_30_days",
+      "captures": [
+        "011-overview-media-detail.json",
+        "010-overview-media-detail.json"
+      ],
+      "checks": 7,
+      "passed": 7,
+      "failed": 0,
+      "failedChecks": []
+    },
+    {
+      "name": "media_all_sources_400_days",
+      "captures": [
+        "014-media-lifetime.json",
+        "013-media-lifetime.json"
+      ],
+      "checks": 7,
+      "passed": 7,
+      "failed": 0,
+      "failedChecks": []
+    },
+    {
+      "name": "fan_transaction_cursor_continuity",
+      "captures": [
+        "probe-fan-transactions-page1.json",
+        "probe-fan-transactions-page2.json"
+      ],
+      "checks": 17,
+      "passed": 17,
+      "failed": 0,
+      "failedChecks": []
+    },
+    {
+      "name": "repeated_large_media_limits",
+      "captures": [
+        "probe-media-top-timeline-limit200.json",
+        "probe-media-top-timeline-limit1000.json"
+      ],
+      "checks": 2,
+      "passed": 2,
+      "failed": 0,
+      "failedChecks": []
+    },
+    {
+      "name": "watch_lift_eligibility_and_ranking",
+      "captures": [
+        "probe-media-top-watchlift20.json",
+        "probe-media-top-views20.json",
+        "002-overview-initial.json"
+      ],
+      "checks": 44,
+      "passed": 44,
+      "failed": 0,
+      "failedChecks": []
+    },
+    {
+      "name": "geographic_media_reconciliation",
+      "captures": [
+        "probe-geo-history-limit200.json",
+        "probe-summary-history-window.json"
+      ],
+      "checks": 4,
+      "passed": 4,
+      "failed": 0,
+      "failedChecks": []
+    }
+  ],
+  "observations": [
+    {
+      "kind": "unique_metric_grain",
+      "captures": [
+        "earnings-initial-23938.1434.json",
+        "probe-series-views-day-history-window.json"
+      ],
+      "windowDays": 30,
+      "source": 0,
+      "field": "uniqueViewers",
+      "approximate": false,
+      "previousApproximate": true,
+      "dailySumEqualsPeriodValue": false
+    },
+    {
+      "kind": "unique_metric_grain",
+      "captures": [
+        "earnings-initial-23938.1434.json",
+        "probe-series-views-day-history-window.json"
+      ],
+      "windowDays": 30,
+      "source": 0,
+      "field": "uniqueImageViewers",
+      "approximate": false,
+      "previousApproximate": true,
+      "dailySumEqualsPeriodValue": true
+    },
+    {
+      "kind": "unique_metric_grain",
+      "captures": [
+        "earnings-initial-23938.1434.json",
+        "probe-series-views-day-history-window.json"
+      ],
+      "windowDays": 30,
+      "source": 1,
+      "field": "uniqueViewers",
+      "approximate": false,
+      "previousApproximate": true,
+      "dailySumEqualsPeriodValue": false
+    },
+    {
+      "kind": "unique_metric_grain",
+      "captures": [
+        "earnings-initial-23938.1434.json",
+        "probe-series-views-day-history-window.json"
+      ],
+      "windowDays": 30,
+      "source": 1,
+      "field": "uniqueImageViewers",
+      "approximate": false,
+      "previousApproximate": true,
+      "dailySumEqualsPeriodValue": false
+    },
+    {
+      "kind": "unique_metric_grain",
+      "captures": [
+        "earnings-initial-23938.1434.json",
+        "probe-series-views-day-history-window.json"
+      ],
+      "windowDays": 30,
+      "source": 4,
+      "field": "uniqueViewers",
+      "approximate": false,
+      "previousApproximate": true,
+      "dailySumEqualsPeriodValue": true
+    },
+    {
+      "kind": "unique_metric_grain",
+      "captures": [
+        "earnings-initial-23938.1434.json",
+        "probe-series-views-day-history-window.json"
+      ],
+      "windowDays": 30,
+      "source": 4,
+      "field": "uniqueImageViewers",
+      "approximate": false,
+      "previousApproximate": true,
+      "dailySumEqualsPeriodValue": true
+    },
+    {
+      "kind": "unique_metric_grain",
+      "captures": [
+        "probe-summary-history-window.json",
+        "probe-series-views-day-history-window.json"
+      ],
+      "windowDays": 400,
+      "source": 0,
+      "field": "uniqueViewers",
+      "approximate": true,
+      "previousApproximate": true,
+      "dailySumEqualsPeriodValue": false
+    },
+    {
+      "kind": "unique_metric_grain",
+      "captures": [
+        "probe-summary-history-window.json",
+        "probe-series-views-day-history-window.json"
+      ],
+      "windowDays": 400,
+      "source": 0,
+      "field": "uniqueImageViewers",
+      "approximate": true,
+      "previousApproximate": true,
+      "dailySumEqualsPeriodValue": true
+    },
+    {
+      "kind": "unique_metric_grain",
+      "captures": [
+        "probe-summary-history-window.json",
+        "probe-series-views-day-history-window.json"
+      ],
+      "windowDays": 400,
+      "source": 1,
+      "field": "uniqueViewers",
+      "approximate": true,
+      "previousApproximate": true,
+      "dailySumEqualsPeriodValue": false
+    },
+    {
+      "kind": "unique_metric_grain",
+      "captures": [
+        "probe-summary-history-window.json",
+        "probe-series-views-day-history-window.json"
+      ],
+      "windowDays": 400,
+      "source": 1,
+      "field": "uniqueImageViewers",
+      "approximate": true,
+      "previousApproximate": true,
+      "dailySumEqualsPeriodValue": false
+    },
+    {
+      "kind": "unique_metric_grain",
+      "captures": [
+        "probe-summary-history-window.json",
+        "probe-series-views-day-history-window.json"
+      ],
+      "windowDays": 400,
+      "source": 4,
+      "field": "uniqueViewers",
+      "approximate": true,
+      "previousApproximate": true,
+      "dailySumEqualsPeriodValue": true
+    },
+    {
+      "kind": "unique_metric_grain",
+      "captures": [
+        "probe-summary-history-window.json",
+        "probe-series-views-day-history-window.json"
+      ],
+      "windowDays": 400,
+      "source": 4,
+      "field": "uniqueImageViewers",
+      "approximate": true,
+      "previousApproximate": true,
+      "dailySumEqualsPeriodValue": true
+    },
+    {
+      "kind": "media_range_scope",
+      "captures": [
+        "011-overview-media-detail.json",
+        "014-media-lifetime.json"
+      ],
+      "mediaIndex": 0,
+      "currentDailyRows": 14,
+      "longerDailyRows": 59,
+      "dailyRowsetChanged": true,
+      "totalsEqual": true,
+      "retentionEqual": true,
+      "retentionPointCount": 20,
+      "retentionSampleEqual": true,
+      "totalsViewsEqualLongerDailySum": false
+    },
+    {
+      "kind": "cursor_page_coverage",
+      "captures": [
+        "probe-fan-transactions-page1.json",
+        "probe-fan-transactions-page2.json"
+      ],
+      "combinedUniqueRows": 60,
+      "firstHasMore": true,
+      "secondHasMore": true,
+      "exhaustionEstablished": false
+    },
+    {
+      "kind": "large_limit_response_sizes",
+      "captures": [
+        "probe-media-top-timeline-limit200.json",
+        "probe-media-top-timeline-limit1000.json"
+      ],
+      "requestedLimits": [
+        200,
+        1000
+      ],
+      "returnedRows": [
+        100,
+        100
+      ],
+      "observedSameOrderedIdentities": true
+    },
+    {
+      "kind": "watch_lift_recomputed_ranking",
+      "captures": [
+        "probe-media-top-watchlift20.json",
+        "probe-media-top-views20.json",
+        "002-overview-initial.json"
+      ],
+      "viewsOfferCount": 20,
+      "watchLiftOfferCount": 18,
+      "eligibleOfferCount": 18,
+      "excludedOfferCount": 2,
+      "sameEligibleSetAndFormulaOrder": true
+    },
+    {
+      "kind": "profile_geographic_coverage",
+      "captures": [
+        "probe-geo-history-limit200.json",
+        "probe-summary-history-window.json"
+      ],
+      "profileCountryRows": 47,
+      "geoSumEqualsAllProfileVisits": false,
+      "geoSumLessThanAllProfileVisits": true
+    },
+    {
+      "kind": "tag_lift_window_availability",
+      "captures": [
+        "probe-tags-kind1-limit200.json",
+        "probe-tags-history-window.json"
+      ],
+      "windows": [
+        {
+          "effectiveInclusiveDays": 30,
+          "rows": 46,
+          "liftAvailable": true,
+          "rowsWithLiftField": 46
+        },
+        {
+          "effectiveInclusiveDays": 400,
+          "rows": 112,
+          "liftAvailable": false,
+          "rowsWithLiftField": 0
+        }
+      ]
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "001-overview-initial.json",
+      "requestedAfter": "2026-10-05T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-10-05T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 4,
+      "requestedInclusiveDays": 4,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedGranularity": "hour",
+      "effectiveGranularity": "hour",
+      "rowHorizon": {
+        "rows": 101,
+        "timestampBuckets": 85,
+        "firstBucket": "2026-10-05T00:00:00.000Z",
+        "lastBucket": "2026-10-08T19:00:00.000Z",
+        "observedSpanDays": 3.7916666666666665
+      },
+      "hourRowsAfterBeforeMidnight": 22,
+      "hourRowsBeyondInclusiveEndDay": 0
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "002-overview-initial.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "004-overview-initial.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "levelHorizon": {
+        "rows": 18,
+        "timestampBuckets": 18,
+        "firstBucket": "2026-09-20T00:00:00.000Z",
+        "lastBucket": "2026-10-07T00:00:00.000Z",
+        "observedSpanDays": 17
+      },
+      "dataSince": "2026-09-20T00:00:00.000Z"
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "005-overview-initial.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "rowHorizon": {
+        "rows": 1,
+        "timestampBuckets": 0
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "006-overview-initial.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0,
+      "offerRows": 3
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "008-content-initial.json",
+      "requestedAfter": "2026-10-05T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-10-05T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 4,
+      "requestedInclusiveDays": 4,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedGranularity": "hour",
+      "effectiveGranularity": "hour",
+      "rowHorizon": {
+        "rows": 101,
+        "timestampBuckets": 85,
+        "firstBucket": "2026-10-05T00:00:00.000Z",
+        "lastBucket": "2026-10-08T19:00:00.000Z",
+        "observedSpanDays": 3.7916666666666665
+      },
+      "hourRowsAfterBeforeMidnight": 22,
+      "hourRowsBeyondInclusiveEndDay": 0
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "008-overview-media-detail.json",
+      "requestedAfter": "2026-10-05T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-10-05T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 4,
+      "requestedInclusiveDays": 4,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedGranularity": "hour",
+      "effectiveGranularity": "hour",
+      "rowHorizon": {
+        "rows": 101,
+        "timestampBuckets": 85,
+        "firstBucket": "2026-10-05T00:00:00.000Z",
+        "lastBucket": "2026-10-08T19:00:00.000Z",
+        "observedSpanDays": 3.7916666666666665
+      },
+      "hourRowsAfterBeforeMidnight": 22,
+      "hourRowsBeyondInclusiveEndDay": 0
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "009-content-initial.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "009-overview-media-detail.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "010-content-initial.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "010-overview-media-detail.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": -1,
+      "effectiveSource": -1,
+      "media": [
+        {
+          "mediaIndex": 0,
+          "daily": {
+            "rows": 18,
+            "timestampBuckets": 17,
+            "firstBucket": "2026-09-09T00:00:00.000Z",
+            "lastBucket": "2026-10-05T00:00:00.000Z",
+            "observedSpanDays": 26
+          },
+          "hours": {
+            "rows": 0,
+            "timestampBuckets": 0
+          },
+          "totalsNull": true,
+          "retentionPoints": 0
+        }
+      ]
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "011-content-initial.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "levelHorizon": {
+        "rows": 18,
+        "timestampBuckets": 18,
+        "firstBucket": "2026-09-20T00:00:00.000Z",
+        "lastBucket": "2026-10-07T00:00:00.000Z",
+        "observedSpanDays": 17
+      },
+      "dataSince": "2026-09-20T00:00:00.000Z"
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "011-overview-media-detail.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0,
+      "media": [
+        {
+          "mediaIndex": 0,
+          "daily": {
+            "rows": 14,
+            "timestampBuckets": 14,
+            "firstBucket": "2026-09-09T00:00:00.000Z",
+            "lastBucket": "2026-09-22T00:00:00.000Z",
+            "observedSpanDays": 13
+          },
+          "hours": {
+            "rows": 0,
+            "timestampBuckets": 0
+          },
+          "totalsNull": false,
+          "retentionPoints": 20
+        }
+      ]
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "012-content-initial.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0,
+      "rowHorizon": {
+        "rows": 10,
+        "timestampBuckets": 0
+      },
+      "tagSeriesHorizon": {
+        "rows": 170,
+        "timestampBuckets": 30,
+        "firstBucket": "2026-09-09T00:00:00.000Z",
+        "lastBucket": "2026-10-08T00:00:00.000Z",
+        "observedSpanDays": 29
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "012-media-lifetime.json",
+      "requestedAfter": "2025-09-04T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-06-11T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 120,
+      "requestedInclusiveDays": 400,
+      "lowerBoundaryShiftDays": 280,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "013-content-initial.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0,
+      "offerRows": 20
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "013-media-lifetime.json",
+      "requestedAfter": "2025-09-04T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2025-09-04T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 400,
+      "requestedInclusiveDays": 400,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": -1,
+      "effectiveSource": -1,
+      "media": [
+        {
+          "mediaIndex": 0,
+          "daily": {
+            "rows": 98,
+            "timestampBuckets": 75,
+            "firstBucket": "2026-06-24T00:00:00.000Z",
+            "lastBucket": "2026-10-05T00:00:00.000Z",
+            "observedSpanDays": 103
+          },
+          "hours": {
+            "rows": 0,
+            "timestampBuckets": 0
+          },
+          "totalsNull": true,
+          "retentionPoints": 0
+        }
+      ]
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "014-media-lifetime.json",
+      "requestedAfter": "2025-09-04T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2025-09-04T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 400,
+      "requestedInclusiveDays": 400,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0,
+      "media": [
+        {
+          "mediaIndex": 0,
+          "daily": {
+            "rows": 59,
+            "timestampBuckets": 59,
+            "firstBucket": "2026-06-24T00:00:00.000Z",
+            "lastBucket": "2026-09-22T00:00:00.000Z",
+            "observedSpanDays": 90
+          },
+          "hours": {
+            "rows": 0,
+            "timestampBuckets": 0
+          },
+          "totalsNull": false,
+          "retentionPoints": 20
+        }
+      ]
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "audience-initial-23938.1419.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "levelHorizon": {
+        "rows": 18,
+        "timestampBuckets": 18,
+        "firstBucket": "2026-09-20T00:00:00.000Z",
+        "lastBucket": "2026-10-07T00:00:00.000Z",
+        "observedSpanDays": 17
+      },
+      "dataSince": "2026-09-20T00:00:00.000Z"
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "audience-initial-23938.1420.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 1,
+      "effectiveSource": 1,
+      "rowHorizon": {
+        "rows": 10,
+        "timestampBuckets": 0
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "audience-ninety-day-23938.1945.json",
+      "requestedAfter": "2026-07-11T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-07-11T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 90,
+      "requestedInclusiveDays": 90,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "levelHorizon": {
+        "rows": 18,
+        "timestampBuckets": 18,
+        "firstBucket": "2026-09-20T00:00:00.000Z",
+        "lastBucket": "2026-10-07T00:00:00.000Z",
+        "observedSpanDays": 17
+      },
+      "dataSince": "2026-09-20T00:00:00.000Z"
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "audience-ninety-day-23938.1946.json",
+      "requestedAfter": "2026-07-11T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-07-11T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 90,
+      "requestedInclusiveDays": 90,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 1,
+      "effectiveSource": 1,
+      "rowHorizon": {
+        "rows": 10,
+        "timestampBuckets": 0
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "audience-ninety-day-23938.1955.json",
+      "requestedAfter": "2019-06-01T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2025-09-04T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 400,
+      "requestedInclusiveDays": 2687,
+      "lowerBoundaryShiftDays": 2287,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 1,
+      "effectiveSource": 1,
+      "rowHorizon": {
+        "rows": 134,
+        "timestampBuckets": 0
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "audience-ninety-day-23938.1956.json",
+      "requestedAfter": "2026-06-11T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-06-11T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 120,
+      "requestedInclusiveDays": 120,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0,
+      "rowHorizon": {
+        "rows": 72,
+        "timestampBuckets": 0
+      },
+      "tagSeriesHorizon": {
+        "rows": 2278,
+        "timestampBuckets": 120,
+        "firstBucket": "2026-06-11T00:00:00.000Z",
+        "lastBucket": "2026-10-08T00:00:00.000Z",
+        "observedSpanDays": 119
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "audience-ninety-day-23938.1957.json",
+      "requestedAfter": "2026-06-10T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-06-10T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 121,
+      "requestedInclusiveDays": 121,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0,
+      "rowHorizon": {
+        "rows": 73,
+        "timestampBuckets": 0
+      },
+      "tagSeriesHorizon": {
+        "rows": 2295,
+        "timestampBuckets": 121,
+        "firstBucket": "2026-06-10T00:00:00.000Z",
+        "lastBucket": "2026-10-08T00:00:00.000Z",
+        "observedSpanDays": 120
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "content-images-23938.1369.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 1,
+      "effectiveSource": 1,
+      "offerRows": 20
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "content-images-23938.1370.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 1,
+      "effectiveSource": 1
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "content-images-ninety-23938.1891.json",
+      "requestedAfter": "2026-07-11T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-07-11T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 90,
+      "requestedInclusiveDays": 90,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 1,
+      "effectiveSource": 1,
+      "offerRows": 20
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "content-images-ninety-23938.1892.json",
+      "requestedAfter": "2026-07-11T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-07-11T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 90,
+      "requestedInclusiveDays": 90,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 1,
+      "effectiveSource": 1
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "content-ninety-day-23938.1805.json",
+      "requestedAfter": "2026-07-11T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-07-11T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 90,
+      "requestedInclusiveDays": 90,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "levelHorizon": {
+        "rows": 18,
+        "timestampBuckets": 18,
+        "firstBucket": "2026-09-20T00:00:00.000Z",
+        "lastBucket": "2026-10-07T00:00:00.000Z",
+        "observedSpanDays": 17
+      },
+      "dataSince": "2026-09-20T00:00:00.000Z"
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "content-ninety-day-23938.1806.json",
+      "requestedAfter": "2026-07-11T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-07-11T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 90,
+      "requestedInclusiveDays": 90,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0,
+      "offerRows": 20
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "content-ninety-day-23938.1807.json",
+      "requestedAfter": "2026-07-11T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-07-11T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 90,
+      "requestedInclusiveDays": 90,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "content-ninety-day-23938.1808.json",
+      "requestedAfter": "2026-07-11T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-07-11T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 90,
+      "requestedInclusiveDays": 90,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "content-ninety-day-23938.1809.json",
+      "requestedAfter": "2026-07-11T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-07-11T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 90,
+      "requestedInclusiveDays": 90,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0,
+      "rowHorizon": {
+        "rows": 10,
+        "timestampBuckets": 0
+      },
+      "tagSeriesHorizon": {
+        "rows": 633,
+        "timestampBuckets": 90,
+        "firstBucket": "2026-07-11T00:00:00.000Z",
+        "lastBucket": "2026-10-08T00:00:00.000Z",
+        "observedSpanDays": 89
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "content-ninety-day-23938.1812.json",
+      "requestedAfter": "2026-07-11T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-07-11T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 90,
+      "requestedInclusiveDays": 90,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 1,
+      "effectiveSource": 1,
+      "offerRows": 20
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "content-ninety-day-23938.1813.json",
+      "requestedAfter": "2026-07-11T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-07-11T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 90,
+      "requestedInclusiveDays": 90,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 1,
+      "effectiveSource": 1
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "content-ninety-day-23938.1814.json",
+      "requestedAfter": "2026-07-11T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-07-11T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 90,
+      "requestedInclusiveDays": 90,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 1,
+      "effectiveSource": 1
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "content-ninety-day-23938.1815.json",
+      "requestedAfter": "2026-07-11T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-07-11T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 90,
+      "requestedInclusiveDays": 90,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 1,
+      "effectiveSource": 1,
+      "rowHorizon": {
+        "rows": 0,
+        "timestampBuckets": 0
+      },
+      "tagSeriesHorizon": {
+        "rows": 0,
+        "timestampBuckets": 0
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "content-other-23938.1555.json",
+      "requestedAfter": "2026-09-17T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-17T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 22,
+      "requestedInclusiveDays": 22,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "levelHorizon": {
+        "rows": 18,
+        "timestampBuckets": 18,
+        "firstBucket": "2026-09-20T00:00:00.000Z",
+        "lastBucket": "2026-10-07T00:00:00.000Z",
+        "observedSpanDays": 17
+      },
+      "dataSince": "2026-09-20T00:00:00.000Z"
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "content-other-23938.1556.json",
+      "requestedAfter": "2026-09-17T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-17T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 22,
+      "requestedInclusiveDays": 22,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 1,
+      "effectiveSource": 1,
+      "offerRows": 20
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "content-other-23938.1557.json",
+      "requestedAfter": "2026-09-17T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-17T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 22,
+      "requestedInclusiveDays": 22,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 1,
+      "effectiveSource": 1
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "content-other-23938.1558.json",
+      "requestedAfter": "2026-09-17T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-17T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 22,
+      "requestedInclusiveDays": 22,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 1,
+      "effectiveSource": 1
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "content-other-23938.1559.json",
+      "requestedAfter": "2026-09-17T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-17T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 22,
+      "requestedInclusiveDays": 22,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 1,
+      "effectiveSource": 1,
+      "rowHorizon": {
+        "rows": 0,
+        "timestampBuckets": 0
+      },
+      "tagSeriesHorizon": {
+        "rows": 0,
+        "timestampBuckets": 0
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "content-other-23938.1563.json",
+      "requestedAfter": "2026-09-17T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-17T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 22,
+      "requestedInclusiveDays": 22,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 4,
+      "effectiveSource": 4,
+      "offerRows": 0
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "content-other-23938.1564.json",
+      "requestedAfter": "2026-09-17T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-17T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 22,
+      "requestedInclusiveDays": 22,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 4,
+      "effectiveSource": 4
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "content-other-23938.1565.json",
+      "requestedAfter": "2026-09-17T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-17T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 22,
+      "requestedInclusiveDays": 22,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 4,
+      "effectiveSource": 4
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "content-other-23938.1566.json",
+      "requestedAfter": "2026-09-17T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-17T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 22,
+      "requestedInclusiveDays": 22,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 4,
+      "effectiveSource": 4,
+      "rowHorizon": {
+        "rows": 0,
+        "timestampBuckets": 0
+      },
+      "tagSeriesHorizon": {
+        "rows": 0,
+        "timestampBuckets": 0
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "content-seven-day-23938.1571.json",
+      "requestedAfter": "2026-10-02T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-10-02T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 7,
+      "requestedInclusiveDays": 7,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "levelHorizon": {
+        "rows": 6,
+        "timestampBuckets": 6,
+        "firstBucket": "2026-10-02T00:00:00.000Z",
+        "lastBucket": "2026-10-07T00:00:00.000Z",
+        "observedSpanDays": 5
+      },
+      "dataSince": "2026-09-20T00:00:00.000Z"
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "content-seven-day-23938.1572.json",
+      "requestedAfter": "2026-10-02T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-10-02T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 7,
+      "requestedInclusiveDays": 7,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 4,
+      "effectiveSource": 4,
+      "offerRows": 0
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "content-seven-day-23938.1573.json",
+      "requestedAfter": "2026-10-02T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-10-02T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 7,
+      "requestedInclusiveDays": 7,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 4,
+      "effectiveSource": 4
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "content-seven-day-23938.1574.json",
+      "requestedAfter": "2026-10-02T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-10-02T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 7,
+      "requestedInclusiveDays": 7,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 4,
+      "effectiveSource": 4
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "content-seven-day-23938.1575.json",
+      "requestedAfter": "2026-10-02T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-10-02T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 7,
+      "requestedInclusiveDays": 7,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 4,
+      "effectiveSource": 4,
+      "rowHorizon": {
+        "rows": 0,
+        "timestampBuckets": 0
+      },
+      "tagSeriesHorizon": {
+        "rows": 0,
+        "timestampBuckets": 0
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "content-seven-day-23938.1576.json",
+      "requestedAfter": "2026-10-02T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-10-02T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 7,
+      "requestedInclusiveDays": 7,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0,
+      "offerRows": 20
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "content-seven-day-23938.1577.json",
+      "requestedAfter": "2026-10-02T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-10-02T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 7,
+      "requestedInclusiveDays": 7,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "content-seven-day-23938.1578.json",
+      "requestedAfter": "2026-10-02T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-10-02T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 7,
+      "requestedInclusiveDays": 7,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "content-seven-day-23938.1579.json",
+      "requestedAfter": "2026-10-02T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-10-02T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 7,
+      "requestedInclusiveDays": 7,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0,
+      "rowHorizon": {
+        "rows": 10,
+        "timestampBuckets": 0
+      },
+      "tagSeriesHorizon": {
+        "rows": 31,
+        "timestampBuckets": 7,
+        "firstBucket": "2026-10-02T00:00:00.000Z",
+        "lastBucket": "2026-10-08T00:00:00.000Z",
+        "observedSpanDays": 6
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "content-seven-day-23938.1589.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0,
+      "offerRows": 18
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "content-seven-day-23938.1590.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0,
+      "offerRows": 20
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "content-sort-completed-23938.1721.json",
+      "requestedAfter": "2026-10-02T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-10-02T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 7,
+      "requestedInclusiveDays": 7,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0,
+      "offerRows": 20
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "content-sort-completed-23938.1722.json",
+      "requestedAfter": "2026-10-02T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-10-02T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 7,
+      "requestedInclusiveDays": 7,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "content-sort-unique-23938.1609.json",
+      "requestedAfter": "2026-10-02T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-10-02T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 7,
+      "requestedInclusiveDays": 7,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0,
+      "offerRows": 20
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "content-sort-unique-23938.1610.json",
+      "requestedAfter": "2026-10-02T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-10-02T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 7,
+      "requestedInclusiveDays": 7,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "content-sort-watch-23938.1661.json",
+      "requestedAfter": "2026-10-02T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-10-02T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 7,
+      "requestedInclusiveDays": 7,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0,
+      "offerRows": 20
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "content-sort-watch-23938.1662.json",
+      "requestedAfter": "2026-10-02T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-10-02T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 7,
+      "requestedInclusiveDays": 7,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "content-timeline-23938.1355.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 1,
+      "effectiveSource": 1,
+      "offerRows": 20
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "content-timeline-23938.1356.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 1,
+      "effectiveSource": 1
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "content-timeline-23938.1357.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 1,
+      "effectiveSource": 1
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "content-timeline-23938.1358.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 1,
+      "effectiveSource": 1,
+      "rowHorizon": {
+        "rows": 0,
+        "timestampBuckets": 0
+      },
+      "tagSeriesHorizon": {
+        "rows": 0,
+        "timestampBuckets": 0
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "earnings-custom-23938.1466.json",
+      "requestedAfter": "2026-09-17T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-17T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 22,
+      "requestedInclusiveDays": 22,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "levelHorizon": {
+        "rows": 18,
+        "timestampBuckets": 18,
+        "firstBucket": "2026-09-20T00:00:00.000Z",
+        "lastBucket": "2026-10-07T00:00:00.000Z",
+        "observedSpanDays": 17
+      },
+      "dataSince": "2026-09-20T00:00:00.000Z"
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "earnings-custom-23938.1467.json",
+      "requestedAfter": "2026-09-17T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-17T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 22,
+      "requestedInclusiveDays": 22,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "rowHorizon": {
+        "rows": 1,
+        "timestampBuckets": 0
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "earnings-custom-23938.1468.json",
+      "requestedAfter": "2026-09-17T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-17T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 22,
+      "requestedInclusiveDays": 22,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedGranularity": "day",
+      "effectiveGranularity": "day",
+      "rowHorizon": {
+        "rows": 1,
+        "timestampBuckets": 1,
+        "firstBucket": "2026-09-17T00:00:00.000Z",
+        "lastBucket": "2026-09-17T00:00:00.000Z",
+        "observedSpanDays": 0
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "earnings-gross-sort-23938.1470.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "rowHorizon": {
+        "rows": 0,
+        "timestampBuckets": 0
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "earnings-gross-sort-23938.1472.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedGranularity": "day",
+      "effectiveGranularity": "day",
+      "rowHorizon": {
+        "rows": 85,
+        "timestampBuckets": 30,
+        "firstBucket": "2026-09-09T00:00:00.000Z",
+        "lastBucket": "2026-10-08T00:00:00.000Z",
+        "observedSpanDays": 29
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "earnings-gross-sort-23938.1473.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedGranularity": "day",
+      "effectiveGranularity": "day",
+      "rowHorizon": {
+        "rows": 19,
+        "timestampBuckets": 19,
+        "firstBucket": "2026-09-20T00:00:00.000Z",
+        "lastBucket": "2026-10-08T00:00:00.000Z",
+        "observedSpanDays": 18
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "earnings-gross-sort-23938.1476.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedGranularity": "day",
+      "effectiveGranularity": "day",
+      "rowHorizon": {
+        "rows": 1,
+        "timestampBuckets": 1,
+        "firstBucket": "2026-09-28T00:00:00.000Z",
+        "lastBucket": "2026-09-28T00:00:00.000Z",
+        "observedSpanDays": 0
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "earnings-gross-sort-23938.1481.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 1,
+      "effectiveSource": 1,
+      "offerRows": 100
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "earnings-gross-sort-23938.1506.json",
+      "requestedAfter": "2025-09-04T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2025-09-04T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 400,
+      "requestedInclusiveDays": 400,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "rowHorizon": {
+        "rows": 1,
+        "timestampBuckets": 0
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "earnings-gross-sort-23938.1509.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 1,
+      "effectiveSource": 1,
+      "offerRows": 100
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "earnings-gross-sort-23938.1510.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0,
+      "rowHorizon": {
+        "rows": 0,
+        "timestampBuckets": 0
+      },
+      "tagSeriesHorizon": {
+        "rows": 0,
+        "timestampBuckets": 0
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "earnings-gross-sort-23938.1511.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0,
+      "rowHorizon": {
+        "rows": 46,
+        "timestampBuckets": 0
+      },
+      "tagSeriesHorizon": {
+        "rows": 296,
+        "timestampBuckets": 30,
+        "firstBucket": "2026-09-09T00:00:00.000Z",
+        "lastBucket": "2026-10-08T00:00:00.000Z",
+        "observedSpanDays": 29
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "earnings-gross-sort-23938.1512.json",
+      "requestedAfter": "2019-06-01T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2025-09-04T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 400,
+      "requestedInclusiveDays": 2687,
+      "lowerBoundaryShiftDays": 2287,
+      "upperBoundaryShiftDays": 0,
+      "rowHorizon": {
+        "rows": 89,
+        "timestampBuckets": 0
+      }
+    },
+    {
+      "kind": "transaction_page_state",
+      "capture": "earnings-gross-sort-23938.1514.json",
+      "rows": 30,
+      "hasMore": true,
+      "nextCursorPresent": true
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "earnings-gross-sort-23938.1515.json",
+      "requestedAfter": "2019-06-01T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2025-09-04T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 400,
+      "requestedInclusiveDays": 2687,
+      "lowerBoundaryShiftDays": 2287,
+      "upperBoundaryShiftDays": 0,
+      "levelHorizon": {
+        "rows": 18,
+        "timestampBuckets": 18,
+        "firstBucket": "2026-09-20T00:00:00.000Z",
+        "lastBucket": "2026-10-07T00:00:00.000Z",
+        "observedSpanDays": 17
+      },
+      "dataSince": "2026-09-20T00:00:00.000Z"
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "earnings-gross-sort-23938.1516.json",
+      "requestedAfter": "2019-06-01T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2025-09-04T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 400,
+      "requestedInclusiveDays": 2687,
+      "lowerBoundaryShiftDays": 2287,
+      "upperBoundaryShiftDays": 0,
+      "requestedGranularity": "hour",
+      "effectiveGranularity": "hour",
+      "rowHorizon": {
+        "rows": 365,
+        "timestampBuckets": 310,
+        "firstBucket": "2026-09-25T00:00:00.000Z",
+        "lastBucket": "2026-10-08T19:00:00.000Z",
+        "observedSpanDays": 13.791666666666666
+      },
+      "hourRowsAfterBeforeMidnight": 22,
+      "hourRowsBeyondInclusiveEndDay": 0
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "earnings-gross-sort-23938.1517.json",
+      "requestedAfter": "2019-06-01T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2025-09-04T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 400,
+      "requestedInclusiveDays": 2687,
+      "lowerBoundaryShiftDays": 2287,
+      "upperBoundaryShiftDays": 0,
+      "requestedGranularity": "day",
+      "effectiveGranularity": "day",
+      "rowHorizon": {
+        "rows": 487,
+        "timestampBuckets": 244,
+        "firstBucket": "2026-02-07T00:00:00.000Z",
+        "lastBucket": "2026-10-08T00:00:00.000Z",
+        "observedSpanDays": 243
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "earnings-gross-sort-23938.1519.json",
+      "requestedAfter": "2019-06-01T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2025-09-04T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 400,
+      "requestedInclusiveDays": 2687,
+      "lowerBoundaryShiftDays": 2287,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0,
+      "rowHorizon": {
+        "rows": 198,
+        "timestampBuckets": 0
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "earnings-gross-sort-23938.1520.json",
+      "requestedAfter": "2019-06-01T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-07-11T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 90,
+      "requestedInclusiveDays": 2687,
+      "lowerBoundaryShiftDays": 2597,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "earnings-gross-sort-23938.1521.json",
+      "requestedAfter": "2019-06-01T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2025-09-04T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 400,
+      "requestedInclusiveDays": 2687,
+      "lowerBoundaryShiftDays": 2287,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0,
+      "rowHorizon": {
+        "rows": 112,
+        "timestampBuckets": 0
+      },
+      "tagSeriesHorizon": {
+        "rows": 5564,
+        "timestampBuckets": 244,
+        "firstBucket": "2026-02-07T00:00:00.000Z",
+        "lastBucket": "2026-10-08T00:00:00.000Z",
+        "observedSpanDays": 243
+      }
+    },
+    {
+      "kind": "transaction_page_state",
+      "capture": "earnings-gross-sort-23938.1524.json",
+      "rows": 30,
+      "hasMore": true,
+      "nextCursorPresent": true
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "earnings-gross-sort-23938.1525.json",
+      "requestedAfter": "2019-06-01T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-06-11T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 120,
+      "requestedInclusiveDays": 2687,
+      "lowerBoundaryShiftDays": 2567,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 1,
+      "effectiveSource": 1,
+      "offerRows": 100
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "earnings-gross-sort-23938.1526.json",
+      "requestedAfter": "2019-06-01T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2025-09-04T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 400,
+      "requestedInclusiveDays": 2687,
+      "lowerBoundaryShiftDays": 2287,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0,
+      "media": [
+        {
+          "mediaIndex": 0,
+          "daily": {
+            "rows": 59,
+            "timestampBuckets": 59,
+            "firstBucket": "2026-06-24T00:00:00.000Z",
+            "lastBucket": "2026-09-22T00:00:00.000Z",
+            "observedSpanDays": 90
+          },
+          "hours": {
+            "rows": 0,
+            "timestampBuckets": 0
+          },
+          "totalsNull": false,
+          "retentionPoints": 20
+        }
+      ]
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "earnings-gross-sort-23938.1529.json",
+      "requestedAfter": "2024-05-01T00:00:00.000Z",
+      "requestedBefore": "2024-05-31T00:00:00.000Z",
+      "effectiveAfter": "2024-05-01T00:00:00.000Z",
+      "effectiveBefore": "2024-05-31T00:00:00.000Z",
+      "effectiveInclusiveDays": 31,
+      "requestedInclusiveDays": 31,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "levelHorizon": {
+        "rows": 0,
+        "timestampBuckets": 0
+      },
+      "dataSince": "2026-09-20T00:00:00.000Z"
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "earnings-gross-sort-23938.1530.json",
+      "requestedAfter": "2024-05-01T00:00:00.000Z",
+      "requestedBefore": "2024-05-31T00:00:00.000Z",
+      "effectiveAfter": "2024-05-01T00:00:00.000Z",
+      "effectiveBefore": "2024-05-31T00:00:00.000Z",
+      "effectiveInclusiveDays": 31,
+      "requestedInclusiveDays": 31,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedGranularity": "day",
+      "effectiveGranularity": "day",
+      "rowHorizon": {
+        "rows": 8,
+        "timestampBuckets": 3,
+        "firstBucket": "2024-05-12T00:00:00.000Z",
+        "lastBucket": "2024-05-23T00:00:00.000Z",
+        "observedSpanDays": 11
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "earnings-gross-sort-23938.1531.json",
+      "requestedAfter": "2026-09-17T00:00:00.000Z",
+      "requestedBefore": "2026-09-17T00:00:00.000Z",
+      "effectiveAfter": "2026-09-17T00:00:00.000Z",
+      "effectiveBefore": "2026-09-17T00:00:00.000Z",
+      "effectiveInclusiveDays": 1,
+      "requestedInclusiveDays": 1,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedGranularity": "hour",
+      "effectiveGranularity": "hour",
+      "rowHorizon": {
+        "rows": 1,
+        "timestampBuckets": 1,
+        "firstBucket": "2026-09-17T23:00:00.000Z",
+        "lastBucket": "2026-09-17T23:00:00.000Z",
+        "observedSpanDays": 0
+      },
+      "hourRowsAfterBeforeMidnight": 1,
+      "hourRowsBeyondInclusiveEndDay": 0
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "earnings-gross-sort-23938.1534.json",
+      "requestedAfter": "2026-10-08T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-10-08T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 1,
+      "requestedInclusiveDays": 1,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0,
+      "offerRows": 3
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "earnings-gross-sort-23938.1535.json",
+      "requestedAfter": "2026-10-08T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-10-08T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 1,
+      "requestedInclusiveDays": 1,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0,
+      "media": [
+        {
+          "mediaIndex": 0,
+          "daily": {
+            "rows": 1,
+            "timestampBuckets": 1,
+            "firstBucket": "2026-10-08T00:00:00.000Z",
+            "lastBucket": "2026-10-08T00:00:00.000Z",
+            "observedSpanDays": 0
+          },
+          "hours": {
+            "rows": 20,
+            "timestampBuckets": 20,
+            "firstBucket": "2026-10-06T21:00:00.000Z",
+            "lastBucket": "2026-10-08T18:00:00.000Z",
+            "observedSpanDays": 1.875
+          },
+          "totalsNull": false,
+          "retentionPoints": 20
+        }
+      ]
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "earnings-gross-sort-23938.1536.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 1,
+      "effectiveSource": 1,
+      "media": [
+        {
+          "mediaIndex": 0,
+          "daily": {
+            "rows": 6,
+            "timestampBuckets": 6,
+            "firstBucket": "2026-09-16T00:00:00.000Z",
+            "lastBucket": "2026-09-21T00:00:00.000Z",
+            "observedSpanDays": 5
+          },
+          "hours": {
+            "rows": 0,
+            "timestampBuckets": 0
+          },
+          "totalsNull": false,
+          "retentionPoints": 0
+        }
+      ]
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "earnings-gross-sort-23938.1537.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0,
+      "offerRows": 3
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "earnings-gross-sort-23938.1539.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 2,
+      "effectiveSource": 0,
+      "offerRows": 3
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "earnings-gross-sort-23938.1540.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 3,
+      "effectiveSource": 0,
+      "offerRows": 3
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "earnings-gross-sort-23938.1542.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedGranularity": "month",
+      "effectiveGranularity": "day",
+      "rowHorizon": {
+        "rows": 60,
+        "timestampBuckets": 30,
+        "firstBucket": "2026-09-09T00:00:00.000Z",
+        "lastBucket": "2026-10-08T00:00:00.000Z",
+        "observedSpanDays": 29
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "earnings-gross-sort-23938.1543.json",
+      "requestedAfter": "2026-10-08T12:00:00.000Z",
+      "requestedBefore": "2026-10-08T13:00:00.000Z",
+      "effectiveAfter": "2026-10-08T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 1,
+      "requestedInclusiveDays": 1.0416666666666667,
+      "lowerBoundaryShiftDays": -0.5,
+      "upperBoundaryShiftDays": -0.5416666666666666,
+      "requestedGranularity": "hour",
+      "effectiveGranularity": "hour",
+      "rowHorizon": {
+        "rows": 22,
+        "timestampBuckets": 19,
+        "firstBucket": "2026-10-08T01:00:00.000Z",
+        "lastBucket": "2026-10-08T19:00:00.000Z",
+        "observedSpanDays": 0.75
+      },
+      "hourRowsAfterBeforeMidnight": 22,
+      "hourRowsBeyondInclusiveEndDay": 0
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "earnings-gross-sort-23938.1545.json",
+      "requestedAfter": "2026-09-17T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-17T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 22,
+      "requestedInclusiveDays": 22,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "rowHorizon": {
+        "rows": 1,
+        "timestampBuckets": 0
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "earnings-initial-23938.1434.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "levelHorizon": {
+        "rows": 18,
+        "timestampBuckets": 18,
+        "firstBucket": "2026-09-20T00:00:00.000Z",
+        "lastBucket": "2026-10-07T00:00:00.000Z",
+        "observedSpanDays": 17
+      },
+      "dataSince": "2026-09-20T00:00:00.000Z"
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "earnings-initial-23938.1435.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "rowHorizon": {
+        "rows": 1,
+        "timestampBuckets": 0
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "earnings-initial-23938.1436.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedGranularity": "day",
+      "effectiveGranularity": "day",
+      "rowHorizon": {
+        "rows": 1,
+        "timestampBuckets": 1,
+        "firstBucket": "2026-09-17T00:00:00.000Z",
+        "lastBucket": "2026-09-17T00:00:00.000Z",
+        "observedSpanDays": 0
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "earnings-initial-23938.1437.json",
+      "requestedAfter": "2019-06-01T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2019-06-25T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 2663,
+      "requestedInclusiveDays": 2687,
+      "lowerBoundaryShiftDays": 24,
+      "upperBoundaryShiftDays": 0,
+      "requestedGranularity": "month",
+      "effectiveGranularity": "month",
+      "rowHorizon": {
+        "rows": 44,
+        "timestampBuckets": 13,
+        "firstBucket": "2024-05-01T00:00:00.000Z",
+        "lastBucket": "2026-09-01T00:00:00.000Z",
+        "observedSpanDays": 853
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "earnings-initial-23938.1438.json",
+      "requestedAfter": "2026-09-01T00:00:00.000Z",
+      "requestedBefore": "2026-09-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-01T00:00:00.000Z",
+      "effectiveBefore": "2026-09-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 8,
+      "requestedInclusiveDays": 8,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedGranularity": "day",
+      "effectiveGranularity": "day",
+      "rowHorizon": {
+        "rows": 1,
+        "timestampBuckets": 1,
+        "firstBucket": "2026-09-08T00:00:00.000Z",
+        "lastBucket": "2026-09-08T00:00:00.000Z",
+        "observedSpanDays": 0
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "earnings-initial-23938.1439.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedGranularity": "day",
+      "effectiveGranularity": "day",
+      "rowHorizon": {
+        "rows": 1,
+        "timestampBuckets": 1,
+        "firstBucket": "2026-09-17T00:00:00.000Z",
+        "lastBucket": "2026-09-17T00:00:00.000Z",
+        "observedSpanDays": 0
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "earnings-initial-23938.1440.json",
+      "requestedAfter": "2026-10-05T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-10-05T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 4,
+      "requestedInclusiveDays": 4,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedGranularity": "hour",
+      "effectiveGranularity": "hour",
+      "rowHorizon": {
+        "rows": 0,
+        "timestampBuckets": 0
+      },
+      "hourRowsAfterBeforeMidnight": 0,
+      "hourRowsBeyondInclusiveEndDay": 0
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "earnings-purchases-sort-23938.1547.json",
+      "requestedAfter": "2026-09-17T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-17T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 22,
+      "requestedInclusiveDays": 22,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "rowHorizon": {
+        "rows": 1,
+        "timestampBuckets": 0
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "fan-detail-23938.1456.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedGranularity": "day",
+      "effectiveGranularity": "day",
+      "rowHorizon": {
+        "rows": 1,
+        "timestampBuckets": 1,
+        "firstBucket": "2026-09-17T00:00:00.000Z",
+        "lastBucket": "2026-09-17T00:00:00.000Z",
+        "observedSpanDays": 0
+      }
+    },
+    {
+      "kind": "transaction_page_state",
+      "capture": "fan-detail-23938.1457.json",
+      "rows": 2,
+      "hasMore": false,
+      "nextCursorPresent": true
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "fan-detail-23938.1458.json",
+      "requestedAfter": "2019-06-01T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2019-06-25T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 2663,
+      "requestedInclusiveDays": 2687,
+      "lowerBoundaryShiftDays": 24,
+      "upperBoundaryShiftDays": 0,
+      "requestedGranularity": "month",
+      "effectiveGranularity": "month",
+      "rowHorizon": {
+        "rows": 3,
+        "timestampBuckets": 2,
+        "firstBucket": "2026-08-01T00:00:00.000Z",
+        "lastBucket": "2026-09-01T00:00:00.000Z",
+        "observedSpanDays": 31
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "fan-lifetime-23938.1461.json",
+      "requestedAfter": "2026-08-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-08-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 61,
+      "requestedInclusiveDays": 61,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedGranularity": "day",
+      "effectiveGranularity": "day",
+      "rowHorizon": {
+        "rows": 3,
+        "timestampBuckets": 3,
+        "firstBucket": "2026-08-09T00:00:00.000Z",
+        "lastBucket": "2026-09-17T00:00:00.000Z",
+        "observedSpanDays": 39
+      }
+    },
+    {
+      "kind": "transaction_page_state",
+      "capture": "fan-lifetime-23938.1462.json",
+      "rows": 4,
+      "hasMore": false,
+      "nextCursorPresent": true
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "image-detail-ui-23938.1925.json",
+      "requestedAfter": "2026-07-11T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-07-11T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 90,
+      "requestedInclusiveDays": 90,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 1,
+      "effectiveSource": 1,
+      "media": [
+        {
+          "mediaIndex": 0,
+          "daily": {
+            "rows": 2,
+            "timestampBuckets": 2,
+            "firstBucket": "2026-07-13T00:00:00.000Z",
+            "lastBucket": "2026-09-01T00:00:00.000Z",
+            "observedSpanDays": 50
+          },
+          "hours": {
+            "rows": 0,
+            "timestampBuckets": 0
+          },
+          "totalsNull": false,
+          "retentionPoints": 0
+        }
+      ]
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "image-detail-ui-23938.1926.json",
+      "requestedAfter": "2026-07-11T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-07-11T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 90,
+      "requestedInclusiveDays": 90,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 1,
+      "effectiveSource": 1
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "image-detail-ui-23938.1927.json",
+      "requestedAfter": "2026-07-11T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-07-11T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 90,
+      "requestedInclusiveDays": 90,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": -1,
+      "effectiveSource": -1,
+      "media": [
+        {
+          "mediaIndex": 0,
+          "daily": {
+            "rows": 2,
+            "timestampBuckets": 2,
+            "firstBucket": "2026-07-13T00:00:00.000Z",
+            "lastBucket": "2026-09-01T00:00:00.000Z",
+            "observedSpanDays": 50
+          },
+          "hours": {
+            "rows": 0,
+            "timestampBuckets": 0
+          },
+          "totalsNull": true,
+          "retentionPoints": 0
+        }
+      ]
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "overview-final-refresh-23938.1996.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "levelHorizon": {
+        "rows": 18,
+        "timestampBuckets": 18,
+        "firstBucket": "2026-09-20T00:00:00.000Z",
+        "lastBucket": "2026-10-07T00:00:00.000Z",
+        "observedSpanDays": 17
+      },
+      "dataSince": "2026-09-20T00:00:00.000Z"
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "overview-final-refresh-23938.1997.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "rowHorizon": {
+        "rows": 1,
+        "timestampBuckets": 0
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "overview-final-refresh-23938.1998.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0,
+      "offerRows": 3
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "overview-final-refresh-23938.1999.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "overview-final-refresh-23938.2000.json",
+      "requestedAfter": "2026-10-05T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-10-05T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 4,
+      "requestedInclusiveDays": 4,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedGranularity": "hour",
+      "effectiveGranularity": "hour",
+      "rowHorizon": {
+        "rows": 102,
+        "timestampBuckets": 86,
+        "firstBucket": "2026-10-05T00:00:00.000Z",
+        "lastBucket": "2026-10-08T20:00:00.000Z",
+        "observedSpanDays": 3.8333333333333335
+      },
+      "hourRowsAfterBeforeMidnight": 23,
+      "hourRowsBeyondInclusiveEndDay": 0
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "overview-final-refresh-23938.2014.json",
+      "requestedAfter": "2026-10-05T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-10-05T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 4,
+      "requestedInclusiveDays": 4,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedGranularity": "hour",
+      "effectiveGranularity": "hour",
+      "rowHorizon": {
+        "rows": 102,
+        "timestampBuckets": 86,
+        "firstBucket": "2026-10-05T00:00:00.000Z",
+        "lastBucket": "2026-10-08T20:00:00.000Z",
+        "observedSpanDays": 3.8333333333333335
+      },
+      "hourRowsAfterBeforeMidnight": 23,
+      "hourRowsBeyondInclusiveEndDay": 0
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "overview-return-thirty-23938.1961.json",
+      "requestedAfter": "2026-07-11T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-07-11T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 90,
+      "requestedInclusiveDays": 90,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "levelHorizon": {
+        "rows": 18,
+        "timestampBuckets": 18,
+        "firstBucket": "2026-09-20T00:00:00.000Z",
+        "lastBucket": "2026-10-07T00:00:00.000Z",
+        "observedSpanDays": 17
+      },
+      "dataSince": "2026-09-20T00:00:00.000Z"
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "overview-return-thirty-23938.1962.json",
+      "requestedAfter": "2026-07-11T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-07-11T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 90,
+      "requestedInclusiveDays": 90,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "rowHorizon": {
+        "rows": 5,
+        "timestampBuckets": 0
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "overview-return-thirty-23938.1963.json",
+      "requestedAfter": "2026-07-11T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-07-11T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 90,
+      "requestedInclusiveDays": 90,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 1,
+      "effectiveSource": 1,
+      "offerRows": 3
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "overview-return-thirty-23938.1964.json",
+      "requestedAfter": "2026-07-11T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-07-11T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 90,
+      "requestedInclusiveDays": 90,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 1,
+      "effectiveSource": 1
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "overview-return-thirty-23938.1965.json",
+      "requestedAfter": "2026-10-05T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-10-05T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 4,
+      "requestedInclusiveDays": 4,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedGranularity": "hour",
+      "effectiveGranularity": "hour",
+      "rowHorizon": {
+        "rows": 102,
+        "timestampBuckets": 86,
+        "firstBucket": "2026-10-05T00:00:00.000Z",
+        "lastBucket": "2026-10-08T20:00:00.000Z",
+        "observedSpanDays": 3.8333333333333335
+      },
+      "hourRowsAfterBeforeMidnight": 23,
+      "hourRowsBeyondInclusiveEndDay": 0
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "overview-return-thirty-23938.1967.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "levelHorizon": {
+        "rows": 18,
+        "timestampBuckets": 18,
+        "firstBucket": "2026-09-20T00:00:00.000Z",
+        "lastBucket": "2026-10-07T00:00:00.000Z",
+        "observedSpanDays": 17
+      },
+      "dataSince": "2026-09-20T00:00:00.000Z"
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "overview-return-thirty-23938.1968.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "rowHorizon": {
+        "rows": 1,
+        "timestampBuckets": 0
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "overview-return-thirty-23938.1969.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 1,
+      "effectiveSource": 1,
+      "offerRows": 3
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "overview-return-thirty-23938.1970.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 1,
+      "effectiveSource": 1
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "overview-top-source-fyp-23938.1982.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0,
+      "offerRows": 3
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "overview-top-source-fyp-23938.1983.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "probe-activehours-history-window.json",
+      "requestedAfter": "2019-06-01T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-07-11T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 90,
+      "requestedInclusiveDays": 2687,
+      "lowerBoundaryShiftDays": 2597,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0
+    },
+    {
+      "kind": "transaction_page_state",
+      "capture": "probe-fan-transactions-page1.json",
+      "rows": 30,
+      "hasMore": true,
+      "nextCursorPresent": true
+    },
+    {
+      "kind": "transaction_page_state",
+      "capture": "probe-fan-transactions-page2.json",
+      "rows": 30,
+      "hasMore": true,
+      "nextCursorPresent": true
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "probe-fans-top-history-limit200.json",
+      "requestedAfter": "2019-06-01T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2025-09-04T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 400,
+      "requestedInclusiveDays": 2687,
+      "lowerBoundaryShiftDays": 2287,
+      "upperBoundaryShiftDays": 0,
+      "rowHorizon": {
+        "rows": 89,
+        "timestampBuckets": 0
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "probe-geo-history-limit200.json",
+      "requestedAfter": "2019-06-01T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2025-09-04T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 400,
+      "requestedInclusiveDays": 2687,
+      "lowerBoundaryShiftDays": 2287,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0,
+      "rowHorizon": {
+        "rows": 198,
+        "timestampBuckets": 0
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "probe-geo-timeline-history-limit200.json",
+      "requestedAfter": "2019-06-01T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2025-09-04T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 400,
+      "requestedInclusiveDays": 2687,
+      "lowerBoundaryShiftDays": 2287,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 1,
+      "effectiveSource": 1,
+      "rowHorizon": {
+        "rows": 134,
+        "timestampBuckets": 0
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "probe-media-detail-history-window.json",
+      "requestedAfter": "2019-06-01T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2025-09-04T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 400,
+      "requestedInclusiveDays": 2687,
+      "lowerBoundaryShiftDays": 2287,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0,
+      "media": [
+        {
+          "mediaIndex": 0,
+          "daily": {
+            "rows": 59,
+            "timestampBuckets": 59,
+            "firstBucket": "2026-06-24T00:00:00.000Z",
+            "lastBucket": "2026-09-22T00:00:00.000Z",
+            "observedSpanDays": 90
+          },
+          "hours": {
+            "rows": 0,
+            "timestampBuckets": 0
+          },
+          "totalsNull": false,
+          "retentionPoints": 20
+        }
+      ]
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "probe-media-detail-image.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 1,
+      "effectiveSource": 1,
+      "media": [
+        {
+          "mediaIndex": 0,
+          "daily": {
+            "rows": 6,
+            "timestampBuckets": 6,
+            "firstBucket": "2026-09-16T00:00:00.000Z",
+            "lastBucket": "2026-09-21T00:00:00.000Z",
+            "observedSpanDays": 5
+          },
+          "hours": {
+            "rows": 0,
+            "timestampBuckets": 0
+          },
+          "totalsNull": false,
+          "retentionPoints": 0
+        }
+      ]
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "probe-media-detail-today.json",
+      "requestedAfter": "2026-10-08T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-10-08T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 1,
+      "requestedInclusiveDays": 1,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0,
+      "media": [
+        {
+          "mediaIndex": 0,
+          "daily": {
+            "rows": 1,
+            "timestampBuckets": 1,
+            "firstBucket": "2026-10-08T00:00:00.000Z",
+            "lastBucket": "2026-10-08T00:00:00.000Z",
+            "observedSpanDays": 0
+          },
+          "hours": {
+            "rows": 20,
+            "timestampBuckets": 20,
+            "firstBucket": "2026-10-06T21:00:00.000Z",
+            "lastBucket": "2026-10-08T18:00:00.000Z",
+            "observedSpanDays": 1.875
+          },
+          "totalsNull": false,
+          "retentionPoints": 20
+        }
+      ]
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "probe-media-top-history-window.json",
+      "requestedAfter": "2019-06-01T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-06-11T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 120,
+      "requestedInclusiveDays": 2687,
+      "lowerBoundaryShiftDays": 2567,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 1,
+      "effectiveSource": 1,
+      "offerRows": 100
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "probe-media-top-source2.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 2,
+      "effectiveSource": 0,
+      "offerRows": 3
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "probe-media-top-source3.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 3,
+      "effectiveSource": 0,
+      "offerRows": 3
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "probe-media-top-timeline-limit1000.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 1,
+      "effectiveSource": 1,
+      "offerRows": 100
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "probe-media-top-timeline-limit200.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 1,
+      "effectiveSource": 1,
+      "offerRows": 100
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "probe-media-top-today.json",
+      "requestedAfter": "2026-10-08T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-10-08T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 1,
+      "requestedInclusiveDays": 1,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0,
+      "offerRows": 3
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "probe-media-top-views20.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0,
+      "offerRows": 20
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "probe-media-top-watchlift.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0,
+      "offerRows": 3
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "probe-media-top-watchlift20.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0,
+      "offerRows": 18
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "probe-posts-known-batch80-400d.json",
+      "requestedAfter": "2025-09-04T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2025-09-04T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 400,
+      "requestedInclusiveDays": 400,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "rowHorizon": {
+        "rows": 1,
+        "timestampBuckets": 0
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "probe-posts-two-known-ids.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "rowHorizon": {
+        "rows": 0,
+        "timestampBuckets": 0
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "probe-series-follows-day.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedGranularity": "day",
+      "effectiveGranularity": "day",
+      "rowHorizon": {
+        "rows": 19,
+        "timestampBuckets": 19,
+        "firstBucket": "2026-09-20T00:00:00.000Z",
+        "lastBucket": "2026-10-08T00:00:00.000Z",
+        "observedSpanDays": 18
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "probe-series-profile-day.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedGranularity": "day",
+      "effectiveGranularity": "day",
+      "rowHorizon": {
+        "rows": 85,
+        "timestampBuckets": 30,
+        "firstBucket": "2026-09-09T00:00:00.000Z",
+        "lastBucket": "2026-10-08T00:00:00.000Z",
+        "observedSpanDays": 29
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "probe-series-revenue-hour-sep17.json",
+      "requestedAfter": "2026-09-17T00:00:00.000Z",
+      "requestedBefore": "2026-09-17T00:00:00.000Z",
+      "effectiveAfter": "2026-09-17T00:00:00.000Z",
+      "effectiveBefore": "2026-09-17T00:00:00.000Z",
+      "effectiveInclusiveDays": 1,
+      "requestedInclusiveDays": 1,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedGranularity": "hour",
+      "effectiveGranularity": "hour",
+      "rowHorizon": {
+        "rows": 1,
+        "timestampBuckets": 1,
+        "firstBucket": "2026-09-17T23:00:00.000Z",
+        "lastBucket": "2026-09-17T23:00:00.000Z",
+        "observedSpanDays": 0
+      },
+      "hourRowsAfterBeforeMidnight": 1,
+      "hourRowsBeyondInclusiveEndDay": 0
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "probe-series-revenue-shifted-may2024.json",
+      "requestedAfter": "2024-05-01T00:00:00.000Z",
+      "requestedBefore": "2024-05-31T00:00:00.000Z",
+      "effectiveAfter": "2024-05-01T00:00:00.000Z",
+      "effectiveBefore": "2024-05-31T00:00:00.000Z",
+      "effectiveInclusiveDays": 31,
+      "requestedInclusiveDays": 31,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedGranularity": "day",
+      "effectiveGranularity": "day",
+      "rowHorizon": {
+        "rows": 8,
+        "timestampBuckets": 3,
+        "firstBucket": "2024-05-12T00:00:00.000Z",
+        "lastBucket": "2024-05-23T00:00:00.000Z",
+        "observedSpanDays": 11
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "probe-series-subscriptions-day.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedGranularity": "day",
+      "effectiveGranularity": "day",
+      "rowHorizon": {
+        "rows": 1,
+        "timestampBuckets": 1,
+        "firstBucket": "2026-09-28T00:00:00.000Z",
+        "lastBucket": "2026-09-28T00:00:00.000Z",
+        "observedSpanDays": 0
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "probe-series-views-day-history-window.json",
+      "requestedAfter": "2019-06-01T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2025-09-04T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 400,
+      "requestedInclusiveDays": 2687,
+      "lowerBoundaryShiftDays": 2287,
+      "upperBoundaryShiftDays": 0,
+      "requestedGranularity": "day",
+      "effectiveGranularity": "day",
+      "rowHorizon": {
+        "rows": 487,
+        "timestampBuckets": 244,
+        "firstBucket": "2026-02-07T00:00:00.000Z",
+        "lastBucket": "2026-10-08T00:00:00.000Z",
+        "observedSpanDays": 243
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "probe-series-views-hour-history-window.json",
+      "requestedAfter": "2019-06-01T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2025-09-04T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 400,
+      "requestedInclusiveDays": 2687,
+      "lowerBoundaryShiftDays": 2287,
+      "upperBoundaryShiftDays": 0,
+      "requestedGranularity": "hour",
+      "effectiveGranularity": "hour",
+      "rowHorizon": {
+        "rows": 365,
+        "timestampBuckets": 310,
+        "firstBucket": "2026-09-25T00:00:00.000Z",
+        "lastBucket": "2026-10-08T19:00:00.000Z",
+        "observedSpanDays": 13.791666666666666
+      },
+      "hourRowsAfterBeforeMidnight": 22,
+      "hourRowsBeyondInclusiveEndDay": 0
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "probe-series-views-hour-intraday-bounds.json",
+      "requestedAfter": "2026-10-08T12:00:00.000Z",
+      "requestedBefore": "2026-10-08T13:00:00.000Z",
+      "effectiveAfter": "2026-10-08T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 1,
+      "requestedInclusiveDays": 1.0416666666666667,
+      "lowerBoundaryShiftDays": -0.5,
+      "upperBoundaryShiftDays": -0.5416666666666666,
+      "requestedGranularity": "hour",
+      "effectiveGranularity": "hour",
+      "rowHorizon": {
+        "rows": 22,
+        "timestampBuckets": 19,
+        "firstBucket": "2026-10-08T01:00:00.000Z",
+        "lastBucket": "2026-10-08T19:00:00.000Z",
+        "observedSpanDays": 0.75
+      },
+      "hourRowsAfterBeforeMidnight": 22,
+      "hourRowsBeyondInclusiveEndDay": 0
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "probe-series-views-month.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedGranularity": "month",
+      "effectiveGranularity": "day",
+      "rowHorizon": {
+        "rows": 60,
+        "timestampBuckets": 30,
+        "firstBucket": "2026-09-09T00:00:00.000Z",
+        "lastBucket": "2026-10-08T00:00:00.000Z",
+        "observedSpanDays": 29
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "probe-summary-history-window.json",
+      "requestedAfter": "2019-06-01T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2025-09-04T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 400,
+      "requestedInclusiveDays": 2687,
+      "lowerBoundaryShiftDays": 2287,
+      "upperBoundaryShiftDays": 0,
+      "levelHorizon": {
+        "rows": 18,
+        "timestampBuckets": 18,
+        "firstBucket": "2026-09-20T00:00:00.000Z",
+        "lastBucket": "2026-10-07T00:00:00.000Z",
+        "observedSpanDays": 17
+      },
+      "dataSince": "2026-09-20T00:00:00.000Z"
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "probe-summary-shifted-may2024.json",
+      "requestedAfter": "2024-05-01T00:00:00.000Z",
+      "requestedBefore": "2024-05-31T00:00:00.000Z",
+      "effectiveAfter": "2024-05-01T00:00:00.000Z",
+      "effectiveBefore": "2024-05-31T00:00:00.000Z",
+      "effectiveInclusiveDays": 31,
+      "requestedInclusiveDays": 31,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "levelHorizon": {
+        "rows": 0,
+        "timestampBuckets": 0
+      },
+      "dataSince": "2026-09-20T00:00:00.000Z"
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "probe-tags-history-window.json",
+      "requestedAfter": "2019-06-01T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2025-09-04T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 400,
+      "requestedInclusiveDays": 2687,
+      "lowerBoundaryShiftDays": 2287,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0,
+      "rowHorizon": {
+        "rows": 112,
+        "timestampBuckets": 0
+      },
+      "tagSeriesHorizon": {
+        "rows": 5564,
+        "timestampBuckets": 244,
+        "firstBucket": "2026-02-07T00:00:00.000Z",
+        "lastBucket": "2026-10-08T00:00:00.000Z",
+        "observedSpanDays": 243
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "probe-tags-kind1-limit200.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0,
+      "rowHorizon": {
+        "rows": 46,
+        "timestampBuckets": 0
+      },
+      "tagSeriesHorizon": {
+        "rows": 296,
+        "timestampBuckets": 30,
+        "firstBucket": "2026-09-09T00:00:00.000Z",
+        "lastBucket": "2026-10-08T00:00:00.000Z",
+        "observedSpanDays": 29
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "probe-tags-lift-window120.json",
+      "requestedAfter": "2026-06-11T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-06-11T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 120,
+      "requestedInclusiveDays": 120,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0,
+      "rowHorizon": {
+        "rows": 72,
+        "timestampBuckets": 0
+      },
+      "tagSeriesHorizon": {
+        "rows": 2278,
+        "timestampBuckets": 120,
+        "firstBucket": "2026-06-11T00:00:00.000Z",
+        "lastBucket": "2026-10-08T00:00:00.000Z",
+        "observedSpanDays": 119
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "probe-tags-lift-window121.json",
+      "requestedAfter": "2026-06-10T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-06-10T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 121,
+      "requestedInclusiveDays": 121,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0,
+      "rowHorizon": {
+        "rows": 73,
+        "timestampBuckets": 0
+      },
+      "tagSeriesHorizon": {
+        "rows": 2295,
+        "timestampBuckets": 121,
+        "firstBucket": "2026-06-10T00:00:00.000Z",
+        "lastBucket": "2026-10-08T00:00:00.000Z",
+        "observedSpanDays": 120
+      }
+    },
+    {
+      "kind": "query_window_and_row_horizon",
+      "capture": "probe-tags-post-kind2.json",
+      "requestedAfter": "2026-09-09T00:00:00.000Z",
+      "requestedBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveAfter": "2026-09-09T00:00:00.000Z",
+      "effectiveBefore": "2026-10-08T00:00:00.000Z",
+      "effectiveInclusiveDays": 30,
+      "requestedInclusiveDays": 30,
+      "lowerBoundaryShiftDays": 0,
+      "upperBoundaryShiftDays": 0,
+      "requestedSource": 0,
+      "effectiveSource": 0,
+      "rowHorizon": {
+        "rows": 0,
+        "timestampBuckets": 0
+      },
+      "tagSeriesHorizon": {
+        "rows": 0,
+        "timestampBuckets": 0
+      }
+    }
+  ],
+  "selfTests": {
+    "checks": 5,
+    "passed": 5,
+    "failed": 0,
+    "results": [
+      {
+        "name": "http_error_with_existing_response_rejected",
+        "passed": true
+      },
+      {
+        "name": "unsuccessful_body_with_existing_response_rejected",
+        "passed": true
+      },
+      {
+        "name": "missing_summary_series_rejected",
+        "passed": true
+      },
+      {
+        "name": "empty_required_summary_series_rejected",
+        "passed": true
+      },
+      {
+        "name": "reversed_watch_lift_order_rejected",
+        "passed": true
+      }
+    ]
+  }
+}

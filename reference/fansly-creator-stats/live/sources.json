@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "sources": [
+    {
+      "name": "main.2e6b96097a4bb73b.js",
+      "url": "https://fansly.com/main.2e6b96097a4bb73b.js",
+      "bytes": 7083675,
+      "sha256": "5e59696b00f85c5906543dde53df2852746a7bb1c299994669387a433cca99ab"
+    },
+    {
+      "name": "runtime.f973459b9af62fd8.js",
+      "url": "https://fansly.com/runtime.f973459b9af62fd8.js",
+      "bytes": 2848,
+      "sha256": "49672cfb051c5c886e8a8272ddc47b4d95f287aae8850178c7f7a9834c72051a"
+    },
+    {
+      "name": "381.3db514b57dd6c2e7.js",
+      "url": "https://fansly.com/381.3db514b57dd6c2e7.js",
+      "bytes": 26553,
+      "sha256": "e60d988c191876824f9014a5b4bb65467b517e43aa668abe7180ad8a1cdc293e"
+    },
+    {
+      "name": "729.d14b4c5910bebc74.js",
+      "url": "https://fansly.com/729.d14b4c5910bebc74.js",
+      "bytes": 191045,
+      "sha256": "76c7d048126bd9bdc3663c56f1fec1ba89495748b778b99ea957872a59b5b07e"
+    }
+  ]
+}

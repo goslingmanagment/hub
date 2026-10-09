@@ -1,0 +1,5105 @@
+{
+  "schemaVersion": 1,
+  "scope": "One authorized creator session; observed response variants, not a universal server specification",
+  "rawRecords": 196,
+  "inferredMethodRecords": 21,
+  "methodEvidenceNote": "Missing methods in early response-only captures are inferred from the pinned GET wrappers, not independently observed wire-method evidence. Later capture_record methods and explicit_get_probe executions are distinguished per artifact.",
+  "uniqueResponseVariants": 134,
+  "coreCoverage": [
+    {
+      "path": "/api/v1/account/stats/summary",
+      "successfulVariants": 10
+    },
+    {
+      "path": "/api/v1/account/stats/series",
+      "successfulVariants": 17
+    },
+    {
+      "path": "/api/v1/account/stats/media/top",
+      "successfulVariants": 25
+    },
+    {
+      "path": "/api/v1/account/stats/media",
+      "successfulVariants": 9
+    },
+    {
+      "path": "/api/v1/account/stats/media/benchmarks",
+      "successfulVariants": 11
+    },
+    {
+      "path": "/api/v1/account/stats/media/shown",
+      "successfulVariants": 3
+    },
+    {
+      "path": "/api/v1/account/stats/geo",
+      "successfulVariants": 4
+    },
+    {
+      "path": "/api/v1/account/stats/activehours",
+      "successfulVariants": 9
+    },
+    {
+      "path": "/api/v1/account/stats/tags",
+      "successfulVariants": 13
+    },
+    {
+      "path": "/api/v1/account/stats/posts",
+      "successfulVariants": 2
+    },
+    {
+      "path": "/api/v1/account/stats/fans/top",
+      "successfulVariants": 9
+    },
+    {
+      "path": "/api/v1/account/stats/fans",
+      "successfulVariants": 3
+    }
+  ],
+  "csvExports": [
+    {
+      "name": "statements-export.csv",
+      "sha256": "94c2f445844d07af0e955aa33854b1db6d0c19189279ab85ad7ad9446ddc1b81",
+      "header": [
+        "Date",
+        "Purchases",
+        "Gross",
+        "Net",
+        "Refunds",
+        "Refunded",
+        "Earnings",
+        "Tips",
+        "Media",
+        "Subscriptions",
+        "Media Sets"
+      ],
+      "dataRows": 30
+    },
+    {
+      "name": "earnings-export.csv",
+      "sha256": "723e51bc1f6da6f5521b9f3df746cc39ef5c744fc23d7ddb9389d0b2a1b04410",
+      "header": [
+        "Date",
+        "Purchases",
+        "Gross",
+        "Net",
+        "Refunds",
+        "Refunded",
+        "Earnings",
+        "Tips"
+      ],
+      "dataRows": 30
+    }
+  ],
+  "uiArtifacts": [
+    {
+      "file": "network/audience-geo-watched-ui.txt",
+      "bytes": 4903,
+      "sha256": "2367c48f5cb7c390bd141d7e2861772946d91c7cb4309119db7ad3348e6c9490"
+    },
+    {
+      "file": "network/audience-initial-ui.txt",
+      "bytes": 4911,
+      "sha256": "3db9ca132e5a9fa8a6179611d40534903d16ee118e24c85692a7f2866bf028be"
+    },
+    {
+      "file": "network/content-images-ui.txt",
+      "bytes": 13410,
+      "sha256": "f6380756090d99945e5b5a156c2c57e84d612890635670d8faa7518b1b8dde80"
+    },
+    {
+      "file": "network/content-initial-ui.txt",
+      "bytes": 17349,
+      "sha256": "3753f1479c171f939599f8f65a15eeeaf5c21a580975db3924e9c6ac7d9acdc1"
+    },
+    {
+      "file": "network/content-other-empty-ui.txt",
+      "bytes": 4181,
+      "sha256": "4c694f9b533426799c512cf8215690cc3a1b28b186ed68de5270d0fc058ea436"
+    },
+    {
+      "file": "network/content-seven-day-sorts-ui.txt",
+      "bytes": 15763,
+      "sha256": "ab00aed451a2b2981004d563ed5fd89fc7b3d73ec193306ef2bc90c93c79c3c0"
+    },
+    {
+      "file": "network/earnings-initial-ui.txt",
+      "bytes": 7445,
+      "sha256": "1947bfc8f6b2eee00b9753d90c9c1de2f19e134136c60a2082fdc94c710ad835"
+    },
+    {
+      "file": "network/fan-detail-ui.txt",
+      "bytes": 9189,
+      "sha256": "326afcec5c24960cb81f3436a655f649baee8d86c5f04156e51b9ef4e0a310b1"
+    },
+    {
+      "file": "network/image-detail-ui-ui.txt",
+      "bytes": 14078,
+      "sha256": "3260ae65e7c81c5e5e6311dd1047b14c943be0f208d9b2d98bf78e89b3683f74"
+    },
+    {
+      "file": "network/overview-final-ui.txt",
+      "bytes": 6659,
+      "sha256": "d0a6a20ec51a3e4772a07da396c15ee226db9ee40f2408dc55878fcd8cc5f07b"
+    },
+    {
+      "file": "network/overview-initial-ui.txt",
+      "bytes": 6648,
+      "sha256": "0f2b61e5c9a7a4098eebb5d88462843127530ecd1115f5ca332757bb52ad883f"
+    },
+    {
+      "file": "network/overview-media-detail-ui.txt",
+      "bytes": 9038,
+      "sha256": "1cccd9668bee9cde6a519c7ac9eeaa5d66dceb54e6d01949e3de487f8628d7fd"
+    },
+    {
+      "file": "screenshots/audience-geo-watched.png",
+      "bytes": 227025,
+      "sha256": "b8edb77fb1ea219438b35e4e38bcdb0be91e6cbfb45c7152bb92e0c8ba8d23cd"
+    },
+    {
+      "file": "screenshots/audience-initial.png",
+      "bytes": 232383,
+      "sha256": "827544f769b871a95ddab30456d5c8de7569367aa1b946eb54466276ee05589f"
+    },
+    {
+      "file": "screenshots/content-images.png",
+      "bytes": 343086,
+      "sha256": "3ed06781cc876e2baf077e222167f57b4ddcf6e4ac703e422115284860af2764"
+    },
+    {
+      "file": "screenshots/content-initial.png",
+      "bytes": 422672,
+      "sha256": "18f29e246a6cc93e179225d65885d3f750c01a48239007ceecad3c7300ec4284"
+    },
+    {
+      "file": "screenshots/content-other-empty.png",
+      "bytes": 175560,
+      "sha256": "84a85fae434eeba65939f90fdc0357cde1f4b0eb40271c26548350c8f315b499"
+    },
+    {
+      "file": "screenshots/content-seven-day-sorts.png",
+      "bytes": 388470,
+      "sha256": "24cb1a2709c9aaea0e837d425d7c99e385bd6ad7b12c1e4311ecc148c9c08785"
+    },
+    {
+      "file": "screenshots/earnings-initial.png",
+      "bytes": 299240,
+      "sha256": "0aa779219bb82049ae5066185f0e440729f6057495ecd24c3a8b77f453057708"
+    },
+    {
+      "file": "screenshots/fan-detail.png",
+      "bytes": 62698,
+      "sha256": "de4b7ca08a7475cfd72646fa558bb7cf3ccb0667b8479938dacf3c1684165abb"
+    },
+    {
+      "file": "screenshots/image-detail-ui.png",
+      "bytes": 60436,
+      "sha256": "5630e4c9fd3327bc15173fa667ab0b6c88d5e8f52e3f72e4c6d6412e0995e870"
+    },
+    {
+      "file": "screenshots/overview-final.png",
+      "bytes": 217342,
+      "sha256": "734b9e9db15ce7d9ae6b378fc3dc3c2a4bd8ee287c1affab508f3e8ceeb9ce2a"
+    },
+    {
+      "file": "screenshots/overview-initial.png",
+      "bytes": 212822,
+      "sha256": "32d194fce37bd0072fae6b76501389360410c8ad470a93e8df645a0700bb9af1"
+    },
+    {
+      "file": "screenshots/overview-media-detail.png",
+      "bytes": 79506,
+      "sha256": "be577fa4835800d72bb1fa74806adcc8c88af937610409ba7cd526516c846746"
+    }
+  ],
+  "records": [
+    {
+      "id": "response-007fcf16e1c6a9ed",
+      "method": "GET",
+      "path": "/api/v1/account/stats/activehours",
+      "query": {
+        "source": "0",
+        "after": "1783728000000",
+        "before": "1791417600000",
+        "timezoneOffsetMinutes": "180",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "2e9e0a7578770f1a0a29cadbe35c3cd62d3d87945233c3ed807e90709fd60887",
+      "response": {
+        "afterBucket": 1783728000000,
+        "beforeBucket": 1791417600000,
+        "source": 0,
+        "timezoneOffsetMinutes": 180,
+        "viewsCount": 7,
+        "imageViewsCount": 7
+      },
+      "artifacts": [
+        {
+          "file": "content-ninety-day-23938.1808.json",
+          "label": "content-ninety-day",
+          "observedAt": "2026-10-08T20:17:19.261Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1808",
+          "sha256": "f6dc089f43d6d08a1974db8fbd9f9f567376d2f6a59e8ca33517cf747bef3f9f"
+        }
+      ]
+    },
+    {
+      "id": "response-06457b8011a1e59f",
+      "method": "GET",
+      "path": "/api/v1/account/stats/activehours",
+      "query": {
+        "source": "1",
+        "after": "1783728000000",
+        "before": "1791417600000",
+        "timezoneOffsetMinutes": "180",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "114abc76f278f8abf8ca55e538e194ebf4c4757fac62476ab82081a02bc84607",
+      "response": {
+        "afterBucket": 1783728000000,
+        "beforeBucket": 1791417600000,
+        "source": 1,
+        "timezoneOffsetMinutes": 180,
+        "viewsCount": 7,
+        "imageViewsCount": 7
+      },
+      "artifacts": [
+        {
+          "file": "content-ninety-day-23938.1814.json",
+          "label": "content-ninety-day",
+          "observedAt": "2026-10-08T20:17:19.700Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1814",
+          "sha256": "8cba0765e00d32ba97f519a1e60caa5a5c3faac9331e07dadebcf724328bd527"
+        }
+      ]
+    },
+    {
+      "id": "response-06fea959ee77d1de",
+      "method": "GET",
+      "path": "/api/v1/account/stats/activehours",
+      "query": {
+        "source": "1",
+        "after": "1789603200000",
+        "before": "1791417600000",
+        "timezoneOffsetMinutes": "180",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "5dfbfcbfeb5d7173c62ce4107444fb5baa3c3bf6237d60367bd50722daf80488",
+      "response": {
+        "afterBucket": 1789603200000,
+        "beforeBucket": 1791417600000,
+        "source": 1,
+        "timezoneOffsetMinutes": 180,
+        "viewsCount": 7,
+        "imageViewsCount": 7
+      },
+      "artifacts": [
+        {
+          "file": "content-other-23938.1558.json",
+          "label": "content-other",
+          "observedAt": "2026-10-08T20:11:18.540Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1558",
+          "sha256": "a7492c9e98680743eac6626b0b98d6c641aedae42c2984a78a8fdba048ddbe64"
+        }
+      ]
+    },
+    {
+      "id": "response-51b6ef4f69aff78b",
+      "method": "GET",
+      "path": "/api/v1/account/stats/activehours",
+      "query": {
+        "source": "0",
+        "after": "1559347200000",
+        "before": "1791417600000",
+        "timezoneOffsetMinutes": "180",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "54f443de5e7a4e63b7b1b023b4aacf159b8f2f4c37ca911ab7e97f343c285663",
+      "response": {
+        "afterBucket": 1783728000000,
+        "beforeBucket": 1791417600000,
+        "source": 0,
+        "timezoneOffsetMinutes": 180,
+        "viewsCount": 7,
+        "imageViewsCount": 7
+      },
+      "artifacts": [
+        {
+          "file": "earnings-gross-sort-23938.1520.json",
+          "label": "earnings-gross-sort",
+          "observedAt": "2026-10-08T20:09:43.750Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1520",
+          "sha256": "01b78ba802809d0a3d2d5c6c46838b93a7e9cc6c014092e49212096792b6fe21"
+        },
+        {
+          "file": "probe-activehours-history-window.json",
+          "label": "activehours-history-window",
+          "observedAt": "2026-10-08T20:03:20.318Z",
+          "methodEvidence": "explicit_get_probe",
+          "sha256": "96792c2bf8a35c63615374119a3e50d1ca105fb2155491e9b1cd3b53099e77bb"
+        }
+      ]
+    },
+    {
+      "id": "response-6a4105869a0cc35b",
+      "method": "GET",
+      "path": "/api/v1/account/stats/activehours",
+      "query": {
+        "source": "1",
+        "after": "1788912000000",
+        "before": "1791417600000",
+        "timezoneOffsetMinutes": "180",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "75112713dcb984a574a3a366b2a249465b64f1c00424b12b800778767669bbb1",
+      "response": {
+        "afterBucket": 1788912000000,
+        "beforeBucket": 1791417600000,
+        "source": 1,
+        "timezoneOffsetMinutes": 180,
+        "viewsCount": 7,
+        "imageViewsCount": 7
+      },
+      "artifacts": [
+        {
+          "file": "content-timeline-23938.1357.json",
+          "label": "content-timeline",
+          "observedAt": "2026-10-08T19:56:27.828Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1357",
+          "sha256": "91f6adf8758b3382378609b88ebccb8371409ab10483ce5657c360b63b3b49fb"
+        }
+      ]
+    },
+    {
+      "id": "response-7ab0109ad4af86e4",
+      "method": "GET",
+      "path": "/api/v1/account/stats/activehours",
+      "query": {
+        "source": "4",
+        "after": "1790899200000",
+        "before": "1791417600000",
+        "timezoneOffsetMinutes": "180",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "ca44b01759a7ceee2f26eef1eb6b41b958c76cc0fd1f5553918998e0f7e99959",
+      "response": {
+        "afterBucket": 1790899200000,
+        "beforeBucket": 1791417600000,
+        "source": 4,
+        "timezoneOffsetMinutes": 180,
+        "viewsCount": 7,
+        "imageViewsCount": 7
+      },
+      "artifacts": [
+        {
+          "file": "content-seven-day-23938.1574.json",
+          "label": "content-seven-day",
+          "observedAt": "2026-10-08T20:15:24.930Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1574",
+          "sha256": "b68ecea395363d90f8dc6f64ad0e8a714ac532880f4613ba471b177f0b2a1433"
+        }
+      ]
+    },
+    {
+      "id": "response-7af22cb5b5ed23ea",
+      "method": "GET",
+      "path": "/api/v1/account/stats/activehours",
+      "query": {
+        "source": "0",
+        "after": "1790899200000",
+        "before": "1791417600000",
+        "timezoneOffsetMinutes": "180",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "370f78d68c6f59dd8b8876fb6390071592a861d9cadbe9d23bcd8883f7d444cd",
+      "response": {
+        "afterBucket": 1790899200000,
+        "beforeBucket": 1791417600000,
+        "source": 0,
+        "timezoneOffsetMinutes": 180,
+        "viewsCount": 7,
+        "imageViewsCount": 7
+      },
+      "artifacts": [
+        {
+          "file": "content-seven-day-23938.1578.json",
+          "label": "content-seven-day",
+          "observedAt": "2026-10-08T20:15:25.014Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1578",
+          "sha256": "e386e079e1e8d88cff1eaaf5ca31e32ca650132d0ff6e6ba203fadfb8dbc2a8d"
+        }
+      ]
+    },
+    {
+      "id": "response-afd5c221ad74bc6d",
+      "method": "GET",
+      "path": "/api/v1/account/stats/activehours",
+      "query": {
+        "source": "4",
+        "after": "1789603200000",
+        "before": "1791417600000",
+        "timezoneOffsetMinutes": "180",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "49fdc46e8ae55ede4cc15e556b3178ee21995c88903fdd82cbc4a8a23c88a3ce",
+      "response": {
+        "afterBucket": 1789603200000,
+        "beforeBucket": 1791417600000,
+        "source": 4,
+        "timezoneOffsetMinutes": 180,
+        "viewsCount": 7,
+        "imageViewsCount": 7
+      },
+      "artifacts": [
+        {
+          "file": "content-other-23938.1565.json",
+          "label": "content-other",
+          "observedAt": "2026-10-08T20:11:18.623Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1565",
+          "sha256": "c1f03e5718650693d748acf97dd34d36e605f8cdb5f65b650a203f59acb34bec"
+        }
+      ]
+    },
+    {
+      "id": "response-d849b0a514267988",
+      "method": "GET",
+      "path": "/api/v1/account/stats/activehours",
+      "query": {
+        "source": "0",
+        "after": "1788912000000",
+        "before": "1791417600000",
+        "timezoneOffsetMinutes": "180",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "0ad74e3286bd997af780ee7f79e9e66708a8a42991420a5549bc1ece0a24c883",
+      "response": {
+        "afterBucket": 1788912000000,
+        "beforeBucket": 1791417600000,
+        "source": 0,
+        "timezoneOffsetMinutes": 180,
+        "viewsCount": 7,
+        "imageViewsCount": 7
+      },
+      "artifacts": [
+        {
+          "file": "010-content-initial.json",
+          "label": "content-initial",
+          "observedAt": "2026-10-08T19:55:17.796Z",
+          "methodEvidence": "inferred_from_pinned_get_wrapper",
+          "requestId": "23938.1341",
+          "sha256": "34798600e51a1430f7f6d68e50ca184f5aeb07191a0660711f664a82e33ddd20"
+        }
+      ]
+    },
+    {
+      "id": "response-3207e9bc7205dec4",
+      "method": "GET",
+      "path": "/api/v1/account/stats/fans",
+      "query": {
+        "fanId": {
+          "count": 1,
+          "references": [
+            "id:190509a590d7"
+          ]
+        },
+        "after": "1786233600000",
+        "before": "1791417600000",
+        "granularity": "day",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "b7cd39153ace648d76837dfbfe99f6f79a3b6775af6def0308ffdbed1e6065ea",
+      "response": {
+        "afterBucket": 1786233600000,
+        "beforeBucket": 1791417600000,
+        "granularity": "day",
+        "rowsCount": 3
+      },
+      "artifacts": [
+        {
+          "file": "fan-lifetime-23938.1461.json",
+          "label": "fan-lifetime",
+          "observedAt": "2026-10-08T19:58:41.080Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1461",
+          "sha256": "0d85a390043b86e51b62d54b823793489cfcd12b906112687084174aeaed23c0"
+        }
+      ]
+    },
+    {
+      "id": "response-b17510a8c24ce9bd",
+      "method": "GET",
+      "path": "/api/v1/account/stats/fans",
+      "query": {
+        "fanId": {
+          "count": 1,
+          "references": [
+            "id:190509a590d7"
+          ]
+        },
+        "after": "1559347200000",
+        "before": "1791417600000",
+        "granularity": "month",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "716c24c9662e7df2db0a7f420649ff6bbe2a88a0f372d8b6733726cbb5cf4257",
+      "response": {
+        "afterBucket": 1561420800000,
+        "beforeBucket": 1791417600000,
+        "granularity": "month",
+        "rowsCount": 3
+      },
+      "artifacts": [
+        {
+          "file": "fan-detail-23938.1458.json",
+          "label": "fan-detail",
+          "observedAt": "2026-10-08T19:58:25.573Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1458",
+          "sha256": "c7968bef08c78ac4e98862c0da4db1e317469b833ccf015a40f0d5e1684d7846"
+        }
+      ]
+    },
+    {
+      "id": "response-de5fc1dbbb94252c",
+      "method": "GET",
+      "path": "/api/v1/account/stats/fans",
+      "query": {
+        "fanId": {
+          "count": 1,
+          "references": [
+            "id:190509a590d7"
+          ]
+        },
+        "after": "1788912000000",
+        "before": "1791417600000",
+        "granularity": "day",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "ba98317702b5ec75986bc5b57e284f6078ec963ca72fed72704ad55b3164baa0",
+      "response": {
+        "afterBucket": 1788912000000,
+        "beforeBucket": 1791417600000,
+        "granularity": "day",
+        "rowsCount": 1
+      },
+      "artifacts": [
+        {
+          "file": "fan-detail-23938.1456.json",
+          "label": "fan-detail",
+          "observedAt": "2026-10-08T19:58:25.617Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1456",
+          "sha256": "600b8e5b2d08c16add6639bbf673fa4d7f0e80a7838010e5fbb6981f844cffa3"
+        }
+      ]
+    },
+    {
+      "id": "response-040ec5e659ef10d0",
+      "method": "GET",
+      "path": "/api/v1/account/stats/fans/top",
+      "query": {
+        "after": "1789603200000",
+        "before": "1791417600000",
+        "orderBy": "grossMills",
+        "limit": "25",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "b02ad5f180f371f5eb5a9f2c614a2cd5f824442ed3d542fddc012f91f3218878",
+      "response": {
+        "afterBucket": 1789603200000,
+        "beforeBucket": 1791417600000,
+        "rowsCount": 1
+      },
+      "artifacts": [
+        {
+          "file": "earnings-gross-sort-23938.1545.json",
+          "label": "earnings-gross-sort",
+          "observedAt": "2026-10-08T20:09:44.105Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1545",
+          "sha256": "558141caa80c49b5ede1b27e694984990e971450e7c9ec7eddb523bd67bbbf2c"
+        }
+      ]
+    },
+    {
+      "id": "response-0f799b2e0a898c84",
+      "method": "GET",
+      "path": "/api/v1/account/stats/fans/top",
+      "query": {
+        "after": "1788912000000",
+        "before": "1791417600000",
+        "orderBy": "netMills",
+        "limit": "25",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "2f829eb4921ecfaf051d0805f90717e40e364884aaf9e41769bd3f5aa8e55757",
+      "response": {
+        "afterBucket": 1788912000000,
+        "beforeBucket": 1791417600000,
+        "rowsCount": 1
+      },
+      "artifacts": [
+        {
+          "file": "earnings-initial-23938.1435.json",
+          "label": "earnings-initial",
+          "observedAt": "2026-10-08T19:57:34.106Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1435",
+          "sha256": "72b1d2246047b83d4a5cd826d9b0d21fd08e9d10df35858064bacdb96923c6e9"
+        }
+      ]
+    },
+    {
+      "id": "response-26c1bc65b5b88a47",
+      "method": "GET",
+      "path": "/api/v1/account/stats/fans/top",
+      "query": {
+        "after": "1788912000000",
+        "before": "1791417600000",
+        "orderBy": "netMills",
+        "limit": "5",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "088876f2229fb184a5d888731c67f901b27f10e3f295e0d6921af1f02fdcc652",
+      "response": {
+        "afterBucket": 1788912000000,
+        "beforeBucket": 1791417600000,
+        "rowsCount": 1
+      },
+      "artifacts": [
+        {
+          "file": "005-overview-initial.json",
+          "label": "overview-initial",
+          "observedAt": "2026-10-08T19:54:24.284Z",
+          "methodEvidence": "inferred_from_pinned_get_wrapper",
+          "requestId": "23938.1248",
+          "sha256": "22e2c206a2f9b6b9cccda53fc52f9034b79872423d62beb92324aabea868f951"
+        }
+      ]
+    },
+    {
+      "id": "response-49d36a334873aef2",
+      "method": "GET",
+      "path": "/api/v1/account/stats/fans/top",
+      "query": {
+        "after": "1789603200000",
+        "before": "1791417600000",
+        "orderBy": "transactions",
+        "limit": "25",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "181f6ca99d293e88086a131723686aa1cbc4df5f0b59f5424a89332ec3b016e7",
+      "response": {
+        "afterBucket": 1789603200000,
+        "beforeBucket": 1791417600000,
+        "rowsCount": 1
+      },
+      "artifacts": [
+        {
+          "file": "earnings-purchases-sort-23938.1547.json",
+          "label": "earnings-purchases-sort",
+          "observedAt": "2026-10-08T20:11:08.561Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1547",
+          "sha256": "76a0006e6287165efb1d4df058b6c64231d35ccf3361f7ffbbe438971aed069a"
+        }
+      ]
+    },
+    {
+      "id": "response-68c23e62b416ee90",
+      "method": "GET",
+      "path": "/api/v1/account/stats/fans/top",
+      "query": {
+        "after": "1559347200000",
+        "before": "1791417600000",
+        "orderBy": "transactions",
+        "limit": "200",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "6efe28734411e9cf48c5af6788a8bddb3034c5f94b3a77a3e7bc617b93415eec",
+      "response": {
+        "afterBucket": 1756944000000,
+        "beforeBucket": 1791417600000,
+        "rowsCount": 89
+      },
+      "artifacts": [
+        {
+          "file": "earnings-gross-sort-23938.1512.json",
+          "label": "earnings-gross-sort",
+          "observedAt": "2026-10-08T20:09:43.606Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1512",
+          "sha256": "6f2b4ef979b97c5e027fc13daa6f43ee396e1927a845a344ac979414a042671f"
+        },
+        {
+          "file": "probe-fans-top-history-limit200.json",
+          "label": "fans-top-history-limit200",
+          "observedAt": "2026-10-08T20:02:11.850Z",
+          "methodEvidence": "explicit_get_probe",
+          "sha256": "b5b5c90bde6715df072d74e3733df76b2b2d737a8644e3a163feda90ba70c032"
+        }
+      ]
+    },
+    {
+      "id": "response-8d196c5095794d25",
+      "method": "GET",
+      "path": "/api/v1/account/stats/fans/top",
+      "query": {
+        "after": "1788912000000",
+        "before": "1791417600000",
+        "orderBy": "netMills",
+        "limit": "5",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "f8adba12db0ff731d50274eeaf7f73e23fb09261c152d4c9740aea75bf1bbcbb",
+      "response": {
+        "afterBucket": 1788912000000,
+        "beforeBucket": 1791417600000,
+        "rowsCount": 1
+      },
+      "artifacts": [
+        {
+          "file": "overview-return-thirty-23938.1968.json",
+          "label": "overview-return-thirty",
+          "observedAt": "2026-10-08T20:20:16.994Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1968",
+          "sha256": "9fee81ef5e0ba229052ec9896e0f9873573f1ab59d6a703b50f196c9b3989cb9"
+        }
+      ]
+    },
+    {
+      "id": "response-8efba14e57baa514",
+      "method": "GET",
+      "path": "/api/v1/account/stats/fans/top",
+      "query": {
+        "after": "1783728000000",
+        "before": "1791417600000",
+        "orderBy": "netMills",
+        "limit": "5",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "ad29f7bd507d21909601471a0a176e2b9037f94152cc1226fa26432ad63cb93f",
+      "response": {
+        "afterBucket": 1783728000000,
+        "beforeBucket": 1791417600000,
+        "rowsCount": 5
+      },
+      "artifacts": [
+        {
+          "file": "overview-return-thirty-23938.1962.json",
+          "label": "overview-return-thirty",
+          "observedAt": "2026-10-08T20:20:16.928Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1962",
+          "sha256": "d5e9814be49186d86261886165c69c84dc0b7be00bdfde16e0f554df24a67c32"
+        }
+      ]
+    },
+    {
+      "id": "response-93de27139200fc01",
+      "method": "GET",
+      "path": "/api/v1/account/stats/fans/top",
+      "query": {
+        "after": "1789603200000",
+        "before": "1791417600000",
+        "orderBy": "netMills",
+        "limit": "25",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "2d8d26703dd93d7ea9c51133e5751351b8565549e77f5f67ec1f139a99c1ccf6",
+      "response": {
+        "afterBucket": 1789603200000,
+        "beforeBucket": 1791417600000,
+        "rowsCount": 1
+      },
+      "artifacts": [
+        {
+          "file": "earnings-custom-23938.1467.json",
+          "label": "earnings-custom",
+          "observedAt": "2026-10-08T19:59:12.780Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1467",
+          "sha256": "4a395f2e32bae5a27ccb33b2bac4d35bd62a9cf214530e26f0b6d586f9e57744"
+        }
+      ]
+    },
+    {
+      "id": "response-d794a7b8542ffe9d",
+      "method": "GET",
+      "path": "/api/v1/account/stats/fans/top",
+      "query": {
+        "after": "1788912000000",
+        "before": "1791417600000",
+        "orderBy": "netMills",
+        "limit": "5",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "558ad70331fec9b38e52b5806cba91673b725c60fcf260938b184ef524784041",
+      "response": {
+        "afterBucket": 1788912000000,
+        "beforeBucket": 1791417600000,
+        "rowsCount": 1
+      },
+      "artifacts": [
+        {
+          "file": "overview-final-refresh-23938.1997.json",
+          "label": "overview-final-refresh",
+          "observedAt": "2026-10-08T20:21:10.617Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1997",
+          "sha256": "861a87eaaf85d23ed87b4e5dde612b40c1bbdba038db45ec3402010b8a3516b9"
+        }
+      ]
+    },
+    {
+      "id": "response-1a48129e2b45bcfe",
+      "method": "GET",
+      "path": "/api/v1/account/stats/geo",
+      "query": {
+        "source": "1",
+        "after": "1788912000000",
+        "before": "1791417600000",
+        "limit": "10",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "664026b354eb88138671a8b7e2ba431a951ad4e96dcf7ad3ba65a5c1ae114a1c",
+      "response": {
+        "afterBucket": 1788912000000,
+        "beforeBucket": 1791417600000,
+        "source": 1,
+        "rowsCount": 10,
+        "profileRowsCount": 10
+      },
+      "artifacts": [
+        {
+          "file": "audience-initial-23938.1420.json",
+          "label": "audience-initial",
+          "observedAt": "2026-10-08T19:57:07.623Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1420",
+          "sha256": "afbdb6c450823de1b086c4936a0d0a8687d3e71bffd2b576e682536220ab3d01"
+        }
+      ]
+    },
+    {
+      "id": "response-66373c8708aa478e",
+      "method": "GET",
+      "path": "/api/v1/account/stats/geo",
+      "query": {
+        "source": "0",
+        "after": "1559347200000",
+        "before": "1791417600000",
+        "limit": "200",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "f416f07a8007049db30620a019ebe93a4e6741a02393743c4163c1037d15a1bd",
+      "response": {
+        "afterBucket": 1756944000000,
+        "beforeBucket": 1791417600000,
+        "source": 0,
+        "rowsCount": 198,
+        "profileRowsCount": 47
+      },
+      "artifacts": [
+        {
+          "file": "earnings-gross-sort-23938.1519.json",
+          "label": "earnings-gross-sort",
+          "observedAt": "2026-10-08T20:09:43.734Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1519",
+          "sha256": "37aa678fb21aa8e037f8de2b8b0524f06ec808d124a793826954f56d16eb2280"
+        },
+        {
+          "file": "probe-geo-history-limit200.json",
+          "label": "geo-history-limit200",
+          "observedAt": "2026-10-08T20:03:15.839Z",
+          "methodEvidence": "explicit_get_probe",
+          "sha256": "e7f59eb59f46d8e1928d98934a57abc6e69f6906c8cc54cd96ae0b403a2b38f5"
+        }
+      ]
+    },
+    {
+      "id": "response-8b0f7c13b85709fd",
+      "method": "GET",
+      "path": "/api/v1/account/stats/geo",
+      "query": {
+        "source": "1",
+        "after": "1559347200000",
+        "before": "1791417600000",
+        "limit": "200",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "e0611485cf1e341ea20c4dd29faea4059b3f89e1bad1ed9232254afb8613add8",
+      "response": {
+        "afterBucket": 1756944000000,
+        "beforeBucket": 1791417600000,
+        "source": 1,
+        "rowsCount": 134,
+        "profileRowsCount": 47
+      },
+      "artifacts": [
+        {
+          "file": "audience-ninety-day-23938.1955.json",
+          "label": "audience-ninety-day",
+          "observedAt": "2026-10-08T20:19:32.808Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1955",
+          "sha256": "b5de219bf0150fc4c8ff396cf73b688526aa67a0cbdcc62b3c9c1459cd4a9f6f"
+        },
+        {
+          "file": "probe-geo-timeline-history-limit200.json",
+          "label": "geo-timeline-history-limit200",
+          "observedAt": "2026-10-08T20:18:56.294Z",
+          "methodEvidence": "explicit_get_probe",
+          "sha256": "151381e2c859a85f3890e7e7d9645b7ec7265df09cf3a9cb37307522f0927f7e"
+        }
+      ]
+    },
+    {
+      "id": "response-c497410e3809216f",
+      "method": "GET",
+      "path": "/api/v1/account/stats/geo",
+      "query": {
+        "source": "1",
+        "after": "1783728000000",
+        "before": "1791417600000",
+        "limit": "10",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "2fe8b43956bb87dab24e0285b566b56316a67d8183d4dc8c83c73d7d35365e42",
+      "response": {
+        "afterBucket": 1783728000000,
+        "beforeBucket": 1791417600000,
+        "source": 1,
+        "rowsCount": 10,
+        "profileRowsCount": 10
+      },
+      "artifacts": [
+        {
+          "file": "audience-ninety-day-23938.1946.json",
+          "label": "audience-ninety-day",
+          "observedAt": "2026-10-08T20:19:32.638Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1946",
+          "sha256": "ad76cdc9491cba8d4d691d56c43b045fb3201e62e204c3dac222d2593c4c5d16"
+        }
+      ]
+    },
+    {
+      "id": "response-05904ba2d09dcc8b",
+      "method": "GET",
+      "path": "/api/v1/account/stats/media",
+      "query": {
+        "mediaOfferId": {
+          "count": 1,
+          "references": [
+            "id:1555b7b1b867"
+          ]
+        },
+        "source": "0",
+        "after": "1559347200000",
+        "before": "1791417600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "948ef53635c109e3cf3b0018110732005a5e2a1f7b7086163b8643247a01c618",
+      "response": {
+        "afterBucket": 1756944000000,
+        "beforeBucket": 1791417600000,
+        "source": 0,
+        "tagSeriesCount": 125,
+        "mediaCount": 1,
+        "likesCount": 4
+      },
+      "artifacts": [
+        {
+          "file": "earnings-gross-sort-23938.1526.json",
+          "label": "earnings-gross-sort",
+          "observedAt": "2026-10-08T20:09:43.875Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1526",
+          "sha256": "cad3580b84d79d7722af5ee2c78ffdef1cb60676cad6e21a734ac0bde8602b08"
+        },
+        {
+          "file": "probe-media-detail-history-window.json",
+          "label": "media-detail-history-window",
+          "observedAt": "2026-10-08T20:03:56.634Z",
+          "methodEvidence": "explicit_get_probe",
+          "sha256": "4020cb4a75bc6be7a26a029fa3fd605a8d66bb113919c6bf2eb9c5fd547cc6d0"
+        }
+      ]
+    },
+    {
+      "id": "response-112e2f31be483c81",
+      "method": "GET",
+      "path": "/api/v1/account/stats/media",
+      "query": {
+        "mediaOfferId": {
+          "count": 1,
+          "references": [
+            "id:1555b7b1b867"
+          ]
+        },
+        "source": "0",
+        "after": "1788912000000",
+        "before": "1791417600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "3f9ee822f8c21f72f99d7af8f505bd696d5e2318514e402ac624138ba5c1e0a1",
+      "response": {
+        "afterBucket": 1788912000000,
+        "beforeBucket": 1791417600000,
+        "source": 0,
+        "tagSeriesCount": 26,
+        "mediaCount": 1,
+        "likesCount": 4
+      },
+      "artifacts": [
+        {
+          "file": "011-overview-media-detail.json",
+          "label": "overview-media-detail",
+          "observedAt": "2026-10-08T19:54:39.543Z",
+          "methodEvidence": "inferred_from_pinned_get_wrapper",
+          "requestId": "23938.1306",
+          "sha256": "a6a63e2a1f1ed12a41925e271000373ef256388a93cd2a8e303d2474f430752d"
+        }
+      ]
+    },
+    {
+      "id": "response-1c881a9458eed409",
+      "method": "GET",
+      "path": "/api/v1/account/stats/media",
+      "query": {
+        "mediaOfferId": {
+          "count": 1,
+          "references": [
+            "id:1555b7b1b867"
+          ]
+        },
+        "source": "-1",
+        "after": "1756944000000",
+        "before": "1791417600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "93e1185f78af29cd85319e18bd5f5f0b24497f9e67e7254fe8809acf5e119087",
+      "response": {
+        "afterBucket": 1756944000000,
+        "beforeBucket": 1791417600000,
+        "source": -1,
+        "tagSeriesCount": 0,
+        "mediaCount": 1,
+        "likesCount": 4
+      },
+      "artifacts": [
+        {
+          "file": "013-media-lifetime.json",
+          "label": "media-lifetime",
+          "observedAt": "2026-10-08T19:55:03.852Z",
+          "methodEvidence": "inferred_from_pinned_get_wrapper",
+          "requestId": "23938.1332",
+          "sha256": "2538973ed3c6e869fac5580eb4e737858f133b82b570d9b5c9451f3308fdf24e"
+        }
+      ]
+    },
+    {
+      "id": "response-2f9197d0b9e02557",
+      "method": "GET",
+      "path": "/api/v1/account/stats/media",
+      "query": {
+        "mediaOfferId": {
+          "count": 1,
+          "references": [
+            "id:1e7618ce09a5"
+          ]
+        },
+        "source": "1",
+        "after": "1788912000000",
+        "before": "1791417600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "43ceae1f6efc5dc22d006f493a163b89109182e4125007d845d32df6d0546833",
+      "response": {
+        "afterBucket": 1788912000000,
+        "beforeBucket": 1791417600000,
+        "source": 1,
+        "tagSeriesCount": 0,
+        "mediaCount": 1,
+        "likesCount": 2
+      },
+      "artifacts": [
+        {
+          "file": "earnings-gross-sort-23938.1536.json",
+          "label": "earnings-gross-sort",
+          "observedAt": "2026-10-08T20:09:43.992Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1536",
+          "sha256": "dd5f6d19307086eda728fd7f8da0f28104e7ca13a702c7baab106c834c19fc59"
+        },
+        {
+          "file": "probe-media-detail-image.json",
+          "label": "media-detail-image",
+          "observedAt": "2026-10-08T20:07:32.976Z",
+          "methodEvidence": "explicit_get_probe",
+          "sha256": "b28db62b8c69c115c287536d92eb1c8c4033d8081e8bda71d2d9b7930b517c22"
+        }
+      ]
+    },
+    {
+      "id": "response-314bbbcddee8c9a5",
+      "method": "GET",
+      "path": "/api/v1/account/stats/media",
+      "query": {
+        "mediaOfferId": {
+          "count": 1,
+          "references": [
+            "id:1555b7b1b867"
+          ]
+        },
+        "source": "-1",
+        "after": "1788912000000",
+        "before": "1791417600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "c54f6ff64689323a490b6181e12ec4ec1a4c973bde9f11b2331a773d4496ea7b",
+      "response": {
+        "afterBucket": 1788912000000,
+        "beforeBucket": 1791417600000,
+        "source": -1,
+        "tagSeriesCount": 0,
+        "mediaCount": 1,
+        "likesCount": 4
+      },
+      "artifacts": [
+        {
+          "file": "010-overview-media-detail.json",
+          "label": "overview-media-detail",
+          "observedAt": "2026-10-08T19:54:39.518Z",
+          "methodEvidence": "inferred_from_pinned_get_wrapper",
+          "requestId": "23938.1308",
+          "sha256": "9df79e5d8439e4bdad5eb5b2e075687d2424155208227676db749241eecd9a68"
+        }
+      ]
+    },
+    {
+      "id": "response-549859cdc20423be",
+      "method": "GET",
+      "path": "/api/v1/account/stats/media",
+      "query": {
+        "mediaOfferId": {
+          "count": 1,
+          "references": [
+            "id:71db6d24d859"
+          ]
+        },
+        "source": "-1",
+        "after": "1783728000000",
+        "before": "1791417600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "121131bb54b33c783e9c254bf146ade3567c2b1fd3840fe6584ee237d37701e6",
+      "response": {
+        "afterBucket": 1783728000000,
+        "beforeBucket": 1791417600000,
+        "source": -1,
+        "tagSeriesCount": 0,
+        "mediaCount": 1,
+        "likesCount": 0
+      },
+      "artifacts": [
+        {
+          "file": "image-detail-ui-23938.1927.json",
+          "label": "image-detail-ui",
+          "observedAt": "2026-10-08T20:18:47.240Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1927",
+          "sha256": "4cdbeb910fd0cdc98f642c19c6b92d7fa6adda1de85601231663a39daa8ba716"
+        }
+      ]
+    },
+    {
+      "id": "response-ab024fa5339ae830",
+      "method": "GET",
+      "path": "/api/v1/account/stats/media",
+      "query": {
+        "mediaOfferId": {
+          "count": 1,
+          "references": [
+            "id:1555b7b1b867"
+          ]
+        },
+        "source": "0",
+        "after": "1756944000000",
+        "before": "1791417600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "9986d68f28b2895e974eb15d25fb674eca4c5396c6fef70e55258e0a2e6827ce",
+      "response": {
+        "afterBucket": 1756944000000,
+        "beforeBucket": 1791417600000,
+        "source": 0,
+        "tagSeriesCount": 125,
+        "mediaCount": 1,
+        "likesCount": 4
+      },
+      "artifacts": [
+        {
+          "file": "014-media-lifetime.json",
+          "label": "media-lifetime",
+          "observedAt": "2026-10-08T19:55:03.875Z",
+          "methodEvidence": "inferred_from_pinned_get_wrapper",
+          "requestId": "23938.1330",
+          "sha256": "a6fab82c8237baa57522657ff630c8e6d3917aec16fb3702160a85e36f8e8556"
+        }
+      ]
+    },
+    {
+      "id": "response-adcb6f6dc035a9fa",
+      "method": "GET",
+      "path": "/api/v1/account/stats/media",
+      "query": {
+        "mediaOfferId": {
+          "count": 1,
+          "references": [
+            "id:34c2c4ffda6a"
+          ]
+        },
+        "source": "0",
+        "after": "1791417600000",
+        "before": "1791417600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "ca1ae3fe84d9526d708de2b84c98f1dc8d843eedf856db889572001fd264e66a",
+      "response": {
+        "afterBucket": 1791417600000,
+        "beforeBucket": 1791417600000,
+        "source": 0,
+        "tagSeriesCount": 2,
+        "mediaCount": 1,
+        "likesCount": 1
+      },
+      "artifacts": [
+        {
+          "file": "earnings-gross-sort-23938.1535.json",
+          "label": "earnings-gross-sort",
+          "observedAt": "2026-10-08T20:09:43.975Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1535",
+          "sha256": "195f8bd4fa069629e7ed14b0131672c5fab1dfc60ea56e74c10bdf1cb2201b7d"
+        },
+        {
+          "file": "probe-media-detail-today.json",
+          "label": "media-detail-today",
+          "observedAt": "2026-10-08T20:07:28.450Z",
+          "methodEvidence": "explicit_get_probe",
+          "sha256": "77f9f357dd5b397299a05544bb6f10582c2365eb62d881048f0d48b5a126387c"
+        }
+      ]
+    },
+    {
+      "id": "response-e48177524f4ae4e9",
+      "method": "GET",
+      "path": "/api/v1/account/stats/media",
+      "query": {
+        "mediaOfferId": {
+          "count": 1,
+          "references": [
+            "id:71db6d24d859"
+          ]
+        },
+        "source": "1",
+        "after": "1783728000000",
+        "before": "1791417600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "33f17531eda01c09d0a7d5e67afe372675ba2f559132f41cc1407d55571845ad",
+      "response": {
+        "afterBucket": 1783728000000,
+        "beforeBucket": 1791417600000,
+        "source": 1,
+        "tagSeriesCount": 0,
+        "mediaCount": 1,
+        "likesCount": 0
+      },
+      "artifacts": [
+        {
+          "file": "image-detail-ui-23938.1925.json",
+          "label": "image-detail-ui",
+          "observedAt": "2026-10-08T20:18:47.210Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1925",
+          "sha256": "9617f4d146081668074c99177257cb9f32180b1a6517538984fa32dd294f0939"
+        }
+      ]
+    },
+    {
+      "id": "response-02e2c562dadadc04",
+      "method": "GET",
+      "path": "/api/v1/account/stats/media/benchmarks",
+      "query": {
+        "source": "1",
+        "after": "1788912000000",
+        "before": "1791417600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "d065e0016e3add1cf55c8d54c7a597a9fb2a8a6ce1315626871af34cbce84cbf",
+      "response": {
+        "afterBucket": 1788912000000,
+        "beforeBucket": 1791417600000,
+        "source": 1,
+        "bucketsCount": 6
+      },
+      "artifacts": [
+        {
+          "file": "content-images-23938.1370.json",
+          "label": "content-images",
+          "observedAt": "2026-10-08T19:56:57.326Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1370",
+          "sha256": "5dce89baa25d2c5550bd72f10fcae8bf1949f833fcf4d1d138afcc63d8df1f28"
+        },
+        {
+          "file": "content-timeline-23938.1356.json",
+          "label": "content-timeline",
+          "observedAt": "2026-10-08T19:56:27.809Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1356",
+          "sha256": "ac590ace79a20985d8be5a9ba8294569922c48ed439b48cf94732e780acf1b5d"
+        },
+        {
+          "file": "overview-return-thirty-23938.1970.json",
+          "label": "overview-return-thirty",
+          "observedAt": "2026-10-08T20:20:16.978Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1970",
+          "sha256": "00c9886db551aff508ee68454cd67750c3186a7b78f1ad498f5a915d35cd54b9"
+        }
+      ]
+    },
+    {
+      "id": "response-1a5b936b98599d94",
+      "method": "GET",
+      "path": "/api/v1/account/stats/media/benchmarks",
+      "query": {
+        "source": "0",
+        "after": "1783728000000",
+        "before": "1791417600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "ea795a48067860f90ec319dcf3e3f96f1f889e69ee91661758308035428533ff",
+      "response": {
+        "afterBucket": 1783728000000,
+        "beforeBucket": 1791417600000,
+        "source": 0,
+        "bucketsCount": 6
+      },
+      "artifacts": [
+        {
+          "file": "content-ninety-day-23938.1807.json",
+          "label": "content-ninety-day",
+          "observedAt": "2026-10-08T20:17:19.236Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1807",
+          "sha256": "a5a55b4ae88e77cedd32ad46c04eac96c3030935199192fc554509bad6b556d7"
+        }
+      ]
+    },
+    {
+      "id": "response-2b4352716ee7681d",
+      "method": "GET",
+      "path": "/api/v1/account/stats/media/benchmarks",
+      "query": {
+        "source": "4",
+        "after": "1789603200000",
+        "before": "1791417600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "afdb655bac239e5199cd7f759b456fe7bdaada4d71eb0af776c9edf02b58f3c6",
+      "response": {
+        "afterBucket": 1789603200000,
+        "beforeBucket": 1791417600000,
+        "source": 4,
+        "bucketsCount": 6
+      },
+      "artifacts": [
+        {
+          "file": "content-other-23938.1564.json",
+          "label": "content-other",
+          "observedAt": "2026-10-08T20:11:18.594Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1564",
+          "sha256": "25f883738cd97b6f27cd3952ff7fa937ef84317af16a05dd75a8b7b6bb2ae751"
+        }
+      ]
+    },
+    {
+      "id": "response-43e3dabe13ec8f8e",
+      "method": "GET",
+      "path": "/api/v1/account/stats/media/benchmarks",
+      "query": {
+        "source": "4",
+        "after": "1790899200000",
+        "before": "1791417600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "02abb49591c9549ba93be4ce5c7654a2e1ab4194316340f2cba084573721e0e6",
+      "response": {
+        "afterBucket": 1790899200000,
+        "beforeBucket": 1791417600000,
+        "source": 4,
+        "bucketsCount": 6
+      },
+      "artifacts": [
+        {
+          "file": "content-seven-day-23938.1573.json",
+          "label": "content-seven-day",
+          "observedAt": "2026-10-08T20:15:24.976Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1573",
+          "sha256": "78c7bef8d9edb4af6ed6b255ff427a31953f23b38e8150f29eefb36a86aca70b"
+        }
+      ]
+    },
+    {
+      "id": "response-5e7348b25f0490b3",
+      "method": "GET",
+      "path": "/api/v1/account/stats/media/benchmarks",
+      "query": {
+        "source": "0",
+        "after": "1756944000000",
+        "before": "1791417600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "26bbbc2dc0633083cab6686b473464419676222cf93d0a17eea30d447c73e443",
+      "response": {
+        "afterBucket": 1781136000000,
+        "beforeBucket": 1791417600000,
+        "source": 0,
+        "bucketsCount": 6
+      },
+      "artifacts": [
+        {
+          "file": "012-media-lifetime.json",
+          "label": "media-lifetime",
+          "observedAt": "2026-10-08T19:55:03.837Z",
+          "methodEvidence": "inferred_from_pinned_get_wrapper",
+          "requestId": "23938.1331",
+          "sha256": "97f11cf9122af15b3fe6fbe66ef109f51576d5dea00c5debaed217dc6d011b6a"
+        }
+      ]
+    },
+    {
+      "id": "response-5e8c840da71ebf06",
+      "method": "GET",
+      "path": "/api/v1/account/stats/media/benchmarks",
+      "query": {
+        "source": "0",
+        "after": "1788912000000",
+        "before": "1791417600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "11c98b7f26c75a540f39b1cece58953125b14f239fe6a4b0f97f96ed292c01a2",
+      "response": {
+        "afterBucket": 1788912000000,
+        "beforeBucket": 1791417600000,
+        "source": 0,
+        "bucketsCount": 6
+      },
+      "artifacts": [
+        {
+          "file": "002-overview-initial.json",
+          "label": "overview-initial",
+          "observedAt": "2026-10-08T19:54:24.111Z",
+          "methodEvidence": "inferred_from_pinned_get_wrapper",
+          "requestId": "23938.1250",
+          "sha256": "e98b47eda2d19ea17c9d4fd98c9d0c046da463ae1815c841eb372918bc5461a7"
+        }
+      ]
+    },
+    {
+      "id": "response-8c9e0c438c65e5d7",
+      "method": "GET",
+      "path": "/api/v1/account/stats/media/benchmarks",
+      "query": {
+        "source": "1",
+        "after": "1783728000000",
+        "before": "1791417600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "3e0b5877df0dcb4677e30cefc7ea938d9e36b3e91fb2082bb3e2ad39ef3d2076",
+      "response": {
+        "afterBucket": 1783728000000,
+        "beforeBucket": 1791417600000,
+        "source": 1,
+        "bucketsCount": 6
+      },
+      "artifacts": [
+        {
+          "file": "content-images-ninety-23938.1892.json",
+          "label": "content-images-ninety",
+          "observedAt": "2026-10-08T20:18:25.399Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1892",
+          "sha256": "975a5a13a7f6c058086745a9fa845b43059d2e0a2841655afc66f4f6418b2a15"
+        },
+        {
+          "file": "content-ninety-day-23938.1813.json",
+          "label": "content-ninety-day",
+          "observedAt": "2026-10-08T20:17:19.674Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1813",
+          "sha256": "635396a84df59fdff70a0626db41a46539760bc00c22d802379a846c43c30087"
+        },
+        {
+          "file": "image-detail-ui-23938.1926.json",
+          "label": "image-detail-ui",
+          "observedAt": "2026-10-08T20:18:47.180Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1926",
+          "sha256": "4d814fe937a38d0715e2e5ce3080ea06b2c8427283e32936859f3017618d1322"
+        },
+        {
+          "file": "overview-return-thirty-23938.1964.json",
+          "label": "overview-return-thirty",
+          "observedAt": "2026-10-08T20:20:16.869Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1964",
+          "sha256": "b7f11475c887a2740b810b57e5bff1fd8425dffb6c03524923f2b83e24e33d27"
+        }
+      ]
+    },
+    {
+      "id": "response-a27e0103e073b0eb",
+      "method": "GET",
+      "path": "/api/v1/account/stats/media/benchmarks",
+      "query": {
+        "source": "1",
+        "after": "1789603200000",
+        "before": "1791417600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "d62816f2cb48f9e23c79bd103bafaefb52f5e98a85f70051dc9adf7517703894",
+      "response": {
+        "afterBucket": 1789603200000,
+        "beforeBucket": 1791417600000,
+        "source": 1,
+        "bucketsCount": 6
+      },
+      "artifacts": [
+        {
+          "file": "content-other-23938.1557.json",
+          "label": "content-other",
+          "observedAt": "2026-10-08T20:11:18.554Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1557",
+          "sha256": "7b2040a66df1b3e7c69109918cb9094d9e617ffae5b325718321e699d07f6ab2"
+        }
+      ]
+    },
+    {
+      "id": "response-a9c307125bc20bf2",
+      "method": "GET",
+      "path": "/api/v1/account/stats/media/benchmarks",
+      "query": {
+        "source": "0",
+        "after": "1790899200000",
+        "before": "1791417600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "a39821a42ecb633a70220cbffa0a70131da2fa16d4d50bd19d84083ab81600dc",
+      "response": {
+        "afterBucket": 1790899200000,
+        "beforeBucket": 1791417600000,
+        "source": 0,
+        "bucketsCount": 6
+      },
+      "artifacts": [
+        {
+          "file": "content-seven-day-23938.1577.json",
+          "label": "content-seven-day",
+          "observedAt": "2026-10-08T20:15:24.995Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1577",
+          "sha256": "3d22fcf261913a66be877971a8d7fdf957cad7448f4004558b95db238a4d19e3"
+        },
+        {
+          "file": "content-sort-completed-23938.1722.json",
+          "label": "content-sort-completed",
+          "observedAt": "2026-10-08T20:16:51.535Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1722",
+          "sha256": "7cf4c495ad0fe3e206d091cca955d90109871ccec07f194f9444c9c05feb7e66"
+        },
+        {
+          "file": "content-sort-unique-23938.1610.json",
+          "label": "content-sort-unique",
+          "observedAt": "2026-10-08T20:15:56.961Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1610",
+          "sha256": "112692d1156b71d095da7de60a597395f235ed45ff41429d78ea5153ffcac7cd"
+        },
+        {
+          "file": "content-sort-watch-23938.1662.json",
+          "label": "content-sort-watch",
+          "observedAt": "2026-10-08T20:16:01.807Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1662",
+          "sha256": "27c71024d29b7ce23b89a5128a7b09caae12168d1bff69bc4470f20bc7f2880e"
+        }
+      ]
+    },
+    {
+      "id": "response-ebdf02d4c131b037",
+      "method": "GET",
+      "path": "/api/v1/account/stats/media/benchmarks",
+      "query": {
+        "source": "0",
+        "after": "1788912000000",
+        "before": "1791417600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "f81a232529c52f649ce0ff9942891f5d8f8d33315fa1c5e2a8e1c00c851ffda3",
+      "response": {
+        "afterBucket": 1788912000000,
+        "beforeBucket": 1791417600000,
+        "source": 0,
+        "bucketsCount": 6
+      },
+      "artifacts": [
+        {
+          "file": "overview-final-refresh-23938.1999.json",
+          "label": "overview-final-refresh",
+          "observedAt": "2026-10-08T20:21:10.558Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1999",
+          "sha256": "f875e1efed4cfaf49e1f79a416ad9d168f81e767ea371ee3d7663c93e4d534c9"
+        },
+        {
+          "file": "overview-top-source-fyp-23938.1983.json",
+          "label": "overview-top-source-fyp",
+          "observedAt": "2026-10-08T20:20:21.703Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1983",
+          "sha256": "2cd9011db2e74533b184091c5b257c7b573db1623a4162ef8857c5efa28ca754"
+        }
+      ]
+    },
+    {
+      "id": "response-ef708fa3301ee613",
+      "method": "GET",
+      "path": "/api/v1/account/stats/media/benchmarks",
+      "query": {
+        "source": "0",
+        "after": "1788912000000",
+        "before": "1791417600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "66f60010a7c37c8ea9b1977fc4fa8d3a0aa296b7f4bd929071d340c0b0930b3f",
+      "response": {
+        "afterBucket": 1788912000000,
+        "beforeBucket": 1791417600000,
+        "source": 0,
+        "bucketsCount": 6
+      },
+      "artifacts": [
+        {
+          "file": "009-content-initial.json",
+          "label": "content-initial",
+          "observedAt": "2026-10-08T19:55:17.780Z",
+          "methodEvidence": "inferred_from_pinned_get_wrapper",
+          "requestId": "23938.1340",
+          "sha256": "87bd2e6df85a4c432c86f620cb7bc0bc4be03e4993d659506b1204ef9d196cbe"
+        },
+        {
+          "file": "009-overview-media-detail.json",
+          "label": "overview-media-detail",
+          "observedAt": "2026-10-08T19:54:39.488Z",
+          "methodEvidence": "inferred_from_pinned_get_wrapper",
+          "requestId": "23938.1307",
+          "sha256": "65e0fee8ac503e35a39784f08d4367c4141eeea5be1e01ef697ee5efd89e75fe"
+        }
+      ]
+    },
+    {
+      "id": "response-2038c4b698f83ddd",
+      "method": "GET",
+      "path": "/api/v1/account/stats/media/shown",
+      "query": {
+        "end": "1791417600000",
+        "hours": "48",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "1c244e5187a6df1c094771501df5fd7939206eb6358b6faa76316da4e1670f60",
+      "response": {
+        "endHour": 1791417600000,
+        "hours": 48,
+        "rowsCount": 3
+      },
+      "artifacts": [
+        {
+          "file": "content-seven-day-23938.1591.json",
+          "label": "content-seven-day",
+          "observedAt": "2026-10-08T20:15:25.166Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1591",
+          "sha256": "6921bd2dcd4600c4976d809392124dd153d4be8b692d75ea22b4a83c4cee78bf"
+        },
+        {
+          "file": "probe-media-shown-explicit-end48.json",
+          "label": "media-shown-explicit-end48",
+          "observedAt": "2026-10-08T20:12:35.422Z",
+          "methodEvidence": "explicit_get_probe",
+          "sha256": "92e551b2c4d3a7dd36e14f6f103c36c2975a4baea25fb17af516b05c63917649"
+        }
+      ]
+    },
+    {
+      "id": "response-db7efcb7bbdd30b9",
+      "method": "GET",
+      "path": "/api/v1/account/stats/media/shown",
+      "query": {
+        "end": "0",
+        "hours": "24",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "fddf4cff4e4b2d12511531bb6ae89ae3861968d6f2da945060b2847da798686a",
+      "response": {
+        "endHour": 1791486000000,
+        "hours": 24,
+        "rowsCount": 3
+      },
+      "artifacts": [
+        {
+          "file": "003-overview-initial.json",
+          "label": "overview-initial",
+          "observedAt": "2026-10-08T19:54:24.167Z",
+          "methodEvidence": "inferred_from_pinned_get_wrapper",
+          "requestId": "23938.1252",
+          "sha256": "41650354e82c61c53f9d73a72520281b04b1e5fbecdf1a15054642411f46abd6"
+        },
+        {
+          "file": "007-content-initial.json",
+          "label": "content-initial",
+          "observedAt": "2026-10-08T19:55:17.748Z",
+          "methodEvidence": "inferred_from_pinned_get_wrapper",
+          "requestId": "23938.1336",
+          "sha256": "6ef8e9f3372d7008ac09c4ddd5200cbcaae4144136bd6a53a8bbdf234f45c273"
+        },
+        {
+          "file": "007-overview-media-detail.json",
+          "label": "overview-media-detail",
+          "observedAt": "2026-10-08T19:54:39.419Z",
+          "methodEvidence": "inferred_from_pinned_get_wrapper",
+          "requestId": "23938.1287",
+          "sha256": "a3609d2c6ac508b170d5d4c2e719103ae7285e1abd74dca93a590ae6e14db3fa"
+        }
+      ]
+    },
+    {
+      "id": "response-e94d3a6cd7a1b485",
+      "method": "GET",
+      "path": "/api/v1/account/stats/media/shown",
+      "query": {
+        "end": "0",
+        "hours": "24",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "45e7313dd96e1b2d3b587fde06403bd83fb138ffbf2e13c5bb92d2119d03f136",
+      "response": {
+        "endHour": 1791489600000,
+        "hours": 24,
+        "rowsCount": 3
+      },
+      "artifacts": [
+        {
+          "file": "overview-final-refresh-23938.2001.json",
+          "label": "overview-final-refresh",
+          "observedAt": "2026-10-08T20:21:10.632Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.2001",
+          "sha256": "995335087ad01df763c411b1c13a19c9af8baf962e2fa1b0da039b4276e1a25d"
+        },
+        {
+          "file": "overview-final-refresh-23938.2015.json",
+          "label": "overview-final-refresh",
+          "observedAt": "2026-10-08T20:21:10.680Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.2015",
+          "sha256": "ad413e56b42749d416e921c28411985c60792279d58968dd48cfd9579581ffa5"
+        },
+        {
+          "file": "overview-return-thirty-23938.1966.json",
+          "label": "overview-return-thirty",
+          "observedAt": "2026-10-08T20:20:16.887Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1966",
+          "sha256": "fd8b1215ba8b9af1a3dbfc87b6e326a15319cf5d04bdd9efb83b2823197c2fe3"
+        }
+      ]
+    },
+    {
+      "id": "response-04326d9c968b02c0",
+      "method": "GET",
+      "path": "/api/v1/account/stats/media/top",
+      "query": {
+        "source": "0",
+        "after": "1790899200000",
+        "before": "1791417600000",
+        "orderBy": "uniqueViewers",
+        "limit": "20",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "dbbfe96422722fdcffbb5acfab782d876fdaedab2448c49793626b59feda6664",
+      "response": {
+        "afterBucket": 1790899200000,
+        "beforeBucket": 1791417600000,
+        "source": 0,
+        "mediaType": null,
+        "offersCount": 20
+      },
+      "artifacts": [
+        {
+          "file": "content-sort-unique-23938.1609.json",
+          "label": "content-sort-unique",
+          "observedAt": "2026-10-08T20:15:56.987Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1609",
+          "sha256": "3f8ced5a375e93c0d413f0c2095666902dab2d5e99a0b401f7a1de8d175da57f"
+        }
+      ]
+    },
+    {
+      "id": "response-0d39e93a628d2056",
+      "method": "GET",
+      "path": "/api/v1/account/stats/media/top",
+      "query": {
+        "source": "1",
+        "after": "1559347200000",
+        "before": "1791417600000",
+        "orderBy": "views",
+        "limit": "100",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "72471dbb58cf03597bef13f8d9fc8be73062b5363d3d758dd43e6cf3479054e8",
+      "response": {
+        "afterBucket": 1781136000000,
+        "beforeBucket": 1791417600000,
+        "source": 1,
+        "mediaType": null,
+        "offersCount": 100
+      },
+      "artifacts": [
+        {
+          "file": "earnings-gross-sort-23938.1525.json",
+          "label": "earnings-gross-sort",
+          "observedAt": "2026-10-08T20:09:43.857Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1525",
+          "sha256": "9037e1fd93752270ee26d21fff270a0db384167d12a94e9d6f27777b99509f64"
+        },
+        {
+          "file": "probe-media-top-history-window.json",
+          "label": "media-top-history-window",
+          "observedAt": "2026-10-08T20:03:52.131Z",
+          "methodEvidence": "explicit_get_probe",
+          "sha256": "10347a56487b985da2bcdeb9a214467e439c5a805c0160a6126dfe462a6d295b"
+        }
+      ]
+    },
+    {
+      "id": "response-0e56504c451610c8",
+      "method": "GET",
+      "path": "/api/v1/account/stats/media/top",
+      "query": {
+        "source": "4",
+        "after": "1789603200000",
+        "before": "1791417600000",
+        "orderBy": "views",
+        "limit": "20",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "ce6a1e8f19a5db774fd10a5d966cdef771a12f54dc14932636f37f12a2b46eb7",
+      "response": {
+        "afterBucket": 1789603200000,
+        "beforeBucket": 1791417600000,
+        "source": 4,
+        "mediaType": null,
+        "offersCount": 0
+      },
+      "artifacts": [
+        {
+          "file": "content-other-23938.1563.json",
+          "label": "content-other",
+          "observedAt": "2026-10-08T20:11:18.661Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1563",
+          "sha256": "e0e79267cf50a81e67c43f5e2be244584bf96fca6db90d2f9191d29612befc4d"
+        }
+      ]
+    },
+    {
+      "id": "response-10e910c7cf199bd1",
+      "method": "GET",
+      "path": "/api/v1/account/stats/media/top",
+      "query": {
+        "source": "1",
+        "after": "1783728000000",
+        "before": "1791417600000",
+        "orderBy": "views",
+        "limit": "3",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "537be6e5b3f85f9ac6b5de548c5d61e71e3292aa125a5793225dca05c2c7670b",
+      "response": {
+        "afterBucket": 1783728000000,
+        "beforeBucket": 1791417600000,
+        "source": 1,
+        "mediaType": null,
+        "offersCount": 3
+      },
+      "artifacts": [
+        {
+          "file": "overview-return-thirty-23938.1963.json",
+          "label": "overview-return-thirty",
+          "observedAt": "2026-10-08T20:20:16.911Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1963",
+          "sha256": "285c310961590909a986a2b38308c1eeb122e0bdebdddd470657ff5a4686d3b6"
+        }
+      ]
+    },
+    {
+      "id": "response-20ad2fcae17f05e2",
+      "method": "GET",
+      "path": "/api/v1/account/stats/media/top",
+      "query": {
+        "source": "1",
+        "after": "1783728000000",
+        "before": "1791417600000",
+        "orderBy": "completedViews",
+        "limit": "20",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "c517b7839bab6612dad1fbe4a5e2505e9735ad5e8fd32f49bba47d6f78d21030",
+      "response": {
+        "afterBucket": 1783728000000,
+        "beforeBucket": 1791417600000,
+        "source": 1,
+        "mediaType": null,
+        "offersCount": 20
+      },
+      "artifacts": [
+        {
+          "file": "content-ninety-day-23938.1812.json",
+          "label": "content-ninety-day",
+          "observedAt": "2026-10-08T20:17:19.733Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1812",
+          "sha256": "6fa9a5d3ec7ecf1f0b3bdecc275c315633b1a5c3d4f390154dd089a00bd18f7d"
+        }
+      ]
+    },
+    {
+      "id": "response-48ba7149412cd053",
+      "method": "GET",
+      "path": "/api/v1/account/stats/media/top",
+      "query": {
+        "source": "2",
+        "after": "1788912000000",
+        "before": "1791417600000",
+        "orderBy": "views",
+        "limit": "3",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "c00f31b58bd11ca9ff7e0dbae7184d5ef05b6860f94dda6dae35cf3d163670fb",
+      "response": {
+        "afterBucket": 1788912000000,
+        "beforeBucket": 1791417600000,
+        "source": 0,
+        "mediaType": null,
+        "offersCount": 3
+      },
+      "artifacts": [
+        {
+          "file": "earnings-gross-sort-23938.1539.json",
+          "label": "earnings-gross-sort",
+          "observedAt": "2026-10-08T20:09:44.033Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1539",
+          "sha256": "9d98e0ce1b77e68c055e385a01b4aac7cfda50207c113536c445fcee013c7756"
+        },
+        {
+          "file": "probe-media-top-source2.json",
+          "label": "media-top-source2",
+          "observedAt": "2026-10-08T20:08:16.051Z",
+          "methodEvidence": "explicit_get_probe",
+          "sha256": "0c51afb31305ec79d7f5a02baa8615c6a40eca3fa1ad0474274fdce1980eca25"
+        }
+      ]
+    },
+    {
+      "id": "response-5ec5e4ec41c1e367",
+      "method": "GET",
+      "path": "/api/v1/account/stats/media/top",
+      "query": {
+        "source": "0",
+        "after": "1790899200000",
+        "before": "1791417600000",
+        "orderBy": "watchMs",
+        "limit": "20",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "d24576e77c2525693fc90a6ae90b7139f5efec35b3d250ae578ea6aa4170ca2a",
+      "response": {
+        "afterBucket": 1790899200000,
+        "beforeBucket": 1791417600000,
+        "source": 0,
+        "mediaType": null,
+        "offersCount": 20
+      },
+      "artifacts": [
+        {
+          "file": "content-sort-watch-23938.1661.json",
+          "label": "content-sort-watch",
+          "observedAt": "2026-10-08T20:16:01.845Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1661",
+          "sha256": "1457daed001429e019b8e2882c844f25641b02a358871f901133d966310f86fe"
+        }
+      ]
+    },
+    {
+      "id": "response-602564b387b18f65",
+      "method": "GET",
+      "path": "/api/v1/account/stats/media/top",
+      "query": {
+        "source": "0",
+        "mediaType": "2",
+        "after": "1788912000000",
+        "before": "1791417600000",
+        "orderBy": "views",
+        "limit": "20",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "9e3ae38b19ed5f523484e51c4806b2a2eab341dfd8b73f1e4f39ef47aa075ddc",
+      "response": {
+        "afterBucket": 1788912000000,
+        "beforeBucket": 1791417600000,
+        "source": 0,
+        "mediaType": 2,
+        "offersCount": 20
+      },
+      "artifacts": [
+        {
+          "file": "content-seven-day-23938.1590.json",
+          "label": "content-seven-day",
+          "observedAt": "2026-10-08T20:15:25.141Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1590",
+          "sha256": "c0b894fcfc16c280412bfe3c4d131b58a29b383320ac9af64a873270c4e40ad4"
+        },
+        {
+          "file": "probe-media-top-views20.json",
+          "label": "media-top-views20",
+          "observedAt": "2026-10-08T20:12:30.859Z",
+          "methodEvidence": "explicit_get_probe",
+          "sha256": "19a926fc163bf47a84607811f4d7bc0c1c44db09cc94976e21f603c9be2aad2e"
+        }
+      ]
+    },
+    {
+      "id": "response-617790b81417fb91",
+      "method": "GET",
+      "path": "/api/v1/account/stats/media/top",
+      "query": {
+        "source": "0",
+        "after": "1783728000000",
+        "before": "1791417600000",
+        "orderBy": "completedViews",
+        "limit": "20",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "9ad1ef413906897a9294a9da405a9222a10408045977173050d3e59ac01a483a",
+      "response": {
+        "afterBucket": 1783728000000,
+        "beforeBucket": 1791417600000,
+        "source": 0,
+        "mediaType": null,
+        "offersCount": 20
+      },
+      "artifacts": [
+        {
+          "file": "content-ninety-day-23938.1806.json",
+          "label": "content-ninety-day",
+          "observedAt": "2026-10-08T20:17:19.602Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1806",
+          "sha256": "622027a3149cebe9296d20b72c2a42946933c1760cef7f438fc0efb175c8ef8a"
+        }
+      ]
+    },
+    {
+      "id": "response-63069fecad1e7704",
+      "method": "GET",
+      "path": "/api/v1/account/stats/media/top",
+      "query": {
+        "source": "0",
+        "after": "1790899200000",
+        "before": "1791417600000",
+        "orderBy": "views",
+        "limit": "20",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "78c6ffd6a9afaef3629c9a520bbbbeb26d29a1d05569a9f6ee85cf92e34e775f",
+      "response": {
+        "afterBucket": 1790899200000,
+        "beforeBucket": 1791417600000,
+        "source": 0,
+        "mediaType": null,
+        "offersCount": 20
+      },
+      "artifacts": [
+        {
+          "file": "content-seven-day-23938.1576.json",
+          "label": "content-seven-day",
+          "observedAt": "2026-10-08T20:15:25.082Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1576",
+          "sha256": "cb894c37e539c34e97beb24df93451cc557e994afedff5334646a37d314dcbfd"
+        }
+      ]
+    },
+    {
+      "id": "response-7489183a3f5558d3",
+      "method": "GET",
+      "path": "/api/v1/account/stats/media/top",
+      "query": {
+        "source": "1",
+        "after": "1788912000000",
+        "before": "1791417600000",
+        "orderBy": "views",
+        "limit": "3",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "40db4b76d65ba42411e4e9a50acd5a84692db97389346f9118a8615a62e9bfd3",
+      "response": {
+        "afterBucket": 1788912000000,
+        "beforeBucket": 1791417600000,
+        "source": 1,
+        "mediaType": null,
+        "offersCount": 3
+      },
+      "artifacts": [
+        {
+          "file": "overview-return-thirty-23938.1969.json",
+          "label": "overview-return-thirty",
+          "observedAt": "2026-10-08T20:20:17.033Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1969",
+          "sha256": "9a77486fb81998ff75e77e690c9d4743f1676b2c138e89e805851f81adf094b9"
+        }
+      ]
+    },
+    {
+      "id": "response-8390dc768778b8f7",
+      "method": "GET",
+      "path": "/api/v1/account/stats/media/top",
+      "query": {
+        "source": "1",
+        "after": "1788912000000",
+        "before": "1791417600000",
+        "orderBy": "views",
+        "limit": "20",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "221e6210a8e1710dae46b605313bcde1cef745c4a39478d053b29a19af40de01",
+      "response": {
+        "afterBucket": 1788912000000,
+        "beforeBucket": 1791417600000,
+        "source": 1,
+        "mediaType": null,
+        "offersCount": 20
+      },
+      "artifacts": [
+        {
+          "file": "content-timeline-23938.1355.json",
+          "label": "content-timeline",
+          "observedAt": "2026-10-08T19:56:27.852Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1355",
+          "sha256": "7367c9961491ab7702be9046806da5904ed6a32ea47a3fd826ad1398674f84d5"
+        }
+      ]
+    },
+    {
+      "id": "response-873726c096825e17",
+      "method": "GET",
+      "path": "/api/v1/account/stats/media/top",
+      "query": {
+        "source": "0",
+        "after": "1788912000000",
+        "before": "1791417600000",
+        "orderBy": "views",
+        "limit": "3",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "b2edf40dc2c912a51a1b4ab5e3696f354fbefedb650415ec1e1570cc8ff5d897",
+      "response": {
+        "afterBucket": 1788912000000,
+        "beforeBucket": 1791417600000,
+        "source": 0,
+        "mediaType": null,
+        "offersCount": 3
+      },
+      "artifacts": [
+        {
+          "file": "006-overview-initial.json",
+          "label": "overview-initial",
+          "observedAt": "2026-10-08T19:54:24.333Z",
+          "methodEvidence": "inferred_from_pinned_get_wrapper",
+          "requestId": "23938.1249",
+          "sha256": "dd5551e1a595f9392590d519d881061146e40ef8836f9e323655963311a62da2"
+        },
+        {
+          "file": "overview-final-refresh-23938.1998.json",
+          "label": "overview-final-refresh",
+          "observedAt": "2026-10-08T20:21:10.649Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1998",
+          "sha256": "595f14b15e05344520e4d1dec0bfe31ad980e61e87ffc7e94ec89dd0da185668"
+        },
+        {
+          "file": "overview-top-source-fyp-23938.1982.json",
+          "label": "overview-top-source-fyp",
+          "observedAt": "2026-10-08T20:20:21.724Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1982",
+          "sha256": "5797c67d499dd1258c017f165599d191b74e1a308c4d41d71418997261499eb1"
+        }
+      ]
+    },
+    {
+      "id": "response-8ce1c3ef973813ba",
+      "method": "GET",
+      "path": "/api/v1/account/stats/media/top",
+      "query": {
+        "source": "0",
+        "after": "1791417600000",
+        "before": "1791417600000",
+        "orderBy": "views",
+        "limit": "3",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "75035a636743e04607a2b2825cf3fa3a138ab8e485e868eba930f0552feadd2d",
+      "response": {
+        "afterBucket": 1791417600000,
+        "beforeBucket": 1791417600000,
+        "source": 0,
+        "mediaType": null,
+        "offersCount": 3
+      },
+      "artifacts": [
+        {
+          "file": "earnings-gross-sort-23938.1534.json",
+          "label": "earnings-gross-sort",
+          "observedAt": "2026-10-08T20:09:43.948Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1534",
+          "sha256": "a642315326f7e2fe7376d2e77a87bb11de1fb690c1bf83a8332ee9248c067e15"
+        },
+        {
+          "file": "probe-media-top-today.json",
+          "label": "media-top-today",
+          "observedAt": "2026-10-08T20:07:23.934Z",
+          "methodEvidence": "explicit_get_probe",
+          "sha256": "ba475814fad33837aed657632b4e8aafcf072e380af251cdbd0669b7731b4fff"
+        }
+      ]
+    },
+    {
+      "id": "response-aacd0d910745baa6",
+      "method": "GET",
+      "path": "/api/v1/account/stats/media/top",
+      "query": {
+        "source": "1",
+        "after": "1788912000000",
+        "before": "1791417600000",
+        "orderBy": "views",
+        "limit": "200",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "1d402e19b5a8e37179fd314ac37e3e9b736227393aa6336a8fd7cacb29ff980e",
+      "response": {
+        "afterBucket": 1788912000000,
+        "beforeBucket": 1791417600000,
+        "source": 1,
+        "mediaType": null,
+        "offersCount": 100
+      },
+      "artifacts": [
+        {
+          "file": "earnings-gross-sort-23938.1481.json",
+          "label": "earnings-gross-sort",
+          "observedAt": "2026-10-08T20:09:43.428Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1481",
+          "sha256": "d764b5cf75fb54b5d079b1742482440f3882490205c32a6fd437bef145571d14"
+        },
+        {
+          "file": "probe-media-top-timeline-limit200.json",
+          "label": "media-top-timeline-limit200",
+          "observedAt": "2026-10-08T20:00:47.787Z",
+          "methodEvidence": "explicit_get_probe",
+          "sha256": "0942e512d695c33eda269a3a83ffbda61a7813daba7f96ac0ef3c15dfae2368b"
+        }
+      ]
+    },
+    {
+      "id": "response-b05c988ff73646f7",
+      "method": "GET",
+      "path": "/api/v1/account/stats/media/top",
+      "query": {
+        "source": "1",
+        "after": "1788912000000",
+        "before": "1791417600000",
+        "orderBy": "views",
+        "limit": "1000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "4277714e1eb8bcbe07858b8d5bb33871cddd7d177ea48d86cdadb8c5b6c23d2e",
+      "response": {
+        "afterBucket": 1788912000000,
+        "beforeBucket": 1791417600000,
+        "source": 1,
+        "mediaType": null,
+        "offersCount": 100
+      },
+      "artifacts": [
+        {
+          "file": "earnings-gross-sort-23938.1509.json",
+          "label": "earnings-gross-sort",
+          "observedAt": "2026-10-08T20:09:43.536Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1509",
+          "sha256": "06606b3e1bd69c661cdc8fea179ac3346631bfe0db2a11f6303588c83d37b131"
+        },
+        {
+          "file": "probe-media-top-timeline-limit1000.json",
+          "label": "media-top-timeline-limit1000",
+          "observedAt": "2026-10-08T20:01:27.254Z",
+          "methodEvidence": "explicit_get_probe",
+          "sha256": "401bdae17471186b20b2888442c4a40c796a8e94ac2d6b5a5862fad55105277f"
+        }
+      ]
+    },
+    {
+      "id": "response-b15f24f5cf9afc32",
+      "method": "GET",
+      "path": "/api/v1/account/stats/media/top",
+      "query": {
+        "source": "0",
+        "after": "1788912000000",
+        "before": "1791417600000",
+        "orderBy": "views",
+        "limit": "20",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "556c742e1987c6519d1559b711eb4d84b941a276c559974547b182fd76b0b222",
+      "response": {
+        "afterBucket": 1788912000000,
+        "beforeBucket": 1791417600000,
+        "source": 0,
+        "mediaType": null,
+        "offersCount": 20
+      },
+      "artifacts": [
+        {
+          "file": "013-content-initial.json",
+          "label": "content-initial",
+          "observedAt": "2026-10-08T19:55:17.856Z",
+          "methodEvidence": "inferred_from_pinned_get_wrapper",
+          "requestId": "23938.1339",
+          "sha256": "20a578945cfa7e6d57f2e6c5962b2c7688404e840753d149e1871e06693540a7"
+        }
+      ]
+    },
+    {
+      "id": "response-b93d28ca62198f3f",
+      "method": "GET",
+      "path": "/api/v1/account/stats/media/top",
+      "query": {
+        "source": "1",
+        "mediaType": "1",
+        "after": "1788912000000",
+        "before": "1791417600000",
+        "orderBy": "views",
+        "limit": "20",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "ba033b1abf03804ad518b4e22c7ad501cefb799925c7ac9490097de2bf8a19dd",
+      "response": {
+        "afterBucket": 1788912000000,
+        "beforeBucket": 1791417600000,
+        "source": 1,
+        "mediaType": 1,
+        "offersCount": 20
+      },
+      "artifacts": [
+        {
+          "file": "content-images-23938.1369.json",
+          "label": "content-images",
+          "observedAt": "2026-10-08T19:56:57.377Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1369",
+          "sha256": "c65b5cb1aea138b90f98f7ce480401751f07a01673026f43c5fe05e5829a627a"
+        }
+      ]
+    },
+    {
+      "id": "response-bd03d0e97d454f22",
+      "method": "GET",
+      "path": "/api/v1/account/stats/media/top",
+      "query": {
+        "source": "0",
+        "mediaType": "2",
+        "after": "1788912000000",
+        "before": "1791417600000",
+        "orderBy": "watchLift",
+        "limit": "3",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "d0e5bf600016f3ac73cc8923425c7afdc1806d70daac1189fb7f22fc8eb4e99e",
+      "response": {
+        "afterBucket": 1788912000000,
+        "beforeBucket": 1791417600000,
+        "source": 0,
+        "mediaType": 2,
+        "offersCount": 3
+      },
+      "artifacts": [
+        {
+          "file": "earnings-gross-sort-23938.1537.json",
+          "label": "earnings-gross-sort",
+          "observedAt": "2026-10-08T20:09:44.013Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1537",
+          "sha256": "5f8b8c7e6e03c421bca404248c22f56bfb744bfa02d41ad423828ed9a9b0e626"
+        },
+        {
+          "file": "probe-media-top-watchlift.json",
+          "label": "media-top-watchlift",
+          "observedAt": "2026-10-08T20:08:11.563Z",
+          "methodEvidence": "explicit_get_probe",
+          "sha256": "dd9aaa6da721dec396373c3d4491845030f07a5d4efd8b433aa9808d6d1d3729"
+        }
+      ]
+    },
+    {
+      "id": "response-c3deead142803a4a",
+      "method": "GET",
+      "path": "/api/v1/account/stats/media/top",
+      "query": {
+        "source": "3",
+        "after": "1788912000000",
+        "before": "1791417600000",
+        "orderBy": "views",
+        "limit": "3",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "b2edf40dc2c912a51a1b4ab5e3696f354fbefedb650415ec1e1570cc8ff5d897",
+      "response": {
+        "afterBucket": 1788912000000,
+        "beforeBucket": 1791417600000,
+        "source": 0,
+        "mediaType": null,
+        "offersCount": 3
+      },
+      "artifacts": [
+        {
+          "file": "earnings-gross-sort-23938.1540.json",
+          "label": "earnings-gross-sort",
+          "observedAt": "2026-10-08T20:09:44.054Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1540",
+          "sha256": "f21189f2edca1b39ee3669fa6eb5d8bf09697bdb589c50152ff2d53b31019c51"
+        },
+        {
+          "file": "probe-media-top-source3.json",
+          "label": "media-top-source3",
+          "observedAt": "2026-10-08T20:08:20.595Z",
+          "methodEvidence": "explicit_get_probe",
+          "sha256": "25b006af5e3d09e4ad31c8ed6509aee36bad1d222e5260ebff9b350875390b26"
+        }
+      ]
+    },
+    {
+      "id": "response-c7f366ae05f5149e",
+      "method": "GET",
+      "path": "/api/v1/account/stats/media/top",
+      "query": {
+        "source": "1",
+        "after": "1789603200000",
+        "before": "1791417600000",
+        "orderBy": "views",
+        "limit": "20",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "75a49c102ec471ec0b14c08eebf23dd556e12e6a75c97f37fb94dfa99a7e8d2a",
+      "response": {
+        "afterBucket": 1789603200000,
+        "beforeBucket": 1791417600000,
+        "source": 1,
+        "mediaType": null,
+        "offersCount": 20
+      },
+      "artifacts": [
+        {
+          "file": "content-other-23938.1556.json",
+          "label": "content-other",
+          "observedAt": "2026-10-08T20:11:18.574Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1556",
+          "sha256": "75aecb18415f58c2d9800c6472987b09307e129616b5f6ed3fefe5251f3f87f2"
+        }
+      ]
+    },
+    {
+      "id": "response-cd63a41e82a514bd",
+      "method": "GET",
+      "path": "/api/v1/account/stats/media/top",
+      "query": {
+        "source": "1",
+        "mediaType": "1",
+        "after": "1783728000000",
+        "before": "1791417600000",
+        "orderBy": "completedViews",
+        "limit": "20",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "3d9f79e19c98aa2251921953ea10329ac9887825ad82fbc2df74da8eed07321a",
+      "response": {
+        "afterBucket": 1783728000000,
+        "beforeBucket": 1791417600000,
+        "source": 1,
+        "mediaType": 1,
+        "offersCount": 20
+      },
+      "artifacts": [
+        {
+          "file": "content-images-ninety-23938.1891.json",
+          "label": "content-images-ninety",
+          "observedAt": "2026-10-08T20:18:25.440Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1891",
+          "sha256": "27d61413e6be9a999cf46b6e86fe57d0ab18f333fd02cb6921782647ac07c764"
+        }
+      ]
+    },
+    {
+      "id": "response-eeb825a264e3c251",
+      "method": "GET",
+      "path": "/api/v1/account/stats/media/top",
+      "query": {
+        "source": "0",
+        "mediaType": "2",
+        "after": "1788912000000",
+        "before": "1791417600000",
+        "orderBy": "watchLift",
+        "limit": "20",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "7cf4494fc35078bc2685cf875bcff6bea6740d19449feb0072e35e82f0670258",
+      "response": {
+        "afterBucket": 1788912000000,
+        "beforeBucket": 1791417600000,
+        "source": 0,
+        "mediaType": 2,
+        "offersCount": 18
+      },
+      "artifacts": [
+        {
+          "file": "content-seven-day-23938.1589.json",
+          "label": "content-seven-day",
+          "observedAt": "2026-10-08T20:15:25.108Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1589",
+          "sha256": "9904bce0f4a2e110f059fc7a4014d25970fab6995278f188729773f38e166dcb"
+        },
+        {
+          "file": "probe-media-top-watchlift20.json",
+          "label": "media-top-watchlift20",
+          "observedAt": "2026-10-08T20:12:26.311Z",
+          "methodEvidence": "explicit_get_probe",
+          "sha256": "883ed2861d982b91a94537994f885526d6e97e1e012a6b5371586ea742e66e38"
+        }
+      ]
+    },
+    {
+      "id": "response-f5e677b8e4312f2a",
+      "method": "GET",
+      "path": "/api/v1/account/stats/media/top",
+      "query": {
+        "source": "4",
+        "after": "1790899200000",
+        "before": "1791417600000",
+        "orderBy": "views",
+        "limit": "20",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "9a70537599a2261402f3aad742e1335140c33a7a9fa692208d48f1a75d3d0130",
+      "response": {
+        "afterBucket": 1790899200000,
+        "beforeBucket": 1791417600000,
+        "source": 4,
+        "mediaType": null,
+        "offersCount": 0
+      },
+      "artifacts": [
+        {
+          "file": "content-seven-day-23938.1572.json",
+          "label": "content-seven-day",
+          "observedAt": "2026-10-08T20:15:24.908Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1572",
+          "sha256": "9be93006c39b9c1cfd6e3c4efa05bceb74af8b4d43f902d9a9f98c3b373391e3"
+        }
+      ]
+    },
+    {
+      "id": "response-fdeeee4b5d46fa96",
+      "method": "GET",
+      "path": "/api/v1/account/stats/media/top",
+      "query": {
+        "source": "0",
+        "after": "1790899200000",
+        "before": "1791417600000",
+        "orderBy": "completedViews",
+        "limit": "20",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "8d29b03c4c3c0dc4c0eff1d353f07e681ac86dfe34c206d4deb6b1f5d1341435",
+      "response": {
+        "afterBucket": 1790899200000,
+        "beforeBucket": 1791417600000,
+        "source": 0,
+        "mediaType": null,
+        "offersCount": 20
+      },
+      "artifacts": [
+        {
+          "file": "content-sort-completed-23938.1721.json",
+          "label": "content-sort-completed",
+          "observedAt": "2026-10-08T20:16:51.572Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1721",
+          "sha256": "a2d3f7ddefcd79f972061d9b100ef9374b7d197bb6b1776d7f7ea5bfd67470d8"
+        }
+      ]
+    },
+    {
+      "id": "response-8b96831a4cb57e65",
+      "method": "GET",
+      "path": "/api/v1/account/stats/posts",
+      "query": {
+        "postIds": {
+          "count": 2,
+          "references": [
+            "id:e86418f629ae",
+            "id:96d592340682"
+          ]
+        },
+        "after": "1788912000000",
+        "before": "1791417600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "5919da4991bdf98316bfc0554277352b7a5294426224fba95f394d42395487f0",
+      "response": {
+        "afterBucket": 1788912000000,
+        "beforeBucket": 1791417600000,
+        "rowsCount": 0
+      },
+      "artifacts": [
+        {
+          "file": "earnings-gross-sort-23938.1470.json",
+          "label": "earnings-gross-sort",
+          "observedAt": "2026-10-08T20:09:43.232Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1470",
+          "sha256": "aff44ae18e1beaa3a9a73365b21a2892e2ec38661d1f40b8e14743cb221b0623"
+        },
+        {
+          "file": "probe-posts-two-known-ids.json",
+          "label": "posts-two-known-ids",
+          "observedAt": "2026-10-08T19:59:31.801Z",
+          "methodEvidence": "explicit_get_probe",
+          "sha256": "13510a16f45f5f583163253eb792c8ed4fd077b00dc0aa55b72233a6c85aed56"
+        }
+      ]
+    },
+    {
+      "id": "response-e7ec01b901e41ee7",
+      "method": "GET",
+      "path": "/api/v1/account/stats/posts",
+      "query": {
+        "postIds": {
+          "count": 72,
+          "references": [
+            "id:45937e60cc45",
+            "id:c9679d7d90b3",
+            "id:570847e41d1a",
+            "id:78e1fff56042",
+            "id:b78fb8c377ec",
+            "id:14be1f639ed0",
+            "id:bc18f12c225e",
+            "id:a853a1ab65b0",
+            "id:5db830a085e4",
+            "id:989680c7e3bc",
+            "id:6838d8e19ddc",
+            "id:c8aa49825501",
+            "id:e5464bc42ef8",
+            "id:85097b5174e0",
+            "id:dd19a45e7c88",
+            "id:b868571fba27",
+            "id:f576b9d16a04",
+            "id:3076414da6a4",
+            "id:843633177c53",
+            "id:5a91f9521587",
+            "id:96d592340682",
+            "id:9d3eed8b8ef8",
+            "id:260015ce159e",
+            "id:c5dd5cde4fff",
+            "id:275a3232d96b",
+            "id:9521e0e30a59",
+            "id:5e40cb36924f",
+            "id:ae40871fd6f7",
+            "id:4463af310ee3",
+            "id:5683089fd217",
+            "id:5831de407abf",
+            "id:c338b33e1d4e",
+            "id:265e3b7d034b",
+            "id:89f3892e4e55",
+            "id:d712d37f4cf5",
+            "id:7b2802f41379",
+            "id:7ae8354fd866",
+            "id:2e96df5cf024",
+            "id:153bd3c8ee07",
+            "id:9be709f7c114",
+            "id:a9e664653bfd",
+            "id:8538f26b0309",
+            "id:02d88c6ae0f4",
+            "id:83a6520dc123",
+            "id:e86418f629ae",
+            "id:3df8aaba5580",
+            "id:b985f89b7ed6",
+            "id:535c01b021c4",
+            "id:025610708f26",
+            "id:ff0857f92915",
+            "id:357005b7b97c",
+            "id:2f7fd2984bad",
+            "id:59e24619ac39",
+            "id:0ba27ad21775",
+            "id:d1f89e73a0f3",
+            "id:b93ee3add09d",
+            "id:ffc0fc7801d6",
+            "id:5f9357da3468",
+            "id:63140966136c",
+            "id:b76b0be456b9",
+            "id:c09289b28fde",
+            "id:1b22248c8e0e",
+            "id:4433135dbf5f",
+            "id:9b90af30d0c7",
+            "id:a6c58f16c841",
+            "id:6fa9fdd2001f",
+            "id:49e1e6a8e02e",
+            "id:d0a6894fe4e8",
+            "id:5f550cad4bcc",
+            "id:52b986178318",
+            "id:6e5f95903c60",
+            "id:87bfaaee0d7d"
+          ]
+        },
+        "after": "1756944000000",
+        "before": "1791417600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "d21e3fced118d35068760b09a9742da12f34d6720bf15a8694905d7d6927920a",
+      "response": {
+        "afterBucket": 1756944000000,
+        "beforeBucket": 1791417600000,
+        "rowsCount": 1
+      },
+      "artifacts": [
+        {
+          "file": "earnings-gross-sort-23938.1506.json",
+          "label": "earnings-gross-sort",
+          "observedAt": "2026-10-08T20:09:43.452Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1506",
+          "sha256": "16090842269af0c9c6b29b8ae01816e45cf5de42ac712767ac073ccd7de05dde"
+        },
+        {
+          "file": "probe-posts-known-batch80-400d.json",
+          "label": "posts-known-batch80-400d",
+          "observedAt": "2026-10-08T20:01:22.186Z",
+          "methodEvidence": "explicit_get_probe",
+          "sha256": "6a8970e5b6cbb29e97498c022b53fbea8b4588644f15cd6bff1492e70ac8b384"
+        }
+      ]
+    },
+    {
+      "id": "response-1a1c23b192b26dcc",
+      "method": "GET",
+      "path": "/api/v1/account/stats/series",
+      "query": {
+        "family": "profile",
+        "granularity": "day",
+        "after": "1788912000000",
+        "before": "1791417600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "e324c9b49345e8641c2ad117cc7b2ce638329fdd0e134af77445c4edfdaa6368",
+      "response": {
+        "afterBucket": 1788912000000,
+        "beforeBucket": 1791417600000,
+        "granularity": "day",
+        "family": "profile",
+        "bucketField": "bucket",
+        "rowsCount": 85
+      },
+      "artifacts": [
+        {
+          "file": "earnings-gross-sort-23938.1472.json",
+          "label": "earnings-gross-sort",
+          "observedAt": "2026-10-08T20:09:43.252Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1472",
+          "sha256": "85b37cddb49ab21fe054e97ba822b6327cd5de281231794a2c6672226856838a"
+        },
+        {
+          "file": "probe-series-profile-day.json",
+          "label": "series-profile-day",
+          "observedAt": "2026-10-08T20:00:20.437Z",
+          "methodEvidence": "explicit_get_probe",
+          "sha256": "0f3f53e3bf076e0762f4beab1bfd7e6ff2d3f03bb223ea4aea1d6e698f634a4f"
+        }
+      ]
+    },
+    {
+      "id": "response-224f6cb6b5b1e3dc",
+      "method": "GET",
+      "path": "/api/v1/account/stats/series",
+      "query": {
+        "family": "revenue",
+        "granularity": "day",
+        "after": "1788220800000",
+        "before": "1788825600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "28290ef8f0cd8b9741e9878fec8814398ecb36c1d8e12fe75a5c954016ae83a4",
+      "response": {
+        "afterBucket": 1788220800000,
+        "beforeBucket": 1788825600000,
+        "granularity": "day",
+        "family": "revenue",
+        "bucketField": "bucket",
+        "rowsCount": 1
+      },
+      "artifacts": [
+        {
+          "file": "earnings-initial-23938.1438.json",
+          "label": "earnings-initial",
+          "observedAt": "2026-10-08T19:57:33.962Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1438",
+          "sha256": "ba4bb6e52c8080096e1f42416c0a09d66908722f2f88db2f6da59d4a3955a6dd"
+        }
+      ]
+    },
+    {
+      "id": "response-3050875aeedaa12d",
+      "method": "GET",
+      "path": "/api/v1/account/stats/series",
+      "query": {
+        "family": "views",
+        "granularity": "hour",
+        "after": "1791158400000",
+        "before": "1791417600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "698cf79744fc07b7b0f7ac42d5d613509a7d743db5a420d5ec6114c7b1d90368",
+      "response": {
+        "afterBucket": 1791158400000,
+        "beforeBucket": 1791417600000,
+        "granularity": "hour",
+        "family": "views",
+        "bucketField": "hourBucket",
+        "rowsCount": 101
+      },
+      "artifacts": [
+        {
+          "file": "001-overview-initial.json",
+          "label": "overview-initial",
+          "observedAt": "2026-10-08T19:54:24.024Z",
+          "methodEvidence": "inferred_from_pinned_get_wrapper",
+          "requestId": "23938.1251",
+          "sha256": "15fbd67e2241c5a72d99411327642331e9ad2e1d62d1292fe494c8ef9b10a68d"
+        }
+      ]
+    },
+    {
+      "id": "response-4e278a7ccddeff9b",
+      "method": "GET",
+      "path": "/api/v1/account/stats/series",
+      "query": {
+        "family": "follows",
+        "granularity": "day",
+        "after": "1788912000000",
+        "before": "1791417600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "20b0ef9dd4f1af65840db4f18effbd655fc9a96ba29ef1a092c3a2f46ee47395",
+      "response": {
+        "afterBucket": 1788912000000,
+        "beforeBucket": 1791417600000,
+        "granularity": "day",
+        "family": "follows",
+        "bucketField": "bucket",
+        "rowsCount": 19
+      },
+      "artifacts": [
+        {
+          "file": "earnings-gross-sort-23938.1473.json",
+          "label": "earnings-gross-sort",
+          "observedAt": "2026-10-08T20:09:43.276Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1473",
+          "sha256": "0669886e363462da1103ccef695e4aea07913c956ae0ca6243cce3559888c339"
+        },
+        {
+          "file": "probe-series-follows-day.json",
+          "label": "series-follows-day",
+          "observedAt": "2026-10-08T20:00:36.501Z",
+          "methodEvidence": "explicit_get_probe",
+          "sha256": "6eb7998ea56965acf1bd7d26587d6fe52ea469106ff54415cffc1cc3773cdc34"
+        }
+      ]
+    },
+    {
+      "id": "response-65230cf39a7e8b61",
+      "method": "GET",
+      "path": "/api/v1/account/stats/series",
+      "query": {
+        "family": "views",
+        "granularity": "hour",
+        "after": "1791158400000",
+        "before": "1791417600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "221acb4b35b8ef1afd6a1b8b6014ab10dc3c4aa171e4b18d1adaa0382494f9bb",
+      "response": {
+        "afterBucket": 1791158400000,
+        "beforeBucket": 1791417600000,
+        "granularity": "hour",
+        "family": "views",
+        "bucketField": "hourBucket",
+        "rowsCount": 102
+      },
+      "artifacts": [
+        {
+          "file": "overview-final-refresh-23938.2000.json",
+          "label": "overview-final-refresh",
+          "observedAt": "2026-10-08T20:21:10.577Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.2000",
+          "sha256": "950331ba721da9195bf8cd696d4ffc677e7d547085c8080f557e6480221d46d5"
+        },
+        {
+          "file": "overview-final-refresh-23938.2014.json",
+          "label": "overview-final-refresh",
+          "observedAt": "2026-10-08T20:21:10.665Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.2014",
+          "sha256": "c09b95d093b077a18b49b1c99876a0451f8afa646a6e60f6346f83008a2e1abc"
+        },
+        {
+          "file": "overview-return-thirty-23938.1965.json",
+          "label": "overview-return-thirty",
+          "observedAt": "2026-10-08T20:20:16.849Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1965",
+          "sha256": "002c7b1c540440484b0aeae8220c153b54909ace200ab825e00e0366a1b7e2c7"
+        }
+      ]
+    },
+    {
+      "id": "response-6dba3a8f471de981",
+      "method": "GET",
+      "path": "/api/v1/account/stats/series",
+      "query": {
+        "family": "views",
+        "granularity": "hour",
+        "after": "1791158400000",
+        "before": "1791417600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "e2edb35af5fdf60c403fd139e28e2eb2ec317a6f00fc33a368b4ad69b276a579",
+      "response": {
+        "afterBucket": 1791158400000,
+        "beforeBucket": 1791417600000,
+        "granularity": "hour",
+        "family": "views",
+        "bucketField": "hourBucket",
+        "rowsCount": 101
+      },
+      "artifacts": [
+        {
+          "file": "008-content-initial.json",
+          "label": "content-initial",
+          "observedAt": "2026-10-08T19:55:17.762Z",
+          "methodEvidence": "inferred_from_pinned_get_wrapper",
+          "requestId": "23938.1335",
+          "sha256": "4615275efe7cf96345375e5d32e921be4e8c41f89c78c8ee657237b148ad93b3"
+        },
+        {
+          "file": "008-overview-media-detail.json",
+          "label": "overview-media-detail",
+          "observedAt": "2026-10-08T19:54:39.466Z",
+          "methodEvidence": "inferred_from_pinned_get_wrapper",
+          "requestId": "23938.1286",
+          "sha256": "87a43e1bab6c7f224faa99d23563fe1ce1d906284c364f74251e159e0cedc1bc"
+        }
+      ]
+    },
+    {
+      "id": "response-753801637d7f12c5",
+      "method": "GET",
+      "path": "/api/v1/account/stats/series",
+      "query": {
+        "family": "views",
+        "granularity": "month",
+        "after": "1788912000000",
+        "before": "1791417600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "b65638fbb217070a4f5fc1c8d17d96fbe89b55d95a8f7de999e00f85093053fa",
+      "response": {
+        "afterBucket": 1788912000000,
+        "beforeBucket": 1791417600000,
+        "granularity": "day",
+        "family": "views",
+        "bucketField": "bucket",
+        "rowsCount": 60
+      },
+      "artifacts": [
+        {
+          "file": "earnings-gross-sort-23938.1542.json",
+          "label": "earnings-gross-sort",
+          "observedAt": "2026-10-08T20:09:44.071Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1542",
+          "sha256": "854bc71ea6f7dc9298b357cc83cd598f38d59aac64c0bed1f96ab4815e233ead"
+        },
+        {
+          "file": "probe-series-views-month.json",
+          "label": "series-views-month",
+          "observedAt": "2026-10-08T20:08:28.997Z",
+          "methodEvidence": "explicit_get_probe",
+          "sha256": "29ed71f97118d088a8bfc5bf41a8b47832a0baf2326c43fed96cb77be6da8d80"
+        }
+      ]
+    },
+    {
+      "id": "response-8697b46d6c292e22",
+      "method": "GET",
+      "path": "/api/v1/account/stats/series",
+      "query": {
+        "family": "subscriptions",
+        "granularity": "day",
+        "after": "1788912000000",
+        "before": "1791417600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "56470d24666e15e9c498bf5aeb097c3676210fbc9f2c3b90944b185bfe014f88",
+      "response": {
+        "afterBucket": 1788912000000,
+        "beforeBucket": 1791417600000,
+        "granularity": "day",
+        "family": "subscriptions",
+        "bucketField": "bucket",
+        "rowsCount": 1
+      },
+      "artifacts": [
+        {
+          "file": "earnings-gross-sort-23938.1476.json",
+          "label": "earnings-gross-sort",
+          "observedAt": "2026-10-08T20:09:43.325Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1476",
+          "sha256": "c444adee5e70873ab07c09561aa06f6a5175a79923acdb48bf15d76148416d82"
+        },
+        {
+          "file": "probe-series-subscriptions-day.json",
+          "label": "series-subscriptions-day",
+          "observedAt": "2026-10-08T20:00:41.282Z",
+          "methodEvidence": "explicit_get_probe",
+          "sha256": "f984e338e27f63b756c894868e65a75dbf338c328d2418ab2a701e0bae567ede"
+        }
+      ]
+    },
+    {
+      "id": "response-8b55b01b85e7e802",
+      "method": "GET",
+      "path": "/api/v1/account/stats/series",
+      "query": {
+        "family": "revenue",
+        "granularity": "month",
+        "after": "1559347200000",
+        "before": "1791417600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "2e8c9474003b18e5056adc942bd61939f479260651587f0599684aa34b3264f9",
+      "response": {
+        "afterBucket": 1561420800000,
+        "beforeBucket": 1791417600000,
+        "granularity": "month",
+        "family": "revenue",
+        "bucketField": "bucket",
+        "rowsCount": 44
+      },
+      "artifacts": [
+        {
+          "file": "earnings-initial-23938.1437.json",
+          "label": "earnings-initial",
+          "observedAt": "2026-10-08T19:57:33.991Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1437",
+          "sha256": "9f4ba273b0c1b51f2bea28207827c108642dd8dbf9478eaa97761347a071a094"
+        }
+      ]
+    },
+    {
+      "id": "response-a08d9ca192634ba0",
+      "method": "GET",
+      "path": "/api/v1/account/stats/series",
+      "query": {
+        "family": "views",
+        "granularity": "hour",
+        "after": "1559347200000",
+        "before": "1791417600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "b335b901b33eecc77485b860c8f7b24f8a136340eb5dad99ead4b2a81ae6beb4",
+      "response": {
+        "afterBucket": 1756944000000,
+        "beforeBucket": 1791417600000,
+        "granularity": "hour",
+        "family": "views",
+        "bucketField": "hourBucket",
+        "rowsCount": 365
+      },
+      "artifacts": [
+        {
+          "file": "earnings-gross-sort-23938.1516.json",
+          "label": "earnings-gross-sort",
+          "observedAt": "2026-10-08T20:09:43.692Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1516",
+          "sha256": "e347f3e8597ef45cabe422eff7b2d0208db9d49086233956cdff2216a8c92e95"
+        },
+        {
+          "file": "probe-series-views-hour-history-window.json",
+          "label": "series-views-hour-history-window",
+          "observedAt": "2026-10-08T20:02:59.696Z",
+          "methodEvidence": "explicit_get_probe",
+          "sha256": "22a1806a1774b4f9b691a311e59d09082e140eed7b85230a52461b8f6ec0eeab"
+        }
+      ]
+    },
+    {
+      "id": "response-a8bafa1e1a45d9b5",
+      "method": "GET",
+      "path": "/api/v1/account/stats/series",
+      "query": {
+        "family": "views",
+        "granularity": "day",
+        "after": "1559347200000",
+        "before": "1791417600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "1fa8c662d6e6d09386d4e54aeb1ebd18342c852748b40397242dbcab334afab6",
+      "response": {
+        "afterBucket": 1756944000000,
+        "beforeBucket": 1791417600000,
+        "granularity": "day",
+        "family": "views",
+        "bucketField": "bucket",
+        "rowsCount": 487
+      },
+      "artifacts": [
+        {
+          "file": "earnings-gross-sort-23938.1517.json",
+          "label": "earnings-gross-sort",
+          "observedAt": "2026-10-08T20:09:43.716Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1517",
+          "sha256": "dd5e1090bc75ec3b978321dc4bdeb49f6a46c6c99d9670dadc38982cd51b2523"
+        },
+        {
+          "file": "probe-series-views-day-history-window.json",
+          "label": "series-views-day-history-window",
+          "observedAt": "2026-10-08T20:03:04.383Z",
+          "methodEvidence": "explicit_get_probe",
+          "sha256": "f2f498bf0d3fb8bfe4657e4afd63528e6ec439a1978148f1d3d0a1cc28059598"
+        }
+      ]
+    },
+    {
+      "id": "response-b06190ba3c757509",
+      "method": "GET",
+      "path": "/api/v1/account/stats/series",
+      "query": {
+        "family": "revenue",
+        "granularity": "day",
+        "after": "1788912000000",
+        "before": "1791417600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "006b8c1704c7808bd7fa12ac5ddeb47eaa3b4a2518c60f4241f4da6782f02a0b",
+      "response": {
+        "afterBucket": 1788912000000,
+        "beforeBucket": 1791417600000,
+        "granularity": "day",
+        "family": "revenue",
+        "bucketField": "bucket",
+        "rowsCount": 1
+      },
+      "artifacts": [
+        {
+          "file": "earnings-initial-23938.1436.json",
+          "label": "earnings-initial",
+          "observedAt": "2026-10-08T19:57:34.156Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1436",
+          "sha256": "1958600e8249fd6b05868b62866eff1de0f4e20a4841a4c97ce816477af1b0ec"
+        },
+        {
+          "file": "earnings-initial-23938.1439.json",
+          "label": "earnings-initial",
+          "observedAt": "2026-10-08T19:57:34.013Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1439",
+          "sha256": "2c4a3c9957732572bd381208574e6f3c90317572b5c2f9cb7b987b65888a79e6"
+        }
+      ]
+    },
+    {
+      "id": "response-b6d42be602b6728a",
+      "method": "GET",
+      "path": "/api/v1/account/stats/series",
+      "query": {
+        "family": "views",
+        "granularity": "hour",
+        "after": "1791460800000",
+        "before": "1791464400000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "c94731422de5b97e425e22ac8e78d1e329f50dd557cf600d75d04eb990e81247",
+      "response": {
+        "afterBucket": 1791417600000,
+        "beforeBucket": 1791417600000,
+        "granularity": "hour",
+        "family": "views",
+        "bucketField": "hourBucket",
+        "rowsCount": 22
+      },
+      "artifacts": [
+        {
+          "file": "earnings-gross-sort-23938.1543.json",
+          "label": "earnings-gross-sort",
+          "observedAt": "2026-10-08T20:09:44.085Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1543",
+          "sha256": "5efe6322b50c5c30f85e8ee8a06c7c7417bbd60c57b76082af752383f6454eba"
+        },
+        {
+          "file": "probe-series-views-hour-intraday-bounds.json",
+          "label": "series-views-hour-intraday-bounds",
+          "observedAt": "2026-10-08T20:08:33.472Z",
+          "methodEvidence": "explicit_get_probe",
+          "sha256": "13c2732ae508109aa2625aed6c7746c9e99676f14f358b2c22d7459063efc2cb"
+        }
+      ]
+    },
+    {
+      "id": "response-c67729b5d9603a92",
+      "method": "GET",
+      "path": "/api/v1/account/stats/series",
+      "query": {
+        "family": "revenue",
+        "granularity": "day",
+        "after": "1714521600000",
+        "before": "1717113600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "9acf92aa5f35431a6fe1459040ce9a69a1b1ef4f4d20374e49dbf36bed725e74",
+      "response": {
+        "afterBucket": 1714521600000,
+        "beforeBucket": 1717113600000,
+        "granularity": "day",
+        "family": "revenue",
+        "bucketField": "bucket",
+        "rowsCount": 8
+      },
+      "artifacts": [
+        {
+          "file": "earnings-gross-sort-23938.1530.json",
+          "label": "earnings-gross-sort",
+          "observedAt": "2026-10-08T20:09:43.911Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1530",
+          "sha256": "89261646cbbc8e2bd4bdec51bbb61c2ad0068cc619355b3ff2eac532c088e074"
+        },
+        {
+          "file": "probe-series-revenue-shifted-may2024.json",
+          "label": "series-revenue-shifted-may2024",
+          "observedAt": "2026-10-08T20:05:17.798Z",
+          "methodEvidence": "explicit_get_probe",
+          "sha256": "2ec1901550c7d61b676d3f25bbe33b0e0db8b1e8e34bb4f2306822a0bd529cd5"
+        }
+      ]
+    },
+    {
+      "id": "response-d416d2db3edb0507",
+      "method": "GET",
+      "path": "/api/v1/account/stats/series",
+      "query": {
+        "family": "revenue",
+        "granularity": "day",
+        "after": "1789603200000",
+        "before": "1791417600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "37816ca6287dd9c172cef7f7d686b4b12a7cbaf02a848664a2e208ec9c7d3619",
+      "response": {
+        "afterBucket": 1789603200000,
+        "beforeBucket": 1791417600000,
+        "granularity": "day",
+        "family": "revenue",
+        "bucketField": "bucket",
+        "rowsCount": 1
+      },
+      "artifacts": [
+        {
+          "file": "earnings-custom-23938.1468.json",
+          "label": "earnings-custom",
+          "observedAt": "2026-10-08T19:59:12.764Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1468",
+          "sha256": "a1f03a65e1937a5494cb8152150a9111b6c10e20a6f6baaddd09d1098892ccc7"
+        }
+      ]
+    },
+    {
+      "id": "response-dd1e18cd77097226",
+      "method": "GET",
+      "path": "/api/v1/account/stats/series",
+      "query": {
+        "family": "revenue",
+        "granularity": "hour",
+        "after": "1789603200000",
+        "before": "1789603200000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "99c041e8d5d04c2e2265a5be918c32a2b749dcdaa9c887592c1ca9713ad4064d",
+      "response": {
+        "afterBucket": 1789603200000,
+        "beforeBucket": 1789603200000,
+        "granularity": "hour",
+        "family": "revenue",
+        "bucketField": "hourBucket",
+        "rowsCount": 1
+      },
+      "artifacts": [
+        {
+          "file": "earnings-gross-sort-23938.1531.json",
+          "label": "earnings-gross-sort",
+          "observedAt": "2026-10-08T20:09:43.928Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1531",
+          "sha256": "c66cbb90db27360e886408cf03e1a7d621d48d21edda686c1df29592d7ed6a95"
+        },
+        {
+          "file": "probe-series-revenue-hour-sep17.json",
+          "label": "series-revenue-hour-sep17",
+          "observedAt": "2026-10-08T20:05:22.301Z",
+          "methodEvidence": "explicit_get_probe",
+          "sha256": "2208bec01d6b8d728a2e434e0f72eb9d8474b3fed3abe753f05db5184116e65d"
+        }
+      ]
+    },
+    {
+      "id": "response-f07a52a3070de159",
+      "method": "GET",
+      "path": "/api/v1/account/stats/series",
+      "query": {
+        "family": "revenue",
+        "granularity": "hour",
+        "after": "1791158400000",
+        "before": "1791417600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "a1d5f72f4828555969d814d85f6d96f21b00436ae5d1dfea4280b45249dec862",
+      "response": {
+        "afterBucket": 1791158400000,
+        "beforeBucket": 1791417600000,
+        "granularity": "hour",
+        "family": "revenue",
+        "bucketField": "hourBucket",
+        "rowsCount": 0
+      },
+      "artifacts": [
+        {
+          "file": "earnings-initial-23938.1440.json",
+          "label": "earnings-initial",
+          "observedAt": "2026-10-08T19:57:34.072Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1440",
+          "sha256": "99453bc367acd8b29d20f07741fa43b5ebedb526e13512ff2297acb16a903767"
+        }
+      ]
+    },
+    {
+      "id": "response-039eb8bbcec2ee04",
+      "method": "GET",
+      "path": "/api/v1/account/stats/summary",
+      "query": {
+        "after": "1559347200000",
+        "before": "1791417600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "8d169f762c76952950c1370f74fd682edbd023421f42c46de5898d2388064e3b",
+      "response": {
+        "afterBucket": 1756944000000,
+        "beforeBucket": 1791417600000,
+        "previousAfterBucket": 1722384000000,
+        "previousBeforeBucket": 1756857600000,
+        "dataSince": 1789862400000,
+        "levelsCount": 18,
+        "viewsCount": 3
+      },
+      "artifacts": [
+        {
+          "file": "earnings-gross-sort-23938.1515.json",
+          "label": "earnings-gross-sort",
+          "observedAt": "2026-10-08T20:09:43.670Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1515",
+          "sha256": "f2f938dee7d0648573608126a63af310108d7e74841881fb21955ab7b15791df"
+        },
+        {
+          "file": "probe-summary-history-window.json",
+          "label": "summary-history-window",
+          "observedAt": "2026-10-08T20:02:55.174Z",
+          "methodEvidence": "explicit_get_probe",
+          "sha256": "914207625aacaf43b6ef1ca8792236581b68d92eb009a1efbe35a723fdf27747"
+        }
+      ]
+    },
+    {
+      "id": "response-08329f24cb3916be",
+      "method": "GET",
+      "path": "/api/v1/account/stats/summary",
+      "query": {
+        "after": "1788912000000",
+        "before": "1791417600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "220ce7a2542754d66ef43338888ccd7f80e518ebacfdff2aa980fdef66577506",
+      "response": {
+        "afterBucket": 1788912000000,
+        "beforeBucket": 1791417600000,
+        "previousAfterBucket": 1786320000000,
+        "previousBeforeBucket": 1788825600000,
+        "dataSince": 1789862400000,
+        "levelsCount": 18,
+        "viewsCount": 3
+      },
+      "artifacts": [
+        {
+          "file": "overview-final-refresh-23938.1996.json",
+          "label": "overview-final-refresh",
+          "observedAt": "2026-10-08T20:21:10.597Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1996",
+          "sha256": "0bf5470db475dbc8234768a3c4a840bc79334d6a029ccf952863d182ca8dbd1e"
+        },
+        {
+          "file": "overview-return-thirty-23938.1967.json",
+          "label": "overview-return-thirty",
+          "observedAt": "2026-10-08T20:20:17.015Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1967",
+          "sha256": "b0a059cebd64adc966ef5dca0ec1f53591f2ec0411c8680831216734a5f98858"
+        }
+      ]
+    },
+    {
+      "id": "response-2a54520b968b4fb5",
+      "method": "GET",
+      "path": "/api/v1/account/stats/summary",
+      "query": {
+        "after": "1788912000000",
+        "before": "1791417600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "7194806550ae2914f59a1e12f67853b7164a5a17f24e357321a6f68d706ddc02",
+      "response": {
+        "afterBucket": 1788912000000,
+        "beforeBucket": 1791417600000,
+        "previousAfterBucket": 1786320000000,
+        "previousBeforeBucket": 1788825600000,
+        "dataSince": 1789862400000,
+        "levelsCount": 18,
+        "viewsCount": 3
+      },
+      "artifacts": [
+        {
+          "file": "004-overview-initial.json",
+          "label": "overview-initial",
+          "observedAt": "2026-10-08T19:54:24.234Z",
+          "methodEvidence": "inferred_from_pinned_get_wrapper",
+          "requestId": "23938.1247",
+          "sha256": "3662d7dfef0ace42e5e78158096b63569aa0eaf0ffc2296a9329e27da5c0f139"
+        }
+      ]
+    },
+    {
+      "id": "response-5f8d6006df8abb95",
+      "method": "GET",
+      "path": "/api/v1/account/stats/summary",
+      "query": {
+        "after": "1714521600000",
+        "before": "1717113600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "d4e32750fc49a50cc5c127783d12550c61eca05facd0d322196a9034e825f9ce",
+      "response": {
+        "afterBucket": 1714521600000,
+        "beforeBucket": 1717113600000,
+        "previousAfterBucket": 1711843200000,
+        "previousBeforeBucket": 1714435200000,
+        "dataSince": 1789862400000,
+        "levelsCount": 0,
+        "viewsCount": 3
+      },
+      "artifacts": [
+        {
+          "file": "earnings-gross-sort-23938.1529.json",
+          "label": "earnings-gross-sort",
+          "observedAt": "2026-10-08T20:09:43.894Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1529",
+          "sha256": "c0f5560a6d61b3c1970c166ad360e5a81026abf2c47d193d7840310ade928d33"
+        },
+        {
+          "file": "probe-summary-shifted-may2024.json",
+          "label": "summary-shifted-may2024",
+          "observedAt": "2026-10-08T20:05:13.319Z",
+          "methodEvidence": "explicit_get_probe",
+          "sha256": "759d6b3a34978d115649c9316b78ef3a94f9efc6a19573d8a21ae98778a77292"
+        }
+      ]
+    },
+    {
+      "id": "response-63bd896bf0a8a79f",
+      "method": "GET",
+      "path": "/api/v1/account/stats/summary",
+      "query": {
+        "after": "1789603200000",
+        "before": "1791417600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "0c23e2ffba98c02d6abf50ea79e6ed8eb9fe9ac4ae75d9dfc82aca8abd895a6c",
+      "response": {
+        "afterBucket": 1789603200000,
+        "beforeBucket": 1791417600000,
+        "previousAfterBucket": 1787702400000,
+        "previousBeforeBucket": 1789516800000,
+        "dataSince": 1789862400000,
+        "levelsCount": 18,
+        "viewsCount": 3
+      },
+      "artifacts": [
+        {
+          "file": "content-other-23938.1555.json",
+          "label": "content-other",
+          "observedAt": "2026-10-08T20:11:18.521Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1555",
+          "sha256": "4b35f6074094af599f5bf6203d711a28053b402073870cfda04da11e4256b695"
+        },
+        {
+          "file": "earnings-custom-23938.1466.json",
+          "label": "earnings-custom",
+          "observedAt": "2026-10-08T19:59:12.802Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1466",
+          "sha256": "16792b91785c64f2aae8bf8f1bfb126866c7791bc43a59e7282b55addd6c05f9"
+        }
+      ]
+    },
+    {
+      "id": "response-653a62c9866bf92f",
+      "method": "GET",
+      "path": "/api/v1/account/stats/summary",
+      "query": {
+        "after": "1790899200000",
+        "before": "1791417600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "5371dbef6c52ae262440e28b35fa7f117ef2473b106f4acf2580ffd9f95f619e",
+      "response": {
+        "afterBucket": 1790899200000,
+        "beforeBucket": 1791417600000,
+        "previousAfterBucket": 1790294400000,
+        "previousBeforeBucket": 1790812800000,
+        "dataSince": 1789862400000,
+        "levelsCount": 6,
+        "viewsCount": 3
+      },
+      "artifacts": [
+        {
+          "file": "content-seven-day-23938.1571.json",
+          "label": "content-seven-day",
+          "observedAt": "2026-10-08T20:15:24.953Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1571",
+          "sha256": "43b75835d98f69115cc3cbb53e1f41217ae76fe35683e5869beb51052f0fb159"
+        }
+      ]
+    },
+    {
+      "id": "response-a8aa2f65ec5ae2b3",
+      "method": "GET",
+      "path": "/api/v1/account/stats/summary",
+      "query": {
+        "after": "1783728000000",
+        "before": "1791417600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "42045a1ee919be03de550198c0bf656b6d37856a31abde4d60ae9ad00f9afa75",
+      "response": {
+        "afterBucket": 1783728000000,
+        "beforeBucket": 1791417600000,
+        "previousAfterBucket": 1775952000000,
+        "previousBeforeBucket": 1783641600000,
+        "dataSince": 1789862400000,
+        "levelsCount": 18,
+        "viewsCount": 3
+      },
+      "artifacts": [
+        {
+          "file": "content-ninety-day-23938.1805.json",
+          "label": "content-ninety-day",
+          "observedAt": "2026-10-08T20:17:19.293Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1805",
+          "sha256": "d1aa5adfb696f84730823634fce5c0d2bbfc22e3f3e25ff8deb78c7b6463dbfb"
+        }
+      ]
+    },
+    {
+      "id": "response-b2a1649e9b93d7be",
+      "method": "GET",
+      "path": "/api/v1/account/stats/summary",
+      "query": {
+        "after": "1783728000000",
+        "before": "1791417600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "a276d148c3619ae14ec62379dc649e46567e4ae6076b4834dde4f495bd59668e",
+      "response": {
+        "afterBucket": 1783728000000,
+        "beforeBucket": 1791417600000,
+        "previousAfterBucket": 1775952000000,
+        "previousBeforeBucket": 1783641600000,
+        "dataSince": 1789862400000,
+        "levelsCount": 18,
+        "viewsCount": 3
+      },
+      "artifacts": [
+        {
+          "file": "audience-ninety-day-23938.1945.json",
+          "label": "audience-ninety-day",
+          "observedAt": "2026-10-08T20:19:32.617Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1945",
+          "sha256": "b58b6d03bb680d360a3e13519b7685849dd8f9641c9ff374965fc930cd3f5231"
+        }
+      ]
+    },
+    {
+      "id": "response-cb41d935fe7c4fa6",
+      "method": "GET",
+      "path": "/api/v1/account/stats/summary",
+      "query": {
+        "after": "1788912000000",
+        "before": "1791417600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "a65b2387028d3a83a999ba7f7fdbff9929024124fd6e1a578911c953ee415029",
+      "response": {
+        "afterBucket": 1788912000000,
+        "beforeBucket": 1791417600000,
+        "previousAfterBucket": 1786320000000,
+        "previousBeforeBucket": 1788825600000,
+        "dataSince": 1789862400000,
+        "levelsCount": 18,
+        "viewsCount": 3
+      },
+      "artifacts": [
+        {
+          "file": "011-content-initial.json",
+          "label": "content-initial",
+          "observedAt": "2026-10-08T19:55:17.815Z",
+          "methodEvidence": "inferred_from_pinned_get_wrapper",
+          "requestId": "23938.1338",
+          "sha256": "db0ce2d2274caebd003794bf0905bc6bb13178cc1cf64d7be6f715938ca63bba"
+        },
+        {
+          "file": "audience-initial-23938.1419.json",
+          "label": "audience-initial",
+          "observedAt": "2026-10-08T19:57:07.643Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1419",
+          "sha256": "0fdc8818c812646222a52a84ab5c99343abedfdaea3eeb9b756e306fe7e49273"
+        },
+        {
+          "file": "earnings-initial-23938.1434.json",
+          "label": "earnings-initial",
+          "observedAt": "2026-10-08T19:57:34.038Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1434",
+          "sha256": "12b14677b8ce9354e79a29621932549aa19e51c8bb53663273cec0e286df6640"
+        }
+      ]
+    },
+    {
+      "id": "response-dd2cd5ca26241624",
+      "method": "GET",
+      "path": "/api/v1/account/stats/summary",
+      "query": {
+        "after": "1783728000000",
+        "before": "1791417600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "3d4943053201b434283525ad5996807a8f60a328eeb77760f17f8fdd91c3e618",
+      "response": {
+        "afterBucket": 1783728000000,
+        "beforeBucket": 1791417600000,
+        "previousAfterBucket": 1775952000000,
+        "previousBeforeBucket": 1783641600000,
+        "dataSince": 1789862400000,
+        "levelsCount": 18,
+        "viewsCount": 3
+      },
+      "artifacts": [
+        {
+          "file": "overview-return-thirty-23938.1961.json",
+          "label": "overview-return-thirty",
+          "observedAt": "2026-10-08T20:20:16.958Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1961",
+          "sha256": "5ee07263fdbccaa653b3bca4ab70db744864a4a302f1a9aed1b917d54015a57a"
+        }
+      ]
+    },
+    {
+      "id": "response-2c6c3dba638eaa6a",
+      "method": "GET",
+      "path": "/api/v1/account/stats/tags",
+      "query": {
+        "source": "0",
+        "kind": "1",
+        "after": "1783728000000",
+        "before": "1791417600000",
+        "orderBy": "views",
+        "limit": "10",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "a744f4934b785c2c156649ccf0fb434628bb99baa71a7d7ff3a92aed10f5d751",
+      "response": {
+        "afterBucket": 1783728000000,
+        "beforeBucket": 1791417600000,
+        "source": 0,
+        "kind": 1,
+        "rowsCount": 10
+      },
+      "artifacts": [
+        {
+          "file": "content-ninety-day-23938.1809.json",
+          "label": "content-ninety-day",
+          "observedAt": "2026-10-08T20:17:19.633Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1809",
+          "sha256": "ddc993d4d090171ecebe6ddfb36422bd6122d9f8d0e50407813f652bc9a34d26"
+        }
+      ]
+    },
+    {
+      "id": "response-44b49de0821cffbc",
+      "method": "GET",
+      "path": "/api/v1/account/stats/tags",
+      "query": {
+        "source": "1",
+        "kind": "1",
+        "after": "1788912000000",
+        "before": "1791417600000",
+        "orderBy": "views",
+        "limit": "10",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "2975f1ae423ac9229023306fb95d40ef8810eb45e3108487c27d4b928b326acd",
+      "response": {
+        "afterBucket": 1788912000000,
+        "beforeBucket": 1791417600000,
+        "source": 1,
+        "kind": 1,
+        "rowsCount": 0
+      },
+      "artifacts": [
+        {
+          "file": "content-timeline-23938.1358.json",
+          "label": "content-timeline",
+          "observedAt": "2026-10-08T19:56:27.785Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1358",
+          "sha256": "b531a0feca4e4f8cee7e65c623b4ad615bd058683f92c22858e98a4ccfa435ca"
+        }
+      ]
+    },
+    {
+      "id": "response-500d5733192af610",
+      "method": "GET",
+      "path": "/api/v1/account/stats/tags",
+      "query": {
+        "source": "0",
+        "kind": "1",
+        "after": "1788912000000",
+        "before": "1791417600000",
+        "orderBy": "views",
+        "limit": "200",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "5e06c1d9cbc9224db8bcc18adaa578b37570c817241e84cb9150b14ce17cb0ff",
+      "response": {
+        "afterBucket": 1788912000000,
+        "beforeBucket": 1791417600000,
+        "source": 0,
+        "kind": 1,
+        "rowsCount": 46
+      },
+      "artifacts": [
+        {
+          "file": "earnings-gross-sort-23938.1511.json",
+          "label": "earnings-gross-sort",
+          "observedAt": "2026-10-08T20:09:43.578Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1511",
+          "sha256": "dce5718088dfff9a7b9415d28728cdd0b93e1d4502fb27c2039ddb142f4bb4e3"
+        },
+        {
+          "file": "probe-tags-kind1-limit200.json",
+          "label": "tags-kind1-limit200",
+          "observedAt": "2026-10-08T20:02:07.013Z",
+          "methodEvidence": "explicit_get_probe",
+          "sha256": "d4f5705754486490b6f85554ed9c8f1d9e5b4668c4ddc36525f03cfea8c542aa"
+        }
+      ]
+    },
+    {
+      "id": "response-583be244d75a56cf",
+      "method": "GET",
+      "path": "/api/v1/account/stats/tags",
+      "query": {
+        "source": "4",
+        "kind": "1",
+        "after": "1790899200000",
+        "before": "1791417600000",
+        "orderBy": "views",
+        "limit": "10",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "5ebd1a5edf682bb0ba2f91deb09d9a1ea0fec15d5654ea1071d044fde8dec0d6",
+      "response": {
+        "afterBucket": 1790899200000,
+        "beforeBucket": 1791417600000,
+        "source": 4,
+        "kind": 1,
+        "rowsCount": 0
+      },
+      "artifacts": [
+        {
+          "file": "content-seven-day-23938.1575.json",
+          "label": "content-seven-day",
+          "observedAt": "2026-10-08T20:15:24.880Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1575",
+          "sha256": "7486c1e29d4a50fa1e4a261deba01aabb67edf1a041934ada06eb7bdaf3af7ee"
+        }
+      ]
+    },
+    {
+      "id": "response-616230d83799a98e",
+      "method": "GET",
+      "path": "/api/v1/account/stats/tags",
+      "query": {
+        "source": "1",
+        "kind": "1",
+        "after": "1783728000000",
+        "before": "1791417600000",
+        "orderBy": "views",
+        "limit": "10",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "983a956c78be4037a369351b8b9cd2858c635740060e8b8e9f79b64836805156",
+      "response": {
+        "afterBucket": 1783728000000,
+        "beforeBucket": 1791417600000,
+        "source": 1,
+        "kind": 1,
+        "rowsCount": 0
+      },
+      "artifacts": [
+        {
+          "file": "content-ninety-day-23938.1815.json",
+          "label": "content-ninety-day",
+          "observedAt": "2026-10-08T20:17:19.653Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1815",
+          "sha256": "987946cc50229cbc7b54edf1c813858dcf33bebec6577666a528c658c9a19af2"
+        }
+      ]
+    },
+    {
+      "id": "response-877e3818ff59ec45",
+      "method": "GET",
+      "path": "/api/v1/account/stats/tags",
+      "query": {
+        "source": "0",
+        "kind": "1",
+        "after": "1788912000000",
+        "before": "1791417600000",
+        "orderBy": "views",
+        "limit": "10",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "07b47925ad37f0853496e2c7915ab7da652f909e88323e9e5715f16f6be4a012",
+      "response": {
+        "afterBucket": 1788912000000,
+        "beforeBucket": 1791417600000,
+        "source": 0,
+        "kind": 1,
+        "rowsCount": 10
+      },
+      "artifacts": [
+        {
+          "file": "012-content-initial.json",
+          "label": "content-initial",
+          "observedAt": "2026-10-08T19:55:17.834Z",
+          "methodEvidence": "inferred_from_pinned_get_wrapper",
+          "requestId": "23938.1342",
+          "sha256": "09babca00c3e03719d898c4897ea36afdb3bafac590ccd7c61369bc11f34471a"
+        }
+      ]
+    },
+    {
+      "id": "response-b31c12f74e7a3b58",
+      "method": "GET",
+      "path": "/api/v1/account/stats/tags",
+      "query": {
+        "source": "0",
+        "kind": "1",
+        "after": "1781049600000",
+        "before": "1791417600000",
+        "orderBy": "views",
+        "limit": "200",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "703d41b8fcfb5acd3530236509577ca6194bcbb929fd77bfc669d831ee6b4a4a",
+      "response": {
+        "afterBucket": 1781049600000,
+        "beforeBucket": 1791417600000,
+        "source": 0,
+        "kind": 1,
+        "rowsCount": 73
+      },
+      "artifacts": [
+        {
+          "file": "audience-ninety-day-23938.1957.json",
+          "label": "audience-ninety-day",
+          "observedAt": "2026-10-08T20:19:32.861Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1957",
+          "sha256": "46aee7480ecd3e2cc7592680dc0495fdcfa3afa98b9e7d0c88718c3b915eab9e"
+        },
+        {
+          "file": "probe-tags-lift-window121.json",
+          "label": "tags-lift-window121",
+          "observedAt": "2026-10-08T20:19:05.473Z",
+          "methodEvidence": "explicit_get_probe",
+          "sha256": "d19607f4375032b1c14f47f9c57e78d463fb4a8910485ba2616a9f5dd2586f08"
+        }
+      ]
+    },
+    {
+      "id": "response-c304b97e3792f935",
+      "method": "GET",
+      "path": "/api/v1/account/stats/tags",
+      "query": {
+        "source": "0",
+        "kind": "1",
+        "after": "1559347200000",
+        "before": "1791417600000",
+        "orderBy": "views",
+        "limit": "200",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "e17242f8410d088416d9b2113d7c0cd8f7d933e817b3a4217d395d657ad89d0e",
+      "response": {
+        "afterBucket": 1756944000000,
+        "beforeBucket": 1791417600000,
+        "source": 0,
+        "kind": 1,
+        "rowsCount": 112
+      },
+      "artifacts": [
+        {
+          "file": "earnings-gross-sort-23938.1521.json",
+          "label": "earnings-gross-sort",
+          "observedAt": "2026-10-08T20:09:43.789Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1521",
+          "sha256": "3415d3f1f4fb5014fdaa96b42690c8ec9468396409be8eba05678ab5114bd322"
+        },
+        {
+          "file": "probe-tags-history-window.json",
+          "label": "tags-history-window",
+          "observedAt": "2026-10-08T20:03:24.935Z",
+          "methodEvidence": "explicit_get_probe",
+          "sha256": "494fab094318d6e30184bff60253a5d431190fbada483db3370c6c22106ccf25"
+        }
+      ]
+    },
+    {
+      "id": "response-cf5d51ae70cf5c6f",
+      "method": "GET",
+      "path": "/api/v1/account/stats/tags",
+      "query": {
+        "source": "4",
+        "kind": "1",
+        "after": "1789603200000",
+        "before": "1791417600000",
+        "orderBy": "views",
+        "limit": "10",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "ef37a54c6a74708b1cb474a5e0ef592930c1137b17d69a465145f9ce02d742b4",
+      "response": {
+        "afterBucket": 1789603200000,
+        "beforeBucket": 1791417600000,
+        "source": 4,
+        "kind": 1,
+        "rowsCount": 0
+      },
+      "artifacts": [
+        {
+          "file": "content-other-23938.1566.json",
+          "label": "content-other",
+          "observedAt": "2026-10-08T20:11:18.643Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1566",
+          "sha256": "0aac1ad7d21f2e216bee6fdd30ba40d86713a19215b0a49b29a663b800d3b647"
+        }
+      ]
+    },
+    {
+      "id": "response-e5e4ce1b98df33cb",
+      "method": "GET",
+      "path": "/api/v1/account/stats/tags",
+      "query": {
+        "source": "0",
+        "kind": "1",
+        "after": "1790899200000",
+        "before": "1791417600000",
+        "orderBy": "views",
+        "limit": "10",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "d0ee172a05a168d4fbdb302321e9a6281ee7dc196d3d95f0089897b226a27df4",
+      "response": {
+        "afterBucket": 1790899200000,
+        "beforeBucket": 1791417600000,
+        "source": 0,
+        "kind": 1,
+        "rowsCount": 10
+      },
+      "artifacts": [
+        {
+          "file": "content-seven-day-23938.1579.json",
+          "label": "content-seven-day",
+          "observedAt": "2026-10-08T20:15:25.036Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1579",
+          "sha256": "dec9f07f24790dddd9adf2ec2a4252b16587ed54f3cc1d667fa54d1a950e9f75"
+        }
+      ]
+    },
+    {
+      "id": "response-f590e8b73a8abe81",
+      "method": "GET",
+      "path": "/api/v1/account/stats/tags",
+      "query": {
+        "source": "1",
+        "kind": "1",
+        "after": "1789603200000",
+        "before": "1791417600000",
+        "orderBy": "views",
+        "limit": "10",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "a158912f4e5f9893ac8688b0f1cc0f1a187ae8f2e51403b6dc010f095331ccda",
+      "response": {
+        "afterBucket": 1789603200000,
+        "beforeBucket": 1791417600000,
+        "source": 1,
+        "kind": 1,
+        "rowsCount": 0
+      },
+      "artifacts": [
+        {
+          "file": "content-other-23938.1559.json",
+          "label": "content-other",
+          "observedAt": "2026-10-08T20:11:18.497Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1559",
+          "sha256": "a814570aecc6ddd2c3fc045815d2d8a695d333649073d6b54fb6775a51110d78"
+        }
+      ]
+    },
+    {
+      "id": "response-f6b9475208d608a7",
+      "method": "GET",
+      "path": "/api/v1/account/stats/tags",
+      "query": {
+        "source": "0",
+        "kind": "2",
+        "after": "1788912000000",
+        "before": "1791417600000",
+        "orderBy": "views",
+        "limit": "100",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "e6148601ce7fa4be0ecb97de91d0def26ae863acf5f513d6a10089824bd2591e",
+      "response": {
+        "afterBucket": 1788912000000,
+        "beforeBucket": 1791417600000,
+        "source": 0,
+        "kind": 2,
+        "rowsCount": 0
+      },
+      "artifacts": [
+        {
+          "file": "earnings-gross-sort-23938.1510.json",
+          "label": "earnings-gross-sort",
+          "observedAt": "2026-10-08T20:09:43.559Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1510",
+          "sha256": "dcd0545c72900af97290208032968a642c48d736bd925a2f22576daaad12c20f"
+        },
+        {
+          "file": "probe-tags-post-kind2.json",
+          "label": "tags-post-kind2",
+          "observedAt": "2026-10-08T20:02:02.521Z",
+          "methodEvidence": "explicit_get_probe",
+          "sha256": "22783a489d802f7df98919599014e24bf6becca71231e7a347a62bb357dcbc6d"
+        }
+      ]
+    },
+    {
+      "id": "response-fdf2ad5b9bdf67ec",
+      "method": "GET",
+      "path": "/api/v1/account/stats/tags",
+      "query": {
+        "source": "0",
+        "kind": "1",
+        "after": "1781136000000",
+        "before": "1791417600000",
+        "orderBy": "views",
+        "limit": "200",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "409d34bd6e41cd3bf341a39dc0626389ed589559ee893c6e52458278f5fa77f7",
+      "response": {
+        "afterBucket": 1781136000000,
+        "beforeBucket": 1791417600000,
+        "source": 0,
+        "kind": 1,
+        "rowsCount": 72
+      },
+      "artifacts": [
+        {
+          "file": "audience-ninety-day-23938.1956.json",
+          "label": "audience-ninety-day",
+          "observedAt": "2026-10-08T20:19:32.832Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1956",
+          "sha256": "fdb5e8c9a6e80402d98a00ee3611659f44b6c2dbd8546b370dc8958d5646f932"
+        },
+        {
+          "file": "probe-tags-lift-window120.json",
+          "label": "tags-lift-window120",
+          "observedAt": "2026-10-08T20:19:00.861Z",
+          "methodEvidence": "explicit_get_probe",
+          "sha256": "286d2c7abad86b41dcfb8411dac64c4b41aaad0998a8d6b3c285cfa32f3f28b9"
+        }
+      ]
+    },
+    {
+      "id": "response-93359fb5a1d962ff",
+      "method": "GET",
+      "path": "/api/v1/account/wallets/earnings",
+      "query": {
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "825809e2c4df6fed993db85a9204c0e40e3a2f2375e202f485b7a65f37860061",
+      "response": {},
+      "artifacts": [
+        {
+          "file": "earnings-initial-23938.1441.json",
+          "label": "earnings-initial",
+          "observedAt": "2026-10-08T19:57:34.174Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1441",
+          "sha256": "3061895b02ef3d4ec185094b88ecaaf31bf9857a9427524428ea2895f074dd6d"
+        }
+      ]
+    },
+    {
+      "id": "response-ffacb8def4354cc4",
+      "method": "GET",
+      "path": "/api/v1/account/wallets/earnings/transactions",
+      "query": {
+        "before": "",
+        "after": "",
+        "limit": "5",
+        "offset": "0",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "1be348fb25279025824dcb11971303611c6f1a244e294dc6b2799a20013e5261",
+      "response": {
+        "dataCount": 5
+      },
+      "artifacts": [
+        {
+          "file": "earnings-initial-23938.1433.json",
+          "label": "earnings-initial",
+          "observedAt": "2026-10-08T19:57:34.135Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1433",
+          "sha256": "cd79544e7cb6846e350c431ed12a24a72f5e60d98ba1ca1b305fcc4f4e2d1bcd"
+        }
+      ]
+    },
+    {
+      "id": "response-0760708c18886d9f",
+      "method": "GET",
+      "path": "/api/v1/account/wallets/earnings/transactions/accounts",
+      "query": {
+        "correlationAccountId": {
+          "count": 1,
+          "references": [
+            "id:190509a590d7"
+          ]
+        },
+        "before": "1791504000000",
+        "after": "1786233600000",
+        "cursor": "0",
+        "limit": "30",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "0962c3fa686c5403423cd781e3608a20677b0d5e47d1d3faed85cc5840b80701",
+      "response": {
+        "hasMore": false,
+        "dataCount": 4
+      },
+      "artifacts": [
+        {
+          "file": "fan-lifetime-23938.1462.json",
+          "label": "fan-lifetime",
+          "observedAt": "2026-10-08T19:58:41.103Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1462",
+          "sha256": "555bf94a6111cdfe74e8ad0b590cfee207593e3ebd68fda5ec97286b0a615a67"
+        }
+      ]
+    },
+    {
+      "id": "response-522c2ab77eb293b1",
+      "method": "GET",
+      "path": "/api/v1/account/wallets/earnings/transactions/accounts",
+      "query": {
+        "correlationAccountId": {
+          "count": 1,
+          "references": [
+            "id:190509a590d7"
+          ]
+        },
+        "before": "1791504000000",
+        "after": "1788912000000",
+        "cursor": "0",
+        "limit": "30",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "5b8b97290aa0643d50f965f1cac3d36f36d91a1b1fd1ede0ce84d770a90037e2",
+      "response": {
+        "hasMore": false,
+        "dataCount": 2
+      },
+      "artifacts": [
+        {
+          "file": "fan-detail-23938.1457.json",
+          "label": "fan-detail",
+          "observedAt": "2026-10-08T19:58:25.596Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1457",
+          "sha256": "b435bbfff6a5f522f3742f61151d5dd7fa48ec86130fd14690cbe36e24c9dc8d"
+        }
+      ]
+    },
+    {
+      "id": "response-7001b6d2d12f4ef3",
+      "method": "GET",
+      "path": "/api/v1/account/wallets/earnings/transactions/accounts",
+      "query": {
+        "correlationAccountId": {
+          "count": 1,
+          "references": [
+            "id:b47c130d56d5"
+          ]
+        },
+        "after": "1559347200000",
+        "before": "1791504000000",
+        "cursor": "0",
+        "limit": "30",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "0e22bc036709a394a6e1bca978f8044c1516004ac475891a08992673ccc165d7",
+      "response": {
+        "hasMore": true,
+        "dataCount": 30
+      },
+      "artifacts": [
+        {
+          "file": "earnings-gross-sort-23938.1514.json",
+          "label": "earnings-gross-sort",
+          "observedAt": "2026-10-08T20:09:43.628Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1514",
+          "sha256": "b951f075be72cac34bd35b721596ccdbf440d11ca150a5732a24fe60b75ea615"
+        },
+        {
+          "file": "probe-fan-transactions-page1.json",
+          "label": "fan-transactions-page1",
+          "observedAt": "2026-10-08T20:02:22.337Z",
+          "methodEvidence": "explicit_get_probe",
+          "sha256": "fd99370ddba800519a854332f007e888c316eb8d4ee0165a4174a1d160f91222"
+        }
+      ]
+    },
+    {
+      "id": "response-d242c1fd947c2a5c",
+      "method": "GET",
+      "path": "/api/v1/account/wallets/earnings/transactions/accounts",
+      "query": {
+        "correlationAccountId": {
+          "count": 1,
+          "references": [
+            "id:b47c130d56d5"
+          ]
+        },
+        "after": "1559347200000",
+        "before": "1791504000000",
+        "cursor": {
+          "count": 1,
+          "references": [
+            "id:ca95e0a9c5c0"
+          ]
+        },
+        "limit": "30",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "ab457cb736083da6e4943f708f0df6d292cd2c0b65fde3bdf7394c910c1a6608",
+      "response": {
+        "hasMore": true,
+        "dataCount": 30
+      },
+      "artifacts": [
+        {
+          "file": "earnings-gross-sort-23938.1524.json",
+          "label": "earnings-gross-sort",
+          "observedAt": "2026-10-08T20:09:43.818Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1524",
+          "sha256": "2298569e153acbdd8b18088b1020358f57d7fd424ef7367aa3f9f5fc374dcc38"
+        },
+        {
+          "file": "probe-fan-transactions-page2.json",
+          "label": "fan-transactions-page2",
+          "observedAt": "2026-10-08T20:03:46.446Z",
+          "methodEvidence": "explicit_get_probe",
+          "sha256": "c8a6b6e210d18ba450323ff121e9ea757330f5327e6b42c166473919c90a6dbc"
+        }
+      ]
+    },
+    {
+      "id": "response-9cb4db7bf273f55d",
+      "method": "GET",
+      "path": "/api/v1/trackinglinks",
+      "query": {
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "13dad6776ade1858ee71874373c5418f6f24717662632313b180873a59d380a6",
+      "response": {},
+      "artifacts": [
+        {
+          "file": "audience-initial-23938.1421.json",
+          "label": "audience-initial",
+          "observedAt": "2026-10-08T19:57:07.658Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1421",
+          "sha256": "d2a6220e3d4e2e17bbd420c189ec512647dbdab0b2ca91a4ce1eaec4c0799f59"
+        },
+        {
+          "file": "audience-ninety-day-23938.1947.json",
+          "label": "audience-ninety-day",
+          "observedAt": "2026-10-08T20:19:32.658Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1947",
+          "sha256": "022c5af9c2c3ae3c7c6b390cb0170e324c06effa698a369ded08e49d918d148c"
+        }
+      ]
+    },
+    {
+      "id": "response-07b0ac41fe39f10b",
+      "method": "GET",
+      "path": "/api/v1/trackinglinks/revenuestats",
+      "query": {
+        "trackingLinkId": {
+          "count": 1,
+          "references": [
+            "id:2d7ba2049c46"
+          ]
+        },
+        "before": "1791504000000",
+        "after": "1786233600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "97fea1840d739a6d668b501a6c6c041a46a72628e42981d6dca3ee6a2c01cfd6",
+      "response": {},
+      "artifacts": [
+        {
+          "file": "audience-initial-23938.1426.json",
+          "label": "audience-initial",
+          "observedAt": "2026-10-08T19:57:07.778Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1426",
+          "sha256": "f335abdcf05b5ba0da9ca0d492aad7181c6422983dd268f23ce02714102a0b22"
+        }
+      ]
+    },
+    {
+      "id": "response-1c747fc7fe258be6",
+      "method": "GET",
+      "path": "/api/v1/trackinglinks/revenuestats",
+      "query": {
+        "trackingLinkId": {
+          "count": 1,
+          "references": [
+            "id:279428f4ee86"
+          ]
+        },
+        "before": "1791504000000",
+        "after": "1786233600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "39ca34be01579c6fe269d86e5d5078f623a783958fca17eed54006563bc68488",
+      "response": {},
+      "artifacts": [
+        {
+          "file": "audience-initial-23938.1424.json",
+          "label": "audience-initial",
+          "observedAt": "2026-10-08T19:57:07.731Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1424",
+          "sha256": "f59fea3817abd0c9bdb0ea7582b85567f028d501d16d97db38502ed097f8918e"
+        }
+      ]
+    },
+    {
+      "id": "response-554028339f221e9e",
+      "method": "GET",
+      "path": "/api/v1/trackinglinks/revenuestats",
+      "query": {
+        "trackingLinkId": {
+          "count": 1,
+          "references": [
+            "id:279428f4ee86"
+          ]
+        },
+        "before": "1791504000000",
+        "after": "1775865600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "6407a12f8a86acac4c697308027450573352402fbe6ad7760b749c1961abf1b3",
+      "response": {},
+      "artifacts": [
+        {
+          "file": "audience-ninety-day-23938.1949.json",
+          "label": "audience-ninety-day",
+          "observedAt": "2026-10-08T20:19:32.749Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1949",
+          "sha256": "95e09465e3e239c1f6d03409acf0248250e8d8dcbff4907201270aa7cd535862"
+        }
+      ]
+    },
+    {
+      "id": "response-5d6f7bbedeaa26ef",
+      "method": "GET",
+      "path": "/api/v1/trackinglinks/revenuestats",
+      "query": {
+        "trackingLinkId": {
+          "count": 1,
+          "references": [
+            "id:a871c12bca06"
+          ]
+        },
+        "before": "1791504000000",
+        "after": "1775865600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "faad64f79a214f0f030ebc36c12902509bac8a1fceecfa548a30ce78cca9e277",
+      "response": {},
+      "artifacts": [
+        {
+          "file": "audience-ninety-day-23938.1953.json",
+          "label": "audience-ninety-day",
+          "observedAt": "2026-10-08T20:19:32.690Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1953",
+          "sha256": "2c92adcb2b8b19d21fcc4afae43abf133566e7853efce54232e011def010cae7"
+        }
+      ]
+    },
+    {
+      "id": "response-bbf0f452e1560197",
+      "method": "GET",
+      "path": "/api/v1/trackinglinks/revenuestats",
+      "query": {
+        "trackingLinkId": {
+          "count": 1,
+          "references": [
+            "id:2d7ba2049c46"
+          ]
+        },
+        "before": "1791504000000",
+        "after": "1775865600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "f60683cb78cacee65e05895fe1719cf9093a164c243879d240d1d569bfbfc1dc",
+      "response": {},
+      "artifacts": [
+        {
+          "file": "audience-ninety-day-23938.1951.json",
+          "label": "audience-ninety-day",
+          "observedAt": "2026-10-08T20:19:32.788Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1951",
+          "sha256": "57e43963c320e951d9d42ded7375fd7db5f321f68deb15b678f3b28b4df84623"
+        }
+      ]
+    },
+    {
+      "id": "response-c399aa6dc06afdc7",
+      "method": "GET",
+      "path": "/api/v1/trackinglinks/revenuestats",
+      "query": {
+        "trackingLinkId": {
+          "count": 1,
+          "references": [
+            "id:a871c12bca06"
+          ]
+        },
+        "before": "1791504000000",
+        "after": "1786233600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "23a1248d3e23eb5768aa8bf265c9f5c9bbd7f4f68b9fa0711b26c86cb87df309",
+      "response": {},
+      "artifacts": [
+        {
+          "file": "audience-initial-23938.1428.json",
+          "label": "audience-initial",
+          "observedAt": "2026-10-08T19:57:07.713Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1428",
+          "sha256": "71f8442c62b2076e907398ddda9cce4e37e1790032ee65965728d117e955ce8f"
+        }
+      ]
+    },
+    {
+      "id": "response-1761886a37aaa164",
+      "method": "GET",
+      "path": "/api/v1/trackinglinks/stats",
+      "query": {
+        "trackingLinkId": {
+          "count": 1,
+          "references": [
+            "id:279428f4ee86"
+          ]
+        },
+        "before": "1791504000000",
+        "after": "1786233600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "11fb0be84fe7d43a777a928b127e82f3f48af71ec9279bbcf0656e7ff68384ea",
+      "response": {},
+      "artifacts": [
+        {
+          "file": "audience-initial-23938.1423.json",
+          "label": "audience-initial",
+          "observedAt": "2026-10-08T19:57:07.750Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1423",
+          "sha256": "27d001712622bea858def7abb951ce817be1ddf96f2d12409fb18683b7749985"
+        }
+      ]
+    },
+    {
+      "id": "response-45bb7a3ce2eec19b",
+      "method": "GET",
+      "path": "/api/v1/trackinglinks/stats",
+      "query": {
+        "trackingLinkId": {
+          "count": 1,
+          "references": [
+            "id:a871c12bca06"
+          ]
+        },
+        "before": "1791504000000",
+        "after": "1786233600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "d8222e37f2d23d70424cd7022e0603c4cb4b9bf4f31e1614ad0aa0c87434a058",
+      "response": {},
+      "artifacts": [
+        {
+          "file": "audience-initial-23938.1427.json",
+          "label": "audience-initial",
+          "observedAt": "2026-10-08T19:57:07.674Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1427",
+          "sha256": "8dc01a309edca1172b314409717fcb3f33fd0ea21d642b26a2b717bef51f6e52"
+        }
+      ]
+    },
+    {
+      "id": "response-54d4e7490ee56c36",
+      "method": "GET",
+      "path": "/api/v1/trackinglinks/stats",
+      "query": {
+        "trackingLinkId": {
+          "count": 1,
+          "references": [
+            "id:a871c12bca06"
+          ]
+        },
+        "before": "1791504000000",
+        "after": "1775865600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "8dedcbf49178cdd23f495acf3330ac1e5b33e4d974b93bb582f2b389613b7666",
+      "response": {},
+      "artifacts": [
+        {
+          "file": "audience-ninety-day-23938.1952.json",
+          "label": "audience-ninety-day",
+          "observedAt": "2026-10-08T20:19:32.729Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1952",
+          "sha256": "b204350d61dc96dad369cc151558c95e0c753415cce5faac5a761f12fdd0111d"
+        }
+      ]
+    },
+    {
+      "id": "response-75bbe3264887dbca",
+      "method": "GET",
+      "path": "/api/v1/trackinglinks/stats",
+      "query": {
+        "trackingLinkId": {
+          "count": 1,
+          "references": [
+            "id:279428f4ee86"
+          ]
+        },
+        "before": "1791504000000",
+        "after": "1775865600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "987a776f37cb8cda2710b178c6104f3fe125a709ef3afd8ab8ea5ef38569c7bf",
+      "response": {},
+      "artifacts": [
+        {
+          "file": "audience-ninety-day-23938.1948.json",
+          "label": "audience-ninety-day",
+          "observedAt": "2026-10-08T20:19:32.772Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1948",
+          "sha256": "2c9b1e665ce9a5ef28fcd14f929ed92091ffc74b3f00900f17c9fd67cf0633a0"
+        }
+      ]
+    },
+    {
+      "id": "response-a896a223f9cdc619",
+      "method": "GET",
+      "path": "/api/v1/trackinglinks/stats",
+      "query": {
+        "trackingLinkId": {
+          "count": 1,
+          "references": [
+            "id:2d7ba2049c46"
+          ]
+        },
+        "before": "1791504000000",
+        "after": "1775865600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "b2d0838fbdb68c874abd08bacaa5a8d2816c603580c705da2d1eb91b88bf7875",
+      "response": {},
+      "artifacts": [
+        {
+          "file": "audience-ninety-day-23938.1950.json",
+          "label": "audience-ninety-day",
+          "observedAt": "2026-10-08T20:19:32.707Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1950",
+          "sha256": "47048bfa5032b517aa2ae33463c747033caa9bb309a5dfe3fea3841963531f49"
+        }
+      ]
+    },
+    {
+      "id": "response-db3ee48282f641f9",
+      "method": "GET",
+      "path": "/api/v1/trackinglinks/stats",
+      "query": {
+        "trackingLinkId": {
+          "count": 1,
+          "references": [
+            "id:2d7ba2049c46"
+          ]
+        },
+        "before": "1791504000000",
+        "after": "1786233600000",
+        "ngsw-bypass": "true"
+      },
+      "status": 200,
+      "success": true,
+      "bodySha256": "c56163a5473375bc35cd0466ea6e4f26f56f8193a58212d561ecff2f997e0507",
+      "response": {},
+      "artifacts": [
+        {
+          "file": "audience-initial-23938.1425.json",
+          "label": "audience-initial",
+          "observedAt": "2026-10-08T19:57:07.691Z",
+          "methodEvidence": "capture_record",
+          "requestId": "23938.1425",
+          "sha256": "7f95f1d9690acaa1cf725039671ac46c8a4e63aeb22131da7d92a05526da50db"
+        }
+      ]
+    }
+  ]
+}
