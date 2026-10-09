@@ -33,6 +33,8 @@ export { isOutputExhausted } from "@agency_hub_core/shared";
 export * from "./ofapi-vendor-usage.ts";
 export * from "./routes-ofapi-vendor.ts";
 export * from "./routes-ofapi-collection.ts";
+export * from "./of-links.ts";
+export * from "./routes-of-links.ts";
 
 export * from "./ofapi-extended-commands.ts";
 export * from "./routes-ofapi-banned-words.ts";

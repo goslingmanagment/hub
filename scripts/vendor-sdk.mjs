@@ -125,6 +125,9 @@ for (const file of [
   "routes-ofapi-vendor.ts",
   "ofapi-vendor-usage.ts",
   "routes-ofapi-collection.ts",
+  // «Ссылки OnlyFans» (traffic PR 12): routes.ts spreads them in, the barrel re-exports both.
+  "of-links.ts",
+  "routes-of-links.ts",
   "routes-ofapi-marketing.ts",
   "ofapi-smart-links.ts",
   "ofapi-extended-commands.ts",
