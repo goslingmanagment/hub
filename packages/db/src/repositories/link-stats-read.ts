@@ -290,33 +290,34 @@ export async function listLinkSeriesAttempts(
   }));
 }
 
-/** The windows one (page, kind) stamped in [from, to), with whether any row
- * of the window is a usable result; and the pair's first stamp ever (null:
- * the pair never stamped a window). */
-export async function listLinkSeriesWindowResults(
+/** The rows of one (page, kind) that can belong to a window in [from, to):
+ * stamped with such a window, or — written without a window (an image older
+ * than 0255, after a rollback) — read within a day of the range; the caller
+ * places those in the window their read time falls in. With whether each row
+ * is a usable result. */
+export async function listLinkSeriesWindowRows(
   db: Database,
   input: { pageId: number; linkKind: LinkStatKind; from: Date; to: Date },
-): Promise<{ firstWindowAt: Date | null; windows: Array<{ windowAt: Date; usable: boolean }> }> {
+): Promise<Array<{ windowAt: Date | null; pulledAt: Date; usable: boolean }>> {
   const run = sql.raw("r");
-  const first = await db.execute<{ first: Date | string | null }>(sql`
-    select min(r.window_at) as first
-    from page_link_stat_runs r
-    where r.platform_account_id = ${input.pageId} and r.link_kind = ${input.linkKind}
-  `);
-  const windows = await db.execute<{ windowAt: Date | string; usable: boolean }>(sql`
-    select r.window_at as "windowAt", bool_or(${linkStatRunUsableResultSql(run)}) as usable
+  const result = await db.execute<{ windowAt: Date | string | null; pulledAt: Date | string; usable: boolean }>(sql`
+    select r.window_at as "windowAt", r.pulled_at as "pulledAt", ${linkStatRunUsableResultSql(run)} as usable
     from page_link_stat_runs r
     where r.platform_account_id = ${input.pageId}
       and r.link_kind = ${input.linkKind}
-      and r.window_at >= ${input.from.toISOString()}::timestamptz
-      and r.window_at < ${input.to.toISOString()}::timestamptz
-    group by r.window_at
-    order by r.window_at
+      and (
+        (r.window_at >= ${input.from.toISOString()}::timestamptz
+          and r.window_at < ${input.to.toISOString()}::timestamptz)
+        or (r.window_at is null
+          and r.pulled_at >= ${input.from.toISOString()}::timestamptz - interval '1 day'
+          and r.pulled_at < ${input.to.toISOString()}::timestamptz + interval '1 day')
+      )
   `);
-  return {
-    firstWindowAt: toDateOrNull(first.rows[0]?.first),
-    windows: windows.rows.map((row) => ({ windowAt: toDate(row.windowAt), usable: row.usable === true })),
-  };
+  return result.rows.map((row) => ({
+    windowAt: toDateOrNull(row.windowAt),
+    pulledAt: toDate(row.pulledAt),
+    usable: row.usable === true,
+  }));
 }
 
 export interface LatestLinkSnapshotRow {

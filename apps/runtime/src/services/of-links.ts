@@ -28,7 +28,7 @@ import {
   listLinkSeriesAccountChanges,
   listLinkSeriesAttempts,
   listLinkSeriesPairStates,
-  listLinkSeriesWindowResults,
+  listLinkSeriesWindowRows,
   listLinkSnapshotHistory,
   listOfLinkPages,
   pointChangedBinding,
@@ -54,8 +54,27 @@ import {
   toBusinessDate,
 } from "@agency_hub_core/shared";
 
-import { findStaleLinkStatPairs, OFAPI_LINK_STATS_SERIES_STALE_AFTER_MS } from "./ofapi-link-stats-monitor.ts";
-import { nextOfapiLinkStatsWindowAt } from "./ofapi-link-stats-windows.ts";
+import {
+  expectedClosedLinkStatWindows,
+  findStaleLinkStatPairs,
+  linkStatSeriesExpectation,
+  OFAPI_LINK_STATS_SERIES_STALE_AFTER_MS,
+  readLinkStatSeriesExpectation,
+  type LinkStatSeriesExpectation,
+} from "./ofapi-link-stats-monitor.ts";
+import { ofapiLinkStatsWindowAt } from "./ofapi-link-stats-windows.ts";
+
+/** Whether the link series is switched on: when it is off, nothing is
+ * expected of it (the monitor's rule) — only the age of what it holds. */
+export interface OfLinksSeriesSwitch {
+  seriesEnabled: boolean;
+}
+
+/** The series monitor's own expectation: the anchor from the window stamps
+ * (an API process has no memory of when it first saw the series enabled). */
+async function seriesExpectation(db: Database, seriesEnabled: boolean): Promise<LinkStatSeriesExpectation> {
+  return seriesEnabled ? readLinkStatSeriesExpectation(db, null) : linkStatSeriesExpectation(null);
+}
 
 /** The history's default and longest range, in business days. */
 export const OF_LINK_HISTORY_DEFAULT_DAYS = 30;
@@ -263,7 +282,10 @@ function generated(now: Date, seriesFloorAt: Date | null) {
 // ---------------------------------------------------------------------------
 // GET /api/v1/admin/of-links
 
-export async function getOfLinks(db: Database, input: { pageId?: number | undefined; now: Date }): Promise<OfLinksResponse> {
+export async function getOfLinks(
+  db: Database,
+  input: OfLinksSeriesSwitch & { pageId?: number | undefined; now: Date },
+): Promise<OfLinksResponse> {
   const { now } = input;
   const pages = await listOfLinkPages(db);
   if (input.pageId !== undefined && !pages.some((page) => page.pageId === input.pageId)) {
@@ -273,21 +295,22 @@ export async function getOfLinks(db: Database, input: { pageId?: number | undefi
   const allPageIds = pages.map((page) => page.pageId);
   const linkPageIds = input.pageId === undefined ? allPageIds : [input.pageId];
 
-  const [seriesFloorAt, pairs, snapshots, recalculations, accountChanges, bindingsSnapshot] = await Promise.all([
+  const [seriesFloorAt, pairs, snapshots, recalculations, accountChanges, bindingsSnapshot, expectation] = await Promise.all([
     readLinkSeriesFloor(db),
     listLinkSeriesPairStates(db, { pageIds: allPageIds }),
     listLatestLinkSnapshots(db, { pageIds: linkPageIds }),
     listLastLinkRecalculations(db, { pageIds: linkPageIds }),
     listLinkSeriesAccountChanges(db, { pageIds: linkPageIds }),
     readTrafficBindingsSnapshot(db),
+    seriesExpectation(db, input.seriesEnabled),
   ]);
 
-  // The series monitor's own rule. A pair never attempted at all is not
-  // judged here (the monitor answers for it from the schedule's anchor).
+  // The series monitor's own rule, with its expectation: a pair never
+  // attempted at all ages from the first window it was expected in.
   const staleByPair = new Map<string, Date>();
   for (const page of pages) {
     const pagePairs = pairs.filter((pair) => pair.platformAccountId === page.pageId);
-    for (const stalePair of findStaleLinkStatPairs(pagePairs, now, () => null)) {
+    for (const stalePair of findStaleLinkStatPairs(pagePairs, now, expectation.expectedSince)) {
       staleByPair.set(`${page.pageId}:${stalePair.linkKind}`, stalePair.since);
     }
   }
@@ -383,7 +406,7 @@ export async function getOfLinks(db: Database, input: { pageId?: number | undefi
 // ---------------------------------------------------------------------------
 // GET /api/v1/admin/of-links/history
 
-export async function getOfLinkHistory(db: Database, input: {
+export async function getOfLinkHistory(db: Database, input: OfLinksSeriesSwitch & {
   pageId: number;
   linkKind: LinkStatKind;
   linkRef: string;
@@ -412,12 +435,19 @@ export async function getOfLinkHistory(db: Database, input: {
   if (history.length === 0) {
     throw new OfLinksRequestError("not_found", "The series has never seen this link");
   }
-  const [seriesFloorAt, attempts, windows, meta] = await Promise.all([
+  const [seriesFloorAt, attempts, windowRows, meta, expectation] = await Promise.all([
     readLinkSeriesFloor(db),
     listLinkSeriesAttempts(db, { pageId: input.pageId, linkKind: input.linkKind, from: range.fromAt, to: range.toAt }),
-    listLinkSeriesWindowResults(db, { pageId: input.pageId, linkKind: input.linkKind, from: range.fromAt, to: range.toAt }),
+    listLinkSeriesWindowRows(db, { pageId: input.pageId, linkKind: input.linkKind, from: range.fromAt, to: range.toAt }),
     listLatestLinkSnapshots(db, { pageIds: [input.pageId] }),
+    seriesExpectation(db, input.seriesEnabled),
   ]);
+  // The windows that gave the pair a usable result; a row without a window
+  // counts for the window its read time falls in (the monitor's rule).
+  const usableWindows = new Set(windowRows
+    .filter((row) => row.usable)
+    .map((row) => (row.windowAt ?? ofapiLinkStatsWindowAt(row.pulledAt)).getTime()));
+  const expectedSince = expectation.expectedSince(page);
   const latest = meta.find((row) => row.linkKind === input.linkKind && row.platformLinkId === input.linkRef) ?? null;
 
   const points: LinkSeriesPoint[] = history.map((row) => ({
@@ -475,14 +505,13 @@ export async function getOfLinkHistory(db: Database, input: {
     const nextStart = businessDateToUtcStart(nextBusinessDate(day), MOSCOW_TIME_ZONE);
     const dayEnd = nextStart.getTime() < range.toAt.getTime() ? nextStart : range.toAt;
     const delta = linkDeltaBetween(series, dayStart, dayEnd);
-    // A window counts as missed once it has closed without a usable result.
-    const missedWindows = windows.firstWindowAt === null || dayEnd.getTime() <= windows.firstWindowAt.getTime()
+    // Every window of the schedule the pair was expected in that day and that
+    // has closed, attempted or not, counts as missed without a usable
+    // result. A day before the pair was expected at all has no answer.
+    const missedWindows = expectedSince === null || dayEnd.getTime() <= expectedSince.getTime()
       ? null
-      : windows.windows.filter((window) =>
-        window.windowAt.getTime() >= dayStart.getTime()
-        && window.windowAt.getTime() < dayEnd.getTime()
-        && !window.usable
-        && nextOfapiLinkStatsWindowAt(window.windowAt).getTime() <= now.getTime()).length;
+      : expectedClosedLinkStatWindows(expectedSince, dayStart, dayEnd, now)
+        .filter((windowAt) => !usableWindows.has(windowAt.getTime())).length;
     days.push({
       businessDate: day,
       dayStartAt: iso(dayStart),

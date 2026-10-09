@@ -231,8 +231,9 @@ export const ofLinksPageKindSchema = z.object({
   linkCount: z.number().int().nonnegative(),
   /** The latest attempt of any status. */
   lastAttempt: ofLinkAttemptSchema.nullable(),
-  /** Not written for two windows and more — the same rule as the series'
-   * stale signal. */
+  /** Not written for two windows and more — the series' stale signal's own
+   * rule and expectation: a pair never attempted ages from the first window
+   * it was expected in. */
   stale: z.boolean(),
   /** When stale: since when the pair has had no usable result. */
   staleSince: isoTimestamp.nullable(),
@@ -325,8 +326,11 @@ export const ofLinkDaySchema = z.object({
   fans: z.number().int().nullable(),
   /** Negative = a vendor recalculation (flag vendor_recalculated), not a loss. */
   vendorNetMills: mills.nullable(),
-  /** Windows of the day the pair (page, kind) recorded without a usable
-   * result; null for days before the series stamped windows (2026-10-09). */
+  /** Windows of the schedule the pair (page, kind) was expected in that day
+   * and that have closed without a usable result — attempted or not (the
+   * series monitor's expectation). Null for a day before the pair was
+   * expected at all (the series' first window stamp, the page's creation),
+   * or while the series is switched off. */
   missedWindows: z.number().int().nonnegative().nullable(),
   flags: z.array(ofLinkDeltaFlagSchema),
   hub: ofLinkHubDaySchema.nullable(),

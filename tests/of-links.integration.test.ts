@@ -86,6 +86,8 @@ beforeEach(async () => {
   freePage = (await createOnlyFansPage(app.db, { modelId: model!.id, label: "lora-of" }))!.id;
   vipPage = (await createOnlyFansPage(app.db, { modelId: model!.id, label: "lora-vip-of" }))!.id;
   stalePage = (await createOnlyFansPage(app.db, { modelId: model!.id, label: "ari-of" }))!.id;
+  // The pages existed long before the series (NOW is a fixed instant; the rows' own clock is today's).
+  await testDb.pool.query("update pages set created_at = '2026-07-01T00:00:00Z'");
   await testDb.pool.query("update pages set ofapi_account_id = 'acct_free' where id = $1", [freePage]);
   await testDb.pool.query("update pages set ofapi_account_id = 'acct_new' where id = $1", [vipPage]);
 
@@ -154,7 +156,7 @@ beforeEach(async () => {
 
 describe("GET /of-links", () => {
   it("gives every link its latest snapshot, fans by kind, its state, its channel and empty Hub money", async () => {
-    const result = await getOfLinks(app.db, { pageId: vipPage, now: NOW });
+    const result = await getOfLinks(app.db, { seriesEnabled: true, pageId: vipPage, now: NOW });
     expect(result.links.map((link) => `${link.linkKind}:${link.linkRef}`)).toEqual([
       "tracking:2150850", "trial:10802699", "trial:11170787", "trial:11687581",
     ]);
@@ -196,7 +198,7 @@ describe("GET /of-links", () => {
   });
 
   it("states each page's collection: last attempt, last usable result, staleness by the series' rule", async () => {
-    const result = await getOfLinks(app.db, { now: NOW });
+    const result = await getOfLinks(app.db, { seriesEnabled: true, now: NOW });
     expect(result.staleAfterHours).toBe(15);
     expect(result.seriesFloorAt).toBe("2026-07-22T12:17:47.000Z");
     expect(result.pages.map((page) => page.pageLabel)).toEqual(["lora-of", "lora-vip-of", "ari-of"]);
@@ -209,8 +211,14 @@ describe("GET /of-links", () => {
     expect(stale.ofapiMapped).toBe(false);
     expect(stale.kinds).toEqual([
       expect.objectContaining({ linkKind: "tracking", stale: true, staleSince: "2026-10-07T03:45:10.000Z", linkCount: 0 }),
-      expect.objectContaining({ linkKind: "trial", stale: false, lastAttempt: null, lastUsableAt: null }),
+      // Never attempted: it ages from the first window the monitor expects it
+      // in (the series' first stamp, 10-07 03:45), not never.
+      expect.objectContaining({ linkKind: "trial", stale: true, staleSince: "2026-10-07T03:45:00.000Z", lastAttempt: null, lastUsableAt: null }),
     ]);
+    // With the series switched off nothing is expected of it: only the age of what it holds.
+    const off = await getOfLinks(app.db, { seriesEnabled: false, now: NOW });
+    expect(off.pages.find((page) => page.pageId === stalePage)!.kinds.map((kind) => [kind.linkKind, kind.stale]))
+      .toEqual([["tracking", true], ["trial", false]]);
     // Without a page, every page's links.
     expect(result.links.filter((link) => link.pageId === freePage).map((link) => [link.linkRef, link.state])).toEqual([
       ["2099377", "active"], ["2099526", "expired"],
@@ -220,7 +228,7 @@ describe("GET /of-links", () => {
 
 describe("GET /of-links/history", () => {
   it("gives business-day deltas between the last snapshots before each Moscow midnight, with their flags", async () => {
-    const history = await getOfLinkHistory(app.db, {
+    const history = await getOfLinkHistory(app.db, { seriesEnabled: true,
       pageId: vipPage, linkKind: "trial", linkRef: "11170787", from: "2026-09-08", to: "2026-09-10", now: NOW,
     });
     expect(history.range).toEqual({
@@ -242,7 +250,7 @@ describe("GET /of-links/history", () => {
   });
 
   it("counts a link older than the series from zero with no_baseline, and reads money from the deprecated column", async () => {
-    const history = await getOfLinkHistory(app.db, {
+    const history = await getOfLinkHistory(app.db, { seriesEnabled: true,
       pageId: vipPage, linkKind: "trial", linkRef: "10802699", from: "2026-07-22", to: "2026-07-22", now: NOW,
     });
     expect(history.days).toEqual([expect.objectContaining({
@@ -252,7 +260,7 @@ describe("GET /of-links/history", () => {
   });
 
   it("lists the list's attempts and counts a window missed only once it has closed", async () => {
-    const midday = await getOfLinkHistory(app.db, {
+    const midday = await getOfLinkHistory(app.db, { seriesEnabled: true,
       pageId: vipPage, linkKind: "trial", linkRef: "11687581", from: "2026-10-09", to: "2026-10-09", now: NOW,
     });
     expect(midday.attempts.map((attempt) => [attempt.status, attempt.usable, attempt.windowAt])).toEqual([
@@ -260,19 +268,38 @@ describe("GET /of-links/history", () => {
       ["failed", false, "2026-10-09T09:45:00.000Z"],
     ]);
     expect(midday.days).toEqual([expect.objectContaining({
+      // 10-08 21:45 UTC passed with no attempt at all: missed. 03:45 gave a
+      // result; 09:45 failed but is still open (its retries run until 15:45).
       // Created 10-08 19:55 MSK, first read 10-09: what it gathered before the day is not known apart.
-      businessDate: "2026-10-09", missedWindows: 0, startObservedAt: null, clicks: 0, vendorNetMills: null, flags: ["no_baseline", "money_unknown"],
+      businessDate: "2026-10-09", missedWindows: 1, startObservedAt: null, clicks: 0, vendorNetMills: null, flags: ["no_baseline", "money_unknown"],
     })]);
-    const evening = await getOfLinkHistory(app.db, {
+    const evening = await getOfLinkHistory(app.db, { seriesEnabled: true,
       pageId: vipPage, linkKind: "trial", linkRef: "11687581", from: "2026-10-09", to: "2026-10-09", now: at("2026-10-09T16:00:00Z"),
     });
-    expect(evening.days[0]!.missedWindows).toBe(1);
+    expect(evening.days[0]!.missedWindows).toBe(2);
+  });
+
+  it("counts every window of a day the worker did not run as missed, with no attempt rows at all", async () => {
+    const history = await getOfLinkHistory(app.db, {
+      seriesEnabled: true, pageId: vipPage, linkKind: "trial", linkRef: "11170787", from: "2026-10-06", to: "2026-10-08", now: NOW,
+    });
+    // The series' first stamp is 10-07 03:45 (its schedule's anchor): 10-06 is
+    // before it; 10-07 MSK holds three expected windows from 03:45 on, 10-08
+    // all four — none of them has a row.
+    expect(history.days.map((day) => [day.businessDate, day.missedWindows])).toEqual([
+      ["2026-10-06", null], ["2026-10-07", 3], ["2026-10-08", 4],
+    ]);
+    expect(history.attempts).toEqual([]);
+    const off = await getOfLinkHistory(app.db, {
+      seriesEnabled: false, pageId: vipPage, linkKind: "trial", linkRef: "11170787", from: "2026-10-08", to: "2026-10-08", now: NOW,
+    });
+    expect(off.days[0]!.missedWindows).toBeNull();
   });
 
   it("refuses an unknown link, an unknown page and a reversed range", async () => {
-    await expect(getOfLinkHistory(app.db, { pageId: vipPage, linkKind: "trial", linkRef: "1", now: NOW })).rejects.toMatchObject({ kind: "not_found" });
-    await expect(getOfLinkHistory(app.db, { pageId: 999_999, linkKind: "trial", linkRef: "1", now: NOW })).rejects.toMatchObject({ kind: "not_found" });
-    await expect(getOfLinkHistory(app.db, {
+    await expect(getOfLinkHistory(app.db, { seriesEnabled: true, pageId: vipPage, linkKind: "trial", linkRef: "1", now: NOW })).rejects.toMatchObject({ kind: "not_found" });
+    await expect(getOfLinkHistory(app.db, { seriesEnabled: true, pageId: 999_999, linkKind: "trial", linkRef: "1", now: NOW })).rejects.toMatchObject({ kind: "not_found" });
+    await expect(getOfLinkHistory(app.db, { seriesEnabled: true,
       pageId: vipPage, linkKind: "trial", linkRef: "11170787", from: "2026-09-10", to: "2026-09-08", now: NOW,
     })).rejects.toMatchObject({ kind: "bad_request" });
   });
@@ -340,7 +367,7 @@ describe("GET /of-links/channels", () => {
     const after = await getOfLinkChannels(app.db, { from: "2026-10-09", to: "2026-10-09", now: NOW });
     expect(freeSegments(after)).toEqual(freeSegments(before));
     expect(after.channels.at(-1)!.totals).toEqual(before.channels.at(-1)!.totals);
-    const current = await getOfLinks(app.db, { now: NOW });
+    const current = await getOfLinks(app.db, { seriesEnabled: true, now: NOW });
     expect(current.pages.map((page) => page.pageLabel)).toEqual(["lora-vip-of", "ari-of"]);
     expect(current.links.some((link) => link.pageId === freePage)).toBe(false);
   });
