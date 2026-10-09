@@ -35,6 +35,7 @@ import {
 import {
   AGENT_DATASET_SQL,
   CLIENT_AUDIENCE_NEW_IGNORED_SUB_TYPES,
+  HUB_LINK_ALLOCATIONS_SQL,
   linkStatRunUsableResultSql,
 } from "@agency_hub_core/db";
 import { sql } from "../packages/db/node_modules/drizzle-orm/index.js";
@@ -561,6 +562,20 @@ describe("agent read plane: dataset registry <-> SQL mapping, both directions", 
     expect(runs.captureFloorPlane).toBe("page_link_stat_runs");
     expect(bindings.readPlanes).toEqual(["traffic_link_bindings", "traffic_channel_contractors"]);
     expect(bindings.captureFloorPlane).toBeUndefined();
+  });
+
+  it("Hub's link money datasets read the attribution rule's SQL and claim no page-wide floor", () => {
+    const campaigns = AGENT_DATASET_SQL.campaigns!;
+    const daily = AGENT_DATASET_SQL.campaign_money_daily!;
+    // ONE rule: both sources embed the SQL form of link-attribution.ts.
+    expect(campaigns.source).toContain(HUB_LINK_ALLOCATIONS_SQL);
+    expect(daily.source).toContain(HUB_LINK_ALLOCATIONS_SQL);
+    // Each link's figure has its own floor (a field); none is the page's.
+    expect(campaigns.captureFloorPlane).toBeUndefined();
+    expect(daily.captureFloorPlane).toBeUndefined();
+    for (const mapping of [campaigns, daily]) {
+      expect(mapping.readPlanes).toEqual(expect.arrayContaining(["transactions", "page_link_fan_periods", "page_link_fan_walks"]));
+    }
   });
 
   it("the scope-pairing rule: a purchase-disclosing dataset needs BOTH capabilities", () => {

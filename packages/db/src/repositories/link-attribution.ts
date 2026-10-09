@@ -357,3 +357,67 @@ export async function readLinkSnapshotCalculations(
     isLoading: row.is_loading,
   }]));
 }
+
+// ── The same rule in SQL (the Agent Read datasets, PR 15) ───────────────────
+
+/** The fan spend rollup's transaction types as SQL literals. */
+const TRANSACTION_TYPES_SQL_TEXT = spenderAnalyticsTransactionTypes
+  .map((type) => `'${type}'::transaction_type`)
+  .join(", ");
+
+/** Each link's floor (the start of its first finished evidential subscriber
+ *  walk), as SQL over all pages: `platform_account_id`, `link_kind`,
+ *  `platform_link_id`, `floor_at`. Binds no parameter. */
+export const HUB_LINK_FLOORS_SQL = `
+  select platform_account_id, link_kind, platform_link_id, min(started_at) as floor_at
+    from page_link_fan_walks
+   where list_kind = 'subscribers' and finished_at is not null and evidential
+   group by platform_account_id, link_kind, platform_link_id
+`;
+
+/**
+ * `attributeHubLinkMoney` as one SQL statement, for the datasets that cannot
+ * call TypeScript: one row per (transaction, receiving link) — `page_id`,
+ * `link_kind`, `link_ref`, `fan_id`, `transaction_id`, `state` (posted |
+ * pending), `occurred_at` (when it happened: the time it is reported at),
+ * `floor_at` (the link's floor) and `share_mills`. The same inputs, the same
+ * equal split, the same remainder dealt one mill at a time in link order
+ * (kind, then link number) — pinned against the TypeScript rule by
+ * tests/link-attribution-sql.integration.test.ts. Unallocated money has no
+ * row. Binds no parameter.
+ */
+export const HUB_LINK_ALLOCATIONS_SQL = `
+  select r.page_id, r.link_kind, r.link_ref, r.fan_id, r.transaction_id, r.state, r.occurred_at, r.floor_at,
+         (r.amount / r.n)
+           + case when r.ord <= abs(r.amount % r.n) then sign(r.amount % r.n)::bigint else 0 end as share_mills
+    from (
+      select d.*,
+             count(*) over (partition by d.transaction_id) as n,
+             row_number() over (
+               partition by d.transaction_id order by d.link_kind, length(d.link_ref), d.link_ref
+             ) as ord
+        from (
+          select distinct t.id as transaction_id, t.platform_account_id as page_id, t.fan_id,
+                 t.transaction_state::text as state, t.creator_net_amount_mills as amount, t.occurred_at,
+                 pe.link_kind, pe.platform_link_id as link_ref, w.floor_at
+            from transactions t
+            left join transactions o
+              on t.transaction_id ~ ':(reversal|chargeback)$'
+             and o.platform_account_id = t.platform_account_id
+             and o.transaction_id = regexp_replace(t.transaction_id, ':(reversal|chargeback)$', '')
+            join page_link_fan_periods pe
+              on pe.platform_account_id = t.platform_account_id and pe.fan_id = t.fan_id
+            join (${HUB_LINK_FLOORS_SQL}) w
+              on w.platform_account_id = pe.platform_account_id
+             and w.link_kind = pe.link_kind
+             and w.platform_link_id = pe.platform_link_id
+           where t.is_active
+             and t.fan_id is not null
+             and t.transaction_state in ('posted', 'pending')
+             and t.canonical_type in (${TRANSACTION_TYPES_SQL_TEXT})
+             and greatest(coalesce(pe.period_start_at, w.floor_at), w.floor_at)
+                   <= coalesce(o.occurred_at, t.occurred_at)
+             and coalesce(o.occurred_at, t.occurred_at) < coalesce(pe.closed_at, 'infinity'::timestamptz)
+        ) d
+    ) r
+`;

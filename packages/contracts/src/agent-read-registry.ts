@@ -135,6 +135,11 @@ export const AGENT_CLAIM_CLASSES = {
       // OnlyFans payout requests live in the same snapshot store; their own
       // field so a payout conclusion names what it rests on.
       ofapiPayoutRequest: { required: ["ofapi_read_snapshots"] },
+      // Hub's own money per OnlyFans link (traffic plan PR 15): the ledger
+      // split over the link ↔ fan periods, each link from the floor its fan
+      // walks set. All three stores answer for it: a period or a walk unread
+      // is money attributed to nobody.
+      hubLinkMoney: { required: ["transactions", "page_link_fan_periods", "page_link_fan_walks"] },
       payoutMethod: { required: ["page_payout_methods"] },
     },
   },

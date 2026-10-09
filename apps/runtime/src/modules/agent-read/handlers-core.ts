@@ -154,6 +154,10 @@ const AGENT_DATASET_CATALOG_OVERRIDES: Partial<Record<AgentDataset, {
   campaign_snapshots: { platforms: ["onlyfans"], captureState: "unknown" },
   campaign_runs: { platforms: ["onlyfans"], captureState: "unknown" },
   campaign_bindings: { platforms: ["onlyfans"], captureState: "unknown" },
+  // Hub's own money per link (PR 15): each link's floor is a field of its
+  // rows, there is no page-wide one.
+  campaigns: { platforms: ["onlyfans"], captureState: "unknown" },
+  campaign_money_daily: { platforms: ["onlyfans"], captureState: "unknown" },
   capture_coverage: { platforms: ["fansly"], captureState: "unknown" },
 };
 
