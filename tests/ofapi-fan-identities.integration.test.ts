@@ -260,6 +260,42 @@ describe("OFAPI fan identities (tracking/trial links)", () => {
     ]);
   });
 
+  it("leaves last_seen_at of known fans alone and still renames them", async () => {
+    const page = await seedMappedPage("links-last-seen-of");
+    const subscribers = [linkUser(110001, "known", "Known"), linkUser(110002, "renamed", "Before")];
+    const { client } = fakeLinksClient({
+      trackingLinks: [{ id: 42 }],
+      trialLinks: [],
+      trackingUsers: new Map([["42:subscribers", subscribers]]),
+      trialSubscribers: new Map(),
+    });
+    appContext = { ...appContext, ofapi: client };
+    expect((await syncOfapiFanIdentities(appContext, await buildInput(page))).satisfied).toBe(true);
+
+    // Both fans were last seen long before the next walk.
+    const longAgo = "2026-01-01T00:00:00.000Z";
+    await testDb!.pool.query("update fans set last_seen_at = $1", [longAgo]);
+    await testDb!.pool.query("update page_fans set last_seen_at = $1", [longAgo]);
+    subscribers.splice(1, 1, linkUser(110002, "renamed2", "After"), linkUser(110003, "fresh", "Fresh"));
+
+    const next = await syncOfapiFanIdentities(appContext, { ...await buildInput(page), requestSeq: 2 });
+    expect(next.satisfied).toBe(true);
+
+    const { rows } = await testDb!.pool.query(`
+      select f.platform_user_id, f.username, f.display_name,
+             f.last_seen_at = $2::timestamptz as fan_kept,
+             pf.last_seen_at = $2::timestamptz as page_fan_kept
+      from fans f join page_fans pf on pf.fan_id = f.id and pf.platform_account_id = $1
+      order by f.platform_user_id
+    `, [page.id, longAgo]);
+    expect(rows).toEqual([
+      { platform_user_id: "110001", username: "known", display_name: "Known", fan_kept: true, page_fan_kept: true },
+      { platform_user_id: "110002", username: "renamed2", display_name: "After", fan_kept: true, page_fan_kept: true },
+      // A fan the walk met for the first time is stamped as before.
+      { platform_user_id: "110003", username: "fresh", display_name: "Fresh", fan_kept: false, page_fan_kept: false },
+    ]);
+  });
+
   it("yields on the per-run request cap with partial coverage kept", async (context) => {
     if (!testDb) {
       context.skip();
