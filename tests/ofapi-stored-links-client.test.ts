@@ -81,4 +81,40 @@ describe("OFAPI stored link-list client methods", () => {
     ]);
     expect(spend.every((entry) => entry.credits === 0)).toBe(true);
   });
+
+  it("books an answer that states no charge at zero, and a stated charge as stated", async () => {
+    const answers = [
+      // No `_meta` at all.
+      JSON.stringify({ data: { list: [], hasMore: false } }),
+      // `_meta` without a credit figure.
+      JSON.stringify({ data: { list: [], hasMore: false }, _meta: { _cache: { is_cached: true } } }),
+      // The vendor says it charged.
+      JSON.stringify({ data: { list: [], hasMore: false }, _meta: { _credits: { used: 2, balance: 10 } } }),
+    ];
+    server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(answers.shift() ?? "{}");
+    });
+    const baseUrl = await listenOnLocalhost(server);
+    const spend: Array<{ operation: string; credits: number; estimated: boolean }> = [];
+    const client = createOfapiClient({
+      baseUrl,
+      apiKey: "test-key",
+      restDelayMs: 0,
+      onCreditSpend: (observation) => {
+        spend.push({ operation: observation.operation, credits: observation.credits, estimated: observation.estimated });
+      },
+    });
+    const context = { pageId: 1, dispatcher: null, egressKey: null, creditBudgetScope: "link_stats" as const };
+
+    await client.listStoredTrackingLinks!(context, ACCOUNT, {});
+    await client.listStoredTrialLinks!(context, ACCOUNT, {});
+    await client.listStoredTrialLinks!(context, ACCOUNT, {});
+
+    expect(spend).toEqual([
+      { operation: "ofapi_stored_tracking_links", credits: 0, estimated: true },
+      { operation: "ofapi_stored_trial_links", credits: 0, estimated: true },
+      { operation: "ofapi_stored_trial_links", credits: 2, estimated: false },
+    ]);
+  });
 });

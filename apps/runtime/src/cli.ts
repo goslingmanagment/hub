@@ -81,6 +81,7 @@ import {
 } from "./services/voice-profiles.ts";
 import { runCanonicalization } from "./services/canonicalize-driver.ts";
 import { runOfapiBindingReconcile } from "./services/ofapi-binding-reconcile.ts";
+import { queueOfapiLinkStatsRunsAfterOperatorRebind } from "./services/ofapi-link-stats-sync.ts";
 import { runDmCorrectionsFingerprintBackfill } from "./services/dm-corrections-backfill.ts";
 import { runTransactionTipContextsBackfill } from "./services/transaction-tip-contexts-backfill.ts";
 import { runDmCorrectionsLineageIntake } from "./services/dm-corrections-lineage-intake.ts";
@@ -1790,6 +1791,25 @@ export function buildProgram() {
         const result = await runOfapiBindingReconcile(app, { dryRun: !options.execute, force: true });
         console.log(JSON.stringify(result, null, 2));
         if (result.skipped !== null) process.exitCode = 1;
+        // A rebind applied here is not reported by the worker's next pass,
+        // so the link series' run after a rebind is queued from here, as the
+        // worker does for its own.
+        try {
+          const queued = await queueOfapiLinkStatsRunsAfterOperatorRebind(app, result.actions, () => {
+            const boss = new PgBoss({ connectionString: app.config.databaseUrl });
+            attachCliPgBossErrorLogger(boss);
+            return boss;
+          });
+          if (queued.length > 0) {
+            console.log(`Link series: a read of page(s) ${queued.join(", ")} is queued in 20 minutes.`);
+          }
+        } catch (error) {
+          console.error(
+            `The rebind is applied, but the link series' read after it could not be queued `
+              + `(${describeError(error)}); the page is read at the next window.`,
+          );
+          process.exitCode = 1;
+        }
       } finally {
         await app.close();
       }

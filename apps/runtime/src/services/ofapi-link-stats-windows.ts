@@ -4,9 +4,26 @@
 // that later asks "which window is this" or "how far apart are the windows".
 // Pure: no imports, no clock of its own.
 
-/** Hours (UTC) at which a window opens; the minute is shared. */
-export const OFAPI_LINK_STATS_WINDOW_HOURS_UTC: readonly number[] = [4, 16];
+/** Hours (UTC) at which a window opens; the minute is shared. Four windows a
+ * day (owner decision, plan П1.1): the reads are free, the 21:45 UTC point is
+ * 00:45 in Moscow — next to the business-day boundary the daily deltas are
+ * cut on — and a series that stopped is noticed in 15 hours instead of 27. */
+export const OFAPI_LINK_STATS_WINDOW_HOURS_UTC: readonly number[] = [3, 9, 15, 21];
 export const OFAPI_LINK_STATS_WINDOW_MINUTE = 45;
+
+/** A pair without a usable result is read again inside its window: 15 minutes
+ * after the scheduled pass, 45 minutes after that, 2 hours after that — three
+ * retries, the last one three hours in, well before the next window opens. */
+export const OFAPI_LINK_STATS_RETRY_DELAYS_MS: readonly number[] = [
+  15 * 60 * 1000,
+  45 * 60 * 1000,
+  2 * 60 * 60 * 1000,
+];
+
+/** After the binding reconciler moves a page to another OFAPI account, the
+ * page is read without waiting for the next window — but not at once: the
+ * new connection's stored cache needs a moment to exist at all. */
+export const OFAPI_LINK_STATS_REBIND_RUN_DELAY_MS = 20 * 60 * 1000;
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;

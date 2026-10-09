@@ -7,7 +7,9 @@ import {
   assertOwnedPageSyncLease,
   getCheckpoint,
   getOfapiCreditState,
+  getOfapiDayCreditsSpent,
   listPageDmConversationsByPlatformConversationIds,
+  recordOfapiPhysicalCreditUsage,
   reserveOfapiDayCredits,
   settleOfapiDayCreditReservation,
   upsertCheckpoint,
@@ -151,11 +153,28 @@ export function isOfapiCreditFloorBlocking(input: {
  * settles each reservation to the server-reported actuals; a request that
  * throws in between leaks at most the 1-credit estimate until the UTC-day
  * rollover (conservative direction).
+ *
+ * `freeReads` (the link series: the vendor's stored caches cost 0 credits) —
+ * money admission becomes an observation instead of a reservation:
+ *   - the credit floor is not checked: a low balance must not stop a lane
+ *     that spends nothing;
+ *   - no credit is reserved, on the lane's counter or on the shared day cap:
+ *     an exhausted shared cap must not stop it either, and a request that
+ *     fails leaves nothing on the lane's counter — a day of failing attempts
+ *     can no longer spend the lane's own quota on estimates;
+ *   - the lane's quota stays, against what the vendor ACTUALLY charged today
+ *     (recorded by the client's ledger sink, or here from the response's
+ *     _meta when no sink accounted it). If stored reads ever start costing
+ *     credits, the lane stops at its quota: that is the end of the assumption,
+ *     not a transient.
+ * The per-run request cap is unchanged; so is everything the client enforces
+ * before a request (credential, storage health, pacing).
  */
 export function createOfapiRestGuard(app: AppContext, options?: {
   maxRequestsPerRun?: number;
   dailyCreditBudget?: number;
   budgetScope?: OfapiDayBudgetScope;
+  freeReads?: boolean;
 }) {
   const maxRequestsPerRun = Math.max(
     1,
@@ -188,6 +207,54 @@ export function createOfapiRestGuard(app: AppContext, options?: {
       : "global";
   let requestsUsed = 0;
   let reservationReceipt: Awaited<ReturnType<typeof reserveOfapiDayCredits>> = null;
+
+  if (options?.freeReads === true) {
+    // The lane's own counter, ledger on or off: with no reservations on it,
+    // it holds actual charges only, and the global-counter fallback (all
+    // OFAPI spend of the day) would be the wrong thing to hold a quota to.
+    const lane = options.budgetScope;
+    if (lane === undefined || lane === "global") {
+      throw new Error("OFAPI free-read guard needs a dedicated budget scope");
+    }
+    return {
+      get requestsUsed() {
+        return requestsUsed;
+      },
+      abandonPendingReservation() {
+        // Nothing was reserved, so a failed request leaves nothing behind.
+        return false;
+      },
+      async resolveBlock(): Promise<OfapiBudgetBlock | null> {
+        if (requestsUsed >= maxRequestsPerRun) {
+          return "ofapi_request_budget";
+        }
+        return await getOfapiDayCreditsSpent(app.db, lane) >= dailyCreditBudget
+          ? "ofapi_daily_credit_budget"
+          : null;
+      },
+      async recordResponse(page: OfapiListPage) {
+        requestsUsed += 1;
+        // The client's ledger sink recorded every physical attempt already,
+        // on the shared counter and on this lane.
+        if (page.creditSpendAccounted === true) {
+          return;
+        }
+        // No sink accounted it (ledger off, or a client without one): take
+        // the vendor's own word. A response that names no charge is free —
+        // that is the lane's premise — and a balance it reports is still a
+        // reconciliation anchor.
+        const creditsUsed = page.meta?.creditsUsed ?? 0;
+        const balance = page.meta?.creditBalance ?? null;
+        if (creditsUsed > 0 || balance !== null) {
+          await recordOfapiPhysicalCreditUsage(app.db, {
+            creditsUsed,
+            balance,
+            budgetScope: lane,
+          });
+        }
+      },
+    };
+  }
 
   return {
     get requestsUsed() {

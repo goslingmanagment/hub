@@ -72,6 +72,7 @@ import {
 } from "./services/ofapi-chargebacks-sync.ts";
 import {
   ensureOfapiLinkStatsQueue,
+  queueOfapiLinkStatsRunsAfterRebind,
   startOfapiLinkStatsWorker,
 } from "./services/ofapi-link-stats-sync.ts";
 import {
@@ -248,6 +249,9 @@ export async function startWorkerServices(
       if (result.skipped !== "disabled") app.logger.warn({ skipped: result.skipped }, "OFAPI binding reconcile skipped");
       return;
     }
+    // A page moved to another OFAPI account is read by the link series
+    // 20 minutes later instead of waiting for the next window.
+    await queueOfapiLinkStatsRunsAfterRebind(app, boss, result.actions);
     if (result.actions.length + result.waiting.length + result.identityMismatches.length + result.duplicates.length > 0) {
       app.logger.info(result, "OFAPI binding reconcile complete");
     }

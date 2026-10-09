@@ -1,5 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
+import { createServer, type Server } from "node:http";
 
+import { PgBoss } from "pg-boss";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -18,19 +20,33 @@ import {
 
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import {
+  ensureOfapiLinkStatsQueue,
+  OFAPI_LINK_STATS_RECONCILE_QUEUE,
+  OFAPI_LINK_STATS_RETRY_QUEUE,
+  parseOfapiLinkStatsTargetedJob,
+  queueOfapiLinkStatsRunAfterBindingReplaced,
+  queueOfapiLinkStatsRunsAfterOperatorRebind,
+  queueOfapiLinkStatsRunsAfterRebind,
   runOfapiLinkStatsReconcile,
   startOfapiLinkStatsWorker,
+  type OfapiLinkStatsTargetedJob,
 } from "../apps/runtime/src/services/ofapi-link-stats-sync.ts";
 import {
   nextOfapiLinkStatsWindowAt,
   ofapiLinkStatsWindowAt,
 } from "../apps/runtime/src/services/ofapi-link-stats-windows.ts";
-import type { OfapiClient, OfapiListPage } from "../apps/runtime/src/services/ofapi.ts";
+import { createOfapiCreditSpendSink } from "../apps/runtime/src/services/ofapi-credits.ts";
+import {
+  createOfapiClient,
+  type OfapiClient,
+  type OfapiListPage,
+} from "../apps/runtime/src/services/ofapi.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
   type StartedTestDatabase,
 } from "./helpers/db.ts";
+import { listenOnLoopback } from "./helpers/network.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 
 let testDb: StartedTestDatabase | null = null;
@@ -112,6 +128,52 @@ function snapshot(pageId: number, linkKind: LinkStatKind, platformLinkId: string
 async function seriesOf(pageId: number, linkKind: LinkStatKind) {
   const runs = await listLinkStatRuns(appContext.db, { platformAccountId: pageId, linkKind });
   return runs.reverse();
+}
+
+function parseJob(data: unknown) {
+  const target = parseOfapiLinkStatsTargetedJob(data);
+  if (target === null) throw new Error("unreadable link-stats job payload");
+  return target;
+}
+
+/** Today's OFAPI day counters; 0 where nothing was ever written. */
+async function dayCounters() {
+  const result = await testDb!.pool.query<{ link_stats: number; backfill: number; global: number }>(
+    `select coalesce(max(link_stats_spent_credits), 0)::int as link_stats,
+            coalesce(max(backfill_spent_credits), 0)::int as backfill,
+            coalesce(max(spent_credits), 0)::int as global
+       from ofapi_credit_state where id = 1`,
+  );
+  return result.rows[0]!;
+}
+
+interface SentJob {
+  queue: string;
+  data: OfapiLinkStatsTargetedJob;
+  options: { startAfter: number; singletonKey: string; retryLimit: number };
+}
+
+/** The slice of pg-boss the link-stats lane uses: `send` is recorded, `work`
+ * keeps the handler of each queue. */
+function fakeBoss() {
+  const sent: SentJob[] = [];
+  const handlers = new Map<string, (jobs: Array<{ data: unknown }>) => Promise<void>>();
+  return {
+    sent,
+    handlers,
+    async send(queue: string, data: OfapiLinkStatsTargetedJob, options: SentJob["options"]) {
+      sent.push({ queue, data, options });
+      return "job-id";
+    },
+    async work(
+      queue: string,
+      _options: { batchSize: number },
+      handler: (jobs: Array<{ data: unknown }>) => Promise<void>,
+    ) {
+      handlers.set(queue, handler);
+      return null;
+    },
+  };
 }
 
 function trackingItem(): Record<string, unknown> {
@@ -271,16 +333,9 @@ describe("OFAPI link-stats reconcile", () => {
     });
     expect(trialSnapshot?.revenueCalculatedAt).toBeInstanceOf(Date);
 
-    // Lane attribution: the fake client never acknowledges spend, so the two
-    // 1-credit reservations stay charged — and they must sit on the DEDICATED
-    // link_stats counter, with the chargebacks backfill lane untouched.
-    const counters = await testDb!.pool.query(
-      `select link_stats_spent_credits, backfill_spent_credits from ofapi_credit_state where id = 1`,
-    );
-    expect(counters.rows[0]).toMatchObject({
-      link_stats_spent_credits: 2,
-      backfill_spent_credits: 0,
-    });
+    // The stored reads are free and the lane reserves nothing for them: two
+    // requests that the vendor did not charge leave every day counter alone.
+    expect(await dayCounters()).toEqual({ link_stats: 0, backfill: 0, global: 0 });
 
     // Stage-7 journaling is load-bearing: one raw-payload row per fetched API
     // page, record-shaped (the sync-pull canonicalizer gates on isRecord).
@@ -425,15 +480,13 @@ describe("OFAPI link-stats reconcile", () => {
     });
 
     // The pg-boss worker surfaces the failure as a terminal job error.
-    let workerHandler: (() => Promise<void>) | null = null;
-    await startOfapiLinkStatsWorker(appContext, {
-      async work(_queue, _options, handler) {
-        workerHandler = handler;
-        return null;
-      },
-    });
-    expect(workerHandler).not.toBeNull();
-    await expect(workerHandler!()).rejects.toThrow(
+    const boss = fakeBoss();
+    await startOfapiLinkStatsWorker(appContext, boss);
+    expect([...boss.handlers.keys()]).toEqual([
+      OFAPI_LINK_STATS_RECONCILE_QUEUE,
+      OFAPI_LINK_STATS_RETRY_QUEUE,
+    ]);
+    await expect(boss.handlers.get(OFAPI_LINK_STATS_RECONCILE_QUEUE)!([])).rejects.toThrow(
       "OFAPI link-stats reconcile failed for 1 page(s)",
     );
     incidents = await listNotificationIncidents(appContext.db);
@@ -784,26 +837,22 @@ describe("OFAPI link-stats reconcile", () => {
     void page;
   });
 
-  it("budget exhaustion truncates quietly: run rows land, but money blocks never page (ofapi_low_credit owns that)", async (context) => {
+  it("the lane's quota stops it once the vendor has really charged that much, and that is an incident", async (context) => {
     if (!testDb) {
       context.skip();
       return;
     }
 
     const page = await seedOfapiPage("links-budget-of", "acct_budget");
-    appContext = createTestAppContext(testDb, {
-      ofapiLinkStatsReconcileEnabled: true,
-      ofapiCreditLedgerEnabled: true,
-    });
     const listStoredTrackingLinks = vi.fn();
     const listStoredTrialLinks = vi.fn();
     appContext = {
       ...appContext,
       ofapi: { listStoredTrackingLinks, listStoredTrialLinks } as unknown as OfapiClient,
     };
-    // Deterministic exhaustion: the DEDICATED link_stats day counter is
-    // pre-seeded at the 50-credit default before the run (not an artifact of
-    // unreleased reservations — the real client releases them).
+    // The DEDICATED link_stats day counter already holds the 50-credit
+    // default. Nothing is reserved on it any more, so it got there by real
+    // charges: stored reads stopped being free.
     await testDb.pool.query(
       `insert into ofapi_credit_state (id, link_stats_spend_day, link_stats_spent_credits)
        values (1, (now() at time zone 'utc')::date, 50)
@@ -825,11 +874,18 @@ describe("OFAPI link-stats reconcile", () => {
       "ofapi_daily_credit_budget",
       "ofapi_daily_credit_budget",
     ]);
-    // ...and NO incident: a money-guard block is a symptom of the account's
-    // credit state, which ofapi_low_credit already pages — this lane logs a
-    // warn (chargebacks precedent). Non-monetary truncation still pages (see
-    // the pagination-contradiction policy).
-    expect(await listNotificationIncidents(appContext.db)).toEqual([]);
+    // ...and the incident opens: no other signal says that the premise the
+    // lane runs on (stored reads cost nothing) no longer holds.
+    const incidents = await listNotificationIncidents(appContext.db);
+    expect(incidents).toHaveLength(1);
+    expect(incidents[0]).toMatchObject({
+      kind: "ofapi_link_stats_reconcile_failed",
+      status: "open",
+    });
+    expect(incidents[0]!.errorSummary).toBe(
+      "fleet fully truncated (1 page(s)): no snapshots written — the vendor charged the lane's "
+        + "whole daily quota for stored reads (they are meant to be free)",
+    );
   });
 
   it("marks a contradictory pagination walk truncated, never complete", async (context) => {
@@ -1591,6 +1647,1071 @@ describe("OFAPI link-stats series: the empty-cache guard is per OFAPI account", 
   });
 });
 
+describe("OFAPI link-stats series: a window is read again until it has a result", () => {
+  const WINDOW = ofapiLinkStatsWindowAt(new Date("2026-10-08T12:00:00Z"));
+  const NEXT_WINDOW = nextOfapiLinkStatsWindowAt(WINDOW);
+  const at = (minutes: number, base = WINDOW) => new Date(base.getTime() + minutes * 60_000);
+  const listPage = (items: Record<string, unknown>[]): OfapiListPage => ({
+    items, hasNextPage: false, nextMarker: null, nextPageUrl: null, meta: null,
+  });
+
+  /** A client whose two lists are spies; a kind named in `failing` throws. */
+  function spiedClient(failing: Set<LinkStatKind>) {
+    const listStoredTrackingLinks = vi.fn(async () => {
+      if (failing.has("tracking")) {
+        throw new Error("tracking endpoint down");
+      }
+      return listPage([trackingItem()]);
+    });
+    const listStoredTrialLinks = vi.fn(async () => {
+      if (failing.has("trial")) {
+        throw new Error("trial endpoint down");
+      }
+      return listPage([trialItem()]);
+    });
+    return {
+      listStoredTrackingLinks,
+      listStoredTrialLinks,
+      client: { listStoredTrackingLinks, listStoredTrialLinks } as unknown as OfapiClient,
+    };
+  }
+
+  it("one kind keeps failing while the other works: only the failing one is read again, three times, and every failure is a row", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedOfapiPage("retry-mixed-of", "acct_retry_mixed");
+    const lists = spiedClient(new Set(["trial"]));
+    appContext = { ...appContext, ofapi: lists.client };
+    const boss = fakeBoss();
+
+    const scheduled = await runOfapiLinkStatsReconcile(appContext, { now: at(0.5), boss });
+    expect(scheduled.queuedRetry).toEqual({ windowAt: WINDOW, retry: 1, startAfterSeconds: 15 * 60 });
+    expect(boss.sent).toEqual([{
+      queue: OFAPI_LINK_STATS_RETRY_QUEUE,
+      data: { trigger: "retry", windowAt: WINDOW.toISOString(), retry: 1 },
+      options: { startAfter: 15 * 60, singletonKey: `retry:${WINDOW.toISOString()}:1`, retryLimit: 0 },
+    }]);
+
+    // Retry 1, 15 minutes in: the working kind already has its result and is
+    // NOT read again; the failing one is, fails, and the next retry is queued
+    // — its failed row did not cancel it.
+    const first = await runOfapiLinkStatsReconcile(appContext, {
+      now: at(15.5), boss, target: { trigger: "retry", windowAt: WINDOW, retry: 1 },
+    });
+    expect(first.pages).toEqual([expect.objectContaining({ pageLabel: page.label, status: "failed" })]);
+    expect(first.pages[0]!.kinds.map((kind) => kind.linkKind)).toEqual(["trial"]);
+    expect(lists.listStoredTrackingLinks).toHaveBeenCalledTimes(1);
+    expect(lists.listStoredTrialLinks).toHaveBeenCalledTimes(2);
+    expect(first.queuedRetry).toEqual({ windowAt: WINDOW, retry: 2, startAfterSeconds: 45 * 60 });
+
+    const second = await runOfapiLinkStatsReconcile(appContext, {
+      now: at(60.5), boss, target: { trigger: "retry", windowAt: WINDOW, retry: 2 },
+    });
+    expect(second.queuedRetry).toEqual({ windowAt: WINDOW, retry: 3, startAfterSeconds: 2 * 60 * 60 });
+
+    // The third retry is the last: the window keeps its hole, in the open.
+    const third = await runOfapiLinkStatsReconcile(appContext, {
+      now: at(180.5), boss, target: { trigger: "retry", windowAt: WINDOW, retry: 3 },
+    });
+    expect(third.queuedRetry).toBeNull();
+    expect(boss.sent.map((job) => job.options.singletonKey)).toEqual([
+      `retry:${WINDOW.toISOString()}:1`,
+      `retry:${WINDOW.toISOString()}:2`,
+      `retry:${WINDOW.toISOString()}:3`,
+    ]);
+    expect(lists.listStoredTrackingLinks).toHaveBeenCalledTimes(1);
+    expect(lists.listStoredTrialLinks).toHaveBeenCalledTimes(4);
+
+    expect((await seriesOf(page.id, "tracking")).map((run) => [run.attempt, run.status])).toEqual([
+      [1, "complete"],
+    ]);
+    expect((await seriesOf(page.id, "trial")).map((run) => [
+      run.windowAt?.toISOString(), run.attempt, run.status, run.reason,
+    ])).toEqual([1, 2, 3, 4].map((attempt) => [
+      WINDOW.toISOString(), attempt, "failed", "trial endpoint down",
+    ]));
+    // A pair that used up the window's attempts is left to the next window:
+    // a late pass of the same window does not read it a fifth time.
+    const late = await runOfapiLinkStatsReconcile(appContext, {
+      now: at(200), boss, target: { trigger: "retry", windowAt: WINDOW, retry: 3 },
+    });
+    expect(late).toEqual({ pages: [], queuedRetry: null });
+    expect(lists.listStoredTrialLinks).toHaveBeenCalledTimes(4);
+  });
+
+  it("after a rebind a cold cache is read again; a kind that never had a link is not", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedOfapiPage("retry-cold-of", "acct_retry_cold_before");
+    // Never a trial link under any account, and empty for days already
+    // (lora-of's trial links).
+    await insertLinkStatRunWithSnapshots(appContext.db, {
+      platformAccountId: page.id,
+      linkKind: "trial",
+      status: "partial",
+      pulledAt: new Date(WINDOW.getTime() - 3 * 24 * 60 * 60_000),
+      apiPages: 1,
+      rawItems: 0,
+      writtenRows: 0,
+      reason: "empty_unverified",
+      windowAt: new Date(WINDOW.getTime() - 3 * 24 * 60 * 60_000),
+      ofapiAccountId: "acct_retry_cold_before",
+    }, []);
+    const inventory = {
+      trackingByAccount: new Map<string, Record<string, unknown>[]>([["acct_retry_cold_before", [trackingItem()]]]),
+      trialByAccount: new Map<string, Record<string, unknown>[]>(),
+    };
+    const calls: string[] = [];
+    const client = linksClient(inventory);
+    appContext = {
+      ...appContext,
+      ofapi: {
+        async listStoredTrackingLinks(context_: unknown, accountId: string, params: { offset?: number }) {
+          calls.push(`tracking:${accountId}`);
+          return client.listStoredTrackingLinks!(context_ as never, accountId, params);
+        },
+        async listStoredTrialLinks(context_: unknown, accountId: string, params: { offset?: number }) {
+          calls.push(`trial:${accountId}`);
+          return client.listStoredTrialLinks!(context_ as never, accountId, params);
+        },
+      } as unknown as OfapiClient,
+    };
+    const boss = fakeBoss();
+    const previous = ofapiLinkStatsWindowAt(new Date(WINDOW.getTime() - 1));
+    await runOfapiLinkStatsReconcile(appContext, { now: new Date(previous.getTime() + 30_000), boss });
+    // Both kinds have their result in that window: its retry reads nothing.
+    expect((await runOfapiLinkStatsReconcile(appContext, {
+      now: new Date(previous.getTime() + 15.5 * 60_000), boss,
+      target: { trigger: "retry", windowAt: previous, retry: 1 },
+    })).pages).toEqual([]);
+
+    // Rebound; the new account's cache is cold for both kinds.
+    await rebindPage(page.id, "acct_retry_cold_after");
+    calls.length = 0;
+    const scheduled = await runOfapiLinkStatsReconcile(appContext, { now: at(0.5), boss });
+    expect(scheduled.queuedRetry).toMatchObject({ windowAt: WINDOW, retry: 1 });
+    const retried = await runOfapiLinkStatsReconcile(appContext, {
+      now: at(15.5), boss, target: { trigger: "retry", windowAt: WINDOW, retry: 1 },
+    });
+    // Only tracking — it had links before, so its empty read is no result.
+    expect(retried.pages[0]!.kinds.map((kind) => kind.linkKind)).toEqual(["tracking"]);
+    expect(calls).toEqual([
+      "tracking:acct_retry_cold_after",
+      "trial:acct_retry_cold_after",
+      "tracking:acct_retry_cold_after",
+    ]);
+
+    // The cache warms up on the next retry: the window gets its point.
+    inventory.trackingByAccount.set("acct_retry_cold_after", [trackingItem()]);
+    const warmed = await runOfapiLinkStatsReconcile(appContext, {
+      now: at(60.5), boss, target: { trigger: "retry", windowAt: WINDOW, retry: 2 },
+    });
+    expect(warmed.pages[0]!.kinds.map((kind) => [kind.linkKind, kind.status])).toEqual([["tracking", "partial"]]);
+    expect((await runOfapiLinkStatsReconcile(appContext, {
+      now: at(180.5), boss, target: { trigger: "retry", windowAt: WINDOW, retry: 3 },
+    })).pages).toEqual([]);
+    expect((await seriesOf(page.id, "tracking")).map((run) => [run.attempt, run.status, run.reason])).toEqual([
+      [1, "complete", null],
+      [1, "partial", "empty_unverified"],
+      [2, "partial", "empty_unverified"],
+      [3, "partial", "binding_changed"],
+    ]);
+  });
+
+  it("after a rebind the old binding's attempts do not use up the new account's retries", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    // The page had links under the old account (an earlier window)…
+    const page = await seedOfapiPage("retry-binding-cap-of", "acct_cap_old");
+    const inventory = {
+      trackingByAccount: new Map<string, Record<string, unknown>[]>([["acct_cap_old", [trackingItem()]]]),
+      trialByAccount: new Map<string, Record<string, unknown>[]>([["acct_cap_old", [trialItem()]]]),
+    };
+    appContext = { ...appContext, ofapi: linksClient(inventory) };
+    const boss = fakeBoss();
+    const previous = ofapiLinkStatsWindowAt(new Date(WINDOW.getTime() - 1));
+    await runOfapiLinkStatsReconcile(appContext, { now: new Date(previous.getTime() + 30_000), boss });
+
+    // …then its session died: the window's pass and its three retries all
+    // skip it — four rows under the old binding.
+    await testDb.pool.query(`update pages set ofapi_auth_status = 'authentication_failed' where id = $1`, [page.id]);
+    await runOfapiLinkStatsReconcile(appContext, { now: at(0.5), boss });
+    for (const [retry, minutes] of [[1, 15.5], [2, 60.5], [3, 180.5]] as const) {
+      await runOfapiLinkStatsReconcile(appContext, {
+        now: at(minutes), boss, target: { trigger: "retry", windowAt: WINDOW, retry },
+      });
+    }
+    expect((await seriesOf(page.id, "tracking")).slice(1).map((run) => [run.attempt, run.status, run.ofapiAccountId]))
+      .toEqual([1, 2, 3, 4].map((attempt) => [attempt, "skipped", "acct_cap_old"]));
+
+    // Rebound; the run after it meets a cold cache: a fifth row, no result.
+    await rebindPage(page.id, "acct_cap_new");
+    await testDb.pool.query(`update pages set ofapi_auth_status = null where id = $1`, [page.id]);
+    const afterRebind = await runOfapiLinkStatsReconcile(appContext, {
+      now: at(200), boss, target: { trigger: "rebind", pageId: page.id },
+    });
+    expect(afterRebind.pages[0]!.kinds.map((kind) => [kind.linkKind, kind.reason])).toEqual([
+      ["tracking", "empty_unverified"],
+      ["trial", "empty_unverified"],
+    ]);
+    expect(afterRebind.queuedRetry).toMatchObject({ windowAt: WINDOW, retry: 1 });
+
+    // The cache warms; the retry the rebind run queued reads the page.
+    inventory.trackingByAccount.set("acct_cap_new", [trackingItem()]);
+    inventory.trialByAccount.set("acct_cap_new", [trialItem()]);
+    const warmed = await runOfapiLinkStatsReconcile(appContext, {
+      now: at(215.5), boss, target: { trigger: "retry", windowAt: WINDOW, retry: 1 },
+    });
+    expect(warmed.pages).toEqual([expect.objectContaining({ pageLabel: page.label, status: "partial", reason: "binding_changed" })]);
+    expect((await seriesOf(page.id, "trial")).slice(-2).map((run) => [run.attempt, run.status, run.reason, run.ofapiAccountId]))
+      .toEqual([
+        [5, "partial", "empty_unverified", "acct_cap_new"],
+        [6, "partial", "binding_changed", "acct_cap_new"],
+      ]);
+    expect((await listLinkStatWindowPairStates(appContext.db, { windowAt: WINDOW }))
+      .find((state) => state.linkKind === "trial")).toMatchObject({
+      attempts: 6, attemptsUnderCurrentBinding: 2, hasUsableResult: true,
+    });
+  });
+
+  it("a newly connected page that reads empty is read again — its first day of empty reads is no result", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    // Connected for the first time: Hub has never seen its links, and the
+    // vendor's stored cache answers empty for both kinds — cold, or truly
+    // empty; nothing tells which yet.
+    const page = await seedOfapiPage("retry-new-cold-of", "acct_retry_new_cold");
+    const inventory = {
+      trackingByAccount: new Map<string, Record<string, unknown>[]>(),
+      trialByAccount: new Map<string, Record<string, unknown>[]>(),
+    };
+    appContext = { ...appContext, ofapi: linksClient(inventory) };
+    const boss = fakeBoss();
+
+    const scheduled = await runOfapiLinkStatsReconcile(appContext, { now: at(0.5), boss });
+    expect(scheduled.pages[0]!.kinds.map((kind) => [kind.linkKind, kind.reason])).toEqual([
+      ["tracking", "empty_unverified"],
+      ["trial", "empty_unverified"],
+    ]);
+    expect(scheduled.queuedRetry).toMatchObject({ windowAt: WINDOW, retry: 1 });
+
+    // The cache warms up for tracking by the first retry; trial stays empty.
+    inventory.trackingByAccount.set("acct_retry_new_cold", [trackingItem()]);
+    const retried = await runOfapiLinkStatsReconcile(appContext, {
+      now: at(15.5), boss, target: { trigger: "retry", windowAt: WINDOW, retry: 1 },
+    });
+    expect(retried.pages[0]!.kinds.map((kind) => [kind.linkKind, kind.status])).toEqual([
+      ["tracking", "written"],
+      ["trial", "partial"],
+    ]);
+    // Trial is still within its first day of empty reads: read again.
+    expect(retried.queuedRetry).toMatchObject({ retry: 2 });
+    expect((await seriesOf(page.id, "tracking")).map((run) => [run.attempt, run.status])).toEqual([
+      [1, "partial"],
+      [2, "complete"],
+    ]);
+  });
+
+  it("a retry that lands the result ends the retries and resolves the incident", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedOfapiPage("retry-heals-of", "acct_retry_heals");
+    const failing = new Set<LinkStatKind>(["trial"]);
+    appContext = { ...appContext, ofapi: spiedClient(failing).client };
+    const boss = fakeBoss();
+
+    await runOfapiLinkStatsReconcile(appContext, { now: at(0.5), boss });
+    expect((await listNotificationIncidents(appContext.db)).map((incident) => incident.status)).toEqual(["open"]);
+
+    failing.clear();
+    const retried = await runOfapiLinkStatsReconcile(appContext, {
+      now: at(15.5), boss, target: { trigger: "retry", windowAt: WINDOW, retry: 1 },
+    });
+    expect(retried.pages).toEqual([expect.objectContaining({ pageLabel: page.label, status: "written" })]);
+    expect((await seriesOf(page.id, "trial")).map((run) => [run.attempt, run.status])).toEqual([
+      [1, "failed"],
+      [2, "complete"],
+    ]);
+    // The next retry was persisted before this one read; it finds nothing left.
+    expect(retried.queuedRetry).toMatchObject({ retry: 2 });
+    const idle = await runOfapiLinkStatsReconcile(appContext, {
+      now: at(60.5), boss, target: { trigger: "retry", windowAt: WINDOW, retry: 2 },
+    });
+    expect(idle.pages).toEqual([]);
+    expect((await listNotificationIncidents(appContext.db)).map((incident) => incident.status)).toEqual(["resolved"]);
+  });
+
+  it("a clean pass still persists its retry, and a retry with nothing to do reads nothing", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedOfapiPage("retry-clean-of", "acct_retry_clean");
+    const lists = spiedClient(new Set());
+    appContext = { ...appContext, ofapi: lists.client };
+    const boss = fakeBoss();
+
+    // The retry is persisted before the pass reads anything, so it exists
+    // whatever the pass then finds.
+    const scheduled = await runOfapiLinkStatsReconcile(appContext, { now: at(0.5), boss });
+    expect(scheduled.queuedRetry).toMatchObject({ retry: 1 });
+
+    // It runs, finds every pair with a result, and reads nothing.
+    const idle = await runOfapiLinkStatsReconcile(appContext, {
+      now: at(15.5), boss, target: { trigger: "retry", windowAt: WINDOW, retry: 1 },
+    });
+    expect(idle.pages).toEqual([]);
+    expect(lists.listStoredTrackingLinks).toHaveBeenCalledTimes(1);
+    expect(await listLinkStatRuns(appContext.db, { platformAccountId: page.id })).toHaveLength(2);
+  });
+
+  it("a retry that arrives after its window closed reads nothing and writes nothing", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedOfapiPage("retry-late-of", "acct_retry_late");
+    const lists = spiedClient(new Set(["trial"]));
+    appContext = { ...appContext, ofapi: lists.client };
+    const boss = fakeBoss();
+    await runOfapiLinkStatsReconcile(appContext, { now: at(0.5), boss });
+
+    const late = await runOfapiLinkStatsReconcile(appContext, {
+      now: at(1, NEXT_WINDOW), boss, target: { trigger: "retry", windowAt: WINDOW, retry: 1 },
+    });
+    expect(late).toEqual({ pages: [], queuedRetry: null });
+    expect(lists.listStoredTrialLinks).toHaveBeenCalledTimes(1);
+    expect(await listLinkStatRuns(appContext.db, { platformAccountId: page.id })).toHaveLength(2);
+    expect(boss.sent).toHaveLength(1);
+  });
+
+  it("no retry is queued when it could only start after the window closed", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    await seedOfapiPage("retry-edge-of", "acct_retry_edge");
+    appContext = { ...appContext, ofapi: spiedClient(new Set(["trial"])).client };
+    const boss = fakeBoss();
+
+    // A pass ten minutes before the next window: the first retry (15 min)
+    // would land in the next window, whose own pass is the next point.
+    const result = await runOfapiLinkStatsReconcile(appContext, { now: at(-10, NEXT_WINDOW), boss });
+    expect(result.pages[0]).toMatchObject({ status: "failed" });
+    expect(result.queuedRetry).toBeNull();
+    expect(boss.sent).toEqual([]);
+  });
+
+  it("a page without a mapping is not retried; a dead session and a pair with no row at all are", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const unmapped = await seedUnmappedPage("retry-unmapped-of");
+    const authDead = await seedOfapiPage("retry-authdead-of", "acct_retry_authdead");
+    await testDb.pool.query(
+      `update pages set ofapi_auth_status = 'authentication_failed' where id = $1`,
+      [authDead.id],
+    );
+    const lists = spiedClient(new Set(["trial"]));
+    appContext = { ...appContext, ofapi: lists.client };
+    const boss = fakeBoss();
+
+    // Only pages the pass cannot read.
+    const alone = await runOfapiLinkStatsReconcile(appContext, { now: at(0.5), boss });
+    expect(alone.pages.map((entry) => entry.reason).sort()).toEqual(["page_auth_dead", "page_unmapped"]);
+
+    // A readable page with a failing kind joins the fleet; its first pass in
+    // the window queues the retry.
+    const failing = await seedOfapiPage("retry-failing-of", "acct_retry_failing");
+    const again = await runOfapiLinkStatsReconcile(appContext, { now: at(1.5), boss });
+    expect(again.queuedRetry).toMatchObject({ retry: 1 });
+    // A page that appears after the pass has no row in the window at all.
+    const newcomer = await seedOfapiPage("retry-newcomer-of", "acct_retry_newcomer");
+
+    const retried = await runOfapiLinkStatsReconcile(appContext, {
+      now: at(16.5), boss, target: { trigger: "retry", windowAt: WINDOW, retry: 1 },
+    });
+    expect(Object.fromEntries(retried.pages.map((entry) => [
+      entry.pageLabel, entry.kinds.map((kind) => kind.linkKind),
+    ]))).toEqual({
+      // Still dead: looked at again, skipped again, no request.
+      [authDead.label]: [],
+      [failing.label]: ["trial"],
+      [newcomer.label]: ["tracking", "trial"],
+    });
+    expect(retried.pages.find((entry) => entry.pageLabel === authDead.label))
+      .toMatchObject({ status: "skipped", reason: "page_auth_dead" });
+    expect((await seriesOf(newcomer.id, "tracking")).map((run) => [run.attempt, run.status])).toEqual([
+      [1, "complete"],
+    ]);
+    expect((await seriesOf(newcomer.id, "trial")).map((run) => [run.attempt, run.status])).toEqual([
+      [1, "failed"],
+    ]);
+    // The unmapped page got nothing from the retry; the dead session got
+    // its third look.
+    expect((await seriesOf(unmapped.id, "trial")).map((run) => [run.attempt, run.status])).toEqual([
+      [1, "skipped"],
+      [2, "skipped"],
+    ]);
+    expect((await seriesOf(authDead.id, "trial")).map((run) => [run.attempt, run.status, run.reason])).toEqual([
+      [1, "skipped", "page_auth_dead"],
+      [2, "skipped", "page_auth_dead"],
+      [3, "skipped", "page_auth_dead"],
+    ]);
+    expect((lists.listStoredTrialLinks.mock.calls as unknown as Array<[unknown, string]>)
+      .some(([, accountId]) => accountId === "acct_retry_authdead")).toBe(false);
+  });
+
+  it("a session restored on the same account after the window's pass is read by the window's retry", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    // 09:45-like: the session is dead, the pass skips the page.
+    const page = await seedOfapiPage("retry-restored-of", "acct_retry_restored");
+    await testDb.pool.query(`update pages set ofapi_auth_status = 'authentication_failed' where id = $1`, [page.id]);
+    appContext = {
+      ...appContext,
+      ofapi: linksClient({
+        trackingByAccount: new Map([["acct_retry_restored", [trackingItem()]]]),
+        trialByAccount: new Map([["acct_retry_restored", [trialItem()]]]),
+      }),
+    };
+    const boss = fakeBoss();
+    const skipped = await runOfapiLinkStatsReconcile(appContext, { now: at(0.5), boss });
+    expect(skipped.pages[0]).toMatchObject({ status: "skipped", reason: "page_auth_dead" });
+    expect(skipped.queuedRetry).toMatchObject({ retry: 1 });
+
+    // 09:50-like: accounts.reconnected on the same acct_* — no rebind, no
+    // link run of its own. The window's retry picks the page up.
+    await testDb.pool.query(`update pages set ofapi_auth_status = 'reconnected' where id = $1`, [page.id]);
+    const retried = await runOfapiLinkStatsReconcile(appContext, {
+      now: at(15.5), boss, target: { trigger: "retry", windowAt: WINDOW, retry: 1 },
+    });
+    expect(retried.pages).toEqual([expect.objectContaining({ pageLabel: page.label, status: "written" })]);
+    for (const kind of ["tracking", "trial"] as const) {
+      expect((await seriesOf(page.id, kind)).map((run) => [run.attempt, run.status, run.reason])).toEqual([
+        [1, "skipped", "page_auth_dead"],
+        [2, "complete", null],
+      ]);
+    }
+  });
+
+  it("a pass that dies before it reads anything has already persisted the window's retry", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    await seedOfapiPage("retry-crash-of", "acct_retry_crash");
+    const boss = fakeBoss();
+    // The first database call of the pass — listing the fleet — fails, as a
+    // transient error or a crash would end it.
+    const db = appContext.db;
+    let calls = 0;
+    const failingDb = new Proxy(db, {
+      get(target, property, receiver) {
+        if (property === "execute") {
+          return (...args: unknown[]) => {
+            calls += 1;
+            if (calls === 1) {
+              return Promise.reject(new Error("connection terminated unexpectedly"));
+            }
+            return (target.execute as (...inner: unknown[]) => unknown).apply(target, args);
+          };
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    await expect(runOfapiLinkStatsReconcile({ ...appContext, db: failingDb }, { now: at(0.5), boss }))
+      .rejects.toThrow("connection terminated unexpectedly");
+    expect(boss.sent).toEqual([{
+      queue: OFAPI_LINK_STATS_RETRY_QUEUE,
+      data: { trigger: "retry", windowAt: WINDOW.toISOString(), retry: 1 },
+      options: { startAfter: 15 * 60, singletonKey: `retry:${WINDOW.toISOString()}:1`, retryLimit: 0 },
+    }]);
+
+    // The retry then reads the window, which has nothing yet.
+    appContext = {
+      ...appContext,
+      ofapi: linksClient({
+        trackingByAccount: new Map([["acct_retry_crash", [trackingItem()]]]),
+        trialByAccount: new Map([["acct_retry_crash", [trialItem()]]]),
+      }),
+    };
+    const retried = await runOfapiLinkStatsReconcile(appContext, {
+      now: at(15.5), boss, target: { trigger: "retry", windowAt: WINDOW, retry: 1 },
+    });
+    expect(retried.pages).toEqual([expect.objectContaining({ status: "written" })]);
+  });
+
+  it("a targeted pass that succeeds does not resolve the incident while another readable pair still has no result", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const healing = await seedOfapiPage("gate-healing-of", "acct_gate_healing");
+    const exhausted = await seedOfapiPage("gate-exhausted-of", "acct_gate_exhausted");
+    const failing = new Set<LinkStatKind>(["trial"]);
+    appContext = { ...appContext, ofapi: spiedClient(failing).client };
+    const boss = fakeBoss();
+
+    await runOfapiLinkStatsReconcile(appContext, { now: at(0.5), boss });
+    // The second page's trial has already used every attempt of the window.
+    for (let attempt = 2; attempt <= 4; attempt += 1) {
+      await insertLinkStatRun(appContext.db, {
+        platformAccountId: exhausted.id,
+        linkKind: "trial",
+        status: "failed",
+        pulledAt: at(attempt),
+        apiPages: 0,
+        rawItems: 0,
+        writtenRows: 0,
+        reason: "trial endpoint down",
+        windowAt: WINDOW,
+        ofapiAccountId: "acct_gate_exhausted",
+      });
+    }
+
+    failing.clear();
+    const retried = await runOfapiLinkStatsReconcile(appContext, {
+      now: at(15.5), boss, target: { trigger: "retry", windowAt: WINDOW, retry: 1 },
+    });
+    // Only the page that may still be retried was read, and it healed...
+    expect(retried.pages).toEqual([expect.objectContaining({ pageLabel: healing.label, status: "written" })]);
+    // ...but the fleet did not: the other page's trial is still without a result.
+    expect((await listNotificationIncidents(appContext.db)).map((incident) => incident.status)).toEqual(["open"]);
+
+    // The next window's scheduled pass reads everything and closes it.
+    await runOfapiLinkStatsReconcile(appContext, { now: at(0.5, NEXT_WINDOW), boss });
+    expect((await listNotificationIncidents(appContext.db)).map((incident) => incident.status)).toEqual(["resolved"]);
+  });
+});
+
+describe("OFAPI link-stats series: the retry queue on real pg-boss", () => {
+  it("queues the same retry once, lets different jobs wait side by side, and never blocks the scheduled queue", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const WINDOW = ofapiLinkStatsWindowAt(new Date("2026-10-08T12:00:00Z"));
+    const page = await seedOfapiPage("pgboss-retry-of", "acct_pgboss_retry");
+    appContext = {
+      ...appContext,
+      ofapi: linksClient({
+        trackingByAccount: new Map([["acct_pgboss_retry", [trackingItem()]]]),
+        trialByAccount: new Map([["acct_pgboss_retry", [trialItem()]]]),
+        failTrialFor: "acct_pgboss_retry",
+      }),
+    };
+    const boss = new PgBoss({ connectionString: testDb.connectionString, schedule: false });
+    await boss.start();
+    try {
+      await ensureOfapiLinkStatsQueue(boss);
+      const queued = async () => (await testDb!.pool.query<{ name: string; singleton_key: string | null; state: string; delayed: boolean }>(
+        `select name, singleton_key, state::text as state, start_after > now() + interval '10 minutes' as delayed
+           from pgboss.job where name like 'ofapi.link-stats.%' order by singleton_key nulls first`,
+      )).rows;
+
+      // The window's pass runs twice (a duplicated cron fire): both find the
+      // trial without a result, both ask for retry 1 — one job.
+      await runOfapiLinkStatsReconcile(appContext, { now: new Date(WINDOW.getTime() + 30_000), boss });
+      await runOfapiLinkStatsReconcile(appContext, { now: new Date(WINDOW.getTime() + 60_000), boss });
+      expect(await queued()).toEqual([{
+        name: OFAPI_LINK_STATS_RETRY_QUEUE,
+        singleton_key: `retry:${WINDOW.toISOString()}:1`,
+        state: "created",
+        delayed: true,
+      }]);
+
+      // A rebind run and the window's next retry wait beside it...
+      expect(await queueOfapiLinkStatsRunsAfterRebind(appContext, boss, [
+        { action: "rebind", applied: true, pageId: page.id },
+        { action: "rebind", applied: true, pageId: page.id },
+      ])).toEqual([page.id, page.id]);
+      await runOfapiLinkStatsReconcile(appContext, {
+        now: new Date(WINDOW.getTime() + 16 * 60_000),
+        boss,
+        target: { trigger: "retry", windowAt: WINDOW, retry: 1 },
+      });
+      expect((await queued()).map((job) => job.singleton_key)).toEqual([
+        `rebind:${page.id}`,
+        `retry:${WINDOW.toISOString()}:1`,
+        `retry:${WINDOW.toISOString()}:2`,
+      ]);
+      // ...and none of them stands in the way of the next window's own job
+      // (on the scheduled queue a waiting job would: `exclusive`).
+      expect(await boss.send(OFAPI_LINK_STATS_RECONCILE_QUEUE)).toEqual(expect.any(String));
+      expect(await boss.send(OFAPI_LINK_STATS_RECONCILE_QUEUE)).toBeNull();
+    } finally {
+      await boss.stop({ graceful: false });
+    }
+  });
+});
+
+describe("OFAPI link-stats series: the run after a rebind", () => {
+  const WINDOW = ofapiLinkStatsWindowAt(new Date("2026-10-08T12:00:00Z"));
+  const at = (minutes: number) => new Date(WINDOW.getTime() + minutes * 60_000);
+
+  it("is queued 20 minutes after each applied rebind, and only for those", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const boss = fakeBoss();
+    const queued = await queueOfapiLinkStatsRunsAfterRebind(appContext, boss, [
+      { action: "rebind", applied: true, pageId: 9 },
+      // A dry run, or a writer that refused: nothing moved.
+      { action: "rebind", applied: false, pageId: 8 },
+      { action: "attach_historical", applied: true, pageId: 7 },
+      { action: "seed_identity", applied: true, pageId: 6 },
+    ]);
+    expect(queued).toEqual([9]);
+    expect(boss.sent).toEqual([{
+      queue: OFAPI_LINK_STATS_RETRY_QUEUE,
+      data: { trigger: "rebind", pageId: 9 },
+      options: { startAfter: 20 * 60, singletonKey: "rebind:9", retryLimit: 0 },
+    }]);
+
+    // The series is switched off: nothing to read, nothing queued.
+    const off = createTestAppContext(testDb, {
+      ofapiLinkStatsReconcileEnabled: false,
+      ofapiCreditLedgerEnabled: true,
+    });
+    expect(await queueOfapiLinkStatsRunsAfterRebind(off, boss, [
+      { action: "rebind", applied: true, pageId: 9 },
+    ])).toEqual([]);
+    expect(boss.sent).toHaveLength(1);
+  });
+
+  it("one hook for every path that replaces a binding: best-effort, never throws", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const boss = fakeBoss();
+    expect(await queueOfapiLinkStatsRunAfterBindingReplaced(appContext, boss, { pageId: 7, source: "owner_api" })).toBe(true);
+    expect(boss.sent).toEqual([{
+      queue: OFAPI_LINK_STATS_RETRY_QUEUE,
+      data: { trigger: "rebind", pageId: 7 },
+      options: { startAfter: 20 * 60, singletonKey: "rebind:7", retryLimit: 0 },
+    }]);
+    // No queue in the process, or one that refuses: logged, not thrown.
+    expect(await queueOfapiLinkStatsRunAfterBindingReplaced(appContext, null, { pageId: 7, source: "owner_api" })).toBe(false);
+    expect(await queueOfapiLinkStatsRunAfterBindingReplaced(appContext, {
+      async send() { throw new Error("queue unavailable"); },
+    }, { pageId: 7, source: "binding_reconciler" })).toBe(false);
+  });
+
+  it("a rebind the operator applies through the CLI queues the same run — an auth-dead window is not left to the next one", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    // 09:45-like: the window's pass finds the session dead and skips the page.
+    // The window's retries look at it again, but a rebind applied through the
+    // CLI must not depend on them (they may be used up, or the window late).
+    const page = await seedOfapiPage("rebind-cli-of", "acct_rebind_cli_old");
+    await testDb.pool.query(`update pages set ofapi_auth_status = 'authentication_failed' where id = $1`, [page.id]);
+    appContext = {
+      ...appContext,
+      ofapi: linksClient({
+        trackingByAccount: new Map([["acct_rebind_cli_new", [trackingItem()]]]),
+        trialByAccount: new Map([["acct_rebind_cli_new", [trialItem()]]]),
+      }),
+    };
+    const fake = fakeBoss();
+    const skipped = await runOfapiLinkStatsReconcile(appContext, { now: at(0.5), boss: fake });
+    expect(skipped.pages[0]).toMatchObject({ status: "skipped", reason: "page_auth_dead" });
+
+    // A dry run, or nothing applied: no connection is even opened.
+    let opened = 0;
+    const createBoss = () => {
+      opened += 1;
+      return new PgBoss({ connectionString: testDb!.connectionString, schedule: false });
+    };
+    expect(await queueOfapiLinkStatsRunsAfterOperatorRebind(appContext, [
+      { action: "rebind", applied: false, pageId: page.id },
+    ], createBoss)).toEqual([]);
+    expect(opened).toBe(0);
+
+    // 09:50-like: `ofapi:bindings:reconcile --execute` applies the rebind.
+    await rebindPage(page.id, "acct_rebind_cli_new");
+    await testDb.pool.query(`update pages set ofapi_auth_status = null where id = $1`, [page.id]);
+    expect(await queueOfapiLinkStatsRunsAfterOperatorRebind(appContext, [
+      { action: "seed_identity", applied: true, pageId: page.id },
+      { action: "rebind", applied: true, pageId: page.id },
+    ], createBoss)).toEqual([page.id]);
+    expect(opened).toBe(1);
+    const jobs = (await testDb.pool.query<{ name: string; singleton_key: string; data: unknown; minutes: number }>(
+      `select name, singleton_key, data, round(extract(epoch from start_after - created_on) / 60)::int as minutes
+         from pgboss.job where name = $1`,
+      [OFAPI_LINK_STATS_RETRY_QUEUE],
+    )).rows;
+    expect(jobs).toEqual([{
+      name: OFAPI_LINK_STATS_RETRY_QUEUE,
+      singleton_key: `rebind:${page.id}`,
+      data: { trigger: "rebind", pageId: page.id },
+      minutes: 20,
+    }]);
+
+    // What the worker then does with it: the window gets its point.
+    const run = await runOfapiLinkStatsReconcile(appContext, {
+      now: at(25), boss: fake, target: parseJob(jobs[0]!.data),
+    });
+    expect(run.pages).toEqual([expect.objectContaining({ pageLabel: page.label, status: "written" })]);
+    expect((await seriesOf(page.id, "tracking")).map((entry) => [entry.attempt, entry.status, entry.reason])).toEqual([
+      [1, "skipped", "page_auth_dead"],
+      [2, "complete", null],
+    ]);
+  });
+
+  it("reads the rebound page's missing pairs in the open window and nothing else", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const rebound = await seedUnmappedPage("rebind-run-of");
+    const other = await seedOfapiPage("rebind-other-of", "acct_rebind_other");
+    const calls: string[] = [];
+    const page = (items: Record<string, unknown>[]): OfapiListPage => ({
+      items, hasNextPage: false, nextMarker: null, nextPageUrl: null, meta: null,
+    });
+    appContext = {
+      ...appContext,
+      ofapi: {
+        async listStoredTrackingLinks(_context: unknown, accountId: string) {
+          calls.push(`tracking:${accountId}`);
+          return page([trackingItem()]);
+        },
+        async listStoredTrialLinks(_context: unknown, accountId: string) {
+          calls.push(`trial:${accountId}`);
+          if (accountId === "acct_rebind_other") {
+            throw new Error("trial endpoint down");
+          }
+          return page([trialItem()]);
+        },
+      } as unknown as OfapiClient,
+    };
+    const boss = fakeBoss();
+
+    // The window's scheduled pass finds the page without a mapping.
+    await runOfapiLinkStatsReconcile(appContext, { now: at(0.5), boss });
+    expect((await seriesOf(rebound.id, "trial")).map((run) => [run.status, run.reason])).toEqual([
+      ["skipped", "page_unmapped"],
+    ]);
+
+    // The reconciler binds it; the run it queued comes 20 minutes later.
+    await setPageOfapiAccountId(appContext.db, { pageId: rebound.id, ofapiAccountId: "acct_rebind_new" });
+    calls.length = 0;
+    const run = await runOfapiLinkStatsReconcile(appContext, {
+      now: at(25), boss, target: { trigger: "rebind", pageId: rebound.id },
+    });
+    expect(run.pages).toEqual([expect.objectContaining({ pageLabel: rebound.label, status: "written" })]);
+    // Only the rebound page was read — not the other page's failing trial,
+    // which belongs to the window's retries.
+    expect(calls).toEqual(["tracking:acct_rebind_new", "trial:acct_rebind_new"]);
+    for (const kind of ["tracking", "trial"] as const) {
+      expect((await seriesOf(rebound.id, kind)).map((entry) => [
+        entry.attempt, entry.status, entry.ofapiAccountId, entry.windowAt?.toISOString(),
+      ])).toEqual([
+        [1, "skipped", null, WINDOW.toISOString()],
+        [2, "complete", "acct_rebind_new", WINDOW.toISOString()],
+      ]);
+    }
+    expect(await seriesOf(other.id, "trial")).toHaveLength(1);
+
+    // The window has the page's results now: a second run reads nothing.
+    calls.length = 0;
+    expect((await runOfapiLinkStatsReconcile(appContext, {
+      now: at(30), boss, target: { trigger: "rebind", pageId: rebound.id },
+    })).pages).toEqual([]);
+    expect(calls).toEqual([]);
+  });
+
+  it("the worker runs a queued job and drops a payload it cannot read", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedOfapiPage("rebind-worker-of", "acct_rebind_worker");
+    appContext = {
+      ...appContext,
+      ofapi: linksClient({
+        trackingByAccount: new Map([["acct_rebind_worker", [trackingItem()]]]),
+        trialByAccount: new Map([["acct_rebind_worker", [trialItem()]]]),
+      }),
+    };
+    const boss = fakeBoss();
+    await startOfapiLinkStatsWorker(appContext, boss);
+    const handler = boss.handlers.get(OFAPI_LINK_STATS_RETRY_QUEUE)!;
+
+    await handler([{ data: { trigger: "retry", windowAt: "not a date", retry: 1 } }]);
+    await handler([{ data: { trigger: "retry", windowAt: WINDOW.toISOString(), retry: 9 } }]);
+    await handler([{ data: null }]);
+    expect(await listLinkStatRuns(appContext.db, { platformAccountId: page.id })).toEqual([]);
+
+    await handler([{ data: { trigger: "rebind", pageId: page.id } }]);
+    expect((await listLinkStatRuns(appContext.db, { platformAccountId: page.id }))
+      .map((run) => run.status)).toEqual(["complete", "complete"]);
+  });
+});
+
+describe("OFAPI link-stats series: free reads stand outside the money guards", () => {
+  const page = (items: Record<string, unknown>[], creditsUsed: number | null = null): OfapiListPage => ({
+    items,
+    hasNextPage: false,
+    nextMarker: null,
+    nextPageUrl: null,
+    meta: creditsUsed === null
+      ? null
+      : { creditsUsed, creditBalance: null, isCached: null, rateRemainingMinute: null },
+  });
+
+  it("reads with the shared day cap exhausted and with the balance under the credit floor", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    appContext = createTestAppContext(testDb, {
+      ofapiLinkStatsReconcileEnabled: true,
+      ofapiCreditLedgerEnabled: true,
+      ofapiMirrorGlobalDailyCreditBudget: 10,
+      ofapiCreditFloor: 500,
+    });
+    const seeded = await seedOfapiPage("free-caps-of", "acct_free_caps");
+    appContext = {
+      ...appContext,
+      ofapi: linksClient({
+        trackingByAccount: new Map([["acct_free_caps", [trackingItem()]]]),
+        trialByAccount: new Map([["acct_free_caps", [trialItem()]]]),
+      }),
+    };
+    // The whole account's day cap is spent — by the paid lanes — and the
+    // balance, observed a moment ago, is far under the floor.
+    await testDb.pool.query(
+      `insert into ofapi_credit_state (id, spend_day, spent_credits, last_balance, last_balance_at)
+       values (1, (now() at time zone 'utc')::date, 10, 37, now())
+       on conflict (id) do update
+         set spend_day = excluded.spend_day,
+             spent_credits = excluded.spent_credits,
+             last_balance = excluded.last_balance,
+             last_balance_at = excluded.last_balance_at`,
+    );
+
+    const result = await runOfapiLinkStatsReconcile(appContext);
+    expect(result.pages).toEqual([expect.objectContaining({ pageLabel: seeded.label, status: "written" })]);
+    expect((await listLinkStatRuns(appContext.db, { platformAccountId: seeded.id }))
+      .map((run) => run.status)).toEqual(["complete", "complete"]);
+    // Nothing was reserved on either counter.
+    expect(await dayCounters()).toEqual({ link_stats: 0, backfill: 0, global: 10 });
+  });
+
+  it("a whole day of failing attempts does not spend the lane's own quota", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    // A quota far below the day's attempts: four windows, each with the
+    // scheduled pass and three retries, both kinds failing every time.
+    appContext = createTestAppContext(testDb, {
+      ofapiLinkStatsReconcileEnabled: true,
+      ofapiCreditLedgerEnabled: true,
+      ofapiLinkStatsDailyCreditBudget: 5,
+    });
+    const seeded = await seedOfapiPage("free-failures-of", "acct_free_failures");
+    const clientInput = {
+      trackingByAccount: new Map([["acct_free_failures", [trackingItem()]]]),
+      trialByAccount: new Map([["acct_free_failures", [trialItem()]]]),
+      failTrackingFor: "acct_free_failures" as string | undefined,
+      failTrialFor: "acct_free_failures" as string | undefined,
+    };
+    appContext = { ...appContext, ofapi: linksClient(clientInput) };
+
+    let windowAt = ofapiLinkStatsWindowAt(new Date("2026-10-08T00:00:00Z"));
+    for (let window = 0; window < 4; window += 1) {
+      windowAt = nextOfapiLinkStatsWindowAt(windowAt);
+      await runOfapiLinkStatsReconcile(appContext, { now: new Date(windowAt.getTime() + 30_000) });
+      for (const [index, minutes] of [15, 60, 180].entries()) {
+        await runOfapiLinkStatsReconcile(appContext, {
+          now: new Date(windowAt.getTime() + minutes * 60_000 + 30_000),
+          target: { trigger: "retry", windowAt, retry: index + 1 },
+        });
+      }
+    }
+    const failedRows = await listLinkStatRuns(appContext.db, { platformAccountId: seeded.id });
+    expect(failedRows).toHaveLength(4 * 4 * 2);
+    expect(failedRows.every((run) => run.status === "failed")).toBe(true);
+    expect(await dayCounters()).toEqual({ link_stats: 0, backfill: 0, global: 0 });
+
+    // The endpoints come back: the very next pass reads — the 32 failures
+    // left nothing on the lane's counter to block it.
+    clientInput.failTrackingFor = undefined;
+    clientInput.failTrialFor = undefined;
+    const healthy = await runOfapiLinkStatsReconcile(appContext, {
+      now: new Date(nextOfapiLinkStatsWindowAt(windowAt).getTime() + 30_000),
+    });
+    expect(healthy.pages).toEqual([expect.objectContaining({ pageLabel: seeded.label, status: "written" })]);
+  });
+
+  it("through the real client and credit sink, an answer that states no charge costs nothing; a stated charge is booked and stops the lane", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    appContext = createTestAppContext(testDb, {
+      ofapiLinkStatsReconcileEnabled: true,
+      ofapiCreditLedgerEnabled: true,
+      ofapiLinkStatsDailyCreditBudget: 2,
+    });
+    const seeded = await seedOfapiPage("free-real-client-of", "acct_free_real");
+    // What the vendor answers, per request: a list without any `_meta`, a
+    // body that is not JSON, or a list whose `_meta` states a charge.
+    let mode: "unstated" | "not_json" | "charged" = "unstated";
+    let requests = 0;
+    const server: Server = createServer((request, response) => {
+      requests += 1;
+      const tracking = (request.url ?? "").includes("/stored/tracking-links");
+      response.writeHead(200, { "content-type": "application/json" });
+      if (mode === "not_json") {
+        response.end("<html>upstream hiccup</html>");
+        return;
+      }
+      response.end(JSON.stringify({
+        data: { list: [tracking ? trackingItem() : trialItem()], hasMore: false },
+        ...(mode === "charged" ? { _meta: { _credits: { used: 1, balance: 900 } } } : {}),
+      }));
+    });
+    const address = await listenOnLoopback(server, "OFAPI stored link lists");
+    if (!address) {
+      server.close();
+      context.skip();
+      return;
+    }
+    try {
+      appContext = {
+        ...appContext,
+        ofapi: createOfapiClient({
+          baseUrl: `http://${address.host}:${address.port}`,
+          apiKey: "test-key",
+          restDelayMs: 0,
+          onCreditSpend: createOfapiCreditSpendSink(appContext),
+        }),
+      };
+      const ledger = async () => (await testDb!.pool.query<{ operation: string; credits: number; estimated: boolean }>(
+        `select operation, credits, estimated from ofapi_credit_ledger order by id`,
+      )).rows;
+
+      // Five passes of unstated answers and one of non-JSON bodies, against
+      // a quota of 2: at the ordinary 1-credit estimate the lane would have
+      // stopped after the first pass.
+      for (let pass = 0; pass < 5; pass += 1) {
+        const result = await runOfapiLinkStatsReconcile(appContext);
+        expect(result.pages[0]).toMatchObject({ pageLabel: seeded.label, status: "written" });
+      }
+      mode = "not_json";
+      const garbled = await runOfapiLinkStatsReconcile(appContext);
+      expect(garbled.pages[0]).toMatchObject({ status: "failed" });
+      expect(requests).toBe(12);
+      expect(await dayCounters()).toEqual({ link_stats: 0, backfill: 0, global: 0 });
+      const booked = await ledger();
+      expect(booked).toHaveLength(12);
+      // Booked, at zero: an estimate of a free read, not a charge.
+      expect(booked.every((row) => row.credits === 0 && row.estimated)).toBe(true);
+      expect(new Set(booked.map((row) => row.operation))).toEqual(
+        new Set(["ofapi_stored_tracking_links", "ofapi_stored_trial_links"]),
+      );
+
+      // The vendor starts charging and says so: 1 + 1 credits reach the
+      // quota of 2, and the next pass stops before its first request.
+      mode = "charged";
+      const charged = await runOfapiLinkStatsReconcile(appContext);
+      expect(charged.pages[0]).toMatchObject({ status: "written" });
+      expect(await dayCounters()).toEqual({ link_stats: 2, backfill: 0, global: 2 });
+      expect((await ledger()).slice(-2)).toEqual([
+        { operation: "ofapi_stored_tracking_links", credits: 1, estimated: false },
+        { operation: "ofapi_stored_trial_links", credits: 1, estimated: false },
+      ]);
+      const stopped = await runOfapiLinkStatsReconcile(appContext);
+      expect(stopped.pages[0]).toMatchObject({ status: "truncated", reason: "ofapi_daily_credit_budget" });
+      expect(requests).toBe(14);
+    } finally {
+      server.close();
+    }
+  });
+
+  it("a charge the vendor reports is counted, and the lane stops at its quota", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    appContext = createTestAppContext(testDb, {
+      ofapiLinkStatsReconcileEnabled: true,
+      ofapiCreditLedgerEnabled: true,
+      ofapiLinkStatsDailyCreditBudget: 5,
+    });
+    const seeded = await seedOfapiPage("free-charged-of", "acct_free_charged");
+    const listStoredTrackingLinks = vi.fn(async () => page([trackingItem()], 3));
+    const listStoredTrialLinks = vi.fn(async () => page([trialItem()], 3));
+    appContext = {
+      ...appContext,
+      ofapi: { listStoredTrackingLinks, listStoredTrialLinks } as unknown as OfapiClient,
+    };
+
+    // 3 credits per read, quota 5: the first read passes (0 spent), so does
+    // the second (3 spent) — a request is never refused on an estimate.
+    const first = await runOfapiLinkStatsReconcile(appContext);
+    expect(first.pages[0]).toMatchObject({ status: "written" });
+    expect(await dayCounters()).toEqual({ link_stats: 6, backfill: 0, global: 6 });
+
+    // 6 charged: stored reads are not free any more, and the lane stops.
+    const second = await runOfapiLinkStatsReconcile(appContext);
+    expect(second.pages[0]).toMatchObject({ status: "truncated", reason: "ofapi_daily_credit_budget" });
+    expect(listStoredTrackingLinks).toHaveBeenCalledTimes(1);
+    expect(listStoredTrialLinks).toHaveBeenCalledTimes(1);
+    expect((await listLinkStatRuns(appContext.db, { platformAccountId: seeded.id }))
+      .map((run) => [run.status, run.reason])).toEqual([
+      ["truncated", "ofapi_daily_credit_budget"],
+      ["truncated", "ofapi_daily_credit_budget"],
+      ["complete", null],
+      ["complete", null],
+    ]);
+    expect(await dayCounters()).toEqual({ link_stats: 6, backfill: 0, global: 6 });
+  });
+});
+
 describe("OFAPI link-stats series: a window's usable result", () => {
   const WINDOW = new Date("2026-10-08T04:45:00Z");
   const EARLIER = new Date("2026-10-07T16:45:00Z");
@@ -1643,12 +2764,12 @@ describe("OFAPI link-stats series: a window's usable result", () => {
 
     expect(await listLinkStatWindowPairStates(appContext.db, { windowAt: WINDOW })).toEqual([
       {
-        platformAccountId: page.id, linkKind: "tracking", attempts: 3, hasUsableResult: true,
-        lastStatus: "complete", lastReason: null,
+        platformAccountId: page.id, linkKind: "tracking", attempts: 3, attemptsUnderCurrentBinding: 3,
+        hasUsableResult: true, lastStatus: "complete", lastReason: null,
       },
       {
-        platformAccountId: page.id, linkKind: "trial", attempts: 3, hasUsableResult: false,
-        lastStatus: "truncated", lastReason: "pagination_contradiction",
+        platformAccountId: page.id, linkKind: "trial", attempts: 3, attemptsUnderCurrentBinding: 3,
+        hasUsableResult: false, lastStatus: "truncated", lastReason: "pagination_contradiction",
       },
     ]);
     // Another window knows nothing of these rows.

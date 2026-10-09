@@ -185,7 +185,7 @@ export async function registerIngestRoutes(server: ApiServer, ctx: ApiModuleCont
   }, async request => {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
-    return refreshOfapiBinding(appContext, request.body, principal.user.id);
+    return refreshOfapiBinding(appContext, request.body, principal.user.id, boss);
   });
   server.get("/api/v1/admin/ofapi/webhook/preflight", {
     schema: routeSchemas.adminOfapiCredentialPreflight,
