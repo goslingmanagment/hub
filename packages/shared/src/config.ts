@@ -165,6 +165,7 @@ const envSchema = z.object({
   OFAPI_LINK_STATS_RECONCILE_ENABLED: booleanSchema.default(false),
   OFAPI_LINK_STATS_DAILY_CREDIT_BUDGET: z.coerce.number().int().min(1).default(50),
   OFAPI_FAN_IDENTITIES_SYNC_ENABLED: booleanSchema.default(false),
+  OFAPI_FAN_IDENTITIES_FINISHED_LINK_INTERVAL_HOURS: z.coerce.number().int().min(0).max(720).default(0),
   OFAPI_AUDIENCE_SWEEP_INTERVAL_MINUTES: z.coerce.number().int().positive().default(1440),
   OFAPI_PRESENCE_PROJECTION_ENABLED: booleanSchema.default(false),
   OFAPI_SPEND_PROJECTION_SHADOW_ENABLED: booleanSchema.default(false),
@@ -455,6 +456,9 @@ export interface AppConfig {
   ofapiLinkStatsReconcileEnabled?: boolean;
   ofapiLinkStatsDailyCreditBudget?: number;
   ofapiFanIdentitiesSyncEnabled?: boolean;
+  /** A finished trial link's subscriber list is re-read at most once in this
+   *  many hours by the fan sweep; 0 = every sweep (traffic plan PR 10). */
+  ofapiFanIdentitiesFinishedLinkIntervalHours?: number;
   ofapiAudienceSweepIntervalMinutes?: number;
   ofapiPresenceProjectionEnabled?: boolean;
   ofapiSpendProjectionShadowEnabled?: boolean;
@@ -835,6 +839,7 @@ export function loadConfig(
     ofapiLinkStatsReconcileEnabled: parsed.OFAPI_LINK_STATS_RECONCILE_ENABLED,
     ofapiLinkStatsDailyCreditBudget: parsed.OFAPI_LINK_STATS_DAILY_CREDIT_BUDGET,
     ofapiFanIdentitiesSyncEnabled: parsed.OFAPI_FAN_IDENTITIES_SYNC_ENABLED,
+    ofapiFanIdentitiesFinishedLinkIntervalHours: parsed.OFAPI_FAN_IDENTITIES_FINISHED_LINK_INTERVAL_HOURS,
     ofapiAudienceSweepIntervalMinutes: parsed.OFAPI_AUDIENCE_SWEEP_INTERVAL_MINUTES,
     ofapiPresenceProjectionEnabled: parsed.OFAPI_PRESENCE_PROJECTION_ENABLED,
     ofapiSpendProjectionShadowEnabled: parsed.OFAPI_SPEND_PROJECTION_SHADOW_ENABLED,
