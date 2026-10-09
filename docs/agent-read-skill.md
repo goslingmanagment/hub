@@ -680,6 +680,19 @@ the plane floor.
 Read the `domain_events` plane floor and blockers before reporting an absence or
 a total.
 
+`followers_daily` is the page's follower rollup, one row per day:
+`newFollowers` counts the follow relationships Hub stores whose `followed_at`
+falls on that day (a later unfollow still counts), and `followersCount` is the
+total Hub knew for the day (null = not known). `businessDate` is a UTC day here,
+not a Moscow one. The rollup is rebuilt from the stored follows, so a past day
+can still move: re-read the recent days rather than trusting a value you read
+once. A day with no row has no stored follow, which is not a capture proof:
+
+```
+hub dataset --page-label lora-1 --dataset followers_daily \
+  --from 2026-10-02T00:00:00Z --to 2026-10-10T00:00:00Z --sort businessDate:asc
+```
+
 `transactions.relatedMessageRef` is a legacy, misnamed compatibility alias for
 the provider's generic correlation key. It is NOT proof of a related message;
 use `correlationRef` in new work.
