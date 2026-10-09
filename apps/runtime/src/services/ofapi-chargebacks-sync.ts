@@ -39,6 +39,7 @@ import {
   type SyncQueueLifecycleClient,
 } from "./sync-queue.ts";
 import { createOfapiRestGuard } from "./sync/ofapi-dm-sync.ts";
+import { buildNormalizedSyncError } from "./sync/errors.ts";
 import { persistRawPayload, retentionDate } from "./sync/shared.ts";
 import {
   assertPageTransactionsWriter,
@@ -86,6 +87,19 @@ type ChargebacksRequest = {
   endDate: string | null;
 };
 
+const CHARGEBACKS_JOURNAL_ACTION = "journal chargebacks page";
+
+/** A failed journal insert, reduced to its sanitized summary. The driver's
+ * error carries the INSERT's bound values — the whole vendor body, fans and
+ * payments — in its message, cause and stack, so it never reaches a log, the
+ * page result or the incident text; only this does. */
+function chargebacksJournalFailure(error: unknown) {
+  return buildNormalizedSyncError(error, {
+    endpoint: "ofapi_chargebacks",
+    action: CHARGEBACKS_JOURNAL_ACTION,
+  });
+}
+
 async function journalChargebacksPage(
   app: AppContext,
   input: { pageId: number; ofapiAccountId: string; request: ChargebacksRequest; body: unknown },
@@ -101,7 +115,7 @@ async function journalChargebacksPage(
     mapperVersion: CHARGEBACKS_JOURNAL_MAPPER_VERSION,
     payloadKind: "mapping_critical",
     retainUntil: retentionDate(),
-  }, { action: "journal chargebacks page", platform: "onlyfans" });
+  }, { action: CHARGEBACKS_JOURNAL_ACTION, platform: "onlyfans" });
 }
 
 export function isOfapiChargebacksReconcileEnabled(
@@ -347,7 +361,7 @@ async function reconcilePage(
           try {
             await journalChargebacksPage(app, { ...journalScope, request, body: error.refusedListBody });
           } catch (journalError) {
-            app.logger.warn({ err: journalError, pageId: input.pageId },
+            app.logger.warn({ pageId: input.pageId, journalFailure: chargebacksJournalFailure(journalError).error },
               "OFAPI chargebacks: could not journal the refused page");
           }
         }
@@ -357,8 +371,14 @@ async function reconcilePage(
       if (page.rawBody === undefined) {
         throw new Error("OFAPI chargebacks page arrived without its vendor body to journal");
       }
-      // Loud: a page that cannot be journaled fails the page's reconcile.
-      await journalChargebacksPage(app, { ...journalScope, request, body: page.rawBody });
+      // Loud: a page that cannot be journaled fails the page's reconcile —
+      // with a fresh error that holds only the sanitized summary (no cause).
+      try {
+        await journalChargebacksPage(app, { ...journalScope, request, body: page.rawBody });
+      } catch (journalError) {
+        // eslint-disable-next-line preserve-caught-error -- the cause holds the INSERT's bound values (the vendor body); only the sanitized summary may travel
+        throw new Error(`OFAPI chargebacks page not journaled: ${chargebacksJournalFailure(journalError).summary}`);
+      }
       apiPages += 1;
       rawRows += page.items.length;
       for (const item of page.items) {
