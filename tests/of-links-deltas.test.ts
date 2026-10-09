@@ -242,3 +242,18 @@ describe("linkSegments and totals", () => {
     expect(totalSegments(segments)).toMatchObject({ linkCount: 2, clicks: 15, netMills: 1_000n, flags: ["money_unknown"] });
   });
 });
+
+describe("expectedClosedLinkStatWindows (the monitor's schedule, for missed windows)", () => {
+  it("lists the closed windows from the first expected one on, attempted or not", async () => {
+    const { expectedClosedLinkStatWindows, linkStatSeriesExpectation } = await import("../apps/runtime/src/services/ofapi-link-stats-monitor.ts");
+    const expectation = linkStatSeriesExpectation(at("2026-10-07T03:45:00Z"));
+    // A page created after the anchor is expected from the first window after its creation.
+    const since = expectation.expectedSince({ pageCreatedAt: at("2026-10-07T10:00:00Z") });
+    expect(since).toEqual(at("2026-10-07T15:45:00Z"));
+    expect(expectedClosedLinkStatWindows(since, at("2026-10-07T00:00:00Z"), at("2026-10-08T12:00:00Z"), at("2026-10-08T12:00:00Z"))
+      .map((windowAt) => windowAt.toISOString().slice(5, 16)))
+      .toEqual(["10-07T15:45", "10-07T21:45", "10-08T03:45"]);
+    expect(linkStatSeriesExpectation(null).expectedSince({ pageCreatedAt: at("2026-10-07T10:00:00Z") })).toBeNull();
+    expect(expectedClosedLinkStatWindows(null, at("2026-10-07T00:00:00Z"), at("2026-10-08T00:00:00Z"), at("2026-10-09T00:00:00Z"))).toEqual([]);
+  });
+});

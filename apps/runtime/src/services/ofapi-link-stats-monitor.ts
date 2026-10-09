@@ -191,6 +191,59 @@ export function closedLinkStatWindowsToCheck(now: Date, anchor: Date | null): Da
   return closed.reverse();
 }
 
+/** Since when each (page, kind) is expected on the current schedule: the
+ * first window at or after both the series' anchor and the page's creation
+ * (null = nothing is expected yet). The one rule for the monitor and for
+ * every reader that judges the series by it (the «Ссылки OnlyFans» API). */
+export interface LinkStatSeriesExpectation {
+  anchor: Date | null;
+  expectedSince: (row: { pageCreatedAt: Date }) => Date | null;
+}
+
+export function linkStatSeriesExpectation(anchor: Date | null): LinkStatSeriesExpectation {
+  return {
+    anchor,
+    expectedSince: (row) => anchor === null
+      ? null
+      : firstOfapiLinkStatsWindowAtOrAfter(new Date(Math.max(anchor.getTime(), row.pageCreatedAt.getTime()))),
+  };
+}
+
+/** The anchor from the whole history of window stamps, with the process's
+ * memory of when it first saw the series enabled as the fallback (a reader
+ * without that memory passes null). */
+export async function readLinkStatSeriesExpectation(
+  db: AppContext["db"],
+  seenEnabledAt: Date | null,
+): Promise<LinkStatSeriesExpectation> {
+  return linkStatSeriesExpectation(linkStatSeriesAnchor(await listFirstLinkStatWindowStamps(db), seenEnabledAt));
+}
+
+/** Every window of the schedule a pair is answerable for in [from, to): from
+ * its first expected window on, closed by `now` (the next one has opened).
+ * Oldest first. Pure. */
+export function expectedClosedLinkStatWindows(
+  expectedSince: Date | null,
+  from: Date,
+  to: Date,
+  now: Date,
+): Date[] {
+  if (expectedSince === null) {
+    return [];
+  }
+  const windows: Date[] = [];
+  let windowAt = firstOfapiLinkStatsWindowAtOrAfter(new Date(Math.max(expectedSince.getTime(), from.getTime())));
+  while (windowAt.getTime() < to.getTime()) {
+    const next = nextOfapiLinkStatsWindowAt(windowAt);
+    if (next.getTime() > now.getTime()) {
+      break;
+    }
+    windows.push(windowAt);
+    windowAt = next;
+  }
+  return windows;
+}
+
 function groupByPage(rows: readonly LinkStatSeriesHealthRow[]) {
   const pages = new Map<number, LinkStatSeriesHealthRow[]>();
   for (const row of rows) {
@@ -307,17 +360,9 @@ export async function runOfapiLinkStatsSeriesMonitor(
 
   try {
     state.seenEnabledAt ??= now;
-    const anchor = linkStatSeriesAnchor(
-      await listFirstLinkStatWindowStamps(app.db),
-      state.seenEnabledAt,
-    );
     // A pair with no attempt at all is expected from the first window after
     // the anchor and after its page was created.
-    const expectedSince = (row: LinkStatSeriesHealthRow) => anchor === null
-      ? null
-      : firstOfapiLinkStatsWindowAtOrAfter(
-        new Date(Math.max(anchor.getTime(), row.pageCreatedAt.getTime())),
-      );
+    const { anchor, expectedSince } = await readLinkStatSeriesExpectation(app.db, state.seenEnabledAt);
 
     // First the rows, then the freshness: a window this run marks as missed
     // must not read as an attempt-free pair in the same run's message.

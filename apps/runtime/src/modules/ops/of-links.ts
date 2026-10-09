@@ -20,13 +20,15 @@ async function answered<T>(read: () => Promise<T>): Promise<T> {
  * the link series, its bindings and its collection state. */
 export function registerOfLinksRoutes(server: ApiServer, ctx: ApiModuleContext) {
   const { appContext: app, auth: { requirePrincipal } } = ctx;
+  // Off: nothing is expected of the series (the monitor's rule).
+  const seriesEnabled = () => app.config.ofapiLinkStatsReconcileEnabled === true;
   server.get("/api/v1/admin/of-links", { schema: ofLinksRouteSchemas.ofLinksGet }, async (request) => {
     requireOwner(await requirePrincipal(request));
-    return answered(() => getOfLinks(app.db, { pageId: request.query.pageId, now: new Date() }));
+    return answered(() => getOfLinks(app.db, { pageId: request.query.pageId, seriesEnabled: seriesEnabled(), now: new Date() }));
   });
   server.get("/api/v1/admin/of-links/history", { schema: ofLinksRouteSchemas.ofLinksHistoryGet }, async (request) => {
     requireOwner(await requirePrincipal(request));
-    return answered(() => getOfLinkHistory(app.db, { ...request.query, now: new Date() }));
+    return answered(() => getOfLinkHistory(app.db, { ...request.query, seriesEnabled: seriesEnabled(), now: new Date() }));
   });
   server.get("/api/v1/admin/of-links/channels", { schema: ofLinksRouteSchemas.ofLinksChannelsGet }, async (request) => {
     requireOwner(await requirePrincipal(request));
