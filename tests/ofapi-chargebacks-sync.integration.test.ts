@@ -3,7 +3,7 @@
 // OnlyMonster-shape) without ever touching the original settled spend row,
 // and re-runs converge (0 new rows).
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createModel,
@@ -25,7 +25,12 @@ import {
   runOfapiChargebacksReconcile,
   startOfapiChargebacksWorker,
 } from "../apps/runtime/src/services/ofapi-chargebacks-sync.ts";
-import type { OfapiClient, OfapiListPage } from "../apps/runtime/src/services/ofapi.ts";
+import {
+  createOfapiClient,
+  OfapiApiError,
+  type OfapiClient,
+  type OfapiListPage,
+} from "../apps/runtime/src/services/ofapi.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -42,6 +47,10 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await testDb?.stop();
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 beforeEach(async (context) => {
@@ -480,6 +489,108 @@ describe("OFAPI chargebacks reconcile", () => {
       kind: "ofapi_chargebacks_reconcile_failed",
       status: "open",
     });
+  });
+
+  // The 200 body the pinned (2026-09-05) and live OFAPI spec document for
+  // GET /{account}/chargebacks: `data.list` plus an informational
+  // `data.marker`, no `hasMore`, no `_pagination`. From 2026-09-08 the client
+  // refused this body ("continuation unavailable") on every daily run.
+  function vendorChargebacksBody(list: Record<string, unknown>[]) {
+    return {
+      data: { list, marker: 1_757_300_000 },
+      _meta: {
+        _credits: { used: 1, balance: 90_000, note: "Always" },
+        _cache: { is_cached: false, note: "Cache disabled for this endpoint" },
+        _rate_limits: { limit_minute: 1000, limit_day: 50000, remaining_minute: 999, remaining_day: 49994 },
+      },
+    };
+  }
+
+  it("reads the vendor's real chargebacks body through the client and catches up a month of failed runs once", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const page = await seedOfapiPage("cb-real", "acct_real");
+    // A chargeback written before the outage puts the page in trailing mode.
+    await upsertTransaction(appContext.db, {
+      platformAccountId: page.id,
+      source: "ofapi:rest",
+      transactionId: "before-outage:chargeback",
+      rawType: "ofapi:chargeback",
+      canonicalType: "chargeback",
+      transactionState: "posted",
+      rawStatus: "undo",
+      grossAmountMills: -1_000n,
+      sourceDestinationAmountMills: -1_000n,
+      creatorNetAmountMills: -800n,
+      senderId: "555000",
+      occurredAt: new Date(Date.now() - 60 * DAY_MS),
+    });
+
+    // The outage as production saw it: the client threw on the body, the page
+    // failed, the global incident opened.
+    appContext = {
+      ...appContext,
+      ofapi: {
+        async listChargebacks() {
+          throw new OfapiApiError("OFAPI list page continuation unavailable", 200, null);
+        },
+      } as unknown as OfapiClient,
+    };
+    const failed = await runOfapiChargebacksReconcile(appContext);
+    expect(failed.pages[0]).toMatchObject({
+      status: "failed",
+      reason: "OFAPI list page continuation unavailable",
+    });
+    expect((await listNotificationIncidents(appContext.db))[0]?.status).toBe("open");
+
+    // 103 vendor rows raised during the outage, 32 days ago. Row 100 is row 99
+    // again: a chargeback that shifted across the offset boundary mid-walk.
+    const missedAt = new Date(Date.now() - 32 * DAY_MS);
+    const vendorList = Array.from({ length: 103 }, (_, index) => {
+      const id = index === 100 ? 99 : index;
+      return { ...chargebackItem(`pay-real-${id}`, String(800_000 + id)), createdAt: missedAt.toISOString() };
+    });
+    const requests: URL[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      requests.push(url);
+      const offset = Number(url.searchParams.get("offset") ?? "0");
+      const limit = Number(url.searchParams.get("limit"));
+      return new Response(JSON.stringify(vendorChargebacksBody(vendorList.slice(offset, offset + limit))), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }));
+    appContext = { ...appContext, ofapi: createOfapiClient({ apiKey: "test", restDelayMs: 0 }) };
+
+    const caughtUp = await runOfapiChargebacksReconcile(appContext);
+    // A full page continues, the short page ends the walk: two requests.
+    expect(caughtUp.pages[0]).toMatchObject({
+      status: "written",
+      reason: null,
+      apiPages: 2,
+      rawRows: 103,
+      writtenRows: 102,
+    });
+    expect(requests.map((url) => url.searchParams.get("offset"))).toEqual(["0", "100"]);
+    // The trailing window reaches back past the whole outage.
+    const startDate = new Date(`${requests[0]!.searchParams.get("start_date")!.replace(" ", "T")}Z`);
+    expect(startDate.getTime()).toBeLessThan(missedAt.getTime());
+    expect((await listNotificationIncidents(appContext.db))[0]?.status).toBe("resolved");
+
+    const countRows = async () => (await testDb!.pool.query<{ n: number }>(
+      "select count(*)::int as n from transactions where platform_account_id = $1",
+      [page.id],
+    )).rows[0]!.n;
+    expect(await countRows()).toBe(103);
+
+    // The next day's run re-reads the same window and adds nothing.
+    const again = await runOfapiChargebacksReconcile(appContext);
+    expect(again.pages[0]).toMatchObject({ status: "written", apiPages: 2, writtenRows: 102 });
+    expect(await countRows()).toBe(103);
   });
 
   // ——— W7.3 (A21+B4, decision #132): negation guards ———
