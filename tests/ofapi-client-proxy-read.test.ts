@@ -128,7 +128,8 @@ describe("OFAPI proxy read client", () => {
     server = createServer((request, response) => {
       upstreamRequests.push(request.url ?? "");
       response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ data: { list: [], hasMore: false } }));
+      // The documented body: no continuation field (see ofapi-request-audit).
+      response.end(JSON.stringify({ data: { list: [], marker: null } }));
     });
     const baseUrl = await listenOnLocalhost(server);
     const client = createOfapiClient({

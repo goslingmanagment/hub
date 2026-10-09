@@ -434,7 +434,8 @@ export interface OfapiClient {
     },
   ): Promise<OfapiListPage>;
   // GET /api/{account}/chargebacks (Stage 14) — vendored-spec shape: data.list
-  // of { id, createdAt, paymentType, payment{...} }, limit/offset pagination.
+  // of { id, createdAt, paymentType, payment{...} } plus data.marker; plain
+  // limit/offset pagination, so a short page is the end of the list.
   listChargebacks?(
     context: OfapiRequestContext,
     accountId: string,
@@ -713,7 +714,13 @@ function parseNextMarker(pagination: Record<string, unknown> | null) {
   }
 }
 
-function toListPage(body: unknown, arrayOnlyLimit?: number): OfapiListPage {
+/** A list route whose documented contract is plain limit/offset with no
+ * continuation field: a page of `limit` items may continue, a shorter page is
+ * the end. Only the named envelopes qualify; explicit continuation evidence,
+ * when a body carries it, still wins. */
+type LengthTerminatedList = { limit: number; envelopes: ReadonlyArray<"data" | "data.list"> };
+
+function toListPage(body: unknown, lengthTerminated?: LengthTerminatedList): OfapiListPage {
   const record = asRecord(body);
   const dataRecord = asRecord(record?.data);
   const data = Array.isArray(record?.data)
@@ -721,6 +728,7 @@ function toListPage(body: unknown, arrayOnlyLimit?: number): OfapiListPage {
     : Array.isArray(dataRecord?.list)
       ? dataRecord.list
       : null;
+  const envelope = data === null ? null : Array.isArray(record?.data) ? "data" : "data.list";
   if (data === null) throw new OfapiApiError("OFAPI list page shape unavailable", 200, null);
   const pagination = asRecord(record?._pagination);
   const nextPage = pagination?.next_page;
@@ -732,10 +740,14 @@ function toListPage(body: unknown, arrayOnlyLimit?: number): OfapiListPage {
   if (nextPage !== undefined && nextPage !== null && typeof nextPage !== "string") {
     throw new OfapiApiError("OFAPI list page continuation invalid", 200, null);
   }
-  // Spenders alone document an unpaginated array family. Every other list
-  // needs explicit continuation/termination evidence; missing is not empty.
-  if (typeof hasMore !== "boolean" && nextPage === undefined && nextMarker === null &&
-      !(arrayOnlyLimit !== undefined && Array.isArray(record?.data))) {
+  // Only routes documented as plain limit/offset (spenders, chargebacks) end
+  // on a short page. Every other list needs explicit continuation/termination
+  // evidence; missing is not empty.
+  const lengthLimit = lengthTerminated !== undefined && envelope !== null &&
+      lengthTerminated.envelopes.includes(envelope)
+    ? lengthTerminated.limit
+    : null;
+  if (typeof hasMore !== "boolean" && nextPage === undefined && nextMarker === null && lengthLimit === null) {
     throw new OfapiApiError("OFAPI list page continuation unavailable", 200, null);
   }
   return {
@@ -746,7 +758,7 @@ function toListPage(body: unknown, arrayOnlyLimit?: number): OfapiListPage {
     }),
     hasNextPage: (typeof nextPage === "string" && nextPage.length > 0) ||
       (typeof hasMore === "boolean" ? hasMore : nextMarker !== null ? true : nextPage === null ? false :
-        arrayOnlyLimit !== undefined && data.length >= arrayOnlyLimit),
+        lengthLimit !== null && data.length >= lengthLimit),
     nextMarker,
     nextPageUrl: typeof nextPage === "string" && nextPage.length > 0 ? nextPage : null,
     meta: parseResponseMeta(body),
@@ -2280,6 +2292,13 @@ export function createOfapiClient(input: {
           hasStartDate: params.startDate != null,
           hasEndDate: endDate != null,
         },
+        // The pinned (2026-09-05) and live spec document `data.list` plus an
+        // informational `data.marker` and limit/offset paging — no `hasMore`,
+        // no `_pagination`. Requiring continuation evidence here failed every
+        // run from 2026-09-08. A bare `data` array is tolerated too: the
+        // pre-2026-09-07 parser accepted both and no body was ever journaled
+        // to say which one the vendor sends.
+        mapResponse: (body: unknown) => toListPage(body, { limit, envelopes: ["data.list", "data"] }),
       });
     },
     async listTrackingLinks(context, accountId, params) {
@@ -2314,7 +2333,10 @@ export function createOfapiClient(input: {
         pageIndex: params.offset != null ? Math.floor(params.offset / limit) : 0,
         cursorPresent: false,
         requestMetadata: { limit, offset: params.offset ?? 0, trackingLinkId, kind },
-        ...(kind === "spenders" ? { mapResponse: (body: unknown) => toListPage(body, limit) } : {}),
+        // Spenders document a bare `data` array with no continuation field.
+        ...(kind === "spenders"
+          ? { mapResponse: (body: unknown) => toListPage(body, { limit, envelopes: ["data"] }) }
+          : {}),
       });
     },
     async listTrialLinks(context, accountId, params) {

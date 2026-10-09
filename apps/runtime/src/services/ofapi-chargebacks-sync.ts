@@ -24,6 +24,7 @@ import {
 } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
+import { resolveOfapiListNextOffset } from "./ofapi-list-pagination.ts";
 import { asRecord, idToString } from "./ofapi-payloads.ts";
 import { upsertTransactionWithNegationGuards } from "./money-negation-guards.ts";
 import type { OfapiRequestContext } from "./ofapi.ts";
@@ -55,10 +56,11 @@ const OFAPI_CHARGEBACKS_QUEUE_OPTIONS = {
 
 const CHARGEBACKS_PAGE_LIMIT = 100;
 // Trailing reconcile window once a page has chargeback rows: chargebacks
-// surface within weeks of the payment, and the upserts make overlap free. A
-// page with NO chargeback rows yet walks the full history (first enable);
-// that first walk is all-or-nothing — see the truncation guard in
-// reconcilePage.
+// surface within weeks of the payment, and the upserts make overlap free. The
+// window is also the catch-up: the first good run after up to 90 days of
+// failed or truncated runs re-reads the whole gap once. A page with NO
+// chargeback rows yet walks the full history (first enable); that first walk
+// is all-or-nothing — see the truncation guard in reconcilePage.
 const CHARGEBACKS_LOOKBACK_DAYS = 90;
 // Per-page request cap per run — a safety backstop over the offset walk.
 const CHARGEBACKS_MAX_PAGES_PER_RUN = 20;
@@ -271,7 +273,9 @@ async function reconcilePage(
     creditBudgetScope: "backfill",
   };
 
-  const normalized: NormalizedChargeback[] = [];
+  // Keyed by transaction id: a chargeback that shifts across an offset
+  // boundary mid-walk is read twice but written and counted once.
+  const normalized = new Map<string, NormalizedChargeback>();
   const skippedReasons: Record<string, number> = {};
   let apiPages = 0;
   let rawRows = 0;
@@ -301,16 +305,25 @@ async function reconcilePage(
       for (const item of page.items) {
         const result = normalizeChargeback(item);
         if (result.status === "ok") {
-          normalized.push(result.row);
+          normalized.set(result.row.transactionId, result.row);
         } else {
           skippedReasons[result.reason] = (skippedReasons[result.reason] ?? 0) + 1;
         }
       }
-      if (page.items.length < CHARGEBACKS_PAGE_LIMIT) {
+      // The client ends the walk on a short page (the route documents no
+      // continuation field) and honours explicit continuation if the vendor
+      // ever sends one.
+      const nextOffset = resolveOfapiListNextOffset(page, {
+        pathname: `/${encodeURIComponent(input.ofapiAccountId)}/chargebacks`,
+        offset,
+        limit: CHARGEBACKS_PAGE_LIMIT,
+        baseUrl: app.config?.ofapiBaseUrl,
+      });
+      if (nextOffset === null) {
         walkComplete = true;
         break;
       }
-      offset += page.items.length;
+      offset = nextOffset;
     }
   } finally {
     await egress.close();
@@ -335,9 +348,9 @@ async function reconcilePage(
   }
 
   let written = 0;
-  if (normalized.length > 0) {
+  if (normalized.size > 0) {
     written = await withOfapiSpendTransactionPageLock(app.db, input.pageId, async (db) => {
-      const fanIds = Array.from(new Set(normalized.map((row) => row.fanPlatformUserId)));
+      const fanIds = Array.from(new Set(Array.from(normalized.values(), (row) => row.fanPlatformUserId)));
       const fanRows = await upsertFans(db, fanIds.map((platformUserId) => ({
         platform: "onlyfans",
         platformUserId,
@@ -350,7 +363,7 @@ async function reconcilePage(
 
       let dirtyFrom: Date | null = null;
       let count = 0;
-      for (const row of normalized) {
+      for (const row of normalized.values()) {
         // W7.3 Guard 1/2: an active :reversal twin or a missing settled
         // original writes this chargeback INACTIVE (never double-negate).
         await upsertTransactionWithNegationGuards(db, {
