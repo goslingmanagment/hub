@@ -74,7 +74,9 @@ import { fanslyResourceSpec } from "../registry.ts";
 // window the route does not honour, and the 90-day long-tail discovery with
 // its fallback to three 31-day windows — but one WINDOW per step. The legacy
 // day cap, chunk budget and continuations are gone: the pacer is the only
-// pace, so a visit is never cut short by a budget.
+// pace, so a visit is never cut short by a budget. Nor is its walk: the four
+// windows a visit that fitted the legacy chunk are gone with it, and a visit
+// walks the item's history to its floor (`BACKFILL_WINDOWS_PER_VISIT`).
 //
 // How a visit spans steps: a visit is a pure procedure over the item as it
 // stood when the visit began (`snapshot`) and the answers of the windows it
