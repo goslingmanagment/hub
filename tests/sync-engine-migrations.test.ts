@@ -44,7 +44,14 @@ import {
   syncMediaHandoff,
   syncPages,
 } from "@agency_hub_core/db";
-import { CONFIG_DESCRIPTORS, ENV_CONFIG_KEYS, RETIRED_FANSLY_ENV_KEYS } from "@agency_hub_core/shared";
+import {
+  CONFIG_DESCRIPTORS,
+  ENV_CONFIG_KEYS,
+  FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY,
+  FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS,
+  FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
+  RETIRED_FANSLY_ENV_KEYS,
+} from "@agency_hub_core/shared";
 
 // Fansly Sync Engine migrations (design §2.1): forward-only, and additive
 // until step 4, whose last ones drop what the hold set replaced. One block
@@ -1152,5 +1159,177 @@ describe("page_dm_thread_unavailability.sql (arena \"vanished chat\", R2: the ch
     // tests/sync-engine-retention-erasure.integration.test.ts runs the page
     // and fan erasure (unchanged by this release) on the new schema.
     expect(flat).toContain("references page_dm_threads(id) on delete cascade");
+  });
+});
+
+describe("retire_dm_unresolvable_exclusion.sql (arena \"vanished chat\", R4: a lookup miss no longer excludes a chat)", () => {
+  // Found by its name, not its number: the number is the next free one at merge.
+  const found = readdirSync("packages/db/migrations").filter((file) => file.endsWith("_retire_dm_unresolvable_exclusion.sql"));
+  const migration = found[0] ?? "";
+  const text = found.length === 1 ? readFileSync(`packages/db/migrations/${migration}`, "utf8") : "";
+  const sql = stripComments(text);
+  const statements = topLevelStatements(sql);
+
+  it("exists once, after the episodes that took over a chat Fansly stops serving (0251)", () => {
+    expect(found).toHaveLength(1);
+    expect(migration > "0251_page_dm_thread_unavailability.sql").toBe(true);
+  });
+
+  it("locks every page row, lifts the reason on every page, then takes it off the threads — data only, one transaction", () => {
+    // Transactional (the runner's own transaction): the lock holds to the end.
+    expect(text.startsWith("-- agency-hub:no-transaction")).toBe(false);
+    // Lock order: the erasure execution lock, page rows (page order), the
+    // carrying threads (id order) — then the writes.
+    expect(statements).toEqual([
+      "select pg_advisory_xact_lock(8154030001::bigint)",
+      "select sp.page_id from sync_pages sp order by sp.page_id for no key update",
+      "update sync_pages sp set lifted_dm_exclusions = array_append(sp.lifted_dm_exclusions, 'partner_unresolvable_from_account_lookup'), "
+        + "updated_at = clock_timestamp() where not ('partner_unresolvable_from_account_lookup' = any(sp.lifted_dm_exclusions))",
+      "select t.id from page_dm_threads t where t.metadata ->> 'messageSyncExcludedReason' = 'partner_unresolvable_from_account_lookup' "
+        + "order by t.id for no key update",
+      "update page_dm_threads t set metadata = t.metadata - 'messageSyncExcludedReason', updated_at = clock_timestamp() "
+        + "where t.metadata ->> 'messageSyncExcludedReason' = 'partner_unresolvable_from_account_lookup'",
+    ]);
+    expect(sql).not.toMatch(/\b(alter|create|drop|rename|truncate|delete|insert|grant|trigger)\b/i);
+    // Nothing else: no other reason, no work, no demand.
+    expect(sql).not.toContain(FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS);
+    expect(sql).not.toMatch(/sync_work|sync_attempts|history_request/);
+    // The 0235 CHECK admits the lifted reason.
+    expect(SYNC_LIFTABLE_DM_EXCLUSIONS).toContain(FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP);
+  });
+
+  it("serializes with erasure: the erasure execution lock's key, taken by every erasure before any row lock", () => {
+    const erasure = readFileSync("apps/runtime/src/services/erasure/index.ts", "utf8");
+    expect(erasure).toContain("const ERASURE_EXECUTION_LOCK_KEY = 8_154_030_001;");
+    // A session lock on its own connection (same bigint key space as the
+    // migration's transaction lock), around the whole execution …
+    expect(erasure).toContain('"select pg_advisory_lock($1::bigint)",');
+    expect(erasure).toContain("return withErasureExecutionLock(app, () => app.db.transaction(async tx => {");
+    // … whose fan threads it locks in id order, under it.
+    expect(erasure).toContain("select t.id from page_dm_threads t where ${threadPred} order by t.id for update of t");
+    expect(statements[0]).toBe("select pg_advisory_xact_lock(8154030001::bigint)");
+  });
+
+  it("serializes with the actor: its page lock conflicts with the fence every actor transaction starts with", () => {
+    // `for no key update` waits for an apply's `for share` and an admission's
+    // `for no key update` of the page row, and blocks both until it commits.
+    const pages = readFileSync("packages/db/src/repositories/sync/pages.ts", "utf8");
+    expect(pages).toContain('const lockClause = input.lock === "share" ? sql`for share of sp` : sql`for no key update of sp`;');
+    const commit = readFileSync("apps/runtime/src/sync/engine/commit.ts", "utf8");
+    expect(commit).toContain("await lockOwnedPage(tx, { pageId: d.pageId, generation: d.generation, lock });");
+  });
+
+  it("names the metadata key and the reason the shared vocabulary has", () => {
+    expect(sql).toContain(`'${FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY}'`);
+    expect(sql).toContain(`'${FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP}'`);
+  });
+
+  it("allows application rollback: no code of this release writes the reason, and the previous image writes it only on a chat that has it", () => {
+    expect(rollbackCompatible()).toContain(`"${migration}"`);
+    // The runtime names the reason nowhere any more (the account probe and
+    // the conversation list were its writers); only the shared reader and the
+    // owner's levers know it, for rows written before.
+    const runtimeSources = (readdirSync("apps/runtime/src", { recursive: true }) as string[])
+      .filter((file) => file.endsWith(".ts"))
+      .map((file) => [file, readFileSync(`apps/runtime/src/${file}`, "utf8")] as const);
+    expect(runtimeSources.length).toBeGreaterThan(100);
+    for (const [file, source] of runtimeSources) {
+      expect(source, file).not.toContain("PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP");
+      expect(source, file).not.toContain(`"${FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP}"`);
+    }
+  });
+});
+
+describe("fansly_public_lookup_egress.sql (arena \"vanished chat\", R5 M5: the public reader's egress)", () => {
+  // Found by its name, not its number: the number is the next free one at merge.
+  const found = readdirSync("packages/db/migrations").filter((file) => file.endsWith("_fansly_public_lookup_egress.sql"));
+  const migration = found[0] ?? "";
+  const text = found.length === 1 ? readFileSync(`packages/db/migrations/${migration}`, "utf8") : "";
+  const sql = stripComments(text);
+  const statements = topLevelStatements(sql);
+
+  it("exists once, after the erasure of the reader's journal shipped (R4) and the last arena migration", () => {
+    expect(found).toHaveLength(1);
+    expect(migration > "0254_retire_dm_unresolvable_exclusion.sql").toBe(true);
+    // Transactional (the runner's own transaction): `set local` needs one.
+    expect(text.startsWith("-- agency-hub:no-transaction")).toBe(false);
+  });
+
+  it("adds the egress table and replaces the source CHECK with the old list plus public_lookup, not valid then validated", () => {
+    const body = statements.filter((statement) => !statement.startsWith("comment on "));
+    expect(body).toEqual([
+      "set local lock_timeout = '5s'",
+      expect.stringMatching(/^create table if not exists fansly_public_egress \( id smallint primary key default 1, url text not null, encrypted_auth text, key_version integer, /),
+      "alter table fansly_send_log drop constraint if exists fansly_send_log_source_check",
+      expect.stringMatching(/^alter table fansly_send_log add constraint fansly_send_log_source_check check \(source in \(.*'public_lookup' \)\) not valid$/),
+      "alter table fansly_send_log validate constraint fansly_send_log_source_check",
+    ]);
+    const table = body[1]!;
+    // A singleton of no page: no foreign key, no page or fan column.
+    expect(table).toContain("constraint fansly_public_egress_singleton_check check (id = 1)");
+    expect(table).toContain("constraint fansly_public_egress_auth_check check ((encrypted_auth is null) = (key_version is null))");
+    expect(table).not.toMatch(/references|page_id|platform_account_id|fan_id/);
+    // Nothing is granted: the table holds a secret.
+    expect(sql).not.toMatch(/\bgrant\b/i);
+    // No proxy address of any kind is written by the migration.
+    expect(sql).not.toMatch(/insert into fansly_public_egress|:\/\//);
+  });
+
+  it("allows application rollback: the previous image never names the table and never writes the new source", () => {
+    expect(rollbackCompatible()).toContain(`"${migration}"`);
+  });
+});
+
+describe("fans_public_lookup.sql (arena \"vanished chat\", R5 M4: the public reader's answers, queue and state)", () => {
+  // Found by its name, not its number: the number is the next free one at merge.
+  const found = readdirSync("packages/db/migrations").filter((file) => file.endsWith("_fans_public_lookup.sql"));
+  const migration = found[0] ?? "";
+  const text = found.length === 1 ? readFileSync(`packages/db/migrations/${migration}`, "utf8") : "";
+  const sql = stripComments(text);
+  const statements = topLevelStatements(sql);
+
+  it("exists once, after the reader's egress (M5)", () => {
+    const egress = readdirSync("packages/db/migrations").filter((file) => file.endsWith("_fansly_public_lookup_egress.sql"));
+    expect(found).toHaveLength(1);
+    expect(egress).toHaveLength(1);
+    expect(migration > egress[0]!).toBe(true);
+    expect(text.startsWith("-- agency-hub:no-transaction")).toBe(false);
+  });
+
+  it("adds two nullable columns to fans with their pair CHECK, the queue, the state and its seed — additive only", () => {
+    const body = statements.filter((statement) => !statement.startsWith("comment on "));
+    expect(body).toEqual([
+      "set local lock_timeout = '5s'",
+      "alter table fans add column if not exists public_checked_at timestamptz, add column if not exists public_found boolean",
+      "do $$…$$",
+      "alter table fans validate constraint fans_public_check_pair_check",
+      expect.stringMatching(/^create table if not exists fansly_public_lookup_queue \( fan_id bigint primary key references fans\(id\) on delete cascade, /),
+      "create index if not exists fansly_public_lookup_queue_pending_idx on fansly_public_lookup_queue (enqueued_at, fan_id) where done_at is null",
+      expect.stringMatching(/^create table if not exists fansly_public_lookup_state \( id smallint primary key default 1, /),
+      "insert into fansly_public_lookup_state (id) values (1) on conflict (id) do nothing",
+      "do $$…$$",
+    ]);
+    expect(text).toContain("check ((public_checked_at is null) = (public_found is null)) not valid;");
+    // No default on the new columns (catalog-only), nothing dropped or rewritten.
+    expect(body[1]).not.toMatch(/default/);
+    expect(sql.replace("on delete cascade", "")).not.toMatch(/\b(drop|rename|truncate|delete|update)\b/i);
+    // The queue's vocabularies and life cycle.
+    expect(checkList(body[4]!, "fansly_public_lookup_queue_reason_check")).toEqual(["deleted_mark"]);
+    expect(body[6]).toContain("stop_reason in ('rate_limited', 'auth_refused', 'network', 'off_contract', 'indeterminate')");
+    // The attempt admitted and not settled, and a stop's incident confirmation.
+    expect(body[6]).toContain("constraint fansly_public_lookup_state_pending_check check ((pending_token is null) = (pending_since is null))");
+    expect(body[6]).toContain("stop_first_batch is null and stop_incident_at is null");
+    expect(text).toContain("grant select on fansly_public_lookup_state to read_only;");
+  });
+
+  it("keeps the vocabularies of the code", async () => {
+    const db = await import("@agency_hub_core/db");
+    expect(db.FANSLY_PUBLIC_LOOKUP_STOP_REASONS).toEqual(["rate_limited", "auth_refused", "network", "off_contract", "indeterminate"]);
+    expect(db.FANSLY_PUBLIC_LOOKUP_DEMANDS).toEqual(["deleted_mark", "episode_partner", "page_lookup_miss"]);
+  });
+
+  it("allows application rollback: the previous image names none of it, and its erasure takes the queue row with the fan", () => {
+    expect(rollbackCompatible()).toContain(`"${migration}"`);
+    expect(sql).toContain("references fans(id) on delete cascade");
   });
 });

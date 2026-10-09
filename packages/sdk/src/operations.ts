@@ -115,6 +115,7 @@ export const kernelOperations = {
   agentSearchMessages: { method: "POST", path: "/api/v1/agent/search/messages" },
   agentSyncStatus: { method: "GET", path: "/api/v1/agent/sync/pages" },
   agentSyncWhy: { method: "GET", path: "/api/v1/agent/pages/:pageLabel/sync/work" },
+  agentThreadAvailability: { method: "GET", path: "/api/v1/agent/pages/:pageLabel/threads/:conversationRef/availability" },
   agentThreadMessages: { method: "GET", path: "/api/v1/agent/pages/:pageLabel/threads/:conversationRef/messages" },
   agentThreads: { method: "GET", path: "/api/v1/agent/threads" },
   aiFeatureStream: { method: "POST", path: "/api/v1/ai/features/:feature" },

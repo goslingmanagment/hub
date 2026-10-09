@@ -112,7 +112,8 @@ describe("the Fansly registry table", () => {
   it("the conversation list's follow-ups are triggers of the entries they create (design §5.3)", () => {
     // A list read asks for a chat's messages (urgent from find and ws-down,
     // planned from head, full and detail — urgent from them too for a chat a
-    // `.find` is open for, step 3b), a group detail, a probe.
+    // `.find` is open for, step 3b) and a group detail; no account probe since
+    // a lookup miss excludes no chat (arena "vanished chat" §6).
     expect(byKey("dm-messages.head").triggers).toEqual(expect.arrayContaining([
       "apply:dm-conversations.find", "apply:dm-conversations.ws-down",
       "apply:dm-conversations.head", "apply:dm-conversations.full", "apply:dm-conversations.detail",
@@ -121,7 +122,6 @@ describe("the Fansly registry table", () => {
       "apply:dm-conversations.head", "apply:dm-conversations.full", "apply:dm-conversations.detail",
     ]));
     expect(byKey("dm-conversations.detail").triggers).toEqual(["apply:dm-conversations.*"]);
-    expect(byKey("fan-profiles.probe").triggers).toEqual(expect.arrayContaining(["apply:dm-conversations.*"]));
     for (const key of ["dm-conversations.head", "dm-conversations.full"]) expect(byKey(key).kind, key).toBe("poll");
     expect(byKey("dm-conversations.full").period?.everyMs).toBe(86_400_000);
     expect(byKey("dm-conversations.head").period?.everyMs).toBe(30 * 60_000);

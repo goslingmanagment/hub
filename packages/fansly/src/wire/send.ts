@@ -74,7 +74,8 @@ export function createOneShotSendCheck(check: FanslySendCheck): {
 }
 
 /**
- * Send one Fansly request through `dispatcher` (the page's proxy dispatcher).
+ * Send one Fansly request through `dispatcher` (the page's proxy dispatcher,
+ * or the public reader's own: a request `buildFanslyPublicWireRequest` built).
  * `req.timeoutMs` bounds the WHOLE call — connect and proxy tunnel, headers
  * and a drip-fed body alike (undici's own header/body timeouts are inactivity
  * timers of the origin request only). `signal` cancels it (shutdown) at once.
@@ -82,7 +83,7 @@ export function createOneShotSendCheck(check: FanslySendCheck): {
  */
 export function sendFanslyWireRequest(
   dispatcher: Dispatcher,
-  req: FanslyWireRequest,
+  req: Pick<FanslyWireRequest, "url" | "headers" | "timeoutMs">,
   hooks: FanslyWireSendHooks,
   signal: AbortSignal,
 ): Promise<FanslyWireOutcome> {

@@ -4,6 +4,7 @@ import { usePageSpenderAutoList } from "@/api/queries";
 import { Pagination } from "@/components/shared/Pagination";
 import { SearchInput } from "@/components/shared/SearchInput";
 import { StatusPanel } from "@/components/shared/StatusPanel";
+import { FanNotVisibleMark } from "@/components/shared/FanNotVisibleMark";
 import { TableSkeleton } from "@/components/shared/TableSkeleton";
 import {
   buildFanProfileNavigation,
@@ -162,9 +163,12 @@ export function SpenderAutoListPage() {
                   className="cursor-pointer border-t border-border transition-colors hover:bg-hover"
                 >
                   <td className="px-4 py-3">
-                    <Link to={fanRoute} state={fanNavigation.state} className="text-[15px] font-semibold text-text-primary hover:text-accent">
-                      {fanLabel.label}
-                    </Link>
+                    <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+                      <Link to={fanRoute} state={fanNavigation.state} className="text-[15px] font-semibold text-text-primary hover:text-accent">
+                        {fanLabel.label}
+                      </Link>
+                      <FanNotVisibleMark missAt={item.accountLookupMissAt} />
+                    </div>
                     {fanLabel.secondaryPlatformHandle && (
                       <div className="text-xs text-text-muted">@{fanLabel.secondaryPlatformHandle}</div>
                     )}

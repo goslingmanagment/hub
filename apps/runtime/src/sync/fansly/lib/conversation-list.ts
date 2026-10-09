@@ -10,7 +10,6 @@ import {
   compareFanslySnowflakeIds,
   fanslySnowflakeToDate,
   FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS,
-  FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
   getFanslyDmMessageSyncExcludedReason,
   type FanslyDmMessageSyncExcludedReason,
 } from "@agency_hub_core/shared";
@@ -34,8 +33,10 @@ import { normalizeFanslyTimestamp } from "./timestamp.ts";
 // `page.items`), with its requests taken out: the group detail becomes a
 // `dm-conversations.detail` follow-up, the limit-1 head repair is retired (an
 // incomplete head keeps the stored id, and the next list read retries it),
-// and the unresolvable-partner probe reads its stored answer (a due probe is
-// a `fan-profiles.probe` follow-up).
+// and the unresolvable-partner exclusion is gone: an account lookup that
+// resolves no partner is the page's own evidence, never a reason to stop
+// reading a chat (arena "vanished chat" §6), so the list neither assigns
+// `partner_unresolvable_from_account_lookup` nor keeps it on a chat it writes.
 
 /** A listed chat's head as the thread should hold it. */
 export interface ResolvedListHead {
@@ -81,9 +82,6 @@ export interface ResolvedListItem {
   head: ResolvedListHead;
   unresolvedIdentity: boolean;
   messageSyncExcludedReason: FanslyDmMessageSyncExcludedReason | null;
-  /** The thread is excluded as unresolvable and no answer of the last day
-   *  says otherwise: the probe is due. */
-  probeDue: boolean;
   /** A served scalar was not an integer (the stored value is kept). */
   scalarDrift: boolean;
   diffReasons: readonly ConversationHeadDiffReason[];
@@ -100,9 +98,6 @@ export interface ResolveListItemInput {
   existing: PageDmThreadListState | null;
   /** The page's own Fansly account id. */
   pageAccountId: string;
-  /** A stored probe answer younger than the reuse day for this thread's
-   *  partner (only read for a thread excluded as unresolvable). */
-  probe: "resolved" | "unresolved" | null;
   /** The exclusion reasons the page lifted (`sync_pages.lifted_dm_exclusions`,
    *  owner decision №8): never assigned to a thread this write leaves bound.
    *  Default: none. */
@@ -249,28 +244,20 @@ export function resolveConversationListItem(input: ResolveListItemInput, now: Da
     now,
   });
 
-  // The aggregation-missing exclusion is recomputed on every pass (it lifts
-  // when the account comes back); the unresolvable one only an answer of the
-  // probe lifts. A reason the page lifted (owner decision №8) is not assigned
-  // to a thread this write leaves bound — the one it binds now, or bound
-  // before (a pass never unbinds); an unbound thread keeps it (the engine
-  // reads no unbound chat, and the lift cleared only bound ones).
+  // The aggregation-missing exclusion is the only one the list writes, and it
+  // is recomputed on every pass (it lifts when the account comes back). A
+  // stored unresolvable one is not kept: this write takes it off. A reason the
+  // page lifted (owner decision №8) is not assigned to a thread this write
+  // leaves bound — the one it binds now, or bound before (a pass never
+  // unbinds); an unbound thread keeps it (the engine reads no unbound chat,
+  // and the lift cleared only bound ones).
   const boundAfterWrite = hydrate !== null || (existing?.fanId ?? null) !== null;
   const lifted = (reason: FanslyDmMessageSyncExcludedReason) =>
     boundAfterWrite && (input.liftedExclusions ?? []).includes(reason);
-  let exclusion: FanslyDmMessageSyncExcludedReason | null =
+  const exclusion: FanslyDmMessageSyncExcludedReason | null =
     aggregationMissing && !lifted(FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS)
       ? FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS
       : null;
-  let probeDue = false;
-  if (getFanslyDmMessageSyncExcludedReason(existing?.metadata) ===
-    FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP &&
-    !lifted(FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP)) {
-    if (input.probe !== "resolved") {
-      exclusion = FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP;
-      probeDue = input.probe === null && writtenPartnerId !== null;
-    }
-  }
   const unresolvedIdentity = writtenPartnerId === null;
 
   const diff = diffConversationHead(existing === null ? null : snapshotOf(existing), {
@@ -307,7 +294,6 @@ export function resolveConversationListItem(input: ResolveListItemInput, now: Da
     head,
     unresolvedIdentity,
     messageSyncExcludedReason: exclusion,
-    probeDue,
     scalarDrift: (item.flags !== undefined && flags === null) || (item.unreadCount !== undefined && unread === null),
     diffReasons: diff.reasons,
     unchanged,
@@ -332,6 +318,10 @@ export interface ResolvedGroupDetail {
   /** The detail's head, when it improves on the stored one (a new row, no
    *  stored head, or a newer id); else null (the stored head stays). */
   head: ResolvedListHead | null;
+  /** The exclusion the write keeps: the stored aggregation-missing one (a
+   *  detail serves no page accounts to recompute it from), never a stored
+   *  unresolvable one, which the list no longer keeps. */
+  messageSyncExcludedReason: FanslyDmMessageSyncExcludedReason | null;
 }
 
 export function resolveGroupDetail(input: {
@@ -358,7 +348,17 @@ export function resolveGroupDetail(input: {
       now: input.now,
     })
     : null;
-  return { groupId: input.detail.id, members: members.length, partnerPlatformUserId: partner, writtenPartnerId, head };
+  const stored = getFanslyDmMessageSyncExcludedReason(input.existing?.metadata);
+  const messageSyncExcludedReason =
+    stored === FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS ? stored : null;
+  return {
+    groupId: input.detail.id,
+    members: members.length,
+    partnerPlatformUserId: partner,
+    writtenPartnerId,
+    head,
+    messageSyncExcludedReason,
+  };
 }
 
 // ── follow-ups: does a chat need a message read? ────────────────────────────

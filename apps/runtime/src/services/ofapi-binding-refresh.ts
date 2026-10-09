@@ -9,6 +9,7 @@ import { BadRequestError, ConflictError, ServiceUnavailableError } from "./error
 import { toAccountRecords } from "./ofapi.ts";
 import { resolveOfapiAuthIncident } from "./notification-incidents.ts";
 import { loadObservationPayload } from "./payload-reader.ts";
+import { queueOfapiLinkStatsRunAfterBindingReplaced, type OfapiLinkStatsSender } from "./ofapi-link-stats-sync.ts";
 
 /** The immutable audit row every custody replacement leaves behind — the owner
  * route and the Decision 382 roster reconciler share this one writer, so the
@@ -24,7 +25,14 @@ export async function recordOfapiBindingReplaced(db: AppContext["db"], input: {
   });
 }
 
-export async function refreshOfapiBinding(app: AppContext, input: OfapiBindingRefreshBody, actorId: number) {
+/** `boss`: the API's job queue, for the link series' read after a successful
+ * replacement (best-effort; null in a process without one). */
+export async function refreshOfapiBinding(
+  app: AppContext,
+  input: OfapiBindingRefreshBody,
+  actorId: number,
+  boss: OfapiLinkStatsSender | null = null,
+) {
   const client = app.ofapi;
   const credential = await client?.getCredentialPreflight?.();
   if (credential?.status !== "verified") throw new ServiceUnavailableError(`OFAPI credential preflight ${credential?.status ?? "unknown"}`);
@@ -114,5 +122,8 @@ export async function refreshOfapiBinding(app: AppContext, input: OfapiBindingRe
     return true;
   });
   if (!applied) throw new ConflictError("Binding or recovery blockers changed; refresh preview");
+  // After the commit, as every binding replacement does: the link series
+  // reads the page 20 minutes later instead of waiting for the next window.
+  await queueOfapiLinkStatsRunAfterBindingReplaced(app, boss, { pageId: page.id, source: "owner_api" });
   return { dryRun: false, applied: true, previewToken, ...preview };
 }

@@ -27,6 +27,8 @@ import {
   aiUsageLedgerFeatures,
   fanFlagTypes,
   userRoles,
+  type TrafficLinkKind,
+  type TrafficValidFromBasis,
 } from "@agency_hub_core/shared";
 import type {
   ConfigOverrideValue,
@@ -1595,7 +1597,8 @@ export const pageFans = pgTable(
     externalPresenceSource: text("external_presence_source"),
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).defaultNow().notNull(),
     // 0224: the Fansly account lookup through this page whose result Hub
-    // stored, and the DM partner probe's own answer (fan-hydration.ts,
+    // stored, and the page's last answer for the fan — the DM partner probe's
+    // or a lookup's, returned or omitted (fan-hydration.ts,
     // sync/fansly/resources/fan-profiles.ts). Neither is asked again within a day.
     accountLookupAt: timestamp("account_lookup_at", { withTimezone: true }),
     accountProbeAt: timestamp("account_probe_at", { withTimezone: true }),
@@ -2531,9 +2534,11 @@ export const pageFanIdentities = pgTable("page_fan_identities",
   }),
 );
 
-// OFAPI trial/tracking link statistics (2026-07-22): one run row per
-// completed (page, link_kind) list walk; append-only per-link snapshots.
-// Cumulative vendor counters stored as observed; deltas are query-time.
+// OFAPI trial/tracking link statistics (2026-07-22): one run row per ATTEMPT
+// to read a (page, link_kind) list — finished walks, and since migration 0255
+// the failed and the skipped ones too; append-only per-link snapshots under
+// the finished walks. Cumulative vendor counters stored as observed; deltas
+// are query-time.
 export const pageLinkStatRuns = pgTable(
   "page_link_stat_runs",
   {
@@ -2542,11 +2547,21 @@ export const pageLinkStatRuns = pgTable(
       .references(() => pages.id, { onDelete: "restrict" })
       .notNull(),
     linkKind: text("link_kind").notNull(),
+    // complete | partial | truncated | failed | skipped (CHECK in 0255).
     status: text("status").notNull(),
     pulledAt: timestamp("pulled_at", { withTimezone: true }).notNull(),
     apiPages: integer("api_pages").default(0).notNull(),
     rawItems: integer("raw_items").default(0).notNull(),
     writtenRows: integer("written_rows").default(0).notNull(),
+    // Why the row is not a clean 'complete'; see the column comment in 0255.
+    reason: text("reason"),
+    // The scheduled window the attempt belongs to; null on rows older than
+    // 0255 and on rows written by an image that predates it.
+    windowAt: timestamp("window_at", { withTimezone: true }),
+    // Ordinal of the row within its (page, link_kind, window).
+    attempt: smallint("attempt").default(1).notNull(),
+    // The OFAPI account the page was bound to when the attempt was made.
+    ofapiAccountId: text("ofapi_account_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({
@@ -2581,10 +2596,23 @@ export const pageLinkStatSnapshots = pgTable(
     // NULL money/spenders = vendor value unknown (revenue block missing, still
     // computing, or unparseable) — deliberately distinct from a real zero.
     spendersCount: integer("spenders_count"),
+    // Deprecated name (0256): the value is the creator's NET after the
+    // OnlyFans fee, refunds and chargebacks. Still written with the same value
+    // as revenueNetMills — the previous image and traffic-control read it.
     revenueGrossMills: bigint("revenue_gross_mills", { mode: "bigint" }),
     revenueIsLoading: boolean("revenue_is_loading"),
     revenueCalculatedAt: timestamp("revenue_calculated_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    // Vendor revenue.total: creator net after the OnlyFans fee and after
+    // refunds and chargebacks. Null on rows an image older than 0256 wrote —
+    // read coalesce(revenue_net_mills, revenue_gross_mills).
+    revenueNetMills: bigint("revenue_net_mills", { mode: "bigint" }),
+    // Vendor revenue.chargebacks: already excluded from revenueNetMills.
+    revenueChargebacksMills: bigint("revenue_chargebacks_mills", { mode: "bigint" }),
+    // Vendor subscribeDays of a trial link; null on tracking links.
+    trialDays: integer("trial_days"),
+    // Vendor tags as sent; [] = none, null = unknown.
+    tags: text("tags").array(),
   },
   (table) => ({
     runLinkUniq: uniqueIndex("page_link_stat_snapshots_run_link_uniq").on(
@@ -2597,6 +2625,135 @@ export const pageLinkStatSnapshots = pgTable(
       table.platformLinkId,
       table.id,
     ),
+  }),
+);
+
+// OnlyFans traffic sources (0257; plan 2026-10-08, PR 11): "link → channel →
+// contractor" with dates. Written only by the owner's CLI through
+// repositories/traffic-bindings.ts, which holds the "one channel per link,
+// one contractor per channel at any instant" rule (advisory lock per key,
+// overlap check over open and closed rows); the open-row unique indexes are
+// its backstop. valid_from_basis has no default: `assumed_link_created`
+// marks a start nobody confirmed.
+export const trafficContractors = pgTable(
+  "traffic_contractors",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    key: text("key").notNull(),
+    title: text("title").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    keyUniq: unique("traffic_contractors_key_uniq").on(table.key),
+    keyCheck: check("traffic_contractors_key_check", sql`${table.key} ~ '^[a-z0-9][a-z0-9_-]{0,63}$'`),
+    titleCheck: check("traffic_contractors_title_check", sql`length(btrim(${table.title})) between 1 and 200`),
+  }),
+);
+
+export const trafficChannels = pgTable(
+  "traffic_channels",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    key: text("key").notNull(),
+    title: text("title").notNull(),
+    note: text("note"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    keyUniq: unique("traffic_channels_key_uniq").on(table.key),
+    keyCheck: check(
+      "traffic_channels_key_check",
+      sql`${table.key} ~ '^[a-z0-9][a-z0-9_-]{0,63}\\.[a-z0-9][a-z0-9_-]{0,63}$'`,
+    ),
+    titleCheck: check("traffic_channels_title_check", sql`length(btrim(${table.title})) between 1 and 200`),
+    noteCheck: check("traffic_channels_note_check", sql`${table.note} is null or length(${table.note}) between 1 and 2000`),
+  }),
+);
+
+export const trafficChannelContractors = pgTable(
+  "traffic_channel_contractors",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    channelId: bigint("channel_id", { mode: "number" })
+      .references(() => trafficChannels.id, { onDelete: "restrict" })
+      .notNull(),
+    contractorId: bigint("contractor_id", { mode: "number" })
+      .references(() => trafficContractors.id, { onDelete: "restrict" })
+      .notNull(),
+    validFrom: timestamp("valid_from", { withTimezone: true }).notNull(),
+    validTo: timestamp("valid_to", { withTimezone: true }),
+    validFromBasis: text("valid_from_basis").$type<TrafficValidFromBasis>().notNull(),
+    note: text("note"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    intervalCheck: check(
+      "traffic_channel_contractors_interval_check",
+      sql`${table.validTo} is null or ${table.validTo} > ${table.validFrom}`,
+    ),
+    basisCheck: check(
+      "traffic_channel_contractors_basis_check",
+      sql`${table.validFromBasis} in ('confirmed', 'assumed_link_created')`,
+    ),
+    noteCheck: check(
+      "traffic_channel_contractors_note_check",
+      sql`${table.note} is null or length(${table.note}) between 1 and 2000`,
+    ),
+    openUniq: uniqueIndex("traffic_channel_contractors_open_uniq")
+      .on(table.channelId)
+      .where(sql`${table.validTo} is null`),
+    channelIdx: index("traffic_channel_contractors_channel_idx").on(table.channelId, table.validFrom),
+    contractorIdx: index("traffic_channel_contractors_contractor_idx").on(table.contractorId, table.validFrom),
+  }),
+);
+
+export const trafficLinkBindings = pgTable(
+  "traffic_link_bindings",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    platformAccountId: bigint("platform_account_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    linkKind: text("link_kind").$type<TrafficLinkKind>().notNull(),
+    platformLinkId: text("platform_link_id").notNull(),
+    channelId: bigint("channel_id", { mode: "number" })
+      .references(() => trafficChannels.id, { onDelete: "restrict" })
+      .notNull(),
+    validFrom: timestamp("valid_from", { withTimezone: true }).notNull(),
+    validTo: timestamp("valid_to", { withTimezone: true }),
+    validFromBasis: text("valid_from_basis").$type<TrafficValidFromBasis>().notNull(),
+    note: text("note"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    linkKindCheck: check("traffic_link_bindings_link_kind_check", sql`${table.linkKind} in ('tracking', 'trial')`),
+    linkIdCheck: check("traffic_link_bindings_link_id_check", sql`${table.platformLinkId} ~ '^[0-9]{1,20}$'`),
+    intervalCheck: check(
+      "traffic_link_bindings_interval_check",
+      sql`${table.validTo} is null or ${table.validTo} > ${table.validFrom}`,
+    ),
+    basisCheck: check(
+      "traffic_link_bindings_basis_check",
+      sql`${table.validFromBasis} in ('confirmed', 'assumed_link_created')`,
+    ),
+    noteCheck: check(
+      "traffic_link_bindings_note_check",
+      sql`${table.note} is null or length(${table.note}) between 1 and 2000`,
+    ),
+    openUniq: uniqueIndex("traffic_link_bindings_open_uniq")
+      .on(table.platformAccountId, table.linkKind, table.platformLinkId)
+      .where(sql`${table.validTo} is null`),
+    linkIdx: index("traffic_link_bindings_link_idx").on(
+      table.platformAccountId,
+      table.linkKind,
+      table.platformLinkId,
+      table.validFrom,
+    ),
+    channelIdx: index("traffic_link_bindings_channel_idx").on(table.channelId, table.validFrom),
   }),
 );
 

@@ -13,6 +13,11 @@ import {
   getPageConversationPreview,
   getPageDmSyncCoverage,
   readDmReaderStore,
+  chatUnavailabilityCause,
+  readChatPartnerPublicChecks,
+  readOpenChatUnavailability,
+  type ChatUnavailabilityCause,
+  type ChatUnavailabilityEpisode,
   type PageConversationMessageProvenance,
 } from "@agency_hub_core/db";
 import { normalizeDmMessageText } from "@agency_hub_core/shared";
@@ -40,6 +45,48 @@ function serializeProvenance(provenance: PageConversationMessageProvenance | und
   return provenance.source === "live"
     ? { source: "live" as const, apiUnavailable: provenance.apiUnavailable }
     : { source: "rest" as const };
+}
+
+/** The chat's open unavailability episode and why, as far as Hub can tell. */
+interface ChatAccessRead {
+  episode: ChatUnavailabilityEpisode;
+  cause: ChatUnavailabilityCause;
+}
+
+/** The chat's open unavailability episode (arena "vanished chat", plan §5):
+ * additive, so a chat without one answers byte for byte as before. The cause
+ * is the partner's session-less public check (plan §7, §8 (а)): found →
+ * `probably_blocked`, not found → `probably_deleted`, none → `unchecked`; the
+ * chatters' copy is keyed by it. */
+function serializeChatAccess(access: ChatAccessRead | undefined) {
+  if (access === undefined) return {};
+  const { episode } = access;
+  return {
+    chatAccess: {
+      state: episode.state,
+      openedAt: episode.openedAt.toISOString(),
+      establishedAt: serializeTimestamp(episode.establishedAt),
+      lastRefusalAt: episode.lastRefusalAt.toISOString(),
+      refusals: episode.refusals,
+      ownerNote: episode.ownerNote,
+      cause: access.cause,
+    },
+  };
+}
+
+/** The open episode of one chat of the page (one indexed read) and, when it
+ * has one, its partner's public check. Only the Fansly engine writes
+ * episodes: another platform's chat never has one. */
+async function readChatAccessEpisode(
+  app: AppContext,
+  pageId: number,
+  platformConversationId: string,
+): Promise<ChatAccessRead | undefined> {
+  const episodes = await readOpenChatUnavailability(app.db, { pageId, groupIds: [platformConversationId] });
+  const episode = episodes.get(platformConversationId);
+  if (episode === undefined) return undefined;
+  const checks = await readChatPartnerPublicChecks(app.db, { threadIds: [episode.threadId] });
+  return { episode, cause: chatUnavailabilityCause(checks.get(episode.threadId)) };
 }
 
 function serializePageMetric(value: number | null | undefined) {
@@ -128,7 +175,7 @@ export async function getPageConversationPreviewReport(
   // The store the page's readers read (step 4, S4-08): message_archive on a
   // page the Fansly Sync Engine runs live, page_dm_messages elsewhere.
   const store = await readDmReaderStore(app.db, page.id);
-  const [preview, freshness] = await Promise.all([
+  const [preview, freshness, chatAccess] = await Promise.all([
     getPageConversationPreview(app.db, {
       platformAccountId: page.id,
       platformConversationId: params.platformConversationId,
@@ -137,6 +184,7 @@ export async function getPageConversationPreviewReport(
       store,
     }),
     getPageDmSyncCoverage(app.db, page.id),
+    readChatAccessEpisode(app, page.id, params.platformConversationId),
   ]);
 
   if (!preview) {
@@ -167,6 +215,7 @@ export async function getPageConversationPreviewReport(
       lastMessageSyncAt: serializeTimestamp(preview.conversation.lastMessageSyncAt),
       unreadCount: preview.conversation.unreadCount,
       lastMessageAt: serializeTimestamp(preview.conversation.lastMessageAt),
+      ...serializeChatAccess(chatAccess),
     },
     messageSyncUx,
     messages: preview.messages.map((message) => ({
@@ -200,6 +249,7 @@ export async function getPageConversationMessagesReport(
   if (!conversation) {
     throw new NotFoundError("Conversation messages were not found");
   }
+  const chatAccess = await readChatAccessEpisode(app, page.id, params.conversationId);
 
   return {
     page: serializePage(page),
@@ -214,6 +264,7 @@ export async function getPageConversationMessagesReport(
       lastMessageSyncAt: serializeTimestamp(conversation.conversation.lastMessageSyncAt),
       unreadCount: conversation.conversation.unreadCount,
       lastMessageAt: serializeTimestamp(conversation.conversation.lastMessageAt),
+      ...serializeChatAccess(chatAccess),
     },
     messages: conversation.messages.map((message) => ({
       messageId: message.messageId,

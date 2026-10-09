@@ -233,9 +233,11 @@ read(
   },
   { defaultCollect: true },
 );
-read("post_labels", "posts/labels", "posts_comments", "list", "offset", page, {
-  defaultCollect: true,
-});
+// Out of the scheduled selection, still an explicit selector. OFAPI documents
+// this read, but OnlyFans answered every request Hub made with its own
+// 404 "Route not found." (three, the first on 2026-09-07), so a scheduled
+// posts_comments run read all posts and then ended on this step.
+read("post_labels", "posts/labels", "posts_comments", "list", "offset", page);
 read("post", "posts/:id", "posts_comments", "object", "none");
 read(
   "post_stats",

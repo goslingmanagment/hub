@@ -40,6 +40,9 @@ export type ClientAudienceNewClass = Pick<(typeof CLIENT_AUDIENCE_NEW_CLASSES)[n
  * rows nor counted as unknown. OnlyFans reports the top-fan award as
  * `subscriptions.new`. Counting it would mark every long window as incomplete
  * for a fact the list is not about.
+ *
+ * The hub's one list of them: the Agent Read `subscription_events` dataset
+ * (agent-dataset-map.ts) leaves the same subTypes out by reading it.
  */
 export const CLIENT_AUDIENCE_NEW_IGNORED_SUB_TYPES = ["customer_award_for_model_top"] as const;
 

@@ -78,6 +78,7 @@ const linkStatsMocks = vi.hoisted(() => ({
   ensureOfapiLinkStatsSchedule: vi.fn(),
   startOfapiLinkStatsWorker: vi.fn(),
   runOfapiLinkStatsReconcile: vi.fn(),
+  queueOfapiLinkStatsRunsAfterRebind: vi.fn(),
 }));
 
 const ofapiDmAnalyticsMocks = vi.hoisted(() => ({
@@ -254,6 +255,7 @@ vi.mock("../apps/runtime/src/services/ofapi-link-stats-sync.ts", () => ({
   ensureOfapiLinkStatsSchedule: linkStatsMocks.ensureOfapiLinkStatsSchedule,
   startOfapiLinkStatsWorker: linkStatsMocks.startOfapiLinkStatsWorker,
   runOfapiLinkStatsReconcile: linkStatsMocks.runOfapiLinkStatsReconcile,
+  queueOfapiLinkStatsRunsAfterRebind: linkStatsMocks.queueOfapiLinkStatsRunsAfterRebind,
 }));
 vi.mock("../apps/runtime/src/services/sync-queue.ts", () => ({
   ensureQueueCreated: vi.fn(async () => {}),

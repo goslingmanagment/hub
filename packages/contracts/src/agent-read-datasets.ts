@@ -154,6 +154,113 @@ export const AGENT_DATASETS = {
     fields: { platform:"string", payoutRef:"string", amountMills:"mills", currency:"string", state:"string", rejectReason:"string", requestedAt:"timestamp", lastObservedAt:"timestamp", observationRef:"string" },
     defaultSort:{field:"requestedAt",dir:"desc",nullsLast:true}, stableKey:["payoutRequestKey"],
   },
+  // ── OnlyFans traffic sources (plan 2026-10-08, PR 14) ─────────────────────
+  // The link series: Hub reads OFAPI's stored tracking and trial link lists
+  // four times a day (page_link_stat_runs / page_link_stat_snapshots). Every
+  // counter and money figure is the vendor's CUMULATIVE value at the moment
+  // of the read; deltas are the reader's arithmetic. OnlyFans only.
+  //
+  // `campaign_snapshots` — the series itself: one row per link in each run
+  // that is a USABLE result of its window (coordinator's П9.1; the one shared
+  // predicate `linkStatRunUsableResultSql`). Money-bearing: the vendor's
+  // revenue is the creator's NET after the OnlyFans fee.
+  campaign_snapshots: {
+    moneyBearing: true,
+    verbatimText: false,
+    disclosesPurchase: false,
+    fields: {
+      linkKind: "string",
+      linkRef: "string",
+      name: "string",
+      observedAt: "timestamp",
+      /** The Europe/Moscow day of `observedAt` (the business day). */
+      businessDate: "date",
+      windowAt: "timestamp",
+      runRef: "string",
+      runStatus: "string",
+      /** The first non-empty run under a new OFAPI account; null on rows an
+       *  image that did not record the flag wrote (everything before 0255). */
+      bindingChanged: "bool",
+      clicks: "int",
+      /** Trial links only; null on tracking links. */
+      claims: "int",
+      subscribers: "int",
+      /** Null while the vendor has not computed it — never a fake zero. */
+      spenders: "int",
+      /** Creator NET after the OnlyFans fee, refunds and chargebacks; null =
+       *  unknown. Never take the fee off again. */
+      vendorRevenueNetMills: "mills",
+      /** Already excluded from `vendorRevenueNetMills`; informational. */
+      vendorChargebacksMills: "mills",
+      vendorRevenueCalculatedAt: "timestamp",
+      isFinished: "bool",
+      linkEndsAt: "timestamp",
+    },
+    // Oldest first: a series is read forward from a watermark.
+    defaultSort: { field: "observedAt", dir: "asc", nullsLast: false },
+    stableKey: ["runId", "platformLinkId"],
+  },
+  // `campaign_runs` — every ATTEMPT to read a page's list, failed and skipped
+  // ones included (a window that passed without any attempt is a `skipped` /
+  // `window_missed` row): where the series has a hole, and why.
+  // `usableResult` is the same shared predicate the snapshots are filtered by.
+  campaign_runs: {
+    moneyBearing: false,
+    verbatimText: false,
+    disclosesPurchase: false,
+    fields: {
+      linkKind: "string",
+      windowAt: "timestamp",
+      observedAt: "timestamp",
+      businessDate: "date",
+      runRef: "string",
+      status: "string",
+      /** Caveats of a `partial`, what stopped a `truncated`, the (redacted)
+       *  error of a `failed`, why a `skipped` was not attempted. */
+      reason: "string",
+      attempt: "int",
+      apiPages: "int",
+      rawItems: "int",
+      writtenRows: "int",
+      bindingChanged: "bool",
+      usableResult: "bool",
+    },
+    defaultSort: { field: "observedAt", dir: "asc", nullsLast: false },
+    stableKey: ["runId"],
+  },
+  // `campaign_bindings` — who brings a link's traffic, with dates: link →
+  // channel (traffic_link_bindings) and channel → contractor
+  // (traffic_channel_contractors), each dated on its own. One row per STRETCH
+  // over which both are constant, so a contractor change inside a binding
+  // splits it, and a stretch no contractor covers says so with a null
+  // contractor. The two facts' own intervals and start bases ride along
+  // unchanged (П9.7: an assumed start is never served as an established one).
+  campaign_bindings: {
+    moneyBearing: false,
+    verbatimText: false,
+    disclosesPurchase: false,
+    fields: {
+      linkKind: "string",
+      linkRef: "string",
+      channelKey: "string",
+      channelTitle: "string",
+      contractorKey: "string",
+      contractorTitle: "string",
+      /** This stretch: [validFrom, validTo), validTo null = still in force. */
+      validFrom: "timestamp",
+      validTo: "timestamp",
+      /** How the link → channel binding's start is known: `confirmed` or
+       *  `assumed_link_created` (the link's creation date stands in). */
+      validFromBasis: "string",
+      bindingValidFrom: "timestamp",
+      bindingValidTo: "timestamp",
+      contractorValidFrom: "timestamp",
+      contractorValidTo: "timestamp",
+      contractorValidFromBasis: "string",
+    },
+    defaultSort: { field: "validFrom", dir: "asc", nullsLast: false },
+    stableKey: ["bindingId", "stretchFrom"],
+  },
   fan_memberships: {
     // MONEY-BEARING because of `lifetimeSpendMills`. The appendix's prose names
     // only subscriptions/transactions/fan_spend_daily as money-bearing while its
@@ -307,8 +414,17 @@ export const AGENT_DATASETS = {
     disclosesPurchase: false,
     fields: {
       platform: "string",
+      /** The UTC day the follows fell on (the rollup buckets `followed_at`
+       *  by UTC date) — not a Europe/Moscow business day. */
       businessDate: "date",
+      /** The page's total follower count Hub knew for that day; null = not
+       *  known (only today's value comes from the live sync). */
       followersCount: "int",
+      /** Follow relationships whose `followed_at` falls on that day, counted
+       *  over what Hub stores (a later unfollow still counts). Derived: the
+       *  rollup is rebuilt from `page_follows`, so a past day can still move.
+       *  A day with no row has no stored follow. */
+      newFollowers: "int",
     },
     defaultSort: { field: "businessDate", dir: "desc", nullsLast: false },
     stableKey: ["pageId"],

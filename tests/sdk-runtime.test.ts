@@ -45,6 +45,18 @@ describe("kernel SDK runtime", () => {
     expect(calls[0].init.method).toBe("GET");
   });
 
+  it("keeps a colon inside a segment literal: POST /api/v2/spenders:batch needs no params", async () => {
+    const { impl, calls } = fakeFetch([{ status: 200, body: { items: [] } }]);
+    const client = createKernelClient(kernelOperations, { baseUrl: "http://hub", fetch: impl });
+
+    await client.spenderBatch({
+      body: { fans: [{ platform: "fansly", platformUserId: "1" }] },
+    } as never).catch(() => undefined); // response shape not under test here
+
+    expect(calls[0]?.url).toBe("http://hub/api/v2/spenders:batch");
+    expect(calls[0]?.init.method).toBe("POST");
+  });
+
   it("throws a contract error when a path param is missing", async () => {
     const { impl } = fakeFetch([{ status: 200, body: {} }]);
     const client = createKernelClient(kernelOperations, { baseUrl: "http://hub", fetch: impl });

@@ -243,6 +243,15 @@ export const AGENT_CLAIM_CLASSES = {
       postLike: { required: ["post_likes"] },
       platformNotification: { required: ["platform_notifications"] },
       captureCoverageRow: { required: ["capture_coverage"] },
+      // ── OnlyFans traffic sources (plan 2026-10-08, PR 14) ──────────────────
+      // The link series and who brings each link's traffic. Each store gets
+      // its own field: the runs prove which windows were attempted, the
+      // snapshots what the vendor counted, and the two dated binding tables
+      // answer for different facts (link → channel, channel → contractor).
+      linkStatRun: { required: ["page_link_stat_runs"] },
+      linkStatSnapshot: { required: ["page_link_stat_snapshots"] },
+      trafficLinkBinding: { required: ["traffic_link_bindings"] },
+      trafficChannelContractor: { required: ["traffic_channel_contractors"] },
     },
   },
 } as const satisfies Record<string, AgentClaimClassDefinition>;

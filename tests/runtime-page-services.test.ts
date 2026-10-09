@@ -9,6 +9,12 @@ const repoMocks = vi.hoisted(() => ({
   getPageDmSyncCoverage: vi.fn(),
   // Step 4 (S4-08): the store a page's DM readers read.
   readDmReaderStore: vi.fn(async () => "page_dm_messages"),
+  // Arena "vanished chat": the open unavailability episodes of a page's chats, by group id.
+  readOpenChatUnavailability: vi.fn(async (): Promise<Map<string, unknown>> => new Map()),
+  // Arena R5: the partner's session-less public check, by thread id.
+  readChatPartnerPublicChecks: vi.fn(async (): Promise<Map<number, unknown>> => new Map()),
+  chatUnavailabilityCause: (check: { found: boolean } | undefined) =>
+    check === undefined ? "unchecked" : check.found ? "probably_blocked" : "probably_deleted",
   millsToNumber: (value: bigint) => Number(value),
 }));
 
@@ -218,6 +224,58 @@ describe("runtime page services", () => {
       { messageId: "1", senderRole: "model", content: "rest", createdAt: "2026-10-01T12:00:00.000Z",
         tipAmountCents: 300, source: "rest" },
     ]);
+    // No open episode: the conversation answers without chatAccess.
+    expect(repoMocks.readOpenChatUnavailability).toHaveBeenCalledWith({}, { pageId: 7, groupIds: ["800"] });
+    expect(result.conversation).not.toHaveProperty("chatAccess");
+  });
+
+  it("serializes the chat's open unavailability episode as chatAccess, cause unchecked", async () => {
+    authMocks.canAccessPage.mockReturnValue(true);
+    liveOverlayMocks.pageReadsLiveOverlay.mockResolvedValue(true);
+    repoMocks.findPageSummaryByLabel.mockResolvedValue({
+      id: 7, label: "lora-1", platform: "fansly", username: null, displayName: null, followerCount: null,
+      subscriberCount: null, lastLightSyncAt: null, lastFollowerSyncAt: null, modelSlug: "lora", modelName: "Lora",
+    });
+    repoMocks.getPageConversationMessages.mockResolvedValue({
+      conversationId: "959503986971394048",
+      conversation: {
+        platformConversationId: "959503986971394048", storedMessageCount: 1, messageCoverageStatus: "complete",
+        messageBackfillComplete: true, messageSyncEligibility: "eligible", messageSyncExcludedReason: null,
+        lastMessageSyncAt: null, unreadCount: 0, lastMessageAt: null,
+      },
+      messages: [],
+    });
+    repoMocks.readOpenChatUnavailability.mockResolvedValueOnce(new Map([["959503986971394048", {
+      threadId: 41,
+      state: "established",
+      openedAt: new Date("2026-10-04T10:00:00.000Z"),
+      establishedAt: new Date("2026-10-04T17:11:00.000Z"),
+      lastRefusalAt: new Date("2026-10-07T17:11:00.000Z"),
+      refusals: 8,
+      ownerNote: "06.10: profile does not open from lora-1",
+      // Evidence the chatters' contract leaves out.
+      lastHttpStatus: 500,
+      retryNotBefore: new Date("2026-10-08T17:11:00.000Z"),
+      firstAttemptId: 115884,
+    }]]));
+
+    const result = await getPageConversationMessagesReport(
+      { db: {} } as never,
+      {} as never,
+      { pageLabel: "lora-1", conversationId: "959503986971394048" },
+      { limit: 25 },
+    );
+
+    expect(result.conversation.chatAccess).toEqual({
+      state: "established",
+      openedAt: "2026-10-04T10:00:00.000Z",
+      establishedAt: "2026-10-04T17:11:00.000Z",
+      lastRefusalAt: "2026-10-07T17:11:00.000Z",
+      refusals: 8,
+      ownerNote: "06.10: profile does not open from lora-1",
+      cause: "unchecked",
+    });
+    expect(repoMocks.readChatPartnerPublicChecks).toHaveBeenCalledWith({}, { threadIds: [41] });
   });
 
   it("allows OnlyFans conversation previews", async () => {

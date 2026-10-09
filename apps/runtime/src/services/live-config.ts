@@ -149,7 +149,7 @@ export interface LiveConfigActor {
  *  BadRequestError; ConfigOverrideVersionConflictError / ConfigOverrideTransitionError
  *  propagate for the caller to map (409 / 400 on the route). */
 export async function applyLiveConfigPatches(
-  app: AppContext,
+  app: Pick<AppContext, "db">,
   input: { patches: readonly LiveConfigPatchInput[]; note?: string | undefined; actor: LiveConfigActor },
 ): Promise<Array<{ key: string; value: ConfigOverrideValue; version: number }>> {
   const validatedPatches = validateLiveConfigPatches(input.patches);

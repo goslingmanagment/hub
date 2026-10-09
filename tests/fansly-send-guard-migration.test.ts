@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 
 import { expect, it } from "vitest";
 
@@ -26,8 +26,29 @@ it("is purely additive: two new tables, a seed, indexes and grants", () => {
   expect(sql).toMatch(/insert into fansly_page_send_guards \(page_id, last_completed_at, next_u, updated_at\)\s+select id, now\(\), 0\.2, now\(\) from pages where platform = 'fansly'\s+on conflict \(page_id\) do nothing/);
 });
 
+// Arena "vanished chat" R5 (M5): the source CHECK is replaced by a later
+// migration, found by its name (its number is the next free one at merge).
+const widenings = readdirSync("packages/db/migrations").filter((file) => file.endsWith("_fansly_public_lookup_egress.sql"));
+const widening = widenings[0] ?? "";
+const wideningSql = widenings.length === 1
+  ? readFileSync(`packages/db/migrations/${widening}`, "utf8")
+    .split("\n")
+    .filter((line) => !line.trimStart().startsWith("--"))
+    .join("\n")
+  : "";
+
+function wideningSourceList(): string[] {
+  const body = wideningSql.slice(wideningSql.indexOf("add constraint fansly_send_log_source_check"));
+  const list = body.slice(body.indexOf("in (") + 4, body.indexOf(")) not valid"));
+  return [...list.matchAll(/'([a-z_]+)'/g)].map((match) => match[1]!);
+}
+
 it("keeps the journal's vocabularies equal to the guard contract", () => {
-  expect(checkList("fansly_send_log_source_check")).toEqual([...FANSLY_SEND_SOURCES]);
+  // 0225's list is the original; the widening adds `public_lookup` and keeps
+  // every value 0225 admits, in its order.
+  expect(widenings).toHaveLength(1);
+  expect(wideningSourceList()).toEqual([...checkList("fansly_send_log_source_check"), "public_lookup"]);
+  expect(wideningSourceList()).toEqual([...FANSLY_SEND_SOURCES]);
   expect(checkList("fansly_send_log_outcome_check")).toEqual([...FANSLY_SEND_OUTCOMES]);
 });
 

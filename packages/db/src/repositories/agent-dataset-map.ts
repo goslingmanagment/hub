@@ -28,7 +28,12 @@
 // are GENERATED from these frozen constants, so a second copy of a code→label
 // map cannot drift away from the first.
 import { POST_ATTACHMENTS_DATASET, RAW_MEDIA_DATASET } from "./agent-content-media-sql.ts";
+import { CLIENT_AUDIENCE_NEW_IGNORED_SUB_TYPES } from "./client-audience-new.ts";
+import { linkStatRunUsableResultSql } from "./ofapi.ts";
 import { LEGACY_EXECUTOR_PLATFORMS } from "./page-sync.ts";
+
+import { sql } from "drizzle-orm";
+import { PgDialect } from "drizzle-orm/pg-core";
 
 import {
   FANSLY_MEDIA_STAT_TYPES,
@@ -40,6 +45,7 @@ import {
   FANSLY_PROFILE_STAT_FAMILIES,
   FANSLY_REVENUE_LABEL_VERSION,
   FANSLY_REVENUE_TYPES,
+  MOSCOW_TIME_ZONE,
 } from "@agency_hub_core/shared";
 
 export interface AgentDatasetSqlMapping {
@@ -189,6 +195,17 @@ const SUBSCRIPTIONS = `
   where s.source_created_at is not null
 `;
 
+// OnlyFans reports some facts that are no subscription under the subscription
+// notification (the top-fan award arrives as `subscriptions.new`). The event
+// stays in `domain_events` as it was captured; this dataset does not serve it
+// as a row. ONE list says which subTypes those are: the one the client's "new
+// subscribers" list already reads. Eligibility, not a source filter: such an
+// event is still a stored row of this lane, so it keeps its say in the capture
+// floor. An event with no subType is not on the list and stays a row.
+const NOT_A_SUBSCRIPTION_SUB_TYPES_SQL = `array[${
+  CLIENT_AUDIENCE_NEW_IGNORED_SUB_TYPES.map((subType) => sqlText(subType)).join(", ")
+}]::text[]`;
+
 const SUBSCRIPTION_EVENTS = `
   select e.account_id          as k_page_id,
          p.platform::text      as k_platform,
@@ -200,6 +217,8 @@ const SUBSCRIPTION_EVENTS = `
              then f.platform_user_id
            else null
          end                   as k_fan,
+         coalesce(e.data ->> 'subType', '') <> all (${NOT_A_SUBSCRIPTION_SUB_TYPES_SQL})
+                               as k_eligible,
          e.observation_id      as k_observation_ref,
          'ofapi_webhook'::text as k_ingest_path,
          'final'::text         as k_convergence,
@@ -333,7 +352,8 @@ const FOLLOWERS_DAILY = `
          null::text             as k_fan,
          p.platform::text       as f_platform,
          df.business_date::text as f_business_date,
-         df.known_total_followers as f_followers_count
+         df.known_total_followers as f_followers_count,
+         df.new_followers       as f_new_followers
   from daily_followers df
   join pages p on p.id = df.platform_account_id
 `;
@@ -1033,6 +1053,192 @@ const CAPTURE_COVERAGE = `
   from capture_coverage cc
 `;
 
+// ── OnlyFans traffic sources (plan 2026-10-08, PR 14) ───────────────────────
+
+/**
+ * The series' ONE rule for "this run is a usable result of its window"
+ * (coordinator's П9.1), as SQL text over the run alias `r` — rendered once
+ * from the repository's own predicate rather than restated here, so the
+ * dataset, the retries and the staleness monitor cannot disagree about which
+ * rows are results. The predicate binds no parameter; an edit that adds one
+ * fails here, at module load, instead of shipping a `$1` into a raw source.
+ */
+const LINK_STAT_RUN_USABLE_SQL = (() => {
+  const rendered = new PgDialect().sqlToQuery(linkStatRunUsableResultSql(sql.raw("r")));
+  if (rendered.params.length > 0) {
+    throw new Error("linkStatRunUsableResultSql must bind no parameter to serve as a dataset source");
+  }
+  return rendered.sql;
+})();
+
+/** The writer records `binding_changed` among a partial run's caveats since
+ * migration 0255, and every run it writes carries `window_at`. A row without
+ * `window_at` was written by an image that recorded no such flag (all rows
+ * before 2026-10-09, or a rolled-back image): its answer is unknown, not
+ * false — the September rebind predates the flag. */
+const LINK_STAT_BINDING_CHANGED_SQL = `case
+           when r.window_at is null then null::boolean
+           else r.status = 'partial'
+             and 'binding_changed' = any(string_to_array(coalesce(r.reason, ''), ','))
+         end`;
+
+/** The business day of a read: Europe/Moscow from 00:00, as `YYYY-MM-DD`. */
+const LINK_STAT_BUSINESS_DATE_SQL =
+  `to_char(r.pulled_at at time zone ${sqlText(MOSCOW_TIME_ZONE)}, 'YYYY-MM-DD')`;
+
+const CAMPAIGN_SNAPSHOTS = `
+  select s.platform_account_id as k_page_id,
+         p.platform::text      as k_platform,
+         s.run_id::text || ':' || s.platform_link_id as k_key,
+         r.pulled_at           as k_occurred_at,
+         null::text            as k_fan,
+         null::bigint          as k_observation_ref,
+         'ofapi_rest_pull'::text as k_ingest_path,
+         -- A snapshot is an append-only point read: it never changes.
+         'final'::text         as k_convergence,
+         s.link_kind           as f_link_kind,
+         s.platform_link_id    as f_link_ref,
+         s.name                as f_name,
+         r.pulled_at           as f_observed_at,
+         ${LINK_STAT_BUSINESS_DATE_SQL} as f_business_date,
+         r.window_at           as f_window_at,
+         r.id::text            as f_run_ref,
+         r.status              as f_run_status,
+         ${LINK_STAT_BINDING_CHANGED_SQL} as f_binding_changed,
+         s.clicks_count        as f_clicks,
+         s.claims_count        as f_claims,
+         s.subscribers_count   as f_subscribers,
+         s.spenders_count      as f_spenders,
+         -- Rows an image older than 0256 wrote carry the (net) value only
+         -- under the deprecated name.
+         coalesce(s.revenue_net_mills, s.revenue_gross_mills) as f_vendor_revenue_net_mills,
+         s.revenue_chargebacks_mills as f_vendor_chargebacks_mills,
+         s.revenue_calculated_at as f_vendor_revenue_calculated_at,
+         s.is_finished         as f_is_finished,
+         s.link_ends_at        as f_link_ends_at
+  from page_link_stat_snapshots s
+  join page_link_stat_runs r on r.id = s.run_id
+  join pages p on p.id = s.platform_account_id
+  where ${LINK_STAT_RUN_USABLE_SQL}
+`;
+
+const CAMPAIGN_RUNS = `
+  select r.platform_account_id as k_page_id,
+         p.platform::text      as k_platform,
+         r.id::text            as k_key,
+         r.pulled_at           as k_occurred_at,
+         null::text            as k_fan,
+         null::bigint          as k_observation_ref,
+         'ofapi_rest_pull'::text as k_ingest_path,
+         'final'::text         as k_convergence,
+         r.link_kind           as f_link_kind,
+         r.window_at           as f_window_at,
+         r.pulled_at           as f_observed_at,
+         ${LINK_STAT_BUSINESS_DATE_SQL} as f_business_date,
+         r.id::text            as f_run_ref,
+         r.status              as f_status,
+         r.reason              as f_reason,
+         r.attempt             as f_attempt,
+         r.api_pages           as f_api_pages,
+         r.raw_items           as f_raw_items,
+         r.written_rows        as f_written_rows,
+         ${LINK_STAT_BINDING_CHANGED_SQL} as f_binding_changed,
+         (${LINK_STAT_RUN_USABLE_SQL}) as f_usable_result
+  from page_link_stat_runs r
+  join pages p on p.id = r.platform_account_id
+`;
+
+/**
+ * Link → channel bindings cut into stretches over which the channel's
+ * contractor is constant too.
+ *
+ * The lateral `span` set is the binding's channel's whole time line, (-∞, ∞)
+ * with no hole and no overlap: its contractor terms (at most one at any
+ * instant — the writer's rule, П9.6) plus the stretches none of them covers
+ * (before the first term, between two, after a closed last one; the whole
+ * line for a channel without terms). Intersecting the binding with every
+ * span it overlaps gives contiguous stretches that add up to the binding
+ * exactly, so a total computed per stretch telescopes to the binding's.
+ */
+const CAMPAIGN_BINDINGS = `
+  select b.platform_account_id as k_page_id,
+         p.platform::text      as k_platform,
+         b.id::text || ':' || to_char(stretch.valid_from at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US') as k_key,
+         stretch.valid_from    as k_occurred_at,
+         null::text            as k_fan,
+         null::bigint          as k_observation_ref,
+         'operator'::text      as k_ingest_path,
+         -- A binding's open end is closed later by the owner's CLI.
+         'converging'::text    as k_convergence,
+         b.link_kind           as f_link_kind,
+         b.platform_link_id    as f_link_ref,
+         ch.key                as f_channel_key,
+         ch.title              as f_channel_title,
+         k.key                 as f_contractor_key,
+         k.title               as f_contractor_title,
+         stretch.valid_from    as f_valid_from,
+         stretch.valid_to      as f_valid_to,
+         b.valid_from_basis    as f_valid_from_basis,
+         b.valid_from          as f_binding_valid_from,
+         b.valid_to            as f_binding_valid_to,
+         stretch.term_valid_from as f_contractor_valid_from,
+         stretch.term_valid_to as f_contractor_valid_to,
+         stretch.term_valid_from_basis as f_contractor_valid_from_basis
+  from traffic_link_bindings b
+  join pages p on p.id = b.platform_account_id
+  join traffic_channels ch on ch.id = b.channel_id
+  join lateral (
+    select greatest(b.valid_from, span.span_from) as valid_from,
+           nullif(least(coalesce(b.valid_to, 'infinity'::timestamptz), span.span_to),
+                  'infinity'::timestamptz) as valid_to,
+           span.contractor_id,
+           span.term_valid_from,
+           span.term_valid_to,
+           span.term_valid_from_basis
+    from (
+      select t.valid_from as span_from,
+             coalesce(t.valid_to, 'infinity'::timestamptz) as span_to,
+             t.contractor_id as contractor_id,
+             t.valid_from as term_valid_from,
+             t.valid_to as term_valid_to,
+             t.valid_from_basis as term_valid_from_basis
+        from traffic_channel_contractors t
+       where t.channel_id = b.channel_id
+      union all
+      select coalesce(gap.previous_to, '-infinity'::timestamptz), gap.valid_from,
+             null::bigint, null::timestamptz, null::timestamptz, null::text
+        from (
+          select t.valid_from,
+                 lag(t.valid_to) over (order by t.valid_from, t.id) as previous_to,
+                 row_number() over (order by t.valid_from, t.id) as ordinal
+            from traffic_channel_contractors t
+           where t.channel_id = b.channel_id
+        ) gap
+       where gap.ordinal = 1 or gap.previous_to < gap.valid_from
+      union all
+      select last_term.valid_to, 'infinity'::timestamptz,
+             null::bigint, null::timestamptz, null::timestamptz, null::text
+        from (
+          select t.valid_to
+            from traffic_channel_contractors t
+           where t.channel_id = b.channel_id
+           order by t.valid_from desc, t.id desc
+           limit 1
+        ) last_term
+       where last_term.valid_to is not null
+      union all
+      select '-infinity'::timestamptz, 'infinity'::timestamptz,
+             null::bigint, null::timestamptz, null::timestamptz, null::text
+       where not exists (
+         select 1 from traffic_channel_contractors t where t.channel_id = b.channel_id
+       )
+    ) span
+    where span.span_from < coalesce(b.valid_to, 'infinity'::timestamptz)
+      and b.valid_from < span.span_to
+  ) stretch on true
+  left join traffic_contractors k on k.id = stretch.contractor_id
+`;
+
 export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>> = {
   ofapi_financial_snapshots: {
     source: `select s.page_id k_page_id,'onlyfans'::text k_platform,
@@ -1079,6 +1285,96 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
       order by s.page_id, i.value->>'nativeId', s.observed_at desc, s.id desc`,
     fields:{platform:"f_platform",payoutRef:"f_payout_ref",amountMills:"f_amount_mills",currency:"f_currency",state:"f_state",rejectReason:"f_reject_reason",requestedAt:"f_requested_at",lastObservedAt:"f_last_observed_at",observationRef:"f_observation_ref"},
     windowColumn:"k_occurred_at",readPlanes:["ofapi_read_snapshots"],captureFloorPlane:"ofapi_read_snapshots",
+  },
+  // ── OnlyFans traffic sources (plan 2026-10-08, PR 14) ─────────────────────
+  // The window and the floor of both series datasets run on `observedAt`
+  // (the run's pulled_at). The snapshots' floor is the page's first usable
+  // read — on production 2026-07-22 12:17 UTC, the series' first run.
+  campaign_snapshots: {
+    source: CAMPAIGN_SNAPSHOTS,
+    fields: {
+      linkKind: "f_link_kind",
+      linkRef: "f_link_ref",
+      name: "f_name",
+      observedAt: "f_observed_at",
+      businessDate: "f_business_date",
+      windowAt: "f_window_at",
+      runRef: "f_run_ref",
+      runStatus: "f_run_status",
+      bindingChanged: "f_binding_changed",
+      clicks: "f_clicks",
+      claims: "f_claims",
+      subscribers: "f_subscribers",
+      spenders: "f_spenders",
+      vendorRevenueNetMills: "f_vendor_revenue_net_mills",
+      vendorChargebacksMills: "f_vendor_chargebacks_mills",
+      vendorRevenueCalculatedAt: "f_vendor_revenue_calculated_at",
+      isFinished: "f_is_finished",
+      linkEndsAt: "f_link_ends_at",
+    },
+    windowColumn: "k_occurred_at",
+    readPlanes: ["page_link_stat_snapshots", "page_link_stat_runs"],
+    captureFloorPlane: "page_link_stat_snapshots",
+    provenanceColumns: {
+      observationRef: "k_observation_ref",
+      ingestPath: "k_ingest_path",
+      convergence: "k_convergence",
+    },
+  },
+  campaign_runs: {
+    source: CAMPAIGN_RUNS,
+    fields: {
+      linkKind: "f_link_kind",
+      windowAt: "f_window_at",
+      observedAt: "f_observed_at",
+      businessDate: "f_business_date",
+      runRef: "f_run_ref",
+      status: "f_status",
+      reason: "f_reason",
+      attempt: "f_attempt",
+      apiPages: "f_api_pages",
+      rawItems: "f_raw_items",
+      writtenRows: "f_written_rows",
+      bindingChanged: "f_binding_changed",
+      usableResult: "f_usable_result",
+    },
+    windowColumn: "k_occurred_at",
+    readPlanes: ["page_link_stat_runs"],
+    captureFloorPlane: "page_link_stat_runs",
+    provenanceColumns: {
+      observationRef: "k_observation_ref",
+      ingestPath: "k_ingest_path",
+      convergence: "k_convergence",
+    },
+  },
+  campaign_bindings: {
+    source: CAMPAIGN_BINDINGS,
+    fields: {
+      linkKind: "f_link_kind",
+      linkRef: "f_link_ref",
+      channelKey: "f_channel_key",
+      channelTitle: "f_channel_title",
+      contractorKey: "f_contractor_key",
+      contractorTitle: "f_contractor_title",
+      validFrom: "f_valid_from",
+      validTo: "f_valid_to",
+      validFromBasis: "f_valid_from_basis",
+      bindingValidFrom: "f_binding_valid_from",
+      bindingValidTo: "f_binding_valid_to",
+      contractorValidFrom: "f_contractor_valid_from",
+      contractorValidTo: "f_contractor_valid_to",
+      contractorValidFromBasis: "f_contractor_valid_from_basis",
+    },
+    // Windowed by the stretch's start, so the whole list is one wide window.
+    windowColumn: "k_occurred_at",
+    readPlanes: ["traffic_link_bindings", "traffic_channel_contractors"],
+    // Agency configuration, not captured history: min(validFrom) would be the
+    // oldest link's creation date, not where any capture began. No floor.
+    provenanceColumns: {
+      observationRef: "k_observation_ref",
+      ingestPath: "k_ingest_path",
+      convergence: "k_convergence",
+    },
   },
   fan_memberships: {
     source: FAN_MEMBERSHIPS,
@@ -1135,6 +1431,7 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
     windowColumn: "k_occurred_at",
     readPlanes: ["domain_events", "fans", "page_fans"],
     captureFloorPlane: "domain_events",
+    eligibilityColumn: "k_eligible",
     provenanceColumns: {
       observationRef: "k_observation_ref",
       ingestPath: "k_ingest_path",
@@ -1227,6 +1524,7 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
       platform: "f_platform",
       businessDate: "f_business_date",
       followersCount: "f_followers_count",
+      newFollowers: "f_new_followers",
     },
     windowColumn: "k_occurred_at",
     readPlanes: ["daily_followers"],

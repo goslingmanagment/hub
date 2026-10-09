@@ -5,6 +5,7 @@ import {
   type OfapiCollectionCategory,
 } from "@agency_hub_core/shared";
 import type { Database } from "../client.ts";
+import { settleLostOfapiCollectionReadAsBilled } from "./ofapi-capture.ts";
 import { getEffectiveOfapiCollectionPolicy } from "./ofapi-collection.ts";
 import { isDmArchiveScopeFenced, tryAcquireDmArchiveWriterFenceLock } from "./erasure-fence.ts";
 
@@ -190,6 +191,72 @@ export async function closeAdmissionRefusedOfapiCollectionRuns(db: Database) {
           and capture.target->>'collectionJobId'=job.id::text and attempt.state in ('reserved','dispatching'))
     returning job.id,job.page_id,job.category,job.reason`);
   return closed.rows.map(row => ({ id: row.id, pageId: Number(row.page_id), category: row.category, reason: row.reason }));
+}
+/**
+ * What the runner writes when a governed GET fails after dispatch
+ * (`OfapiGovernedRequestError`, phase `post_dispatch`, in the runtime's
+ * ofapi.ts). The size-limit message carries its byte limit.
+ */
+const POST_DISPATCH_FAILURE_REASONS = [
+  "OFAPI governed response body read failed",
+  "OFAPI governed request failed before response headers",
+] as const;
+/**
+ * Scheduled runs an older runner parked as `paused` for the two outcomes it
+ * now ends as failed: a governed GET that failed after dispatch, and a
+ * captured 4xx/5xx other than 401 and 403 (the runner's
+ * `capturedStatusEndsScheduledRun`). Such a run cannot move: its step allows
+ * one request and that request is spent. Only the outer run closes here; the
+ * reason, the cursor and the captured response stay as they are, and the lost
+ * read's reserve is settled by `settleEndedOfapiCollectionSafeReads`. Nothing
+ * is dispatched, and the next interval starts a new run. Runs parked for authorization, a policy refusal, a rejected contract or
+ * a cursor cycle keep waiting for the owner.
+ */
+export async function closeSafeReadFailedOfapiCollectionRuns(db: Database) {
+  const capturedStatus = sql`substring(job.reason from '^Vendor HTTP ([0-9]{3}); response captured$')::int`;
+  const closed = await db.execute<{ id: string; page_id: string; category: string; reason: string }>(sql`
+    update ofapi_collection_jobs job set state='failed',lease_token=null,lease_until=null,updated_at=now()
+    where job.state='paused' and job.purpose='background'
+      and coalesce(job.target->>'executor','read')='read'
+      and (job.reason in (${sql.join(POST_DISPATCH_FAILURE_REASONS.map(reason => sql`${reason}`), sql`,`)})
+        or job.reason ~ '^OFAPI response exceeds [0-9]+ byte capture limit$'
+        or (${capturedStatus} between 400 and 599 and ${capturedStatus} not in (401,403)))
+      and (job.lease_until is null or job.lease_until<=now())
+      and not exists(select 1 from ofapi_capture_jobs capture join ofapi_request_attempts attempt on attempt.capture_job_id=capture.id
+        where capture.kind='collection_read' and capture.page_id=job.page_id
+          and capture.target->>'collectionJobId'=job.id::text and attempt.state in ('reserved','dispatching'))
+    returning job.id,job.page_id,job.category,job.reason`);
+  return closed.rows.map(row => ({ id: row.id, pageId: Number(row.page_id), category: row.category, reason: row.reason }));
+}
+/**
+ * Lost safe reads of collection runs that have ended, still unresolved because
+ * the runtime that lost them parked the attempt for an owner. The run is over
+ * and its step's one request is spent, so nothing would ever resolve them and
+ * each kept its reserve in `governed_unsettled_credits`, which admission
+ * subtracts from the balance before comparing it with the credit floor. Each
+ * is settled as billed, once: the reserve is released and the charge stays in
+ * every budget (the collection transport now does this when the response is
+ * lost). Selecting by the run's state rather than by what this sweep just
+ * closed keeps the pass repeatable after a crash and covers runs the owner
+ * finished by hand. Reads of other lanes and attempts of runs still parked
+ * for the owner are not selected.
+ */
+export async function settleEndedOfapiCollectionSafeReads(db: Database, limit = 100) {
+  const unresolved = await db.execute<{ id: string }>(sql`
+    select attempt.id::text as id
+    from ofapi_request_attempts attempt
+    join ofapi_capture_jobs capture on capture.id = attempt.capture_job_id
+    join ofapi_collection_jobs job on job.page_id = capture.page_id and job.id::text = capture.target->>'collectionJobId'
+    where attempt.state = 'indeterminate' and attempt.certainty_resolved_at is null
+      and attempt.owner_kind = 'capture_job' and attempt.request_semantics = 'safe_read'
+      and capture.kind = 'collection_read'
+      and job.state in ('failed','completed')
+    order by attempt.finished_at, attempt.id
+    limit ${limit}`);
+  const settled: string[] = [];
+  for (const row of unresolved.rows)
+    if (await settleLostOfapiCollectionReadAsBilled(db, { attemptId: row.id })) settled.push(row.id);
+  return settled;
 }
 /** Schedule only explicitly configured non-baseline categories; never enables a collector. */
 export async function enqueueDueOfapiCollectionSchedules(

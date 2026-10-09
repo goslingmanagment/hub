@@ -12,6 +12,7 @@ import {
   getPageConversationPreview,
   listAgentTranscript,
   listArchiveConversationMessages,
+  readOpenChatUnavailabilityForRequest,
   upsertFans,
   upsertPageDmConversation,
   upsertPageDmMessages,
@@ -387,6 +388,165 @@ describe("live overlay readers: the per-page switch through the API", () => {
     expect(transcript.rows.map((row) => row.messageRef)).toContain("900000000000000102");
     const archive = await listArchiveConversationMessages(f.app.db, { conversationRef: GROUP });
     expect(archive.map((row) => row.messageRef).sort()).toEqual(["900000000000000101", "900000000000000115"]);
+  });
+});
+
+/** An open (or ended) unavailability episode of a chat, as the actor and M2 write it. */
+async function seedEpisode(threadId: number, input: {
+  state: "refusing" | "established"; refusals: number; note?: string; ended?: boolean;
+}) {
+  await testDb.pool.query(`
+    insert into page_dm_thread_unavailability (thread_id, state, opened_at, established_at, ended_at, end_reason,
+      refusals, last_refusal_at, last_http_status, retry_not_before, first_attempt_id, last_attempt_id,
+      first_observation_id, first_observation_received_at, last_observation_id, last_observation_received_at,
+      owner_note, owner_note_at)
+    values ($1, $2::text, $3::timestamptz, case when $2::text = 'established' then $4::timestamptz end,
+      case when $7::boolean then $5::timestamptz end, case when $7::boolean then 'read_served' end,
+      $6::int, $5::timestamptz, 500, case when $2::text = 'established' then now() + interval '1 day' end, 11, 15,
+      901, $3::timestamptz, 905, $5::timestamptz, $8::text, case when $8::text is not null then $3::timestamptz end)`, [
+    threadId, input.state, at(-3600), at(-1800), at(-600), input.refusals, input.ended === true, input.note ?? null,
+  ]);
+}
+
+describe("chat access: a chat Fansly no longer serves to the page (arena vanished chat, plan §5)", () => {
+  async function routes(f: Fixture) {
+    await createUserAccount(f.app, { username: "dima", role: "owner", password: "owner-secret" }, { source: "cli" });
+    const api = await buildApiServer(f.app);
+    servers.push(api);
+    await api.ready();
+    const login = await api.inject({ method: "POST", url: "/api/v1/auth/login",
+      payload: { username: "dima", password: "owner-secret" } });
+    const cookie = String(login.headers["set-cookie"]).split(";")[0]!;
+    return async (group: string) => {
+      const answers = await Promise.all(["messages", "preview?limit=25"].map(async (path) => {
+        const response = await api.inject({ method: "GET", url: `/api/v1/pages/ari-1/conversations/${group}/${path}`,
+          headers: { cookie } });
+        expect(response.statusCode, response.body).toBe(200);
+        return (response.json() as { conversation: Record<string, unknown> }).conversation;
+      }));
+      return answers as [Record<string, unknown>, Record<string, unknown>];
+    };
+  }
+
+  it("both chatter routes carry the open episode as chatAccess, its cause from the public check; other chats and ended episodes none", async () => {
+    const f = await fixture();
+    await seedChat(f);
+    const read = await routes(f);
+    const [baselineMessages, baselinePreview] = await read(GROUP);
+    expect(baselineMessages).not.toHaveProperty("chatAccess");
+    expect(baselinePreview).not.toHaveProperty("chatAccess");
+
+    await seedEpisode(f.main.id, { state: "established", refusals: 8, note: "06.10: the profile does not open from ari-1" });
+    const expected = {
+      state: "established", openedAt: at(-3600).toISOString(), establishedAt: at(-1800).toISOString(),
+      lastRefusalAt: at(-600).toISOString(), refusals: 8, ownerNote: "06.10: the profile does not open from ari-1",
+      cause: "unchecked",
+    };
+    for (const conversation of await read(GROUP)) {
+      expect(conversation.chatAccess).toEqual(expected);
+    }
+    // Everything else about the chat answers as before.
+    const [withMessages, withPreview] = await read(GROUP);
+    const { chatAccess: _messagesAccess, ...messagesRest } = withMessages;
+    const { chatAccess: _previewAccess, ...previewRest } = withPreview;
+    expect(messagesRest).toEqual(baselineMessages);
+    expect(previewRest).toEqual(baselinePreview);
+    for (const conversation of await read(OTHER_GROUP)) expect(conversation).not.toHaveProperty("chatAccess");
+
+    // The cause is the partner's session-less public check (arena R5, plan
+    // §8 (а)): found → probably blocked, not found → probably deleted.
+    await testDb.pool.query("update fans set public_checked_at = now(), public_found = true where platform_user_id = $1", [FAN]);
+    for (const conversation of await read(GROUP)) {
+      expect(conversation.chatAccess).toEqual({ ...expected, cause: "probably_blocked" });
+    }
+    await testDb.pool.query("update fans set public_found = false where platform_user_id = $1", [FAN]);
+    for (const conversation of await read(GROUP)) {
+      expect(conversation.chatAccess).toEqual({ ...expected, cause: "probably_deleted" });
+    }
+    await testDb.pool.query("update fans set public_checked_at = null, public_found = null where platform_user_id = $1", [FAN]);
+
+    // A refusing episode is sent too (the dashboard shows no banner for it).
+    await testDb.pool.query("delete from page_dm_thread_unavailability");
+    await seedEpisode(f.main.id, { state: "refusing", refusals: 2 });
+    for (const conversation of await read(GROUP)) {
+      expect(conversation.chatAccess).toEqual({ ...expected, state: "refusing", establishedAt: null, refusals: 2, ownerNote: null });
+    }
+
+    // An ended episode is history: the chat answers as if it never had one.
+    await testDb.pool.query("delete from page_dm_thread_unavailability");
+    await seedEpisode(f.main.id, { state: "established", refusals: 5, ended: true });
+    const [endedMessages, endedPreview] = await read(GROUP);
+    expect(endedMessages).toEqual(baselineMessages);
+    expect(endedPreview).toEqual(baselinePreview);
+  });
+
+  it("the AI loader labels the chat's socket messages only when told the chat is unavailable", async () => {
+    const f = await fixture();
+    await f.archive("7801", 0, "hey babe");
+    await f.archive("7802", 60, "hey you", { mine: true });
+    await f.live("7803", { seconds: 120, content: "enjoy baby" });
+    await f.live("7804", { seconds: 150, sender: PAGE_REF, content: "live reply" });
+    const load = (chatUnavailable?: boolean) => loadTranscriptContext(f.app, {
+      pageId: f.page.id, conversationRef: GROUP, liveOverlay: "serve", ...(chatUnavailable === undefined ? {} : { chatUnavailable }),
+    });
+
+    const plain = await load();
+    expect(plain.unconfirmedSocketMessages).toBe(0);
+    expect(await load(false)).toEqual(plain);
+
+    const unavailable = await load(true);
+    expect(unavailable.messages.map((message) => [String(message.id), message.sender, message.text, message.labels])).toEqual([
+      ["7801", "Fan", "hey babe", []],
+      ["7802", "Model", "hey you", []],
+      ["7803", "Fan", "enjoy baby", ["[Unconfirmed]"]],
+      ["7804", "Model", "live reply", ["[Unconfirmed]"]],
+    ]);
+    expect(unavailable.transcript.split("\n").slice(-2)).toEqual([
+      expect.stringMatching(/^\[\d\d:\d\d\] Fan: \[Unconfirmed\] enjoy baby$/),
+      expect.stringMatching(/^\[\d\d:\d\d\] Model: \[Unconfirmed\] live reply$/),
+    ]);
+    expect(unavailable.unconfirmedSocketMessages).toBe(2);
+    // The loader's own manifest and the served window do not change: only the labels.
+    expect(unavailable.contextManifest).toEqual(plain.contextManifest);
+    expect(unavailable.served).toEqual(plain.served);
+
+    // Without the overlay there is nothing to label.
+    const archiveOnly = await loadTranscriptContext(f.app, { pageId: f.page.id, conversationRef: GROUP, chatUnavailable: true });
+    expect(archiveOnly.messages.every((message) => message.labels.length === 0)).toBe(true);
+    expect(archiveOnly.unconfirmedSocketMessages).toBe(0);
+  });
+
+  it("an AI request's chat resolves by group id first, else by the fan's account id; only an open episode counts", async () => {
+    const f = await fixture();
+    const read = (groupIds: string[], partnerIds: string[]) => readOpenChatUnavailabilityForRequest(f.app.db, {
+      pageId: f.page.id, groupIds, partnerIds,
+    });
+    expect(await read([GROUP], [FAN])).toBeNull();
+    expect(await read([], [])).toBeNull();
+
+    await seedEpisode(f.main.id, { state: "established", refusals: 5 });
+    expect(await read([GROUP], [])).toMatchObject({ groupId: GROUP, state: "established", refusals: 5 });
+    // An older client names the chat by the fan's account id: the fan's newest chat with the page.
+    await testDb.pool.query("update page_dm_threads set last_message_at = $2 where id = $1", [f.other.id, at(-60)]);
+    expect(await read([FAN], [FAN])).toMatchObject({ groupId: GROUP });
+    // A group id of the page wins over the fan's other chats.
+    expect(await read([OTHER_GROUP], [FAN])).toBeNull();
+    // Another page's chat, an unknown ref: nothing.
+    expect(await readOpenChatUnavailabilityForRequest(f.app.db, { pageId: f.page.id + 1000, groupIds: [GROUP], partnerIds: [FAN] }))
+      .toBeNull();
+    expect(await read([UNKNOWN_GROUP], ["700000000000000999"])).toBeNull();
+
+    // The fan's newest chat decides: once the other chat is newer, it has no episode.
+    await testDb.pool.query("update page_dm_threads set last_message_at = now() where id = $1", [f.other.id]);
+    expect(await read([FAN], [FAN])).toBeNull();
+
+    // A refusing episode is read (the caller decides what it means); an ended one is not.
+    await testDb.pool.query("delete from page_dm_thread_unavailability");
+    await seedEpisode(f.main.id, { state: "refusing", refusals: 2 });
+    expect(await read([GROUP], [])).toMatchObject({ state: "refusing" });
+    await testDb.pool.query("delete from page_dm_thread_unavailability");
+    await seedEpisode(f.main.id, { state: "established", refusals: 5, ended: true });
+    expect(await read([GROUP], [FAN])).toBeNull();
   });
 });
 

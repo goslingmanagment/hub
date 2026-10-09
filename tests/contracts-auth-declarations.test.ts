@@ -63,6 +63,8 @@ describe("route auth declarations", () => {
       "agentHydrationRequestCreate",
       // The Sync Engine's "why waiting" of one page's work.
       "agentSyncWhy",
+      // Whether Fansly stopped serving one chat to its page.
+      "agentThreadAvailability",
       "agentThreadMessages",
       // The chat extension's page routes (`/api/v1/client/pages/:pageLabel/…`):
       // `apiKey` + page scope, the page always in the path.

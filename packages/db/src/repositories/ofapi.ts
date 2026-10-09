@@ -1,5 +1,5 @@
 import { OfapiAccountCustodyConflictError, ofapiAccountBelongsToPageSql } from "./ofapi-bindings.ts";
-import { and, asc, desc, eq, gt, gte, inArray, isNotNull, lt, lte, ne, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, getTableColumns, gt, gte, inArray, isNotNull, lt, lte, ne, sql, type SQL } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 import {
@@ -1643,6 +1643,32 @@ export async function recordOfapiPhysicalCreditUsage(
   await db.transaction((tx) => applyOfapiPhysicalCreditUsage(tx, input));
 }
 
+/** What a scope's UTC-day counter holds today: 0 when the counter belongs to
+ * an earlier day or there is no state row yet. A read, never a reservation —
+ * for a lane whose requests are free at the vendor and whose quota therefore
+ * counts only what the vendor actually charged. */
+export async function getOfapiDayCreditsSpent(
+  db: Database,
+  scope: OfapiDayBudgetScope,
+  now = new Date(),
+): Promise<number> {
+  const columns = OFAPI_DAY_COUNTER_COLUMNS[scope];
+  const result = await db.execute<{ day: string | Date | null; credits: unknown }>(sql`
+    select ${sql.raw(columns.day)} as day, ${sql.raw(columns.credits)} as credits
+    from ofapi_credit_state
+    where id = 1
+  `);
+  const row = result.rows[0];
+  if (!row || row.day === null) {
+    return 0;
+  }
+  const day = utcDayOf(row.day instanceof Date ? row.day : new Date(row.day));
+  const credits = Number(row.credits);
+  // A counter dated ahead of `now` (clock skew) still counts: the cautious
+  // reading, as in reserveOfapiDayCredits.
+  return day >= utcDayOf(now) && Number.isFinite(credits) ? credits : 0;
+}
+
 export interface OfapiCreditState {
   spentToday: number;
   // The audience sweep's reservation counter (audit F9) — what its budget
@@ -3146,17 +3172,29 @@ export async function getOfapiMoneyStreamStates(
 
 export type LinkStatKind = "tracking" | "trial";
 
+/** One row of page_link_stat_runs is one ATTEMPT to read a (page, kind) list.
+ * 'complete' = the list was read whole in one response with nothing dropped
+ * (the only absence-proving status); 'partial' = read whole, with a caveat in
+ * `reason`; 'truncated' = the walk was stopped; 'failed' = the request or the
+ * write failed; 'skipped' = no attempt was made. Only the first two carry
+ * snapshots. */
+export type LinkStatRunStatus = "complete" | "partial" | "truncated" | "failed" | "skipped";
+
 export interface InsertLinkStatRunInput {
   platformAccountId: number;
   linkKind: LinkStatKind;
-  // 'complete' = full walk, zero dropped items (the only absence-proving
-  // status); 'partial' = full walk with normalization drops; 'truncated' =
-  // walk did not finish.
-  status: "complete" | "partial" | "truncated";
+  status: LinkStatRunStatus;
   pulledAt: Date;
   apiPages: number;
   rawItems: number;
   writtenRows: number;
+  /** Why the row is not a clean 'complete' (caveats, block, error, skip). */
+  reason?: string | null;
+  /** The scheduled window the attempt belongs to. `attempt` is numbered
+   * within it; without a window the row is attempt 1. */
+  windowAt?: Date | null;
+  /** The OFAPI account the page was bound to when the attempt was made. */
+  ofapiAccountId?: string | null;
 }
 
 export interface InsertLinkStatSnapshotInput {
@@ -3174,15 +3212,36 @@ export interface InsertLinkStatSnapshotInput {
   // null = vendor value unknown (revenue block missing, still computing, or
   // unparseable) — deliberately distinct from a real zero.
   spendersCount: number | null;
-  revenueGrossMills: bigint | null;
+  /** Vendor revenue.total: the creator's net after the OnlyFans fee and after
+   * refunds and chargebacks. Written to revenue_net_mills AND, with the same
+   * value, to the deprecated revenue_gross_mills. */
+  revenueNetMills: bigint | null;
+  /** Vendor revenue.chargebacks: already excluded from revenueNetMills. */
+  revenueChargebacksMills: bigint | null;
   revenueIsLoading: boolean | null;
   revenueCalculatedAt: Date | null;
+  /** Vendor subscribeDays of a trial link; null on tracking links. */
+  trialDays: number | null;
+  /** Vendor tags as sent; [] = none, null = unknown. */
+  tags: string[] | null;
 }
 
-async function insertLinkStatRun(
+/** `reason` is operator-facing text and, on a failure, a vendor or driver
+ * error message: bound it so one pathological error cannot bloat the series. */
+const LINK_STAT_RUN_REASON_MAX_LENGTH = 500;
+
+/** Writes one attempt row. `attempt` is the row's ordinal within its
+ * (page, kind, window), taken from the rows already there — so a scheduled
+ * run, a retry, a post-rebind run and the monitor's `window_missed` row number
+ * themselves without telling each other. Two writers racing on one pair can
+ * tie; nothing keys on the number. Snapshot-carrying statuses go through
+ * insertLinkStatRunWithSnapshots. */
+export async function insertLinkStatRun(
   db: Database,
   input: InsertLinkStatRunInput,
-): Promise<{ id: number }> {
+): Promise<{ id: number; attempt: number }> {
+  const windowAt = input.windowAt ?? null;
+  const reason = input.reason ?? null;
   const [row] = await db
     .insert(pageLinkStatRuns)
     .values({
@@ -3193,16 +3252,28 @@ async function insertLinkStatRun(
       apiPages: input.apiPages,
       rawItems: input.rawItems,
       writtenRows: input.writtenRows,
+      reason: reason === null ? null : reason.slice(0, LINK_STAT_RUN_REASON_MAX_LENGTH),
+      windowAt,
+      attempt: windowAt === null
+        ? 1
+        : sql<number>`(
+            select least(coalesce(max(prior.attempt), 0) + 1, 32767)::smallint
+            from page_link_stat_runs prior
+            where prior.platform_account_id = ${input.platformAccountId}
+              and prior.link_kind = ${input.linkKind}
+              and prior.window_at = ${windowAt.toISOString()}::timestamptz
+          )`,
+      ofapiAccountId: input.ofapiAccountId ?? null,
     })
-    .returning({ id: pageLinkStatRuns.id });
+    .returning({ id: pageLinkStatRuns.id, attempt: pageLinkStatRuns.attempt });
   if (!row) {
     throw new Error("insertLinkStatRun returned no row");
   }
   return row;
 }
 
-// node-postgres extended protocol caps bind parameters at 65535; with 16
-// columns per row a single VALUES insert breaks past 4095 rows. Chunk well
+// node-postgres extended protocol caps bind parameters at 65535; with 20
+// columns per row a single VALUES insert breaks past 3276 rows. Chunk well
 // below that; callers wrap this in a transaction when atomicity matters.
 const LINK_STAT_SNAPSHOT_INSERT_CHUNK = 1000;
 
@@ -3233,9 +3304,15 @@ async function insertLinkStatSnapshots(
         claimsCount: row.claimsCount,
         subscribersCount: row.subscribersCount,
         spendersCount: row.spendersCount,
-        revenueGrossMills: row.revenueGrossMills,
+        revenueNetMills: row.revenueNetMills,
+        // The deprecated name keeps the same value for as long as anything
+        // reads it: the previous image after a rollback, traffic-control's SQL.
+        revenueGrossMills: row.revenueNetMills,
+        revenueChargebacksMills: row.revenueChargebacksMills,
         revenueIsLoading: row.revenueIsLoading,
         revenueCalculatedAt: row.revenueCalculatedAt,
+        trialDays: row.trialDays,
+        tags: row.tags,
       })))
       .returning({ id: pageLinkStatSnapshots.id });
     insertedTotal += inserted.length;
@@ -3251,6 +3328,9 @@ export async function insertLinkStatRunWithSnapshots(
   run: InsertLinkStatRunInput,
   rows: InsertLinkStatSnapshotInput[],
 ): Promise<{ runId: number; writtenRows: number }> {
+  if (rows.length > 0 && run.status !== "complete" && run.status !== "partial") {
+    throw new Error(`link-stat run status ${run.status} cannot carry snapshots`);
+  }
   return db.transaction(async (tx) => {
     const dbTx = tx as Database;
     const inserted = await insertLinkStatRun(dbTx, run);
@@ -3279,15 +3359,20 @@ export async function listLinkStatRuns(
     .orderBy(desc(pageLinkStatRuns.pulledAt), desc(pageLinkStatRuns.id));
 }
 
-/** Latest FINISHED walk (complete or partial, never truncated) for
- * (page, kind) — the baseline the inventory-vanished guard compares a new
- * empty walk against. Including partial runs makes the guard converge (the
- * second consecutive empty walk sees an empty baseline and proves absence)
- * and closes the reverse hole (a non-empty partial baseline still flags a
- * sudden wipe as suspicious). */
+/** Latest FINISHED walk (complete or partial, never truncated, failed or
+ * skipped) for (page, kind) — the baseline the inventory-vanished guard
+ * compares a new empty walk against. Including partial runs makes the guard
+ * converge (the second consecutive empty walk sees an empty baseline and
+ * proves absence) and closes the reverse hole (a non-empty partial baseline
+ * still flags a sudden wipe as suspicious).
+ *
+ * With `ofapiAccountId` the baseline is the latest finished walk made UNDER
+ * THAT ACCOUNT: the stored lists are the vendor's cache of one connection, so
+ * what another account showed says nothing about this one's emptiness. Rows
+ * whose account is unknown (null) never match an account. */
 export async function findLatestFinishedLinkStatRun(
   db: Database,
-  input: { platformAccountId: number; linkKind: LinkStatKind },
+  input: { platformAccountId: number; linkKind: LinkStatKind; ofapiAccountId?: string },
 ) {
   const [row] = await db
     .select()
@@ -3296,6 +3381,9 @@ export async function findLatestFinishedLinkStatRun(
       eq(pageLinkStatRuns.platformAccountId, input.platformAccountId),
       eq(pageLinkStatRuns.linkKind, input.linkKind),
       inArray(pageLinkStatRuns.status, ["complete", "partial"]),
+      ...(input.ofapiAccountId === undefined
+        ? []
+        : [eq(pageLinkStatRuns.ofapiAccountId, input.ofapiAccountId)]),
     ))
     .orderBy(desc(pageLinkStatRuns.pulledAt), desc(pageLinkStatRuns.id))
     .limit(1);
@@ -3305,10 +3393,11 @@ export async function findLatestFinishedLinkStatRun(
 /** Latest finished walk that actually SAW links (rawItems > 0). A page with
  * no such run has never demonstrated a non-empty inventory — an empty walk
  * there is unverifiable (cold vendor cache?) and must never mint an
- * absence-proving 'complete'. */
+ * absence-proving 'complete'. With `ofapiAccountId` the question is asked of
+ * that account alone (see findLatestFinishedLinkStatRun). */
 export async function findLatestNonEmptyFinishedLinkStatRun(
   db: Database,
-  input: { platformAccountId: number; linkKind: LinkStatKind },
+  input: { platformAccountId: number; linkKind: LinkStatKind; ofapiAccountId?: string },
 ) {
   const [row] = await db
     .select()
@@ -3318,16 +3407,344 @@ export async function findLatestNonEmptyFinishedLinkStatRun(
       eq(pageLinkStatRuns.linkKind, input.linkKind),
       inArray(pageLinkStatRuns.status, ["complete", "partial"]),
       gt(pageLinkStatRuns.rawItems, 0),
+      ...(input.ofapiAccountId === undefined
+        ? []
+        : [eq(pageLinkStatRuns.ofapiAccountId, input.ofapiAccountId)]),
     ))
     .orderBy(desc(pageLinkStatRuns.pulledAt), desc(pageLinkStatRuns.id))
     .limit(1);
   return row ?? null;
 }
 
+/** Has (page, kind) shown links under an account OTHER than this one — a
+ * finished non-empty walk whose account differs or is unknown? That is what
+ * makes the first non-empty walk under an account a binding change rather
+ * than a page's first inventory. */
+export async function hasNonEmptyLinkStatRunUnderAnotherAccount(
+  db: Database,
+  input: { platformAccountId: number; linkKind: LinkStatKind; ofapiAccountId: string },
+): Promise<boolean> {
+  const [row] = await db
+    .select({ id: pageLinkStatRuns.id })
+    .from(pageLinkStatRuns)
+    .where(and(
+      eq(pageLinkStatRuns.platformAccountId, input.platformAccountId),
+      eq(pageLinkStatRuns.linkKind, input.linkKind),
+      inArray(pageLinkStatRuns.status, ["complete", "partial"]),
+      gt(pageLinkStatRuns.rawItems, 0),
+      sql`${pageLinkStatRuns.ofapiAccountId} is distinct from ${input.ofapiAccountId}`,
+    ))
+    .limit(1);
+  return row !== undefined;
+}
+
+/**
+ * The ONE definition of a window's usable result for a (page, kind): the row
+ * gives the series a point a reader can use. `run` is the SQL alias of a
+ * page_link_stat_runs row.
+ *
+ *   - `complete` — a whole read. An empty one is the confirmed absence the
+ *     reconcile mints only after THE SAME OFAPI account showed links and then
+ *     read empty twice (the per-account guard): "every link was deleted" is a
+ *     point of the series, not a missing one. A cold cache can never get here
+ *     — under a new account its empty reads stay `partial`;
+ *   - `partial` that wrote snapshots;
+ *   - an empty `partial` on a pair that had NEVER shown a link, under any
+ *     OFAPI account (rows of unknown account included), before this row,
+ *     AND whose emptiness has lasted: an earlier empty read of the pair at
+ *     least 24 hours before this one. Such a pair stays `partial`
+ *     (empty_unverified) for good — lora-of's trial links, 154 runs on
+ *     production since 2026-07-22, none ever non-empty — and that is its
+ *     steady state, not a missing point that would retry every window and
+ *     page as stale forever. The first empty read of a pair, and every empty
+ *     read in the 24 hours after it, is not a result: a page connected for
+ *     the first time may well have links while the vendor's stored cache is
+ *     still cold, and "0 links" must not pass for a reading until the
+ *     emptiness has persisted. Until then the pair is retried and ages
+ *     toward series_stale like any pair without a result.
+ *
+ * Everything else is an attempt without a result: `failed`, `skipped`,
+ * `truncated`, a `partial` that wrote nothing (every item dropped), and an
+ * empty `partial` on a pair that has had links under some account — a cold
+ * cache after a rebind (`empty_unverified` under the new account), an
+ * inventory that vanished and is not confirmed yet (`inventory_vanished`).
+ * The presence of such a row neither cancels a retry of its window nor
+ * advances the freshness of the series.
+ */
+/** How long a never-linked pair must keep reading empty before its empty
+ * reads count as results (linkStatRunUsableResultSql). */
+export const LINK_STAT_EMPTY_PERSISTENCE_HOURS = 24;
+
+export function linkStatRunUsableResultSql(run: SQL): SQL {
+  return sql`(
+    ${run}.status = 'complete'
+    or (${run}.status = 'partial' and ${run}.written_rows > 0)
+    or (${run}.status = 'partial' and ${run}.raw_items = 0
+      and not exists (
+        select 1 from page_link_stat_runs seen
+        where seen.platform_account_id = ${run}.platform_account_id
+          and seen.link_kind = ${run}.link_kind
+          and seen.status in ('complete', 'partial')
+          and seen.raw_items > 0
+          and seen.id < ${run}.id
+      )
+      and exists (
+        select 1 from page_link_stat_runs earlier
+        where earlier.platform_account_id = ${run}.platform_account_id
+          and earlier.link_kind = ${run}.link_kind
+          and earlier.status in ('complete', 'partial')
+          and earlier.raw_items = 0
+          and earlier.id < ${run}.id
+          and earlier.pulled_at <= ${run}.pulled_at - interval '${sql.raw(String(LINK_STAT_EMPTY_PERSISTENCE_HOURS))} hours'
+      ))
+  )`;
+}
+
+export interface LinkStatWindowPairState {
+  platformAccountId: number;
+  linkKind: LinkStatKind;
+  /** Rows the pair has in the window, of any status. */
+  attempts: number;
+  /** Of those, the rows made under the page's CURRENT OFAPI binding (its
+   * `ofapi_account_id` now). Attempts of an earlier binding stay in the
+   * history but do not use up the retries of the binding that replaced it. */
+  attemptsUnderCurrentBinding: number;
+  /** At least one of them is a usable result (linkStatRunUsableResultSql). */
+  hasUsableResult: boolean;
+  lastStatus: LinkStatRunStatus;
+  lastReason: string | null;
+}
+
+/** What each (page, kind) has in one scheduled window. A pair with no row in
+ * the window is absent from the result: the caller holds the list of pairs it
+ * expects. */
+export async function listLinkStatWindowPairStates(
+  db: Database,
+  input: { windowAt: Date },
+): Promise<LinkStatWindowPairState[]> {
+  const run = sql.raw("r");
+  const result = await db.execute<{
+    platformAccountId: number | string;
+    linkKind: LinkStatKind;
+    attempts: number | string;
+    attemptsUnderCurrentBinding: number | string;
+    hasUsableResult: boolean;
+    lastStatus: LinkStatRunStatus;
+    lastReason: string | null;
+  }>(sql`
+    select r.platform_account_id as "platformAccountId",
+           r.link_kind as "linkKind",
+           count(*)::int as "attempts",
+           (count(*) filter (where r.ofapi_account_id is not distinct from p.ofapi_account_id))::int
+             as "attemptsUnderCurrentBinding",
+           bool_or(${linkStatRunUsableResultSql(run)}) as "hasUsableResult",
+           (array_agg(r.status order by r.attempt desc, r.id desc))[1] as "lastStatus",
+           (array_agg(r.reason order by r.attempt desc, r.id desc))[1] as "lastReason"
+    from page_link_stat_runs r
+    join pages p on p.id = r.platform_account_id
+    where r.window_at = ${input.windowAt.toISOString()}::timestamptz
+    group by r.platform_account_id, r.link_kind, p.ofapi_account_id
+    order by r.platform_account_id, r.link_kind
+  `);
+  return result.rows.map((row) => ({
+    platformAccountId: Number(row.platformAccountId),
+    linkKind: row.linkKind,
+    attempts: Number(row.attempts),
+    attemptsUnderCurrentBinding: Number(row.attemptsUnderCurrentBinding),
+    hasUsableResult: row.hasUsableResult === true,
+    lastStatus: row.lastStatus,
+    lastReason: row.lastReason,
+  }));
+}
+
+/** A run's snapshots as Hub reads them. `revenueNetMills` falls back to the
+ * deprecated revenue_gross_mills: rows written before migration 0256, or by
+ * the previous image after a rollback, carry the value only there. */
 export async function listLinkStatSnapshots(db: Database, input: { runId: number }) {
   return db
-    .select()
+    .select({
+      ...getTableColumns(pageLinkStatSnapshots),
+      revenueNetMills: sql<bigint | null>`coalesce(${pageLinkStatSnapshots.revenueNetMills}, ${pageLinkStatSnapshots.revenueGrossMills})`,
+    })
     .from(pageLinkStatSnapshots)
     .where(eq(pageLinkStatSnapshots.runId, input.runId))
     .orderBy(pageLinkStatSnapshots.platformLinkId);
+}
+
+/** One (active OnlyFans page, link kind) as the series monitor sees it. */
+export interface LinkStatSeriesHealthRow {
+  platformAccountId: number;
+  pageLabel: string;
+  pageCreatedAt: Date;
+  ofapiAccountId: string | null;
+  ofapiAuthStatus: string | null;
+  linkKind: LinkStatKind;
+  /** `pulled_at` of the pair's latest USABLE result
+   * (linkStatRunUsableResultSql); null = it has never had one. Attempt rows
+   * that gave the series nothing — failed, skipped (the monitor's own
+   * `window_missed` among them), truncated, an empty partial on a pair that
+   * has had links — do not move it. */
+  lastUsableAt: Date | null;
+  /** The pair's first row of any status; null = nothing was ever attempted. */
+  firstAttemptAt: Date | null;
+  lastAttemptAt: Date | null;
+  lastAttemptStatus: LinkStatRunStatus | null;
+  lastAttemptReason: string | null;
+}
+
+/** The freshness of the link series, for every active OnlyFans page and both
+ * kinds — mapped or not: a page the reconcile cannot read is part of the
+ * series' population and of its signals. Each pair is answered by index-order
+ * lookups on (page, kind, pulled_at), so the newest usable row is found
+ * without reading the pair's history. */
+export async function listLinkStatSeriesHealth(db: Database): Promise<LinkStatSeriesHealthRow[]> {
+  const run = sql.raw("r");
+  const result = await db.execute<{
+    platformAccountId: number | string;
+    pageLabel: string;
+    pageCreatedAt: Date | string;
+    ofapiAccountId: string | null;
+    ofapiAuthStatus: string | null;
+    linkKind: LinkStatKind;
+    lastUsableAt: Date | string | null;
+    firstAttemptAt: Date | string | null;
+    lastAttemptAt: Date | string | null;
+    lastAttemptStatus: LinkStatRunStatus | null;
+    lastAttemptReason: string | null;
+  }>(sql`
+    select p.id as "platformAccountId",
+           p.label as "pageLabel",
+           p.created_at as "pageCreatedAt",
+           p.ofapi_account_id as "ofapiAccountId",
+           p.ofapi_auth_status as "ofapiAuthStatus",
+           kind.link_kind as "linkKind",
+           usable.pulled_at as "lastUsableAt",
+           first_attempt.pulled_at as "firstAttemptAt",
+           last_attempt.pulled_at as "lastAttemptAt",
+           last_attempt.status as "lastAttemptStatus",
+           last_attempt.reason as "lastAttemptReason"
+    from pages p
+    cross join (values ('tracking'), ('trial')) as kind(link_kind)
+    left join lateral (
+      select r.pulled_at
+      from page_link_stat_runs r
+      where r.platform_account_id = p.id
+        and r.link_kind = kind.link_kind
+        and ${linkStatRunUsableResultSql(run)}
+      order by r.pulled_at desc, r.id desc
+      limit 1
+    ) usable on true
+    left join lateral (
+      select r.pulled_at
+      from page_link_stat_runs r
+      where r.platform_account_id = p.id and r.link_kind = kind.link_kind
+      order by r.pulled_at asc, r.id asc
+      limit 1
+    ) first_attempt on true
+    left join lateral (
+      select r.pulled_at, r.status, r.reason
+      from page_link_stat_runs r
+      where r.platform_account_id = p.id and r.link_kind = kind.link_kind
+      order by r.pulled_at desc, r.id desc
+      limit 1
+    ) last_attempt on true
+    where p.platform = 'onlyfans' and p.status = 'active'
+    order by p.id, kind.link_kind
+  `);
+  return result.rows.map((row) => ({
+    platformAccountId: Number(row.platformAccountId),
+    pageLabel: row.pageLabel,
+    pageCreatedAt: new Date(row.pageCreatedAt),
+    ofapiAccountId: row.ofapiAccountId,
+    ofapiAuthStatus: row.ofapiAuthStatus,
+    linkKind: row.linkKind,
+    lastUsableAt: toDateOrNull(row.lastUsableAt),
+    firstAttemptAt: toDateOrNull(row.firstAttemptAt),
+    lastAttemptAt: toDateOrNull(row.lastAttemptAt),
+    lastAttemptStatus: row.lastAttemptStatus,
+    lastAttemptReason: row.lastAttemptReason,
+  }));
+}
+
+/** The earliest window the series ever stamped at each time of day (UTC
+ * hour and minute) — at most one row per schedule slot ever used, from the
+ * whole history, not a bounded range. The caller keeps the stamps that lie on
+ * its current schedule; the earliest of those is where the schedule began. */
+export async function listFirstLinkStatWindowStamps(db: Database): Promise<Date[]> {
+  const result = await db.execute<{ first: Date | string }>(sql`
+    select min(r.window_at) as first
+    from page_link_stat_runs r
+    where r.window_at is not null
+    group by extract(hour from r.window_at at time zone 'UTC'),
+             extract(minute from r.window_at at time zone 'UTC')
+  `);
+  return result.rows
+    .map((row) => toDateOrNull(row.first))
+    .filter((first): first is Date => first !== null);
+}
+
+/** The rows of any status that tell which (page, kind) was attempted when,
+ * from `since` on. A row with a window names it (`windowAt`). A row without
+ * one — written by an image older than migration 0255, e.g. after a rollback
+ * — names only its read time (`pulledAt`), and the caller places it in the
+ * window that read time falls in. */
+export async function listLinkStatAttemptWindows(
+  db: Database,
+  input: { since: Date },
+): Promise<Array<{ platformAccountId: number; linkKind: LinkStatKind; windowAt: Date | null; pulledAt: Date | null }>> {
+  const result = await db.execute<{
+    platformAccountId: number | string;
+    linkKind: LinkStatKind;
+    windowAt: Date | string | null;
+    pulledAt: Date | string | null;
+  }>(sql`
+    select distinct r.platform_account_id as "platformAccountId",
+           r.link_kind as "linkKind",
+           r.window_at as "windowAt",
+           case when r.window_at is null then r.pulled_at end as "pulledAt"
+    from page_link_stat_runs r
+    where r.window_at >= ${input.since.toISOString()}::timestamptz
+       or (r.window_at is null and r.pulled_at >= ${input.since.toISOString()}::timestamptz)
+  `);
+  return result.rows.map((row) => ({
+    platformAccountId: Number(row.platformAccountId),
+    linkKind: row.linkKind,
+    windowAt: toDateOrNull(row.windowAt),
+    pulledAt: toDateOrNull(row.pulledAt),
+  }));
+}
+
+/** Records that a window passed without any attempt for a (page, kind): one
+ * `skipped` / `window_missed` row, stamped with the window itself. Written
+ * only while the pair still has NO row in the window, in the same statement —
+ * a late pass or a second monitor that got there first leaves nothing to add.
+ * A row without a window (an image older than 0255) counts for the window
+ * its read time falls in, [windowAt, windowEnd). The account is not known for
+ * an attempt that never happened. Returns whether the row was written. */
+export async function recordLinkStatWindowMissed(
+  db: Database,
+  input: { platformAccountId: number; linkKind: LinkStatKind; windowAt: Date; windowEnd: Date },
+): Promise<boolean> {
+  const windowAt = input.windowAt.toISOString();
+  const windowEnd = input.windowEnd.toISOString();
+  const result = await db.execute<{ id: number | string }>(sql`
+    insert into page_link_stat_runs
+      (platform_account_id, link_kind, status, pulled_at, api_pages, raw_items, written_rows,
+       reason, window_at, attempt, ofapi_account_id)
+    select ${input.platformAccountId}, ${input.linkKind}, 'skipped', ${windowAt}::timestamptz, 0, 0, 0,
+           'window_missed', ${windowAt}::timestamptz, 1, null
+    where not exists (
+      select 1 from page_link_stat_runs prior
+      where prior.platform_account_id = ${input.platformAccountId}
+        and prior.link_kind = ${input.linkKind}
+        and (
+          prior.window_at = ${windowAt}::timestamptz
+          or (prior.window_at is null
+            and prior.pulled_at >= ${windowAt}::timestamptz
+            and prior.pulled_at < ${windowEnd}::timestamptz)
+        )
+    )
+    returning id
+  `);
+  return result.rows.length > 0;
 }

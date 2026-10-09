@@ -40,6 +40,7 @@ import {
   handleAgentHistoryRequestList,
 } from "./handlers-history.ts";
 import { handleAgentSyncStatus, handleAgentSyncWhy } from "./handlers-sync.ts";
+import { handleAgentThreadAvailability } from "./handlers-thread-availability.ts";
 
 /**
  * The Agent Read Plane registrar: operations #1..#13 under `/api/v1/agent/*`.
@@ -131,6 +132,16 @@ export function registerAgentReadRoutes(server: ApiServer, ctx: ApiModuleContext
   }, async (request) => {
     const principal = await requireAgentKeyPrincipal(request);
     return handleAgentThreadMessages(appContext, principal, request.params, request.query);
+  });
+
+  // Whether Fansly stopped serving one chat to its page (arena "vanished chat",
+  // plan §5): the chat's open unavailability episode, or null. Page-scoped like
+  // #6, database only — no message text, no request to Fansly.
+  server.get("/api/v1/agent/pages/:pageLabel/threads/:conversationRef/availability", {
+    schema: routeSchemas.agentThreadAvailability,
+  }, async (request) => {
+    const principal = await requireAgentKeyPrincipal(request);
+    return handleAgentThreadAvailability(appContext, principal, request.params);
   });
 
   server.post("/api/v1/agent/search/messages", {

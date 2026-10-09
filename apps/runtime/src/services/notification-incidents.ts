@@ -39,6 +39,18 @@ export const FANSLY_SEND_GUARD_CLOSED_SUBKEY = "send_guard_closed";
 /** Plan §2.4/§10: two sends of one page closer than the pause setting. Must
  * never happen; the latch stays open for an hour after the last one seen. */
 export const FANSLY_PACE_VIOLATION_SUBKEY = "pace_violation";
+/** Traffic sources plan §2.10: the page-scoped latches of the OnlyFans link
+ * series, under the kind its failed pass already has (a new kind is a
+ * contract change: an image rolled back to cannot show it). The kind's own
+ * latch — no subKey, global — stays the single failed pass.
+ *   series_stale   a (page, link kind) has had no usable result for two
+ *                  windows and more: the series is not being written;
+ *   page_unmapped  an active OnlyFans page has no OFAPI account mapping. */
+export const OFAPI_LINK_STATS_SERIES_STALE_SUBKEY = "series_stale";
+export const OFAPI_LINK_STATS_PAGE_UNMAPPED_SUBKEY = "page_unmapped";
+export type OfapiLinkStatsPageSubKey =
+  | typeof OFAPI_LINK_STATS_SERIES_STALE_SUBKEY
+  | typeof OFAPI_LINK_STATS_PAGE_UNMAPPED_SUBKEY;
 /** Plan §10, design §9.6: the Fansly Sync Engine's five alerts, one subKey
  * each under the kind `fansly_sync_engine` (0233). 1–4 are page-scoped, 5
  * (`process`) is global. */
@@ -55,7 +67,16 @@ export const SYNC_ENGINE_PACE_VIOLATION_SUBKEY = "page_stopped:pace_violation";
  * the owner raises it). */
 export const SYNC_ENGINE_ROUTE_SUBKEY_PREFIX = "route_limited:";
 export type SyncEngineRouteSubKey = `${typeof SYNC_ENGINE_ROUTE_SUBKEY_PREFIX}${string}`;
-export type SyncEngineIncidentSubKey = SyncEngineAlertSubKey | typeof SYNC_ENGINE_PACE_VIOLATION_SUBKEY | SyncEngineRouteSubKey;
+/** Arena "vanished chat" R5: the session-less public account reader stopped
+ * (its first 429, 401/403, network failure or answer off the contract). A
+ * global latch (no page), resolved only by the owner's resume (`pnpm cli sync
+ * public-lookup resume`). */
+export const SYNC_ENGINE_PUBLIC_LOOKUP_SUBKEY = "public_lookup";
+export type SyncEngineIncidentSubKey =
+  | SyncEngineAlertSubKey
+  | typeof SYNC_ENGINE_PACE_VIOLATION_SUBKEY
+  | typeof SYNC_ENGINE_PUBLIC_LOOKUP_SUBKEY
+  | SyncEngineRouteSubKey;
 
 /** The latch subKey of one route's incident. */
 export function syncEngineRouteSubKey(route: string): SyncEngineRouteSubKey {
@@ -66,8 +87,14 @@ const SYNC_ENGINE_ROUTE_OPEN_TITLE = "🚨 Fansly Sync Engine route held: a 429 
   + "(the rest runs; the endpoint then runs at half rate until raised)";
 const SYNC_ENGINE_ROUTE_RESOLVE_DETAIL = "Fansly Sync Engine route open again (10 min clean; its slowdown stays until raised)";
 
-const SYNC_ENGINE_OPEN_TITLES: Record<SyncEngineAlertSubKey | typeof SYNC_ENGINE_PACE_VIOLATION_SUBKEY, string> = {
+type SyncEngineTitledSubKey =
+  | SyncEngineAlertSubKey
+  | typeof SYNC_ENGINE_PACE_VIOLATION_SUBKEY
+  | typeof SYNC_ENGINE_PUBLIC_LOOKUP_SUBKEY;
+
+const SYNC_ENGINE_OPEN_TITLES: Record<SyncEngineTitledSubKey, string> = {
   page_stopped: "🚨 Fansly Sync Engine stopped a page (429, auth, identity, network or ownership)",
+  [SYNC_ENGINE_PUBLIC_LOOKUP_SUBKEY]: "🚨 Fansly public account reader stopped (429, 401/403, network or an unexpected answer) — nothing sends until the owner resumes it",
   [SYNC_ENGINE_PACE_VIOLATION_SUBKEY]: "🚨 Fansly Sync Engine pace violated: two sends of a page closer than their pause, or of a route closer than its interval",
   live_degraded: "🚨 Fansly Sync Engine live path degraded (socket, decode debt or quarantined work)",
   freshness: "🚨 Fansly Sync Engine freshness broken (messages, money or urgent work late)",
@@ -75,8 +102,9 @@ const SYNC_ENGINE_OPEN_TITLES: Record<SyncEngineAlertSubKey | typeof SYNC_ENGINE
   process: "🚨 Fansly Sync Engine process silent — no sync heartbeat for 2 min while a page is in the engine",
 };
 
-const SYNC_ENGINE_RESOLVE_DETAILS: Record<SyncEngineAlertSubKey | typeof SYNC_ENGINE_PACE_VIOLATION_SUBKEY, string> = {
+const SYNC_ENGINE_RESOLVE_DETAILS: Record<SyncEngineTitledSubKey, string> = {
   page_stopped: "Fansly Sync Engine page running again (10 min clean)",
+  [SYNC_ENGINE_PUBLIC_LOOKUP_SUBKEY]: "Fansly public account reader resumed by the owner",
   [SYNC_ENGINE_PACE_VIOLATION_SUBKEY]: "Fansly Sync Engine pace violation acknowledged by the owner",
   live_degraded: "Fansly Sync Engine live path healthy again",
   freshness: "Fansly Sync Engine freshness back within bounds",
@@ -187,6 +215,14 @@ function openTitleForIncident(
   }
   if (input.kind === "sync_silent" && input.subKey === FANSLY_PACE_VIOLATION_SUBKEY) {
     return "🚨 Fansly pace violated: two requests of a page closer than the pause setting";
+  }
+  // The link series' page latches say what is wrong with the page, not that
+  // "a reconcile failed": nothing may have run at all.
+  if (input.kind === "ofapi_link_stats_reconcile_failed" && input.subKey === OFAPI_LINK_STATS_SERIES_STALE_SUBKEY) {
+    return "🚨 OnlyFans link series is not being written";
+  }
+  if (input.kind === "ofapi_link_stats_reconcile_failed" && input.subKey === OFAPI_LINK_STATS_PAGE_UNMAPPED_SUBKEY) {
+    return "🚨 OnlyFans page has no OFAPI account mapping";
   }
   // The engine's alerts: one kind, a title per alert — the owner acts on the
   // first line.
@@ -364,6 +400,12 @@ function resolveDetailForIncident(
     case "ofapi_chargebacks_reconcile_failed":
       return "OFAPI chargebacks reconcile recovered";
     case "ofapi_link_stats_reconcile_failed":
+      if (input.subKey === OFAPI_LINK_STATS_SERIES_STALE_SUBKEY) {
+        return "OnlyFans link series is being written again";
+      }
+      if (input.subKey === OFAPI_LINK_STATS_PAGE_UNMAPPED_SUBKEY) {
+        return "OnlyFans page is mapped to an OFAPI account again";
+      }
       return "OFAPI link-stats reconcile recovered";
     case "ai_provider_billing":
       return "AI provider billing recovered";
@@ -1045,6 +1087,55 @@ export async function resolveOfapiGlobalIncident(
     platform: null,
     subKey: input.subKey ?? null,
     recoveredAt: input.recoveredAt,
+  });
+}
+
+/** Open a page latch of the OnlyFans link series (the minutely series monitor
+ * is the one caller). Like every non-critical kind it only moves the latch:
+ * whether and when it pages is the paging policy's — `series_stale` at once,
+ * `page_unmapped` after 30 minutes. */
+export async function notifyOfapiLinkStatsPageIncident(
+  app: IncidentApp,
+  input: {
+    subKey: OfapiLinkStatsPageSubKey;
+    pageId: number;
+    pageLabel: string;
+    errorSummary: string;
+    occurredAt: Date;
+  },
+): Promise<boolean> {
+  return openIncidentAndNotify(app, {
+    kind: "ofapi_link_stats_reconcile_failed",
+    platformAccountId: input.pageId,
+    pageLabel: input.pageLabel,
+    platform: "onlyfans",
+    subKey: input.subKey,
+    errorCode: input.subKey,
+    errorSummary: input.errorSummary,
+    occurredAt: input.occurredAt,
+  });
+}
+
+export async function resolveOfapiLinkStatsPageIncident(
+  app: IncidentApp,
+  input: { subKey: OfapiLinkStatsPageSubKey; pageId: number; pageLabel: string; recoveredAt: Date },
+): Promise<boolean> {
+  return resolveIncidentAndNotify(app, {
+    kind: "ofapi_link_stats_reconcile_failed",
+    platformAccountId: input.pageId,
+    pageLabel: input.pageLabel,
+    platform: "onlyfans",
+    subKey: input.subKey,
+    recoveredAt: input.recoveredAt,
+  });
+}
+
+/** The latch key of one page's link-series incident. */
+export function ofapiLinkStatsPageIncidentKey(input: { subKey: OfapiLinkStatsPageSubKey; pageId: number }): string {
+  return incidentKey({
+    kind: "ofapi_link_stats_reconcile_failed",
+    platformAccountId: input.pageId,
+    subKey: input.subKey,
   });
 }
 

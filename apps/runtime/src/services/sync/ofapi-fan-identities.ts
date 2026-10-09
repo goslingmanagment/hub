@@ -8,6 +8,11 @@
 // durable cursor records completed link/kind targets and the active user-page
 // offset. This keeps idempotent upserts simple without re-buying the same
 // prefix whenever a large account spans several budget-limited chunks.
+//
+// Every list page the walk buys is journaled before anything reads it: the
+// link lists and each link's subscribers/spenders, with the request that
+// produced them. The page is the only record of which link a fan came from —
+// the fans/page_fans writes below keep the fan and drop the link.
 
 import {
   getCheckpoint,
@@ -29,11 +34,40 @@ import {
   type OfapiStreamChunkResult,
 } from "./ofapi-dm-sync.ts";
 import type { SyncRunTelemetry } from "./observability.ts";
+import { persistRawPayload, retentionDate } from "./shared.ts";
 
 const LINKS_PAGE_LIMIT = 100;
 const USERS_PAGE_LIMIT = 100;
 const DEFAULT_MAX_REQUESTS_PER_RUN = 25;
 const DEFAULT_DAILY_CREDIT_BUDGET = 300;
+const OFAPI_LINK_FANS_MAPPER_VERSION = "ofapi-link-fans-v1";
+
+// One journal kind per vendor route, registered in observation-kinds.ts. Each
+// kind is a literal under an `endpoint` key because that is the seam
+// tests/observation-kind-coverage.test.ts greps for the kinds this tree
+// writes. `path` is the route template for requestParams; the link id is in
+// the body.
+const LINK_LIST_JOURNAL = {
+  tracking: { endpoint: "link_lists_tracking_live", path: "/:accountId/tracking-links" },
+  trial: { endpoint: "link_lists_trial_live", path: "/:accountId/trial-links" },
+} as const;
+
+const LINK_USERS_JOURNAL = {
+  "tracking:subscribers": {
+    endpoint: "link_fans_tracking_subscribers",
+    path: "/:accountId/tracking-links/:trackingLinkId/subscribers",
+  },
+  "tracking:spenders": {
+    endpoint: "link_fans_tracking_spenders",
+    path: "/:accountId/tracking-links/:trackingLinkId/spenders",
+  },
+  "trial:subscribers": {
+    endpoint: "link_fans_trial_subscribers",
+    path: "/:accountId/trial-links/:trialLinkId/subscribers",
+  },
+} as const;
+
+type LinkPageJournal = { endpoint: string; path: string };
 
 export function isOfapiFanIdentitiesSyncEnabled(
   config?: Pick<AppContext["config"], "ofapiFanIdentitiesSyncEnabled">,
@@ -95,12 +129,17 @@ async function upsertLinkUsers(
   if (fanInputs.length === 0) {
     return 0;
   }
-  const fans = await upsertFans(app.db, fanInputs);
+  // A fan in a link's list was not seen on the page: the walk re-reads every
+  // list on every pass, and refreshing `last_seen_at` here made it the time of
+  // the last walk for every fan a link ever brought. New fans, usernames and
+  // display names are written as before.
+  const seen = { touchLastSeen: false };
+  const fans = await upsertFans(app.db, fanInputs, seen);
   if (fans.length > 0) {
     await upsertFanPages(app.db, fans.map((fan) => ({
       fanId: fan.id,
       platformAccountId: pageId,
-    })));
+    })), seen);
   }
   return fans.length;
 }
@@ -109,6 +148,16 @@ type GuardedFetch = (
   offset: number,
   limit: number,
 ) => Promise<OfapiListPage>;
+
+type LinkUsersTarget = {
+  key: string;
+  linkKind: "tracking" | "trial";
+  linkId: string;
+  list: "subscribers" | "spenders";
+  journal: LinkPageJournal;
+  pathname: string;
+  fetchPage: GuardedFetch;
+};
 
 export interface OfapiFanIdentitiesStats {
   trackingLinks: number;
@@ -221,6 +270,9 @@ export async function syncOfapiFanIdentities(
     budget: SyncChunkBudget;
     telemetry: SyncRunTelemetry;
     requestSeq: number;
+    /** The chunk's run. It keys each journaled page apart from the pages of
+     *  the request's other chunks, which share `requestSeq`. */
+    syncRunId: number;
   },
 ): Promise<OfapiStreamChunkResult> {
   const ofapiAccountId = input.pageContext.page.ofapiAccountId;
@@ -278,6 +330,41 @@ export async function syncOfapiFanIdentities(
   const completedTargetKeys = new Set(cursor.completedTargetKeys);
   const trackingLinkIds = new Set(cursor.trackingLinkIds);
   const trialLinkIds = new Set(cursor.trialLinkIds);
+
+  // Journal one fetched list page, untrimmed, before the walk reads it. The
+  // OFAPI client exposes no raw response envelope, so the body is the item
+  // records as they arrived plus the request that produced them: a page of
+  // fans does not name its link, and without the link, list and offset it
+  // could not be replayed. Loud on failure — the throw fails the chunk before
+  // the cursor moves, so the retry asks for this page again.
+  const journalPage = async (
+    journal: LinkPageJournal,
+    scope: Record<string, unknown>,
+    request: { offset: number; limit: number },
+    page: OfapiListPage,
+  ) => {
+    await persistRawPayload(app.db, {
+      platformAccountId: input.pageContext.page.id,
+      syncRunId: input.syncRunId,
+      endpoint: journal.endpoint,
+      requestParams: { ...request, path: journal.path },
+      responsePayload: {
+        ...scope,
+        ...request,
+        requestSeq: input.requestSeq,
+        ofapiAccountId,
+        items: page.items,
+        hasNextPage: page.hasNextPage,
+        nextPageUrl: page.nextPageUrl ?? null,
+      },
+      mapperVersion: OFAPI_LINK_FANS_MAPPER_VERSION,
+      payloadKind: "mapping_critical",
+      retainUntil: retentionDate(),
+    }, {
+      action: `inserting ${journal.endpoint} raw payload`,
+      platform: "onlyfans",
+    });
+  };
   const persistCursor = async () => {
     cursor = {
       ...cursor,
@@ -316,6 +403,12 @@ export async function syncOfapiFanIdentities(
         });
       await guard.recordResponse(page);
       stats.requestsUsed += 1;
+      await journalPage(
+        LINK_LIST_JOURNAL[linkType],
+        { linkKind: linkType },
+        { offset: cursor.linkOffset, limit: pageLimit },
+        page,
+      );
 
       const ids = linkType === "tracking" ? trackingLinkIds : trialLinkIds;
       for (const item of page.items) {
@@ -361,11 +454,15 @@ export async function syncOfapiFanIdentities(
     stats.upsertedFans += await upsertLinkUsers(app, input.pageContext.page.id, items, kind);
   };
 
-  const targets: Array<{ key: string; pathname: string; fetchPage: GuardedFetch }> = [];
+  const targets: LinkUsersTarget[] = [];
   for (const linkId of trackingLinkIds) {
     for (const kind of ["subscribers", "spenders"] as const) {
       targets.push({
         key: `tracking:${linkId}:${kind}`,
+        linkKind: "tracking",
+        linkId,
+        list: kind,
+        journal: LINK_USERS_JOURNAL[`tracking:${kind}`],
         pathname: `/${encodeURIComponent(ofapiAccountId)}/tracking-links/${encodeURIComponent(linkId)}/${kind}`,
         fetchPage: (offset, limit) =>
           client.listTrackingLinkUsers!(requestContext, ofapiAccountId, linkId, kind, {
@@ -378,6 +475,10 @@ export async function syncOfapiFanIdentities(
   for (const linkId of trialLinkIds) {
     targets.push({
       key: `trial:${linkId}:subscribers`,
+      linkKind: "trial",
+      linkId,
+      list: "subscribers",
+      journal: LINK_USERS_JOURNAL["trial:subscribers"],
       pathname: `/${encodeURIComponent(ofapiAccountId)}/trial-links/${encodeURIComponent(linkId)}/subscribers`,
       fetchPage: (offset, limit) =>
         client.listTrialLinkSubscribers!(requestContext, ofapiAccountId, linkId, {
@@ -423,7 +524,13 @@ export async function syncOfapiFanIdentities(
       const page = await target.fetchPage(offset, pageLimit);
       await guard.recordResponse(page);
       stats.requestsUsed += 1;
-      await consumeUsers(page.items, target.key.endsWith(":spenders") ? "spenders" : "subscribers");
+      await journalPage(
+        target.journal,
+        { link: { kind: target.linkKind, id: target.linkId }, list: target.list },
+        { offset, limit: pageLimit },
+        page,
+      );
+      await consumeUsers(page.items, target.list);
       const nextOffset = resolveOfapiListNextOffset(page, {
         pathname: target.pathname, offset, limit: pageLimit, baseUrl: app.config?.ofapiBaseUrl,
       });

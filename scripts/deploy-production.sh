@@ -739,6 +739,79 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # its readers show it; its page and fan erasure delete the threads and the
   # episodes go with them through the cascade.
   "0251_page_dm_thread_unavailability.sql"
+  # A lookup miss no longer excludes a chat (arena "vanished chat", M3b): data
+  # only, no DDL, no work, in one transaction — the erasure execution lock
+  # (key 8154030001, which every image's erasure takes before any row lock),
+  # every sync_pages row locked in page order (the previous image's sync keeps
+  # running while the api migrates, and each of its actor transactions starts
+  # by locking its page row, so none writes back a reason it read before), then
+  # `partner_unresolvable_from_account_lookup` added to every page's
+  # lifted_dm_exclusions (owner decision №8, 0235), then the threads that
+  # carry the reason locked in id order and the reason taken off them
+  # (production: 17). The previous image honours
+  # the lift: its conversation list keeps no lifted reason on a bound chat
+  # and its account probe assigns none; no chat carries the reason after
+  # this, and it reads the re-included chats like any other. This image reads
+  # the lift for nothing. So the previous image runs unchanged after a
+  # rollback.
+  "0254_retire_dm_unresolvable_exclusion.sql"
+  # Every attempt of the OnlyFans link series is a row (traffic sources plan
+  # 2026-10-08, PR 2): page_link_stat_runs gains four columns the previous
+  # image never names (reason, window_at, attempt smallint NOT NULL DEFAULT 1,
+  # ofapi_account_id), its status CHECK is swapped for one that also admits
+  # 'failed' and 'skipped', and ofapi_account_id is filled on existing rows
+  # from ofapi_account_bindings. The previous image inserts runs by column
+  # name with the three old statuses (attempt takes its default, the rest stay
+  # null) and reads runs only through status in ('complete', 'partial'), so it
+  # never meets a failed or skipped row; traffic-control's SQL selects the
+  # same two statuses and none of the new columns. Rows the previous image
+  # writes after a rollback have no window and no account: the new image
+  # treats an unknown account as "not this account" (no absence proof from
+  # it), which is the cautious reading.
+  "0255_page_link_stat_runs_attempts.sql"
+  # The OnlyFans link money named for what it is (traffic sources plan
+  # 2026-10-08, PR 6): page_link_stat_snapshots gains four nullable columns
+  # the previous image never names (revenue_net_mills,
+  # revenue_chargebacks_mills, trial_days, tags), revenue_net_mills is copied
+  # from revenue_gross_mills where that is known, and revenue_gross_mills only
+  # gets a comment — it is not renamed or dropped, and the new image keeps
+  # writing the same value into it. The previous image inserts snapshots by
+  # column name and keeps writing revenue_gross_mills; its rows after a
+  # rollback have a null revenue_net_mills, which Hub's readers read through
+  # coalesce(revenue_net_mills, revenue_gross_mills), and null chargebacks,
+  # trial length and tags, which is "unknown". traffic-control's SQL reads
+  # revenue_gross_mills and none of the new columns.
+  "0256_page_link_stat_snapshots_net_revenue.sql"
+  # Traffic sources, "link → channel → contractor" with dates (plan
+  # 2026-10-08, PR 11, migration D): four new tables (traffic_contractors,
+  # traffic_channels, traffic_channel_contractors, traffic_link_bindings;
+  # IF NOT EXISTS), their checks and indexes, no data. No existing table,
+  # column or row changes. The previous image never names the tables: it
+  # runs unchanged after a rollback, and the bindings stay as they were
+  # (only the owner's CLI writes them). Its page erasure does not know
+  # traffic_link_bindings, whose RESTRICT FK to pages never fires (erasure
+  # keeps the pages row), so a page erased by the previous image keeps its
+  # bindings — link ids and channel keys, no fan data — until the next one.
+  "0257_traffic_link_bindings.sql"
+  # The session-less public account reader's egress (arena "vanished chat",
+  # R5 M5): a new singleton table fansly_public_egress (the reader's own
+  # proxy, no page key, no foreign key, nothing granted) and the source CHECK
+  # of fansly_send_log replaced by the old list plus 'public_lookup' (added NOT
+  # VALID, validated; lock_timeout 5 s). The previous image never names the
+  # table, writes only sources the old list has and reads the column as text,
+  # so it runs unchanged after a rollback. Nothing sends through the egress in
+  # this release.
+  "0258_fansly_public_lookup_egress.sql"
+  # The session-less public account reader (arena "vanished chat", R5 M4):
+  # two nullable columns on fans without a default (public_checked_at,
+  # public_found; catalog-only) with their pair CHECK added NOT VALID and
+  # validated (lock_timeout 5 s), and two new tables — the owner's re-check
+  # queue (fan_id → fans ON DELETE CASCADE) and the reader's one-row state
+  # (seeded). The previous image never names any of them and reads and writes
+  # fans by named columns only, so it runs unchanged after a rollback, without
+  # a reader: what the reader wrote stays, every cause reads `unchecked`, and
+  # its fan erasure deletes the fans row and the queue row with it.
+  "0259_fans_public_lookup.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

@@ -209,3 +209,44 @@ describe("features surface", () => {
     expect(full).not.toContain('type="checkbox"');
   });
 });
+
+describe("OnlyFans link costs as the settings state them", () => {
+  // The stored link lists cost 0 credits and feed the only history of link
+  // counters; the per-link fan sweep costs a credit per list page. The copy had
+  // it the other way round, and the card sent the owner to a screen that reads
+  // a different capture.
+  it("keeps the link history as core work and shows its evidence where its calls are listed", () => {
+    const feature = findHubFeature("of-marketing")!;
+    expect(feature.advice).toBe("keep");
+    expect(feature.evidenceHref).toBe("/ofapi-credits");
+    mocks.useAdminConfig.mockReturnValue({ data: view({ ofapiLinkStatsReconcileEnabled: true }), isError: false });
+    const card = render(FeaturesTab, "/settings?tab=features&view=all&feature=of-marketing");
+    expect(card).toContain("Основа работы");
+    expect(card).toContain("кредиты OFAPI не расходуются");
+    expect(card).toContain('href="/ofapi-credits"');
+    expect(card).not.toContain('href="/ofapi-marketing"');
+  });
+  it("calls the stored link reads free and the fan sweep paid, on the page and in the registry", () => {
+    const descriptor = (key: string) => CONFIG_DESCRIPTORS.find((item) => item.key === key)!;
+    // A registry cost warning is what puts the spend badge and the two-click
+    // confirm on a setting: the free reads carry none, the insurance quota and
+    // the paid sweep do.
+    expect(descriptor("ofapiLinkStatsReconcileEnabled").costWarning).toBeUndefined();
+    expect(descriptor("ofapiLinkStatsReconcileEnabled").note).toMatch(/^Free stored-list reads: 0 OFAPI credits/);
+    expect(descriptor("ofapiLinkStatsDailyCreditBudget").costWarning).toMatch(/^Insurance quota/);
+    expect(descriptor("ofapiFanIdentitiesSyncEnabled").costWarning).toMatch(/^Paid: 1 OFAPI credit per list page/);
+
+    mocks.useAdminConfig.mockReturnValue({ data: view({ ofapiLinkStatsReconcileEnabled: true }), isError: false });
+    const linkStats = render(ConfigurationTab, "/settings?tab=configuration&feature=of-marketing");
+    expect(linkStats).toContain("Это бесплатные чтения, кредиты OFAPI не расходуются; дневная квота — страховка.");
+    expect(linkStats).not.toContain("влияет на расходы");
+
+    mocks.useAdminConfig.mockReturnValue({ data: view({ ofapiLinkStatsDailyCreditBudget: 50 }), isError: false });
+    const quota = render(ConfigurationTab, "/settings?tab=configuration&feature=of-marketing");
+    expect(quota).toContain("Квота — страховка: чтения бесплатные, кредиты OFAPI не расходуются.");
+
+    mocks.useAdminConfig.mockReturnValue({ data: view({ ofapiAudienceSyncEnabled: true, ofapiFanIdentitiesSyncEnabled: true }), isError: false });
+    const sweep = render(ConfigurationTab, "/settings?tab=configuration&feature=of-audience");
+    expect(sweep).toContain("Платно: один кредит OFAPI за каждую страницу списка каждой ссылки, четыре прохода в сутки.");
+  });
+});

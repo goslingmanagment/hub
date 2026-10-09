@@ -433,6 +433,46 @@ hub sync-why --page-label lora-1 --resource transactions.head
 hub sync-why --page-label lora-1 --resource dm-messages.head --subject 810272281019305984
 ```
 
+## A chat Fansly stopped serving (`hub thread-availability`)
+
+Fansly can stop serving one chat to one page: the fan blocked the page, or
+deleted the account. Every read of that chat then gets Fansly's own error, and
+the Fansly Sync Engine keeps an **unavailability episode** of the page and the
+chat: `refusing` from the first refusal, `established` at the fifth, after
+which the engine stops reading the chat in the background (only a new message
+in it asks for one read, not before `retryNotBefore`). Chatters still see the
+messages the socket showed, but `hub transcript` (confirmed messages only) stops
+growing, and a history request for the chat is refused (`excluded`,
+`chat_unavailable`).
+
+`hub thread-availability --page-label <page> --conversation <ref>` reads that
+episode for ONE chat. It needs `read:messages`, reads the database only (no
+message text, no request to Fansly) and answers the operation's own document
+plus a one-line `note` that says what the answer means:
+
+- `data.episode` is the chat's OPEN episode: `state`, `openedAt`,
+  `establishedAt`, `lastRefusalAt`, `refusals`, `retryNotBefore`, `ownerNote`
+  (`text` and `at`, the owner's own observation) and `cause`.
+- **`episode: null` means no open episode is recorded. It is NOT proof that
+  Fansly serves the chat**: an episode opens only when a read of the chat is
+  refused, so a chat nobody has read since, a chat whose episode ended, and
+  every chat of a page the engine does not run (OnlyFans included) all answer
+  null.
+- `cause` is a likelihood, never a proof: `unchecked` (deleted or blocked,
+  nobody checked), `probably_blocked` (the account exists when looked up
+  without a login), `probably_deleted` (it does not). The check is Hub's
+  public account reader, which runs only while the owner keeps it on: a
+  partner it has not checked yet says `unchecked`.
+- A page outside your grant and a conversation ref the page holds no thread
+  for are the plane's one static 404 (`code: "not_found"`, exit 4).
+- On a hub older than this route the CLI prints `data: null`, the note
+  `state unknown: the server has no availability route`, and exits 0: the
+  state is unknown, not "served".
+
+```
+hub thread-availability --page-label lora-1 --conversation 810272281019305984 --pretty
+```
+
 ## The CLI
 
 ```
@@ -495,7 +535,8 @@ Output is exactly one JSON document on stdout, every time, success or failure:
 `blockers` is lifted out of the body on purpose: it is the exit code contract,
 and an agent that reads nothing else must still see it. Note that this example
 is an ordinary successful call, and `exitCode: 0` next to a non empty `blockers`
-is the normal case, not an anomaly.
+is the normal case, not an anomaly. `hub thread-availability` adds a `note`
+beside `data`: one line saying what its answer means.
 
 Exit codes. **`0` means the call succeeded, NOT that the answer is complete**:
 
@@ -529,6 +570,7 @@ Global flags: `--base-url`, `--fail-on-partial`, `--pretty`, `--help`.
 | `hub timeline` | One fan's merged timeline across lanes (money, separate post-tip attribution, subscriptions, follows, message refs). |
 | `hub threads` | Cross page DM thread inventory with per thread capture bounds. |
 | `hub transcript` | The full transcript of ONE thread. Needs `read:messages`; every call is audited. |
+| `hub thread-availability` | Whether Fansly stopped serving ONE chat to its page: its open unavailability episode, or null (no open episode recorded, not proof that the chat is served). Needs `read:messages`. |
 | `hub search` | Bounded full text search over the message archive. It does not paginate, by design. |
 | `hub coverage` | The capture axis on its own: what was ever captured for a scope and window. |
 | `hub observations` | Capture journal ENVELOPES (kind, source, timing, sizes). Never payload bodies. |
@@ -631,8 +673,25 @@ rewrite the stored phase. `fanId` is returned only when the stored event identit
 still resolves to a fan of that page. Legacy v3 events that accidentally stored
 the creator id, and identities removed by erasure, keep their event row but expose
 `fanId=null`; the read path never rehydrates identity from raw capture payloads.
+OnlyFans also sends the top-fan award under the subscription notification
+(`subType=customer_award_for_model_top`). It is no subscription and is never a
+row here, under either phase or any filter; the stored event still counts toward
+the plane floor.
 Read the `domain_events` plane floor and blockers before reporting an absence or
 a total.
+
+`followers_daily` is the page's follower rollup, one row per day:
+`newFollowers` counts the follow relationships Hub stores whose `followed_at`
+falls on that day (a later unfollow still counts), and `followersCount` is the
+total Hub knew for the day (null = not known). `businessDate` is a UTC day here,
+not a Moscow one. The rollup is rebuilt from the stored follows, so a past day
+can still move: re-read the recent days rather than trusting a value you read
+once. A day with no row has no stored follow, which is not a capture proof:
+
+```
+hub dataset --page-label lora-1 --dataset followers_daily \
+  --from 2026-10-02T00:00:00Z --to 2026-10-10T00:00:00Z --sort businessDate:asc
+```
 
 `transactions.relatedMessageRef` is a legacy, misnamed compatibility alias for
 the provider's generic correlation key. It is NOT proof of a related message;
@@ -877,6 +936,78 @@ differ; neither is wrong; the raw codes are on every row so either can be
 reproduced. This applies to the 30-day view only — the last-24h comparison needs
 no adjustment. If someone asks why a number disagrees with the platform page,
 this is usually the answer, and the answer is an explanation, not a correction.
+
+### OnlyFans links: the series and who brings the traffic
+
+Three OnlyFans-only datasets serve the tracking and trial links Hub reads from
+OFAPI's stored lists four times a day (03:45, 09:45, 15:45, 21:45 UTC), and the
+dated "link → channel → contractor" bindings the owner keeps in Hub.
+
+| dataset | what it answers | capabilities | claim field |
+|---|---|---|---|
+| `campaign_snapshots` | one row per link per usable read: clicks, claims, subscribers, spenders, the vendor's net revenue | `+ read:money` | `linkStatSnapshot` |
+| `campaign_runs` | every attempt to read a page's list, failed and skipped ones included | `read:datasets` | `linkStatRun` |
+| `campaign_bindings` | which channel and contractor a link belonged to, and from when | `read:datasets` | `trafficLinkBinding`, `trafficChannelContractor` |
+
+**Cumulative, as observed.** Every counter and `vendorRevenueNetMills` is the
+vendor's running total at `observedAt`, not a day's increment; a daily delta is
+your subtraction of the last reads before two day boundaries. `businessDate` is
+the Europe/Moscow day of `observedAt`. `claims` exists on trial links only (null
+on tracking links); `subscribers` is what the vendor counts. Money is the
+creator's NET after the OnlyFans fee, refunds and chargebacks — never take the
+fee off again; `vendorChargebacksMills` is already excluded from it. A null
+`spenders` or `vendorRevenueNetMills` means the vendor had not computed it, never
+zero. A falling money figure is the vendor recalculating, not a loss — after an
+OFAPI account change it did so once already (September 2026, −$748.80);
+`bindingChanged: true` marks the first read under a new account, and
+`bindingChanged: null` a read written before that flag existed (2026-10-09).
+
+**Only usable results are points of the series.** `campaign_snapshots` serves
+the reads of runs that count as a result of their window; everything else is an
+attempt and lives in `campaign_runs`, with `status` (`complete`, `partial`,
+`truncated`, `failed`, `skipped`), `reason` and `usableResult` — the same rule
+the snapshots are filtered by. A window with no usable row in `campaign_runs`
+is a hole; its rows say why (a window that passed with no attempt at all is a
+`skipped` / `window_missed` row). Both series datasets window and sort on
+`observedAt`, oldest first, and their `captureFloor` is the page's first read:
+2026-07-22 12:17 UTC on production. Nothing before it was ever read.
+
+Read the series forward from a watermark, one page at a time, and continue
+with the cursor until `delivery.nextCursor` is null:
+
+```
+hub dataset --page-label lora-vip-of --dataset campaign_snapshots \
+  --from 2026-10-01T00:00:00Z --to 2026-10-09T00:00:00Z \
+  --filter linkKind:eq:trial --limit 200 --claim-field linkStatSnapshot
+```
+
+```
+hub dataset --page-label lora-vip-of --dataset campaign_runs \
+  --from 2026-10-01T00:00:00Z --to 2026-10-09T00:00:00Z \
+  --filter usableResult:eq:false --limit 200 --claim-field linkStatRun
+```
+
+**Bindings are stretches.** A link has at most one channel and a channel at
+most one contractor at any instant, each dated on its own. `campaign_bindings`
+returns one row per stretch over which both are constant: `[validFrom,
+validTo)` (null `validTo` = still in force), a contractor change inside a
+binding splits it, and a stretch no contractor covers has a null
+`contractorKey`. The binding's own interval and the contractor term's ride
+along (`bindingValidFrom` / `bindingValidTo`, `contractorValidFrom` /
+`contractorValidTo`). `validFromBasis` says how the binding's start is known:
+`confirmed`, or `assumed_link_created` — nobody knew, and the link's creation
+date stands in; `contractorValidFromBasis` says the same of the contractor's
+term. Never present an assumed start as an established one. The window applies
+to a stretch's start, so ask for the whole list with a wide one; there is no
+capture floor here, because bindings are configuration, not captured history:
+
+```
+hub dataset --page-label lora-vip-of --dataset campaign_bindings \
+  --from 2000-01-01T00:00:00Z --to 2100-01-01T00:00:00Z --limit 200
+```
+
+A link with no row has no channel in Hub — report it as "without a channel",
+not as organic traffic.
 
 ### Files and post attachments
 

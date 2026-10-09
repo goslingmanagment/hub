@@ -1425,6 +1425,87 @@ export const agentThreadMessagesResponseSchema = z.object({
   addAgentIssues(agentEvidenceIssues(value, value.items.length), ctx));
 
 // ---------------------------------------------------------------------------
+// agentThreadAvailability — whether Fansly stopped serving ONE chat to its
+// page (arena "vanished chat", plan §2, §5, §8)
+//
+// The Fansly Sync Engine keeps a chat-unavailability EPISODE of a page × chat
+// (`page_dm_thread_unavailability`): the page's actor opens it when Fansly
+// refuses a read of the chat's head with its own error envelope, and
+// establishes it at the episode's fifth such refusal — the fan blocked the
+// page or deleted the account. The episode is not a key on the transcript or
+// the thread inventory: those answers are strict, and a released `hub`
+// validates every answer against the schema it was built with, so a new key
+// there would break it. It is this route of its own instead: the page's grant,
+// one chat, no message text, no request to Fansly.
+// ---------------------------------------------------------------------------
+
+/** `refusing`: Fansly refused the chat's head and the episode counts the
+ *  refusals; `established`: refused five times — the chat's work is closed and
+ *  nothing reads its head before `retryNotBefore`. */
+export const agentThreadAvailabilityStateEnum = z.enum(["refusing", "established"]);
+
+/**
+ * Why Fansly stopped serving the chat, as far as Hub can tell (plan §8). The
+ * state and the engine's behaviour do not depend on it; every value is a
+ * likelihood, never a proof:
+ *   - `unchecked` — nobody checked the fan's account: it was deleted, or the
+ *     fan blocked the page;
+ *   - `probably_blocked` — a public check without any page's session found
+ *     the account, so the fan probably blocked the page;
+ *   - `probably_deleted` — that check did not find the account, so it was
+ *     probably deleted.
+ * The check is Hub's session-less public account reader (plan §7), which runs
+ * only while the owner keeps it on; a partner it has not checked reads
+ * `unchecked`.
+ */
+export const agentThreadAvailabilityCauseEnum = z.enum(["unchecked", "probably_blocked", "probably_deleted"]);
+
+/** A chat's open unavailability episode, without its evidence ids (the
+ *  owner's `pnpm cli sync chats unavailable` lists those). */
+export const agentThreadAvailabilityEpisodeSchema = z.object({
+  state: agentThreadAvailabilityStateEnum,
+  /** The episode's first refusal: Fansly has not served the chat's history to
+   *  the page since. */
+  openedAt: agentIsoTimestamp,
+  /** The fifth refusal, which established it; null while `refusing`. */
+  establishedAt: agentIsoTimestamp.nullable(),
+  lastRefusalAt: agentIsoTimestamp,
+  /** Fansly's refusals of the chat's head since its last served read, one per
+   *  attempt. */
+  refusals: z.number().int().positive(),
+  /** Established only: nothing reads the chat's head before this instant, and
+   *  after it only a new message in the chat asks for one read. */
+  retryNotBefore: agentIsoTimestamp.nullable(),
+  /** The owner's own observation and when it was made (at most 2000
+   *  characters, the table's CHECK). */
+  ownerNote: z.object({
+    text: z.string().min(1),
+    at: agentIsoTimestamp,
+  }).strict().nullable(),
+  cause: agentThreadAvailabilityCauseEnum,
+}).strict();
+
+export const agentThreadAvailabilityResponseSchema = z.object({
+  scope: z.object({
+    pageLabel: z.string(),
+    platform: platformEnum,
+    conversationRef: z.string(),
+  }).strict(),
+  /**
+   * The chat's OPEN episode, or null. NULL MEANS "NO OPEN EPISODE RECORDED", NOT
+   * PROOF THAT FANSLY SERVES THE CHAT: an episode opens only when a read of the
+   * chat's head is refused, so a chat nobody has read since Fansly stopped
+   * serving it, a chat whose episode ended, and every chat of a page the Fansly
+   * Sync Engine does not run (an OnlyFans page included) read null.
+   */
+  episode: agentThreadAvailabilityEpisodeSchema.nullable(),
+  delivery: agentDeliverySchema,
+  capture: agentCaptureSchema,
+  conclusion: agentConclusionSchema,
+}).strict().superRefine((value, ctx) =>
+  addAgentIssues(agentEvidenceIssues(value, value.episode === null ? 0 : 1), ctx));
+
+// ---------------------------------------------------------------------------
 // #7 agentSearchMessages
 // ---------------------------------------------------------------------------
 
@@ -2735,6 +2816,25 @@ export const agentRouteSchemas = {
       503: errorResponseSchema,
     },
   },
+  agentThreadAvailability: {
+    auth: { kind: "agentKey", scope: "page" },
+    tags: ["agent"],
+    summary:
+      "Whether Fansly stopped serving ONE chat to its page: the chat's open unavailability episode the Fansly"
+      + " Sync Engine keeps, or null. A null episode means no open episode is recorded, not proof that Fansly serves"
+      + " the chat. Database only: no message text, no request to Fansly. Needs read:messages; a thread this page"
+      + " does not hold is the plane's static 404",
+    params: agentPageConversationParamsSchema,
+    response: {
+      200: agentThreadAvailabilityResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      429: errorResponseSchema,
+      503: errorResponseSchema,
+    },
+  },
   agentSearchMessages: {
     auth: { kind: "agentKey" },
     tags: ["agent"],
@@ -3024,6 +3124,9 @@ export type AgentResolveResponse = z.infer<typeof agentResolveResponseSchema>;
 export type AgentPersonTimelineResponse = z.infer<typeof agentPersonTimelineResponseSchema>;
 export type AgentThreadsResponse = z.infer<typeof agentThreadsResponseSchema>;
 export type AgentThreadMessagesResponse = z.infer<typeof agentThreadMessagesResponseSchema>;
+export type AgentThreadAvailabilityResponse = z.infer<typeof agentThreadAvailabilityResponseSchema>;
+export type AgentThreadAvailabilityEpisode = z.infer<typeof agentThreadAvailabilityEpisodeSchema>;
+export type AgentThreadAvailabilityCause = z.infer<typeof agentThreadAvailabilityCauseEnum>;
 export type AgentSearchMessagesResponse = z.infer<typeof agentSearchMessagesResponseSchema>;
 export type AgentCoverageResponse = z.infer<typeof agentCoverageResponseSchema>;
 export type AgentObservationsResponse = z.infer<typeof agentObservationsResponseSchema>;

@@ -1246,6 +1246,15 @@ const spenderLastTransactionSchema = z.object({
   occurredAt: isoTimestamp,
 }).nullable();
 
+// The page's own "can't see this fan" mark: when the latest Fansly account
+// answer through THIS page — an account lookup or the DM partner probe — did
+// not return the fan (page_fans.account_probe_resolved = false), the time of
+// that answer. The fan probably blocked the page or deleted the account; other
+// pages keep their own answer, so the fan shows normally there. Null when the
+// latest answer returned the fan, the page never asked, or the list spans more
+// than one page. Optional: a server before it omits the key.
+const accountLookupMissAtSchema = isoTimestamp.nullable().optional();
+
 const spenderListItemSchema = z.object({
   fan: spenderFanSchema,
   metrics: spenderMetricsSchema,
@@ -1254,6 +1263,7 @@ const spenderListItemSchema = z.object({
   conversation: spenderConversationSchema,
   lastTransaction: spenderLastTransactionSchema,
   retentionStatus: spenderRetentionStatusEnum.exclude(["all"]),
+  accountLookupMissAt: accountLookupMissAtSchema,
 });
 
 export const spenderListResponseSchema = z.object({
@@ -1297,6 +1307,7 @@ const pageSpenderAutoListFanSchema = z.object({
   lifetimeGrossAmountMills: mills,
   lifetimeCreatorNetAmountMills: mills,
   lastTransactionAt: isoTimestamp.nullable(),
+  accountLookupMissAt: accountLookupMissAtSchema,
 });
 
 export const pageSpenderAutoListDetailResponseSchema = z.object({
@@ -1420,6 +1431,29 @@ const pageConversationFanSchema = z.object({
   displayName: z.string().nullable(),
 });
 
+/** Why Fansly stopped serving a chat to its page, as far as Hub can tell
+ * (arena "vanished chat", plan §8 (а)): the partner's latest session-less
+ * public account check (Hub's public reader). `unchecked`: no check yet — it
+ * was deleted or the fan blocked the page. `probably_blocked`: the account is
+ * found without a session. `probably_deleted`: it is not. */
+const conversationChatAccessCauseSchema = z.enum(["unchecked", "probably_blocked", "probably_deleted"]);
+
+/** The chat's open unavailability episode (plan §2): Fansly refuses the
+ * chat's history to this page since `openedAt`. `refusing`: the refusals
+ * so far (transient); `established`: at the episode's 5th refusal — the
+ * engine stopped reading the chat, and its socket messages stay unconfirmed
+ * until a read is served again. */
+const conversationChatAccessSchema = z.object({
+  state: z.enum(["refusing", "established"]),
+  openedAt: isoTimestamp,
+  establishedAt: isoTimestamp.nullable(),
+  lastRefusalAt: isoTimestamp,
+  refusals: z.number().int(),
+  /** The owner's own observation (`sync chats note`), verbatim. */
+  ownerNote: z.string().nullable(),
+  cause: conversationChatAccessCauseSchema,
+});
+
 const pageConversationStateSchema = z.object({
   platformConversationId: z.string(),
   storedMessageCount: z.number().int(),
@@ -1430,6 +1464,9 @@ const pageConversationStateSchema = z.object({
   lastMessageSyncAt: isoTimestamp.nullable(),
   unreadCount: z.number().int(),
   lastMessageAt: isoTimestamp.nullable(),
+  /** Additive: present only while the chat has an open unavailability
+   * episode (Fansly pages); absent otherwise and from older kernels. */
+  chatAccess: conversationChatAccessSchema.optional(),
 });
 
 /** Provenance of a conversation message (Fansly live overlay, plan §7.11).

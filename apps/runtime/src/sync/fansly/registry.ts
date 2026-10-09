@@ -67,7 +67,9 @@ export interface ResourceSpec extends EngineResourceSpec {
 /** A legacy stream or sender no entry takes over, and why (design §4.5). */
 export interface LegacyDisposition {
   ref: LegacyRef;
-  disposition: "retired" | "stays_legacy" | "by_streams";
+  /** `pageless`: a sender of no page at all, which no engine entry can take
+   *  over (the session-less public account reader, arena "vanished chat" R5). */
+  disposition: "retired" | "stays_legacy" | "by_streams" | "pageless";
   reason: string;
 }
 
@@ -443,6 +445,9 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     module: fanProfilesModule("lookup"),
   },
   {
+    // No apply of this build asks for it: a lookup miss excludes no chat
+    // (arena "vanished chat" §6). Kept so a row an older image asked for
+    // still runs — it stores the page's answer and excludes nothing.
     key: "fan-profiles.probe", file: "fan-profiles", subject: "fan", kind: "trigger", class: "planned",
     triggers: ["apply:dm-conversations.*", "apply:dm-messages.*"], slo: {},
     proof: "snapshot", walk: "single", http: true, evidence: false, fence: "none",
@@ -700,6 +705,11 @@ export const FANSLY_LEGACY_UNMAPPED: readonly LegacyDisposition[] = [
     ref: sender("ws_probe"),
     disposition: "retired",
     reason: "operator scripts refuse pages in handover or live",
+  },
+  {
+    ref: sender("public_lookup"),
+    disposition: "pageless",
+    reason: "the session-less public account reader (arena R5): no page, no session, its own egress (fansly_public)",
   },
 ];
 

@@ -59,6 +59,14 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
   // through, and the seam ~27–30 of this initiative's new Fansly kinds will
   // arrive on.
   { kind: "account_lookup", source: "pull", writer: "sync/fansly/capture.ts" },
+  // Arena plan §7 (owner decision Р1): the session-less public reader's raw
+  // answer for a batch of fan ids, journaled before parsing with NO page
+  // (account_id null). Registered a release AHEAD of its writer (R4, as
+  // media_offer_stats was ahead of WP-F4) with the fan erasure that reaches a
+  // page-less row; the writer follows the contract that lives there —
+  // services/erasure/index.ts PAGELESS_FAN_OBSERVATION_KINDS. Its failed
+  // bodies go under `account_lookup_public:failed`.
+  { kind: "account_lookup_public", source: "pull", writer: "sync/fansly/public-lookup.ts (arena R5)" },
   { kind: "account_me", source: "pull", writer: "services/sync/executor-handlers.ts" },
   { kind: "dm_conversations", source: "pull", writer: "sync/fansly/capture.ts" },
   { kind: "dm_messages", source: "pull", writer: "sync/fansly/capture.ts" },
@@ -163,6 +171,14 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
   // first thing this registry pins.
   { kind: "link_stats_tracking", source: "pull", writer: "services/ofapi-link-stats-sync.ts" },
   { kind: "link_stats_trial", source: "pull", writer: "services/ofapi-link-stats-sync.ts" },
+  // The fan-identities link walk: one kind per vendor route. `link_lists_*` is
+  // the live link list the walk discovers its targets from; `link_fans_*` is
+  // one page of one link's subscribers or spenders, with the link in the body.
+  { kind: "link_lists_tracking_live", source: "pull", writer: "services/sync/ofapi-fan-identities.ts" },
+  { kind: "link_lists_trial_live", source: "pull", writer: "services/sync/ofapi-fan-identities.ts" },
+  { kind: "link_fans_tracking_subscribers", source: "pull", writer: "services/sync/ofapi-fan-identities.ts" },
+  { kind: "link_fans_tracking_spenders", source: "pull", writer: "services/sync/ofapi-fan-identities.ts" },
+  { kind: "link_fans_trial_subscribers", source: "pull", writer: "services/sync/ofapi-fan-identities.ts" },
 
   // ── the OFAPI webhook plane (vendor-named events) ────────────────────────
   { kind: "posts.liked", source: "webhook", writer: "services/ofapi-webhook-capture.ts" },
@@ -496,6 +512,13 @@ export const RAW_ONLY_OBSERVATION_KINDS: readonly RawOnlyObservationKind[] = [
       + "no durable fact of its own beyond the identity the replay family already mints.",
   },
   {
+    kind: "account_lookup_public",
+    justification:
+      "Whether a fan's account answers a session-less lookup; the reader that asked writes "
+      + "its verdict itself (arena plan §7). Page-less, so no family can mint events from it: "
+      + "domain_events require an account.",
+  },
+  {
     kind: "earnings_accounts",
     justification:
       "Payout-account identifiers. Captured for completeness, never projected — and "
@@ -524,6 +547,37 @@ export const RAW_ONLY_OBSERVATION_KINDS: readonly RawOnlyObservationKind[] = [
   {
     kind: "link_stats_trial",
     justification: "The second half of the BL-C3 pair — same lane, same reasoning.",
+  },
+  {
+    kind: "link_lists_tracking_live",
+    justification:
+      "The live tracking-link list the fan-identities walk reads to find its targets. "
+      + "Link counters are projected from the stored lists (link_stats_*); this body is "
+      + "kept so a walk's targets can be replayed, and no family parses it.",
+  },
+  {
+    kind: "link_lists_trial_live",
+    justification:
+      "The live trial-link list of the same walk — same reasoning as link_lists_tracking_live.",
+  },
+  {
+    kind: "link_fans_tracking_subscribers",
+    justification:
+      "One page of one tracking link's subscribers, with the link and offset in the body. "
+      + "The walk writes fans/page_fans directly and keeps no link; the link-to-fan "
+      + "relation is rebuilt from these bodies by a later projection, not a family.",
+  },
+  {
+    kind: "link_fans_tracking_spenders",
+    justification:
+      "One page of one tracking link's spenders, with the vendor's per-fan revenue — "
+      + "same lane and same reasoning as link_fans_tracking_subscribers.",
+  },
+  {
+    kind: "link_fans_trial_subscribers",
+    justification:
+      "One page of one trial link's subscribers — same lane and same reasoning as "
+      + "link_fans_tracking_subscribers.",
   },
   {
     kind: "users.typing",

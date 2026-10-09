@@ -74,10 +74,24 @@ async function readMarketingResources(app: AppContext): Promise<OfapiMarketingRe
   return [...found.entries()].filter(([key])=>!tombstones.has(key)).map(([,resource])=>resource);
 }
 
+/** The worker's minute pass (the collection sweep), never a read. It first
+ * continues the local repair of captured responses: outcome, projection and
+ * credit accounting, each guarded by its own receipt state. Then a dispatch
+ * that never reached capture within two minutes becomes indeterminate — only a
+ * row still `dispatching` moves, so a settled outcome is never overwritten.
+ * Neither step sends anything, and an indeterminate command is never sent
+ * again: dispatch acts only on a `prepared` row. */
+export async function sweepOfapiMarketingIntents(app: AppContext) {
+  const projection = await runOfapiMarketingProjection(app);
+  const interrupted = (await app.db.execute<{ id: string }>(sql`update ofapi_marketing_intents set state='indeterminate',error_code='dispatch_interrupted'
+    where state='dispatching' and dispatched_at<now()-interval '2 minutes' returning id`)).rows.map(row => row.id);
+  return { ...projection, interrupted };
+}
+
+/** A read: it writes nothing. The dashboard polls it every 15 s, and each poll
+ * used to run the projection and the stranded-dispatch update; both now run in
+ * sweepOfapiMarketingIntents. */
 export async function getOfapiMarketingDashboard(app: AppContext) {
-  await runOfapiMarketingProjection(app);
-  await app.db.execute(sql`update ofapi_marketing_intents set state='indeterminate',error_code='dispatch_interrupted'
-    where state='dispatching' and dispatched_at<now()-interval '2 minutes'`);
   const rows = (await app.db.execute<NonNullable<Awaited<ReturnType<typeof intentById>>>>(sql`select * from ofapi_marketing_intents order by created_at desc limit 50`)).rows;
   const snapshots = (await app.db.execute<{page_id: number; operation: string; pathname: string; query:Record<string,string>; observed_at: Date; coverage: unknown; items: unknown[]}>(sql`select page_id,operation,pathname,query,observed_at,coverage,items from ofapi_read_snapshots where category in ('smart_links','tracking_links') order by observed_at desc,id desc limit 100`)).rows;
   const analytics = snapshots.flatMap(s => {

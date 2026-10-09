@@ -64,9 +64,10 @@ describe("resetIntegrationDatabase", () => {
     const afterDelete = await snapshot();
 
     expect(afterDelete).toEqual(afterTruncate);
-    // …and that state is: empty, except the reference data and the two
+    // …and that state is: empty, except the reference data and the three
     // fixture singletons the reset reseeds.
     expect(afterDelete.tables.filter((table) => table.rows > 0).map((table) => table.name)).toEqual([
+      "fansly_public_lookup_state",
       "ofapi_collection_state",
       "ofapi_storage_health_state",
       "platforms",

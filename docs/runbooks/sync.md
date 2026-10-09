@@ -370,6 +370,7 @@ their clean window (`routes`) and the open latches (`openLatches`), and the glob
 | | `planned_stale` | a poll not served within its SLO (else 3 periods) | `sync why` on the key |
 | | `transactions_ledger_incomplete` | the newest finished rescan proved the ledger short of Fansly's lifetime total | the owner's backfill: `sync work enqueue --resource transactions.backfill` |
 | 5 `process` (global) | `heartbeat_silent`, `stalled` | no `sync` heartbeat for 2 minutes while a page is in the engine; or the stall watchdog ended the process | [Watchdog restarts](#watchdog-restarts-shutdown-and-deploys) |
+| `public_lookup` (global) | `rate_limited`, `auth_refused`, `network`, `off_contract`, `indeterminate` | the session-less public account reader stopped on its first failure (or an attempt whose outcome nobody recorded); it stays open until the owner resumes the reader | [The public account reader](#the-public-account-reader) |
 
 Alert 1 stays 10 minutes after its hold ends ("hold cleared and 10 minutes clean"). A pause of the whole page and a
 page hold explain waiting work: no `urgent_waiting` and no `planned_stale` for it, and no `request_stalled` under a
@@ -543,10 +544,9 @@ is multi-fan.
 ## Excluded chats
 
 A chat can carry `page_dm_threads.metadata.messageSyncExcludedReason`: `partner_missing_from_aggregation_accounts`
-(the conversation list assigns it) or `partner_unresolvable_from_account_lookup` (`fan-profiles.probe` assigns it
-when the account lookup resolves no partner). The engine reads no messages of an excluded chat; the socket still
-shows its new messages, and a history request for its fan is refused `excluded`. Whether such chats load at all is
-asked on a live page:
+(the conversation list assigns it). The engine reads no messages of an excluded chat; the socket still shows its new
+messages, and a history request for its fan is refused `excluded`. Whether such chats load at all is asked on a live
+page:
 
 ```sh
 pnpm cli sync excluded probe --page lora-1 --sample 20
@@ -569,6 +569,25 @@ pnpm cli sync excluded unlift --page lora-1 --reason partner_missing_from_aggreg
   chats, 80 % or more served and no page-level error. The page's bound chats lose the reason and sync like any chat:
   new heads are read, history only by request. The lift is per page.
 - `unlift` applies the reason again; the next conversation-list pass marks the chats.
+
+`partner_unresolvable_from_account_lookup` is retired (arena "vanished chat", R4): an account lookup that resolves no
+partner is the page's own evidence (the fan blocked that page, or a transient miss), so `fan-profiles.probe` excludes
+no chat and the conversation list neither assigns the reason nor keeps it on a chat it writes. The migration
+`*_retire_dm_unresolvable_exclusion.sql` lifted it on every page (`lifted_dm_exclusions`, so an older image — still
+running while the api migrates, or rolled back to — keeps it on no bound chat and assigns it from no probe) and took it
+off every thread (production: 17), under the erasure execution lock and the page locks the actor's own transactions
+take. Those chats are read by ordinary demand only (a newer list head when the list next lists the chat, a socket
+message, a history request). A chat Fansly stops serving is the next section's. The levers above still accept the
+reason, for rows and recorded probes written before; `lift` of it is a no-op, and `unlift` changes nothing in this
+release but leaves an older image free to apply the old rule on that page again — keep the lift. To check (read-only;
+both 0):
+
+```sql
+select (select count(*) from page_dm_threads
+         where metadata ->> 'messageSyncExcludedReason' = 'partner_unresolvable_from_account_lookup') as chats,
+       (select count(*) from sync_pages
+         where not ('partner_unresolvable_from_account_lookup' = any(lifted_dm_exclusions))) as pages_not_lifted;
+```
 
 ## A chat Fansly does not serve
 
@@ -603,7 +622,10 @@ reflect unavailable chats.
 Where it is counted: `sync page status` (`chatsUnavailable`), `sync alerts status` (per page `chats`: `unavailable`,
 `refusedRecently` — the chats that opened an episode within the `chats_refused` window — and
 `unconfirmedWithoutThread`), the «Синк» tab (the «Сообщения чатов» block: «Чатов, которые Fansly не отдаёт: N»), the
-golden signal `sync_chats_unavailable`.
+golden signal `sync_chats_unavailable`. An agent reads one chat's open episode with `hub thread-availability`
+(`agentThreadAvailability`, `read:messages`; no evidence ids; `cause` from the partner's public check — [The public
+account reader](#the-public-account-reader)): null there means no open episode is recorded, not that Fansly serves the
+chat.
 
 ```sh
 pnpm cli sync chats unavailable --page lora-1
@@ -670,6 +692,83 @@ select p.label, count(distinct e.thread_id) as chats, min(e.opened_at) as first_
 summaries: a new socket message of an established chat opens `message_unconfirmed` after 15 minutes (until the
 parity window defers it), the head row the message opens inherits the vendor's block and shows "Needs attention · 1
 blocked by Fansly" again, and there is no `chats_refused`. No data changes either way.
+
+## The public account reader
+
+Whether a fan's account still exists is asked **without any session** (arena "vanished chat" R5, owner decision Р1):
+the way a logged-out browser asks, `GET /account?ids=…` with no authorization, no session or client id, no client
+check and no cookie. A fan who blocked a page is still found that way; a deleted account is not. No page's session
+and no page's proxy is ever used for it: the request is built by the session-less builder alone (a spec that carries
+a session is refused before anything is built) and leaves through the reader's **own egress** (`fansly_public`):
+one proxy that the owner configures and no page holds, letting through Fansly's API host only. Without it the
+reader sends nothing.
+
+The proxy's address and secret live in 1Password, never in the repository or this runbook. Set it from there; the
+password is stored encrypted (as a page's proxy is) and never printed; a proxy that a page uses (the same address
+and user) is refused. Setting, showing or removing it sends nothing.
+
+```sh
+pnpm cli sync public-lookup proxy show
+pnpm cli sync public-lookup proxy set --proxy-url http://proxy.example:8080 --proxy-username user --proxy-password-stdin --note 'the public reader proxy from 1Password'
+pnpm cli sync public-lookup proxy remove --note 'proxy rotated'
+```
+
+`--proxy-password-stdin` reads the password from stdin (`op read 'op://…' | …`); `--proxy-password-env NAME` and
+`--proxy-password-file FILE` are the alternatives. Each change is audited (`admin.fansly_public_egress_set`,
+`admin.fansly_public_egress_remove`: the masked route, never the password).
+
+**The reader** runs in the `sync` process and is **off** until the owner turns it on (`fanslyPublicLookupEnabled`, a
+live setting: no restart). It asks, in this order and each fan once however many pages name it: the owner's one-off
+re-check of the legacy deleted marks (owner decision Р2 (а), queued by `recheck-marks`: 1 207 marks ≈ 13 requests),
+the partners of chats Fansly stopped serving (established episodes) and the fans a page's lookup missed — those two
+when never checked or checked over 7 days ago. Up to `fanslyPublicLookupBatchSize` ids a request (100 by default),
+at most 1 request a minute and 50 a day, and never sooner than the page pause S × (1 + u) after its previous one; no
+page's budget is used. What it writes: `fans.public_checked_at` and `public_found`; a found account loses its
+deleted mark, a missing one keeps it. The chat's banner and `hub thread-availability` then say «вероятно ЧС»
+(`probably_blocked`: found) or «вероятно удалён» (`probably_deleted`: not found); unchecked stays `unchecked`.
+
+```sh
+pnpm cli sync public-lookup status
+pnpm cli sync public-lookup queue --limit 20
+pnpm cli sync public-lookup recheck-marks --note 'owner decision R2 (a): recheck the legacy deleted marks'
+pnpm cli sync public-lookup enable --note 'proxy set, start the public reader'
+pnpm cli sync public-lookup disable --note 'pause the public reader'
+pnpm cli sync public-lookup resume --note 'checked the proxy and the stop reason'
+```
+
+- `status` and `queue` are read-only: the switch, the proxy (masked), a stop and its Retry-After, the requests of the
+  last 24 hours, the demand by reason, the re-check's progress («снято / осталось»: found and taken off, not found
+  and kept, marks remaining) and what the next pass does.
+- `recheck-marks` only enqueues (audited `admin.fansly_public_lookup_recheck_marks`, counts only); the reader asks in
+  its own pace. `enable` / `disable` write the live setting through the console's path (`admin.config_update`).
+- **A stop.** The first 429, 401/403, network failure or unexpected answer stops the reader and opens the incident
+  «Fansly public account reader stopped» (`fansly_sync_engine` / `public_lookup`, no page; retried every pass until
+  it is confirmed); on the very first batch it says so — then the public lookup itself is in question, decide before
+  resuming. So does an attempt whose outcome nobody recorded (`indeterminate`: its process died mid-request) — it
+  may have reached Fansly and is never sent again on a guess. An attempt whose answer is journaled but not yet
+  applied (a failed write, a restart) is settled from the journal on the next pass, before any new request. Nothing about any fan changes on
+  a failure, and the reader never falls back to a page's session or proxy. Read `status`, the journal below and the
+  raw answer, then `resume` (audited `admin.fansly_public_lookup_resume`; it resolves the incident). A Retry-After
+  still ahead is waited for after a resume.
+
+The reader's requests of the last day and their outcomes:
+
+```sql
+select l.captured_at, l.sent_at, l.completed_at, l.outcome, l.http_status, l.operation
+  from fansly_send_log l
+ where l.page_id is null and l.source = 'public_lookup'
+   and l.captured_at > now() - interval '24 hours'
+ order by l.captured_at desc;
+```
+
+Its state (a stop and whether its incident is confirmed, the Retry-After it honours, an attempt not settled yet, its
+first and latest answers):
+
+```sql
+select stopped_at, stop_reason, stop_http_status, stop_detail, stop_first_batch, stop_incident_at, retry_not_before,
+       pending_since, first_answer_at, last_answer_at, resumed_at
+  from fansly_public_lookup_state;
+```
 
 ## Onboarding a page
 

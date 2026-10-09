@@ -64,14 +64,15 @@ const handlers = { profile_notifications: { plan: () => [{ operation: "ofapi_rea
   pathname: "/acct_test/fans/expired", query: { limit: "20", offset: "0" } }] } };
 
 describe("owner finishes an incomplete scheduled OFAPI read", () => {
-  it.each(["captured404", "indeterminate"] as const)("preserves partial data and %s charges, admits one CAS action, and waits for the next interval", async failure => {
+  // A lost response or a captured 404 ends a scheduled run failed on its own;
+  // what still parks and needs this action is authorization or a rejected contract.
+  it.each(["captured401", "rejected_contract"] as const)("preserves partial data and %s charges, admits one CAS action, and waits for the next interval", async failure => {
     const { id, at } = await scheduled();
     const fetch = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ data: { list: [{ id: "55" }], hasMore: true, nextOffset: 20 }, _meta: { _credits: { used: 1, balance: 9999 } } })))
-      .mockImplementationOnce(async () => {
-        if (failure === "indeterminate") throw new Error("connection reset after dispatch");
-        return new Response(JSON.stringify({ error: "not found", _meta: { _credits: { used: 1, balance: 9998 } } }), { status: 404 });
-      });
+      .mockImplementationOnce(async () => failure === "rejected_contract"
+        ? new Response(JSON.stringify({ data: { list: "invalid" }, _meta: { _credits: { used: 1, balance: 9998 } } }))
+        : new Response(JSON.stringify({ error: "unauthorized", _meta: { _credits: { used: 1, balance: 9998 } } }), { status: 401 }));
     vi.stubGlobal("fetch", fetch);
     expect(await runOfapiCollectionJob(app, id, handlers)).toMatchObject({ state: "paused" });
     const before = (await db.pool.query("select * from ofapi_collection_jobs where id=$1", [id])).rows[0];

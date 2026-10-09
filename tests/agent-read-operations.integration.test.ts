@@ -1809,16 +1809,64 @@ describe("[sync-critical] agent read plane operations", () => {
         observationId: 105,
         dedupKey: "sub:started:444:2026-03-10T00:00:00.000Z",
       },
+      // OnlyFans sends the top-fan award under the subscription notification.
+      // It is no subscription: stored as captured, never a row, whichever of
+      // the two event types carries it.
+      {
+        type: "subscription.started",
+        occurredAt: new Date("2026-03-05T00:00:00Z"),
+        fanIdentityRef: "111",
+        data: { subType: "customer_award_for_model_top" },
+        schemaVersion: 1,
+        observationId: 106,
+        dedupKey: "sub:started:111:2026-03-05T00:00:00.000Z",
+      },
+      {
+        type: "subscription.renewed",
+        occurredAt: new Date("2026-03-06T00:00:00Z"),
+        fanIdentityRef: "222",
+        data: { subType: "customer_award_for_model_top" },
+        schemaVersion: 1,
+        observationId: 107,
+        dedupKey: "sub:renewed:222:2026-03-06T00:00:00.000Z",
+      },
+      // An event with no subType is not on the list of what is left out.
+      {
+        type: "subscription.renewed",
+        occurredAt: new Date("2026-03-07T00:00:00Z"),
+        fanIdentityRef: "222",
+        data: {},
+        schemaVersion: 1,
+        observationId: 108,
+        dedupKey: "sub:renewed:222:2026-03-07T00:00:00.000Z",
+      },
+      // The page's oldest stored event of this lane is an award. It is no row,
+      // but it is a stored fact: the capture floor is its time.
+      {
+        type: "subscription.started",
+        occurredAt: new Date("2026-02-20T00:00:00Z"),
+        fanIdentityRef: "111",
+        data: { subType: "customer_award_for_model_top" },
+        schemaVersion: 1,
+        observationId: 109,
+        dedupKey: "sub:started:111:2026-02-20T00:00:00.000Z",
+      },
     ]);
 
     const response = await agentPost(
       "/api/v1/agent/pages/lora-vip-of/datasets/subscription_events/query",
-      { from: "2026-03-01T00:00:00Z", to: "2026-03-10T00:00:00Z" },
+      { from: "2026-02-01T00:00:00Z", to: "2026-03-10T00:00:00Z" },
     );
     expect(response.statusCode, response.body).toBe(200);
     const body = response.json();
     expect(body.items.map((item: { fields: Record<string, unknown> }) => item.fields))
       .toEqual([
+        {
+          occurredAt: "2026-03-07T00:00:00.000Z",
+          fanId: "222",
+          phase: "renewed",
+          subType: null,
+        },
         {
           occurredAt: "2026-03-04T00:00:00.000Z",
           fanId: null,
@@ -1844,6 +1892,11 @@ describe("[sync-critical] agent read plane operations", () => {
       plane: "domain_events",
       state: "read",
     }));
+    expect(body.capture.planes.find((plane: { plane: string }) =>
+      plane.plane === "domain_events").captureFloor).toEqual({
+      at: "2026-02-20T00:00:00.000Z",
+      kind: "oldest_stored_row",
+    });
     expect(body.capture.planes).toContainEqual(expect.objectContaining({
       plane: "fans",
       state: "read",
@@ -1856,6 +1909,25 @@ describe("[sync-critical] agent read plane operations", () => {
       plane: "observations",
       state: "not_applicable",
     }));
+
+    // A filter naming the award's own subType does not reach it either.
+    const awards = await agentPost(
+      "/api/v1/agent/pages/lora-vip-of/datasets/subscription_events/query",
+      {
+        from: "2026-02-01T00:00:00Z",
+        to: "2026-03-10T00:00:00Z",
+        filters: [{ field: "subType", op: "eq", value: "customer_award_for_model_top" }],
+      },
+    );
+    expect(awards.statusCode, awards.body).toBe(200);
+    expect(awards.json().items).toEqual([]);
+    // The dataset is a read: the three award events are still stored.
+    const storedAwards = await testDb!.pool.query(
+      `select count(*)::int as n from domain_events
+       where account_id = $1 and data ->> 'subType' = 'customer_award_for_model_top'`,
+      [page.id],
+    );
+    expect(storedAwards.rows[0].n).toBe(3);
 
     // Fan erasure removes the identity rows. The immutable event may remain,
     // but the read plane must immediately stop exposing that fan id.

@@ -32,7 +32,13 @@ import {
   agentThreadMessagesQuerySchema,
   routeSchemas,
 } from "@agency_hub_core/contracts";
-import { AGENT_DATASET_SQL } from "@agency_hub_core/db";
+import {
+  AGENT_DATASET_SQL,
+  CLIENT_AUDIENCE_NEW_IGNORED_SUB_TYPES,
+  linkStatRunUsableResultSql,
+} from "@agency_hub_core/db";
+import { sql } from "../packages/db/node_modules/drizzle-orm/index.js";
+import { PgDialect } from "../packages/db/node_modules/drizzle-orm/pg-core/index.js";
 
 // Agent Read Plane slice A, contract gates. Every assertion here corresponds to a
 // property the design pays for elsewhere: the vocabulary is DERIVED (so a drift
@@ -47,6 +53,9 @@ const AGENT_OPERATIONS = [
   "agentPersonTimeline",
   "agentThreads",
   "agentThreadMessages",
+  // Whether Fansly stopped serving one chat to its page (arena "vanished
+  // chat", plan §5): page-scoped like #6, database only.
+  "agentThreadAvailability",
   "agentSearchMessages",
   "agentCoverage",
   "agentObservations",
@@ -109,6 +118,7 @@ describe("agent read plane: the operation surface", () => {
       "agentHistoryRequestCreate",
       "agentHydrationRequestCreate",
       "agentSyncWhy",
+      "agentThreadAvailability",
       "agentThreadMessages",
     ]);
   });
@@ -151,6 +161,7 @@ describe("agent read plane: the operation surface", () => {
     // The path-addressed ones DO declare it.
     for (const key of [
       "agentThreadMessages",
+      "agentThreadAvailability",
       "agentDatasetQuery",
       "agentHistoryRequestCreate",
       "agentHistoryRequestGet",
@@ -467,6 +478,20 @@ describe("agent read plane: dataset registry <-> SQL mapping, both directions", 
     expect(fields.get("lastObservedAt")?.filterable).toBe(true);
   });
 
+  it("subscription events leave out what is no subscription, by the hub's one list of such subTypes", () => {
+    // The client's "new subscribers" list and this dataset must not disagree on
+    // whether a top-fan award is a subscription, so the dataset's SQL is built
+    // from the list the client list reads. Eligibility keeps the award out of
+    // rows without taking it out of the capture floor.
+    const mapping = AGENT_DATASET_SQL.subscription_events!;
+    expect(mapping.eligibilityColumn).toBe("k_eligible");
+    expect(mapping.source).toContain("as k_eligible");
+    expect(CLIENT_AUDIENCE_NEW_IGNORED_SUB_TYPES).toContain("customer_award_for_model_top");
+    for (const subType of CLIENT_AUDIENCE_NEW_IGNORED_SUB_TYPES) {
+      expect(mapping.source, subType).toContain(`'${subType}'`);
+    }
+  });
+
   it("every mapped column is exposed by its own source projection", () => {
     for (const dataset of AGENT_DATASET_NAMES) {
       const mapping = AGENT_DATASET_SQL[dataset]!;
@@ -517,6 +542,25 @@ describe("agent read plane: dataset registry <-> SQL mapping, both directions", 
     // And `sync_streams` keeps its honest emptiness — this test must never be
     // "made to pass" by giving it a plane it does not read.
     expect(AGENT_DATASET_SQL.sync_streams!.readPlanes).toEqual([]);
+  });
+
+  it("the link series serves only usable results and names its planes and floors", () => {
+    const snapshots = AGENT_DATASET_SQL.campaign_snapshots!;
+    const runs = AGENT_DATASET_SQL.campaign_runs!;
+    const bindings = AGENT_DATASET_SQL.campaign_bindings!;
+    // ONE predicate decides what a usable result of a window is (П9.1): the
+    // snapshots are filtered by it and the runs report it, both rendered from
+    // the repository's own definition rather than restated.
+    const usable = new PgDialect().sqlToQuery(linkStatRunUsableResultSql(sql.raw("r"))).sql;
+    expect(snapshots.source).toContain(`where ${usable}`);
+    expect(runs.source).toContain(`(${usable}) as f_usable_result`);
+    // The series' floor is its first stored read; the bindings are agency
+    // configuration and claim no capture floor at all.
+    expect(snapshots.captureFloorPlane).toBe("page_link_stat_snapshots");
+    expect(snapshots.readPlanes).toEqual(["page_link_stat_snapshots", "page_link_stat_runs"]);
+    expect(runs.captureFloorPlane).toBe("page_link_stat_runs");
+    expect(bindings.readPlanes).toEqual(["traffic_link_bindings", "traffic_channel_contractors"]);
+    expect(bindings.captureFloorPlane).toBeUndefined();
   });
 
   it("the scope-pairing rule: a purchase-disclosing dataset needs BOTH capabilities", () => {

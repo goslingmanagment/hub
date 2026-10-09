@@ -290,6 +290,11 @@ export async function resetIntegrationDatabase(
   await pool.query(`do $$ begin if to_regclass('ofapi_collection_state') is not null then
     insert into ofapi_collection_state(id) values(1) on conflict(id) do nothing;
   end if; end $$`);
+  // The same for the public account reader's state (arena R5): the runtime
+  // never recreates it — a missing row stops every pass before a request.
+  await pool.query(`do $$ begin if to_regclass('fansly_public_lookup_state') is not null then
+    insert into fansly_public_lookup_state(id) values(1) on conflict(id) do nothing;
+  end if; end $$`);
 }
 
 export async function seedFanslyPage(
