@@ -9,6 +9,7 @@ import { ofapiVendorRouteSchemas } from "./routes-ofapi-vendor.ts";
 import { ofapiReadCollectionsRouteSchemas } from "./routes-ofapi-read-collections.ts";
 import { ofapiExportRouteSchemas } from "./routes-ofapi-exports.ts";
 import { ofapiCollectionRouteSchemas } from "./routes-ofapi-collection.ts";
+import { ofLinksRouteSchemas } from "./routes-of-links.ts";
 import {
   PERIOD_OPTIONS,
   SPENDER_PERIOD_OPTIONS,
@@ -5842,6 +5843,7 @@ const baseRouteSchemas = {
   ...ofapiMediaRouteSchemas,
   ...ofapiMediaImageRouteSchemas,
   ...ofapiCollectionRouteSchemas,
+  ...ofLinksRouteSchemas,
   health: {
     auth: { kind: "public" },
     tags: ["system"],

@@ -209,6 +209,10 @@ export * from "./repositories/voice-profiles.ts";
 export * from "./repositories/ofapi-bindings.ts";
 export * from "./repositories/traffic-bindings.ts";
 export * from "./repositories/link-fans.ts";
+// «Ссылки OnlyFans» reads (traffic PR 12): the series, its collection state and
+// the bindings; the delta arithmetic over them is pure.
+export * from "./repositories/link-stats-read.ts";
+export * from "./repositories/link-stats-deltas.ts";
 
 export * from "./repositories/ofapi-vendor-usage.ts";
 export * from "./repositories/ofapi-collection.ts";
