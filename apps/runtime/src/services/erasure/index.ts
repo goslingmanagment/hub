@@ -1926,6 +1926,12 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     // links; RESTRICT FK on pages. Channels, contractors and their terms are
     // agency configuration, not the page's, and stay.
     ["traffic_link_bindings", "platform_account_id"],
+    // Link ↔ fan (0260): periods before the fans they belong to, those before
+    // the walks both reference, then the journal cursor. RESTRICT FKs on pages.
+    ["page_link_fan_periods", "platform_account_id"],
+    ["page_link_fans", "platform_account_id"],
+    ["page_link_fan_walks", "platform_account_id"],
+    ["page_link_fan_journal_cursors", "platform_account_id"],
     ["fan_spend_daily", "platform_account_id"],
     ["fan_spend_lifetime", "platform_account_id"],
     ["fan_notes", "platform_account_id"],

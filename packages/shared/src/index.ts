@@ -33,6 +33,7 @@ export * from "./spender-retention.ts";
 export * from "./spender-stats.ts";
 export * from "./time.ts";
 export * from "./traffic-bindings.ts";
+export * from "./link-fans.ts";
 export * from "./unicode.ts";
 export * from "./types.ts";
 

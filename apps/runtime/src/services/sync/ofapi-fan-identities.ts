@@ -12,7 +12,9 @@
 // Every list page the walk buys is journaled before anything reads it: the
 // link lists and each link's subscribers/spenders, with the request that
 // produced them. The page is the only record of which link a fan came from —
-// the fans/page_fans writes below keep the fan and drop the link.
+// the fans/page_fans writes below keep the fan and drop the link; the link ↔
+// fan projection (ofapi-link-fans-projection.ts) is built from the journaled
+// pages, never from what the walk holds in memory.
 
 import {
   getCheckpoint,
@@ -20,6 +22,8 @@ import {
   upsertFanPages,
   upsertFans,
 } from "@agency_hub_core/db";
+
+import { sanitizeError } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 import { idToString } from "../ofapi-payloads.ts";
@@ -34,6 +38,7 @@ import {
   type OfapiStreamChunkResult,
 } from "./ofapi-dm-sync.ts";
 import type { SyncRunTelemetry } from "./observability.ts";
+import { projectLinkFanJournal } from "../ofapi-link-fans-projection.ts";
 import { persistRawPayload, retentionDate } from "./shared.ts";
 
 const LINKS_PAGE_LIMIT = 100;
@@ -41,6 +46,10 @@ const USERS_PAGE_LIMIT = 100;
 const DEFAULT_MAX_REQUESTS_PER_RUN = 25;
 const DEFAULT_DAILY_CREDIT_BUDGET = 300;
 const OFAPI_LINK_FANS_MAPPER_VERSION = "ofapi-link-fans-v1";
+// Journal pages the link ↔ fan projection applies per page the walk buys:
+// normally just that page; after a deploy, a rollback or a failed projection
+// the backlog drains this many at a time, oldest first.
+const LINK_FANS_PROJECTION_PAGES_PER_CALL = 25;
 
 // One journal kind per vendor route, registered in observation-kinds.ts. Each
 // kind is a literal under an `endpoint` key because that is the seam
@@ -165,6 +174,10 @@ export interface OfapiFanIdentitiesStats {
   userPages: number;
   upsertedFans: number;
   requestsUsed: number;
+  /** Journal pages the link ↔ fan projection applied in this chunk. */
+  linkFanPagesProjected: number;
+  /** Projection calls that failed; their pages wait in the journal. */
+  linkFanProjectionErrors: number;
 }
 
 type OfapiFanIdentitiesCursorStateV1 = {
@@ -309,6 +322,8 @@ export async function syncOfapiFanIdentities(
     userPages: 0,
     upsertedFans: 0,
     requestsUsed: 0,
+    linkFanPagesProjected: 0,
+    linkFanProjectionErrors: 0,
   };
 
   const checkpoint = await getCheckpoint(app.db, input.pageContext.page.id, "fan_identities");
@@ -454,6 +469,29 @@ export async function syncOfapiFanIdentities(
     stats.upsertedFans += await upsertLinkUsers(app, input.pageContext.page.id, items, kind);
   };
 
+  // The link ↔ fan projection (PR 8) reads the journal, not this page: it
+  // applies the journal pages after its cursor, which is this one unless an
+  // earlier call left some behind. Its failure never fails the walk — the
+  // page bought is already journaled and the next call applies it; failing
+  // the chunk would only buy it again.
+  const projectLinkFans = async () => {
+    try {
+      const projected = await projectLinkFanJournal(app, {
+        pageId: input.pageContext.page.id,
+        maxPages: LINK_FANS_PROJECTION_PAGES_PER_CALL,
+      });
+      stats.linkFanPagesProjected += projected.applied + projected.skipped;
+      if (projected.ruleMismatch) {
+        app.logger.warn({ pageId: input.pageContext.page.id },
+          "link-fans projection of this page was built under another rule; run link-fans:reproject");
+      }
+    } catch (error) {
+      stats.linkFanProjectionErrors += 1;
+      app.logger.error({ pageId: input.pageContext.page.id, err: sanitizeError(error) },
+        "link-fans projection failed; its journal pages wait for the next call");
+    }
+  };
+
   const targets: LinkUsersTarget[] = [];
   for (const linkId of trackingLinkIds) {
     for (const kind of ["subscribers", "spenders"] as const) {
@@ -531,6 +569,7 @@ export async function syncOfapiFanIdentities(
         page,
       );
       await consumeUsers(page.items, target.list);
+      await projectLinkFans();
       const nextOffset = resolveOfapiListNextOffset(page, {
         pathname: target.pathname, offset, limit: pageLimit, baseUrl: app.config?.ofapiBaseUrl,
       });

@@ -536,7 +536,8 @@ export const RAW_ONLY_OBSERVATION_KINDS: readonly RawOnlyObservationKind[] = [
     justification:
       "One page of one tracking link's subscribers, with the link and offset in the body. "
       + "The walk writes fans/page_fans directly and keeps no link; the link-to-fan "
-      + "relation is rebuilt from these bodies by a later projection, not a family.",
+      + "relation is projected from these bodies (the sync_raw_payloads copy, by "
+      + "services/ofapi-link-fans-projection.ts into page_link_fan_*), not by a family.",
   },
   {
     kind: "link_fans_tracking_spenders",
