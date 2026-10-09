@@ -82,9 +82,15 @@ it.each(["body", "headers", "size"] as const)("retains safe %s failure diagnosti
   const exposed = JSON.stringify({ receipt, warnings: warning.mock.calls });
   for (const secret of [privateUrl, "private-error-code", "private-error-message", "secret-provider-key", "private-proxy.invalid", "private-response-body", "private-header-value", "acct_private", "/me"])
     expect(exposed).not.toContain(secret);
-  expect((await db.pool.query("select state,credit_state from ofapi_request_attempts where operation='ofapi_read_me'")).rows).toEqual([{ state: "indeterminate", credit_state: "indeterminate" }]);
-  // Diagnostics do not open a retry path or release the original allowance.
+  // The uncertain safe read is settled as billed: counted as spent, holding no reserve.
+  expect((await db.pool.query("select state,credit_state,settled_credits,certainty_resolution from ofapi_request_attempts where operation='ofapi_read_me'")).rows)
+    .toEqual([{ state: "indeterminate", credit_state: "settled", settled_credits: 1, certainty_resolution: "safe_read_retry_assumed_billed" }]);
+  expect((await db.pool.query("select governed_unsettled_credits from ofapi_credit_state")).rows[0].governed_unsettled_credits).toBe(0);
+  // Diagnostics do not open a retry path or release the original allowance:
+  // the step's one call is spent, before and after its capture job's retry time.
   await expect(captureOfapiCollectionRead(app, input)).rejects.toThrow("Collection capture unavailable");
+  await db.pool.query("update ofapi_capture_jobs set next_attempt_at=now()-interval '1 second'");
+  await expect(captureOfapiCollectionRead(app, input)).rejects.toThrow("Capture admission: job_cap");
   expect(fetch).toHaveBeenCalledTimes(1);
   expect((await db.pool.query("select used_calls,used_credits::int,max_calls,max_credits::int from ofapi_collection_jobs where id=$1", [job.id])).rows[0]).toEqual({ used_calls: 1, used_credits: 1, max_calls: 1, max_credits: 1 });
   expect((await db.pool.query("select count(*)::int count from observations where source='ofapi_capture'")).rows[0].count).toBe(0);

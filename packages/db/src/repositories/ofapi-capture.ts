@@ -1968,6 +1968,81 @@ export async function markOfapiAttemptIndeterminate(
 }
 
 /**
+ * The safe-read law applied after the fact to one lost collection read: what
+ * `markOfapiAttemptIndeterminate` does at failure time when given
+ * `retrySafeReadAt`, for an attempt an older runtime left unresolved. The
+ * settlement ledger row already carries the reserve as an estimated charge and
+ * every spend counter already includes it, so only the certainty changes: the
+ * attempt settles as billed and its reserve leaves the unsettled pool, once.
+ *
+ * Narrow on purpose. It acts only on an unresolved indeterminate safe read
+ * owned by a `collection_read` capture job and reports `false` for anything
+ * else — an interactive request, a stateful attempt, a read of another lane,
+ * an attempt already resolved. A collection step's job allows one call, so
+ * moving it out of `blocked / indeterminate` asks the vendor nothing more.
+ */
+export async function settleLostOfapiCollectionReadAsBilled(
+  db: Database,
+  input: { attemptId: string; now?: Date },
+) {
+  const now = input.now ?? new Date();
+  return db.transaction(async (tx) => {
+    const database = tx as unknown as Database;
+    await database.execute(sql`select id from ofapi_credit_state where id = 1 for update`);
+    const attempt = await lockAttempt(database, input.attemptId);
+    if (
+      !attempt ||
+      attempt.state !== "indeterminate" ||
+      attempt.credit_state !== "indeterminate" ||
+      attempt.request_semantics !== "safe_read" ||
+      attempt.owner_kind !== "capture_job"
+    ) {
+      return false;
+    }
+    const job = await database.execute<{ kind: string }>(sql`
+      select kind from ofapi_capture_jobs where id = ${attempt.owner_id}::uuid for update
+    `);
+    if (job.rows[0]?.kind !== "collection_read") {
+      return false;
+    }
+    const reservedCredits = asNumber(attempt.reserved_credits, "reserved_credits");
+    await database.execute(sql`
+      update ofapi_request_attempts
+      set credit_state = 'settled',
+          settled_credits = ${reservedCredits},
+          credit_estimated = true,
+          certainty_resolved_at = ${now},
+          certainty_resolution = 'safe_read_retry_assumed_billed',
+          updated_at = ${now}
+      where id = ${input.attemptId}::uuid
+        and state = 'indeterminate'
+        and certainty_resolved_at is null
+    `);
+    await database.execute(sql`
+      update ofapi_credit_state
+      set governed_unsettled_credits = greatest(
+            0,
+            governed_unsettled_credits - ${reservedCredits}
+          ),
+          updated_at = ${now}
+      where id = 1
+    `);
+    await database.execute(sql`
+      update ofapi_capture_jobs
+      set state = 'retry_wait',
+          next_attempt_at = ${now},
+          reason_code = 'indeterminate_safe_read_retry',
+          row_version = row_version + 1,
+          updated_at = ${now}
+      where id = ${attempt.owner_id}::uuid
+        and state = 'blocked'
+        and reason_code = 'indeterminate'
+    `);
+    return true;
+  });
+}
+
+/**
  * Planner-side crash recovery. A lease that expired before dispatch is safe
  * to release and retry; one that crossed the dispatch CAS is financially
  * uncertain and is parked for reconciliation. No recovery path performs a

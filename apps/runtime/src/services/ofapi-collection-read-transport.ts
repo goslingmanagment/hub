@@ -41,6 +41,20 @@ export class OfapiCollectionAdmissionError extends Error {
   }
 }
 
+/**
+ * Every collection read is a safe GET, so an uncertain dispatch settles the way
+ * the capture plane settles its own safe reads: assumed billed. The reserve
+ * leaves the unsettled pool and every spend counter keeps the charge; left
+ * unresolved, one reserve per failed scheduled run would lower the balance
+ * admission sees, with nothing to release it. The step's capture job allows
+ * one call, so the `retry_wait` it moves to never becomes a second request: a
+ * later lease of the same step is refused at admission as `job_cap`.
+ */
+function assumedBilledSafeRead() {
+  const now = new Date();
+  return { now, retrySafeReadAt: new Date(now.getTime() + 60_000) };
+}
+
 /** Preserve explicitly selected jobs created under the old catalog category.
  * This does not change interactive gateway admission or the DB job's limits. */
 export function matchesOfapiCollectionJobCategory(
@@ -287,6 +301,7 @@ export async function captureOfapiCollectionRead(
           fenceToken: reservation.fenceToken,
           outcome: "transport",
           ...(diagnostics ? { details: diagnostics } : {}),
+          ...assumedBilledSafeRead(),
         });
       }
       throw error;
@@ -318,6 +333,7 @@ export async function captureOfapiCollectionRead(
         fenceToken: reservation.fenceToken,
         outcome: "capture_uncommitted",
         responseObservedAt: raw.receivedAt,
+        ...assumedBilledSafeRead(),
       });
       throw error;
     }

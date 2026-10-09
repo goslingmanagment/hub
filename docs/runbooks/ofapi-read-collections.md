@@ -56,13 +56,14 @@ Nothing is applied by deployment.
 - No template is a stop, not an empty snapshot. OFAPI documents only the
   template object (`data` with an `id`), and the desktop's gateway read of
   this path already refuses anything else. A `data` of `null` or a list stops
-  the run as `contract rejected`; a `4xx` other than `429` stops it with that
-  status. Either way the run parks as `paused` with the raw response retained,
-  and it holds only this category on that page: the next daily read waits.
-  Read the retained response, then use **Завершить неполный проход** (below).
-  If the next run parks the same way, the page has no template the read
-  accepts: turn `account_settings` off for that page and report the response
-  shape. Check the first live capture on each pilot page after the flip.
+  the run as `contract rejected`: it parks as `paused` with the raw response
+  retained and holds only this category on that page, so the next daily read
+  waits. Read the retained response, then use **Завершить неполный проход**
+  (below). A `4xx` other than `401` and `403` ends the run as `failed` with
+  that status and the next daily read asks again (one call a day). If the
+  next run stops the same way, the page has no template the read accepts:
+  turn `account_settings` off for that page and report the response shape.
+  Check the first live capture on each pilot page after the flip.
 - Rollback: an image older than this category does not know
   `account_settings`. Once the owner has turned it on or run it as a one-off,
   the newest collection jobs include `account_settings` runs, and the older
@@ -77,19 +78,34 @@ The owner report is DB-only. Expired fan rows provide contactability, captured s
 
 Agent consumers query `POST /api/v1/agent/pages/{pageLabel}/datasets/ofapi_financial_snapshots/query`. Both `read:datasets` and `read:money` plus the page grant are mandatory. `valueMills` is populated only for normalized monetary values; `rawValue` and `unit=provider_number` preserve otherwise unnamed provider numbers. The dataset's request window filters observation time; the row's `windowFrom/windowTo` identifies the provider aggregation window. Do not add the same snapshot across collection runs.
 
-One physical attempt settles into a raw observation before parsing. The worker recovers captured or completed steps without another request. Canonicalization repairs a missing event from retained raw data, and `projection:rebuild ofapi_read_snapshots` rebuilds the normalized view without vendor egress. Policy/storage/credit denial pauses a one-off job. A scheduled run refused at capture admission (storage gate, credit floor, caps) has dispatched nothing for that step, so it ends as `failed` with `scheduled_run_refused:<reason>` and the next interval starts a fresh window; the minutely sweep closes scheduled runs that an older runtime parked as paused for such a refusal (2026-09-18: a 93% disk had held balances, visitors and both link categories for two weeks). A scheduled run that reaches its job, daily or interval allowance instead ends as `failed` with `scheduled_run_exhausted:<limit>`; its saved cursor and partial coverage remain available. The next configured interval may create a fresh bounded window under current policy, without resuming the exhausted cursor or resetting its spend. Owner pauses still require explicit recovery. A lost network response is uncertain paid work; the existing capture operator tools can reconcile or cancel it. No write command is part of this runner. Local parse failures retain the raw payload and have a bounded local retry count.
+One physical attempt settles into a raw observation before parsing. The worker recovers captured or completed steps without another request. Canonicalization repairs a missing event from retained raw data, and `projection:rebuild ofapi_read_snapshots` rebuilds the normalized view without vendor egress. Policy/storage/credit denial pauses a one-off job. A scheduled run refused at capture admission (storage gate, credit floor, caps) has dispatched nothing for that step, so it ends as `failed` with `scheduled_run_refused:<reason>` and the next interval starts a fresh window; the minutely sweep closes scheduled runs that an older runtime parked as paused for such a refusal (2026-09-18: a 93% disk had held balances, visitors and both link categories for two weeks). A scheduled run that reaches its job, daily or interval allowance instead ends as `failed` with `scheduled_run_exhausted:<limit>`; its saved cursor and partial coverage remain available. The next configured interval may create a fresh bounded window under current policy, without resuming the exhausted cursor or resetting its spend. Owner pauses still require explicit recovery. A lost network response is uncertain paid work: the transport settles the attempt as billed (`safe_read_retry_assumed_billed`), so its reserve leaves the unsettled pool while the charge stays in every budget, and the step is never requested again. No write command is part of this runner. Local parse failures retain the raw payload and have a bounded local retry count.
 
-A scheduled GET with a captured `429` or `500`–`599` response also ends its current
-run as `failed`. These statuses follow the existing OFAPI rate-limit/server-error
-classification (Decision #245); they do not authorize an immediate retry. The
-next configured schedule may start a separate bounded run. The failed run keeps
-its raw response, cursor, caps, consumed calls/credits and response bytes. For an
-older run parked on a captured `503`, owner **Resume** reads that exact response
-locally and finishes the run as failed, even when its call allowance is spent.
-It makes no additional vendor request. One-off jobs remain paused on these
-statuses; a fresh probe requires a separate bounded job. Authentication errors,
-other HTTP statuses, uncertain transport outcomes and parse failures retain their
-existing recovery behavior and never gain a fresh scheduled request this way.
+A scheduled GET with a captured `4xx` or `5xx` response other than `401` and
+`403` also ends its current run as `failed`, and so does one whose response was
+lost after dispatch (no response headers, an unreadable body, a body over the
+size limit). Neither authorizes an immediate retry: the step allows one request
+and it is spent. The next configured schedule may start a separate bounded run
+from the first step under the category's own limits. The failed run keeps its
+raw response, cursor, caps, consumed calls/credits and response bytes. The
+minutely sweep closes scheduled runs that an older runtime parked as paused for
+either outcome (2026-09-08..10-06: ten runs on both OF pages, the oldest held
+its category for a month); it changes only the outer run's state. The same
+sweep then settles as billed every lost read whose run has ended, closed by it
+or finished by the owner, that an older runtime left unresolved: the reserve
+leaves the unsettled pool once, the charge stays in every budget, and the
+step's capture job still has no call left. Reads of other lanes and of runs
+still parked for the owner are not touched. One-off jobs
+remain paused on these outcomes; a fresh probe requires a separate bounded job.
+`401`/`403`, a status outside `4xx`/`5xx`, a policy refusal, a rejected
+contract, a cursor cycle and local failures still park the run for the owner
+and never gain a fresh scheduled request this way. A `404` that names a missing
+account ends its run like any other `404`, and the dead binding then stops the
+next run before any request (`OFAPI binding unavailable`).
+
+A scheduled category that keeps ending `failed` on the same step (a route the
+vendor no longer serves, a response that always times out) spends its calls up
+to that step every interval, inside its daily credit limit, and never reaches
+the steps after it. Turn the category off for that page or fix the catalog entry.
 
 Costs are based on reserved estimates until captured vendor metadata is available. All catalog requests start with a one-credit reservation; vendor prices can vary and the actual response may exceed a remaining cap. Such overage is retained and blocks the next call. These are managed-request ceilings, not a guarantee of the provider invoice: incoming vendor events, external tools and accepted asynchronous operations remain separate. No paid probe ran during development.
 
@@ -108,8 +124,9 @@ Costs are based on reserved estimates until captured vendor metadata is availabl
 Collection step and cursor fingerprints use canonical JSON so a checkpoint's
 Postgres JSONB key ordering cannot create a second paid intent. Reads also adopt
 an older capture slot only when page, account, collection job and the complete
-canonical request target match. A retained unresolved attempt still blocks new
-egress; a different query, account or job cannot borrow its response.
+canonical request target match. A step whose one request ended without a
+captured response still blocks new egress for that step; a different query,
+account or job cannot borrow its response.
 
 If a pre-fix job is paused after spending its full allowance, use the existing
 owner **Resume** action. It now permits local recovery when the current frozen
@@ -132,8 +149,8 @@ timeouts, limits, accounting certainty or retry authorization.
 
 ## Finish an incomplete scheduled read
 
-When a paused periodic GET cannot usefully resume (for example, a retained `404`
-or an uncertain body-read failure), the owner can choose **Завершить неполный
+When a paused periodic GET cannot usefully resume (for example, a retained `401`
+or a rejected response contract), the owner can choose **Завершить неполный
 проход** in Collection. Confirm the page and category. The confirmation explains
 that data, the saved cursor and uncertain charges remain, and the next run follows
 the enabled schedule. The action marks only the outer run `failed`; it does not
