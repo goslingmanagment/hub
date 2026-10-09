@@ -1557,7 +1557,7 @@ describe("OFAPI link-stats series: the empty-cache guard is per OFAPI account", 
       return;
     }
 
-    // What an image older than migration 0252 writes: a finished non-empty
+    // What an image older than migration 0255 writes: a finished non-empty
     // walk with no account on it.
     const page = await seedOfapiPage("legacy-rows-of", "acct_legacy");
     await insertLinkStatRunWithSnapshots(appContext.db, {

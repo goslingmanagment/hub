@@ -1,4 +1,4 @@
--- 0252_page_link_stat_runs_attempts.sql
+-- 0255_page_link_stat_runs_attempts.sql
 --
 -- OnlyFans traffic sources, the link series (plan 2026-10-08, PR 2,
 -- migration A): every attempt to read a page's tracking or trial links is a
@@ -98,7 +98,7 @@ comment on column page_link_stat_runs.status is
 comment on column page_link_stat_runs.reason is
   'Null on a clean complete. partial: comma-separated caveats (binding_changed, inventory_vanished, empty_unverified, all_items_skipped | items_skipped, multi_page). truncated: what stopped the walk. failed: the error text. skipped: page_unmapped, page_auth_dead, ofapi_mapping_changed, ofapi_client_not_configured, window_missed.';
 comment on column page_link_stat_runs.window_at is
-  'The scheduled window the attempt belongs to (UTC). Null on rows older than migration 0252 and on rows written by an image that predates it.';
+  'The scheduled window the attempt belongs to (UTC). Null on rows older than migration 0255 and on rows written by an image that predates it.';
 comment on column page_link_stat_runs.attempt is
   'Ordinal of the row within its (page, link kind, window): 1 for the first attempt.';
 comment on column page_link_stat_runs.ofapi_account_id is

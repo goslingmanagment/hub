@@ -768,7 +768,7 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # writes after a rollback have no window and no account: the new image
   # treats an unknown account as "not this account" (no absence proof from
   # it), which is the cautious reading.
-  "0252_page_link_stat_runs_attempts.sql"
+  "0255_page_link_stat_runs_attempts.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"
