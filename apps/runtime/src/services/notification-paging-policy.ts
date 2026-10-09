@@ -43,6 +43,12 @@ function immediate(recoveryHoldMs = 5 * MINUTE_MS): NotificationPagingPolicy {
   return { openHoldMs: 0, recoveryHoldMs, flap: null };
 }
 
+/** Never pages: the condition is a line in the daily digest's "Open now"
+ * list until it resolves, and its recovery is recorded without a message. */
+function digestOnly(recoveryHoldMs = HOUR_MS): NotificationPagingPolicy {
+  return { openHoldMs: Number.POSITIVE_INFINITY, recoveryHoldMs, flap: null };
+}
+
 function sustained(
   openHoldMs: number,
   recoveryHoldMs: number,
@@ -144,6 +150,12 @@ export function notificationPagingPolicyFor(
     // The binding reconciler repairs a lost mapping within five minutes; a
     // page still unmapped after thirty needs a hand.
     return sustained(30 * MINUTE_MS, 5 * MINUTE_MS, null);
+  }
+  if (kind === "read_gateway_capture" && subKey === "collection_stale") {
+    // Traffic sources plan §2.10: a scheduled collection category no run
+    // completed for two intervals — a page's data ages by days, nothing
+    // breaks today, and the owner decides (raise the cap, switch it off).
+    return digestOnly();
   }
   if (kind === "db_disk_usage" && subKey === "runway_warning") {
     // A 30-day runway that hovers at 29 days flips hourly; the warning is

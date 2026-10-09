@@ -7,6 +7,7 @@ import { toast } from "sonner";
 
 import {
   useAdminOfapiCollection,
+  useAdminOfapiCollectionJobs,
   useAdminOfapiWebhookStatus,
   useOfapiCollectionApply,
   useOfapiCollectionJobCreate,
@@ -17,6 +18,7 @@ import {
   type OfapiCollectionChangeBody,
   type OfapiCollectionJob,
   type OfapiCollectionJobBody,
+  type OfapiCollectionJobStateFilter,
   type OfapiCollectionMode,
   type OfapiCollectionPreview,
   type OfapiCollectionSettings,
@@ -34,6 +36,7 @@ import {
   categoryLabel,
   categoryWhy,
   consumerLabel,
+  JOB_STATE_FILTER_OPTIONS_RU,
   jobStateLabel,
   modeLabel,
   MODE_DESCRIPTIONS_RU,
@@ -63,6 +66,7 @@ import {
   INTERVAL_OPTIONS_MINUTES,
   intervalLabel,
   jobProgress,
+  jobReasonText,
   jobsFor,
   localDateTimeToIso,
   maskWebhookId,
@@ -75,6 +79,7 @@ import {
   scopeLabel,
   scopePageId,
   serializeDraft,
+  staleEntries,
   stopSummary,
   summarizeAudit,
   usageTotals,
@@ -86,6 +91,8 @@ import {
   type CollectionScope,
   type DraftEntry,
   type RowTone,
+  type StaleEntry,
+  CAP_LEVER_FIELD_RU,
 } from "./collectionModel.js";
 
 // Settings › Collection (S-UI, decisions #250/#251). One screen: what the
@@ -416,6 +423,7 @@ export function CollectionTab() {
   });
   const scopePolicies = views.flatMap((view) => view.policies);
   const totals = usageTotals(scopePolicies);
+  const stale = staleEntries(snapshot);
   const blockReason = draftBlockReason(draft);
   const busy = preview.isPending || apply.isPending;
 
@@ -431,6 +439,7 @@ export function CollectionTab() {
           onResume={() => openPausePreview(true)}
         />
       )}
+      {stale.length > 0 && <StaleBanner entries={stale} />}
 
       <div className="flex flex-wrap items-start justify-between gap-4">
         <PageHeading />
@@ -699,6 +708,45 @@ function PausedBanner(props: {
       <button type="button" className={primaryButtonClass} disabled={props.busy} onClick={props.onResume}>
         Возобновить сбор
       </button>
+    </div>
+  );
+}
+
+/** Traffic plan §2.8 п. 3: categories no scheduled run completed for two
+ *  intervals. Same rule as the digest incident `collection_stale`. */
+export function StaleBanner(props: { entries: StaleEntry[] }) {
+  const n = props.entries.length;
+  const outgrows = props.entries.some((entry) => entry.outgrowsRun);
+  const levers = (["calls", "credits"] as const).filter((lever) => props.entries.some((entry) => entry.lever === lever));
+  return (
+    <div role="status" data-testid="collection-stale-banner" className="rounded-xl border border-warning/30 bg-warning/[0.06] px-4 py-3">
+      <p className="text-[13.5px] font-semibold text-amber-700">
+        Сбор по расписанию отстаёт: {n} {ruPlural(n, "категория не завершалась", "категории не завершались", "категорий не завершались")} успешно
+        дольше двух интервалов
+      </p>
+      <ul className="mt-1.5 flex flex-col gap-1 text-[12.5px] leading-relaxed text-text-secondary">
+        {props.entries.map((entry) => (
+          <li key={`${entry.pageId}:${entry.category}`}>
+            <span className="font-semibold text-text-primary">{categoryLabel(entry.category)}</span>
+            {" · "}{entry.pageLabel}{" — "}{entry.cause}
+            <span className="text-text-muted">
+              {" · "}
+              {entry.policy.scheduleHealth.lastCompletedAt
+                ? `последний успешный проход ${utcDateTime(entry.policy.scheduleHealth.lastCompletedAt)}`
+                : "успешных проходов не было"}
+            </span>
+          </li>
+        ))}
+      </ul>
+      {outgrows && (
+        <p className="mt-1.5 text-[12px] leading-relaxed text-text-secondary">
+          Проход начинается каждый интервал и тратит потолок задачи, но до конца списка не доходит.
+          {levers.length > 0 && <>
+            {" "}Поднять потолок: раскройте категорию и увеличьте {levers.map((lever) => CAP_LEVER_FIELD_RU[lever]).join(" или ")}.
+          </>}
+          {" "}Сохранённые настройки сами не меняются.
+        </p>
+      )}
     </div>
   );
 }
@@ -1213,16 +1261,43 @@ export function JobsCard(props: { snapshot: OfapiCollectionSnapshot; scope: Coll
   const resume = useOfapiCollectionJobResume();
   const finish = useOfapiCollectionJobFinishIncomplete();
   const [finishPreview, setFinishPreview] = useState<{ job: OfapiCollectionJob; revision: number } | null>(null);
-  const jobs = jobsFor(props.snapshot, props.scope);
-  if (jobs.length === 0) return null;
+  const [stateFilter, setStateFilter] = useState<NonNullable<OfapiCollectionJobStateFilter> | null>(null);
+  // The snapshot lists every page's jobs, paused first, then the newest, at
+  // most 100. A selected page or state is asked of the server, never cut out
+  // of that list here: an unfinished-state filter returns every match, so any
+  // unfinished job stays reachable for «Продолжить» / «Завершить неполный проход».
+  const pageId = scopePageId(props.scope);
+  const own = stateFilter !== null || pageId !== null;
+  const filtered = useAdminOfapiCollectionJobs(own ? { jobState: stateFilter, pageId } : null);
+  const source = own ? filtered.data : props.snapshot;
+  const jobs = source ? jobsFor(source, props.scope) : [];
+  const total = source?.jobsTotal ?? jobs.length;
+  if (stateFilter === null && jobs.length === 0) return null;
   return (
     <section className={cardClass} aria-labelledby="collection-jobs-heading">
-      <div className="flex items-baseline justify-between gap-3 px-4 pt-3.5">
+      <div className="flex flex-wrap items-baseline justify-between gap-3 px-4 pt-3.5">
         <h3 id="collection-jobs-heading" className={eyebrowClass}>Проходы сбора и разовые задачи</h3>
         {resume.isError && <p role="alert" className="text-[12px] text-red-700">{errorMessage(resume.error, "Не удалось продолжить задачу")}</p>}
-        <span className="text-[12px] text-text-secondary">{jobs.length} {ruPlural(jobs.length, "задача", "задачи", "задач")} · потолки на каждую</span>
+        <div className="flex items-center gap-2.5">
+          <label className="inline-flex items-center gap-1.5 text-[12px] text-text-secondary">
+            <span>Показать</span>
+            <select
+              aria-label="Фильтр задач по состоянию"
+              value={stateFilter ?? ""}
+              onChange={(event) => setStateFilter(event.target.value === "" ? null : event.target.value as NonNullable<OfapiCollectionJobStateFilter>)}
+              className="h-7 rounded-lg border border-border bg-card px-2 text-[12px] text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+            >
+              {JOB_STATE_FILTER_OPTIONS_RU.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+          </label>
+          <span className="text-[12px] text-text-secondary">
+            {own && filtered.isPending ? "загрузка…" : `${total > jobs.length ? `показаны ${jobs.length} из ${total}` : `${jobs.length} ${ruPlural(jobs.length, "задача", "задачи", "задач")}`} · потолки на каждую`}
+          </span>
+        </div>
       </div>
-      <div className="mt-3 overflow-x-auto">
+      {own && filtered.isError && <p role="alert" className="px-4 pt-2 text-[12px] text-red-700">{errorMessage(filtered.error, "Не удалось загрузить задачи")}</p>}
+      {own && !filtered.isPending && jobs.length === 0 && <p className="px-4 py-4 text-[13px] text-text-secondary">Задач в этом состоянии нет.</p>}
+      {jobs.length > 0 && <div className="mt-3 overflow-x-auto">
         <table className="w-full min-w-[760px] border-collapse">
           <thead>
             <tr>
@@ -1240,7 +1315,7 @@ export function JobsCard(props: { snapshot: OfapiCollectionSnapshot; scope: Coll
                 <td className={tdClass}>{scopeLabel(job.pageId, props.snapshot.pages)}</td>
                 <td className={tdClass}>
                   <span className="font-medium text-text-primary">{jobStateLabel(job.state)}</span>
-                  {job.reason && <div className="mt-0.5 text-[11px] text-text-muted">{job.reason}</div>}
+                  {jobReasonText(job) && <div className="mt-0.5 text-[11px] text-text-muted">{jobReasonText(job)}</div>}
                   {job.category === "vault_files" ? <Link className={smallButtonClass} to="/ofapi-media">Открыть загрузку</Link> : ["paused", "blocked", "budget_exhausted"].includes(job.state) && <button type="button" className={smallButtonClass} disabled={resume.isPending || props.snapshot.backgroundPaused} onClick={() => resume.mutate({ id: job.id, expectedRevision: props.snapshot.revision })}>Продолжить с чекпоинта</button>}
                   {job.canFinishIncomplete && <button type="button" className={smallButtonClass} disabled={resume.isPending || finish.isPending} onClick={() => {
                     finish.reset();
@@ -1253,7 +1328,7 @@ export function JobsCard(props: { snapshot: OfapiCollectionSnapshot; scope: Coll
             ))}
           </tbody>
         </table>
-      </div>
+      </div>}
       {finishPreview && <FinishIncompleteRunModal job={finishPreview.job} pageLabel={scopeLabel(finishPreview.job.pageId, props.snapshot.pages)}
         pending={finish.isPending} error={finish.isError ? errorMessage(finish.error, "Не удалось завершить проход") : null}
         onClose={() => { if (!finish.isPending) setFinishPreview(null); }}

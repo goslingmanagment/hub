@@ -18,6 +18,9 @@ export type OfapiCollectionPolicyState = OfapiCollectionPolicy["state"];
 export type OfapiCollectionCatalogEntry = OfapiCollectionSnapshot["catalog"][number];
 export type OfapiCollectionPage = OfapiCollectionSnapshot["pages"][number];
 export type OfapiCollectionJob = OfapiCollectionSnapshot["jobs"][number];
+export type OfapiCollectionScheduleHealth = OfapiCollectionPolicy["scheduleHealth"];
+export type OfapiCollectionRun = NonNullable<OfapiCollectionScheduleHealth["lastRun"]>;
+export type OfapiCollectionJobStateFilter = NonNullable<NonNullable<Parameters<typeof kernel.ofapiCollectionGet>[0]>["query"]>["jobState"];
 export type OfapiCollectionAuditRow = OfapiCollectionSnapshot["audit"][number];
 export type OfapiCollectionApplyResult = Awaited<ReturnType<typeof kernel.ofapiCollectionApply>>;
 export type OfapiCollectionJobCreateResult = Awaited<ReturnType<typeof kernel.ofapiCollectionJobCreate>>;
@@ -28,6 +31,25 @@ export function useAdminOfapiCollection() {
     ...ofapiCollectionQueryOptions(),
     refetchInterval: 15_000,
     placeholderData: (previous) => previous,
+  });
+}
+
+/** The job list asked of the server for one page and/or state, so a job past
+ *  the snapshot's hundred rows stays reachable (an unfinished-state filter
+ *  returns every match). Shares the collection key prefix: every mutation's
+ *  invalidation refreshes it too. */
+export function useAdminOfapiCollectionJobs(input: { jobState: Exclude<OfapiCollectionJobStateFilter, undefined> | null; pageId: number | null } | null) {
+  return useQuery({
+    queryKey: [...OFAPI_COLLECTION_QUERY_KEY, "jobs", input?.jobState ?? null, input?.pageId ?? null],
+    queryFn: () => kernel.ofapiCollectionGet({ query: {
+      ...(input?.jobState ? { jobState: input.jobState } : {}),
+      ...(input?.pageId ? { pageId: input.pageId } : {}),
+    } }),
+    enabled: input !== null,
+    // No placeholder: another page's or state's rows must not stand in while
+    // the selected ones load.
+    refetchInterval: 15_000,
+    meta: { suppressGlobalError: true },
   });
 }
 
