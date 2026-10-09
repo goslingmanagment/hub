@@ -33,6 +33,9 @@ describe("agent read dataset vocabulary", () => {
       "campaign_snapshots",
       "campaign_runs",
       "campaign_bindings",
+      // PR 15: Hub's own money per link, beside OFAPI's.
+      "campaigns",
+      "campaign_money_daily",
       "fan_memberships",
       "dm_threads",
       "subscriptions",
@@ -81,7 +84,7 @@ describe("agent read dataset vocabulary", () => {
       "stories",
       "fan_lists",
       "livestreams",
-      "campaigns",
+      // `campaigns` left for the available list (traffic plan PR 15).
       "polls",
       "chargebacks",
       "blocks",
@@ -224,6 +227,26 @@ describe("agent read dataset vocabulary", () => {
     expect(AGENT_DATASETS.campaign_bindings.defaultSort.field).toBe("validFrom");
   });
 
+  it("serves Hub's own money per link under the plan's contract (PR 15)", () => {
+    // Plan 2026-10-08 §6: `campaigns`, one row per link with both money
+    // figures, and `campaign_money_daily`, Hub's figure per Moscow day.
+    expect(Object.keys(AGENT_DATASETS.campaigns.fields)).toEqual([
+      "linkKind", "linkRef", "name", "url", "linkCreatedAt", "linkEndsAt", "isFinished",
+      "trialDays", "tags", "channelKey", "contractorKey", "lastObservedAt", "clicks", "fans",
+      "fansMetric", "subscribers", "spenders", "vendorRevenueNetMills", "vendorRevenueCalculatedAt",
+      "hubRevenueNetMills", "hubPendingMills", "hubMoneyFloorAt", "attributionRule", "revenueBasis",
+    ]);
+    expect(Object.keys(AGENT_DATASETS.campaign_money_daily.fields)).toEqual([
+      "businessDate", "dayStartAt", "linkKind", "linkRef", "hubRevenueNetMills", "hubPendingMills",
+      "transactionCount", "fanCount", "attributionRule", "floorAt",
+    ]);
+    for (const dataset of ["campaigns", "campaign_money_daily"] as const) {
+      expect(agentDatasetRequiredCapabilities(dataset)).toEqual(["read:datasets", "read:money"]);
+    }
+    expect(AGENT_DATASETS.campaigns.fields.tags).toBe("string_array");
+    expect(AGENT_DATASETS.campaign_money_daily.defaultSort).toEqual({ field: "dayStartAt", dir: "asc", nullsLast: false });
+  });
+
   it("uses wire field names the query schema will accept", () => {
     // The query body validates `field` against /^[a-z][a-zA-Z0-9]*$/ with a 64-char
     // cap BEFORE any lookup. A registry field that cannot pass that regex would be
@@ -272,6 +295,9 @@ describe("agent read dataset vocabulary", () => {
       // The vendor's revenue per link; the attempts and the bindings carry no
       // money and stay on read:datasets alone.
       "campaign_snapshots",
+      // Hub's own money per link and per day (PR 15).
+      "campaigns",
+      "campaign_money_daily",
       "fan_memberships",
       "subscriptions",
       "transactions",

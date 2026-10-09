@@ -29,6 +29,7 @@
 // map cannot drift away from the first.
 import { POST_ATTACHMENTS_DATASET, RAW_MEDIA_DATASET } from "./agent-content-media-sql.ts";
 import { CLIENT_AUDIENCE_NEW_IGNORED_SUB_TYPES } from "./client-audience-new.ts";
+import { HUB_LINK_ALLOCATIONS_SQL, HUB_LINK_FLOORS_SQL } from "./link-attribution.ts";
 import { linkStatRunUsableResultSql } from "./ofapi.ts";
 import { LEGACY_EXECUTOR_PLATFORMS } from "./page-sync.ts";
 
@@ -45,6 +46,7 @@ import {
   FANSLY_PROFILE_STAT_FAMILIES,
   FANSLY_REVENUE_LABEL_VERSION,
   FANSLY_REVENUE_TYPES,
+  LINK_ATTRIBUTION_RULE,
   MOSCOW_TIME_ZONE,
 } from "@agency_hub_core/shared";
 
@@ -1239,6 +1241,127 @@ const CAMPAIGN_BINDINGS = `
   left join traffic_contractors k on k.id = stretch.contractor_id
 `;
 
+// ── OnlyFans traffic sources: Hub's own money per link (plan 2026-10-08,
+// PR 15) ────────────────────────────────────────────────────────────────────
+// Both datasets read Hub's attribution through HUB_LINK_ALLOCATIONS_SQL, the
+// SQL form of repositories/link-attribution.ts's rule (pinned against it by
+// tests/link-attribution-sql.integration.test.ts): recipients are decided over
+// every link of the page before any filter of the request.
+
+/** The link's money basis, the same on both figures. */
+const LINK_REVENUE_BASIS_SQL = sqlText("creator_net_after_platform_fee");
+
+/** Each link's latest snapshot among the series' usable results, with its read time. */
+const LATEST_LINK_SNAPSHOT = `
+  select distinct on (s.platform_account_id, s.link_kind, s.platform_link_id)
+         s.platform_account_id, s.link_kind, s.platform_link_id, s.name, s.url,
+         s.link_created_at, s.link_ends_at, s.is_finished, s.trial_days, s.tags,
+         s.clicks_count, s.claims_count, s.subscribers_count, s.spenders_count,
+         coalesce(s.revenue_net_mills, s.revenue_gross_mills) as revenue_net_mills,
+         s.revenue_calculated_at, r.pulled_at
+    from page_link_stat_snapshots s
+    join page_link_stat_runs r on r.id = s.run_id
+   where ${LINK_STAT_RUN_USABLE_SQL}
+   order by s.platform_account_id, s.link_kind, s.platform_link_id, r.pulled_at desc, s.id desc
+`;
+
+const CAMPAIGNS = `
+  select l.platform_account_id as k_page_id,
+         p.platform::text      as k_platform,
+         l.link_kind || ':' || l.platform_link_id as k_key,
+         l.pulled_at           as k_occurred_at,
+         null::text            as k_fan,
+         null::bigint          as k_observation_ref,
+         'hot_projection'::text as k_ingest_path,
+         -- Hub's figure moves as periods close and money settles.
+         'converging'::text    as k_convergence,
+         l.link_kind           as f_link_kind,
+         l.platform_link_id    as f_link_ref,
+         l.name                as f_name,
+         l.url                 as f_url,
+         l.link_created_at     as f_link_created_at,
+         l.link_ends_at        as f_link_ends_at,
+         l.is_finished         as f_is_finished,
+         l.trial_days          as f_trial_days,
+         l.tags                as f_tags,
+         bound.channel_key     as f_channel_key,
+         bound.contractor_key  as f_contractor_key,
+         l.pulled_at           as f_last_observed_at,
+         l.clicks_count        as f_clicks,
+         case when l.link_kind = 'trial' then l.claims_count else l.subscribers_count end as f_fans,
+         case when l.link_kind = 'trial' then 'claims' else 'subscribers' end as f_fans_metric,
+         l.subscribers_count   as f_subscribers,
+         l.spenders_count      as f_spenders,
+         l.revenue_net_mills   as f_vendor_revenue_net_mills,
+         l.revenue_calculated_at as f_vendor_revenue_calculated_at,
+         -- No floor, no figure: null, never zero.
+         case when fl.floor_at is null then null else coalesce(hub.net_mills, 0) end as f_hub_revenue_net_mills,
+         case when fl.floor_at is null then null else coalesce(hub.pending_mills, 0) end as f_hub_pending_mills,
+         fl.floor_at           as f_hub_money_floor_at,
+         ${sqlText(LINK_ATTRIBUTION_RULE)}::text as f_attribution_rule,
+         ${LINK_REVENUE_BASIS_SQL}::text as f_revenue_basis
+  from (${LATEST_LINK_SNAPSHOT}) l
+  join pages p on p.id = l.platform_account_id
+  left join (${HUB_LINK_FLOORS_SQL}) fl
+    on fl.platform_account_id = l.platform_account_id
+   and fl.link_kind = l.link_kind
+   and fl.platform_link_id = l.platform_link_id
+  left join (
+    select a.page_id, a.link_kind, a.link_ref,
+           (sum(a.share_mills) filter (where a.state = 'posted'))::bigint as net_mills,
+           (sum(a.share_mills) filter (where a.state = 'pending'))::bigint as pending_mills
+      from (${HUB_LINK_ALLOCATIONS_SQL}) a
+     group by a.page_id, a.link_kind, a.link_ref
+  ) hub
+    on hub.page_id = l.platform_account_id
+   and hub.link_kind = l.link_kind
+   and hub.link_ref = l.platform_link_id
+  left join lateral (
+    select ch.key as channel_key, k.key as contractor_key
+      from traffic_link_bindings b
+      join traffic_channels ch on ch.id = b.channel_id
+      left join traffic_channel_contractors t
+        on t.channel_id = b.channel_id
+       and t.valid_from <= now() and (t.valid_to is null or now() < t.valid_to)
+      left join traffic_contractors k on k.id = t.contractor_id
+     where b.platform_account_id = l.platform_account_id
+       and b.link_kind = l.link_kind
+       and b.platform_link_id = l.platform_link_id
+       and b.valid_from <= now() and (b.valid_to is null or now() < b.valid_to)
+     limit 1
+  ) bound on true
+`;
+
+const CAMPAIGN_MONEY_DAILY = `
+  select a.page_id             as k_page_id,
+         p.platform::text      as k_platform,
+         a.link_kind || ':' || a.link_ref || ':' || a.business_date as k_key,
+         a.day_start_at        as k_occurred_at,
+         null::text            as k_fan,
+         null::bigint          as k_observation_ref,
+         'hot_projection'::text as k_ingest_path,
+         'converging'::text    as k_convergence,
+         a.business_date       as f_business_date,
+         a.day_start_at        as f_day_start_at,
+         a.link_kind           as f_link_kind,
+         a.link_ref            as f_link_ref,
+         coalesce(sum(a.share_mills) filter (where a.state = 'posted'), 0)::bigint as f_hub_revenue_net_mills,
+         coalesce(sum(a.share_mills) filter (where a.state = 'pending'), 0)::bigint as f_hub_pending_mills,
+         (count(distinct a.transaction_id) filter (where a.state = 'posted'))::int as f_transaction_count,
+         (count(distinct a.fan_id) filter (where a.state = 'posted'))::int as f_fan_count,
+         ${sqlText(LINK_ATTRIBUTION_RULE)}::text as f_attribution_rule,
+         min(a.floor_at)       as f_floor_at
+  from (
+    select x.*,
+           to_char(x.occurred_at at time zone ${sqlText(MOSCOW_TIME_ZONE)}, 'YYYY-MM-DD') as business_date,
+           date_trunc('day', x.occurred_at at time zone ${sqlText(MOSCOW_TIME_ZONE)})
+             at time zone ${sqlText(MOSCOW_TIME_ZONE)} as day_start_at
+      from (${HUB_LINK_ALLOCATIONS_SQL}) x
+  ) a
+  join pages p on p.id = a.page_id
+  group by a.page_id, p.platform, a.link_kind, a.link_ref, a.business_date, a.day_start_at
+`;
+
 export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>> = {
   ofapi_financial_snapshots: {
     source: `select s.page_id k_page_id,'onlyfans'::text k_platform,
@@ -1370,6 +1493,75 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
     readPlanes: ["traffic_link_bindings", "traffic_channel_contractors"],
     // Agency configuration, not captured history: min(validFrom) would be the
     // oldest link's creation date, not where any capture began. No floor.
+    provenanceColumns: {
+      observationRef: "k_observation_ref",
+      ingestPath: "k_ingest_path",
+      convergence: "k_convergence",
+    },
+  },
+  // ── Hub's own money per link (PR 15) ─────────────────────────────────────
+  // No page-wide capture floor: each link's figure starts at its own floor,
+  // served as a field (`hubMoneyFloorAt`, `floorAt`).
+  campaigns: {
+    source: CAMPAIGNS,
+    fields: {
+      linkKind: "f_link_kind",
+      linkRef: "f_link_ref",
+      name: "f_name",
+      url: "f_url",
+      linkCreatedAt: "f_link_created_at",
+      linkEndsAt: "f_link_ends_at",
+      isFinished: "f_is_finished",
+      trialDays: "f_trial_days",
+      tags: "f_tags",
+      channelKey: "f_channel_key",
+      contractorKey: "f_contractor_key",
+      lastObservedAt: "f_last_observed_at",
+      clicks: "f_clicks",
+      fans: "f_fans",
+      fansMetric: "f_fans_metric",
+      subscribers: "f_subscribers",
+      spenders: "f_spenders",
+      vendorRevenueNetMills: "f_vendor_revenue_net_mills",
+      vendorRevenueCalculatedAt: "f_vendor_revenue_calculated_at",
+      hubRevenueNetMills: "f_hub_revenue_net_mills",
+      hubPendingMills: "f_hub_pending_mills",
+      hubMoneyFloorAt: "f_hub_money_floor_at",
+      attributionRule: "f_attribution_rule",
+      revenueBasis: "f_revenue_basis",
+    },
+    windowColumn: "k_occurred_at",
+    readPlanes: [
+      "page_link_stat_snapshots",
+      "page_link_stat_runs",
+      "traffic_link_bindings",
+      "traffic_channel_contractors",
+      "transactions",
+      "page_link_fan_periods",
+      "page_link_fan_walks",
+    ],
+    provenanceColumns: {
+      observationRef: "k_observation_ref",
+      ingestPath: "k_ingest_path",
+      convergence: "k_convergence",
+    },
+  },
+  campaign_money_daily: {
+    source: CAMPAIGN_MONEY_DAILY,
+    fields: {
+      businessDate: "f_business_date",
+      dayStartAt: "f_day_start_at",
+      linkKind: "f_link_kind",
+      linkRef: "f_link_ref",
+      hubRevenueNetMills: "f_hub_revenue_net_mills",
+      hubPendingMills: "f_hub_pending_mills",
+      transactionCount: "f_transaction_count",
+      fanCount: "f_fan_count",
+      attributionRule: "f_attribution_rule",
+      floorAt: "f_floor_at",
+    },
+    windowColumn: "k_occurred_at",
+    readPlanes: ["transactions", "page_link_fan_periods", "page_link_fan_walks"],
     provenanceColumns: {
       observationRef: "k_observation_ref",
       ingestPath: "k_ingest_path",

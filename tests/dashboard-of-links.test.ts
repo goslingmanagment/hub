@@ -23,6 +23,7 @@ vi.mock("../apps/dashboard/src/api/ofapiCollection.ts", () => ({
 import { effectivePickedLink, OfapiMarketing, smartLinksHaveData } from "../apps/dashboard/src/pages/OfapiMarketing.tsx";
 import { marketingActionInFlight, marketingRefetchInterval, MARKETING_POLL_MS, type MarketingDashboard } from "../apps/dashboard/src/api/ofapiMarketing.ts";
 import {
+  differenceView,
   filterLinks,
   hubMoneyView,
   linkStateView,
@@ -197,6 +198,32 @@ describe("the screen's rules", () => {
     expect(sortLinks(links).map((row) => row.linkRef)).toEqual(["11170787", "11687581", "10802699"]);
     expect(filterLinks(links, "closed").map((row) => row.linkRef)).toEqual(["10802699"]);
     expect(linkTotals(links)).toEqual({ clicks: 11_798, fans: 3_015, vendorMills: 14_211_440, unknownMoney: 1 });
+  });
+
+  it("says what the difference compares: the money of a period, never the totals beside it", () => {
+    const comparison = (overrides: Partial<OfLink["comparison"]>): Pick<OfLink, "comparison"> => ({
+      comparison: {
+        state: "provisional", flags: [], fromAt: "2026-10-09T03:30:00.000Z", toAt: "2026-10-10T05:30:00.000Z",
+        vendorDeltaMills: 52_500, hubNetMills: 52_501, differenceMills: 1, ...overrides,
+      },
+    });
+    // One mill is no difference a person reads: "$0.00", no sign.
+    expect(differenceView(comparison({}))).toEqual({
+      amount: "$0.00", period: "за период с 09.10.26", figures: "OFAPI $52.50 · Hub $52.50", note: "предварительно",
+    });
+    expect(differenceView(comparison({ differenceMills: -9, hubNetMills: 52_491 })).amount).toBe("$0.00");
+    expect(differenceView(comparison({ state: "comparable", differenceMills: 1_230, hubNetMills: 53_730 }))).toMatchObject({
+      amount: "+$1.23", note: "сопоставимо",
+    });
+    // Not comparable: no amount, the state says why.
+    expect(differenceView(comparison({ state: "different_history", vendorDeltaMills: 13_052_500, differenceMills: -13_000_000 }))).toEqual({
+      amount: null, period: "OFAPI за всё время, Hub с 09.10.26", figures: "OFAPI $13,052.50 · Hub $52.50",
+      note: "разные периоды — не сравнимы",
+    });
+    expect(differenceView(comparison({ state: "incomplete" }))).toEqual({
+      amount: null, period: "", figures: "", note: "неполные данные — сравнивать рано",
+    });
+    expect(differenceView({ comparison: link().comparison })).toEqual({ amount: null, period: "", figures: "", note: "" });
   });
 
   it("names the link's state and money in the owner's words", () => {

@@ -261,6 +261,87 @@ export const AGENT_DATASETS = {
     defaultSort: { field: "validFrom", dir: "asc", nullsLast: false },
     stableKey: ["bindingId", "stretchFrom"],
   },
+  // ── OnlyFans traffic sources: Hub's own money per link (plan 2026-10-08,
+  // PR 15) ────────────────────────────────────────────────────────────────
+  // Hub's own figure, beside OFAPI's: posted transactions (П9.3) split equally
+  // over the links whose link ↔ fan periods hold them, under
+  // `ofapi_subscription_period_equal_split.v1` (each row names it). A link's
+  // figure begins at its own floor (`hubMoneyFloorAt` / `floorAt`, the start of
+  // its first finished fan walk): Hub says nothing of the time before it.
+  // Computed when read — a period confirmed later changes past figures.
+  //
+  // `campaigns` — one row per link of the series, its latest state: the
+  // latest snapshot's counters and OFAPI's money, the channel and contractor
+  // bound to it now, and Hub's money since its floor. Windowed by
+  // `lastObservedAt`.
+  campaigns: {
+    moneyBearing: true,
+    verbatimText: false,
+    disclosesPurchase: false,
+    fields: {
+      linkKind: "string",
+      linkRef: "string",
+      name: "string",
+      url: "string",
+      linkCreatedAt: "timestamp",
+      linkEndsAt: "timestamp",
+      isFinished: "bool",
+      /** Vendor subscribeDays of a trial link; null on tracking links. */
+      trialDays: "int",
+      tags: "string_array",
+      /** The channel and contractor bound now; null = none. */
+      channelKey: "string",
+      contractorKey: "string",
+      lastObservedAt: "timestamp",
+      clicks: "int",
+      /** Claims on a trial link, subscribers on a tracking link (`fansMetric`). */
+      fans: "int",
+      fansMetric: "string",
+      subscribers: "int",
+      spenders: "int",
+      /** OFAPI: creator NET after the OnlyFans fee, refunds and chargebacks;
+       *  null = unknown. Never take the fee off again. */
+      vendorRevenueNetMills: "mills",
+      vendorRevenueCalculatedAt: "timestamp",
+      /** Hub: posted transactions since `hubMoneyFloorAt`, net after the fee;
+       *  null when the link has no finished fan walk (no floor). */
+      hubRevenueNetMills: "mills",
+      /** Hub: pending transactions since the floor — never in the figure. */
+      hubPendingMills: "mills",
+      hubMoneyFloorAt: "timestamp",
+      attributionRule: "string",
+      /** `creator_net_after_platform_fee` for both money figures. */
+      revenueBasis: "string",
+    },
+    defaultSort: { field: "lastObservedAt", dir: "desc", nullsLast: true },
+    stableKey: ["pageId", "linkKind", "linkRef"],
+  },
+  // `campaign_money_daily` — Hub's own money per link and Europe/Moscow
+  // business day (00:00–24:00 Moscow): a row for a day with any posted or
+  // pending share of the link. A day after the link's floor without a row had
+  // none; a day before it is unknown to Hub. A chargeback or refund stands on
+  // its own day with its original purchase's link shares (П2).
+  campaign_money_daily: {
+    moneyBearing: true,
+    verbatimText: false,
+    disclosesPurchase: false,
+    fields: {
+      businessDate: "date",
+      /** 00:00 Moscow of the day, as a UTC instant (the window's column). */
+      dayStartAt: "timestamp",
+      linkKind: "string",
+      linkRef: "string",
+      hubRevenueNetMills: "mills",
+      hubPendingMills: "mills",
+      /** Posted transactions with a share of this link that day. */
+      transactionCount: "int",
+      fanCount: "int",
+      attributionRule: "string",
+      floorAt: "timestamp",
+    },
+    defaultSort: { field: "dayStartAt", dir: "asc", nullsLast: false },
+    stableKey: ["pageId", "linkKind", "linkRef", "businessDate"],
+  },
   fan_memberships: {
     // MONEY-BEARING because of `lifetimeSpendMills`. The appendix's prose names
     // only subscriptions/transactions/fan_spend_daily as money-bearing while its
@@ -1018,7 +1099,6 @@ export const AGENT_PLANNED_DATASETS = {
   stories: {},
   fan_lists: {},
   livestreams: {},
-  campaigns: {},
   polls: {},
   chargebacks: {},
   blocks: {},

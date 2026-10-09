@@ -105,13 +105,55 @@ const comparisonLabels = {
   incomplete: "неполные данные",
 } as const;
 
-export function differenceView(link: Pick<OfLink, "comparison">): { amount: string | null; note: string } {
+/** Below one cent a difference shows as "$0.00", without a sign. */
+const CENT_MILLS = 10;
+
+export interface DifferenceView {
+  /** "+$12.30", "−…", "$0.00"; null when the two figures cannot be compared. */
+  amount: string | null;
+  /** Over which stretch: the difference is of the money in it, never of the
+   *  totals shown beside it. "за период с 08.10.26" */
+  period: string;
+  /** What is compared: "OFAPI $52.50 · Hub $52.50" (OFAPI's increase over the
+   *  period, Hub's figure over the same period). */
+  figures: string;
+  /** The comparison's state, in the owner's words. */
+  note: string;
+}
+
+export function differenceView(link: Pick<OfLink, "comparison">): DifferenceView {
   const comparison = link.comparison;
-  if (comparison.state === null || comparison.differenceMills === null) {
-    return { amount: null, note: "" };
+  if (comparison.state === null) {
+    return { amount: null, period: "", figures: "", note: "" };
   }
-  const sign = comparison.differenceMills > 0 ? "+" : "";
-  return { amount: `${sign}${money(comparison.differenceMills)}`, note: comparisonLabels[comparison.state] };
+  const since = comparison.fromAt ? moscowShortDate(comparison.fromAt) : null;
+  const figures = comparison.vendorDeltaMills === null || comparison.hubNetMills === null
+    ? ""
+    : `OFAPI ${money(comparison.vendorDeltaMills)} · Hub ${money(comparison.hubNetMills)}`;
+  if (comparison.state === "incomplete") {
+    return { amount: null, period: "", figures: "", note: `${comparisonLabels.incomplete} — сравнивать рано` };
+  }
+  if (comparison.state === "different_history") {
+    return {
+      amount: null,
+      period: since ? `OFAPI за всё время, Hub с ${since}` : "",
+      figures,
+      note: `${comparisonLabels.different_history} — не сравнимы`,
+    };
+  }
+  const difference = comparison.differenceMills;
+  if (difference === null) {
+    return { amount: null, period: "", figures, note: comparisonLabels[comparison.state] };
+  }
+  const amount = Math.abs(difference) < CENT_MILLS
+    ? money(0)
+    : `${difference > 0 ? "+" : ""}${money(difference)}`;
+  return {
+    amount,
+    period: since ? `за период с ${since}` : "",
+    figures,
+    note: comparisonLabels[comparison.state],
+  };
 }
 
 export function bindingView(link: Pick<OfLink, "binding">): { channel: string; contractor: string; dates: string; assumed: boolean } | null {

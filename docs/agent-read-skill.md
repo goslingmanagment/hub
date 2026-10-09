@@ -1009,6 +1009,53 @@ hub dataset --page-label lora-vip-of --dataset campaign_bindings \
 A link with no row has no channel in Hub — report it as "without a channel",
 not as organic traffic.
 
+### OnlyFans links: Hub's own money per link
+
+Beside OFAPI's figure, Hub computes its own: the posted transactions of the
+fans a link brought, split equally when a fan's periods on several links
+overlap (rule `ofapi_subscription_period_equal_split.v1`, named on every row).
+A fan's period on a link is open while the link's subscriber list holds him
+flagged active; Hub reads those lists four times a day.
+
+| dataset | what it answers | capabilities | claim field |
+|---|---|---|---|
+| `campaigns` | one row per link: its latest snapshot, the channel and contractor bound now, OFAPI's and Hub's money | `+ read:money` | `hubLinkMoney`, `linkStatSnapshot` |
+| `campaign_money_daily` | Hub's money per link and Europe/Moscow business day | `+ read:money` | `hubLinkMoney` |
+
+**Each link has its own floor.** `hubMoneyFloorAt` (`campaigns`) and `floorAt`
+(`campaign_money_daily`) are where Hub's figure for the link begins — the start
+of its first fully read fan list (the earliest is 2026-10-09 03:30 UTC). Hub
+says nothing about the time before it: never compare OFAPI's all-time revenue
+with Hub's figure as if both started at the link's creation. A link with no
+floor has `hubRevenueNetMills: null` — unknown, not zero. There is no
+page-wide capture floor on these datasets.
+
+**Posted money only.** `hubRevenueNetMills` counts posted transactions, net
+after the OnlyFans fee — the same basis as `vendorRevenueNetMills`;
+`hubPendingMills` is money still pending and is never part of it. A chargeback
+or refund takes the shares of the purchase it reverses and stands on its own
+day. The split is decided over all the page's links before any filter, so a
+filtered sum never inflates a shared transaction.
+
+**Moving figures.** Hub's figure changes after the fact when a fan's period is
+confirmed closed (two lists without him) or money settles — `convergence:
+"converging"`. `campaign_money_daily` has a row for a day with any share of the
+link; a day after the floor without a row had none. Its window and sort are
+`dayStartAt` (00:00 Moscow as a UTC instant):
+
+```
+hub dataset --page-label lora-vip-of --dataset campaign_money_daily \
+  --from 2026-10-01T00:00:00Z --to 2026-10-31T00:00:00Z \
+  --filter linkRef:eq:11170786 --limit 200 --claim-field hubLinkMoney
+```
+
+`campaigns` is windowed by `lastObservedAt` (the link's latest read), so ask
+for the recent past to get every live link. When the two figures differ, the
+usual reasons are the vendor's own recalculations, money still pending in Hub,
+chargebacks Hub's ledger has not reconciled yet, and the two figures covering
+different stretches (the vendor computes rarely); the owner's «Ссылки
+OnlyFans» screen states which one applies per link.
+
 ### Files and post attachments
 
 `raw_media` identifies a platform file by `(page, mediaRef)` independently of
