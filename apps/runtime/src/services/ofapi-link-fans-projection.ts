@@ -188,32 +188,53 @@ export async function readLinkFanJournalBody(
 }
 
 /**
- * Whether an executed erasure covers this journal page: a page (or model)
- * erasure of the page, or a fan erasure of a fan the page names, started at
- * or after the page's capture (the fence every projection of retained
- * material uses, repositories/erasure-fence.ts). Call holding the fence's
+ * What an executed erasure covers of this journal page (the fence every
+ * projection of retained material uses, repositories/erasure-fence.ts), as of
+ * the page's capture: `page` — a page (or model) erasure of the page, started
+ * at or after it: nothing of the page may be written; else `fans` — the fans
+ * the page names whom a fan erasure started at or after it covers: their items
+ * are left out and the rest of the page applies. Call holding the fence's
  * shared lock.
  */
-async function isLinkFanJournalRowFenced(
+async function linkFanJournalRowFence(
   tx: Database,
   pageId: number,
   row: LinkFanJournalRow,
   parsed: LinkFansPageParse,
-): Promise<boolean> {
+): Promise<{ page: boolean; fans: Set<string> }> {
+  const fence = { pageId, platform: "onlyfans" as const, materialAt: row.capturedAt };
+  if (await isDmArchiveScopeFenced(tx, { ...fence, refs: [] })) return { page: true, fans: new Set() };
   const refs = parsed.ok
-    ? [...parsed.page.subscribers, ...parsed.page.spenders].map((item) => item.platformUserId)
+    ? [...new Set([...parsed.page.subscribers, ...parsed.page.spenders].map((item) => item.platformUserId))]
     : [];
-  return isDmArchiveScopeFenced(tx, { pageId, platform: "onlyfans", refs, materialAt: row.capturedAt });
+  const fans = new Set<string>();
+  // One question for the page; one per fan only when it says someone is covered.
+  if (refs.length > 0 && await isDmArchiveScopeFenced(tx, { ...fence, refs })) {
+    for (const ref of refs) {
+      if (await isDmArchiveScopeFenced(tx, { ...fence, refs: [ref] })) fans.add(ref);
+    }
+  }
+  return { page: false, fans };
+}
+
+/** The page without the items of the fans an erasure covers. */
+function withoutFencedFans(parsed: LinkFansPageParse, fans: ReadonlySet<string>): LinkFansPageParse {
+  if (!parsed.ok || fans.size === 0) return parsed;
+  const subscribers = parsed.page.subscribers.filter((item) => !fans.has(item.platformUserId));
+  const spenders = parsed.page.spenders.filter((item) => !fans.has(item.platformUserId));
+  const dropped = parsed.page.subscribers.length - subscribers.length + parsed.page.spenders.length - spenders.length;
+  return { ok: true, page: { ...parsed.page, subscribers, spenders, itemCount: Math.max(0, parsed.page.itemCount - dropped) } };
 }
 
 export type LinkFanJournalRowOutcome = "applied" | "skipped" | "fenced";
 
 /**
- * Apply one journal row and move the cursor past it: a page an erasure covers
- * is not applied (and no cursor is created for it — an erased page keeps
- * none); a body that does not hold together is skipped with a warning. Call
- * in a transaction holding the page's projection lock and the erasure
- * fence's shared lock, with the cursor right before the row.
+ * Apply one journal row and move the cursor past it: a page a page (or
+ * model) erasure covers is not applied (and no cursor is created for it — an
+ * erased page keeps none); the items of fans a fan erasure covers are left
+ * out and the rest applies; a body that does not hold together is skipped
+ * with a warning. Call in a transaction holding the page's projection lock
+ * and the erasure fence's shared lock, with the cursor right before the row.
  */
 export async function applyLinkFanJournalRow(
   ctx: ProjectionContext,
@@ -223,11 +244,12 @@ export async function applyLinkFanJournalRow(
   body: unknown,
 ): Promise<LinkFanJournalRowOutcome> {
   const parsed = parseLinkFansJournalPage(row.endpoint, body);
-  if (await isLinkFanJournalRowFenced(tx, pageId, row, parsed)) {
+  const fence = await linkFanJournalRowFence(tx, pageId, row, parsed);
+  if (fence.page) {
     await advanceLinkFanJournalCursor(tx, { pageId, rawPayloadId: row.id, applied: false });
     return "fenced";
   }
-  return applyUnfencedLinkFanJournalRow(ctx, tx, pageId, row, parsed);
+  return applyUnfencedLinkFanJournalRow(ctx, tx, pageId, row, withoutFencedFans(parsed, fence.fans));
 }
 
 /** The part after the fence check: apply (or skip as unreadable) and move
@@ -252,7 +274,7 @@ async function applyUnfencedLinkFanJournalRow(
 export interface LinkFanProjectionStats {
   applied: number;
   skipped: number;
-  /** Journal pages an erasure covers, passed over unapplied. */
+  /** Journal pages a page (or model) erasure covers, passed over unapplied. */
   fenced: number;
   /** Journal rows were left for a later call (the page cap, or the lock was
    *  held by a rebuild). */
@@ -289,10 +311,12 @@ export async function projectLinkFanJournal(
       // A rebuild, or an erasure of the page, is running: come back later.
       if (!(await tryLockLinkFanProjection(tx, input.pageId))) return "busy" as const;
       if (!(await tryAcquireDmArchiveWriterFenceLock(tx, input.pageId))) return "busy" as const;
-      // An erasure that ran since the body was read: nothing of it is
-      // written, not even a cursor.
+      // An erasure of the page that ran since the body was read: nothing of
+      // it is written, not even a cursor. A fan erasure only takes that fan's
+      // items out of the page; the page goes on.
       const parsed = parseLinkFansJournalPage(row.endpoint, body);
-      if (await isLinkFanJournalRowFenced(tx, input.pageId, row, parsed)) {
+      const fence = await linkFanJournalRowFence(tx, input.pageId, row, parsed);
+      if (fence.page) {
         return (await advanceLinkFanJournalCursor(tx, { pageId: input.pageId, rawPayloadId: row.id, applied: false }))
           ? "fenced" as const
           : "fenced_no_cursor" as const;
@@ -301,7 +325,7 @@ export async function projectLinkFanJournal(
       if (locked.rule !== LINK_ATTRIBUTION_RULE) return "rule" as const;
       // Another writer moved the cursor since it was read: read it again.
       if (locked.lastRawPayloadId !== afterId) return "moved" as const;
-      return applyUnfencedLinkFanJournalRow(ctx, tx, input.pageId, row, parsed);
+      return applyUnfencedLinkFanJournalRow(ctx, tx, input.pageId, row, withoutFencedFans(parsed, fence.fans));
     });
     if (outcome === "busy") {
       stats.pending = true;

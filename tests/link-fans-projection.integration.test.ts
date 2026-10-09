@@ -373,16 +373,21 @@ describe("link ↔ fan projection (ofapi_subscription_period_equal_split.v1)", (
     const owner = (await testDb!.pool.query<{ id: string }>(
       "insert into users (username, role) values ('lf-owner', 'owner') returning id::text")).rows[0]!.id;
 
-    // A fan erasure of fan 2 that started after walk 2 was captured: walk 1
-    // (fan 1 alone) is applied, walk 2's page naming fan 2 is passed over.
-    await trialWalk(page.id, { linkId: "7", requestSeq: 1, start: at(0), pages: [[subscriber(1, true)]] });
+    // A fan erasure of fan 2 that started after walk 2 was captured — and
+    // whose deletion stopped after its tombstone, so the journal still holds
+    // fan 2 on walk 2's page, the very first page there is no cursor for yet
+    // (a fan erasure must not stall the page): the page applies without fan 2.
     await trialWalk(page.id, { linkId: "7", requestSeq: 2, start: at(6), pages: [[subscriber(1, true), subscriber(2, true)]] });
+    await trialWalk(page.id, { linkId: "7", requestSeq: 3, start: at(8), pages: [[subscriber(1, true)]] });
     await testDb!.pool.query(
       `insert into erasure_log (scope_type, scope_ref, initiated_by, dry_run, plan, started_at)
        values ('fan', 'fan:onlyfans:2', $1, false, '{}'::jsonb, $2)`, [owner, at(7)]);
-    expect(await project(page.id)).toMatchObject({ applied: 1, fenced: 1 });
-    expect((await walks(page.id)).map((row) => row.seq)).toEqual([1]);
+    expect(await project(page.id)).toMatchObject({ applied: 2, fenced: 0, pending: false });
+    expect((await walks(page.id)).map((row) => [row.seq, row.items])).toEqual([[2, 1], [3, 1]]);
     expect((await periods(page.id)).map((row) => row.fan)).toEqual(["1"]);
+    expect((await testDb!.pool.query("select 1 from fans where platform_user_id = '2'")).rowCount).toBe(1);
+    expect((await testDb!.pool.query(
+      "select 1 from page_link_fans lf join fans f on f.id = lf.fan_id where f.platform_user_id = '2'")).rowCount).toBe(0);
 
     // An erasure of the whole page (its rows gone, its tombstone in place) and
     // a journal page captured before it that a run had already read: nothing
