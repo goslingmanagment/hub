@@ -368,7 +368,7 @@ their clean window (`routes`) and the open latches (`openLatches`), and the glob
 | | `urgent_waiting` | urgent work waiting 2 minutes past its due time, or past the end of its own subject breaker when that is later, with no pause, hold, file breaker or route hold to explain it | `sync work list`, `sync why` |
 | 4 `stuck` | `request_stalled` | a history request with runnable work and no read for 30 minutes | [History requests](#history-requests) |
 | | `planned_stale` | a poll not served within its SLO (else 3 periods) | `sync why` on the key |
-| | `transactions_ledger_incomplete` | the newest finished rescan proved the ledger short of Fansly's lifetime total | the owner's backfill: `sync work enqueue --resource transactions.backfill` |
+| | `transactions_ledger_incomplete` | the rescan's last certified round proved the ledger short of Fansly's lifetime total, no backfill is running or one has applied no answer for 30 minutes, and none completed (`backfill_complete`) after that round began | the owner's backfill: `sync work enqueue --resource transactions.backfill` |
 | 5 `process` (global) | `heartbeat_silent`, `stalled` | no `sync` heartbeat for 2 minutes while a page is in the engine; or the stall watchdog ended the process | [Watchdog restarts](#watchdog-restarts-shutdown-and-deploys) |
 | `public_lookup` (global) | `rate_limited`, `auth_refused`, `network`, `off_contract`, `indeterminate` | the session-less public account reader stopped on its first failure (or an attempt whose outcome nobody recorded); it stays open until the owner resumes the reader | [The public account reader](#the-public-account-reader) |
 

@@ -51,9 +51,12 @@ import { purchaseTargetFollowups, purchaseTargetsOfTransactions } from "./purcha
 //   checkpoint minus 7 days, or the oldest pending row if older, never past 30
 //   days — in pages of 100, early-stopped by the first page reaching below
 //   the window; `total` stable and no row served twice, else the walk starts
-//   over (bounded); a full read must fetch `total` rows.
-// - backfill (owner, a new page): the whole list in pages of 100, `total`
-//   stable, fetched = total.
+//   over (bounded); a full read must fetch `total` rows. A certified round's
+//   receipt (`ledgerRows`, `walkStartedAt`) is the row's `proof`, kept until
+//   the next certified round: a withheld round's receipt goes to `result`
+//   alone, so alert 4 reads the last round that proved something.
+// - backfill (owner, a new page's birth): the whole list in pages of 100,
+//   `total` stable, fetched = total.
 //
 // Every page is one apply transaction: the erasure fence (registry fence
 // `dm`: the writer below takes it again, re-entrantly), the fans of the page
@@ -344,11 +347,18 @@ function restartOutcome(
   };
 }
 
+/** Where a withheld walk's receipt goes besides `cursor.last`: the backfill's
+ *  `proof` (the account of its closed goal row); the rescan's `result` alone,
+ *  so its standing row's `proof` keeps the last certified round (alert 4's
+ *  fact) across rounds and restarts. */
+type WithheldReceipt = "proof" | "result";
+
 function withheldOutcome(
   cursor: TransactionsCursor,
   walk: TransactionsWalk,
   reason: RestartReason,
-  detail: Record<string, unknown> = {},
+  detail: Record<string, unknown>,
+  receiptIn: WithheldReceipt,
 ): WorkOutcome {
   const receipt = { withheld: reason, pages: walk.pages, fetched: walk.fetched, total: walk.total, ...detail };
   return {
@@ -356,7 +366,7 @@ function withheldOutcome(
     close: "done",
     closeReason: "walk_withheld",
     cursor: { ...cursor, walk: null, restartCount: 0, last: receipt } satisfies TransactionsCursor,
-    proof: receipt,
+    ...(receiptIn === "proof" ? { proof: receipt } : { result: receipt }),
   };
 }
 
@@ -366,11 +376,12 @@ function unstable(
   walk: TransactionsWalk,
   reason: RestartReason,
   now: Date,
-  detail: Record<string, unknown> = {},
+  detail: Record<string, unknown>,
+  receiptIn: WithheldReceipt,
 ): ApplyResult {
   return cursor.restartCount < TRANSACTIONS_MAX_WALK_RESTARTS
     ? { work: restartOutcome(cursor, walk, reason, now, detail), followups: [], counters: { [`walk_restart_${reason}`]: 1 } }
-    : { work: withheldOutcome(cursor, walk, reason, detail), followups: [], counters: { walk_withheld: 1 } };
+    : { work: withheldOutcome(cursor, walk, reason, detail, receiptIn), followups: [], counters: { walk_withheld: 1 } };
 }
 
 export function transactionsModule(variant: TransactionsVariant): ResourceModule {
@@ -473,11 +484,11 @@ export function transactionsModule(variant: TransactionsVariant): ResourceModule
     // two pages means this walk can no longer be certified (the page is not
     // written; its observation stays journaled).
     if (walk.total !== null && page.total !== walk.total) {
-      return unstable(cursor, walk, "total_changed", input.now, { previousTotal: walk.total, total: page.total });
+      return unstable(cursor, walk, "total_changed", input.now, { previousTotal: walk.total, total: page.total }, "result");
     }
     const overlap = findTransactionPageOverlap(walk.lastPageIds, items);
     if (overlap.length > 0) {
-      return unstable(cursor, walk, "offset_overlap", input.now, { overlap: overlap.slice(0, 10) });
+      return unstable(cursor, walk, "offset_overlap", input.now, { overlap: overlap.slice(0, 10) }, "result");
     }
     const write = await writeTransactionsPage(tx, input, key, items);
     const after = walk.after === null ? null : new Date(walk.after);
@@ -507,13 +518,14 @@ export function transactionsModule(variant: TransactionsVariant): ResourceModule
       };
     }
     if (!earlyStopped && next.total !== null && next.fetched !== next.total) {
-      const result = unstable(cursor, next, "total_mismatch", input.now, { total: next.total, fetched: next.fetched });
+      const result = unstable(cursor, next, "total_mismatch", input.now, { total: next.total, fetched: next.fetched }, "result");
       return { ...result, followups: write.followups, counters: { ...allCounters, ...result.counters } };
     }
     // Whole-ledger completeness: every listed row is stored under
     // `fansly:rest` and captured rows are never deleted, so the ledger holds
     // at least the lifetime total — or a hole outside this window needs a
-    // backfill (metric; alert 4 `transactions_ledger_incomplete`).
+    // backfill (metric; alert 4 `transactions_ledger_incomplete` reads this
+    // receipt, the row's `proof`, until the next certified round).
     const ledgerRows = await countTransactionsBySource(tx, { platformAccountId: input.pageId, source: "fansly:rest" });
     const receipt = {
       after: next.after,
@@ -555,15 +567,15 @@ export function transactionsModule(variant: TransactionsVariant): ResourceModule
       seenDemanded: [],
     };
     if (walk.total !== null && page.total !== walk.total) {
-      return unstable(cursor, walk, "total_changed", input.now, { previousTotal: walk.total, total: page.total });
+      return unstable(cursor, walk, "total_changed", input.now, { previousTotal: walk.total, total: page.total }, "proof");
     }
     const done = offsetPageDone({ offset: walk.offset, itemCount: items.length, limit, total: page.total });
     if (items.length === 0 && (!done || (walk.offset === 0 && page.total > 0))) {
-      return unstable(cursor, walk, "empty_page_before_done", input.now, { total: page.total, offset: walk.offset });
+      return unstable(cursor, walk, "empty_page_before_done", input.now, { total: page.total, offset: walk.offset }, "proof");
     }
     const overlap = findTransactionPageOverlap(walk.lastPageIds, items);
     if (overlap.length > 0) {
-      return unstable(cursor, walk, "offset_overlap", input.now, { overlap: overlap.slice(0, 10) });
+      return unstable(cursor, walk, "offset_overlap", input.now, { overlap: overlap.slice(0, 10) }, "proof");
     }
     const write = await writeTransactionsPage(tx, input, key, items);
     const newest = items.reduce<Date | null>((latest, item) => {
@@ -590,7 +602,7 @@ export function transactionsModule(variant: TransactionsVariant): ResourceModule
     // still differs from it closes the backfill withheld for the owner.
     if (next.total !== null && next.fetched !== next.total) {
       return {
-        work: withheldOutcome(cursor, next, "total_mismatch", { total: next.total, fetched: next.fetched }),
+        work: withheldOutcome(cursor, next, "total_mismatch", { total: next.total, fetched: next.fetched }, "proof"),
         followups: write.followups,
         counters: { ...write.counters, walk_withheld: 1 },
       };

@@ -363,6 +363,33 @@ describe("transactions", () => {
     expect(await countRows(testDb.pool, "select count(*)::int as n from transactions where transaction_id = 'tx-late'")).toBe(0);
   });
 
+  it("rescan: past the restart bound a withheld round keeps the last certified proof", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage();
+    const seed = tx("tx-seed", { status: 2, createdAt: Date.now() - DAY });
+    await makeDue(pageId, "transactions.backfill");
+    await runLive(pageId, () => okResponse(txPage([seed], 1)), async () => (await workRow(pageId, "transactions.backfill"))?.state === "done");
+    // A certified round: the whole (one-row) list, its receipt the row's proof.
+    await makeDue(pageId, "transactions.rescan");
+    await runLive(pageId, () => okResponse(txPage([seed], 1)), async () => (await attempts(pageId, "transactions.rescan")) === 1);
+    const certified = (await workRow(pageId, "transactions.rescan"))!.proof;
+    expect(certified).toMatchObject({ fetched: 1, total: 1, ledgerRows: 1 });
+    expect(certified).toHaveProperty("walkStartedAt");
+
+    // Three rounds that fetch fewer rows than the stated total: two restarts,
+    // then the round closes withheld.
+    for (let round = 2; round <= 4; round += 1) {
+      await makeDue(pageId, "transactions.rescan");
+      await runLive(pageId, () => okResponse(txPage([seed], 5)), async () => (await attempts(pageId, "transactions.rescan")) === round);
+    }
+    const rescan = (await workRow(pageId, "transactions.rescan"))!;
+    expect(rescan.state).toBe("open");
+    expect(rescan.result).toEqual({ withheld: "total_mismatch", pages: 1, fetched: 1, total: 5 });
+    expect(rescan.cursor).toMatchObject({ walk: null, restartCount: 0, last: rescan.result });
+    // The receipt went to `result` alone: the proof is the certified round's.
+    expect(rescan.proof).toEqual(certified);
+  });
+
   it("backfill: the whole list in pages of 100, fetched equal to total", async (context) => {
     if (!testDb) return context.skip();
     const pageId = await seedPage();

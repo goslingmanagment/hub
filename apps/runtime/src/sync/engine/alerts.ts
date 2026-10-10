@@ -108,6 +108,10 @@ export const SYNC_MONEY_LOOKBACK_MS = 60 * 60_000;
 export const SYNC_URGENT_WAIT_MS = 2 * 60_000;
 /** Alert 4: a request with runnable work and no read for this long. */
 export const SYNC_REQUEST_STALL_MS = 30 * 60_000;
+/** Alert 4: an open `transactions.backfill` with no applied answer for this
+ *  long (from its newest applied answer, else its creation — an admission is
+ *  no progress) no longer explains the ledger's shortfall. */
+export const SYNC_LEDGER_BACKFILL_STALL_MS = SYNC_REQUEST_STALL_MS;
 /** Alert 4: a poll without its own SLO is stale after this many periods. */
 export const SYNC_STALE_PERIODS = 3;
 /** The send audit re-reads this much of the journal before its last pass (a
@@ -315,12 +319,31 @@ export function evaluatePageAlerts(facts: PageAlertFacts, registry: Pick<EngineR
       stuck.push({ detail: "planned_stale", since: stale[0]!.since, context: { resources: stale.map((row) => row.resource) } });
     }
   }
-  if (journal.ledgerIncomplete !== null) {
-    stuck.push({
-      detail: "transactions_ledger_incomplete",
-      since: journal.ledgerIncomplete.at,
-      context: { missing: journal.ledgerIncomplete.missing },
-    });
+  // The rescan's last certified round proved the ledger short. A backfill
+  // explains it while it moves (or waits for what the owner or alert 1
+  // owns: its pause, a page hold), and so does one that completed after the
+  // round began (the next round decides).
+  const shortfall = journal.ledgerIncomplete;
+  if (shortfall !== null) {
+    const backfill = journal.transactionsBackfill;
+    const open = backfill.openProgressAt !== null;
+    const moving = open && msSince(backfill.openProgressAt, now) <= SYNC_LEDGER_BACKFILL_STALL_MS;
+    const waitExplained = open && (page.pausedAll || holdInForce ||
+      resourceExplained(page, holds, "transactions.backfill", now, registry));
+    const completedSince = backfill.lastCompletedAt !== null &&
+      shortfall.roundStartedAt.getTime() <= backfill.lastCompletedAt.getTime();
+    if (!moving && !waitExplained && !completedSince) {
+      stuck.push({
+        detail: "transactions_ledger_incomplete",
+        since: shortfall.roundStartedAt,
+        context: {
+          missing: shortfall.missing,
+          total: shortfall.total,
+          ledgerRows: shortfall.ledgerRows,
+          backfill: open ? "stalled" : backfill.lastCompletedAt !== null ? "completed_before_round" : "none",
+        },
+      });
+    }
   }
   conditions.push(condition("stuck", stuck, now));
 
