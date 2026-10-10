@@ -64,7 +64,7 @@ Deploy:
 
 ```bash
 scripts/deploy-production.sh --mode dist-only \
-  root@45.8.230.111 \
+  root@152.53.191.242 \
   --verify-url https://gosling-agency.ru
 ```
 
