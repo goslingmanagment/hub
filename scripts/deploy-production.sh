@@ -876,6 +876,10 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # previous image's metric reads are served by 0186's series index (and
   # sampled_at's), so it runs unchanged after a rollback.
   "0267_ops_metric_samples_drop_metric_time_idx.sql"
+  # The public lookup's partial index on page_fans (fan_id) include
+  # (account_probe_at) where account_probe_resolved is false, built
+  # CONCURRENTLY. Index-only: the previous image never needs it.
+  "0268_page_fans_account_probe_unresolved_idx.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"
