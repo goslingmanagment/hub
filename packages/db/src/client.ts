@@ -45,6 +45,27 @@ export type PoolTimeouts = {
   idleInTransactionSessionTimeoutMs: number;
 };
 
+/**
+ * How long a pooled connection lives. node-postgres closes an idle one after
+ * 10 s, which suits a one-shot command: its open sockets would otherwise keep
+ * the process alive. A role that queries every few seconds pays for it in new
+ * sessions instead (prod 2026-10-10: ~31 a minute across the roles, each a
+ * fork, a SCRAM exchange and a cold catalog cache in a new backend).
+ */
+export type PoolLifetime = {
+  /** An idle connection closes after this long. */
+  idleTimeoutMillis: number;
+  /** A connection is retired, once idle, after this long, so a backend's
+   *  caches cannot grow for the life of the process. */
+  maxLifetimeSeconds: number;
+};
+
+/** The long-lived roles' pools (api, worker, scheduler, sync), pg-boss's included. */
+export const RUNTIME_POOL_LIFETIME: PoolLifetime = {
+  idleTimeoutMillis: 5 * 60_000,
+  maxLifetimeSeconds: 60 * 60,
+};
+
 export type CreatePoolOptions = {
   /**
    * Called for every absorbed background error. Defaults to a console.warn so
@@ -54,6 +75,8 @@ export type CreatePoolOptions = {
   onBackgroundError?: PoolBackgroundErrorHandler;
   /** Every connection of the pool starts its session with these. */
   timeouts?: PoolTimeouts;
+  /** Absent: node-postgres' defaults (idle 10 s, no lifetime cap). */
+  lifetime?: PoolLifetime;
 };
 
 /** The server-side timeouts a pooled session runs with, as Postgres reports
@@ -109,15 +132,19 @@ function warnBackgroundError(event: PoolBackgroundErrorEvent) {
  */
 export function createPool(connectionString: string, options: CreatePoolOptions = {}) {
   const timeouts = options.timeouts;
-  const pool = new Pool(timeouts === undefined
-    ? { connectionString }
-    : {
-      connectionString,
+  const pool = new Pool({
+    connectionString,
+    ...(timeouts === undefined ? {} : {
       connectionTimeoutMillis: timeouts.connectionTimeoutMillis,
       statement_timeout: timeouts.statementTimeoutMs,
       lock_timeout: timeouts.lockTimeoutMs,
       idle_in_transaction_session_timeout: timeouts.idleInTransactionSessionTimeoutMs,
-    });
+    }),
+    ...(options.lifetime === undefined ? {} : {
+      idleTimeoutMillis: options.lifetime.idleTimeoutMillis,
+      maxLifetimeSeconds: options.lifetime.maxLifetimeSeconds,
+    }),
+  });
   const report = options.onBackgroundError ?? warnBackgroundError;
   // pg re-emits an idle client's error on the Pool, so the same Error object can
   // reach both listeners below: report it once.
