@@ -5,6 +5,8 @@ import {
   createFanslyPage,
   createModel,
   createOnlyFansPage,
+  applyMessageEventsToArchive,
+  listDomainEventsByDedupKeys,
   searchArchiveMessages,
   setPageOfapiAccountId,
   upsertFans,
@@ -333,6 +335,111 @@ describe("message archive projection (Stage 10)", () => {
     expect(afterRebuild.rows).toEqual([
       { text_plain: "was deleted", content_pending: false, deleted: true },
     ]);
+  });
+
+  it("a message.deleted that names the chat, the side and the send time writes them into its stub; one that names none keeps today's stub", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const { ofPage, fanslyPage } = await seedPages();
+    const deletedAt = new Date("2026-06-26T00:00:12Z");
+    const socketDeletion = (ref: string, input: {
+      fan: string | null; sender: string | null; sentByPage: boolean | null; createdAt: string | null;
+    }) => ({
+      type: "message.deleted",
+      occurredAt: deletedAt,
+      fanIdentityRef: input.fan,
+      conversationRef: "chat-fy",
+      messageRef: ref,
+      data: { source: "fansly_ws", senderRef: input.sender, sentByPage: input.sentByPage, createdAt: input.createdAt },
+      schemaVersion: 1,
+      observationId: 30,
+      dedupKey: `msg-deleted:fansly:${ref}`,
+    });
+    // A content row first: its deletion below names another chat and side.
+    await appendDomainEvents(testDb.db, fanslyPage!.id, [{
+      ...messageEvent({ ref: "fy-content", fan: "fan-fy2", text: "kept", occurredAt: new Date("2026-06-25T12:00:00Z") }),
+      conversationRef: "chat-fy2",
+    }]);
+    await appendDomainEvents(testDb.db, fanslyPage!.id, [
+      socketDeletion("fy-fan", { fan: "fan-fy", sender: "fan-fy", sentByPage: false, createdAt: "2026-06-26T00:00:03.250Z" }),
+      socketDeletion("fy-own", { fan: null, sender: "own-fy", sentByPage: true, createdAt: "2026-06-26T00:00:05.000Z" }),
+      socketDeletion("fy-unknown", { fan: null, sender: null, sentByPage: null, createdAt: null }),
+      {
+        ...socketDeletion("fy-content", { fan: "fan-other", sender: "own-fy", sentByPage: true, createdAt: "2026-06-20T00:00:00.000Z" }),
+        conversationRef: "chat-other",
+      },
+    ]);
+    // An OFAPI deletion: no chat, no fan, nothing in its data.
+    await appendDomainEvents(testDb.db, ofPage!.id, [{
+      type: "message.deleted",
+      occurredAt: new Date("2026-06-26T01:00:00Z"),
+      messageRef: "of-gone",
+      data: {},
+      schemaVersion: 1,
+      observationId: 31,
+      dedupKey: "msg:deleted:of-gone",
+    }]);
+    expect(await runMessageArchiveProjection(appStub())).toMatchObject({ inserted: 1, tombstoned: 5 });
+
+    const snapshot = async () => (await testDb!.pool.query<Record<string, unknown>>(`
+      select account_id::int as account_id, message_ref, conversation_ref, fan_native_id, sender_role, is_sent_by_me,
+             occurred_at, text_plain, content_pending, deleted_at, source_event_id::text as source_event_id
+        from message_archive order by account_id, message_ref
+    `)).rows;
+    const byRef = (rows: Array<Record<string, unknown>>) => new Map(rows.map((row) => [row.message_ref as string, row]));
+    const stubs = byRef(await snapshot());
+    const stub = { content_pending: true, text_plain: "", deleted_at: deletedAt };
+    expect(stubs.get("fy-fan")).toMatchObject({
+      ...stub, conversation_ref: "chat-fy", sender_role: "fan", is_sent_by_me: false, fan_native_id: "fan-fy",
+      occurred_at: new Date("2026-06-26T00:00:03.250Z"),
+    });
+    expect(stubs.get("fy-own")).toMatchObject({
+      ...stub, conversation_ref: "chat-fy", sender_role: "model", is_sent_by_me: true, fan_native_id: null,
+      occurred_at: new Date("2026-06-26T00:00:05.000Z"),
+    });
+    // The side and the send time unknown: the chat only, dated by the deletion.
+    expect(stubs.get("fy-unknown")).toMatchObject({
+      ...stub, conversation_ref: "chat-fy", sender_role: "unknown", is_sent_by_me: false, fan_native_id: null,
+      occurred_at: deletedAt,
+    });
+    // Today's stub for a deletion that names nothing.
+    expect(stubs.get("of-gone")).toMatchObject({
+      content_pending: true, text_plain: "", conversation_ref: null, sender_role: "unknown", is_sent_by_me: false,
+      fan_native_id: null, occurred_at: new Date("2026-06-26T01:00:00Z"), deleted_at: new Date("2026-06-26T01:00:00Z"),
+    });
+    // A row with content only gets the mark.
+    expect(stubs.get("fy-content")).toMatchObject({
+      content_pending: false, text_plain: "kept", conversation_ref: "chat-fy2", sender_role: "fan", is_sent_by_me: false,
+      fan_native_id: "fan-fy2", occurred_at: new Date("2026-06-25T12:00:00Z"), deleted_at: deletedAt,
+    });
+
+    // A repeat of the same events and a rebuild give the same rows.
+    const first = await snapshot();
+    const repeated = await applyMessageEventsToArchive(testDb.db, {
+      accountId: fanslyPage!.id,
+      platform: "fansly",
+      events: await listDomainEventsByDedupKeys(testDb.db, fanslyPage!.id, [
+        "msg:received:fy-content", "msg-deleted:fansly:fy-fan", "msg-deleted:fansly:fy-own",
+        "msg-deleted:fansly:fy-unknown", "msg-deleted:fansly:fy-content",
+      ]),
+    });
+    expect(repeated).toMatchObject({ inserted: 0, tombstoned: 0 });
+    expect(await snapshot()).toEqual(first);
+    expect(await rebuildMessageArchiveProjection(appStub())).toMatchObject({ inserted: 1, tombstoned: 5 });
+    expect(await snapshot()).toEqual(first);
+
+    // A later REST copy fills the stub: one row, the mark kept.
+    await appendDomainEvents(testDb.db, fanslyPage!.id, [{
+      ...messageEvent({ ref: "fy-fan", fan: "fan-fy", text: "too late", occurredAt: new Date("2026-06-26T00:00:03Z") }),
+      conversationRef: "chat-fy",
+    }]);
+    expect(await runMessageArchiveProjection(appStub())).toMatchObject({ inserted: 1 });
+    expect((await snapshot()).filter((row) => row.message_ref === "fy-fan")).toEqual([expect.objectContaining({
+      content_pending: false, text_plain: "too late", conversation_ref: "chat-fy", sender_role: "fan",
+      is_sent_by_me: false, fan_native_id: "fan-fy", occurred_at: new Date("2026-06-26T00:00:03Z"), deleted_at: deletedAt,
+    })]);
   });
 
   it("projects full OF material without turning it into a business message event", async (context) => {

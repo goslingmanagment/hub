@@ -29,9 +29,12 @@ import type { ApplyResult, LocalApplyInput, ResourceModule } from "../../engine/
 // the retired receipt reconcile did until step 4 S4-11; the engine inserts no
 // hot row since step 4 S4-13, so the rows are the ones legacy stored, and their
 // frozen copy never shows a deleted message as live); one deliverable
-// `message.deleted` per message (dedup `msg-deleted:fansly:<id>`), and the
-// archive tombstone from the stored events (tombstone-first, sticky: a
-// later REST copy hydrates the stub and keeps the tombstone). Then the stored
+// `message.deleted` per message (dedup `msg-deleted:fansly:<id>`) carrying
+// what the socket showed of the message — its chat, and from the create frame
+// its sender, side and send time — and the archive tombstone from the stored
+// events (tombstone-first, sticky: a message the archive does not hold yet
+// gets a stub with that chat, side and send time and no text; a later REST
+// copy fills the stub and keeps the tombstone). Then the stored
 // window of every thread whose archive holds one of the messages is recounted
 // from the archive (`writeThreadSummaryAfterDeletion`, the only engine writer
 // of those columns besides the read's, I9/E7; step 4 S4-08: the page's
@@ -51,6 +54,11 @@ interface DeletedOverlayRow {
   groupId: string | null;
   /** The sender, when the socket showed the message before deleting it. */
   senderRef: string | null;
+  /** The side from the create frame; null when the socket did not show the
+   *  create or the page's own id was unknown. */
+  sentByPage: boolean | null;
+  /** The send time from the create frame; null when the socket did not show it. */
+  createdAt: Date | null;
   deletedAt: Date;
   observationId: number;
 }
@@ -72,10 +80,13 @@ async function deletedOverlayRows(tx: Database, pageId: number, ids: readonly st
     platform_message_id: string;
     platform_conversation_id: string | null;
     sender_platform_user_id: string | null;
+    is_sent_by_page: boolean | null;
+    created_at: Date | string | null;
     deleted_at: Date | string;
     delete_observation_id: string;
   }>(sql`
-    select platform_message_id, platform_conversation_id, sender_platform_user_id, deleted_at, delete_observation_id::text
+    select platform_message_id, platform_conversation_id, sender_platform_user_id, is_sent_by_page, created_at,
+           deleted_at, delete_observation_id::text
       from dm_live_messages
      where page_id = ${pageId}
        and platform_message_id = any(${sql.param([...new Set(ids)])}::text[])
@@ -86,6 +97,8 @@ async function deletedOverlayRows(tx: Database, pageId: number, ids: readonly st
     messageId: row.platform_message_id,
     groupId: row.platform_conversation_id,
     senderRef: row.sender_platform_user_id,
+    sentByPage: row.is_sent_by_page,
+    createdAt: row.created_at === null ? null : dateOf(row.created_at),
     deletedAt: dateOf(row.deleted_at),
     observationId: Number(row.delete_observation_id),
   }));
@@ -228,12 +241,22 @@ export async function applyDmLiveDeletions(tx: Database, input: LocalApplyInput)
   }
 
   if (carried.length > 0) {
+    // The event is dated by the deletion; what the socket showed of the
+    // message is its data (the names of `message.live_observed`). The sender
+    // is the fan only on a fan's message: with the side unknown it may be the
+    // page itself.
     const events: DomainEventInput[] = carried.map((row) => ({
       type: "message.deleted",
       occurredAt: row.deletedAt,
+      fanIdentityRef: row.sentByPage === false ? row.senderRef : null,
       conversationRef: row.groupId,
       messageRef: row.messageId,
-      data: { source: "fansly_ws" },
+      data: {
+        source: "fansly_ws",
+        senderRef: row.senderRef,
+        sentByPage: row.sentByPage,
+        createdAt: row.createdAt?.toISOString() ?? null,
+      },
       schemaVersion: 1,
       observationId: row.observationId,
       dedupKey: `msg-deleted:fansly:${row.messageId}`,

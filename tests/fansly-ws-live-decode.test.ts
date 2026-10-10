@@ -151,6 +151,17 @@ describe("passive parity verdict", () => {
       .toEqual({ outcome: "mismatch", source: "message_archive", fields: ["sender"], waitReason: null });
   });
 
+  it("judges a deletion stub by the chat, side and send time it carries: the socket's own facts match; the old chatless stub of an own message did not", () => {
+    const own = { ...base, is_sent_by_page: true, sender_platform_user_id: "3" };
+    const stub = { arc_found: true, arc_text: "", arc_reply: null, arc_content_pending: true };
+    expect(judgeDmLiveParity({ ...own, ...stub, arc_group: "22", arc_sent_by_me: true,
+      arc_occurred_at: own.created_at }, 3_600_000))
+      .toEqual({ outcome: "match", source: "message_archive", fields: [], waitReason: null });
+    expect(judgeDmLiveParity({ ...own, ...stub, arc_group: null, arc_sent_by_me: false,
+      arc_occurred_at: new Date("2026-10-01T10:00:05.400Z") }, 3_600_000))
+      .toEqual({ outcome: "mismatch", source: "message_archive", fields: ["sender", "time"], waitReason: null });
+  });
+
   it("never scores a field the socket did not carry", () => {
     expect(judgeDmLiveParity({ ...base, ...hot, field_mask: 0, hot_content: "other", hot_reply: "1" }, 3_600_000))
       .toEqual({ outcome: "match", source: "page_dm_messages", fields: [], waitReason: null });

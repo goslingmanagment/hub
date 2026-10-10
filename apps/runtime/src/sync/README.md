@@ -333,9 +333,10 @@ broadcast. A deletion becomes `dm-live.deletions` (no request): a
 `local` step (a write without a request, in one generation-fenced transaction under the erasure fence, taken before
 the HTTP gate on the actor's next lap — no page hold or pacer slot delays it — and admitting nothing): the page's hot
 rows of the message are marked (sticky), one deliverable `message.deleted` is appended and the archive tombstoned
-from it (tombstone-first, sticky against a later REST copy), and then the stored window of every thread whose archive
-holds one of the messages is recounted from the archive by `writeThreadSummaryAfterDeletion` — the head stays the
-conversation list's, the chain is untouched.
+from it (tombstone-first, sticky against a later REST copy: a message the archive does not hold yet gets a stub with
+the chat, the side and the send time the socket showed and no text, which the later REST copy fills), and then the
+stored window of every thread whose archive holds one of the messages is recounted from the archive by
+`writeThreadSummaryAfterDeletion` — the head stays the conversation list's, the chain is untouched.
 Since step 4 S4-11 this is the only path from a socket deletion to the stores: the legacy receipt reconcile is gone, and
 the receipts it applied stay as records that the archive shadow rebuild re-applies.
 
