@@ -7,7 +7,7 @@ the operational notes each Wave-1 PR ships; deploy preconditions live at the end
 file, so exec the container directly — wrap ad-hoc reads in a read-only envelope):
 
 ```bash
-ssh root@45.8.230.111
+ssh root@152.53.191.242
 docker exec -it agency-hub-postgres-1 psql -X -v ON_ERROR_STOP=1 -U postgres -d agency_hub_core
 # BEGIN READ ONLY; SET LOCAL statement_timeout='30s'; …; ROLLBACK;
 ```
