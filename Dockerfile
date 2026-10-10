@@ -19,6 +19,8 @@ FROM target-base AS prod-deps
 ARG TARGETARCH
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+# pnpm applies patches/ (patchedDependencies) while it installs.
+COPY patches ./patches
 COPY apps/runtime/package.json ./apps/runtime/package.json
 COPY packages/contracts/package.json ./packages/contracts/package.json
 COPY packages/db/package.json ./packages/db/package.json
@@ -45,6 +47,8 @@ WORKDIR /app
 ARG BUILDARCH
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+# pnpm applies patches/ (patchedDependencies) while it installs.
+COPY patches ./patches
 COPY apps/dashboard/package.json ./apps/dashboard/package.json
 COPY apps/runtime/package.json ./apps/runtime/package.json
 COPY packages/contracts/package.json ./packages/contracts/package.json
