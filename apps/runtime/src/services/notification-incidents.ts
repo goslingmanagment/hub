@@ -77,10 +77,17 @@ export type SyncEngineRouteSubKey = `${typeof SYNC_ENGINE_ROUTE_SUBKEY_PREFIX}${
  * global latch (no page), resolved only by the owner's resume (`pnpm cli sync
  * public-lookup resume`). */
 export const SYNC_ENGINE_PUBLIC_LOOKUP_SUBKEY = "public_lookup";
+/** Bug hunt Д11: a rule of the alert evaluator (process `sync`) has not
+ * judged a handover/live page for 5 min while `sync` beats — the alerts it
+ * derives can neither page nor resolve. A global latch, written by the api
+ * watchdog alone (`services/ops-watchdog.ts`): opened while such a pair
+ * exists, resolved once every pair is judged again. */
+export const SYNC_ENGINE_EVALUATOR_SUBKEY = "evaluator";
 export type SyncEngineIncidentSubKey =
   | SyncEngineAlertSubKey
   | typeof SYNC_ENGINE_PACE_VIOLATION_SUBKEY
   | typeof SYNC_ENGINE_PUBLIC_LOOKUP_SUBKEY
+  | typeof SYNC_ENGINE_EVALUATOR_SUBKEY
   | SyncEngineRouteSubKey;
 
 /** The latch subKey of one route's incident. */
@@ -95,11 +102,13 @@ const SYNC_ENGINE_ROUTE_RESOLVE_DETAIL = "Fansly Sync Engine route open again (1
 type SyncEngineTitledSubKey =
   | SyncEngineAlertSubKey
   | typeof SYNC_ENGINE_PACE_VIOLATION_SUBKEY
-  | typeof SYNC_ENGINE_PUBLIC_LOOKUP_SUBKEY;
+  | typeof SYNC_ENGINE_PUBLIC_LOOKUP_SUBKEY
+  | typeof SYNC_ENGINE_EVALUATOR_SUBKEY;
 
 const SYNC_ENGINE_OPEN_TITLES: Record<SyncEngineTitledSubKey, string> = {
   page_stopped: "🚨 Fansly Sync Engine stopped a page (429, auth, identity, network or ownership)",
   [SYNC_ENGINE_PUBLIC_LOOKUP_SUBKEY]: "🚨 Fansly public account reader stopped (429, 401/403, network or an unexpected answer) — nothing sends until the owner resumes it",
+  [SYNC_ENGINE_EVALUATOR_SUBKEY]: "🚨 Fansly Sync Engine alerts unevaluated — some alerts of a page have not been judged for 5 min (they can neither page nor resolve)",
   [SYNC_ENGINE_PACE_VIOLATION_SUBKEY]: "🚨 Fansly Sync Engine pace violated: two sends of a page closer than their pause, or of a route closer than its interval",
   live_degraded: "🚨 Fansly Sync Engine live path degraded (socket, decode debt or quarantined work)",
   freshness: "🚨 Fansly Sync Engine freshness broken (messages, money or urgent work late)",
@@ -110,6 +119,7 @@ const SYNC_ENGINE_OPEN_TITLES: Record<SyncEngineTitledSubKey, string> = {
 const SYNC_ENGINE_RESOLVE_DETAILS: Record<SyncEngineTitledSubKey, string> = {
   page_stopped: "Fansly Sync Engine page running again (10 min clean)",
   [SYNC_ENGINE_PUBLIC_LOOKUP_SUBKEY]: "Fansly public account reader resumed by the owner",
+  [SYNC_ENGINE_EVALUATOR_SUBKEY]: "Fansly Sync Engine alerts evaluated again",
   [SYNC_ENGINE_PACE_VIOLATION_SUBKEY]: "Fansly Sync Engine pace violation acknowledged by the owner",
   live_degraded: "Fansly Sync Engine live path healthy again",
   freshness: "Fansly Sync Engine freshness back within bounds",
@@ -578,21 +588,33 @@ export async function notifyWrongTransactionsWriterIncident(
   });
 }
 
-async function resolveIncidentAndNotify(
-  app: IncidentApp,
-  input: {
-    kind: NotificationIncidentKind;
-    platformAccountId: number | null;
-    pageLabel: string | null;
-    platform: "fansly" | "onlyfans" | null;
-    recoveredAt?: Date;
-    stream?: SyncStream | null;
-    subKey?: string | null;
-    /** Set only when the resolve is not the condition's own recovery. */
-    resolution?: IncidentResolution;
-    deliveryMode?: "policy" | "critical_outbox";
-  },
-): Promise<boolean> {
+/** What a resolve did: moved an open latch to resolved; changed nothing (the
+ *  latch was not open, or was seen after `recoveredAt`); or failed (logged
+ *  here; the latch stays as it was). */
+export type IncidentResolveOutcome =
+  | { status: "resolved" }
+  | { status: "unchanged" }
+  | { status: "failed"; error: unknown };
+
+type ResolveIncidentInput = {
+  kind: NotificationIncidentKind;
+  platformAccountId: number | null;
+  pageLabel: string | null;
+  platform: "fansly" | "onlyfans" | null;
+  recoveredAt?: Date;
+  stream?: SyncStream | null;
+  subKey?: string | null;
+  /** Set only when the resolve is not the condition's own recovery. */
+  resolution?: IncidentResolution;
+  deliveryMode?: "policy" | "critical_outbox";
+};
+
+/** True: this call moved an open latch to resolved (`resolveIncidentOutcome`). */
+async function resolveIncidentAndNotify(app: IncidentApp, input: ResolveIncidentInput): Promise<boolean> {
+  return (await resolveIncidentOutcome(app, input)).status === "resolved";
+}
+
+async function resolveIncidentOutcome(app: IncidentApp, input: ResolveIncidentInput): Promise<IncidentResolveOutcome> {
   const recoveredAt = input.recoveredAt ?? new Date();
   const metadata = {
     pageLabel: input.pageLabel,
@@ -620,15 +642,14 @@ async function resolveIncidentAndNotify(
 
     // Decision 381: the recovery notice for every non-critical kind is the
     // paging sweep's, once the condition has stayed quiet for its hold.
-    // True: this call moved an open latch to resolved.
-    return resolved !== null;
+    return { status: resolved !== null ? "resolved" : "unchanged" };
   } catch (error) {
     app.logger.warn({
       platformAccountId: input.platformAccountId,
       incidentKind: input.kind,
       err: error,
     }, "Notification incident resolve failed; continuing");
-    return false;
+    return { status: "failed", error };
   }
 }
 
@@ -1025,11 +1046,13 @@ export async function notifySyncEngineIncident(
   });
 }
 
+/** Resolve one of the engine's latches; the outcome tells a resolve that did
+ *  not land (`failed`) from one with nothing to do (`unchanged`). */
 export async function resolveSyncEngineIncident(
   app: IncidentApp,
   input: { subKey: SyncEngineIncidentSubKey; pageId: number | null; pageLabel: string | null; recoveredAt: Date },
-) {
-  await resolveIncidentAndNotify(app, {
+): Promise<IncidentResolveOutcome> {
+  return resolveIncidentOutcome(app, {
     kind: "fansly_sync_engine",
     platformAccountId: input.pageId,
     pageLabel: input.pageLabel,

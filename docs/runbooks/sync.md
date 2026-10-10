@@ -370,6 +370,7 @@ their clean window (`routes`) and the open latches (`openLatches`), and the glob
 | | `planned_stale` | a poll not served within its SLO (else 3 periods) | `sync why` on the key |
 | | `transactions_ledger_incomplete` | the rescan's last certified round proved the ledger short of Fansly's lifetime total, no backfill is running or one has applied no answer for 30 minutes, and none completed (`backfill_complete`) after that round began | the owner's backfill: `sync work enqueue --resource transactions.backfill` |
 | 5 `process` (global) | `heartbeat_silent`, `stalled` | no `sync` heartbeat for 2 minutes while a page is in the engine; or the stall watchdog ended the process | [Watchdog restarts](#watchdog-restarts-shutdown-and-deploys) |
+| `evaluator` (global) | `failing`, `unrecorded`, `late` | while `sync` beats, a rule of the alert evaluator has not judged a `handover`/`live` page for 5 minutes, counted from its last full judgement or the page's mode change (a restart does not reset it): `failing` — a fact it reads, the rule itself, or its open or resolve keeps failing (the summary names the pages, rules and the error, e.g. `journal: database query failed (57014)`); `unrecorded` — no record for the pair (a `sync` that predates the table, or one that never reached the page); `late` — no failure, but judged less often than every 5 minutes (slow passes). Meanwhile the alerts that rule derives can neither page nor resolve | the `sync` log (`Fansly sync alerts: rules not evaluated`), then the evaluation check under [Read-only data checks](#read-only-data-checks); a code fault is fixed forward or rolled back |
 | `public_lookup` (global) | `rate_limited`, `auth_refused`, `network`, `off_contract`, `indeterminate` | the session-less public account reader stopped on its first failure (or an attempt whose outcome nobody recorded); it stays open until the owner resumes the reader | [The public account reader](#the-public-account-reader) |
 
 Alert 1 stays 10 minutes after its hold ends ("hold cleared and 10 minutes clean"). A pause of the whole page and a
@@ -906,6 +907,11 @@ zgrep -h '"level":50\|evaluation pass failed\|stalled; exiting\|shutdown cap' /o
 up (`docker compose ps sync`), and what do its logs end with? Nothing else sends for a Fansly page, so a stopped
 `sync` is a stopped Fansly sync.
 
+**The `evaluator` latch after a rollback.** Only the api's watchdog closes it, and an image from before the alert
+evaluations has no such leg: a latch open at the rollback stays open. Once the evaluation check below shows every
+pair judged (or the image has no table to check), close it by hand — the dashboard's resolve button, or
+`POST /api/v1/admin/notifications/incidents/:id/resolve` — or let the next forward deploy close it.
+
 **Shutdown and deploys.** On SIGTERM each actor finishes the step in flight and writes its page's safe release; the
 process ends 40 s after the signal at the latest, inside the container's 45 s stop grace. A page whose release did
 not finish waits for a stop confirmation. The deploy recreates `sync` and then confirms the owners of the stopped
@@ -986,6 +992,25 @@ select count(*) as unparked_legacy_rows
 
 `legacy_sends` is 0 (a row with `page_id` null is the onboarding identity check), `legacy_runs` lists `onlyfans`
 alone, `unparked_legacy_rows` is 0.
+
+**The alert evaluator judges every page.** Per `handover`/`live` page and rule, how long ago the evaluator last
+judged it in full, how far its latest pass lagged behind that, and the failure that keeps it from judging now (the
+`evaluator` latch opens past 300 s):
+
+```sql
+select p.label, r.rule,
+       round(extract(epoch from now() - e.evaluated_at)) as age_s,
+       round(extract(epoch from e.attempted_at - e.evaluated_at)) as behind_s,
+       e.failure
+  from sync_pages sp
+  join pages p on p.id = sp.page_id
+ cross join unnest(array['page_stopped','live_degraded','freshness','stuck','route_limited','pace_audit']) as r(rule)
+  left join sync_alert_evaluations e on e.page_id = sp.page_id and e.rule = r.rule
+ where sp.mode in ('handover', 'live')
+ order by 1, 2;
+```
+
+Healthy: six rows a page, `age_s` under 60, `behind_s` 0, no `failure`. A row without `age_s` was never recorded.
 
 **Tip contexts.** A Fansly ledger tip is bridged to its optional note and conversation by the tip id the `/message`
 answer carries, never by time or amount. The engine's rows carry observation lineage (`source_observation_id`);

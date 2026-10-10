@@ -86,6 +86,11 @@ describe("Fansly Sync Engine repository boundaries", () => {
     expect(filesMatching("(insert into|update|delete from) sync_holds\\b", SOURCES)).toEqual([
       "packages/db/src/repositories/sync/pages.ts",
     ]);
+    // The alert evaluations by their repository alone (bug hunt Д11); nothing deletes them.
+    expect(filesMatching("(insert into|update) sync_alert_evaluations\\b", SOURCES)).toEqual([
+      "packages/db/src/repositories/sync/alert-evaluations.ts",
+    ]);
+    expect(filesMatching("delete from sync_alert_evaluations\\b", SOURCES)).toEqual([]);
     expect(filesMatching("set mode = \\$\\{", ["packages/db/src/repositories/sync"])).toEqual([
       "packages/db/src/repositories/sync/pages.ts",
     ]);

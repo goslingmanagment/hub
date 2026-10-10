@@ -26,6 +26,9 @@ const REQUIRED_TABLE_NAMES = [
   // Fansly Sync Engine chat-unavailability episodes (0251): the refusal path,
   // the DM planner and the history intake read and write it.
   "page_dm_thread_unavailability",
+  // Fansly Sync Engine alert evaluations (0262): the evaluator writes, the
+  // api watchdog reads.
+  "sync_alert_evaluations",
 ] as const;
 const LEGACY_TABLE_NAMES = [
   ["platform", "accounts"].join("_"),

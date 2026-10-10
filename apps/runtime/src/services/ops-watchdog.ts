@@ -6,7 +6,11 @@
 // wedged-but-alive process. The watchdog runs from the API process — the one
 // long-lived process independent of scheduler/worker — and pages when either
 // signal goes silent. The Fansly Sync Engine adds a third leg (alert 5, design
-// §9.6): a page is in the engine and no `sync` process beats.
+// §9.6): a page is in the engine and no `sync` process beats. A fourth (bug
+// hunt Д11) watches what that beat does not prove: while `sync` beats, every
+// rule of the alert evaluator must have judged every handover/live page within
+// 5 min (`sync_alert_evaluations`), or the global latch `evaluator` pages — a
+// rule that keeps failing can neither page nor resolve its own alert.
 //
 // E-2's leg — legacy Fansly sync chunks that stop starting while a stream is
 // due — went with its subject at step 4 (S4-21): no Fansly page has a legacy
@@ -19,6 +23,8 @@ import {
   getLatestOpsMetricSampleAt,
   hasFreshInstanceHeartbeat,
   hasSyncPageInEngine,
+  readUnevaluatedSyncAlertRules,
+  type SyncUnevaluatedAlertRule,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
@@ -31,6 +37,7 @@ import {
   notifySyncEngineIncident,
   resolveOfapiGlobalIncident,
   resolveSyncEngineIncident,
+  SYNC_ENGINE_EVALUATOR_SUBKEY,
 } from "./notification-incidents.ts";
 import {
   runNotificationPagingSweepExclusive,
@@ -49,6 +56,11 @@ export const OPS_WATCHDOG_BOOT_GRACE_MS = 5 * 60_000;
 /** Alert 5 (design §9.6): the `sync` process beats every 30 s; none for this
  *  long while a page is in the engine pages the owner. */
 export const OPS_WATCHDOG_SYNC_ENGINE_SILENCE_MS = 2 * 60_000;
+/** Bug hunt Д11: a rule of the alert evaluator that has not judged a
+ *  handover/live page for this long — from its last full judgement or the
+ *  page's last mode change, whichever is later, on the database clock — opens
+ *  the `evaluator` latch. A restart of `sync` does not reset it. */
+export const OPS_WATCHDOG_SYNC_ALERTS_STALE_MS = 5 * 60_000;
 /** The api-side delivery fallback drains a few rows on a short clock: it runs
  * beside the watchdog every minute, and the worker takes over once it is back. */
 export const OPS_WATCHDOG_FALLBACK_MAX_ROWS = 5;
@@ -141,7 +153,82 @@ export async function runOpsWatchdogCheck(
     });
   }
 
+  // Bug hunt Д11: the evaluator's rules, judged only while `sync` beats (a
+  // silent process is alert 5's). The leg's own failure changes nothing else.
+  if (!syncEngineSilent) {
+    try {
+      await latchSyncAlertEvaluator(app, { bootGrace, now });
+    } catch (error) {
+      app.logger.warn({ err: error }, "Ops watchdog: the sync alert evaluation check failed; its latch stays as it is");
+    }
+  }
+
   return { bootGrace, schedulerFresh, samplerFresh, syncEngineSilent };
+}
+
+/** The `evaluator` latch: open while a handover/live page has a rule the
+ *  evaluator has not judged for `OPS_WATCHDOG_SYNC_ALERTS_STALE_MS`, resolved
+ *  once every pair is judged again. Inside the boot grace it only resolves. */
+async function latchSyncAlertEvaluator(
+  app: Pick<AppContext, "db" | "logger">,
+  input: { bootGrace: boolean; now: Date },
+): Promise<void> {
+  const stale = await readUnevaluatedSyncAlertRules(app.db, { staleAfterMs: OPS_WATCHDOG_SYNC_ALERTS_STALE_MS });
+  if (stale.length === 0) {
+    await resolveSyncEngineIncident(app, { subKey: SYNC_ENGINE_EVALUATOR_SUBKEY, pageId: null, pageLabel: null, recoveredAt: input.now });
+    return;
+  }
+  if (input.bootGrace) return;
+  await notifySyncEngineIncident(app, {
+    subKey: SYNC_ENGINE_EVALUATOR_SUBKEY,
+    pageId: null,
+    pageLabel: null,
+    // The heaviest first: a rule failing, a rule never recorded, a rule late.
+    detail: stale.some((pair) => pair.failure !== null) ? "failing" : stale.some((pair) => !pair.recorded) ? "unrecorded" : "late",
+    errorSummary: unevaluatedSummary(stale),
+    occurredAt: input.now,
+  });
+}
+
+const STALE_STATES = ["failing", "unrecorded", "late"] as const;
+
+function clockOf(at: Date): string {
+  return `${at.toISOString().slice(11, 16)}Z`;
+}
+
+/** The `evaluator` latch's summary: the pairs grouped by state and failure
+ *  (the heaviest first, the oldest first within a state), each group with its
+ *  pages (named up to two, else counted), its rules and since when — e.g.
+ *  "6 pages: freshness — money: database query failed (57014) since 10:02Z".
+ *  The latch clamps it to its 240 characters. */
+export function unevaluatedSummary(stale: readonly SyncUnevaluatedAlertRule[]): string {
+  const groups = new Map<string, {
+    state: (typeof STALE_STATES)[number];
+    what: string;
+    pages: Set<string>;
+    rules: Set<string>;
+    since: Date | null;
+  }>();
+  for (const pair of stale) {
+    const state = pair.failure !== null ? "failing" : !pair.recorded ? "unrecorded" : "late";
+    const what = state === "failing" ? pair.failure! : state === "unrecorded" ? "never recorded" : "not judged";
+    const since = state === "failing" ? pair.failedSince : pair.evaluatedAt;
+    const key = `${state}\u0000${what}`;
+    const group = groups.get(key) ?? { state, what, pages: new Set<string>(), rules: new Set<string>(), since };
+    group.pages.add(pair.pageLabel ?? String(pair.pageId));
+    group.rules.add(pair.rule);
+    if (since !== null && (group.since === null || since.getTime() < group.since.getTime())) group.since = since;
+    groups.set(key, group);
+  }
+  return [...groups.values()]
+    .sort((a, b) => STALE_STATES.indexOf(a.state) - STALE_STATES.indexOf(b.state)
+      || (a.since?.getTime() ?? 0) - (b.since?.getTime() ?? 0))
+    .map((group) => {
+      const pages = group.pages.size <= 2 ? [...group.pages].join(", ") : `${group.pages.size} pages`;
+      const since = group.since === null ? "" : ` since ${clockOf(group.since)}`;
+      return `${pages}: ${[...group.rules].join(", ")} — ${group.what}${since}`;
+    })
+    .join("; ");
 }
 
 /**
