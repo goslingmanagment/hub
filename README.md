@@ -276,6 +276,26 @@ Resource Saver. Container logs are bounded everywhere with Docker's rotating
 `local` driver: local Compose keeps `10m` × 3 files per container, production
 Compose keeps `20m` × 5.
 
+That log lives in the container's own directory, so recreating a container
+deletes it. Before every command that replaces or removes production
+containers (the forward recreate, the separate `sync` recreate, the rollback),
+the deploy archives their whole logs with `scripts/archive-container-logs.sh`
+into `/opt/agency-hub/container-logs/<service>/*.log.gz` (root, 0600) and
+prints `Container logs archived (<phase>)`, or a `WARNING` when the archive is
+partial or missing; it never fails the deploy. A running container is archived
+as a snapshot, so its last seconds before the stop are not in the file.
+Archives are kept 30 days within a soft cap of 512 MiB, and none are written
+at 90 % disk or more.
+
+Before recreating an app service by hand (`up -d` of a changed service, or
+`--force-recreate`), check that no deploy runs (no `/opt/agency-hub/.deploy.lock`)
+and archive its log first:
+
+```bash
+/opt/agency-hub/scripts/archive-container-logs.sh --dir /opt/agency-hub/container-logs \
+  --project-dir /opt/agency-hub --reason manual <service>
+```
+
 ## Backups
 
 Recurring off-server backups, restore drills and backup-provider monitoring are intentionally outside the owner-approved product scope. Loss of the VPS can mean loss of the stored history; that risk was explicitly accepted. Reopening a backup program requires a new owner decision and is not an implicit implementation blocker.
@@ -308,6 +328,16 @@ docker compose --env-file .env.production -f docker-compose.production.yml logs 
 ```
 
 Common causes are an invalid `DATABASE_URL`, a bad `APP_ENCRYPTION_KEY`, or missing page credentials.
+
+The logs of containers a deploy replaced are archived on the host, one file
+per container, named `<created>_<archived>_<id12>_<revision>.log.gz` (sorted
+by name is chronological; `.truncated` marks an incomplete read):
+
+```bash
+ls -1 /opt/agency-hub/container-logs/api | tail
+zcat /opt/agency-hub/container-logs/api/<file> | head -1   # header: exit_code, oom_killed, restart_count, snapshot
+zcat /opt/agency-hub/container-logs/api/<file> | tail -n +2 | cut -d' ' -f2- | tail -200
+```
 
 ### `/api/v1/health` is not healthy
 

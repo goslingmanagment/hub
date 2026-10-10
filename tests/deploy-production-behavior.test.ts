@@ -1,13 +1,16 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
+import { containerId as fakeContainerId, createFakeDockerHost, HELPER_BASH } from "./helpers/fake-docker-host.ts";
+
 const repoRoot = fileURLToPath(new URL("../", import.meta.url));
 const deployPath = path.join(repoRoot, "scripts/deploy-production.sh");
+const archiveHelperPath = path.join(repoRoot, "scripts/archive-container-logs.sh");
 const infrastructurePath = path.join(repoRoot, "scripts/deploy-infrastructure.mjs");
 const revision = "0123456789ab";
 const checksum = "a".repeat(64);
@@ -101,6 +104,24 @@ ssh() {
 SSH_ARGS=()
 `;
 
+// М1: the container log archive goes over ssh as `timeout 300 bash -l -s --
+// <args>` with the local helper on stdin. This ssh journals the call like the
+// prelude's, keeps the streamed stdin, evaluates the remote command against a
+// `timeout` that records the argv it would run, and answers
+// TEST_ARCHIVE_STATUS (the helper's 0/3/4, ssh's 255, timeout's 124).
+const archiveSsh = String.raw`
+ssh() {
+  printf 'ssh %s\n' "$*" >> "$TEST_COMMAND_LOG"
+  cat > "$TEST_HELPER_STDIN"
+  local remote
+  for remote; do :; done
+  (
+    timeout() { printf '%s\n' "$@" > "$TEST_HELPER_ARGV"; printf 'service=fixture found=1\n'; return "$TEST_ARCHIVE_STATUS"; }
+    eval "$remote"
+  )
+}
+`;
+
 describe("production deploy behavior without production access", () => {
   let fixtureRoot: string;
   let commandLog: string;
@@ -141,6 +162,8 @@ describe("production deploy behavior without production access", () => {
       TEST_EXPECTED_IMAGE: imageId, TEST_POSTGRES_METADATA: currentPostgres, TEST_PROJECT: "agency-hub",
       TEST_CALCULATED_CHECKSUM: checksum,
       TEST_REMOTE_FAILURE_PATTERN: "", TEST_SSH_FAILURE: "0", TEST_SYNC_STATUSES: "healthy",
+      APP_DIR: "/opt/agency-hub", TEST_ARCHIVE_STATUS: "0",
+      TEST_HELPER_STDIN: path.join(fixtureRoot, "helper-stdin"), TEST_HELPER_ARGV: path.join(fixtureRoot, "helper-argv"),
       ...overrides,
     };
   }
@@ -153,6 +176,18 @@ describe("production deploy behavior without production access", () => {
 
   function commands() {
     return readFileSync(commandLog, "utf8").trim().split("\n").filter(Boolean);
+  }
+
+  /** The argv the last archive's remote command ran under `timeout`. */
+  function archiveArgv() {
+    return readFileSync(path.join(fixtureRoot, "helper-argv"), "utf8").trim().split("\n");
+  }
+
+  function archiveArgs(phase: string, ...services: string[]) {
+    return [
+      "300", "bash", "-l", "-s", "--", "--dir", "/opt/agency-hub/container-logs", "--project-dir", "/opt/agency-hub",
+      "--reason", `deploy fixture-123 ${revision} ${phase}`, ...services,
+    ];
   }
 
   it.each([
@@ -531,19 +566,128 @@ describe("production deploy behavior without production access", () => {
 
   // Design §9.3 [A3]: the app-scope recreate leaves sync alone; it is
   // recreated on its own, without touching its dependencies, once the api is
-  // healthy. A stack recreate already started it after API health.
-  it("recreates only the sync container in app scope, and nothing in stack scope", () => {
-    const apps = runFunctions(["recreate_sync_service"], "recreate_sync_service");
+  // healthy. A stack recreate already started it after API health. М1: the
+  // old container's log is archived right before that `up`, while it runs.
+  it("recreates sync in app scope as archive, then up; never stops it", () => {
+    const apps = runFunctions(["recreate_sync_service", "archive_remote_container_logs"], `${archiveSsh}\nrecreate_sync_service`);
     expect(apps.status, apps.stderr).toBe(0);
     expect(commands()).toEqual([
+      "ssh root@fixture.invalid timeout 300 bash -l -s -- --dir /opt/agency-hub/container-logs --project-dir /opt/agency-hub "
+        + `--reason deploy\\ fixture-123\\ ${revision}\\ sync sync`,
       "set -euo pipefail; cd /opt/agency-hub && docker compose --current up -d --no-deps --force-recreate --no-build sync",
     ]);
+    expect(archiveArgv()).toEqual(archiveArgs("sync", "sync"));
+    expect(readFileSync(path.join(fixtureRoot, "helper-stdin"), "utf8")).toBe(readFileSync(archiveHelperPath, "utf8"));
+    expect(apps.stderr).toMatch(/^Container logs archived \(sync\) duration_seconds=\d+: service=fixture found=1$/m);
+    expect(commands().join("\n")).not.toMatch(/ stop /);
 
     writeFileSync(commandLog, "");
-    const stack = runFunctions(["recreate_sync_service"], "recreate_sync_service", { RECREATE_SCOPE: "stack" });
+    const stack = runFunctions(["recreate_sync_service", "archive_remote_container_logs"], `${archiveSsh}\nrecreate_sync_service`, {
+      RECREATE_SCOPE: "stack",
+    });
     expect(stack.status, stack.stderr).toBe(0);
     expect(stack.stderr).toContain("Stack recreate already started the sync container");
     expect(commands()).toEqual([]);
+  });
+
+  it.each([
+    ["a dropped connection", "255"],
+    ["a timeout", "124"],
+  ])("%s during the sync archive still recreates sync", (_label, status) => {
+    const result = runFunctions(["recreate_sync_service", "archive_remote_container_logs"], String.raw`
+      ${archiveSsh}
+      if recreate_sync_service; then exit 0; else exit 51; fi
+    `, { TEST_ARCHIVE_STATUS: status });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toContain(`WARNING: container logs NOT archived (sync) exit=${status} duration_seconds=`);
+    expect(result.stderr).not.toContain("Container logs archived");
+    expect(commands()).toHaveLength(2);
+    expect(commands()[1]).toContain("up -d --no-deps --force-recreate --no-build sync");
+    expect(commands().join("\n")).not.toMatch(/ stop /);
+  });
+
+  it("archive_remote_container_logs streams the local helper with app dir, run id, revision and phase, bounds it with timeout 300 and logs its duration", () => {
+    const result = runFunctions(["archive_remote_container_logs"], String.raw`
+      ${archiveSsh}
+      SECONDS=0
+      archive_remote_container_logs forward api worker
+    `, { APP_DIR: "/srv/hub dir/", REMOTE: "deploy@fixture.invalid" });
+    expect(result.status, result.stderr).toBe(0);
+    expect(commands()).toEqual([
+      "ssh deploy@fixture.invalid timeout 300 bash -l -s -- --dir /srv/hub\\ dir/container-logs --project-dir /srv/hub\\ dir/ "
+        + `--reason deploy\\ fixture-123\\ ${revision}\\ forward api worker`,
+    ]);
+    expect(archiveArgv()).toEqual([
+      "300", "bash", "-l", "-s", "--", "--dir", "/srv/hub dir/container-logs", "--project-dir", "/srv/hub dir/",
+      "--reason", `deploy fixture-123 ${revision} forward`, "api", "worker",
+    ]);
+    expect(readFileSync(path.join(fixtureRoot, "helper-stdin"), "utf8")).toBe(readFileSync(archiveHelperPath, "utf8"));
+    expect(result.stderr).toBe("Container logs archived (forward) duration_seconds=0: service=fixture found=1\n");
+  });
+
+  it.each([
+    ["apps", ["api", "worker", "scheduler"]],
+    ["stack", ["postgres", "api", "worker", "scheduler", "sync"]],
+  ])("archive_before_stack_recreate in %s scope archives the forward recreate's services and never stops", (scope, services) => {
+    const result = runFunctions(["archive_before_stack_recreate", "archive_remote_container_logs"], `${archiveSsh}\narchive_before_stack_recreate`, {
+      RECREATE_SCOPE: scope,
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(archiveArgv()).toEqual(archiveArgs("forward", ...services));
+    expect(commands()).toHaveLength(1);
+    expect(commands()[0]).toMatch(/^ssh /);
+    expect(commands().join("\n")).not.toMatch(/ stop |compose/);
+  });
+
+  // Astra №3: the wrapper's verdict is the real helper's exit status. Here
+  // the ssh runs the streamed helper locally (`bash -s -- <args>`) against a
+  // fake Docker host whose project directory is APP_DIR.
+  describe("the wrapper over the real helper", () => {
+    function archiveForReal(options: { logsExit?: number; gzipFails?: boolean; unusableDir?: boolean } = {}) {
+      const appDir = path.join(fixtureRoot, "app");
+      mkdirSync(appDir);
+      if (options.unusableDir) writeFileSync(path.join(appDir, "container-logs"), "a file, not a directory");
+      const fake = createFakeDockerHost(fixtureRoot, {
+        containers: [{ id: fakeContainerId("5e"), service: "sync", workingDir: appDir, logsExit: options.logsExit ?? 0 }],
+        gzipFails: options.gzipFails === true,
+      });
+      const { PATH: helperPath, ...fakeEnv } = fake.env;
+      const result = runFunctions(["archive_remote_container_logs"], String.raw`
+        ssh() {
+          printf 'ssh %s\n' "$*" >> "$TEST_COMMAND_LOG"
+          local remote
+          for remote; do :; done
+          timeout() { shift 2; [[ "$1" != -l ]] || shift; PATH="$TEST_HELPER_PATH" "$TEST_HELPER_BASH" "$@"; }
+          eval "$remote"
+        }
+        archive_remote_container_logs sync sync
+      `, { ...fakeEnv, APP_DIR: appDir, TEST_HELPER_PATH: helperPath, TEST_HELPER_BASH: HELPER_BASH });
+      return { result, archives: path.join(appDir, "container-logs", "sync") };
+    }
+
+    it("reports a full archive", () => {
+      const { result, archives } = archiveForReal();
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stderr).toMatch(/^Container logs archived \(sync\) duration_seconds=\d+: service=sync found=1; archived service=sync id=5e5e5e5e5e5e file=sync\/\S+\.log\.gz bytes=\d+ snapshot=true read_limit=none; pruned files=0 bytes=0 total=\d+$/m);
+      expect(readdirSync(archives)).toHaveLength(1);
+    });
+
+    it.each([
+      ["a failed docker logs", { logsExit: 1 }],
+      ["a failed gzip", { gzipFails: true }],
+    ])("reports %s as partial", (_label, options) => {
+      const { result } = archiveForReal(options);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stderr).toMatch(/^WARNING: container logs archived only partially \(sync\) duration_seconds=\d+: service=sync found=1; truncated service=sync /m);
+      expect(result.stderr).not.toContain("Container logs archived");
+    });
+
+    it("reports an unusable archive directory as not archived", () => {
+      const { result } = archiveForReal({ unusableDir: true });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stderr).toMatch(/^WARNING: container logs NOT archived \(sync\) exit=4 duration_seconds=\d+: skipped error=directory_unavailable /m);
+      expect(result.stderr).not.toContain("Container logs archived");
+    });
   });
 
   it("propagates a failed sync recreate to its caller", () => {
@@ -592,8 +736,9 @@ describe("production deploy behavior without production access", () => {
       writeFileSync(path.join(fixtureRoot, "schema-before"), "0001_init\n");
       return runFunctions([
         "rollback_remote_stack", "remote_release_defines_sync", "wait_for_sync_container_health",
-        "confirm_sync_owner_handover", "confirm_remote_fansly_send_guard_terminations",
+        "confirm_sync_owner_handover", "confirm_remote_fansly_send_guard_terminations", "archive_remote_container_logs",
       ], String.raw`
+        ${archiveSsh}
         sleep() { :; }
         run_remote() {
           printf '%s\n' "$1" >> "$TEST_COMMAND_LOG"
@@ -608,16 +753,18 @@ describe("production deploy behavior without production access", () => {
           esac
         }
         capture_remote_schema_migrations() { cp "$SCHEMA_BEFORE_FILE" "$1"; }
-        verify_remote_legacy_onlyfans_dm_messages_retired() { return 0; }
+        verify_remote_legacy_onlyfans_dm_messages_retired() { return "$TEST_DM_RETIRED_STATUS"; }
+        restore_remote_release_files() { printf 'restore release files\n' >> "$TEST_COMMAND_LOG"; ROLLBACK_RELEASE_FILES_RESTORED=1; }
         wait_for_api_health() { printf 'api health\n' >> "$TEST_COMMAND_LOG"; return "$TEST_API_HEALTH_STATUS"; }
-        ROLLBACK_IMAGE_AVAILABLE=1 SCHEMA_BASELINE_CAPTURED=1 ROLLBACK_RELEASE_FILES_RESTORED=1
+        ROLLBACK_IMAGE_AVAILABLE=1 SCHEMA_BASELINE_CAPTURED=1 ROLLBACK_RELEASE_FILES_RESTORED="$TEST_RELEASE_FILES_RESTORED"
         SCHEMA_BEFORE_FILE="$ROOT_DIR/schema-before" SCHEMA_AFTER_FILE="$ROOT_DIR/schema-after" HEALTH_FILE="$ROOT_DIR/health"
         IMAGE_TAG=example/hub:production ROLLBACK_IMAGE_TAG=example/hub:production-rollback-fixture
         rollback_remote_stack
         log "rollback returned"
       `, {
         RECREATE_SERVICES: "api worker scheduler", TEST_RELEASE_SERVICES: "postgres api scheduler worker sync",
-        TEST_API_HEALTH_STATUS: "0", TEST_SYNC_STATUSES: "starting healthy", ...overrides,
+        TEST_API_HEALTH_STATUS: "0", TEST_SYNC_STATUSES: "starting healthy",
+        TEST_DM_RETIRED_STATUS: "0", TEST_RELEASE_FILES_RESTORED: "1", ...overrides,
       });
     }
 
@@ -699,6 +846,49 @@ describe("production deploy behavior without production access", () => {
       const result = rollback({ TEST_REMOTE_FAILURE_PATTERN: "config --services" });
       expect(result.status, result.stderr).toBe(0);
       expect(commands()).toContain(`${rollbackUp} api worker scheduler sync`);
+    });
+
+    // М1: the rollback replaces the failed candidate's containers (and
+    // removes sync when the restored release predates it), so their logs are
+    // archived right before its `up`, after the release files are restored.
+    it.each([
+      ["app", { TEST_RELEASE_SERVICES: "postgres api scheduler worker sync" }, ["api", "worker", "scheduler", "sync"]],
+      ["app (restored release without sync)", { TEST_RELEASE_SERVICES: "postgres api scheduler worker" }, ["api", "worker", "scheduler", "sync"]],
+      ["stack", { RECREATE_SCOPE: "stack", RECREATE_SERVICES: "" }, ["postgres", "api", "worker", "scheduler", "sync"]],
+    ] as const)("archives the replaced containers right before the rollback up (%s scope)", (_label, overrides, services) => {
+      const result = rollback({ ...overrides, TEST_RELEASE_FILES_RESTORED: "0" });
+      expect(result.status, result.stderr).toBe(0);
+      const calls = commands();
+      const restore = calls.indexOf("restore release files");
+      const archive = lineOf(calls, "ssh root@fixture.invalid timeout 300 bash -l -s --");
+      const recreate = lineOf(calls, " up -d --remove-orphans --force-recreate --no-build");
+      expect(restore).toBeGreaterThan(-1);
+      expect(archive).toBeGreaterThan(restore);
+      expect(recreate).toBe(archive + 1);
+      expect(calls.filter((call) => call.startsWith("ssh "))).toHaveLength(1);
+      expect(archiveArgv()).toEqual(archiveArgs("rollback", ...services));
+      expect(calls.join("\n")).not.toMatch(/ stop /);
+      expect(result.stderr).toContain("Container logs archived (rollback)");
+    });
+
+    it("a failed archive never blocks the rollback", () => {
+      const result = rollback({ TEST_ARCHIVE_STATUS: "255" });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stderr).toContain("WARNING: container logs NOT archived (rollback) exit=255");
+      expect(commands()).toContain(`${rollbackUp} api worker scheduler sync`);
+      expect(commands().at(-1)).toBe(sendGuardConfirmation);
+      expect(result.stderr).toMatch(/rollback returned\n$/);
+    });
+
+    it.each([
+      ["a pre-recreate migration forbids it", { ROLLBACK_FORBIDDEN: "1" }],
+      ["the legacy dm_messages retirement is not proven", { TEST_DM_RETIRED_STATUS: "1" }],
+    ])("archives nothing when the rollback is skipped: %s", (_label, overrides) => {
+      const result = rollback(overrides);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stderr).toContain("Rollback skipped");
+      expect(commands().join("\n")).not.toMatch(/^ssh |up -d/m);
+      expect(result.stderr).not.toContain("Container logs");
     });
 
     it("neither waits for sync nor confirms anything when the rollback recreate itself fails", () => {

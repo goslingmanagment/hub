@@ -849,6 +849,7 @@ for file in \
   docker-compose.production.yml \
   scripts/deploy-production.sh \
   scripts/deploy-metadata.sh \
+  scripts/archive-container-logs.sh \
   scripts/deploy-infrastructure.mjs \
   scripts/verify-desktop-lifecycle-v2-evidence.mjs \
   scripts/verify-client-sdk-retention.mjs
@@ -1075,6 +1076,51 @@ dump_remote_diagnostics() {
   log "Remote verification failed; collecting docker compose status and recent logs"
   run_remote "set +e; cd ${REMOTE_APP_DIR_ESCAPED} || exit 0; ${REMOTE_COMPOSE} ps; printf '\\n'; ${REMOTE_COMPOSE} logs --tail=200 postgres api worker; if ${REMOTE_COMPOSE} config --services 2>/dev/null | grep -qx sync; then printf '\\n'; ${REMOTE_COMPOSE} logs --tail=200 sync; fi; exit 0" \
     || log "Unable to collect remote diagnostics"
+}
+
+# М1: a recreate deletes a container together with its log (the production
+# `local` driver keeps it in the container's own directory, and nothing ships
+# it elsewhere), so every deploy command that replaces or removes containers
+# is preceded by this archive of their logs into ${APP_DIR}/container-logs.
+# The helper only reads Docker and goes over ssh stdin from this checkout, so
+# the version the tests ran is the one that runs, also after
+# restore_remote_release_files. A running container is archived as a
+# snapshot: nothing is stopped for it. The archive never fails the deploy or
+# the rollback; anything but a full archive is a WARNING.
+archive_remote_container_logs() {
+  local phase="$1"
+  shift
+  local started=$SECONDS
+  local status=0
+  local output
+  local remote_args
+  remote_args="$(printf ' %q' --dir "${APP_DIR%/}/container-logs" --project-dir "$APP_DIR" \
+    --reason "deploy ${DEPLOY_RUN_ID} ${APP_SOURCE_REVISION} ${phase}" "$@")"
+  output="$(ssh "${SSH_ARGS[@]}" "$REMOTE" "timeout 300 bash -l -s --${remote_args}" \
+    <"${SCRIPT_DIR}/archive-container-logs.sh" 2>&1)" || status=$?
+  output="${output//$'\n'/; }"
+  case "$status" in
+    0)
+      log "Container logs archived (${phase}) duration_seconds=$((SECONDS - started)): ${output}"
+      ;;
+    3)
+      log "WARNING: container logs archived only partially (${phase}) duration_seconds=$((SECONDS - started)): ${output}"
+      ;;
+    *)
+      log "WARNING: container logs NOT archived (${phase}) exit=${status} duration_seconds=$((SECONDS - started)): ${output}"
+      ;;
+  esac
+  return 0
+}
+
+# The forward recreate's containers. App scope leaves sync to
+# recreate_sync_service, which archives it right before its own `up`.
+archive_before_stack_recreate() {
+  if [[ "$RECREATE_SCOPE" == "apps" ]]; then
+    archive_remote_container_logs forward api worker scheduler
+  else
+    archive_remote_container_logs forward postgres api worker scheduler sync
+  fi
 }
 
 capture_remote_rollback_image() {
@@ -1444,13 +1490,18 @@ rollback_remote_stack() {
   # PostgreSQL as well. Sync rides in the same `up` (its depends_on starts it
   # once the rolled-back api is healthy), or, when the restored files predate
   # it, --remove-orphans removes it. A stack-scope deploy recreated everything,
-  # PostgreSQL included, so its rollback still lists nothing.
+  # PostgreSQL included, so its rollback still lists nothing. Either way the
+  # failed candidate's containers go, so their logs are archived first (М1),
+  # sync's whether it is recreated or removed.
   local release_has_sync=0
   remote_release_defines_sync && release_has_sync=1
   local services="${RECREATE_SERVICES:-}"
   if [[ -n "$services" && "$release_has_sync" == "1" ]]; then
     services+=" sync"
   fi
+  local archived=(api worker scheduler sync)
+  [[ -n "${RECREATE_SERVICES:-}" ]] || archived=(postgres "${archived[@]}")
+  archive_remote_container_logs rollback "${archived[@]}"
   run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; docker tag $(printf '%q' "$ROLLBACK_IMAGE_TAG") $(printf '%q' "$IMAGE_TAG"); ${REMOTE_COMPOSE} up -d --remove-orphans --force-recreate --no-build${services:+ ${services}}" \
     || {
       log "Rollback command failed"
@@ -1662,7 +1713,8 @@ wait_for_scheduler_health() {
 # stops the old container (SIGTERM, 45 s grace: it finishes its in-flight
 # request) and only then starts the new one. A stack-scope recreate already
 # started the new container after API health through its depends_on, so it
-# is not recreated twice.
+# is not recreated twice. The old container's log is archived right before
+# the `up`, while it still runs (М1, archive_remote_container_logs).
 # scripts/check-compose-recreate-order.sh proves this order on a throwaway
 # Compose project.
 recreate_sync_service() {
@@ -1671,6 +1723,7 @@ recreate_sync_service() {
     return 0
   fi
   log "Recreating the sync container after API health (migrations done)"
+  archive_remote_container_logs sync sync
   run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED} && ${REMOTE_COMPOSE} up -d --no-deps --force-recreate --no-build sync"
 }
 
@@ -2448,6 +2501,9 @@ validate_pull_checkout || fail_after_release_sync "Pull checkout changed before 
 verify_remote_infrastructure_unchanged "$REMOTE_COMPOSE" || fail_after_release_sync "PostgreSQL/infrastructure changed during deploy; refusing app-only promotion"
 run_remote "set -euo pipefail; docker tag $(printf '%q' "$IMAGE_CANDIDATE_TAG") $(printf '%q' "$IMAGE_TAG")" \
   || fail_after_release_sync "Unable to promote candidate image tag after validation"
+# Before STACK_RECREATED=1: an interrupt during the archive leaves a deploy
+# that recreated nothing, and cleanup_deploy restarts the quiesced services.
+archive_before_stack_recreate
 RECREATE_SERVICES=""
 if [[ "$RECREATE_SCOPE" == "apps" ]]; then
   RECREATE_SERVICES="api worker scheduler"
