@@ -1085,6 +1085,9 @@ export const syncWork = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
     closedAt: timestamp("closed_at", { withTimezone: true }),
     closeReason: text("close_reason"),
+    // 0264 (bug hunt Д3/У2): the start of the work's current series of steps
+    // without an outcome; null once a step has one (`settleWork`).
+    failingSince: timestamp("failing_since", { withTimezone: true }),
   },
   (table) => ({
     openUniq: uniqueIndex("sync_work_open_uniq")

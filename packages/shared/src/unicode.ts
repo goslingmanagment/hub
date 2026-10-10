@@ -77,6 +77,59 @@ export function sanitizePostgresText(text: string): string {
   return sanitizeString(text).replaceAll("\u0000", "�");
 }
 
+/** Deep-copy `value` with every string and every object key passed through
+ * `sanitizePostgresText` (unpaired surrogates and U+0000 become U+FFFD), so
+ * the result survives Postgres json/jsonb input and every text column a
+ * writer copies it into (bug hunt Д3). A parsed `__proto__` key is kept as
+ * data, as `sanitizeLoneSurrogatesDeep` keeps it. */
+export function sanitizePostgresTextDeep<T>(value: T): T {
+  if (typeof value === "string") {
+    return sanitizePostgresText(value) as T;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizePostgresTextDeep(item)) as T;
+  }
+  if (value !== null && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value)) {
+      Object.defineProperty(out, sanitizePostgresText(key), {
+        value: sanitizePostgresTextDeep(item),
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
+    }
+    return out as T;
+  }
+  return value;
+}
+
+/** What `sanitizePostgresTextDeep` would replace in `value` (object keys
+ * included): unpaired surrogates and U+0000 characters. The same walk without
+ * a copy, so a caller can keep the value itself when both are 0. */
+export function countPostgresUnstorableDeep(value: unknown): { loneSurrogates: number; nul: number } {
+  const count = { loneSurrogates: 0, nul: 0 };
+  const visitString = (text: string): void => {
+    count.loneSurrogates += countInString(text);
+    if (text.includes("\u0000")) count.nul += text.split("\u0000").length - 1;
+  };
+  const visit = (item: unknown): void => {
+    if (typeof item === "string") {
+      visitString(item);
+    } else if (Array.isArray(item)) {
+      for (const entry of item) visit(entry);
+    } else if (item !== null && typeof item === "object") {
+      const record = item as Record<string, unknown>;
+      for (const key of Object.keys(record)) {
+        visitString(key);
+        visit(record[key]);
+      }
+    }
+  };
+  visit(value);
+  return count;
+}
+
 /** How many unpaired surrogates `sanitizeLoneSurrogatesDeep` would replace in
  * `value` (object keys included). Walks the same tree and copies nothing, so a
  * caller can keep the value itself when the answer is 0. */

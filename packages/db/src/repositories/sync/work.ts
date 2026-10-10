@@ -127,6 +127,10 @@ export interface SyncWorkRow {
   updatedAt: Date;
   closedAt: Date | null;
   closeReason: string | null;
+  /** The start of the row's current series of steps without an outcome (a
+   *  plan error, a failed local write, an in-memory answer not applied, an
+   *  attempt recovered `unknown`); null once a step had one (0264). */
+  failingSince: Date | null;
 }
 
 type WorkSqlRow = {
@@ -163,6 +167,7 @@ type WorkSqlRow = {
   updatedAt: Date | string;
   closedAt: Date | string | null;
   closeReason: string | null;
+  failingSince: Date | string | null;
 };
 
 /** Every column but the ciphertext `secret_params`. */
@@ -199,7 +204,8 @@ const workColumns = sql`
   w.created_at as "createdAt",
   w.updated_at as "updatedAt",
   w.closed_at as "closedAt",
-  w.close_reason as "closeReason"
+  w.close_reason as "closeReason",
+  w.failing_since as "failingSince"
 `;
 
 function stringList(value: unknown): string[] {
@@ -247,6 +253,7 @@ function normalizeWorkRow(row: WorkSqlRow): SyncWorkRow {
     updatedAt: toRequiredDate(row.updatedAt),
     closedAt: toDate(row.closedAt),
     closeReason: row.closeReason,
+    failingSince: toDate(row.failingSince),
   };
 }
 
@@ -843,6 +850,12 @@ export interface SettleWorkInput {
   /** The subject breaker after this step (§9); absent: unchanged. */
   breaker?: { failureCount: number; breakerUntil: Date | null; blockedByVendorAt: Date | null };
   lastErrorClass?: string | null;
+  /** The step ended without an outcome (true: a plan error, a failed local
+   *  write retried, an in-memory answer not applied) or with one (false): the
+   *  series `failing_since` measures goes on (kept, or started now) or ends
+   *  (null). Absent: the column is left as it is (a refusal before sending, a
+   *  route's deferral, a busy erasure fence). */
+  stepFailed?: boolean;
 }
 
 export interface SettleWorkResult {
@@ -871,6 +884,10 @@ export async function settleWork(db: Database, input: SettleWorkInput): Promise<
   // under the row's next due time (none for a credentials check).
   const breakerUntil = sql`case when ${breaker !== undefined} then ${timestampParam(breaker?.breakerUntil)} else w.breaker_until end`;
   const dueFloor = sql`case when w.resource = any(${textArrayParam(CREDENTIALS_CHECK_RESOURCES)}) then null else ${breakerUntil} end`;
+  // The series of steps without an outcome (0264): goes on, ends, or is left.
+  const stepFailed = input.stepFailed === undefined
+    ? sql`w.failing_since`
+    : input.stepFailed ? sql`coalesce(w.failing_since, clock_timestamp())` : sql`null::timestamptz`;
   const result = await db.execute<{ state: SyncWorkState; demandRevision: string; appliedRevision: string }>(sql`
     update sync_work w
        set applied_revision = greatest(w.applied_revision,
@@ -896,6 +913,7 @@ export async function settleWork(db: Database, input: SettleWorkInput): Promise<
              then ${timestampParam(breaker?.blockedByVendorAt)} else w.blocked_by_vendor_at end,
            last_error_class = case when ${input.lastErrorClass !== undefined}
              then ${input.lastErrorClass ?? null}::text else w.last_error_class end,
+           failing_since = ${stepFailed},
            owner_generation = ${generationParam(input.generation)},
            updated_at = clock_timestamp()
      where w.id = ${input.workId}
@@ -1034,7 +1052,10 @@ export interface RequeuedSyncWork {
  * quarantined row (a plan quarantine, an answer whose body is gone from the
  * journal — its attempt quarantined as
  * `SYNC_APPLY_ERROR_PAYLOAD_UNAVAILABLE`) opens due now for a fresh read.
- * Both drop `result.quarantine`; a second refusal writes a new one. Only rows
+ * Both drop `result.quarantine` and start afresh (`failing_since` null); a
+ * second refusal writes a new quarantine. A row quarantined as
+ * `unknown_repeated` (a read whose capture never committed) opens for a fresh
+ * read: its last attempt is `unknown`, with no answer in the journal. Only rows
  * of the page in `quarantined` are touched; NOTIFY wakes the page's actor at
  * commit.
  */
@@ -1081,6 +1102,7 @@ export async function requeueQuarantinedWork(
            waiting_until = null,
            due_at = case when r.id is not null then w.due_at else clock_timestamp() end,
            result = case when jsonb_typeof(w.result) = 'object' then nullif(w.result - 'quarantine', '{}'::jsonb) else w.result end,
+           failing_since = null,
            updated_at = clock_timestamp()
       from target t
       left join reapply r on r.work_id = t.id

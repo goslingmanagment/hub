@@ -238,7 +238,12 @@ Neither has a lever: they end by time or by a success. The answer that failed is
 
 A quarantined row broke its contract (Fansly changed a shape), stuck its cursor or failed its apply three times. The
 raw answer is in the journal, and why is in the row (`result.quarantine`: `reason`, `detail`, `attemptId`, `at`).
-Alert 2 (`quarantined`) stays open while any row is quarantined.
+Alert 2 (`quarantined`) stays open while any row is quarantined. `unknown_repeated` is a read that never recorded its
+answer twice in a row within 10 minutes (bug hunt Д3): its capture kept failing (a character the journal refuses, a
+bug in our capture code) or the process died on it. Its `detail` lists the two attempts and their error classes
+(`commit_failed:<SQLSTATE|error name>`, null when the actor could not say); the `sync` log has the error. Nothing of
+that answer is in the journal, so a requeue reads it again — and a new failure within 10 minutes quarantines it
+again.
 
 ```sh
 pnpm cli sync work list --page lora-1 --state quarantined
@@ -367,7 +372,9 @@ their clean window (`routes`) and the open latches (`openLatches`), and the glob
 | | `money_not_in_ledger` | a money frame not in the ledger for 5 minutes | `sync why --resource transactions.head` |
 | | `urgent_waiting` | urgent work waiting 2 minutes past its due time, or past the end of its own subject breaker when that is later, with no pause, hold, file breaker or route hold to explain it | `sync work list`, `sync why` |
 | 4 `stuck` | `request_stalled` | a history request with runnable work and no read for 30 minutes | [History requests](#history-requests) |
-| | `planned_stale` | a poll not served within its SLO (else 3 periods) | `sync why` on the key |
+| | `step_failing` | a work's steps have ended without an outcome for 5 minutes (`sync_work.failing_since`: a plan that throws, a local write retried, an in-memory answer not applied, an attempt recovered `unknown`), with no pause, page hold, requests pause (a `requests`-class key), key pause, file breaker or route hold to explain it; the summary names the keys and the error classes | `sync work list --page <label>`, `sync why` on the key, the `sync` log (`a resource's plan failed`, `a local step failed`, `apply failed`) |
+| | `apply_pending` | an answer captured (or deferred) and not applied 5 minutes after its admission | `sync why` on the key, the `sync` log (`apply failed`) |
+| | `planned_stale` | a poll with no applied answer within its SLO (else 3 periods) | `sync why` on the key |
 | | `transactions_ledger_incomplete` | the rescan's last certified round proved the ledger short of Fansly's lifetime total, no backfill is running or one has applied no answer for 30 minutes, and none completed (`backfill_complete`) after that round began | the owner's backfill: `sync work enqueue --resource transactions.backfill` |
 | 5 `process` (global) | `heartbeat_silent`, `stalled` | no `sync` heartbeat for 2 minutes while a page is in the engine; or the stall watchdog ended the process | [Watchdog restarts](#watchdog-restarts-shutdown-and-deploys) |
 | `evaluator` (global) | `failing`, `unrecorded`, `late` | while `sync` beats, a rule of the alert evaluator has not judged a `handover`/`live` page for 5 minutes, counted from its last full judgement or the page's mode change (a restart does not reset it): `failing` — a fact it reads, the rule itself, or its open or resolve keeps failing (the summary names the pages, rules and the error, e.g. `journal: database query failed (57014)`); `unrecorded` — no record for the pair (a `sync` that predates the table, or one that never reached the page); `late` — no failure, but judged less often than every 5 minutes (slow passes). Meanwhile the alerts that rule derives can neither page nor resolve | the `sync` log (`Fansly sync alerts: rules not evaluated`), then the evaluation check under [Read-only data checks](#read-only-data-checks); a code fault is fixed forward or rolled back |

@@ -1184,7 +1184,13 @@ describe("sync_attempts", () => {
     await confirmSyncOwnersStopped(db(), { runningHosts: ["after-restart"], ownHost: "cli", confirmedBy: "test", dryRun: false });
     expect(await own(pageId, owner({ host: "after-restart" }))).toBe(generation + 1n);
     expect(await inTx((tx) => recoverUnfinishedAttempts(tx, { pageId })))
-      .toEqual({ unknown: 2, memorySkipped: 0, workReopened: 2, appliesDue: 1 });
+      .toEqual({
+        unknown: 2,
+        unknownWorkIds: [admitted.workId, sent.workId].sort((x, y) => x - y),
+        memorySkipped: 0,
+        workReopened: 2,
+        appliesDue: 1,
+      });
     expect(await getSyncAttempt(db(), admitted.attemptId)).toMatchObject({ outcome: "unknown" });
     expect(await getSyncAttempt(db(), sent.attemptId)).toMatchObject({ outcome: "unknown" });
     expect((await listUnfinishedAttempts(db(), { pageId, phase: "apply", dueOnly: true })).map((row) => row.id))
@@ -1194,7 +1200,7 @@ describe("sync_attempts", () => {
     expect(states.get(sent.workId)).toBe("open");
     expect(states.get(captured.workId)).toBe("running");
     expect(await inTx((tx) => recoverUnfinishedAttempts(tx, { pageId })))
-      .toEqual({ unknown: 0, memorySkipped: 0, workReopened: 0, appliesDue: 1 });
+      .toEqual({ unknown: 0, unknownWorkIds: [], memorySkipped: 0, workReopened: 0, appliesDue: 1 });
   });
 });
 

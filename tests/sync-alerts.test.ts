@@ -23,10 +23,13 @@ import {
   SYNC_HANDOVER_STUCK_MS,
   SYNC_LEDGER_BACKFILL_STALL_MS,
   SYNC_OWNERSHIP_UNCONFIRMED_MS,
+  SYNC_APPLY_PENDING_MS,
   SYNC_PAGE_ALERT_RULES,
   SYNC_PAGE_ALERT_SUB_KEYS,
   SYNC_REQUEST_STALL_MS,
   SYNC_SOCKET_DOWN_MS,
+  SYNC_STEP_FAILING_MS,
+  conditionResources,
   syncAlertResolveAfterMs,
   type PageAlertFactPart,
   type PageAlertFacts,
@@ -57,6 +60,7 @@ function facts(overrides: {
   live?: Partial<PageAlertFacts["live"]>;
   chats?: Partial<PageAlertFacts["chats"]>;
   money?: PageAlertFacts["money"];
+  steps?: Partial<PageAlertFacts["steps"]>;
 } = {}): PageAlertFacts {
   return {
     now: NOW,
@@ -109,6 +113,11 @@ function facts(overrides: {
       ...overrides.chats,
     },
     money: overrides.money ?? null,
+    steps: {
+      failing: [],
+      applyPending: [],
+      ...overrides.steps,
+    },
   };
 }
 
@@ -243,8 +252,14 @@ describe("alert rules (design §9.6)", () => {
     expect(quarantined).toEqual([expect.objectContaining({
       subKey: "live_degraded",
       detail: "quarantined",
-      reasons: [expect.objectContaining({ context: { byResource: { "dm-messages.head": 2 } } })],
+      reasons: [expect.objectContaining({ context: { byResource: { "dm-messages.head": 2 }, resources: ["dm-messages.head"] } })],
     })]);
+    // The keys, sorted, so the summary names them (bug hunt Д3/У2).
+    const two = evaluatePageAlerts(facts({ journal: { quarantined: { "poison.read": 1, "dm-messages.head": 2 } } }), registry);
+    expect(two[0]!.reasons[0]!.context).toEqual({
+      byResource: { "poison.read": 1, "dm-messages.head": 2 },
+      resources: ["dm-messages.head", "poison.read"],
+    });
   });
 
   it("alert 3: unconfirmed fan messages, money not in the ledger, urgent work waiting", () => {
@@ -333,7 +348,7 @@ describe("alert rules (design §9.6)", () => {
       .toEqual({ stuck: "request_stalled" });
     // notifications.forward: SLO 60 min.
     const poll = (servedMs: number) => facts({
-      journal: { polls: [{ resource: "notifications.forward", lastServedAt: at(-servedMs), createdAt: at(-24 * 60 * MINUTE) }] },
+      journal: { polls: [{ resource: "notifications.forward", lastAppliedAt: at(-servedMs), createdAt: at(-24 * 60 * MINUTE) }] },
     });
     expect(evaluate(poll(55 * MINUTE))).toEqual({});
     expect(evaluate(poll(65 * MINUTE))).toEqual({ stuck: "planned_stale" });
@@ -342,6 +357,123 @@ describe("alert rules (design §9.6)", () => {
     expect(evaluate({ ...off, page: { ...off.page, registryOverrides: { "notifications.forward": { enabled: false } } } })).toEqual({});
     expect(evaluate(facts({ journal: { ledgerIncomplete: shortfall(3) } })))
       .toEqual({ stuck: "transactions_ledger_incomplete" });
+  });
+
+  it("alert 4: step_failing — a key whose steps ended without an outcome for more than 5 min (bug hunt Д3/У2)", () => {
+    expect(SYNC_STEP_FAILING_MS).toBe(5 * MINUTE);
+    const row = (resource: string, sinceMs: number, works = 1, errorClasses = ["plan:TypeError"]) =>
+      ({ resource, works, failingSince: at(-sinceMs), errorClasses });
+    const stuck = (input: PageAlertFacts) => evaluatePageAlerts(input, registry).find((entry) => entry.subKey === "stuck");
+    const failing = (rows: PageAlertFacts["steps"]["failing"], page: Partial<PageAlertFacts["page"]> = {}) =>
+      stuck(facts({ steps: { failing: rows }, page }));
+    // Younger than 5 min: nothing; older: the key is named.
+    expect(failing([row("dm-live.deletions", 4 * MINUTE)])).toBeUndefined();
+    expect(failing([row("dm-live.deletions", 6 * MINUTE)])).toEqual({
+      subKey: "stuck",
+      detail: "step_failing",
+      since: at(-6 * MINUTE),
+      seenAt: NOW,
+      reasons: [{
+        detail: "step_failing",
+        since: at(-6 * MINUTE),
+        context: { works: 1, resources: ["dm-live.deletions"], errors: ["plan:TypeError"] },
+      }],
+    });
+    // Every explanation of an urgent wait explains it: the owner's pause, a
+    // page hold, a pause of the key, its file's breaker, a hold on its routes.
+    const catchup = [row("dm-messages.catchup", 6 * MINUTE)];
+    expect(failing(catchup)).toMatchObject({ detail: "step_failing" });
+    expect(failing(catchup, { pausedAll: true })).toBeUndefined();
+    expect(failing(catchup, { holds: [credentialsHeld("auth")] })).toBeUndefined();
+    expect(failing(catchup, { holds: [networkHeld(MINUTE)] })).toBeUndefined();
+    expect(failing(catchup, { pausedResources: ["dm-messages.catchup"] })).toBeUndefined();
+    expect(failing(catchup, { registryOverrides: { "dm-messages.catchup": { enabled: false } } })).toBeUndefined();
+    expect(failing(catchup, { holds: [resourceBreakerRow("dm-messages", at(MINUTE), { since: at(-MINUTE) })] })).toBeUndefined();
+    expect(failing(catchup, { holds: routeHoldRows("messages.page", { holdUntil: at(MINUTE).toISOString() }) })).toBeUndefined();
+    expect(failing(catchup, { holds: routeHoldRows("messages.page", { holdUntil: at(-1).toISOString() }) }))
+      .toMatchObject({ detail: "step_failing" });
+    // The owner's requests pause explains a key of the requests class only.
+    const history = [row("dm-messages.history", 6 * MINUTE)];
+    expect(failing(history)).toMatchObject({ detail: "step_failing" });
+    expect(failing(history, { pausedRequests: true })).toBeUndefined();
+    expect(failing(catchup, { pausedRequests: true })).toMatchObject({ detail: "step_failing" });
+    // An explained key is dropped, an unexplained one in the same fact pages;
+    // works and errors add up over the keys that page.
+    const both = [
+      row("dm-messages.catchup", 10 * MINUTE, 201, ["local:57014"]),
+      row("dm-live.deletions", 6 * MINUTE, 1, ["local:57014", "plan:TypeError"]),
+      row("dm-conversations.find", 7 * MINUTE, 2, ["plan:TypeError"]),
+    ];
+    expect(failing(both, { pausedResources: ["dm-messages.catchup"] })).toMatchObject({
+      since: at(-7 * MINUTE),
+      reasons: [{
+        detail: "step_failing",
+        since: at(-7 * MINUTE),
+        context: { works: 3, resources: ["dm-live.deletions", "dm-conversations.find"], errors: ["local:57014", "plan:TypeError"] },
+      }],
+    });
+    expect(failing(both)!.reasons[0]!.context).toMatchObject({ works: 204, resources: ["dm-messages.catchup", "dm-live.deletions", "dm-conversations.find"] });
+  });
+
+  it("alert 4: the owner's requests pause changes neither urgent_waiting nor planned_stale", () => {
+    const waiting = { urgentWaiting: [{ resource: "dm-messages.head", subject: "1", dueAt: at(-3 * MINUTE), breakerUntil: null, waitingReason: null }] };
+    const stale = { polls: [{ resource: "notifications.forward", lastAppliedAt: at(-65 * MINUTE), createdAt: at(-24 * 60 * MINUTE) }] };
+    for (const journal of [waiting, stale]) {
+      expect(evaluatePageAlerts(facts({ journal, page: { pausedRequests: true } }), registry))
+        .toEqual(evaluatePageAlerts(facts({ journal }), registry));
+    }
+    expect(evaluate(facts({ journal: waiting, page: { pausedRequests: true } }))).toEqual({ freshness: "urgent_waiting" });
+    expect(evaluate(facts({ journal: stale, page: { pausedRequests: true } }))).toEqual({ stuck: "planned_stale" });
+  });
+
+  it("alert 4: apply_pending — an answer captured and not applied for more than 5 min, whatever pauses or holds", () => {
+    expect(SYNC_APPLY_PENDING_MS).toBe(5 * MINUTE);
+    const pending = (admittedMs: number, page: Partial<PageAlertFacts["page"]> = {}) => evaluatePageAlerts(facts({
+      steps: { applyPending: [
+        { resource: "transactions.head", subject: "", attemptId: 11, admittedAt: at(-admittedMs), applyError: "57014" },
+        { resource: "transactions.head", subject: "", attemptId: 12, admittedAt: at(-admittedMs + MINUTE), applyError: null },
+      ] },
+      page,
+    }), registry).find((entry) => entry.subKey === "stuck");
+    expect(pending(5 * MINUTE)).toBeUndefined();
+    expect(pending(7 * MINUTE)).toEqual({
+      subKey: "stuck",
+      detail: "apply_pending",
+      since: at(-7 * MINUTE),
+      seenAt: NOW,
+      reasons: [{ detail: "apply_pending", since: at(-7 * MINUTE), context: { attempts: [11, 12], resources: ["transactions.head"] } }],
+    });
+    expect(pending(7 * MINUTE, { pausedAll: true })).toMatchObject({ detail: "apply_pending" });
+    expect(pending(7 * MINUTE, { holds: [credentialsHeld("auth")] })!.reasons.map((reason) => reason.detail)).toEqual(["apply_pending"]);
+  });
+
+  it("alert 4: planned_stale judges a poll by its newest applied answer; a poll that never applied one, by its creation", () => {
+    const poll = (lastAppliedAt: Date | null, createdAt: Date) =>
+      evaluate(facts({ journal: { polls: [{ resource: "transactions.insurance", lastAppliedAt, createdAt }] } }));
+    // transactions.insurance: SLO 15 min.
+    expect(poll(at(-14 * MINUTE), at(-24 * 60 * MINUTE))).toEqual({});
+    expect(poll(at(-20 * MINUTE), at(-24 * 60 * MINUTE))).toEqual({ stuck: "planned_stale" });
+    expect(poll(null, at(-10 * MINUTE))).toEqual({});
+    expect(poll(null, at(-20 * MINUTE))).toEqual({ stuck: "planned_stale" });
+  });
+
+  it("alert 4: the new reasons come first, in the order step_failing, apply_pending, then the others", () => {
+    const all = evaluatePageAlerts(facts({
+      steps: {
+        failing: [{ resource: "dm-live.deletions", works: 1, failingSince: at(-6 * MINUTE), errorClasses: [] }],
+        applyPending: [{ resource: "transactions.head", subject: "", attemptId: 3, admittedAt: at(-8 * MINUTE), applyError: null }],
+      },
+      journal: {
+        stalledRequests: [{ requestRef: "r-1", lastServedAt: at(-40 * MINUTE), createdAt: at(-60 * MINUTE) }],
+        polls: [{ resource: "notifications.forward", lastAppliedAt: at(-65 * MINUTE), createdAt: at(-24 * 60 * MINUTE) }],
+        ledgerIncomplete: shortfall(3),
+      },
+    }), registry).find((entry) => entry.subKey === "stuck")!;
+    expect(all.detail).toBe("step_failing");
+    expect(all.reasons.map((reason) => reason.detail))
+      .toEqual(["step_failing", "apply_pending", "request_stalled", "planned_stale", "transactions_ledger_incomplete"]);
+    // The summary's keys: every reason's `resources`, once each, in the reasons' order.
+    expect(conditionResources(all)).toEqual(["dm-live.deletions", "transactions.head", "notifications.forward"]);
   });
 
   it("alert 4: the rescan's proven shortfall pages unless a moving backfill or one completed since the round began explains it", () => {
@@ -456,7 +588,9 @@ describe("the page alerts as rules (bug hunt Д11)", () => {
     facts({ journal: { urgentWaiting: [waiting] } }),
     facts({ journal: { urgentWaiting: [waiting] }, page: { holds: routeHoldRows("messages.page", { holdUntil: at(MINUTE).toISOString() }) } }),
     facts({ journal: { stalledRequests: [{ requestRef: "r-1", lastServedAt: at(-40 * MINUTE), createdAt: at(-60 * MINUTE) }] } }),
-    facts({ journal: { polls: [{ resource: "notifications.forward", lastServedAt: at(-65 * MINUTE), createdAt: at(-24 * 60 * MINUTE) }] } }),
+    facts({ journal: { polls: [{ resource: "notifications.forward", lastAppliedAt: at(-65 * MINUTE), createdAt: at(-24 * 60 * MINUTE) }] } }),
+    facts({ steps: { failing: [{ resource: "dm-live.deletions", works: 1, failingSince: at(-6 * MINUTE), errorClasses: ["local:57014"] }] } }),
+    facts({ steps: { applyPending: [{ resource: "transactions.head", subject: "", attemptId: 9, admittedAt: at(-6 * MINUTE), applyError: "57014" }] } }),
     facts({ journal: { ledgerIncomplete: shortfall(3) } }),
     facts({
       journal: { ledgerIncomplete: shortfall(3), transactionsBackfill: { openProgressAt: at(-SYNC_LEDGER_BACKFILL_STALL_MS - MINUTE), lastCompletedAt: null } },
@@ -497,6 +631,12 @@ describe("the page alerts as rules (bug hunt Д11)", () => {
         .map((subKey) => SYNC_PAGE_ALERT_RULES[subKey].evaluate(input, registry))
         .filter((entry) => entry !== null));
     }
+  });
+
+  it("alert 4 reads the journal and the steps (bug hunt Д3/У2)", () => {
+    expect(PAGE_ALERT_FACT_PARTS).toContain("steps");
+    expect(SYNC_PAGE_ALERT_RULES.stuck.parts).toEqual(["journal", "steps"]);
+    expect(PAGE_ALERT_NEUTRAL_FACTS.steps).toEqual({ failing: [], applyPending: [] });
   });
 
   it("the evaluator's rules are the repository's vocabulary", () => {

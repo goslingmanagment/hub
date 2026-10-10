@@ -152,7 +152,11 @@ One step of a page is four short transactions: **admit** (the attempt is journal
 **HTTP** (no transaction open) → **capture** (the raw answer is committed to `observations` before anything parses
 it) → **apply** (erasure fence, parse through the wire contract, domain writes, events, cursor and proof, `applied`).
 A crash between capture and apply re-applies from the journal without a request; a crash before capture leaves the
-attempt `unknown` and the read is repeated as a new, counted attempt.
+attempt `unknown` and the read is repeated as a new, counted attempt — once: when the two newest attempts of a work
+are `unknown` and the older was admitted within 10 min, recovery quarantines the work instead (`unknown_repeated`,
+its attempts and their error classes in `result.quarantine.detail`, alert 2; bug hunt Д3). A read whose capture can
+never commit — a character the journal refuses, a bug in our capture code, a process that dies on the answer — costs
+two requests, not a loop; the attempt says why when the actor could (`commit_failed:<SQLSTATE|error name>`).
 
 Steps that need no request do not wait for the HTTP gate (step 3b, ruling 9; `stepBeforeGate` in `engine/actor.ts`).
 On every lap, after the due applies and before the page hold and the pacer, the actor plans the due work of the keys
@@ -966,6 +970,18 @@ Two deterministic errors stop more than their work: an identity error (`Platform
 `onOutcome` as `identity_mismatch` (page hold until an identity proof after it, alerts 1 and 2), and a wrong transactions writer
 holds the resource file (30 min → 2 h → 6 h).
 
+A step that ends without an outcome is counted by how long it lasts (bug hunt Д3/У2, `sync_work.failing_since`): a
+plan that throws (the work waits a minute on `dependency`), a local write that fails and is retried, an in-memory
+answer (the Upgrade, a CDN hop) whose apply fails with a deferral or a transient error and is read again, and an
+attempt recovery closed `unknown` go on with the work's series; any step with an outcome — an applied answer, a
+committed local write, a plan that needs no request (`done`, `wait`), a classified answer of Fansly — ends it, and
+the owner's requeue starts afresh. Alert 4 pages a series older than 5 min (`step_failing`). An in-memory answer is
+read again on the deferred ladder by the age of that series (1 s → 5 s → 30 s → 60 s), not by the age of its fresh
+answer (every second). The journal replaces U+0000 as it replaces an unpaired surrogate (U+FFFD: jsonb refuses the
+`\u0000` escape, text the byte; `+nul-replaced-v1` in the capture-shape version), and an answer the journal codec
+had to change is applied from its journal copy, never from the served object, so the projection stores what the
+journal holds.
+
 ## Route budgets (step 3b)
 
 Fansly's quota is a bucket per page and endpoint (≈ 20 a minute; `impl/research-astra-quota-model.md`), so on top of
@@ -1038,7 +1054,14 @@ transaction (a refused credential, another identity, a pace violation; a 429 ope
 `route_limited:<route>`); `engine/alerts.ts` re-derives every
 condition from the database every 30 s and is the only path that resolves one, so a latch never flips on a partial
 view. Alerts 1–3 resolve after their condition has stayed false for 10 minutes since the latch last saw it (alert 4 as
-soon as progress resumes), so a condition that comes and goes keeps one standing page. A pace violation has its own
+soon as progress resumes), so a condition that comes and goes keeps one standing page. Alert 4 (`stuck`) also names
+a key whose steps keep ending without an outcome — `step_failing`: open or running work whose `failing_since` is
+older than 5 min, unless the owner's pause, a page hold, the owner's requests pause (a `requests`-class key), a pause
+or switch-off of the key, its file's breaker or a hold on all its routes explains it (read one row per key, so a
+paused key never hides another) — and an answer whose apply hangs: `apply_pending`, a captured or deferred attempt
+admitted more than 5 min ago (live-hour's `applyPending`). Its `planned_stale` judges a poll by its newest applied
+answer, not by its admissions. The summary of a latch the evaluator opens names the keys its reasons name
+(`resources`), so Telegram names them too. A pace violation has its own
 latch that only the owner closes (`pnpm cli sync alerts ack --page <label>`); the evaluator also re-reads the
 journal's new live sends, so a violation the capture path could not report still opens it. That re-read is the
 **send audit** (`engine/send-audit.ts`), the one checker `sync check live-hour` runs too. It judges
@@ -1067,9 +1090,9 @@ process cannot report its own death; a stalled process opens it itself (`stalled
 restart. `pnpm cli sync alerts status` shows what holds per page.
 
 **One failure never silences the evaluator** (bug hunt Д11). Each page alert is a rule of its own
-(`SYNC_PAGE_ALERT_RULES`) that declares the parts of the facts it reads — `journal`, `live`, `chats` and the pass's one
-`money` window. A part is read in its own boundary (`readPageAlertFactsSettled`): one that fails stands in with its
-neutral value, which holds no reason. Unknown is no health: a condition that holds on the parts that were read opens
+(`SYNC_PAGE_ALERT_RULES`) that declares the parts of the facts it reads — `journal`, `live`, `chats`, `steps` (alert
+4's steps without an outcome) and the pass's one `money` window. A part is read in its own boundary
+(`readPageAlertFactsSettled`): one that fails stands in with its neutral value, which holds no reason. Unknown is no health: a condition that holds on the parts that were read opens
 (its summary lists the parts it could not see, `blind`), but a rule that could not read a part it declares, whose
 evaluation threw, or whose open or resolve did not land (`resolveSyncEngineIncident` tells `failed` from `unchanged`)
 never resolves its latch. The route incidents and the pace backstop have boundaries of their own; the backstop's cursor

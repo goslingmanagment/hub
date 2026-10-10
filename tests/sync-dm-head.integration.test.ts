@@ -17,8 +17,9 @@ import { FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY, FANSLY_WS_LIVE_FIELD } from
 
 import { familyForObservation } from "../apps/runtime/src/services/canonicalize/index.ts";
 import { canonicalizeObservationInTransaction } from "../apps/runtime/src/sync/engine/canonicalize.ts";
-import type { SyncFaultPoint } from "../apps/runtime/src/sync/engine/commit.ts";
+import type { CaptureCodec, SyncFaultPoint } from "../apps/runtime/src/sync/engine/commit.ts";
 import { createEngineRegistry, pollsFor, type EngineRegistry } from "../apps/runtime/src/sync/engine/resource.ts";
+import { fanslyCaptureCodec } from "../apps/runtime/src/sync/fansly/capture.ts";
 import { FANSLY_RESOURCE_SPECS, fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";
 import { getHistoryRequest, submitHistoryRequest } from "../apps/runtime/src/sync/requests/history.ts";
 import {
@@ -261,6 +262,7 @@ async function runLive(
     faults?: (point: SyncFaultPoint) => Promise<void>;
     metrics?: RecordingMetrics;
     alerts?: RecordingAlerts;
+    capture?: CaptureCodec;
   } = {},
 ) {
   const transport = new ScriptedLiveTransport();
@@ -278,6 +280,7 @@ async function runLive(
     alerts: options.alerts ?? new RecordingAlerts(),
     metrics: options.metrics ?? new RecordingMetrics(),
     ...(options.faults === undefined ? {} : { faults: options.faults }),
+    ...(options.capture === undefined ? {} : { capture: options.capture }),
   });
   const run = actor.run({ stop: stop.signal, abort: abort.signal });
   try {
@@ -419,6 +422,46 @@ describe("dm-messages.head", () => {
     // The tip sidecar keeps its observation lineage (0230).
     const tipRow = await testDb.pool.query("select source_observation_id::text as obs, source_raw_payload_id from transaction_tip_contexts where platform_tip_id = $1", [tip.id]);
     expect(tipRow.rows[0]).toEqual({ obs: attempt.rows[0]!.observation_id, source_raw_payload_id: null });
+  });
+
+  it("a fan's message holding U+0000 is read once, journaled and archived with U+FFFD, never quarantined (bug hunt Д3)", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage();
+    const threadId = await seedThread(pageId, { n: 1, stored: range(1, 20), chain: true });
+    const registry = await registryFor(pageId);
+    await liveOverlay(pageId, 1, 21, "hi�there");
+    await demand(pageId, "dm-messages.head", 1, [msg(21)]);
+    // Fansly serves the fan's text with the NUL in it (the JSON `\u0000` escape).
+    const respond = (): FanslyWireOutcome => okResponse({
+      messages: range(1, 21).reverse().map((k) => wireMessage(groupOf(1), k, k === 21 ? { content: "hi\u0000there" } : {})),
+    });
+    const alerts = new RecordingAlerts();
+    const { requests } = await runLive(pageId, registry, respond,
+      async () => (await workRow(pageId, "dm-messages.head", 1))?.state === "done", { alerts, capture: fanslyCaptureCodec });
+
+    expect(requests).toHaveLength(1);
+    expect(await storedIds(threadId)).toEqual(range(1, 21).map(msg));
+    const attempt = await testDb.pool.query<{ outcome: string; apply_state: string; observation_id: string }>(
+      "select outcome, apply_state, observation_id::text from sync_attempts where page_id = $1 and resource = 'dm-messages.head'",
+      [pageId],
+    );
+    expect(attempt.rows).toEqual([expect.objectContaining({ outcome: "response", apply_state: "applied" })]);
+    const observation = await testDb.pool.query<{ text: string; content: string }>(
+      `select payload::text as text,
+              (select m ->> 'content' from jsonb_array_elements(payload -> 'messages') m where m ->> 'id' = $2) as content
+         from observations where id = $1`,
+      [attempt.rows[0]!.observation_id, msg(21)],
+    );
+    expect(observation.rows[0]!.text).not.toContain("\\u0000");
+    expect(observation.rows[0]!.content).toBe("hi�there");
+    const archived = await testDb.pool.query<{ text_plain: string }>(
+      "select text_plain from message_archive where account_id = $1 and platform = 'fansly' and message_ref = $2",
+      [pageId, msg(21)],
+    );
+    expect(archived.rows).toHaveLength(1);
+    expect(archived.rows[0]!.text_plain).toContain("�");
+    expect(await scalar("select count(*)::int as n from sync_work where page_id = $1 and state = 'quarantined'", [pageId])).toBe(0);
+    expect(alerts.opened).toEqual([]);
   });
 
   it("a demand that arrives while the read is in flight gets one more read (I11)", async (context) => {

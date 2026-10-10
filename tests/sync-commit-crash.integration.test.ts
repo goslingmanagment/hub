@@ -5,6 +5,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { getSyncPage, upsertDemand, type Database } from "@agency_hub_core/db";
 
 import { SyncCrashFault, type SyncFaultPoint } from "../apps/runtime/src/sync/engine/commit.ts";
+import type { ResourceModule } from "../apps/runtime/src/sync/engine/resource.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -15,8 +16,12 @@ import {
   CRASH_READ_KEY,
   crashRegistry,
   makeTestActor,
+  pollsRequest,
+  RecordingAlerts,
   recordingTransport,
   seedSyncPage,
+  testRegistry,
+  testSpec,
   waitFor,
 } from "./helpers/sync-engine-host.ts";
 
@@ -25,6 +30,9 @@ import {
 // attempt `unknown` and the read is repeated as a new, counted attempt; a
 // crash after the capture applies from the journal WITHOUT a new request; a
 // crash inside the apply rolls it back and it is applied exactly once.
+// Two crashes before the capture of one work within 10 min (bug hunt Д3):
+// the third owner's recovery quarantines it instead of reading it a third
+// time (`unknown_repeated`, alert 2).
 
 let testDb: StartedTestDatabase | null = null;
 
@@ -166,4 +174,133 @@ describe("a real process killed (SIGKILL) at a boundary", () => {
     expect(await attempts()).toMatchObject(EXPECTED.in_apply.attempts);
     expect(await countRows(testDb.pool, "select count(*)::int as n from sync_test_effects")).toBe(1);
   }, 90_000);
+});
+
+describe("the request limiter: two crashes before the capture of one work (bug hunt Д3)", () => {
+  /** An owner whose `n`-th send crashes the process right after it (the
+   *  attempt is left to the next owner's recovery). */
+  async function crashOnSend(pageId: number, n = 1, registry = crashRegistry()): Promise<void> {
+    let sends = 0;
+    const owner = await makeTestActor({
+      db: db(),
+      pageId,
+      registry,
+      transport: recordingTransport(db()),
+      faults: (at) => {
+        if (at !== "after_send") return;
+        sends += 1;
+        if (sends === n) throw new SyncCrashFault(at);
+      },
+    });
+    await expect(owner.actor.run({ stop: owner.stop.signal, abort: owner.abort.signal })).rejects.toBeInstanceOf(SyncCrashFault);
+  }
+
+  const hits = () => countRows(testDb!.pool, "select count(*)::int as n from sync_test_hits");
+
+  it("two crashes after the send on one work within 10 min quarantine it, alert 2", async (context) => {
+    if (!testDb) return context.skip();
+    const { pageId } = await seedSyncPage({ db: db(), pool: testDb.pool }, { mode: "live", guard: "fansly_sync_engine" });
+    await upsertDemand(db(), { pageId, resource: CRASH_READ_KEY, kind: "trigger", class: "urgent" });
+    await crashOnSend(pageId);
+    await crashOnSend(pageId);
+    expect(await hits()).toBe(2);
+
+    const alerts = new RecordingAlerts();
+    const third = await makeTestActor({ db: db(), pageId, registry: crashRegistry(), transport: recordingTransport(db()), alerts });
+    const run = third.actor.run({ stop: third.stop.signal, abort: third.abort.signal });
+    try {
+      await waitFor(async () => (
+        await countRows(testDb!.pool, "select count(*)::int as n from sync_work where state = 'quarantined'") === 1 ? true : null
+      ), 20_000, "the quarantine");
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    } finally {
+      third.stop.abort();
+      await run;
+    }
+
+    // No third read.
+    expect(await hits()).toBe(2);
+    expect(await attempts()).toMatchObject([
+      { owner_generation: "1", outcome: "unknown", apply_state: "none" },
+      { owner_generation: "2", outcome: "unknown", apply_state: "none" },
+    ]);
+    const work = await testDb.pool.query<{ state: string; last_error_class: string; reason: string; attempts: number[] }>(
+      `select state, last_error_class, result -> 'quarantine' ->> 'reason' as reason,
+              array(select jsonb_array_elements_text(result -> 'quarantine' -> 'detail' -> 'attempts')::bigint)::int[] as attempts
+         from sync_work`,
+    );
+    const ids = await testDb.pool.query<{ id: number }>("select id::int from sync_attempts order by id desc");
+    expect(work.rows).toEqual([{
+      state: "quarantined",
+      last_error_class: "unknown_repeated",
+      reason: "unknown_repeated",
+      attempts: ids.rows.map((row) => row.id),
+    }]);
+    expect(alerts.opened).toEqual([expect.objectContaining({
+      subKey: "live_degraded",
+      detail: "quarantined",
+      context: expect.objectContaining({ resource: CRASH_READ_KEY, reason: "unknown_repeated" }),
+    })]);
+  }, 60_000);
+
+  it("an applied answer between two crashes keeps it open", async (context) => {
+    if (!testDb) return context.skip();
+    const { pageId } = await seedSyncPage({ db: db(), pool: testDb.pool }, { mode: "live", guard: "fansly_sync_engine" });
+    await upsertDemand(db(), { pageId, resource: CRASH_READ_KEY, kind: "trigger", class: "urgent" });
+    // A read whose apply leaves the work open (due again at once) until the
+    // test lets it close.
+    let close = false;
+    const read: ResourceModule = {
+      plan: async () => ({ kind: "request", request: pollsRequest }),
+      apply: async () => ({ work: { satisfiesRevision: true, ...(close ? { close: "done" as const } : {}) }, followups: [] }),
+    };
+    const registry = testRegistry([testSpec(CRASH_READ_KEY, read)]);
+    await crashOnSend(pageId, 1, registry);
+    // The next owner reads once (applied), then crashes on its second send.
+    await crashOnSend(pageId, 2, registry);
+    expect(await hits()).toBe(3);
+
+    close = true;
+    const third = await makeTestActor({ db: db(), pageId, registry, transport: recordingTransport(db()) });
+    const run = third.actor.run({ stop: third.stop.signal, abort: third.abort.signal });
+    try {
+      await waitFor(async () => (
+        await countRows(testDb!.pool, "select count(*)::int as n from sync_work where state = 'done'") === 1 ? true : null
+      ), 20_000, "the read applied");
+    } finally {
+      third.stop.abort();
+      await run;
+    }
+
+    // The newest two attempts were not both unknown: read again, never quarantined.
+    expect(await hits()).toBe(4);
+    expect(await attempts()).toMatchObject([
+      { owner_generation: "1", outcome: "unknown" },
+      { owner_generation: "2", outcome: "response", apply_state: "applied" },
+      { owner_generation: "2", outcome: "unknown" },
+      { owner_generation: "3", outcome: "response", apply_state: "applied" },
+    ]);
+    expect(await countRows(testDb.pool, "select count(*)::int as n from sync_work where last_error_class = 'unknown_repeated'")).toBe(0);
+  }, 60_000);
+
+  it("a second crash older than 10 min keeps it open", async (context) => {
+    if (!testDb) return context.skip();
+    const { pageId } = await seedSyncPage({ db: db(), pool: testDb.pool }, { mode: "live", guard: "fansly_sync_engine" });
+    await upsertDemand(db(), { pageId, resource: CRASH_READ_KEY, kind: "trigger", class: "urgent" });
+    await crashOnSend(pageId);
+    await crashOnSend(pageId);
+    // The first of the two was admitted 11 minutes ago: two unrelated crashes.
+    await testDb.pool.query(
+      "update sync_attempts set admitted_at = admitted_at - interval '11 minutes' where id = (select min(id) from sync_attempts)",
+    );
+    await restartUntilApplied(pageId);
+
+    expect(await hits()).toBe(3);
+    expect(await attempts()).toMatchObject([
+      { owner_generation: "1", outcome: "unknown" },
+      { owner_generation: "2", outcome: "unknown" },
+      { owner_generation: "3", outcome: "response", apply_state: "applied" },
+    ]);
+    expect(await countRows(testDb.pool, "select count(*)::int as n from sync_test_effects")).toBe(1);
+  }, 60_000);
 });

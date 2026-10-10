@@ -3,10 +3,11 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { PlatformAccountIdentityImmutableError, upsertDemand, type Database } from "@agency_hub_core/db";
+import type { FanslyWireRequest } from "@agency_hub_core/fansly";
 
 import { WrongTransactionsWriterError } from "../apps/runtime/src/services/transactions-writer-gate.ts";
 import { RESOURCE_HOLD_LADDER_MS } from "../apps/runtime/src/sync/engine/errors.ts";
-import type { ResourceModule } from "../apps/runtime/src/sync/engine/resource.ts";
+import type { RequestPlan, ResourceModule } from "../apps/runtime/src/sync/engine/resource.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -30,7 +31,9 @@ import {
 // retried without being counted. Other work of the page goes on meanwhile.
 // Two deterministic errors stop more than their work: an identity error the
 // whole page (§3.8, §5.1), a wrong transactions writer its resource file
-// (§5.6).
+// (§5.6). An in-memory answer (an Upgrade, a CDN hop) whose apply keeps
+// failing transiently is read again on the ladder of its work's series of
+// failed steps (`failing_since`, bug hunt Д3), not every second.
 
 let testDb: StartedTestDatabase | null = null;
 
@@ -276,5 +279,77 @@ describe("a poisoned apply", () => {
       { resource: "fine.read", state: "done" },
     ]);
     expect(alerts.opened.map((alert) => [alert.subKey, alert.detail])).toEqual([["live_degraded", "quarantined"]]);
+  }, 60_000);
+});
+
+/** A transport whose Upgrade is answered 101 (the API routes as the scripted one). */
+class UpgradeTransport extends ScriptedLiveTransport {
+  override async prepare(request: RequestPlan): Promise<FanslyWireRequest> {
+    if (request.spec !== "ws.upgrade") return super.prepare(request);
+    return { spec: request.spec, url: "wss://fansly.invalid/?v=3", headers: {}, timeoutMs: 20_000 };
+  }
+}
+
+describe("an in-memory answer whose apply keeps failing transiently", () => {
+  it("is read again on its streak's ladder", async (context) => {
+    if (!testDb) return context.skip();
+    const { pageId } = await seedSyncPage({ db: db(), pool: testDb.pool }, { mode: "live", guard: "fansly_sync_engine" });
+    let applies = 0;
+    const upgrade: ResourceModule = {
+      plan: async () => ({ kind: "request", request: { spec: "ws.upgrade", params: {} } }),
+      apply: async () => done,
+      applyAnswer: async () => {
+        applies += 1;
+        throw Object.assign(new Error("deadlock detected"), { code: "40P01" });
+      },
+    };
+    const registry = testRegistry([testSpec("mem.upgrade", upgrade)]);
+    await upsertDemand(db(), { pageId, resource: "mem.upgrade", kind: "trigger", class: "urgent" });
+    const work = async () => (await testDb!.pool.query<{
+      state: string; last_error_class: string | null; failing_since: Date | null; due_in_ms: number;
+    }>(
+      `select state, last_error_class, failing_since,
+              (extract(epoch from due_at - updated_at) * 1000)::float8 as due_in_ms
+         from sync_work where resource = 'mem.upgrade'`,
+    )).rows[0]!;
+    const run = async (atLeast: number) => {
+      const transport = new UpgradeTransport();
+      transport.respond = () => ({ kind: "response", status: 101, headers: {}, bodyText: "", bodyBytes: 0, sendMark: "request_start" });
+      const actor = await makeTestActor({ db: db(), pageId, registry, transport });
+      const running = actor.actor.run({ stop: actor.stop.signal, abort: actor.abort.signal });
+      try {
+        await waitFor(async () => (applies >= atLeast && (await work()).last_error_class === "apply:40P01" ? true : null),
+          20_000, "the failed apply settled");
+      } finally {
+        actor.stop.abort();
+        await running;
+      }
+    };
+
+    // The first failure: read again a second later, and the series starts.
+    await run(1);
+    const first = await work();
+    expect(first).toMatchObject({ state: "open", last_error_class: "apply:40P01" });
+    expect(first.failing_since).not.toBeNull();
+    expect(first.due_in_ms).toBeGreaterThan(500);
+    expect(first.due_in_ms).toBeLessThan(1_500);
+
+    // A series 40 s old: the ladder's 30 s step, though this answer is fresh.
+    await testDb.pool.query(
+      "update sync_work set failing_since = clock_timestamp() - interval '40 seconds', due_at = clock_timestamp() where resource = 'mem.upgrade'",
+    );
+    const before = applies;
+    await run(before + 1);
+    const later = await work();
+    expect(later).toMatchObject({ state: "open", last_error_class: "apply:40P01" });
+    expect(later.due_in_ms).toBeGreaterThan(29_000);
+    expect(later.due_in_ms).toBeLessThan(31_000);
+    // The series goes on from its start.
+    expect(Date.now() - later.failing_since!.getTime()).toBeGreaterThan(39_000);
+    const attempts = await testDb.pool.query<{ apply_state: string; apply_error: string | null }>(
+      "select apply_state, apply_error from sync_attempts where resource = 'mem.upgrade' order by id",
+    );
+    expect(attempts.rows.every((row) => row.apply_state === "skipped" && row.apply_error === "40P01")).toBe(true);
+    expect(await testDb.pool.query("select 1 from sync_work where state = 'quarantined'")).toMatchObject({ rowCount: 0 });
   }, 60_000);
 });

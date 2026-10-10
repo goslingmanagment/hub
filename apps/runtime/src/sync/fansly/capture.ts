@@ -20,7 +20,8 @@
 //      requestedTargetIds, response}` (lib/posts-rules.ts `inspectFanslyPostTipsScope`);
 //   3. the CDN signing-token strip for the kinds it names (never `dm_messages`
 //      or `purchase_history*`: the AI describer downloads from those URLs);
-//   4. the lone-surrogate replacement json/jsonb need.
+//   4. the replacement json/jsonb and text need: unpaired surrogates and
+//      U+0000 (bug hunt Д3).
 //
 // The served object is never mutated (each step copies on write), so the apply
 // keeps using it — follower presence needs the untrimmed body (design §5.12).
@@ -60,7 +61,8 @@ import {
 } from "./lib/cdn-tokens.ts";
 import {
   JOURNAL_LONE_SURROGATES_REPLACED_MAPPER_SUFFIX,
-  replaceJournalLoneSurrogates,
+  JOURNAL_NUL_REPLACED_MAPPER_SUFFIX,
+  replaceJournalUnstorableText,
 } from "./lib/journal-lone-surrogates.ts";
 
 /** The part of a wire spec this needs: the observation kind it journals
@@ -103,6 +105,8 @@ export interface FanslyJournalBody {
   mapperVersion: string;
   /** Unpaired UTF-16 surrogates replaced by U+FFFD in `payload`. */
   loneSurrogatesReplaced: number;
+  /** U+0000 characters replaced by U+FFFD in `payload`. */
+  nulReplaced: number;
 }
 
 const CATALOG_KINDS: ReadonlySet<string> = new Set(FANSLY_CATALOG_CANONICALIZED_KINDS);
@@ -178,16 +182,20 @@ export function prepareJournalBody(spec: FanslyJournalSpec, served: FanslyServed
     body = stripFanslySignedCdnTokens(body);
     mapperVersion = `${mapperVersion}${FANSLY_CDN_TOKENS_STRIPPED_MAPPER_SUFFIX}`;
   }
-  const surrogates = replaceJournalLoneSurrogates(body);
-  if (surrogates.replaced > 0) {
+  const unstorable = replaceJournalUnstorableText(body);
+  if (unstorable.loneSurrogates > 0) {
     mapperVersion = `${mapperVersion}${JOURNAL_LONE_SURROGATES_REPLACED_MAPPER_SUFFIX}`;
   }
-  const payload = surrogates.value;
+  if (unstorable.nul > 0) {
+    mapperVersion = `${mapperVersion}${JOURNAL_NUL_REPLACED_MAPPER_SUFFIX}`;
+  }
+  const payload = unstorable.value;
   return {
     payload,
     payloadHash: createHash("sha256").update(JSON.stringify(payload)).digest(),
     mapperVersion,
-    loneSurrogatesReplaced: surrogates.replaced,
+    loneSurrogatesReplaced: unstorable.loneSurrogates,
+    nulReplaced: unstorable.nul,
   };
 }
 

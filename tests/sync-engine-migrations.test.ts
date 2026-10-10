@@ -45,6 +45,7 @@ import {
   syncHolds,
   syncMediaHandoff,
   syncPages,
+  syncWork,
 } from "@agency_hub_core/db";
 import {
   CONFIG_DESCRIPTORS,
@@ -1385,6 +1386,37 @@ describe("sync_alert_evaluations.sql (bug hunt Д11: the alert evaluator's proof
   });
 
   it("allows application rollback: the previous image never names the table", () => {
+    expect(rollbackCompatible()).toContain(`"${migration}"`);
+  });
+});
+
+describe("sync_work_failing_since.sql (bug hunt Д3/У2: a step without an outcome is counted)", () => {
+  // Found by its name, not its number: the number is the next free one at merge.
+  const found = readdirSync("packages/db/migrations").filter((file) => file.endsWith("_sync_work_failing_since.sql"));
+  const migration = found[0] ?? "";
+  const text = found.length === 1 ? readFileSync(`packages/db/migrations/${migration}`, "utf8") : "";
+  const sql = stripComments(text);
+  const statements = topLevelStatements(sql);
+
+  it("exists once, after the alert evaluations (Д11)", () => {
+    expect(found).toHaveLength(1);
+    expect(migration > "0262_sync_alert_evaluations.sql").toBe(true);
+  });
+
+  it("is purely additive: one nullable column without a default (catalog-only) and its comment", () => {
+    expect(statements).toEqual([
+      "alter table sync_work add column if not exists failing_since timestamptz",
+      expect.stringMatching(/^comment on column sync_work\.failing_since is 'Д3\/У2: /),
+    ]);
+    expect(sql).not.toMatch(/\b(drop|rename|truncate|delete|update|default|not null|grant)\b/i);
+  });
+
+  it("is mirrored in drizzle", () => {
+    const columns = syncWork as unknown as Record<string, { name?: unknown }>;
+    expect(columns.failingSince?.name).toBe("failing_since");
+  });
+
+  it("allows application rollback after the additive migration", () => {
     expect(rollbackCompatible()).toContain(`"${migration}"`);
   });
 });

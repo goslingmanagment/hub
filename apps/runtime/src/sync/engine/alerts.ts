@@ -11,6 +11,7 @@ import {
   readSyncChatAlertFacts,
   readSyncJournalAlertFacts,
   readSyncLivePathFacts,
+  readSyncStepAlertFacts,
   recordSyncAlertEvaluation,
   SYNC_ALERT_EVALUATION_RULES,
   SYNC_ALERTS_ACK_AUDIT_EVENT,
@@ -22,6 +23,7 @@ import {
   type SyncJournalAlertFacts,
   type SyncLivePathFacts,
   type SyncPageRow,
+  type SyncStepAlertFacts,
 } from "@agency_hub_core/db";
 import { sanitizeError } from "@agency_hub_core/shared";
 
@@ -89,6 +91,18 @@ import { noStallTracker, type StallTracker, type StallTracking } from "./watchdo
 // full (`sync_alert_evaluations`); the api watchdog pages the global latch
 // `evaluator` when a pair has gone unjudged for 5 min. A failure is logged
 // when it starts or changes, and its end once — never every pass.
+//
+// Alert 4 (`stuck`, bug hunt Д3/У2) also names a key whose steps keep ending
+// without an outcome: `step_failing` — open or running work whose series of
+// failed steps (`sync_work.failing_since`: a plan that throws, a local write
+// retried, an in-memory answer not applied, an attempt recovered `unknown`)
+// began more than 5 min ago, unless the owner's pause, a page hold, the
+// owner's requests pause (a `requests`-class key), a pause or switch-off of
+// the key, its file's breaker or a hold on all its routes explains it; and
+// `apply_pending` — an answer whose apply has been pending for more than
+// 5 min. Its `planned_stale` judges a poll by its newest applied answer, not
+// by its admissions. The summary of a latch the evaluator opens names the
+// keys its reasons name (`resources`).
 
 /** The evaluator's cadence. */
 export const SYNC_ALERT_EVAL_INTERVAL_MS = 30_000;
@@ -132,6 +146,12 @@ export const SYNC_REQUEST_STALL_MS = 30 * 60_000;
 export const SYNC_LEDGER_BACKFILL_STALL_MS = SYNC_REQUEST_STALL_MS;
 /** Alert 4: a poll without its own SLO is stale after this many periods. */
 export const SYNC_STALE_PERIODS = 3;
+/** Alert 4 (`step_failing`): a work whose steps have ended without an
+ *  outcome for longer than this (`sync_work.failing_since`). */
+export const SYNC_STEP_FAILING_MS = 5 * 60_000;
+/** Alert 4 (`apply_pending`): an answer captured (or deferred) and not applied
+ *  this long after its admission — `sync check live-hour`'s `applyPending`. */
+export const SYNC_APPLY_PENDING_MS = 5 * 60_000;
 /** The send audit re-reads this much of the journal before its last pass (a
  *  send captured after a pass with an earlier send instant; an unknown send
  *  counted at its upper bound). */
@@ -172,6 +192,8 @@ export interface PageAlertFacts {
   live: SyncLivePathFacts;
   /** The page's chat-unavailability episodes (`chats_refused`). */
   chats: SyncChatAlertFacts;
+  /** Steps that end without an outcome, applies pending (alert 4). */
+  steps: SyncStepAlertFacts;
   money: { count: number; oldestReceivedAt: Date } | null;
   now: Date;
 }
@@ -187,10 +209,12 @@ function dateOf(value: unknown): Date | null {
 }
 
 /** A resource whose work waits for a reason the owner or another alert owns:
- *  a pause, a switch-off, its file's breaker, or a hold on every route it
- *  reads (the route's own incident pages for that) — the last two by the hold
- *  evaluator, over the route holds alone (no send is counted: a budget's
- *  interval explains no wait this long). */
+ *  a pause — of the key, or the owner's requests pause of the page for a key
+ *  of the `requests` class (the pick leaves that class out) — a switch-off,
+ *  its file's breaker, or a hold on every route it reads (the route's own
+ *  incident pages for that) — the last two by the hold evaluator, over the
+ *  route holds alone (no send is counted: a budget's interval explains no
+ *  wait this long). */
 function resourceExplained(
   page: PageAlertFacts["page"],
   holds: HoldSet,
@@ -200,6 +224,7 @@ function resourceExplained(
 ): boolean {
   if (page.pausedResources.includes(resource) || resourceDisabled(page, resource)) return true;
   const spec = registry.spec(resource);
+  if (page.pausedRequests && spec?.class === "requests") return true;
   const routes = !holds.routes.ok || spec === null
     ? null
     : routeAdmissionView(new RouteClocks({ sends: [], state: holds.routes.state }), [spec], now);
@@ -284,7 +309,8 @@ function liveDegradedCondition(facts: PageAlertFacts): SyncAlertCondition | null
   }
   const quarantined = Object.entries(journal.quarantined);
   if (quarantined.length > 0) {
-    degraded.push({ detail: "quarantined", since: null, context: { byResource: Object.fromEntries(quarantined) } });
+    const byResource = Object.fromEntries(quarantined);
+    degraded.push({ detail: "quarantined", since: null, context: { byResource, resources: Object.keys(byResource).sort() } });
   }
   return condition("live_degraded", degraded, now);
 }
@@ -330,12 +356,45 @@ function freshnessCondition(facts: PageAlertFacts, registry: Pick<EngineRegistry
 
 /** Alert 4 of one page (pure). */
 function stuckCondition(facts: PageAlertFacts, registry: Pick<EngineRegistry, "spec">): SyncAlertCondition | null {
-  const { page, journal, now } = facts;
+  const { page, journal, steps, now } = facts;
   const { holds, held } = pageHoldsNow(facts);
   const holdInForce = held !== null;
 
   // 4. Stuck.
   const stuck: SyncAlertCondition["reasons"] = [];
+  // A key whose steps keep ending without an outcome (bug hunt Д3/У2): what
+  // explains an urgent wait explains it too — the owner's pause, a page hold,
+  // a pause or hold of the key — but not `dependency`, which every failed
+  // step writes. One fact row per key, judged here after the read.
+  if (!page.pausedAll && !holdInForce) {
+    const failing = steps.failing.filter((row) =>
+      msSince(row.failingSince, now) > SYNC_STEP_FAILING_MS && !resourceExplained(page, holds, row.resource, now, registry));
+    if (failing.length > 0) {
+      const since = failing.map((row) => row.failingSince).sort((a, b) => a.getTime() - b.getTime())[0]!;
+      stuck.push({
+        detail: "step_failing",
+        since,
+        context: {
+          works: failing.reduce((sum, row) => sum + row.works, 0),
+          resources: failing.map((row) => row.resource),
+          errors: [...new Set(failing.flatMap((row) => row.errorClasses))],
+        },
+      });
+    }
+  }
+  // An answer whose apply has been pending too long: applies run under a pause
+  // and a hold too (`drainDueApplies` opens every lap), so nothing explains it.
+  const pending = steps.applyPending.filter((row) => msSince(row.admittedAt, now) > SYNC_APPLY_PENDING_MS);
+  if (pending.length > 0) {
+    stuck.push({
+      detail: "apply_pending",
+      since: pending.map((row) => row.admittedAt).sort((a, b) => a.getTime() - b.getTime())[0]!,
+      context: {
+        attempts: pending.map((row) => row.attemptId),
+        resources: [...new Set(pending.map((row) => row.resource))],
+      },
+    });
+  }
   if (!page.pausedAll && !page.pausedRequests && journal.stalledRequests.length > 0) {
     stuck.push({
       detail: "request_stalled",
@@ -350,7 +409,8 @@ function stuckCondition(facts: PageAlertFacts, registry: Pick<EngineRegistry, "s
       if (spec === null || resourceExplained(page, holds, poll.resource, now, registry)) continue;
       const periodMs = effectivePeriodMs(spec, page);
       const staleAfterMs = spec.slo?.staleAfterMs ?? (periodMs === null ? null : SYNC_STALE_PERIODS * periodMs);
-      const since = poll.lastServedAt ?? poll.createdAt;
+      // Its newest applied answer: admissions without one are no progress.
+      const since = poll.lastAppliedAt ?? poll.createdAt;
       if (staleAfterMs !== null && msSince(since, now) > staleAfterMs) stale.push({ resource: poll.resource, since });
     }
     stale.sort((a, b) => a.since.getTime() - b.since.getTime());
@@ -389,7 +449,7 @@ function stuckCondition(facts: PageAlertFacts, registry: Pick<EngineRegistry, "s
 
 /** The parts of a page's alert facts, each read on its own
  *  (`readPageAlertFactsSettled`); the page row and `now` are always there. */
-export const PAGE_ALERT_FACT_PARTS = ["journal", "live", "chats", "money"] as const;
+export const PAGE_ALERT_FACT_PARTS = ["journal", "live", "chats", "money", "steps"] as const;
 export type PageAlertFactPart = (typeof PAGE_ALERT_FACT_PARTS)[number];
 
 /** The value of each part that holds no reason of any alert: what stands in
@@ -413,6 +473,7 @@ export const PAGE_ALERT_NEUTRAL_FACTS: { readonly [P in PageAlertFactPart]: Page
   },
   chats: { unavailable: 0, refused: { chats: 0, firstOpenedAt: null } },
   money: null,
+  steps: { failing: [], applyPending: [] },
 };
 
 /** One page alert as a rule: the parts of the facts it reads, and its
@@ -430,7 +491,7 @@ export const SYNC_PAGE_ALERT_RULES: Readonly<Record<SyncPageAlertSubKey, SyncPag
   page_stopped: { parts: ["journal"], evaluate: (facts) => pageStoppedCondition(facts) },
   live_degraded: { parts: ["journal", "live"], evaluate: (facts) => liveDegradedCondition(facts) },
   freshness: { parts: ["journal", "live", "chats", "money"], evaluate: freshnessCondition },
-  stuck: { parts: ["journal"], evaluate: stuckCondition },
+  stuck: { parts: ["journal", "steps"], evaluate: stuckCondition },
 };
 
 /**
@@ -539,10 +600,15 @@ export async function readPageAlertFactsSettled(
   }));
   const chats = await settle("chats", PAGE_ALERT_NEUTRAL_FACTS.chats, () =>
     readSyncChatAlertFacts(db, { pageId, refusedWindowMs: SYNC_CHATS_REFUSED_WINDOW_MS }));
+  const steps = await settle("steps", PAGE_ALERT_NEUTRAL_FACTS.steps, () => readSyncStepAlertFacts(db, {
+    pageId,
+    failingAfterMs: SYNC_STEP_FAILING_MS,
+    applyPendingAfterMs: SYNC_APPLY_PENDING_MS,
+  }));
   let money: PageAlertFacts["money"] = PAGE_ALERT_NEUTRAL_FACTS.money;
   if (input.money instanceof Map) money = input.money.get(pageId) ?? null;
   else if (input.money !== undefined) failed.set("money", input.money.error);
-  return { facts: { page: input.page, journal, live, chats, money, now: input.page.dbNow }, failed };
+  return { facts: { page: input.page, journal, live, chats, money, steps, now: input.page.dbNow }, failed };
 }
 
 /** Read a page's alert facts (`readPageAlertFactsSettled`); a part that cannot
@@ -586,6 +652,18 @@ export async function readMissingMoneyFrames(
 /** Pages whose alerts page the owner (`handover`, `live`). */
 export function pagesOwnerAlerts(page: Pick<SyncPageRow, "mode">): boolean {
   return page.mode === "handover" || page.mode === "live";
+}
+
+/** The keys a condition's reasons name (`context.resources`, string arrays
+ *  only), once each, in the order of its reasons. */
+export function conditionResources(condition: Pick<SyncAlertCondition, "reasons">): string[] {
+  const resources = new Set<string>();
+  for (const reason of condition.reasons) {
+    const named = reason.context?.resources;
+    if (!Array.isArray(named)) continue;
+    for (const resource of named) if (typeof resource === "string") resources.add(resource);
+  }
+  return [...resources];
 }
 
 function summaryOf(detail: string, since: Date | null, context: Readonly<Record<string, unknown>> | undefined): string {
@@ -897,6 +975,8 @@ export class SyncAlertEvaluator {
     const blind = rule.parts.filter((part) => settled.failed.has(part));
     const failures = blind.map((part) => `${part}: ${syncAlertFailureText(settled.failed.get(part))}`);
     if (held !== null) {
+      // The keys its reasons name, so the page names them, not only `sync alerts status`.
+      const resources = conditionResources(held);
       const landed = await notifySyncEngineIncident(this.#app, {
         subKey,
         pageId: page.pageId,
@@ -904,6 +984,7 @@ export class SyncAlertEvaluator {
         detail: held.detail,
         errorSummary: summaryOf(held.detail, held.since, {
           reasons: held.reasons.map((reason) => reason.detail),
+          ...(resources.length === 0 ? {} : { resources }),
           ...(blind.length === 0 ? {} : { blind }),
         }),
         occurredAt: held.seenAt,

@@ -6,12 +6,16 @@ import {
   createFanslyPage,
   createLiveSyncPage,
   createModel,
+  ensureFanslyPageSendGuard,
   ensurePollRows,
   getNotificationIncidentByKey,
   getSyncPage,
   listSyncPages,
   readSyncJournalAlertFacts,
+  readSyncStepAlertFacts,
   SYNC_ALERT_EVALUATION_RULES,
+  upsertDemand,
+  upsertDemands,
   type Database,
 } from "@agency_hub_core/db";
 import type { FanslyWireOutcome, FanslyWireRequest } from "@agency_hub_core/fansly";
@@ -38,8 +42,8 @@ import {
   SyncAlertEvaluator,
 } from "../apps/runtime/src/sync/engine/alerts.ts";
 import { computeSyncMetrics, sampleSyncEngineMetrics } from "../apps/runtime/src/sync/engine/metrics.ts";
-import { pollsFor } from "../apps/runtime/src/sync/engine/resource.ts";
-import { createFanslyRegistry } from "../apps/runtime/src/sync/fansly/registry.ts";
+import { createEngineRegistry, pollsFor, type EngineRegistry, type ResourceModule } from "../apps/runtime/src/sync/engine/resource.ts";
+import { createFanslyRegistry, FANSLY_RESOURCE_SPECS, fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";
 import { applyAccountMeToPage } from "../apps/runtime/src/sync/fansly/resources/account.ts";
 import { enqueueOwnerSyncWork } from "../apps/runtime/src/sync/inspect.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
@@ -61,7 +65,10 @@ import { clearPageHolds, replaceHoldRows, resourceBreakerRow, seedPageHold, seed
 // a route's 429 is its own latch per page+route (D5), the pace latch is the
 // owner's to close, alert 5 is the api watchdog's, and the sampler's compact
 // set. Alert 4's ledger rule runs on the real rescan and backfill (the
-// production actor and transactions module, fixed answers).
+// production actor and transactions module, fixed answers). Alert 4 also
+// names a key whose steps keep ending without an outcome (`step_failing`)
+// and an answer whose apply hangs (`apply_pending`), and judges a poll by its
+// newest applied answer (bug hunt Д3/У2).
 
 let testDb: StartedTestDatabase | null = null;
 
@@ -1039,4 +1046,351 @@ describe("the golden signals (design §9.5)", () => {
       "select value_ms::text as value from ops_metric_samples where metric = 'sync_sends' and quantile = 'p95'",
     )).toEqual([{ value: "3" }]);
   });
+});
+
+describe("alert 4: a work failing without an outcome (bug hunt Д3/У2)", () => {
+  // The real actor, commit paths and evaluator; only the module step under
+  // test is wrapped to fail (SIL-2 of the bug hunt).
+  const MINUTE = 60_000;
+
+  /** A live page the actor can step: an open receiver socket, a beating
+   *  owner, the send guard the engine's and a known identity. */
+  async function actorPage(): Promise<WsCapturePage> {
+    const page = await enginePage("live");
+    await ensureFanslyPageSendGuard(db(), page.pageId);
+    await testDb!.pool.query("update fansly_page_send_guards set owner_engine = 'fansly_sync_engine' where page_id = $1", [page.pageId]);
+    await testDb!.pool.query(
+      "update pages set metadata = $2::jsonb, last_verified_at = clock_timestamp() where id = $1",
+      [page.pageId, JSON.stringify({ accountCreatedAt: "2026-08-15T00:00:00.000Z" })],
+    );
+    return page;
+  }
+
+  function registryWith(overrides: Record<string, (real: ResourceModule) => ResourceModule>): EngineRegistry {
+    return createEngineRegistry(FANSLY_RESOURCE_SPECS.map((spec) => {
+      const wrap = overrides[spec.key];
+      if (wrap === undefined || spec.module === undefined) return spec;
+      const load = spec.module;
+      return { ...spec, module: async () => wrap(await load()) };
+    }));
+  }
+
+  /** Every standing row of the page, parked (the step under test alone runs). */
+  async function parkStandingRows(pageId: number): Promise<void> {
+    const page = await getSyncPage(db(), pageId);
+    await ensurePollRows(db(), { pageId, polls: pollsFor(registry, page!).map((poll) => ({ ...poll, phase: 0.999 })) });
+  }
+
+  async function makeDue(pageId: number, resource: string, extra: { subject?: string; messageIds?: string[] } = {}) {
+    const spec = fanslyResourceSpec(resource)!;
+    return upsertDemand(db(), {
+      pageId,
+      resource,
+      kind: spec.kind,
+      class: spec.class,
+      ...(extra.subject === undefined ? {} : { subject: extra.subject }),
+      ...(extra.messageIds === undefined ? {} : { demand: { messageIds: extra.messageIds, txIds: [], reasons: ["test"], overflow: false } }),
+    });
+  }
+
+  async function workRow(pageId: number, resource: string, subject = "") {
+    return (await query<{
+      state: string; waitingReason: string | null; lastErrorClass: string | null; failingSince: Date | null; dueInMs: number;
+    }>(
+      `select state, waiting_reason as "waitingReason", last_error_class as "lastErrorClass", failing_since as "failingSince",
+              (extract(epoch from due_at - updated_at) * 1000)::float8 as "dueInMs"
+         from sync_work where page_id = $1 and resource = $2 and subject = $3 and not shadow order by id desc limit 1`,
+      [pageId, resource, subject],
+    ))[0] ?? null;
+  }
+
+  /** The actor (a new owner generation) until `until` holds. */
+  async function runActor(
+    pageId: number,
+    actorRegistry: EngineRegistry,
+    until: () => Promise<boolean>,
+    respond: (req: FanslyWireRequest) => FanslyWireOutcome = () => okResponse(),
+  ): Promise<void> {
+    const transport = new ScriptedLiveTransport();
+    transport.respond = respond;
+    const { actor, stop, abort } = await makeTestActor({ db: db(), pageId, registry: actorRegistry, transport, ownRef: OWN });
+    const running = actor.run({ stop: stop.signal, abort: abort.signal });
+    try {
+      await waitFor(async () => ((await until()) ? true : null), 30_000, "the step");
+    } finally {
+      stop.abort();
+      await running;
+    }
+    // The owner beats on (alert 1 is not under test).
+    await testDb!.pool.query("update sync_pages set owner_heartbeat_at = clock_timestamp() where page_id = $1", [pageId]);
+  }
+
+  /** Alert 4's reasons now (detail and context). */
+  async function stuckReasons(pageId: number) {
+    const conditions = await collectPageAlerts(db(), { page: (await getSyncPage(db(), pageId))!, registry });
+    return conditions.find((condition) => condition.subKey === "stuck")?.reasons ?? [];
+  }
+
+  const opened = (result: Awaited<ReturnType<typeof pass>>, pageId: number) =>
+    result.opened.filter((entry) => entry.pageId === pageId && entry.subKey === "stuck");
+  const resolved = (result: Awaited<ReturnType<typeof pass>>, pageId: number) =>
+    result.resolved.filter((entry) => entry.pageId === pageId && entry.subKey === "stuck");
+
+  async function ageFailing(pageId: number, resource: string, ms: number): Promise<void> {
+    await testDb!.pool.query(
+      "update sync_work set failing_since = failing_since - make_interval(secs => $3::double precision / 1000) where page_id = $1 and resource = $2",
+      [pageId, resource, ms],
+    );
+  }
+
+  it("a plan that keeps throwing pages step_failing after 5 min, naming its key; a plan with an outcome ends it and the latch closes", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await actorPage();
+    let broken = true;
+    const actorRegistry = registryWith({
+      "dm-conversations.find": (real) => ({
+        ...real,
+        plan: async (work, ctx) => {
+          if (broken) throw new TypeError("a bug in the plan");
+          return { kind: "wait", reason: "not_due", until: new Date(ctx.now.getTime() + 60 * MINUTE) };
+        },
+      }),
+    });
+    await parkStandingRows(page.pageId);
+    await makeDue(page.pageId, "dm-conversations.find", { subject: GROUP, messageIds: ["910000000000000011"] });
+    await runActor(page.pageId, actorRegistry, async () =>
+      (await workRow(page.pageId, "dm-conversations.find", GROUP))?.lastErrorClass === "plan:TypeError");
+    const failing = (await workRow(page.pageId, "dm-conversations.find", GROUP))!;
+    expect(failing).toMatchObject({ state: "open", waitingReason: "dependency" });
+    expect(failing.failingSince).not.toBeNull();
+    expect(failing.dueInMs).toBeGreaterThan(59_000);
+    expect(failing.dueInMs).toBeLessThan(61_000);
+    // Younger than 5 min: nothing yet.
+    expect(opened(await pass(), page.pageId)).toEqual([]);
+
+    await ageFailing(page.pageId, "dm-conversations.find", 6 * MINUTE);
+    expect(opened(await pass(), page.pageId)).toEqual([{ pageId: page.pageId, subKey: "stuck", detail: "step_failing" }]);
+    expect((await incident("stuck", page.pageId))!.errorSummary).toContain("dm-conversations.find");
+    expect(await stuckReasons(page.pageId)).toEqual([expect.objectContaining({
+      detail: "step_failing",
+      context: { works: 1, resources: ["dm-conversations.find"], errors: ["plan:TypeError"] },
+    })]);
+
+    // The plan is fixed: its next step has an outcome (a wait), the series ends.
+    broken = false;
+    await testDb.pool.query("update sync_work set due_at = clock_timestamp() where page_id = $1 and resource = 'dm-conversations.find'", [page.pageId]);
+    await runActor(page.pageId, actorRegistry, async () =>
+      (await workRow(page.pageId, "dm-conversations.find", GROUP))?.failingSince === null);
+    expect(await workRow(page.pageId, "dm-conversations.find", GROUP)).toMatchObject({ state: "open", failingSince: null });
+    expect(resolved(await pass(), page.pageId)).toEqual([{ pageId: page.pageId, subKey: "stuck" }]);
+  }, 90_000);
+
+  it("a local step that keeps failing transiently (57014) pages step_failing after 5 min", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await actorPage();
+    let failures = 0;
+    const actorRegistry = registryWith({
+      "dm-live.deletions": (real) => ({
+        ...real,
+        applyLocal: async () => {
+          failures += 1;
+          throw Object.assign(new Error("canceling statement due to statement timeout"), { code: "57014" });
+        },
+      }),
+    });
+    await parkStandingRows(page.pageId);
+    await makeDue(page.pageId, "dm-live.deletions", { subject: GROUP, messageIds: ["910000000000000031"] });
+    await runActor(page.pageId, actorRegistry, async () =>
+      failures >= 1 && (await workRow(page.pageId, "dm-live.deletions", GROUP))?.lastErrorClass === "local:57014");
+    const row = (await workRow(page.pageId, "dm-live.deletions", GROUP))!;
+    expect(row).toMatchObject({ state: "open", waitingReason: "dependency" });
+    expect(row.failingSince).not.toBeNull();
+
+    await ageFailing(page.pageId, "dm-live.deletions", 6 * MINUTE);
+    expect(opened(await pass(), page.pageId)).toEqual([{ pageId: page.pageId, subKey: "stuck", detail: "step_failing" }]);
+    expect(await stuckReasons(page.pageId)).toEqual([expect.objectContaining({
+      detail: "step_failing",
+      context: { works: 1, resources: ["dm-live.deletions"], errors: ["local:57014"] },
+    })]);
+  }, 90_000);
+
+  it("a journaled answer whose apply keeps failing transiently pages apply_pending 5 min after its admission", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await actorPage();
+    let failures = 0;
+    const actorRegistry = registryWith({
+      "transactions.head": (real) => ({
+        ...real,
+        apply: async () => {
+          failures += 1;
+          throw Object.assign(new Error("canceling statement due to statement timeout"), { code: "57014" });
+        },
+      }),
+    });
+    await parkStandingRows(page.pageId);
+    await makeDue(page.pageId, "transactions.head");
+    const tx = {
+      walletId: "wallet-1", transactionId: "tx-head-1", accountId: OWN, correlationId: null, correlationAccountId: null,
+      type: 7001, destination: 1, amount: 10_000, destinationTax: 2_000, destinationAmount: 8_000, newBalance: null,
+      newBalance64: 100_000, createdAt: Date.now() - 3_600_000, updatedAt: null, status: 1, senderId: null, receiverId: OWN,
+    };
+    await runActor(page.pageId, actorRegistry, async () => failures >= 1 && (await query<{ n: number }>(
+      "select count(*)::int as n from sync_attempts where page_id = $1 and resource = 'transactions.head' and apply_state = 'deferred'",
+      [page.pageId],
+    ))[0]!.n === 1, () => okResponse({ total: 1, data: [tx] }));
+    expect(await workRow(page.pageId, "transactions.head")).toMatchObject({ state: "running" });
+    // The deferral counts nothing and no step failed: no series, no step_failing.
+    expect((await workRow(page.pageId, "transactions.head"))!.failingSince).toBeNull();
+    expect(opened(await pass(), page.pageId)).toEqual([]);
+
+    await testDb.pool.query(
+      "update sync_attempts set admitted_at = admitted_at - interval '6 minutes' where page_id = $1 and resource = 'transactions.head'",
+      [page.pageId],
+    );
+    expect(opened(await pass(), page.pageId)).toEqual([{ pageId: page.pageId, subKey: "stuck", detail: "apply_pending" }]);
+    const attempts = await query<{ id: number }>("select id::int from sync_attempts where page_id = $1 and resource = 'transactions.head'", [page.pageId]);
+    expect(await stuckReasons(page.pageId)).toEqual([expect.objectContaining({
+      detail: "apply_pending",
+      context: { attempts: attempts.map((row) => row.id), resources: ["transactions.head"] },
+    })]);
+    expect((await incident("stuck", page.pageId))!.errorSummary).toContain("transactions.head");
+  }, 90_000);
+
+  it("a paused key's failing works never hide another key's failure", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await enginePage("live");
+    await parkStandingRows(page.pageId);
+    const catchup = fanslyResourceSpec("dm-messages.catchup")!;
+    await upsertDemands(db(), Array.from({ length: 201 }, (_, index) => ({
+      pageId: page.pageId,
+      resource: "dm-messages.catchup",
+      subject: `4000000000${String(index).padStart(8, "0")}`,
+      kind: catchup.kind,
+      class: catchup.class,
+    })));
+    await testDb.pool.query(
+      `update sync_work set failing_since = clock_timestamp() - interval '10 minutes', last_error_class = 'local:57014'
+        where page_id = $1 and resource = 'dm-messages.catchup'`,
+      [page.pageId],
+    );
+    await testDb.pool.query("update sync_pages set paused_resources = array['dm-messages.catchup'] where page_id = $1", [page.pageId]);
+    await makeDue(page.pageId, "dm-live.deletions", { subject: GROUP, messageIds: ["910000000000000041"] });
+    await testDb.pool.query(
+      `update sync_work set failing_since = clock_timestamp() - interval '6 minutes', last_error_class = 'local:57014'
+        where page_id = $1 and resource = 'dm-live.deletions'`,
+      [page.pageId],
+    );
+
+    // One fact row per key, however many works the paused one has.
+    const facts = await readSyncStepAlertFacts(db(), { pageId: page.pageId, failingAfterMs: 5 * MINUTE, applyPendingAfterMs: 5 * MINUTE });
+    expect(facts.failing.map((row) => ({ resource: row.resource, works: row.works, errorClasses: row.errorClasses }))).toEqual([
+      { resource: "dm-messages.catchup", works: 201, errorClasses: ["local:57014"] },
+      { resource: "dm-live.deletions", works: 1, errorClasses: ["local:57014"] },
+    ]);
+    expect(facts.applyPending).toEqual([]);
+
+    expect(opened(await pass(), page.pageId)).toEqual([{ pageId: page.pageId, subKey: "stuck", detail: "step_failing" }]);
+    expect(await stuckReasons(page.pageId)).toEqual([expect.objectContaining({
+      detail: "step_failing",
+      context: { works: 1, resources: ["dm-live.deletions"], errors: ["local:57014"] },
+    })]);
+    const summary = (await incident("stuck", page.pageId))!.errorSummary;
+    expect(summary).toContain("dm-live.deletions");
+    expect(summary).not.toContain("dm-messages.catchup");
+  }, 60_000);
+
+  it("the owner's requests pause explains a failing history read; lifted, it pages", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await enginePage("live");
+    await parkStandingRows(page.pageId);
+    await makeDue(page.pageId, "dm-messages.history", { subject: GROUP });
+    await testDb.pool.query(
+      `update sync_work set failing_since = clock_timestamp() - interval '6 minutes', last_error_class = 'plan:TypeError'
+        where page_id = $1 and resource = 'dm-messages.history'`,
+      [page.pageId],
+    );
+    await testDb.pool.query("update sync_pages set paused_requests = true where page_id = $1", [page.pageId]);
+    expect(opened(await pass(), page.pageId)).toEqual([]);
+    expect(await stuckReasons(page.pageId)).toEqual([]);
+
+    await testDb.pool.query("update sync_pages set paused_requests = false where page_id = $1", [page.pageId]);
+    expect(opened(await pass(), page.pageId)).toEqual([{ pageId: page.pageId, subKey: "stuck", detail: "step_failing" }]);
+    expect(await stuckReasons(page.pageId)).toEqual([expect.objectContaining({
+      detail: "step_failing",
+      context: { works: 1, resources: ["dm-messages.history"], errors: ["plan:TypeError"] },
+    })]);
+  }, 60_000);
+
+  it("controls: a repair's real wait for the work it spawned ends a series and pages nothing; a paused key pages nothing", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await actorPage();
+    await parkStandingRows(page.pageId);
+    // The repair's pass spawned a chat head that has not been served yet.
+    await makeDue(page.pageId, "dm-messages.head", { subject: GROUP, messageIds: ["910000000000000051"] });
+    await testDb.pool.query(
+      "update sync_work set due_at = clock_timestamp() + interval '1 hour' where page_id = $1 and resource = 'dm-messages.head'",
+      [page.pageId],
+    );
+    await makeDue(page.pageId, "repair.ws-gap");
+    await testDb.pool.query(
+      `update sync_work
+          set cursor = $2::jsonb,
+              failing_since = clock_timestamp() - interval '10 minutes',
+              due_at = clock_timestamp()
+        where page_id = $1 and resource = 'repair.ws-gap'`,
+      [page.pageId, JSON.stringify({
+        phase: "wait",
+        pass: { since: new Date(Date.now() - 60 * MINUTE).toISOString(), targets: [], startedRevision: 1 },
+        offset: 0,
+        pageCount: 1,
+        spawned: [{ resource: "dm-messages.head", subject: GROUP }],
+        waitStartedAt: new Date().toISOString(),
+      })],
+    );
+    await runActor(page.pageId, registry, async () => (await workRow(page.pageId, "repair.ws-gap"))?.waitingReason === "dependency");
+    expect(await workRow(page.pageId, "repair.ws-gap")).toMatchObject({ state: "open", waitingReason: "dependency", failingSince: null });
+    expect(opened(await pass(), page.pageId)).toEqual([]);
+    expect(await stuckReasons(page.pageId)).toEqual([]);
+
+    // A failing key the owner paused pages nothing.
+    await makeDue(page.pageId, "dm-live.deletions", { subject: GROUP, messageIds: ["910000000000000052"] });
+    await testDb.pool.query(
+      "update sync_work set failing_since = clock_timestamp() - interval '6 minutes' where page_id = $1 and resource = 'dm-live.deletions'",
+      [page.pageId],
+    );
+    await testDb.pool.query("update sync_pages set paused_resources = array['dm-live.deletions'] where page_id = $1", [page.pageId]);
+    expect(opened(await pass(), page.pageId)).toEqual([]);
+    expect(await stuckReasons(page.pageId)).toEqual([]);
+  }, 90_000);
+
+  it("planned_stale judges a poll by its newest applied answer, not by its admissions", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await enginePage("live");
+    await parkStandingRows(page.pageId);
+    const [insurance] = await query<{ id: number }>(
+      "select id::int from sync_work where page_id = $1 and resource = 'transactions.insurance' and state = 'open'", [page.pageId],
+    );
+    // Admitted a minute ago, its newest applied answer 20 min old (SLO 15 min).
+    await testDb.pool.query(
+      `update sync_work set last_served_at = clock_timestamp() - interval '1 minute', created_at = clock_timestamp() - interval '1 day'
+        where id = $1`,
+      [insurance!.id],
+    );
+    await testDb.pool.query(
+      `insert into sync_attempts (page_id, work_id, resource, subject, class, owner_generation, setting_ms, jitter_u, pause_ms,
+                                  admitted_at, sent_at, send_mark, completed_at, operation, request, outcome, http_status,
+                                  apply_state, applied_at)
+       values ($1, $2, 'transactions.insurance', '', 'planned', 1, 2000, 0, 2000,
+               clock_timestamp() - interval '20 minutes 1 second', clock_timestamp() - interval '20 minutes 1 second',
+               'request_start', clock_timestamp() - interval '20 minutes', 'transactions.page', '{}'::jsonb, 'response', 200,
+               'applied', clock_timestamp() - interval '20 minutes')`,
+      [page.pageId, insurance!.id],
+    );
+    expect(opened(await pass(), page.pageId)).toEqual([{ pageId: page.pageId, subKey: "stuck", detail: "planned_stale" }]);
+    expect(await stuckReasons(page.pageId)).toEqual([expect.objectContaining({
+      detail: "planned_stale",
+      context: { resources: ["transactions.insurance"] },
+    })]);
+    expect((await incident("stuck", page.pageId))!.errorSummary).toContain('"resources":["transactions.insurance"]');
+  }, 60_000);
 });

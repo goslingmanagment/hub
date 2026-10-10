@@ -73,7 +73,7 @@ import {
   type ThreadChain,
 } from "../lib/chain.ts";
 import { normalizeFanslyDmMessages } from "../lib/dm-normalize.ts";
-import { replaceJournalLoneSurrogates } from "../lib/journal-lone-surrogates.ts";
+import { replaceJournalUnstorableText } from "../lib/journal-lone-surrogates.ts";
 import { readFanslyPageFacts, waitForPageIdentity } from "../lib/page-facts.ts";
 import { normalizeFanslyTimestamp } from "../lib/timestamp.ts";
 import { materializeFanslyDmTipContexts } from "../lib/tip-contexts.ts";
@@ -1076,7 +1076,7 @@ async function canonicalizeAndFeedArchive(tx: Database, input: {
     accountId: input.pageId,
     kind: "dm_messages",
     // The body as journaled (§3.11): dm_messages is never CDN-stripped.
-    payload: replaceJournalLoneSurrogates(input.response).value,
+    payload: replaceJournalUnstorableText(input.response).value,
     observedAt: null,
     receivedAt: input.observation.receivedAt,
   }, {

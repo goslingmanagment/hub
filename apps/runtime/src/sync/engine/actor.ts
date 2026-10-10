@@ -3,6 +3,7 @@ import {
   getSyncPage,
   LiveGateClosedError,
   lockOwnedPage,
+  markAttemptCommitFailed,
   nextOpenWorkDueAt,
   OwnershipLostError,
   pickBeforeGateWork,
@@ -85,7 +86,11 @@ import type { StallTracker } from "./watchdog.ts";
 //
 // It leaves its loop when it is told to stop (shutdown, mode change), when its
 // ownership is gone (the lock session ended, or a commit met a foreign
-// generation), or when a commit after a send keeps failing. A request already
+// generation), or when a commit after a send keeps failing — then it marks the
+// attempt with why (`commit_failed:<SQLSTATE|name>`, best effort) and exits
+// `failed`; the next actor's recovery closes the attempt `unknown` and reads
+// the work once more, or quarantines it when its two newest attempts ended so
+// within 10 min (bug hunt Д3). A request already
 // in flight is always awaited and committed first; the host writes the safe
 // release once the actor has returned (design §3.6 "Ownership loss").
 
@@ -447,10 +452,15 @@ export class SyncActor {
   ): Promise<ActorExit | null> {
     const d = this.#d;
     if (outcome.kind === "aborted_before_send") {
-      return exitOf(await this.#committed(() => settleNotSent(d, admission, outcome)));
+      const settled = await this.#committed(() => settleNotSent(d, admission, outcome));
+      if (!settled.ok) await this.#markCommitFailed(admission, settled.exit);
+      return exitOf(settled);
     }
     const captured = await this.#committed(() => capture(d, admission, armed, outcome, module));
-    if (!captured.ok) return captured.exit;
+    if (!captured.ok) {
+      await this.#markCommitFailed(admission, captured.exit);
+      return captured.exit;
+    }
     this.#phase("apply");
     await this.#fault("after_capture");
     if (captured.value.applyNow) {
@@ -478,6 +488,20 @@ export class SyncActor {
       }
     }
     return { ok: false, exit: { kind: "failed", error: errorName(last) } };
+  }
+
+  /** The actor gives up on a commit after the request (`failed`): the attempt
+   *  says why (`commit_failed:<SQLSTATE|name>`) before recovery closes it
+   *  `unknown` — best effort, in its own transaction; without the database
+   *  the class stays null. */
+  async #markCommitFailed(admission: AdmissionRecord, exit: ActorExit): Promise<void> {
+    if (exit.kind !== "failed") return;
+    const d = this.#d;
+    try {
+      await markAttemptCommitFailed(d.db, { attemptId: admission.attemptId, errorClass: `commit_failed:${exit.error}` });
+    } catch (error) {
+      d.logger.debug({ attemptId: admission.attemptId, err: errorName(error) }, "Fansly sync actor: best-effort commit-failed mark failed");
+    }
   }
 
   /** The page's hold set holds rows this build cannot read: the page admits

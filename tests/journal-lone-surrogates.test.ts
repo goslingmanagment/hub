@@ -45,7 +45,9 @@ const { runWithPageSyncExecutionContext } = await import("@agency_hub_core/db");
 const { persistRawPayload, retentionDate } = await import("../apps/runtime/src/services/sync/shared.ts");
 const {
   JOURNAL_LONE_SURROGATES_REPLACED_MAPPER_SUFFIX,
+  JOURNAL_NUL_REPLACED_MAPPER_SUFFIX,
   replaceJournalLoneSurrogates,
+  replaceJournalUnstorableText,
 } = await import("../apps/runtime/src/sync/fansly/lib/journal-lone-surrogates.ts");
 
 const LONE_HIGH = "\ud83d";
@@ -123,6 +125,48 @@ describe("replaceJournalLoneSurrogates", () => {
     const result = replaceJournalLoneSurrogates(dirty);
     expect(result).toEqual({ value: { about: "bio �", list: ["� x"] }, replaced: 2 });
     expect(dirty.about).toBe(`bio ${LONE_HIGH}`);
+  });
+});
+
+describe("replaceJournalUnstorableText (bug hunt Д3: U+0000 too)", () => {
+  it("returns a clean value by identity with both counts 0", () => {
+    const clean = cleanBody();
+    const result = replaceJournalUnstorableText(clean);
+    expect(result).toEqual({ value: clean, loneSurrogates: 0, nul: 0 });
+    expect(result.value).toBe(clean);
+  });
+
+  it("replaces a NUL in a value and in a key, and a surrogate beside a NUL, by U+FFFD with the right counts", () => {
+    const dirty = { about: "nul\u0000here", "k\u0000ey": [`${LONE_HIGH} and \u0000\u0000`], plain: "fine" };
+    const snapshot = JSON.stringify(dirty);
+    const result = replaceJournalUnstorableText(dirty);
+    expect(result).toEqual({
+      value: { about: "nul�here", "k�ey": ["� and ��"], plain: "fine" },
+      loneSurrogates: 1,
+      nul: 4,
+    });
+    // What the driver sends jsonb no longer carries a refused escape.
+    expect(JSON.stringify(result.value)).not.toContain("\\u0000");
+    expect(JSON.stringify(result.value)).not.toMatch(/\\ud[89ab]/i);
+    // The served object is left as it was.
+    expect(JSON.stringify(dirty)).toBe(snapshot);
+    expect(result.value).not.toBe(dirty);
+  });
+
+  it("keeps a parsed __proto__ key as data", () => {
+    const dirty = JSON.parse('{"__proto__":{"about":"x\\u0000y"},"ok":"z"}') as Record<string, unknown>;
+    const result = replaceJournalUnstorableText(dirty);
+    expect(Object.getPrototypeOf(result.value)).toBe(Object.prototype);
+    expect(JSON.stringify(result.value)).toBe('{"__proto__":{"about":"x�y"},"ok":"z"}');
+    expect(result.nul).toBe(1);
+  });
+
+  it("names its suffix; the legacy replacement still leaves a NUL alone", () => {
+    expect(JOURNAL_NUL_REPLACED_MAPPER_SUFFIX).toBe("+nul-replaced-v1");
+    const body = { success: true, response: [{ id: "1", content: "hi\u0000there" }] };
+    const legacy = replaceJournalLoneSurrogates(body);
+    expect(legacy.replaced).toBe(0);
+    expect(JSON.stringify(legacy.value)).toContain("\\u0000");
   });
 });
 
