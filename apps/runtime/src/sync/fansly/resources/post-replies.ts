@@ -1,4 +1,6 @@
 
+import { sql } from "drizzle-orm";
+
 import {
   countPostComments,
   countPostRepliesWalkProgress,
@@ -199,17 +201,38 @@ async function authorsFollowup(db: Database, pageId: number, cursor: PostReplies
   };
 }
 
+/** Whether the page's list of posts is whole: it has no `posts.backfill` row
+ *  (a page that never ran one: its known roots are the list), or its newest
+ *  one walked the timeline to its end (`sync_work_key_recent`). An open,
+ *  paused, quarantined or otherwise closed backfill means roots are still
+ *  unknown. */
+async function postsListWhole(tx: Database, pageId: number): Promise<boolean> {
+  const result = await tx.execute<{ state: string; closeReason: string | null }>(sql`
+    select state, close_reason as "closeReason"
+      from sync_work
+     where page_id = ${pageId} and resource = 'posts.backfill' and subject = '' and not shadow
+     order by id desc
+     limit 1
+  `);
+  const newest = result.rows[0];
+  return newest === undefined || (newest.state === "done" && newest.closeReason === "walk_timeline_exhausted");
+}
+
 /** The archive's coverage after a finished post (legacy rules, minus the
- *  retired budget deferral): complete only when every root was walked and
- *  nothing is possibly truncated. */
+ *  retired budget deferral): complete only when every known root was walked,
+ *  nothing is possibly truncated and the list of roots is whole
+ *  (`postsListWhole`) — every root walked of a list still being read is
+ *  `in_progress` (`posts_list_incomplete`). */
 async function writeArchiveCoverage(tx: Database, input: { pageId: number; now: Date; cursor: PostRepliesCursor }) {
   const progress = await countPostRepliesWalkProgress(tx, input.pageId);
   const archive = await countPostComments(tx, input.pageId);
   const everyRootWalked = progress.rootsKnown > 0 && progress.rootsWalked >= progress.rootsKnown;
+  const exhausted = everyRootWalked && archive.possiblyTruncated === 0;
+  const listWhole = !exhausted || (await postsListWhole(tx, input.pageId));
   const status: CaptureCoverageStatus = progress.rootsKnown === 0
     ? "not_started"
-    : everyRootWalked && archive.possiblyTruncated === 0
-      ? "provider_exhausted"
+    : exhausted
+      ? listWhole ? "provider_exhausted" : "in_progress"
       : everyRootWalked ? "window_captured" : "in_progress";
   await writeFanslyLaneCoverage({
     db: tx,
@@ -220,7 +243,7 @@ async function writeArchiveCoverage(tx: Database, input: { pageId: number; now: 
     acquisitionMode: "retroactive",
     proof: "none",
     newestCapturedAt: input.now,
-    reasonCode: status === "window_captured" ? "pagination_unproven" : null,
+    reasonCode: status === "window_captured" ? "pagination_unproven" : listWhole ? null : "posts_list_incomplete",
     expectedCount: progress.rootsKnown,
     observedUniqueCount: progress.rootsWalked,
     cursor: {

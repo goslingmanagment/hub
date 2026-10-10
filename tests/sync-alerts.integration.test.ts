@@ -2,7 +2,18 @@ import { randomUUID } from "node:crypto";
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { getNotificationIncidentByKey, listSyncPages, type Database } from "@agency_hub_core/db";
+import {
+  createFanslyPage,
+  createLiveSyncPage,
+  createModel,
+  ensurePollRows,
+  getNotificationIncidentByKey,
+  getSyncPage,
+  listSyncPages,
+  readSyncJournalAlertFacts,
+  type Database,
+} from "@agency_hub_core/db";
+import type { FanslyWireOutcome, FanslyWireRequest } from "@agency_hub_core/fansly";
 import { createLogger } from "@agency_hub_core/shared";
 
 import { runGoldenSignalSample, SYNC_ENGINE_METRICS_PROBE } from "../apps/runtime/src/services/golden-signals.ts";
@@ -15,16 +26,29 @@ import { runOpsWatchdogCheck } from "../apps/runtime/src/services/ops-watchdog.t
 import { buildSyncAlertsCommandGroup } from "../apps/runtime/src/sync/cli/alerts.ts";
 import {
   acknowledgeSyncPaceViolations,
+  collectPageAlerts,
   createIncidentAlertSink,
   readSyncAlertStatus,
   SYNC_ALERT_CLEAN_MS,
+  SYNC_LEDGER_BACKFILL_STALL_MS,
   SyncAlertEvaluator,
 } from "../apps/runtime/src/sync/engine/alerts.ts";
 import { computeSyncMetrics, sampleSyncEngineMetrics } from "../apps/runtime/src/sync/engine/metrics.ts";
+import { pollsFor } from "../apps/runtime/src/sync/engine/resource.ts";
 import { createFanslyRegistry } from "../apps/runtime/src/sync/fansly/registry.ts";
+import { applyAccountMeToPage } from "../apps/runtime/src/sync/fansly/resources/account.ts";
+import { enqueueOwnerSyncWork } from "../apps/runtime/src/sync/inspect.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { seedWsCapturePage, seedWsThread, wsTransaction, type WsCapturePage } from "./helpers/fansly-ws-capture.ts";
-import { quietLogger, setModeDirect, testConfig } from "./helpers/sync-engine-host.ts";
+import {
+  makeTestActor,
+  okResponse,
+  quietLogger,
+  ScriptedLiveTransport,
+  setModeDirect,
+  testConfig,
+  waitFor,
+} from "./helpers/sync-engine-host.ts";
 import { clearPageHolds, replaceHoldRows, resourceBreakerRow, seedPageHold, seedRouteState } from "./helpers/sync-holds.ts";
 
 // The Fansly Sync Engine's alerts and golden signals against a real database
@@ -32,7 +56,8 @@ import { clearPageHolds, replaceHoldRows, resourceBreakerRow, seedPageHold, seed
 // handover/live pages only, alerts 1–3 wait 10 clean minutes (alert 4 none),
 // a route's 429 is its own latch per page+route (D5), the pace latch is the
 // owner's to close, alert 5 is the api watchdog's, and the sampler's compact
-// set.
+// set. Alert 4's ledger rule runs on the real rescan and backfill (the
+// production actor and transactions module, fixed answers).
 
 let testDb: StartedTestDatabase | null = null;
 
@@ -206,7 +231,7 @@ describe("the alert evaluator (design §9.6)", () => {
     expect((await pass()).resolved).toEqual([{ pageId: page.pageId, subKey: "page_stopped" }]);
   });
 
-  it("alerts 2 and 3 resolve only after 10 clean minutes, so a condition that comes and goes keeps one page; alert 4 resolves at once", async (context) => {
+  it("alerts 2 and 3 resolve only after 10 clean minutes, so a condition that comes and goes keeps one page", async (context) => {
     if (!testDb) return context.skip();
     const page = await enginePage("live");
     await testDb.pool.query(
@@ -239,17 +264,6 @@ describe("the alert evaluator (design §9.6)", () => {
     expect((await pass()).resolved).toEqual([]);
     await ageLatch("live_degraded", page.pageId, 60_000);
     expect((await pass()).resolved).toEqual([{ pageId: page.pageId, subKey: "live_degraded" }]);
-
-    // Alert 4: progress resumes ⇒ resolved on the next pass.
-    const rescan = (proof: Record<string, unknown>) => testDb!.pool.query(
-      `insert into sync_work (page_id, shadow, resource, subject, kind, class, state, proof, closed_at)
-       values ($1, false, 'transactions.rescan', '', 'goal', 'planned', 'done', $2::jsonb, clock_timestamp())`,
-      [page.pageId, JSON.stringify(proof)],
-    );
-    await rescan({ ledgerIncomplete: 3 });
-    expect((await pass()).opened).toEqual([{ pageId: page.pageId, subKey: "stuck", detail: "transactions_ledger_incomplete" }]);
-    await rescan({});
-    expect((await pass()).resolved).toEqual([{ pageId: page.pageId, subKey: "stuck" }]);
   });
 
   it("has no alert for a page left in shadow, and resolves the latches of a page that is off", async (context) => {
@@ -418,6 +432,247 @@ describe("the alert evaluator (design §9.6)", () => {
       [syncEngineIncidentKey({ subKey: syncEngineRouteSubKey("media.offer_stats"), pageId: page.pageId })])).toHaveLength(1);
     expect(await incident(syncEngineRouteSubKey("media.offer_stats"), page.pageId)).toMatchObject({ status: "open", errorCode: "rate_limit" });
   });
+});
+
+describe("alert 4: the ledger the rescan's last certified round proved short (bug hunt Д1)", () => {
+  // A page born by `createLiveSyncPage` alone (no birth work): the insurance
+  // poll stores the newest 200 of 450 rows and escalates; the rescan's 7-day
+  // round, certified, proves 250 missing — on its standing poll row, which
+  // never closes.
+  const OWN_ID = "300000000000000001";
+  const LIFETIME = 450;
+  const DAY_MS = 86_400_000;
+  const BACKFILL = "transactions.backfill";
+  const at = Date.now();
+  const LEDGER = Array.from({ length: LIFETIME }, (_, index) => ({
+    walletId: "wallet-1", transactionId: `tx-${String(index).padStart(4, "0")}`, accountId: OWN_ID, correlationId: null,
+    correlationAccountId: null, type: 7001, destination: 1, amount: 10_000, destinationTax: 2_000, destinationAmount: 8_000,
+    newBalance: null, newBalance64: 100_000, createdAt: at - (index + 1) * DAY_MS, updatedAt: null, status: 2, senderId: null,
+    receiverId: OWN_ID,
+  }));
+
+  const param = (req: FanslyWireRequest, name: string) => Number(new URL(req.url).searchParams.get(name));
+  /** The ledger as Fansly lists it, `total` always the lifetime's. */
+  const ledgerPage = (req: FanslyWireRequest, rows = LEDGER): FanslyWireOutcome =>
+    okResponse({ total: LIFETIME, data: rows.slice(param(req, "offset"), param(req, "offset") + param(req, "limit")) });
+
+  async function livePage(label: string): Promise<number> {
+    const model = await createModel(db(), { slug: `model-${label}`, name: label });
+    const pageId = await testDb!.db.transaction(async (raw) => {
+      const tx = raw as unknown as Database;
+      const page = await createFanslyPage(tx, { modelId: model!.id, label });
+      await applyAccountMeToPage(tx, {
+        pageId: page!.id,
+        account: { id: OWN_ID, username: "user_001", displayName: null, createdAt: 0, followCount: 0, subscriberCount: 0 } as never,
+        syncType: "light",
+      });
+      await createLiveSyncPage(tx, {
+        pageId: page!.id, by: "onboarding:test", identityAccountId: OWN_ID, identityCheckedAt: new Date(),
+        credentialsGeneration: "a".repeat(64),
+      });
+      return page!.id;
+    });
+    // The actor's first lap: the insurance due now, every other standing row parked.
+    const page = (await getSyncPage(db(), pageId))!;
+    await ensurePollRows(db(), {
+      pageId, polls: pollsFor(registry, page).map((poll) => ({ ...poll, phase: poll.resource === "transactions.insurance" ? 0 : 0.999 })),
+    });
+    return pageId;
+  }
+
+  async function appliedAttempts(pageId: number, resource: string): Promise<number> {
+    return (await query<{ n: number }>(
+      "select count(*)::int as n from sync_attempts where page_id = $1 and resource = $2 and apply_state = 'applied'", [pageId, resource],
+    ))[0]!.n;
+  }
+
+  async function workRow(pageId: number, resource: string) {
+    return (await query<{
+      state: string; closeReason: string | null; proof: Record<string, unknown> | null; result: Record<string, unknown> | null;
+      cursor: Record<string, unknown>; lastServedAt: Date | null;
+    }>(
+      `select state, close_reason as "closeReason", proof, result, cursor, last_served_at as "lastServedAt"
+         from sync_work where page_id = $1 and resource = $2 and not shadow order by id desc limit 1`,
+      [pageId, resource],
+    ))[0];
+  }
+
+  /** A fresh actor (a new owner generation: a restart) until `until`. */
+  async function runActor(
+    pageId: number,
+    until: () => Promise<boolean>,
+    respond: (req: FanslyWireRequest) => FanslyWireOutcome = (req) => ledgerPage(req),
+    onHit: ((req: FanslyWireRequest) => Promise<void>) | null = null,
+  ): Promise<void> {
+    const transport = new ScriptedLiveTransport();
+    transport.respond = respond;
+    transport.onHit = onHit;
+    const { actor, stop, abort } = await makeTestActor({ db: db(), pageId, registry, transport, ownRef: OWN_ID });
+    const running = actor.run({ stop: stop.signal, abort: abort.signal });
+    try {
+      await waitFor(async () => ((await until()) ? true : null), 60_000, "the walk");
+    } finally {
+      stop.abort();
+      await running;
+    }
+  }
+
+  /** The next rescan round, now. */
+  async function rescanRound(pageId: number, respond?: (req: FanslyWireRequest) => FanslyWireOutcome): Promise<void> {
+    const before = await appliedAttempts(pageId, "transactions.rescan");
+    await testDb!.pool.query(
+      "update sync_work set due_at = clock_timestamp() where page_id = $1 and resource = 'transactions.rescan' and state = 'open'", [pageId],
+    );
+    await runActor(pageId, async () => (await appliedAttempts(pageId, "transactions.rescan")) > before, respond);
+  }
+
+  const stuck = (result: Awaited<ReturnType<typeof pass>>, pageId: number) => ({
+    opened: result.opened.filter((entry) => entry.pageId === pageId && entry.subKey === "stuck"),
+    resolved: result.resolved.filter((entry) => entry.pageId === pageId && entry.subKey === "stuck"),
+  });
+  const LEDGER_OPENED = (pageId: number) => ({ opened: [{ pageId, subKey: "stuck", detail: "transactions_ledger_incomplete" }], resolved: [] });
+
+  /** Alert 4's reason now, with its context (null: none). */
+  async function ledgerReason(pageId: number) {
+    const conditions = await collectPageAlerts(db(), { page: (await getSyncPage(db(), pageId))!, registry });
+    return conditions.flatMap((condition) => condition.reasons).find((reason) => reason.detail === "transactions_ledger_incomplete") ?? null;
+  }
+
+  async function shortfall(pageId: number) {
+    return (await readSyncJournalAlertFacts(db(), {
+      pageId, stopLookbackMs: SYNC_ALERT_CLEAN_MS, urgentAfterMs: 120_000, requestStallMs: 1_800_000,
+    })).ledgerIncomplete;
+  }
+
+  /** (i) The insurance's 200 rows, then a certified rescan round 250 short. */
+  async function shortRound(label: string): Promise<{ pageId: number; roundStartedAt: Date }> {
+    const pageId = await livePage(label);
+    await runActor(pageId, async () => (await appliedAttempts(pageId, "transactions.rescan")) >= 1);
+    const rescan = (await workRow(pageId, "transactions.rescan"))!;
+    expect(rescan).toMatchObject({ state: "open", proof: { total: LIFETIME, ledgerRows: 200, ledgerIncomplete: 250, earlyStopped: true } });
+    const fact = await shortfall(pageId);
+    expect(fact).toEqual({ missing: 250, total: LIFETIME, ledgerRows: 200, roundStartedAt: new Date(String(rescan.proof!.walkStartedAt)) });
+    expect(await query(`select 1 from sync_work where page_id = $1 and resource = '${BACKFILL}'`, [pageId])).toEqual([]);
+    return { pageId, roundStartedAt: fact!.roundStartedAt };
+  }
+
+  it("(i)–(iv) a certified short round on the open poll row pages; a moving backfill, then one completed after the round began, explain it; the next whole round clears it", async (context) => {
+    if (!testDb) return context.skip();
+    const { pageId, roundStartedAt } = await shortRound("ledger-short");
+    // (i) Nothing walks the rest: alert 4 opens, since the round began.
+    expect(stuck(await pass(), pageId)).toEqual(LEDGER_OPENED(pageId));
+    expect(await ledgerReason(pageId)).toEqual({
+      detail: "transactions_ledger_incomplete", since: roundStartedAt,
+      context: { missing: 250, total: LIFETIME, ledgerRows: 200, backfill: "none" },
+    });
+
+    // (ii) The owner's backfill, open and moving (an answer applied just
+    // now): explained, the latch resolves at once.
+    await enqueueOwnerSyncWork(db(), registry, { pageLabel: "ledger-short", resource: BACKFILL, actor: "test" });
+    const whileMoving: Array<ReturnType<typeof stuck>> = [];
+    await runActor(pageId, async () => (await workRow(pageId, BACKFILL))?.state === "done", undefined, async () => {
+      if ((await appliedAttempts(pageId, BACKFILL)) === 1) whileMoving.push(stuck(await pass(), pageId));
+    });
+    expect(whileMoving[0]).toEqual({ opened: [], resolved: [{ pageId, subKey: "stuck" }] });
+
+    // (iii) It completed after the round began: the round's proof still says
+    // 250, and that is explained until the next round.
+    expect(await workRow(pageId, BACKFILL)).toMatchObject({ state: "done", closeReason: "backfill_complete", proof: { fetched: LIFETIME } });
+    expect(await shortfall(pageId)).toMatchObject({ missing: 250, roundStartedAt });
+    expect(stuck(await pass(), pageId)).toEqual({ opened: [], resolved: [] });
+    expect(await ledgerReason(pageId)).toBeNull();
+
+    // (iv) The next round reads the whole ledger: no shortfall at all.
+    await rescanRound(pageId);
+    expect((await workRow(pageId, "transactions.rescan"))!.proof).toMatchObject({ total: LIFETIME, ledgerRows: LIFETIME });
+    expect(await shortfall(pageId)).toBeNull();
+    expect(stuck(await pass(), pageId)).toEqual({ opened: [], resolved: [] });
+  }, 120_000);
+
+  it("(v) a withheld rescan round keeps the last certified round's proof: the alert stays open, through a restart too", async (context) => {
+    if (!testDb) return context.skip();
+    const { pageId, roundStartedAt } = await shortRound("ledger-withheld");
+    expect(stuck(await pass(), pageId)).toEqual(LEDGER_OPENED(pageId));
+    const certified = (await workRow(pageId, "transactions.rescan"))!.proof;
+
+    // Three empty answers that still state 450: two restarts, then withheld.
+    const empty = () => okResponse({ total: LIFETIME, data: [] });
+    for (let round = 0; round < 3; round += 1) await rescanRound(pageId, empty);
+    const withheld = (await workRow(pageId, "transactions.rescan"))!;
+    expect(withheld.state).toBe("open");
+    expect(withheld.result).toMatchObject({ withheld: "total_mismatch", fetched: 0, total: LIFETIME });
+    expect(withheld.cursor.last).toEqual(withheld.result);
+    expect(withheld.proof).toEqual(certified);
+    expect(await shortfall(pageId)).toMatchObject({ missing: 250, roundStartedAt });
+    expect(stuck(await pass(), pageId)).toEqual({ opened: [], resolved: [] });
+    expect(await incident("stuck", pageId)).toMatchObject({ status: "open", errorCode: "transactions_ledger_incomplete" });
+
+    // Another actor (each round runs a new one), another empty answer: a
+    // restart of the next round, the verdict unchanged.
+    await rescanRound(pageId, empty);
+    expect((await workRow(pageId, "transactions.rescan"))!.proof).toEqual(certified);
+    expect(stuck(await pass(), pageId)).toEqual({ opened: [], resolved: [] });
+    expect(await incident("stuck", pageId)).toMatchObject({ status: "open" });
+  }, 120_000);
+
+  it("(vi) a backfill that closed withheld after the round began explains nothing", async (context) => {
+    if (!testDb) return context.skip();
+    const { pageId } = await shortRound("ledger-backfill-withheld");
+    expect(stuck(await pass(), pageId)).toEqual(LEDGER_OPENED(pageId));
+    await enqueueOwnerSyncWork(db(), registry, { pageLabel: "ledger-backfill-withheld", resource: BACKFILL, actor: "test" });
+    // The last page is ten rows short of the stated total: withheld at once.
+    const short = LEDGER.slice(0, LIFETIME - 10);
+    await runActor(pageId, async () => (await workRow(pageId, BACKFILL))?.state === "done", (req) => ledgerPage(req, short));
+    expect(await workRow(pageId, BACKFILL)).toMatchObject({
+      state: "done", closeReason: "walk_withheld", proof: { withheld: "total_mismatch", fetched: LIFETIME - 10, total: LIFETIME },
+    });
+    expect(stuck(await pass(), pageId)).toEqual({ opened: [], resolved: [] });
+    expect(await incident("stuck", pageId)).toMatchObject({ status: "open" });
+    expect((await ledgerReason(pageId))?.context).toMatchObject({ missing: 250, backfill: "none" });
+  }, 120_000);
+
+  it("(vii) a backfill whose every read fails is stalled 30 min after its last applied answer, however recent its admissions", async (context) => {
+    if (!testDb) return context.skip();
+    const { pageId } = await shortRound("ledger-backfill-stalled");
+    expect(stuck(await pass(), pageId)).toEqual(LEDGER_OPENED(pageId));
+    await enqueueOwnerSyncWork(db(), registry, { pageLabel: "ledger-backfill-stalled", resource: BACKFILL, actor: "test" });
+    // Just queued: explained.
+    expect(stuck(await pass(), pageId)).toEqual({ opened: [], resolved: [{ pageId, subKey: "stuck" }] });
+
+    // Every backfill read is a network failure; the insurance (made due by
+    // each of them) answers in between, so the failure streak restarts and
+    // no network hold explains the wait.
+    const failed = async () => (await query<{ n: number }>(
+      `select count(*)::int as n from sync_attempts where page_id = $1 and resource = '${BACKFILL}' and error_class = 'network'`, [pageId],
+    ))[0]!.n;
+    await runActor(
+      pageId,
+      async () => (await failed()) >= 3,
+      (req) => param(req, "limit") === 100 ? { kind: "transport_error", sent: true, message: "socket hang up" } : ledgerPage(req),
+      async (req) => {
+        if (param(req, "limit") !== 100) return;
+        await testDb!.pool.query(
+          "update sync_work set due_at = clock_timestamp() where page_id = $1 and resource = 'transactions.insurance' and state = 'open'", [pageId],
+        );
+      },
+    );
+    expect(await appliedAttempts(pageId, BACKFILL)).toBe(0);
+    expect(await query("select kind from sync_holds where page_id = $1 and scope = 'page'", [pageId])).toEqual([]);
+    expect(stuck(await pass(), pageId)).toEqual({ opened: [], resolved: [] });
+
+    // 31 minutes on (the row's own clock: no answer was ever applied). Its
+    // admissions are recent — a stall counted from them would stay explained.
+    await testDb.pool.query(
+      `update sync_work set created_at = created_at - make_interval(secs => $2::double precision / 1000)
+        where page_id = $1 and resource = '${BACKFILL}'`,
+      [pageId, SYNC_LEDGER_BACKFILL_STALL_MS + 60_000],
+    );
+    const backfill = (await workRow(pageId, BACKFILL))!;
+    expect(backfill.state).toBe("open");
+    expect(Date.now() - backfill.lastServedAt!.getTime()).toBeLessThan(SYNC_LEDGER_BACKFILL_STALL_MS);
+    expect(stuck(await pass(), pageId)).toEqual(LEDGER_OPENED(pageId));
+    expect((await ledgerReason(pageId))?.context).toMatchObject({ missing: 250, backfill: "stalled" });
+  }, 120_000);
 });
 
 describe("the owner's CLI: `sync alerts status | ack` (`cli/alerts.ts`)", () => {

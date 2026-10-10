@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
@@ -524,6 +526,57 @@ describe("subscribers.poll", () => {
     expect(poll!.due_at.getTime() - Date.now()).toBeGreaterThan(50 * 60_000);
     // The unseen subscription stays current: a withheld walk retires nothing.
     expect(await countRows(testDb.pool, "select count(*)::int as n from page_subscriptions where platform_account_id = $1 and is_current", [pageId])).toBe(150);
+  });
+});
+
+describe("subscribers.history", () => {
+  /** The runbook's check of a new page's birth walks (`docs/runbooks/sync.md`
+   *  "Onboarding a page" step 4): the block that reads the `new_page` rows. */
+  function birthWalksSql(label: string): string {
+    const runbook = readFileSync(new URL("../docs/runbooks/sync.md", import.meta.url), "utf8");
+    const blocks = [...runbook.matchAll(/```sql\n([\s\S]*?)```/g)].map((match) => match[1]!);
+    const [block] = blocks.filter((sql) => sql.includes("? 'new_page'"));
+    expect(block, "the runbook's birth-walks check").toBeDefined();
+    return block!.replace(/:'page_label'/g, `'${label}'`);
+  }
+
+  it("a birth's history walk whose answers stay short of their total closes uncertified, and the runbook's check says it did not succeed", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage();
+    const label = (await testDb.pool.query<{ label: string }>("select label from pages where id = $1", [pageId])).rows[0]!.label;
+    await makeDue(pageId, "subscribers.history", { reason: "new_page" });
+    // One former subscriber served, a hundred stated: twice restarted, then
+    // read to its end withheld.
+    const served = [subscription("sub-old-1", "530000000000000001", { status: 5, endsAt: Date.now() - 86_400_000 })];
+    await runLive(pageId, (req) => {
+      if (req.spec === "subscribers.page") {
+        return okResponse({ stats: { totalActive: 0, totalExpired: 100, total: 100 }, subscriptions: served });
+      }
+      if (req.spec === "accounts.by_ids") return okResponse([]);
+      throw new Error(`unexpected ${req.spec}`);
+    }, async () => {
+      // Skip each restart's 60 s delay.
+      await testDb!.pool.query(
+        `update sync_work set due_at = clock_timestamp()
+          where page_id = $1 and resource = 'subscribers.history' and state = 'open'
+            and (cursor->>'restartCount')::int > 0 and due_at > clock_timestamp()`,
+        [pageId],
+      );
+      return (await workRow(pageId, "subscribers.history"))?.state === "done";
+    });
+
+    expect(await appliedAttempts(pageId, "subscribers.history")).toBe(3);
+    const history = await testDb.pool.query<{ close_reason: string; proof: Record<string, unknown> }>(
+      "select close_reason, proof from sync_work where page_id = $1 and resource = 'subscribers.history'", [pageId],
+    );
+    expect(history.rows).toEqual([{
+      close_reason: "history_walked",
+      proof: expect.objectContaining({ mode: "expired", historyCertified: false, historyWithheldReason: "partial_result", observedCount: 1 }),
+    }]);
+    const check = await testDb.pool.query<{ resource: string; state: string; reasons: string[]; succeeded: boolean | null }>(birthWalksSql(label));
+    expect(check.rows.map((row) => ({ resource: row.resource, state: row.state, reasons: row.reasons, succeeded: row.succeeded }))).toEqual([
+      { resource: "subscribers.history", state: "done", reasons: ["new_page"], succeeded: false },
+    ]);
   });
 });
 

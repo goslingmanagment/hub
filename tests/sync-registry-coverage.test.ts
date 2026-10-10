@@ -7,15 +7,20 @@ import { describe, expect, it } from "vitest";
 import { SYNC_STREAMS } from "@agency_hub_core/db";
 import { FANSLY_SEND_SOURCES, FANSLY_WIRE_SPECS } from "@agency_hub_core/fansly";
 
-import { beforeGateKeys, NOT_IMPLEMENTED_RECHECK_MS, plansBeforeGate } from "../apps/runtime/src/sync/engine/resource.ts";
+import { beforeGateKeys, NOT_IMPLEMENTED_RECHECK_MS, plansBeforeGate, pollsFor } from "../apps/runtime/src/sync/engine/resource.ts";
 import {
   createFanslyRegistry,
   FANSLY_LEGACY_UNMAPPED,
+  FANSLY_LIVE_FRAME_RESOURCE,
   FANSLY_RESOURCE_SPECS,
+  fanslyNewPageKeys,
+  fanslyNewPageWork,
   fanslyResourceSpec,
   type LegacyRef,
   type ResourceSpec,
+  type Trigger,
 } from "../apps/runtime/src/sync/fansly/registry.ts";
+import { ownerEnqueueKeys } from "../apps/runtime/src/sync/inspect.ts";
 import { routeHoldAfter } from "../apps/runtime/src/sync/engine/route-holds.ts";
 import { RouteClocks, routeExclusions } from "../apps/runtime/src/sync/engine/route-policy.ts";
 import { DM_LIST_READ_KEYS, DM_LIST_WS_DOWN_EVERY_MS } from "../apps/runtime/src/sync/fansly/resources/dm-conversations.ts";
@@ -298,6 +303,162 @@ describe("the Fansly registry table", () => {
     const standing = FANSLY_RESOURCE_SPECS.filter((spec) => spec.standing !== undefined && spec.subjectQueue !== true);
     expect(standing.map((spec) => [spec.key, spec.kind, spec.standing!.recheckMs])).toEqual([["catalog.vault", "goal", 86_400_000]]);
     expect(fanslyResourceSpec("catalog.vault")!.ownerProtected).toBe(true);
+  });
+});
+
+describe("every trigger an entry declares has its producer", () => {
+  // A trigger is a promise: something creates or bumps the key's work for it.
+  // Each (key, trigger) pair of the registry is owned by exactly one producer
+  // — a file and a marker the file holds: the call that writes the work (for
+  // a derived category the call site, never membership in a list the
+  // registry itself builds). Socket frames (`ws:*`) are the router's: its own
+  // suite proves every declared pair is emitted by some frame
+  // (tests/sync-ws-router.test.ts). An entry nothing triggers is drain-only:
+  // it runs rows an older image left, and says so here.
+  const root = join(__dirname, "..");
+  const SRC = "apps/runtime/src";
+
+  interface Producer {
+    file: string;
+    marker: string;
+  }
+
+  /** Keys with no trigger: the rows an older image asked for still run. */
+  const DRAIN_ONLY: Readonly<Record<string, string>> = {
+    "fan-profiles.probe": "a lookup miss excludes no chat (arena \"vanished chat\" §6): no apply of this build asks for it",
+  };
+
+  const lookup = (file: string): Producer => ({ file, marker: "lookupFollowups(" });
+  const dmListFollowups: Producer = { file: `${SRC}/sync/fansly/resources/dm-conversations.ts`, marker: "list_head:${input.key}" };
+  const repair = (marker: string): Producer => ({ file: `${SRC}/sync/fansly/resources/repair.ts`, marker });
+  const transactions = (marker: string): Producer => ({ file: `${SRC}/sync/fansly/resources/transactions.ts`, marker });
+  /** The pairs no derived category owns, each with its producer. */
+  const EXPLICIT: ReadonlyArray<{ key: string; trigger: Trigger } & Producer> = [
+    // The socket's lifecycle and its gap repair.
+    { key: "ws.connect", trigger: "ws_lifecycle", file: `${SRC}/sync/fansly/ws/source.ts`, marker: 'resource: "ws.connect"' },
+    { key: "dm-conversations.ws-down", trigger: "ws_lifecycle", file: `${SRC}/sync/fansly/ws/source.ts`, marker: '"dm-conversations.ws-down"' },
+    { key: "repair.ws-gap", trigger: "ws_gap", file: `${SRC}/sync/fansly/ws/source.ts`, marker: '"repair.ws-gap"' },
+    { key: "dm-messages.head", trigger: "ws_gap", ...repair("applyListPage(") },
+    { key: "transactions.head", trigger: "ws_gap", ...repair("resource: MONEY_HEAD_KEY") },
+    { key: "subscribers.poll", trigger: "ws_gap", ...repair("resource: SUBSCRIBERS_KEY") },
+    // A plan that waits for another key's work.
+    { key: "account.poll", trigger: "dependency", file: `${SRC}/sync/fansly/lib/page-facts.ts`, marker: 'resource: "account.poll"' },
+    {
+      key: "dm-conversations.find", trigger: "dependency",
+      file: `${SRC}/sync/fansly/resources/dm-messages.ts`, marker: "resource: FIND_KEY, subject: groupId, demand: { reason: `dependency:",
+    },
+    { key: "transactions.backfill", trigger: "dependency", ...transactions('resource: "transactions.backfill"') },
+    // An apply's follow-ups.
+    { key: "dm-conversations.detail", trigger: "apply:dm-conversations.*", file: `${SRC}/sync/fansly/resources/dm-conversations.ts`, marker: "resource: DETAIL_KEY" },
+    ...(["ws-down", "find", "head", "full", "detail"] as const).map((variant) => ({
+      key: "dm-messages.head", trigger: `apply:dm-conversations.${variant}` as Trigger, ...dmListFollowups,
+    })),
+    ...(["head", "full", "detail"] as const).map((variant) => ({
+      key: "dm-messages.catchup", trigger: `apply:dm-conversations.${variant}` as Trigger, ...dmListFollowups,
+    })),
+    { key: "transactions.rescan", trigger: "apply:transactions.head", ...transactions('resource: "transactions.rescan"') },
+    // The roster has no standing row: the money steps ask for it when a
+    // subject is dirty (projection queue) or past its age (poll-like).
+    { key: "fan-earnings.roster", trigger: "projection_queue", ...transactions("fanEarningsRosterFollowups(") },
+    { key: "fan-earnings.roster", trigger: "poll", ...transactions("fanEarningsRosterFollowups(") },
+    { key: "fan-earnings.roster", trigger: "apply:transactions.*", ...transactions("fanEarningsRosterFollowups(") },
+    { key: "purchases.targets", trigger: "apply:transactions.*", ...transactions("purchaseTargetFollowups(") },
+    { key: "purchases.targets", trigger: "apply:dm-messages.*", file: `${SRC}/sync/fansly/resources/dm-messages.ts`, marker: "purchaseTargetFollowups(" },
+    { key: "payouts.walk", trigger: "apply:payouts.daily", file: `${SRC}/sync/fansly/resources/payouts.ts`, marker: "resource: PAYOUTS_WALK_KEY" },
+    { key: "followers.reconcile", trigger: "apply:followers.head", file: `${SRC}/sync/fansly/resources/followers.ts`, marker: "resource: RECONCILE_KEY" },
+    { key: "fan-profiles.lookup", trigger: "apply:subscribers.*", ...lookup(`${SRC}/sync/fansly/resources/subscribers.ts`) },
+    { key: "fan-profiles.lookup", trigger: "apply:followers.*", ...lookup(`${SRC}/sync/fansly/resources/followers.ts`) },
+    { key: "fan-profiles.lookup", trigger: "apply:transactions.*", ...lookup(`${SRC}/sync/fansly/resources/transactions.ts`) },
+    { key: "post-replies.authors", trigger: "apply:post-replies.walk", file: `${SRC}/sync/fansly/resources/post-replies.ts`, marker: "resource: AUTHORS_KEY" },
+    { key: "catalog.vault", trigger: "apply:catalog.fixed", file: `${SRC}/sync/fansly/resources/catalog.ts`, marker: "resource: VAULT_KEY" },
+    { key: "catalog.hydrate", trigger: "apply:catalog.*", file: `${SRC}/sync/fansly/resources/catalog.ts`, marker: "resource: HYDRATE_KEY" },
+  ];
+
+  const ownerKeys = new Set(ownerEnqueueKeys());
+  const standingKeys = new Set(pollsFor(createFanslyRegistry(), { registryOverrides: {} }).map((row) => row.resource));
+  const ACCOUNT_CHECKS = ["account.verify", "account.identity"];
+
+  /** Every producer that owns the pair (exactly one is the rule). */
+  function producersOf(key: string, trigger: Trigger): Producer[] {
+    const found: Producer[] = [];
+    if (trigger === "new_page") found.push({ file: `${SRC}/services/page-onboarding.ts`, marker: "fanslyNewPageWork(" });
+    if (trigger === "owner" && ownerKeys.has(key)) found.push({ file: `${SRC}/sync/cli.ts`, marker: "enqueueOwnerSyncWork(" });
+    if (trigger === "owner" && key === "probe.manual") found.push({ file: `${SRC}/sync/inspect.ts`, marker: "PROBE_KEY" });
+    if (trigger === "owner" && key === "probe.excluded-chat") found.push({ file: `${SRC}/sync/excluded.ts`, marker: "EXCLUDED_CHAT_PROBE_KEY" });
+    if ((trigger === "owner" || trigger === "api") && ACCOUNT_CHECKS.includes(key)) {
+      found.push({ file: `${SRC}/services/sync-engine-account.ts`, marker: `resource: "${key}"` });
+    }
+    if (trigger === "api" && !ACCOUNT_CHECKS.includes(key)) found.push({ file: `${SRC}/sync/requests/urgent.ts`, marker: "apiResourceSpec(" });
+    if (trigger === "request") found.push({ file: `${SRC}/sync/requests/history.ts`, marker: "HISTORY_WORK_RESOURCE" });
+    if ((trigger === "poll" || trigger === "projection_queue") && standingKeys.has(key)) {
+      found.push({ file: `${SRC}/sync/engine/actor.ts`, marker: "ensurePollRows(" });
+    }
+    if (trigger.startsWith("ws:")) found.push({ file: `${SRC}/sync/fansly/ws/router.ts`, marker: "export function routeWsItems(" });
+    for (const row of EXPLICIT) {
+      if (row.key === key && row.trigger === trigger) found.push({ file: row.file, marker: row.marker });
+    }
+    return found;
+  }
+
+  const pairs = FANSLY_RESOURCE_SPECS.flatMap((spec) => spec.triggers.map((trigger) => ({ key: spec.key, trigger })));
+
+  it("each (key, trigger) pair has exactly one producer, and the producer's file holds its marker", () => {
+    expect(pairs.length).toBeGreaterThan(50);
+    const sources = new Map<string, string>();
+    const source = (file: string) => {
+      if (!sources.has(file)) sources.set(file, readFileSync(join(root, file), "utf8"));
+      return sources.get(file)!;
+    };
+    const unowned: string[] = [];
+    for (const { key, trigger } of pairs) {
+      const producers = producersOf(key, trigger);
+      if (producers.length !== 1) {
+        unowned.push(`${key}|${trigger}: ${producers.length} producers`);
+        continue;
+      }
+      const [producer] = producers;
+      if (!source(producer!.file).includes(producer!.marker)) unowned.push(`${key}|${trigger}: no "${producer!.marker}" in ${producer!.file}`);
+    }
+    expect(unowned).toEqual([]);
+  });
+
+  it("the explicit table names declared pairs only, each once (both ways)", () => {
+    const declared = new Set(pairs.map((pair) => `${pair.key}|${pair.trigger}`));
+    const listed = EXPLICIT.map((row) => `${row.key}|${row.trigger}`);
+    expect(new Set(listed).size).toBe(listed.length);
+    expect(listed.filter((pair) => !declared.has(pair))).toEqual([]);
+    // Every pair of the explicit kinds is in it (the categories above own none of them).
+    const explicitKinds = pairs.filter(({ key, trigger }) =>
+      trigger === "ws_gap" || trigger === "ws_lifecycle" || trigger === "dependency" || trigger.startsWith("apply:") ||
+      ((trigger === "poll" || trigger === "projection_queue") && !standingKeys.has(key)));
+    expect(explicitKinds.map((pair) => `${pair.key}|${pair.trigger}`).sort()).toEqual([...listed].sort());
+    // The live frame overlay is no work row: not an entry, no producer.
+    expect(FANSLY_RESOURCE_SPECS.some((spec) => spec.key === FANSLY_LIVE_FRAME_RESOURCE.key)).toBe(false);
+  });
+
+  it("an entry nothing triggers is drain-only, with its reason", () => {
+    const untriggered = FANSLY_RESOURCE_SPECS.filter((spec) => spec.triggers.length === 0).map((spec) => spec.key);
+    expect(untriggered).toEqual(Object.keys(DRAIN_ONLY));
+    for (const reason of Object.values(DRAIN_ONLY)) expect(reason.length).toBeGreaterThan(10);
+  });
+
+  it("a page's birth queues its five history walks, page-level planned goals — no top-spenders bootstrap, no DM history (owner decisions)", () => {
+    expect(fanslyNewPageKeys()).toEqual([
+      "notifications.backfill", "posts.backfill", "stats.backfill", "subscribers.history", "transactions.backfill",
+    ]);
+    for (const key of fanslyNewPageKeys()) {
+      expect(byKey(key), key).toMatchObject({ kind: "goal", class: "planned", subject: "page" });
+      // The owner can start each one again.
+      expect(byKey(key).triggers, key).toContain("owner");
+    }
+    const now = new Date("2026-10-10T12:00:00Z");
+    expect(fanslyNewPageWork({ pageId: 7, now })).toEqual(fanslyNewPageKeys().map((resource) => ({
+      pageId: 7, resource, subject: "", kind: "goal", class: "planned", dueAt: now, coalesceUntil: null, deadlineAt: null,
+      extendOnSignal: false, demand: { messageIds: [], txIds: [], reasons: ["new_page"] },
+    })));
+    // A key that declares the trigger must be one walk of the page.
+    const perThread = { ...byKey("dm-messages.history"), triggers: ["new_page"] as Trigger[] };
+    expect(() => fanslyNewPageWork({ pageId: 7, now }, [perThread])).toThrow(/page-level goals only/);
   });
 });
 

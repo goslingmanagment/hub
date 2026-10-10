@@ -755,6 +755,41 @@ describe("post-replies.walk", () => {
     expect(await coverage(pageId, "post_replies")).toMatchObject({ status: "provider_exhausted", expected_count: 2, observed_unique_count: 2 });
   });
 
+  it("every known root walked is complete only once the list of posts is whole: a paused posts.backfill keeps it in progress", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage();
+    await seedPost(pageId, P(1), daysAgo(1));
+    // The page's posts.backfill is open and paused (the owner's price lever):
+    // posts older than the known ones may exist.
+    await makeDue(pageId, "posts.backfill");
+    await testDb.pool.query("update sync_pages set paused_resources = array['posts.backfill'] where page_id = $1", [pageId]);
+    const respond: Responder = (req) => {
+      if (req.spec === "post.replies") return okResponse({ posts: [] });
+      if (req.spec === "posts.timeline") return okResponse({ posts: [] });
+      return okResponse([]);
+    };
+    await makeDue(pageId, "post-replies.walk");
+    await runLive(pageId, respond, async () => (await workRow(pageId, "post-replies.walk"))?.waiting_reason === "not_due");
+    expect((await queueRow(pageId, "post_replies", P(1)))!.last_visited_at).toBeInstanceOf(Date);
+    expect(await coverage(pageId, "post_replies")).toMatchObject({
+      status: "in_progress", reason_code: "posts_list_incomplete", expected_count: 1, observed_unique_count: 1,
+    });
+
+    // The backfill walks the timeline to its end; the next walked post
+    // finds the list whole (a page that never had a posts.backfill row is
+    // complete as before: the tests above).
+    await testDb.pool.query("update sync_pages set paused_resources = '{}' where page_id = $1", [pageId]);
+    await runLive(pageId, respond, async () => (await workRow(pageId, "posts.backfill"))?.state === "done");
+    expect(await workRow(pageId, "posts.backfill")).toMatchObject({ state: "done", close_reason: "walk_timeline_exhausted" });
+    await seedPost(pageId, P(2), daysAgo(2));
+    await makeDue(pageId, "post-replies.walk");
+    await runLive(pageId, respond, async () => (await queueRow(pageId, "post_replies", P(2)))?.last_visited_at instanceof Date &&
+      (await workRow(pageId, "post-replies.walk"))?.waiting_reason === "not_due");
+    expect(await coverage(pageId, "post_replies")).toMatchObject({
+      status: "provider_exhausted", reason_code: null, expected_count: 2, observed_unique_count: 2,
+    });
+  });
+
   it("a failing post opens its queue row's breaker and the walk moves on to the next due post", async (context) => {
     if (!testDb) return context.skip();
     const pageId = await seedPage();

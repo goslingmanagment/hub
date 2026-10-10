@@ -64,7 +64,7 @@ import { registryOverrideProblem, type RegistryOverride } from "../apps/runtime/
 import { ROUTE_HOLD_LADDER_MS } from "../apps/runtime/src/sync/engine/route-holds.ts";
 import { WAITING_REASONS } from "../apps/runtime/src/sync/engine/status.ts";
 import { SYNC_STALL_AFTER_MS, SYNC_STALL_EXIT_CODE } from "../apps/runtime/src/sync/engine/watchdog.ts";
-import { createFanslyRegistry, FANSLY_RESOURCE_SPECS } from "../apps/runtime/src/sync/fansly/registry.ts";
+import { createFanslyRegistry, FANSLY_RESOURCE_SPECS, fanslyNewPageKeys } from "../apps/runtime/src/sync/fansly/registry.ts";
 import { FANSLY_ROUTES, isFanslyRoute } from "../apps/runtime/src/sync/fansly/routes.ts";
 import { ownerEnqueueKeys } from "../apps/runtime/src/sync/inspect.ts";
 
@@ -262,6 +262,10 @@ describe("the sync runbook quotes the engine", () => {
 
   it("lists the keys `sync work enqueue` takes", () => {
     expect(ticksBetween("The keys it takes:", "Old chat history")).toEqual(ownerEnqueueKeys());
+  });
+
+  it("lists the history walks a page's birth queues (`new_page`)", () => {
+    expect(ticksBetween("The page's birth queued these history walks:", "Nothing else is walked at birth")).toEqual(fanslyNewPageKeys());
   });
 
   it("lists the owner-protected keys", () => {

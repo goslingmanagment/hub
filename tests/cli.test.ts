@@ -568,7 +568,7 @@ describe("CLI parsing", () => {
     expect(removeProxyCommand?.helpInformation()).toContain("--page <label>");
   });
 
-  it("adds a Fansly page live on the sync engine and queues no legacy sync", async () => {
+  it("adds a Fansly page live on the sync engine, prints the history walks its birth queued, and queues no legacy sync", async () => {
     const tempFile = await createTempJsonFile("fansly-session.json", {
       authorization: "token",
     });
@@ -578,6 +578,7 @@ describe("CLI parsing", () => {
         id: 101,
         label: "lora-main",
       },
+      queuedAtBirth: ["notifications.backfill", "posts.backfill", "stats.backfill", "subscribers.history", "transactions.backfill"],
     });
 
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -616,6 +617,9 @@ describe("CLI parsing", () => {
     expect(cliMocks.requestPageSync).not.toHaveBeenCalled();
     expect(logSpy).toHaveBeenCalledWith("Created Fansly page lora-main (101)");
     expect(logSpy).toHaveBeenCalledWith("lora-main is live on the Fansly Sync Engine: the sync host adopts it within seconds");
+    expect(logSpy).toHaveBeenCalledWith(
+      "queued at birth: notifications.backfill, posts.backfill, stats.backfill, subscribers.history, transactions.backfill",
+    );
   });
 
   it("refuses Fansly CLI onboarding without a proxy before opening the app", async () => {

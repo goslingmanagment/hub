@@ -1,10 +1,11 @@
-import type { SyncStream } from "@agency_hub_core/db";
+import type { SyncStream, UpsertDemandInput } from "@agency_hub_core/db";
 import type { FanslySendSource, FanslyWireId } from "@agency_hub_core/fansly";
 
 import { FOLLOWERS_RECONCILE_MIN_INTERVAL_MS } from "./lib/audience-rules.ts";
 import type { Metrics } from "../engine/ports.ts";
 import {
   createEngineRegistry,
+  demandToUpsert,
   type EngineRegistry,
   type EngineResourceSpec,
   type ResourceModule,
@@ -14,6 +15,9 @@ import {
 // per resource variant — trigger, period, class, coalescing, SLO, proof,
 // walk, the wire operations it sends and the legacy streams and senders it
 // replaces (pinned by tests/sync-registry-coverage.test.ts).
+// Every (key, trigger) pair an entry declares has its producer — the code that
+// creates or bumps that key's work for that trigger
+// (tests/sync-registry-coverage.test.ts).
 //
 // "How fresh a resource is" is one line here (a period, a coalescing window);
 // a change to an owner-protected frequency (decision №6) needs the owner.
@@ -337,8 +341,10 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     module: topSpendersModule("window"),
   },
   {
+    // Owner decision 2026-10-09: not queued at a page's birth (nothing reads
+    // the rankings' history); the owner starts it.
     key: "top-spenders.bootstrap", file: "top-spenders", subject: "page", kind: "goal", class: "planned",
-    triggers: ["owner", "new_page"], slo: {},
+    triggers: ["owner"], slo: {},
     proof: "snapshot", walk: "windows", http: true, evidence: false, fence: "none",
     operations: ["earnings.accounts"],
     legacy: [stream("top_spenders")],
@@ -402,7 +408,7 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
   },
   {
     key: "subscribers.history", file: "subscribers", subject: "page", kind: "goal", class: "planned",
-    triggers: ["owner"], slo: {},
+    triggers: ["owner", "new_page"], slo: {},
     proof: "offset_stable", walk: "offset-walk", http: true, evidence: false, fence: "none",
     operations: ["subscribers.page"],
     legacy: [stream("subscribers")],
@@ -437,7 +443,7 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     // `FANSLY_ACCOUNT_LOOKUP_REUSE_MS`, read by `partitionLookupIds`; no
     // cadence of its own).
     key: "fan-profiles.lookup", file: "fan-profiles", subject: "page", kind: "goal", class: "planned",
-    triggers: ["apply:subscribers.*", "apply:followers.*", "apply:transactions.*", "dependency"],
+    triggers: ["apply:subscribers.*", "apply:followers.*", "apply:transactions.*"],
     slo: {},
     proof: "snapshot", walk: "subject-queue", http: true, evidence: false, fence: "none",
     operations: ["accounts.by_ids"],
@@ -445,11 +451,12 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     module: fanProfilesModule("lookup"),
   },
   {
-    // No apply of this build asks for it: a lookup miss excludes no chat
-    // (arena "vanished chat" §6). Kept so a row an older image asked for
-    // still runs — it stores the page's answer and excludes nothing.
+    // Drain-only: no apply of this build asks for it — a lookup miss excludes
+    // no chat (arena "vanished chat" §6) — so nothing triggers it. Kept so a
+    // row an older image asked for still runs (and for a rollback): it stores
+    // the page's answer and excludes nothing.
     key: "fan-profiles.probe", file: "fan-profiles", subject: "fan", kind: "trigger", class: "planned",
-    triggers: ["apply:dm-conversations.*", "apply:dm-messages.*"], slo: {},
+    triggers: [], slo: {},
     proof: "snapshot", walk: "single", http: true, evidence: false, fence: "none",
     operations: ["accounts.by_ids"],
     legacy: [stream("dm_conversations"), stream("dm_messages")],
@@ -476,7 +483,7 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
   },
   {
     key: "notifications.backfill", file: "notifications", subject: "page", kind: "goal", class: "planned",
-    triggers: ["owner"], slo: {},
+    triggers: ["owner", "new_page"], slo: {},
     proof: "empty_page", walk: "cursor-walk", http: true, evidence: true, fence: "none",
     operations: ["notifications.page"],
     legacy: [stream("notifications")],
@@ -494,7 +501,7 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
   },
   {
     key: "posts.backfill", file: "posts", subject: "page", kind: "goal", class: "planned",
-    triggers: ["owner"], slo: {},
+    triggers: ["owner", "new_page"], slo: {},
     proof: "empty_page", walk: "cursor-walk", http: true, evidence: false, fence: "none",
     operations: ["posts.timeline", "posts.tips"],
     legacy: [stream("posts")],
@@ -607,7 +614,7 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
   },
   {
     key: "stats.backfill", file: "stats", subject: "page", kind: "goal", class: "planned",
-    triggers: ["owner"], slo: {},
+    triggers: ["owner", "new_page"], slo: {},
     proof: "window_honoured", walk: "windows", http: true, evidence: false, fence: "none",
     operations: ["account.stats", "earnings.stats_window"],
     legacy: [stream("stats_snapshot")],
@@ -720,6 +727,34 @@ export function fanslyResourceSpec(key: string): ResourceSpec | null {
 
 export function createFanslyRegistry(options: { metrics?: Metrics } = {}): EngineRegistry {
   return createEngineRegistry(FANSLY_RESOURCE_SPECS, options);
+}
+
+/** The keys a page born live queues in its birth transaction (`new_page`):
+ *  its history walks, sorted. */
+export function fanslyNewPageKeys(specs: readonly ResourceSpec[] = FANSLY_RESOURCE_SPECS): string[] {
+  return specs.filter((spec) => spec.triggers.includes("new_page")).map((spec) => spec.key).sort();
+}
+
+/**
+ * The `new_page` trigger's work (its one producer is the birth transaction,
+ * `onboardFanslyPage`): one planned goal per key that declares the trigger,
+ * demand reason `new_page`, as the entry's own demand rule writes it. A key
+ * that declares it must be a page-level goal (one walk of the page's history).
+ */
+export function fanslyNewPageWork(
+  input: { pageId: number; now: Date },
+  specs: readonly ResourceSpec[] = FANSLY_RESOURCE_SPECS,
+): UpsertDemandInput[] {
+  return fanslyNewPageKeys(specs).map((key) => {
+    const spec = specs.find((candidate) => candidate.key === key)!;
+    if (spec.kind !== "goal" || spec.subject !== "page") {
+      throw new Error(`${key} declares new_page but is a ${spec.kind} per ${spec.subject}: a birth queues page-level goals only`);
+    }
+    // A page is born without registry overrides: nothing is switched off.
+    const upsert = demandToUpsert({ resource: key, demand: { reason: "new_page" } }, spec, input);
+    if (upsert === null) throw new Error(`${key}: no work at birth`);
+    return upsert;
+  });
 }
 
 // ── the lever map (step 4, S4-24) ────────────────────────────────────────────

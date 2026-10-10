@@ -17,7 +17,9 @@ import {
   SYNC_CHATS_REFUSED_CHATS,
   SYNC_CHATS_REFUSED_WINDOW_MS,
   SYNC_HANDOVER_STUCK_MS,
+  SYNC_LEDGER_BACKFILL_STALL_MS,
   SYNC_OWNERSHIP_UNCONFIRMED_MS,
+  SYNC_REQUEST_STALL_MS,
   SYNC_SOCKET_DOWN_MS,
   syncAlertResolveAfterMs,
   type PageAlertFacts,
@@ -83,6 +85,7 @@ function facts(overrides: {
       urgentWaiting: [],
       polls: [],
       ledgerIncomplete: null,
+      transactionsBackfill: { openProgressAt: null, lastCompletedAt: null },
       stalledRequests: [],
       ...overrides.journal,
     },
@@ -111,6 +114,11 @@ const networkHeld = (untilMs: number, detail: Record<string, unknown> = {}) =>
 function evaluate(input: PageAlertFacts) {
   return Object.fromEntries(evaluatePageAlerts(input, registry).map((entry) => [entry.subKey, entry.detail]));
 }
+
+/** The rescan's last certified round, `missing` rows short of 450, begun
+ *  `startedMs` from now. */
+const shortfall = (missing: number, startedMs = -MINUTE) =>
+  ({ missing, total: 450, ledgerRows: 450 - missing, roundStartedAt: at(startedMs) });
 
 describe("alert rules (design §9.6)", () => {
   it("a healthy live page holds no alert", () => {
@@ -190,7 +198,7 @@ describe("alert rules (design §9.6)", () => {
     // Every other condition holds as of now.
     const conditions = evaluatePageAlerts(facts({
       live: { socket: { up: false, lastAliveAt: null }, unconfirmed: { count: 1, oldestVisibleAt: at(-20 * MINUTE) } },
-      journal: { ledgerIncomplete: { missing: 3, at: at(-MINUTE) } },
+      journal: { ledgerIncomplete: shortfall(3) },
     }), registry);
     expect(conditions.map((entry) => [entry.subKey, entry.seenAt])).toEqual([
       ["live_degraded", NOW],
@@ -325,8 +333,51 @@ describe("alert rules (design §9.6)", () => {
     // A key the owner switched off for the page is not stale.
     const off = poll(65 * MINUTE);
     expect(evaluate({ ...off, page: { ...off.page, registryOverrides: { "notifications.forward": { enabled: false } } } })).toEqual({});
-    expect(evaluate(facts({ journal: { ledgerIncomplete: { missing: 3, at: at(-MINUTE) } } })))
+    expect(evaluate(facts({ journal: { ledgerIncomplete: shortfall(3) } })))
       .toEqual({ stuck: "transactions_ledger_incomplete" });
+  });
+
+  it("alert 4: the rescan's proven shortfall pages unless a moving backfill or one completed since the round began explains it", () => {
+    expect(SYNC_LEDGER_BACKFILL_STALL_MS).toBe(SYNC_REQUEST_STALL_MS);
+    const round = shortfall(250, -10 * MINUTE);
+    const ledger = (backfill: PageAlertFacts["journal"]["transactionsBackfill"], page: Partial<PageAlertFacts["page"]> = {}) =>
+      evaluatePageAlerts(facts({ journal: { ledgerIncomplete: round, transactionsBackfill: backfill }, page }), registry)
+        .find((entry) => entry.subKey === "stuck");
+    const pages = (backfill: "none" | "stalled" | "completed_before_round") => ({
+      detail: "transactions_ledger_incomplete",
+      since: round.roundStartedAt,
+      reasons: [{
+        detail: "transactions_ledger_incomplete",
+        since: round.roundStartedAt,
+        context: { missing: 250, total: 450, ledgerRows: 200, backfill },
+      }],
+    });
+    // No proven shortfall (no certified round, or a complete one): nothing,
+    // whatever the backfill does.
+    expect(evaluatePageAlerts(facts({
+      journal: { ledgerIncomplete: null, transactionsBackfill: { openProgressAt: at(-60 * MINUTE), lastCompletedAt: null } },
+    }), registry)).toEqual([]);
+    // No backfill at all.
+    expect(ledger({ openProgressAt: null, lastCompletedAt: null })).toEqual({ subKey: "stuck", seenAt: NOW, ...pages("none") });
+    // An open backfill whose answer applied within 30 min moves.
+    expect(ledger({ openProgressAt: at(-SYNC_LEDGER_BACKFILL_STALL_MS + MINUTE), lastCompletedAt: null })).toBeUndefined();
+    // Open 30 min with nothing applied (its progress is its creation): stalled.
+    expect(ledger({ openProgressAt: at(-SYNC_LEDGER_BACKFILL_STALL_MS - MINUTE), lastCompletedAt: null })).toMatchObject(pages("stalled"));
+    // A stall the owner's pause or a page hold explains pages nobody here.
+    const stalled = { openProgressAt: at(-SYNC_LEDGER_BACKFILL_STALL_MS - MINUTE), lastCompletedAt: null };
+    expect(ledger(stalled, { pausedResources: ["transactions.backfill"] })).toBeUndefined();
+    expect(ledger(stalled, { pausedAll: true })).toBeUndefined();
+    expect(ledger(stalled, { registryOverrides: { "transactions.backfill": { enabled: false } } })).toBeUndefined();
+    expect(ledger(stalled, { holds: [resourceBreakerRow("transactions", at(MINUTE), { since: at(-MINUTE) })] })).toBeUndefined();
+    expect(evaluate(facts({
+      journal: { ledgerIncomplete: round, transactionsBackfill: stalled },
+      page: { holds: [credentialsHeld("auth")] },
+    }))).toEqual({ page_stopped: "auth" });
+    // A backfill that completed before the round began does not explain it …
+    expect(ledger({ openProgressAt: null, lastCompletedAt: at(-11 * MINUTE) })).toMatchObject(pages("completed_before_round"));
+    // … one that completed after it did (the next round decides).
+    expect(ledger({ openProgressAt: null, lastCompletedAt: at(-5 * MINUTE) })).toBeUndefined();
+    expect(ledger({ openProgressAt: null, lastCompletedAt: round.roundStartedAt })).toBeUndefined();
   });
 
   it("alert 3: a lone chat Fansly refuses never pages; five chats refused within ten minutes do (chats_refused)", () => {
@@ -362,7 +413,7 @@ describe("alert rules (design §9.6)", () => {
     expect(evaluate(facts({
       page: { holds: [credentialsHeld("auth")] },
       live: { socket: { up: false, lastAliveAt: null }, unconfirmed: { count: 1, oldestVisibleAt: at(-16 * MINUTE) } },
-      journal: { ledgerIncomplete: { missing: 1, at: at(-MINUTE) } },
+      journal: { ledgerIncomplete: shortfall(1) },
     }))).toEqual({
       page_stopped: "auth",
       live_degraded: "socket_down",

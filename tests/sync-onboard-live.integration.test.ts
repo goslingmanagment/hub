@@ -61,9 +61,10 @@ vi.mock("../apps/runtime/src/services/proxy-validation.ts", async (importOrigina
 //
 //  - onboarding: one journaled no-page `/account/me` (page_id null, source
 //    `onboarding`) through the page's own proxy, then the page, its
-//    credentials, proxy, identity, live engine row and engine guard in one
-//    transaction; no legacy state; the host acquires it within a pass and its
-//    first request is ≥ 1.2 × S after the takeover;
+//    credentials, proxy, identity, live engine row, engine guard and its five
+//    history walks (`new_page`, nothing else) in one transaction — a refused
+//    birth queues none; no legacy state; the host acquires it within a pass
+//    and its first request is ≥ 1.2 × S after the takeover;
 //  - `createLiveSyncPage` refuses a page with a legacy footprint;
 //  - both callers (onboarding, `/admin/credentials/verify`) refuse a missing or
 //    refused proxy before anything is journaled or sent;
@@ -187,8 +188,30 @@ async function counts() {
            (select count(*)::int from sync_pages) as sync_pages,
            (select count(*)::int from fansly_page_send_guards) as guards,
            (select count(*)::int from page_sync_states) as sync_states,
-           (select count(*)::int from page_sync_cursors) as sync_cursors
+           (select count(*)::int from page_sync_cursors) as sync_cursors,
+           (select count(*)::int from sync_work) as sync_work
   `)).rows[0]!;
+}
+
+/** The history walks a page born live queues in its birth transaction
+ *  (`new_page`): owner decisions — no top-spenders bootstrap, no DM history. */
+const NEW_PAGE_KEYS = [
+  "notifications.backfill", "posts.backfill", "stats.backfill", "subscribers.history", "transactions.backfill",
+];
+
+/** The work a birth queued (demand reason `new_page`), by key. */
+async function birthWork(pageId: number) {
+  return (await testDb!.pool.query<{ resource: string; kind: string; class: string; subject: string; state: string; reasons: string[] }>(
+    `select resource, kind, class, subject, state, demand -> 'reasons' as reasons
+       from sync_work
+      where page_id = $1 and not shadow and demand -> 'reasons' ? 'new_page'
+      order by resource`,
+    [pageId],
+  )).rows;
+}
+
+function bornWith(keys: readonly string[]) {
+  return keys.map((resource) => ({ resource, kind: "goal", class: "planned", subject: "", state: "open", reasons: ["new_page"] }));
 }
 
 async function startApi(context: AppContext): Promise<string> {
@@ -219,8 +242,16 @@ describe("onboarding goes straight to live (S4-05)", () => {
     hosts.push(host);
     await host.start();
 
-    const { page, account } = await onboard(app(), "onboard-live");
+    const { page, account, queuedAtBirth } = await onboard(app(), "onboard-live");
     expect(account.id).toBe(HARNESS_OWN_REF);
+    // Its history walks are queued in the birth transaction, and only they
+    // (the harness registry knows none of them: they wait on `dependency`).
+    expect(queuedAtBirth).toEqual(NEW_PAGE_KEYS);
+    expect(await birthWork(page.id)).toEqual(bornWith(NEW_PAGE_KEYS));
+    expect((await testDb.pool.query(
+      "select count(*)::int as n from sync_work where page_id = $1 and resource in ('top-spenders.bootstrap', 'dm-messages.history')",
+      [page.id],
+    )).rows[0].n).toBe(0);
 
     // One journaled no-page check, through the page's own proxy, with its session.
     expect(await journal()).toEqual([
@@ -303,16 +334,18 @@ describe("onboarding goes straight to live (S4-05)", () => {
     const failed = onboard(app(), "refused-page", { token: REFUSED_TOKEN });
     await expect(failed).rejects.toBeInstanceOf(FanslyApiError);
     await expect(failed).rejects.toMatchObject({ status: 401, message: "Fansly authorization failed (401)" });
-    expect(await counts()).toMatchObject({ pages: 0, credentials: 0, proxies: 0, sync_pages: 0, guards: 0 });
+    expect(await counts()).toMatchObject({ pages: 0, credentials: 0, proxies: 0, sync_pages: 0, guards: 0, sync_work: 0 });
     expect(await journal()).toEqual([
       { page_id: null, source: "onboarding", operation: "account_me", outcome: "response", http_status: 401, sent: true, completed: true },
     ]);
 
-    await onboard(app(), "first-page");
+    const { page: first } = await onboard(app(), "first-page");
     await expect(onboard(app(), "second-page")).rejects.toThrow(
       `Upstream account "fansly:${HARNESS_OWN_REF}" is already bound to page "first-page"`,
     );
-    expect(await counts()).toMatchObject({ pages: 1, credentials: 1, proxies: 1, sync_pages: 1, guards: 1 });
+    // The refused birth queued nothing: the five rows are the first page's.
+    expect(await counts()).toMatchObject({ pages: 1, credentials: 1, proxies: 1, sync_pages: 1, guards: 1, sync_work: NEW_PAGE_KEYS.length });
+    expect(await birthWork(first.id)).toEqual(bornWith(NEW_PAGE_KEYS));
     expect((await journal()).map((entry) => entry.source)).toEqual(["onboarding", "onboarding", "onboarding"]);
   });
 
@@ -331,7 +364,7 @@ describe("onboarding goes straight to live (S4-05)", () => {
     expect(await journal()).toEqual([]);
     expect(checks).toEqual([]);
     expect(proxy!.tunnels).toBe(0);
-    expect(await counts()).toMatchObject({ pages: 0, sync_pages: 0, guards: 0 });
+    expect(await counts()).toMatchObject({ pages: 0, sync_pages: 0, guards: 0, sync_work: 0 });
   });
 });
 
@@ -445,7 +478,11 @@ describe("the dashboard's create-page check (/admin/credentials/verify)", () => 
     });
     const pageId = Number(created.json().page.id);
     expect((await getSyncPage(db(), pageId))).toMatchObject({ mode: "live", modeChangedBy: "onboarding:api:owner" });
-    expect(await counts()).toMatchObject({ pages: 1, sync_pages: 1, guards: 1, sync_states: 0, sync_cursors: 0 });
+    // `syncQueued` is the birth's own work: the five history walks.
+    expect(await birthWork(pageId)).toEqual(bornWith(NEW_PAGE_KEYS));
+    expect(await counts()).toMatchObject({
+      pages: 1, sync_pages: 1, guards: 1, sync_states: 0, sync_cursors: 0, sync_work: NEW_PAGE_KEYS.length,
+    });
 
     const duplicate = await api!.inject({
       method: "POST",
@@ -455,7 +492,9 @@ describe("the dashboard's create-page check (/admin/credentials/verify)", () => 
     });
     expect(duplicate.statusCode).toBe(409);
     expect(duplicate.json()).toEqual({ error: "conflict", message: 'Page "dashboard-page" already exists', statusCode: 409 });
-    expect(await counts()).toMatchObject({ pages: 1, credentials: 1, proxies: 1, sync_pages: 1, guards: 1 });
+    // The refused birth queued nothing.
+    expect(await counts()).toMatchObject({ pages: 1, credentials: 1, proxies: 1, sync_pages: 1, guards: 1, sync_work: NEW_PAGE_KEYS.length });
+    expect(await birthWork(pageId)).toEqual(bornWith(NEW_PAGE_KEYS));
     expect((await journal()).map((entry) => [entry.page_id, entry.source])).toEqual([
       [null, "credentials_verify"],
       [null, "onboarding"],

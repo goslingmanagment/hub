@@ -368,7 +368,7 @@ their clean window (`routes`) and the open latches (`openLatches`), and the glob
 | | `urgent_waiting` | urgent work waiting 2 minutes past its due time, or past the end of its own subject breaker when that is later, with no pause, hold, file breaker or route hold to explain it | `sync work list`, `sync why` |
 | 4 `stuck` | `request_stalled` | a history request with runnable work and no read for 30 minutes | [History requests](#history-requests) |
 | | `planned_stale` | a poll not served within its SLO (else 3 periods) | `sync why` on the key |
-| | `transactions_ledger_incomplete` | the newest finished rescan proved the ledger short of Fansly's lifetime total | the owner's backfill: `sync work enqueue --resource transactions.backfill` |
+| | `transactions_ledger_incomplete` | the rescan's last certified round proved the ledger short of Fansly's lifetime total, no backfill is running or one has applied no answer for 30 minutes, and none completed (`backfill_complete`) after that round began | the owner's backfill: `sync work enqueue --resource transactions.backfill` |
 | 5 `process` (global) | `heartbeat_silent`, `stalled` | no `sync` heartbeat for 2 minutes while a page is in the engine; or the stall watchdog ended the process | [Watchdog restarts](#watchdog-restarts-shutdown-and-deploys) |
 | `public_lookup` (global) | `rate_limited`, `auth_refused`, `network`, `off_contract`, `indeterminate` | the session-less public account reader stopped on its first failure (or an attempt whose outcome nobody recorded); it stays open until the owner resumes the reader | [The public account reader](#the-public-account-reader) |
 
@@ -784,10 +784,22 @@ A new Fansly page is born `live` on the engine; there is no shadow period and no
 
    The session is checked through that proxy with one `/account/me` that belongs to no page yet: unpaced, journaled
    (`fansly_send_log` with `page_id` null). Only then are the page, its credentials, its proxy, the proven identity,
-   its `live` engine row and its engine-owned guard row created, in one transaction.
+   its `live` engine row, its engine-owned guard row and its history walks created, in one transaction. The CLI
+   prints the walks it queued (`queued at birth: …`).
 3. **What happens next, by itself.** The `sync` host adopts the page within seconds; its first request goes at
-   least 1.2 × S later. The polls start, the socket connects, and the hourly transactions rescan asks for the
-   transactions backfill while nothing is stored. History requests are open at once.
+   least 1.2 × S later. The polls start, the socket connects, and the history walks of the page's birth (demand
+   reason `new_page`, planned goals) run once each, the planned class taking them in turn within the route
+   budgets. The page's birth queued these history walks: `notifications.backfill`, `posts.backfill`,
+   `stats.backfill`, `subscribers.history`, `transactions.backfill`. Nothing else is walked at birth: the
+   top-spenders bootstrap is the owner's demand, old chat history a request. Their whole one-time price, for a page
+   the size of lora-1: about 2.6 thousand requests for the walks themselves (notifications ≈ 2 350, posts ≈ 180,
+   stats ≈ 45, subscribers ≈ 8, money ≈ 45), plus what the loaded history starts, as an owner's walk does today —
+   the order histories of ≈ 2 080 PPV targets (≈ 4.2 thousand), the earnings of ≈ 740 paying fans (≈ 1.5
+   thousand), the first comment walk of ≈ 1 360 posts (up to ≈ 1.4 thousand): ≈ 9–10 thousand requests over
+   about a day; for a page the size of ari-1 about 1 thousand. A walk stops with
+   `sync page pause --page <label> --resource <key>` (or an override `enabled: false`). The hourly transactions
+   rescan checks the ledger against Fansly's lifetime total; a shortfall no running backfill explains is alert 4
+   (`transactions_ledger_incomplete`). History requests are open at once.
 4. **Check** `sync page status --page <label>` (a running owner, a connected socket, no hold) and
    `sync ownership status`. The row itself:
 
@@ -800,7 +812,28 @@ A new Fansly page is born `live` on the engine; there is no shadow period and no
     where p.label = :'page_label';
    ```
 
-   `mode` is `live`, `mode_changed_by` starts with `onboarding:`, `owner_engine` is `fansly_sync_engine`.
+   `mode` is `live`, `mode_changed_by` starts with `onboarding:`, `owner_engine` is `fansly_sync_engine`. The
+   walks of its birth, and whether each one's end is proven (`succeeded`):
+
+   ```sql
+   select w.resource, w.kind, w.class, w.state, w.demand -> 'reasons' as reasons, w.closed_at, w.close_reason,
+          case w.resource
+            when 'notifications.backfill' then w.close_reason = 'backfill_floor' and w.cursor -> 'form' ->> 'mode' = 'unfiltered'
+            when 'posts.backfill' then w.close_reason = 'walk_timeline_exhausted'
+            when 'stats.backfill' then w.close_reason = 'backfill_complete' and (
+              select count(*) from capture_coverage c where c.page_id = w.page_id and c.scope_ref = ''
+                 and c.plane in ('stats_account_daily', 'stats_earnings') and c.status = 'provider_exhausted') = 2
+            when 'subscribers.history' then w.close_reason = 'history_walked' and w.proof ->> 'historyCertified' = 'true'
+            when 'transactions.backfill' then w.close_reason = 'backfill_complete' and w.proof ->> 'fetched' = w.proof ->> 'total'
+          end as succeeded
+     from sync_work w join pages p on p.id = w.page_id
+    where p.label = :'page_label' and not w.shadow and w.demand -> 'reasons' ? 'new_page'
+    order by w.resource;
+   ```
+
+   Once all five are `done`, every one is `succeeded = t`. An `f` is a walk that closed without proving its end
+   (a withheld walk, an unconfirmed history): look into that key (`sync why --page <label> --resource <key>`) and
+   `sync work enqueue` it again.
 5. **Judge the first hour** once it has passed (read-only; JSON on stdout; exit 0 accepted, 1 failed, 2 open):
 
    ```sh
@@ -811,10 +844,10 @@ A new Fansly page is born `live` on the engine; there is no shadow period and no
    with its hold kept, no 401 or 403, no page hold, the first media request within 60 seconds, nothing stuck and the
    SLOs. Verdicts: `pass`, `accepted_with_route_429`, `owner_review` (429s on two or more routes), `inconclusive`,
    `fail`.
-6. **One-time walks are the owner's demand**, each on a live page and audited:
+6. **Other and repeated walks are the owner's demand**, each on a live page and audited:
 
    ```sh
-   pnpm cli sync work enqueue --page lora-4 --resource top-spenders.bootstrap --note 'new page'
+   pnpm cli sync work enqueue --page lora-4 --resource transactions.backfill --note 'again after a withheld walk'
    ```
 
    The keys it takes: `fan-profiles.alias-backfill`, `followers.reconcile`, `notifications.backfill`,

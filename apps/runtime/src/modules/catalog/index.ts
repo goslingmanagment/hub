@@ -321,8 +321,9 @@ export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) 
     const body = request.body;
     if (body.platform === "fansly") {
       // Step 4 S4-05: the page is born live on the Fansly Sync Engine, whose
-      // host adopts it on its next pass; no legacy sync is queued for it.
-      await onboardFanslyPage(appContext, {
+      // host adopts it on its next pass; no legacy sync is queued for it. Its
+      // initial sync is the history walks its birth queued (`new_page`).
+      const { queuedAtBirth } = await onboardFanslyPage(appContext, {
         modelSlug: body.modelSlug,
         label: body.label,
         session: body.session,
@@ -333,7 +334,7 @@ export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) 
       return {
         page: serializeAssignedPage(page),
         verified: true,
-        syncQueued: true,
+        syncQueued: queuedAtBirth.length > 0,
         syncWarning: null,
         syncRetry: null,
       };

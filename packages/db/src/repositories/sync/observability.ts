@@ -76,11 +76,38 @@ export interface SyncJournalAlertFacts {
   }>;
   /** The page's poll rows (one per poll key). */
   polls: Array<{ resource: string; lastServedAt: Date | null; createdAt: Date }>;
-  /** The newest finished `transactions.rescan` proved the ledger short of the
-   *  vendor's lifetime total by this many rows. */
-  ledgerIncomplete: { missing: number; at: Date } | null;
+  /** The last certified round of the page's `transactions.rescan` (its
+   *  standing poll row keeps that round's receipt in `proof`; a withheld round
+   *  leaves it) proved the ledger short of the vendor's lifetime total:
+   *  `missing` rows of `total`, `ledgerRows` stored, the round's first page
+   *  admitted at `roundStartedAt` (database clock). Null: no certified round,
+   *  or a complete one. */
+  ledgerIncomplete: { missing: number; total: number; ledgerRows: number; roundStartedAt: Date } | null;
+  /** The page's `transactions.backfill`: an open (or running) row's progress —
+   *  its newest applied answer, else its creation (an admission is no
+   *  progress) — and the newest close of a row that completed
+   *  (`backfill_complete`; a withheld or cancelled one explains nothing). */
+  transactionsBackfill: { openProgressAt: Date | null; lastCompletedAt: Date | null };
   /** Open history requests with runnable work and no read within the bound. */
   stalledRequests: Array<{ requestRef: string; lastServedAt: Date | null; createdAt: Date }>;
+}
+
+/** The ledger fact of a `transactions.rescan` receipt (`proof`): a certified
+ *  round carries `ledgerRows` and `walkStartedAt` (one receipt writes both);
+ *  any other receipt — a withheld one an older image left there — proves
+ *  nothing. */
+export function rescanLedgerShortfall(proof: unknown): SyncJournalAlertFacts["ledgerIncomplete"] {
+  if (typeof proof !== "object" || proof === null || Array.isArray(proof)) return null;
+  const receipt = proof as Record<string, unknown>;
+  const whole = (value: unknown): number | null =>
+    typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+  const ledgerRows = whole(receipt.ledgerRows);
+  const startedAt = typeof receipt.walkStartedAt === "string" ? new Date(receipt.walkStartedAt) : null;
+  if (ledgerRows === null || startedAt === null || Number.isNaN(startedAt.getTime())) return null;
+  const missing = whole(receipt.ledgerIncomplete);
+  const total = whole(receipt.total);
+  if (missing === null || missing === 0 || total === null) return null;
+  return { missing, total, ledgerRows, roundStartedAt: startedAt };
 }
 
 /**
@@ -130,16 +157,37 @@ export async function readSyncJournalAlertFacts(
        and w.kind = 'poll'
        and w.state in ('open', 'running')
   `);
-  const ledger = await db.execute<{ missing: string | null; at: Date | string }>(sql`
-    select w.proof ->> 'ledgerIncomplete' as missing, w.closed_at as at
+  // The rescan is a poll: its one row stays open, and its receipt (`proof`)
+  // is its last certified round's (`sync_work_key_recent`).
+  const ledger = await db.execute<{ proof: unknown }>(sql`
+    select w.proof
       from sync_work w
      where w.page_id = ${input.pageId}
        and w.resource = 'transactions.rescan'
        and w.subject = ''
        and not w.shadow
-       and w.state = 'done'
      order by w.id desc
      limit 1
+  `);
+  const backfill = await db.execute<{ openProgressAt: Date | string | null; lastCompletedAt: Date | string | null }>(sql`
+    select (select greatest(w.created_at, max(a.applied_at))
+              from sync_work w
+              left join sync_attempts a on a.work_id = w.id and a.apply_state = 'applied'
+             where w.page_id = ${input.pageId}
+               and w.resource = 'transactions.backfill'
+               and w.subject = ''
+               and not w.shadow
+               and w.state in ('open', 'running')
+             group by w.id
+             order by w.id desc
+             limit 1) as "openProgressAt",
+           (select max(w.closed_at)
+              from sync_work w
+             where w.page_id = ${input.pageId}
+               and w.resource = 'transactions.backfill'
+               and w.subject = ''
+               and not w.shadow
+               and w.close_reason = 'backfill_complete') as "lastCompletedAt"
   `);
   const stalled = await db.execute<{ requestRef: string; lastServedAt: Date | string | null; createdAt: Date | string }>(sql`
     select r.request_ref::text as "requestRef", r.last_served_at as "lastServedAt", r.created_at as "createdAt"
@@ -161,8 +209,7 @@ export async function readSyncJournalAlertFacts(
      order by r.id
      limit 20
   `);
-  const ledgerRow = ledger.rows[0];
-  const missing = ledgerRow?.missing === null || ledgerRow?.missing === undefined ? 0 : Number(ledgerRow.missing);
+  const backfillRow = backfill.rows[0];
   const stopRow = stop.rows[0];
   return {
     lastStopAttempt: stopRow ? { errorClass: stopRow.errorClass, at: toRequiredDate(stopRow.at) } : null,
@@ -179,7 +226,11 @@ export async function readSyncJournalAlertFacts(
       lastServedAt: toDate(row.lastServedAt),
       createdAt: toRequiredDate(row.createdAt),
     })),
-    ledgerIncomplete: ledgerRow && missing > 0 ? { missing, at: toRequiredDate(ledgerRow.at) } : null,
+    ledgerIncomplete: rescanLedgerShortfall(ledger.rows[0]?.proof ?? null),
+    transactionsBackfill: {
+      openProgressAt: toDate(backfillRow?.openProgressAt ?? null),
+      lastCompletedAt: toDate(backfillRow?.lastCompletedAt ?? null),
+    },
     stalledRequests: stalled.rows.map((row) => ({
       requestRef: row.requestRef,
       lastServedAt: toDate(row.lastServedAt),
