@@ -169,8 +169,12 @@ async function seedPage(label?: string) {
 }
 
 /** A thread as legacy and the journal rebuild left it: messages 1..5 stored
- *  (page_dm_messages and the archive) and proven a partial chain. */
-async function seedThread(pageId: number, options: { n?: number; groupId?: string; excluded?: boolean; bound?: boolean } = {}): Promise<number> {
+ *  (page_dm_messages and the archive) and proven a partial chain, its head
+ *  read received `headAt` (default an hour ago). */
+async function seedThread(
+  pageId: number,
+  options: { n?: number; groupId?: string; excluded?: boolean; bound?: boolean; headAt?: Date } = {},
+): Promise<number> {
   const groupId = options.groupId ?? groupOf(options.n ?? 1);
   const stored = [1, 2, 3, 4, 5];
   const [fan] = await upsertFans(db(), [{ platform: "fansly" as const, platformUserId: FAN }]);
@@ -212,7 +216,7 @@ async function seedThread(pageId: number, options: { n?: number; groupId?: strin
     epoch: 0,
     state: "partial",
     headId: msg(5),
-    headAt: new Date(Date.now() - HOUR),
+    headAt: options.headAt ?? new Date(Date.now() - HOUR),
     oldestId: msg(1),
     oldestCreatedAtMs: BASE_MS + 1000,
     count: 5,
@@ -672,7 +676,10 @@ describe("after establishment (owner decision Р5: no background reads)", () => 
   it("a new socket message gives exactly one read, not before the retry boundary; a list head the episode answered gives none", async (context) => {
     if (!testDb) return context.skip();
     const pageId = await seedPage();
-    const threadId = await seedThread(pageId);
+    // The chain's head read was received while message 5 was the newest:
+    // 7 and 9 came after it (a head read the chain joined after them, 75 s
+    // on, would account for a list head it did not show).
+    const threadId = await seedThread(pageId, { headAt: new Date(BASE_MS + 5_500) });
     const registry = await registryFor(pageId);
     const episodeId = await seedEpisode(threadId, { state: "established", refusals: 5, retryInMs: HOUR, handledListHeadId: msg(7) });
     const boundary = (await episodes(threadId))[0]!.retry_not_before!;

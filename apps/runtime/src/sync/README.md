@@ -120,8 +120,13 @@ A DM thread has three writers, each with its own columns: the conversation list 
 membership generation and the list's two metadata keys — never an unbinding), the chain (`writeThreadChain`) and, on
 pages the engine owns, the legacy coverage columns (`writeThreadSummary` after a read, from the messages it stored in
 `message_archive`; `writeThreadSummaryAfterDeletion` after a socket deletion, a recount of the thread's archive
-messages). A list head newer than what the message reads reached becomes one `dm-messages.catchup` (planned;
-`dm-messages.head` when the list is the live signal).
+messages). A chat's list head is the newer of the row's `lastMessageId` and the group's embedded `lastMessage.id`
+(design §5.3; the row sometimes serves a stale id). A list head newer than what the message reads reached becomes one
+`dm-messages.catchup` (planned; `dm-messages.head` when the list is the live signal). It asks for no further read once
+the chain joined a head read received at least 75 s after the head's creation (`head_confirmed_at`) and the head was
+not in it: Fansly keeps naming a deleted newest message as the head (`lastMessage: null`). The daily full walk re-reads
+such a head once. A chat that sits on page 2 behind a stale row while the socket is down is found by the head walk if
+it reaches that page, else by the full walk — within a day (Р3).
 
 A socket event in a chat the page does not know raises `dm-conversations.find` (urgent, 12 s). A burst of new chats
 shares one read of the list head (step 3b ruling 1, plan PR 1-3): the first read of offset 0 by any key of the list

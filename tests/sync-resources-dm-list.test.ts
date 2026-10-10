@@ -10,13 +10,18 @@ import {
 } from "@agency_hub_core/shared";
 
 import { prepareJournalBody } from "../apps/runtime/src/sync/fansly/capture.ts";
+import { emptyChain, foldChainPage, type ThreadChain } from "../apps/runtime/src/sync/fansly/lib/chain.ts";
 import {
+  DM_LIST_HEAD_ANSWERED_AFTER_MS,
+  listHeadAccounted,
   listHeadInstant,
   listHeadNeedsRead,
+  listItemHeadId,
   listPageUnchanged,
   resolveConversationListItem,
   resolveGroupDetail,
   type ListHeadFollowupState,
+  type ResolvedListItem,
   type ResolveListItemInput,
 } from "../apps/runtime/src/sync/fansly/lib/conversation-list.ts";
 import { truncateDmPreview } from "../apps/runtime/src/sync/fansly/lib/dm-preview.ts";
@@ -24,6 +29,7 @@ import {
   parseDmListFullCursor,
   parseDmListHeadCursor,
 } from "../apps/runtime/src/sync/fansly/resources/dm-conversations.ts";
+import { DM_HEAD_NOT_FOUND_RETRY_MS } from "../apps/runtime/src/sync/fansly/resources/dm-messages.ts";
 
 // The conversation list's rules without I/O (design §5.3): what a listed chat
 // says about its thread, when a page of chats ends a head walk, when a list
@@ -59,6 +65,7 @@ function state(overrides: Partial<PageDmThreadListState> = {}): PageDmThreadList
     metadata: {},
     newestStoredMessageId: HEAD_ID,
     headConfirmedId: null,
+    headConfirmedAt: null,
     updatedAt: new Date(HEAD_AT_MS),
     ...overrides,
   };
@@ -118,6 +125,7 @@ function input(overrides: Partial<ResolveListItemInput> = {}): ResolveListItemIn
     aggregationAccountCount: 1,
     existing: state(),
     pageAccountId: PAGE,
+    engineStartAt: new Date("2026-10-01T00:00:00Z"),
     ...overrides,
   };
 }
@@ -160,10 +168,18 @@ describe("resolveConversationListItem", () => {
     });
   });
 
-  it("a head the walk cannot vouch for keeps the page changed: list and embedded ids disagree, or no time", () => {
-    expect(resolveConversationListItem(input({ group: group({}, { id: "910000000000000004" }) }), NOW).unchanged).toBe(false);
-    expect(resolveConversationListItem(input({ group: group({}, { createdAt: null }) }), NOW).unchanged).toBe(false);
-    expect(resolveConversationListItem(input({ group: null }), NOW).unchanged).toBe(false);
+  it("a head newer than the reads that the walk cannot vouch for keeps the page changed; one the reads reached does not", () => {
+    // List and embedded ids disagree, the embedded head has no time, or no
+    // aggregation group: the reads reached an older message, nothing answered
+    // the head.
+    const behind = state({ newestStoredMessageId: "910000000000000003" });
+    expect(resolveConversationListItem(input({ group: group({}, { id: "910000000000000004" }), existing: behind }), NOW).unchanged).toBe(false);
+    expect(resolveConversationListItem(input({ group: group({}, { createdAt: null }), existing: behind }), NOW).unchanged).toBe(false);
+    expect(resolveConversationListItem(input({ group: null, existing: behind }), NOW).unchanged).toBe(false);
+    // The same three with the head the reads reached: nothing new, the walk may stop.
+    expect(resolveConversationListItem(input({ group: group({}, { id: "910000000000000004" }) }), NOW).unchanged).toBe(true);
+    expect(resolveConversationListItem(input({ group: group({}, { createdAt: null }) }), NOW).unchanged).toBe(true);
+    expect(resolveConversationListItem(input({ group: null }), NOW).unchanged).toBe(true);
     // A chat without any message is as known as it gets.
     const empty = resolveConversationListItem(input({
       item: row({ lastMessageId: null }),
@@ -401,6 +417,7 @@ describe("listHeadNeedsRead", () => {
       newestStoredMessageId: "910000000000000005",
       listHeadId: "910000000000000006",
       listHeadAt: new Date("2026-10-02T11:00:00Z"),
+      headConfirmedAt: null,
       ...overrides,
     };
   }
@@ -429,6 +446,39 @@ describe("listHeadNeedsRead", () => {
     expect(listHeadNeedsRead(follow({ ...neverRead }), null)).toBe(false);
   });
 
+  it("a head above the reads that a chain-joined head read received 75 s after its creation did not show asks for none; the full walk re-reads it", () => {
+    const createdMs = Date.parse("2026-10-02T10:00:00Z");
+    const head = (BigInt(createdMs - 1561494359900) << 22n).toString();
+    const base = { listHeadId: head, headConfirmedId: "910000000000000005", newestStoredMessageId: "910000000000000005" };
+    const early = new Date(createdMs + 74_999);
+    const late = new Date(createdMs + 75_000);
+    // Whether the embedded message vouches for the head (its served time) or not.
+    expect(listHeadNeedsRead(follow({ ...base, headConfirmedAt: early, listHeadAt: new Date(createdMs) }), engineStart)).toBe(true);
+    expect(listHeadNeedsRead(follow({ ...base, headConfirmedAt: late, listHeadAt: new Date(createdMs) }), engineStart)).toBe(false);
+    expect(listHeadNeedsRead(follow({ ...base, headConfirmedAt: late, listHeadAt: null }), engineStart)).toBe(false);
+    // A chat no read reached a message of (a chain proven empty): the same.
+    expect(listHeadNeedsRead(follow({ ...base, headConfirmedId: null, newestStoredMessageId: null, headConfirmedAt: late }), engineStart)).toBe(false);
+    // A read before the engine's start on the page accounts for nothing.
+    expect(listHeadNeedsRead(follow({ ...base, headConfirmedAt: late }), new Date(late.getTime() + 1))).toBe(true);
+    expect(listHeadAccounted({ headId: head, known: null, headConfirmedAt: late, engineStartAt: null })).toBe(false);
+    // An id that is not a decimal snowflake has no creation instant: never accounted by time.
+    expect(listHeadAccounted({ headId: "not-an-id", known: null, headConfirmedAt: late, engineStartAt: engineStart })).toBe(false);
+    expect(listHeadNeedsRead(follow({
+      listHeadId: "not-an-id", headConfirmedId: null, newestStoredMessageId: null, headConfirmedAt: late, listHeadAt: new Date(createdMs),
+    }), engineStart)).toBe(true);
+    // The full walk (recheck): a head accounted by time gets its read; one the reads reached does not.
+    expect(listHeadNeedsRead(follow({ ...base, headConfirmedAt: late }), engineStart, true)).toBe(true);
+    expect(listHeadNeedsRead(follow({ listHeadId: "910000000000000005", headConfirmedAt: late }), engineStart, true)).toBe(false);
+    expect(listHeadNeedsRead(follow({ listHeadId: "910000000000000004", headConfirmedAt: late }), engineStart, true)).toBe(false);
+    // A head a chat-unavailability episode answered asks for none, re-read or not.
+    expect(listHeadNeedsRead(follow({ ...base, headConfirmedAt: late, unavailableHandledHeadId: head }), engineStart, true)).toBe(false);
+    expect(listHeadNeedsRead(follow({ ...base, headConfirmedAt: early, unavailableHandledHeadId: head }), engineStart)).toBe(false);
+  });
+
+  it("the 75 s are the head read's own patience before `not_found` (15 s + 60 s)", () => {
+    expect(DM_LIST_HEAD_ANSWERED_AFTER_MS).toBe(DM_HEAD_NOT_FOUND_RETRY_MS.reduce((a, b) => a + b, 0));
+  });
+
   it("a head's instant: the served time, else its snowflake's", () => {
     const served = new Date("2026-10-02T11:00:00Z");
     expect(listHeadInstant("910000000000000006", served)).toBe(served);
@@ -436,6 +486,297 @@ describe("listHeadNeedsRead", () => {
     expect(listHeadInstant((1000n << 22n).toString(), null)).toEqual(new Date(1561494359900 + 1000));
     expect(listHeadInstant("not-an-id", null)).toBeNull();
     expect(listHeadInstant(null, null)).toBeNull();
+  });
+});
+
+// ── a chat's list head (У5: Д4, Д7) ─────────────────────────────────────────
+
+/** The follow-up state `applyListPage` builds for a listed chat. */
+function followOf(item: ResolvedListItem, thread: PageDmThreadListState): ListHeadFollowupState {
+  const servedAt = item.head.embeddedMessageId === item.head.headId ? item.head.servedAt : null;
+  return {
+    groupId: item.groupId,
+    fanId: thread.fanId,
+    metadata: thread.metadata,
+    headConfirmedId: thread.headConfirmedId,
+    newestStoredMessageId: thread.newestStoredMessageId,
+    listHeadId: item.head.headId,
+    listHeadAt: listHeadInstant(item.head.headId, servedAt),
+    headConfirmedAt: thread.headConfirmedAt,
+  };
+}
+
+/** The thread after the list's writer wrote the item. */
+function writtenBy(thread: PageDmThreadListState, item: ResolvedListItem): PageDmThreadListState {
+  return {
+    ...thread,
+    conversationFlags: item.list.conversationFlags,
+    unreadCount: item.list.unreadCount,
+    subscriptionTierId: item.list.subscriptionTierId,
+    lastUnreadMessageId: item.list.lastUnreadMessageId,
+    lastMessageId: item.head.lastMessageId,
+    lastMessageAt: item.head.lastMessageAt,
+    lastMessageSenderId: item.head.lastMessageSenderId,
+    lastMessageSenderRole: item.head.lastMessageSenderRole,
+    lastMessagePreview: item.head.lastMessagePreview,
+  };
+}
+
+describe("listItemHeadId", () => {
+  it("the newer of the row's id and the embedded one; an id that is not decimal never wins over the row's", () => {
+    expect(listItemHeadId("100", "99")).toBe("100");
+    expect(listItemHeadId("99", "100")).toBe("100");
+    expect(listItemHeadId("100", null)).toBe("100");
+    expect(listItemHeadId(null, "100")).toBe("100");
+    expect(listItemHeadId(null, null)).toBeNull();
+    expect(listItemHeadId("100", "x")).toBe("100");
+    expect(listItemHeadId("x", "100")).toBe("x");
+  });
+});
+
+describe("a phantom list head (Д4, prod lora-3)", () => {
+  // Fansly keeps naming the chat's deleted newest message as the row's
+  // `lastMessageId` and serves the group's `lastMessage: null`; `/message`
+  // never shows it again (lora-3 chat 964012116774244352, 2026-10-07).
+  const OWN = "743702253470232576";
+  const PARTNER = "924881748523757569";
+  const CHAT = "964012116774244352";
+  const CHAIN_HEAD = "964058353217056769"; // 2026-10-07 03:29:42, REST's newest
+  const PHANTOM = "964268547746312193"; // 2026-10-07 17:24:56, deleted
+  const PHANTOM_AT_MS = listHeadInstant(PHANTOM, null)!.getTime();
+  const ENGINE_START = new Date("2026-10-03T19:09:00Z");
+  const READ_AT = new Date("2026-10-09T14:00:00Z");
+
+  const ITEM: FanslyMessagingGroup = {
+    groupId: CHAT,
+    partnerAccountId: PARTNER,
+    partnerUsername: "user924881680315981824",
+    flags: 2,
+    unreadCount: 0,
+    subscriptionTierId: null,
+    lastMessageId: PHANTOM,
+    lastUnreadMessageId: "0",
+  };
+  const GROUP_ROW = {
+    id: CHAT,
+    type: 1,
+    users: [
+      { type: 0, userId: OWN, groupId: CHAT, permissionFlags: 65535 },
+      { type: 0, userId: PARTNER, groupId: CHAT, permissionFlags: 65535 },
+    ],
+    createdBy: OWN,
+    groupFlags: 0,
+    lastMessage: null,
+  } as unknown as FanslyMessagingAggregatedGroup;
+
+  /** The thread with the chain on REST's newest message, confirmed before the phantom was created. */
+  function stored(overrides: Partial<PageDmThreadListState> = {}): PageDmThreadListState {
+    return state({
+      platformConversationId: CHAT,
+      partnerPlatformUserId: PARTNER,
+      partnerUsername: "user924881680315981824",
+      partnerDisplayName: null,
+      conversationFlags: 2,
+      lastUnreadMessageId: "0",
+      lastMessageId: CHAIN_HEAD,
+      lastMessageAt: new Date("2026-10-07T03:29:42Z"),
+      lastMessageSenderId: OWN,
+      lastMessageSenderRole: "model",
+      lastMessagePreview: "not talkative today, are you babe? haha",
+      newestStoredMessageId: CHAIN_HEAD,
+      headConfirmedId: CHAIN_HEAD,
+      headConfirmedAt: new Date("2026-10-07T03:30:10Z"),
+      ...overrides,
+    });
+  }
+
+  function pass(thread: PageDmThreadListState, engineStartAt = ENGINE_START) {
+    const item = resolveConversationListItem({
+      item: ITEM,
+      group: GROUP_ROW,
+      accountsById: new Map([[PARTNER, { id: PARTNER, username: "user924881680315981824", displayName: null }]]),
+      aggregationAccountCount: 30,
+      existing: thread,
+      pageAccountId: OWN,
+      engineStartAt,
+    }, READ_AT);
+    return { item, needsRead: listHeadNeedsRead(followOf(item, thread), engineStartAt) };
+  }
+
+  /** The catch-up's head read as the apply folds it: REST's newest message
+   *  is still the chain head (`head_unchanged`), received at READ_AT. */
+  function catchupRead(thread: PageDmThreadListState): PageDmThreadListState {
+    const chain: ThreadChain = {
+      ...emptyChain(),
+      state: "partial",
+      headId: thread.headConfirmedId,
+      headAt: thread.headConfirmedAt,
+      oldestId: "964040000000000000",
+      oldestCreatedAtMs: listHeadInstant("964040000000000000", null)!.getTime(),
+      count: 3,
+    };
+    const ids = [CHAIN_HEAD, "964056000000000000", "964040000000000000"];
+    const fold = foldChainPage(chain, null, {
+      before: null,
+      limit: 25,
+      ids,
+      createdAtMs: ids.map((id) => listHeadInstant(id, null)!.getTime()),
+      capturedAt: READ_AT,
+      witness: { kind: "attempt", attemptId: 1, observationId: 1, receivedAt: READ_AT },
+    }, null);
+    expect(fold.verdict.kind).toBe("head_unchanged");
+    return { ...thread, headConfirmedId: fold.chain.headId, headConfirmedAt: fold.chain.headAt };
+  }
+
+  it("(а) no head read since the phantom: a read is asked, the stored head kept for it, the page not ended", () => {
+    const { item, needsRead } = pass(stored());
+    expect(needsRead).toBe(true);
+    expect(item.head).toMatchObject({
+      listMessageId: PHANTOM, embeddedMessageId: null, headId: PHANTOM, lastMessageId: CHAIN_HEAD, preserveHeadForRetry: true,
+    });
+    expect(item.unchanged).toBe(false);
+  });
+
+  it("(б) four passes ask for one read: the pass after it writes the phantom, the next ones end the head walk on the page", () => {
+    let thread = stored();
+    const asked: boolean[] = [];
+    const items: ResolvedListItem[] = [];
+    for (let n = 0; n < 4; n += 1) {
+      const { item, needsRead } = pass(thread);
+      asked.push(needsRead);
+      items.push(item);
+      thread = writtenBy(thread, item);
+      if (needsRead) thread = catchupRead(thread);
+    }
+    // Before the fix: [true, true, true, true], and no pass ended the walk.
+    expect(asked).toEqual([true, false, false, false]);
+    // The pass after the read writes the phantom with the last visible
+    // message's time and sender: a one-off change of the page.
+    expect(items[1]!.head).toMatchObject({
+      headId: PHANTOM, lastMessageId: PHANTOM, preserveHeadForRetry: false, lastMessageAt: new Date("2026-10-07T03:29:42Z"),
+      lastMessageSenderId: OWN, lastMessageSenderRole: "model",
+    });
+    expect(items[1]!.unchanged).toBe(false);
+    for (const item of items.slice(2)) {
+      expect(item.diffReasons).toEqual([]);
+      expect(item.unchanged).toBe(true);
+      expect(listPageUnchanged([item])).toBe(true);
+    }
+    expect(thread).toMatchObject({ lastMessageId: PHANTOM, headConfirmedId: CHAIN_HEAD, headConfirmedAt: READ_AT });
+  });
+
+  it("(в) the head read counts from 75 s after the head's creation", () => {
+    expect(pass(stored({ headConfirmedAt: new Date(PHANTOM_AT_MS + 74_999) })).needsRead).toBe(true);
+    expect(pass(stored({ headConfirmedAt: new Date(PHANTOM_AT_MS + 75_000) })).needsRead).toBe(false);
+  });
+
+  it("(г) a head read before the engine's start on the page accounts for nothing", () => {
+    expect(pass(stored({ headConfirmedAt: READ_AT }), new Date(READ_AT.getTime() + 1)).needsRead).toBe(true);
+    expect(pass(stored({ headConfirmedAt: READ_AT }), READ_AT).needsRead).toBe(false);
+  });
+
+  it("(д) a head deleted after the reads confirmed it (lora-1 form): no read, the head written once, then the walk stops", () => {
+    const confirmed = stored({ headConfirmedId: PHANTOM, newestStoredMessageId: PHANTOM, headConfirmedAt: null });
+    const first = pass(confirmed);
+    expect(first.needsRead).toBe(false);
+    expect(first.item.head).toMatchObject({ headId: PHANTOM, lastMessageId: PHANTOM, preserveHeadForRetry: false });
+    expect(first.item.unchanged).toBe(false);
+    const second = pass(writtenBy(confirmed, first.item));
+    expect(second.needsRead).toBe(false);
+    expect(second.item.unchanged).toBe(true);
+  });
+});
+
+describe("a stale list row (Д7, prod ari-1)", () => {
+  // The row serves an old `lastMessageId` while the group's embedded
+  // `lastMessage` is newer (ari-1 chat 963752637080039424, 2026-10-09).
+  const OWN = "300000000000000001";
+  const PARTNER = "962915146519961600";
+  const CHAT = "963752637080039424";
+  const STALE = "964389149329092608"; // model, 2026-10-08 01:24:10
+  const EMBEDDED = "964808195857985536"; // fan, 2026-10-09 05:09:18
+  const EMBEDDED_AT_MS = Date.parse("2026-10-09T05:09:18.707Z");
+  const ENGINE_START = new Date("2026-10-03T19:08:19Z");
+  const LIST_AT = new Date("2026-10-09T05:12:25Z");
+
+  const ITEM: FanslyMessagingGroup = {
+    groupId: CHAT,
+    partnerAccountId: PARTNER,
+    partnerUsername: "fan",
+    flags: 0,
+    unreadCount: 1,
+    subscriptionTierId: null,
+    lastMessageId: STALE,
+    lastUnreadMessageId: null,
+  };
+  const GROUP_ROW = {
+    id: CHAT,
+    users: [
+      { groupId: CHAT, userId: OWN, type: 0, permissionFlags: 0 },
+      { groupId: CHAT, userId: PARTNER, type: 0, permissionFlags: 0 },
+    ],
+    lastMessage: {
+      id: EMBEDDED, type: 1, dataVersion: 1, content: "hidden", groupId: CHAT, senderId: PARTNER, correlationId: null,
+      inReplyTo: null, inReplyToRoot: null, createdAt: EMBEDDED_AT_MS / 1000, attachments: [], embeds: [], interactions: [], likes: [],
+    },
+  } as unknown as FanslyMessagingAggregatedGroup;
+
+  /** The reads reached the row's stale id (the socket missed the 05:09 message). */
+  function stored(overrides: Partial<PageDmThreadListState> = {}): PageDmThreadListState {
+    return state({
+      platformConversationId: CHAT,
+      partnerPlatformUserId: PARTNER,
+      lastMessageId: STALE,
+      lastMessageAt: new Date("2026-10-08T01:24:10Z"),
+      lastMessageSenderId: OWN,
+      lastMessageSenderRole: "model",
+      lastMessagePreview: "stale",
+      newestStoredMessageId: STALE,
+      headConfirmedId: STALE,
+      headConfirmedAt: new Date("2026-10-09T04:40:00Z"),
+      ...overrides,
+    });
+  }
+
+  function pass(thread: PageDmThreadListState) {
+    const item = resolveConversationListItem({
+      item: ITEM,
+      group: GROUP_ROW,
+      accountsById: new Map([[PARTNER, { id: PARTNER, username: "fan", displayName: null }]]),
+      aggregationAccountCount: 1,
+      existing: thread,
+      pageAccountId: OWN,
+      engineStartAt: ENGINE_START,
+    }, LIST_AT);
+    return { item, needsRead: listHeadNeedsRead(followOf(item, thread), ENGINE_START) };
+  }
+
+  it("the head is the embedded message: the written head is that one message, and a read is asked", () => {
+    const { item, needsRead } = pass(stored());
+    // Before the fix: the stale id with the embedded message's time and sender, and no read.
+    expect(item.head).toMatchObject({
+      listMessageId: STALE,
+      embeddedMessageId: EMBEDDED,
+      headId: EMBEDDED,
+      lastMessageId: EMBEDDED,
+      lastMessageSenderId: PARTNER,
+      lastMessageSenderRole: "fan",
+      lastMessagePreview: "hidden",
+      preserveHeadForRetry: false,
+    });
+    expect(item.head.lastMessageAt?.getTime()).toBe(EMBEDDED_AT_MS);
+    expect(needsRead).toBe(true);
+    expect(item.diffReasons).toEqual(expect.arrayContaining(["last_message_id"]));
+    expect(item.unchanged).toBe(false);
+  });
+
+  it("delivered by the socket (the chain on the embedded message): no read, and once the head is written the walk stops", () => {
+    const delivered = stored({ headConfirmedId: EMBEDDED, newestStoredMessageId: EMBEDDED });
+    const first = pass(delivered);
+    expect(first.needsRead).toBe(false);
+    const second = pass(writtenBy(delivered, first.item));
+    expect(second.needsRead).toBe(false);
+    expect(second.item.unchanged).toBe(true);
   });
 });
 

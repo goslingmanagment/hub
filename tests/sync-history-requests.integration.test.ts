@@ -3,10 +3,11 @@ import { setTimeout as sleep } from "node:timers/promises";
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import type { Database } from "@agency_hub_core/db";
+import { getSyncPage, listPageDmThreadListStates, type Database } from "@agency_hub_core/db";
 import type { FanslyWireRequest } from "@agency_hub_core/fansly";
 
 import { createEngineRegistry, type EngineRegistry } from "../apps/runtime/src/sync/engine/resource.ts";
+import { listHeadNeedsRead } from "../apps/runtime/src/sync/fansly/lib/conversation-list.ts";
 import { fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";
 import {
   cancelHistoryRequest,
@@ -286,6 +287,66 @@ describe("history requests through the requests class", () => {
     );
     expect(thread.rows[0]).toEqual({ contiguous_count: 5 * PAGE, stored: 5 * PAGE });
     expect((await stored(pageId)).hot).toBe(0);
+  }, 90_000);
+
+  it("a cancel while the head read is on the wire accounts for no list head: the walk never joined the chain", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await livePage();
+    // The engine has run on the page for a day.
+    await testDb.pool.query(
+      "update sync_pages set legacy_imported_at = clock_timestamp() - interval '1 day', mode_changed_at = clock_timestamp() - interval '1 day' where page_id = $1",
+      [pageId],
+    );
+    const chats = new FakeChats();
+    // The chain reached H by a head read an hour ago; 40 messages came after
+    // it (the socket missed them), the newest X 50 minutes ago.
+    const chat = chats.add({ count: 60, ageMs: 2 * DAY });
+    const threadId = await seedChatThread(handles(), pageId, chat, { stored: chat.messages, chain: true });
+    const H = chat.messages.at(-1)!.id;
+    const above = chats.append(chat.groupId, 40, "alternate", Date.now() - 50 * 60_000);
+    const X = above.at(-1)!;
+    const before = await testDb.pool.query<{ head_confirmed_at: Date }>("select head_confirmed_at from page_dm_threads where id = $1", [threadId]);
+    const filed = await file(pageId, [chat], { kind: "all" });
+    let cancelled = false;
+    // The cancel lands while the first read (the head) is on the wire.
+    const { made, reads } = await liveActor(pageId, chats, async (_req, index) => {
+      if (index !== 0) return;
+      await cancelHistoryRequest(ctx(), filed.request.ref, { reason: "test cancel" });
+      cancelled = true;
+    });
+    await runActorUntil(made, async () => {
+      if (!cancelled) return false;
+      await sleep(1_500);
+      return true;
+    }, 60_000, "the cancel and a quiet second and a half");
+
+    expect(reads).toHaveLength(1);
+    expect(new URL(reads[0]!.url).searchParams.get("before")).toBeNull();
+    const work = await testDb.pool.query<{ state: string }>(
+      "select state from sync_work where page_id = $1 and resource = 'dm-messages.history'", [pageId]);
+    expect(work.rows).toEqual([{ state: "cancelled" }]);
+    // The head read was applied (its sync mark is past X + 75 s), the chain
+    // did not move: its 25 messages are all above H, the walk down to H is gone.
+    const [state] = await listPageDmThreadListStates(db(), { platformAccountId: pageId, platformConversationIds: [chat.groupId] });
+    const sync = await testDb.pool.query<{ last_message_sync_at: Date }>("select last_message_sync_at from page_dm_threads where id = $1", [threadId]);
+    expect(sync.rows[0]!.last_message_sync_at.getTime()).toBeGreaterThanOrEqual(X.createdAtMs + 75_000);
+    expect(state).toMatchObject({ headConfirmedId: H, headConfirmedAt: before.rows[0]!.head_confirmed_at });
+    // A list head X still asks for a read: 15 messages below the head read's
+    // page would stay outside the archive otherwise. (Taking the head read's
+    // sync mark as the fact, the first draft of the plan, would ask none.)
+    const page = await getSyncPage(db(), pageId);
+    const follow = {
+      groupId: chat.groupId,
+      fanId: state!.fanId,
+      metadata: state!.metadata,
+      headConfirmedId: state!.headConfirmedId,
+      newestStoredMessageId: state!.newestStoredMessageId,
+      headConfirmedAt: state!.headConfirmedAt,
+      listHeadId: X.id,
+      listHeadAt: new Date(X.createdAtMs),
+    };
+    expect(listHeadNeedsRead(follow, page!.legacyImportedAt)).toBe(true);
+    expect(listHeadNeedsRead({ ...follow, headConfirmedAt: sync.rows[0]!.last_message_sync_at }, page!.legacyImportedAt)).toBe(false);
   }, 90_000);
 
   it("latest N with full pages: exactly ⌈N/25⌉ reads, inside the request's own bounds", async (context) => {
