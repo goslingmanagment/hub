@@ -26,8 +26,23 @@
 // every other store (text columns included, which the driver encodes as UTF-8)
 // already turns it into U+FFFD. The served object is never mutated either: the
 // lane goes on parsing it after the journal write, as before.
+//
+// Bug hunt Д3 (2026-10-09): U+0000 wedges the journal the same way. jsonb
+// refuses the `\u0000` escape JSON.stringify writes for it (SQLSTATE 22P05),
+// a text column refuses the byte itself (22021), and Fansly does not scrub
+// control characters from what it serves (the archive holds 35 messages with a
+// TAB or a CR). The engine's journal (`replaceJournalUnstorableText`) replaces
+// both by U+FFFD, the same policy: a copy only when there is something to
+// replace, the served object untouched; an answer it changed is applied from
+// its journal copy, so the projection and the journal agree. The legacy lane,
+// OFAPI and the public reader keep `replaceJournalLoneSurrogates`.
 
-import { countLoneSurrogatesDeep, sanitizeLoneSurrogatesDeep } from "@agency_hub_core/shared";
+import {
+  countLoneSurrogatesDeep,
+  countPostgresUnstorableDeep,
+  sanitizeLoneSurrogatesDeep,
+  sanitizePostgresTextDeep,
+} from "@agency_hub_core/shared";
 
 /**
  * Appended to `sync_raw_payloads.mapper_version` when the raw body had any
@@ -36,6 +51,12 @@ import { countLoneSurrogatesDeep, sanitizeLoneSurrogatesDeep } from "@agency_hub
  * Observations carry no mapper field; the capture's run note gives both counts.
  */
 export const JOURNAL_LONE_SURROGATES_REPLACED_MAPPER_SUFFIX = "+lone-surrogates-replaced-v1";
+
+/**
+ * Appended to the engine's capture-shape version when the journal body had
+ * any U+0000 replaced, after `+lone-surrogates-replaced-v1` when both apply.
+ */
+export const JOURNAL_NUL_REPLACED_MAPPER_SUFFIX = "+nul-replaced-v1";
 
 /** The run note's `details.code`. An info note, never an anomaly: the capture
  *  succeeded and the page is healthy. */
@@ -49,4 +70,16 @@ export const JOURNAL_LONE_SURROGATES_REPLACED_NOTE_CODE = "journal_lone_surrogat
 export function replaceJournalLoneSurrogates<T>(value: T): { value: T; replaced: number } {
   const replaced = countLoneSurrogatesDeep(value);
   return { value: replaced === 0 ? value : sanitizeLoneSurrogatesDeep(value), replaced };
+}
+
+/**
+ * The engine's journal form of `value` (bug hunt Д3): every unpaired surrogate
+ * and every U+0000, in values and object keys alike, replaced by U+FFFD, with
+ * both counts. With nothing to replace it is `value` itself (one walk, no
+ * copy); otherwise a deep copy, and `value` is left as it was.
+ */
+export function replaceJournalUnstorableText<T>(value: T): { value: T; loneSurrogates: number; nul: number } {
+  const found = countPostgresUnstorableDeep(value);
+  const replaced = found.loneSurrogates + found.nul > 0;
+  return { value: replaced ? sanitizePostgresTextDeep(value) : value, ...found };
 }

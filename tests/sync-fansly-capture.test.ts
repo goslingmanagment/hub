@@ -46,7 +46,7 @@ const { FANSLY_MAPPER_VERSION } = await import("@agency_hub_core/fansly");
 const shared = await import("../apps/runtime/src/services/sync/shared.ts");
 const trims = await import("../apps/runtime/src/sync/fansly/lib/capture-trims.ts");
 const { FANSLY_STATS_MAPPER_VERSION } = await import("../apps/runtime/src/sync/fansly/lib/stats-rules.ts");
-const { prepareJournalBody } = await import("../apps/runtime/src/sync/fansly/capture.ts");
+const { fanslyCaptureCodec, prepareJournalBody } = await import("../apps/runtime/src/sync/fansly/capture.ts");
 
 const SIGNED = "https://cdn3.fansly.com/700000000000000001/800000000000000001.jpeg"
   + "?ngsw-bypass=true&Policy=eyJTdGF0ZW1lbnQiOltdfQ__&Key-Pair-Id=KTESTPAIR01&Signature=abc~DEF_ghi-1";
@@ -207,6 +207,41 @@ describe("prepareJournalBody", () => {
     const clean = prepareJournalBody({ kind: "group_detail" }, { response: body });
     expect(clean).toMatchObject({ loneSurrogatesReplaced: 0, mapperVersion: FANSLY_MAPPER_VERSION });
     expect(clean.payload).toBe(body);
+  });
+
+  it("replaces a NUL and says so in the capture-shape version (bug hunt Д3)", () => {
+    const nul = prepareJournalBody({ kind: "group_detail" }, { response: { id: "1", name: "a\u0000b", "k\u0000": 1 } });
+    expect(nul.nulReplaced).toBe(2);
+    expect(nul.loneSurrogatesReplaced).toBe(0);
+    expect(nul.mapperVersion).toBe(`${FANSLY_MAPPER_VERSION}+nul-replaced-v1`);
+    expect(nul.payload).toEqual({ id: "1", name: "a�b", "k�": 1 });
+    expect(nul.payloadHash.equals(createHash("sha256").update(JSON.stringify(nul.payload)).digest())).toBe(true);
+    // Both: the surrogate suffix first, then the NUL one.
+    const both = servedBodies().dm_messages as { response?: unknown };
+    const withNul = { ...(both as Record<string, unknown>), extra: "x\u0000" };
+    const prepared = prepareJournalBody({ kind: "dm_messages" }, { response: withNul });
+    expect(prepared).toMatchObject({ loneSurrogatesReplaced: 1, nulReplaced: 1 });
+    expect(prepared.mapperVersion).toBe(`${FANSLY_MAPPER_VERSION}+lone-surrogates-replaced-v1+nul-replaced-v1`);
+    // A clean body has neither.
+    expect(prepareJournalBody({ kind: "group_detail" }, { response: servedBodies().group_detail }))
+      .toMatchObject({ nulReplaced: 0, loneSurrogatesReplaced: 0, mapperVersion: FANSLY_MAPPER_VERSION });
+  });
+
+  it("the production capture codec no longer hands jsonb the \\u0000 escape (bug hunt Д3)", () => {
+    const body = { success: true, response: [{ id: "1", content: "hi\u0000there" }] };
+    const journal = fanslyCaptureCodec.prepare({
+      spec: "messages.page" as never,
+      kind: "dm_messages",
+      response: body,
+      contractAccepted: true,
+      request: { spec: "messages.page", params: {} } as never,
+      ownRef: "1",
+      module: {} as never,
+    });
+    expect(JSON.stringify(journal)).not.toContain("\\u0000");
+    expect(JSON.stringify(journal)).toContain("hi�there");
+    // The served object is untouched.
+    expect(body.response[0]!.content).toBe("hi\u0000there");
   });
 
   it("wraps a reply page in its walk envelope, and refuses one without the walk", () => {

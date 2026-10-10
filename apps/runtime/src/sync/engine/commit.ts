@@ -16,6 +16,7 @@ import {
   insertAuditEvent,
   insertObservation,
   listUnfinishedAttempts,
+  listWorksWithUnknownAttemptStreak,
   lockAttemptForApply,
   lockOwnedPage,
   lockWorkRows,
@@ -40,6 +41,9 @@ import {
   skipAttemptApply,
   writeSyncRouteState,
   SYNC_APPLY_ERROR_PAYLOAD_UNAVAILABLE,
+  SYNC_QUARANTINE_UNKNOWN_REPEATED,
+  SYNC_UNKNOWN_ATTEMPTS_TO_QUARANTINE,
+  SYNC_UNKNOWN_ATTEMPTS_WINDOW_MS,
   tryAcquireDmArchiveWriterFenceLock,
   upsertDemands,
   type Database,
@@ -47,6 +51,7 @@ import {
   type SettleWorkResult,
   type SyncAttemptRow,
   type SyncPageRow,
+  type SyncUnknownAttemptStreak,
   type SyncWorkRow,
   type UpsertDemandInput,
 } from "@agency_hub_core/db";
@@ -60,12 +65,16 @@ import {
   type FanslyWireRead,
   type FanslyWireRequest,
 } from "@agency_hub_core/fansly";
-import { proofClearsCredentialsHold, type FanslyPageHoldOperation } from "@agency_hub_core/shared";
+import {
+  countPostgresUnstorableDeep,
+  proofClearsCredentialsHold,
+  type FanslyPageHoldOperation,
+} from "@agency_hub_core/shared";
 
 import { isCapturePayloadUnavailable, resolveCapturePayloadRow } from "../../services/payload-reader.ts";
 import { WrongTransactionsWriterError } from "../../services/transactions-writer-gate.ts";
 import { fanslyCdnTokenStripApplies, stripFanslySignedCdnTokens } from "../fansly/lib/cdn-tokens.ts";
-import { replaceJournalLoneSurrogates } from "../fansly/lib/journal-lone-surrogates.ts";
+import { replaceJournalUnstorableText } from "../fansly/lib/journal-lone-surrogates.ts";
 import { routeOfWireId } from "../fansly/routes.ts";
 import { holdSetOf, whyHeld, type HoldSet } from "./admission.ts";
 import {
@@ -117,6 +126,20 @@ import type { WorkClass } from "./scheduler.ts";
 //
 // Lock order (design §3.7): sync_pages → erasure fence → hot tables →
 // domain_event_seq → sync_work → history_requests → history_request_items.
+//
+// A step that ends without an outcome is counted (bug hunt Д3/У2). A read
+// whose capture never commits (jsonb refusing a character, our own capture
+// code throwing, a process that dies with the answer in hand) leaves its
+// attempt to recovery, which closes it `unknown`: the read is repeated once,
+// and a work whose two newest attempts were closed so within 10 min is
+// quarantined (`unknown_repeated`, alert 2) instead of being read a third
+// time — the attempt says why when the actor could (`commit_failed:<class>`).
+// A plan that throws, a local write that fails and is retried, an in-memory
+// answer whose apply fails and is read again, and an attempt recovered
+// `unknown` go on with the work's series of steps without an outcome
+// (`sync_work.failing_since`); any step with an outcome ends it. Alert 4
+// (`step_failing`) pages a series older than 5 min that no pause or hold
+// explains.
 
 /** Where a test may crash the actor (design §10, `sync-commit-crash`). */
 export type SyncFaultPoint = "after_admit" | "after_send" | "after_capture" | "in_apply" | "after_apply";
@@ -198,14 +221,15 @@ export interface CaptureCodec {
 /**
  * The engine's journal transform: the resource's own trim, then the signed CDN
  * tokens stripped for the kinds the legacy journal strips them for, then every
- * unpaired UTF-16 surrogate replaced (json/jsonb refuse one). The served object
- * is never mutated. It adds no envelope, so the journal body is the answer.
+ * unpaired UTF-16 surrogate and every U+0000 replaced (json/jsonb refuse
+ * both, text the NUL). The served object is never mutated. It adds no
+ * envelope, so the journal body is the answer.
  */
 export const defaultCaptureCodec: CaptureCodec = {
   prepare({ kind, response, module }) {
     let body = module.journal === undefined ? response : module.journal(response);
     if (fanslyCdnTokenStripApplies("fansly", kind)) body = stripFanslySignedCdnTokens(body);
-    return replaceJournalLoneSurrogates(body).value;
+    return replaceJournalUnstorableText(body).value;
   },
   served({ payload }) {
     return payload;
@@ -611,14 +635,17 @@ export async function commitNoHttp(
     await lockOwnedPage(tx, { pageId: d.pageId, generation: d.generation, lock: "no_key_update" });
     switch (plan.kind) {
       case "done": {
-        const settled = await settleWork(tx, settleInputOf(d, work, spec, {
-          close: "done",
-          closeReason: plan.reason,
-          satisfiesRevision: true,
-          ...(plan.cursor === undefined ? {} : { cursor: plan.cursor }),
-          ...(plan.proof === undefined ? {} : { proof: plan.proof }),
-          ...(plan.result === undefined ? {} : { result: plan.result }),
-        }, work.demandRevision, page, now));
+        const settled = await settleWork(tx, {
+          ...settleInputOf(d, work, spec, {
+            close: "done",
+            closeReason: plan.reason,
+            satisfiesRevision: true,
+            ...(plan.cursor === undefined ? {} : { cursor: plan.cursor }),
+            ...(plan.proof === undefined ? {} : { proof: plan.proof }),
+            ...(plan.result === undefined ? {} : { result: plan.result }),
+          }, work.demandRevision, page, now),
+          stepFailed: false,
+        });
         await afterSettle(tx, d, work, settled, plan.reason);
         return;
       }
@@ -632,6 +659,7 @@ export async function commitNoHttp(
           nextDueAt: until,
           waitingReason: plan.reason,
           waitingUntil: until,
+          stepFailed: false,
         });
         const upserts = upsertsOf(d, plan.enqueue ?? [], page, now);
         if (upserts.length > 0) await upsertDemands(tx, upserts);
@@ -724,6 +752,7 @@ export async function applyLocal(d: CommitDeps, work: SyncWorkRow, module: Resou
       const done = await settleWork(tx, {
         ...settleInputOf(d, work, spec, result.work, work.demandRevision, page, now),
         lastErrorClass: null,
+        stepFailed: false,
       });
       if (done === null) throw new ApplyDeferred("work_not_open");
       const upserts = upsertsOf(d, result.followups, page, now);
@@ -782,6 +811,7 @@ async function recordLocalError(d: CommitDeps, work: SyncWorkRow, error: unknown
       waitingReason: "dependency",
       waitingUntil: until,
       lastErrorClass: `local:${name}`,
+      stepFailed: true,
     });
   });
   d.metrics.increment("sync_apply_errors", { kind, error: name, local: true });
@@ -880,7 +910,8 @@ async function supersedeQuarantinedVerify(
 }
 
 /** A plan threw: the work waits a minute (an unexpected error of a module
- *  never stops the page). */
+ *  never stops the page) and its series of steps without an outcome goes on
+ *  (`failing_since`: alert 4's `step_failing` after 5 min). */
 export async function deferAfterPlanError(d: CommitDeps, work: SyncWorkRow, error: unknown): Promise<void> {
   d.metrics.increment("sync_plan_errors", { resource: work.resource });
   d.logger.error({ pageId: d.pageId, workId: work.id, resource: work.resource, err: errorName(error) },
@@ -897,6 +928,7 @@ export async function deferAfterPlanError(d: CommitDeps, work: SyncWorkRow, erro
       waitingReason: "dependency",
       waitingUntil: until,
       lastErrorClass: `plan:${errorName(error)}`,
+      stepFailed: true,
     });
   });
 }
@@ -923,7 +955,7 @@ function failedBody(outcome: Extract<FanslyWireOutcome, { kind: "response" }>): 
   const text = outcome.bodyText.length > MAX_FAILED_BODY_CHARS
     ? outcome.bodyText.slice(0, MAX_FAILED_BODY_CHARS)
     : outcome.bodyText;
-  return replaceJournalLoneSurrogates({
+  return replaceJournalUnstorableText({
     status: outcome.status,
     contentType: outcome.headers["content-type"] ?? null,
     retryAfter: outcome.headers["retry-after"] ?? null,
@@ -1154,10 +1186,25 @@ export async function capture(
   }
   await openAlerts(d, alerts, { resource: admission.work.resource, attemptId: admission.attemptId });
   const applyNow = committed.decision.work.action === "apply";
+  // An answer the journal codec had to change (a U+0000 or an unpaired
+  // surrogate became U+FFFD, bug hunt Д3) is applied from its journal copy,
+  // never from the served object: the projection then stores what the journal
+  // holds, and no text or jsonb write of the apply meets the character.
+  const fromJournal = applyNow && journaled !== null && read !== null && read.kind === "accepted" &&
+    hasUnstorableText(read.response);
   return {
     applyNow,
-    inMemory: applyNow && read !== null && read.kind === "accepted" ? { response: read.response, parsed: read.value } : null,
+    inMemory: applyNow && !fromJournal && read !== null && read.kind === "accepted"
+      ? { response: read.response, parsed: read.value }
+      : null,
   };
+}
+
+/** Whether a served answer holds text Postgres cannot store as is (a U+0000
+ *  or an unpaired surrogate, in a value or a key). */
+function hasUnstorableText(response: unknown): boolean {
+  const found = countPostgresUnstorableDeep(response);
+  return found.nul + found.loneSurrogates > 0;
 }
 
 /**
@@ -1288,6 +1335,7 @@ async function writeOutcomeDecision(
         waitingUntil: next.waitingUntil,
         lastErrorClass: decision.attemptErrorClass,
         ...(breaker === undefined ? {} : { breaker }),
+        stepFailed: false,
       });
       return;
     case "quarantine":
@@ -1318,6 +1366,7 @@ async function writeOutcomeDecision(
         ...(next.waitingUntil === undefined ? {} : { waitingUntil: next.waitingUntil }),
         ...terminal,
         ...(breaker === undefined ? {} : { breaker }),
+        stepFailed: false,
       });
       await afterSettle(tx, d, work, settled, next.closeReason);
       return;
@@ -1599,6 +1648,7 @@ async function settleApplied(
   const settled = await settleWork(tx, {
     ...settle,
     lastErrorClass: null,
+    stepFailed: false,
     ...(breakerSet && spec.subjectQueue !== true
       ? { breaker: { failureCount: 0, breakerUntil: null, blockedByVendorAt: null } }
       : {}),
@@ -1706,17 +1756,23 @@ async function recordApplyError(d: CommitDeps, attemptId: number, error: unknown
     if (answerInMemory && (kind === "deferred" || kind === "transient")) {
       // An answer that lived in memory only has nothing to be re-applied
       // from: the attempt is skipped and its work is read again, as a new
-      // admission, once the retry delay passed.
+      // admission, once the retry delay passed. The delay climbs the ladder by
+      // the age of the work's series of failed steps, not by the age of this
+      // answer (always fresh: a retry every second, bug hunt Д3), and the
+      // series goes on.
       await skipAttemptApply(tx, { attemptId, error: name });
       if (attempt.workId !== null) {
+        const work = await getSyncWork(tx, attempt.workId);
+        const failingForMs = Math.max(0, now.getTime() - (work?.failingSince ?? now).getTime());
         await settleWork(tx, {
           workId: attempt.workId,
           generation: d.generation,
           servedRevision: attempt.demandRevision ?? 0,
           satisfiesRevision: false,
-          nextDueAt: new Date(now.getTime() + retryInMs),
+          nextDueAt: new Date(now.getTime() + deferredRetryInMs(failingForMs)),
           waitingReason: null,
           lastErrorClass: `apply:${name}`,
+          stepFailed: true,
         });
       }
       return { quarantined: false, alerts: [] };
@@ -1836,18 +1892,62 @@ export async function drainDueApplies(d: CommitDeps, max: number): Promise<numbe
 
 // ── recovery ────────────────────────────────────────────────────────────────
 
+/** What recovery did; `quarantined`: the works it stopped reading
+ *  (`unknown_repeated`). */
+export type RecoverUnfinishedResult = RecoverUnfinishedAttemptsResult & { quarantined: SyncUnknownAttemptStreak[] };
+
 /**
  * Recovery at actor start (design §3.7.5), under the new generation: unfinished
  * attempts become `unknown` (the read is repeated as a new attempt; the
  * takeover floor covers a possible send), running work without a pending
  * apply opens again, and pending applies are due now (applied by
  * `drainDueApplies` before any admission).
+ *
+ * The request limiter (bug hunt Д3), in the same transaction: a work whose
+ * two newest attempts are now `unknown`, the older admitted within 10 min, is
+ * not read a third time — it is quarantined (`unknown_repeated`, the attempts
+ * and their error classes as its detail, the newer attempt named), and alert 2
+ * opens after the commit. A single `unknown` (one crash) is read again once.
  */
-export async function recoverUnfinished(d: CommitDeps): Promise<RecoverUnfinishedAttemptsResult> {
-  return inTx(d.db, async (tx) => {
+export async function recoverUnfinished(d: CommitDeps): Promise<RecoverUnfinishedResult> {
+  const recovered = await inTx(d.db, async (tx): Promise<RecoverUnfinishedResult> => {
     await lockOwnedPage(tx, { pageId: d.pageId, generation: d.generation, lock: "no_key_update" });
-    return recoverUnfinishedAttempts(tx, { pageId: d.pageId, answerInMemoryOperations: ANSWER_IN_MEMORY_OPERATIONS });
+    const result = await recoverUnfinishedAttempts(tx, { pageId: d.pageId, answerInMemoryOperations: ANSWER_IN_MEMORY_OPERATIONS });
+    const streaks = await listWorksWithUnknownAttemptStreak(tx, {
+      pageId: d.pageId,
+      workIds: result.unknownWorkIds,
+      streak: SYNC_UNKNOWN_ATTEMPTS_TO_QUARANTINE,
+      withinMs: SYNC_UNKNOWN_ATTEMPTS_WINDOW_MS,
+    });
+    const quarantined: SyncUnknownAttemptStreak[] = [];
+    for (const streak of streaks) {
+      const stopped = await quarantineWork(tx, {
+        workId: streak.workId,
+        generation: d.generation,
+        errorClass: SYNC_QUARANTINE_UNKNOWN_REPEATED,
+        detail: { attempts: streak.attemptIds, errorClasses: streak.errorClasses },
+        attemptId: streak.attemptIds[0] ?? null,
+      });
+      if (stopped) quarantined.push(streak);
+    }
+    return { ...result, quarantined };
   });
+  for (const work of recovered.quarantined) {
+    d.logger.error({
+      pageId: d.pageId,
+      workId: work.workId,
+      resource: work.resource,
+      attempts: work.attemptIds,
+      errorClasses: work.errorClasses,
+    }, "Fansly sync: a read that never recorded its answer twice in a row is quarantined, not read again");
+    await openAlerts(d, [{ subKey: "live_degraded", detail: "quarantined" }], {
+      resource: work.resource,
+      workId: work.workId,
+      reason: SYNC_QUARANTINE_UNKNOWN_REPEATED,
+      errorClasses: work.errorClasses,
+    });
+  }
+  return recovered;
 }
 
 // ── alerts ──────────────────────────────────────────────────────────────────

@@ -857,6 +857,12 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # `exhausted`, and honours any max_attempts (without stopping on the first
   # failure it sends in a row again, but loses nothing). No data to repair.
   "0263_notification_outbox_reported_in.sql"
+  # Д3/У2 (a step without an outcome is counted): one nullable column on
+  # sync_work without a default (catalog only); the previous image never names
+  # it (it inserts and updates sync_work by named columns); its quarantine
+  # reads `unknown_repeated` as any quarantined row (alert 2, requeue), and
+  # its recovery repeats an `unknown` read without the limiter, as before.
+  "0264_sync_work_failing_since.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

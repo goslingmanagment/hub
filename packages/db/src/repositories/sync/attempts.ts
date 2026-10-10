@@ -64,6 +64,16 @@ export const SYNC_TAKEOVER_FACTOR = 1.2;
 export const SYNC_PACE_AUDIT_LOOKBACK_MS = 300_000;
 /** Generic apply errors before the attempt and its work are quarantined (§3.7.3). */
 export const SYNC_APPLY_FAILURES_TO_QUARANTINE = 3;
+/** Bug hunt Д3: a work whose this many newest attempts recovery closed
+ *  `unknown` (a read whose capture never committed, a process that died with
+ *  it in flight) … */
+export const SYNC_UNKNOWN_ATTEMPTS_TO_QUARANTINE = 2;
+/** … the oldest of them admitted within this window, is quarantined by the
+ *  recovery instead of being read a third time. Two unrelated crashes on one
+ *  work rarely fall within it; a real loop repeats within seconds. */
+export const SYNC_UNKNOWN_ATTEMPTS_WINDOW_MS = 600_000;
+/** The quarantine reason (`sync_work.last_error_class`) of such a work. */
+export const SYNC_QUARANTINE_UNKNOWN_REPEATED = "unknown_repeated";
 
 export interface SyncAttemptRow {
   id: number;
@@ -289,6 +299,28 @@ export async function insertAdmission(
     throw new OwnershipLostError(input.pageId, input.generation, found ? BigInt(found.generation) : null);
   }
   return { attemptId: Number(row.attemptId), admittedAt: toRequiredDate(row.admittedAt) };
+}
+
+/**
+ * Best effort when the actor gives up on a commit after the request (its
+ * capture, or the settle of a refusal before sending, kept failing; bug hunt
+ * Д3): why, as `commit_failed:<SQLSTATE|error name>`, on the attempt still
+ * `admitted`/`sent` that has no error class yet. Its own transaction, without
+ * the generation fence, like `markAttemptSent`; recovery closes the attempt
+ * `unknown` and keeps the class. False: nothing was marked.
+ */
+export async function markAttemptCommitFailed(
+  db: Database,
+  input: { attemptId: number; errorClass: string },
+): Promise<boolean> {
+  const result = await db.execute(sql`
+    update sync_attempts
+       set error_class = ${input.errorClass}::text
+     where id = ${input.attemptId}
+       and outcome in ('admitted', 'sent')
+       and error_class is null
+  `);
+  return (result.rowCount ?? 0) > 0;
 }
 
 /** Best effort right after onRequestStart (never awaited by the send): the
@@ -545,6 +577,8 @@ export async function listUnfinishedAttempts(
 export interface RecoverUnfinishedAttemptsResult {
   /** Attempts admitted or sent by a previous run: outcome `unknown`. */
   unknown: number;
+  /** The work rows of those attempts (distinct, ascending). */
+  unknownWorkIds: number[];
   /** Captured answers that lived in memory only: `skipped`, their work open again. */
   memorySkipped: number;
   /** Running work rows whose attempt ended without anything to apply: open again. */
@@ -559,7 +593,10 @@ export interface RecoverUnfinishedAttemptsResult {
  * `unknown` (the read is safe to repeat as a NEW attempt; the takeover floor
  * already covers its possible send), running work without a pending apply
  * opens again, and pending applies are due now — "сбой между (3) и (4)
- * доприменяется из сохранённого ответа без нового HTTP".
+ * доприменяется из сохранённого ответа без нового HTTP". A row it opens whose
+ * last attempt it closed `unknown` goes on with its series of steps without an
+ * outcome (`failing_since`, bug hunt Д3); the caller decides whether that
+ * row is read again (`listWorksWithUnknownAttemptStreak`).
  */
 export async function recoverUnfinishedAttempts(
   db: Database,
@@ -572,12 +609,17 @@ export async function recoverUnfinishedAttempts(
   },
 ): Promise<RecoverUnfinishedAttemptsResult> {
   const inMemory = textArrayParam(input.answerInMemoryOperations ?? []);
-  const result = await db.execute<{ unknown: number; memorySkipped: number; appliesDue: number }>(sql`
+  const result = await db.execute<{
+    unknown: number;
+    unknownWorkIds: string[] | null;
+    memorySkipped: number;
+    appliesDue: number;
+  }>(sql`
     with live_unknown as (
       update sync_attempts
          set outcome = 'unknown', completed_at = clock_timestamp()
        where page_id = ${input.pageId} and not shadow and outcome in ('admitted', 'sent')
-      returning id
+      returning id, work_id
     ), memory_skipped as (
       update sync_attempts
          set apply_state = 'skipped', apply_error = 'answer_lost_at_restart', apply_retry_at = null
@@ -592,6 +634,8 @@ export async function recoverUnfinishedAttempts(
       returning id
     )
     select (select count(*) from live_unknown)::int as unknown,
+           (select array_agg(distinct work_id order by work_id)::text[]
+              from live_unknown where work_id is not null) as "unknownWorkIds",
            (select count(*) from memory_skipped)::int as "memorySkipped",
            (select count(*) from applies_due)::int as "appliesDue"
   `);
@@ -601,6 +645,9 @@ export async function recoverUnfinishedAttempts(
        set state = 'open',
            waiting_reason = null,
            waiting_until = null,
+           failing_since = case when exists (
+               select 1 from sync_attempts u where u.id = w.last_attempt_id and u.outcome = 'unknown')
+             then coalesce(w.failing_since, clock_timestamp()) else w.failing_since end,
            updated_at = clock_timestamp()
      where w.page_id = ${input.pageId}
        and w.state = 'running'
@@ -613,10 +660,78 @@ export async function recoverUnfinishedAttempts(
   const row = result.rows[0];
   return {
     unknown: Number(row?.unknown ?? 0),
+    unknownWorkIds: (row?.unknownWorkIds ?? []).map(Number),
     memorySkipped: Number(row?.memorySkipped ?? 0),
     workReopened: reopened.rowCount ?? 0,
     appliesDue: Number(row?.appliesDue ?? 0),
   };
+}
+
+/** A work whose newest attempts were all closed `unknown`
+ *  (`listWorksWithUnknownAttemptStreak`). */
+export interface SyncUnknownAttemptStreak {
+  workId: number;
+  resource: string;
+  subject: string;
+  /** The streak's attempts, newest first. */
+  attemptIds: number[];
+  /** Their error classes in the same order (`commit_failed:…` when the actor
+   *  could say why; null when it could not). */
+  errorClasses: Array<string | null>;
+}
+
+/**
+ * The request limiter's read (bug hunt Д3), in the recovery's transaction:
+ * of the given work rows (those of the attempts the recovery just closed
+ * `unknown`), the open or running ones whose `streak` newest attempts are all
+ * `unknown` and the oldest of those was admitted within `withinMs` (database
+ * clock). Such a read never recorded its answer twice in a row: reading it a
+ * third time would repeat the loop. One short scan of `sync_attempts_work`
+ * per row.
+ */
+export async function listWorksWithUnknownAttemptStreak(
+  db: Database,
+  input: { pageId: number; workIds: readonly number[]; streak: number; withinMs: number },
+): Promise<SyncUnknownAttemptStreak[]> {
+  const ids = [...new Set(input.workIds)].filter((id) => Number.isSafeInteger(id) && id > 0);
+  const streak = Math.max(1, Math.trunc(input.streak));
+  if (ids.length === 0) return [];
+  const result = await db.execute<{
+    workId: string;
+    resource: string;
+    subject: string;
+    attemptIds: string[];
+    errorClasses: Array<string | null>;
+  }>(sql`
+    select w.id::text as "workId", w.resource, w.subject,
+           array_agg(a.id::text order by a.id desc) as "attemptIds",
+           array_agg(a.error_class order by a.id desc) as "errorClasses"
+      from sync_work w
+     cross join lateral (
+       select a.id, a.outcome, a.error_class, a.admitted_at
+         from sync_attempts a
+        where a.work_id = w.id
+          and not a.shadow
+        order by a.id desc
+        limit ${streak}
+     ) a
+     where w.id = any(${sql.param(ids.map(String))}::bigint[])
+       and w.page_id = ${input.pageId}
+       and not w.shadow
+       and w.state in ('open', 'running')
+     group by w.id, w.resource, w.subject
+    having count(*) = ${streak}
+       and bool_and(a.outcome = 'unknown')
+       and min(a.admitted_at) > clock_timestamp() - ${Math.max(0, input.withinMs)}::double precision * interval '1 millisecond'
+     order by w.id
+  `);
+  return result.rows.map((row) => ({
+    workId: Number(row.workId),
+    resource: row.resource,
+    subject: row.subject,
+    attemptIds: row.attemptIds.map(Number),
+    errorClasses: row.errorClasses.map((value) => value ?? null),
+  }));
 }
 
 /**

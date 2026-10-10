@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { sanitizeLoneSurrogatesDeep, sanitizePostgresText, truncateUtf16Safe } from "@agency_hub_core/shared";
+import {
+  countPostgresUnstorableDeep,
+  sanitizeLoneSurrogatesDeep,
+  sanitizePostgresText,
+  sanitizePostgresTextDeep,
+  truncateUtf16Safe,
+} from "@agency_hub_core/shared";
 
 // 2026-07-11 deploy-night find: a reply-preview slice cut an emoji in half;
 // the lone high surrogate made Postgres reject the derived sync_event jsonb
@@ -58,5 +64,38 @@ describe("sanitizePostgresText", () => {
     expect(sanitizePostgresText(plain)).toBe(plain);
     // What jsonb refuses: a lone surrogate escape or a NUL escape.
     expect(JSON.stringify(sanitizePostgresText("a\ud83d\u0000b"))).not.toMatch(/\\u(d[89ab]|0000)/i);
+  });
+});
+
+describe("sanitizePostgresTextDeep and countPostgresUnstorableDeep (bug hunt Д3)", () => {
+  it("replace and count unpaired surrogates and NUL in values and keys, keep everything else", () => {
+    const body = {
+      text: "whole 🥰 pair, tab\there",
+      "key\u0000": ["a\u0000b", "lone \ud83d", 5, null, true],
+      nested: { deeper: "\u0000\u0000", "\udfffk": "ok" },
+    };
+    const snapshot = JSON.stringify(body);
+    expect(countPostgresUnstorableDeep(body)).toEqual({ loneSurrogates: 2, nul: 4 });
+    const clean = sanitizePostgresTextDeep(body);
+    expect(clean).toEqual({
+      text: "whole 🥰 pair, tab\there",
+      "key�": ["a�b", "lone �", 5, null, true],
+      nested: { deeper: "��", "�k": "ok" },
+    });
+    expect(countPostgresUnstorableDeep(clean)).toEqual({ loneSurrogates: 0, nul: 0 });
+    expect(JSON.stringify(clean)).not.toMatch(/\\u(d[89ab]|0000)/i);
+    // The input is never mutated.
+    expect(JSON.stringify(body)).toBe(snapshot);
+  });
+
+  it("pass primitives through and keep a parsed __proto__ key as data", () => {
+    expect(sanitizePostgresTextDeep(5)).toBe(5);
+    expect(sanitizePostgresTextDeep(null)).toBeNull();
+    expect(countPostgresUnstorableDeep("plain")).toEqual({ loneSurrogates: 0, nul: 0 });
+    expect(countPostgresUnstorableDeep(undefined)).toEqual({ loneSurrogates: 0, nul: 0 });
+    const parsed = JSON.parse('{"__proto__":{"a":"x\\u0000"}}') as Record<string, unknown>;
+    const clean = sanitizePostgresTextDeep(parsed);
+    expect(Object.getPrototypeOf(clean)).toBe(Object.prototype);
+    expect(JSON.stringify(clean)).toBe('{"__proto__":{"a":"x�"}}');
   });
 });

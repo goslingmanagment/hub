@@ -74,8 +74,10 @@ export interface SyncJournalAlertFacts {
     breakerUntil: Date | null;
     waitingReason: string | null;
   }>;
-  /** The page's poll rows (one per poll key). */
-  polls: Array<{ resource: string; lastServedAt: Date | null; createdAt: Date }>;
+  /** The page's poll rows (one per poll key), each with its newest applied
+   *  answer (null: none yet) — an admission whose answer never applied is no
+   *  progress (bug hunt Д3/У2). */
+  polls: Array<{ resource: string; lastAppliedAt: Date | null; createdAt: Date }>;
   /** The last certified round of the page's `transactions.rescan` (its
    *  standing poll row keeps that round's receipt in `proof`; a withheld round
    *  leaves it) proved the ledger short of the vendor's lifetime total:
@@ -112,7 +114,8 @@ export function rescanLedgerShortfall(proof: unknown): SyncJournalAlertFacts["le
 
 /**
  * The journal facts of one page's alerts 1, 2 (quarantine), 3 (urgent wait)
- * and 4 (design §9.6), as of the database clock.
+ * and 4 (design §9.6), as of the database clock. Alert 4's steps without an
+ * outcome are a part of their own (`readSyncStepAlertFacts`).
  */
 export async function readSyncJournalAlertFacts(
   db: Database,
@@ -149,8 +152,14 @@ export async function readSyncJournalAlertFacts(
      order by ${urgentWaitingSinceSql}, w.id
      limit 200
   `);
-  const polls = await db.execute<{ resource: string; lastServedAt: Date | string | null; createdAt: Date | string }>(sql`
-    select w.resource, w.last_served_at as "lastServedAt", w.created_at as "createdAt"
+  // The newest applied answer of each poll (`sync_attempts_work`): a poll
+  // admitted again and again without an applied answer is stale too.
+  const polls = await db.execute<{ resource: string; lastAppliedAt: Date | string | null; createdAt: Date | string }>(sql`
+    select w.resource,
+           (select a.applied_at
+              from sync_attempts a
+             where a.work_id = w.id and a.apply_state = 'applied' order by a.id desc limit 1) as "lastAppliedAt",
+           w.created_at as "createdAt"
       from sync_work w
      where w.page_id = ${input.pageId}
        and not w.shadow
@@ -223,7 +232,7 @@ export async function readSyncJournalAlertFacts(
     })),
     polls: polls.rows.map((row) => ({
       resource: row.resource,
-      lastServedAt: toDate(row.lastServedAt),
+      lastAppliedAt: toDate(row.lastAppliedAt),
       createdAt: toRequiredDate(row.createdAt),
     })),
     ledgerIncomplete: rescanLedgerShortfall(ledger.rows[0]?.proof ?? null),
@@ -235,6 +244,83 @@ export async function readSyncJournalAlertFacts(
       requestRef: row.requestRef,
       lastServedAt: toDate(row.lastServedAt),
       createdAt: toRequiredDate(row.createdAt),
+    })),
+  };
+}
+
+/** What alert 4 reads of the page's steps that end without an outcome (bug
+ *  hunt Д3/У2). */
+export interface SyncStepAlertFacts {
+  /** Open or running work whose series of steps without an outcome
+   *  (`failing_since`) began more than `failingAfterMs` ago: ONE row per key,
+   *  the oldest series first — the rule drops the keys a pause or a hold
+   *  explains after the read, so however many works one key has never hide
+   *  another key. */
+  failing: Array<{ resource: string; works: number; failingSince: Date; errorClasses: string[] }>;
+  /** Captured or deferred applies admitted more than `applyPendingAfterMs`
+   *  ago (`sync check live-hour`'s `applyPending` rule), by id, at most 200. */
+  applyPending: Array<{ resource: string; subject: string; attemptId: number; admittedAt: Date; applyError: string | null }>;
+}
+
+/**
+ * The step facts of one page's alert 4 (bug hunt Д3/У2), as of the database
+ * clock: the keys whose works keep failing without an outcome, and the
+ * answers whose apply has been pending too long. Two short reads: the page's
+ * open and running work (`sync_work_open_uniq`) grouped by key, and the
+ * partial index of unfinished attempts.
+ */
+export async function readSyncStepAlertFacts(
+  db: Database,
+  input: { pageId: number; failingAfterMs: number; applyPendingAfterMs: number },
+): Promise<SyncStepAlertFacts> {
+  const failing = await db.execute<{
+    resource: string;
+    works: number;
+    failingSince: Date | string;
+    errorClasses: string[] | null;
+  }>(sql`
+    select w.resource,
+           count(*)::int as works,
+           min(w.failing_since) as "failingSince",
+           array_remove(array_agg(distinct w.last_error_class), null) as "errorClasses"
+      from sync_work w
+     where w.page_id = ${input.pageId}
+       and not w.shadow
+       and w.state in ('open', 'running')
+       and w.failing_since < statement_timestamp() - ${input.failingAfterMs}::double precision * interval '1 millisecond'
+     group by w.resource
+     order by min(w.failing_since), w.resource
+     limit 200
+  `);
+  const pending = await db.execute<{
+    resource: string;
+    subject: string;
+    attemptId: string;
+    admittedAt: Date | string;
+    applyError: string | null;
+  }>(sql`
+    select a.resource, a.subject, a.id::text as "attemptId", a.admitted_at as "admittedAt", a.apply_error as "applyError"
+      from sync_attempts a
+     where a.page_id = ${input.pageId}
+       and not a.shadow
+       and a.apply_state in ('captured', 'deferred')
+       and a.admitted_at < statement_timestamp() - ${input.applyPendingAfterMs}::double precision * interval '1 millisecond'
+     order by a.id
+     limit 200
+  `);
+  return {
+    failing: failing.rows.map((row) => ({
+      resource: row.resource,
+      works: Number(row.works),
+      failingSince: toRequiredDate(row.failingSince),
+      errorClasses: row.errorClasses ?? [],
+    })),
+    applyPending: pending.rows.map((row) => ({
+      resource: row.resource,
+      subject: row.subject,
+      attemptId: Number(row.attemptId),
+      admittedAt: toRequiredDate(row.admittedAt),
+      applyError: row.applyError,
     })),
   };
 }

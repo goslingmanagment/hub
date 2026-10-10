@@ -96,6 +96,15 @@ describe("Fansly Sync Engine repository boundaries", () => {
     ]);
   });
 
+  it("writes sync_work.failing_since only in the work and attempt repositories (bug hunt Д3/У2)", () => {
+    // `settleWork` (the engine's steps), `requeueQuarantinedWork` (the owner)
+    // and `recoverUnfinishedAttempts` (recovery) — no other writer.
+    expect(filesMatching("failing_since =", SOURCES)).toEqual([
+      "packages/db/src/repositories/sync/attempts.ts",
+      "packages/db/src/repositories/sync/work.ts",
+    ]);
+  });
+
   it("reads the step-1 guard owner (0229) in the live gate", () => {
     expect(filesMatching("g\\.owner_engine as \"ownerEngine\"", ["packages/db/src/repositories/sync"])).toEqual([
       "packages/db/src/repositories/sync/pages.ts",
