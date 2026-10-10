@@ -940,7 +940,12 @@ release_remote_deploy_lock() {
 cleanup_deploy() {
   local exit_status=$?
 
-  if [[ "$exit_status" != "0" && "${STACK_RECREATED:-0}" != "1" && "${LEGACY_SYNC_QUIESCED:-0}" == "1" ]]; then
+  # Not keyed on the exit status: bash killed by SIGINT (Ctrl-C) or another
+  # signal while it reads a command substitution — `$(ssh …)`, such as the log
+  # archive right before the recreate — runs this trap with $? = 0. Every exit
+  # that quiesced and never recreated left the scheduler and worker stopped:
+  # fail() restarts them itself (and clears the flag), and success recreates.
+  if [[ "${STACK_RECREATED:-0}" != "1" && "${LEGACY_SYNC_QUIESCED:-0}" == "1" ]]; then
     restore_quiesced_sync_services \
       || log "Unable to restart quiesced sync services during deploy cleanup"
   fi

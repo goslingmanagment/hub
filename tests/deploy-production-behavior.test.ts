@@ -639,6 +639,42 @@ describe("production deploy behavior without production access", () => {
     expect(commands().join("\n")).not.toMatch(/ stop |compose/);
   });
 
+  // М1 places the forward archive before STACK_RECREATED=1 so that an
+  // interrupt during it leaves a deploy that recreated nothing, whose cleanup
+  // restarts the quiesced scheduler and worker. A Ctrl-C reaches the whole
+  // foreground process group: ssh catches it and exits 255 (OpenSSH's "Killed
+  // by signal 2"), and bash, reading the archive's `$(ssh …)`, dies of SIGINT
+  // and runs the EXIT trap with $? = 0.
+  it("a Ctrl-C during the forward archive restarts the quiesced scheduler and worker and recreates nothing", () => {
+    const script = path.join(fixtureRoot, "interrupted-deploy.sh");
+    writeFileSync(script, [
+      shellPrelude,
+      ...["cleanup_deploy", "restore_quiesced_sync_services", "archive_before_stack_recreate", "archive_remote_container_logs"]
+        .map(shellFunction),
+      String.raw`
+        ssh() { printf 'ssh %s\n' "$*" >> "$TEST_COMMAND_LOG"; trap 'exit 255' INT; kill -INT 0; sleep 5; }
+        unset TEMP_DIR REMOTE_DIST_CONTEXT_DIR REMOTE_INFRA_CONTEXT_DIR
+        REMOTE_DEPLOY_LOCK_ACQUIRED=0 LOCAL_DEPLOY_LOCK_ACQUIRED=0
+        trap cleanup_deploy EXIT
+        STACK_RECREATED=0
+        LEGACY_SYNC_QUIESCED=1
+        archive_before_stack_recreate
+        STACK_RECREATED=1
+        run_remote "set -euo pipefail; up -d --remove-orphans --force-recreate --no-build api worker scheduler"
+      `,
+    ].join("\n"));
+    // Job control gives the "deploy" its own process group, so the SIGINT
+    // stays inside it.
+    const result = spawnSync("bash", ["-c", 'set -m; bash "$1" & wait "$!"', "interrupted", script], {
+      encoding: "utf8", env: environment(), timeout: 10_000,
+    });
+    expect(result.status, result.stderr).toBe(130);
+    expect(commands()).toEqual([
+      expect.stringMatching(/^ssh root@fixture\.invalid timeout 300 bash -l -s -- .* api worker scheduler$/),
+      "set -euo pipefail; cd /opt/agency-hub; docker compose --current start scheduler worker",
+    ]);
+  });
+
   // Astra №3: the wrapper's verdict is the real helper's exit status. Here
   // the ssh runs the streamed helper locally (`bash -s -- <args>`) against a
   // fake Docker host whose project directory is APP_DIR.
