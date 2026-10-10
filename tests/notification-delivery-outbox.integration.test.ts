@@ -12,6 +12,7 @@ import {
   openNotificationIncident,
   recoverAndResolveNotificationIncident,
   releaseNotificationDeliveryBackoff,
+  summarizeNotificationPageDelivery,
   updateTelegramSettings,
 } from "@agency_hub_core/db";
 
@@ -737,5 +738,40 @@ describe("durable notification delivery outbox", () => {
     }
     expect(await outboxRow(held.id)).toMatchObject({ state: "pending", available_at: until });
     expect(await outboxRow(free.id)).toMatchObject({ state: "pending", available_at: t0 });
+  });
+
+  // Д2: the digest used to count a page as sent the moment it was enqueued.
+  // Now it reads where each `sync_failure` opening of the window ended; the
+  // recoveries, the missed-alerts summaries, the AI pair, suppressed pages and
+  // pages from before the window are not pages of it.
+  it("the digest counts the window's pages by where their opening ended", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    await getTelegramSettings(testDb.db);
+    const since = new Date("2026-10-05T00:00:00.000Z");
+    const inWindow = new Date("2026-10-05T15:30:00.000Z");
+    const row = async (name: string, set: string, createdAt = inWindow) => {
+      const created = await syncFailureRow(testDb!.db, name, inWindow);
+      await testDb!.pool.query(
+        `update notification_delivery_outbox set ${set}, created_at = $2 where id = $1`,
+        [created.id, createdAt],
+      );
+    };
+    await row("delivered", "state = 'delivered', attempt_count = 1, delivered_at = transition_at");
+    await row("retired", "state = 'exhausted', exhausted_at = transition_at, last_error = 'Not delivered: x'");
+    await row("queued", "attempt_count = 3");
+    await row("in flight", "transition = 'reopened', state = 'leased', lease_token = 't', lease_expires_at = transition_at");
+    // Not pages of the window.
+    await row("alerts off", "state = 'suppressed', suppression_reason = 'sync_failure_alerts_disabled'");
+    await row("recovery", "transition = 'resolved', state = 'delivered', delivered_at = transition_at");
+    await row("summary", "transition = 'resolved', attempt_count = 2");
+    await row("ai", "paging_policy = 'ai_critical', state = 'delivered', delivered_at = transition_at");
+    await row("yesterday", "state = 'delivered', delivered_at = transition_at", new Date(since.getTime() - 60_000));
+
+    expect(await summarizeNotificationPageDelivery(testDb.db, { since }))
+      .toEqual({ delivered: 1, missed: 1, queued: 2 });
   });
 });
