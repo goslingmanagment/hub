@@ -26,6 +26,7 @@ import {
   DEFAULT_DELETE_AFTER_SECONDS,
   DEFAULT_RETENTION_SECONDS,
   HEARTBEAT_RETENTION_SECONDS,
+  PG_BOSS_SEND_IT_QUEUE,
   QUEUE_RETENTION_SETTINGS,
 } from "../apps/runtime/src/services/queue-retention.ts";
 import { registerAllSchedules } from "../apps/runtime/src/services/schedules.ts";
@@ -77,6 +78,10 @@ async function createAllQueues(boss: PgBoss) {
   await ensureNotificationPagingSweepQueue(boss);
   await ensureTieringQueue(boss);
   await ensureAgentHydrationQueue(boss);
+  // The scheduler's timekeeper creates pg-boss's own cron dispatcher queue on
+  // start (`createQueue(QUEUES.SEND_IT)`, library defaults); these bosses run
+  // with schedule: false, so create it the same way.
+  await boss.createQueue(PG_BOSS_SEND_IT_QUEUE);
 }
 
 /**
@@ -157,6 +162,12 @@ describe("pg-boss queue retention integration", () => {
       expect(await boss.getQueue("observations.partitions.ensure")).toMatchObject({
         retentionSeconds: DEFAULT_RETENTION_SECONDS,
         deleteAfterSeconds: DEFAULT_DELETE_AFTER_SECONDS,
+      });
+
+      // Class E — pg-boss's cron dispatcher: business floor, one-day deletion.
+      expect(await boss.getQueue(PG_BOSS_SEND_IT_QUEUE)).toMatchObject({
+        retentionSeconds: DEFAULT_RETENTION_SECONDS,
+        deleteAfterSeconds: HEARTBEAT_RETENTION_SECONDS,
       });
 
       // Class D — dead letter: retention pinned, deletion clock never declared,

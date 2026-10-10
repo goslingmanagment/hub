@@ -9,6 +9,7 @@ import {
   DEFAULT_DELETE_AFTER_SECONDS,
   DEFAULT_RETENTION_SECONDS,
   HEARTBEAT_RETENTION_SECONDS,
+  PG_BOSS_SEND_IT_QUEUE,
   QUEUE_RETENTION_SETTINGS,
 } from "../apps/runtime/src/services/queue-retention.ts";
 import {
@@ -151,9 +152,9 @@ describe("reconcileQueueRetention", () => {
       // back as drift after losing the race, so only those retry. The rest are
       // pinned at the defaults precisely so an upgrade cannot move them.
       const writes = store.updates.filter((update) => update.queue === setting.queue);
-      expect(writes, setting.queue).toHaveLength(
-        setting.retentionSeconds === DEFAULT_RETENTION_SECONDS ? 1 : 2,
-      );
+      const pinnedAtDefaults = setting.retentionSeconds === DEFAULT_RETENTION_SECONDS
+        && (setting.deleteAfterSeconds === undefined || setting.deleteAfterSeconds === DEFAULT_DELETE_AFTER_SECONDS);
+      expect(writes, setting.queue).toHaveLength(pinnedAtDefaults ? 1 : 2);
     }
 
     expect(store.updates.length).toBeGreaterThan(QUEUE_RETENTION_SETTINGS.length);
@@ -234,6 +235,22 @@ describe("pg-boss queue retention settings", () => {
       expect(setting.retentionSeconds).toBeGreaterThanOrEqual(BUSINESS_CRON_MIN_RETENTION_SECONDS);
       expect(setting.deleteAfterSeconds).toBe(DEFAULT_DELETE_AFTER_SECONDS);
     }
+  });
+
+  it("keeps pg-boss's cron dispatcher on the business floor, deleting sent ticks after a day", () => {
+    const dispatch = QUEUE_RETENTION_SETTINGS.filter((setting) => setting.retentionClass === "cron-dispatch");
+    expect(dispatch.map((setting) => setting.queue)).toEqual([PG_BOSS_SEND_IT_QUEUE]);
+    // An unsent tick may be a daily business cron's: same outage floor.
+    expect(dispatch[0]!.retentionSeconds).toBeGreaterThanOrEqual(BUSINESS_CRON_MIN_RETENTION_SECONDS);
+    expect(dispatch[0]!.deleteAfterSeconds).toBe(HEARTBEAT_RETENTION_SECONDS);
+  });
+
+  it("names pg-boss's cron dispatcher queue as pg-boss itself does", async () => {
+    const timekeeper = await readFile(
+      path.join(repoRoot, "apps/runtime/node_modules/pg-boss/dist/timekeeper.js"),
+      "utf8",
+    );
+    expect(timekeeper).toContain(`SEND_IT: '${PG_BOSS_SEND_IT_QUEUE}'`);
   });
 
   it("leaves dead letters on retention alone, with no deletion clock", () => {

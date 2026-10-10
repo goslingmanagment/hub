@@ -44,6 +44,16 @@ export const DEFAULT_DELETE_AFTER_SECONDS = 604_800;
  */
 export const BUSINESS_CRON_MIN_RETENTION_SECONDS = 604_800;
 
+/**
+ * pg-boss's own cron dispatcher (`QUEUES.SEND_IT` in pg-boss's timekeeper): the
+ * scheduler's timekeeper enqueues one row per cron tick here and its worker
+ * sends the real job. Library defaults kept every sent tick 7 days: 149 280 of
+ * the 207 273 rows of pgboss.job_common on prod (2026-10-10), which pg-boss's
+ * minutely queue statistics count in full. Pinned by
+ * tests/queue-retention.test.ts against pg-boss's source.
+ */
+export const PG_BOSS_SEND_IT_QUEUE = "__pgboss__send-it";
+
 export type QueueRetentionClass =
   /** A: minutely/every-few-minutes heartbeats. Stale ticks have no value. */
   | "heartbeat-cron"
@@ -53,7 +63,11 @@ export type QueueRetentionClass =
   | "business-cron"
   /** D: dead letters. Never fetched, so `completed_on` stays NULL and
    *  `deleteAfterSeconds` cannot apply — only retention governs them. */
-  | "dead-letter";
+  | "dead-letter"
+  /** E: pg-boss's own cron dispatcher. An unsent tick may carry a business
+   *  cron, so retention keeps the business floor; a sent tick is worthless
+   *  after a day, since each target queue keeps its own history. */
+  | "cron-dispatch";
 
 export interface QueueRetentionSetting {
   readonly queue: string;
@@ -109,6 +123,9 @@ export const QUEUE_RETENTION_SETTINGS: readonly QueueRetentionSetting[] = [
   { queue: "ofapi.dm-analytics.rebuild", retentionClass: "business-cron", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: DEFAULT_DELETE_AFTER_SECONDS },
   { queue: "db.disk-usage.check", retentionClass: "business-cron", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: DEFAULT_DELETE_AFTER_SECONDS },
   { queue: "capture.payload.parity.verify", retentionClass: "business-cron", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: DEFAULT_DELETE_AFTER_SECONDS },
+
+  // ---- Class E: pg-boss's cron dispatcher (14d / 24h) ----------------------
+  { queue: PG_BOSS_SEND_IT_QUEUE, retentionClass: "cron-dispatch", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: HEARTBEAT_RETENTION_SECONDS },
 
   // ---- Class D: dead letters (14d retention, no deletion clock) ----------
   { queue: "sync.planner.dlq", retentionClass: "dead-letter", retentionSeconds: DEFAULT_RETENTION_SECONDS },
