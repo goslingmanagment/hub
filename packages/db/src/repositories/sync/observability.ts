@@ -5,7 +5,7 @@ import type { Database } from "../../client.ts";
 import { capturePayloadRefFromColumns, type CapturePayloadRef } from "../capture-payloads.ts";
 import { SYNC_PACE_AUDIT_LOOKBACK_MS } from "./attempts.ts";
 import { countUnavailableChats, openChatUnavailabilitySql, syncWorkOfUnavailableChatSql } from "./chat-unavailability.ts";
-import { textArrayParam, toDate, toRequiredDate } from "./values.ts";
+import { jsonParam, textArrayParam, toDate, toRequiredDate } from "./values.ts";
 
 // Fansly Sync Engine: the reads behind its alerts and its golden signals
 // (plan §10, design §9.5, §9.6). Reads only; every window is an index range
@@ -322,6 +322,73 @@ export async function readSyncStepAlertFacts(
       admittedAt: toRequiredDate(row.admittedAt),
       applyError: row.applyError,
     })),
+  };
+}
+
+/** What alert 4 reads of the page's planned demand past its SLO (bug hunt Д5). */
+export interface SyncPlannedDemandAlertFacts {
+  /** ONE row per judged key that is overdue, the oldest first: `works` its
+   *  overdue rows, `since` the oldest of their waits. */
+  stale: Array<{ resource: string; works: number; since: Date }>;
+}
+
+/**
+ * The planned demand of one page's alert 4 (bug hunt Д5), as of the database
+ * clock, for the keys in `slos` (a planned goal or trigger without a standing
+ * row, with its SLO). Demand is an open or running row whose demand is not
+ * served (`applied_revision < demand_revision`); it waits since its first
+ * demand, or since its own breaker's end when that is later. Two rows never
+ * count: one the vendor blocks (`blocked_by_vendor_at`), and a `dm-messages.*`
+ * row of a chat with an open unavailability episode (a lone refused chat
+ * never pages). A key is overdue when a row has waited past the key's SLO AND
+ * the key applied no answer within the SLO — no attempt of any of its works,
+ * open or closed, with `apply_state = 'applied'` admitted since: a history
+ * load that moves is no stall, nor is a walk resumed after a breaker. Only the
+ * overdue keys, one row each — the rule drops the keys a pause or a hold
+ * explains after the read, so however many rows one key has never hide
+ * another key. The progress probe runs only for a key with overdue rows.
+ */
+export async function readSyncPlannedDemandAlertFacts(
+  db: Database,
+  input: { pageId: number; slos: ReadonlyArray<{ resource: string; staleAfterMs: number }> },
+): Promise<SyncPlannedDemandAlertFacts> {
+  if (input.slos.length === 0) return { stale: [] };
+  const waitingSince = sql`greatest(w.first_demand_at, coalesce(w.breaker_until, w.first_demand_at))`;
+  const result = await db.execute<{ resource: string; works: number; since: Date | string }>(sql`
+    with overdue as (
+      select w.resource, j."staleAfterMs", count(*)::int as works, min(${waitingSince}) as since
+        from sync_work w
+        join jsonb_to_recordset(${jsonParam(input.slos)}) as j(resource text, "staleAfterMs" double precision)
+          on j.resource = w.resource
+       where w.page_id = ${input.pageId}
+         and not w.shadow
+         and w.state in ('open', 'running')
+         and w.applied_revision < w.demand_revision
+         and w.blocked_by_vendor_at is null
+         and ${waitingSince} < statement_timestamp() - j."staleAfterMs" * interval '1 millisecond'
+         and not (w.resource like 'dm-messages.%'
+                  and ${openChatUnavailabilitySql({ pageId: sql`w.page_id`, groupId: sql`w.subject` })})
+       group by w.resource, j."staleAfterMs"
+    )
+    select o.resource, o.works, o.since
+      from overdue o
+      left join lateral (
+        select a.applied_at
+          from sync_attempts a
+         where a.page_id = ${input.pageId}
+           and not a.shadow
+           and a.resource = o.resource
+           and a.apply_state = 'applied'
+           and a.admitted_at > statement_timestamp() - o."staleAfterMs" * interval '1 millisecond'
+         order by a.admitted_at desc
+         limit 1
+      ) progress on true
+     where progress.applied_at is null
+     order by o.since, o.resource
+     limit 200
+  `);
+  return {
+    stale: result.rows.map((row) => ({ resource: row.resource, works: Number(row.works), since: toRequiredDate(row.since) })),
   };
 }
 

@@ -194,7 +194,7 @@ function basisPoints(value: number | null): number | null {
  */
 export async function sampleSyncEngineMetrics(
   db: Database,
-  input: { registry: Pick<EngineRegistry, "spec">; settingMs: number; resolvePayload?: FanslyWsLivePayloadResolver },
+  input: { registry: Pick<EngineRegistry, "spec" | "specs">; settingMs: number; resolvePayload?: FanslyWsLivePayloadResolver },
 ): Promise<OpsMetricSampleInput[]> {
   const pages = await listSyncPages(db);
   const now = pages[0]?.dbNow ?? new Date();

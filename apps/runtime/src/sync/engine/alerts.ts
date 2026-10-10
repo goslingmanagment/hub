@@ -11,6 +11,7 @@ import {
   readSyncChatAlertFacts,
   readSyncJournalAlertFacts,
   readSyncLivePathFacts,
+  readSyncPlannedDemandAlertFacts,
   readSyncStepAlertFacts,
   recordSyncAlertEvaluation,
   SYNC_ALERT_EVALUATION_RULES,
@@ -23,6 +24,7 @@ import {
   type SyncJournalAlertFacts,
   type SyncLivePathFacts,
   type SyncPageRow,
+  type SyncPlannedDemandAlertFacts,
   type SyncStepAlertFacts,
 } from "@agency_hub_core/db";
 import { sanitizeError } from "@agency_hub_core/shared";
@@ -103,6 +105,14 @@ import { noStallTracker, type StallTracker, type StallTracking } from "./watchdo
 // 5 min. Its `planned_stale` judges a poll by its newest applied answer, not
 // by its admissions. The summary of a latch the evaluator opens names the
 // keys its reasons name (`resources`).
+//
+// Bug hunt Д5: `planned_stale` also judges a planned goal or trigger key with
+// an SLO and no standing row (`plannedDemandSlos`) — its demand unserved past
+// the SLO while the key applied no answer for as long (a vendor's block and a
+// chat with an unavailability episode excepted). The standing walks declare
+// an SLO that nothing judges here: what they have to read is their queue's
+// to say (their failing steps page as `step_failing`). A file's breaker
+// explains a wait on its first arm only (`SYNC_RESOURCE_HOLD_EXPLAINED_STEPS`).
 
 /** The evaluator's cadence. */
 export const SYNC_ALERT_EVAL_INTERVAL_MS = 30_000;
@@ -146,6 +156,11 @@ export const SYNC_REQUEST_STALL_MS = 30 * 60_000;
 export const SYNC_LEDGER_BACKFILL_STALL_MS = SYNC_REQUEST_STALL_MS;
 /** Alert 4: a poll without its own SLO is stale after this many periods. */
 export const SYNC_STALE_PERIODS = 3;
+/** Alerts 3 and 4: a file's breaker explains the waits of its keys up to
+ *  this arm of its ladder (the first: 30 min, a short trouble of the file).
+ *  An arm that came back before any success of the file (2 h, 6 h) no longer
+ *  does — nothing else pages for it, so its keys' own rules do (bug hunt Д5). */
+export const SYNC_RESOURCE_HOLD_EXPLAINED_STEPS = 1;
 /** Alert 4 (`step_failing`): a work whose steps have ended without an
  *  outcome for longer than this (`sync_work.failing_since`). */
 export const SYNC_STEP_FAILING_MS = 5 * 60_000;
@@ -194,6 +209,8 @@ export interface PageAlertFacts {
   chats: SyncChatAlertFacts;
   /** Steps that end without an outcome, applies pending (alert 4). */
   steps: SyncStepAlertFacts;
+  /** Planned goal/trigger keys whose demand waits past their SLO (alert 4). */
+  demand: SyncPlannedDemandAlertFacts;
   money: { count: number; oldestReceivedAt: Date } | null;
   now: Date;
 }
@@ -211,10 +228,11 @@ function dateOf(value: unknown): Date | null {
 /** A resource whose work waits for a reason the owner or another alert owns:
  *  a pause — of the key, or the owner's requests pause of the page for a key
  *  of the `requests` class (the pick leaves that class out) — a switch-off,
- *  its file's breaker, or a hold on every route it reads (the route's own
- *  incident pages for that) — the last two by the hold evaluator, over the
- *  route holds alone (no send is counted: a budget's interval explains no
- *  wait this long). */
+ *  its file's breaker on its first arm (`SYNC_RESOURCE_HOLD_EXPLAINED_STEPS`;
+ *  one back before any success of the file explains nothing), or a hold on
+ *  every route it reads (the route's own incident pages for that) — the last
+ *  two by the hold evaluator, over the route holds alone (no send is counted:
+ *  a budget's interval explains no wait this long). */
 function resourceExplained(
   page: PageAlertFacts["page"],
   holds: HoldSet,
@@ -229,7 +247,21 @@ function resourceExplained(
     ? null
     : routeAdmissionView(new RouteClocks({ sends: [], state: holds.routes.state }), [spec], now);
   const held = heldByScope(holds, routes, { work: { resource } }, now);
-  return held.resource !== null || held.route?.scope === "route_hold";
+  return (held.resource !== null && held.resource.step <= SYNC_RESOURCE_HOLD_EXPLAINED_STEPS)
+    || held.route?.scope === "route_hold";
+}
+
+/** The keys alert 4 judges by their demand (bug hunt Д5): every planned goal
+ *  or trigger with an SLO and no standing row, with that SLO. A standing walk
+ *  declares one that is not judged here (its queue says what is due). */
+export function plannedDemandSlos(registry: Pick<EngineRegistry, "specs">): Array<{ resource: string; staleAfterMs: number }> {
+  const slos: Array<{ resource: string; staleAfterMs: number }> = [];
+  for (const spec of registry.specs) {
+    const staleAfterMs = spec.slo?.staleAfterMs;
+    if (staleAfterMs === undefined || spec.class !== "planned" || spec.standing !== undefined) continue;
+    if (spec.kind === "goal" || spec.kind === "trigger") slos.push({ resource: spec.key, staleAfterMs });
+  }
+  return slos;
 }
 
 function condition(
@@ -413,6 +445,12 @@ function stuckCondition(facts: PageAlertFacts, registry: Pick<EngineRegistry, "s
       const since = poll.lastAppliedAt ?? poll.createdAt;
       if (staleAfterMs !== null && msSince(since, now) > staleAfterMs) stale.push({ resource: poll.resource, since });
     }
+    // A planned goal or trigger whose demand has waited past its SLO while the
+    // key applied no answer (bug hunt Д5): one fact row per key, judged here.
+    for (const row of facts.demand.stale) {
+      if (resourceExplained(page, holds, row.resource, now, registry)) continue;
+      stale.push({ resource: row.resource, since: row.since });
+    }
     stale.sort((a, b) => a.since.getTime() - b.since.getTime());
     if (stale.length > 0) {
       stuck.push({ detail: "planned_stale", since: stale[0]!.since, context: { resources: stale.map((row) => row.resource) } });
@@ -449,7 +487,7 @@ function stuckCondition(facts: PageAlertFacts, registry: Pick<EngineRegistry, "s
 
 /** The parts of a page's alert facts, each read on its own
  *  (`readPageAlertFactsSettled`); the page row and `now` are always there. */
-export const PAGE_ALERT_FACT_PARTS = ["journal", "live", "chats", "money", "steps"] as const;
+export const PAGE_ALERT_FACT_PARTS = ["journal", "live", "chats", "money", "steps", "demand"] as const;
 export type PageAlertFactPart = (typeof PAGE_ALERT_FACT_PARTS)[number];
 
 /** The value of each part that holds no reason of any alert: what stands in
@@ -474,6 +512,7 @@ export const PAGE_ALERT_NEUTRAL_FACTS: { readonly [P in PageAlertFactPart]: Page
   chats: { unavailable: 0, refused: { chats: 0, firstOpenedAt: null } },
   money: null,
   steps: { failing: [], applyPending: [] },
+  demand: { stale: [] },
 };
 
 /** One page alert as a rule: the parts of the facts it reads, and its
@@ -491,7 +530,7 @@ export const SYNC_PAGE_ALERT_RULES: Readonly<Record<SyncPageAlertSubKey, SyncPag
   page_stopped: { parts: ["journal"], evaluate: (facts) => pageStoppedCondition(facts) },
   live_degraded: { parts: ["journal", "live"], evaluate: (facts) => liveDegradedCondition(facts) },
   freshness: { parts: ["journal", "live", "chats", "money"], evaluate: freshnessCondition },
-  stuck: { parts: ["journal", "steps"], evaluate: stuckCondition },
+  stuck: { parts: ["journal", "steps", "demand"], evaluate: stuckCondition },
 };
 
 /**
@@ -575,7 +614,11 @@ export interface SettledPageAlertFacts {
  *  `{ error }` is that read's failure, the part `money` failed. */
 export async function readPageAlertFactsSettled(
   db: Database,
-  input: { page: SyncPageRow; money?: Map<number, PageMissingMoney> | { error: unknown } },
+  input: {
+    page: SyncPageRow;
+    registry: Pick<EngineRegistry, "spec" | "specs">;
+    money?: Map<number, PageMissingMoney> | { error: unknown };
+  },
 ): Promise<SettledPageAlertFacts> {
   const failed = new Map<PageAlertFactPart, unknown>();
   const settle = async <T>(part: PageAlertFactPart, neutral: T, read: () => Promise<T>): Promise<T> => {
@@ -605,17 +648,19 @@ export async function readPageAlertFactsSettled(
     failingAfterMs: SYNC_STEP_FAILING_MS,
     applyPendingAfterMs: SYNC_APPLY_PENDING_MS,
   }));
+  const demand = await settle("demand", PAGE_ALERT_NEUTRAL_FACTS.demand, () =>
+    readSyncPlannedDemandAlertFacts(db, { pageId, slos: plannedDemandSlos(input.registry) }));
   let money: PageAlertFacts["money"] = PAGE_ALERT_NEUTRAL_FACTS.money;
   if (input.money instanceof Map) money = input.money.get(pageId) ?? null;
   else if (input.money !== undefined) failed.set("money", input.money.error);
-  return { facts: { page: input.page, journal, live, chats, money, steps, now: input.page.dbNow }, failed };
+  return { facts: { page: input.page, journal, live, chats, money, steps, demand, now: input.page.dbNow }, failed };
 }
 
 /** Read a page's alert facts (`readPageAlertFactsSettled`); a part that cannot
  *  be read throws its error (the first, in reading order). */
 export async function readPageAlertFacts(
   db: Database,
-  input: { page: SyncPageRow; money?: Map<number, PageMissingMoney> },
+  input: { page: SyncPageRow; registry: Pick<EngineRegistry, "spec" | "specs">; money?: Map<number, PageMissingMoney> },
 ): Promise<PageAlertFacts> {
   const settled = await readPageAlertFactsSettled(db, input);
   if (settled.failed.size > 0) throw settled.failed.values().next().value;
@@ -627,7 +672,7 @@ export async function collectPageAlerts(
   db: Database,
   input: {
     page: SyncPageRow;
-    registry: Pick<EngineRegistry, "spec">;
+    registry: Pick<EngineRegistry, "spec" | "specs">;
     money?: Map<number, { count: number; oldestReceivedAt: Date }>;
   },
 ): Promise<SyncAlertCondition[]> {
@@ -741,7 +786,7 @@ export interface SyncAlertPassResult {
 export interface SyncAlertEvaluatorOptions {
   db: Database;
   logger: SyncLogger;
-  registry: Pick<EngineRegistry, "spec">;
+  registry: Pick<EngineRegistry, "spec" | "specs">;
   resolvePayload?: FanslyWsLivePayloadResolver;
   intervalMs?: number;
   /** The process's stall watchdog: every pass is watched, page by page. */
@@ -941,7 +986,9 @@ export class SyncAlertEvaluator {
    *  its pace backstop — each rule's outcome into `outcomes`. */
   async #evaluatePage(page: SyncPageRow, input: PagePass): Promise<void> {
     const owner = pagesOwnerAlerts(page);
-    const settled = owner ? await readPageAlertFactsSettled(this.#o.db, { page, money: input.money }) : null;
+    const settled = owner
+      ? await readPageAlertFactsSettled(this.#o.db, { page, registry: this.#o.registry, money: input.money })
+      : null;
     for (const subKey of SYNC_PAGE_ALERT_SUB_KEYS) {
       input.outcomes.set(subKey, await this.#evaluatePageAlert(page, subKey, settled, input));
     }
@@ -1176,7 +1223,7 @@ export async function acknowledgeSyncPaceViolations(
 /** `pnpm cli sync alerts status`: per page, what holds now and its latches. */
 export async function readSyncAlertStatus(
   db: Database,
-  input: { registry: Pick<EngineRegistry, "spec">; pages: readonly SyncPageRow[]; resolvePayload?: FanslyWsLivePayloadResolver },
+  input: { registry: Pick<EngineRegistry, "spec" | "specs">; pages: readonly SyncPageRow[]; resolvePayload?: FanslyWsLivePayloadResolver },
 ) {
   const now = input.pages[0]?.dbNow ?? new Date();
   const money = await readMissingMoneyFrames(db, {
@@ -1190,7 +1237,7 @@ export async function readSyncAlertStatus(
   for (const page of input.pages) {
     // Only handover/live page the owner: no other page has a condition.
     const pagesOwner = pagesOwnerAlerts(page);
-    const facts = pagesOwner ? await readPageAlertFacts(db, { page, money }) : null;
+    const facts = pagesOwner ? await readPageAlertFacts(db, { page, registry: input.registry, money }) : null;
     statuses.push({
       page: page.pageLabel ?? String(page.pageId),
       mode: page.mode,

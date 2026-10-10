@@ -5,7 +5,7 @@ import type * as IncidentsModule from "../apps/runtime/src/services/notification
 import type * as MoneyFramesModule from "../apps/runtime/src/sync/fansly/ws/money-frames.ts";
 
 const fake = vi.hoisted(() => ({
-  pages: vi.fn(), incidents: vi.fn(), journal: vi.fn(), live: vi.fn(), chats: vi.fn(), steps: vi.fn(), sends: vi.fn(),
+  pages: vi.fn(), incidents: vi.fn(), journal: vi.fn(), live: vi.fn(), chats: vi.fn(), steps: vi.fn(), demand: vi.fn(), sends: vi.fn(),
   notify: vi.fn(), resolve: vi.fn(), money: vi.fn(), record: vi.fn(), passFailed: vi.fn(),
 }));
 
@@ -17,6 +17,7 @@ vi.mock("@agency_hub_core/db", async (original) => ({
   readSyncLivePathFacts: fake.live,
   readSyncChatAlertFacts: fake.chats,
   readSyncStepAlertFacts: fake.steps,
+  readSyncPlannedDemandAlertFacts: fake.demand,
   readFanslySendAudit: fake.sends,
   recordSyncAlertEvaluation: fake.record,
   markSyncAlertEvaluationPassFailed: fake.passFailed,
@@ -45,7 +46,7 @@ const now = new Date("2026-10-09T15:00:00Z");
 const ago = (ms: number) => new Date(now.getTime() - ms);
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
 const db = {} as Database;
-const registry = { spec: () => null };
+const registry = { spec: () => null, specs: [] };
 const journal = {
   lastStopAttempt: null, quarantined: {}, urgentWaiting: [], polls: [], ledgerIncomplete: null,
   transactionsBackfill: { openProgressAt: null, lastCompletedAt: null }, stalledRequests: [],
@@ -114,6 +115,7 @@ beforeEach(() => {
   }));
   fake.chats.mockResolvedValue({ unavailable: 0, refused: { chats: 0, firstOpenedAt: null } });
   fake.steps.mockResolvedValue(steps);
+  fake.demand.mockResolvedValue({ stale: [] });
   fake.sends.mockResolvedValue([]);
   fake.money.mockResolvedValue([]);
   // An open that landed, a resolve that moved the latch.
@@ -203,6 +205,19 @@ describe("the alert evaluator's failure boundaries (bug hunt Д11)", () => {
     expect(lastRecord(2)).toEqual(HEALTHY);
   });
 
+  it("a failed demand read blinds alert 4 alone: never resolved, the other rules judged (bug hunt Д5)", async () => {
+    fake.demand.mockImplementation(async (_db, { pageId }) => {
+      if (pageId === 1) throw queryError("57014", "canceling statement due to statement timeout");
+      return { stale: [] };
+    });
+    fake.incidents.mockResolvedValue([openLatch(1, "stuck", 20 * MINUTE)]);
+    const result = await new SyncAlertEvaluator({ db, logger, registry }).runOnce();
+    expect(resolvedKeys()).toEqual([]);
+    expect(lastRecord(1)).toEqual({ ...HEALTHY, stuck: "demand: database query failed (57014)" });
+    expect(result!.opened).toEqual([{ pageId: 2, subKey: "live_degraded", detail: "socket_down" }]);
+    expect(lastRecord(2)).toEqual(HEALTHY);
+  });
+
   it("the summary of an opened stuck names its keys (bug hunt Д3/У2)", async () => {
     fake.steps.mockImplementation(async (_db, { pageId }) => (pageId === 1
       ? { failing: [{ resource: "dm-live.deletions", works: 1, failingSince: ago(6 * MINUTE), errorClasses: ["local:57014"] }], applyPending: [] }
@@ -221,7 +236,7 @@ describe("the alert evaluator's failure boundaries (bug hunt Д11)", () => {
       ? { ...journal, polls: [{ resource: "notifications.forward", lastAppliedAt: now, createdAt: ago(60 * MINUTE) }] }
       : journal));
     fake.incidents.mockResolvedValue([openLatch(1, "stuck", 20 * MINUTE)]);
-    const broken = { spec: () => { throw new TypeError("spec is broken"); } };
+    const broken = { spec: () => { throw new TypeError("spec is broken"); }, specs: [] };
     const result = await new SyncAlertEvaluator({ db, logger, registry: broken }).runOnce();
     // Its old latch stays open; the other three alerts and page 2 are as in the control.
     expect(resolvedKeys()).toEqual([]);

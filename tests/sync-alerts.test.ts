@@ -27,9 +27,11 @@ import {
   SYNC_PAGE_ALERT_RULES,
   SYNC_PAGE_ALERT_SUB_KEYS,
   SYNC_REQUEST_STALL_MS,
+  SYNC_RESOURCE_HOLD_EXPLAINED_STEPS,
   SYNC_SOCKET_DOWN_MS,
   SYNC_STEP_FAILING_MS,
   conditionResources,
+  plannedDemandSlos,
   syncAlertResolveAfterMs,
   type PageAlertFactPart,
   type PageAlertFacts,
@@ -41,7 +43,7 @@ import {
 } from "../apps/runtime/src/sync/engine/errors.ts";
 import { OWNERSHIP_ALERT_AFTER_MS } from "../apps/runtime/src/sync/engine/host.ts";
 import { quantileOf, syncMetricsDue } from "../apps/runtime/src/sync/engine/metrics.ts";
-import { createFanslyRegistry } from "../apps/runtime/src/sync/fansly/registry.ts";
+import { createFanslyRegistry, FANSLY_RESOURCE_SPECS } from "../apps/runtime/src/sync/fansly/registry.ts";
 import { moneyFramesMissing } from "../apps/runtime/src/sync/fansly/ws/money-frames.ts";
 
 import { pageHoldRow, resourceBreakerRow, routeHoldRows, routeStateRows } from "./helpers/sync-holds.ts";
@@ -61,6 +63,7 @@ function facts(overrides: {
   chats?: Partial<PageAlertFacts["chats"]>;
   money?: PageAlertFacts["money"];
   steps?: Partial<PageAlertFacts["steps"]>;
+  demand?: Partial<PageAlertFacts["demand"]>;
 } = {}): PageAlertFacts {
   return {
     now: NOW,
@@ -117,6 +120,10 @@ function facts(overrides: {
       failing: [],
       applyPending: [],
       ...overrides.steps,
+    },
+    demand: {
+      stale: [],
+      ...overrides.demand,
     },
   };
 }
@@ -548,6 +555,80 @@ describe("alert rules (design §9.6)", () => {
     }))).toEqual({ freshness: "chats_refused" });
   });
 
+  it("alerts 3 and 4: a file breaker explains a wait on its first arm only (bug hunt Д5)", () => {
+    expect(SYNC_RESOURCE_HOLD_EXPLAINED_STEPS).toBe(1);
+    const waits = (holds: PageAlertFacts["page"]["holds"]) => evaluatePageAlerts(facts({
+      page: { holds },
+      journal: {
+        urgentWaiting: [{ resource: "dm-conversations.find", subject: "g1", dueAt: at(-10 * MINUTE), breakerUntil: null, waitingReason: null }],
+        polls: [{ resource: "dm-conversations.head", lastAppliedAt: null, createdAt: at(-120 * MINUTE) }],
+      },
+    }), registry);
+    const catchup = (holds: PageAlertFacts["page"]["holds"]) =>
+      evaluate(facts({ page: { holds }, demand: { stale: [{ resource: "dm-messages.catchup", works: 1, since: at(-7 * 60 * MINUTE) }] } }));
+    const arm = (step: number, file = "dm-conversations") => [resourceBreakerRow(file, at(25 * MINUTE), { step, since: at(-MINUTE) })];
+    expect(waits(arm(1))).toEqual([]);
+    expect(catchup(arm(1, "dm-messages"))).toEqual({});
+    // Back before any success of the file (2 h, 6 h): its keys' own rules page.
+    for (const step of [2, 3]) {
+      expect(waits(arm(step)).map((entry) => [entry.subKey, entry.detail, conditionResources(entry)])).toEqual([
+        ["freshness", "urgent_waiting", ["dm-conversations.find"]],
+        ["stuck", "planned_stale", ["dm-conversations.head"]],
+      ]);
+      expect(catchup(arm(step, "dm-messages"))).toEqual({ stuck: "planned_stale" });
+    }
+    // A failing step's key, the same (p2-05's step_failing reads the same rule).
+    const failing = (step: number) => evaluate(facts({
+      page: { holds: arm(step, "dm-messages") },
+      steps: { failing: [{ resource: "dm-messages.catchup", works: 1, failingSince: at(-6 * MINUTE), errorClasses: [] }] },
+    }));
+    expect(failing(1)).toEqual({});
+    expect(failing(2)).toEqual({ stuck: "step_failing" });
+    // An ended arm explains nothing, whatever its step.
+    expect(catchup([resourceBreakerRow("dm-messages", at(-1), { step: 1 })])).toEqual({ stuck: "planned_stale" });
+  });
+
+  it("alert 4: planned demand past its SLO (bug hunt Д5)", () => {
+    const row = (resource: string, sinceMs: number, works = 1) => ({ resource, works, since: at(-sinceMs) });
+    const stuck = (stale: PageAlertFacts["demand"]["stale"], page: Partial<PageAlertFacts["page"]> = {}, journal: Partial<PageAlertFacts["journal"]> = {}) =>
+      evaluatePageAlerts(facts({ demand: { stale }, page, journal }), registry).find((entry) => entry.subKey === "stuck");
+    // The read decided the key is overdue: its row's since is the reason's.
+    const catchup = [row("dm-messages.catchup", 7 * 60 * MINUTE, 3)];
+    expect(stuck(catchup)).toEqual({
+      subKey: "stuck",
+      detail: "planned_stale",
+      since: at(-7 * 60 * MINUTE),
+      seenAt: NOW,
+      reasons: [{ detail: "planned_stale", since: at(-7 * 60 * MINUTE), context: { resources: ["dm-messages.catchup"] } }],
+    });
+    // What explains a poll's wait explains it: the owner's pause, a page hold,
+    // a pause or switch-off of the key, a hold on all its routes, its file's
+    // breaker on its first arm.
+    expect(stuck(catchup, { pausedAll: true })).toBeUndefined();
+    expect(stuck(catchup, { holds: [credentialsHeld("auth")] })).toBeUndefined();
+    expect(stuck(catchup, { holds: [networkHeld(MINUTE)] })).toBeUndefined();
+    expect(stuck(catchup, { pausedResources: ["dm-messages.catchup"] })).toBeUndefined();
+    expect(stuck(catchup, { registryOverrides: { "dm-messages.catchup": { enabled: false } } })).toBeUndefined();
+    expect(stuck(catchup, { holds: routeHoldRows("messages.page", { holdUntil: at(MINUTE).toISOString() }) })).toBeUndefined();
+    expect(stuck(catchup, { holds: [resourceBreakerRow("dm-messages", at(MINUTE), { since: at(-MINUTE) })] })).toBeUndefined();
+    // The owner's requests pause: a planned key is not of its class.
+    expect(stuck(catchup, { pausedRequests: true })).toMatchObject({ detail: "planned_stale" });
+    // An explained key is dropped, an unexplained one in the same fact pages.
+    const two = [row("purchases.targets", 2 * 24 * 60 * MINUTE, 201), row("dm-messages.catchup", 7 * 60 * MINUTE)];
+    expect(stuck(two, { pausedResources: ["purchases.targets"] })).toMatchObject({
+      since: at(-7 * 60 * MINUTE),
+      reasons: [{ detail: "planned_stale", context: { resources: ["dm-messages.catchup"] } }],
+    });
+    // Beside a stale poll: one reason, the oldest since, both keys once.
+    const poll = { polls: [{ resource: "notifications.forward", lastAppliedAt: at(-65 * MINUTE), createdAt: at(-24 * 60 * MINUTE) }] };
+    expect(stuck(catchup, {}, poll)!.reasons).toEqual([
+      { detail: "planned_stale", since: at(-7 * 60 * MINUTE), context: { resources: ["dm-messages.catchup", "notifications.forward"] } },
+    ]);
+    expect(stuck([row("followers.reconcile", 30 * MINUTE)], {}, poll)!.reasons).toEqual([
+      { detail: "planned_stale", since: at(-65 * MINUTE), context: { resources: ["notifications.forward", "followers.reconcile"] } },
+    ]);
+  });
+
   it("several alerts at once, one condition each", () => {
     expect(evaluate(facts({
       page: { holds: [credentialsHeld("auth")] },
@@ -559,6 +640,35 @@ describe("alert rules (design §9.6)", () => {
       freshness: "message_unconfirmed",
       stuck: "transactions_ledger_incomplete",
     });
+  });
+});
+
+describe("the registry's SLOs as alert 4 judges them (bug hunt Д5)", () => {
+  const HOUR = 60 * MINUTE;
+  const DAY = 24 * HOUR;
+
+  it("judges the planned goals and triggers with an SLO by their demand", () => {
+    expect(plannedDemandSlos(registry)).toEqual([
+      { resource: "dm-messages.catchup", staleAfterMs: 6 * HOUR },
+      { resource: "fan-earnings.roster", staleAfterMs: 3 * DAY },
+      { resource: "purchases.targets", staleAfterMs: 12 * HOUR },
+      { resource: "followers.reconcile", staleAfterMs: 3 * DAY },
+    ]);
+  });
+
+  it("judges none of the standing walks: they declare an SLO their queue answers for", () => {
+    const judged = new Set(plannedDemandSlos(registry).map((entry) => entry.resource));
+    const unjudged = registry.specs
+      .filter((spec) => spec.kind !== "poll" && spec.slo?.staleAfterMs !== undefined && !judged.has(spec.key));
+    expect(unjudged.map((spec) => spec.key).sort()).toEqual(["catalog.vault", "media-stats.walk", "post-replies.walk", "posts.engagement"]);
+    expect(unjudged.every((spec) => spec.standing !== undefined)).toBe(true);
+  });
+
+  it("a judged key's SLO outlasts its floor between walks", () => {
+    const judged = new Set(plannedDemandSlos(registry).map((entry) => entry.resource));
+    const floored = FANSLY_RESOURCE_SPECS.filter((spec) => judged.has(spec.key) && spec.minIntervalMs !== undefined);
+    expect(floored.map((spec) => spec.key)).toEqual(["followers.reconcile"]);
+    for (const spec of floored) expect(spec.slo!.staleAfterMs!, spec.key).toBeGreaterThan(spec.minIntervalMs!);
   });
 });
 
@@ -591,6 +701,7 @@ describe("the page alerts as rules (bug hunt Д11)", () => {
     facts({ journal: { polls: [{ resource: "notifications.forward", lastAppliedAt: at(-65 * MINUTE), createdAt: at(-24 * 60 * MINUTE) }] } }),
     facts({ steps: { failing: [{ resource: "dm-live.deletions", works: 1, failingSince: at(-6 * MINUTE), errorClasses: ["local:57014"] }] } }),
     facts({ steps: { applyPending: [{ resource: "transactions.head", subject: "", attemptId: 9, admittedAt: at(-6 * MINUTE), applyError: "57014" }] } }),
+    facts({ demand: { stale: [{ resource: "dm-messages.catchup", works: 1, since: at(-7 * 60 * MINUTE) }] } }),
     facts({ journal: { ledgerIncomplete: shortfall(3) } }),
     facts({
       journal: { ledgerIncomplete: shortfall(3), transactionsBackfill: { openProgressAt: at(-SYNC_LEDGER_BACKFILL_STALL_MS - MINUTE), lastCompletedAt: null } },
@@ -633,10 +744,11 @@ describe("the page alerts as rules (bug hunt Д11)", () => {
     }
   });
 
-  it("alert 4 reads the journal and the steps (bug hunt Д3/У2)", () => {
-    expect(PAGE_ALERT_FACT_PARTS).toContain("steps");
-    expect(SYNC_PAGE_ALERT_RULES.stuck.parts).toEqual(["journal", "steps"]);
+  it("alert 4 reads the journal, the steps (bug hunt Д3/У2) and the planned demand (bug hunt Д5)", () => {
+    expect(PAGE_ALERT_FACT_PARTS).toEqual(["journal", "live", "chats", "money", "steps", "demand"]);
+    expect(SYNC_PAGE_ALERT_RULES.stuck.parts).toEqual(["journal", "steps", "demand"]);
     expect(PAGE_ALERT_NEUTRAL_FACTS.steps).toEqual({ failing: [], applyPending: [] });
+    expect(PAGE_ALERT_NEUTRAL_FACTS.demand).toEqual({ stale: [] });
   });
 
   it("the evaluator's rules are the repository's vocabulary", () => {

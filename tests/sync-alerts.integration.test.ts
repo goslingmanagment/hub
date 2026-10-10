@@ -12,6 +12,7 @@ import {
   getSyncPage,
   listSyncPages,
   readSyncJournalAlertFacts,
+  readSyncPlannedDemandAlertFacts,
   readSyncStepAlertFacts,
   SYNC_ALERT_EVALUATION_RULES,
   upsertDemand,
@@ -36,15 +37,17 @@ import {
   acknowledgeSyncPaceViolations,
   collectPageAlerts,
   createIncidentAlertSink,
+  plannedDemandSlos,
   readSyncAlertStatus,
   SYNC_ALERT_CLEAN_MS,
   SYNC_LEDGER_BACKFILL_STALL_MS,
   SyncAlertEvaluator,
 } from "../apps/runtime/src/sync/engine/alerts.ts";
 import { computeSyncMetrics, sampleSyncEngineMetrics } from "../apps/runtime/src/sync/engine/metrics.ts";
-import { createEngineRegistry, pollsFor, type EngineRegistry, type ResourceModule } from "../apps/runtime/src/sync/engine/resource.ts";
+import { createEngineRegistry, demandToUpsert, pollsFor, type EngineRegistry, type ResourceModule } from "../apps/runtime/src/sync/engine/resource.ts";
 import { createFanslyRegistry, FANSLY_RESOURCE_SPECS, fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";
 import { applyAccountMeToPage } from "../apps/runtime/src/sync/fansly/resources/account.ts";
+import { purchaseTargetFollowups } from "../apps/runtime/src/sync/fansly/resources/purchases.ts";
 import { enqueueOwnerSyncWork } from "../apps/runtime/src/sync/inspect.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { seedWsCapturePage, seedWsThread, wsTransaction, type WsCapturePage } from "./helpers/fansly-ws-capture.ts";
@@ -502,6 +505,7 @@ describe("the alert evaluator (design §9.6)", () => {
     );
     await openPageLatch(page, "stuck", 20 * 60_000);
     const broken = {
+      specs: registry.specs,
       spec: (resource: string) => {
         if (resource === "notifications.forward") throw new TypeError("the registry is broken");
         return registry.spec(resource);
@@ -1392,5 +1396,381 @@ describe("alert 4: a work failing without an outcome (bug hunt Д3/У2)", () => 
       context: { resources: ["transactions.insurance"] },
     })]);
     expect((await incident("stuck", page.pageId))!.errorSummary).toContain('"resources":["transactions.insurance"]');
+  }, 60_000);
+});
+
+describe("bug hunt Д5: planned demand past its SLO; a file breaker's arms", () => {
+  // Alert 4's `planned_stale` judges a planned goal or trigger with an SLO by
+  // its demand: unserved past the SLO while the key applied no answer for as
+  // long. A file's breaker explains a wait on its first arm only.
+  const MINUTE = 60_000;
+  const HOUR = 60 * MINUTE;
+  const DAY = 24 * HOUR;
+  /** The planned goal/trigger keys with an SLO alert 4 judges by their demand. */
+  const DEMAND_KEYS = ["dm-messages.catchup", "fan-earnings.roster", "followers.reconcile", "purchases.targets"];
+  /** The standing walks: an SLO declared, not judged (plan §3.4). */
+  const STANDING_WALKS = ["catalog.vault", "media-stats.walk", "post-replies.walk", "posts.engagement"];
+  const PURCHASES = "purchases.targets";
+
+  /** Every standing row of the page, parked. */
+  async function parkStandingRows(pageId: number): Promise<void> {
+    const page = await getSyncPage(db(), pageId);
+    await ensurePollRows(db(), { pageId, polls: pollsFor(registry, page!).map((poll) => ({ ...poll, phase: 0.999 })) });
+  }
+
+  /** A demand of `resource` (reason `test`), as its trigger would leave the row. */
+  async function makeDue(pageId: number, resource: string, subject?: string, messageIds: string[] = []) {
+    const spec = fanslyResourceSpec(resource)!;
+    return upsertDemand(db(), {
+      pageId,
+      resource,
+      kind: spec.kind,
+      class: spec.class,
+      ...(subject === undefined ? {} : { subject }),
+      demand: { messageIds, reasons: ["test"] },
+    });
+  }
+
+  /** A demand signal of purchases as its producer emits it (`purchaseTargetFollowups`). */
+  async function purchaseDemand(pageId: number, targetId: string, reason: string) {
+    const [signal] = purchaseTargetFollowups([{ kind: "media", id: targetId }], reason);
+    return upsertDemand(db(), demandToUpsert(signal!, fanslyResourceSpec(PURCHASES)!, { pageId, now: new Date() })!);
+  }
+
+  /** Time passes for a work row: demanded, created and due `ms` earlier. */
+  async function ageDemand(workId: number, ms: number): Promise<void> {
+    await testDb!.pool.query(
+      `update sync_work set first_demand_at = clock_timestamp() - make_interval(secs => $2::double precision / 1000),
+              created_at = clock_timestamp() - make_interval(secs => $2::double precision / 1000),
+              due_at = clock_timestamp() - make_interval(secs => $2::double precision / 1000)
+        where id = $1`,
+      [workId, ms],
+    );
+  }
+
+  /** Another walk of purchases, closed, whose answer applied `ms` ago: the key moves. */
+  async function closedWalkApplied(pageId: number, targetId: string, ms: number): Promise<void> {
+    const { id } = await makeDue(pageId, PURCHASES, `media:${targetId}`);
+    await testDb!.pool.query(
+      `update sync_work set state = 'done', closed_at = clock_timestamp(), close_reason = 'empty_page', applied_revision = demand_revision
+        where id = $1`,
+      [id],
+    );
+    await testDb!.pool.query(
+      `insert into sync_attempts (page_id, work_id, resource, subject, class, owner_generation, setting_ms, jitter_u, pause_ms,
+                                  admitted_at, sent_at, send_mark, completed_at, operation, request, outcome, http_status,
+                                  apply_state, applied_at)
+       values ($1, $2, $3, $4, 'planned', 1, 2000, 0, 2000,
+               clock_timestamp() - make_interval(secs => $5::double precision / 1000 + 1),
+               clock_timestamp() - make_interval(secs => $5::double precision / 1000 + 1),
+               'request_start', clock_timestamp() - make_interval(secs => $5::double precision / 1000),
+               'media.order_history', '{}'::jsonb, 'response', 200,
+               'applied', clock_timestamp() - make_interval(secs => $5::double precision / 1000))`,
+      [pageId, id, PURCHASES, `media:${targetId}`, ms],
+    );
+  }
+
+  /** Time passes for the key's attempts: every instant `ms` earlier. */
+  async function ageAttempts(pageId: number, resource: string, ms: number): Promise<void> {
+    await testDb!.pool.query(
+      `update sync_attempts
+          set admitted_at = admitted_at - make_interval(secs => $3::double precision / 1000),
+              sent_at = sent_at - make_interval(secs => $3::double precision / 1000),
+              completed_at = completed_at - make_interval(secs => $3::double precision / 1000),
+              applied_at = applied_at - make_interval(secs => $3::double precision / 1000)
+        where page_id = $1 and resource = $2`,
+      [pageId, resource, ms],
+    );
+  }
+
+  /** An open chat-unavailability episode of the thread, as the actor leaves it. */
+  async function episode(threadId: number, state: "refusing" | "established"): Promise<void> {
+    await testDb!.pool.query(
+      `insert into page_dm_thread_unavailability (thread_id, state, opened_at, established_at, refusals, last_refusal_at,
+              last_http_status, retry_not_before, first_attempt_id, last_attempt_id, first_observation_id,
+              first_observation_received_at, last_observation_id, last_observation_received_at)
+       values ($1, $2::text, now() - interval '7 hours', case when $2::text = 'established' then now() - interval '1 hour' end,
+               case when $2::text = 'established' then 5 else 1 end, now() - interval '1 hour', 500,
+               case when $2::text = 'established' then now() + interval '23 hours' end,
+               41, 45, 901, now() - interval '7 hours', 905, now() - interval '1 hour')`,
+      [threadId, state],
+    );
+  }
+
+  /** What `sync alerts status` says holds for the page now. */
+  async function conditionsOf(pageId: number) {
+    const status = await readSyncAlertStatus(db(), { registry, pages: (await listSyncPages(db())).filter((row) => row.pageId === pageId) });
+    return status.pages[0]!.conditions;
+  }
+
+  async function reasonOf(pageId: number, subKey: string, detail: string) {
+    return (await conditionsOf(pageId)).find((entry) => entry.subKey === subKey)?.reasons.find((entry) => entry.detail === detail) ?? null;
+  }
+
+  /** Alert 4's `planned_stale` now (null: none). */
+  async function plannedStale(pageId: number): Promise<{ since: Date | null; resources: string[] } | null> {
+    const reason = await reasonOf(pageId, "stuck", "planned_stale");
+    return reason === null ? null : { since: reason.since, resources: reason.context!.resources as string[] };
+  }
+
+  const stuckOpened = (result: Awaited<ReturnType<typeof pass>>, pageId: number) =>
+    result.opened.filter((entry) => entry.pageId === pageId && entry.subKey === "stuck");
+
+  it("the four demand-driven keys page planned_stale past their SLO; the standing walks do not", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await enginePage("live");
+    await parkStandingRows(page.pageId);
+    await makeDue(page.pageId, "fan-earnings.roster");
+    await makeDue(page.pageId, "followers.reconcile");
+    await makeDue(page.pageId, PURCHASES, "media:910000000000000001");
+    await makeDue(page.pageId, "dm-messages.catchup", GROUP);
+    // Every one of them, the four walks and the poll `stats.daily`: demanded,
+    // created, admitted and due 4 days ago; no applied answer on the page.
+    const aged = [...DEMAND_KEYS, ...STANDING_WALKS, "stats.daily"];
+    await testDb.pool.query(
+      `update sync_work set first_demand_at = clock_timestamp() - interval '4 days', created_at = clock_timestamp() - interval '4 days',
+              last_served_at = clock_timestamp() - interval '4 days', due_at = clock_timestamp() - interval '4 days'
+        where page_id = $1 and resource = any($2::text[])`,
+      [page.pageId, aged],
+    );
+    expect(await query("select 1 from sync_work where page_id = $1 and resource = any($2::text[]) and state = 'open'", [page.pageId, aged]))
+      .toHaveLength(aged.length);
+    const stale = await plannedStale(page.pageId);
+    expect(new Set(stale?.resources)).toEqual(new Set([...DEMAND_KEYS, "stats.daily"]));
+    for (const walk of STANDING_WALKS) expect(stale?.resources).not.toContain(walk);
+  }, 60_000);
+
+  it("an overdue demand the vendor, a refused chat, a pause or its key's progress explains pages nobody", async (context) => {
+    if (!testDb) return context.skip();
+    let pages = 0;
+    /** A clean live page with one demand of `resource`, 2 days old. */
+    async function overdue(resource: string, subject: string): Promise<{ pageId: number; workId: number }> {
+      pages += 1;
+      const page = await enginePage("live", `d5-${pages}`, `10000000000000${1000 + pages}`);
+      await parkStandingRows(page.pageId);
+      const { id } = await makeDue(page.pageId, resource, subject);
+      await ageDemand(id, 2 * DAY);
+      return { pageId: page.pageId, workId: id };
+    }
+    const setWork = (workId: number, set: string) => testDb!.pool.query(`update sync_work set ${set} where id = $1`, [workId]);
+    const TARGET = "media:910000000000000001";
+
+    // Control: as it stands, it pages.
+    const control = await overdue(PURCHASES, TARGET);
+    expect(await plannedStale(control.pageId)).toMatchObject({ resources: [PURCHASES] });
+
+    // The vendor blocks the subject.
+    const blocked = await overdue(PURCHASES, TARGET);
+    await setWork(blocked.workId, "blocked_by_vendor_at = clock_timestamp() - interval '1 day'");
+    expect(await plannedStale(blocked.pageId)).toBeNull();
+    // Its own breaker stands for another hour.
+    const held = await overdue(PURCHASES, TARGET);
+    await setWork(held.workId, "breaker_until = clock_timestamp() + interval '1 hour'");
+    expect(await plannedStale(held.pageId)).toBeNull();
+    // Its own breaker ended an hour ago: it waits from there, not from its first demand.
+    const ended = await overdue(PURCHASES, TARGET);
+    await setWork(ended.workId, "breaker_until = clock_timestamp() - interval '1 hour'");
+    expect(await plannedStale(ended.pageId)).toBeNull();
+    // A chat with an open unavailability episode, refusing or established.
+    for (const state of ["refusing", "established"] as const) {
+      const refused = await overdue("dm-messages.catchup", GROUP);
+      expect(await plannedStale(refused.pageId), state).toMatchObject({ resources: ["dm-messages.catchup"] });
+      await episode(await seedWsThread({ db: db(), pool: testDb.pool }, { pageId: refused.pageId, groupId: GROUP, fanRef: FAN }), state);
+      expect(await plannedStale(refused.pageId), state).toBeNull();
+    }
+    // The owner's pause of the key, of the page; a network hold of the page.
+    const paused = await overdue(PURCHASES, TARGET);
+    await testDb.pool.query("update sync_pages set paused_resources = array['purchases.targets'] where page_id = $1", [paused.pageId]);
+    expect(await plannedStale(paused.pageId)).toBeNull();
+    const pausedAll = await overdue(PURCHASES, TARGET);
+    await testDb.pool.query("update sync_pages set paused_all = true where page_id = $1", [pausedAll.pageId]);
+    expect(await plannedStale(pausedAll.pageId)).toBeNull();
+    const network = await overdue(PURCHASES, TARGET);
+    await seedPageHold(testDb, { pageId: network.pageId, kind: "network", untilSeconds: 60 });
+    expect(await plannedStale(network.pageId)).toBeNull();
+    // The key applied an answer within its SLO (another, closed walk of it).
+    const moving = await overdue(PURCHASES, TARGET);
+    await closedWalkApplied(moving.pageId, "910000000000000002", HOUR);
+    expect(await plannedStale(moving.pageId)).toBeNull();
+    // Control: that answer admitted 13 h ago (SLO 12 h) is no progress.
+    await ageAttempts(moving.pageId, PURCHASES, 12 * HOUR);
+    expect(await plannedStale(moving.pageId)).toMatchObject({ resources: [PURCHASES] });
+  }, 120_000);
+
+  it("a paused key's overdue rows never hide another key's overdue demand", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await enginePage("live");
+    await parkStandingRows(page.pageId);
+    const purchases = fanslyResourceSpec(PURCHASES)!;
+    await upsertDemands(db(), Array.from({ length: 201 }, (_, index) => ({
+      pageId: page.pageId,
+      resource: PURCHASES,
+      subject: `media:9100000000${String(index).padStart(8, "0")}`,
+      kind: purchases.kind,
+      class: purchases.class,
+      demand: { reasons: ["test"] },
+    })));
+    await testDb.pool.query(
+      "update sync_work set first_demand_at = clock_timestamp() - interval '2 days' where page_id = $1 and resource = $2",
+      [page.pageId, PURCHASES],
+    );
+    await testDb.pool.query("update sync_pages set paused_resources = array['purchases.targets'] where page_id = $1", [page.pageId]);
+    const { id } = await makeDue(page.pageId, "dm-messages.catchup", GROUP);
+    await ageDemand(id, 7 * HOUR);
+
+    // One fact row per key, however many rows the paused one has.
+    const facts = await readSyncPlannedDemandAlertFacts(db(), { pageId: page.pageId, slos: plannedDemandSlos(registry) });
+    expect(facts.stale.map((row) => ({ resource: row.resource, works: row.works }))).toEqual([
+      { resource: PURCHASES, works: 201 },
+      { resource: "dm-messages.catchup", works: 1 },
+    ]);
+
+    expect(stuckOpened(await pass(), page.pageId)).toEqual([{ pageId: page.pageId, subKey: "stuck", detail: "planned_stale" }]);
+    expect((await plannedStale(page.pageId))?.resources).toEqual(["dm-messages.catchup"]);
+    const summary = (await incident("stuck", page.pageId))!.errorSummary;
+    expect(summary).toContain("dm-messages.catchup");
+    expect(summary).not.toContain(PURCHASES);
+  }, 60_000);
+
+  it("a sale merged into a history load's row waits behind the load, not from the load's start", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await enginePage("live");
+    await parkStandingRows(page.pageId);
+    // The history load's demand for the target, 13 h ago (SLO 12 h); the load
+    // moves: another target's walk applied its answer 10 min ago.
+    const { id } = await purchaseDemand(page.pageId, "910000000000000001", "transactions.backfill");
+    await ageDemand(id, 13 * HOUR);
+    await closedWalkApplied(page.pageId, "910000000000000002", 10 * MINUTE);
+    // A new sale of the target, as the socket router signals it, merges into
+    // the load's row: its first demand stays the load's.
+    const sale = await purchaseDemand(page.pageId, "910000000000000001", "ws:order");
+    const [row] = await query<{ firstDemandAt: Date; reasons: string[] }>(
+      `select first_demand_at as "firstDemandAt", demand -> 'reasons' as reasons from sync_work where id = $1`,
+      [id],
+    );
+    expect(sale).toMatchObject({ id, created: false, demandRevision: 2 });
+    expect([...row!.reasons].sort()).toEqual(["transactions.backfill", "ws:order"]);
+    expect(Date.now() - row!.firstDemandAt.getTime()).toBeGreaterThan(13 * HOUR - MINUTE);
+    expect(await plannedStale(page.pageId)).toBeNull();
+
+    // Control: the load's last applied answer admitted 13 h ago — it stopped,
+    // and the row pages from its first demand.
+    await ageAttempts(page.pageId, PURCHASES, 13 * HOUR);
+    expect(await plannedStale(page.pageId)).toEqual({ since: row!.firstDemandAt, resources: [PURCHASES] });
+  }, 60_000);
+
+  it("a walk that resumes after the vendor's block is not stale while its pages apply", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await enginePage("live");
+    await ensureFanslyPageSendGuard(db(), page.pageId);
+    await testDb.pool.query("update fansly_page_send_guards set owner_engine = 'fansly_sync_engine' where page_id = $1", [page.pageId]);
+    await testDb.pool.query(
+      "update pages set metadata = $2::jsonb, last_verified_at = clock_timestamp() where id = $1",
+      [page.pageId, JSON.stringify({ accountCreatedAt: "2026-08-15T00:00:00.000Z" })],
+    );
+    await parkStandingRows(page.pageId);
+    const targetId = "880000000000000002";
+    const { id } = await makeDue(page.pageId, PURCHASES, `media:${targetId}`);
+    // Demanded 2 days ago; the vendor blocked it a day ago and its daily probe is due now.
+    await ageDemand(id, 2 * DAY);
+    await testDb.pool.query(
+      `update sync_work set failure_count = 5, blocked_by_vendor_at = clock_timestamp() - interval '1 day',
+              breaker_until = clock_timestamp() - interval '1 second', due_at = clock_timestamp() - interval '1 second',
+              waiting_reason = 'blocked_by_vendor'
+        where id = $1`,
+      [id],
+    );
+    // Fansly answers with a page of orders, and with older ones below each:
+    // the walk goes on, its row open with unserved demand.
+    const order = (orderId: number) => ({
+      orderId: String(orderId), accountId: "500000000000000011", accountMediaId: targetId, createdAt: Math.floor(Date.now() / 1000) - 60, type: 1,
+    });
+    const transport = new ScriptedLiveTransport();
+    transport.respond = (req) => {
+      const before = new URL(req.url).searchParams.get("before");
+      const head = before === null ? 9_100 : Number(before) - 1;
+      return okResponse({ accountMediaOrderHistory: [order(head), order(head - 1)] });
+    };
+    const applied = async () => (await query<{ n: number }>(
+      "select count(*)::int as n from sync_attempts where page_id = $1 and resource = $2 and apply_state = 'applied'", [page.pageId, PURCHASES],
+    ))[0]!.n;
+    const { actor, stop, abort } = await makeTestActor({ db: db(), pageId: page.pageId, registry, transport, ownRef: OWN });
+    const running = actor.run({ stop: stop.signal, abort: abort.signal });
+    try {
+      await waitFor(async () => ((await applied()) >= 1 ? true : null), 30_000, "the probe's applied page");
+    } finally {
+      stop.abort();
+      await running;
+    }
+    await testDb.pool.query("update sync_pages set owner_heartbeat_at = clock_timestamp() where page_id = $1", [page.pageId]);
+
+    // The applied page lifted the vendor's block and the breaker; the walk goes on below it.
+    const [row] = await query<{
+      state: string; blockedByVendorAt: Date | null; breakerUntil: Date | null; appliedRevision: number; demandRevision: number;
+      cursor: { before?: unknown };
+    }>(
+      `select state, blocked_by_vendor_at as "blockedByVendorAt", breaker_until as "breakerUntil",
+              applied_revision::int as "appliedRevision", demand_revision::int as "demandRevision", cursor
+         from sync_work where id = $1`,
+      [id],
+    );
+    expect(row).toMatchObject({ blockedByVendorAt: null, breakerUntil: null });
+    expect(["open", "running"]).toContain(row!.state);
+    expect(row!.appliedRevision).toBeLessThan(row!.demandRevision);
+    expect(row!.cursor.before).toEqual(expect.any(String));
+    // Its demand is 2 days old and nothing holds it any more, but the key applies.
+    expect(stuckOpened(await pass(), page.pageId)).toEqual([]);
+    expect(await plannedStale(page.pageId)).toBeNull();
+
+    // Control: its applied pages 13 h old (SLO 12 h).
+    await ageAttempts(page.pageId, PURCHASES, 13 * HOUR);
+    expect(await plannedStale(page.pageId)).toMatchObject({ resources: [PURCHASES] });
+  }, 90_000);
+
+  it("the evaluator opens stuck for an overdue catch-up and resolves it once served", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await enginePage("live");
+    await parkStandingRows(page.pageId);
+    const { id } = await makeDue(page.pageId, "dm-messages.catchup", GROUP);
+    await ageDemand(id, 7 * HOUR);
+    expect(stuckOpened(await pass(), page.pageId)).toEqual([{ pageId: page.pageId, subKey: "stuck", detail: "planned_stale" }]);
+    expect((await incident("stuck", page.pageId))!.errorSummary).toContain('"resources":["dm-messages.catchup"]');
+
+    // Served: the next pass resolves the latch at once (alert 4).
+    await testDb.pool.query("update sync_work set applied_revision = demand_revision where id = $1", [id]);
+    expect((await pass()).resolved).toEqual([{ pageId: page.pageId, subKey: "stuck" }]);
+    expect(await incident("stuck", page.pageId)).toMatchObject({ status: "resolved" });
+  }, 60_000);
+
+  it("a file breaker explains the waits on its first arm only", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await enginePage("live");
+    await parkStandingRows(page.pageId);
+    // A new chat's find due 10 min ago, and the list head unread for 2 h (SLO 90 min).
+    await makeDue(page.pageId, "dm-conversations.find", GROUP, ["910000000000000007"]);
+    await testDb.pool.query(
+      `update sync_work set due_at = clock_timestamp() - interval '10 minutes', first_demand_at = clock_timestamp() - interval '10 minutes',
+              waiting_reason = null
+        where page_id = $1 and resource = 'dm-conversations.find'`,
+      [page.pageId],
+    );
+    await testDb.pool.query(
+      `update sync_work set created_at = clock_timestamp() - interval '2 hours', last_served_at = clock_timestamp() - interval '2 hours'
+        where page_id = $1 and resource = 'dm-conversations.head'`,
+      [page.pageId],
+    );
+    const breaker = (step: number) =>
+      replaceHoldRows(testDb!, page.pageId, "resource", [resourceBreakerRow("dm-conversations", new Date(Date.now() + 25 * MINUTE), { step })]);
+
+    // The first arm (30 min): a short trouble of the file explains both waits.
+    await breaker(1);
+    const first = await conditionsOf(page.pageId);
+    expect(first.find((entry) => entry.subKey === "freshness")).toBeUndefined();
+    expect(first.find((entry) => entry.subKey === "stuck")).toBeUndefined();
+
+    // Back before any success (2 h): nobody else pages for the file, so its keys do.
+    await breaker(2);
+    expect((await reasonOf(page.pageId, "freshness", "urgent_waiting"))?.context).toMatchObject({ resources: ["dm-conversations.find"] });
+    expect(await plannedStale(page.pageId)).toMatchObject({ resources: ["dm-conversations.head"] });
   }, 60_000);
 });
