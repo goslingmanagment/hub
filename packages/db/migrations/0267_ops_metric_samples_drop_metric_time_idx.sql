@@ -1,5 +1,5 @@
 -- agency-hub:no-transaction
--- 0266: drop ops_metric_samples_metric_time_idx (metric, sampled_at desc).
+-- 0267: drop ops_metric_samples_metric_time_idx (metric, sampled_at desc).
 --
 -- 0186 kept it "for the other metric reads", and the only other read by
 -- metric is listOpsMetricSamplesSince (ops-metrics.ts): one series by metric

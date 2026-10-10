@@ -4,7 +4,7 @@ import { listOpsMetricSamplesSince } from "@agency_hub_core/db";
 
 import { startTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 
-// 0266 dropped ops_metric_samples_metric_time_idx (metric, sampled_at desc):
+// 0267 dropped ops_metric_samples_metric_time_idx (metric, sampled_at desc):
 // its only reader, listOpsMetricSamplesSince (the disk alert's series fit),
 // filters by metric AND quantile, which 0186's series index answers with all
 // three keys and value_ms included.
@@ -32,7 +32,7 @@ afterAll(async () => {
   await harness?.stop();
 });
 
-describe("ops_metric_samples indexes after 0266", () => {
+describe("ops_metric_samples indexes after 0267", () => {
   it("no longer carries the (metric, sampled_at) index", async () => {
     const result = await harness.pool.query<{ indexname: string }>(
       "select indexname from pg_indexes where tablename = 'ops_metric_samples' order by 1",
