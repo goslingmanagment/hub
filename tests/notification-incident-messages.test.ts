@@ -1,10 +1,17 @@
 import { describe, expect, it } from "vitest";
 
+import { appendMissedAlertsLine, type NotificationPagingCandidate } from "@agency_hub_core/db";
+
 import { describeClosedFanslyPage } from "../apps/runtime/src/services/fansly-send-guard/monitor.ts";
 import {
   openMessageForIncident,
   resolveMessageForIncident,
 } from "../apps/runtime/src/services/notification-incidents.ts";
+import {
+  MISSED_ALERTS_SUMMARY_MAX_CHARS,
+  renderMissedAlertsHeader,
+  renderMissedAlertsLine,
+} from "../apps/runtime/src/services/notification-paging-sweep.ts";
 
 // Review R2-7: the resolve-text ternary had explicit text for 8 of 12 kinds;
 // golden_signal_lag auto-resolves TODAY and fell through to "OFAPI webhooks
@@ -180,5 +187,83 @@ describe("resolveMessageForIncident", () => {
         platform: "onlyfans",
       }),
     ).toContain("generation recovered");
+  });
+});
+
+// Д2: a page that opened and resolved before Telegram accepted its alert is a
+// line of one missed-alerts summary — no late "🚨", no "✅" without it.
+describe("missed-alerts summary", () => {
+  function candidate(overrides: Partial<NotificationPagingCandidate>): NotificationPagingCandidate {
+    return {
+      incidentId: 116,
+      incidentKey: "fansly_sync_engine:10:freshness",
+      kind: "fansly_sync_engine",
+      platformAccountId: 10,
+      pageLabel: "lilly-2",
+      platform: "fansly",
+      stream: null,
+      status: "resolved",
+      openedAt: new Date("2026-10-05T15:32:54Z"),
+      lastSeenAt: new Date("2026-10-05T15:42:54Z"),
+      resolvedAt: new Date("2026-10-05T15:42:54Z"),
+      errorSummary: null,
+      resolution: null,
+      paging: null,
+      ...overrides,
+    };
+  }
+
+  it("names the episode, its page and the span it was open", () => {
+    expect(renderMissedAlertsHeader())
+      .toBe("📵 Not delivered in time — these alerts opened and resolved before Telegram accepted them:");
+    expect(renderMissedAlertsLine({
+      candidate: candidate({}),
+      pagedOpenedAt: new Date("2026-10-05T15:32:54Z"),
+      pagedMode: "immediate",
+      resolvedAt: new Date("2026-10-05T15:42:54Z"),
+    })).toBe("• Fansly Sync Engine freshness broken (messages, money or urgent work late) — lilly-2 (fansly)"
+      + " · 10-05 15:32 → 15:42 UTC (10 min)");
+    // A flapping page covered a storm, not one episode; a span past midnight
+    // dates both ends; a global latch has no page.
+    expect(renderMissedAlertsLine({
+      candidate: candidate({ kind: "proxy_failed", incidentKey: "proxy_failed:7", pageLabel: "lora-2" }),
+      pagedOpenedAt: new Date("2026-10-05T22:10:00Z"),
+      pagedMode: "flapping",
+      resolvedAt: new Date("2026-10-06T01:02:00Z"),
+    })).toBe("• Proxy failed — lora-2 (fansly) · flapped 10-05 22:10 → 10-06 01:02 UTC (2 h 52 min)");
+    expect(renderMissedAlertsLine({
+      candidate: candidate({
+        kind: "scheduler_silent", incidentKey: "scheduler_silent:global", platformAccountId: null, pageLabel: null, platform: null,
+      }),
+      pagedOpenedAt: null,
+      pagedMode: "sustained",
+      resolvedAt: new Date("2026-10-05T15:50:00Z"),
+    })).toBe("• Scheduler heartbeat silent — cron is not firing · 10-05 15:32 → 15:50 UTC (17 min)");
+  });
+
+  it("stays under 3 500 characters: a line that would pass it starts a new summary", () => {
+    expect(MISSED_ALERTS_SUMMARY_MAX_CHARS).toBe(3_500);
+    const line = renderMissedAlertsLine({
+      candidate: candidate({ pageLabel: "x".repeat(64) }),
+      pagedOpenedAt: new Date("2026-10-05T15:32:54Z"),
+      pagedMode: "immediate",
+      resolvedAt: new Date("2026-10-05T15:42:54Z"),
+    });
+    let text = `${renderMissedAlertsHeader()}\n${line}`;
+    let lines = 1;
+    for (;;) {
+      const appended = appendMissedAlertsLine(text, line, MISSED_ALERTS_SUMMARY_MAX_CHARS);
+      if (appended === null) {
+        break;
+      }
+      text = appended;
+      lines += 1;
+    }
+    expect(text.length).toBeLessThanOrEqual(3_500);
+    expect(text.length + 1 + line.length).toBeGreaterThan(3_500);
+    expect(lines).toBeGreaterThan(10);
+    // Telegram's own limit is 4 096 UTF-16 units; the margin is the point.
+    expect(appendMissedAlertsLine("a".repeat(3_499), "b", 3_500)).toBeNull();
+    expect(appendMissedAlertsLine("a".repeat(3_498), "b", 3_500)).toBe(`${"a".repeat(3_498)}\nb`);
   });
 });

@@ -4,6 +4,7 @@ import {
   insertDeliveryAttempt,
   listNotificationIncidentCyclesSince,
   listNotificationIncidentsWithPages,
+  summarizeNotificationPageDelivery,
   type NotificationIncidentCycleWithPage,
   type NotificationIncidentKind,
   type NotificationIncidentWithPage,
@@ -32,7 +33,9 @@ function escapeHtml(text: string) {
     .replaceAll(">", "&gt;");
 }
 
-function subjectLabel(input: {
+/** "<title> — <page> (<platform>)": the digest's subject, and the missed-alerts
+ * summary's (notification-paging-sweep.ts). */
+export function subjectLabel(input: {
   kind: NotificationIncidentKind;
   subKey: string | null;
   pageLabel: string | null;
@@ -49,14 +52,22 @@ export interface AlertDigestInput {
   windowMs?: number;
   open: readonly NotificationIncidentWithPage[];
   cycles: readonly NotificationIncidentCycleWithPage[];
+  /** Д2: the window's pages by where their opening ended — a page counts
+   *  once it reached Telegram, not once it was enqueued. */
+  pageDelivery: { delivered: number; missed: number; queued: number };
+}
+
+function countOf(count: number, singular: string, plural: string) {
+  return `${count} ${count === 1 ? singular : plural}`;
 }
 
 /** Null when there is nothing worth a message. Exported for the text tests. */
 export function renderAlertDigest(input: AlertDigestInput): string | null {
   const windowMs = input.windowMs ?? ALERT_DIGEST_WINDOW_MS;
-  const paged = input.cycles.filter((cycle) => cycle.paged);
   const quiet = input.cycles.filter((cycle) => !cycle.paged);
-  if (input.open.length === 0 && input.cycles.length === 0) {
+  const { delivered, missed, queued } = input.pageDelivery;
+  const pages = delivered + missed + queued;
+  if (input.open.length === 0 && input.cycles.length === 0 && pages === 0) {
     return null;
   }
 
@@ -86,7 +97,13 @@ export function renderAlertDigest(input: AlertDigestInput): string | null {
   }
 
   const summary = [
-    paged.length > 0 ? `${paged.length} paged` : null,
+    ...(pages > 0
+      ? [
+        `${countOf(delivered, "page", "pages")} delivered`,
+        `${missed} not delivered`,
+        `${queued} still queued`,
+      ]
+      : []),
     quiet.length > 0 ? `${quiet.length} quiet episode${quiet.length === 1 ? "" : "s"} healed before paging` : null,
   ].filter((part): part is string => part !== null);
   if (summary.length > 0) {
@@ -134,11 +151,12 @@ export async function buildAlertDigest(
   now = new Date(),
 ): Promise<string | null> {
   const since = new Date(now.getTime() - ALERT_DIGEST_WINDOW_MS);
-  const [open, cycles] = await Promise.all([
+  const [open, cycles, pageDelivery] = await Promise.all([
     listNotificationIncidentsWithPages(app.db, { status: "open", limit: 200 }),
     listNotificationIncidentCyclesSince(app.db, { since }),
+    summarizeNotificationPageDelivery(app.db, { since }),
   ]);
-  return renderAlertDigest({ now, open: open.items, cycles });
+  return renderAlertDigest({ now, open: open.items, cycles, pageDelivery });
 }
 
 export type AlertDigestDelivery =

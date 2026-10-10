@@ -430,4 +430,24 @@ describe("database migration invariants", () => {
     expect(compatible).toContain('"0260_page_link_fans.sql"');
     expect(compatible).toContain('"0261_sync_raw_payloads_link_fans_idx.sql"');
   });
+
+  it("adds the missed-alerts summary reference as a nullable self-reference and lifts the standing alert queue", async () => {
+    const migration = await readFile("packages/db/migrations/0263_notification_outbox_reported_in.sql", "utf8");
+    const statements = migration.split("\n").filter((line) => !line.trim().startsWith("--")).join("\n");
+
+    // Nullable, no default: the ALTER touches the catalog only.
+    expect(statements).toMatch(
+      /ADD COLUMN IF NOT EXISTS reported_in_outbox_id bigint\s+REFERENCES notification_delivery_outbox\(id\);/,
+    );
+    expect(statements).not.toMatch(/reported_in_outbox_id bigint[^;]*(NOT NULL|DEFAULT)/i);
+    // Only the alerts still queued get the new horizon; the AI pair keeps 5.
+    expect(statements).toContain("SET max_attempts = 400");
+    expect(statements).toContain("WHERE paging_policy = 'sync_failure'");
+    expect(statements).toContain("AND state IN ('pending', 'leased')");
+    expect(statements).not.toContain("ai_critical");
+
+    const deploy = await readFile("scripts/deploy-production.sh", "utf8");
+    expect(deploy.match(/ROLLBACK_COMPATIBLE_MIGRATIONS=\([\s\S]*?\n\)/)?.[0])
+      .toContain('"0263_notification_outbox_reported_in.sql"');
+  });
 });

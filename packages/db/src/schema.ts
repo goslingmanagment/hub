@@ -1,5 +1,6 @@
 import type { OfapiExtendedCommandKind, OfapiExtendedCommandPayload } from "@agency_hub_core/shared";
 import {
+  type AnyPgColumn,
   bigserial,
   bigint,
   boolean,
@@ -553,6 +554,9 @@ export const notificationDeliveryOutbox = pgTable(
     suppressionReason: text("suppression_reason"),
     deliveredAt: timestamp("delivered_at", { withTimezone: true }),
     exhaustedAt: timestamp("exhausted_at", { withTimezone: true }),
+    /** Д2 (0263): the missed-alerts summary that reports this retired opening. */
+    reportedInOutboxId: bigint("reported_in_outbox_id", { mode: "number" })
+      .references((): AnyPgColumn => notificationDeliveryOutbox.id),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },

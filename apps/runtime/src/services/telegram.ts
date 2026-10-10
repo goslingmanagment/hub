@@ -341,6 +341,11 @@ export async function sendTelegramMessage(
     /** Stable outbox identity for traceability; Telegram has no native
      * idempotency parameter, so it is deliberately not sent over the wire. */
     idempotencyKey?: string;
+    /** Д2: false leaves a timed-out request unrepeated within this call — a
+     * timeout is an indeterminate outcome, and the notification outbox
+     * repeats the row itself after its backoff. 429, 5xx and the other
+     * transport failures are retried in-process either way. Default true. */
+    retryTimeouts?: boolean;
   },
 ): Promise<TelegramSendResult> {
   const creds = input.credentials ?? resolveTelegramCredentials(
@@ -451,7 +456,8 @@ export async function sendTelegramMessage(
         const described = describeTelegramFailure(error);
         const failureKind = classifyTransportFailure(error);
         const canRetry = attemptNumber <= TELEGRAM_SEND_MAX_RETRIES
-          && failureKind !== "connect";
+          && failureKind !== "connect"
+          && (failureKind !== "timeout" || input.retryTimeouts !== false);
 
         if (canRetry) {
           await delay(resolveRetryDelayMs(null, attemptNumber));

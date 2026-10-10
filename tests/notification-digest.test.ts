@@ -15,6 +15,7 @@ const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const NOW = new Date("2026-09-22T09:00:00.000Z");
 const ago = (ms: number) => new Date(NOW.getTime() - ms);
+const NO_PAGES = { delivered: 0, missed: 0, queued: 0 };
 
 function openIncident(
   overrides: Partial<NotificationIncidentWithPage> & Pick<NotificationIncidentWithPage, "id" | "kind" | "incidentKey">,
@@ -55,7 +56,7 @@ function cycle(
 
 describe("renderAlertDigest", () => {
   it("is silent when nothing is open and nothing happened", () => {
-    expect(renderAlertDigest({ now: NOW, open: [], cycles: [] })).toBeNull();
+    expect(renderAlertDigest({ now: NOW, open: [], cycles: [], pageDelivery: NO_PAGES })).toBeNull();
   });
 
   it("lists standing incidents by age and groups the quiet episodes per subject", () => {
@@ -91,6 +92,7 @@ describe("renderAlertDigest", () => {
         cycle({ kind: "scheduler_silent", incidentKey: "scheduler_silent:global", resolvedAt: ago(2 * HOUR - 5 * MINUTE) }),
         cycle({ kind: "proxy_failed", incidentKey: "proxy_failed:7", pageLabel: "lora-2", platform: "fansly", paged: true }),
       ],
+      pageDelivery: { delivered: 1, missed: 0, queued: 0 },
     });
 
     expect(text).toBe([
@@ -100,7 +102,7 @@ describe("renderAlertDigest", () => {
       "• OFAPI chargebacks reconcile failed · 13 d",
       "• Proxy failed — lora-2 (fansly) · 3 h 12 min",
       "",
-      "<b>Window</b>: 1 paged · 3 quiet episodes healed before paging",
+      "<b>Window</b>: 1 page delivered · 0 not delivered · 0 still queued · 3 quiet episodes healed before paging",
       "• Proxy failed — lilly-1 (fansly): 2 episodes, longest 4 min",
       "• Scheduler heartbeat silent — cron is not firing: 1 episode, longest 5 min",
     ].join("\n"));
@@ -121,8 +123,38 @@ describe("renderAlertDigest", () => {
           resolvedAt: null,
         }),
       ],
+      pageDelivery: NO_PAGES,
     });
     expect(text).toContain("• Stream sync failed — a&lt;b&gt; (onlyfans): 1 episode, longest 30 min");
     expect(text).not.toContain("Open now");
+  });
+
+  // Д2: "N paged" counted a page the moment it was enqueued, so a page lost
+  // in a Telegram outage read as sent. The window now counts where each
+  // page's opening ended.
+  it("counts delivered, not delivered and queued pages instead of enqueued ones", () => {
+    const pagedCycles = [0, 1, 2, 3].map((index) => cycle({
+      kind: "fansly_sync_engine",
+      incidentKey: `fansly_sync_engine:${index}:live_degraded`,
+      pageLabel: `lilly-${index}`,
+      platform: "fansly",
+      paged: true,
+    }));
+    const text = renderAlertDigest({
+      now: NOW,
+      open: [],
+      cycles: pagedCycles,
+      pageDelivery: { delivered: 2, missed: 1, queued: 1 },
+    });
+    expect(text).toBe([
+      "🩺 <b>Alerts · last 1 d</b>",
+      "",
+      "<b>Window</b>: 2 pages delivered · 1 not delivered · 1 still queued",
+    ].join("\n"));
+    expect(text).not.toContain("paged");
+
+    // A page whose episode began before the window still makes the digest.
+    expect(renderAlertDigest({ now: NOW, open: [], cycles: [], pageDelivery: { delivered: 0, missed: 1, queued: 0 } }))
+      .toBe("🩺 <b>Alerts · last 1 d</b>\n\n<b>Window</b>: 0 pages delivered · 1 not delivered · 0 still queued");
   });
 });

@@ -16,6 +16,7 @@ import {
   notifySyncEngineIncident,
   resolveLegacyStreamIncidentsOfEnginePage,
 } from "../apps/runtime/src/services/notification-incidents.ts";
+import { runNotificationDeliveryOutbox } from "../apps/runtime/src/services/notification-delivery-outbox.ts";
 import { runNotificationPagingSweep } from "../apps/runtime/src/services/notification-paging-sweep.ts";
 import { SyncEngineHost, type SyncHostOptions } from "../apps/runtime/src/sync/engine/host.ts";
 import { createPacer } from "../apps/runtime/src/sync/engine/pacer.ts";
@@ -175,8 +176,13 @@ describe("legacy stream incidents at the transition to the Fansly Sync Engine", 
     const model = await createModel(db(), { slug: "of-model", name: "of" });
     const onlyFans = (await createOnlyFansPage(db(), { modelId: model!.id, label: "of-1" }))!;
     await legacyStreamFailure({ pageId: onlyFans.id, label: "of-1", platform: "onlyfans", stream: "posts", at: openedAt });
-    // The sweep pages the stream latches (open for an hour, hold 10 min).
+    // The sweep pages the stream latches (open for an hour, hold 10 min), and
+    // the pages reach the owner — a page that never did would close into the
+    // missed-alerts summary instead of its own resolve message (Д2).
     await runNotificationPagingSweep(app(), { now: new Date() });
+    await runNotificationDeliveryOutbox(app(), {
+      sender: async () => ({ status: "sent" as const, chatId: "1", messageId: 1 }),
+    });
 
     // The page is switched live (the switch's end state: mode, guard, import);
     // the engine raises one of its own alerts.

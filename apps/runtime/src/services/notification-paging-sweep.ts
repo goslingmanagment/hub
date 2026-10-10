@@ -1,11 +1,12 @@
 import {
+  ALERT_DELIVERY_MAX_ATTEMPTS,
   enqueueNotificationDeliveryOutbox,
-  getNotificationDeliveryOutboxByIncident,
   hasManualIncidentResolveSince,
   listNotificationPagingCandidates,
   markNotificationIncidentCyclesPaged,
   recordNotificationIncidentCycle,
   settleNotificationIncidentCycle,
+  settleUndeliveredPage,
   summarizeNotificationIncidentCycles,
   upsertNotificationIncidentPaging,
   type Database,
@@ -15,6 +16,7 @@ import {
 import type { PgBoss, Queue } from "pg-boss";
 
 import type { AppContext } from "../bootstrap.ts";
+import { subjectLabel } from "./notification-digest.ts";
 import {
   openMessageForIncident,
   parseIncidentSubKey,
@@ -49,7 +51,9 @@ export const NOTIFICATION_PAGING_SWEEP_LOCK_KEY = 1;
 /** Episodes that resolved earlier than this were either recorded by an
  * earlier sweep or are older than anything the digest reports. */
 const RESOLVED_LOOKBACK_MS = 7 * 24 * 60 * 60_000;
-const MAX_DELIVERY_ATTEMPTS = 5;
+/** Д2: a missed-alerts summary stays well under Telegram's 4 096; a line
+ * that would pass it starts a new summary. */
+export const MISSED_ALERTS_SUMMARY_MAX_CHARS = 3_500;
 
 const notificationPagingSweepQueueOptions = {
   policy: "exclusive",
@@ -87,6 +91,11 @@ export interface NotificationPagingSweepResult {
   paged: number;
   resolved: number;
   silentlyResolved: number;
+  /** Pages that resolved before their opening reached Telegram: reported in
+   *  the missed-alerts summary instead. */
+  missedReported: number;
+  /** Recoveries left to the next sweep: the opening was being sent. */
+  deferred: number;
   failed: number;
 }
 
@@ -160,6 +169,39 @@ export function renderPagingResolvedMessage(input: {
   const span = formatDurationShort(input.resolvedAt.getTime() - input.pagedOpenedAt.getTime());
   const verb = input.pagedMode === "flapping" ? "flapped for" : "was open";
   return `${base}\nQuiet for ${quiet} · ${verb} ${span}`;
+}
+
+/** Д2: the first line of a missed-alerts summary. */
+export function renderMissedAlertsHeader(): string {
+  return "📵 Not delivered in time — these alerts opened and resolved before Telegram accepted them:";
+}
+
+function formatUtcMinute(date: Date, withDay: boolean): string {
+  const iso = date.toISOString();
+  return withDay ? `${iso.slice(5, 10)} ${iso.slice(11, 16)}` : iso.slice(11, 16);
+}
+
+/** Д2: one missed episode — what, where, and the span it was open:
+ * `• <title> — <page> (fansly) · 10-05 15:32 → 15:42 UTC (10 min)`; a
+ * flapping page says "flapped" before its span. */
+export function renderMissedAlertsLine(input: {
+  candidate: NotificationPagingCandidate;
+  pagedOpenedAt: Date | null;
+  pagedMode: "immediate" | "sustained" | "flapping" | null;
+  resolvedAt: Date;
+}): string {
+  const { candidate } = input;
+  const label = subjectLabel({
+    kind: candidate.kind,
+    subKey: subKeyOf(candidate),
+    pageLabel: candidate.pageLabel,
+    platform: candidate.platform,
+  });
+  const openedAt = input.pagedOpenedAt ?? candidate.openedAt;
+  const sameDay = openedAt.toISOString().slice(0, 10) === input.resolvedAt.toISOString().slice(0, 10);
+  const span = `${formatUtcMinute(openedAt, true)} → ${formatUtcMinute(input.resolvedAt, !sameDay)} UTC`
+    + ` (${formatDurationShort(input.resolvedAt.getTime() - openedAt.getTime())})`;
+  return `• ${label} · ${input.pagedMode === "flapping" ? "flapped " : ""}${span}`;
 }
 
 async function evaluateCandidate(
@@ -261,7 +303,7 @@ async function evaluateCandidate(
           channel: "telegram",
           messageText,
           pagingPolicy: "sync_failure",
-          maxAttempts: MAX_DELIVERY_ATTEMPTS,
+          maxAttempts: ALERT_DELIVERY_MAX_ATTEMPTS,
         },
         now,
       });
@@ -284,40 +326,71 @@ async function evaluateCandidate(
     return;
   }
 
-  // A recovery is only news if the page itself reached Telegram. A page whose
-  // outbox row ended suppressed (alerts were off) or exhausted must not be
-  // followed by an orphan "Resolved". Rows still pending are fine: the outbox
-  // delivers per incident in transition order, so the page goes first. No row
-  // at all means the page predates this sweep (the migration seed) and was
-  // sent by the retired direct path.
-  const pageRows = paging?.pagedAt
-    ? (await getNotificationDeliveryOutboxByIncident(app.db, candidate.incidentId))
-      .filter((row) => row.transition !== "resolved" && toMs(row.createdAt) >= toMs(paging.pagedAt!))
-    : [];
-  const pageNeverDelivered = pageRows.length > 0
-    && pageRows.every((row) => row.state === "suppressed" || row.state === "exhausted");
-  const silent = decision.silent || pageNeverDelivered;
-  const messageText = silent
-    ? null
-    : renderPagingResolvedMessage({
-      candidate,
-      pagedOpenedAt: paging?.pagedOpenedAt ?? null,
-      pagedMode: paging?.pagedMode ?? null,
-      resolvedAt: decision.transitionAt,
+  // A recovery is only news if the page itself reached Telegram (Д2). The
+  // page's opening rows are locked and judged inside the transaction that
+  // writes the outcome, so no delivery pass sends one of them meanwhile:
+  // - delivered (or no row: the 0205 seed) → the usual "✅", unless the
+  //   dashboard's manual resolve already said it;
+  // - in flight → nothing is written, the next sweep decides;
+  // - suppressed (alerts were off) → settled silently, never resurrected;
+  // - otherwise it never reached Telegram: no late "🚨", no "✅" without its
+  //   opening, no silence — the openings are retired and the episode is a line
+  //   of the missed-alerts summary (or, after a manual resolve, retired
+  //   without one).
+  const pagedAt = paging?.pagedAt;
+  if (!pagedAt) {
+    // The policy decides a recovery only for a standing page.
+    throw new Error(`Incident ${candidate.incidentId} resolved without a standing page`);
+  }
+  const pagedOpenedAt = paging.pagedOpenedAt ?? null;
+  const pagedMode = paging.pagedMode ?? null;
+  const outcome = await app.db.transaction(async (tx) => {
+    const txDb = tx as unknown as Database;
+    const settlement = await settleUndeliveredPage(txDb, {
+      incidentId: candidate.incidentId,
+      pagedAt,
+      mode: decision.silent ? "manual" : "missed",
+      summary: {
+        header: renderMissedAlertsHeader(),
+        line: renderMissedAlertsLine({
+          candidate,
+          pagedOpenedAt,
+          pagedMode,
+          resolvedAt: decision.transitionAt,
+        }),
+        transitionAt: decision.transitionAt,
+        maxChars: MISSED_ALERTS_SUMMARY_MAX_CHARS,
+      },
       now,
     });
-  await app.db.transaction(async (tx) => {
-    const txDb = tx as unknown as Database;
-    if (messageText !== null) {
+    if (settlement.outcome === "deferred") {
+      if (newEpisode || paging.observedStatus !== candidate.status) {
+        await upsertNotificationIncidentPaging(txDb, {
+          notificationIncidentId: candidate.incidentId,
+          observedOpenedAt: candidate.openedAt,
+          observedStatus: candidate.status,
+          now,
+        });
+      }
+      return "deferred" as const;
+    }
+    const announce = settlement.outcome === "delivered" && !decision.silent;
+    if (announce) {
       await enqueueNotificationDeliveryOutbox(txDb, {
         notificationIncidentId: candidate.incidentId,
         transition: "resolved",
         transitionAt: decision.transitionAt,
         request: {
           channel: "telegram",
-          messageText,
+          messageText: renderPagingResolvedMessage({
+            candidate,
+            pagedOpenedAt,
+            pagedMode,
+            resolvedAt: decision.transitionAt,
+            now,
+          }),
           pagingPolicy: "sync_failure",
-          maxAttempts: MAX_DELIVERY_ATTEMPTS,
+          maxAttempts: ALERT_DELIVERY_MAX_ATTEMPTS,
         },
         now,
       });
@@ -329,11 +402,19 @@ async function evaluateCandidate(
       pagedResolvedAt: now,
       now,
     });
+    if (announce) {
+      return "resolved" as const;
+    }
+    return settlement.outcome === "retired" && !decision.silent ? "missed" as const : "silent" as const;
   });
-  if (silent) {
-    result.silentlyResolved += 1;
-  } else {
+  if (outcome === "deferred") {
+    result.deferred += 1;
+  } else if (outcome === "resolved") {
     result.resolved += 1;
+  } else if (outcome === "missed") {
+    result.missedReported += 1;
+  } else {
+    result.silentlyResolved += 1;
   }
 }
 
@@ -354,6 +435,8 @@ export async function runNotificationPagingSweep(
     paged: 0,
     resolved: 0,
     silentlyResolved: 0,
+    missedReported: 0,
+    deferred: 0,
     failed: 0,
   };
   const candidates = await listNotificationPagingCandidates(app.db, {
@@ -437,7 +520,10 @@ export function startNotificationPagingSweepWorker(
       // The api watchdog's fallback holds this minute's pass.
       return;
     }
-    if (result.paged > 0 || result.resolved > 0 || result.failed > 0) {
+    if (
+      result.paged > 0 || result.resolved > 0 || result.missedReported > 0
+      || result.deferred > 0 || result.failed > 0
+    ) {
       app.logger.info(result, "Notification paging sweep complete");
     }
   });
