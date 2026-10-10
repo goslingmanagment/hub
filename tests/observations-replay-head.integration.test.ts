@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { listObservationsForReplay } from "@agency_hub_core/db";
+import { listObservationsForReplay, REPLAY_PENDING_HEAD_LIMIT } from "@agency_hub_core/db";
 
 import { startTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 
@@ -167,9 +167,11 @@ describe("observation replay at a caught-up scan head", () => {
       belowParseVersion: 5, source: "webhook", kinds: ["messages.received", "messages.sent"],
     });
     expect(pending.rows).toHaveLength(200);
-    // The added existence probe must not turn a cheap 200-row head into a
-    // walk of the 60,000-row pending corpus or a full filter-and-sort pass.
-    expect(heapVisits(await explain(pending.statement))).toBeLessThan(1500);
+    // The head lookup must not turn a cheap 200-row head into a walk of the
+    // 60,000-row pending corpus or a full filter-and-sort pass. It reads at
+    // most REPLAY_PENDING_HEAD_LIMIT + 1 pending rows before it leaves a dense
+    // head to the walk, which then finds its 200 rows within ~800.
+    expect(heapVisits(await explain(pending.statement))).toBeLessThan(1500 + REPLAY_PENDING_HEAD_LIMIT);
   }, 120_000);
 
   it("preserves negative/sparse versions, numeric id order, payloads and time bounds", async () => {
