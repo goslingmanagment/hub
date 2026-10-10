@@ -183,6 +183,42 @@ describe("startRuntimeHeartbeat", () => {
     }
   });
 
+  it("keeps beating while a gauge write hangs, and starts no second write beside it", async () => {
+    h.upsertInstanceHeartbeat.mockImplementation(async () => {
+      h.calls.push("upsert");
+    });
+    let releaseGauge!: () => void;
+    h.insertOpsMetricSamples.mockImplementationOnce(() => new Promise<undefined>((resolve) => {
+      releaseGauge = () => resolve(undefined);
+    }));
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    try {
+      const { HEARTBEAT_INTERVAL_MS, RUNTIME_MEMORY_SAMPLE_INTERVAL_MS, startRuntimeHeartbeat } =
+        await import("../apps/runtime/src/services/runtime-heartbeat.ts");
+      const hb = startRuntimeHeartbeat(makeApp(), "worker");
+      await vi.waitFor(() => expect(h.insertOpsMetricSamples).toHaveBeenCalledTimes(1));
+
+      // Past the sampling interval with the first write still pending: every
+      // beat lands, and none starts a second write.
+      const beats = RUNTIME_MEMORY_SAMPLE_INTERVAL_MS / HEARTBEAT_INTERVAL_MS + 1;
+      for (let beat = 1; beat <= beats; beat += 1) {
+        vi.advanceTimersByTime(HEARTBEAT_INTERVAL_MS);
+        await vi.waitFor(() => expect(h.upsertInstanceHeartbeat).toHaveBeenCalledTimes(beat + 1));
+      }
+      expect(h.insertOpsMetricSamples).toHaveBeenCalledTimes(1);
+
+      // Once it settles, the next beat samples again.
+      releaseGauge();
+      vi.advanceTimersByTime(HEARTBEAT_INTERVAL_MS);
+      await vi.waitFor(() => expect(h.insertOpsMetricSamples).toHaveBeenCalledTimes(2));
+
+      await hb.stop();
+    } finally {
+      vi.useRealTimers();
+      h.upsertInstanceHeartbeat.mockReset();
+    }
+  });
+
   it("never lets a failed gauge write cost the beat its liveness", async () => {
     h.upsertInstanceHeartbeat.mockImplementation(async () => {
       h.calls.push("upsert");

@@ -194,6 +194,23 @@ export function startRuntimeHeartbeat(
   let stopped = false;
   let inFlight: Promise<void> | null = null;
   let lastMemorySampleAtMs: number | null = null;
+  // The memory gauge write runs beside the beats, one at a time: a slow or
+  // hung insert must never hold back the next beat and its health file.
+  let memoryWrite: Promise<void> | null = null;
+
+  const sampleMemory = () => {
+    const nowMs = Date.now();
+    if (stopped || memoryWrite) return;
+    if (lastMemorySampleAtMs !== null && nowMs - lastMemorySampleAtMs < RUNTIME_MEMORY_SAMPLE_INTERVAL_MS) return;
+    lastMemorySampleAtMs = nowMs;
+    memoryWrite = insertOpsMetricSamples(app.db, runtimeMemorySamples(role))
+      .catch((error: unknown) => {
+        app.logger.warn({ err: error, role }, "runtime memory gauge write failed");
+      })
+      .finally(() => {
+        memoryWrite = null;
+      });
+  };
 
   const beat = async () => {
     try {
@@ -228,14 +245,9 @@ export function startRuntimeHeartbeat(
       }
       // Idempotent across instances; whichever process runs it first wins.
       await reapStaleInstances(app.db).catch(() => undefined);
-      // After liveness is recorded: a failed gauge write never costs a beat.
-      const nowMs = Date.now();
-      if (lastMemorySampleAtMs === null || nowMs - lastMemorySampleAtMs >= RUNTIME_MEMORY_SAMPLE_INTERVAL_MS) {
-        lastMemorySampleAtMs = nowMs;
-        await insertOpsMetricSamples(app.db, runtimeMemorySamples(role)).catch((error: unknown) => {
-          app.logger.warn({ err: error, role }, "runtime memory gauge write failed");
-        });
-      }
+      // After liveness is recorded, and not awaited: a failed or slow gauge
+      // write never costs a beat.
+      sampleMemory();
     } catch (error) {
       app.logger.warn({ err: error, role }, "runtime heartbeat upsert failed");
     }

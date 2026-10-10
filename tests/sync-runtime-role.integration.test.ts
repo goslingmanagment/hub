@@ -87,6 +87,14 @@ async function tableCounts(db: StartedTestDatabase) {
   return Object.fromEntries(result.rows.map((row) => [row.name, Number(row.n)]));
 }
 
+/** Rows per process memory gauge (runtime-heartbeat.ts). */
+async function processGaugeCounts(db: StartedTestDatabase) {
+  const result = await db.pool.query<{ metric: string; n: number }>(
+    "select metric, count(*)::int as n from ops_metric_samples where metric like 'process\\_%' group by metric",
+  );
+  return Object.fromEntries(result.rows.map((row) => [row.metric, row.n]));
+}
+
 function changedTables(before: Record<string, number>, after: Record<string, number>) {
   return Object.fromEntries(
     Object.keys({ ...before, ...after })
@@ -162,10 +170,11 @@ describe("the sync runtime role", () => {
     }
   }, 60_000);
 
-  it("runs as `startup.ts sync`: heartbeats, writes nothing else, stays up while idle, exits 0 on SIGTERM", async (context) => {
+  it("runs as `startup.ts sync`: heartbeats, samples its memory, writes nothing else, stays up while idle, exits 0 on SIGTERM", async (context) => {
     if (!testDb) return context.skip();
     const db = testDb;
     const before = await tableCounts(db);
+    const gaugesBefore = await processGaugeCounts(db);
     const healthFile = path.join(scratch, "sync-health.json");
     const child = spawn(process.execPath, ["--import", "tsx/esm", "apps/runtime/src/startup.ts", "sync"], {
       env: { ...process.env, ...syncEnv(db, { SYNC_HEALTH_FILE: healthFile, LOG_LEVEL: "info" }) },
@@ -206,9 +215,19 @@ describe("the sync runtime role", () => {
       await sleep(IDLE_EXIT_WINDOW_MS);
       alive();
       expect((await syncRows(db)).map((entry) => entry.instance_id)).toEqual([row!.instance_id]);
+      // Besides its heartbeat row: one sample of each of its memory gauges,
+      // which the first beat writes.
+      const gaugeRows = { before: before.ops_metric_samples!, after: before.ops_metric_samples! + 3 };
       expect(changedTables(before, await tableCounts(db))).toEqual({
         runtime_instances: { before: 0, after: 1 },
+        ops_metric_samples: gaugeRows,
       });
+      const gaugesAfter = await processGaugeCounts(db);
+      expect(Object.fromEntries(
+        Object.keys(gaugesAfter)
+          .filter((metric) => gaugesAfter[metric] !== gaugesBefore[metric])
+          .map((metric) => [metric, gaugesAfter[metric]! - (gaugesBefore[metric] ?? 0)]),
+      )).toEqual({ process_rss_bytes_sync: 1, process_heap_used_bytes_sync: 1, process_external_bytes_sync: 1 });
 
       child.kill("SIGTERM");
       const result = await Promise.race([
@@ -219,7 +238,7 @@ describe("the sync runtime role", () => {
       ]);
       expect(result, stderr).toEqual({ code: 0, signal: null });
       expect(await syncRows(db)).toEqual([]);
-      expect(changedTables(before, await tableCounts(db))).toEqual({});
+      expect(changedTables(before, await tableCounts(db))).toEqual({ ops_metric_samples: gaugeRows });
     } finally {
       if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
     }
