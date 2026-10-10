@@ -1313,7 +1313,7 @@ export async function ensureDomainEventPartitions(
 const BRIN_AUTOSUMMARIZE_LOCK_TIMEOUT = sql.raw(`'2s'`);
 
 /**
- * Migration 0264 switched autosummarize on for every BRIN index, but Postgres
+ * Migration 0265 switched autosummarize on for every BRIN index, but Postgres
  * keeps no storage options on a partitioned index: a partition created later
  * clones a plain BRIN, whose ranges would again stay unsummarized until the
  * partition's next vacuum. So each partition this job ensures gets the option

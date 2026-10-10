@@ -1,5 +1,5 @@
 -- agency-hub:no-transaction
--- 0264: every BRIN index summarizes a page range as soon as the next one opens.
+-- 0265: every BRIN index summarizes a page range as soon as the next one opens.
 --
 -- A BRIN range is summarized only when something asks: VACUUM,
 -- brin_summarize_new_values(), or, with autosummarize, autovacuum as soon as an

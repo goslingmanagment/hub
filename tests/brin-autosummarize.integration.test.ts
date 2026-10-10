@@ -6,7 +6,7 @@ import { createPool, ensureDomainEventPartitions } from "@agency_hub_core/db";
 
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 
-// 0264: every BRIN index summarizes a page range as soon as the next one opens
+// 0265: every BRIN index summarizes a page range as soon as the next one opens
 // (autosummarize). Without it, every range written since a table's last vacuum
 // stays unsummarized and a BRIN scan reads it whole: the minutely canonicalize
 // sample read ~200 MB a run on prod. A partitioned index cannot hold the
@@ -81,7 +81,7 @@ describe("BRIN autosummarize", () => {
   it("leaves a locked partition's switch to the next run instead of failing the job", async () => {
     const partition = "domain_events_2029_09";
     // A partition made by hand clones the parent's plain BRIN, as one created
-    // before 0264 or by any other path would.
+    // before 0265 or by any other path would.
     await harness.pool.query(`
       create table ${partition} partition of domain_events
       for values from ('2029-09-01') to ('2029-10-01')
@@ -114,15 +114,15 @@ describe("BRIN autosummarize", () => {
     expect(await partitionBrinOptions(partition)).toEqual(["autosummarize=on"]);
   }, 30_000);
 
-  it("waits out a reader in 1 s slices when 0264 switches an existing index", async () => {
+  it("waits out a reader in 1 s slices when 0265 switches an existing index", async () => {
     const partition = "domain_events_2030_01";
     await harness.pool.query(`
       create table ${partition} partition of domain_events
       for values from ('2030-01-01') to ('2030-02-01')
     `);
-    // 0264's first statement generates one bounded-wait switch per BRIN
+    // 0265's first statement generates one bounded-wait switch per BRIN
     // index still without the option; this partition's is the only one.
-    const migration = await readFile("packages/db/migrations/0264_brin_autosummarize.sql", "utf8");
+    const migration = await readFile("packages/db/migrations/0265_brin_autosummarize.sql", "utf8");
     const statements = migration.split("-- agency-hub:statement").slice(1).map((part) => part.trim());
     expect(statements).toHaveLength(2);
     const generator = statements[0]!.replace("-- agency-hub:execute-returned-statements", "");
