@@ -15,7 +15,10 @@ set -euo pipefail
 #      migrates.
 #   2. The separate `up -d --no-deps --force-recreate --no-build sync`, run
 #      once the api is healthy, stops the old sync with SIGTERM, waits for its
-#      graceful exit and only then starts the new one: no overlap.
+#      graceful exit and only then starts the new one: no overlap. Before it,
+#      scripts/archive-container-logs.sh (М1) archives the running old sync's
+#      log as a snapshot: its labels, project dir and `docker logs` on real
+#      Docker.
 #   3. Control (the assumption itself): with sync listed in the same `up` as
 #      the api, Compose stops the old sync before the new api is healthy.
 #   4. The app-scope rollback (the forward recreate's services plus sync)
@@ -33,6 +36,7 @@ set -euo pipefail
 #   scripts/check-compose-recreate-order.sh [image]   (default node:22-bookworm-slim)
 
 IMAGE="${1:-node:22-bookworm-slim}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MIGRATE_MS=8000
 DRAIN_MS=3000
 PROJECT="hub-a3-check-$$"
@@ -81,7 +85,11 @@ import { appendFileSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 
 const role = process.argv[2];
-const log = (event) => appendFileSync("/events/log", `${Date.now()} ${role} ${event} ${hostname()}\n`);
+const log = (event) => {
+  const line = `${Date.now()} ${role} ${event} ${hostname()}\n`;
+  appendFileSync("/events/log", line);
+  process.stdout.write(line);
+};
 log("start");
 setInterval(() => {}, 1 << 30);
 if (role === "api") {
@@ -208,6 +216,7 @@ postgres_1="$(service_container postgres)"
 postgres_1_host="$(container_hostname "$postgres_1")"
 postgres_1_started="$(docker inspect -f '{{.State.StartedAt}}' "$postgres_1")"
 sync_1="$(service_container sync)"
+sync_1_id="$(docker inspect -f '{{.Id}}' "$sync_1")"
 sync_1_host="$(container_hostname "$sync_1")"
 sync_1_started="$(docker inspect -f '{{.State.StartedAt}}' "$sync_1")"
 
@@ -225,21 +234,39 @@ else
   verdict FAIL "1. '${APP_RECREATE[*]}' touched the sync container (before ${sync_1_host}, after ${sync_after:-none}) or the new api never became ready"
 fi
 
-# 2. The separate sync recreate after API health: graceful stop, then start.
+# 2. The separate sync recreate after API health: graceful stop, then start,
+# preceded by the deploy's log archive of the running old sync (М1). The
+# trailing slash is deliberate: the helper must find the Compose label anyway.
+archive_status=0
+archive_output="$(bash "${SCRIPT_DIR}/archive-container-logs.sh" --dir "${WORKDIR}/archive" \
+  --project-dir "${WORKDIR}/" --reason "a3 check" sync)" || archive_status=$?
+note "archive-container-logs.sh exit=${archive_status}: ${archive_output//$'\n'/; }"
 compose "${SYNC_RECREATE[@]}"
 refresh_events
 sync_2_host="$(container_hostname "$(service_container sync)")"
 term_1="$(event_ms sync term "$sync_1_host")"
 exit_1="$(event_ms sync exit "$sync_1_host")"
 start_2="$(event_ms sync start "$sync_2_host")"
+shopt -s nullglob
+sync_archives=("${WORKDIR}"/archive/sync/*.log.gz)
+shopt -u nullglob
+archive_text=""
+if (( ${#sync_archives[@]} == 1 )); then
+  archive_text="$(gzip -dc "${sync_archives[0]}")" || archive_text=""
+fi
+archive_header="${archive_text%%$'\n'*}"
+archive_has_start=0
+[[ "$archive_text" == *" sync start ${sync_1_host}"* ]] && archive_has_start=1
 if [[ -n "$term_1" && -n "$exit_1" && -n "$start_2" && -n "$api_2_ready" \
   && "$sync_2_host" != "$sync_1_host" \
   && "$term_1" -gt "$api_2_ready" \
   && $((exit_1 - term_1)) -ge $((DRAIN_MS - 100)) \
-  && "$start_2" -ge "$exit_1" ]]; then
-  verdict PASS "2. '${SYNC_RECREATE[*]}': old sync got SIGTERM $((term_1 - api_2_ready)) ms after the new api was ready, drained $((exit_1 - term_1)) ms and exited; the new sync ${sync_2_host} started $((start_2 - exit_1)) ms after that exit"
+  && "$start_2" -ge "$exit_1" \
+  && "$archive_status" == 0 && "$archive_has_start" == 1 \
+  && "$archive_header" == *"\"id\":\"${sync_1_id}\""* && "$archive_header" == *'"snapshot":true'* ]]; then
+  verdict PASS "2. '${SYNC_RECREATE[*]}': old sync got SIGTERM $((term_1 - api_2_ready)) ms after the new api was ready, drained $((exit_1 - term_1)) ms and exited; the new sync ${sync_2_host} started $((start_2 - exit_1)) ms after that exit; the old sync's log was archived first as sync/${sync_archives[0]##*/} with \"snapshot\":true"
 else
-  verdict FAIL "2. '${SYNC_RECREATE[*]}' did not stop the old sync gracefully before starting the new one (term=${term_1:-none} exit=${exit_1:-none} new start=${start_2:-none} api ready=${api_2_ready:-none})"
+  verdict FAIL "2. '${SYNC_RECREATE[*]}' did not stop the old sync gracefully before starting the new one, or its log was not archived first (term=${term_1:-none} exit=${exit_1:-none} new start=${start_2:-none} api ready=${api_2_ready:-none} archive exit=${archive_status} archives=${#sync_archives[@]} start line=${archive_has_start} header=${archive_header:-none})"
 fi
 
 # 3. Control: sync listed with the api in one `up`.
