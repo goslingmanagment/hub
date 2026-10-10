@@ -1,0 +1,30 @@
+{
+  "ProxySettings": {
+    "ProxyMode": "fixed_servers",
+    "ProxyServer": "127.0.0.1:3128"
+  },
+  "QuicAllowed": false,
+  "WebRtcIPHandling": "disable_non_proxied_udp",
+  "NetworkPredictionOptions": 2,
+  "PasswordManagerEnabled": false,
+  "PasswordLeakDetectionEnabled": false,
+  "AutofillAddressEnabled": false,
+  "AutofillCreditCardEnabled": false,
+  "BrowserSignin": 0,
+  "SyncDisabled": true,
+  "BackgroundModeEnabled": false,
+  "TranslateEnabled": false,
+  "DefaultNotificationsSetting": 2,
+  "DownloadRestrictions": 3,
+  "DefaultBrowserSettingEnabled": false,
+  "MetricsReportingEnabled": false,
+  "ExtensionSettings": {
+    "*": {
+      "installation_mode": "blocked"
+    }
+  },
+  "RestoreOnStartup": 4,
+  "RestoreOnStartupURLs": [
+    "about:blank"
+  ]
+}

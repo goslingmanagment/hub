@@ -1,0 +1,80 @@
+# The stand of stage 1 (plan §5): our own servers instead of Fansly. The
+# network is internal — nothing on it reaches the internet. Run from the
+# worktree root:
+#   docker compose -f apps/page-browser/stand/docker-compose.yml up -d --build
+name: pb-stand
+
+networks:
+  stand:
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.250.250.0/24
+
+volumes:
+  ca: {}
+
+services:
+  stand-server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    image: pb-stand-server
+    networks:
+      stand:
+        ipv4_address: 10.250.250.10
+    volumes:
+      - ca:/stand/ca
+    environment:
+      STAND_SOCKS_USER: pb
+      STAND_SOCKS_PASS: pb-secret
+
+  browser:
+    image: pb-browser
+    depends_on: [stand-server]
+    networks:
+      stand:
+        ipv4_address: 10.250.250.20
+    cap_add: [NET_ADMIN]
+    # PROTOTYPE: Chrome's sandbox needs user namespaces, which Docker's
+    # default seccomp profile forbids; production gets a Chrome seccomp
+    # profile instead (plan §3.1). --no-sandbox is never used.
+    security_opt:
+      - seccomp=unconfined
+    shm_size: 1gb
+    volumes:
+      - ca:/stand/ca:ro
+      # The prototype's code is mounted: an edit needs a restart, not a build.
+      - ../src:/opt/page-browser/src:ro
+      - ../docker:/opt/page-browser/docker:ro
+    environment:
+      PB_SOCKS_HOST: 10.250.250.10
+      PB_SOCKS_PORT: "1080"
+      PB_SOCKS_USER: pb
+      PB_SOCKS_PASS: pb-secret
+      PB_RPC_FROM: 10.250.250.0/24
+      PB_RPC_TOKEN: stand-token
+      PB_FAST_RETRY: "1"
+      PB_WAIT_CA: "1"
+      PB_RUNTIME_ENABLE: "1"
+
+      PB_DEBUG_FETCH: "1"
+      PB_DEBUG_NET: "1"
+      PB_ON_BLOCKED_SEND: log
+
+  runner:
+    image: node:22-bookworm-slim
+    depends_on: [browser]
+    working_dir: /pb
+    networks:
+      stand:
+        ipv4_address: 10.250.250.30
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ..:/pb:ro
+      - ./results:/stand/results
+    environment:
+      STAND_OPERATOR: ws://10.250.250.20:7700/rpc
+      STAND_SERVER: 10.250.250.10
+      STAND_BROWSER_CONTAINER: pb-stand-browser-1
+    command: ["sleep", "infinity"]

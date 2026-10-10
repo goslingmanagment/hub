@@ -1,0 +1,477 @@
+// Stage-1 scenarios. Each run starts from a ready operator with the site
+// loaded, sets up its situation, injects its fault and checks the two
+// journals: what the engine admitted and what reached the stand server.
+
+import { checkAdmitted, type Ctx, type RunResult, type Scenario } from "./main.ts";
+import { monoMs, sleep } from "../../src/shared/util.ts";
+import type { JournalEvent } from "./infra.ts";
+
+const API = "https://api.stand.test";
+
+async function until(predicate: () => boolean | Promise<boolean>, timeoutMs: number, what: string): Promise<void> {
+  const deadline = monoMs() + timeoutMs;
+  while (!(await predicate())) {
+    if (monoMs() > deadline) throw new Error(`timeout waiting for ${what}`);
+    await sleep(50);
+  }
+}
+
+function reqs(events: JournalEvent[], rid: string): JournalEvent[] {
+  return events.filter((event) => event.t === "req" && event.rid === rid);
+}
+
+/** A ready operator, the site loaded, every admission granted. */
+async function fresh(ctx: Ctx): Promise<void> {
+  ctx.engine.decideSite = () => ({ grant: true });
+  ctx.engine.decideCheck = () => ({ grant: true });
+  ctx.engine.decideWs = () => ({ grant: true });
+  await ctx.engine.waitReady();
+  await ctx.stand.mark();
+}
+
+/** One admitted request so the API connection is warm (HTTP/2). */
+async function warm(ctx: Ctx, tag: string): Promise<void> {
+  const result = await ctx.engine.eval<{ status?: number; error?: string }>(`site.api(${JSON.stringify(`warm-${tag}`)})`);
+  if (result.status !== 200) throw new Error(`warm-up request failed: ${JSON.stringify(result)}`);
+}
+
+// ── smoke: the whole path once ────────────────────────────────────────────
+
+const smoke: Scenario = async (ctx) => {
+  await fresh(ctx);
+  const notes: Record<string, unknown> = {};
+  const violations: string[] = [];
+  const tag = `s${ctx.run}-${Date.now() % 100000}`;
+
+  const siteResult = await ctx.engine.eval<Record<string, unknown>>(`site.api(${JSON.stringify(`smoke-site-${tag}`)})`);
+  notes.site = siteResult;
+  if (siteResult.status !== 200) violations.push(`site request: ${JSON.stringify(siteResult)}`);
+
+  const hub = await ctx.engine.sendHub(`hub-${tag}`, `${API}/api/item?rid=smoke-hub-${tag}`, { authorization: "stand-token", "fansly-client-id": "1", "fansly-client-check": "abc" });
+  notes.hub = hub;
+  if (hub.outcome !== "response" || hub.status !== 200) violations.push(`hub request: ${JSON.stringify(hub)}`);
+
+  const wsIndex = await ctx.engine.eval<number>(`site.ws(${JSON.stringify(`smoke-ws-${tag}`)})`, false);
+  await until(async () => (await ctx.engine.eval<{ readyState: number }>(`site.wsState(${wsIndex})`, false)).readyState !== 0, 10_000, "socket open");
+  notes.wsOpen = await ctx.engine.eval(`site.wsState(${wsIndex})`, false);
+  notes.wsPing = await ctx.engine.eval(`site.wsSend(${wsIndex}, "p")`, false);
+  notes.wsForbidden = await ctx.engine.eval(`site.wsSend(${wsIndex}, JSON.stringify({ t: 99, d: "read" }))`, false);
+  notes.detect = await ctx.engine.eval(`site.detect()`, false);
+  await sleep(1000);
+
+  const events = await ctx.stand.journal();
+  // Sockets are admitted per tunnel (no URL known there): checked by count.
+  const admitted = checkAdmitted(events, ctx.engine.grants, "smoke-site-");
+  const admittedHub = checkAdmitted(events, ctx.engine.grants, "smoke-hub-");
+  violations.push(...admitted.violations, ...admittedHub.violations);
+  const wsOpens = events.filter((event) => event.t === "ws.open" && String(event.rid ?? "").startsWith("smoke-ws-")).length;
+  const wsGrants = ctx.engine.grants.filter((grant) => grant.kind === "ws").length;
+  if (wsOpens > wsGrants) violations.push(`${wsOpens} sockets opened, ${wsGrants} socket admissions`);
+  const hubArrival = reqs(events, `smoke-hub-${tag}`).find((event) => event.method === "GET");
+  if (hubArrival && typeof hub.sendMono === "number") notes.hubSendMonoMinusServer = Math.round((hub.sendMono as number) - hubArrival.mono);
+  // Header parity (stage 1 item 15): the Hub request vs the site's request
+  // to the same route — names and order, values of the browser's own ones.
+  const siteArrival = reqs(events, `smoke-site-${tag}`).find((event) => event.method === "GET");
+  if (siteArrival && hubArrival) {
+    const names = (event: JournalEvent) => (event.headers ?? []).map(([name]) => name);
+    const browserOwn = (event: JournalEvent) =>
+      Object.fromEntries((event.headers ?? []).filter(([name]) => /^(sec-|user-agent|accept|origin|referer)/.test(name)));
+    notes.headerParity = {
+      same: JSON.stringify(names(siteArrival)) === JSON.stringify(names(hubArrival)),
+      site: names(siteArrival),
+      hub: names(hubArrival),
+      browserOwnSite: browserOwn(siteArrival),
+      browserOwnHub: browserOwn(hubArrival),
+    };
+  }
+  const frames = events.filter((event) => event.t === "ws.frame").map((event) => event.text);
+  notes.wsFrames = frames;
+  if (!frames.includes("p")) violations.push("the allowed socket message did not arrive");
+  if (frames.some((text) => typeof text === "string" && text.includes('"t":99'))) violations.push("a forbidden socket message reached the server");
+  notes.preflights = events.filter((event) => event.t === "req" && event.method === "OPTIONS").length;
+  notes.arrivals = admitted.arrivals + admittedHub.arrivals;
+  notes.grants = ctx.engine.grants.map((grant) => `${grant.kind}:${grant.rid ?? grant.id}`);
+  notes.guardReports = ctx.engine.observed.filter((o) => o.kind === "guard").map((o) => ({ k: o.k, target: o.target, href: o.href, t: o.t }));
+  notes.tunnels = (await ctx.engine.command("test.tunnels")).tunnels;
+  return { ok: violations.length === 0, violations, notes };
+};
+
+// ── condition №1: control lost while requests are held ──────────────────────
+
+type LossFault = "operator-kill" | "operator-hang" | "holder-kill" | "cdp-break" | "cdp-drop" | "chrome-kill" | "planned-stop";
+
+async function injectLoss(ctx: Ctx, fault: LossFault): Promise<void> {
+  switch (fault) {
+    case "operator-kill":
+      await ctx.docker.signal("operator", "KILL");
+      return;
+    case "operator-hang":
+      // The watchdog kills it within ~5.5 s (heartbeat file).
+      await ctx.docker.signal("operator", "STOP");
+      return;
+    case "holder-kill":
+      await ctx.docker.signal("holder", "KILL");
+      return;
+    case "cdp-break":
+      await ctx.engine.command("test.breakCdp", {}, 3000);
+      return;
+    case "cdp-drop":
+      await ctx.engine.command("test.dropCdp", {}, 3000);
+      return;
+    case "chrome-kill":
+      await ctx.docker.signal("chrome", "KILL");
+      return;
+    case "planned-stop":
+      await ctx.engine.command("closeExit", {}, 3000);
+      await ctx.engine.command("test.dropCdp", {}, 3000);
+      return;
+  }
+}
+
+function controlLoss(fault: LossFault, releaseOne: boolean, opts: { lossDelayMs?: number; gate?: boolean } = {}): Scenario {
+  return async (ctx) => {
+    await fresh(ctx);
+    const tag = `${fault}-${ctx.run}-${Date.now() % 100000}`;
+    await ctx.engine.command("test.config", { lossDelayMs: opts.lossDelayMs ?? 0, gate: opts.gate ?? true });
+    await warm(ctx, tag);
+    const sitePrefix = `p-${tag}-`;
+    const hubId = `h-${tag}`;
+    ctx.engine.decideSite = (ask) => (ask.rid?.startsWith(sitePrefix) ? "hold" : { grant: true });
+    ctx.engine.decideCheck = (id) => (id === hubId ? "hold" : { grant: true });
+    const rids = [0, 1, 2, 3, 4].map((i) => `${sitePrefix}${i}`);
+    await ctx.engine.eval(`(${JSON.stringify(rids)}).forEach((r) => site.api(r)), true`, false);
+    void ctx.engine.sendHub(hubId, `${API}/api/hub?rid=${hubId}`, { authorization: "stand-token" });
+    await until(
+      () => [...ctx.engine.heldSite.values()].filter((ask) => ask.rid?.startsWith(sitePrefix)).length >= 5 && ctx.engine.heldChecks.has(hubId),
+      10_000,
+      "5 site requests and 1 Hub request held",
+    );
+    const delay = Math.random() * 1500;
+    let released: string | null = null;
+    if (releaseOne) {
+      // Grant one request a moment before the fault: the fault then hits
+      // while an admitted request is on its way.
+      const lead = Math.random() * 60;
+      await sleep(Math.max(0, delay - lead));
+      const [first] = [...ctx.engine.heldSite.values()].filter((ask) => ask.rid?.startsWith(sitePrefix));
+      if (first) {
+        ctx.engine.releaseSite(first.siteRequestId, { grant: true });
+        released = first.rid;
+      }
+      await sleep(lead);
+    } else {
+      await sleep(delay);
+    }
+    const faultMono = monoMs();
+    await injectLoss(ctx, fault);
+    ctx.engine.heldSite.clear();
+    ctx.engine.heldChecks.clear();
+    await sleep(fault === "operator-hang" ? 9000 : 4000);
+    const events = await ctx.stand.journal();
+    const checked = checkAdmitted(events, ctx.engine.grants, `p-${tag}`);
+    const hubChecked = checkAdmitted(events, ctx.engine.grants, hubId);
+    const arrived = events.filter((event) => event.t === "req" && event.rid && (event.rid.startsWith(sitePrefix) || event.rid === hubId)).map((event) => `${event.method} ${event.rid} +${Math.round(event.mono - faultMono)}ms`);
+    // Back to a ready operator for the next run.
+    ctx.engine.close();
+    await ctx.engine.waitReady(180_000);
+    const violations = [...checked.violations, ...hubChecked.violations];
+    return {
+      ok: violations.length === 0,
+      violations,
+      notes: { fault, lossDelayMs: opts.lossDelayMs ?? 0, gate: opts.gate ?? true, delayMs: Math.round(delay), released, arrived },
+    };
+  };
+}
+
+/** The residual window of the gate: CDP is lost right after an admitted
+ *  request was released, while its gate window is still open (its "sent"
+ *  never comes — CDP is gone). What Chrome releases then meets an open
+ *  window until the operator reacts. */
+function openWindow(lossDelayMs: number): Scenario {
+  return async (ctx) => {
+    await fresh(ctx);
+    const tag = `ow-${lossDelayMs}-${ctx.run}-${Date.now() % 100000}`;
+    await ctx.engine.command("test.config", { lossDelayMs, gate: true });
+    await warm(ctx, tag);
+    const sitePrefix = `p-${tag}-`;
+    ctx.engine.decideSite = (ask) => (ask.rid?.startsWith(sitePrefix) ? "hold" : { grant: true });
+    const rids = [0, 1, 2, 3, 4].map((i) => `${sitePrefix}${i}`);
+    // Preflights cached for this run: the request itself is the only
+    // physical request, released straight into the window.
+    await ctx.stand.config({ corsMaxAge: 600 });
+    await ctx.engine.eval(`(${JSON.stringify(rids)}).forEach((r) => site.api(r)), true`, false);
+    await until(() => [...ctx.engine.heldSite.values()].filter((ask) => ask.rid?.startsWith(sitePrefix)).length >= 5, 10_000, "5 held");
+    const [first] = [...ctx.engine.heldSite.values()].filter((ask) => ask.rid?.startsWith(sitePrefix));
+    ctx.engine.releaseSite(first!.siteRequestId, { grant: true });
+    const faultMono = monoMs();
+    await ctx.engine.command("test.breakCdp", {}, 3000);
+    ctx.engine.heldSite.clear();
+    await sleep(4000);
+    const events = await ctx.stand.journal();
+    const checked = checkAdmitted(events, ctx.engine.grants, sitePrefix);
+    const arrived = events.filter((event) => event.t === "req" && String(event.rid ?? "").startsWith(sitePrefix)).map((event) => `${event.method} ${event.rid} +${Math.round(event.mono - faultMono)}ms`);
+    await ctx.stand.config({ corsMaxAge: 0 });
+    ctx.engine.close();
+    await ctx.engine.waitReady(180_000);
+    return { ok: checked.violations.length === 0, violations: checked.violations, notes: { lossDelayMs, released: first!.rid, arrived } };
+  };
+}
+
+// ── condition №2: Chrome's own retries, the send moment, the deadline ──────
+
+function retry(fault: "h2RefusedStream" | "h2Goaway" | "resetAfterHeaders", gate: boolean): Scenario {
+  return async (ctx) => {
+    await fresh(ctx);
+    const tag = `${fault}-${gate ? "g" : "n"}-${ctx.run}-${Date.now() % 100000}`;
+    await ctx.engine.command("test.config", { gate });
+    await warm(ctx, tag);
+    const rid = `r-${tag}`;
+    await ctx.stand.fault({ kind: fault, match: { rid, method: "GET" } });
+    const result = await ctx.engine.eval<Record<string, unknown>>(`site.api(${JSON.stringify(rid)})`);
+    await sleep(1500);
+    const events = await ctx.stand.journal();
+    const arrivals = reqs(events, rid).filter((event) => event.method !== "OPTIONS");
+    const grants = ctx.engine.grants.filter((grant) => grant.rid === rid);
+    const retries = ctx.engine.observed.filter((o) => o.kind === "retry");
+    const gateEvents = ctx.engine.observed.filter((o) => o.kind === "gate");
+    await ctx.engine.command("test.config", { gate: true });
+    // Criterion: one admission → at most one operation on the server.
+    const violations = arrivals.length > grants.length ? [`${arrivals.length} arrivals of ${rid} for ${grants.length} admission(s) — Chrome repeated the request`] : [];
+    return {
+      ok: violations.length === 0,
+      violations,
+      notes: {
+        gate,
+        site: result,
+        arrivals: arrivals.map((event) => ({ conn: event.connId, stream: event.streamId, reused: event.reused })),
+        faults: events.filter((event) => event.t === "fault" || event.t === "h2.rst" || event.t === "h2.goaway").map((event) => event.t),
+        operatorSaw: retries.map((o) => ({ sends: o.sends })),
+        gateCuts: gateEvents.map((o) => o.kind + ":" + String(o.tunnels)),
+        siteDone: [...ctx.engine.siteDone.values()].filter((d) => String(d.siteRequestId) && grants.some((g) => g.id === d.siteRequestId)).map((d) => ({ outcome: d.outcome, sends: d.sends, errorText: d.errorText })),
+      },
+    };
+  };
+}
+
+const sendTime: Scenario = async (ctx) => {
+  await fresh(ctx);
+  const tag = `st-${ctx.run}-${Date.now() % 100000}`;
+  await warm(ctx, tag);
+  const diffs: number[] = [];
+  const siteDiffs: number[] = [];
+  for (let i = 0; i < 20; i++) {
+    const rid = `${tag}-h${i}`;
+    const result = await ctx.engine.sendHub(`${tag}-h${i}`, `${API}/api/hub?rid=${rid}`, { authorization: "stand-token" });
+    const srid = `${tag}-s${i}`;
+    await ctx.engine.eval(`site.api(${JSON.stringify(srid)})`);
+    await sleep(100);
+    const events = await ctx.stand.journal();
+    const arrival = reqs(events, rid).find((event) => event.method === "GET");
+    if (arrival && typeof result.sendMono === "number") diffs.push(Math.round((arrival.mono - (result.sendMono as number)) * 10) / 10);
+    const sarrival = reqs(events, srid).find((event) => event.method === "GET");
+    const done = [...ctx.engine.siteDone.values()].find((d) => {
+      const grant = ctx.engine.grants.find((g) => g.id === d.siteRequestId);
+      return grant?.rid === srid;
+    });
+    if (sarrival && done && typeof done.sendMono === "number") siteDiffs.push(Math.round((sarrival.mono - (done.sendMono as number)) * 10) / 10);
+  }
+  const worst = Math.max(...diffs.map(Math.abs), ...siteDiffs.map(Math.abs));
+  const violations = worst > 50 ? [`send moment off by ${worst} ms (> 50 ms)`] : diffs.length < 20 ? [`only ${diffs.length} Hub send moments measured`] : [];
+  return { ok: violations.length === 0, violations, notes: { hubServerMinusChromeMs: diffs, siteServerMinusChromeMs: siteDiffs, worst } };
+};
+
+type ExpiryDelay = "socks" | "tcp";
+
+/** The admission lasts 5 s; the new connection takes 8 s (under the
+ *  operator's 15 s SOCKS timeout), so it completes after the deadline. */
+const EXPIRY_WINDOW_MS = 5000;
+const EXPIRY_DELAY_MS = 8000;
+
+function expiry(kind: "site" | "hub", delayAt: ExpiryDelay, gate: boolean, hubAbort = true): Scenario {
+  return async (ctx) => {
+    await fresh(ctx);
+    ctx.engine.decideSite = (ask) => (ask.rid?.startsWith("e-") ? { grant: true, windowMs: EXPIRY_WINDOW_MS } : { grant: true });
+    ctx.engine.decideCheck = (id) => (id.startsWith("e-") ? { grant: true, windowMs: EXPIRY_WINDOW_MS } : { grant: true });
+    const tag = `exp-${kind}-${delayAt}-${gate ? "g" : "n"}${hubAbort ? "a" : ""}-${ctx.run}-${Date.now() % 100000}`;
+    await ctx.engine.command("test.config", { gate, hubAbort });
+    await warm(ctx, tag);
+    // A fresh connection is needed and it takes 20 s; the admission lasts 15 s.
+    await ctx.engine.command("test.cutApi");
+    await sleep(300);
+    await ctx.stand.fault(delayAt === "socks" ? { kind: "socksConnectDelay", ms: EXPIRY_DELAY_MS, count: 2 } : { kind: "tcpDelay", ms: EXPIRY_DELAY_MS, count: 2 });
+    const rid = `e-${tag}`;
+    let outcome: unknown;
+    if (kind === "site") {
+      outcome = await ctx.engine.eval(`site.api(${JSON.stringify(rid)}, { plain: true })`);
+    } else {
+      outcome = await ctx.engine.sendHub(rid, `${API}/api/hub?rid=${rid}`, {});
+    }
+    await sleep(8000);
+    const events = await ctx.stand.journal();
+    const checked = checkAdmitted(events, ctx.engine.grants, rid, 50);
+    await ctx.engine.command("test.config", { gate: true, hubAbort: true });
+    return {
+      ok: checked.violations.length === 0,
+      violations: checked.violations,
+      notes: {
+        gate,
+        hubAbort,
+        outcome,
+        arrivals: reqs(events, rid).map((event) => `${event.method} +${Math.round(event.mono - (ctx.engine.grants.find((g) => g.rid === rid)?.deadlineMono ?? 0))}ms vs deadline`),
+        gateEvents: ctx.engine.observed.filter((o) => o.kind === "gate").map((o) => ({ kind: o.kind, tunnels: o.tunnels })),
+        aborts: ctx.engine.observed.filter((o) => o.kind === "hub.abort_before_deadline").length,
+      },
+    };
+  };
+}
+
+// ── condition №3: the socket ─────────────────────────────────────────────
+
+const FORBIDDEN = JSON.stringify({ t: 99, d: "read-ack" });
+
+const wsContexts: Scenario = async (ctx) => {
+  await fresh(ctx);
+  const tag = `wsc-${ctx.run}-${Date.now() % 100000}`;
+  const violations: string[] = [];
+  const notes: Record<string, unknown> = {};
+  // main world
+  const index = await ctx.engine.eval<number>(`site.ws(${JSON.stringify(`${tag}-main`)})`, false);
+  await until(async () => (await ctx.engine.eval<{ readyState: number }>(`site.wsState(${index})`, false)).readyState === 1, 10_000, "main socket open");
+  notes.main = {
+    forbiddenFirst: await ctx.engine.eval(`site.wsSend(${index}, ${JSON.stringify(FORBIDDEN)})`, false),
+    ping: await ctx.engine.eval(`site.wsSend(${index}, "p")`, false),
+  };
+  // same-origin iframe
+  await ctx.engine.eval(`site.iframe("/frame.html")`);
+  const fIndex = await ctx.engine.eval<number>(`site.frameSite(0).ws(${JSON.stringify(`${tag}-frame`)})`, false);
+  await until(async () => (await ctx.engine.eval<{ readyState: number }>(`site.frameSite(0).wsState(${fIndex})`, false)).readyState === 1, 10_000, "frame socket open");
+  notes.frame = {
+    forbidden: await ctx.engine.eval(`site.frameSite(0).wsSend(${fIndex}, ${JSON.stringify(FORBIDDEN)})`, false),
+    sendToString: await ctx.engine.eval(`Function.prototype.toString.call(site.frameSite(0) && document.querySelector("iframe").contentWindow.WebSocket.prototype.send)`, false),
+  };
+  // dedicated worker
+  notes.workerReady = await ctx.engine.eval(`site.worker()`);
+  const w = await ctx.engine.eval<{ index: number }>(`site.inWorker({ op: "ws", rid: ${JSON.stringify(`${tag}-worker`)} })`);
+  notes.worker = { open: w, forbidden: await ctx.engine.eval(`site.inWorker({ op: "wsSend", index: ${w.index}, data: ${JSON.stringify(FORBIDDEN)} })`) };
+  // shared worker
+  notes.sharedReady = await ctx.engine.eval(`site.sharedWorker()`);
+  const sw = await ctx.engine.eval<{ index: number }>(`site.inShared({ op: "ws", rid: ${JSON.stringify(`${tag}-shared`)} })`);
+  notes.shared = { open: sw, forbidden: await ctx.engine.eval(`site.inShared({ op: "wsSend", index: ${sw.index}, data: ${JSON.stringify(FORBIDDEN)} })`) };
+  // service worker
+  notes.swReady = await ctx.engine.eval(`site.serviceWorker()`);
+  const svc = await ctx.engine.eval<{ index: number }>(`site.inServiceWorker({ op: "ws", rid: ${JSON.stringify(`${tag}-sw`)} })`);
+  notes.serviceWorker = { open: svc, probe: await ctx.engine.eval(`site.inServiceWorker({ op: "probe" })`), forbidden: await ctx.engine.eval(`site.inServiceWorker({ op: "wsSend", index: ${svc.index}, data: ${JSON.stringify(FORBIDDEN)} })`) };
+  await sleep(1500);
+  const events = await ctx.stand.journal();
+  const opened = events.filter((event) => event.t === "ws.open" && String(event.rid ?? "").startsWith(tag)).map((event) => `${event.rid}:${event.proto}`);
+  notes.opened = opened;
+  for (const where of ["main", "frame", "worker", "shared", "sw"]) {
+    if (!opened.some((entry) => entry.startsWith(`${tag}-${where}:`))) violations.push(`no socket opened from ${where}`);
+  }
+  const frames = events.filter((event) => event.t === "ws.frame").map((event) => String(event.text));
+  if (frames.some((text) => text.includes('"t":99'))) violations.push("a forbidden socket message reached the server");
+  const wsGrants = ctx.engine.grants.filter((grant) => grant.kind === "ws").length;
+  notes.wsAdmissions = wsGrants;
+  if (wsGrants < opened.length) violations.push(`${opened.length} sockets opened, ${wsGrants} admissions`);
+  notes.guard = ctx.engine.observed.filter((o) => o.kind === "guard").map((o) => `${o.k}@${o.target}`);
+  const blocked = ctx.engine.observed.filter((o) => o.kind === "guard" && o.k === "blocked_send").length;
+  if (blocked < 5) violations.push(`only ${blocked} of 5 forbidden messages reported as blocked`);
+  return { ok: violations.length === 0, violations, notes };
+};
+
+const wsOverH2: Scenario = async (ctx) => {
+  await fresh(ctx);
+  const tag = `wsh2-${ctx.run}-${Date.now() % 100000}`;
+  const notes: Record<string, unknown> = {};
+  const violations: string[] = [];
+  for (const refuse of [true, false]) {
+    await ctx.engine.command("test.config", { wsHostRefuse: refuse });
+    const before = ctx.engine.grants.filter((grant) => grant.kind === "ws").length;
+    const fetched = await ctx.engine.eval(`site.wsHostFetch(${JSON.stringify(`${tag}-${refuse}-f`)})`);
+    const index = await ctx.engine.eval<number>(`site.ws(${JSON.stringify(`${tag}-${refuse}-s`)})`, false);
+    await until(async () => (await ctx.engine.eval<{ readyState: number }>(`site.wsState(${index})`, false)).readyState !== 0, 10_000, "socket settled");
+    await sleep(500);
+    const events = await ctx.stand.journal();
+    const open = events.find((event) => event.t === "ws.open" && event.rid === `${tag}-${refuse}-s`);
+    const admissions = ctx.engine.grants.filter((grant) => grant.kind === "ws").length - before;
+    notes[refuse ? "refused" : "allowed"] = { fetched, proto: open?.proto ?? null, admissions };
+    // With the operator's rule (refuse) every socket needs its own tunnel and
+    // admission. Without it (evidence only) a socket may ride the session.
+    if (refuse && open && admissions === 0) violations.push(`a socket opened over ${open.proto} without an admission`);
+    await ctx.engine.eval(`location.reload(), true`, false).catch(() => undefined);
+    await ctx.engine.waitReady();
+  }
+  await ctx.engine.command("test.config", { wsHostRefuse: true });
+  return { ok: violations.length === 0, violations, notes };
+};
+
+const wsRefused: Scenario = async (ctx) => {
+  await fresh(ctx);
+  ctx.engine.decideWs = () => ({ grant: false, reason: "stand: not now" });
+  const tag = `wsr-${ctx.run}-${Date.now() % 100000}`;
+  const index = await ctx.engine.eval<number>(`site.ws(${JSON.stringify(tag)})`, false);
+  await until(async () => (await ctx.engine.eval<{ readyState: number }>(`site.wsState(${index})`, false)).readyState === 3, 15_000, "socket closed");
+  const state = await ctx.engine.eval(`site.wsState(${index})`, false);
+  const events = await ctx.stand.journal();
+  const reached = events.some((event) => event.t === "ws.open" && event.rid === tag);
+  ctx.engine.decideWs = () => ({ grant: true });
+  return { ok: !reached, violations: reached ? ["a refused socket reached the server"] : [], notes: { state } };
+};
+
+const wsBlankIframe: Scenario = async (ctx) => {
+  await fresh(ctx);
+  const tag = `wsb-${ctx.run}-${Date.now() % 100000}`;
+  const index = await ctx.engine.eval<number>(`site.ws(${JSON.stringify(tag)})`, false);
+  await until(async () => (await ctx.engine.eval<{ readyState: number }>(`site.wsState(${index})`, false)).readyState === 1, 10_000, "socket open");
+  const bypass = await ctx.engine.eval(`site.blankIframeSend(${index}, ${JSON.stringify(FORBIDDEN)})`, false);
+  await sleep(800);
+  const events = await ctx.stand.journal();
+  const leaked = events.some((event) => event.t === "ws.frame" && String(event.text).includes('"t":99'));
+  return { ok: !leaked, violations: leaked ? ["a forbidden message left through a fresh about:blank iframe's WebSocket"] : [], notes: { bypass } };
+};
+
+const wsDetect: Scenario = async (ctx) => {
+  await fresh(ctx);
+  const detect = await ctx.engine.eval(`site.detect()`, false);
+  return { ok: true, violations: [], notes: { detect } };
+};
+
+export const scenarios: Record<string, Scenario> = {
+  smoke,
+  "loss-operator-kill": controlLoss("operator-kill", false),
+  "loss-operator-kill-inflight": controlLoss("operator-kill", true),
+  "loss-operator-hang": controlLoss("operator-hang", false),
+  "loss-holder-kill": controlLoss("holder-kill", false),
+  "loss-holder-kill-inflight": controlLoss("holder-kill", true),
+  "loss-cdp-break": controlLoss("cdp-break", false),
+  "loss-cdp-break-inflight": controlLoss("cdp-break", true),
+  "loss-cdp-drop": controlLoss("cdp-drop", false),
+  // The gate alone: the operator reacts 300 ms late on purpose.
+  "loss-cdp-break-late": controlLoss("cdp-break", false, { lossDelayMs: 300 }),
+  "loss-cdp-break-late-inflight": controlLoss("cdp-break", true, { lossDelayMs: 300 }),
+  "loss-cdp-break-late-nogate": controlLoss("cdp-break", false, { lossDelayMs: 300, gate: false }),
+  "loss-holder-kill-late": controlLoss("holder-kill", false, { lossDelayMs: 300 }),
+  "loss-open-window": openWindow(0),
+  "loss-open-window-late": openWindow(300),
+  "loss-chrome-kill": controlLoss("chrome-kill", false),
+  "loss-planned-stop": controlLoss("planned-stop", false),
+  "retry-refused": retry("h2RefusedStream", true),
+  "retry-refused-nogate": retry("h2RefusedStream", false),
+  "retry-goaway": retry("h2Goaway", true),
+  "retry-goaway-nogate": retry("h2Goaway", false),
+  "retry-reset": retry("resetAfterHeaders", true),
+  "retry-reset-nogate": retry("resetAfterHeaders", false),
+  "send-time": sendTime,
+  "expiry-site-socks": expiry("site", "socks", true),
+  "expiry-site-socks-nogate": expiry("site", "socks", false),
+  "expiry-site-tcp": expiry("site", "tcp", true),
+  "expiry-site-tcp-nogate": expiry("site", "tcp", false),
+  "expiry-hub-socks": expiry("hub", "socks", true),
+  "expiry-hub-socks-abortonly": expiry("hub", "socks", false, true),
+  "expiry-hub-socks-nothing": expiry("hub", "socks", false, false),
+  "ws-contexts": wsContexts,
+  "ws-h2": wsOverH2,
+  "ws-refused": wsRefused,
+  "ws-blank-iframe": wsBlankIframe,
+  "ws-detect": wsDetect,
+};
