@@ -476,6 +476,9 @@ export async function buildApiServer(appContext: AppContext) {
       // this to 24h, which would double the 24h heartbeat retention pinned in
       // services/queue-retention.ts. Must match the worker and scheduler roles.
       maintenanceIntervalSeconds: 3600,
+      // The role's pool lifetime (bootstrap.ts) for pg-boss's own pool, which
+      // polls every few seconds; absent for tests and codegen.
+      ...(appContext.poolLifetime ?? {}),
     });
     // Without a listener an EventEmitter 'error' throws and takes the API
     // down on a transient Postgres blip (audit B8). Log only: this instance

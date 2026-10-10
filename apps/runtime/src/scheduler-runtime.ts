@@ -40,6 +40,8 @@ export async function runSchedulerRuntime() {
     // this to 24h, which would double the 24h heartbeat retention pinned in
     // services/queue-retention.ts. Must match the api and worker roles.
     maintenanceIntervalSeconds: 3600,
+    // pg-boss's own pool polls every few seconds: keep its idle connections.
+    ...(app.poolLifetime ?? {}),
   });
   boss.on("error", (error) => {
     app.logger.error({ err: error }, "pg-boss scheduler error; exiting for restart");

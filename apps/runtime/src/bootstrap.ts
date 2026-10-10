@@ -1,5 +1,12 @@
 import { ofapiCollectionPolicyHooks } from "./services/ofapi-collection-policy.ts";
-import { assertRuntimeSchemaReady, createDb, createPool, type Database } from "@agency_hub_core/db";
+import {
+  assertRuntimeSchemaReady,
+  createDb,
+  createPool,
+  RUNTIME_POOL_LIFETIME,
+  type Database,
+  type PoolLifetime,
+} from "@agency_hub_core/db";
 import {
   createLogger,
   loadConfig,
@@ -73,6 +80,11 @@ export interface AppContext {
    *  closes it; optional so AppContext literals (tests) need not provide it —
    *  `getFanslySendGuards` then builds one on first use. */
   fanslySendGuards?: FanslySendGuardRegistry | undefined;
+  /** How long this process's pooled connections live — `pool`'s, and the
+   *  pg-boss pool a role builds next to it. Set for the long-lived roles;
+   *  absent for the CLI and for AppContext literals (node-postgres' 10 s idle
+   *  close lets a one-shot command exit). */
+  poolLifetime?: PoolLifetime | undefined;
   close(): Promise<void>;
 }
 
@@ -80,6 +92,13 @@ export interface CreateAppContextOptions {
   /** The role in this process's Fansly holder identity (journal and status).
    *  The long-lived runtimes pass theirs; everything else is the CLI. */
   processRole?: FanslySendHolderRole;
+}
+
+const LONG_LIVED_ROLES: ReadonlySet<FanslySendHolderRole> = new Set(["api", "worker", "scheduler", "sync"]);
+
+/** A long-lived role keeps its idle connections; anything else closes them fast. */
+export function poolLifetimeForRole(role: FanslySendHolderRole | undefined): PoolLifetime | undefined {
+  return role !== undefined && LONG_LIVED_ROLES.has(role) ? RUNTIME_POOL_LIFETIME : undefined;
 }
 
 export async function createAppContext(options: CreateAppContextOptions = {}): Promise<AppContext> {
@@ -109,7 +128,8 @@ export async function createAppContext(options: CreateAppContextOptions = {}): P
     }, "Telegram is using the deprecated transition legacy-page egress route");
   }
 
-  const pool = createPool(rawConfig.databaseUrl);
+  const poolLifetime = poolLifetimeForRole(options.processRole);
+  const pool = createPool(rawConfig.databaseUrl, poolLifetime === undefined ? {} : { lifetime: poolLifetime });
   try {
     await assertRuntimeSchemaReady(pool);
 
@@ -175,6 +195,7 @@ export async function createAppContext(options: CreateAppContextOptions = {}): P
       aiGatewayOpenrouterProvider,
       voiceTtsProvider,
       fanslySendGuards,
+      poolLifetime,
       async close() {
         // Before the pool ends: a lease still held (none at run time since
         // step 4) writes its completion first.
