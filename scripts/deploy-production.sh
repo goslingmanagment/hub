@@ -848,6 +848,15 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # erased by the previous image keeps its rows — page × rule × instants, no
   # fan data — until the next one.
   "0262_sync_alert_evaluations.sql"
+  # Д2 (an alert outlives a Telegram outage): one nullable self-reference on
+  # notification_delivery_outbox (reported_in_outbox_id, no default: catalog
+  # only; the FK is checked over a few hundred null rows) and the queue's
+  # `sync_failure` rows raised to the new 400-attempt horizon. The previous
+  # image never names the column, sends a missed-alerts summary as the
+  # ordinary `resolved` row it is, treats a retired opening as terminal
+  # `exhausted`, and honours any max_attempts (without stopping on the first
+  # failure it sends in a row again, but loses nothing). No data to repair.
+  "0263_notification_outbox_reported_in.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

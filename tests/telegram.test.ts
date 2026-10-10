@@ -351,6 +351,56 @@ describe("telegram service", () => {
     expect(logger.warn).not.toHaveBeenCalled();
   });
 
+  // Д2: the notification outbox repeats a row after its backoff, so a timed-out
+  // request — an indeterminate outcome — is not repeated inside its call.
+  it("with retryTimeouts: false a timed-out send is not repeated inside the call; a 5xx still is", async () => {
+    sharedMocks.createProxyRequestDispatcher.mockReturnValue(fakeDispatcher());
+    const app = {
+      db: {},
+      logger: { warn: vi.fn() },
+      config: {
+        encryptionKeysByVersion: new Map([[1, Buffer.alloc(32, 7)]]),
+        telegramBotToken: null,
+        telegramChatId: null,
+        telegramReportHourUtc: 9,
+        ...serviceProxyConfig(),
+      },
+    } as never;
+    const credentials = { botToken: "123:abc", chatId: "6065935464" };
+    const timeoutError = () => Object.assign(new Error("socket timed out"), { name: "TimeoutError" });
+    const sent = () => new Response(JSON.stringify({ ok: true, result: { message_id: 42 } }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+
+    const timedOut = vi.spyOn(globalThis, "fetch").mockRejectedValue(timeoutError());
+    expect(await sendTelegramMessage(app, { text: "hello", credentials, retryTimeouts: false })).toEqual({
+      status: "failed",
+      error: "Telegram API request timed out through the service proxy.",
+    });
+    expect(timedOut).toHaveBeenCalledTimes(1);
+    timedOut.mockRestore();
+
+    const unavailable = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: false, description: "Bad Gateway" }), {
+        status: 502,
+        headers: { "content-type": "application/json" },
+      }))
+      .mockResolvedValueOnce(sent());
+    expect(await sendTelegramMessage(app, { text: "hello", credentials, retryTimeouts: false }))
+      .toMatchObject({ status: "sent", messageId: 42 });
+    expect(unavailable).toHaveBeenCalledTimes(2);
+    unavailable.mockRestore();
+
+    // The default is unchanged: the digest, the report and the manual resolve
+    // still repeat a timeout inside the call.
+    const byDefault = vi.spyOn(globalThis, "fetch")
+      .mockRejectedValueOnce(timeoutError())
+      .mockResolvedValueOnce(sent());
+    expect(await sendTelegramMessage(app, { text: "hello", credentials })).toMatchObject({ status: "sent" });
+    expect(byDefault).toHaveBeenCalledTimes(2);
+  });
+
   it("uses the transition legacy page proxy for photo sends only when the service tuple is absent", async () => {
     const dispatcher = {
       dispatch: vi.fn(),

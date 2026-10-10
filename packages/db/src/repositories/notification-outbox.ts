@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 import {
@@ -29,6 +29,20 @@ export interface NotificationDeliveryOutboxRequest {
 }
 
 const DEFAULT_MAX_ATTEMPTS = 5;
+/**
+ * Д2: the delivery horizon of every `sync_failure` row (opening, recovery,
+ * missed-alerts summary). After the four fast retries (1, 2, 4, 8 min) a row
+ * gets at most 8 attempts an hour — one by its own 15-minute backoff ceiling
+ * and at most one by a backoff release, itself at most once per
+ * RELEASE_AFTER_SILENCE_MS — so 4 + 396 attempts outlast ≥ 49 h of any mix
+ * of successes and failures (≈ 99 h of a solid outage, which releases
+ * nothing). The count is only a backstop now: whether an opening still
+ * matters is the paging sweep's call at recovery time, not the counter's.
+ */
+export const ALERT_DELIVERY_MAX_ATTEMPTS = 400;
+/** Equal to the backoff ceiling: a delivery after this long without any
+ * delivered row ends an outage and releases the backed-off alerts. */
+export const RELEASE_AFTER_SILENCE_MS = 15 * 60_000;
 /**
  * Must outlast the slowest PHYSICAL send a worker can make, or a second runner
  * reclaims a row that is still in flight and Telegram — which has no
@@ -336,4 +350,240 @@ export async function settleNotificationDeliveryOutboxAttempt(
 
     return updated ?? null;
   });
+}
+
+/**
+ * Д2: ends an outage. The delivery pass calls it on its first delivered row:
+ * when no other row was delivered in the RELEASE_AFTER_SILENCE_MS before it,
+ * every backed-off `sync_failure` row becomes due at once, so the alerts that
+ * are still open go out in this pass or the next instead of each waiting out
+ * its own backoff (up to the 15-minute ceiling). The silence condition sits
+ * in the same statement, so there is at most one release per
+ * RELEASE_AFTER_SILENCE_MS, and a row that fails after the channel is back
+ * waits its ordinary backoff — together with the 15-minute ceiling that keeps
+ * a row at ≤ 8 attempts an hour (ALERT_DELIVERY_MAX_ATTEMPTS). The AI critical
+ * pair is never released: its own horizon (5 attempts, ≈ 15 min) would burn
+ * in minutes. A row another transaction holds (the paging sweep settling its
+ * page) is skipped, not waited for.
+ */
+export async function releaseNotificationDeliveryBackoff(
+  db: Database,
+  input: { now: Date; deliveredOutboxId: number },
+): Promise<number> {
+  const silentSince = new Date(input.now.getTime() - RELEASE_AFTER_SILENCE_MS);
+  const released = await db.execute<{ id: number | string }>(sql`
+    update ${notificationDeliveryOutbox}
+       set available_at = ${input.now},
+           updated_at = ${input.now}
+     where id in (
+       select backed_off.id
+         from notification_delivery_outbox backed_off
+        where backed_off.state = 'pending'
+          and backed_off.paging_policy = 'sync_failure'
+          and backed_off.attempt_count > 0
+          and backed_off.available_at > ${input.now}
+          and not exists (
+            select 1
+              from notification_delivery_outbox recent
+             where recent.state = 'delivered'
+               and recent.delivered_at > ${silentSince}
+               and recent.id <> ${input.deliveredOutboxId}
+          )
+        for update of backed_off skip locked
+     )
+    returning id
+  `);
+  return released.rows.length;
+}
+
+export const MISSED_ALERT_ERROR = "Not delivered: the page resolved before Telegram accepted it";
+export const MANUALLY_RESOLVED_ALERT_ERROR = "Not delivered: manually resolved from the dashboard";
+
+/** The summary text with one more line, or null when it would pass
+ * `maxChars` (then the line starts a new summary). Counted in UTF-16 units,
+ * as Telegram counts its 4 096. */
+export function appendMissedAlertsLine(text: string, line: string, maxChars: number): string | null {
+  const appended = `${text}\n${line}`;
+  return appended.length <= maxChars ? appended : null;
+}
+
+export type UndeliveredPageSettlement =
+  /** An opening reached Telegram, or the page has no outbox row (the 0205
+   *  seed): the recovery is announced as usual. */
+  | { outcome: "delivered" }
+  /** Every opening was suppressed (alerts were off): settled silently. */
+  | { outcome: "suppressed" }
+  /** An opening is being sent right now: nothing was written; the next sweep
+   *  decides once the send has settled. */
+  | { outcome: "deferred" }
+  /** The openings never reached Telegram and are terminal now; `missed` put
+   *  the episode in a summary, `manual` retired them without one. */
+  | { outcome: "retired"; summaryOutboxId: number | null; retiredOutboxIds: number[] };
+
+/**
+ * Д2: the paging sweep's decision about a page that resolved, made inside the
+ * sweep's transaction with the page's opening rows locked (`FOR UPDATE`), so
+ * no delivery pass can lease one of them while it is decided and none can
+ * reach Telegram after it.
+ *
+ * A page whose opening never reached Telegram (`pending` or `exhausted`) gets
+ * neither a late "🚨" nor a "✅" without its opening nor silence: with `mode:
+ * "missed"` the openings are retired (`exhausted`, MISSED_ALERT_ERROR) and the
+ * episode becomes one line of a missed-alerts summary — appended to the open
+ * summary (the newest `pending` one that already reports a page) when the line
+ * fits, with a full horizon on top of the attempts it has used; otherwise a new
+ * summary carried by this incident under its standard recovery key. A summary
+ * in flight (`leased`) is never edited: its text is already on the wire. With
+ * `mode: "manual"` (the dashboard's own "Manually resolved" line went out) the
+ * pending openings are retired without a summary.
+ *
+ * The caller renders the texts; this only stores them. Serialised against
+ * other sweeps by the sweep's advisory lock; delivery leases skip the rows it
+ * holds (`skip locked`).
+ */
+export async function settleUndeliveredPage(
+  tx: Database,
+  input: {
+    incidentId: number;
+    pagedAt: Date;
+    mode: "missed" | "manual";
+    summary: { header: string; line: string; transitionAt: Date; maxChars: number };
+    now: Date;
+  },
+): Promise<UndeliveredPageSettlement> {
+  const { now } = input;
+  // An opening already reported in a summary belongs to an earlier page.
+  const locked = await tx.execute<{ id: number | string; state: NotificationDeliveryOutboxState }>(sql`
+    select id, state
+      from ${notificationDeliveryOutbox}
+     where notification_incident_id = ${input.incidentId}
+       and transition <> 'resolved'
+       and created_at >= ${input.pagedAt}
+       and reported_in_outbox_id is null
+     order by id
+     for update
+  `);
+  const openings = locked.rows.map((row) => ({ id: Number(row.id), state: row.state }));
+  if (openings.length === 0 || openings.some((row) => row.state === "delivered")) {
+    return { outcome: "delivered" };
+  }
+  if (openings.some((row) => row.state === "leased")) {
+    return { outcome: "deferred" };
+  }
+  if (openings.every((row) => row.state === "suppressed")) {
+    return { outcome: "suppressed" };
+  }
+  const pendingIds = openings.filter((row) => row.state === "pending").map((row) => row.id);
+  const exhaustedIds = openings.filter((row) => row.state === "exhausted").map((row) => row.id);
+
+  const retire = (lastError: string, summaryOutboxId: number | null) => tx.update(notificationDeliveryOutbox)
+    .set({
+      state: "exhausted",
+      availableAt: now,
+      leaseToken: null,
+      leaseExpiresAt: null,
+      lastError,
+      exhaustedAt: now,
+      reportedInOutboxId: summaryOutboxId,
+      updatedAt: now,
+    })
+    .where(and(
+      inArray(notificationDeliveryOutbox.id, pendingIds),
+      eq(notificationDeliveryOutbox.state, "pending"),
+    ));
+
+  if (input.mode === "manual") {
+    if (pendingIds.length > 0) {
+      await retire(MANUALLY_RESOLVED_ALERT_ERROR, null);
+    }
+    return { outcome: "retired", summaryOutboxId: null, retiredOutboxIds: pendingIds };
+  }
+
+  const open = await tx.execute<{ id: number | string; messageText: string }>(sql`
+    select summary.id, summary.message_text as "messageText"
+      from notification_delivery_outbox summary
+     where summary.transition = 'resolved'
+       and summary.paging_policy = 'sync_failure'
+       and summary.channel = 'telegram'
+       and summary.state = 'pending'
+       and exists (
+         select 1
+           from notification_delivery_outbox reported
+          where reported.reported_in_outbox_id = summary.id
+       )
+     order by summary.id desc
+     limit 1
+     for update of summary
+  `);
+  const current = open.rows[0];
+  const appended = current
+    ? appendMissedAlertsLine(current.messageText, input.summary.line, input.summary.maxChars)
+    : null;
+  let summaryOutboxId: number;
+  if (current && appended !== null) {
+    summaryOutboxId = Number(current.id);
+    // The new episode gets a full horizon, whatever the summary has used.
+    await tx.update(notificationDeliveryOutbox)
+      .set({
+        messageText: appended,
+        maxAttempts: sql`${notificationDeliveryOutbox.attemptCount} + ${ALERT_DELIVERY_MAX_ATTEMPTS}`,
+        updatedAt: now,
+      })
+      .where(eq(notificationDeliveryOutbox.id, summaryOutboxId));
+  } else {
+    const created = await enqueueNotificationDeliveryOutbox(tx, {
+      notificationIncidentId: input.incidentId,
+      transition: "resolved",
+      transitionAt: input.summary.transitionAt,
+      request: {
+        channel: "telegram",
+        messageText: `${input.summary.header}\n${input.summary.line}`,
+        pagingPolicy: "sync_failure",
+        maxAttempts: ALERT_DELIVERY_MAX_ATTEMPTS,
+      },
+      now,
+    });
+    summaryOutboxId = created.id;
+  }
+
+  if (pendingIds.length > 0) {
+    await retire(MISSED_ALERT_ERROR, summaryOutboxId);
+  }
+  if (exhaustedIds.length > 0) {
+    await tx.update(notificationDeliveryOutbox)
+      .set({ reportedInOutboxId: summaryOutboxId, updatedAt: now })
+      .where(and(
+        inArray(notificationDeliveryOutbox.id, exhaustedIds),
+        isNull(notificationDeliveryOutbox.reportedInOutboxId),
+      ));
+  }
+  return { outcome: "retired", summaryOutboxId, retiredOutboxIds: [...pendingIds, ...exhaustedIds] };
+}
+
+/**
+ * Д2: the digest's page counts — the `sync_failure` openings created since
+ * `since` (suppressed ones were never meant to go out), by where they ended:
+ * delivered, not delivered (`exhausted`, including the ones retired into a
+ * missed-alerts summary) and still in the queue.
+ */
+export async function summarizeNotificationPageDelivery(
+  db: Database,
+  input: { since: Date },
+): Promise<{ delivered: number; missed: number; queued: number }> {
+  const result = await db.execute<{ delivered: number | string; missed: number | string; queued: number | string }>(sql`
+    select count(*) filter (where state = 'delivered') as delivered,
+           count(*) filter (where state = 'exhausted') as missed,
+           count(*) filter (where state in ('pending', 'leased')) as queued
+      from ${notificationDeliveryOutbox}
+     where paging_policy = 'sync_failure'
+       and transition <> 'resolved'
+       and state <> 'suppressed'
+       and created_at >= ${input.since}
+  `);
+  const row = result.rows[0];
+  return {
+    delivered: Number(row?.delivered ?? 0),
+    missed: Number(row?.missed ?? 0),
+    queued: Number(row?.queued ?? 0),
+  };
 }

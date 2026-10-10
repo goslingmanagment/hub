@@ -1,6 +1,7 @@
 import {
   getTelegramSettings,
   leaseNotificationDeliveryOutbox,
+  releaseNotificationDeliveryBackoff,
   settleNotificationDeliveryOutboxAttempt,
   suppressLeasedNotificationDelivery,
 } from "@agency_hub_core/db";
@@ -110,6 +111,15 @@ export async function ensureNotificationDeliveryOutboxSchedule(
  * Drains a bounded number of durable notification transitions. The database
  * lease, not the pg-boss tick, owns delivery concurrency and crash recovery.
  *
+ * Д2: a send that does not go through (`failed` or `skipped`, whatever the
+ * cause — the cause is not reliably classified) is settled as usual and ends
+ * the pass: the first due row is the probe of the channel, so an outage costs
+ * one call a minute instead of one ~40 s failure per due row, and the rows
+ * behind it keep their attempts. The first delivered row of a pass that ends
+ * 15 minutes without any delivery releases every backed-off `sync_failure`
+ * row (`releaseNotificationDeliveryBackoff`), so what is still open goes out
+ * in this pass or the next.
+ *
  * Telegram has no provider-side idempotency primitive. The stable key is
  * nevertheless carried through the sender boundary and logs so another
  * channel with such a primitive can use it, and so retries are traceable.
@@ -138,10 +148,13 @@ export async function runNotificationDeliveryOutbox(
   const sweepStartedAt = Date.now();
   const maxRows = Math.max(1, Math.floor(input?.maxRows ?? DEFAULT_BATCH_LIMIT));
   const budgetMs = Math.max(0, input?.budgetMs ?? SWEEP_BUDGET_MS);
+  // A timed-out request is not repeated inside the call: the row repeats it
+  // after its backoff.
   const sender = input?.sender ?? ((delivery: NotificationOutboxDelivery) =>
     sendTelegramMessage(app, {
       text: delivery.text,
       idempotencyKey: delivery.idempotencyKey,
+      retryTimeouts: false,
     }));
   const result = {
     leased: 0,
@@ -149,6 +162,11 @@ export async function runNotificationDeliveryOutbox(
     retrying: 0,
     exhausted: 0,
     suppressed: 0,
+    /** Backed-off rows the pass's first delivery made due (0 when another
+     * row was delivered in the 15 min before it). */
+    released: 0,
+    /** The pass ended on a send that did not go through. */
+    stoppedOnFailure: false,
   };
 
   for (let index = 0; index < maxRows; index += 1) {
@@ -247,14 +265,24 @@ export async function runNotificationDeliveryOutbox(
         notificationOutboxId: row.id,
         idempotencyKey: row.idempotencyKey,
       }, "Notification outbox lease was lost before delivery settlement");
-      continue;
-    }
-    if (settled.state === "delivered") {
+    } else if (settled.state === "delivered") {
       result.delivered += 1;
+      if (result.delivered === 1) {
+        result.released = await releaseNotificationDeliveryBackoff(app.db, {
+          now: clock(),
+          deliveredOutboxId: settled.id,
+        });
+      }
     } else if (settled.state === "exhausted") {
       result.exhausted += 1;
     } else {
       result.retrying += 1;
+    }
+    if (delivery.status !== "sent") {
+      // The channel is down (or the row cannot go out): the next due row
+      // would only burn an attempt the same way. The next pass probes again.
+      result.stoppedOnFailure = true;
+      break;
     }
   }
 
@@ -267,8 +295,10 @@ export function startNotificationDeliveryOutboxWorker(
 ): Promise<string> {
   return boss.work(NOTIFICATION_DELIVERY_OUTBOX_QUEUE, { batchSize: 1 }, async () => {
     const result = await runNotificationDeliveryOutbox(app);
-    if (result.exhausted > 0) {
-      app.logger.warn(result, "Notification outbox delivery exhausted");
+    if (result.stoppedOnFailure) {
+      app.logger.warn(result, result.exhausted > 0
+        ? "Notification outbox delivery exhausted; the pass stopped on the failed send"
+        : "Notification outbox delivery failed; the pass stopped, the next one retries");
     } else if (result.leased > 0) {
       app.logger.info(result, "Notification outbox delivery sweep complete");
     }
