@@ -286,7 +286,7 @@ importers:
         specifier: workspace:*
         version: link:../contracts
       zod:
-        specifier: ^4.6.5
+        specifier: ^4.1.5
         version: 4.6.5
 
   packages/shared:
