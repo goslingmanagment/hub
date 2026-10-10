@@ -203,7 +203,8 @@ async function applyReplyMaterial(
 /**
  * Applies one account's message.* events (ordered by account_seq) onto the
  * archive. received/sent insert (first writer wins — cross-producer dedup
- * already collapsed same-fact events upstream); deleted tombstones;
+ * already collapsed same-fact events upstream); deleted tombstones (a stub
+ * carries the chat, side and send time the event names);
  * ppv_unlocked (H2, INC-001 — a NO-OP through v1) marks the named message
  * opened: is_opened only ever moves to TRUE (monotonic — a purchase is never
  * undone, and no later writer's false/null may regress it), on an existing
@@ -490,16 +491,27 @@ export async function applyMessageEventsToArchive(
       // Tombstone-first, one atomic statement: no row yet → insert a
       // content_pending stub carrying the tombstone (the later content
       // event hydrates it); live row → set deleted_at; already tombstoned →
-      // no-op (idempotent replay).
+      // no-op (idempotent replay). The stub carries what the event names of
+      // the message: its chat, its fan, its side (data.sentByPage) and its
+      // send time (data.createdAt; else the deletion's instant). A Fansly
+      // socket deletion names them; OFAPI and harvest deletions name none,
+      // so their stub is the chatless one dated by the deletion.
+      const sentByPage = dataField(event.data, "sentByPage");
+      const side = typeof sentByPage === "boolean" ? sentByPage : null;
       const result = await db.execute(sql`
         insert into ${target} (
-          account_id, platform, message_ref, occurred_at, content_pending,
+          account_id, platform, conversation_ref, message_ref, fan_native_id,
+          sender_role, is_sent_by_me, occurred_at, content_pending,
           deleted_at, source_event_id
         ) values (
           ${input.accountId},
           ${input.platform},
+          ${event.conversationRef},
           ${event.messageRef},
-          ${event.occurredAt},
+          ${event.fanIdentityRef},
+          ${side === true ? "model" : side === false ? "fan" : "unknown"},
+          ${side === true},
+          ${headDate(dataField(event.data, "createdAt")) ?? event.occurredAt},
           true,
           ${event.occurredAt},
           ${event.id}

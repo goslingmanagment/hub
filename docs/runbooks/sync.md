@@ -490,7 +490,10 @@ that covers its place without it gives `not_found`) and clears the reason. A cha
 (every read an error) keeps its socket messages this way. `chat_unavailable` is the same deferral for a chat whose
 unavailability the engine has established ([A chat Fansly does not serve](#a-chat-fansly-does-not-serve)); while a
 chat has an open episode, alert 3 does not count its new socket messages either. A reason on a row with
-`confirmed_at` means nothing.
+`confirmed_at` means nothing. A message deleted before its first REST read is judged against its archive stub
+(see Deletions below): the stub carries the socket's own chat, side and send time, so it is a `match` by
+construction; when the deletion frame came before the create frame and the deletion step ran first, the stub keeps
+the deletion's instant and `mismatch {time}` is possible.
 
 ```sql
 select page_id, confirm_wait_reason, count(*), min(first_visible_at)
@@ -522,7 +525,9 @@ select page_id, platform_message_id, platform_conversation_id, first_visible_at,
 Deferring them again is a write: the owner's decision.
 
 **Deletions.** A Fansly deletion frame marks the copies Hub already holds (`deleted_at` on `message_archive` and on
-the page's hot rows); text, attachments and tips stay, nothing is inserted, and no later REST read clears a mark.
+the page's hot rows); text, attachments and tips stay, and no later REST read clears a mark. A deletion before the
+first read inserts a mark row into `message_archive`: the chat, the side and the send time the socket showed,
+`content_pending`, no text; a later REST copy fills it, and the mark stays.
 The engine is the only writer: the page's `dm-live.deletions` work, a step without a request, so no page hold,
 pacer slot or route hold delays it (the owner's pause of the page does). Marks have no unmark lever; a code rollback
 does not undo them. Stale deletion work (owner's session):

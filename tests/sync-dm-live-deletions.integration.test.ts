@@ -3,8 +3,12 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   appendDomainEventsInTransaction,
   applyMessageEventsToArchive,
+  confirmDmLiveMessages,
   DM_ARCHIVE_ERASURE_FENCE_LOCK_NS,
+  getPageConversationMessages,
   getSyncPage,
+  listAgentTranscript,
+  listArchiveConversationMessagesForAi,
   listDomainEventsByDedupKeys,
   setPageHold,
   upsertDemand,
@@ -174,12 +178,40 @@ async function overlayDeletedAt(pageId: number, messageId: string): Promise<Date
   return result.rows[0]?.deleted_at ?? null;
 }
 
-async function archiveRow(pageId: number, messageId: string) {
-  const result = await testDb!.pool.query<{ deleted_at: Date | null; content_pending: boolean; text_plain: string | null }>(
-    "select deleted_at, content_pending, text_plain from message_archive where account_id = $1 and platform = 'fansly' and message_ref = $2",
+interface ArchiveRow {
+  conversation_ref: string | null;
+  sender_role: string;
+  is_sent_by_me: boolean;
+  fan_native_id: string | null;
+  occurred_at: Date | null;
+  deleted_at: Date | null;
+  content_pending: boolean;
+  text_plain: string | null;
+}
+
+async function archiveRows(pageId: number, messageId: string): Promise<ArchiveRow[]> {
+  const result = await testDb!.pool.query<ArchiveRow>(
+    `select conversation_ref, sender_role, is_sent_by_me, fan_native_id, occurred_at, deleted_at, content_pending, text_plain
+       from message_archive where account_id = $1 and platform = 'fansly' and message_ref = $2`,
     [pageId, messageId],
   );
-  return result.rows[0] ?? null;
+  return result.rows;
+}
+
+async function archiveRow(pageId: number, messageId: string): Promise<ArchiveRow | null> {
+  return (await archiveRows(pageId, messageId))[0] ?? null;
+}
+
+async function overlayRow(pageId: number, messageId: string) {
+  const result = await testDb!.pool.query<{
+    created_at: Date | null; deleted_at: Date | null; confirm_outcome: string | null;
+    mismatch_fields: string[] | null; confirm_source: string | null;
+  }>(
+    `select created_at, deleted_at, confirm_outcome, mismatch_fields, confirm_source
+       from dm_live_messages where page_id = $1 and platform_message_id = $2`,
+    [pageId, messageId],
+  );
+  return result.rows[0]!;
 }
 
 async function threadWindow(threadId: number) {
@@ -316,9 +348,124 @@ describe("dm-live.deletions on a live page", () => {
     // The hot copy is marked; the archive gets the stub carrying the tombstone
     // (a later REST copy hydrates it and keeps the mark).
     expect((await hotRow(page.pageId, inFlight))!.deleted_at).not.toBeNull();
-    expect(await archiveRow(page.pageId, inFlight)).toMatchObject({ content_pending: true, text_plain: "" });
-    expect((await archiveRow(page.pageId, inFlight))!.deleted_at).not.toBeNull();
+    // The socket showed only the deletion: the stub carries the frame's chat;
+    // the side and the send time stay unknown, so it is dated by the deletion.
+    const deletedAt = await overlayDeletedAt(page.pageId, inFlight);
+    expect(deletedAt).not.toBeNull();
+    expect(await archiveRow(page.pageId, inFlight)).toEqual({
+      conversation_ref: GROUP,
+      sender_role: "unknown",
+      is_sent_by_me: false,
+      fan_native_id: null,
+      occurred_at: deletedAt,
+      deleted_at: deletedAt,
+      content_pending: true,
+      text_plain: "",
+    });
     expect(await threadWindow(threadId)).toEqual(before);
+  }, 60_000);
+
+  it.each(["fan", "own"] as const)("a message deleted before the first read (%s): the tombstone carries the chat, the side and the send time; parity judges it match; a later REST copy fills the same row", async (side) => {
+    if (!testDb) return;
+    const { page, threadId, ids } = await seedLivePage("live", `ws-early-${side}`);
+    const fan = side === "fan";
+    const id = fan ? String(910_000_000_000_100_005n) : String(910_000_000_000_100_006n);
+    const senderRef = fan ? FAN : OWN;
+    // The socket shows the message, then its deletion, before any REST read.
+    const sentAtMs = Date.now() - 10_000;
+    const created = await page.capture(wsCreated(wsMessage({ id, groupId: GROUP, senderId: senderRef, createdAt: sentAtMs / 1000 })));
+    expect((await applyFanslyWsLive(app(), created))?.status).toBe("applied");
+    const before = await threadWindow(threadId);
+    const observationId = await deleteFrame(page, id);
+    await runDeletions(page.pageId);
+
+    const overlay = await overlayRow(page.pageId, id);
+    expect(overlay.created_at).toEqual(new Date(sentAtMs));
+    expect(overlay.deleted_at).not.toBeNull();
+    expect(overlay.deleted_at!.getTime()).toBeGreaterThan(sentAtMs);
+    // The stub: the chat, the side and the send time the socket showed; no text.
+    expect(await archiveRows(page.pageId, id)).toEqual([{
+      conversation_ref: GROUP,
+      sender_role: fan ? "fan" : "model",
+      is_sent_by_me: !fan,
+      fan_native_id: fan ? FAN : null,
+      occurred_at: overlay.created_at,
+      deleted_at: overlay.deleted_at,
+      content_pending: true,
+      text_plain: "",
+    }]);
+    // The event carries them: the sender as the fan only on a fan's message.
+    const events = await testDb.pool.query(
+      `select fan_identity_ref, conversation_ref, occurred_at, data, schema_version, dedup_key, observation_id::text
+         from domain_events where account_id = $1 and type = 'message.deleted' and message_ref = $2`,
+      [page.pageId, id],
+    );
+    expect(events.rows).toEqual([{
+      fan_identity_ref: fan ? FAN : null,
+      conversation_ref: GROUP,
+      occurred_at: overlay.deleted_at,
+      data: { source: "fansly_ws", senderRef, sentByPage: !fan, createdAt: overlay.created_at!.toISOString() },
+      schema_version: 1,
+      dedup_key: `msg-deleted:fansly:${id}`,
+      observation_id: String(observationId),
+    }]);
+    // The stored window never counted it.
+    expect(await threadWindow(threadId)).toEqual(before);
+
+    // The stored-message readers do not see the stub; the transcript shows it
+    // in its chat as deleted.
+    const conversation = await getPageConversationMessages(db(), {
+      platformAccountId: page.pageId, platformConversationId: GROUP, store: "message_archive",
+    });
+    expect(conversation!.messages.map((message) => message.messageId).sort()).toEqual([...ids].sort());
+    expect((await listArchiveConversationMessagesForAi(db(), { accountId: page.pageId, conversationRef: GROUP }))
+      .map((row) => row.messageRef).sort()).toEqual([...ids].sort());
+    const transcript = await listAgentTranscript(db(), {
+      pageId: page.pageId, platform: "fansly", conversationRef: GROUP, sortDir: "asc", limit: 20,
+      from: new Date(Date.now() - 2 * 3_600_000), to: new Date(Date.now() + 3_600_000), filters: {}, hotArm: false,
+    });
+    expect(transcript.rows.find((row) => row.messageRef === id)).toMatchObject({
+      occurredAt: overlay.created_at,
+      deletedAt: overlay.deleted_at,
+      contentPending: true,
+      senderRole: fan ? "fan" : "model",
+      isSentByMe: !fan,
+    });
+
+    // The parity pass compares the socket with the stub: a match.
+    await testDb.pool.query(
+      "update dm_live_messages set confirm_due_at = now() - interval '1 second' where page_id = $1", [page.pageId],
+    );
+    expect(await confirmDmLiveMessages(db(), { limit: 10 })).toMatchObject({ checked: 1, match: 1, mismatch: 0 });
+    expect(await overlayRow(page.pageId, id)).toMatchObject({
+      confirm_outcome: "match", mismatch_fields: null, confirm_source: "message_archive",
+    });
+
+    // A later REST copy (whole seconds, as Fansly dates it) fills the same row
+    // and keeps the tombstone.
+    const restAt = new Date(Math.floor(sentAtMs / 1000) * 1000);
+    await db().transaction(async (raw) => {
+      const tx = raw as unknown as Database;
+      const key = `test:rest:${id}`;
+      await appendDomainEventsInTransaction(tx, page.pageId, [{
+        type: fan ? "message.received" : "message.sent", occurredAt: restAt, fanIdentityRef: fan ? FAN : null,
+        conversationRef: GROUP, messageRef: id, data: { text: "deleted early", price: 0, isTip: false },
+        schemaVersion: 1, observationId, dedupKey: key,
+      }]);
+      await applyMessageEventsToArchive(tx, {
+        accountId: page.pageId, platform: "fansly", events: await listDomainEventsByDedupKeys(tx, page.pageId, [key]),
+      });
+    });
+    expect(await archiveRows(page.pageId, id)).toEqual([{
+      conversation_ref: GROUP,
+      sender_role: fan ? "fan" : "model",
+      is_sent_by_me: !fan,
+      fan_native_id: fan ? FAN : null,
+      occurred_at: restAt,
+      deleted_at: overlay.deleted_at,
+      content_pending: false,
+      text_plain: "deleted early",
+    }]);
   }, 60_000);
 
   it("an erasure-fenced fan: nothing is written, the work closes", async (context) => {
