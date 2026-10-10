@@ -359,6 +359,13 @@ describe("alert rules (design §9.6)", () => {
     });
     expect(evaluate(poll(55 * MINUTE))).toEqual({});
     expect(evaluate(poll(65 * MINUTE))).toEqual({ stuck: "planned_stale" });
+    // The money insurance: every 15 min, stale past 45 min (owner decision
+    // 09.10, У8 step 1) — one served 20 min ago is on time.
+    const insurance = (servedMs: number) => facts({
+      journal: { polls: [{ resource: "transactions.insurance", lastAppliedAt: at(-servedMs), createdAt: at(-24 * 60 * MINUTE) }] },
+    });
+    expect(evaluate(insurance(20 * MINUTE))).toEqual({});
+    expect(evaluate(insurance(46 * MINUTE))).toEqual({ stuck: "planned_stale" });
     // A key the owner switched off for the page is not stale.
     const off = poll(65 * MINUTE);
     expect(evaluate({ ...off, page: { ...off.page, registryOverrides: { "notifications.forward": { enabled: false } } } })).toEqual({});
@@ -457,11 +464,11 @@ describe("alert rules (design §9.6)", () => {
   it("alert 4: planned_stale judges a poll by its newest applied answer; a poll that never applied one, by its creation", () => {
     const poll = (lastAppliedAt: Date | null, createdAt: Date) =>
       evaluate(facts({ journal: { polls: [{ resource: "transactions.insurance", lastAppliedAt, createdAt }] } }));
-    // transactions.insurance: SLO 15 min.
-    expect(poll(at(-14 * MINUTE), at(-24 * 60 * MINUTE))).toEqual({});
-    expect(poll(at(-20 * MINUTE), at(-24 * 60 * MINUTE))).toEqual({ stuck: "planned_stale" });
-    expect(poll(null, at(-10 * MINUTE))).toEqual({});
-    expect(poll(null, at(-20 * MINUTE))).toEqual({ stuck: "planned_stale" });
+    // transactions.insurance: SLO 45 min (owner decision 09.10, У8 step 1).
+    expect(poll(at(-44 * MINUTE), at(-24 * 60 * MINUTE))).toEqual({});
+    expect(poll(at(-50 * MINUTE), at(-24 * 60 * MINUTE))).toEqual({ stuck: "planned_stale" });
+    expect(poll(null, at(-40 * MINUTE))).toEqual({});
+    expect(poll(null, at(-50 * MINUTE))).toEqual({ stuck: "planned_stale" });
   });
 
   it("alert 4: the new reasons come first, in the order step_failing, apply_pending, then the others", () => {

@@ -37,7 +37,13 @@ import type {
 //   - a dirty mark or a retry made it due (`next_due_at`, written by the
 //     transactions writer and by the receipts), or
 //   - it is a spender of the page (`page_fans` net > 0) never read, or not
-//     read within the roster age (today's 156 h).
+//     read within the roster age (30 days).
+// The monthly plane is every spender's; the lifetime plane only that of a
+// fan whose monthly reads never gave a valid snapshot (visited, never
+// checked), its fallback (owner decision 09.10, У4): the rankings read the
+// lifetime row only of a fan without monthly rows. A never-read fan is read
+// monthly first. The writer still marks both planes dirty; the lifetime mark
+// of a fan with a monthly snapshot stays a pending revision nobody reads.
 // One walk row per page steps through the due subjects (dirty first, then
 // never read, then the oldest read) and closes when none is left; the
 // transactions apply asks for a new one whenever a subject is due again.
@@ -52,11 +58,10 @@ import type {
 
 export const FAN_EARNINGS_ROSTER_KEY = "fan-earnings.roster";
 
-const HOUR_MS = 3_600_000;
-/** The roster age (registry parameter: 156 h, the owner's production setting
- *  of the legacy roster when it was retired): a spender is read again this
- *  long after its last read. */
-export const FAN_EARNINGS_ROSTER_MAX_AGE_MS = 156 * HOUR_MS;
+const DAY_MS = 86_400_000;
+/** The roster age (owner decision 09.10, У14: 30 days): a spender is read
+ *  again this long after its last read. */
+export const FAN_EARNINGS_ROSTER_MAX_AGE_MS = 30 * DAY_MS;
 
 export type FanEarningsWindow = FanEarningsRefreshWindow;
 
@@ -98,7 +103,8 @@ export function fanEarningsRequest(subject: FanEarningsSubject, now: Date): Requ
 
 /**
  * The next due subject of the page (read-only): marked due first (by due
- * time), then never read, then the oldest read.
+ * time), then never read, then the oldest read. A lifetime subject only of a
+ * fan whose monthly row was visited without a valid snapshot.
  */
 export async function nextDueFanEarningsSubject(
   db: Database,
@@ -106,33 +112,48 @@ export async function nextDueFanEarningsSubject(
 ): Promise<DueFanEarningsSubject | null> {
   const now = input.now;
   const ageCutoff = new Date(now.getTime() - (input.maxAgeMs ?? FAN_EARNINGS_ROSTER_MAX_AGE_MS));
+  // A queue row a read may take now: no live claim, no retry pending.
+  const free = sql`(s.claim_token is null or s.claim_expires_at <= ${now})
+         and (s.retry_after_at is null or s.retry_after_at <= ${now})`;
   const result = await db.execute<{ fanRef: string; window: string; rank: number }>(sql`
-    with planes(window_name, plane) as (
-      values ('lifetime', 'fan_earnings_lifetime'), ('monthly', 'fan_earnings_monthly')
-    ), roster as (
+    with roster as (
       select f.platform_user_id as fan_ref
         from page_fans pf
         join fans f on f.id = pf.fan_id
        where pf.platform_account_id = ${input.pageId}
          and pf.total_creator_net_mills > 0
-    ), due as (
-      select s.subject_ref as fan_ref, p.window_name, 0 as rank, s.next_due_at as at
-        from subject_refresh_state s
-        join planes p on p.plane = s.plane
-       where s.page_id = ${input.pageId}
-         and s.next_due_at <= ${now}
-         and (s.claim_token is null or s.claim_expires_at <= ${now})
-         and (s.retry_after_at is null or s.retry_after_at <= ${now})
+    ), fallback as (
+      -- Fans whose monthly reads never gave a valid snapshot (visited, never
+      -- checked): the lifetime read is their fallback.
+      select m.subject_ref as fan_ref
+        from subject_refresh_state m
+       where m.page_id = ${input.pageId} and m.plane = 'fan_earnings_monthly'
+         and m.last_visited_at is not null and m.last_checked_at is null
+    ), roster_planes(fan_ref, window_name, plane) as (
+      select r.fan_ref, 'monthly', 'fan_earnings_monthly' from roster r
       union all
-      select r.fan_ref, p.window_name, case when s.last_visited_at is null then 1 else 2 end, s.last_visited_at
-        from roster r
-       cross join planes p
+      select r.fan_ref, 'lifetime', 'fan_earnings_lifetime' from roster r join fallback b on b.fan_ref = r.fan_ref
+    ), due as (
+      select s.subject_ref as fan_ref, 'monthly' as window_name, 0 as rank, s.next_due_at as at
+        from subject_refresh_state s
+       where s.page_id = ${input.pageId} and s.plane = 'fan_earnings_monthly'
+         and s.next_due_at <= ${now}
+         and ${free}
+      union all
+      select s.subject_ref, 'lifetime', 0, s.next_due_at
+        from fallback b
+        join subject_refresh_state s
+          on s.page_id = ${input.pageId} and s.plane = 'fan_earnings_lifetime' and s.subject_ref = b.fan_ref
+       where s.next_due_at <= ${now}
+         and ${free}
+      union all
+      select p.fan_ref, p.window_name, case when s.last_visited_at is null then 1 else 2 end, s.last_visited_at
+        from roster_planes p
         left join subject_refresh_state s
-          on s.page_id = ${input.pageId} and s.plane = p.plane and s.subject_ref = r.fan_ref
+          on s.page_id = ${input.pageId} and s.plane = p.plane and s.subject_ref = p.fan_ref
        where s.subject_ref is null or (
                (s.last_visited_at is null or s.last_visited_at <= ${ageCutoff})
-           and (s.claim_token is null or s.claim_expires_at <= ${now})
-           and (s.retry_after_at is null or s.retry_after_at <= ${now}))
+           and ${free})
     ), ranked as (
       select fan_ref, window_name, min(rank) as rank, min(at) as at
         from due
@@ -150,7 +171,7 @@ export async function nextDueFanEarningsSubject(
 
 /**
  * The roster walk a page needs now (a follow-up of the transactions steps,
- * which run at least every five minutes): one whenever a subject is due.
+ * which run at least every fifteen minutes): one whenever a subject is due.
  */
 export async function fanEarningsRosterFollowups(
   db: Database,

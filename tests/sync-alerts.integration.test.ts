@@ -1374,7 +1374,9 @@ describe("alert 4: a work failing without an outcome (bug hunt Д3/У2)", () => 
     const [insurance] = await query<{ id: number }>(
       "select id::int from sync_work where page_id = $1 and resource = 'transactions.insurance' and state = 'open'", [page.pageId],
     );
-    // Admitted a minute ago, its newest applied answer 20 min old (SLO 15 min).
+    // Admitted a minute ago, its newest applied answer 5 min past the SLO
+    // (the registry's: 45 min since the owner's decision of 09.10, У8).
+    const appliedAgoS = (fanslyResourceSpec("transactions.insurance")!.slo!.staleAfterMs! + 5 * MINUTE) / 1000;
     await testDb.pool.query(
       `update sync_work set last_served_at = clock_timestamp() - interval '1 minute', created_at = clock_timestamp() - interval '1 day'
         where id = $1`,
@@ -1385,10 +1387,10 @@ describe("alert 4: a work failing without an outcome (bug hunt Д3/У2)", () => 
                                   admitted_at, sent_at, send_mark, completed_at, operation, request, outcome, http_status,
                                   apply_state, applied_at)
        values ($1, $2, 'transactions.insurance', '', 'planned', 1, 2000, 0, 2000,
-               clock_timestamp() - interval '20 minutes 1 second', clock_timestamp() - interval '20 minutes 1 second',
-               'request_start', clock_timestamp() - interval '20 minutes', 'transactions.page', '{}'::jsonb, 'response', 200,
-               'applied', clock_timestamp() - interval '20 minutes')`,
-      [page.pageId, insurance!.id],
+               clock_timestamp() - make_interval(secs => $3::float8 + 1), clock_timestamp() - make_interval(secs => $3::float8 + 1),
+               'request_start', clock_timestamp() - make_interval(secs => $3::float8), 'transactions.page', '{}'::jsonb, 'response', 200,
+               'applied', clock_timestamp() - make_interval(secs => $3::float8))`,
+      [page.pageId, insurance!.id, appliedAgoS],
     );
     expect(opened(await pass(), page.pageId)).toEqual([{ pageId: page.pageId, subKey: "stuck", detail: "planned_stale" }]);
     expect(await stuckReasons(page.pageId)).toEqual([expect.objectContaining({

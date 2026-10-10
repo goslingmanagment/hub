@@ -18,7 +18,7 @@ import { FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY, FANSLY_WS_LIVE_FIELD } from
 import { familyForObservation } from "../apps/runtime/src/services/canonicalize/index.ts";
 import { canonicalizeObservationInTransaction } from "../apps/runtime/src/sync/engine/canonicalize.ts";
 import type { CaptureCodec, SyncFaultPoint } from "../apps/runtime/src/sync/engine/commit.ts";
-import { createEngineRegistry, pollsFor, type EngineRegistry } from "../apps/runtime/src/sync/engine/resource.ts";
+import { createEngineRegistry, demandToUpsert, pollsFor, type EngineRegistry } from "../apps/runtime/src/sync/engine/resource.ts";
 import { fanslyCaptureCodec } from "../apps/runtime/src/sync/fansly/capture.ts";
 import { FANSLY_RESOURCE_SPECS, fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";
 import { getHistoryRequest, submitHistoryRequest } from "../apps/runtime/src/sync/requests/history.ts";
@@ -536,6 +536,90 @@ describe("dm-messages.head", () => {
     const overlay = await testDb.pool.query("select confirm_outcome, confirm_source, confirmed_at is not null as confirmed from dm_live_messages where platform_message_id = $1", [msg(9)]);
     expect(overlay.rows[0]).toEqual({ confirm_outcome: "not_found", confirm_source: null, confirmed: true });
     expect(await scalar("select count(*)::int as n from sync_attempts where page_id = $1 and resource = 'dm-messages.head'", [pageId])).toBe(3);
+  });
+
+  it("a fan's signal never shortens the head's retry ladder (У9)", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage();
+    await seedThread(pageId, { n: 4, stored: range(1, 5), chain: true });
+    const registry = await registryFor(pageId);
+    // Three fan messages the socket showed above the REST head; REST lags
+    // until t = 15 s: the reads at 5 s and 12 s do not show them, the one at
+    // 27 s does.
+    for (const k of [7, 9, 11]) await liveOverlay(pageId, 4, k);
+    const spec = fanslyResourceSpec("dm-messages.head")!;
+    // A signal's instant on the database's clock, the one `times` reads: the
+    // host's clock may run ahead of the test container's.
+    const dbNow = async () => (await testDb!.pool.query<{ now: Date }>("select clock_timestamp() as now")).rows[0]!.now;
+    const signal = async (k: number, coalesce: "normal" | "fast") => upsertDemand(db(), demandToUpsert({
+      resource: spec.key, subject: groupOf(4), coalesce,
+      demand: { messageIds: [msg(k)], reason: "ws:message_created" },
+      ...(coalesce === "fast" ? { deadlineMs: 10_000 } : {}),
+    }, spec, { pageId, now: await dbNow() })!);
+    // Time passes: the row's times move back by `ms`.
+    const pass = async (id: number, ms: number) => testDb!.pool.query(
+      `update sync_work set due_at = due_at - make_interval(secs => $2::float8 / 1000),
+              coalesce_until = coalesce_until - make_interval(secs => $2::float8 / 1000),
+              deadline_at = deadline_at - make_interval(secs => $2::float8 / 1000)
+        where id = $1`,
+      [id, ms],
+    );
+    const times = async (id: number) => (await testDb!.pool.query<{ due_ms: number; cap_ms: number }>(
+      `select (extract(epoch from (due_at - clock_timestamp())) * 1000)::float8 as due_ms,
+              (extract(epoch from (coalesce_until - clock_timestamp())) * 1000)::float8 as cap_ms
+         from sync_work where id = $1`,
+      [id],
+    )).rows[0]!;
+    const missesNow = async () => {
+      const row = await workRow(pageId, "dm-messages.head", 4);
+      return row?.state === "open" ? (row.cursor.misses as Record<string, number> | undefined) ?? {} : null;
+    };
+    const lagging = serve(groupOf(4), range(1, 5));
+
+    // t = 0: the first message on the normal window; read at t = 5: miss 1,
+    // the retry 15 s later (t = 20).
+    const { id } = await signal(7, "normal");
+    await pass(id, 5_000);
+    await runLive(pageId, registry, lagging, async () => (await missesNow())?.[msg(7)] === 1);
+    let row = await workRow(pageId, "dm-messages.head", 4);
+    expect(row!.due_at.getTime() - row!.updated_at.getTime()).toBeGreaterThan(14_000);
+    expect(row!.due_at.getTime() - row!.updated_at.getTime()).toBeLessThan(16_000);
+
+    // t = 6: a fast signal of the second caps the window at t = 12 but leaves
+    // the retry at t = 20 (not t = 8).
+    await pass(id, 1_000);
+    await signal(9, "fast");
+    let now = await times(id);
+    expect(now.due_ms).toBeGreaterThan(10_000);
+    expect(now.cap_ms).toBeGreaterThan(5_000);
+    expect(now.cap_ms).toBeLessThanOrEqual(6_000);
+
+    // t = 10: a fast signal of the third: due at the cap, t = 12.
+    await pass(id, 4_000);
+    await signal(11, "fast");
+    now = await times(id);
+    expect(now.due_ms).toBeGreaterThan(1_000);
+    expect(now.due_ms).toBeLessThanOrEqual(2_000);
+
+    // t = 12: the second read misses all three (2, 1, 1): the retry in 15 s.
+    await pass(id, 2_000);
+    await runLive(pageId, registry, lagging, async () => (await missesNow())?.[msg(7)] === 2);
+    row = await workRow(pageId, "dm-messages.head", 4);
+    expect(row!.cursor.misses).toEqual({ [msg(7)]: 2, [msg(9)]: 1, [msg(11)]: 1 });
+    expect(row!.due_at.getTime() - row!.updated_at.getTime()).toBeGreaterThan(14_000);
+    expect(row!.due_at.getTime() - row!.updated_at.getTime()).toBeLessThan(16_000);
+
+    // t = 27: REST shows all three; the head closes confirmed.
+    await pass(id, 15_000);
+    await runLive(pageId, registry, serve(groupOf(4), [...range(1, 5), 7, 9, 11]),
+      async () => (await workRow(pageId, "dm-messages.head", 4))?.state === "done");
+    expect(await workRow(pageId, "dm-messages.head", 4)).toMatchObject({ close_reason: "confirmed" });
+    expect(await scalar("select count(*)::int as n from sync_attempts where page_id = $1 and resource = 'dm-messages.head'", [pageId])).toBe(3);
+    const overlay = await testDb.pool.query<{ id: string; confirm_outcome: string | null }>(
+      "select platform_message_id as id, confirm_outcome from dm_live_messages where page_id = $1 order by platform_message_id::numeric",
+      [pageId],
+    );
+    expect(overlay.rows).toEqual([7, 9, 11].map((k) => ({ id: msg(k), confirm_outcome: "match" })));
   });
 
   it("reads 60 new messages down until the staged walk meets the chain, which moves only then", async (context) => {

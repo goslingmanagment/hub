@@ -42,11 +42,12 @@ import { purchaseTargetFollowups, purchaseTargetsOfTransactions } from "./purcha
 // `after`/`before`: a bound makes `total` disagree with the rows), journaled
 // as `earnings_transactions`, one page per step.
 //
-// - head (urgent, a WS money signal) and insurance (planned, every 5 min,
-//   owner decision №5): pages of 20 [A2] from offset 0 until a page holds a
-//   transaction already stored with the served status and every id the
-//   signals named has been served — or the list ends. A walk that reaches
-//   offset 200 without that closes `escalated` and makes the rescan due [D6].
+// - head (urgent, a WS money signal) and insurance (planned, every 15 min,
+//   owner decision №5 as changed 09.10): pages of 20 [A2] from offset 0
+//   until a page holds a transaction already stored with the served status
+//   and every id the signals named has been served — or the list ends. A
+//   walk that reaches offset 200 without that closes `escalated` and makes
+//   the rescan due [D6].
 // - rescan (planned, hourly): the legacy incremental window — from the
 //   checkpoint minus 7 days, or the oldest pending row if older, never past 30
 //   days — in pages of 100, early-stopped by the first page reaching below

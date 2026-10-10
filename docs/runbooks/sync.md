@@ -393,6 +393,12 @@ first arm only; one that came back before any success (2 h, 6 h) no longer does:
 is no `urgent_waiting` until 2 minutes after the breaker ends, and its `since` is that end; `sync check live-hour`
 counts `urgentWaiting` by the same rule. A new signal never makes such a row due before its breaker ends.
 
+**Rollback across the 15-minute insurance poll.** The image before it polls `transactions.insurance` every 5 minutes
+and calls it stale after 15, but keeps the due time the new image set (up to 16.5 minutes after the last admission).
+In the first ≈17 minutes after the rollback, `planned_stale` on `transactions.insurance` may open once on a page and
+closes by itself within ≈1.5 minutes, once the old image admits the poll: do nothing. The same alert on another
+resource, later than 17 minutes after the rollback, or still open after 5 minutes is real.
+
 **A pace violation must never happen**: it means two requests of a page left closer than the owner's rule. Its
 latch does not resolve by itself. Read its summary in `sync alerts status`, find the two sends in the journal (the
 `pace_ok` query above, narrowed to the page), find the cause, and only then close it:
@@ -1069,7 +1075,9 @@ select p.label, cp.platform_post_id, cp.post_tip_total_mills,
 
 **Per-fan earnings.** `fan-earnings.roster` keeps the receipt model: a claim at admission, a receipt at the apply,
 provider totals in mills, never computed from local transactions. A valid empty answer is no zero, and malformed
-money never becomes one. One fan's revisions, signal and baseline times and receipt provenance:
+money never becomes one. The monthly earnings are read for every spender — dirty, new, or read more than 30 days
+ago; the lifetime earnings only for a fan without a valid monthly snapshot (owner decision 09.10). One fan's
+revisions, signal and baseline times and receipt provenance:
 
 ```sql
 select fansly_earnings_refresh_status(:'page_label', :'fan_ref');

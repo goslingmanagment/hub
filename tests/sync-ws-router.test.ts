@@ -156,8 +156,9 @@ describe("routeWsItems (design §6.2)", () => {
     const reply = message({ senderId: OWN });
     const broadcast = message({ senderId: OWN, type: 2, correlationId: "990000000000000001" });
     const ctx = context({ threads: { [GROUP]: BOUND } });
+    // The own window (5 min from the first own message, owner decision 09.10, У9).
     expect(routeWsItems(items(created(reply)), ctx)).toEqual([{
-      resource: "dm-messages.head", subject: GROUP, coalesce: "normal",
+      resource: "dm-messages.head", subject: GROUP, coalesce: "own",
       demand: { messageIds: [reply.id], reason: "ws:message_created:own" },
     }]);
     expect(routeWsItems(items(created(broadcast)), ctx)).toEqual([]);
@@ -285,6 +286,33 @@ describe("routeWsItems (design §6.2)", () => {
     expect(mergeDemandSignals([
       { resource: "transactions.head" }, { resource: "dm-messages.head", subject: "b" }, { resource: "dm-messages.head", subject: "a" },
     ]).map((signal) => `${signal.resource}/${signal.subject ?? ""}`)).toEqual(["dm-messages.head/a", "dm-messages.head/b", "transactions.head/"]);
+  });
+
+  it("merges an own message with a fan's on the fan's window: the own window stays only when every signal is own (У9)", () => {
+    const fan = message();
+    const media = message({ attachments: [{ contentType: 1, contentId: "500000000000000004" }] });
+    const reply = message({ senderId: OWN });
+    const reply2 = message({ senderId: OWN });
+    const noSender = message();
+    delete noSender.senderId;
+    const ctx = context({ threads: { [GROUP]: BOUND } });
+    expect(routeWsItems(items(batch(created(reply), created(fan))), ctx)).toEqual([{
+      resource: "dm-messages.head", subject: GROUP, coalesce: "normal",
+      demand: { messageIds: [reply.id, fan.id], reason: "ws:message_created:own,ws:message_created" },
+    }]);
+    expect(routeWsItems(items(batch(created(reply), created(media))), ctx)).toEqual([{
+      resource: "dm-messages.head", subject: GROUP, coalesce: "fast", deadlineMs: FAST_CONFIRM_DEADLINE_MS,
+      demand: { messageIds: [reply.id, media.id], reason: "ws:message_created:own,ws:message_created" },
+    }]);
+    // A broken frame's +15 s yields to the default due time, of a window that is not own.
+    const broken = routeWsItems(items(batch(created(reply), created(noSender))), ctx);
+    expect(broken).toHaveLength(1);
+    expect(broken[0]!.coalesce).not.toBe("own");
+    expect(broken[0]!.dueAt).toBeUndefined();
+    expect(routeWsItems(items(batch(created(reply), created(reply2))), ctx)).toEqual([{
+      resource: "dm-messages.head", subject: GROUP, coalesce: "own",
+      demand: { messageIds: [reply.id, reply2.id], reason: "ws:message_created:own" },
+    }]);
   });
 
   it("every target is a registry entry that declares the trigger, and every socket trigger declared is some frame's", () => {

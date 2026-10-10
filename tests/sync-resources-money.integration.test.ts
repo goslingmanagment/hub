@@ -3,6 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   ensurePollRows,
   getSyncPage,
+  markFanEarningsDirty,
   upsertDemand,
   upsertFans,
   type Database,
@@ -441,31 +442,118 @@ describe("fan-earnings.roster", () => {
     return result.rows;
   }
 
-  it("reads each never-read spender's two endpoints under a claim, settles the receipts, then closes", async (context) => {
+  async function lifetimeRow(pageId: number) {
+    const result = await testDb!.pool.query<{ pending: boolean; claimed: boolean; visited: boolean }>(
+      `select requested_revision > applied_revision as pending, claim_token is not null as claimed,
+              last_visited_at is not null as visited
+         from subject_refresh_state where page_id = $1 and plane = 'fan_earnings_lifetime'`,
+      [pageId],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  const monthlyRow = (fanRef: string) => ({ correlationAccountId: fanRef, type: 7001, totalGross: 1_000, totalNet: 800, year: 2026, month: 9 });
+
+  it("a never-read spender: monthly first; a valid monthly snapshot retires the lifetime read (У4)", async (context) => {
     if (!testDb) return context.skip();
     const pageId = await seedPage();
     const fanRef = "500000000000000007";
     await seedSpender(pageId, fanRef);
     await makeDue(pageId, "fan-earnings.roster");
-    const row = { correlationAccountId: fanRef, type: 7001, totalGross: 1_000, totalNet: 800 };
     const { hits, requests } = await runLive(pageId, (req) => {
-      if (req.spec === "earnings.stats_accounts") return okResponse([row]);
-      if (req.spec === "earnings.monthly_accounts") return okResponse([{ ...row, year: 2026, month: 9 }]);
+      if (req.spec === "earnings.monthly_accounts") return okResponse([monthlyRow(fanRef)]);
       throw new Error(`unexpected ${req.spec}`);
     }, async () => (await workRow(pageId, "fan-earnings.roster"))?.state === "done");
 
-    expect(hits.sort()).toEqual(["earnings.monthly_accounts", "earnings.stats_accounts"]);
+    expect(hits).toEqual(["earnings.monthly_accounts"]);
     for (const req of requests) {
       expect(param(req, "correlationAccountId")).toBe(fanRef);
       expect(param(req, "after")).toBe("0");
     }
     expect(await subjects(pageId)).toEqual([
-      { plane: "fan_earnings_lifetime", outcome: "observed", claimed: false, failures: 0, due: null, visited: true, fingerprint: true },
       { plane: "fan_earnings_monthly", outcome: "observed", claimed: false, failures: 0, due: null, visited: true, fingerprint: true },
     ]);
     expect(await workRow(pageId, "fan-earnings.roster")).toMatchObject({ close_reason: "roster_fresh" });
     const kinds = await testDb.pool.query("select kind from observations where account_id = $1 order by id", [pageId]);
-    expect(kinds.rows.map((r) => r.kind).sort()).toEqual(["fan_earnings_monthly", "fan_earnings_stats"]);
+    expect(kinds.rows.map((r) => r.kind)).toEqual(["fan_earnings_monthly"]);
+  });
+
+  it("a monthly answer without a valid snapshot falls back to lifetime, after the monthly", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage();
+    const fanRef = "500000000000000009";
+    await seedSpender(pageId, fanRef);
+    await makeDue(pageId, "fan-earnings.roster");
+    const { hits } = await runLive(pageId, (req) => {
+      if (req.spec === "earnings.monthly_accounts") return okResponse([]);
+      if (req.spec === "earnings.stats_accounts") {
+        return okResponse([{ correlationAccountId: fanRef, type: 7001, totalGross: 1_000, totalNet: 800 }]);
+      }
+      throw new Error(`unexpected ${req.spec}`);
+    }, async () => (await workRow(pageId, "fan-earnings.roster"))?.state === "done");
+
+    expect(hits).toEqual(["earnings.monthly_accounts", "earnings.stats_accounts"]);
+    const [lifetime, monthly] = await subjects(pageId);
+    expect(lifetime).toMatchObject({ plane: "fan_earnings_lifetime", outcome: "observed", claimed: false, due: null, fingerprint: true });
+    expect(monthly).toMatchObject({ plane: "fan_earnings_monthly", outcome: "empty", claimed: false, failures: 1, visited: true, fingerprint: false });
+    expect(monthly!.due!.getTime() - Date.now()).toBeGreaterThan(30_000);
+    expect(monthly!.due!.getTime() - Date.now()).toBeLessThanOrEqual(60_000);
+    expect(await workRow(pageId, "fan-earnings.roster")).toMatchObject({ close_reason: "roster_fresh" });
+  });
+
+  it("a dirty mark of a monthly-backed spender reads monthly only", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage();
+    const fanRef = "500000000000000010";
+    await seedSpender(pageId, fanRef);
+    const respond = (req: FanslyWireRequest) => {
+      if (req.spec === "earnings.monthly_accounts") return okResponse([monthlyRow(fanRef)]);
+      throw new Error(`unexpected ${req.spec}`);
+    };
+    await makeDue(pageId, "fan-earnings.roster");
+    expect((await runLive(pageId, respond, async () => (await workRow(pageId, "fan-earnings.roster"))?.state === "done")).hits)
+      .toEqual(["earnings.monthly_accounts"]);
+
+    // The money writer marks both planes dirty; only the monthly one is read.
+    await markFanEarningsDirty(db(), { pageId, fanRefs: [fanRef], now: new Date() });
+    await makeDue(pageId, "fan-earnings.roster");
+    const { hits } = await runLive(pageId, respond, async () => (await workRow(pageId, "fan-earnings.roster"))?.state === "done");
+    expect(hits).toEqual(["earnings.monthly_accounts"]);
+    // The lifetime mark stays an honest pending revision nobody claims.
+    expect(await lifetimeRow(pageId)).toEqual({ pending: true, claimed: false, visited: false });
+    expect(await workRow(pageId, "fan-earnings.roster")).toMatchObject({ close_reason: "roster_fresh" });
+  });
+
+  it("the roster age is 30 days", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage();
+    const fanRef = "500000000000000011";
+    await seedSpender(pageId, fanRef);
+    // A monthly snapshot read 29 days ago.
+    await testDb.pool.query(
+      `insert into subject_refresh_state (page_id, plane, subject_ref, last_visited_at, last_checked_at)
+       values ($1, 'fan_earnings_monthly', $2, now() - interval '29 days', now() - interval '29 days')`,
+      [pageId, fanRef],
+    );
+    const respond = (req: FanslyWireRequest) => {
+      if (req.spec === "earnings.monthly_accounts") return okResponse([monthlyRow(fanRef)]);
+      throw new Error(`unexpected ${req.spec}`);
+    };
+    await makeDue(pageId, "fan-earnings.roster");
+    expect((await runLive(pageId, respond, async () => (await workRow(pageId, "fan-earnings.roster"))?.state === "done")).hits)
+      .toEqual([]);
+    expect(await workRow(pageId, "fan-earnings.roster")).toMatchObject({ close_reason: "roster_fresh" });
+
+    // 31 days: one monthly read.
+    await testDb.pool.query(
+      `update subject_refresh_state set last_visited_at = now() - interval '31 days', last_checked_at = now() - interval '31 days'
+        where page_id = $1 and plane = 'fan_earnings_monthly'`,
+      [pageId],
+    );
+    await makeDue(pageId, "fan-earnings.roster");
+    expect((await runLive(pageId, respond, async () => (await workRow(pageId, "fan-earnings.roster"))?.state === "done")).hits)
+      .toEqual(["earnings.monthly_accounts"]);
+    expect(await lifetimeRow(pageId)).toBeNull();
   });
 
   it("a 404 is the subject's answer for now; a 5xx climbs its breaker; the walk goes on", async (context) => {
@@ -474,12 +562,13 @@ describe("fan-earnings.roster", () => {
     const fanRef = "500000000000000008";
     await seedSpender(pageId, fanRef);
     await makeDue(pageId, "fan-earnings.roster");
+    // The monthly read fails first, so the lifetime read is the fallback.
     const { hits } = await runLive(pageId, (req) => (req.spec === "earnings.stats_accounts"
       ? statusResponse(404, { success: false, error: { code: 404 } })
       : statusResponse(500, { success: false })),
     async () => (await workRow(pageId, "fan-earnings.roster"))?.state === "done");
 
-    expect(hits).toHaveLength(2);
+    expect(hits).toEqual(["earnings.monthly_accounts", "earnings.stats_accounts"]);
     const [lifetime, monthly] = await subjects(pageId);
     expect(lifetime).toMatchObject({ plane: "fan_earnings_lifetime", outcome: "rejected", claimed: false, due: null });
     expect(monthly).toMatchObject({ plane: "fan_earnings_monthly", outcome: "failed", claimed: false, failures: 1 });

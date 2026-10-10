@@ -24,6 +24,7 @@ import { ownerEnqueueKeys } from "../apps/runtime/src/sync/inspect.ts";
 import { routeHoldAfter } from "../apps/runtime/src/sync/engine/route-holds.ts";
 import { RouteClocks, routeExclusions } from "../apps/runtime/src/sync/engine/route-policy.ts";
 import { DM_LIST_READ_KEYS, DM_LIST_WS_DOWN_EVERY_MS } from "../apps/runtime/src/sync/fansly/resources/dm-conversations.ts";
+import { FAN_EARNINGS_ROSTER_MAX_AGE_MS } from "../apps/runtime/src/sync/fansly/resources/fan-earnings.ts";
 import type { FanslyRoute } from "../apps/runtime/src/sync/fansly/routes.ts";
 import { RecordingMetrics } from "./helpers/sync-engine-host.ts";
 
@@ -225,8 +226,15 @@ describe("the Fansly registry table", () => {
     expect(FANSLY_RESOURCE_SPECS.filter(plansBeforeGate).every((spec) => spec.class !== "requests")).toBe(true);
   });
 
-  it("the owner's frequencies (decision №5, №6) and the stated-empty bound on account.poll", () => {
-    expect(byKey("transactions.insurance").period?.everyMs).toBe(5 * 60_000);
+  it("the owner's frequencies (decision №5, №6, the cadences of 09.10) and the stated-empty bound on account.poll", () => {
+    // Owner decisions of 09.10: the insurance every 15 min (stale past 3
+    // periods), a spender re-read every 30 days, own messages confirmed in
+    // one 5-min window from the first.
+    expect(byKey("transactions.insurance").period?.everyMs).toBe(15 * 60_000);
+    expect(byKey("transactions.insurance").slo?.staleAfterMs).toBe(45 * 60_000);
+    expect(FAN_EARNINGS_ROSTER_MAX_AGE_MS).toBe(30 * 86_400_000);
+    expect(byKey("fan-earnings.roster").queuePlane).toBe("fan_earnings_monthly");
+    expect(byKey("dm-messages.head").coalesce?.own).toEqual({ quietMs: 5 * 60_000, maxMs: 5 * 60_000 });
     expect(byKey("catalog.fixed").period?.everyMs).toBe(24 * 3_600_000);
     expect(byKey("media-stats.walk").tiers).toEqual([
       { maxAgeDays: 30, everyMs: 86_400_000 },
@@ -261,7 +269,7 @@ describe("the Fansly registry table", () => {
     expect(metrics.get("sync_not_implemented")).toBe(FANSLY_RESOURCE_SPECS.filter((spec) => spec.module === undefined).length);
   });
 
-  it("the money entries: one walk row per purchase target, the earnings roster a queue walk, the 5-min insurance poll", () => {
+  it("the money entries: one walk row per purchase target, the earnings roster a queue walk, the 6-hour rankings poll", () => {
     const targets = byKey("purchases.targets");
     expect(targets).toMatchObject({ subject: "target", kind: "goal", terminalStatuses: [404, 410, 422] });
     expect(targets.subjectQueue).toBeUndefined();

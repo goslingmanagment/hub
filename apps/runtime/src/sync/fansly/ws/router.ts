@@ -15,7 +15,7 @@ import type { WsItem } from "./decode.ts";
 // |-----------------------------------------------------------|------------------------------------------------|
 // | message created, bound non-excluded thread, fan           | dm-messages.head (fast window on attachments, tip, incomplete frame) |
 // | message created, own, mass broadcast                      | none (decision №9, D22)                        |
-// | message created, own, not a broadcast                     | dm-messages.head (normal window)               |
+// | message created, own, not a broadcast                     | dm-messages.head (own window: 5 min from the first) |
 // | message created, excluded thread                          | none (overlay "API недоступен", decision №8)   |
 // | message created, own, mass-message container (type 3)     | none (never a chat, [A6])                      |
 // | message created, unknown or unbound thread                | dm-conversations.find                          |
@@ -127,7 +127,7 @@ function routeItem(item: WsItem, ctx: RouteContext): DemandSignal[] {
         return [{
           resource: "dm-messages.head",
           subject: groupId,
-          coalesce: "normal",
+          coalesce: "own",
           demand: { messageIds: [item.message.id], reason: "ws:message_created:own" },
         }];
       }
@@ -227,10 +227,21 @@ function mergeIds(a: readonly string[] | undefined, b: readonly string[] | undef
 
 /** The earlier due time. No due time means the target's default — now, or
  *  the end of its quiet window — which is never later than an explicit due
- *  time of this router (now, +10 s, +15 s), so it wins. */
+ *  time of this router (now, +10 s, +15 s), so it wins. The own window (5 min)
+ *  is the exception, but it never merges with one: an own signal carries no
+ *  due time and stays own only beside another own one (`narrower`). */
 function earlier(a: Date | undefined, b: Date | undefined): Date | undefined {
   if (a === undefined || b === undefined) return undefined;
   return a.getTime() <= b.getTime() ? a : b;
+}
+
+/** The narrower coalescing window: fast, then normal (or the target's
+ *  default), then own — own only when both signals are own. */
+function narrower(a: DemandSignal["coalesce"], b: DemandSignal["coalesce"]): DemandSignal["coalesce"] {
+  if (a === "fast" || b === "fast") return "fast";
+  if (a === "own") return b;
+  if (b === "own") return a;
+  return a;
 }
 
 function shorter(a: number | undefined, b: number | undefined): number | undefined {
@@ -255,7 +266,9 @@ export function mergeDemandSignals(signals: readonly DemandSignal[]): DemandSign
     else merged.dueAt = dueAt;
     const deadlineMs = shorter(seen.deadlineMs, signal.deadlineMs);
     if (deadlineMs !== undefined) merged.deadlineMs = deadlineMs;
-    if (seen.coalesce === "fast" || signal.coalesce === "fast") merged.coalesce = "fast";
+    const coalesce = narrower(seen.coalesce, signal.coalesce);
+    if (coalesce === undefined) delete merged.coalesce;
+    else merged.coalesce = coalesce;
     const ids = mergeIds(seen.ids, signal.ids);
     if (ids !== undefined) merged.ids = ids;
     if (seen.demand !== undefined || signal.demand !== undefined) {
