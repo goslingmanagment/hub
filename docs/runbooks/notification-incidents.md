@@ -1,24 +1,67 @@
 # Notification incidents — delivery semantics & W3 operational notes
 
-## Telegram delivery is at-least-once (W3.3, cross-review note)
+## Telegram delivery is at-least-once (W3.3; outbox rules since Д2)
 
-Incident OPEN notifications retry on later monitor passes until one attempt
-lands (`telegram_delivery_attempts.status = 'sent'`), capped at 5 total
-attempts per incident. Consequences:
+Every page and recovery goes through the durable `notification_delivery_outbox`
+(Decision 381: the paging sweep decides, the outbox delivers). Delivery rules
+(`docs/error-handling.md`, "Durable critical-notification outbox"):
 
-- **A duplicate page is possible** if the process dies between the Telegram
-  accept and the attempt-row insert — the next pass sees `sentCount = 0` and
-  re-sends. This is deliberate: preferable to the pre-W3 behavior where one
-  transient Telegram failure at open time lost that incident's page
-  permanently.
-- Watch `telegram_delivery_attempts` after deploying a change to this
-  machinery: duplicates on a standing incident should STOP once a `sent` row
-  exists for it. A stream of repeats past 5 attempts is a bug.
-- An incident opened while alerts were disabled records no attempt and is
+- **Horizon.** Every `sync_failure` row (opening, recovery, missed-alerts
+  summary) carries `max_attempts = 400`: retries at 1, 2, 4, 8 min, then at most
+  8 an hour — ≥ 49 h whatever the mix of successes and failures. The AI
+  critical pair keeps 5.
+- **Stop on the first failure.** A delivery pass ends at its first send that
+  does not go through: during an outage one call a minute, not one ~40 s
+  failure per due row. A timed-out request is not repeated inside its call.
+- **Backoff release.** The first delivered row after 15 minutes without any
+  delivery makes every backed-off `sync_failure` row due at once: what is still
+  open goes out within a pass or two, at worst 15 minutes after Telegram is
+  back. At most once per 15 minutes; never for the AI pair.
+- **Missed alerts.** A page that resolves while its opening never reached
+  Telegram (`pending` or `exhausted`) gets no late "🚨" and no orphan "✅": its
+  opening is retired (`exhausted`, `last_error` `Not delivered: …`,
+  `reported_in_outbox_id` → the summary) and the episode is a line of one
+  "📵 Not delivered in time" summary. A manual resolve from the dashboard
+  retires a pending opening without a summary.
+
+Consequences:
+
+- **A duplicate page is possible** when Telegram accepts a message and the
+  answer is lost (or the process dies before the attempt row commits): the row
+  is sent again. Bounded to ≤ 4 copies an hour of one standing row, ≤ 8 on a
+  channel that flaps with a period of 15 min or more. Deliberate: a duplicate is
+  preferable to a lost page.
+- An incident opened while alerts were disabled gets a `suppressed` row and is
   never retro-paged (re-enabling alerts must not flood).
 
-Telegram alerting does NOT carry the outbox one-attempt law — sends already
-retry in-process on 429/5xx, and a duplicate pager message is harmless.
+Telegram alerting does NOT carry the outbox one-attempt law — that law is the
+platform command outbox's (`ofapi_commands`), where a duplicate is a real
+action; a duplicate pager message is harmless.
+
+Checks (read-only, `prodsql.sh`; `:d` = deploy time):
+
+```sql
+set local statement_timeout = '30s';
+-- The queue right now (normally empty).
+select id, paging_policy, transition, state, attempt_count, max_attempts
+  from notification_delivery_outbox where state in ('pending', 'leased');
+-- No undelivered opening without its summary (expect 0).
+select count(*) from notification_delivery_outbox
+ where created_at > :d and paging_policy = 'sync_failure' and transition <> 'resolved'
+   and state = 'exhausted' and reported_in_outbox_id is null
+   and last_error not like 'Not delivered: manually resolved%';
+-- No sync_failure row exhausted by its counter (expect 0; else an outage outlasted 49 h).
+select count(*) from notification_delivery_outbox
+ where exhausted_at > :d and paging_policy = 'sync_failure' and last_error not like 'Not delivered:%';
+-- The stop on the first failure: at most 2 failed sends a minute (worker + api fallback).
+select date_trunc('minute', created_at), count(*) from telegram_delivery_attempts
+ where created_at > :d and kind in ('incident_opened', 'incident_resolved') and status in ('failed', 'skipped')
+ group by 1 having count(*) > 2;
+-- The summaries and the openings each one reports (delivered, length ≤ 3 500).
+select s.id, s.state, length(s.message_text), count(r.id) from notification_delivery_outbox s
+  join notification_delivery_outbox r on r.reported_in_outbox_id = s.id
+ where s.created_at > :d group by 1, 2, 3;
+```
 
 ## proxy_missing incidents (W3.1, decision #124)
 

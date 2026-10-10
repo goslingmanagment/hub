@@ -66,7 +66,7 @@ do not maintain client-side copies.
 | OFAPI bounded collection reads — captured transient HTTP | Only a durably captured GET response with `429` or `500`–`599` ends the current background run as `failed`, preserving its response, cursor, caps and consumption. There is no immediate retry or second dispatch on that run; a new bounded run is eligible only at the next configured schedule interval. One-offs remain paused. Auth, other HTTP statuses, indeterminate transport and parse failures keep their existing recovery behavior. | The owner's scheduled policy authorizes the next window. Resume on a legacy paused transient response only replays its captured response locally and ends that run as failed; a fresh one-off probe requires separate bounded approval. |
 | OFAPI bounded collection reads — owner finishes incomplete | An owner may close an idle paused background GET run as `failed` after reviewing its retained state, including an uncertain charge. The revision/state/page-fenced action preserves all response, attempt, ledger, cursor and allowance evidence; it performs no egress or charge reconciliation. One-offs, uploads, exports and active work are ineligible. | The explicit owner finish unblocks only the next configured periodic window under current policy. It neither resumes the old cursor nor overrides global/category pause. |
 | Fansly `subscribers` walk — empty active page | An empty first page of the active (`status=3,4`) walk retires membership only when the provider states the zero: accepted contract, terminal page, explicit `totalActive=0`, nothing positive earlier in the walk. Even then the finalization transaction locks the current rows untouched since the walk began and retires that exact set only if it holds at most five subscriptions, each past `ends_at` before the walk began with auto-renew off (`subscribers_empty_snapshot_certified` run note). Failing that, it retires the whole locked set, whatever its size, ends or auto-renew, when Fansly's own `/account/me` `subscriberCount` (written hourly to `pages.subscriber_count` by the light and followers streams) also reads 0 and its `pages.last_verified_at` is no more than 2 h before the walk began (`subscribers_empty_snapshot_confirmed_by_counter` run note with `retiredCount`, `subscriberCount`, `lastVerifiedAt`). Either is a normal success: checkpoint, failure streak and `stream_failed_threshold` recover. Any other empty first page over current membership, including a stated zero whose counter is non-zero, stale or null, keeps `subscribers_empty_first_page_guard` (warn, with its `reason` and, for a stated zero, the counter it saw) and fails the chunk into the ordinary retry ladder, membership untouched. Every finalization spares rows touched since the cursor's `walkStartedAt`; a cursor without one is fenced before its next read (rewalked if it was past offset 0). Until a walk has written a page, its start is taken afresh right before each read, so a first read retried after a failure or a budget yield is judged by its own time, not the failed attempt's. | The walk converges by itself once the zero is explainable. The account counter trails a lapse by about a day, so a larger or unexplained drop keeps failing (incident open) for roughly that long, then converges on the counter's zero; a drop the counter never confirms keeps failing until a walk observes membership again or an operator retires the rows. |
-| Critical-notification delivery | The durable outbox automatically retries delivery failures to a bounded attempt cap. This retries the notification only, never the failed business action. | Outbox lease/attempt policy; suppression and exhaustion are terminal. |
+| Critical-notification delivery | The durable outbox automatically retries delivery failures to a bounded attempt cap — for every `sync_failure` alert a 400-attempt horizon of ≥ 49 h (Д2), for the AI critical pair 5. A delivery pass stops at its first send that does not go through, and a timed-out request is never repeated inside its call: the row repeats it after its backoff. This retries the notification only, never the failed business action. | Outbox lease/attempt policy; suppression and exhaustion are terminal. Whether an undelivered alert still matters is the paging sweep's call when its page resolves (missed-alerts summary), not the counter's. |
 
 Decision 322 preserves a future `rate_limit` / `provider_5xx` deadline when
 new requests arrive before or after retry settlement. The shared queue keeps
@@ -394,9 +394,17 @@ stable idempotency key is
 | `leased` | Owned for 300 seconds — longer than the slowest physical Telegram send (`TELEGRAM_SEND_RETRY_WINDOW_MS`, ~150s), so a second runner cannot reclaim a row that is still in flight. Success makes it `delivered`; a disabled policy makes it `suppressed`; a failed/skipped attempt returns it to `pending` or reaches `exhausted`. An expired lease is reclaimable without consuming an attempt. |
 | `delivered` | Telegram delivery was accepted and the row settled; terminal. |
 | `suppressed` | Master notifications or `aiCriticalAlertsEnabled` was off at enqueue or worker recheck; terminal. Later flag changes do not resurrect the row. |
-| `exhausted` | The maximum delivery attempts were consumed; terminal and explicitly timestamped. |
+| `exhausted` | Terminal and explicitly timestamped. Either the maximum delivery attempts were consumed, or (Д2) the paging sweep retired an opening whose page resolved before Telegram accepted it: `last_error` then starts with `Not delivered:`, and `reported_in_outbox_id` names the missed-alerts summary that reports it (null after a manual resolve, which has its own line). |
 
-The default attempt cap is 5. Failed/skipped delivery attempts are journaled.
+The default attempt cap is 5 (the AI critical pair). Every `sync_failure` row —
+opening, recovery, missed-alerts summary — is enqueued with
+`ALERT_DELIVERY_MAX_ATTEMPTS = 400` (Д2): after the four fast retries a row gets
+at most 8 attempts an hour (one by its own 15-minute backoff ceiling, at most one
+by a backoff release), so 4 + 396 attempts last ≥ 49 h of any mix of successes
+and failures, ≈ 99 h of a solid outage. Migration 0263 lifted the rows queued at
+deploy time to the same horizon. The counter is only a backstop now: an opening
+that never reached Telegram is settled by the paging sweep when its page
+resolves (below). Failed/skipped delivery attempts are journaled.
 The default-cap retry delays are 1, 2, 4, and 8 minutes; a higher configured cap
 uses the same exponential sequence capped at 15 minutes. The minutely worker
 leases up to 25 due rows by default and stops on a 300,000 ms wall-clock budget,
@@ -409,14 +417,44 @@ sweep budget plus one send window must fit under. Telegram offers no
 provider-side idempotency key, so a process death after Telegram accepts a
 message but before local settlement can still duplicate a notification.
 
+During an outage (Д2, 2026-10-10) a pass stops at its first send that does not
+go through (`failed` or `skipped`, whatever the cause — causes are not reliably
+classified): the first due row is the probe of the channel, so an outage costs
+one call a minute instead of one ~40 s failure per due row, and the rows behind
+it keep their attempts. The outbox's sender does not repeat a timed-out request
+inside its call (`retryTimeouts: false`; 429, 5xx and other transport failures
+still retry in-process). When the pass's first delivered row ends 15 minutes
+without any delivered row, one statement makes every backed-off `sync_failure`
+row due at once (the backoff release) — so what is still open goes out in that
+pass or the next, at worst 15 minutes after Telegram is back (the backoff
+ceiling). The silence condition sits in the same statement, so there is at most
+one release per 15 minutes, and a row that fails after the channel is back waits
+its ordinary backoff; rows another transaction holds (the paging sweep settling
+their page) are skipped. The AI critical pair is never released: its 5-attempt
+horizon would burn in minutes.
+
+Duplicates over losses, as in W3.3: when Telegram accepts a message and the
+answer is lost, the row is sent again. The bounds are the stop (one call a
+minute per process during an outage), the 15-minute ceiling plus at most one
+release per 15 minutes (≤ 4 copies an hour of one standing row, ≤ 8 on a channel
+that flaps with a period of 15 min or more), no timeout repeat inside a call, a
+terminal success, and retired openings that are never sent. The AGENTS.md rule
+"at most one attempt per command, never auto-retry an indeterminate send" is
+about the platform command outbox (`ofapi_commands`), where a duplicate is a real
+action at a fan or in money; owner notifications retry only themselves
+(`docs/runbooks/notification-incidents.md`).
+
 Delivery is FIFO per `(incident, channel)`: a row is only leasable when no
 earlier-`transition_at` row of the same incident and channel is still `pending`
 or `leased`. Without that fence the due-filter hides a backed-off `opened` row
 while a freshly enqueued `resolved` row is delivered first. Terminal states
 never block a successor, so an `opened` row that ends `exhausted` or
 `suppressed` releases its `resolved` successor, which then pages on its own —
-including the case where paging was off when the incident opened. Suppressing
-such an orphan resolution is a deliberate open question, not current behavior.
+including the case where paging was off when the incident opened. Since Д2 only
+the AI critical pair can produce such an orphan "Resolved": the paging sweep
+never enqueues a recovery behind an opening that did not reach Telegram (Quiet
+hold, below). Suppressing the AI pair's orphan resolution is a deliberate open
+question, not current behavior.
 
 `aiCriticalAlertsEnabled` is a separate audited config flag, default `false`;
 the master Telegram notification flag must also be enabled. Paging-off does
@@ -447,10 +485,10 @@ Delivery concurrency stays with the outbox lease.
 |---|---|
 | Open hold | The condition must have stayed open this long before its page is enqueued. `0` pages on the first sweep that sees it open (the kinds that need a hand today, the Fansly send guard's `sync_silent` page latches `send_guard_closed` / `pace_violation`, and every `fansly_sync_engine` alert). Sustained kinds: `proxy_failed` 15 min, `stream_failed_threshold` 10 min, `scheduler_silent` / `ops_sampler_silent` / `sync_silent` 10 min, `golden_signal_lag` / `ofapi_burn_rate` 30 min, `ofapi_webhook_silence` 10 min, `db_disk_usage:runway_warning` 6 h. |
 | Flap rule | A sustained kind whose latch opened ≥ 5 times inside 6 h pages once as "flapping" even if no episode outlasted the open hold. The page covers every episode in the window. `scheduler_silent` and `ops_sampler_silent` open on deploys, so theirs is ≥ 12 in 6 h. `sync_silent` has none: one Fansly page alone runs 15–17 min between chunks, so with the rest of the fleet blocked it flickers while chunks still start. |
-| Quiet hold | The recovery notice is enqueued only once the latch has stayed resolved for the hold (immediate kinds 5–60 min, proxy kinds 30 min, watchdog 10 min, runway warning 24 h). A reopen inside the hold is the same standing page: no message either way. A page whose outbox row ended `suppressed` or `exhausted` never reached the owner, so its recovery is settled silently rather than as an orphan "Resolved". |
+| Quiet hold | The recovery notice is enqueued only once the latch has stayed resolved for the hold (immediate kinds 5–60 min, proxy kinds 30 min, watchdog 10 min, runway warning 24 h). A reopen inside the hold is the same standing page: no message either way. When the recovery is due, the sweep locks the page's opening rows and decides in the transaction that writes the outcome: an opening `delivered` (or no row: the 0205 seed) → the usual "Resolved"; an opening in flight (`leased`) → nothing written, the next sweep decides; every opening `suppressed` (alerts were off) → settled silently. Otherwise (`pending` or `exhausted`, none delivered) the page opened and resolved unseen — deliberate policy change, Д2, 2026-10-10: before it, an `exhausted` opening was settled silently and a `pending` one was followed by a late "🚨"+"✅" pair. Now the openings are retired (`exhausted`, `Not delivered: the page resolved before Telegram accepted it`) and the episode becomes one line of a "📵 Not delivered in time" summary: appended to the open summary (the newest `pending` one; with a full 400-attempt horizon on top of the attempts it used) while it stays under 3 500 characters, else a new one carried by this incident under its standard recovery key. A summary in flight is never edited; the episode starts a new one. |
 | Episodes | Every latch episode (a distinct `opened_at`) is recorded in `notification_incident_cycles` on the first sweep that sees it, including episodes that began and ended between two sweeps; `paged` marks the ones a page covered. |
-| Manual resolve | The dashboard's own "Manually resolved" line is the recovery notice; the sweep sees the `incident_manually_resolved` attempt and settles the standing page silently. |
-| Digest | Daily, at the report hour after the revenue report: open incidents by age and the quiet episodes of the last 24 h grouped per subject. Skipped when empty; idempotent per due date via an `alert_digest_scheduled` attempt row; gated by the master flag and `syncFailureAlertsEnabled`. |
+| Manual resolve | The dashboard's own "Manually resolved" line is the recovery notice; the sweep sees the `incident_manually_resolved` attempt and settles the standing page silently. A `pending` opening is retired (`Not delivered: manually resolved from the dashboard`) without a summary. |
+| Digest | Daily, at the report hour after the revenue report: open incidents by age, the window's pages by where their opening ended (`N pages delivered · M not delivered · K still queued`, counted over the `sync_failure` openings created in the window — not at enqueue, Д2), and the quiet episodes of the last 24 h grouped per subject. Skipped when empty; idempotent per due date via an `alert_digest_scheduled` attempt row; gated by the master flag and `syncFailureAlertsEnabled`. |
 
 Idempotency: a held page's outbox key uses the episode's `opened_at`, a
 flapping page's the decision instant, a recovery notice's the latch's
