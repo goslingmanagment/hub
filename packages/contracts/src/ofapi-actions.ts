@@ -2,6 +2,7 @@ import { z } from "zod";
 import { ofapiAccountActionOptions } from "./ofapi-actions-account.ts";
 import { ofapiPublishingActionOptions } from "./ofapi-actions-publishing.ts";
 import { ofapiCollectionActionOptions } from "./ofapi-actions-collections.ts";
+import { isoDateTime } from "./primitives.ts";
 
 /** Each batch contributes an explicit schema; clients never submit HTTP paths. */
 export const ofapiActionSchema = z.union([...ofapiCollectionActionOptions, ...ofapiPublishingActionOptions, ...ofapiAccountActionOptions]);
@@ -13,6 +14,6 @@ export const ofapiActionIntentSchema = z.object({
   estimatedCredits: z.number().int().nonnegative(), actualCredits: z.number().int().nonnegative().nullable(),
   remoteId: z.string().nullable(), responseData: z.unknown().nullable(), responseMeta: z.unknown().nullable(),
   errorCode: z.string().nullable(), responseObservationId: z.number().nullable(),
-  accountingState: z.enum(["pending", "complete"]), createdAt: z.string().datetime(),
+  accountingState: z.enum(["pending", "complete"]), createdAt: isoDateTime(),
 });
 export type OfapiActionIntent = z.infer<typeof ofapiActionIntentSchema>;

@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { isoDateTime } from "./primitives.ts";
+
 const linkId = z.string().regex(/^[0-9A-HJKMNP-TV-Z]{26}$/);
 const pixelId = z.number().int().positive();
 const optionalName = z.string().max(100).nullable().optional();
@@ -42,7 +44,7 @@ export type OfapiMarketingAction = z.infer<typeof ofapiMarketingActionSchema>;
 
 export const ofapiMarketingResourceSchema = z.object({
   pageId: z.number().int().positive().nullable(), nativeAccountRef: z.string().nullable(), kind: z.enum(["smart_link", "pixel", "postback", "tracking", "trial"]),
-  id: z.string(), shared: z.boolean(), parentId: z.string().nullable(), name: z.string().nullable(), observedAt: z.string().datetime(),
+  id: z.string(), shared: z.boolean(), parentId: z.string().nullable(), name: z.string().nullable(), observedAt: isoDateTime(),
   linkType: z.string().nullable(), platform: z.string().nullable(), platformPixelId: z.string().nullable(),
   publicUrl: z.string().nullable(), httpMethod: z.enum(["GET", "POST"]).nullable(), status: z.string().nullable(), destination: z.string().nullable(),
   clicks: z.number().nullable(), conversions: z.number().nullable(), subscribers: z.number().nullable(), spenders: z.number().nullable(),
@@ -61,7 +63,7 @@ export type OfapiMarketingPreviewValue = z.infer<typeof ofapiMarketingPreviewVal
 export const ofapiMarketingIntentSchema = z.object({
   id: z.string().uuid(), action: z.string(), state: z.string(), errorCode: z.string().nullable(),
   remoteId:z.string().nullable(),accountingState:z.enum(["pending","complete"]),projectionState:z.enum(["pending","complete"]),
-  createdAt: z.string().datetime(), responseObservationId: z.number().nullable(),
+  createdAt: isoDateTime(), responseObservationId: z.number().nullable(),
   preview: z.object({ pageId:z.number().int().positive().nullable(),pageLabel:z.string().nullable(),accountId:z.string().nullable(),values:z.array(ofapiMarketingPreviewValueSchema),
     destination: z.string().nullable(), templateVariables: z.array(z.string()), headerNames: z.array(z.string()),
     targetId: z.string().nullable(), changedFields: z.array(z.string()), conversionTypes: z.array(z.string()), scope: z.string().nullable(),
@@ -82,7 +84,7 @@ export const ofapiMarketingMetricSchema = z.object({
   attributionOnly: z.literal(true),
 });
 export type OfapiMarketingMetric = z.infer<typeof ofapiMarketingMetricSchema>;
-export const ofapiMarketingAnalyticsSchema = z.object({ pageId: z.number().int().positive(), operation: z.string(), linkId: z.string(), observedAt: z.string().datetime(),
+export const ofapiMarketingAnalyticsSchema = z.object({ pageId: z.number().int().positive(), operation: z.string(), linkId: z.string(), observedAt: isoDateTime(),
   window: z.object({from:z.string().nullable(),to:z.string().nullable()}), requestedRevenueBasis:z.enum(["net","gross"]).nullable(),
   coverage: z.object({ state: z.enum(["complete", "partial", "unknown"]), reason: z.string().nullable() }), rows: z.array(ofapiMarketingMetricSchema) });
 export const ofapiMarketingDashboardSchema = z.object({

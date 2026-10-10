@@ -364,13 +364,15 @@ describe("claim and custody contract", () => {
   it("leaves the Fansly outreach route's wire byte for byte as it was", () => {
     // `followerOutreachAttempt` (the desktop's and the Fansly extension's
     // greeting custody) is a separate route this change must not touch: the
-    // sha256 of its OpenAPI fragment as it stood on main before H-7b.
+    // sha256 of its OpenAPI fragment as it stood on main before H-7b. Re-pinned
+    // once for zod 4.6, whose JSON Schema writes a nullable string as
+    // `type: ["string", "null"]` instead of `anyOf`: the fragment's only change.
     const document = JSON.parse(
       readFileSync(new URL("../reference/agency-hub.openapi.json", import.meta.url), "utf8"),
     ) as { paths: Record<string, unknown> };
     const fragment = document.paths["/api/v1/pages/{pageLabel}/follower-outreach/attempt"];
     expect(fragment).toBeDefined();
     expect(createHash("sha256").update(JSON.stringify(fragment)).digest("hex"))
-      .toBe("cb9f2d8ca5d5d11204239108af8f98ab0ff82413c0c8554e6dfc7d4c51b1bf30");
+      .toBe("3b718d9271378f6d51277bc10ce366007d59b493d70a21a54d980f460c3f520f");
   });
 });
