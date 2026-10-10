@@ -40,6 +40,7 @@ const h = vi.hoisted(() => {
       return 0;
     }),
     loadEffectiveConfig: vi.fn(async (_db: unknown, config: unknown) => config),
+    insertOpsMetricSamples: vi.fn(async () => undefined),
   };
 });
 
@@ -47,6 +48,7 @@ vi.mock("@agency_hub_core/db", () => ({
   upsertInstanceHeartbeat: h.upsertInstanceHeartbeat,
   removeInstance: h.removeInstance,
   reapStaleInstances: h.reapStaleInstances,
+  insertOpsMetricSamples: h.insertOpsMetricSamples,
 }));
 
 vi.mock("../apps/runtime/src/services/effective-config.ts", () => ({
@@ -137,6 +139,106 @@ describe("startRuntimeHeartbeat", () => {
     } finally {
       vi.useRealTimers();
       // Back to the parking implementation the other cases rely on.
+      h.upsertInstanceHeartbeat.mockReset();
+    }
+  });
+
+  it("records the process's memory as gauges after a beat, at most every 5 minutes", async () => {
+    h.upsertInstanceHeartbeat.mockImplementation(async () => {
+      h.calls.push("upsert");
+    });
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    try {
+      const { HEARTBEAT_INTERVAL_MS, RUNTIME_MEMORY_SAMPLE_INTERVAL_MS, startRuntimeHeartbeat } =
+        await import("../apps/runtime/src/services/runtime-heartbeat.ts");
+      const hb = startRuntimeHeartbeat(makeApp(), "worker");
+
+      await vi.waitFor(() => expect(h.insertOpsMetricSamples).toHaveBeenCalledTimes(1));
+      const [, samples] = h.insertOpsMetricSamples.mock.calls[0] as unknown as [unknown, Array<{ metric: string; quantile: string; valueMs: number }>];
+      expect(samples.map((sample) => sample.metric)).toEqual([
+        "process_rss_bytes_worker",
+        "process_heap_used_bytes_worker",
+        "process_external_bytes_worker",
+      ]);
+      for (const sample of samples) {
+        expect(sample.quantile).toBe("p50");
+        expect(sample.valueMs).toBeGreaterThan(0);
+      }
+      // The gauge follows the beat's own liveness writes.
+      expect(h.calls).toEqual(["upsert", "reap"]);
+
+      // Beats inside the 5 minutes write no gauge; the first one past them does.
+      for (let beat = 1; beat * HEARTBEAT_INTERVAL_MS < RUNTIME_MEMORY_SAMPLE_INTERVAL_MS; beat += 1) {
+        vi.advanceTimersByTime(HEARTBEAT_INTERVAL_MS);
+        await vi.waitFor(() => expect(h.upsertInstanceHeartbeat).toHaveBeenCalledTimes(beat + 1));
+      }
+      expect(h.insertOpsMetricSamples).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(HEARTBEAT_INTERVAL_MS);
+      await vi.waitFor(() => expect(h.insertOpsMetricSamples).toHaveBeenCalledTimes(2));
+
+      await hb.stop();
+    } finally {
+      vi.useRealTimers();
+      h.upsertInstanceHeartbeat.mockReset();
+    }
+  });
+
+  it("keeps beating while a gauge write hangs, and starts no second write beside it", async () => {
+    h.upsertInstanceHeartbeat.mockImplementation(async () => {
+      h.calls.push("upsert");
+    });
+    let releaseGauge!: () => void;
+    h.insertOpsMetricSamples.mockImplementationOnce(() => new Promise<undefined>((resolve) => {
+      releaseGauge = () => resolve(undefined);
+    }));
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    try {
+      const { HEARTBEAT_INTERVAL_MS, RUNTIME_MEMORY_SAMPLE_INTERVAL_MS, startRuntimeHeartbeat } =
+        await import("../apps/runtime/src/services/runtime-heartbeat.ts");
+      const hb = startRuntimeHeartbeat(makeApp(), "worker");
+      await vi.waitFor(() => expect(h.insertOpsMetricSamples).toHaveBeenCalledTimes(1));
+
+      // Past the sampling interval with the first write still pending: every
+      // beat lands, and none starts a second write.
+      const beats = RUNTIME_MEMORY_SAMPLE_INTERVAL_MS / HEARTBEAT_INTERVAL_MS + 1;
+      for (let beat = 1; beat <= beats; beat += 1) {
+        vi.advanceTimersByTime(HEARTBEAT_INTERVAL_MS);
+        await vi.waitFor(() => expect(h.upsertInstanceHeartbeat).toHaveBeenCalledTimes(beat + 1));
+      }
+      expect(h.insertOpsMetricSamples).toHaveBeenCalledTimes(1);
+
+      // Once it settles, the next beat samples again.
+      releaseGauge();
+      vi.advanceTimersByTime(HEARTBEAT_INTERVAL_MS);
+      await vi.waitFor(() => expect(h.insertOpsMetricSamples).toHaveBeenCalledTimes(2));
+
+      await hb.stop();
+    } finally {
+      vi.useRealTimers();
+      h.upsertInstanceHeartbeat.mockReset();
+    }
+  });
+
+  it("never lets a failed gauge write cost the beat its liveness", async () => {
+    h.upsertInstanceHeartbeat.mockImplementation(async () => {
+      h.calls.push("upsert");
+    });
+    h.insertOpsMetricSamples.mockRejectedValueOnce(new Error("ops_metric_samples unavailable"));
+    const dir = mkdtempSync(join(tmpdir(), "hb-memory-"));
+    const healthFilePath = join(dir, "health.json");
+    const logger = { warn: vi.fn() };
+    try {
+      const { startRuntimeHeartbeat } = await import("../apps/runtime/src/services/runtime-heartbeat.ts");
+      const hb = startRuntimeHeartbeat(({ db: {}, config: {}, bootSkipped: [], logger }) as never, "api", { healthFilePath });
+      await vi.waitFor(() => expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ role: "api" }),
+        "runtime memory gauge write failed",
+      ));
+      expect(h.calls).toEqual(["upsert", "reap"]);
+      expect(existsSync(healthFilePath)).toBe(true);
+      await hb.stop();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
       h.upsertInstanceHeartbeat.mockReset();
     }
   });
