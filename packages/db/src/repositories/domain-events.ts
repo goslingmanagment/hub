@@ -1171,15 +1171,26 @@ export async function listObservationsForReplay(
   // statement snapshot. Enumerate actual versions: negative/sparse versions
   // remain eligible, and a large caller floor cannot create a huge series.
   // Deep/exact/account scopes need columns outside that index; time scopes
-  // can span kind prefixes. Keep their original lookup. Populated heads retain
-  // the original id-ordered page.
+  // can span kind prefixes. Keep their original lookup.
+  //
+  // A head with kinds is bounded below by the exact earliest pending
+  // received_at over every version x kind pair, in this same snapshot: the
+  // id-ordered page then skips every month before it (received_at is the
+  // partition key) instead of walking each month's primary key to discard
+  // already-parsed rows. Every eligible row is at or after that minimum, so
+  // the page is unchanged. Never carry the bound past this statement: a row
+  // committed later with an older received_at is visible to the next head,
+  // whose own minimum includes it. A row the sweep cannot parse yet keeps the
+  // bound at its date and shows as the obs_backlog_* gauge. The kind-free
+  // head (its probe's first row is not a minimum) keeps the existence probe.
   const probePendingHead = input.source !== undefined && input.afterId == null
     && input.observationId === undefined && input.accountId == null && input.accountIds === undefined
     && input.from == null && input.to == null;
   const versionBounds = sql`o.parse_version < ${input.belowParseVersion}
     ${input.atLeastParseVersion === undefined ? sql`` : sql`and o.parse_version >= ${input.atLeastParseVersion}`}`;
   const probeKinds = [...new Set(input.kinds ?? [])];
-  const pendingHead = probePendingHead ? sql`
+  const boundedHead = probePendingHead && probeKinds.length > 0;
+  const replayVersions = sql`
     with recursive replay_versions(parse_version) as (
       (
         select o.parse_version from observations o
@@ -1196,20 +1207,36 @@ export async function listObservationsForReplay(
         order by o.parse_version
         limit 1
       ) next_version
-    ), replay_pending as materialized (
+    )`;
+  const pendingHead = !probePendingHead ? sql`` : boundedHead ? sql`
+    ${replayVersions}, replay_floor as materialized (
+      select min(pending_prefix.received_at) as received_at
+      from replay_versions pending_version
+      cross join unnest(array[${sql.join(probeKinds.map(kind => sql`${kind}`), sql`, `)}]::text[]) as replay_kinds(kind)
+      cross join lateral (
+        select o.received_at from observations o
+        where o.parse_version = pending_version.parse_version and o.source = ${input.source}
+          and o.kind = replay_kinds.kind
+        order by o.received_at
+        limit 1
+      ) pending_prefix
+    )
+  ` : sql`
+    ${replayVersions}, replay_pending as materialized (
       select 1
       from replay_versions pending_version
-      ${probeKinds.length === 0 ? sql`` : sql`cross join unnest(array[${sql.join(probeKinds.map(kind => sql`${kind}`), sql`, `)}]::text[]) as replay_kinds(kind)`}
       cross join lateral (
         select 1 from observations o
         where o.parse_version = pending_version.parse_version and o.source = ${input.source}
-          ${probeKinds.length === 0 ? sql`` : sql`and o.kind = replay_kinds.kind`}
-        order by ${probeKinds.length === 0 ? sql`o.kind, ` : sql``}o.received_at
+        order by o.kind, o.received_at
         limit 1
       ) pending_prefix
       limit 1
     )
-  ` : sql``;
+  `;
+  const headCondition = boundedHead
+    ? sql`and o.received_at >= (select received_at from replay_floor)`
+    : probePendingHead ? sql`and exists (select 1 from replay_pending)` : sql``;
   const result = await db.execute<Record<string, unknown>>(sql`
     ${pendingHead}
     select o.id::text as id, o.source, o.producer, o.platform, o.account_id,
@@ -1219,7 +1246,7 @@ export async function listObservationsForReplay(
            o.payload_object_id::text as payload_object_id
     from observations o
     where ${sql.join(conditions, sql` and `)}
-      ${probePendingHead ? sql`and exists (select 1 from replay_pending)` : sql``}
+      ${headCondition}
     order by o.id asc
     limit ${limit}
   `);

@@ -94,9 +94,9 @@ function flatten(plan: PlanNode): PlanNode[] {
   return [plan, ...(plan.Plans ?? []).flatMap(flatten)];
 }
 
-function heapVisits(plan: PlanNode): number {
+function heapVisits(plan: PlanNode, relationPrefix = "observations_"): number {
   return flatten(plan).reduce((sum, node) => {
-    if (!node["Relation Name"]?.startsWith("observations_")) return sum;
+    if (!node["Relation Name"]?.startsWith(relationPrefix)) return sum;
     return sum + (node["Node Type"] === "Index Only Scan"
       ? node["Heap Fetches"] ?? 0
       : ((node["Actual Rows"] ?? 0) + (node["Rows Removed by Filter"] ?? 0)) * (node["Actual Loops"] ?? 0));
@@ -231,5 +231,138 @@ describe("observation replay at a caught-up scan head", () => {
     expect(pending.rows).toHaveLength(1);
     expect(pending.rows[0]).toMatchObject({ parseVersion: 0, payload: { fresh: true } });
     expect((await captureReplay(input)).rows).toEqual(pending.rows);
+  });
+});
+
+// A populated head: the family has pending capture, so the old existence probe
+// let the id-ordered page walk every month's primary key. July is correlated
+// capture the head must never read: each predicate (pull, floor-a, version 0)
+// is common on its own, but no row carries all three. The family's own pending
+// capture is five September rows; ids leave a gap below them for late commits.
+const FLOOR_INPUT = { belowParseVersion: 1, source: "pull", kinds: ["floor-a", "floor-b"] };
+const FLOOR_PENDING_IDS = [300051, 300052, 300053, 300054, 300055];
+
+async function seedFloorFixture(parsedVersion = 1) {
+  // The test cluster commits asynchronously, and vacuum cannot mark a page
+  // all-visible before the inserting commit is flushed. Commit this seed
+  // synchronously so the vacuum below leaves July all-visible, as an old
+  // month is on prod.
+  const seed = await harness.pool.connect();
+  try {
+    await seed.query("set synchronous_commit = on");
+    await seed.query("truncate observations");
+    await seed.query(`
+      insert into observations (id, source, producer, kind, payload, payload_hash,
+        idempotency_key, received_at, parse_version) overriding system value
+      select n, case n % 3 when 2 then 'webhook' else 'pull' end, 'replay-floor',
+        case n % 3 when 1 then 'floor-other' else 'floor-a' end,
+        jsonb_build_object('fixture', n), '\\x00'::bytea, 'replay-floor-' || n,
+        '2026-07-01'::timestamptz + n * interval '15 seconds',
+        case n % 3 when 0 then $1::int else 0 end
+      from generate_series(1, 120000) n
+    `, [parsedVersion]);
+    await seed.query(`
+      insert into observations (id, source, producer, kind, payload, payload_hash,
+        idempotency_key, received_at, parse_version) overriding system value
+      select 300000 + n, 'pull', 'replay-floor', 'floor-a',
+        jsonb_build_object('fixture', 300000 + n), '\\x00'::bytea, 'replay-floor-' || (300000 + n),
+        '2026-09-20'::timestamptz + n * interval '1 minute',
+        case when n > 50 then 0 else $1::int end
+      from generate_series(1, 55) n
+    `, [parsedVersion]);
+    // Child statistics are fresh; the partitioned parent has never been
+    // analyzed, as on prod.
+    await seed.query("vacuum (analyze) observations_2026_07, observations_2026_09");
+  } finally {
+    await seed.query("reset synchronous_commit");
+    seed.release();
+  }
+}
+
+async function insertFloorRow(
+  client: { query: (text: string, values: unknown[]) => Promise<unknown> },
+  row: { id: number; receivedAt: string; parseVersion: number },
+) {
+  await client.query(`
+    insert into observations (id, source, producer, kind, payload, payload_hash,
+      idempotency_key, received_at, parse_version) overriding system value
+    values ($1, 'pull', 'replay-floor', 'floor-a', jsonb_build_object('fixture', $1::bigint),
+      '\\x00'::bytea, 'replay-floor-' || $1, $2, $3)
+  `, [row.id, row.receivedAt, row.parseVersion]);
+}
+
+describe("observation replay at a populated scan head", () => {
+  it("a populated head reads no month older than its oldest pending capture", async () => {
+    await seedFloorFixture();
+    const head = await expectLegacyRows(FLOOR_INPUT);
+    expect(head.rows.map(row => row.id)).toEqual(FLOOR_PENDING_IDS);
+    // The fixture reproduces the defect: the old page walks July's heap.
+    expect(heapVisits(await explain(legacyStatement(FLOOR_INPUT)), "observations_2026_07"))
+      .toBeGreaterThanOrEqual(50_000);
+    const plan = await explain(head.statement);
+    expect(heapVisits(plan, "observations_2026_07")).toBe(0);
+    expect(heapVisits(plan)).toBeLessThan(1_000);
+  }, 120_000);
+
+  it("a capture left unparsed holds the floor at its own month; no fixed window", async () => {
+    await seedFloorFixture();
+    await insertFloorRow(harness.pool, { id: 150000, receivedAt: "2026-07-20Z", parseVersion: 0 });
+    const head = await expectLegacyRows(FLOOR_INPUT);
+    expect(head.rows.map(row => row.id)).toEqual([150000, ...FLOOR_PENDING_IDS]);
+    expect(heapVisits(await explain(head.statement), "observations_2026_07")).toBeGreaterThan(0);
+    // A two-day ceiling below the fixture's "now" would drop the stuck row.
+    const fixtureNow = new Date("2026-09-21Z").getTime();
+    const ceiling = await listObservationsForReplay(harness.db, {
+      ...FLOOR_INPUT, from: new Date(fixtureNow - 2 * 24 * 60 * 60 * 1000),
+    });
+    expect(ceiling.map(row => row.id)).toEqual(FLOOR_PENDING_IDS);
+    expect(ceiling.map(row => row.id)).not.toEqual(head.rows.map(row => row.id));
+  }, 120_000);
+
+  it("a late commit with an older date and a smaller id is seen by the next head", async () => {
+    await seedFloorFixture();
+    const late = await harness.pool.connect();
+    try {
+      await late.query("begin");
+      await insertFloorRow(late, { id: 200000, receivedAt: "2026-08-15Z", parseVersion: 0 });
+      const before = await expectLegacyRows(FLOOR_INPUT);
+      expect(before.rows.map(row => row.id)).toEqual(FLOOR_PENDING_IDS);
+      await late.query("commit");
+    } catch (error) {
+      await late.query("rollback");
+      throw error;
+    } finally {
+      late.release();
+    }
+    const after = await expectLegacyRows(FLOOR_INPUT);
+    expect(after.rows.map(row => row.id)).toEqual([200000, ...FLOOR_PENDING_IDS]);
+    const pastIt = await expectLegacyRows({ ...FLOOR_INPUT, afterId: 200000 });
+    expect(pastIt.rows.map(row => row.id)).toEqual(FLOOR_PENDING_IDS);
+  }, 120_000);
+
+  it("the replay pass floor ignores capture below its version range", async () => {
+    await seedFloorFixture(2);
+    await insertFloorRow(harness.pool, { id: 150000, receivedAt: "2026-07-20Z", parseVersion: 0 });
+    await insertFloorRow(harness.pool, { id: 300100, receivedAt: "2026-09-21Z", parseVersion: 1 });
+    const input = { ...FLOOR_INPUT, belowParseVersion: 2, atLeastParseVersion: 1 };
+    const head = await expectLegacyRows(input);
+    expect(head.rows.map(row => row.id)).toEqual([300100]);
+    expect(heapVisits(await explain(head.statement), "observations_2026_07")).toBe(0);
+  }, 120_000);
+
+  it("bounds only the kind-scoped head; the kind-free head keeps its existence probe", async () => {
+    const bounded = (await expectLegacyRows(FLOOR_INPUT)).statement.text.replace(/\s+/g, " ");
+    expect(bounded).toContain("replay_floor");
+    expect(bounded).toContain("o.received_at >= (select received_at from replay_floor)");
+    expect(bounded).not.toContain("replay_pending");
+    for (const input of [
+      { belowParseVersion: 1, source: "command_result" },
+      { belowParseVersion: 1, source: "command_result", kinds: [] },
+    ]) {
+      const text = (await expectLegacyRows(input)).statement.text.replace(/\s+/g, " ");
+      expect(text).toContain("exists (select 1 from replay_pending)");
+      expect(text).toContain("order by o.kind, o.received_at");
+      expect(text).not.toContain("replay_floor");
+    }
   });
 });
