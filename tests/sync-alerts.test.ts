@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 
+import { SYNC_ALERT_EVALUATION_RULES } from "@agency_hub_core/db";
 import { INDEFINITE_UNTIL } from "@agency_hub_core/shared";
 
 import {
   incidentTitleForKind,
   resolveMessageForIncident,
+  SYNC_ENGINE_EVALUATOR_SUBKEY,
   SYNC_ENGINE_PACE_VIOLATION_SUBKEY,
   syncEngineIncidentKey,
   syncEngineRouteSubKey,
@@ -13,15 +15,20 @@ import { notificationPagingPolicyFor } from "../apps/runtime/src/services/notifi
 import {
   evaluatePageAlerts,
   evaluateRouteAlerts,
+  PAGE_ALERT_FACT_PARTS,
+  PAGE_ALERT_NEUTRAL_FACTS,
   SYNC_ALERT_CLEAN_MS,
   SYNC_CHATS_REFUSED_CHATS,
   SYNC_CHATS_REFUSED_WINDOW_MS,
   SYNC_HANDOVER_STUCK_MS,
   SYNC_LEDGER_BACKFILL_STALL_MS,
   SYNC_OWNERSHIP_UNCONFIRMED_MS,
+  SYNC_PAGE_ALERT_RULES,
+  SYNC_PAGE_ALERT_SUB_KEYS,
   SYNC_REQUEST_STALL_MS,
   SYNC_SOCKET_DOWN_MS,
   syncAlertResolveAfterMs,
+  type PageAlertFactPart,
   type PageAlertFacts,
 } from "../apps/runtime/src/sync/engine/alerts.ts";
 import {
@@ -423,6 +430,80 @@ describe("alert rules (design §9.6)", () => {
   });
 });
 
+describe("the page alerts as rules (bug hunt Д11)", () => {
+  /** A part the rule does not declare: any read of it throws. */
+  function undeclared(part: PageAlertFactPart): never {
+    const refuse = (): never => {
+      throw new Error(`read of the undeclared part ${part}`);
+    };
+    return new Proxy({}, { get: refuse, has: refuse, ownKeys: refuse, getOwnPropertyDescriptor: refuse }) as never;
+  }
+
+  /** Facts of the cases above under which each alert holds. */
+  const waiting = { resource: "dm-messages.head", subject: "1", dueAt: at(-3 * MINUTE), breakerUntil: null, waitingReason: null };
+  const conditionCases: PageAlertFacts[] = [
+    facts({ page: { holds: [credentialsHeld("auth")] } }),
+    facts({ page: { holds: [networkHeld(MINUTE, { networkSince: at(-NETWORK_ALERT_AFTER_MS - MINUTE).toISOString() })] } }),
+    facts({ page: { holds: routeHoldRows("messaging.groups", { effectivePerMin: -1 }) } }),
+    facts({ journal: { lastStopAttempt: { errorClass: "auth", at: at(-MINUTE) } } }),
+    facts({ page: { mode: "handover", modeChangedAt: at(-SYNC_HANDOVER_STUCK_MS - MINUTE) } }),
+    facts({ page: { owner: { ...facts().page.owner, heartbeatAt: null } } }),
+    facts({ live: { socket: { up: false, lastAliveAt: null }, decode: { receipts: 200, debt: 3 } } }),
+    facts({ journal: { quarantined: { "dm-messages.head": 2 } } }),
+    facts({ live: { unconfirmed: { count: 1, oldestVisibleAt: at(-20 * MINUTE) } } }),
+    facts({ chats: { refused: { chats: SYNC_CHATS_REFUSED_CHATS, firstOpenedAt: at(-MINUTE) } } }),
+    facts({ money: { count: 1, oldestReceivedAt: at(-6 * MINUTE) } }),
+    facts({ journal: { urgentWaiting: [waiting] } }),
+    facts({ journal: { urgentWaiting: [waiting] }, page: { holds: routeHoldRows("messages.page", { holdUntil: at(MINUTE).toISOString() }) } }),
+    facts({ journal: { stalledRequests: [{ requestRef: "r-1", lastServedAt: at(-40 * MINUTE), createdAt: at(-60 * MINUTE) }] } }),
+    facts({ journal: { polls: [{ resource: "notifications.forward", lastServedAt: at(-65 * MINUTE), createdAt: at(-24 * 60 * MINUTE) }] } }),
+    facts({ journal: { ledgerIncomplete: shortfall(3) } }),
+    facts({
+      journal: { ledgerIncomplete: shortfall(3), transactionsBackfill: { openProgressAt: at(-SYNC_LEDGER_BACKFILL_STALL_MS - MINUTE), lastCompletedAt: null } },
+      page: { holds: [resourceBreakerRow("transactions", at(MINUTE), { since: at(-MINUTE) })] },
+    }),
+  ];
+
+  it("neutral facts hold no condition", () => {
+    const neutral: PageAlertFacts = { page: facts().page, ...PAGE_ALERT_NEUTRAL_FACTS, now: NOW };
+    expect(evaluatePageAlerts(neutral, registry)).toEqual([]);
+    // Each part alone neutral beside the others' healthy facts.
+    for (const part of PAGE_ALERT_FACT_PARTS) {
+      expect(evaluatePageAlerts({ ...facts(), [part]: PAGE_ALERT_NEUTRAL_FACTS[part] }, registry), part).toEqual([]);
+    }
+  });
+
+  it("each page rule reads only the parts it declares", () => {
+    // Not vacuous: the cases hold every alert.
+    expect(new Set(conditionCases.flatMap((input) => evaluatePageAlerts(input, registry).map((entry) => entry.subKey))))
+      .toEqual(new Set(SYNC_PAGE_ALERT_SUB_KEYS));
+    for (const subKey of SYNC_PAGE_ALERT_SUB_KEYS) {
+      const rule = SYNC_PAGE_ALERT_RULES[subKey];
+      for (const [index, input] of conditionCases.entries()) {
+        const masked = { ...input };
+        for (const part of PAGE_ALERT_FACT_PARTS) {
+          if (!rule.parts.includes(part)) Object.assign(masked, { [part]: undeclared(part) });
+        }
+        expect(() => rule.evaluate(masked, registry), `${subKey}, case ${index}`).not.toThrow();
+        expect(rule.evaluate(masked, registry), `${subKey}, case ${index}`).toEqual(rule.evaluate(input, registry));
+      }
+    }
+  });
+
+  it("evaluates the rules in the alerts' order, one condition each", () => {
+    expect(Object.keys(SYNC_PAGE_ALERT_RULES)).toEqual([...SYNC_PAGE_ALERT_SUB_KEYS]);
+    for (const input of conditionCases) {
+      expect(evaluatePageAlerts(input, registry)).toEqual(SYNC_PAGE_ALERT_SUB_KEYS
+        .map((subKey) => SYNC_PAGE_ALERT_RULES[subKey].evaluate(input, registry))
+        .filter((entry) => entry !== null));
+    }
+  });
+
+  it("the evaluator's rules are the repository's vocabulary", () => {
+    expect([...Object.keys(SYNC_PAGE_ALERT_RULES), "route_limited", "pace_audit"]).toEqual([...SYNC_ALERT_EVALUATION_RULES]);
+  });
+});
+
 describe("the incident kind fansly_sync_engine", () => {
   it("keys one latch per page and alert, the pace violation apart, one per page+route, alert 5 global", () => {
     expect(syncEngineIncidentKey({ subKey: "page_stopped", pageId: 7 })).toBe("fansly_sync_engine:7:page_stopped");
@@ -431,10 +512,12 @@ describe("the incident kind fansly_sync_engine", () => {
     expect(syncEngineIncidentKey({ subKey: SYNC_ENGINE_PACE_VIOLATION_SUBKEY, pageId: 7 }))
       .toBe("fansly_sync_engine:7:page_stopped:pace_violation");
     expect(syncEngineIncidentKey({ subKey: "process", pageId: null })).toBe("fansly_sync_engine:global:process");
+    expect(syncEngineIncidentKey({ subKey: SYNC_ENGINE_EVALUATOR_SUBKEY, pageId: null })).toBe("fansly_sync_engine:global:evaluator");
   });
 
   it("opens and resolves under one title per alert", () => {
-    const titles = ["page_stopped", SYNC_ENGINE_PACE_VIOLATION_SUBKEY, "live_degraded", "freshness", "stuck", "process", "route_limited:messages.page"]
+    const titles = ["page_stopped", SYNC_ENGINE_PACE_VIOLATION_SUBKEY, "live_degraded", "freshness", "stuck", "process",
+      SYNC_ENGINE_EVALUATOR_SUBKEY, "route_limited:messages.page"]
       .map((subKey) => incidentTitleForKind({ kind: "fansly_sync_engine", subKey }));
     expect(new Set(titles).size).toBe(titles.length);
     expect(titles.every((title) => title.startsWith("Fansly Sync Engine"))).toBe(true);
@@ -443,6 +526,10 @@ describe("the incident kind fansly_sync_engine", () => {
       .toBe("✅ Resolved\nFansly Sync Engine pace violation acknowledged by the owner: lilly-1 (fansly)");
     expect(resolveMessageForIncident({ kind: "fansly_sync_engine", subKey: "process", pageLabel: null, platform: null }))
       .toBe("✅ Resolved\nFansly Sync Engine heartbeat back");
+    expect(incidentTitleForKind({ kind: "fansly_sync_engine", subKey: SYNC_ENGINE_EVALUATOR_SUBKEY }))
+      .toBe("Fansly Sync Engine alerts unevaluated — some alerts of a page have not been judged for 5 min (they can neither page nor resolve)");
+    expect(resolveMessageForIncident({ kind: "fansly_sync_engine", subKey: SYNC_ENGINE_EVALUATOR_SUBKEY, pageLabel: null, platform: null }))
+      .toBe("✅ Resolved\nFansly Sync Engine alerts evaluated again");
     // Every route's latch reads the same title; an empty route is no route latch.
     expect(incidentTitleForKind({ kind: "fansly_sync_engine", subKey: "route_limited:media.offer_stats" }))
       .toBe(incidentTitleForKind({ kind: "fansly_sync_engine", subKey: "route_limited:messages.page" }));
@@ -452,7 +539,8 @@ describe("the incident kind fansly_sync_engine", () => {
   });
 
   it("pages every alert at once", () => {
-    for (const subKey of ["page_stopped", SYNC_ENGINE_PACE_VIOLATION_SUBKEY, "live_degraded", "freshness", "stuck", "process", "route_limited:messages.page"]) {
+    for (const subKey of ["page_stopped", SYNC_ENGINE_PACE_VIOLATION_SUBKEY, "live_degraded", "freshness", "stuck", "process",
+      SYNC_ENGINE_EVALUATOR_SUBKEY, "route_limited:messages.page"]) {
       expect(notificationPagingPolicyFor("fansly_sync_engine", subKey)).toMatchObject({ openHoldMs: 0, flap: null });
     }
   });

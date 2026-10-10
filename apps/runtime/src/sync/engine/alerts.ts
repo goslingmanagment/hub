@@ -6,19 +6,24 @@ import {
   isSyncUrgentWorkWaiting,
   listNotificationIncidents,
   listSyncPages,
+  markSyncAlertEvaluationPassFailed,
   readFanslySendAudit,
   readSyncChatAlertFacts,
   readSyncJournalAlertFacts,
   readSyncLivePathFacts,
+  recordSyncAlertEvaluation,
+  SYNC_ALERT_EVALUATION_RULES,
   SYNC_ALERTS_ACK_AUDIT_EVENT,
   syncUrgentWaitingSince,
   type Database,
   type FanslyWsLivePayloadResolver,
+  type SyncAlertEvaluationRule,
   type SyncChatAlertFacts,
   type SyncJournalAlertFacts,
   type SyncLivePathFacts,
   type SyncPageRow,
 } from "@agency_hub_core/db";
+import { sanitizeError } from "@agency_hub_core/shared";
 
 import {
   notifySyncEngineIncident,
@@ -71,6 +76,19 @@ import { noStallTracker, type StallTracker, type StallTracking } from "./watchdo
 // step 4 (S4-21), still honoured where a row says it — the ownership alert is
 // suppressed (no owner runs there by design); a handover older than 10 min is
 // `handover_stuck`.
+//
+// Failure boundaries (bug hunt Д11). One failing read, rule, open, resolve or
+// record never silences the rest of the pass: each page alert is a rule of
+// its own (`SYNC_PAGE_ALERT_RULES`) that declares the parts of the facts it
+// reads; a part that cannot be read (the journal, the live path, the chats,
+// the pass's one money window) stands in with its neutral value, and every
+// rule that reads it is "not evaluated". Unknown is no health: such a rule
+// opens what holds on what it could read, and never resolves; neither does a
+// rule whose evaluation threw, nor one whose open or resolve did not land.
+// Each pass records, per handover/live page and rule, whether it was judged in
+// full (`sync_alert_evaluations`); the api watchdog pages the global latch
+// `evaluator` when a pair has gone unjudged for 5 min. A failure is logged
+// when it starts or changes, and its end once — never every pass.
 
 /** The evaluator's cadence. */
 export const SYNC_ALERT_EVAL_INTERVAL_MS = 30_000;
@@ -198,21 +216,24 @@ function condition(
   return first === undefined ? null : { subKey, detail: first.detail, since: first.since, seenAt, reasons };
 }
 
-/**
- * Alerts 1–4 of one page from its facts (pure). At most one condition per
- * alert; its `detail` is the most severe reason, `reasons` lists them all.
- */
-export function evaluatePageAlerts(facts: PageAlertFacts, registry: Pick<EngineRegistry, "spec">): SyncAlertCondition[] {
-  const { page, journal, live, now } = facts;
-  const conditions: Array<SyncAlertCondition | null> = [];
+/** The page's hold set, and what of it holds the page itself now by the hold
+ *  evaluator (the rule the actor admits by): alerts 1, 3 and 4 read both. */
+function pageHoldsNow(facts: Pick<PageAlertFacts, "page" | "now">): {
+  holds: HoldSet;
+  held: ReturnType<typeof pageHoldsInForce>;
+} {
+  const holds = holdSetOf(facts.page.holds);
+  return { holds, held: pageHoldsInForce(holds, facts.now) };
+}
 
+/** Alert 1 of one page (pure). */
+function pageStoppedCondition(facts: PageAlertFacts): SyncAlertCondition | null {
+  const { page, journal, now } = facts;
   // 1. The page stopped: what holds the page itself by the hold evaluator
   // (the rule the actor admits by) — a credentials hold, a network hold
   // (alone or beside it), rows of its hold set this build cannot read.
   const stopped: SyncAlertCondition["reasons"] = [];
-  const holds = holdSetOf(page.holds);
-  const held = pageHoldsInForce(holds, now);
-  const holdInForce = held !== null;
+  const { held } = pageHoldsNow(facts);
   if (held?.credentials) stopped.push({ detail: held.credentials.kind, since: held.credentials.since });
   // Rows this build cannot read keep the page's admission closed: a route's
   // state (`engine/route-policy.ts`), or a row of a kind it does not know.
@@ -247,8 +268,12 @@ export function evaluatePageAlerts(facts: PageAlertFacts, registry: Pick<EngineR
     stopped.push({ detail: journal.lastStopAttempt.errorClass, since: journal.lastStopAttempt.at, context: { clean: false } });
     stoppedSeenAt = journal.lastStopAttempt.at;
   }
-  conditions.push(condition("page_stopped", stopped, stoppedSeenAt));
+  return condition("page_stopped", stopped, stoppedSeenAt);
+}
 
+/** Alert 2 of one page (pure). */
+function liveDegradedCondition(facts: PageAlertFacts): SyncAlertCondition | null {
+  const { journal, live, now } = facts;
   // 2. The live path degraded.
   const degraded: SyncAlertCondition["reasons"] = [];
   if (!live.socket.up && msSince(live.socket.lastAliveAt, now) > SYNC_SOCKET_DOWN_MS) {
@@ -261,7 +286,14 @@ export function evaluatePageAlerts(facts: PageAlertFacts, registry: Pick<EngineR
   if (quarantined.length > 0) {
     degraded.push({ detail: "quarantined", since: null, context: { byResource: Object.fromEntries(quarantined) } });
   }
-  conditions.push(condition("live_degraded", degraded, now));
+  return condition("live_degraded", degraded, now);
+}
+
+/** Alert 3 of one page (pure). */
+function freshnessCondition(facts: PageAlertFacts, registry: Pick<EngineRegistry, "spec">): SyncAlertCondition | null {
+  const { page, journal, live, now } = facts;
+  const { holds, held } = pageHoldsNow(facts);
+  const holdInForce = held !== null;
 
   // 3. Freshness. The owner's pause and a page hold explain a wait (alert 1
   // or the owner's own lever), so they do not page twice. A message of a chat
@@ -293,7 +325,14 @@ export function evaluatePageAlerts(facts: PageAlertFacts, registry: Pick<EngineR
       });
     }
   }
-  conditions.push(condition("freshness", late, now));
+  return condition("freshness", late, now);
+}
+
+/** Alert 4 of one page (pure). */
+function stuckCondition(facts: PageAlertFacts, registry: Pick<EngineRegistry, "spec">): SyncAlertCondition | null {
+  const { page, journal, now } = facts;
+  const { holds, held } = pageHoldsNow(facts);
+  const holdInForce = held !== null;
 
   // 4. Stuck.
   const stuck: SyncAlertCondition["reasons"] = [];
@@ -345,9 +384,64 @@ export function evaluatePageAlerts(facts: PageAlertFacts, registry: Pick<EngineR
       });
     }
   }
-  conditions.push(condition("stuck", stuck, now));
+  return condition("stuck", stuck, now);
+}
 
-  return conditions.filter((entry): entry is SyncAlertCondition => entry !== null);
+/** The parts of a page's alert facts, each read on its own
+ *  (`readPageAlertFactsSettled`); the page row and `now` are always there. */
+export const PAGE_ALERT_FACT_PARTS = ["journal", "live", "chats", "money"] as const;
+export type PageAlertFactPart = (typeof PAGE_ALERT_FACT_PARTS)[number];
+
+/** The value of each part that holds no reason of any alert: what stands in
+ *  for a part that could not be read. A live path without a socket reading is
+ *  "up" (no `lastAliveAt` would be `socket_down`). */
+export const PAGE_ALERT_NEUTRAL_FACTS: { readonly [P in PageAlertFactPart]: PageAlertFacts[P] } = {
+  journal: {
+    lastStopAttempt: null,
+    quarantined: {},
+    urgentWaiting: [],
+    polls: [],
+    ledgerIncomplete: null,
+    transactionsBackfill: { openProgressAt: null, lastCompletedAt: null },
+    stalledRequests: [],
+  },
+  live: {
+    socket: { up: true, lastAliveAt: null },
+    decode: { receipts: 0, debt: 0 },
+    unconfirmed: { count: 0, oldestVisibleAt: null },
+    unconfirmedWithoutThread: { count: 0, oldestVisibleAt: null },
+  },
+  chats: { unavailable: 0, refused: { chats: 0, firstOpenedAt: null } },
+  money: null,
+};
+
+/** One page alert as a rule: the parts of the facts it reads, and its
+ *  condition (pure). A rule never reads a part it does not declare: the
+ *  evaluator judges it only when every declared part was read. */
+export interface SyncPageAlertRule {
+  readonly parts: readonly PageAlertFactPart[];
+  evaluate(facts: PageAlertFacts, registry: Pick<EngineRegistry, "spec">): SyncAlertCondition | null;
+}
+
+/** Alerts 1–4, one rule each. A new reason goes inside its alert's rule; a new
+ *  read is a new part (with its neutral value) declared by the rules that
+ *  read it; a new alert is an entry here and in `SYNC_ALERT_EVALUATION_RULES`. */
+export const SYNC_PAGE_ALERT_RULES: Readonly<Record<SyncPageAlertSubKey, SyncPageAlertRule>> = {
+  page_stopped: { parts: ["journal"], evaluate: (facts) => pageStoppedCondition(facts) },
+  live_degraded: { parts: ["journal", "live"], evaluate: (facts) => liveDegradedCondition(facts) },
+  freshness: { parts: ["journal", "live", "chats", "money"], evaluate: freshnessCondition },
+  stuck: { parts: ["journal"], evaluate: stuckCondition },
+};
+
+/**
+ * Alerts 1–4 of one page from its facts (pure), the rules in their order. At
+ * most one condition per alert; its `detail` is the most severe reason,
+ * `reasons` lists them all.
+ */
+export function evaluatePageAlerts(facts: PageAlertFacts, registry: Pick<EngineRegistry, "spec">): SyncAlertCondition[] {
+  return SYNC_PAGE_ALERT_SUB_KEYS
+    .map((subKey) => SYNC_PAGE_ALERT_RULES[subKey].evaluate(facts, registry))
+    .filter((entry): entry is SyncAlertCondition => entry !== null);
 }
 
 /** A route of a page whose own incident holds (step 3b D5, `route_limited:<route>`). */
@@ -404,32 +498,62 @@ function routeAlertContext(condition: SyncRouteAlertCondition): Record<string, u
   };
 }
 
-/** Read a page's alert facts. `money` comes from one window read over many
- *  pages (`readMoneyFrames`); without it the money rule is skipped. */
-export async function readPageAlertFacts(
+/** A page's money frames missing from the ledger (`readMissingMoneyFrames`). */
+export type PageMissingMoney = NonNullable<PageAlertFacts["money"]>;
+
+/** A page's alert facts, each part read on its own: a part that could not be
+ *  read holds its neutral value (`PAGE_ALERT_NEUTRAL_FACTS`) and is in
+ *  `failed`, with its error, in reading order. */
+export interface SettledPageAlertFacts {
+  facts: PageAlertFacts;
+  failed: ReadonlyMap<PageAlertFactPart, unknown>;
+}
+
+/** Read a page's alert facts part by part. `money` comes from one window read
+ *  over many pages (`readMoneyFrames`): without it the money rule is skipped;
+ *  `{ error }` is that read's failure, the part `money` failed. */
+export async function readPageAlertFactsSettled(
   db: Database,
-  input: { page: SyncPageRow; money?: Map<number, { count: number; oldestReceivedAt: Date }> },
-): Promise<PageAlertFacts> {
-  const journal = await readSyncJournalAlertFacts(db, {
-    pageId: input.page.pageId,
+  input: { page: SyncPageRow; money?: Map<number, PageMissingMoney> | { error: unknown } },
+): Promise<SettledPageAlertFacts> {
+  const failed = new Map<PageAlertFactPart, unknown>();
+  const settle = async <T>(part: PageAlertFactPart, neutral: T, read: () => Promise<T>): Promise<T> => {
+    try {
+      return await read();
+    } catch (error) {
+      failed.set(part, error);
+      return neutral;
+    }
+  };
+  const pageId = input.page.pageId;
+  const journal = await settle("journal", PAGE_ALERT_NEUTRAL_FACTS.journal, () => readSyncJournalAlertFacts(db, {
+    pageId,
     stopLookbackMs: SYNC_ALERT_CLEAN_MS,
     urgentAfterMs: SYNC_URGENT_WAIT_MS,
     requestStallMs: SYNC_REQUEST_STALL_MS,
-  });
-  const live = await readSyncLivePathFacts(db, {
-    pageId: input.page.pageId,
+  }));
+  const live = await settle("live", PAGE_ALERT_NEUTRAL_FACTS.live, () => readSyncLivePathFacts(db, {
+    pageId,
     decodeWindowMs: SYNC_DECODE_DEBT_WINDOW_MS,
     unconfirmedAfterMs: SYNC_UNCONFIRMED_MESSAGE_MS,
-  });
-  const chats = await readSyncChatAlertFacts(db, { pageId: input.page.pageId, refusedWindowMs: SYNC_CHATS_REFUSED_WINDOW_MS });
-  return {
-    page: input.page,
-    journal,
-    live,
-    chats,
-    money: input.money?.get(input.page.pageId) ?? null,
-    now: input.page.dbNow,
-  };
+  }));
+  const chats = await settle("chats", PAGE_ALERT_NEUTRAL_FACTS.chats, () =>
+    readSyncChatAlertFacts(db, { pageId, refusedWindowMs: SYNC_CHATS_REFUSED_WINDOW_MS }));
+  let money: PageAlertFacts["money"] = PAGE_ALERT_NEUTRAL_FACTS.money;
+  if (input.money instanceof Map) money = input.money.get(pageId) ?? null;
+  else if (input.money !== undefined) failed.set("money", input.money.error);
+  return { facts: { page: input.page, journal, live, chats, money, now: input.page.dbNow }, failed };
+}
+
+/** Read a page's alert facts (`readPageAlertFactsSettled`); a part that cannot
+ *  be read throws its error (the first, in reading order). */
+export async function readPageAlertFacts(
+  db: Database,
+  input: { page: SyncPageRow; money?: Map<number, PageMissingMoney> },
+): Promise<PageAlertFacts> {
+  const settled = await readPageAlertFactsSettled(db, input);
+  if (settled.failed.size > 0) throw settled.failed.values().next().value;
+  return settled.facts;
 }
 
 /** Read a page's facts and evaluate it (`readPageAlertFacts`). */
@@ -512,6 +636,15 @@ async function pageLabelOf(db: Database, pageId: number): Promise<string | null>
   return page?.pageLabel ?? null;
 }
 
+/** A rule of a handover/live page the pass could not judge in full, and why:
+ *  a fact part it reads or the rule itself failed, or its open or resolve did
+ *  not land. Its latch was left as it was. */
+export interface SyncAlertRuleFailure {
+  pageId: number;
+  rule: SyncAlertEvaluationRule;
+  failure: string;
+}
+
 export interface SyncAlertPassResult {
   pages: number;
   opened: Array<{ pageId: number; subKey: SyncEngineIncidentSubKey; detail: string }>;
@@ -523,6 +656,8 @@ export interface SyncAlertPassResult {
   routeIntervalViolations: number;
   /** Pairs the audit could not judge (no recorded pause or interval). */
   inconclusivePairs: number;
+  /** Bug hunt Д11: the rules the pass could not judge (`sync_alert_evaluations`). */
+  unevaluated: SyncAlertRuleFailure[];
 }
 
 export interface SyncAlertEvaluatorOptions {
@@ -535,6 +670,42 @@ export interface SyncAlertEvaluatorOptions {
   watchdog?: StallTracking;
 }
 
+/** An open that did not land (`notifySyncEngineIncident` logs its error). */
+const OPEN_NOT_WRITTEN = "open: the latch was not written";
+
+/**
+ * An error as the evaluation record and the log carry it: its SQLSTATE (or
+ * its name) and a short message. A driver error's statement and values never
+ * (`sanitizeError`'s query-style projection).
+ */
+export function syncAlertFailureText(error: unknown): string {
+  const sanitized = sanitizeError(error, {
+    maxChars: 160,
+    truncation: "ellipsis",
+    trim: true,
+    queryStyleMessage: ({ name, code }) => `database query failed (${code ?? name})`,
+    fallbackMessage: "unknown error",
+  });
+  return sanitized.queryStyle ? sanitized.message : `${sanitized.code ?? sanitized.name}: ${sanitized.message}`;
+}
+
+/** A failure the log has said: a rule of a page, a page's record, the pass. */
+interface ReportedFailure {
+  pageId: number | null;
+  rule: string;
+  failure: string;
+}
+
+/** What one pass hands each page. */
+interface PagePass {
+  /** Open latches by key, with the last instant their condition was seen. */
+  open: ReadonlyMap<string, Date>;
+  money: Map<number, PageMissingMoney> | { error: unknown };
+  result: SyncAlertPassResult;
+  /** Each rule of the page: null when judged in full, else why not. */
+  outcomes: Map<SyncAlertEvaluationRule, string | null>;
+}
+
 /**
  * The 30-second evaluator of the `sync` process. Each pass: every
  * `handover`/`live` page's alerts 1–4 are derived from the database; a
@@ -545,11 +716,16 @@ export interface SyncAlertEvaluatorOptions {
  * resolved at once (a page in `off` or `shadow` pages nothing). The
  * pace backstop re-reads the journal's new sends (a violation the capture
  * path could not report, e.g. across a crash, still opens the pace latch).
+ * Every rule of a handover/live page is judged within its own failure
+ * boundary, and the pass records each one's outcome
+ * (`recordSyncAlertEvaluation`) for the api watchdog.
  */
 export class SyncAlertEvaluator {
   readonly #o: SyncAlertEvaluatorOptions;
   readonly #app: IncidentApp;
   readonly #paceAuditedTo = new Map<number, Date>();
+  /** The failures the log last said, by `<pageId>:<rule>` (`pass`: the pass). */
+  #reported: ReadonlyMap<string, ReportedFailure> = new Map();
   #timer: ReturnType<typeof setInterval> | null = null;
   #pass: Promise<SyncAlertPassResult | null> | null = null;
 
@@ -575,10 +751,7 @@ export class SyncAlertEvaluator {
     if (this.#pass === null) {
       const pass = this.#o.watchdog?.track({ component: "alerts" }, "pages") ?? noStallTracker;
       this.#pass = this.#evaluate(pass)
-        .catch((error: unknown) => {
-          this.#o.logger.warn({ err: error instanceof Error ? error.name : "unknown" }, "Fansly sync alerts: evaluation pass failed");
-          return null;
-        })
+        .catch((error: unknown) => this.#passFailed(error))
         .finally(() => {
           pass.done();
           this.#pass = null;
@@ -587,92 +760,224 @@ export class SyncAlertEvaluator {
     return this.#pass;
   }
 
+  /** The pass could not read its frame (the pages, the open latches), so it
+   *  judged nothing: logged once, and the recorded rules marked failing (best
+   *  effort — unmarked, they age into the watchdog's view all the same). */
+  async #passFailed(error: unknown): Promise<null> {
+    const failure = `pass: ${syncAlertFailureText(error)}`;
+    this.#report(new Map([...this.#reported, ["pass", { pageId: null, rule: "pass", failure }]]));
+    try {
+      await markSyncAlertEvaluationPassFailed(this.#o.db, { failure });
+    } catch {
+      // The database that failed the pass may refuse this too.
+    }
+    return null;
+  }
+
+  /** Log what failed this pass against what the log last said: one warn for
+   *  the failures that started or changed, one info for those that ended —
+   *  never the same failure on every pass. */
+  #report(current: ReadonlyMap<string, ReportedFailure>): void {
+    const changed = [...current]
+      .filter(([key, entry]) => this.#reported.get(key)?.failure !== entry.failure)
+      .map(([, entry]) => entry);
+    const ended = [...this.#reported]
+      .filter(([key]) => !current.has(key))
+      .map(([, entry]) => ({ pageId: entry.pageId, rule: entry.rule }));
+    if (changed.length > 0) {
+      this.#o.logger.warn({ failing: changed, failingNow: current.size }, "Fansly sync alerts: rules not evaluated");
+    }
+    if (ended.length > 0) this.#o.logger.info({ recovered: ended }, "Fansly sync alerts: rules evaluated again");
+    this.#reported = current;
+  }
+
   async #evaluate(pass: StallTracker): Promise<SyncAlertPassResult> {
     const { db } = this.#o;
+    // The pass's frame: without it there is nothing to judge (`runOnce`).
     const pages = await listSyncPages(db);
     const result: SyncAlertPassResult = {
       pages: pages.length, opened: [], resolved: [], paceViolations: 0, routeIntervalViolations: 0, inconclusivePairs: 0,
+      unevaluated: [],
     };
-    // Open latches by key, with the last instant their condition was seen.
     const open = new Map((await listNotificationIncidents(db, { status: "open" }))
       .filter((incident) => incident.kind === "fansly_sync_engine")
       .map((incident) => [incident.incidentKey, incident.lastSeenAt] as const));
     const owned = pages.filter(pagesOwnerAlerts);
     const now = pages[0]?.dbNow ?? new Date();
     pass.progress("money_frames");
-    const money = await readMissingMoneyFrames(db, {
-      pageIds: owned.map((page) => page.pageId),
-      now,
-      ...(this.#o.resolvePayload === undefined ? {} : { resolvePayload: this.#o.resolvePayload }),
-    });
+    // One window read for every page: its failure blinds the money part of
+    // each page's alert 3, nothing else.
+    let money: PagePass["money"];
+    try {
+      money = await readMissingMoneyFrames(db, {
+        pageIds: owned.map((page) => page.pageId),
+        now,
+        ...(this.#o.resolvePayload === undefined ? {} : { resolvePayload: this.#o.resolvePayload }),
+      });
+    } catch (error) {
+      money = { error };
+    }
+    const failing = new Map<string, ReportedFailure>();
     for (const page of pages) {
-      pass.progress("page");
-      const conditions = pagesOwnerAlerts(page)
-        ? await collectPageAlerts(db, { page, registry: this.#o.registry, money })
-        : [];
-      const holding = new Map(conditions.map((entry) => [entry.subKey, entry]));
-      for (const subKey of SYNC_PAGE_ALERT_SUB_KEYS) {
-        const held = holding.get(subKey);
-        const key = syncEngineIncidentKey({ subKey, pageId: page.pageId });
-        const lastSeenAt = open.get(key);
-        if (held !== undefined) {
-          await notifySyncEngineIncident(this.#app, {
-            subKey,
-            pageId: page.pageId,
-            pageLabel: page.pageLabel,
-            detail: held.detail,
-            errorSummary: summaryOf(held.detail, held.since, { reasons: held.reasons.map((reason) => reason.detail) }),
-            occurredAt: held.seenAt,
-          });
-          if (lastSeenAt === undefined) result.opened.push({ pageId: page.pageId, subKey, detail: held.detail });
-        } else if (lastSeenAt !== undefined) {
-          const cleanMs = pagesOwnerAlerts(page) ? syncAlertResolveAfterMs(subKey) : 0;
-          if (page.dbNow.getTime() - lastSeenAt.getTime() < cleanMs) continue;
-          await resolveSyncEngineIncident(this.#app, { subKey, pageId: page.pageId, pageLabel: page.pageLabel, recoveredAt: page.dbNow });
-          result.resolved.push({ pageId: page.pageId, subKey });
+      pass.progress(`page ${page.pageId}`);
+      const owner = pagesOwnerAlerts(page);
+      const outcomes = new Map<SyncAlertEvaluationRule, string | null>();
+      let unforeseen: string | null = null;
+      try {
+        await this.#evaluatePage(page, { open, money, result, outcomes });
+      } catch (error) {
+        // The page's boundary: the next pages go on.
+        unforeseen = `page: ${syncAlertFailureText(error)}`;
+      }
+      if (owner || unforeseen !== null) {
+        for (const rule of SYNC_ALERT_EVALUATION_RULES) {
+          if (!outcomes.has(rule)) outcomes.set(rule, unforeseen ?? "page: not evaluated");
         }
       }
-      await this.#evaluateRoutes(page, open, result);
-      if (pagesOwnerAlerts(page)) {
-        const audited = await this.#auditSends(page);
-        result.paceViolations += audited.pace;
-        result.routeIntervalViolations += audited.intervals;
-        result.inconclusivePairs += audited.inconclusive;
+      for (const [rule, failure] of outcomes) {
+        if (failure === null) continue;
+        failing.set(`${page.pageId}:${rule}`, { pageId: page.pageId, rule, failure });
+        if (owner) result.unevaluated.push({ pageId: page.pageId, rule, failure });
+      }
+      if (!owner) continue;
+      // The page's record, whatever its rules did; its own failure stops nothing.
+      pass.progress("record");
+      try {
+        await recordSyncAlertEvaluation(db, {
+          pageId: page.pageId,
+          at: page.dbNow,
+          outcomes: SYNC_ALERT_EVALUATION_RULES.map((rule) => ({ rule, failure: outcomes.get(rule) ?? null })),
+        });
+      } catch (error) {
+        failing.set(`${page.pageId}:record`, { pageId: page.pageId, rule: "record", failure: `record: ${syncAlertFailureText(error)}` });
       }
     }
+    this.#report(failing);
     if (result.opened.length > 0 || result.resolved.length > 0) {
       this.#o.logger.info({ opened: result.opened, resolved: result.resolved }, "Fansly sync alerts: latches changed");
     }
     return result;
   }
 
+  /** One page: alerts 1–4, its route incidents and, on a handover/live page,
+   *  its pace backstop — each rule's outcome into `outcomes`. */
+  async #evaluatePage(page: SyncPageRow, input: PagePass): Promise<void> {
+    const owner = pagesOwnerAlerts(page);
+    const settled = owner ? await readPageAlertFactsSettled(this.#o.db, { page, money: input.money }) : null;
+    for (const subKey of SYNC_PAGE_ALERT_SUB_KEYS) {
+      input.outcomes.set(subKey, await this.#evaluatePageAlert(page, subKey, settled, input));
+    }
+    input.outcomes.set("route_limited", await this.#evaluateRoutes(page, input.open, input.result));
+    if (owner) input.outcomes.set("pace_audit", await this.#auditPage(page, input.result));
+  }
+
+  /** One page alert: null when judged in full, else why not. Unknown is no
+   *  health — a rule that threw, or one that could not read a part it reads,
+   *  never resolves its latch; what holds on the parts it read still opens. */
+  async #evaluatePageAlert(
+    page: SyncPageRow,
+    subKey: SyncPageAlertSubKey,
+    settled: SettledPageAlertFacts | null,
+    input: PagePass,
+  ): Promise<string | null> {
+    const lastSeenAt = input.open.get(syncEngineIncidentKey({ subKey, pageId: page.pageId }));
+    // A page that pages nobody holds no condition: its latches resolve at once.
+    if (settled === null) {
+      return lastSeenAt === undefined || page.dbNow.getTime() < lastSeenAt.getTime()
+        ? null
+        : this.#resolve(page, subKey, input.result);
+    }
+    const rule = SYNC_PAGE_ALERT_RULES[subKey];
+    let held: SyncAlertCondition | null;
+    try {
+      held = rule.evaluate(settled.facts, this.#o.registry);
+    } catch (error) {
+      return `evaluate: ${syncAlertFailureText(error)}`;
+    }
+    const blind = rule.parts.filter((part) => settled.failed.has(part));
+    const failures = blind.map((part) => `${part}: ${syncAlertFailureText(settled.failed.get(part))}`);
+    if (held !== null) {
+      const landed = await notifySyncEngineIncident(this.#app, {
+        subKey,
+        pageId: page.pageId,
+        pageLabel: page.pageLabel,
+        detail: held.detail,
+        errorSummary: summaryOf(held.detail, held.since, {
+          reasons: held.reasons.map((reason) => reason.detail),
+          ...(blind.length === 0 ? {} : { blind }),
+        }),
+        occurredAt: held.seenAt,
+      });
+      if (!landed) failures.push(OPEN_NOT_WRITTEN);
+      else if (lastSeenAt === undefined) input.result.opened.push({ pageId: page.pageId, subKey, detail: held.detail });
+      return failures.length === 0 ? null : failures.join("; ");
+    }
+    // A part it could not read may hold a reason: the latch stays as it is.
+    if (failures.length > 0) return failures.join("; ");
+    if (lastSeenAt === undefined || page.dbNow.getTime() - lastSeenAt.getTime() < syncAlertResolveAfterMs(subKey)) return null;
+    return this.#resolve(page, subKey, input.result);
+  }
+
+  /** Resolve a latch of the page. A resolve that did not land is a failure of
+   *  the rule; one with nothing to do (closed already, seen later) is none. */
+  async #resolve(page: SyncPageRow, subKey: SyncEngineIncidentSubKey, result: SyncAlertPassResult): Promise<string | null> {
+    const outcome = await resolveSyncEngineIncident(this.#app, {
+      subKey, pageId: page.pageId, pageLabel: page.pageLabel, recoveredAt: page.dbNow,
+    });
+    if (outcome.status === "failed") return `resolve: ${syncAlertFailureText(outcome.error)}`;
+    if (outcome.status === "resolved") result.resolved.push({ pageId: page.pageId, subKey });
+    return null;
+  }
+
   /** The page's route incidents (D5): one latch per route held or within its
    *  clean window; a latch of a route without its condition resolves after
-   *  10 clean minutes (at once on a page that pages nobody). */
-  async #evaluateRoutes(page: SyncPageRow, open: ReadonlyMap<string, Date>, result: SyncAlertPassResult): Promise<void> {
-    const conditions = pagesOwnerAlerts(page) ? evaluateRouteAlerts(page, page.dbNow) : [];
-    const holding = new Map(conditions.map((entry) => [entry.route, entry]));
-    for (const route of FANSLY_ROUTES.keys()) {
-      const subKey = syncEngineRouteSubKey(route);
-      const key = syncEngineIncidentKey({ subKey, pageId: page.pageId });
-      const lastSeenAt = open.get(key);
-      const held = holding.get(route);
-      if (held !== undefined) {
-        await notifySyncEngineIncident(this.#app, {
-          subKey,
-          pageId: page.pageId,
-          pageLabel: page.pageLabel,
-          detail: held.detail,
-          errorSummary: summaryOf(held.detail, held.last429At, routeAlertContext(held)),
-          occurredAt: held.seenAt,
-        });
-        if (lastSeenAt === undefined) result.opened.push({ pageId: page.pageId, subKey, detail: held.detail });
-      } else if (lastSeenAt !== undefined) {
-        const cleanMs = pagesOwnerAlerts(page) ? SYNC_ALERT_CLEAN_MS : 0;
-        if (page.dbNow.getTime() - lastSeenAt.getTime() < cleanMs) continue;
-        await resolveSyncEngineIncident(this.#app, { subKey, pageId: page.pageId, pageLabel: page.pageLabel, recoveredAt: page.dbNow });
-        result.resolved.push({ pageId: page.pageId, subKey });
+   *  10 clean minutes (at once on a page that pages nobody). Null when every
+   *  route was judged and every open and resolve landed. */
+  async #evaluateRoutes(page: SyncPageRow, open: ReadonlyMap<string, Date>, result: SyncAlertPassResult): Promise<string | null> {
+    const failures = new Set<string>();
+    try {
+      const conditions = pagesOwnerAlerts(page) ? evaluateRouteAlerts(page, page.dbNow) : [];
+      const holding = new Map(conditions.map((entry) => [entry.route, entry]));
+      for (const route of FANSLY_ROUTES.keys()) {
+        const subKey = syncEngineRouteSubKey(route);
+        const key = syncEngineIncidentKey({ subKey, pageId: page.pageId });
+        const lastSeenAt = open.get(key);
+        const held = holding.get(route);
+        if (held !== undefined) {
+          const landed = await notifySyncEngineIncident(this.#app, {
+            subKey,
+            pageId: page.pageId,
+            pageLabel: page.pageLabel,
+            detail: held.detail,
+            errorSummary: summaryOf(held.detail, held.last429At, routeAlertContext(held)),
+            occurredAt: held.seenAt,
+          });
+          if (!landed) failures.add(OPEN_NOT_WRITTEN);
+          else if (lastSeenAt === undefined) result.opened.push({ pageId: page.pageId, subKey, detail: held.detail });
+        } else if (lastSeenAt !== undefined) {
+          const cleanMs = pagesOwnerAlerts(page) ? SYNC_ALERT_CLEAN_MS : 0;
+          if (page.dbNow.getTime() - lastSeenAt.getTime() < cleanMs) continue;
+          const failure = await this.#resolve(page, subKey, result);
+          if (failure !== null) failures.add(failure);
+        }
       }
+    } catch (error) {
+      failures.add(`evaluate: ${syncAlertFailureText(error)}`);
+    }
+    return failures.size === 0 ? null : [...failures].join("; ");
+  }
+
+  /** The pace backstop of a page within its own boundary: null when its sends
+   *  were read and judged and every violation's open landed. */
+  async #auditPage(page: SyncPageRow, result: SyncAlertPassResult): Promise<string | null> {
+    try {
+      const audited = await this.#auditSends(page);
+      result.paceViolations += audited.pace;
+      result.routeIntervalViolations += audited.intervals;
+      result.inconclusivePairs += audited.inconclusive;
+      return audited.landed ? null : OPEN_NOT_WRITTEN;
+    } catch (error) {
+      return `audit: ${syncAlertFailureText(error)}`;
     }
   }
 
@@ -683,8 +988,10 @@ export class SyncAlertEvaluator {
    *  latch as of its send; an acknowledged one never reopens it. A pair it
    *  cannot judge (an attempt admitted before 0237, two clocks that disagree,
    *  a send never recorded that its admission does not prove) pages nobody:
-   *  it is counted, and no acceptance passes on it. */
-  async #auditSends(page: SyncPageRow): Promise<{ pace: number; intervals: number; inconclusive: number }> {
+   *  it is counted, and no acceptance passes on it. The cursor moves only when
+   *  every open landed: the next pass reads the same sends again (the open is
+   *  idempotent), so a violation is never lost to a failed write. */
+  async #auditSends(page: SyncPageRow): Promise<{ pace: number; intervals: number; inconclusive: number; landed: boolean }> {
     // From the last pass (with an overlap), never further back than the first
     // pass reads (a page back in the engine after a while starts there).
     const last = this.#paceAuditedTo.get(page.pageId);
@@ -696,8 +1003,9 @@ export class SyncAlertEvaluator {
     const window = { start: since, until: null };
     const pace = auditPagePace(rows, window);
     const intervals = auditRouteIntervals(rows, window);
+    let landed = true;
     const latch = async (detail: string, at: Date, context: Record<string, unknown>) => {
-      await notifySyncEngineIncident(this.#app, {
+      const written = await notifySyncEngineIncident(this.#app, {
         subKey: SYNC_ENGINE_PACE_VIOLATION_SUBKEY,
         pageId: page.pageId,
         pageLabel: page.pageLabel,
@@ -705,6 +1013,7 @@ export class SyncAlertEvaluator {
         errorSummary: summaryOf(detail, at, context),
         occurredAt: at,
       });
+      if (!written) landed = false;
     };
     for (const pair of pace.violations) {
       await latch("pace_violation", pair.sentAt, {
@@ -737,11 +1046,12 @@ export class SyncAlertEvaluator {
         ceilingIntervalMs: breach.ceilingIntervalMs,
       });
     }
-    this.#paceAuditedTo.set(page.pageId, page.dbNow);
+    if (landed) this.#paceAuditedTo.set(page.pageId, page.dbNow);
     return {
       pace: pace.violations.length,
       intervals: intervals.violations.length + intervals.ceiling.length,
       inconclusive: pace.inconclusive.length + intervals.inconclusive.length,
+      landed,
     };
   }
 }

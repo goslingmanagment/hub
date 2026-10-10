@@ -1011,6 +1011,30 @@ export const syncHolds = pgTable(
   }),
 );
 
+// 0262 (bug hunt Д11): the alert evaluator's proof of work — per
+// handover/live page and rule (`SYNC_ALERT_EVALUATION_RULES`), when it was
+// last judged in full and why it cannot be now. Written by the evaluator
+// (apps/runtime/src/sync/engine/alerts.ts) through
+// repositories/sync/alert-evaluations.ts only; read by the api watchdog.
+export const syncAlertEvaluations = pgTable(
+  "sync_alert_evaluations",
+  {
+    pageId: bigint("page_id", { mode: "number" }).notNull().references(() => pages.id, { onDelete: "restrict" }),
+    rule: text("rule").notNull(),
+    attemptedAt: timestamp("attempted_at", { withTimezone: true }).notNull(),
+    evaluatedAt: timestamp("evaluated_at", { withTimezone: true }),
+    failure: text("failure"),
+    failedSince: timestamp("failed_since", { withTimezone: true }),
+  },
+  (table) => ({
+    pk: primaryKey({ name: "sync_alert_evaluations_pkey", columns: [table.pageId, table.rule] }),
+    failureCheck: check(
+      "sync_alert_evaluations_failure_check",
+      sql`(${table.failure} is null) = (${table.failedSince} is null)`,
+    ),
+  }),
+);
+
 // 0228 (plan §3, §11): the one work queue of the new engine. One open row per
 // page × shadow × resource × subject (`sync_work_open_uniq`); demand merges
 // into it through `upsertDemand` (repositories/sync/work.ts). `shadow` is

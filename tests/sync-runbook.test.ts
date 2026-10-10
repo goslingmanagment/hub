@@ -9,6 +9,7 @@ import {
   HISTORY_ITEM_STATES,
   HISTORY_REQUEST_STATES,
   LIVE_SYNC_PAGE_REFUSALS,
+  SYNC_ALERT_EVALUATION_RULES,
 } from "@agency_hub_core/db";
 import { FANSLY_PAUSE_MAX_MS, FANSLY_PAUSE_MIN_MS } from "@agency_hub_core/shared";
 
@@ -49,6 +50,7 @@ vi.mock("../apps/runtime/src/bootstrap.ts", () => ({
 import { buildProgram } from "../apps/runtime/src/cli.ts";
 import {
   SYNC_ENGINE_ALERT_SUBKEYS,
+  SYNC_ENGINE_EVALUATOR_SUBKEY,
   SYNC_ENGINE_PACE_VIOLATION_SUBKEY,
   SYNC_ENGINE_ROUTE_SUBKEY_PREFIX,
 } from "../apps/runtime/src/services/notification-incidents.ts";
@@ -242,6 +244,9 @@ describe("the sync runbook quotes the engine", () => {
     for (const subKey of SYNC_ENGINE_ALERT_SUBKEYS) expect(alerts).toContain(`\`${subKey}\``);
     expect(alerts).toContain(`\`${SYNC_ENGINE_PACE_VIOLATION_SUBKEY}\``);
     expect(alerts).toContain(`\`${SYNC_ENGINE_ROUTE_SUBKEY_PREFIX}<route>\``);
+    expect(alerts).toContain(`\`${SYNC_ENGINE_EVALUATOR_SUBKEY}\` (global)`);
+    // Its check reads the evaluator's own vocabulary.
+    expect(RUNBOOK).toContain(`unnest(array[${SYNC_ALERT_EVALUATION_RULES.map((rule) => `'${rule}'`).join(",")}])`);
   });
 
   it("gives the ladders and thresholds of the error rules", () => {

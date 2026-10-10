@@ -193,6 +193,8 @@ export * from "./repositories/sync/ws-gap.ts";
 export * from "./repositories/sync/media-handoff.ts";
 export * from "./repositories/sync/dm-exclusions.ts";
 export * from "./repositories/sync/observability.ts";
+// The alert evaluator's proof of work (0262, bug hunt Д11).
+export * from "./repositories/sync/alert-evaluations.ts";
 export * from "./repositories/sync/subject-queue.ts";
 // The chat-unavailability episodes (0251, arena "vanished chat" plan §2).
 export * from "./repositories/sync/chat-unavailability.ts";

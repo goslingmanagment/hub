@@ -37,8 +37,10 @@ import {
   SYNC_WORK_CLASSES,
   SYNC_WORK_KINDS,
   SYNC_WORK_STATES,
+  SYNC_ALERT_EVALUATION_RULES,
   SYNC_MEDIA_HANDOFF_MAX_BYTES,
   SYNC_LIFTABLE_DM_EXCLUSIONS,
+  syncAlertEvaluations,
   syncAttempts,
   syncHolds,
   syncMediaHandoff,
@@ -1331,5 +1333,58 @@ describe("fans_public_lookup.sql (arena \"vanished chat\", R5 M4: the public rea
   it("allows application rollback: the previous image names none of it, and its erasure takes the queue row with the fan", () => {
     expect(rollbackCompatible()).toContain(`"${migration}"`);
     expect(sql).toContain("references fans(id) on delete cascade");
+  });
+});
+
+describe("sync_alert_evaluations.sql (bug hunt Д11: the alert evaluator's proof of work)", () => {
+  // Found by its name, not its number: the number is the next free one at merge.
+  const found = readdirSync("packages/db/migrations").filter((file) => file.endsWith("_sync_alert_evaluations.sql"));
+  const migration = found[0] ?? "";
+  const text = found.length === 1 ? readFileSync(`packages/db/migrations/${migration}`, "utf8") : "";
+  const sql = stripComments(text);
+  const statements = topLevelStatements(sql);
+  const columns = ["page_id", "rule", "attempted_at", "evaluated_at", "failure", "failed_since"];
+
+  it("exists once, after the hold set (0240), in a transaction", () => {
+    expect(found).toHaveLength(1);
+    expect(migration > "0240_sync_holds.sql").toBe(true);
+    expect(text.startsWith("-- agency-hub:no-transaction")).toBe(false);
+  });
+
+  it("is purely additive: one table, comments and the read-role grant — no row, nothing else touched", () => {
+    for (const statement of statements) {
+      expect(statement).toMatch(/^(create table if not exists sync_alert_evaluations \(|comment on (table|column) sync_alert_evaluations|do \$\$)/);
+      // A foreign key's own `on delete restrict` is not a deletion.
+      expect(statement.replaceAll("on delete restrict", "")).not.toMatch(/\b(drop|rename|truncate|delete|update|insert|alter)\b/i);
+    }
+    expect(statements.filter((statement) => statement.startsWith("create table"))).toHaveLength(1);
+    expect(statements.filter((statement) => statement.startsWith("do $$"))).toHaveLength(1);
+    expect(text).toContain("grant select on sync_alert_evaluations to read_only");
+  });
+
+  it("is page-owned (the page delete restricted), keyed by page and rule, a failure always with its start", () => {
+    expect(sql).toContain("page_id bigint not null references pages(id) on delete restrict");
+    expect(sql).toContain("constraint sync_alert_evaluations_pkey primary key (page_id, rule)");
+    expect(sql).toContain("constraint sync_alert_evaluations_failure_check check ((failure is null) = (failed_since is null))");
+    expect(sql).not.toMatch(/on delete cascade/);
+    // The rule's vocabulary is the code's: no CHECK pins it.
+    expect(sql).not.toMatch(/rule in \(/);
+    expect(SYNC_ALERT_EVALUATION_RULES).toEqual(["page_stopped", "live_degraded", "freshness", "stuck", "route_limited", "pace_audit"]);
+    const body = sql.slice(sql.indexOf("create table if not exists sync_alert_evaluations ("), sql.indexOf("\n);"));
+    expect([...body.matchAll(/^\s{2}([a-z_]+) (?:bigint|text|timestamptz)\b/gm)].map((match) => match[1])).toEqual(columns);
+  });
+
+  it("comments the table and every column, and is mirrored in drizzle", () => {
+    expect(statements.some((statement) => statement.startsWith("comment on table sync_alert_evaluations is '"))).toBe(true);
+    for (const column of columns) {
+      expect(statements.some((statement) => statement.startsWith(`comment on column sync_alert_evaluations.${column} is '`)), column).toBe(true);
+    }
+    const names = Object.values(syncAlertEvaluations as unknown as Record<string, { name?: unknown }>).map((column) => column.name);
+    expect(names).toEqual(expect.arrayContaining(columns));
+    expect(readFileSync("packages/db/src/schema-guard.ts", "utf8")).toContain('"sync_alert_evaluations",');
+  });
+
+  it("allows application rollback: the previous image never names the table", () => {
+    expect(rollbackCompatible()).toContain(`"${migration}"`);
   });
 });

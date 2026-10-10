@@ -11,6 +11,7 @@ import {
   getSyncPage,
   listSyncPages,
   readSyncJournalAlertFacts,
+  SYNC_ALERT_EVALUATION_RULES,
   type Database,
 } from "@agency_hub_core/db";
 import type { FanslyWireOutcome, FanslyWireRequest } from "@agency_hub_core/fansly";
@@ -18,10 +19,13 @@ import { createLogger } from "@agency_hub_core/shared";
 
 import { runGoldenSignalSample, SYNC_ENGINE_METRICS_PROBE } from "../apps/runtime/src/services/golden-signals.ts";
 import {
+  notifySyncEngineIncident,
+  SYNC_ENGINE_EVALUATOR_SUBKEY,
   SYNC_ENGINE_PACE_VIOLATION_SUBKEY,
   syncEngineIncidentKey,
   syncEngineRouteSubKey,
 } from "../apps/runtime/src/services/notification-incidents.ts";
+import { runNotificationPagingSweep } from "../apps/runtime/src/services/notification-paging-sweep.ts";
 import { runOpsWatchdogCheck } from "../apps/runtime/src/services/ops-watchdog.ts";
 import { buildSyncAlertsCommandGroup } from "../apps/runtime/src/sync/cli/alerts.ts";
 import {
@@ -121,6 +125,39 @@ async function ageLatch(subKey: Parameters<typeof syncEngineIncidentKey>[0]["sub
       where incident_key = $1`,
     [syncEngineIncidentKey({ subKey, pageId }), ms],
   );
+}
+
+/** The evaluator's record of a page (`sync_alert_evaluations`), by rule. */
+async function evaluations(pageId: number) {
+  return query<{ rule: string; attemptedAt: Date; evaluatedAt: Date | null; failure: string | null; failedSince: Date | null }>(
+    `select rule, attempted_at as "attemptedAt", evaluated_at as "evaluatedAt", failure, failed_since as "failedSince"
+       from sync_alert_evaluations where page_id = $1 order by rule`,
+    [pageId],
+  );
+}
+
+async function evaluation(pageId: number, rule: string) {
+  return (await evaluations(pageId)).find((row) => row.rule === rule);
+}
+
+/** Time passes for the evaluator's record: every instant of the page's rows `ms` earlier. */
+async function ageEvaluations(pageId: number, ms: number): Promise<void> {
+  await testDb!.pool.query(
+    `update sync_alert_evaluations
+        set attempted_at = attempted_at - make_interval(secs => $2::double precision / 1000),
+            evaluated_at = evaluated_at - make_interval(secs => $2::double precision / 1000),
+            failed_since = failed_since - make_interval(secs => $2::double precision / 1000)
+      where page_id = $1`,
+    [pageId, ms],
+  );
+}
+
+/** Open a page latch of the engine as the evaluator would, its condition last seen `ms` ago. */
+async function openPageLatch(page: WsCapturePage, subKey: "stuck" | "freshness", ms: number): Promise<void> {
+  await notifySyncEngineIncident({ db: db(), logger }, {
+    subKey, pageId: page.pageId, pageLabel: page.label, detail: "request_stalled", errorSummary: "request_stalled", occurredAt: new Date(),
+  });
+  await ageLatch(subKey, page.pageId, ms);
 }
 
 /** A sent attempt of the page's journal; `shadow` makes it a row shadow mode
@@ -431,6 +468,60 @@ describe("the alert evaluator (design §9.6)", () => {
     expect(await query("select 1 from notification_incidents where incident_key = $1",
       [syncEngineIncidentKey({ subKey: syncEngineRouteSubKey("media.offer_stats"), pageId: page.pageId })])).toHaveLength(1);
     expect(await incident(syncEngineRouteSubKey("media.offer_stats"), page.pageId)).toMatchObject({ status: "open", errorCode: "rate_limit" });
+  });
+
+  it("the evaluator records every rule of a live page; a rule that throws keeps its latch and is recorded failing", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await enginePage("live");
+    const [{ before }] = await query<{ before: Date }>("select clock_timestamp() as before") as [{ before: Date }];
+    await pass();
+    const [{ after }] = await query<{ after: Date }>("select clock_timestamp() as after") as [{ after: Date }];
+    const rows = await evaluations(page.pageId);
+    expect(rows.map((row) => row.rule)).toEqual([...SYNC_ALERT_EVALUATION_RULES].sort());
+    for (const row of rows) {
+      expect(row, row.rule).toMatchObject({ failure: null, failedSince: null });
+      // The pass's database clock, one instant for the page.
+      expect(row.evaluatedAt!.getTime(), row.rule).toBe(row.attemptedAt.getTime());
+      expect(row.evaluatedAt!.getTime()).toBeGreaterThanOrEqual(before.getTime());
+      expect(row.evaluatedAt!.getTime()).toBeLessThanOrEqual(after.getTime());
+    }
+
+    // A poll row the stuck rule reads, and a registry whose spec throws for it:
+    // the stuck latch the condition no longer holds stays open.
+    await testDb.pool.query(
+      `insert into sync_work (page_id, shadow, resource, subject, kind, class, state)
+       values ($1, false, 'notifications.forward', '', 'poll', 'planned', 'open')`,
+      [page.pageId],
+    );
+    await openPageLatch(page, "stuck", 20 * 60_000);
+    const broken = {
+      spec: (resource: string) => {
+        if (resource === "notifications.forward") throw new TypeError("the registry is broken");
+        return registry.spec(resource);
+      },
+    };
+    const evaluatedBefore = (await evaluation(page.pageId, "stuck"))!.evaluatedAt;
+    const failing = await pass(new SyncAlertEvaluator({ db: db(), logger, registry: broken }));
+    expect(failing.resolved).toEqual([]);
+    expect(failing.unevaluated).toEqual([{ pageId: page.pageId, rule: "stuck", failure: "evaluate: TypeError: the registry is broken" }]);
+    expect(await incident("stuck", page.pageId)).toMatchObject({ status: "open" });
+    const stuck = (await evaluation(page.pageId, "stuck"))!;
+    expect(stuck).toMatchObject({ failure: "evaluate: TypeError: the registry is broken", failedSince: stuck.attemptedAt });
+    expect(stuck.evaluatedAt).toEqual(evaluatedBefore);
+    expect(stuck.attemptedAt.getTime()).toBeGreaterThan(evaluatedBefore!.getTime());
+    // The other rules were judged.
+    expect((await evaluations(page.pageId)).filter((row) => row.failure !== null).map((row) => row.rule)).toEqual(["stuck"]);
+
+    // A second failing pass keeps the streak's start.
+    await pass(new SyncAlertEvaluator({ db: db(), logger, registry: broken }));
+    expect((await evaluation(page.pageId, "stuck"))!.failedSince).toEqual(stuck.failedSince);
+
+    // The registry mended: judged, the latch resolved at once (alert 4).
+    expect((await pass()).resolved).toEqual([{ pageId: page.pageId, subKey: "stuck" }]);
+    expect(await incident("stuck", page.pageId)).toMatchObject({ status: "resolved" });
+    const mended = (await evaluation(page.pageId, "stuck"))!;
+    expect(mended).toMatchObject({ failure: null, failedSince: null });
+    expect(mended.evaluatedAt).toEqual(mended.attemptedAt);
   });
 });
 
@@ -751,6 +842,134 @@ describe("alert 5: the api watchdog (design §9.6)", () => {
     );
     expect(await runOpsWatchdogCheck(app(), { startedAtMs: pastGrace() })).toMatchObject({ syncEngineSilent: false });
     expect(await incident("process", null)).toMatchObject({ status: "resolved" });
+  });
+});
+
+describe("the evaluator's own latch: the api watchdog reads its record (bug hunt Д11)", () => {
+  const app = () => ({ db: db(), config: { telegramEnabled: false }, logger: { info: () => {}, warn: () => {}, error: () => {} } }) as never;
+  const pastGrace = () => Date.now() - 10 * 60_000;
+  const MINUTE = 60_000;
+
+  /** A live page that went live 10 min ago. */
+  async function livePage(label: string): Promise<WsCapturePage> {
+    const page = await enginePage("live", label);
+    await testDb!.pool.query("update sync_pages set mode_changed_at = clock_timestamp() - interval '10 minutes' where page_id = $1", [page.pageId]);
+    return page;
+  }
+
+  /** A `sync` process beating now, started `startedMs` ago. */
+  async function syncBeats(startedMs = 0): Promise<string> {
+    const instanceId = randomUUID();
+    await testDb!.pool.query(
+      `insert into runtime_instances (role, instance_id, started_at, last_seen_at, running)
+       values ('sync', $1, now() - make_interval(secs => $2::double precision / 1000), now(), '{}'::jsonb)`,
+      [instanceId, startedMs],
+    );
+    return instanceId;
+  }
+
+  const evaluatorLatch = () => incident(SYNC_ENGINE_EVALUATOR_SUBKEY, null);
+
+  it("the api watchdog pages when a live page's alerts went unevaluated for 5 minutes, and resolves once they are evaluated", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await livePage("lora-1");
+    const instance = await syncBeats();
+    // Nothing recorded yet: inside the api's boot grace nothing opens.
+    expect(await runOpsWatchdogCheck(app(), { startedAtMs: Date.now() })).toMatchObject({ syncEngineSilent: false });
+    expect(await evaluatorLatch()).toBeNull();
+    await runOpsWatchdogCheck(app(), { startedAtMs: pastGrace() });
+    expect(await evaluatorLatch()).toMatchObject({
+      status: "open", platformAccountId: null, errorCode: "unrecorded", kind: "fansly_sync_engine",
+      errorSummary: expect.stringContaining("lora-1: page_stopped, live_degraded, freshness, stuck, route_limited, pace_audit — never recorded"),
+    });
+
+    // One real pass of the evaluator: the next check resolves it.
+    await pass();
+    await runOpsWatchdogCheck(app(), { startedAtMs: pastGrace() });
+    expect(await evaluatorLatch()).toMatchObject({ status: "resolved" });
+
+    // A `sync` restarted a minute ago over rows older than 5 minutes: the
+    // restart resets nothing, the latch opens (`late`).
+    await ageEvaluations(page.pageId, 6 * MINUTE);
+    await testDb.pool.query("update runtime_instances set started_at = now() - interval '1 minute' where instance_id = $1", [instance]);
+    await runOpsWatchdogCheck(app(), { startedAtMs: pastGrace() });
+    expect(await evaluatorLatch()).toMatchObject({ status: "open", errorCode: "late", errorSummary: expect.stringContaining("lora-1: ") });
+
+    // A failing rule is the heaviest; the summary names the page, the rule and the error.
+    await testDb.pool.query(
+      `update sync_alert_evaluations set failure = 'journal: database query failed (57014)', failed_since = attempted_at
+        where page_id = $1 and rule = 'stuck'`,
+      [page.pageId],
+    );
+    await runOpsWatchdogCheck(app(), { startedAtMs: pastGrace() });
+    const failing = await evaluatorLatch();
+    expect(failing).toMatchObject({ status: "open", errorCode: "failing" });
+    expect(failing!.errorSummary).toMatch(/^lora-1: stuck — journal: database query failed \(57014\) since \d\d:\d\dZ; lora-1: /);
+
+    // `sync` silent: alert 5's; the evaluator latch is left as it is.
+    await testDb.pool.query("update runtime_instances set last_seen_at = now() - interval '10 minutes' where instance_id = $1", [instance]);
+    const seen = failing!.lastSeenAt;
+    expect(await runOpsWatchdogCheck(app(), { startedAtMs: pastGrace() })).toMatchObject({ syncEngineSilent: true });
+    expect(await incident("process", null)).toMatchObject({ status: "open" });
+    expect(await evaluatorLatch()).toMatchObject({ status: "open", errorCode: "failing", lastSeenAt: seen });
+  });
+
+  it("a resolve that keeps failing wakes the api watchdog, and the condition's return pages again once the latch has closed", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await livePage("lora-2");
+    await syncBeats();
+    await pass();
+    const evaluatedAt = (await evaluation(page.pageId, "stuck"))!.evaluatedAt;
+    expect(evaluatedAt).not.toBeNull();
+
+    // A stuck latch, paged, whose condition has not held for 20 minutes …
+    await openPageLatch(page, "stuck", 20 * MINUTE);
+    const stuckKey = syncEngineIncidentKey({ subKey: "stuck", pageId: page.pageId });
+    const sweepApp = { db: db(), logger: quietLogger } as never;
+    await runNotificationPagingSweep(sweepApp, { now: new Date() });
+    // … and a resolve that cannot land (its recovery tombstone refused).
+    await testDb.pool.query(`create function refuse_stuck_recovery() returns trigger language plpgsql as $$
+      begin if new.incident_key like '%:stuck' then raise exception 'injected deadlock' using errcode = '40P01'; end if; return new; end $$;
+      create trigger refuse_stuck_recovery before insert or update on notification_incident_recoveries
+        for each row execute function refuse_stuck_recovery()`);
+    try {
+      const failing = await pass();
+      expect(failing.resolved).toEqual([]);
+      expect(failing.unevaluated).toEqual([{ pageId: page.pageId, rule: "stuck", failure: "resolve: database query failed (40P01)" }]);
+      expect(await incident("stuck", page.pageId)).toMatchObject({ status: "open" });
+      expect(await evaluation(page.pageId, "stuck")).toMatchObject({ failure: "resolve: database query failed (40P01)", evaluatedAt });
+
+      // Five minutes on: the watchdog opens its latch.
+      await ageEvaluations(page.pageId, 6 * MINUTE);
+      await runOpsWatchdogCheck(app(), { startedAtMs: pastGrace() });
+      const latch = await evaluatorLatch();
+      expect(latch).toMatchObject({ status: "open", errorCode: "failing" });
+      expect(latch!.errorSummary).toContain("lora-2: stuck — resolve: database query failed (40P01)");
+    } finally {
+      await testDb.pool.query("drop trigger refuse_stuck_recovery on notification_incident_recoveries; drop function refuse_stuck_recovery()");
+    }
+
+    // The resolve lands: the pass closes `stuck`, the watchdog its own latch.
+    expect((await pass()).resolved).toEqual([{ pageId: page.pageId, subKey: "stuck" }]);
+    expect(await evaluation(page.pageId, "stuck")).toMatchObject({ failure: null, failedSince: null });
+    await runOpsWatchdogCheck(app(), { startedAtMs: pastGrace() });
+    expect(await evaluatorLatch()).toMatchObject({ status: "resolved" });
+
+    // The sweep closes the page after the recovery hold; the condition's
+    // return then pages again.
+    const resolvedAt = (await incident("stuck", page.pageId))!.resolvedAt!;
+    await runNotificationPagingSweep(sweepApp, { now: new Date(resolvedAt.getTime() + 6 * MINUTE) });
+    await notifySyncEngineIncident({ db: db(), logger }, {
+      subKey: "stuck", pageId: page.pageId, pageLabel: page.label, detail: "request_stalled", errorSummary: "request_stalled", occurredAt: new Date(),
+    });
+    await runNotificationPagingSweep(sweepApp, { now: new Date(resolvedAt.getTime() + 7 * MINUTE) });
+    const outbox = await query<{ transition: string }>(
+      `select o.transition from notification_delivery_outbox o
+         join notification_incidents n on n.id = o.notification_incident_id
+        where n.incident_key = $1 order by o.id`,
+      [stuckKey],
+    );
+    expect(outbox.map((row) => row.transition)).toEqual(["opened", "resolved", "reopened"]);
   });
 });
 

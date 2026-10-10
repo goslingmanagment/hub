@@ -1066,6 +1066,23 @@ has no condition. Alert 5 — a page is in the engine and no `sync` process beat
 process cannot report its own death; a stalled process opens it itself (`stalled`) right before it exits for a
 restart. `pnpm cli sync alerts status` shows what holds per page.
 
+**One failure never silences the evaluator** (bug hunt Д11). Each page alert is a rule of its own
+(`SYNC_PAGE_ALERT_RULES`) that declares the parts of the facts it reads — `journal`, `live`, `chats` and the pass's one
+`money` window. A part is read in its own boundary (`readPageAlertFactsSettled`): one that fails stands in with its
+neutral value, which holds no reason. Unknown is no health: a condition that holds on the parts that were read opens
+(its summary lists the parts it could not see, `blind`), but a rule that could not read a part it declares, whose
+evaluation threw, or whose open or resolve did not land (`resolveSyncEngineIncident` tells `failed` from `unchanged`)
+never resolves its latch. The route incidents and the pace backstop have boundaries of their own; the backstop's cursor
+moves only once every open landed, so the next pass reads the same sends again. A page's boundary catches the
+unforeseen; the next pages go on. Each pass then records, per `handover`/`live` page and rule of
+`SYNC_ALERT_EVALUATION_RULES` (the four alerts, `route_limited`, `pace_audit`), whether it judged the rule in full
+(`sync_alert_evaluations`: `evaluated_at` on the database clock, else the failure and since when — a part or step, a
+SQLSTATE, never SQL); a pass that cannot read its frame marks the rows failing. A failure is logged when it starts or
+changes and its end once, never every pass. The api watchdog's leg beside alert 5 reads the rows while `sync` beats:
+a pair not judged for 5 min — from its last judgement or the page's mode change, whichever is later; a restart resets
+nothing — opens the global latch `evaluator` (`failing`, `unrecorded` or `late`), which resolves once every pair is
+judged again. The `sync` process never writes that latch.
+
 The golden signals (`engine/metrics.ts`) come from the database: `computeSyncMetrics` per page (smallest send gap
 vs the setting, violations, sends by class and resource, holds, breakers, quarantine) and the global families
 (confirmation lag, REST mismatches by field, the DM apply's `not_found` verdicts, money lag from a socket frame to the

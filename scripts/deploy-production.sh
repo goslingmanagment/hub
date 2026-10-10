@@ -835,6 +835,19 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # built CONCURRENTLY outside a transaction (after dropping an INVALID
   # leftover). Index-only; the previous image never reads it.
   "0261_sync_raw_payloads_link_fans_idx.sql"
+  # The alert evaluator's proof of work (bug hunt Д11): one new table
+  # sync_alert_evaluations (IF NOT EXISTS; RESTRICT FK to pages, like the
+  # other engine tables), its comments and the read-role grant, no data.
+  # Purely additive; the previous image never names the table. After a
+  # rollback its rows stay unread and its sync writes none, and its api has no
+  # watchdog leg that reads them; a forward deploy rewrites them on its first
+  # pass. An `evaluator` latch open at the rollback is closed by the owner
+  # (docs/runbooks/sync.md, "Watchdog restarts, shutdown and deploys") or by
+  # the next forward deploy. Its page erasure does not know the table, whose
+  # RESTRICT FK to pages never fires (erasure keeps the pages row), so a page
+  # erased by the previous image keeps its rows — page × rule × instants, no
+  # fan data — until the next one.
+  "0262_sync_alert_evaluations.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"
