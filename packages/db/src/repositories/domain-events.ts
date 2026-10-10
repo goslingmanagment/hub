@@ -1106,6 +1106,15 @@ export interface ReplayObservationRow {
 }
 
 /**
+ * How many pending rows listObservationsForReplay collects through the
+ * health-floor index before it pages by the id-ordered walk instead. A live
+ * family keeps a few dozen waiting (prod 2026-10-10: 0-34 per family); a parser
+ * bump or an outage can leave many more, which the walk finds quickly because
+ * they are dense. This many rows is also what a dense head pays extra.
+ */
+export const REPLAY_PENDING_HEAD_LIMIT = 1_000;
+
+/**
  * Observations awaiting (re-)canonicalization: parse_version below the
  * caller's current version, optionally narrowed by kind/account/received
  * window. Keyset-paged by id — the minutely sweep and the replay CLI are the
@@ -1133,6 +1142,9 @@ export async function listObservationsForReplay(
     to?: Date | null;
     afterId?: number | null;
     limit?: number;
+    /** Tests only: how many pending rows the head lookup collects before it
+     *  leaves the page to the id-ordered walk (REPLAY_PENDING_HEAD_LIMIT). */
+    pendingHeadLimit?: number;
   },
 ): Promise<ReplayObservationRow[]> {
   const limit = input.limit ?? 200;
@@ -1165,21 +1177,35 @@ export async function listObservationsForReplay(
     conditions.push(sql`o.id > ${input.afterId}`);
   }
 
-  // A caught-up family can make LIMIT choose an id-ordered walk of every
-  // monthly heap. Prove whether any work exists through 0144's covering
+  // The minutely sweep starts every pass from the head (afterId null), and an
+  // id-ordered page walks every partition's primary key until it has `limit`
+  // rows. While work is dense that is quick; when only a few rows wait (the
+  // steady state of a live family) it reads the whole journal to find them: on
+  // prod 3.56 M rows and 1.16 M buffers for one row, ~17 times a minute, 61% of
+  // the database's time (2026-10-10). So the head is found through 0144's
   // (parse_version, source, kind, received_at) index first, in this same
-  // statement snapshot. Enumerate actual versions: negative/sparse versions
-  // remain eligible, and a large caller floor cannot create a huge series.
-  // Deep/exact/account scopes need columns outside that index; time scopes
-  // can span kind prefixes. Keep their original lookup. Populated heads retain
-  // the original id-ordered page.
+  // statement snapshot: every pending row of each (version, kind) prefix, up to
+  // REPLAY_PENDING_HEAD_LIMIT in all. Within that limit the page is those rows'
+  // first `limit` by id, the same page the walk returns; nothing pending is an
+  // empty page; past it the original id-ordered walk runs, as work is dense.
+  // Versions are enumerated as they exist: negative/sparse versions remain
+  // eligible, and a large caller floor cannot create a huge series.
+  // Deep/exact/account scopes need columns outside that index, and time scopes
+  // can span kind prefixes: they keep the plain lookup.
   const probePendingHead = input.source !== undefined && input.afterId == null
     && input.observationId === undefined && input.accountId == null && input.accountIds === undefined
     && input.from == null && input.to == null;
   const versionBounds = sql`o.parse_version < ${input.belowParseVersion}
     ${input.atLeastParseVersion === undefined ? sql`` : sql`and o.parse_version >= ${input.atLeastParseVersion}`}`;
   const probeKinds = [...new Set(input.kinds ?? [])];
-  const pendingHead = probePendingHead ? sql`
+  const pendingHeadLimit = input.pendingHeadLimit ?? REPLAY_PENDING_HEAD_LIMIT;
+  const columns = sql`o.id::text as id, o.source, o.producer, o.platform, o.account_id,
+           o.native_account_ref, o.kind, o.payload, o.observed_at,
+           o.received_at, o.parse_version,
+           to_char(o.payload_bucket_month, 'YYYY-MM-DD') as payload_bucket_month,
+           o.payload_object_id::text as payload_object_id`;
+  const where = sql.join(conditions, sql` and `);
+  const result = await db.execute<Record<string, unknown>>(probePendingHead ? sql`
     with recursive replay_versions(parse_version) as (
       (
         select o.parse_version from observations o
@@ -1196,30 +1222,48 @@ export async function listObservationsForReplay(
         order by o.parse_version
         limit 1
       ) next_version
-    ), replay_pending as materialized (
-      select 1
+    ), pending_keys as materialized (
+      select pending.id, pending.received_at
       from replay_versions pending_version
       ${probeKinds.length === 0 ? sql`` : sql`cross join unnest(array[${sql.join(probeKinds.map(kind => sql`${kind}`), sql`, `)}]::text[]) as replay_kinds(kind)`}
       cross join lateral (
-        select 1 from observations o
+        select o.id, o.received_at from observations o
         where o.parse_version = pending_version.parse_version and o.source = ${input.source}
           ${probeKinds.length === 0 ? sql`` : sql`and o.kind = replay_kinds.kind`}
+        -- The index's own order: under a LIMIT, a plan that could stop early in
+        -- a sequential scan would read a whole partition when nothing waits.
         order by ${probeKinds.length === 0 ? sql`o.kind, ` : sql``}o.received_at
-        limit 1
-      ) pending_prefix
-      limit 1
+        limit ${pendingHeadLimit + 1}
+      ) pending
+      limit ${pendingHeadLimit + 1}
+    ), pending_head as materialized (
+      select k.id, k.received_at from pending_keys k
+      where (select count(*) from pending_keys) <= ${pendingHeadLimit}
+      order by k.id
+      limit ${limit}
     )
-  ` : sql``;
-  const result = await db.execute<Record<string, unknown>>(sql`
-    ${pendingHead}
-    select o.id::text as id, o.source, o.producer, o.platform, o.account_id,
-           o.native_account_ref, o.kind, o.payload, o.observed_at,
-           o.received_at, o.parse_version,
-           to_char(o.payload_bucket_month, 'YYYY-MM-DD') as payload_bucket_month,
-           o.payload_object_id::text as payload_object_id
+    select * from (
+      (
+        select ${columns}, o.id as replay_order
+        from pending_head h
+        join observations o on o.id = h.id and o.received_at = h.received_at
+        where ${where}
+      )
+      union all
+      (
+        select ${columns}, o.id as replay_order
+        from observations o
+        where ${where} and (select count(*) from pending_keys) > ${pendingHeadLimit}
+        order by o.id asc
+        limit ${limit}
+      )
+    ) page
+    order by page.replay_order asc
+    limit ${limit}
+  ` : sql`
+    select ${columns}
     from observations o
-    where ${sql.join(conditions, sql` and `)}
-      ${probePendingHead ? sql`and exists (select 1 from replay_pending)` : sql``}
+    where ${where}
     order by o.id asc
     limit ${limit}
   `);
