@@ -858,6 +858,17 @@ Check that every page has a fresh `heartbeat_at` and the new container's host. R
 the stderr lines (the `phase` says where it hung) and fix forward. A block of the event loop itself is not covered
 by the watchdog: the heartbeat stops with it, and alert 5 `heartbeat_silent` opens.
 
+**Logs of earlier containers.** A restart keeps the container's log; a deploy recreates `sync` and deletes it, but
+first archives it on the host (`scripts/archive-container-logs.sh`). The file covering an instant T is the one
+whose `created` ≤ T ≤ `archived`. A snapshot (`"snapshot":true`) lacks the last ≤ 45 s before the stop. Every line
+starts with Docker's timestamp: cut it (`cut -d' ' -f2-`) before `jq`.
+
+```sh
+ls -1 /opt/agency-hub/container-logs/sync | tail   # created_archived_id_rev; the last is the newest
+zcat /opt/agency-hub/container-logs/sync/F.log.gz | head -1   # header: exit_code, oom_killed, restart_count, snapshot
+zgrep -h '"level":50\|evaluation pass failed\|stalled; exiting\|shutdown cap' /opt/agency-hub/container-logs/sync/*.log.gz
+```
+
 **Alert 5 `heartbeat_silent`**: no `sync` heartbeat for 2 minutes while a page is in the engine. Is the container
 up (`docker compose ps sync`), and what do its logs end with? Nothing else sends for a Fansly page, so a stopped
 `sync` is a stopped Fansly sync.

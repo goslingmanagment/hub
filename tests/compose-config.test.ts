@@ -315,6 +315,53 @@ describe("compose config", () => {
     expect(check).toContain('compose "${ROLLBACK_RECREATE[@]}" sync');
   });
 
+  // М1: a recreate deletes a container together with its log (the `local`
+  // driver keeps it in the container's directory). Every deploy command that
+  // replaces or removes containers must be preceded, within a few statements,
+  // by the archive of their logs (behavior: tests/deploy-production-behavior
+  // and tests/archive-container-logs). A new such command without one fails
+  // here.
+  it("every deploy command that replaces containers archives their logs first (М1)", async () => {
+    const lines = (await readComposeFile("scripts/deploy-production.sh")).split("\n");
+    const significant = (line: string) => line.trim() !== "" && !line.trimStart().startsWith("#");
+    const replacing = /(?:\$\{\w*compose\w*\}|docker compose)\s+(?:up\b[^;"]*--force-recreate|rm\b|down\b)/i;
+    const archive = /^\s*(?:archive_remote_container_logs\s+\S|archive_before_stack_recreate\s*$)/;
+
+    const commands = lines.flatMap((line, index) => (significant(line) && replacing.test(line) ? [index] : []));
+    expect(commands.map((index) => lines[index]!.match(/up -d [^"]*/)?.[0])).toEqual(expect.arrayContaining([
+      "up -d --remove-orphans --force-recreate --no-build${services:+ ${services}}",
+      "up -d --no-deps --force-recreate --no-build sync",
+      "up -d --remove-orphans --force-recreate --no-build ${RECREATE_SERVICES}",
+    ]));
+    for (const index of commands) {
+      const before = lines.slice(0, index).filter(significant).slice(-15);
+      expect(before.some((line) => archive.test(line)), `no log archive before line ${index + 1}: ${lines[index]!.trim()}`).toBe(true);
+    }
+  });
+
+  it("deploy-production.sh archives before marking the stack recreated, and ships the helper in the release kit", async () => {
+    const text = await readComposeFile("scripts/deploy-production.sh");
+    const main = text.slice(text.indexOf('ROLLBACK_RELEASE_ARCHIVE="${TEMP_DIR}/rollback-release-files.tar"'));
+    const promote = main.indexOf('docker tag $(printf \'%q\' "$IMAGE_CANDIDATE_TAG") $(printf \'%q\' "$IMAGE_TAG")');
+    const archive = main.indexOf("\narchive_before_stack_recreate\n");
+    const marked = main.indexOf("\nSTACK_RECREATED=1\n");
+    const up = main.indexOf("up -d --remove-orphans --force-recreate --no-build ${RECREATE_SERVICES}");
+    expect(promote).toBeGreaterThan(-1);
+    expect(archive).toBeGreaterThan(promote);
+    expect(marked).toBeGreaterThan(archive);
+    expect(up).toBeGreaterThan(marked);
+    expect(main.split("\narchive_before_stack_recreate\n")).toHaveLength(2);
+
+    // The sync recreate archives and never stops the running engine first.
+    const recreate = getShellFunction(text, "recreate_sync_service") ?? "";
+    expect(recreate).toContain("archive_remote_container_logs sync sync\n");
+    expect(recreate).not.toMatch(/ stop /);
+
+    const releaseFilesStart = text.indexOf("REMOTE_RELEASE_FILES=()");
+    const releaseFiles = text.slice(releaseFilesStart, text.indexOf("\ndo\n", releaseFilesStart) + 1);
+    expect(releaseFiles).toContain("  scripts/archive-container-logs.sh \\\n");
+  });
+
   // Plan §2.5: on SIGTERM the api admits no new Fansly request and lets the
   // one in flight (≤ 30 s) finish and write its completion; Docker's default
   // 10 s would cut it and leave its page closed.
