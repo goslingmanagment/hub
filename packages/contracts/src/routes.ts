@@ -45,6 +45,7 @@ import {
   fanLookupParamsSchema,
   fanSearchMatchKindEnum,
   intId,
+  isoDateTime,
   isoTimestamp,
   mills,
   pageParamsSchema,
@@ -496,7 +497,7 @@ export const pageConversationProfileParamsSchema = pageParamsSchema.extend({
 
 // Request instants must include a timezone; the legacy isoTimestamp response
 // primitive is intentionally permissive and must not validate query bounds.
-export const revenueInstantSchema = z.iso.datetime({ offset: true })
+export const revenueInstantSchema = isoDateTime({ offset: true })
   .refine((value) => Number.isFinite(Date.parse(value)), "Invalid timestamp");
 
 const standardRevenueQuerySchema = z.object({

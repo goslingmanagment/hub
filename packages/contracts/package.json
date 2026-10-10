@@ -7,6 +7,6 @@
   },
   "dependencies": {
     "@agency_hub_core/shared": "workspace:*",
-    "zod": "^4.1.5"
+    "zod": "^4.6.5"
   }
 }

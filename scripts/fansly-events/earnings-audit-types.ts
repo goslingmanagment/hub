@@ -1,9 +1,11 @@
 import { z } from "zod";
 
+import { isoDateTime } from "../../packages/contracts/src/primitives.ts";
+
 const integer = z.string().regex(/^-?\d{1,20}$/);
 const id = z.string().regex(/^\d{1,16}$/)
   .refine(value => BigInt(value) <= BigInt(Number.MAX_SAFE_INTEGER));
-const timestamp = z.iso.datetime({ offset: true });
+const timestamp = isoDateTime({ offset: true });
 const fan = z.string().min(1).max(256);
 
 export const earningsAuditScopeSchema = z.object({

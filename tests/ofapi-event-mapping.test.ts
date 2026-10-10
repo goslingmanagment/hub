@@ -354,4 +354,14 @@ describe("mapOfapiEventToSyncEvent", () => {
       payload: "not-an-object",
     })).toBeNull();
   });
+
+  // zod 4.4 began failing an absent key read by a bare z.unknown(); the
+  // envelope keeps zod 4.3's acceptance, so such a body is mapped, not
+  // quarantined as an invalid envelope.
+  it("accepts an envelope that omits payload, as before the zod 4.6 upgrade", () => {
+    const parsed = ofapiWebhookEnvelopeSchema.safeParse({ event: "accounts.connected", account_id: "acct_test" });
+    expect(parsed.success).toBe(true);
+    expect(parsed.data?.payload).toBeUndefined();
+    expect(ofapiWebhookEnvelopeSchema.safeParse({ account_id: "acct_test" }).success).toBe(false);
+  });
 });
