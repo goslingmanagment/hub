@@ -863,6 +863,11 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # reads `unknown_repeated` as any quarantined row (alert 2, requeue), and
   # its recovery repeats an `unknown` read without the limiter, as before.
   "0264_sync_work_failing_since.sql"
+  # BRIN autosummarize: a storage option on every BRIN index (one bounded-wait
+  # ALTER INDEX each) and a one-time brin_summarize_new_values; no data, no
+  # column, no query changes. The previous image reads the same indexes with
+  # fewer unsummarized ranges, so it runs unchanged after a rollback.
+  "0265_brin_autosummarize.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"
