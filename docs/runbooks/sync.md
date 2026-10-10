@@ -370,11 +370,11 @@ their clean window (`routes`) and the open latches (`openLatches`), and the glob
 | 3 `freshness` | `message_unconfirmed` | a fan message the socket showed, not confirmed by REST for 15 minutes and not deferred ([The live overlay](#the-socket-and-its-repair)), in a chat Hub has a thread for that has no unavailability episode | `sync why --resource dm-messages.head --subject <group id>` |
 | | `chats_refused` | 5 or more chats of the page opened an unavailability episode within 10 minutes: Fansly refusing the page's chats, not one chat refusing the page ([A chat Fansly does not serve](#a-chat-fansly-does-not-serve)) | `sync chats unavailable --page <label>` |
 | | `money_not_in_ledger` | a money frame not in the ledger for 5 minutes | `sync why --resource transactions.head` |
-| | `urgent_waiting` | urgent work waiting 2 minutes past its due time, or past the end of its own subject breaker when that is later, with no pause, hold, file breaker or route hold to explain it | `sync work list`, `sync why` |
+| | `urgent_waiting` | urgent work waiting 2 minutes past its due time, or past the end of its own subject breaker when that is later, with no pause, hold, file breaker on its first arm (30 min) or route hold to explain it | `sync work list`, `sync why` |
 | 4 `stuck` | `request_stalled` | a history request with runnable work and no read for 30 minutes | [History requests](#history-requests) |
 | | `step_failing` | a work's steps have ended without an outcome for 5 minutes (`sync_work.failing_since`: a plan that throws, a local write retried, an in-memory answer not applied, an attempt recovered `unknown`), with no pause, page hold, requests pause (a `requests`-class key), key pause, file breaker or route hold to explain it; the summary names the keys and the error classes | `sync work list --page <label>`, `sync why` on the key, the `sync` log (`a resource's plan failed`, `a local step failed`, `apply failed`) |
 | | `apply_pending` | an answer captured (or deferred) and not applied 5 minutes after its admission | `sync why` on the key, the `sync` log (`apply failed`) |
-| | `planned_stale` | a poll with no applied answer within its SLO (else 3 periods) | `sync why` on the key |
+| | `planned_stale` | a poll with no applied answer within its SLO (else 3 periods), or a planned goal or trigger with an SLO (`dm-messages.catchup`, `purchases.targets`, `followers.reconcile`, `fan-earnings.roster`) whose demand has gone unserved past it while the key applied no answer for as long — not under its own breaker or the vendor's block, not of a chat with an unavailability episode; a history load that moves pages nobody; the standing walks are not judged here (their failing steps page as `step_failing`) | `sync why` on the key; `sync work list --resource <key>` |
 | | `transactions_ledger_incomplete` | the rescan's last certified round proved the ledger short of Fansly's lifetime total, no backfill is running or one has applied no answer for 30 minutes, and none completed (`backfill_complete`) after that round began | the owner's backfill: `sync work enqueue --resource transactions.backfill` |
 | 5 `process` (global) | `heartbeat_silent`, `stalled` | no `sync` heartbeat for 2 minutes while a page is in the engine; or the stall watchdog ended the process | [Watchdog restarts](#watchdog-restarts-shutdown-and-deploys) |
 | `evaluator` (global) | `failing`, `unrecorded`, `late` | while `sync` beats, a rule of the alert evaluator has not judged a `handover`/`live` page for 5 minutes, counted from its last full judgement or the page's mode change (a restart does not reset it): `failing` — a fact it reads, the rule itself, or its open or resolve keeps failing (the summary names the pages, rules and the error, e.g. `journal: database query failed (57014)`); `unrecorded` — no record for the pair (a `sync` that predates the table, or one that never reached the page); `late` — no failure, but judged less often than every 5 minutes (slow passes). Meanwhile the alerts that rule derives can neither page nor resolve | the `sync` log (`Fansly sync alerts: rules not evaluated`), then the evaluation check under [Read-only data checks](#read-only-data-checks); a code fault is fixed forward or rolled back |
@@ -385,10 +385,13 @@ page hold explain waiting work: no `urgent_waiting` and no `planned_stale` for i
 pause of the page or of its requests. `message_unconfirmed`, `chats_refused` and `money_not_in_ledger` open
 regardless. A lone chat Fansly does not serve never pages: alert 3 leaves its messages out, and a fan message of a
 chat Hub has no thread for is counted in `sync alerts status` (`chats.unconfirmedWithoutThread`), not paged — a
-broken chat find pages through its quarantine (alert 2) or its wait (`urgent_waiting`). A work row
-under its own subject breaker — `subject_breaker` or `blocked_by_vendor` in `sync why` — is no `urgent_waiting`
-until 2 minutes after the breaker ends, and its `since` is that end; `sync check live-hour` counts `urgentWaiting` by
-the same rule. A new signal never makes such a row due before its breaker ends.
+broken chat find pages through its quarantine (alert 2), its failing steps (`step_failing`, alert 4) or its wait
+(`urgent_waiting`) — its file's breaker explains that wait on its first arm only; a find that ends without the chat
+pages nobody, the list's next head read (≤ 30 min) finds it. A file breaker explains the waits of its keys on its
+first arm only; one that came back before any success (2 h, 6 h) no longer does: they page as `urgent_waiting` and
+`planned_stale`. A work row under its own subject breaker — `subject_breaker` or `blocked_by_vendor` in `sync why` —
+is no `urgent_waiting` until 2 minutes after the breaker ends, and its `since` is that end; `sync check live-hour`
+counts `urgentWaiting` by the same rule. A new signal never makes such a row due before its breaker ends.
 
 **A pace violation must never happen**: it means two requests of a page left closer than the owner's rule. Its
 latch does not resolve by itself. Read its summary in `sync alerts status`, find the two sends in the journal (the

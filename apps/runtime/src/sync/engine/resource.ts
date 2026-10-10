@@ -55,8 +55,12 @@ export interface CadenceSpec { everyMs: number; fullEveryMs?: number }
 export interface SloSpec {
   /** When the result of urgent work is due (its deadline). */
   resultMs?: number;
-  /** A planned resource not refreshed for this long is stale (alert 4);
-   *  default 3 × period. */
+  /** A planned resource not refreshed for this long is stale (alert 4's
+   *  `planned_stale`): a poll by its newest applied answer (default 3 ×
+   *  period); a planned goal or trigger without `standing` by its oldest
+   *  unserved demand, while the key applied no answer for as long. A standing
+   *  walk declares it, but nothing judges it: what it has to read is its
+   *  queue's to say (bug hunt Д5). */
   staleAfterMs?: number;
 }
 

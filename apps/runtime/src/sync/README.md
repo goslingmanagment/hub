@@ -508,7 +508,9 @@ live-hour`:
   (`dmLiveAwaitingConfirmSql`), of a chat the page has a thread for (`dmLiveChatKnownSql`), with no open episode,
   refusing or established (`dmLiveChatUnavailableSql`). A message of a chat with no thread is counted apart
   (`SyncLivePathFacts.unconfirmedWithoutThread`, shown by `sync alerts status`), never paged: a broken find pages
-  through its quarantine or its wait. `chats_refused` (alert 3, `readSyncChatAlertFacts`) opens when 5 or more chats
+  through its quarantine (alert 2), its failing steps (`step_failing`, alert 4) or its wait (`urgent_waiting`) — its
+  file's breaker explains that wait on its first arm only; a find that ends without the chat pages nobody, the list's
+  next head read (≤ 30 min) finds it. `chats_refused` (alert 3, `readSyncChatAlertFacts`) opens when 5 or more chats
   of the page opened an episode within 10 minutes — the resource hold's threshold (`RESOURCE_BREAKER_SUBJECTS`,
   `RESOURCE_BREAKER_WINDOW_MS`): `dm-messages.head` is out of the resource hold, so a lone chat never pages and Fansly
   refusing the page's chats still does. `sync check live-hour` takes `dmLiveUnconfirmedSql` for
@@ -1066,10 +1068,16 @@ older than 5 min, unless the owner's pause, a page hold, the owner's requests pa
 or switch-off of the key, its file's breaker or a hold on all its routes explains it (read one row per key, so a
 paused key never hides another) — and an answer whose apply hangs: `apply_pending`, a captured or deferred attempt
 admitted more than 5 min ago (live-hour's `applyPending`). Its `planned_stale` judges a poll by its newest applied
-answer, not by its admissions. The summary of a latch the evaluator opens names the keys its reasons name
-(`resources`), so Telegram names them too. A pace violation has its own
-latch that only the owner closes (`pnpm cli sync alerts ack --page <label>`); the evaluator also re-reads the
-journal's new live sends, so a violation the capture path could not report still opens it. That re-read is the
+answer, not by its admissions, and a planned goal or trigger with an SLO and no standing row (`dm-messages.catchup`,
+`purchases.targets`, `followers.reconcile`, `fan-earnings.roster`: `plannedDemandSlos`) by its demand — unserved past
+the SLO since its first demand (or its own breaker's end) while the key applied no answer for as long (read one row
+per key, `readSyncPlannedDemandAlertFacts`), unless the vendor blocks the row or its chat has an unavailability
+episode; the standing walks declare an SLO nothing judges here (bug hunt Д5). A file's breaker explains a wait — of
+`urgent_waiting`, `planned_stale`, `step_failing` and the ledger's shortfall — on its first arm (30 min) only: one
+back before any success of the file (2 h, 6 h) no longer does (`SYNC_RESOURCE_HOLD_EXPLAINED_STEPS`). The summary
+of a latch the evaluator opens names the keys its reasons name (`resources`), so Telegram names them too. A pace
+violation has its own latch that only the owner closes (`pnpm cli sync alerts ack --page <label>`); the evaluator
+also re-reads the journal's new live sends, so a violation the capture path could not report still opens it. That re-read is the
 **send audit** (`engine/send-audit.ts`), the one checker `sync check live-hour` runs too. It judges
 the recorded sends by what each admission recorded it applied, never by a copy of the policy:
 - I1: every pair of adjacent sends of the page (both journals) ≥ the later one's own pause `S × (1 + u)`
