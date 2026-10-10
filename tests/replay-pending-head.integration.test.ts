@@ -161,8 +161,21 @@ describe("listObservationsForReplay at the head of a pass", () => {
       // under the walk's arm (the second member) must stay unexecuted.
       const top = (plan.rows[0]!["QUERY PLAN"] as Array<{ Plan: Record<string, unknown> }>)[0]!.Plan;
       const children = (node: Record<string, unknown>) => (node.Plans as Array<Record<string, unknown>> | undefined) ?? [];
-      const union = children(top).find((child) => child["Parent Relationship"] === "Outer")!;
-      const walkArm = children(union).filter((child) => child["Parent Relationship"] === "Member")[1]!;
+      const members = (node: Record<string, unknown>) => children(node).filter((child) => child["Parent Relationship"] === "Member");
+      // The union is a Merge Append or an Append (under a Sort): the first
+      // node outside the CTEs with member arms.
+      const findUnion = (node: Record<string, unknown>): Record<string, unknown> | undefined => {
+        if (members(node).length >= 2) return node;
+        for (const child of children(node)) {
+          if (child["Parent Relationship"] === "InitPlan") continue;
+          const found = findUnion(child);
+          if (found) return found;
+        }
+        return undefined;
+      };
+      const union = findUnion(top);
+      expect(union, "the page's union of the head and the walk").toBeDefined();
+      const walkArm = members(union!)[1]!;
       const loops: number[] = [];
       const visit = (node: Record<string, unknown>) => {
         if (String(node["Relation Name"] ?? "").startsWith("observations")) loops.push(Number(node["Actual Loops"]));
