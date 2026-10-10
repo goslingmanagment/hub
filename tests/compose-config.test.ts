@@ -205,6 +205,16 @@ describe("compose config", () => {
   // or one shared with the host or another container breaks that proof — and a
   // service in another's network namespace would see that container's hostname
   // while it runs on, in a pid namespace of its own.
+  // Every Node role caps glibc's malloc arenas: a thread of its own per arena
+  // kept ~160 MB of freed memory across the roles on prod (2026-10-10).
+  it("docker-compose.production.yml caps glibc malloc arenas for every Node role", async () => {
+    const text = await readComposeFile("docker-compose.production.yml");
+    for (const service of ["api", "scheduler", "worker", "sync"]) {
+      expect(getServiceBlock(text, service), service).toContain('MALLOC_ARENA_MAX: "2"');
+    }
+    expect(getServiceBlock(text, "postgres")).not.toContain("MALLOC_ARENA_MAX");
+  });
+
   it("docker-compose.production.yml lets every container keep its id as its hostname", async () => {
     const text = await readComposeFile("docker-compose.production.yml");
     for (const service of ["api", "scheduler", "worker", "sync"]) {
