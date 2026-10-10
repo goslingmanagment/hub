@@ -673,6 +673,9 @@ describe("sync_work demand", () => {
     const breakerUntil = new Date(Date.now() + 3_600_000);
     const failed = { failureCount: 2, breakerUntil, blockedByVendorAt: null };
     const rowOf = async (resource: string) => (await getWorkForStatus(db(), { pageId, resource, states: ["open"] }))[0]!;
+    // "Now" on the database's clock, the one the pick reads: the host's clock
+    // may run ahead of the test container's.
+    const dbNow = async () => (await testDb!.pool.query<{ now: Date }>("select clock_timestamp() as now")).rows[0]!.now;
 
     // An `account.identity` with a pasted candidate failed: its breaker an hour ahead.
     const identity = await upsertDemand(db(), check(SYNC_CREDENTIALS_CHECK_KEYS.identity, { secretParams: "candidate-1" }));
@@ -682,7 +685,7 @@ describe("sync_work demand", () => {
       nextDueAt: breakerUntil, breaker: failed, lastErrorClass: "subject_failure",
     });
     // A new demand keeps its due time: now, not the breaker's end.
-    const now = new Date();
+    const now = await dbNow();
     await upsertDemand(db(), check(SYNC_CREDENTIALS_CHECK_KEYS.identity, { dueAt: now }));
     let row = await rowOf(SYNC_CREDENTIALS_CHECK_KEYS.identity);
     expect(row.breakerUntil!.getTime()).toBe(breakerUntil.getTime());
@@ -703,7 +706,7 @@ describe("sync_work demand", () => {
     // An `account.verify` that fails while a newer demand came: the newer demand's due time stands.
     const verify = await upsertDemand(db(), check(SYNC_CREDENTIALS_CHECK_KEYS.verify, { dueAt: new Date(Date.now() + 60_000) }));
     await markWorkRunning(db(), { workId: verify.id, generation });
-    const asked = new Date();
+    const asked = await dbNow();
     await upsertDemand(db(), check(SYNC_CREDENTIALS_CHECK_KEYS.verify, { dueAt: asked }));
     await settleWork(db(), {
       workId: verify.id, generation, servedRevision: 1, satisfiesRevision: false,

@@ -548,11 +548,14 @@ describe("dm-messages.head", () => {
     // 27 s does.
     for (const k of [7, 9, 11]) await liveOverlay(pageId, 4, k);
     const spec = fanslyResourceSpec("dm-messages.head")!;
+    // A signal's instant on the database's clock, the one `times` reads: the
+    // host's clock may run ahead of the test container's.
+    const dbNow = async () => (await testDb!.pool.query<{ now: Date }>("select clock_timestamp() as now")).rows[0]!.now;
     const signal = async (k: number, coalesce: "normal" | "fast") => upsertDemand(db(), demandToUpsert({
       resource: spec.key, subject: groupOf(4), coalesce,
       demand: { messageIds: [msg(k)], reason: "ws:message_created" },
       ...(coalesce === "fast" ? { deadlineMs: 10_000 } : {}),
-    }, spec, { pageId, now: new Date() })!);
+    }, spec, { pageId, now: await dbNow() })!);
     // Time passes: the row's times move back by `ms`.
     const pass = async (id: number, ms: number) => testDb!.pool.query(
       `update sync_work set due_at = due_at - make_interval(secs => $2::float8 / 1000),
