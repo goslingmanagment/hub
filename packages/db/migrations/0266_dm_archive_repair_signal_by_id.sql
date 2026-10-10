@@ -1,5 +1,5 @@
 -- agency-hub:no-transaction
--- 0265: the corrections reconciler's work list reads its rows in id order
+-- 0266: the corrections reconciler's work list reads its rows in id order
 -- from an index of its own, instead of walking the whole archive.
 --
 -- listDmRepairSignalRows (dm-message-candidate.ts) pages

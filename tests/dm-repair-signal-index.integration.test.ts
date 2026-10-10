@@ -6,7 +6,7 @@ import { createModel, createOnlyFansPage, listDmRepairSignalRows } from "@agency
 
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 
-// 0265: the corrections reconciler's work list (listDmRepairSignalRows) reads
+// 0266: the corrections reconciler's work list (listDmRepairSignalRows) reads
 // pending rows in id order from a partial index on (id) whose predicate is the
 // list's own. 0076's (platform_account_id, id) index could not give that order,
 // and the planner priced `is distinct from` at ~99.5% of the rows, so it walked
@@ -73,7 +73,7 @@ async function planOf(input: Parameters<typeof listDmRepairSignalRows>[1]) {
   return plan.rows.map((row) => row["QUERY PLAN"]).join("\n");
 }
 
-describe("the corrections work list's index (0265)", () => {
+describe("the corrections work list's index (0266)", () => {
   it("is the only repair-signal index, with the work list's predicate", async () => {
     const result = await harness.pool.query<{ indexname: string; indexdef: string }>(`
       select indexname, indexdef from pg_indexes
@@ -84,7 +84,7 @@ describe("the corrections work list's index (0265)", () => {
       indexdef: "CREATE INDEX dm_message_archive_repair_signal_id_idx ON public.dm_message_archive USING btree (id) "
         + "WHERE ((material_fingerprint IS DISTINCT FROM emitted_fingerprint) AND (material_fingerprint IS NOT NULL))",
     }]);
-    const migration = await readFile("packages/db/migrations/0265_dm_archive_repair_signal_by_id.sql", "utf8");
+    const migration = await readFile("packages/db/migrations/0266_dm_archive_repair_signal_by_id.sql", "utf8");
     expect(migration).toContain("where material_fingerprint is distinct from emitted_fingerprint and material_fingerprint is not null;");
   });
 

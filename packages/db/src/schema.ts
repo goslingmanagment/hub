@@ -2155,7 +2155,7 @@ export const dmMessageArchive = pgTable(
       .on(table.platformAccountId, table.platformConversationId, table.messageCreatedAt.desc()),
     retainUntilIdx: index("dm_message_archive_retain_until_idx").on(table.retainUntil),
     sourceJournalIdx: index("dm_message_archive_source_journal_idx").on(table.sourceJournalId),
-    // 0265: the reconciler's work list in id order (listDmRepairSignalRows).
+    // 0266: the reconciler's work list in id order (listDmRepairSignalRows).
     repairSignalIdx: index("dm_message_archive_repair_signal_id_idx")
       .on(table.id)
       .where(sql`${table.materialFingerprint} is distinct from ${table.emittedFingerprint} and ${table.materialFingerprint} is not null`),
