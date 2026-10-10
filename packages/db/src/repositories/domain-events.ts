@@ -528,14 +528,23 @@ export async function listDomainEventAccountBounds(
   if (accountIds.length === 0) {
     return bounds;
   }
+  // The oldest retained row is the first entry of each partition's
+  // (account_id, account_seq) index: a Limit 1 over their Merge Append. The
+  // old `left join ... min()` aggregated every event the account ever had
+  // (prod 2026-10-10: 0.6-4 s on each v2 stream connect, 15k buffers).
   const result = await db.execute<Record<string, unknown>>(sql`
     select s.account_id,
            (s.next_seq - 1)::text as current_seq,
-           min(de.account_seq)::text as oldest_retained
+           oldest.account_seq::text as oldest_retained
     from domain_event_seq s
-    left join domain_events de on de.account_id = s.account_id
+    left join lateral (
+      select de.account_seq
+      from domain_events de
+      where de.account_id = s.account_id
+      order by de.account_seq
+      limit 1
+    ) oldest on true
     where s.account_id in (${sql.join(accountIds.map((id) => sql`${id}`), sql`, `)})
-    group by s.account_id, s.next_seq
   `);
   for (const row of result.rows) {
     bounds.set(Number(row.account_id), {
