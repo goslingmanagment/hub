@@ -17,7 +17,10 @@
 -- 1. switch autosummarize on. ALTER INDEX takes ACCESS EXCLUSIVE on the index
 --    (not the table), and every insert into the partition opens that index, so
 --    each switch waits at most 1 s for its lock and then retries, instead of
---    queueing writes behind a long reader;
+--    queueing writes behind a long reader. After ~60 s of a reader holding it
+--    the switch WARNS and moves on rather than failing the api's startup:
+--    ensureDomainEventPartitions retries the current and coming months daily,
+--    and step 2 still summarizes that index's tail;
 -- 2. summarize what is already written. brin_summarize_new_values reads only
 --    unsummarized ranges, under SHARE UPDATE EXCLUSIVE (no conflict with reads
 --    or writes). Old partitions receive too few inserts for autovacuum to reach
@@ -42,7 +45,7 @@ begin
       perform pg_sleep(0.5);
     end;
   end loop;
-  raise exception 'could not lock index %%.%% to switch autosummarize on', %1$L, %2$L;
+  raise warning 'could not lock index %%.%% to switch autosummarize on; left as it was', %1$L, %2$L;
 end
 $do$$statement$,
   n.nspname,
