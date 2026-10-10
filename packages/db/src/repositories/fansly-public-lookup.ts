@@ -401,9 +401,14 @@ function demandSql(input: { recheckBefore: Date }) {
          and e.state = 'established'
          and coalesce(t.fan_id, fp.id) is not null
       union all
+      -- IS FALSE, not = false: the same rows (null fails both), but the planner
+      -- reads "= false" as NOT x and prices it 1 - P(true), ignoring that ~99%
+      -- of the column is null: 71 520 rows expected for 51 (prod 2026-10-10),
+      -- which hash-joined every Fansly fan, regex and all. IS FALSE is priced
+      -- from the column's own frequencies and matches 0268's partial index.
       select pf.fan_id, 'page_lookup_miss', 2, pf.account_probe_at
         from page_fans pf
-       where pf.account_probe_resolved = false
+       where pf.account_probe_resolved is false
     ), due as (
       select d.fan_id, min(d.priority) as priority, min(d.since) as since,
              array_agg(distinct d.demand order by d.demand) as demands
