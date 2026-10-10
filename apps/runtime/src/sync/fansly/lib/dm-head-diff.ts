@@ -36,11 +36,12 @@ export type ConversationHeadDiffReason =
  * head repair, or the stored row it fell back to).
  */
 export type ConversationHeadSnapshot = {
-  /** For the INCOMING side this is the provider's raw `lastMessageId`, NOT the
-   *  value the sweep ends up writing: when the head block is incomplete the
-   *  sweep preserves the stored id for a later retry (`preserveHeadForRetry`)
-   *  while still treating the provider's id as evidence the head moved. That
-   *  is the historical predicate and it is what the streak reproduces. */
+  /** For the INCOMING side this is the chat's head — the newer of the list
+   *  row's `lastMessageId` and the embedded `lastMessage.id` — NOT the value
+   *  the sweep ends up writing: when the head block is incomplete the sweep
+   *  preserves the stored id for a later retry (`preserveHeadForRetry`) while
+   *  still treating the head as evidence it moved. That is the historical
+   *  predicate and it is what the streak reproduces. */
   lastMessageId: string | null;
   unreadCount: number;
   isVisible: boolean;

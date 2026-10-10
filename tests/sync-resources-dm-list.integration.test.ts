@@ -10,6 +10,7 @@ import {
   writeSyncRouteState,
   upsertDemand,
   upsertFans,
+  writeThreadChain,
   type Database,
 } from "@agency_hub_core/db";
 import type { FanslyWireOutcome, FanslyWireRequest } from "@agency_hub_core/fansly";
@@ -46,6 +47,7 @@ import {
   waitFor,
 } from "./helpers/sync-engine-host.ts";
 import { pageHoldKindOf, resourceBreakersOf, routeEntryOf, seedRouteState } from "./helpers/sync-holds.ts";
+import { FANSLY_EPOCH_MS, snowflakeAt } from "./helpers/sync-engine.ts";
 
 // The conversation list of the Fansly Sync Engine (design §5.3) through the
 // real actor and commits against a real database: a scripted live transport
@@ -94,6 +96,15 @@ interface Chat {
   headId: string | null;
   headAtMs: number | null;
   unread?: number;
+  /** The group's embedded `lastMessage` when it is not the row's head:
+   *  null for none (a deleted newest message), else another message. */
+  embedded?: { id: string; atMs: number } | null;
+}
+
+/** The message the aggregation group embeds for a chat. */
+function embeddedOf(chat: Chat): { id: string; atMs: number | null } | null {
+  if (chat.embedded !== undefined) return chat.embedded;
+  return chat.headId === null ? null : { id: chat.headId, atMs: chat.headAtMs };
 }
 
 function fanAccount(id: string) {
@@ -127,17 +138,17 @@ function listPage(chats: readonly Chat[], total?: number) {
           { groupId: groupOf(chat.n), userId: OWN_ID, type: 0, permissionFlags: 0 },
           ...(partnerOf(chat) === null ? [] : [{ groupId: groupOf(chat.n), userId: partnerOf(chat)!, type: 0, permissionFlags: 0 }]),
         ],
-        lastMessage: chat.headId === null ? null : {
-          id: chat.headId,
+        lastMessage: embeddedOf(chat) === null ? null : {
+          id: embeddedOf(chat)!.id,
           type: 1,
           dataVersion: 1,
-          content: `message ${chat.headId}`,
+          content: `message ${embeddedOf(chat)!.id}`,
           groupId: groupOf(chat.n),
           senderId: partnerOf(chat) ?? OWN_ID,
           correlationId: null,
           inReplyTo: null,
           inReplyToRoot: null,
-          createdAt: chat.headAtMs,
+          createdAt: embeddedOf(chat)!.atMs,
           attachments: [],
           embeds: [],
           interactions: [],
@@ -304,11 +315,11 @@ async function thread(pageId: number, n: number) {
     last_message_sender_role: string; last_message_preview: string | null; metadata: Record<string, unknown>;
     last_seen_generation: string | null; is_visible: boolean; stored_message_count: number;
     newest_stored_message_id: string | null; message_coverage_status: string; last_message_sync_at: Date | null;
-    history_state: string; head_confirmed_id: string | null;
+    history_state: string; head_confirmed_id: string | null; head_confirmed_at: Date | null;
   }>(
     `select fan_id, partner_platform_user_id as partner, last_message_id, last_message_at, last_message_sender_role::text,
             last_message_preview, metadata, last_seen_generation, is_visible, stored_message_count, newest_stored_message_id,
-            message_coverage_status::text, last_message_sync_at, history_state, head_confirmed_id
+            message_coverage_status::text, last_message_sync_at, history_state, head_confirmed_id, head_confirmed_at
        from page_dm_threads where platform_account_id = $1 and platform_conversation_id = $2`,
     [pageId, groupOf(n)],
   );
@@ -511,6 +522,264 @@ describe("dm-conversations.full", () => {
     });
     expect(await thread(pageId, 4000)).toBeNull();
     expect(withheld!.due_at.getTime() - Date.now()).toBeGreaterThan(20 * HOUR);
+  });
+});
+
+describe("a chat's list head (У5: Д4, Д7)", () => {
+  const CATCHUP = "dm-messages.catchup";
+  const snowflakeMs = (id: string) => Number((BigInt(id) >> 22n) + BigInt(FANSLY_EPOCH_MS));
+
+  function wireMessage(n: number, id: string, fromFan = true) {
+    return {
+      id, type: 1, dataVersion: 1, content: `message ${id}`, groupId: groupOf(n), senderId: fromFan ? fanOf(n) : OWN_ID,
+      correlationId: null, inReplyTo: null, inReplyToRoot: null, createdAt: Math.floor(snowflakeMs(id) / 1000),
+      attachments: [], embeds: [], interactions: [], likes: [], totalTipAmount: 0,
+    };
+  }
+
+  /** The chain the message reads proved over `ids` (newest first), its head read received at `headAt`. */
+  async function seedChain(pageId: number, n: number, ids: readonly string[], headAt: Date): Promise<void> {
+    const result = await testDb!.pool.query<{ id: string }>(
+      "select id::text from page_dm_threads where platform_account_id = $1 and platform_conversation_id = $2", [pageId, groupOf(n)]);
+    const oldest = ids.at(-1)!;
+    await db().transaction(async (tx) => writeThreadChain(tx as unknown as Database, Number(result.rows[0]!.id), {
+      chain: {
+        epoch: 0, state: "partial", headId: ids[0]!, headAt, oldestId: oldest, oldestCreatedAtMs: snowflakeMs(oldest),
+        count: ids.length, upwardCount: 0, proof: null, proofWitness: null, provenAt: null,
+      },
+      source: "engine",
+    }));
+  }
+
+  function completedAt(row: Awaited<ReturnType<typeof workRow>>): string | null {
+    const last = row?.cursor.last as { completedAt?: unknown } | null | undefined;
+    return typeof last?.completedAt === "string" ? last.completedAt : null;
+  }
+
+  /** One more walk of a list key, due now, run until it finished. */
+  async function walk(pageId: number, key: string, respond: Responder) {
+    const before = completedAt(await workRow(pageId, key));
+    await makeDue(pageId, key);
+    const ran = await runLive(pageId, respond, async () => {
+      const after = completedAt(await workRow(pageId, key));
+      return after !== null && after !== before;
+    });
+    const list = ran.hits.filter((spec) => spec === "messaging.groups").length;
+    return { ...ran, list, last: (await workRow(pageId, key))!.cursor.last as Record<string, unknown> };
+  }
+
+  /** The open catch-ups (they wait out their coalescing minute) run now. */
+  async function drainCatchups(pageId: number, respond: Responder) {
+    await testDb!.pool.query(
+      "update sync_work set due_at = clock_timestamp() where page_id = $1 and resource = $2 and state = 'open' and not shadow",
+      [pageId, CATCHUP],
+    );
+    return runLive(pageId, respond, async () => (await countRows(testDb!.pool,
+      "select count(*)::int as n from sync_work where page_id = $1 and resource = $2 and state in ('open', 'running') and not shadow",
+      [pageId, CATCHUP])) === 0);
+  }
+
+  async function catchups(pageId: number, n: number) {
+    const result = await testDb!.pool.query<{ state: string; close_reason: string | null; demand: { messageIds: string[]; reasons: string[] } }>(
+      "select state, close_reason, demand from sync_work where page_id = $1 and resource = $2 and subject = $3 and not shadow order by id",
+      [pageId, CATCHUP, groupOf(n)],
+    );
+    return result.rows;
+  }
+
+  async function archived(pageId: number, id: string): Promise<boolean> {
+    return (await countRows(testDb!.pool,
+      "select count(*)::int as n from message_archive where account_id = $1 and platform = 'fansly' and message_ref = $2", [pageId, id])) === 1;
+  }
+
+  const groupIdOf = (req: FanslyWireRequest) => new URL(req.url).searchParams.get("groupId");
+
+  it("a phantom head (a deleted newest message) costs one read, then the head walk stops on its page; the full walk re-reads it once", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage();
+    const old = NOW_MS - 3 * 24 * HOUR;
+    // Chat 150 on page 0: the reads reached H; the list names X, created
+    // after H and deleted since (`lastMessage: null`); REST serves H and older.
+    const P = 150;
+    const history = [snowflakeAt(NOW_MS - 3 * HOUR), snowflakeAt(NOW_MS - 4 * HOUR), snowflakeAt(NOW_MS - 5 * HOUR)];
+    const H = history[0]!;
+    const X = snowflakeAt(NOW_MS - 2 * HOUR);
+    const known = (from: number) => Array.from({ length: 100 }, (_, i): Chat => ({ n: from + i, headId: messageOf(from + i), headAtMs: old }));
+    const page0 = known(100).map((chat): Chat => (chat.n === P ? { n: P, headId: X, headAtMs: null, embedded: null } : chat));
+    const page1 = known(200);
+    await seedThreads(pageId, [
+      ...[...page0, ...page1].filter((chat) => chat.n !== P).map((chat) => ({ ...chat, newestStored: chat.headId })),
+      { n: P, headId: H, headAtMs: snowflakeMs(H), newestStored: H, storedCount: history.length },
+    ]);
+    // The head read that confirmed H was received before X was created.
+    await seedChain(pageId, P, history, new Date(snowflakeMs(H) + 60_000));
+    const respond: Responder = (req) => {
+      if (req.spec === "messaging.groups") {
+        const offset = offsetOf(req);
+        return okResponse(listPage(offset === 0 ? page0 : offset === 100 ? page1 : []));
+      }
+      if (req.spec === "messages.page" && groupIdOf(req) === groupOf(P)) return okResponse({ messages: history.map((id) => wireMessage(P, id)) });
+      throw new Error(`unexpected ${req.url}`);
+    };
+
+    // Pass 1: the head walk reads both pages and asks one catch-up for X;
+    // its read shows H as REST's newest (`head_unchanged`) and drops X.
+    const first = await walk(pageId, "dm-conversations.head", respond);
+    expect(first.list).toBe(2);
+    expect(first.last).toMatchObject({ stop: "unchanged_page", pageCount: 2 });
+    expect(await catchups(pageId, P)).toEqual([
+      { state: "open", close_reason: null, demand: expect.objectContaining({ messageIds: [X], reasons: ["list_head:dm-conversations.head"] }) },
+    ]);
+    const read = await drainCatchups(pageId, respond);
+    expect(read.hits).toEqual(["messages.page"]);
+    expect(await catchups(pageId, P)).toEqual([
+      { state: "done", close_reason: "caught_up", demand: expect.objectContaining({ messageIds: [] }) },
+    ]);
+    const afterRead = (await thread(pageId, P))!;
+    expect(afterRead).toMatchObject({ last_message_id: H, head_confirmed_id: H });
+    expect(afterRead.head_confirmed_at!.getTime()).toBeGreaterThan(snowflakeMs(X) + 75_000);
+
+    // Pass 2: no catch-up; the head is written (a one-off change of page 0).
+    const second = await walk(pageId, "dm-conversations.head", respond);
+    expect(second.list).toBe(2);
+    expect(second.hits.filter((spec) => spec !== "messaging.groups")).toEqual([]);
+    expect(await catchups(pageId, P)).toHaveLength(1);
+    expect((await thread(pageId, P))!.last_message_id).toBe(X);
+
+    // Pass 3: the walk stops on page 0.
+    const third = await walk(pageId, "dm-conversations.head", respond);
+    expect(third.hits).toEqual(["messaging.groups"]);
+    expect(third.last).toMatchObject({ stop: "unchanged_page", pageCount: 1 });
+    expect(await catchups(pageId, P)).toHaveLength(1);
+
+    // The daily full walk re-reads the accounted head once.
+    const full = await walk(pageId, "dm-conversations.full", respond);
+    expect(full.list).toBe(3);
+    expect(full.hits.filter((spec) => spec !== "messaging.groups")).toEqual([]);
+    const rechecks = await catchups(pageId, P);
+    expect(rechecks).toHaveLength(2);
+    expect(rechecks[1]).toEqual({
+      state: "open", close_reason: null, demand: expect.objectContaining({ messageIds: [X], reasons: ["list_head:dm-conversations.full"] }),
+    });
+    expect((await drainCatchups(pageId, respond)).hits).toEqual(["messages.page"]);
+    expect((await catchups(pageId, P))[1]).toMatchObject({ state: "done", close_reason: "caught_up" });
+
+    // … and the head walk after it asks none.
+    const fifth = await walk(pageId, "dm-conversations.head", respond);
+    expect(fifth.hits).toEqual(["messaging.groups"]);
+    expect(await catchups(pageId, P)).toHaveLength(2);
+    expect(await archived(pageId, X)).toBe(false);
+  }, 90_000);
+
+  it("a message the socket missed that REST served later than 75 s after it: the full walk reads it", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage();
+    const P = 7;
+    const history = [snowflakeAt(NOW_MS - 3 * HOUR), snowflakeAt(NOW_MS - 4 * HOUR), snowflakeAt(NOW_MS - 5 * HOUR)];
+    const H = history[0]!;
+    const X = snowflakeAt(NOW_MS - 2 * HOUR);
+    await seedThreads(pageId, [{ n: P, headId: H, headAtMs: snowflakeMs(H), newestStored: H, storedCount: history.length }]);
+    await seedChain(pageId, P, history, new Date(snowflakeMs(H) + 60_000));
+    // The list serves X with its embedded message (the fan's, with a time);
+    // no overlay row of it (the socket missed it). REST lags: X comes later.
+    const chats: Chat[] = [{ n: P, headId: X, headAtMs: snowflakeMs(X) }];
+    let served = history;
+    const respond: Responder = (req) => {
+      if (req.spec === "messaging.groups") return okResponse(listPage(offsetOf(req) === 0 ? chats : []));
+      if (req.spec === "messages.page" && groupIdOf(req) === groupOf(P)) return okResponse({ messages: served.map((id) => wireMessage(P, id)) });
+      throw new Error(`unexpected ${req.url}`);
+    };
+
+    // The head walk asks one catch-up; its read does not show X: dropped.
+    expect((await walk(pageId, "dm-conversations.head", respond)).list).toBe(1);
+    expect(await catchups(pageId, P)).toEqual([
+      { state: "open", close_reason: null, demand: expect.objectContaining({ messageIds: [X] }) },
+    ]);
+    expect((await drainCatchups(pageId, respond)).hits).toEqual(["messages.page"]);
+    expect(await catchups(pageId, P)).toEqual([
+      { state: "done", close_reason: "caught_up", demand: expect.objectContaining({ messageIds: [] }) },
+    ]);
+    expect(await archived(pageId, X)).toBe(false);
+    // The next head walk asks none.
+    expect((await walk(pageId, "dm-conversations.head", respond)).hits).toEqual(["messaging.groups"]);
+    expect(await catchups(pageId, P)).toHaveLength(1);
+
+    // REST serves X now: the full walk reads it.
+    served = [X, ...history];
+    expect((await walk(pageId, "dm-conversations.full", respond)).list).toBe(1);
+    const rechecks = await catchups(pageId, P);
+    expect(rechecks).toHaveLength(2);
+    expect(rechecks[1]).toMatchObject({ state: "open", demand: { messageIds: [X], reasons: ["list_head:dm-conversations.full"] } });
+    expect((await drainCatchups(pageId, respond)).hits).toEqual(["messages.page"]);
+    expect(await archived(pageId, X)).toBe(true);
+    expect(await thread(pageId, P)).toMatchObject({ head_confirmed_id: X });
+    // The next full walk asks none.
+    expect((await walk(pageId, "dm-conversations.full", respond)).hits).toEqual(["messaging.groups"]);
+    expect(await catchups(pageId, P)).toHaveLength(2);
+  }, 90_000);
+
+  describe("a stale row on the second page while the socket is down (Р3, Codex)", () => {
+    // Chat 210 sits on page 1 under its stale row id S (3 days old); its
+    // embedded message E, the fan's, is 10 minutes old. A repair or `.ws-down`
+    // does not reach page 1 (tests/sync-repair.integration.test.ts).
+    const C = 210;
+    const S = snowflakeAt(NOW_MS - 3 * 24 * HOUR);
+    const E = snowflakeAt(NOW_MS - 10 * 60_000);
+    const old = NOW_MS - 3 * 24 * HOUR;
+    const page0 = Array.from({ length: 100 }, (_, i): Chat => ({ n: 100 + i, headId: messageOf(100 + i), headAtMs: old }));
+    const page1 = Array.from({ length: 50 }, (_, i): Chat => (200 + i === C
+      ? { n: C, headId: S, headAtMs: snowflakeMs(S), embedded: { id: E, atMs: snowflakeMs(E) } }
+      : { n: 200 + i, headId: messageOf(200 + i), headAtMs: old }));
+
+    async function seed(): Promise<number> {
+      const pageId = await seedPage();
+      await seedThreads(pageId, [
+        ...[...page0, ...page1].filter((chat) => chat.n !== C).map((chat) => ({ ...chat, newestStored: chat.headId })),
+        { n: C, headId: S, headAtMs: snowflakeMs(S), newestStored: S },
+      ]);
+      return pageId;
+    }
+
+    function respondWith(first: readonly Chat[]): Responder {
+      return (req) => {
+        if (req.spec !== "messaging.groups") throw new Error(`unexpected ${req.url}`);
+        const offset = offsetOf(req);
+        return okResponse(listPage(offset === 0 ? first : offset === 100 ? page1 : []));
+      };
+    }
+
+    it("the head walk finds it only when it reaches its page", async (context) => {
+      if (!testDb) return context.skip();
+      const pageId = await seed();
+      // A quiet page 0: the walk stops on it, nothing asks for the chat (the
+      // full walk's day is its bound).
+      const quiet = await walk(pageId, "dm-conversations.head", respondWith(page0));
+      expect(quiet.hits).toEqual(["messaging.groups"]);
+      expect(quiet.last).toMatchObject({ stop: "unchanged_page", pageCount: 1 });
+      expect(await subjectsOf(pageId, CATCHUP)).toEqual([]);
+      // One chat moved on page 0: the walk reads page 1 and asks for E.
+      const moved = page0.map((chat): Chat => (chat.n === 100 ? { ...chat, headId: messageOf(100, 1), headAtMs: NOW_MS - 5 * 60_000 } : chat));
+      const reached = await walk(pageId, "dm-conversations.head", respondWith(moved));
+      expect(reached.list).toBe(2);
+      expect(await subjectsOf(pageId, CATCHUP)).toEqual([groupOf(100), groupOf(C)]);
+      expect((await catchups(pageId, C))[0]!.demand.messageIds).toEqual([E]);
+      const written = (await thread(pageId, C))!;
+      expect(written).toMatchObject({ last_message_id: E, last_message_sender_role: "fan", newest_stored_message_id: S });
+      expect(written.last_message_at!.getTime()).toBe(snowflakeMs(E));
+    }, 60_000);
+
+    it("the full walk finds it; the bound is the head walk's period if it reaches the page, else the full walk's", async (context) => {
+      if (!testDb) return context.skip();
+      const pageId = await seed();
+      const full = await walk(pageId, "dm-conversations.full", respondWith(page0));
+      expect(full.list).toBe(2);
+      expect(await subjectsOf(pageId, CATCHUP)).toEqual([groupOf(C)]);
+      expect((await catchups(pageId, C))[0]!.demand).toMatchObject({ messageIds: [E], reasons: ["list_head:dm-conversations.full"] });
+      // Р3: the bound is the head walk's period when it reaches the chat's
+      // page, else the full walk's. If they grow (У15), revisit Р3.
+      expect(fanslyResourceSpec("dm-conversations.head")!.period!.everyMs).toBe(30 * 60_000);
+      expect(fanslyResourceSpec("dm-conversations.full")!.period!.everyMs).toBe(24 * HOUR);
+    }, 60_000);
   });
 });
 

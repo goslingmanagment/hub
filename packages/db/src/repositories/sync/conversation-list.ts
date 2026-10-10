@@ -44,6 +44,10 @@ export interface PageDmThreadListState {
    *  compared with to decide whether the chat needs a read. */
   newestStoredMessageId: string | null;
   headConfirmedId: string | null;
+  /** The receipt of the newest head read the chain joined (`writeThreadChain`,
+   *  `head_confirmed_at`); read-only here: a list head above the chain that
+   *  such a read, received late enough, did not show asks for no read. */
+  headConfirmedAt: Date | null;
   updatedAt: Date;
 }
 
@@ -68,6 +72,7 @@ type ListStateSqlRow = {
   metadata: Record<string, unknown> | null;
   newestStoredMessageId: string | null;
   headConfirmedId: string | null;
+  headConfirmedAt: Date | string | null;
   updatedAt: Date | string;
 };
 
@@ -92,6 +97,7 @@ const listStateColumns = sql`
   t.metadata,
   t.newest_stored_message_id as "newestStoredMessageId",
   t.head_confirmed_id as "headConfirmedId",
+  t.head_confirmed_at as "headConfirmedAt",
   t.updated_at as "updatedAt"
 `;
 
@@ -117,6 +123,7 @@ function normalizeListState(row: ListStateSqlRow): PageDmThreadListState {
     metadata: row.metadata ?? {},
     newestStoredMessageId: row.newestStoredMessageId,
     headConfirmedId: row.headConfirmedId,
+    headConfirmedAt: toDate(row.headConfirmedAt),
     updatedAt: toDate(row.updatedAt)!,
   };
 }

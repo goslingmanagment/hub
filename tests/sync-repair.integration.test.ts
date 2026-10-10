@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { upsertDemand, upsertFans, type Database } from "@agency_hub_core/db";
+import { upsertDemand, upsertFans, writeThreadChain, type Database } from "@agency_hub_core/db";
 import type { FanslyWireOutcome, FanslyWireRequest } from "@agency_hub_core/fansly";
 
 import { createEngineRegistry, type EngineRegistry, type ResourceModule } from "../apps/runtime/src/sync/engine/resource.ts";
@@ -10,6 +10,7 @@ import { fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts"
 import { DM_LIST_WS_DOWN_EVERY_MS } from "../apps/runtime/src/sync/fansly/resources/dm-conversations.ts";
 import { intervalMsOf, routeBudget } from "../apps/runtime/src/sync/fansly/routes.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
+import { snowflakeAt } from "./helpers/sync-engine.ts";
 import {
   makeTestActor,
   okResponse,
@@ -70,6 +71,9 @@ interface Chat {
   n: number;
   headId: string;
   headAtMs: number;
+  /** The group's embedded `lastMessage` when it is not the row's head:
+   *  null for none (a deleted newest message), else another message. */
+  embedded?: { id: string; atMs: number } | null;
 }
 
 /** One `/messaging/groups` answer for these chats (newest first, as served). */
@@ -97,10 +101,10 @@ function listPage(chats: readonly Chat[]) {
           { groupId: groupOf(chat.n), userId: OWN_ID, type: 0, permissionFlags: 0 },
           { groupId: groupOf(chat.n), userId: fanOf(chat.n), type: 0, permissionFlags: 0 },
         ],
-        lastMessage: {
-          id: chat.headId, type: 1, dataVersion: 1, content: `message ${chat.headId}`, groupId: groupOf(chat.n),
-          senderId: fanOf(chat.n), correlationId: null, inReplyTo: null, inReplyToRoot: null, createdAt: chat.headAtMs,
-          attachments: [], embeds: [], interactions: [], likes: [],
+        lastMessage: chat.embedded === null ? null : {
+          id: chat.embedded?.id ?? chat.headId, type: 1, dataVersion: 1, content: `message ${chat.embedded?.id ?? chat.headId}`,
+          groupId: groupOf(chat.n), senderId: fanOf(chat.n), correlationId: null, inReplyTo: null, inReplyToRoot: null,
+          createdAt: chat.embedded?.atMs ?? chat.headAtMs, attachments: [], embeds: [], interactions: [], likes: [],
         },
       })),
     },
@@ -287,6 +291,64 @@ describe("repair.ws-gap", () => {
       close_reason: "gap_reconciled",
       result: { targets: 2, stamped: 2, listPages: 2, asked: 7 },
     });
+  }, 60_000);
+
+  it("stops on the first full page older than its window: a stale row on the next page is not read (the Codex scenario, Р3)", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage();
+    const now = Date.now();
+    // Page 1: a full page of chats older than the window (first demand − 60 s).
+    // Page 2: chat 310 under its stale row id, its embedded message (the fan's)
+    // inside the window — the head walk or the full walk finds it
+    // (tests/sync-resources-dm-list.integration.test.ts).
+    const page1: Chat[] = Array.from({ length: 100 }, (_, i) => ({ n: 100 + i, headId: messageOf(100 + i), headAtMs: now - 3 * 3_600_000 }));
+    const page2: Chat[] = Array.from({ length: 100 }, (_, i) => (i === 10
+      ? { n: 310, headId: messageOf(310), headAtMs: now - 3 * 86_400_000, embedded: { id: snowflakeAt(now - 10 * MINUTE), atMs: now - 10 * MINUTE } }
+      : { n: 300 + i, headId: messageOf(300 + i), headAtMs: now - 3 * 3_600_000 }));
+    await seedThreads(pageId, [...page1, ...page2].map((chat) => chat.n));
+    await demand(pageId, "repair.ws-gap");
+    await run(pageId, registry(), (req) => (req.spec === "messaging.groups" ? okResponse(listPage(offsetOf(req) === 0 ? page1 : page2)) : polls()),
+      async () => (await workRow(pageId, "repair.ws-gap"))?.state === "done");
+    expect((await listOffsets(pageId, "repair.ws-gap")).map((read) => read.offset)).toEqual([0]);
+    expect(await workRow(pageId, "dm-messages.head")).toBeNull();
+  }, 60_000);
+
+  it("reads no head a chain-joined head read received 75 s after its creation did not show; a read whose walk did not join accounts for nothing", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage();
+    const now = Date.now();
+    // Three chats whose reads reached messageOf(n); the list names X_n,
+    // created 2 h ago and deleted since (`lastMessage: null`).
+    // 1: the chain joined a head read 1 h ago — X_1 accounted for, no read;
+    // 2: the chain's head read is 3 h old — read;
+    // 3: as 2, with a head read 1 h ago whose walk never joined the chain
+    //    (`last_message_sync_at` only) — read.
+    const head = (n: number) => snowflakeAt(now - 2 * 3_600_000, n);
+    const confirmedAgoMs: Record<number, number> = { 1: 3_600_000, 2: 3 * 3_600_000, 3: 3 * 3_600_000 };
+    await seedThreads(pageId, [1, 2, 3]);
+    for (const n of [1, 2, 3]) {
+      const thread = await testDb.pool.query<{ id: string }>(
+        "select id::text from page_dm_threads where platform_account_id = $1 and platform_conversation_id = $2", [pageId, groupOf(n)]);
+      await db().transaction(async (tx) => writeThreadChain(tx as unknown as Database, Number(thread.rows[0]!.id), {
+        chain: {
+          epoch: 0, state: "partial", headId: messageOf(n), headAt: new Date(now - confirmedAgoMs[n]!), oldestId: messageOf(n),
+          oldestCreatedAtMs: null, count: 1, upwardCount: 0, proof: null, proofWitness: null, provenAt: null,
+        },
+        source: "engine",
+      }));
+    }
+    await testDb.pool.query(
+      "update page_dm_threads set last_message_sync_at = clock_timestamp() - interval '1 hour' where platform_account_id = $1 and platform_conversation_id = $2",
+      [pageId, groupOf(3)],
+    );
+    const chats: Chat[] = [1, 2, 3].map((n) => ({ n, headId: head(n), headAtMs: now - 2 * 3_600_000, embedded: null }));
+    await demand(pageId, "repair.ws-gap");
+    await run(pageId, registry(), (req) => (req.spec === "messaging.groups" ? okResponse(listPage(chats)) : polls()),
+      async () => (await workRow(pageId, "repair.ws-gap"))?.state === "done");
+    const heads = await testDb.pool.query<{ subject: string; ids: string[] }>(
+      `select subject, demand->'messageIds' as ids from sync_work
+        where page_id = $1 and resource = 'dm-messages.head' order by subject`, [pageId]);
+    expect(heads.rows).toEqual([{ subject: groupOf(2), ids: [head(2)] }, { subject: groupOf(3), ids: [head(3)] }]);
   }, 60_000);
 
   it("a reconnect during a pass starts a new pass, which stamps the new connection too", async (context) => {

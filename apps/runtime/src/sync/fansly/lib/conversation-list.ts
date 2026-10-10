@@ -28,6 +28,16 @@ import { normalizeFanslyTimestamp } from "./timestamp.ts";
 // what one listed chat says about its thread, whether a page of them ends a
 // head walk, and whether a chat's list head asks for a message read.
 //
+// A chat's list head is the newer of the row's `lastMessageId` and the
+// group's embedded `lastMessage.id` (`listItemHeadId`): the row sometimes
+// serves a stale id. A head above what the message reads reached asks for one
+// read; once a head read the chain joined, received 75 s or more after the
+// head's creation, did not show it (`listHeadAccounted`: Fansly keeps naming
+// a deleted newest message, with `lastMessage: null`), it asks for none — but
+// the daily full walk re-reads such a head once (`recheck`). A head walk stops
+// on a page whose every head is settled: vouched for by the embedded message
+// with a time, or accounted for.
+//
 // `resolveConversationListItem` is the pure part of the legacy
 // dm_conversations sweep's per-conversation step (its loop over
 // `page.items`), with its requests taken out: the group detail becomes a
@@ -40,10 +50,15 @@ import { normalizeFanslyTimestamp } from "./timestamp.ts";
 
 /** A listed chat's head as the thread should hold it. */
 export interface ResolvedListHead {
-  /** The list row's `lastMessageId` (what the provider says the head is). */
+  /** The list row's own `lastMessageId`, raw (it can be stale). */
   listMessageId: string | null;
   /** The aggregation group's embedded `lastMessage.id`. */
   embeddedMessageId: string | null;
+  /** The chat's head: the newer of the two (`listItemHeadId`). */
+  headId: string | null;
+  /** The head is accounted for (`listHeadAccounted`): the stored id is not
+   *  kept for a retry. */
+  headAccounted: boolean;
   /** The embedded head's creation time as served (null: absent or invalid). */
   servedAt: Date | null;
   /** The embedded head carries a usable creation time. */
@@ -102,6 +117,9 @@ export interface ResolveListItemInput {
    *  owner decision №8): never assigned to a thread this write leaves bound.
    *  Default: none. */
   liftedExclusions?: readonly string[];
+  /** The engine's start on the page (`legacy_imported_at ?? mode_changed_at`):
+   *  only a head read since then accounts for a list head. */
+  engineStartAt: Date | null;
 }
 
 const EARLIEST_PLAUSIBLE_MS = Date.UTC(2010, 0, 1);
@@ -154,10 +172,55 @@ function snapshotOf(state: PageDmThreadListState): ConversationHeadSnapshot {
 }
 
 /**
+ * A chat's head: the newer (snowflake) of the list row's `lastMessageId` and
+ * the group's embedded `lastMessage.id` (design §5.3) — the row sometimes
+ * serves a stale id. Ids that do not compare (not decimal) leave the row's.
+ */
+export function listItemHeadId(listId: string | null, embeddedId: string | null): string | null {
+  if (listId !== null && embeddedId !== null && compareFanslySnowflakeIds(embeddedId, listId) === 1) return embeddedId;
+  return listId ?? embeddedId;
+}
+
+/** How long `.head` waits for a missing id before `not_found`: 15 s + 60 s
+ *  (`DM_HEAD_NOT_FOUND_RETRY_MS`, pinned by a test). */
+export const DM_LIST_HEAD_ANSWERED_AFTER_MS = 75_000;
+
+/**
+ * A list head the message reads already account for: at or below what they
+ * reached (`known` = `coalesce(head_confirmed_id, newest_stored_message_id)`),
+ * or above it while the chain joined a head read received at least 75 s after
+ * the head's creation (`head_confirmed_at`, no earlier than the engine's start
+ * on the page). That read showed the chat's newest messages and its walk
+ * reached the chain, so a head above the chain is one REST did not serve
+ * (deleted, or never served): another read would add nothing. A walk that
+ * has not reached the chain — still going, or closed before it — moves no
+ * `head_confirmed_at` and accounts for nothing.
+ */
+export function listHeadAccounted(input: {
+  headId: string;
+  known: string | null;
+  headConfirmedAt: Date | null;
+  engineStartAt: Date | null;
+}): boolean {
+  if (input.known !== null) {
+    const order = compareFanslySnowflakeIds(input.headId, input.known);
+    if (order === -1 || order === 0) return true;
+  }
+  const createdAt = listHeadInstant(input.headId, null);
+  if (createdAt === null || input.headConfirmedAt === null || input.engineStartAt === null) return false;
+  const confirmedMs = input.headConfirmedAt.getTime();
+  return confirmedMs >= input.engineStartAt.getTime() && confirmedMs >= createdAt.getTime() + DM_LIST_HEAD_ANSWERED_AFTER_MS;
+}
+
+/**
  * The head block a served head message gives a thread, with the legacy
- * fallbacks: an incomplete head (no time or no sender) keeps the stored time,
- * sender and role — and, when the id moved, the stored id too, so the next
- * read of the list retries it (`preserveHeadForRetry`).
+ * fallbacks. The head is `listItemHeadId`; the embedded message gives the
+ * time, sender, role and preview only when it is that head. An incomplete
+ * head (the embedded message is not the head, or has no time or no sender)
+ * keeps the stored time, sender and role — and, when the id moved and the
+ * head is not accounted for, the stored id too, so the next read of the list
+ * retries it (`preserveHeadForRetry`). An accounted head is written with the
+ * stored time and sender.
  */
 export function resolveListHead(input: {
   listMessageId: string | null;
@@ -166,26 +229,35 @@ export function resolveListHead(input: {
   pageAccountId: string;
   partnerId: string | null;
   now: Date;
+  /** `listHeadAccounted` for the head (false for a group detail). */
+  headAccounted: boolean;
 }): ResolvedListHead {
   const head = input.headMessage ?? null;
+  const embeddedMessageId = nonEmpty(head?.id);
+  const headId = listItemHeadId(input.listMessageId, embeddedMessageId);
+  const isHead = embeddedMessageId !== null && embeddedMessageId === headId;
   const time = fanslyMessageTime(head?.createdAt, input.now);
   const senderId = nonEmpty(head?.senderId);
-  const complete = time.at !== null && senderId !== null;
+  const headAt = isHead ? time.at : null;
+  const headSenderId = isHead ? senderId : null;
+  const headComplete = headAt !== null && headSenderId !== null;
   const existing = input.existing;
-  const preserveHeadForRetry = input.listMessageId !== null && !complete &&
-    (existing === null || existing.lastMessageId !== input.listMessageId);
-  const role = resolveDmSenderRole(senderId, input.pageAccountId, input.partnerId);
+  const preserveHeadForRetry = headId !== null && !headComplete && !input.headAccounted &&
+    (existing === null || existing.lastMessageId !== headId);
+  const role = resolveDmSenderRole(headSenderId, input.pageAccountId, input.partnerId);
   return {
     listMessageId: input.listMessageId,
-    embeddedMessageId: nonEmpty(head?.id),
+    embeddedMessageId,
+    headId,
+    headAccounted: input.headAccounted,
     servedAt: time.at,
     timestampValid: time.at !== null,
     timestampImplausible: time.implausible,
-    lastMessageId: preserveHeadForRetry ? existing?.lastMessageId ?? null : input.listMessageId,
-    lastMessageAt: time.at ?? existing?.lastMessageAt ?? null,
-    lastMessageSenderId: senderId ?? existing?.lastMessageSenderId ?? null,
-    lastMessageSenderRole: complete ? role : existing?.lastMessageSenderRole ?? "unknown",
-    lastMessagePreview: truncateDmPreview(typeof head?.content === "string" ? head.content : null)
+    lastMessageId: preserveHeadForRetry ? existing?.lastMessageId ?? null : headId,
+    lastMessageAt: headAt ?? existing?.lastMessageAt ?? null,
+    lastMessageSenderId: headSenderId ?? existing?.lastMessageSenderId ?? null,
+    lastMessageSenderRole: headComplete ? role : existing?.lastMessageSenderRole ?? "unknown",
+    lastMessagePreview: (isHead ? truncateDmPreview(typeof head?.content === "string" ? head.content : null) : null)
       ?? existing?.lastMessagePreview ?? null,
     preserveHeadForRetry,
   };
@@ -235,13 +307,22 @@ export function resolveConversationListItem(input: ResolveListItemInput, now: Da
     subscriptionTierId: text(item.subscriptionTierId),
     lastUnreadMessageId: text(item.lastUnreadMessageId),
   };
+  const listMessageId = nonEmpty(item.lastMessageId);
+  const headId = listItemHeadId(listMessageId, nonEmpty(group?.lastMessage?.id));
+  const headAccounted = existing !== null && headId !== null && listHeadAccounted({
+    headId,
+    known: existing.headConfirmedId ?? existing.newestStoredMessageId,
+    headConfirmedAt: existing.headConfirmedAt,
+    engineStartAt: input.engineStartAt,
+  });
   const head = resolveListHead({
-    listMessageId: nonEmpty(item.lastMessageId),
+    listMessageId,
     headMessage: group?.lastMessage ?? null,
     existing,
     pageAccountId,
     partnerId: writtenPartnerId,
     now,
+    headAccounted,
   });
 
   // The aggregation-missing exclusion is the only one the list writes, and it
@@ -261,7 +342,7 @@ export function resolveConversationListItem(input: ResolveListItemInput, now: Da
   const unresolvedIdentity = writtenPartnerId === null;
 
   const diff = diffConversationHead(existing === null ? null : snapshotOf(existing), {
-    lastMessageId: head.listMessageId,
+    lastMessageId: head.headId,
     unreadCount: list.unreadCount,
     isVisible: true,
     conversationFlags: list.conversationFlags,
@@ -272,12 +353,11 @@ export function resolveConversationListItem(input: ResolveListItemInput, now: Da
     unresolvedIdentity,
     messageSyncExcludedReason: exclusion,
   });
-  // A head the walk can vouch for: the list and its embedded message agree
-  // and carry a time — or the chat has no message at all.
-  const headKnown = head.listMessageId === null
-    ? head.embeddedMessageId === null
-    : head.listMessageId === head.embeddedMessageId && head.timestampValid;
-  const unchanged = existing !== null && headKnown && !breaksLegacyUnchangedPage(diff.reasons);
+  // A settled head: the embedded message is the head and carries a time (or
+  // the chat has no message at all), or the reads account for it — it tells
+  // the walk nothing new, and the next page is not about this chat.
+  const vouched = head.headId === null || (head.embeddedMessageId === head.headId && head.timestampValid);
+  const unchanged = existing !== null && (vouched || head.headAccounted) && !breaksLegacyUnchangedPage(diff.reasons);
 
   return {
     groupId,
@@ -346,6 +426,7 @@ export function resolveGroupDetail(input: {
       pageAccountId: input.pageAccountId,
       partnerId: writtenPartnerId,
       now: input.now,
+      headAccounted: false,
     })
     : null;
   const stored = getFanslyDmMessageSyncExcludedReason(input.existing?.metadata);
@@ -371,7 +452,11 @@ export interface ListHeadFollowupState {
   /** The message reads' position (read before the list write; the list never moves it). */
   headConfirmedId: string | null;
   newestStoredMessageId: string | null;
-  /** The provider's head id for the chat. */
+  /** `head_confirmed_at`: the receipt of the newest head read the chain
+   *  joined (read before the list write; the list never moves it). */
+  headConfirmedAt: Date | null;
+  /** The chat's head: the newer of the list row's id and the embedded
+   *  `lastMessage.id` (`listItemHeadId`). */
   listHeadId: string | null;
   /** Its creation time (embedded), else the instant in its snowflake. */
   listHeadAt: Date | null;
@@ -401,13 +486,19 @@ export function listHeadInstant(listHeadId: string | null, servedAt: Date | null
  * chat-unavailability episode, arena "vanished chat" §2.3) asks for no read
  * of a list head its episode already answered: only a newer head gives one
  * read (after the episode's retry boundary, which the read's plan waits for).
+ * A head a late enough chain-joined head read did not show asks for no read
+ * (`listHeadAccounted`), except on the full walk (`recheck`): a message the
+ * socket missed and REST served later than 75 s is read within a day.
  */
-export function listHeadNeedsRead(state: ListHeadFollowupState, engineStartAt: Date | null): boolean {
+export function listHeadNeedsRead(state: ListHeadFollowupState, engineStartAt: Date | null, recheck = false): boolean {
   if (state.fanId === null || state.listHeadId === null) return false;
   if (getFanslyDmMessageSyncExcludedReason(state.metadata) !== null) return false;
   const handled = state.unavailableHandledHeadId ?? null;
   if (handled !== null && compareFanslySnowflakeIds(state.listHeadId, handled) !== 1) return false;
   const known = state.headConfirmedId ?? state.newestStoredMessageId;
+  if (!recheck && listHeadAccounted({ headId: state.listHeadId, known, headConfirmedAt: state.headConfirmedAt, engineStartAt })) {
+    return false;
+  }
   if (known !== null) return compareFanslySnowflakeIds(state.listHeadId, known) === 1;
   return state.listHeadAt !== null && engineStartAt !== null && state.listHeadAt.getTime() > engineStartAt.getTime();
 }

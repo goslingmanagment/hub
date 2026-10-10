@@ -56,8 +56,9 @@ import { readFanslyPageFacts, waitForPageIdentity } from "../lib/page-facts.ts";
 // step.
 //
 // - head (planned poll, 30 min): from offset 0 to the first page whose every
-//   chat is unchanged (same head id, a head with a time, nothing the legacy
-//   streak counts as a change), or a short page. No membership generation.
+//   chat is unchanged (same head, a settled head — the embedded message with
+//   a time, or one the reads account for — and nothing the legacy streak
+//   counts as a change), or a short page. No membership generation.
 // - full (planned poll, daily [A14]): every page to the short one, stamping a
 //   fresh membership generation; no thread is ever hidden (Fansly states no
 //   total, so no walk can prove a thread gone). Rows served twice inside one
@@ -82,11 +83,14 @@ import { readFanslyPageFacts, waitForPageIdentity } from "../lib/page-facts.ts";
 //
 // Every apply writes through the list's own writer
 // (`upsertPageDmConversationListFields`): never the stored window, the
-// coverage verdict or the chain columns (I9), never an unbinding. A listed
-// head newer than what the message reads reached asks for a read:
+// coverage verdict or the chain columns (I9), never an unbinding. A chat's
+// head is the newer of the row's id and the embedded `lastMessage.id`. A
+// listed head newer than what the message reads reached asks for a read:
 // `dm-messages.catchup` (planned) from head/full/detail, `dm-messages.head`
 // (urgent) from ws-down, find and repair, and for any chat a `.find` is open
-// for, whichever read lists it (the read answers that find).
+// for, whichever read lists it (the read answers that find). A head a late
+// enough chain-joined head read did not show (a deleted newest message
+// Fansly keeps naming) asks for none, except once per full walk.
 
 export type DmConversationsVariant = "head" | "full" | "find" | "detail" | "ws-down";
 
@@ -219,12 +223,15 @@ async function threadFollowups(
   // A chat Fansly refuses to the page asks for no read of a list head its
   // established episode already answered (arena "vanished chat" §2.3).
   const handled = await unavailableHandledHeads(db, input.pageId, input.threads.map((thread) => thread.state.groupId));
+  // The full walk re-reads a head the reads account for by time (once a day).
+  const recheck = input.key === FULL_KEY;
   const needRead = input.threads.filter((thread) => listHeadNeedsRead(
     { ...thread.state, unavailableHandledHeadId: handled.get(thread.state.groupId) ?? null },
     input.engineStartAt,
+    recheck,
   ));
   const answered = input.threads.filter((thread) => handled.has(thread.state.groupId)
-    && listHeadNeedsRead(thread.state, input.engineStartAt) && !needRead.includes(thread)).length;
+    && listHeadNeedsRead(thread.state, input.engineStartAt, recheck) && !needRead.includes(thread)).length;
   const openFinds = await listOpenWorkSubjects(db, {
     pageId: input.pageId,
     resource: FIND_KEY,
@@ -315,6 +322,7 @@ export async function applyListPage(
   // start on it (the follow-ups).
   const page = await getSyncPage(tx, input.pageId);
   const liftedExclusions = page?.liftedDmExclusions ?? [];
+  const startAt = engineStartAt(page);
 
   const items = rows.map((item) => resolveConversationListItem({
     item,
@@ -324,6 +332,7 @@ export async function applyListPage(
     existing: existingByGroup.get(item.groupId) ?? null,
     pageAccountId,
     liftedExclusions,
+    engineStartAt: startAt,
   }, input.now));
 
   // The partners' fans: a profile served with the list, or an id ensured
@@ -380,7 +389,7 @@ export async function applyListPage(
     bump("partner_missing_from_accounts", item.aggregationMissing);
     bump("partner_missing_lifted", item.aggregationMissing && item.messageSyncExcludedReason === null);
     bump("partner_contradictory", item.contradictory);
-    const servedAt = item.head.embeddedMessageId === item.head.listMessageId ? item.head.servedAt : null;
+    const servedAt = item.head.embeddedMessageId === item.head.headId ? item.head.servedAt : null;
     threads.push({
       state: {
         groupId: item.groupId,
@@ -388,8 +397,9 @@ export async function applyListPage(
         metadata: written.metadata,
         headConfirmedId: existing?.headConfirmedId ?? null,
         newestStoredMessageId: existing?.newestStoredMessageId ?? null,
-        listHeadId: item.head.listMessageId,
-        listHeadAt: listHeadInstant(item.head.listMessageId, servedAt),
+        headConfirmedAt: existing?.headConfirmedAt ?? null,
+        listHeadId: item.head.headId,
+        listHeadAt: listHeadInstant(item.head.headId, servedAt),
       },
       requestGroupDetail: item.requestGroupDetail,
       followupClass: input.classOf(item.groupId),
@@ -398,7 +408,7 @@ export async function applyListPage(
   const followups = await threadFollowups(tx, {
     pageId: input.pageId,
     key: input.key,
-    engineStartAt: engineStartAt(page),
+    engineStartAt: startAt,
     threads,
   });
   return {
@@ -475,6 +485,7 @@ async function applyGroupDetail(
         metadata: written.metadata,
         headConfirmedId: existing?.headConfirmedId ?? null,
         newestStoredMessageId: existing?.newestStoredMessageId ?? null,
+        headConfirmedAt: existing?.headConfirmedAt ?? null,
         listHeadId,
         listHeadAt: listHeadInstant(listHeadId, servedAt),
       },
@@ -839,6 +850,7 @@ const findModule: ResourceModule = {
       metadata: state.metadata,
       headConfirmedId: state.headConfirmedId,
       newestStoredMessageId: state.newestStoredMessageId,
+      headConfirmedAt: state.headConfirmedAt,
       listHeadId,
       listHeadAt: listHeadInstant(listHeadId, state.lastMessageAt),
       unavailableHandledHeadId: handled.get(groupId) ?? null,
