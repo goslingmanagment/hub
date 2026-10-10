@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { FANSLY_WS_LIVE_DECODER_VERSION, FANSLY_WS_MAX_FRAME_BYTES } from "@agency_hub_core/shared";
 
-import { fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";
+import { FANSLY_RESOURCE_SPECS, fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";
 import { parsePurchaseTargetSubject, purchaseTargetFollowups } from "../apps/runtime/src/sync/fansly/resources/purchases.ts";
 import { decodeFanslyWsFrame, WS_ROUTE_DECODER_VERSION, type WsItem } from "../apps/runtime/src/sync/fansly/ws/decode.ts";
 import {
@@ -20,8 +20,9 @@ import { serviceFrame, wrapped } from "./helpers/fansly-ws-fixtures.ts";
 
 // The engine's WebSocket decode + router (design §6.1, §6.2): every row of the
 // routing table, the broadcast rule [A6] with its rate fallback, the fast
-// confirmation window, the demand merge, and that every target is a registry
-// entry that declares the trigger.
+// confirmation window, the demand merge, that every target is a registry
+// entry that declares the trigger, and that every socket trigger an entry
+// declares is emitted by some frame (its producer is the router).
 
 const OWN = "100000000000000001";
 const FAN = "200000000000000001";
@@ -286,9 +287,11 @@ describe("routeWsItems (design §6.2)", () => {
     ]).map((signal) => `${signal.resource}/${signal.subject ?? ""}`)).toEqual(["dm-messages.head/a", "dm-messages.head/b", "transactions.head/"]);
   });
 
-  it("every target is a registry entry that declares the trigger", () => {
+  it("every target is a registry entry that declares the trigger, and every socket trigger declared is some frame's", () => {
+    const noSender = message();
+    delete noSender.senderId;
     const frames = [
-      created(message()), created(message({ senderId: OWN })), serviceFrame({ type: 10, message: { id: "600000000000000001" } }),
+      created(message()), created(message({ senderId: OWN })), created(noSender), serviceFrame({ type: 10, message: { id: "600000000000000001" } }),
       serviceFrame({ type: 8, id: OTHER_GROUP }, 4), serviceFrame({ type: 3, transaction: { id: "1", type: 2110, status: 1 } }, 6),
       serviceFrame({ type: 3, transaction: { id: "2", type: 2110, status: 2 } }, 6), serviceFrame({ type: 3, transaction: { id: "3", type: 16012, status: 1 } }, 6),
       serviceFrame({ type: 7, order: { orderId: "4", accountMediaId: "5" } }, 2), serviceFrame({ type: 2, wallet: { id: "6" } }, 6),
@@ -297,13 +300,17 @@ describe("routeWsItems (design §6.2)", () => {
     ];
     const contexts = [context({ threads: { [GROUP]: BOUND }, pending: ["2"] }), context()];
     const seen = new Set<string>();
+    /** `key|trigger` of every socket trigger some frame emitted. */
+    const emitted = new Set<string>();
     for (const frame of frames) {
       for (const ctx of contexts) {
         for (const signal of routeWsItems(items(frame), ctx)) {
           const spec = fanslyResourceSpec(signal.resource);
           expect(spec, signal.resource).not.toBeNull();
           for (const reason of signal.demand!.reason.split(",")) {
-            expect(spec!.triggers.some((trigger) => reason === trigger || reason.startsWith(`${trigger}:`)), `${signal.resource} ← ${reason}`).toBe(true);
+            const trigger = spec!.triggers.find((candidate) => reason === candidate || reason.startsWith(`${candidate}:`));
+            expect(trigger, `${signal.resource} ← ${reason}`).toBeDefined();
+            emitted.add(`${signal.resource}|${trigger}`);
           }
           seen.add(signal.resource);
         }
@@ -313,5 +320,9 @@ describe("routeWsItems (design §6.2)", () => {
       "dm-conversations.find", "dm-live.deletions", "dm-messages.head", "payouts.daily", "purchases.targets", "repair.ws-gap",
       "subscribers.poll", "transactions.head", "transactions.rescan",
     ]);
+    // Both ways: every socket trigger an entry declares is some frame's.
+    const declared = FANSLY_RESOURCE_SPECS.flatMap((spec) =>
+      spec.triggers.filter((trigger) => trigger.startsWith("ws:")).map((trigger) => `${spec.key}|${trigger}`));
+    expect(declared.filter((pair) => !emitted.has(pair))).toEqual([]);
   });
 });

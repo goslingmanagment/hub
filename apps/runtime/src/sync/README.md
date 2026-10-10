@@ -19,7 +19,11 @@ no lever takes a page to `live` or out of it (I17). Since step 4 a new Fansly pa
 onboarding checks its session through its own proxy without a page (one journaled `/account/me`, `fansly_send_log`
 with `page_id` null — owner decision №4) and creates the page, its credentials, the proven identity, the trusted
 credentials digest, its `live` row and its engine-owned guard row in one transaction (`createLiveSyncPage`); the host
-adopts it on its next pass and its first request goes ≥ 1.2 × S later (I5). The legacy engine never runs it.
+adopts it on its next pass and its first request goes ≥ 1.2 × S later (I5). The legacy engine never runs it. The same
+transaction queues the page's five history walks, once — the registry's `new_page` trigger, whose one producer the
+birth is (`fanslyNewPageWork`): `notifications.backfill`, `posts.backfill`, `stats.backfill`, `subscribers.history`,
+`transactions.backfill`, planned goals in the planned class's turn; the top-spenders bootstrap stays the owner's
+demand, old chat history a request (I12).
 Since step 4 S4-10 the legacy page-sync executor serves no Fansly page at all (I21): Fansly declares no legacy stream,
 so the legacy planner and executor seed, schedule, wake and lease OnlyFans pages only, the app-level `requestPageSync`
 (`services/sync-control.ts`, behind the API, the CLI and the levers) refuses a Fansly page with 409

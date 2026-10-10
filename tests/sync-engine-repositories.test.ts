@@ -10,7 +10,8 @@ import { sortDemandSignals } from "@agency_hub_core/db";
 //
 // I17 — a page is `live` only by its birth: Fansly onboarding creates the
 // page's row live in the transaction that creates the page
-// (`createLiveSyncPage`, step 4 S4-05), and nothing else calls it. Nothing
+// (`createLiveSyncPage`, step 4 S4-05), and nothing else calls it; the page's
+// history walks (`new_page`, `fanslyNewPageWork`) are queued there alone. Nothing
 // makes an existing page `handover` or `live`, takes a page out of `live`, or
 // flips a send guard row's owner: the step-3 switch, its rollback and the
 // switch capability that opened those transitions are gone (step 4 S4-21).
@@ -68,6 +69,11 @@ describe("Fansly Sync Engine repository boundaries", () => {
     // The only insert of a row that is born live.
     expect(filesMatching("'live', clock_timestamp\\(\\)", SOURCES)).toEqual([
       "packages/db/src/repositories/sync/pages.ts",
+    ]);
+    // The `new_page` trigger's one producer is that birth (its definition aside).
+    expect(filesMatching("fanslyNewPageWork\\(", SOURCES)).toEqual([
+      "apps/runtime/src/services/page-onboarding.ts",
+      "apps/runtime/src/sync/fansly/registry.ts",
     ]);
   });
 

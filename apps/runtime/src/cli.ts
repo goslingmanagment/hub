@@ -1449,7 +1449,7 @@ export function buildProgram() {
         if (!proxy) {
           throw new Error("Fansly onboarding requires --proxy-url");
         }
-        const { page: created } = await onboardFanslyPage(app, {
+        const { page: created, queuedAtBirth } = await onboardFanslyPage(app, {
           modelSlug: options.model,
           label: options.label,
           session,
@@ -1460,6 +1460,7 @@ export function buildProgram() {
         // Step 4 S4-05: born live; no legacy sync is queued for it.
         console.log(`Created Fansly page ${created.label} (${created.id})`);
         console.log(`${created.label} is live on the Fansly Sync Engine: the sync host adopts it within seconds`);
+        console.log(`queued at birth: ${queuedAtBirth.length === 0 ? "nothing" : queuedAtBirth.join(", ")}`);
       } finally {
         await app.close();
       }

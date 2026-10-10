@@ -6446,7 +6446,8 @@ describe("api integration", () => {
       return;
     }
 
-    // A Fansly page is born live on the Fansly Sync Engine and queues nothing
+    // A Fansly page is born live on the Fansly Sync Engine and queues no
+    // legacy sync — its history walks are engine work queued at its birth
     // (step 4 S4-05, tests/sync-onboard-live.integration.test.ts); an
     // OnlyFans page still starts on the legacy executor.
     const activeTestDb = testDb;

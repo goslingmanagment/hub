@@ -10,6 +10,7 @@ import {
   setPageOfapiAccountId,
   storePlatformCredentials,
   updateOnlyFansPageIdentityFromOfapi,
+  upsertDemands,
 } from "@agency_hub_core/db";
 import {
   encryptJson,
@@ -21,6 +22,7 @@ import {
 } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
+import { fanslyNewPageWork } from "../sync/fansly/registry.ts";
 import { applyAccountMeToPage } from "../sync/fansly/resources/account.ts";
 import { checkFanslyIdentityWithoutPage } from "../sync/fansly/identity-without-page.ts";
 import { readFanslyPageGeneration } from "./egress/fansly-probe-context.ts";
@@ -72,10 +74,15 @@ function normalizeProxyInput(proxy: ProxyConfig) {
  * A new Fansly page (step 4 S4-05): its session is checked through the proxy
  * it will get — one journaled `/account/me` that belongs to no page yet
  * (owner decision №4) — and only then are the page, its credentials, its
- * proxy, the account the check proved and its engine row created, in ONE
- * transaction. The page is born `live` on the Fansly Sync Engine
- * (`createLiveSyncPage`): the sync host adopts it on its next pass, its first
- * request ≥ 1.2 × S after that; the legacy engine never runs it.
+ * proxy, the account the check proved, its engine row and its history walks
+ * created, in ONE transaction. The page is born `live` on the Fansly Sync
+ * Engine (`createLiveSyncPage`): the sync host adopts it on its next pass, its
+ * first request ≥ 1.2 × S after that; the legacy engine never runs it. The
+ * birth is the one producer of the registry's `new_page` trigger: right after
+ * `createLiveSyncPage` it queues one planned goal per key that declares it
+ * (`fanslyNewPageWork`: the page's money, posts, notifications, stats and
+ * former subscribers), returned as `queuedAtBirth`; a refused birth queues
+ * nothing.
  */
 export async function onboardFanslyPage(
   app: FanslyOnboardingContext,
@@ -107,9 +114,9 @@ export async function onboardFanslyPage(
     source: "onboarding",
   });
 
-  let page;
+  let born;
   try {
-    page = await app.db.transaction(async (tx) => {
+    born = await app.db.transaction(async (tx) => {
       const dbTx = tx as unknown as typeof app.db;
       const created = await createFanslyPage(dbTx, {
         modelId: model.id,
@@ -142,13 +149,16 @@ export async function onboardFanslyPage(
         credentialsGeneration: await readFanslyPageGeneration(dbTx, created.label),
       });
 
-      return created;
+      // The `new_page` trigger: the page's history walks, queued with its birth.
+      const work = fanslyNewPageWork({ pageId: created.id, now: new Date() });
+      await upsertDemands(dbTx, work);
+      return { created, queuedAtBirth: work.map((row) => row.resource) };
     });
   } catch (error) {
     rethrowPageIdentityConflict(error);
   }
 
-  return { page, account: identity.account };
+  return { page: born.created, account: identity.account, queuedAtBirth: born.queuedAtBirth };
 }
 
 export async function onboardOnlyFansPage(
