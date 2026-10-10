@@ -868,6 +868,10 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # column, no query changes. The previous image reads the same indexes with
   # fewer unsummarized ranges, so it runs unchanged after a rollback.
   "0265_brin_autosummarize.sql"
+  # The corrections work list's partial index on dm_message_archive (id),
+  # built CONCURRENTLY, and the drop of 0076's unused (platform_account_id, id)
+  # partial index. Index-only: the previous image's query reads either plan.
+  "0266_dm_archive_repair_signal_by_id.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"
