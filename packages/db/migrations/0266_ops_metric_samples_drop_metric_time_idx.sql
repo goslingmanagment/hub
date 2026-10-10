@@ -1,0 +1,13 @@
+-- agency-hub:no-transaction
+-- 0266: drop ops_metric_samples_metric_time_idx (metric, sampled_at desc).
+--
+-- 0186 kept it "for the other metric reads", and the only other read by
+-- metric is listOpsMetricSamplesSince (ops-metrics.ts): one series by metric
+-- AND quantile since a cutoff, which 0186's own (metric, quantile, sampled_at
+-- desc) include (value_ms) index answers with all three keys, index-only.
+-- On prod (2026-10-10) it had 5 scans since 2026-10-03 against 12 112 for
+-- 0186's index, while every minutely sample write still maintained it:
+-- 324 MB, 5.2 M entries, the largest index of the table. Prune and the
+-- deadman read sampled_at's own index (0080), untouched.
+-- agency-hub:statement
+drop index concurrently if exists ops_metric_samples_metric_time_idx;

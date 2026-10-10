@@ -872,6 +872,10 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # built CONCURRENTLY, and the drop of 0076's unused (platform_account_id, id)
   # partial index. Index-only: the previous image's query reads either plan.
   "0266_dm_archive_repair_signal_by_id.sql"
+  # Drops ops_metric_samples_metric_time_idx CONCURRENTLY. Index-only: the
+  # previous image's metric reads are served by 0186's series index (and
+  # sampled_at's), so it runs unchanged after a rollback.
+  "0267_ops_metric_samples_drop_metric_time_idx.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

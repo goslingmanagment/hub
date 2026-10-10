@@ -71,9 +71,10 @@ export interface OpsMetricSampleRow {
 }
 
 /** G1.5: one series' history since a cutoff, OLDEST first — the shape a
- * least-squares days-to-full fit consumes (db-disk-alert.ts). Served by
- * ops_metric_samples_metric_time_idx (metric, sampled_at DESC); the DESC index
- * scans an ascending range just as well. `since` is exclusive of nothing —
+ * least-squares days-to-full fit consumes (db-disk-alert.ts). Served
+ * index-only by 0186's ops_metric_samples_series_time_idx (metric, quantile,
+ * sampled_at DESC) INCLUDE (value_ms); the DESC index scans an ascending range
+ * just as well. `since` is exclusive of nothing —
  * the boundary sample is included so a 24h window keeps its oldest point. */
 export async function listOpsMetricSamplesSince(
   db: Database,
