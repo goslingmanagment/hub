@@ -333,7 +333,10 @@ acking them, is a column nothing reads or writes any more.)
 
 Own mass broadcasts make no work (decision №9): they are `message.type = 2` with one shared correlation id (measured
 on the production journal), and as a fallback more than 20 own messages in distinct chats within 60 s are a
-broadcast. A deletion becomes `dm-live.deletions` (no request): a
+broadcast. Any other own message waits in one 5-minute window from the first own message of the chat (owner decision
+09.10): later own messages never extend it, and a fan's message in the chat is read on its own window (5 s, fast 2 s)
+— before the row's first read it opens that window, after it the head's retries stand. A deletion becomes
+`dm-live.deletions` (no request): a
 `local` step (a write without a request, in one generation-fenced transaction under the erasure fence, taken before
 the HTTP gate on the actor's next lap — no page hold or pacer slot delays it — and admitting nothing): the page's hot
 rows of the message are marked (sticky), one deliverable `message.deleted` is appended and the archive tombstoned

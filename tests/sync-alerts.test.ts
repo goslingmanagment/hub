@@ -359,6 +359,13 @@ describe("alert rules (design §9.6)", () => {
     });
     expect(evaluate(poll(55 * MINUTE))).toEqual({});
     expect(evaluate(poll(65 * MINUTE))).toEqual({ stuck: "planned_stale" });
+    // The money insurance: every 15 min, stale past 45 min (owner decision
+    // 09.10, У8 step 1) — one served 20 min ago is on time.
+    const insurance = (servedMs: number) => facts({
+      journal: { polls: [{ resource: "transactions.insurance", lastServedAt: at(-servedMs), createdAt: at(-24 * 60 * MINUTE) }] },
+    });
+    expect(evaluate(insurance(20 * MINUTE))).toEqual({});
+    expect(evaluate(insurance(46 * MINUTE))).toEqual({ stuck: "planned_stale" });
     // A key the owner switched off for the page is not stale.
     const off = poll(65 * MINUTE);
     expect(evaluate({ ...off, page: { ...off.page, registryOverrides: { "notifications.forward": { enabled: false } } } })).toEqual({});

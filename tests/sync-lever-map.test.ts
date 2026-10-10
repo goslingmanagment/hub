@@ -103,7 +103,7 @@ describe("the engine registry's lever map", () => {
       light: 3_600,
       dm_conversations: 1_800,
       dm_messages: 0,
-      transactions: 300,
+      transactions: 900,
       top_spenders: 21_600,
       fan_earnings: 0,
       purchase_history: 0,

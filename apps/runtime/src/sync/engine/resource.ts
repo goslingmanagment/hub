@@ -42,6 +42,11 @@ export interface CoalesceSpec {
   extendOnSignal: boolean;
   /** Attachments, tips, incomplete frames: a shorter window. */
   fast?: { quietMs: number; maxMs: number };
+  /** The page's own message: a window from the first signal that no signal
+   *  extends (it merges by the earlier due time). A signal of another window
+   *  that arrives before the row's first request opens its own quiet window
+   *  (`upsertDemand`), so the own window never holds it. */
+  own?: { quietMs: number; maxMs: number };
 }
 
 /** One age tier of a subject-queue walk: items up to `maxAgeDays` old (null:
@@ -151,7 +156,9 @@ export interface DemandSignal {
   subject?: string;
   /** Earliest run; default: now, or the end of the coalescing quiet window. */
   dueAt?: Date;
-  coalesce?: "normal" | "fast";
+  /** The coalescing window; `own` falls back to the normal one on an entry
+   *  without an own window. */
+  coalesce?: "normal" | "fast" | "own";
   demand?: { messageIds?: readonly string[]; txIds?: readonly string[]; reason: string };
   /** Non-secret parameters, written when the row is created. */
   params?: unknown;
@@ -650,13 +657,19 @@ export function demandToUpsert(
 ): UpsertDemandInput | null {
   if (input.page !== undefined && resourceDisabled(input.page, spec.key)) return null;
   const at = input.now.getTime();
+  const own = signal.coalesce === "own" ? spec.coalesce?.own : undefined;
   const window = spec.coalesce === undefined
     ? null
-    : signal.coalesce === "fast" && spec.coalesce.fast !== undefined
-      ? spec.coalesce.fast
-      : { quietMs: spec.coalesce.quietMs, maxMs: spec.coalesce.maxMs };
+    : own !== undefined
+      ? own
+      : signal.coalesce === "fast" && spec.coalesce.fast !== undefined
+        ? spec.coalesce.fast
+        : { quietMs: spec.coalesce.quietMs, maxMs: spec.coalesce.maxMs };
   const dueAt = signal.dueAt ?? (window === null ? input.now : new Date(at + window.quietMs));
-  const deadlineMs = signal.deadlineMs ?? spec.slo?.resultMs;
+  // The own window's result is due its whole window after the signal.
+  const resultMs = spec.slo?.resultMs;
+  const deadlineMs = signal.deadlineMs
+    ?? (own !== undefined && resultMs !== undefined ? own.maxMs + resultMs : resultMs);
   const upsert: UpsertDemandInput = {
     pageId: signal.pageId ?? input.pageId,
     resource: spec.key,
@@ -666,7 +679,7 @@ export function demandToUpsert(
     dueAt,
     coalesceUntil: window === null ? null : new Date(at + window.maxMs),
     deadlineAt: deadlineMs === undefined ? null : new Date(at + deadlineMs),
-    extendOnSignal: spec.coalesce?.extendOnSignal === true,
+    extendOnSignal: own === undefined && spec.coalesce?.extendOnSignal === true,
   };
   if (signal.demand !== undefined) {
     upsert.demand = {

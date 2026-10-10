@@ -268,7 +268,13 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
       // it: that read answers the find (step 3b, the shared list-head read).
       "apply:dm-conversations.head", "apply:dm-conversations.full", "apply:dm-conversations.detail",
     ],
-    coalesce: { quietMs: 5 * SECOND, maxMs: 20 * SECOND, extendOnSignal: true, fast: { quietMs: 2 * SECOND, maxMs: 6 * SECOND } },
+    // Owner decision 09.10 (У9): the page's own message (not a broadcast) is
+    // confirmed within 5 min of the first one in the chat; a fan's message
+    // in the same chat never waits for that window.
+    coalesce: {
+      quietMs: 5 * SECOND, maxMs: 20 * SECOND, extendOnSignal: true, fast: { quietMs: 2 * SECOND, maxMs: 6 * SECOND },
+      own: { quietMs: 5 * MINUTE, maxMs: 5 * MINUTE },
+    },
     slo: { resultMs: 30 * SECOND },
     proof: "chain_empty_page", walk: "incremental-head", http: true, evidence: true, fence: "dm_archive",
     operations: ["messages.page"],
@@ -305,9 +311,10 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     module: transactionsModule("head"),
   },
   {
-    // Owner decision №5: the insurance poll every 5 minutes.
+    // Owner decision №5, changed 09.10 (У8 step 1): every 15 minutes; the
+    // silent-socket detector is step 2.
     key: "transactions.insurance", file: "transactions", subject: "page", kind: "poll", class: "planned",
-    triggers: ["poll"], period: { everyMs: 5 * MINUTE }, slo: { staleAfterMs: 15 * MINUTE },
+    triggers: ["poll"], period: { everyMs: 15 * MINUTE }, slo: { staleAfterMs: 45 * MINUTE },
     proof: "head_known_item", walk: "offset-walk", http: true, evidence: false, fence: "dm_archive",
     operations: ["transactions.page"],
     legacy: [stream("transactions")],
@@ -353,14 +360,16 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
 
   // ── fan-earnings (S2-07b) ─────────────────────────────────────────────────
   {
-    // The transactions steps (≥ every 5 min) ask for a walk whenever a subject
-    // is due: dirty (projection queue) or past the roster age (poll-like). No
-    // standing row: between walks the queue alone says when the next is due.
+    // The transactions steps (≥ every 15 min) ask for a walk whenever a
+    // subject is due: dirty (projection queue) or past the roster age of 30
+    // days (poll-like). No standing row: between walks the queue alone says
+    // when the next is due. The monthly read first; the lifetime one only for
+    // a fan without a valid monthly snapshot (owner decision 09.10, У4).
     key: "fan-earnings.roster", file: "fan-earnings", subject: "page", kind: "goal", class: "planned",
     triggers: ["projection_queue", "poll", "apply:transactions.*"], slo: { staleAfterMs: 3 * DAY },
     proof: "receipt", walk: "subject-queue", http: true, evidence: false, fence: "none",
     operations: ["earnings.stats_accounts", "earnings.monthly_accounts"],
-    terminalStatuses: [400, 404, 410], subjectQueue: true, queuePlane: "fan_earnings_lifetime",
+    terminalStatuses: [400, 404, 410], subjectQueue: true, queuePlane: "fan_earnings_monthly",
     legacy: [stream("fan_earnings")],
     module: fanEarningsModule,
   },

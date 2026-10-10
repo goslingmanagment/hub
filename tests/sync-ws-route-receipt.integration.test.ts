@@ -168,6 +168,61 @@ describe("the post-ack routing hook (I18)", () => {
     expect(before.find((row) => row.resource === "purchases.targets")!.params).toEqual({ target: { kind: "media", id: "970000000000000001" } });
   });
 
+  it("own replies wait in a 5-min window; a fan message in the same chat does not (owner decision 09.10, У9)", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await livePage("live");
+    const otherGroup = "300000000000000002";
+    await seedWsThread(handles(), { pageId: page.pageId, groupId: otherGroup, fanRef: "200000000000000002" });
+    // The chat's head row: its due time and cap from now (the database
+    // clock), its due time as such, and its demanded ids.
+    const head = async (groupId: string) => (await query<{
+      due_ms: number; cap_ms: number; due_at_ms: number; due_in_ms: number; deadline_in_ms: number; ids: string[];
+    }>(
+      `select (extract(epoch from (due_at - clock_timestamp())) * 1000)::float8 as due_ms,
+              (extract(epoch from (coalesce_until - clock_timestamp())) * 1000)::float8 as cap_ms,
+              (extract(epoch from due_at) * 1000)::float8 as due_at_ms,
+              (extract(epoch from (due_at - first_demand_at)) * 1000)::float8 as due_in_ms,
+              (extract(epoch from (deadline_at - first_demand_at)) * 1000)::float8 as deadline_in_ms,
+              demand -> 'messageIds' as ids
+         from sync_work where page_id = $1 and resource = 'dm-messages.head' and subject = $2 and state = 'open'`,
+      [page.pageId, groupId],
+    ))[0]!;
+
+    // A chatter's reply: one read 5 min after it, the result due 30 s later.
+    const reply = wsMessage({ groupId: GROUP, senderId: OWN });
+    await applyFanslyWsLive(app(), await page.capture(wsCreated(reply)));
+    let row = await head(GROUP);
+    expect(row.due_in_ms).toBeGreaterThan(299_000);
+    expect(row.due_in_ms).toBeLessThan(301_000);
+    expect(row.deadline_in_ms).toBeGreaterThan(329_000);
+    expect(row.deadline_in_ms).toBeLessThan(331_000);
+
+    // The fan writes in the same chat: read on the fan's window (5 s quiet,
+    // 20 s cap from its arrival), confirming both.
+    const fan = wsMessage({ groupId: GROUP, senderId: FAN });
+    await applyFanslyWsLive(app(), await page.capture(wsCreated(fan)));
+    row = await head(GROUP);
+    expect(row.due_ms).toBeLessThanOrEqual(6_000);
+    expect(row.cap_ms).toBeLessThanOrEqual(21_000);
+    expect(row.deadline_in_ms).toBeLessThan(40_000);
+    expect([...row.ids].sort()).toEqual([reply.id, fan.id].sort());
+
+    // A further reply moves nothing.
+    const dueAt = row.due_at_ms;
+    await applyFanslyWsLive(app(), await page.capture(wsCreated(wsMessage({ groupId: GROUP, senderId: OWN }))));
+    row = await head(GROUP);
+    expect(row.due_at_ms).toBe(dueAt);
+    expect(row.ids).toHaveLength(3);
+
+    // A reply and a fan's message in one frame: the fan's window.
+    await applyFanslyWsLive(app(), await page.capture(wsCreated(
+      wsMessage({ groupId: otherGroup, senderId: OWN }), wsMessage({ groupId: otherGroup, senderId: "200000000000000002" }),
+    )));
+    row = await head(otherGroup);
+    expect(row.due_ms).toBeLessThanOrEqual(6_000);
+    expect(row.cap_ms).toBeLessThanOrEqual(21_000);
+  });
+
   it("PPV orders: one walk row per target across receipts; a subject-less quarantined row of an older build takes none", async (context) => {
     if (!testDb) return context.skip();
     const page = await livePage("live");

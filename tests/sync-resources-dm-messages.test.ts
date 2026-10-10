@@ -211,4 +211,24 @@ describe("registry", () => {
     })!;
     expect(fast).toMatchObject({ dueAt: new Date(NOW.getTime() + 2_000), coalesceUntil: new Date(NOW.getTime() + 6_000) });
   });
+
+  it("an own message waits in one 5-min window that no signal extends (owner decision 09.10, У9)", () => {
+    const spec = fanslyResourceSpec("dm-messages.head")!;
+    const own = demandToUpsert({ resource: spec.key, subject: "7", coalesce: "own", demand: { messageIds: ["1"], reason: "ws" } }, spec, {
+      pageId: 1, now: NOW,
+    })!;
+    expect(own).toMatchObject({
+      class: "urgent", dueAt: new Date(NOW.getTime() + 300_000), coalesceUntil: new Date(NOW.getTime() + 300_000),
+      deadlineAt: new Date(NOW.getTime() + 330_000), extendOnSignal: false,
+    });
+    // An entry without an own window takes the signal on its normal one.
+    const catchup = fanslyResourceSpec("dm-messages.catchup")!;
+    expect(catchup.coalesce?.own).toBeUndefined();
+    const normal = demandToUpsert({ resource: catchup.key, subject: "7", coalesce: "own", demand: { messageIds: ["1"], reason: "ws" } }, catchup, {
+      pageId: 1, now: NOW,
+    })!;
+    expect(normal).toMatchObject({
+      dueAt: new Date(NOW.getTime() + 60_000), coalesceUntil: new Date(NOW.getTime() + 600_000), extendOnSignal: true,
+    });
+  });
 });

@@ -328,6 +328,10 @@ export interface UpsertDemandResult {
  * deadline and coalescing cap. A coalescing window whose cap has passed is
  * closed: the signal never delays a row that is runnable by then, and opens
  * its own window on a row that still waits (a step's due time, its breaker).
+ * Before the row's first request, a signal whose cap ends before the row's
+ * due time — a row parked by a longer window (the page's own message) — opens
+ * its own quiet window; after it, the step's due time (the head's retry
+ * ladder) is merged as before.
  * No signal makes a row due before its own breaker ends (`breaker_until`): the
  * pick waits for it anyway, and a due time before it would read as urgent
  * work waiting — except a credentials check, whose pick does not wait
@@ -406,8 +410,11 @@ export async function upsertDemand(db: Database, input: UpsertDemandInput): Prom
         when not ${input.extendOnSignal === true}::boolean
           then least(sync_work.due_at, excluded.due_at)
         -- An open window: the quiet window moves later, never past its cap.
+        -- Before the row's first request, a signal whose cap ends before the
+        -- row is due (a row parked by a longer window) opens its own quiet window.
         when not ${windowClosed}
-          then least(sync_work.coalesce_until, greatest(sync_work.due_at, excluded.due_at))
+          then case when sync_work.attempts_count = 0 and sync_work.due_at > excluded.coalesce_until then excluded.due_at
+                    else least(sync_work.coalesce_until, greatest(sync_work.due_at, excluded.due_at)) end
         -- A closed one: a runnable row is not delayed; a waiting one takes the signal's window.
         when ${runnable}
           then sync_work.due_at

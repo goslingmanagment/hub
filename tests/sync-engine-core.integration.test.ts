@@ -751,6 +751,84 @@ describe("sync_work demand", () => {
     expect(row!.coalesceUntil!.getTime()).toBe(s1 + 20_000);
   });
 
+  it("an own-message window never holds a fan's signal (У9)", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage("own-window");
+    let seq = 0;
+    // The head's windows as `demandToUpsert` writes them: own (5 min from the
+    // first own message, never extended), normal (5 s / 20 s), fast (2 s / 6 s),
+    // a broken frame's explicit +15 s on the normal window.
+    const own = (at: number, subject: string) => demand(pageId, {
+      subject, dueAt: new Date(at + 300_000), coalesceUntil: new Date(at + 300_000), deadlineAt: new Date(at + 330_000),
+      extendOnSignal: false, demand: { messageIds: [`own-${++seq}`], reasons: ["ws:message_created:own"] },
+    });
+    const fan = (at: number, subject: string) => demand(pageId, {
+      subject, dueAt: new Date(at + 5_000), coalesceUntil: new Date(at + 20_000), deadlineAt: new Date(at + 30_000),
+      extendOnSignal: true, demand: { messageIds: [`fan-${++seq}`], reasons: ["ws:message_created"] },
+    });
+    const fast = (at: number, subject: string) => demand(pageId, {
+      subject, dueAt: new Date(at + 2_000), coalesceUntil: new Date(at + 6_000), deadlineAt: new Date(at + 10_000),
+      extendOnSignal: true, demand: { messageIds: [`fast-${++seq}`], reasons: ["ws:message_created"] },
+    });
+    const broken = (at: number, subject: string) => demand(pageId, {
+      subject, dueAt: new Date(at + 15_000), coalesceUntil: new Date(at + 20_000), deadlineAt: new Date(at + 30_000),
+      extendOnSignal: true, demand: { reasons: ["ws:message_invalid_known_chat"] },
+    });
+    const rowOf = async (subject: string) => (await getWorkForStatus(db(), { pageId, subject }))[0]!;
+    const times = async (subject: string) => {
+      const row = await rowOf(subject);
+      return { due: row.dueAt.getTime(), cap: row.coalesceUntil!.getTime(), deadline: row.deadlineAt!.getTime() };
+    };
+
+    // (a) An own message, then a fan's: the fan's quiet window, cap and deadline.
+    const t0 = Date.now();
+    await upsertDemand(db(), own(t0, "a"));
+    expect(await times("a")).toEqual({ due: t0 + 300_000, cap: t0 + 300_000, deadline: t0 + 330_000 });
+    const t1 = Date.now();
+    await upsertDemand(db(), fan(t1, "a"));
+    expect(await times("a")).toEqual({ due: t1 + 5_000, cap: t1 + 20_000, deadline: t1 + 30_000 });
+    // (b) A further own message moves nothing.
+    await upsertDemand(db(), own(Date.now(), "a"));
+    expect(await times("a")).toEqual({ due: t1 + 5_000, cap: t1 + 20_000, deadline: t1 + 30_000 });
+    expect((await rowOf("a")).demand.messageIds).toHaveLength(3);
+
+    // (c) A fan's message, then an own one: the fan's due time and cap stand.
+    const c0 = Date.now();
+    await upsertDemand(db(), fan(c0, "c"));
+    await upsertDemand(db(), own(Date.now(), "c"));
+    expect(await times("c")).toEqual({ due: c0 + 5_000, cap: c0 + 20_000, deadline: c0 + 30_000 });
+
+    // (d) An own message, then a fast one: 2 s, capped at 6 s.
+    await upsertDemand(db(), own(Date.now(), "d"));
+    const d1 = Date.now();
+    await upsertDemand(db(), fast(d1, "d"));
+    expect(await times("d")).toEqual({ due: d1 + 2_000, cap: d1 + 6_000, deadline: d1 + 10_000 });
+
+    // (e) An own message, then a broken frame's +15 s.
+    await upsertDemand(db(), own(Date.now(), "e"));
+    const e1 = Date.now();
+    await upsertDemand(db(), broken(e1, "e"));
+    expect((await times("e")).due).toBe(e1 + 15_000);
+
+    // (f) Own after own: the first one's 5 min.
+    const f0 = Date.now();
+    await upsertDemand(db(), own(f0, "f"));
+    await upsertDemand(db(), own(f0 + 1_000, "f"));
+    expect(await times("f")).toEqual({ due: f0 + 300_000, cap: f0 + 300_000, deadline: f0 + 330_000 });
+
+    // (g) After the row's first request its due time is the step's (the
+    // head's retry 14 s ahead): a fast signal caps the window but never pulls
+    // the retry in.
+    const g0 = Date.now();
+    const g = await upsertDemand(db(), fan(g0, "g"));
+    await testDb.pool.query("update sync_work set attempts_count = 1, due_at = $2, coalesce_until = $2 where id = $1", [
+      g.id, new Date(g0 + 14_000),
+    ]);
+    const g1 = Date.now();
+    await upsertDemand(db(), fast(g1, "g"));
+    expect(await times("g")).toEqual({ due: g0 + 14_000, cap: g1 + 6_000, deadline: g1 + 10_000 });
+  });
+
   it("creates the registry's polls once, each with a random phase", async (context) => {
     if (!testDb) return context.skip();
     const pageId = await seedPage("polls");
