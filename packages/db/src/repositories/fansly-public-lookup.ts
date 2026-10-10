@@ -405,7 +405,7 @@ function demandSql(input: { recheckBefore: Date }) {
       -- reads "= false" as NOT x and prices it 1 - P(true), ignoring that ~99%
       -- of the column is null: 71 520 rows expected for 51 (prod 2026-10-10),
       -- which hash-joined every Fansly fan, regex and all. IS FALSE is priced
-      -- from the column's own frequencies and matches 0267's partial index.
+      -- from the column's own frequencies and matches 0268's partial index.
       select pf.fan_id, 'page_lookup_miss', 2, pf.account_probe_at
         from page_fans pf
        where pf.account_probe_resolved is false

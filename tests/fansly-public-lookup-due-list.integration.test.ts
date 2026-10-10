@@ -11,7 +11,7 @@ import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helper
 // as NOT x, 1 - P(true), ignoring that ~99% of the column is null: 71 520 rows
 // expected for 51 on prod, which hash-joined every Fansly fan (317 ms a run).
 // IS FALSE picks the same rows, is priced from the column's frequencies, and
-// matches 0267's partial index.
+// matches 0268's partial index.
 
 let harness: StartedTestDatabase;
 let pageId = 0;
@@ -71,7 +71,7 @@ describe("the public lookup's due list", () => {
     expect(batch.every((candidate) => candidate.demands.includes("page_lookup_miss"))).toBe(true);
   });
 
-  it("reads the misses from 0267's partial index, priced at the rows that match", async () => {
+  it("reads the misses from 0268's partial index, priced at the rows that match", async () => {
     const statements: Array<{ text: string; values: unknown[] }> = [];
     const pool = harness.pool as unknown as { query: (config: unknown, values?: unknown) => Promise<unknown> };
     const original = pool.query.bind(pool);

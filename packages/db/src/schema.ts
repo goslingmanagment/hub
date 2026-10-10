@@ -1646,7 +1646,7 @@ export const pageFans = pgTable(
       table.platformAccountId,
       table.pageAlias,
     ),
-    // 0267: the public lookup's page_lookup_miss demand (fansly-public-lookup.ts).
+    // 0268: the public lookup's page_lookup_miss demand (fansly-public-lookup.ts).
     accountProbeUnresolvedIdx: index("page_fans_account_probe_unresolved_idx")
       .on(table.fanId)
       .where(sql`${table.accountProbeResolved} is false`),

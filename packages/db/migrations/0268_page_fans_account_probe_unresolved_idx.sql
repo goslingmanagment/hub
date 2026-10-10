@@ -1,5 +1,5 @@
 -- agency-hub:no-transaction
--- 0267: the Fansly public lookup reads the fans a page's lookup missed from a
+-- 0268: the Fansly public lookup reads the fans a page's lookup missed from a
 -- partial index instead of scanning page_fans.
 --
 -- pickFanslyPublicLookupBatch (fansly-public-lookup.ts) runs for every batch
