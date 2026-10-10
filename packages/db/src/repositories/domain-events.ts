@@ -1356,9 +1356,57 @@ export async function ensureDomainEventPartitions(
       create table if not exists "${name}" partition of "domain_events"
       for values from ('${monthStart(year, month)}') to ('${monthStart(next.year, next.month)}')
     `));
+    await switchPartitionBrinAutosummarizeOn(db, name);
     ensured.push(name);
   }
   return ensured;
+}
+
+/** How long a switch below may wait for its index lock before it gives up. */
+const BRIN_AUTOSUMMARIZE_LOCK_TIMEOUT = sql.raw(`'2s'`);
+
+/**
+ * Migration 0265 switched autosummarize on for every BRIN index, but Postgres
+ * keeps no storage options on a partitioned index: a partition created later
+ * clones a plain BRIN, whose ranges would again stay unsummarized until the
+ * partition's next vacuum. So each partition this job ensures gets the option
+ * here. A new partition is empty, so the switch is instant; ALTER INDEX still
+ * needs ACCESS EXCLUSIVE on the index, so it waits at most 2 s and otherwise
+ * leaves the switch to the next run (the lead is months).
+ */
+async function switchPartitionBrinAutosummarizeOn(db: Database, partition: string): Promise<void> {
+  const pending = await db.execute<{ index: string }>(sql`
+    select format('%I.%I', n.nspname, c.relname) as index
+    from pg_index x
+    join pg_class c on c.oid = x.indexrelid
+    join pg_namespace n on n.oid = c.relnamespace
+    join pg_am am on am.oid = c.relam
+    where x.indrelid = to_regclass(${`public.${partition}`})
+      and am.amname = 'brin'
+      and not exists (
+        select 1 from unnest(coalesce(c.reloptions, '{}'::text[])) as o(option)
+        where o.option in ('autosummarize=on', 'autosummarize=true')
+      )
+  `);
+  for (const { index } of pending.rows) {
+    try {
+      await db.transaction(async (tx) => {
+        await tx.execute(sql`set local lock_timeout = ${BRIN_AUTOSUMMARIZE_LOCK_TIMEOUT}`);
+        await tx.execute(sql.raw(`alter index ${index} set (autosummarize = on)`));
+      });
+    } catch (error) {
+      if (!isLockNotAvailable(error)) throw error;
+    }
+  }
+}
+
+function isLockNotAvailable(error: unknown): boolean {
+  let current: unknown = error;
+  while (typeof current === "object" && current !== null) {
+    if ("code" in current && current.code === "55P03") return true;
+    current = "cause" in current ? current.cause : undefined;
+  }
+  return false;
 }
 
 /** Partition lead beyond the current month — the pre-create job's floor signal. */
