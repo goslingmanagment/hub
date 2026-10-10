@@ -48,14 +48,16 @@ export async function pruneOpsMetricSamples(db: Database, retentionDays: number)
  * check (db-disk-alert.ts), not by the minutely golden-signal sampler. Counting
  * them would let a dead sampler read as alive for up to an hour after every
  * disk row, making ops_sampler_silent flap hourly instead of latching. The
+ * `process_*` memory gauges are excluded for the same reason: every role's
+ * heartbeat writes them (runtime-heartbeat.ts), sampler or not. The
  * `\_` escape keeps the underscore literal (LIKE treats a bare `_` as a
  * wildcard); the sampled_at index still serves this as a backward index scan
- * with a filter, and non-disk rows are ~11/min, so the first row matches at
+ * with a filter, and sampler rows are ~11/min, so the first row matches at
  * once. */
 export async function getLatestOpsMetricSampleAt(db: Database): Promise<Date | null> {
   const result = await db.execute<{ latest: Date | string | null }>(sql`
     select max(sampled_at) as latest from ops_metric_samples
-    where metric not like 'disk\\_%'
+    where metric not like 'disk\\_%' and metric not like 'process\\_%'
   `);
   const latest = result.rows[0]?.latest;
   return latest ? new Date(latest) : null;

@@ -3,9 +3,11 @@ import { mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
 import {
+  insertOpsMetricSamples,
   reapStaleInstances,
   removeInstance,
   upsertInstanceHeartbeat,
+  type OpsMetricSampleInput,
 } from "@agency_hub_core/db";
 import { buildRunningSnapshot, type AppConfig } from "@agency_hub_core/shared";
 
@@ -31,6 +33,30 @@ export type RuntimeHeartbeatContext = Pick<AppContext, "db" | "config" | "logger
  *  `intervalMs` (the `sync` role: 30 s, against its 2-minute alert). */
 export const HEARTBEAT_INTERVAL_MS = 60_000;
 export const HEARTBEAT_STOP_TIMEOUT_MS = 5_000;
+
+/** How often a role records its own memory as ops metric gauges. */
+export const RUNTIME_MEMORY_SAMPLE_INTERVAL_MS = 5 * 60_000;
+
+/**
+ * The process's memory as single readings in ops_metric_samples, under
+ * quantile 'p50' like the disk gauges (value_ms is a BIGINT; these are bytes):
+ * `process_rss_bytes_<role>`, `process_heap_used_bytes_<role>` (V8's live
+ * heap) and `process_external_bytes_<role>` (Buffers and other memory V8
+ * tracks outside its heap). Visibility, no threshold: the RSS of a role is what
+ * the host pays, and a worker peak of 911 MB (2026-10-10) had no record to
+ * explain it. The sampler deadman skips `process_*` rows
+ * (getLatestOpsMetricSampleAt): a role's own beat is not sampler liveness.
+ */
+export function runtimeMemorySamples(
+  role: RuntimeRole,
+  usage: NodeJS.MemoryUsage = process.memoryUsage(),
+): OpsMetricSampleInput[] {
+  return [
+    { metric: `process_rss_bytes_${role}`, quantile: "p50", valueMs: usage.rss },
+    { metric: `process_heap_used_bytes_${role}`, quantile: "p50", valueMs: usage.heapUsed },
+    { metric: `process_external_bytes_${role}`, quantile: "p50", valueMs: usage.external },
+  ];
+}
 
 export interface RuntimeHeartbeat {
   readonly instanceId: string;
@@ -167,6 +193,7 @@ export function startRuntimeHeartbeat(
   // before removing the row, so a late upsert can never resurrect a removed instance.
   let stopped = false;
   let inFlight: Promise<void> | null = null;
+  let lastMemorySampleAtMs: number | null = null;
 
   const beat = async () => {
     try {
@@ -201,6 +228,14 @@ export function startRuntimeHeartbeat(
       }
       // Idempotent across instances; whichever process runs it first wins.
       await reapStaleInstances(app.db).catch(() => undefined);
+      // After liveness is recorded: a failed gauge write never costs a beat.
+      const nowMs = Date.now();
+      if (lastMemorySampleAtMs === null || nowMs - lastMemorySampleAtMs >= RUNTIME_MEMORY_SAMPLE_INTERVAL_MS) {
+        lastMemorySampleAtMs = nowMs;
+        await insertOpsMetricSamples(app.db, runtimeMemorySamples(role)).catch((error: unknown) => {
+          app.logger.warn({ err: error, role }, "runtime memory gauge write failed");
+        });
+      }
     } catch (error) {
       app.logger.warn({ err: error, role }, "runtime heartbeat upsert failed");
     }
