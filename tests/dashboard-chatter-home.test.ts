@@ -1,10 +1,14 @@
 import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Decision 351: a chatter's home is /account. Every owner page behind
 // ProtectedLayout answers 403 for them, so neither a fresh sign-in nor a
 // remembered `next` may land them there.
+//
+// The app also answers on the chatters' own site, where nginx serves only
+// /account, /join and /login. There the sign-in carries the product's name and
+// the cabinet is every role's home: the console lives under another name.
 
 const mocks = vi.hoisted(() => ({
   useAuthMe: vi.fn(),
@@ -52,10 +56,22 @@ import { ChatterLayout } from "../apps/dashboard/src/components/layout/ChatterLa
 import { ProtectedLayout } from "../apps/dashboard/src/components/layout/ProtectedLayout.tsx";
 import { LoginPage } from "../apps/dashboard/src/pages/LoginPage.tsx";
 import { resolveRoleHome } from "../apps/dashboard/src/lib/navigation.ts";
+import { CHATTER_SITE_ORIGIN, CONSOLE_ORIGIN } from "../apps/dashboard/src/lib/sites.ts";
 
 function user(role: string) {
   return { authMethod: "session", user: { id: 3, username: "grisha", role, mustChangePassword: false, assignedPages: [] } };
 }
+
+function openOn(origin: string) {
+  vi.stubGlobal("window", { location: { origin } });
+}
+
+function signedOut() {
+  mocks.useAuthMe.mockReturnValue({ data: undefined, isLoading: false, isError: false });
+}
+
+const CHATGOOSE_WORDMARK = '<span class="text-accent">Chat</span><span>Goose</span>';
+const AGENCYHUB_WORDMARK = '<span class="text-accent">Agency</span><span>Hub</span>';
 
 beforeEach(() => {
   mocks.search = new URLSearchParams();
@@ -64,6 +80,10 @@ beforeEach(() => {
   mocks.useLogin.mockReset().mockReturnValue({ isPending: false, isError: false, error: null, mutate: vi.fn(), reset: vi.fn() });
   mocks.useLogout.mockReset().mockReturnValue({ isPending: false, mutateAsync: vi.fn() });
   mocks.usePages.mockReset().mockReturnValue({ data: [], isLoading: false, isError: false, refetch: vi.fn() });
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 describe("resolveRoleHome", () => {
@@ -124,5 +144,68 @@ describe("ChatterLayout", () => {
     const html = renderToStaticMarkup(createElement(ChatterLayout));
     expect(html).not.toContain("nav-redirect");
     expect(html).toContain("page-outlet");
+  });
+});
+
+describe("on the chatters' site", () => {
+  beforeEach(() => openOn(CHATTER_SITE_ORIGIN));
+
+  it("signs a person in to ChatGoose, not to a console they never see", () => {
+    signedOut();
+    const html = renderToStaticMarkup(createElement(LoginPage));
+    expect(html).toContain(CHATGOOSE_WORDMARK);
+    expect(html).not.toContain("Agency");
+    expect(html).toContain("Логин");
+  });
+
+  it.each(["owner", "team_lead", "chatter"])("makes the cabinet home for the %s role, whatever page was remembered", (role) => {
+    expect(resolveRoleHome(role, "/usage")).toBe("/account");
+    expect(resolveRoleHome(role, "/")).toBe("/account");
+  });
+
+  it.each(["owner", "team_lead"])("opens the cabinet, not the console, when the %s role is already signed in", (role) => {
+    mocks.search = new URLSearchParams({ next: "/usage" });
+    mocks.useAuthMe.mockReturnValue({ data: user(role), isLoading: false, isError: false });
+    const html = renderToStaticMarkup(createElement(LoginPage));
+    expect(html).toContain('data-to="/account"');
+    expect(html).not.toContain('data-to="/usage"');
+  });
+
+  it("ends an owner's in-app visit to a console route on the cabinet, before the console asks the kernel for anything", () => {
+    mocks.useAuthMe.mockReturnValue({ data: user("owner"), isLoading: false, isError: false });
+    const html = renderToStaticMarkup(createElement(ProtectedLayout));
+    expect(html).toContain('data-to="/account"');
+    expect(html).not.toContain("owner-sidebar");
+    expect(html).not.toContain("page-outlet");
+    expect(mocks.useAuthMe).not.toHaveBeenCalled();
+    expect(mocks.usePages).not.toHaveBeenCalled();
+  });
+
+  it.each(["owner", "team_lead", "chatter"])("still opens the cabinet itself for the %s role", (role) => {
+    mocks.useAuthMe.mockReturnValue({ data: user(role), isLoading: false, isError: false });
+    const html = renderToStaticMarkup(createElement(ChatterLayout));
+    expect(html).not.toContain("nav-redirect");
+    expect(html).toContain("page-outlet");
+  });
+});
+
+describe("on the console's own name", () => {
+  beforeEach(() => openOn(CONSOLE_ORIGIN));
+
+  it("keeps the AgencyHub sign-in", () => {
+    signedOut();
+    const html = renderToStaticMarkup(createElement(LoginPage));
+    expect(html).toContain(AGENCYHUB_WORDMARK);
+    expect(html).not.toContain("Goose");
+  });
+
+  it("returns an owner to the page they were sent away from, and leaves them the console", () => {
+    mocks.search = new URLSearchParams({ next: "/usage" });
+    mocks.useAuthMe.mockReturnValue({ data: user("owner"), isLoading: false, isError: false });
+    expect(resolveRoleHome("owner", "/usage")).toBe("/usage");
+    expect(renderToStaticMarkup(createElement(LoginPage))).toContain('data-to="/usage"');
+    const shell = renderToStaticMarkup(createElement(ProtectedLayout));
+    expect(shell).not.toContain("nav-redirect");
+    expect(shell).toContain("owner-sidebar");
   });
 });

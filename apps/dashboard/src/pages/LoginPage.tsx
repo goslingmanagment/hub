@@ -3,6 +3,16 @@ import { useNavigate, Navigate, useSearchParams } from "react-router";
 import { useLogin, useAuthMe } from "@/api/queries";
 import { KernelApiError } from "@/api/sdk";
 import { resolveLoginReturnPath, resolveRoleHome } from "@/lib/navigation";
+import { isChatterSite } from "@/lib/sites";
+
+// One sign-in screen for two names. A chatter signs in to the product they
+// use, so on their site it carries that product's wordmark — the one
+// ChatterLayout and /join show — and not the name of a console they never see.
+function Wordmark() {
+  return isChatterSite()
+    ? <><span className="text-accent">Chat</span><span>Goose</span></>
+    : <><span className="text-accent">Agency</span><span>Hub</span></>;
+}
 
 export function LoginPage() {
   const navigate = useNavigate();
@@ -45,8 +55,7 @@ export function LoginPage() {
     <div className="flex min-h-screen items-center justify-center bg-bg p-4">
       <div className="w-full max-w-[380px] rounded-xl border border-border bg-card p-6 sm:p-8 shadow-sm">
         <h1 className="mb-6 text-center text-2xl font-bold">
-          <span className="text-accent">Agency</span>
-          <span>Hub</span>
+          <Wordmark />
         </h1>
 
         {authQuery.isError && !(authQuery.error instanceof KernelApiError && authQuery.error.status === 401) && <p role="alert" className="mb-4 text-sm text-text-secondary">Не удалось проверить текущую сессию. Можно повторить вход.</p>}
