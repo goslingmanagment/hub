@@ -1,10 +1,18 @@
 #!/bin/sh
 # Stage-1 series on the final prototype (after Astra's reviews):
 #   docker exec -d <project>-runner-1 sh /pb/stand/runner/batch5.sh A|B|C|D
+# This only records what each scenario printed. The verdict of the series is
+# verify-series.ts over the result files (the SERIES table there is this list).
 set -u
 PART="${1:-A}"
 OUT=/stand/results/last-${STAND_NAME:-stand}-$PART-$(date -u +%Y%m%dT%H%M%SZ).log
-run() { echo "=== $1 x$2 $(date -u +%H:%M:%S)" >> "$OUT"; node --no-warnings /pb/stand/runner/main.ts "$1" "$2" 2>&1 | grep '"scenario"' >> "$OUT"; }
+run() {
+  echo "=== $1 x$2 $(date -u +%H:%M:%S)" >> "$OUT"
+  node --no-warnings /pb/stand/runner/main.ts "$1" "$2" > /tmp/batch-run.out 2>&1
+  code=$?
+  # A runner that died without its summary leaves a line too.
+  grep '"scenario"' /tmp/batch-run.out >> "$OUT" || echo "=== no summary: $1 (exit $code)" >> "$OUT"
+}
 case "$PART" in
   A)
     for s in ws-contexts ws-refused ws-blank-iframe ws-h2 ws-sw-restart; do run "$s" 50; done
