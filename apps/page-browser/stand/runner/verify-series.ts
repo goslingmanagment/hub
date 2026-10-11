@@ -42,6 +42,7 @@ const SERIES: Record<string, Record<string, number>> = {
     "next-admission-expired": 20, "next-admission-slow": 20, "stale-after-limit": 10,
     "cancel-next-admission": 20, "cancel-next-admission-pending": 20,
     "document-replaced-site": 10, "document-replaced-site-simple": 10, "document-replaced-hub": 10,
+    "document-replaced-site-frame": 10, "document-replaced-hub-frame": 10,
   },
   F: {
     "expiry-site-reused": 50, "expiry-hub-reused": 50, "expiry-site-operator-stop": 50,

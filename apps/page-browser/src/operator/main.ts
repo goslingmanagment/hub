@@ -373,27 +373,51 @@ cdp.on("Target.detachedFromTarget", (event) => {
 // cannot leave anyway. A document is known by its loader id: the one each
 // request was issued by (Network.requestWillBeSent) and the ones each frame
 // has left behind (Page.frameNavigated). Only a loader seen to be replaced
-// counts; a request whose loader is not known yet is released as before.
+// counts. A preflight has no loader of its own: it takes the one of the
+// request it was made for, whichever of the two Chrome reports first (second
+// live session: the preflight came first and was released into the void).
+// When the request's loader is still not known, its frame decides: a frame
+// that committed another document after the request paused has left it.
 
 const loaderOfRequest = new Map<string, string>();
+const initiatorOfPreflight = new Map<string, string>();
 const loaderOfFrame = new Map<string, string>();
 const replacedLoaders = new Set<string>();
+/** Documents each frame has committed (Page.frameNavigated). */
+const navigationsOfFrame = new Map<string, number>();
+/** Stand: ignore the loaders, so the frame's rule alone decides. */
+let testIgnoreLoaders = false;
 
 function remember<K, V>(map: Map<K, V>, key: K, value: V): void {
   map.set(key, value);
   if (map.size > 5000) map.delete(map.keys().next().value!);
 }
 
-function documentReplaced(params: PausedParams): boolean {
-  const loader = params.networkId ? loaderOfRequest.get(params.networkId) : undefined;
-  return loader !== undefined && replacedLoaders.has(loader);
+function navigationsNow(params: PausedParams): number {
+  return params.frameId ? navigationsOfFrame.get(params.frameId) ?? 0 : 0;
+}
+
+function loaderOfRequestId(networkId: string | undefined): string | undefined {
+  if (!networkId || testIgnoreLoaders) return undefined;
+  const own = loaderOfRequest.get(networkId);
+  if (own !== undefined) return own;
+  const initiator = initiatorOfPreflight.get(networkId);
+  return initiator !== undefined ? loaderOfRequest.get(initiator) : undefined;
+}
+
+/** `navigationsAtPause`: the frame's committed documents when the request
+ *  paused. */
+function documentReplaced(params: PausedParams, navigationsAtPause: number): boolean {
+  const loader = loaderOfRequestId(params.networkId);
+  if (loader !== undefined) return replacedLoaders.has(loader);
+  return params.frameId !== undefined && navigationsNow(params) > navigationsAtPause;
 }
 
 /** Paused requests of a replaced document, still waiting for their
  *  admissions: failed now, so the engine never admits them. */
 function failReplacedDocumentRequests(): void {
   for (const [id, pending] of pendingSite) {
-    if (!documentReplaced(pending.params)) continue;
+    if (!documentReplaced(pending.params, pending.navigationsAtPause)) continue;
     pendingSite.delete(id);
     clearTimeout(pending.timer);
     observe("site.document_replaced", { req: id });
@@ -401,7 +425,7 @@ function failReplacedDocumentRequests(): void {
     finishOp(pending.op, { outcome: "aborted_before_send", reason: "its document was replaced while it waited" });
   }
   for (const attempt of hub.values()) {
-    if (attempt.done || !attempt.waiting || !documentReplaced(attempt.waiting.params)) continue;
+    if (attempt.done || !attempt.waiting || !documentReplaced(attempt.waiting.params, attempt.waiting.navigationsAtPause)) continue;
     const { event, params } = attempt.waiting;
     attempt.waiting = null;
     if (attempt.pausedTimer) clearTimeout(attempt.pausedTimer);
@@ -426,8 +450,9 @@ cdp.on("Page.frameNavigated", (event) => {
       if (replacedLoaders.size > 5000) replacedLoaders.delete(replacedLoaders.values().next().value!);
     }
     remember(loaderOfFrame, frame.id, frame.loaderId);
-    failReplacedDocumentRequests();
   }
+  remember(navigationsOfFrame, frame.id, (navigationsOfFrame.get(frame.id) ?? 0) + 1);
+  failReplacedDocumentRequests();
 });
 
 cdp.on("Runtime.bindingCalled", (event) => {
@@ -757,8 +782,7 @@ cdp.on("Network.requestWillBeSent", (event) => {
   // A preflight has a request id of its own and no loader: it belongs to the
   // document of the request it was made for.
   else if (params.initiator?.type === "preflight" && params.initiator.requestId) {
-    const loader = loaderOfRequest.get(params.initiator.requestId);
-    if (loader) remember(loaderOfRequest, params.requestId, loader);
+    remember(initiatorOfPreflight, params.requestId, params.initiator.requestId);
   }
   const phys = byNetworkId.get(params.requestId);
   if (phys && params.redirectResponse) {
@@ -1465,6 +1489,7 @@ interface PendingSite {
   op: Operation;
   role: Physical["role"];
   timer: NodeJS.Timeout;
+  navigationsAtPause: number;
 }
 const pendingSite = new Map<string, PendingSite>();
 
@@ -1502,7 +1527,7 @@ function onSitePaused(event: CdpEvent, params: PausedParams, hop = false): void 
     // The engine hears it: an admission given later has nothing to release.
     finishOp(op, { outcome: "aborted_before_send", reason: "the admission wait is over" });
   }, CFG.siteAdmitWaitMs);
-  pendingSite.set(id, { event, params, op, role: preflight ? "preflight" : "main", timer });
+  pendingSite.set(id, { event, params, op, role: preflight ? "preflight" : "main", timer, navigationsAtPause: navigationsNow(params) });
   askSiteAdmit(id, params, method);
 }
 
@@ -1523,7 +1548,7 @@ function onSiteAdmitResult(message: EngineMessage): void {
     finishOp(pending.op, { outcome: "aborted_before_send", reason: message.ok === true ? "the admission came expired or the exit is closed" : "refused" });
     return;
   }
-  if (documentReplaced(pending.params)) {
+  if (documentReplaced(pending.params, pending.navigationsAtPause)) {
     observe("site.document_replaced", { req: id });
     void resolvePaused(pending.event, "fail", { requestId: id, errorReason: "Aborted" });
     finishOp(pending.op, { outcome: "aborted_before_send", reason: "its document was replaced while it waited" });
@@ -1544,7 +1569,7 @@ interface HubAttempt {
   url: string;
   headers: Record<string, string>;
   op: Operation | null;
-  waiting: { event: CdpEvent; params: PausedParams; role: Physical["role"] } | null;
+  waiting: { event: CdpEvent; params: PausedParams; role: Physical["role"]; navigationsAtPause: number } | null;
   pausedTimer: NodeJS.Timeout | null;
   worldId: number | null;
   done: boolean;
@@ -1782,7 +1807,7 @@ function onHubPaused(event: CdpEvent, params: PausedParams, attemptId: string): 
     return;
   }
   attempt.op = newOperation("hub", attemptId, attemptId, (outcome) => hubResult(attempt, outcome));
-  attempt.waiting = { event, params, role };
+  attempt.waiting = { event, params, role, navigationsAtPause: navigationsNow(params) };
   rpc.send({ type: "check", attemptId });
   attempt.pausedTimer = setTimeout(() => {
     observe("hub.check_timeout", { attemptId });
@@ -1795,7 +1820,7 @@ function onCheckResult(message: EngineMessage): void {
   const attempt = hub.get(String(message.attemptId));
   if (!attempt || attempt.done || !attempt.waiting || !attempt.op) return;
   if (attempt.pausedTimer) clearTimeout(attempt.pausedTimer);
-  const { event, params, role } = attempt.waiting;
+  const { event, params, role, navigationsAtPause } = attempt.waiting;
   attempt.waiting = null;
   const deadline = Number(message.deadlineMono);
   if (message.ok !== true || !(deadline > monoMs()) || !egress.exitOpen) {
@@ -1803,7 +1828,7 @@ function onCheckResult(message: EngineMessage): void {
     hubResult(attempt, { outcome: "aborted_before_send", reason: message.reason ?? "refused" });
     return;
   }
-  if (documentReplaced(params)) {
+  if (documentReplaced(params, navigationsAtPause)) {
     observe("hub.document_replaced", { attemptId: attempt.attemptId });
     void resolvePaused(event, "fail", { requestId: params.requestId, errorReason: "Aborted" });
     hubResult(attempt, { outcome: "aborted_before_send", reason: "its document was replaced while it waited" });
@@ -2364,6 +2389,7 @@ async function onCommand(message: EngineMessage): Promise<void> {
         if (typeof message.dataDelayMs === "number") testDataDelayMs = message.dataDelayMs;
         if (typeof message.cdpDelayMs === "number") cdp.testDelayMs = message.cdpDelayMs;
         if (typeof message.cdpReplyDelayMs === "number") cdp.testReplyDelayMs = message.cdpReplyDelayMs;
+        if (typeof message.ignoreLoaders === "boolean") testIgnoreLoaders = message.ignoreLoaders;
         if (typeof message.burstClose === "boolean") egress.gate.burstClose = message.burstClose;
         if (typeof message.preflightFulfill === "boolean") CFG.preflightFulfill = message.preflightFulfill;
         if (typeof message.fetchScope === "string") CFG.fetchScope = message.fetchScope;

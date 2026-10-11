@@ -1002,10 +1002,14 @@ function cancelNextAdmission(connection: "warm" | "pending"): Scenario {
  *  operator fails it instead: nothing of it reaches the server, the engine
  *  hears that it was not sent, and the page goes on past the limit.
  *  `kind`: a site request with a preflight, a simple one, or a Hub request. */
-function documentReplacedWhileWaiting(kind: "site" | "site-simple" | "hub"): Scenario {
+function documentReplacedWhileWaiting(kind: "site" | "site-simple" | "hub", frameOnly = false): Scenario {
   return async (ctx) => {
     await fresh(ctx);
-    const tag = `docrep-${kind}-${ctx.run}-${Date.now() % 100000}`;
+    // `frameOnly`: the operator ignores the requests' loaders, as when Chrome
+    // reported a preflight before the request it was made for (second live
+    // session); the frame's navigations alone decide.
+    await ctx.engine.command("test.config", { ignoreLoaders: frameOnly });
+    const tag = `docrep-${kind}${frameOnly ? "-f" : ""}-${ctx.run}-${Date.now() % 100000}`;
     await warm(ctx, tag);
     const rid = `d-${tag}`;
     let grant: () => void;
@@ -1032,6 +1036,7 @@ function documentReplacedWhileWaiting(kind: "site" | "site-simple" | "hub"): Sce
     const halted = ctx.engine.alarms.filter((alarm) => alarm.kind === "halted" && Number(alarm.recvMono) >= since).map((alarm) => alarm.detail);
     if (halted.length > 0) await ctx.engine.command("restart");
     await ctx.engine.waitReady(180_000);
+    await ctx.engine.command("test.config", { ignoreLoaders: false });
     const arrivals = reqs(events, rid).map((event) => `${event.method} ${event.rid}`);
     const told = kind === "hub" ? ctx.engine.results.get(rid) ?? null : ctx.engine.siteDoneOf(rid);
     const violations: string[] = [];
@@ -1858,6 +1863,8 @@ export const scenarios: Record<string, Scenario> = {
   "document-replaced-site": documentReplacedWhileWaiting("site"),
   "document-replaced-site-simple": documentReplacedWhileWaiting("site-simple"),
   "document-replaced-hub": documentReplacedWhileWaiting("hub"),
+  "document-replaced-site-frame": documentReplacedWhileWaiting("site", true),
+  "document-replaced-hub-frame": documentReplacedWhileWaiting("hub", true),
   "cancel-next-admission-pending": cancelNextAdmission("pending"),
   "ws-expiry-socks": wsExpiry("socks"),
   "ws-expiry-tls": wsExpiry("tls"),
