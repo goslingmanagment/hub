@@ -1448,6 +1448,62 @@ export async function getWorkForStatus(
   return result.rows.map(normalizeWorkRow);
 }
 
+/** The fields of a work row the page status and "why waiting" read
+ *  (`apps/runtime/src/sync/engine/status.ts`), with the row's page. */
+export type SyncWorkStatusFields = Pick<
+  SyncWorkRow,
+  | "id" | "pageId" | "resource" | "subject" | "class" | "state" | "dueAt"
+  | "breakerUntil" | "blockedByVendorAt" | "waitingReason" | "waitingUntil"
+>;
+
+/**
+ * Every page's open, running and quarantined work in one statement: what the
+ * page status counts, for a reader of all pages at once (`/api/v1/ops/live`).
+ * Only the fields the status reads — none of the row's jsonb.
+ *
+ * The state list is the predicate of `sync_work_open_uniq`, written as the
+ * literal the planner matches to that index (never a parameter): the read
+ * stays inside the index over open work however many closed rows the journal
+ * keeps (production 2026-10-11: 115 rows of 27 thousand, 0.8 ms, 116 buffers).
+ * No row cap: a status that counted part of the open work would be wrong
+ * without saying so.
+ */
+export async function listOpenWorkOfAllPages(db: Database): Promise<SyncWorkStatusFields[]> {
+  const result = await db.execute<Pick<
+    WorkSqlRow,
+    | "id" | "pageId" | "resource" | "subject" | "class" | "state" | "dueAt"
+    | "breakerUntil" | "blockedByVendorAt" | "waitingReason" | "waitingUntil"
+  >>(sql`
+    select w.id::text as id,
+           w.page_id::text as "pageId",
+           w.resource,
+           w.subject,
+           w.class,
+           w.state,
+           w.due_at as "dueAt",
+           w.breaker_until as "breakerUntil",
+           w.blocked_by_vendor_at as "blockedByVendorAt",
+           w.waiting_reason as "waitingReason",
+           w.waiting_until as "waitingUntil"
+      from sync_work w
+     where w.state = any (array['open', 'running', 'quarantined'])
+       and not w.shadow
+  `);
+  return result.rows.map((row) => ({
+    id: Number(row.id),
+    pageId: Number(row.pageId),
+    resource: row.resource,
+    subject: row.subject,
+    class: row.class,
+    state: row.state,
+    dueAt: toRequiredDate(row.dueAt),
+    breakerUntil: toDate(row.breakerUntil),
+    blockedByVendorAt: toDate(row.blockedByVendorAt),
+    waitingReason: row.waitingReason,
+    waitingUntil: toDate(row.waitingUntil),
+  }));
+}
+
 /** The newest closed row of a key (breaker carry-forward, status of closed
  *  work); with `closedAfter`, only one that closed after that instant (a
  *  caller reusing a recent result, e.g. the describer's earlier download). */
