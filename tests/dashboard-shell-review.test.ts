@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, Route, Routes } from "../apps/dashboard/node_modules/react-router/dist/development/index.js";
 import { buildLoginRoute, resolveLoginReturnPath, resolveDashboardPeriod, resolveSpenderPeriod } from "../apps/dashboard/src/lib/navigation.ts";
 
-const mocks = vi.hoisted(() => ({ useAuthMe: vi.fn(), usePages: vi.fn(), useOverview: vi.fn(), useLogin: vi.fn() }));
+const mocks = vi.hoisted(() => ({ useAuthMe: vi.fn(), usePages: vi.fn(), useOverview: vi.fn(), useLogin: vi.fn(), useLogout: vi.fn() }));
 vi.mock("../apps/dashboard/src/api/queries.ts", () => mocks);
 vi.mock("../apps/dashboard/src/api/sdk.ts", () => ({ KernelApiError: class extends Error { constructor(message: string, _category: string, readonly status: number) { super(message); } } }));
 vi.mock("../apps/dashboard/src/components/layout/Sidebar.tsx", () => ({ Sidebar: () => "navigation" }));
@@ -36,6 +36,7 @@ beforeEach(() => {
   mocks.useAuthMe.mockReturnValue({ data: { user: { username: "owner", role: "owner" } }, isLoading: false, isError: false });
   mocks.usePages.mockReturnValue({ data: [{ id: 1, label: "test", platform: "fansly", modelSlug: "model", modelName: "Model", username: "test" }], isLoading: false, isError: false });
   mocks.useLogin.mockReturnValue({ isPending: false, isError: false, mutate: vi.fn(), reset: vi.fn() });
+  mocks.useLogout.mockReturnValue({ isPending: false, mutate: vi.fn() });
 });
 
 describe("shared page shell", () => {

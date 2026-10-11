@@ -219,7 +219,7 @@ describe("JoinPage", () => {
     expect(html).toContain("grisha");
     expect(html).toContain("Установить расширение для Fansly");
     expect(html).not.toContain("Скачать приложение для OnlyFans");
-    expect(html).toContain("https://ext.gosling-agency.ru/start.html");
+    expect(html).toContain('href="https://chatgoose.gosling-agency.ru/fansly/start.html"');
   });
 
   it("offers both clients to someone with pages on both platforms", () => {
@@ -228,8 +228,10 @@ describe("JoinPage", () => {
     }));
     mocks.useRedeemAccountLink.mockReturnValue(redeemState({ isSuccess: true, data: { username: "grisha" } }));
     const html = renderJoin();
-    expect(html).toContain("https://ext.gosling-agency.ru/install.html");
-    expect(html).toContain("https://ext.gosling-agency.ru/desktop/");
+    expect(html).toContain('href="https://chatgoose.gosling-agency.ru/fansly/"');
+    expect(html).toContain('href="https://chatgoose.gosling-agency.ru/desktop/"');
+    // The addresses these pages had before they moved under the chatters' site.
+    expect(html).not.toContain("ext.gosling-agency.ru");
   });
 
   it("shows a password the kernel refused as a password problem, not a broken link", () => {

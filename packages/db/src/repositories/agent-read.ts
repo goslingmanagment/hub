@@ -1,5 +1,7 @@
 import { sql, type SQL } from "drizzle-orm";
 
+import { truncateUtf16Safe } from "@agency_hub_core/shared";
+
 import type { Database } from "../client.ts";
 import { agentDatasetSqlMapping } from "./agent-dataset-map.ts";
 import { type CapturePayloadRef, capturePayloadRefFromColumns } from "./capture-payloads.ts";
@@ -1500,6 +1502,15 @@ export async function countAgentThreads(
 // #7 search
 // ---------------------------------------------------------------------------
 
+/**
+ * The snippet cap, in two units. Postgres cuts the window in CHARACTERS, and the
+ * wire contract (`agentSearchLocatorSchema.snippet`) caps it in UTF-16 code
+ * units. An emoji outside the BMP is one character and two code units, so a full
+ * window holding one overflowed the contract, and response validation turned the
+ * whole answer into a 500 over that single row.
+ */
+export const AGENT_SEARCH_SNIPPET_MAX_LENGTH = 300;
+
 export interface AgentSearchRow {
   pageLabel: string;
   platform: string;
@@ -1576,7 +1587,7 @@ export async function searchAgentArchive(
   }
 
   const snippet = input.includeSnippet
-    ? sql`substring(ma.text_plain from greatest(1, coalesce(nullif(position(lower(${input.query}) in lower(ma.text_plain)), 0), 1) - 120) for 300)`
+    ? sql`substring(ma.text_plain from greatest(1, coalesce(nullif(position(lower(${input.query}) in lower(ma.text_plain)), 0), 1) - 120) for ${sql.raw(String(AGENT_SEARCH_SNIPPET_MAX_LENGTH))})`
     : sql`null::text`;
 
   const result = await db.execute<Record<string, unknown>>(sql`
@@ -1602,7 +1613,10 @@ export async function searchAgentArchive(
       senderRole: String(row.sender_role ?? "unknown"),
       isSentByMe: row.is_sent_by_me === true,
       rank: Math.max(0, Number(row.rank ?? 0)),
-      snippet: row.snippet == null ? null : String(row.snippet),
+      // The cut drops the tail and never leaves half an emoji behind.
+      snippet: row.snippet == null
+        ? null
+        : truncateUtf16Safe(String(row.snippet), AGENT_SEARCH_SNIPPET_MAX_LENGTH),
       deletedAt: date(row.deleted_at),
     })),
     witnesses: witnessesFor(["message_archive"]),

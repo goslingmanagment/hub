@@ -1,13 +1,19 @@
 import { Navigate, Outlet, useLocation } from "react-router";
 import { useAuthMe, useLogout } from "@/api/queries";
 import { KernelApiError } from "@/api/sdk";
-import { buildLoginRoute } from "@/lib/navigation";
+import { buildLoginRoute, chatterExit } from "@/lib/navigation";
 import { clearDashboardSession } from "@/lib/queryClient";
+import { isConsoleSite } from "@/lib/sites";
 
 // Decision 351: the shell for /account. A chatter has no owner console, so
 // there is no sidebar and no page catalogue here — one line of chrome above a
 // single column. The owner and a team lead may open the same page (it is their
 // account too); the layout does not branch on role.
+//
+// The console's own production name serves no cabinet at all: the account
+// lives on the chatters' site, and a session does not carry between the two
+// names. There this layout only sends people on — an owner or a team lead to
+// the console, a chatter to the sign-in page that turns them away.
 
 export function ChatterLayout() {
   const location = useLocation();
@@ -43,6 +49,10 @@ export function ChatterLayout() {
         </div>
       </div>
     );
+  }
+
+  if (isConsoleSite()) {
+    return <Navigate to={data.user.role === "chatter" ? chatterExit() : "/"} replace />;
   }
 
   async function handleLogout() {

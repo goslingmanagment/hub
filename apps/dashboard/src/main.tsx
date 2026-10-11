@@ -5,7 +5,10 @@ import { Toaster } from "sonner";
 import { App } from "./App.js";
 import { prefetchPages } from "./api/pages.js";
 import { queryClient } from "./lib/queryClient.js";
+import { applySiteTitle } from "./lib/sites.js";
 import "./globals.css";
+
+applySiteTitle();
 
 // Analytics is the only surface that needs the page catalog, and it can fire
 // nothing until it has one. Starting that request here — before React, before
