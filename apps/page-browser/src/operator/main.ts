@@ -515,9 +515,11 @@ function startLimit(op: Operation): void {
   op.limitTimer = setTimeout(() => {
     if (op.done) return;
     observe("op.limit", { op: op.id, kind: op.kind, status: op.status, mainSends: op.main?.sends ?? 0 });
-    // The gate's window goes with the operation; an API tunnel still busy
-    // with it is cut so nothing of it leaves later.
-    egress.cutClass("api", "operation over its time limit");
+    // The gate's window goes with the operation. A request without an
+    // answer may still be on its way out: its API tunnels are cut so nothing
+    // of it leaves later. One whose answer began left long ago (the page did
+    // not read the body to its end — stand finding): the connection stays.
+    if (op.status === null) egress.cutClass("api", "operation over its time limit");
     if (op.status !== null && op.main) {
       finishWithBody(op, op.main, "limit", null, { outcome: "response", status: op.status, headers: op.headers, sends: op.main.sends, sendMono: op.sendMono, fromCache: op.fromCache, fromServiceWorker: op.fromServiceWorker, bodyEnd: "limit" });
     } else {
@@ -2053,6 +2055,7 @@ async function onCommand(message: EngineMessage): Promise<void> {
         if (typeof message.preflightFulfill === "boolean") CFG.preflightFulfill = message.preflightFulfill;
         if (typeof message.fetchScope === "string") CFG.fetchScope = message.fetchScope;
         if (typeof message.hubBodyLimit === "number") CFG.hubBodyLimit = message.hubBodyLimit;
+        if (message.hubTransport === "xhr" || message.hubTransport === "fetch") CFG.hubTransport = message.hubTransport;
         if (typeof message.siteUrlSame === "boolean") testSiteUrlSame = message.siteUrlSame;
         if (typeof message.siteBypass === "boolean") testSiteBypass = message.siteBypass;
         return reply({ ok: true, gate: egress.gate.enabled, placeholder: CFG.hubPlaceholderHost, hubAbort: CFG.hubAbortBeforeDeadline, wsHostRefuse: CFG.refuseWsHostRequests });

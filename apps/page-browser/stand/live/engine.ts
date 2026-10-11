@@ -42,8 +42,10 @@ const WS_STUCK_MS = 15_000;
  *  read — /emails/unsubscribe is one). */
 const HUB_PATHS = new RegExp(process.env.LIVE_HUB_PATHS ?? "^/api/v1/account/me$");
 
+/** The stand's rehearsal: the stand's short token and its navigation hook. */
+const REHEARSAL = process.env.LIVE_REHEARSAL === "1";
 if (PAUSE_MS < 2000) throw new Error("LIVE_PAUSE_MS below the owner's 2 s minimum");
-if (TOKEN.length < 16) throw new Error("PB_RPC_TOKEN is required");
+if (TOKEN.length < 16 && !REHEARSAL) throw new Error("PB_RPC_TOKEN is required");
 
 mkdirSync("/stand/results", { recursive: true });
 const journalFile = `/stand/results/live-${new Date().toISOString().replace(/[:.]/g, "-")}.jsonl`;
@@ -72,12 +74,17 @@ interface Queued {
   id: string;
   label: string;
   askedMono: number;
+  /** A Hub request waits here for its turn and is sent only then, as Hub's
+   *  pacer does (the operator gives a check 5 s). */
+  launch?: () => void;
 }
 
 const engine = new StandEngine(OPERATOR, TOKEN, Date.now());
 const hold = (): Decision => "hold";
+/** Hub requests whose turn has come: their check passes at once. */
+const hubAdmitted = new Set<string>();
 engine.decideSite = hold;
-engine.decideCheck = hold;
+engine.decideCheck = (attemptId): Decision => (hubAdmitted.has(attemptId) ? { grant: true, windowMs: WINDOW_MS } : { grant: false, reason: "not this engine's request" });
 engine.decideWs = hold;
 
 const queue: Queued[] = [];
@@ -95,6 +102,7 @@ let alarmsSeen = 0;
 let observedSeen = 0;
 let wsEventsSeen = 0;
 let statesSeen = 0;
+let lastStateKey = "";
 
 function nextGap(): number {
   return PAUSE_MS * (1 + 0.2 * Math.random());
@@ -103,7 +111,7 @@ function nextGap(): number {
 function refuse(item: Queued, reason: string): void {
   counts.refused += 1;
   if (item.kind === "site") engine.releaseSite(item.id, { grant: false, reason });
-  if (item.kind === "hub") engine.releaseCheck(item.id, { grant: false, reason });
+  if (item.kind === "hub") hubRefused.get(item.id)?.(reason);
   if (item.kind === "ws") engine.releaseWs(item.id, { grant: false, reason });
   journal("refused", { kind: item.kind, what: item.label, reason });
 }
@@ -112,7 +120,10 @@ function admit(item: Queued): void {
   const now = monoMs();
   const decision = { grant: true as const, windowMs: WINDOW_MS };
   if (item.kind === "site") engine.releaseSite(item.id, decision);
-  if (item.kind === "hub") engine.releaseCheck(item.id, decision);
+  if (item.kind === "hub") {
+    hubAdmitted.add(item.id);
+    item.launch?.();
+  }
   if (item.kind === "ws") engine.releaseWs(item.id, decision);
   counts[item.kind] += 1;
   if (item.kind === "site") siteStarts.push(now);
@@ -161,11 +172,6 @@ function collect(): void {
     seen.add(ask.siteRequestId);
     queue.push({ kind: "site", id: ask.siteRequestId, label: `${ask.method} ${safeUrl(ask.url)}`, askedMono: ask.askedMono });
   }
-  for (const check of engine.heldChecks.values()) {
-    if (seen.has(check.attemptId)) continue;
-    seen.add(check.attemptId);
-    queue.push({ kind: "hub", id: check.attemptId, label: hubLabels.get(check.attemptId) ?? check.attemptId, askedMono: check.askedMono });
-  }
   for (const ws of engine.heldWs.values()) {
     if (seen.has(ws.connId)) continue;
     seen.add(ws.connId);
@@ -187,6 +193,10 @@ function report(): void {
   }
   for (; statesSeen < engine.states.length; statesSeen++) {
     const state = engine.states[statesSeen]!;
+    // The operator repeats its state every few seconds: changes only.
+    const key = `${String(state.state)}|${String(state.reason)}|${String(state.exit)}`;
+    if (key === lastStateKey) continue;
+    lastStateKey = key;
     journal("state", { state: state.state, reason: state.reason, exit: state.exit });
   }
   for (; wsEventsSeen < engine.wsEvents.length; wsEventsSeen++) {
@@ -268,20 +278,34 @@ function pump(): void {
 }
 
 let hubSeq = 0;
+const hubRefused = new Map<string, (reason: string) => void>();
 function hubRequest(path: string, query: string, method: string): Promise<unknown> {
   const id = `live-${Date.now()}-${++hubSeq}`;
   const url = `${API}${path}${query ? `?${query}` : ""}`;
   hubLabels.set(id, `${method} ${safeUrl(url)}`);
-  journal("hub.send", { id, what: hubLabels.get(id) });
-  return engine.sendHub(id, url, {}, method, { session: true }).then((r) => ({
-    outcome: r.outcome,
-    status: r.status ?? null,
-    error: r.error ?? null,
-    source: r.source ?? null,
-    file: (r.body as { file?: string } | null)?.file ?? null,
-    bytes: (r.body as { bytes?: number } | null)?.bytes ?? null,
-    headerNames: r.headers ? Object.keys(r.headers as object) : null,
-  }));
+  journal("hub.queued", { id, what: hubLabels.get(id) });
+  return new Promise((resolve) => {
+    hubRefused.set(id, (reason) => resolve({ outcome: "refused", reason }));
+    queue.push({
+      kind: "hub",
+      id,
+      label: hubLabels.get(id)!,
+      askedMono: monoMs(),
+      launch: () => {
+        void engine.sendHub(id, url, {}, method, { session: true }).then((r) =>
+          resolve({
+            outcome: r.outcome,
+            status: r.status ?? null,
+            reason: r.reason ?? null,
+            error: r.error ?? null,
+            source: r.source ?? null,
+            preflightStatus: (r.preflight as { status?: number } | null)?.status ?? null,
+            headerNames: r.headers ? Object.keys(r.headers as object) : null,
+          }),
+        );
+      },
+    });
+  });
 }
 
 function control(): void {
@@ -318,8 +342,8 @@ function control(): void {
       }
       if (req.method === "POST" && req.url === "/command") {
         const name = String(body.name ?? "");
-        if (!["restart", "closeExit"].includes(name)) return reply(400, { error: "unknown command" });
-        void engine.command(name).then((result) => {
+        if (!["restart", "closeExit"].includes(name) && !(REHEARSAL && name === "test.navigate")) return reply(400, { error: "unknown command" });
+        void engine.command(name, name === "test.navigate" ? { url: String(body.url ?? "") } : {}).then((result) => {
           journal("command", { name, ok: result.ok ?? null });
           if (name === "restart" && result.ok === true) {
             stopped = null;

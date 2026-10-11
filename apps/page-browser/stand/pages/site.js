@@ -11,6 +11,23 @@
     log.push(Object.assign({ at: performance.now() }, entry));
     return entry;
   };
+  // fansly-client-check as Fansly's bundle computes it (cyrb53 of
+  // key_path_deviceId): the operator checks its own key against it.
+  const cyrb53 = (text) => {
+    let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+    for (let i = 0; i < text.length; i++) {
+      const ch = text.charCodeAt(i);
+      h1 = Math.imul(h1 ^ ch, 2654435761);
+      h2 = Math.imul(h2 ^ ch, 1597334677);
+    }
+    h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507);
+    h1 ^= Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+    h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507);
+    h2 ^= Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+    return 4294967296 * (2097151 & h2) + (h1 >>> 0);
+  };
+  const DEVICE = "1";
+  const clientCheck = (url) => cyrb53(`necvac-govry3-tybkYz_${new URL(url).pathname}_${DEVICE}`).toString(16);
 
   const site = {
     log,
@@ -23,7 +40,7 @@
       const init = {
         method: opts.method || "GET",
         credentials: "include",
-        headers: opts.plain ? {} : { authorization: "stand-token", "fansly-client-id": "1", "fansly-client-check": "abc" },
+        headers: opts.plain ? {} : { authorization: "stand-token", "fansly-client-id": DEVICE, "fansly-client-check": clientCheck(url) },
         keepalive: opts.keepalive === true,
       };
       if (opts.body) init.body = opts.body;
@@ -75,17 +92,34 @@
         body: method === "GET" || method === "HEAD" ? undefined : opts.bodySize ? JSON.stringify({ pad: "x".repeat(Math.max(0, opts.bodySize - 10)) }) : "{}",
         keepalive: opts.keepalive === true,
       }).then(
-        (r) => note({ kind: "raw", rid, method, path, status: r.status, ms: performance.now() - started }),
+        // The body is read, as a site's client reads it: a response nobody
+        // reads never ends for CDP (the operation would wait out its limit).
+        async (r) => {
+          await r.text().catch(() => "");
+          return note({ kind: "raw", rid, method, path, status: r.status, ms: performance.now() - started });
+        },
         (e) => note({ kind: "raw", rid, method, path, error: String(e), ms: performance.now() - started }),
       );
     },
 
-    xhr(rid) {
+    xhr(rid, opts = {}) {
       return new Promise((resolve) => {
         const x = new XMLHttpRequest();
-        x.open("GET", `${API}/api/xhr?rid=${encodeURIComponent(rid)}`);
+        const url = `${API}/api/xhr?rid=${encodeURIComponent(rid)}`;
+        x.open("GET", url);
         x.withCredentials = true;
-        x.setRequestHeader("authorization", "stand-token");
+        // `fansly`: the headers of Fansly's client in the order its Angular
+        // interceptors set them (public bundle).
+        if (opts.fansly) {
+          x.setRequestHeader("accept", "application/json, text/plain, */*");
+          x.setRequestHeader("authorization", "stand-token");
+          x.setRequestHeader("fansly-client-id", DEVICE);
+          x.setRequestHeader("fansly-client-ts", String(Date.now()));
+          x.setRequestHeader("fansly-session-id", "stand-session");
+          x.setRequestHeader("fansly-client-check", clientCheck(url));
+        } else {
+          x.setRequestHeader("authorization", "stand-token");
+        }
         x.onloadend = () => resolve(note({ kind: "xhr", rid, status: x.status }));
         x.send();
       });
@@ -323,4 +357,20 @@
     },
   };
   window.site = site;
+
+  // The rehearsal of the live test's engine (stand/live): the page works on
+  // its own, as a site does — a burst at load, a socket, a login, a poll,
+  // and, with `auto=429`, a request the server answers 429.
+  const auto = new URLSearchParams(location.search).get("auto");
+  if (auto) {
+    const tag = `auto${Date.now() % 100000}`;
+    site.burst(`${tag}-load`, 8);
+    site.ws(`${tag}-ws`);
+    site.raw(`${tag}-login`, "POST", "/api/v1/login", { bodySize: 120 });
+    let n = 0;
+    setInterval(() => {
+      n += 1;
+      site.api(`${tag}-poll-${n}`, auto === "429" && n === 4 ? { query: "status=429" } : {});
+    }, 4000);
+  }
 })();

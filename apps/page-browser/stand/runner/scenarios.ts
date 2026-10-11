@@ -984,6 +984,39 @@ const wsTamper: Scenario = async (ctx) => {
   return { ok: violations.length === 0, violations, notes: { out, frames: frames.map((text) => text.slice(0, 60)), blocked } };
 };
 
+/** Stage 1, item 15, for a site whose API calls are XMLHttpRequest (Fansly's
+ *  Angular client): a Hub request made by XMLHttpRequest in the isolated
+ *  world, with the session's headers taken from the site's own request, has
+ *  the same header names in the same order on the wire, and the time and
+ *  check headers of its own path. */
+const xhrParity: Scenario = async (ctx) => {
+  await fresh(ctx);
+  const tag = `xp-${ctx.run}-${Date.now() % 100000}`;
+  await ctx.engine.command("test.config", { hubTransport: "xhr" });
+  ctx.arm();
+  const site = await ctx.engine.eval<{ status?: number }>(`site.xhr(${JSON.stringify(`${tag}-site`)}, { fansly: true })`);
+  const hub = await ctx.engine.sendHub(`${tag}-hub`, `${API}/api/xhr?rid=${tag}-hub`, {}, "GET", { session: true });
+  await ctx.engine.command("test.config", { hubTransport: "fetch" });
+  await sleep(300);
+  const events = await ctx.stand.journal();
+  const siteArrival = reqs(events, `${tag}-site`).find((event) => event.method === "GET");
+  const hubArrival = reqs(events, `${tag}-hub`).find((event) => event.method === "GET");
+  const names = (event: JournalEvent | undefined) => (event?.headers ?? []).map(([name]) => name);
+  const value = (event: JournalEvent | undefined, name: string) => (event?.headers ?? []).find(([n]) => n === name)?.[1] ?? null;
+  const violations: string[] = [];
+  if (site.status !== 200) violations.push(`the site's XMLHttpRequest: ${JSON.stringify(site)}`);
+  if (hub.outcome !== "response" || hub.status !== 200) violations.push(`the Hub request: ${String(hub.outcome)} ${String(hub.status ?? hub.error ?? hub.reason ?? "")}`);
+  if (JSON.stringify(names(siteArrival)) !== JSON.stringify(names(hubArrival))) violations.push("header names or their order differ");
+  for (const name of ["accept", "authorization", "fansly-client-id", "fansly-session-id", "sec-fetch-mode", "sec-fetch-site", "sec-fetch-dest", "priority"]) {
+    if (value(siteArrival, name) !== value(hubArrival, name)) violations.push(`${name} differs: ${String(value(siteArrival, name))} / ${String(value(hubArrival, name))}`);
+  }
+  // The check is of the request's own path: here both paths are the same.
+  if (value(hubArrival, "fansly-client-check") !== value(siteArrival, "fansly-client-check")) violations.push("fansly-client-check differs for the same path");
+  const ts = Number(value(hubArrival, "fansly-client-ts"));
+  if (!(Math.abs(ts - Date.now()) < 15_000)) violations.push(`fansly-client-ts is off: ${String(value(hubArrival, "fansly-client-ts"))}`);
+  return { ok: violations.length === 0, violations, notes: { site: names(siteArrival), hub: names(hubArrival) } };
+};
+
 export const scenarios: Record<string, Scenario> = {
   smoke,
   "loss-operator-kill": controlLoss("operator-kill", false),
@@ -1049,4 +1082,5 @@ export const scenarios: Record<string, Scenario> = {
   "ws-blank-iframe": wsBlankIframe,
   "ws-detect": wsDetect,
   "ws-tamper": wsTamper,
+  "xhr-parity": xhrParity,
 };
