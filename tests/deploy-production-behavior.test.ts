@@ -635,6 +635,10 @@ describe("production deploy behavior without production access", () => {
       const second = runFunctions(lockFunctions, `${lockSetup}\nacquire_remote_deploy_lock`, { DEPLOY_RUN_ID: "second-456" });
       expect(second.status).not.toBe(0);
       expect(second.stderr).toContain("another deploy is running");
+      // What it says to remove by hand names the marker too: left behind, the
+      // marker would go on telling observers that a deploy is running.
+      const advice = second.stderr.split("\n").find((line) => line.includes("remove only after confirming no deploy is active"));
+      expect(advice).toContain(`rm -rf ${lock()} ${marker()}`);
       // The refused run touched neither the lock nor the marker of the first.
       expect(readFileSync(path.join(lock(), "owner"), "utf8")).toBe("fixture-123\n");
       expect(readFileSync(path.join(marker(), "owner"), "utf8")).toBe("fixture-123\n");
