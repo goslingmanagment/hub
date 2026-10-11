@@ -1,12 +1,15 @@
 // The engine of the test on a real Fansly account (plan §5, stage 1, items
 // 4–17), PROTOTYPE. Not Hub: a stand-alone RPC peer of one page's operator.
 //
-// Pacing (the owner's rule): between the starts of any two requests of the
-// page at least S (2.5 s), with 0–20 % on top; one operation in flight — a
-// site request (with its preflight), a Hub request or a socket connection.
-// Site requests wait at most 60 s and at most 300 start in an hour (spec §3).
-// A 429 pauses everything until the owner resumes; so do the operator's halt
-// and a changed fansly-client-check.
+// Pacing (the owner's rule), conservative for the first sessions (Astra
+// review 2, F): one operation in flight — a site request (with its
+// preflight), a Hub request or a socket's handshake — and the next starts
+// at least S (2.5 s, plus 0–20 %) after the previous one ended, so after its
+// actual send too. Site requests wait at most 60 s and at most 300 start in
+// an hour (spec §3). An operation without an end, a 429 (on a request or its
+// preflight), the operator's halt, a changed fansly-client-check or a second
+// lost CDP within 10 minutes stop the session: the operator closes its exit
+// for good (`stop`) until the owner restarts it.
 //
 // The journal (/stand/results/live-<time>.jsonl) has no secrets and no
 // bodies: methods, hosts and paths (query parameter names only), statuses,
@@ -14,8 +17,10 @@
 //
 // Control, from the runner container (127.0.0.1:7801):
 //   GET  /status
-//   POST /hub      {"path": "/api/v1/account/me", "query": "...", "method": "GET"}
-//   POST /pause    POST /resume    POST /command {"name": "restart"}
+//   POST /hub      {"path": "/api/v1/account/me"}   (reviewed paths only)
+//   POST /stop     the exit closes, the page stays stopped
+//   POST /pause    no new admissions;  POST /resume
+//   POST /command  {"name": "restart"}
 
 import { createServer } from "node:http";
 import { appendFileSync, mkdirSync } from "node:fs";
@@ -30,8 +35,12 @@ const API = process.env.LIVE_API ?? "https://apiv3.fansly.com";
 const WAIT_MS = 60_000;
 const SITE_PER_HOUR = 300;
 const WINDOW_MS = 15_000;
-/** An operation that reports no end in this long frees the slot anyway. */
+/** An operation that reports no end in this long stops the session. */
 const STUCK_MS = 25_000;
+const WS_STUCK_MS = 15_000;
+/** Hub requests of the test: reviewed paths only (a GET is not always a
+ *  read — /emails/unsubscribe is one). */
+const HUB_PATHS = new RegExp(process.env.LIVE_HUB_PATHS ?? "^/api/v1/account/me$");
 
 if (PAUSE_MS < 2000) throw new Error("LIVE_PAUSE_MS below the owner's 2 s minimum");
 if (TOKEN.length < 16) throw new Error("PB_RPC_TOKEN is required");
@@ -75,7 +84,9 @@ const queue: Queued[] = [];
 const seen = new Set<string>();
 let inFlight: (Queued & { startedMono: number }) | null = null;
 let lastStart = -Infinity;
+let lastEnd = -Infinity;
 let gap = PAUSE_MS;
+const cdpLosses: number[] = [];
 const siteStarts: number[] = [];
 let paused: string | null = null;
 const counts = { site: 0, hub: 0, ws: 0, refused: 0, paused: 0 };
@@ -105,17 +116,31 @@ function admit(item: Queued): void {
   if (item.kind === "ws") engine.releaseWs(item.id, decision);
   counts[item.kind] += 1;
   if (item.kind === "site") siteStarts.push(now);
-  journal("admitted", { kind: item.kind, what: item.label, waitedMs: Math.round(now - item.askedMono), sinceLastMs: Number.isFinite(lastStart) ? Math.round(now - lastStart) : null });
-  // A socket's handshake goes to the socket host, outside the API's single
-  // window: the pause counts from its start, the slot is not held.
-  if (item.kind !== "ws") inFlight = { ...item, startedMono: now };
+  journal("admitted", { kind: item.kind, what: item.label, waitedMs: Math.round(now - item.askedMono), sinceLastEndMs: Number.isFinite(lastEnd) ? Math.round(now - lastEnd) : null });
+  inFlight = { ...item, startedMono: now };
   lastStart = now;
   gap = nextGap();
 }
 
 function done(item: Queued): boolean {
   if (item.kind === "site") return engine.siteDone.has(item.id);
-  return engine.results.has(item.id);
+  if (item.kind === "hub") return engine.results.has(item.id);
+  return wsTunnels.has(item.id);
+}
+
+/** Socket tunnels by admission id: their handshake went up, or they ended. */
+const wsTunnels = new Map<string, string>();
+
+let stopped: string | null = null;
+
+/** Stop the session: no admissions, and the operator closes its exit for
+ *  good (every tunnel, the site's socket too). */
+function stopSession(reason: string): void {
+  if (stopped !== null) return;
+  stopped = reason;
+  paused = `stopped: ${reason}`;
+  journal("session.stop", { reason });
+  void engine.command("stop").then((result) => journal("command", { name: "stop", ok: result.ok ?? null }));
 }
 
 /** The type of a socket frame from the site's server (`t` of its JSON), not
@@ -153,7 +178,12 @@ function report(): void {
   for (; alarmsSeen < engine.alarms.length; alarmsSeen++) {
     const alarm = engine.alarms[alarmsSeen]!;
     journal("alarm", { kind: alarm.kind, detail: alarm.detail });
-    if (alarm.kind === "halted" || alarm.kind === "client_check_mismatch") paused = `alarm ${String(alarm.kind)}`;
+    if (alarm.kind === "halted" || alarm.kind === "client_check_mismatch" || alarm.kind === "ws_blocked_send") stopSession(`alarm ${String(alarm.kind)}`);
+    if (alarm.kind === "cdp_lost") {
+      const now = monoMs();
+      cdpLosses.push(now);
+      if (cdpLosses.filter((at) => now - at < 600_000).length >= 2) stopSession("CDP lost twice in 10 minutes");
+    }
   }
   for (; statesSeen < engine.states.length; statesSeen++) {
     const state = engine.states[statesSeen]!;
@@ -167,6 +197,11 @@ function report(): void {
   }
   for (; observedSeen < engine.observed.length; observedSeen++) {
     const o = engine.observed[observedSeen]!;
+    if (o.type === "wsTunnel") {
+      if (!wsTunnels.has(String(o.connId))) wsTunnels.set(String(o.connId), String(o.event));
+      journal("ws.tunnel", { connId: o.connId, event: o.event });
+      continue;
+    }
     if (o.kind === "paused") journal("paused", { cls: o.cls, method: o.method, what: safeUrl(o.url), type: o.resourceType });
     else if (o.kind === "guard") journal("guard", { k: o.k, target: o.target, form: o.form ?? null, len: o.len ?? null, msgType: o.msgType ?? null, keys: o.keys ?? null, dKeys: o.dKeys ?? null });
     else if (o.kind === "gate" && o.gateEvent !== "first_bytes") journal("gate", { gateEvent: o.gateEvent, window: o.window, phase: o.phase ?? null, length: o.length ?? null, cut: o.cut ?? null });
@@ -175,26 +210,41 @@ function report(): void {
 }
 
 function finished(item: Queued): void {
-  if (item.kind === "site") {
-    const d = engine.siteDone.get(item.id)!;
-    journal("site.done", { what: item.label, outcome: d.outcome, status: d.status ?? null, source: d.source ?? null, bytes: (d.body as { bytes?: number } | null)?.bytes ?? null, complete: (d.body as { complete?: boolean } | null)?.complete ?? null, error: d.error ?? d.errorText ?? null });
-    if (d.status === 429) paused = `429 on ${item.label}`;
+  if (item.kind === "ws") {
+    journal("ws.done", { what: item.label, event: wsTunnels.get(item.id) ?? null });
+    return;
   }
-  if (item.kind === "hub") {
-    const r = engine.results.get(item.id)!;
-    journal("hub.done", { what: item.label, outcome: r.outcome, status: r.status ?? null, source: r.source ?? null, bytes: (r.body as { bytes?: number } | null)?.bytes ?? null, error: r.error ?? null });
-    if (r.status === 429) paused = `429 on ${item.label}`;
-  }
+  const d = item.kind === "site" ? engine.siteDone.get(item.id)! : engine.results.get(item.id)!;
+  const preflightStatus = (d.preflight as { status?: number } | null)?.status ?? null;
+  journal(item.kind === "site" ? "site.done" : "hub.done", {
+    what: item.label,
+    outcome: d.outcome,
+    status: d.status ?? null,
+    preflightStatus,
+    source: d.source ?? null,
+    error: d.error ?? d.errorText ?? null,
+  });
+  if (d.status === 429 || preflightStatus === 429) stopSession(`429 on ${item.label}`);
 }
 
 function pump(): void {
+  if (!engine.connected) {
+    // The operator's RPC went away (its process restarted): start over with
+    // a fresh connection and a fresh pause (compose restarts this process).
+    journal("rpc.lost", {});
+    process.exit(1);
+  }
   collect();
   report();
   const now = monoMs();
-  if (inFlight && (done(inFlight) || now - inFlight.startedMono > STUCK_MS)) {
-    if (!done(inFlight)) journal("stuck", { kind: inFlight.kind, what: inFlight.label });
-    else finished(inFlight);
+  if (inFlight && done(inFlight)) {
+    finished(inFlight);
     inFlight = null;
+    lastEnd = now;
+  } else if (inFlight && now - inFlight.startedMono > (inFlight.kind === "ws" ? WS_STUCK_MS : STUCK_MS)) {
+    // An operation without an end may still be running: the slot is not
+    // freed, the session stops.
+    stopSession(`no end of ${inFlight.label} in ${inFlight.kind === "ws" ? WS_STUCK_MS : STUCK_MS} ms`);
   }
   for (let i = queue.length - 1; i >= 0; i--) {
     const item = queue[i]!;
@@ -208,12 +258,8 @@ function pump(): void {
     }
   }
   while (siteStarts.length > 0 && now - siteStarts[0]! > 3_600_000) siteStarts.shift();
-  if (queue.length === 0 || now < lastStart + gap) return;
-  // A socket connection does not wait for the API's operation in flight
-  // (the operator gives it 10 s): only the pause between starts holds.
-  const wsIndex = queue.findIndex((queued) => queued.kind === "ws");
-  if (inFlight && wsIndex < 0) return;
-  const item = inFlight ? queue.splice(wsIndex, 1)[0]! : queue.shift()!;
+  if (inFlight || queue.length === 0 || now < lastStart + gap || now < lastEnd + gap) return;
+  const item = queue.shift()!;
   if (item.kind === "site" && siteStarts.length >= SITE_PER_HOUR) {
     refuse(item, "site hour cap");
     return;
@@ -246,15 +292,18 @@ function control(): void {
       const body = chunks.length > 0 ? (JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>) : {};
       const reply = (status: number, value: unknown) => res.writeHead(status, { "content-type": "application/json" }).end(`${JSON.stringify(value, null, 2)}\n`);
       if (req.method === "GET" && req.url === "/status") {
-        return reply(200, { state: engine.lastState?.state ?? null, exit: engine.lastState?.exit ?? null, paused, queue: queue.length, inFlight: inFlight?.label ?? null, counts, sitesLastHour: siteStarts.length, journal: journalFile });
+        return reply(200, { state: engine.lastState?.state ?? null, reason: engine.lastState?.reason ?? null, exit: engine.lastState?.exit ?? null, stopped, paused, queue: queue.length, inFlight: inFlight?.label ?? null, counts, sitesLastHour: siteStarts.length, journal: journalFile });
       }
       if (req.method === "POST" && req.url === "/hub") {
         const path = String(body.path ?? "");
-        if (!path.startsWith("/api/v1/")) return reply(400, { error: "path must start with /api/v1/" });
-        const method = String(body.method ?? "GET").toUpperCase();
-        if (method !== "GET") return reply(400, { error: "stage 1: GET only" });
-        void hubRequest(path, String(body.query ?? ""), method).then((result) => reply(200, result));
+        if (!HUB_PATHS.test(path)) return reply(400, { error: `not a reviewed path: ${HUB_PATHS}` });
+        if (stopped !== null) return reply(409, { error: `session stopped: ${stopped}` });
+        void hubRequest(path, "", "GET").then((result) => reply(200, result));
         return;
+      }
+      if (req.method === "POST" && req.url === "/stop") {
+        stopSession("owner");
+        return reply(200, { stopped });
       }
       if (req.method === "POST" && req.url === "/pause") {
         paused = "owner";
@@ -262,15 +311,20 @@ function control(): void {
         return reply(200, { paused });
       }
       if (req.method === "POST" && req.url === "/resume") {
+        if (stopped !== null) return reply(409, { error: `session stopped: ${stopped}; restart the page with /command restart first` });
         paused = null;
         journal("paused.off", { by: "control" });
         return reply(200, { paused });
       }
       if (req.method === "POST" && req.url === "/command") {
         const name = String(body.name ?? "");
-        if (!["restart", "closeExit", "openExit"].includes(name)) return reply(400, { error: "unknown command" });
+        if (!["restart", "closeExit"].includes(name)) return reply(400, { error: "unknown command" });
         void engine.command(name).then((result) => {
           journal("command", { name, ok: result.ok ?? null });
+          if (name === "restart" && result.ok === true) {
+            stopped = null;
+            paused = null;
+          }
           reply(200, result);
         });
         return;
@@ -284,6 +338,8 @@ async function main(): Promise<void> {
   journal("start", { operator: OPERATOR, pauseMs: PAUSE_MS, api: API });
   await engine.connect(300_000);
   journal("connected", {});
+  // A fresh start waits one full pause before its first admission.
+  lastEnd = monoMs();
   control();
   setInterval(pump, 20);
 }

@@ -12,6 +12,8 @@ export interface Grant {
   id: string;
   rid: string | null;
   url: string | null;
+  /** The request's method (a preflight comes on top, as OPTIONS). */
+  method: string | null;
   grantedMono: number;
   deadlineMono: number;
 }
@@ -67,6 +69,7 @@ export class StandEngine {
   /** The site's socket as the operator reports it from CDP. */
   wsEvents: Array<Message & { recvMono: number }> = [];
   #hubUrls = new Map<string, string>();
+  #hubMethods = new Map<string, string>();
   #commandWaiters = new Map<string, (message: Message) => void>();
   #resultWaiters = new Map<string, (message: Message) => void>();
   #pingTimer: NodeJS.Timeout | null = null;
@@ -148,10 +151,10 @@ export class StandEngine {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ ownerGeneration: this.ownerGeneration, ...message }));
   }
 
-  #grant(kind: Grant["kind"], id: string, url: string | null, windowMs = SEND_WINDOW_MS): number {
+  #grant(kind: Grant["kind"], id: string, url: string | null, windowMs = SEND_WINDOW_MS, method: string | null = null): number {
     const now = monoMs();
     const deadline = now + windowMs;
-    this.grants.push({ kind, id, rid: ridOf(url), url, grantedMono: now, deadlineMono: deadline });
+    this.grants.push({ kind, id, rid: ridOf(url), url, method, grantedMono: now, deadlineMono: deadline });
     return deadline;
   }
 
@@ -241,7 +244,7 @@ export class StandEngine {
   #answerSite(ask: SiteAsk, decision: Exclude<Decision, "hold">): void {
     if (decision.grant && this.serialize) this.#siteInFlight = ask.siteRequestId;
     if (decision.grant) {
-      const deadline = this.#grant("site", ask.siteRequestId, ask.url, decision.windowMs);
+      const deadline = this.#grant("site", ask.siteRequestId, ask.url, decision.windowMs, ask.method);
       this.#send({ type: "siteAdmitResult", siteRequestId: ask.siteRequestId, ok: true, deadlineMono: deadline });
     } else {
       this.#refuse("site", ask.siteRequestId, ask.url, decision.reason ?? "refused");
@@ -270,7 +273,7 @@ export class StandEngine {
   #answerCheck(attemptId: string, decision: Exclude<Decision, "hold">): void {
     const url = this.#hubUrls.get(attemptId) ?? null;
     if (decision.grant) {
-      const deadline = this.#grant("hub", attemptId, url, decision.windowMs);
+      const deadline = this.#grant("hub", attemptId, url, decision.windowMs, this.#hubMethods.get(attemptId) ?? "GET");
       this.#send({ type: "checkResult", attemptId, ok: true, deadlineMono: deadline });
     } else {
       this.#refuse("hub", attemptId, url, decision.reason ?? "refused");
@@ -318,6 +321,7 @@ export class StandEngine {
   /** A Hub request (plan §4.2). The url carries `rid` for the journals. */
   sendHub(attemptId: string, url: string, headers: Record<string, string> = {}, method = "GET", extra: Record<string, unknown> = {}): Promise<Message> {
     this.#hubUrls.set(attemptId, url);
+    this.#hubMethods.set(attemptId, method.toUpperCase());
     const done = new Promise<Message>((resolve) => {
       // The operator closes every attempt within its operation limit; a
       // missing result is the scenario's finding, not a hang of the series.

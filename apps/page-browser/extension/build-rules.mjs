@@ -40,6 +40,10 @@ const profiles = {
       "thirdpartyconnect/.*",
       "logout",
     ],
+    /** Reads that are not reads, any method (public bundle 2026-10-11, Astra
+     *  review 2): an unsubscribe by link, a content-filter verification, and
+     *  the support widgets' authorisations (their answers carry tokens). */
+    neverAnyMethod: ["emails/unsubscribe", "account/verifynsfw", "intercom/authorize", "zendesk/authorize"],
     /** The owner's login on the page's screen: the password, the 2FA code
      *  and a new device's e-mail check. */
     login: ["login", "login/twofa", "login/email", "login/email/verification", "login/email/verification/token", "login/email/verify", "email-challenge/v1/.*"],
@@ -57,6 +61,7 @@ function build(profile) {
   for (let i = 0; i < profile.never.length; i += 6) {
     add(400, "block", { regexFilter: `^https://${hosts}/api/v1/(${profile.never.slice(i, i + 6).join("|")})([?#].*)?$`, requestMethods: WRITES });
   }
+  if (profile.neverAnyMethod?.length) add(400, "block", { regexFilter: `^https://${hosts}/api/v1/(${profile.neverAnyMethod.join("|")})([?#].*)?$` });
   add(300, "allow", { regexFilter: `^https://${esc(profile.api)}/api/v1/(${profile.login.join("|")})([?#].*)?$`, requestMethods: ["post"] });
   add(200, "block", { requestDomains: profile.writeDomains, requestMethods: WRITES });
   if (profile.closedSockets.length > 0) add(200, "block", { requestDomains: profile.closedSockets, resourceTypes: ["websocket"] });

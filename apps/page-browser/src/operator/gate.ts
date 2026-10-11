@@ -40,6 +40,9 @@
 //               QUIET_MS — the one case that rests on CDP. At the deadline,
 //               with nothing sent, every API tunnel is cut: the request never
 //               leaves.
+//               Once the server sent anything on the window's tunnel after
+//               the request began, no big record goes there any more:
+//               Chrome repeats a request only after a refusal of the server.
 //   holding     the request is out: big records are held. This is what stops
 //               Chrome's own repeats — after REFUSED_STREAM it repeats on the
 //               same connection and CDP does not report it (stand finding). A
@@ -89,6 +92,10 @@ interface Window {
   tls13: boolean | null;
   /** Big records that went up the window's tunnel. */
   used: number;
+  /** The server sent bytes on the window's tunnel after the request began:
+   *  whatever Chrome writes there from now on may answer them — a repeat
+   *  after a refusal among it. */
+  serverSpoke: boolean;
   announced: boolean;
   openedAt: number;
   firstChunkAt: number | null;
@@ -128,13 +135,16 @@ export class ApiGate {
       // The handshake of the window's own connection.
       if (!appData) return "up";
       if (w.newTunnel === tunnel) w.tls13 = tls13;
-      // A body's DATA frame can be as small as a control frame (a 2-byte
-      // body: a 33-byte record): once the request's HEADERS is out, every
-      // record of a request with a body counts (stand: retry-post). Before
-      // it, and after a bodiless one, small records are control frames.
-      const counting = big || (w.used > this.#setupRecords(w) && w.requestRecords > 1);
-      if (!counting) return "up";
-      if (w.used >= this.#budget(w)) return big ? "hold" : "up";
+      if (!big) return "up";
+      // Chrome repeats a request only after the server refused it (an
+      // RST_STREAM, a GOAWAY, a closed connection — Chrome 155,
+      // HttpNetworkTransaction). Once the server spoke after the request's
+      // HEADERS, nothing more of this window goes: a repeat cannot pass even
+      // inside the budget, e.g. when the server refuses before the body
+      // (Astra review 2, A). A body's DATA follows its HEADERS at once; a
+      // small DATA (a body of a few bytes) passes as a control record.
+      if (w.serverSpoke) return "hold";
+      if (w.used >= this.#budget(w)) return "hold";
       w.used += 1;
       return "up";
     }
@@ -144,6 +154,13 @@ export class ApiGate {
     w.tunnel = tunnel;
     w.used = 1;
     return "up";
+  }
+
+  /** The server's bytes arrived on API tunnel `tunnel` (before they are
+   *  passed to Chrome). */
+  noteServerBytes(tunnel: number): void {
+    const w = this.#window;
+    if (this.#phase === "open" && w !== null && w.tunnel === tunnel && w.used > this.#setupRecords(w)) w.serverSpoke = true;
   }
 
   /** A record that went up `tunnel` ended. */
@@ -195,11 +212,12 @@ export class ApiGate {
     this.#window = {
       id,
       deadline: deadlineMono,
-      requestRecords: !this.burstClose || bodyBytes === null ? Infinity : 1 + Math.ceil(bodyBytes / DATA_FRAME_MAX),
+      requestRecords: !this.burstClose || bodyBytes === null ? Infinity : 1 + bigDataRecords(bodyBytes),
       newTunnel: null,
       tunnel: null,
       tls13: null,
       used: 0,
+      serverSpoke: false,
       announced: false,
       openedAt: now,
       firstChunkAt: null,
@@ -321,6 +339,18 @@ export class ApiGate {
   }
 }
 
+/** DATA records of a body that are bigger than a control record: every full
+ *  frame, and the last one unless it carries 8 bytes or less (31 bytes of
+ *  overhead in a TLS 1.3 record, 38 in TLS 1.2 — both against limits that
+ *  leave 8). A small last frame passes as a control record and uses no
+ *  budget. */
+function bigDataRecords(bodyBytes: number): number {
+  if (bodyBytes <= 0) return 0;
+  const frames = Math.ceil(bodyBytes / DATA_FRAME_MAX);
+  const last = bodyBytes - (frames - 1) * DATA_FRAME_MAX;
+  return last <= 8 ? frames - 1 : frames;
+}
+
 function round(value: number): number {
   return Math.round(value * 1000) / 1000;
 }
@@ -332,28 +362,55 @@ export function controlRecordLimit(tls13: boolean | null): number {
   return tls13 === false ? 46 : 39;
 }
 
-/** The TLS version the server chose, from its ServerHello (the first record
- *  it sends): true = 1.3, false = older, null = not a ServerHello,
- *  undefined = more bytes needed. */
+/** The TLS version the server chose, from its ServerHello: true = 1.3,
+ *  false = older, null = not a well-formed ServerHello (the tunnel is then
+ *  cut), undefined = more bytes needed. The ServerHello may be split over
+ *  several handshake records (RFC 8446 §5.1): their payloads are joined
+ *  until the whole message is there (Astra review 2, C). */
 export function serverHelloIsTls13(bytes: Buffer): boolean | null | undefined {
-  if (bytes.length < 5) return undefined;
-  if (bytes[0] !== 0x16) return null;
-  const recordEnd = 5 + bytes.readUInt16BE(3);
-  if (bytes.length < recordEnd) return recordEnd > 5 + 16_384 + 256 ? null : undefined;
-  let p = 5;
-  if (bytes[p] !== 0x02) return null;
-  p += 4; // handshake type, length
-  p += 2 + 32; // legacy_version, random
-  if (p >= recordEnd) return null;
-  p += 1 + bytes[p]!; // legacy_session_id
+  // Join the payloads of the leading handshake records.
+  const parts: Buffer[] = [];
+  let p = 0;
+  let joined = 0;
+  for (;;) {
+    if (bytes.length < p + 5) break;
+    if (bytes[p] !== 0x16) {
+      if (parts.length === 0) return null;
+      break;
+    }
+    const length = bytes.readUInt16BE(p + 3);
+    if (length === 0 || length > 16_384 + 256) return null;
+    if (bytes.length < p + 5 + length) break;
+    parts.push(bytes.subarray(p + 5, p + 5 + length));
+    joined += length;
+    p += 5 + length;
+    if (joined >= 4) {
+      const head = Buffer.concat(parts);
+      if (head[0] !== 0x02) return null;
+      const messageLength = head.readUIntBE(1, 3);
+      if (messageLength > 65_536) return null;
+      if (head.length >= 4 + messageLength) return parseServerHello(head.subarray(4, 4 + messageLength));
+    }
+  }
+  return bytes.length > 70_000 ? null : undefined;
+}
+
+function parseServerHello(body: Buffer): boolean | null {
+  let p = 2 + 32; // legacy_version, random
+  if (body.length < p + 1) return null;
+  p += 1 + body[p]!; // legacy_session_id
   p += 2 + 1; // cipher_suite, legacy_compression_method
-  if (p + 2 > recordEnd) return false; // no extensions: TLS 1.2 or older
-  const extEnd = Math.min(recordEnd, p + 2 + bytes.readUInt16BE(p));
+  if (p > body.length) return null;
+  if (p === body.length) return false; // no extensions: TLS 1.2 or older
+  if (p + 2 > body.length) return null;
+  const extEnd = p + 2 + body.readUInt16BE(p);
+  if (extEnd > body.length) return null;
   p += 2;
   while (p + 4 <= extEnd) {
-    const type = bytes.readUInt16BE(p);
-    const length = bytes.readUInt16BE(p + 2);
-    if (type === 0x002b && length === 2 && p + 6 <= extEnd) return bytes.readUInt16BE(p + 4) === 0x0304;
+    const type = body.readUInt16BE(p);
+    const length = body.readUInt16BE(p + 2);
+    if (p + 4 + length > extEnd) return null;
+    if (type === 0x002b) return length === 2 ? body.readUInt16BE(p + 4) === 0x0304 : null;
     p += 4 + length;
   }
   return false;

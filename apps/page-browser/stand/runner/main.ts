@@ -59,8 +59,14 @@ export function checkAdmitted(events: JournalEvent[], grants: Grant[], ridPrefix
       violations.push(`${what} is not the address that was admitted`);
       continue;
     }
+    // The request's own method; a preflight (OPTIONS) comes on top of it.
+    const sameMethod = admitted.filter((grant) => event.method === "OPTIONS" || grant.method === null || grant.method.toUpperCase() === String(event.method).toUpperCase());
+    if (sameMethod.length === 0) {
+      violations.push(`${what} is not the method that was admitted (${admitted.map((grant) => grant.method).join(", ")})`);
+      continue;
+    }
     const role = event.method === "OPTIONS" ? "preflight" : "main";
-    const grant = admitted.find((candidate) => (used.get(candidate)?.[role] ?? 0) === 0);
+    const grant = sameMethod.find((candidate) => (used.get(candidate)?.[role] ?? 0) === 0);
     if (!grant) {
       violations.push(`${what} arrived again under one admission — a repeat`);
       continue;

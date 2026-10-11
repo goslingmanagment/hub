@@ -72,7 +72,7 @@
         method,
         credentials: "include",
         headers: opts.plain ? {} : { authorization: "stand-token" },
-        body: method === "GET" || method === "HEAD" ? undefined : "{}",
+        body: method === "GET" || method === "HEAD" ? undefined : opts.bodySize ? JSON.stringify({ pad: "x".repeat(Math.max(0, opts.bodySize - 10)) }) : "{}",
         keepalive: opts.keepalive === true,
       }).then(
         (r) => note({ kind: "raw", rid, method, path, status: r.status, ms: performance.now() - started }),

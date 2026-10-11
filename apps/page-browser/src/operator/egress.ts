@@ -58,6 +58,7 @@ class Tunnel {
   /** Socket tunnels: the admission's deadline, and whether the socket's
    *  handshake request went up before it. */
   wsDeadline = 0;
+  wsConnId: string | null = null;
   wsHandshakeSent = false;
   /** Big application-data records that went up (socket tunnels). */
   appRecords = 0;
@@ -79,11 +80,15 @@ export class Egress {
   readonly classify: (host: string) => HostClass;
   readonly gate = new ApiGate();
   /** Admission of a new socket connection (socket host): resolves the
-   *  admission's deadline (CLOCK_MONOTONIC ms) to let the CONNECT through,
-   *  null to refuse it. */
-  admitWsTunnel: (host: string) => Promise<number | null> = async () => null;
+   *  admission's deadline (CLOCK_MONOTONIC ms) and id to let the CONNECT
+   *  through, null to refuse it. */
+  admitWsTunnel: (host: string) => Promise<{ deadline: number; connId: string } | null> = async () => null;
+  /** A socket tunnel's handshake request went up, or the tunnel ended. */
+  onWsTunnel: (connId: string, event: "handshake_sent" | "closed") => void = () => undefined;
 
   #exitOpen = false;
+  /** Set by a halt: the exit stays closed whatever asks to open it. */
+  #latched: string | null = null;
   #tunnels = new Set<Tunnel>();
   #nextId = 1;
   #journal: TunnelRecord[] = [];
@@ -104,8 +109,22 @@ export class Egress {
   }
 
   openExit(): void {
+    if (this.#latched !== null) {
+      log("exit.open_refused", { latched: this.#latched });
+      return;
+    }
     this.#exitOpen = true;
     log("exit.open");
+  }
+
+  /** Close the exit and keep it closed until `unlatch` (a halt). */
+  latch(reason: string): void {
+    this.#latched = reason;
+    this.closeExit(`halted: ${reason}`);
+  }
+
+  unlatch(): void {
+    this.#latched = null;
   }
 
   /** Close the exit: refuse new tunnels and cut every open one at once. */
@@ -142,6 +161,7 @@ export class Egress {
     this.#journal.push(tunnel.rec);
     if (this.#journal.length > 5000) this.#journal.splice(0, 1000);
     log("tunnel.closed", { ...tunnel.rec });
+    if (tunnel.wsConnId) this.onWsTunnel(tunnel.wsConnId, "closed");
   }
 
   #refuse(rec: TunnelRecord, client: Socket, result: string): void {
@@ -209,6 +229,7 @@ export class Egress {
             return;
           }
           tunnel.wsHandshakeSent = true;
+          if (tunnel.wsConnId) this.onWsTunnel(tunnel.wsConnId, "handshake_sent");
         }
       }
       tunnel.recordLeft = total;
@@ -307,17 +328,19 @@ export class Egress {
     client.on("data", (chunk: Buffer) => this.#onClientData(tunnel, chunk));
     if (head.length > 0) this.#onClientData(tunnel, head);
 
-    const proceed: Promise<number | null> = cls === "ws" ? this.admitWsTunnel(host) : Promise.resolve(Infinity);
+    const proceed: Promise<{ deadline: number; connId: string | null } | null> = cls === "ws" ? this.admitWsTunnel(host) : Promise.resolve({ deadline: Infinity, connId: null });
     proceed
-      .then((deadline) => {
+      .then((admission) => {
         if (!this.#tunnels.has(tunnel)) return;
-        const admitted = deadline !== null && monoMs() < deadline;
+        const admitted = admission !== null && monoMs() < admission.deadline;
         if (!admitted || !this.#exitOpen) {
           this.#tunnels.delete(tunnel);
           this.#refuse(rec, client, admitted ? "refused: exit closed" : "refused: socket not admitted");
+          if (admission?.connId) this.onWsTunnel(admission.connId, "closed");
           return;
         }
-        tunnel.wsDeadline = deadline;
+        tunnel.wsDeadline = admission.deadline;
+        tunnel.wsConnId = admission.connId;
         return socksConnect(this.socks, host, port).then((upstream) => {
           if (!this.#tunnels.has(tunnel) || !this.#exitOpen) {
             upstream.destroy();
@@ -332,6 +355,8 @@ export class Egress {
           upstream.on("data", (chunk: Buffer) => {
             tunnel.rec.down += chunk.length;
             if (tunnel.serverFirst !== null && (cls === "api" || cls === "ws")) this.#serverHello(tunnel, chunk);
+            // Before Chrome can react to them (a refusal it would repeat on).
+            if (cls === "api") this.gate.noteServerBytes(tunnel.rec.id);
             client.write(chunk);
           });
           upstream.on("close", () => this.#finish(tunnel, tunnel.rec.result || "upstream closed"));
@@ -349,13 +374,20 @@ export class Egress {
   #serverHello(tunnel: Tunnel, chunk: Buffer): void {
     const seen = Buffer.concat([tunnel.serverFirst!, chunk]);
     const tls13 = serverHelloIsTls13(seen);
-    if (tls13 === undefined && seen.length < 20_000) {
+    if (tls13 === undefined) {
       tunnel.serverFirst = seen;
       return;
     }
     tunnel.serverFirst = null;
-    tunnel.tls13 = tls13 ?? null;
-    log("tunnel.tls", { id: tunnel.rec.id, tls13: tunnel.tls13 });
+    if (tls13 === null) {
+      // The record counts depend on the version: a handshake the proxy
+      // cannot read is not carried at all.
+      log("tunnel.tls", { id: tunnel.rec.id, tls13: null });
+      this.#finish(tunnel, "TLS handshake not understood");
+      return;
+    }
+    tunnel.tls13 = tls13;
+    log("tunnel.tls", { id: tunnel.rec.id, tls13 });
   }
 
   /** Local and private destinations are refused even with an open exit. */

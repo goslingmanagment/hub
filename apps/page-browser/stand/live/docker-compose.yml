@@ -61,9 +61,12 @@ services:
       PB_HOSTS_WS: wsv3.fansly.com
       PB_HOSTS_CDN: cdn*.fansly.com
       PB_HUB_TRANSPORT: xhr
-      # Stage 1, item 9 learns what the site sends: a message off the list
-      # is not sent and is journalled; the page keeps working.
-      PB_ON_BLOCKED_SEND: log
+      # Plan §4.3: a socket message off the list is not sent, the exit
+      # closes and the page stays stopped (its form and key names, never its
+      # content, are in the journal for the owner's decision — item 9).
+      PB_ON_BLOCKED_SEND: stop
+      # The first session writes no response bodies (Astra review 2, E).
+      PB_CAPTURE_BODIES: "0"
       PB_SELFTEST_RULES: "1"
       PB_SELFTEST_NEVER_PATH: /api/v1/message/ack
       PB_IPCHECK_HOST: api.ipify.org
@@ -77,6 +80,8 @@ services:
   engine:
     image: node:22-bookworm-slim
     depends_on: [browser]
+    # It exits when the operator's RPC goes away; a fresh start reconnects.
+    restart: on-failure
     networks:
       live:
         ipv4_address: 10.250.240.30
@@ -87,4 +92,5 @@ services:
       LIVE_OPERATOR: ws://10.250.240.20:7700/rpc
       PB_RPC_TOKEN: ${PB_RPC_TOKEN}
       LIVE_PAUSE_MS: ${LIVE_PAUSE_MS:-2500}
+      LIVE_HUB_PATHS: "^/api/v1/account/me$$"
     command: ["node", "--no-warnings", "/pb/stand/live/engine.ts"]

@@ -10,7 +10,7 @@
 
 import { connect as tlsConnect } from "node:tls";
 import { createConnection } from "node:net";
-import { closeSync, createWriteStream, existsSync, mkdirSync, openSync, readFileSync, utimesSync, type WriteStream } from "node:fs";
+import { closeSync, createWriteStream, existsSync, mkdirSync, openSync, readFileSync, rmSync, utimesSync, type WriteStream } from "node:fs";
 import { createHash, type Hash } from "node:crypto";
 
 import { Cdp, type CdpEvent } from "./cdp.ts";
@@ -91,6 +91,13 @@ const CFG = {
   /** Capture response bodies of API requests to disk (plan §4.2 step 7,
    *  §4.3 step 4). */
   captureBodies: envStr("PB_CAPTURE_BODIES", "1") === "1",
+  /** Paths whose responses may be written down (a regular expression); none
+   *  when unset, except on the stand (Astra review 2, E: a filter of bad
+   *  names missed /intercom/authorize). */
+  captureAllow: (() => {
+    const pattern = envStr("PB_CAPTURE_ALLOW", process.env.PB_STAND === "1" ? "^/api/" : "");
+    return pattern === "" ? null : new RegExp(pattern);
+  })(),
   bodiesDir: envStr("PB_BODIES_DIR", "/data/buffer/bodies"),
   /** A Hub response over this declared size is cancelled before its body. */
   hubBodyLimit: envInt("PB_HUB_BODY_LIMIT", 32 * 1024 * 1024),
@@ -377,10 +384,9 @@ cdp.on("Runtime.bindingCalled", (event) => {
   if (payload.k === "blocked_send") {
     log("guard.blocked_send", { msgType: payload.msgType, len: payload.len, target: info?.type });
     rpc.send({ type: "alarm", kind: "ws_blocked_send", detail: { msgType: payload.msgType, len: payload.len, target: info?.type } });
-    if (CFG.onBlockedSend === "stop") {
-      egress.closeExit("blocked socket message");
-      setState("failed", "blocked socket message");
-    }
+    // Plan §4.3: the exit closes and the page stays stopped (a halt: no
+    // restart brings it back on its own).
+    if (CFG.onBlockedSend === "stop") halt("an unknown outgoing socket message");
   }
   if (payload.k === "guard_failed") halt(`socket guard failed in a ${info?.type ?? "context"}: ${String(payload.why)}`);
 });
@@ -448,6 +454,8 @@ interface Operation {
   fromServiceWorker: boolean;
   /** Response headers the engine may use (Retry-After...), cookies left out. */
   headers: Record<string, string> | null;
+  /** The preflight's status, when it had one. */
+  preflightStatus: number | null;
   sessionId: string | null;
   done: boolean;
   mainTimer: NodeJS.Timeout | null;
@@ -491,6 +499,7 @@ function newOperation(kind: Operation["kind"], id: string, key: string, onFinish
     fromCache: false,
     fromServiceWorker: false,
     headers: null,
+    preflightStatus: null,
     sessionId: null,
     done: false,
     mainTimer: null,
@@ -521,6 +530,14 @@ function finishOp(op: Operation, outcome: Record<string, unknown>): void {
   if (op.done) return;
   op.done = true;
   liveOps.delete(op);
+  // A capture still open (control lost, a redirect, a limit) is closed
+  // here: its file is not whole and no result says it is.
+  for (const phys of [op.preflight, op.main]) {
+    if (phys?.capture) {
+      phys.capture.stream.destroy();
+      phys.capture = null;
+    }
+  }
   if (op.mainTimer) clearTimeout(op.mainTimer);
   if (op.limitTimer) clearTimeout(op.limitTimer);
   for (const phys of [op.preflight, op.main]) if (phys?.networkId) byNetworkId.delete(phys.networkId);
@@ -529,7 +546,7 @@ function finishOp(op: Operation, outcome: Record<string, unknown>): void {
     const wid = phys ? windowId(phys) : null;
     if (wid) egress.gate.close(wid);
   }
-  op.onFinish({ ...outcome, preflight: op.preflight ? { sends: op.preflight.sends } : null, preflightSendMono: op.preflightSendMono });
+  op.onFinish({ ...outcome, preflight: op.preflight ? { sends: op.preflight.sends, status: op.preflightStatus } : null, preflightSendMono: op.preflightSendMono });
 }
 
 /** Release one physical request of an admitted operation. */
@@ -588,17 +605,20 @@ function bodyBytes(request: PausedParams["request"]): number | null {
 }
 
 /** Responses that may carry secrets are never written down (spec §2.4: the
- *  login operations; Astra review of the prototype, finding 7). Stage 1
- *  keeps reads only, and none of the login, session or 2FA paths. */
+ *  login operations; Astra reviews of the prototype, findings 7 and E).
+ *  Stage 1 keeps reads only, of the allowed paths only, and none that look
+ *  like login, session, 2FA or an authorisation. */
 function capturable(request: PausedParams["request"]): boolean {
   if (!["GET", "HEAD"].includes(request.method.toUpperCase())) return false;
+  if (CFG.captureAllow === null) return false;
   let path = "";
   try {
     path = new URL(request.url).pathname;
   } catch {
     return false;
   }
-  return !/\/(login|logout|session|sessions|twofa|auth|token|password)(\/|$)/i.test(path);
+  if (!CFG.captureAllow.test(path)) return false;
+  return !/\/(login|logout|session|sessions|twofa|auth|authorize|token|password)(\/|$)/i.test(path);
 }
 
 function isPreflight(params: PausedParams): boolean {
@@ -872,6 +892,9 @@ async function onResponseStage(event: CdpEvent, params: ResponseStage): Promise<
   const wid = windowId(phys);
   if (wid) egress.gate.responding(wid);
   if (phys.role === "preflight") {
+    // Its status goes with the operation: a 429 to the preflight is a 429
+    // (Astra review 2, G).
+    op.preflightStatus = params.responseStatusCode;
     // Chrome 155 pauses a preflight in Fetch as a request with the same
     // request id as the request it guards. Its client in the network
     // service is done at the headers and drops the loader; the browser
@@ -913,6 +936,7 @@ async function onResponseStage(event: CdpEvent, params: ResponseStage): Promise<
   }
   const sessionId = params.networkId ? sessionOfRequest.get(params.networkId) : undefined;
   if (sessionId && params.networkId) {
+    let created: Capture | null = null;
     try {
       mkdirSync(CFG.bodiesDir, { recursive: true });
       const file = `${CFG.bodiesDir}/${Date.now()}-${params.networkId.replace(/[^A-Za-z0-9.]/g, "_")}.bin`;
@@ -934,11 +958,17 @@ async function onResponseStage(event: CdpEvent, params: ResponseStage): Promise<
         capture.writeError = error.message;
         capture.broken = true;
       });
+      created = capture;
       const armed = await cdp.send<{ bufferedData?: string }>("Network.streamResourceContent", { requestId: params.networkId }, sessionId);
       phys.capture = capture;
       if (armed.bufferedData) appendBody(capture, Buffer.from(armed.bufferedData, "base64"), null, 0);
     } catch (error) {
       observe("body.arm_failed", { op: op.id, error: (error as Error).message });
+      // A file opened for nothing goes again.
+      if (created !== null && phys.capture !== created) {
+        created.stream.destroy();
+        rmSync(created.file, { force: true });
+      }
     }
   } else {
     observe("body.arm_failed", { op: op.id, error: "no session for the request" });
@@ -1060,6 +1090,8 @@ function finishWithBody(op: Operation, phys: Physical, ended: "finished" | "canc
 
 interface PausedParams {
   requestId: string;
+  /** Set when the request is the next hop of a redirect. */
+  redirectedRequestId?: string;
   request: {
     url: string;
     urlFragment?: string;
@@ -1111,12 +1143,24 @@ cdp.on("Fetch.requestPaused", (event) => {
     return;
   }
   const fragment = params.request.urlFragment ?? url.hash;
-  if (params.networkId && refusedHops.has(params.networkId)) {
+  if (params.redirectedRequestId !== undefined || (params.networkId && refusedHops.has(params.networkId))) {
+    // A redirect's next hop. A Hub request never follows one; a site's hop
+    // is a new request with an admission of its own — not the old one
+    // (Astra review 2, B: Fetch may pause the hop before the Network events
+    // of the redirect arrive on the page's session).
+    if (params.redirectedRequestId !== undefined && !(params.networkId && refusedHops.has(params.networkId)) && !(fragment.startsWith("#hub-") || url.hostname.endsWith(PLACEHOLDER_SUFFIX))) {
+      const cls = classify(url.hostname);
+      if (cls === "api") return onSitePaused(event, params, true);
+      if (cls === "site" || cls === "cdn") {
+        void resolvePaused(event, "continue", { requestId });
+        return;
+      }
+    }
     observe("hub.redirect_hop_refused", { url: params.request.url.split("?")[0] });
     void resolvePaused(event, "fail", { requestId, errorReason: "BlockedByClient" });
     return;
   }
-  if (fragment.startsWith("#pb-selftest-")) return onSelftestPaused(event, params, fragment);
+  if (fragment.startsWith("#pb-selftest-") && onSelftestPaused(event, params, fragment)) return;
   if (fragment.startsWith("#hub-") || url.hostname.endsWith(PLACEHOLDER_SUFFIX)) return onHubPaused(event, params, fragment.slice(5));
   const cls = classify(url.hostname);
   observe("paused", { url: params.request.url, method: params.request.method, cls, resourceType: params.resourceType, networkId: params.networkId ?? null });
@@ -1238,7 +1282,7 @@ interface PendingSite {
 }
 const pendingSite = new Map<string, PendingSite>();
 
-function onSitePaused(event: CdpEvent, params: PausedParams): void {
+function onSitePaused(event: CdpEvent, params: PausedParams, hop = false): void {
   if (testSiteBypass) {
     void resolvePaused(event, "continue", { requestId: params.requestId });
     return;
@@ -1246,8 +1290,9 @@ function onSitePaused(event: CdpEvent, params: PausedParams): void {
   const preflight = isPreflight(params);
   const method = preflight ? preflightMethod(params) : params.request.method;
   const key = opKey(params.request.url, method);
-  if (!preflight) noteSiteSession(params.request);
-  if (!preflight) {
+  if (!preflight && !hop) noteSiteSession(params.request);
+  // A redirect's hop asks for an admission of its own.
+  if (!preflight && !hop) {
     // The request of an operation whose preflight was admitted and passed.
     const op = awaitingMain.get(key);
     if (op && !op.done) {
@@ -1462,9 +1507,11 @@ function onHubPaused(event: CdpEvent, params: PausedParams, attemptId: string): 
   const role: Physical["role"] = isPreflight(params) ? "preflight" : "main";
   if (attempt.op && attempt.op.admissionId) {
     // The request after its admitted preflight: same admission, no new check.
+    // One admission covers one request: a second one (a redirect's hop) is
+    // refused.
     const op = attempt.op;
     if (op.mainTimer) clearTimeout(op.mainTimer);
-    if (role === "main" && op.deadline !== null && op.deadline > monoMs() && egress.exitOpen) {
+    if (role === "main" && op.main === null && op.deadline !== null && op.deadline > monoMs() && egress.exitOpen) {
       releasePhysical(op, event, params, "main", urlOverride(attempt, params.request.url));
     } else {
       void resolvePaused(event, "fail", { requestId: params.requestId, errorReason: "Aborted" });
@@ -1526,9 +1573,12 @@ function onCheckResult(message: EngineMessage): void {
 
 const selftestWaiters = new Map<string, (outcome: Record<string, unknown>) => void>();
 
-function onSelftestPaused(event: CdpEvent, params: PausedParams, fragment: string): void {
+function onSelftestPaused(event: CdpEvent, params: PausedParams, fragment: string): boolean {
+  // Only the self-test's own request, while it runs and the exit is closed;
+  // the same marker on any other request means nothing (Astra review 2, B).
   const waiter = selftestWaiters.get(fragment);
-  if (waiter && params.networkId) {
+  if (state !== "selftest" || egress.exitOpen || !waiter) return false;
+  if (params.networkId) {
     const op = newOperation("selftest", fragment, fragment, waiter);
     const phys: Physical = { op, role: "main", networkId: params.networkId, sends: 0, done: false, capture: null };
     op.main = phys;
@@ -1536,6 +1586,7 @@ function onSelftestPaused(event: CdpEvent, params: PausedParams, fragment: strin
   }
   // No admission: the exit is closed, the request has nowhere to go.
   void resolvePaused(event, "continue", { requestId: params.requestId });
+  return true;
 }
 
 /** Network.loadingFailed of requests that never stop in Fetch (the rules
@@ -1643,9 +1694,11 @@ async function checkExitIp(): Promise<string> {
 // ── startup (plan §4.1) ───────────────────────────────────────────────────
 
 async function start(): Promise<void> {
+  notHalted();
   egress.closeExit("startup");
   setState("chrome_starting");
   const status = await supervisor({ cmd: "chrome.status" });
+  notHalted();
   if (!status.running) await supervisor({ cmd: "chrome.start", env: { TZ: CFG.env.timeZone, LANG_TAG: CFG.env.language } });
   // Wait until the holder holds the DevTools connection.
   for (let i = 0; i < 300 && !cdp.cdpUp; i++) await sleep(100);
@@ -1677,6 +1730,7 @@ async function start(): Promise<void> {
   setState("ip_check");
   const ip = await checkExitIp();
   if (ip !== CFG.pinnedIp) throw new Error(`exit IP ${ip} is not the pinned ${CFG.pinnedIp}`);
+  notHalted();
   egress.openExit();
   setState("site_loading");
   await cdp.send("Page.navigate", { url: CFG.siteUrl }, sitePage.sessionId);
@@ -1687,18 +1741,27 @@ async function start(): Promise<void> {
 
 async function startLoop(): Promise<void> {
   const ladder = [10_000, 30_000, 120_000, 300_000];
-  for (let attempt = 0; ; attempt++) {
+  for (let attempt = 0; halted === null; attempt++) {
     try {
       await start();
       return;
     } catch (error) {
       egress.closeExit("startup failed");
+      // A halt during the start stays: no retry (Astra review 2, D).
+      if (halted !== null) break;
       setState("failed", (error as Error).message);
       const wait = ladder[Math.min(attempt, ladder.length - 1)]!;
       log("start.failed", { error: (error as Error).message, retryInMs: wait });
       await sleep(Number(process.env.PB_FAST_RETRY) > 0 ? 2000 : wait);
     }
   }
+  if (halted !== null) setState("failed", `halted: ${halted}`);
+}
+
+/** Every step of the start checks the halt latch: only the engine's
+ *  `restart` clears it. */
+function notHalted(): void {
+  if (halted !== null) throw new Error(`halted: ${halted}`);
 }
 
 /** Control is lost (the holder died or Chrome closed the DevTools
@@ -1728,7 +1791,7 @@ let halted: string | null = null;
 function halt(reason: string): void {
   if (halted !== null) return;
   halted = reason;
-  egress.closeExit(`halted: ${reason}`);
+  egress.latch(reason);
   log("halted", { reason });
   rpc.send({ type: "alarm", kind: "halted", detail: { reason } });
   setState("failed", `halted: ${reason}`);
@@ -1859,11 +1922,13 @@ rpc.onMessage = (message) => {
 // Socket tunnels: admitted by the engine, one CONNECT = one socket.
 const pendingWs = new Map<string, (deadline: number | null) => void>();
 let wsAdmitSeq = 0;
+egress.onWsTunnel = (connId, event) => rpc.send({ type: "wsTunnel", connId, event, mono: monoMs() });
+
 egress.admitWsTunnel = (host) =>
   new Promise((resolve) => {
     if (!rpc.up) return resolve(null);
     const connId = `ws-${process.pid}-${++wsAdmitSeq}`;
-    pendingWs.set(connId, resolve);
+    pendingWs.set(connId, (deadline) => resolve(deadline === null ? null : { deadline, connId }));
     rpc.send({ type: "wsAdmit", connId, host });
     setTimeout(() => {
       if (pendingWs.delete(connId)) resolve(null);
@@ -1900,7 +1965,13 @@ async function onCommand(message: EngineMessage): Promise<void> {
       case "restart":
         // After a halt: the engine starts the page again on purpose.
         halted = null;
+        egress.unlatch();
         if (state === "failed" && !restarting) void startLoop();
+        return reply({ ok: true });
+      case "stop":
+        // The engine stops the page: the exit closes at once (every tunnel,
+        // the site's socket too) and stays closed until `restart`.
+        halt("engine stop");
         return reply({ ok: true });
       case "test.breakCdp":
       case "test.dropCdp":

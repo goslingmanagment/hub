@@ -235,7 +235,13 @@ function openWindow(lossDelayMs: number): Scenario {
     const alarm = ctx.engine.alarms.find((a) => a.kind === "cdp_lost" && Number(a.recvMono) >= faultMono);
     ctx.engine.close();
     await ctx.engine.waitReady(180_000);
-    return { ok: checked.violations.length === 0, violations: checked.violations, notes: { lossDelayMs, released: first!.rid, arrived, windowOpenAtLoss: (alarm?.detail as { windowOpen?: boolean } | undefined)?.windowOpen ?? null } };
+    const windowOpenAtLoss = (alarm?.detail as { windowOpen?: boolean } | undefined)?.windowOpen ?? null;
+    // The case this scenario exists for: CDP lost while the window was open.
+    // A run that missed it proves nothing and is replaced.
+    if (checked.violations.length === 0 && windowOpenAtLoss !== true) {
+      return { ok: false, violations: ["scenario error: the window was not open at the loss (not exercised)"], notes: { lossDelayMs, released: first!.rid, arrived, windowOpenAtLoss } };
+    }
+    return { ok: checked.violations.length === 0, violations: checked.violations, notes: { lossDelayMs, released: first!.rid, arrived, windowOpenAtLoss } };
   };
 }
 
@@ -318,6 +324,7 @@ const idlePing: Scenario = async (ctx) => {
   await warm(ctx, tag);
   await sleep(11_000);
   const rid = `i-${tag}`;
+  ctx.arm();
   const siteStarted = monoMs();
   const site = await ctx.engine.eval<{ status?: number; error?: string }>(`site.api(${JSON.stringify(rid)})`);
   const siteMs = Math.round(monoMs() - siteStarted);
@@ -383,16 +390,16 @@ function retry(fault: "h2RefusedStream" | "h2Goaway" | "resetAfterHeaders", gate
  *  Chrome repeats it on the same connection before its announcement is
  *  handled (Astra review of the prototype, finding 5). The window's budget
  *  — its HEADERS and DATA records — must stop the repeat. */
-function retryPost(cdpDelayMs: number): Scenario {
+function retryPost(cdpDelayMs: number, bodySize = 0): Scenario {
   return async (ctx) => {
     await fresh(ctx);
-    const tag = `post-${cdpDelayMs}-${ctx.run}-${Date.now() % 100000}`;
+    const tag = `post-${cdpDelayMs}-${bodySize}-${ctx.run}-${Date.now() % 100000}`;
     await warm(ctx, tag);
     const rid = `rp-${tag}`;
     await ctx.stand.fault({ kind: "h2RefusedStream", match: { rid, method: "POST" }, ms: 0 });
     await ctx.engine.command("test.config", { cdpDelayMs });
     ctx.arm();
-    const result = await ctx.engine.eval<Record<string, unknown>>(`site.raw(${JSON.stringify(rid)}, "POST", "/api/v1/login")`);
+    const result = await ctx.engine.eval<Record<string, unknown>>(`site.raw(${JSON.stringify(rid)}, "POST", "/api/v1/login", ${JSON.stringify(bodySize ? { bodySize } : {})})`);
     await sleep(1500);
     await ctx.engine.command("test.config", { cdpDelayMs: 0 });
     const events = await ctx.stand.journal();
@@ -401,9 +408,30 @@ function retryPost(cdpDelayMs: number): Scenario {
     const checked = checkAdmitted(events, ctx.engine.grants, rid);
     const violations = [...checked.violations];
     if (arrivals.length === 0 || !faulted) violations.push(`the fault did not meet the request (arrivals ${arrivals.length}, fault seen ${faulted})`);
-    return { ok: violations.length === 0, violations, notes: { cdpDelayMs, site: result, arrivals: arrivals.map((event) => ({ conn: event.connId, stream: event.streamId })) } };
+    return { ok: violations.length === 0, violations, notes: { cdpDelayMs, bodySize, site: result, arrivals: arrivals.map((event) => ({ conn: event.connId, stream: event.streamId })) } };
   };
 }
+
+/** A login after the connection was quiet for 10 s: Chrome writes a PING
+ *  between the POST's HEADERS and its DATA (Astra review 2, A — the PING must
+ *  not take the body's place). */
+const idlePost: Scenario = async (ctx) => {
+  await fresh(ctx);
+  const tag = `idlepost-${ctx.run}-${Date.now() % 100000}`;
+  await warm(ctx, tag);
+  await sleep(11_000);
+  const rid = `ip-${tag}`;
+  ctx.arm();
+  const started = monoMs();
+  const result = await ctx.engine.eval<{ status?: number; error?: string }>(`site.raw(${JSON.stringify(rid)}, "POST", "/api/v1/login", { bodySize: 120 })`);
+  const ms = Math.round(monoMs() - started);
+  const events = await ctx.stand.journal();
+  const violations = [...checkAdmitted(events, ctx.engine.grants, rid).violations];
+  const arrivals = reqs(events, rid).filter((event) => event.method === "POST");
+  if (result.status !== 200 || ms > 3000) violations.push(`login after 11 s of quiet: ${JSON.stringify(result)} in ${ms} ms`);
+  if (arrivals.length !== 1) violations.push(`${arrivals.length} POST arrivals`);
+  return { ok: violations.length === 0, violations, notes: { ms, result } };
+};
 
 /** Does a garbage collection in the renderer cancel a Hub fetch nobody in
  *  the isolated world holds on to? `at`: while paused before the admission,
@@ -992,6 +1020,10 @@ export const scenarios: Record<string, Scenario> = {
   "retry-reset-rtt0": retry("resetAfterHeaders", true, 0),
   "retry-post": retryPost(0),
   "retry-post-slowcdp": retryPost(50),
+  // 100 KB: the server refuses after HEADERS while most of the body still
+  // waits for flow control — a repeat inside the window's budget.
+  "retry-post-large": retryPost(0, 100_000),
+  "idle-post": idlePost,
   "send-time": sendTime,
   "hub-gc-paused": hubGc("paused"),
   "hub-gc-body": hubGc("body"),
