@@ -128,6 +128,8 @@ for (const file of [
   // «Ссылки OnlyFans» (traffic PR 12): routes.ts spreads them in, the barrel re-exports both.
   "of-links.ts",
   "routes-of-links.ts",
+  // The operator screen's read (`GET /api/v1/ops/live`): routes.ts spreads it in.
+  "routes-ops-live.ts",
   "routes-ofapi-marketing.ts",
   "ofapi-smart-links.ts",
   "ofapi-extended-commands.ts",

@@ -10,6 +10,7 @@ import { ofapiReadCollectionsRouteSchemas } from "./routes-ofapi-read-collection
 import { ofapiExportRouteSchemas } from "./routes-ofapi-exports.ts";
 import { ofapiCollectionRouteSchemas } from "./routes-ofapi-collection.ts";
 import { ofLinksRouteSchemas } from "./routes-of-links.ts";
+import { opsLiveRouteSchemas } from "./routes-ops-live.ts";
 import {
   PERIOD_OPTIONS,
   SPENDER_PERIOD_OPTIONS,
@@ -5017,8 +5018,9 @@ export const ofapiDmColdArchiveStatusResponseSchema = z.object({
 //                  key is refused here exactly as it is on every kind but agentKey
 // scope:"page" = the middleware resolves params.pageLabel and requires canAccessPage
 // before any handler runs; page ids derived from query/body stay handler-checked.
-// `roles` is reserved for narrowing beyond the kind (unused today; Stage 22 adds
-// device tokens additively). `roles` never admits an agent: it names human roles.
+// `roles` narrows the principal beyond the kind — `opsLive` is `monitoring` for
+// the owner alone: the token, or an owner's dashboard session. `roles` never
+// admits an agent: it names human roles.
 export const routeAuthPolicySchema = z
   .object({
     kind: z.enum(["public", "hmac", "monitoring", "session", "any-session", "owner-session", "apiKey", "device-token", "pending-device-token", "agentKey", "any"]),
@@ -5864,6 +5866,7 @@ const baseRouteSchemas = {
       403: errorResponseSchema,
     },
   },
+  ...opsLiveRouteSchemas,
   healthSync: {
     auth: { kind: "monitoring" },
     tags: ["system"],

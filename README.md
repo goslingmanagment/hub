@@ -9,6 +9,7 @@ For v1.0 production:
 - crashed services restart automatically through Docker restart policies
 - public process/database health is available at `/api/v1/health`
 - detailed sync health at `/api/v1/health/sync` requires an owner or dashboard session, or a configured `HEALTH_SYNC_MONITORING_TOKEN` sent as `x-monitoring-token`
+- the operator screen's read at `/api/v1/ops/live` (sync's sent requests, each page's holds and why its work waits, process heartbeats, the job queue, open incidents — every page, nothing that identifies a fan) takes the same token, or the owner's dashboard session only
 - Swagger/OpenAPI docs at `/documentation` and `/api/v1/openapi.json` require an owner dashboard session
 
 Recurring off-server backups and disaster-recovery restore drills are outside the owner-approved product scope. Do not assume built-in backup or restore scripts exist.

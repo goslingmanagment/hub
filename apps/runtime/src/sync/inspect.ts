@@ -28,6 +28,7 @@ import {
   type SyncWorkKind,
   type SyncWorkRow,
   type SyncWorkState,
+  type SyncWorkStatusFields,
 } from "@agency_hub_core/db";
 import type { AppConfig } from "@agency_hub_core/shared";
 
@@ -43,7 +44,9 @@ import {
   buildPageStatus,
   estimateSlotOpensAt,
   explainWork,
+  summarizeQueue,
   type PageStatus,
+  type QueueStatus,
   type RouteStatusView,
   type StatusPage,
   type StatusWork,
@@ -95,7 +98,7 @@ function statusPage(page: SyncPageRow): StatusPage {
   };
 }
 
-function statusWork(work: SyncWorkRow): StatusWork {
+function statusWork(work: Omit<SyncWorkStatusFields, "pageId">): StatusWork {
   return {
     id: work.id,
     resource: work.resource,
@@ -202,6 +205,33 @@ export async function readSyncPageStatus(
         decodeDebt: ws.decodeDebt,
       },
   });
+}
+
+/**
+ * A page's open work counted by class and by why it waits — the `queue` of
+ * its status (`readSyncPageStatus`) alone, by the same explanation, for a
+ * reader that brings the rows itself: `/api/v1/ops/live` reads every page's
+ * open work in one statement (`listOpenWorkOfAllPages`) and asks here page by
+ * page. `works` are the page's open, running and quarantined rows. One read:
+ * the page's route clocks.
+ */
+export async function readSyncPageQueue(
+  db: Database,
+  page: SyncPageRow,
+  works: ReadonlyArray<Omit<SyncWorkStatusFields, "pageId">>,
+  settingMs: number,
+  now: Date = page.dbNow,
+): Promise<QueueStatus> {
+  const routes = await readPageRoutes(db, page, now);
+  return summarizeQueue(
+    works.map(statusWork),
+    statusPage(page),
+    {
+      slotOpensAt: estimateSlotOpensAt({ lastSendAt: page.lastSendAt, lastCompletedAt: page.lastCompletedAt, settingMs }),
+      routes: routes.admission,
+    },
+    now,
+  );
 }
 
 export interface WorkWhy {
