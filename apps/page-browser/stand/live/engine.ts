@@ -36,7 +36,12 @@ const API = process.env.LIVE_API ?? "https://apiv3.fansly.com";
  *  request, 10 s for a socket's CONNECT): an admission is never given to a
  *  request the operator has already let go (Astra review 3, item 6). */
 const WAIT_MS = 55_000;
-const WS_WAIT_MS = 8_000;
+/** Fansly's client gives up a socket that is still connecting after ~3 s
+ *  and opens another (first session, 2026-10-11). The CONNECT of the one it
+ *  gave up keeps waiting at the proxy (stand finding 27); admitted, it opened
+ *  a tunnel Chrome never sent a handshake on, and the session stopped on it.
+ *  A CONNECT that waited longer than the site does is refused instead. */
+const WS_WAIT_MS = Number(process.env.LIVE_WS_WAIT_MS ?? "2500");
 /** Fields of the identity read returned to the owner's terminal (in memory
  *  only; never in the journal). */
 const HUB_EXTRACT = (process.env.LIVE_HUB_EXTRACT ?? "response.account.id,response.account.username").split(",").filter(Boolean);
