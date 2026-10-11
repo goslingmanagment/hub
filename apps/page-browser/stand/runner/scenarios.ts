@@ -2,6 +2,7 @@
 // loaded, sets up its situation, injects its fault and checks the two
 // journals: what the engine admitted and what reached the stand server.
 
+import { SEND_WINDOW_MS } from "./engine.ts";
 import { checkAdmitted, type Ctx, type RunResult, type Scenario } from "./main.ts";
 import { monoMs, sleep } from "../../src/shared/util.ts";
 import type { JournalEvent } from "./infra.ts";
@@ -560,7 +561,7 @@ const EXPIRY_WINDOW_MS = 5000;
 const EXPIRY_DELAY_MS = 8000;
 
 const EXPIRY_FAULT: Record<ExpiryDelay, Record<string, unknown>> = {
-  socks: { kind: "socksConnectDelay", ms: EXPIRY_DELAY_MS, count: 2 },
+  socks: { kind: "socksConnectDelay", match: { host: "api.stand.test" }, ms: EXPIRY_DELAY_MS, count: 2 },
   tcp: { kind: "tcpDelay", ms: EXPIRY_DELAY_MS, count: 2 },
   // The tunnel is open and the ClientHello went up; the ServerHello waits.
   tls: { kind: "tlsStall", match: { host: "api.stand.test" }, ms: EXPIRY_DELAY_MS, count: 2 },
@@ -576,13 +577,42 @@ function arrivalsVsDeadline(ctx: Ctx, events: JournalEvent[], rid: string): stri
  *  it means the fault missed the request, and the run proves nothing. */
 const NOT_EXERCISED = "scenario error: the request arrived inside its window — the fault missed it (not exercised)";
 
-function expiry(kind: "site" | "hub", delayAt: ExpiryDelay, gate: boolean, hubAbort = true): Scenario {
+/** What an expiry run must show besides "nothing arrived late" to count: the
+ *  request did not arrive at all, and whatever `evidence` names did happen
+ *  (the fault was applied, the gate's window ran out with the request
+ *  unsent). A run without it is replaced, never passed (Astra review 6,
+ *  finding 3). */
+function expiryVerdict(ctx: Ctx, events: JournalEvent[], rid: string, evidence: Record<string, boolean>, notes: Record<string, unknown>): RunResult {
+  const violations = [...checkAdmitted(events, ctx.engine.grants, rid, 50).violations];
+  const arrivals = arrivalsVsDeadline(ctx, events, rid);
+  const gateEvents = ctx.engine.observed.filter((o) => o.kind === "gate" && o.gateEvent !== "first_bytes" && o.gateEvent !== "hold").map((o) => ({ event: o.gateEvent, cut: o.cut }));
+  const told = ctx.engine.siteDoneOf(rid) ?? ctx.engine.results.get(rid) ?? null;
+  const outcome = told ? { outcome: told.outcome, reason: told.reason ?? told.errorText ?? told.error ?? null, sent: told.sent ?? null } : null;
+  if (violations.length === 0) {
+    const missing = Object.entries(evidence).filter(([, seen]) => !seen).map(([what]) => what);
+    if (arrivals.length > 0) violations.push(NOT_EXERCISED);
+    else if (missing.length > 0) violations.push(`scenario error: not shown — ${missing.join("; ")} (not exercised)`);
+  }
+  return { ok: violations.length === 0, violations, notes: { arrivals, gateEvents, outcome, ...notes } };
+}
+
+/** The gate's window of the request ran to its deadline with the request
+ *  unsent, and the gate cut the API tunnels. */
+function windowExpired(ctx: Ctx): boolean {
+  return ctx.engine.observed.some((o) => o.kind === "gate" && o.gateEvent === "expired");
+}
+
+function faultApplied(events: JournalEvent[], kind: unknown): boolean {
+  return events.some((event) => event.t === "fault" && event.kind === kind);
+}
+
+function expiry(kind: "site" | "hub", delayAt: ExpiryDelay, gate: boolean): Scenario {
   return async (ctx) => {
     await fresh(ctx);
     ctx.engine.decideSite = (ask) => (ask.rid?.startsWith("e-") ? { grant: true, windowMs: EXPIRY_WINDOW_MS } : { grant: true });
     ctx.engine.decideCheck = (id) => (id.startsWith("e-") ? { grant: true, windowMs: EXPIRY_WINDOW_MS } : { grant: true });
-    const tag = `exp-${kind}-${delayAt}-${gate ? "g" : "n"}${hubAbort ? "a" : ""}-${ctx.run}-${Date.now() % 100000}`;
-    await ctx.engine.command("test.config", { gate, hubAbort });
+    const tag = `exp-${kind}-${delayAt}-${gate ? "g" : "n"}-${ctx.run}-${Date.now() % 100000}`;
+    await ctx.engine.command("test.config", { gate });
     await warm(ctx, tag);
     // A fresh connection is needed and it takes 8 s; the admission lasts 5 s.
     await coldApi(ctx);
@@ -597,22 +627,9 @@ function expiry(kind: "site" | "hub", delayAt: ExpiryDelay, gate: boolean, hubAb
     }
     await sleep(8000);
     const events = await ctx.stand.journal();
-    const violations = [...checkAdmitted(events, ctx.engine.grants, rid, 50).violations];
-    const arrivals = arrivalsVsDeadline(ctx, events, rid);
-    if (violations.length === 0 && arrivals.length > 0) violations.push(NOT_EXERCISED);
-    await ctx.engine.command("test.config", { gate: true, hubAbort: true });
-    return {
-      ok: violations.length === 0,
-      violations,
-      notes: {
-        gate,
-        hubAbort,
-        outcome,
-        arrivals,
-        gateEvents: ctx.engine.observed.filter((o) => o.kind === "gate" && o.gateEvent !== "first_bytes" && o.gateEvent !== "hold").map((o) => ({ event: o.gateEvent, cut: o.cut })),
-        aborts: ctx.engine.observed.filter((o) => o.kind === "hub.abort_before_deadline").length,
-      },
-    };
+    await ctx.engine.command("test.config", { gate: true });
+    const evidence = { "the delay was applied": faultApplied(events, EXPIRY_FAULT[delayAt].kind), ...(gate ? { "the gate's window ran out": windowExpired(ctx) } : {}) };
+    return expiryVerdict(ctx, events, rid, evidence, { gate, page: outcome });
   };
 }
 
@@ -648,16 +665,6 @@ async function withStopped(ctx: Ctx, pids: number[], during: () => Promise<void>
   }
 }
 
-function stoppedVerdict(ctx: Ctx, events: JournalEvent[], rid: string, gate: boolean, notes: Record<string, unknown>): RunResult {
-  const violations = [...checkAdmitted(events, ctx.engine.grants, rid, 50).violations];
-  const arrivals = arrivalsVsDeadline(ctx, events, rid);
-  if (violations.length === 0 && arrivals.length > 0) violations.push(NOT_EXERCISED);
-  const gateEvents = ctx.engine.observed.filter((o) => o.kind === "gate" && o.gateEvent !== "first_bytes" && o.gateEvent !== "hold").map((o) => ({ event: o.gateEvent, cut: o.cut }));
-  const told = ctx.engine.siteDoneOf(rid) ?? ctx.engine.results.get(rid) ?? null;
-  const outcome = told ? { outcome: told.outcome, reason: told.reason ?? told.errorText ?? told.error ?? null, sent: told.sent ?? null } : null;
-  return { ok: violations.length === 0, violations, notes: { gate, arrivals, gateEvents, outcome, ...notes } };
-}
-
 /** The admission of the runs below: Chrome's network service, or the
  *  operator, is stopped for longer and runs again after the deadline. */
 const STOPPED_WINDOW_MS = 3000;
@@ -683,7 +690,7 @@ function expiryReused(kind: "site" | "hub", gate: boolean): Scenario {
     await sleep(3000);
     const events = await ctx.stand.journal();
     await ctx.engine.command("test.config", { gate: true });
-    return stoppedVerdict(ctx, events, rid, gate, { kind });
+    return expiryVerdict(ctx, events, rid, gate ? { "the gate's window ran out": windowExpired(ctx) } : {}, { gate, kind });
   };
 }
 
@@ -715,19 +722,20 @@ function expiryOperatorStop(gate: boolean): Scenario {
     const rid = `e-${tag}`;
     const release = await holdOne(ctx, "site", rid);
     await coldApi(ctx);
-    await ctx.stand.fault({ kind: "socksConnectDelay", ms: 1000, count: 2 });
+    await ctx.stand.fault({ kind: "socksConnectDelay", match: { host: "api.stand.test" }, ms: 1000, count: 2 });
     const operator = (await ctx.docker.pids()).operator;
     if (!operator) throw new Error("no operator process");
-    ctx.arm();
     release(OPERATOR_WINDOW_MS);
-    // The operator released the request and Chrome asked for its tunnel.
-    await sleep(150);
+    // The operator released the request and its connection is under way: the
+    // stand's SOCKS server has the CONNECT and holds its answer.
+    await until(async () => faultApplied(await ctx.stand.journal(), "socksConnectDelay"), 700, "the request's connection at the SOCKS server");
+    ctx.arm();
     await withStopped(ctx, [operator], () => sleep(OPERATOR_STOP_MS));
     await sleep(3000);
     const events = await ctx.stand.journal();
     const wentOn = await operatorWentOn(ctx, operator);
     await ctx.engine.command("test.config", { gate: true });
-    const result = stoppedVerdict(ctx, events, rid, gate, { wentOn });
+    const result = expiryVerdict(ctx, events, rid, gate ? { "the gate's window ran out": windowExpired(ctx) } : {}, { gate, wentOn });
     if (!wentOn && result.violations.length === 0) return { ...result, ok: false, violations: [WATCHDOG_KILLED] };
     return result;
   };
@@ -752,15 +760,16 @@ function expiryLateGrant(kind: "site" | "hub"): Scenario {
     await sleep(2500);
     const events = await ctx.stand.journal();
     const wentOn = await operatorWentOn(ctx, operator);
-    const result = stoppedVerdict(ctx, events, rid, true, { kind, wentOn });
+    const told = ctx.engine.siteDoneOf(rid) ?? ctx.engine.results.get(rid) ?? null;
+    const result = expiryVerdict(ctx, events, rid, { "the operator refused the admission as expired": told?.outcome === "aborted_before_send" }, { kind, wentOn });
     if (!wentOn && result.violations.length === 0) return { ...result, ok: false, violations: [WATCHDOG_KILLED] };
     return result;
   };
 }
 
-/** The page's process stopped: a Hub request's own abort before the deadline
- *  runs in the page and cannot act. The new connection takes 8 s, the
- *  admission lasts 5 s. */
+/** The page's process stopped while a Hub request's new connection takes 8 s
+ *  and its admission lasts 5 s: nothing in the page can help the deadline,
+ *  and the request's end reaches the operator only when the page runs again. */
 function expiryPageStop(gate: boolean): Scenario {
   return async (ctx) => {
     await fresh(ctx);
@@ -783,7 +792,166 @@ function expiryPageStop(gate: boolean): Scenario {
     // The health check may have taken the stopped page for a hung one.
     await ctx.engine.waitReady(180_000);
     await ctx.engine.command("test.config", { gate: true });
-    return stoppedVerdict(ctx, events, rid, gate, { aborts: ctx.engine.observed.filter((o) => o.kind === "hub.abort_before_deadline").length });
+    const evidence = { "the delay was applied": faultApplied(events, "socksConnectDelay"), ...(gate ? { "the gate's window ran out": windowExpired(ctx) } : {}) };
+    return expiryVerdict(ctx, events, rid, evidence, { gate });
+  };
+}
+
+/** The pilot's engine admits its next operation this long after the reported
+ *  end of the previous one. */
+const NEXT_PAUSE_MS = 2500;
+
+/** The engine's next admission after a Hub request whose connection was late
+ *  while the page stood (Astra review 6, finding 1). The operator must not
+ *  report the first operation's end while its request can still leave, and
+ *  nothing of it may go under the second admission. `connectMs`: 8 s — the
+ *  first admission (5 s) runs out; 4.8 s — the connection comes just before
+ *  the deadline. No cut and no new document between the two operations. */
+function nextAdmission(connectMs: number): Scenario {
+  return async (ctx) => {
+    await fresh(ctx);
+    const tag = `next-${connectMs}-${ctx.run}-${Date.now() % 100000}`;
+    await warm(ctx, tag);
+    const first = `e-${tag}`;
+    const second = `n-${tag}`;
+    // The second request waits for its admission from the start: the page
+    // may still stand when its turn comes.
+    const releaseSecond = await holdOne(ctx, "site", second);
+    const releaseFirst = await holdOne(ctx, "hub", first);
+    await coldApi(ctx);
+    await ctx.stand.fault({ kind: "socksConnectDelay", match: { host: "api.stand.test" }, ms: connectMs, count: 1 });
+    const renderers = await ctx.docker.rendererPids();
+    if (renderers.length === 0) throw new Error("no renderer process");
+    const ended = () => ctx.engine.results.has(first);
+    let whilePageStood = false;
+    ctx.arm();
+    await withStopped(ctx, renderers, async () => {
+      releaseFirst(EXPIRY_WINDOW_MS);
+      const stoodUntil = monoMs() + EXPIRY_DELAY_MS + 2000;
+      while (monoMs() < stoodUntil && !ended()) await sleep(50);
+      if (!ended()) return;
+      // The end was reported while the page stands: the engine goes on, and
+      // whatever of the first request is still alive in Chrome has its chance.
+      whilePageStood = true;
+      await sleep(NEXT_PAUSE_MS);
+      releaseSecond(SEND_WINDOW_MS);
+      await sleep(Math.max(0, stoodUntil - monoMs()) + 3000);
+    });
+    if (!whilePageStood) {
+      await until(ended, 25_000, "the first request's end");
+      await sleep(NEXT_PAUSE_MS);
+      releaseSecond(SEND_WINDOW_MS);
+    }
+    await sleep(3000);
+    const events = await ctx.stand.journal();
+    // The health check may have taken the stopped page for a hung one.
+    await ctx.engine.waitReady(180_000);
+    const violations = [...checkAdmitted(events, ctx.engine.grants, first, 50).violations, ...checkAdmitted(events, ctx.engine.grants, second, 50).violations];
+    const firstArrivals = arrivalsVsDeadline(ctx, events, first);
+    const secondArrivals = arrivalsVsDeadline(ctx, events, second);
+    const told = ctx.engine.results.get(first) ?? null;
+    const reportedUnsent = told !== null && (told.sent === false || told.outcome === "aborted_before_send");
+    if (reportedUnsent && firstArrivals.length > 0) violations.push("the first request reached the server, and the operator reported it as not sent");
+    if (secondArrivals.length !== 1) violations.push(`${secondArrivals.length} arrivals of the next request`);
+    if (violations.length === 0) {
+      const expired = connectMs > EXPIRY_WINDOW_MS;
+      const missing = [
+        faultApplied(events, "socksConnectDelay") ? null : "the delay was applied",
+        expired && !windowExpired(ctx) ? "the gate's window ran out" : null,
+        expired === (firstArrivals.length === 0) ? null : expired ? "the first request did not leave" : "the first request left inside its window",
+      ].filter((what) => what !== null);
+      if (missing.length > 0) violations.push(`scenario error: not shown — ${missing.join("; ")} (not exercised)`);
+    }
+    return {
+      ok: violations.length === 0,
+      violations,
+      notes: { connectMs, whilePageStood, first: { arrivals: firstArrivals, outcome: told?.outcome ?? null, sent: told?.sent ?? null }, second: secondArrivals },
+    };
+  };
+}
+
+/** A request Chrome still holds when its operation's limit comes (finding 36):
+ *  the network service stands (SIGSTOP) from before the admission until
+ *  after the engine admitted its next operation. Whatever the process does
+ *  with the first request when it runs again, the request must not reach the
+ *  server: its admission is long over. */
+const staleAfterLimit: Scenario = async (ctx) => {
+  await fresh(ctx);
+  const tag = `stale-${ctx.run}-${Date.now() % 100000}`;
+  await warm(ctx, tag);
+  const first = `e-${tag}`;
+  const second = `n-${tag}`;
+  ctx.engine.decideSite = (ask) => (ask.rid === first || ask.rid === second ? "hold" : { grant: true });
+  await ctx.engine.eval(`site.api(${JSON.stringify(first)}, { plain: true }), site.api(${JSON.stringify(second)}, { plain: true }), true`, false);
+  const heldAsk = (rid: string) => [...ctx.engine.heldSite.values()].find((ask) => ask.rid === rid);
+  await until(() => heldAsk(first) !== undefined && heldAsk(second) !== undefined, 10_000, "both requests held");
+  const net = await ctx.docker.networkServicePid();
+  if (net === null) throw new Error("no network service process");
+  const since = monoMs();
+  const stopped = () => ctx.engine.alarms.some((alarm) => alarm.kind === "halted" && Number(alarm.recvMono) >= since);
+  ctx.arm();
+  await withStopped(ctx, [net], async () => {
+    ctx.engine.releaseSite(heldAsk(first)!.siteRequestId, { grant: true });
+    // Nothing of the request can end while the process stands: the
+    // operation's limit (21 s) ends it.
+    await until(() => ctx.engine.siteDoneOf(first) !== null, 30_000, "the first operation's end");
+    await sleep(NEXT_PAUSE_MS);
+    const ask = heldAsk(second);
+    if (ask && !stopped()) ctx.engine.releaseSite(ask.siteRequestId, { grant: true });
+    await sleep(1500);
+  });
+  await sleep(4000);
+  const events = await ctx.stand.journal();
+  const pageStopped = stopped();
+  if (pageStopped) await ctx.engine.command("restart");
+  await ctx.engine.waitReady(180_000);
+  const violations = [...checkAdmitted(events, ctx.engine.grants, first, 50).violations, ...checkAdmitted(events, ctx.engine.grants, second, 50).violations];
+  const firstArrivals = arrivalsVsDeadline(ctx, events, first);
+  const told = ctx.engine.siteDoneOf(first);
+  if (violations.length === 0 && firstArrivals.length > 0) violations.push(NOT_EXERCISED);
+  if (violations.length === 0 && told?.error !== "no end within the operation limit") violations.push(`scenario error: not shown — the first operation ended by its limit (${JSON.stringify(told?.error ?? told?.outcome ?? null)}) (not exercised)`);
+  return { ok: violations.length === 0, violations, notes: { pageStopped, first: { arrivals: firstArrivals, outcome: told?.outcome ?? null, error: told?.error ?? null }, second: arrivalsVsDeadline(ctx, events, second) } };
+};
+
+/** A socket's admission runs out while its connection is still being made
+ *  (Astra review 6): SOCKS answers after the deadline, or the tunnel is open
+ *  and the TLS handshake hangs. The socket's handshake request must not
+ *  leave, and the engine hears that the socket failed. */
+function wsExpiry(delayAt: "socks" | "tls"): Scenario {
+  return async (ctx) => {
+    await fresh(ctx);
+    const tag = `wx-${delayAt}-${ctx.run}-${Date.now() % 100000}`;
+    const since = monoMs();
+    ctx.engine.decideWs = () => ({ grant: true, windowMs: EXPIRY_WINDOW_MS });
+    const kind = delayAt === "socks" ? "socksConnectDelay" : "tlsStall";
+    await ctx.stand.fault({ kind, match: { host: "ws.stand.test" }, ms: EXPIRY_DELAY_MS });
+    ctx.arm();
+    const index = await ctx.engine.eval<number>(`site.ws(${JSON.stringify(tag)})`, false);
+    await sleep(EXPIRY_DELAY_MS + 2500);
+    const events = await ctx.stand.journal();
+    ctx.engine.decideWs = () => ({ grant: true });
+    const grant = ctx.engine.grants.filter((g) => g.kind === "ws" && g.grantedMono >= since).at(-1);
+    const opened = events.filter((event) => event.t === "ws.open" && event.rid === tag);
+    const heard = ctx.engine.observed.filter((o) => o.type === "wsTunnel" && Number(o.recvMono) >= since && (o.event === "open" || o.event === "failed")).map((o) => ({ event: o.event, error: o.error ?? null }));
+    const tunnels = ((await ctx.engine.command("test.tunnels")).tunnels as Array<{ cls?: string; result?: string }>).filter((tunnel) => tunnel.cls === "ws").map((tunnel) => tunnel.result ?? "");
+    const state = await ctx.engine.eval(`site.wsState(${index})`, false);
+    const violations: string[] = [];
+    for (const event of opened) {
+      const late = Math.round(event.mono - (grant?.deadlineMono ?? 0));
+      if (!grant) violations.push("a socket's handshake reached the server without an admission");
+      else if (late > 50) violations.push(`the socket's handshake reached the server ${late} ms after its admission's deadline`);
+    }
+    if (violations.length === 0) {
+      const missing = [
+        grant ? null : "the socket's admission was asked",
+        faultApplied(events, kind) ? null : "the delay was applied",
+        opened.length === 0 ? null : "the handshake did not leave",
+        tunnels.some((result) => result.startsWith("socket admission expired")) ? null : "the proxy ended the tunnel by the deadline",
+      ].filter((what) => what !== null);
+      if (missing.length > 0) violations.push(`scenario error: not shown — ${missing.join("; ")} (not exercised)`);
+      else if (!heard.some((outcome) => outcome.event === "failed")) violations.push(`the engine did not hear that the socket failed (${JSON.stringify(heard)})`);
+    }
+    return { ok: violations.length === 0, violations, notes: { delayAt, heard, tunnels: tunnels.slice(-3), state } };
   };
 }
 
@@ -1531,8 +1699,7 @@ export const scenarios: Record<string, Scenario> = {
   "expiry-site-tcp": expiry("site", "tcp", true),
   "expiry-site-tcp-nogate": expiry("site", "tcp", false),
   "expiry-hub-socks": expiry("hub", "socks", true),
-  "expiry-hub-socks-abortonly": expiry("hub", "socks", false, true),
-  "expiry-hub-socks-nothing": expiry("hub", "socks", false, false),
+  "expiry-hub-socks-nogate": expiry("hub", "socks", false),
   "expiry-site-tls": expiry("site", "tls", true),
   "expiry-site-tls-nogate": expiry("site", "tls", false),
   "expiry-hub-tls": expiry("hub", "tls", true),
@@ -1545,6 +1712,11 @@ export const scenarios: Record<string, Scenario> = {
   "expiry-hub-late-grant": expiryLateGrant("hub"),
   "expiry-hub-page-stop": expiryPageStop(true),
   "expiry-hub-page-stop-nogate": expiryPageStop(false),
+  "next-admission-expired": nextAdmission(EXPIRY_DELAY_MS),
+  "next-admission-slow": nextAdmission(4800),
+  "stale-after-limit": staleAfterLimit,
+  "ws-expiry-socks": wsExpiry("socks"),
+  "ws-expiry-tls": wsExpiry("tls"),
   rules: rules(false),
   "rules-bypass": rules(true),
   "body-capture": bodyCapture,

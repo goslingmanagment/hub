@@ -6,7 +6,10 @@
 set -u
 PART="${1:-A}"
 OUT=/stand/results/${SERIES:-last}-${STAND_NAME:-stand}-$PART-$(date -u +%Y%m%dT%H%M%SZ).log
+# RUNS=<n>: a dry pass, every scenario n times (not a series: the verifier
+# refuses its counts).
 run() {
+  set -- "$1" "${RUNS:-$2}"
   echo "=== $1 x$2 $(date -u +%H:%M:%S)" >> "$OUT"
   node --no-warnings /pb/stand/runner/main.ts "$1" "$2" > /tmp/batch-run.out 2>&1
   code=$?
@@ -37,15 +40,19 @@ case "$PART" in
     run idle-ping 10; run idle-post 10; run send-time 10
     run slow-body-limit 10; run slow-body-limit-capture 5
     for s in expiry-site-socks expiry-site-tcp expiry-hub-socks; do run "$s" 50; done
+    for s in retry-refused-nogate retry-goaway-nogate retry-reset-nogate expiry-site-socks-nogate expiry-site-tcp-nogate expiry-hub-socks-nogate; do run "$s" 10; done
     ;;
-  # The deadline's other cases of the plan (§4.2, step 4) and the 408 repeat.
+  # The deadline's other cases of the plan (§4.2, step 4), the engine's next
+  # admission after them, the socket's deadline and the 408 repeat.
   E)
     for s in expiry-site-tls expiry-hub-tls expiry-hub-page-stop; do run "$s" 50; done
     run expiry-site-tls-nogate 10; run expiry-hub-page-stop-nogate 10
+    run next-admission-expired 20; run next-admission-slow 20; run stale-after-limit 10
     ;;
   F)
     for s in expiry-site-reused expiry-hub-reused expiry-site-operator-stop expiry-site-late-grant expiry-hub-late-grant retry-408; do run "$s" 50; done
     run expiry-site-reused-nogate 10; run expiry-site-operator-stop-nogate 10; run retry-408-nogate 10
+    run ws-expiry-socks 50; run ws-expiry-tls 50
     ;;
   # The replies of CDP commands reach the operator later than the events.
   G)

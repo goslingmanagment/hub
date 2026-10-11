@@ -33,15 +33,19 @@ const SERIES: Record<string, Record<string, number>> = {
     "retry-post": 20, "retry-post-slowcdp": 20, "retry-post-large": 20, "retry-post-large-nogate": 10, "post-too-large": 10,
     "idle-ping": 10, "idle-post": 10, "send-time": 10, "slow-body-limit": 10, "slow-body-limit-capture": 5,
     "expiry-site-socks": 50, "expiry-site-tcp": 50, "expiry-hub-socks": 50,
+    "retry-refused-nogate": 10, "retry-goaway-nogate": 10, "retry-reset-nogate": 10,
+    "expiry-site-socks-nogate": 10, "expiry-site-tcp-nogate": 10, "expiry-hub-socks-nogate": 10,
   },
   E: {
     "expiry-site-tls": 50, "expiry-hub-tls": 50, "expiry-hub-page-stop": 50,
     "expiry-site-tls-nogate": 10, "expiry-hub-page-stop-nogate": 10,
+    "next-admission-expired": 20, "next-admission-slow": 20, "stale-after-limit": 10,
   },
   F: {
     "expiry-site-reused": 50, "expiry-hub-reused": 50, "expiry-site-operator-stop": 50,
     "expiry-site-late-grant": 50, "expiry-hub-late-grant": 50, "retry-408": 50,
     "expiry-site-reused-nogate": 10, "expiry-site-operator-stop-nogate": 10, "retry-408-nogate": 10,
+    "ws-expiry-socks": 50, "ws-expiry-tls": 50,
   },
   // The replies of CDP commands reach the operator 100 ms after the events.
   G: {
@@ -57,8 +61,14 @@ const LATE_REPLIES_MS: Record<string, number> = { G: 100 };
  *  an unrelated failure does not count for it. */
 const CONTROLS: Record<string, string> = {
   "loss-cdp-break-late-nogate": "arrived without any admission",
+  "retry-refused-nogate": "Chrome repeated the request",
+  "retry-goaway-nogate": "Chrome repeated the request",
+  "retry-reset-nogate": "Chrome repeated the request",
   "retry-post-large-nogate": "arrived again under one admission",
   "retry-408-nogate": "arrived again under one admission",
+  "expiry-site-socks-nogate": "arrived outside its admission window",
+  "expiry-site-tcp-nogate": "arrived outside its admission window",
+  "expiry-hub-socks-nogate": "arrived outside its admission window",
   "expiry-site-tls-nogate": "arrived outside its admission window",
   "expiry-site-reused-nogate": "arrived outside its admission window",
   "expiry-site-operator-stop-nogate": "arrived outside its admission window",
@@ -117,6 +127,12 @@ function main(): void {
         artifact = JSON.parse(readFileSync(join(dir, basename(found.at(-1)!)), "utf8")) as Artifact;
       } catch (error) {
         problems.push(`${label}: result file unreadable (${(error as Error).message})`);
+        continue;
+      }
+      // The log names the file; the file must be this scenario's own
+      // (Astra review 6, finding 4).
+      if (artifact.scenario !== name) {
+        problems.push(`${label}: its result file holds ${String(artifact.scenario)}`);
         continue;
       }
       const valid = artifact.results.filter((run) => !run.invalid);

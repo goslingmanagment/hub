@@ -55,8 +55,6 @@ const CFG = {
   pinnedIp: envStr("PB_PINNED_IP", "203.0.113.7"),
   /** What a blocked socket message does: `stop` (plan) or `log` (stand runs). */
   onBlockedSend: envStr("PB_ON_BLOCKED_SEND", "stop"),
-  /** Candidate for condition №2: abort a Hub fetch 1 s before its deadline. */
-  hubAbortBeforeDeadline: envStr("PB_HUB_ABORT", "1") === "1",
   /** Candidate: release Hub requests from an unreachable placeholder host. */
   hubPlaceholderHost: envStr("PB_HUB_PLACEHOLDER", "1") === "1",
   /** Refuse every non-socket request to the socket host (no HTTP/2 session
@@ -533,6 +531,14 @@ function startLimit(op: Operation): void {
       finishWithBody(op, op.main, "limit", null, { outcome: "response", status: op.status, headers: op.headers, sends: op.main.sends, sendMono: op.sendMono, fromCache: op.fromCache, fromServiceWorker: op.fromServiceWorker, bodyEnd: "limit" });
     } else {
       finishOp(op, { outcome: "transport_error", sent: (op.main?.sends ?? 0) > 0, error: "no end within the operation limit", sends: op.main?.sends ?? 0 });
+      // No answer, and Chrome did not report the request's end either,
+      // though the gate cut its connections at the deadline or 20 s after
+      // the send. Chrome may still hold the request (its network service
+      // stood for 25 s on the stand, finding 36) and write it in the window
+      // of a later admission, which the gate cannot tell from that
+      // admission's own request. The request dies with the browser: the
+      // page stops.
+      halt("an operation's request did not end within its limit");
     }
   }, OP_LIMIT_MS);
 }
@@ -1460,7 +1466,6 @@ interface HubAttempt {
   op: Operation | null;
   waiting: { event: CdpEvent; params: PausedParams; role: Physical["role"] } | null;
   pausedTimer: NodeJS.Timeout | null;
-  abortTimer: NodeJS.Timeout | null;
   worldId: number | null;
   done: boolean;
   /** Fields of the JSON answer the engine asked for by path — read in the
@@ -1501,7 +1506,6 @@ function hubResult(attempt: HubAttempt, outcome: Record<string, unknown>): void 
     }
   };
   if (attempt.pausedTimer) clearTimeout(attempt.pausedTimer);
-  if (attempt.abortTimer) clearTimeout(attempt.abortTimer);
   if (attempt.op && !attempt.op.done) {
     attempt.op.done = true;
     liveOps.delete(attempt.op);
@@ -1604,7 +1608,6 @@ async function onHubSend(message: EngineMessage): Promise<void> {
     op: null,
     waiting: null,
     pausedTimer: null,
-    abortTimer: null,
     worldId: null,
     done: false,
     extract:
@@ -1724,27 +1727,11 @@ function onCheckResult(message: EngineMessage): void {
   op.admissionId = `hub:${attempt.attemptId}`;
   op.deadline = deadline;
   startLimit(op);
-  if (CFG.hubAbortBeforeDeadline) {
-    attempt.abortTimer = setTimeout(() => {
-      if (op.main?.sends || attempt.done || !sitePage || attempt.worldId === null) return;
-      observe("hub.abort_before_deadline", { attemptId: attempt.attemptId });
-      // The abort of a fetch still in its preflight has no end event of a
-      // request we track: close the attempt ourselves if none comes.
-      setTimeout(() => {
-        if (!attempt.done && !(op.main?.sends)) finishOp(op, { outcome: "transport_error", sent: false, errorText: "net::ERR_ABORTED", canceled: true, error: "aborted before its deadline", sends: 0 });
-      }, 500);
-      cdp.post(
-        "Runtime.callFunctionOn",
-        {
-          functionDeclaration: "function (id) { const e = globalThis.__pbLive && globalThis.__pbLive.get(id); if (e) e.controller.abort(); return !!e; }",
-          executionContextId: attempt.worldId,
-          arguments: [{ value: attempt.attemptId }],
-          returnByValue: true,
-        },
-        sitePage.sessionId,
-      );
-    }, Math.max(0, deadline - 1000 - monoMs()));
-  }
+  // The deadline is the gate's alone. An abort from the page a second before
+  // it (the plan's candidate, §4.2 step 4) cannot say whether it was carried
+  // out: with the page hung, the operation was reported as ended and unsent
+  // while its request was still alive, and the next admission could carry it
+  // (Astra review 6, finding 1).
   releasePhysical(op, event, params, role, urlOverride(attempt, params.request.url));
 }
 
@@ -2274,7 +2261,6 @@ async function onCommand(message: EngineMessage): Promise<void> {
         // Stand only: switch the candidates for comparison runs.
         if (typeof message.gate === "boolean") egress.gate.enabled = message.gate;
         if (typeof message.placeholder === "boolean") CFG.hubPlaceholderHost = message.placeholder;
-        if (typeof message.hubAbort === "boolean") CFG.hubAbortBeforeDeadline = message.hubAbort;
         if (typeof message.wsHostRefuse === "boolean") CFG.refuseWsHostRequests = message.wsHostRefuse;
         if (typeof message.lossDelayMs === "number") lossReactionDelayMs = message.lossDelayMs;
         if (typeof message.urlAlways === "boolean") testUrlAlways = message.urlAlways;
@@ -2291,7 +2277,7 @@ async function onCommand(message: EngineMessage): Promise<void> {
         if (typeof message.captureBodies === "boolean") CFG.captureBodies = message.captureBodies;
         if (typeof message.siteUrlSame === "boolean") testSiteUrlSame = message.siteUrlSame;
         if (typeof message.siteBypass === "boolean") testSiteBypass = message.siteBypass;
-        return reply({ ok: true, gate: egress.gate.enabled, placeholder: CFG.hubPlaceholderHost, hubAbort: CFG.hubAbortBeforeDeadline, wsHostRefuse: CFG.refuseWsHostRequests });
+        return reply({ ok: true, gate: egress.gate.enabled, placeholder: CFG.hubPlaceholderHost, wsHostRefuse: CFG.refuseWsHostRequests });
       }
       case "test.tunnels":
         return reply({ ok: true, tunnels: egress.journal().slice(-200), gate: egress.gate.state });

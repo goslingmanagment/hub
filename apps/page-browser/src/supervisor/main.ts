@@ -11,7 +11,7 @@
 // /run/pb/pids.json for the stand's fault injection (docker exec … kill).
 
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { chmodSync, chownSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, chownSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 
 import { encodeMessage, readMessages } from "../shared/frames.ts";
@@ -133,10 +133,49 @@ function startXServer(): void {
   });
 }
 
+const PROFILE = "/data/profile";
+
+/** Chrome unpacks the rules extension into a new version directory at every
+ *  start that follows an exit it had no time to record (it writes its
+ *  preferences about 10 s after the install) and collects the unused
+ *  directories only 30 s after a start. A Chrome that keeps dying sooner
+ *  leaves a hundred of them and then cannot install the extension at all
+ *  ("Could not find a home for extension", stand finding 33): the self-test
+ *  fails and the page stays closed. So before every start the version
+ *  directories the preferences do not name are removed — what Chrome's own
+ *  collection would do. */
+function dropUnrecordedExtensionDirs(): void {
+  const recorded = new Set<string>();
+  for (const file of ["Preferences", "Secure Preferences"]) {
+    try {
+      const prefs = JSON.parse(readFileSync(`${PROFILE}/Default/${file}`, "utf8")) as { extensions?: { settings?: Record<string, { path?: unknown }> } };
+      for (const setting of Object.values(prefs.extensions?.settings ?? {})) if (typeof setting.path === "string") recorded.add(setting.path);
+    } catch {
+      // No such file yet, or one Chrome will reset: it records nothing.
+    }
+  }
+  const root = `${PROFILE}/Default/Extensions`;
+  let dropped = 0;
+  try {
+    for (const id of readdirSync(root)) {
+      for (const version of readdirSync(`${root}/${id}`)) {
+        // "Temp" holds what an interrupted install was unpacking.
+        if (id !== "Temp" && recorded.has(`${id}/${version}`)) continue;
+        rmSync(`${root}/${id}/${version}`, { recursive: true, force: true });
+        dropped += 1;
+      }
+    }
+  } catch {
+    // No extensions directory yet.
+  }
+  if (dropped > 0) log("chrome.extension_dirs_dropped", { dropped });
+}
+
 function startChrome(env: Record<string, string>): number {
   if (chrome && chrome.exitCode === null && chrome.signalCode === null) return chrome.pid!;
+  dropUnrecordedExtensionDirs();
   const args = [
-    "--user-data-dir=/data/profile",
+    `--user-data-dir=${PROFILE}`,
     `--remote-debugging-port=${envInt("PB_CDP_PORT", 9222)}`,
     "--window-size=1920,1080",
     `--lang=${env.LANG_TAG ?? "en-US"}`,

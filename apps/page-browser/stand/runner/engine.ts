@@ -184,6 +184,9 @@ export class StandEngine {
           resourceType: String(message.resourceType),
           askedMono: recvMono,
         };
+        // Chrome numbers its paused requests anew after a restart: the end
+        // of an earlier request under the same id is not this one's.
+        this.siteDone.delete(ask.siteRequestId);
         this.#decideSite(ask);
         break;
       }
