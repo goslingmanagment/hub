@@ -291,7 +291,18 @@ export class StandEngine {
   /** A Hub request (plan §4.2). The url carries `rid` for the journals. */
   sendHub(attemptId: string, url: string, headers: Record<string, string> = {}, method = "GET"): Promise<Message> {
     this.#hubUrls.set(attemptId, url);
-    const done = new Promise<Message>((resolve) => this.#resultWaiters.set(attemptId, resolve));
+    const done = new Promise<Message>((resolve) => {
+      // The operator closes every attempt within its operation limit; a
+      // missing result is the scenario's finding, not a hang of the series.
+      const timer = setTimeout(() => {
+        this.#resultWaiters.delete(attemptId);
+        resolve({ type: "result", attemptId, outcome: "no_result", error: "no result from the operator in 45 s" });
+      }, 45_000);
+      this.#resultWaiters.set(attemptId, (message) => {
+        clearTimeout(timer);
+        resolve(message);
+      });
+    });
     this.#send({ type: "send", attemptId, method, url, headers, kind: "api", timeoutMs: 20_000 });
     return done;
   }

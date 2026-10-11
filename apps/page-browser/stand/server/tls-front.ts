@@ -76,7 +76,7 @@ export class Front {
 
   /** Listen on `port`: TLS front when `withTls`, else plain HTTP/1.1. */
   listen(port: number, withTls: boolean): Promise<net.Server> {
-    const server = net.createServer({ pauseOnConnect: withTls }, (raw) => {
+    const server = net.createServer({ pauseOnConnect: withTls, noDelay: true }, (raw) => {
       if (withTls) this.#acceptTls(raw, port);
       else this.#acceptPlain(raw, port);
     });

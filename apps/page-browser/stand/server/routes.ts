@@ -114,10 +114,14 @@ export class Router {
     const faults = this.#deps.faults;
     const ctx = { host: ex.authority, path: ex.path, rid: ex.rid, method: ex.method };
 
+    // `ms` on these faults is the round trip the stand has not got: a real
+    // server's refusal reaches Chrome that much later.
+    const lag = (ms: number | null) => (ms && ms > 0 ? new Promise<void>((resolve) => setTimeout(resolve, ms)) : Promise.resolve());
     let fault = faults.take("resetAfterHeaders", ctx);
     if (fault) {
       this.#journalFault(fault, ex);
       ex.fault = fault.kind;
+      await lag(fault.ms);
       resetConnection(ex.conn);
       return true;
     }
@@ -126,6 +130,7 @@ export class Router {
       if (fault) {
         this.#journalFault(fault, ex);
         ex.fault = fault.kind;
+        await lag(fault.ms);
         ex.refuseStream(fault.code ?? http2.constants.NGHTTP2_REFUSED_STREAM);
         return true;
       }
@@ -133,6 +138,7 @@ export class Router {
       if (fault) {
         this.#journalFault(fault, ex);
         ex.fault = fault.kind;
+        await lag(fault.ms);
         ex.goawayBelowStream(fault.code ?? http2.constants.NGHTTP2_NO_ERROR);
         return true;
       }

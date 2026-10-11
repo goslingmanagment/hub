@@ -101,6 +101,7 @@ export class Cdp {
     if (!socket || socket.destroyed) return Promise.reject(new Error(`${method}: holder link down`));
     const id = this.#nextId++;
     if (this.#nextId > 2_000_000_000) this.#nextId = 1;
+    if (process.env.PB_DEBUG_CDP === "1" && !method.startsWith("Fetch.")) log("send", { method, sessionId: sessionId ?? null, params: JSON.stringify(params).slice(0, 200) });
     const command: Record<string, unknown> = { id, method, params };
     if (sessionId) command.sessionId = sessionId;
     return new Promise<T>((resolve, reject) => {
@@ -156,6 +157,10 @@ export class Cdp {
       params: (message.params as Record<string, unknown>) ?? {},
       seq,
     };
+    if (process.env.PB_DEBUG_CDP === "1") {
+      const p = event.params as Record<string, any>;
+      log("event", { m: event.method, id: p.requestId ?? p.targetInfo?.targetId ?? null, extra: p.errorText ?? p.dataLength ?? p.type ?? p.reason ?? null, canceled: p.canceled ?? null });
+    }
     if (typeof message.sessionId === "string") event.sessionId = message.sessionId;
     // Paused requests stay unacknowledged until they are resolved (see the
     // header); every other message is done once its handlers ran.

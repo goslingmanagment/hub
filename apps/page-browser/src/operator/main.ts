@@ -297,6 +297,11 @@ interface Physical {
   done: boolean;
 }
 
+/** An admitted operation ends within this time whatever Chrome does (plan
+ *  §4.14, the engine's REQUEST_TIMEOUT_MS + 1 s): a body nobody reads has no
+ *  end event, a cancelled preflight has none for its request. */
+const OP_LIMIT_MS = 21_000;
+
 interface Operation {
   kind: "hub" | "site" | "selftest";
   id: string;
@@ -314,6 +319,7 @@ interface Operation {
   sessionId: string | null;
   done: boolean;
   mainTimer: NodeJS.Timeout | null;
+  limitTimer: NodeJS.Timeout | null;
   onFinish: (outcome: Record<string, unknown>) => void;
 }
 
@@ -349,14 +355,32 @@ function newOperation(kind: Operation["kind"], id: string, key: string, onFinish
     sessionId: null,
     done: false,
     mainTimer: null,
+    limitTimer: null,
     onFinish,
   };
+}
+
+/** Start the operation's clock at its admission. */
+function startLimit(op: Operation): void {
+  op.limitTimer = setTimeout(() => {
+    if (op.done) return;
+    observe("op.limit", { op: op.id, kind: op.kind, status: op.status, mainSends: op.main?.sends ?? 0 });
+    // The gate's window goes with the operation; an API tunnel still busy
+    // with it is cut so nothing of it leaves later.
+    egress.cutApi("operation over its time limit");
+    if (op.status !== null) {
+      finishOp(op, { outcome: "response", status: op.status, sends: op.main?.sends ?? 0, sendMono: op.sendMono, fromCache: op.fromCache, fromServiceWorker: op.fromServiceWorker, bodyEnd: "limit" });
+    } else {
+      finishOp(op, { outcome: "transport_error", sent: (op.main?.sends ?? 0) > 0, error: "no end within the operation limit", sends: op.main?.sends ?? 0 });
+    }
+  }, OP_LIMIT_MS);
 }
 
 function finishOp(op: Operation, outcome: Record<string, unknown>): void {
   if (op.done) return;
   op.done = true;
   if (op.mainTimer) clearTimeout(op.mainTimer);
+  if (op.limitTimer) clearTimeout(op.limitTimer);
   for (const phys of [op.preflight, op.main]) if (phys?.networkId) byNetworkId.delete(phys.networkId);
   if (awaitingMain.get(op.key) === op) awaitingMain.delete(op.key);
   for (const phys of [op.preflight, op.main]) {
@@ -442,6 +466,7 @@ cdp.on("Network.responseReceived", (event) => {
   const op = phys.op;
   const timing = params.response.timing;
   const sendMono = timing && timing.sendStart >= 0 ? timing.requestTime * 1000 + timing.sendStart : null;
+  if (process.env.PB_DEBUG_NET === "1") observe("timing", { op: op.id, role: phys.role, timing, reused: (params.response as Record<string, unknown>).connectionReused, connectionId: (params.response as Record<string, unknown>).connectionId });
   if (phys.role === "preflight") {
     op.preflightSendMono = sendMono;
   } else {
@@ -485,7 +510,25 @@ cdp.on("Network.loadingFailed", (event) => {
   const phys = byNetworkId.get(params.requestId);
   if (!phys || phys.done) return;
   phys.done = true;
-  finishOp(phys.op, {
+  const op = phys.op;
+  if (op.kind === "site" && phys.role === "main" && op.status !== null && params.canceled === true) {
+    // The site read the body as a stream (or dropped it): Chrome reports the
+    // end as "canceled" although the response arrived. For the engine the
+    // request was answered; whether the body is whole is judged by its
+    // length or shape, not by this event.
+    finishOp(op, {
+      outcome: "response",
+      status: op.status,
+      sends: phys.sends,
+      sendMono: op.sendMono,
+      fromCache: op.fromCache,
+      fromServiceWorker: op.fromServiceWorker,
+      bodyEnd: "canceled",
+      sessionId: event.sessionId ?? null,
+    });
+    return;
+  }
+  finishOp(op, {
     outcome: "transport_error",
     // Chrome reported the request's headers as sent at least once → its
     // outcome on the server's side is unknown; otherwise nothing of it left.
@@ -615,7 +658,8 @@ function onSiteAdmitResult(message: EngineMessage): void {
   const op = pending.op;
   op.admissionId = `site:${id}`;
   op.deadline = deadline;
-  releasePhysical(op, pending.event, pending.params, pending.role);
+  startLimit(op);
+  releasePhysical(op, pending.event, pending.params, pending.role, testSiteUrlSame ? { url: pending.params.request.url } : {});
 }
 
 // ── Hub requests (plan §4.2) ──────────────────────────────────────────────
@@ -637,10 +681,15 @@ const hub = new Map<string, HubAttempt>();
 function hubResult(attempt: HubAttempt, outcome: Record<string, unknown>): void {
   if (attempt.done) return;
   attempt.done = true;
+  if (sitePage && attempt.worldId !== null && cdp.cdpUp) {
+    cdp.post("Runtime.callFunctionOn", { functionDeclaration: HUB_RELEASE, executionContextId: attempt.worldId, arguments: [{ value: attempt.attemptId }], returnByValue: true }, sitePage.sessionId);
+  }
   if (attempt.pausedTimer) clearTimeout(attempt.pausedTimer);
   if (attempt.abortTimer) clearTimeout(attempt.abortTimer);
   if (attempt.op && !attempt.op.done) {
     attempt.op.done = true;
+    if (attempt.op.limitTimer) clearTimeout(attempt.op.limitTimer);
+    if (attempt.op.mainTimer) clearTimeout(attempt.op.mainTimer);
     for (const phys of [attempt.op.preflight, attempt.op.main]) {
       const wid = phys ? windowId(phys) : null;
       if (wid) egress.gateClose(wid);
@@ -664,19 +713,26 @@ async function isolatedWorld(page: TargetInfo): Promise<number> {
   return page.worldId;
 }
 
+// The fetch of a Hub request, in the isolated world. The body is consumed
+// with arrayBuffer(), not with a stream reader: Chrome 155 ends a fetch whose
+// body JS reads as a stream (getReader, for-await, pipeTo) with
+// Network.loadingFailed (ERR_ABORTED, canceled) even after the whole body was
+// read, when the body was still arriving during the read; and it sends no end
+// event at all while a body is not consumed (stand findings). The operator
+// reads the response from CDP; the buffer here is dropped at once.
 const HUB_FETCH = `function (id, url, method, headers) {
   const g = globalThis;
-  const aborts = g.__pbAborts || (g.__pbAborts = new Map());
-  const controller = new AbortController();
-  aborts.set(id, controller);
-  fetch(url, { method: method, headers: headers, credentials: "include", mode: "cors", redirect: "manual", signal: controller.signal })
-    .then(async (response) => {
-      if (response.body) { const reader = response.body.getReader(); for (;;) { const r = await reader.read(); if (r.done) break; } }
-    })
-    .catch(() => {})
-    .finally(() => aborts.delete(id));
+  const live = g.__pbLive || (g.__pbLive = new Map());
+  const entry = { controller: new AbortController(), promise: null };
+  live.set(id, entry);
+  entry.promise = fetch(url, { method: method, headers: headers, credentials: "include", mode: "cors", redirect: "manual", signal: entry.controller.signal })
+    .then((response) => response.arrayBuffer())
+    .then(() => undefined, () => undefined);
   return true;
 }`;
+
+/** Lets go of a finished attempt in the isolated world (see HUB_FETCH). */
+const HUB_RELEASE = `function (id) { const live = globalThis.__pbLive; return live ? live.delete(id) : false; }`;
 
 async function onHubSend(message: EngineMessage): Promise<void> {
   const attemptId = String(message.attemptId);
@@ -725,6 +781,13 @@ async function onHubSend(message: EngineMessage): Promise<void> {
 
 /** The real URL of a physical request of a Hub attempt (the placeholder host
  *  swapped back; the fragment never leaves Chrome anyway). */
+/** `url` for Fetch.continueRequest — only when the paused URL is the
+ *  placeholder (stand knob: PB_TEST_URL_ALWAYS passes it always). */
+function urlOverride(attempt: HubAttempt, pausedUrl: string): Record<string, unknown> {
+  const needed = new URL(pausedUrl).hostname.endsWith(PLACEHOLDER_SUFFIX) || testUrlAlways;
+  return needed ? { url: realUrl(attempt, pausedUrl) } : {};
+}
+
 function realUrl(attempt: HubAttempt, pausedUrl: string): string {
   const paused = new URL(pausedUrl);
   const real = new URL(attempt.url);
@@ -746,7 +809,7 @@ function onHubPaused(event: CdpEvent, params: PausedParams, attemptId: string): 
     const op = attempt.op;
     if (op.mainTimer) clearTimeout(op.mainTimer);
     if (role === "main" && op.deadline !== null && op.deadline > monoMs() && egress.exitOpen) {
-      releasePhysical(op, event, params, "main", { url: realUrl(attempt, params.request.url) });
+      releasePhysical(op, event, params, "main", urlOverride(attempt, params.request.url));
     } else {
       void resolvePaused(event, "fail", { requestId: params.requestId, errorReason: "Aborted" });
       hubResult(attempt, { outcome: "aborted_before_send", reason: role === "main" ? "admission expired between preflight and request" : "a second preflight" });
@@ -778,14 +841,20 @@ function onCheckResult(message: EngineMessage): void {
   const op = attempt.op;
   op.admissionId = `hub:${attempt.attemptId}`;
   op.deadline = deadline;
+  startLimit(op);
   if (CFG.hubAbortBeforeDeadline) {
     attempt.abortTimer = setTimeout(() => {
       if (op.main?.sends || attempt.done || !sitePage || attempt.worldId === null) return;
       observe("hub.abort_before_deadline", { attemptId: attempt.attemptId });
+      // The abort of a fetch still in its preflight has no end event of a
+      // request we track: close the attempt ourselves if none comes.
+      setTimeout(() => {
+        if (!attempt.done && !(op.main?.sends)) finishOp(op, { outcome: "transport_error", sent: false, errorText: "net::ERR_ABORTED", canceled: true, error: "aborted before its deadline", sends: 0 });
+      }, 500);
       cdp.post(
         "Runtime.callFunctionOn",
         {
-          functionDeclaration: "function (id) { const c = globalThis.__pbAborts && globalThis.__pbAborts.get(id); if (c) c.abort(); return !!c; }",
+          functionDeclaration: "function (id) { const e = globalThis.__pbLive && globalThis.__pbLive.get(id); if (e) e.controller.abort(); return !!e; }",
           executionContextId: attempt.worldId,
           arguments: [{ value: attempt.attemptId }],
           returnByValue: true,
@@ -794,7 +863,7 @@ function onCheckResult(message: EngineMessage): void {
       );
     }, Math.max(0, deadline - 1000 - monoMs()));
   }
-  releasePhysical(op, event, params, role, { url: realUrl(attempt, params.request.url) });
+  releasePhysical(op, event, params, role, urlOverride(attempt, params.request.url));
 }
 
 // ── self-test with the exit closed (plan §4.1 step 5) ─────────────────────
@@ -920,6 +989,10 @@ async function startLoop(): Promise<void> {
  *  connection): Chrome has released every held request. Close the exit at
  *  once, kill Chrome, start over (plan §4.1, §4.9). */
 let lossReactionDelayMs = Number(process.env.PB_TEST_LOSS_DELAY_MS ?? "0");
+/** Stand: pass `url` to Fetch.continueRequest even when it is unchanged. */
+let testUrlAlways = false;
+/** Stand: pass the same `url` for site requests too. */
+let testSiteUrlSame = false;
 
 async function controlLost(reason: string): Promise<void> {
   // Stand only: react late, so what Chrome releases meets the open exit and
@@ -1007,8 +1080,8 @@ function onWsAdmitResult(message: EngineMessage): void {
 }
 
 egress.onGateEvent = (event) => {
-  log("gate.event", event);
-  observe("gate", event);
+  if (event.kind !== "up_chunk") log("gate.event", event);
+  observe("gate", { ...event, gateEvent: event.kind });
 };
 
 async function onCommand(message: EngineMessage): Promise<void> {
@@ -1040,8 +1113,37 @@ async function onCommand(message: EngineMessage): Promise<void> {
         if (!sitePage) return reply({ ok: false, error: "no page" });
         await cdp.send("Page.navigate", { url: String(message.url ?? CFG.siteUrl) }, sitePage.sessionId);
         return reply({ ok: true });
+      case "test.evalIsolated": {
+        // Stand only: run an expression in the operator's isolated world.
+        if (!sitePage) return reply({ ok: false, error: "no page" });
+        const world = await isolatedWorld(sitePage);
+        const result = await cdp.send<{ result?: { value?: unknown }; exceptionDetails?: { text?: string } }>(
+          "Runtime.evaluate",
+          { expression: String(message.expression), contextId: world, awaitPromise: message.await === true, returnByValue: true },
+          sitePage.sessionId,
+        );
+        return reply({ ok: !result.exceptionDetails, value: result.result?.value ?? null, error: result.exceptionDetails?.text ?? null });
+      }
+      case "test.callIsolated": {
+        // Stand only: Runtime.callFunctionOn in the isolated world.
+        if (!sitePage) return reply({ ok: false, error: "no page" });
+        const world = await isolatedWorld(sitePage);
+        const result = await cdp.send<{ result?: { value?: unknown }; exceptionDetails?: { text?: string } }>(
+          "Runtime.callFunctionOn",
+          { functionDeclaration: String(message.fn), executionContextId: world, arguments: (message.args as unknown[]) ?? [], returnByValue: true, awaitPromise: message.await === true },
+          sitePage.sessionId,
+        );
+        return reply({ ok: !result.exceptionDetails, value: result.result?.value ?? null, error: result.exceptionDetails?.text ?? null });
+      }
+      case "test.gc":
+        // Stand only: a full garbage collection in the page's renderer.
+        if (!sitePage) return reply({ ok: false, error: "no page" });
+        await cdp.send("HeapProfiler.collectGarbage", {}, sitePage.sessionId);
+        return reply({ ok: true });
       case "test.cutApi":
         return reply({ ok: true, cut: egress.cutApi("stand: cut API tunnels") });
+      case "test.cutWs":
+        return reply({ ok: true, cut: egress.cutClass("ws", "stand: cut socket tunnels") });
       case "test.config": {
         // Stand only: switch the candidates for comparison runs.
         if (typeof message.gate === "boolean") egress.gateEnabled = message.gate;
@@ -1049,6 +1151,8 @@ async function onCommand(message: EngineMessage): Promise<void> {
         if (typeof message.hubAbort === "boolean") CFG.hubAbortBeforeDeadline = message.hubAbort;
         if (typeof message.wsHostRefuse === "boolean") CFG.refuseWsHostRequests = message.wsHostRefuse;
         if (typeof message.lossDelayMs === "number") lossReactionDelayMs = message.lossDelayMs;
+        if (typeof message.urlAlways === "boolean") testUrlAlways = message.urlAlways;
+        if (typeof message.siteUrlSame === "boolean") testSiteUrlSame = message.siteUrlSame;
         return reply({ ok: true, gate: egress.gateEnabled, placeholder: CFG.hubPlaceholderHost, hubAbort: CFG.hubAbortBeforeDeadline, wsHostRefuse: CFG.refuseWsHostRequests });
       }
       case "test.tunnels":

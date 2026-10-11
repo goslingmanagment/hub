@@ -8,24 +8,31 @@
 // TLS, but on the API host only one admitted request is ever in flight and
 // every other request waits in Chrome's Fetch interception. So the bytes
 // Chrome writes into API tunnels are forwarded only inside the window of the
-// admission that is in flight:
-//   closed      — no admission: bytes are held (not forwarded);
-//   open        — an admitted request was released: forward until its
-//                 deadline (CLOCK_MONOTONIC); after it, bytes are held and the
-//                 tunnels that hold them are cut (the request never leaves);
-//   sent        — Chrome reported the request's headers as sent: hold again.
-//                 Chrome's network stack repeats a request on its own after
-//                 REFUSED_STREAM, GOAWAY, a reset or a 408, and CDP does not
-//                 report the repeat (stand finding): its bytes are held here,
-//                 a new API tunnel is refused (a repeat on a new connection),
-//                 and without response headers in 20 s the tunnels are cut;
-//   responding  — its response headers arrived (no retry can follow): forward
-//                 the held bytes (flow control, acks) and what follows;
+// physical request that was just released, and a new tunnel to the API is
+// accepted only at the start of such a window:
+//   closed      — nothing released: bytes are held, new tunnels refused;
+//   open        — a request was released: forward (and accept new tunnels)
+//                 until its deadline on CLOCK_MONOTONIC; at the deadline,
+//                 unsent, every API tunnel is cut — the request never leaves;
+//   sent        — Chrome announced the request's headers
+//                 (requestWillBeSentExtraInfo). The announcement comes before
+//                 the bytes are written and may overtake them, so forwarding
+//                 goes on until the window carried bytes and then stayed
+//                 quiet for QUIET_MS; after that bytes are held. New tunnels
+//                 are refused from the announcement on. Why: Chrome's network
+//                 stack repeats a request on its own after REFUSED_STREAM,
+//                 GOAWAY, a reset or a 408, and CDP does not report the
+//                 repeat (stand finding). A repeat on a new connection meets
+//                 the refusal; a repeat on the same connection comes a round
+//                 trip later and is held. No response headers in 20 s → the
+//                 API tunnels are cut;
+//   responding  — the response headers arrived (no repeat can follow):
+//                 forward the held bytes (flow control, acks) and the rest;
 //   closed      — the request finished.
-// Bytes held while closed are the TLS/HTTP2 housekeeping of idle connections,
-// or requests Chrome released without us (a CDP detach) — on a CDP loss the
-// operator cuts every tunnel, so those never leave. The stand measures what
-// this gate does and does not cover.
+// Bytes held while closed are the housekeeping of idle connections, or
+// requests Chrome released without us (a CDP detach) — on a CDP loss the
+// operator cuts every tunnel, so those never leave. What this gate does not
+// cover is measured on the stand (README of the stage-1 report).
 
 import { createServer as createHttpServer, type IncomingMessage } from "node:http";
 import { connect as tcpConnect, isIP, type Socket } from "node:net";
@@ -61,6 +68,11 @@ export interface TunnelRecord {
 const HELD_LIMIT = 4 * 1024 * 1024;
 /** Plan §4.14: a Hub request's limit (REQUEST_TIMEOUT_MS of the engine). */
 const SENT_TIMEOUT_MS = 20_000;
+/** After Chrome announced the send: the window closes once it carried bytes
+ *  and then stayed quiet this long. Must be shorter than a round trip to the
+ *  API (a repeat cannot come sooner) and longer than Chrome's lag between
+ *  the announcement and the write. */
+const QUIET_MS = Number(process.env.PB_GATE_QUIET_MS ?? "5");
 
 class Tunnel {
   readonly rec: TunnelRecord;
@@ -97,6 +109,14 @@ export class Egress {
   #gateDeadline = 0;
   #deadlineTimer: NodeJS.Timeout | null = null;
   #sentTimer: NodeJS.Timeout | null = null;
+  #quietTimer: NodeJS.Timeout | null = null;
+  #gateOpenedMono = 0;
+  #gateFirstBytes = false;
+  /** Bytes forwarded up on API tunnels in the current window. */
+  #windowBytes = 0;
+  #lastChunkMono = 0;
+  /** In `sent`: true once the window went quiet — bytes are held. */
+  #sentHold = false;
 
   constructor(socks: SocksConfig, classify: (host: string) => HostClass) {
     this.socks = socks;
@@ -133,6 +153,11 @@ export class Egress {
 
   gateOpen(admissionId: string, deadlineMono: number): void {
     this.#setGate("open", admissionId, deadlineMono);
+    this.#gateOpenedMono = monoMs();
+    this.#gateFirstBytes = false;
+    this.#windowBytes = 0;
+    this.#lastChunkMono = 0;
+    this.#sentHold = false;
     for (const tunnel of this.#apiTunnels()) {
       tunnel.forwardedInWindow = 0;
       this.#flush(tunnel);
@@ -141,19 +166,26 @@ export class Egress {
     this.#deadlineTimer = setTimeout(() => this.#onDeadline(admissionId), Math.max(0, ms));
   }
 
-  /** Chrome reported the admitted request's headers as sent. Returns false
-   *  when this was a second send of the same request (a retry): every API
-   *  tunnel is cut before the retry's bytes leave. */
+  /** Chrome announced the released request's headers
+   *  (requestWillBeSentExtraInfo). Returns false for a second announcement
+   *  of one request — never seen on the stand: Chrome announces a request
+   *  once even when it repeats it. */
   gateSent(admissionId: string): boolean {
     if (this.#gateAdmission !== admissionId) return true;
     if (this.#gate === "open") {
-      this.#setGate("sent", admissionId, this.#gateDeadline);
+      const deadline = this.#gateDeadline;
+      const deadlineTimer = this.#deadlineTimer;
+      this.#deadlineTimer = null; // kept: an announced request may still be unsent at the deadline
+      this.#setGate("sent", admissionId, deadline);
+      this.#deadlineTimer = deadlineTimer;
+      this.#sentHold = false;
       if (this.gateEnabled) {
+        this.#armQuiet();
         this.#sentTimer = setTimeout(() => {
           this.#sentTimer = null;
           if (this.#gate !== "sent" || this.#gateAdmission !== admissionId) return;
           const cut = this.#cutWhere((tunnel) => tunnel.rec.cls === "api", "gate: no response 20 s after the send");
-          this.onGateEvent({ kind: "sent_timeout", admissionId, tunnels: cut, forwardedInWindow: 0 });
+          this.onGateEvent({ kind: "sent_timeout", admissionId, tunnels: cut, forwardedInWindow: this.#windowBytes });
         }, SENT_TIMEOUT_MS);
       }
       return true;
@@ -164,6 +196,26 @@ export class Egress {
       return false;
     }
     return true;
+  }
+
+  /** In `sent`: hold once the window carried bytes and stayed quiet. */
+  #armQuiet(): void {
+    if (this.#quietTimer) clearTimeout(this.#quietTimer);
+    this.#quietTimer = null;
+    if (this.#gate !== "sent" || this.#sentHold) return;
+    // No bytes yet in this window: the announcement overtook the write.
+    if (this.#windowBytes === 0) return;
+    const wait = Math.max(0, QUIET_MS - (monoMs() - this.#lastChunkMono));
+    this.#quietTimer = setTimeout(() => {
+      this.#quietTimer = null;
+      if (this.#gate !== "sent" || this.#sentHold) return;
+      if (monoMs() - this.#lastChunkMono + 0.5 >= QUIET_MS) {
+        this.#sentHold = true;
+        if (process.env.PB_DEBUG_NET === "1") this.onGateEvent({ kind: "sent_hold", admissionId: this.#gateAdmission, tunnels: 0, forwardedInWindow: this.#windowBytes });
+      } else {
+        this.#armQuiet();
+      }
+    }, wait);
   }
 
   gateResponding(admissionId: string): void {
@@ -184,6 +236,11 @@ export class Egress {
     return this.#cutWhere((tunnel) => tunnel.rec.cls === "api", reason);
   }
 
+  /** Cut every tunnel of one host class. */
+  cutClass(cls: HostClass, reason: string): number {
+    return this.#cutWhere((tunnel) => tunnel.rec.cls === cls, reason);
+  }
+
   #setGate(state: GateState, admissionId: string | null, deadline: number): void {
     if (this.#deadlineTimer && state !== "open") {
       clearTimeout(this.#deadlineTimer);
@@ -193,6 +250,10 @@ export class Egress {
       clearTimeout(this.#sentTimer);
       this.#sentTimer = null;
     }
+    if (this.#quietTimer && state !== "sent") {
+      clearTimeout(this.#quietTimer);
+      this.#quietTimer = null;
+    }
     this.#gate = state;
     this.#gateAdmission = admissionId;
     this.#gateDeadline = deadline;
@@ -201,8 +262,10 @@ export class Egress {
   #onDeadline(admissionId: string): void {
     this.#deadlineTimer = null;
     if (!this.gateEnabled) return;
-    if (this.#gate !== "open" || this.#gateAdmission !== admissionId) return;
-    // The deadline passed and Chrome has not reported the request as sent.
+    if (this.#gateAdmission !== admissionId) return;
+    // Announced and already on its way (bytes went out): not an expiry.
+    if (!(this.#gate === "open" || (this.#gate === "sent" && this.#windowBytes === 0))) return;
+    // The deadline passed and the request has not left.
     // From now on nothing of it may leave: hold, and cut the API tunnels that
     // are holding bytes or still connecting.
     let forwarded = 0;
@@ -217,7 +280,17 @@ export class Egress {
   #gateForwards(): boolean {
     if (!this.gateEnabled) return true;
     if (this.#gate === "responding") return true;
-    return this.#gate === "open" && monoMs() < this.#gateDeadline;
+    if (this.#gate === "open") return monoMs() < this.#gateDeadline;
+    if (this.#gate === "sent" && !this.#sentHold) return this.#windowBytes > 0 || monoMs() < this.#gateDeadline;
+    return false;
+  }
+
+  /** Bytes went up an API tunnel inside the window. */
+  #noteForwarded(tunnel: Tunnel, bytes: number): void {
+    tunnel.forwardedInWindow += bytes;
+    this.#windowBytes += bytes;
+    this.#lastChunkMono = monoMs();
+    if (this.#gate === "sent" && !this.#sentHold) this.#armQuiet();
   }
 
   #apiTunnels(): Tunnel[] {
@@ -230,7 +303,10 @@ export class Egress {
     tunnel.held = [];
     tunnel.heldBytes = 0;
     tunnel.rec.up += bytes.length;
-    tunnel.forwardedInWindow += bytes.length;
+    if (tunnel.rec.cls === "api") this.#noteForwarded(tunnel, bytes.length);
+    if (tunnel.rec.cls === "api" && this.#gate === "open") {
+      this.onGateEvent({ kind: "flushed_held", admissionId: this.#gateAdmission, tunnels: tunnel.rec.id, forwardedInWindow: bytes.length });
+    }
     tunnel.upstream.write(bytes);
   }
 
@@ -314,8 +390,17 @@ export class Egress {
         tunnel.heldBytes += chunk.length;
         return;
       }
+      // Bytes held earlier go first: the stream's order is never changed.
+      if (tunnel.held.length > 0) this.#flush(tunnel);
       tunnel.rec.up += chunk.length;
-      if (tunnel.rec.cls === "api") tunnel.forwardedInWindow += chunk.length;
+      if (tunnel.rec.cls === "api") {
+        if (process.env.PB_DEBUG_NET === "1") this.onGateEvent({ kind: "up_chunk", admissionId: this.#gateAdmission, tunnels: tunnel.rec.id, forwardedInWindow: chunk.length });
+        this.#noteForwarded(tunnel, chunk.length);
+        if (!this.#gateFirstBytes && (this.#gate === "open" || this.#gate === "sent")) {
+          this.#gateFirstBytes = true;
+          this.onGateEvent({ kind: "first_bytes", admissionId: this.#gateAdmission, tunnels: tunnel.rec.id, forwardedInWindow: Math.round((monoMs() - this.#gateOpenedMono) * 1000) / 1000 });
+        }
+      }
       tunnel.upstream.write(chunk);
     };
     client.on("data", onClientData);

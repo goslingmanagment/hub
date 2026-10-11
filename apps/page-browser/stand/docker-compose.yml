@@ -2,6 +2,9 @@
 # network is internal — nothing on it reaches the internet. Run from the
 # worktree root:
 #   docker compose -f apps/page-browser/stand/docker-compose.yml up -d --build
+# A second stand beside it (development while a series runs):
+#   STAND_NET=10.250.251 docker compose -p pb-dev -f … up -d
+# PB_SRC points the containers at a frozen copy of apps/page-browser.
 name: pb-stand
 
 networks:
@@ -9,7 +12,7 @@ networks:
     internal: true
     ipam:
       config:
-        - subnet: 10.250.250.0/24
+        - subnet: ${STAND_NET:-10.250.250}.0/24
 
 volumes:
   ca: {}
@@ -22,9 +25,10 @@ services:
     image: pb-stand-server
     networks:
       stand:
-        ipv4_address: 10.250.250.10
+        ipv4_address: ${STAND_NET:-10.250.250}.10
     volumes:
       - ca:/stand/ca
+      - ${PB_SRC:-..}/stand/pages:/stand/pages:ro
     environment:
       STAND_SOCKS_USER: pb
       STAND_SOCKS_PASS: pb-secret
@@ -34,7 +38,7 @@ services:
     depends_on: [stand-server]
     networks:
       stand:
-        ipv4_address: 10.250.250.20
+        ipv4_address: ${STAND_NET:-10.250.250}.20
     cap_add: [NET_ADMIN]
     # PROTOTYPE: Chrome's sandbox needs user namespaces, which Docker's
     # default seccomp profile forbids; production gets a Chrome seccomp
@@ -45,21 +49,22 @@ services:
     volumes:
       - ca:/stand/ca:ro
       # The prototype's code is mounted: an edit needs a restart, not a build.
-      - ../src:/opt/page-browser/src:ro
-      - ../docker:/opt/page-browser/docker:ro
+      - ${PB_SRC:-..}/src:/opt/page-browser/src:ro
+      - ${PB_SRC:-..}/docker:/opt/page-browser/docker:ro
     environment:
-      PB_SOCKS_HOST: 10.250.250.10
+      PB_SOCKS_HOST: ${STAND_NET:-10.250.250}.10
       PB_SOCKS_PORT: "1080"
       PB_SOCKS_USER: pb
       PB_SOCKS_PASS: pb-secret
-      PB_RPC_FROM: 10.250.250.0/24
+      PB_RPC_FROM: ${STAND_NET:-10.250.250}.0/24
       PB_RPC_TOKEN: stand-token
       PB_FAST_RETRY: "1"
       PB_WAIT_CA: "1"
       PB_RUNTIME_ENABLE: "1"
 
-      PB_DEBUG_FETCH: "1"
-      PB_DEBUG_NET: "1"
+      PB_DEBUG_FETCH: "${PB_DEBUG:-0}"
+      PB_DEBUG_NET: "${PB_DEBUG:-0}"
+      PB_DEBUG_CDP: "${PB_DEBUG:-0}"
       PB_ON_BLOCKED_SEND: log
 
   runner:
@@ -68,13 +73,14 @@ services:
     working_dir: /pb
     networks:
       stand:
-        ipv4_address: 10.250.250.30
+        ipv4_address: ${STAND_NET:-10.250.250}.30
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ..:/pb:ro
+      - ${PB_SRC:-..}:/pb:ro
       - ./results:/stand/results
     environment:
-      STAND_OPERATOR: ws://10.250.250.20:7700/rpc
-      STAND_SERVER: 10.250.250.10
-      STAND_BROWSER_CONTAINER: pb-stand-browser-1
+      STAND_OPERATOR: ws://${STAND_NET:-10.250.250}.20:7700/rpc
+      STAND_SERVER: ${STAND_NET:-10.250.250}.10
+      STAND_NAME: ${COMPOSE_PROJECT_NAME:-pb-stand}
+      STAND_BROWSER_CONTAINER: ${COMPOSE_PROJECT_NAME:-pb-stand}-browser-1
     command: ["sleep", "infinity"]

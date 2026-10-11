@@ -120,7 +120,7 @@ export class SocksServer {
   }
 
   #listen(): Promise<void> {
-    const server = net.createServer({ allowHalfOpen: true }, (client) => this.#onConnection(client));
+    const server = net.createServer({ allowHalfOpen: true, noDelay: true }, (client) => this.#onConnection(client));
     this.#server = server;
     return new Promise((resolve, reject) => {
       server.once("error", reject);
@@ -312,6 +312,10 @@ export class SocksServer {
     }
 
     const upstream = net.connect({ host: target.host, port: target.port, allowHalfOpen: true });
+    // A relay must not add Nagle's delay: with it a small frame sent shortly
+    // after another one waits for the delayed ACK (≈ 40 ms) and the journal's
+    // arrival times stop matching the sender's.
+    upstream.setNoDelay(true);
     tunnel.upstream = upstream;
     // net.connect() to an IP literal runs the connect() syscall on the next
     // tick, which fixes the local port; this tick runs right after it and
