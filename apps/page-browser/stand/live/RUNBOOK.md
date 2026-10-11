@@ -59,8 +59,11 @@ docker build --build-context chrome=$HOME/code/.cache/page-browser/chrome \
 
 ## Запуск
 
+Из отдельной копии ветки прототипа на проверенном коммите: код оператора, супервизора и движка контейнеры берут оттуда (`src/`, `docker/` смонтированы), в образе — Chrome, KasmVNC, политики и правила расширения. Журнал ложится в `stand/results/` этой копии: после теста его забрать, потом удалять копию.
+
 ```sh
-cd apps/page-browser/stand/live
+git worktree add --detach ~/code/.worktrees/hub-pb-live <коммит>
+cd ~/code/.worktrees/hub-pb-live/apps/page-browser/stand/live
 export PB_SOCKS_HOST=$(op read "op://<сейф>/<прокси>/host")   # и так же порт, логин, пароль
 export PB_PINNED_IP=…   # выходной IP прокси
 export PB_TZ=…          # часовой пояс региона прокси; PB_LANG, PB_GEO — по нему же
