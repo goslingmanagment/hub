@@ -390,10 +390,11 @@ function retry(fault: "h2RefusedStream" | "h2Goaway" | "resetAfterHeaders", gate
  *  Chrome repeats it on the same connection before its announcement is
  *  handled (Astra review of the prototype, finding 5). The window's budget
  *  — its HEADERS and DATA records — must stop the repeat. */
-function retryPost(cdpDelayMs: number, bodySize = 0): Scenario {
+function retryPost(cdpDelayMs: number, bodySize = 0, gate = true): Scenario {
   return async (ctx) => {
     await fresh(ctx);
-    const tag = `post-${cdpDelayMs}-${bodySize}-${ctx.run}-${Date.now() % 100000}`;
+    const tag = `post-${cdpDelayMs}-${bodySize}-${gate ? "g" : "n"}-${ctx.run}-${Date.now() % 100000}`;
+    await ctx.engine.command("test.config", { gate });
     await warm(ctx, tag);
     const rid = `rp-${tag}`;
     await ctx.stand.fault({ kind: "h2RefusedStream", match: { rid, method: "POST" }, ms: 0 });
@@ -401,7 +402,7 @@ function retryPost(cdpDelayMs: number, bodySize = 0): Scenario {
     ctx.arm();
     const result = await ctx.engine.eval<Record<string, unknown>>(`site.raw(${JSON.stringify(rid)}, "POST", "/api/v1/login", ${JSON.stringify(bodySize ? { bodySize } : {})})`);
     await sleep(1500);
-    await ctx.engine.command("test.config", { cdpDelayMs: 0 });
+    await ctx.engine.command("test.config", { cdpDelayMs: 0, gate: true });
     const events = await ctx.stand.journal();
     const arrivals = reqs(events, rid).filter((event) => event.method === "POST");
     const faulted = events.some((event) => event.t === "fault" || event.t === "h2.rst");
@@ -1023,6 +1024,7 @@ export const scenarios: Record<string, Scenario> = {
   // 100 KB: the server refuses after HEADERS while most of the body still
   // waits for flow control — a repeat inside the window's budget.
   "retry-post-large": retryPost(0, 100_000),
+  "retry-post-large-nogate": retryPost(0, 100_000, false),
   "idle-post": idlePost,
   "send-time": sendTime,
   "hub-gc-paused": hubGc("paused"),

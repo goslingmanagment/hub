@@ -10,7 +10,7 @@
 
 import { connect as tlsConnect } from "node:tls";
 import { createConnection } from "node:net";
-import { closeSync, createWriteStream, existsSync, mkdirSync, openSync, readFileSync, rmSync, utimesSync, type WriteStream } from "node:fs";
+import { closeSync, createWriteStream, existsSync, mkdirSync, openSync, readFileSync, rmSync, utimesSync, writeFileSync, type WriteStream } from "node:fs";
 import { createHash, type Hash } from "node:crypto";
 
 import { Cdp, type CdpEvent } from "./cdp.ts";
@@ -1786,11 +1786,20 @@ function targetGone(error: Error): boolean {
  *  a target is not in place): the exit closes, Chrome goes, and the page
  *  stays stopped until the engine restarts it — the same failure would come
  *  back with every automatic restart. */
-let halted: string | null = null;
+/** The latch survives a restart of the operator (and of the container): a
+ *  stopped page stays stopped until the engine's `restart`. */
+const HALT_FILE = envStr("PB_HALT_FILE", "/data/buffer/halted");
+let halted: string | null = existsSync(HALT_FILE) ? readFileSync(HALT_FILE, "utf8").trim() || "halted before a restart" : null;
+if (halted !== null) egress.latch(halted);
 
 function halt(reason: string): void {
   if (halted !== null) return;
   halted = reason;
+  try {
+    writeFileSync(HALT_FILE, `${reason}\n`);
+  } catch (error) {
+    log("halt.file_failed", { error: (error as Error).message });
+  }
   egress.latch(reason);
   log("halted", { reason });
   rpc.send({ type: "alarm", kind: "halted", detail: { reason } });
@@ -1965,6 +1974,7 @@ async function onCommand(message: EngineMessage): Promise<void> {
       case "restart":
         // After a halt: the engine starts the page again on purpose.
         halted = null;
+        rmSync(HALT_FILE, { force: true });
         egress.unlatch();
         if (state === "failed" && !restarting) void startLoop();
         return reply({ ok: true });

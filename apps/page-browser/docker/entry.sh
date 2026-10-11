@@ -60,5 +60,8 @@ fi
 
 # A restarted container keeps /tmp: drop the old display's lock and socket.
 rm -f /tmp/.X99-lock /tmp/.X11-unix/X99 /run/pb/*.sock /run/pb/operator.alive
+# A halted page stays halted across restarts — except on the stand, whose
+# runner restarts the container to recover.
+if [ "${PB_STAND:-0}" = "1" ]; then rm -f "${PB_HALT_FILE:-/data/buffer/halted}"; fi
 mkdir -p -m 1777 /tmp/.X11-unix
 exec node --no-warnings /opt/page-browser/src/supervisor/main.ts
