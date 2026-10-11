@@ -285,6 +285,9 @@ export class Router {
     let body = Buffer.from(JSON.stringify(payload), "utf8");
     const headers: OutHeaders = { ...cors, "content-type": "application/json" };
     let status = statusParam(query.get("status"));
+    // `location`: with status 301/302/307, a redirect to that address.
+    const location = query.get("location");
+    if (location) headers.location = location;
 
     const cache = intParam(query, "cache");
     const etagParam = query.get("etag");

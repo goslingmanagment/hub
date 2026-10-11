@@ -235,6 +235,9 @@ function networkServicePid(): number | null {
   }
 }
 
+/** Set by the operator when it halted but could not remove the start permit. */
+let frozen: string | null = null;
+
 function listenControl(): void {
   if (existsSync(CTL_SOCK)) unlinkSync(CTL_SOCK);
   const server = createServer((socket) => {
@@ -244,7 +247,18 @@ function listenControl(): void {
       log("ctl", { cmd: command.cmd, reason: command.reason });
       switch (command.cmd) {
         case "chrome.start":
+          // A halt whose record could not be written keeps Chrome down for
+          // as long as this container lives.
+          if (frozen !== null) {
+            reply({ ok: false, error: `frozen: ${frozen}` });
+            break;
+          }
           reply({ ok: true, pid: startChrome(command.env ?? {}) });
+          break;
+        case "freeze":
+          frozen = command.reason ?? "halt";
+          killChromeGroup("SIGKILL");
+          reply({ ok: true });
           break;
         case "chrome.stop":
           stopChrome().then(() => reply({ ok: true }));

@@ -81,6 +81,12 @@ const CFG = {
   /** The self-test also checks the rules extension (an image with it). */
   selftestRules: envStr("PB_SELFTEST_RULES", "0") === "1",
   selftestNeverPath: envStr("PB_SELFTEST_NEVER_PATH", "/api/v1/message/ack"),
+  /** Stop the page when the engine's link is lost (the pilot's engine). */
+  haltOnEngineLoss: envStr("PB_HALT_ON_ENGINE_LOSS", "0") === "1",
+  /** The largest request body released (stage 1: a login). A bigger one
+   *  needs the server's flow control between its records, which the gate
+   *  cannot tell from a refusal (Astra review 3, item 4). */
+  maxBodyBytes: envInt("PB_MAX_BODY_BYTES", 16 * 1024 - 9),
   /** How a Hub request is made in the isolated world: "fetch", or "xhr" —
    *  as Fansly's own API calls (Angular's HttpClient over XMLHttpRequest),
    *  so their headers match (stage 1, item 15). */
@@ -427,6 +433,8 @@ interface Physical {
   networkId: string | null;
   sends: number;
   done: boolean;
+  /** The response body is to be written down (decided at the release). */
+  wantCapture: boolean;
   capture: Capture | null;
 }
 
@@ -560,7 +568,9 @@ function windowId(phys: Physical): string | null {
 }
 
 function releasePhysical(op: Operation, event: CdpEvent, params: PausedParams, role: Physical["role"], extra: Record<string, unknown> = {}): void {
-  const phys: Physical = { op, role, networkId: params.networkId ?? null, sends: 0, done: false, capture: null };
+  releasedKind.set(params.requestId, op.kind);
+  if (releasedKind.size > 5000) releasedKind.delete(releasedKind.keys().next().value!);
+  const phys: Physical = { op, role, networkId: params.networkId ?? null, sends: 0, done: false, wantCapture: false, capture: null };
   if (role === "preflight") op.preflight = phys;
   else op.main = phys;
   if (phys.networkId) byNetworkId.set(phys.networkId, phys);
@@ -569,12 +579,15 @@ function releasePhysical(op: Operation, event: CdpEvent, params: PausedParams, r
   if (role === "preflight" && op.kind === "site") awaitingMain.set(op.key, op);
   const id = windowId(phys);
   const body = bodyBytes(params.request);
-  if (body === null && egress.gate.enabled) {
+  if ((body === null || body > CFG.maxBodyBytes) && egress.gate.enabled) {
     // The gate counts a request's records by its body: a body it cannot
-    // measure (a stream) would leave the window open on CDP's word alone.
-    log("release.refused", { op: op.id, why: "body of unknown length" });
+    // measure (a stream) would leave the window open on CDP's word alone,
+    // and one of several DATA frames may need the server's flow control
+    // between them.
+    const why = body === null ? "body of unknown length" : `body of ${body} bytes over the limit`;
+    log("release.refused", { op: op.id, why });
     void resolvePaused(event, "fail", { requestId: params.requestId, errorReason: "BlockedByClient" });
-    finishOp(op, { outcome: "transport_error", sent: false, error: "body of unknown length" });
+    finishOp(op, { outcome: "transport_error", sent: false, error: why });
     return;
   }
   if (id && op.deadline !== null) egress.gate.open(id, op.deadline, body);
@@ -582,10 +595,10 @@ function releasePhysical(op: Operation, event: CdpEvent, params: PausedParams, r
   // stream is armed there, before a byte of it reaches the page; for a
   // preflight, its answer is handed on by Fetch.fulfillRequest (see
   // onResponseStage — the race of Chrome's preflight interception).
-  const intercept =
-    (CFG.captureBodies && role === "main" && phys.networkId !== null && capturable(params.request)) || (role === "preflight" && CFG.preflightFulfill)
-      ? { interceptResponse: true }
-      : {};
+  phys.wantCapture = CFG.captureBodies && role === "main" && phys.networkId !== null && capturable(params.request);
+  // Every request's response stops at its headers too: a redirect must be
+  // handed on by fulfillRequest (see onResponseStage).
+  const intercept = role === "main" || CFG.preflightFulfill ? { interceptResponse: true } : {};
   void resolvePaused(event, "continue", { requestId: params.requestId, ...extra, ...intercept });
 }
 
@@ -664,6 +677,8 @@ cdp.on("Network.requestWillBeSentExtraInfo", (event) => {
 /** Network ids of Hub requests that were redirected: their next hop is
  *  refused. */
 const refusedHops = new Set<string>();
+/** Whose request each released Fetch request was — for its redirect hops. */
+const releasedKind = new Map<string, Operation["kind"]>();
 
 /** The session a request's Network events come on (its page or worker). */
 const sessionOfRequest = new Map<string, string>();
@@ -833,9 +848,31 @@ cdp.on("Network.webSocketCreated", (event) => {
   wsEvent("created", event, { connId: params.requestId, url: params.url });
 });
 
+// The outcome of an admitted socket's handshake goes back to the engine
+// under the admission's id (Astra review 3, item 2). The proxy knows the
+// tunnel, CDP knows the socket: an admitted tunnel's socket is the next one
+// CDP sees sending its handshake (the engine admits one at a time).
+const wsAwaitingHandshake: string[] = [];
+const wsAdmissionOfSocket = new Map<string, string>();
+
+function wsOutcome(connId: string, event: "open" | "failed", fields: Record<string, unknown>): void {
+  rpc.send({ type: "wsTunnel", connId, event, mono: monoMs(), ...fields });
+}
+
+cdp.on("Network.webSocketWillSendHandshakeRequest", (event) => {
+  const params = event.params as { requestId: string };
+  const connId = wsAwaitingHandshake.shift();
+  if (connId !== undefined) wsAdmissionOfSocket.set(params.requestId, connId);
+});
+
 cdp.on("Network.webSocketHandshakeResponseReceived", (event) => {
   const params = event.params as { requestId: string; response: { status: number } };
   wsEvent("open", event, { connId: params.requestId, url: wsUrls.get(params.requestId) ?? null, status: params.response.status });
+  const connId = wsAdmissionOfSocket.get(params.requestId);
+  if (connId !== undefined) {
+    wsAdmissionOfSocket.delete(params.requestId);
+    wsOutcome(connId, params.response.status === 101 ? "open" : "failed", { status: params.response.status });
+  }
 });
 
 cdp.on("Network.webSocketFrameReceived", (event) => {
@@ -853,12 +890,24 @@ cdp.on("Network.webSocketFrameSent", (event) => {
 cdp.on("Network.webSocketFrameError", (event) => {
   const params = event.params as { requestId: string; errorMessage: string };
   wsEvent("error", event, { connId: params.requestId, error: params.errorMessage });
+  const connId = wsAdmissionOfSocket.get(params.requestId);
+  if (connId !== undefined) {
+    // An error before the handshake's answer: the handshake failed (its
+    // status, when Chrome names one, is in the message).
+    wsAdmissionOfSocket.delete(params.requestId);
+    wsOutcome(connId, "failed", { status: Number(/response code: (\d+)/.exec(params.errorMessage)?.[1] ?? 0) || null, error: params.errorMessage.slice(0, 120) });
+  }
 });
 
 cdp.on("Network.webSocketClosed", (event) => {
   const params = event.params as { requestId: string };
   wsEvent("close", event, { connId: params.requestId });
   wsUrls.delete(params.requestId);
+  const connId = wsAdmissionOfSocket.get(params.requestId);
+  if (connId !== undefined) {
+    wsAdmissionOfSocket.delete(params.requestId);
+    wsOutcome(connId, "failed", { error: "closed before the handshake's answer" });
+  }
 });
 
 // ── response bodies ───────────────────────────────────────────────────────
@@ -919,10 +968,46 @@ async function onResponseStage(event: CdpEvent, params: ResponseStage): Promise<
         event.sessionId,
       )
       .catch((error: Error) => {
+        // Not continued instead: that is the path that kills the network
+        // service. The preflight fails, its request is never sent.
         log("fetch.preflight_fulfill_failed", { error: error.message });
-        return cdp.send("Fetch.continueResponse", { requestId: params.requestId }, event.sessionId).catch(() => undefined);
+        return cdp.send("Fetch.failRequest", { requestId: params.requestId, errorReason: "Failed" }, event.sessionId).catch(() => undefined);
       })
       .finally(() => cdp.ack(event.seq));
+    return;
+  }
+  const location = headerOf(params.responseHeaders, "location");
+  if (params.responseStatusCode >= 300 && params.responseStatusCode < 400 && location !== null) {
+    // A redirect of an API request is not followed — neither Hub's (plan
+    // §4.2) nor the site's. Chrome 155 preflights the next hop under this
+    // request's id while this request's interception job is still registered
+    // (it lives through the whole redirect chain), takes that for a
+    // "Duplicate request ID" and kills its network service (stand finding:
+    // every redirect of a preflighted request under Fetch did it, whether
+    // the answer was continued or fulfilled with its Location). So the
+    // answer goes to the page as final, without the Location; the engine
+    // gets the redirect and its address.
+    const headers = (params.responseHeaders ?? []).filter((header) => header.name.toLowerCase() !== "location");
+    await cdp
+      .send(
+        "Fetch.fulfillRequest",
+        { requestId: params.requestId, responseCode: params.responseStatusCode, responseHeaders: headers, ...(params.responseStatusText ? { responsePhrase: params.responseStatusText } : {}), body: "" },
+        event.sessionId,
+      )
+      .catch((error: Error) => {
+        log("fetch.redirect_fulfill_failed", { error: error.message });
+        return cdp.send("Fetch.failRequest", { requestId: params.requestId, errorReason: "Failed" }, event.sessionId).catch(() => undefined);
+      })
+      .finally(() => cdp.ack(event.seq));
+    if (!op.done) {
+      phys.done = true;
+      const engineSide = engineHeaders(Object.fromEntries((params.responseHeaders ?? []).map((header) => [header.name, header.value])));
+      finishOp(op, { outcome: "response", status: params.responseStatusCode, headers: engineSide, location, redirect: true, sends: phys.sends, sendMono: op.sendMono });
+    }
+    return;
+  }
+  if (!phys.wantCapture) {
+    await release();
     return;
   }
   const declared = headerOf(params.responseHeaders, "content-length");
@@ -962,6 +1047,9 @@ async function onResponseStage(event: CdpEvent, params: ResponseStage): Promise<
       });
       created = capture;
       const armed = await cdp.send<{ bufferedData?: string }>("Network.streamResourceContent", { requestId: params.networkId }, sessionId);
+      // The operation may have ended while the stream was being armed: a
+      // capture attached now would never be closed.
+      if (op.done || phys.done) throw new Error("the operation ended before the stream was armed");
       phys.capture = capture;
       if (armed.bufferedData) appendBody(capture, Buffer.from(armed.bufferedData, "base64"), null, 0);
     } catch (error) {
@@ -1146,11 +1234,14 @@ cdp.on("Fetch.requestPaused", (event) => {
   }
   const fragment = params.request.urlFragment ?? url.hash;
   if (params.redirectedRequestId !== undefined || (params.networkId && refusedHops.has(params.networkId))) {
-    // A redirect's next hop. A Hub request never follows one; a site's hop
-    // is a new request with an admission of its own — not the old one
-    // (Astra review 2, B: Fetch may pause the hop before the Network events
-    // of the redirect arrive on the page's session).
-    if (params.redirectedRequestId !== undefined && !(params.networkId && refusedHops.has(params.networkId)) && !(fragment.startsWith("#hub-") || url.hostname.endsWith(PLACEHOLDER_SUFFIX))) {
+    // A redirect's next hop. Whose it is follows from the request it comes
+    // from (by its Fetch id), never from the new address or its fragment —
+    // a Location can change both (Astra reviews 2 B, 3 item 5). A Hub
+    // request never follows a redirect; a site's hop is a new request with
+    // an admission of its own.
+    const parent = params.redirectedRequestId !== undefined ? releasedKind.get(params.redirectedRequestId) : undefined;
+    const hubHop = parent === "hub" || (params.networkId !== undefined && refusedHops.has(params.networkId)) || fragment.startsWith("#hub-") || url.hostname.endsWith(PLACEHOLDER_SUFFIX);
+    if (!hubHop) {
       const cls = classify(url.hostname);
       if (cls === "api") return onSitePaused(event, params, true);
       if (cls === "site" || cls === "cdn") {
@@ -1315,6 +1406,8 @@ function onSitePaused(event: CdpEvent, params: PausedParams, hop = false): void 
     if (!pendingSite.delete(id)) return;
     observe("site.admit_timeout", { req: id });
     void resolvePaused(event, "fail", { requestId: id, errorReason: "Failed" });
+    // The engine hears it: an admission given later has nothing to release.
+    finishOp(op, { outcome: "aborted_before_send", reason: "the admission wait is over" });
   }, CFG.siteAdmitWaitMs);
   pendingSite.set(id, { event, params, op, role: preflight ? "preflight" : "main", timer });
   askSiteAdmit(id, params, method);
@@ -1334,6 +1427,7 @@ function onSiteAdmitResult(message: EngineMessage): void {
   if (message.ok !== true || !(deadline > monoMs()) || !egress.exitOpen) {
     observe("site.refused", { req: id, reason: message.reason ?? (message.ok ? "expired" : "refused") });
     void resolvePaused(pending.event, "fail", { requestId: id, errorReason: "Failed" });
+    finishOp(pending.op, { outcome: "aborted_before_send", reason: message.ok === true ? "the admission came expired or the exit is closed" : "refused" });
     return;
   }
   const op = pending.op;
@@ -1356,26 +1450,67 @@ interface HubAttempt {
   abortTimer: NodeJS.Timeout | null;
   worldId: number | null;
   done: boolean;
+  /** Fields of the JSON answer the engine asked for by path — read in the
+   *  isolated world and passed in memory, nothing written (the pilot's
+   *  identity check; Astra review 3, item 7). */
+  extract: string[] | null;
 }
 const hub = new Map<string, HubAttempt>();
+
+const HUB_EXTRACTED = `function (id) { const e = globalThis.__pbLive && globalThis.__pbLive.get(id); return e && e.extracted !== undefined ? { ready: true, value: e.extracted } : { ready: false }; }`;
+
+/** What the isolated world picked from the answer (waits for its handler:
+ *  the load's end reaches CDP a moment before the page's code). */
+async function readExtracted(attempt: HubAttempt): Promise<unknown> {
+  if (!sitePage || attempt.worldId === null) return null;
+  for (let i = 0; i < 20; i++) {
+    try {
+      const reply = await cdp.send<{ result?: { value?: { ready?: boolean; value?: unknown } } }>(
+        "Runtime.callFunctionOn",
+        { functionDeclaration: HUB_EXTRACTED, executionContextId: attempt.worldId, arguments: [{ value: attempt.attemptId }], returnByValue: true },
+        sitePage.sessionId,
+      );
+      if (reply.result?.value?.ready === true) return reply.result.value.value ?? null;
+    } catch {
+      return null;
+    }
+    await sleep(50);
+  }
+  return null;
+}
 
 function hubResult(attempt: HubAttempt, outcome: Record<string, unknown>): void {
   if (attempt.done) return;
   attempt.done = true;
-  if (sitePage && attempt.worldId !== null && cdp.cdpUp) {
-    cdp.post("Runtime.callFunctionOn", { functionDeclaration: HUB_RELEASE, executionContextId: attempt.worldId, arguments: [{ value: attempt.attemptId }], returnByValue: true }, sitePage.sessionId);
-  }
+  const release = () => {
+    if (sitePage && attempt.worldId !== null && cdp.cdpUp) {
+      cdp.post("Runtime.callFunctionOn", { functionDeclaration: HUB_RELEASE, executionContextId: attempt.worldId, arguments: [{ value: attempt.attemptId }], returnByValue: true }, sitePage.sessionId);
+    }
+  };
   if (attempt.pausedTimer) clearTimeout(attempt.pausedTimer);
   if (attempt.abortTimer) clearTimeout(attempt.abortTimer);
   if (attempt.op && !attempt.op.done) {
     attempt.op.done = true;
+    liveOps.delete(attempt.op);
     if (attempt.op.limitTimer) clearTimeout(attempt.op.limitTimer);
     if (attempt.op.mainTimer) clearTimeout(attempt.op.mainTimer);
     for (const phys of [attempt.op.preflight, attempt.op.main]) {
       const wid = phys ? windowId(phys) : null;
       if (wid) egress.gate.close(wid);
+      if (phys?.capture) {
+        phys.capture.stream.destroy();
+        phys.capture = null;
+      }
     }
   }
+  if (attempt.extract !== null && outcome.outcome === "response" && outcome.status === 200 && cdp.cdpUp) {
+    void readExtracted(attempt).then((extracted) => {
+      release();
+      rpc.send({ type: "result", attemptId: attempt.attemptId, ...outcome, extracted });
+    });
+    return;
+  }
+  release();
   rpc.send({ type: "result", attemptId: attempt.attemptId, ...outcome });
 }
 
@@ -1402,25 +1537,43 @@ async function isolatedWorld(page: TargetInfo): Promise<number> {
 // event at all while a body is not consumed (stand findings). The operator
 // reads the response from CDP; the buffer here is dropped at once.
 // Headers come as [name, value] pairs: their order is the site's.
-const HUB_FETCH = `function (id, url, method, headers, transport) {
+const HUB_FETCH = `function (id, url, method, headers, transport, extract) {
   const g = globalThis;
   const live = g.__pbLive || (g.__pbLive = new Map());
+  // The fields the engine asked for, by path; scalars only.
+  const pick = (buffer) => {
+    if (!extract) return undefined;
+    try {
+      const json = JSON.parse(new TextDecoder().decode(buffer));
+      const out = {};
+      for (let i = 0; i < extract.length; i++) {
+        let v = json;
+        const keys = extract[i].split(".");
+        for (let k = 0; k < keys.length; k++) v = v === null || v === undefined ? undefined : v[keys[k]];
+        out[extract[i]] = typeof v === "string" || typeof v === "number" || typeof v === "boolean" ? v : null;
+      }
+      return out;
+    } catch (e) {
+      return null;
+    }
+  };
   if (transport === "xhr") {
     const x = new XMLHttpRequest();
-    const entry = { controller: { abort: () => x.abort() }, request: x };
+    const entry = { controller: { abort: () => x.abort() }, request: x, extracted: undefined };
     live.set(id, entry);
     x.open(method, url, true);
     x.withCredentials = true;
     x.responseType = "arraybuffer";
     for (let i = 0; i < headers.length; i++) x.setRequestHeader(headers[i][0], headers[i][1]);
+    x.onloadend = () => { entry.extracted = extract ? (x.response ? pick(x.response) : null) : undefined; };
     x.send();
     return true;
   }
-  const entry = { controller: new AbortController(), promise: null };
+  const entry = { controller: new AbortController(), promise: null, extracted: undefined };
   live.set(id, entry);
   entry.promise = fetch(url, { method: method, headers: headers, credentials: "include", mode: "cors", redirect: "manual", signal: entry.controller.signal })
     .then((response) => response.arrayBuffer())
-    .then(() => undefined, () => undefined);
+    .then((buffer) => { entry.extracted = extract ? pick(buffer) : undefined; }, () => { entry.extracted = extract ? null : undefined; });
   return true;
 }`;
 
@@ -1441,6 +1594,10 @@ async function onHubSend(message: EngineMessage): Promise<void> {
     abortTimer: null,
     worldId: null,
     done: false,
+    extract:
+      Array.isArray(message.extract) && message.extract.length <= 8 && message.extract.every((path) => typeof path === "string" && /^[A-Za-z0-9_.]{1,80}$/.test(path))
+        ? (message.extract as string[])
+        : null,
   };
   hub.set(attemptId, attempt);
   if (state !== "ready" || !sitePage) {
@@ -1472,7 +1629,14 @@ async function onHubSend(message: EngineMessage): Promise<void> {
       {
         functionDeclaration: HUB_FETCH,
         executionContextId: attempt.worldId,
-        arguments: [{ value: attemptId }, { value: issued.toString() }, { value: attempt.method }, { value: CFG.hubTransport === "xhr" ? headers : Object.fromEntries(headers) }, { value: CFG.hubTransport }],
+        arguments: [
+          { value: attemptId },
+          { value: issued.toString() },
+          { value: attempt.method },
+          { value: CFG.hubTransport === "xhr" ? headers : Object.fromEntries(headers) },
+          { value: CFG.hubTransport },
+          { value: attempt.extract },
+        ],
         returnByValue: true,
       },
       sitePage.sessionId,
@@ -1582,7 +1746,7 @@ function onSelftestPaused(event: CdpEvent, params: PausedParams, fragment: strin
   if (state !== "selftest" || egress.exitOpen || !waiter) return false;
   if (params.networkId) {
     const op = newOperation("selftest", fragment, fragment, waiter);
-    const phys: Physical = { op, role: "main", networkId: params.networkId, sends: 0, done: false, capture: null };
+    const phys: Physical = { op, role: "main", networkId: params.networkId, sends: 0, done: false, wantCapture: false, capture: null };
     op.main = phys;
     byNetworkId.set(params.networkId, phys);
   }
@@ -1701,7 +1865,10 @@ async function start(): Promise<void> {
   setState("chrome_starting");
   const status = await supervisor({ cmd: "chrome.status" });
   notHalted();
-  if (!status.running) await supervisor({ cmd: "chrome.start", env: { TZ: CFG.env.timeZone, LANG_TAG: CFG.env.language } });
+  if (!status.running) {
+    const started = await supervisor({ cmd: "chrome.start", env: { TZ: CFG.env.timeZone, LANG_TAG: CFG.env.language } });
+    if (started.ok !== true) throw new Error(`Chrome was not started: ${String(started.error ?? "refused")}`);
+  }
   // Wait until the holder holds the DevTools connection.
   for (let i = 0; i < 300 && !cdp.cdpUp; i++) await sleep(100);
   if (!cdp.cdpUp) throw new Error("no CDP connection");
@@ -1788,21 +1955,30 @@ function targetGone(error: Error): boolean {
  *  a target is not in place): the exit closes, Chrome goes, and the page
  *  stays stopped until the engine restarts it — the same failure would come
  *  back with every automatic restart. */
-/** The latch survives a restart of the operator (and of the container): a
- *  stopped page stays stopped until the engine's `restart`. */
-const HALT_FILE = envStr("PB_HALT_FILE", "/data/buffer/halted");
-let halted: string | null = existsSync(HALT_FILE) ? readFileSync(HALT_FILE, "utf8").trim() || "halted before a restart" : null;
+/** The page runs only while its start permit exists (a file in the buffer
+ *  volume). A halt removes it; only the engine's `restart` writes it. So a
+ *  stopped page stays stopped across restarts of the operator and of the
+ *  container, and a stop that could not be recorded cannot turn into a
+ *  start: without the file nothing starts (Astra review 3, item 3). The
+ *  stand's container start writes the permit itself. */
+const PERMIT_FILE = envStr("PB_PERMIT_FILE", "/data/buffer/start-permit");
+let halted: string | null = existsSync(PERMIT_FILE) ? null : "no start permit (the engine's restart gives one)";
 if (halted !== null) egress.latch(halted);
 
 function halt(reason: string): void {
   if (halted !== null) return;
   halted = reason;
-  try {
-    writeFileSync(HALT_FILE, `${reason}\n`);
-  } catch (error) {
-    log("halt.file_failed", { error: (error as Error).message });
-  }
+  // The exit first, then the record of it.
   egress.latch(reason);
+  try {
+    rmSync(PERMIT_FILE, { force: true });
+    if (existsSync(PERMIT_FILE)) throw new Error("the permit is still there");
+  } catch (error) {
+    // The permit could not be removed: the supervisor keeps the page down
+    // for as long as the container lives, and says so.
+    log("halt.permit_not_removed", { error: (error as Error).message });
+    void supervisor({ cmd: "freeze", reason }).catch(() => undefined);
+  }
   log("halted", { reason });
   rpc.send({ type: "alarm", kind: "halted", detail: { reason } });
   setState("failed", `halted: ${reason}`);
@@ -1903,6 +2079,11 @@ rpc.onConnected = () => {
 
 rpc.onLost = (reason) => {
   observe("engine.lost", { reason });
+  // The pilot's engine keeps its pacing and its stop in memory: a new one
+  // would start blank while an admitted operation still runs. So the page
+  // stops with its engine and the owner starts it again (Astra review 3,
+  // item 1). Hub's engine recovers by generations instead (plan §4.7).
+  if (CFG.haltOnEngineLoss && halted === null && state !== "starting") halt(`engine link lost: ${reason}`);
 };
 
 rpc.onMessage = (message) => {
@@ -1933,22 +2114,53 @@ rpc.onMessage = (message) => {
 // Socket tunnels: admitted by the engine, one CONNECT = one socket.
 const pendingWs = new Map<string, (deadline: number | null) => void>();
 let wsAdmitSeq = 0;
-egress.onWsTunnel = (connId, event) => rpc.send({ type: "wsTunnel", connId, event, mono: monoMs() });
+egress.onWsTunnel = (connId, event) => {
+  if (event === "closed") {
+    // A tunnel that ended before its socket's handshake was answered.
+    const waiting = wsAwaitingHandshake.indexOf(connId);
+    if (waiting >= 0) {
+      wsAwaitingHandshake.splice(waiting, 1);
+      wsOutcome(connId, "failed", { error: "the tunnel ended before the handshake" });
+      return;
+    }
+    for (const [socket, admission] of wsAdmissionOfSocket) {
+      if (admission !== connId) continue;
+      wsAdmissionOfSocket.delete(socket);
+      wsOutcome(connId, "failed", { error: "the tunnel ended before the handshake's answer" });
+      return;
+    }
+  }
+  rpc.send({ type: "wsTunnel", connId, event, mono: monoMs() });
+};
+
+/** How long a socket's CONNECT waits for the engine (Chrome's own patience
+ *  with its proxy is not much longer). */
+const WS_ADMIT_WAIT_MS = 10_000;
 
 egress.admitWsTunnel = (host) =>
   new Promise((resolve) => {
     if (!rpc.up) return resolve(null);
     const connId = `ws-${process.pid}-${++wsAdmitSeq}`;
-    pendingWs.set(connId, (deadline) => resolve(deadline === null ? null : { deadline, connId }));
-    rpc.send({ type: "wsAdmit", connId, host });
+    pendingWs.set(connId, (deadline) => {
+      if (deadline !== null) wsAwaitingHandshake.push(connId);
+      resolve(deadline === null ? null : { deadline, connId });
+    });
+    rpc.send({ type: "wsAdmit", connId, host, waitMs: WS_ADMIT_WAIT_MS });
     setTimeout(() => {
-      if (pendingWs.delete(connId)) resolve(null);
-    }, 10_000);
+      if (!pendingWs.delete(connId)) return;
+      resolve(null);
+      // The engine hears it: an admission given later has nothing to admit.
+      wsOutcome(connId, "failed", { error: "the admission wait is over" });
+    }, WS_ADMIT_WAIT_MS);
   });
 
 function onWsAdmitResult(message: EngineMessage): void {
   const resolve = pendingWs.get(String(message.connId));
-  if (!resolve) return;
+  if (!resolve) {
+    // Too late: the CONNECT is gone. The engine must not wait for it.
+    if (message.ok === true) wsOutcome(String(message.connId), "failed", { error: "the admission came too late" });
+    return;
+  }
   pendingWs.delete(String(message.connId));
   // The deadline goes with the tunnel: the socket's handshake must leave
   // before it, however long SOCKS and TLS take.
@@ -1975,8 +2187,14 @@ async function onCommand(message: EngineMessage): Promise<void> {
         return reply({ ok: true });
       case "restart":
         // After a halt: the engine starts the page again on purpose.
+        // The permit first: a start that could not be recorded as permitted
+        // does not happen.
+        try {
+          writeFileSync(PERMIT_FILE, `${new Date().toISOString()}\n`);
+        } catch (error) {
+          return reply({ ok: false, error: `the start permit could not be written: ${(error as Error).message}` });
+        }
         halted = null;
-        rmSync(HALT_FILE, { force: true });
         egress.unlatch();
         if (state === "failed" && !restarting) void startLoop();
         return reply({ ok: true });
@@ -2056,6 +2274,9 @@ async function onCommand(message: EngineMessage): Promise<void> {
         if (typeof message.fetchScope === "string") CFG.fetchScope = message.fetchScope;
         if (typeof message.hubBodyLimit === "number") CFG.hubBodyLimit = message.hubBodyLimit;
         if (message.hubTransport === "xhr" || message.hubTransport === "fetch") CFG.hubTransport = message.hubTransport;
+        if (typeof message.haltOnEngineLoss === "boolean") CFG.haltOnEngineLoss = message.haltOnEngineLoss;
+        if (typeof message.maxBodyBytes === "number") CFG.maxBodyBytes = message.maxBodyBytes;
+        if (typeof message.captureBodies === "boolean") CFG.captureBodies = message.captureBodies;
         if (typeof message.siteUrlSame === "boolean") testSiteUrlSame = message.siteUrlSame;
         if (typeof message.siteBypass === "boolean") testSiteBypass = message.siteBypass;
         return reply({ ok: true, gate: egress.gate.enabled, placeholder: CFG.hubPlaceholderHost, hubAbort: CFG.hubAbortBeforeDeadline, wsHostRefuse: CFG.refuseWsHostRequests });

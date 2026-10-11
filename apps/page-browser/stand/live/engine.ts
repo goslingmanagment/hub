@@ -32,7 +32,14 @@ const OPERATOR = process.env.LIVE_OPERATOR ?? "ws://10.250.240.20:7700/rpc";
 const TOKEN = process.env.PB_RPC_TOKEN ?? "";
 const PAUSE_MS = Number(process.env.LIVE_PAUSE_MS ?? "2500");
 const API = process.env.LIVE_API ?? "https://apiv3.fansly.com";
-const WAIT_MS = 60_000;
+/** Admission waits, shorter than the operator's own (60 s for a site
+ *  request, 10 s for a socket's CONNECT): an admission is never given to a
+ *  request the operator has already let go (Astra review 3, item 6). */
+const WAIT_MS = 55_000;
+const WS_WAIT_MS = 8_000;
+/** Fields of the identity read returned to the owner's terminal (in memory
+ *  only; never in the journal). */
+const HUB_EXTRACT = (process.env.LIVE_HUB_EXTRACT ?? "response.account.id,response.account.username").split(",").filter(Boolean);
 const SITE_PER_HOUR = 300;
 const WINDOW_MS = 15_000;
 /** An operation that reports no end in this long stops the session. */
@@ -136,11 +143,11 @@ function admit(item: Queued): void {
 function done(item: Queued): boolean {
   if (item.kind === "site") return engine.siteDone.has(item.id);
   if (item.kind === "hub") return engine.results.has(item.id);
-  return wsTunnels.has(item.id);
+  return wsOutcomes.has(item.id);
 }
 
-/** Socket tunnels by admission id: their handshake went up, or they ended. */
-const wsTunnels = new Map<string, string>();
+/** Socket handshakes by admission id: answered 101 ("open") or failed. */
+const wsOutcomes = new Map<string, { event: string; status: number | null; error: string | null }>();
 
 let stopped: string | null = null;
 
@@ -208,8 +215,10 @@ function report(): void {
   for (; observedSeen < engine.observed.length; observedSeen++) {
     const o = engine.observed[observedSeen]!;
     if (o.type === "wsTunnel") {
-      if (!wsTunnels.has(String(o.connId))) wsTunnels.set(String(o.connId), String(o.event));
-      journal("ws.tunnel", { connId: o.connId, event: o.event });
+      if ((o.event === "open" || o.event === "failed") && !wsOutcomes.has(String(o.connId))) {
+        wsOutcomes.set(String(o.connId), { event: String(o.event), status: typeof o.status === "number" ? o.status : null, error: typeof o.error === "string" ? o.error : null });
+      }
+      journal("ws.tunnel", { connId: o.connId, event: o.event, status: o.status ?? null, error: o.error ?? null });
       continue;
     }
     if (o.kind === "paused") journal("paused", { cls: o.cls, method: o.method, what: safeUrl(o.url), type: o.resourceType });
@@ -221,7 +230,11 @@ function report(): void {
 
 function finished(item: Queued): void {
   if (item.kind === "ws") {
-    journal("ws.done", { what: item.label, event: wsTunnels.get(item.id) ?? null });
+    const outcome = wsOutcomes.get(item.id)!;
+    journal("ws.done", { what: item.label, ...outcome });
+    // A socket that could not open would be tried again and again: the
+    // pilot stops on the first failure, a 429 among them.
+    if (outcome.event !== "open") stopSession(`socket handshake failed${outcome.status ? ` (${outcome.status})` : ""}: ${item.label}`);
     return;
   }
   const d = item.kind === "site" ? engine.siteDone.get(item.id)! : engine.results.get(item.id)!;
@@ -239,10 +252,12 @@ function finished(item: Queued): void {
 
 function pump(): void {
   if (!engine.connected) {
-    // The operator's RPC went away (its process restarted): start over with
-    // a fresh connection and a fresh pause (compose restarts this process).
+    // The link to the operator is gone. The operator stops its page on that
+    // (PB_HALT_ON_ENGINE_LOSS): this engine's pacing and stop live in its
+    // memory, a fresh one would start blank next to an operation still
+    // running. The owner starts both again (Astra review 3, item 1).
     journal("rpc.lost", {});
-    process.exit(1);
+    process.exit(0);
   }
   collect();
   report();
@@ -258,13 +273,17 @@ function pump(): void {
   }
   for (let i = queue.length - 1; i >= 0; i--) {
     const item = queue[i]!;
-    if (paused !== null) {
+    if ((item.kind === "site" && engine.siteDone.has(item.id)) || (item.kind === "ws" && wsOutcomes.has(item.id))) {
+      // The operator let it go while it waited here.
+      queue.splice(i, 1);
+      journal("expired", { kind: item.kind, what: item.label });
+    } else if (paused !== null) {
       counts.paused += 1;
       queue.splice(i, 1);
       refuse(item, `paused: ${paused}`);
-    } else if (now - item.askedMono > WAIT_MS) {
+    } else if (now - item.askedMono > (item.kind === "ws" ? WS_WAIT_MS : WAIT_MS)) {
       queue.splice(i, 1);
-      refuse(item, "waited 60 s");
+      refuse(item, "waited too long");
     }
   }
   while (siteStarts.length > 0 && now - siteStarts[0]! > 3_600_000) siteStarts.shift();
@@ -292,7 +311,7 @@ function hubRequest(path: string, query: string, method: string): Promise<unknow
       label: hubLabels.get(id)!,
       askedMono: monoMs(),
       launch: () => {
-        void engine.sendHub(id, url, {}, method, { session: true }).then((r) =>
+        void engine.sendHub(id, url, {}, method, { session: true, extract: HUB_EXTRACT }).then((r) =>
           resolve({
             outcome: r.outcome,
             status: r.status ?? null,
@@ -300,7 +319,8 @@ function hubRequest(path: string, query: string, method: string): Promise<unknow
             error: r.error ?? null,
             source: r.source ?? null,
             preflightStatus: (r.preflight as { status?: number } | null)?.status ?? null,
-            headerNames: r.headers ? Object.keys(r.headers as object) : null,
+            // The identity fields, for the owner to compare (not journalled).
+            extracted: r.extracted ?? null,
           }),
         );
       },

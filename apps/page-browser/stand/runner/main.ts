@@ -144,16 +144,19 @@ async function main(): Promise<void> {
   }
   const counted = results.filter((result) => !result.invalid);
   const failed = counted.filter((result) => !result.ok);
-  const summary = { scenario: name, runs: counted.length, passed: counted.length - failed.length, failed: failed.length, invalid: results.length - counted.length, resets, results };
+  // A series that could not gather its valid runs is not a pass (Astra
+  // review 3: 3 asked, 8 invalid, 0 valid used to exit 0).
+  const short = Math.max(0, runs - counted.length);
+  const summary = { scenario: name, asked: runs, runs: counted.length, passed: counted.length - failed.length, failed: failed.length, invalid: results.length - counted.length, short, resets, results };
   const file = `/stand/results/${name}-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
   try {
     writeFileSync(file, JSON.stringify(summary, null, 2));
   } catch {
     // results dir not mounted
   }
-  console.log(JSON.stringify({ scenario: name, runs: summary.runs, passed: summary.passed, failed: summary.failed, invalid: summary.invalid, resets, file }));
+  console.log(JSON.stringify({ scenario: name, asked: runs, runs: summary.runs, passed: summary.passed, failed: summary.failed, invalid: summary.invalid, short, resets, file }));
   engine.close();
-  process.exit(failed.length === 0 ? 0 : 1);
+  process.exit(failed.length === 0 && short === 0 ? 0 : 1);
 }
 
 if (process.argv[1]?.endsWith("main.ts")) void main();

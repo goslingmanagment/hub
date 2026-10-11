@@ -394,7 +394,9 @@ function retryPost(cdpDelayMs: number, bodySize = 0, gate = true): Scenario {
   return async (ctx) => {
     await fresh(ctx);
     const tag = `post-${cdpDelayMs}-${bodySize}-${gate ? "g" : "n"}-${ctx.run}-${Date.now() % 100000}`;
-    await ctx.engine.command("test.config", { gate });
+    // A body over the stage-1 limit is released here on purpose: the gate's
+    // own rule is what the large variant checks.
+    await ctx.engine.command("test.config", { gate, maxBodyBytes: Math.max(16_375, bodySize + 1024) });
     await warm(ctx, tag);
     const rid = `rp-${tag}`;
     await ctx.stand.fault({ kind: "h2RefusedStream", match: { rid, method: "POST" }, ms: 0 });
@@ -402,7 +404,7 @@ function retryPost(cdpDelayMs: number, bodySize = 0, gate = true): Scenario {
     ctx.arm();
     const result = await ctx.engine.eval<Record<string, unknown>>(`site.raw(${JSON.stringify(rid)}, "POST", "/api/v1/login", ${JSON.stringify(bodySize ? { bodySize } : {})})`);
     await sleep(1500);
-    await ctx.engine.command("test.config", { cdpDelayMs: 0, gate: true });
+    await ctx.engine.command("test.config", { cdpDelayMs: 0, gate: true, maxBodyBytes: 16_375 });
     const events = await ctx.stand.journal();
     const arrivals = reqs(events, rid).filter((event) => event.method === "POST");
     const faulted = events.some((event) => event.t === "fault" || event.t === "h2.rst");
@@ -412,6 +414,24 @@ function retryPost(cdpDelayMs: number, bodySize = 0, gate = true): Scenario {
     return { ok: violations.length === 0, violations, notes: { cdpDelayMs, bodySize, site: result, arrivals: arrivals.map((event) => ({ conn: event.connId, stream: event.streamId })) } };
   };
 }
+
+/** Stage 1 releases no body over one DATA frame (a login is far smaller): a
+ *  bigger one is refused before it leaves. */
+const postTooLarge: Scenario = async (ctx) => {
+  await fresh(ctx);
+  const tag = `big-${ctx.run}-${Date.now() % 100000}`;
+  await warm(ctx, tag);
+  const rid = `pb-${tag}`;
+  ctx.arm();
+  const result = await ctx.engine.eval<{ status?: number; error?: string }>(`site.raw(${JSON.stringify(rid)}, "POST", "/api/v1/login", { bodySize: 40000 })`);
+  await sleep(500);
+  const events = await ctx.stand.journal();
+  const arrivals = reqs(events, rid).filter((event) => event.method === "POST");
+  const violations: string[] = [];
+  if (arrivals.length > 0) violations.push(`${arrivals.length} arrivals of a 40 KB POST`);
+  if (result.status !== undefined) violations.push(`the page got an answer: ${JSON.stringify(result)}`);
+  return { ok: violations.length === 0, violations, notes: { result } };
+};
 
 /** A login after the connection was quiet for 10 s: Chrome writes a PING
  *  between the POST's HEADERS and its DATA (Astra review 2, A — the PING must
@@ -1017,6 +1037,131 @@ const xhrParity: Scenario = async (ctx) => {
   return { ok: violations.length === 0, violations, notes: { site: names(siteArrival), hub: names(hubArrival) } };
 };
 
+/** The pilot's rule (Astra review 3, item 1): the engine's link is lost
+ *  while an admitted request is still answered and others are held — the
+ *  page stops (exit closed for good), nothing held leaves, and only the
+ *  engine's `restart` brings it back. */
+const engineLossHalt: Scenario = async (ctx) => {
+  await fresh(ctx);
+  const tag = `el-${ctx.run}-${Date.now() % 100000}`;
+  await ctx.engine.command("test.config", { haltOnEngineLoss: true });
+  await warm(ctx, tag);
+  const sitePrefix = `p-${tag}-`;
+  ctx.engine.decideSite = (ask) => (ask.rid?.startsWith(sitePrefix) ? "hold" : { grant: true });
+  const slow = `${sitePrefix}0`;
+  const rest = [1, 2, 3].map((i) => `${sitePrefix}${i}`);
+  await ctx.engine.eval(`site.api(${JSON.stringify(slow)}, { query: "size=200000&slow=1500" }), (${JSON.stringify(rest)}).forEach((r) => site.api(r)), true`, false);
+  await until(() => [...ctx.engine.heldSite.values()].filter((ask) => ask.rid?.startsWith(sitePrefix)).length >= 4, 10_000, "4 held");
+  const first = [...ctx.engine.heldSite.values()].find((ask) => ask.rid === slow);
+  ctx.engine.releaseSite(first!.siteRequestId, { grant: true });
+  await sleep(400);
+  ctx.arm();
+  ctx.engine.close();
+  ctx.engine.heldSite.clear();
+  await sleep(3000);
+  const events = await ctx.stand.journal();
+  const violations = [...checkAdmitted(events, ctx.engine.grants, sitePrefix).violations];
+  await ctx.engine.connect(30_000);
+  await sleep(500);
+  const stateAfter = String(ctx.engine.lastState?.state ?? "");
+  const reasonAfter = String(ctx.engine.lastState?.reason ?? "");
+  if (stateAfter !== "failed" || !reasonAfter.startsWith("halted: engine link lost")) violations.push(`after the loss the page is ${stateAfter} (${reasonAfter}), not halted`);
+  if (ctx.engine.lastState?.exit !== "closed") violations.push("the exit is not closed after the loss");
+  // Back for the next run: the halt is cleared only by `restart`.
+  await ctx.engine.command("test.config", { haltOnEngineLoss: false });
+  const restart = await ctx.engine.command("restart");
+  await ctx.engine.waitReady(120_000);
+  return { ok: violations.length === 0, violations, notes: { stateAfter, reasonAfter, restartOk: restart.ok ?? null } };
+};
+
+/** An admitted socket's handshake ends for the engine as "open" (101) or as
+ *  "failed" — here the server drops the connection at the handshake (Astra
+ *  review 3, item 2). */
+const wsHandshakeOutcome: Scenario = async (ctx) => {
+  await fresh(ctx);
+  const tag = `wh-${ctx.run}-${Date.now() % 100000}`;
+  const since = monoMs();
+  const outcomes = () => ctx.engine.observed.filter((o) => o.type === "wsTunnel" && Number(o.recvMono) >= since && (o.event === "open" || o.event === "failed"));
+  ctx.arm();
+  const good = await ctx.engine.eval<number>(`site.ws(${JSON.stringify(`${tag}-good`)})`, false);
+  await until(() => outcomes().length >= 1, 10_000, "the first socket's outcome");
+  await ctx.stand.fault({ kind: "resetAfterHeaders", match: { host: "ws.stand.test" } });
+  await ctx.engine.eval<number>(`site.ws(${JSON.stringify(`${tag}-bad`)})`, false);
+  await until(() => outcomes().length >= 2, 15_000, "the second socket's outcome");
+  const seen = outcomes().map((o) => ({ event: o.event, status: o.status ?? null, error: o.error ?? null }));
+  const violations: string[] = [];
+  if (seen[0]?.event !== "open" || seen[0]?.status !== 101) violations.push(`the good socket ended as ${JSON.stringify(seen[0])}`);
+  if (seen[1]?.event !== "failed") violations.push(`the refused socket ended as ${JSON.stringify(seen[1])}`);
+  return { ok: violations.length === 0, violations, notes: { good, seen } };
+};
+
+/** A Hub request made by XMLHttpRequest meets a redirect whose address has
+ *  another fragment: the hop is refused, not taken for a request of the site
+ *  (Astra review 3, item 5), and the engine gets the redirect itself. */
+const hubRedirect: Scenario = async (ctx) => {
+  await fresh(ctx);
+  const tag = `hr-${ctx.run}-${Date.now() % 100000}`;
+  await ctx.engine.command("test.config", { hubTransport: "xhr" });
+  await ctx.engine.eval(`site.xhr(${JSON.stringify(`${tag}-site`)}, { fansly: true })`);
+  const hop = `${API}/api/item?rid=${tag}-hop#elsewhere`;
+  const asksBefore = ctx.engine.grants.length + ctx.engine.refusals.length;
+  ctx.arm();
+  const armedMono = monoMs();
+  const hub = await ctx.engine.sendHub(`${tag}-hub`, `${API}/api/xhr?rid=${tag}-hub&status=302&location=${encodeURIComponent(hop)}`, {}, "GET", { session: true });
+  await sleep(1500);
+  await ctx.engine.command("test.config", { hubTransport: "fetch" });
+  const events = await ctx.stand.journal();
+  const violations: string[] = [];
+  const hopArrivals = events.filter((event) => event.t === "req" && event.rid === `${tag}-hop`);
+  if (hopArrivals.length > 0) violations.push(`the redirect's hop reached the server (${hopArrivals.map((event) => event.method).join(", ")})`);
+  const hopAsks = [...ctx.engine.grants, ...ctx.engine.refusals].slice(asksBefore).filter((entry) => entry.rid === `${tag}-hop`);
+  if (hopAsks.length > 0) violations.push("the hop asked for a site admission");
+  if (hub.status !== 302 || hub.redirect !== true) violations.push(`the Hub result: ${String(hub.outcome)} ${String(hub.status ?? "")} redirect ${String(hub.redirect ?? "")}`);
+  violations.push(...browserLost(ctx, armedMono));
+  return { ok: violations.length === 0, violations, notes: { hub: { outcome: hub.outcome, status: hub.status ?? null, location: hub.location ?? null }, hopArrivals: hopArrivals.length } };
+};
+
+/** Chrome's network service must survive the scenario (it died on every
+ *  redirect of a Hub XMLHttpRequest — stand finding): any loss of the
+ *  browser after the arming is a failure. */
+function browserLost(ctx: Ctx, sinceMono: number): string[] {
+  return ctx.engine.alarms.filter((alarm) => alarm.kind === "cdp_lost" && Number(alarm.recvMono) >= sinceMono).map((alarm) => `the browser was lost: ${String((alarm.detail as { reason?: string } | undefined)?.reason ?? "")}`);
+}
+
+/** A request of the site to the API meets a redirect. It is not followed
+ *  (Chrome 155 kills its network service when it preflights the hop of an
+ *  intercepted request — stand finding): the page gets the 3xx as final, the
+ *  hop never leaves, the engine learns of the redirect, the browser lives.
+ *  `xhr`: by XMLHttpRequest (as Fansly's client), else fetch. */
+function siteRedirect(xhr: boolean, capture = true): Scenario {
+  return async (ctx) => {
+    await fresh(ctx);
+    const tag = `sr-${xhr ? "x" : "f"}${capture ? "" : "n"}-${ctx.run}-${Date.now() % 100000}`;
+    await ctx.engine.command("test.config", { captureBodies: capture });
+    await warm(ctx, tag);
+    const hop = `${API}/api/item?rid=${tag}-hop`;
+    ctx.arm();
+    const armedMono = monoMs();
+    const target = `/api/${xhr ? "xhr" : "item"}?status=302&location=${encodeURIComponent(hop)}`;
+    const result = xhr
+      ? await ctx.engine.eval<Record<string, unknown>>(`new Promise((resolve) => { const x = new XMLHttpRequest(); x.open("GET", ${JSON.stringify(`${API}${target}&rid=${tag}-first`)}); x.withCredentials = true; x.setRequestHeader("authorization", "stand-token"); x.onloadend = () => resolve({ status: x.status }); x.send(); })`)
+      : await ctx.engine.eval<Record<string, unknown>>(`site.raw(${JSON.stringify(`${tag}-first`)}, "GET", ${JSON.stringify(target)})`);
+    await sleep(1500);
+    await ctx.engine.command("test.config", { captureBodies: true });
+    const events = await ctx.stand.journal();
+    const violations = [...checkAdmitted(events, ctx.engine.grants, `${tag}-`).violations];
+    const hops = events.filter((event) => event.t === "req" && event.rid === `${tag}-hop`);
+    if (hops.length !== 0) violations.push(`${hops.length} arrivals of the hop`);
+    const done = ctx.engine.siteDoneOf(`${tag}-first`);
+    if (done?.redirect !== true || done?.status !== 302) violations.push(`the engine got ${JSON.stringify({ outcome: done?.outcome, status: done?.status, redirect: done?.redirect })}`);
+    violations.push(...browserLost(ctx, armedMono));
+    // The page works on: the next request passes.
+    const after = await ctx.engine.eval<{ status?: number }>(`site.api(${JSON.stringify(`${tag}-after`)})`);
+    if (after.status !== 200) violations.push(`the request after the redirect: ${JSON.stringify(after)}`);
+    return { ok: violations.length === 0, violations, notes: { result, hops: hops.length, location: done?.location ?? null } };
+  };
+}
+
 export const scenarios: Record<string, Scenario> = {
   smoke,
   "loss-operator-kill": controlLoss("operator-kill", false),
@@ -1059,6 +1204,7 @@ export const scenarios: Record<string, Scenario> = {
   "retry-post-large": retryPost(0, 100_000),
   "retry-post-large-nogate": retryPost(0, 100_000, false),
   "idle-post": idlePost,
+  "post-too-large": postTooLarge,
   "send-time": sendTime,
   "hub-gc-paused": hubGc("paused"),
   "hub-gc-body": hubGc("body"),
@@ -1083,4 +1229,11 @@ export const scenarios: Record<string, Scenario> = {
   "ws-detect": wsDetect,
   "ws-tamper": wsTamper,
   "xhr-parity": xhrParity,
+  "engine-loss-halt": engineLossHalt,
+  "ws-handshake-outcome": wsHandshakeOutcome,
+  "hub-redirect": hubRedirect,
+  "site-redirect": siteRedirect(false),
+  "site-redirect-xhr": siteRedirect(true),
+  // Without the response-stage interception (no body capture).
+  "site-redirect-nocapture": siteRedirect(false, false),
 };
