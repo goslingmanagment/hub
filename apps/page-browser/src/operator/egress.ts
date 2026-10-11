@@ -13,7 +13,7 @@ import { createServer as createHttpServer, type IncomingMessage } from "node:htt
 import { connect as tcpConnect, isIP, type Socket } from "node:net";
 import { existsSync, readFileSync } from "node:fs";
 
-import { ApiGate, RecordTracker } from "./gate.ts";
+import { ApiGate, controlRecordLimit, serverHelloIsTls13 } from "./gate.ts";
 import { makeLog, monoMs } from "../shared/util.ts";
 
 const log = makeLog("egress");
@@ -42,6 +42,9 @@ export interface TunnelRecord {
 
 const EXTENSION_DIST = process.env.PB_EXTENSION_DIST ?? "/opt/page-browser/extension-dist";
 const HELD_LIMIT = 4 * 1024 * 1024;
+const EMPTY = Buffer.alloc(0);
+/** Stand: every record of an API tunnel and the gate's verdict on it. */
+const DEBUG_RECORDS = process.env.PB_DEBUG_RECORDS === "1";
 
 class Tunnel {
   readonly rec: TunnelRecord;
@@ -49,8 +52,22 @@ class Tunnel {
   upstream: Socket | null = null;
   held: Buffer[] = [];
   heldBytes = 0;
-  /** TLS records of what went up (API tunnels). */
-  readonly records = new RecordTracker();
+  /** API and socket tunnels: what is left of the record in progress from
+   *  Chrome (it goes up: a held record holds the tunnel). */
+  recordLeft = 0;
+  /** Socket tunnels: the admission's deadline, and whether the socket's
+   *  handshake request went up before it. */
+  wsDeadline = 0;
+  wsHandshakeSent = false;
+  /** Big application-data records that went up (socket tunnels). */
+  appRecords = 0;
+  /** Bytes of a record header still incomplete (API tunnels). */
+  partial: Buffer = EMPTY;
+  /** Bytes Chrome sent before the tunnel was up. */
+  early: Buffer[] = [];
+  /** The server chose TLS 1.3 (from its ServerHello); null = not seen. */
+  tls13: boolean | null = null;
+  serverFirst: Buffer | null = EMPTY;
   constructor(rec: TunnelRecord, client: Socket) {
     this.rec = rec;
     this.client = client;
@@ -61,9 +78,10 @@ export class Egress {
   readonly socks: SocksConfig;
   readonly classify: (host: string) => HostClass;
   readonly gate = new ApiGate();
-  /** Admission of a new socket connection (socket host): resolves true to
-   *  let the CONNECT through. */
-  admitWsTunnel: (host: string) => Promise<boolean> = async () => false;
+  /** Admission of a new socket connection (socket host): resolves the
+   *  admission's deadline (CLOCK_MONOTONIC ms) to let the CONNECT through,
+   *  null to refuse it. */
+  admitWsTunnel: (host: string) => Promise<number | null> = async () => null;
 
   #exitOpen = false;
   #tunnels = new Set<Tunnel>();
@@ -74,9 +92,7 @@ export class Egress {
     this.socks = socks;
     this.classify = classify;
     this.gate.cut = (reason) => this.cutClass("api", reason);
-    this.gate.flush = () => {
-      for (const tunnel of this.#tunnels) if (tunnel.rec.cls === "api") this.#flush(tunnel);
-    };
+    this.gate.cutHeld = (reason) => this.#cutWhere((tunnel) => tunnel.rec.cls === "api" && tunnel.heldBytes > 0, reason);
   }
 
   get exitOpen(): boolean {
@@ -148,55 +164,98 @@ export class Egress {
   #up(tunnel: Tunnel, bytes: Buffer): void {
     if (bytes.length === 0 || !tunnel.upstream) return;
     tunnel.rec.up += bytes.length;
-    if (tunnel.rec.cls === "api") tunnel.records.advance(bytes);
     tunnel.upstream.write(bytes);
-  }
-
-  /** Forward what a tunnel holds (its order is never changed). */
-  #flush(tunnel: Tunnel): void {
-    if (!tunnel.upstream || tunnel.held.length === 0) return;
-    const bytes = Buffer.concat(tunnel.held);
-    tunnel.held = [];
-    tunnel.heldBytes = 0;
-    this.#up(tunnel, bytes);
   }
 
   #onClientData(tunnel: Tunnel, chunk: Buffer): void {
     if (!this.#tunnels.has(tunnel)) return;
     if (!tunnel.upstream) {
+      // Before "200 Connection Established" (Chrome does not send then).
+      tunnel.early.push(chunk);
+      return;
+    }
+    if (tunnel.rec.cls === "api") this.#onApiData(tunnel, chunk);
+    else if (tunnel.rec.cls === "ws" && !tunnel.wsHandshakeSent) this.#onWsData(tunnel, chunk);
+    else this.#up(tunnel, chunk);
+  }
+
+  /** A socket tunnel before its handshake request went up: the request (the
+   *  first big application-data record after the TLS handshake) leaves only
+   *  before the admission's deadline (Astra review of the prototype, finding
+   *  6); after it, everything goes (the guard in the page checks messages). */
+  #onWsData(tunnel: Tunnel, chunk: Buffer): void {
+    const data = tunnel.partial.length > 0 ? Buffer.concat([tunnel.partial, chunk]) : chunk;
+    tunnel.partial = EMPTY;
+    let offset = 0;
+    while (offset < data.length && !tunnel.wsHandshakeSent) {
+      if (tunnel.recordLeft > 0) {
+        const take = Math.min(tunnel.recordLeft, data.length - offset);
+        tunnel.recordLeft -= take;
+        offset += take;
+        continue;
+      }
+      if (data.length - offset < 5) {
+        tunnel.partial = Buffer.from(data.subarray(offset));
+        this.#up(tunnel, data.subarray(0, offset));
+        return;
+      }
+      const total = 5 + data.readUInt16BE(offset + 3);
+      if (data[offset] === 23 && total > controlRecordLimit(tunnel.tls13)) {
+        tunnel.appRecords += 1;
+        // TLS 1.3: the client's Finished is application data too.
+        if (tunnel.appRecords === (tunnel.tls13 === false ? 1 : 2)) {
+          if (monoMs() >= tunnel.wsDeadline) {
+            this.#finish(tunnel, "socket admission expired before its handshake");
+            return;
+          }
+          tunnel.wsHandshakeSent = true;
+        }
+      }
+      tunnel.recordLeft = total;
+    }
+    this.#up(tunnel, data);
+  }
+
+  /** Chrome's bytes on an API tunnel: the gate decides record by record.
+   *  Once a record is held, everything after it on this tunnel is held too —
+   *  until the tunnel is cut; held bytes never go up. */
+  #onApiData(tunnel: Tunnel, chunk: Buffer): void {
+    if (tunnel.heldBytes > 0) {
       this.#hold(tunnel, chunk);
       return;
     }
-    if (tunnel.rec.cls !== "api") {
-      this.#up(tunnel, chunk);
-      return;
-    }
-    if (this.gate.forwards()) {
-      this.#flush(tunnel);
-      if (this.gate.wantsOneRecord) {
-        // Exactly one record of this window goes up; what follows waits.
-        const end = tunnel.records.oneRecord(chunk);
-        if (end >= 0) {
-          this.#up(tunnel, chunk.subarray(0, end));
-          this.gate.noteChunk(end);
-          this.gate.recordDone();
-          this.#hold(tunnel, chunk.subarray(end));
-          return;
-        }
+    const id = tunnel.rec.id;
+    const data = tunnel.partial.length > 0 ? Buffer.concat([tunnel.partial, chunk]) : chunk;
+    tunnel.partial = EMPTY;
+    let offset = 0;
+    let holdFrom = -1;
+    while (offset < data.length) {
+      if (tunnel.recordLeft > 0) {
+        const take = Math.min(tunnel.recordLeft, data.length - offset);
+        tunnel.recordLeft -= take;
+        offset += take;
+        this.gate.noteChunk(id, take);
+        if (tunnel.recordLeft === 0) this.gate.recordDone(id);
+        continue;
       }
-      this.#up(tunnel, chunk);
-      this.gate.noteChunk(chunk.length);
-      return;
+      if (data.length - offset < 5) {
+        // The next record's header is not complete: decided with the next chunk.
+        tunnel.partial = Buffer.from(data.subarray(offset));
+        break;
+      }
+      const total = 5 + data.readUInt16BE(offset + 3);
+      const big = total > controlRecordLimit(tunnel.tls13);
+      const verdict = this.gate.record(id, big, data[offset] === 23, tunnel.tls13);
+      if (DEBUG_RECORDS) log("record", { tunnel: id, type: data[offset], total, verdict, phase: this.gate.state.phase, window: this.gate.state.window });
+      if (verdict === "hold") {
+        if (big) this.gate.noteHeld(id, total);
+        holdFrom = offset;
+        break;
+      }
+      tunnel.recordLeft = total;
     }
-    // Not forwarding. A record already half through is finished first; what
-    // follows is held from a record boundary on.
-    let rest = chunk;
-    if (tunnel.held.length === 0 && tunnel.records.midRecord) {
-      const prefix = tunnel.records.prefixToBoundary(chunk);
-      this.#up(tunnel, chunk.subarray(0, prefix));
-      rest = chunk.subarray(prefix);
-    }
-    this.#hold(tunnel, rest);
+    this.#up(tunnel, data.subarray(0, holdFrom >= 0 ? holdFrom : offset));
+    if (holdFrom >= 0) this.#hold(tunnel, data.subarray(holdFrom));
   }
 
   // ── the proxy ──────────────────────────────────────────────────────────
@@ -240,7 +299,7 @@ export class Egress {
       // connection, retrying one whose admission expired, or sending one it
       // released without us (a CDP detach).
       if (!this.gate.admitsTunnel()) return this.#refuse(rec, client, `refused: gate ${this.gate.state.phase}`);
-      this.gate.noteTunnel();
+      this.gate.noteTunnel(rec.id);
     }
     const tunnel = new Tunnel(rec, client);
     this.#tunnels.add(tunnel);
@@ -248,23 +307,31 @@ export class Egress {
     client.on("data", (chunk: Buffer) => this.#onClientData(tunnel, chunk));
     if (head.length > 0) this.#onClientData(tunnel, head);
 
-    const proceed = cls === "ws" ? this.admitWsTunnel(host) : Promise.resolve(true);
+    const proceed: Promise<number | null> = cls === "ws" ? this.admitWsTunnel(host) : Promise.resolve(Infinity);
     proceed
-      .then((admitted) => {
+      .then((deadline) => {
         if (!this.#tunnels.has(tunnel)) return;
+        const admitted = deadline !== null && monoMs() < deadline;
         if (!admitted || !this.#exitOpen) {
           this.#tunnels.delete(tunnel);
           this.#refuse(rec, client, admitted ? "refused: exit closed" : "refused: socket not admitted");
           return;
         }
+        tunnel.wsDeadline = deadline;
         return socksConnect(this.socks, host, port).then((upstream) => {
           if (!this.#tunnels.has(tunnel) || !this.#exitOpen) {
             upstream.destroy();
             return;
           }
+          if (cls === "ws" && monoMs() >= tunnel.wsDeadline) {
+            upstream.destroy();
+            this.#finish(tunnel, "socket admission expired before its connection");
+            return;
+          }
           tunnel.upstream = upstream;
           upstream.on("data", (chunk: Buffer) => {
             tunnel.rec.down += chunk.length;
+            if (tunnel.serverFirst !== null && (cls === "api" || cls === "ws")) this.#serverHello(tunnel, chunk);
             client.write(chunk);
           });
           upstream.on("close", () => this.#finish(tunnel, tunnel.rec.result || "upstream closed"));
@@ -272,9 +339,23 @@ export class Egress {
           upstream.resume();
           client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
           log("tunnel.open", { id: rec.id, host, port, cls });
+          for (const chunk of tunnel.early.splice(0)) this.#onClientData(tunnel, chunk);
         });
       })
       .catch((error: Error) => this.#finish(tunnel, `socks: ${error.message}`));
+  }
+
+  /** The TLS version of an API tunnel decides the size of a control record. */
+  #serverHello(tunnel: Tunnel, chunk: Buffer): void {
+    const seen = Buffer.concat([tunnel.serverFirst!, chunk]);
+    const tls13 = serverHelloIsTls13(seen);
+    if (tls13 === undefined && seen.length < 20_000) {
+      tunnel.serverFirst = seen;
+      return;
+    }
+    tunnel.serverFirst = null;
+    tunnel.tls13 = tls13 ?? null;
+    log("tunnel.tls", { id: tunnel.rec.id, tls13: tunnel.tls13 });
   }
 
   /** Local and private destinations are refused even with an open exit. */

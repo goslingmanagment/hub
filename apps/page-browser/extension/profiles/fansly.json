@@ -1,0 +1,376 @@
+[
+  {
+    "id": 1,
+    "priority": 400,
+    "action": {
+      "type": "block"
+    },
+    "condition": {
+      "regexFilter": "^https://apiv3\\.fansly\\.com(\\.pb-hold\\.invalid)?/api/v1/(message/ack(/all)?|message/typing|message/like(/remove)?|status|notifications/ack|groups/users/readreceipts)([?#].*)?$",
+      "requestMethods": [
+        "post",
+        "put",
+        "patch",
+        "delete"
+      ],
+      "resourceTypes": [
+        "main_frame",
+        "sub_frame",
+        "stylesheet",
+        "script",
+        "image",
+        "font",
+        "object",
+        "xmlhttprequest",
+        "ping",
+        "csp_report",
+        "media",
+        "websocket",
+        "webtransport",
+        "webbundle",
+        "other"
+      ]
+    }
+  },
+  {
+    "id": 2,
+    "priority": 400,
+    "action": {
+      "type": "block"
+    },
+    "condition": {
+      "regexFilter": "^https://apiv3\\.fansly\\.com(\\.pb-hold\\.invalid)?/api/v1/(account/disable|account/emailchange/.*|account/wallets/transaction/refund|login/password.*|twofa(/.*)?|session/close)([?#].*)?$",
+      "requestMethods": [
+        "post",
+        "put",
+        "patch",
+        "delete"
+      ],
+      "resourceTypes": [
+        "main_frame",
+        "sub_frame",
+        "stylesheet",
+        "script",
+        "image",
+        "font",
+        "object",
+        "xmlhttprequest",
+        "ping",
+        "csp_report",
+        "media",
+        "websocket",
+        "webtransport",
+        "webbundle",
+        "other"
+      ]
+    }
+  },
+  {
+    "id": 3,
+    "priority": 400,
+    "action": {
+      "type": "block"
+    },
+    "condition": {
+      "regexFilter": "^https://apiv3\\.fansly\\.com(\\.pb-hold\\.invalid)?/api/v1/(management/.*|webpush/delete|payments/payout.*|payments/wallets.*|payouts/.*|thirdpartyconnect/.*)([?#].*)?$",
+      "requestMethods": [
+        "post",
+        "put",
+        "patch",
+        "delete"
+      ],
+      "resourceTypes": [
+        "main_frame",
+        "sub_frame",
+        "stylesheet",
+        "script",
+        "image",
+        "font",
+        "object",
+        "xmlhttprequest",
+        "ping",
+        "csp_report",
+        "media",
+        "websocket",
+        "webtransport",
+        "webbundle",
+        "other"
+      ]
+    }
+  },
+  {
+    "id": 4,
+    "priority": 400,
+    "action": {
+      "type": "block"
+    },
+    "condition": {
+      "regexFilter": "^https://apiv3\\.fansly\\.com(\\.pb-hold\\.invalid)?/api/v1/(logout)([?#].*)?$",
+      "requestMethods": [
+        "post",
+        "put",
+        "patch",
+        "delete"
+      ],
+      "resourceTypes": [
+        "main_frame",
+        "sub_frame",
+        "stylesheet",
+        "script",
+        "image",
+        "font",
+        "object",
+        "xmlhttprequest",
+        "ping",
+        "csp_report",
+        "media",
+        "websocket",
+        "webtransport",
+        "webbundle",
+        "other"
+      ]
+    }
+  },
+  {
+    "id": 5,
+    "priority": 300,
+    "action": {
+      "type": "allow"
+    },
+    "condition": {
+      "regexFilter": "^https://apiv3\\.fansly\\.com/api/v1/(login|login/twofa|login/email|login/email/verification|login/email/verification/token|login/email/verify|email-challenge/v1/.*)([?#].*)?$",
+      "requestMethods": [
+        "post"
+      ],
+      "resourceTypes": [
+        "main_frame",
+        "sub_frame",
+        "stylesheet",
+        "script",
+        "image",
+        "font",
+        "object",
+        "xmlhttprequest",
+        "ping",
+        "csp_report",
+        "media",
+        "websocket",
+        "webtransport",
+        "webbundle",
+        "other"
+      ]
+    }
+  },
+  {
+    "id": 6,
+    "priority": 200,
+    "action": {
+      "type": "block"
+    },
+    "condition": {
+      "requestDomains": [
+        "fansly.com"
+      ],
+      "requestMethods": [
+        "post",
+        "put",
+        "patch",
+        "delete"
+      ],
+      "resourceTypes": [
+        "main_frame",
+        "sub_frame",
+        "stylesheet",
+        "script",
+        "image",
+        "font",
+        "object",
+        "xmlhttprequest",
+        "ping",
+        "csp_report",
+        "media",
+        "websocket",
+        "webtransport",
+        "webbundle",
+        "other"
+      ]
+    }
+  },
+  {
+    "id": 7,
+    "priority": 200,
+    "action": {
+      "type": "block"
+    },
+    "condition": {
+      "requestDomains": [
+        "chatws.fansly.com"
+      ],
+      "resourceTypes": [
+        "websocket"
+      ]
+    }
+  },
+  {
+    "id": 8,
+    "priority": 100,
+    "action": {
+      "type": "block"
+    },
+    "condition": {
+      "urlFilter": "||localhost",
+      "resourceTypes": [
+        "main_frame",
+        "sub_frame",
+        "stylesheet",
+        "script",
+        "image",
+        "font",
+        "object",
+        "xmlhttprequest",
+        "ping",
+        "csp_report",
+        "media",
+        "websocket",
+        "webtransport",
+        "webbundle",
+        "other"
+      ]
+    }
+  },
+  {
+    "id": 9,
+    "priority": 100,
+    "action": {
+      "type": "block"
+    },
+    "condition": {
+      "urlFilter": "||127.0.0.1",
+      "resourceTypes": [
+        "main_frame",
+        "sub_frame",
+        "stylesheet",
+        "script",
+        "image",
+        "font",
+        "object",
+        "xmlhttprequest",
+        "ping",
+        "csp_report",
+        "media",
+        "websocket",
+        "webtransport",
+        "webbundle",
+        "other"
+      ]
+    }
+  },
+  {
+    "id": 10,
+    "priority": 100,
+    "action": {
+      "type": "block"
+    },
+    "condition": {
+      "urlFilter": "||10.",
+      "resourceTypes": [
+        "main_frame",
+        "sub_frame",
+        "stylesheet",
+        "script",
+        "image",
+        "font",
+        "object",
+        "xmlhttprequest",
+        "ping",
+        "csp_report",
+        "media",
+        "websocket",
+        "webtransport",
+        "webbundle",
+        "other"
+      ]
+    }
+  },
+  {
+    "id": 11,
+    "priority": 100,
+    "action": {
+      "type": "block"
+    },
+    "condition": {
+      "urlFilter": "||192.168.",
+      "resourceTypes": [
+        "main_frame",
+        "sub_frame",
+        "stylesheet",
+        "script",
+        "image",
+        "font",
+        "object",
+        "xmlhttprequest",
+        "ping",
+        "csp_report",
+        "media",
+        "websocket",
+        "webtransport",
+        "webbundle",
+        "other"
+      ]
+    }
+  },
+  {
+    "id": 12,
+    "priority": 100,
+    "action": {
+      "type": "block"
+    },
+    "condition": {
+      "urlFilter": "||169.254.",
+      "resourceTypes": [
+        "main_frame",
+        "sub_frame",
+        "stylesheet",
+        "script",
+        "image",
+        "font",
+        "object",
+        "xmlhttprequest",
+        "ping",
+        "csp_report",
+        "media",
+        "websocket",
+        "webtransport",
+        "webbundle",
+        "other"
+      ]
+    }
+  },
+  {
+    "id": 13,
+    "priority": 100,
+    "action": {
+      "type": "block"
+    },
+    "condition": {
+      "urlFilter": "||[::1]",
+      "resourceTypes": [
+        "main_frame",
+        "sub_frame",
+        "stylesheet",
+        "script",
+        "image",
+        "font",
+        "object",
+        "xmlhttprequest",
+        "ping",
+        "csp_report",
+        "media",
+        "websocket",
+        "webtransport",
+        "webbundle",
+        "other"
+      ]
+    }
+  }
+]

@@ -316,7 +316,7 @@ export class StandEngine {
   }
 
   /** A Hub request (plan §4.2). The url carries `rid` for the journals. */
-  sendHub(attemptId: string, url: string, headers: Record<string, string> = {}, method = "GET"): Promise<Message> {
+  sendHub(attemptId: string, url: string, headers: Record<string, string> = {}, method = "GET", extra: Record<string, unknown> = {}): Promise<Message> {
     this.#hubUrls.set(attemptId, url);
     const done = new Promise<Message>((resolve) => {
       // The operator closes every attempt within its operation limit; a
@@ -330,7 +330,7 @@ export class StandEngine {
         resolve(message);
       });
     });
-    this.#send({ type: "send", attemptId, method, url, headers, kind: "api", timeoutMs: 20_000 });
+    this.#send({ type: "send", attemptId, method, url, headers, kind: "api", timeoutMs: 20_000, ...extra });
     return done;
   }
 

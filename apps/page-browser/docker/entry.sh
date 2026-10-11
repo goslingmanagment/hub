@@ -10,7 +10,7 @@ set -eu
 SOCKS_HOST="${PB_SOCKS_HOST:?PB_SOCKS_HOST is required}"
 SOCKS_PORT="${PB_SOCKS_PORT:-1080}"
 RPC_PORT="${PB_RPC_PORT:-7700}"
-RPC_FROM="${PB_RPC_FROM:-0.0.0.0/0}"
+RPC_FROM="${PB_RPC_FROM:-127.0.0.1}"
 SOCKS_IP=$(getent ahostsv4 "$SOCKS_HOST" | awk 'NR==1{print $1}')
 [ -n "$SOCKS_IP" ] || { echo "cannot resolve $SOCKS_HOST" >&2; exit 1; }
 echo "$SOCKS_IP" > /run/socks-ip

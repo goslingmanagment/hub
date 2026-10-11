@@ -83,15 +83,17 @@ function keep(name: "holder" | "operator", script: string, restartMs: number): v
  *  screen, plan §4.8: web client on :6901 with basic auth, the password
  *  from PB_VNC_PASSWORD), else Xvfb. */
 function startXServer(): void {
-  const kasm = existsSync("/usr/bin/Xkasmvnc") && process.env.PB_VNC !== "0";
+  // No password, no screen: KasmVNC without its password would give anyone
+  // who reaches the port the page's screen and input (Astra review of the
+  // prototype, finding 12). The stand runs Xvfb then.
+  const password = process.env.PB_VNC_PASSWORD ?? "";
+  if (process.env.PB_VNC !== "0" && existsSync("/usr/bin/Xkasmvnc") && password === "") log("x.no_vnc", { why: "PB_VNC_PASSWORD is not set" });
+  const kasm = existsSync("/usr/bin/Xkasmvnc") && process.env.PB_VNC !== "0" && password !== "";
   let child: ChildProcess;
   if (kasm) {
     const passwordFile = "/home/pb-chrome/.kasmpasswd";
-    const password = process.env.PB_VNC_PASSWORD ?? "";
-    if (password !== "") {
-      // kasmvncpasswd reads the password twice from stdin; -w: write access.
-      execFileSync("kasmvncpasswd", ["-u", "owner", "-w", passwordFile], { input: `${password}\n${password}\n`, uid: CHROME_UID, gid: CHROME_UID, env: baseEnv("/home/pb-chrome") });
-    }
+    // kasmvncpasswd reads the password twice from stdin; -w: write access.
+    execFileSync("kasmvncpasswd", ["-u", "owner", "-w", passwordFile], { input: `${password}\n${password}\n`, uid: CHROME_UID, gid: CHROME_UID, env: baseEnv("/home/pb-chrome") });
     const args = [
       DISPLAY,
       "-geometry", "1920x1080", "-depth", "24",
@@ -100,7 +102,7 @@ function startXServer(): void {
       "-httpd", "/usr/share/kasmvnc/www",
       "-KasmPasswordFile", passwordFile,
       "-sslOnly", "0",
-      "-disableBasicAuth", password === "" ? "1" : "0",
+      "-disableBasicAuth", "0",
       // The web client authenticates at HTTP (basic auth against the
       // password file); no second VNC-level password.
       "-SecurityTypes", "None",
@@ -112,7 +114,7 @@ function startXServer(): void {
       "-publicIP", "127.0.0.1",
     ];
     child = spawn("Xkasmvnc", args, { uid: CHROME_UID, gid: CHROME_UID, env: baseEnv("/home/pb-chrome"), stdio: ["ignore", "pipe", "pipe"] });
-    log("x.started", { server: "Xkasmvnc", port: envInt("PB_VNC_PORT", 6901), auth: password !== "" });
+    log("x.started", { server: "Xkasmvnc", port: envInt("PB_VNC_PORT", 6901), auth: true });
   } else {
     child = spawn("Xvfb", [DISPLAY, "-screen", "0", "1920x1080x24", "-nolisten", "tcp", "-ac"], {
       uid: CHROME_UID,
@@ -278,7 +280,7 @@ function listenControl(): void {
 function watchdog(): void {
   setInterval(() => {
     const pid = pids.operator;
-    if (pid === null || !existsSync(HEARTBEAT)) return;
+    if (pid === null || pid === undefined || !existsSync(HEARTBEAT)) return;
     const age = Date.now() - statSync(HEARTBEAT).mtimeMs;
     if (age > WATCHDOG_MS) {
       log("watchdog.kill", { pid, ageMs: Math.round(age) });

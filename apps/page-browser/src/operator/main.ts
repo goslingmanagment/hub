@@ -10,7 +10,7 @@
 
 import { connect as tlsConnect } from "node:tls";
 import { createConnection } from "node:net";
-import { closeSync, createWriteStream, mkdirSync, openSync, utimesSync, type WriteStream } from "node:fs";
+import { closeSync, createWriteStream, existsSync, mkdirSync, openSync, readFileSync, utimesSync, type WriteStream } from "node:fs";
 import { createHash, type Hash } from "node:crypto";
 
 import { Cdp, type CdpEvent } from "./cdp.ts";
@@ -35,9 +35,11 @@ const CFG = {
   ctlSock: envStr("PB_CTL_SOCK", "/run/pb/ctl.sock"),
   proxyPort: envInt("PB_PROXY_PORT", 3128),
   rpcPort: envInt("PB_RPC_PORT", 7700),
-  rpcToken: envStr("PB_RPC_TOKEN", "stand-token"),
+  rpcToken: envStr("PB_RPC_TOKEN", ""),
   socks: {
-    host: envStr("PB_SOCKS_HOST", "stand-server"),
+    // The address entry.sh resolved and opened in the egress rules: the
+    // operator has no DNS of its own.
+    host: existsSync("/run/socks-ip") ? readFileSync("/run/socks-ip", "utf8").trim() : envStr("PB_SOCKS_HOST", "stand-server"),
     port: envInt("PB_SOCKS_PORT", 1080),
     user: envStr("PB_SOCKS_USER", "pb"),
     pass: envStr("PB_SOCKS_PASS", "pb-secret"),
@@ -79,6 +81,13 @@ const CFG = {
   /** The self-test also checks the rules extension (an image with it). */
   selftestRules: envStr("PB_SELFTEST_RULES", "0") === "1",
   selftestNeverPath: envStr("PB_SELFTEST_NEVER_PATH", "/api/v1/message/ack"),
+  /** How a Hub request is made in the isolated world: "fetch", or "xhr" —
+   *  as Fansly's own API calls (Angular's HttpClient over XMLHttpRequest),
+   *  so their headers match (stage 1, item 15). */
+  hubTransport: envStr("PB_HUB_TRANSPORT", "fetch"),
+  /** Fansly's key of fansly-client-check (public bundle, 2026-10-11); it is
+   *  checked against every value the site computes itself. */
+  fanslyCheckKey: envStr("PB_FANSLY_CHECK_KEY", "necvac-govry3-tybkYz"),
   /** Capture response bodies of API requests to disk (plan §4.2 step 7,
    *  §4.3 step 4). */
   captureBodies: envStr("PB_CAPTURE_BODIES", "1") === "1",
@@ -90,12 +99,11 @@ const CFG = {
 
 const PLACEHOLDER_SUFFIX = ".pb-hold.invalid";
 const BINDING = `__pb${Math.random().toString(36).slice(2, 10)}`;
+// Spec §2.6: Fansly's ping and the socket's authorisation
+// {"t":1,"d":"{\"token\":…,\"v\":3}"}; what else the site sends — stage 1, item 9.
 const GUARD_POLICY: GuardPolicy = {
   exact: envStr("PB_WS_ALLOW_EXACT", "p").split("|").filter(Boolean),
-  jsonTypes: envStr("PB_WS_ALLOW_TYPES", "1")
-    .split(",")
-    .filter(Boolean)
-    .map((value) => (/^\d+$/.test(value) ? Number(value) : value)),
+  json: JSON.parse(envStr("PB_WS_ALLOW_JSON", '[{"t":1,"keys":["t","d"],"dKeys":["token","v"]}]')) as GuardPolicy["json"],
 };
 const GUARD = guardSource(BINDING, GUARD_POLICY);
 
@@ -104,11 +112,19 @@ const GEO = (() => {
   return parts.length >= 2 && parts.every((part) => Number.isFinite(part)) ? { latitude: parts[0]!, longitude: parts[1]!, accuracy: parts[2] ?? 50 } : null;
 })();
 
+/** A host list entry is a name, or a pattern with `*` for one label part
+ *  (`cdn*.fansly.com`). */
+function hostIn(list: string[], host: string): boolean {
+  return list.some((entry) =>
+    entry.includes("*") ? new RegExp(`^${entry.split("*").map((part) => part.replace(/[.\\^$+?()[\]{}|]/g, "\\$&")).join("[^.]*")}$`).test(host) : entry === host,
+  );
+}
+
 function classify(host: string): HostClass {
-  if (CFG.hosts.site.includes(host)) return "site";
-  if (CFG.hosts.api.includes(host)) return "api";
-  if (CFG.hosts.ws.includes(host)) return "ws";
-  if (CFG.hosts.cdn.includes(host)) return "cdn";
+  if (hostIn(CFG.hosts.site, host)) return "site";
+  if (hostIn(CFG.hosts.api, host)) return "api";
+  if (hostIn(CFG.hosts.ws, host)) return "ws";
+  if (hostIn(CFG.hosts.cdn, host)) return "cdn";
   return "denied";
 }
 
@@ -118,6 +134,12 @@ type OpState = "starting" | "chrome_starting" | "attaching" | "selftest" | "ip_c
 
 const cdp = new Cdp();
 const egress = new Egress(CFG.socks, classify);
+// The engine's token is required; the stand's own token only on the stand
+// (Astra review of the prototype, finding 12).
+if (CFG.rpcToken.length < 16 && !(process.env.PB_STAND === "1" && CFG.rpcToken !== "")) {
+  log("fatal", { error: "PB_RPC_TOKEN is missing or too short" });
+  process.exit(2);
+}
 const rpc = new RpcServer(CFG.rpcToken);
 let state: OpState = "starting";
 let stateReason = "";
@@ -242,9 +264,15 @@ async function setUpTarget(info: TargetInfo, waiting: boolean): Promise<void> {
     }
   } catch (error) {
     log("target.setup_failed", { type: info.type, url: info.url, error: (error as Error).message });
-  } finally {
-    if (waiting) cdp.post("Runtime.runIfWaitingForDebugger", {}, s);
+    // A web target without its interception or socket guard never runs
+    // (Astra review of the prototype, finding 2) — unless it is gone already
+    // (closed, or CDP itself lost: the loss path handles that).
+    if (isPage || isWorker) {
+      if (!targetGone(error as Error)) halt(`setup of a ${info.type} failed: ${(error as Error).message}`);
+      return;
+    }
   }
+  if (waiting) cdp.post("Runtime.runIfWaitingForDebugger", {}, s);
   log("target.ready", { type: info.type, url: info.url, sessionId: s, waiting });
 }
 
@@ -275,21 +303,24 @@ cdp.on("Debugger.paused", (event) => {
       const result = frame
         ? await cdp.send<{ exceptionDetails?: unknown }>("Debugger.evaluateOnCallFrame", { callFrameId: frame.callFrameId, expression: GUARD, silent: true }, s)
         : await cdp.send<{ exceptionDetails?: unknown }>("Runtime.evaluate", { expression: GUARD, silent: true }, s);
-      if (result.exceptionDetails) log("guard.worker_failed", { type: info.type, url: info.url, details: result.exceptionDetails });
+      if (result.exceptionDetails) throw new Error("the guard threw");
       log("guard.worker_installed", { type: info.type, url: info.url, reason: params.reason, persistent: info.persistentGuard === true });
       if (!info.persistentGuard) await cdp.send("Debugger.removeBreakpoint", { breakpointId }, s).catch(() => undefined);
     } catch (error) {
+      // The worker stays paused before its first script; the page stops
+      // (unless the worker or CDP is gone already).
       log("guard.worker_failed", { type: info.type, url: info.url, error: (error as Error).message });
-    } finally {
-      if (info.persistentGuard) {
-        // The breakpoint stays for the next start of the worker.
-        cdp.post("Debugger.resume", {}, s);
-      } else {
-        // Disabling the debugger resumes the worker and leaves nothing behind
-        // (no pauses on the site's own `debugger;` statements).
-        info.guardBreakpoint = undefined;
-        cdp.post("Debugger.disable", {}, s);
-      }
+      if (!targetGone(error as Error)) halt(`socket guard failed in a ${info.type}`);
+      return;
+    }
+    if (info.persistentGuard) {
+      // The breakpoint stays for the next start of the worker.
+      cdp.post("Debugger.resume", {}, s);
+    } else {
+      // Disabling the debugger resumes the worker and leaves nothing behind
+      // (no pauses on the site's own `debugger;` statements).
+      info.guardBreakpoint = undefined;
+      cdp.post("Debugger.disable", {}, s);
     }
   })();
 });
@@ -351,6 +382,7 @@ cdp.on("Runtime.bindingCalled", (event) => {
       setState("failed", "blocked socket message");
     }
   }
+  if (payload.k === "guard_failed") halt(`socket guard failed in a ${info?.type ?? "context"}: ${String(payload.why)}`);
 });
 
 // ── operations: what one admission covers ─────────────────────────────────
@@ -377,6 +409,10 @@ interface Capture {
   contentLength: number | null;
   contentEncoding: string | null;
   armedMono: number;
+  /** The file could not be written (disk full...): the body is not whole. */
+  writeError: string | null;
+  /** Settles when the file is closed (or failed). */
+  flushed: Promise<void> | null;
 }
 
 interface Physical {
@@ -410,6 +446,8 @@ interface Operation {
   wireStatus: number | null;
   fromCache: boolean;
   fromServiceWorker: boolean;
+  /** Response headers the engine may use (Retry-After...), cookies left out. */
+  headers: Record<string, string> | null;
   sessionId: string | null;
   done: boolean;
   mainTimer: NodeJS.Timeout | null;
@@ -427,13 +465,18 @@ if (process.env.PB_DEBUG_NET === "1") {
     cdp.on(method, (event) => {
       const p = event.params as Record<string, any>;
       if (!byNetworkId.has(p.requestId)) return;
-      log("net", { m: method.slice(8), id: p.requestId, type: p.type ?? null, url: p.request?.url ?? p.response?.url ?? null, status: p.response?.status ?? p.statusCode ?? null, err: p.errorText ?? null });
+      log("net", { m: method.slice(8), id: p.requestId, type: p.type ?? null, url: String(p.request?.url ?? p.response?.url ?? "").split("?")[0], status: p.response?.status ?? p.statusCode ?? null, err: p.errorText ?? null });
     });
   }
 }
 
+/** Every operation not finished yet: a lost browser ends them all, so no
+ *  timer of the old browser acts on the new one (Astra review of the
+ *  prototype, finding 9). */
+const liveOps = new Set<Operation>();
+
 function newOperation(kind: Operation["kind"], id: string, key: string, onFinish: Operation["onFinish"]): Operation {
-  return {
+  const op: Operation = {
     kind,
     id,
     key,
@@ -447,12 +490,15 @@ function newOperation(kind: Operation["kind"], id: string, key: string, onFinish
     wireStatus: null,
     fromCache: false,
     fromServiceWorker: false,
+    headers: null,
     sessionId: null,
     done: false,
     mainTimer: null,
     limitTimer: null,
     onFinish,
   };
+  liveOps.add(op);
+  return op;
 }
 
 /** Start the operation's clock at its admission. */
@@ -463,8 +509,8 @@ function startLimit(op: Operation): void {
     // The gate's window goes with the operation; an API tunnel still busy
     // with it is cut so nothing of it leaves later.
     egress.cutClass("api", "operation over its time limit");
-    if (op.status !== null) {
-      finishOp(op, { outcome: "response", status: op.status, sends: op.main?.sends ?? 0, sendMono: op.sendMono, fromCache: op.fromCache, fromServiceWorker: op.fromServiceWorker, bodyEnd: "limit" });
+    if (op.status !== null && op.main) {
+      finishWithBody(op, op.main, "limit", null, { outcome: "response", status: op.status, headers: op.headers, sends: op.main.sends, sendMono: op.sendMono, fromCache: op.fromCache, fromServiceWorker: op.fromServiceWorker, bodyEnd: "limit" });
     } else {
       finishOp(op, { outcome: "transport_error", sent: (op.main?.sends ?? 0) > 0, error: "no end within the operation limit", sends: op.main?.sends ?? 0 });
     }
@@ -474,6 +520,7 @@ function startLimit(op: Operation): void {
 function finishOp(op: Operation, outcome: Record<string, unknown>): void {
   if (op.done) return;
   op.done = true;
+  liveOps.delete(op);
   if (op.mainTimer) clearTimeout(op.mainTimer);
   if (op.limitTimer) clearTimeout(op.limitTimer);
   for (const phys of [op.preflight, op.main]) if (phys?.networkId) byNetworkId.delete(phys.networkId);
@@ -502,15 +549,56 @@ function releasePhysical(op: Operation, event: CdpEvent, params: PausedParams, r
   // not on the preflight's loadingFinished (that may come later).
   if (role === "preflight" && op.kind === "site") awaitingMain.set(op.key, op);
   const id = windowId(phys);
-  const bodiless = ["GET", "HEAD", "OPTIONS"].includes(params.request.method.toUpperCase());
-  if (id && op.deadline !== null) egress.gate.open(id, op.deadline, bodiless);
+  const body = bodyBytes(params.request);
+  if (body === null && egress.gate.enabled) {
+    // The gate counts a request's records by its body: a body it cannot
+    // measure (a stream) would leave the window open on CDP's word alone.
+    log("release.refused", { op: op.id, why: "body of unknown length" });
+    void resolvePaused(event, "fail", { requestId: params.requestId, errorReason: "BlockedByClient" });
+    finishOp(op, { outcome: "transport_error", sent: false, error: "body of unknown length" });
+    return;
+  }
+  if (id && op.deadline !== null) egress.gate.open(id, op.deadline, body);
   // The response stops once more at its headers: for a request, the body's
   // stream is armed there, before a byte of it reaches the page; for a
   // preflight, its answer is handed on by Fetch.fulfillRequest (see
   // onResponseStage — the race of Chrome's preflight interception).
   const intercept =
-    (CFG.captureBodies && role === "main" && phys.networkId !== null) || (role === "preflight" && CFG.preflightFulfill) ? { interceptResponse: true } : {};
+    (CFG.captureBodies && role === "main" && phys.networkId !== null && capturable(params.request)) || (role === "preflight" && CFG.preflightFulfill)
+      ? { interceptResponse: true }
+      : {};
   void resolvePaused(event, "continue", { requestId: params.requestId, ...extra, ...intercept });
+}
+
+/** The body of a paused request in bytes: 0 = none, null = not known (a
+ *  stream or a blob the event does not carry). */
+function bodyBytes(request: PausedParams["request"]): number | null {
+  if (["GET", "HEAD", "OPTIONS"].includes(request.method.toUpperCase())) return 0;
+  const entries = request.postDataEntries;
+  if (entries && entries.length > 0) {
+    let total = 0;
+    for (const entry of entries) {
+      if (typeof entry.bytes !== "string") return null;
+      total += Buffer.from(entry.bytes, "base64").length;
+    }
+    return total;
+  }
+  if (typeof request.postData === "string") return Buffer.byteLength(request.postData, "utf8");
+  return request.hasPostData ? null : 0;
+}
+
+/** Responses that may carry secrets are never written down (spec §2.4: the
+ *  login operations; Astra review of the prototype, finding 7). Stage 1
+ *  keeps reads only, and none of the login, session or 2FA paths. */
+function capturable(request: PausedParams["request"]): boolean {
+  if (!["GET", "HEAD"].includes(request.method.toUpperCase())) return false;
+  let path = "";
+  try {
+    path = new URL(request.url).pathname;
+  } catch {
+    return false;
+  }
+  return !/\/(login|logout|session|sessions|twofa|auth|token|password)(\/|$)/i.test(path);
 }
 
 function isPreflight(params: PausedParams): boolean {
@@ -531,11 +619,14 @@ function opKey(url: string, method: string): string {
 }
 
 cdp.on("Network.requestWillBeSentExtraInfo", (event) => {
-  const params = event.params as { requestId: string };
+  const params = event.params as { requestId: string; headers?: Record<string, string> };
   const phys = byNetworkId.get(params.requestId);
   if (!phys || phys.done) return;
   const op = phys.op;
   phys.sends += 1;
+  // Stage 1, item 15: the names of the headers as sent, in order — of the
+  // site's requests and of Hub's, to compare (never the values).
+  if (phys.sends === 1 && params.headers) observe("headers", { op: op.id, opKind: op.kind, role: phys.role, path: op.key.split(" ")[1] ? new URL(op.key.split(" ")[1]!).pathname : null, names: Object.keys(params.headers) });
   observe("send", { op: op.id, kind: op.kind, role: phys.role, n: phys.sends });
   const wid = windowId(phys);
   if (wid) egress.gate.announced(wid);
@@ -548,20 +639,37 @@ cdp.on("Network.requestWillBeSentExtraInfo", (event) => {
   if (op.kind === "hub" && phys.role === "main" && phys.sends === 1) rpc.send({ type: "sent", attemptId: op.id, mono: monoMs() });
 });
 
+/** Network ids of Hub requests that were redirected: their next hop is
+ *  refused. */
+const refusedHops = new Set<string>();
+
 /** The session a request's Network events come on (its page or worker). */
 const sessionOfRequest = new Map<string, string>();
 
 cdp.on("Network.requestWillBeSent", (event) => {
-  const params = event.params as { requestId: string; request: { url: string }; redirectResponse?: { status: number } };
+  const params = event.params as { requestId: string; request: { url: string }; redirectResponse?: { status: number; headers?: Record<string, string> } };
   if (event.sessionId) {
     sessionOfRequest.set(params.requestId, event.sessionId);
     if (sessionOfRequest.size > 5000) sessionOfRequest.delete(sessionOfRequest.keys().next().value!);
   }
   const phys = byNetworkId.get(params.requestId);
   if (phys && params.redirectResponse) {
-    // A redirect ends this admission: the next hop stops in Fetch again and
-    // needs its own admission.
-    observe("redirect", { op: phys.op.id, status: params.redirectResponse.status, to: params.request.url });
+    // A redirect ends this admission: the operation finishes with it, and
+    // the next hop stops in Fetch again as a request of its own that needs
+    // its own admission (Astra review of the prototype, finding 10).
+    observe("redirect", { op: phys.op.id, status: params.redirectResponse.status, to: params.request.url.split("?")[0] });
+    const op = phys.op;
+    if (phys.role === "main" && !op.done) {
+      phys.done = true;
+      // A Hub request never follows a redirect (XMLHttpRequest would): the
+      // next hop is refused when it pauses.
+      if (op.kind === "hub") {
+        refusedHops.add(params.requestId);
+        if (refusedHops.size > 1000) refusedHops.delete(refusedHops.values().next().value!);
+      }
+      const headers = engineHeaders(params.redirectResponse.headers);
+      finishOp(op, { outcome: "response", status: params.redirectResponse.status, headers, location: headers?.location ?? null, redirect: true, sends: phys.sends, sendMono: op.sendMono });
+    }
   }
 });
 
@@ -570,6 +678,16 @@ cdp.on("Network.responseReceivedExtraInfo", (event) => {
   const phys = byNetworkId.get(params.requestId);
   if (phys && phys.role === "main") phys.op.wireStatus = params.statusCode;
 });
+
+/** A response's headers for the engine: everything but cookies. */
+function engineHeaders(headers: Record<string, string> | undefined): Record<string, string> | null {
+  if (!headers) return null;
+  const out: Record<string, string> = {};
+  for (const [name, value] of Object.entries(headers)) {
+    if (!/^set-cookie2?$/i.test(name)) out[name.toLowerCase()] = value;
+  }
+  return out;
+}
 
 /** Where the answer came from (plan §4.2 step 8). */
 function sourceOf(op: Operation): string {
@@ -595,6 +713,7 @@ cdp.on("Network.responseReceived", (event) => {
   } else {
     op.sendMono = sendMono;
     op.status = params.response.status;
+    op.headers = engineHeaders((params.response as { headers?: Record<string, string> }).headers);
     op.fromCache = params.response.fromDiskCache === true;
     op.fromServiceWorker = params.response.fromServiceWorker === true;
     op.sessionId = event.sessionId ?? null;
@@ -616,9 +735,10 @@ cdp.on("Network.loadingFinished", (event) => {
     if (!op.main) op.mainTimer = setTimeout(() => finishOp(op, { outcome: "transport_error", sent: false, error: "the request did not follow its preflight" }), 5000);
     return;
   }
-  finishOp(op, {
+  finishWithBody(op, phys, "finished", params.encodedDataLength, {
     outcome: "response",
     status: op.status,
+    headers: op.headers,
     sends: phys.sends,
     sendMono: op.sendMono,
     fromCache: op.fromCache,
@@ -627,7 +747,6 @@ cdp.on("Network.loadingFinished", (event) => {
     sessionId: event.sessionId ?? null,
     source: sourceOf(op),
     wireStatus: op.wireStatus,
-    body: sealBody(phys, "finished", params.encodedDataLength),
   });
 });
 
@@ -642,9 +761,10 @@ cdp.on("Network.loadingFailed", (event) => {
     // end as "canceled" although the response arrived. For the engine the
     // request was answered; whether the body is whole is judged by its
     // length or shape, not by this event.
-    finishOp(op, {
+    finishWithBody(op, phys, "canceled", null, {
       outcome: "response",
       status: op.status,
+      headers: op.headers,
       sends: phys.sends,
       sendMono: op.sendMono,
       fromCache: op.fromCache,
@@ -653,11 +773,11 @@ cdp.on("Network.loadingFailed", (event) => {
       sessionId: event.sessionId ?? null,
       source: sourceOf(op),
       wireStatus: op.wireStatus,
-      body: sealBody(phys, "canceled", null),
     });
     return;
   }
   sealBody(phys, "failed", null);
+  phys.capture = null;
   finishOp(op, {
     outcome: "transport_error",
     // Chrome reported the request's headers as sent at least once → its
@@ -807,7 +927,13 @@ async function onResponseStage(event: CdpEvent, params: ResponseStage): Promise<
         contentLength,
         contentEncoding: headerOf(params.responseHeaders, "content-encoding"),
         armedMono: monoMs(),
+        writeError: null,
+        flushed: null,
       };
+      capture.stream.on("error", (error: Error) => {
+        capture.writeError = error.message;
+        capture.broken = true;
+      });
       const armed = await cdp.send<{ bufferedData?: string }>("Network.streamResourceContent", { requestId: params.networkId }, sessionId);
       phys.capture = capture;
       if (armed.bufferedData) appendBody(capture, Buffer.from(armed.bufferedData, "base64"), null, 0);
@@ -853,9 +979,7 @@ function onBodyData(params: { requestId: string; dataLength: number; encodedData
         sitePage.sessionId,
       );
     }
-    const body = sealBody(phys, "limit", null);
-    phys.capture = null;
-    finishOp(op, { outcome: "response", status: op.status, bodyOverflow: true, sends: phys.sends, sendMono: op.sendMono, body });
+    finishWithBody(op, phys, "limit", null, { outcome: "response", status: op.status, headers: op.headers, bodyOverflow: true, sends: phys.sends, sendMono: op.sendMono });
   }
 }
 
@@ -871,7 +995,10 @@ cdp.on("Network.dataReceived", (event) => {
 function sealBody(phys: Physical, ended: "finished" | "canceled" | "failed" | "limit", totalEncoded: number | null): Record<string, unknown> | null {
   const capture = phys.capture;
   if (!capture) return null;
-  capture.stream.end();
+  capture.flushed = new Promise<void>((resolve) => {
+    capture.stream.once("error", () => resolve());
+    capture.stream.end(() => resolve());
+  });
   const encoded = totalEncoded ?? capture.encoded;
   let complete = false;
   let how = "incomplete";
@@ -909,11 +1036,39 @@ function sealBody(phys: Physical, ended: "finished" | "canceled" | "failed" | "l
   };
 }
 
+/** Finish an operation once its body file is closed: the result says the
+ *  body is whole only if the file holds it (Astra review of the prototype,
+ *  finding 11). */
+function finishWithBody(op: Operation, phys: Physical, ended: "finished" | "canceled" | "failed" | "limit", totalEncoded: number | null, outcome: Record<string, unknown>): void {
+  const capture = phys.capture;
+  const body = sealBody(phys, ended, totalEncoded);
+  phys.capture = null;
+  if (!capture?.flushed || !body) {
+    finishOp(op, { ...outcome, body });
+    return;
+  }
+  void capture.flushed.then(() => {
+    if (capture.writeError !== null) {
+      body.complete = false;
+      body.how = `the file was not written: ${capture.writeError}`;
+    }
+    finishOp(op, { ...outcome, body });
+  });
+}
+
 // ── Fetch: every request of every context stops here ─────────────────────
 
 interface PausedParams {
   requestId: string;
-  request: { url: string; urlFragment?: string; method: string; headers: Record<string, string> };
+  request: {
+    url: string;
+    urlFragment?: string;
+    method: string;
+    headers: Record<string, string>;
+    postData?: string;
+    hasPostData?: boolean;
+    postDataEntries?: Array<{ bytes?: string }>;
+  };
   frameId?: string;
   resourceType: string;
   networkId?: string;
@@ -940,7 +1095,7 @@ cdp.on("Fetch.requestPaused", (event) => {
     void onResponseStage(event, stage);
     return;
   }
-  if (process.env.PB_DEBUG_FETCH === "1") log("fetch.paused", { method: params.request.method, url: params.request.url, frag: params.request.urlFragment ?? null, networkId: params.networkId ?? null, type: params.resourceType });
+  if (process.env.PB_DEBUG_FETCH === "1") log("fetch.paused", { method: params.request.method, url: params.request.url.split("?")[0], frag: params.request.urlFragment ?? null, networkId: params.networkId ?? null, type: params.resourceType });
   if (event.seq <= replayUpTo) {
     // Paused under a previous operator instance: its admission (if any) is
     // gone with that instance. Never released — failed.
@@ -956,6 +1111,11 @@ cdp.on("Fetch.requestPaused", (event) => {
     return;
   }
   const fragment = params.request.urlFragment ?? url.hash;
+  if (params.networkId && refusedHops.has(params.networkId)) {
+    observe("hub.redirect_hop_refused", { url: params.request.url.split("?")[0] });
+    void resolvePaused(event, "fail", { requestId, errorReason: "BlockedByClient" });
+    return;
+  }
   if (fragment.startsWith("#pb-selftest-")) return onSelftestPaused(event, params, fragment);
   if (fragment.startsWith("#hub-") || url.hostname.endsWith(PLACEHOLDER_SUFFIX)) return onHubPaused(event, params, fragment.slice(5));
   const cls = classify(url.hostname);
@@ -973,6 +1133,99 @@ cdp.on("Fetch.requestPaused", (event) => {
   // an HTTP/2 session a later socket would ride without its own tunnel.
   void resolvePaused(event, "fail", { requestId, errorReason: "BlockedByClient" });
 });
+
+// ── the site's session, for Hub requests (plan §4.7) ──────────────────────
+//
+// Taken from the site's own API requests as they pause in Fetch and kept in
+// memory only: never logged, never written. A Hub request gets the headers
+// the site's script set on its last API request, in their order (Angular's
+// interceptors: accept, authorization, fansly-client-id, -ts, -session-id,
+// -check), with the time and the check of its own path.
+
+/** Headers Chrome sets itself: not the site's, not copied. */
+const BROWSER_HEADERS = new Set(["user-agent", "referer", "origin", "accept-encoding", "accept-language", "host", "connection", "cookie", "content-length", "priority", "sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform", "sec-fetch-site", "sec-fetch-mode", "sec-fetch-dest", "sec-fetch-user", "sec-fetch-storage-access", "upgrade-insecure-requests"]);
+
+const siteSession = {
+  /** The site's script-set headers of its last API GET, in order. */
+  template: null as Array<[string, string]> | null,
+  /** fansly-client-check computed with our key matched the site's own. */
+  checkOk: null as boolean | null,
+  checkAlarmed: false,
+};
+
+/** The site's cached client time: now ± 5 s, never going back, refreshed
+ *  every 3 s (Fansly's bundle). */
+let fanslyClientTs = Date.now() + (5000 - Math.floor(10_000 * Math.random()));
+setInterval(() => {
+  const next = Date.now() + (5000 - Math.floor(10_000 * Math.random()));
+  if (next > fanslyClientTs) fanslyClientTs = next;
+}, 3000).unref();
+
+/** cyrb53, as Fansly's bundle computes fansly-client-check. */
+function cyrb53(text: string, seed = 0): number {
+  let h1 = 0xdeadbeef ^ seed;
+  let h2 = 0x41c6ce57 ^ seed;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507);
+  h1 ^= Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507);
+  h2 ^= Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return 4294967296 * (2097151 & h2) + (h1 >>> 0);
+}
+
+function fanslyClientCheck(pathname: string, deviceId: string): string {
+  return cyrb53(`${CFG.fanslyCheckKey}_${pathname}_${deviceId}`).toString(16);
+}
+
+function noteSiteSession(request: PausedParams["request"]): void {
+  if (request.method.toUpperCase() !== "GET") return;
+  const template: Array<[string, string]> = [];
+  for (const [name, value] of Object.entries(request.headers)) {
+    if (!BROWSER_HEADERS.has(name.toLowerCase())) template.push([name, value]);
+  }
+  if (!template.some(([name]) => name.toLowerCase() === "authorization")) return;
+  siteSession.template = template;
+  const check = template.find(([name]) => name.toLowerCase() === "fansly-client-check")?.[1];
+  const deviceId = template.find(([name]) => name.toLowerCase() === "fansly-client-id")?.[1];
+  if (check !== undefined && deviceId !== undefined) {
+    let pathname = "";
+    try {
+      pathname = new URL(request.url).pathname;
+    } catch {
+      return;
+    }
+    siteSession.checkOk = fanslyClientCheck(pathname, deviceId) === check;
+    if (!siteSession.checkOk && !siteSession.checkAlarmed) {
+      // The site's algorithm or key changed: Hub requests would differ from
+      // the site's — the transport is not ready (plan §4.7).
+      siteSession.checkAlarmed = true;
+      log("session.check_mismatch", {});
+      rpc.send({ type: "alarm", kind: "client_check_mismatch", detail: {} });
+    }
+  }
+}
+
+/** The headers of a Hub request: the site's template, its time and check
+ *  for this path, then the engine's own; or why there are none. */
+function sessionHeaders(pathname: string, extra: Record<string, string>): Array<[string, string]> | string {
+  const template = siteSession.template;
+  if (template === null) return "no session seen yet: the site made no API request with authorization";
+  if (siteSession.checkOk === false) return "fansly-client-check of the site differs from ours: transport not ready";
+  const deviceId = template.find(([name]) => name.toLowerCase() === "fansly-client-id")?.[1] ?? "";
+  const out: Array<[string, string]> = [];
+  for (const [name, value] of template) {
+    const lower = name.toLowerCase();
+    if (lower === "fansly-client-ts") out.push([name, String(fanslyClientTs)]);
+    else if (lower === "fansly-client-check") out.push([name, fanslyClientCheck(pathname, deviceId)]);
+    else out.push([name, value]);
+  }
+  for (const [name, value] of Object.entries(extra)) if (!out.some(([have]) => have.toLowerCase() === name.toLowerCase())) out.push([name, value]);
+  return out;
+}
 
 // ── site requests: admitted by the engine (plan §4.3) ─────────────────────
 
@@ -993,6 +1246,7 @@ function onSitePaused(event: CdpEvent, params: PausedParams): void {
   const preflight = isPreflight(params);
   const method = preflight ? preflightMethod(params) : params.request.method;
   const key = opKey(params.request.url, method);
+  if (!preflight) noteSiteSession(params.request);
   if (!preflight) {
     // The request of an operation whose preflight was admitted and passed.
     const op = awaitingMain.get(key);
@@ -1100,9 +1354,21 @@ async function isolatedWorld(page: TargetInfo): Promise<number> {
 // read, when the body was still arriving during the read; and it sends no end
 // event at all while a body is not consumed (stand findings). The operator
 // reads the response from CDP; the buffer here is dropped at once.
-const HUB_FETCH = `function (id, url, method, headers) {
+// Headers come as [name, value] pairs: their order is the site's.
+const HUB_FETCH = `function (id, url, method, headers, transport) {
   const g = globalThis;
   const live = g.__pbLive || (g.__pbLive = new Map());
+  if (transport === "xhr") {
+    const x = new XMLHttpRequest();
+    const entry = { controller: { abort: () => x.abort() }, request: x };
+    live.set(id, entry);
+    x.open(method, url, true);
+    x.withCredentials = true;
+    x.responseType = "arraybuffer";
+    for (let i = 0; i < headers.length; i++) x.setRequestHeader(headers[i][0], headers[i][1]);
+    x.send();
+    return true;
+  }
   const entry = { controller: new AbortController(), promise: null };
   live.set(id, entry);
   entry.promise = fetch(url, { method: method, headers: headers, credentials: "include", mode: "cors", redirect: "manual", signal: entry.controller.signal })
@@ -1138,6 +1404,16 @@ async function onHubSend(message: EngineMessage): Promise<void> {
   const issued = new URL(attempt.url);
   if (CFG.hubPlaceholderHost) issued.hostname = `${real.hostname}${PLACEHOLDER_SUFFIX}`;
   issued.hash = `hub-${attemptId}`;
+  // The session's headers come from the site's own requests (plan §4.7).
+  let headers: Array<[string, string]> = Object.entries(attempt.headers);
+  if (message.session === true) {
+    const built = sessionHeaders(real.pathname, attempt.headers);
+    if (typeof built === "string") {
+      hubResult(attempt, { outcome: "transport_error", sent: false, error: built });
+      return;
+    }
+    headers = built;
+  }
   try {
     attempt.worldId = await isolatedWorld(sitePage);
     attempt.pausedTimer = setTimeout(
@@ -1149,7 +1425,7 @@ async function onHubSend(message: EngineMessage): Promise<void> {
       {
         functionDeclaration: HUB_FETCH,
         executionContextId: attempt.worldId,
-        arguments: [{ value: attemptId }, { value: issued.toString() }, { value: attempt.method }, { value: attempt.headers }],
+        arguments: [{ value: attemptId }, { value: issued.toString() }, { value: attempt.method }, { value: CFG.hubTransport === "xhr" ? headers : Object.fromEntries(headers) }, { value: CFG.hubTransport }],
         returnByValue: true,
       },
       sitePage.sessionId,
@@ -1437,17 +1713,48 @@ let testSiteUrlSame = false;
  *  once, unasked (what the rules extension must still stop). */
 let testSiteBypass = false;
 
+/** The command failed because its target or CDP itself is gone: nothing of
+ *  that target runs any more. */
+function targetGone(error: Error): boolean {
+  return restarting || !cdp.cdpUp || /session with given id not found|target closed|no target with given id|holder link down|cdp (closed|down)/i.test(error.message);
+}
+
+/** A check that must hold did not (the socket guard or the interception of
+ *  a target is not in place): the exit closes, Chrome goes, and the page
+ *  stays stopped until the engine restarts it — the same failure would come
+ *  back with every automatic restart. */
+let halted: string | null = null;
+
+function halt(reason: string): void {
+  if (halted !== null) return;
+  halted = reason;
+  egress.closeExit(`halted: ${reason}`);
+  log("halted", { reason });
+  rpc.send({ type: "alarm", kind: "halted", detail: { reason } });
+  setState("failed", `halted: ${reason}`);
+  void supervisor({ cmd: "chrome.kill", reason: `halted: ${reason}` }).catch(() => undefined);
+}
+
 async function controlLost(reason: string): Promise<void> {
   // Stand only: react late, so what Chrome releases meets the open exit and
   // only the gate stands in its way.
+  // A window still open at the loss may have carried a request Chrome
+  // released without us instead of the admitted one (the gate cannot tell
+  // two requests apart inside TLS; Astra review of the prototype, finding 4):
+  // at most the window's budget of one request the rules extension allows —
+  // the fallback rule of owner decision №10. The alarm says so.
+  const gateAtLoss = egress.gate.state;
   if (lossReactionDelayMs > 0) await sleep(lossReactionDelayMs);
   egress.closeExit(`control lost: ${reason}`);
-  rpc.send({ type: "alarm", kind: "cdp_lost", detail: { reason } });
+  rpc.send({ type: "alarm", kind: "cdp_lost", detail: { reason, windowOpen: gateAtLoss.phase === "open", window: gateAtLoss.window } });
   if (restarting) return;
   restarting = true;
   setState("failed", `control lost: ${reason}`);
   targets.clear();
   sitePage = null;
+  for (const op of [...liveOps]) {
+    finishOp(op, { outcome: "transport_error", sent: (op.main?.sends ?? 0) > 0 || op.main !== null, error: `control lost: ${reason}` });
+  }
   byNetworkId.clear();
   awaitingMain.clear();
   for (const [, pending] of pendingSite) clearTimeout(pending.timer);
@@ -1460,6 +1767,10 @@ async function controlLost(reason: string): Promise<void> {
   replayUpTo = linked.lastSeq;
   log("holder.relinked", linked);
   restarting = false;
+  if (halted !== null) {
+    setState("failed", `halted: ${halted}`);
+    return;
+  }
   await startLoop();
 }
 
@@ -1546,16 +1857,16 @@ rpc.onMessage = (message) => {
 };
 
 // Socket tunnels: admitted by the engine, one CONNECT = one socket.
-const pendingWs = new Map<string, (ok: boolean) => void>();
+const pendingWs = new Map<string, (deadline: number | null) => void>();
 let wsAdmitSeq = 0;
 egress.admitWsTunnel = (host) =>
   new Promise((resolve) => {
-    if (!rpc.up) return resolve(false);
+    if (!rpc.up) return resolve(null);
     const connId = `ws-${process.pid}-${++wsAdmitSeq}`;
     pendingWs.set(connId, resolve);
     rpc.send({ type: "wsAdmit", connId, host });
     setTimeout(() => {
-      if (pendingWs.delete(connId)) resolve(false);
+      if (pendingWs.delete(connId)) resolve(null);
     }, 10_000);
   });
 
@@ -1563,7 +1874,10 @@ function onWsAdmitResult(message: EngineMessage): void {
   const resolve = pendingWs.get(String(message.connId));
   if (!resolve) return;
   pendingWs.delete(String(message.connId));
-  resolve(message.ok === true && Number(message.deadlineMono) > monoMs());
+  // The deadline goes with the tunnel: the socket's handshake must leave
+  // before it, however long SOCKS and TLS take.
+  const deadline = Number(message.deadlineMono);
+  resolve(message.ok === true && Number.isFinite(deadline) && deadline > monoMs() ? deadline : null);
 }
 
 egress.gate.onEvent = (event) => {
@@ -1580,7 +1894,13 @@ async function onCommand(message: EngineMessage): Promise<void> {
         egress.closeExit("engine command");
         return reply({ ok: true });
       case "openExit":
+        if (halted !== null) return reply({ ok: false, error: `halted: ${halted}` });
         egress.openExit();
+        return reply({ ok: true });
+      case "restart":
+        // After a halt: the engine starts the page again on purpose.
+        halted = null;
+        if (state === "failed" && !restarting) void startLoop();
         return reply({ ok: true });
       case "test.breakCdp":
       case "test.dropCdp":

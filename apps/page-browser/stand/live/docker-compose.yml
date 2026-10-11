@@ -1,0 +1,90 @@
+# The test on a real Fansly account (plan §5, stage 1, items 4–17), PROTOTYPE.
+# Run by hand on the owner's machine, never in CI. Secrets come from
+# 1Password into the environment of `docker compose up` and nowhere else —
+# see RUNBOOK.md next to this file.
+#
+# What runs: one page container (the Fansly profile image: Chrome, holder,
+# operator, rules extension for Fansly, KasmVNC) whose only way out is the
+# test SOCKS5 proxy; and the test engine (live/engine.ts), the operator's RPC
+# peer with Fansly's pacing. KasmVNC (the owner's screen for the login) is
+# published on this machine's loopback only.
+
+name: pb-live
+
+networks:
+  live:
+    ipam:
+      config:
+        - subnet: 10.250.240.0/24
+          gateway: 10.250.240.1
+
+volumes:
+  # The page's Chrome profile (its session after the login) and its capture
+  # of response bodies: deleted with `docker compose -p pb-live down -v`.
+  profile:
+  buffer:
+
+services:
+  browser:
+    image: ${PB_IMAGE:-pb-browser:fansly}
+    networks:
+      live:
+        ipv4_address: 10.250.240.20
+    cap_add: [NET_ADMIN]
+    # PROTOTYPE, as on the stand: Chrome's sandbox needs user namespaces.
+    security_opt:
+      - seccomp=unconfined
+    shm_size: 1gb
+    ports:
+      # The owner's screen: http://127.0.0.1:16901 (user "owner").
+      - "127.0.0.1:16901:6901"
+    volumes:
+      - profile:/data/profile
+      - buffer:/data/buffer
+      - ${PB_SRC:-../..}/src:/opt/page-browser/src:ro
+      - ${PB_SRC:-../..}/docker:/opt/page-browser/docker:ro
+    environment:
+      PB_SOCKS_HOST: ${PB_SOCKS_HOST:?the test proxy host}
+      PB_SOCKS_PORT: ${PB_SOCKS_PORT:?the test proxy port}
+      PB_SOCKS_USER: ${PB_SOCKS_USER:?the test proxy user}
+      PB_SOCKS_PASS: ${PB_SOCKS_PASS:?the test proxy password}
+      # The proxy's exit address: the exit opens only if the check sees it.
+      PB_PINNED_IP: ${PB_PINNED_IP:?the test proxy exit IP}
+      PB_RPC_TOKEN: ${PB_RPC_TOKEN:?a random token, see RUNBOOK.md}
+      PB_RPC_FROM: 10.250.240.30
+      PB_VNC_PASSWORD: ${PB_VNC_PASSWORD:?the screen password, see RUNBOOK.md}
+      # Docker forwards the published port from the network's gateway.
+      PB_VNC_FROM: 10.250.240.1
+      PB_SITE_URL: https://fansly.com/
+      PB_HOSTS_SITE: fansly.com,assets.fansly.com
+      PB_HOSTS_API: apiv3.fansly.com
+      PB_HOSTS_WS: wsv3.fansly.com
+      PB_HOSTS_CDN: cdn*.fansly.com
+      PB_HUB_TRANSPORT: xhr
+      # Stage 1, item 9 learns what the site sends: a message off the list
+      # is not sent and is journalled; the page keeps working.
+      PB_ON_BLOCKED_SEND: log
+      PB_SELFTEST_RULES: "1"
+      PB_SELFTEST_NEVER_PATH: /api/v1/message/ack
+      PB_IPCHECK_HOST: api.ipify.org
+      # The page's environment by the proxy's region (plan §4.1 step 2).
+      PB_TZ: ${PB_TZ:?the proxy region's time zone, e.g. America/New_York}
+      PB_LANG: ${PB_LANG:-en-US}
+      PB_GEO: ${PB_GEO:-}
+      PB_CHROME_ARGS: --ignore-gpu-blocklist
+      PB_DEBUG_RECORDS: ${PB_DEBUG_RECORDS:-0}
+
+  engine:
+    image: node:22-bookworm-slim
+    depends_on: [browser]
+    networks:
+      live:
+        ipv4_address: 10.250.240.30
+    volumes:
+      - ${PB_SRC:-../..}:/pb:ro
+      - ../results:/stand/results
+    environment:
+      LIVE_OPERATOR: ws://10.250.240.20:7700/rpc
+      PB_RPC_TOKEN: ${PB_RPC_TOKEN}
+      LIVE_PAUSE_MS: ${LIVE_PAUSE_MS:-2500}
+    command: ["node", "--no-warnings", "/pb/stand/live/engine.ts"]

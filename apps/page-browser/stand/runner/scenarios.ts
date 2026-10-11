@@ -180,6 +180,7 @@ function controlLoss(fault: LossFault, releaseOne: boolean, opts: { lossDelayMs?
     } else {
       await sleep(delay);
     }
+    ctx.arm();
     const faultMono = monoMs();
     await injectLoss(ctx, fault);
     ctx.engine.heldSite.clear();
@@ -214,13 +215,15 @@ function openWindow(lossDelayMs: number): Scenario {
     const sitePrefix = `p-${tag}-`;
     ctx.engine.decideSite = (ask) => (ask.rid?.startsWith(sitePrefix) ? "hold" : { grant: true });
     const rids = [0, 1, 2, 3, 4].map((i) => `${sitePrefix}${i}`);
-    // Preflights cached for this run: the request itself is the only
-    // physical request, released straight into the window.
-    await ctx.stand.config({ corsMaxAge: 600 });
-    await ctx.engine.eval(`(${JSON.stringify(rids)}).forEach((r) => site.api(r)), true`, false);
+    // Simple requests (no custom headers): no preflight, so the request
+    // itself is the physical request released straight into the window. (The
+    // earlier version cached preflights per URL — every rid is a new URL, so
+    // it exercised the preflight's window; Astra review, finding 13.)
+    await ctx.engine.eval(`(${JSON.stringify(rids)}).forEach((r) => site.api(r, { plain: true })), true`, false);
     await until(() => [...ctx.engine.heldSite.values()].filter((ask) => ask.rid?.startsWith(sitePrefix)).length >= 5, 10_000, "5 held");
     const [first] = [...ctx.engine.heldSite.values()].filter((ask) => ask.rid?.startsWith(sitePrefix));
     ctx.engine.releaseSite(first!.siteRequestId, { grant: true });
+    ctx.arm();
     const faultMono = monoMs();
     await ctx.engine.command("test.breakCdp", {}, 3000);
     ctx.engine.heldSite.clear();
@@ -228,12 +231,109 @@ function openWindow(lossDelayMs: number): Scenario {
     const events = await ctx.stand.journal();
     const checked = checkAdmitted(events, ctx.engine.grants, sitePrefix);
     const arrived = events.filter((event) => event.t === "req" && String(event.rid ?? "").startsWith(sitePrefix)).map((event) => `${event.method} ${event.rid} +${Math.round(event.mono - faultMono)}ms`);
-    await ctx.stand.config({ corsMaxAge: 0 });
+    // Was the window open at the loss (the case this scenario exists for)?
+    const alarm = ctx.engine.alarms.find((a) => a.kind === "cdp_lost" && Number(a.recvMono) >= faultMono);
     ctx.engine.close();
     await ctx.engine.waitReady(180_000);
-    return { ok: checked.violations.length === 0, violations: checked.violations, notes: { lossDelayMs, released: first!.rid, arrived } };
+    return { ok: checked.violations.length === 0, violations: checked.violations, notes: { lossDelayMs, released: first!.rid, arrived, windowOpenAtLoss: (alarm?.detail as { windowOpen?: boolean } | undefined)?.windowOpen ?? null } };
   };
 }
+
+/** CDP is lost while the admitted request's answer is still coming (its body
+ *  streams for 1.5 s): the gate is in its responding phase, and what Chrome
+ *  releases then must stay held. */
+function respondingLoss(lossDelayMs: number): Scenario {
+  return async (ctx) => {
+    await fresh(ctx);
+    const tag = `resp-${lossDelayMs}-${ctx.run}-${Date.now() % 100000}`;
+    await ctx.engine.command("test.config", { lossDelayMs, gate: true });
+    await warm(ctx, tag);
+    const sitePrefix = `p-${tag}-`;
+    ctx.engine.decideSite = (ask) => (ask.rid?.startsWith(sitePrefix) ? "hold" : { grant: true });
+    const slow = `${sitePrefix}0`;
+    const rest = [1, 2, 3, 4].map((i) => `${sitePrefix}${i}`);
+    await ctx.engine.eval(`site.api(${JSON.stringify(slow)}, { query: "size=200000&slow=1500" }), (${JSON.stringify(rest)}).forEach((r) => site.api(r)), true`, false);
+    await until(() => [...ctx.engine.heldSite.values()].filter((ask) => ask.rid?.startsWith(sitePrefix)).length >= 5, 10_000, "5 held");
+    const first = [...ctx.engine.heldSite.values()].find((ask) => ask.rid === slow);
+    ctx.engine.releaseSite(first!.siteRequestId, { grant: true });
+    // The answer starts within milliseconds on the stand and streams for 1.5 s.
+    const delay = 300 + Math.random() * 700;
+    await sleep(delay);
+    ctx.arm();
+    const faultMono = monoMs();
+    await ctx.engine.command("test.breakCdp", {}, 3000);
+    ctx.engine.heldSite.clear();
+    await sleep(4000);
+    const events = await ctx.stand.journal();
+    const checked = checkAdmitted(events, ctx.engine.grants, sitePrefix);
+    const arrived = events.filter((event) => event.t === "req" && String(event.rid ?? "").startsWith(sitePrefix)).map((event) => `${event.method} ${event.rid} +${Math.round(event.mono - faultMono)}ms`);
+    const held = ctx.engine.observed.filter((o) => o.kind === "gate" && o.gateEvent === "held").map((o) => `${String(o.phase)}:${String(o.length)}`);
+    ctx.engine.close();
+    await ctx.engine.waitReady(180_000);
+    return { ok: checked.violations.length === 0, violations: checked.violations, notes: { lossDelayMs, delayMs: Math.round(delay), arrived, held } };
+  };
+}
+
+/** A CDP loss while the released request opens a new connection to the API
+ *  (SOCKS answers in 150 ms): that window forwards its whole connection
+ *  until Chrome's announcement — the residual of the gate. */
+function newConnectionLoss(lossDelayMs: number): Scenario {
+  return async (ctx) => {
+    await fresh(ctx);
+    const tag = `nc-${lossDelayMs}-${ctx.run}-${Date.now() % 100000}`;
+    await ctx.engine.command("test.config", { lossDelayMs, gate: true });
+    await warm(ctx, tag);
+    const sitePrefix = `p-${tag}-`;
+    ctx.engine.decideSite = (ask) => (ask.rid?.startsWith(sitePrefix) ? "hold" : { grant: true });
+    const rids = [0, 1, 2, 3, 4].map((i) => `${sitePrefix}${i}`);
+    await ctx.engine.eval(`(${JSON.stringify(rids)}).forEach((r) => site.api(r)), true`, false);
+    await until(() => [...ctx.engine.heldSite.values()].filter((ask) => ask.rid?.startsWith(sitePrefix)).length >= 5, 10_000, "5 held");
+    await ctx.engine.command("test.cutApi");
+    await sleep(200);
+    await ctx.stand.fault({ kind: "socksConnectDelay", ms: 150, count: 2 });
+    const [first] = [...ctx.engine.heldSite.values()].filter((ask) => ask.rid?.startsWith(sitePrefix));
+    ctx.engine.releaseSite(first!.siteRequestId, { grant: true });
+    const delay = Math.random() * 120;
+    await sleep(delay);
+    ctx.arm();
+    const faultMono = monoMs();
+    await ctx.engine.command("test.breakCdp", {}, 3000);
+    ctx.engine.heldSite.clear();
+    await sleep(4000);
+    const events = await ctx.stand.journal();
+    const checked = checkAdmitted(events, ctx.engine.grants, sitePrefix);
+    const arrived = events.filter((event) => event.t === "req" && String(event.rid ?? "").startsWith(sitePrefix)).map((event) => `${event.method} ${event.rid} +${Math.round(event.mono - faultMono)}ms`);
+    ctx.engine.close();
+    await ctx.engine.waitReady(180_000);
+    return { ok: checked.violations.length === 0, violations: checked.violations, notes: { lossDelayMs, delayMs: Math.round(delay), released: first!.rid, arrived } };
+  };
+}
+
+/** Chrome writes a PING before a request on a connection it read nothing from
+ *  for 10 s (SpdySession::MaybeSendPrefacePing). The window must still let
+ *  the request itself through, for a site request and a Hub request. */
+const idlePing: Scenario = async (ctx) => {
+  await fresh(ctx);
+  const tag = `idle-${ctx.run}-${Date.now() % 100000}`;
+  await warm(ctx, tag);
+  await sleep(11_000);
+  const rid = `i-${tag}`;
+  const siteStarted = monoMs();
+  const site = await ctx.engine.eval<{ status?: number; error?: string }>(`site.api(${JSON.stringify(rid)})`);
+  const siteMs = Math.round(monoMs() - siteStarted);
+  await sleep(11_000);
+  const hubId = `ih-${tag}`;
+  const hubStarted = monoMs();
+  const hub = await ctx.engine.sendHub(hubId, `${API}/api/hub?rid=${hubId}`, { authorization: "stand-token" });
+  const hubMs = Math.round(monoMs() - hubStarted);
+  const events = await ctx.stand.journal();
+  const violations = [...checkAdmitted(events, ctx.engine.grants, rid).violations, ...checkAdmitted(events, ctx.engine.grants, hubId).violations];
+  if (site.status !== 200 || siteMs > 3000) violations.push(`site request after 11 s of quiet: ${JSON.stringify(site)} in ${siteMs} ms`);
+  if (hub.outcome !== "response" || hubMs > 3000) violations.push(`Hub request after 11 s of quiet: ${String(hub.outcome)} ${String(hub.errorText ?? hub.error ?? "")} in ${hubMs} ms`);
+  const arrivals = [...reqs(events, rid), ...reqs(events, hubId)].map((event) => `${event.method} ${event.rid} conn ${event.connId} reused ${String(event.reused)}`);
+  const held = ctx.engine.observed.filter((o) => o.kind === "gate" && o.gateEvent === "held").map((o) => `${String(o.phase)}:${String(o.length)}`);
+  return { ok: violations.length === 0, violations, notes: { siteMs, hubMs, arrivals, held } };
+};
 
 // ── condition №2: Chrome's own retries, the send moment, the deadline ──────
 
@@ -247,6 +347,7 @@ function retry(fault: "h2RefusedStream" | "h2Goaway" | "resetAfterHeaders", gate
     await warm(ctx, tag);
     const rid = `r-${tag}`;
     await ctx.stand.fault({ kind: fault, match: { rid, method: "GET" }, ms: rttMs });
+    ctx.arm();
     const result = await ctx.engine.eval<Record<string, unknown>>(`site.api(${JSON.stringify(rid)})`);
     await sleep(1500);
     const events = await ctx.stand.journal();
@@ -255,8 +356,11 @@ function retry(fault: "h2RefusedStream" | "h2Goaway" | "resetAfterHeaders", gate
     const retries = ctx.engine.observed.filter((o) => o.kind === "retry");
     const gateEvents = ctx.engine.observed.filter((o) => o.kind === "gate");
     await ctx.engine.command("test.config", { gate: true });
-    // Criterion: one admission → at most one operation on the server.
+    // Criterion: one admission → at most one operation on the server, and
+    // the fault really met the request (otherwise the run proves nothing).
+    const faulted = events.some((event) => event.t === "fault" || event.t === "h2.rst" || event.t === "h2.goaway");
     const violations = arrivals.length > grants.length ? [`${arrivals.length} arrivals of ${rid} for ${grants.length} admission(s) — Chrome repeated the request`] : [];
+    if (arrivals.length === 0 || !faulted) violations.push(`the fault did not meet the request (arrivals ${arrivals.length}, fault seen ${faulted})`);
     return {
       ok: violations.length === 0,
       violations,
@@ -271,6 +375,33 @@ function retry(fault: "h2RefusedStream" | "h2Goaway" | "resetAfterHeaders", gate
         siteDone: [...ctx.engine.siteDone.values()].filter((d) => String(d.siteRequestId) && grants.some((g) => g.id === d.siteRequestId)).map((d) => ({ outcome: d.outcome, sends: d.sends, errorText: d.errorText })),
       },
     };
+  };
+}
+
+/** A request with a body (the login, the only write of stage 1) refused by
+ *  the server (REFUSED_STREAM) while the operator handles CDP events late:
+ *  Chrome repeats it on the same connection before its announcement is
+ *  handled (Astra review of the prototype, finding 5). The window's budget
+ *  — its HEADERS and DATA records — must stop the repeat. */
+function retryPost(cdpDelayMs: number): Scenario {
+  return async (ctx) => {
+    await fresh(ctx);
+    const tag = `post-${cdpDelayMs}-${ctx.run}-${Date.now() % 100000}`;
+    await warm(ctx, tag);
+    const rid = `rp-${tag}`;
+    await ctx.stand.fault({ kind: "h2RefusedStream", match: { rid, method: "POST" }, ms: 0 });
+    await ctx.engine.command("test.config", { cdpDelayMs });
+    ctx.arm();
+    const result = await ctx.engine.eval<Record<string, unknown>>(`site.raw(${JSON.stringify(rid)}, "POST", "/api/v1/login")`);
+    await sleep(1500);
+    await ctx.engine.command("test.config", { cdpDelayMs: 0 });
+    const events = await ctx.stand.journal();
+    const arrivals = reqs(events, rid).filter((event) => event.method === "POST");
+    const faulted = events.some((event) => event.t === "fault" || event.t === "h2.rst");
+    const checked = checkAdmitted(events, ctx.engine.grants, rid);
+    const violations = [...checked.violations];
+    if (arrivals.length === 0 || !faulted) violations.push(`the fault did not meet the request (arrivals ${arrivals.length}, fault seen ${faulted})`);
+    return { ok: violations.length === 0, violations, notes: { cdpDelayMs, site: result, arrivals: arrivals.map((event) => ({ conn: event.connId, stream: event.streamId })) } };
   };
 }
 
@@ -365,6 +496,7 @@ function expiry(kind: "site" | "hub", delayAt: ExpiryDelay, gate: boolean, hubAb
     await sleep(300);
     await ctx.stand.fault(delayAt === "socks" ? { kind: "socksConnectDelay", ms: EXPIRY_DELAY_MS, count: 2 } : { kind: "tcpDelay", ms: EXPIRY_DELAY_MS, count: 2 });
     const rid = `e-${tag}`;
+    ctx.arm();
     let outcome: unknown;
     if (kind === "site") {
       outcome = await ctx.engine.eval(`site.api(${JSON.stringify(rid)}, { plain: true })`);
@@ -764,6 +896,65 @@ const wsDetect: Scenario = async (ctx) => {
   return { ok: true, violations: [], notes: { detect } };
 };
 
+/** The site's own scripts run after the guard and may replace any built-in
+ *  it uses (Astra review of the prototype, finding 1): a spy on
+ *  Reflect.apply, a lying JSON.parse, a `t` getter on Object.prototype, a spy
+ *  on WeakMap.prototype.get, Set/Map methods that say yes. No tampered
+ *  message may reach the server, and a captured function must not be the
+ *  native send. */
+const wsTamper: Scenario = async (ctx) => {
+  await fresh(ctx);
+  const tag = `wst-${ctx.run}-${Date.now() % 100000}`;
+  const index = await ctx.engine.eval<number>(`site.ws(${JSON.stringify(tag)})`, false);
+  await until(async () => (await ctx.engine.eval<{ readyState: number }>(`site.wsState(${index})`, false)).readyState === 1, 10_000, "socket open");
+  const attack = `(() => {
+    const out = {};
+    const ws = site.sockets[${index}].socket || site.sockets[${index}];
+    const msg = (n) => JSON.stringify({ t: 99, d: "tamper-" + n });
+    const realApply = Reflect.apply;
+    let captured = null;
+    Reflect.apply = function (target, thisArg, args) { if (captured === null && typeof target === "function" && target !== WebSocket.prototype.send && target.name === "send") captured = target; return realApply(target, thisArg, args); };
+    try { ws.send("p"); } finally { Reflect.apply = realApply; }
+    out.capturedSend = captured !== null;
+    if (captured) { try { captured.call(ws, msg(1)); out.sentViaApply = true; } catch (e) { out.applyError = String(e); } }
+    const realParse = JSON.parse;
+    JSON.parse = function () { return { t: 1, d: '{"token":"x","v":3}' }; };
+    try { ws.send(msg(2)); } finally { JSON.parse = realParse; }
+    Object.defineProperty(Object.prototype, "t", { configurable: true, get() { return 1; } });
+    try { ws.send(JSON.stringify({ d: '{"token":"x","v":3}', x: "tamper-3" })); } finally { delete Object.prototype.t; }
+    const realGet = WeakMap.prototype.get;
+    let map = null;
+    WeakMap.prototype.get = function (key) { map = this; return realGet.call(this, key); };
+    try { Function.prototype.toString.call(WebSocket.prototype.send); } finally { WeakMap.prototype.get = realGet; }
+    out.capturedMap = map !== null;
+    if (map) { const n = realGet.call(map, WebSocket.prototype.send); if (typeof n === "function") { try { n.call(ws, msg(4)); out.sentViaMap = true; } catch (e) { out.mapError = String(e); } } }
+    const realHas = Set.prototype.has;
+    Set.prototype.has = function () { return true; };
+    try { ws.send(msg(5)); } finally { Set.prototype.has = realHas; }
+    const realMapGet = Map.prototype.get;
+    Map.prototype.get = function () { return { keys: ["t", "d"], dKeys: null }; };
+    try { ws.send(msg(6)); } finally { Map.prototype.get = realMapGet; }
+    const realOwnKeys = Reflect.ownKeys;
+    Reflect.ownKeys = function () { return ["t", "d"]; };
+    try { ws.send(JSON.stringify({ t: 1, d: '{"token":"x","v":3,"x":"tamper-7"}' })); } finally { Reflect.ownKeys = realOwnKeys; }
+    return out;
+  })()`;
+  ctx.arm();
+  const armedMono = monoMs();
+  const out = await ctx.engine.eval<Record<string, unknown>>(attack, false);
+  await sleep(1000);
+  const events = await ctx.stand.journal();
+  // The journal starts at this run's fresh page (fresh() marks it).
+  const frames = events.filter((event) => event.t === "ws.frame").map((event) => String(event.text));
+  const violations: string[] = [];
+  const leaked = frames.filter((text) => text.includes("tamper"));
+  if (leaked.length > 0) violations.push(`${leaked.length} tampered message(s) reached the server: ${leaked.map((text) => text.slice(0, 60)).join(" | ")}`);
+  if (out.sentViaApply === true || out.sentViaMap === true) violations.push("the native send was reached from the page");
+  const blocked = ctx.engine.observed.filter((o) => o.kind === "guard" && o.k === "blocked_send" && Number(o.recvMono) >= armedMono).length;
+  if (blocked < 5) violations.push(`only ${blocked} of the 5 tampered sends reported as blocked`);
+  return { ok: violations.length === 0, violations, notes: { out, frames: frames.map((text) => text.slice(0, 60)), blocked } };
+};
+
 export const scenarios: Record<string, Scenario> = {
   smoke,
   "loss-operator-kill": controlLoss("operator-kill", false),
@@ -781,6 +972,11 @@ export const scenarios: Record<string, Scenario> = {
   "loss-holder-kill-late": controlLoss("holder-kill", false, { lossDelayMs: 300 }),
   "loss-open-window": openWindow(0),
   "loss-open-window-late": openWindow(300),
+  "loss-responding": respondingLoss(0),
+  "loss-responding-late": respondingLoss(300),
+  "loss-new-connection": newConnectionLoss(0),
+  "loss-new-connection-late": newConnectionLoss(300),
+  "idle-ping": idlePing,
   "loss-chrome-kill": controlLoss("chrome-kill", false),
   "loss-planned-stop": controlLoss("planned-stop", false),
   "retry-refused": retry("h2RefusedStream", true),
@@ -794,6 +990,8 @@ export const scenarios: Record<string, Scenario> = {
   "retry-refused-rtt0": retry("h2RefusedStream", true, 0),
   "retry-goaway-rtt0": retry("h2Goaway", true, 0),
   "retry-reset-rtt0": retry("resetAfterHeaders", true, 0),
+  "retry-post": retryPost(0),
+  "retry-post-slowcdp": retryPost(50),
   "send-time": sendTime,
   "hub-gc-paused": hubGc("paused"),
   "hub-gc-body": hubGc("body"),
@@ -816,4 +1014,5 @@ export const scenarios: Record<string, Scenario> = {
   "ws-refused": wsRefused,
   "ws-blank-iframe": wsBlankIframe,
   "ws-detect": wsDetect,
+  "ws-tamper": wsTamper,
 };

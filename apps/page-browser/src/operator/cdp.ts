@@ -10,6 +10,8 @@ import { createConnection, type Socket } from "node:net";
 import { encodeMessage, readMessages } from "../shared/frames.ts";
 import { makeLog, sleep } from "../shared/util.ts";
 
+/** Commands whose parameters stay out of the journal. */
+const QUIET_PARAMS = /^(Fetch\.|Input\.|Runtime\.(evaluate|callFunctionOn)|Debugger\.evaluateOnCallFrame|Network\.setExtraHTTPHeaders|Network\.setCookie|Storage\.)/;
 const log = makeLog("cdp");
 
 export interface CdpEvent {
@@ -121,7 +123,9 @@ export class Cdp {
     if (!socket || socket.destroyed) return Promise.reject(new Error(`${method}: holder link down`));
     const id = this.#nextId++;
     if (this.#nextId > 2_000_000_000) this.#nextId = 1;
-    if (process.env.PB_DEBUG_CDP === "1" && !method.startsWith("Fetch.")) log("send", { method, sessionId: sessionId ?? null, params: JSON.stringify(params).slice(0, 200) });
+    // Parameters are never logged for commands that can carry what the owner
+    // typed or a request's content (Astra review of the prototype, finding 7).
+    if (process.env.PB_DEBUG_CDP === "1") log("send", { method, sessionId: sessionId ?? null, params: QUIET_PARAMS.test(method) ? "[not logged]" : JSON.stringify(params).slice(0, 200) });
     const command: Record<string, unknown> = { id, method, params };
     if (sessionId) command.sessionId = sessionId;
     return new Promise<T>((resolve, reject) => {

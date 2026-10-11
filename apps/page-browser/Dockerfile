@@ -7,7 +7,7 @@
 #
 #   docker build --build-context chrome=$HOME/code/.cache/page-browser/chrome \
 #     --build-context kasmvnc=$HOME/code/.cache/page-browser/kasmvnc \
-#     -t pb-browser apps/page-browser
+#     [--build-arg PROFILE=fansly] -t pb-browser apps/page-browser
 FROM node:22-bookworm-slim
 
 ARG TARGETARCH
@@ -46,6 +46,11 @@ COPY src/ /opt/page-browser/src/
 # else). PROTOTYPE: the key is made at build time, so the ID changes with the
 # image; production signs with a kept key (constant ID).
 COPY extension/ /opt/page-browser/extension/
+# The site profile picks the rules: stand (the stand's hosts) or fansly.
+ARG PROFILE=stand
+RUN cp /opt/page-browser/extension/profiles/${PROFILE}.json /opt/page-browser/extension/rules.json \
+ && rm -rf /opt/page-browser/extension/profiles /opt/page-browser/extension/build-rules.mjs \
+ && echo "$PROFILE" > /opt/page-browser/profile.txt
 RUN apt-get update && apt-get install -y --no-install-recommends openssl && rm -rf /var/lib/apt/lists/* \
  && mkdir -p /opt/page-browser/extension-dist && cd /opt/page-browser \
  && openssl genrsa -out /tmp/ext-key.pem 2048 2>/dev/null \

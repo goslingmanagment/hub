@@ -16,6 +16,10 @@ export interface Ctx {
   docker: Docker;
   run: number;
   log: (event: string, fields?: Record<string, unknown>) => void;
+  /** Called right before the fault: an error from here on is a failed run,
+   *  not a run the stand could not set up. */
+  arm: () => void;
+  armed: boolean;
 }
 
 export interface RunResult {
@@ -27,26 +31,54 @@ export interface RunResult {
 export type Scenario = (ctx: Ctx) => Promise<RunResult>;
 
 /** Every request the stand server received for these rids must have been
- *  admitted, and must have arrived inside the admission's window. `slackMs`:
- *  the forwarding latency between the proxy (the sender) and the server. */
+ *  admitted, must have arrived inside the admission's window and at the
+ *  admitted address, and one admission covers one operation: at most one
+ *  preflight and one request (a second is a repeat). `slackMs`: the
+ *  forwarding latency between the proxy (the sender) and the server. */
 export function checkAdmitted(events: JournalEvent[], grants: Grant[], ridPrefix: string, slackMs = 50): { violations: string[]; arrivals: number } {
   const violations: string[] = [];
   let arrivals = 0;
+  const used = new Map<Grant, { preflight: number; main: number }>();
   for (const event of events) {
     if (event.t !== "req" || !event.rid || !event.rid.startsWith(ridPrefix)) continue;
     arrivals += 1;
+    const what = `${event.method} ${event.path} (rid ${event.rid})`;
     const own = grants.filter((grant) => grant.rid === event.rid);
     if (own.length === 0) {
-      violations.push(`${event.method} ${event.path} (rid ${event.rid}) arrived without any admission`);
+      violations.push(`${what} arrived without any admission`);
       continue;
     }
-    const inWindow = own.some((grant) => event.mono >= grant.grantedMono && event.mono <= grant.deadlineMono + slackMs);
-    if (!inWindow) {
+    const inWindow = own.filter((grant) => event.mono >= grant.grantedMono && event.mono <= grant.deadlineMono + slackMs);
+    if (inWindow.length === 0) {
       const nearest = own.map((grant) => Math.round(event.mono - grant.deadlineMono)).join(", ");
-      violations.push(`${event.method} ${event.path} (rid ${event.rid}) arrived outside its admission window (ms after deadline: ${nearest})`);
+      violations.push(`${what} arrived outside its admission window (ms after deadline: ${nearest})`);
+      continue;
     }
+    const admitted = inWindow.filter((grant) => samePath(grant.url ?? "", String(event.path ?? "")));
+    if (admitted.length === 0) {
+      violations.push(`${what} is not the address that was admitted`);
+      continue;
+    }
+    const role = event.method === "OPTIONS" ? "preflight" : "main";
+    const grant = admitted.find((candidate) => (used.get(candidate)?.[role] ?? 0) === 0);
+    if (!grant) {
+      violations.push(`${what} arrived again under one admission — a repeat`);
+      continue;
+    }
+    const count = used.get(grant) ?? { preflight: 0, main: 0 };
+    count[role] += 1;
+    used.set(grant, count);
   }
   return { violations, arrivals };
+}
+
+function samePath(url: string, path: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.pathname + parsed.search === path;
+  } catch {
+    return false;
+  }
 }
 
 async function main(): Promise<void> {
@@ -73,10 +105,18 @@ async function main(): Promise<void> {
     const log = (event: string, fields?: Record<string, unknown>) =>
       console.log(JSON.stringify({ run, ms: Math.round(monoMs() - started), event, ...fields }));
     let result: RunResult;
+    const ctx: Ctx = { engine, stand, docker, run, log, armed: false, arm: () => undefined };
+    ctx.arm = () => {
+      ctx.armed = true;
+    };
     try {
-      result = await scenario({ engine, stand, docker, run, log });
+      result = await scenario(ctx);
     } catch (error) {
-      result = { ok: false, violations: [`scenario error: ${(error as Error).stack}`], notes: {} };
+      // Before the fault: the stand could not set the run up. After it: the
+      // run failed (recovery is part of what is checked).
+      result = ctx.armed
+        ? { ok: false, violations: [`error after the fault: ${(error as Error).stack}`], notes: {} }
+        : { ok: false, violations: [`scenario error: ${(error as Error).stack}`], notes: {} };
     }
     await stand.clearFaults().catch(() => undefined);
     const invalid = result.violations.length > 0 && result.violations.every((violation) => violation.startsWith("scenario error:"));

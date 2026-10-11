@@ -3,51 +3,71 @@
 //
 // The proxy cannot see requests inside TLS. But on the API host only one
 // admitted request is in flight, and every other request waits in Chrome's
-// Fetch interception. So what Chrome writes into API tunnels is forwarded
-// only inside the window of the physical request that was just released, and
-// a new tunnel to the API is accepted only at the start of such a window.
+// Fetch interception. So the gate decides on every TLS record Chrome writes
+// into an API tunnel (5-byte header: type, version, length). The decision is
+// made at the header and holds for the whole record; a tunnel that holds a
+// record holds everything after it (a TLS stream is never reordered and
+// nothing is dropped from it).
 //
-//   closed      nothing is released: bytes are held, new tunnels refused.
-//   open        a request was released: bytes are forwarded until the
-//               admission's deadline (CLOCK_MONOTONIC). A request without a
-//               body on a warm connection is one TLS record — Chrome writes
-//               its HEADERS frame in one go — so the window forwards exactly
-//               one record and holds what follows (a request Chrome released
-//               without us at that moment is a record of its own). Otherwise
-//               (a new connection in this window, a body) it stops when
-//               Chrome has announced the send (requestWillBeSentExtraInfo)
-//               and the line went quiet for QUIET_MS. At the deadline, with
-//               nothing sent, every API tunnel is cut: the request never
+//   A control record — the size of an HTTP/2 control frame: PING and its
+//   ACK, WINDOW_UPDATE, RST_STREAM, SETTINGS ACK, GOAWAY without debug data
+//   (≤ 17 bytes of frame; a TLS 1.3 record of ≤ 39 bytes) — goes up in every
+//   phase. No request fits in one: Chrome's smallest request HEADERS, every
+//   field HPACK-indexed, is 16+ fields, 25+ bytes of frame. Chrome writes a
+//   PING before a request on a connection it read nothing from for 10 s
+//   (SpdySession::MaybeSendPrefacePing); that PING does not use the window.
+//
+//   Any other ("big") record goes up only as the request of an open window,
+//   and a window has a budget of big records: Chrome writes one frame per
+//   socket write (SpdySession::DoWrite), and BoringSSL makes each write a
+//   record of its own. A request is its HEADERS record plus, with a body,
+//   one DATA record per 16 375 bytes (kMaxSpdyFrameChunkSize). A connection
+//   opened in the window (one at most) adds its own records: the TLS 1.3
+//   Finished and the HTTP/2 preface with SETTINGS (TLS 1.2: the preface;
+//   records that are not application data — ClientHello, ChangeCipherSpec —
+//   are not counted). Chrome 155 sends no TLS early data
+//   (kEnableTLS13EarlyData is off by default).
+//
+//   closed      no request is out: big records are held.
+//   open        a request was released. Its first big record on a warm
+//               connection (or the connection opened for it) makes that
+//               tunnel the window's; the budget goes up it and the window
+//               holds from the end of its last record. A request Chrome
+//               released without us at that moment is a record of its own
+//               and stays. A body of unknown length has no budget: the window
+//               then holds once Chrome has announced the send
+//               (requestWillBeSentExtraInfo) and the line went quiet for
+//               QUIET_MS — the one case that rests on CDP. At the deadline,
+//               with nothing sent, every API tunnel is cut: the request never
 //               leaves.
-//   holding     the request is out: bytes are held (a record that is half
-//               through is finished first). This is what stops Chrome's own
-//               repeats — after REFUSED_STREAM it repeats in the same
-//               connection, CDP does not report it (stand finding), and the
-//               repeat's bytes stay here. A repeat on a new connection (after
-//               GOAWAY, a reset, a 408) meets the refusal of new tunnels,
-//               which starts at Chrome's announcement. No response headers
-//               in 20 s → the API tunnels are cut.
-//   responding  the response headers arrived (no repeat can follow): the
-//               held bytes (flow control, acks) and the rest are forwarded.
+//   holding     the request is out: big records are held. This is what stops
+//               Chrome's own repeats — after REFUSED_STREAM it repeats on the
+//               same connection and CDP does not report it (stand finding). A
+//               repeat on a new connection (after GOAWAY, a reset, a 408) meets
+//               the refusal of new tunnels. No response headers in 20 s → the
+//               API tunnels are cut.
+//   responding  the response headers arrived. Big records stay held: one now
+//               would be a request Chrome released without us (a CDP loss
+//               while the body is still coming — stand finding).
 //
-// Bytes held while closed are the housekeeping of idle connections — or
-// requests Chrome released without us (a CDP detach); on a CDP loss the
-// operator cuts every tunnel, so those never leave. What is left open: a CDP
-// loss inside a window that is still forwarding (stand: loss-open-window).
+// A big record still held when the next window opens was never admitted: its
+// tunnel is cut, never flushed. What is left open: a request Chrome releases
+// without us in the very moment a window opens can take its place (the
+// admitted request is then held and fails); and a body of unknown length.
 
 import { monoMs } from "../shared/util.ts";
 
-/** Fallback of the one-record rule: a record still incomplete this long
- *  after the window's first chunk closes the window anyway. */
-const BURST_MS = Number(process.env.PB_GATE_BURST_MS ?? "2");
-/** After Chrome's announcement, a window that is not a single burst stops
- *  forwarding once it carried bytes and stayed quiet this long. Shorter than
- *  a round trip to the API (a repeat cannot come sooner). */
+/** After Chrome's announcement, a window without a budget stops once it
+ *  carried bytes and stayed quiet this long. Shorter than a round trip to
+ *  the API (a repeat cannot come sooner). */
 const QUIET_MS = Number(process.env.PB_GATE_QUIET_MS ?? "5");
 /** Plan §4.14: a request's limit (REQUEST_TIMEOUT_MS of the engine). */
 const NO_RESPONSE_MS = 20_000;
+/** Chrome's largest DATA frame payload (kMaxSpdyFrameChunkSize). */
+const DATA_FRAME_MAX = 16 * 1024 - 9;
 
 export type GatePhase = "closed" | "open" | "holding" | "responding";
+export type RecordVerdict = "up" | "hold";
 
 export interface GateEvent {
   kind: string;
@@ -58,10 +78,17 @@ export interface GateEvent {
 interface Window {
   id: string;
   deadline: number;
-  /** No body: one burst on a warm connection. */
-  bodiless: boolean;
-  /** A tunnel was opened in this window (its handshake comes in bursts). */
-  newTunnel: boolean;
+  /** Big records of the request itself (HEADERS and DATA); Infinity = a body
+   *  of unknown length. */
+  requestRecords: number;
+  /** The tunnel opened in this window. */
+  newTunnel: number | null;
+  /** The tunnel the request goes up. */
+  tunnel: number | null;
+  /** The new connection negotiated TLS 1.3 (null: not known, counted as 1.3). */
+  tls13: boolean | null;
+  /** Big records that went up the window's tunnel. */
+  used: number;
   announced: boolean;
   openedAt: number;
   firstChunkAt: number | null;
@@ -71,13 +98,14 @@ interface Window {
 
 export class ApiGate {
   enabled = process.env.PB_GATE !== "0";
-  /** Stand: off = the window closes only on Chrome's announcement. */
+  /** Stand: off = no budget, every window closes on the announcement and
+   *  quiet (the earlier candidate). */
   burstClose = process.env.PB_GATE_BURST !== "0";
   onEvent: (event: GateEvent) => void = () => undefined;
   /** Cut every API tunnel; returns how many. */
   cut: (reason: string) => number = () => 0;
-  /** Forward what API tunnels hold (the phase now forwards). */
-  flush: () => void = () => undefined;
+  /** Cut the API tunnels that hold bytes; returns how many. */
+  cutHeld: (reason: string) => number = () => 0;
 
   #phase: GatePhase = "closed";
   #window: Window | null = null;
@@ -89,70 +117,96 @@ export class ApiGate {
     return { phase: this.#phase, window: this.#window?.id ?? null, deadline: this.#window?.deadline ?? 0 };
   }
 
-  /** May bytes go up an API tunnel now? */
-  forwards(): boolean {
-    if (!this.enabled) return true;
-    if (this.#phase === "responding") return true;
-    return this.#phase === "open" && this.#window !== null && monoMs() < this.#window.deadline;
-  }
-
-  /** The window forwards one record only (a request without a body on a
-   *  warm connection) and has not forwarded it yet. */
-  get wantsOneRecord(): boolean {
+  /** A record starts on API tunnel `tunnel` (nothing held before it there).
+   *  `big`: larger than a control frame; `appData`: TLS application data
+   *  (type 23); `tls13`: what the tunnel's server chose. */
+  record(tunnel: number, big: boolean, appData: boolean, tls13: boolean | null): RecordVerdict {
+    if (!this.enabled) return "up";
     const w = this.#window;
-    return this.enabled && this.#phase === "open" && w !== null && this.#singleBurst(w) && w.firstChunkAt === null;
+    if (this.#phase !== "open" || w === null || monoMs() >= w.deadline) return big ? "hold" : "up";
+    if (w.tunnel === tunnel) {
+      // The handshake of the window's own connection.
+      if (!appData) return "up";
+      if (w.newTunnel === tunnel) w.tls13 = tls13;
+      // A body's DATA frame can be as small as a control frame (a 2-byte
+      // body: a 33-byte record): once the request's HEADERS is out, every
+      // record of a request with a body counts (stand: retry-post). Before
+      // it, and after a bodiless one, small records are control frames.
+      const counting = big || (w.used > this.#setupRecords(w) && w.requestRecords > 1);
+      if (!counting) return "up";
+      if (w.used >= this.#budget(w)) return big ? "hold" : "up";
+      w.used += 1;
+      return "up";
+    }
+    if (!big) return "up";
+    if (w.tunnel !== null || !appData) return "hold";
+    // The request's first record: the tunnel is the window's.
+    w.tunnel = tunnel;
+    w.used = 1;
+    return "up";
   }
 
-  /** The window's one record went up: hold from here on. */
-  recordDone(): void {
-    if (this.#phase === "open") this.#hold("record");
+  /** A record that went up `tunnel` ended. */
+  recordDone(tunnel: number): void {
+    const w = this.#window;
+    if (this.#phase !== "open" || w === null || w.tunnel !== tunnel || w.used < this.#budget(w)) return;
+    this.#hold("budget");
   }
 
   /** May Chrome open a new tunnel to the API now? Only for the request just
-   *  released and not yet announced. */
+   *  released, before it went up anywhere, once per window. */
   admitsTunnel(): boolean {
     if (!this.enabled) return true;
     const w = this.#window;
-    return this.#phase === "open" && w !== null && !w.announced && monoMs() < w.deadline;
+    return this.#phase === "open" && w !== null && !w.announced && w.newTunnel === null && w.tunnel === null && monoMs() < w.deadline;
   }
 
-  /** A tunnel was accepted inside the window. */
-  noteTunnel(): void {
+  /** A tunnel was accepted inside the window: the request goes up it. */
+  noteTunnel(tunnel: number): void {
     const w = this.#window;
     if (!w || this.#phase !== "open") return;
-    w.newTunnel = true;
-    // Its handshake is several bursts: the burst rule no longer applies.
-    this.#clearHoldTimer();
-    if (w.announced) this.#watchQuiet();
+    w.newTunnel = tunnel;
+    w.tunnel = tunnel;
+    if (w.announced && w.requestRecords === Infinity) this.#watchQuiet();
   }
 
-  /** Bytes Chrome wrote after the window opened went up. */
-  noteChunk(bytes: number): void {
+  /** Bytes went up `tunnel`. */
+  noteChunk(tunnel: number, bytes: number): void {
     const w = this.#window;
-    if (!w || !(this.#phase === "open" || this.#phase === "responding")) return;
+    if (!w || w.tunnel !== tunnel || this.#phase !== "open") return;
     const now = monoMs();
     w.bytes += bytes;
     w.lastChunkAt = now;
-    if (this.#phase !== "open") return;
     if (w.firstChunkAt === null) {
       w.firstChunkAt = now;
-      this.onEvent({ kind: "first_bytes", window: w.id, detail: { afterOpenMs: round(now - w.openedAt), bytes } });
-      if (this.#singleBurst(w)) {
-        this.#holdTimer = setTimeout(() => this.#hold("burst"), BURST_MS);
-        return;
-      }
+      this.onEvent({ kind: "first_bytes", window: w.id, detail: { afterOpenMs: round(now - w.openedAt), bytes, newTunnel: w.newTunnel !== null } });
     }
-    if (w.announced && !this.#singleBurst(w)) this.#watchQuiet();
+    if (w.announced && w.requestRecords === Infinity) this.#watchQuiet();
   }
 
-  /** A physical request was released (Fetch.continueRequest follows). */
-  open(id: string, deadlineMono: number, bodiless: boolean): void {
+  /** A physical request is about to be released (Fetch.continueRequest
+   *  follows). `bodyBytes`: its body (0 = none, null = unknown length). */
+  open(id: string, deadlineMono: number, bodyBytes: number | null): void {
     this.#clearTimers();
+    // Whatever a tunnel still holds was never admitted.
+    const cut = this.enabled ? this.cutHeld("gate: bytes held from before this window") : 0;
+    if (cut > 0) this.onEvent({ kind: "unadmitted_cut", window: id, detail: { cut, phase: this.#phase } });
     const now = monoMs();
-    this.#window = { id, deadline: deadlineMono, bodiless, newTunnel: false, announced: false, openedAt: now, firstChunkAt: null, lastChunkAt: 0, bytes: 0 };
+    this.#window = {
+      id,
+      deadline: deadlineMono,
+      requestRecords: !this.burstClose || bodyBytes === null ? Infinity : 1 + Math.ceil(bodyBytes / DATA_FRAME_MAX),
+      newTunnel: null,
+      tunnel: null,
+      tls13: null,
+      used: 0,
+      announced: false,
+      openedAt: now,
+      firstChunkAt: null,
+      lastChunkAt: 0,
+      bytes: 0,
+    };
     this.#phase = "open";
-    // Housekeeping held while closed goes first; it does not start the burst.
-    this.flush();
     this.#deadlineTimer = setTimeout(() => this.#onDeadline(id), Math.max(0, deadlineMono - now));
   }
 
@@ -170,7 +224,7 @@ export class ApiGate {
       const cut = this.cut("gate: no response 20 s after the send");
       this.onEvent({ kind: "no_response", window: id, detail: { cut, bytes: w.bytes } });
     }, NO_RESPONSE_MS);
-    if (this.#phase === "open" && !this.#singleBurst(w)) this.#watchQuiet();
+    if (this.#phase === "open" && w.requestRecords === Infinity) this.#watchQuiet();
   }
 
   /** The response headers arrived. */
@@ -178,7 +232,6 @@ export class ApiGate {
     if (this.#window?.id !== id || this.#phase === "closed" || this.#phase === "responding") return;
     this.#clearTimers();
     this.#phase = "responding";
-    this.flush();
   }
 
   /** The request finished (or its operation was closed). */
@@ -196,8 +249,20 @@ export class ApiGate {
     this.#window = null;
   }
 
-  #singleBurst(w: Window): boolean {
-    return this.burstClose && w.bodiless && !w.newTunnel;
+  /** A big record was held (for the journal: what was stopped and when). */
+  noteHeld(tunnel: number, length: number): void {
+    this.onEvent({ kind: "held", window: this.#window?.id ?? null, detail: { tunnel, length, phase: this.#phase } });
+  }
+
+  /** Big records the window's tunnel may carry. */
+  #budget(w: Window): number {
+    return this.#setupRecords(w) + w.requestRecords;
+  }
+
+  /** Big records of the window's own new connection before the request. */
+  #setupRecords(w: Window): number {
+    if (w.newTunnel === null) return 0;
+    return w.tls13 === false ? 1 : 2;
   }
 
   #hold(why: string): void {
@@ -227,9 +292,8 @@ export class ApiGate {
     this.#deadlineTimer = null;
     const w = this.#window;
     if (!this.enabled || !w || w.id !== id || this.#phase !== "open") return;
-    // Out already? A single burst that carried bytes, or an announced send
-    // that carried bytes after it began.
-    const sent = (this.#singleBurst(w) && w.firstChunkAt !== null) || (w.announced && w.bytes > 0 && !w.newTunnel);
+    // Out already? A record of the request itself went up.
+    const sent = w.used > this.#setupRecords(w);
     if (sent) {
       this.#hold("deadline");
       return;
@@ -240,7 +304,7 @@ export class ApiGate {
     this.#clearTimers();
     this.#phase = "closed";
     this.#window = null;
-    this.onEvent({ kind: "expired", window: id, detail: { cut, bytes: w.bytes, announced: w.announced, newTunnel: w.newTunnel } });
+    this.onEvent({ kind: "expired", window: id, detail: { cut, bytes: w.bytes, announced: w.announced, newTunnel: w.newTunnel !== null } });
   }
 
   #clearHoldTimer(): void {
@@ -261,79 +325,36 @@ function round(value: number): number {
   return Math.round(value * 1000) / 1000;
 }
 
-/** Follows the TLS records of one direction of a tunnel (5-byte header:
- *  type, version, length). The gate never stops forwarding in the middle of
- *  a record: a request's frame split over two TCP segments stays whole. */
-export class RecordTracker {
-  #header = Buffer.alloc(5);
-  #headerFill = 0;
-  #remaining = 0;
+/** The largest record that carries only a control frame (≤ 17 bytes): TLS
+ *  1.3 adds 22 bytes (header, content type, AEAD tag); TLS 1.2 with AES-GCM
+ *  29 (explicit nonce). A request's HEADERS is at least 47 (1.3) or 54 (1.2). */
+export function controlRecordLimit(tls13: boolean | null): number {
+  return tls13 === false ? 46 : 39;
+}
 
-  /** In the middle of a record (or of its header)? */
-  get midRecord(): boolean {
-    return this.#headerFill > 0 || this.#remaining > 0;
+/** The TLS version the server chose, from its ServerHello (the first record
+ *  it sends): true = 1.3, false = older, null = not a ServerHello,
+ *  undefined = more bytes needed. */
+export function serverHelloIsTls13(bytes: Buffer): boolean | null | undefined {
+  if (bytes.length < 5) return undefined;
+  if (bytes[0] !== 0x16) return null;
+  const recordEnd = 5 + bytes.readUInt16BE(3);
+  if (bytes.length < recordEnd) return recordEnd > 5 + 16_384 + 256 ? null : undefined;
+  let p = 5;
+  if (bytes[p] !== 0x02) return null;
+  p += 4; // handshake type, length
+  p += 2 + 32; // legacy_version, random
+  if (p >= recordEnd) return null;
+  p += 1 + bytes[p]!; // legacy_session_id
+  p += 2 + 1; // cipher_suite, legacy_compression_method
+  if (p + 2 > recordEnd) return false; // no extensions: TLS 1.2 or older
+  const extEnd = Math.min(recordEnd, p + 2 + bytes.readUInt16BE(p));
+  p += 2;
+  while (p + 4 <= extEnd) {
+    const type = bytes.readUInt16BE(p);
+    const length = bytes.readUInt16BE(p + 2);
+    if (type === 0x002b && length === 2 && p + 6 <= extEnd) return bytes.readUInt16BE(p + 4) === 0x0304;
+    p += 4 + length;
   }
-
-  /** Account for bytes that went up. */
-  advance(bytes: Buffer): void {
-    this.#walk(bytes, false);
-  }
-
-  /** Leading bytes of `bytes` that make up exactly one whole record from
-   *  the current position (finishing the one in progress counts); -1 when
-   *  the chunk ends before that record does. */
-  oneRecord(bytes: Buffer): number {
-    if (this.midRecord) {
-      const end = this.prefixToBoundary(bytes);
-      return this.#atBoundaryAfter(bytes, end) ? end : -1;
-    }
-    if (bytes.length < 5) return -1;
-    const end = 5 + bytes.readUInt16BE(3);
-    return end <= bytes.length ? end : -1;
-  }
-
-  #atBoundaryAfter(bytes: Buffer, offset: number): boolean {
-    // prefixToBoundary returns the chunk's length when the record does not
-    // end inside it: tell the two apart by walking a copy.
-    const copy = new RecordTracker();
-    copy.#headerFill = this.#headerFill;
-    copy.#remaining = this.#remaining;
-    copy.#header = Buffer.from(this.#header);
-    copy.advance(bytes.subarray(0, offset));
-    return !copy.midRecord;
-  }
-
-  /** How many leading bytes of `bytes` finish the record in progress. */
-  prefixToBoundary(bytes: Buffer): number {
-    if (!this.midRecord) return 0;
-    return this.#walk(bytes, true);
-  }
-
-  #walk(bytes: Buffer, stopAtBoundary: boolean): number {
-    let headerFill = this.#headerFill;
-    let remaining = this.#remaining;
-    const header = stopAtBoundary ? Buffer.from(this.#header) : this.#header;
-    let offset = 0;
-    while (offset < bytes.length) {
-      if (remaining === 0) {
-        const take = Math.min(5 - headerFill, bytes.length - offset);
-        bytes.copy(header, headerFill, offset, offset + take);
-        headerFill += take;
-        offset += take;
-        if (headerFill < 5) break;
-        remaining = header.readUInt16BE(3);
-        headerFill = 0;
-      } else {
-        const take = Math.min(remaining, bytes.length - offset);
-        remaining -= take;
-        offset += take;
-      }
-      if (stopAtBoundary && remaining === 0 && headerFill === 0) return offset;
-    }
-    if (!stopAtBoundary) {
-      this.#headerFill = headerFill;
-      this.#remaining = remaining;
-    }
-    return offset;
-  }
+  return false;
 }
