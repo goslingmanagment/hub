@@ -218,7 +218,7 @@ function report(): void {
       if ((o.event === "open" || o.event === "failed") && !wsOutcomes.has(String(o.connId))) {
         wsOutcomes.set(String(o.connId), { event: String(o.event), status: typeof o.status === "number" ? o.status : null, error: typeof o.error === "string" ? o.error : null });
       }
-      journal("ws.tunnel", { connId: o.connId, event: o.event, status: o.status ?? null, error: o.error ?? null });
+      journal("ws.tunnel", { connId: o.connId, step: o.event, status: o.status ?? null, error: o.error ?? null });
       continue;
     }
     if (o.kind === "paused") journal("paused", { cls: o.cls, method: o.method, what: safeUrl(o.url), type: o.resourceType });
@@ -231,7 +231,7 @@ function report(): void {
 function finished(item: Queued): void {
   if (item.kind === "ws") {
     const outcome = wsOutcomes.get(item.id)!;
-    journal("ws.done", { what: item.label, ...outcome });
+    journal("ws.done", { what: item.label, outcome: outcome.event, status: outcome.status, error: outcome.error });
     // A socket that could not open would be tried again and again: the
     // pilot stops on the first failure, a 429 among them.
     if (outcome.event !== "open") stopSession(`socket handshake failed${outcome.status ? ` (${outcome.status})` : ""}: ${item.label}`);
