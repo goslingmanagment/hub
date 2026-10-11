@@ -110,6 +110,7 @@ let observedSeen = 0;
 let wsEventsSeen = 0;
 let statesSeen = 0;
 let lastStateKey = "";
+let lastBrowserState = "";
 
 function nextGap(): number {
   return PAUSE_MS * (1 + 0.2 * Math.random());
@@ -173,6 +174,27 @@ function frameType(data: unknown): string | number | null {
   }
 }
 
+/** Chrome was started anew. It numbers its paused requests from the start
+ *  again, and whatever the previous one asked for died with it: those
+ *  requests are dropped here and their ids forgotten — a new request under
+ *  an old id is a new request (Astra review 7, finding 2). The pacing and the
+ *  hour's count stay. `since`: when the operator said so. */
+function newBrowser(since: number): void {
+  for (const [id, ask] of engine.heldSite) if (ask.askedMono < since) engine.heldSite.delete(id);
+  for (const [id, ask] of engine.heldWs) if (ask.askedMono < since) engine.heldWs.delete(id);
+  let dropped = 0;
+  for (let i = queue.length - 1; i >= 0; i--) {
+    const item = queue[i]!;
+    if (item.kind !== "hub" && item.askedMono < since) {
+      queue.splice(i, 1);
+      dropped += 1;
+    }
+  }
+  seen.clear();
+  for (const item of queue) seen.add(item.id);
+  journal("browser.new", { dropped });
+}
+
 function collect(): void {
   for (const ask of engine.heldSite.values()) {
     if (seen.has(ask.siteRequestId)) continue;
@@ -200,6 +222,8 @@ function report(): void {
   }
   for (; statesSeen < engine.states.length; statesSeen++) {
     const state = engine.states[statesSeen]!;
+    if (state.state === "chrome_starting" && lastBrowserState !== "chrome_starting") newBrowser(state.recvMono);
+    lastBrowserState = String(state.state);
     // The operator repeats its state every few seconds: changes only.
     const key = `${String(state.state)}|${String(state.reason)}|${String(state.exit)}`;
     if (key === lastStateKey) continue;

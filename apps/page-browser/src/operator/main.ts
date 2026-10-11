@@ -538,7 +538,7 @@ function startLimit(op: Operation): void {
       // of a later admission, which the gate cannot tell from that
       // admission's own request. The request dies with the browser: the
       // page stops.
-      halt("an operation's request did not end within its limit");
+      halt("an operation's request did not end within its limit", "stop");
     }
   }, OP_LIMIT_MS);
 }
@@ -834,6 +834,13 @@ cdp.on("Network.loadingFailed", (event) => {
     corsErrorStatus: params.corsErrorStatus ?? null,
     sends: phys.sends,
   });
+  // A cancel is the page's word, not the sender's: the page drops a request
+  // at once, and Chrome's network service hears of it separately. A released
+  // request cancelled before its answer may still be alive there and leave
+  // in the window of a later admission (Astra review 7, finding 1). It dies
+  // with the browser: the page stops.
+  const answered = phys.role === "main" ? op.status !== null : op.preflightStatus !== null;
+  if (params.canceled === true && !answered) halt("a released request was cancelled before its answer", "stop");
 });
 
 // ── the site's socket: frames from CDP (plan §4.4) ──────────────────────────
@@ -983,6 +990,9 @@ async function onResponseStage(event: CdpEvent, params: ResponseStage): Promise<
       .finally(() => cdp.ack(event.seq));
     return;
   }
+  // The answer is here by the browser's own word; the page's
+  // Network.responseReceived may come later, or never from a hung page.
+  if (op.status === null) op.status = params.responseStatusCode;
   const location = headerOf(params.responseHeaders, "location");
   if (params.responseStatusCode >= 300 && params.responseStatusCode < 400 && location !== null) {
     // A redirect of an API request is not followed — neither Hub's (plan
@@ -1964,14 +1974,18 @@ function targetGone(error: Error): boolean {
 let halted: string | null = envStr("PB_AUTOSTART", "0") === "1" ? null : "not started yet (the engine's restart starts the page)";
 if (halted !== null) egress.latch(halted);
 
-function halt(reason: string): void {
+/** `how`: "kill" — at once, when the page itself cannot be trusted (a guard
+ *  or an interception that is not in place); "stop" — Chrome is asked to exit
+ *  and writes its profile first (the session of a login just made), killed
+ *  after 5 s. The exit is latched before either: nothing leaves meanwhile. */
+function halt(reason: string, how: "kill" | "stop" = "kill"): void {
   if (halted !== null) return;
   halted = reason;
   egress.latch(reason);
-  log("halted", { reason });
+  log("halted", { reason, how });
   rpc.send({ type: "alarm", kind: "halted", detail: { reason } });
   setState("failed", `halted: ${reason}`);
-  void supervisor({ cmd: "chrome.kill", reason: `halted: ${reason}` }).catch(() => undefined);
+  void supervisor({ cmd: how === "kill" ? "chrome.kill" : "chrome.stop", reason: `halted: ${reason}` }).catch(() => undefined);
 }
 
 async function controlLost(reason: string): Promise<void> {
@@ -2060,9 +2074,14 @@ async function healthProbe(): Promise<void> {
 // ── engine messages ───────────────────────────────────────────────────────
 
 rpc.onConnected = () => {
-  // Site requests waiting for an admission are asked again (plan §3.2).
-  for (const [id, pending] of pendingSite) askSiteAdmit(id, pending.params, isPreflight(pending.params) ? preflightMethod(pending.params) : pending.params.request.method);
-  queueMicrotask(sendState);
+  // After the answer to the hello, which goes when this returns: site
+  // requests waiting for an admission are asked again (plan §3.2). Asked
+  // here, they reached the engine before the answer (the pilot's engine
+  // took that for a refused hello on the stand).
+  queueMicrotask(() => {
+    for (const [id, pending] of pendingSite) askSiteAdmit(id, pending.params, isPreflight(pending.params) ? preflightMethod(pending.params) : pending.params.request.method);
+    sendState();
+  });
   return { state, bufferId: "prototype", operatorPid: process.pid };
 };
 
@@ -2199,7 +2218,7 @@ async function onCommand(message: EngineMessage): Promise<void> {
       case "stop":
         // The engine stops the page: the exit closes at once (every tunnel,
         // the site's socket too) and stays closed until `restart`.
-        halt("engine stop");
+        halt("engine stop", "stop");
         return reply({ ok: true });
       case "test.breakCdp":
       case "test.dropCdp":

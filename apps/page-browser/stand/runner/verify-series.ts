@@ -40,6 +40,7 @@ const SERIES: Record<string, Record<string, number>> = {
     "expiry-site-tls": 50, "expiry-hub-tls": 50, "expiry-hub-page-stop": 50,
     "expiry-site-tls-nogate": 10, "expiry-hub-page-stop-nogate": 10,
     "next-admission-expired": 20, "next-admission-slow": 20, "stale-after-limit": 10,
+    "cancel-next-admission": 20, "cancel-next-admission-pending": 20,
   },
   F: {
     "expiry-site-reused": 50, "expiry-hub-reused": 50, "expiry-site-operator-stop": 50,
@@ -80,6 +81,7 @@ interface Run {
   ok: boolean;
   invalid: boolean;
   violations: string[];
+  stoppedBefore?: string;
 }
 
 interface Artifact {
@@ -148,6 +150,7 @@ function main(): void {
         : valid.filter((run) => !run.ok || run.violations.length > 0);
       if (wrong.length > 0) problems.push(`${label}: ${control ? "control runs without the intended violation" : "failed runs"}: ${wrong.map((run) => run.run).join(", ")}`);
       for (const run of invalid) console.log(`not counted: ${label} run ${run.run}: ${run.violations.map((violation) => violation.split("\n")[0]).join("; ")}`);
+      for (const run of artifact.results) if (run.stoppedBefore) console.log(`began on a stopped page: ${label} run ${run.run}: ${run.stoppedBefore}`);
     }
   }
 

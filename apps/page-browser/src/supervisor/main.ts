@@ -142,16 +142,23 @@ const PROFILE = "/data/profile";
  *  leaves a hundred of them and then cannot install the extension at all
  *  ("Could not find a home for extension", stand finding 33): the self-test
  *  fails and the page stays closed. So before every start the version
- *  directories the preferences do not name are removed — what Chrome's own
- *  collection would do. */
+ *  directories the preferences do not name are removed, as Chrome's own
+ *  collection does: an installed version and one waiting to be installed
+ *  are both kept. Preferences that exist and cannot be read name nothing
+ *  reliably — then nothing is removed. */
 function dropUnrecordedExtensionDirs(): void {
   const recorded = new Set<string>();
   for (const file of ["Preferences", "Secure Preferences"]) {
+    const path = `${PROFILE}/Default/${file}`;
+    if (!existsSync(path)) continue;
     try {
-      const prefs = JSON.parse(readFileSync(`${PROFILE}/Default/${file}`, "utf8")) as { extensions?: { settings?: Record<string, { path?: unknown }> } };
-      for (const setting of Object.values(prefs.extensions?.settings ?? {})) if (typeof setting.path === "string") recorded.add(setting.path);
-    } catch {
-      // No such file yet, or one Chrome will reset: it records nothing.
+      const prefs = JSON.parse(readFileSync(path, "utf8")) as { extensions?: { settings?: Record<string, { path?: unknown; idle_install_info?: { path?: unknown } }> } };
+      for (const setting of Object.values(prefs.extensions?.settings ?? {})) {
+        for (const named of [setting.path, setting.idle_install_info?.path]) if (typeof named === "string") recorded.add(named);
+      }
+    } catch (error) {
+      log("chrome.extension_dirs_kept", { file, error: (error as Error).message });
+      return;
     }
   }
   const root = `${PROFILE}/Default/Extensions`;

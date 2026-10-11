@@ -20,6 +20,9 @@ export interface Ctx {
    *  not a run the stand could not set up. */
   arm: () => void;
   armed: boolean;
+  /** Why the page stood stopped when the run began (the run before left it
+   *  so), or null. */
+  stoppedBefore: string | null;
 }
 
 export interface RunResult {
@@ -111,7 +114,7 @@ async function main(): Promise<void> {
     const log = (event: string, fields?: Record<string, unknown>) =>
       console.log(JSON.stringify({ run, ms: Math.round(monoMs() - started), event, ...fields }));
     let result: RunResult;
-    const ctx: Ctx = { engine, stand, docker, run, log, armed: false, arm: () => undefined };
+    const ctx: Ctx = { engine, stand, docker, run, log, armed: false, arm: () => undefined, stoppedBefore: null };
     ctx.arm = () => {
       ctx.armed = true;
     };
@@ -126,7 +129,7 @@ async function main(): Promise<void> {
     }
     await stand.clearFaults().catch(() => undefined);
     const invalid = result.violations.length > 0 && result.violations.every((violation) => violation.startsWith("scenario error:"));
-    results.push({ run, ms: Math.round(monoMs() - started), invalid, ...result });
+    results.push({ run, ms: Math.round(monoMs() - started), invalid, ...(ctx.stoppedBefore === null ? {} : { stoppedBefore: ctx.stoppedBefore }), ...result });
     console.log(JSON.stringify({ run, ok: result.ok, invalid, violations: result.violations, notes: result.notes }));
     if (invalid) {
       invalidInRow += 1;

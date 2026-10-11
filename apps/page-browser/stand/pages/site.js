@@ -32,6 +32,13 @@
   const site = {
     log,
     sockets,
+    _aborts: new Map(),
+
+    abort(rid) {
+      const controller = site._aborts.get(rid);
+      if (controller) controller.abort();
+      return !!controller;
+    },
 
     /** A site API request with the headers Fansly's client sends (they make
      *  it a CORS request with a preflight). */
@@ -44,6 +51,12 @@
         keepalive: opts.keepalive === true,
       };
       if (opts.body) init.body = opts.body;
+      if (opts.abortable) {
+        // The page drops its own request, as a site does on a route change.
+        const controller = new AbortController();
+        init.signal = controller.signal;
+        site._aborts.set(rid, controller);
+      }
       const started = performance.now();
       return fetch(url, init).then(
         async (r) => note({ kind: "api", rid, status: r.status, ms: performance.now() - started, body: (await r.text()).slice(0, 300) }),
