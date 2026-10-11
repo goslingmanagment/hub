@@ -1,15 +1,19 @@
 import { Navigate, Outlet, useLocation } from "react-router";
 import { useAuthMe, useLogout } from "@/api/queries";
 import { KernelApiError } from "@/api/sdk";
-import { buildLoginRoute } from "@/lib/navigation";
+import { buildLoginRoute, chatterExit } from "@/lib/navigation";
 import { clearDashboardSession } from "@/lib/queryClient";
-import { CHATTER_SITE_ORIGIN, isConsoleSite } from "@/lib/sites";
+import { isConsoleSite } from "@/lib/sites";
 
 // Decision 351: the shell for /account. A chatter has no owner console, so
 // there is no sidebar and no page catalogue here — one line of chrome above a
 // single column. The owner and a team lead may open the same page (it is their
-// account too); the layout does not branch on role — except on the console's
-// own production name, where a chatter is told that their cabinet is elsewhere.
+// account too); the layout does not branch on role.
+//
+// The console's own production name serves no cabinet at all: the account
+// lives on the chatters' site, and a session does not carry between the two
+// names. There this layout only sends people on — an owner or a team lead to
+// the console, a chatter to the sign-in page that turns them away.
 
 export function ChatterLayout() {
   const location = useLocation();
@@ -47,6 +51,10 @@ export function ChatterLayout() {
     );
   }
 
+  if (isConsoleSite()) {
+    return <Navigate to={data.user.role === "chatter" ? chatterExit() : "/"} replace />;
+  }
+
   async function handleLogout() {
     if (logout.isPending) return;
     try {
@@ -54,38 +62,6 @@ export function ChatterLayout() {
       clearDashboardSession();
       window.location.assign("/login");
     } catch { /* The mutation retains the failure; never claim an unconfirmed sign-out. */ }
-  }
-
-  // The console's own name is not a chatter's place: the cabinet is on the
-  // chatters' site, and a session does not carry from one name to the other.
-  // Opening the cabinet here left a person who also has an owner login
-  // guessing why the console would not open. So the page says whose name this
-  // is and offers both ways out. An owner or a team lead still gets their
-  // account here.
-  if (isConsoleSite() && data.user.role === "chatter") {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-bg p-6">
-        <div className="max-w-md rounded-xl border border-border bg-card p-6">
-          <h1 className="font-semibold text-text-primary">Это консоль владельца</h1>
-          <p className="mt-2 text-sm text-text-secondary">
-            Вы вошли как {data.user.username}. Это логин чаттера: консоль ему недоступна, а аккаунт ChatGoose открывается на своём адресе.
-          </p>
-          <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-3">
-            <button
-              type="button"
-              onClick={() => void handleLogout()}
-              disabled={logout.isPending}
-              className="min-h-11 rounded-lg bg-accent px-4 text-white disabled:opacity-50"
-            >
-              Войти под другим логином
-            </button>
-            <a href={`${CHATTER_SITE_ORIGIN}/account`} className="text-sm text-text-secondary underline">
-              Открыть аккаунт ChatGoose
-            </a>
-          </div>
-        </div>
-      </div>
-    );
   }
 
   return (
