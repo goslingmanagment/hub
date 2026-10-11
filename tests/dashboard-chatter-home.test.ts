@@ -55,7 +55,7 @@ vi.mock("../apps/dashboard/src/components/layout/Topbar.tsx", () => ({
 import { ChatterLayout } from "../apps/dashboard/src/components/layout/ChatterLayout.tsx";
 import { ProtectedLayout } from "../apps/dashboard/src/components/layout/ProtectedLayout.tsx";
 import { LoginPage } from "../apps/dashboard/src/pages/LoginPage.tsx";
-import { resolveRoleHome } from "../apps/dashboard/src/lib/navigation.ts";
+import { chatterExit, resolveRoleHome } from "../apps/dashboard/src/lib/navigation.ts";
 import { CHATTER_SITE_ORIGIN, CONSOLE_ORIGIN } from "../apps/dashboard/src/lib/sites.ts";
 
 function user(role: string) {
@@ -197,6 +197,32 @@ describe("on the console's own name", () => {
     const html = renderToStaticMarkup(createElement(LoginPage));
     expect(html).toContain(AGENCYHUB_WORDMARK);
     expect(html).not.toContain("Goose");
+  });
+
+  it("does not take a chatter login in: the form stays and says where that account is", () => {
+    const html = renderToStaticMarkup(createElement(LoginPage));
+    expect(html).not.toContain("nav-redirect");
+    expect(html).toContain('type="password"');
+    expect(html).toContain("Это вход в админку. Аккаунт ChatGoose — на");
+    expect(html).toContain(`href="${CHATTER_SITE_ORIGIN}/account"`);
+  });
+
+  it("says nothing of the kind to someone who is simply signed out", () => {
+    signedOut();
+    expect(renderToStaticMarkup(createElement(LoginPage))).not.toContain("Это вход в админку");
+  });
+
+  it("sends a chatter session from a console page to the sign-in page, not to a cabinet", () => {
+    expect(chatterExit()).toBe("/login");
+    expect(renderToStaticMarkup(createElement(ProtectedLayout))).toContain('data-to="/login"');
+  });
+
+  it("serves no cabinet: /account leads an owner to the console and a chatter to the sign-in page", () => {
+    expect(renderToStaticMarkup(createElement(ChatterLayout))).toContain('data-to="/login"');
+    mocks.useAuthMe.mockReturnValue({ data: user("owner"), isLoading: false, isError: false });
+    const html = renderToStaticMarkup(createElement(ChatterLayout));
+    expect(html).toContain('data-to="/"');
+    expect(html).not.toContain("page-outlet");
   });
 
   it("returns an owner to the page they were sent away from, and leaves them the console", () => {

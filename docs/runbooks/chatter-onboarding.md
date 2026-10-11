@@ -11,7 +11,11 @@ An owner cookie session is required for administrative actions.
 
 The console is served on `hub.gosling-agency.ru`; the person you invite lands
 on `chatgoose.gosling-agency.ru`, the chatters' site, which also serves their
-cabinet at `/account`.
+cabinet at `/account`. These are two doors. The
+console's name takes in the owner and team leads only: a chatter login is not
+accepted there (the form answers «Это вход в админку. Аккаунт ChatGoose — на
+chatgoose.gosling-agency.ru»), and no cabinet is served under that name. The
+chatters' site takes any login and shows that login's account.
 
 ## Inviting
 

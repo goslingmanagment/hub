@@ -1,9 +1,10 @@
-import { useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useNavigate, Navigate, useSearchParams } from "react-router";
-import { useLogin, useAuthMe } from "@/api/queries";
+import { useLogin, useLogout, useAuthMe } from "@/api/queries";
 import { KernelApiError } from "@/api/sdk";
 import { resolveLoginReturnPath, resolveRoleHome } from "@/lib/navigation";
-import { isChatterSite } from "@/lib/sites";
+import { clearDashboardSession } from "@/lib/queryClient";
+import { CHATTER_SITE_ORIGIN, isChatterSite, isConsoleSite } from "@/lib/sites";
 
 // One sign-in screen for two names. A chatter signs in to the product they
 // use, so on their site it carries that product's wordmark — the one
@@ -19,9 +20,24 @@ export function LoginPage() {
   const [params] = useSearchParams();
   const returnTo = resolveLoginReturnPath(params.get("next"));
   const login = useLogin();
+  const logout = useLogout();
   const authQuery = useAuthMe();
   const { data: auth, isLoading: authLoading } = authQuery;
   const submitting = useRef(false);
+
+  // Two doors. The console's own name is the owner's and the team leads' way
+  // in; a chatter login belongs to ChatGoose and is not accepted here. A
+  // session of one — made by this form a moment ago, or left in the browser
+  // from before the names were split — is ended, and the form says where that
+  // login is at home. No cabinet opens under the console's name.
+  const turnedAway = isConsoleSite() && !authQuery.isError && auth?.user.role === "chatter";
+  const [wasTurnedAway, setWasTurnedAway] = useState(false);
+  const endSession = logout.mutate;
+  useEffect(() => {
+    if (!turnedAway) return;
+    setWasTurnedAway(true);
+    endSession(undefined, { onSuccess: () => clearDashboardSession() });
+  }, [turnedAway, endSession]);
 
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -34,7 +50,7 @@ export function LoginPage() {
     );
   }
 
-  if (auth?.user && !authQuery.isError) {
+  if (auth?.user && !authQuery.isError && !turnedAway) {
     return <Navigate to={resolveRoleHome(auth.user.role, returnTo)} replace />;
   }
 
@@ -45,7 +61,12 @@ export function LoginPage() {
     login.mutate(
       { username, password },
       {
-        onSuccess: (state) => navigate(resolveRoleHome(state.user.role, returnTo), { replace: true }),
+        onSuccess: (state) => {
+          // Turned away above, once the session it has just made is read back.
+          if (isConsoleSite() && state.user.role === "chatter") return;
+          setWasTurnedAway(false);
+          navigate(resolveRoleHome(state.user.role, returnTo), { replace: true });
+        },
         onSettled: () => { submitting.current = false; },
       },
     );
@@ -59,6 +80,12 @@ export function LoginPage() {
         </h1>
 
         {authQuery.isError && !(authQuery.error instanceof KernelApiError && authQuery.error.status === 401) && <p role="alert" className="mb-4 text-sm text-text-secondary">Не удалось проверить текущую сессию. Можно повторить вход.</p>}
+        {(turnedAway || wasTurnedAway) && (
+          <p role="alert" className="mb-4 text-sm text-text-secondary">
+            Это вход в админку. Аккаунт ChatGoose — на{" "}
+            <a href={`${CHATTER_SITE_ORIGIN}/account`} className="underline">chatgoose.gosling-agency.ru</a>.
+          </p>
+        )}
         <form onSubmit={handleSubmit} className="flex flex-col gap-4" aria-busy={login.isPending}>
           <div className="flex flex-col gap-1.5">
             <label htmlFor="username" className="text-sm text-text-secondary">

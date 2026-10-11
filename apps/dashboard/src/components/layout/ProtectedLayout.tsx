@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Navigate, Outlet, useLocation } from "react-router";
 import { useAuthMe, usePages } from "@/api/queries";
 import { KernelApiError } from "@/api/sdk";
-import { CHATTER_HOME, buildLoginRoute } from "@/lib/navigation";
+import { CHATTER_HOME, buildLoginRoute, chatterExit } from "@/lib/navigation";
 import { isChatterSite } from "@/lib/sites";
 import { QueryNotice } from "@/components/shared/QueryNotice";
 import { DashboardShellProvider } from "./DashboardShellContext.js";
@@ -103,9 +103,10 @@ function ConsoleLayout() {
 
   // Decision 351: every page behind this layout is owner or team-lead work and
   // answers 403 for a chatter. Send them to their own cabinet instead of
-  // rendering a console full of refusals.
+  // rendering a console full of refusals — or, on the console's own name,
+  // where there is no cabinet, to the sign-in page that turns them away.
   if (data.user.role === "chatter") {
-    return <Navigate to={CHATTER_HOME} replace />;
+    return <Navigate to={chatterExit()} replace />;
   }
 
   const shellValue = {
