@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -556,12 +556,113 @@ describe("production deploy behavior without production access", () => {
       REMOTE_DEPLOY_LOCK_ACQUIRED=1
       REMOTE_DEPLOY_LOCK_DIR_ESCAPED=/opt/agency-hub/.deploy.lock
       REMOTE_DEPLOY_LOCK_DIR=/opt/agency-hub/.deploy.lock
+      REMOTE_DEPLOY_MARKER_DIR_ESCAPED=/opt/agency-hub/.monitor/.deploy.lock
+      REMOTE_DEPLOY_MARKER_DIR=/opt/agency-hub/.monitor/.deploy.lock
       release_remote_deploy_lock || log "lock release failed"
       [[ "$REMOTE_DEPLOY_LOCK_ACQUIRED" == 1 ]]
     `, { TEST_REMOTE_FAILURE_PATTERN: "remote lock owner changed" });
     expect(result.status, result.stderr).toBe(0);
     expect(result.stderr).toContain("lock release failed");
-    expect(commands()).toHaveLength(1);
+    // One remote command, of several lines: the marker's removal and the lock's.
+    expect(commands().filter((line) => line === "set -euo pipefail")).toHaveLength(1);
+  });
+
+  // The server monitor is given `.monitor`, not the app directory: the marker
+  // there is how it sees a deploy. These run the real remote commands against
+  // a directory of the fixture (whose path has spaces in it).
+  describe("the deploy marker for observers", () => {
+    const lockSetup = String.raw`
+      run_remote() { bash -c "$1"; }
+      APP_DIR="$ROOT_DIR/app"
+      REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"
+      REMOTE_DEPLOY_LOCK_DIR="$APP_DIR/.deploy.lock"
+      REMOTE_DEPLOY_LOCK_DIR_ESCAPED="$(printf '%q' "$REMOTE_DEPLOY_LOCK_DIR")"
+      REMOTE_DEPLOY_MARKER_PARENT="$APP_DIR/.monitor"
+      REMOTE_DEPLOY_MARKER_PARENT_ESCAPED="$(printf '%q' "$REMOTE_DEPLOY_MARKER_PARENT")"
+      REMOTE_DEPLOY_MARKER_DIR="$REMOTE_DEPLOY_MARKER_PARENT/.deploy.lock"
+      REMOTE_DEPLOY_MARKER_DIR_ESCAPED="$(printf '%q' "$REMOTE_DEPLOY_MARKER_DIR")"
+      ROLLBACK_IMAGE_TAG=rollback CLEAN_FULL_BASE_TAG=base REMOTE_DEPLOY_LOCK_ACQUIRED=0
+    `;
+    const lockFunctions = ["acquire_remote_deploy_lock", "release_remote_deploy_lock"];
+    const appDir = () => path.join(fixtureRoot, "app");
+    const marker = () => path.join(appDir(), ".monitor", ".deploy.lock");
+    const lock = () => path.join(appDir(), ".deploy.lock");
+    const release = `${lockSetup}\nREMOTE_DEPLOY_LOCK_ACQUIRED=1\nrelease_remote_deploy_lock`;
+
+    it("is published under the lock with this run's id, and removed with the lock; its directory stays", () => {
+      const held = runFunctions(lockFunctions, `${lockSetup}\nacquire_remote_deploy_lock`);
+      expect(held.status, held.stderr).toBe(0);
+      expect(readFileSync(path.join(lock(), "owner"), "utf8")).toBe("fixture-123\n");
+      expect(readFileSync(path.join(marker(), "owner"), "utf8")).toBe("fixture-123\n");
+      // An unprivileged observer has to be able to look into the directory.
+      expect(statSync(path.dirname(marker())).mode & 0o777).toBe(0o755);
+
+      const released = runFunctions(lockFunctions, release);
+      expect(released.status, released.stderr).toBe(0);
+      expect(existsSync(lock())).toBe(false);
+      expect(existsSync(marker())).toBe(false);
+      // A mount of the directory would go on showing a removed one.
+      expect(existsSync(path.dirname(marker()))).toBe(true);
+    });
+
+    it("replaces a marker left by a run that died, so it carries this deploy's time", () => {
+      mkdirSync(marker(), { recursive: true });
+      writeFileSync(path.join(marker(), "owner"), "a-run-that-died\n");
+      const longAgo = new Date(Date.now() - 3 * 3_600_000);
+      utimesSync(marker(), longAgo, longAgo);
+
+      const held = runFunctions(lockFunctions, `${lockSetup}\nacquire_remote_deploy_lock`);
+      expect(held.status, held.stderr).toBe(0);
+      expect(readFileSync(path.join(marker(), "owner"), "utf8")).toBe("fixture-123\n");
+      expect(Date.now() - statSync(marker()).mtimeMs).toBeLessThan(60_000);
+    });
+
+    it("never fails a deploy: the lock is taken and released when the marker cannot be made", () => {
+      // Something that is not a directory where the marker's directory belongs.
+      mkdirSync(appDir(), { recursive: true });
+      writeFileSync(path.join(appDir(), ".monitor"), "");
+      const held = runFunctions(lockFunctions, `${lockSetup}\nacquire_remote_deploy_lock\n[[ "$REMOTE_DEPLOY_LOCK_ACQUIRED" == 1 ]]`);
+      expect(held.status, held.stderr).toBe(0);
+      expect(held.stderr).toContain("unable to publish the deploy marker");
+      expect(readFileSync(path.join(lock(), "owner"), "utf8")).toBe("fixture-123\n");
+      const released = runFunctions(lockFunctions, release);
+      expect(released.status, released.stderr).toBe(0);
+      expect(existsSync(lock())).toBe(false);
+    });
+
+    it("leaves the lock's exclusion as it was: a second deploy is refused, marker or no marker", () => {
+      expect(runFunctions(lockFunctions, `${lockSetup}\nacquire_remote_deploy_lock`).status).toBe(0);
+      const second = runFunctions(lockFunctions, `${lockSetup}\nacquire_remote_deploy_lock`, { DEPLOY_RUN_ID: "second-456" });
+      expect(second.status).not.toBe(0);
+      expect(second.stderr).toContain("another deploy is running");
+      // The refused run touched neither the lock nor the marker of the first.
+      expect(readFileSync(path.join(lock(), "owner"), "utf8")).toBe("fixture-123\n");
+      expect(readFileSync(path.join(marker(), "owner"), "utf8")).toBe("fixture-123\n");
+    });
+
+    it("does not remove another run's marker, and still reports a lock whose owner changed", () => {
+      expect(runFunctions(lockFunctions, `${lockSetup}\nacquire_remote_deploy_lock`).status).toBe(0);
+      // The lock was taken over by hand and another run holds it now.
+      writeFileSync(path.join(lock(), "owner"), "second-456\n");
+      writeFileSync(path.join(marker(), "owner"), "second-456\n");
+      const released = runFunctions(lockFunctions, String.raw`${lockSetup}
+        REMOTE_DEPLOY_LOCK_ACQUIRED=1
+        release_remote_deploy_lock || log "lock release failed"
+        [[ "$REMOTE_DEPLOY_LOCK_ACQUIRED" == 1 ]]
+      `);
+      expect(released.status, released.stderr).toBe(0);
+      expect(released.stderr).toContain("remote lock owner changed");
+      expect(readFileSync(path.join(lock(), "owner"), "utf8")).toBe("second-456\n");
+      expect(readFileSync(path.join(marker(), "owner"), "utf8")).toBe("second-456\n");
+    });
+
+    it("removes its own marker even when its lock has been removed by hand", () => {
+      expect(runFunctions(lockFunctions, `${lockSetup}\nacquire_remote_deploy_lock`).status).toBe(0);
+      rmSync(lock(), { recursive: true });
+      const released = runFunctions(lockFunctions, release);
+      expect(released.status, released.stderr).toBe(0);
+      expect(existsSync(marker())).toBe(false);
+    });
   });
 
   // Design §9.3 [A3]: the app-scope recreate leaves sync alone; it is

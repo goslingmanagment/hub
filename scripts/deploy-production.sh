@@ -406,6 +406,17 @@ LOCAL_DEPLOY_LOCK_ACQUIRED=0
 REMOTE_DEPLOY_LOCK_DIR="${APP_DIR%/}/.deploy.lock"
 REMOTE_DEPLOY_LOCK_DIR_ESCAPED="$(printf '%q' "$REMOTE_DEPLOY_LOCK_DIR")"
 REMOTE_DEPLOY_LOCK_ACQUIRED=0
+# A sign of the held lock for an observer that must not be given the app
+# directory itself. The server monitor mounts only this directory, read-only,
+# in place of the app directory, and so finds the marker where it looks for
+# the lock. The lock stays where it is: moved, a deploy run from an older
+# checkout would no longer exclude one run from this one. The marker is a
+# courtesy — nothing about it may fail a deploy — and its directory is never
+# removed: a mount of it would go on showing the removed one.
+REMOTE_DEPLOY_MARKER_PARENT="${APP_DIR%/}/.monitor"
+REMOTE_DEPLOY_MARKER_PARENT_ESCAPED="$(printf '%q' "$REMOTE_DEPLOY_MARKER_PARENT")"
+REMOTE_DEPLOY_MARKER_DIR="${REMOTE_DEPLOY_MARKER_PARENT}/.deploy.lock"
+REMOTE_DEPLOY_MARKER_DIR_ESCAPED="$(printf '%q' "$REMOTE_DEPLOY_MARKER_DIR")"
 ROLLBACK_COMPATIBLE_MIGRATIONS=(
   "0013_backfill_egress_rate_limit_scope_key.sql"
   "0014_repair_light_trusted_sync_states.sql"
@@ -977,8 +988,26 @@ acquire_local_deploy_lock() {
 
 release_remote_deploy_lock() {
   [[ "${REMOTE_DEPLOY_LOCK_ACQUIRED:-0}" == "1" ]] || return 0
-  run_remote "set -euo pipefail; if [[ -d ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED} ]]; then if [[ -f ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED}/owner ]] && [[ \"\$(cat ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED}/owner)\" == $(printf '%q' "$DEPLOY_RUN_ID") ]]; then rm -rf ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED}; else printf '[deploy] remote lock owner changed; leaving %s in place\n' $(printf '%q' "$REMOTE_DEPLOY_LOCK_DIR") >&2; exit 1; fi; fi" \
-    || return 1
+  local remote_command
+  # The observers' marker goes first, while the lock is still this run's, and
+  # only when it is this run's: a later run has replaced it with its own.
+  remote_command=$(cat <<EOF
+set -euo pipefail
+if [[ -f ${REMOTE_DEPLOY_MARKER_DIR_ESCAPED}/owner ]] && [[ "\$(cat ${REMOTE_DEPLOY_MARKER_DIR_ESCAPED}/owner 2>/dev/null)" == $(printf '%q' "$DEPLOY_RUN_ID") ]]; then
+  rm -rf ${REMOTE_DEPLOY_MARKER_DIR_ESCAPED} 2>/dev/null \\
+    || printf '[deploy] warning: unable to remove the deploy marker %s\n' $(printf '%q' "$REMOTE_DEPLOY_MARKER_DIR") >&2
+fi
+if [[ -d ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED} ]]; then
+  if [[ -f ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED}/owner ]] && [[ "\$(cat ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED}/owner)" == $(printf '%q' "$DEPLOY_RUN_ID") ]]; then
+    rm -rf ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED}
+  else
+    printf '[deploy] remote lock owner changed; leaving %s in place\n' $(printf '%q' "$REMOTE_DEPLOY_LOCK_DIR") >&2
+    exit 1
+  fi
+fi
+EOF
+)
+  run_remote "$remote_command" || return 1
   REMOTE_DEPLOY_LOCK_ACQUIRED=0
 }
 
@@ -1051,6 +1080,15 @@ if mkdir ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED} 2>/dev/null; then
     printf 'clean_full_base_tag=%s\n' $(printf '%q' "$CLEAN_FULL_BASE_TAG")
   } > ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED}/metadata
   printf '%s\n' $(printf '%q' "$DEPLOY_RUN_ID") > ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED}/owner
+  # The observers' marker, made anew under the lock: it carries this deploy's
+  # time, and one left behind by a run that died is replaced, not kept.
+  if ! { mkdir -p ${REMOTE_DEPLOY_MARKER_PARENT_ESCAPED} \\
+      && chmod 755 ${REMOTE_DEPLOY_MARKER_PARENT_ESCAPED} \\
+      && rm -rf ${REMOTE_DEPLOY_MARKER_DIR_ESCAPED} \\
+      && mkdir ${REMOTE_DEPLOY_MARKER_DIR_ESCAPED} \\
+      && printf '%s\n' $(printf '%q' "$DEPLOY_RUN_ID") > ${REMOTE_DEPLOY_MARKER_DIR_ESCAPED}/owner; } 2>/dev/null; then
+    printf '[deploy] warning: unable to publish the deploy marker %s; the deploy goes on\n' $(printf '%q' "$REMOTE_DEPLOY_MARKER_DIR") >&2
+  fi
   exit 0
 fi
 printf '[deploy] error: another deploy is running; remote lock exists: %s\n' $(printf '%q' "$REMOTE_DEPLOY_LOCK_DIR") >&2
