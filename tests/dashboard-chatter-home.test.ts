@@ -199,6 +199,22 @@ describe("on the console's own name", () => {
     expect(html).not.toContain("Goose");
   });
 
+  it("tells a chatter whose name this is instead of opening the cabinet under it", () => {
+    const html = renderToStaticMarkup(createElement(ChatterLayout));
+    expect(html).toContain("Это консоль владельца");
+    expect(html).toContain("grisha");
+    expect(html).toContain("Войти под другим логином");
+    expect(html).toContain(`href="${CHATTER_SITE_ORIGIN}/account"`);
+    expect(html).not.toContain("page-outlet");
+  });
+
+  it("still opens the account page there for an owner", () => {
+    mocks.useAuthMe.mockReturnValue({ data: user("owner"), isLoading: false, isError: false });
+    const html = renderToStaticMarkup(createElement(ChatterLayout));
+    expect(html).toContain("page-outlet");
+    expect(html).not.toContain("Это консоль владельца");
+  });
+
   it("returns an owner to the page they were sent away from, and leaves them the console", () => {
     mocks.search = new URLSearchParams({ next: "/usage" });
     mocks.useAuthMe.mockReturnValue({ data: user("owner"), isLoading: false, isError: false });

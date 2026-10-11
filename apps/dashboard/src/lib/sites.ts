@@ -25,6 +25,13 @@ export function isChatterSite(): boolean {
   return typeof window !== "undefined" && window.location.origin === CHATTER_SITE_ORIGIN;
 }
 
+/** True only on the console's own production name. A local build or a test is
+ *  the whole app on one origin and serves the cabinet itself. Guarded like
+ *  isChatterSite. */
+export function isConsoleSite(): boolean {
+  return typeof window !== "undefined" && window.location.origin === CONSOLE_ORIGIN;
+}
+
 /**
  * The origin of the chatters' pages that go with a console running on
  * `consoleOrigin`. A production console sends people to the chatters' site.
