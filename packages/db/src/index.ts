@@ -163,6 +163,8 @@ export * from "./repositories/ofapi-sync-snapshot.ts";
 export * from "./repositories/telegram-settings.ts";
 export * from "./repositories/reporting.ts";
 export * from "./repositories/runtime-instances.ts";
+// The reads of `GET /api/v1/ops/live` (the operator screen's one request).
+export * from "./repositories/ops-live.ts";
 export * from "./repositories/page-dm.ts";
 export * from "./repositories/fansly-dm-reader-heads.ts";
 export * from "./repositories/fansly-send-guard.ts";
