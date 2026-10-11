@@ -1976,8 +1976,10 @@ if (halted !== null) egress.latch(halted);
 
 /** `how`: "kill" — at once, when the page itself cannot be trusted (a guard
  *  or an interception that is not in place); "stop" — Chrome is asked to exit
- *  and writes its profile first (the session of a login just made), killed
- *  after 5 s. The exit is latched before either: nothing leaves meanwhile. */
+ *  by itself and is killed after 5 s. That writes its preferences, but not
+ *  surely what a site keeps in localStorage (a login just made — Astra
+ *  review 8): nothing may rely on the session being there afterwards. The
+ *  exit is latched before either: nothing leaves meanwhile. */
 function halt(reason: string, how: "kill" | "stop" = "kill"): void {
   if (halted !== null) return;
   halted = reason;
