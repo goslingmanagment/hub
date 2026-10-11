@@ -6,6 +6,7 @@
 # replaces the root supervisor with s6-overlay and adds KasmVNC, fonts and Mesa.
 #
 #   docker build --build-context chrome=$HOME/code/.cache/page-browser/chrome \
+#     --build-context kasmvnc=$HOME/code/.cache/page-browser/kasmvnc \
 #     -t pb-browser apps/page-browser
 FROM node:22-bookworm-slim
 
@@ -20,11 +21,12 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 COPY --from=chrome google-chrome-stable_${CHROME_VERSION}_${TARGETARCH}.deb /tmp/chrome.deb
+COPY --from=kasmvnc kasmvncserver_bookworm_1.5.0_${TARGETARCH}.deb /tmp/kasmvnc.deb
 # The package adds Google's apt source and a daily cron job that re-adds it:
 # Chrome is updated only by a new image (plan §4.10).
 RUN apt-get update \
- && apt-get install -y --no-install-recommends /tmp/chrome.deb \
- && rm -f /tmp/chrome.deb /etc/apt/sources.list.d/google-chrome.list /etc/cron.daily/google-chrome \
+ && apt-get install -y --no-install-recommends /tmp/chrome.deb /tmp/kasmvnc.deb \
+ && rm -f /tmp/chrome.deb /tmp/kasmvnc.deb /etc/apt/sources.list.d/google-chrome.list /etc/cron.daily/google-chrome \
  && rm -rf /var/lib/apt/lists/* \
  && google-chrome-stable --version
 

@@ -79,20 +79,55 @@ function keep(name: "holder" | "operator", script: string, restartMs: number): v
   start();
 }
 
-function startXvfb(): void {
-  const child = spawn("Xvfb", [DISPLAY, "-screen", "0", "1920x1080x24", "-nolisten", "tcp", "-ac"], {
-    uid: CHROME_UID,
-    gid: CHROME_UID,
-    env: baseEnv("/home/pb-chrome"),
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+/** The X server of the page: KasmVNC's Xkasmvnc when present (the owner's
+ *  screen, plan §4.8: web client on :6901 with basic auth, the password
+ *  from PB_VNC_PASSWORD), else Xvfb. */
+function startXServer(): void {
+  const kasm = existsSync("/usr/bin/Xkasmvnc") && process.env.PB_VNC !== "0";
+  let child: ChildProcess;
+  if (kasm) {
+    const passwordFile = "/home/pb-chrome/.kasmpasswd";
+    const password = process.env.PB_VNC_PASSWORD ?? "";
+    if (password !== "") {
+      // kasmvncpasswd reads the password twice from stdin; -w: write access.
+      execFileSync("kasmvncpasswd", ["-u", "owner", "-w", passwordFile], { input: `${password}\n${password}\n`, uid: CHROME_UID, gid: CHROME_UID, env: baseEnv("/home/pb-chrome") });
+    }
+    const args = [
+      DISPLAY,
+      "-geometry", "1920x1080", "-depth", "24",
+      "-websocketPort", String(envInt("PB_VNC_PORT", 6901)),
+      "-interface", "0.0.0.0",
+      "-httpd", "/usr/share/kasmvnc/www",
+      "-KasmPasswordFile", passwordFile,
+      "-sslOnly", "0",
+      "-disableBasicAuth", password === "" ? "1" : "0",
+      // The web client authenticates at HTTP (basic auth against the
+      // password file); no second VNC-level password.
+      "-SecurityTypes", "None",
+      "-FrameRate", "30",
+      "-AlwaysShared",
+      "-nolisten", "tcp",
+      // No STUN lookups (UDP is closed anyway; without an address set,
+      // Xkasmvnc exits when its STUN queries fail).
+      "-publicIP", "127.0.0.1",
+    ];
+    child = spawn("Xkasmvnc", args, { uid: CHROME_UID, gid: CHROME_UID, env: baseEnv("/home/pb-chrome"), stdio: ["ignore", "pipe", "pipe"] });
+    log("x.started", { server: "Xkasmvnc", port: envInt("PB_VNC_PORT", 6901), auth: password !== "" });
+  } else {
+    child = spawn("Xvfb", [DISPLAY, "-screen", "0", "1920x1080x24", "-nolisten", "tcp", "-ac"], {
+      uid: CHROME_UID,
+      gid: CHROME_UID,
+      env: baseEnv("/home/pb-chrome"),
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  }
   pids.xvfb = child.pid ?? null;
   writePids();
-  pipeLogs("xvfb", child);
+  pipeLogs(kasm ? "kasmvnc" : "xvfb", child);
   child.on("exit", (code, signal) => {
-    log("xvfb.exited", { code, signal });
+    log("x.exited", { code, signal });
     pids.xvfb = null;
-    setTimeout(startXvfb, 1000);
+    setTimeout(startXServer, 1000);
   });
 }
 
@@ -262,7 +297,7 @@ chownSync(RUN, 0, OPERATOR_UID);
 chmodSync(RUN, 0o770);
 writePids();
 listenControl();
-startXvfb();
+startXServer();
 await sleep(500);
 keep("holder", `${SRC}/holder/main.ts`, 300);
 keep("operator", `${SRC}/operator/main.ts`, 1000);

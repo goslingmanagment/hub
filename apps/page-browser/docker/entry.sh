@@ -31,6 +31,7 @@ table inet pb {
     iif lo accept
     ct state established,related accept
     ip saddr $RPC_FROM tcp dport $RPC_PORT accept
+    ip saddr ${PB_VNC_FROM:-127.0.0.1} tcp dport ${PB_VNC_PORT:-6901} accept
   }
 }
 EOF
