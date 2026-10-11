@@ -13,11 +13,13 @@
 //
 // The journal (/stand/results/live-<time>.jsonl) has no secrets and no
 // bodies: methods, hosts and paths (query parameter names only), statuses,
-// sizes, alarms, the guard's reports (message type and key names).
+// sizes, alarms, the guard's reports (message type and key names). A body the
+// operator captured (PB_CAPTURE_BODIES, PB_CAPTURE_ALLOW) stays in the page's
+// buffer; the journal has its file name, sizes, hash prefix and wholeness.
 //
 // Control, from the runner container (127.0.0.1:7801):
 //   GET  /status
-//   POST /hub      {"path": "/api/v1/account/me"}   (reviewed paths only)
+//   POST /hub      {"read": "account.me"}   (named reads, LIVE_HUB_READS)
 //   POST /stop     the exit closes, the page stays stopped
 //   POST /pause    no new admissions;  POST /resume
 //   POST /command  {"name": "restart"}
@@ -50,12 +52,24 @@ const WINDOW_MS = 15_000;
 /** An operation that reports no end in this long stops the session. */
 const STUCK_MS = 25_000;
 const WS_STUCK_MS = 15_000;
-/** Hub requests of the test: reviewed paths only (a GET is not always a
- *  read — /emails/unsubscribe is one). */
-const HUB_PATHS = new RegExp(process.env.LIVE_HUB_PATHS ?? "^/api/v1/account/me$");
-
 /** The stand's rehearsal: the stand's short token and its navigation hook. */
 const REHEARSAL = process.env.LIVE_REHEARSAL === "1";
+
+/** Hub requests of the test: named reads only, each exactly as Hub's wire
+ *  sends it (`packages/fansly/src/wire/specs.ts`, main 6ee3d627) — a GET is
+ *  not always a read (/emails/unsubscribe is one). A session enables some of
+ *  them (LIVE_HUB_READS). Only the identity read returns fields to the
+ *  terminal; the others leave their bodies in the page's buffer, if the
+ *  capture allows their path. */
+const HUB_READS: Record<string, { path: string; query: string; extract: boolean }> = {
+  "account.me": { path: "/api/v1/account/me", query: "", extract: true },
+  "messaging.groups": { path: "/api/v1/messaging/groups", query: "offset=0&limit=100&sortOrder=1&flags=0", extract: false },
+  "vault.albums": { path: "/api/v1/vault/albumsnew", query: "", extract: false },
+  "subscriptions.tiers": { path: "/api/v1/subscriptions/tiers", query: "", extract: false },
+  ...(REHEARSAL ? { "stand.hub": { path: "/api/hub", query: "", extract: false } } : {}),
+};
+const HUB_ENABLED = new Set((process.env.LIVE_HUB_READS ?? (REHEARSAL ? "stand.hub" : "account.me")).split(",").filter(Boolean));
+for (const name of HUB_ENABLED) if (!(name in HUB_READS)) throw new Error(`unknown Hub read: ${name}`);
 if (PAUSE_MS < 2000) throw new Error("LIVE_PAUSE_MS below the owner's 2 s minimum");
 if (TOKEN.length < 16 && !REHEARSAL) throw new Error("PB_RPC_TOKEN is required");
 
@@ -78,6 +92,23 @@ function safeUrl(url: unknown): string {
   } catch {
     return "?";
   }
+}
+
+/** A captured body as the journal keeps it: its file in the page's buffer,
+ *  sizes, hash and whether it is whole — never its content. */
+function bodySummary(body: unknown): Record<string, unknown> | null {
+  if (body === null || typeof body !== "object") return null;
+  const b = body as Record<string, unknown>;
+  return {
+    file: typeof b.file === "string" ? b.file.split("/").at(-1) : null,
+    bytes: b.bytes ?? null,
+    encodedBytes: b.encodedBytes ?? null,
+    contentLength: b.contentLength ?? null,
+    contentEncoding: b.contentEncoding ?? null,
+    sha256: typeof b.sha256 === "string" ? b.sha256.slice(0, 16) : null,
+    complete: b.complete ?? null,
+    how: b.how ?? null,
+  };
 }
 
 type Kind = "site" | "hub" | "ws";
@@ -275,6 +306,7 @@ function finished(item: Queued): void {
     preflightStatus,
     source: d.source ?? null,
     error: d.error ?? d.errorText ?? null,
+    body: bodySummary(d.body),
   });
   if (d.status === 429 || preflightStatus === 429) stopSession(`429 on ${item.label}`);
 }
@@ -327,7 +359,7 @@ function pump(): void {
 
 let hubSeq = 0;
 const hubRefused = new Map<string, (reason: string) => void>();
-function hubRequest(path: string, query: string, method: string): Promise<unknown> {
+function hubRequest(path: string, query: string, method: string, extract: boolean): Promise<unknown> {
   const id = `live-${Date.now()}-${++hubSeq}`;
   const url = `${API}${path}${query ? `?${query}` : ""}`;
   hubLabels.set(id, `${method} ${safeUrl(url)}`);
@@ -340,7 +372,7 @@ function hubRequest(path: string, query: string, method: string): Promise<unknow
       label: hubLabels.get(id)!,
       askedMono: monoMs(),
       launch: () => {
-        void engine.sendHub(id, url, {}, method, { session: true, extract: HUB_EXTRACT }).then((r) =>
+        void engine.sendHub(id, url, {}, method, { session: true, extract: extract ? HUB_EXTRACT : null }).then((r) =>
           resolve({
             outcome: r.outcome,
             status: r.status ?? null,
@@ -348,6 +380,7 @@ function hubRequest(path: string, query: string, method: string): Promise<unknow
             error: r.error ?? null,
             source: r.source ?? null,
             preflightStatus: (r.preflight as { status?: number } | null)?.status ?? null,
+            body: bodySummary(r.body),
             // The identity fields, for the owner to compare (not journalled).
             extracted: r.extracted ?? null,
           }),
@@ -368,10 +401,13 @@ function control(): void {
         return reply(200, { state: engine.lastState?.state ?? null, reason: engine.lastState?.reason ?? null, exit: engine.lastState?.exit ?? null, stopped, paused, queue: queue.length, inFlight: inFlight?.label ?? null, counts, sitesLastHour: siteStarts.length, journal: journalFile });
       }
       if (req.method === "POST" && req.url === "/hub") {
-        const path = String(body.path ?? "");
-        if (!HUB_PATHS.test(path)) return reply(400, { error: `not a reviewed path: ${HUB_PATHS}` });
+        // {"read": "<name>"}; {"path": …} names the read with that path and
+        // no query, as the first sessions' runbook does.
+        const name = body.read !== undefined ? String(body.read) : Object.keys(HUB_READS).find((key) => HUB_READS[key]!.path === String(body.path ?? "") && HUB_READS[key]!.query === "");
+        if (name === undefined || !HUB_ENABLED.has(name)) return reply(400, { error: `not an enabled read; enabled: ${[...HUB_ENABLED].join(", ")}` });
         if (stopped !== null) return reply(409, { error: `session stopped: ${stopped}` });
-        void hubRequest(path, "", "GET").then((result) => reply(200, result));
+        const read = HUB_READS[name]!;
+        void hubRequest(read.path, read.query, "GET", read.extract).then((result) => reply(200, result));
         return;
       }
       if (req.method === "POST" && req.url === "/stop") {

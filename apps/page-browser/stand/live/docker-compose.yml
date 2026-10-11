@@ -67,8 +67,11 @@ services:
       PB_ON_BLOCKED_SEND: stop
       # The pilot's engine keeps its pacing in memory: the page stops with it.
       PB_HALT_ON_ENGINE_LOSS: "1"
-      # The first session writes no response bodies (Astra review 2, E).
-      PB_CAPTURE_BODIES: "0"
+      # The first sessions write no response bodies (Astra review 2, E). A
+      # later session writes the bodies of the reviewed paths only; the
+      # operator never writes a login, session, 2FA or authorisation path.
+      PB_CAPTURE_BODIES: ${PB_CAPTURE_BODIES:-0}
+      PB_CAPTURE_ALLOW: ${PB_CAPTURE_ALLOW:-}
       PB_SELFTEST_RULES: "1"
       PB_SELFTEST_NEVER_PATH: /api/v1/message/ack
       PB_IPCHECK_HOST: api.ipify.org
@@ -95,5 +98,5 @@ services:
       LIVE_OPERATOR: ws://10.250.240.20:7700/rpc
       PB_RPC_TOKEN: ${PB_RPC_TOKEN}
       LIVE_PAUSE_MS: ${LIVE_PAUSE_MS:-2500}
-      LIVE_HUB_PATHS: "^/api/v1/account/me$$"
+      LIVE_HUB_READS: ${LIVE_HUB_READS:-account.me}
     command: ["node", "--no-warnings", "/pb/stand/live/engine.ts"]
