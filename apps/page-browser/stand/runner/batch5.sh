@@ -1,11 +1,11 @@
 #!/bin/sh
 # Stage-1 series on the final prototype (after Astra's reviews):
-#   docker exec -d <project>-runner-1 sh /pb/stand/runner/batch5.sh A|B|C|D
+#   docker exec -d -e SERIES=<name> <project>-runner-1 sh /pb/stand/runner/batch5.sh A|B|C|D|E|F|G
 # This only records what each scenario printed. The verdict of the series is
 # verify-series.ts over the result files (the SERIES table there is this list).
 set -u
 PART="${1:-A}"
-OUT=/stand/results/last-${STAND_NAME:-stand}-$PART-$(date -u +%Y%m%dT%H%M%SZ).log
+OUT=/stand/results/${SERIES:-last}-${STAND_NAME:-stand}-$PART-$(date -u +%Y%m%dT%H%M%SZ).log
 run() {
   echo "=== $1 x$2 $(date -u +%H:%M:%S)" >> "$OUT"
   node --no-warnings /pb/stand/runner/main.ts "$1" "$2" > /tmp/batch-run.out 2>&1
@@ -37,6 +37,21 @@ case "$PART" in
     run idle-ping 10; run idle-post 10; run send-time 10
     run slow-body-limit 10; run slow-body-limit-capture 5
     for s in expiry-site-socks expiry-site-tcp expiry-hub-socks; do run "$s" 50; done
+    ;;
+  # The deadline's other cases of the plan (§4.2, step 4) and the 408 repeat.
+  E)
+    for s in expiry-site-tls expiry-hub-tls expiry-hub-page-stop; do run "$s" 50; done
+    run expiry-site-tls-nogate 10; run expiry-hub-page-stop-nogate 10
+    ;;
+  F)
+    for s in expiry-site-reused expiry-hub-reused expiry-site-operator-stop expiry-site-late-grant expiry-hub-late-grant retry-408; do run "$s" 50; done
+    run expiry-site-reused-nogate 10; run expiry-site-operator-stop-nogate 10; run retry-408-nogate 10
+    ;;
+  # The replies of CDP commands reach the operator later than the events.
+  G)
+    export STAND_CDP_REPLY_DELAY_MS=100
+    for s in smoke body-capture hub-redirect site-redirect site-redirect-xhr loss-cdp-break-late-inflight; do run "$s" 20; done
+    for s in ws-contexts xhr-parity retry-post; do run "$s" 10; done
     ;;
 esac
 echo "=== done $(date -u +%H:%M:%S)" >> "$OUT"

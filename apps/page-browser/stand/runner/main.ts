@@ -147,7 +147,8 @@ async function main(): Promise<void> {
   // A series that could not gather its valid runs is not a pass (Astra
   // review 3: 3 asked, 8 invalid, 0 valid used to exit 0).
   const short = Math.max(0, runs - counted.length);
-  const summary = { scenario: name, asked: runs, runs: counted.length, passed: counted.length - failed.length, failed: failed.length, invalid: results.length - counted.length, short, resets, results };
+  const cdpReplyDelayMs = Number(process.env.STAND_CDP_REPLY_DELAY_MS ?? "0");
+  const summary = { scenario: name, asked: runs, runs: counted.length, passed: counted.length - failed.length, failed: failed.length, invalid: results.length - counted.length, short, resets, cdpReplyDelayMs, results };
   const file = `/stand/results/${name}-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
   try {
     writeFileSync(file, JSON.stringify(summary, null, 2));

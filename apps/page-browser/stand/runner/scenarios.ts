@@ -20,17 +20,33 @@ function reqs(events: JournalEvent[], rid: string): JournalEvent[] {
   return events.filter((event) => event.t === "req" && event.rid === rid);
 }
 
+/** Any scenario with the replies of CDP commands handed to the operator this
+ *  much later than the events (STAND_CDP_REPLY_DELAY_MS): code that waits for
+ *  a reply must not lose to the events its own command causes. */
+const CDP_REPLY_DELAY_MS = Number(process.env.STAND_CDP_REPLY_DELAY_MS ?? "0");
+
 /** A ready operator, the site loaded, every admission granted. */
 async function fresh(ctx: Ctx): Promise<void> {
   ctx.engine.decideSite = () => ({ grant: true });
   ctx.engine.decideCheck = () => ({ grant: true });
   ctx.engine.decideWs = () => ({ grant: true });
   await ctx.engine.waitReady();
+  await ctx.engine.command("test.config", { cdpReplyDelayMs: CDP_REPLY_DELAY_MS });
+  // No connection of the previous run either: one that it left unfinished (a
+  // request that ended while its connection was still being made) takes the
+  // place of this run's first connection, and that request fails (finding 32).
+  await coldApi(ctx);
   // A clean page every run: sockets, workers and frames of the previous run
   // close with the document (they pile up otherwise — 125 open sockets
   // stalled the 26th run of a series).
-  // The new document is recognised by a marker in its address: a request
-  // issued in the old one would be cancelled by the navigation.
+  await newDocument(ctx);
+  await ctx.stand.mark();
+}
+
+/** The site loaded anew. The new document is recognised by a marker in its
+ *  address: a request issued in the old one would be cancelled by the
+ *  navigation. */
+async function newDocument(ctx: Ctx): Promise<void> {
   const marker = `run${Date.now()}`;
   await ctx.engine.command("test.navigate", { url: `https://site.stand.test/?${marker}` });
   await until(
@@ -44,13 +60,24 @@ async function fresh(ctx: Ctx): Promise<void> {
     30_000,
     "the fresh page",
   );
-  await ctx.stand.mark();
 }
 
 /** One admitted request so the API connection is warm (HTTP/2). */
 async function warm(ctx: Ctx, tag: string): Promise<void> {
   const result = await ctx.engine.eval<{ status?: number; error?: string }>(`site.api(${JSON.stringify(`warm-${tag}`)})`);
   if (result.status !== 200) throw new Error(`warm-up request failed: ${JSON.stringify(result)}`);
+}
+
+/** No connection to the API left and none coming back. After a cut Chrome may
+ *  open a new one at once (a connect job of its own); with the gate off
+ *  nothing refuses it, and the run's request would find it warm. */
+async function coldApi(ctx: Ctx): Promise<void> {
+  for (let i = 0; i < 10; i++) {
+    const reply = await ctx.engine.command("test.cutApi");
+    await sleep(300);
+    if (i > 0 && reply.cut === 0) return;
+  }
+  throw new Error("the API connections keep coming back");
 }
 
 // ── smoke: the whole path once ────────────────────────────────────────────
@@ -525,12 +552,29 @@ const sendTime: Scenario = async (ctx) => {
   return { ok: violations.length === 0, violations, notes: { hubServerMinusChromeMs: diffs, siteServerMinusChromeMs: siteDiffs, worst, odd, debug } };
 };
 
-type ExpiryDelay = "socks" | "tcp";
+type ExpiryDelay = "socks" | "tcp" | "tls";
 
 /** The admission lasts 5 s; the new connection takes 8 s (under the
  *  operator's 15 s SOCKS timeout), so it completes after the deadline. */
 const EXPIRY_WINDOW_MS = 5000;
 const EXPIRY_DELAY_MS = 8000;
+
+const EXPIRY_FAULT: Record<ExpiryDelay, Record<string, unknown>> = {
+  socks: { kind: "socksConnectDelay", ms: EXPIRY_DELAY_MS, count: 2 },
+  tcp: { kind: "tcpDelay", ms: EXPIRY_DELAY_MS, count: 2 },
+  // The tunnel is open and the ClientHello went up; the ServerHello waits.
+  tls: { kind: "tlsStall", match: { host: "api.stand.test" }, ms: EXPIRY_DELAY_MS, count: 2 },
+};
+
+/** What reached the server for `rid` against its admission's deadline. */
+function arrivalsVsDeadline(ctx: Ctx, events: JournalEvent[], rid: string): string[] {
+  const deadline = ctx.engine.grants.find((grant) => grant.rid === rid)?.deadlineMono ?? 0;
+  return reqs(events, rid).map((event) => `${event.method} +${Math.round(event.mono - deadline)}ms vs deadline`);
+}
+
+/** The delay or the stop spans the request's whole window: an arrival inside
+ *  it means the fault missed the request, and the run proves nothing. */
+const NOT_EXERCISED = "scenario error: the request arrived inside its window — the fault missed it (not exercised)";
 
 function expiry(kind: "site" | "hub", delayAt: ExpiryDelay, gate: boolean, hubAbort = true): Scenario {
   return async (ctx) => {
@@ -540,10 +584,9 @@ function expiry(kind: "site" | "hub", delayAt: ExpiryDelay, gate: boolean, hubAb
     const tag = `exp-${kind}-${delayAt}-${gate ? "g" : "n"}${hubAbort ? "a" : ""}-${ctx.run}-${Date.now() % 100000}`;
     await ctx.engine.command("test.config", { gate, hubAbort });
     await warm(ctx, tag);
-    // A fresh connection is needed and it takes 20 s; the admission lasts 15 s.
-    await ctx.engine.command("test.cutApi");
-    await sleep(300);
-    await ctx.stand.fault(delayAt === "socks" ? { kind: "socksConnectDelay", ms: EXPIRY_DELAY_MS, count: 2 } : { kind: "tcpDelay", ms: EXPIRY_DELAY_MS, count: 2 });
+    // A fresh connection is needed and it takes 8 s; the admission lasts 5 s.
+    await coldApi(ctx);
+    await ctx.stand.fault(EXPIRY_FAULT[delayAt]);
     const rid = `e-${tag}`;
     ctx.arm();
     let outcome: unknown;
@@ -554,20 +597,225 @@ function expiry(kind: "site" | "hub", delayAt: ExpiryDelay, gate: boolean, hubAb
     }
     await sleep(8000);
     const events = await ctx.stand.journal();
-    const checked = checkAdmitted(events, ctx.engine.grants, rid, 50);
+    const violations = [...checkAdmitted(events, ctx.engine.grants, rid, 50).violations];
+    const arrivals = arrivalsVsDeadline(ctx, events, rid);
+    if (violations.length === 0 && arrivals.length > 0) violations.push(NOT_EXERCISED);
     await ctx.engine.command("test.config", { gate: true, hubAbort: true });
     return {
-      ok: checked.violations.length === 0,
-      violations: checked.violations,
+      ok: violations.length === 0,
+      violations,
       notes: {
         gate,
         hubAbort,
         outcome,
-        arrivals: reqs(events, rid).map((event) => `${event.method} +${Math.round(event.mono - (ctx.engine.grants.find((g) => g.rid === rid)?.deadlineMono ?? 0))}ms vs deadline`),
+        arrivals,
         gateEvents: ctx.engine.observed.filter((o) => o.kind === "gate" && o.gateEvent !== "first_bytes" && o.gateEvent !== "hold").map((o) => ({ event: o.gateEvent, cut: o.cut })),
         aborts: ctx.engine.observed.filter((o) => o.kind === "hub.abort_before_deadline").length,
       },
     };
+  };
+}
+
+// The plan's other cases of the deadline (§4.2, step 4): a connection already
+// open and reused, the operator stopped, the page's processes stopped.
+
+/** One request of `kind` paused at the engine's admission; the returned
+ *  function grants it for `windowMs`. */
+async function holdOne(ctx: Ctx, kind: "site" | "hub", rid: string): Promise<(windowMs: number) => void> {
+  if (kind === "site") {
+    ctx.engine.decideSite = (ask) => (ask.rid === rid ? "hold" : { grant: true });
+    // A simple request: no preflight, the request itself is what is admitted.
+    await ctx.engine.eval(`site.api(${JSON.stringify(rid)}, { plain: true }), true`, false);
+    await until(() => [...ctx.engine.heldSite.values()].some((ask) => ask.rid === rid), 10_000, "the site request held");
+    return (windowMs) => {
+      const ask = [...ctx.engine.heldSite.values()].find((held) => held.rid === rid)!;
+      ctx.engine.releaseSite(ask.siteRequestId, { grant: true, windowMs });
+    };
+  }
+  ctx.engine.decideCheck = (id) => (id === rid ? "hold" : { grant: true });
+  void ctx.engine.sendHub(rid, `${API}/api/hub?rid=${rid}`, {});
+  await until(() => ctx.engine.heldChecks.has(rid), 5000, "the Hub request held");
+  return (windowMs) => void ctx.engine.releaseCheck(rid, { grant: true, windowMs });
+}
+
+/** Processes of the page's container stopped (SIGSTOP) while `during` runs. */
+async function withStopped(ctx: Ctx, pids: number[], during: () => Promise<void>): Promise<void> {
+  await ctx.docker.exec(["kill", "-STOP", ...pids.map(String)]);
+  try {
+    await during();
+  } finally {
+    await ctx.docker.exec(["kill", "-CONT", ...pids.map(String)]);
+  }
+}
+
+function stoppedVerdict(ctx: Ctx, events: JournalEvent[], rid: string, gate: boolean, notes: Record<string, unknown>): RunResult {
+  const violations = [...checkAdmitted(events, ctx.engine.grants, rid, 50).violations];
+  const arrivals = arrivalsVsDeadline(ctx, events, rid);
+  if (violations.length === 0 && arrivals.length > 0) violations.push(NOT_EXERCISED);
+  const gateEvents = ctx.engine.observed.filter((o) => o.kind === "gate" && o.gateEvent !== "first_bytes" && o.gateEvent !== "hold").map((o) => ({ event: o.gateEvent, cut: o.cut }));
+  const told = ctx.engine.siteDoneOf(rid) ?? ctx.engine.results.get(rid) ?? null;
+  const outcome = told ? { outcome: told.outcome, reason: told.reason ?? told.errorText ?? told.error ?? null, sent: told.sent ?? null } : null;
+  return { ok: violations.length === 0, violations, notes: { gate, arrivals, gateEvents, outcome, ...notes } };
+}
+
+/** The admission of the runs below: Chrome's network service, or the
+ *  operator, is stopped for longer and runs again after the deadline. */
+const STOPPED_WINDOW_MS = 3000;
+
+/** A warm HTTP/2 connection and an admitted request that Chrome writes late:
+ *  its network service — the process that writes — is stopped when the
+ *  admission comes and runs again 1.5 s after the deadline. */
+function expiryReused(kind: "site" | "hub", gate: boolean): Scenario {
+  return async (ctx) => {
+    await fresh(ctx);
+    const tag = `exp-reused-${kind}-${gate ? "g" : "n"}-${ctx.run}-${Date.now() % 100000}`;
+    await ctx.engine.command("test.config", { gate });
+    await warm(ctx, tag);
+    const rid = `e-${tag}`;
+    const release = await holdOne(ctx, kind, rid);
+    const net = await ctx.docker.networkServicePid();
+    if (net === null) throw new Error("no network service process");
+    ctx.arm();
+    await withStopped(ctx, [net], async () => {
+      release(STOPPED_WINDOW_MS);
+      await sleep(STOPPED_WINDOW_MS + 1500);
+    });
+    await sleep(3000);
+    const events = await ctx.stand.journal();
+    await ctx.engine.command("test.config", { gate: true });
+    return stoppedVerdict(ctx, events, rid, gate, { kind });
+  };
+}
+
+/** The operator is the sender, and here it is stopped across the deadline:
+ *  1.5 s of admission, 2.8 s of stop (under the watchdog's 5 s). */
+const OPERATOR_WINDOW_MS = 1500;
+const OPERATOR_STOP_MS = 2800;
+
+/** Back to a ready operator; false = the watchdog killed the stopped one, so
+ *  the run did not show an operator that goes on after the deadline. */
+async function operatorWentOn(ctx: Ctx, pid: number): Promise<boolean> {
+  if ((await ctx.docker.pids()).operator === pid) return true;
+  ctx.engine.close();
+  await ctx.engine.waitReady(180_000);
+  return false;
+}
+
+const WATCHDOG_KILLED = "scenario error: the watchdog killed the stopped operator (not exercised)";
+
+/** The request is released, its new connection waits for SOCKS (1 s), and
+ *  the operator stops: the SOCKS answer and the deadline both pass while it
+ *  stands. When it runs again the request must not go. */
+function expiryOperatorStop(gate: boolean): Scenario {
+  return async (ctx) => {
+    await fresh(ctx);
+    const tag = `exp-opstop-${gate ? "g" : "n"}-${ctx.run}-${Date.now() % 100000}`;
+    await ctx.engine.command("test.config", { gate });
+    await warm(ctx, tag);
+    const rid = `e-${tag}`;
+    const release = await holdOne(ctx, "site", rid);
+    await coldApi(ctx);
+    await ctx.stand.fault({ kind: "socksConnectDelay", ms: 1000, count: 2 });
+    const operator = (await ctx.docker.pids()).operator;
+    if (!operator) throw new Error("no operator process");
+    ctx.arm();
+    release(OPERATOR_WINDOW_MS);
+    // The operator released the request and Chrome asked for its tunnel.
+    await sleep(150);
+    await withStopped(ctx, [operator], () => sleep(OPERATOR_STOP_MS));
+    await sleep(3000);
+    const events = await ctx.stand.journal();
+    const wentOn = await operatorWentOn(ctx, operator);
+    await ctx.engine.command("test.config", { gate: true });
+    const result = stoppedVerdict(ctx, events, rid, gate, { wentOn });
+    if (!wentOn && result.violations.length === 0) return { ...result, ok: false, violations: [WATCHDOG_KILLED] };
+    return result;
+  };
+}
+
+/** The admission reaches a stopped operator and is read after its deadline:
+ *  the deadline is a moment, not a remainder counted from the reading. */
+function expiryLateGrant(kind: "site" | "hub"): Scenario {
+  return async (ctx) => {
+    await fresh(ctx);
+    const tag = `exp-late-${kind}-${ctx.run}-${Date.now() % 100000}`;
+    await warm(ctx, tag);
+    const rid = `e-${tag}`;
+    const release = await holdOne(ctx, kind, rid);
+    const operator = (await ctx.docker.pids()).operator;
+    if (!operator) throw new Error("no operator process");
+    ctx.arm();
+    await withStopped(ctx, [operator], async () => {
+      release(OPERATOR_WINDOW_MS);
+      await sleep(OPERATOR_STOP_MS);
+    });
+    await sleep(2500);
+    const events = await ctx.stand.journal();
+    const wentOn = await operatorWentOn(ctx, operator);
+    const result = stoppedVerdict(ctx, events, rid, true, { kind, wentOn });
+    if (!wentOn && result.violations.length === 0) return { ...result, ok: false, violations: [WATCHDOG_KILLED] };
+    return result;
+  };
+}
+
+/** The page's process stopped: a Hub request's own abort before the deadline
+ *  runs in the page and cannot act. The new connection takes 8 s, the
+ *  admission lasts 5 s. */
+function expiryPageStop(gate: boolean): Scenario {
+  return async (ctx) => {
+    await fresh(ctx);
+    const tag = `exp-page-${gate ? "g" : "n"}-${ctx.run}-${Date.now() % 100000}`;
+    await ctx.engine.command("test.config", { gate });
+    await warm(ctx, tag);
+    const rid = `e-${tag}`;
+    const release = await holdOne(ctx, "hub", rid);
+    await coldApi(ctx);
+    await ctx.stand.fault(EXPIRY_FAULT.socks);
+    const renderers = await ctx.docker.rendererPids();
+    if (renderers.length === 0) throw new Error("no renderer process");
+    ctx.arm();
+    await withStopped(ctx, renderers, async () => {
+      release(EXPIRY_WINDOW_MS);
+      await sleep(EXPIRY_DELAY_MS + 1000);
+    });
+    await sleep(2000);
+    const events = await ctx.stand.journal();
+    // The health check may have taken the stopped page for a hung one.
+    await ctx.engine.waitReady(180_000);
+    await ctx.engine.command("test.config", { gate: true });
+    return stoppedVerdict(ctx, events, rid, gate, { aborts: ctx.engine.observed.filter((o) => o.kind === "hub.abort_before_deadline").length });
+  };
+}
+
+/** HTTP/1.1: a 408 on a reused keep-alive connection, which Chrome answers by
+ *  sending the request again on a new connection (plan §4.2, step 6). The API
+ *  host offers only http/1.1 for the run. */
+function retry408(gate: boolean): Scenario {
+  return async (ctx) => {
+    await fresh(ctx);
+    const tag = `h1408-${gate ? "g" : "n"}-${ctx.run}-${Date.now() % 100000}`;
+    await ctx.engine.command("test.config", { gate });
+    // The run starts without connections to the API: the warm-up's are HTTP/1.1.
+    await ctx.stand.config({ h1Hosts: ["api.stand.test"] });
+    try {
+      await warm(ctx, tag);
+      const rid = `r-${tag}`;
+      await ctx.stand.fault({ kind: "h1_408_on_reuse", match: { rid, method: "GET" } });
+      ctx.arm();
+      // A simple request: it goes on the warm-up's connection (the same
+      // credentials mode), which makes it a reused one.
+      const result = await ctx.engine.eval<Record<string, unknown>>(`site.api(${JSON.stringify(rid)}, { plain: true })`);
+      await sleep(1500);
+      const events = await ctx.stand.journal();
+      const arrivals = reqs(events, rid);
+      const faulted = events.some((event) => event.t === "fault");
+      const violations = [...checkAdmitted(events, ctx.engine.grants, rid).violations];
+      if (arrivals.length === 0 || !faulted) violations.push(`the fault did not meet the request (arrivals ${arrivals.length}, fault seen ${faulted})`);
+      return { ok: violations.length === 0, violations, notes: { gate, site: result, arrivals: arrivals.map((event) => ({ conn: event.connId, proto: event.proto, reused: event.reused })) } };
+    } finally {
+      await ctx.stand.config({ h1Hosts: [] });
+      await ctx.engine.command("test.config", { gate: true });
+    }
   };
 }
 
@@ -906,8 +1154,7 @@ const wsOverH2: Scenario = async (ctx) => {
     // With the operator's rule (refuse) every socket needs its own tunnel and
     // admission. Without it (evidence only) a socket may ride the session.
     if (refuse && open && admissions === 0) violations.push(`a socket opened over ${open.proto} without an admission`);
-    await ctx.engine.eval(`location.reload(), true`, false).catch(() => undefined);
-    await ctx.engine.waitReady();
+    await newDocument(ctx);
   }
   await ctx.engine.command("test.config", { wsHostRefuse: true });
   await ctx.engine.command("test.cutWs");
@@ -1260,6 +1507,8 @@ export const scenarios: Record<string, Scenario> = {
   "retry-goaway-nogate": retry("h2Goaway", false),
   "retry-reset": retry("resetAfterHeaders", true),
   "retry-reset-nogate": retry("resetAfterHeaders", false),
+  "retry-408": retry408(true),
+  "retry-408-nogate": retry408(false),
   // The same with the stand's own round trip (< 1 ms): how short a round
   // trip the quiet window of the gate still covers.
   "retry-refused-rtt0": retry("h2RefusedStream", true, 0),
@@ -1284,6 +1533,18 @@ export const scenarios: Record<string, Scenario> = {
   "expiry-hub-socks": expiry("hub", "socks", true),
   "expiry-hub-socks-abortonly": expiry("hub", "socks", false, true),
   "expiry-hub-socks-nothing": expiry("hub", "socks", false, false),
+  "expiry-site-tls": expiry("site", "tls", true),
+  "expiry-site-tls-nogate": expiry("site", "tls", false),
+  "expiry-hub-tls": expiry("hub", "tls", true),
+  "expiry-site-reused": expiryReused("site", true),
+  "expiry-site-reused-nogate": expiryReused("site", false),
+  "expiry-hub-reused": expiryReused("hub", true),
+  "expiry-site-operator-stop": expiryOperatorStop(true),
+  "expiry-site-operator-stop-nogate": expiryOperatorStop(false),
+  "expiry-site-late-grant": expiryLateGrant("site"),
+  "expiry-hub-late-grant": expiryLateGrant("hub"),
+  "expiry-hub-page-stop": expiryPageStop(true),
+  "expiry-hub-page-stop-nogate": expiryPageStop(false),
   rules: rules(false),
   "rules-bypass": rules(true),
   "body-capture": bodyCapture,

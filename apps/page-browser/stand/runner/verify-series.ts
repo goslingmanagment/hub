@@ -1,5 +1,5 @@
 // The verdict of a batch5 series, read from the result files themselves.
-//   node stand/runner/verify-series.ts <results dir> [log prefix, default "last-"]
+//   node stand/runner/verify-series.ts <results dir> [series name, default "last"]
 // batch5.sh only records what the runner printed; it does not judge (Astra
 // review 5: a runner that exits 1, or dies without a summary, must not pass
 // unnoticed). Here every scenario of the series must have its asked number
@@ -9,7 +9,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { basename, join } from "node:path";
 
-/** batch5.sh, parts A–D: scenario → valid runs asked. */
+/** batch5.sh, its parts: scenario → valid runs asked. */
 const SERIES: Record<string, Record<string, number>> = {
   A: {
     "ws-contexts": 50, "ws-refused": 50, "ws-blank-iframe": 50, "ws-h2": 50, "ws-sw-restart": 50,
@@ -34,13 +34,35 @@ const SERIES: Record<string, Record<string, number>> = {
     "idle-ping": 10, "idle-post": 10, "send-time": 10, "slow-body-limit": 10, "slow-body-limit-capture": 5,
     "expiry-site-socks": 50, "expiry-site-tcp": 50, "expiry-hub-socks": 50,
   },
+  E: {
+    "expiry-site-tls": 50, "expiry-hub-tls": 50, "expiry-hub-page-stop": 50,
+    "expiry-site-tls-nogate": 10, "expiry-hub-page-stop-nogate": 10,
+  },
+  F: {
+    "expiry-site-reused": 50, "expiry-hub-reused": 50, "expiry-site-operator-stop": 50,
+    "expiry-site-late-grant": 50, "expiry-hub-late-grant": 50, "retry-408": 50,
+    "expiry-site-reused-nogate": 10, "expiry-site-operator-stop-nogate": 10, "retry-408-nogate": 10,
+  },
+  // The replies of CDP commands reach the operator 100 ms after the events.
+  G: {
+    "smoke": 20, "body-capture": 20, "hub-redirect": 20, "site-redirect": 20, "site-redirect-xhr": 20,
+    "ws-contexts": 10, "xhr-parity": 10, "retry-post": 10, "loss-cdp-break-late-inflight": 20,
+  },
 };
+
+/** Parts run with STAND_CDP_REPLY_DELAY_MS. */
+const LATE_REPLIES_MS: Record<string, number> = { G: 100 };
 
 /** Controls run without the gate: every run must show this violation, and
  *  an unrelated failure does not count for it. */
 const CONTROLS: Record<string, string> = {
   "loss-cdp-break-late-nogate": "arrived without any admission",
   "retry-post-large-nogate": "arrived again under one admission",
+  "retry-408-nogate": "arrived again under one admission",
+  "expiry-site-tls-nogate": "arrived outside its admission window",
+  "expiry-site-reused-nogate": "arrived outside its admission window",
+  "expiry-site-operator-stop-nogate": "arrived outside its admission window",
+  "expiry-hub-page-stop-nogate": "arrived outside its admission window",
 };
 
 interface Run {
@@ -54,63 +76,66 @@ interface Artifact {
   scenario: string;
   asked: number;
   short: number;
+  cdpReplyDelayMs?: number;
   results: Run[];
 }
 
 function main(): void {
   const dir = process.argv[2] ?? "/stand/results";
-  const prefix = process.argv[3] ?? "last-";
-  const logs = readdirSync(dir).filter((name) => name.startsWith(prefix) && name.endsWith(".log"));
-  const summaries = new Map<string, Array<{ file: string }>>();
-  const finished = new Set<string>();
-  for (const log of logs) {
-    const text = readFileSync(join(dir, log), "utf8");
-    const part = /-([A-D])-\d{8}T\d{6}Z\.log$/.exec(log)?.[1];
-    if (part && /^=== done /m.test(text)) finished.add(part);
+  const series = process.argv[3] ?? "last";
+  const logs = readdirSync(dir).filter((name) => name.startsWith(`${series}-`) && name.endsWith(".log"));
+  const problems: string[] = [];
+  let scenarios = 0;
+  let validRuns = 0;
+  let notCounted = 0;
+  for (const [part, expected] of Object.entries(SERIES)) {
+    const mine = logs.filter((name) => new RegExp(`-${part}-\\d{8}T\\d{6}Z\\.log$`).test(name));
+    if (mine.length !== 1) {
+      problems.push(`part ${part}: ${mine.length} logs`);
+      continue;
+    }
+    const text = readFileSync(join(dir, mine[0]!), "utf8");
+    if (!/^=== done /m.test(text)) problems.push(`part ${part}: the driver did not finish`);
+    const files = new Map<string, string[]>();
     for (const line of text.split("\n")) {
       if (!line.startsWith("{")) continue;
       const summary = JSON.parse(line) as { scenario: string; file: string };
-      summaries.set(summary.scenario, [...(summaries.get(summary.scenario) ?? []), summary]);
+      files.set(summary.scenario, [...(files.get(summary.scenario) ?? []), summary.file]);
     }
-  }
-
-  const problems: string[] = [];
-  let validRuns = 0;
-  let notCounted = 0;
-  for (const [part, scenarios] of Object.entries(SERIES)) {
-    if (!finished.has(part)) problems.push(`part ${part}: the driver did not finish`);
-    for (const [name, asked] of Object.entries(scenarios)) {
-      const found = summaries.get(name);
+    for (const name of files.keys()) if (!(name in expected)) problems.push(`${part} ${name}: not in the series`);
+    for (const [name, asked] of Object.entries(expected)) {
+      scenarios += 1;
+      const label = `${part} ${name}`;
+      const found = files.get(name);
       if (!found) {
-        problems.push(`${name}: no result`);
+        problems.push(`${label}: no result`);
         continue;
       }
-      if (found.length > 1) problems.push(`${name}: ${found.length} results in one series`);
+      if (found.length > 1) problems.push(`${label}: ${found.length} results`);
       let artifact: Artifact;
       try {
-        artifact = JSON.parse(readFileSync(join(dir, basename(found.at(-1)!.file)), "utf8")) as Artifact;
+        artifact = JSON.parse(readFileSync(join(dir, basename(found.at(-1)!)), "utf8")) as Artifact;
       } catch (error) {
-        problems.push(`${name}: result file unreadable (${(error as Error).message})`);
+        problems.push(`${label}: result file unreadable (${(error as Error).message})`);
         continue;
       }
       const valid = artifact.results.filter((run) => !run.invalid);
       const invalid = artifact.results.filter((run) => run.invalid);
       validRuns += valid.length;
       notCounted += invalid.length;
-      if (artifact.asked !== asked) problems.push(`${name}: ${artifact.asked} runs asked, the series needs ${asked}`);
-      if (valid.length !== asked || artifact.short !== 0) problems.push(`${name}: ${valid.length} valid runs of ${asked}`);
+      if (artifact.asked !== asked) problems.push(`${label}: ${artifact.asked} runs asked, the series needs ${asked}`);
+      if (valid.length !== asked || artifact.short !== 0) problems.push(`${label}: ${valid.length} valid runs of ${asked}`);
+      if ((artifact.cdpReplyDelayMs ?? 0) !== (LATE_REPLIES_MS[part] ?? 0)) problems.push(`${label}: ran with CDP replies ${artifact.cdpReplyDelayMs ?? 0} ms late, the part needs ${LATE_REPLIES_MS[part] ?? 0}`);
       const control = CONTROLS[name];
       const wrong = control
         ? valid.filter((run) => run.ok || !run.violations.some((violation) => violation.includes(control)) || run.violations.some((violation) => violation.startsWith("error after the fault")))
         : valid.filter((run) => !run.ok || run.violations.length > 0);
-      if (wrong.length > 0) problems.push(`${name}: ${control ? "control runs without the intended violation" : "failed runs"}: ${wrong.map((run) => run.run).join(", ")}`);
-      for (const run of invalid) console.log(`not counted: ${name} run ${run.run}: ${run.violations.map((violation) => violation.split("\n")[0]).join("; ")}`);
+      if (wrong.length > 0) problems.push(`${label}: ${control ? "control runs without the intended violation" : "failed runs"}: ${wrong.map((run) => run.run).join(", ")}`);
+      for (const run of invalid) console.log(`not counted: ${label} run ${run.run}: ${run.violations.map((violation) => violation.split("\n")[0]).join("; ")}`);
     }
   }
-  const expected = new Set(Object.values(SERIES).flatMap((scenarios) => Object.keys(scenarios)));
-  for (const name of summaries.keys()) if (!expected.has(name)) console.log(`outside the series: ${name}`);
 
-  console.log(`${expected.size} scenarios, ${validRuns} valid runs, ${notCounted} not counted`);
+  console.log(`${scenarios} scenarios, ${validRuns} valid runs, ${notCounted} not counted`);
   for (const problem of problems) console.log(`PROBLEM ${problem}`);
   console.log(problems.length === 0 ? "PASSED" : `NOT PASSED: ${problems.length} problem(s)`);
   process.exit(problems.length === 0 ? 0 : 1);

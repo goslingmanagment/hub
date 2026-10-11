@@ -48,6 +48,9 @@ export class Cdp {
   /** Stand: handle every Chrome message this much later, in order (a slow
    *  operator — the holder and Chrome keep buffering meanwhile). */
   testDelayMs = 0;
+  /** Stand: hand a command's reply over this much later, the events on time
+   *  — CDP does not order a reply against the events its command causes. */
+  testReplyDelayMs = 0;
   #delayed: Array<{ seq: number; message: Record<string, unknown>; at: number }> = [];
   #delayTimer: NodeJS.Timeout | null = null;
   onHolderEvent: (event: { t: string; reason?: string }) => void = () => undefined;
@@ -171,9 +174,13 @@ export class Cdp {
       const pending = this.#pending.get(message.id);
       if (!pending) return; // a response to a previous operator instance
       this.#pending.delete(message.id);
-      const error = message.error as { code: number; message: string } | undefined;
-      if (error) pending.reject(new CdpError(pending.method, error.code, error.message));
-      else pending.resolve((message.result as Record<string, unknown>) ?? {});
+      const settle = () => {
+        const error = message.error as { code: number; message: string } | undefined;
+        if (error) pending.reject(new CdpError(pending.method, error.code, error.message));
+        else pending.resolve((message.result as Record<string, unknown>) ?? {});
+      };
+      if (this.testReplyDelayMs > 0) setTimeout(settle, this.testReplyDelayMs);
+      else settle();
       return;
     }
     const event: CdpEvent = {

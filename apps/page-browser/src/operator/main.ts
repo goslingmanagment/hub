@@ -989,6 +989,10 @@ async function onResponseStage(event: CdpEvent, params: ResponseStage): Promise<
     // answer goes to the page as final, without the Location; the engine
     // gets the redirect and its address.
     const headers = (params.responseHeaders ?? []).filter((header) => header.name.toLowerCase() !== "location");
+    // The end of this request is reported here, with the redirect's address:
+    // Chrome's own end event for the fulfilled answer may reach us before
+    // this command's reply and must not finish the operation without it.
+    phys.done = true;
     await cdp
       .send(
         "Fetch.fulfillRequest",
@@ -1001,7 +1005,6 @@ async function onResponseStage(event: CdpEvent, params: ResponseStage): Promise<
       })
       .finally(() => cdp.ack(event.seq));
     if (!op.done) {
-      phys.done = true;
       const engineSide = engineHeaders(Object.fromEntries((params.responseHeaders ?? []).map((header) => [header.name, header.value])));
       finishOp(op, { outcome: "response", status: params.responseStatusCode, headers: engineSide, location, redirect: true, sends: phys.sends, sendMono: op.sendMono });
     }
@@ -1016,6 +1019,11 @@ async function onResponseStage(event: CdpEvent, params: ResponseStage): Promise<
   if (op.kind === "hub" && contentLength !== null && contentLength > CFG.hubBodyLimit) {
     // Over the limit by its own word: cancelled before the body (plan §4.2).
     observe("body.over_limit", { op: op.id, contentLength });
+    // Our own cancel ends the request with Network.loadingFailed, and that
+    // event may reach us before this command's reply: the end is reported
+    // here, as an answer over the limit, not there as a transport error
+    // (stand finding: 1 of 20 body-capture runs).
+    phys.done = true;
     await cdp.send("Fetch.failRequest", { requestId: params.requestId, errorReason: "Aborted" }, event.sessionId).catch(() => undefined);
     cdp.ack(event.seq);
     op.status = params.responseStatusCode;
@@ -1161,6 +1169,10 @@ function sealBody(phys: Physical, ended: "finished" | "canceled" | "failed" | "l
  *  body is whole only if the file holds it (Astra review of the prototype,
  *  finding 11). */
 function finishWithBody(op: Operation, phys: Physical, ended: "finished" | "canceled" | "failed" | "limit", totalEncoded: number | null, outcome: Record<string, unknown>): void {
+  // The request's end is decided: an end event that still comes for it (a
+  // limit cancels the transfer) must not overtake the result that waits for
+  // its file below.
+  phys.done = true;
   const capture = phys.capture;
   const body = sealBody(phys, ended, totalEncoded);
   phys.capture = null;
@@ -2268,6 +2280,7 @@ async function onCommand(message: EngineMessage): Promise<void> {
         if (typeof message.urlAlways === "boolean") testUrlAlways = message.urlAlways;
         if (typeof message.dataDelayMs === "number") testDataDelayMs = message.dataDelayMs;
         if (typeof message.cdpDelayMs === "number") cdp.testDelayMs = message.cdpDelayMs;
+        if (typeof message.cdpReplyDelayMs === "number") cdp.testReplyDelayMs = message.cdpReplyDelayMs;
         if (typeof message.burstClose === "boolean") egress.gate.burstClose = message.burstClose;
         if (typeof message.preflightFulfill === "boolean") CFG.preflightFulfill = message.preflightFulfill;
         if (typeof message.fetchScope === "string") CFG.fetchScope = message.fetchScope;
