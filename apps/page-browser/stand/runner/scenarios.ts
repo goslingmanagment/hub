@@ -29,9 +29,21 @@ async function fresh(ctx: Ctx): Promise<void> {
   // A clean page every run: sockets, workers and frames of the previous run
   // close with the document (they pile up otherwise — 125 open sockets
   // stalled the 26th run of a series).
-  await ctx.engine.command("test.navigate", {});
-  await sleep(300);
-  await ctx.engine.waitReady();
+  // The new document is recognised by a marker in its address: a request
+  // issued in the old one would be cancelled by the navigation.
+  const marker = `run${Date.now()}`;
+  await ctx.engine.command("test.navigate", { url: `https://site.stand.test/?${marker}` });
+  await until(
+    async () => {
+      try {
+        return (await ctx.engine.eval<boolean>(`typeof site === "object" && location.search.includes(${JSON.stringify(marker)}) && document.readyState === "complete"`, false)) === true;
+      } catch {
+        return false;
+      }
+    },
+    30_000,
+    "the fresh page",
+  );
   await ctx.stand.mark();
 }
 
@@ -378,6 +390,172 @@ function expiry(kind: "site" | "hub", delayAt: ExpiryDelay, gate: boolean, hubAb
   };
 }
 
+// ── stage 1 item 17: response bodies are captured whole ─────────────────────
+
+interface BodyCase {
+  name: string;
+  query: string;
+  how?: "arrayBuffer" | "stream";
+  /** Ask twice: the second answer is a 304 served from the browser's cache. */
+  twice?: boolean;
+  /** What the capture must say about itself. */
+  expect?: "complete" | "shape";
+}
+
+const BODY_CASES: BodyCase[] = [
+  { name: "small", query: "size=5000" },
+  { name: "gzip", query: "size=300000&enc=gzip" },
+  { name: "brotli", query: "size=300000&enc=br" },
+  { name: "chunked", query: "size=300000&chunked=1" },
+  { name: "slow", query: "size=200000&slow=1200" },
+  { name: "slow, read as a stream", query: "size=200000&slow=1200", how: "stream" },
+  { name: "gzip, read as a stream", query: "size=300000&enc=gzip&slow=800", how: "stream", expect: "shape" },
+  { name: "revalidated (304)", query: "size=40000&etag=v1", twice: true },
+  { name: "40 MB (over the 32 MiB limit of Hub requests)", query: "size=40000000" },
+];
+
+const bodyCapture: Scenario = async (ctx) => {
+  await fresh(ctx);
+  ctx.engine.serialize = true;
+  const tag = `bc-${ctx.run}-${Date.now() % 100000}`;
+  const violations: string[] = [];
+  const rows: unknown[] = [];
+  try {
+    for (const [index, c] of BODY_CASES.entries()) {
+      const rid = `${tag}-${index}`;
+      const call = `site.apiHash(${JSON.stringify(rid)}, ${JSON.stringify(c.query)}, ${JSON.stringify(c.how ?? "arrayBuffer")})`;
+      let page = await ctx.engine.eval<{ status?: number; bytes?: number; sha256?: string; error?: string }>(call);
+      if (c.twice) page = await ctx.engine.eval(call);
+      await sleep(400);
+      const done = ctx.engine.siteDoneOf(rid);
+      const body = (done?.body ?? null) as { bytes: number; sha256: string; complete: boolean; how: string; ended: string; encodedBytes: number; contentEncoding: string | null; contentLength: number | null; chunks: number } | null;
+      const same = body !== null && body.sha256 === page.sha256 && body.bytes === page.bytes;
+      rows.push({ case: c.name, pageBytes: page.bytes ?? page.error, captured: body?.bytes ?? null, same, complete: body?.complete ?? null, how: body?.how ?? null, ended: body?.ended ?? null, status: done?.status ?? null, source: done?.source ?? null, encodedBytes: body?.encodedBytes ?? null, enc: body?.contentEncoding ?? null, chunks: body?.chunks ?? null });
+      if (!same) violations.push(`${c.name}: the captured body differs from what the page read (${body?.bytes ?? "none"} vs ${page.bytes ?? page.error} bytes)`);
+      else if ((c.expect ?? "complete") === "complete" && body?.complete !== true) violations.push(`${c.name}: the capture is whole but not marked complete (${body?.how})`);
+      if (c.twice && done?.source !== "revalidated_304") violations.push(`${c.name}: the source is ${String(done?.source)}, not revalidated_304`);
+    }
+    // Hub requests: the limit by the declared size and while receiving.
+    await ctx.engine.command("test.config", { hubBodyLimit: 2_000_000 });
+    const declared = await ctx.engine.sendHub(`${tag}-hub-declared`, `${API}/api/body?rid=${tag}-hub-declared&size=5000000`, { authorization: "stand-token" });
+    const streamed = await ctx.engine.sendHub(`${tag}-hub-chunked`, `${API}/api/body?rid=${tag}-hub-chunked&size=5000000&chunked=1`, { authorization: "stand-token" });
+    const fits = await ctx.engine.sendHub(`${tag}-hub-fits`, `${API}/api/body?rid=${tag}-hub-fits&size=500000&enc=gzip`, { authorization: "stand-token" });
+    await ctx.engine.command("test.config", { hubBodyLimit: 32 * 1024 * 1024 });
+    const hubRow = (r: Record<string, unknown>) => ({ outcome: r.outcome, status: r.status, bodyOverflow: r.bodyOverflow ?? false, bytes: (r.body as { bytes?: number } | null)?.bytes ?? null, complete: (r.body as { complete?: boolean } | null)?.complete ?? null });
+    rows.push({ case: "Hub, 5 MB declared, limit 2 MB", ...hubRow(declared) });
+    rows.push({ case: "Hub, 5 MB chunked, limit 2 MB", ...hubRow(streamed) });
+    rows.push({ case: "Hub, 0.5 MB gzip, limit 2 MB", ...hubRow(fits) });
+    if (declared.bodyOverflow !== true) violations.push("Hub: a response declared over the limit was not cancelled before its body");
+    if (streamed.bodyOverflow !== true) violations.push("Hub: a chunked response over the limit was not cancelled while receiving");
+    const streamedBytes = (streamed.body as { bytes?: number } | null)?.bytes ?? 0;
+    if (streamedBytes > 3_000_000) violations.push(`Hub: ${streamedBytes} bytes of a chunked response were taken with a 2 MB limit`);
+    if (fits.outcome !== "response" || (fits.body as { complete?: boolean } | null)?.complete !== true) violations.push(`Hub: a response under the limit was not captured whole (${JSON.stringify(fits).slice(0, 200)})`);
+  } finally {
+    ctx.engine.serialize = false;
+  }
+  return { ok: violations.length === 0, violations, notes: { rows } };
+};
+
+/** Ten 15 MB responses in a row (150 MB, over Chrome's own 100 MB buffer of
+ *  bodies) with the operator handling every CDP message 300 ms late. */
+const bodyBurst: Scenario = async (ctx) => {
+  await fresh(ctx);
+  ctx.engine.serialize = true;
+  const tag = `bb-${ctx.run}-${Date.now() % 100000}`;
+  const violations: string[] = [];
+  const rows: unknown[] = [];
+  try {
+    await ctx.engine.command("test.config", { cdpDelayMs: 300 });
+    const calls = Array.from({ length: 10 }, (_, i) => `site.apiHash(${JSON.stringify(`${tag}-${i}`)}, "size=15000000")`);
+    const reply = await ctx.engine.command("test.eval", { expression: `Promise.all([${calls.join(",")}])`, await: true }, 300_000);
+    if (reply.ok !== true) throw new Error(`burst failed: ${String(reply.error)}`);
+    const pages = reply.value as Array<{ bytes?: number; sha256?: string; error?: string }>;
+    await sleep(2500);
+    for (const [i, page] of pages.entries()) {
+      const done = ctx.engine.siteDoneOf(`${tag}-${i}`);
+      const body = (done?.body ?? null) as { bytes: number; sha256: string; complete: boolean } | null;
+      const same = body !== null && body.sha256 === page.sha256;
+      rows.push({ i, pageBytes: page.bytes ?? page.error, captured: body?.bytes ?? null, same, complete: body?.complete ?? null });
+      if (!same || body?.complete !== true) violations.push(`response ${i}: captured ${body?.bytes ?? "none"} of ${page.bytes ?? page.error} bytes, complete=${body?.complete}`);
+    }
+  } finally {
+    await ctx.engine.command("test.config", { cdpDelayMs: 0 }, 60_000);
+    ctx.engine.serialize = false;
+  }
+  return { ok: violations.length === 0, violations, notes: { rows } };
+};
+
+// ── stage 1 item 6: the rules extension ─────────────────────────────────────
+
+interface RuleCase {
+  name: string;
+  method: string;
+  path: string;
+  /** Must the request reach the server? */
+  reaches: boolean;
+}
+
+const RULE_CASES: RuleCase[] = [
+  { name: "never: read ack", method: "POST", path: "/api/v1/message/ack", reaches: false },
+  { name: "never: typing", method: "POST", path: "/api/v1/message/typing", reaches: false },
+  { name: "never: status", method: "POST", path: "/api/v1/status", reaches: false },
+  { name: "unknown write (POST)", method: "POST", path: "/api/v1/group", reaches: false },
+  { name: "unknown write (PUT)", method: "PUT", path: "/api/v1/notes", reaches: false },
+  { name: "unknown write (PATCH)", method: "PATCH", path: "/api/v1/account", reaches: false },
+  { name: "unknown write (DELETE)", method: "DELETE", path: "/api/v1/post/1", reaches: false },
+  { name: "login operation", method: "POST", path: "/api/v1/login", reaches: true },
+  { name: "read", method: "GET", path: "/api/v1/account/me", reaches: true },
+];
+
+/** `bypass`: the operator releases every API request unasked and its gate is
+ *  off — only the extension stands in the way. */
+function rules(bypass: boolean): Scenario {
+  return async (ctx) => {
+    await fresh(ctx);
+    const tag = `dnr-${bypass ? "b" : "n"}-${ctx.run}-${Date.now() % 100000}`;
+    await ctx.engine.command("test.config", { siteBypass: bypass, gate: !bypass });
+    const violations: string[] = [];
+    const rows: unknown[] = [];
+    const pausedBefore = ctx.engine.observed.length;
+    try {
+      for (const [index, c] of RULE_CASES.entries()) {
+        const rid = `${tag}-${index}`;
+        const page = await ctx.engine.eval<{ status?: number; error?: string }>(`site.raw(${JSON.stringify(rid)}, ${JSON.stringify(c.method)}, ${JSON.stringify(c.path)})`);
+        await sleep(200);
+        const events = await ctx.stand.journal();
+        const arrived = reqs(events, rid).map((event) => String(event.method));
+        const seenByOperator = ctx.engine.observed.slice(pausedBefore).filter((o) => o.kind === "paused" && String(o.url).includes(rid)).map((o) => String(o.method));
+        rows.push({ case: c.name, page: page.status ?? page.error, arrived, operatorSaw: seenByOperator });
+        const mainArrived = arrived.includes(c.method);
+        if (mainArrived !== c.reaches) violations.push(`${c.name}: ${c.method} ${c.path} ${mainArrived ? "reached" : "did not reach"} the server`);
+      }
+      // The same rules for requests Hub issues (released from the
+      // placeholder host): the operator is not the only barrier for them.
+      for (const [name, method, path, reaches] of [
+        ["Hub: never (read ack)", "POST", "/api/v1/message/ack", false],
+        ["Hub: unknown write", "POST", "/api/v1/group", false],
+        ["Hub: read", "GET", "/api/v1/account/me", true],
+      ] as const) {
+        const rid = `${tag}-hub-${method}-${path.split("/").pop()}`;
+        const result = await ctx.engine.sendHub(rid, `${API}${path}?rid=${rid}`, { authorization: "stand-token" }, method);
+        await sleep(200);
+        const arrived = reqs(await ctx.stand.journal(), rid).map((event) => String(event.method));
+        rows.push({ case: name, result: result.outcome === "response" ? result.status : `${String(result.outcome)} ${String(result.errorText ?? result.error ?? "")}`, arrived });
+        if (arrived.includes(method) !== reaches) violations.push(`${name}: ${method} ${path} ${arrived.includes(method) ? "reached" : "did not reach"} the server`);
+      }
+      // Local and private addresses from the page.
+      const local = await ctx.engine.eval<string[]>(
+        `Promise.all(["http://localhost:9222/json/version", "http://127.0.0.1:7700/", "http://10.0.0.1/", "http://192.168.1.1/"].map((u) => fetch(u, { mode: "no-cors" }).then(() => "reached " + u, (e) => "blocked " + u)))`,
+      );
+      rows.push({ case: "local and private addresses", page: local });
+      for (const line of local) if (line.startsWith("reached")) violations.push(`the page ${line}`);
+    } finally {
+      await ctx.engine.command("test.config", { siteBypass: false, gate: true });
+    }
+    return { ok: violations.length === 0, violations, notes: { bypass, rows } };
+  };
+}
+
 // ── condition №3: the socket ─────────────────────────────────────────────
 
 const FORBIDDEN = JSON.stringify({ t: 99, d: "read-ack" });
@@ -429,6 +607,61 @@ const wsContexts: Scenario = async (ctx) => {
   notes.guard = ctx.engine.observed.filter((o) => o.kind === "guard").map((o) => `${o.k}@${o.target}`);
   const blocked = ctx.engine.observed.filter((o) => o.kind === "guard" && o.k === "blocked_send").length;
   if (blocked < 5) violations.push(`only ${blocked} of 5 forbidden messages reported as blocked`);
+  return { ok: violations.length === 0, violations, notes };
+};
+
+/** Stage 1 item 5: every frame the server sends reaches the engine, in
+ *  order and once — in a burst, after a reconnect and on a worker's socket. */
+const wsFrames: Scenario = async (ctx) => {
+  await fresh(ctx);
+  const tag = `wsf-${ctx.run}-${Date.now() % 100000}`;
+  const violations: string[] = [];
+  const notes: Record<string, unknown> = {};
+  const startSeq = ctx.engine.wsEvents.length;
+  const wsIdOf = async (rid: string) => {
+    let id: string | null = null;
+    await until(async () => {
+      const open = (await ctx.stand.journal()).find((event) => event.t === "ws.open" && event.rid === rid);
+      id = open ? String(open.wsId) : null;
+      return id !== null;
+    }, 10_000, `socket ${rid} on the server`);
+    return id!;
+  };
+  const push = async (wsId: string, prefix: string, n: number) => {
+    for (let base = 0; base < n; base += 50) {
+      await Promise.all(Array.from({ length: Math.min(50, n - base) }, (_, i) => ctx.stand.wsPush(`${prefix}-${String(base + i).padStart(5, "0")}`, wsId)));
+    }
+  };
+  // 1. a burst of 1 000 frames on the page's socket
+  const first = await ctx.engine.eval<number>(`site.ws(${JSON.stringify(`${tag}-a`)})`, false);
+  const idA = await wsIdOf(`${tag}-a`);
+  await push(idA, "a", 1000);
+  // 2. the server drops the socket; the site opens a new one; 200 more
+  await ctx.stand.wsClose(idA);
+  await until(async () => (await ctx.engine.eval<{ readyState: number }>(`site.wsState(${first})`, false)).readyState === 3, 10_000, "socket closed");
+  await ctx.engine.eval<number>(`site.ws(${JSON.stringify(`${tag}-b`)})`, false);
+  const idB = await wsIdOf(`${tag}-b`);
+  await push(idB, "b", 200);
+  // 3. a worker's socket
+  await ctx.engine.eval(`site.worker()`);
+  await ctx.engine.eval(`site.inWorker({ op: "ws", rid: ${JSON.stringify(`${tag}-w`)} })`);
+  const idW = await wsIdOf(`${tag}-w`);
+  await push(idW, "w", 100);
+  await sleep(1500);
+  const events = await ctx.stand.journal();
+  const got = ctx.engine.wsEvents.slice(startSeq);
+  for (const [name, wsId, prefix, n] of [["burst", idA, "a", 1000], ["after reconnect", idB, "b", 200], ["worker", idW, "w", 100]] as const) {
+    const sent = events.filter((event) => event.t === "ws.send" && event.wsId === wsId && String(event.text).startsWith(`${prefix}-`)).map((event) => String(event.text));
+    const received = got.filter((event) => event.kind === "in" && String(event.data).startsWith(`${prefix}-`)).map((event) => String(event.data));
+    const sameOrder = sent.length === received.length && sent.every((text, i) => text === received[i]);
+    notes[name] = { sent: sent.length, received: received.length, sameOrder, unique: new Set(received).size };
+    if (sent.length !== n) violations.push(`${name}: the server sent ${sent.length} of ${n}`);
+    if (!sameOrder) violations.push(`${name}: ${received.length} frames reached the engine of ${sent.length} sent (or out of order)`);
+  }
+  const seqs = got.map((event) => Number(event.seq));
+  if (seqs.some((seq, i) => i > 0 && seq !== seqs[i - 1]! + 1)) violations.push("the operator's event numbers have a gap");
+  notes.lifecycle = got.filter((event) => event.kind !== "in" && event.kind !== "out").map((event) => `${String(event.kind)}@${String(event.target)}`);
+  notes.out = got.filter((event) => event.kind === "out").length;
   return { ok: violations.length === 0, violations, notes };
 };
 
@@ -534,8 +767,13 @@ export const scenarios: Record<string, Scenario> = {
   "expiry-hub-socks": expiry("hub", "socks", true),
   "expiry-hub-socks-abortonly": expiry("hub", "socks", false, true),
   "expiry-hub-socks-nothing": expiry("hub", "socks", false, false),
+  rules: rules(false),
+  "rules-bypass": rules(true),
+  "body-capture": bodyCapture,
+  "body-burst": bodyBurst,
   "ws-contexts": wsContexts,
   "ws-h2": wsOverH2,
+  "ws-frames": wsFrames,
   "ws-refused": wsRefused,
   "ws-blank-iframe": wsBlankIframe,
   "ws-detect": wsDetect,

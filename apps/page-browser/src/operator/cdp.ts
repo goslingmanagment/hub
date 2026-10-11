@@ -43,6 +43,11 @@ export class Cdp {
   #ackTimer: NodeJS.Timeout | null = null;
   /** Holder link state, reported by the holder. */
   cdpUp = false;
+  /** Stand: handle every Chrome message this much later, in order (a slow
+   *  operator — the holder and Chrome keep buffering meanwhile). */
+  testDelayMs = 0;
+  #delayed: Array<{ seq: number; message: Record<string, unknown>; at: number }> = [];
+  #delayTimer: NodeJS.Timeout | null = null;
   onHolderEvent: (event: { t: string; reason?: string }) => void = () => undefined;
   onHolderGone: () => void = () => undefined;
 
@@ -82,7 +87,8 @@ export class Cdp {
           return;
         }
         if (message.t === "m") {
-          this.#onChrome(message.seq!, message.d!);
+          if (this.testDelayMs > 0 || this.#delayed.length > 0) this.#delay(message.seq!, message.d!);
+          else this.#onChrome(message.seq!, message.d!);
           return;
         }
         if (message.t === "cdp.up") this.cdpUp = true;
@@ -90,6 +96,20 @@ export class Cdp {
         this.onHolderEvent(message);
       });
     });
+  }
+
+  #delay(seq: number, message: Record<string, unknown>): void {
+    this.#delayed.push({ seq, message, at: Date.now() + this.testDelayMs });
+    if (!this.#delayTimer) this.#drainDelayed();
+  }
+
+  #drainDelayed(): void {
+    this.#delayTimer = null;
+    while (this.#delayed.length > 0 && this.#delayed[0]!.at <= Date.now()) {
+      const next = this.#delayed.shift()!;
+      this.#onChrome(next.seq, next.message);
+    }
+    if (this.#delayed.length > 0) this.#delayTimer = setTimeout(() => this.#drainDelayed(), Math.max(1, this.#delayed[0]!.at - Date.now()));
   }
 
   get linked(): boolean {

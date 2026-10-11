@@ -64,11 +64,19 @@ export class StandEngine {
   heldChecks = new Map<string, { attemptId: string; askedMono: number }>();
   heldWs = new Map<string, { connId: string; askedMono: number }>();
   lastState: Message | null = null;
+  /** The site's socket as the operator reports it from CDP. */
+  wsEvents: Array<Message & { recvMono: number }> = [];
   #hubUrls = new Map<string, string>();
   #commandWaiters = new Map<string, (message: Message) => void>();
   #resultWaiters = new Map<string, (message: Message) => void>();
   #pingTimer: NodeJS.Timeout | null = null;
   #n = 0;
+
+  /** One site request in flight, as the real engine admits: the next ask
+   *  waits for the previous `siteDone`. */
+  serialize = false;
+  #siteInFlight: string | null = null;
+  #siteQueue: SiteAsk[] = [];
 
   decideSite: (ask: SiteAsk) => Decision = () => ({ grant: true });
   decideCheck: (attemptId: string) => Decision = () => ({ grant: true });
@@ -178,6 +186,11 @@ export class StandEngine {
       }
       case "siteDone":
         this.siteDone.set(String(message.siteRequestId), { ...message, recvMono });
+        if (this.#siteInFlight === String(message.siteRequestId)) {
+          this.#siteInFlight = null;
+          const next = this.#siteQueue.shift();
+          if (next) this.#decideSite(next);
+        }
         break;
       case "check":
         this.#decideCheck(String(message.attemptId), recvMono);
@@ -196,6 +209,9 @@ export class StandEngine {
       case "wsAdmit":
         this.#decideWs(String(message.connId), recvMono);
         break;
+      case "wsEvent":
+        this.wsEvents.push({ ...message, recvMono });
+        break;
       case "commandResult": {
         const waiter = this.#commandWaiters.get(String(message.id));
         this.#commandWaiters.delete(String(message.id));
@@ -210,6 +226,10 @@ export class StandEngine {
   }
 
   #decideSite(ask: SiteAsk): void {
+    if (this.serialize && this.#siteInFlight !== null) {
+      this.#siteQueue.push(ask);
+      return;
+    }
     const decision = this.decideSite(ask);
     if (decision === "hold") {
       this.heldSite.set(ask.siteRequestId, ask);
@@ -219,6 +239,7 @@ export class StandEngine {
   }
 
   #answerSite(ask: SiteAsk, decision: Exclude<Decision, "hold">): void {
+    if (decision.grant && this.serialize) this.#siteInFlight = ask.siteRequestId;
     if (decision.grant) {
       const deadline = this.#grant("site", ask.siteRequestId, ask.url, decision.windowMs);
       this.#send({ type: "siteAdmitResult", siteRequestId: ask.siteRequestId, ok: true, deadlineMono: deadline });
@@ -286,6 +307,12 @@ export class StandEngine {
     if (!this.heldWs.delete(connId)) return false;
     this.#answerWs(connId, decision);
     return true;
+  }
+
+  /** The outcome of the site request with this rid (its latest admission). */
+  siteDoneOf(rid: string): Message | null {
+    const grant = [...this.grants].reverse().find((g) => g.kind === "site" && g.rid === rid && this.siteDone.has(g.id));
+    return grant ? this.siteDone.get(grant.id) ?? null : null;
   }
 
   /** A Hub request (plan §4.2). The url carries `rid` for the journals. */

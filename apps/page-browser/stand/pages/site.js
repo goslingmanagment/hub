@@ -34,11 +34,50 @@
       );
     },
 
+    /** A site request whose body the page reads and digests itself — the
+     *  truth the operator's capture is compared with. `how`: "arrayBuffer"
+     *  or "stream" (a reader loop, as Angular's fetch backend does). */
+    async apiHash(rid, query, how = "arrayBuffer") {
+      try {
+        const r = await fetch(`${API}/api/body?rid=${encodeURIComponent(rid)}&${query}`, { credentials: "include", headers: { authorization: "stand-token" } });
+        let buf;
+        if (how === "stream") {
+          const reader = r.body.getReader();
+          const parts = [];
+          for (;;) { const x = await reader.read(); if (x.done) break; parts.push(x.value); }
+          buf = await new Blob(parts).arrayBuffer();
+        } else {
+          buf = await r.arrayBuffer();
+        }
+        const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", buf));
+        const sha256 = Array.from(digest, (b) => b.toString(16).padStart(2, "0")).join("");
+        return note({ kind: "apiHash", rid, status: r.status, bytes: buf.byteLength, sha256 });
+      } catch (e) {
+        return note({ kind: "apiHash", rid, error: String(e) });
+      }
+    },
+
     /** n requests at once, as a page does at load. */
     burst(prefix, n, opts) {
       const all = [];
       for (let i = 0; i < n; i++) all.push(site.api(`${prefix}-${i}`, opts));
       return Promise.all(all);
+    },
+
+    /** Any request to the API by method and path (the rules extension and
+     *  the operator's map are tested with it). */
+    raw(rid, method, path, opts = {}) {
+      const started = performance.now();
+      return fetch(`${API}${path}${path.includes("?") ? "&" : "?"}rid=${encodeURIComponent(rid)}`, {
+        method,
+        credentials: "include",
+        headers: opts.plain ? {} : { authorization: "stand-token" },
+        body: method === "GET" || method === "HEAD" ? undefined : "{}",
+        keepalive: opts.keepalive === true,
+      }).then(
+        (r) => note({ kind: "raw", rid, method, path, status: r.status, ms: performance.now() - started }),
+        (e) => note({ kind: "raw", rid, method, path, error: String(e), ms: performance.now() - started }),
+      );
     },
 
     xhr(rid) {
@@ -200,6 +239,50 @@
       } catch (e) {
         return { threw: String(e), sendSource: text };
       }
+    },
+
+    /** What a site sees of the page's environment and device (stage 1
+     *  items 11 and 16). */
+    async environment() {
+      const out = {};
+      out.timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      out.tzOffsetMin = new Date().getTimezoneOffset();
+      out.locale = Intl.DateTimeFormat().resolvedOptions().locale;
+      out.language = navigator.language;
+      out.languages = navigator.languages;
+      out.geo = await new Promise((resolve) => {
+        if (!navigator.geolocation) return resolve("no api");
+        navigator.geolocation.getCurrentPosition(
+          (p) => resolve({ lat: p.coords.latitude, lon: p.coords.longitude, acc: p.coords.accuracy }),
+          (e) => resolve(`error ${e.code}: ${e.message}`),
+          { timeout: 3000 },
+        );
+      });
+      out.geoPermission = await navigator.permissions.query({ name: "geolocation" }).then((s) => s.state, (e) => String(e));
+      out.screen = { w: screen.width, h: screen.height, aw: screen.availWidth, ah: screen.availHeight, depth: screen.colorDepth, dpr: devicePixelRatio, inner: [innerWidth, innerHeight], outer: [outerWidth, outerHeight] };
+      out.cores = navigator.hardwareConcurrency;
+      out.memory = navigator.deviceMemory;
+      out.platform = navigator.platform;
+      out.userAgent = navigator.userAgent;
+      out.webdriver = navigator.webdriver;
+      out.plugins = navigator.plugins.length;
+      out.maxTouchPoints = navigator.maxTouchPoints;
+      out.uaData = navigator.userAgentData
+        ? await navigator.userAgentData.getHighEntropyValues(["architecture", "bitness", "model", "platformVersion", "fullVersionList", "wow64"]).catch((e) => String(e))
+        : null;
+      try {
+        const gl = document.createElement("canvas").getContext("webgl");
+        const info = gl && gl.getExtension("WEBGL_debug_renderer_info");
+        out.webgl = gl ? { vendor: info ? gl.getParameter(info.UNMASKED_VENDOR_WEBGL) : null, renderer: info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : null, version: gl.getParameter(gl.VERSION) } : "no webgl";
+      } catch (e) {
+        out.webgl = String(e);
+      }
+      const probe = ["Arial", "Helvetica", "Times New Roman", "Courier New", "Verdana", "Georgia", "Liberation Sans", "DejaVu Sans", "Noto Sans", "Noto Color Emoji", "Ubuntu", "Roboto", "Segoe UI", "San Francisco"];
+      const canvas = document.createElement("canvas").getContext("2d");
+      const width = (font) => { canvas.font = `40px ${font}`; return canvas.measureText("mmmmmmmmmmlli10OQ").width; };
+      const base = { mono: width("monospace"), sans: width("sans-serif"), serif: width("serif") };
+      out.fonts = probe.filter((name) => width(`"${name}", monospace`) !== base.mono || width(`"${name}", sans-serif`) !== base.sans || width(`"${name}", serif`) !== base.serif);
+      return out;
     },
 
     /** What a site could notice about the guard. */

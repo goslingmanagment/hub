@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "Hub page rules",
+  "description": "Static request rules of the page browser. No scripts.",
+  "version": "1.0.0",
+  "permissions": ["declarativeNetRequest"],
+  "declarative_net_request": {
+    "rule_resources": [{ "id": "hub", "enabled": true, "path": "rules.json" }]
+  }
+}

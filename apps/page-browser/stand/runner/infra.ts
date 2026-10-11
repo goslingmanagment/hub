@@ -116,6 +116,10 @@ export class StandServer {
   async wsPush(text: string, wsId?: string): Promise<void> {
     await httpJson({ host: this.host, port: this.port, path: "/ws/push", method: "POST", body: wsId ? { wsId, text } : { text } });
   }
+
+  async wsClose(wsId?: string, code = 1001): Promise<void> {
+    await httpJson({ host: this.host, port: this.port, path: "/ws/close", method: "POST", body: wsId ? { wsId, code } : { code } });
+  }
 }
 
 // ── docker ────────────────────────────────────────────────────────────────

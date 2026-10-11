@@ -34,7 +34,7 @@ services:
       STAND_SOCKS_PASS: pb-secret
 
   browser:
-    image: pb-browser
+    image: ${PB_IMAGE:-pb-browser}
     depends_on: [stand-server]
     networks:
       stand:
@@ -66,6 +66,11 @@ services:
       PB_DEBUG_NET: "${PB_DEBUG:-0}"
       PB_DEBUG_CDP: "${PB_DEBUG:-0}"
       PB_ON_BLOCKED_SEND: log
+      PB_SELFTEST_RULES: "${PB_SELFTEST_RULES:-0}"
+      PB_TZ: "${PB_TZ:-UTC}"
+      PB_LANG: "${PB_LANG:-en-US}"
+      PB_GEO: "${PB_GEO:-}"
+      PB_CHROME_ARGS: "${PB_CHROME_ARGS:-}"
 
   runner:
     image: node:22-bookworm-slim

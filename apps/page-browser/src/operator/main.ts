@@ -10,7 +10,8 @@
 
 import { connect as tlsConnect } from "node:tls";
 import { createConnection } from "node:net";
-import { closeSync, openSync, utimesSync } from "node:fs";
+import { closeSync, createWriteStream, mkdirSync, openSync, utimesSync, type WriteStream } from "node:fs";
+import { createHash, type Hash } from "node:crypto";
 
 import { Cdp, type CdpEvent } from "./cdp.ts";
 import { Egress, socksConnect, type HostClass } from "./egress.ts";
@@ -60,6 +61,22 @@ const CFG = {
    *  there for a socket to ride). */
   refuseWsHostRequests: envStr("PB_WS_HOST_REFUSE", "1") === "1",
   siteAdmitWaitMs: envInt("PB_SITE_ADMIT_WAIT_MS", 60_000),
+  /** The page's environment by its proxy's region (plan §4.1 step 2). */
+  env: {
+    timeZone: envStr("PB_TZ", "UTC"),
+    language: envStr("PB_LANG", "en-US"),
+    /** "latitude,longitude,accuracy" or empty: no geolocation override. */
+    geolocation: envStr("PB_GEO", ""),
+  },
+  /** The self-test also checks the rules extension (an image with it). */
+  selftestRules: envStr("PB_SELFTEST_RULES", "0") === "1",
+  selftestNeverPath: envStr("PB_SELFTEST_NEVER_PATH", "/api/v1/message/ack"),
+  /** Capture response bodies of API requests to disk (plan §4.2 step 7,
+   *  §4.3 step 4). */
+  captureBodies: envStr("PB_CAPTURE_BODIES", "1") === "1",
+  bodiesDir: envStr("PB_BODIES_DIR", "/data/buffer/bodies"),
+  /** A Hub response over this declared size is cancelled before its body. */
+  hubBodyLimit: envInt("PB_HUB_BODY_LIMIT", 32 * 1024 * 1024),
   heartbeat: "/run/pb/operator.alive",
 };
 
@@ -73,6 +90,11 @@ const GUARD_POLICY: GuardPolicy = {
     .map((value) => (/^\d+$/.test(value) ? Number(value) : value)),
 };
 const GUARD = guardSource(BINDING, GUARD_POLICY);
+
+const GEO = (() => {
+  const parts = CFG.env.geolocation.split(",").map((part) => Number(part.trim()));
+  return parts.length >= 2 && parts.every((part) => Number.isFinite(part)) ? { latitude: parts[0]!, longitude: parts[1]!, accuracy: parts[2] ?? 50 } : null;
+})();
 
 function classify(host: string): HostClass {
   if (CFG.hosts.site.includes(host)) return "site";
@@ -174,6 +196,8 @@ async function setUpTarget(info: TargetInfo, waiting: boolean): Promise<void> {
       await cdp.send("Runtime.addBinding", { name: BINDING }, s);
     }
     if (isPage) {
+      // Geolocation of the page's region, before the target runs anything.
+      if (GEO) await cdp.send("Emulation.setGeolocationOverride", GEO, s);
       await cdp.send("Page.enable", {}, s);
       await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: GUARD, runImmediately: true }, s);
     }
@@ -289,12 +313,30 @@ cdp.on("Runtime.bindingCalled", (event) => {
 // physical request gets its own gate window inside the admission's window,
 // and Chrome sending one of them twice is a retry.
 
+/** A response body as it streams in (plan §4.2 step 7): written to disk
+ *  chunk by chunk, never whole in memory. `decoded` — the body as the page
+ *  gets it; `encoded` — the bytes of the transfer (compressed). */
+interface Capture {
+  file: string;
+  stream: WriteStream;
+  hash: Hash;
+  decoded: number;
+  encoded: number;
+  chunks: number;
+  /** A chunk whose data did not match its announced length. */
+  broken: boolean;
+  contentLength: number | null;
+  contentEncoding: string | null;
+  armedMono: number;
+}
+
 interface Physical {
   op: Operation;
   role: "preflight" | "main";
   networkId: string | null;
   sends: number;
   done: boolean;
+  capture: Capture | null;
 }
 
 /** An admitted operation ends within this time whatever Chrome does (plan
@@ -314,6 +356,9 @@ interface Operation {
   sendMono: number | null;
   preflightSendMono: number | null;
   status: number | null;
+  /** The status the server really sent (304 for a revalidated cache entry;
+   *  the page sees the cached 200). */
+  wireStatus: number | null;
   fromCache: boolean;
   fromServiceWorker: boolean;
   sessionId: string | null;
@@ -350,6 +395,7 @@ function newOperation(kind: Operation["kind"], id: string, key: string, onFinish
     sendMono: null,
     preflightSendMono: null,
     status: null,
+    wireStatus: null,
     fromCache: false,
     fromServiceWorker: false,
     sessionId: null,
@@ -399,7 +445,7 @@ function windowId(phys: Physical): string | null {
 }
 
 function releasePhysical(op: Operation, event: CdpEvent, params: PausedParams, role: Physical["role"], extra: Record<string, unknown> = {}): void {
-  const phys: Physical = { op, role, networkId: params.networkId ?? null, sends: 0, done: false };
+  const phys: Physical = { op, role, networkId: params.networkId ?? null, sends: 0, done: false, capture: null };
   if (role === "preflight") op.preflight = phys;
   else op.main = phys;
   if (phys.networkId) byNetworkId.set(phys.networkId, phys);
@@ -408,7 +454,10 @@ function releasePhysical(op: Operation, event: CdpEvent, params: PausedParams, r
   if (role === "preflight" && op.kind === "site") awaitingMain.set(op.key, op);
   const id = windowId(phys);
   if (id && op.deadline !== null) egress.gateOpen(id, op.deadline);
-  void resolvePaused(event, "continue", { requestId: params.requestId, ...extra });
+  // The response stops once more at its headers: the body's stream is armed
+  // there, before a byte of it reaches the page.
+  const intercept = CFG.captureBodies && role === "main" && phys.networkId !== null ? { interceptResponse: true } : {};
+  void resolvePaused(event, "continue", { requestId: params.requestId, ...extra, ...intercept });
 }
 
 function isPreflight(params: PausedParams): boolean {
@@ -446,8 +495,15 @@ cdp.on("Network.requestWillBeSentExtraInfo", (event) => {
   if (op.kind === "hub" && phys.role === "main" && phys.sends === 1) rpc.send({ type: "sent", attemptId: op.id, mono: monoMs() });
 });
 
+/** The session a request's Network events come on (its page or worker). */
+const sessionOfRequest = new Map<string, string>();
+
 cdp.on("Network.requestWillBeSent", (event) => {
   const params = event.params as { requestId: string; request: { url: string }; redirectResponse?: { status: number } };
+  if (event.sessionId) {
+    sessionOfRequest.set(params.requestId, event.sessionId);
+    if (sessionOfRequest.size > 5000) sessionOfRequest.delete(sessionOfRequest.keys().next().value!);
+  }
   const phys = byNetworkId.get(params.requestId);
   if (phys && params.redirectResponse) {
     // A redirect ends this admission: the next hop stops in Fetch again and
@@ -455,6 +511,20 @@ cdp.on("Network.requestWillBeSent", (event) => {
     observe("redirect", { op: phys.op.id, status: params.redirectResponse.status, to: params.request.url });
   }
 });
+
+cdp.on("Network.responseReceivedExtraInfo", (event) => {
+  const params = event.params as { requestId: string; statusCode: number };
+  const phys = byNetworkId.get(params.requestId);
+  if (phys && phys.role === "main") phys.op.wireStatus = params.statusCode;
+});
+
+/** Where the answer came from (plan §4.2 step 8). */
+function sourceOf(op: Operation): string {
+  if (op.fromServiceWorker) return "service_worker";
+  if (op.wireStatus === 304) return "revalidated_304";
+  if (op.fromCache) return "cache_unconfirmed";
+  return "network";
+}
 
 cdp.on("Network.responseReceived", (event) => {
   const params = event.params as {
@@ -502,6 +572,9 @@ cdp.on("Network.loadingFinished", (event) => {
     fromServiceWorker: op.fromServiceWorker,
     encodedBytes: params.encodedDataLength,
     sessionId: event.sessionId ?? null,
+    source: sourceOf(op),
+    wireStatus: op.wireStatus,
+    body: sealBody(phys, "finished", params.encodedDataLength),
   });
 });
 
@@ -525,9 +598,13 @@ cdp.on("Network.loadingFailed", (event) => {
       fromServiceWorker: op.fromServiceWorker,
       bodyEnd: "canceled",
       sessionId: event.sessionId ?? null,
+      source: sourceOf(op),
+      wireStatus: op.wireStatus,
+      body: sealBody(phys, "canceled", null),
     });
     return;
   }
+  sealBody(phys, "failed", null);
   finishOp(op, {
     outcome: "transport_error",
     // Chrome reported the request's headers as sent at least once → its
@@ -541,6 +618,213 @@ cdp.on("Network.loadingFailed", (event) => {
     sends: phys.sends,
   });
 });
+
+// ── the site's socket: frames from CDP (plan §4.4) ──────────────────────────
+//
+// PROTOTYPE: frames are numbered and passed to the engine as they come; the
+// durable buffer on disk is stage 3 (PR 11).
+
+let wsSeq = 0;
+const wsUrls = new Map<string, string>();
+
+function wsEvent(kind: string, event: CdpEvent, fields: Record<string, unknown>): void {
+  const info = event.sessionId ? targets.get(event.sessionId) : undefined;
+  rpc.send({ type: "wsEvent", seq: ++wsSeq, kind, target: info?.type ?? null, mono: monoMs(), ...fields });
+}
+
+cdp.on("Network.webSocketCreated", (event) => {
+  const params = event.params as { requestId: string; url: string };
+  wsUrls.set(params.requestId, params.url);
+  wsEvent("created", event, { connId: params.requestId, url: params.url });
+});
+
+cdp.on("Network.webSocketHandshakeResponseReceived", (event) => {
+  const params = event.params as { requestId: string; response: { status: number } };
+  wsEvent("open", event, { connId: params.requestId, url: wsUrls.get(params.requestId) ?? null, status: params.response.status });
+});
+
+cdp.on("Network.webSocketFrameReceived", (event) => {
+  const params = event.params as { requestId: string; response: { opcode: number; payloadData: string } };
+  wsEvent("in", event, { connId: params.requestId, opcode: params.response.opcode, data: params.response.payloadData });
+});
+
+cdp.on("Network.webSocketFrameSent", (event) => {
+  const params = event.params as { requestId: string; response: { opcode: number; payloadData: string } };
+  // The journal of outgoing socket messages (plan §4.11) keeps the shape,
+  // not the content: an auth frame carries the token.
+  wsEvent("out", event, { connId: params.requestId, opcode: params.response.opcode, len: params.response.payloadData.length });
+});
+
+cdp.on("Network.webSocketFrameError", (event) => {
+  const params = event.params as { requestId: string; errorMessage: string };
+  wsEvent("error", event, { connId: params.requestId, error: params.errorMessage });
+});
+
+cdp.on("Network.webSocketClosed", (event) => {
+  const params = event.params as { requestId: string };
+  wsEvent("close", event, { connId: params.requestId });
+  wsUrls.delete(params.requestId);
+});
+
+// ── response bodies ───────────────────────────────────────────────────────
+
+interface ResponseStage {
+  requestId: string;
+  networkId?: string;
+  responseStatusCode?: number;
+  responseErrorReason?: string;
+  responseHeaders?: Array<{ name: string; value: string }>;
+}
+
+function headerOf(headers: Array<{ name: string; value: string }> | undefined, name: string): string | null {
+  const found = headers?.find((header) => header.name.toLowerCase() === name);
+  return found ? found.value : null;
+}
+
+/** The response of a released request stopped at its headers. */
+async function onResponseStage(event: CdpEvent, params: ResponseStage): Promise<void> {
+  const phys = params.networkId ? byNetworkId.get(params.networkId) : undefined;
+  const release = () =>
+    cdp
+      .send("Fetch.continueResponse", { requestId: params.requestId })
+      .catch((error: Error) => log("fetch.response_failed", { error: error.message }))
+      .finally(() => cdp.ack(event.seq));
+  if (!phys || phys.done || params.responseStatusCode === undefined) {
+    await release();
+    return;
+  }
+  const op = phys.op;
+  // The response is here: no repeat of the request can follow.
+  const wid = windowId(phys);
+  if (wid) egress.gateResponding(wid);
+  const declared = headerOf(params.responseHeaders, "content-length");
+  const contentLength = declared !== null && /^\d+$/.test(declared) ? Number(declared) : null;
+  if (op.kind === "hub" && contentLength !== null && contentLength > CFG.hubBodyLimit) {
+    // Over the limit by its own word: cancelled before the body (plan §4.2).
+    observe("body.over_limit", { op: op.id, contentLength });
+    await cdp.send("Fetch.failRequest", { requestId: params.requestId, errorReason: "Aborted" }).catch(() => undefined);
+    cdp.ack(event.seq);
+    op.status = params.responseStatusCode;
+    finishOp(op, { outcome: "response", status: op.status, bodyOverflow: true, contentLength, sends: phys.sends, sendMono: op.sendMono });
+    return;
+  }
+  const sessionId = params.networkId ? sessionOfRequest.get(params.networkId) : undefined;
+  if (sessionId && params.networkId) {
+    try {
+      mkdirSync(CFG.bodiesDir, { recursive: true });
+      const file = `${CFG.bodiesDir}/${Date.now()}-${params.networkId.replace(/[^A-Za-z0-9.]/g, "_")}.bin`;
+      const capture: Capture = {
+        file,
+        stream: createWriteStream(file),
+        hash: createHash("sha256"),
+        decoded: 0,
+        encoded: 0,
+        chunks: 0,
+        broken: false,
+        contentLength,
+        contentEncoding: headerOf(params.responseHeaders, "content-encoding"),
+        armedMono: monoMs(),
+      };
+      const armed = await cdp.send<{ bufferedData?: string }>("Network.streamResourceContent", { requestId: params.networkId }, sessionId);
+      phys.capture = capture;
+      if (armed.bufferedData) appendBody(capture, Buffer.from(armed.bufferedData, "base64"), null, 0);
+    } catch (error) {
+      observe("body.arm_failed", { op: op.id, error: (error as Error).message });
+    }
+  } else {
+    observe("body.arm_failed", { op: op.id, error: "no session for the request" });
+  }
+  await release();
+}
+
+function appendBody(capture: Capture, data: Buffer, announced: number | null, encoded: number): void {
+  if (announced !== null && data.length !== announced) capture.broken = true;
+  capture.stream.write(data);
+  capture.hash.update(data);
+  capture.decoded += data.length;
+  capture.encoded += encoded;
+  capture.chunks += 1;
+}
+
+/** Stand: handle body chunks this much later (a slow operator). */
+let testDataDelayMs = 0;
+
+function onBodyData(params: { requestId: string; dataLength: number; encodedDataLength: number; data?: string }): void {
+  const phys = byNetworkId.get(params.requestId);
+  if (!phys?.capture) return;
+  if (params.data === undefined) {
+    // Data passed before the stream was armed or without it: a hole.
+    if (params.dataLength > 0) phys.capture.broken = true;
+    return;
+  }
+  appendBody(phys.capture, Buffer.from(params.data, "base64"), params.dataLength, params.encodedDataLength);
+  const op = phys.op;
+  if (op.kind === "hub" && phys.capture.decoded > CFG.hubBodyLimit && !op.done) {
+    // No declared size (chunked, compressed): the limit holds while it comes.
+    observe("body.over_limit", { op: op.id, received: phys.capture.decoded });
+    const attempt = hub.get(op.id);
+    if (attempt && sitePage && attempt.worldId !== null) {
+      cdp.post(
+        "Runtime.callFunctionOn",
+        { functionDeclaration: "function (id) { const e = globalThis.__pbLive && globalThis.__pbLive.get(id); if (e) e.controller.abort(); return !!e; }", executionContextId: attempt.worldId, arguments: [{ value: op.id }], returnByValue: true },
+        sitePage.sessionId,
+      );
+    }
+    const body = sealBody(phys, "limit", null);
+    phys.capture = null;
+    finishOp(op, { outcome: "response", status: op.status, bodyOverflow: true, sends: phys.sends, sendMono: op.sendMono, body });
+  }
+}
+
+cdp.on("Network.dataReceived", (event) => {
+  const params = event.params as { requestId: string; dataLength: number; encodedDataLength: number; data?: string };
+  if (testDataDelayMs > 0) setTimeout(() => onBodyData(params), testDataDelayMs);
+  else onBodyData(params);
+});
+
+/** What was captured, for the outcome. `how` says why it counts as whole:
+ *  the load finished; or it ended as a cancel (a body read as a stream does,
+ *  see FINDINGS) and the transfer's length matches content-length. */
+function sealBody(phys: Physical, ended: "finished" | "canceled" | "failed" | "limit", totalEncoded: number | null): Record<string, unknown> | null {
+  const capture = phys.capture;
+  if (!capture) return null;
+  capture.stream.end();
+  const encoded = totalEncoded ?? capture.encoded;
+  let complete = false;
+  let how = "incomplete";
+  if (!capture.broken) {
+    if (ended === "finished") {
+      complete = true;
+      how = "load finished";
+    } else if (ended === "canceled") {
+      // A body the page read as a stream ends as a cancel even when whole.
+      // The per-chunk transfer lengths do not add up to the transfer's size
+      // then (stand), so only an uncompressed body with a declared length
+      // can be checked by length; the rest is checked by its shape (JSON).
+      const identity = capture.contentEncoding === null || capture.contentEncoding === "identity";
+      if (identity && capture.contentLength !== null) {
+        complete = capture.decoded === capture.contentLength;
+        how = complete ? "content-length matched" : "shorter than content-length";
+      } else {
+        how = "shape check needed";
+      }
+    }
+  } else {
+    how = "a chunk was missing or short";
+  }
+  return {
+    file: capture.file,
+    bytes: capture.decoded,
+    encodedBytes: encoded,
+    chunks: capture.chunks,
+    sha256: capture.hash.digest("hex"),
+    contentLength: capture.contentLength,
+    contentEncoding: capture.contentEncoding,
+    complete,
+    how,
+    ended,
+  };
+}
 
 // ── Fetch: every request of every context stops here ─────────────────────
 
@@ -564,6 +848,15 @@ function resolvePaused(event: CdpEvent, action: "continue" | "fail", params: Rec
 cdp.on("Fetch.requestPaused", (event) => {
   const params = event.params as unknown as PausedParams;
   const requestId = params.requestId;
+  const stage = event.params as unknown as ResponseStage;
+  if (stage.responseStatusCode !== undefined || stage.responseErrorReason !== undefined) {
+    if (event.seq <= replayUpTo) {
+      void resolvePaused(event, "fail", { requestId, errorReason: "Aborted" });
+      return;
+    }
+    void onResponseStage(event, stage);
+    return;
+  }
   if (process.env.PB_DEBUG_FETCH === "1") log("fetch.paused", { method: params.request.method, url: params.request.url, frag: params.request.urlFragment ?? null, networkId: params.networkId ?? null, type: params.resourceType });
   if (event.seq <= replayUpTo) {
     // Paused under a previous operator instance: its admission (if any) is
@@ -610,6 +903,10 @@ interface PendingSite {
 const pendingSite = new Map<string, PendingSite>();
 
 function onSitePaused(event: CdpEvent, params: PausedParams): void {
+  if (testSiteBypass) {
+    void resolvePaused(event, "continue", { requestId: params.requestId });
+    return;
+  }
   const preflight = isPreflight(params);
   const method = preflight ? preflightMethod(params) : params.request.method;
   const key = opKey(params.request.url, method);
@@ -874,7 +1171,7 @@ function onSelftestPaused(event: CdpEvent, params: PausedParams, fragment: strin
   const waiter = selftestWaiters.get(fragment);
   if (waiter && params.networkId) {
     const op = newOperation("selftest", fragment, fragment, waiter);
-    const phys: Physical = { op, role: "main", networkId: params.networkId, sends: 0, done: false };
+    const phys: Physical = { op, role: "main", networkId: params.networkId, sends: 0, done: false, capture: null };
     op.main = phys;
     byNetworkId.set(params.networkId, phys);
   }
@@ -882,38 +1179,92 @@ function onSelftestPaused(event: CdpEvent, params: PausedParams, fragment: strin
   void resolvePaused(event, "continue", { requestId: params.requestId });
 }
 
-async function runSelftest(): Promise<Record<string, unknown>> {
-  const results: Record<string, unknown> = {};
-  const page = sitePage;
-  if (!page) throw new Error("no page target");
-  const world = await isolatedWorld(page);
-  const fragment = `#pb-selftest-${Date.now()}`;
-  const outcome = new Promise<Record<string, unknown>>((resolve) => {
-    selftestWaiters.set(fragment, resolve);
-    setTimeout(() => resolve({ outcome: "timeout" }), 10_000);
-  });
+/** Network.loadingFailed of requests that never stop in Fetch (the rules
+ *  extension cancels them first): by the self-test's marker in the URL. */
+const selftestByRequest = new Map<string, string>();
+const selftestFailed = new Map<string, { errorText: string; blockedReason: string | null }>();
+
+cdp.on("Network.requestWillBeSent", (event) => {
+  const params = event.params as { requestId: string; request: { url: string } };
+  const marker = /[?&]pbst=([\w-]+)/.exec(params.request.url)?.[1];
+  if (marker) selftestByRequest.set(params.requestId, marker);
+});
+
+cdp.on("Network.loadingFailed", (event) => {
+  const params = event.params as { requestId: string; errorText: string; blockedReason?: string };
+  const marker = selftestByRequest.get(params.requestId);
+  if (!marker) return;
+  selftestByRequest.delete(params.requestId);
+  selftestFailed.set(marker, { errorText: params.errorText, blockedReason: params.blockedReason ?? null });
+});
+
+/** One self-test request from the isolated world; resolves with how it
+ *  failed (it must fail: the exit is closed). */
+async function selftestRequest(page: TargetInfo, world: number, method: string, path: string, marker: string): Promise<{ errorText: string; blockedReason: string | null; paused: boolean }> {
+  const fragment = `#pb-selftest-${marker}`;
+  let paused = false;
+  const viaFetch = new Promise<Record<string, unknown>>((resolve) => selftestWaiters.set(fragment, (outcome) => {
+    paused = true;
+    resolve(outcome);
+  }));
   const apiHost = CFG.hosts.api[0]!;
   await cdp.send(
     "Runtime.callFunctionOn",
     {
-      functionDeclaration: "function (u) { fetch(u, { mode: 'no-cors' }).catch(() => {}); return true; }",
+      functionDeclaration: "function (u, m) { fetch(u, { method: m, mode: 'no-cors', body: m === 'GET' ? undefined : '{}' }).catch(() => {}); return true; }",
       executionContextId: world,
-      arguments: [{ value: `https://${apiHost}/api/selftest${fragment}` }],
+      arguments: [{ value: `https://${apiHost}${path}?pbst=${marker}${fragment}` }, { value: method }],
       returnByValue: true,
     },
     page.sessionId,
   );
-  const exitClosed = await outcome;
-  selftestWaiters.delete(fragment);
+  const deadline = monoMs() + 4000;
+  for (;;) {
+    const failed = selftestFailed.get(marker);
+    if (failed) {
+      selftestFailed.delete(marker);
+      selftestWaiters.delete(fragment);
+      return { ...failed, paused };
+    }
+    if (monoMs() > deadline) {
+      selftestWaiters.delete(fragment);
+      return { errorText: "timeout", blockedReason: null, paused };
+    }
+    await Promise.race([viaFetch, sleep(20)]);
+  }
+}
+
+/** Plan §4.1 step 5: every lock is checked on its own, with the exit closed,
+ *  and the answer shows which lock stopped the request. */
+async function runSelftest(): Promise<Record<string, unknown>> {
+  const page = sitePage;
+  if (!page) throw new Error("no page target");
+  const world = await isolatedWorld(page);
+  const run = `${Date.now()}`;
+  const results: Record<string, unknown> = {};
+  // 1. A permitted request reaches the operator's proxy and is refused there.
+  const exitClosed = await selftestRequest(page, world, "GET", "/api/selftest", `${run}-exit`);
   results.exitClosed = exitClosed;
+  const exitOk = exitClosed.paused && exitClosed.errorText.includes("TUNNEL_CONNECTION_FAILED");
+  // 2-3. The rules extension cancels a "never" request and an unknown write
+  // before they reach the interception. On the first start of a profile the
+  // policy is still installing the extension: retried for a few seconds.
+  let rulesOk = !CFG.selftestRules;
+  if (CFG.selftestRules) {
+    for (let attempt = 0; attempt < 12 && !rulesOk; attempt++) {
+      const never = await selftestRequest(page, world, "POST", CFG.selftestNeverPath, `${run}-never${attempt}`);
+      const write = await selftestRequest(page, world, "POST", "/api/v1/pb-selftest-unknown", `${run}-write${attempt}`);
+      results.never = never;
+      results.unknownWrite = write;
+      rulesOk = [never, write].every((r) => !r.paused && r.errorText.includes("BLOCKED_BY_CLIENT"));
+      if (!rulesOk) await sleep(700);
+    }
+  }
+  // 4. The kernel lets Chrome's user reach nothing but the proxy.
   const net = await supervisor({ cmd: "netselftest" }).catch((error: Error) => ({ ok: false, error: error.message }));
   results.kernel = net;
-  const pass =
-    exitClosed.outcome === "transport_error" &&
-    exitClosed.sent === false &&
-    String(exitClosed.errorText).includes("TUNNEL_CONNECTION_FAILED") &&
-    (net as { ok?: boolean }).ok === true;
-  return { pass, ...results };
+  const pass = exitOk && rulesOk && (net as { ok?: boolean }).ok === true;
+  return { pass, exitOk, rulesOk, ...results };
 }
 
 async function checkExitIp(): Promise<string> {
@@ -936,11 +1287,15 @@ async function start(): Promise<void> {
   egress.closeExit("startup");
   setState("chrome_starting");
   const status = await supervisor({ cmd: "chrome.status" });
-  if (!status.running) await supervisor({ cmd: "chrome.start", env: { TZ: envStr("PB_TZ", "UTC"), LANG_TAG: envStr("PB_LANG", "en-US") } });
+  if (!status.running) await supervisor({ cmd: "chrome.start", env: { TZ: CFG.env.timeZone, LANG_TAG: CFG.env.language } });
   // Wait until the holder holds the DevTools connection.
   for (let i = 0; i < 300 && !cdp.cdpUp; i++) await sleep(100);
   if (!cdp.cdpUp) throw new Error("no CDP connection");
   setState("attaching");
+  if (GEO) {
+    // The site may read the position without a prompt nobody would answer.
+    await cdp.send("Browser.grantPermissions", { permissions: ["geolocation"], origin: new URL(CFG.siteUrl).origin });
+  }
   await cdp.send("Fetch.enable", { patterns: [{ urlPattern: "*", requestStage: "Request" }] });
   await cdp.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
   for (let i = 0; i < 50 && !sitePage; i++) await sleep(100);
@@ -993,6 +1348,9 @@ let lossReactionDelayMs = Number(process.env.PB_TEST_LOSS_DELAY_MS ?? "0");
 let testUrlAlways = false;
 /** Stand: pass the same `url` for site requests too. */
 let testSiteUrlSame = false;
+/** Stand: a broken operator — every API request of the site is released at
+ *  once, unasked (what the rules extension must still stop). */
+let testSiteBypass = false;
 
 async function controlLost(reason: string): Promise<void> {
   // Stand only: react late, so what Chrome releases meets the open exit and
@@ -1060,11 +1418,11 @@ rpc.onMessage = (message) => {
 
 // Socket tunnels: admitted by the engine, one CONNECT = one socket.
 const pendingWs = new Map<string, (ok: boolean) => void>();
-let wsSeq = 0;
+let wsAdmitSeq = 0;
 egress.admitWsTunnel = (host) =>
   new Promise((resolve) => {
     if (!rpc.up) return resolve(false);
-    const connId = `ws-${process.pid}-${++wsSeq}`;
+    const connId = `ws-${process.pid}-${++wsAdmitSeq}`;
     pendingWs.set(connId, resolve);
     rpc.send({ type: "wsAdmit", connId, host });
     setTimeout(() => {
@@ -1152,7 +1510,11 @@ async function onCommand(message: EngineMessage): Promise<void> {
         if (typeof message.wsHostRefuse === "boolean") CFG.refuseWsHostRequests = message.wsHostRefuse;
         if (typeof message.lossDelayMs === "number") lossReactionDelayMs = message.lossDelayMs;
         if (typeof message.urlAlways === "boolean") testUrlAlways = message.urlAlways;
+        if (typeof message.dataDelayMs === "number") testDataDelayMs = message.dataDelayMs;
+        if (typeof message.cdpDelayMs === "number") cdp.testDelayMs = message.cdpDelayMs;
+        if (typeof message.hubBodyLimit === "number") CFG.hubBodyLimit = message.hubBodyLimit;
         if (typeof message.siteUrlSame === "boolean") testSiteUrlSame = message.siteUrlSame;
+        if (typeof message.siteBypass === "boolean") testSiteBypass = message.siteBypass;
         return reply({ ok: true, gate: egress.gateEnabled, placeholder: CFG.hubPlaceholderHost, hubAbort: CFG.hubAbortBeforeDeadline, wsHostRefuse: CFG.refuseWsHostRequests });
       }
       case "test.tunnels":

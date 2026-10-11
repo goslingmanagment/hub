@@ -36,6 +36,7 @@
 
 import { createServer as createHttpServer, type IncomingMessage } from "node:http";
 import { connect as tcpConnect, isIP, type Socket } from "node:net";
+import { existsSync, readFileSync } from "node:fs";
 
 import { makeLog, monoMs } from "../shared/util.ts";
 
@@ -65,6 +66,7 @@ export interface TunnelRecord {
   result: string;
 }
 
+const EXTENSION_DIST = process.env.PB_EXTENSION_DIST ?? "/opt/page-browser/extension-dist";
 const HELD_LIMIT = 4 * 1024 * 1024;
 /** Plan §4.14: a Hub request's limit (REQUEST_TIMEOUT_MS of the engine). */
 const SENT_TIMEOUT_MS = 20_000;
@@ -336,6 +338,19 @@ export class Egress {
 
   listen(port: number): Promise<void> {
     const server = createHttpServer((req, res) => {
+      // The one thing served here: the rules extension, to Chrome's policy
+      // installer (plan §4.6 — Chrome fetches it from no other place).
+      const files: Record<string, [string, string]> = {
+        "/pb-extension/update.xml": [`${EXTENSION_DIST}/update.xml`, "application/xml"],
+        "/pb-extension/hub.crx": [`${EXTENSION_DIST}/hub.crx`, "application/x-chrome-extension"],
+      };
+      const file = req.method === "GET" && req.url ? files[req.url.split("?")[0]!] : undefined;
+      if (file && existsSync(file[0])) {
+        const body = readFileSync(file[0]);
+        log("extension.served", { url: req.url, bytes: body.length });
+        res.writeHead(200, { "content-type": file[1], "content-length": body.length }).end(body);
+        return;
+      }
       // Plain-HTTP proxying is never needed: the site is HTTPS-only.
       log("plain.refused", { url: req.url });
       res.writeHead(403).end();

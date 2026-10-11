@@ -104,12 +104,17 @@ function startChrome(env: Record<string, string>): number {
     "--window-size=1920,1080",
     `--lang=${env.LANG_TAG ?? "en-US"}`,
     "--no-first-run",
+    // Extra flags of the image (e.g. --ignore-gpu-blocklist: WebGL on Mesa's
+    // llvmpipe, which Chrome's blocklist turns off on a server without GPU).
+    ...envStr("PB_CHROME_ARGS", "").split(" ").filter(Boolean),
     "about:blank",
   ];
   const child = spawn("/usr/bin/google-chrome-stable", args, {
     uid: CHROME_UID,
     gid: CHROME_UID,
-    env: { ...baseEnv("/home/pb-chrome"), DISPLAY, TZ: env.TZ ?? "UTC" },
+    // On Linux Chrome takes its UI language (and navigator.language) from
+    // the environment, not from --lang.
+    env: { ...baseEnv("/home/pb-chrome"), DISPLAY, TZ: env.TZ ?? "UTC", LANGUAGE: env.LANG_TAG ?? "en-US", LANG: `${(env.LANG_TAG ?? "en-US").replace("-", "_")}.UTF-8` },
     stdio: ["ignore", "pipe", "pipe"],
     detached: true,
   });
