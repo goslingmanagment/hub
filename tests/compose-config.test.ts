@@ -477,6 +477,9 @@ describe("compose config", () => {
     const cleanup = getShellFunction(text, "cleanup_deploy");
 
     expect(text).toContain('REMOTE_DEPLOY_LOCK_DIR="${APP_DIR%/}/.deploy.lock"');
+    // The lock is where it always was; observers get a marker beside it.
+    expect(text).toContain('REMOTE_DEPLOY_MARKER_PARENT="${APP_DIR%/}/.monitor"');
+    expect(remoteLock).toContain("mkdir ${REMOTE_DEPLOY_MARKER_DIR_ESCAPED}");
     expect(localLock).toContain('mkdir "$LOCAL_DEPLOY_LOCK_DIR"');
     expect(localLock).toContain("agency-hub-deploy-production-${root_hash}.lock");
     expect(localLock).toContain("candidate_tag");
