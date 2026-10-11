@@ -208,8 +208,12 @@ function pump(): void {
     }
   }
   while (siteStarts.length > 0 && now - siteStarts[0]! > 3_600_000) siteStarts.shift();
-  if (inFlight || queue.length === 0 || now < lastStart + gap) return;
-  const item = queue.shift()!;
+  if (queue.length === 0 || now < lastStart + gap) return;
+  // A socket connection does not wait for the API's operation in flight
+  // (the operator gives it 10 s): only the pause between starts holds.
+  const wsIndex = queue.findIndex((queued) => queued.kind === "ws");
+  if (inFlight && wsIndex < 0) return;
+  const item = inFlight ? queue.splice(wsIndex, 1)[0]! : queue.shift()!;
   if (item.kind === "site" && siteStarts.length >= SITE_PER_HOUR) {
     refuse(item, "site hour cap");
     return;
