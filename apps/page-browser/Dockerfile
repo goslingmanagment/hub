@@ -15,7 +15,8 @@ ARG CHROME_VERSION=155.0.8059.39-1
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       xvfb xauth nftables libnss3-tools procps iproute2 ca-certificates curl tini tcpdump \
-      fonts-liberation fonts-dejavu-core \
+      fonts-liberation fonts-dejavu-core fonts-noto-core fonts-noto-color-emoji \
+      libgl1-mesa-dri libegl1 libgles2 \
  && rm -rf /var/lib/apt/lists/*
 
 COPY --from=chrome google-chrome-stable_${CHROME_VERSION}_${TARGETARCH}.deb /tmp/chrome.deb
@@ -55,5 +56,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends openssl && rm -
  && printf '%s\n' "<?xml version='1.0' encoding='UTF-8'?>" "<gupdate xmlns='http://www.google.com/update2/response' protocol='2.0'>" "  <app appid='$ID'><updatecheck codebase='http://127.0.0.1:3128/pb-extension/hub.crx' version='$VERSION' /></app>" "</gupdate>" > extension-dist/update.xml \
  && node -e 'const fs=require("fs");const p="/etc/opt/chrome/policies/managed/hub.json";const d=JSON.parse(fs.readFileSync(p));const id=fs.readFileSync("/opt/page-browser/extension-dist/id.txt","utf8").trim();d.ExtensionSettings={"*":{installation_mode:"blocked"},[id]:{installation_mode:"force_installed",update_url:"http://127.0.0.1:3128/pb-extension/update.xml"}};fs.writeFileSync(p,JSON.stringify(d,null,2)+"\n")' \
  && cat extension-dist/update.xml && grep -A4 ExtensionSettings /etc/opt/chrome/policies/managed/hub.json
+
+# WebGL on Mesa's llvmpipe: Chrome blocklists software GL (stand finding).
+ENV PB_CHROME_ARGS="--ignore-gpu-blocklist" PB_SELFTEST_RULES=1
 
 ENTRYPOINT ["/usr/bin/tini", "--", "/opt/page-browser/docker/entry.sh"]
