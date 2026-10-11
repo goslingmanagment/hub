@@ -59,6 +59,8 @@ services:
       PB_RPC_FROM: ${STAND_NET:-10.250.250}.0/24
       PB_RPC_TOKEN: stand-token
       PB_STAND: "1"
+      # The stand's page starts by itself; elsewhere the engine starts it.
+      PB_AUTOSTART: "1"
       PB_FAST_RETRY: "1"
       PB_WAIT_CA: "1"
       PB_RUNTIME_ENABLE: "1"

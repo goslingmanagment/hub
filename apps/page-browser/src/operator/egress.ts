@@ -79,10 +79,11 @@ export class Egress {
   readonly socks: SocksConfig;
   readonly classify: (host: string) => HostClass;
   readonly gate = new ApiGate();
-  /** Admission of a new socket connection (socket host): resolves the
-   *  admission's deadline (CLOCK_MONOTONIC ms) and id to let the CONNECT
-   *  through, null to refuse it. */
-  admitWsTunnel: (host: string) => Promise<{ deadline: number; connId: string } | null> = async () => null;
+  /** Admission of a new socket connection (socket host). The id is known
+   *  from the start of the wait — a CONNECT Chrome drops while it waits is
+   *  reported under it; `granted` resolves the admission's deadline
+   *  (CLOCK_MONOTONIC ms) to let the CONNECT through, null to refuse it. */
+  admitWsTunnel: (host: string) => { connId: string; granted: Promise<number | null> } = () => ({ connId: "", granted: Promise.resolve(null) });
   /** A socket tunnel's handshake request went up, or the tunnel ended. */
   onWsTunnel: (connId: string, event: "handshake_sent" | "closed") => void = () => undefined;
 
@@ -328,19 +329,25 @@ export class Egress {
     client.on("data", (chunk: Buffer) => this.#onClientData(tunnel, chunk));
     if (head.length > 0) this.#onClientData(tunnel, head);
 
-    const proceed: Promise<{ deadline: number; connId: string | null } | null> = cls === "ws" ? this.admitWsTunnel(host) : Promise.resolve({ deadline: Infinity, connId: null });
+    let proceed: Promise<number | null> = Promise.resolve(Infinity);
+    if (cls === "ws") {
+      const admission = this.admitWsTunnel(host);
+      tunnel.wsConnId = admission.connId || null;
+      proceed = admission.granted;
+    }
     proceed
-      .then((admission) => {
+      .then((deadline) => {
+        // Gone while it waited (Chrome dropped the CONNECT): its end was
+        // reported under the admission's id when it closed.
         if (!this.#tunnels.has(tunnel)) return;
-        const admitted = admission !== null && monoMs() < admission.deadline;
+        const admitted = deadline !== null && monoMs() < deadline;
         if (!admitted || !this.#exitOpen) {
           this.#tunnels.delete(tunnel);
           this.#refuse(rec, client, admitted ? "refused: exit closed" : "refused: socket not admitted");
-          if (admission?.connId) this.onWsTunnel(admission.connId, "closed");
+          if (tunnel.wsConnId) this.onWsTunnel(tunnel.wsConnId, "closed");
           return;
         }
-        tunnel.wsDeadline = admission.deadline;
-        tunnel.wsConnId = admission.connId;
+        tunnel.wsDeadline = deadline;
         return socksConnect(this.socks, host, port).then((upstream) => {
           if (!this.#tunnels.has(tunnel) || !this.#exitOpen) {
             upstream.destroy();

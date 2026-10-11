@@ -27,6 +27,7 @@ case "$PART" in
     for s in retry-refused-rtt0 retry-goaway-rtt0 retry-reset-rtt0 retry-post retry-post-slowcdp retry-post-large; do run "$s" 20; done
     run retry-post-large-nogate 10; run post-too-large 10
     run idle-ping 10; run idle-post 10; run send-time 10
+    run slow-body-limit 10; run slow-body-limit-capture 5
     for s in expiry-site-socks expiry-site-tcp expiry-hub-socks; do run "$s" 50; done
     ;;
 esac

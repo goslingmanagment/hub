@@ -10,7 +10,7 @@
 
 import { connect as tlsConnect } from "node:tls";
 import { createConnection } from "node:net";
-import { closeSync, createWriteStream, existsSync, mkdirSync, openSync, readFileSync, rmSync, utimesSync, writeFileSync, type WriteStream } from "node:fs";
+import { closeSync, createWriteStream, existsSync, mkdirSync, openSync, readFileSync, rmSync, utimesSync, type WriteStream } from "node:fs";
 import { createHash, type Hash } from "node:crypto";
 
 import { Cdp, type CdpEvent } from "./cdp.ts";
@@ -523,11 +523,12 @@ function startLimit(op: Operation): void {
   op.limitTimer = setTimeout(() => {
     if (op.done) return;
     observe("op.limit", { op: op.id, kind: op.kind, status: op.status, mainSends: op.main?.sends ?? 0 });
-    // The gate's window goes with the operation. A request without an
-    // answer may still be on its way out: its API tunnels are cut so nothing
-    // of it leaves later. One whose answer began left long ago (the page did
-    // not read the body to its end — stand finding): the connection stays.
-    if (op.status === null) egress.cutClass("api", "operation over its time limit");
+    // The gate's window goes with the operation, and so does the transfer:
+    // the API tunnels are cut. A request without an answer may still be on
+    // its way out; one whose answer began may still be receiving its body —
+    // either way nothing of it is in flight once the engine hears its end,
+    // so the next operation never overlaps it (Astra review 4, item 1).
+    egress.cutClass("api", "operation over its time limit");
     if (op.status !== null && op.main) {
       finishWithBody(op, op.main, "limit", null, { outcome: "response", status: op.status, headers: op.headers, sends: op.main.sends, sendMono: op.sendMono, fromCache: op.fromCache, fromServiceWorker: op.fromServiceWorker, bodyEnd: "limit" });
     } else {
@@ -1955,30 +1956,19 @@ function targetGone(error: Error): boolean {
  *  a target is not in place): the exit closes, Chrome goes, and the page
  *  stays stopped until the engine restarts it — the same failure would come
  *  back with every automatic restart. */
-/** The page runs only while its start permit exists (a file in the buffer
- *  volume). A halt removes it; only the engine's `restart` writes it. So a
- *  stopped page stays stopped across restarts of the operator and of the
- *  container, and a stop that could not be recorded cannot turn into a
- *  start: without the file nothing starts (Astra review 3, item 3). The
- *  stand's container start writes the permit itself. */
-const PERMIT_FILE = envStr("PB_PERMIT_FILE", "/data/buffer/start-permit");
-let halted: string | null = existsSync(PERMIT_FILE) ? null : "no start permit (the engine's restart gives one)";
+/** The page runs only after the engine's explicit `restart`, and a halt
+ *  holds until the next one. Nothing of this is kept on disk: an operator or
+ *  a container that starts again is halted again, so no failure to write or
+ *  remove a file can turn a stop into a start (Astra reviews 3 and 4). Hub's
+ *  engine will start its pages the same way, by generation (plan §4.7). The
+ *  stand starts by itself (PB_AUTOSTART). */
+let halted: string | null = envStr("PB_AUTOSTART", "0") === "1" ? null : "not started yet (the engine's restart starts the page)";
 if (halted !== null) egress.latch(halted);
 
 function halt(reason: string): void {
   if (halted !== null) return;
   halted = reason;
-  // The exit first, then the record of it.
   egress.latch(reason);
-  try {
-    rmSync(PERMIT_FILE, { force: true });
-    if (existsSync(PERMIT_FILE)) throw new Error("the permit is still there");
-  } catch (error) {
-    // The permit could not be removed: the supervisor keeps the page down
-    // for as long as the container lives, and says so.
-    log("halt.permit_not_removed", { error: (error as Error).message });
-    void supervisor({ cmd: "freeze", reason }).catch(() => undefined);
-  }
   log("halted", { reason });
   rpc.send({ type: "alarm", kind: "halted", detail: { reason } });
   setState("failed", `halted: ${reason}`);
@@ -2116,6 +2106,17 @@ const pendingWs = new Map<string, (deadline: number | null) => void>();
 let wsAdmitSeq = 0;
 egress.onWsTunnel = (connId, event) => {
   if (event === "closed") {
+    // Dropped by Chrome while it still waited for its admission (a
+    // navigation, a replaced socket): nothing is left to admit, the engine
+    // hears it, and a grant that comes later goes nowhere (Astra review 4,
+    // item 3).
+    const resolver = pendingWs.get(connId);
+    if (resolver) {
+      pendingWs.delete(connId);
+      resolver(null);
+      wsOutcome(connId, "failed", { error: "the connection was dropped before its admission" });
+      return;
+    }
     // A tunnel that ended before its socket's handshake was answered.
     const waiting = wsAwaitingHandshake.indexOf(connId);
     if (waiting >= 0) {
@@ -2137,13 +2138,13 @@ egress.onWsTunnel = (connId, event) => {
  *  with its proxy is not much longer). */
 const WS_ADMIT_WAIT_MS = 10_000;
 
-egress.admitWsTunnel = (host) =>
-  new Promise((resolve) => {
-    if (!rpc.up) return resolve(null);
-    const connId = `ws-${process.pid}-${++wsAdmitSeq}`;
+egress.admitWsTunnel = (host) => {
+  const connId = `ws-${process.pid}-${++wsAdmitSeq}`;
+  if (!rpc.up) return { connId, granted: Promise.resolve(null) };
+  const granted = new Promise<number | null>((resolve) => {
     pendingWs.set(connId, (deadline) => {
       if (deadline !== null) wsAwaitingHandshake.push(connId);
-      resolve(deadline === null ? null : { deadline, connId });
+      resolve(deadline);
     });
     rpc.send({ type: "wsAdmit", connId, host, waitMs: WS_ADMIT_WAIT_MS });
     setTimeout(() => {
@@ -2153,6 +2154,8 @@ egress.admitWsTunnel = (host) =>
       wsOutcome(connId, "failed", { error: "the admission wait is over" });
     }, WS_ADMIT_WAIT_MS);
   });
+  return { connId, granted };
+};
 
 function onWsAdmitResult(message: EngineMessage): void {
   const resolve = pendingWs.get(String(message.connId));
@@ -2165,7 +2168,10 @@ function onWsAdmitResult(message: EngineMessage): void {
   // The deadline goes with the tunnel: the socket's handshake must leave
   // before it, however long SOCKS and TLS take.
   const deadline = Number(message.deadlineMono);
-  resolve(message.ok === true && Number.isFinite(deadline) && deadline > monoMs() ? deadline : null);
+  const usable = message.ok === true && Number.isFinite(deadline) && deadline > monoMs();
+  // An admission that cannot be used is answered: the engine does not wait.
+  if (message.ok === true && !usable) wsOutcome(String(message.connId), "failed", { error: "the admission came expired" });
+  resolve(usable ? deadline : null);
 }
 
 egress.gate.onEvent = (event) => {
@@ -2187,13 +2193,6 @@ async function onCommand(message: EngineMessage): Promise<void> {
         return reply({ ok: true });
       case "restart":
         // After a halt: the engine starts the page again on purpose.
-        // The permit first: a start that could not be recorded as permitted
-        // does not happen.
-        try {
-          writeFileSync(PERMIT_FILE, `${new Date().toISOString()}\n`);
-        } catch (error) {
-          return reply({ ok: false, error: `the start permit could not be written: ${(error as Error).message}` });
-        }
         halted = null;
         egress.unlatch();
         if (state === "failed" && !restarting) void startLoop();

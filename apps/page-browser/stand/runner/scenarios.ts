@@ -1092,8 +1092,76 @@ const wsHandshakeOutcome: Scenario = async (ctx) => {
   const violations: string[] = [];
   if (seen[0]?.event !== "open" || seen[0]?.status !== 101) violations.push(`the good socket ended as ${JSON.stringify(seen[0])}`);
   if (seen[1]?.event !== "failed") violations.push(`the refused socket ended as ${JSON.stringify(seen[1])}`);
-  return { ok: violations.length === 0, violations, notes: { good, seen } };
+  // A CONNECT that ends while it waits for its admission: the engine hears
+  // "failed" under that admission's id, a grant that comes later goes
+  // nowhere, and the next socket's outcome is its own (Astra review 4, item
+  // 3). Chrome itself keeps a waiting CONNECT even when its page is gone
+  // (stand: a closed socket and a navigation both left it to the operator's
+  // 10 s wait), so the tunnel is ended from the proxy's side here.
+  await ctx.stand.clearFaults();
+  const before = outcomes().length;
+  ctx.engine.heldWs.clear();
+  ctx.engine.decideWs = () => "hold";
+  await ctx.engine.eval<number>(`site.ws(${JSON.stringify(`${tag}-drop`)})`, false);
+  await until(() => ctx.engine.heldWs.size >= 1, 10_000, "the socket's admission asked");
+  const heldId = [...ctx.engine.heldWs.keys()][0]!;
+  await ctx.engine.command("test.cutWs");
+  await until(() => outcomes().length > before, 5000, "the dropped socket's outcome");
+  const droppedOutcome = outcomes()[before]!;
+  if (droppedOutcome.connId !== heldId || droppedOutcome.event !== "failed" || !String(droppedOutcome.error ?? "").includes("dropped before its admission")) {
+    violations.push(`the dropped socket ended as ${JSON.stringify({ connId: droppedOutcome.connId, event: droppedOutcome.event, error: droppedOutcome.error ?? null })}, asked as ${heldId}`);
+  }
+  ctx.engine.releaseWs(heldId, { grant: true });
+  await sleep(300);
+  ctx.engine.decideWs = () => ({ grant: true });
+  const mark = outcomes().length;
+  await ctx.engine.eval<number>(`site.ws(${JSON.stringify(`${tag}-next`)})`, false);
+  await until(() => outcomes().slice(mark).some((o) => o.event === "open"), 10_000, "the next socket's outcome");
+  const next = outcomes().slice(mark).find((o) => o.event === "open")!;
+  if (next.connId === heldId || next.status !== 101) violations.push(`the next socket was reported as ${JSON.stringify({ connId: next.connId, status: next.status })}`);
+  return { ok: violations.length === 0, violations, notes: { good, seen, dropped: { connId: droppedOutcome.connId, error: droppedOutcome.error ?? null }, next: next.connId } };
 };
+
+/** An answer whose body is still coming at the operation's limit (21 s):
+ *  the transfer is cut before the engine hears the operation's end, so the
+ *  next operation never overlaps it (Astra review 4, item 1). `capture`: with
+ *  the body's capture or, as in the pilot, without. */
+function slowBodyLimit(capture: boolean): Scenario {
+  return async (ctx) => {
+    await fresh(ctx);
+    const tag = `sb-${capture ? "c" : "n"}-${ctx.run}-${Date.now() % 100000}`;
+    await ctx.engine.command("test.config", { captureBodies: capture });
+    await warm(ctx, tag);
+    ctx.engine.serialize = true;
+    try {
+      ctx.arm();
+      const first = `${tag}-slow`;
+      const second = `${tag}-next`;
+      await ctx.engine.eval(`site.api(${JSON.stringify(first)}, { query: "size=400000&slow=30000" }), true`, false);
+      await sleep(2000);
+      await ctx.engine.eval(`site.api(${JSON.stringify(second)}), true`, false);
+      await until(() => ctx.engine.siteDoneOf(first) !== null, 30_000, "the slow operation's end");
+      const done = ctx.engine.siteDoneOf(first)!;
+      await until(async () => reqs(await ctx.stand.journal(), second).some((event) => event.method === "GET"), 15_000, "the next request");
+      const events = await ctx.stand.journal();
+      const violations = [...checkAdmitted(events, ctx.engine.grants, `${tag}-`).violations];
+      const firstArrival = reqs(events, first).find((event) => event.method === "GET");
+      const secondArrival = reqs(events, second).find((event) => event.method === "OPTIONS") ?? reqs(events, second).find((event) => event.method === "GET");
+      // The first answer's connection is gone before the next request starts.
+      const closed = events.filter((event) => (event.t === "tcp.close" || event.t === "h2.close" || event.t === "conn.close") && event.connId === firstArrival?.connId);
+      if (done.bodyEnd !== "limit") violations.push(`the slow operation ended as ${JSON.stringify({ outcome: done.outcome, bodyEnd: done.bodyEnd ?? null })}`);
+      if (!secondArrival || !firstArrival) violations.push("an arrival is missing");
+      else {
+        if (secondArrival.mono < Number(done.recvMono) - 5) violations.push(`the next request reached the server ${Math.round(Number(done.recvMono) - secondArrival.mono)} ms before the slow one ended`);
+        if (closed.length === 0 || closed[0]!.mono > secondArrival.mono) violations.push("the slow answer's connection was still open when the next request arrived");
+      }
+      return { ok: violations.length === 0, violations, notes: { endedAfterMs: firstArrival ? Math.round(Number(done.recvMono) - firstArrival.mono) : null, closes: closed.map((event) => event.t) } };
+    } finally {
+      ctx.engine.serialize = false;
+      await ctx.engine.command("test.config", { captureBodies: true });
+    }
+  };
+}
 
 /** A Hub request made by XMLHttpRequest meets a redirect whose address has
  *  another fragment: the hop is refused, not taken for a request of the site
@@ -1231,6 +1299,8 @@ export const scenarios: Record<string, Scenario> = {
   "xhr-parity": xhrParity,
   "engine-loss-halt": engineLossHalt,
   "ws-handshake-outcome": wsHandshakeOutcome,
+  "slow-body-limit": slowBodyLimit(false),
+  "slow-body-limit-capture": slowBodyLimit(true),
   "hub-redirect": hubRedirect,
   "site-redirect": siteRedirect(false),
   "site-redirect-xhr": siteRedirect(true),

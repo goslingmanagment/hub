@@ -60,13 +60,4 @@ fi
 
 # A restarted container keeps /tmp: drop the old display's lock and socket.
 rm -f /tmp/.X99-lock /tmp/.X11-unix/X99 /run/pb/*.sock /run/pb/operator.alive
-# The page starts only with its start permit, which the engine's `restart`
-# writes and a halt removes (a stopped page stays stopped across restarts).
-# The stand gives the permit itself: its runner restarts the container to
-# recover.
-if [ "${PB_STAND:-0}" = "1" ]; then
-  permit="${PB_PERMIT_FILE:-/data/buffer/start-permit}"
-  date -u +%FT%TZ > "$permit" && chown pb-operator:pb-operator "$permit"
-fi
-mkdir -p -m 1777 /tmp/.X11-unix
 exec node --no-warnings /opt/page-browser/src/supervisor/main.ts
