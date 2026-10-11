@@ -100,6 +100,54 @@ c /hub POST '{"path":"/api/v1/account/me"}'
 
 Позже, отдельными сессиями: тела ответов (п. 17, с белым списком путей), другие чтения Hub, перезапуск (пп. 11, 16), медиа (после «ворот» на CDN, этап 3).
 
+## Сессия с телами ответов
+
+Что добавляется к узкой сессии:
+
+- тела ответов пишутся в буфер страницы — только пути из списка ниже, только GET и только основной запрос (не preflight). Вход, выход, сессии, 2FA, авторизации и пароль оператор не пишет никогда, что бы ни было в списке;
+- кроме сверки аккаунта — три чтения Hub из каталога движка, по одному, ровно как их шлёт Hub (`packages/fansly/src/wire/specs.ts`): `messaging.groups` (тот же маршрут, что у сайта, — п. 8), `vault.albums`, `subscriptions.tiers`;
+- спокойная вкладка — 30 минут.
+
+Вход делает владелец или, по его просьбе, агент — тем же путём: вводом в форму сайта на экране KasmVNC. Данные входа агент берёт из сообщения владельца и никуда не пишет; снимки экрана с формой не делаются.
+
+Список путей (`PB_CAPTURE_ALLOW`):
+
+```
+^/api/v1/(account|account/media|messaging/groups|message/unread|notifications/unack|subscriptions|subscriptions/tiers|vault/albumsnew|timeline/home|timeline/permissions|mediastories/following|streaming/followingstreams/online|contentdiscovery/(media/suggestionsnew|suggestions|livesuggestions)|versioning)$
+```
+
+Не пишутся: `account/me` (в нём может быть почта входа), `settings`, деньги (`wallets`, `payments`, `payouts`, `orders`), `notifications/alertsettings`, `thirdpartyconnect/providers`, `device/id`.
+
+Запуск — контейнеры пересоздаются с теми же переменными, что при первом запуске, и ещё:
+
+```sh
+export PB_CAPTURE_BODIES=1
+export PB_CAPTURE_ALLOW='<список выше>'
+export LIVE_HUB_READS=account.me,messaging.groups,vault.albums,subscriptions.tiers
+docker compose -p pb-live up -d
+```
+
+У нового контейнера другое имя хоста, и Chrome не запустится с замком профиля прежнего (`FINDINGS.md`, п. 44): пока Chrome не запущен, убрать `/data/profile/Singleton*`.
+
+Ход — как в узкой сессии; после сверки аккаунта:
+
+```sh
+c /hub POST '{"read":"messaging.groups"}'
+c /hub POST '{"read":"vault.albums"}'
+c /hub POST '{"read":"subscriptions.tiers"}'
+```
+
+В журнале у каждого ответа, тело которого записано, — имя файла, размеры, начало SHA-256 и признак целостности (`complete`, `how`); содержимого нет.
+
+После `/stop` — сводка буфера без содержимого (на каждый файл: размер, JSON ли он, `success`, форма `response`), затем тела удаляются:
+
+```sh
+docker exec -i pb-live-browser-1 node - < bodies.mjs > ../results/bodies-<время>.jsonl
+docker exec pb-live-browser-1 rm -rf /data/buffer/bodies
+```
+
+Что смотрим: п. 17 — каждое тело целое (`complete`; где `how` — «shape check needed», тело должно разбираться как JSON); п. 10 — сколько байт в час дают ответы сайта по маршрутам; п. 8 — у запросов Hub свои исходы, не перепутанные с запросами сайта к тому же маршруту; п. 15 — заголовки запросов Hub и сайта к одним маршрутам.
+
 ## После теста
 
 ```sh
