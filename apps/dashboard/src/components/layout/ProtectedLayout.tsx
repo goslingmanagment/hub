@@ -3,6 +3,7 @@ import { Navigate, Outlet, useLocation } from "react-router";
 import { useAuthMe, usePages } from "@/api/queries";
 import { KernelApiError } from "@/api/sdk";
 import { CHATTER_HOME, buildLoginRoute } from "@/lib/navigation";
+import { isChatterSite } from "@/lib/sites";
 import { QueryNotice } from "@/components/shared/QueryNotice";
 import { DashboardShellProvider } from "./DashboardShellContext.js";
 import { Sidebar } from "./Sidebar.js";
@@ -57,7 +58,17 @@ function MobileNavigation({ user, close }: {
   );
 }
 
+// The chatters' site serves /account, /join and /login of this app and nothing
+// else, so a console route is reachable there only from inside the app — the
+// catch-all's redirect to "/", for one. Whoever arrives that way, of any role,
+// is taken to their cabinet before the console asks the kernel for anything:
+// the console has a name of its own.
 export function ProtectedLayout() {
+  if (isChatterSite()) return <Navigate to={CHATTER_HOME} replace />;
+  return <ConsoleLayout />;
+}
+
+function ConsoleLayout() {
   const location = useLocation();
   const [navigationOpen, setNavigationOpen] = useState(false);
   const closeNavigation = useCallback(() => setNavigationOpen(false), []);

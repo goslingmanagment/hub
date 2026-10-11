@@ -38,6 +38,7 @@ import { ExistingMemberNotice, InviteModal } from "../apps/dashboard/src/pages/s
 import { LinkRevealModal } from "../apps/dashboard/src/pages/settings/team/LinkRevealModal.tsx";
 import { UserDetailModal } from "../apps/dashboard/src/pages/settings/team/UserDetailModal.tsx";
 import {
+  buildJoinLink,
   daysToHours,
   deviceRevokedReasonLabel,
   findTeamMember,
@@ -270,11 +271,25 @@ describe("groupPagesByPlatform", () => {
 });
 
 describe("the invite link", () => {
+  // The console has a name of its own; the person it invites is a chatter and
+  // opens the link on the chatters' site, where the console is not served.
+  it.each(["https://hub.gosling-agency.ru", "https://gosling-agency.ru"])(
+    "made on the production console at %s, opens on the chatters' site",
+    (consoleOrigin) => {
+      expect(buildJoinLink(consoleOrigin, "s3cr3t")).toBe("https://chatgoose.gosling-agency.ru/join#s3cr3t");
+    },
+  );
+
+  it("made anywhere else, stays on the origin that serves the whole app", () => {
+    expect(buildJoinLink("http://localhost:5173", "s3cr3t")).toBe("http://localhost:5173/join#s3cr3t");
+    expect(buildJoinLink("", "s3cr3t")).toBe("/join#s3cr3t");
+  });
+
   it("writes a Telegram message a person can act on without being told anything else", () => {
-    const message = telegramMessage("invite", "grisha", "https://gosling-agency.ru/join#s3cr3t");
-    expect(message).toContain("https://gosling-agency.ru/join#s3cr3t");
+    const message = telegramMessage("invite", "grisha", "https://chatgoose.gosling-agency.ru/join#s3cr3t");
+    expect(message).toContain("https://chatgoose.gosling-agency.ru/join#s3cr3t");
     expect(message).toContain("Логин: grisha");
-    expect(message).toContain("https://ext.gosling-agency.ru/start.html");
+    expect(message).toContain("Как начать: https://chatgoose.gosling-agency.ru/fansly/start.html");
   });
 
   it("says «новый пароль», not «приглашение», for a reset", () => {
@@ -611,8 +626,8 @@ describe("InviteModal", () => {
 });
 
 describe("LinkRevealModal", () => {
-  it("shows the link once, on this origin, with a message ready for Telegram", () => {
-    vi.stubGlobal("window", { location: { origin: "https://gosling-agency.ru" } });
+  it("shows the link once, for the chatters' site, with a message ready for Telegram", () => {
+    vi.stubGlobal("window", { location: { origin: "https://hub.gosling-agency.ru" } });
 
     const markup = render(LinkRevealModal as ComponentType<Record<string, unknown>>, {
       link: {
@@ -625,11 +640,31 @@ describe("LinkRevealModal", () => {
       onClose: vi.fn(),
     });
 
-    expect(markup).toContain("https://gosling-agency.ru/join#s3cr3t");
+    expect(markup).toContain("https://chatgoose.gosling-agency.ru/join#s3cr3t");
+    // Neither the link nor the message built from it names the console.
+    expect(markup).not.toContain("hub.gosling-agency.ru");
     expect(markup).toContain("показывается один раз");
     expect(markup).toContain("Скопировать");
     expect(markup).toContain("Логин: grisha");
     expect(markup).toContain("Приглашение для grisha");
+  });
+
+  it("keeps the link on its own origin when the console is not a production one", () => {
+    vi.stubGlobal("window", { location: { origin: "http://localhost:5173" } });
+
+    const markup = render(LinkRevealModal as ComponentType<Record<string, unknown>>, {
+      link: {
+        userId: 17,
+        username: "grisha",
+        kind: "invite",
+        secret: "s3cr3t",
+        expiresAt: "2026-09-22T00:00:00.000Z",
+      },
+      onClose: vi.fn(),
+    });
+
+    expect(markup).toContain("http://localhost:5173/join#s3cr3t");
+    expect(markup).not.toContain("chatgoose.gosling-agency.ru/join");
   });
 
   it("cannot be dismissed by a stray backdrop click — the link is unrecoverable", () => {
