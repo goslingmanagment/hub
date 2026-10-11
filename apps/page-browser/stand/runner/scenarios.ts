@@ -995,6 +995,58 @@ function cancelNextAdmission(connection: "warm" | "pending"): Scenario {
   };
 }
 
+/** A request waits for its admission while its page is replaced: Fansly's
+ *  client reloads the page right after a login (first live session). The
+ *  request belongs to a document that is gone; released, Chrome neither sent
+ *  it nor reported its end, and the operation's limit stopped the page. The
+ *  operator fails it instead: nothing of it reaches the server, the engine
+ *  hears that it was not sent, and the page goes on past the limit.
+ *  `kind`: a site request with a preflight, a simple one, or a Hub request. */
+function documentReplacedWhileWaiting(kind: "site" | "site-simple" | "hub"): Scenario {
+  return async (ctx) => {
+    await fresh(ctx);
+    const tag = `docrep-${kind}-${ctx.run}-${Date.now() % 100000}`;
+    await warm(ctx, tag);
+    const rid = `d-${tag}`;
+    let grant: () => void;
+    if (kind === "hub") {
+      ctx.engine.decideCheck = (id) => (id === rid ? "hold" : { grant: true });
+      void ctx.engine.sendHub(rid, `${API}/api/hub?rid=${rid}`, { authorization: "stand-token" });
+      await until(() => ctx.engine.heldChecks.has(rid), 10_000, "the Hub request held");
+      grant = () => void ctx.engine.releaseCheck(rid, { grant: true });
+    } else {
+      ctx.engine.decideSite = (ask) => (ask.rid === rid ? "hold" : { grant: true });
+      await ctx.engine.eval(`site.api(${JSON.stringify(rid)}, ${kind === "site-simple" ? "{ plain: true }" : "{}"}), true`, false);
+      await until(() => [...ctx.engine.heldSite.values()].some((ask) => ask.rid === rid), 10_000, "the site request held");
+      const held = [...ctx.engine.heldSite.values()].find((ask) => ask.rid === rid)!;
+      grant = () => void ctx.engine.releaseSite(held.siteRequestId, { grant: true });
+    }
+    const since = monoMs();
+    ctx.arm();
+    await newDocument(ctx);
+    // The engine admits it anyway, as an engine that did not hear in time.
+    grant();
+    // Past the operation's limit (21 s): a page that would stop has stopped.
+    await sleep(OP_LIMIT_PLUS_MS);
+    const events = await ctx.stand.journal();
+    const halted = ctx.engine.alarms.filter((alarm) => alarm.kind === "halted" && Number(alarm.recvMono) >= since).map((alarm) => alarm.detail);
+    if (halted.length > 0) await ctx.engine.command("restart");
+    await ctx.engine.waitReady(180_000);
+    const arrivals = reqs(events, rid).map((event) => `${event.method} ${event.rid}`);
+    const told = kind === "hub" ? ctx.engine.results.get(rid) ?? null : ctx.engine.siteDoneOf(rid);
+    const violations: string[] = [];
+    if (arrivals.length > 0) violations.push(`a request of the replaced document reached the server: ${arrivals.join(", ")}`);
+    if (halted.length > 0) violations.push(`the page stopped: ${JSON.stringify(halted)}`);
+    if (violations.length === 0 && (told?.outcome !== "aborted_before_send" || !String(told?.reason ?? "").includes("document was replaced"))) {
+      violations.push(`the engine heard ${JSON.stringify({ outcome: told?.outcome ?? null, reason: told?.reason ?? told?.error ?? null })}, not that the document was replaced`);
+    }
+    return { ok: violations.length === 0, violations, notes: { kind, told: told ? { outcome: told.outcome, reason: told.reason ?? told.error ?? null } : null, halted } };
+  };
+}
+
+/** The operation's limit (21 s) and a margin. */
+const OP_LIMIT_PLUS_MS = 23_000;
+
 /** A socket's admission runs out while its connection is still being made
  *  (Astra review 6): SOCKS answers after the deadline, or the tunnel is open
  *  and the TLS handshake hangs. The socket's handshake request must not
@@ -1803,6 +1855,9 @@ export const scenarios: Record<string, Scenario> = {
   "next-admission-slow": nextAdmission(4800),
   "stale-after-limit": staleAfterLimit,
   "cancel-next-admission": cancelNextAdmission("warm"),
+  "document-replaced-site": documentReplacedWhileWaiting("site"),
+  "document-replaced-site-simple": documentReplacedWhileWaiting("site-simple"),
+  "document-replaced-hub": documentReplacedWhileWaiting("hub"),
   "cancel-next-admission-pending": cancelNextAdmission("pending"),
   "ws-expiry-socks": wsExpiry("socks"),
   "ws-expiry-tls": wsExpiry("tls"),

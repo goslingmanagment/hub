@@ -363,13 +363,70 @@ cdp.on("Target.detachedFromTarget", (event) => {
   if (sitePage?.sessionId === sessionId) sitePage = null;
 });
 
+// ── documents: a request of a replaced document is never released ────────
+//
+// The site reloads its page right after a login (first live session,
+// 2026-10-11): requests the old document issued were still waiting for their
+// admissions. Released afterwards, such a request was neither sent nor ended
+// by Chrome — its document is gone — and the operation's limit stopped the
+// page. A request whose document has been replaced is failed instead: it
+// cannot leave anyway. A document is known by its loader id: the one each
+// request was issued by (Network.requestWillBeSent) and the ones each frame
+// has left behind (Page.frameNavigated). Only a loader seen to be replaced
+// counts; a request whose loader is not known yet is released as before.
+
+const loaderOfRequest = new Map<string, string>();
+const loaderOfFrame = new Map<string, string>();
+const replacedLoaders = new Set<string>();
+
+function remember<K, V>(map: Map<K, V>, key: K, value: V): void {
+  map.set(key, value);
+  if (map.size > 5000) map.delete(map.keys().next().value!);
+}
+
+function documentReplaced(params: PausedParams): boolean {
+  const loader = params.networkId ? loaderOfRequest.get(params.networkId) : undefined;
+  return loader !== undefined && replacedLoaders.has(loader);
+}
+
+/** Paused requests of a replaced document, still waiting for their
+ *  admissions: failed now, so the engine never admits them. */
+function failReplacedDocumentRequests(): void {
+  for (const [id, pending] of pendingSite) {
+    if (!documentReplaced(pending.params)) continue;
+    pendingSite.delete(id);
+    clearTimeout(pending.timer);
+    observe("site.document_replaced", { req: id });
+    void resolvePaused(pending.event, "fail", { requestId: id, errorReason: "Aborted" });
+    finishOp(pending.op, { outcome: "aborted_before_send", reason: "its document was replaced while it waited" });
+  }
+  for (const attempt of hub.values()) {
+    if (attempt.done || !attempt.waiting || !documentReplaced(attempt.waiting.params)) continue;
+    const { event, params } = attempt.waiting;
+    attempt.waiting = null;
+    if (attempt.pausedTimer) clearTimeout(attempt.pausedTimer);
+    observe("hub.document_replaced", { attemptId: attempt.attemptId });
+    void resolvePaused(event, "fail", { requestId: params.requestId, errorReason: "Aborted" });
+    hubResult(attempt, { outcome: "aborted_before_send", reason: "its document was replaced while it waited" });
+  }
+}
+
 cdp.on("Page.frameNavigated", (event) => {
-  const frame = (event.params as { frame: { id: string; parentId?: string; url: string } }).frame;
+  const frame = (event.params as { frame: { id: string; parentId?: string; url: string; loaderId?: string } }).frame;
   const info = event.sessionId ? targets.get(event.sessionId) : undefined;
   if (info && !frame.parentId) {
     info.mainFrameId = frame.id;
     info.url = frame.url;
     info.worldId = undefined; // the isolated world died with the document
+  }
+  if (frame.loaderId) {
+    const previous = loaderOfFrame.get(frame.id);
+    if (previous !== undefined && previous !== frame.loaderId) {
+      replacedLoaders.add(previous);
+      if (replacedLoaders.size > 5000) replacedLoaders.delete(replacedLoaders.values().next().value!);
+    }
+    remember(loaderOfFrame, frame.id, frame.loaderId);
+    failReplacedDocumentRequests();
   }
 });
 
@@ -691,10 +748,17 @@ const releasedKind = new Map<string, Operation["kind"]>();
 const sessionOfRequest = new Map<string, string>();
 
 cdp.on("Network.requestWillBeSent", (event) => {
-  const params = event.params as { requestId: string; request: { url: string }; redirectResponse?: { status: number; headers?: Record<string, string> } };
+  const params = event.params as { requestId: string; loaderId?: string; initiator?: { type?: string; requestId?: string }; request: { url: string }; redirectResponse?: { status: number; headers?: Record<string, string> } };
   if (event.sessionId) {
     sessionOfRequest.set(params.requestId, event.sessionId);
     if (sessionOfRequest.size > 5000) sessionOfRequest.delete(sessionOfRequest.keys().next().value!);
+  }
+  if (params.loaderId) remember(loaderOfRequest, params.requestId, params.loaderId);
+  // A preflight has a request id of its own and no loader: it belongs to the
+  // document of the request it was made for.
+  else if (params.initiator?.type === "preflight" && params.initiator.requestId) {
+    const loader = loaderOfRequest.get(params.initiator.requestId);
+    if (loader) remember(loaderOfRequest, params.requestId, loader);
   }
   const phys = byNetworkId.get(params.requestId);
   if (phys && params.redirectResponse) {
@@ -1459,6 +1523,12 @@ function onSiteAdmitResult(message: EngineMessage): void {
     finishOp(pending.op, { outcome: "aborted_before_send", reason: message.ok === true ? "the admission came expired or the exit is closed" : "refused" });
     return;
   }
+  if (documentReplaced(pending.params)) {
+    observe("site.document_replaced", { req: id });
+    void resolvePaused(pending.event, "fail", { requestId: id, errorReason: "Aborted" });
+    finishOp(pending.op, { outcome: "aborted_before_send", reason: "its document was replaced while it waited" });
+    return;
+  }
   const op = pending.op;
   op.admissionId = `site:${id}`;
   op.deadline = deadline;
@@ -1731,6 +1801,12 @@ function onCheckResult(message: EngineMessage): void {
   if (message.ok !== true || !(deadline > monoMs()) || !egress.exitOpen) {
     void resolvePaused(event, "fail", { requestId: params.requestId, errorReason: "Aborted" });
     hubResult(attempt, { outcome: "aborted_before_send", reason: message.reason ?? "refused" });
+    return;
+  }
+  if (documentReplaced(params)) {
+    observe("hub.document_replaced", { attemptId: attempt.attemptId });
+    void resolvePaused(event, "fail", { requestId: params.requestId, errorReason: "Aborted" });
+    hubResult(attempt, { outcome: "aborted_before_send", reason: "its document was replaced while it waited" });
     return;
   }
   const op = attempt.op;
