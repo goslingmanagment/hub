@@ -228,6 +228,9 @@ function controlLoss(fault: LossFault, releaseOne: boolean, opts: { lossDelayMs?
     const checked = checkAdmitted(events, ctx.engine.grants, `p-${tag}`);
     const hubChecked = checkAdmitted(events, ctx.engine.grants, hubId);
     const arrived = events.filter((event) => event.t === "req" && event.rid && (event.rid.startsWith(sitePrefix) || event.rid === hubId)).map((event) => `${event.method} ${event.rid} +${Math.round(event.mono - faultMono)}ms`);
+    // What the operator said about the loss: was a window open (the residual
+    // of owner decision №10)?
+    const alarms = ctx.engine.alarms.filter((a) => a.kind === "cdp_lost" && Number(a.recvMono) >= faultMono).map((a) => a.detail);
     // Back to a ready operator for the next run.
     ctx.engine.close();
     await ctx.engine.waitReady(180_000);
@@ -235,7 +238,7 @@ function controlLoss(fault: LossFault, releaseOne: boolean, opts: { lossDelayMs?
     return {
       ok: violations.length === 0,
       violations,
-      notes: { fault, lossDelayMs: opts.lossDelayMs ?? 0, gate: opts.gate ?? true, delayMs: Math.round(delay), released, arrived },
+      notes: { fault, lossDelayMs: opts.lossDelayMs ?? 0, gate: opts.gate ?? true, delayMs: Math.round(delay), released, arrived, alarms },
     };
   };
 }
