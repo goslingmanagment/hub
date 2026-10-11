@@ -1097,7 +1097,7 @@ if [[ -f ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED}/metadata ]]; then
   while IFS= read -r line; do printf '[deploy]   %s\n' "\$line" >&2; done < ${REMOTE_DEPLOY_LOCK_DIR_ESCAPED}/metadata
 fi
 printf '[deploy] inspect with: ssh %s %s\n' $(printf '%q' "$REMOTE") $(printf '%q' "ls -la ${REMOTE_DEPLOY_LOCK_DIR}; cat ${REMOTE_DEPLOY_LOCK_DIR}/metadata") >&2
-printf '[deploy] remove only after confirming no deploy is active: rm -rf %s\n' $(printf '%q' "$REMOTE_DEPLOY_LOCK_DIR") >&2
+printf '[deploy] remove only after confirming no deploy is active: rm -rf %s %s\n' $(printf '%q' "$REMOTE_DEPLOY_LOCK_DIR") $(printf '%q' "$REMOTE_DEPLOY_MARKER_DIR") >&2
 exit 73
 EOF
 )
